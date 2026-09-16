@@ -1,0 +1,6 @@
+problem,file,role
+first_num_greater_than,description.txt,problem description
+first_num_greater_than,inputs.txt,input test cases
+first_num_greater_than,refsol.py,reference solution
+first_num_greater_than,tests_hint.json,LLM-generated test case hints
+first_num_greater_than,codes_data.json,explanation and fix instructions
