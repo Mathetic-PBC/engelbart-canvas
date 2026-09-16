@@ -146,7 +146,7 @@ A note is one row in both tables (same id); `library.path` is absolute, `notes.p
 
 ## 9. Known kinks (left open on purpose)
 
-1. Non-test root is unused; what moves out of `test/` and when.
+1. The normal root (test off) has no seeds and no ingestion path yet, so its library only ever holds notes.
 2. Library ingestion beyond seeds (register a downloaded PDF by path? watch a folder?).
 3. Whether goals/topics also want SQL rows (they are directories + `meta.json` now).
 4. Deleting anything; archiving Past goals; moving a goal between boxes.

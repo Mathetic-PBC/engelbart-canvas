@@ -97,4 +97,4 @@ ENGELBART_DEBUG_PORT=9223 node scripts/drive.mjs text
 
 ## Known kinks (deliberately open)
 
-See spec §9: the unused non-test root, library ingestion beyond seeds, whether goals/topics want SQL rows, deletion, note↔goal association living in the notes table rather than frontmatter, simulated build/chat, images in documents, one project open at a time.
+See spec §9: library ingestion beyond seeds (test seeds only; the normal root starts empty), whether goals/topics want SQL rows, deletion, note↔goal association living in the notes table rather than frontmatter, simulated build/chat, images in documents, one project open at a time.
