@@ -42,3 +42,19 @@ What was checked, how, and what was not. Automated coverage is `npm test` (53 te
 ## Packaged app
 
 `npm run package` → `release/Engelbart-darwin-arm64/Engelbart.app` (468 MB; `node-pty` and `@electric-sql/pglite` unpacked from asar). Smoke-launched with a scratch home on a separate DevTools port: home listed the project, the canvas opened (`2 sources · Topic 1`), the workspace mounted xterm with a live shell, and the paper rendered 21 pages with the 3 saved notes restored; no renderer errors. Unsigned: first launch on another machine needs right-click → Open.
+
+
+# Round 2 — 2026-09-16 evening (first-run screen, roots, sidebar)
+
+Driven on a fresh scratch home (`ENGELBART_HOME_DIR`, port 9223, `ENGELBART_CONFIRM_ALL=1`). Unit tests: 58 passing, including `test/store-modes.test.cjs` (test root vs normal root, separate libraries, reset leaves the normal root alone).
+
+| Step | Result | Evidence |
+|---|---|---|
+| First launch, empty root | **Create a new project** screen: title, subtitle, `#fafafa` card with *Project name* / *Project path* (`./` + mono slug), filled button disabled until a name exists; gear + pill top-right | `20-first-open.png`, `21-create-filled.png` |
+| Name "Reading Group" | path hint follows as `reading-group`; *Create project* enabled | `21-create-filled.png` |
+| Create | `test/reading-group/{project.json, notes.pglite, Welcome!.md, First steps/Getting started/…}`; the workspace opens with the **Welcome!** tab active, sidebar header *Getting started · 1 / 1*, rows Workspace + Welcome!, `+ Context` `+ Folder`, `+ Later` at the bottom; shell in `reading-group` | `22-welcome.png`, file listing |
+| `+ Folder`, type "Reading", Enter | folder row with chevron, name saved in `meta.json.context` | `23-sidebar-folder.png` |
+| `+ Context` → Library → paper | paper attached at the tree root (a folder receives items when it is the selected row) | `23-sidebar-folder.png`, `meta.json` |
+| Gear → Reset everything (auto-confirmed) | `~/.engelbart/test` wiped to `annotations/ library.pglite/ seed/`; app returns to the create screen | text dump, `ls` |
+| Sibling switcher on hover | not driven: the CDP mouse-enter did not trigger React's hover; the code is the design's popover. Hudson exercised it live (a second topic appeared as `2 / 2`). | — |
+| Normal root (`TEST · OFF`) | covered by `store-modes.test.cjs`: separate `library.pglite`, no seeds, projects listed per root | test |

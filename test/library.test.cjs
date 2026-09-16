@@ -18,7 +18,7 @@ fs.writeFileSync(path.join(fixtures, 'problems.csv'), 'a,b\n');
 let ctx;
 
 test.before(async () => {
-  ctx = { homeDir, root: layout.root, testRoot: layout.testRoot, libraryDb: await db.openLibraryDb(layout.testRoot) };
+  ctx = { homeDir, root: layout.root, dataRoot: layout.testRoot, libraryDb: await db.openLibraryDb(layout.testRoot) };
 });
 test.after(async () => {
   await db.closeAll();

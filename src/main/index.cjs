@@ -337,6 +337,23 @@ if (!hasSingleInstanceLock) {
         electronShell.showItemInFolder(target);
         return true;
       },
+      confirmReset: async () => {
+        if (process.env.ENGELBART_CONFIRM_ALL === '1') return true; // driver harness only (scripts/drive.mjs)
+        const options = {
+          type: 'warning',
+          buttons: ['Reset test data', 'Cancel'],
+          defaultId: 1,
+          cancelId: 1,
+          title: 'Reset test data?',
+          message: 'Delete everything under ~/.engelbart/test?',
+          detail: 'Projects, notes, the test library and paper annotations are removed. The library is seeded again on the next start.',
+          noLink: true,
+        };
+        const result = mainWindow && !mainWindow.isDestroyed()
+          ? await dialog.showMessageBox(mainWindow, options)
+          : await dialog.showMessageBox(options);
+        return result.response === 0;
+      },
     });
     buildMenu();
     electronSession.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));

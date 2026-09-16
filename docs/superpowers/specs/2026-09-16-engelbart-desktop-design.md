@@ -13,7 +13,7 @@ Out of scope now: live preview, dataset viewer (both render the word *placeholde
 | # | Question | Decision | Why |
 |---|---|---|---|
 | 1 | "`.engelbart/` at my computer's root" | `~/.engelbart/` (home directory), created on first launch. | `/` is sealed on macOS; `~/.claude`, `~/.codex` follow the same convention. |
-| 2 | "all of this in some test directory" + test toggle | Everything the app does lives under `~/.engelbart/test/`. The toggle is a pill fixed top-right on every screen. Test **off** → the window is blank except the pill. Test **on** → the full app, rooted at `~/.engelbart/test/`. Toggle state persists in `~/.engelbart/config.json`. | Literal reading of the request. The non-test root is reserved and untouched. |
+| 2 | "all of this in some test directory" + test toggle | The pill is fixed top-right on every screen. Test **on** → the app is rooted at `~/.engelbart/test/` (seeded library, settings gear with *Reset everything*). Test **off** → the same app rooted at `~/.engelbart/` with its own, separate library database and no seeds. Toggle state persists in `~/.engelbart/config.json`. *(Revised 2026-09-16 evening: the first version left test-off blank.)* | "create a new folder either in the engelbart root or in engelbart/test depending"; "the test sql should be different from normal one". |
 | 3 | "use Supabase's local SDK" | **PGlite** (`@electric-sql/pglite`, Postgres in WASM, persisted to a directory) with plain SQL, migrations written as Postgres SQL. | There is no standalone "Supabase local SDK": local Supabase is a Docker stack, unusable inside an installable app. PGlite is what Supabase's own database.build uses; the schema ports to a Supabase project unchanged. Swap point is one module (`src/main/store/db.cjs`). |
 | 4 | Library DB location | `~/.engelbart/test/library.pglite/` (root). Per-project notes DB at `<project>/notes.pglite/`. | As requested: library at the Engelbart root, notes table per project. |
 | 5 | Library columns | `id, name, type (note|paper|git_repo|dataset|website, required), path?, url?, folder_path?, project_id?, created, last_edited`. | As requested. `project_id` is the join key to the project's notes table. |
@@ -28,10 +28,13 @@ Out of scope now: live preview, dataset viewer (both render the word *placeholde
 | 14 | PDF viewer "ink" | pdf.js (rendering + text layer), rough.js (zigzag highlights, low-opacity arrows), Caveat (handwritten margin notes) — the three libraries the design loads. Bundled locally, no CDN. | "the js libraries that claude design uses to provide the ink". |
 | 15 | PDF annotations storage | `~/.engelbart/test/annotations/<library_id>.json`. | Papers may live outside `.engelbart` (downloaded PDFs); the rule is that everything the app writes stays inside `.engelbart`. |
 | 16 | Which library items open | Only papers with a local `path` (downloaded PDFs). Websites/repos open externally in the browser; datasets → placeholder pane. | As requested. |
-| 17 | Multiple projects | A Home screen (blank + `+ Project` top-right on first run; project cards afterwards). Breadcrumb `Engelbart / project / box / goal`. | Needed to reach more than one project; kept in the design's language. |
+| 17 | First run and multiple projects | With no project in the current root the app opens on the **Create a new project** screen (`design/goal-canvas` "Name Project.dc.html": name, `./slug` path, filled *Create project*). Creating makes the directory `<root>/<slug>`, a first goal **First steps** (Current), a first topic **Getting started**, and a **Welcome!** note attached to that topic, then lands in the workspace with the note open. With projects present, Home shows the cards and `+ Project` opens the same screen. Breadcrumb `Engelbart / project / box / goal`. | Request of 2026-09-16 evening. The workspace needs a goal and a topic to exist; naming them for what they are follows design message 26. |
 | 18 | `@[chat]` inline chat *panels* (earlier iteration) | Dropped; only the final `@chat` line form is built. | The last two tweak messages define the line form. |
 | 19 | Image paste into documents | Not built (it is an import). `![alt](http…)` lines still render. | Rule 7. |
 | 20 | Deleting projects/goals/topics/notes | Not built. | Unrequested; destructive; a kink to decide on. |
+| 21 | Sidebar (design update 2026-09-16 21:09, messages 26–27) | No "Topics / Notes / Ideas" labels. Header = the current topic: status mark, editable name, `n / m`; hovering it lists the sibling topics and `+ New`. Below: the topic's context **tree** (Workspace first; folders expand; double-click renames; notes and papers are children), then `+ Context` / `+ Folder`; the Later list pinned to the bottom. Items `@[mentioned]` in the topic's document appear as children too. | "call them what they actually are"; "allow me to create folders of the context". |
+| 22 | Project directory name | `<root>/<slug>` where the slug is the path field of the create screen (default: slugified name); the display name lives in `project.json`. Renaming a project renames the directory only while it is still the name's own slug. | The create screen shows `./` + slug; the earlier rule "folder renamed with the project" is kept for the default case. |
+| 23 | Context tree storage | `meta.context` is a tree: entries are library ids or `{ id, name, children }` folders, validated (depth ≤ 6, ≤ 500 entries, ids unique across the tree). | Folders are per topic, like the design's `res` folders. |
 
 ## 3. File-system layout (test mode)
 
@@ -87,7 +90,9 @@ Bridge (`window.engelbartAPI`, all async, validated in main):
 
 ## 5. Screens and behaviour (from the design; values are the design's)
 
-**Test pill** (all screens): fixed top-right, DS caps pill: `TEST · ON` (filled ink) / `TEST · OFF` (outline). Off → blank page + pill only.
+**Test pill and gear** (all screens): fixed top-right, DS caps pill: `TEST · ON` (filled ink) / `TEST · OFF` (outline); in test mode a `⚙` sits left of it with *Reveal in Finder* and *Reset everything…* (native confirmation, then `~/.engelbart/test` is deleted and recreated).
+
+**Create a new project** (first run, and `+ Project`): wordmark top-left; centred column ≤ 600 px; `Create a new project` 500 34px −0.4px; subtitle 17px `#4d4d4d`; card `#fafafa` 1px `#eaeaea` radius 12 with *Project name* (placeholder `e.g. Engelbart`) and *Project path* (`./` + mono slug, hint follows the name); filled *Create project* 440×48, disabled until a name exists.
 
 **Home** (test on): wordmark `Engelbart` (500 17px, −0.2px) top-left, `+ Project` top-right beside the pill. Cards (1px `#eaeaea`, radius 8): name 14.5px/500, meta `n goals · edited …`. Creating: inline DS field, Enter creates and opens. Rename: click the name.
 

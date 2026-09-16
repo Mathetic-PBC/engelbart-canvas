@@ -14,8 +14,7 @@ function relative(iso) {
 }
 
 /** First screen: blank with `+ Project` top-right; then a grid of project cards. */
-export default function Home({ projects, onCreate, onOpen, onRename, error }) {
-  const [creating, setCreating] = React.useState(false);
+export default function Home({ projects, onCreateScreen, onOpen, onRename, error }) {
   const [renaming, setRenaming] = React.useState(null);
   return (
     <div style={{ position: 'absolute', inset: 0, overflow: 'auto', background: '#fff' }}>
@@ -23,14 +22,10 @@ export default function Home({ projects, onCreate, onOpen, onRename, error }) {
         <span style={{ font: '500 17px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Engelbart</span>
         {projects.length > 0 && <span style={{ font: '12px/1 var(--font-sans)', color: '#8f8f8f' }}>{projects.length} project{projects.length === 1 ? '' : 's'}</span>}
       </div>
-      <div style={{ position: 'absolute', right: 124, top: 14, display: 'flex', alignItems: 'center', gap: 12 }}>
-        {creating
-          ? <InlineField placeholder="project name…" onCommit={(name) => { setCreating(false); onCreate(name); }} onCancel={() => setCreating(false)} />
-          : (
-            <button type="button" className="hov-ink" onClick={() => setCreating(true)} style={{ padding: '7px 14px', border: '1px solid #eaeaea', borderRadius: 999, background: '#fff', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#4d4d4d', transition: 'color 120ms, border-color 120ms' }}>
-              + Project
-            </button>
-          )}
+      <div style={{ position: 'absolute', right: 164, top: 14, display: 'flex', alignItems: 'center', gap: 12 }}>
+        <button type="button" className="hov-ink" onClick={onCreateScreen} style={{ padding: '7px 14px', border: '1px solid #eaeaea', borderRadius: 999, background: '#fff', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#4d4d4d', transition: 'color 120ms, border-color 120ms' }}>
+          + Project
+        </button>
       </div>
       {error && <div style={{ position: 'absolute', left: 24, top: 52, font: '12.5px/1.5 var(--font-sans)', color: '#e70022' }}>{error}</div>}
       {projects.length > 0 && (

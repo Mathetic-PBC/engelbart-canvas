@@ -26,30 +26,32 @@ open "release/Engelbart-darwin-arm64/Engelbart.app"
 
 Unsigned and not notarised: first launch needs right-click → Open. The first launch creates `~/.engelbart/`.
 
-## Test mode
+## First run, test mode, reset
 
-The pill top-right is the only control that exists on every screen. **Test · on** roots the app at `~/.engelbart/test/` and seeds the library once (the HypoCompass paper, its repository, the arXiv page, a small dataset). **Test · off** leaves the window blank except the pill. The non-test root is reserved and untouched.
+With no project in the current root the app opens on **Create a new project** (name + `./slug` path). Creating a project makes `<root>/<slug>/`, a first goal *First steps*, a first topic *Getting started* and a *Welcome!* note, and opens the workspace with that note.
+
+The pill top-right exists on every screen. **Test · on** roots the app at `~/.engelbart/test/` and seeds that library once (the HypoCompass paper, its repository, the arXiv page, a small dataset); the `⚙` beside the pill can reveal the folder or **Reset everything** (native confirmation, then `~/.engelbart/test/` is deleted and recreated). **Test · off** roots the same app at `~/.engelbart/` with its own library database and no seeds.
 
 ## What lands on disk
 
 ```
-~/.engelbart/
+~/.engelbart/                        test off: this is the root
   config.json                        { "testMode": true }
-  test/
-    library.pglite/                  Postgres (PGlite): table `library`
-    annotations/<libraryId>.json     paper marks (highlights, notes, positions)
-    seed/                            the seeded fixtures
-    <Project>/
-      project.json                   { id, created }
-      notes.pglite/                  Postgres (PGlite): table `notes`
-      <Note>.md                      every note of the project, flat, plain markdown
-      <Goal>/meta.json               { id, box, created }
-      <Goal>/future.md               the Future list, one "- idea" per line
-      <Goal>/<Topic>/meta.json       { id, status, context: [libraryId], created }
-      <Goal>/<Topic>/workspace.md    the topic's document
+  library.pglite/                    Postgres (PGlite): table `library` (normal)
+  annotations/<libraryId>.json       paper marks (normal)
+  test/                              test on: this is the root — same layout, own library, seeds
+    library.pglite/  annotations/  seed/
+  <slug>/                            one project (slug = the path field of the create screen)
+    project.json                     { id, name, created }
+    notes.pglite/                    Postgres (PGlite): table `notes`
+    <Note>.md                        every note of the project, flat, plain markdown
+    <Goal>/meta.json                 { id, box, created }
+    <Goal>/future.md                 the Later list, one "- idea" per line
+    <Goal>/<Topic>/meta.json         { id, status, context: tree of library ids and { id, name, children } folders, created }
+    <Goal>/<Topic>/workspace.md      the topic's document
 ```
 
-Renaming a project, goal, topic or note renames the directory or file; ids stay in the json files. SQL schema: spec §6.
+Renaming a goal, topic or note renames the directory or file; renaming a project updates `project.json` and renames the directory only while it still is the name's own slug. Ids stay in the json files. SQL schema: spec §6.
 
 ## Layout of the code
 
@@ -60,8 +62,8 @@ src/main/store/              home layout + config, PGlite databases, projects/go
 src/main/terminal/           Experimental Terminal engine, unchanged (session manager, launch, providers, settings)
 src/preload.cjs              window.terminalAPI (ET contract) + window.engelbartAPI
 src/renderer/App.jsx         home | canvas | workspace, the zoom-and-fade transition, the test pill
-src/renderer/screens/        Home, Canvas, Workspace
-src/renderer/workspace/      Rail, DocTabs, DocEditor (+ MentionMenu, Popover), CtxModal, RightPane
+src/renderer/screens/        CreateProject, Home, Canvas, Workspace
+src/renderer/workspace/      Rail (topic header + sibling switcher + context tree), DocTabs, DocEditor (+ MentionMenu, Popover), CtxModal, RightPane
 src/renderer/pdf/PaperView   pdf.js + rough.js + Caveat
 src/renderer/terminal/       xterm client over terminalAPI; sessions survive navigation
 src/renderer/model/doc.js    the pure editor model (regexes, todo lines, caret offset mapping)
@@ -90,6 +92,8 @@ To test against a scratch home instead of your real `~/.engelbart`:
 ENGELBART_HOME_DIR=/tmp/eb-home electron . --user-data-dir=/tmp/eb-userdata --remote-debugging-port=9223
 ENGELBART_DEBUG_PORT=9223 node scripts/drive.mjs text
 ```
+
+`ENGELBART_CONFIRM_ALL=1` makes the native confirmation dialogs (reset) answer yes, for scripted runs only.
 
 ## Known kinks (deliberately open)
 

@@ -8,7 +8,8 @@ import RightPane from '../workspace/RightPane.jsx';
 import InlineField from '../ui/InlineField.jsx';
 import { kindOf } from '../ui/Icons.jsx';
 
-// The goal workspace: header crumbs, rail, document, right pane (design lines 101–390).
+// The goal workspace: header crumbs, sidebar, document, right pane (design lines 101–390,
+// sidebar per the 2026-09-16 update).
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const BOX_LABEL = { current: 'Current', experimental: 'Experimental', past: 'Past' };
@@ -17,6 +18,7 @@ const NEXT_STATUS = { open: 'progress', progress: 'done', done: 'open' };
 const SAVE_DELAY = 400;
 
 const basename = (value) => String(value || '').split('/').pop();
+const newId = () => (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
 
 function describe(row) {
   const kind = kindOf(row);
@@ -29,37 +31,52 @@ function describe(row) {
   return { ...row, title: row.name, summary, facts: `${kind.label}${row.last_edited ? ` · edited ${String(row.last_edited).slice(0, 10)}` : ''}` };
 }
 
+/* context tree helpers (entries: id string | { id, name, children }) */
+const treeIds = (entries, out = []) => {
+  for (const entry of entries || []) {
+    if (typeof entry === 'string') out.push(entry);
+    else if (entry) treeIds(entry.children, out);
+  }
+  return out;
+};
+const insertInto = (entries, folderId, id) => {
+  if (!folderId) return [...entries, id];
+  return entries.map((entry) => {
+    if (typeof entry === 'string') return entry;
+    if (entry.id === folderId) return { ...entry, children: [...(entry.children || []), id] };
+    return { ...entry, children: insertInto(entry.children || [], folderId, id) };
+  });
+};
+const renameFolder = (entries, folderId, name) => entries.map((entry) => {
+  if (typeof entry === 'string') return entry;
+  if (entry.id === folderId) return { ...entry, name };
+  return { ...entry, children: renameFolder(entry.children || [], folderId, name) };
+});
+
 function Separator({ onDown, onMove, onUp, onReset }) {
   return (
-    <div
-      role="separator"
-      aria-orientation="vertical"
-      onPointerDown={onDown}
-      onPointerMove={onMove}
-      onPointerUp={onUp}
-      onDoubleClick={onReset}
-      style={{ position: 'relative', flex: 'none', width: 1, background: '#eaeaea', cursor: 'col-resize', touchAction: 'none' }}
-    >
+    <div role="separator" aria-orientation="vertical" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onDoubleClick={onReset} style={{ position: 'relative', flex: 'none', width: 1, background: '#eaeaea', cursor: 'col-resize', touchAction: 'none' }}>
       <div style={{ position: 'absolute', inset: '0 -6px', zIndex: 4 }} />
     </div>
   );
 }
 
-export default function Workspace({ tree, library, goalId, style, active, reload, onClose, onHome, onError }) {
+export default function Workspace({ tree, library, goalId, initialTopicId, initialTab, style, active, reload, onClose, onHome, onError }) {
   const project = tree.project;
   const goal = tree.goals.find((candidate) => candidate.id === goalId);
   const topics = goal ? goal.topics : [];
-  const [topicId, setTopicId] = React.useState(topics[0] ? topics[0].id : null);
-  const [expanded, setExpanded] = React.useState(() => (topics[0] ? { [topics[0].id]: true } : {}));
-  const [hoverTopic, setHoverTopic] = React.useState(null);
+  const [topicId, setTopicId] = React.useState(initialTopicId || (topics[0] ? topics[0].id : null));
   const [railWidth, setRailWidth] = React.useState(300);
   const [split, setSplit] = React.useState(0.5);
-  const [tabs, setTabs] = React.useState([{ id: 'ws', title: 'Workspace' }]);
-  const [activeTab, setActiveTab] = React.useState('ws');
+  const [tabs, setTabs] = React.useState(() => (initialTab ? [{ id: 'ws', title: 'Workspace' }, initialTab] : [{ id: 'ws', title: 'Workspace' }]));
+  const [activeTab, setActiveTab] = React.useState(initialTab ? initialTab.id : 'ws');
   const [docs, setDocs] = React.useState({});
   const [rightMode, setRightMode] = React.useState('preview');
   const [ctxModal, setCtxModal] = React.useState(null);
   const [paper, setPaper] = React.useState(null);
+  const [folders, setFolders] = React.useState({});
+  const [selFolder, setSelFolder] = React.useState(null);
+  const [renaming, setRenaming] = React.useState(null);
   const [ideas, setIdeas] = React.useState(() => (goal ? goal.future : []).map((text, index) => ({ id: `f${index}`, text })));
   const [renamingGoal, setRenamingGoal] = React.useState(false);
   const [titleDraft, setTitleDraft] = React.useState('');
@@ -109,7 +126,9 @@ export default function Workspace({ tree, library, goalId, style, active, reload
     if (ideaTimer.current) clearTimeout(ideaTimer.current);
   }, [flush]);
 
-  /* -------------------------------------------------------------- mentions */
+  /* ---------------------------------------------------------- context rows */
+
+  const byId = React.useMemo(() => new Map(library.map((row) => [row.id, row])), [library]);
 
   const mentioned = React.useMemo(() => {
     const text = topic ? docs[`ws:${topic.id}`] || '' : '';
@@ -117,20 +136,42 @@ export default function Workspace({ tree, library, goalId, style, active, reload
     return library.filter((row) => names.has(row.name.toLowerCase()));
   }, [docs, topic, library]);
 
-  const rowsFor = React.useCallback((candidate) => {
-    const byId = new Map(library.map((row) => [row.id, row]));
-    const seen = new Set();
-    const rows = [{ id: 'ws', name: 'Workspace', type: 'workspace' }];
-    const push = (row) => {
-      if (!row || seen.has(row.id)) return;
-      seen.add(row.id);
-      rows.push(row);
+  const activeRowId = activeTab !== 'ws' ? activeTab : (rightMode === 'paper' && paper ? paper.id : rightMode === 'dataset' ? 'dataset' : 'ws');
+
+  const rows = React.useMemo(() => {
+    const out = [{ id: 'ws', name: 'Workspace', type: 'workspace', depth: 0, on: activeRowId === 'ws', editing: false }];
+    if (!topic) return out;
+    const present = new Set();
+    const walk = (entries, depth) => {
+      for (const entry of entries) {
+        if (typeof entry === 'string') {
+          const row = byId.get(entry);
+          if (!row) continue;
+          present.add(row.id);
+          out.push({ ...row, depth, on: activeRowId === row.id || (row.type === 'dataset' && activeRowId === 'dataset'), editing: renaming === row.id });
+        } else {
+          const open = folders[entry.id] !== false;
+          present.add(entry.id);
+          out.push({ id: entry.id, name: entry.name, type: 'folder', depth, open, on: selFolder === entry.id, editing: renaming === entry.id, children: entry.children });
+          if (open) walk(entry.children || [], depth + 1);
+        }
+      }
     };
-    for (const id of candidate.context) push(byId.get(id));
-    if (candidate.id === topicId) for (const row of mentioned) push(row);
-    for (const note of goal ? goal.notes : []) if (note.topicId === candidate.id) push({ id: note.id, name: note.name, type: 'note' });
-    return rows;
-  }, [library, topicId, mentioned, goal]);
+    walk(topic.context, 0);
+    for (const note of goal ? goal.notes : []) {
+      if (note.topicId === topic.id && !present.has(note.id)) {
+        present.add(note.id);
+        out.push({ id: note.id, name: note.name, type: 'note', depth: 0, on: activeRowId === note.id, editing: renaming === note.id });
+      }
+    }
+    for (const row of mentioned) {
+      if (!present.has(row.id)) {
+        present.add(row.id);
+        out.push({ ...row, depth: 0, on: activeRowId === row.id, editing: renaming === row.id });
+      }
+    }
+    return out;
+  }, [topic, byId, folders, selFolder, renaming, activeRowId, goal, mentioned]);
 
   const mentionable = React.useMemo(() => [CHAT_ITEM, ...library.map(describe)], [library]);
 
@@ -163,31 +204,39 @@ export default function Workspace({ tree, library, goalId, style, active, reload
 
   const openItem = React.useCallback((row) => {
     if (!row || row.id === 'chat') return;
-    if (row.type === 'workspace') {
-      setActiveTab('ws');
-      return;
-    }
-    if (row.type === 'note') {
-      openTab(row.id, row.name);
-      return;
-    }
-    if (row.type === 'paper') {
-      void openPaper(row);
-      return;
-    }
-    if (row.type === 'dataset') {
-      setRightMode('dataset');
-      return;
-    }
+    if (row.type === 'workspace') { setActiveTab('ws'); return; }
+    if (row.type === 'note') { openTab(row.id, row.name); return; }
+    if (row.type === 'paper') { void openPaper(row); return; }
+    if (row.type === 'dataset') { setRightMode('dataset'); return; }
     if (row.url) api.openExternal(row.url).catch((error) => onError(error));
   }, [openTab, openPaper, onError]);
 
+  const onRowClick = (row) => {
+    if (row.type === 'folder') {
+      setSelFolder((current) => (current === row.id ? null : row.id));
+      setFolders((current) => ({ ...current, [row.id]: current[row.id] === false }));
+      return;
+    }
+    setSelFolder(null);
+    openItem(row);
+  };
+
   /* ---------------------------------------------------------------- topics */
+
+  const saveContext = async (entries) => {
+    if (!topic) return;
+    try {
+      await api.setTopicContext(project.id, goalId, topic.id, entries);
+      await reload();
+    } catch (error) {
+      onError(error);
+    }
+  };
 
   const selectTopic = (id) => {
     setTopicId(id);
-    setExpanded((current) => ({ ...current, [id]: true }));
     setActiveTab('ws');
+    setSelFolder(null);
   };
 
   const addTopic = async () => {
@@ -209,9 +258,21 @@ export default function Workspace({ tree, library, goalId, style, active, reload
     }
   };
 
-  const addNote = async (attachTopic) => {
+  const renameTopic = async (name) => {
+    if (!topic) return;
     try {
-      const note = await api.createNote(project.id, { name: 'Untitled note', goalId, topicId: attachTopic ? attachTopic.id : null });
+      await api.renameTopic(project.id, goalId, topic.id, name);
+      await reload();
+    } catch (error) {
+      onError(error);
+    }
+  };
+
+  const addNote = async () => {
+    if (!topic) return;
+    try {
+      const note = await api.createNote(project.id, { name: 'Untitled note', goalId, topicId: topic.id });
+      await api.setTopicContext(project.id, goalId, topic.id, insertInto(topic.context, selFolder, note.id));
       await reload();
       setCtxModal(null);
       openTab(note.id, note.name);
@@ -220,12 +281,29 @@ export default function Workspace({ tree, library, goalId, style, active, reload
     }
   };
 
-  const attachContext = async (candidate, row) => {
+  const attachContext = async (row) => {
+    if (!topic) return;
+    await saveContext(insertInto(topic.context, selFolder, row.id));
+    setCtxModal(null);
+  };
+
+  const addFolder = async () => {
+    if (!topic) return;
+    const id = newId();
+    await saveContext([...topic.context, { id, name: 'New folder', children: [] }]);
+    setFolders((current) => ({ ...current, [id]: true }));
+    setRenaming(id);
+  };
+
+  const renameRow = async (row, name) => {
     try {
-      await api.setTopicContext(project.id, goalId, candidate.id, [...candidate.context, row.id]);
+      if (row.type === 'folder') {
+        await saveContext(renameFolder(topic ? topic.context : [], row.id, name));
+        return;
+      }
+      const updated = await api.renameLibraryItem(row.id, name);
+      setTabs((current) => current.map((tab) => (tab.id === row.id ? { ...tab, title: updated.name } : tab)));
       await reload();
-      setCtxModal(null);
-      setExpanded((current) => ({ ...current, [candidate.id]: true }));
     } catch (error) {
       onError(error);
     }
@@ -288,10 +366,8 @@ export default function Workspace({ tree, library, goalId, style, active, reload
         return;
       }
       if (event.key !== 'Escape') return;
-      if (ctxModal) {
-        setCtxModal(null);
-        return;
-      }
+      if (ctxModal) { setCtxModal(null); return; }
+      if (renaming) { setRenaming(null); return; }
       if (renamingGoal) return;
       if (editorRef.current && editorRef.current.isActive && editorRef.current.isActive()) return;
       if (inTerminal) return;
@@ -300,7 +376,7 @@ export default function Workspace({ tree, library, goalId, style, active, reload
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [active, tabs, ctxModal, renamingGoal, onClose]);
+  }, [active, tabs, ctxModal, renaming, renamingGoal, onClose]);
 
   /* --------------------------------------------------------------- resizing */
 
@@ -313,7 +389,6 @@ export default function Workspace({ tree, library, goalId, style, active, reload
 
   if (!goal) return <div style={style} />;
 
-  const activeRowId = activeTab !== 'ws' ? activeTab : (rightMode === 'paper' && paper ? paper.id : rightMode === 'dataset' ? 'dataset' : 'ws');
   const text = docKey ? docs[docKey] : undefined;
 
   const header = (
@@ -330,7 +405,7 @@ export default function Workspace({ tree, library, goalId, style, active, reload
 
   return (
     <div data-screen-label="Workspace" style={style}>
-      <header style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '16px 24px', borderBottom: '1px solid #eaeaea', flex: 'none', paddingRight: 140 }}>
+      <header style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '16px 24px', borderBottom: '1px solid #eaeaea', flex: 'none', paddingRight: 180 }}>
         <button type="button" onClick={onHome} title="All projects" style={{ padding: 0, border: 0, background: 'transparent', cursor: 'pointer', font: '500 17px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Engelbart</button>
         <span style={{ font: '15px/1 var(--font-sans)', color: '#c9c9c9' }}>/</span>
         <button type="button" className="hov-ink" onClick={onClose} title="Back to the canvas" style={{ padding: 0, border: 0, background: 'transparent', cursor: 'pointer', font: '400 15px/1.3 var(--font-sans)', color: '#4d4d4d' }}>{project.name}</button>
@@ -347,24 +422,19 @@ export default function Workspace({ tree, library, goalId, style, active, reload
         <Rail
           width={Math.min(railWidth, railMax())}
           topics={topics}
-          activeTopicId={topicId}
-          expanded={expanded}
-          hoverTopic={hoverTopic}
-          rowsFor={rowsFor}
-          activeRowId={activeRowId}
-          notes={goal.notes}
-          activeTab={activeTab}
-          ideas={ideas}
+          topic={topic}
           onSelectTopic={selectTopic}
           onCycleTopic={cycleTopic}
-          onTogglePin={(id) => { setExpanded((current) => ({ ...current, [id]: !current[id] })); setHoverTopic(null); }}
-          onHoverTopic={setHoverTopic}
-          onLeaveTopic={() => setHoverTopic(null)}
-          onOpenRow={(candidate, row) => { if (candidate.id !== topicId) selectTopic(candidate.id); openItem(row); }}
-          onAddContext={(candidate) => setCtxModal(candidate)}
+          onRenameTopic={renameTopic}
           onAddTopic={addTopic}
-          onOpenNote={(note) => openTab(note.id, note.name)}
-          onAddNote={() => addNote(null)}
+          rows={rows}
+          onRowClick={onRowClick}
+          onRowRenameStart={(row) => setRenaming(row.id)}
+          onRowRename={renameRow}
+          onRowRenameEnd={() => setRenaming(null)}
+          onAddContext={() => { if (topic) setCtxModal(topic); }}
+          onAddFolder={addFolder}
+          ideas={ideas}
           onIdeasChange={saveIdeas}
           onAddIdea={addIdea}
         />
@@ -410,13 +480,13 @@ export default function Workspace({ tree, library, goalId, style, active, reload
         />
       </div>
 
-      {ctxModal && (
+      {ctxModal && topic && (
         <CtxModal
-          topic={topics.find((candidate) => candidate.id === ctxModal.id) || ctxModal}
+          topic={{ ...topic, context: treeIds(topic.context) }}
           library={library}
           onClose={() => setCtxModal(null)}
-          onNewNote={() => addNote(ctxModal)}
-          onAttach={(row) => attachContext(topics.find((candidate) => candidate.id === ctxModal.id) || ctxModal, row)}
+          onNewNote={addNote}
+          onAttach={attachContext}
         />
       )}
     </div>

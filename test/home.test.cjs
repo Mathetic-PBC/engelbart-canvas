@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { ensureHome, readConfig, writeConfig, sanitizeName, uniqueName } = require('../src/main/store/home.cjs');
+const { ensureHome, readConfig, writeConfig, sanitizeName, slugify, uniqueName } = require('../src/main/store/home.cjs');
 
 function tempHome() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-home-'));
@@ -49,4 +49,12 @@ test('uniqueName appends a counter on collision, for dirs and files', () => {
   assert.equal(uniqueName(dir, 'Fresh'), 'Fresh');
   fs.writeFileSync(path.join(dir, 'Note.md'), '');
   assert.equal(uniqueName(dir, 'Note', '.md'), 'Note 2');
+});
+
+test('slugify follows the create screen: lower-case, dashes, trimmed', () => {
+  assert.equal(slugify('Thesis 2026'), 'thesis-2026');
+  assert.equal(slugify('  My Folder!  '), 'my-folder');
+  assert.equal(slugify('../etc/passwd'), 'etc-passwd');
+  assert.equal(slugify(''), '');
+  assert.equal(slugify('x'.repeat(80)).length, 48);
 });

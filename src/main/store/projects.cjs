@@ -2,26 +2,42 @@
 
 // Projects, goals and topics are directories; notes are flat markdown files in the
 // project directory, indexed by the project's notes table and mirrored in the root
-// library (spec §3).
+// library (spec §3). `ctx.dataRoot` is ~/.engelbart (test off) or ~/.engelbart/test (test on).
 //
-//   <testRoot>/<Project>/project.json               { id, created }
-//   <testRoot>/<Project>/notes.pglite/
-//   <testRoot>/<Project>/<Note>.md
-//   <testRoot>/<Project>/<Goal>/meta.json           { id, box, created }
-//   <testRoot>/<Project>/<Goal>/future.md           "- idea" per line
-//   <testRoot>/<Project>/<Goal>/<Topic>/meta.json   { id, status, context, created }
-//   <testRoot>/<Project>/<Goal>/<Topic>/workspace.md
+//   <dataRoot>/<slug>/project.json                { id, name, created }
+//   <dataRoot>/<slug>/notes.pglite/
+//   <dataRoot>/<slug>/<Note>.md
+//   <dataRoot>/<slug>/<Goal>/meta.json            { id, box, created }
+//   <dataRoot>/<slug>/<Goal>/future.md            "- idea" per line
+//   <dataRoot>/<slug>/<Goal>/<Topic>/meta.json    { id, status, context, created }
+//   <dataRoot>/<slug>/<Goal>/<Topic>/workspace.md
+//
+// A topic's `context` is a tree: entries are library ids (strings) or folders
+// `{ id, name, children: [entries] }` (the design's + Folder).
 
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { sanitizeName, uniqueName, readJson, writeJson, DIR_MODE } = require('./home.cjs');
+const { sanitizeName, slugify, uniqueName, readJson, writeJson, DIR_MODE } = require('./home.cjs');
 const db = require('./db.cjs');
 
 const BOXES = Object.freeze(['current', 'experimental', 'past']);
 const STATUSES = Object.freeze(['open', 'progress', 'done']);
-const RESERVED = new Set(['annotations', 'seed']);
+const RESERVED = new Set(['annotations', 'seed', 'test']);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MAX_TREE_ENTRIES = 500;
+const MAX_TREE_DEPTH = 6;
+
+const WELCOME_NOTE = [
+  'This is a note. Notes are plain markdown files in your project folder, and the sidebar lists what this topic can see.',
+  '',
+  '- [ ] Write a todo, then press Build',
+  '- [ ] Type @ to mention a paper, dataset or note from your library',
+  '- [ ] Type @chat, a question, and press Enter',
+  '',
+  'The Workspace tab is this topic\'s own document. Add papers, folders and notes from the sidebar with + Context and + Folder.',
+  '',
+].join('\n');
 
 const nowIso = () => new Date().toISOString();
 const byCreated = (a, b) => String(a.created || '').localeCompare(String(b.created || ''));
@@ -73,16 +89,57 @@ function latestMtime(dir, depth = 3) {
   return latest ? new Date(latest).toISOString() : null;
 }
 
+/* ------------------------------------------------------------ context tree */
+
+function validateTree(entries, depth = 0, counter = { n: 0, seen: new Set() }) {
+  if (!Array.isArray(entries)) throw new TypeError('context must be an array');
+  if (depth > MAX_TREE_DEPTH) throw new TypeError('context folders are nested too deep');
+  const out = [];
+  const seen = counter.seen;
+  for (const entry of entries) {
+    counter.n += 1;
+    if (counter.n > MAX_TREE_ENTRIES) throw new TypeError('context has too many entries');
+    if (typeof entry === 'string') {
+      assertId(entry, 'library item');
+      if (seen.has(entry)) continue;
+      seen.add(entry);
+      out.push(entry);
+    } else if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+      const id = assertId(entry.id, 'folder');
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const name = typeof entry.name === 'string' ? entry.name.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 200) : '';
+      out.push({ id, name: name || 'New folder', children: validateTree(entry.children || [], depth + 1, counter) });
+    } else {
+      throw new TypeError('context entry must be an id or a folder');
+    }
+  }
+  return out;
+}
+
+function treeIds(entries, out = []) {
+  for (const entry of entries || []) {
+    if (typeof entry === 'string') out.push(entry);
+    else if (entry && typeof entry === 'object') treeIds(entry.children, out);
+  }
+  return out;
+}
+
+function treeContains(entries, id) {
+  return treeIds(entries).includes(id);
+}
+
 /* ------------------------------------------------------------------ projects */
 
 function projectRecord(dir) {
   const meta = readJson(path.join(dir, 'project.json'));
   if (!meta || typeof meta.id !== 'string') return null;
-  return { id: meta.id, name: path.basename(dir), dir, created: meta.created || null };
+  const name = typeof meta.name === 'string' && meta.name.trim() ? meta.name : path.basename(dir);
+  return { id: meta.id, name, slug: path.basename(dir), dir, created: meta.created || null };
 }
 
 function projectRecords(ctx) {
-  return subdirs(ctx.testRoot).map(projectRecord).filter(Boolean);
+  return subdirs(ctx.dataRoot).map(projectRecord).filter(Boolean);
 }
 
 function findProject(ctx, id) {
@@ -92,32 +149,66 @@ function findProject(ctx, id) {
   return project;
 }
 
+function publicProject(project, extra = {}) {
+  return { id: project.id, name: project.name, slug: project.slug, dir: project.dir, created: project.created, ...extra };
+}
+
 async function listProjects(ctx) {
   return projectRecords(ctx)
-    .map((project) => ({ ...project, goalCount: goalRecords(project.dir).length, lastEdited: latestMtime(project.dir) || project.created }))
+    .map((project) => publicProject(project, { goalCount: goalRecords(project.dir).length, lastEdited: latestMtime(project.dir) || project.created }))
     .sort((a, b) => String(b.lastEdited || '').localeCompare(String(a.lastEdited || '')));
 }
 
-async function createProject(ctx, name) {
-  const dirName = uniqueName(ctx.testRoot, sanitizeName(name));
-  const dir = path.join(ctx.testRoot, dirName);
+// `path` is the directory name under the data root, as the create screen shows it after "./".
+function resolveSlug(ctx, name, requested) {
+  const raw = typeof requested === 'string' && requested.trim() ? requested : name;
+  const slug = slugify(raw) || 'engelbart';
+  return uniqueName(ctx.dataRoot, slug);
+}
+
+async function createProject(ctx, input) {
+  const options = typeof input === 'string' ? { name: input } : (input || {});
+  const name = sanitizeName(options.name);
+  const slug = resolveSlug(ctx, name, options.path);
+  const dir = path.join(ctx.dataRoot, slug);
   fs.mkdirSync(dir, { mode: DIR_MODE });
-  const meta = { id: randomUUID(), created: nowIso() };
+  const meta = { id: randomUUID(), name, created: nowIso() };
   writeJson(path.join(dir, 'project.json'), meta);
   await db.openNotesDb(dir);
-  return { ...projectRecord(dir), goalCount: 0, lastEdited: meta.created };
+  return publicProject(projectRecord(dir), { goalCount: 0, lastEdited: meta.created });
+}
+
+// First-run flow: the project, a first goal and topic, and a "Welcome!" note open in the
+// topic's context (spec §2 #17, request of 2026-09-16).
+async function createProjectWithWelcome(ctx, input) {
+  const project = await createProject(ctx, input);
+  const goal = await createGoal(ctx, project.id, { name: 'First steps', box: 'current' });
+  const topic = await createTopic(ctx, project.id, goal.id, 'Getting started');
+  const note = await createNote(ctx, project.id, { name: 'Welcome!', goalId: goal.id, topicId: topic.id, text: WELCOME_NOTE });
+  await setTopicContext(ctx, project.id, goal.id, topic.id, [note.id]);
+  return { project, goalId: goal.id, topicId: topic.id, noteId: note.id, noteName: note.name };
 }
 
 async function renameProject(ctx, id, name) {
   const project = findProject(ctx, id);
-  const base = sanitizeName(name);
-  if (base === project.name) return { ...project, goalCount: goalRecords(project.dir).length, lastEdited: latestMtime(project.dir) };
-  const next = path.join(ctx.testRoot, uniqueName(ctx.testRoot, base));
-  await db.closeDb(path.join(project.dir, 'notes.pglite'));
-  fs.renameSync(project.dir, next);
-  await ctx.libraryDb.rewritePathPrefix(project.dir + path.sep, next + path.sep);
-  const renamed = projectRecord(next);
-  return { ...renamed, goalCount: goalRecords(next).length, lastEdited: latestMtime(next) };
+  const next = sanitizeName(name);
+  if (next === project.name) return publicProject(project, { goalCount: goalRecords(project.dir).length, lastEdited: latestMtime(project.dir) });
+  const meta = readJson(path.join(project.dir, 'project.json')) || {};
+  writeJson(path.join(project.dir, 'project.json'), { ...meta, name: next });
+  let dir = project.dir;
+  // The directory follows the name only while it is still the name's own slug.
+  if (project.slug === slugify(project.name)) {
+    const slug = uniqueName(ctx.dataRoot, slugify(next) || 'engelbart');
+    const target = path.join(ctx.dataRoot, slug);
+    if (target !== dir) {
+      await db.closeDb(path.join(dir, 'notes.pglite'));
+      fs.renameSync(dir, target);
+      await ctx.libraryDb.rewritePathPrefix(dir + path.sep, target + path.sep);
+      dir = target;
+    }
+  }
+  const renamed = projectRecord(dir);
+  return publicProject(renamed, { goalCount: goalRecords(dir).length, lastEdited: latestMtime(dir) });
 }
 
 /* --------------------------------------------------------------------- goals */
@@ -192,7 +283,12 @@ function publicGoal(goal) {
 function topicRecord(dir) {
   const meta = readJson(path.join(dir, 'meta.json'));
   if (!meta || typeof meta.id !== 'string' || !STATUSES.includes(meta.status)) return null;
-  const context = Array.isArray(meta.context) ? meta.context.filter((item) => typeof item === 'string') : [];
+  let context = [];
+  try {
+    context = validateTree(meta.context || []);
+  } catch {
+    context = [];
+  }
   return { id: meta.id, name: path.basename(dir), status: meta.status, context, dir, created: meta.created || null };
 }
 
@@ -238,10 +334,9 @@ async function setTopicStatus(ctx, projectId, goalId, topicId, status) {
   return publicTopic(topicRecord(topic.dir));
 }
 
-async function setTopicContext(ctx, projectId, goalId, topicId, ids) {
+async function setTopicContext(ctx, projectId, goalId, topicId, entries) {
   const { topic } = findTopic(ctx, projectId, goalId, topicId);
-  if (!Array.isArray(ids) || ids.length > 500) throw new TypeError('context must be an array');
-  const context = [...new Set(ids.map((id) => assertId(id, 'library item')))];
+  const context = validateTree(entries);
   const meta = readJson(path.join(topic.dir, 'meta.json'));
   writeJson(path.join(topic.dir, 'meta.json'), { ...meta, context });
   return publicTopic(topicRecord(topic.dir));
@@ -253,13 +348,13 @@ function publicNote(row) {
   return { id: row.id, name: row.name, path: row.path, goalId: row.goal_id || null, topicId: row.topic_id || null, created: row.created, lastEdited: row.last_edited };
 }
 
-async function createNote(ctx, projectId, { name, goalId, topicId } = {}) {
+async function createNote(ctx, projectId, { name, goalId, topicId, text } = {}) {
   const project = findProject(ctx, projectId);
   if (goalId != null) assertId(goalId, 'goal');
   if (topicId != null) assertId(topicId, 'topic');
   const stem = uniqueName(project.dir, sanitizeName(name || 'Untitled note'), '.md');
   const file = path.join(project.dir, `${stem}.md`);
-  writeTextAtomic(file, '');
+  writeTextAtomic(file, typeof text === 'string' ? text : '');
   const id = randomUUID();
   const notesDb = await db.openNotesDb(project.dir);
   const row = await notesDb.insert({ id, name: stem, path: `${stem}.md`, goal_id: goalId || null, topic_id: topicId || null });
@@ -333,14 +428,19 @@ async function loadProject(ctx, projectId) {
     notes: notes.filter((note) => note.goalId === goal.id),
     future: readFuture(goal.dir),
   }));
-  return { project: { id: project.id, name: project.name, dir: project.dir, created: project.created }, goals, notes };
+  return { project: publicProject(project), goals, notes };
 }
 
 module.exports = {
   BOXES,
   STATUSES,
+  WELCOME_NOTE,
+  validateTree,
+  treeIds,
+  treeContains,
   listProjects,
   createProject,
+  createProjectWithWelcome,
   renameProject,
   loadProject,
   createGoal,

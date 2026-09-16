@@ -31,8 +31,10 @@ const invoke = (channel) => (...args) => ipcRenderer.invoke(`engelbart:${channel
 const engelbartAPI = Object.freeze({
   config: invoke('config'),
   setTestMode: invoke('set-test-mode'),
+  resetTestData: invoke('reset-test-data'),
   listProjects: invoke('list-projects'),
   createProject: invoke('create-project'),
+  createProjectWithWelcome: invoke('create-project-with-welcome'),
   renameProject: invoke('rename-project'),
   loadProject: invoke('load-project'),
   createGoal: invoke('create-goal'),
@@ -47,6 +49,7 @@ const engelbartAPI = Object.freeze({
   readDoc: invoke('read-doc'),
   writeDoc: invoke('write-doc'),
   library: invoke('library'),
+  renameLibraryItem: invoke('rename-library-item'),
   readLibraryFile: invoke('read-library-file'),
   readAnnotations: invoke('read-annotations'),
   writeAnnotations: invoke('write-annotations'),

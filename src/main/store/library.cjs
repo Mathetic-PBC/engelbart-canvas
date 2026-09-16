@@ -23,7 +23,7 @@ function seedRows(seedDir) {
 async function seedIfEmpty(ctx, fixturesDir) {
   const existing = await ctx.libraryDb.list();
   if (existing.length) return 0;
-  const seedDir = path.join(ctx.testRoot, 'seed');
+  const seedDir = path.join(ctx.dataRoot, 'seed');
   fs.mkdirSync(seedDir, { recursive: true, mode: DIR_MODE });
   for (const name of ['hypocompass.pdf', 'problems.csv']) {
     const source = path.join(fixturesDir, name);
@@ -58,7 +58,7 @@ async function readLibraryFile(ctx, id) {
 
 function annotationFile(ctx, id) {
   if (typeof id !== 'string' || !UUID_RE.test(id)) throw new TypeError('library id is invalid');
-  return path.join(ctx.testRoot, 'annotations', `${id}.json`);
+  return path.join(ctx.dataRoot, 'annotations', `${id}.json`);
 }
 
 async function readAnnotations(ctx, id) {
