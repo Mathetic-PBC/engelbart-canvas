@@ -1,0 +1,1084 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style data-omelette-injected>html,body{background:transparent}</style><script data-omelette-injected>(()=>{{const n=new URLSearchParams(location.search).get("theme");if(n==="light"||n==="dark"){document.documentElement.dataset.theme=n}}{if(new URLSearchParams(location.search).get("_omthumb")==="1"){const n=(f)=>{const g=f.focus;if(!g)return;f.focus=function(h){g.call(this,{...h,preventScroll:true})}};n(HTMLElement.prototype);n(SVGElement.prototype);if(typeof MathMLElement!=="undefined"){n(MathMLElement.prototype)}const d=(f)=>{f.removeAttribute("autofocus");f.inert=true;if(!(f instanceof HTMLElement))f.removeAttribute("tabindex")};const p=(f)=>{if(f.hasAttribute("autofocus"))d(f);for(const g of f.querySelectorAll("[autofocus]")){d(g)}};p(document.documentElement);new MutationObserver((f)=>{for(const g of f){for(const h of g.addedNodes){if(h.nodeType===1)p(h)}}}).observe(document,{childList:true,subtree:true})}}{const n=()=>{try{if(document.querySelector('meta[name="color-scheme"]'))return;const d=getComputedStyle(document.documentElement).getPropertyValue("color-scheme").trim();if(d&&d!=="normal")return;const p=(y)=>{if(!y)return null;const m=getComputedStyle(y).backgroundColor.match(/^rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s/]+([\d.]+%?))?\s*\)$/);if(!m)return null;const w=m[4]==null?1:parseFloat(m[4])/(m[4].endsWith("%")?100:1);if(w<0.99)return null;return[+m[1],+m[2],+m[3]]};const f=p(document.body)||p(document.documentElement);if(!f)return;const g=(y)=>{const m=y/255;return m<=0.04045?m/12.92:((m+0.055)/1.055)**2.4};const h=0.2126*g(f[0])+0.7152*g(f[1])+0.0722*g(f[2]);document.documentElement.style.setProperty("color-scheme",h<0.4?"dark":"light")}catch{}};if(document.readyState==="complete")n();else window.addEventListener("load",n)}var I=[];var B=false;var K=false;var C=()=>{};if(K===true){try{const n=setTimeout.bind(window);const d=1e4;const p=15;const f=1e4;const g=120000;const h=200;const y=(o)=>{try{let r;if(typeof o==="string")r=o;else if(o instanceof URL)r=o.href;else if(typeof Request!=="undefined"&&o instanceof Request)r=o.url;else return null;if(!r)return null;const l=document.baseURI;const i=new URL(r,l);if(i.protocol!=="http:"&&i.protocol!=="https:")return null;if(i.origin!==new URL(l).origin)return null;return i.origin+i.pathname}catch{return null}};const m=new Map;const w=(o)=>{let r=m.get(o);if(!r){if(m.size>=h){const l=m.keys().next().value;if(l!==undefined)m.delete(l)}r={fails:[],until:0,cooldown:f,hard:false};m.set(o,r)}return r};const R=(o)=>{const r=m.get(o);return r!==undefined&&r.until>Date.now()};const O=(o,r)=>{const l=Date.now();const i=w(o);if(r)i.hard=true;if(i.until>l)return;i.fails.push(l);while(i.fails.length>0&&i.fails[0]<=l-d)i.fails.shift();if(i.fails.length>=p){i.until=l+i.cooldown;if(i.hard)i.cooldown=Math.min(i.cooldown*2,g);i.fails.length=0;try{n(()=>{try{S(true)}catch{}},i.until-l+100)}catch{}console.warn("[omelette] asset circuit breaker: pausing requests to "+o+" for "+Math.round((i.until-l)/1000)+"s after "+p+" failures in "+d/1000+"s")}};const e=(o)=>{m.delete(o)};const t=100;const a=new WeakMap;const u=new Set;let s=null;const S=(o)=>{for(const r of Array.from(u)){try{const l=a.get(r);if(l===undefined){u.delete(r);continue}if(o){const i=y(l);if(i!==null&&R(i))continue}a.delete(r);u.delete(r);if(s!==null)s.call(r,l)}catch{}}};C=()=>{try{m.clear();S(false)}catch{}};document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")C()});const _=window.fetch;if(typeof _==="function"){const o=function(...r){let l=null;try{l=y(r[0])}catch{}if(l!==null&&R(l)){let c;try{if(r[1]&&r[1].signal!==undefined){c=r[1].signal||undefined}else if(typeof Request!=="undefined"&&r[0]instanceof Request){c=r[0].signal||undefined}}catch{c=undefined}return new Promise((k,b)=>{const E=()=>{try{return c.reason!==undefined?c.reason:new DOMException("The operation was aborted.","AbortError")}catch{return new DOMException("The operation was aborted.","AbortError")}};try{if(c&&c.aborted){b(E());return}}catch{}let T=false;const j=()=>{if(T)return;T=true;b(E())};try{if(c)c.addEventListener("abort",j,{once:true})}catch{}n(()=>{if(T)return;T=true;try{if(c)c.removeEventListener("abort",j)}catch{}let L;try{L=new Response(null,{status:429,statusText:"Too Many Requests",headers:{"Retry-After":"10"}})}catch{L={ok:false,status:429}}k(L)},250)})}const i=_.apply(window,r);if(l!==null){const c=l;i.then((k)=>{try{if(k.ok)e(c);else if(k.status===401||k.status===403||k.status===404||k.status===429){O(c,k.status!==404)}}catch{}},()=>{})}return i};window.fetch=o}const v=Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,"src");if(v!==undefined&&v.set!==undefined&&v.get!==undefined){const o=v.set;s=o;Object.defineProperty(HTMLImageElement.prototype,"src",{configurable:true,enumerable:v.enumerable,get:v.get,set(r){const l=`${r}`;try{const i=y(l);if(i!==null&&R(i)){a.set(this,l);if(u.size<t)u.add(this);return}}catch{}try{a.delete(this);u.delete(this)}catch{}o.call(this,l)}})}try{const o=HTMLImageElement.prototype.setAttribute;HTMLImageElement.prototype.setAttribute=function(r,l){if(arguments.length<2){o.apply(this,arguments);return}if(typeof r==="string"&&r.toLowerCase()==="src"){const i=`${l}`;try{const c=y(i);if(c!==null&&R(c)){a.set(this,i);if(u.size<t)u.add(this);return}a.delete(this);u.delete(this)}catch{}o.call(this,r,i);return}o.call(this,r,l)}}catch{}window.addEventListener("error",(o)=>{try{const r=o.target;if(r instanceof HTMLImageElement){const l=y(r.currentSrc||r.src||"");if(l!==null)O(l,true)}}catch{}},true);window.addEventListener("load",(o)=>{try{const r=o.target;if(r instanceof HTMLImageElement){const l=y(r.currentSrc||r.src||"");if(l!==null)e(l);const i=a.get(r);if(i!==undefined){let c=false;try{c=new URL(i,document.baseURI).href===new URL(r.currentSrc||r.src||"",document.baseURI).href}catch{c=false}if(c){a.delete(r);u.delete(r)}}}}catch{}},true)}catch{}}var J=30000;var G=3000;document.addEventListener("DOMContentLoaded",()=>{const n=window.Babel;const d="om-src-id";if(n&&n.registerPlugin&&!(n.availablePlugins&&n.availablePlugins[d])){n.registerPlugin(d,({types:h})=>({visitor:{JSXOpeningElement(y,m){const w=y.node;if(w.name&&w.name.type==="JSXMemberExpression")return;for(let t=0;t<w.attributes.length;t++){const a=w.attributes[t];if(a.type==="JSXAttribute"&&a.name&&a.name.name==="data-om-id")return}const R=m.file&&m.file.opts&&m.file.opts.filename||"?";const O=w.loc&&w.loc.start;const e=`jsx:${R}:${w.start??0}:${O?O.line:0}:${O?O.column+1:0}`;w.attributes.push(h.jsxAttribute(h.jsxIdentifier("data-om-id"),h.stringLiteral(e)))}}}))}const p="om-text-extract";let f=false;if(B&&n&&n.registerPlugin&&!(n.availablePlugins&&n.availablePlugins[p])){const h=window.React;if(h&&h.useSyncExternalStore&&h.createElement){f=true;const y={};const m=new Set;let w=0;window.__omTextO=y;window.__omTextSet=(e)=>{for(const t in e){const a=e[t];if(a==null)delete y[t];else y[t]=a}w++;m.forEach((t)=>t())};const R=(e)=>{m.add(e);return()=>m.delete(e)};const O=()=>w;window.__OmT=function e(t){h.useSyncExternalStore(R,O,O);return h.createElement("span",{"data-om-text":t.i,className:"__om-t"},t.i in y?y[t.i]:t.children)};n.registerPlugin(p,({types:e})=>{const t={style:1,script:1,noscript:1,textarea:1,title:1,option:1,text:1,tspan:1,textPath:1};const a={placeholder:1,alt:1,title:1,label:1,"aria-label":1,"aria-description":1,"aria-placeholder":1};const u=(o,r)=>e.logicalExpression("??",e.memberExpression(e.logicalExpression("||",e.memberExpression(e.identifier("window"),e.identifier("__omTextO")),e.objectExpression([])),e.stringLiteral(o),true),r);const s=(o)=>o.file&&o.file.opts&&o.file.opts.filename||"?";const S=(o)=>o.file&&o.file.code||"";const _=(o,r)=>{const l=(c)=>c&&c.start!=null&&c.end!=null&&(c.type==="StringLiteral"||c.type==="TemplateLiteral"&&c.expressions.length===0)?[c.start,c.end]:null;const i=l(r);if(i)return i;if(r&&r.type==="Identifier"){const c=o.scope.getBinding(r.name);if(c&&c.constant&&c.path.node.type==="VariableDeclarator"){return l(c.path.node.init)}}return null};const v=(o,r,l)=>{const i=o.node;let c=false;const k=(E,T)=>{c=true;return e.jsxElement(e.jsxOpeningElement(e.jsxIdentifier("__OmT"),[e.jsxAttribute(e.jsxIdentifier("i"),e.stringLiteral(E))],false),e.jsxClosingElement(e.jsxIdentifier("__OmT")),[T],false)};const b=i.children.map((E)=>{if(E.type==="JSXText"){if(E.start==null||E.end==null)return E;const T=l.slice(E.start,E.end);const j=T.length-T.trimStart().length;const L=T.length-T.trimEnd().length;if(j+L>=T.length)return E;return k(`txt:${r}:${E.start+j}:${E.end-L}`,E)}if(E.type==="JSXExpressionContainer"){const T=_(o,E.expression);if(T)return k(`str:${r}:${T[0]}:${T[1]}`,E)}return E});if(c)i.children=b};return{visitor:{JSXOpeningElement(o,r){const l=o.node;const i=s(r);const c={};for(let k=0;k<l.attributes.length;k++){const b=l.attributes[k];if(b.type!=="JSXAttribute"||!b.name)continue;const E=b.name.name;if(!a[E])continue;if(!b.value||b.value.type!=="StringLiteral")continue;if(b.value.start==null||b.value.end==null)continue;const T=`txt:${i}:${b.value.start}:${b.value.end}`;c[E]=T;b.value=e.jsxExpressionContainer(u(T,e.stringLiteral(b.value.value)))}if(Object.keys(c).length){l.attributes.push(e.jsxAttribute(e.jsxIdentifier("data-om-text-attrs"),e.stringLiteral(JSON.stringify(c))))}},JSXElement(o,r){const l=o.node.openingElement;const i=l&&l.name&&l.name.name;if(i==="__OmT")return;if(typeof i==="string"&&t[i])return;v(o,s(r),S(r))},JSXFragment(o,r){v(o,s(r),S(r))}}}})}}const g=f?["transform-react-jsx-source",d,p]:["transform-react-jsx-source",d];document.querySelectorAll('script[type="text/babel"],script[type="text/jsx"]').forEach((h,y)=>{const m=h.getAttribute("data-plugins")||"";const w=g.filter((R)=>m.indexOf(R)<0);if(w.length){h.setAttribute("data-plugins",m?`${m},${w.join(",")}`:w.join(","))}if(!h.hasAttribute("data-filename")){h.setAttribute("data-filename",h.getAttribute("src")||`inline-${y}`)}})});var A=window.parent;var U="not editable here — open the project in the Claude Design editor to save";var W=()=>Promise.resolve({persisted:false,noHost:true,reason:U});var H=W;var M="data/storage.json";var z=()=>{try{const n=new URL(document.baseURI);const d=n.pathname.match(/\/projects\/([^/]+)\/serve\//);if(d)return d[1];return n.hostname.split(".")[0]||""}catch{return location.hostname.split(".")[0]||""}};var Z=()=>{try{const n=new URL(document.baseURI);const d=n.pathname.indexOf("/serve/");if(d>=0)return n.origin+n.pathname.slice(0,d+"/serve/".length)+M}catch{}return"./"+M};var x=null;var N=()=>{if(!x){x=fetch(Z(),{cache:"no-store"}).then((n)=>{if(n.ok)return n.text();return n.status===404?"":null}).catch(()=>null).then((n)=>{if(n===null){x=null;return null}const d=new Map;if(!n)return d;let p;try{p=JSON.parse(n)}catch{console.warn("[omelette.storage] "+M+" is not valid JSON; treating the store as unreadable so a save cannot overwrite the "+"hand-edited bytes. Fix the JSON (or delete the file) to re-enable persistence.");x=null;return null}if(p===null||typeof p!=="object"||Array.isArray(p)){console.warn("[omelette.storage] "+M+" doesn't hold a JSON object; treating the store as unreadable so a save cannot "+"overwrite the hand-edited bytes. Make the top level a JSON object to re-enable persistence.");x=null;return null}const f=p;if("data"in f){const g=f.data;if(g===null||typeof g!=="object"||Array.isArray(g)){console.warn("[omelette.storage] "+M+' has a "data" field that is not a JSON object; treating the store as unreadable so a '+'save cannot overwrite the hand-edited bytes. Make "data" a JSON object to re-enable persistence.');x=null;return null}const h=f._meta;const y=h!==null&&typeof h==="object"?h.project:undefined;if(typeof y==="string"&&y!==""&&y!==z())return d;for(const m of Object.keys(g))d.set(m,g[m]);return d}for(const g of Object.keys(f)){if(g!=="_meta")d.set(g,f[g])}return d})}return x};var F=(n)=>H(M,JSON.stringify({_meta:{project:z(),version:1},data:Object.fromEntries(n)},null,2));var D=Promise.resolve();var $=(n)=>{const d=D.then(n);D=d.then(()=>{return},()=>{return});return d};var V=/sk-(?:ant-)?[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|xox[a-z]-[A-Za-z0-9][A-Za-z0-9-]{9,}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----/;var Y=/password|passwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token|credential/i;var Q=(n,d,p)=>{if(V.test(d)||Y.test(n)&&typeof p==="string"&&p.length>=8){console.warn('[omelette.storage] the value for "'+n+'" looks like a credential. The storage file is a plaintext project file — visible to '+"everyone with project access and copied when the project is duplicated. Do not store secrets here.")}};var q={persisted:false,reason:"could not load the existing store — not overwriting it"};var X={persisted:false,reason:"stored value changed since a failed read — re-read this key before saving"};var P=new Set;var ee={get:(n)=>{if(typeof n!=="string"){return Promise.reject(new TypeError("storage.get: key must be a string"))}return $(N).then((d)=>{if(d===null){P.add(n);return null}P.delete(n);if(!d.has(n))return null;const p=d.get(n);return p==null?null:JSON.parse(JSON.stringify(p))})},set:(n,d)=>{if(typeof n!=="string"){return Promise.reject(new TypeError("storage.set: key must be a string"))}let p;try{p=JSON.stringify(d)}catch(g){return Promise.reject(new TypeError("storage.set: value must be JSON-serializable ("+String(g)+")"))}if(p===undefined){return Promise.reject(new TypeError("storage.set: value must be JSON-serializable"))}Q(n,p,d);const f=JSON.parse(p);return $(()=>N().then((g)=>{if(g===null)return q;if(P.has(n)){if(g.has(n))return X;P.delete(n)}g.set(n,f);return F(g)}))},delete:(n)=>{if(typeof n!=="string"){return Promise.reject(new TypeError("storage.delete: key must be a string"))}return $(()=>N().then((d)=>{if(d===null)return q;if(P.has(n)){if(d.has(n))return X;P.delete(n)}d.delete(n);return F(d)}))},keys:()=>$(N).then((n)=>n===null?[]:Array.from(n.keys()))};window.omelette={writeFile:(n,d)=>H(n,d).then((p)=>{if(!p.persisted&&!p.noHost){throw new Error(p.reason||"write failed")}}),storage:ee};if(A&&A!==window){const n=(e,t)=>{try{A.postMessage({__omelette_log:true,type:e,data:t},"*")}catch{}};["log","warn","error"].forEach((e)=>{const t=console[e];console[e]=(...a)=>{const u=a.map((s)=>{try{return typeof s==="object"?JSON.stringify(s):String(s)}catch{try{return String(s)}catch{return"[unstringifiable]"}}}).join(" ");n(e,u);t.apply(console,a)}});window.addEventListener("error",(e)=>{const t=e.target;if(t&&t!==window&&t.tagName){const a=t.src||t.href||"";n("resource_error",`${t.tagName} failed to load: ${a}`)}else{n("error",`${e.message||"Unknown error"} at ${e.filename||"?"}:${e.lineno||0}:${e.colno||0}`)}},true);window.addEventListener("unhandledrejection",(e)=>{const t=e.reason;const a=t instanceof Error?`${t.message} ${t.stack}`:String(t);n("error",`Unhandled rejection: ${a}`)});window.addEventListener("click",(e)=>{if(e.defaultPrevented||e.button!==0)return;if(e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;const t=e.composedPath?e.composedPath():[];const a=["button","input","select","textarea","summary","label"];let u=null;for(const v of t){if(!(v instanceof Element))continue;if(v.localName==="a"){if(!(v instanceof HTMLAnchorElement))return;u=v;break}if(a.indexOf(v.localName)!==-1)return}if(!u)return;if(u.isContentEditable)return;const s=u.closest("[contenteditable]");if(s&&s.getAttribute("contenteditable")!=="false")return;const S=(u.getAttribute("target")||"_self").toLowerCase();if(S!=="_self"&&S!=="_top"&&S!=="_parent")return;let _;try{_=new URL(u.href)}catch{return}if(_.protocol!=="http:"&&_.protocol!=="https:")return;if(location.origin==="null")return;if(_.origin===location.origin)return;e.preventDefault();window.open(_.href,"_blank","noopener,noreferrer")});const d=()=>{try{A.postMessage({type:"omelette:height",height:document.documentElement.scrollHeight},"*")}catch{}};if(window.ResizeObserver)new ResizeObserver(d).observe(document.documentElement);const p=()=>{d();if(!document.querySelector('script[type="text/babel"],script[type="text/jsx"]'))return;const e=()=>document.getElementById("root")||document.querySelector("body > div[id]");const t=e()?.firstElementChild??null;let a=0;const u=()=>{const s=e();if(s&&s.firstElementChild!==t||++a>30){d();return}setTimeout(u,100)};setTimeout(u,100)};if(document.readyState==="complete")p();else window.addEventListener("load",p);const f={};let g=0;const h=(e)=>new Promise((t,a)=>{if(!I.length){a(new Error("claude.complete: no parent origin"));return}const u=`c${++g}`;const s=()=>setTimeout(()=>{delete f[u];a(new Error(`claude.complete: no data for ${J/1000}s`))},J);const S=s();f[u]={resolve:t,reject:a,text:"",t:S,arm:s};try{for(const _ of I){A.postMessage({__om_api:true,id:u,body:e},_)}}catch(_){clearTimeout(S);delete f[u];a(_)}});const y=8;const m=async(e,t)=>{if(!Array.isArray(e.messages)){throw new Error("claude.complete: tools require a messages array")}const a=e.messages.slice();const u={...e,tools:e.tools.map((_)=>{if(_===null||typeof _!=="object")return _;const v={};for(const o of Object.keys(_)){if(typeof _[o]!=="function")v[o]=_[o]}return v})};const s=u.tool_choice;const S=s!=null&&(s.type==="any"||s.type==="tool")?{...u,tool_choice:s.disable_parallel_tool_use!==undefined?{type:"auto",disable_parallel_tool_use:s.disable_parallel_tool_use}:{type:"auto"}}:u;for(let _=0;_<y;_++){const v=await h({..._===0?u:S,messages:a});const o=v.message;const r=o&&Array.isArray(o.content)?o.content:null;const l=r?r.filter((c)=>c?.type==="tool_use"):[];if(o?.stop_reason!=="tool_use"||l.length===0){return v.text}const i=[];for(const c of l){const k=t.get(c.name);if(!k){i.push({type:"tool_result",tool_use_id:c.id,content:`no handler for tool "${c.name}"`,is_error:true});continue}try{const b=await k(c.input);const E=typeof b==="string"?b:O(b)??"";i.push({type:"tool_result",tool_use_id:c.id,content:E})}catch(b){i.push({type:"tool_result",tool_use_id:c.id,content:String(b?.message??b??"tool handler failed"),is_error:true})}}a.push({role:"assistant",content:r},{role:"user",content:i})}throw new Error(`claude.complete: exceeded ${y} tool turns`)};window.claude={complete(e){const t=e;if(t!==null&&typeof t==="object"&&Array.isArray(t.tools)&&t.tools.some((a)=>a!==null&&typeof a==="object"&&typeof a.run==="function")){const a=new Map;for(const u of t.tools){if(u!==null&&typeof u==="object"&&typeof u.run==="function"){a.set(String(u.name),u.run)}}return m(t,a)}return h(e).then((a)=>a.text)}};const w={};let R=0;H=(e,t)=>new Promise((a)=>{if(!I.length){a({persisted:false,noHost:true,reason:U});return}const u=`f${++R}`;const s=setTimeout(()=>{delete w[u];a({persisted:false,noHost:true,reason:U})},G);w[u]={settle:a,t:s};try{for(const S of I){A.postMessage({__om_file:true,id:u,op:"write",path:e,content:t},S)}}catch{clearTimeout(s);delete w[u];a({persisted:false,noHost:true,reason:U})}});const O=(e)=>{try{return JSON.stringify(e)}catch{return JSON.stringify(String(e))}};window.addEventListener("message",(e)=>{if(I.indexOf(e.origin)<0)return;if(e.source!==A)return;const t=e.data;if(!t)return;if(t.type==="omelette-preview-refresh"){if(typeof t.token!=="string"||!/^[0-9a-f.-]+(\.(rc|pr-[0-9]+))?(\.[0-9]+\.[0-9a-f]{16})?$/.test(t.token))return;const s=Math.max(1,Math.floor((t.expiresAt||0)-Date.now()/1000));document.cookie="__Host-omelette-preview="+t.token+"; Path=/; Secure; SameSite=None; Partitioned; Max-Age="+s;C();return}if(t.__om_file_r){const s=w[t.id];if(!s)return;clearTimeout(s.t);delete w[t.id];s.settle(t.ok?{persisted:true}:{persisted:false,reason:t.error||"write failed"});return}if(t.__om_api_r){const s=f[t.id];if(!s)return;if(t.error!=null){clearTimeout(s.t);delete f[t.id];s.reject(new Error(t.error));return}if(t.chunk!=null){clearTimeout(s.t);s.t=s.arm();s.text+=t.chunk;return}if(t.done){clearTimeout(s.t);delete f[t.id];s.resolve({text:t.text!=null?t.text:s.text,message:t.message});return}return}if(!t.__om_eval)return;const a=t;const u=(s)=>{e.source.postMessage({...s,__om_eval_r:1,id:a.id},e.origin)};try{const s=(0,eval)(a.code);if(s&&typeof s.then==="function"){s.then((S)=>u({ok:1,v:O(S)}),(S)=>u({ok:0,e:String(S)}))}else{u({ok:1,v:O(s)})}}catch(s){u({ok:0,e:String(s)})}})}})();
+</script>
+
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="_ds/engelbart-design-system-81b7cba6-1c6e-462b-9cea-81baf5a521fe/tokens/fonts.css">
+<link rel="stylesheet" href="_ds/engelbart-design-system-81b7cba6-1c6e-462b-9cea-81baf5a521fe/tokens/colors.css">
+<link rel="stylesheet" href="_ds/engelbart-design-system-81b7cba6-1c6e-462b-9cea-81baf5a521fe/tokens/typography.css">
+<link rel="stylesheet" href="_ds/engelbart-design-system-81b7cba6-1c6e-462b-9cea-81baf5a521fe/tokens/spacing.css">
+<link rel="stylesheet" href="_ds/engelbart-design-system-81b7cba6-1c6e-462b-9cea-81baf5a521fe/tokens/effects.css">
+<link rel="stylesheet" href="_ds/engelbart-design-system-81b7cba6-1c6e-462b-9cea-81baf5a521fe/styles.css">
+<script src="_ds/engelbart-design-system-81b7cba6-1c6e-462b-9cea-81baf5a521fe/_ds_bundle.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://unpkg.com/roughjs@4.6.6/bundled/rough.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;500&display=swap">
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#fff;color:#171717;font:14.5px/1.5 system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif}
+*{box-sizing:border-box}
+a{color:#0070f3;text-decoration:underline;text-underline-offset:3px}
+a:hover{color:#0761d1}
+button{font:inherit;color:inherit}
+button:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(0,112,243,.18)}
+input,textarea{outline:none}
+textarea::placeholder,input::placeholder{color:#8f8f8f;font-style:italic}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes blink{50%{opacity:0}}
+[data-idea-row]:hover button{opacity:1!important}
+[data-idea-row] button::after{content:'×'}
+.pdf-text{position:absolute;overflow:hidden;line-height:1;text-align:initial;text-size-adjust:none;forced-color-adjust:none}
+.pdf-text span,.pdf-text br{color:transparent;position:absolute;white-space:pre;cursor:text;transform-origin:0% 0%}
+.pdf-text ::selection{background:rgba(0,112,243,.3)}
+.pdf-text .endOfContent{display:none}
+[data-pdf] [data-page]{user-select:none}
+[data-pdf] .pdf-text{user-select:text}
+[data-pdf] textarea::selection{background:rgba(0,112,243,.2)}
+</style>
+</helmet>
+<div style="position:fixed; inset:0; overflow:hidden; background:#fff; color:#171717; font-family:var(--font-sans)">
+
+  <sc-if value="{{ showCanvas }}" hint-placeholder-val="{{ true }}">
+    <div data-canvas="1" data-screen-label="Canvas" style="{{ canvasStyle }}">
+      <div style="position:absolute; left:24px; top:18px; z-index:2; display:flex; align-items:baseline; gap:10px">
+        <span style="font:500 17px/1 var(--font-sans); letter-spacing:-0.2px; color:#171717">Engelbart</span>
+        <span style="font:12px/1 var(--font-sans); color:#8f8f8f">{{ goalCount }} goals</span>
+      </div>
+      <div style="position:absolute; right:24px; bottom:18px; z-index:2; padding:7px 14px; border:1px solid #eaeaea; border-radius:999px; background:#fff; font:11.5px/1 var(--font-sans); color:#8f8f8f; white-space:nowrap">⌘ + scroll or pinch to zoom · scroll to pan · click a goal to open</div>
+      <div style="{{ innerStyle }}">
+        <div style="display:grid; grid-template-columns:70fr 30fr; grid-template-rows:1fr 1fr; gap:16px; width:100%; height:100%; padding:64px 24px 24px">
+          <sc-for list="{{ boxes }}" as="box" hint-placeholder-count="3">
+            <div style="grid-area: {{ box.area }}; display:flex; flex-direction:column; gap:14px; min-height:0; padding:16px 18px 18px; border:1px solid #eaeaea; border-radius:8px; background:#fff">
+              <div style="display:flex; justify-content:space-between; align-items:baseline; gap:12px">
+                <span style="font:500 9px/1 var(--font-sans); letter-spacing:1.6px; text-transform:uppercase; color:#8f8f8f">{{ box.label }}</span>
+                <span style="font:500 9px/1 var(--font-sans); letter-spacing:1.6px; text-transform:uppercase; color:#8f8f8f">{{ box.right }}</span>
+              </div>
+              <div style="flex:1; min-height:0; display:flex; flex-wrap:wrap; align-content:flex-start; gap:12px">
+                <sc-for list="{{ box.goals }}" as="g" hint-placeholder-count="2">
+                  <div onClick="{{ g.open }}" onMouseEnter="{{ g.hover }}" onMouseLeave="{{ unhover }}" style="flex: {{ g.grow }} 1 {{ g.basis }}px; display:flex; flex-direction:column; gap:10px; padding:12px 14px 14px; border:1px solid #eaeaea; border-radius:8px; background:#fff; cursor:zoom-in; transition:border-color 120ms; min-width:0" style-hover="border-color:#c9c9c9">
+                    <div style="display:flex; align-items:baseline; justify-content:space-between; gap:8px">
+                      <span style="font:500 14.5px/1.5 var(--font-sans); color:#171717">{{ g.name }}</span>
+                      <span style="font:11px/1 var(--font-sans); color:#8f8f8f; white-space:nowrap">{{ g.count }}</span>
+                    </div>
+                    <sc-if value="{{ g.hasTopics }}" hint-placeholder-val="{{ false }}">
+                      <div style="display:flex; flex-direction:column; gap:2px">
+                        <sc-for list="{{ g.topics }}" as="tp" hint-placeholder-count="2">
+                          <div style="display:flex; align-items:center; gap:8px; min-width:0">
+                            <span style="{{ tp.markStyle }}">{{ tp.markGlyph }}</span>
+                            <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:13px/1.7 var(--font-sans); color:#171717">{{ tp.title }}</span>
+                          </div>
+                        </sc-for>
+                      </div>
+                    </sc-if>
+                    <sc-if value="{{ g.detail }}" hint-placeholder-val="{{ false }}">
+                      <div style="display:flex; flex-direction:column; gap:4px; border-top:1px solid #eaeaea; padding-top:10px">
+                        <sc-for list="{{ g.sources }}" as="s" hint-placeholder-count="3">
+                          <div style="display:flex; align-items:center; gap:8px; min-width:0">
+                            <span title="{{ s.kind }}" style="flex:none; width:16px; display:flex; align-items:center; justify-content:center; color:#4d4d4d; font:500 12px/1 var(--font-sans)">{{ s.glyph }}</span>
+                            <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:12px/1.6 var(--font-sans); color:{{ s.color }}; font-style:{{ s.fontStyle }}">{{ s.title }}</span>
+                          </div>
+                        </sc-for>
+                      </div>
+                    </sc-if>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ showWs }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Workspace" style="{{ wsStyle }}">
+      <header style="display:flex; align-items:baseline; gap:10px; padding:16px 24px; border-bottom:1px solid #eaeaea; flex:none">
+        <button onClick="{{ closeWs }}" title="All goals" style="padding:0; border:0; background:transparent; cursor:pointer; font:500 17px/1 var(--font-sans); letter-spacing:-0.2px; color:#171717">Engelbart</button>
+        <span style="font:15px/1 var(--font-sans); color:#c9c9c9">/</span>
+        <button onClick="{{ closeWs }}" title="Back to the canvas" style="padding:0; border:0; background:transparent; cursor:pointer; font:400 15px/1.3 var(--font-sans); color:#4d4d4d" style-hover="color:#171717">{{ boxLabel }}</button>
+        <span style="font:15px/1 var(--font-sans); color:#c9c9c9">/</span>
+        <h1 style="margin:0; font:400 15px/1.3 var(--font-sans); color:#4d4d4d">{{ goalName }}</h1>
+        <span style="margin-left:auto; font:11.5px/1 var(--font-sans); color:#8f8f8f">esc zooms out</span>
+      </header>
+
+      <div style="flex:1; min-height:0; display:flex">
+
+        <aside aria-label="Topics" style="{{ railStyle }}">
+          <div style="padding:0 12px 14px; font:600 11px/1.3 var(--font-sans); color:#4d4d4d">Topics</div>
+          <sc-for list="{{ topics }}" as="t" hint-placeholder-count="4">
+            <div onMouseEnter="{{ t.enter }}" onMouseLeave="{{ leaveTopic }}" style="display:flex; flex-direction:column">
+              <div onClick="{{ t.select }}" style="display:flex; align-items:center; gap:10px; padding:11px 12px; border-radius:8px; cursor:pointer; background:{{ t.bg }}; box-shadow:{{ t.shadow }}; transition:background 120ms">
+                <button onClick="{{ t.cycle }}" title="{{ t.statusTitle }}" aria-label="{{ t.statusTitle }}" style="{{ t.markStyle }}">{{ t.markGlyph }}</button>
+                <span style="flex:1; min-width:0; font:{{ t.weight }} 14px/1.5 var(--font-sans); color:#171717; overflow-wrap:anywhere">{{ t.title }}</span>
+                <sc-if value="{{ t.showToggle }}" hint-placeholder-val="{{ false }}">
+                  <button onClick="{{ t.toggle }}" title="{{ t.toggleTitle }}" style="flex:none; width:22px; height:22px; padding:0; border:0; border-radius:6px; background:transparent; cursor:pointer; font:13px/1 var(--font-sans); color:#8f8f8f" style-hover="color:#171717; background:#f2f2f2">{{ t.toggleGlyph }}</button>
+                </sc-if>
+              </div>
+              <sc-if value="{{ t.open }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex; flex-direction:column; gap:1px; padding:2px 0 8px 22px; animation:rise 160ms cubic-bezier(.25,.1,.25,1)">
+                  <sc-for list="{{ t.rows }}" as="r" hint-placeholder-count="3">
+                    <div onClick="{{ r.click }}" style="display:flex; align-items:center; gap:10px; padding:6px 10px; border-radius:6px; cursor:pointer; background:{{ r.bg }}; transition:background 120ms" style-hover="background:#f2f2f2">
+                      <span style="flex:none; width:18px; height:18px; border-radius:5px; display:flex; align-items:center; justify-content:center; color:{{ r.fg }}; font:500 12px/1 var(--font-sans)">{{ r.glyph }}</span>
+                      <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:{{ r.weight }} 13px/1.5 var(--font-sans); color:#171717">{{ r.name }}</span>
+                      <span style="flex:none; font:500 9px/1 var(--font-sans); letter-spacing:1.2px; text-transform:uppercase; color:#8f8f8f">{{ r.kindLabel }}</span>
+                    </div>
+                  </sc-for>
+                  <div onClick="{{ t.addContext }}" style="display:flex; align-items:center; gap:10px; padding:6px 10px; border-radius:6px; cursor:pointer; color:#8f8f8f; transition:color 120ms" style-hover="color:#171717; background:#f2f2f2">
+                    <span style="flex:none; width:18px; height:18px; display:flex; align-items:center; justify-content:center; font:500 13px/1 var(--font-sans)">+</span>
+                    <span style="font:13px/1.5 var(--font-sans)">Context</span>
+                  </div>
+                </div>
+              </sc-if>
+            </div>
+          </sc-for>
+          <div onClick="{{ addTopic }}" style="display:flex; align-items:center; gap:12px; padding:8px 12px; font:13px/1.4 var(--font-sans); color:#8f8f8f; cursor:pointer; transition:color 120ms" style-hover="color:#171717">+ Topic</div>
+
+          <div style="padding:22px 12px 14px; font:600 11px/1.3 var(--font-sans); color:#4d4d4d">Notes</div>
+          <sc-for list="{{ notes }}" as="n" hint-placeholder-count="2">
+            <div onClick="{{ n.click }}" style="display:flex; align-items:center; gap:10px; padding:11px 12px; border-radius:8px; cursor:pointer; background:{{ n.bg }}; box-shadow:{{ n.shadow }}; transition:background 120ms" style-hover="background:#f2f2f2">
+              <span style="flex:none; width:16px; height:16px; display:flex; align-items:center; justify-content:center; color:#171717; font-size:16px; line-height:1">{{ noteGlyph }}</span>
+              <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:{{ n.weight }} 14px/1.5 var(--font-sans); color:#171717">{{ n.name }}</span>
+            </div>
+          </sc-for>
+          <div onClick="{{ addFreeNote }}" style="display:flex; align-items:center; gap:12px; padding:8px 12px; font:13px/1.4 var(--font-sans); color:#8f8f8f; cursor:pointer; transition:color 120ms" style-hover="color:#171717">+ Note</div>
+
+          <div style="padding:22px 12px 14px; font:600 11px/1.3 var(--font-sans); color:#4d4d4d">Future</div>
+          <sc-for list="{{ ideas }}" as="idea" hint-placeholder-count="0">
+            <div data-idea-row="1" style="display:flex; align-items:flex-start; gap:10px; padding:6px 12px; border-radius:8px" style-hover="background:#f2f2f2">
+              <span style="flex:none; margin-top:4px; width:14px; text-align:center; font:14px/1 var(--font-sans); color:#8f8f8f">–</span>
+              <textarea data-idea="{{ idea.id }}" rows="1" spellCheck="false" value="{{ idea.text }}" onChange="{{ idea.change }}" onKeyDown="{{ idea.key }}" onBlur="{{ idea.blur }}" style="flex:1; min-width:0; padding:0; border:0; background:transparent; resize:none; overflow:hidden; font:14px/1.5 var(--font-sans); color:#171717; field-sizing:content"></textarea>
+              <button onClick="{{ idea.remove }}" aria-label="Remove idea" style="flex:none; margin-top:3px; padding:0 2px; border:0; background:transparent; font:14px/1 var(--font-sans); color:#c9c9c9; cursor:pointer; opacity:0; transition:color 120ms, opacity 120ms" style-hover="color:#e70022; opacity:1" style-focus="opacity:1"></button>
+            </div>
+          </sc-for>
+          <div onClick="{{ addIdea }}" style="display:flex; align-items:center; gap:12px; padding:8px 12px; font:13px/1.4 var(--font-sans); color:#8f8f8f; cursor:pointer; transition:color 120ms" style-hover="color:#171717">+ Idea</div>
+
+          
+        </aside>
+
+        <div role="separator" aria-orientation="vertical" onPointerDown="{{ railDown }}" onPointerMove="{{ railMove }}" onPointerUp="{{ railUp }}" onDoubleClick="{{ railReset }}" style="position:relative; flex:none; width:1px; background:#eaeaea; cursor:col-resize; touch-action:none" style-after="content:''; position:absolute; inset:0 -6px; z-index:4"></div>
+
+        <main style="{{ mainStyle }}">
+          <div style="display:flex; align-items:center; gap:0; padding:0 8px; min-height:38px; border-bottom:1px solid #eaeaea; flex:none">
+            <sc-for list="{{ tabs }}" as="tab" hint-placeholder-count="1">
+              <div onClick="{{ tab.select }}" style="display:flex; align-items:center; gap:8px; padding:10px 12px 12px; margin-bottom:-1px; border-bottom:2px solid {{ tab.line }}; cursor:pointer; font:{{ tab.weight }} 13px/1.3 var(--font-sans); color:{{ tab.color }}; white-space:nowrap" style-hover="color:#171717">
+                <span>{{ tab.title }}</span>
+                <sc-if value="{{ tab.closable }}" hint-placeholder-val="{{ false }}">
+                  <button onClick="{{ tab.close }}" aria-label="Close tab" style="padding:0 2px; border:0; background:transparent; cursor:pointer; font:13px/1 var(--font-sans); color:#c9c9c9" style-hover="color:#e70022">×</button>
+                </sc-if>
+              </div>
+            </sc-for>
+            
+          </div><div onClick="{{ docClick }}" style="flex:1; min-height:0; overflow:auto; padding:28px clamp(12px, 4%, 40px) 120px; cursor:text">
+            <div style="max-width:65ch; margin-inline:auto; padding-inline:clamp(0px, 3%, 24px); cursor:auto; font-size:17px">
+              <input value="{{ docTitle }}" onChange="{{ titleChange }}" onKeyDown="{{ titleKey }}" aria-label="Title" spellCheck="false" style="display:block; width:100%; padding:0; border:0; background:transparent; font:500 22px/1.35 var(--font-sans); letter-spacing:-0.3px; color:#171717">
+              
+              <div data-editor="1" contentEditable="true" suppressContentEditableWarning="{{ true }}" spellCheck="false" role="textbox" aria-multiline="true" aria-label="Document" style="margin-top:18px; outline:none; min-height:240px; font:17px/1.6 var(--font-sans); color:#171717; white-space:pre-wrap; overflow-wrap:anywhere; caret-color:#171717; cursor:text"></div>
+            </div>
+          </div>
+
+          
+        </main>
+
+        <div role="separator" aria-orientation="vertical" onPointerDown="{{ splitDown }}" onPointerMove="{{ splitMove }}" onPointerUp="{{ railUp }}" onDoubleClick="{{ splitReset }}" style="position:relative; flex:none; width:1px; background:#eaeaea; cursor:col-resize; touch-action:none" style-after="content:''; position:absolute; inset:0 -6px; z-index:4"></div>
+
+        <section aria-label="Preview" style="{{ rightStyle }}">
+          <div style="display:flex; align-items:center; gap:16px; min-height:38px; border-bottom:1px solid #eaeaea; flex:none">
+            <sc-for list="{{ rightTabs }}" as="rt" hint-placeholder-count="3">
+              <button onClick="{{ rt.select }}" style="flex:none; padding:10px 0 12px; margin-bottom:-1px; border:0; border-bottom:2px solid {{ rt.line }}; background:transparent; font:{{ rt.weight }} 13px/1.3 var(--font-sans); color:{{ rt.color }}; cursor:pointer; white-space:nowrap; transition:color 120ms" style-hover="color:#171717">{{ rt.label }}</button>
+            </sc-for>
+            
+          </div>
+
+          <sc-if value="{{ modePreview }}" hint-placeholder-val="{{ true }}">
+            <div style="flex:1; min-height:0; display:flex; flex-direction:column; gap:10px; padding-top:14px">
+              <div style="flex:1; min-height:0; display:flex; flex-direction:column; background:#fff; border:1px solid #eaeaea; border-radius:10px; overflow:hidden">
+                <div style="display:flex; align-items:center; gap:6px; padding:8px 10px; border-bottom:1px solid #eaeaea; flex:none">
+                  <span style="width:8px; height:8px; border-radius:50%; background:#c9c9c9"></span>
+                  <span style="width:8px; height:8px; border-radius:50%; background:#c9c9c9"></span>
+                  <span style="width:8px; height:8px; border-radius:50%; background:#c9c9c9"></span>
+                  <span style="margin-left:8px; flex:1; height:16px; padding:0 8px; border-radius:4px; background:#fafafa; font:10px/16px var(--font-mono); color:#8f8f8f; overflow:hidden; white-space:nowrap">http://141.148.1.3:8080/</span>
+                  <button style="margin-left:8px; padding:2px 10px; border:1px solid #eaeaea; border-radius:4px; background:#fff; font:500 11px/1.4 var(--font-sans); color:#171717; cursor:pointer" style-hover="border-color:#c9c9c9">Stop</button>
+                </div>
+
+                <div style="flex:1; min-height:0; overflow:auto; padding:14px 16px 18px; display:flex; flex-direction:column; gap:16px; font:12.5px/1.6 var(--font-sans); color:#171717">
+                  <div style="display:flex; flex-direction:column; gap:6px">
+                    <span style="font:500 9px/1 var(--font-sans); letter-spacing:1.6px; text-transform:uppercase; color:#8f8f8f">A · Problem</span>
+                    <div><code style="font:12px/1.6 var(--font-mono); padding:1px 5px; border-radius:4px; background:#f2f2f2">second_largest(nums)</code> — given a non-empty list of integers, return the second largest <em>distinct</em> value, or <code style="font:12px/1.6 var(--font-mono); padding:1px 5px; border-radius:4px; background:#f2f2f2">None</code> if there is none.</div>
+                  </div>
+
+                  <div style="display:flex; flex-direction:column; gap:6px">
+                    <span style="font:500 9px/1 var(--font-sans); letter-spacing:1.6px; text-transform:uppercase; color:#8f8f8f">B · Test suite</span>
+                    <div style="border:1px solid #eaeaea; border-radius:8px; overflow:hidden">
+                      <div style="display:grid; grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) minmax(0,1fr) 28px; gap:0 12px; padding:8px 12px; background:#fafafa; font:500 11px/1.4 var(--font-sans); color:#4d4d4d">
+                        <span>input</span><span>expected</span><span>{{ studentName }} returns</span><span></span>
+                      </div>
+                      <sc-for list="{{ tests }}" as="tc" hint-placeholder-count="1">
+                        <div style="display:grid; grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) minmax(0,1fr) 28px; gap:0 12px; align-items:center; padding:7px 12px; border-top:1px solid #f5f5f5; font:12px/1.5 var(--font-mono)">
+                          <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ tc.input }}</span>
+                          <span style="color:#4d4d4d">{{ tc.expected }}</span>
+                          <span style="color:{{ tc.color }}">{{ tc.got }}</span>
+                          <button onClick="{{ tc.remove }}" aria-label="Remove test" style="padding:0 2px; border:0; background:transparent; font:14px/1 var(--font-sans); color:#c9c9c9; cursor:pointer" style-hover="color:#e70022">×</button>
+                        </div>
+                      </sc-for>
+                      <div style="display:flex; align-items:center; gap:8px; padding:8px 12px; border-top:1px solid #eaeaea">
+                        <input value="{{ hcInput }}" onChange="{{ hcInputChange }}" onKeyDown="{{ hcInputKey }}" placeholder="e.g. [3, 3, 2]" spellCheck="false" style="flex:1; min-width:0; padding:6px 10px; border:1px solid #eaeaea; border-radius:8px; background:#fafafa; font:12px/1.5 var(--font-mono); color:#171717" style-focus="border-color:#c9c9c9">
+                        <x-import component-from-global-scope="EngelbartDesignSystem_81b7cb.Button" size="sm" on-click="{{ hcAdd }}" hint-size="auto,32px">Add test</x-import>
+                      </div>
+                    </div>
+                    <span style="font:11.5px/1.5 var(--font-sans); color:#8f8f8f">{{ testsNote }}</span>
+                  </div>
+
+                  <div style="display:flex; flex-direction:column; gap:8px">
+                    <span style="font:500 9px/1 var(--font-sans); letter-spacing:1.6px; text-transform:uppercase; color:#8f8f8f">C · Office hour queue</span>
+                    <div style="display:flex; flex-wrap:wrap; gap:8px">
+                      <sc-for list="{{ students }}" as="st" hint-placeholder-count="3">
+                        <button onClick="{{ st.select }}" style="display:inline-flex; align-items:center; gap:8px; padding:7px 14px; border:1px solid {{ st.border }}; border-radius:999px; background:#fff; font:500 12.5px/1 var(--font-sans); color:#171717; cursor:pointer; transition:border-color 120ms" style-hover="border-color:#c9c9c9">
+                          <span style="width:11px; height:11px; border-radius:50%; border:1.5px solid {{ st.dotBorder }}; background:{{ st.dotBg }}"></span>
+                          <span>{{ st.name }}</span>
+                          <span style="font:11px/1 var(--font-sans); color:#8f8f8f">{{ st.fails }}</span>
+                        </button>
+                      </sc-for>
+                    </div>
+                  </div>
+
+                  <div style="display:flex; flex-direction:column; gap:6px">
+                    <span style="font:500 9px/1 var(--font-sans); letter-spacing:1.6px; text-transform:uppercase; color:#8f8f8f">D · {{ studentName }}'s solution</span>
+                    <pre style="margin:0; padding:12px 14px; border:1px solid #eaeaea; border-radius:8px; background:#fafafa; font:12px/1.7 var(--font-mono); color:#171717; white-space:pre; overflow:auto">{{ studentCode }}</pre>
+                  </div>
+
+                  <div style="display:flex; flex-direction:column; gap:8px">
+                    <span style="font:500 9px/1 var(--font-sans); letter-spacing:1.6px; text-transform:uppercase; color:#8f8f8f">E · Chat with {{ studentName }}</span>
+                    <div style="display:flex; flex-direction:column; gap:8px">
+                      <sc-for list="{{ chat }}" as="msg" hint-placeholder-count="1">
+                        <div style="display:flex; flex-direction:column; gap:3px; align-items:{{ msg.align }}">
+                          <span style="font:500 9px/1 var(--font-sans); color:#8f8f8f">{{ msg.who }}</span>
+                          <div style="max-width:88%; padding:7px 11px; border-radius:10px; background:{{ msg.bg }}; border:1px solid {{ msg.border }}; font:13px/1.5 var(--font-sans); color:#171717; text-wrap:pretty">{{ msg.text }}</div>
+                        </div>
+                      </sc-for>
+                      <sc-if value="{{ chatEmpty }}" hint-placeholder-val="{{ true }}"><span style="font:12px/1.5 var(--font-sans); color:#8f8f8f">{{ studentName }} is waiting in the queue. Give a hint, not the answer.</span></sc-if>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:10px; padding:4px 4px 4px 12px; background:#fff; border:1px solid #eaeaea; border-radius:10px" style-focus-within="border-color:#c9c9c9">
+                      <input value="{{ hcDraft }}" onChange="{{ hcDraftChange }}" onKeyDown="{{ hcDraftKey }}" placeholder="what would you ask {{ studentName }} to check…" spellCheck="false" style="flex:1; min-width:0; padding:6px 0; border:0; background:transparent; font:13px/1.5 var(--font-sans); color:#171717">
+                      <button onClick="{{ hcSend }}" style="flex:none; width:26px; height:26px; padding:0; border:0; border-radius:50%; display:flex; align-items:center; justify-content:center; background:{{ sendBg }}; color:{{ sendFg }}; font:500 13px/1 var(--font-sans); cursor:pointer; transition:background 160ms,color 160ms">›</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div style="flex:none; height:210px; display:flex; flex-direction:column; gap:2px; padding:12px 16px 12px; border-radius:10px; background:#0a0a0a; color:#ededed; font:12px/1.7 var(--font-mono); overflow:auto">
+                <div style="display:flex; align-items:center; gap:14px; margin-bottom:8px; font:11px/1 var(--font-mono); color:#8f8f8f">
+                  <span>TERMINAL</span>
+                  <span style="margin-left:auto; display:flex; gap:12px">
+                    <button onClick="{{ pickClaude }}" style="padding:0; border:0; background:transparent; cursor:pointer; font:11px/1 var(--font-mono); color:{{ claudeColor }}; border-bottom:1px solid {{ claudeLine }}">claude</button>
+                    <button onClick="{{ pickCodex }}" style="padding:0; border:0; background:transparent; cursor:pointer; font:11px/1 var(--font-mono); color:{{ codexColor }}; border-bottom:1px solid {{ codexLine }}">codex</button>
+                  </span>
+                </div>
+                <div style="color:#8f8f8f"># {{ agent }} · no session yet</div>
+                <sc-for list="{{ termLines }}" as="ln" hint-placeholder-count="0">
+                  <div style="color:{{ ln.color }}; white-space:pre-wrap">{{ ln.text }}</div>
+                </sc-for>
+                <div style="display:flex; align-items:center; gap:8px">
+                  <span style="color:#8f8f8f">$</span>
+                  <input value="{{ termInput }}" onChange="{{ termChange }}" onKeyDown="{{ termKey }}" spellCheck="false" aria-label="Terminal input" style="flex:1; min-width:0; padding:0; border:0; background:transparent; font:12px/1.7 var(--font-mono); color:#ededed; caret-color:#ededed">
+                </div>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ modePaper }}" hint-placeholder-val="{{ false }}">
+            <div style="flex:1; min-height:0; display:flex; flex-direction:column; gap:12px; padding-top:14px">
+              <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:16px">
+                <h3 style="margin:0; font:600 15px/1.4 var(--font-sans); color:#171717; text-wrap:pretty">How to Teach Programming in the AI Era? Using LLMs as a Teachable Agent for Debugging</h3>
+              </div>
+              <div style="display:flex; align-items:center; gap:6px">
+                
+                
+                
+              </div>
+              <div data-pdf="uploads/hypocompass.pdf" style="flex:1; min-height:0; overflow:auto; border:1px solid #eaeaea; border-radius:8px; background:#fff; padding:0; display:flex; flex-direction:column; align-items:center; gap:0"><span style="font:12px/1.5 var(--font-sans); color:#8f8f8f">{{ pdfNote }}</span></div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ modeDataset }}" hint-placeholder-val="{{ false }}">
+            <div style="flex:1; min-height:0; display:flex; flex-direction:column; gap:14px; padding-top:14px; overflow:auto">
+              <div style="display:flex; align-items:baseline; justify-content:space-between; gap:16px">
+                <h3 style="margin:0; font:600 15px/1.4 var(--font-sans); color:#171717">system/backend/problems/</h3>
+                <span style="font:12px/1.4 var(--font-sans); color:#8f8f8f">3 problems · Ready</span>
+              </div>
+              <p style="margin:0; font:13px/1.6 var(--font-sans); color:#4d4d4d; text-wrap:pretty">The 3 problems used in the user study. Each folder carries the files below plus the LLM-generated correct and buggy code files.</p>
+              <div style="border:1px solid #eaeaea; border-radius:8px; overflow:hidden">
+                <div style="display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.6fr); padding:10px 14px; background:#fafafa; font:600 12px/1.4 var(--font-sans); color:#4d4d4d"><span>file</span><span>role</span></div>
+                <sc-for list="{{ datasetFiles }}" as="f" hint-placeholder-count="5">
+                  <div style="display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.6fr); padding:9px 14px; border-top:1px solid #eaeaea; font:12px/1.5 var(--font-sans); background:{{ f.bg }}">
+                    <span style="font:12px/1.5 var(--font-mono); color:#171717">{{ f.name }}</span>
+                    <span style="color:#4d4d4d">{{ f.role }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-if>
+        </section>
+      </div>
+
+      <sc-if value="{{ ctxOpen }}" hint-placeholder-val="{{ false }}">
+        <div onClick="{{ ctxClose }}" style="position:fixed; inset:0; z-index:40; display:flex; align-items:flex-start; justify-content:center; padding-top:12vh; background:rgba(255,255,255,.55)">
+          <div onClick="{{ stop }}" role="dialog" aria-label="Add context" style="width:min(460px, calc(100vw - 32px)); padding:18px 18px 14px; background:#fff; border:1px solid #c9c9c9; border-radius:10px; box-shadow:0 12px 32px rgba(0,0,0,.06); animation:rise 220ms cubic-bezier(.25,.1,.25,1)">
+            <div style="display:flex; align-items:baseline; justify-content:space-between; gap:12px; padding:0 2px 12px">
+              <span style="font:500 9px/1 var(--font-sans); letter-spacing:1.6px; text-transform:uppercase; color:#8f8f8f">Add context to {{ ctxTopicTitle }}</span>
+              <button onClick="{{ ctxClose }}" aria-label="Close" style="padding:0 4px; border:0; background:transparent; cursor:pointer; font:15px/1 var(--font-sans); color:#c9c9c9" style-hover="color:#171717">×</button>
+            </div>
+            <div style="display:flex; flex-direction:column; background:#fafafa; border:1px solid #eaeaea; border-radius:8px; overflow:hidden">
+              <sc-for list="{{ ctxOptions }}" as="o" hint-placeholder-count="5">
+                <div style="border-top:1px solid {{ o.rule }}">
+                  <div onClick="{{ o.click }}" style="display:flex; align-items:center; gap:14px; padding:12px 14px; cursor:pointer; background:{{ o.bg }}; transition:background 120ms" style-hover="background:#f2f2f2">
+                    <span style="flex:none; width:18px; height:18px; display:flex; align-items:center; justify-content:center; color:#171717; font:500 13px/1 var(--font-sans)">{{ o.glyph }}</span>
+                    <span style="flex:1; min-width:0; display:flex; flex-direction:column; gap:2px">
+                      <span style="font:500 14px/1.4 var(--font-sans); color:#171717">{{ o.title }}</span>
+                      <span style="font:12.5px/1.5 var(--font-sans); color:#4d4d4d; text-wrap:pretty">{{ o.why }}</span>
+                    </span>
+                    <span style="flex:none; font:12px/1 var(--font-sans); color:#8f8f8f">{{ o.chevron }}</span>
+                  </div>
+                  <sc-if value="{{ o.active }}" hint-placeholder-val="{{ false }}">
+                    <div style="display:flex; flex-direction:column; gap:8px; padding:2px 14px 14px 46px; animation:rise 160ms cubic-bezier(.25,.1,.25,1)">
+                      <div style="display:flex; align-items:center; gap:8px; padding:4px 4px 4px 12px; background:#fff; border:1px solid #eaeaea; border-radius:8px" style-focus-within="border-color:#c9c9c9">
+                        <input data-ctx-input="1" value="{{ ctxValue }}" onChange="{{ ctxChange }}" onKeyDown="{{ ctxKey }}" placeholder="{{ o.placeholder }}" spellCheck="false" style="flex:1; min-width:0; padding:6px 0; border:0; background:transparent; font:13px/1.5 var(--font-sans); color:#171717">
+                        <x-import component-from-global-scope="EngelbartDesignSystem_81b7cb.Button" size="sm" variant="filled" go="{{ true }}" on-click="{{ ctxSubmit }}" hint-size="auto,32px">Add</x-import>
+                      </div>
+                      
+                    </div>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+            <input id="ctx-file-input" type="file" accept="image/*,.pdf,.csv,.tsv,.parquet,.json,.jsonl,.zip" onChange="{{ ctxFile }}" style="display:none">
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ mentionOpen }}" hint-placeholder-val="{{ false }}">
+        <div data-mention-menu="1" style="{{ mentionStyle }}">
+          <div style="padding:6px 10px 6px; font:500 9px/1 var(--font-sans); letter-spacing:1.6px; text-transform:uppercase; color:#8f8f8f">Mention a source in this topic</div>
+          <sc-for list="{{ mentionItems }}" as="m" hint-placeholder-count="3">
+            <div onMouseDown="{{ m.pick }}" style="display:flex; align-items:center; gap:10px; padding:7px 10px; border-radius:6px; cursor:pointer; background:{{ m.bg }}">
+              <span style="flex:none; width:18px; height:18px; display:flex; align-items:center; justify-content:center; color:#4d4d4d; font:500 12px/1 var(--font-sans)">{{ m.glyph }}</span>
+              <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:13px/1.4 var(--font-sans); color:#171717">{{ m.name }}</span>
+              <span style="flex:none; font:500 9px/1 var(--font-sans); letter-spacing:1.2px; text-transform:uppercase; color:#8f8f8f">{{ m.kindLabel }}</span>
+            </div>
+          </sc-for>
+          <sc-if value="{{ noMentions }}" hint-placeholder-val="{{ false }}"><div style="padding:7px 10px; font:12.5px/1.5 var(--font-sans); color:#8f8f8f">nothing matches</div></sc-if>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ popOpen }}" hint-placeholder-val="{{ false }}">
+        <div style="{{ popStyle }}">
+          <div style="font:500 9px/1 var(--font-sans); letter-spacing:1.6px; text-transform:uppercase; color:#8f8f8f">{{ popKind }}</div>
+          <div style="margin-top:8px; font:500 14.5px/1.4 var(--font-sans); color:#171717; text-wrap:pretty">{{ popTitle }}</div>
+          <div style="margin-top:6px; font:12.5px/1.7 var(--font-sans); color:#4d4d4d; text-wrap:pretty">{{ popSummary }}</div>
+          <div style="margin-top:10px; padding-top:10px; border-top:1px solid #eaeaea; font:12px/1.5 var(--font-sans); color:#8f8f8f">{{ popFacts }}</div>
+        </div>
+      </sc-if>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;railDefault&quot;:{&quot;editor&quot;:&quot;range&quot;,&quot;default&quot;:300,&quot;min&quot;:180,&quot;max&quot;:520,&quot;step&quot;:10,&quot;unit&quot;:&quot;px&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Layout&quot;},&quot;buildSpeed&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;normal&quot;,&quot;options&quot;:[&quot;fast&quot;,&quot;normal&quot;,&quot;slow&quot;],&quot;tsType&quot;:&quot;'fast' | 'normal' | 'slow'&quot;,&quot;section&quot;:&quot;Build simulation&quot;}}">
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const EASE='cubic-bezier(.25,.1,.25,1)';
+const GH=React.createElement('svg',{viewBox:'0 0 16 16',width:12,height:12,fill:'currentColor','aria-hidden':'true'},React.createElement('path',{d:'M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z'}));
+const PDF=React.createElement('svg',{viewBox:'0 0 16 16',width:12,height:12,fill:'none',stroke:'currentColor',strokeWidth:1.5,strokeLinejoin:'round','aria-hidden':'true'},React.createElement('path',{d:'M3.5 1.5h6l3 3v10h-9z'}),React.createElement('path',{d:'M9.5 1.5v3h3'}));
+const LAYERS=React.createElement('svg',{viewBox:'0 0 16 16',width:12,height:12,fill:'none',stroke:'currentColor',strokeWidth:1.5,strokeLinejoin:'round',strokeLinecap:'round','aria-hidden':'true'},React.createElement('path',{d:'M8 2.5 14 5.5 8 8.5 2 5.5z'}),React.createElement('path',{d:'M2 8.5l6 3 6-3'}),React.createElement('path',{d:'M2 11.5l6 3 6-3'}));
+const WS=React.createElement('svg',{viewBox:'0 0 16 16',width:12,height:12,fill:'none',stroke:'currentColor',strokeWidth:1.5,strokeLinejoin:'round','aria-hidden':'true'},React.createElement('rect',{x:1.5,y:1.5,width:4.5,height:4.5,rx:1}),React.createElement('rect',{x:8,y:1.5,width:6.5,height:4.5,rx:1}),React.createElement('rect',{x:1.5,y:8,width:6.5,height:6.5,rx:1}),React.createElement('rect',{x:10,y:8,width:4.5,height:4.5,rx:1}));
+const NOTE=React.createElement('svg',{viewBox:'0 0 16 16',width:'1em',height:'1em',fill:'none',stroke:'currentColor',strokeWidth:1.5,strokeLinejoin:'round',strokeLinecap:'round','aria-hidden':'true'},React.createElement('rect',{x:2,y:2.5,width:10,height:11.5,rx:1.2}),React.createElement('path',{d:'M4.5 1v3M7 1v3M9.5 1v3M4.5 7.5h5M4.5 10h5M4.5 12.5h3'}));
+const CHAT=React.createElement('svg',{viewBox:'0 0 16 16',width:12,height:12,fill:'none',stroke:'currentColor',strokeWidth:1.5,strokeLinejoin:'round','aria-hidden':'true'},React.createElement('path',{d:'M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v6a1.5 1.5 0 0 1-1.5 1.5H6l-3.5 3v-3A1.5 1.5 0 0 1 2 9.5z'}));
+const CHAT_RES={id:'chat',kind:'chat',name:'chat',title:'Chat',summary:'Talk to the model about this document. Replies are simulated in this prototype.',facts:'simulated'};
+const KIND={chat:{g:CHAT,label:'chat'},link:{g:'↗',label:'link'},drive:{g:'▲',label:'google drive'},repo:{g:GH,label:'git repo'},pdf:{g:PDF,label:'pdf'},data:{g:LAYERS,label:'dataset'},note:{g:NOTE,label:'note'},essay:{g:NOTE,label:'essay'},image:{g:React.createElement('svg',{viewBox:'0 0 16 16',width:12,height:12,fill:'none',stroke:'currentColor',strokeWidth:1.5,strokeLinejoin:'round',strokeLinecap:'round','aria-hidden':'true'},React.createElement('rect',{x:1.5,y:2.5,width:13,height:11,rx:1.2}),React.createElement('circle',{cx:5.5,cy:6,r:1.25}),React.createElement('path',{d:'M14.5 10.5 11 7l-4.5 4.5L4.5 9.5 1.5 12.5'})),label:'image'},ws:{g:WS,label:'workspace'}};
+const LABELS={queued:'Queued',building:'Building…',checking:'Checking…',fixing:'Fixing…',needs_user:'Needs you',done:'Done',failed:'Failed'};
+const HELD=['queued','building','checking','fixing'];
+const RES={
+  'r-repo':{id:'r-repo',kind:'repo',name:'hypocompass',title:'mqo00/hypocompass',summary:'Teachable-agent debugging. The student, in the role of a TA, compiles a test suite and helps LLM-simulated novices — Bob, Chelsea, Dave — fix their buggy solutions through chat.',facts:'MIT · 4 commits · Jupyter 54% · JavaScript 28% · Python 11%',opens:'preview'},
+  'r-paper':{id:'r-paper',kind:'pdf',name:'How to Teach Programming in the AI Era?',title:'How to Teach Programming in the AI Era? Using LLMs as a Teachable Agent for Debugging',summary:'Ma, Shen, Koedinger, Wu. Students learn debugging by teaching an LLM novice, instead of being taught by it.',facts:'AIED 2024 · Best Paper · arXiv 2310.05292',opens:'paper'},
+  'r-data':{id:'r-data',kind:'data',name:'backend/problems',title:'system/backend/problems/',summary:'The 3 problems from the user study — description.txt, inputs.txt, refsol.py, tests_hint.json, codes_data.json, plus correct and buggy code files.',facts:'3 problems · 5 files each · + code files',opens:'dataset'},
+};
+const TOPICS=[
+  {id:'t1',title:'Topic 1',status:'done',ctx:[]},
+  {id:'t2',title:'Topic 2',status:'done',ctx:[]},
+  {id:'t3',title:'Topic 3',status:'progress',ctx:[]},
+  {id:'t4',title:'Topic 4',status:'open',ctx:['r-repo','r-paper','r-data']},
+];
+const NOTES=[{id:'note1',name:'Note 1'},{id:'note2',name:'Note 2'}];
+const GOALS={
+  exp:[{id:'g5',name:'Goal 5',sources:[{k:'essay'}]},{id:'g6',name:'Goal 6',sources:[{k:'image'}]}],
+  past:[{id:'g7',name:'Goal 7',sources:[{k:'repo'},{k:'pdf'}]}],
+  cur:[
+    {id:'g1',name:'Goal 1',sources:[{k:'repo',t:'mqo00/hypocompass'},{k:'pdf',t:'How to Teach Programming in the AI Era?'},{k:'data',t:'backend/problems/'},{k:'image',t:'study_material/image.png'},{k:'essay'}]},
+    {id:'g2',name:'Goal 2',sources:[{k:'repo'},{k:'pdf'}]},
+    {id:'g3',name:'Goal 3',sources:[{k:'essay'},{k:'image'}]},
+    {id:'g4',name:'Goal 4',sources:[{k:'essay'}]},
+  ],
+};
+const BOXES=[{id:'cur',label:'Current',pct:'70%',area:'1 / 1 / 3 / 2'},{id:'exp',label:'Experimental',pct:'15%',area:'1 / 2 / 2 / 3'},{id:'past',label:'Past',pct:'15%',area:'2 / 2 / 3 / 3'}];
+const DOCS={
+  'ws:t4':[
+    'Working notes for **Topic 4**. Sources: @[hypocompass], @[How to Teach Programming in the AI Era?] and @[backend/problems]. Hosted demo: [141.148.1.3:8080](http://141.148.1.3:8080/).',
+    '',
+    '- [ ] When a user runs /bart in their claude chat after doing onboarding it should ask the user if they are working on {project name} and that should be the most recently edited/modified/interacted with project',
+    '  - [ ] It should ask them this as a popup modal replacing the current terrible one',
+    '  - [ ] The options should be yes or "Select a different project" where they can select from a list of their projects OR click a create new project button or an import existing project button',
+    '  - [ ] The create a new project should do the new project onboarding workflow with the option (this is already built) with the skip in the lower right the code for this already exists.',
+    '- [ ] Write spec, then produce an explorable/interactive high-level behavior architecture model (not just text) for the /bart project-selection modal flow, for quick inspection before build',
+  ].join('\n'),
+};
+const TODO_RE=/^( *)- (?:\[([ xX])\] )?(.*)$/,HEAD_RE=/^(#{1,3}) (.*)$/;
+const IMG_RE=/^!\[([^\]]*)\]\((img:[\w-]+|https?:[^)\s]+|data:image[^)\s]+)\)$/;
+const CHAT_RE=/^@chat(?:\s(.*))?$/,QUOTE_RE=/^> ?(.*)$/;
+const parseLine=l=>{let m;if((m=l.match(CHAT_RE)))return {type:'chat',text:m[1]||''};if((m=l.match(QUOTE_RE)))return {type:'quote',text:m[1]};if((m=l.match(IMG_RE)))return {type:'img',text:m[1],src:m[2]};if((m=l.match(TODO_RE)))return {type:'todo',depth:Math.min(8,Math.floor(m[1].length/2)),done:!!m[2]&&m[2]!==' ',text:m[3]};if((m=l.match(HEAD_RE)))return {type:'h',level:m[1].length,text:m[2]};return {type:'p',text:l};};
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const todoLine=(depth,done,text)=>`${'  '.repeat(depth)}- [${done?'x':' '}] ${text}`;
+const HC={
+  ref:a=>{const s=[...new Set(a)].sort((x,y)=>x-y);return s.length<2?null:s[s.length-2];},
+  students:[
+    {id:'bob',name:'Bob',code:'def second_largest(nums):\n    nums.sort()\n    return nums[-2]',run:a=>{if(a.length<2)throw 'IndexError';const s=[...a].sort((x,y)=>x-y);return s[s.length-2];}},
+    {id:'chelsea',name:'Chelsea',code:'def second_largest(nums):\n    return sorted(set(nums))[-2]',run:a=>{const s=[...new Set(a)].sort((x,y)=>x-y);if(s.length<2)throw 'IndexError';return s[s.length-2];}},
+    {id:'dave',name:'Dave',code:'def second_largest(nums):\n    m = max(nums)\n    return max(x for x in nums if x < m)',run:a=>{const m=Math.max(...a);const r=a.filter(x=>x<m);if(!r.length)throw 'ValueError';return Math.max(...r);}},
+  ],
+};
+const DATASET_FILES=[{name:'description.txt',role:'problem description'},{name:'inputs.txt',role:'input test cases'},{name:'refsol.py',role:'reference solution'},{name:'tests_hint.json',role:'LLM-generated test case hints'},{name:'codes_data.json',role:'explanation and fix instructions'}];
+const fmt=v=>v===null?'None':String(v);
+const parseInput=s=>{try{const a=JSON.parse(s);return Array.isArray(a)&&a.length&&a.every(Number.isFinite)?a:null;}catch(e){return null;}};
+const INLINE=/(@chat(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\])/g;
+
+class Component extends DCLogic {
+  state={phase:'canvas',zoom:1,pan:{x:0,y:0},hoverGoal:null,openRect:null,goalId:'g1',
+    topic:'t4',expanded:{t4:true},hoverTopic:null,railWidth:Number(this.props.railDefault)||300,split:.5,
+    tabs:[{id:'ws',title:'Workspace'}],activeTab:'ws',
+    docs:DOCS,statuses:{'ws:t4':{2:'building',3:'building',4:'building',5:'building'}},activeLine:null,mention:null,mentionIdx:0,pop:null,ctxModal:null,
+    res:RES,topics:TOPICS,notes:NOTES,seq:100,
+    rightMode:'preview',agent:'claude',termLines:[],termInput:'',
+    hcStudent:'bob',hcTests:['[3, 1, 2]'],hcInput:'',hcChat:{},hcDraft:''};
+  hoverEl=null;history=[];future=[];caret=null;lastHtml='';lastKey='';chatDrafts={};refocusChat=null;
+
+  componentDidMount(){
+    this.onKey=e=>{
+      const mod=e.metaKey||e.ctrlKey,s=this.state;
+      if(this.pendingSelKey(e))return;
+      if(s.phase==='workspace'&&mod&&/^[1-9]$/.test(e.key)){const t=s.tabs[Number(e.key)-1];if(t){e.preventDefault();this.setState({activeTab:t.id,activeLine:null,mention:null});}}
+      if(e.key==='Escape'&&s.phase==='workspace'&&s.activeLine==null&&!s.mention&&!s.ctxModal)this.closeWs();
+    };
+    this.onWheel=e=>{
+      if(this.state.phase!=='canvas')return;
+      const el=document.querySelector('[data-canvas]');if(!el||!el.contains(e.target))return;
+      e.preventDefault();
+      const {zoom,pan}=this.state,r=el.getBoundingClientRect(),cx=e.clientX-r.left,cy=e.clientY-r.top;
+      if(e.ctrlKey||e.metaKey){
+        const dy=clamp(e.deltaMode===1?e.deltaY*16:e.deltaY,-40,40);
+        const z=clamp(zoom*Math.exp(-dy*0.004),0.5,4),k=z/zoom;
+        this.setState({zoom:z,pan:{x:cx-(cx-pan.x)*k,y:cy-(cy-pan.y)*k}});
+        if(z>2.6&&this.state.hoverGoal&&this.hoverEl)this.openGoal(this.state.hoverGoal,this.hoverEl.getBoundingClientRect());
+      } else this.setState({pan:{x:pan.x-e.deltaX,y:pan.y-e.deltaY}});
+    };
+    this.onResize=()=>{clearTimeout(this.pdfT);this.pdfT=setTimeout(()=>this.syncPdf(),150);const w=window.innerWidth||1200;const max=Math.max(180,Math.min(520,w-700));if(this.state.railWidth>max)this.setState({railWidth:max});this.forceUpdate();};
+    window.addEventListener('keydown',this.onKey);
+    window.addEventListener('wheel',this.onWheel,{passive:false});
+    window.addEventListener('resize',this.onResize);
+    this.onResize();
+    const inEd=e=>e.target&&e.target.closest&&e.target.closest('[data-editor]');
+    this.docListeners={
+      keydown:e=>{if(!inEd(e))return;const ci=e.target.closest&&e.target.closest('[data-chat-input]');if(ci){if(e.key==='Enter'){e.preventDefault();this.chatSend(ci.dataset.chatInput);}e.stopPropagation();return;}this.editorKey(e);},
+      input:e=>{if(!inEd(e))return;const ci=e.target.closest&&e.target.closest('[data-chat-input]');if(ci){const k=this.chatKeyOf(this.docKey(),ci.dataset.chatInput);this.chatDrafts[k]=ci.value;const b=ci.parentElement.querySelector('[data-act="chatsend"]');if(b){b.style.background=ci.value.trim()?'#0070f3':'#eaeaea';b.style.color=ci.value.trim()?'#fff':'#8f8f8f';}return;}this.editorInput();},
+      paste:e=>{if(inEd(e)&&!(e.target.closest&&e.target.closest('[data-chat-input]')))this.editorPaste(e);},
+      click:e=>{if(inEd(e))this.editorClick(e);},
+      mouseover:e=>{if(inEd(e))this.editorOver(e);},
+      mouseout:e=>{if(inEd(e))this.editorOut(e);},
+      selectionchange:()=>{this.onSel();const sl=getSelection();if(sl&&sl.isCollapsed)this.pendingSel=null;},
+      mousedown:e=>{if(e.target.closest&&e.target.closest('[data-pdf] [data-page]'))this.pdfDown={x:e.clientX,y:e.clientY};},
+      mouseup:e=>this.pdfMouseUp(e),
+      dragover:e=>{if(inEd(e))e.preventDefault();},
+      drop:e=>{if(!inEd(e))return;const fs=[...((e.dataTransfer&&e.dataTransfer.files)||[])].filter(f=>f.type.startsWith('image/'));if(fs.length){e.preventDefault();fs.forEach(f=>this.insertImage(f));}},
+      focusout:e=>{if(inEd(e)&&!(e.relatedTarget&&e.relatedTarget.closest&&e.relatedTarget.closest('[data-mention-menu]')))this.setState({activeLine:null,mention:null});},
+      compositionstart:()=>{this.composing=true;},
+      compositionend:e=>{this.composing=false;if(inEd(e))this.editorInput();},
+    };
+    Object.entries(this.docListeners).forEach(([k,f])=>document.addEventListener(k,f));
+    this.syncEditor();
+    const k=this.speed();
+    [2,3,4,5].forEach((i,n)=>{setTimeout(()=>this.setStatus('ws:t4',i,'checking'),(2600+n*450)*k);setTimeout(()=>this.setStatus('ws:t4',i,'done',true),(4600+n*450)*k);});
+  }
+  componentWillUnmount(){window.removeEventListener('keydown',this.onKey);window.removeEventListener('wheel',this.onWheel);window.removeEventListener('resize',this.onResize);Object.entries(this.docListeners||{}).forEach(([k,f])=>document.removeEventListener(k,f));}
+  componentDidUpdate(){this.syncEditor();this.syncPdf();this.fitPdf();}
+  fitPdf(){const host=document.querySelector('[data-pdf]');if(!host||!host.dataset.rendered||this.pdfW==null)return;const W=host.clientWidth-2;if(Math.abs(W-this.pdfW)<8)return;clearTimeout(this.pdfTimer);this.pdfTimer=setTimeout(()=>{const h=document.querySelector('[data-pdf]');if(!h)return;delete h.dataset.rendered;this.syncPdf();},250);}
+
+  /* paper — drawn page by page with pdf.js (Chrome blocks the file in a frame here). Select text, then type for a margin note or press Enter to only highlight. */
+  syncPdf(){
+    const host=document.querySelector('[data-pdf]');if(!host)return;if(host.dataset.rendered&&Math.abs(Number(host.dataset.rendered)-host.clientWidth)<40)return;if(this.pdfBusy)return;
+    const lib=window.pdfjsLib;if(!lib){if(!this.state.pdfNote)this.setState({pdfNote:'The pdf renderer did not load.'});return;}
+    host.dataset.rendered=String(host.clientWidth);this.pdfBusy=true;lib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    const W=host.clientWidth-2,G=W<330?Math.max(24,Math.round(W*.12)):clamp(Math.round(W*.2),64,150);this.pdfG=G;this.pdfW=W;
+    lib.getDocument(host.dataset.pdf).promise.then(async doc=>{
+      host.innerHTML='';host.style.alignItems='flex-start';
+      const pageW=Math.max(120,W-2*G);this.marks={};
+      for(let n=1;n<=doc.numPages;n++){
+        const page=await doc.getPage(n),v0=page.getViewport({scale:1}),scale=pageW/v0.width,vp=page.getViewport({scale}),vp2=page.getViewport({scale:scale*2});
+        const pageH=vp.height,wrap=document.createElement('div');wrap.dataset.page=n;wrap.style.cssText=`position:relative;flex:none;width:${pageW+2*G}px;height:${pageH}px;margin:0 auto;background:#fff;${n>1?'border-top:1px solid #eaeaea;':''}box-sizing:content-box`;
+        const c=document.createElement('canvas');c.width=vp2.width;c.height=vp2.height;c.style.cssText=`position:absolute;left:${G}px;top:0;width:${pageW}px;height:${pageH}px;background:#fff`;
+        const hl=document.createElementNS('http://www.w3.org/2000/svg','svg');hl.dataset.hl=n;hl.setAttribute('width',pageW);hl.setAttribute('height',pageH);hl.setAttribute('viewBox',`0 0 ${pageW} ${pageH}`);hl.style.cssText=`position:absolute;left:${G}px;top:0;width:${pageW}px;height:${pageH}px;pointer-events:none;overflow:visible`;
+        const tl=document.createElement('div');tl.className='pdf-text';tl.dataset.textLayer=n;tl.style.cssText=`left:${G}px;top:0;width:${pageW}px;height:${pageH}px`;tl.style.setProperty('--scale-factor',scale);
+        const notes=document.createElement('div');notes.dataset.notes=n;notes.style.cssText='position:absolute;inset:0;pointer-events:none';
+        const ar=document.createElementNS('http://www.w3.org/2000/svg','svg');ar.dataset.arrows=n;ar.setAttribute('width',pageW+2*G);ar.setAttribute('height',pageH);ar.setAttribute('viewBox',`0 0 ${pageW+2*G} ${pageH}`);ar.style.cssText='position:absolute;inset:0;pointer-events:none;overflow:visible';
+        wrap.append(c,hl,tl,ar,notes);host.appendChild(wrap);
+        await page.render({canvasContext:c.getContext('2d'),viewport:vp2}).promise;
+        try{await lib.renderTextLayer({textContentSource:await page.getTextContent(),container:tl,viewport:vp,textDivs:[]}).promise;}catch(err){}
+        this.renderMarks(n);
+      }
+      this.pdfBusy=false;this.syncPdf();
+    }).catch(err=>{this.pdfBusy=false;host.innerHTML='';this.setState({pdfNote:'Could not open uploads/hypocompass.pdf — '+(err&&err.message||err)});delete host.dataset.rendered;});
+  }
+  pdfMouseUp(e){
+    const wrap=e.target.closest&&e.target.closest('[data-pdf] [data-page]');if(!wrap)return;
+    if(e.target.closest('textarea'))return;
+    const sel=getSelection(),tl=wrap.querySelector('[data-text-layer]');
+    if(sel&&!sel.isCollapsed&&sel.rangeCount){
+      const range=sel.getRangeAt(0);if(!tl.contains(range.startContainer)||!tl.contains(range.endContainer)){this.pendingSel=null;return;}
+      const box=tl.getBoundingClientRect(),rects=[...range.getClientRects()].filter(r=>r.width>1&&r.height>1).map(r=>({x:r.left-box.left,y:r.top-box.top,w:r.width,h:r.height}));
+      if(!rects.length)return;
+      const cx=rects.reduce((a,r)=>a+r.x+r.w/2,0)/rects.length;
+      this.pendingSel={page:Number(tl.dataset.textLayer),rects,side:cx/box.width<.45?'left':'right',y:Math.min(...rects.map(r=>r.y)),text:sel.toString()};
+      return;
+    }
+    if(this.pdfDown&&Math.hypot(e.clientX-this.pdfDown.x,e.clientY-this.pdfDown.y)<4&&!e.target.closest('.pdf-text span')){
+      const box=wrap.getBoundingClientRect(),x=e.clientX-box.left,y=e.clientY-box.top,page=Number(wrap.dataset.page);
+      const m=this.addMark({page,rects:[],side:null,y,text:''},'',{x,y});
+      requestAnimationFrame(()=>{const ta=document.querySelector(`textarea[data-mark="${m.id}"]`);if(ta)ta.focus();});
+    }
+  }
+  freeWidth(page,x,y,h){const G=this.pdfG||150,tl=document.querySelector(`[data-text-layer="${page}"]`),wrap=tl&&tl.parentElement;if(!tl)return 160;const W=wrap.offsetWidth;let right=W-8;
+    for(const s of tl.querySelectorAll('span')){const l=s.offsetLeft+G,t=s.offsetTop,b=t+s.offsetHeight;if(b<y||t>y+h)continue;if(l>x&&l<right)right=l-6;}
+    return Math.max(70,right-x);}
+  pendingSelKey(e){
+    const p=this.pendingSel;if(!p)return false;const t=e.target;if(t&&t.closest&&t.closest('input,textarea,[contenteditable="true"]'))return false;
+    if(e.key==='Escape'){this.pendingSel=null;return true;}
+    if(e.key==='Enter'){e.preventDefault();this.addMark(p,null);this.pendingSel=null;getSelection().removeAllRanges();return true;}
+    if(e.key.length===1&&!e.metaKey&&!e.ctrlKey&&!e.altKey){e.preventDefault();const m=this.addMark(p,e.key);this.pendingSel=null;getSelection().removeAllRanges();
+      requestAnimationFrame(()=>{const ta=document.querySelector(`textarea[data-mark="${m.id}"]`);if(ta){ta.focus();ta.setSelectionRange(ta.value.length,ta.value.length);}});return true;}
+    return false;
+  }
+  addMark(p,note,pos){this.marks=this.marks||{};const m={id:'m'+Date.now()+Math.random().toString(36).slice(2,6),rects:p.rects,side:p.side,y:p.y,note,text:p.text,pos:pos||null};(this.marks[p.page]=this.marks[p.page]||[]).push(m);this.renderMarks(p.page);return m;}
+  renderMarks(page){
+    const hl=document.querySelector(`[data-hl="${page}"]`),notes=document.querySelector(`[data-notes="${page}"]`),ar=document.querySelector(`[data-arrows="${page}"]`);if(!hl||!notes)return;
+    const G=this.pdfG||150,pageW=hl.getBoundingClientRect().width;const PM=Math.round(pageW*0.085);hl.innerHTML='';notes.innerHTML='';if(ar)ar.innerHTML='';
+    const rc=window.rough?window.rough.svg(hl):null,ra=window.rough&&ar?window.rough.svg(ar):null;let k=0;
+    for(const m of (this.marks||{})[page]||[]){k++;
+      for(const r of m.rects){if(rc){hl.appendChild(rc.rectangle(r.x,r.y+r.h*0.15,r.w,r.h*0.7,{fill:'rgba(0,112,243,.14)',fillStyle:'zigzag',fillWeight:1.2,hachureGap:2.6,hachureAngle:-4,stroke:'none',roughness:0.9,seed:m.rects.indexOf(r)+7}));}
+        else{const d=document.createElementNS('http://www.w3.org/2000/svg','rect');d.setAttribute('x',r.x);d.setAttribute('y',r.y);d.setAttribute('width',r.w);d.setAttribute('height',r.h);d.setAttribute('fill','rgba(0,112,243,.12)');hl.appendChild(d);}}
+      if(m.note==null)continue;
+      const ta=document.createElement('textarea');ta.dataset.mark=m.id;ta.value=m.note;ta.rows=1;ta.spellcheck=false;
+      let left,top,width;
+      if(m.pos){left=m.pos.x;top=m.pos.y-11;width=Math.min(this.freeWidth(page,m.pos.x,m.pos.y,22),G+pageW*.6);}
+      else{left=m.side==='left'?8:G+pageW-PM+8;top=Math.max(0,m.y-6);width=G+PM-16;}
+      ta.style.cssText=`position:absolute;left:${left}px;top:${top}px;width:${width}px;pointer-events:auto;padding:0 6px;border:0;background:transparent;resize:none;overflow:hidden;font:500 17px/1.25 'Caveat',cursive;color:#171717;outline:none`;
+      const fit=()=>{ta.style.height='auto';ta.style.height=ta.scrollHeight+'px';};
+      ta.oninput=()=>{m.note=ta.value;fit();};
+      ta.onblur=()=>{if(!ta.value.trim()){const list=this.marks[page];if(m.rects.length)m.note=null;else list.splice(list.indexOf(m),1);this.renderMarks(page);}};
+      ta.onkeydown=ev=>{ev.stopPropagation();if(ev.key==='Escape')ta.blur();};
+      ta.onmousedown=ev=>ev.stopPropagation();
+      notes.appendChild(ta);fit();
+      if(ra&&m.rects.length&&!m.pos){
+        const r=m.rects[0],ax=m.side==='left'?G+r.x-3:G+r.x+r.w+3,ay=r.y+r.h/2;
+        const nx=m.side==='left'?left+width-4:left+2,ny=top+11;
+        const mx=(ax+nx)/2,my=(ay+ny)/2+(m.side==='left'?-6:6);
+        const opts={stroke:'rgba(0,112,243,.35)',strokeWidth:1.1,roughness:1.4,bowing:1.2,seed:page*13+k};
+        ar.appendChild(ra.curve([[ax,ay],[mx,my],[nx,ny]],opts));
+        const dx=nx-mx,dy=ny-my,len=Math.hypot(dx,dy)||1,ux=dx/len,uy=dy/len,hx=nx-ux*7,hy=ny-uy*7;
+        ar.appendChild(ra.line(nx,ny,hx-uy*3.5,hy+ux*3.5,opts));ar.appendChild(ra.line(nx,ny,hx+uy*3.5,hy-ux*3.5,opts));
+      }
+    }
+  }
+
+  /* canvas ↔ workspace */
+  goal(){for(const k in GOALS){const g=GOALS[k].find(x=>x.id===this.state.goalId);if(g)return {...g,box:k};}return {...GOALS.cur[0],box:'cur'};}
+  openGoal(id,rect){
+    if(this.state.phase!=='canvas')return;
+    const r={x:rect.left,y:rect.top,w:rect.width,h:rect.height};
+    this.setState({phase:'pre-open',goalId:id,openRect:r,hoverGoal:null},()=>{let done=false;const go=()=>{if(done)return;done=true;this.setState({phase:'opening'},()=>setTimeout(()=>this.setState({phase:'workspace'}),280));};requestAnimationFrame(go);setTimeout(go,120);});
+  }
+  closeWs=()=>{
+    if(this.state.phase!=='workspace')return;
+    this.setState({phase:'pre-close',activeLine:null,mention:null,pop:null},()=>requestAnimationFrame(()=>this.setState({phase:'closing'},()=>setTimeout(()=>this.setState({phase:'canvas'}),280))));
+  };
+  wsStyle(){
+    const {phase,openRect:r}=this.state,W=window.innerWidth||1200,H=window.innerHeight||800;
+    const base={position:'absolute',inset:0,display:'flex',flexDirection:'column',background:'#fff',transformOrigin:'0 0',willChange:'transform,opacity'};
+    const small=r?{opacity:0,transform:`translate(${r.x}px,${r.y}px) scale(${r.w/W},${r.h/H})`}:{opacity:0,transform:'scale(.6)'};
+    if(phase==='pre-open')return {...base,...small,transition:'none'};
+    if(phase==='closing')return {...base,...small,transition:`transform 240ms ${EASE},opacity 180ms ${EASE} 40ms`};
+    return {...base,opacity:1,transform:'none',transition:`transform 260ms ${EASE},opacity 200ms ${EASE}`};
+  }
+  canvasStyle(){
+    const {phase,openRect:r}=this.state,base={position:'absolute',inset:0,overflow:'hidden',background:'#fff'};
+    const origin=r?`${r.x+r.w/2}px ${r.y+r.h/2}px`:'50% 50%';
+    const away={opacity:0,transform:'scale(1.6)',transformOrigin:origin};
+    if(phase==='pre-close')return {...base,...away,transition:'none'};
+    if(phase==='opening')return {...base,...away,transition:`transform 260ms ${EASE},opacity 200ms ${EASE}`};
+    if(phase==='closing')return {...base,opacity:1,transform:'none',transformOrigin:origin,transition:`transform 260ms ${EASE},opacity 220ms ${EASE}`};
+    return {...base,opacity:1,transform:'none',transformOrigin:origin};
+  }
+
+  /* sidebar */
+  railDown=e=>{e.preventDefault();e.currentTarget.setPointerCapture(e.pointerId);this.railBox=e.currentTarget.parentElement.getBoundingClientRect();};
+  railMove=e=>{if(!e.currentTarget.hasPointerCapture(e.pointerId))return;const box=this.railBox||e.currentTarget.parentElement.getBoundingClientRect();this.setState({railWidth:clamp(e.clientX-box.left,180,Math.max(180,Math.min(520,box.width-700)))});};
+  railUp=e=>{if(e.currentTarget.hasPointerCapture(e.pointerId))e.currentTarget.releasePointerCapture(e.pointerId);};
+  railReset=()=>this.setState({railWidth:Number(this.props.railDefault)||300});
+  splitDown=e=>{e.preventDefault();e.currentTarget.setPointerCapture(e.pointerId);const body=e.currentTarget.parentElement.getBoundingClientRect(),rail=e.currentTarget.parentElement.firstElementChild.getBoundingClientRect();this.splitBox={left:rail.right+1,width:body.right-rail.right-2};};
+  splitMove=e=>{if(!e.currentTarget.hasPointerCapture(e.pointerId)||!this.splitBox)return;const {left,width}=this.splitBox,lo=Math.min(.6,420/Math.max(1,width)),hi=1-Math.min(.4,300/Math.max(1,width));this.setState({split:clamp((e.clientX-left)/width,lo,hi)});clearTimeout(this.pdfT);this.pdfT=setTimeout(()=>this.syncPdf(),150);};
+  splitReset=()=>this.setState({split:.5});
+  speed(){return {fast:.45,normal:1,slow:2.2}[this.props.buildSpeed]||1;}
+  cycleTopic(id){const next={open:'progress',progress:'done',done:'open'};this.setState(s=>({topics:s.topics.map(t=>t.id===id?{...t,status:next[t.status]||'progress'}:t)}));}
+  addTopic=()=>{const id='t'+this.state.seq,n=this.state.topics.length+1;this.setState(s=>({seq:s.seq+1,topics:[...s.topics,{id,title:'Topic '+n,status:'open',ctx:[]}]}),()=>this.selectTopic(id));};
+  addIdea=()=>{const id='f'+this.state.seq;this.setState(s=>({seq:s.seq+1,ideas:[...(s.ideas||[]),{id,text:''}]}),()=>{const el=document.querySelector(`textarea[data-idea="${id}"]`);if(el)el.focus();});};
+  selectTopic(id){this.setState(s=>({topic:id,expanded:{...s.expanded,[id]:true},activeTab:'ws',activeLine:null,mention:null}));}
+  togglePin(id){this.setState(s=>({expanded:{...s.expanded,[id]:!s.expanded[id]},hoverTopic:null}));}
+  openCtx(topicId,r){
+    if(r.kind==='ws'){this.setState({topic:topicId,activeTab:'ws',activeLine:null,mention:null});return;}
+    if(r.kind==='chat')return;
+    if(r.kind==='note'){this.openTab(r.id,r.name);return;}
+    if(r.url){window.open(r.url,'_blank','noreferrer');return;}
+    this.setState({topic:topicId,rightMode:r.opens||'preview',pop:null});
+  }
+  openTab(id,title){this.setState(s=>({tabs:s.tabs.some(t=>t.id===id)?s.tabs:[...s.tabs,{id,title}],activeTab:id,activeLine:null,mention:null,pop:null}));}
+  closeTab(id){this.setState(s=>{const tabs=s.tabs.filter(t=>t.id!==id);return {tabs,activeTab:s.activeTab===id?tabs[tabs.length-1].id:s.activeTab,activeLine:null,mention:null};});}
+  addNote(topicId){
+    const id='n'+this.state.seq,note={id,kind:'note',name:'Untitled note',title:'Untitled note',summary:'A note in this topic.',facts:'note'};
+    this.setState(s=>({seq:s.seq+1,res:{...s.res,[id]:note},topics:s.topics.map(t=>t.id===topicId?{...t,ctx:[...t.ctx,id]}:t),expanded:{...s.expanded,[topicId]:true}}),()=>{this.openTab(id,note.name);this.focusNewDoc();});
+  }
+  addRes(topicId,r){const id='r'+this.state.seq;this.setState(s=>({seq:s.seq+1,res:{...s.res,[id]:{...r,id}},topics:s.topics.map(t=>t.id===topicId?{...t,ctx:[...t.ctx,id]}:t),expanded:{...s.expanded,[topicId]:true},ctxModal:null}));}
+  ctxClose=()=>this.setState({ctxModal:null});
+  ctxStep(step){this.setState(s=>({ctxModal:{...s.ctxModal,step:s.ctxModal.step===step?null:step,value:''}}),()=>{const el=document.querySelector('input[data-ctx-input]');if(el)el.focus();});}
+  ctxSubmit=()=>{
+    const m=this.state.ctxModal;if(!m)return;const v=m.value.trim();if(!v)return;
+    if(m.step==='link'){const url=/^https?:\/\//.test(v)?v:'https://'+v;let host=v;try{host=new URL(url).host;}catch(e){}
+      this.addRes(m.topicId,{kind:'link',name:host,title:url,url,summary:'A linked page. Opens in a new tab.',facts:host});}
+    if(m.step==='repo'){const name=v.replace(/^https?:\/\/github\.com\//,'').replace(/\/$/,'');
+      this.addRes(m.topicId,{kind:'repo',name:name.split('/').pop(),title:name,summary:'Connected through GitHub. Its files and history become available to this topic.',facts:'github · '+name,opens:'preview'});}
+    if(m.step==='drive'){this.addRes(m.topicId,{kind:'drive',name:v,title:v,summary:'Connected through Google Drive.',facts:'google drive',url:/^https?:/.test(v)?v:null});}
+  };
+  ctxFile=e=>{
+    const m=this.state.ctxModal,f=e.target.files&&e.target.files[0];e.target.value='';if(!m||!f)return;
+    const ext=(f.name.split('.').pop()||'').toLowerCase(),kind=/^(png|jpe?g|gif|webp|svg|heic)$/.test(ext)?'image':ext==='pdf'?'pdf':'data';
+    this.addRes(m.topicId,{kind,name:f.name,title:f.name,summary:`Imported from your files · ${(f.size/1024/1024).toFixed(1)} MB`,facts:KIND[kind].label+' · '+ext,opens:kind==='pdf'?'paper':kind==='data'?'dataset':undefined});
+  };
+  addFreeNote=()=>{const id='n'+this.state.seq,name='Untitled note';this.setState(s=>({seq:s.seq+1,notes:[...s.notes,{id,name}]}),()=>{this.openTab(id,name);this.focusNewDoc();});};
+
+  /* document — one markdown string per doc, edited on a single contentEditable surface (Obsidian-style: the caret's line shows its source, every other line renders) */
+  docKey(){const t=this.state.activeTab;return t==='ws'?'ws:'+this.state.topic:t;}
+  lines(key){return (this.state.docs[key]??'').split('\n');}
+  editorEl(){return document.querySelector('[data-editor]');}
+  setDoc(key,text,caret){const prev=this.state.docs[key]??'';if(prev!==text){this.history.push({key,text:prev,caret:this.caretInfo()?.anchor||null});if(this.history.length>200)this.history.shift();this.future=[];this.setState(s=>({docs:{...s.docs,[key]:text}}));}if(caret)this.caret=caret;}
+  setLines(key,fn,caret){this.setDoc(key,fn(this.lines(key)).join('\n'),caret);}
+  status(key,i){return (this.state.statuses[key]||{})[i]||'';}
+  setStatus(key,i,status,done){this.setState(s=>{const st={...(s.statuses[key]||{}),[i]:status};const ls=(s.docs[key]??'').split('\n');if(done){const p=parseLine(ls[i]||'');if(p.type==='todo')ls[i]=todoLine(p.depth,true,p.text);}return {statuses:{...s.statuses,[key]:st},docs:{...s.docs,[key]:ls.join('\n')}};});}
+  shiftStatuses(key,from,delta){this.setState(s=>{const st={};Object.entries(s.statuses[key]||{}).forEach(([k,v])=>{const i=Number(k);if(i<from)st[i]=v;else if(!(delta<0&&i<from-delta))st[i+delta]=v;});return {statuses:{...s.statuses,[key]:st}};});}
+  writeText(key,i,text,caret){this.setLines(key,ls=>ls.map((l,j)=>{if(j!==i)return l;const p=parseLine(l);return p.type==='todo'?todoLine(p.depth,p.done,text):text;}),caret);}
+  undo=()=>{const h=this.history.pop();if(!h)return;this.future.push({key:h.key,text:this.state.docs[h.key]??''});this.setState(s=>({docs:{...s.docs,[h.key]:h.text}}));if(h.caret)this.caret={line:h.caret.line,offset:h.caret.offset};};
+  redo=()=>{const f=this.future.pop();if(!f)return;this.history.push({key:f.key,text:this.state.docs[f.key]??'',caret:null});this.setState(s=>({docs:{...s.docs,[f.key]:f.text}}));};
+
+  /* rendering */
+  tokShown(tok){
+    if(tok.startsWith('**')&&tok.endsWith('**')&&tok.length>4)return {shown:tok.slice(2,-2),pre:2};
+    if(tok.startsWith('`')&&tok.endsWith('`')&&tok.length>2)return {shown:tok.slice(1,-1),pre:1};
+    if(tok.startsWith('*')&&tok.endsWith('*')&&tok.length>2)return {shown:tok.slice(1,-1),pre:1};
+    if(tok.startsWith('@[')){const nm=tok.slice(2,-1);return {shown:'@'+(nm.startsWith('chat')?'chat':nm),pre:1};}
+    const m=tok.match(/^\[([^\]]+)\]\(([^)]+)\)$/);if(m)return {shown:m[1],pre:1};
+    return {shown:tok,pre:0};
+  }
+  tokensOf(p,line){const src=p.type==='h'||p.type==='todo'||p.type==='quote'?p.text:line;const toks=src.split(INLINE).filter(Boolean);if(p.type==='h')return [line.slice(0,p.level+1),...toks];if(p.type==='quote')return [line.slice(0,line.length-p.text.length),...toks];return toks;}
+  revealRange(){const c=this.caret;if(c)return c.sel?c.sel:[c.offset,c.offset];const s=this.selRaw;return s?[s.a,s.b]:[-1,-1];}
+  openIdx(tokens,a,b){const out=[];let acc=0;tokens.forEach((tok,k)=>{const end=acc+tok.length;if(this.tokShown(tok).pre&&a<=end&&b>=acc)out.push(k);acc=end;});return out;}
+  activeHtml(tokens){
+    const [a,b]=this.revealRange(),open=this.openIdx(tokens,a,b);this.openKey=open.join(',');
+    return tokens.map((tok,k)=>{const isOpen=!this.tokShown(tok).pre||open.includes(k);
+      return `<span data-src="${esc(tok)}" data-open="${isOpen?1:0}">${isOpen&&tok!=='@chat'?esc(tok):this.inlineHtml(tok)}</span>`;}).join('');
+  }
+  segs(t){return [...t.childNodes].filter(n=>n.nodeName!=='BR').map(n=>{const el=n.nodeType===1&&n.dataset&&n.dataset.src!=null?n:null;const txt=n.textContent.replace(/\u200b/g,'');const open=!el||el.dataset.open==='1';return {dl:txt.length,src:open?txt:el.dataset.src,open,rl:open?txt.length:el.dataset.src.length};});}
+  displayToRaw(t,disp){
+    const segs=this.segs(t);if(!segs.length)return null;let accD=0,accR=0;
+    for(const s of segs){if(disp<=accD+s.dl){const d=disp-accD;if(s.open)return accR+d;const {pre}=this.tokShown(s.src);return accR+(d===0?0:Math.min(s.rl,pre+d));}accD+=s.dl;accR+=s.rl;}
+    return accR;
+  }
+  rawToDisplay(t,raw){
+    const segs=this.segs(t);let accD=0,accR=0;
+    for(const s of segs){if(raw<=accR+s.rl){const d=raw-accR;if(s.open)return accD+d;const {pre}=this.tokShown(s.src);return accD+Math.max(0,Math.min(s.dl,d-pre));}accD+=s.dl;accR+=s.rl;}
+    return accD;
+  }
+  activeRaw(t){return this.segs(t).map(s=>s.src).join('');}
+  inlineHtml(text){
+    return text.split(INLINE).map(p=>{if(!p)return '';
+      if(p.startsWith('**')&&p.endsWith('**')&&p.length>4)return `<strong style="font-weight:600">${esc(p.slice(2,-2))}</strong>`;
+      if(p.startsWith('`')&&p.endsWith('`')&&p.length>2)return `<code style="padding:1px 4px;border-radius:4px;background:#f2f2f2;font:.92em/1.6 var(--font-mono)">${esc(p.slice(1,-1))}</code>`;
+      if(p.startsWith('*')&&p.endsWith('*')&&p.length>2)return `<em>${esc(p.slice(1,-1))}</em>`;
+      if(p==='@chat')return `<span style="color:#0070f3;font-weight:500">@chat</span>`;
+      if(p.startsWith('@[')){const name=p.slice(2,-1),shown=name.startsWith('chat')?'chat':name;return `<span data-mention="${esc(name)}" style="color:#0070f3;font-weight:500;cursor:pointer;border-bottom:1px dotted #c9c9c9">@${esc(shown)}</span>`;}
+      const m=p.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+      if(m)return `<a href="${esc(m[2])}" data-link="1" style="color:#0070f3;text-decoration:underline;text-underline-offset:3px">${esc(m[1])}</a>`;
+      return esc(p);}).join('');
+  }
+  lineHtml(i,line,p,active,status){
+    const raw=`data-line="${i}" data-raw="${esc(line)}"`;
+    if(p.type==='todo'){
+      const held=HELD.includes(status),done=p.done,label=done?'Done':(LABELS[status]||'');
+      const content=active?this.activeHtml(this.tokensOf(p,line)):this.inlineHtml(p.text);
+      return `<div ${raw} style="display:flex;align-items:flex-start;gap:10px;margin-left:${p.depth*24}px">`
+        +`<span contenteditable="false" data-act="toggle" data-row="${i}" role="button" style="user-select:none;flex:none;width:14px;margin-top:12px;text-align:center;font:15px/1 var(--font-sans);color:${held?'#c9c9c9':done?'#8f8f8f':'#171717'};cursor:${held?'default':'pointer'}">${done?'✓':'–'}</span>`
+        +`<span class="t" style="flex:1;min-width:0;padding:6px 0;min-height:39px;color:${(held||done)?'#8f8f8f':'#171717'};text-decoration:${done?'line-through':'none'}">${content||'<br>'}</span>`
+        +(label?`<span contenteditable="false" style="user-select:none;flex:none;margin-top:11px;font:600 11px/1.5 var(--font-sans);color:${status==='failed'?'#e70022':'#8f8f8f'}">${label}</span>`:'')
+        +(!held&&!done?`<button contenteditable="false" data-act="build" data-row="${i}" ${p.text.trim()?'':'disabled'} style="user-select:none;flex:none;margin-top:7px;padding:4px 8px;border:1px solid #eaeaea;border-radius:6px;background:#fff;font:12px/1.5 var(--font-sans);color:#171717;cursor:pointer;opacity:${p.text.trim()?1:.4};white-space:nowrap">Build</button>`:'')
+        +(!held?`<button contenteditable="false" data-act="remove" data-row="${i}" aria-label="Remove todo" style="user-select:none;flex:none;margin-top:12px;padding:0 2px;border:0;background:transparent;font:14px/1 var(--font-sans);color:#c9c9c9;cursor:pointer">×</button>`:'')
+        +'</div>';
+    }
+    if(p.type==='h'){const size=[26,22,18][p.level-1];const content=active?this.activeHtml(this.tokensOf(p,line)):this.inlineHtml(p.text);
+      return `<div ${raw} style="padding:4px 0;min-height:35px;font:500 ${size}px/1.6 var(--font-sans);letter-spacing:-0.3px"><span class="t">${content||'<br>'}</span></div>`;}
+    if(p.type==='chat'){const content=active?this.activeHtml(this.tokensOf(p,line)):this.inlineHtml(line);const busy=status==='asking';
+      return `<div ${raw} style="display:flex;align-items:flex-start;gap:10px;padding:4px 0;min-height:35px"><span class="t" style="flex:1;min-width:0">${content||'<br>'}</span>`
+        +`<button contenteditable="false" data-act="ask" data-row="${i}" aria-label="Send" ${p.text.trim()&&!busy?'':'disabled'} style="user-select:none;flex:none;margin-top:3px;width:26px;height:26px;padding:0;border:0;border-radius:50%;display:flex;align-items:center;justify-content:center;background:${p.text.trim()&&!busy?'#0070f3':'#eaeaea'};color:${p.text.trim()&&!busy?'#fff':'#8f8f8f'};cursor:${p.text.trim()&&!busy?'pointer':'default'};transition:background 160ms"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="square"><path d="M8 13.5V3.2M3.6 7.4 8 3l4.4 4.4"/></svg></button></div>`;}
+    if(p.type==='quote'){const content=active?this.activeHtml(this.tokensOf(p,line)):this.inlineHtml(p.text);
+      return `<div ${raw} style="padding:2px 0 2px 14px;min-height:31px;border-left:2px solid #eaeaea;margin-left:2px;color:#4d4d4d;font-size:16px"><span class="t">${content||'<br>'}</span></div>`;}
+    if(p.type==='img'){const src=p.src.startsWith('img:')?((this.images||{})[p.src.slice(4)]||''):p.src;
+      const content=active?this.activeHtml([line]):`<img src="${esc(src)}" alt="${esc(p.text)}" draggable="false" style="display:block;max-width:100%;max-height:520px;margin:6px 0;border:1px solid #eaeaea;border-radius:8px;user-select:none">`;
+      return `<div ${raw} style="padding:4px 0;min-height:35px"><span class="t" style="display:block">${content}</span></div>`;}
+    const content=active?this.activeHtml(this.tokensOf(p,line)):this.inlineHtml(line);
+    return `<div ${raw} style="padding:4px 0;min-height:35px"><span class="t">${content||'<br>'}</span></div>`;
+  }
+  groupHtml(group){
+    const open=group.filter(t=>t.p.text.trim()&&!t.p.done);if(!open.length)return '';
+    const busy=open.filter(t=>HELD.includes(t.status)),ready=open.filter(t=>!HELD.includes(t.status)),doneN=group.filter(t=>t.p.done).length;
+    const label=busy.length&&!ready.length?'Building…':ready.length&&busy.length?`Queue ${ready.length}`:'Build all';
+    const note=`${group.length} todo${group.length===1?'':'s'} · ${doneN} done${busy.length?` · ${busy.length} in progress`:''}`;
+    return `<div contenteditable="false" style="user-select:none;display:flex;justify-content:flex-end;align-items:center;gap:12px;padding:12px 0 18px"><span style="margin-right:auto;font:12px/1.5 var(--font-sans);color:#8f8f8f">${note}</span><button data-act="buildall" data-lines="${ready.map(t=>t.i).join(',')}" ${ready.length?'':'disabled'} style="display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:42px;min-width:110px;padding:12px 20px;border:0;border-radius:8px;background:#0070f3;color:#fff;font:600 14px/1 var(--font-sans);cursor:pointer;opacity:${ready.length?1:.4}">${label}</button></div>`;
+  }
+  editorHtml(key){
+    const ls=this.lines(key),st=this.state.statuses[key]||{},active=this.state.activeLine;let out='',group=[];
+    ls.forEach((line,i)=>{const p=parseLine(line);const chats=[...line.matchAll(/@\[chat(?::([\w-]+))?\]/g)].map(m=>m[1]||'chat');
+      if(chats.length&&p.type==='p'){const content=active===i?this.activeHtml(this.tokensOf(p,line)):this.inlineHtml(line);
+        out+=`<div data-line="${i}" data-raw="${esc(line)}" style="margin:6px 0 14px;border:1px solid #eaeaea;border-radius:10px;background:#fafafa;overflow:hidden"><span class="t" style="display:block;padding:10px 14px 2px">${content||'<br>'}</span>${chats.map(id=>this.chatHtml(key,id)).join('')}</div>`;return;}
+      out+=this.lineHtml(i,line,p,active===i,st[i]||'');
+      for(const id of chats)out+=`<div style="margin:6px 0 14px;border:1px solid #eaeaea;border-radius:10px;background:#fafafa;overflow:hidden">${this.chatHtml(key,id)}</div>`;
+      if(p.type==='todo')group.push({i,p,status:st[i]||''});
+      const next=ls[i+1];if(p.type==='todo'&&(next==null||parseLine(next).type!=='todo')){out+=this.groupHtml(group);group=[];}});
+    return out;
+  }
+  syncEditor(){
+    const ed=this.editorEl();if(!ed)return;const key=this.docKey(),html=this.editorHtml(key);
+    const hadFocus=document.activeElement===ed||ed.contains(document.activeElement);
+    if(html===this.lastHtml&&key===this.lastKey){if(this.caret&&(hadFocus||this.wantFocus)){ed.focus({preventScroll:true});this.applyCaret();}this.wantFocus=false;return;}
+    const c=this.caret||(hadFocus?this.caretInfo()?.anchor:null);
+    if(c&&!this.caret)this.caret=c;
+    this.syncing=true;ed.innerHTML=html;this.lastHtml=html;this.lastKey=key;
+    if(c&&(hadFocus||this.wantFocus)){ed.focus({preventScroll:true});this.caret=c;this.applyCaret();}
+    this.wantFocus=false;this.syncing=false;
+    ed.querySelectorAll('[data-chat-feed]').forEach(f=>{f.scrollTop=f.scrollHeight;});
+    if(this.refocusChat){const el=ed.querySelector(`input[data-chat-input="${this.refocusChat}"]`);this.refocusChat=null;if(el){el.focus();el.setSelectionRange(el.value.length,el.value.length);}}
+  }
+  applyCaret(){const c=this.caret;this.caret=null;if(!c)return;if(c.sel)this.setSelection(c.line,c.sel[0],c.sel[1]);else this.setSelection(c.line,c.offset,c.offset);}
+  posIn(t,offset){const walker=document.createTreeWalker(t,NodeFilter.SHOW_TEXT);let node,rest=offset;while((node=walker.nextNode())){if(rest<=node.length)return {node,offset:rest};rest-=node.length;}
+    if(t.firstChild&&t.firstChild.nodeName==='BR')return {node:t,offset:0};const last=t.lastChild;return last&&last.nodeType===3?{node:last,offset:last.length}:{node:t,offset:t.childNodes.length};}
+  setSelection(line,a,b){const ed=this.editorEl();if(!ed)return;const d=ed.querySelector(`[data-line="${line}"]`);const t=d&&d.querySelector('.t');if(!t)return;
+    const s=this.posIn(t,this.rawToDisplay(t,a)),e=this.posIn(t,this.rawToDisplay(t,b)),range=document.createRange();range.setStart(s.node,s.offset);range.setEnd(e.node,e.offset);const sel=getSelection();sel.removeAllRanges();sel.addRange(range);}
+  caretInfo(){
+    const sel=getSelection();if(!sel||!sel.rangeCount)return null;const ed=this.editorEl();if(!ed||!ed.contains(sel.anchorNode))return null;
+    const info=(n,o)=>{if(!n)return null;const el=n.nodeType===1?n:n.parentElement;const d=el&&el.closest('[data-line]');if(!d)return null;const t=d.querySelector('.t');let off=0;
+      if(t&&t.contains(n)){const r=document.createRange();r.selectNodeContents(t);r.setEnd(n,o);off=r.toString().replace(/\u200b/g,'').length;}else off=t?t.textContent.length:0;
+      const isActive=Number(d.dataset.line)===this.state.activeLine;let raw=t?this.displayToRaw(t,off):off;if(raw==null){const p=parseLine(d.dataset.raw||'');raw=isActive?off:p.type==='img'?0:this.rawOffset(p,off);}
+      return {line:Number(d.dataset.line),offset:raw};};
+    const anchor=info(sel.anchorNode,sel.anchorOffset),focus=info(sel.focusNode,sel.focusOffset)||anchor;
+    return anchor?{anchor,focus}:null;
+  }
+  rawOffset(p,fOff){
+    const text=p.text,base=p.type==='h'?p.level+1:p.type==='quote'?2:0;let accF=0,accR=0;
+    for(const tok of text.split(INLINE)){if(!tok)continue;let shown=tok,pre=0;
+      if(tok.startsWith('**')&&tok.endsWith('**')&&tok.length>4){shown=tok.slice(2,-2);pre=2;}
+      else if(tok.startsWith('`')&&tok.endsWith('`')&&tok.length>2){shown=tok.slice(1,-1);pre=1;}
+      else if(tok.startsWith('*')&&tok.endsWith('*')&&tok.length>2){shown=tok.slice(1,-1);pre=1;}
+      else if(tok.startsWith('@[')){const nm=tok.slice(2,-1);shown='@'+(nm.startsWith('chat')?'chat':nm);pre=1;}
+      else {const m=tok.match(/^\[([^\]]+)\]\(([^)]+)\)$/);if(m){shown=m[1];pre=1;}}
+      if(fOff<=accF+shown.length){const d=fOff-accF;return base+accR+(pre?(d===0?0:Math.min(tok.length,pre+d)):d);}
+      accF+=shown.length;accR+=tok.length;}
+    return base+text.length;
+  }
+
+  /* events */
+  onSel(){
+    if(this.syncing)return;if(document.activeElement&&document.activeElement.closest&&document.activeElement.closest('[data-chat]'))return;const c=this.caretInfo();if(!c)return;
+    const a=Math.min(c.anchor.offset,c.focus.offset),b=Math.max(c.anchor.offset,c.focus.offset);
+    if(c.anchor.line!==this.state.activeLine){this.selRaw={line:c.anchor.line,a,b};if(!this.caret)this.caret={line:c.anchor.line,sel:[a,b]};this.setState({activeLine:c.anchor.line,mention:null});return;}
+    this.selRaw={line:c.anchor.line,a,b};
+    const ls=this.lines(this.docKey()),line=ls[c.anchor.line]??'',p=parseLine(line),key=p.type==='img'?'':this.openIdx(this.tokensOf(p,line),a,b).join(',');
+    if(key!==this.openKey){this.caret={line:c.anchor.line,sel:[a,b]};this.forceUpdate();}
+  }
+  editorInput=()=>{
+    const ed=this.editorEl();if(!ed||this.composing)return;const key=this.docKey(),old=this.lines(key);
+    const divs=[...ed.querySelectorAll('[data-raw]')],c=this.caretInfo(),activeId=c?c.anchor.line:null;
+    let ls=divs.map(d=>{const raw=d.dataset.raw??'';if(Number(d.dataset.line)!==activeId)return raw;const t=d.querySelector('.t');const txt=t?this.activeRaw(t):'';const p=parseLine(raw);return p.type==='todo'?todoLine(p.depth,p.done,txt):txt;});
+    if(!ls.length)ls=[''];
+    const pos=divs.findIndex(d=>Number(d.dataset.line)===activeId);
+    let caret=c&&pos>=0?{line:pos,offset:c.anchor.offset}:null;
+    if(caret){const before=parseLine(old[activeId]??''),after=parseLine(ls[pos]??'');
+      if(before.type!=='todo'&&after.type==='todo')caret={line:pos,offset:Math.max(0,caret.offset-(ls[pos].length-after.text.length))};}
+    this.setDoc(key,ls.join('\n'),caret);
+    if(caret){const p=parseLine(ls[pos]??''),txt=p.type==='todo'?p.text:ls[pos],m=txt.slice(0,caret.offset).match(/@([^\s@\[\]]{0,30})$/);
+      if(m){const r=getSelection().getRangeAt(0).getBoundingClientRect();this.setState({activeLine:pos,mention:{i:pos,query:m[1],start:caret.offset-m[0].length,caret:caret.offset,x:clamp(r.left,8,(window.innerWidth||1200)-300),y:r.bottom+6},mentionIdx:0});}
+      else this.setState(s=>s.mention||s.activeLine!==pos?{mention:null,activeLine:pos}:null);}
+  };
+  editorKey=e=>{
+    const s=this.state,c=this.caretInfo();if(!c)return;const key=this.docKey(),ls=this.lines(key);
+    const i=c.anchor.line,line=ls[i]??'',p=parseLine(line),cur=p.type==='todo'?p.text:line,mod=e.metaKey||e.ctrlKey;
+    const same=c.anchor.line===c.focus.line,a=Math.min(c.anchor.offset,c.focus.offset),b=Math.max(c.anchor.offset,c.focus.offset),collapsed=same&&a===b;
+    if(s.mention){const items=this.mentionList(),n=Math.max(1,items.length);
+      if(e.key==='ArrowDown'){e.preventDefault();this.setState({mentionIdx:(s.mentionIdx+1)%n});return;}
+      if(e.key==='ArrowUp'){e.preventDefault();this.setState({mentionIdx:(s.mentionIdx-1+n)%n});return;}
+      if((e.key==='Enter'||e.key==='Tab')&&items.length){e.preventDefault();this.pickMention(items[s.mentionIdx]||items[0]);return;}
+      if(e.key==='Escape'){e.preventDefault();this.setState({mention:null});return;}}
+    if(mod&&e.key.toLowerCase()==='z'){e.preventDefault();if(e.shiftKey)this.redo();else this.undo();return;}
+    if(mod&&same&&e.key.toLowerCase()==='b'){e.preventDefault();this.wrap(key,i,cur,a,b,'**');return;}
+    if(mod&&same&&e.key.toLowerCase()==='i'){e.preventDefault();this.wrap(key,i,cur,a,b,'*');return;}
+    if(mod&&same&&e.key.toLowerCase()==='k'){e.preventDefault();this.link(key,i,cur,a,b);return;}
+    if(mod&&e.key==='Enter'){e.preventDefault();if(p.type==='todo')this.buildIdx(key,[i]);return;}
+    if(e.key==='Tab'){e.preventDefault();if(p.type==='todo'){this.indent(key,i,e.shiftKey?-1:1);this.caret={line:i,offset:a};}return;}
+    if(e.key==='Enter'&&!e.shiftKey&&!mod&&p.type==='chat'){e.preventDefault();this.askInline(key,i);return;}
+    if(e.key==='Enter'&&!e.shiftKey&&!mod){e.preventDefault();if(!same)return;
+      if(p.type==='todo'&&!p.text.trim()){this.setLines(key,x=>x.map((l,j)=>j===i?'':l),{line:i,offset:0});return;}
+      const head=cur.slice(0,a),tail=cur.slice(b),l1=p.type==='todo'?todoLine(p.depth,p.done,head):head,l2=p.type==='todo'?todoLine(p.depth,false,tail):tail;
+      this.setLines(key,x=>{const out=[...x];out[i]=l1;out.splice(i+1,0,l2);return out;},{line:i+1,offset:0});this.shiftStatuses(key,i+1,1);this.setState({activeLine:i+1,mention:null});return;}
+    if(e.key==='Backspace'&&collapsed&&a===0){
+      if(p.type==='todo'){e.preventDefault();if(p.depth>0){this.indent(key,i,-1);this.caret={line:i,offset:0};}else this.setLines(key,x=>x.map((l,j)=>j===i?p.text:l),{line:i,offset:0});return;}
+      if(i>0){e.preventDefault();const q=parseLine(ls[i-1]),off=(q.type==='todo'?q.text:ls[i-1]).length;
+        this.setLines(key,x=>{const out=[...x];out[i-1]=x[i-1]+cur;out.splice(i,1);return out;},{line:i-1,offset:off});this.shiftStatuses(key,i,-1);this.setState({activeLine:i-1,mention:null});}
+      return;}
+    if(e.key==='Delete'&&collapsed&&a===cur.length&&i<ls.length-1){e.preventDefault();const q=parseLine(ls[i+1]),nt=q.type==='todo'?q.text:ls[i+1];
+      this.setLines(key,x=>{const out=[...x];out[i]=x[i]+nt;out.splice(i+1,1);return out;},{line:i,offset:cur.length});this.shiftStatuses(key,i+1,-1);return;}
+    if(e.key==='Escape'){const ed=this.editorEl();if(ed)ed.blur();}
+  };
+  insertImage(file){
+    const c=this.caretInfo(),key=this.docKey(),ls=this.lines(key),i=c?c.anchor.line:ls.length-1;
+    const id='i'+Date.now().toString(36)+Math.random().toString(36).slice(2,5),name=(file.name||'pasted image').replace(/[\[\]()]/g,'');
+    const reader=new FileReader();reader.onload=()=>{this.images=this.images||{};this.images[id]=reader.result;
+      const line=`![${name}](img:${id})`,empty=!(ls[i]||'').trim();
+      this.setLines(key,x=>{const out=[...x];if(empty)out.splice(i,1,line,'');else out.splice(i+1,0,line,'');return out;},{line:empty?i+1:i+2,offset:0});
+      this.shiftStatuses(key,empty?i+1:i+1,empty?1:2);this.setState({activeLine:empty?i+1:i+2,mention:null});};
+    reader.readAsDataURL(file);
+  }
+  editorPaste=e=>{
+    const files=[...((e.clipboardData&&e.clipboardData.files)||[])].filter(f=>f.type.startsWith('image/'));
+    if(files.length){e.preventDefault();files.forEach(f=>this.insertImage(f));return;}
+    const c=this.caretInfo();if(!c)return;e.preventDefault();const text=((e.clipboardData||window.clipboardData).getData('text/plain')||'').replace(/\r/g,'');if(!text)return;
+    const key=this.docKey(),ls=this.lines(key),i=c.anchor.line,line=ls[i]??'',p=parseLine(line),cur=p.type==='todo'?p.text:line;
+    const same=c.anchor.line===c.focus.line,a=same?Math.min(c.anchor.offset,c.focus.offset):c.anchor.offset,b=same?Math.max(c.anchor.offset,c.focus.offset):a;
+    const parts=text.split('\n');
+    if(parts.length===1){this.writeText(key,i,cur.slice(0,a)+text+cur.slice(b),{line:i,offset:a+text.length});return;}
+    const first=cur.slice(0,a)+parts[0],last=parts[parts.length-1]+cur.slice(b);
+    this.setLines(key,x=>{const out=[...x];out[i]=p.type==='todo'?todoLine(p.depth,p.done,first):first;out.splice(i+1,0,...parts.slice(1,-1),last);return out;},{line:i+parts.length-1,offset:parts[parts.length-1].length});
+    this.shiftStatuses(key,i+1,parts.length-1);this.setState({activeLine:i+parts.length-1,mention:null});
+  };
+  editorClick=e=>{
+    const act=e.target.closest('[data-act]');
+    if(act){e.preventDefault();const key=this.docKey(),i=Number(act.dataset.row),k=act.dataset.act;
+      if(k==='chatsend'){this.chatSend(act.dataset.chat);return;}
+      if(k==='ask'){this.askInline(key,i);return;}
+      if(k==='toggle')this.toggleTodo(key,i);else if(k==='build')this.buildIdx(key,[i]);else if(k==='remove')this.removeLine(key,i);else if(k==='buildall'&&act.dataset.lines)this.buildIdx(key,act.dataset.lines.split(',').map(Number));return;}
+    const a=e.target.closest('a[data-link]');if(a){e.preventDefault();window.open(a.getAttribute('href'),'_blank','noreferrer');return;}
+    const m=e.target.closest('[data-mention]');if(m){e.preventDefault();this.hidePop();const nm=m.dataset.mention;if(nm.startsWith('chat')){const id=nm.split(':')[1]||'chat';const el=this.editorEl().querySelector(`input[data-chat-input="${id}"]`);if(el)el.focus();return;}this.openCtx(this.state.topic,this.findRes(nm));}
+  };
+  editorOver=e=>{const m=e.target.closest('[data-mention]');if(m)this.showPop(this.findRes(m.dataset.mention),{currentTarget:m});};
+  editorOut=e=>{if(e.target.closest('[data-mention]'))this.hidePop();};
+  docClick=e=>{
+    if(e.target!==e.currentTarget)return;const ed=this.editorEl();if(!ed)return;
+    const ls=this.lines(this.docKey()),last=ls.length-1,p=parseLine(ls[last]);
+    this.caret={line:last,offset:(p.type==='todo'?p.text:ls[last]).length};this.wantFocus=true;ed.focus({preventScroll:true});
+    if(this.state.activeLine===last)this.applyCaret();else this.setState({activeLine:last});
+  };
+  renameDoc=e=>{const v=e.target.value,id=this.state.activeTab;
+    if(id==='ws'){const t=this.state.topic;this.setState(s=>({wsTitles:{...(s.wsTitles||{}),[t]:v}}));return;}
+    this.setState(s=>({tabs:s.tabs.map(t=>t.id===id?{...t,title:v}:t),notes:s.notes.map(n=>n.id===id?{...n,name:v}:n),res:s.res[id]?{...s.res,[id]:{...s.res[id],name:v,title:v}}:s.res}));};
+  askInline(key,i){
+    const ls=this.lines(key),p=parseLine(ls[i]||'');if(p.type!=='chat'||!p.text.trim()||this.status(key,i)==='asking')return;
+    this.setState(s=>({statuses:{...s.statuses,[key]:{...(s.statuses[key]||{}),[i]:'asking'}}}));
+    const ed=this.editorEl();if(ed)ed.blur();this.setState({activeLine:null,mention:null});
+    setTimeout(()=>{
+      const cur=this.lines(key),todos=cur.map(parseLine).filter(q=>q.type==='todo'&&q.text.trim()),open=todos.filter(q=>!q.done);
+      const reply=[`I read this document — ${todos.length} todo${todos.length===1?'':'s'}, ${open.length} open.`,`About "${p.text.trim()}": no model is connected in this prototype, so this reply is simulated.`];
+      let j=i+1;while(j<cur.length&&parseLine(cur[j]).type==='quote')j++;
+      const quotes=reply.map(t=>'> '+t);
+      this.setLines(key,x=>{const out=[...x];out.splice(i+1,j-i-1,...quotes);return out;});
+      this.shiftStatuses(key,i+1,quotes.length-(j-i-1));
+      this.setState(s=>({statuses:{...s.statuses,[key]:{...(s.statuses[key]||{}),[i]:''}}}));
+    },700);
+  }
+  chatKeyOf(key,id){return key+'|'+id;}
+  chatHtml(key,id){
+    const k=this.chatKeyOf(key,id),msgs=(this.state.chats||{})[k]||[],draft=(this.chatDrafts||{})[k]||'';
+    const bubble=m=>`<div style="display:flex;flex-direction:column;gap:3px;align-items:${m.who==='you'?'flex-end':'flex-start'}"><span style="font:500 9px/1 var(--font-sans);color:#8f8f8f">${esc(m.who)}</span><div style="max-width:78%;padding:7px 11px;border-radius:10px;background:${m.who==='you'?'#eaeaea':'#fff'};border:1px solid ${m.who==='you'?'transparent':'#eaeaea'};font:14.5px/1.5 var(--font-sans);color:#171717;white-space:pre-line">${esc(m.text)}</div></div>`;
+    return `<div contenteditable="false" data-chat="${id}" style="user-select:none">`
+      +`<div data-chat-feed="${id}" style="max-height:240px;overflow:auto;padding:10px 14px;display:flex;flex-direction:column;gap:10px;user-select:text">${msgs.map(bubble).join('')||'<span style="font:12.5px/1.6 var(--font-sans);color:#8f8f8f">Ask about this document.</span>'}</div>`
+      +`<div style="padding:0 10px 10px"><div style="display:flex;align-items:center;gap:10px;padding:4px 4px 4px 12px;background:#fff;border:1px solid #eaeaea;border-radius:10px"><input data-chat-input="${id}" value="${esc(draft)}" placeholder="message…" spellcheck="false" style="flex:1;min-width:0;padding:6px 0;border:0;background:transparent;font:14.5px/1.5 var(--font-sans);color:#171717;outline:none"><button data-act="chatsend" data-chat="${id}" aria-label="Send" style="flex:none;width:26px;height:26px;padding:0;border:0;border-radius:50%;display:flex;align-items:center;justify-content:center;background:${draft.trim()?'#0070f3':'#eaeaea'};color:${draft.trim()?'#fff':'#8f8f8f'};font:500 13px/1 var(--font-sans);cursor:pointer">›</button></div></div></div>`;
+  }
+  chatSend(id){
+    const key=this.docKey(),k=this.chatKeyOf(key,id),text=((this.chatDrafts||{})[k]||'').trim();if(!text)return;
+    this.chatDrafts[k]='';this.refocusChat=id;
+    this.setState(s=>({chats:{...(s.chats||{}),[k]:[...((s.chats||{})[k]||[]),{who:'you',text}]}}));
+    setTimeout(()=>{const ls=this.lines(key).map(parseLine),todos=ls.filter(p=>p.type==='todo'&&p.text.trim()),open=todos.filter(p=>!p.done);
+      const reply=`I read this document — ${todos.length} todo${todos.length===1?'':'s'}, ${open.length} open. About "${text}": no model is connected in this prototype, so this reply is simulated.`;
+      this.setState(s=>({chats:{...(s.chats||{}),[k]:[...((s.chats||{})[k]||[]),{who:'Bart',text:reply}]}}));},700);
+  }
+  focusNewDoc(){this.caret={line:0,offset:0};this.wantFocus=true;this.setState({activeLine:0});}
+
+  /* operations */
+  mentionList(){
+    const q=(this.state.mention?.query||'').toLowerCase(),t=this.state.topics.find(x=>x.id===this.state.topic);
+    return [CHAT_RES,...(t?t.ctx:[]).map(id=>this.state.res[id])].filter(r=>r&&(r.name.toLowerCase().includes(q)||(r.title||'').toLowerCase().includes(q)));
+  }
+  pickMention(r){
+    const m=this.state.mention;if(!m||!r)return;const key=this.docKey(),ls=this.lines(key),p=parseLine(ls[m.i]||'');
+    const cur=p.type==='todo'?p.text:ls[m.i],ins=r.id==='chat'?'@chat ':`@[${r.name}] `;
+    this.writeText(key,m.i,cur.slice(0,m.start)+ins+cur.slice(m.caret),{line:m.i,offset:m.start+ins.length});
+    this.wantFocus=true;this.setState({mention:null,activeLine:m.i});
+  }
+  wrap(key,i,cur,st,en,mark){this.writeText(key,i,cur.slice(0,st)+mark+cur.slice(st,en)+mark+cur.slice(en),{line:i,sel:[st+mark.length,en+mark.length]});}
+  link(key,i,cur,st,en){const sel=cur.slice(st,en)||'link';const a=st+sel.length+3;this.writeText(key,i,cur.slice(0,st)+`[${sel}](url)`+cur.slice(en),{line:i,sel:[a,a+3]});}
+  indent(key,i,dir){
+    this.setLines(key,ls=>{const p=parseLine(ls[i]||'');if(p.type!=='todo')return ls;const nd=clamp(p.depth+dir,0,8);if(nd===p.depth)return ls;
+      if(dir>0){const prev=parseLine(ls[i-1]||'');if(prev.type!=='todo'||nd>prev.depth+1)return ls;}
+      const out=[...ls];out[i]=todoLine(nd,p.done,p.text);
+      for(let j=i+1;j<ls.length;j++){const q=parseLine(ls[j]);if(q.type!=='todo'||q.depth<=p.depth)break;out[j]=todoLine(clamp(q.depth+dir,0,8),q.done,q.text);}
+      return out;});
+  }
+  removeLine(key,i){this.setLines(key,ls=>ls.length>1?ls.filter((_,j)=>j!==i):['']);this.shiftStatuses(key,i,-1);this.setState({mention:null});}
+  toggleTodo(key,i){this.setLines(key,ls=>ls.map((l,j)=>{if(j!==i)return l;const p=parseLine(l);return todoLine(p.depth,!p.done,p.text);}));this.setState(s=>({statuses:{...s.statuses,[key]:{...(s.statuses[key]||{}),[i]:''}}}));}
+  buildIdx(key,idxs){
+    const ls=this.lines(key),open=idxs.filter(i=>{const p=parseLine(ls[i]||'');return p.type==='todo'&&p.text.trim()&&!p.done&&!HELD.includes(this.status(key,i));});
+    if(!open.length)return;
+    this.setState(s=>{const st={...(s.statuses[key]||{})};open.forEach(i=>{st[i]='building';});return {statuses:{...s.statuses,[key]:st},mention:null};});
+    const k=this.speed();
+    open.forEach((i,n)=>{setTimeout(()=>this.setStatus(key,i,'checking'),(1600+n*400)*k);setTimeout(()=>this.setStatus(key,i,'done',true),(3000+n*400)*k);});
+  }
+  findRes(name){const n=name.toLowerCase();if(n.startsWith('chat'))return CHAT_RES;return Object.values(this.state.res).find(r=>r.name.toLowerCase()===n)||{id:'?',kind:'note',name,title:name,summary:'Not attached to this topic yet.',facts:'unresolved'};}
+  showPop(res,e){const r=e.currentTarget.getBoundingClientRect();this.setState({pop:{res,x:clamp(r.left,8,(window.innerWidth||1200)-340),y:r.bottom+8}});}
+  hidePop=()=>this.setState({pop:null});
+  inline(text){
+    return text.split(INLINE).map((p,i)=>{
+      if(!p)return null;
+      if(p.startsWith('**')&&p.endsWith('**')&&p.length>4)return React.createElement('strong',{key:i,style:{fontWeight:600}},p.slice(2,-2));
+      if(p.startsWith('`')&&p.endsWith('`')&&p.length>2)return React.createElement('code',{key:i,style:{padding:'1px 4px',borderRadius:4,background:'#f2f2f2',font:'.92em/1.6 var(--font-mono)'}},p.slice(1,-1));
+      if(p.startsWith('*')&&p.endsWith('*')&&p.length>2)return React.createElement('em',{key:i},p.slice(1,-1));
+      if(p.startsWith('@[')){const name=p.slice(2,-1),res=this.findRes(name);
+        return React.createElement('span',{key:i,onMouseEnter:e=>this.showPop(res,e),onMouseLeave:this.hidePop,onClick:e=>{e.stopPropagation();this.hidePop();this.openCtx(this.state.topic,res);},style:{color:'#0070f3',fontWeight:500,cursor:'pointer',borderBottom:'1px dotted #c9c9c9'}},'@'+name);}
+      const m=p.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+      if(m)return React.createElement('a',{key:i,href:m[2],target:'_blank',rel:'noreferrer',onClick:e=>e.stopPropagation(),style:{color:'#0070f3',textDecoration:'underline',textUnderlineOffset:3}},m[1]);
+      return p;
+    });
+  }
+
+  /* right pane */
+  student(){return HC.students.find(s=>s.id===this.state.hcStudent)||HC.students[0];}
+  testsFor(st){return this.state.hcTests.map(input=>{const a=parseInput(input);if(!a)return {input,expected:'—',got:'invalid input',pass:false,bad:true};const expected=fmt(HC.ref(a));let got;try{got=fmt(st.run([...a]));}catch(err){got=String(err);}return {input,expected,got,pass:got===expected,bad:false};});}
+  hcAdd=()=>{const v=this.state.hcInput.trim();if(!v)return;this.setState(s=>({hcTests:[...s.hcTests,v],hcInput:''}));};
+  hcSend=()=>{
+    const text=this.state.hcDraft.trim();if(!text)return;const st=this.student(),id=st.id;
+    this.setState(s=>({hcDraft:'',hcChat:{...s.hcChat,[id]:[...(s.hcChat[id]||[]),{who:'you',text}]}}));
+    setTimeout(()=>{const fail=this.testsFor(st).find(t=>!t.pass&&!t.bad);
+      const reply=fail?`With ${fail.input} I get ${fail.got}, but you expect ${fail.expected}. Let me trace my code on that input…`:'Every test you gave me passes so far. Which input should I try next?';
+      this.setState(s=>({hcChat:{...s.hcChat,[id]:[...(s.hcChat[id]||[]),{who:st.name,text:reply}]}}));},700);
+  };
+  termKey=e=>{
+    if(e.key!=='Enter')return;const cmd=this.state.termInput.trim();if(!cmd)return;
+    const lines=[{text:'$ '+cmd,color:'#ededed'}];let agent=this.state.agent;
+    if(cmd==='claude'||cmd==='codex'){agent=cmd;lines.push({text:`# ${cmd} · session started — no shell is attached in this prototype`,color:'#8f8f8f'});}
+    else lines.push({text:'# no shell is attached in this prototype',color:'#8f8f8f'});
+    this.setState(s=>({termLines:[...s.termLines,...lines],termInput:'',agent}));
+  };
+
+  ctxOptions(){
+    const m=this.state.ctxModal;if(!m)return [];
+    const opts=[
+      {id:'note',glyph:KIND.note.g,title:'New note',why:'A blank note in this topic. Opens in a new tab.',click:()=>{this.setState({ctxModal:null});this.addNote(m.topicId);}},
+      {id:'import',glyph:KIND.data.g,title:'Import',why:'An image, a pdf or a dataset from your files.',click:()=>{const el=document.getElementById('ctx-file-input');if(el)el.click();}},
+      {id:'link',glyph:KIND.link.g,title:'Link',why:'A page on the web, kept as a reference.',placeholder:'paste a url…',hint:'Enter adds it · the host becomes its name'},
+      {id:'repo',glyph:KIND.repo.g,title:'Git repo',why:'Connect GitHub, then pick a repository.',placeholder:'owner/repository…',hint:'GitHub sign-in is not wired in this prototype — the repository is attached by name'},
+      {id:'drive',glyph:KIND.drive.g,title:'Google Drive',why:'Connect Google Drive, then pick a file or folder.',placeholder:'paste a drive link or file name…',hint:'Drive sign-in is not wired in this prototype — the file is attached by name'},
+    ];
+    return opts.map((o,i)=>{const active=m.step===o.id,expands=!!o.placeholder;return {...o,active,rule:i?'#eaeaea':'transparent',bg:active?'#fff':'transparent',chevron:expands?(active?'⌃':'›'):'›',click:o.click||(()=>this.ctxStep(o.id))};});
+  }
+  renderVals(){
+    const s=this.state,phase=s.phase;
+    const showCanvas=phase!=='workspace',showWs=phase!=='canvas';
+    const detail=s.zoom>=1.15;
+    const boxes=BOXES.map(box=>({...box,right:`${box.pct} · ${GOALS[box.id].length} goal${GOALS[box.id].length===1?'':'s'}`,
+      goals:GOALS[box.id].map(g=>{const tps=g.id==='g1'?s.topics:[];return {...g,detail,grow:g.sources.length+tps.length+1,basis:120+(g.sources.length+tps.length)*30,count:`${g.sources.length} source${g.sources.length===1?'':'s'}`,hasTopics:tps.length>0,
+        topics:tps.map(t=>{const done=t.status==='done',prog=t.status==='progress';return {...t,markGlyph:done?'✓':'',markStyle:done?{flex:'none',width:11,height:11,borderRadius:'50%',background:'#171717',color:'#fff',font:'600 7px/11px var(--font-sans)',textAlign:'center'}:{flex:'none',width:11,height:11,borderRadius:'50%',border:`1.5px ${prog?'dashed':'solid'} ${prog?'#171717':'#c9c9c9'}`}};}),
+        sources:g.sources.map(x=>({glyph:KIND[x.k].g,kind:KIND[x.k].label,title:x.t||`untitled ${KIND[x.k].label}…`,color:x.t?'#4d4d4d':'#8f8f8f',fontStyle:x.t?'normal':'italic'})),
+        open:e=>this.openGoal(g.id,e.currentTarget.getBoundingClientRect()),
+        hover:e=>{this.hoverEl=e.currentTarget;this.setState({hoverGoal:g.id});}};})}));
+    const goal=this.goal(),boxLabel=BOXES.find(b=>b.id===goal.box).label;
+    const topicsSrc=goal.id==='g1'?s.topics:[];
+    const topics=topicsSrc.map(t=>{
+      const active=t.id===s.topic,pinned=!!s.expanded[t.id],open=pinned||s.hoverTopic===t.id;
+      const done=t.status==='done',prog=t.status==='progress';
+      const markStyle=done?{flex:'none',width:14,height:14,borderRadius:'50%',border:0,appearance:'none',background:'#171717',color:'#fff',font:'600 9px/14px var(--font-sans)',textAlign:'center'}
+        :{flex:'none',width:14,height:14,borderRadius:'50%',border:`1.5px ${prog?'dashed':'solid'} ${prog||active?'#171717':'#c9c9c9'}`};
+      const rows=[{id:'ws',kind:'ws',name:'Workspace'},...t.ctx.map(id=>s.res[id]).filter(Boolean)].map(r=>{
+        const on=active&&(r.kind==='ws'?s.activeTab==='ws':r.kind==='note'?s.activeTab===r.id:s.rightMode===r.opens);
+        return {...r,glyph:KIND[r.kind].g,kindLabel:r.kind==='ws'?'':KIND[r.kind].label,bg:on?'#fff':'transparent',weight:on?500:400,fg:(r.kind==='ws'||r.kind==='note')?'#171717':'#4d4d4d',click:e=>{e.stopPropagation();this.openCtx(t.id,r);}};});
+      Object.assign(markStyle,{padding:0,cursor:'pointer',boxSizing:'border-box',appearance:'none',background:done?'#171717':'transparent'});
+      return {...t,active,open,pinned,rows,markStyle,markGlyph:done?'✓':'',statusTitle:done?'Done — click for todo':prog?'In progress — click for done':'Todo — click for in progress',cycle:e=>{e.stopPropagation();this.cycleTopic(t.id);},weight:active?600:400,bg:active?'#fff':'transparent',shadow:active?'0 1px 3px #0000000a, 0 0 0 1px #eaeaea':'none',
+        showToggle:pinned||active,toggleGlyph:pinned?'⌃':'›',toggleTitle:pinned?'Collapse':'Expand',
+        select:()=>this.selectTopic(t.id),toggle:e=>{e.stopPropagation();this.togglePin(t.id);},enter:()=>this.setState({hoverTopic:t.id}),addContext:e=>{e.stopPropagation();this.setState({ctxModal:{topicId:t.id,step:null,value:''}});}};});
+    const notes=s.notes.map(n=>({...n,bg:s.activeTab===n.id?'#fff':'transparent',shadow:s.activeTab===n.id?'0 1px 3px #0000000a, 0 0 0 1px #eaeaea':'none',weight:s.activeTab===n.id?600:400,click:()=>this.openTab(n.id,n.name)}));
+    const ideas=(s.ideas||[]).map(i=>({...i,change:e=>{const v=e.target.value;this.setState(x=>({ideas:x.ideas.map(y=>y.id===i.id?{...y,text:v}:y)}));},key:e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();this.addIdea();}if(e.key==='Escape')e.target.blur();},blur:e=>{if(!e.target.value.trim())this.setState(x=>({ideas:x.ideas.filter(y=>y.id!==i.id)}));},remove:()=>this.setState(x=>({ideas:x.ideas.filter(y=>y.id!==i.id)}))}));
+    const tabs=s.tabs.map(t=>{const on=t.id===s.activeTab;return {...t,line:on?'#171717':'transparent',weight:on?600:400,color:on?'#171717':'#4d4d4d',closable:t.id!=='ws',select:()=>this.setState({activeTab:t.id,activeLine:null,mention:null}),close:e=>{e.stopPropagation();this.closeTab(t.id);}};});
+    const activeTopic=s.topics.find(t=>t.id===s.topic);
+    const tab=s.tabs.find(t=>t.id===s.activeTab);
+    const docTitle=s.activeTab==='ws'?((s.wsTitles||{})[s.topic]??'Workspace'):(tab?tab.title:'');
+    const docSub=s.activeTab==='ws'?`${activeTopic?activeTopic.title:''} · ${goal.name} · ${boxLabel}`:`Note · ${goal.name} · ${boxLabel}`;
+    const mentionItems=this.mentionList().map((r,i)=>({...r,glyph:KIND[r.kind].g,kindLabel:KIND[r.kind].label,bg:i===s.mentionIdx?'#f2f2f2':'transparent',pick:e=>{e.preventDefault();this.pickMention(r);}}));
+    const rightTabs=[{id:'preview',label:'Live preview'},{id:'paper',label:'Paper'},{id:'dataset',label:'Dataset'}].map(t=>{const on=s.rightMode===t.id;return {...t,line:on?'#171717':'transparent',weight:on?600:400,color:on?'#171717':'#4d4d4d',select:()=>this.setState({rightMode:t.id})};});
+    const st=this.student(),tests=this.testsFor(st).map((t,i)=>({...t,color:t.pass?'#171717':'#e70022',remove:()=>this.setState(x=>({hcTests:x.hcTests.filter((_,j)=>j!==i)}))}));
+    const failing=tests.filter(t=>!t.pass&&!t.bad).length;
+    const students=HC.students.map(x=>{const on=x.id===s.hcStudent,f=this.testsFor(x).filter(t=>!t.pass&&!t.bad).length;return {...x,border:on?'#171717':'#eaeaea',dotBorder:on?'#171717':'#c9c9c9',dotBg:on?'#171717':'transparent',fails:f?`${f} failing`:'',select:()=>this.setState({hcStudent:x.id})};});
+    const chat=(s.hcChat[st.id]||[]).map(m=>({...m,align:m.who==='you'?'flex-end':'flex-start',bg:m.who==='you'?'#eaeaea':'#fff',border:m.who==='you'?'transparent':'#eaeaea'}));
+    const pop=s.pop;
+    return {
+      showCanvas,showWs,canvasStyle:this.canvasStyle(),wsStyle:this.wsStyle(),
+      innerStyle:{position:'absolute',left:0,top:0,width:'100%',height:'100%',transform:`translate(${s.pan.x}px,${s.pan.y}px) scale(${s.zoom})`,transformOrigin:'0 0'},
+      boxes,goalCount:Object.values(GOALS).reduce((n,a)=>n+a.length,0),unhover:()=>{this.hoverEl=null;this.setState({hoverGoal:null});},
+      closeWs:this.closeWs,boxLabel,goalName:goal.name,
+      railStyle:{flex:'none',width:Math.min(s.railWidth,Math.max(180,Math.min(520,(window.innerWidth||1200)-700))),padding:'24px 16px',display:'flex',flexDirection:'column',gap:5,overflow:'auto',background:'#fafafa'},
+      mainStyle:{flex:`${s.split} 1 0`,minWidth:'min(420px, 55%)',minHeight:0,display:'flex',flexDirection:'column',position:'relative'},
+      rightStyle:{flex:`${1-s.split} 1 0`,minWidth:0,minHeight:0,display:'flex',flexDirection:'column',padding:'0 20px 20px'},
+      splitDown:this.splitDown,splitMove:this.splitMove,splitReset:this.splitReset,
+      railDown:this.railDown,railMove:this.railMove,railUp:this.railUp,railReset:this.railReset,
+      topics,addTopic:this.addTopic,noteGlyph:KIND.note.g,leaveTopic:()=>this.setState({hoverTopic:null}),notes,addFreeNote:this.addFreeNote,ideas,addIdea:this.addIdea,
+            tabs,docTitle,docSub,titleChange:this.renameDoc,titleKey:e=>{if(e.key==='Enter'||e.key==='Escape')e.target.blur();},docClick:this.docClick,mentionItems,noMentions:!mentionItems.length,mentionOpen:!!s.mention,
+      mentionStyle:{position:'fixed',left:s.mention?.x||0,top:s.mention?.y||0,zIndex:60,minWidth:280,padding:4,background:'#fff',border:'1px solid #eaeaea',borderRadius:8,animation:`rise 160ms ${EASE}`},
+      pdfNote:s.pdfNote||'Opening the paper…',rightTabs,host:'141.148.1.3:8080',modePreview:s.rightMode==='preview',modePaper:s.rightMode==='paper',modeDataset:s.rightMode==='dataset',
+      studentName:st.name,studentCode:st.code,tests,testsNote:failing?`${failing} of ${tests.length} test${tests.length===1?'':'s'} expose${failing===1?'s':''} a bug in ${st.name}'s code — point ${st.name} at one.`:`${st.name}'s code passes every test so far. Add an input that breaks it (duplicates? a single element?).`,
+      hcInput:s.hcInput,hcInputChange:e=>this.setState({hcInput:e.target.value}),hcInputKey:e=>{if(e.key==='Enter')this.hcAdd();},hcAdd:this.hcAdd,
+      students,chat,chatEmpty:!chat.length,hcDraft:s.hcDraft,hcDraftChange:e=>this.setState({hcDraft:e.target.value}),hcDraftKey:e=>{if(e.key==='Enter')this.hcSend();},hcSend:this.hcSend,
+      sendBg:s.hcDraft.trim()?'#0070f3':'#eaeaea',sendFg:s.hcDraft.trim()?'#fff':'#8f8f8f',
+      agent:s.agent,pickClaude:()=>this.setState({agent:'claude'}),pickCodex:()=>this.setState({agent:'codex'}),
+      claudeColor:s.agent==='claude'?'#ededed':'#8f8f8f',claudeLine:s.agent==='claude'?'#ededed':'transparent',codexColor:s.agent==='codex'?'#ededed':'#8f8f8f',codexLine:s.agent==='codex'?'#ededed':'transparent',
+      termLines:s.termLines,termInput:s.termInput,termChange:e=>this.setState({termInput:e.target.value}),termKey:this.termKey,
+      datasetFiles:DATASET_FILES.map((f,i)=>({...f,bg:i%2?'#fafafa':'#fff'})),
+      ctxOpen:!!s.ctxModal,ctxClose:this.ctxClose,stop:e=>e.stopPropagation(),ctxTopicTitle:(s.topics.find(t=>t.id===s.ctxModal?.topicId)||{}).title||'',
+      ctxOptions:this.ctxOptions(),ctxValue:s.ctxModal?.value||'',ctxChange:e=>this.setState(x=>({ctxModal:{...x.ctxModal,value:e.target.value}})),ctxKey:e=>{if(e.key==='Enter')this.ctxSubmit();if(e.key==='Escape')this.ctxClose();},ctxSubmit:this.ctxSubmit,ctxFile:this.ctxFile,
+      popOpen:!!pop,popStyle:pop?{position:'fixed',left:pop.x,top:pop.y,zIndex:50,width:330,padding:'14px 16px',background:'#fff',border:'1px solid #c9c9c9',borderRadius:8,boxShadow:'0 12px 32px rgba(0,0,0,.06)',pointerEvents:'none',animation:`rise 160ms ${EASE}`}:{display:'none'},
+      popKind:pop?KIND[pop.res.kind].label:'',popTitle:pop?pop.res.title:'',popSummary:pop?pop.res.summary:'',popFacts:pop?pop.res.facts:'',
+    };
+  }
+}
+</script>
+</body>
+</html>
