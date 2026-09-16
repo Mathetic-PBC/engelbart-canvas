@@ -321,7 +321,7 @@ if (!hasSingleInstanceLock) {
     rendererLifecycle = new RendererLifecycle(manager);
     rendererLifecycle.detach();
     settings = new SettingsStore(app.getPath('userData'), app.getPath('home'));
-    store = createStore({ homeDir: app.getPath('home'), fixturesDir: FIXTURES });
+    store = createStore({ homeDir: process.env.ENGELBART_HOME_DIR || app.getPath('home'), fixturesDir: FIXTURES });
     manager.on('data', (payload) => sendToRenderer('terminal:data', payload));
     manager.on('exit', (payload) => sendToRenderer('terminal:exit', payload));
     registerTerminalIpc();

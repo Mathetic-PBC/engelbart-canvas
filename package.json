@@ -3,7 +3,7 @@
   "productName": "Engelbart",
   "version": "0.1.0",
   "private": true,
-  "description": "Engelbart desktop — a simulation/testing environment for the Goal Canvas: projects, goals, topics, notes, library, PDF ink, and a native terminal.",
+  "description": "Engelbart desktop \u2014 a simulation/testing environment for the Goal Canvas: projects, goals, topics, notes, library, PDF ink, and a native terminal.",
   "main": "src/main/index.cjs",
   "scripts": {
     "build": "node scripts/build.mjs",
@@ -12,9 +12,12 @@
     "test:pty": "ELECTRON_RUN_AS_NODE=1 electron --test test/*.integration.cjs",
     "rebuild": "electron-rebuild -f -w node-pty",
     "postinstall": "npm run rebuild",
-    "package": "npm run build && electron-packager . Engelbart --platform=darwin --arch=arm64 --out=release --app-bundle-id=dev.engelbart.desktop --asar.unpackDir='{node_modules/node-pty,node_modules/@electric-sql/pglite}' --ignore='^/(test|docs|design|release|.superpowers|.git)($|/)' --overwrite"
+    "package": "npm run build && electron-packager . Engelbart --platform=darwin --arch=arm64 --out=release --app-bundle-id=dev.engelbart.desktop --asar.unpackDir='{node_modules/node-pty,node_modules/@electric-sql/pglite}' --ignore='^/(test|docs|design|release|.superpowers|.git)($|/)' --overwrite",
+    "start:debug": "npm run build && electron . --remote-debugging-port=9222"
   },
-  "engines": { "node": ">=22.12.0" },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "dependencies": {
     "@electric-sql/pglite": "0.5.8",
     "@fontsource/caveat": "5.3.0",

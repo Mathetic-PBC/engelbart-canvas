@@ -8,6 +8,9 @@ import React from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import rough from 'roughjs';
 
+// pdf.js 6: a document is torn down through its loading task (PDFDocumentProxy has no destroy()).
+const destroyDoc = (doc) => { try { const task = doc && doc.loadingTask; if (task && typeof task.destroy === 'function') task.destroy().catch(() => {}); } catch { /* already gone */ } };
+
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const BASE = document.baseURI;
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('./pdf.worker.min.mjs', BASE).href;
@@ -109,7 +112,7 @@ export default class PaperView extends React.Component {
     this.flushSave(this.props.onMarksChange);
     this.gen += 1;
     this.cancelLayout();
-    if (this.doc) { const d = this.doc; this.doc = null; d.destroy().catch(() => {}); }
+    if (this.doc) { const d = this.doc; this.doc = null; destroyDoc(d); }
   }
 
   /* ---------------------------------------------------------------- persistence */
@@ -135,7 +138,7 @@ export default class PaperView extends React.Component {
   async load() {
     const gen = ++this.gen;
     this.cancelLayout();
-    if (this.doc) { const d = this.doc; this.doc = null; d.destroy().catch(() => {}); }
+    if (this.doc) { const d = this.doc; this.doc = null; destroyDoc(d); }
     const host = this.host.current;
     if (host) { host.innerHTML = ''; host.style.alignItems = 'center'; }
     this.pdfW = null;
@@ -144,7 +147,7 @@ export default class PaperView extends React.Component {
     this.setState({ note: 'Opening the paper…' });
     try {
       const doc = await pdfjsLib.getDocument({ data, isEvalSupported: false, ...ASSETS }).promise;
-      if (gen !== this.gen) { doc.destroy().catch(() => {}); return; }
+      if (gen !== this.gen) { destroyDoc(doc); return; }
       this.doc = doc;
       this.setState({ note: '' });
       await this.layout();
