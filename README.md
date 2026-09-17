@@ -28,7 +28,7 @@ Unsigned and not notarised: first launch needs right-click → Open. The first l
 
 ## First run, test mode, reset
 
-With no project in the current root the app opens on **Create a new project** (name + `./slug` path). Creating a project makes `<root>/<slug>/`, a first goal *First steps*, a first topic *Getting started* and a *Welcome!* note, and opens the workspace with that note.
+With no project in the current root the app opens on **Create a new project** (name + `./slug` path). Creating a project makes `<root>/<slug>/`, a first goal *First steps*, a first topic *Getting started* and a *Welcome!* note, and opens the workspace with that note. From then on the app opens straight into the topic you were last in (`<root>/state.json`); `Engelbart` in the header, or Escape, shows all projects — a card grid that ends with a dashed **+ Project** card. There is no kanban screen: the goal crumb in the header lists the project's goals and adds new ones.
 
 The pill top-right exists on every screen. **Test · on** roots the app at `~/.engelbart/test/` and seeds that library once (the HypoCompass paper, its repository, the arXiv page, a small dataset); the `⚙` beside the pill can reveal the folder or **Reset everything** (native confirmation, then `~/.engelbart/test/` is deleted and recreated). **Test · off** roots the same app at `~/.engelbart/` with its own library database and no seeds.
 
@@ -61,11 +61,11 @@ src/main/ipc.cjs             engelbart:* handlers, argument validation, lazy sto
 src/main/store/              home layout + config, PGlite databases, projects/goals/topics/notes/docs, library + annotations
 src/main/terminal/           Experimental Terminal engine, unchanged (session manager, launch, providers, settings)
 src/preload.cjs              window.terminalAPI (ET contract) + window.engelbartAPI
-src/renderer/App.jsx         home | canvas | workspace, the zoom-and-fade transition, the test pill
-src/renderer/screens/        CreateProject, Home, Canvas, Workspace
-src/renderer/workspace/      Rail (topic header + sibling switcher + context tree), DocTabs, DocEditor (+ MentionMenu, Popover), CtxModal, RightPane
+src/renderer/App.jsx         create | all projects | workspace; reopens the last topic; the test pill
+src/renderer/screens/        CreateProject, Home (all projects), Workspace (three-column header: crumbs + goal menu, doc tabs, pane switcher)
+src/renderer/workspace/      Rail (topic header + sibling switcher + context tree), DocTabs, DocEditor (+ MentionMenu, Popover), CtxModal, RightPane, Browser
 src/renderer/pdf/PaperView   pdf.js + rough.js + Caveat
-src/renderer/terminal/       xterm client over terminalAPI; sessions survive navigation
+src/renderer/terminal/       the Terminal pane (tabs, cwd chip, Terminal / Claude Code / Codex switcher) over terminalAPI; sessions survive navigation
 src/renderer/model/doc.js    the pure editor model (regexes, todo lines, caret offset mapping)
 scripts/drive.mjs            CDP driver for exploratory testing (screenshots, clicks, typing)
 ```
@@ -82,7 +82,7 @@ Exploratory testing against a running app:
 ```sh
 npm run start:debug
 node scripts/drive.mjs shot /tmp/home.png
-node scripts/drive.mjs clicksel "[data-canvas] div[style*='zoom-in']" -- wait 800 -- shot /tmp/ws.png
+node scripts/drive.mjs clicksel "[data-right-mode='terminal']" -- wait 800 -- shot /tmp/terminal.png
 node scripts/drive.mjs errors          # anything the renderer caught
 ```
 

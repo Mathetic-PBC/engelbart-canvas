@@ -70,3 +70,23 @@ Reproduced and fixed on a scratch instance (port 9224) with the caret placed pro
 | "Do not show the `#-###` even after it has bolded … don't wait for me to hit enter" | The active line always rendered a heading's `# ` prefix token as source. | The prefix is a hidden marker token like `**`: shown only while the caret is inside it; display↔raw offset mapping treats it as zero-width. | active heading: innerText `Title`, prefix span empty, typing appends `# Titles` |
 
 `npm test`: 58 passing.
+
+
+# Round 4 — 2026-09-17 (Claude Design revision + Hudson's screen and editor requests)
+
+Design revision pulled from Claude Design (messages 34–54: terminal pane, browser pane, header columns, todo/chat cards, Copy all, PDF margin fix) and Hudson's message of the same day (no kanban, open into *Getting started*, dashed `+ Project` card, hidden heading marks, nested-todo Enter, `- ` after deleting everything). Driven on a fresh scratch home (`ENGELBART_HOME_DIR`, port 9225, `ENGELBART_CONFIRM_ALL=1`). Unit tests: 60 passing (two new: last-open state, `read-text-file` path rules).
+
+| Step | Result | Evidence |
+|---|---|---|
+| Create "HypoCompass" | Workspace opens with **Welcome!** active; header = `Engelbart / Current / First steps` · tabs `Workspace · Welcome! ×` · `Browser Terminal Paper Dataset`; the welcome todos sit in one grey card with *Copy all* / *Build all* | `32-workspace.png` |
+| Terminal | Own pane: tab `›_ hypocompass ×` + `+`, light xterm with the shell prompt in the project directory, bottom bar `›_ Terminal` · `▭ <cwd>` · `Terminal / Claude Code / Codex` | `33-terminal.png` |
+| Browser: `example.com` | tab `◎ example.com`, badge `WEB`, page in the iframe centred on `#f2f2f2`; blank state text before that | `35-browser-web.png` |
+| Browser: `./Welcome!.md` | badge `FILE`, the note's markdown as mono text (read through `read-text-file`, project-relative) | `38-browser-file.png` |
+| Workspace doc: `- ` on the empty document | becomes a todo row (card) at once; `second` + Tab nests; Enter on the empty nested row steps out to the root, the next Enter leaves the list; `# Heading here` renders as a 26px heading with no `#` while the caret is still on it | `36-editor-todo-heading.png`, stored lines dumped |
+| `@chat what is this document about` + Enter | question and the two simulated replies form one card; replies `contenteditable=false`; send button gone once answered; an editable empty line follows | `37-chat-card.png` |
+| Select all (editing command) + Backspace, then `- fresh`, Enter, `second` | document → `['']`; then `- [ ] fresh`, `- [ ] second` — the earlier failure was the editor collapsing cross-line selections to line 0; with a document that ended on a read-only reply, select-all itself collapsed, hence the trailing editable line rule | stored lines dumped |
+| Paper: select two spans, then click the margin | 2 pending rects drawn, native selection released; typing `n…` opens the Caveat note with the text, highlight cleared, arrow drawn | `41-paper-note.png` |
+| `Engelbart` in the header | all projects: card `HypoCompass · 1 goal · edited …` + dashed `+ Project`; clicking the card reopens `Getting started`; Escape returns to all projects | `43-home.png` |
+| Hover the goal crumb → `+ New goal` | menu lists `CURRENT · First steps 0 / 1`; new goal opens as `Goal 2 / Topic 1` | `44-goal-menu.png` |
+| Quit and relaunch | opens straight into `Goal 2 / Topic 1`; `test/state.json` holds the ids | `45-reopen.png` |
+| Not driven | ⌘T / ⌘1–9 in the terminal, the Claude Code / Codex switcher (would start real agents in the scratch directory), the device presets' visual result, `sandbox:` and `localhost:` addresses. All are the design's code paths with no I/O beyond the iframe. | — |

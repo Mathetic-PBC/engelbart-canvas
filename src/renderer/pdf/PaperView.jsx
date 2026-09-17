@@ -65,9 +65,12 @@ export default class PaperView extends React.Component {
     this.dirty = false;
     this.saveTimer = null;
     this.resizeTimer = null;
-    this.onDown = (e) => { if (e.target.closest && e.target.closest('[data-pdf] [data-page]')) this.pdfDown = { x: e.clientX, y: e.clientY }; };
+    this.onDown = (e) => {
+      if (!(e.target.closest && e.target.closest('[data-pdf] [data-page]'))) return;
+      this.pdfDown = { x: e.clientX, y: e.clientY };
+      if (!e.target.closest('textarea')) this.clearPending();
+    };
     this.onUp = (e) => this.pdfMouseUp(e);
-    this.onSelChange = () => { const sl = getSelection(); if (sl && sl.isCollapsed) this.pendingSel = null; };
     this.onKeyCapture = (e) => { if (this.pendingSelKey(e)) e.stopPropagation(); };
   }
 
@@ -75,7 +78,6 @@ export default class PaperView extends React.Component {
     const host = this.host.current;
     host.addEventListener('mousedown', this.onDown);
     host.addEventListener('mouseup', this.onUp);
-    document.addEventListener('selectionchange', this.onSelChange);
     window.addEventListener('keydown', this.onKeyCapture, true);
     this.ro = new ResizeObserver(() => this.onResize());
     this.ro.observe(host);
@@ -87,7 +89,7 @@ export default class PaperView extends React.Component {
       this.flushSave(prev.onMarksChange);
       this.marks = clone(this.props.marks || {});
       this.dirty = false;
-      this.pendingSel = null;
+      this.clearPending();
       this.load();
       return;
     }
@@ -105,7 +107,6 @@ export default class PaperView extends React.Component {
       host.removeEventListener('mousedown', this.onDown);
       host.removeEventListener('mouseup', this.onUp);
     }
-    document.removeEventListener('selectionchange', this.onSelChange);
     window.removeEventListener('keydown', this.onKeyCapture, true);
     if (this.ro) this.ro.disconnect();
     clearTimeout(this.resizeTimer);
@@ -244,7 +245,7 @@ export default class PaperView extends React.Component {
     const sel = getSelection(), tl = wrap.querySelector('[data-text-layer]');
     if (sel && !sel.isCollapsed && sel.rangeCount) {
       const range = sel.getRangeAt(0);
-      if (!tl || !tl.contains(range.startContainer) || !tl.contains(range.endContainer)) { this.pendingSel = null; return; }
+      if (!tl || !tl.contains(range.startContainer) || !tl.contains(range.endContainer)) { this.clearPending(); return; }
       const box = tl.getBoundingClientRect(), seen = new Set();
       const rects = [...range.getClientRects()].filter((r) => r.width > 1 && r.height > 1)
         .map((r) => ({ x: r.left - box.left, y: r.top - box.top, w: r.width, h: r.height }))
@@ -252,6 +253,7 @@ export default class PaperView extends React.Component {
       if (!rects.length) return;
       const cx = rects.reduce((a, r) => a + r.x + r.w / 2, 0) / rects.length;
       this.pendingSel = { page: Number(tl.dataset.textLayer), rects, side: cx / box.width < .45 ? 'left' : 'right', y: Math.min(...rects.map((r) => r.y)), text: sel.toString() };
+      this.showPending(); sel.removeAllRanges();
       return;
     }
     if (this.pdfDown && Math.hypot(e.clientX - this.pdfDown.x, e.clientY - this.pdfDown.y) < 4 && !e.target.closest('.pdf-text span')) {
@@ -278,16 +280,31 @@ export default class PaperView extends React.Component {
   pendingSelKey(e) {
     const p = this.pendingSel; if (!p) return false;
     if (isEditable(e.target)) return false;
-    if (e.key === 'Escape') { this.pendingSel = null; return true; }
-    if (e.key === 'Enter') { e.preventDefault(); this.addMark(p, null); this.pendingSel = null; getSelection().removeAllRanges(); return true; }
+    if (e.key === 'Escape') { this.clearPending(); return true; }
+    if (e.key === 'Enter') { e.preventDefault(); this.addMark(p, null); this.clearPending(); return true; }
     if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
       e.preventDefault();
-      const m = this.addMark(p, e.key); this.pendingSel = null; getSelection().removeAllRanges();
+      const m = this.addMark(p, e.key); this.clearPending();
       requestAnimationFrame(() => { const ta = document.querySelector(`textarea[data-mark="${m.id}"]`); if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } });
       return true;
     }
     return false;
   }
+
+  // The pending selection, drawn into the page's highlight layer until a note is typed or it is dismissed.
+  showPending() {
+    const p = this.pendingSel; if (!p) return; this.hidePending();
+    const host = this.host.current, hl = host && host.querySelector(`[data-hl="${p.page}"]`); if (!hl) return;
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g'); g.dataset.pending = '1';
+    for (const r of p.rects) {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      el.setAttribute('x', r.x); el.setAttribute('y', r.y); el.setAttribute('width', r.w); el.setAttribute('height', r.h); el.setAttribute('fill', 'rgba(0,112,243,.22)');
+      g.appendChild(el);
+    }
+    hl.appendChild(g);
+  }
+  hidePending() { const host = this.host.current; if (host) host.querySelectorAll('[data-pending]').forEach((n) => n.remove()); }
+  clearPending() { this.pendingSel = null; this.hidePending(); }
 
   // p carries pixel geometry from the current layout; the stored mark is in page units.
   addMark(p, note, pos) {
@@ -362,14 +379,14 @@ export default class PaperView extends React.Component {
   render() {
     const { title } = this.props;
     return (
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 14 }}>
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 12 }}>
         <style>{LAYER_CSS}</style>
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, padding: '14px 20px 0' }}>
           <h3 style={{ margin: 0, font: '600 15px/1.4 var(--font-sans)', color: '#171717', textWrap: 'pretty' }}>{title}</h3>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} />
         <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          <div ref={this.host} data-pdf="1" style={{ flex: 1, minHeight: 0, overflow: 'auto', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', padding: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0 }} />
+          <div ref={this.host} data-pdf="1" style={{ flex: 1, minHeight: 0, overflow: 'auto', border: 0, borderTop: '1px solid #eaeaea', borderRadius: 0, background: '#fff', padding: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0 }} />
           {this.state.note
             ? <span style={{ position: 'absolute', left: 0, right: 0, top: 14, textAlign: 'center', font: '12px/1.5 var(--font-sans)', color: '#8f8f8f', pointerEvents: 'none' }}>{this.state.note}</span>
             : null}

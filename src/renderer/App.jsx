@@ -3,33 +3,11 @@ import { api, errorMessage } from './api.js';
 import TestToggle from './ui/TestToggle.jsx';
 import Home from './screens/Home.jsx';
 import CreateProject from './screens/CreateProject.jsx';
-import Canvas from './screens/Canvas.jsx';
 import Workspace from './screens/Workspace.jsx';
 
-const EASE = 'cubic-bezier(.25,.1,.25,1)';
-
-// Canvas ↔ workspace transition styles, from the design (Goal Canvas.dc.html lines 615–631).
-function wsStyle(phase, r) {
-  const W = window.innerWidth || 1200;
-  const H = window.innerHeight || 800;
-  const base = { position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: '#fff', transformOrigin: '0 0', willChange: 'transform,opacity' };
-  const small = r ? { opacity: 0, transform: `translate(${r.x}px,${r.y}px) scale(${r.w / W},${r.h / H})` } : { opacity: 0, transform: 'scale(.6)' };
-  if (phase === 'pre-open') return { ...base, ...small, transition: 'none' };
-  if (phase === 'closing') return { ...base, ...small, transition: `transform 240ms ${EASE},opacity 180ms ${EASE} 40ms` };
-  return { ...base, opacity: 1, transform: 'none', transition: `transform 260ms ${EASE},opacity 200ms ${EASE}` };
-}
-
-function canvasStyle(phase, r) {
-  const base = { position: 'absolute', inset: 0, overflow: 'hidden', background: '#fff' };
-  const origin = r ? `${r.x + r.w / 2}px ${r.y + r.h / 2}px` : '50% 50%';
-  const away = { opacity: 0, transform: 'scale(1.6)', transformOrigin: origin };
-  if (phase === 'pre-close') return { ...base, ...away, transition: 'none' };
-  if (phase === 'opening') return { ...base, ...away, transition: `transform 260ms ${EASE},opacity 200ms ${EASE}` };
-  if (phase === 'closing') return { ...base, opacity: 1, transform: 'none', transformOrigin: origin, transition: `transform 260ms ${EASE},opacity 220ms ${EASE}` };
-  return { ...base, opacity: 1, transform: 'none', transformOrigin: origin };
-}
-
-const WS_PHASES = new Set(['pre-open', 'opening', 'workspace', 'pre-close', 'closing']);
+// Screens (2026-09-17): the app opens straight into the last topic you were in — the
+// "Getting started" topic of a fresh project — and the first run shows the create screen.
+// The kanban canvas is gone; "Engelbart" in the header (or Escape) shows all projects.
 
 export default function App() {
   const [config, setConfig] = React.useState(null);
@@ -39,19 +17,17 @@ export default function App() {
   const [library, setLibrary] = React.useState([]);
   const [tree, setTree] = React.useState(null);
   const [goalId, setGoalId] = React.useState(null);
-  const [entry, setEntry] = React.useState(null); // { topicId, tab } for a workspace opened straight after creation
-  const [phase, setPhase] = React.useState('home'); // home | create | canvas | pre-open | opening | workspace | pre-close | closing
-  const [openRect, setOpenRect] = React.useState(null);
+  const [entry, setEntry] = React.useState(null); // { topicId, tab } for the workspace being opened
+  const [phase, setPhase] = React.useState('boot'); // boot | create | home | workspace
+  const visited = React.useRef({}); // goalId → last topic id, for this session
   const [, setTick] = React.useState(0);
 
   const fail = (candidate) => setError(errorMessage(candidate));
 
-  // Home shows the project grid, or the create screen when the data root has no project yet.
-  const refreshHome = React.useCallback(async () => {
+  const loadHome = React.useCallback(async () => {
     const [list, rows] = await Promise.all([api.listProjects(), api.library()]);
     setProjects(list);
     setLibrary(rows);
-    setPhase(list.length ? 'home' : 'create');
     return list;
   }, []);
 
@@ -68,17 +44,46 @@ export default function App() {
     }
   }, [tree]);
 
+  // Open a project straight into a topic: the remembered one, else the first goal's first topic.
+  const openProject = React.useCallback(async (id, prefer) => {
+    let [next, rows] = await Promise.all([api.loadProject(id), api.library()]);
+    if (!next.goals.length) {
+      const goal = await api.createGoal(id, { name: 'First steps', box: 'current' });
+      await api.createTopic(id, goal.id, 'Getting started');
+      next = await api.loadProject(id);
+    }
+    const goal = next.goals.find((candidate) => candidate.id === (prefer && prefer.goalId)) || next.goals[0];
+    const topic = goal.topics.find((candidate) => candidate.id === (prefer && prefer.topicId)) || goal.topics[0] || null;
+    setTree(next);
+    setLibrary(rows);
+    setGoalId(goal.id);
+    setEntry({ topicId: topic ? topic.id : null, tab: (prefer && prefer.tab) || null });
+    setPhase('workspace');
+    setError('');
+    api.setLastOpen({ projectId: id, goalId: goal.id, topicId: topic ? topic.id : null }).catch(() => {});
+  }, []);
+
+  // Startup (and after the data root changes): the last project you were in, or the create screen.
+  const start = React.useCallback(async () => {
+    const list = await loadHome();
+    if (!list.length) { setPhase('create'); return; }
+    const last = await api.lastOpen().catch(() => null);
+    const id = last && list.some((project) => project.id === last.projectId) ? last.projectId : list[0].id;
+    await openProject(id, last && last.projectId === id ? last : null);
+  }, [loadHome, openProject]);
+
   React.useEffect(() => {
     (async () => {
       try {
         const initial = await api.config();
         setConfig(initial);
-        await refreshHome();
+        await start();
       } catch (candidate) {
         fail(candidate);
+        setPhase((current) => (current === 'boot' ? 'home' : current));
       }
     })();
-  }, [refreshHome]);
+  }, [start]);
 
   React.useEffect(() => {
     const onResize = () => setTick((value) => value + 1);
@@ -90,7 +95,6 @@ export default function App() {
     setTree(null);
     setGoalId(null);
     setEntry(null);
-    setOpenRect(null);
   }
 
   async function toggleTest() {
@@ -101,7 +105,7 @@ export default function App() {
       const next = await api.setTestMode(!config.testMode);
       setConfig(next);
       leaveProject();
-      await refreshHome();
+      await start();
     } catch (candidate) {
       fail(candidate);
     } finally {
@@ -118,25 +122,12 @@ export default function App() {
       if (result.reset) {
         setConfig(result);
         leaveProject();
-        await refreshHome();
+        await start();
       }
     } catch (candidate) {
       fail(candidate);
     } finally {
       setBusy(false);
-    }
-  }
-
-  async function openProject(id) {
-    try {
-      const [next, rows] = await Promise.all([api.loadProject(id), api.library()]);
-      setTree(next);
-      setLibrary(rows);
-      setEntry(null);
-      setPhase('canvas');
-      setError('');
-    } catch (candidate) {
-      fail(candidate);
     }
   }
 
@@ -147,13 +138,7 @@ export default function App() {
     setError('');
     try {
       const made = await api.createProjectWithWelcome(input);
-      const [next, rows] = await Promise.all([api.loadProject(made.project.id), api.library()]);
-      setTree(next);
-      setLibrary(rows);
-      setGoalId(made.goalId);
-      setEntry({ topicId: made.topicId, tab: { id: made.noteId, title: made.noteName } });
-      setOpenRect(null);
-      setPhase('workspace');
+      await openProject(made.project.id, { goalId: made.goalId, topicId: made.topicId, tab: { id: made.noteId, title: made.noteName } });
     } catch (candidate) {
       fail(candidate);
     } finally {
@@ -163,64 +148,51 @@ export default function App() {
 
   async function goHome() {
     leaveProject();
+    setPhase('home');
     try {
-      await refreshHome();
+      await loadHome();
     } catch (candidate) {
       fail(candidate);
     }
   }
 
-  function openGoal(id, rect) {
-    if (phase !== 'canvas') return;
+  const onVisit = React.useCallback((visitedGoalId, topicId) => {
+    visited.current[visitedGoalId] = topicId;
+    if (tree) api.setLastOpen({ projectId: tree.project.id, goalId: visitedGoalId, topicId }).catch(() => {});
+  }, [tree]);
+
+  function selectGoal(id) {
+    if (!tree || id === goalId) return;
     setGoalId(id);
-    setEntry(null);
-    setOpenRect({ x: rect.left, y: rect.top, w: rect.width, h: rect.height });
-    setPhase('pre-open');
-    let done = false;
-    const go = () => {
-      if (done) return;
-      done = true;
-      setPhase('opening');
-      setTimeout(() => setPhase('workspace'), 280);
-    };
-    requestAnimationFrame(go);
-    setTimeout(go, 120);
+    setEntry({ topicId: visited.current[id] || null, tab: null });
   }
 
-  function closeWorkspace() {
-    if (phase !== 'workspace') return;
-    setPhase('pre-close');
-    requestAnimationFrame(() => {
-      setPhase('closing');
-      setTimeout(() => setPhase('canvas'), 280);
-    });
+  async function createGoal() {
+    if (!tree) return;
+    try {
+      const goal = await api.createGoal(tree.project.id, { name: `Goal ${tree.goals.length + 1}`, box: 'current' });
+      const topic = await api.createTopic(tree.project.id, goal.id, 'Topic 1');
+      const [next, rows] = await Promise.all([api.loadProject(tree.project.id), api.library()]);
+      setTree(next);
+      setLibrary(rows);
+      setGoalId(goal.id);
+      setEntry({ topicId: topic.id, tab: null });
+    } catch (candidate) {
+      fail(candidate);
+    }
   }
 
-  if (!config) return <div style={{ position: 'absolute', inset: 0, background: '#fff' }} />;
-
-  const showCanvas = tree && (phase === 'canvas' || phase === 'pre-open' || phase === 'opening' || phase === 'pre-close' || phase === 'closing');
-  const showWs = tree && goalId && WS_PHASES.has(phase);
+  if (!config || phase === 'boot') return <div style={{ position: 'absolute', inset: 0, background: '#fff' }} />;
 
   return (
     <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#fff' }}>
       {phase === 'home' && (
-        <Home projects={projects} error={error} onCreateScreen={() => setPhase('create')} onOpen={openProject} onRename={async (id, name) => { try { await api.renameProject(id, name); await refreshHome(); } catch (candidate) { fail(candidate); } }} />
+        <Home projects={projects} error={error} onCreateScreen={() => setPhase('create')} onOpen={(id) => openProject(id, null).catch(fail)} onRename={async (id, name) => { try { await api.renameProject(id, name); await loadHome(); } catch (candidate) { fail(candidate); } }} />
       )}
       {phase === 'create' && (
-        <CreateProject onCreate={createProject} onBack={projects.length ? () => setPhase('home') : null} busy={busy} error={error} />
+        <CreateProject onCreate={createProject} onBack={projects.length ? goHome : null} busy={busy} error={error} />
       )}
-      {showCanvas && (
-        <Canvas
-          tree={tree}
-          library={library}
-          style={canvasStyle(phase, openRect)}
-          interactive={phase === 'canvas'}
-          onHome={goHome}
-          onOpenGoal={openGoal}
-          onCreateGoal={async (name, box) => { try { await api.createGoal(tree.project.id, { name, box }); await reload(); } catch (candidate) { fail(candidate); } }}
-        />
-      )}
-      {showWs && (
+      {phase === 'workspace' && tree && goalId && (
         <Workspace
           key={goalId}
           tree={tree}
@@ -228,11 +200,14 @@ export default function App() {
           goalId={goalId}
           initialTopicId={entry ? entry.topicId : null}
           initialTab={entry ? entry.tab : null}
-          style={wsStyle(phase, openRect)}
-          active={phase === 'workspace'}
+          style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: '#fff' }}
+          active
           reload={reload}
-          onClose={closeWorkspace}
+          onClose={goHome}
           onHome={goHome}
+          onSelectGoal={selectGoal}
+          onCreateGoal={createGoal}
+          onVisit={onVisit}
           onError={fail}
         />
       )}

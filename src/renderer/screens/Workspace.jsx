@@ -4,18 +4,22 @@ import Rail from '../workspace/Rail.jsx';
 import DocTabs from '../workspace/DocTabs.jsx';
 import DocEditor, { CHAT_ITEM } from '../workspace/DocEditor.jsx';
 import CtxModal from '../workspace/CtxModal.jsx';
-import RightPane from '../workspace/RightPane.jsx';
+import RightPane, { RIGHT_MODES } from '../workspace/RightPane.jsx';
 import InlineField from '../ui/InlineField.jsx';
 import { kindOf } from '../ui/Icons.jsx';
 
-// The goal workspace: header crumbs, sidebar, document, right pane (design lines 101–390,
-// sidebar per the 2026-09-16 update).
+// The workspace (design 2026-09-17): a header in three columns — Engelbart / box / goal over
+// the sidebar, the document tabs over the document, the Browser · Terminal · Paper · Dataset
+// switcher over the right pane — then sidebar, document, right pane. With the canvas gone,
+// the goal crumb opens the list of goals.
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const BOX_LABEL = { current: 'Current', experimental: 'Experimental', past: 'Past' };
+const BOX_ORDER = ['current', 'experimental', 'past'];
 const MENTION_RE = /@\[([^\]\n]+)\]/g;
 const NEXT_STATUS = { open: 'progress', progress: 'done', done: 'open' };
 const SAVE_DELAY = 400;
+const EASE = 'cubic-bezier(.25,.1,.25,1)';
 
 const basename = (value) => String(value || '').split('/').pop();
 const newId = () => (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
@@ -61,11 +65,64 @@ function Separator({ onDown, onMove, onUp, onReset }) {
   );
 }
 
-export default function Workspace({ tree, library, goalId, initialTopicId, initialTab, style, active, reload, onClose, onHome, onError }) {
+/** Box / goal crumbs; hovering lists every goal of the project, clicking the name renames it. */
+function GoalCrumbs({ goals, goal, wide, onSelectGoal, onRenameGoal, onCreateGoal, onRenamingChange }) {
+  const [menu, setMenu] = React.useState(null); // { x, y }
+  const [renaming, setRenaming] = React.useState(false);
+  const timer = React.useRef(null);
+  const open = (event) => { clearTimeout(timer.current); const r = event.currentTarget.getBoundingClientRect(); setMenu({ x: r.left - 8, y: r.bottom + 4 }); };
+  const close = () => { clearTimeout(timer.current); timer.current = setTimeout(() => setMenu(null), 120); };
+  React.useEffect(() => () => clearTimeout(timer.current), []);
+  const startRename = () => { setMenu(null); setRenaming(true); onRenamingChange(true); };
+  const endRename = () => { setRenaming(false); onRenamingChange(false); };
+  const width = Math.min(280, (window.innerWidth || 1200) - 16);
+  return (
+    <div onMouseEnter={open} onMouseLeave={close} data-goal-crumbs="1" style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: '0 1 auto' }}>
+      <button type="button" className="hov-ink" title="All goals" style={{ flex: 'none', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', font: '400 14px/1.3 var(--font-sans)', color: '#4d4d4d', whiteSpace: 'nowrap', transition: 'color 120ms' }}>{BOX_LABEL[goal.box] || goal.box}</button>
+      {wide && (
+        <>
+          <span style={{ flex: 'none', font: '15px/1 var(--font-sans)', color: '#c9c9c9' }}>/</span>
+          {renaming
+            ? <InlineField initial={goal.name} placeholder="goal name…" style={{ padding: '2px 8px' }} onCommit={(name) => { endRename(); if (name && name !== goal.name) onRenameGoal(name); }} onCancel={endRename} />
+            : <h1 title="Click to rename" onClick={startRename} style={{ margin: 0, minWidth: 0, font: '400 14px/1.3 var(--font-sans)', color: '#4d4d4d', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'text' }}>{goal.name}</h1>}
+        </>
+      )}
+      {menu && !renaming && (
+        <div onMouseEnter={() => clearTimeout(timer.current)} onMouseLeave={close} style={{ position: 'fixed', left: clamp(menu.x, 8, (window.innerWidth || 1200) - width - 8), top: menu.y, zIndex: 60, width, padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, animation: `rise 160ms ${EASE}` }}>
+          {BOX_ORDER.map((box) => {
+            const list = goals.filter((candidate) => candidate.box === box);
+            if (!list.length) return null;
+            return (
+              <React.Fragment key={box}>
+                <div style={{ padding: '6px 10px 4px', font: '500 9px/1 var(--font-sans)', letterSpacing: '1.6px', textTransform: 'uppercase', color: '#8f8f8f' }}>{BOX_LABEL[box]}</div>
+                {list.map((candidate) => {
+                  const on = candidate.id === goal.id;
+                  const done = candidate.topics.filter((topic) => topic.status === 'done').length;
+                  return (
+                    <div key={candidate.id} className="hov-wash" onClick={() => { setMenu(null); onSelectGoal(candidate.id); }} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 6, cursor: 'pointer', background: on ? '#fafafa' : 'transparent', transition: 'background 120ms' }}>
+                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: `${on ? 600 : 400} 13.5px/1.5 var(--font-sans)`, color: '#171717' }}>{candidate.name}</span>
+                      <span style={{ flex: 'none', font: '11px/1 var(--font-sans)', color: '#8f8f8f' }}>{done} / {candidate.topics.length}</span>
+                    </div>
+                  );
+                })}
+              </React.Fragment>
+            );
+          })}
+          <div className="hov-ink-wash" onClick={() => { setMenu(null); onCreateGoal(); }} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 6, cursor: 'pointer', color: '#8f8f8f', transition: 'color 120ms' }}>
+            <span style={{ flex: 'none', width: 14, textAlign: 'center', font: '500 13px/1 var(--font-sans)' }}>+</span>
+            <span style={{ font: '13.5px/1.5 var(--font-sans)' }}>New goal</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function Workspace({ tree, library, goalId, initialTopicId, initialTab, style, active, reload, onClose, onHome, onSelectGoal, onCreateGoal, onVisit, onError }) {
   const project = tree.project;
   const goal = tree.goals.find((candidate) => candidate.id === goalId);
   const topics = goal ? goal.topics : [];
-  const [topicId, setTopicId] = React.useState(initialTopicId || (topics[0] ? topics[0].id : null));
+  const [topicId, setTopicId] = React.useState(() => (initialTopicId && topics.some((topic) => topic.id === initialTopicId) ? initialTopicId : (topics[0] ? topics[0].id : null)));
   const [railWidth, setRailWidth] = React.useState(300);
   const [split, setSplit] = React.useState(0.5);
   const [tabs, setTabs] = React.useState(() => (initialTab ? [{ id: 'ws', title: 'Workspace' }, initialTab] : [{ id: 'ws', title: 'Workspace' }]));
@@ -77,15 +134,12 @@ export default function Workspace({ tree, library, goalId, initialTopicId, initi
   const [folders, setFolders] = React.useState({});
   const [selFolder, setSelFolder] = React.useState(null);
   const [renaming, setRenaming] = React.useState(null);
-  const [ideas, setIdeas] = React.useState(() => (goal ? goal.future : []).map((text, index) => ({ id: `f${index}`, text })));
   const [renamingGoal, setRenamingGoal] = React.useState(false);
   const [titleDraft, setTitleDraft] = React.useState('');
   const editorRef = React.useRef(null);
   const pending = React.useRef(new Map());
-  const ideaTimer = React.useRef(null);
   const railBox = React.useRef(null);
   const splitBox = React.useRef(null);
-  const ideaSeq = React.useRef(1000);
 
   const topic = topics.find((candidate) => candidate.id === topicId) || null;
   const docKey = activeTab === 'ws' ? (topic ? `ws:${topic.id}` : null) : `note:${activeTab}`;
@@ -93,6 +147,9 @@ export default function Workspace({ tree, library, goalId, initialTopicId, initi
     if (!docKey) return null;
     return activeTab === 'ws' ? { kind: 'workspace', goalId, topicId: topic.id } : { kind: 'note', id: activeTab };
   }, [docKey, activeTab, goalId, topic]);
+
+  // Remember where we are, so the app reopens here.
+  React.useEffect(() => { if (topic && onVisit) onVisit(goalId, topic.id); }, [goalId, topic && topic.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ------------------------------------------------------------ documents */
 
@@ -123,7 +180,6 @@ export default function Workspace({ tree, library, goalId, initialTopicId, initi
 
   React.useEffect(() => () => {
     for (const key of [...pending.current.keys()]) flush(key);
-    if (ideaTimer.current) clearTimeout(ideaTimer.current);
   }, [flush]);
 
   /* ---------------------------------------------------------- context rows */
@@ -309,19 +365,13 @@ export default function Workspace({ tree, library, goalId, initialTopicId, initi
     }
   };
 
-  /* ----------------------------------------------------------------- ideas */
-
-  const saveIdeas = (next) => {
-    setIdeas(next);
-    if (ideaTimer.current) clearTimeout(ideaTimer.current);
-    ideaTimer.current = setTimeout(() => {
-      api.setFuture(project.id, goalId, next.map((idea) => idea.text)).catch((error) => onError(error));
-    }, SAVE_DELAY);
-  };
-
-  const addIdea = () => {
-    ideaSeq.current += 1;
-    saveIdeas([...ideas.map((idea) => ({ ...idea, focus: false })), { id: `f${ideaSeq.current}`, text: '', focus: true }]);
+  const renameGoal = async (name) => {
+    try {
+      await api.renameGoal(project.id, goalId, name);
+      await reload();
+    } catch (error) {
+      onError(error);
+    }
   };
 
   /* ----------------------------------------------------------------- title */
@@ -390,6 +440,8 @@ export default function Workspace({ tree, library, goalId, initialTopicId, initi
   if (!goal) return <div style={style} />;
 
   const text = docKey ? docs[docKey] : undefined;
+  const rail = Math.min(railWidth, railMax());
+  const headWide = rail >= 260;
 
   const header = (
     <input
@@ -405,22 +457,30 @@ export default function Workspace({ tree, library, goalId, initialTopicId, initi
 
   return (
     <div data-screen-label="Workspace" style={style}>
-      <header style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '16px 24px', borderBottom: '1px solid #eaeaea', flex: 'none', paddingRight: 180 }}>
-        <button type="button" onClick={onHome} title="All projects" style={{ padding: 0, border: 0, background: 'transparent', cursor: 'pointer', font: '500 17px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Engelbart</button>
-        <span style={{ font: '15px/1 var(--font-sans)', color: '#c9c9c9' }}>/</span>
-        <button type="button" className="hov-ink" onClick={onClose} title="Back to the canvas" style={{ padding: 0, border: 0, background: 'transparent', cursor: 'pointer', font: '400 15px/1.3 var(--font-sans)', color: '#4d4d4d' }}>{project.name}</button>
-        <span style={{ font: '15px/1 var(--font-sans)', color: '#c9c9c9' }}>/</span>
-        <button type="button" className="hov-ink" onClick={onClose} title="Back to the canvas" style={{ padding: 0, border: 0, background: 'transparent', cursor: 'pointer', font: '400 15px/1.3 var(--font-sans)', color: '#4d4d4d' }}>{BOX_LABEL[goal.box]}</button>
-        <span style={{ font: '15px/1 var(--font-sans)', color: '#c9c9c9' }}>/</span>
-        {renamingGoal
-          ? <InlineField initial={goal.name} placeholder="goal name…" style={{ padding: '2px 8px' }} onCommit={async (name) => { setRenamingGoal(false); try { await api.renameGoal(project.id, goalId, name); await reload(); } catch (error) { onError(error); } }} onCancel={() => setRenamingGoal(false)} />
-          : <h1 title="Click to rename" onClick={() => setRenamingGoal(true)} style={{ margin: 0, font: '400 15px/1.3 var(--font-sans)', color: '#4d4d4d', cursor: 'text' }}>{goal.name}</h1>}
-        <span style={{ marginLeft: 'auto', font: '11.5px/1 var(--font-sans)', color: '#8f8f8f' }}>esc zooms out</span>
+      <header style={{ display: 'flex', alignItems: 'stretch', minHeight: 46, borderBottom: '1px solid #eaeaea', background: '#fafafa', flex: 'none' }}>
+        <div style={{ flex: 'none', width: rail, display: 'flex', alignItems: 'center', gap: 8, padding: '0 16px', minWidth: 0, overflow: 'hidden' }}>
+          <button type="button" onClick={onHome} title="All projects" style={{ flex: 'none', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', font: '500 17px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Engelbart</button>
+          <span style={{ flex: 'none', font: '15px/1 var(--font-sans)', color: '#c9c9c9' }}>/</span>
+          <GoalCrumbs goals={tree.goals} goal={goal} wide={headWide} onSelectGoal={onSelectGoal} onRenameGoal={renameGoal} onCreateGoal={onCreateGoal} onRenamingChange={setRenamingGoal} />
+        </div>
+        <div style={{ flex: 'none', width: 1, background: '#eaeaea' }} />
+        <div style={{ flex: `${split} 1 0`, minWidth: 'min(420px, 55%)', display: 'flex', alignItems: 'flex-end', gap: 2, padding: '8px 8px 0', overflow: 'hidden' }}>
+          <DocTabs tabs={tabs} activeTab={activeTab} onSelect={setActiveTab} onClose={closeTab} />
+        </div>
+        <div style={{ flex: 'none', width: 1, background: '#eaeaea' }} />
+        <div style={{ flex: `${1 - split} 1 0`, minWidth: 0, display: 'flex', alignItems: 'center', gap: 16, padding: '0 20px' }}>
+          {RIGHT_MODES.map((mode) => {
+            const on = rightMode === mode.id;
+            return (
+              <button key={mode.id} type="button" className="hov-ink" onClick={() => setRightMode(mode.id)} data-right-mode={mode.id} style={{ flex: 'none', padding: '0 0 2px', border: 0, borderBottom: `2px solid ${on ? '#171717' : 'transparent'}`, background: 'transparent', font: `${on ? 600 : 400} 13px/1.3 var(--font-sans)`, color: on ? '#171717' : '#4d4d4d', cursor: 'pointer', whiteSpace: 'nowrap', transition: 'color 120ms' }}>{mode.label}</button>
+            );
+          })}
+        </div>
       </header>
 
       <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
         <Rail
-          width={Math.min(railWidth, railMax())}
+          width={rail}
           topics={topics}
           topic={topic}
           onSelectTopic={selectTopic}
@@ -434,15 +494,11 @@ export default function Workspace({ tree, library, goalId, initialTopicId, initi
           onRowRenameEnd={() => setRenaming(null)}
           onAddContext={() => { if (topic) setCtxModal(topic); }}
           onAddFolder={addFolder}
-          ideas={ideas}
-          onIdeasChange={saveIdeas}
-          onAddIdea={addIdea}
         />
 
         <Separator onDown={railDown} onMove={railMove} onUp={pointerUp} onReset={() => setRailWidth(300)} />
 
         <main style={{ flex: `${split} 1 0`, minWidth: 'min(420px, 55%)', minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
-          <DocTabs tabs={tabs} activeTab={activeTab} onSelect={setActiveTab} onClose={closeTab} />
           {docKey && text !== undefined ? (
             <DocEditor
               ref={editorRef}
@@ -471,12 +527,12 @@ export default function Workspace({ tree, library, goalId, initialTopicId, initi
 
         <RightPane
           mode={rightMode}
-          onMode={setRightMode}
           paper={paper}
           onMarksChange={(id, marks) => api.writeAnnotations(id, marks).catch((error) => onError(error))}
           projectDir={project.dir}
           projectId={project.id}
-          style={{ flex: `${1 - split} 1 0`, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 20px 20px' }}
+          onExpand={() => setSplit((current) => (current <= 0.36 ? 0.5 : 0.35))}
+          style={{ flex: `${1 - split} 1 0`, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }}
         />
       </div>
 

@@ -15,6 +15,7 @@ button:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(0,112,243,.18)}
 input,textarea{outline:none}
 textarea::placeholder,input::placeholder{color:#8f8f8f;font-style:italic}
 @keyframes blink{50%{opacity:0}}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 [data-idea-row]:hover button{opacity:1!important}
 [data-idea-row] button::after{content:'×'}
 .pdf-text{position:absolute;overflow:hidden;line-height:1;text-align:initial;text-size-adjust:none;forced-color-adjust:none}

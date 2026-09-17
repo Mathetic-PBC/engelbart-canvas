@@ -416,6 +416,49 @@ async function writeDoc(ctx, projectId, ref, text) {
   return { lastEdited: nowIso() };
 }
 
+/* ------------------------------------------------------------- last opened */
+
+// Where the app reopens: <dataRoot>/state.json { projectId, goalId, topicId }. Missing or
+// stale ids simply fall back to the first project / goal / topic when the app starts.
+const STATE_FILE = 'state.json';
+const idOrNull = (value) => (typeof value === 'string' && UUID_RE.test(value) ? value : null);
+
+function readLastOpen(ctx) {
+  const value = readJson(path.join(ctx.dataRoot, STATE_FILE), {}) || {};
+  return { projectId: idOrNull(value.projectId), goalId: idOrNull(value.goalId), topicId: idOrNull(value.topicId) };
+}
+
+function writeLastOpen(ctx, value) {
+  const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const next = { projectId: idOrNull(input.projectId), goalId: idOrNull(input.goalId), topicId: idOrNull(input.topicId) };
+  writeJson(path.join(ctx.dataRoot, STATE_FILE), next);
+  return next;
+}
+
+/* ---------------------------------------------------------------- text files */
+
+// The browser pane's "file" mode: a path typed as ~/…, /… or relative to the project directory,
+// read-only, kept inside the home directory, first 20 000 characters.
+async function readProjectTextFile(ctx, projectId, input) {
+  const project = findProject(ctx, projectId);
+  if (typeof input !== 'string' || !input.trim() || input.length > 4096 || input.includes('\0')) throw new TypeError('path is invalid');
+  let target = input.trim();
+  if (target.startsWith('~/')) target = path.join(ctx.homeDir, target.slice(2));
+  else if (target === '~') target = ctx.homeDir;
+  else if (!path.isAbsolute(target)) target = path.join(project.dir, target);
+  const resolved = fs.realpathSync(path.resolve(target));
+  const homeReal = fs.realpathSync(ctx.homeDir);
+  if (resolved !== homeReal && !resolved.startsWith(homeReal + path.sep)) throw new Error('Only files inside your home directory can be opened');
+  const stat = fs.statSync(resolved);
+  if (stat.isDirectory()) {
+    const entries = fs.readdirSync(resolved, { withFileTypes: true }).map((entry) => entry.name + (entry.isDirectory() ? '/' : '')).sort();
+    return { path: resolved, text: entries.join('\n'), truncated: false, kind: 'directory' };
+  }
+  if (!stat.isFile() || stat.size > 2 * 1024 * 1024) throw new Error('The file is not a readable text file');
+  const text = fs.readFileSync(resolved, 'utf8');
+  return { path: resolved, text: text.slice(0, 20000), truncated: text.length > 20000, kind: 'file' };
+}
+
 /* --------------------------------------------------------------------- tree */
 
 async function loadProject(ctx, projectId) {
@@ -454,4 +497,7 @@ module.exports = {
   renameNote,
   readDoc,
   writeDoc,
+  readProjectTextFile,
+  readLastOpen,
+  writeLastOpen,
 };

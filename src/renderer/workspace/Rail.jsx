@@ -1,10 +1,10 @@
 import React from 'react';
 import { KIND, kindOf } from '../ui/Icons.jsx';
 
-// The sidebar, from the updated Goal Canvas.dc.html (2026-09-16 21:09): the current topic as
-// a header (status mark, editable name, "n / m") whose hover reveals the sibling topics and
+// The sidebar, from the updated Goal Canvas.dc.html (2026-09-17): the current topic as a
+// header (status mark, editable name, "n / m") whose hover reveals the sibling topics and
 // "+ New"; below it the topic's context tree (Workspace first, folders expand, double-click
-// renames); "+ Context" and "+ Folder"; the Later list pinned to the bottom.
+// renames); "+ Context" and "+ Folder". (The Later list was removed in the 09-17 revision.)
 
 const FOLDER = (
   <svg viewBox="0 0 16 16" width="1em" height="1em" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true">
@@ -29,41 +29,6 @@ function statusTitle(status) {
 
 function blurOnEnter(event) {
   if (event.key === 'Enter' || event.key === 'Escape') event.target.blur();
-}
-
-function IdeaRow({ idea, onChange, onEnter, onRemove }) {
-  const ref = React.useRef(null);
-  React.useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${el.scrollHeight}px`;
-  }, [idea.text]);
-  React.useEffect(() => {
-    if (idea.focus && ref.current) ref.current.focus();
-  }, [idea.focus]);
-  return (
-    <div data-idea-row="1" className="hov-wash" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '6px 12px', borderRadius: 8 }}>
-      <span style={{ flex: 'none', marginTop: 4, width: 14, textAlign: 'center', font: '14px/1 var(--font-sans)', color: '#8f8f8f' }}>–</span>
-      <textarea
-        ref={ref}
-        rows={1}
-        spellCheck={false}
-        value={idea.text}
-        onChange={(event) => onChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' && !event.shiftKey) {
-            event.preventDefault();
-            onEnter();
-          }
-          if (event.key === 'Escape') event.target.blur();
-        }}
-        onBlur={() => { if (!idea.text.trim()) onRemove(); }}
-        style={{ flex: 1, minWidth: 0, padding: 0, border: 0, background: 'transparent', resize: 'none', overflow: 'hidden', font: '14px/1.5 var(--font-sans)', color: '#171717', fieldSizing: 'content' }}
-      />
-      <button type="button" onClick={onRemove} aria-label="Remove idea" className="hov-del-show focus-show" style={{ flex: 'none', marginTop: 3, padding: '0 2px', border: 0, background: 'transparent', font: '14px/1 var(--font-sans)', color: '#c9c9c9', cursor: 'pointer', opacity: 0, transition: 'color 120ms, opacity 120ms' }} />
-    </div>
-  );
 }
 
 function TopicHeader({ topics, topic, onSelectTopic, onCycleTopic, onRenameTopic, onAddTopic }) {
@@ -167,7 +132,7 @@ function TreeRow({ row, onClick, onRenameStart, onRename, onRenameEnd }) {
 export default function Rail({
   width, topics, topic, onSelectTopic, onCycleTopic, onRenameTopic, onAddTopic,
   rows, onRowClick, onRowRenameStart, onRowRename, onRowRenameEnd,
-  onAddContext, onAddFolder, ideas, onIdeasChange, onAddIdea,
+  onAddContext, onAddFolder,
 }) {
   return (
     <aside aria-label="Sidebar" style={{ flex: 'none', width, padding: '24px 16px', display: 'flex', flexDirection: 'column', gap: 5, overflow: 'auto', background: '#fafafa' }}>
@@ -178,18 +143,6 @@ export default function Rail({
       <div style={{ display: 'flex', gap: 4, padding: '6px 0 0 6px' }}>
         <div className="hov-ink-wash" onClick={onAddContext} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6, font: '13px/1.4 var(--font-sans)', color: '#8f8f8f', cursor: 'pointer', transition: 'color 120ms' }}>+ Context</div>
         <div className="hov-ink-wash" onClick={onAddFolder} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6, font: '13px/1.4 var(--font-sans)', color: '#8f8f8f', cursor: 'pointer', transition: 'color 120ms' }}>+ Folder</div>
-      </div>
-      <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: 2, paddingTop: 22 }}>
-        {ideas.map((idea, index) => (
-          <IdeaRow
-            key={idea.id}
-            idea={idea}
-            onChange={(text) => onIdeasChange(ideas.map((candidate, i) => (i === index ? { ...candidate, text } : candidate)))}
-            onEnter={onAddIdea}
-            onRemove={() => onIdeasChange(ideas.filter((_, i) => i !== index))}
-          />
-        ))}
-        <div className="hov-ink" onClick={onAddIdea} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px', font: '13px/1.4 var(--font-sans)', color: '#8f8f8f', cursor: 'pointer', transition: 'color 120ms' }}>+ Later</div>
       </div>
     </aside>
   );

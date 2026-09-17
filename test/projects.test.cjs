@@ -136,3 +136,30 @@ test('goals and topics are directories with meta.json; docs and future round-tri
   assert.equal(loadedGoal.notes[0].name, 'Reading notes');
   assert.equal(tree.notes.length, 1);
 });
+
+test('last-open state: stored per data root, stale ids become null', async () => {
+  const project = await projects.createProject(ctx, 'Reopen');
+  assert.deepEqual(projects.readLastOpen(ctx), { projectId: null, goalId: null, topicId: null });
+  const written = projects.writeLastOpen(ctx, { projectId: project.id, goalId: 'nope', topicId: undefined, extra: 1 });
+  assert.deepEqual(written, { projectId: project.id, goalId: null, topicId: null });
+  assert.deepEqual(projects.readLastOpen(ctx), written);
+  assert.ok(fs.existsSync(path.join(layout.testRoot, 'state.json')));
+});
+
+test('read-text-file: project-relative, ~/ and absolute paths inside the home directory only', async () => {
+  const project = await projects.createProject(ctx, 'Browser');
+  fs.writeFileSync(path.join(project.dir, 'notes.txt'), 'hello\nworld\n');
+  assert.equal((await projects.readProjectTextFile(ctx, project.id, 'notes.txt')).text, 'hello\nworld\n');
+  assert.equal((await projects.readProjectTextFile(ctx, project.id, './notes.txt')).kind, 'file');
+  const viaHome = await projects.readProjectTextFile(ctx, project.id, `~/${path.relative(homeDir, path.join(project.dir, 'notes.txt'))}`);
+  assert.equal(viaHome.text, 'hello\nworld\n');
+  const dir = await projects.readProjectTextFile(ctx, project.id, project.dir);
+  assert.equal(dir.kind, 'directory');
+  assert.ok(dir.text.split('\n').includes('notes.txt'));
+  await assert.rejects(projects.readProjectTextFile(ctx, project.id, '/etc/hosts'), /inside your home directory/);
+  await assert.rejects(projects.readProjectTextFile(ctx, project.id, 'missing.txt'));
+  fs.writeFileSync(path.join(project.dir, 'big.txt'), 'x'.repeat(25000));
+  const big = await projects.readProjectTextFile(ctx, project.id, 'big.txt');
+  assert.equal(big.text.length, 20000);
+  assert.equal(big.truncated, true);
+});

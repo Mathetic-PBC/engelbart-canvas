@@ -104,6 +104,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     return { reset: true, ...config };
   });
 
+  handle('last-open', withCtx((ctx) => projects.readLastOpen(ctx)));
+  handle('set-last-open', withCtx((ctx, value) => projects.writeLastOpen(ctx, value)));
   handle('list-projects', withCtx((ctx) => projects.listProjects(ctx)));
   handle('create-project', withCtx((ctx, input) => projects.createProject(ctx, projectInput(input))));
   handle('create-project-with-welcome', withCtx((ctx, input) => projects.createProjectWithWelcome(ctx, projectInput(input))));
@@ -130,6 +132,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('read-doc', withCtx((ctx, pid, ref) => projects.readDoc(ctx, str(pid, 'project id', 64), docRef(ref))));
   handle('write-doc', withCtx((ctx, pid, ref, text) => projects.writeDoc(ctx, str(pid, 'project id', 64), docRef(ref), text)));
 
+  handle('read-text-file', withCtx((ctx, pid, input) => projects.readProjectTextFile(ctx, str(pid, 'project id', 64), str(input, 'path', 4096))));
   handle('library', withCtx((ctx) => library.listLibrary(ctx)));
   handle('rename-library-item', withCtx(async (ctx, id, name) => {
     const row = await ctx.libraryDb.get(str(id, 'library id', 64));
