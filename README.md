@@ -26,6 +26,10 @@ open "release/Engelbart-darwin-arm64/Engelbart.app"
 
 Unsigned and not notarised: first launch needs right-click → Open. The first launch creates `~/.engelbart/`.
 
+## Terminal pane
+
+Each tab is a real PTY (the Experimental Terminal engine). You type into the **Run commands** box at the bottom, like a chat; the transcript above starts empty because sessions run zsh with `ZDOTDIR` pointing at wrappers in the app's user-data folder that load your own rc files and then blank the prompt (bash and fish are unchanged). Click the transcript to type straight into an interactive program. The dropdown at the right of the tab strip starts Claude Code or Codex in the current directory (the box hides while they run, they have their own), and the `▭` chip picks a working directory.
+
 ## Restarting after a code change
 
 ```sh

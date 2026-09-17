@@ -380,3 +380,14 @@ export function dismissError(at) {
 }
 
 export { PROVIDER_NAMES };
+
+/** Send raw input to a running session: a command line typed in the pane's own box, or a control character. */
+export function sendInput(id, data) {
+  const record = state.sessions.get(id);
+  if (record) inputFor(record, data);
+}
+
+/** The native folder picker (main process); resolves to a path or null. */
+export function pickDirectory(current) {
+  return api().pickDirectory(current);
+}

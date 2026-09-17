@@ -13,6 +13,7 @@ const {
   shell: electronShell,
 } = require('electron');
 const { SessionManager } = require('./terminal/session-manager.cjs');
+const { environmentWithHiddenPrompt } = require('./shell-rc.cjs');
 const { resolveShell } = require('./terminal/launch.cjs');
 const { discoverProviders } = require('./terminal/provider-discovery.cjs');
 const { SettingsStore } = require('./terminal/settings.cjs');
@@ -317,7 +318,7 @@ if (!hasSingleInstanceLock) {
   app.on('activate', createWindow);
   app.whenReady().then(() => {
     registerProtocol();
-    manager = new SessionManager();
+    manager = new SessionManager({ environment: environmentWithHiddenPrompt(process.env, app.getPath('userData')) });
     rendererLifecycle = new RendererLifecycle(manager);
     rendererLifecycle.detach();
     settings = new SettingsStore(app.getPath('userData'), app.getPath('home'));

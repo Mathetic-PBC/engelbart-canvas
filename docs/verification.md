@@ -90,3 +90,14 @@ Design revision pulled from Claude Design (messages 34–54: terminal pane, brow
 | Hover the goal crumb → `+ New goal` | menu lists `CURRENT · First steps 0 / 1`; new goal opens as `Goal 2 / Topic 1` | `44-goal-menu.png` |
 | Quit and relaunch | opens straight into `Goal 2 / Topic 1`; `test/state.json` holds the ids | `45-reopen.png` |
 | Not driven | ⌘T / ⌘1–9 in the terminal, the Claude Code / Codex switcher (would start real agents in the scratch directory), the device presets' visual result, `sandbox:` and `localhost:` addresses. All are the design's code paths with no I/O beyond the iframe. | — |
+
+### Addendum — terminal as a chat box (same day)
+
+Driven on the scratch instance (port 9225) after the change. Unit tests: 62 passing (two new in `test/shell-rc.test.cjs`, one of which runs `/bin/zsh -il` against a fake home whose `.zshrc` sets a prompt from `precmd`).
+
+| Step | Result | Evidence |
+|---|---|---|
+| Open the Terminal pane | transcript empty (no prompt), the *Run commands* box focused, dropdown reads `Terminal ⌄`, chip shows the project directory | `46-terminal-empty.png` |
+| Type `echo hello from the box`, Enter | transcript lines: `echo hello from the box`, `hello from the box`; box cleared | DOM dump |
+| Dropdown | `✓ Terminal · Claude Code · Codex` | `47-terminal-menu.png` |
+| Not driven | the folder picker (native dialog), starting Claude Code / Codex from the dropdown (real agents), ^C into a running command | — |
