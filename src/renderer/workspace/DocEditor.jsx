@@ -41,6 +41,7 @@ export default class DocEditor extends React.Component {
     this.docListeners = {
       keydown: (e) => { if (inEd(e)) this.editorKey(e); },
       input: (e) => { if (inEd(e)) this.editorInput(); },
+      beforeinput: (e) => { if (!inEd(e)) return; const sel = getSelection(); this.bulkDelete = /^delete/.test(e.inputType || '') && !!sel && !sel.isCollapsed; },
       paste: (e) => { if (inEd(e)) this.editorPaste(e); },
       click: (e) => { if (inEd(e)) this.editorClick(e); },
       mouseover: (e) => { if (inEd(e)) this.editorOver(e); },
@@ -133,10 +134,12 @@ export default class DocEditor extends React.Component {
 
   /* ---------------------------------------------------------------- rendering (HTML strings, as the design) */
   revealRange() { const c = this.caret; if (c) return c.sel ? c.sel : [c.offset, c.offset]; const s = this.selRaw; return s ? [s.a, s.b] : [-1, -1]; }
-  openIdx(tokens, a, b) { const out = []; let acc = 0; tokens.forEach((tok, k) => { const end = acc + tok.length; if (tokShown(tok).pre && a <= end && b >= acc) out.push(k); acc = end; }); return out; }
-  activeHtml(tokens) {
-    const [a, b] = this.revealRange(), open = this.openIdx(tokens, a, b); this.openKey = open.join(',');
+  // Which tokens show their source on the active line: markers the caret touches, and a heading's `# ` only while the caret is inside it.
+  openIdx(tokens, a, b, prefixCount = 0) { const out = []; let acc = 0; tokens.forEach((tok, k) => { const end = acc + tok.length; const isPrefix = k < prefixCount; const pre = isPrefix ? tok.length : tokShown(tok).pre; if (pre && (isPrefix ? (a < end && b >= acc) : (a <= end && b >= acc))) out.push(k); acc = end; }); return out; }
+  activeHtml(tokens, prefixCount = 0) {
+    const [a, b] = this.revealRange(), open = this.openIdx(tokens, a, b, prefixCount); this.openKey = open.join(',');
     return tokens.map((tok, k) => {
+      if (k < prefixCount) { const isOpen = open.includes(k); return `<span data-src="${esc(tok)}" data-open="${isOpen ? 1 : 0}" data-prefix="1">${isOpen ? esc(tok) : ''}</span>`; }
       const isOpen = !tokShown(tok).pre || open.includes(k);
       return `<span data-src="${esc(tok)}" data-open="${isOpen ? 1 : 0}">${isOpen && tok !== '@chat' ? esc(tok) : inlineHtml(tok)}</span>`;
     }).join('');
@@ -144,15 +147,16 @@ export default class DocEditor extends React.Component {
   segs(t) {
     return [...t.childNodes].filter((n) => n.nodeName !== 'BR').map((n) => {
       const el = n.nodeType === 1 && n.dataset && n.dataset.src != null ? n : null;
-      const txt = n.textContent.replace(/​/g, '');
+      const txt = n.textContent.replace(/\u200b/g, '');
       const open = !el || el.dataset.open === '1';
-      return { dl: txt.length, src: open ? txt : el.dataset.src, open, rl: open ? txt.length : el.dataset.src.length };
+      const prefix = !!(el && el.dataset.prefix);
+      return { dl: txt.length, src: open ? txt : el.dataset.src, open, rl: open ? txt.length : el.dataset.src.length, prefix };
     });
   }
   displayToRaw(t, disp) {
     const segs = this.segs(t); if (!segs.length) return null; let accD = 0, accR = 0;
     for (const s of segs) {
-      if (disp <= accD + s.dl) { const d = disp - accD; if (s.open) return accR + d; const { pre } = tokShown(s.src); return accR + (d === 0 ? 0 : Math.min(s.rl, pre + d)); }
+      if (disp <= accD + s.dl) { const d = disp - accD; if (s.open) return accR + d; if (s.prefix) return accR + s.rl; const { pre } = tokShown(s.src); return accR + (d === 0 ? 0 : Math.min(s.rl, pre + d)); }
       accD += s.dl; accR += s.rl;
     }
     return accR;
@@ -160,7 +164,7 @@ export default class DocEditor extends React.Component {
   rawToDisplay(t, raw) {
     const segs = this.segs(t); let accD = 0, accR = 0;
     for (const s of segs) {
-      if (raw <= accR + s.rl) { const d = raw - accR; if (s.open) return accD + d; const { pre } = tokShown(s.src); return accD + Math.max(0, Math.min(s.dl, d - pre)); }
+      if (raw <= accR + s.rl) { const d = raw - accR; if (s.open) return accD + d; if (s.prefix) return accD; const { pre } = tokShown(s.src); return accD + Math.max(0, Math.min(s.dl, d - pre)); }
       accD += s.dl; accR += s.rl;
     }
     return accD;
@@ -181,7 +185,7 @@ export default class DocEditor extends React.Component {
         + '</div>';
     }
     if (p.type === 'h') {
-      const size = [26, 22, 18][p.level - 1]; const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(p.text);
+      const size = [26, 22, 18][p.level - 1]; const content = active ? this.activeHtml(tokensOf(p, line), 1) : inlineHtml(p.text);
       return `<div ${raw} style="padding:4px 0;min-height:35px;font:500 ${size}px/1.6 var(--font-sans);letter-spacing:-0.3px"><span class="t">${content || '<br>'}</span></div>`;
     }
     if (p.type === 'chat') {
@@ -271,25 +275,47 @@ export default class DocEditor extends React.Component {
       this.setState({ activeLine: c.anchor.line, mention: null }); return;
     }
     this.selRaw = { line: c.anchor.line, a, b };
-    const ls = this.lines(), line = ls[c.anchor.line] ?? '', p = parseLine(line), key = p.type === 'img' ? '' : this.openIdx(tokensOf(p, line), a, b).join(',');
+    const ls = this.lines(), line = ls[c.anchor.line] ?? '', p = parseLine(line), key = p.type === 'img' ? '' : this.openIdx(tokensOf(p, line), a, b, p.type === 'h' ? 1 : 0).join(',');
     if (key !== this.openKey) { this.caret = { line: c.anchor.line, sel: [a, b] }; this.forceUpdate(); }
   }
   editorInput = () => {
     const ed = this.editorEl(); if (!ed || this.composing) return; const old = this.lines();
     const divs = [...ed.querySelectorAll('[data-raw]')], c = this.caretInfo(), activeId = c ? c.anchor.line : null;
+    // Text the browser put outside the line structure (a caret that landed on the root) is folded into the last line.
+    const strayText = [...ed.childNodes]
+      .filter((n) => (n.nodeType === 3 && n.textContent.trim()) || (n.nodeType === 1 && n.getAttribute('data-line') == null && n.getAttribute('contenteditable') !== 'false' && n.textContent.trim()))
+      .map((n) => n.textContent).join('').replace(/\u200b/g, '');
+    let strip = 0, cleared = false;
+    // A non-collapsed selection at the last selectionchange (which precedes the edit; the collapse arrives after `input`)
+    // or a beforeinput delete of a selection: the edit removed a range, not a character.
+    const bulk = this.bulkDelete || !!(this.selRaw && this.selRaw.a !== this.selRaw.b); this.bulkDelete = false;
     let ls = divs.map((d) => {
       const raw = d.dataset.raw ?? ''; if (Number(d.dataset.line) !== activeId) return raw;
-      const t = d.querySelector('.t'); const txt = t ? this.activeRaw(t) : ''; const p = parseLine(raw);
-      return p.type === 'todo' ? todoLine(p.depth, p.done, txt) : txt;
+      const t = d.querySelector('.t'); let txt = t ? this.activeRaw(t) : ''; const p = parseLine(raw);
+      if (p.type !== 'todo') return txt;
+      // A bulk deletion that empties a todo leaves a plain empty line, as deleting everything should.
+      if (bulk && !txt.trim()) { cleared = true; return ''; }
+      // A list marker typed into an empty todo row starts the todo instead of nesting a literal "- ".
+      if (!p.text.trim()) { const m = txt.match(/^- (?:\[[ xX]\] )?/); if (m) { strip = m[0].length; txt = txt.slice(strip); } }
+      return todoLine(p.depth, p.done, txt);
     });
     if (!ls.length) ls = [''];
-    const pos = divs.findIndex((d) => Number(d.dataset.line) === activeId);
+    let pos = divs.findIndex((d) => Number(d.dataset.line) === activeId);
     let caret = c && pos >= 0 ? { line: pos, offset: c.anchor.offset } : null;
+    if (caret && (strip || cleared)) { caret = { line: pos, offset: cleared ? 0 : Math.max(0, caret.offset - strip) }; this.lastHtml = null; }
+    if (strayText) {
+      const last = ls.length - 1, q = parseLine(ls[last]), base = q.type === 'todo' ? q.text.length : ls[last].length;
+      ls[last] = q.type === 'todo' ? todoLine(q.depth, q.done, q.text + strayText) : ls[last] + strayText;
+      pos = last; caret = { line: last, offset: base + strayText.length }; this.lastHtml = null;
+    }
     if (caret) {
       const before = parseLine(old[activeId] ?? ''), after = parseLine(ls[pos] ?? '');
       if (before.type !== 'todo' && after.type === 'todo') caret = { line: pos, offset: Math.max(0, caret.offset - (ls[pos].length - after.text.length)) };
     }
-    this.setDoc(ls.join('\n'), caret);
+    const nextText = ls.join('\n'); const unchanged = nextText === this.props.text;
+    this.setDoc(nextText, caret);
+    // A strip or clear that leaves the stored text as it was still has to redraw the line the browser altered.
+    if (unchanged && (strip || cleared)) this.syncEditor();
     if (caret) {
       const p = parseLine(ls[pos] ?? ''), txt = p.type === 'todo' ? p.text : ls[pos], m = txt.slice(0, caret.offset).match(/@([^\s@\[\]]{0,30})$/);
       if (m) {
@@ -355,6 +381,7 @@ export default class DocEditor extends React.Component {
     this.shiftStatuses(i + 1, parts.length - 1); this.setState({ activeLine: i + parts.length - 1, mention: null });
   };
   editorClick = (e) => {
+    if (e.target === this.editorEl()) { this.focusEnd(); return; } // the editor's own empty space below the last line
     const act = e.target.closest('[data-act]');
     if (act) {
       e.preventDefault(); const i = Number(act.dataset.row), k = act.dataset.act;

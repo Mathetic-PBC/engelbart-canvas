@@ -58,3 +58,15 @@ Driven on a fresh scratch home (`ENGELBART_HOME_DIR`, port 9223, `ENGELBART_CONF
 | Gear → Reset everything (auto-confirmed) | `~/.engelbart/test` wiped to `annotations/ library.pglite/ seed/`; app returns to the create screen | text dump, `ls` |
 | Sibling switcher on hover | not driven: the CDP mouse-enter did not trigger React's hover; the code is the design's popover. Hudson exercised it live (a second topic appeared as `2 / 2`). | — |
 | Normal root (`TEST · OFF`) | covered by `store-modes.test.cjs`: separate `library.pglite`, no seeds, projects listed per root | test |
+
+
+# Round 3 — 2026-09-16 night (editor defects from Hudson's in-app bug list)
+
+Reproduced and fixed on a scratch instance (port 9224) with the caret placed programmatically where clicks were ambiguous.
+
+| Report | Cause | Fix | Check |
+|---|---|---|---|
+| "if I type `- ` it does not necessarily format it into a TODO … if I delete everything it won't register again" | Deleting a todo's text with a selection left an empty todo row (marker kept, text gone); typing `- ` into it produced the literal text `- [ ] - x`. Text the browser inserted outside the line structure was never read. | A selection-delete that empties a todo now leaves a plain empty line; a list marker typed into an empty todo starts the todo instead of nesting; stray text at the editor root is folded into the last line; a click on the editor's own empty space goes to the end of the last line. | select-all + Backspace → `[""]`; `- z` → `- [ ] z`; Enter, `- `, `x` → `- [ ] x` with the DOM redrawn after the marker; root text node folded, none left |
+| "Do not show the `#-###` even after it has bolded … don't wait for me to hit enter" | The active line always rendered a heading's `# ` prefix token as source. | The prefix is a hidden marker token like `**`: shown only while the caret is inside it; display↔raw offset mapping treats it as zero-width. | active heading: innerText `Title`, prefix span empty, typing appends `# Titles` |
+
+`npm test`: 58 passing.
