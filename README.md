@@ -26,6 +26,16 @@ open "release/Engelbart-darwin-arm64/Engelbart.app"
 
 Unsigned and not notarised: first launch needs right-click → Open. The first launch creates `~/.engelbart/`.
 
+## Restarting after a code change
+
+```sh
+npm run relaunch                 # quit every running copy, rebuild + repackage, open release/…/Engelbart.app
+npm run relaunch -- --dev        # quit, rebuild, run `electron .` in the background instead (faster, same data)
+npm run relaunch -- --no-build   # just quit and reopen
+```
+
+Both use the real data root, `~/.engelbart`. The packaged app under `release/` only changes when it is repackaged, so opening it from Finder after a code change shows the old build. `ENGELBART_HOME_DIR` (a different data root) is for scripted test runs only; the relaunch script clears it.
+
 ## First run, test mode, reset
 
 With no project in the current root the app opens on **Create a new project** (name + `./slug` path). Creating a project makes `<root>/<slug>/`, a first goal *First steps*, a first topic *Getting started* and a *Welcome!* note, and opens the workspace with that note. From then on the app opens straight into the topic you were last in (`<root>/state.json`); `Engelbart` in the header, or Escape, shows all projects — a card grid that ends with a dashed **+ Project** card. There is no kanban screen: the goal crumb in the header lists the project's goals and adds new ones.
