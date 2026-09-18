@@ -91,7 +91,8 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
   const running = !!current && current.snapshot.status === 'running';
   const now = current ? describe(current) : { integrated: false, busy: false, agent: 'shell', command: '', cwd: null };
   const cwdOf = (record) => describe(record).cwd || cwdOverride[record.snapshot.id] || record.snapshot.cwd;
-  const currentCwd = current ? cwdOf(current) : cwd;
+  const projectCwd = cwd || state.home || null; // the project's code directory; your home directory if a terminal is ever asked for without one
+  const currentCwd = current ? cwdOf(current) : projectCwd;
   const agentLabel = LABEL[now.agent] || LABEL.shell;
   const boxIsInput = running && now.integrated && !takeover; // the box owns typing; the transcript is locked
   const showBox = running && !takeover;
@@ -115,6 +116,20 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
     })();
     return () => { cancelled = true; };
   }, [projectId, cwd]);
+
+  // The project's code directory changed (it is chosen after the project opens, or re-chosen):
+  // terminals you have not used yet, still sitting in the old one, follow it.
+  const lastProjectCwd = useRef(cwd);
+  useEffect(() => {
+    const previous = lastProjectCwd.current;
+    lastProjectCwd.current = cwd;
+    if (!cwd || !previous || previous === cwd) return;
+    for (const record of sessionsFor(projectId)) {
+      const shell = describe(record);
+      const untouched = record.snapshot.status === 'running' && shell.integrated && !shell.busy && !touched[record.snapshot.id];
+      if (untouched && (shell.cwd || record.snapshot.cwd) === previous) sendInput(record.snapshot.id, `cd -- ${shellQuote(cwd)}\r`);
+    }
+  }, [cwd, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ↑ recalls real commands from the first keypress: seed the box from the shell's history file.
   useEffect(() => {
@@ -200,7 +215,7 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
     setLaunching({ provider });
     try {
       const dims = estimateDimensions(stageRef.current);
-      const record = await createSession({ provider, cwd: at || currentCwd || cwd, projectId, ...dims });
+      const record = await createSession({ provider, cwd: at || projectCwd, projectId, ...dims });
       activate(record.snapshot.id);
       setLaunching(null);
       return record;
@@ -309,7 +324,7 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
       const mod = event.metaKey || event.ctrlKey;
       if (!mod) return;
       const inside = rootRef.current && event.target && rootRef.current.contains(event.target);
-      if (event.metaKey && event.key.toLowerCase() === 't' && !event.shiftKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); void launch('shell', currentCwd); return; }
+      if (event.metaKey && event.key.toLowerCase() === 't' && !event.shiftKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); void launch('shell', projectCwd); return; }
       if (inside && event.metaKey && /^[1-9]$/.test(event.key)) {
         const record = sessions[Number(event.key) - 1];
         if (record) { event.preventDefault(); event.stopPropagation(); activate(record.snapshot.id); }
@@ -317,7 +332,7 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [visible, sessions, currentCwd]);
+  }, [visible, sessions, projectCwd]);
 
   const stopKeys = (event) => { event.stopPropagation(); };
   const menuW = 200;
@@ -339,7 +354,7 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
             </div>
           );
         })}
-        <button type="button" className="hov-ink-wash" onClick={() => void launch('shell', currentCwd)} title="New terminal (⌘T)" style={{ flex: 'none', alignSelf: 'center', width: 26, height: 26, padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', font: '16px/1 var(--font-sans)', color: '#4d4d4d' }}>+</button>
+        <button type="button" className="hov-ink-wash" onClick={() => void launch('shell', projectCwd)} title="New terminal (⌘T) in the project's code directory" style={{ flex: 'none', alignSelf: 'center', width: 26, height: 26, padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', font: '16px/1 var(--font-sans)', color: '#4d4d4d' }}>+</button>
         <div ref={menuRef} style={{ marginLeft: 'auto', alignSelf: 'center', flex: 'none', position: 'relative' }}>
           <button type="button" className="hov-ink-wash" data-agent-menu="1" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setMenu(menu ? null : { x: r.right, y: r.bottom }); }} title="Terminal, Claude Code or Codex — started in this tab's directory" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 8px', border: 0, borderRadius: 6, background: menu ? '#eaeaea' : 'transparent', cursor: 'pointer', font: '500 12.5px/1.3 var(--font-sans)', color: '#171717', whiteSpace: 'nowrap' }}>
             <span>{agentLabel}</span>

@@ -152,8 +152,11 @@ function projectRecord(dir) {
     try { migrateProjectDir(dir); } catch (error) { console.error(`Engelbart: could not convert ${dir} to the workspace layout: ${error.message}`); }
   }
   const name = typeof meta.name === 'string' && meta.name.trim() ? meta.name : path.basename(dir);
-  const directory = typeof meta.directory === 'string' && path.isAbsolute(meta.directory) ? meta.directory : null;
-  return { id: meta.id, name, slug: path.basename(dir), dir, created: meta.created || null, directory };
+  const saved = typeof meta.directory === 'string' && path.isAbsolute(meta.directory) ? meta.directory : null;
+  let exists = false;
+  try { exists = !!saved && fs.statSync(saved).isDirectory(); } catch { exists = false; }
+  // A saved directory that is gone (moved, unmounted) counts as not chosen: the project asks again.
+  return { id: meta.id, name, slug: path.basename(dir), dir, created: meta.created || null, directory: exists ? saved : null, directoryMissing: saved && !exists ? saved : null };
 }
 
 function projectRecords(ctx) {
@@ -168,7 +171,7 @@ function findProject(ctx, id) {
 }
 
 function publicProject(project, extra = {}) {
-  return { id: project.id, name: project.name, slug: project.slug, dir: project.dir, created: project.created, directory: project.directory, ...extra };
+  return { id: project.id, name: project.name, slug: project.slug, dir: project.dir, created: project.created, directory: project.directory, directoryMissing: project.directoryMissing, ...extra };
 }
 
 const countWorkspaces = (dir) => workspaceRecords(dir).reduce((n, workspace) => n + 1 + countWorkspaces(workspace.dir), 0);

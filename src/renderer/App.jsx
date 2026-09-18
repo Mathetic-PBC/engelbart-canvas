@@ -31,6 +31,7 @@ function DirectoryGate({ project, onChosen, onHome, error }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <span style={{ font: '500 9px/1 var(--font-sans)', letterSpacing: '1.6px', textTransform: 'uppercase', color: '#8f8f8f' }}>{project.name}</span>
           <h2 style={{ margin: 0, font: '500 20px/1.3 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Where does this project's code live?</h2>
+          {project.directoryMissing && <p style={{ margin: 0, font: '13px/1.6 var(--font-mono)', color: '#e70022', overflowWrap: 'anywhere' }}>{project.directoryMissing} is no longer there.</p>}
           <p style={{ margin: 0, font: '14px/1.6 var(--font-sans)', color: '#4d4d4d', textWrap: 'pretty' }}>Terminals, Claude Code and Codex open in this directory, and it is where code changes are made. It is saved in the project's <code style={{ font: '.92em var(--font-mono)' }}>project.json</code>.</p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>

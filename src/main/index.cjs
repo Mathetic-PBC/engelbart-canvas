@@ -185,7 +185,8 @@ function registerTerminalIpc() {
     }
   });
   ipcMain.handle('terminal:pick-directory', trustedHandler(async (current) => {
-    let defaultPath = settings.get().lastCwd;
+    // Start in the home directory, never in Engelbart's own data folder (where the last terminal may have been).
+    let defaultPath = app.getPath('home');
     if (typeof current === 'string' && current.length <= 4096) {
       try {
         if (fs.statSync(current).isDirectory()) defaultPath = current;

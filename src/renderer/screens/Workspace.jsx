@@ -488,7 +488,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           mode={rightMode}
           paper={paper}
           onMarksChange={(id, marks) => api.writeAnnotations(id, marks).catch((error) => onError(error))}
-          projectDir={project.directory || project.dir}
+          projectDir={project.directory || null}
           projectId={project.id}
           onExpand={() => setSplit((current) => (current <= 0.36 ? 0.5 : 0.35))}
           style={{ flex: `${1 - split} 1 0`, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }}

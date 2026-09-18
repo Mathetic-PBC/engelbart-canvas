@@ -51,6 +51,9 @@ test('the code directory: stored in project.json, must be an absolute existing d
   await assert.rejects(projects.setProjectDirectory(ctx, bare.id, path.join(code, 'missing')), /does not exist/);
   assert.equal((await projects.setProjectDirectory(ctx, bare.id, code)).directory, code);
   assert.equal((await projects.loadProject(ctx, bare.id)).project.directory, code);
+  fs.rmSync(code, { recursive: true });
+  const gone = (await projects.loadProject(ctx, bare.id)).project;
+  assert.deepEqual([gone.directory, gone.directoryMissing], [null, code], 'a directory that vanished counts as not chosen, and is named');
 });
 
 test('createProjectWithWelcome makes a first workspace and a Welcome! note in its context', async () => {
