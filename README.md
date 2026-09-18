@@ -38,6 +38,8 @@ npm run relaunch -- --dev        # quit, rebuild, run `electron .` in the backgr
 npm run relaunch -- --no-build   # just quit and reopen
 ```
 
+It works from a terminal inside Engelbart too (say, from a Claude Code session running there): quitting Engelbart closes that terminal, so the script hands the rest to a detached copy (log: `~/Library/Logs/Engelbart-relaunch.log`) and you resume the agent afterwards with `claude -r`. `--dry-run` says what would happen without touching anything.
+
 Both use the real data root, `~/.engelbart`. The packaged app under `release/` only changes when it is repackaged, so opening it from Finder after a code change shows the old build. `ENGELBART_HOME_DIR` (a different data root) is for scripted test runs only; the relaunch script clears it.
 
 ## First run, test mode, reset

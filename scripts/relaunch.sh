@@ -2,9 +2,15 @@
 # Restart Engelbart deterministically: quit every running copy started from this checkout,
 # rebuild, launch, and confirm it is up. Always uses the real data root (~/.engelbart).
 #
-#   npm run relaunch                 # rebuild + repackage, then open release/…/Engelbart.app (~40 s)
-#   npm run relaunch -- --dev        # rebuild, then run `electron .` in the background (~5 s, same ~/.engelbart)
-#   npm run relaunch -- --no-build   # skip the rebuild / repackage step
+#   npm run relaunch                 # quit, rebuild + repackage, open release/…/Engelbart.app (~40 s)
+#   npm run relaunch -- --dev        # quit, rebuild, run `electron .` in the background (~5 s, same ~/.engelbart)
+#   npm run relaunch -- --no-build   # quit and reopen only
+#   npm run relaunch -- --dry-run    # say what would happen, touch nothing
+#
+# It can be run from a terminal INSIDE Engelbart (for instance from a Claude Code session there).
+# Quitting Engelbart closes that terminal and everything in it, this script included, so in that
+# case the work continues in a detached copy that survives the terminal. Progress goes to
+# ~/Library/Logs/Engelbart-relaunch.log; resume an agent session afterwards with `claude -r`.
 #
 # Both forms read and write ~/.engelbart. Only scripted test runs should ever set
 # ENGELBART_HOME_DIR; this script clears it so a stray shell export cannot point the app elsewhere.
@@ -14,39 +20,80 @@ REPO="$PWD"
 APP="$REPO/release/Engelbart-darwin-arm64/Engelbart.app"
 PACKAGED="$APP/Contents/MacOS/Engelbart"
 DEV_BIN="$REPO/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"
-LOG="$HOME/Library/Logs/Engelbart-dev.log"
+DEV_LOG="$HOME/Library/Logs/Engelbart-dev.log"
+RELAUNCH_LOG="$HOME/Library/Logs/Engelbart-relaunch.log"
 DEV=0
 BUILD=1
+DRY=0
 for arg in "$@"; do
   case "$arg" in
     --dev) DEV=1 ;;
     --no-build) BUILD=0 ;;
+    --dry-run) DRY=1 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
 done
 unset ENGELBART_HOME_DIR ENGELBART_CONFIRM_ALL
 
+# Is one of this shell's ancestors an Engelbart started from this checkout?
+inside_engelbart() {
+  pid=$$
+  while [ -n "$pid" ] && [ "$pid" != "0" ] && [ "$pid" != "1" ]; do
+    command=$(ps -o command= -p "$pid" 2>/dev/null || true)
+    case "$command" in
+      "$PACKAGED"*|"$DEV_BIN"*) return 0 ;;
+    esac
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ' || true)
+  done
+  return 1
+}
+
+# pgrep/pkill leave out their own ancestors unless told otherwise (-a); inside Engelbart the app
+# IS an ancestor, and skipping it made an earlier version of this script report "did not start".
+running() { pgrep -a -f "$1" 2>/dev/null | grep -v "^$$\$" || true; }
+
 quit() { # $1: full-command-line pattern
-  if ! pgrep -f "$1" >/dev/null 2>&1; then return 0; fi
-  echo "quitting $(pgrep -f "$1" | tr '\n' ' ')"
-  pkill -f "$1" || true
+  [ -n "$(running "$1")" ] || return 0
+  echo "quitting $(running "$1" | tr '\n' ' ')"
+  pkill -a -f "$1" || true
   i=0
-  while pgrep -f "$1" >/dev/null 2>&1; do
+  while [ -n "$(running "$1")" ]; do
     i=$((i + 1))
-    if [ "$i" -ge 20 ]; then echo "force-quitting"; pkill -9 -f "$1" || true; sleep 1; break; fi
+    if [ "$i" -ge 20 ]; then echo "force-quitting"; pkill -9 -a -f "$1" || true; sleep 1; break; fi
     sleep 0.5
   done
 }
+
+if [ "$DRY" = 1 ]; then
+  if inside_engelbart; then echo "this shell runs inside Engelbart: the restart would continue detached (log: $RELAUNCH_LOG) and this terminal would close"; else echo "this shell is outside Engelbart: the restart would run here"; fi
+  echo "packaged copies running: $(running "$PACKAGED" | tr '\n' ' ')"
+  echo "dev copies running: $(running "$DEV_BIN" | tr '\n' ' ')"
+  echo "would: quit them$( [ "$BUILD" = 1 ] && { [ "$DEV" = 1 ] && echo ', npm run build' || echo ', npm run package'; } ), then $( [ "$DEV" = 1 ] && echo 'run electron .' || echo "open $APP" )"
+  exit 0
+fi
+
+if [ -z "${ENGELBART_RELAUNCH_DETACHED:-}" ] && inside_engelbart; then
+  mkdir -p "$(dirname "$RELAUNCH_LOG")"
+  echo "This terminal is inside Engelbart, so it will close when Engelbart quits."
+  echo "The restart continues in the background; log: $RELAUNCH_LOG"
+  echo "Resume a Claude Code session afterwards with: claude -r"
+  ENGELBART_RELAUNCH_DETACHED=1 nohup sh "$0" "$@" >"$RELAUNCH_LOG" 2>&1 </dev/null &
+  exit 0
+fi
+[ -n "${ENGELBART_RELAUNCH_DETACHED:-}" ] && { date; sleep 1; }
+
+# An agent session's private variables must not ride into the app (and from there into its terminals).
+unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_EXECPATH CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN CLAUDE_CODE_SESSION_ATTENDED CLAUDE_PID CLAUDE_EFFORT 2>/dev/null || true
 
 quit "$PACKAGED"
 quit "$DEV_BIN"
 
 if [ "$DEV" = 1 ]; then
   [ "$BUILD" = 1 ] && npm run build
-  mkdir -p "$(dirname "$LOG")"
-  nohup npx electron . >"$LOG" 2>&1 &
+  mkdir -p "$(dirname "$DEV_LOG")"
+  nohup npx electron . >"$DEV_LOG" 2>&1 </dev/null &
   PATTERN="$DEV_BIN"
-  WHAT="electron . (log: $LOG)"
+  WHAT="electron . (log: $DEV_LOG)"
 else
   [ "$BUILD" = 1 ] && npm run package
   [ -x "$PACKAGED" ] || { echo "no packaged app at $APP — run without --no-build" >&2; exit 1; }
@@ -56,7 +103,7 @@ else
 fi
 
 i=0
-while ! pgrep -f "$PATTERN" >/dev/null 2>&1; do
+while [ -z "$(running "$PATTERN")" ]; do
   i=$((i + 1))
   if [ "$i" -ge 40 ]; then echo "Engelbart did not start" >&2; exit 1; fi
   sleep 0.5
