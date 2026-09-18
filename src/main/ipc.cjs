@@ -27,13 +27,13 @@ function optStr(value, what, max = MAX_NAME) {
 function docRef(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('doc ref must be an object');
   if (value.kind === 'note') return { kind: 'note', id: str(value.id, 'note id', 64) };
-  if (value.kind === 'workspace') return { kind: 'workspace', goalId: str(value.goalId, 'goal id', 64), topicId: str(value.topicId, 'topic id', 64) };
+  if (value.kind === 'workspace') return { kind: 'workspace', workspaceId: str(value.workspaceId, 'workspace id', 64) };
   throw new TypeError('Unknown doc kind');
 }
 
 function projectInput(value) {
   const input = typeof value === 'string' ? { name: value } : (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
-  return { name: str(input.name, 'name'), path: optStr(input.path, 'path', 200) };
+  return { name: str(input.name, 'name'), path: optStr(input.path, 'path', 200), directory: optStr(input.directory, 'directory', 4096) };
 }
 
 function createStore({ homeDir, fixturesDir }) {
@@ -113,22 +113,25 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('rename-project', withCtx((ctx, id, name) => projects.renameProject(ctx, str(id, 'project id', 64), str(name, 'name'))));
   handle('load-project', withCtx((ctx, id) => projects.loadProject(ctx, str(id, 'project id', 64))));
 
-  handle('create-goal', withCtx((ctx, pid, input) => {
-    if (!input || typeof input !== 'object') throw new TypeError('goal input must be an object');
-    return projects.createGoal(ctx, str(pid, 'project id', 64), { name: optStr(input.name, 'name') || 'Goal', box: str(input.box, 'box', 32) });
-  }));
-  handle('rename-goal', withCtx((ctx, pid, gid, name) => projects.renameGoal(ctx, str(pid, 'project id', 64), str(gid, 'goal id', 64), str(name, 'name'))));
-  handle('set-future', withCtx((ctx, pid, gid, ideas) => projects.setFuture(ctx, str(pid, 'project id', 64), str(gid, 'goal id', 64), ideas)));
+  handle('set-project-directory', withCtx((ctx, id, directory) => projects.setProjectDirectory(ctx, str(id, 'project id', 64), str(directory, 'directory', 4096))));
 
-  handle('create-topic', withCtx((ctx, pid, gid, name) => projects.createTopic(ctx, str(pid, 'project id', 64), str(gid, 'goal id', 64), optStr(name, 'name') || 'Topic')));
-  handle('rename-topic', withCtx((ctx, pid, gid, tid, name) => projects.renameTopic(ctx, str(pid, 'project id', 64), str(gid, 'goal id', 64), str(tid, 'topic id', 64), str(name, 'name'))));
-  handle('set-topic-status', withCtx((ctx, pid, gid, tid, status) => projects.setTopicStatus(ctx, str(pid, 'project id', 64), str(gid, 'goal id', 64), str(tid, 'topic id', 64), str(status, 'status', 32))));
-  handle('set-topic-context', withCtx((ctx, pid, gid, tid, entries) => projects.setTopicContext(ctx, str(pid, 'project id', 64), str(gid, 'goal id', 64), str(tid, 'topic id', 64), entries)));
+  handle('create-workspace', withCtx((ctx, pid, input) => {
+    const value = input && typeof input === 'object' ? input : {};
+    return projects.createWorkspace(ctx, str(pid, 'project id', 64), { name: optStr(value.name, 'name'), parentId: optStr(value.parentId, 'parent id', 64) });
+  }));
+  handle('rename-workspace', withCtx((ctx, pid, wid, name) => projects.renameWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(name, 'name'))));
+  handle('set-workspace-status', withCtx((ctx, pid, wid, status) => projects.setWorkspaceStatus(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(status, 'status', 32))));
+  handle('set-workspace-context', withCtx((ctx, pid, wid, entries) => projects.setWorkspaceContext(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), entries)));
 
   handle('create-note', withCtx((ctx, pid, input) => {
     const value = input && typeof input === 'object' ? input : {};
-    return projects.createNote(ctx, str(pid, 'project id', 64), { name: optStr(value.name, 'name'), goalId: optStr(value.goalId, 'goal id', 64), topicId: optStr(value.topicId, 'topic id', 64) });
+    return projects.createNote(ctx, str(pid, 'project id', 64), { name: optStr(value.name, 'name'), workspaceId: optStr(value.workspaceId, 'workspace id', 64) });
   }));
+  handle('save-image', withCtx((ctx, pid, input) => {
+    const value = input && typeof input === 'object' ? input : {};
+    return projects.saveImage(ctx, str(pid, 'project id', 64), { bytes: value.bytes, mime: str(value.mime, 'mime', 64), name: optStr(value.name, 'name') });
+  }));
+  handle('read-image', withCtx((ctx, id) => projects.readImage(ctx, str(id, 'image id', 64))));
   handle('rename-note', withCtx((ctx, pid, id, name) => projects.renameNote(ctx, str(pid, 'project id', 64), str(id, 'note id', 64), str(name, 'name'))));
   handle('read-doc', withCtx((ctx, pid, ref) => projects.readDoc(ctx, str(pid, 'project id', 64), docRef(ref))));
   handle('write-doc', withCtx((ctx, pid, ref, text) => projects.writeDoc(ctx, str(pid, 'project id', 64), docRef(ref), text)));

@@ -10,13 +10,13 @@
 const path = require('node:path');
 const { PGlite } = require('@electric-sql/pglite');
 
-const LIBRARY_TYPES = Object.freeze(['note', 'paper', 'git_repo', 'dataset', 'website']);
+const LIBRARY_TYPES = Object.freeze(['note', 'paper', 'git_repo', 'dataset', 'website', 'image']);
 
 const LIBRARY_SCHEMA = `
 create table if not exists library (
   id uuid primary key,
   name text not null,
-  type text not null check (type in ('note','paper','git_repo','dataset','website')),
+  type text not null check (type in ('note','paper','git_repo','dataset','website','image')),
   path text,
   url text,
   folder_path text,
@@ -25,6 +25,9 @@ create table if not exists library (
   last_edited timestamptz not null default now()
 );
 create index if not exists library_project on library (project_id);
+-- databases created before pasted images existed: widen the type check
+alter table library drop constraint if exists library_type_check;
+alter table library add constraint library_type_check check (type in ('note','paper','git_repo','dataset','website','image'));
 `;
 
 const NOTES_SCHEMA = `

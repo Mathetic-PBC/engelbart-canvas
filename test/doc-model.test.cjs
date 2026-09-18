@@ -107,3 +107,15 @@ test('esc escapes the four HTML-significant characters', async () => {
   assert.equal(esc('a<b>&"c'), 'a&lt;b&gt;&amp;&quot;c');
   assert.equal(esc(5), '5');
 });
+
+test('a pasted image is an inline token that reads [Attachment n]; alone on a line it is an image', async () => {
+  const { INLINE, tokShown, inlineHtml, parseLine, rawOffset } = await load();
+  const token = '![Attachment 1](img:0a1b2c3d-0000-4000-8000-000000000000)';
+  assert.deepEqual(`fix ${token} now`.split(INLINE).filter(Boolean), ['fix ', token, ' now']);
+  assert.deepEqual(tokShown(token), { shown: '[Attachment 1]', pre: 1 });
+  assert.match(inlineHtml(`fix ${token}`), /data-attachment="0a1b2c3d-0000-4000-8000-000000000000"[^>]*>\[Attachment 1\]</);
+  assert.equal(parseLine(token).type, 'img');
+  const todo = parseLine(`- [ ] fix ${token} now`);
+  assert.equal(todo.type, 'todo');
+  assert.equal(rawOffset(todo, 'fix [Attachment 1] now'.length), `fix ${token} now`.length, 'a click after the chip maps past the whole token');
+});

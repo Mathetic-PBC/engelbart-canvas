@@ -6,7 +6,7 @@ import { KIND, kindOf } from '../ui/Icons.jsx';
 
 export default function CtxModal({ topic, library, onClose, onNewNote, onAttach }) {
   const [step, setStep] = React.useState(null);
-  const candidates = library.filter((row) => !topic.context.includes(row.id) && row.type !== 'note');
+  const candidates = library.filter((row) => !topic.context.includes(row.id) && row.type !== 'note' && row.type !== 'image');
   const options = [
     { id: 'note', glyph: KIND.note.glyph, title: 'New note', why: 'A blank note in this topic. Opens in a new tab.', click: onNewNote },
     { id: 'library', glyph: KIND.dataset.glyph, title: 'Library', why: `A paper, dataset, repository or link already in your library · ${candidates.length} available.`, expands: true },

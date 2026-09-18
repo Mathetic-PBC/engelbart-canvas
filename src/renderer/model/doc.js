@@ -7,7 +7,8 @@ export const HEAD_RE = /^(#{1,3}) (.*)$/;
 export const IMG_RE = /^!\[([^\]]*)\]\((img:[\w-]+|https?:[^)\s]+|data:image[^)\s]+)\)$/;
 export const CHAT_RE = /^@chat(?:\s(.*))?$/;
 export const QUOTE_RE = /^> ?(.*)$/;
-export const INLINE = /(@chat(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\])/g;
+export const ATTACH_RE = /^!\[([^\]\n]*)\]\(img:([\w-]+)\)$/;
+export const INLINE = /(!\[[^\]\n]*\]\(img:[\w-]+\)|@chat(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\])/g;
 const LINK_RE = /^\[([^\]]+)\]\(([^)]+)\)$/;
 
 export const LABELS = { queued: 'Queued', building: 'Building…', checking: 'Checking…', fixing: 'Fixing…', needs_user: 'Needs you', done: 'Done', failed: 'Failed' };
@@ -29,6 +30,7 @@ export const todoLine = (depth, done, text) => `${'  '.repeat(depth)}- [${done ?
 
 /** What an inline token shows when rendered, and how many source characters precede the shown text. */
 export function tokShown(tok) {
+  const attachment = tok.match(ATTACH_RE); if (attachment) return { shown: `[${attachment[1] || 'Attachment'}]`, pre: 1 };
   if (tok.startsWith('**') && tok.endsWith('**') && tok.length > 4) return { shown: tok.slice(2, -2), pre: 2 };
   if (tok.startsWith('`') && tok.endsWith('`') && tok.length > 2) return { shown: tok.slice(1, -1), pre: 1 };
   if (tok.startsWith('*') && tok.endsWith('*') && tok.length > 2) return { shown: tok.slice(1, -1), pre: 1 };
@@ -72,6 +74,9 @@ export function rawOffset(p, fOff, line) {
 export function inlineHtml(text) {
   return text.split(INLINE).map((p) => {
     if (!p) return '';
+    // A pasted image inside a todo or a chat line reads as [Attachment n]; on a line of its own it renders as the image.
+    const attachment = p.match(ATTACH_RE);
+    if (attachment) return `<span data-attachment="${esc(attachment[2])}" style="padding:1px 6px;border-radius:4px;background:#f2f2f2;border:1px solid #eaeaea;font:.86em/1.6 var(--font-mono);color:#4d4d4d;white-space:nowrap">[${esc(attachment[1] || 'Attachment')}]</span>`;
     if (p.startsWith('**') && p.endsWith('**') && p.length > 4) return `<strong style="font-weight:600">${esc(p.slice(2, -2))}</strong>`;
     if (p.startsWith('`') && p.endsWith('`') && p.length > 2) return `<code style="padding:1px 4px;border-radius:4px;background:#f2f2f2;font:.92em/1.6 var(--font-mono)">${esc(p.slice(1, -1))}</code>`;
     if (p.startsWith('*') && p.endsWith('*') && p.length > 2) return `<em>${esc(p.slice(1, -1))}</em>`;

@@ -200,8 +200,8 @@ export default class DocEditor extends React.Component {
       return `<div ${raw} contenteditable="false" data-readonly="1" style="user-select:text;cursor:default;padding:0 16px ${last ? '12px' : '0'} 16px;background:#fafafa;border-radius:${R[edge] || '0'};margin-bottom:${last ? '14px' : '0'};color:#4d4d4d;font-size:16px"><span class="t" style="display:block;min-height:31px;padding:2px 0 2px 12px;border-left:2px solid #dcdcdc">${content || '<br>'}</span></div>`;
     }
     if (p.type === 'img') {
-      const src = p.src.startsWith('img:') ? '' : p.src;
-      const content = active ? this.activeHtml([line]) : `<img src="${esc(src)}" alt="${esc(p.text)}" draggable="false" style="display:block;max-width:100%;max-height:520px;margin:6px 0;border:1px solid #eaeaea;border-radius:8px;user-select:none">`;
+      const src = p.src.startsWith('img:') ? ((this.props.images || {})[p.src.slice(4)] || '') : p.src;
+      const content = active ? this.activeHtml([line]) : !src ? `<span contenteditable="false" style="display:inline-block;margin:6px 0;padding:10px 14px;border:1px dashed #c9c9c9;border-radius:8px;font:12.5px/1.5 var(--font-sans);color:#8f8f8f;user-select:none">${esc(p.text || 'image')}…</span>` : `<img src="${esc(src)}" alt="${esc(p.text)}" draggable="false" style="display:block;max-width:100%;max-height:520px;margin:6px 0;border:1px solid #eaeaea;border-radius:8px;user-select:none">`;
       return `<div ${raw} style="padding:4px 0;min-height:35px"><span class="t" style="display:block">${content}</span></div>`;
     }
     const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(line);
@@ -407,8 +407,35 @@ export default class DocEditor extends React.Component {
     }
     if (e.key === 'Escape') { const ed = this.editorEl(); if (ed) ed.blur(); }
   };
+  // Pasted images are saved by the parent (library + <project>/assets) and referenced as ![Attachment n](img:<id>):
+  // inline in a todo or chat line, where it reads [Attachment n]; on its own line anywhere else, where it renders.
+  async pasteImages(files, at) {
+    for (const file of files) {
+      const n = (String(this.props.text ?? '').match(/\]\(img:/g) || []).length + 1;
+      let saved;
+      try { saved = await this.props.onPasteImage(file, `Attachment ${n}`); } catch { saved = null; }
+      if (!saved || !saved.id || !this.mounted) continue;
+      const token = `![Attachment ${n}](img:${saved.id})`;
+      const ls = this.lines(), i = Math.min(at.line, ls.length - 1), line = ls[i] ?? '', p = parseLine(line);
+      if (p.type === 'todo' || p.type === 'chat') {
+        const cur = p.type === 'todo' ? p.text : line, a = Math.min(at.offset, cur.length), ins = `${a > 0 && !/\s$/.test(cur.slice(0, a)) ? ' ' : ''}${token} `;
+        this.writeText(i, cur.slice(0, a) + ins + cur.slice(a), { line: i, offset: a + ins.length });
+        at = { line: i, offset: a + ins.length };
+      } else if (!line.trim()) {
+        this.setLines((x) => { const out = [...x]; out.splice(i, 1, token, ''); return out; }, { line: i + 1, offset: 0 });
+        this.shiftStatuses(i + 1, 1); this.setState({ activeLine: i + 1, mention: null }); at = { line: i + 1, offset: 0 };
+      } else {
+        this.setLines((x) => { const out = [...x]; out.splice(i + 1, 0, token, ''); return out; }, { line: i + 2, offset: 0 });
+        this.shiftStatuses(i + 1, 2); this.setState({ activeLine: i + 2, mention: null }); at = { line: i + 2, offset: 0 };
+      }
+      this.wantFocus = true;
+    }
+  }
   editorPaste = (e) => {
-    const c = this.caretInfo(); if (!c) return; e.preventDefault();
+    const c = this.caretInfo(); if (!c) return;
+    const pasted = [...(((e.clipboardData || {}).files) || [])].filter((file) => /^image\/(png|jpeg|gif|webp)$/.test(file.type));
+    if (pasted.length && this.props.onPasteImage) { e.preventDefault(); void this.pasteImages(pasted, { line: c.anchor.line, offset: Math.min(c.anchor.offset, c.focus.offset) }); return; }
+    e.preventDefault();
     const text = ((e.clipboardData || window.clipboardData).getData('text/plain') || '').replace(/\r/g, ''); if (!text) return;
     const ls = this.lines(), i = c.anchor.line, line = ls[i] ?? '', p = parseLine(line), cur = p.type === 'todo' ? p.text : line;
     const same = c.anchor.line === c.focus.line, a = same ? Math.min(c.anchor.offset, c.focus.offset) : c.anchor.offset, b = same ? Math.max(c.anchor.offset, c.focus.offset) : a;

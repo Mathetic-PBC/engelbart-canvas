@@ -40,7 +40,7 @@ export default function Home({ projects, onCreateScreen, onOpen, onRename, error
                 )}
             </div>
             <span style={{ font: '12px/1.4 var(--font-sans)', color: '#8f8f8f' }}>
-              {project.goalCount} goal{project.goalCount === 1 ? '' : 's'}{project.lastEdited ? ` · edited ${relative(project.lastEdited)}` : ''}
+              {project.workspaceCount} workspace{project.workspaceCount === 1 ? '' : 's'}{project.lastEdited ? ` · edited ${relative(project.lastEdited)}` : ''}
             </span>
           </div>
         ))}

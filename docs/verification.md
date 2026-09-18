@@ -122,3 +122,20 @@ Reproduced first: typing `# Header` **one character at a time** (new driver comm
 | Sidebar | 8px more air between the topic switcher and the first context row | `48-untitled-flow.png` |
 | Test-harness incident | one run picked Claude Code on a *used* terminal, which correctly opened a new tab — with the real Claude Code, in the scratch instance at `/usr`. No message was sent; it ended with the instance. It exposed that terminals inherited the outer Claude Code session's variables; those are now stripped (unit-tested). | — |
 | Not driven | the folder picker (native dialog); a real Claude Code / Codex session end to end | — |
+
+### Addendum — 2026-09-18, second change set (workspace tree, code directory, pasted images, no folders)
+
+Unit tests: 69 passing. Driven on the scratch instance, whose project was still in the goal/topic layout.
+
+| Step | Result | Evidence |
+|---|---|---|
+| Launch on the old layout | `First steps/Getting started`, `Goal 2/Topic 1`, `Goal 2/User Interface` became `Getting started`, `Topic 1`, `User Interface` at the project level; goals parked in `.legacy/`; backup in `test/.backups/`; the app reopened *User Interface* from the old `topicId` | directory listings before/after |
+| Project without `directory` | modal *Where does this project's code live?* over the workspace (`filter: blur(6px)`, `pointer-events: none`); Escape does not dismiss it | `51-directory-gate.png` |
+| Directory chosen (through the API; the native picker cannot be driven) | `project.json` gains `directory`; gate gone; the terminal's chip shows that folder | `project.json`, DOM dump |
+| `+ Workspace`, type `Terminal pane`, Enter | nested under *User Interface* on disk (`User Interface/Terminal pane/workspace.md`); crumbs `Engelbart / HypoCompass / User Interface`; caret in the document | DOM dump, `find` |
+| Paste a PNG on a plain line | `![Attachment 1](img:<id>)` on its own line, rendered as the image; `assets/<id>.png` written; *Attachment 1* appears in the sidebar | `52-image-paste.png` |
+| Paste a PNG inside `- fix this` | inserted at the caret, reads `[Attachment 2]` in the todo | `52-image-paste.png` |
+| Reload | the image comes back from disk through `read-image` | DOM dump |
+| Crumb → parent | *User Interface* lists `Workspace · Thoughts · Terminal pane →` | DOM dump |
+| Create screen | third field *Code directory*; *Create project* disabled until a folder is chosen | `53-create-directory.png` |
+| Hudson's real data | only `npm run migrate -- --dry-run` was run against `~/.engelbart` (read-only): 4 projects would convert, and the context folder *New folder* in *Agents* would be flattened | terminal output |

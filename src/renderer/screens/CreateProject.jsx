@@ -11,13 +11,27 @@ export default function CreateProject({ onCreate, onBack, busy, error }) {
   const [slugTouched, setSlugTouched] = React.useState(false);
   const auto = slugify(name);
   const shownSlug = slugTouched ? slug : auto;
-  const disabled = busy || !name.trim();
+  const [directory, setDirectory] = React.useState('');
+  const [picking, setPicking] = React.useState(false);
+  const disabled = busy || !name.trim() || !directory;
+
+  // The same native folder picker the terminal's directory chip uses.
+  const pick = async () => {
+    if (picking) return;
+    setPicking(true);
+    try {
+      const chosen = await window.terminalAPI.pickDirectory(directory || undefined);
+      if (chosen) setDirectory(chosen);
+    } finally {
+      setPicking(false);
+    }
+  };
 
   const go = () => {
     const trimmed = name.trim();
-    if (!trimmed || busy) return;
+    if (!trimmed || busy || !directory) return;
     const path = slugTouched && slug.trim() ? slugify(slug) : auto;
-    onCreate({ name: trimmed, path: path || undefined });
+    onCreate({ name: trimmed, path: path || undefined, directory });
   };
 
   return (
@@ -27,7 +41,7 @@ export default function CreateProject({ onCreate, onBack, busy, error }) {
           ? <button type="button" onClick={onBack} title="All projects" style={{ padding: 0, border: 0, background: 'transparent', cursor: 'pointer', font: '500 17px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Engelbart</button>
           : <span style={{ font: '500 17px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Engelbart</span>}
       </div>
-      <form onSubmit={(event) => { event.preventDefault(); go(); }} style={{ width: '100%', maxWidth: 600, margin: '0 auto', padding: '140px 24px 80px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 36, animation: 'rise 260ms cubic-bezier(.25,.1,.25,1)' }}>
+      <form onSubmit={(event) => { event.preventDefault(); go(); }} style={{ width: '100%', maxWidth: 600, margin: '0 auto', padding: '100px 24px 80px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 36, animation: 'rise 260ms cubic-bezier(.25,.1,.25,1)' }}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, textAlign: 'center' }}>
           <h1 style={{ margin: 0, font: '500 34px/1.2 var(--font-sans)', letterSpacing: '-0.4px', color: '#171717' }}>Create a new project</h1>
           <p style={{ margin: 0, maxWidth: 480, font: '17px/1.6 var(--font-sans)', color: '#4d4d4d', textWrap: 'pretty' }}>A project uses your papers, data, and notes as context for&nbsp;planning and building your research.</p>
@@ -59,6 +73,14 @@ export default function CreateProject({ onCreate, onBack, busy, error }) {
               />
             </div>
           </label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <span style={{ font: '500 15px/1.4 var(--font-sans)', color: '#171717' }}>Code directory</span>
+            <button type="button" className="hov-bd2" onClick={pick} data-pick-directory="1" title="Where this project's code lives: terminals and agents open here" style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '14px 16px', background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, cursor: 'pointer', textAlign: 'left', transition: 'border-color 120ms' }}>
+              <span style={{ flex: 'none', font: '14px/1.4 var(--font-mono)', color: '#8f8f8f' }}>▭</span>
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: `16px/1.4 var(${directory ? '--font-mono' : '--font-sans'})`, color: directory ? '#171717' : '#8f8f8f', fontStyle: directory ? 'normal' : 'italic' }}>{directory || 'Choose the folder where code changes are made…'}</span>
+              <span style={{ flex: 'none', font: '500 13px/1 var(--font-sans)', color: '#4d4d4d' }}>{directory ? 'Change' : 'Choose'}</span>
+            </button>
+          </div>
         </div>
 
         <Button variant="filled" type="submit" disabled={disabled} style={{ width: 440, maxWidth: '100%', height: 48, justifyContent: 'center', font: '500 13px/1 var(--font-sans)' }}>

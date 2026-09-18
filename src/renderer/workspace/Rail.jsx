@@ -2,16 +2,10 @@ import React from 'react';
 import { KIND, kindOf } from '../ui/Icons.jsx';
 import { isUntitled } from '../model/names.js';
 
-// The sidebar, from the updated Goal Canvas.dc.html (2026-09-17): the current topic as a
-// header (status mark, editable name, "n / m") whose hover reveals the sibling topics and
-// "+ New"; below it the topic's context tree (Workspace first, folders expand, double-click
-// renames); "+ Context" and "+ Folder". (The Later list was removed in the 09-17 revision.)
-
-const FOLDER = (
-  <svg viewBox="0 0 16 16" width="1em" height="1em" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true">
-    <path d="M1.5 4.5A1.5 1.5 0 0 1 3 3h3l1.5 1.5H13a1.5 1.5 0 0 1 1.5 1.5v6A1.5 1.5 0 0 1 13 13.5H3a1.5 1.5 0 0 1-1.5-1.5z" />
-  </svg>
-);
+// The sidebar: the current workspace as a header (status mark, editable name, "n / m") whose
+// hover reveals its sibling workspaces and "+ New"; below it the workspace's context tree
+// (Workspace first; double-click renames), pasted images, and the workspaces nested inside it
+// (→); then "+ Context" and "+ Workspace". Folders are gone: a nested workspace groups things.
 
 function markStyle(status, interactive = true) {
   const done = status === 'done';
@@ -58,7 +52,7 @@ function TopicHeader({ topics, topic, onSelectTopic, onCycleTopic, onRenameTopic
           onChange={(event) => setDraft(event.target.value)}
           onBlur={commit}
           onKeyDown={blurOnEnter}
-          placeholder={topic ? (isUntitled(topic.name) ? topic.name : '') : 'no topic yet…'}
+          placeholder={topic ? (isUntitled(topic.name) ? topic.name : '') : 'no workspace yet…'}
           disabled={!topic}
           aria-label="Name"
           spellCheck={false}
@@ -97,7 +91,7 @@ function TreeRow({ row, onClick, onRenameStart, onRename, onRenameEnd }) {
       inputRef.current.select();
     }
   }, [row.editing]);
-  const glyph = row.type === 'workspace' ? KIND.workspace.glyph : row.type === 'folder' ? FOLDER : kindOf(row).glyph;
+  const glyph = row.type === 'workspace' || row.type === 'child' ? KIND.workspace.glyph : kindOf(row).glyph;
   const commit = () => {
     const next = draft.trim();
     if (next && next !== row.name) onRename(row, next);
@@ -110,7 +104,7 @@ function TreeRow({ row, onClick, onRenameStart, onRename, onRenameEnd }) {
       onDoubleClick={(event) => { if (row.type === 'workspace') return; event.stopPropagation(); onRenameStart(row); }}
       style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', marginLeft: row.depth * 18, borderRadius: 6, cursor: 'pointer', background: row.on ? '#fff' : 'transparent', boxShadow: row.on ? '0 1px 3px #0000000a, 0 0 0 1px #eaeaea' : 'none', transition: 'background 120ms' }}
     >
-      <span style={{ flex: 'none', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#171717', fontSize: row.type === 'workspace' ? 12 : 15, lineHeight: 1 }}>{glyph}</span>
+      <span style={{ flex: 'none', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#171717', fontSize: row.type === 'workspace' || row.type === 'child' ? 12 : 15, lineHeight: 1 }}>{glyph}</span>
       {row.editing
         ? (
           <input
@@ -126,7 +120,7 @@ function TreeRow({ row, onClick, onRenameStart, onRename, onRenameEnd }) {
           />
         )
         : <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: `${row.on ? 600 : 400} 14px/1.5 var(--font-sans)`, color: isUntitled(row.name) ? '#8f8f8f' : '#171717' }}>{row.name}</span>}
-      {row.type === 'folder' && <span style={{ flex: 'none', font: '12px/1 var(--font-sans)', color: '#8f8f8f' }}>{row.open ? '⌃' : '›'}</span>}
+      {row.type === 'child' && <span title="A workspace inside this one" style={{ flex: 'none', font: '12px/1 var(--font-sans)', color: '#8f8f8f' }}>→</span>}
     </div>
   );
 }
@@ -134,7 +128,7 @@ function TreeRow({ row, onClick, onRenameStart, onRename, onRenameEnd }) {
 export default function Rail({
   width, topics, topic, onSelectTopic, onCycleTopic, onRenameTopic, onAddTopic,
   rows, onRowClick, onRowRenameStart, onRowRename, onRowRenameEnd,
-  onAddContext, onAddFolder,
+  onAddContext, onAddChild,
 }) {
   return (
     <aside aria-label="Sidebar" style={{ flex: 'none', width, padding: '24px 16px', display: 'flex', flexDirection: 'column', gap: 5, overflow: 'auto', background: '#fafafa' }}>
@@ -142,9 +136,9 @@ export default function Rail({
       {rows.map((row) => (
         <TreeRow key={row.id} row={row} onClick={onRowClick} onRenameStart={onRowRenameStart} onRename={onRowRename} onRenameEnd={onRowRenameEnd} />
       ))}
-      <div style={{ display: 'flex', gap: 4, padding: '6px 0 0 6px' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '6px 0 0 6px' }}>
         <div className="hov-ink-wash" onClick={onAddContext} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6, font: '13px/1.4 var(--font-sans)', color: '#8f8f8f', cursor: 'pointer', transition: 'color 120ms' }}>+ Context</div>
-        <div className="hov-ink-wash" onClick={onAddFolder} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6, font: '13px/1.4 var(--font-sans)', color: '#8f8f8f', cursor: 'pointer', transition: 'color 120ms' }}>+ Folder</div>
+        <div className="hov-ink-wash" onClick={onAddChild} title="A workspace nested inside this one" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6, font: '13px/1.4 var(--font-sans)', color: '#8f8f8f', cursor: 'pointer', transition: 'color 120ms' }}>+ Workspace</div>
       </div>
     </aside>
   );

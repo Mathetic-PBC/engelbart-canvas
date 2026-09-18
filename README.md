@@ -51,23 +51,23 @@ The pill top-right exists on every screen. **Test · on** roots the app at `~/.e
 ## What lands on disk
 
 ```
-~/.engelbart/                        test off: this is the root
-  config.json                        { "testMode": true }
-  library.pglite/                    Postgres (PGlite): table `library` (normal)
-  annotations/<libraryId>.json       paper marks (normal)
-  test/                              test on: this is the root — same layout, own library, seeds
-    library.pglite/  annotations/  seed/
-  <slug>/                            one project (slug = the path field of the create screen)
-    project.json                     { id, name, created }
-    notes.pglite/                    Postgres (PGlite): table `notes`
-    <Note>.md                        every note of the project, flat, plain markdown
-    <Goal>/meta.json                 { id, box, created }
-    <Goal>/future.md                 the Later list, one "- idea" per line
-    <Goal>/<Topic>/meta.json         { id, status, context: tree of library ids and { id, name, children } folders, created }
-    <Goal>/<Topic>/workspace.md      the topic's document
+~/.engelbart/                         (test mode: ~/.engelbart/test/, same shape, plus seed/)
+  config.json  state.json             test toggle; { projectId, workspaceId } to reopen
+  library.pglite/                     table `library`: every note, paper, repo, dataset, website, image
+  annotations/<library id>.json       PDF highlights and margin notes
+  .backups/<project>-<time>/          copies taken before a layout conversion
+  <project>/
+    project.json                      { id, name, created, directory }   directory = where the code lives
+    notes.pglite/                     table `notes` (topic_id holds the workspace id)
+    <Note>.md                         notes, flat
+    assets/<id>.png                   pasted images (library rows of type `image`)
+    <Workspace>/workspace.md          a workspace's document
+    <Workspace>/meta.json             { id, status, context: [library ids], created }
+    <Workspace>/<Child>/…             workspaces nest to any depth
+    .legacy/                          goal directories from the first layout, parked, never deleted
 ```
 
-Renaming a goal, topic or note renames the directory or file; renaming a project updates `project.json` and renames the directory only while it still is the name's own slug. Ids stay in the json files. SQL schema: spec §6.
+Terminals, Claude Code and Codex start in the project's `directory`. A project without one opens behind a modal until you pick a folder. Projects in the first layout (`<project>/<Goal>/<Topic>/`) are converted the first time the app opens them; preview with `npm run migrate -- --dry-run`.
 
 ## Layout of the code
 

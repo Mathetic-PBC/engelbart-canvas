@@ -5,9 +5,43 @@ import Home from './screens/Home.jsx';
 import CreateProject from './screens/CreateProject.jsx';
 import Workspace from './screens/Workspace.jsx';
 
-// Screens (2026-09-17): the app opens straight into the last topic you were in — the
-// "Getting started" topic of a fresh project — and the first run shows the create screen.
-// The kanban canvas is gone; "Engelbart" in the header (or Escape) shows all projects.
+// Screens: the app opens straight into the workspace you were last in — "Getting started" in a
+// fresh project — and the first run shows the create screen. "Engelbart" in the header (or
+// Escape) shows all projects. A project whose project.json has no code directory yet is held
+// behind a modal until one is chosen (2026-09-18).
+
+const pickFolder = (current) => window.terminalAPI.pickDirectory(current || undefined);
+
+/** The project exists but does not know where its code lives: nothing else works until it does. */
+function DirectoryGate({ project, onChosen, onHome, error }) {
+  const [busy, setBusy] = React.useState(false);
+  const choose = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const chosen = await pickFolder(null);
+      if (chosen) await onChosen(chosen);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div role="dialog" aria-modal="true" aria-label="Choose the project's code directory" data-directory-gate="1" style={{ position: 'fixed', inset: 0, zIndex: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(255,255,255,.35)' }}>
+      <div style={{ width: 'min(480px, 100%)', display: 'flex', flexDirection: 'column', gap: 18, padding: 28, background: '#fff', border: '1px solid #c9c9c9', borderRadius: 12, boxShadow: '0 12px 40px #0000001f', animation: 'rise 200ms cubic-bezier(.25,.1,.25,1)' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <span style={{ font: '500 9px/1 var(--font-sans)', letterSpacing: '1.6px', textTransform: 'uppercase', color: '#8f8f8f' }}>{project.name}</span>
+          <h2 style={{ margin: 0, font: '500 20px/1.3 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Where does this project's code live?</h2>
+          <p style={{ margin: 0, font: '14px/1.6 var(--font-sans)', color: '#4d4d4d', textWrap: 'pretty' }}>Terminals, Claude Code and Codex open in this directory, and it is where code changes are made. It is saved in the project's <code style={{ font: '.92em var(--font-mono)' }}>project.json</code>.</p>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <button type="button" onClick={choose} disabled={busy} autoFocus style={{ minHeight: 40, padding: '10px 18px', border: 0, borderRadius: 8, background: '#0070f3', color: '#fff', cursor: busy ? 'default' : 'pointer', font: '500 13px/1 var(--font-sans)', opacity: busy ? 0.6 : 1 }}>{busy ? 'Choosing…' : 'Choose folder…'}</button>
+          <button type="button" className="hov-ink" onClick={onHome} style={{ padding: 0, border: 0, background: 'transparent', cursor: 'pointer', font: '13px/1 var(--font-sans)', color: '#8f8f8f' }}>All projects</button>
+        </div>
+        {error && <span style={{ font: '12.5px/1.5 var(--font-sans)', color: '#e70022' }}>{error}</span>}
+      </div>
+    </div>
+  );
+}
 
 export default function App() {
   const [config, setConfig] = React.useState(null);
@@ -16,10 +50,8 @@ export default function App() {
   const [projects, setProjects] = React.useState([]);
   const [library, setLibrary] = React.useState([]);
   const [tree, setTree] = React.useState(null);
-  const [goalId, setGoalId] = React.useState(null);
-  const [entry, setEntry] = React.useState(null); // { topicId, tab } for the workspace being opened
+  const [entry, setEntry] = React.useState(null); // { workspaceId, tab } for the project being opened
   const [phase, setPhase] = React.useState('boot'); // boot | create | home | workspace
-  const visited = React.useRef({}); // goalId → last topic id, for this session
   const [, setTick] = React.useState(0);
 
   const fail = (candidate) => setError(errorMessage(candidate));
@@ -44,23 +76,18 @@ export default function App() {
     }
   }, [tree]);
 
-  // Open a project straight into a topic: the remembered one, else the first goal's first topic.
+  // Open a project straight into a workspace: the remembered one, else the first.
   const openProject = React.useCallback(async (id, prefer) => {
     let [next, rows] = await Promise.all([api.loadProject(id), api.library()]);
-    if (!next.goals.length) {
-      const goal = await api.createGoal(id, { name: 'First steps', box: 'current' });
-      await api.createTopic(id, goal.id, 'Getting started');
+    if (!next.workspaces.length) {
+      await api.createWorkspace(id, { name: 'Getting started' });
       next = await api.loadProject(id);
     }
-    const goal = next.goals.find((candidate) => candidate.id === (prefer && prefer.goalId)) || next.goals[0];
-    const topic = goal.topics.find((candidate) => candidate.id === (prefer && prefer.topicId)) || goal.topics[0] || null;
     setTree(next);
     setLibrary(rows);
-    setGoalId(goal.id);
-    setEntry({ topicId: topic ? topic.id : null, tab: (prefer && prefer.tab) || null });
+    setEntry({ workspaceId: (prefer && prefer.workspaceId) || next.workspaces[0].id, tab: (prefer && prefer.tab) || null });
     setPhase('workspace');
     setError('');
-    api.setLastOpen({ projectId: id, goalId: goal.id, topicId: topic ? topic.id : null }).catch(() => {});
   }, []);
 
   // Startup (and after the data root changes): the last project you were in, or the create screen.
@@ -93,7 +120,6 @@ export default function App() {
 
   function leaveProject() {
     setTree(null);
-    setGoalId(null);
     setEntry(null);
   }
 
@@ -138,7 +164,7 @@ export default function App() {
     setError('');
     try {
       const made = await api.createProjectWithWelcome(input);
-      await openProject(made.project.id, { goalId: made.goalId, topicId: made.topicId, tab: { id: made.noteId, title: made.noteName } });
+      await openProject(made.project.id, { workspaceId: made.workspaceId, tab: { id: made.noteId, title: made.noteName } });
     } catch (candidate) {
       fail(candidate);
     } finally {
@@ -156,27 +182,16 @@ export default function App() {
     }
   }
 
-  const onVisit = React.useCallback((visitedGoalId, topicId) => {
-    visited.current[visitedGoalId] = topicId;
-    if (tree) api.setLastOpen({ projectId: tree.project.id, goalId: visitedGoalId, topicId }).catch(() => {});
+  const onVisit = React.useCallback((workspaceId) => {
+    if (tree) api.setLastOpen({ projectId: tree.project.id, workspaceId }).catch(() => {});
   }, [tree]);
 
-  function selectGoal(id) {
-    if (!tree || id === goalId) return;
-    setGoalId(id);
-    setEntry({ topicId: visited.current[id] || null, tab: null });
-  }
-
-  async function createGoal() {
+  async function chooseDirectory(directory) {
     if (!tree) return;
+    setError('');
     try {
-      const goal = await api.createGoal(tree.project.id, { name: `Goal ${tree.goals.length + 1}`, box: 'current' });
-      const topic = await api.createTopic(tree.project.id, goal.id, 'Topic 1');
-      const [next, rows] = await Promise.all([api.loadProject(tree.project.id), api.library()]);
-      setTree(next);
-      setLibrary(rows);
-      setGoalId(goal.id);
-      setEntry({ topicId: topic.id, tab: null });
+      await api.setProjectDirectory(tree.project.id, directory);
+      await reload();
     } catch (candidate) {
       fail(candidate);
     }
@@ -192,26 +207,26 @@ export default function App() {
       {phase === 'create' && (
         <CreateProject onCreate={createProject} onBack={projects.length ? goHome : null} busy={busy} error={error} />
       )}
-      {phase === 'workspace' && tree && goalId && (
+      {phase === 'workspace' && tree && (
         <Workspace
-          key={goalId}
+          key={tree.project.id}
           tree={tree}
           library={library}
-          goalId={goalId}
-          initialTopicId={entry ? entry.topicId : null}
+          initialWorkspaceId={entry ? entry.workspaceId : null}
           initialTab={entry ? entry.tab : null}
-          style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: '#fff' }}
-          active
+          style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: '#fff', ...(tree.project.directory ? {} : { filter: 'blur(6px)', pointerEvents: 'none', userSelect: 'none' }) }}
+          active={!!tree.project.directory}
           reload={reload}
           onClose={goHome}
           onHome={goHome}
-          onSelectGoal={selectGoal}
-          onCreateGoal={createGoal}
           onVisit={onVisit}
           onError={fail}
         />
       )}
-      {error && phase !== 'home' && phase !== 'create' && (
+      {phase === 'workspace' && tree && !tree.project.directory && (
+        <DirectoryGate project={tree.project} onChosen={chooseDirectory} onHome={goHome} error={error} />
+      )}
+      {error && phase !== 'home' && phase !== 'create' && !(tree && !tree.project.directory) && (
         <div style={{ position: 'fixed', left: 24, bottom: 18, zIndex: 150, padding: '7px 12px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', font: '12.5px/1.5 var(--font-sans)', color: '#e70022', display: 'flex', gap: 10, alignItems: 'center' }}>
           <span>{error}</span>
           <button type="button" onClick={() => setError('')} style={{ padding: '0 2px', border: 0, background: 'transparent', cursor: 'pointer', color: '#c9c9c9', font: '14px/1 var(--font-sans)' }}>×</button>

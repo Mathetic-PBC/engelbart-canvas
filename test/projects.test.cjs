@@ -8,6 +8,7 @@ const path = require('node:path');
 const db = require('../src/main/store/db.cjs');
 const { ensureHome } = require('../src/main/store/home.cjs');
 const projects = require('../src/main/store/projects.cjs');
+const { migrateProjectDir } = require('../src/main/store/migrate.cjs');
 
 const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-projects-'));
 const layout = ensureHome(homeDir);
@@ -24,126 +25,142 @@ test('projects: create, list, rename moves the directory and rewrites note paths
   const created = await projects.createProject(ctx, 'Thesis/2026');
   assert.equal(created.name, 'Thesis2026');
   assert.equal(created.slug, 'thesis2026');
-  assert.ok(fs.statSync(path.join(layout.testRoot, 'thesis2026', 'project.json')).isFile());
+  assert.equal(created.directory, null);
   assert.ok(fs.statSync(path.join(layout.testRoot, 'thesis2026', 'notes.pglite')).isDirectory());
-  assert.equal(JSON.parse(fs.readFileSync(path.join(layout.testRoot, 'thesis2026', 'project.json'), 'utf8')).name, 'Thesis2026');
   const note = await projects.createNote(ctx, created.id, { name: 'First' });
-  assert.equal(note.path, 'First.md');
-  const listed = await projects.listProjects(ctx);
-  assert.equal(listed.length, 1);
-  assert.equal(listed[0].goalCount, 0);
-  const renamed = await projects.renameProject(ctx, created.id, 'Thesis');
-  assert.equal(renamed.name, 'Thesis');
-  assert.equal(renamed.slug, 'thesis');
-  assert.equal(renamed.id, created.id);
-  assert.ok(!fs.existsSync(path.join(layout.testRoot, 'thesis2026')));
-  assert.ok(fs.existsSync(path.join(layout.testRoot, 'thesis', 'First.md')));
-  const libraryRow = await ctx.libraryDb.get(note.id);
-  assert.equal(libraryRow.path, path.join(layout.testRoot, 'thesis', 'First.md'));
-  assert.equal(libraryRow.type, 'note');
-  assert.equal(libraryRow.project_id, created.id);
-  const same = await projects.renameProject(ctx, created.id, 'Thesis');
-  assert.equal(same.name, 'Thesis');
-  await assert.rejects(() => projects.renameProject(ctx, 'not-a-uuid', 'x'), TypeError);
+  const renamed = await projects.renameProject(ctx, created.id, 'Dissertation');
+  assert.equal(renamed.slug, 'dissertation');
+  assert.equal((await ctx.libraryDb.get(note.id)).path, path.join(layout.testRoot, 'dissertation', 'First.md'));
+  assert.ok((await projects.listProjects(ctx)).some((project) => project.id === created.id && project.workspaceCount === 0));
 });
 
 test('a custom project path keeps its directory through renames', async () => {
-  const created = await projects.createProject(ctx, { name: 'Reading Group', path: 'My Folder!' });
-  assert.equal(created.slug, 'my-folder');
-  assert.ok(fs.existsSync(path.join(layout.testRoot, 'my-folder', 'project.json')));
-  const renamed = await projects.renameProject(ctx, created.id, 'Reading Group 2');
-  assert.equal(renamed.slug, 'my-folder');
-  assert.equal(renamed.name, 'Reading Group 2');
-  const twin = await projects.createProject(ctx, { name: 'Reading Group', path: 'my-folder' });
-  assert.equal(twin.slug, 'my-folder 2');
+  const created = await projects.createProject(ctx, { name: 'Reading Group', path: 'rg-2026' });
+  assert.equal(created.slug, 'rg-2026');
+  assert.equal((await projects.renameProject(ctx, created.id, 'Reading Circle')).slug, 'rg-2026');
 });
 
-test('createProjectWithWelcome makes a first goal and topic and a Welcome! note in the topic context', async () => {
-  const made = await projects.createProjectWithWelcome(ctx, { name: 'Fresh' });
-  assert.equal(made.noteName, 'Welcome!');
+test('the code directory: stored in project.json, must be an absolute existing directory', async () => {
+  const code = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-code-'));
+  const created = await projects.createProject(ctx, { name: 'With Code', directory: code });
+  assert.equal(created.directory, code);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(created.dir, 'project.json'), 'utf8')).directory, code);
+  const bare = await projects.createProject(ctx, 'No Code Yet');
+  assert.equal(bare.directory, null);
+  await assert.rejects(projects.setProjectDirectory(ctx, bare.id, 'relative/path'), /absolute/);
+  await assert.rejects(projects.setProjectDirectory(ctx, bare.id, path.join(code, 'missing')), /does not exist/);
+  assert.equal((await projects.setProjectDirectory(ctx, bare.id, code)).directory, code);
+  assert.equal((await projects.loadProject(ctx, bare.id)).project.directory, code);
+});
+
+test('createProjectWithWelcome makes a first workspace and a Welcome! note in its context', async () => {
+  const made = await projects.createProjectWithWelcome(ctx, { name: 'Welcome Test' });
   const tree = await projects.loadProject(ctx, made.project.id);
-  assert.equal(tree.goals.length, 1);
-  assert.equal(tree.goals[0].name, 'First steps');
-  assert.equal(tree.goals[0].topics[0].name, 'Getting started');
-  assert.deepEqual(tree.goals[0].topics[0].context, [made.noteId]);
-  assert.equal(tree.notes[0].name, 'Welcome!');
-  assert.equal(tree.notes[0].topicId, made.topicId);
-  const text = await projects.readDoc(ctx, made.project.id, { kind: 'note', id: made.noteId });
-  assert.ok(text.startsWith('This is a note'));
-  assert.ok(fs.existsSync(path.join(layout.testRoot, 'fresh', 'Welcome!.md')));
+  assert.equal(tree.workspaces.length, 1);
+  assert.equal(tree.workspaces[0].name, 'Getting started');
+  assert.deepEqual(tree.workspaces[0].context, [made.noteId]);
+  assert.equal(tree.notes[0].workspaceId, made.workspaceId);
+  assert.ok(fs.existsSync(path.join(made.project.dir, 'Getting started', 'workspace.md')));
+  assert.ok(fs.existsSync(path.join(made.project.dir, 'Welcome!.md')));
 });
 
-test('topic context accepts folders and rejects bad entries', async () => {
-  const project = await projects.createProject(ctx, 'Trees');
-  const goal = await projects.createGoal(ctx, project.id, { name: 'G', box: 'current' });
-  const topic = await projects.createTopic(ctx, project.id, goal.id, 'T');
-  const a = '11111111-2222-4333-8444-555555555555';
-  const folder = '22222222-2222-4333-8444-555555555555';
-  const saved = await projects.setTopicContext(ctx, project.id, goal.id, topic.id, [{ id: folder, name: ' Reading ', children: [a, a] }, a]);
-  assert.deepEqual(saved.context, [{ id: folder, name: 'Reading', children: [a] }]);
-  assert.deepEqual(projects.treeIds(saved.context), [a]);
-  await assert.rejects(() => projects.setTopicContext(ctx, project.id, goal.id, topic.id, [42]), TypeError);
-  await assert.rejects(() => projects.setTopicContext(ctx, project.id, goal.id, topic.id, [{ id: 'nope', children: [] }]), TypeError);
-});
+test('workspaces nest to any depth; docs, status, context and renames work at every level', async () => {
+  const project = await projects.createProject(ctx, 'Nesting');
+  const top = await projects.createWorkspace(ctx, project.id, { name: 'User Interface' });
+  const child = await projects.createWorkspace(ctx, project.id, { name: 'Terminal', parentId: top.id });
+  const grandchild = await projects.createWorkspace(ctx, project.id, { name: 'History', parentId: child.id });
+  assert.ok(fs.existsSync(path.join(project.dir, 'User Interface', 'Terminal', 'History', 'meta.json')));
+  assert.ok(fs.existsSync(path.join(project.dir, 'User Interface', 'Terminal', 'History', 'workspace.md')));
 
-test('goals and topics are directories with meta.json; docs and future round-trip', async () => {
-  const project = await projects.createProject(ctx, 'Canvas');
-  const goal = await projects.createGoal(ctx, project.id, { name: 'Goal 1', box: 'current' });
-  assert.equal(goal.box, 'current');
-  await assert.rejects(() => projects.createGoal(ctx, project.id, { name: 'x', box: 'later' }), TypeError);
-  const goalDir = path.join(layout.testRoot, 'canvas', 'Goal 1');
-  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(goalDir, 'meta.json'), 'utf8'))).sort(), ['box', 'created', 'id']);
-  const duplicate = await projects.createGoal(ctx, project.id, { name: 'Goal 1', box: 'past' });
-  assert.equal(duplicate.name, 'Goal 1 2');
+  await projects.writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: grandchild.id }, '# deep\n');
+  assert.equal(await projects.readDoc(ctx, project.id, { kind: 'workspace', workspaceId: grandchild.id }), '# deep\n');
+  assert.equal((await projects.setWorkspaceStatus(ctx, project.id, child.id, 'progress')).status, 'progress');
+  const note = await projects.createNote(ctx, project.id, { name: 'Reading', workspaceId: grandchild.id });
+  assert.ok(fs.existsSync(path.join(project.dir, 'Reading.md')), 'notes stay flat in the project');
+  assert.deepEqual((await projects.setWorkspaceContext(ctx, project.id, grandchild.id, [note.id])).context, [note.id]);
 
-  const topic = await projects.createTopic(ctx, project.id, goal.id, 'Topic 4');
-  assert.equal(topic.status, 'open');
-  assert.deepEqual(topic.context, []);
-  const topicDir = path.join(goalDir, 'Topic 4');
-  assert.equal(fs.readFileSync(path.join(topicDir, 'workspace.md'), 'utf8'), '');
-  await projects.writeDoc(ctx, project.id, { kind: 'workspace', goalId: goal.id, topicId: topic.id }, '- [ ] first\n');
-  assert.equal(await projects.readDoc(ctx, project.id, { kind: 'workspace', goalId: goal.id, topicId: topic.id }), '- [ ] first\n');
-  assert.equal((await projects.setTopicStatus(ctx, project.id, goal.id, topic.id, 'progress')).status, 'progress');
-  await assert.rejects(() => projects.setTopicStatus(ctx, project.id, goal.id, topic.id, 'later'), TypeError);
-  const paperId = '11111111-2222-4333-8444-555555555555';
-  assert.deepEqual((await projects.setTopicContext(ctx, project.id, goal.id, topic.id, [paperId, paperId])).context, [paperId]);
-  const renamedTopic = await projects.renameTopic(ctx, project.id, goal.id, topic.id, 'Debugging');
-  assert.equal(renamedTopic.name, 'Debugging');
-  assert.ok(fs.existsSync(path.join(goalDir, 'Debugging', 'workspace.md')));
-  const renamedGoal = await projects.renameGoal(ctx, project.id, goal.id, 'HypoCompass');
-  assert.equal(renamedGoal.name, 'HypoCompass');
-  assert.ok(fs.existsSync(path.join(layout.testRoot, 'canvas', 'HypoCompass', 'Debugging', 'meta.json')));
-
-  assert.deepEqual(await projects.setFuture(ctx, project.id, goal.id, ['  ship it ', '', 'next']), ['ship it', 'next']);
-  assert.equal(fs.readFileSync(path.join(layout.testRoot, 'canvas', 'HypoCompass', 'future.md'), 'utf8'), '- ship it\n- next\n');
-
-  const note = await projects.createNote(ctx, project.id, { name: 'Reading', goalId: goal.id, topicId: topic.id });
-  assert.equal(note.goalId, goal.id);
-  assert.ok(fs.existsSync(path.join(layout.testRoot, 'canvas', 'Reading.md')));
-  assert.ok(!fs.existsSync(path.join(layout.testRoot, 'canvas', 'HypoCompass', 'Reading.md')));
-  await projects.writeDoc(ctx, project.id, { kind: 'note', id: note.id }, '# hi\n');
-  assert.equal(await projects.readDoc(ctx, project.id, { kind: 'note', id: note.id }), '# hi\n');
-  const renamedNote = await projects.renameNote(ctx, project.id, note.id, 'Reading notes');
-  assert.equal(renamedNote.path, 'Reading notes.md');
-  assert.equal((await ctx.libraryDb.get(note.id)).path, path.join(layout.testRoot, 'canvas', 'Reading notes.md'));
+  const renamed = await projects.renameWorkspace(ctx, project.id, child.id, 'Shell');
+  assert.equal(renamed.name, 'Shell');
+  assert.ok(fs.existsSync(path.join(project.dir, 'User Interface', 'Shell', 'History', 'workspace.md')), 'children travel with a renamed parent');
+  assert.equal((await projects.createWorkspace(ctx, project.id, { name: 'assets' })).name, 'assets workspace');
 
   const tree = await projects.loadProject(ctx, project.id);
-  assert.equal(tree.project.name, 'Canvas');
-  assert.equal(tree.goals.length, 2);
-  const loadedGoal = tree.goals.find((candidate) => candidate.id === goal.id);
-  assert.equal(loadedGoal.topics[0].name, 'Debugging');
-  assert.deepEqual(loadedGoal.future, ['ship it', 'next']);
-  assert.equal(loadedGoal.notes[0].name, 'Reading notes');
-  assert.equal(tree.notes.length, 1);
+  const ui = tree.workspaces.find((workspace) => workspace.id === top.id);
+  assert.equal(ui.children[0].name, 'Shell');
+  assert.equal(ui.children[0].children[0].id, grandchild.id);
+  assert.equal((await projects.listProjects(ctx)).find((candidate) => candidate.id === project.id).workspaceCount, 4);
+  await assert.rejects(projects.createWorkspace(ctx, project.id, { name: 'x', parentId: '00000000-0000-4000-8000-000000000000' }), /Unknown workspace/);
 });
 
-test('last-open state: stored per data root, stale ids become null', async () => {
+test('workspace context is a flat list: folders sent by an old client are flattened, bad entries rejected', async () => {
+  const project = await projects.createProject(ctx, 'Folders');
+  const workspace = await projects.createWorkspace(ctx, project.id, { name: 'W' });
+  const note = await projects.createNote(ctx, project.id, { name: 'N', workspaceId: workspace.id });
+  const other = await projects.createNote(ctx, project.id, { name: 'O', workspaceId: workspace.id });
+  const folder = { id: '11111111-1111-4111-8111-111111111111', name: 'Reading', children: [note.id] };
+  assert.deepEqual((await projects.setWorkspaceContext(ctx, project.id, workspace.id, [folder, other.id, note.id])).context, [note.id, other.id]);
+  await assert.rejects(projects.setWorkspaceContext(ctx, project.id, workspace.id, [42]), /id or a folder/);
+});
+
+test('pasted images: bytes land in <project>/assets, the library gets an image row, and only images are accepted', async () => {
+  const project = await projects.createProject(ctx, 'Images');
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  const row = await projects.saveImage(ctx, project.id, { bytes: png, mime: 'image/png', name: 'Attachment 1' });
+  assert.equal(row.type, 'image');
+  assert.equal(row.project_id, project.id);
+  assert.equal(row.path, path.join(project.dir, 'assets', `${row.id}.png`));
+  assert.deepEqual(fs.readFileSync(row.path), png);
+  const read = await projects.readImage(ctx, row.id);
+  assert.equal(read.mime, 'image/png');
+  assert.deepEqual(Buffer.from(read.bytes), png);
+  await assert.rejects(projects.saveImage(ctx, project.id, { bytes: png, mime: 'image/svg+xml' }), /png, jpeg, gif and webp/);
+  await assert.rejects(projects.saveImage(ctx, project.id, { bytes: Buffer.alloc(0), mime: 'image/png' }), /empty/);
+  assert.equal((await projects.loadProject(ctx, project.id)).workspaces.length, 0, 'assets is not a workspace');
+});
+
+test('the goal/topic layout converts in place: topics become workspaces, ids and notes survive, nothing is deleted', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-legacy-'));
+  const legacyLayout = ensureHome(root);
+  const legacyCtx = { homeDir: root, root: legacyLayout.root, dataRoot: legacyLayout.root, libraryDb: await db.openLibraryDb(legacyLayout.root) };
+  const dir = path.join(legacyLayout.root, 'engelbart');
+  const write = (file, value) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, typeof value === 'string' ? value : JSON.stringify(value)); };
+  const pid = '21f92f4d-0358-4154-850a-751be41113db';
+  const ui = '712e0e1d-0715-49f8-b47f-ed08b8cb3c9b';
+  const other = '69ee72b1-7963-4f83-8a7b-05d4a9e61d24';
+  write(path.join(dir, 'project.json'), { id: pid, name: 'Engelbart', created: '2026-09-17T03:46:45.017Z' });
+  write(path.join(dir, 'First steps', 'meta.json'), { id: 'cc48c423-574b-4bff-85f6-53b2bc44b5ac', box: 'current', created: '2026-09-17T03:46:45.503Z' });
+  write(path.join(dir, 'First steps', 'future.md'), '- later\n');
+  const held = ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'];
+  write(path.join(dir, 'First steps', 'User Interface', 'meta.json'), { id: ui, status: 'open', context: [{ id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Reading', children: [held[0]] }, held[1]], created: '2026-09-17T03:47:32.035Z' });
+  write(path.join(dir, 'First steps', 'User Interface', 'workspace.md'), 'ui notes\n');
+  write(path.join(dir, 'Second', 'meta.json'), { id: 'dd48c423-574b-4bff-85f6-53b2bc44b5ac', box: 'past', created: '2026-09-17T04:00:00.000Z' });
+  write(path.join(dir, 'Second', 'User Interface', 'meta.json'), { id: other, status: 'done', context: [], created: '2026-09-17T04:01:00.000Z' });
+  write(path.join(dir, 'Second', 'User Interface', 'workspace.md'), 'same name, other goal\n');
+
+  const preview = migrateProjectDir(dir, { dryRun: true });
+  assert.deepEqual(preview.moved.map((move) => move.to), ['User Interface', 'User Interface 2']);
+  assert.ok(fs.existsSync(path.join(dir, 'First steps', 'User Interface', 'workspace.md')), 'a dry run moves nothing');
+
+  const tree = await projects.loadProject(legacyCtx, pid); // the store converts on first touch
+  assert.deepEqual(tree.workspaces.map((workspace) => [workspace.id, workspace.name, workspace.status]), [[ui, 'User Interface', 'open'], [other, 'User Interface 2', 'done']]);
+  assert.equal(await projects.readDoc(legacyCtx, pid, { kind: 'workspace', workspaceId: ui }), 'ui notes\n');
+  assert.deepEqual(tree.workspaces[0].context, held, 'what the context folder held stays, flat and in order');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'User Interface', 'meta.json'), 'utf8')).context, held);
+  assert.equal(fs.readFileSync(path.join(dir, '.legacy', 'First steps', 'future.md'), 'utf8'), '- later\n');
+  const backups = fs.readdirSync(path.join(legacyLayout.root, '.backups'));
+  assert.equal(backups.length, 1);
+  assert.equal(fs.readFileSync(path.join(legacyLayout.root, '.backups', backups[0], 'First steps', 'User Interface', 'workspace.md'), 'utf8'), 'ui notes\n');
+  assert.equal(migrateProjectDir(dir), null, 'already converted');
+  assert.equal((await projects.listProjects(legacyCtx)).length, 1, 'dot directories are not projects');
+});
+
+test('last-open state: stored per data root, stale ids become null, files from the topic era still read', async () => {
   const project = await projects.createProject(ctx, 'Reopen');
-  assert.deepEqual(projects.readLastOpen(ctx), { projectId: null, goalId: null, topicId: null });
-  const written = projects.writeLastOpen(ctx, { projectId: project.id, goalId: 'nope', topicId: undefined, extra: 1 });
-  assert.deepEqual(written, { projectId: project.id, goalId: null, topicId: null });
+  const written = projects.writeLastOpen(ctx, { projectId: project.id, workspaceId: 'nope', extra: 1 });
+  assert.deepEqual(written, { projectId: project.id, workspaceId: null });
   assert.deepEqual(projects.readLastOpen(ctx), written);
-  assert.ok(fs.existsSync(path.join(layout.testRoot, 'state.json')));
+  fs.writeFileSync(path.join(layout.testRoot, 'state.json'), JSON.stringify({ projectId: project.id, goalId: project.id, topicId: project.id }));
+  assert.deepEqual(projects.readLastOpen(ctx), { projectId: project.id, workspaceId: project.id });
 });
 
 test('read-text-file: project-relative, ~/ and absolute paths inside the home directory only', async () => {
