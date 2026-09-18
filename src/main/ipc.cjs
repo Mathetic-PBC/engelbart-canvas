@@ -11,6 +11,7 @@ const home = require('./store/home.cjs');
 const db = require('./store/db.cjs');
 const projects = require('./store/projects.cjs');
 const library = require('./store/library.cjs');
+const { readShellHistory } = require('./shell-history.cjs');
 
 const MAX_NAME = 512;
 
@@ -147,6 +148,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('read-annotations', withCtx((ctx, id) => library.readAnnotations(ctx, str(id, 'library id', 64))));
   handle('write-annotations', withCtx((ctx, id, value) => library.writeAnnotations(ctx, str(id, 'library id', 64), value)));
 
+  handle('shell-history', () => readShellHistory({ homeDir: require('node:os').homedir() }));
   handle('open-external', (url) => openExternal(url));
   handle('reveal', async (target) => {
     const value = path.resolve(str(target, 'path', 4096));

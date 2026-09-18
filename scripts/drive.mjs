@@ -8,7 +8,7 @@
 //   node scripts/drive.mjs clicksel "button[title='All projects']"
 //   node scripts/drive.mjs type "hello" -- key Enter
 //
-// Commands: shot <file> | eval <js> | click <x> <y> | clicksel <css> [nth] | drag <x1> <y1> <x2> <y2> | wheel <x> <y> <dx> <dy> [cmd|ctrl] | type <text> | key <Key> | wait <ms> | reload [ms] | errors | text
+// Commands: shot <file> | eval <js> | click <x> <y> | clicksel <css> [nth] | drag <x1> <y1> <x2> <y2> | wheel <x> <y> <dx> <dy> [cmd|ctrl] | type <text> | typeslow <text> | key <Key> | wait <ms> | reload [ms] | errors | text
 // Several commands run in sequence when separated by `--`.
 
 import { writeFileSync } from 'node:fs';
@@ -124,6 +124,10 @@ async function run(commands) {
         const modifiers = args[4] ? parseKey(`${args[4]}+x`).modifiers : 0;
         await cdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX: dx || 0, deltaY: dy || 0, modifiers });
         out.push(`wheel ${dx},${dy} at ${x},${y}`);
+      } else if (name === 'typeslow') {
+        // One character per input event with a pause, so the app re-renders between keystrokes as it does for a person.
+        for (const ch of args.join(' ')) { await cdp.send('Input.insertText', { text: ch }); await new Promise((resolve) => setTimeout(resolve, 45)); }
+        console.log(`typed ${args.join(' ').length} chars, one at a time`);
       } else if (name === 'type') {
         await cdp.send('Input.insertText', { text: args.join(' ') });
         out.push(`typed ${args.join(' ').length} chars`);

@@ -56,6 +56,7 @@ const engelbartAPI = Object.freeze({
   readLibraryFile: invoke('read-library-file'),
   readAnnotations: invoke('read-annotations'),
   writeAnnotations: invoke('write-annotations'),
+  shellHistory: invoke('shell-history'),
   openExternal: invoke('open-external'),
   reveal: invoke('reveal'),
 });

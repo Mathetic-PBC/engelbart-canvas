@@ -7,6 +7,7 @@ import CtxModal from '../workspace/CtxModal.jsx';
 import RightPane, { RIGHT_MODES } from '../workspace/RightPane.jsx';
 import InlineField from '../ui/InlineField.jsx';
 import { kindOf } from '../ui/Icons.jsx';
+import { isUntitled, nextUntitled } from '../model/names.js';
 
 // The workspace (design 2026-09-17): a header in three columns — Engelbart / box / goal over
 // the sidebar, the document tabs over the document, the Browser · Terminal · Paper · Dataset
@@ -137,6 +138,7 @@ export default function Workspace({ tree, library, goalId, initialTopicId, initi
   const [renamingGoal, setRenamingGoal] = React.useState(false);
   const [titleDraft, setTitleDraft] = React.useState('');
   const editorRef = React.useRef(null);
+  const wantTitleFocus = React.useRef(false); // a topic or note was just created: the caret belongs in its title
   const pending = React.useRef(new Map());
   const railBox = React.useRef(null);
   const splitBox = React.useRef(null);
@@ -297,8 +299,9 @@ export default function Workspace({ tree, library, goalId, initialTopicId, initi
 
   const addTopic = async () => {
     try {
-      const created = await api.createTopic(project.id, goalId, `Topic ${topics.length + 1}`);
+      const created = await api.createTopic(project.id, goalId, nextUntitled('Workspace', topics.map((candidate) => candidate.name)));
       await reload();
+      wantTitleFocus.current = true;
       selectTopic(created.id);
     } catch (error) {
       onError(error);
@@ -327,10 +330,11 @@ export default function Workspace({ tree, library, goalId, initialTopicId, initi
   const addNote = async () => {
     if (!topic) return;
     try {
-      const note = await api.createNote(project.id, { name: 'Untitled note', goalId, topicId: topic.id });
+      const note = await api.createNote(project.id, { name: nextUntitled('Note', (tree.notes || []).map((candidate) => candidate.name)), goalId, topicId: topic.id });
       await api.setTopicContext(project.id, goalId, topic.id, insertInto(topic.context, selFolder, note.id));
       await reload();
       setCtxModal(null);
+      wantTitleFocus.current = true;
       openTab(note.id, note.name);
     } catch (error) {
       onError(error);
@@ -378,12 +382,13 @@ export default function Workspace({ tree, library, goalId, initialTopicId, initi
 
   const currentTab = tabs.find((tab) => tab.id === activeTab);
   const docTitle = activeTab === 'ws' ? (topic ? topic.name : '') : (currentTab ? currentTab.title : '');
-  React.useEffect(() => { setTitleDraft(docTitle); }, [docTitle, docKey]);
+  const shownTitle = isUntitled(docTitle) ? '' : docTitle; // an untitled name is the field's hint, not its value
+  React.useEffect(() => { setTitleDraft(shownTitle); }, [shownTitle, docKey]);
 
   const commitTitle = async () => {
     const next = titleDraft.trim();
     if (!next || next === docTitle) {
-      setTitleDraft(docTitle);
+      setTitleDraft(shownTitle);
       return;
     }
     try {
@@ -445,10 +450,20 @@ export default function Workspace({ tree, library, goalId, initialTopicId, initi
 
   const header = (
     <input
+      ref={(element) => { if (element && wantTitleFocus.current) { wantTitleFocus.current = false; element.focus(); } }}
       value={titleDraft}
       onChange={(event) => setTitleDraft(event.target.value)}
       onBlur={commitTitle}
-      onKeyDown={(event) => { if (event.key === 'Enter' || event.key === 'Escape') event.target.blur(); }}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') { event.target.blur(); return; }
+        if (event.key !== 'Enter') return;
+        // Enter names the document and drops the caret into it.
+        event.preventDefault();
+        event.target.blur();
+        if (editorRef.current && editorRef.current.focusStart) editorRef.current.focusStart();
+      }}
+      placeholder={isUntitled(docTitle) ? docTitle : 'Untitled'}
+      data-doc-title="1"
       aria-label="Title"
       spellCheck={false}
       style={{ display: 'block', width: '100%', padding: 0, border: 0, background: 'transparent', font: '500 22px/1.35 var(--font-sans)', letterSpacing: '-0.3px', color: '#171717' }}

@@ -101,3 +101,24 @@ Driven on the scratch instance (port 9225) after the change. Unit tests: 62 pass
 | Type `echo hello from the box`, Enter | transcript lines: `echo hello from the box`, `hello from the box`; box cleared | DOM dump |
 | Dropdown | `✓ Terminal · Claude Code · Codex` | `47-terminal-menu.png` |
 | Not driven | the folder picker (native dialog), starting Claude Code / Codex from the dropdown (real agents), ^C into a running command | — |
+
+### Addendum — 2026-09-18 (Hudson's second list: headings, terminal keyboard, untitled names, sidebar spacing)
+
+Reproduced first: typing `# Header` **one character at a time** (new driver command `typeslow`; the bulk `type` used on 09-17 inserts the whole string in one event and hid this) stored `# ` and showed `Header`; Enter then lost the text. Cause: the hidden `#` was an empty span and the browser put the typed characters inside it. Unit tests: 65 passing (`test/shell-rc.test.cjs` now runs real `/bin/zsh` through the launcher four ways).
+
+| Step | Result | Evidence |
+|---|---|---|
+| `# Header` typed character by character | stored `# Header`; shown `# Header` at 26px/500 while the caret is on the line; Enter → line shows `Header`, `body text` lands on the next line; same for `### Small one` | stored/shown lines dumped |
+| Topic switcher → `+ New` | caret in the document title, field empty, hint `Untitled Workspace 1` (also grey in the sidebar); type `User Interface`, Enter → topic renamed, caret in the document, `typed without clicking` stored | `48-untitled-flow.png`, DOM dump |
+| `+ Context` → New note | same flow with `Untitled Note 1` → `Thoughts`; tab and sidebar follow | `48-untitled-flow.png` |
+| Terminal opens | transcript empty, box focused | DOM dump |
+| `echo hi`, `cd /tmp` from the box | output in the transcript; the `▭` chip follows to `/tmp` | DOM dump |
+| ↑ ↑ ↓ ↓ in the box | recalls `cd /tmp`, then `command -v claude`, then back to empty | DOM dump |
+| A key aimed at the transcript while idle | lands in the box (`x`), focus returns to the box | DOM dump |
+| `sleep 3` | after 200 ms: note `sleep has the keyboard · type in the window above`, focus in the transcript; when it ends the box and the focus return | DOM dump |
+| `claude` typed by hand (a shell function standing in for the real one) | chip and dropdown read `Claude Code`, box replaced by the note, keys go to the program; on exit the box returns | `49-terminal-agent-typed.png` |
+| Untouched terminal at `/usr`, dropdown → Claude Code | same tab (count stays 1), `claude` runs in `/usr`; on exit the box returns | `50-terminal-agent-inplace.png` |
+| Shell that follows a dropdown-launched agent | covered by a unit test: `launcher -ilc 'true; exec "$TERMINAL_USER_SHELL" -il'` emits the ready mark with an empty prompt | `test/shell-rc.test.cjs` |
+| Sidebar | 8px more air between the topic switcher and the first context row | `48-untitled-flow.png` |
+| Test-harness incident | one run picked Claude Code on a *used* terminal, which correctly opened a new tab — with the real Claude Code, in the scratch instance at `/usr`. No message was sent; it ended with the instance. It exposed that terminals inherited the outer Claude Code session's variables; those are now stripped (unit-tested). | — |
+| Not driven | the folder picker (native dialog); a real Claude Code / Codex session end to end | — |

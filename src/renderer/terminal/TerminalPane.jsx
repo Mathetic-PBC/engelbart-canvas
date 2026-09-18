@@ -1,10 +1,12 @@
-// The Terminal pane (design 2026-09-17, chat-style per Hudson): a tab strip with an agent
-// dropdown at its right, an empty light transcript (xterm), and a bottom bar with the agent and
-// working-directory chips and — for plain shells — a "Run commands" box you type into like a
-// chat. Claude Code and Codex draw their own input, so the box hides while they run. Every tab
-// is a real PTY session from the Experimental Terminal engine; the shell's prompt is emptied by
-// the ZDOTDIR wrapper in src/main/shell-rc.cjs so the transcript starts blank.
+// The Terminal pane (design 2026-09-17, chat-style per Hudson). One rule decides where typing
+// goes: while the shell is idle you type in the "Run commands" box at the bottom and the
+// transcript does not take keys; while a program runs — a quick command, an arrow-key menu,
+// Claude Code or Codex, however it was started — the keyboard belongs to the transcript, as in
+// any terminal, and the box steps aside until the program ends. The shell tells us which state
+// it is in through the marks emitted by the zsh wrappers (src/main/shell-rc.cjs); they also
+// keep the directory chip true. Every tab is a real PTY from the Experimental Terminal engine.
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { api } from '../api.js';
 import {
   bootstrap,
   closeSession,
@@ -17,8 +19,10 @@ import {
   mountView,
   pickDirectory,
   providerName,
+  selectionText,
   sendInput,
   sessionsFor,
+  setInputLock,
   subscribe,
   unmountView,
 } from './sessions.js';
@@ -28,11 +32,26 @@ const AGENTS = [
   { id: 'claude', label: 'Claude Code' },
   { id: 'codex', label: 'Codex' },
 ];
+const LABEL = Object.fromEntries(AGENTS.map((agent) => [agent.id, agent.label]));
 const MONO = 'var(--font-mono)';
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
+// Control characters by code, never as literals: editors and tools strip the raw bytes.
+const CTRL = { c: String.fromCharCode(3), d: String.fromCharCode(4), l: String.fromCharCode(12) };
+const TAKEOVER_DELAY = 200; // commands that finish faster never move the keyboard
+const AGENT_COMMAND = /^(?:\s*(?:command|exec|noglob|nocorrect|sudo)\s+|\s*[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*\s*(?:\S*\/)?(claude|codex)(?:\s|$)/;
 const basename = (value) => (String(value || '~').replace(/\/+$/, '').split('/').pop() || '/');
 const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const agentOfCommand = (command) => { const match = AGENT_COMMAND.exec(command || ''); return match ? match[1] : null; };
+
+/** What a tab is right now: a plain terminal, or an agent (by dropdown launch or by typing its name). */
+function describe(record) {
+  const shell = record.shell || {};
+  const integrated = !!shell.integrated;
+  const busy = integrated ? !!shell.busy : record.snapshot.provider !== 'shell';
+  const agent = integrated ? (busy ? agentOfCommand(shell.command) || 'shell' : 'shell') : record.snapshot.provider;
+  return { integrated, busy, agent, command: shell.command || '', cwd: (integrated && shell.cwd) || null };
+}
 
 let version = 0;
 const bump = () => { version += 1; };
@@ -60,19 +79,22 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
   const [draft, setDraft] = useState('');
   const [history, setHistory] = useState([]);
   const [histIdx, setHistIdx] = useState(null);
-  const [cwdOverride, setCwdOverride] = useState({}); // session id → directory chosen from the picker
+  const [cwdOverride, setCwdOverride] = useState({}); // session id → directory picked while no shell could cd
+  const [touched, setTouched] = useState({}); // session id → a command was sent from the box
+  const [takeover, setTakeover] = useState(false); // the running program has the keyboard
   const autoStarted = useRef(new Set());
 
   const sessions = sessionsFor(projectId);
   const active = sessions.find((record) => record.snapshot.id === activeId) || null;
   const current = active || sessions[0] || null;
   const currentId = current ? current.snapshot.id : null;
-  const provider = current ? current.snapshot.provider : 'shell';
-  const isAgent = provider !== 'shell';
   const running = !!current && current.snapshot.status === 'running';
-  const cwdOf = (record) => cwdOverride[record.snapshot.id] || record.snapshot.cwd;
+  const now = current ? describe(current) : { integrated: false, busy: false, agent: 'shell', command: '', cwd: null };
+  const cwdOf = (record) => describe(record).cwd || cwdOverride[record.snapshot.id] || record.snapshot.cwd;
   const currentCwd = current ? cwdOf(current) : cwd;
-  const agentLabel = (AGENTS.find((agent) => agent.id === provider) || AGENTS[0]).label;
+  const agentLabel = LABEL[now.agent] || LABEL.shell;
+  const boxIsInput = running && now.integrated && !takeover; // the box owns typing; the transcript is locked
+  const showBox = running && !takeover;
 
   // Bootstrap once; start one shell in the project directory when this project has none.
   useEffect(() => {
@@ -93,6 +115,13 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
     })();
     return () => { cancelled = true; };
   }, [projectId, cwd]);
+
+  // ↑ recalls real commands from the first keypress: seed the box from the shell's history file.
+  useEffect(() => {
+    let cancelled = false;
+    api.shellHistory().then((list) => { if (!cancelled && Array.isArray(list)) setHistory((mine) => [...list.filter((item) => !mine.includes(item)), ...mine].slice(-500)); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   // Adopt the current session's view into the stage; detach the others.
   useLayoutEffect(() => {
@@ -122,15 +151,36 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
 
   // Detach on unmount; the xterm instances and PTYs stay alive in the store.
   useEffect(() => () => {
-    for (const record of getState().sessions.values()) unmountView(record.snapshot.id);
+    for (const record of getState().sessions.values()) { unmountView(record.snapshot.id); setInputLock(record.snapshot.id, false); }
   }, []);
 
-  // Where typing goes: the box for shells, the transcript for agents that draw their own input.
+  // A running program takes the keyboard — after a beat, so `ls` does not make the focus jump.
+  useEffect(() => {
+    if (!now.busy) { setTakeover(false); return undefined; }
+    if (!now.integrated) { setTakeover(true); return undefined; }
+    const timer = setTimeout(() => setTakeover(true), TAKEOVER_DELAY);
+    return () => clearTimeout(timer);
+  }, [now.busy, now.integrated, currentId]);
+
+  // While the box is the input, keys that reach the transcript are handed to the box.
+  useEffect(() => {
+    if (!currentId) return undefined;
+    setInputLock(currentId, boxIsInput, (event) => {
+      event.preventDefault();
+      const input = inputRef.current;
+      if (!input) return;
+      input.focus();
+      if (event.key.length === 1 && !event.ctrlKey && !event.altKey) setDraft((text) => text + event.key);
+    });
+    return () => setInputLock(currentId, false);
+  }, [currentId, boxIsInput]);
+
+  // Where typing goes.
   useEffect(() => {
     if (!visible || !currentId) return;
-    if (isAgent) focusSession(currentId);
+    if (takeover) focusSession(currentId);
     else if (inputRef.current) inputRef.current.focus();
-  }, [visible, currentId, isAgent]);
+  }, [visible, currentId, takeover, showBox]);
 
   useEffect(() => {
     if (!menu) return undefined;
@@ -144,29 +194,36 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
     requestAnimationFrame(() => requestAnimationFrame(() => { fitSession(id); }));
   };
 
-  const launch = async (nextProvider, at) => {
-    const info = state.providers.get(nextProvider);
-    if (nextProvider !== 'shell' && info && !info.available) return null;
-    setLaunching({ provider: nextProvider });
+  const launch = async (provider, at) => {
+    const info = state.providers.get(provider);
+    if (provider !== 'shell' && info && !info.available) return null;
+    setLaunching({ provider });
     try {
       const dims = estimateDimensions(stageRef.current);
-      const record = await createSession({ provider: nextProvider, cwd: at || currentCwd || cwd, projectId, ...dims });
+      const record = await createSession({ provider, cwd: at || currentCwd || cwd, projectId, ...dims });
       activate(record.snapshot.id);
       setLaunching(null);
       return record;
     } catch (error) {
-      setLaunching({ error: `${providerName(nextProvider)} could not be started: ${errorText(error)}` });
+      setLaunching({ error: `${providerName(provider)} could not be started: ${errorText(error)}` });
       return null;
     }
   };
 
-  // The dropdown: Claude Code / Codex run in the current directory; Terminal is the plain shell.
-  const pickAgent = (nextProvider) => {
+  // The dropdown. An untouched idle terminal becomes the agent in place — that is how you choose
+  // its directory: pick the folder, then pick the agent. Otherwise the agent gets its own tab here.
+  const pickAgent = (agent) => {
     setMenu(null);
-    if (current && provider === nextProvider && running) { if (isAgent) focusSession(currentId); else if (inputRef.current) inputRef.current.focus(); return; }
-    const existing = [...sessions].reverse().find((record) => record.snapshot.provider === nextProvider && record.snapshot.status === 'running');
-    if (existing) { activate(existing.snapshot.id); return; }
-    void launch(nextProvider, currentCwd);
+    if (current && running && now.agent === agent) { if (takeover) focusSession(currentId); else if (inputRef.current) inputRef.current.focus(); return; }
+    const alive = (record) => record.snapshot.status === 'running' && record.snapshot.id !== currentId;
+    if (agent === 'shell') {
+      const idle = [...sessions].reverse().find((record) => alive(record) && describe(record).agent === 'shell');
+      if (idle) activate(idle.snapshot.id); else void launch('shell', currentCwd);
+      return;
+    }
+    if (current && running && now.integrated && !now.busy && !touched[currentId]) { sendInput(currentId, `${agent}\r`); return; }
+    const here = [...sessions].reverse().find((record) => alive(record) && describe(record).agent === agent && cwdOf(record) === currentCwd);
+    if (here) activate(here.snapshot.id); else void launch(agent, currentCwd);
   };
 
   const close = async (id) => {
@@ -181,15 +238,19 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
     }
   };
 
-  // The working-directory chip: pick a folder; a shell changes into it, an agent remembers it for the next launch.
+  // The directory chip: pick a folder. An idle shell changes into it (and reports it back through
+  // its marks); otherwise the choice is kept for the next thing started from this tab.
   const changeCwd = async () => {
     const chosen = await pickDirectory(currentCwd).catch(() => null);
     if (!chosen || !currentId) return;
-    setCwdOverride((map) => ({ ...map, [currentId]: chosen }));
-    if (!isAgent && running) sendInput(currentId, `cd -- ${shellQuote(chosen)}\r`);
+    if (running && now.integrated && !now.busy) sendInput(currentId, `cd -- ${shellQuote(chosen)}\r`);
+    else if (running && !now.integrated && now.agent === 'shell') { sendInput(currentId, `cd -- ${shellQuote(chosen)}\r`); setCwdOverride((map) => ({ ...map, [currentId]: chosen })); }
+    else setCwdOverride((map) => ({ ...map, [currentId]: chosen }));
+    if (inputRef.current) inputRef.current.focus();
   };
 
-  // The box: Enter sends the line, ↑/↓ walk what you typed here, ^C ^D ^L reach the shell.
+  // The box: Enter sends the line; ↑/↓ walk the shell's history and what you typed here;
+  // ^C ^D ^L reach the shell; ⌘C with nothing selected in the box copies the transcript selection.
   const onInputKey = (event) => {
     if (!currentId) return;
     const key = event.key;
@@ -197,7 +258,10 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
       event.preventDefault();
       const text = draft;
       if (running) sendInput(currentId, `${text}\r`);
-      if (text.trim()) setHistory((list) => [...list.filter((item) => item !== text), text].slice(-200));
+      if (text.trim()) {
+        setHistory((list) => [...list.filter((item) => item !== text), text].slice(-500));
+        setTouched((map) => (map[currentId] ? map : { ...map, [currentId]: true }));
+      }
       setHistIdx(null);
       setDraft('');
       return;
@@ -214,14 +278,28 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
       if (idx >= history.length) { setHistIdx(null); setDraft(''); } else { setHistIdx(idx); setDraft(history[idx]); }
       return;
     }
+    if (event.metaKey && key.toLowerCase() === 'c') {
+      const input = event.currentTarget;
+      const text = input.selectionStart === input.selectionEnd ? selectionText(currentId) : '';
+      if (text) { event.preventDefault(); navigator.clipboard.writeText(text).catch(() => {}); }
+      return;
+    }
     if (event.ctrlKey && !event.metaKey && !event.altKey) {
       const letter = key.toLowerCase();
-      if (letter === 'c') { event.preventDefault(); if (running) sendInput(currentId, ''); setDraft(''); return; }
-      if (letter === 'd' && !draft) { event.preventDefault(); if (running) sendInput(currentId, ''); return; }
-      if (letter === 'l') { event.preventDefault(); if (running) sendInput(currentId, ''); return; }
+      if (letter === 'c') { event.preventDefault(); if (running) sendInput(currentId, CTRL.c); setDraft(''); setHistIdx(null); return; }
+      if (letter === 'd' && !draft) { event.preventDefault(); if (running) sendInput(currentId, CTRL.d); return; }
+      if (letter === 'l') { event.preventDefault(); if (running) sendInput(currentId, CTRL.l); return; }
     }
     if (key === 'Tab') { event.preventDefault(); return; }
     if (key === 'Escape') { event.preventDefault(); event.currentTarget.blur(); }
+  };
+
+  // Clicking the transcript: a running program gets the keyboard; an idle shell sends you back to
+  // the box (unless you were selecting text to copy).
+  const onStageClick = () => {
+    if (!currentId) return;
+    if (!boxIsInput) { focusSession(currentId); return; }
+    if (!selectionText(currentId) && inputRef.current) inputRef.current.focus();
   };
 
   // ⌘T opens a new terminal while the pane is showing; ⌘1–9 switch tabs while focus is in the pane.
@@ -231,8 +309,8 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
       const mod = event.metaKey || event.ctrlKey;
       if (!mod) return;
       const inside = rootRef.current && event.target && rootRef.current.contains(event.target);
-      if (event.key.toLowerCase() === 't' && !event.shiftKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); void launch('shell', currentCwd); return; }
-      if (inside && /^[1-9]$/.test(event.key)) {
+      if (event.metaKey && event.key.toLowerCase() === 't' && !event.shiftKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); void launch('shell', currentCwd); return; }
+      if (inside && event.metaKey && /^[1-9]$/.test(event.key)) {
         const record = sessions[Number(event.key) - 1];
         if (record) { event.preventDefault(); event.stopPropagation(); activate(record.snapshot.id); }
       }
@@ -243,6 +321,7 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
 
   const stopKeys = (event) => { event.stopPropagation(); };
   const menuW = 200;
+  const runningWhat = now.agent !== 'shell' ? LABEL[now.agent] : (now.command.trim().split(/\s+/)[0] || 'the program');
 
   return (
     <div ref={rootRef} data-terminal="1" onKeyDown={stopKeys} onKeyUp={stopKeys} style={{ flex: 1, minHeight: 0, display: visible ? 'flex' : 'none', flexDirection: 'column', background: '#fff' }}>
@@ -253,7 +332,7 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
           const alive = record.snapshot.status === 'running';
           const title = `${basename(cwdOf(record))}${alive ? '' : ` · exited${Number.isInteger(record.snapshot.exitCode) ? ` ${record.snapshot.exitCode}` : ''}`}`;
           return (
-            <div key={id} className="hov-ink" onClick={() => activate(id)} title={`${providerName(record.snapshot.provider)} · ${cwdOf(record)}`} style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: '0 1 auto', maxWidth: 220, padding: '7px 10px 8px', border: `1px solid ${on ? '#eaeaea' : 'transparent'}`, borderBottomColor: on ? '#fff' : 'transparent', borderRadius: '8px 8px 0 0', marginBottom: -1, background: on ? '#fff' : 'transparent', cursor: 'pointer', font: `${on ? 500 : 400} 12.5px/1.3 var(--font-sans)`, color: on ? '#171717' : '#4d4d4d', whiteSpace: 'nowrap', transition: 'color 120ms' }}>
+            <div key={id} className="hov-ink" onClick={() => activate(id)} title={`${LABEL[describe(record).agent] || 'Terminal'} · ${cwdOf(record)}`} style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: '0 1 auto', maxWidth: 220, padding: '7px 10px 8px', border: `1px solid ${on ? '#eaeaea' : 'transparent'}`, borderBottomColor: on ? '#fff' : 'transparent', borderRadius: '8px 8px 0 0', marginBottom: -1, background: on ? '#fff' : 'transparent', cursor: 'pointer', font: `${on ? 500 : 400} 12.5px/1.3 var(--font-sans)`, color: on ? '#171717' : '#4d4d4d', whiteSpace: 'nowrap', transition: 'color 120ms' }}>
               <span style={{ flex: 'none', font: `11px/1 ${MONO}`, color: '#8f8f8f' }}>›_</span>
               <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</span>
               <button type="button" className="hov-del" onClick={(event) => { event.stopPropagation(); void close(id); }} aria-label="Close terminal" style={{ flex: 'none', padding: '0 2px', border: 0, background: 'transparent', cursor: 'pointer', font: '13px/1 var(--font-sans)', color: '#c9c9c9' }}>×</button>
@@ -262,7 +341,7 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
         })}
         <button type="button" className="hov-ink-wash" onClick={() => void launch('shell', currentCwd)} title="New terminal (⌘T)" style={{ flex: 'none', alignSelf: 'center', width: 26, height: 26, padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', font: '16px/1 var(--font-sans)', color: '#4d4d4d' }}>+</button>
         <div ref={menuRef} style={{ marginLeft: 'auto', alignSelf: 'center', flex: 'none', position: 'relative' }}>
-          <button type="button" className="hov-ink-wash" data-agent-menu="1" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setMenu(menu ? null : { x: r.right, y: r.bottom }); }} title="Terminal, Claude Code or Codex" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 8px', border: 0, borderRadius: 6, background: menu ? '#eaeaea' : 'transparent', cursor: 'pointer', font: '500 12.5px/1.3 var(--font-sans)', color: '#171717', whiteSpace: 'nowrap' }}>
+          <button type="button" className="hov-ink-wash" data-agent-menu="1" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setMenu(menu ? null : { x: r.right, y: r.bottom }); }} title="Terminal, Claude Code or Codex — started in this tab's directory" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 8px', border: 0, borderRadius: 6, background: menu ? '#eaeaea' : 'transparent', cursor: 'pointer', font: '500 12.5px/1.3 var(--font-sans)', color: '#171717', whiteSpace: 'nowrap' }}>
             <span>{agentLabel}</span>
             <span style={{ font: '10px/1 var(--font-sans)', color: '#8f8f8f' }}>⌄</span>
           </button>
@@ -271,7 +350,7 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
               {AGENTS.map((agent) => {
                 const info = state.providers.get(agent.id);
                 const available = agent.id === 'shell' || !info || info.available;
-                const on = provider === agent.id;
+                const on = now.agent === agent.id;
                 return (
                   <div key={agent.id} role="menuitem" className={available ? 'hov-wash' : ''} onClick={() => { if (available) pickAgent(agent.id); }} title={available ? `${agent.label} in ${currentCwd || 'home'}` : 'not found on PATH'} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px', borderRadius: 6, cursor: available ? 'pointer' : 'default', color: available ? '#171717' : '#c9c9c9' }}>
                     <span style={{ flex: 'none', width: 14, textAlign: 'center', font: '12px/1 var(--font-sans)' }}>{on ? '✓' : ''}</span>
@@ -285,7 +364,7 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
         </div>
       </div>
 
-      <div ref={stageRef} onClick={() => { if (currentId) focusSession(currentId); }} style={{ position: 'relative', flex: 1, minHeight: 0, padding: '10px 14px 0', background: '#fff', cursor: 'text', overflow: 'hidden' }}>
+      <div ref={stageRef} onClick={onStageClick} data-term-stage="1" style={{ position: 'relative', flex: 1, minHeight: 0, padding: '10px 14px 0', background: '#fff', cursor: boxIsInput ? 'default' : 'text', overflow: 'hidden' }}>
         {!currentId && (
           <div style={{ font: `12.5px/1.7 ${MONO}`, color: '#8f8f8f' }}>{!state.bootstrapComplete ? 'starting…' : (cwd ? 'no terminal yet — press + or ⌘T' : 'no project directory')}</div>
         )}
@@ -300,10 +379,10 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
 
       <div style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 10, padding: '10px 14px 12px', borderTop: '1px solid #eaeaea', background: '#fafafa' }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 6px' }}>
-          <span style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fff', font: `500 11.5px/1.4 ${MONO}`, color: '#171717', whiteSpace: 'nowrap' }}><span style={{ color: '#8f8f8f' }}>›_</span>{agentLabel}</span>
+          <span data-agent-chip="1" style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fff', font: `500 11.5px/1.4 ${MONO}`, color: '#171717', whiteSpace: 'nowrap' }}><span style={{ color: '#8f8f8f' }}>›_</span>{agentLabel}</span>
           <button type="button" className="hov-bd2" onClick={() => void changeCwd()} disabled={!currentId} title="Change working directory…" data-cwd-chip="1" style={{ flex: '0 1 auto', minWidth: 0, display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fff', font: `11.5px/1.4 ${MONO}`, color: '#4d4d4d', whiteSpace: 'nowrap', overflow: 'hidden', cursor: currentId ? 'pointer' : 'default', textAlign: 'left', transition: 'border-color 120ms' }}><span style={{ color: '#8f8f8f' }}>▭</span><span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentCwd || '~'}</span></button>
         </div>
-        {currentId && !isAgent && (
+        {currentId && (showBox ? (
           <input
             ref={inputRef}
             data-term-input="1"
@@ -313,11 +392,15 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
             spellCheck={false}
             autoComplete="off"
             aria-label="Terminal input"
-            placeholder={running ? 'Run commands' : 'this terminal has exited — press + for a new one'}
-            disabled={!running}
+            placeholder="Run commands"
             style={{ display: 'block', width: '100%', padding: '2px 0', border: 0, background: 'transparent', font: `12.5px/1.7 ${MONO}`, color: '#171717', caretColor: '#0070f3' }}
           />
-        )}
+        ) : (
+          // Same height as the box, so the transcript (and the program drawing in it) is not resized.
+          <div data-term-hint="1" style={{ padding: '2px 0', font: `12.5px/1.7 ${MONO}`, color: '#8f8f8f', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {running ? `${runningWhat} has the keyboard · type in the window above` : 'this terminal has exited — press + for a new one'}
+          </div>
+        ))}
       </div>
     </div>
   );

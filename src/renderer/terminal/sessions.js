@@ -167,15 +167,41 @@ function makeTerminalRecord(snapshot, projectId) {
     lastDimensions: { cols: snapshot.cols, rows: snapshot.rows },
     disposables: [],
     projectId: projectId || state.projectOf.get(snapshot.id) || null,
+    shell: { integrated: false, busy: snapshot.provider !== 'shell', command: '', cwd: snapshot.cwd },
+    inputLocked: false,
+    onLockedKey: null,
   };
 
+  // Shell-integration marks from the zsh wrappers (src/main/shell-rc.cjs): A = ready for a command,
+  // C = a command started, E;<line> = its command line, P;Cwd=<dir> = where the shell is.
+  record.disposables.push(terminal.parser.registerOscHandler(633, (data) => { applyShellMark(record, data); return true; }));
   record.disposables.push(terminal.onData((data) => inputFor(record, data)));
   record.disposables.push(terminal.onTitleChange((title) => {
     record.displayTitle = truncateTitle(title, record.snapshot.title || providerName(record.snapshot.provider));
     notify();
   }));
-  terminal.attachCustomKeyEventHandler((event) => handleTerminalKeyEvent(event, (data) => inputFor(record, data)));
+  terminal.attachCustomKeyEventHandler((event) => {
+    // While the pane's own box is the input (shell idle), the transcript does not take typing.
+    if (record.inputLocked && !event.metaKey) {
+      if (event.type === 'keydown' && record.onLockedKey) record.onLockedKey(event);
+      return false;
+    }
+    return handleTerminalKeyEvent(event, (data) => inputFor(record, data));
+  });
   return record;
+}
+
+function applyShellMark(record, data) {
+  const text = String(data || '');
+  const kind = text[0];
+  const rest = text.length > 2 ? text.slice(2) : '';
+  const shell = record.shell;
+  if (kind === 'A') record.shell = { ...shell, integrated: true, busy: false, command: '' };
+  else if (kind === 'C') record.shell = { ...shell, integrated: true, busy: true };
+  else if (kind === 'E') record.shell = { ...shell, command: rest };
+  else if (kind === 'P' && rest.startsWith('Cwd=')) record.shell = { ...shell, cwd: rest.slice(4) || shell.cwd };
+  else return;
+  notify();
 }
 
 function queueOutput(record, entry) {
@@ -390,4 +416,18 @@ export function sendInput(id, data) {
 /** The native folder picker (main process); resolves to a path or null. */
 export function pickDirectory(current) {
   return api().pickDirectory(current);
+}
+
+/** While locked, keys pressed in the transcript go to `onKey` (the pane's box) instead of the PTY. */
+export function setInputLock(id, locked, onKey = null) {
+  const record = state.sessions.get(id);
+  if (!record) return;
+  record.inputLocked = !!locked;
+  record.onLockedKey = locked ? onKey : null;
+}
+
+/** The text selected in a session's transcript ('' when none). */
+export function selectionText(id) {
+  const record = state.sessions.get(id);
+  return record && record.opened ? record.terminal.getSelection() : '';
 }

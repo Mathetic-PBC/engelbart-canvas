@@ -1,5 +1,6 @@
 import React from 'react';
 import { KIND, kindOf } from '../ui/Icons.jsx';
+import { isUntitled } from '../model/names.js';
 
 // The sidebar, from the updated Goal Canvas.dc.html (2026-09-17): the current topic as a
 // header (status mark, editable name, "n / m") whose hover reveals the sibling topics and
@@ -33,20 +34,21 @@ function blurOnEnter(event) {
 
 function TopicHeader({ topics, topic, onSelectTopic, onCycleTopic, onRenameTopic, onAddTopic }) {
   const [hover, setHover] = React.useState(false);
-  const [draft, setDraft] = React.useState(topic ? topic.name : '');
+  const shown = (value) => (value && !isUntitled(value) ? value : '');
+  const [draft, setDraft] = React.useState(topic ? shown(topic.name) : '');
   const timer = React.useRef(null);
-  React.useEffect(() => { setDraft(topic ? topic.name : ''); }, [topic && topic.id, topic && topic.name]);
+  React.useEffect(() => { setDraft(topic ? shown(topic.name) : ''); }, [topic && topic.id, topic && topic.name]);
   const index = topic ? topics.findIndex((candidate) => candidate.id === topic.id) : -1;
   const open = () => { clearTimeout(timer.current); setHover(true); };
   const close = () => { clearTimeout(timer.current); timer.current = setTimeout(() => setHover(false), 120); };
   const commit = () => {
     const next = draft.trim();
     if (!topic) return;
-    if (!next || next === topic.name) { setDraft(topic.name); return; }
+    if (!next || next === topic.name) { setDraft(shown(topic.name)); return; }
     onRenameTopic(next);
   };
   return (
-    <div onMouseEnter={open} onMouseLeave={close} style={{ position: 'relative', padding: '0 0 10px' }}>
+    <div onMouseEnter={open} onMouseLeave={close} style={{ position: 'relative', padding: '0 0 10px', marginBottom: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 12px' }}>
         {topic
           ? <button type="button" onClick={() => onCycleTopic(topic)} title={statusTitle(topic.status)} aria-label={statusTitle(topic.status)} style={markStyle(topic.status)}>{topic.status === 'done' ? '✓' : ''}</button>
@@ -56,7 +58,7 @@ function TopicHeader({ topics, topic, onSelectTopic, onCycleTopic, onRenameTopic
           onChange={(event) => setDraft(event.target.value)}
           onBlur={commit}
           onKeyDown={blurOnEnter}
-          placeholder={topic ? '' : 'no topic yet…'}
+          placeholder={topic ? (isUntitled(topic.name) ? topic.name : '') : 'no topic yet…'}
           disabled={!topic}
           aria-label="Name"
           spellCheck={false}
@@ -71,7 +73,7 @@ function TopicHeader({ topics, topic, onSelectTopic, onCycleTopic, onRenameTopic
             return (
               <div key={candidate.id} className="hov-wash" onClick={() => { setHover(false); onSelectTopic(candidate.id); }} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 6, cursor: 'pointer', background: on ? '#fafafa' : 'transparent', transition: 'background 120ms' }}>
                 <span style={markStyle(candidate.status, false)}>{candidate.status === 'done' ? '✓' : ''}</span>
-                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: `${on ? 600 : 400} 13.5px/1.5 var(--font-sans)`, color: '#171717' }}>{candidate.name}</span>
+                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: `${on ? 600 : 400} 13.5px/1.5 var(--font-sans)`, color: isUntitled(candidate.name) ? '#8f8f8f' : '#171717' }}>{candidate.name}</span>
               </div>
             );
           })}
@@ -123,7 +125,7 @@ function TreeRow({ row, onClick, onRenameStart, onRename, onRenameEnd }) {
             style={{ flex: 1, minWidth: 0, padding: 0, border: 0, background: 'transparent', font: `${row.on ? 600 : 400} 14px/1.5 var(--font-sans)`, color: '#171717' }}
           />
         )
-        : <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: `${row.on ? 600 : 400} 14px/1.5 var(--font-sans)`, color: '#171717' }}>{row.name}</span>}
+        : <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: `${row.on ? 600 : 400} 14px/1.5 var(--font-sans)`, color: isUntitled(row.name) ? '#8f8f8f' : '#171717' }}>{row.name}</span>}
       {row.type === 'folder' && <span style={{ flex: 'none', font: '12px/1 var(--font-sans)', color: '#8f8f8f' }}>{row.open ? '⌃' : '›'}</span>}
     </div>
   );

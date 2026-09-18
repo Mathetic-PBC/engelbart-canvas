@@ -28,7 +28,7 @@ Unsigned and not notarised: first launch needs right-click → Open. The first l
 
 ## Terminal pane
 
-Each tab is a real PTY (the Experimental Terminal engine). You type into the **Run commands** box at the bottom, like a chat; the transcript above starts empty because sessions run zsh with `ZDOTDIR` pointing at wrappers in the app's user-data folder that load your own rc files and then blank the prompt (bash and fish are unchanged). Click the transcript to type straight into an interactive program. The dropdown at the right of the tab strip starts Claude Code or Codex in the current directory (the box hides while they run, they have their own), and the `▭` chip picks a working directory.
+Each tab is a real PTY (the Experimental Terminal engine). While the shell is idle you type into the **Run commands** box at the bottom, like a chat: Enter sends, ↑/↓ recall your shell history, and the transcript above starts empty and does not take keys. While a program runs — an arrow-key menu, a REPL, Claude Code or Codex, started from the dropdown or by typing its name — the keyboard belongs to the transcript, as in any terminal, and the box comes back when the program ends. The dropdown at the right of the tab strip turns an untouched terminal into the agent in place, so to choose an agent's directory: click the `▭` chip, pick the folder, pick the agent. The mechanism (a launcher plus zsh wrapper startup files that blank the prompt and emit shell-integration marks, then hand your configuration back) is described in `src/main/shell-rc.cjs`; bash and fish are left alone.
 
 ## Restarting after a code change
 

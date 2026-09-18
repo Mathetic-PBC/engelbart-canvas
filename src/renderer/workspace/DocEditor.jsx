@@ -134,12 +134,13 @@ export default class DocEditor extends React.Component {
 
   /* ---------------------------------------------------------------- rendering (HTML strings, as the design) */
   revealRange() { const c = this.caret; if (c) return c.sel ? c.sel : [c.offset, c.offset]; const s = this.selRaw; return s ? [s.a, s.b] : [-1, -1]; }
-  // Which tokens show their source on the active line: inline markers the caret touches. A heading's `# ` never shows (2026-09-17).
-  openIdx(tokens, a, b, prefixCount = 0) { const out = []; let acc = 0; tokens.forEach((tok, k) => { const end = acc + tok.length; if (k >= prefixCount) { const pre = tokShown(tok).pre; if (pre && a <= end && b >= acc) out.push(k); } acc = end; }); return out; }
-  activeHtml(tokens, prefixCount = 0) {
-    const [a, b] = this.revealRange(), open = this.openIdx(tokens, a, b, prefixCount); this.openKey = open.join(',');
+  // Which tokens show their source on the active line: inline markers the caret touches. A heading's `# ` is plain text there, so it
+  // shows (in the heading's font) for as long as the caret is on the line and goes away when the caret leaves (2026-09-18: hiding it
+  // left an empty span the browser typed into, and those characters were lost).
+  openIdx(tokens, a, b) { const out = []; let acc = 0; tokens.forEach((tok, k) => { const end = acc + tok.length, pre = tokShown(tok).pre; if (pre && a <= end && b >= acc) out.push(k); acc = end; }); return out; }
+  activeHtml(tokens) {
+    const [a, b] = this.revealRange(), open = this.openIdx(tokens, a, b); this.openKey = open.join(',');
     return tokens.map((tok, k) => {
-      if (k < prefixCount) { const isOpen = open.includes(k); return `<span data-src="${esc(tok)}" data-open="${isOpen ? 1 : 0}" data-prefix="1">${isOpen ? esc(tok) : ''}</span>`; }
       const isOpen = !tokShown(tok).pre || open.includes(k);
       return `<span data-src="${esc(tok)}" data-open="${isOpen ? 1 : 0}">${isOpen && tok !== '@chat' ? esc(tok) : inlineHtml(tok)}</span>`;
     }).join('');
@@ -149,14 +150,13 @@ export default class DocEditor extends React.Component {
       const el = n.nodeType === 1 && n.dataset && n.dataset.src != null ? n : null;
       const txt = n.textContent.replace(/\u200b/g, '');
       const open = !el || el.dataset.open === '1';
-      const prefix = !!(el && el.dataset.prefix);
-      return { dl: txt.length, src: open ? txt : el.dataset.src, open, rl: open ? txt.length : el.dataset.src.length, prefix };
+      return { dl: txt.length, src: open ? txt : el.dataset.src, open, rl: open ? txt.length : el.dataset.src.length };
     });
   }
   displayToRaw(t, disp) {
     const segs = this.segs(t); if (!segs.length) return null; let accD = 0, accR = 0;
     for (const s of segs) {
-      if (disp <= accD + s.dl) { const d = disp - accD; if (s.open) return accR + d; if (s.prefix) return accR + s.rl; const { pre } = tokShown(s.src); return accR + (d === 0 ? 0 : Math.min(s.rl, pre + d)); }
+      if (disp <= accD + s.dl) { const d = disp - accD; if (s.open) return accR + d; const { pre } = tokShown(s.src); return accR + (d === 0 ? 0 : Math.min(s.rl, pre + d)); }
       accD += s.dl; accR += s.rl;
     }
     return accR;
@@ -164,7 +164,7 @@ export default class DocEditor extends React.Component {
   rawToDisplay(t, raw) {
     const segs = this.segs(t); let accD = 0, accR = 0;
     for (const s of segs) {
-      if (raw <= accR + s.rl) { const d = raw - accR; if (s.open) return accD + d; if (s.prefix) return accD; const { pre } = tokShown(s.src); return accD + Math.max(0, Math.min(s.dl, d - pre)); }
+      if (raw <= accR + s.rl) { const d = raw - accR; if (s.open) return accD + d; const { pre } = tokShown(s.src); return accD + Math.max(0, Math.min(s.dl, d - pre)); }
       accD += s.dl; accR += s.rl;
     }
     return accD;
@@ -185,7 +185,7 @@ export default class DocEditor extends React.Component {
         + '</div>';
     }
     if (p.type === 'h') {
-      const size = [26, 22, 18][p.level - 1]; const content = active ? this.activeHtml(tokensOf(p, line), 1) : inlineHtml(p.text);
+      const size = [26, 22, 18][p.level - 1]; const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(p.text);
       return `<div ${raw} style="padding:4px 0;min-height:35px;font:500 ${size}px/1.6 var(--font-sans);letter-spacing:-0.3px"><span class="t">${content || '<br>'}</span></div>`;
     }
     if (p.type === 'chat') {
@@ -298,7 +298,7 @@ export default class DocEditor extends React.Component {
       this.setState({ activeLine: c.anchor.line, mention: null }); return;
     }
     this.selRaw = { line: c.anchor.line, a, b };
-    const line = ls[c.anchor.line] ?? '', p = parseLine(line), key = p.type === 'img' ? '' : this.openIdx(tokensOf(p, line), a, b, p.type === 'h' ? 1 : 0).join(',');
+    const line = ls[c.anchor.line] ?? '', p = parseLine(line), key = p.type === 'img' ? '' : this.openIdx(tokensOf(p, line), a, b).join(',');
     if (key !== this.openKey) { this.caret = { line: c.anchor.line, sel: [a, b] }; this.forceUpdate(); }
   }
   editorInput = () => {
@@ -377,7 +377,6 @@ export default class DocEditor extends React.Component {
       this.setLines((x) => { const out = [...x]; out[i] = l1; out.splice(i + 1, 0, l2); return out; }, { line: i + 1, offset: 0 });
       this.shiftStatuses(i + 1, 1); this.setState({ activeLine: i + 1, mention: null }); return;
     }
-    if (e.key === 'Backspace' && collapsed && p.type === 'h' && a <= p.level + 1) { e.preventDefault(); this.setLines((x) => x.map((l, j) => (j === i ? p.text : l)), { line: i, offset: 0 }); return; }
     if (e.key === 'Backspace' && collapsed && a === 0) {
       if (p.type === 'todo') {
         e.preventDefault();
