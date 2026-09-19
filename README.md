@@ -26,6 +26,22 @@ open "release/Engelbart-darwin-arm64/Engelbart.app"
 
 Unsigned and not notarised: first launch needs right-click → Open. The first launch creates `~/.engelbart/`.
 
+## Catalog and summaries
+
+While the app is open it sweeps the library once a minute (and at launch, and when the computer wakes). A note longer than 1,000 characters that has been left alone for 30 minutes gets a summary of under 1,000 characters saying why it matters and what is in it; after an edit it is rewritten, with a closing "Changed:" sentence. A PDF that prints an Abstract uses that abstract instead and never calls a model. Each project's `.context/catalog.json` lists its workspaces and items with those summaries.
+
+The model is chosen in `~/.engelbart/config.json`, which is read again for every summary:
+
+```json
+"summarizer": {
+  "provider": "openai",
+  "openai":    { "model": "gpt-5.6-luna",  "effort": "high" },
+  "anthropic": { "model": "claude-opus-5", "effort": "high" }
+}
+```
+
+`provider` is `openai` (Codex CLI) or `anthropic` (Claude Code CLI); effort is `low`, `medium`, `high`, `xhigh` or `max`. Both run as hidden processes on your subscription sign-in, never an API key, and isolated from your own Codex and Claude Code configuration. `ENGELBART_SUMMARIES=off` turns the sweep off.
+
 ## Terminal pane
 
 Each tab is a real PTY (the Experimental Terminal engine). While the shell is idle you type into the **Run commands** box at the bottom, like a chat: Enter sends, ↑/↓ recall your shell history, and the transcript above starts empty and does not take keys. While a program runs — an arrow-key menu, a REPL, Claude Code or Codex, started from the dropdown or by typing its name — the keyboard belongs to the transcript, as in any terminal, and the box comes back when the program ends. The dropdown at the right of the tab strip turns an untouched terminal into the agent in place, so to choose an agent's directory: click the `▭` chip, pick the folder, pick the agent. The mechanism (a launcher plus zsh wrapper startup files that blank the prompt and emit shell-integration marks, then hand your configuration back) is described in `src/main/shell-rc.cjs`; bash and fish are left alone.
@@ -53,7 +69,9 @@ The pill top-right exists on every screen. **Test · on** roots the app at `~/.e
 ```
 ~/.engelbart/                         (test mode: ~/.engelbart/test/, same shape, plus seed/)
   config.json  state.json             test toggle; { projectId, workspaceId } to reopen
-  library.pglite/                     table `library`: every note, paper, repo, dataset, website, image
+  library.pglite/                     table `library`: every note, paper, repo, dataset, website, image (+ summary, summary_edited, char_count)
+  .context/status.json                the last summary sweep that did something
+  .context/summary-system-prompt.md   optional: replaces the built-in summary prompt
   annotations/<library id>.json       PDF highlights and margin notes
   .backups/<project>-<time>/          copies taken before a layout conversion
   <project>/
@@ -61,6 +79,7 @@ The pill top-right exists on every screen. **Test · on** roots the app at `~/.e
     notes.pglite/                     table `notes` (topic_id holds the workspace id)
     <Note>.md                         notes, flat
     assets/<id>.png                   pasted images (library rows of type `image`)
+    .context/catalog.json             what the project holds, with summaries, for agents that read files
     <Workspace>/workspace.md          a workspace's document
     <Workspace>/meta.json             { id, status, context: [library ids], created }
     <Workspace>/<Child>/…             workspaces nest to any depth
@@ -109,7 +128,7 @@ ENGELBART_HOME_DIR=/tmp/eb-home electron . --user-data-dir=/tmp/eb-userdata --re
 ENGELBART_DEBUG_PORT=9223 node scripts/drive.mjs text
 ```
 
-`ENGELBART_CONFIRM_ALL=1` makes the native confirmation dialogs (reset) answer yes, for scripted runs only.
+`ENGELBART_CONFIRM_ALL=1` makes the native confirmation dialogs (reset) answer yes, for scripted runs only. So are `ENGELBART_SUMMARY_FAKE=1` (no model, a recognisable blurb), `ENGELBART_SUMMARY_QUIET_MS` and `ENGELBART_SUMMARY_INTERVAL_MS` (shorten the 30-minute and one-minute clocks).
 
 ## Known kinks (deliberately open)
 

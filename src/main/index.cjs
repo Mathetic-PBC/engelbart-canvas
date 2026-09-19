@@ -8,12 +8,15 @@ const {
   dialog,
   ipcMain,
   Menu,
+  powerMonitor,
   protocol,
   session: electronSession,
   shell: electronShell,
 } = require('electron');
 const { SessionManager } = require('./terminal/session-manager.cjs');
 const { environmentForSessions } = require('./shell-rc.cjs');
+const { createSweeper } = require('./context/sweeper.cjs');
+const { createCliSummarizer, createFakeSummarizer } = require('./context/summarizer.cjs');
 const { resolveShell } = require('./terminal/launch.cjs');
 const { discoverProviders } = require('./terminal/provider-discovery.cjs');
 const { SettingsStore } = require('./terminal/settings.cjs');
@@ -45,6 +48,7 @@ let manager = null;
 let rendererLifecycle = null;
 let settings = null;
 let store = null;
+let sweeper = null;
 let quitPending = false;
 let quitReady = false;
 
@@ -137,6 +141,7 @@ async function requestQuit() {
     }
   }
   try {
+    if (sweeper) await sweeper.stop();
     if (manager) await manager.shutdown();
     if (store) await store.close();
   } catch (error) {
@@ -324,6 +329,22 @@ if (!hasSingleInstanceLock) {
     rendererLifecycle.detach();
     settings = new SettingsStore(app.getPath('userData'), app.getPath('home'));
     store = createStore({ homeDir: process.env.ENGELBART_HOME_DIR || app.getPath('home'), fixturesDir: FIXTURES });
+    // Catalog summaries (src/main/context): swept once a minute while the app is open, at launch,
+    // and when the computer wakes. ENGELBART_SUMMARIES=off disables it; the _FAKE / _QUIET_MS /
+    // _INTERVAL_MS variables exist for scripted runs only.
+    const millis = (name) => { const value = Number(process.env[name]); return Number.isFinite(value) && value > 0 ? value : undefined; };
+    sweeper = createSweeper({
+      getContext: () => store.context(),
+      summarize: process.env.ENGELBART_SUMMARY_FAKE === '1'
+        ? createFakeSummarizer()
+        : createCliSummarizer({ readSettings: () => store.config().summarizer, runDirectory: path.join(app.getPath('userData'), 'context-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home') }),
+      quietMs: millis('ENGELBART_SUMMARY_QUIET_MS'),
+      intervalMs: millis('ENGELBART_SUMMARY_INTERVAL_MS'),
+    });
+    if (process.env.ENGELBART_SUMMARIES !== 'off') {
+      sweeper.start();
+      powerMonitor.on('resume', () => sweeper.sweepSoon());
+    }
     manager.on('data', (payload) => sendToRenderer('terminal:data', payload));
     manager.on('exit', (payload) => sendToRenderer('terminal:exit', payload));
     registerTerminalIpc();

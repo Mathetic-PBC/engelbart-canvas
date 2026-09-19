@@ -294,6 +294,17 @@ function publicWorkspace(workspace) {
   return { id: workspace.id, name: workspace.name, status: workspace.status, context: workspace.context, created: workspace.created };
 }
 
+/** Every workspace of a project, flat, with its path from the project directory ("Agents/Inline chat agent"). */
+function flattenWorkspaces(projectDir, prefix = '', depth = 0, out = []) {
+  if (depth > 32) return out;
+  for (const workspace of workspaceRecords(depth === 0 ? projectDir : path.join(projectDir, prefix))) {
+    const at = prefix ? `${prefix}/${workspace.name}` : workspace.name;
+    out.push({ id: workspace.id, name: workspace.name, path: at, context: workspace.context });
+    flattenWorkspaces(projectDir, at, depth + 1, out);
+  }
+  return out;
+}
+
 function workspaceTree(parentDir, depth = 0) {
   if (depth > 32) return [];
   return workspaceRecords(parentDir).map((workspace) => ({ ...publicWorkspace(workspace), children: workspaceTree(workspace.dir, depth + 1) }));
@@ -358,6 +369,7 @@ async function createNote(ctx, projectId, { name, workspaceId, text } = {}) {
   const notesDb = await db.openNotesDb(project.dir);
   const row = await notesDb.insert({ id, name: stem, path: `${stem}.md`, goal_id: null, topic_id: workspaceId || null });
   await ctx.libraryDb.insert({ id, name: stem, type: 'note', path: file, project_id: projectId });
+  await ctx.libraryDb.setCharCount(id, typeof text === 'string' ? text.length : 0);
   return publicNote(row);
 }
 
@@ -436,10 +448,14 @@ async function readDoc(ctx, projectId, ref) {
 async function writeDoc(ctx, projectId, ref, text) {
   if (typeof text !== 'string' || text.length > 5 * 1024 * 1024) throw new TypeError('doc text must be a string under 5 MB');
   const resolved = await resolveDoc(ctx, projectId, ref);
+  let previous = null;
+  try { previous = fs.readFileSync(resolved.file, 'utf8'); } catch { previous = null; }
+  // A save that changes nothing is not an edit: last_edited decides when a summary is stale.
+  if (previous === text) return { lastEdited: null };
   writeTextAtomic(resolved.file, text);
   if (resolved.note) {
     await resolved.notesDb.touch(resolved.note.id);
-    await ctx.libraryDb.touch(resolved.note.id);
+    await ctx.libraryDb.recordEdit(resolved.note.id, text.length); // the note's character count, current with every save
   }
   return { lastEdited: nowIso() };
 }
@@ -522,4 +538,6 @@ module.exports = {
   readProjectTextFile,
   readLastOpen,
   writeLastOpen,
+  projectRecords,
+  flattenWorkspaces,
 };

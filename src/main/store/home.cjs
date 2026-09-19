@@ -20,13 +20,47 @@ function ensureHome(homeDir) {
   fs.mkdirSync(path.join(testRoot, 'annotations'), { recursive: true, mode: DIR_MODE });
   const configFile = path.join(root, 'config.json');
   if (!fs.existsSync(configFile)) writeConfig(root, {});
+  else {
+    // A config written before a setting existed gains it, so every switch is there to be edited.
+    let onDisk = null;
+    try { onDisk = JSON.parse(fs.readFileSync(configFile, 'utf8')); } catch { onDisk = null; }
+    if (!onDisk || typeof onDisk !== 'object' || !onDisk.summarizer) writeConfig(root, {});
+  }
   return { root, testRoot, configFile };
+}
+
+// Which model writes the catalog summaries (src/main/context). Both providers are the CLIs the
+// terminal already offers, run hidden and signed in with your subscription, never an API key:
+//   "openai"    → Codex CLI        "anthropic" → Claude Code CLI
+// Change `provider` to switch; each provider keeps its own model and effort. The file is read
+// again for every summary, so an edit takes effect without a restart.
+const SUMMARIZER_DEFAULTS = Object.freeze({
+  provider: 'openai',
+  openai: Object.freeze({ model: 'gpt-5.6-luna', effort: 'high' }),
+  anthropic: Object.freeze({ model: 'claude-opus-5', effort: 'high' }),
+});
+const PROVIDER_ALIASES = { openai: 'openai', codex: 'openai', anthropic: 'anthropic', claude: 'anthropic' };
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
+
+function normalizeSummarizer(value) {
+  const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const out = { provider: PROVIDER_ALIASES[String(input.provider || '').toLowerCase()] || SUMMARIZER_DEFAULTS.provider };
+  for (const name of ['openai', 'anthropic']) {
+    const given = input[name] && typeof input[name] === 'object' ? input[name] : {};
+    out[name] = {
+      model: typeof given.model === 'string' && MODEL_RE.test(given.model) ? given.model : SUMMARIZER_DEFAULTS[name].model,
+      effort: EFFORTS.includes(given.effort) ? given.effort : SUMMARIZER_DEFAULTS[name].effort,
+    };
+  }
+  return out;
 }
 
 function normalizeConfig(value) {
   const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   return {
     testMode: typeof input.testMode === 'boolean' ? input.testMode : true,
+    summarizer: normalizeSummarizer(input.summarizer),
   };
 }
 
@@ -43,7 +77,7 @@ function writeConfig(root, patch) {
     throw new TypeError('Config update must be an object');
   }
   for (const key of Object.keys(patch)) {
-    if (key !== 'testMode') throw new TypeError(`Unsupported config key: ${key}`);
+    if (key !== 'testMode' && key !== 'summarizer') throw new TypeError(`Unsupported config key: ${key}`);
   }
   if (Object.hasOwn(patch, 'testMode') && typeof patch.testMode !== 'boolean') {
     throw new TypeError('testMode must be a boolean');
@@ -101,4 +135,4 @@ function writeJson(file, value) {
   fs.renameSync(temporary, file);
 }
 
-module.exports = { ensureHome, normalizeConfig, readConfig, writeConfig, sanitizeName, slugify, uniqueName, readJson, writeJson, DIR_MODE };
+module.exports = { SUMMARIZER_DEFAULTS, normalizeSummarizer, ensureHome, normalizeConfig, readConfig, writeConfig, sanitizeName, slugify, uniqueName, readJson, writeJson, DIR_MODE };

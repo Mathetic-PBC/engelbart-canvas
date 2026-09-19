@@ -25,6 +25,11 @@ create table if not exists library (
   last_edited timestamptz not null default now()
 );
 create index if not exists library_project on library (project_id);
+-- the catalog blurb (src/main/context): written by the summary sweep, null for images and for notes that are short or not yet settled
+alter table library add column if not exists summary text;
+alter table library add column if not exists summary_edited timestamptz;
+-- characters in a note's file, kept current on every save; null for every other type
+alter table library add column if not exists char_count integer;
 -- databases created before pasted images existed: widen the type check
 alter table library drop constraint if exists library_type_check;
 alter table library add constraint library_type_check check (type in ('note','paper','git_repo','dataset','website','image'));
@@ -51,6 +56,11 @@ function plain(row) {
     out[key] = value instanceof Date ? value.toISOString() : value;
   }
   return out;
+}
+
+function requireCount(value) {
+  if (!Number.isInteger(value) || value < 0 || value > 2_000_000_000) throw new TypeError('count must be a non-negative integer');
+  return value;
 }
 
 async function openRaw(dir, schema) {
@@ -142,6 +152,54 @@ async function openLibraryDb(testRoot) {
     async touch(id) {
       await db.query('update library set last_edited = now() where id = $1', [requireText(id, 'id', { max: 64 })]);
       return true;
+    },
+    // A note was saved with different text: it counts as edited now, and its length is recorded with it.
+    async recordEdit(id, charCount) {
+      await db.query('update library set last_edited = now(), char_count = $2 where id = $1', [requireText(id, 'id', { max: 64 }), requireCount(charCount)]);
+      return true;
+    },
+    // Length only (a new note, or a backfill): does not count as an edit.
+    async setCharCount(id, charCount) {
+      await db.query('update library set char_count = $2 where id = $1', [requireText(id, 'id', { max: 64 }), requireCount(charCount)]);
+      return true;
+    },
+    // `at` is when the text that was summarized was read, so an edit made while the summary was
+    // being written still leaves summary_edited < last_edited. Never touches last_edited.
+    async setSummary(id, summary, at) {
+      const text = summary == null ? null : requireText(summary, 'summary', { max: 4000 });
+      const result = await db.query(
+        'update library set summary = $2, summary_edited = $3 where id = $1 returning *',
+        [requireText(id, 'id', { max: 64 }), text, text == null ? null : new Date(at).toISOString()],
+      );
+      return plain(result.rows[0]);
+    },
+    // Notes whose length has never been recorded (created before the column existed).
+    async uncountedNotes() {
+      const result = await db.query("select id, path from library where type = 'note' and path is not null and char_count is null");
+      return result.rows.map(plain);
+    },
+    // Notes the summary sweep has to look at: untouched since `quietBefore`, and either never
+    // summarized (and not known to be short) or summarized before their last edit.
+    async summaryCandidates(quietBefore, minChars) {
+      const result = await db.query(
+        `select * from library
+          where type = 'note' and path is not null and last_edited <= $1
+            and ((summary is null and (char_count is null or char_count > $2))
+              or (summary is not null and (summary_edited is null or summary_edited < last_edited)))
+          order by last_edited`,
+        [new Date(quietBefore).toISOString(), requireCount(minChars)],
+      );
+      return result.rows.map(plain);
+    },
+    // Papers with a local file: a PDF's abstract is its summary.
+    async papersWithFiles() {
+      const result = await db.query("select * from library where type = 'paper' and path is not null order by created");
+      return result.rows.map(plain);
+    },
+    // Escape hatch for tests and repairs.
+    async query(sql, params = []) {
+      const result = await db.query(sql, params);
+      return result.rows.map(plain);
     },
     async rewritePathPrefix(oldPrefix, newPrefix) {
       const result = await db.query(

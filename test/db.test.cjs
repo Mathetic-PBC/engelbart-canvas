@@ -27,7 +27,8 @@ test('library: schema, insert, type constraint, list order', async () => {
   const rows = await library.list();
   assert.equal(rows.length, 2);
   assert.equal(rows[0].name, 'A paper');
-  assert.deepEqual(Object.keys(rows[0]).sort(), ['created', 'folder_path', 'id', 'last_edited', 'name', 'path', 'project_id', 'type', 'url']);
+  assert.deepEqual(Object.keys(rows[0]).sort(), ['char_count', 'created', 'folder_path', 'id', 'last_edited', 'name', 'path', 'project_id', 'summary', 'summary_edited', 'type', 'url']);
+  assert.deepEqual([rows[0].summary, rows[0].summary_edited, rows[0].char_count], [null, null, null], 'the catalog columns default to null');
 });
 
 test('library: rename, touch, rewritePathPrefix only touches rows under the old prefix', async () => {

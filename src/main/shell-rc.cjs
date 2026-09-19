@@ -88,15 +88,21 @@ exec ${quote(realShell)} "$@"
 // CLAUDE_VAULT, CLAUDE_CODE_USE_*, …) pass through.
 const SESSION_SCOPED = [/^CLAUDE_CODE_(CHILD_SESSION|EXECPATH|MESSAGING_|SESSION_|SSE_PORT)/, /^CLAUDE_(PID|EFFORT)$/, /^CODEX_(SANDBOX|MANAGED_BY)/];
 
-/** The environment terminal sessions start with: the process environment, minus an outer agent's session, with SHELL = the launcher. */
-function environmentForSessions(base, userDataDir) {
-  const realShell = resolveShell(base);
+/** `base` without an outer agent session's private variables. */
+function scrubAgentSession(base) {
   const environment = {};
   for (const [key, value] of Object.entries(base)) {
     if (!SESSION_SCOPED.some((pattern) => pattern.test(key))) environment[key] = value;
   }
+  return environment;
+}
+
+/** The environment terminal sessions start with: the process environment, minus an outer agent's session, with SHELL = the launcher. */
+function environmentForSessions(base, userDataDir) {
+  const realShell = resolveShell(base);
+  const environment = scrubAgentSession(base);
   environment.SHELL = prepareLauncher(userDataDir, realShell);
   return environment;
 }
 
-module.exports = { prepareZshDir, prepareLauncher, environmentForSessions, FILES };
+module.exports = { prepareZshDir, prepareLauncher, environmentForSessions, scrubAgentSession, FILES };

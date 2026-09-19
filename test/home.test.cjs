@@ -23,9 +23,21 @@ test('ensureHome creates ~/.engelbart, test root and annotations', () => {
 
 test('config defaults to test mode and persists a toggle atomically', () => {
   const { root } = ensureHome(tempHome());
-  assert.deepEqual(readConfig(root), { testMode: true });
-  assert.deepEqual(writeConfig(root, { testMode: false }), { testMode: false });
-  assert.deepEqual(readConfig(root), { testMode: false });
+  const summarizer = { provider: 'openai', openai: { model: 'gpt-5.6-luna', effort: 'high' }, anthropic: { model: 'claude-opus-5', effort: 'high' } };
+  assert.deepEqual(readConfig(root), { testMode: true, summarizer }, 'summaries default to Codex, gpt-5.6-luna, high');
+  assert.deepEqual(writeConfig(root, { testMode: false }), { testMode: false, summarizer });
+  assert.deepEqual(readConfig(root), { testMode: false, summarizer });
+
+  // Switching is one word; each provider keeps its own model and effort; nonsense falls back to the defaults.
+  const file = path.join(root, 'config.json');
+  fs.writeFileSync(file, JSON.stringify({ testMode: false, summarizer: { provider: 'claude', anthropic: { model: 'claude-sonnet-5', effort: 'low' }, openai: { model: 'rm -rf /', effort: 'extreme' } } }));
+  assert.deepEqual(readConfig(root).summarizer, { provider: 'anthropic', openai: { model: 'gpt-5.6-luna', effort: 'high' }, anthropic: { model: 'claude-sonnet-5', effort: 'low' } });
+  assert.equal(writeConfig(root, { testMode: true }).summarizer.anthropic.model, 'claude-sonnet-5', 'toggling test mode keeps the summarizer settings');
+
+  // A config file from before the setting existed gains it on the next launch.
+  fs.writeFileSync(file, JSON.stringify({ testMode: false }));
+  ensureHome(path.dirname(root));
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { testMode: false, summarizer });
   assert.throws(() => writeConfig(root, { testMode: 'no' }), TypeError);
   assert.throws(() => writeConfig(root, { other: 1 }), TypeError);
   assert.equal(fs.readdirSync(root).filter((name) => name.endsWith('.tmp')).length, 0);

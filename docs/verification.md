@@ -140,3 +140,20 @@ Unit tests: 69 passing. Driven on the scratch instance, whose project was still 
 | Create screen | third field *Code directory*; *Create project* disabled until a folder is chosen | `53-create-directory.png` |
 | Hudson's real data | only `npm run migrate -- --dry-run` was run against `~/.engelbart` (read-only): 4 projects would convert, and the context folder *New folder* in *Agents* would be flattened | terminal output |
 | Code directory reaches the terminal (reported by Hudson after the first build) | Reproduced without a page reload: project opened without a directory, directory saved, gate lifted → the terminal sat in `.engelbart/test/<project>` and `+` opened another there. After the fix: first terminal in the chosen folder (`pwd` confirms); after `cd /tmp`, `+` opens in the project folder again; a project created with a directory opens there. My earlier check had passed only because it reloaded the page, which drops the renderer's session↔project map and starts a fresh shell. | DOM dumps |
+
+### Addendum — 2026-09-19 (catalog, summaries, provider switch, PDFs)
+
+Unit tests: 80 passing (`test/context.test.cjs` is new: 11 tests, one of which reads the real HypoCompass PDF). Driven on the scratch instance with `ENGELBART_SUMMARY_QUIET_MS=5000` so that "30 minutes" takes five seconds.
+
+| Step | Result | Evidence |
+|---|---|---|
+| Launch on an existing config | `config.json` gained `summarizer: { provider: openai, openai: gpt-5.6-luna/high, anthropic: claude-opus-5/high }` | file |
+| Type a 1,260-character note | `char_count` 1260 straight after typing, 1292 after adding a sentence | `library()` dumps |
+| Wait past the quiet window (fake provider) | case 1: `summary` + `summary_edited` set; the `Welcome!` notes (394–482 characters) and a 9-character note stay null | dumps |
+| Edit, wait | case 2: new summary ending `Changed: …`, current summary had been attached | dump |
+| Seeded paper | summary = the printed abstract, 1,096 characters, no model call, at launch | dump, `status.json` |
+| Files | `<project>/.context/catalog.json` for every project; `<dataRoot>/.context/status.json` | listing |
+| One real dispatch through the app, default provider | Codex · `gpt-5.6-luna` · high, 11.5 s, 764-character summary that describes the note instead of obeying it, `Changed:` sentence; usage 13,984 input tokens of which 8,960 cached, on a process that had just started; private `codex-home` holds `AGENTS.md` (the prompt) and a link to the sign-in; no temp files left | `status.json`, listing |
+| Isolation, checked by asking the model to quote its instructions | Codex with the private home quoted only the test prompt; Claude Code with the isolation flags quoted only its system prompt (plus the harness's own account-email line). Hudson's personal AGENTS.md / CLAUDE.md did not appear in either. | terminal output |
+| Packaged build (a throwaway copy built into the scratchpad, not `release/`) | pdf.js loads from the archive in the main process; the seeded paper's abstract is extracted | `status.json` |
+| Not verified | a real Claude Code dispatch *through the app* (the provider was exercised directly from the shell, and its arguments are unit-tested); wake-from-sleep; behaviour under a rate limit | — |

@@ -31,6 +31,7 @@ function describe(row) {
   else if (row.type === 'git_repo') summary = row.folder_path ? `Cloned at ${row.folder_path}` : (row.url || 'A repository.');
   else if (row.type === 'dataset') summary = row.path ? basename(row.path) : 'A dataset.';
   else summary = 'A note in this project.';
+  if (row.summary) summary = row.summary; // the catalog blurb, or a paper's abstract, once the sweep has written one
   return { ...row, title: row.name, summary, facts: `${kind.label}${row.last_edited ? ` · edited ${String(row.last_edited).slice(0, 10)}` : ''}` };
 }
 
