@@ -42,6 +42,17 @@ The model is chosen in `~/.engelbart/config.json`, which is read again for every
 
 `provider` is `openai` (Codex CLI) or `anthropic` (Claude Code CLI); effort is `low`, `medium`, `high`, `xhigh` or `max`. Both run as hidden processes on your subscription sign-in, never an API key, and isolated from your own Codex and Claude Code configuration. `ENGELBART_SUMMARIES=off` turns the sweep off.
 
+## Copy and @bart
+
+**Copy** (sidebar, lower left) puts the open document on the clipboard with every `@[mentioned]` file's content in `<file>` tags directly under the line that mentions it: notes whole (with their own mentions), anything else as its path or URL plus its summary.
+
+**`@bart <question>`** then Enter asks an agent that can read the project's notes and library, read (never edit) the code directory, and search the web. The answer appears under the question as a draft: **Hide** removes it, **Save** keeps it, read-only, ending with which model said it. It runs hidden on your Claude Code or Codex subscription, never an API key.
+
+- No flags: the question starts at the first step of the ladder and the agent moves itself up when it judges the question needs it, keeping what it has read. Codex: Sol medium, Sol high, Astra xhigh. Claude Code: Sonnet medium, Opus high, Fable xhigh.
+- By hand: `@bart --opus --high why …` (also `--fable`, `--sol`, `--luna`, `--xhigh`, `--extra high`). Picking by hand turns moving up off.
+- The list, the ladders and the default provider: `~/.engelbart/model-effort-inline-question.json`, read again for every question.
+- The instructions it runs under: `src/main/bart/system-prompt.cjs`, or your own in `<data root>/.context/bart-system-prompt.md`.
+
 ## Terminal pane
 
 Each tab is a real PTY (the Experimental Terminal engine). While the shell is idle you type into the **Run commands** box at the bottom, like a chat: Enter sends, ↑/↓ recall your shell history, and the transcript above starts empty and does not take keys. While a program runs — an arrow-key menu, a REPL, Claude Code or Codex, started from the dropdown or by typing its name — the keyboard belongs to the transcript, as in any terminal, and the box comes back when the program ends. The dropdown at the right of the tab strip turns an untouched terminal into the agent in place, so to choose an agent's directory: click the `▭` chip, pick the folder, pick the agent. The mechanism (a launcher plus zsh wrapper startup files that blank the prompt and emit shell-integration marks, then hand your configuration back) is described in `src/main/shell-rc.cjs`; bash and fish are left alone.

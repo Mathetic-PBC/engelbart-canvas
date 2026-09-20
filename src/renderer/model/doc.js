@@ -5,10 +5,15 @@
 export const TODO_RE = /^( *)- (?:\[([ xX])\] )?(.*)$/;
 export const HEAD_RE = /^(#{1,3}) (.*)$/;
 export const IMG_RE = /^!\[([^\]]*)\]\((img:[\w-]+|https?:[^)\s]+|data:image[^)\s]+)\)$/;
-export const CHAT_RE = /^@chat(?:\s(.*))?$/;
+export const BART_RE = /^@bart(?:\s(.*))?$/;
+// An answer under an @bart line, one prefix per line (src/main/bart/reply.cjs writes them):
+// pending while the run with that id works, a draft until it is hidden or saved, then kept.
+export const PENDING_RE = /^bart~> ?([\w-]*)$/;
+export const DRAFT_RE = /^bart\?> ?(.*)$/;
+export const REPLY_RE = /^bart> ?(.*)$/;
 export const QUOTE_RE = /^> ?(.*)$/;
 export const ATTACH_RE = /^!\[([^\]\n]*)\]\(img:([\w-]+)\)$/;
-export const INLINE = /(!\[[^\]\n]*\]\(img:[\w-]+\)|@chat(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\])/g;
+export const INLINE = /(!\[[^\]\n]*\]\(img:[\w-]+\)|@bart(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\])/g;
 const LINK_RE = /^\[([^\]]+)\]\(([^)]+)\)$/;
 
 export const LABELS = { queued: 'Queued', building: 'Building…', checking: 'Checking…', fixing: 'Fixing…', needs_user: 'Needs you', done: 'Done', failed: 'Failed' };
@@ -16,7 +21,10 @@ export const HELD = ['queued', 'building', 'checking', 'fixing'];
 
 export const parseLine = (l) => {
   let m;
-  if ((m = l.match(CHAT_RE))) return { type: 'chat', text: m[1] || '' };
+  if ((m = l.match(BART_RE))) return { type: 'bart', text: m[1] || '' };
+  if ((m = l.match(PENDING_RE))) return { type: 'pending', id: m[1], text: '' };
+  if ((m = l.match(DRAFT_RE))) return { type: 'draft', text: m[1] };
+  if ((m = l.match(REPLY_RE))) return { type: 'reply', text: m[1] };
   if ((m = l.match(QUOTE_RE))) return { type: 'quote', text: m[1] };
   if ((m = l.match(IMG_RE))) return { type: 'img', text: m[1], src: m[2] };
   if ((m = l.match(TODO_RE))) return { type: 'todo', depth: Math.min(8, Math.floor(m[1].length / 2)), done: !!m[2] && m[2] !== ' ', text: m[3] };
@@ -26,6 +34,9 @@ export const parseLine = (l) => {
 
 export const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+/** Lines the person cannot edit: answers, and the legacy `> ` replies of the prototype. */
+export const isAnswer = (type) => type === 'quote' || type === 'reply' || type === 'draft' || type === 'pending';
+
 export const todoLine = (depth, done, text) => `${'  '.repeat(depth)}- [${done ? 'x' : ' '}] ${text}`;
 
 /** What an inline token shows when rendered, and how many source characters precede the shown text. */
@@ -34,7 +45,7 @@ export function tokShown(tok) {
   if (tok.startsWith('**') && tok.endsWith('**') && tok.length > 4) return { shown: tok.slice(2, -2), pre: 2 };
   if (tok.startsWith('`') && tok.endsWith('`') && tok.length > 2) return { shown: tok.slice(1, -1), pre: 1 };
   if (tok.startsWith('*') && tok.endsWith('*') && tok.length > 2) return { shown: tok.slice(1, -1), pre: 1 };
-  if (tok.startsWith('@[')) { const nm = tok.slice(2, -1); return { shown: '@' + (nm.startsWith('chat') ? 'chat' : nm), pre: 1 }; }
+  if (tok.startsWith('@[')) { const nm = tok.slice(2, -1); return { shown: '@' + (nm.startsWith('bart') ? 'bart' : nm), pre: 1 }; }
   const m = tok.match(LINK_RE); if (m) return { shown: m[1], pre: 1 };
   return { shown: tok, pre: 0 };
 }
@@ -70,7 +81,7 @@ export function rawOffset(p, fOff, line) {
   return base + text.length;
 }
 
-/** Rendered HTML for inline markup (bold, code, italic, @chat, @[mention], [link](url)). */
+/** Rendered HTML for inline markup (bold, code, italic, @bart, @[mention], [link](url)). */
 export function inlineHtml(text) {
   return text.split(INLINE).map((p) => {
     if (!p) return '';
@@ -80,8 +91,8 @@ export function inlineHtml(text) {
     if (p.startsWith('**') && p.endsWith('**') && p.length > 4) return `<strong style="font-weight:600">${esc(p.slice(2, -2))}</strong>`;
     if (p.startsWith('`') && p.endsWith('`') && p.length > 2) return `<code style="padding:1px 4px;border-radius:4px;background:#f2f2f2;font:.92em/1.6 var(--font-mono)">${esc(p.slice(1, -1))}</code>`;
     if (p.startsWith('*') && p.endsWith('*') && p.length > 2) return `<em>${esc(p.slice(1, -1))}</em>`;
-    if (p === '@chat') return `<span style="color:#0070f3;font-weight:500">@chat</span>`;
-    if (p.startsWith('@[')) { const name = p.slice(2, -1), shown = name.startsWith('chat') ? 'chat' : name; return `<span data-mention="${esc(name)}" style="color:#0070f3;font-weight:500;cursor:pointer;border-bottom:1px dotted #c9c9c9">@${esc(shown)}</span>`; }
+    if (p === '@bart') return `<span style="color:#0070f3;font-weight:500">@bart</span>`;
+    if (p.startsWith('@[')) { const name = p.slice(2, -1), shown = name.startsWith('bart') ? 'bart' : name; return `<span data-mention="${esc(name)}" style="color:#0070f3;font-weight:500;cursor:pointer;border-bottom:1px dotted #c9c9c9">@${esc(shown)}</span>`; }
     const m = p.match(LINK_RE);
     if (m) return `<a href="${esc(m[2])}" data-link="1" style="color:#0070f3;text-decoration:underline;text-underline-offset:3px">${esc(m[1])}</a>`;
     return esc(p);

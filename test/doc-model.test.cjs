@@ -15,12 +15,12 @@ test('parseLine classifies todo lines with depth and done state', async () => {
   assert.equal(parseLine('                    - [ ] deep').depth, 8);
 });
 
-test('parseLine classifies headings, chat, quote, image and paragraphs', async () => {
+test('parseLine classifies headings, bart, quote, image and paragraphs', async () => {
   const { parseLine } = await load();
   assert.deepEqual(parseLine('## Title'), { type: 'h', level: 2, text: 'Title' });
   assert.deepEqual(parseLine('#### not a heading'), { type: 'p', text: '#### not a heading' });
-  assert.deepEqual(parseLine('@chat hi there'), { type: 'chat', text: 'hi there' });
-  assert.deepEqual(parseLine('@chat'), { type: 'chat', text: '' });
+  assert.deepEqual(parseLine('@bart hi there'), { type: 'bart', text: 'hi there' });
+  assert.deepEqual(parseLine('@bart'), { type: 'bart', text: '' });
   assert.deepEqual(parseLine('> quoted'), { type: 'quote', text: 'quoted' });
   assert.deepEqual(parseLine('>tight'), { type: 'quote', text: 'tight' });
   assert.deepEqual(parseLine('![alt](https://x.y/z.png)'), { type: 'img', text: 'alt', src: 'https://x.y/z.png' });
@@ -38,8 +38,8 @@ test('todoLine serialises depth and done state', async () => {
 test('INLINE splits bold, mention and link tokens, keeping separators', async () => {
   const { INLINE } = await load();
   assert.deepEqual('a **b** @[n] [l](u)'.split(INLINE).filter(Boolean), ['a ', '**b**', ' ', '@[n]', ' ', '[l](u)']);
-  assert.deepEqual('@chat hi'.split(INLINE).filter(Boolean), ['@chat', ' hi']);
-  assert.deepEqual('@chatty'.split(INLINE).filter(Boolean), ['@chatty']);
+  assert.deepEqual('@bart hi'.split(INLINE).filter(Boolean), ['@bart', ' hi']);
+  assert.deepEqual('@bartty'.split(INLINE).filter(Boolean), ['@bartty']);
   assert.deepEqual('*i* `c`'.split(INLINE).filter(Boolean), ['*i*', ' ', '`c`']);
 });
 
@@ -49,10 +49,10 @@ test('tokShown reports the shown text and the source prefix length', async () =>
   assert.deepEqual(tokShown('*it*'), { shown: 'it', pre: 1 });
   assert.deepEqual(tokShown('`c`'), { shown: 'c', pre: 1 });
   assert.deepEqual(tokShown('@[hypocompass]'), { shown: '@hypocompass', pre: 1 });
-  assert.deepEqual(tokShown('@[chat:x]'), { shown: '@chat', pre: 1 });
+  assert.deepEqual(tokShown('@[bart:x]'), { shown: '@bart', pre: 1 });
   assert.deepEqual(tokShown('[text](https://a.b)'), { shown: 'text', pre: 1 });
   assert.deepEqual(tokShown('plain'), { shown: 'plain', pre: 0 });
-  assert.deepEqual(tokShown('@chat'), { shown: '@chat', pre: 0 });
+  assert.deepEqual(tokShown('@bart'), { shown: '@bart', pre: 0 });
 });
 
 test('tokensOf keeps heading and quote prefixes as their own first token', async () => {
@@ -61,7 +61,7 @@ test('tokensOf keeps heading and quote prefixes as their own first token', async
   assert.deepEqual(tokensOf(parseLine('> q *i*'), '> q *i*'), ['> ', 'q ', '*i*']);
   assert.deepEqual(tokensOf(parseLine('>q'), '>q'), ['>', 'q']);
   assert.deepEqual(tokensOf(parseLine('- [ ] t @[x]'), '- [ ] t @[x]'), ['t ', '@[x]']);
-  assert.deepEqual(tokensOf(parseLine('@chat hi'), '@chat hi'), ['@chat', ' hi']);
+  assert.deepEqual(tokensOf(parseLine('@bart hi'), '@bart hi'), ['@bart', ' hi']);
 });
 
 test('rawOffset maps a display offset across a bold token', async () => {
@@ -83,11 +83,11 @@ test('rawOffset adds the heading base and handles mentions', async () => {
   assert.equal(rawOffset(parseLine('see @[hypocompass] now'), 4), 4); // before the mention
 });
 
-test('rawOffset with the line uses the real quote prefix and whole chat/paragraph lines', async () => {
+test('rawOffset with the line uses the real quote prefix and whole bart/paragraph lines', async () => {
   const { rawOffset, parseLine } = await load();
   assert.equal(rawOffset(parseLine('>q'), 1, '>q'), 2);
   assert.equal(rawOffset(parseLine('> q'), 1, '> q'), 3);
-  assert.equal(rawOffset(parseLine('@chat hello'), 8, '@chat hello'), 8);
+  assert.equal(rawOffset(parseLine('@bart hello'), 8, '@bart hello'), 8);
   assert.equal(rawOffset(parseLine('- [ ] a **b**'), 2, '- [ ] a **b**'), 2); // todo offsets stay relative to p.text; a boundary belongs to the preceding token
 });
 
@@ -96,7 +96,7 @@ test('inlineHtml renders markup and escapes text', async () => {
   assert.equal(inlineHtml('a **b** c'), 'a <strong style="font-weight:600">b</strong> c');
   assert.equal(inlineHtml('*i*'), '<em>i</em>');
   assert.equal(inlineHtml('`c`'), '<code style="padding:1px 4px;border-radius:4px;background:#f2f2f2;font:.92em/1.6 var(--font-mono)">c</code>');
-  assert.equal(inlineHtml('@chat go'), '<span style="color:#0070f3;font-weight:500">@chat</span> go');
+  assert.equal(inlineHtml('@bart go'), '<span style="color:#0070f3;font-weight:500">@bart</span> go');
   assert.match(inlineHtml('@[hypocompass]'), /^<span data-mention="hypocompass"[^>]*>@hypocompass<\/span>$/);
   assert.match(inlineHtml('[t](https://a.b)'), /^<a href="https:\/\/a\.b" data-link="1"[^>]*>t<\/a>$/);
   assert.equal(inlineHtml('<b>&"'), '&lt;b&gt;&amp;&quot;');

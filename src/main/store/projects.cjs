@@ -533,6 +533,8 @@ module.exports = {
   renameNote,
   saveImage,
   readImage,
+  findWorkspace,
+  resolveDoc,
   readDoc,
   writeDoc,
   readProjectTextFile,

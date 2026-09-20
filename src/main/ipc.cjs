@@ -11,6 +11,8 @@ const home = require('./store/home.cjs');
 const db = require('./store/db.cjs');
 const projects = require('./store/projects.cjs');
 const library = require('./store/library.cjs');
+const { expandDoc } = require('./context/expand-mentions.cjs');
+const { failureLines } = require('./bart/reply.cjs');
 const { readShellHistory } = require('./shell-history.cjs');
 
 const MAX_NAME = 512;
@@ -93,7 +95,7 @@ function createStore({ homeDir, fixturesDir }) {
   return { layout, context, config: describe, setTestMode, resetTestData, close: closeAll };
 }
 
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, notify }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const withCtx = (fn) => async (...args) => fn(await store.context(), ...args);
 
@@ -135,6 +137,29 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('rename-note', withCtx((ctx, pid, id, name) => projects.renameNote(ctx, str(pid, 'project id', 64), str(id, 'note id', 64), str(name, 'name'))));
   handle('read-doc', withCtx((ctx, pid, ref) => projects.readDoc(ctx, str(pid, 'project id', 64), docRef(ref))));
   handle('write-doc', withCtx((ctx, pid, ref, text) => projects.writeDoc(ctx, str(pid, 'project id', 64), docRef(ref), text)));
+  // The sidebar's Copy: the document with every @mentioned file placed where it is mentioned. The
+  // clipboard is written here because the renderer is refused every permission, and its own
+  // clipboard wants a user gesture that reading the files can outlive.
+  handle('copy-doc', withCtx(async (ctx, pid, ref) => {
+    const { text, chars, files, missing } = await expandDoc(ctx, str(pid, 'project id', 64), docRef(ref));
+    writeClipboard(text);
+    return { chars, files, missing };
+  }));
+
+  // @bart: the answer comes back as draft lines for the document. A run that fails answers too, so
+  // the question line never stays locked behind a pending line; only Stop returns nothing to place.
+  handle('ask-bart', withCtx(async (ctx, pid, input) => {
+    const value = input && typeof input === 'object' ? input : {};
+    const askId = str(value.askId, 'ask id', 64);
+    if (!/^[\w-]+$/.test(askId)) throw new TypeError('ask id is invalid');
+    try {
+      return await bart.ask(ctx, str(pid, 'project id', 64), { askId, ref: docRef(value.ref), workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000) }, { onProgress: (progress) => notify('engelbart:bart-progress', { askId, ...progress }) });
+    } catch (error) {
+      if (error && error.kind === 'stopped') return { stopped: true };
+      return { failed: true, lines: failureLines(error && error.message) };
+    }
+  }));
+  handle('stop-bart', (askId) => bart.stop(str(askId, 'ask id', 64)));
 
   handle('read-text-file', withCtx((ctx, pid, input) => projects.readProjectTextFile(ctx, str(pid, 'project id', 64), str(input, 'path', 4096))));
   handle('library', withCtx((ctx) => library.listLibrary(ctx)));

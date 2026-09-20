@@ -2,7 +2,7 @@ import React from 'react';
 import { api, errorMessage } from '../api.js';
 import Rail from '../workspace/Rail.jsx';
 import DocTabs from '../workspace/DocTabs.jsx';
-import DocEditor, { CHAT_ITEM } from '../workspace/DocEditor.jsx';
+import DocEditor, { BART_ITEM } from '../workspace/DocEditor.jsx';
 import CtxModal from '../workspace/CtxModal.jsx';
 import RightPane, { RIGHT_MODES } from '../workspace/RightPane.jsx';
 import { kindOf } from '../ui/Icons.jsx';
@@ -100,23 +100,80 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   const flush = React.useCallback((key) => {
     const entry = pending.current.get(key);
-    if (!entry) return;
+    if (!entry) return undefined;
     clearTimeout(entry.timer);
     pending.current.delete(key);
-    api.writeDoc(project.id, entry.ref, entry.text).catch((error) => onError(error));
+    return api.writeDoc(project.id, entry.ref, entry.text).catch((error) => onError(error));
   }, [project.id, onError]);
 
-  const onDocChange = React.useCallback((text) => {
-    if (!docKey || !docRef) return;
-    setDocs((current) => ({ ...current, [docKey]: text }));
-    const previous = pending.current.get(docKey);
+  // A document's text changes: from the editor (the open one), or from an @bart answer (any of them).
+  const changeDoc = React.useCallback((key, ref, text) => {
+    setDocs((current) => ({ ...current, [key]: text }));
+    const previous = pending.current.get(key);
     if (previous) clearTimeout(previous.timer);
-    pending.current.set(docKey, { ref: docRef, text, timer: setTimeout(() => flush(docKey), SAVE_DELAY) });
-  }, [docKey, docRef, flush]);
+    pending.current.set(key, { ref, text, timer: setTimeout(() => flush(key), SAVE_DELAY) });
+  }, [flush]);
+
+  const onDocChange = React.useCallback((text) => {
+    if (docKey && docRef) changeDoc(docKey, docRef, text);
+  }, [docKey, docRef, changeDoc]);
 
   React.useEffect(() => () => {
     for (const key of [...pending.current.keys()]) flush(key);
   }, [flush]);
+
+  /* ----------------------------------------------------------------- @bart */
+
+  // A question leaves the editor as { askId, text } with a pending line `bart~> <askId>` already under it. The agent reads
+  // the documents from disk, so everything is saved first. Its answer replaces the pending line in whatever that document's
+  // text is by then, open or not; Stop removes the line; progress (which model, moved up or not) shows on the pending row.
+  const [asks, setAsks] = React.useState({});
+  const docsRef = React.useRef(docs);
+  docsRef.current = docs;
+  React.useEffect(() => api.onBartProgress((progress) => {
+    setAsks((current) => (current[progress.askId] ? { ...current, [progress.askId]: { ...current[progress.askId], ...progress } } : current));
+  }), []);
+
+  const askBart = React.useCallback(async ({ askId, text }) => {
+    if (!docKey || !docRef || !topic) return;
+    const key = docKey, ref = docRef;
+    const place = (lines) => {
+      const held = docsRef.current[key];
+      if (typeof held !== 'string') return;
+      const all = held.split('\n'), at = all.indexOf(`bart~> ${askId}`);
+      if (at < 0) return; // the pending line was undone away: there is nowhere to put the answer
+      all.splice(at, 1, ...lines);
+      changeDoc(key, ref, all.join('\n'));
+    };
+    setAsks((current) => ({ ...current, [askId]: { docKey: key } }));
+    try {
+      await new Promise((resolve) => { setTimeout(resolve, 0); }); // let the pending line reach `pending` before flushing it
+      await Promise.all([...pending.current.keys()].map((held) => flush(held)));
+      const out = await api.askBart(project.id, { askId, ref, workspaceId: topic.id, text });
+      place(out.stopped ? [] : out.lines);
+    } catch (error) {
+      place([`bart?> **No answer.** ${errorMessage(error)}`]);
+    } finally {
+      setAsks((current) => { const next = { ...current }; delete next[askId]; return next; });
+    }
+  }, [docKey, docRef, topic, project.id, flush, changeDoc]);
+
+  // Copy (the sidebar's lower left): the open document with every @mentioned file's content
+  // placed where it is mentioned. It is read from disk, so every open tab is saved first.
+  const [copied, setCopied] = React.useState(null);
+  const copiedTimer = React.useRef(null);
+  React.useEffect(() => () => clearTimeout(copiedTimer.current), []);
+  const copyDoc = React.useCallback(async () => {
+    if (!docRef) return;
+    try {
+      await Promise.all([...pending.current.keys()].map((key) => flush(key)));
+      setCopied(await api.copyDoc(project.id, docRef));
+      clearTimeout(copiedTimer.current);
+      copiedTimer.current = setTimeout(() => setCopied(null), 1800);
+    } catch (error) {
+      onError(error);
+    }
+  }, [docRef, flush, project.id, onError]);
 
   /* ---------------------------------------------------------------- images */
 
@@ -188,7 +245,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return out;
   }, [topic, here, byId, renaming, activeRowId, tree.notes, mentioned]);
 
-  const mentionable = React.useMemo(() => [CHAT_ITEM, ...library.filter((row) => row.type !== 'image').map(describe)], [library]);
+  const mentionable = React.useMemo(() => [BART_ITEM, ...library.filter((row) => row.type !== 'image').map(describe)], [library]);
 
   /* --------------------------------------------------------------- opening */
 
@@ -452,6 +509,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onRowRenameEnd={() => setRenaming(null)}
           onAddContext={() => { if (topic) setCtxModal(topic); }}
           onAddChild={() => addTopic(true)}
+          onCopy={docRef ? copyDoc : null}
+          copied={copied}
+          copyTitle={docRef ? `Copy “${docTitle}” with every @mentioned file's content placed where it is mentioned` : ''}
         />
 
         <Separator onDown={railDown} onMove={railMove} onUp={pointerUp} onReset={() => setRailWidth(300)} />
@@ -469,6 +529,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
               buildSpeed="normal"
               images={images}
               onPasteImage={pasteImage}
+              asks={asks}
+              onAsk={askBart}
+              onStopAsk={(askId) => api.stopBart(askId).catch((error) => onError(error))}
               header={header}
             />
           ) : (

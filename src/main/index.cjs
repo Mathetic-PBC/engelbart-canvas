@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   Menu,
@@ -17,6 +18,8 @@ const { SessionManager } = require('./terminal/session-manager.cjs');
 const { environmentForSessions } = require('./shell-rc.cjs');
 const { createSweeper } = require('./context/sweeper.cjs');
 const { createCliSummarizer, createFakeSummarizer } = require('./context/summarizer.cjs');
+const { createBart, createFakeBart } = require('./bart/ask.cjs');
+const { loadModels } = require('./bart/models.cjs');
 const { resolveShell } = require('./terminal/launch.cjs');
 const { discoverProviders } = require('./terminal/provider-discovery.cjs');
 const { SettingsStore } = require('./terminal/settings.cjs');
@@ -49,6 +52,7 @@ let rendererLifecycle = null;
 let settings = null;
 let store = null;
 let sweeper = null;
+let bart = null;
 let quitPending = false;
 let quitReady = false;
 
@@ -142,6 +146,7 @@ async function requestQuit() {
   }
   try {
     if (sweeper) await sweeper.stop();
+    if (bart) bart.stopAll();
     if (manager) await manager.shutdown();
     if (store) await store.close();
   } catch (error) {
@@ -341,6 +346,12 @@ if (!hasSingleInstanceLock) {
       quietMs: millis('ENGELBART_SUMMARY_QUIET_MS'),
       intervalMs: millis('ENGELBART_SUMMARY_INTERVAL_MS'),
     });
+    // @bart (src/main/bart): hidden Claude Code or Codex runs on the person's subscription, reading only.
+    // ENGELBART_BART_FAKE=1 answers without a model, for scripted runs only.
+    const readModels = () => loadModels(store.layout.root);
+    bart = process.env.ENGELBART_BART_FAKE === '1'
+      ? createFakeBart({ readModels })
+      : createBart({ readModels, runDirectory: path.join(app.getPath('userData'), 'bart-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-bart') });
     if (process.env.ENGELBART_SUMMARIES !== 'off') {
       sweeper.start();
       powerMonitor.on('resume', () => sweeper.sweepSoon());
@@ -360,6 +371,9 @@ if (!hasSingleInstanceLock) {
         electronShell.showItemInFolder(target);
         return true;
       },
+      writeClipboard: (text) => clipboard.writeText(text),
+      bart,
+      notify: sendToRenderer,
       confirmReset: async () => {
         if (process.env.ENGELBART_CONFIRM_ALL === '1') return true; // driver harness only (scripts/drive.mjs)
         const options = {

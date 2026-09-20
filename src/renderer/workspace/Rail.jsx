@@ -6,6 +6,8 @@ import { isUntitled } from '../model/names.js';
 // hover reveals its sibling workspaces and "+ New"; below it the workspace's context tree
 // (Workspace first; double-click renames), pasted images, and the workspaces nested inside it
 // (→); then "+ Context" and "+ Workspace". Folders are gone: a nested workspace groups things.
+// Under the list, in the lower left, Copy: the open document with every @mentioned file's
+// content placed where it is mentioned (src/main/context/expand-mentions.cjs).
 
 function markStyle(status, interactive = true) {
   const done = status === 'done';
@@ -125,20 +127,32 @@ function TreeRow({ row, onClick, onRenameStart, onRename, onRenameEnd }) {
   );
 }
 
+function copiedLabel(copied) {
+  const parts = ['Copied'];
+  if (copied.files) parts.push(`${copied.files} file${copied.files === 1 ? '' : 's'}`);
+  if (copied.missing) parts.push(`${copied.missing} missing`);
+  return parts.join(' · ');
+}
+
 export default function Rail({
   width, topics, topic, onSelectTopic, onCycleTopic, onRenameTopic, onAddTopic,
   rows, onRowClick, onRowRenameStart, onRowRename, onRowRenameEnd,
-  onAddContext, onAddChild,
+  onAddContext, onAddChild, onCopy, copied, copyTitle,
 }) {
   return (
-    <aside aria-label="Sidebar" style={{ flex: 'none', width, padding: '24px 16px', display: 'flex', flexDirection: 'column', gap: 5, overflow: 'auto', background: '#fafafa' }}>
-      <TopicHeader topics={topics} topic={topic} onSelectTopic={onSelectTopic} onCycleTopic={onCycleTopic} onRenameTopic={onRenameTopic} onAddTopic={onAddTopic} />
-      {rows.map((row) => (
-        <TreeRow key={row.id} row={row} onClick={onRowClick} onRenameStart={onRowRenameStart} onRename={onRowRename} onRenameEnd={onRowRenameEnd} />
-      ))}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '6px 0 0 6px' }}>
-        <div className="hov-ink-wash" onClick={onAddContext} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6, font: '13px/1.4 var(--font-sans)', color: '#8f8f8f', cursor: 'pointer', transition: 'color 120ms' }}>+ Context</div>
-        <div className="hov-ink-wash" onClick={onAddChild} title="A workspace nested inside this one" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6, font: '13px/1.4 var(--font-sans)', color: '#8f8f8f', cursor: 'pointer', transition: 'color 120ms' }}>+ Workspace</div>
+    <aside aria-label="Sidebar" style={{ flex: 'none', width, display: 'flex', flexDirection: 'column', background: '#fafafa' }}>
+      <div style={{ flex: 1, minHeight: 0, padding: '24px 16px 8px', display: 'flex', flexDirection: 'column', gap: 5, overflow: 'auto' }}>
+        <TopicHeader topics={topics} topic={topic} onSelectTopic={onSelectTopic} onCycleTopic={onCycleTopic} onRenameTopic={onRenameTopic} onAddTopic={onAddTopic} />
+        {rows.map((row) => (
+          <TreeRow key={row.id} row={row} onClick={onRowClick} onRenameStart={onRowRenameStart} onRename={onRowRename} onRenameEnd={onRowRenameEnd} />
+        ))}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '6px 0 0 6px' }}>
+          <div className="hov-ink-wash" onClick={onAddContext} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6, font: '13px/1.4 var(--font-sans)', color: '#8f8f8f', cursor: 'pointer', transition: 'color 120ms' }}>+ Context</div>
+          <div className="hov-ink-wash" onClick={onAddChild} title="A workspace nested inside this one" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6, font: '13px/1.4 var(--font-sans)', color: '#8f8f8f', cursor: 'pointer', transition: 'color 120ms' }}>+ Workspace</div>
+        </div>
+      </div>
+      <div style={{ flex: 'none', padding: '6px 16px 14px 22px' }}>
+        <button type="button" className="hov-ink-wash" onClick={onCopy} disabled={!onCopy} title={copyTitle} data-copy-doc="1" style={{ padding: '6px 8px', border: 0, borderRadius: 6, background: 'transparent', font: '13px/1.4 var(--font-sans)', color: copied ? '#171717' : '#8f8f8f', cursor: onCopy ? 'pointer' : 'default', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', transition: 'color 120ms' }}>{copied ? copiedLabel(copied) : 'Copy'}</button>
       </div>
     </aside>
   );

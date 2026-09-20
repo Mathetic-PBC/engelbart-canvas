@@ -67,6 +67,27 @@ function loadSystemPrompt(dataRoot) {
   return SUMMARY_SYSTEM_PROMPT;
 }
 
+/**
+ * A private CODEX_HOME holding two things: a link to the person's Codex sign-in and an AGENTS.md,
+ * which is how `codex exec` is given a system prompt. False when Codex is not signed in with a
+ * ChatGPT account: an API key is never used.
+ */
+function prepareCodexHome({ codexHome, source, instructions }) {
+  let auth = null;
+  try { auth = JSON.parse(fs.readFileSync(source, 'utf8')); } catch { auth = null; }
+  if (!auth || auth.auth_mode !== 'chatgpt' || !auth.tokens) return false;
+  fs.mkdirSync(codexHome, { recursive: true, mode: 0o700 });
+  const link = path.join(codexHome, 'auth.json');
+  let linked = null;
+  try { linked = fs.readlinkSync(link); } catch { linked = null; }
+  if (linked !== source) { try { fs.unlinkSync(link); } catch { /* none yet */ } fs.symlinkSync(source, link); }
+  const file = path.join(codexHome, 'AGENTS.md');
+  let current = null;
+  try { current = fs.readFileSync(file, 'utf8'); } catch { current = null; }
+  if (current !== instructions) fs.writeFileSync(file, instructions, { mode: 0o600 });
+  return true;
+}
+
 function lastResultLine(stdout) {
   const lines = String(stdout || '').split(/\r?\n/).map((line) => line.trim()).filter((line) => line.startsWith('{') && line.endsWith('}'));
   for (let i = lines.length - 1; i >= 0; i -= 1) {
@@ -124,18 +145,7 @@ function createCliSummarizer({ readSettings, environment = process.env, runDirec
 
   async function viaCodex({ request, model, effort, stem, signal }) {
     const source = codexAuthFile || path.join(environment.CODEX_HOME || path.join(os.homedir(), '.codex'), 'auth.json');
-    let auth = null;
-    try { auth = JSON.parse(fs.readFileSync(source, 'utf8')); } catch { auth = null; }
-    if (!auth || auth.auth_mode !== 'chatgpt' || !auth.tokens) throw new SummaryError('unavailable', 'Codex is not signed in with a ChatGPT account (run `codex login`); an API key is never used for summaries');
-    fs.mkdirSync(codexHome, { recursive: true, mode: 0o700 });
-    const link = path.join(codexHome, 'auth.json');
-    let linked = null;
-    try { linked = fs.readlinkSync(link); } catch { linked = null; }
-    if (linked !== source) { try { fs.unlinkSync(link); } catch { /* none yet */ } fs.symlinkSync(source, link); }
-    const instructions = path.join(codexHome, 'AGENTS.md');
-    let current = null;
-    try { current = fs.readFileSync(instructions, 'utf8'); } catch { current = null; }
-    if (current !== request.system) fs.writeFileSync(instructions, request.system, { mode: 0o600 });
+    if (!prepareCodexHome({ codexHome, source, instructions: request.system })) throw new SummaryError('unavailable', 'Codex is not signed in with a ChatGPT account (run `codex login`); an API key is never used for summaries');
     const outFile = `${stem}.out.txt`;
     try {
       const command = `exec codex exec --skip-git-repo-check --ephemeral -s read-only -m "$ENGELBART_SUMMARY_MODEL" -c 'model_reasoning_effort="${effort}"' -c project_doc_max_bytes=0 --color never --json -o "$ENGELBART_SUMMARY_OUTPUT" - < "$ENGELBART_SUMMARY_INPUT"`;
@@ -178,4 +188,4 @@ function createFakeSummarizer() {
   };
 }
 
-module.exports = { buildRequest, fitSummary, loadSystemPrompt, createCliSummarizer, createFakeSummarizer, SummaryError, MAX_SUMMARY_CHARS, MAX_INPUT_CHARS };
+module.exports = { buildRequest, fitSummary, loadSystemPrompt, createCliSummarizer, createFakeSummarizer, SummaryError, MAX_SUMMARY_CHARS, MAX_INPUT_CHARS, NOT_THE_SUBSCRIPTION, prepareCodexHome, lastResultLine, lastUsage };
