@@ -69,8 +69,7 @@ function createPostItViews({ electron, getWindow, getContext, send }) {
     } });
     const entry = { row, view, db: database, pending: Promise.resolve(), fresh, error: null };
     entries.set(row.id, entry);
-    view.setBackgroundColor('#fff3b3');
-    view.setBorderRadius(6);
+    view.setBackgroundColor('#00000000');
     view.setBounds(cardBounds(row, viewport(), zoom()));
     view.setVisible(false);
     win.contentView.addChildView(view);

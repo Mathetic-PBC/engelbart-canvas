@@ -57,7 +57,7 @@ The model is chosen in `~/.engelbart/config.json`, which is read again for every
 
 ## Project post-its (prototype)
 
-The folded-corner icon beside **Copy** adds a titleless post-it. It uses the note editor's font and inline Markdown. Click text to edit; drag blank space to move; drag the bottom-right grip to resize (or focus the grip and use arrow keys). While moving a card, the bottom-left corner becomes a trash target. Release there to permanently delete it. Escape cancels a drag.
+The yellow sticky-note icon beside **Copy** adds a titleless post-it. The icon and card use `design/assets/yellow-sticky-note.svg`, including its paper texture, curled corner, and transparent shadow. The card uses the note editor's font and inline Markdown. Click text to edit; drag blank space to move; drag the curled corner to resize (or focus the grip and use arrow keys). While moving a card, the bottom-left corner becomes a trash target. Release there to permanently delete it. Escape cancels a drag.
 
 Cards belong to the project and remain visible across its workspaces and notes. Content and preferred layout persist in `post_its` inside the project's `notes.pglite`. A smaller window temporarily clamps the cards into view. There is no hidden/completed state, drawer, attachment picker, or `@btw` command in this prototype.
 

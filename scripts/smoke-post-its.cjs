@@ -79,6 +79,8 @@ app.whenReady().then(async () => {
     await click(win.webContents, Math.round(button.x), Math.round(button.y));
     let card = await until(() => cards(win)[0], 'native card creation');
     await until(() => js(card.webContents, '!!document.querySelector("[data-editor]")'), 'card editor');
+    assert.equal(await js(card.webContents, '(async()=>{const image=new Image();image.src=document.querySelector(".post-paper image").href.baseVal;await image.decode();return image.naturalWidth})()'), 512, 'supplied SVG loads from the packaged renderer assets');
+    assert.equal(await js(card.webContents, 'getComputedStyle(document.body).backgroundColor'), 'rgba(0, 0, 0, 0)', 'paper margins remain transparent');
     assert.equal(await js(card.webContents, 'typeof window.engelbartAPI'), 'undefined', 'card has no general app bridge');
     const hostFont = await js(win.webContents, 'getComputedStyle(document.querySelector("[data-editor]")).font');
     const cardFont = await js(card.webContents, 'getComputedStyle(document.querySelector("[data-editor]")).font');
@@ -99,13 +101,24 @@ app.whenReady().then(async () => {
     const moved = card.getBounds();
     assert.ok(Math.abs(moved.x - before.x - 280) <= 1 && Math.abs(moved.y - before.y - 80) <= 1, `blank-area drag: ${JSON.stringify({ before, moved })}`);
     const boundsBeforeText = card.getBounds();
-    await click(card.webContents, 32, 65);
-    await drag(card, 70, 0, { x: 32, y: 65 });
+    const textPoint = await js(card.webContents, '(()=>{const range=document.createRange();range.selectNodeContents(document.querySelector("[data-line=\\\"1\\\"] .t"));const r=range.getBoundingClientRect();return{x:Math.round(r.left+4),y:Math.round(r.top+r.height/2)}})()');
+    await click(card.webContents, textPoint.x, textPoint.y);
+    await drag(card, 70, 0, textPoint);
     assert.deepEqual(card.getBounds(), boundsBeforeText, 'text drag selects without moving card');
     assert.ok(await js(card.webContents, 'getSelection().toString().length > 0'), 'text remains selectable');
-    await drag(card, 80, 50, { x: card.getBounds().width - 10, y: card.getBounds().height - 10 });
+    const grip = await js(card.webContents, '(()=>{const r=document.querySelector("[data-resize-post-it]").getBoundingClientRect();return{x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)}})()');
+    await drag(card, 80, 50, grip);
     const sized = card.getBounds();
     assert.deepEqual([sized.width, sized.height], [380, 290], 'corner resize');
+    if (process.env.ENGELBART_POST_IT_ART_SHOT) {
+      card.webContents.setBackgroundThrottling(false);
+      await js(card.webContents, 'document.activeElement.blur()');
+      const picture = await card.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true });
+      const pixels = picture.toBitmap(), { width, height } = picture.getSize();
+      assert.equal(pixels[3], 0, 'native card capture preserves transparent corners');
+      assert.equal(pixels[(Math.floor(height / 2) * width + Math.floor(width / 2)) * 4 + 3], 255, 'the paper itself is opaque');
+      fs.writeFileSync(process.env.ENGELBART_POST_IT_ART_SHOT, picture.toPNG());
+    }
     console.log('PASS create, font, markdown, blank drag, text selection, resize');
 
     await js(win.webContents, 'document.querySelector("button[aria-label=Settings]").click()');

@@ -933,7 +933,7 @@ export default class DocEditor extends React.Component {
     return (
       <>
         <style>{RISE_CSS + CARD_CSS}</style>
-        <div onClick={this.docClick} style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: compact ? '20px 18px 28px' : '28px clamp(12px, 4%, 40px) 120px', cursor: compact ? 'grab' : 'text' }}>
+        <div onClick={this.docClick} style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: compact ? '4px 4px 24px' : '28px clamp(12px, 4%, 40px) 120px', cursor: compact ? 'grab' : 'text' }}>
           <div style={{ maxWidth: '65ch', marginInline: 'auto', paddingInline: compact ? 0 : 'clamp(0px, 3%, 24px)', cursor: 'auto', fontSize: 17 }}>
             {this.props.header}
             <div

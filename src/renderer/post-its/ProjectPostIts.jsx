@@ -1,8 +1,9 @@
 import React from 'react';
 import { api } from '../api.js';
+import StickyNoteArt from './StickyNoteArt.jsx';
 
 export function PostItIcon() {
-  return <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10l6-6V5a2 2 0 0 0-2-2Z" /><path d="M15 21v-4a2 2 0 0 1 2-2h4" /></svg>;
+  return <StickyNoteArt width="23" height="23" />;
 }
 
 export default function ProjectPostIts({ projectId, active, onError }) {

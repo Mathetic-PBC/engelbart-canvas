@@ -1,6 +1,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import DocEditor from '../workspace/DocEditor.jsx';
+import StickyNoteArt from './StickyNoteArt.jsx';
 import '../tokens/typography.css';
 import '@fontsource/source-code-pro/400.css';
 import './card.css';
@@ -73,8 +74,11 @@ function Card() {
   };
 
   return <div className="post-card" data-trash={overTrash ? '1' : '0'} onPointerDownCapture={down} onPointerMove={move} onPointerUp={end} onPointerCancel={(e) => end(e, true)} onLostPointerCapture={(e) => end(e, true)} onClickCapture={(e) => { if (suppressClick.current) { e.preventDefault(); e.stopPropagation(); suppressClick.current = false; } }}>
-    {card && <DocEditor ref={editor} compact docKey={card.id} text={card.text} onChange={change} onOpenLink={(url) => api.openLink(url).catch((e) => setError(e.message))} onCopyText={api.copy} />}
-    {card && !card.text && <span className="post-placeholder">Write something…</span>}
+    <StickyNoteArt className="post-paper" />
+    <div className="post-content">
+      {card && <DocEditor ref={editor} compact docKey={card.id} text={card.text} onChange={change} onOpenLink={(url) => api.openLink(url).catch((e) => setError(e.message))} onCopyText={api.copy} />}
+      {card && !card.text && <span className="post-placeholder">Write something…</span>}
+    </div>
     {overTrash && <span className="post-delete-hint">Release to delete</span>}
     {error && <div role="alert" className="post-error">Couldn’t save: {error}</div>}
     <button data-resize-post-it="1" className="post-resize" aria-label="Resize post-it" title="Drag to resize" onKeyDown={(event) => {
