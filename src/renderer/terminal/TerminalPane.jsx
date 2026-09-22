@@ -362,7 +362,7 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
             <span style={{ font: '10px/1 var(--font-sans)', color: '#8f8f8f' }}>⌄</span>
           </button>
           {menu && (
-            <div role="menu" style={{ position: 'fixed', left: clamp(menu.x - menuW, 8, (window.innerWidth || 1200) - menuW - 8), top: menu.y + 6, zIndex: 60, width: menuW, padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, animation: `rise 160ms ${EASE}` }}>
+            <div data-overlay="1" role="menu" style={{ position: 'fixed', left: clamp(menu.x - menuW, 8, (window.innerWidth || 1200) - menuW - 8), top: menu.y + 6, zIndex: 60, width: menuW, padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, animation: `rise 160ms ${EASE}` }}>
               {AGENTS.map((agent) => {
                 const info = state.providers.get(agent.id);
                 const available = agent.id === 'shell' || !info || info.available;

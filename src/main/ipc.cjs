@@ -102,14 +102,15 @@ function createStore({ homeDir, fixturesDir, inspectPdf: readPdf = null }) {
   return { layout, context, config: describe, setTestMode, resetTestData, close: closeAll };
 }
 
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, notify, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister() }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, notify, beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister() }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const withCtx = (fn) => async (...args) => fn(await store.context(), ...args);
 
   handle('config', () => store.config());
-  handle('set-test-mode', (value) => store.setTestMode(value));
+  handle('set-test-mode', async (value) => { await beforeContextChange(); return store.setTestMode(value); });
   handle('reset-test-data', async () => {
     if (!(await confirmReset())) return { reset: false, ...store.config() };
+    await beforeContextChange();
     const config = await store.resetTestData();
     return { reset: true, ...config };
   });

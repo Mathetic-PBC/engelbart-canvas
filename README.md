@@ -55,6 +55,20 @@ The model is chosen in `~/.engelbart/config.json`, which is read again for every
 - The list, the ladders and the default provider: `~/.engelbart/model-effort-inline-question.json`, read again for every question.
 - The instructions it runs under: `src/main/bart/system-prompt.cjs`, or your own in `<data root>/.context/bart-system-prompt.md`.
 
+## Project post-its (prototype)
+
+The folded-corner icon beside **Copy** adds a titleless post-it. It uses the note editor's font and inline Markdown. Click text to edit; drag blank space to move; drag the bottom-right grip to resize (or focus the grip and use arrow keys). While moving a card, the bottom-left corner becomes a trash target. Release there to permanently delete it. Escape cancels a drag.
+
+Cards belong to the project and remain visible across its workspaces and notes. Content and preferred layout persist in `post_its` inside the project's `notes.pglite`. A smaller window temporarily clamps the cards into view. There is no hidden/completed state, drawer, attachment picker, or `@btw` command in this prototype.
+
+Each card is an app-owned `WebContentsView` above the live browser. Its restricted preload can edit only that card. Native browser tabs are restacked below cards, and cards temporarily yield to app dialogs/menus. Each view has a substantial renderer cost: approximately 100 MB working set per card in the development smoke run; this architecture is intended for trying the interaction, not hundreds of cards.
+
+Verification: `npm test`, then `npm run build && npx electron scripts/smoke-post-its.cjs`. The smoke test uses a hidden window and disposable data, checks editing/geometry/browser interaction/trash, and prints a checkpoint directory. To check a full relaunch:
+
+```sh
+ENGELBART_POST_IT_SMOKE_ROOT=/path/from/checkpoint ENGELBART_POST_IT_SMOKE_RESTORE=1 npx electron scripts/smoke-post-its.cjs
+```
+
 ## Terminal pane
 
 Each tab is a real PTY (the Experimental Terminal engine). While the shell is idle you type into the **Run commands** box at the bottom, like a chat: Enter sends, ↑/↓ recall your shell history, and the transcript above starts empty and does not take keys. While a program runs — an arrow-key menu, a REPL, Claude Code or Codex, started from the dropdown or by typing its name — the keyboard belongs to the transcript, as in any terminal, and the box comes back when the program ends. The dropdown at the right of the tab strip turns an untouched terminal into the agent in place, so to choose an agent's directory: click the `▭` chip, pick the folder, pick the agent. The mechanism (a launcher plus zsh wrapper startup files that blank the prompt and emit shell-integration marks, then hand your configuration back) is described in `src/main/shell-rc.cjs`; bash and fish are left alone.
@@ -89,7 +103,7 @@ The pill top-right exists on every screen. **Test · on** roots the app at `~/.e
   .backups/<project>-<time>/          copies taken before a layout conversion
   <project>/
     project.json                      { id, name, created, directory }   directory = where the code lives
-    notes.pglite/                     table `notes` (topic_id holds the workspace id)
+    notes.pglite/                     tables `notes` (topic_id holds the workspace id), `post_its` (text and preferred layout)
     <Note>.md                         notes, flat
     assets/<id>.png                   pasted images (library rows of type `image`)
     .context/catalog.json             what the project holds, with summaries, for agents that read files

@@ -27,7 +27,7 @@ export default function TestToggle({ testMode, onToggle, onReset, onReveal, busy
             ⚙
           </button>
           {open && (
-            <div role="menu" style={{ position: 'absolute', right: 0, top: 'calc(100% + 6px)', minWidth: 230, padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, animation: 'rise 160ms cubic-bezier(.25,.1,.25,1)' }}>
+            <div data-overlay="1" role="menu" style={{ position: 'absolute', right: 0, top: 'calc(100% + 6px)', minWidth: 230, padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, animation: 'rise 160ms cubic-bezier(.25,.1,.25,1)' }}>
               <div style={{ padding: '6px 10px 6px', font: '500 9px/1 var(--font-sans)', letterSpacing: '1.6px', textTransform: 'uppercase', color: '#8f8f8f' }}>Test data · ~/.engelbart/test</div>
               <div role="menuitem" className="hov-wash" onClick={() => { setOpen(false); onReveal(); }} style={{ padding: '8px 10px', borderRadius: 6, cursor: 'pointer', font: '13px/1.4 var(--font-sans)', color: '#171717' }}>Reveal in Finder</div>
               <div role="menuitem" className="hov-wash" onClick={() => { setOpen(false); onReset(); }} style={{ padding: '8px 10px', borderRadius: 6, cursor: 'pointer', font: '13px/1.4 var(--font-sans)', color: '#e70022' }}>Reset everything…</div>

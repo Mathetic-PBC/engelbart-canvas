@@ -85,6 +85,12 @@ const engelbartAPI = Object.freeze({
   onBrowserLogin: (callback) => subscribe('browser:login', callback),
   onBrowserOpenTab: (callback) => subscribe('browser:open-tab', callback),
   onBrowserFocusAddress: (callback) => subscribe('browser:focus-address', callback),
+  postItsActivate: (projectId) => ipcRenderer.invoke('post-its:activate', projectId),
+  postItsCreate: (projectId) => ipcRenderer.invoke('post-its:create', projectId),
+  postItsSuspend: (value) => ipcRenderer.invoke('post-its:suspend', value),
+  postItsLayout: () => ipcRenderer.invoke('post-its:layout'),
+  onPostItsDrag: (callback) => subscribe('post-its:drag', callback),
+  onPostItsError: (callback) => subscribe('post-its:error', callback),
 });
 
 contextBridge.exposeInMainWorld('terminalAPI', terminalAPI);

@@ -1,6 +1,7 @@
 import React from 'react';
 import { KIND, kindOf } from '../ui/Icons.jsx';
 import { isUntitled } from '../model/names.js';
+import { PostItIcon } from '../post-its/ProjectPostIts.jsx';
 
 // The sidebar: the current workspace as a header (status mark, editable name, "n / m") whose
 // hover reveals its sibling workspaces and "+ New"; below it the workspace's context tree
@@ -63,7 +64,7 @@ function TopicHeader({ topics, topic, onSelectTopic, onCycleTopic, onRenameTopic
         <span style={{ flex: 'none', font: '11px/1 var(--font-sans)', color: '#8f8f8f' }}>{topics.length ? `${index + 1} / ${topics.length}` : '0 / 0'}</span>
       </div>
       {hover && (
-        <div style={{ position: 'absolute', left: 8, right: 8, top: '100%', zIndex: 30, padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, animation: 'rise 160ms cubic-bezier(.25,.1,.25,1)' }}>
+        <div data-overlay="1" data-workspace-menu="1" style={{ position: 'absolute', left: 8, right: 8, top: '100%', zIndex: 30, padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, animation: 'rise 160ms cubic-bezier(.25,.1,.25,1)' }}>
           {topics.map((candidate) => {
             const on = topic && candidate.id === topic.id;
             return (
@@ -137,7 +138,7 @@ function copiedLabel(copied) {
 export default function Rail({
   width, topics, topic, onSelectTopic, onCycleTopic, onRenameTopic, onAddTopic,
   rows, onRowClick, onRowRenameStart, onRowRename, onRowRenameEnd,
-  onAddContext, onAddChild, onCopy, copied, copyTitle,
+  onAddContext, onAddChild, onCopy, copied, copyTitle, onPostIt,
 }) {
   return (
     <aside aria-label="Sidebar" style={{ flex: 'none', width, display: 'flex', flexDirection: 'column', background: '#fafafa' }}>
@@ -151,8 +152,9 @@ export default function Rail({
           <div className="hov-ink-wash" onClick={onAddChild} title="A workspace nested inside this one" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6, font: '13px/1.4 var(--font-sans)', color: '#8f8f8f', cursor: 'pointer', transition: 'color 120ms' }}>+ Workspace</div>
         </div>
       </div>
-      <div style={{ flex: 'none', padding: '6px 16px 14px 22px' }}>
+      <div style={{ flex: 'none', padding: '6px 16px 14px 22px', display: 'flex', alignItems: 'center', gap: 4 }}>
         <button type="button" className="hov-ink-wash" onClick={onCopy} disabled={!onCopy} title={copyTitle} data-copy-doc="1" style={{ padding: '6px 8px', border: 0, borderRadius: 6, background: 'transparent', font: '13px/1.4 var(--font-sans)', color: copied ? '#171717' : '#8f8f8f', cursor: onCopy ? 'pointer' : 'default', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', transition: 'color 120ms' }}>{copied ? copiedLabel(copied) : 'Copy'}</button>
+        <button type="button" className="hov-ink-wash" onClick={onPostIt} disabled={!onPostIt} aria-label="Add post-it" title="Add post-it" data-add-post-it="1" style={{ display: 'grid', placeItems: 'center', width: 31, height: 31, padding: 5, border: 0, borderRadius: 6, background: 'transparent', color: '#8f8f8f', cursor: 'pointer', flex: 'none' }}><PostItIcon /></button>
       </div>
     </aside>
   );

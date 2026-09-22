@@ -929,11 +929,12 @@ export default class DocEditor extends React.Component {
   }
   render() {
     const s = this.state;
+    const compact = this.props.compact;
     return (
       <>
         <style>{RISE_CSS + CARD_CSS}</style>
-        <div onClick={this.docClick} style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '28px clamp(12px, 4%, 40px) 120px', cursor: 'text' }}>
-          <div style={{ maxWidth: '65ch', marginInline: 'auto', paddingInline: 'clamp(0px, 3%, 24px)', cursor: 'auto', fontSize: 17 }}>
+        <div onClick={this.docClick} style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: compact ? '20px 18px 28px' : '28px clamp(12px, 4%, 40px) 120px', cursor: compact ? 'grab' : 'text' }}>
+          <div style={{ maxWidth: '65ch', marginInline: 'auto', paddingInline: compact ? 0 : 'clamp(0px, 3%, 24px)', cursor: 'auto', fontSize: 17 }}>
             {this.props.header}
             <div
               data-editor="1"
@@ -943,8 +944,8 @@ export default class DocEditor extends React.Component {
               spellCheck={false}
               role="textbox"
               aria-multiline="true"
-              aria-label="Document"
-              style={{ marginTop: 18, outline: 'none', minHeight: 240, font: '17px/1.6 var(--font-sans)', color: '#171717', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', caretColor: '#171717', cursor: 'text' }}
+              aria-label={compact ? 'Post-it' : 'Document'}
+              style={{ marginTop: compact ? 0 : 18, outline: 'none', minHeight: compact ? 28 : 240, font: '17px/1.6 var(--font-sans)', color: '#171717', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', caretColor: '#171717', cursor: 'text' }}
             />
           </div>
         </div>

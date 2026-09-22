@@ -29,6 +29,7 @@ const { RendererLifecycle, shouldHideWindowOnClose } = require('./terminal/windo
 const { assertTrustedRenderer, parseExternalUrl } = require('./ipc-validation.cjs');
 const { createStore, registerEngelbartIpc } = require('./ipc.cjs');
 const { createBrowserViews, registerBrowserIpc } = require('./browser/views.cjs');
+const { createPostItViews } = require('./post-its/views.cjs');
 
 const DIST = path.join(__dirname, '../../dist');
 const FIXTURES = path.join(__dirname, '../../fixtures');
@@ -58,6 +59,7 @@ let sweeper = null;
 let bart = null;
 let providerStatus = null;
 let browserViews = null;
+let postItViews = null;
 let quitPending = false;
 let quitReady = false;
 
@@ -137,6 +139,7 @@ async function requestQuit() {
     if (sweeper) await sweeper.stop();
     if (bart) bart.stopAll();
     if (browserViews) await browserViews.flush().catch(() => {});
+    if (postItViews) await postItViews.activate(null);
     if (manager) await manager.shutdown();
     if (store) await store.close();
   } catch (error) {
@@ -262,6 +265,7 @@ function createWindow() {
     return;
   }
   mainWindow = new BrowserWindow({
+    show: process.env.ENGELBART_HEADLESS !== '1', // isolated automated checks; never take desktop focus
     width: 1440,
     height: 900,
     minWidth: 900,
@@ -289,8 +293,10 @@ function createWindow() {
     if (url !== mainWindow.webContents.getURL()) event.preventDefault();
   });
   // The renderer's browser tabs live in its memory: when the page goes, their views go with it.
-  mainWindow.webContents.on('did-start-loading', () => { rendererLifecycle.detach(); browserViews.closeAll(); });
-  mainWindow.webContents.on('render-process-gone', () => rendererLifecycle.detach());
+  mainWindow.webContents.on('did-start-loading', () => { rendererLifecycle.detach(); browserViews.closeAll(); void postItViews.activate(null).catch(console.error); });
+  mainWindow.webContents.on('render-process-gone', () => { rendererLifecycle.detach(); void postItViews.activate(null).catch(console.error); });
+  mainWindow.on('resize', () => postItViews.layout());
+  mainWindow.on('blur', () => postItViews.cancelGesture());
   mainWindow.on('close', (event) => {
     if (shouldHideWindowOnClose(process.platform, quitReady)) {
       event.preventDefault();
@@ -300,6 +306,7 @@ function createWindow() {
   mainWindow.on('closed', () => {
     rendererLifecycle.detach();
     browserViews.closeAll();
+    void postItViews.activate(null).catch(console.error);
     mainWindow = null;
   });
   mainWindow.loadURL(APP_URL);
@@ -355,18 +362,27 @@ if (!hasSingleInstanceLock) {
     manager.on('data', (payload) => sendToRenderer('terminal:data', payload));
     manager.on('exit', (payload) => sendToRenderer('terminal:exit', payload));
     registerTerminalIpc();
+    postItViews = createPostItViews({
+      electron: { WebContentsView, clipboard, shell: electronShell },
+      getWindow: () => mainWindow,
+      getContext: () => store.context(),
+      send: sendToRenderer,
+    });
+    postItViews.register({ ipcMain, trustedHandler });
     browserViews = createBrowserViews({
       electron: { WebContentsView, session: electronSession, Menu, clipboard, dialog, shell: electronShell },
       getWindow: () => mainWindow,
       send: sendToRenderer,
       appName: app.getName(),
       fileRoot: () => homeDir,
+      onLayerChange: () => postItViews.raise(),
     });
     registerBrowserIpc({ ipcMain, trustedHandler, views: browserViews });
     registerEngelbartIpc({
       ipcMain,
       trustedHandler,
       store,
+      beforeContextChange: () => postItViews.activate(null),
       openExternal: async (value) => {
         await electronShell.openExternal(parseExternalUrl(value).href);
         return true;

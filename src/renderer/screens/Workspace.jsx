@@ -9,6 +9,7 @@ import { kindOf } from '../ui/Icons.jsx';
 import { hasTag, isNote } from '../model/kind.js';
 import { isUntitled, nextUntitled } from '../model/names.js';
 import { OPEN_IN_BROWSER } from '../model/address.js';
+import ProjectPostIts from '../post-its/ProjectPostIts.jsx';
 
 // The workspace screen (design 2026-09-17): a header in three columns — Engelbart / project /
 // parent workspaces over the sidebar, the document tabs over the document, the Browser ·
@@ -551,6 +552,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onAddChild={() => addTopic(true)}
           onCopy={docRef ? copyDoc : null}
           copied={copied}
+          onPostIt={active ? () => api.postItsCreate(project.id).catch(onError) : null}
           copyTitle={docRef ? `Copy “${docTitle}” with every @mentioned file's content placed where it is mentioned` : ''}
         />
 
@@ -601,6 +603,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
         />
       </div>
 
+      <ProjectPostIts projectId={project.id} active={active} onError={onError} />
       {ctxModal && topic && (
         <CtxModal
           topic={topic}
