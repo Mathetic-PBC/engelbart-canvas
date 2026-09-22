@@ -7,6 +7,7 @@ const {
   handleTerminalKeyEvent,
   initialTerminalGeometry,
   openTerminalLink,
+  browserLink,
   PendingEvents,
   preservedChromeFocus,
   splitUtf8Chunks,
@@ -111,6 +112,17 @@ test('terminal link activation reports bridge rejection without opening a window
   const errors = [];
   await openTerminalLink('file:///tmp/private', async () => { throw rejection; }, (error) => errors.push(error));
   assert.deepEqual(errors, [rejection]);
+});
+
+test('a terminal link is a web page for the Browser pane, or it is refused', async () => {
+  assert.equal(browserLink('http://localhost:5173'), 'http://localhost:5173/');
+  assert.equal(browserLink('https://example.com/a?b=1#c'), 'https://example.com/a?b=1#c');
+  assert.throws(() => browserLink('file:///tmp/private'), /http or https/);
+  assert.throws(() => browserLink('javascript:alert(1)'), /http or https/);
+  assert.throws(() => browserLink('not a url'), /invalid/);
+  const errors = [];
+  await openTerminalLink('mailto:a@b.c', (uri) => browserLink(uri), (error) => errors.push(error.message));
+  assert.deepEqual(errors, ['URL protocol must be http or https']);
 });
 
 test('pending events merge bootstrap history monotonically exactly once', () => {

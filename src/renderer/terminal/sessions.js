@@ -7,14 +7,17 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+import { WebglAddon } from '@xterm/addon-webgl';
 import {
   DEFAULT_CHUNK_BYTES,
   handleTerminalKeyEvent,
   initialTerminalGeometry,
   openTerminalLink,
+  browserLink,
   PendingEvents,
   splitUtf8Chunks,
 } from './helpers.cjs';
+import { OPEN_IN_BROWSER } from '../model/address.js';
 
 const PROVIDER_NAMES = { shell: 'Shell', claude: 'Claude Code', codex: 'Codex' };
 const DEFAULT_FONT_SIZE = 12.5;
@@ -115,7 +118,7 @@ function inputFor(record, value) {
 function openLink(uri) {
   void openTerminalLink(
     uri,
-    (value) => api().openExternal(value),
+    (value) => { window.dispatchEvent(new CustomEvent(OPEN_IN_BROWSER, { detail: { url: browserLink(value) } })); },
     (error) => pushError(`Link could not be opened: ${errorMessage(error)}`),
   );
 }
@@ -126,6 +129,7 @@ function makeTerminalRecord(snapshot, projectId) {
     allowProposedApi: false,
     cursorBlink: true,
     cursorStyle: 'bar',
+    cursorInactiveStyle: 'none', // no hollow cursor in a transcript that is not taking keys
     fontFamily: "'Source Code Pro', Menlo, SFMono-Regular, monospace",
     fontSize: state.settings.fontSize || DEFAULT_FONT_SIZE,
     lineHeight: 1.18,
@@ -137,6 +141,9 @@ function makeTerminalRecord(snapshot, projectId) {
     minimumContrastRatio: 4.5,
     rightClickSelectsWord: true,
     scrollback: 10000,
+    scrollSensitivity: 2.5,
+    fastScrollSensitivity: 10,
+    smoothScrollDuration: 90,
     theme: THEME,
   });
   const fitAddon = new FitAddon();
@@ -152,7 +159,7 @@ function makeTerminalRecord(snapshot, projectId) {
   view.id = `terminal-${snapshot.id}`;
   view.setAttribute('role', 'tabpanel');
   view.setAttribute('aria-label', `${providerName(snapshot.provider)} terminal`);
-  view.style.cssText = 'position:absolute;inset:0;';
+  view.style.cssText = 'position:absolute;inset:10px 0 0 14px;'; // the stage's padding does not reach an absolute child; text kept off the pane's edge and its resize handle
 
   const record = {
     snapshot: { ...snapshot, history: undefined },
@@ -170,7 +177,23 @@ function makeTerminalRecord(snapshot, projectId) {
     shell: { integrated: false, busy: snapshot.provider !== 'shell', command: '', cwd: snapshot.cwd },
     inputLocked: false,
     onLockedKey: null,
+    onLockedFocus: null,
   };
+
+  // While the pane's own box is the input, the transcript never holds focus (so it shows no
+  // cursor and a click does nothing); dragging still selects text for ⌘C.
+  // A press on empty space there starts nothing: only a drag that begins on printed text selects.
+  view.addEventListener('mousedown', (event) => {
+    if (!record.inputLocked || textUnder(record, event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    terminal.clearSelection();
+  }, true);
+  view.addEventListener('focusin', () => {
+    if (!record.inputLocked) return;
+    terminal.blur();
+    if (record.onLockedFocus) record.onLockedFocus();
+  });
 
   // Shell-integration marks from the zsh wrappers (src/main/shell-rc.cjs): A = ready for a command,
   // C = a command started, E;<line> = its command line, P;Cwd=<dir> = where the shell is.
@@ -189,6 +212,20 @@ function makeTerminalRecord(snapshot, projectId) {
     return handleTerminalKeyEvent(event, (data) => inputFor(record, data));
   });
   return record;
+}
+
+/** Whether the pointer is over a printed character of the transcript (not blank space or an empty row). */
+function textUnder(record, event) {
+  const screen = record.view.querySelector('.xterm-screen');
+  if (!screen) return false;
+  const box = screen.getBoundingClientRect();
+  const { cols, rows, buffer } = record.terminal;
+  if (!box.width || !box.height || event.clientX < box.left || event.clientY < box.top) return false;
+  const col = Math.floor((event.clientX - box.left) / (box.width / cols));
+  const row = Math.floor((event.clientY - box.top) / (box.height / rows));
+  if (col >= cols || row >= rows) return false;
+  const line = buffer.active.getLine(buffer.active.viewportY + row);
+  return !!line && col < line.translateToString(true).length;
 }
 
 function applyShellMark(record, data) {
@@ -331,7 +368,7 @@ export async function createSession({ provider = 'shell', cwd, projectId, cols, 
   return record;
 }
 
-/** Ask main to close the PTY (it confirms with a dialog when the process still runs). */
+/** Ask main to close the PTY; a running process is ended without asking. */
 export async function closeSession(id) {
   try {
     const closed = await api().closeSession(id);
@@ -353,8 +390,21 @@ export function mountView(id, stage) {
   if (!record.opened) {
     record.terminal.open(record.view);
     record.opened = true;
+    useGpuRenderer(record);
   }
   return record;
+}
+
+// The GPU renderer is what makes scrolling a long transcript smooth; the DOM renderer remains
+// the fallback when WebGL is unavailable or its context is lost.
+function useGpuRenderer(record) {
+  try {
+    const addon = new WebglAddon();
+    addon.onContextLoss(() => addon.dispose());
+    record.terminal.loadAddon(addon);
+  } catch {
+    // DOM renderer.
+  }
 }
 
 export function unmountView(id) {
@@ -419,11 +469,14 @@ export function pickDirectory(current) {
 }
 
 /** While locked, keys pressed in the transcript go to `onKey` (the pane's box) instead of the PTY. */
-export function setInputLock(id, locked, onKey = null) {
+export function setInputLock(id, locked, onKey = null, onFocus = null) {
   const record = state.sessions.get(id);
   if (!record) return;
   record.inputLocked = !!locked;
   record.onLockedKey = locked ? onKey : null;
+  record.onLockedFocus = locked ? onFocus : null;
+  record.view.classList.toggle('locked', !!locked);
+  if (locked && record.opened && record.view.contains(document.activeElement)) record.terminal.blur();
 }
 
 /** The text selected in a session's transcript ('' when none). */

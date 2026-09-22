@@ -3,8 +3,8 @@
 // A document as one text that stands on its own outside Engelbart: what the sidebar's Copy puts
 // on the clipboard (2026-09-19). Every @[mentioned] file is placed directly under the line that
 // mentions it, in <file> tags, once: at its first mention reading top to bottom. A note is
-// included whole and brings its own mentions with it. Anything else (a paper, a website, a
-// repository, a dataset) is included as where it is plus its catalog summary when the sweep has
+// included whole and brings its own mentions with it. Anything else (a pdf, a website, a
+// repository, a folder, a data file) is included as where it is plus its catalog summary when the sweep has
 // written one; a paper's text can run to hundreds of thousands of characters, its abstract cannot.
 // A mention that leads nowhere says so where it stands. A pasted image becomes the path of its
 // file, which means something outside the app; img:<id> does not.
@@ -14,15 +14,17 @@ const projects = require('../store/projects.cjs');
 
 // The editor's inline tokens (src/renderer/model/doc.js), so a mention inside `code` stays text
 // here as it does on screen. test/expand-mentions.test.cjs holds the two together.
-const INLINE = /(!\[[^\]\n]*\]\(img:[\w-]+\)|@bart(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\])/g;
+const INLINE = /(!\[[^\]\n]*\]\(img:[\w-]+\)|@bart(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`])/g;
 const IMAGE_TOKEN = /^!\[([^\]\n]*)\]\(img:([\w-]+)\)$/;
 const BART_NAME = /^bart/i; // the editor shows @[bart…] as the question agent, never as a file
 
+const isNote = (row) => Array.isArray(row.tags) && row.tags.includes('note'); // an md from outside the project is not read through the notes table
 const attr = (value) => String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 const bare = (text) => String(text == null ? '' : text).replace(/\r/g, '').replace(/^\n+/, '').trimEnd();
 
 function openTag(row) {
   const parts = [`name="${attr(row.name)}"`, `type="${attr(row.type)}"`];
+  if (Array.isArray(row.tags) && row.tags.length) parts.push(`tags="${attr(row.tags.join(' '))}"`);
   if (row.path) parts.push(`path="${attr(row.path)}"`);
   if (row.folder_path) parts.push(`folder="${attr(row.folder_path)}"`);
   if (row.url) parts.push(`url="${attr(row.url)}"`);
@@ -30,7 +32,7 @@ function openTag(row) {
 }
 
 async function fileBlock(row, source, seen, tally) {
-  if (row.type === 'note') {
+  if (isNote(row)) {
     let text;
     try { text = await source.read(row); } catch { text = null; }
     if (typeof text !== 'string') { tally.missing += 1; return [`${openTag(row)} missing="true" />`]; }

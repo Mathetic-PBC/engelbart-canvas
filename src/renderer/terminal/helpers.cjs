@@ -118,10 +118,18 @@ function preservedChromeFocus(candidate, sessionIds) {
   return { sessionId: candidate.sessionId, action: candidate.action };
 }
 
-function openTerminalLink(uri, openExternal, onError) {
+function openTerminalLink(uri, open, onError) {
   return Promise.resolve()
-    .then(() => openExternal(uri))
+    .then(() => open(uri))
     .catch((error) => onError(error));
+}
+
+/** A terminal link opens as a new tab in the Browser pane, which takes web pages only. */
+function browserLink(uri) {
+  let url;
+  try { url = new URL(String(uri)); } catch { throw new TypeError('URL is invalid'); }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new TypeError('URL protocol must be http or https');
+  return url.href;
 }
 
 class PendingEvents {
@@ -208,6 +216,7 @@ module.exports = {
   handleTerminalKeyEvent,
   initialTerminalGeometry,
   openTerminalLink,
+  browserLink,
   PendingEvents,
   preservedChromeFocus,
   splitUtf8Chunks,

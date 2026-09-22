@@ -23,10 +23,10 @@ test.after(async () => {
 
 test('projects: create, list, rename moves the directory and rewrites note paths', async () => {
   const created = await projects.createProject(ctx, 'Thesis/2026');
-  assert.equal(created.name, 'Thesis2026');
-  assert.equal(created.slug, 'thesis2026');
+  assert.equal(created.name, 'Thesis-2026');
+  assert.equal(created.slug, 'thesis-2026');
   assert.equal(created.directory, null);
-  assert.ok(fs.statSync(path.join(layout.testRoot, 'thesis2026', 'notes.pglite')).isDirectory());
+  assert.ok(fs.statSync(path.join(layout.testRoot, 'thesis-2026', 'notes.pglite')).isDirectory());
   const note = await projects.createNote(ctx, created.id, { name: 'First' });
   const renamed = await projects.renameProject(ctx, created.id, 'Dissertation');
   assert.equal(renamed.slug, 'dissertation');
@@ -182,4 +182,33 @@ test('read-text-file: project-relative, ~/ and absolute paths inside the home di
   const big = await projects.readProjectTextFile(ctx, project.id, 'big.txt');
   assert.equal(big.text.length, 20000);
   assert.equal(big.truncated, true);
+});
+
+test('resolve-page-file: an html file by full path, or relative to the project, the engelbart folder or the code directory', async () => {
+  const code = path.join(homeDir, 'code-pages');
+  fs.mkdirSync(path.join(code, 'docs'), { recursive: true });
+  const project = await projects.createProject(ctx, { name: 'Pages', directory: code });
+  fs.mkdirSync(path.join(project.dir, 'My Workspace'), { recursive: true });
+  fs.writeFileSync(path.join(project.dir, 'My Workspace', 'report.html'), '<h1>r</h1>');
+  fs.writeFileSync(path.join(project.dir, 'notes.txt'), 'text');
+  fs.writeFileSync(path.join(code, 'docs', 'index.htm'), '<h1>d</h1>');
+  const real = (file) => fs.realpathSync(file);
+  const { pathToFileURL } = require('node:url');
+
+  const report = real(path.join(project.dir, 'My Workspace', 'report.html'));
+  const found = await projects.resolvePageFile(ctx, project.id, 'My Workspace/report.html');
+  assert.deepEqual(found, { path: report, url: pathToFileURL(report).href });
+  assert.equal((await projects.resolvePageFile(ctx, project.id, report)).path, report);
+  assert.equal((await projects.resolvePageFile(ctx, project.id, `~/${path.relative(homeDir, report)}`)).path, report);
+  assert.equal((await projects.resolvePageFile(ctx, project.id, pathToFileURL(report).href)).path, report);
+  assert.equal((await projects.resolvePageFile(ctx, project.id, `${path.basename(project.dir)}/My Workspace/report.html`)).path, report); // from the engelbart folder
+  assert.equal((await projects.resolvePageFile(ctx, project.id, 'docs/index.htm')).path, real(path.join(code, 'docs', 'index.htm'))); // from the code directory
+  assert.equal((await projects.resolvePageFile(ctx, project.id, 'My Workspace/report.html#results?x')).url, `${pathToFileURL(report).href}#results?x`);
+
+  for (const not of ['notes.txt', 'missing.html', 'apple.com', 'example.com/index.html', '/etc/hosts', 'My Workspace']) {
+    assert.equal(await projects.resolvePageFile(ctx, project.id, not), null, not);
+  }
+  fs.symlinkSync('/etc/hosts', path.join(project.dir, 'escape.html'));
+  assert.equal(await projects.resolvePageFile(ctx, project.id, 'escape.html'), null);
+  assert.equal((await projects.readProjectTextFile(ctx, project.id, 'notes.txt')).text, 'text');
 });

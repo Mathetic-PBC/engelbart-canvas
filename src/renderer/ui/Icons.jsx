@@ -1,5 +1,7 @@
-// The six SVG kind icons the design defines (Goal Canvas.dc.html lines 395–402) as React components,
-// plus the KIND map keyed by library item type.
+// The SVG kind icons the design defines (Goal Canvas.dc.html lines 395–402) as React components,
+// plus the KIND map keyed by a row's kind (model/kind.js: its tags first, then its type).
+
+import { kindKey, kindLabel } from '../model/kind.js';
 
 export const GH = () => (
   <svg viewBox="0 0 16 16" width={12} height={12} fill="currentColor" aria-hidden="true">
@@ -22,6 +24,18 @@ export const LAYERS = () => (
   </svg>
 );
 
+export const FOLDER = () => (
+  <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinejoin="round" aria-hidden="true">
+    <path d="M1.5 4a1 1 0 0 1 1-1h3.3l1.5 1.8h6.2a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" />
+  </svg>
+);
+
+export const CODE = () => (
+  <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" aria-hidden="true">
+    <path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5" />
+  </svg>
+);
+
 export const WS = () => (
   <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinejoin="round" aria-hidden="true">
     <rect x={1.5} y={1.5} width={4.5} height={4.5} rx={1} />
@@ -31,10 +45,19 @@ export const WS = () => (
   </svg>
 );
 
+// A sheet with its corner turned down and three lines (Hudson's reference drawing, 2026-09-21).
 export const NOTE = () => (
   <svg viewBox="0 0 16 16" width="1em" height="1em" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" aria-hidden="true">
-    <rect x={2} y={2.5} width={10} height={11.5} rx={1.2} />
-    <path d="M4.5 1v3M7 1v3M9.5 1v3M4.5 7.5h5M4.5 10h5M4.5 12.5h3" />
+    <path d="M5 1.5h4.5L13 5v7.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2z" />
+    <path d="M9.5 1.5v2A1.5 1.5 0 0 0 11 5h2" />
+    <path d="M5.5 7.75h5M5.5 10h5M5.5 12.25h5" />
+  </svg>
+);
+
+export const SEARCH = () => (
+  <svg viewBox="0 0 16 16" width={16} height={16} fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" aria-hidden="true">
+    <circle cx={6.75} cy={6.75} r={4.5} />
+    <path d="M10.25 10.25 14 14" />
   </svg>
 );
 
@@ -52,18 +75,31 @@ export const IMAGE = () => (
   </svg>
 );
 
-/** Kind → glyph (React node or Unicode string) and label, keyed by library item `type`. */
+export const TASK = () => (
+  <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" aria-hidden="true">
+    <rect x={2} y={2.5} width={12} height={11} rx={2} />
+    <path d="M5 8.2l2.2 2.2L11 6.2" />
+  </svg>
+);
+
+/** Kind → glyph (React node or Unicode string) and the kind's name, keyed by `kindKey(row)`. */
 export const KIND = {
   note: { glyph: <NOTE />, label: 'note' },
-  paper: { glyph: <PDF />, label: 'pdf' },
-  git_repo: { glyph: <GH />, label: 'git repo' },
-  dataset: { glyph: <LAYERS />, label: 'dataset' },
+  md: { glyph: <NOTE />, label: 'md' },
+  pdf: { glyph: <PDF />, label: 'pdf' },
+  git: { glyph: <GH />, label: 'git repo' },
+  folder: { glyph: <FOLDER />, label: 'folder' },
   website: { glyph: '↗', label: 'link' },
-  chat: { glyph: <CHAT />, label: 'chat' },
-  workspace: { glyph: <WS />, label: 'workspace' },
+  html: { glyph: <CODE />, label: 'html' },
+  data: { glyph: <LAYERS />, label: 'data file' },
+  chat: { glyph: <CHAT />, label: 'chat', fixed: true },
+  task: { glyph: <TASK />, label: 'task', fixed: true },
+  workspace: { glyph: <WS />, label: 'workspace', fixed: true },
   image: { glyph: <IMAGE />, label: 'image' },
 };
 
+/** A row's glyph, and the words beside it: a library row says its type then its tags ("pdf · paper"); the editor's own items keep their name. */
 export function kindOf(item) {
-  return (item && KIND[item.type]) || KIND.note;
+  const kind = KIND[kindKey(item)] || KIND.note;
+  return kind.fixed || !item || !item.type ? kind : { glyph: kind.glyph, label: kindLabel(item) };
 }

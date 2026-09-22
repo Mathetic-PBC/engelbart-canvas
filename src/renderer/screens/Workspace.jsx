@@ -2,15 +2,17 @@ import React from 'react';
 import { api, errorMessage } from '../api.js';
 import Rail from '../workspace/Rail.jsx';
 import DocTabs from '../workspace/DocTabs.jsx';
-import DocEditor, { BART_ITEM } from '../workspace/DocEditor.jsx';
+import DocEditor, { BART_ITEM, TASK_ITEM } from '../workspace/DocEditor.jsx';
 import CtxModal from '../workspace/CtxModal.jsx';
 import RightPane, { RIGHT_MODES } from '../workspace/RightPane.jsx';
 import { kindOf } from '../ui/Icons.jsx';
+import { hasTag, isNote } from '../model/kind.js';
 import { isUntitled, nextUntitled } from '../model/names.js';
+import { OPEN_IN_BROWSER } from '../model/address.js';
 
 // The workspace screen (design 2026-09-17): a header in three columns — Engelbart / project /
 // parent workspaces over the sidebar, the document tabs over the document, the Browser ·
-// Terminal · Paper · Dataset switcher over the right pane — then sidebar, document, right pane.
+// Terminal · Paper switcher over the right pane — then sidebar, document, right pane.
 // A project is a tree of workspaces (2026-09-18): the sidebar shows the current one, its
 // siblings on hover, and its child workspaces as rows.
 
@@ -26,11 +28,10 @@ const basename = (value) => String(value || '').split('/').pop();
 function describe(row) {
   const kind = kindOf(row);
   let summary;
-  if (row.type === 'paper') summary = row.path ? `Downloaded pdf · ${basename(row.path)}` : 'A paper.';
+  if (isNote(row)) summary = 'A note in this project.';
+  else if (hasTag(row, 'git')) summary = row.folder_path ? `Cloned at ${row.folder_path}` : (row.url || 'A repository.');
   else if (row.type === 'website') summary = row.url || 'A linked page.';
-  else if (row.type === 'git_repo') summary = row.folder_path ? `Cloned at ${row.folder_path}` : (row.url || 'A repository.');
-  else if (row.type === 'dataset') summary = row.path ? basename(row.path) : 'A dataset.';
-  else summary = 'A note in this project.';
+  else summary = row.folder_path || (row.path ? basename(row.path) : '');
   if (row.summary) summary = row.summary; // the catalog blurb, or a paper's abstract, once the sweep has written one
   return { ...row, title: row.name, summary, facts: `${kind.label}${row.last_edited ? ` · edited ${String(row.last_edited).slice(0, 10)}` : ''}` };
 }
@@ -66,6 +67,12 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const [activeTab, setActiveTab] = React.useState(initialTab ? initialTab.id : 'ws');
   const [docs, setDocs] = React.useState({});
   const [rightMode, setRightMode] = React.useState('preview');
+  // A link clicked in the terminal opens in the Browser (which adds the tab); the pane turns to show it.
+  React.useEffect(() => {
+    const show = () => setRightMode('preview');
+    window.addEventListener(OPEN_IN_BROWSER, show);
+    return () => window.removeEventListener(OPEN_IN_BROWSER, show);
+  }, []);
   const [ctxModal, setCtxModal] = React.useState(null);
   const [paper, setPaper] = React.useState(null);
   const [renaming, setRenaming] = React.useState(null);
@@ -126,15 +133,37 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   // A question leaves the editor as { askId, text } with a pending line `bart~> <askId>` already under it. The agent reads
   // the documents from disk, so everything is saved first. Its answer replaces the pending line in whatever that document's
-  // text is by then, open or not; Stop removes the line; progress (which model, moved up or not) shows on the pending row.
+  // text is by then, open or not; Stop removes the line; progress (which model, what it is doing, the answer so far) shows on the pending row.
+  // A follow-up also carries `turns`, the earlier turns of its exchange as the document holds them, and Regenerate may carry
+  // `choice`, a model and effort for that run alone.
   const [asks, setAsks] = React.useState({});
+  // What the @bart line's chip offers and what its flags are checked against. The files behind it are read again for every
+  // question, so this is read again whenever the window comes back to the front.
+  const [bartModels, setBartModels] = React.useState(null);
+  React.useEffect(() => {
+    let live = true;
+    const load = () => api.bartModels().then((models) => { if (live) setBartModels(models); }).catch(() => {});
+    load();
+    window.addEventListener('focus', load);
+    return () => { live = false; window.removeEventListener('focus', load); };
+  }, []);
   const docsRef = React.useRef(docs);
   docsRef.current = docs;
-  React.useEffect(() => api.onBartProgress((progress) => {
-    setAsks((current) => (current[progress.askId] ? { ...current, [progress.askId]: { ...current[progress.askId], ...progress } } : current));
+  // Progress is of three kinds: a step of the ladder begins ({ step, name, effort, movedUp }: whatever the last step showed
+  // is dropped), what the agent is doing ({ activity }, kept in `log` when it is a thing done rather than a state), and the
+  // answer so far ({ lines }). All of it lives here, never in the document: only the finished answer is written there.
+  React.useEffect(() => api.onBartProgress(({ askId, log, ...progress }) => {
+    setAsks((current) => {
+      const ask = current[askId];
+      if (!ask) return current;
+      const next = { ...ask, ...progress };
+      if (progress.step) { next.activity = ''; next.lines = []; }
+      if (log && progress.activity) next.log = [...(ask.log || []), progress.activity].slice(-60);
+      return { ...current, [askId]: next };
+    });
   }), []);
 
-  const askBart = React.useCallback(async ({ askId, text }) => {
+  const askBart = React.useCallback(async ({ askId, text, turns, choice }) => {
     if (!docKey || !docRef || !topic) return;
     const key = docKey, ref = docRef;
     const place = (lines) => {
@@ -149,10 +178,10 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     try {
       await new Promise((resolve) => { setTimeout(resolve, 0); }); // let the pending line reach `pending` before flushing it
       await Promise.all([...pending.current.keys()].map((held) => flush(held)));
-      const out = await api.askBart(project.id, { askId, ref, workspaceId: topic.id, text });
+      const out = await api.askBart(project.id, { askId, ref, workspaceId: topic.id, text, turns: turns || [], choice: choice || null });
       place(out.stopped ? [] : out.lines);
     } catch (error) {
-      place([`bart?> **No answer.** ${errorMessage(error)}`]);
+      place([`bart> **No answer.** ${errorMessage(error)}`]);
     } finally {
       setAsks((current) => { const next = { ...current }; delete next[askId]; return next; });
     }
@@ -217,7 +246,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return library.filter((row) => (row.type === 'image' ? shown.has(row.id) : names.has(row.name.toLowerCase())));
   }, [docs, topic, library]);
 
-  const activeRowId = activeTab !== 'ws' ? activeTab : (rightMode === 'paper' && paper ? paper.id : rightMode === 'dataset' ? 'dataset' : 'ws');
+  const activeRowId = activeTab !== 'ws' ? activeTab : (rightMode === 'paper' && paper ? paper.id : 'ws');
 
   const rows = React.useMemo(() => {
     const out = [{ id: 'ws', name: 'Workspace', type: 'workspace', depth: 0, on: activeRowId === 'ws', editing: false }];
@@ -227,12 +256,12 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       const row = byId.get(id);
       if (!row || present.has(row.id)) continue;
       present.add(row.id);
-      out.push({ ...row, depth: 0, on: activeRowId === row.id || (row.type === 'dataset' && activeRowId === 'dataset'), editing: renaming === row.id });
+      out.push({ ...row, depth: 0, on: activeRowId === row.id, editing: renaming === row.id });
     }
     for (const note of tree.notes || []) {
       if (note.workspaceId === topic.id && !present.has(note.id)) {
         present.add(note.id);
-        out.push({ id: note.id, name: note.name, type: 'note', depth: 0, on: activeRowId === note.id, editing: renaming === note.id });
+        out.push({ id: note.id, name: note.name, type: 'md', tags: ['note'], depth: 0, on: activeRowId === note.id, editing: renaming === note.id });
       }
     }
     for (const row of mentioned) {
@@ -245,7 +274,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return out;
   }, [topic, here, byId, renaming, activeRowId, tree.notes, mentioned]);
 
-  const mentionable = React.useMemo(() => [BART_ITEM, ...library.filter((row) => row.type !== 'image').map(describe)], [library]);
+  const mentionable = React.useMemo(() => [BART_ITEM, TASK_ITEM, ...library.filter((row) => row.type !== 'image').map(describe)], [library]);
 
   /* --------------------------------------------------------------- opening */
 
@@ -263,6 +292,18 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     });
   };
 
+  // Dragging a note tab onto another takes its place; Workspace is not part of the shuffle.
+  const moveTab = React.useCallback((id, overId) => {
+    setTabs((current) => {
+      const from = current.findIndex((tab) => tab.id === id);
+      const to = current.findIndex((tab) => tab.id === overId);
+      if (from < 1 || to < 1 || from === to) return current;
+      const next = [...current];
+      next.splice(to, 0, next.splice(from, 1)[0]);
+      return next;
+    });
+  }, []);
+
   const openPaper = React.useCallback(async (row) => {
     setRightMode('paper');
     setPaper({ id: row.id, name: row.name, loading: true });
@@ -277,9 +318,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const openItem = React.useCallback((row) => {
     if (!row || row.id === 'chat') return;
     if (row.type === 'workspace') { setActiveTab('ws'); return; }
-    if (row.type === 'note') { openTab(row.id, row.name); return; }
-    if (row.type === 'paper') { void openPaper(row); return; }
-    if (row.type === 'dataset') { setRightMode('dataset'); return; }
+    if (isNote(row)) { openTab(row.id, row.name); return; }
+    if (row.type === 'pdf') { void openPaper(row); return; } // any pdf, paper or not; a paper added by its address is a website and opens as a link
     if (row.type === 'image') return;
     if (row.url) api.openExternal(row.url).catch((error) => onError(error));
   }, [openTab, openPaper, onError]);
@@ -446,7 +486,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     <input
       ref={(element) => { if (element && wantTitleFocus.current) { wantTitleFocus.current = false; element.focus(); } }}
       value={titleDraft}
-      onChange={(event) => setTitleDraft(event.target.value)}
+      onChange={(event) => setTitleDraft(event.target.value.replace(/[/\\]/g, '-'))} // a title is a file name: slashes become hyphens as you type
       onBlur={commitTitle}
       onKeyDown={(event) => {
         if (event.key === 'Escape') { event.target.blur(); return; }
@@ -480,7 +520,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
         </div>
         <div style={{ flex: 'none', width: 1, background: '#eaeaea' }} />
         <div style={{ flex: `${split} 1 0`, minWidth: 'min(420px, 55%)', display: 'flex', alignItems: 'flex-end', gap: 2, padding: '8px 8px 0', overflow: 'hidden' }}>
-          <DocTabs tabs={tabs} activeTab={activeTab} onSelect={setActiveTab} onClose={closeTab} />
+          <DocTabs tabs={tabs} activeTab={activeTab} onSelect={setActiveTab} onClose={closeTab} onMove={moveTab} />
         </div>
         <div style={{ flex: 'none', width: 1, background: '#eaeaea' }} />
         <div style={{ flex: `${1 - split} 1 0`, minWidth: 0, display: 'flex', alignItems: 'center', gap: 16, padding: '0 20px' }}>
@@ -530,6 +570,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
               images={images}
               onPasteImage={pasteImage}
               asks={asks}
+              models={bartModels}
+              onCopyText={(value) => api.copyText(value)}
               onAsk={askBart}
               onStopAsk={(askId) => api.stopBart(askId).catch((error) => onError(error))}
               header={header}

@@ -28,21 +28,21 @@ test('seedIfEmpty inserts the four fixtures once', async () => {
   assert.equal(await library.seedIfEmpty(ctx, fixtures), 4);
   assert.equal(await library.seedIfEmpty(ctx, fixtures), 0);
   const rows = await library.listLibrary(ctx);
-  assert.deepEqual(rows.map((row) => row.type).sort(), ['dataset', 'git_repo', 'paper', 'website']);
-  const paper = rows.find((row) => row.type === 'paper');
+  assert.deepEqual(rows.map((row) => [row.type, row.tags]).sort(), [['csv', []], ['pdf', []], ['website', ['git']], ['website', ['paper']]]);
+  const paper = rows.find((row) => row.type === 'pdf');
   assert.equal(paper.path, path.join(layout.testRoot, 'seed', 'hypocompass.pdf'));
   assert.ok(fs.existsSync(paper.path));
 });
 
 test('readLibraryFile returns pdf bytes and refuses other files', async () => {
   const rows = await library.listLibrary(ctx);
-  const paper = rows.find((row) => row.type === 'paper');
+  const paper = rows.find((row) => row.type === 'pdf');
   const file = await library.readLibraryFile(ctx, paper.id);
   assert.equal(file.name, paper.name);
   assert.equal(Buffer.from(file.bytes).toString('utf8'), '%PDF-1.4 test');
-  const dataset = rows.find((row) => row.type === 'dataset');
+  const dataset = rows.find((row) => row.type === 'csv');
   await assert.rejects(() => library.readLibraryFile(ctx, dataset.id), /Only downloaded pdf/);
-  const site = rows.find((row) => row.type === 'website');
+  const site = rows.find((row) => row.type === 'website' && row.tags.includes('paper'));
   await assert.rejects(() => library.readLibraryFile(ctx, site.id), /no local file/);
   await assert.rejects(() => library.readLibraryFile(ctx, '../etc'), TypeError);
 });

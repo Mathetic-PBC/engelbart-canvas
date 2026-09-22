@@ -186,7 +186,7 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
       if (!input) return;
       input.focus();
       if (event.key.length === 1 && !event.ctrlKey && !event.altKey) setDraft((text) => text + event.key);
-    });
+    }, () => { if (inputRef.current) inputRef.current.focus(); });
     return () => setInputLock(currentId, false);
   }, [currentId, boxIsInput]);
 
@@ -309,15 +309,16 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
     if (key === 'Escape') { event.preventDefault(); event.currentTarget.blur(); }
   };
 
-  // Clicking the transcript: a running program gets the keyboard; an idle shell sends you back to
-  // the box (unless you were selecting text to copy).
+  // Clicking the transcript: a running program gets the keyboard; under an idle shell the
+  // transcript is inert and the box keeps the caret (⌘C there copies a dragged selection).
   const onStageClick = () => {
     if (!currentId) return;
     if (!boxIsInput) { focusSession(currentId); return; }
-    if (!selectionText(currentId) && inputRef.current) inputRef.current.focus();
+    if (inputRef.current) inputRef.current.focus();
   };
 
-  // ⌘T opens a new terminal while the pane is showing; ⌘1–9 switch tabs while focus is in the pane.
+  // ⌘T opens a new terminal while the pane is showing; ⌘W closes the current tab and ⌘1–9 switch
+  // tabs while focus is in the pane.
   useEffect(() => {
     if (!visible) return undefined;
     const onKey = (event) => {
@@ -325,6 +326,7 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
       if (!mod) return;
       const inside = rootRef.current && event.target && rootRef.current.contains(event.target);
       if (event.metaKey && event.key.toLowerCase() === 't' && !event.shiftKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); void launch('shell', projectCwd); return; }
+      if (inside && currentId && event.metaKey && event.key.toLowerCase() === 'w' && !event.shiftKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); void close(currentId); return; }
       if (inside && event.metaKey && /^[1-9]$/.test(event.key)) {
         const record = sessions[Number(event.key) - 1];
         if (record) { event.preventDefault(); event.stopPropagation(); activate(record.snapshot.id); }
@@ -332,11 +334,10 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [visible, sessions, projectCwd]);
+  }, [visible, sessions, projectCwd, currentId]);
 
   const stopKeys = (event) => { event.stopPropagation(); };
   const menuW = 200;
-  const runningWhat = now.agent !== 'shell' ? LABEL[now.agent] : (now.command.trim().split(/\s+/)[0] || 'the program');
 
   return (
     <div ref={rootRef} data-terminal="1" onKeyDown={stopKeys} onKeyUp={stopKeys} style={{ flex: 1, minHeight: 0, display: visible ? 'flex' : 'none', flexDirection: 'column', background: '#fff' }}>
@@ -413,7 +414,7 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
         ) : (
           // Same height as the box, so the transcript (and the program drawing in it) is not resized.
           <div data-term-hint="1" style={{ padding: '2px 0', font: `12.5px/1.7 ${MONO}`, color: '#8f8f8f', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {running ? `${runningWhat} has the keyboard · type in the window above` : 'this terminal has exited — press + for a new one'}
+            {running ? '\u00a0' : 'this terminal has exited — press + for a new one'}
           </div>
         ))}
       </div>

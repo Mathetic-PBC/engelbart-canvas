@@ -1,6 +1,6 @@
 # Engelbart (desktop experiment)
 
-A macOS app that turns the *Goal Canvas* design into a working simulation environment: projects, goals, topics, notes and a library on disk under `~/.engelbart/`, an Obsidian-style document with inline todos and a placeholder `@chat`, a paper reader with rough.js ink and handwritten margin notes, and the Experimental Terminal engine embedded for real shell / Claude Code / Codex sessions. Nothing talks to a model yet; that is the point.
+A macOS app that turns the *Goal Canvas* design into a working simulation environment: projects, goals, topics, notes and a library on disk under `~/.engelbart/`, an Obsidian-style document with bullet lists, `- [ ]` tasks (typed `@Task`) and inline `@bart` questions, a paper reader with rough.js ink and handwritten margin notes, and the Experimental Terminal engine embedded for real shell / Claude Code / Codex sessions. Nothing talks to a model yet; that is the point.
 
 - Spec (every interpretation listed): `docs/superpowers/specs/2026-09-16-engelbart-desktop-design.md`
 - Plan: `docs/superpowers/plans/2026-09-16-engelbart-desktop.md`
@@ -50,6 +50,8 @@ The model is chosen in `~/.engelbart/config.json`, which is read again for every
 
 - No flags: the question starts at the first step of the ladder and the agent moves itself up when it judges the question needs it, keeping what it has read. Codex: Sol medium, Sol high, Astra xhigh. Claude Code: Sonnet medium, Opus high, Fable xhigh.
 - By hand: `@bart --opus --high why …` (also `--fable`, `--sol`, `--luna`, `--xhigh`, `--extra high`). Picking by hand turns moving up off.
+- Or hover the chip beside the send arrow: it names the model and effort the question starts on, and a pick there writes those same flags into the line. Flags the list recognises are slightly bolder.
+- Which providers are offered at all: `providers` in `~/.engelbart/config.json` (`["openai", "anthropic"]`).
 - The list, the ladders and the default provider: `~/.engelbart/model-effort-inline-question.json`, read again for every question.
 - The instructions it runs under: `src/main/bart/system-prompt.cjs`, or your own in `<data root>/.context/bart-system-prompt.md`.
 
@@ -80,7 +82,7 @@ The pill top-right exists on every screen. **Test · on** roots the app at `~/.e
 ```
 ~/.engelbart/                         (test mode: ~/.engelbart/test/, same shape, plus seed/)
   config.json  state.json             test toggle; { projectId, workspaceId } to reopen
-  library.pglite/                     table `library`: every note, paper, repo, dataset, website, image (+ summary, summary_edited, char_count)
+  library.pglite/                     table `library`: every md, pdf, folder, website, data file, image; `type` is the format, `tags` what was inferred: paper, git, note (+ summary, summary_edited, char_count)
   .context/status.json                the last summary sweep that did something
   .context/summary-system-prompt.md   optional: replaces the built-in summary prompt
   annotations/<library id>.json       PDF highlights and margin notes
@@ -106,13 +108,14 @@ src/main/index.cjs           app lifecycle, window, engelbart:// protocol, menu,
 src/main/ipc.cjs             engelbart:* handlers, argument validation, lazy store context + seeding
 src/main/store/              home layout + config, PGlite databases, projects/goals/topics/notes/docs, library + annotations
 src/main/terminal/           Experimental Terminal engine, unchanged (session manager, launch, providers, settings)
+src/main/browser/            views.cjs: the Browser pane's pages as WebContentsViews (decision 48)
 src/preload.cjs              window.terminalAPI (ET contract) + window.engelbartAPI
 src/renderer/App.jsx         create | all projects | workspace; reopens the last topic; the test pill
 src/renderer/screens/        CreateProject, Home (all projects), Workspace (three-column header: crumbs + goal menu, doc tabs, pane switcher)
 src/renderer/workspace/      Rail (topic header + sibling switcher + context tree), DocTabs, DocEditor (+ MentionMenu, Popover), CtxModal, RightPane, Browser
 src/renderer/pdf/PaperView   pdf.js + rough.js + Caveat
 src/renderer/terminal/       the Terminal pane (tabs, cwd chip, Terminal / Claude Code / Codex switcher) over terminalAPI; sessions survive navigation
-src/renderer/model/doc.js    the pure editor model (regexes, todo lines, caret offset mapping)
+src/renderer/model/doc.js    the pure editor model (regexes, task and bullet lines, caret offset mapping)
 scripts/drive.mjs            CDP driver for exploratory testing (screenshots, clicks, typing)
 ```
 

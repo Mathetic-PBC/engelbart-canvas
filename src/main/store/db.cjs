@@ -7,16 +7,26 @@
 //   <testRoot>/library.pglite    table `library`  — every mentionable thing, all projects
 //   <project>/notes.pglite       table `notes`    — the notes created in that project
 
+const fs = require('node:fs');
 const path = require('node:path');
 const { PGlite } = require('@electric-sql/pglite');
 
-const LIBRARY_TYPES = Object.freeze(['note', 'paper', 'git_repo', 'dataset', 'website', 'image']);
+// `type` is what a row is, read off the thing itself and never guessed: a file's format, or
+// `folder`, `website`, `image` for the three that are not a file with an extension. What a row is
+// *for* is inferred and lives in `tags`, beside the type and never instead of it: a pdf may or may
+// not be a paper, and a paper may be a pdf or an address (2026-09-21).
+const LIBRARY_TYPES = Object.freeze(['md', 'pdf', 'html', 'csv', 'tsv', 'json', 'jsonl', 'parquet', 'xlsx', 'folder', 'website', 'image']);
+// `paper`: an arXiv or DOI address, or a pdf that reads like one (src/main/context/pdf-kind.cjs).
+// `git`: a repository, by its address or as a folder with a `.git`. `note`: written in Engelbart;
+// nothing that is added from outside can get it.
+const LIBRARY_TAGS = Object.freeze(['paper', 'git', 'note']);
+const typeList = LIBRARY_TYPES.map((type) => `'${type}'`).join(',');
 
 const LIBRARY_SCHEMA = `
 create table if not exists library (
   id uuid primary key,
   name text not null,
-  type text not null check (type in ('note','paper','git_repo','dataset','website','image')),
+  type text not null check (type in (${typeList})),
   path text,
   url text,
   folder_path text,
@@ -30,9 +40,35 @@ alter table library add column if not exists summary text;
 alter table library add column if not exists summary_edited timestamptz;
 -- characters in a note's file, kept current on every save; null for every other type
 alter table library add column if not exists char_count integer;
--- databases created before pasted images existed: widen the type check
+-- a GitHub repository's numeric id: what the repository is, whatever it is called this year. Digits,
+-- kept as text (it crosses IPC and JSON). Null for everything else and for a repository GitHub could
+-- not be asked about (private, offline), which is then known by its url. One row per id.
+alter table library add column if not exists github_id text;
+create unique index if not exists library_github_id on library (github_id) where github_id is not null;
+-- what was inferred about the row (LIBRARY_TAGS), and the version of the category rules that was
+-- applied to it (library.cjs CATEGORY_RULES; null: none yet). A row behind the current version is
+-- re-categorized the next time its library opens, which is how an installed library follows a
+-- change of rules without anyone adding its items again.
+alter table library add column if not exists tags text[] not null default '{}';
+alter table library add column if not exists categorized integer;
+-- Databases from before 2026-09-21 typed a row by what it was for (note, paper, git_repo, dataset;
+-- website also meant an html file). Each becomes its format plus the tag that says the rest. This
+-- is only what SQL can tell from the old type: categorized stays null, so library.recategorize
+-- then applies the rules to every row before the library is handed to anyone (a pdf was always
+-- called a paper, so whether one is comes from reading it; an address that was typed website may be
+-- an arXiv one). Nothing a row knew is lost, and no summary, summary_edited or last_edited changes. The two fallbacks (a paper or dataset whose file has some other extension) match
+-- nothing the app ever wrote; they exist so that no row can fail the check below.
 alter table library drop constraint if exists library_type_check;
-alter table library add constraint library_type_check check (type in ('note','paper','git_repo','dataset','website','image'));
+update library set type = 'md', tags = array['note'] where type = 'note';
+update library set type = 'website', tags = array['paper'] where type = 'paper' and path is null;
+update library set type = 'pdf' where type = 'paper';
+update library set type = case when folder_path is null then 'website' else 'folder' end, tags = array['git'] where type = 'git_repo';
+update library set type = 'folder' where type = 'dataset' and path is null;
+update library set type = case lower(substring(path from '\\.([^./]+)$')) when 'tsv' then 'tsv' when 'json' then 'json' when 'jsonl' then 'jsonl' when 'ndjson' then 'jsonl' when 'parquet' then 'parquet' when 'xlsx' then 'xlsx' else 'csv' end where type = 'dataset';
+update library set type = 'html' where type = 'website' and path is not null;
+alter table library add constraint library_type_check check (type in (${typeList}));
+alter table library drop constraint if exists library_note_is_md;
+alter table library add constraint library_note_is_md check (type = 'md' or not ('note' = any(tags)));
 `;
 
 const NOTES_SCHEMA = `
@@ -58,17 +94,48 @@ function plain(row) {
   return out;
 }
 
+function optionalGithubId(value) {
+  if (value == null || value === '') return null;
+  if (typeof value !== 'string' || !/^[1-9]\d{0,18}$/.test(value)) throw new TypeError('github id must be a string of digits');
+  return value;
+}
+
+function requireTags(value, type) {
+  if (value == null) return [];
+  if (!Array.isArray(value)) throw new TypeError('tags must be a list');
+  const tags = [...new Set(value)];
+  for (const tag of tags) if (!LIBRARY_TAGS.includes(tag)) throw new TypeError(`Unknown library tag: ${tag}`);
+  if (tags.includes('note') && type !== 'md') throw new TypeError('Only a note written in Engelbart (an md) can be tagged note');
+  return tags;
+}
+
 function requireCount(value) {
   if (!Number.isInteger(value) || value < 0 || value > 2_000_000_000) throw new TypeError('count must be a non-negative integer');
   return value;
 }
 
-async function openRaw(dir, schema) {
+// A library typed the old way is about to be rewritten row by row (LIBRARY_SCHEMA): the directory
+// is copied first, closed, to <root>/.backups/library-<when>.pglite. It happens once, because the
+// converted table has the column this looks for.
+async function typedTheOldWay(db) {
+  const columns = (await db.query("select column_name from information_schema.columns where table_name = 'library'")).rows.map((row) => row.column_name);
+  return columns.length > 0 && !columns.includes('tags');
+}
+
+async function openRaw(dir, schema, { setAsideIf } = {}) {
   const key = path.resolve(dir);
   if (instances.has(key)) return instances.get(key);
   const opening = (async () => {
-    const db = new PGlite(key);
+    let db = new PGlite(key);
     await db.waitReady;
+    if (setAsideIf && await setAsideIf(db)) {
+      await db.close();
+      const backups = path.join(path.dirname(key), '.backups');
+      fs.mkdirSync(backups, { recursive: true, mode: 0o700 });
+      fs.cpSync(key, path.join(backups, `${path.basename(key, '.pglite')}-${new Date().toISOString().replace(/[:.]/g, '-')}.pglite`), { recursive: true });
+      db = new PGlite(key);
+      await db.waitReady;
+    }
     await db.exec(schema);
     return db;
   })();
@@ -106,15 +173,15 @@ function requireText(value, name, { optional = false, max = 4096 } = {}) {
 
 async function openLibraryDb(testRoot) {
   const dir = path.join(testRoot, 'library.pglite');
-  const db = await openRaw(dir, LIBRARY_SCHEMA);
+  const db = await openRaw(dir, LIBRARY_SCHEMA, { setAsideIf: typedTheOldWay });
   return {
     dir,
     async insert(row) {
       const type = requireText(row.type, 'type');
       if (!LIBRARY_TYPES.includes(type)) throw new TypeError(`Unknown library type: ${type}`);
       const result = await db.query(
-        `insert into library (id, name, type, path, url, folder_path, project_id)
-         values ($1, $2, $3, $4, $5, $6, $7) returning *`,
+        `insert into library (id, name, type, path, url, folder_path, project_id, github_id, tags, categorized)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning *`,
         [
           requireText(row.id, 'id', { max: 64 }),
           requireText(row.name, 'name', { max: 512 }),
@@ -123,6 +190,9 @@ async function openLibraryDb(testRoot) {
           requireText(row.url, 'url', { optional: true }),
           requireText(row.folder_path, 'folder_path', { optional: true }),
           requireText(row.project_id, 'project_id', { optional: true, max: 64 }),
+          optionalGithubId(row.github_id),
+          requireTags(row.tags, type),
+          row.categorized == null ? null : requireCount(row.categorized),
         ],
       );
       return plain(result.rows[0]);
@@ -173,9 +243,43 @@ async function openLibraryDb(testRoot) {
       );
       return plain(result.rows[0]);
     },
+    // What the category rules make of a row: its type and tags, and `rules`, the version that was
+    // applied (null when the row could not be settled, a pdf that is not there to read: the mark
+    // stays where it was). Not an edit, and nothing to do with the summary: it writes these three columns only.
+    async setCategory(id, { type, tags }, rules) {
+      if (!LIBRARY_TYPES.includes(type)) throw new TypeError(`Unknown library type: ${type}`);
+      const result = await db.query(
+        'update library set type = $2, tags = $3, categorized = coalesce($4, categorized) where id = $1 returning *',
+        [requireText(id, 'id', { max: 64 }), type, requireTags(tags, type), rules == null ? null : requireCount(rules)],
+      );
+      if (!result.rows.length) throw new Error('Unknown library item');
+      return plain(result.rows[0]);
+    },
+    // Rows behind `rules`: converted from a database typed the old way, made before the rules
+    // changed, or a pdf that could not be read when it was added.
+    async uncategorized(rules) {
+      const result = await db.query('select * from library where categorized is null or categorized < $1 order by created, name', [requireCount(rules)]);
+      return result.rows.map(plain);
+    },
+    // A note and a pasted image are what Engelbart made them; no rule has anything to infer. Returns how many were marked.
+    async settleUninferable(rules) {
+      const result = await db.query("update library set categorized = $1 where (categorized is null or categorized < $1) and (type = 'image' or 'note' = any(tags))", [requireCount(rules)]);
+      return result.affectedRows || 0;
+    },
+    // What is known about a repository, all on its one row: its GitHub id, its address, its clone on
+    // disk, the name GitHub gives it. Every value is the one to store. Learning one is not an edit:
+    // last_edited stays. A repository that has a folder is a folder; one that has only its address
+    // is a website.
+    async updateRepo(id, { name, url, folder_path: folderPath, github_id: githubId }) {
+      const result = await db.query(
+        "update library set name = $2, url = $3, folder_path = $4, github_id = $5, type = case when $4::text is null then 'website' else 'folder' end where id = $1 returning *",
+        [requireText(id, 'id', { max: 64 }), requireText(name, 'name', { max: 512 }), requireText(url, 'url', { optional: true }), requireText(folderPath, 'folder_path', { optional: true }), optionalGithubId(githubId)],
+      );
+      return plain(result.rows[0]);
+    },
     // Notes whose length has never been recorded (created before the column existed).
     async uncountedNotes() {
-      const result = await db.query("select id, path from library where type = 'note' and path is not null and char_count is null");
+      const result = await db.query("select id, path from library where 'note' = any(tags) and path is not null and char_count is null");
       return result.rows.map(plain);
     },
     // Notes the summary sweep has to look at: untouched since `quietBefore`, and either never
@@ -183,7 +287,7 @@ async function openLibraryDb(testRoot) {
     async summaryCandidates(quietBefore, minChars) {
       const result = await db.query(
         `select * from library
-          where type = 'note' and path is not null and last_edited <= $1
+          where 'note' = any(tags) and path is not null and last_edited <= $1
             and ((summary is null and (char_count is null or char_count > $2))
               or (summary is not null and (summary_edited is null or summary_edited < last_edited)))
           order by last_edited`,
@@ -191,9 +295,9 @@ async function openLibraryDb(testRoot) {
       );
       return result.rows.map(plain);
     },
-    // Papers with a local file: a PDF's abstract is its summary.
+    // Every pdf on disk, paper or not: a PDF's abstract is its summary.
     async papersWithFiles() {
-      const result = await db.query("select * from library where type = 'paper' and path is not null order by created");
+      const result = await db.query("select * from library where type = 'pdf' and path is not null order by created");
       return result.rows.map(plain);
     },
     // Escape hatch for tests and repairs.
@@ -258,4 +362,4 @@ async function openNotesDb(projectDir) {
   };
 }
 
-module.exports = { LIBRARY_TYPES, openLibraryDb, openNotesDb, closeDb, closeAll };
+module.exports = { LIBRARY_TYPES, LIBRARY_TAGS, openLibraryDb, openNotesDb, closeDb, closeAll };

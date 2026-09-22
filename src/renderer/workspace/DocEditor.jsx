@@ -4,12 +4,16 @@
 //   * props.text is the source of truth; every edit calls props.onChange(text) synchronously.
 //   * the `@[chat]` inline chat *panels* are gone; the line form is `@bart …` (2026-09-19), answered by a real agent:
 //     Enter puts a pending line under the question and hands it to props.onAsk; the parent replaces that line with the
-//     answer as draft lines (Hide removes them, Save keeps them). Answers, and a question with something under it, are read-only.
+//     answer. The card is Claude Design's "Answer Card" (2026-09-21, design/goal-canvas/ANSWER-CARD.md): an answer is kept
+//     as it arrives and its text can be edited; its foot holds Copy, Regenerate, which model said it, Collapse and Delete
+//     as icons; a field at the bottom of the card asks a follow-up, which joins the same card.
 //   * image paste/drop is not supported (spec §2 #19); `![alt](http…)` lines still render.
 //   * clicking into a rendered (non-active) line maps the display offset through rawOffset(), so the caret
 //     lands on the clicked character even inside bold/mention markup.
 import React from 'react';
-import { parseLine, todoLine, esc, tokShown, tokensOf, rawOffset, inlineHtml, isAnswer, LABELS, HELD } from '../model/doc.js';
+import { parseLine, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, threads, turnText, INLINE, LABELS, HELD, ATTRIBUTION_RE } from '../model/doc.js';
+import { readFlags, readQuestion, withChoice, modelOf, effortOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
+import BartPicker from './BartPicker.jsx';
 import MentionMenu from './MentionMenu.jsx';
 import Popover from './Popover.jsx';
 
@@ -17,27 +21,65 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const SPEED = { fast: 0.45, normal: 1, slow: 2.2 };
 
 export const BART_ITEM = { id: 'bart', type: 'chat', name: 'bart', title: 'Bart', summary: 'Ask a question about this document, the project\'s code or the web. Add --opus or --high to pick the model or the effort by hand.', facts: 'reads, never edits' };
+// Picking this writes `@Task `, which the document stores as the `- [ ] ` row a typed `- []` also makes.
+export const TASK_ITEM = { id: 'task', type: 'task', name: 'Task', title: 'Task', summary: 'A task row: check it off, \u2318\u23ce builds it, and a run of them shares one card.', facts: 'stored as - [ ]' };
 
-const UNDER_BART = ['pending', 'draft', 'reply'];
+const UNDER_BART = ['pending', 'reply'];
 const newAskId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
 const RISE_CSS = '@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}@keyframes thinking{0%,100%{opacity:.25}50%{opacity:1}}';
+// The answer card's controls. They are drawn as strings inside the editor, so what hover does lives here: an icon washes
+// grey and turns ink (Delete turns red) and shows its name under it; the chip's border goes one grey darker, never ink.
+const CARD_CSS = '.bart-ic{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:none;cursor:pointer;color:#4d4d4d}'
+  + '.bart-ic:hover{background:#f2f2f2;color:#171717}.bart-ic[data-danger]:hover{color:#e70022}.bart-ic:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(0,112,243,.18)}'
+  + '.bart-tip{position:absolute;top:100%;z-index:5;margin-top:4px;padding:4px 7px;border:1px solid #eaeaea;border-radius:6px;background:#fff;color:#171717;font:12px/1.2 var(--font-sans);white-space:nowrap;pointer-events:none;opacity:0;visibility:hidden;transition:opacity 120ms}'
+  + '.bart-ic:hover+.bart-tip,.bart-ic:focus-visible+.bart-tip{opacity:1;visibility:visible}'
+  + '.bart-chip{transition:border-color 120ms}.bart-chip:hover{border-color:#c9c9c9!important}.bart-send{transition:background 120ms}.bart-send:hover{opacity:.86}'
+  + '.bart-text{padding:4px 2px;border:0;background:transparent;color:#8f8f8f;font:500 12px/1.4 var(--font-sans);cursor:pointer}.bart-text:hover{color:#171717}'
+  + '[data-follow-input]::placeholder{color:#8f8f8f;font-style:italic;font-size:14.5px}';
+// Lucide's drawings at the design's weight: 16px, 1.5px stroke, round caps.
+const icon = (paths, size = 16, width = 1.5, caps = 'round') => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${width}" stroke-linecap="${caps}" stroke-linejoin="${caps === 'round' ? 'round' : 'miter'}" aria-hidden="true">${paths}</svg>`;
+const ICON = {
+  copy: icon('<rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>'),
+  regenerate: icon('<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path>'),
+  collapse: icon('<path d="m7 20 5-5 5 5"></path><path d="m7 4 5 5 5-5"></path>'),
+  expand: icon('<path d="m7 15 5 5 5-5"></path><path d="m7 9 5-5 5 5"></path>'),
+  trash: icon('<path d="M3 6h18"></path><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"></path><path d="M19 6v13a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path>'),
+  chevron: `<span style="display:inline-flex;color:#8f8f8f">${icon('<path d="m6 9 6 6 6-6"></path>', 12, 2)}</span>`,
+  send: icon('<path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path>', 13, 2.2),
+  // The steps toggle: a plain angle with square ends (Hudson's reference, 2026-09-21), pointing up while the list is open.
+  stepsOpen: icon('<path d="m5 15.5 7-7 7 7"></path>', 10, 3, 'square'),
+  stepsShut: icon('<path d="m5 8.5 7 7 7-7"></path>', 10, 3, 'square'),
+};
+const radius = (top, closes) => `${top ? '10px 10px' : '0 0'} ${closes ? '10px 10px' : '0 0'}`;
+// A flag the models file recognises is a little bolder than the text around it; a `--word` it does not know stays plain.
+const FLAG_LOOK = 'font-weight:500';
 
 export default class DocEditor extends React.Component {
-  state = { activeLine: null, mention: null, mentionIdx: 0, pop: null, statuses: {} };
+  state = { activeLine: null, mention: null, mentionIdx: 0, pop: null, picker: null, statuses: {} };
   edRef = React.createRef();
   history = []; future = []; caret = null; lastHtml = ''; lastKey = null; selRaw = null; openKey = ''; copied = null; copiedT = null;
   syncing = false; wantFocus = false; composing = false; mounted = false; timers = new Set();
+  openLogs = new Set(); // asks whose list of steps is open
+  pickerT = null;
+  // A follow-up being typed and the model picked for it, by the first line of its card. Neither is in the document, and
+  // neither is in the editor's HTML: the field keeps its text across redraws because it is put back after each one.
+  followText = new Map(); followChoice = new Map();
 
   /* ---------------------------------------------------------------- lifecycle */
   componentDidMount() {
     this.mounted = true;
     const inEd = (e) => e.target && e.target.closest && e.target.closest('[data-editor]') === this.editorEl();
+    // The follow-up field is an <input> inside the editor: its keys and text are its own, not the document's.
+    const inFollow = (e) => !!(e.target && e.target.matches && e.target.matches('[data-follow-input]'));
     this.docListeners = {
-      keydown: (e) => { if (inEd(e)) this.editorKey(e); },
-      input: (e) => { if (inEd(e)) this.editorInput(); },
-      beforeinput: (e) => { if (!inEd(e)) return; const sel = getSelection(); this.bulkDelete = /^delete/.test(e.inputType || '') && !!sel && !sel.isCollapsed; },
-      paste: (e) => { if (inEd(e)) this.editorPaste(e); },
+      keydown: (e) => { if (!inEd(e)) return; if (inFollow(e)) this.followKey(e); else this.editorKey(e); },
+      input: (e) => { if (!inEd(e)) return; if (inFollow(e)) this.followInput(e.target); else this.editorInput(); },
+      beforeinput: (e) => { if (!inEd(e) || inFollow(e)) return; const sel = getSelection(); this.bulkDelete = /^delete/.test(e.inputType || '') && !!sel && !sel.isCollapsed; },
+      paste: (e) => { if (inEd(e) && !inFollow(e)) this.editorPaste(e); },
+      // A press on one of the editor's buttons must not move the keyboard: leaving a line redraws the editor, and a button
+      // redrawn between the press and the release never gets its click (found with Delete, while an answer was being edited).
+      mousedown: (e) => { if (inEd(e) && e.target.closest('button[data-act], .bart-chip')) e.preventDefault(); },
       click: (e) => { if (inEd(e)) this.editorClick(e); },
       mouseover: (e) => { if (inEd(e)) this.editorOver(e); },
       mouseout: (e) => { if (inEd(e)) this.editorOut(e); },
@@ -46,7 +88,7 @@ export default class DocEditor extends React.Component {
       drop: (e) => { if (inEd(e)) e.preventDefault(); },
       focusout: (e) => { if (inEd(e) && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-mention-menu]'))) this.setState({ activeLine: null, mention: null }); },
       compositionstart: () => { this.composing = true; },
-      compositionend: (e) => { this.composing = false; if (inEd(e)) this.editorInput(); },
+      compositionend: (e) => { this.composing = false; if (inEd(e) && !inFollow(e)) this.editorInput(); },
     };
     Object.entries(this.docListeners).forEach(([k, f]) => document.addEventListener(k, f));
     this.syncEditor();
@@ -57,13 +99,16 @@ export default class DocEditor extends React.Component {
     if (prevProps.docKey !== this.props.docKey) {
       this.history = []; this.future = []; this.caret = null; this.lastHtml = ''; this.lastKey = null; this.selRaw = null; this.openKey = '';
       const s = this.state;
-      if (s.activeLine != null || s.mention || s.pop) { this.setState({ activeLine: null, mention: null, pop: null }); return; }
+      if (s.activeLine != null || s.mention || s.pop || s.picker) { this.setState({ activeLine: null, mention: null, pop: null, picker: null }); return; }
     }
+    // Progress of a run arrives many times a second. It changes pending rows only, and those are replaced where they
+    // stand: the rest of the editor, the caret and a selection in it are not touched.
+    if (prevProps.asks !== this.props.asks && prevProps.text === this.props.text && prevProps.docKey === this.props.docKey && this.patchPending()) return;
     this.syncEditor();
   }
 
   componentWillUnmount() {
-    this.mounted = false;
+    this.mounted = false; clearTimeout(this.pickerT);
     Object.entries(this.docListeners || {}).forEach(([k, f]) => document.removeEventListener(k, f));
     for (const id of this.timers) clearTimeout(id);
     this.timers.clear();
@@ -83,8 +128,17 @@ export default class DocEditor extends React.Component {
   editorEl() { return this.edRef.current; }
   statusesFor(key = this.key()) { return this.state.statuses[key] || {}; }
   status(i) { return this.statusesFor()[i] || ''; }
-  // Lines the person cannot edit: answers, and an @bart line once something stands under it.
-  lockedAt(ls, i) { const t = parseLine(ls[i] ?? '').type; return isAnswer(t) || (t === 'bart' && ls[i + 1] != null && UNDER_BART.includes(parseLine(ls[i + 1]).type)); }
+  // Lines the person cannot type in: an @bart line once something stands under it, a run at work, the closing line of an
+  // answer (it is the card's foot), an answer folded away, and the prototype's `> ` replies. The text of an answer can be
+  // edited (2026-09-21): it is a drawn-prefix line, as a bullet is.
+  lockedAt(ls, i) {
+    const p = parseLine(ls[i] ?? '');
+    if (p.type === 'reply') return p.folded || (ATTRIBUTION_RE.test(p.text) && parseLine(ls[i + 1] ?? '').type !== 'reply');
+    if (p.type === 'bart') return ls[i + 1] != null && UNDER_BART.includes(parseLine(ls[i + 1]).type);
+    return isAnswer(p.type);
+  }
+  // A card is closed by its foot, never by a line the caret can sit on: the document needs a line of its own after it.
+  endsOnCard(ls) { const last = ls.length - 1; return this.lockedAt(ls, last) || parseLine(ls[last] ?? '').type === 'reply'; }
   speed() { return SPEED[this.props.buildSpeed] || 1; }
   timer(fn, ms) { const id = setTimeout(() => { this.timers.delete(id); if (this.mounted) fn(); }, ms); this.timers.add(id); return id; }
 
@@ -100,7 +154,7 @@ export default class DocEditor extends React.Component {
   }
   setLines(fn, caret) { this.setDoc(fn(this.lines()).join('\n'), caret); }
   writeText(i, text, caret) {
-    this.setLines((ls) => ls.map((l, j) => { if (j !== i) return l; const p = parseLine(l); return p.type === 'todo' ? todoLine(p.depth, p.done, text) : text; }), caret);
+    this.setLines((ls) => ls.map((l, j) => { if (j !== i) return l; return sameLine(parseLine(l), text); }), caret);
   }
   setStatus(key, i, status, done) {
     this.setState((s) => ({ statuses: { ...s.statuses, [key]: { ...(s.statuses[key] || {}), [i]: status } } }));
@@ -135,12 +189,24 @@ export default class DocEditor extends React.Component {
   // shows (in the heading's font) for as long as the caret is on the line and goes away when the caret leaves (2026-09-18: hiding it
   // left an empty span the browser typed into, and those characters were lost).
   openIdx(tokens, a, b) { const out = []; let acc = 0; tokens.forEach((tok, k) => { const end = acc + tok.length, pre = tokShown(tok).pre; if (pre && a <= end && b >= acc) out.push(k); acc = end; }); return out; }
-  activeHtml(tokens) {
+  activeHtml(tokens, flags) {
     const [a, b] = this.revealRange(), open = this.openIdx(tokens, a, b); this.openKey = open.join(',');
     return tokens.map((tok, k) => {
+      if (flags && flags.has(k)) return `<span data-src="${esc(tok)}" data-open="1" style="${FLAG_LOOK}">${esc(tok)}</span>`;
       const isOpen = !tokShown(tok).pre || open.includes(k);
       return `<span data-src="${esc(tok)}" data-open="${isOpen ? 1 : 0}">${isOpen && tok !== '@bart' ? esc(tok) : inlineHtml(tok)}</span>`;
     }).join('');
+  }
+  // An @bart line in pieces: its recognised flags (src/main/bart/question.cjs reads them, as the run will) each a token of
+  // their own, the rest split as any line is. Shown verbatim, so offsets in the line are what they were.
+  bartTokens(line, p) {
+    const models = this.props.models, base = line.length - p.text.length, tokens = [], flags = new Set();
+    let at = 0;
+    for (const [from, to] of models ? readFlags(p.text, models).spans : []) {
+      tokens.push(...line.slice(at, base + from).split(INLINE).filter(Boolean)); flags.add(tokens.length); tokens.push(line.slice(base + from, base + to)); at = base + to;
+    }
+    tokens.push(...line.slice(at).split(INLINE).filter(Boolean));
+    return { tokens, flags };
   }
   segs(t) {
     return [...t.childNodes].filter((n) => n.nodeName !== 'BR').map((n) => {
@@ -168,8 +234,8 @@ export default class DocEditor extends React.Component {
   }
   activeRaw(t) { return this.segs(t).map((s) => s.src).join(''); }
 
-  lineHtml(i, line, p, active, status, first, edge, locked) {
-    const R = { top: '10px 10px 0 0', mid: '0', bottom: '0 0 10px 10px', solo: '10px' };
+  // `at` says where a line of an @bart card stands in it (this.layout); every other line has none.
+  lineHtml(i, line, p, active, status, first, at, locked) {
     const raw = `data-line="${i}" data-raw="${esc(line)}"`;
     if (p.type === 'todo') {
       const held = HELD.includes(status), done = p.done, label = done ? 'Done' : (LABELS[status] || '');
@@ -181,39 +247,69 @@ export default class DocEditor extends React.Component {
         + (!held ? `<button contenteditable="false" data-act="remove" data-row="${i}" aria-label="Remove todo" style="user-select:none;flex:none;margin-top:12px;padding:0 2px;border:0;background:transparent;font:14px/1 var(--font-sans);color:#c9c9c9;cursor:pointer">×</button>` : '')
         + '</div>';
     }
+    if (p.type === 'list') {
+      const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(p.text);
+      return `<div ${raw} style="display:flex;align-items:flex-start;gap:10px;padding:4px 0 4px ${p.depth * 24}px;min-height:35px">`
+        + `<span contenteditable="false" style="user-select:none;flex:none;width:14px;text-align:center;line-height:1.6;color:#8f8f8f">\u2022</span>`
+        + `<span class="t" style="flex:1;min-width:0">${content || '<br>'}</span></div>`;
+    }
     if (p.type === 'h') {
       const size = [26, 22, 18][p.level - 1]; const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(p.text);
       return `<div ${raw} style="padding:4px 0;min-height:35px;font:500 ${size}px/1.6 var(--font-sans);letter-spacing:-0.3px"><span class="t">${content || '<br>'}</span></div>`;
     }
     if (p.type === 'bart') {
-      const content = active && !locked ? this.activeHtml(tokensOf(p, line)) : inlineHtml(line); const ready = !!p.text.trim();
-      return `<div ${raw} ${locked ? 'contenteditable="false" data-readonly="1"' : ''} style="display:flex;align-items:flex-start;gap:10px;padding:10px 16px ${edge === 'solo' ? '10px' : '4px'};min-height:35px;background:#fafafa;border-radius:${R[edge] || '10px 10px 0 0'};margin-bottom:${edge === 'solo' ? '14px' : '0'};${locked ? 'user-select:text;cursor:default' : ''}"><span class="t" style="flex:1;min-width:0">${content || '<br>'}</span>`
-        + (edge === 'top' ? '' : `<button contenteditable="false" data-act="ask" data-row="${i}" aria-label="Send" ${ready ? '' : 'disabled'} style="user-select:none;flex:none;margin-top:3px;width:26px;height:26px;padding:0;border:0;border-radius:50%;display:flex;align-items:center;justify-content:center;background:${ready ? '#0070f3' : '#eaeaea'};color:${ready ? '#fff' : '#8f8f8f'};cursor:${ready ? 'pointer' : 'default'};transition:background 160ms"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="square"><path d="M8 13.5V3.2M3.6 7.4 8 3l4.4 4.4"/></svg></button>`)
+      const { tokens, flags } = this.bartTokens(line, p), models = this.props.models;
+      const content = active && !locked ? this.activeHtml(tokens, flags) : tokens.map((tok, k) => (flags.has(k) ? `<span style="${FLAG_LOOK}">${esc(tok)}</span>` : inlineHtml(tok))).join('');
+      const read = models ? readQuestion(p.text, models) : null, ready = !!(read ? read.question : p.text).trim();
+      const send = `<button contenteditable="false" data-act="ask" data-row="${i}" aria-label="Send" ${ready ? '' : 'disabled'} style="user-select:none;flex:none;width:26px;height:26px;padding:0;border:0;border-radius:50%;display:flex;align-items:center;justify-content:center;background:${ready ? '#0070f3' : '#eaeaea'};color:${ready ? '#fff' : '#8f8f8f'};cursor:${ready ? 'pointer' : 'default'};transition:background 160ms"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="square"><path d="M8 13.5V3.2M3.6 7.4 8 3l4.4 4.4"/></svg></button>`;
+      // The chip: what the question starts on, and (hovered) where that is changed. The arrow sits inside it, one unit.
+      const open = !!(this.state.picker && this.state.picker.kind === 'line' && this.state.picker.i === i);
+      const chip = read ? `<span contenteditable="false" data-chip="${i}" style="user-select:none;flex:none;display:inline-flex;align-items:center;gap:8px;margin:-2px -6px 0 0;padding:2px 2px 2px 12px;border:1px solid #eaeaea;border-radius:999px;background:#fff"><span data-act="pick" data-row="${i}" role="button" aria-haspopup="dialog" aria-expanded="${open}" style="display:inline-flex;align-items:center;gap:7px;height:26px;font:13px/1 var(--font-sans);color:#4d4d4d;cursor:default;white-space:nowrap">${esc(read.steps[0].name)} ${esc(EFFORT_LABELS[read.steps[0].effort] || read.steps[0].effort)}<span style="display:inline-flex;align-items:center;justify-content:center;width:10px;height:12px;font:12px/1 var(--font-sans);color:#8f8f8f"><span style="position:relative;top:${open ? '3px' : '-3px'}">${open ? '⌃' : '⌄'}</span></span></span>${send}</span>` : `<span contenteditable="false" style="flex:none;margin-top:3px">${send}</span>`;
+      // The question opens its card, or follows an answer inside one. Once it is answered its chip goes: the foot says who answered.
+      const top = !at || at.top, closes = !at || at.closes;
+      return `<div ${raw} ${locked ? 'contenteditable="false" data-readonly="1"' : ''} style="display:flex;align-items:flex-start;gap:10px;padding:${top ? 12 : 10}px 16px ${closes ? '10px' : '4px'};min-height:35px;background:#fafafa;border-radius:${radius(top, closes)};margin-bottom:${closes ? '14px' : '0'};font-size:16px;line-height:1.6;${locked ? 'user-select:text;cursor:default' : ''}"><span class="t" style="flex:1;min-width:0">${content || '<br>'}</span>`
+        + (closes ? chip : '')
         + '</div>';
     }
     if (p.type === 'pending') {
-      // The run with this id is working, or it died with the app and only Hide is left.
+      // The run with this id is working, or it died with the app and only Hide is left. While it works the row shows what
+      // it is doing, the things it has done (behind the count, closed until clicked) and the answer so far. None of that is
+      // in the document: it comes from props.asks, and the row's `data-raw` stays the bare pending line.
       const ask = (this.props.asks || {})[p.id];
-      const label = ask ? `${ask.movedUp ? 'Thinking harder' : 'Thinking'}${ask.name ? ` · ${esc(ask.name)} ${esc(ask.effort)}` : ''}` : 'No answer came back: the run was interrupted.';
-      const button = 'user-select:none;flex:none;padding:4px 10px;border:1px solid #eaeaea;border-radius:8px;background:#fff;color:#171717;font:500 12px/1.4 var(--font-sans);cursor:pointer';
-      return `<div ${raw} contenteditable="false" data-readonly="1" style="user-select:none;cursor:default;display:flex;align-items:center;gap:10px;padding:2px 16px 12px;background:#fafafa;border-radius:0 0 10px 10px;margin-bottom:14px;color:#8f8f8f;font:13px/1.5 var(--font-sans)">`
+      const doing = ask ? (ask.activity || (ask.movedUp ? 'Thinking harder' : 'Thinking')) : '';
+      const label = ask ? `${esc(doing)}${ask.name ? ` · ${esc(ask.name)} ${esc(ask.effort)}` : ''}` : 'No answer came back: the run was interrupted.';
+      const log = (ask && ask.log) || [], open = this.openLogs.has(p.id);
+      // The answer so far is not the answer: smaller and grey, with a mark pulsing where the next words go. No rule beside
+      // it (2026-09-21); it starts where the answer's text will, so nothing moves sideways when the answer lands.
+      const cursor = '<span style="display:inline-block;width:7px;height:13px;margin-left:3px;vertical-align:-1px;border-radius:2px;background:#c9c9c9;animation:thinking 1.2s ease-in-out infinite"></span>';
+      const written = ((ask && ask.lines) || []).map((text, n, all) => { const a = this.answerLook(text), end = n === all.length - 1; a.content = a.content.replace(/color:#171717;font-weight:600/g, 'font-weight:600'); // all of it grey until it is the answer
+        return `<span style="display:block;min-height:${text ? 22 : 10}px;padding:1px 0 1px 14px;${a.look}color:#8f8f8f;font-size:14px;line-height:1.65;${end ? 'margin-bottom:10px;' : ''}">${end ? (/<\/span><\/span>$/.test(a.content) ? a.content.replace(/<\/span><\/span>$/, `${cursor}</span></span>`) : a.content + cursor) : (a.content || '<br>')}</span>`; }).join('');
+      const closes = !at || at.closes;
+      return `<div ${raw} data-pending="${esc(p.id)}" contenteditable="false" data-readonly="1" style="user-select:none;cursor:default;padding:2px 16px 12px;background:#fafafa;border-radius:${radius(!at, closes)};margin-bottom:${closes ? '14px' : '0'};color:#8f8f8f;font:13px/1.5 var(--font-sans)">`
+        + written
+        + (open && log.length ? `<div style="margin:0 0 8px 16px;font:12px/1.7 var(--font-sans);color:#8f8f8f">${log.map((entry) => `<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(entry)}</div>`).join('')}</div>` : '')
+        + '<div style="display:flex;align-items:center;gap:10px">'
         + (ask ? '<span style="flex:none;width:6px;height:6px;border-radius:50%;background:#0070f3;animation:thinking 1.2s ease-in-out infinite"></span>' : '')
-        + `<span class="t" style="flex:1;min-width:0">${label}</span>`
-        + (ask ? `<button data-act="stopask" data-ask="${esc(p.id)}" style="${button}">Stop</button>` : `<button data-act="hidedraft" data-from="${i}" data-to="${i}" style="${button}">Hide</button>`)
-        + '</div>';
+        + `<span class="t" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</span>`
+        + (log.length ? `<button class="bart-text" data-act="asklog" data-ask="${esc(p.id)}" aria-expanded="${open}" style="user-select:none;flex:none;display:inline-flex;align-items:center;gap:6px;font-weight:400">${log.length} ${log.length === 1 ? 'step' : 'steps'}${open ? ICON.stepsOpen : ICON.stepsShut}</button>` : '')
+        + (ask ? `<button class="bart-text" data-act="stopask" data-ask="${esc(p.id)}" style="user-select:none;flex:none">Stop</button>` : `<button class="bart-text" data-act="dropline" data-row="${i}" style="user-select:none;flex:none">Hide</button>`)
+        + '</div></div>';
     }
-    if (isAnswer(p.type)) {
-      // An answer: read-only, in the grey card under its question, with one continuous rule down the left. A draft's card is
-      // closed by its foot (Hide · Save), not by its last line.
-      const last = edge === 'bottom' || edge === 'solo', closes = last && p.type !== 'draft';
-      let content = inlineHtml(p.text), look = '', minHeight = p.text ? 31 : 12;
-      if (p.type !== 'quote') {
-        const q = parseLine(p.text);
-        if (q.type === 'h') { content = inlineHtml(q.text); look = `font:600 ${[18, 17, 16][q.level - 1]}px/1.5 var(--font-sans);color:#171717;padding-top:8px;`; }
-        else if (q.type === 'todo') content = `<span style="display:flex;gap:8px;padding-left:${q.depth * 18}px"><span style="flex:none;color:#8f8f8f">•</span><span style="flex:1;min-width:0">${inlineHtml(q.text)}</span></span>`;
-        else if (last && /^\*[^*]+\*$/.test(p.text)) { content = esc(p.text.slice(1, -1)); look = 'font:12px/1.6 var(--font-sans);color:#8f8f8f;'; minHeight = 20; } // which model said it
-      }
-      return `<div ${raw} contenteditable="false" data-readonly="1" style="user-select:text;cursor:default;padding:0 16px ${closes ? '12px' : '0'} 16px;background:#fafafa;border-radius:${closes ? (R[edge] || '0') : (edge === 'top' || edge === 'solo' ? '10px 10px 0 0' : '0')};margin-bottom:${closes ? '14px' : '0'};color:#4d4d4d;font-size:16px"><span class="t" style="display:block;min-height:${minHeight}px;padding:2px 0 2px 12px;border-left:2px solid #dcdcdc;${look}">${content || '<br>'}</span></div>`;
+    if (p.type === 'reply') {
+      if (at && at.role === 'foot') return this.footHtml({ raw, q: at.turn.q, text: p.text.slice(1, -1), folded: at.turn.folded, closes: at.closes });
+      // Folded away, or the empty line the runner leaves before the closing line: in the document, not on the page.
+      if (p.folded || (at && at.gap)) return `<div ${raw} contenteditable="false" data-readonly="1" style="display:none"></div>`;
+      // One line of an answer, in the grey card with one continuous rule down its left. The caret's line shows its source
+      // on the design's focus tint; the rule and the card stay where they are.
+      const a = this.answerLook(p.text), content = active ? this.activeHtml(tokensOf(p, line)) : a.content;
+      // (An answer with no question above it, left by an edit outside the app, is a card of its own.)
+      const near = at ? null : this.lines(), first = at ? at.first : parseLine(near[i - 1] ?? '').type !== 'reply', closes = at ? at.closes : parseLine(near[i + 1] ?? '').type !== 'reply', last = at ? at.lastBody : closes;
+      return `<div ${raw} style="padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(!at && first, closes)};margin-bottom:${closes ? 14 : 0}px;color:#4d4d4d;font-size:16px;line-height:1.65;cursor:text"><span style="display:block;padding:${first ? 2 : 0}px 0 ${last ? 2 : 0}px 12px;border-left:2px solid #dcdcdc"><span class="t" style="display:block;min-height:${a.minHeight}px;border-radius:4px;${a.look}${active ? 'background:#f2f2f2;box-shadow:0 0 0 4px #f2f2f2;' : ''}">${content || '<br>'}</span></span></div>`;
+    }
+    if (p.type === 'quote') {
+      // The prototype's replies: read-only, as they were.
+      const ls = this.lines(), up = i > 0 && parseLine(ls[i - 1]).type === 'quote', down = parseLine(ls[i + 1] ?? '').type === 'quote';
+      return `<div ${raw} contenteditable="false" data-readonly="1" style="user-select:text;cursor:default;padding:${up ? 0 : 8}px 16px ${down ? '0' : '12px'};background:#fafafa;border-radius:${radius(!up, !down)};margin-bottom:${down ? '0' : '14px'};color:#4d4d4d;font-size:16px"><span class="t" style="display:block;min-height:${p.text ? 31 : 12}px;padding:2px 0 2px 12px;border-left:2px solid #dcdcdc">${inlineHtml(p.text) || '<br>'}</span></div>`;
     }
     if (p.type === 'img') {
       const src = p.src.startsWith('img:') ? ((this.props.images || {})[p.src.slice(4)] || '') : p.src;
@@ -222,6 +318,15 @@ export default class DocEditor extends React.Component {
     }
     const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(line);
     return `<div ${raw} style="padding:4px 0;min-height:35px"><span class="t">${content || '<br>'}</span></div>`;
+  }
+  // How one line of an answer reads: a heading, a bullet, or plain text; bold is ink on the answer's grey. An answer in the
+  // document and one still being written (the pending row) look the same. A paragraph is one line and an empty line is
+  // the 22px between two of them; a bullet keeps 8px to the next.
+  answerLook(text) {
+    const q = parseLine(text), ink = (html) => html.replace(/<strong style="font-weight:600">/g, '<strong style="color:#171717;font-weight:600">');
+    if (q.type === 'h') return { content: ink(inlineHtml(q.text)), look: `font:600 ${[18, 17, 16][q.level - 1]}px/1.5 var(--font-sans);color:#171717;padding-top:8px;`, minHeight: 26 };
+    if (isMarked(q.type)) return { content: `<span style="display:flex;gap:10px;padding-left:${q.depth * 18}px"><span contenteditable="false" style="flex:none;color:#8f8f8f;user-select:none">•</span><span style="flex:1;min-width:0">${ink(inlineHtml(q.text))}</span></span>`, look: 'padding-top:4px;padding-bottom:4px;', minHeight: 26 };
+    return { content: ink(inlineHtml(text)), look: 'text-wrap:pretty;', minHeight: text ? 26 : 22 };
   }
   // The foot of a todo card: Copy all on the left, Build all on the right while anything is open; clicking its whitespace adds a line below the card.
   groupHtml(group) {
@@ -233,45 +338,124 @@ export default class DocEditor extends React.Component {
     const label = busy.length && !ready.length ? 'Building…' : ready.length && busy.length ? `Queue ${ready.length}` : 'Build all';
     return `<div contenteditable="false" data-act="after" data-after="${lastIdx}" style="user-select:none;display:flex;justify-content:flex-end;align-items:center;gap:12px;padding:12px 16px 14px;margin-bottom:14px;background:#fafafa;border-radius:0 0 10px 10px;cursor:text">${copy}<button data-act="buildall" data-lines="${ready.map((t) => t.i).join(',')}" ${ready.length ? '' : 'disabled'} style="display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;padding:8px 14px;border:0;border-radius:8px;background:#0070f3;color:#fff;font:500 13px/1 var(--font-sans);cursor:pointer;opacity:${ready.length ? 1 : .4}">${label}</button></div>`;
   }
-  // The foot of an answer not yet kept: Hide removes it and frees the question, Save keeps it as part of the document.
-  draftFoot(from, to) {
-    const button = 'display:inline-flex;align-items:center;min-height:32px;padding:8px 14px;border-radius:8px;font:500 13px/1 var(--font-sans);cursor:pointer';
-    return `<div contenteditable="false" style="user-select:none;display:flex;justify-content:flex-end;align-items:center;gap:8px;padding:10px 16px 14px;margin-bottom:14px;background:#fafafa;border-radius:0 0 10px 10px"><button data-act="hidedraft" data-from="${from}" data-to="${to}" style="${button};border:1px solid #eaeaea;background:#fff;color:#171717">Hide</button><button data-act="savedraft" data-from="${from}" data-to="${to}" style="${button};border:0;background:#0070f3;color:#fff">Save</button></div>`;
+  // Where every line of an @bart card stands in it: which turn it belongs to, whether it opens or closes the card, and
+  // what is drawn after it that is not a line (a foot for an answer that has no closing line; the follow-up field).
+  layout(ls) {
+    const at = new Map();
+    for (const thread of threads(ls)) {
+      const end = thread.turns[thread.turns.length - 1];
+      const follow = end.answered && !end.pending && !end.folded && !!this.props.onAsk;
+      for (const turn of thread.turns) {
+        at.set(turn.q, { thread, turn, role: 'question', top: turn.q === thread.from, closes: !turn.answered });
+        const footless = turn.answered && !turn.pending && turn.foot < 0, tail = turn === end;
+        const gap = turn.foot > turn.from && parseLine(ls[turn.foot - 1]).text === '' ? turn.foot - 1 : -1;
+        const lastBody = (turn.foot >= 0 ? turn.foot : turn.to + 1) - (gap >= 0 ? 2 : 1);
+        for (let i = turn.from; i <= turn.to; i++) {
+          const role = i === turn.foot ? 'foot' : parseLine(ls[i]).type === 'pending' ? 'pending' : 'answer', ends = i === turn.to;
+          at.set(i, { thread, turn, role, gap: i === gap, first: i === turn.from, lastBody: i === lastBody, closes: ends && tail && !follow && !footless, footAfter: ends && footless, followAfter: ends && tail && follow, tail });
+        }
+      }
+    }
+    return at;
+  }
+  findTurn(ls, q) { for (const thread of threads(ls)) { const turn = thread.turns.find((t) => t.q === q); if (turn) return { thread, turn }; } return null; }
+  // The foot of one turn (Answer Card): Copy and Regenerate on the left, which model said it, Collapse or Expand, Delete.
+  // Icons, each with its name under it on hover; Regenerate has none, because hovering it opens the selector instead.
+  // `raw` is set when the answer's closing line is this foot; an answer without one (a run that failed) gets the same foot.
+  footHtml({ raw, q, text, folded, closes }) {
+    const wrap = (inner, extra = '') => `<span style="flex:none;position:relative;display:inline-flex;${extra}">${inner}</span>`;
+    const tip = (label, side) => `<span class="bart-tip" style="${side}:0">${label}</span>`;
+    const copied = this.copied === `bart${q}`;
+    return `<div ${raw || ''} contenteditable="false" data-readonly="1" data-foot="${q}" style="user-select:none;cursor:default;display:flex;align-items:center;gap:4px;padding:8px 12px 10px;background:#fafafa;border-radius:${radius(false, closes)};margin-bottom:${closes ? '14px' : '0'}">`
+      + wrap(`<button class="bart-ic" data-act="copybart" data-turn="${q}" aria-label="Copy" ${copied ? 'style="color:#8f8f8f"' : ''}>${ICON.copy}</button>${tip(copied ? 'Copied' : 'Copy', 'left')}`)
+      + wrap(`<button class="bart-ic" data-act="regen" data-turn="${q}" aria-label="Regenerate" aria-haspopup="dialog">${ICON.regenerate}</button>`, 'margin-right:auto;')
+      + `<span class="t" style="flex:0 1 auto;min-width:0;margin-right:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12px/1.6 var(--font-sans);color:#8f8f8f">${esc(text || '')}</span>`
+      + wrap(`<button class="bart-ic" data-act="fold" data-turn="${q}" aria-label="${folded ? 'Expand' : 'Collapse'}" aria-expanded="${!folded}">${folded ? ICON.expand : ICON.collapse}</button>${tip(folded ? 'Expand' : 'Collapse', 'right')}`)
+      + wrap(`<button class="bart-ic" data-danger="1" data-act="dropturn" data-turn="${q}" aria-label="Delete">${ICON.trash}</button>${tip('Delete', 'right')}`)
+      + '</div>';
+  }
+  // What a follow-up starts on: the pick made on this card's chip, or else the flags of the question before it, so an
+  // exchange pinned to a model stays on it. → { flags, step }
+  followStep(ls, thread) {
+    const models = this.props.models; if (!models) return { flags: '', step: null };
+    const choice = this.followChoice.get(thread.from);
+    const last = parseLine(ls[thread.turns[thread.turns.length - 1].q]).text;
+    const flags = choice && modelOf(choice.model, models) ? `--${choice.model} --${choice.effort}` : readFlags(last, models).spans.map(([a, b]) => last.slice(a, b)).join(' ');
+    return { flags, step: readQuestion(flags, models).steps[0] };
+  }
+  // The field that asks a follow-up, closing the card: `@bart`, the text, and one pill with the model and a round send.
+  // What is typed is not in this string (restoreFollow puts it back), so typing never redraws the editor.
+  followHtml(ls, thread) {
+    const { step } = this.followStep(ls, thread), from = thread.from;
+    const open = !!(this.state.picker && this.state.picker.kind === 'follow' && this.state.picker.i === from);
+    return `<div contenteditable="false" data-followup="${from}" style="user-select:none;display:flex;align-items:center;gap:10px;padding:16px 16px 18px;margin-bottom:14px;background:#fafafa;border-radius:0 0 10px 10px">`
+      + '<span style="flex:none;color:#0070f3;font-weight:500;font-size:16px">@bart</span>'
+      + `<input data-follow-input="${from}" placeholder="Respond…" aria-label="Ask a follow-up" spellcheck="false" autocomplete="off" style="flex:1;min-width:0;padding:0;border:0;background:none;outline:none;font:16px/1.5 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text">`
+      + `<span data-chip="f${from}" style="flex:none;position:relative;display:inline-flex"><span class="bart-chip" data-act="pickfollow" data-thread="${from}" role="button" aria-haspopup="dialog" aria-expanded="${open}" style="display:inline-flex;align-items:center;gap:6px;padding:5px 6px 5px 12px;border:1px solid ${open ? '#c9c9c9' : '#eaeaea'};border-radius:999px;background:#fff;cursor:pointer;font:13px/1 var(--font-sans);color:#171717">`
+      + (step ? `<span>${esc(step.name)} ${esc(EFFORT_LABELS[step.effort] || step.effort)}</span>${ICON.chevron}<span style="width:1px;height:14px;background:#eaeaea;margin:0 2px"></span>` : '')
+      + `<button class="bart-send" data-act="sendfollow" data-thread="${from}" aria-label="Send" style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:50%;background:#f2f2f2;color:#8f8f8f;cursor:pointer">${ICON.send}</button>`
+      + '</span></span></div>';
+  }
+  // After a redraw: what was being typed goes back into its field, the send turns blue again, and a field that had the
+  // keyboard takes it back with its selection.
+  restoreFollow(ed, had) {
+    for (const input of ed.querySelectorAll('[data-follow-input]')) {
+      const text = this.followText.get(Number(input.dataset.followInput)) || '';
+      if (text) input.value = text;
+      this.paintSend(input);
+      if (had && had.key === input.dataset.followInput) { input.focus({ preventScroll: true }); try { input.setSelectionRange(had.a, had.b); } catch { /* not a text selection */ } }
+    }
+  }
+  paintSend(input) {
+    const send = input.parentElement && input.parentElement.querySelector('[data-act="sendfollow"]'); if (!send) return;
+    const ready = !!input.value.trim(); send.style.background = ready ? '#0070f3' : '#f2f2f2'; send.style.color = ready ? '#fff' : '#8f8f8f';
   }
   editorHtml() {
-    const ls = this.lines(), st = this.statusesFor(), active = this.state.activeLine; let out = '', group = [];
+    const ls = this.lines(), st = this.statusesFor(), active = this.state.activeLine, at = this.layout(ls); let out = '', group = [];
     ls.forEach((line, i) => {
-      const p = parseLine(line);
-      let edge = '';
-      const nextType = ls[i + 1] != null ? parseLine(ls[i + 1]).type : '';
-      if (p.type === 'bart' || isAnswer(p.type)) {
-        const na = isAnswer(nextType), prev = i > 0 ? parseLine(ls[i - 1]).type : '';
-        const inCard = isAnswer(p.type) && (isAnswer(prev) || (prev === 'bart' && UNDER_BART.includes(p.type)));
-        edge = p.type === 'bart' ? (UNDER_BART.includes(nextType) ? 'top' : 'solo') : inCard ? (na ? 'mid' : 'bottom') : (na ? 'top' : 'solo');
-      }
-      out += this.lineHtml(i, line, p, active === i, st[i] || '', p.type === 'todo' && !group.length, edge, this.lockedAt(ls, i));
-      if (p.type === 'draft' && nextType !== 'draft') { let from = i; while (from > 0 && parseLine(ls[from - 1]).type === 'draft') from--; out += this.draftFoot(from, i); }
+      const p = parseLine(line), where = at.get(i);
+      out += this.lineHtml(i, line, p, active === i, st[i] || '', p.type === 'todo' && !group.length, where, this.lockedAt(ls, i));
+      if (where && where.footAfter) out += this.footHtml({ q: where.turn.q, text: '', folded: where.turn.folded, closes: where.tail && !where.followAfter });
+      if (where && where.followAfter) out += this.followHtml(ls, where.thread);
       if (p.type === 'todo') group.push({ i, p, status: st[i] || '' });
       const next = ls[i + 1];
       if (p.type === 'todo' && (next == null || parseLine(next).type !== 'todo')) { out += this.groupHtml(group); group = []; }
     });
     return out;
   }
+  patchPending() {
+    const ed = this.editorEl(); if (!ed || this.lastKey !== this.key()) return false;
+    const ls = this.lines(), at = this.layout(ls);
+    for (const d of ed.querySelectorAll('[data-pending]')) {
+      const i = Number(d.dataset.line), p = parseLine(ls[i] ?? ''); if (p.type !== 'pending' || p.id !== d.dataset.pending) return false;
+      const html = this.lineHtml(i, ls[i], p, false, '', false, at.get(i), true);
+      if (html !== d.outerHTML) { const holder = document.createElement('div'); holder.innerHTML = html; if (holder.firstElementChild.outerHTML !== d.outerHTML) d.replaceWith(holder.firstElementChild); }
+    }
+    this.lastHtml = this.editorHtml(); return true;
+  }
   syncEditor() {
     const ed = this.editorEl(); if (!ed) return; const key = this.key();
-    // A document never ends on a read-only reply: select-all and the caret need an editable line after it.
-    const tail = this.lines(); if (this.lockedAt(tail, tail.length - 1)) { this.props.onChange(tail.join('\n') + '\n'); return; }
+    // A document never ends on a card: select-all and the caret need a line of the document's own after it.
+    const tail = this.lines(); if (this.endsOnCard(tail)) { this.props.onChange(tail.join('\n') + '\n'); return; }
+    // Nor does it start on one. Chromium will not select from inside a block that cannot be edited, so with a locked
+    // question as the first line, select-all from a caret selected nothing; and nothing could be typed above that card.
+    if (this.lockedAt(tail, 0)) {
+      this.shiftStatuses(0, 1); if (this.caret) this.caret = { ...this.caret, line: this.caret.line + 1 };
+      if (this.state.activeLine != null) this.setState((st) => ({ activeLine: st.activeLine == null ? null : st.activeLine + 1 }));
+      this.props.onChange('\n' + tail.join('\n')); return;
+    }
     const html = this.editorHtml();
     const hadFocus = document.activeElement === ed || ed.contains(document.activeElement);
+    const field = document.activeElement, had = field && field.matches && field.matches('[data-follow-input]') && ed.contains(field) ? { key: field.dataset.followInput, a: field.selectionStart, b: field.selectionEnd } : null;
     if (html === this.lastHtml && key === this.lastKey) {
       if (this.caret && (hadFocus || this.wantFocus)) { ed.focus({ preventScroll: true }); this.applyCaret(); }
       this.wantFocus = false; return;
     }
     let c = this.caret || (hadFocus ? this.caretInfo()?.anchor : null);
-    if (!c && hadFocus && !ed.querySelector('[data-line]')) { const ls = this.lines(), last = ls.length - 1, p = parseLine(ls[last]); c = { line: last, offset: (p.type === 'todo' ? p.text : ls[last]).length }; }
+    if (!c && hadFocus && !ed.querySelector('[data-line]')) { const ls = this.lines(), last = ls.length - 1, p = parseLine(ls[last]); c = { line: last, offset: lineText(p, ls[last]).length }; }
     if (c && !this.caret) this.caret = c;
-    this.syncing = true; ed.innerHTML = html; this.lastHtml = html; this.lastKey = key;
-    if (c && (hadFocus || this.wantFocus)) { ed.focus({ preventScroll: true }); this.caret = c; this.applyCaret(); }
+    this.syncing = true; ed.innerHTML = html; this.lastHtml = html; this.lastKey = key; this.restoreFollow(ed, had);
+    if (c && !had && (hadFocus || this.wantFocus)) { ed.focus({ preventScroll: true }); this.caret = c; this.applyCaret(); }
     this.wantFocus = false; this.syncing = false;
   }
   applyCaret() { const c = this.caret; this.caret = null; if (!c) return; if (c.sel) this.setSelection(c.line, c.sel[0], c.sel[1]); else this.setSelection(c.line, c.offset, c.offset); }
@@ -296,7 +480,7 @@ export default class DocEditor extends React.Component {
       const isActive = Number(d.dataset.line) === this.state.activeLine;
       let raw = null;
       if (t && (isActive || t.querySelector('[data-src]'))) raw = this.displayToRaw(t, off);
-      if (raw == null) { const line = d.dataset.raw || '', p = parseLine(line); raw = isActive ? off : p.type === 'img' ? 0 : rawOffset(p, off, line); }
+      if (raw == null) { const line = d.dataset.raw || '', p = parseLine(line); raw = isActive ? off : p.type === 'img' ? 0 : p.type === 'reply' ? replyRawOffset(p, off) : rawOffset(p, off, line); }
       return { line: Number(d.dataset.line), offset: raw };
     };
     const anchor = info(sel.anchorNode, sel.anchorOffset), focus = info(sel.focusNode, sel.focusOffset) || anchor;
@@ -309,11 +493,17 @@ export default class DocEditor extends React.Component {
     const r = sel.getRangeAt(0), lineOf = (n) => { const el = n.nodeType === 1 ? n : n.parentElement; return el && el.closest('[data-line]'); };
     const a = lineOf(r.startContainer), b = lineOf(r.endContainer); return !!(a || b) && a !== b;
   }
+  // The first and last line a selection touches; null when either end is outside the lines (select all starts on the root).
+  selLines() {
+    const sel = getSelection(); if (!sel || !sel.rangeCount) return null;
+    const r = sel.getRangeAt(0), lineOf = (n) => { const el = n.nodeType === 1 ? n : n.parentElement, d = el && el.closest('[data-line]'); return d ? Number(d.dataset.line) : null; };
+    const a = lineOf(r.startContainer), b = lineOf(r.endContainer); return a == null || b == null ? null : [Math.min(a, b), Math.max(a, b)];
+  }
   onSel() {
     if (this.syncing) return; const c = this.caretInfo(); if (!c) return;
     const ls = this.lines(); if (this.lockedAt(ls, c.anchor.line)) return;
     // A selection across lines (⌘A, shift-click) is left to the browser; the next input rebuilds whatever lines survive it.
-    if (c.anchor.line !== c.focus.line || this.multiLine()) { this.selRaw = { line: c.anchor.line, a: c.anchor.offset, b: c.anchor.offset, multi: true }; return; }
+    if (c.anchor.line !== c.focus.line || this.multiLine()) { this.selRaw = { line: c.anchor.line, a: c.anchor.offset, b: c.anchor.offset, multi: true, lines: this.selLines() }; return; }
     const a = Math.min(c.anchor.offset, c.focus.offset), b = Math.max(c.anchor.offset, c.focus.offset);
     if (c.anchor.line !== this.state.activeLine) {
       this.selRaw = { line: c.anchor.line, a, b };
@@ -340,42 +530,57 @@ export default class DocEditor extends React.Component {
       const p = parseLine(raw); if (this.lockedAt(old, Number(d.dataset.line))) return raw;
       const t = d.querySelector('.t'); let txt = t ? this.activeRaw(t) : '';
       if (p.type === 'h' && Number(d.dataset.line) !== this.state.activeLine && !/^#{1,3} /.test(txt)) txt = raw.slice(0, p.level + 1) + txt;
-      if (p.type !== 'todo') return txt;
-      // A bulk deletion that empties a todo leaves a plain empty line, as deleting everything should.
+      if (p.type === 'reply') return sameLine(p, txt);
+      if (!isMarked(p.type)) return txt;
+      // A bulk deletion that empties a row leaves a plain empty line, as deleting everything should.
       if (bulk && !txt.trim()) { cleared = true; return ''; }
-      // A list marker typed into an empty todo row starts the todo instead of nesting a literal "- ".
-      if (!p.text.trim()) { const m = txt.match(/^- (?:\[[ xX]\] )?/); if (m) { strip = m[0].length; txt = txt.slice(strip); } }
-      return todoLine(p.depth, p.done, txt);
+      // The space that finishes a marker the person is still typing (`- []` then a space) belongs to the marker, not to
+      // the row: an empty row never starts with one.
+      if (!p.text && /^ /.test(txt)) { const lead = txt.match(/^ +/)[0].length; strip += lead; txt = txt.slice(lead); }
+      // A marker just typed at the head of a row that already draws one re-types the row instead of standing as text:
+      // `- ` makes it a bullet, `- [] ` / `@Task ` make it a task. The caret must sit right after the marker, so a
+      // deletion that happens to leave one at the head does not eat it.
+      const again = retypedRow(p, txt);
+      if (again && c && c.anchor.offset === strip + again.ate) { strip += again.ate; return again.line; }
+      return sameLine(p, txt);
     };
     // The lines that survived the edit, in order. A deletion across lines (select all, cut) takes no answer and no answered
-    // question with it: those the browser removed are put back where they stood.
+    // question with it: those the browser removed are put back where they stood. The one deletion that may take answer
+    // lines is one made inside a single answer, where its text is the person's to edit.
     const kept = new Map(divs.map((d) => [Number(d.dataset.line), d]));
+    const span = this.selRaw && this.selRaw.multi ? this.selRaw.lines : null, inside = !!span && old.slice(span[0], span[1] + 1).every((l) => parseLine(l).type === 'reply');
     let ls = [], pos = -1, restored = false;
     old.forEach((rawLine, j) => {
       const d = kept.get(j);
-      if (!d) { if (this.lockedAt(old, j)) { ls.push(rawLine); restored = true; } return; }
+      if (!d) { if (this.lockedAt(old, j) || (parseLine(rawLine).type === 'reply' && !inside)) { ls.push(rawLine); restored = true; } return; }
       if (j === activeId) pos = ls.length;
       ls.push(textOf(d));
     });
-    if (!ls.length || (strayText && this.lockedAt(ls, ls.length - 1))) ls.push('');
+    if (!ls.length || (strayText && this.endsOnCard(ls))) ls.push('');
     if (restored) this.lastHtml = null;
     let caret = c && pos >= 0 ? { line: pos, offset: c.anchor.offset } : null;
     if (caret && (strip || cleared)) { caret = { line: pos, offset: cleared ? 0 : Math.max(0, caret.offset - strip) }; this.lastHtml = null; }
     if (strayText) {
-      const last = ls.length - 1, q = parseLine(ls[last]), base = q.type === 'todo' ? q.text.length : ls[last].length;
-      ls[last] = q.type === 'todo' ? todoLine(q.depth, q.done, q.text + strayText) : ls[last] + strayText;
+      const last = ls.length - 1, q = parseLine(ls[last]), base = lineText(q, ls[last]).length;
+      ls[last] = sameLine(q, lineText(q, ls[last]) + strayText);
       pos = last; caret = { line: last, offset: base + strayText.length }; this.lastHtml = null;
     }
-    if (caret) {
-      const before = parseLine(old[activeId] ?? ''), after = parseLine(ls[pos] ?? '');
-      if (before.type !== 'todo' && after.type === 'todo') caret = { line: pos, offset: Math.max(0, caret.offset - (ls[pos].length - after.text.length)) };
+    // `@Task …`, `- []` and `* x` are stored as the row they make, so the line reads the same way tomorrow.
+    if (pos >= 0 && ls[pos] != null) ls[pos] = canonicalLine(ls[pos]);
+    // A row that just took a marker (or swapped one) holds fewer characters than the caret counted: the caret moves by
+    // the difference between the two markers, so it stays where the person is typing.
+    if (caret && activeId != null) {
+      const was = old[activeId] ?? '', now = ls[pos] ?? '';
+      const before = parseLine(was), after = parseLine(now);
+      const grew = (now.length - lineText(after, now).length) - (was.length - lineText(before, was).length);
+      if (grew) caret = { line: pos, offset: Math.max(0, caret.offset - grew) };
     }
     const nextText = ls.join('\n'); const unchanged = nextText === this.props.text;
     this.setDoc(nextText, caret);
     // A strip or clear that leaves the stored text as it was still has to redraw the line the browser altered.
     if (unchanged && (strip || cleared)) this.syncEditor();
     if (caret) {
-      const p = parseLine(ls[pos] ?? ''), txt = p.type === 'todo' ? p.text : ls[pos], m = txt.slice(0, caret.offset).match(/@([^\s@\[\]]{0,30})$/);
+      const p = parseLine(ls[pos] ?? ''), txt = lineText(p, ls[pos]), m = txt.slice(0, caret.offset).match(/@([^\s@\[\]]{0,30})$/);
       if (m) {
         const r = getSelection().getRangeAt(0).getBoundingClientRect();
         this.setState({ activeLine: pos, mention: { i: pos, query: m[1], start: caret.offset - m[0].length, caret: caret.offset, x: clamp(r.left, 8, (window.innerWidth || 1200) - 300), y: r.bottom + 6 }, mentionIdx: 0 });
@@ -383,8 +588,9 @@ export default class DocEditor extends React.Component {
     }
   };
   editorKey = (e) => {
+    if (this.state.picker) this.closePicker();
     const s = this.state, c = this.caretInfo(); if (!c) return; const ls = this.lines();
-    const i = c.anchor.line, line = ls[i] ?? '', p = parseLine(line), cur = p.type === 'todo' ? p.text : line, mod = e.metaKey || e.ctrlKey;
+    const i = c.anchor.line, line = ls[i] ?? '', p = parseLine(line), cur = lineText(p, line), mod = e.metaKey || e.ctrlKey;
     const same = c.anchor.line === c.focus.line, a = Math.min(c.anchor.offset, c.focus.offset), b = Math.max(c.anchor.offset, c.focus.offset), collapsed = same && a === b;
     if (s.mention) {
       const items = this.mentionList(), n = Math.max(1, items.length);
@@ -398,20 +604,20 @@ export default class DocEditor extends React.Component {
     if (mod && same && e.key.toLowerCase() === 'i') { e.preventDefault(); this.wrap(i, cur, a, b, '*'); return; }
     if (mod && same && e.key.toLowerCase() === 'k') { e.preventDefault(); this.link(i, cur, a, b); return; }
     if (mod && e.key === 'Enter') { e.preventDefault(); if (p.type === 'todo') this.buildIdx([i]); return; }
-    if (e.key === 'Tab') { e.preventDefault(); if (p.type === 'todo') { this.indent(i, e.shiftKey ? -1 : 1); this.caret = { line: i, offset: a }; } return; }
+    if (e.key === 'Tab') { e.preventDefault(); if (isMarked(p.type)) { this.indent(i, e.shiftKey ? -1 : 1); this.caret = { line: i, offset: a }; } return; }
     if (e.key === 'Enter' && !e.shiftKey && !mod && p.type === 'bart') { e.preventDefault(); this.askInline(i); return; }
     if (e.key === 'Enter' && !e.shiftKey && !mod) {
       e.preventDefault(); if (!same) return;
-      if (p.type === 'todo' && !p.text.trim()) {
+      if (isMarked(p.type) && !p.text.trim()) {
         if (p.depth > 0) { this.indent(i, -1); this.caret = { line: i, offset: 0 }; } else this.setLines((x) => x.map((l, j) => (j === i ? '' : l)), { line: i, offset: 0 });
         return;
       }
-      const head = cur.slice(0, a), tail = cur.slice(b), l1 = p.type === 'todo' ? todoLine(p.depth, p.done, head) : head, l2 = p.type === 'todo' ? todoLine(p.depth, false, tail) : tail;
+      const head = cur.slice(0, a), tail = cur.slice(b), l1 = sameLine(p, head), l2 = p.type === 'todo' ? todoLine(p.depth, false, tail) : sameLine(p, tail);
       this.setLines((x) => { const out = [...x]; out[i] = l1; out.splice(i + 1, 0, l2); return out; }, { line: i + 1, offset: 0 });
       this.shiftStatuses(i + 1, 1); this.setState({ activeLine: i + 1, mention: null }); return;
     }
     if (e.key === 'Backspace' && collapsed && a === 0) {
-      if (p.type === 'todo') {
+      if (isMarked(p.type)) {
         e.preventDefault();
         if (p.depth > 0) { this.indent(i, -1); this.caret = { line: i, offset: 0 }; } else this.setLines((x) => x.map((l, j) => (j === i ? p.text : l)), { line: i, offset: 0 });
         return;
@@ -422,20 +628,20 @@ export default class DocEditor extends React.Component {
           // Answers are read-only: an empty line right after one goes away; a line with text stays.
           if (cur !== '' || ls.length < 2) return;
           let k = i - 1; while (k >= 0 && this.lockedAt(ls, k)) k--;
-          const target = k >= 0 ? { line: k, offset: (parseLine(ls[k]).type === 'todo' ? parseLine(ls[k]).text : ls[k]).length } : null;
+          const target = k >= 0 ? { line: k, offset: lineText(parseLine(ls[k]), ls[k]).length } : null;
           this.setLines((x) => x.filter((_, j) => j !== i), target); this.shiftStatuses(i, -1);
           if (target) this.setState({ activeLine: k, mention: null }); else { const ed = this.editorEl(); if (ed) ed.blur(); this.setState({ activeLine: null, mention: null }); }
           return;
         }
-        const off = (q.type === 'todo' ? q.text : ls[i - 1]).length;
-        this.setLines((x) => { const out = [...x]; out[i - 1] = x[i - 1] + cur; out.splice(i, 1); return out; }, { line: i - 1, offset: off });
+        const off = lineText(q, ls[i - 1]).length;
+        this.setLines((x) => { const out = [...x]; out[i - 1] = sameLine(q, lineText(q, x[i - 1]) + cur); out.splice(i, 1); return out; }, { line: i - 1, offset: off });
         this.shiftStatuses(i, -1); this.setState({ activeLine: i - 1, mention: null });
       }
       return;
     }
     if (e.key === 'Delete' && collapsed && a === cur.length && i < ls.length - 1) {
-      e.preventDefault(); const q = parseLine(ls[i + 1]); if (this.lockedAt(ls, i + 1)) return; const nt = q.type === 'todo' ? q.text : ls[i + 1];
-      this.setLines((x) => { const out = [...x]; out[i] = x[i] + nt; out.splice(i + 1, 1); return out; }, { line: i, offset: cur.length });
+      e.preventDefault(); const q = parseLine(ls[i + 1]); if (this.lockedAt(ls, i + 1)) return; const nt = lineText(q, ls[i + 1]);
+      this.setLines((x) => { const out = [...x]; out[i] = sameLine(p, cur + nt); out.splice(i + 1, 1); return out; }, { line: i, offset: cur.length });
       this.shiftStatuses(i + 1, -1); return;
     }
     if (e.key === 'Escape') { const ed = this.editorEl(); if (ed) ed.blur(); }
@@ -450,8 +656,8 @@ export default class DocEditor extends React.Component {
       if (!saved || !saved.id || !this.mounted) continue;
       const token = `![Attachment ${n}](img:${saved.id})`;
       const ls = this.lines(), i = Math.min(at.line, ls.length - 1), line = ls[i] ?? '', p = parseLine(line);
-      if (p.type === 'todo' || p.type === 'bart') {
-        const cur = p.type === 'todo' ? p.text : line, a = Math.min(at.offset, cur.length), ins = `${a > 0 && !/\s$/.test(cur.slice(0, a)) ? ' ' : ''}${token} `;
+      if (isMarked(p.type) || p.type === 'bart' || p.type === 'reply') {
+        const cur = lineText(p, line), a = Math.min(at.offset, cur.length), ins = `${a > 0 && !/\s$/.test(cur.slice(0, a)) ? ' ' : ''}${token} `;
         this.writeText(i, cur.slice(0, a) + ins + cur.slice(a), { line: i, offset: a + ins.length });
         at = { line: i, offset: a + ins.length };
       } else if (!line.trim()) {
@@ -470,12 +676,13 @@ export default class DocEditor extends React.Component {
     if (pasted.length && this.props.onPasteImage) { e.preventDefault(); void this.pasteImages(pasted, { line: c.anchor.line, offset: Math.min(c.anchor.offset, c.focus.offset) }); return; }
     e.preventDefault();
     const text = ((e.clipboardData || window.clipboardData).getData('text/plain') || '').replace(/\r/g, ''); if (!text) return;
-    const ls = this.lines(), i = c.anchor.line, line = ls[i] ?? '', p = parseLine(line), cur = p.type === 'todo' ? p.text : line;
+    const ls = this.lines(), i = c.anchor.line, line = ls[i] ?? '', p = parseLine(line), cur = lineText(p, line);
     const same = c.anchor.line === c.focus.line, a = same ? Math.min(c.anchor.offset, c.focus.offset) : c.anchor.offset, b = same ? Math.max(c.anchor.offset, c.focus.offset) : a;
     const parts = text.split('\n');
     if (parts.length === 1) { this.writeText(i, cur.slice(0, a) + text + cur.slice(b), { line: i, offset: a + text.length }); return; }
     const first = cur.slice(0, a) + parts[0], last = parts[parts.length - 1] + cur.slice(b);
-    this.setLines((x) => { const out = [...x]; out[i] = p.type === 'todo' ? todoLine(p.depth, p.done, first) : first; out.splice(i + 1, 0, ...parts.slice(1, -1), last); return out; }, { line: i + parts.length - 1, offset: parts[parts.length - 1].length });
+    const inAnswer = (text) => (p.type === 'reply' ? sameLine(p, text) : text);
+    this.setLines((x) => { const out = [...x]; out[i] = sameLine(p, first); out.splice(i + 1, 0, ...parts.slice(1, -1).map(inAnswer), inAnswer(last)); return out; }, { line: i + parts.length - 1, offset: parts[parts.length - 1].length });
     this.shiftStatuses(i + 1, parts.length - 1); this.setState({ activeLine: i + parts.length - 1, mention: null });
   };
   editorClick = (e) => {
@@ -497,9 +704,24 @@ export default class DocEditor extends React.Component {
         this.caret = { line: at, offset: 0 }; this.wantFocus = true; this.setState({ activeLine: at, mention: null });
         return;
       }
-      if (k === 'ask') { this.askInline(i); return; }
+      if (k === 'ask') { this.closePicker(); this.askInline(i); return; }
+      if (k === 'pick') { this.openPicker(act, 'line'); return; }
+      if (k === 'pickfollow') { this.openPicker(act, 'follow'); return; }
+      if (k === 'sendfollow') { this.closePicker(); this.sendFollow(Number(act.dataset.thread)); return; }
+      if (k === 'regen') { this.closePicker(); const q = Number(act.dataset.turn); this.regenerate(q, this.ranWith(this.lines(), q).choice); return; }
+      if (k === 'fold') { this.toggleFold(Number(act.dataset.turn)); return; }
+      if (k === 'dropturn') { this.closePicker(); this.deleteTurn(Number(act.dataset.turn)); return; }
+      if (k === 'dropline') { this.removeLine(i); return; }
+      if (k === 'copybart') {
+        const q = Number(act.dataset.turn), text = this.copyText(q);
+        (this.props.onCopyText ? Promise.resolve(this.props.onCopyText(text)) : navigator.clipboard.writeText(text)).catch(() => {});
+        this.copied = `bart${q}`; this.lastHtml = null; this.forceUpdate();
+        if (this.copiedT) clearTimeout(this.copiedT);
+        this.copiedT = this.timer(() => { this.copied = null; this.lastHtml = null; this.forceUpdate(); }, 1400);
+        return;
+      }
+      if (k === 'asklog') { const id = act.dataset.ask; if (this.openLogs.has(id)) this.openLogs.delete(id); else this.openLogs.add(id); this.patchPending(); return; }
       if (k === 'stopask') { if (this.props.onStopAsk) this.props.onStopAsk(act.dataset.ask); return; }
-      if (k === 'hidedraft' || k === 'savedraft') { this.settleDraft(Number(act.dataset.from), Number(act.dataset.to), k === 'savedraft'); return; }
       if (k === 'toggle') this.toggleTodo(i);
       else if (k === 'build') this.buildIdx([i]);
       else if (k === 'remove') this.removeLine(i);
@@ -514,15 +736,24 @@ export default class DocEditor extends React.Component {
       const res = this.findRes(nm); if (res.id !== '?' && this.props.onOpenItem) this.props.onOpenItem(res);
     }
   };
-  editorOver = (e) => { const m = e.target.closest('[data-mention]'); if (m) this.showPop(this.findRes(m.dataset.mention), { currentTarget: m }); };
-  editorOut = (e) => { if (e.target.closest('[data-mention]')) this.hidePop(); };
+  editorOver = (e) => {
+    const m = e.target.closest('[data-mention]'); if (m) this.showPop(this.findRes(m.dataset.mention), { currentTarget: m });
+    const pick = e.target.closest('[data-act="pick"],[data-act="pickfollow"],[data-act="regen"]'); if (pick) this.openPicker(pick, { pick: 'line', pickfollow: 'follow', regen: 'regen' }[pick.dataset.act]);
+  };
+  // Leaving what opened the selector starts its closing clock, unless the pointer went straight onto the selector: React has
+  // by then already handled that same event (the selector's onMouseEnter stops the clock), and this would start it again.
+  editorOut = (e) => {
+    if (e.target.closest('[data-mention]')) this.hidePop();
+    const onto = e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-bart-picker]');
+    if (!onto && e.target.closest('[data-act="pick"],[data-act="pickfollow"],[data-act="regen"]')) this.leavePicker();
+  };
   openLink(href) { if (this.props.onOpenLink) this.props.onOpenLink(href); else window.open(href, '_blank', 'noreferrer'); }
   docClick = (e) => { if (e.target !== e.currentTarget) return; this.docClickInternal(); };
   docClickInternal() {
     const ed = this.editorEl(); if (!ed) return;
     const ls = this.lines(), last = ls.length - 1, p = parseLine(ls[last]);
-    if (this.lockedAt(ls, last)) { this.setLines((x) => [...x, '']); this.caret = { line: last + 1, offset: 0 }; this.wantFocus = true; this.setState({ activeLine: last + 1, mention: null }); return; }
-    this.caret = { line: last, offset: (p.type === 'todo' ? p.text : ls[last]).length }; this.wantFocus = true; ed.focus({ preventScroll: true });
+    if (this.endsOnCard(ls)) { this.setLines((x) => [...x, '']); this.caret = { line: last + 1, offset: 0 }; this.wantFocus = true; this.setState({ activeLine: last + 1, mention: null }); return; }
+    this.caret = { line: last, offset: lineText(p, ls[last]).length }; this.wantFocus = true; ed.focus({ preventScroll: true });
     if (this.state.activeLine === last) this.applyCaret(); else this.setState({ activeLine: last });
   }
 
@@ -532,16 +763,104 @@ export default class DocEditor extends React.Component {
   askInline(i) {
     const ls = this.lines(), p = parseLine(ls[i] || ''); if (p.type !== 'bart' || !p.text.trim() || !this.props.onAsk || this.lockedAt(ls, i)) return;
     const askId = newAskId(), add = [`bart~> ${askId}`]; if (i + 1 >= ls.length) add.push('');
+    const turns = this.turnsBefore(ls, i);
     this.setLines((x) => { const out = [...x]; out.splice(i + 1, 0, ...add); return out; }); this.shiftStatuses(i + 1, add.length);
     const ed = this.editorEl(); if (ed) ed.blur(); this.setState({ activeLine: null, mention: null });
-    this.props.onAsk({ askId, text: p.text.trim() });
+    this.props.onAsk({ askId, text: p.text.trim(), turns });
   }
-  settleDraft(from, to, keep) {
-    const mine = (l) => ['draft', 'pending'].includes(parseLine(l).type);
-    this.setLines((ls) => (keep ? ls.map((l, j) => (j >= from && j <= to && mine(l) ? l.replace(/^bart\?>/, 'bart>') : l)) : ls.filter((l, j) => j < from || j > to || !mine(l))));
-    if (!keep) this.shiftStatuses(from, -(to - from + 1));
-    this.setState({ mention: null });
+  // The turns of the card above question `q`, as the document holds them: what a follow-up is a follow-up to.
+  turnsBefore(ls, q) {
+    const found = this.findTurn(ls, q); if (!found) return [];
+    return found.thread.turns.filter((turn) => turn.q < q && turn.answered && !turn.pending).map((turn) => turnText(ls, turn));
   }
+  // A follow-up: the question goes under the card's last answer as an @bart line of its own, with the pending line under it.
+  sendFollow(from) {
+    const ls = this.lines(), thread = threads(ls).find((t) => t.from === from), text = (this.followText.get(from) || '').trim();
+    if (!thread || !text || !this.props.onAsk) return;
+    const end = thread.turns[thread.turns.length - 1]; if (!end.answered || end.pending) return;
+    const { flags } = this.followStep(ls, thread), asked = [flags, text].filter(Boolean).join(' ');
+    const askId = newAskId(), add = [`@bart ${asked}`, `bart~> ${askId}`]; if (thread.to + 1 >= ls.length) add.push('');
+    const turns = thread.turns.filter((turn) => turn.answered && !turn.pending).map((turn) => turnText(ls, turn));
+    this.followText.delete(from);
+    const ed = this.editorEl(); if (ed && ed.contains(document.activeElement)) document.activeElement.blur();
+    this.setLines((x) => { const out = [...x]; out.splice(thread.to + 1, 0, ...add); return out; }); this.shiftStatuses(thread.to + 1, add.length);
+    this.setState({ activeLine: null, mention: null });
+    this.props.onAsk({ askId, text: asked, turns });
+  }
+  followKey(e) {
+    if (this.state.picker) this.closePicker();
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); this.sendFollow(Number(e.target.dataset.followInput)); }
+    else if (e.key === 'Escape') e.target.blur();
+  }
+  followInput(input) { this.followText.set(Number(input.dataset.followInput), input.value); this.paintSend(input); }
+  // What answered turn `q`, read from its closing line ("Sol · medium · 31 s"); the question's own first step when there is
+  // none. → { current } for the selector to mark, and { choice } to regenerate with the same model and effort.
+  ranWith(ls, q) {
+    const models = this.props.models, found = this.findTurn(ls, q); if (!models || !found) return { current: null, choice: undefined };
+    const [name, effort] = found.turn.foot >= 0 ? parseLine(ls[found.turn.foot]).text.slice(1, -1).split(' · ') : [];
+    for (const [provider, entry] of Object.entries(models.providers)) {
+      for (const [key, model] of Object.entries(entry.models)) if (model.name === name && effortOf(effort)) return { current: { provider, model: key, effort: effortOf(effort) }, choice: { model: key, effort: effortOf(effort) } };
+    }
+    const step = readQuestion(parseLine(ls[q]).text, models).steps[0];
+    return { current: { provider: step.provider, model: step.key, effort: step.effort }, choice: undefined };
+  }
+  // Regenerate: the answer gives way to a pending line and the question is asked again, as a follow-up to the turns above
+  // it. `choice` is a model and effort for this run; the line keeps the words it was asked with.
+  regenerate(q, choice) {
+    const ls = this.lines(), found = this.findTurn(ls, q); if (!found || found.turn.pending || !this.props.onAsk) return;
+    const { turn } = found, p = parseLine(ls[q]); if (!p.text.trim()) return;
+    const askId = newAskId(), gone = turn.to - turn.q, turns = this.turnsBefore(ls, q);
+    this.setLines((x) => { const out = [...x]; out.splice(turn.from, gone, `bart~> ${askId}`); return out; });
+    if (gone > 1) this.shiftStatuses(turn.from + 1, -(gone - 1)); else if (!gone) this.shiftStatuses(turn.from, 1);
+    this.setState({ activeLine: null, mention: null });
+    this.props.onAsk({ askId, text: p.text.trim(), turns, choice: choice && this.props.models && modelOf(choice.model, this.props.models) ? choice : undefined });
+  }
+  // Collapse / Expand: the fold is in the file, on every line of the answer, so it survives whatever else changes.
+  toggleFold(q) {
+    const ls = this.lines(), found = this.findTurn(ls, q); if (!found || !found.turn.answered) return;
+    const { turn } = found, to = !turn.folded;
+    this.setLines((x) => x.map((l, j) => { if (j < turn.from || j > turn.to) return l; const p = parseLine(l); return p.type === 'reply' ? replyLine(p.text, to).trimEnd() : l; }));
+    this.setState({ activeLine: null, mention: null });
+  }
+  // Delete: this turn leaves the document, its question and its answer; the turns around it stay. A run still at work is stopped.
+  deleteTurn(q) {
+    const ls = this.lines(), found = this.findTurn(ls, q); if (!found) return;
+    const { turn } = found, n = turn.to - turn.q + 1;
+    if (turn.pending && this.props.onStopAsk) this.props.onStopAsk(turn.pending);
+    this.setLines((x) => { const out = x.filter((_, j) => j < turn.q || j > turn.to); return out.length ? out : ['']; });
+    this.shiftStatuses(turn.q, -n); this.setState({ activeLine: null, mention: null });
+  }
+  // Copy: the question as asked (no flags) and the answer as written (no prefixes, no closing line).
+  copyText(q) {
+    const ls = this.lines(), found = this.findTurn(ls, q); if (!found) return '';
+    const { question, answer } = turnText(ls, found.turn);
+    return [this.props.models ? readFlags(question, this.props.models).rest : question, answer].filter(Boolean).join('\n\n');
+  }
+  // The selector. Under an @bart line's chip a choice is written into the line as flags, so the line says what will answer
+  // it and taking the flags out gives the ladder back. Under a card's follow-up chip the choice waits for the follow-up;
+  // under Regenerate it waits for the selector's own blue button. It opens on hover and stays while the pointer is on
+  // what opened it or on the selector itself.
+  openPicker(el, kind) {
+    clearTimeout(this.pickerT); const i = Number(kind === 'line' ? el.dataset.row : kind === 'regen' ? el.dataset.turn : el.dataset.thread);
+    if (this.state.picker && this.state.picker.i === i && this.state.picker.kind === kind) return;
+    const r = (kind === 'regen' ? el : el.closest('[data-chip]') || el).getBoundingClientRect();
+    this.setState({ picker: { kind, i, left: kind === 'regen' ? r.left : null, right: r.right, top: r.top, bottom: r.bottom, choice: null } });
+  }
+  leavePicker = () => { clearTimeout(this.pickerT); this.pickerT = setTimeout(() => { if (this.mounted) this.closePicker(); }, 220); };
+  stayPicker = () => clearTimeout(this.pickerT);
+  closePicker() { clearTimeout(this.pickerT); if (this.state.picker) this.setState({ picker: null }); }
+  pickModel = (choice) => {
+    const pk = this.state.picker, models = this.props.models; if (!pk || !models) return;
+    if (pk.kind === 'regen') { this.setState({ picker: { ...pk, choice } }); return; }
+    if (pk.kind === 'follow') { this.followChoice.set(pk.i, choice); this.lastHtml = null; this.forceUpdate(); return; }
+    const ls = this.lines(), p = parseLine(ls[pk.i] || ''); if (p.type !== 'bart' || this.lockedAt(ls, pk.i)) { this.closePicker(); return; }
+    const text = withChoice(p.text, models, choice), line = `@bart ${text}${readFlags(text, models).rest ? '' : ' '}`;
+    this.setLines((x) => x.map((l, j) => (j === pk.i ? line : l)), this.state.activeLine === pk.i ? { line: pk.i, offset: line.length } : undefined);
+  };
+  sendPicked = () => {
+    const pk = this.state.picker; if (!pk || pk.kind !== 'regen') return;
+    const choice = pk.choice || this.ranWith(this.lines(), pk.i).choice; this.closePicker(); this.regenerate(pk.i, choice);
+  };
 
   /* ---------------------------------------------------------------- operations */
   bartItem() { return (this.props.mentionable || []).find((r) => r && r.id === 'bart') || BART_ITEM; }
@@ -551,7 +870,14 @@ export default class DocEditor extends React.Component {
   }
   pickMention(r) {
     const m = this.state.mention; if (!m || !r) return; const ls = this.lines(), p = parseLine(ls[m.i] || '');
-    const cur = p.type === 'todo' ? p.text : ls[m.i], ins = r.id === 'bart' ? '@bart ' : `@[${r.name}] `;
+    const cur = lineText(p, ls[m.i]);
+    if (r.id === 'task') {
+      // `@Task` is a trigger, not text: the line becomes the task row it names, keeping whatever else was on it.
+      const rest = (cur.slice(0, m.start) + cur.slice(m.caret)).replace(/\s+$/, '');
+      this.setLines((x) => x.map((l, j) => (j === m.i ? todoLine(isMarked(p.type) ? p.depth : 0, p.type === 'todo' && p.done, rest) : l)), { line: m.i, offset: rest.length });
+      this.wantFocus = true; this.setState({ mention: null, activeLine: m.i }); return;
+    }
+    const ins = r.id === 'bart' ? '@bart ' : `@[${r.name}] `;
     this.writeText(m.i, cur.slice(0, m.start) + ins + cur.slice(m.caret), { line: m.i, offset: m.start + ins.length });
     this.wantFocus = true; this.setState({ mention: null, activeLine: m.i });
   }
@@ -559,10 +885,10 @@ export default class DocEditor extends React.Component {
   link(i, cur, st, en) { const sel = cur.slice(st, en) || 'link'; const a = st + sel.length + 3; this.writeText(i, cur.slice(0, st) + `[${sel}](url)` + cur.slice(en), { line: i, sel: [a, a + 3] }); }
   indent(i, dir) {
     this.setLines((ls) => {
-      const p = parseLine(ls[i] || ''); if (p.type !== 'todo') return ls; const nd = clamp(p.depth + dir, 0, 8); if (nd === p.depth) return ls;
-      if (dir > 0) { const prev = parseLine(ls[i - 1] || ''); if (prev.type !== 'todo' || nd > prev.depth + 1) return ls; }
-      const out = [...ls]; out[i] = todoLine(nd, p.done, p.text);
-      for (let j = i + 1; j < ls.length; j++) { const q = parseLine(ls[j]); if (q.type !== 'todo' || q.depth <= p.depth) break; out[j] = todoLine(clamp(q.depth + dir, 0, 8), q.done, q.text); }
+      const p = parseLine(ls[i] || ''); if (!isMarked(p.type)) return ls; const nd = clamp(p.depth + dir, 0, 8); if (nd === p.depth) return ls;
+      if (dir > 0) { const prev = parseLine(ls[i - 1] || ''); if (!isMarked(prev.type) || nd > prev.depth + 1) return ls; }
+      const out = [...ls]; out[i] = sameLine({ ...p, depth: nd }, p.text);
+      for (let j = i + 1; j < ls.length; j++) { const q = parseLine(ls[j]); if (!isMarked(q.type) || q.depth <= p.depth) break; out[j] = sameLine({ ...q, depth: clamp(q.depth + dir, 0, 8) }, q.text); }
       return out;
     });
   }
@@ -591,11 +917,21 @@ export default class DocEditor extends React.Component {
   hidePop = () => { if (this.state.pop) this.setState({ pop: null }); };
 
   /* ---------------------------------------------------------------- render */
+  pickerView() {
+    const pk = this.state.picker, models = this.props.models; if (!pk || !models) return null;
+    const ls = this.lines(), marked = (choice) => ({ provider: (modelOf(choice.model, models) || {}).provider, model: choice.model, effort: choice.effort });
+    let current = null;
+    if (pk.kind === 'regen') current = pk.choice ? marked(pk.choice) : this.ranWith(ls, pk.i).current;
+    else if (pk.kind === 'follow') { const thread = threads(ls).find((t) => t.from === pk.i), step = thread && this.followStep(ls, thread).step; current = step && { provider: step.provider, model: step.key, effort: step.effort }; }
+    else { const p = parseLine(ls[pk.i] || ''); if (p.type === 'bart') { const step = readQuestion(p.text, models).steps[0]; current = { provider: step.provider, model: step.key, effort: step.effort }; } }
+    if (!current || !models.providers[current.provider]) return null;
+    return <BartPicker models={models} current={current} anchor={pk} onPick={this.pickModel} onSend={pk.kind === 'regen' ? this.sendPicked : undefined} onEnter={this.stayPicker} onLeave={this.leavePicker} />;
+  }
   render() {
     const s = this.state;
     return (
       <>
-        <style>{RISE_CSS}</style>
+        <style>{RISE_CSS + CARD_CSS}</style>
         <div onClick={this.docClick} style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '28px clamp(12px, 4%, 40px) 120px', cursor: 'text' }}>
           <div style={{ maxWidth: '65ch', marginInline: 'auto', paddingInline: 'clamp(0px, 3%, 24px)', cursor: 'auto', fontSize: 17 }}>
             {this.props.header}
@@ -614,6 +950,7 @@ export default class DocEditor extends React.Component {
         </div>
         {s.mention && <MentionMenu items={this.mentionList()} index={s.mentionIdx} x={s.mention.x} y={s.mention.y} onPick={(r) => this.pickMention(r)} />}
         {s.pop && <Popover item={s.pop.res} x={s.pop.x} y={s.pop.y} />}
+        {this.pickerView()}
       </>
     );
   }

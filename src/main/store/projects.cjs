@@ -9,17 +9,19 @@
 //   <dataRoot>/<slug>/notes.pglite/
 //   <dataRoot>/<slug>/<Note>.md
 //   <dataRoot>/<slug>/assets/<id>.<ext>
-//   <dataRoot>/<slug>/<Workspace>/meta.json          { id, status, context, created }
+//   <dataRoot>/<slug>/<Workspace>/meta.json          { id, status, context, created, chars }
 //   <dataRoot>/<slug>/<Workspace>/workspace.md
 //   <dataRoot>/<slug>/<Workspace>/<Child>/…          the same, recursively
 //
 // `directory` is where the project's code lives: terminals and agents start there.
 // A workspace's `context` is a flat list of library ids. Grouping is done by nesting a workspace.
+// `chars` is the length of workspace.md, the workspace's counterpart of a note's library.char_count.
 // The earlier layout (<slug>/<Goal>/<Topic>/…) is converted on first touch: see ./migrate.cjs.
 
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const { fileURLToPath, pathToFileURL } = require('node:url');
 const { sanitizeName, slugify, uniqueName, readJson, writeJson, DIR_MODE } = require('./home.cjs');
 const db = require('./db.cjs');
 const { migrateProjectDir } = require('./migrate.cjs');
@@ -36,9 +38,10 @@ const MAX_TREE_DEPTH = 6;
 const WELCOME_NOTE = [
   'This is a note. Notes are plain markdown files in your project folder, and the sidebar lists what this workspace can see.',
   '',
-  '- [ ] Write a todo, then press Build',
-  '- [ ] Type @ to mention a paper, dataset or note from your library',
-  '- [ ] Type @chat, a question, and press Enter',
+  '- [ ] Type @Task or "- []" for a task, then press Build',
+  '- [ ] Type @ to mention a paper, folder or note from your library',
+  '- [ ] Type @bart, a question, and press Enter',
+  '- A bare dash is a bullet; Tab and Shift-Tab nest it',
   '',
   'The Workspace tab is this workspace\'s own document. Add papers, folders and notes from the sidebar with + Context and + Folder, and nest a workspace inside this one with + Workspace. Paste an image anywhere.',
   '',
@@ -177,17 +180,56 @@ function publicProject(project, extra = {}) {
 const countWorkspaces = (dir) => workspaceRecords(dir).reduce((n, workspace) => n + 1 + countWorkspaces(workspace.dir), 0);
 const summary = (project) => ({ workspaceCount: countWorkspaces(project.dir), lastEdited: latestMtime(project.dir) || project.created });
 
+const RECENT_WORKSPACES = 4;
+const RECENT_TEXT_CHARS = 4000;
+
+/** The workspaces whose document changed last, newest first, each with the start of its text. */
+function recentWorkspaces(projectDir, workspaces, limit = RECENT_WORKSPACES) {
+  return workspaces
+    .map((workspace) => {
+      const file = path.join(projectDir, workspace.path, 'workspace.md');
+      let edited = 0;
+      try { edited = fs.statSync(file).mtimeMs; } catch { edited = 0; }
+      return { workspace, file, edited };
+    })
+    .sort((a, b) => b.edited - a.edited)
+    .slice(0, limit)
+    .map(({ workspace, file, edited }) => {
+      let text = '';
+      try { text = fs.readFileSync(file, 'utf8').slice(0, RECENT_TEXT_CHARS); } catch { text = ''; }
+      return { id: workspace.id, name: workspace.name, path: workspace.path, chars: workspace.chars, edited: edited ? new Date(edited).toISOString() : null, text };
+    });
+}
+
+// Each project with what the all-projects screen draws on its card: the workspaces touched last
+// and the ids of the library rows it holds.
 async function listProjects(ctx) {
+  const rows = await ctx.libraryDb.list();
   return projectRecords(ctx)
-    .map((project) => publicProject(project, summary(project)))
+    .map((project) => {
+      const workspaces = flattenWorkspaces(project.dir);
+      const refs = referencedBy(workspaces);
+      return publicProject(project, {
+        workspaceCount: workspaces.length,
+        lastEdited: latestMtime(project.dir) || project.created,
+        recent: recentWorkspaces(project.dir, workspaces),
+        libraryIds: rows.filter((row) => holds(project, refs, row)).map((row) => row.id),
+      });
+    })
     .sort((a, b) => String(b.lastEdited || '').localeCompare(String(a.lastEdited || '')));
 }
 
 // `path` is the directory name under the data root, as the create screen shows it after "./".
 function resolveSlug(ctx, name, requested) {
   const raw = typeof requested === 'string' && requested.trim() ? requested : name;
+  return freeSlug(ctx, raw);
+}
+
+// A project called "test", "seed" or "annotations" would take a directory name the data root keeps
+// for itself, and then never be listed.
+function freeSlug(ctx, raw) {
   const slug = slugify(raw) || 'engelbart';
-  return uniqueName(ctx.dataRoot, slug);
+  return uniqueName(ctx.dataRoot, RESERVED.has(slug) ? `${slug}-project` : slug);
 }
 
 // The project's code directory: absolute, existing, a directory.
@@ -241,7 +283,7 @@ async function renameProject(ctx, id, name) {
   let dir = project.dir;
   // The directory follows the name only while it is still the name's own slug.
   if (project.slug === slugify(project.name)) {
-    const slug = uniqueName(ctx.dataRoot, slugify(next) || 'engelbart');
+    const slug = freeSlug(ctx, next);
     const target = path.join(ctx.dataRoot, slug);
     if (target !== dir) {
       await db.closeDb(path.join(dir, 'notes.pglite'));
@@ -266,7 +308,13 @@ function workspaceRecord(dir) {
   } catch {
     context = [];
   }
-  return { id: meta.id, name: path.basename(dir), status: meta.status, context, dir, created: meta.created || null };
+  // Kept by every save through the app; a workspace last saved before the count existed is measured.
+  const chars = Number.isInteger(meta.chars) && meta.chars >= 0 ? meta.chars : docChars(dir);
+  return { id: meta.id, name: path.basename(dir), status: meta.status, context, chars, dir, created: meta.created || null };
+}
+
+function docChars(dir) {
+  try { return fs.readFileSync(path.join(dir, 'workspace.md'), 'utf8').length; } catch { return 0; }
 }
 
 function workspaceRecords(parentDir) {
@@ -291,7 +339,7 @@ function findWorkspace(ctx, projectId, workspaceId) {
 }
 
 function publicWorkspace(workspace) {
-  return { id: workspace.id, name: workspace.name, status: workspace.status, context: workspace.context, created: workspace.created };
+  return { id: workspace.id, name: workspace.name, status: workspace.status, context: workspace.context, chars: workspace.chars, created: workspace.created };
 }
 
 /** Every workspace of a project, flat, with its path from the project directory ("Agents/Inline chat agent"). */
@@ -299,10 +347,38 @@ function flattenWorkspaces(projectDir, prefix = '', depth = 0, out = []) {
   if (depth > 32) return out;
   for (const workspace of workspaceRecords(depth === 0 ? projectDir : path.join(projectDir, prefix))) {
     const at = prefix ? `${prefix}/${workspace.name}` : workspace.name;
-    out.push({ id: workspace.id, name: workspace.name, path: at, context: workspace.context });
+    out.push({ id: workspace.id, name: workspace.name, path: at, context: workspace.context, chars: workspace.chars });
     flattenWorkspaces(projectDir, at, depth + 1, out);
   }
   return out;
+}
+
+/** Library id → the paths of the workspaces that have it in context. */
+function referencedBy(workspaces) {
+  const refs = new Map();
+  for (const workspace of workspaces) {
+    for (const id of workspace.context) refs.set(id, [...(refs.get(id) || []), workspace.path]);
+  }
+  return refs;
+}
+
+/** What a project holds: the rows made in it (`project_id`, the origin) and the rows one of its workspaces has in context. */
+const holds = (project, refs, row) => row.project_id === project.id || refs.has(row.id);
+
+// A workspace.md written from outside the app (an agent in a terminal): the stored count follows
+// the file. Workspaces that never had a count are left alone; reading one measures the file.
+function recountWorkspaces(ctx) {
+  let fixed = 0;
+  const walk = (parentDir, depth) => {
+    if (depth > 32) return;
+    for (const workspace of workspaceRecords(parentDir)) {
+      const meta = readJson(path.join(workspace.dir, 'meta.json'));
+      if (meta && Number.isInteger(meta.chars) && meta.chars !== docChars(workspace.dir)) { patchWorkspaceMeta(workspace, { chars: docChars(workspace.dir) }); fixed += 1; }
+      walk(workspace.dir, depth + 1);
+    }
+  };
+  for (const project of projectRecords(ctx)) walk(project.dir, 0);
+  return fixed;
 }
 
 function workspaceTree(parentDir, depth = 0) {
@@ -321,7 +397,7 @@ async function createWorkspace(ctx, projectId, { name, parentId } = {}) {
   const parentDir = parentId ? findWorkspace(ctx, projectId, parentId).workspace.dir : findProject(ctx, projectId).dir;
   const dir = path.join(parentDir, workspaceDirName(parentDir, name, 'Untitled Workspace 1'));
   fs.mkdirSync(dir, { mode: DIR_MODE });
-  writeJson(path.join(dir, 'meta.json'), { id: randomUUID(), status: 'open', context: [], created: nowIso() });
+  writeJson(path.join(dir, 'meta.json'), { id: randomUUID(), status: 'open', context: [], created: nowIso(), chars: 0 });
   writeTextAtomic(path.join(dir, 'workspace.md'), '');
   return publicWorkspace(workspaceRecord(dir));
 }
@@ -368,7 +444,7 @@ async function createNote(ctx, projectId, { name, workspaceId, text } = {}) {
   const id = randomUUID();
   const notesDb = await db.openNotesDb(project.dir);
   const row = await notesDb.insert({ id, name: stem, path: `${stem}.md`, goal_id: null, topic_id: workspaceId || null });
-  await ctx.libraryDb.insert({ id, name: stem, type: 'note', path: file, project_id: projectId });
+  await ctx.libraryDb.insert({ id, name: stem, type: 'md', tags: ['note'], path: file, project_id: projectId });
   await ctx.libraryDb.setCharCount(id, typeof text === 'string' ? text.length : 0);
   return publicNote(row);
 }
@@ -431,7 +507,7 @@ async function resolveDoc(ctx, projectId, ref) {
   }
   if (ref.kind === 'workspace') {
     const { workspace } = findWorkspace(ctx, projectId, ref.workspaceId);
-    return { file: path.join(workspace.dir, 'workspace.md') };
+    return { file: path.join(workspace.dir, 'workspace.md'), workspace };
   }
   throw new TypeError('Unknown doc kind');
 }
@@ -457,6 +533,7 @@ async function writeDoc(ctx, projectId, ref, text) {
     await resolved.notesDb.touch(resolved.note.id);
     await ctx.libraryDb.recordEdit(resolved.note.id, text.length); // the note's character count, current with every save
   }
+  if (resolved.workspace) patchWorkspaceMeta(resolved.workspace, { chars: text.length }); // and the workspace's
   return { lastEdited: nowIso() };
 }
 
@@ -484,16 +561,43 @@ function writeLastOpen(ctx, value) {
 
 // The browser pane's "file" mode: a path typed as ~/…, /… or relative to the project directory,
 // read-only, kept inside the home directory, first 20 000 characters.
-async function readProjectTextFile(ctx, projectId, input) {
-  const project = findProject(ctx, projectId);
+/** A typed path, made real. Relative ones are looked for in the project, then the engelbart
+ *  folder, then the project's code directory; the first that exists wins. Home directory only. */
+function resolveTypedPath(ctx, project, input) {
   if (typeof input !== 'string' || !input.trim() || input.length > 4096 || input.includes('\0')) throw new TypeError('path is invalid');
   let target = input.trim();
-  if (target.startsWith('~/')) target = path.join(ctx.homeDir, target.slice(2));
-  else if (target === '~') target = ctx.homeDir;
-  else if (!path.isAbsolute(target)) target = path.join(project.dir, target);
-  const resolved = fs.realpathSync(path.resolve(target));
+  if (/^file:\/\//i.test(target)) target = fileURLToPath(target);
+  let candidates;
+  if (target.startsWith('~/')) candidates = [path.join(ctx.homeDir, target.slice(2))];
+  else if (target === '~') candidates = [ctx.homeDir];
+  else if (path.isAbsolute(target)) candidates = [target];
+  else candidates = [project.dir, ctx.dataRoot, ctx.root, project.directory].filter(Boolean).map((base) => path.join(base, target));
+  const resolved = fs.realpathSync(candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0]);
   const homeReal = fs.realpathSync(ctx.homeDir);
   if (resolved !== homeReal && !resolved.startsWith(homeReal + path.sep)) throw new Error('Only files inside your home directory can be opened');
+  return resolved;
+}
+
+const PAGE_FILE = /\.html?$/i;
+
+/** What the Browser pane renders rather than prints: an html file that exists. Anything else is null. */
+async function resolvePageFile(ctx, projectId, input) {
+  const project = findProject(ctx, projectId);
+  const typed = String(input || '').trim();
+  const cut = typed.search(/[#?]/); // `report.html#results` is the file, then a place in it
+  for (const [file, rest] of cut > 0 ? [[typed, ''], [typed.slice(0, cut), typed.slice(cut)]] : [[typed, '']]) {
+    try {
+      const resolved = resolveTypedPath(ctx, project, file);
+      if (PAGE_FILE.test(resolved) && fs.statSync(resolved).isFile()) return { path: resolved, url: pathToFileURL(resolved).href + rest };
+    } catch {
+      // Not a file here: the address means something else.
+    }
+  }
+  return null;
+}
+
+async function readProjectTextFile(ctx, projectId, input) {
+  const resolved = resolveTypedPath(ctx, findProject(ctx, projectId), input);
   const stat = fs.statSync(resolved);
   if (stat.isDirectory()) {
     const entries = fs.readdirSync(resolved, { withFileTypes: true }).map((entry) => entry.name + (entry.isDirectory() ? '/' : '')).sort();
@@ -538,8 +642,13 @@ module.exports = {
   readDoc,
   writeDoc,
   readProjectTextFile,
+  resolvePageFile,
   readLastOpen,
   writeLastOpen,
   projectRecords,
+  findProject,
   flattenWorkspaces,
+  referencedBy,
+  holds,
+  recountWorkspaces,
 };

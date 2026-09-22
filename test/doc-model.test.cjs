@@ -7,12 +7,68 @@ const { pathToFileURL } = require('node:url');
 
 const load = () => import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
 
-test('parseLine classifies todo lines with depth and done state', async () => {
+test('a task line is a checkbox; a bare dash is a bullet (2026-09-20)', async () => {
   const { parseLine } = await load();
   assert.deepEqual(parseLine('  - [x] a'), { type: 'todo', depth: 1, done: true, text: 'a' });
   assert.deepEqual(parseLine('- [ ] open'), { type: 'todo', depth: 0, done: false, text: 'open' });
-  assert.deepEqual(parseLine('- plain dash'), { type: 'todo', depth: 0, done: false, text: 'plain dash' });
+  assert.deepEqual(parseLine('- []'), { type: 'todo', depth: 0, done: false, text: '' }, 'the short checkbox starts a task');
+  assert.deepEqual(parseLine('- [] buy milk'), { type: 'todo', depth: 0, done: false, text: 'buy milk' });
+  assert.deepEqual(parseLine('- []one'), { type: 'list', depth: 0, text: '[]one' }, 'the checkbox needs its space: nothing flips mid-word');
+  assert.deepEqual(parseLine('- [x]done'), { type: 'list', depth: 0, text: '[x]done' });
+  assert.deepEqual(parseLine('- plain dash'), { type: 'list', depth: 0, text: 'plain dash' });
   assert.equal(parseLine('                    - [ ] deep').depth, 8);
+});
+
+test('bullets are their own kind of line, nested by two spaces', async () => {
+  const { parseLine, listLine } = await load();
+  assert.deepEqual(parseLine('- one'), { type: 'list', depth: 0, text: 'one' });
+  assert.deepEqual(parseLine('  - two'), { type: 'list', depth: 1, text: 'two' });
+  assert.deepEqual(parseLine('* star'), { type: 'list', depth: 0, text: 'star' }, 'a star is a bullet too');
+  assert.deepEqual(parseLine('- '), { type: 'list', depth: 0, text: '' });
+  assert.deepEqual(parseLine('-no space'), { type: 'p', text: '-no space' });
+  assert.equal(parseLine('                    - deep').depth, 8);
+  assert.equal(listLine(2, 'x'), '    - x');
+  assert.deepEqual(parseLine(listLine(3, 'round trip')), { type: 'list', depth: 3, text: 'round trip' });
+});
+
+test('@Task starts a task, in either case, only at the head of a line', async () => {
+  const { parseLine } = await load();
+  assert.deepEqual(parseLine('@Task write the paper'), { type: 'todo', depth: 0, done: false, text: 'write the paper' });
+  assert.deepEqual(parseLine('@task write the paper'), { type: 'todo', depth: 0, done: false, text: 'write the paper' });
+  assert.deepEqual(parseLine('@TASK '), { type: 'todo', depth: 0, done: false, text: '' }, 'the space is the trigger, as "- " used to be');
+  assert.deepEqual(parseLine('  @Task nested'), { type: 'todo', depth: 1, done: false, text: 'nested' });
+  assert.deepEqual(parseLine('@Task'), { type: 'p', text: '@Task' }, 'no space yet: still being typed');
+  assert.deepEqual(parseLine('@taskforce meets'), { type: 'p', text: '@taskforce meets' });
+  assert.deepEqual(parseLine('ask @Task about it'), { type: 'p', text: 'ask @Task about it' });
+});
+
+test('canonicalLine stores either task trigger as the checkbox line it makes', async () => {
+  const { canonicalLine } = await load();
+  assert.equal(canonicalLine('@Task x'), '- [ ] x');
+  assert.equal(canonicalLine('  @task x'), '  - [ ] x');
+  assert.equal(canonicalLine('@Task '), '- [ ] ');
+  assert.equal(canonicalLine('- [] x'), '- [ ] x');
+  assert.equal(canonicalLine('- [x] done'), '- [x] done');
+  assert.equal(canonicalLine('* star'), '- star', 'one bullet marker is stored');
+  assert.equal(canonicalLine('- plain dash'), '- plain dash');
+  assert.equal(canonicalLine('hello'), 'hello');
+});
+
+test('a marker typed into a row that already draws one re-types the row', async () => {
+  const { parseLine, retypedRow } = await load();
+  const bullet = parseLine('- ');
+  assert.deepEqual(retypedRow(bullet, '- [ ] real work'), { line: '- [ ] real work', ate: 6 });
+  assert.deepEqual(retypedRow(bullet, '@Task real work'), { line: '- [ ] real work', ate: 6 });
+  assert.deepEqual(retypedRow(bullet, '- nested?'), { line: '- nested?', ate: 2 }, 'no literal "- " inside a bullet');
+  assert.deepEqual(retypedRow(bullet, '- []'), { line: '- [ ] ', ate: 4 }, 'the checkbox alone starts the task');
+  assert.deepEqual(retypedRow(bullet, '- []one'), { line: '- []one', ate: 2 }, 'half a checkbox: the bullet marker is absorbed, the rest is text');
+  const task = parseLine('- [ ] ');
+  assert.deepEqual(retypedRow(task, '- []one'), { line: '- []one', ate: 2 }, 'the marker typed wins: a task takes the bullet it was given');
+  assert.equal(retypedRow(task, 'plain'), null);
+  assert.equal(retypedRow(bullet, 'plain text'), null);
+  const nested = parseLine('  - [ ] ');
+  assert.deepEqual(retypedRow(nested, '- [x] done'), { line: '  - [x] done', ate: 6 });
+  assert.deepEqual(retypedRow(nested, '- a bullet'), { line: '  - a bullet', ate: 2 }, 'an empty task takes the bullet marker');
 });
 
 test('parseLine classifies headings, bart, quote, image and paragraphs', async () => {
@@ -61,6 +117,7 @@ test('tokensOf keeps heading and quote prefixes as their own first token', async
   assert.deepEqual(tokensOf(parseLine('> q *i*'), '> q *i*'), ['> ', 'q ', '*i*']);
   assert.deepEqual(tokensOf(parseLine('>q'), '>q'), ['>', 'q']);
   assert.deepEqual(tokensOf(parseLine('- [ ] t @[x]'), '- [ ] t @[x]'), ['t ', '@[x]']);
+  assert.deepEqual(tokensOf(parseLine('- t @[x]'), '- t @[x]'), ['t ', '@[x]'], 'a bullet marker is drawn, never typed');
   assert.deepEqual(tokensOf(parseLine('@bart hi'), '@bart hi'), ['@bart', ' hi']);
 });
 
@@ -89,6 +146,7 @@ test('rawOffset with the line uses the real quote prefix and whole bart/paragrap
   assert.equal(rawOffset(parseLine('> q'), 1, '> q'), 3);
   assert.equal(rawOffset(parseLine('@bart hello'), 8, '@bart hello'), 8);
   assert.equal(rawOffset(parseLine('- [ ] a **b**'), 2, '- [ ] a **b**'), 2); // todo offsets stay relative to p.text; a boundary belongs to the preceding token
+  assert.equal(rawOffset(parseLine('- a **b**'), 2, '- a **b**'), 2); // a bullet's offsets are relative to p.text too
 });
 
 test('inlineHtml renders markup and escapes text', async () => {
@@ -118,4 +176,67 @@ test('a pasted image is an inline token that reads [Attachment n]; alone on a li
   const todo = parseLine(`- [ ] fix ${token} now`);
   assert.equal(todo.type, 'todo');
   assert.equal(rawOffset(todo, 'fix [Attachment 1] now'.length), `fix ${token} now`.length, 'a click after the chip maps past the whole token');
+});
+
+test('a bare address is a link as it stands; closing punctuation, markdown links and code are left alone', async () => {
+  const { INLINE, tokShown, inlineHtml, parseLine, rawOffset } = await load();
+  assert.deepEqual('see https://example.com/a_b?q=1#x, then'.split(INLINE).filter(Boolean), ['see ', 'https://example.com/a_b?q=1#x', ', then']);
+  assert.deepEqual('read https://example.com/paper.pdf.'.split(INLINE).filter(Boolean), ['read ', 'https://example.com/paper.pdf', '.']);
+  assert.deepEqual('(https://example.com)'.split(INLINE).filter(Boolean), ['(', 'https://example.com', ')']);
+  assert.deepEqual(tokShown('https://example.com'), { shown: 'https://example.com', pre: 0 });
+  assert.match(inlineHtml('go to https://example.com/?a=1&b=2 now'), /^go to <a href="https:\/\/example\.com\/\?a=1&amp;b=2" data-link="1"[^>]*>https:\/\/example\.com\/\?a=1&amp;b=2<\/a> now$/);
+  assert.equal((inlineHtml('[site](https://example.com)').match(/<a /g) || []).length, 1, 'a markdown link stays one link');
+  assert.doesNotMatch(inlineHtml('`curl https://example.com`'), /<a /);
+  assert.match(inlineHtml(parseLine('bart> source: https://example.com/x').text), /<a href="https:\/\/example\.com\/x"/, 'an answer line links too');
+  const todo = parseLine('- [ ] open https://example.com today');
+  assert.equal(rawOffset(todo, 'open https://example.com today'.length), todo.text.length, 'offsets are unchanged: the address shows as typed');
+});
+
+/* ------------------------------------------------------------- @bart cards (Answer Card, 2026-09-21) */
+
+test('an answer line is a drawn-prefix line: its text is edited, its prefix and its fold are kept', async () => {
+  const { parseLine, lineText, sameLine, replyLine, tokensOf, rawOffset, replyRawOffset, isDrawn, isMarked } = await load();
+  const open = parseLine('bart> It **is** so'), folded = parseLine('bart+> It **is** so');
+  assert.deepEqual([open.folded, folded.folded, open.text, folded.text], [false, true, 'It **is** so', 'It **is** so']);
+  assert.ok(isDrawn('reply') && !isMarked('reply'), 'drawn like a bullet, but not a row of a list: no nesting, no stepping out');
+  assert.equal(lineText(open, 'bart> It **is** so'), 'It **is** so');
+  assert.equal(sameLine(open, 'It was'), 'bart> It was');
+  assert.equal(sameLine(folded, 'It was'), 'bart+> It was');
+  assert.equal(sameLine(open, 'word '), 'bart> word ', 'a space typed at the end survives, or no second word could follow');
+  assert.deepEqual(parseLine(replyLine('', false)), { type: 'reply', text: '', folded: false });
+  assert.deepEqual(tokensOf(open, 'bart> It **is** so'), ['It ', '**is**', ' so']);
+  assert.equal(rawOffset(open, 5, 'bart> It **is** so'), 7, 'offsets are in the text, not the line');
+  // A rendered answer line shows its own markdown drawn: no `## `, and a • (one character) where `- ` stands.
+  assert.equal(replyRawOffset(parseLine('bart> ## Seen'), 2), 5);
+  assert.equal(replyRawOffset(parseLine('bart> - **230** characters'), 1), 2);
+  assert.equal(replyRawOffset(parseLine('bart> - **230** characters'), 4), 7, 'the end of a bold run is inside its closing marks, as on any line');
+  assert.equal(replyRawOffset(parseLine('bart>   - nested'), 3), 6);
+  assert.equal(replyRawOffset(parseLine('bart> plain **bold**'), 8), 10);
+});
+
+test('threads: a question, what stands under it, and the follow-ups asked right after', async () => {
+  const { threads, turnText } = await load();
+  const doc = [
+    'intro',                          // 0
+    '@bart --opus why?',              // 1
+    'bart> Because.',                 // 2
+    'bart>',                          // 3
+    'bart> *Opus · high · 12 s*',     // 4
+    '@bart and then?',                // 5
+    'bart+> Then this.',              // 6
+    'bart+> *Opus · high · 4 s*',     // 7
+    '@bart a third',                  // 8
+    'bart~> k9-x',                    // 9
+    '',                               // 10
+    '@bart typed, not sent',          // 11
+    '@bart another, right under it',  // 12
+    'bart> **No answer.** Codex was not found', // 13
+  ];
+  const found = threads(doc);
+  assert.deepEqual(found.map((thread) => [thread.from, thread.to, thread.turns.length]), [[1, 9, 3], [11, 11, 1], [12, 13, 1]], 'a question with nothing under it does not take the next one into its card');
+  assert.deepEqual(found[0].turns.map((turn) => [turn.q, turn.from, turn.to, turn.answered, turn.pending, turn.foot, turn.folded]), [[1, 2, 4, true, null, 4, false], [5, 6, 7, true, null, 7, true], [8, 9, 9, true, 'k9-x', -1, false]]);
+  assert.deepEqual(turnText(doc, found[0].turns[0]), { question: '--opus why?', answer: 'Because.' }, 'the closing line and the gap before it are not the answer');
+  assert.deepEqual(turnText(doc, found[0].turns[1]), { question: 'and then?', answer: 'Then this.' }, 'a folded answer is still what was said');
+  assert.deepEqual([found[2].turns[0].foot, turnText(doc, found[2].turns[0]).answer], [-1, '**No answer.** Codex was not found'], 'a run that failed has no closing line');
+  assert.deepEqual(threads(['bart> orphaned', 'text']), []);
 });

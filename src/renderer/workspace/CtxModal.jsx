@@ -1,18 +1,19 @@
 import React from 'react';
 import { KIND, kindOf } from '../ui/Icons.jsx';
+import { isNote } from '../model/kind.js';
 
 // "Add context to {topic}" (design lines 331–364). Two options only: a new note in this topic,
 // or an existing library item (no import — spec §2 #7).
 
 export default function CtxModal({ topic, library, onClose, onNewNote, onAttach }) {
   const [step, setStep] = React.useState(null);
-  const candidates = library.filter((row) => !topic.context.includes(row.id) && row.type !== 'note' && row.type !== 'image');
+  const candidates = library.filter((row) => !topic.context.includes(row.id) && !isNote(row) && row.type !== 'image');
   const options = [
     { id: 'note', glyph: KIND.note.glyph, title: 'New note', why: 'A blank note in this topic. Opens in a new tab.', click: onNewNote },
-    { id: 'library', glyph: KIND.dataset.glyph, title: 'Library', why: `A paper, dataset, repository or link already in your library · ${candidates.length} available.`, expands: true },
+    { id: 'library', glyph: KIND.data.glyph, title: 'Library', why: `A pdf, folder, repository or link already in your library · ${candidates.length} available.`, expands: true },
   ];
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 40, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: '12vh', background: 'rgba(255,255,255,.55)' }}>
+    <div onClick={onClose} data-overlay="1" style={{ position: 'fixed', inset: 0, zIndex: 40, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: '12vh', background: 'rgba(255,255,255,.55)' }}>
       <div onClick={(event) => event.stopPropagation()} role="dialog" aria-label="Add context" style={{ width: 'min(460px, calc(100vw - 32px))', padding: '18px 18px 14px', background: '#fff', border: '1px solid #c9c9c9', borderRadius: 10, boxShadow: '0 12px 32px rgba(0,0,0,.06)', animation: 'rise 220ms cubic-bezier(.25,.1,.25,1)' }}>
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, padding: '0 2px 12px' }}>
           <span style={{ font: '500 9px/1 var(--font-sans)', letterSpacing: '1.6px', textTransform: 'uppercase', color: '#8f8f8f' }}>Add context to {topic.name}</span>

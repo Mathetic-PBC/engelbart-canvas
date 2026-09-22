@@ -162,7 +162,7 @@ test('a burst is bounded per sweep, and status plus each project catalog land in
   assert.equal(catalog.project.root, project.dir);
   assert.ok(catalog.workspaces.some((entry) => entry.path === 'Agents/Inline chat agent' && entry.document === 'Agents/Inline chat agent/workspace.md'));
   const first = catalog.entries.find((entry) => entry.id === many[3].id);
-  assert.deepEqual([first.type, first.path, first.workspaces, first.chars, first.summaryStale], ['note', 'Burst 3.md', ['Agents/Inline chat agent'], 1500, false]);
+  assert.deepEqual([first.type, first.tags, first.path, first.workspaces, first.chars, first.summaryStale], ['md', ['note'], 'Burst 3.md', ['Agents/Inline chat agent'], 1500, false]);
   assert.ok(first.summary.startsWith('Summary of Burst'));
   assert.ok(catalog.entries.some((entry) => entry.type === 'image' && entry.summary === null && /^assets\//.test(entry.path)));
   assert.ok(JSON.parse(fs.readFileSync(path.join(layout.root, '.context', 'status.json'), 'utf8')).summarized.length === 3);
@@ -308,7 +308,7 @@ test('PDFs in the sweep: an Abstract is the summary and no model runs; a changed
   fs.copyFileSync(path.join(__dirname, '..', 'fixtures', 'hypocompass.pdf'), file);
   const old = new Date(Date.now() - 45 * MINUTE);
   fs.utimesSync(file, old, old);
-  const paper = await ctx.libraryDb.insert({ id: '99999999-9999-4999-8999-999999999999', name: 'HypoCompass', type: 'paper', path: file });
+  const paper = await ctx.libraryDb.insert({ id: '99999999-9999-4999-8999-999999999999', name: 'HypoCompass', type: 'pdf', path: file });
 
   const first = recorder();
   const report = await sweeperWith(first.summarize).sweep();
@@ -341,5 +341,30 @@ test('PDFs in the sweep: an Abstract is the summary and no model runs; a changed
   assert.deepEqual((await sweeper.sweep()).cleared, ['HypoCompass']);
   assert.equal((await sweeper.sweep()).extracted, 0);
   assert.equal(third.calls.length, 0);
+  await ctx.libraryDb.remove(paper.id);
+});
+
+test('re-categorizing an installed library is not an edit: the sweep that follows summarizes nothing and extracts nothing', async () => {
+  const library = require('../src/main/store/library.cjs');
+  const { inspectPdf } = require('../src/main/context/pdf-kind.cjs');
+  const file = path.join(layout.root, 'installed-paper.pdf');
+  fs.copyFileSync(path.join(__dirname, '..', 'fixtures', 'hypocompass.pdf'), file);
+  const old = new Date(Date.now() - 45 * MINUTE);
+  fs.utimesSync(file, old, old);
+  // as the conversion leaves them: a pdf with no tag yet, a long note, both carrying summaries written before the upgrade
+  const paper = await ctx.libraryDb.insert({ id: '88888888-8888-4888-8888-888888888888', name: 'Installed paper', type: 'pdf', path: file });
+  await ctx.libraryDb.setSummary(paper.id, 'The summary it had before the upgrade.', new Date(Date.now() - 10 * MINUTE));
+  const kept = await note('Installed note', long('installed'), 120);
+  await ctx.libraryDb.setSummary(kept.id, 'The note summary it had.', new Date(Date.now() - 60 * MINUTE));
+  await ctx.libraryDb.query('update library set categorized = null where id = any($1)', [[paper.id, kept.id]]);
+  const fields = async () => Promise.all([paper.id, kept.id].map(async (id) => { const r = await row(id); return [r.summary, r.summary_edited, r.last_edited, r.char_count]; }));
+  const before = await fields();
+
+  const report = await library.recategorize(ctx, { inspectPdf }); // the real reader, on a real paper
+  assert.deepEqual(report.changed.filter((r) => r.id === paper.id).map((r) => [r.type, r.tags]), [['pdf', ['paper']]]);
+  const after = recorder();
+  const swept = await sweeperWith(after.summarize).sweep();
+  assert.deepEqual([after.calls.length, swept.dispatched, swept.extracted, swept.abstracts, swept.cleared], [0, 0, 0, [], []]);
+  assert.deepEqual(await fields(), before);
   await ctx.libraryDb.remove(paper.id);
 });

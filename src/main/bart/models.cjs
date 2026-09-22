@@ -12,14 +12,14 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { readJson, writeJson } = require('../store/home.cjs');
+const { EFFORTS, effortOf, modelOf, readFlags, readQuestion, withChoice } = require('./question.cjs');
 
 const MODELS_FILE = 'model-effort-inline-question.json';
-const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
 const KEY_RE = /^[a-z][a-z0-9]{0,23}$/;
 
 const DEFAULT_MODELS = {
-  about: 'Models and efforts for @bart, the inline question agent. This file applies to every project and is read again for each question. A question starts on the first step of the default provider\'s ladder; the agent may move up a step when the question needs more than it was given, and it keeps what it has read. `@bart --opus --high …` picks a model and an effort by hand and turns that off. Luna and Sonnet: lookups, definitions, rewording. Sol and Opus: questions that need several files read or careful reasoning. Astra and Fable: the hardest questions, where a slow answer is acceptable. Medium effort answers in seconds; high and xhigh think longer before answering.',
+  about: 'Models and efforts for @bart, the inline question agent. This file applies to every project and is read again for each question. A question starts on the first step of the default provider\'s ladder; the agent may move up a step when the question needs more than it was given, and it keeps what it has read. `@bart --opus --high …` picks a model and an effort by hand and turns that off. Luna and Sonnet: lookups, definitions, rewording. Sol and Opus: questions that need several files read or careful reasoning. Astra and Fable: the hardest questions, where a slow answer is acceptable. Medium effort answers in seconds; high and xhigh think longer before answering; ultra (Codex) and max (Claude Code) are the most either will spend, by hand only: no ladder reaches them.',
   provider: 'openai',
   providers: {
     openai: {
@@ -29,7 +29,7 @@ const DEFAULT_MODELS = {
         sol: { id: 'gpt-5.6-sol', name: 'Sol', use: 'The default. Most questions about the project.' },
         astra: { id: 'gpt-6-astra', name: 'Astra', use: 'Deepest. Hard reasoning across many files; slow.' },
       },
-      efforts: ['medium', 'high', 'xhigh'],
+      efforts: ['medium', 'high', 'xhigh', 'ultra'],
       ladder: [{ model: 'sol', effort: 'medium' }, { model: 'sol', effort: 'high' }, { model: 'astra', effort: 'xhigh' }],
     },
     anthropic: {
@@ -40,7 +40,7 @@ const DEFAULT_MODELS = {
         opus: { id: 'opus', name: 'Opus', use: 'Questions that need several files read or careful reasoning.' },
         fable: { id: 'fable', name: 'Fable', use: 'Deepest. The hardest questions; slow.' },
       },
-      efforts: ['medium', 'high', 'xhigh'],
+      efforts: ['medium', 'high', 'xhigh', 'max'],
       ladder: [{ model: 'sonnet', effort: 'medium' }, { model: 'opus', effort: 'high' }, { model: 'fable', effort: 'xhigh' }],
     },
   },
@@ -73,77 +73,20 @@ function normalizeModels(value) {
   return { about: typeof given.about === 'string' ? given.about : DEFAULT_MODELS.about, provider: providers[given.provider] ? given.provider : DEFAULT_MODELS.provider, providers };
 }
 
-/** The list in force, writing the defaults the first time so there is a file to edit. */
-function loadModels(homeRoot) {
+/** Only the providers config.json lists (`providers`); when it lists none of them, all stay, so a question can always run. */
+function onlyProviders(models, only) {
+  const kept = Object.keys(models.providers).filter((key) => Array.isArray(only) && only.includes(key));
+  if (!kept.length) return models;
+  return { ...models, provider: kept.includes(models.provider) ? models.provider : kept[0], providers: Object.fromEntries(kept.map((key) => [key, models.providers[key]])) };
+}
+
+/** The list in force, writing the defaults the first time so there is a file to edit. `only`: the providers config.json offers. */
+function loadModels(homeRoot, { only } = {}) {
   const file = path.join(homeRoot, MODELS_FILE);
   const held = readJson(file);
   if (!held) { try { if (!fs.existsSync(file)) writeJson(file, DEFAULT_MODELS); } catch { /* read-only home: the defaults still apply */ } }
-  return normalizeModels(held || DEFAULT_MODELS);
+  const models = normalizeModels(held || DEFAULT_MODELS);
+  return only ? onlyProviders(models, only) : models;
 }
 
-const squash = (word) => String(word == null ? '' : word).toLowerCase().replace(/[\s_.-]+/g, '');
-const EFFORT_WORDS = { low: 'low', lo: 'low', medium: 'medium', med: 'medium', mid: 'medium', high: 'high', hi: 'high', xhigh: 'xhigh', extrahigh: 'xhigh', xtrahigh: 'xhigh', exhigh: 'xhigh', veryhigh: 'xhigh', max: 'max', maximum: 'max' };
-
-/** "Extra high", "x-high", " XHIGH " → "xhigh"; null when the word is not an effort. */
-function effortOf(word) {
-  return EFFORT_WORDS[squash(word)] || null;
-}
-
-/** "--Fable", "fable 5.1", "claude-opus-5", "gpt-5.6-sol" → { provider, model }; null when the word names no model in the list. */
-function modelOf(word, models) {
-  const bare = (value) => squash(value).replace(/\d+/g, '');
-  const wanted = bare(word);
-  if (!wanted) return null;
-  for (const [provider, entry] of Object.entries(models.providers)) {
-    for (const [key, model] of Object.entries(entry.models)) {
-      if (wanted === key || wanted === bare(model.id) || wanted === bare(model.name) || wanted.replace(/^(claude|gpt|codex)/, '') === key) return { provider, model: key };
-    }
-  }
-  return null;
-}
-
-/**
- * The text after "@bart": flags at either end are taken off, the rest is the question. A `--word`
- * that names neither a model nor an effort stays in the question. → { question, provider, steps, pinned }
- * where steps are { provider, key, model (the id the CLI gets), name, effort }, one when pinned.
- */
-function readQuestion(text, models) {
-  const words = String(text || '').trim().split(/\s+/).filter(Boolean);
-  let chosen = null;
-  let effort = null;
-  const take = (from) => {
-    for (;;) {
-      const at = from === 'start' ? 0 : words.length - 1;
-      const word = words[at];
-      if (!word || !/^--\S/.test(word)) return;
-      const flag = word.slice(2);
-      const model = modelOf(flag, models);
-      let level = effortOf(flag);
-      let used = 1;
-      // "--extra high" and "--extra --high": two words, one effort.
-      if (!model && !level && squash(flag) === 'extra' && from === 'start' && effortOf((words[1] || '').replace(/^--/, '')) === 'high') { level = 'xhigh'; used = 2; }
-      if (!model && !level) return;
-      if (model) chosen = model; else effort = level;
-      if (from === 'start') words.splice(0, used); else words.splice(at, 1);
-    }
-  };
-  take('start');
-  take('end');
-  const provider = chosen ? chosen.provider : models.provider;
-  const entry = models.providers[provider];
-  // An effort the list does not offer becomes the nearest one it does: --max is xhigh, --low is medium.
-  if (effort && !entry.efforts.includes(effort)) {
-    const rank = (value) => EFFORTS.indexOf(value);
-    effort = [...entry.efforts].sort((a, b) => Math.abs(rank(a) - rank(effort)) - Math.abs(rank(b) - rank(effort)))[0];
-  }
-  const step = (rung) => ({ provider, key: rung.model, model: entry.models[rung.model].id, name: entry.models[rung.model].name, effort: rung.effort });
-  const pinned = !!(chosen || effort);
-  if (!pinned) return { question: words.join(' '), provider, steps: entry.ladder.map(step), pinned };
-  // One of the two by hand: the other comes from the ladder step that already pairs with it.
-  const rung = chosen
-    ? { model: chosen.model, effort: effort || (entry.ladder.find((candidate) => candidate.model === chosen.model) || { effort: 'medium' }).effort }
-    : { model: (entry.ladder.find((candidate) => candidate.effort === effort) || entry.ladder[0]).model, effort };
-  return { question: words.join(' '), provider, steps: [step(rung)], pinned };
-}
-
-module.exports = { MODELS_FILE, EFFORTS, DEFAULT_MODELS, normalizeModels, loadModels, effortOf, modelOf, readQuestion };
+module.exports = { MODELS_FILE, EFFORTS, DEFAULT_MODELS, normalizeModels, onlyProviders, loadModels, effortOf, modelOf, readFlags, readQuestion, withChoice };

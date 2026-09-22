@@ -7,5 +7,5 @@ if (!bridge) throw new Error('Engelbart bridge is unavailable');
 export const api = bridge;
 
 export function errorMessage(error) {
-  return error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(error || 'Unknown error');
+  return error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (\w*Error: )?/, '') : String(error || 'Unknown error');
 }

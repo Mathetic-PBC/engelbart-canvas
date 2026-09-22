@@ -26,13 +26,11 @@ function DirectoryGate({ project, onChosen, onHome, error }) {
     }
   };
   return (
-    <div role="dialog" aria-modal="true" aria-label="Choose the project's code directory" data-directory-gate="1" style={{ position: 'fixed', inset: 0, zIndex: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(255,255,255,.35)' }}>
+    <div role="dialog" aria-modal="true" aria-label="Choose the project's code directory" data-directory-gate="1" data-overlay="1" style={{ position: 'fixed', inset: 0, zIndex: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(255,255,255,.35)' }}>
       <div style={{ width: 'min(480px, 100%)', display: 'flex', flexDirection: 'column', gap: 18, padding: 28, background: '#fff', border: '1px solid #c9c9c9', borderRadius: 12, boxShadow: '0 12px 40px #0000001f', animation: 'rise 200ms cubic-bezier(.25,.1,.25,1)' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <span style={{ font: '500 9px/1 var(--font-sans)', letterSpacing: '1.6px', textTransform: 'uppercase', color: '#8f8f8f' }}>{project.name}</span>
           <h2 style={{ margin: 0, font: '500 20px/1.3 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Where does this project's code live?</h2>
           {project.directoryMissing && <p style={{ margin: 0, font: '13px/1.6 var(--font-mono)', color: '#e70022', overflowWrap: 'anywhere' }}>{project.directoryMissing} is no longer there.</p>}
-          <p style={{ margin: 0, font: '14px/1.6 var(--font-sans)', color: '#4d4d4d', textWrap: 'pretty' }}>Terminals, Claude Code and Codex open in this directory, and it is where code changes are made. It is saved in the project's <code style={{ font: '.92em var(--font-mono)' }}>project.json</code>.</p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <button type="button" onClick={choose} disabled={busy} autoFocus style={{ minHeight: 40, padding: '10px 18px', border: 0, borderRadius: 8, background: '#0070f3', color: '#fff', cursor: busy ? 'default' : 'pointer', font: '500 13px/1 var(--font-sans)', opacity: busy ? 0.6 : 1 }}>{busy ? 'Choosing…' : 'Choose folder…'}</button>
@@ -86,7 +84,9 @@ export default function App() {
     }
     setTree(next);
     setLibrary(rows);
-    setEntry({ workspaceId: (prefer && prefer.workspaceId) || next.workspaces[0].id, tab: (prefer && prefer.tab) || null });
+    // A note opened from the library lands in the workspace it was made in.
+    const made = prefer && prefer.tab && !prefer.workspaceId ? next.notes.find((note) => note.id === prefer.tab.id) : null;
+    setEntry({ workspaceId: (prefer && prefer.workspaceId) || (made && made.workspaceId) || next.workspaces[0].id, tab: (prefer && prefer.tab) || null });
     setPhase('workspace');
     setError('');
   }, []);
@@ -203,7 +203,16 @@ export default function App() {
   return (
     <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#fff' }}>
       {phase === 'home' && (
-        <Home projects={projects} error={error} onCreateScreen={() => setPhase('create')} onOpen={(id) => openProject(id, null).catch(fail)} onRename={async (id, name) => { try { await api.renameProject(id, name); await loadHome(); } catch (candidate) { fail(candidate); } }} />
+        <Home
+          projects={projects}
+          library={library}
+          error={error}
+          onCreateScreen={() => setPhase('create')}
+          onOpenWorkspace={(id, workspaceId) => openProject(id, workspaceId ? { workspaceId } : null).catch(fail)}
+          onOpenNote={(row) => openProject(row.project_id, { tab: { id: row.id, title: row.name } }).catch(fail)}
+          onLibraryChanged={() => loadHome().catch(fail)}
+          onRename={async (id, name) => { try { await api.renameProject(id, name); await loadHome(); } catch (candidate) { fail(candidate); } }}
+        />
       )}
       {phase === 'create' && (
         <CreateProject onCreate={createProject} onBack={projects.length ? goHome : null} busy={busy} error={error} />
@@ -228,7 +237,7 @@ export default function App() {
         <DirectoryGate project={tree.project} onChosen={chooseDirectory} onHome={goHome} error={error} />
       )}
       {error && phase !== 'home' && phase !== 'create' && !(tree && !tree.project.directory) && (
-        <div style={{ position: 'fixed', left: 24, bottom: 18, zIndex: 150, padding: '7px 12px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', font: '12.5px/1.5 var(--font-sans)', color: '#e70022', display: 'flex', gap: 10, alignItems: 'center' }}>
+        <div data-overlay="1" style={{ position: 'fixed', left: 24, bottom: 18, zIndex: 150, padding: '7px 12px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', font: '12.5px/1.5 var(--font-sans)', color: '#e70022', display: 'flex', gap: 10, alignItems: 'center' }}>
           <span>{error}</span>
           <button type="button" onClick={() => setError('')} style={{ padding: '0 2px', border: 0, background: 'transparent', cursor: 'pointer', color: '#c9c9c9', font: '14px/1 var(--font-sans)' }}>×</button>
         </div>

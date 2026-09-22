@@ -19,32 +19,42 @@ const ENDS_SENTENCE = /[.!?]["'”’)\]]?$/;
 let pdfjsPromise = null;
 const loadPdfjs = () => { pdfjsPromise = pdfjsPromise || import('pdfjs-dist/legacy/build/pdf.mjs'); return pdfjsPromise; };
 
-/** Lines of the first `maxPages` pages: [{ page, x, y, h (font height), text }], in reading order of the content stream. */
-async function readPdfLines(file, { maxPages = 3 } = {}) {
+/** An open PDF: `{ doc, close }`. Always `close()` it. */
+async function openPdf(file) {
   const pdfjs = await loadPdfjs();
   const task = pdfjs.getDocument({ data: new Uint8Array(fs.readFileSync(file)), useSystemFonts: true, isEvalSupported: false, verbosity: 0 });
-  const doc = await task.promise;
+  return { doc: await task.promise, close: () => task.destroy() };
+}
+
+/** The lines of page `n`. Rotated items are never part of a line; a caller that wants them (the arXiv stamp) passes a list to collect them in. */
+async function pageLines(doc, n, { rotated = null } = {}) {
+  const page = await doc.getPage(n);
+  const content = await page.getTextContent();
+  const lines = [];
+  let current = null;
+  const flush = () => { if (current && current.text.trim()) lines.push({ ...current, text: current.text.replace(/\s+/g, ' ').trim() }); current = null; };
+  for (const item of content.items) {
+    if (typeof item.str !== 'string') continue;
+    const [, b, c, , x, y] = item.transform;
+    if (Math.abs(b) > 0.01 || Math.abs(c) > 0.01) { if (rotated) rotated.push(item.str); continue; } // rotated: watermarks, margin stamps
+    if (current && Math.abs(y - current.y) > 2) flush();
+    if (!current) current = { page: n, x: Math.round(x), y: Math.round(y), h: Math.round((item.height || 0) * 10) / 10, text: '' };
+    current.text += item.str;
+    if (item.hasEOL) flush();
+  }
+  flush();
+  page.cleanup();
+  return lines;
+}
+
+/** Lines of the first `maxPages` pages: [{ page, x, y, h (font height), text }], in reading order of the content stream. */
+async function readPdfLines(file, { maxPages = 3 } = {}) {
+  const { doc, close } = await openPdf(file);
   const lines = [];
   try {
-    for (let n = 1; n <= Math.min(maxPages, doc.numPages); n += 1) {
-      const page = await doc.getPage(n);
-      const content = await page.getTextContent();
-      let current = null;
-      const flush = () => { if (current && current.text.trim()) lines.push({ ...current, text: current.text.replace(/\s+/g, ' ').trim() }); current = null; };
-      for (const item of content.items) {
-        if (typeof item.str !== 'string') continue;
-        const [, b, c, , x, y] = item.transform;
-        if (Math.abs(b) > 0.01 || Math.abs(c) > 0.01) continue; // rotated: watermarks, margin stamps
-        if (current && Math.abs(y - current.y) > 2) flush();
-        if (!current) current = { page: n, x: Math.round(x), y: Math.round(y), h: Math.round((item.height || 0) * 10) / 10, text: '' };
-        current.text += item.str;
-        if (item.hasEOL) flush();
-      }
-      flush();
-      page.cleanup();
-    }
+    for (let n = 1; n <= Math.min(maxPages, doc.numPages); n += 1) lines.push(...(await pageLines(doc, n)));
   } finally {
-    await task.destroy();
+    await close();
   }
   return lines;
 }
@@ -96,4 +106,4 @@ async function extractText(file, { maxPages = 120 } = {}) {
   return (await readPdfLines(file, { maxPages })).map((line) => line.text).join('\n');
 }
 
-module.exports = { readPdfLines, findAbstract, extractAbstract, extractText, MAX_ABSTRACT_CHARS };
+module.exports = { openPdf, pageLines, readPdfLines, findAbstract, extractAbstract, extractText, MAX_ABSTRACT_CHARS };

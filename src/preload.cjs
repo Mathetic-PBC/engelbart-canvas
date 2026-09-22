@@ -1,6 +1,6 @@
 'use strict';
 
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 function subscribe(channel, callback) {
   if (typeof callback !== 'function') throw new TypeError('Listener must be a function');
@@ -53,9 +53,18 @@ const engelbartAPI = Object.freeze({
   copyDoc: invoke('copy-doc'),
   askBart: invoke('ask-bart'),
   stopBart: invoke('stop-bart'),
+  bartModels: invoke('bart-models'),
+  copyText: invoke('copy-text'),
   onBartProgress: (callback) => subscribe('engelbart:bart-progress', callback),
   readTextFile: invoke('read-text-file'),
+  resolvePageFile: invoke('resolve-page-file'),
   library: invoke('library'),
+  projectsForLibraryItem: invoke('projects-for-library-item'),
+  libraryForProject: invoke('library-for-project'),
+  addLibraryItem: invoke('add-library-item'),
+  previewLibraryItem: invoke('preview-library-item'),
+  // A file dropped on the window: where it is on disk (the renderer's File no longer says).
+  pathForFile: (file) => { try { return webUtils.getPathForFile(file) || null; } catch { return null; } },
   renameLibraryItem: invoke('rename-library-item'),
   readLibraryFile: invoke('read-library-file'),
   readAnnotations: invoke('read-annotations'),
@@ -63,6 +72,19 @@ const engelbartAPI = Object.freeze({
   shellHistory: invoke('shell-history'),
   openExternal: invoke('open-external'),
   reveal: invoke('reveal'),
+  // Browser pane: pages are native views in the main process (src/main/browser/views.cjs).
+  browserOpen: (id, url) => ipcRenderer.invoke('browser:open', id, url),
+  browserShow: (id, rect) => ipcRenderer.invoke('browser:show', id, rect),
+  browserHide: (options) => ipcRenderer.invoke('browser:hide', options),
+  browserCommand: (id, name) => ipcRenderer.invoke('browser:command', id, name),
+  browserClose: (id) => ipcRenderer.invoke('browser:close', id),
+  browserCloseAll: () => ipcRenderer.invoke('browser:close-all'),
+  browserLoginReply: (requestId, credentials) => ipcRenderer.invoke('browser:login-reply', requestId, credentials),
+  onBrowserState: (callback) => subscribe('browser:state', callback),
+  onBrowserClosed: (callback) => subscribe('browser:closed', callback),
+  onBrowserLogin: (callback) => subscribe('browser:login', callback),
+  onBrowserOpenTab: (callback) => subscribe('browser:open-tab', callback),
+  onBrowserFocusAddress: (callback) => subscribe('browser:focus-address', callback),
 });
 
 contextBridge.exposeInMainWorld('terminalAPI', terminalAPI);

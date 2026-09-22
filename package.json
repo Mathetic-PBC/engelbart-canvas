@@ -3,7 +3,7 @@
   "productName": "Engelbart",
   "version": "0.1.0",
   "private": true,
-  "description": "Engelbart desktop \u2014 a simulation/testing environment for the Goal Canvas: projects, goals, topics, notes, library, PDF ink, and a native terminal.",
+  "description": "Engelbart desktop — a simulation/testing environment for the Goal Canvas: projects, goals, topics, notes, library, PDF ink, and a native terminal.",
   "main": "src/main/index.cjs",
   "scripts": {
     "build": "node scripts/build.mjs",
@@ -27,6 +27,7 @@
     "@xterm/addon-fit": "0.11.0",
     "@xterm/addon-search": "0.16.0",
     "@xterm/addon-web-links": "0.12.0",
+    "@xterm/addon-webgl": "0.19.0",
     "@xterm/xterm": "6.0.0",
     "node-pty": "1.1.0",
     "pdfjs-dist": "6.3.289",

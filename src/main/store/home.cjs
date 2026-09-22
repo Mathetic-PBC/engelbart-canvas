@@ -24,7 +24,7 @@ function ensureHome(homeDir) {
     // A config written before a setting existed gains it, so every switch is there to be edited.
     let onDisk = null;
     try { onDisk = JSON.parse(fs.readFileSync(configFile, 'utf8')); } catch { onDisk = null; }
-    if (!onDisk || typeof onDisk !== 'object' || !onDisk.summarizer) writeConfig(root, {});
+    if (!onDisk || typeof onDisk !== 'object' || !onDisk.summarizer || !Array.isArray(onDisk.providers)) writeConfig(root, {});
   }
   return { root, testRoot, configFile };
 }
@@ -56,10 +56,20 @@ function normalizeSummarizer(value) {
   return out;
 }
 
+// Which providers @bart offers (src/main/bart): its selector lists these and no others, and a flag
+// naming a model of one that is not here is not a flag. Take a name out to stop offering it.
+const PROVIDERS_DEFAULT = Object.freeze(['openai', 'anthropic']);
+
+function normalizeProviders(value) {
+  const named = (Array.isArray(value) ? value : []).map((name) => PROVIDER_ALIASES[String(name || '').toLowerCase()]).filter(Boolean);
+  return named.length ? [...new Set(named)] : [...PROVIDERS_DEFAULT];
+}
+
 function normalizeConfig(value) {
   const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   return {
     testMode: typeof input.testMode === 'boolean' ? input.testMode : true,
+    providers: normalizeProviders(input.providers),
     summarizer: normalizeSummarizer(input.summarizer),
   };
 }
@@ -77,7 +87,7 @@ function writeConfig(root, patch) {
     throw new TypeError('Config update must be an object');
   }
   for (const key of Object.keys(patch)) {
-    if (key !== 'testMode' && key !== 'summarizer') throw new TypeError(`Unsupported config key: ${key}`);
+    if (key !== 'testMode' && key !== 'summarizer' && key !== 'providers') throw new TypeError(`Unsupported config key: ${key}`);
   }
   if (Object.hasOwn(patch, 'testMode') && typeof patch.testMode !== 'boolean') {
     throw new TypeError('testMode must be a boolean');
@@ -91,12 +101,13 @@ function writeConfig(root, patch) {
 }
 
 // A display name → a filesystem-safe directory or file stem. Keeps spaces and
-// unicode; drops path separators, control characters and leading dots.
+// unicode; slashes become hyphens; drops colons, control characters and leading dots.
 function sanitizeName(name) {
   let value = typeof name === 'string' ? name : '';
   value = value
     .replace(/[\x00-\x1f\x7f]/g, '')
-    .replace(/[/\\:]/g, '')
+    .replace(/[/\\]/g, '-')
+    .replace(/:/g, '')
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/^\.+/, '')

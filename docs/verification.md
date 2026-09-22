@@ -157,3 +157,37 @@ Unit tests: 80 passing (`test/context.test.cjs` is new: 11 tests, one of which r
 | Isolation, checked by asking the model to quote its instructions | Codex with the private home quoted only the test prompt; Claude Code with the isolation flags quoted only its system prompt (plus the harness's own account-email line). Hudson's personal AGENTS.md / CLAUDE.md did not appear in either. | terminal output |
 | Packaged build (a throwaway copy built into the scratchpad, not `release/`) | pdf.js loads from the archive in the main process; the seeded paper's abstract is extracted | `status.json` |
 | Not verified | a real Claude Code dispatch *through the app* (the provider was exercised directly from the shell, and its arguments are unit-tested); wake-from-sleep; behaviour under a rate limit | — |
+
+### Addendum — 2026-09-20 (tasks by name, bullets back)
+
+Unit tests: 119 passing (`test/doc-model.test.cjs` gained the task/bullet/`@Task`/`retypedRow` cases). Driven on a scratch instance (`ENGELBART_HOME_DIR=<scratchpad>/home1`, port 9241, `ENGELBART_BART_FAKE=1` for the last row), typing key by key with `typeslow` so every keystroke re-renders.
+
+| Step | Result | Evidence |
+|---|---|---|
+| Type `- one`, Enter, `two`, Tab, Enter, `three`, Enter, Tab, `four` | `- one` / `  - two` / `  - three` / `    - four`, each drawn with a `•` and no card | `data-raw` dumps |
+| Enter on an empty nested bullet, twice more | steps out one level, then leaves the list (a plain empty line) — the rule tasks already had | dumps |
+| Backspace at the head of `  - two` | outdents to depth 0 and its child follows; again → plain paragraph `two` | dumps |
+| Type `- [] short form`, `- [ ] long form`, `@task lower case` | all three store `- [ ] …` and draw the task row (mark, ×) in one card | dumps |
+| Type `- a bullet` right after them | stays a bullet, outside the card | dump |
+| `@tas` | the `@` menu offers **Task** (kind `task`); Enter turns the line into `- [ ] ` with the caret in it | menu text, dumps |
+| Checkbox and **Build all** | toggle writes `- [x]`, Build all runs `Building…` → `Done` and checks the row | dumps |
+| `@bart` answer (fake) | `- **230** characters of documents` renders as a bullet inside the answer card, as before | `lists2.png` |
+| Not verified | ordered lists (`1. `) are not part of this change; a real model answer was not re-run (the fake writes the same bullet lines) | — |
+
+### Addendum — 2026-09-21 (answer card, follow-ups, Ultra / Max)
+
+`npm test`: 148 pass (20 in `test/bart.test.cjs`, two new in `test/doc-model.test.cjs`). Driven in an isolated instance (`ENGELBART_BART_FAKE=1`, own home, port 9251, real key and pointer events through `scripts/drive.mjs`); the fake agent reports which path a follow-up took.
+
+| Step | Observed | How |
+| --- | --- | --- |
+| `@bart why…` ⏎ | One grey card: question inside it, answer with the rule, foot of icons (Copy, Regenerate · `Sol · medium · 1 s` · Collapse, Delete), then `@bart` *Respond…* with the `Sol Medium ⌄ ↑` pill | 1:1 screenshot |
+| Type in the field, ⏎ | Send turned `rgb(0, 112, 243)` with text; `@bart and the long ones` + answer joined the same card; the answer says **"the same session, given the question alone"** | screenshot, `workspace.md` |
+| Collapse on turn 1 | Answer hidden, foot stays, button reads Expand; file holds `bart+> ` on that answer's lines | DOM, `workspace.md` |
+| Click into turn 2's answer, type, ⏎, type | Text and trailing spaces kept, Enter made a second `bart> ` line; prefix never shown | `workspace.md` |
+| Delete on turn 1 **while a line of turn 2 was being edited** | First failed: the press moved focus, the editor redrew, the click never arrived. After the `mousedown` fix only turn 1 left the file | `workspace.md` |
+| Follow-up after that edit and delete | **"a new session, given 1 earlier turn"**: the document no longer matched the session, so everything was given again | `workspace.md` |
+| Caret in the last line, select all, Backspace | First selected nothing (first line was a locked question). After the first-line rule: 341 characters selected, the person's line went, both turns stayed | `diff` of the file |
+| Hover Regenerate → Astra → Ultra → blue button | Selector under the icon, original model marked, `Ultra` listed; first closed itself 220 ms after the pointer went straight onto it (event order), fixed; then the turn reran as `Astra · ultra`, question line unchanged | DOM, `workspace.md` |
+| A run in progress | Answer so far smaller and grey with **no rule**; `2 steps` with a square-ended angle; Stop as text | 1:1 screenshot |
+
+Not exercised against a real model in this pass: `--resume` inside the window with Claude Code and Codex (the command lines and the resumed input are asserted with the CLI stubbed; both resumes were verified by hand on 2026-09-19 for the escalation ladder, which uses the same calls), and whether `ultra` is accepted for every Codex model on Hudson's plan.

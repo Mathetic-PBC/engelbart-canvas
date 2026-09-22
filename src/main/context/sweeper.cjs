@@ -8,8 +8,9 @@
 //   2. its summary is older than its last edit ("Not null > 30 mins": file + system prompt +
 //      current summary in, summary out).
 // Before dispatching, the file has to be longer than 1000 characters; a shorter note keeps (or
-// returns to) a null summary, since reading it costs less than reading about it. A PDF follows the
-// same clock by its file's modification time, with one difference: if it prints an "Abstract"
+// returns to) a null summary, since reading it costs less than reading about it. A note is an md
+// tagged `note`; an md added from outside is not swept. A PDF (every row of type pdf, tagged paper
+// or not) follows the same clock by its file's modification time, with one difference: if it prints an "Abstract"
 // section, that text is its summary, no model runs, and the length rule does not apply; a PDF
 // without one is summarized from its extracted text. Images and every other type stay null. Writing a summary sets summary and summary_edited
 // and nothing else. Afterwards every project's .context/catalog.json is brought up to date.
@@ -17,6 +18,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { writeJson, DIR_MODE } = require('../store/home.cjs');
+const projects = require('../store/projects.cjs');
 const { writeCatalogs } = require('./catalog.cjs');
 const { loadSystemPrompt } = require('./summarizer.cjs');
 const { extractAbstract, extractText } = require('./pdf-text.cjs');
@@ -110,6 +112,7 @@ function createSweeper(options) {
     for (const row of await ctx.libraryDb.uncountedNotes()) {
       try { await ctx.libraryDb.setCharCount(row.id, fs.readFileSync(row.path, 'utf8').length); } catch { /* the file is gone */ }
     }
+    projects.recountWorkspaces(ctx);
     for (const row of await ctx.libraryDb.summaryCandidates(new Date(now() - config.quietMs), config.minChars)) await considerNote(ctx, row, report);
     for (const row of await ctx.libraryDb.papersWithFiles()) await considerPaper(ctx, row, report);
     report.catalogs = await writeCatalogs(ctx, { now: () => new Date(now()) });

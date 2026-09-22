@@ -14,6 +14,8 @@ const library = require('./store/library.cjs');
 const { expandDoc } = require('./context/expand-mentions.cjs');
 const { failureLines } = require('./bart/reply.cjs');
 const { readShellHistory } = require('./shell-history.cjs');
+const { createDescriber, createRepoIdentifier, createRemoteFileLister } = require('./store/page-meta.cjs');
+const { inspectPdf } = require('./context/pdf-kind.cjs');
 
 const MAX_NAME = 512;
 
@@ -38,7 +40,8 @@ function projectInput(value) {
   return { name: str(input.name, 'name'), path: optStr(input.path, 'path', 200), directory: optStr(input.directory, 'directory', 4096) };
 }
 
-function createStore({ homeDir, fixturesDir }) {
+// `inspectPdf` (the app passes pdf-kind's) is how a pdf is read for whether it is a paper when a library is re-categorized.
+function createStore({ homeDir, fixturesDir, inspectPdf: readPdf = null }) {
   const layout = home.ensureHome(homeDir);
   const contexts = new Map();
 
@@ -60,6 +63,10 @@ function createStore({ homeDir, fixturesDir }) {
       const libraryDb = await db.openLibraryDb(dataRoot);
       const next = { homeDir, root: layout.root, dataRoot, mode: current, libraryDb };
       if (current === 'test') await library.seedIfEmpty(next, fixturesDir);
+      // A library behind the category rules (converted from the old types, or from before a change of
+      // rules) is brought up to them before anyone reads it: about 30 ms a pdf, once. Summaries are
+      // not touched. A failure leaves the rows due for the next launch; the library still opens.
+      try { await library.recategorize(next, { inspectPdf: readPdf }); } catch { /* still due */ }
       return next;
     })();
     contexts.set(current, opening);
@@ -95,7 +102,7 @@ function createStore({ homeDir, fixturesDir }) {
   return { layout, context, config: describe, setTestMode, resetTestData, close: closeAll };
 }
 
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, notify }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, notify, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister() }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const withCtx = (fn) => async (...args) => fn(await store.context(), ...args);
 
@@ -153,20 +160,35 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     const askId = str(value.askId, 'ask id', 64);
     if (!/^[\w-]+$/.test(askId)) throw new TypeError('ask id is invalid');
     try {
-      return await bart.ask(ctx, str(pid, 'project id', 64), { askId, ref: docRef(value.ref), workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000) }, { onProgress: (progress) => notify('engelbart:bart-progress', { askId, ...progress }) });
+      // `turns`: the earlier turns of the exchange this question continues, read from the document. `choice`: Regenerate's selector.
+      const turns = (Array.isArray(value.turns) ? value.turns : []).slice(-40).map((turn) => ({ question: str(turn && turn.question, 'earlier question', 8000), answer: str(turn && turn.answer, 'earlier answer', 40000) }));
+      const choice = value.choice && typeof value.choice === 'object' ? { model: str(value.choice.model, 'model', 24), effort: str(value.choice.effort, 'effort', 24) } : null;
+      if (choice && !/^[a-z][a-z0-9]*$/.test(choice.model + choice.effort)) throw new TypeError('choice is invalid');
+      return await bart.ask(ctx, str(pid, 'project id', 64), { askId, ref: docRef(value.ref), workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice }, { onProgress: (progress) => notify('engelbart:bart-progress', { askId, ...progress }) });
     } catch (error) {
       if (error && error.kind === 'stopped') return { stopped: true };
       return { failed: true, lines: failureLines(error && error.message) };
     }
   }));
   handle('stop-bart', (askId) => bart.stop(str(askId, 'ask id', 64)));
+  // What the @bart line's selector offers and what its flags are checked against: the models file,
+  // cut down to the providers config.json lists. Names and keys only; the file's prose stays here.
+  handle('bart-models', () => { const { provider, providers } = readModels(); return { provider, providers }; });
+  // Copy all under an answer: a question and its answer, as they read in the document.
+  handle('copy-text', (text) => { writeClipboard(str(text, 'text', 400000)); return true; });
 
+  handle('resolve-page-file', withCtx((ctx, pid, input) => projects.resolvePageFile(ctx, str(pid, 'project id', 64), str(input, 'path', 4096))));
   handle('read-text-file', withCtx((ctx, pid, input) => projects.readProjectTextFile(ctx, str(pid, 'project id', 64), str(input, 'path', 4096))));
   handle('library', withCtx((ctx) => library.listLibrary(ctx)));
+  // Both directions of "who holds what", derived from the workspaces on disk (no join table).
+  handle('projects-for-library-item', withCtx((ctx, id) => library.projectsForLibraryItem(ctx, str(id, 'library id', 64))));
+  handle('library-for-project', withCtx((ctx, pid) => library.libraryForProject(ctx, str(pid, 'project id', 64))));
+  handle('add-library-item', withCtx((ctx, input) => library.addItem(ctx, str(input, 'link or path', 4096), { describe, identifyRepo, inspectPdf })));
+  handle('preview-library-item', withCtx((ctx, id) => library.previewItem(ctx, str(id, 'library id', 64), { listRemoteFiles })));
   handle('rename-library-item', withCtx(async (ctx, id, name) => {
     const row = await ctx.libraryDb.get(str(id, 'library id', 64));
     if (!row) throw new Error('Unknown library item');
-    if (row.type === 'note' && row.project_id) {
+    if (row.tags.includes('note') && row.project_id) {
       const note = await projects.renameNote(ctx, row.project_id, row.id, str(name, 'name'));
       return ctx.libraryDb.get(note.id);
     }

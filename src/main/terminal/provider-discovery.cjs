@@ -45,11 +45,53 @@ function probeProvider(shell, provider, sourceEnvironment) {
   });
 }
 
+// Sign-in belongs to the CLIs: each is asked for its own status, and only true / false / null
+// (could not tell) leaves this file — never the account details either one prints.
+const AUTH = {
+  claude: {
+    command: 'claude auth status --json',
+    read: (output) => {
+      const match = /"loggedIn"\s*:\s*(true|false)/.exec(output);
+      return match ? match[1] === 'true' : null;
+    },
+  },
+  codex: {
+    command: 'codex login status',
+    read: (output) => (/not logged in/i.test(output) ? false : /logged in/i.test(output) ? true : null),
+  },
+};
+
+function probeAuthentication(shell, provider, sourceEnvironment) {
+  const shellName = path.basename(shell);
+  const command = `printf '${RESULT_PREFIX}auth\\n'; ${AUTH[provider].command} 2>&1`;
+  const args = shellName === 'fish'
+    ? ['--login', '--interactive', '--command', command]
+    : ['-ilc', command];
+  return new Promise((resolve) => {
+    execFile(shell, args, {
+      env: sanitizeEnvironment(sourceEnvironment),
+      timeout: 15000,
+      maxBuffer: 256 * 1024,
+    }, (error, stdout) => {
+      // A signed-out CLI exits non-zero and still says so; only output decides.
+      const text = String(stdout || '');
+      const start = text.lastIndexOf(`${RESULT_PREFIX}auth`);
+      resolve(start === -1 ? null : AUTH[provider].read(text.slice(start)));
+    });
+  });
+}
+
+async function probe(shell, provider, sourceEnvironment) {
+  const found = await probeProvider(shell, provider, sourceEnvironment);
+  const authenticated = found.available ? await probeAuthentication(shell, provider, sourceEnvironment) : null;
+  return { ...found, authenticated, checkedAt: new Date().toISOString() };
+}
+
 async function discoverProviders(sourceEnvironment = process.env) {
   const shell = resolveShell(sourceEnvironment);
   const [claude, codex] = await Promise.all([
-    probeProvider(shell, 'claude', sourceEnvironment),
-    probeProvider(shell, 'codex', sourceEnvironment),
+    probe(shell, 'claude', sourceEnvironment),
+    probe(shell, 'codex', sourceEnvironment),
   ]);
   return [
     { id: 'shell', name: PROVIDERS.shell.name, available: true, path: shell },
@@ -58,4 +100,25 @@ async function discoverProviders(sourceEnvironment = process.env) {
   ];
 }
 
-module.exports = { discoverProviders };
+/**
+ * What is installed and signed in, held in memory only (a saved "signed in" goes stale the moment
+ * someone logs out elsewhere). refresh() is the launch check; get() answers from the last check and
+ * runs one itself when there is none, or when the last one left a sign-in unknown.
+ */
+function createProviderStatus(sourceEnvironment = process.env, discover = discoverProviders) {
+  let known = null;
+  let running = null;
+  const refresh = () => {
+    if (!running) {
+      running = discover(sourceEnvironment)
+        .then((providers) => { known = providers; return providers; })
+        .finally(() => { running = null; });
+    }
+    return running;
+  };
+  const unknown = () => !known || known.some((provider) => provider.available && provider.authenticated === null && provider.id !== 'shell');
+  const get = () => (unknown() ? refresh() : Promise.resolve(known));
+  return { refresh, get, peek: () => known };
+}
+
+module.exports = { discoverProviders, createProviderStatus };

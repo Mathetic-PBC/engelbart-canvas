@@ -4,6 +4,7 @@
 // was asked from when it was asked from a note, every mentioned note in full at the place it is
 // mentioned (../context/expand-mentions.cjs), the library as Context.json with a `mentioned`
 // flag per item, and where things are on disk so the agent's own file tools can open the rest.
+// A follow-up carries all of that again, read again, and the earlier turns of its exchange as well.
 
 const path = require('node:path');
 const projects = require('../store/projects.cjs');
@@ -20,6 +21,16 @@ function markPlace(text, askId) {
     if (!pending) return [line];
     return pending[1] === askId ? [HERE] : [];
   }).join('\n');
+}
+
+/**
+ * The earlier turns of the exchange a follow-up continues, as the document holds them now: the person may have edited
+ * an answer or deleted a turn since, and what stands in the document is what was said.
+ */
+function conversationBlock(turns) {
+  if (!turns.length) return '';
+  const said = turns.map((turn, n) => `<turn n="${n + 1}">\n<asked>\n${turn.question}\n</asked>\n<answered>\n${turn.answer}\n</answered>\n</turn>`);
+  return `<conversation>\n${said.join('\n')}\n</conversation>`;
 }
 
 const block = (tag, name, text) => `<${tag} name="${String(name).replace(/[<>"\n\r]/g, ' ').slice(0, 200)}">\n${text}\n</${tag}>`;
@@ -50,6 +61,7 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId }) {
   const entries = catalog.entries.filter((entry) => entry.type !== 'image').map((entry) => ({
     name: entry.name,
     type: entry.type,
+    tags: entry.tags,
     path: entry.path ? path.resolve(project.dir, entry.path) : null,
     url: entry.url,
     summary: entry.summaryStale ? null : entry.summary,
@@ -67,4 +79,4 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId }) {
   return { project, dirs: [project.directory, ctx.dataRoot].filter(Boolean), head, contextJson: `<context_json>\n${JSON.stringify(entries, null, 1)}\n</context_json>`, documents: documents.join('\n\n') };
 }
 
-module.exports = { HERE, markPlace, buildContext };
+module.exports = { HERE, markPlace, buildContext, conversationBlock };

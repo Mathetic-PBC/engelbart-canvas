@@ -13,19 +13,22 @@ const {
   protocol,
   session: electronSession,
   shell: electronShell,
+  WebContentsView,
 } = require('electron');
 const { SessionManager } = require('./terminal/session-manager.cjs');
 const { environmentForSessions } = require('./shell-rc.cjs');
 const { createSweeper } = require('./context/sweeper.cjs');
+const { inspectPdf } = require('./context/pdf-kind.cjs');
 const { createCliSummarizer, createFakeSummarizer } = require('./context/summarizer.cjs');
-const { createBart, createFakeBart } = require('./bart/ask.cjs');
+const { createBart, createFakeBart, createThreads } = require('./bart/ask.cjs');
 const { loadModels } = require('./bart/models.cjs');
 const { resolveShell } = require('./terminal/launch.cjs');
-const { discoverProviders } = require('./terminal/provider-discovery.cjs');
+const { createProviderStatus } = require('./terminal/provider-discovery.cjs');
 const { SettingsStore } = require('./terminal/settings.cjs');
 const { RendererLifecycle, shouldHideWindowOnClose } = require('./terminal/window-lifecycle.cjs');
 const { assertTrustedRenderer, parseExternalUrl } = require('./ipc-validation.cjs');
 const { createStore, registerEngelbartIpc } = require('./ipc.cjs');
+const { createBrowserViews, registerBrowserIpc } = require('./browser/views.cjs');
 
 const DIST = path.join(__dirname, '../../dist');
 const FIXTURES = path.join(__dirname, '../../fixtures');
@@ -53,6 +56,8 @@ let settings = null;
 let store = null;
 let sweeper = null;
 let bart = null;
+let providerStatus = null;
+let browserViews = null;
 let quitPending = false;
 let quitReady = false;
 
@@ -97,22 +102,6 @@ function registerProtocol() {
 async function closeSession(id) {
   const current = manager.get(id);
   if (!current) return false;
-  if (current.status === 'running') {
-    const options = {
-      type: 'warning',
-      buttons: ['Close Session', 'Cancel'],
-      defaultId: 1,
-      cancelId: 1,
-      title: 'Close terminal session?',
-      message: `Close ${current.title}?`,
-      detail: 'Its running process will be terminated.',
-      noLink: true,
-    };
-    const result = mainWindow && !mainWindow.isDestroyed()
-      ? await dialog.showMessageBox(mainWindow, options)
-      : await dialog.showMessageBox(options);
-    if (result.response !== 0) return false;
-  }
   return manager.close(id);
 }
 
@@ -147,6 +136,7 @@ async function requestQuit() {
   try {
     if (sweeper) await sweeper.stop();
     if (bart) bart.stopAll();
+    if (browserViews) await browserViews.flush().catch(() => {});
     if (manager) await manager.shutdown();
     if (store) await store.close();
   } catch (error) {
@@ -170,7 +160,7 @@ function registerTerminalIpc() {
       sessions,
     };
   }));
-  ipcMain.handle('terminal:providers', trustedHandler(() => discoverProviders(process.env)));
+  ipcMain.handle('terminal:providers', trustedHandler(() => providerStatus.get()));
   ipcMain.handle('terminal:create', trustedHandler((request) => manager.create({
     provider: request && request.provider,
     cwd: request && request.cwd,
@@ -298,7 +288,8 @@ function createWindow() {
   mainWindow.webContents.on('will-navigate', (event, url) => {
     if (url !== mainWindow.webContents.getURL()) event.preventDefault();
   });
-  mainWindow.webContents.on('did-start-loading', () => rendererLifecycle.detach());
+  // The renderer's browser tabs live in its memory: when the page goes, their views go with it.
+  mainWindow.webContents.on('did-start-loading', () => { rendererLifecycle.detach(); browserViews.closeAll(); });
   mainWindow.webContents.on('render-process-gone', () => rendererLifecycle.detach());
   mainWindow.on('close', (event) => {
     if (shouldHideWindowOnClose(process.platform, quitReady)) {
@@ -308,6 +299,7 @@ function createWindow() {
   });
   mainWindow.on('closed', () => {
     rendererLifecycle.detach();
+    browserViews.closeAll();
     mainWindow = null;
   });
   mainWindow.loadURL(APP_URL);
@@ -333,7 +325,11 @@ if (!hasSingleInstanceLock) {
     rendererLifecycle = new RendererLifecycle(manager);
     rendererLifecycle.detach();
     settings = new SettingsStore(app.getPath('userData'), app.getPath('home'));
-    store = createStore({ homeDir: process.env.ENGELBART_HOME_DIR || app.getPath('home'), fixturesDir: FIXTURES });
+    // Which CLIs are installed and signed in: checked at every launch, in the background.
+    providerStatus = createProviderStatus(process.env);
+    void providerStatus.refresh().catch(() => {});
+    const homeDir = process.env.ENGELBART_HOME_DIR || app.getPath('home');
+    store = createStore({ homeDir, fixturesDir: FIXTURES, inspectPdf });
     // Catalog summaries (src/main/context): swept once a minute while the app is open, at launch,
     // and when the computer wakes. ENGELBART_SUMMARIES=off disables it; the _FAKE / _QUIET_MS /
     // _INTERVAL_MS variables exist for scripted runs only.
@@ -348,10 +344,10 @@ if (!hasSingleInstanceLock) {
     });
     // @bart (src/main/bart): hidden Claude Code or Codex runs on the person's subscription, reading only.
     // ENGELBART_BART_FAKE=1 answers without a model, for scripted runs only.
-    const readModels = () => loadModels(store.layout.root);
+    const readModels = () => loadModels(store.layout.root, { only: store.config().providers });
     bart = process.env.ENGELBART_BART_FAKE === '1'
-      ? createFakeBart({ readModels })
-      : createBart({ readModels, runDirectory: path.join(app.getPath('userData'), 'bart-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-bart') });
+      ? createFakeBart({ readModels, threads: createThreads({ file: path.join(app.getPath('userData'), 'bart-threads.json') }) })
+      : createBart({ readModels, runDirectory: path.join(app.getPath('userData'), 'bart-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-bart'), threads: createThreads({ file: path.join(app.getPath('userData'), 'bart-threads.json') }) });
     if (process.env.ENGELBART_SUMMARIES !== 'off') {
       sweeper.start();
       powerMonitor.on('resume', () => sweeper.sweepSoon());
@@ -359,6 +355,14 @@ if (!hasSingleInstanceLock) {
     manager.on('data', (payload) => sendToRenderer('terminal:data', payload));
     manager.on('exit', (payload) => sendToRenderer('terminal:exit', payload));
     registerTerminalIpc();
+    browserViews = createBrowserViews({
+      electron: { WebContentsView, session: electronSession, Menu, clipboard, dialog, shell: electronShell },
+      getWindow: () => mainWindow,
+      send: sendToRenderer,
+      appName: app.getName(),
+      fileRoot: () => homeDir,
+    });
+    registerBrowserIpc({ ipcMain, trustedHandler, views: browserViews });
     registerEngelbartIpc({
       ipcMain,
       trustedHandler,
@@ -373,6 +377,7 @@ if (!hasSingleInstanceLock) {
       },
       writeClipboard: (text) => clipboard.writeText(text),
       bart,
+      readModels,
       notify: sendToRenderer,
       confirmReset: async () => {
         if (process.env.ENGELBART_CONFIRM_ALL === '1') return true; // driver harness only (scripts/drive.mjs)

@@ -8,7 +8,7 @@
 //   node scripts/drive.mjs clicksel "button[title='All projects']"
 //   node scripts/drive.mjs type "hello" -- key Enter
 //
-// Commands: shot <file> | eval <js> | click <x> <y> | clicksel <css> [nth] | drag <x1> <y1> <x2> <y2> | wheel <x> <y> <dx> <dy> [cmd|ctrl] | type <text> | typeslow <text> | key <Key> | wait <ms> | reload [ms] | errors | text
+// Commands: shot <file> | eval <js> | click <x> <y> | clicksel <css> [nth] | drag <x1> <y1> <x2> <y2> | press <x> <y> | moveto <x> <y> [steps] | release <x> <y> | wheel <x> <y> <dx> <dy> [cmd|ctrl] | type <text> | typeslow <text> | key <Key> | wait <ms> | reload [ms] | errors | text
 // Several commands run in sequence when separated by `--`.
 
 import { writeFileSync } from 'node:fs';
@@ -77,6 +77,7 @@ function parseKey(spec) {
 async function run(commands) {
   const cdp = await connect();
   const out = [];
+  let held = null; // where the mouse button went down (press … release)
   try {
     await cdp.send('Runtime.enable');
     for (const command of commands) {
@@ -119,6 +120,26 @@ async function run(commands) {
         }
         await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: x2, y: y2, button: 'left', clickCount: 1 });
         out.push(`drag ${x1},${y1} → ${x2},${y2}`);
+      } else if (name === 'press' || name === 'moveto' || name === 'release') {
+        // A drag in pieces, so its middle can be looked at: press <x> <y> -- moveto <x> <y> [steps] -- shot … -- release <x> <y>
+        const [x, y] = args.map(Number);
+        if (name === 'press') {
+          await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+          await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 });
+          held = { x, y };
+        } else if (name === 'moveto') {
+          const from = held || { x, y };
+          const steps = Number(args[2] || 12);
+          for (let i = 1; i <= steps; i += 1) {
+            await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: from.x + ((x - from.x) * i) / steps, y: from.y + ((y - from.y) * i) / steps, button: 'left', buttons: 1 });
+            await new Promise((resolve) => setTimeout(resolve, 16));
+          }
+          held = { x, y };
+        } else {
+          await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
+          held = null;
+        }
+        out.push(`${name} ${x},${y}`);
       } else if (name === 'wheel') {
         const [x, y, dx, dy] = args.map(Number);
         const modifiers = args[4] ? parseKey(`${args[4]}+x`).modifiers : 0;

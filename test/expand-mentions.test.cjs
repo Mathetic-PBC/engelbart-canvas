@@ -25,7 +25,7 @@ function sourceOf(rows, images = {}) {
     image: (id) => images[id] || null,
   };
 }
-const note = (name, text) => ({ id: `id-${name}`, name, type: 'note', path: `/p/${name}.md`, text });
+const note = (name, text) => ({ id: `id-${name}`, name, type: 'md', tags: ['note'], path: `/p/${name}.md`, text });
 const expand = async (text, source, seen) => { const result = await expandMentions(text, source, seen); return { ...result, text: result.lines.join('\n') }; };
 
 test('a mentioned note lands under the line that mentions it, once', async () => {
@@ -35,7 +35,7 @@ test('a mentioned note lands under the line that mentions it, once', async () =>
     'Intro',
     'See @[Plan] first.',
     '',
-    '<file name="Plan" type="note" path="/p/Plan.md">',
+    '<file name="Plan" type="md" tags="note" path="/p/Plan.md">',
     'step one',
     'step two',
     '</file>',
@@ -55,11 +55,11 @@ test('two mentions on one line give two blocks in the order they are mentioned, 
   assert.equal(result.text, [
     '- [ ] read @[B] and @[A]',
     '',
-    '<file name="B" type="note" path="/p/B.md">',
+    '<file name="B" type="md" tags="note" path="/p/B.md">',
     'b',
     '</file>',
     '',
-    '<file name="A" type="note" path="/p/A.md">',
+    '<file name="A" type="md" tags="note" path="/p/A.md">',
     'a',
     '</file>',
     '',
@@ -74,13 +74,13 @@ test('a note brings its own mentions with it, and a circle of mentions ends', as
   assert.equal(result.text, [
     '@[A]',
     '',
-    '<file name="A" type="note" path="/p/A.md">',
+    '<file name="A" type="md" tags="note" path="/p/A.md">',
     'A says @[B]',
     '',
-    '<file name="B" type="note" path="/p/B.md">',
+    '<file name="B" type="md" tags="note" path="/p/B.md">',
     'B says @[C] and @[A]',
     '',
-    '<file name="C" type="note" path="/p/C.md">',
+    '<file name="C" type="md" tags="note" path="/p/C.md">',
     'C says @[Root]',
     '</file>',
     '</file>',
@@ -108,30 +108,30 @@ test('a mention inside code stays text, @bart is not a file, and a mention with 
 });
 
 test('a note whose file cannot be read is missing, not empty', async () => {
-  const result = await expand('@[Lost]', sourceOf([{ id: 'x', name: 'Lost', type: 'note', path: '/p/Lost.md' }]));
-  assert.equal(result.text, '@[Lost]\n\n<file name="Lost" type="note" path="/p/Lost.md" missing="true" />');
+  const result = await expand('@[Lost]', sourceOf([{ id: 'x', name: 'Lost', type: 'md', tags: ['note'], path: '/p/Lost.md' }]));
+  assert.equal(result.text, '@[Lost]\n\n<file name="Lost" type="md" tags="note" path="/p/Lost.md" missing="true" />');
   assert.equal(result.missing, 1);
   assert.equal(result.files, 0);
 });
 
 test('anything that is not a note is included as where it is, with its summary when it has one', async () => {
   const source = sourceOf([
-    { id: 'p', name: 'Attention', type: 'paper', path: '/lib/attention.pdf', summary: 'We propose the Transformer.\nIt attends.' },
+    { id: 'p', name: 'Attention', type: 'pdf', tags: ['paper'], path: '/lib/attention.pdf', summary: 'We propose the Transformer.\nIt attends.' },
     { id: 'w', name: 'Docs "v2" <beta>', type: 'website', url: 'https://example.com/?a=1&b=2' },
-    { id: 'r', name: 'Repo', type: 'git_repo', url: 'https://github.com/x/y', folder_path: '/code/y' },
+    { id: 'r', name: 'Repo', type: 'folder', tags: ['git'], url: 'https://github.com/x/y', folder_path: '/code/y' },
   ]);
   const result = await expand('@[Attention] @[Docs "v2" <beta>] @[Repo]', source);
   assert.equal(result.text, [
     '@[Attention] @[Docs "v2" <beta>] @[Repo]',
     '',
-    '<file name="Attention" type="paper" path="/lib/attention.pdf" contains="summary">',
+    '<file name="Attention" type="pdf" tags="paper" path="/lib/attention.pdf" contains="summary">',
     'We propose the Transformer.',
     'It attends.',
     '</file>',
     '',
     '<file name="Docs &quot;v2&quot; &lt;beta>" type="website" url="https://example.com/?a=1&amp;b=2" />',
     '',
-    '<file name="Repo" type="git_repo" folder="/code/y" url="https://github.com/x/y" />',
+    '<file name="Repo" type="folder" tags="git" folder="/code/y" url="https://github.com/x/y" />',
   ].join('\n'));
   assert.equal(result.files, 3);
   assert.deepEqual(source.reads, []);
@@ -176,7 +176,7 @@ test('expandDoc: a workspace document under its name, with this project\'s note 
     '',
     'Read @[Plan].',
     '',
-    `<file name="Plan" type="note" path="${planRow.path}">`,
+    `<file name="Plan" type="md" tags="note" path="${planRow.path}">`,
     'this project\'s plan',
     '</file>',
   ].join('\n'));
@@ -187,7 +187,7 @@ test('expandDoc: a note is not included in itself, and a note only another proje
   await projects.createNote(ctx, other.id, { name: 'Elsewhere', text: 'from the other project' });
   const loop = await projects.createNote(ctx, project.id, { name: 'Loop', text: 'I mention @[Loop] and @[Elsewhere].' });
   const result = await expandDoc(ctx, project.id, { kind: 'note', id: loop.id });
-  assert.match(result.text, /^# Loop\n\nI mention @\[Loop\] and @\[Elsewhere\]\.\n\n<file name="Elsewhere" type="note" path="[^"]+">\nfrom the other project\n<\/file>$/);
+  assert.match(result.text, /^# Loop\n\nI mention @\[Loop\] and @\[Elsewhere\]\.\n\n<file name="Elsewhere" type="md" tags="note" path="[^"]+">\nfrom the other project\n<\/file>$/);
   assert.equal(result.files, 1);
 });
 

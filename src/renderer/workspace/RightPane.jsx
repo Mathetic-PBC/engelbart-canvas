@@ -3,13 +3,12 @@ import TerminalPane from '../terminal/TerminalPane.jsx';
 import Browser from './Browser.jsx';
 
 // Right pane (design 2026-09-17): edge to edge, no padding; the switcher lives in the header.
-// Browser | Terminal | Paper | Dataset. Browser and Terminal stay mounted while hidden.
+// Browser | Terminal | Paper. Browser and Terminal stay mounted while hidden.
 
 export const RIGHT_MODES = [
   { id: 'preview', label: 'Browser' },
   { id: 'terminal', label: 'Terminal' },
   { id: 'paper', label: 'Paper' },
-  { id: 'dataset', label: 'Dataset' },
 ];
 
 export default function RightPane({ mode, paper, onMarksChange, projectDir, projectId, onExpand, style }) {
@@ -27,11 +26,6 @@ export default function RightPane({ mode, paper, onMarksChange, projectDir, proj
               </div>
             </div>
           )
-      )}
-      {mode === 'dataset' && (
-        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 14, padding: '14px 20px 20px', overflow: 'auto' }}>
-          <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', font: '13px/1.5 var(--font-sans)', color: '#8f8f8f' }}>placeholder · dataset</div>
-        </div>
       )}
     </section>
   );

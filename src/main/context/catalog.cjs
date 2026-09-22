@@ -10,11 +10,11 @@ const path = require('node:path');
 const { readJson, writeJson, DIR_MODE } = require('../store/home.cjs');
 const projects = require('../store/projects.cjs');
 
-const ABOUT = 'Everything this project holds. `path` is relative to `project.root` unless absolute. `summary` says why an item matters and what is in it: for a PDF with an Abstract section it is that abstract; otherwise it is a model-written blurb, which exists only for notes (and PDFs without an abstract) longer than 1000 characters that have been left alone for 30 minutes. When `summary` is null or `summaryStale` is true, read the file itself. `workspaces` lists the workspaces whose context includes the item.';
+const ABOUT = 'Everything this project holds. `type` is what an item is and is never a guess: a file\'s format (md, pdf, html, csv, tsv, json, jsonl, parquet, xlsx), or folder, website, image. `tags` is what was inferred about it: `paper` (an arXiv or DOI address, or a pdf that reads like a paper), `git` (a repository: its address, or a folder with a .git), `note` (written in Engelbart). `path` is relative to `project.root` unless absolute. `summary` says why an item matters and what is in it: for a PDF with an Abstract section it is that abstract; for a page or repository added by its address it is the description the page gives of itself; otherwise it is a model-written blurb, which exists only for notes (and PDFs without an abstract) longer than 1000 characters that have been left alone for 30 minutes. `chars` is the length of a note file, and of a workspace document. When `summary` is null or `summaryStale` is true, read the file itself. `workspaces` lists the workspaces whose context includes the item.';
 
 // A note is edited through the app (last_edited); a PDF is "edited" when its file changes.
 function changedAt(row) {
-  if (row.type === 'paper' && row.path) { try { return new Date(fs.statSync(row.path).mtimeMs).toISOString(); } catch { return row.last_edited; } }
+  if (row.type === 'pdf' && row.path) { try { return new Date(fs.statSync(row.path).mtimeMs).toISOString(); } catch { return row.last_edited; } }
   return row.last_edited;
 }
 
@@ -24,9 +24,11 @@ function entryFor(row, project, referencedBy) {
     id: row.id,
     name: row.name,
     type: row.type,
+    tags: row.tags || [],
     path: row.path ? (inside ? path.relative(project.dir, row.path) : row.path) : null,
     url: row.url || null,
     folderPath: row.folder_path || null,
+    githubId: row.github_id || null,
     workspaces: referencedBy.get(row.id) || [],
     chars: row.char_count ?? null,
     lastEdited: row.last_edited || null,
@@ -37,17 +39,14 @@ function entryFor(row, project, referencedBy) {
 }
 
 function buildCatalog(project, workspaces, rows, generated) {
-  const referencedBy = new Map();
-  for (const workspace of workspaces) {
-    for (const id of workspace.context) referencedBy.set(id, [...(referencedBy.get(id) || []), workspace.path]);
-  }
+  const referencedBy = projects.referencedBy(workspaces);
   return {
-    version: 1,
+    version: 2, // 2: `type` became the format and `tags` arrived (2026-09-21)
     about: ABOUT,
     generated,
     project: { id: project.id, name: project.name, root: project.dir, directory: project.directory || null },
-    workspaces: workspaces.map((workspace) => ({ id: workspace.id, name: workspace.name, path: workspace.path, document: `${workspace.path}/workspace.md` })),
-    entries: rows.filter((row) => row.project_id === project.id || referencedBy.has(row.id)).map((row) => entryFor(row, project, referencedBy)),
+    workspaces: workspaces.map((workspace) => ({ id: workspace.id, name: workspace.name, path: workspace.path, document: `${workspace.path}/workspace.md`, chars: workspace.chars ?? null })),
+    entries: rows.filter((row) => projects.holds(project, referencedBy, row)).map((row) => entryFor(row, project, referencedBy)),
   };
 }
 
