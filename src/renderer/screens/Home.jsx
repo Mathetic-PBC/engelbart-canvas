@@ -2,7 +2,7 @@ import React from 'react';
 import InlineField from '../ui/InlineField.jsx';
 import { api, errorMessage } from '../api.js';
 import { KIND, kindOf, SEARCH } from '../ui/Icons.jsx';
-import { parseLine, inlineHtml } from '../model/doc.js';
+import { parseLines, inlineHtml } from '../model/doc.js';
 import { hasTag, isNote, kindKey, kindRank, KIND_ORDER } from '../model/kind.js';
 
 // All projects (Claude Design "Projects.dc.html", 2026-09-21): the library as a rail on the left
@@ -36,12 +36,14 @@ function relative(iso) {
 /** A document the way the workspace shows it, read-only: bold, italic, code, links and mentions; tasks and bullets as dashes. */
 function DocPreview({ text, maxLines, size = 10.5 }) {
   const lines = String(text || '').replace(/^\s*\n/, '').split('\n');
-  const shown = maxLines ? lines.slice(0, maxLines) : lines;
+  const shown = maxLines ? lines.slice(0, maxLines) : lines, parsed = parseLines(lines);
   return (
     <div className="doc-preview" style={{ font: `${size}px/1.45 var(--font-sans)`, color: '#171717', overflowWrap: 'anywhere' }}>
       {shown.map((line, index) => {
-        const p = parseLine(line);
-        if (p.type === 'pending' || p.type === 'img') return null;
+        const p = parsed[index];
+        if (p.type === 'pending' || p.type === 'img' || p.type === 'fence' || p.code === 'open' || p.code === 'close') return null;
+        if (p.code === 'body') return <div key={index} style={{ paddingLeft: '0.7em', borderLeft: '2px solid #eaeaea', font: '0.92em/1.5 var(--font-mono)', color: '#4d4d4d', whiteSpace: 'pre-wrap' }}>{p.text || '\u00a0'}</div>;
+        if (p.type === 'code') return <div key={index} style={{ padding: '0 0.6em', background: '#fafafa', font: '0.92em/1.5 var(--font-mono)', whiteSpace: 'pre-wrap' }}>{line || '\u00a0'}</div>;
         if (p.type === 'p' && !p.text.trim()) return <div key={index} style={{ height: '0.6em' }} />;
         const html = { __html: inlineHtml(p.type === 'bart' ? `@bart ${p.text}` : p.text || '') };
         if (p.type === 'h') return <div key={index} style={{ margin: '0.35em 0 0.15em', fontWeight: 600 }} dangerouslySetInnerHTML={html} />;
@@ -74,8 +76,8 @@ function HeldIcons({ rows }) {
   );
 }
 
-/** What hovering a library row adds to the row: by kind, then the projects and workspaces that hold it. */
-function ItemPeek({ row, more, onOpenWorkspace }) {
+/** What hovering a library row adds to the row: by kind, then the projects and workspaces that hold it. The workspace sidebar shows the same card. */
+export function ItemPeek({ row, more, onOpenWorkspace }) {
   const kind = kindOf(row);
   const source = row.url ? stripScheme(row.url) : row.path ? basename(row.path) : '';
   // Where it is on disk: a repository's clone (whether or not it also has an address), any other folder.

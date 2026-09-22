@@ -1,19 +1,18 @@
 import React from 'react';
 import { api } from '../api.js';
-import StickyNoteArt from './StickyNoteArt.jsx';
 
-export function PostItIcon() {
-  return <StickyNoteArt width="23" height="23" />;
-}
-
-export default function ProjectPostIts({ projectId, active, onError }) {
-  const [drag, setDrag] = React.useState({ active: false, over: false });
+// A project's post-its: native cards above the window (main/post-its/views.cjs). This keeps them to the workspace screen,
+// hides them while a menu or a dialog is open (they would cover it), and reports a card being dragged (`onDrag`
+// { active, over, thrown }) to the sidebar's trash can, which is where one is thrown away (2026-09-22).
+export default function ProjectPostIts({ projectId, active, onError, onDrag }) {
   const error = React.useRef(onError);
   error.current = onError;
+  const drag = React.useRef(onDrag);
+  drag.current = onDrag;
   React.useEffect(() => {
     if (!active) return undefined;
     const fail = (e) => error.current(e);
-    const offDrag = api.onPostItsDrag(setDrag);
+    const offDrag = api.onPostItsDrag((state) => { if (drag.current) drag.current(state); });
     const offError = api.onPostItsError(fail);
     let last = null;
     const check = () => {
@@ -29,12 +28,9 @@ export default function ProjectPostIts({ projectId, active, onError }) {
     window.addEventListener('resize', resize);
     return () => {
       observer.disconnect(); offDrag(); offError(); window.removeEventListener('resize', resize);
+      if (drag.current) drag.current({ active: false, over: false });
       api.postItsActivate(null).catch(fail);
     };
   }, [projectId, active]);
-  if (!active || !drag.active) return null;
-  return <div data-post-it-trash="1" aria-label="Post-it trash" style={{ position: 'fixed', left: 0, bottom: 0, width: 160, height: 112, zIndex: 180, border: `2px dashed ${drag.over ? '#c43c35' : '#c9c9c9'}`, borderRadius: '0 14px 0 0', background: drag.over ? '#ffe5df' : '#faf8ee', color: drag.over ? '#a6231e' : '#71664a', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 7, pointerEvents: 'none', font: '12px/1.4 var(--font-sans)' }}>
-    <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7" /></svg>
-    {drag.over ? 'Release to delete' : 'Drop here to delete'}
-  </div>;
+  return null;
 }

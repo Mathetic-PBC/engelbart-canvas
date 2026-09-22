@@ -79,7 +79,6 @@ function Card() {
       {card && <DocEditor ref={editor} compact docKey={card.id} text={card.text} onChange={change} onOpenLink={(url) => api.openLink(url).catch((e) => setError(e.message))} onCopyText={api.copy} />}
       {card && !card.text && <span className="post-placeholder">Write something…</span>}
     </div>
-    {overTrash && <span className="post-delete-hint">Release to delete</span>}
     {error && <div role="alert" className="post-error">Couldn’t save: {error}</div>}
     <button data-resize-post-it="1" className="post-resize" aria-label="Resize post-it" title="Drag to resize" onKeyDown={(event) => {
       // Keyboard resize shares the native geometry path.

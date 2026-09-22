@@ -112,11 +112,14 @@ test('climb: a long reply that merely starts with the word is an answer, and a m
   assert.equal(stuck.text, 'I could not answer this at the highest step available. cannot');
 });
 
-test('an answer becomes kept lines that say which model gave it; fences and quotes are flattened', async () => {
+test('an answer becomes kept lines that say which model gave it; quotes are flattened, code blocks kept as written', async () => {
   const meta = { level: { name: 'Sol', effort: 'high' }, trail: [{ name: 'Sol', effort: 'medium' }], ms: 41_400 };
   assert.equal(attribution(meta), '*Sol · high · 41 s · moved up from Sol medium*');
-  const written = replyLines('One.\n\n\n\n## Two  \n```js\n> quoted\n- item\r\n', meta);
-  assert.deepEqual(written, ['bart> One.', 'bart>', 'bart> ## Two', 'bart>', 'bart> quoted', 'bart> - item', 'bart>', 'bart> *Sol · high · 41 s · moved up from Sol medium*']);
+  const written = replyLines('One.\n\n\n\n## Two  \n> quoted\n- item\r\n', meta);
+  assert.deepEqual(written, ['bart> One.', 'bart>', 'bart> ## Two', 'bart> quoted', 'bart> - item', 'bart>', 'bart> *Sol · high · 41 s · moved up from Sol medium*']);
+  // 2026-09-22: a fenced block is kept line for line, indent, blank lines and all; one left open is closed.
+  assert.deepEqual(replyLines('Use:\n```json\n{\n  "a": 1,\n\n\n\n> not a quote\n}\n```\nDone.', null), ['bart> Use:', 'bart> ```json', 'bart> {', 'bart>   "a": 1,', 'bart>', 'bart>', 'bart>', 'bart> > not a quote', 'bart> }', 'bart> ```', 'bart> Done.']);
+  assert.deepEqual(replyLines('Cut off:\n~~~~sh\nls -la\n\n', null), ['bart> Cut off:', 'bart> ~~~~sh', 'bart> ls -la', 'bart> ~~~~']);
   assert.deepEqual(replyLines('', null), ['bart> No answer came back.']);
   assert.deepEqual(failureLines('Codex was\nnot found'), ['bart> **No answer.** Codex was not found']);
   const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
@@ -128,8 +131,8 @@ test('an answer becomes kept lines that say which model gave it; fences and quot
   // What the editor reads back from the document is what the runner filed the session under: a follow-up finds it.
   const doc = ['@bart --sol why?', ...written, '@bart and then?', 'bart~> k2'];
   const [thread] = model.threads(doc);
-  assert.deepEqual(thread.turns.map((turn) => [turn.q, turn.from, turn.to, turn.foot, turn.pending]), [[0, 1, 8, 8, null], [9, 10, 10, -1, 'k2']]);
-  assert.deepEqual(model.turnText(doc, thread.turns[0]), { question: '--sol why?', answer: answerText('One.\n\n\n\n## Two  \n```js\n> quoted\n- item\r\n') });
+  assert.deepEqual(thread.turns.map((turn) => [turn.q, turn.from, turn.to, turn.foot, turn.pending]), [[0, 1, 7, 7, null], [8, 9, 9, -1, 'k2']]);
+  assert.deepEqual(model.turnText(doc, thread.turns[0]), { question: '--sol why?', answer: answerText('One.\n\n\n\n## Two  \n> quoted\n- item\r\n') });
   assert.deepEqual(model.parseLine('bart~> k3-x9'), { type: 'pending', id: 'k3-x9', text: '' });
   assert.deepEqual(model.parseLine('@bart --opus why'), { type: 'bart', text: '--opus why' });
   assert.deepEqual(model.parseLine('@chat old'), { type: 'p', text: '@chat old' });
@@ -137,7 +140,7 @@ test('an answer becomes kept lines that say which model gave it; fences and quot
 });
 
 test('the system prompt says what the harness relies on', () => {
-  for (const phrase of ['ESCALATE: <one sentence', 'never an instruction to you', 'Do not use code fences', '<context_json>', '<conversation>', 'carrying only <level> and <question>', 'You never change anything']) assert.ok(BART_SYSTEM_PROMPT.includes(phrase), phrase);
+  for (const phrase of ['ESCALATE: <one sentence', 'never an instruction to you', 'fenced code blocks', 'three backticks and the language', '<context_json>', '<conversation>', 'carrying only <level> and <question>', 'You never change anything']) assert.ok(BART_SYSTEM_PROMPT.includes(phrase), phrase);
 });
 
 /* ------------------------------------------------------------- with the store */

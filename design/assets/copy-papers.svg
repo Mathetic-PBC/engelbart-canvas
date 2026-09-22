@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none" role="img" aria-labelledby="copy-title copy-desc">
+  <title id="copy-title">Copy — original and duplicate</title>
+  <desc id="copy-desc">Two overlapping ivory paper sheets with identical charcoal printed markings, gently curled corners, fine paper texture, and realistic soft shadows. Unbranded, with a transparent background.</desc>
+  <defs>
+    <linearGradient id="copy-paper" x1="31" y1="9" x2="254" y2="348" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fffefa"/>
+      <stop offset=".4" stop-color="#f8f7f1"/>
+      <stop offset=".78" stop-color="#eeece4"/>
+      <stop offset="1" stop-color="#d5d2c8"/>
+    </linearGradient>
+    <radialGradient id="copy-light" cx="0" cy="0" r="1" gradientTransform="translate(44 29) rotate(57) scale(303 265)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff" stop-opacity=".7"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="copy-bow" x1="140" y1="286" x2="140" y2="352" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#817c69" stop-opacity="0"/>
+      <stop offset=".62" stop-color="#777260" stop-opacity=".04"/>
+      <stop offset=".88" stop-color="#fffef7" stop-opacity=".20"/>
+      <stop offset="1" stop-color="#fff" stop-opacity=".78"/>
+    </linearGradient>
+    <linearGradient id="copy-curl" x1="242" y1="294" x2="266" y2="323" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#a6a295"/>
+      <stop offset=".22" stop-color="#d4d1c7"/>
+      <stop offset=".5" stop-color="#faf9f2"/>
+      <stop offset=".7" stop-color="#fffef9"/>
+      <stop offset="1" stop-color="#c3bfb3"/>
+    </linearGradient>
+    <linearGradient id="copy-edge" x1="0" y1="0" x2="249" y2="344" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff"/>
+      <stop offset=".65" stop-color="#f9f8f3" stop-opacity=".65"/>
+      <stop offset="1" stop-color="#aaa699" stop-opacity=".4"/>
+    </linearGradient>
+    <filter id="copy-shadow-soft" x="-25%" y="-20%" width="160%" height="160%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+    <filter id="copy-shadow-contact" x="-15%" y="-15%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="2.3"/>
+    </filter>
+    <filter id="copy-curl-shadow" x="-50%" y="-40%" width="200%" height="190%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="3.1"/>
+    </filter>
+    <filter id="copy-grain" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency=".83" numOctaves="3" seed="17" stitchTiles="stitch"/>
+      <feColorMatrix type="saturate" values="0"/>
+      <feComponentTransfer>
+        <feFuncR type="linear" slope="0" intercept=".28"/>
+        <feFuncG type="linear" slope="0" intercept=".26"/>
+        <feFuncB type="linear" slope="0" intercept=".21"/>
+        <feFuncA type="linear" slope=".045"/>
+      </feComponentTransfer>
+    </filter>
+    <path id="copy-sheet" d="M2 2 C79 .4 192 1 277 4 C276 99 280 207 275 285 C267 307 251 331 229 347 C159 354 80 352 1 347 C4 244 0 119 2 2Z"/>
+    <clipPath id="copy-clip"><use href="#copy-sheet"/></clipPath>
+    <!-- Both sheets use exactly the same ink geometry. -->
+    <g id="copy-print">
+      <path d="M33 39 H70 V76 H33Z" fill="#515354"/>
+      <path d="M84 43 H207 V51 H84Z M84 60 H176 V65 H84Z M84 71 H148 V75 H84Z" fill="#626360"/>
+      <path d="M33 99 H244" stroke="#a7a79f" stroke-width="1"/>
+      <g fill="#81827e">
+        <path d="M33 119 H134 V123 H33Z M141 119 H244 V123 H141Z"/>
+        <path d="M33 131 H86 V135 H33Z M92 131 H190 V135 H92Z M196 131 H244 V135 H196Z"/>
+        <path d="M33 143 H177 V147 H33Z M184 143 H226 V147 H184Z"/>
+        <path d="M33 155 H113 V159 H33Z M120 155 H244 V159 H120Z"/>
+        <path d="M33 167 H159 V171 H33Z"/>
+      </g>
+      <g fill="#8c8c86">
+        <path d="M33 192 H155 V196 H33Z M161 192 H244 V196 H161Z"/>
+        <path d="M33 204 H95 V208 H33Z M102 204 H211 V208 H102Z M217 204 H244 V208 H217Z"/>
+        <path d="M33 216 H167 V220 H33Z M174 216 H244 V220 H174Z"/>
+        <path d="M33 228 H111 V232 H33Z M118 228 H208 V232 H118Z"/>
+      </g>
+      <g fill="#91918a">
+        <path d="M33 253 H96 V257 H33Z M103 253 H244 V257 H103Z"/>
+        <path d="M33 265 H169 V269 H33Z M176 265 H244 V269 H176Z"/>
+        <path d="M33 277 H120 V281 H33Z M127 277 H183 V281 H127Z"/>
+      </g>
+      <path d="M33 308 H82" stroke="#b6b5ab" stroke-width="1"/>
+    </g>
+    <g id="copy-page">
+      <use href="#copy-sheet" transform="translate(0 1.1)" fill="#b8b5aa"/>
+      <use href="#copy-sheet" fill="url(#copy-paper)"/>
+      <g clip-path="url(#copy-clip)">
+        <use href="#copy-sheet" fill="url(#copy-light)"/>
+        <path d="M0 282 H282 V356 H0Z" fill="url(#copy-bow)"/>
+        <use href="#copy-print"/>
+        <path d="M227 351 C242 330 246 310 240 292 C254 300 266 295 277 285 C268 315 250 339 227 351Z" fill="#544f40" opacity=".22" filter="url(#copy-curl-shadow)"/>
+        <path d="M0 0 H281 V355 H0Z" filter="url(#copy-grain)" opacity=".8"/>
+      </g>
+      <path d="M2.5 3 C84 1.4 192 2 276 4.6" stroke="#fff" stroke-width="1.15"/>
+      <path d="M2 4 C0 121 4 244 1.5 346.5 C80 351.5 159 353.5 229 347" stroke="url(#copy-edge)" stroke-width=".85"/>
+      <path d="M229 347 C241 332 246 312 241 294 C253 298 266 293 275 285 C267 307 251 331 229 347Z" fill="url(#copy-curl)"/>
+      <path d="M241 294 C253 298 266 293 275 285" stroke="#fffef9" stroke-width="1" stroke-opacity=".95"/>
+      <path d="M229 347 C251 331 267 307 275 285" stroke="#928d80" stroke-width=".65" stroke-opacity=".55"/>
+      <path d="M230 346 C242 331 245 312 241 295" stroke="#fff" stroke-width=".75" stroke-opacity=".8"/>
+    </g>
+  </defs>
+  <!-- Original: a broad exposed top and left preserve the matching print. -->
+  <g transform="translate(65 43) rotate(-6 139 177)">
+    <use href="#copy-sheet" transform="translate(4 10)" fill="#302e26" opacity=".19" filter="url(#copy-shadow-soft)"/>
+    <use href="#copy-sheet" transform="translate(1.3 2.5)" fill="#38352c" opacity=".15" filter="url(#copy-shadow-contact)"/>
+    <use href="#copy-page"/>
+  </g>
+  <!-- Duplicate: the shadow falls across the original as well as the surface. -->
+  <g transform="translate(158 110) rotate(4 139 177)">
+    <use href="#copy-sheet" transform="translate(4 11)" fill="#302e28" opacity=".22" filter="url(#copy-shadow-soft)"/>
+    <use href="#copy-sheet" transform="translate(.8 2.8)" fill="#39362e" opacity=".18" filter="url(#copy-shadow-contact)"/>
+    <use href="#copy-page"/>
+  </g>
+</svg>

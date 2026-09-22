@@ -13,6 +13,10 @@ import { kindOf, stripScheme, OPEN_IN_BROWSER } from '../model/address.js';
 // full path or a path inside the engelbart folder, is a page too (the main process says whether
 // the path names one); other files are read through the main process as text; sandboxes are not
 // connected.
+// The address field ends in the page's place in the library (Add - Mention.dc.html, 2026-09-22): "+ Save" when the
+// library does not hold it (a card names it and adds it to the library alone, or to this workspace too), "+ Workspace"
+// when the library holds it and this workspace does not (one click), and ✓ when it is here. The page in front is also
+// reported (`onPage`) for the @ menu, which offers it first.
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
@@ -35,6 +39,72 @@ const quiet = (promise) => promise.catch(() => {});
 const glyphFor = (k) => (k.kind === 'file' || k.kind === 'disk' ? KIND.note.glyph : k.kind === 'sandbox' ? '▲' : '◎');
 
 const ICON_BUTTON = { width: 26, height: 26, padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', font: '14px/1 var(--font-sans)' };
+const basename = (value) => String(value || '').split('/').pop();
+const SAVE_LABEL = { none: '+\u00a0Save', lib: '+\u00a0Workspace', here: '✓' };
+
+// Three books on a shelf, one of them banded (Hudson's reference, Add - Mention.dc.html).
+const Shelf = () => (
+  <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block', flex: 'none', fill: 'currentColor', stroke: 'none' }}>
+    <rect x="1.5" y="3" width="3.2" height="11" rx="1" />
+    <path fillRule="evenodd" d="M6 5a1 1 0 0 1 1-1h1.4a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1zM6.85 6.4a.5.5 0 0 1 .5-.5h.7a.5.5 0 0 1 0 1h-.7a.5.5 0 0 1-.5-.5zm0 5.2a.5.5 0 0 1 .5-.5h.7a.5.5 0 0 1 0 1h-.7a.5.5 0 0 1-.5-.5z" />
+    <rect x="10.8" y="2" width="3.2" height="12" rx="1" />
+  </svg>
+);
+const Grid = () => (
+  <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block', flex: 'none', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinejoin: 'round', strokeLinecap: 'round' }}>
+    <path d="M2.5 1.5h2.5a1 1 0 0 1 1 1v2.5a1 1 0 0 1-1 1h-2.5a1 1 0 0 1-1-1v-2.5a1 1 0 0 1 1-1z M9 1.5h4.5a1 1 0 0 1 1 1v2.5a1 1 0 0 1-1 1h-4.5a1 1 0 0 1-1-1v-2.5a1 1 0 0 1 1-1z M2.5 8h4.5a1 1 0 0 1 1 1v4.5a1 1 0 0 1-1 1h-4.5a1 1 0 0 1-1-1v-4.5a1 1 0 0 1 1-1z M11 8h2.5a1 1 0 0 1 1 1v2.5a1 1 0 0 1-1 1h-2.5a1 1 0 0 1-1-1v-2.5a1 1 0 0 1 1-1z" />
+  </svg>
+);
+
+function SaveTip({ text }) {
+  return <div role="tooltip" style={{ position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 50, padding: '6px 9px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fff', color: '#4d4d4d', font: '400 11.5px/1.3 var(--font-sans)', whiteSpace: 'nowrap', pointerEvents: 'none', animation: `rise 120ms ${EASE}` }}>{text}</div>;
+}
+
+// "+ Save": the page's name in the library, then where it goes — the library alone, or the library and this workspace
+// (the heavier button, and what Enter does).
+function SaveCard({ title, onSave, onClose, cardRef }) {
+  const [name, setName] = React.useState(title);
+  const [tip, setTip] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState('');
+  const commit = async (here) => {
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    try { await onSave(name.trim() || title, here); onClose(); } catch (failure) { setError(errorMessage(failure)); } finally { setBusy(false); }
+  };
+  const button = { display: 'flex', alignItems: 'center', gap: 7, height: 28, padding: '0 9px 0 7px', borderRadius: 6, cursor: 'pointer', font: '500 12.5px/1 var(--font-sans)' };
+  return (
+    <div ref={cardRef} data-overlay="1" data-save-card="1" style={{ position: 'absolute', right: 10, top: 44, zIndex: 40, width: 360, maxWidth: 'calc(100% - 20px)', boxSizing: 'border-box', padding: '14px 16px 14px', background: '#fff', border: '1px solid #c9c9c9', borderRadius: 8, boxShadow: '0 12px 32px rgba(0,0,0,.06)', textAlign: 'left', animation: `rise 160ms ${EASE}` }}>
+      <input
+        ref={(element) => { if (element && !element.dataset.focused) { element.dataset.focused = '1'; element.focus({ preventScroll: true }); element.select(); } }}
+        value={name}
+        readOnly={busy}
+        onChange={(event) => { setName(event.target.value); setError(''); }}
+        onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void commit(true); } else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose(); } }}
+        aria-label="Name in the library"
+        spellCheck={false}
+        className="save-name"
+        style={{ display: 'block', width: '100%', boxSizing: 'border-box', marginTop: 9, padding: '0 0 4px', border: 0, borderBottom: '1px solid #eaeaea', background: 'transparent', font: '500 14.5px/1.4 var(--font-sans)', color: '#171717', transition: 'border-color 120ms' }}
+      />
+      {error && <div style={{ paddingTop: 6, font: '12px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere' }}>{error}</div>}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, marginTop: 14 }}>
+        <div style={{ position: 'relative', display: 'flex' }}>
+          <button type="button" className="hov-outline" disabled={busy} onClick={() => commit(false)} onMouseEnter={() => setTip('lib')} onMouseLeave={() => setTip(null)} aria-label="Add to library only" style={{ ...button, border: '1px solid transparent', background: 'transparent', color: '#4d4d4d', transition: 'color 120ms, border-color 120ms' }}>
+            <Shelf /><span>Library only</span>
+          </button>
+          {tip === 'lib' && <SaveTip text="Add to library only" />}
+        </div>
+        <div style={{ position: 'relative', display: 'flex' }}>
+          <button type="button" className="hov-save" disabled={busy} onClick={() => commit(true)} onMouseEnter={() => setTip('ws')} onMouseLeave={() => setTip(null)} aria-label="Add to library and this workspace" style={{ ...button, border: '1px solid #eaeaea', background: '#f2f2f2', color: '#171717', transition: 'border-color 120ms, background 120ms' }}>
+            <Grid /><span style={{ fontWeight: 600 }}>Workspace</span>
+          </button>
+          {tip === 'ws' && <SaveTip text="Add to library and this workspace" />}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // HTTP authentication (a staging site, a proxy). In the document, not in the pane: a popup can ask too.
 function LoginPrompt({ request, onAnswer }) {
@@ -57,7 +127,7 @@ function LoginPrompt({ request, onAnswer }) {
   );
 }
 
-export default function Browser({ projectId, visible, onExpand }) {
+export default function Browser({ projectId, visible, onExpand, onPage, save }) {
   const [tabs, setTabs] = React.useState(() => [blankTab()]); // { id, url, web: the page's state from main | null }
   const [activeId, setActiveId] = React.useState(() => null);
   const [draft, setDraft] = React.useState('');
@@ -69,6 +139,10 @@ export default function Browser({ projectId, visible, onExpand }) {
   const [occluded, setOccluded] = React.useState(false);
   const [snapshot, setSnapshot] = React.useState(null);
   const [logins, setLogins] = React.useState([]); // HTTP authentication a page (or a popup) is waiting on
+  const [typing, setTyping] = React.useState(false); // the address has the keyboard: its end is the address's, not Save's
+  const [saving, setSaving] = React.useState(false); // the Save card is open
+  const saveCard = React.useRef(null);
+  const saveButton = React.useRef(null);
   const addressRef = React.useRef(null);
   const menuRef = React.useRef(null);
   const slotRef = React.useRef(null); // where the page goes
@@ -79,6 +153,25 @@ export default function Browser({ projectId, visible, onExpand }) {
   const web = tab.web;
   const failed = page && web && web.error ? web.error : null;
   const showing = visible && page && !failed && !occluded;
+
+  // The page in front, for the library: a page's address (where it is now), or the path of a file read as text.
+  const pageInput = page ? ((web && web.url) || tab.url) : k.kind === 'file' && file && file.path && !file.error ? file.path : null;
+  const pageTitle = page ? ((web && web.title) || stripScheme(pageInput || '')) : basename(pageInput);
+  const savable = !!pageInput && !/^about:/i.test(pageInput) && k.kind !== 'local';
+  React.useEffect(() => { if (onPage) onPage(savable ? { input: pageInput, title: pageTitle || stripScheme(pageInput) } : null); }, [savable, pageInput, pageTitle, onPage]);
+  React.useEffect(() => { setSaving(false); }, [tab.id, pageInput]);
+  // The card closes on a press anywhere else.
+  React.useEffect(() => {
+    if (!saving) return undefined;
+    const away = (event) => { if (![saveCard, saveButton].some((ref) => ref.current && ref.current.contains(event.target))) setSaving(false); };
+    document.addEventListener('mousedown', away, true);
+    return () => document.removeEventListener('mousedown', away, true);
+  }, [saving]);
+  const saveState = save && savable ? save.state : null;
+  const onSaveClick = () => {
+    if (saveState === 'none') setSaving((open) => !open);
+    else if (saveState === 'lib') save.onLink().catch(() => {});
+  };
 
   React.useEffect(() => {
     if (!menu) return undefined;
@@ -242,7 +335,7 @@ export default function Browser({ projectId, visible, onExpand }) {
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: visible ? 'flex' : 'none', flexDirection: 'column', background: '#fff', overflow: 'hidden' }}>
-      <div style={{ display: 'flex', alignItems: 'stretch', gap: 2, padding: '6px 8px 0', background: '#fafafa', borderBottom: '1px solid #eaeaea', flex: 'none', overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'stretch', gap: 2, padding: '6px 9px 0', background: '#fafafa', borderBottom: '1px solid #eaeaea', flex: 'none', overflow: 'hidden' }}>
         {tabs.map((t) => {
           const on = t.id === tab.id;
           const kk = kindOf(t.url);
@@ -257,13 +350,25 @@ export default function Browser({ projectId, visible, onExpand }) {
         <button type="button" className="hov-ink-wash" onClick={newTab} aria-label="New tab" style={{ flex: 'none', alignSelf: 'center', width: 26, height: 26, marginLeft: 4, padding: 0, border: 0, borderRadius: 6, background: 'transparent', font: '16px/1 var(--font-sans)', color: '#8f8f8f', cursor: 'pointer' }}>+</button>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px', borderBottom: '1px solid #eaeaea', flex: 'none' }}>
+      <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px', borderBottom: '1px solid #eaeaea', flex: 'none' }}>
         <button type="button" className="hov-wash" onClick={back} aria-label="Back" style={{ ...ICON_BUTTON, color: canBack ? '#171717' : '#c9c9c9' }}>←</button>
         <button type="button" className="hov-wash" onClick={forward} aria-label="Forward" style={{ ...ICON_BUTTON, color: canForward ? '#171717' : '#c9c9c9' }}>→</button>
         <button type="button" className="hov-wash" onClick={reload} aria-label={loading ? 'Stop' : 'Reload'} style={{ ...ICON_BUTTON, color: '#4d4d4d' }}>{loading ? '×' : '↻'}</button>
-        <form onSubmit={go} className="focus-bd2" style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, height: 30, padding: '0 10px', borderRadius: 8, background: '#fafafa', border: '1px solid transparent', transition: 'border-color 120ms' }}>
-          <input ref={addressRef} value={draft} onChange={(event) => setDraft(event.target.value)} onFocus={(event) => event.target.select()} onKeyDown={(event) => { if (event.key === 'Escape') { setDraft(stripScheme(tab.url)); event.target.blur(); } }} spellCheck={false} aria-label="Address" style={{ flex: 1, minWidth: 0, padding: 0, border: 0, background: 'transparent', font: '12.5px/1.4 var(--font-mono)', color: '#171717', textAlign: 'left' }} />
+        <form onSubmit={go} className="focus-bd2" style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, height: 30, padding: saveState && !typing ? '0 3px 0 10px' : '0 10px', borderRadius: 8, background: '#fafafa', border: '1px solid transparent', transition: 'border-color 120ms' }}>
+          <input ref={addressRef} value={draft} onChange={(event) => setDraft(event.target.value)} onFocus={(event) => { event.target.select(); setTyping(true); }} onBlur={() => setTyping(false)} onKeyDown={(event) => { if (event.key === 'Escape') { setDraft(stripScheme(tab.url)); event.target.blur(); } }} spellCheck={false} aria-label="Address" style={{ flex: 1, minWidth: 0, padding: 0, border: 0, background: 'transparent', font: '12.5px/1.4 var(--font-mono)', color: '#171717', textAlign: 'left' }} />
+          {saveState && !typing && (
+            <button
+              ref={saveButton}
+              type="button"
+              data-page-save={saveState}
+              className={saveState === 'here' ? undefined : 'hov-ink'}
+              onClick={onSaveClick}
+              aria-expanded={saving}
+              style={{ flex: 'none', height: 24, padding: '0 8px', border: 0, borderRadius: 5, background: saving ? '#eaeaea' : 'transparent', cursor: saveState === 'here' ? 'default' : 'pointer', font: '500 12px/1 var(--font-sans)', color: saveState === 'here' ? '#8f8f8f' : saving ? '#171717' : '#4d4d4d', whiteSpace: 'nowrap', transition: 'background 120ms, color 120ms' }}
+            >{SAVE_LABEL[saveState]}</button>
+          )}
         </form>
+        {saving && saveState === 'none' && <SaveCard key={pageInput} title={pageTitle || stripScheme(pageInput)} onSave={save.onSave} onClose={() => setSaving(false)} cardRef={saveCard} />}
         <div style={{ position: 'relative' }} ref={menuRef}>
           <button type="button" className="hov-wash" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setMenu(menu ? null : { x: r.right, y: r.bottom }); }} aria-label="More" style={{ ...ICON_BUTTON, background: menu ? '#f2f2f2' : 'transparent', font: '600 16px/1 var(--font-sans)', color: '#4d4d4d' }}>⋮</button>
           {menu && (

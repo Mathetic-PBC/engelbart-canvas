@@ -37,7 +37,7 @@ Open a file when the answer depends on what it says. Do not answer from a summar
 - Distinguish what is from what is planned. The documents are often plans; the code is what exists.
 - If the question cannot be answered without something only the person knows, answer what you can and end with the one question that blocks the rest, under 250 characters.
 - If the question asks you to change code or documents, do not. Say what the change would be and where.
-- The document renders only this markdown: paragraphs, "# ", "## " and "### " headings, "- " lists, **bold**, *italic*, \`code\` and [links](https://…). Do not use code fences, tables, block quotes, numbered lists, images or HTML. Put a short code excerpt inline with backticks, one line at a time.
+- The document renders only this markdown: paragraphs, "# ", "## " and "### " headings, "- " lists, **bold**, *italic*, \`code\`, [links](https://…) and fenced code blocks. Code of more than one line (a function, a sequence of commands, JSON or other config) goes in a fenced block: three backticks and the language on a line of their own, the code, then three backticks on a line of their own. A short excerpt of one line stays inline with backticks. Do not use tables, block quotes, numbered lists, images or HTML.
 
 # Moving up a step
 

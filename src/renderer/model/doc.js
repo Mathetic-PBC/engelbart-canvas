@@ -10,7 +10,7 @@ export const TASK_RE = /^( *)@task[ \t](.*)$/i;
 export const LIST_RE = /^( *)[-*] (.*)$/;
 export const HEAD_RE = /^(#{1,3}) (.*)$/;
 export const IMG_RE = /^!\[([^\]]*)\]\((img:[\w-]+|https?:[^)\s]+|data:image[^)\s]+)\)$/;
-export const BART_RE = /^@bart(?:\s(.*))?$/;
+export const BART_RE = /^@bart(?:\s(.*))?$/i; // `@Bart` is what the @ menu writes (2026-09-22); `@bart` is what is typed
 // An answer under an @bart line, one prefix per line (src/main/bart/reply.cjs writes them): pending while the run with
 // that id works, then a reply. A reply is kept as it arrives (2026-09-21: no Save; Delete is the way out) and its text
 // can be edited; `bart+> ` is the same line folded away by Collapse, so a fold is in the file and survives everything
@@ -22,7 +22,7 @@ export const REPLY_RE = /^bart(\+?)> ?(.*)$/;
 export const ATTRIBUTION_RE = /^\*[^*]+\*$/;
 export const QUOTE_RE = /^> ?(.*)$/;
 export const ATTACH_RE = /^!\[([^\]\n]*)\]\(img:([\w-]+)\)$/;
-export const INLINE = /(!\[[^\]\n]*\]\(img:[\w-]+\)|@bart(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`])/g;
+export const INLINE = /(!\[[^\]\n]*\]\(img:[\w-]+\)|@[Bb]art(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`])/g;
 const LINK_RE = /^\[([^\]]+)\]\(([^)]+)\)$/;
 // A bare address, typed, pasted or written by @bart, is a link as it stands (closing punctuation is not part of it).
 const URL_RE = /^https?:\/\/\S+$/;
@@ -47,7 +47,84 @@ export const parseLine = (l) => {
   return { type: 'p', text: l };
 };
 
+// A fenced code block (2026-09-22): a fence of three or more backticks (or tildes) with an optional language, the code,
+// then a fence of the same character at least as long. Only a closed fence makes a block, so the rest of the document
+// does not turn to code under a fence still being typed. Inside a block every line is code, whatever it looks like:
+// `# x` is not a heading, `- x` not a bullet, `@bart` not a question. That needs the lines around it, so the document is
+// read with parseLines(); parseLine() alone reads one line as if no block held it.
+export const FENCE_RE = /^( {0,3})(`{3,}|~{3,})([^`]*)$/;
+const CLOSE_RE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
+
+/** The closed code blocks of a document, in order → [{ open, close, lang, fence }] (line indexes; fence as typed, indent included). */
+export function codeBlocks(lines) {
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = String(lines[i]).match(FENCE_RE); if (!m) continue;
+    const mark = m[2];
+    for (let j = i + 1; j < lines.length; j++) {
+      const c = String(lines[j]).match(CLOSE_RE);
+      if (c && c[1][0] === mark[0] && c[1].length >= mark.length) { out.push({ open: i, close: j, lang: m[3].trim().split(/\s+/)[0] || '', fence: m[1] + mark }); i = j; break; }
+    }
+  }
+  return out;
+}
+
+/**
+ * Every line of a document, read in place: parseLine's reading, except that the lines of a code block are `fence` and
+ * `code`. An @bart answer holds code blocks of its own (2026-09-22), found in each run of answer lines by the same rule;
+ * those lines stay `reply` (they belong to the card: fold, delete, copy and follow-ups treat them as answer) and carry
+ * `code`: 'open' | 'body' | 'close'. A block's `open`/`close` are always indexes into the document.
+ */
+export function parseLines(lines) {
+  const ps = lines.map((l) => parseLine(String(l)));
+  for (const block of codeBlocks(lines)) {
+    ps[block.open] = { type: 'fence', open: true, text: lines[block.open], lang: block.lang, block };
+    for (let i = block.open + 1; i < block.close; i++) ps[i] = { type: 'code', text: lines[i], lang: block.lang, block };
+    ps[block.close] = { type: 'fence', open: false, text: lines[block.close], lang: block.lang, block };
+  }
+  for (let i = 0; i < ps.length; i++) {
+    if (ps[i].type !== 'reply') continue;
+    let j = i; while (j + 1 < ps.length && ps[j + 1].type === 'reply') j++;
+    for (const found of codeBlocks(ps.slice(i, j + 1).map((p) => p.text))) {
+      const block = { ...found, open: i + found.open, close: i + found.close };
+      for (let k = block.open; k <= block.close; k++) ps[k] = { ...ps[k], code: k === block.open ? 'open' : k === block.close ? 'close' : 'body', open: k === block.open, lang: block.lang, block };
+    }
+    i = j;
+  }
+  return ps;
+}
+
+/** A line that opens or closes a code block, in the document or in an answer. */
+export const isFence = (p) => !!p && (p.type === 'fence' || p.code === 'open' || p.code === 'close');
+/** A line of code, in the document or in an answer: what it shows is exactly its text. */
+export const isCode = (p) => !!p && (p.type === 'code' || p.code === 'body');
+
+/** What an opening fence shows while the caret is elsewhere: what follows its backticks (the language), or nothing. */
+export const fenceShown = (p) => (p.open ? p.text.slice(p.block.fence.length).trimStart() : '');
+
 export const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// Code is coloured only where it can be read one line at a time without guessing: JSON (keys ink, strings blue, numbers
+// and literals grey, punctuation faint), in the app's one ink, grays and one blue. Other languages show as they are typed.
+const JSON_LANGS = new Set(['json', 'jsonc', 'json5', 'jsonl', 'ndjson', 'geojson']);
+const JSON_TOKEN = /("(?:[^"\\]|\\.)*"?)([ \t]*:)?|((?<![\w.])-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?![\w.]))|\b(true|false|null)\b|([{}[\],:])|(\/\/.*$)/g;
+const LOOK = { key: 'color:#171717', str: 'color:#0761d1', num: 'color:#4d4d4d', punct: 'color:#8f8f8f', note: 'color:#8f8f8f;font-style:italic' };
+const tint = (look, s) => `<span style="${LOOK[look]}">${esc(s)}</span>`;
+
+/** One line of code as HTML: its text exactly (only spans added), coloured when the language is one read here. */
+export function highlight(text, lang) {
+  if (!JSON_LANGS.has(String(lang || '').toLowerCase())) return esc(text);
+  let out = '', at = 0;
+  for (const m of text.matchAll(JSON_TOKEN)) {
+    out += esc(text.slice(at, m.index)); at = m.index + m[0].length;
+    if (m[1] != null && m[2] != null) out += tint('key', m[1]) + esc(m[2].slice(0, -1)) + tint('punct', ':');
+    else if (m[1] != null) out += tint('str', m[1]);
+    else if (m[3] != null || m[4] != null) out += tint('num', m[0]);
+    else if (m[5] != null) out += tint('punct', m[0]);
+    else out += tint('note', m[0]);
+  }
+  return out + esc(text.slice(at));
+}
 
 /** Lines that stand under an @bart question: what it is working on, what it said, and the legacy `> ` replies of the prototype. */
 export const isAnswer = (type) => type === 'quote' || type === 'reply' || type === 'pending';
@@ -141,24 +218,24 @@ export function replyRawOffset(p, fOff) {
  * `from..to` are the lines under the question (to === q when there are none), `pending` is the id of a run still
  * working, `foot` the closing line that says which model answered (-1 without one).
  */
-export function threads(lines) {
+export function threads(lines, ps = parseLines(lines)) {
   const out = [];
   for (let i = 0; i < lines.length; i++) {
-    if (parseLine(lines[i]).type !== 'bart') continue;
+    if (ps[i].type !== 'bart') continue;
     const thread = { from: i, to: i, turns: [] };
     for (;;) {
       const turn = { q: i, from: i + 1, to: i, answered: false, pending: null, foot: -1, folded: false };
       while (i + 1 < lines.length) {
-        const p = parseLine(lines[i + 1]);
+        const p = ps[i + 1];
         if (p.type !== 'pending' && p.type !== 'reply') break;
         i += 1; turn.to = i;
         if (p.type === 'pending') turn.pending = p.id;
         else turn.folded = p.folded;
       }
       turn.answered = turn.to > turn.q;
-      if (turn.answered && !turn.pending) { const last = parseLine(lines[turn.to]); if (last.type === 'reply' && ATTRIBUTION_RE.test(last.text)) turn.foot = turn.to; }
+      if (turn.answered && !turn.pending) { const last = ps[turn.to]; if (last.type === 'reply' && ATTRIBUTION_RE.test(last.text)) turn.foot = turn.to; }
       thread.turns.push(turn); thread.to = turn.to;
-      if (!turn.answered || i + 1 >= lines.length || parseLine(lines[i + 1]).type !== 'bart') break;
+      if (!turn.answered || i + 1 >= lines.length || ps[i + 1].type !== 'bart') break;
       i += 1;
     }
     out.push(thread);
@@ -183,7 +260,7 @@ export function inlineHtml(text) {
     if (p.startsWith('**') && p.endsWith('**') && p.length > 4) return `<strong style="font-weight:600">${esc(p.slice(2, -2))}</strong>`;
     if (p.startsWith('`') && p.endsWith('`') && p.length > 2) return `<code style="padding:1px 4px;border-radius:4px;background:#f2f2f2;font:.92em/1.6 var(--font-mono)">${esc(p.slice(1, -1))}</code>`;
     if (p.startsWith('*') && p.endsWith('*') && p.length > 2) return `<em>${esc(p.slice(1, -1))}</em>`;
-    if (p === '@bart') return `<span style="color:#0070f3;font-weight:500">@bart</span>`;
+    if (/^@bart$/i.test(p)) return `<span style="color:#0070f3;font-weight:500">${esc(p)}</span>`;
     if (p.startsWith('@[')) { const name = p.slice(2, -1), shown = name.startsWith('bart') ? 'bart' : name; return `<span data-mention="${esc(name)}" style="color:#0070f3;font-weight:500;cursor:pointer;border-bottom:1px dotted #c9c9c9">@${esc(shown)}</span>`; }
     const m = p.match(LINK_RE);
     if (m) return `<a href="${esc(m[2])}" data-link="1" style="color:#0070f3;text-decoration:underline;text-underline-offset:3px">${esc(m[1])}</a>`;

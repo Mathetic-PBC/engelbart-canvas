@@ -11,10 +11,10 @@ export const RIGHT_MODES = [
   { id: 'paper', label: 'Paper' },
 ];
 
-export default function RightPane({ mode, paper, onMarksChange, projectDir, projectId, onExpand, style }) {
+export default function RightPane({ mode, paper, onMarksChange, projectDir, projectId, onExpand, onPage, save, style }) {
   return (
     <section aria-label="Preview" style={style}>
-      <Browser projectId={projectId} visible={mode === 'preview'} onExpand={onExpand} />
+      <Browser projectId={projectId} visible={mode === 'preview'} onExpand={onExpand} onPage={onPage} save={save} />
       <TerminalPane cwd={projectDir} projectId={projectId} visible={mode === 'terminal'} />
       {mode === 'paper' && (
         paper && paper.bytes

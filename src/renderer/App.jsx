@@ -49,7 +49,7 @@ export default function App() {
   const [projects, setProjects] = React.useState([]);
   const [library, setLibrary] = React.useState([]);
   const [tree, setTree] = React.useState(null);
-  const [entry, setEntry] = React.useState(null); // { workspaceId, tab } for the project being opened
+  const [entry, setEntry] = React.useState(null); // { workspaceId, tab, views } for the project being opened
   const [phase, setPhase] = React.useState('boot'); // boot | create | home | workspace
   const [, setTick] = React.useState(0);
 
@@ -75,9 +75,10 @@ export default function App() {
     }
   }, [tree]);
 
-  // Open a project straight into a workspace: the remembered one, else the first.
+  // Open a project straight into a workspace: the remembered one, else the first. Each of its workspaces reopens with
+  // the tabs, the document and the scroll position it was left with (state.json `views`).
   const openProject = React.useCallback(async (id, prefer) => {
-    let [next, rows] = await Promise.all([api.loadProject(id), api.library()]);
+    let [next, rows, views] = await Promise.all([api.loadProject(id), api.library(), api.views(id).catch(() => ({}))]);
     if (!next.workspaces.length) {
       await api.createWorkspace(id, { name: 'Getting started' });
       next = await api.loadProject(id);
@@ -86,7 +87,7 @@ export default function App() {
     setLibrary(rows);
     // A note opened from the library lands in the workspace it was made in.
     const made = prefer && prefer.tab && !prefer.workspaceId ? next.notes.find((note) => note.id === prefer.tab.id) : null;
-    setEntry({ workspaceId: (prefer && prefer.workspaceId) || (made && made.workspaceId) || next.workspaces[0].id, tab: (prefer && prefer.tab) || null });
+    setEntry({ workspaceId: (prefer && prefer.workspaceId) || (made && made.workspaceId) || next.workspaces[0].id, tab: (prefer && prefer.tab) || null, views });
     setPhase('workspace');
     setError('');
   }, []);
@@ -224,6 +225,7 @@ export default function App() {
           library={library}
           initialWorkspaceId={entry ? entry.workspaceId : null}
           initialTab={entry ? entry.tab : null}
+          initialViews={entry ? entry.views : null}
           style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: '#fff', ...(tree.project.directory ? {} : { filter: 'blur(6px)', pointerEvents: 'none', userSelect: 'none' }) }}
           active={!!tree.project.directory}
           reload={reload}

@@ -212,7 +212,9 @@ const folderThere = (folder) => { try { return !!folder && fs.statSync(folder).i
 // written in Engelbart has it (projects.createNote).
 const ARXIV_RE = /^(?:arxiv:\s*|https?:\/\/(?:www\.)?arxiv\.org\/(?:abs|pdf)\/)?(\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?\/?$/i;
 const DOI_RE = /^(?:doi:\s*|https?:\/\/(?:dx\.)?doi\.org\/)?(10\.\d{4,9}\/\S+)$/i;
-const FILE_TYPES = new Map([['.md', 'md'], ['.markdown', 'md'], ['.pdf', 'pdf'], ['.html', 'html'], ['.htm', 'html'], ['.csv', 'csv'], ['.tsv', 'tsv'], ['.json', 'json'], ['.jsonl', 'jsonl'], ['.ndjson', 'jsonl'], ['.parquet', 'parquet'], ['.xlsx', 'xlsx']]);
+const FILE_TYPES = new Map([['.md', 'md'], ['.markdown', 'md'], ['.pdf', 'pdf'], ['.html', 'html'], ['.htm', 'html'], ['.csv', 'csv'], ['.tsv', 'tsv'], ['.json', 'json'], ['.jsonl', 'jsonl'], ['.ndjson', 'jsonl'], ['.parquet', 'parquet'], ['.xlsx', 'xlsx'],
+  // a picture on disk is linked where it is, like any file (a pasted one is copied into the project: projects.saveImage)
+  ['.png', 'image'], ['.jpg', 'image'], ['.jpeg', 'image'], ['.gif', 'image'], ['.webp', 'image'], ['.heic', 'image'], ['.svg', 'image']]);
 const TEXT_TYPES = new Set(['csv', 'tsv', 'json', 'jsonl']); // what the peek can show the first lines of
 const tagged = (row, tag) => Array.isArray(row.tags) && row.tags.includes(tag);
 
@@ -282,64 +284,117 @@ function resolveAddition(input, { homeDir }) {
 }
 
 /**
- * Adds what the address or path names, once: the row that is already the same thing is returned
- * (`existing: true`; `linked: true` when this add taught it something). A page is asked for its
- * own title and description (`describe`), a GitHub repository for who it is (`identifyRepo`), both
- * best effort; the description becomes the row's summary. A pdf is read for whether it is a paper
- * (`inspectPdf`, which answers with its tags); one that cannot be read is added all the same and
- * left due for recategorize.
+ * The row that already is what `found` (resolveAddition's answer) names, or null. A repository is
+ * one row whatever its spelling: the same GitHub id (`who`, when GitHub was asked) is the same
+ * repository; without an id on both sides the address decides (a clone added before remotes were
+ * read has no url: it is read now) — but never against a row that has a *different* id: that name
+ * was taken over. Anything else is the same file, the same folder, or the same address.
  */
-async function addItem(ctx, input, { describe, identifyRepo, inspectPdf } = {}) {
-  const found = resolveAddition(input, { homeDir: ctx.homeDir });
-  const rows = await ctx.libraryDb.list();
-  let about = null;
+function sameAs(rows, found, who = null) {
   if (tagged(found, 'git') && found.url) {
-    const github = found.url.match(GITHUB_RE);
-    let who = null;
-    if (github && identifyRepo) { try { who = await identifyRepo(github[1], github[2]); } catch { who = null; } }
-    if (who) Object.assign(found, { github_id: who.id, url: who.url, name: who.fullName });
-    // The same id is the same repository, whatever either side calls it. Without an id on both
-    // sides the address decides (a clone added before remotes were read has no url: it is read
-    // now) — but never against a row that has a *different* id: that name was taken over.
     const key = repoKey(found.url);
     const addressOf = (row) => repoKey(row.url || (row.folder_path ? readCloneRemote(row.folder_path) : null));
     const repo = (who && rows.find((row) => row.github_id === who.id))
       || rows.find((row) => tagged(row, 'git') && (!who || !row.github_id) && addressOf(row) === key);
-    if (repo) {
-      // Whichever came second fills in what the row lacks, and the row follows a rename. A name
-      // given by hand is kept: only a name that was the old owner/name is brought up to date.
-      const was = repo.url && repo.url.match(GITHUB_RE);
-      const next = {
-        name: who && was && repo.name.toLowerCase() === `${was[1]}/${was[2]}`.toLowerCase() ? who.fullName : repo.name,
-        url: who ? who.url : (repo.url || found.url),
-        folder_path: found.folder_path && (!folderThere(repo.folder_path) || repo.folder_path === found.folder_path) ? found.folder_path : repo.folder_path,
-        github_id: repo.github_id || (who ? who.id : null),
-      };
-      const linked = Object.keys(next).some((field) => (next[field] || null) !== (repo[field] || null));
-      return { ...(linked ? await ctx.libraryDb.updateRepo(repo.id, next) : repo), existing: true, linked };
-    }
+    if (repo) return repo;
+  }
+  // A repository with an id was matched by it above; an address equal to another row's is then a different repository.
+  const page = !found.path && !found.folder_path && !found.github_id && found.url ? pageKey(found.url) : null;
+  return rows.find((row) => (found.path && row.path === found.path) || (found.folder_path && row.folder_path === found.folder_path) || (page && !row.path && row.url && pageKey(row.url) === page)) || null;
+}
+
+/**
+ * What two spellings of one page share: `http` or `https`, with or without `www.`, a trailing slash, a #fragment. The
+ * query stays — `?id=2` can be another page. Anything that is not a web address is itself.
+ */
+function pageKey(url) {
+  let u;
+  try { u = new URL(url); } catch { return String(url || ''); }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return u.href;
+  return `${u.host.toLowerCase().replace(/^www\./, '')}${u.pathname.replace(/\/+$/, '')}${u.search}`;
+}
+
+/**
+ * A repository that is already a row can still teach the row something when its other half is
+ * added: the clone of a row known by its address (or the address of a clone), the id GitHub gives
+ * it, the name it has since a rename, the place a moved clone is now (spec §2 #56, #57). A name
+ * given by hand is kept: only a name that was the old owner/name is brought up to date.
+ */
+async function learnRepo(ctx, repo, found, who) {
+  const was = repo.url && repo.url.match(GITHUB_RE);
+  const next = {
+    name: who && was && repo.name.toLowerCase() === `${was[1]}/${was[2]}`.toLowerCase() ? who.fullName : repo.name,
+    url: who ? who.url : (repo.url || found.url),
+    folder_path: found.folder_path && (!folderThere(repo.folder_path) || repo.folder_path === found.folder_path) ? found.folder_path : repo.folder_path,
+    github_id: repo.github_id || (who ? who.id : null),
+  };
+  const learned = Object.keys(next).some((field) => (next[field] || null) !== (repo[field] || null));
+  return learned ? ctx.libraryDb.updateRepo(repo.id, next) : repo;
+}
+
+/** What adding something the library already holds throws. The message names the row as the library calls it. */
+function alreadyThere(row) {
+  const error = new Error(`Already in the library as “${row.name}”`);
+  error.code = 'EXISTS';
+  error.row = row;
+  return error;
+}
+
+/**
+ * What an address or a path would be in the library, asked without adding it and without the
+ * network: `row`, the row that already is that thing, or null; `found`, what the resolver makes of
+ * it; `error`, why it cannot be added (nothing at that path, a format Engelbart does not read). The
+ * Browser's Save button and the sidebar's search ask this.
+ */
+async function lookupItem(ctx, input) {
+  let found;
+  try { found = resolveAddition(input, { homeDir: ctx.homeDir }); } catch (error) { return { row: null, found: null, error: error.message }; }
+  return { row: sameAs(await ctx.libraryDb.list(), found), found, error: null };
+}
+
+/**
+ * Adds what the address or path names as a new row. Something the library already holds is not
+ * added twice: that throws (`code: 'EXISTS'`, "Already in the library as “…”", 2026-09-22). The
+ * only thing such an add still does is what learnRepo says: a repository's row learns its clone,
+ * its id or its new name, since that is the same row knowing more, not a second one.
+ * A page is asked for its own title and description (`describe`), a GitHub repository for who it
+ * is (`identifyRepo`), both best effort; the description becomes the row's summary. A pdf is read
+ * for whether it is a paper (`inspectPdf`, which answers with its tags); one that cannot be read is
+ * added all the same and left due for recategorize. `name`, when given, is what the row is called
+ * (the Browser's Save card lets the person name the page).
+ */
+async function addItem(ctx, input, { describe, identifyRepo, inspectPdf, name: given = null } = {}) {
+  const found = resolveAddition(input, { homeDir: ctx.homeDir });
+  const rows = await ctx.libraryDb.list();
+  let about = null, who = null;
+  if (tagged(found, 'git') && found.url) {
+    const github = found.url.match(GITHUB_RE);
+    if (github && identifyRepo) { try { who = await identifyRepo(github[1], github[2]); } catch { who = null; } }
+    if (who) Object.assign(found, { github_id: who.id, url: who.url, name: who.fullName });
+  }
+  const same = sameAs(rows, found, who);
+  if (same) throw alreadyThere(tagged(found, 'git') && tagged(same, 'git') ? await learnRepo(ctx, same, found, who) : same);
+  if (tagged(found, 'git') && found.url) {
     if (!found.folder_path) {
       found.folder_path = findProjectClone(ctx, found.url);
       if (found.folder_path) found.type = 'folder'; // a repository that has a folder is a folder (db.updateRepo keeps the same rule)
     }
     if (who) about = { title: '', description: who.description };
   }
-  // A repository with an id was matched by it above; an address equal to another row's is then a different repository.
-  const same = rows.find((row) => (found.path && row.path === found.path) || (found.folder_path && row.folder_path === found.folder_path) || (!found.path && !found.folder_path && !found.github_id && found.url && row.url === found.url));
-  if (same) return { ...same, existing: true, linked: false };
   const page = found.type === 'website' && !found.tags.length; // a plain page: it names and describes itself
   if (describe && page) {
     try { about = await describe(found); } catch { about = null; }
   }
   const title = about && typeof about.title === 'string' ? about.title.replace(/\s+/g, ' ').trim().slice(0, 200) : '';
+  const named = typeof given === 'string' ? given.replace(/\s+/g, ' ').trim().slice(0, 200) : '';
   // Everything but a pdf is fully categorized by the resolver; a pdf is once it has been read.
-  let row = await ctx.libraryDb.insert({ id: randomUUID(), name: page && title ? title : found.name, type: found.type, tags: found.tags, path: found.path || null, url: found.url || null, folder_path: found.folder_path || null, project_id: null, github_id: found.github_id || null, categorized: found.type === 'pdf' ? null : CATEGORY_RULES });
+  let row = await ctx.libraryDb.insert({ id: randomUUID(), name: named || (page && title ? title : found.name), type: found.type, tags: found.tags, path: found.path || null, url: found.url || null, folder_path: found.folder_path || null, project_id: null, github_id: found.github_id || null, categorized: found.type === 'pdf' ? null : CATEGORY_RULES });
   if (inspectPdf && row.type === 'pdf') {
     try { row = await ctx.libraryDb.setCategory(row.id, { type: row.type, tags: await inspectPdf(row.path) }, CATEGORY_RULES); } catch { /* not readable now: recategorize tries again */ }
   }
   const description = about && typeof about.description === 'string' ? about.description.replace(/\s+/g, ' ').trim().slice(0, 1200) : '';
-  if (description) return { ...(await ctx.libraryDb.setSummary(row.id, description, new Date())), existing: false };
-  return { ...row, existing: false };
+  if (description) return ctx.libraryDb.setSummary(row.id, description, new Date());
+  return row;
 }
 
 /* ------------------------------------------------------------ re-categorizing */
@@ -440,4 +495,4 @@ async function previewItem(ctx, id, { listRemoteFiles } = {}) {
   return out;
 }
 
-module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, projectsForLibraryItem, libraryForProject, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, recategorize, CATEGORY_RULES, previewItem };
+module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, projectsForLibraryItem, libraryForProject, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, lookupItem, recategorize, CATEGORY_RULES, previewItem };

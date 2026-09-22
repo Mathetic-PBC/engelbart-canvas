@@ -26,8 +26,21 @@ function layoutFromBounds(bounds, viewport, zoom = 1) {
   };
 }
 
-function inTrash(point, viewport, zoom = 1) {
-  return point.x >= 0 && point.x <= 160 * zoom && point.y >= viewport.height - 112 * zoom && point.y <= viewport.height;
+// The trash is the sidebar's trash can (2026-09-22), wherever the sidebar puts it: the renderer
+// measures it in CSS pixels of the window's content (`rect`, null when no workspace shows one); the
+// pointer comes in content DIPs, which are CSS pixels times the zoom.
+function inTrash(point, rect, zoom = 1) {
+  if (!rect) return false;
+  const x = point.x / zoom, y = point.y / zoom;
+  return x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height;
 }
 
-module.exports = { cardBounds, layoutFromBounds, inTrash };
+/** A rect the renderer sent, or null: four finite numbers, inside any window there could be. */
+function trashRect(value) {
+  if (value == null) return null;
+  const fields = ['x', 'y', 'width', 'height'];
+  if (typeof value !== 'object' || !fields.every((key) => Number.isFinite(value[key]) && Math.abs(value[key]) < 100000) || value.width <= 0 || value.height <= 0) throw new TypeError('Invalid trash rect');
+  return Object.fromEntries(fields.map((key) => [key, value[key]]));
+}
+
+module.exports = { cardBounds, layoutFromBounds, inTrash, trashRect };

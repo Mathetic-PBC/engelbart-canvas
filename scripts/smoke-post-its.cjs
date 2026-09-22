@@ -193,9 +193,12 @@ app.whenReady().then(async () => {
     for (let i = 0; i < 7; i++) await js(win.webContents, `window.engelbartAPI.postItsCreate(${JSON.stringify(created.project.id)})`);
     await until(() => cards(win).length === 8, 'eight cards');
     await until(async () => (await Promise.all(cards(win).map((v) => js(v.webContents, '!!document.querySelector("[data-editor]")')))).every(Boolean), 'eight editors');
-    const b = card.getBounds(), vp = win.getContentBounds();
-    await drag(card, 50 - b.x - 150, vp.height - 40 - b.y - 180);
+    // The trash is the sidebar's trash can, wherever the sidebar puts it (2026-09-22): drop on its middle.
+    const b = card.getBounds(), zoom = win.webContents.getZoomFactor();
+    const can = await js(win.webContents, '(()=>{const r=document.querySelector("[data-trash]").getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+r.height/2}})()');
+    await drag(card, Math.round(can.x * zoom - b.x - 150), Math.round(can.y * zoom - b.y - 180));
     await until(() => cards(win).length === 7, 'trash drop removes native view');
+    assert.equal(await js(win.webContents, 'document.querySelector("[data-trash]").dataset.trash'), 'full', 'the can shows what was thrown in');
     assert.equal((await db.postIts.list()).some((row) => row.id === saved.id), false, 'trash drop deletes stored card');
     console.log('PASS eight cards and drag-to-trash deletion');
     console.log(`Renderer working sets (KB): ${app.getAppMetrics().filter((m) => m.type === 'Tab').map((m) => m.memory.workingSetSize).join(', ')}`);

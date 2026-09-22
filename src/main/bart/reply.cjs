@@ -24,12 +24,35 @@ function attribution({ level, trail, ms }) {
   return `*${parts.join(' · ')}*`;
 }
 
-/** The model's text as the lines of an answer. Fences and quotes it was told not to use are flattened, not trusted. */
+const FENCE_RE = /^ {0,3}(`{3,}|~{3,})/;
+const CLOSE_RE = /^ {0,3}(`{3,}|~{3,})\s*$/;
+
+/**
+ * The model's text as the lines of an answer. A fenced code block is kept as written (2026-09-22: the editor draws it),
+ * and one the text leaves open — cut off, or still arriving — is closed, so it reads as code rather than as a stray
+ * fence. Outside code, the block quotes it was told not to use are flattened and a run of blank lines is one.
+ */
 function bodyLines(text) {
-  const body = String(text || '').replace(/\r/g, '').slice(0, MAX_REPLY_CHARS).split('\n')
-    .map((line) => line.replace(/\s+$/, '').replace(/^```.*$/, '').replace(/^> ?/, ''))
-    .join('\n').replace(/\n{3,}/g, '\n\n').trim();
-  return (body || 'No answer came back.').split('\n');
+  const lines = String(text || '').replace(/\r/g, '').slice(0, MAX_REPLY_CHARS).split('\n').map((line) => line.replace(/\s+$/, ''));
+  const out = [];
+  let fence = null;
+  for (const line of lines) {
+    if (fence) {
+      out.push(line);
+      const close = line.match(CLOSE_RE);
+      if (close && close[1][0] === fence[0] && close[1].length >= fence.length) fence = null;
+      continue;
+    }
+    const open = line.match(FENCE_RE);
+    if (open) { fence = open[1]; out.push(line); continue; }
+    const flat = line.replace(/^> ?/, '');
+    if (flat || out[out.length - 1] !== '') out.push(flat);
+  }
+  if (fence) { while (out[out.length - 1] === '') out.pop(); out.push(fence); }
+  while (out.length && out[0] === '') out.shift();
+  while (out.length && out[out.length - 1] === '') out.pop();
+  if (out.length && !FENCE_RE.test(out[0])) out[0] = out[0].trimStart();
+  return out.length ? out : ['No answer came back.'];
 }
 
 /** The answer as lines for the document. */

@@ -395,6 +395,13 @@ if (!hasSingleInstanceLock) {
       bart,
       readModels,
       notify: sendToRenderer,
+      // "Choose from disk…" in the sidebar's + menu: files and folders together, several at once (macOS allows both in one panel).
+      pickPaths: async () => {
+        if (process.env.ENGELBART_PICK_PATHS) return JSON.parse(process.env.ENGELBART_PICK_PATHS); // driver harness only (scripts/drive.mjs)
+        const options = { properties: ['openFile', 'openDirectory', 'multiSelections'] };
+        const result = mainWindow && !mainWindow.isDestroyed() ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
+        return result.canceled ? [] : result.filePaths;
+      },
       confirmReset: async () => {
         if (process.env.ENGELBART_CONFIRM_ALL === '1') return true; // driver harness only (scripts/drive.mjs)
         const options = {

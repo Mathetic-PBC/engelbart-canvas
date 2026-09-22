@@ -14,7 +14,7 @@ await build({
   jsx: 'automatic',
   target: 'chrome148',
   sourcemap: true,
-  loader: { '.css': 'css', '.woff2': 'file', '.woff': 'file', '.ttf': 'file', '.svg': 'file' },
+  loader: { '.css': 'css', '.woff2': 'file', '.woff': 'file', '.ttf': 'file', '.svg': 'file', '.png': 'file' },
   define: { 'process.env.NODE_ENV': JSON.stringify(mode) },
   logLevel: 'warning',
 });

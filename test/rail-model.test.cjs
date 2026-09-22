@@ -1,0 +1,81 @@
+'use strict';
+
+// The workspace sidebar's search and the document's @ menu (Canvas.dc.html, Add - Mention.dc.html, 2026-09-22).
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const path = require('node:path');
+const { pathToFileURL } = require('node:url');
+
+const load = () => import(pathToFileURL(path.join(__dirname, '../src/renderer/model/rail.js')).href);
+
+const row = (id, name, type, tags = [], more = {}) => ({ id, name, type, tags, ...more });
+const library = [
+  row('n1', 'Saving and importing library items', 'md', ['note']),
+  row('p1', 'ColBERT', 'pdf', ['paper'], { path: '/Users/h/ColBERT.pdf' }),
+  row('g1', 'VectifyAI/PageIndex', 'website', ['git'], { url: 'https://github.com/VectifyAI/PageIndex' }),
+  row('w1', 'Contextual Retrieval', 'website', [], { url: 'https://www.anthropic.com/engineering/contextual-retrieval' }),
+  row('i1', 'Attachment 1', 'image'),
+  row('c1', 'problems.csv', 'csv', [], { path: '/Users/h/problems.csv' }),
+  row('f1', 'fixtures', 'folder', [], { folder_path: '/Users/h/fixtures' }),
+];
+
+test('looksAddable: addresses, arXiv and DOI ids, remotes and paths, by their spelling', async () => {
+  const { looksAddable } = await load();
+  for (const yes of ['https://example.org/a', 'arxiv:2310.05292', '2310.05292v2', 'doi:10.1145/3544548.3580919', 'git@github.com:o/r.git', 'ssh://git@host/o/r', '~/papers/x.pdf', '/Users/h/x', 'file:///Users/h/x.html', '"https://example.org/q"']) assert.equal(looksAddable(yes), true, yes);
+  for (const no of ['', 'colbert', 'Contextual Retrieval', 'notes/today.md', 'https://', 'a b']) assert.equal(looksAddable(no), false, no);
+});
+
+test('search: empty offers Note, Workspace and four things not here yet; typed, the matches first; nothing already on the rail', async () => {
+  const { searchRows } = await load();
+  const inRail = (id) => id === 'p1';
+  const empty = searchRows({ query: '', library, inRail });
+  assert.deepEqual(empty.map((r) => r.key), ['new:note', 'new:workspace', 'g1', 'w1', 'c1', 'f1'], 'no notes, no pictures, nothing already here, at most four');
+  assert.deepEqual(empty.slice(2).map((r) => r.tag), ['link · git', 'link', 'csv', 'folder']);
+  const typed = searchRows({ query: 'retriev', library, inRail });
+  assert.deepEqual(typed.map((r) => r.key), ['w1', 'new:note', 'new:workspace'], 'the Note and Workspace rows keep their names whatever is typed');
+  assert.deepEqual(searchRows({ query: 'colbert', library, inRail }).map((r) => r.key), ['new:note', 'new:workspace'], 'what is here already is not offered again');
+  assert.deepEqual(searchRows({ query: 'import', library, inRail }).map((r) => r.key)[0], 'n1', 'a note is found by name');
+  assert.deepEqual(searchRows({ query: 'anthropic.com', library, inRail }).map((r) => r.key)[0], 'w1', 'and a page by its address');
+});
+
+test('search: an address or a path is the one row the library has for it, or a new one, once the main process has answered', async () => {
+  const { searchRows } = await load();
+  const inRail = (id) => id === 'p1';
+  const query = 'https://example.org/new-page';
+  assert.deepEqual(searchRows({ query, library, inRail, found: undefined }), [], 'still asking');
+  assert.deepEqual(searchRows({ query, library, inRail, found: { row: null, found: null, error: 'Nothing is at that path' } }), []);
+  const fresh = searchRows({ query, library, inRail, found: { row: null, found: { type: 'website', tags: [], name: 'example.org/new-page', url: query }, error: null } });
+  assert.deepEqual([fresh.length, fresh[0].kind, fresh[0].name, fresh[0].tag], [1, 'fresh', 'example.org/new-page', 'new link']);
+  assert.deepEqual(searchRows({ query: '/Users/h/ColBERT.pdf', library, inRail, found: { row: library[1], found: {}, error: null } }).map((r) => [r.key, r.tag]), [['p1', 'here']]);
+  assert.deepEqual(searchRows({ query: 'https://github.com/VectifyAI/PageIndex', library, inRail, found: { row: library[2], found: {}, error: null } }).map((r) => [r.key, r.tag]), [['g1', 'link · git']]);
+});
+
+test('@ menu: Bart, Task and Note first by their first letters, the open page next, then ten from the library; no workspaces', async () => {
+  const { mentionRows } = await load();
+  const many = [...library, ...Array.from({ length: 12 }, (_, i) => row(`x${i}`, `Extra ${i}`, 'website', [], { url: `https://example.org/${i}` }))];
+  const all = mentionRows({ query: '', library: many, page: null, pageRow: null });
+  assert.deepEqual(all.slice(0, 3).map((r) => r.name), ['Bart', 'Task', 'Note']);
+  assert.equal(all.length, 3 + 10, 'ten from the library');
+  assert.equal(all.some((r) => r.key === 'i1'), false, 'pictures are not mentioned by hand');
+  assert.deepEqual(mentionRows({ query: 'b', library, page: null, pageRow: null }).map((r) => r.name).slice(0, 1), ['Bart']);
+  assert.deepEqual(mentionRows({ query: 'no', library, page: null, pageRow: null }).map((r) => r.key), ['verb:note', 'n1'], 'a verb by its first letters; a library row by its words, which include "md · note"');
+  assert.deepEqual(mentionRows({ query: 'as', library, page: null, pageRow: null }).map((r) => r.key), [], 'Task is not matched from its middle');
+  assert.deepEqual(mentionRows({ query: 'import', library, page: null, pageRow: null }).map((r) => r.key), ['n1']);
+
+  const page = { input: 'https://arxiv.org/pdf/2005.11401', title: 'Retrieval-Augmented Generation [RAG]' };
+  const fresh = mentionRows({ query: '', library, page, pageRow: null });
+  assert.deepEqual([fresh[3].kind, fresh[3].name, fresh[3].input, fresh[3].open], ['fresh', 'Retrieval-Augmented Generation RAG', page.input, true], 'the open page leads the library, named so a mention can hold it');
+  const held = mentionRows({ query: 'contextual', library, page: { input: 'https://www.anthropic.com/engineering/contextual-retrieval', title: 'Contextual Retrieval' }, pageRow: library[3] });
+  assert.deepEqual(held.map((r) => [r.key, !!r.open]), [['w1', true]], 'a page the library holds is that row, once');
+  assert.deepEqual(mentionRows({ query: 'colbert', library, page, pageRow: null }).map((r) => r.key), ['p1'], 'the page is left out when it does not match');
+});
+
+test('@Bart, as the menu writes it, is a question like a typed @bart; both render as a token (2026-09-22)', async () => {
+  const doc = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
+  assert.deepEqual(doc.parseLine('@Bart what is here?'), doc.parseLine('@bart what is here?'));
+  assert.equal(doc.parseLine('@Bart what is here?').type, 'bart');
+  assert.deepEqual('@Bart hi'.split(doc.INLINE).filter(Boolean), ['@Bart', ' hi']);
+  assert.match(doc.inlineHtml('@Bart hi'), /<span style="color:#0070f3;font-weight:500">@Bart<\/span> hi/);
+  assert.equal(doc.parseLine('@Barty').type === 'bart', false);
+});

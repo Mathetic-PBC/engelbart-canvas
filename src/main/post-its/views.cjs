@@ -5,7 +5,7 @@ const { randomUUID } = require('node:crypto');
 const { openNotesDb } = require('../store/db.cjs');
 const { findProject } = require('../store/projects.cjs');
 const { assertTrustedRenderer, parseExternalUrl } = require('../ipc-validation.cjs');
-const { cardBounds, layoutFromBounds, inTrash } = require('./geometry.cjs');
+const { cardBounds, layoutFromBounds, inTrash, trashRect: readTrashRect } = require('./geometry.cjs');
 
 const CARD_URL = 'engelbart://app/post-it.html';
 
@@ -13,7 +13,7 @@ const CARD_URL = 'engelbart://app/post-it.html';
 function createPostItViews({ electron, getWindow, getContext, send }) {
   const { WebContentsView, clipboard, shell } = electron;
   const entries = new Map();
-  let projectId = null, database = null, suspended = false, gesture = null;
+  let projectId = null, database = null, suspended = false, gesture = null, trash = null;
   let operations = Promise.resolve();
   const exclusive = (work) => {
     const result = operations.then(work);
@@ -189,7 +189,7 @@ function createPostItViews({ electron, getWindow, getContext, send }) {
     const g = gesture, dx = input.x - g.x, dy = input.y - g.y;
     if (Math.hypot(dx, dy) >= 4) g.moved = true;
     const vp = viewport(), scale = zoom();
-    const over = g.kind === 'drag' && inTrash({ x: input.x - vp.x, y: input.y - vp.y }, vp, scale);
+    const over = g.kind === 'drag' && inTrash({ x: input.x - vp.x, y: input.y - vp.y }, trash, scale);
     const b = { ...g.bounds };
     if (g.kind === 'drag') { b.x += dx; b.y += dy; }
     else { b.width = Math.max(180 * scale, Math.min(2400 * scale, b.width + dx)); b.height = Math.max(140 * scale, Math.min(2400 * scale, b.height + dy)); }
@@ -202,7 +202,7 @@ function createPostItViews({ electron, getWindow, getContext, send }) {
     }
     if (input.phase !== 'end') return;
     gesture = null;
-    send('post-its:drag', { active: false, over: false });
+    send('post-its:drag', { active: false, over: false, thrown: !!(over && g.moved) });
     entry.view.webContents.send('post-it:trash', false);
     if (!g.moved) return;
     if (over) { void exclusive(() => remove(entry)).catch(report); return; }
@@ -219,6 +219,7 @@ function createPostItViews({ electron, getWindow, getContext, send }) {
     ipcMain.handle('post-its:create', trustedHandler(create));
     ipcMain.handle('post-its:suspend', trustedHandler(setSuspended));
     ipcMain.handle('post-its:layout', trustedHandler(layout));
+    ipcMain.handle('post-its:trash-rect', trustedHandler((rect) => { trash = readTrashRect(rect); return true; }));
     ipcMain.handle('post-it:ready', (event) => ready(forEvent(event)));
     ipcMain.handle('post-it:edit', (event, text) => edit(forEvent(event), text));
     ipcMain.handle('post-it:copy', (event, text) => {

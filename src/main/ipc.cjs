@@ -102,7 +102,7 @@ function createStore({ homeDir, fixturesDir, inspectPdf: readPdf = null }) {
   return { layout, context, config: describe, setTestMode, resetTestData, close: closeAll };
 }
 
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, notify, beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister() }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister() }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const withCtx = (fn) => async (...args) => fn(await store.context(), ...args);
 
@@ -117,6 +117,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
 
   handle('last-open', withCtx((ctx) => projects.readLastOpen(ctx)));
   handle('set-last-open', withCtx((ctx, value) => projects.writeLastOpen(ctx, value)));
+  handle('views', withCtx((ctx, projectId) => projects.readViews(ctx, projectId)));
+  handle('set-view', withCtx((ctx, projectId, workspaceId, view) => projects.writeView(ctx, projectId, workspaceId, view)));
   handle('list-projects', withCtx((ctx) => projects.listProjects(ctx)));
   handle('create-project', withCtx((ctx, input) => projects.createProject(ctx, projectInput(input))));
   handle('create-project-with-welcome', withCtx((ctx, input) => projects.createProjectWithWelcome(ctx, projectInput(input))));
@@ -132,6 +134,9 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('rename-workspace', withCtx((ctx, pid, wid, name) => projects.renameWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(name, 'name'))));
   handle('set-workspace-status', withCtx((ctx, pid, wid, status) => projects.setWorkspaceStatus(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(status, 'status', 32))));
   handle('set-workspace-context', withCtx((ctx, pid, wid, entries) => projects.setWorkspaceContext(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), entries)));
+  // The sidebar: search, +, Save and an @mention bring a library item into a workspace; the trash takes it out (and remembers that it did).
+  handle('link-to-workspace', withCtx((ctx, pid, wid, ids) => projects.linkToWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), (Array.isArray(ids) ? ids : [ids]).slice(0, 200).map((id) => str(id, 'library id', 64)))));
+  handle('unlink-from-workspace', withCtx((ctx, pid, wid, id) => projects.unlinkFromWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(id, 'library id', 64))));
 
   handle('create-note', withCtx((ctx, pid, input) => {
     const value = input && typeof input === 'object' ? input : {};
@@ -184,7 +189,11 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // Both directions of "who holds what", derived from the workspaces on disk (no join table).
   handle('projects-for-library-item', withCtx((ctx, id) => library.projectsForLibraryItem(ctx, str(id, 'library id', 64))));
   handle('library-for-project', withCtx((ctx, pid) => library.libraryForProject(ctx, str(pid, 'project id', 64))));
-  handle('add-library-item', withCtx((ctx, input) => library.addItem(ctx, str(input, 'link or path', 4096), { describe, identifyRepo, inspectPdf })));
+  // Adding makes a new row or throws "Already in the library as …" (library.addItem). `options.name` names it (the Browser's Save card).
+  handle('add-library-item', withCtx((ctx, input, options) => library.addItem(ctx, str(input, 'link or path', 4096), { describe, identifyRepo, inspectPdf, name: optStr(options && typeof options === 'object' ? options.name : null, 'name', 200) })));
+  handle('lookup-library-item', withCtx((ctx, input) => library.lookupItem(ctx, str(input, 'link or path', 4096))));
+  // "Choose from disk…": the native picker, files and folders, several at once.
+  handle('pick-library-paths', () => pickPaths());
   handle('preview-library-item', withCtx((ctx, id) => library.previewItem(ctx, str(id, 'library id', 64), { listRemoteFiles })));
   handle('rename-library-item', withCtx(async (ctx, id, name) => {
     const row = await ctx.libraryDb.get(str(id, 'library id', 64));

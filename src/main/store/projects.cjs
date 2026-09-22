@@ -310,7 +310,8 @@ function workspaceRecord(dir) {
   }
   // Kept by every save through the app; a workspace last saved before the count existed is measured.
   const chars = Number.isInteger(meta.chars) && meta.chars >= 0 ? meta.chars : docChars(dir);
-  return { id: meta.id, name: path.basename(dir), status: meta.status, context, chars, dir, created: meta.created || null };
+  const removed = Array.isArray(meta.removed) ? meta.removed.filter((id) => typeof id === 'string' && UUID_RE.test(id)) : [];
+  return { id: meta.id, name: path.basename(dir), status: meta.status, context, removed, chars, dir, created: meta.created || null };
 }
 
 function docChars(dir) {
@@ -339,7 +340,7 @@ function findWorkspace(ctx, projectId, workspaceId) {
 }
 
 function publicWorkspace(workspace) {
-  return { id: workspace.id, name: workspace.name, status: workspace.status, context: workspace.context, chars: workspace.chars, created: workspace.created };
+  return { id: workspace.id, name: workspace.name, status: workspace.status, context: workspace.context, removed: workspace.removed, chars: workspace.chars, created: workspace.created };
 }
 
 /** Every workspace of a project, flat, with its path from the project directory ("Agents/Inline chat agent"). */
@@ -425,6 +426,29 @@ async function setWorkspaceStatus(ctx, projectId, workspaceId, status) {
 async function setWorkspaceContext(ctx, projectId, workspaceId, entries) {
   const { workspace } = findWorkspace(ctx, projectId, workspaceId);
   return patchWorkspaceMeta(workspace, { context: flatContext(entries) });
+}
+
+// The sidebar's trash and its ways of bringing something in (2026-09-22). A workspace's rail shows
+// its context, the notes made in it and what its document @mentions; the trash takes a row off it
+// whatever put it there, so `removed` (meta.json) remembers what was thrown away and the rail leaves
+// it out. Nothing is deleted: the library keeps the row and the project keeps the note. Linking an
+// item again (search, +, Save, an @mention picked from the menu) puts it back in context and takes
+// it off `removed`. Both run here, one read and one write of meta.json, so quick adds never race.
+const MAX_REMOVED = 1000;
+
+async function linkToWorkspace(ctx, projectId, workspaceId, ids) {
+  const { workspace } = findWorkspace(ctx, projectId, workspaceId);
+  const adding = (Array.isArray(ids) ? ids : [ids]).map((id) => assertId(id, 'library'));
+  const context = [...workspace.context];
+  for (const id of adding) if (!context.includes(id)) context.push(id);
+  return patchWorkspaceMeta(workspace, { context: flatContext(context), removed: workspace.removed.filter((id) => !adding.includes(id)) });
+}
+
+async function unlinkFromWorkspace(ctx, projectId, workspaceId, id) {
+  const { workspace } = findWorkspace(ctx, projectId, workspaceId);
+  const gone = assertId(id, 'library');
+  const removed = [...workspace.removed.filter((held) => held !== gone), gone].slice(-MAX_REMOVED);
+  return patchWorkspaceMeta(workspace, { context: workspace.context.filter((held) => held !== gone), removed });
 }
 
 /* --------------------------------------------------------------------- notes */
@@ -539,22 +563,88 @@ async function writeDoc(ctx, projectId, ref, text) {
 
 /* ------------------------------------------------------------- last opened */
 
-// Where the app reopens: <dataRoot>/state.json { projectId, workspaceId }. Missing or stale ids
+// Where the app reopens: <dataRoot>/state.json { projectId, workspaceId, views }. Missing or stale ids
 // fall back to the first project / workspace. (Files written before the layout change carry
 // `topicId`, which is the same id.)
+// `views[projectId][workspaceId]` is what a workspace had open when it was left (2026-09-22): the document in front
+// (`active`: 'ws' or a note's library id), its note tabs, and where each document was scrolled to, keyed as the editor
+// keys documents (`ws:<id>`, `note:<id>`). Positions belong to the workspace, so one note can be halfway down in one
+// workspace and at the top in another. Scrolling writes here and nowhere else: a document's edit time never moves.
 const STATE_FILE = 'state.json';
+const MAX_TABS = 40;
+const MAX_POSITIONS = 200;
 const idOrNull = (value) => (typeof value === 'string' && UUID_RE.test(value) ? value : null);
+const plainObject = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : null);
+
+function readState(ctx) {
+  return plainObject(readJson(path.join(ctx.dataRoot, STATE_FILE), {})) || {};
+}
 
 function readLastOpen(ctx) {
-  const value = readJson(path.join(ctx.dataRoot, STATE_FILE), {}) || {};
+  const value = readState(ctx);
   return { projectId: idOrNull(value.projectId), workspaceId: idOrNull(value.workspaceId) || idOrNull(value.topicId) };
 }
 
+/** Rewrites state.json with the reopen ids given and the views it already held. */
+function writeState(ctx, last, views) {
+  writeJson(path.join(ctx.dataRoot, STATE_FILE), { ...last, ...(plainObject(views) ? { views } : {}) });
+}
+
 function writeLastOpen(ctx, value) {
-  const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const input = plainObject(value) || {};
   const next = { projectId: idOrNull(input.projectId), workspaceId: idOrNull(input.workspaceId) };
-  writeJson(path.join(ctx.dataRoot, STATE_FILE), next);
+  writeState(ctx, next, readState(ctx).views);
   return next;
+}
+
+/** { top, line?, offset?, hash? } — the scroll offset in pixels, and the first line on screen, how far its top sat above the pane's edge, a hash of its text. */
+function cleanPosition(value) {
+  const input = plainObject(value); if (!input || !Number.isFinite(input.top)) return null;
+  const out = { top: Math.round(Math.min(1e7, Math.max(0, input.top))) };
+  if (Number.isInteger(input.line) && input.line >= 0 && input.line < 1e6) {
+    out.line = input.line;
+    out.offset = Number.isFinite(input.offset) ? Math.round(Math.min(1e6, Math.max(-1e6, input.offset))) : 0;
+    if (typeof input.hash === 'string' && /^[0-9a-z]{1,16}$/.test(input.hash)) out.hash = input.hash;
+  }
+  return out;
+}
+
+function cleanView(value) {
+  const input = plainObject(value); if (!input) return null;
+  const tabs = [], seen = new Set();
+  for (const tab of Array.isArray(input.tabs) ? input.tabs : []) {
+    const id = idOrNull(tab && tab.id); if (!id || seen.has(id)) continue;
+    seen.add(id); tabs.push({ id, title: typeof tab.title === 'string' ? tab.title.slice(0, 200) : '' });
+    if (tabs.length >= MAX_TABS) break;
+  }
+  const positions = {};
+  for (const [key, position] of Object.entries(plainObject(input.positions) || {}).slice(-MAX_POSITIONS)) {
+    const m = /^(ws|note):(.+)$/.exec(key), clean = m && idOrNull(m[2]) ? cleanPosition(position) : null;
+    if (clean) positions[`${m[1]}:${m[2]}`] = clean;
+  }
+  const active = input.active !== 'ws' && seen.has(idOrNull(input.active)) ? input.active : 'ws';
+  return { active, tabs, positions };
+}
+
+/** What each workspace of a project had open → { [workspaceId]: { active, tabs, positions } }. */
+function readViews(ctx, projectId) {
+  const id = idOrNull(projectId); if (!id) return {};
+  const mine = plainObject((plainObject(readState(ctx).views) || {})[id]) || {};
+  const out = {};
+  for (const [workspaceId, view] of Object.entries(mine)) {
+    const clean = idOrNull(workspaceId) ? cleanView(view) : null;
+    if (clean) out[workspaceId] = clean;
+  }
+  return out;
+}
+
+function writeView(ctx, projectId, workspaceId, view) {
+  const pid = idOrNull(projectId), wid = idOrNull(workspaceId);
+  if (!pid || !wid) throw new TypeError('a view needs a project id and a workspace id');
+  const clean = cleanView(view); if (!clean) throw new TypeError('view is invalid');
+  const state = readState(ctx), views = plainObject(state.views) || {};
+  writeState(ctx, { projectId: idOrNull(state.projectId), workspaceId: idOrNull(state.workspaceId) || idOrNull(state.topicId) }, { ...views, [pid]: { ...(plainObject(views[pid]) || {}), [wid]: clean } });
+  return clean;
 }
 
 /* ---------------------------------------------------------------- text files */
@@ -633,6 +723,8 @@ module.exports = {
   renameWorkspace,
   setWorkspaceStatus,
   setWorkspaceContext,
+  linkToWorkspace,
+  unlinkFromWorkspace,
   createNote,
   renameNote,
   saveImage,
@@ -645,6 +737,8 @@ module.exports = {
   resolvePageFile,
   readLastOpen,
   writeLastOpen,
+  readViews,
+  writeView,
   projectRecords,
   findProject,
   flattenWorkspaces,

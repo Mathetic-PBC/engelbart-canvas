@@ -34,6 +34,8 @@ const engelbartAPI = Object.freeze({
   resetTestData: invoke('reset-test-data'),
   lastOpen: invoke('last-open'),
   setLastOpen: invoke('set-last-open'),
+  views: invoke('views'),
+  setView: invoke('set-view'),
   listProjects: invoke('list-projects'),
   createProject: invoke('create-project'),
   createProjectWithWelcome: invoke('create-project-with-welcome'),
@@ -62,6 +64,10 @@ const engelbartAPI = Object.freeze({
   projectsForLibraryItem: invoke('projects-for-library-item'),
   libraryForProject: invoke('library-for-project'),
   addLibraryItem: invoke('add-library-item'),
+  lookupLibraryItem: invoke('lookup-library-item'),
+  pickLibraryPaths: invoke('pick-library-paths'),
+  linkToWorkspace: invoke('link-to-workspace'),
+  unlinkFromWorkspace: invoke('unlink-from-workspace'),
   previewLibraryItem: invoke('preview-library-item'),
   // A file dropped on the window: where it is on disk (the renderer's File no longer says).
   pathForFile: (file) => { try { return webUtils.getPathForFile(file) || null; } catch { return null; } },
@@ -89,6 +95,8 @@ const engelbartAPI = Object.freeze({
   postItsCreate: (projectId) => ipcRenderer.invoke('post-its:create', projectId),
   postItsSuspend: (value) => ipcRenderer.invoke('post-its:suspend', value),
   postItsLayout: () => ipcRenderer.invoke('post-its:layout'),
+  // Where the sidebar's trash can is (window pixels), so a post-it dropped on it is thrown away; null when there is none.
+  postItsTrashRect: (rect) => ipcRenderer.invoke('post-its:trash-rect', rect),
   onPostItsDrag: (callback) => subscribe('post-its:drag', callback),
   onPostItsError: (callback) => subscribe('post-its:error', callback),
 });

@@ -37,7 +37,7 @@ test('post-its survive database reopening, stay in their project, and deletion c
 });
 
 test('window clamping preserves preferred geometry and scales native bounds with zoom', () => {
-  const { cardBounds, layoutFromBounds, inTrash } = require('../src/main/post-its/geometry.cjs');
+  const { cardBounds, layoutFromBounds } = require('../src/main/post-its/geometry.cjs');
   const layout = { nx: 1, ny: 1, width: 600, height: 500 };
   assert.deepEqual(cardBounds(layout, { width: 400, height: 300 }, 1), { x: 8, y: 56, width: 384, height: 236 });
   assert.deepEqual(layout, { nx: 1, ny: 1, width: 600, height: 500 });
@@ -45,7 +45,17 @@ test('window clamping preserves preferred geometry and scales native bounds with
   const normal = cardBounds({ nx: .5, ny: .5, width: 300, height: 240 }, { width: 1000, height: 800 }, 1);
   assert.deepEqual(cardBounds({ nx: .5, ny: .5, width: 300, height: 240 }, { width: 2000, height: 1600 }, 2), { x: normal.x * 2, y: normal.y * 2, width: 600, height: 480 });
   assert.deepEqual(layoutFromBounds({ x: 592, y: 392, width: 600, height: 500 }, { width: 1200, height: 900 }, 1), layout);
-  assert.equal(inTrash({ x: 40, y: 850 }, { width: 1200, height: 900 }, 1), true);
-  assert.equal(inTrash({ x: 500, y: 850 }, { width: 1200, height: 900 }, 1), false);
-  assert.equal(inTrash({ x: 40, y: 950 }, { width: 1200, height: 900 }, 1), false);
+});
+
+test('a post-it is thrown away over the sidebar trash can as the renderer measured it, at any zoom (2026-09-22)', () => {
+  const { inTrash, trashRect } = require('../src/main/post-its/geometry.cjs');
+  const can = trashRect({ x: 40, y: 800, width: 72, height: 72 });
+  assert.equal(inTrash({ x: 60, y: 820 }, can, 1), true);
+  assert.equal(inTrash({ x: 30, y: 820 }, can, 1), false, 'left of the can');
+  assert.equal(inTrash({ x: 60, y: 880 }, can, 1), false, 'under the can');
+  assert.equal(inTrash({ x: 120, y: 1640 }, can, 2), true, 'window pixels are the rect times the zoom');
+  assert.equal(inTrash({ x: 60, y: 820 }, null, 1), false, 'no workspace on screen: no trash');
+  assert.equal(trashRect(null), null);
+  assert.throws(() => trashRect({ x: 0, y: 0, width: NaN, height: 10 }), /trash rect/);
+  assert.throws(() => trashRect({ x: 0, y: 0, width: 0, height: 10 }), /trash rect/);
 });

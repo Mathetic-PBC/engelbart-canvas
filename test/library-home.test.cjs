@@ -115,7 +115,7 @@ test('a project named after a directory the data root keeps for itself is still 
   assert.equal((await projects.renameProject(ctx, (await projects.createProject(ctx, 'Seedling')).id, 'seed')).slug, 'seed-project');
 });
 
-test('adding: one resolver for addresses and paths, files linked where they are, the same thing added once', async () => {
+test('adding: one resolver for addresses and paths, files linked where they are, the same thing refused the second time', async () => {
   const resolve = (input) => library.resolveAddition(input, { homeDir });
   // the type is what the thing is (an address is a website); what it is for is a tag, told from the address alone
   assert.deepEqual(resolve(' arxiv:2310.05292v3 '), { type: 'website', tags: ['paper'], name: 'arXiv 2310.05292', url: 'https://arxiv.org/abs/2310.05292' });
@@ -142,9 +142,19 @@ test('adding: one resolver for addresses and paths, files linked where they are,
   const describe = async () => ({ title: '  Embark:\n Dynamic documents ', description: 'Travel planning as a document.' });
   const identifyRepo = async (owner, name) => ({ id: '1000596606', fullName: `${owner}/${name}`, url: `https://github.com/${owner}/${name}`, description: 'A repository.' });
   const page = await library.addItem(ctx, 'https://www.inkandswitch.com/embark/', { describe });
-  assert.deepEqual([page.name, page.summary, page.project_id, page.existing], ['Embark: Dynamic documents', 'Travel planning as a document.', null, false]);
-  const again = await library.addItem(ctx, 'https://www.inkandswitch.com/embark/', { describe: async () => { throw new Error('asked twice'); } });
-  assert.deepEqual([again.id, again.existing], [page.id, true]);
+  assert.deepEqual([page.name, page.summary, page.project_id], ['Embark: Dynamic documents', 'Travel planning as a document.', null]);
+  // 2026-09-22: adding what the library already holds is an error that names the row, and nothing is asked or written
+  const rowsBefore = (await ctx.libraryDb.list()).length;
+  await assert.rejects(library.addItem(ctx, 'https://www.inkandswitch.com/embark/', { describe: async () => { throw new Error('asked twice'); } }), (error) => error.code === 'EXISTS' && error.message === 'Already in the library as “Embark: Dynamic documents”' && error.row.id === page.id);
+  assert.equal((await ctx.libraryDb.list()).length, rowsBefore);
+  // one page, however its address is spelled: scheme, www., a trailing slash, a #fragment
+  for (const spelling of ['http://inkandswitch.com/embark', 'https://www.inkandswitch.com/embark#top', 'https://INKANDSWITCH.com/embark//']) {
+    await assert.rejects(library.addItem(ctx, spelling), /Already in the library as “Embark: Dynamic documents”/, spelling);
+  }
+  const query = await library.addItem(ctx, 'https://www.inkandswitch.com/embark/?part=2');
+  assert.notEqual(query.id, page.id, 'a query can be another page');
+  const named = await library.addItem(ctx, 'https://example.org/named', { describe, name: '  My   name for it ' });
+  assert.deepEqual([named.name, named.summary], ['My name for it', 'Travel planning as a document.'], 'a name given with the add wins over the page title; the description is still the summary');
   const repo = await library.addItem(ctx, 'git@github.com:mqo00/hypocompass.git', { describe, identifyRepo });
   assert.deepEqual([repo.name, repo.summary, repo.github_id], ['mqo00/hypocompass', 'A repository.', '1000596606'], 'a repository is named by GitHub and known by its id');
   const offline = await library.addItem(ctx, 'https://example.org/offline', { describe: async () => { throw new Error('no network'); } });
@@ -152,7 +162,7 @@ test('adding: one resolver for addresses and paths, files linked where they are,
   assert.deepEqual([page.type, page.tags, repo.type, repo.tags], ['website', [], 'website', ['git']]);
   const pdf = await library.addItem(ctx, path.join(files, 'Attention.pdf'));
   assert.equal(fs.existsSync(pdf.path) && pdf.path === path.join(files, 'Attention.pdf'), true, 'linked, not copied');
-  assert.equal((await library.addItem(ctx, '~/files/Attention.pdf')).id, pdf.id);
+  await assert.rejects(library.addItem(ctx, '~/files/Attention.pdf'), /Already in the library as “Attention”/, 'the same file by another spelling');
   assert.deepEqual([pdf.type, pdf.tags, pdf.categorized], ['pdf', [], null], 'nobody read it, so it says nothing about being a paper and is still due');
 });
 
@@ -167,8 +177,8 @@ test('adding categorizes at once: a row says which rules it has had, and a pdf t
   const invoice = await library.addItem(ctx, path.join(files, 'invoice.pdf'), { inspectPdf });
   assert.deepEqual([invoice.tags, invoice.categorized], [[], library.CATEGORY_RULES], 'read, and not a paper');
   const locked = await library.addItem(ctx, path.join(files, 'locked.pdf'), { inspectPdf });
-  assert.deepEqual([locked.existing, locked.tags, locked.categorized], [false, [], null], 'a pdf that cannot be read is still added, and is due');
-  await library.addItem(ctx, path.join(files, 'paper.pdf'), { inspectPdf });
+  assert.deepEqual([locked.tags, locked.categorized], [[], null], 'a pdf that cannot be read is still added, and is due');
+  await assert.rejects(library.addItem(ctx, path.join(files, 'paper.pdf'), { inspectPdf }), /Already in the library/);
   assert.deepEqual(looked, ['paper.pdf', 'invoice.pdf', 'locked.pdf'], 'the row that exists is not read again');
   const link = await library.addItem(ctx, 'https://doi.org/10.1145/1234567.1234568');
   assert.deepEqual([link.tags, link.categorized], [['paper'], library.CATEGORY_RULES], 'an address needs no reading');
@@ -343,34 +353,37 @@ test('a repository is its GitHub id: the address then the clone, the clone then 
   ]);
   const { identifyRepo } = hub;
 
-  // address first, clone second: one row, which gains the folder
+  // address first, clone second: one row, which gains the folder; the add itself is refused (2026-09-22)
   const byUrl = await library.addItem(ctx, 'https://github.com/acme/widgets', { identifyRepo });
   assert.deepEqual([byUrl.github_id, byUrl.name, byUrl.url, byUrl.summary, byUrl.folder_path], ['101', 'Acme/Widgets', 'https://github.com/Acme/Widgets', 'From GitHub.', null], 'named and addressed the way GitHub spells it');
   const clone = fakeClone(path.join(base, 'widgets-checkout'), 'git@github.com:acme/widgets.git');
-  const linked = await library.addItem(ctx, clone, { identifyRepo });
-  assert.deepEqual([linked.id, linked.existing, linked.linked, linked.folder_path], [byUrl.id, true, true, clone]);
+  await assert.rejects(library.addItem(ctx, clone, { identifyRepo }), (error) => error.code === 'EXISTS' && error.row.id === byUrl.id);
+  const linked = await ctx.libraryDb.get(byUrl.id);
+  assert.equal(linked.folder_path, clone);
   assert.deepEqual([byUrl.type, byUrl.tags, linked.type, linked.tags], ['website', ['git'], 'folder', ['git']], 'a repository known only by its address is a website; once it has a folder it is a folder');
-  assert.equal((await library.addItem(ctx, clone, { identifyRepo })).linked, false, 'nothing left to fill in');
+  await assert.rejects(library.addItem(ctx, clone, { identifyRepo }), /Already in the library as “Acme\/Widgets”/);
+  assert.equal((await ctx.libraryDb.get(byUrl.id)).last_edited, linked.last_edited, 'nothing left to fill in');
 
   // clone first: the row is made with id, address and folder
   const second = fakeClone(path.join(base, 'gears'), 'https://github.com/acme/gears.git');
   const byFolder = await library.addItem(ctx, second, { identifyRepo });
-  assert.deepEqual([byFolder.github_id, byFolder.name, byFolder.url, byFolder.folder_path, byFolder.existing], ['102', 'acme/gears', 'https://github.com/acme/gears', second, false]);
+  assert.deepEqual([byFolder.github_id, byFolder.name, byFolder.url, byFolder.folder_path], ['102', 'acme/gears', 'https://github.com/acme/gears', second]);
   assert.deepEqual([byFolder.type, byFolder.tags], ['folder', ['git']]);
-  assert.equal((await library.addItem(ctx, 'git@github.com:acme/gears.git', { identifyRepo })).id, byFolder.id);
+  await assert.rejects(library.addItem(ctx, 'git@github.com:acme/gears.git', { identifyRepo }), (error) => error.row.id === byFolder.id);
 
   // renamed on GitHub: the row was added under the old name, the clone's remote says the new one. Same id, same row,
   // and the row follows the rename (its name too, because nobody had renamed it by hand).
   const old = await library.addItem(ctx, 'https://github.com/acme/old-cogs', { identifyRepo: async () => ({ id: '103', fullName: 'acme/old-cogs', url: 'https://github.com/acme/old-cogs', description: '' }) });
   const cogs = fakeClone(path.join(base, 'cogs'), 'https://github.com/acme/cogs.git');
-  const renamed = await library.addItem(ctx, cogs, { identifyRepo });
+  await assert.rejects(library.addItem(ctx, cogs, { identifyRepo }), /Already in the library as “acme\/cogs”/, 'the error names the row as it is now called');
+  const renamed = await ctx.libraryDb.get(old.id);
   assert.deepEqual([renamed.id, renamed.github_id, renamed.url, renamed.name, renamed.folder_path], [old.id, '103', 'https://github.com/acme/cogs', 'acme/cogs', cogs]);
 
   // a name someone else took over: same address as a row, different id, so a different repository and a second row
   const before = await library.addItem(ctx, 'https://github.com/acme/reused', { identifyRepo: async () => ({ id: '104', fullName: 'acme/reused', url: 'https://github.com/acme/reused', description: '' }) });
   const after = await library.addItem(ctx, 'https://github.com/acme/reused', { identifyRepo: async () => ({ id: '999', fullName: 'acme/reused', url: 'https://github.com/acme/reused', description: '' }) });
   assert.notEqual(after.id, before.id);
-  assert.deepEqual([after.github_id, after.existing], ['999', false]);
+  assert.equal(after.github_id, '999');
 
   // the database holds the line too: one row per id
   await assert.rejects(ctx.libraryDb.insert({ id: randomUUID(), name: 'dup', type: 'website', tags: ['git'], url: 'https://github.com/x/dup', github_id: '101' }), /unique|duplicate/i);
@@ -383,24 +396,28 @@ test('GitHub cannot be asked (private, offline): the address stands in for the i
   const byUrl = await library.addItem(ctx, 'https://github.com/Mathetic-PBC/secret', { identifyRepo: silent });
   assert.deepEqual([byUrl.github_id, byUrl.name], [null, 'Mathetic-PBC/secret']);
   const clone = fakeClone(path.join(base, 'secret'), 'git@github.com:mathetic-pbc/secret.git');
-  const linked = await library.addItem(ctx, clone, { identifyRepo: silent });
-  assert.deepEqual([linked.id, linked.linked, linked.folder_path, linked.github_id], [byUrl.id, true, clone, null], 'matched by address, without case');
+  await assert.rejects(library.addItem(ctx, clone, { identifyRepo: silent }), (error) => error.row.id === byUrl.id);
+  const linked = await ctx.libraryDb.get(byUrl.id);
+  assert.deepEqual([linked.folder_path, linked.github_id], [clone, null], 'matched by address, without case');
 
   // a clone added before remotes were read has neither url nor id: the address still finds it, and now it has all three
   const legacyDir = fakeClone(path.join(base, 'legacy'), 'https://github.com/acme/legacy.git');
   const legacy = await ctx.libraryDb.insert({ id: randomUUID(), name: 'legacy', type: 'folder', tags: ['git'], folder_path: legacyDir });
-  const found = await library.addItem(ctx, 'https://github.com/acme/legacy', { identifyRepo: async () => ({ id: '105', fullName: 'acme/legacy', url: 'https://github.com/acme/legacy', description: '' }) });
-  assert.deepEqual([found.id, found.url, found.github_id, found.name, found.linked], [legacy.id, 'https://github.com/acme/legacy', '105', 'legacy', true], 'a name given by hand is kept');
+  await assert.rejects(library.addItem(ctx, 'https://github.com/acme/legacy', { identifyRepo: async () => ({ id: '105', fullName: 'acme/legacy', url: 'https://github.com/acme/legacy', description: '' }) }), /Already in the library as “legacy”/);
+  const found = await ctx.libraryDb.get(legacy.id);
+  assert.deepEqual([found.url, found.github_id, found.name], ['https://github.com/acme/legacy', '105', 'legacy'], 'a name given by hand is kept');
 
   // the clone moved: adding it from its new place replaces a folder that is no longer there
   const moved = path.join(base, 'secret-moved');
   fs.renameSync(clone, moved);
-  const again = await library.addItem(ctx, moved, { identifyRepo: silent });
-  assert.deepEqual([again.id, again.folder_path, again.linked], [byUrl.id, moved, true]);
+  await assert.rejects(library.addItem(ctx, moved, { identifyRepo: silent }), /Already in the library/);
+  assert.equal((await ctx.libraryDb.get(byUrl.id)).folder_path, moved);
 
   // a repository that is not on GitHub has no id and is known by its address
-  const lab = await library.addItem(ctx, 'git@gitlab.example.org:group/tool.git', { identifyRepo: async () => { throw new Error('asked GitHub about a repository that is not there'); } });
-  assert.deepEqual([lab.type, lab.tags, lab.url, lab.github_id], ['website', ['git'], 'https://gitlab.example.org/group/tool', null]);
+  // (group/tool was made by the re-categorizing test above; this one is new)
+  const lab = await library.addItem(ctx, 'git@gitlab.example.org:group/lathe.git', { identifyRepo: async () => { throw new Error('asked GitHub about a repository that is not there'); } });
+  assert.deepEqual([lab.type, lab.tags, lab.url, lab.github_id], ['website', ['git'], 'https://gitlab.example.org/group/lathe', null]);
+  await assert.rejects(library.addItem(ctx, 'git@gitlab.example.org:group/tool.git'), /Already in the library as “group\/tool”/, 'the one the library holds is refused by its address');
 });
 
 test('a project\'s code directory is a clone the library already knows about: found on add and on hover, read from disk', async () => {
@@ -428,4 +445,51 @@ test('a project\'s code directory is a clone the library already knows about: fo
   assert.deepEqual([gone.files, gone.folder, gone.folderMissing], [['README.md'], null, '~/code/tool']);
   const kept = await ctx.libraryDb.get(added.id);
   assert.deepEqual([kept.github_id, kept.url, kept.folder_path], ['106', 'https://github.com/acme/tool', other], 'nothing is removed, and the path is kept for the day the folder comes back');
+});
+
+/* The workspace sidebar (2026-09-22): what the Save button and the search ask, pictures from disk, the trash. */
+
+test('lookup: what an address or a path would be, and the row that already is it, without adding or asking the network', async () => {
+  const files = path.join(homeDir, 'lookups');
+  fs.mkdirSync(files);
+  fs.writeFileSync(path.join(files, 'figure.PNG'), 'x');
+  fs.writeFileSync(path.join(files, 'shot.heic'), 'x');
+  const before = (await ctx.libraryDb.list()).length;
+  const fresh = await library.lookupItem(ctx, 'https://example.org/never-added');
+  assert.deepEqual([fresh.row, fresh.found.type, fresh.found.url, fresh.error], [null, 'website', 'https://example.org/never-added', null]);
+  const page = await library.addItem(ctx, 'https://example.org/looked-up');
+  const held = await library.lookupItem(ctx, 'https://example.org/looked-up');
+  assert.equal(held.row.id, page.id);
+  const repo = await library.addItem(ctx, 'https://github.com/looked/up');
+  assert.equal((await library.lookupItem(ctx, 'git@github.com:Looked/Up.git')).row.id, repo.id, 'a repository by any spelling of its address');
+  assert.match((await library.lookupItem(ctx, path.join(files, 'missing.pdf'))).error, /Nothing is at that path/);
+  // a picture on disk is its own type, linked where it is
+  const picture = await library.lookupItem(ctx, path.join(files, 'figure.PNG'));
+  assert.deepEqual([picture.row, picture.found.type, picture.found.path], [null, 'image', path.join(files, 'figure.PNG')]);
+  const heic = await library.addItem(ctx, path.join(files, 'shot.heic'));
+  assert.deepEqual([heic.type, heic.tags, heic.path], ['image', [], path.join(files, 'shot.heic')]);
+  assert.equal((await ctx.libraryDb.list()).length, before + 3, 'looking up adds nothing');
+});
+
+test('the trash takes a row off a workspace whatever put it there, and linking it again brings it back; nothing is deleted', async () => {
+  const project = await projects.createProject(ctx, 'Sidebar');
+  const workspace = await projects.createWorkspace(ctx, project.id, { name: 'Reading' });
+  const other = await projects.createWorkspace(ctx, project.id, { name: 'Elsewhere' });
+  const a = await library.addItem(ctx, 'https://example.org/a-link');
+  const b = await library.addItem(ctx, 'https://example.org/b-link');
+  const note = await projects.createNote(ctx, project.id, { name: 'Made here', workspaceId: workspace.id });
+  let seen = await projects.linkToWorkspace(ctx, project.id, workspace.id, [a.id, b.id, a.id]);
+  assert.deepEqual([seen.context, seen.removed], [[a.id, b.id], []], 'once each, in the order given');
+  await projects.linkToWorkspace(ctx, project.id, other.id, [a.id]);
+  seen = await projects.unlinkFromWorkspace(ctx, project.id, workspace.id, a.id);
+  assert.deepEqual([seen.context, seen.removed], [[b.id], [a.id]]);
+  // a note made in the workspace was never in its context: the trash still takes it off, by remembering it
+  seen = await projects.unlinkFromWorkspace(ctx, project.id, workspace.id, note.id);
+  assert.deepEqual([seen.context, seen.removed], [[b.id], [a.id, note.id]]);
+  assert.deepEqual((await projects.loadProject(ctx, project.id)).workspaces.find((w) => w.id === workspace.id).removed, [a.id, note.id], 'the tree carries it to the rail');
+  assert.ok(await ctx.libraryDb.get(a.id), 'the library keeps the row');
+  assert.deepEqual(projects.findWorkspace(ctx, project.id, other.id).workspace.context, [a.id], 'other workspaces keep it');
+  seen = await projects.linkToWorkspace(ctx, project.id, workspace.id, [note.id]);
+  assert.deepEqual([seen.context, seen.removed], [[b.id, note.id], [a.id]], 'brought back: in context, no longer removed');
+  await assert.rejects(projects.linkToWorkspace(ctx, project.id, workspace.id, ['not-an-id']), /library id is invalid/);
 });
