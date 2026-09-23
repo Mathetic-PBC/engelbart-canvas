@@ -313,3 +313,70 @@ test('code blocks inside an @bart answer: the lines stay answer lines and say wh
   assert.deepEqual(thread.turns.map((turn) => [turn.q, turn.from, turn.to, turn.foot]), [[0, 1, 9, 9], [10, 11, 12, 12]]);
   assert.equal(turnText(doc, thread.turns[0]).answer, 'Like this:\n```json\n{\n  "a": 1\n\n}\n```', 'a follow-up sends the block back as markdown');
 });
+
+test('JSON block selection uses whole lines in either direction, excluding an untouched next line', async () => {
+  const { selectedLineRange } = await load();
+  const start = { line: 1, offset: 2 }, end = { line: 4, offset: 0 };
+  assert.deepEqual(selectedLineRange({ anchor: start, focus: end }), { from: 1, to: 3 });
+  assert.deepEqual(selectedLineRange({ anchor: end, focus: start }), { from: 1, to: 3 });
+  assert.deepEqual(selectedLineRange({ anchor: start, focus: { ...end, offset: 1 } }), { from: 1, to: 4 });
+  assert.deepEqual(selectedLineRange({ anchor: start, focus: start }), { from: 1, to: 1 });
+});
+
+test('JSON block formatting keeps every selected character and surrounding prose', async () => {
+  const { jsonBlockEdit, parseLines } = await load();
+  const doc = ['Before', '{', '\t"quoted": "<x> & `literal`",  ', '', '  "unfinished": ', '}', 'After'];
+  const edit = jsonBlockEdit(doc, 1, 5);
+  assert.deepEqual(edit.lines, ['Before', '```json', ...doc.slice(1, 6), '```', 'After']);
+  assert.deepEqual(edit.body, { from: 2, to: 6 });
+  assert.deepEqual(edit.insertions, [{ at: 1, count: 1 }, { at: 7, count: 1 }]);
+  assert.ok(parseLines(edit.lines).slice(2, 7).every((p) => p.type === 'code' && p.lang === 'json'));
+  assert.equal(doc[1], '{', 'the input array was not mutated');
+  assert.deepEqual(jsonBlockEdit(['{"ok":true}'], 0, 0).lines, ['```json', '{"ok":true}', '```', ''], 'the trailing editor line belongs to the same edit');
+  assert.deepEqual(jsonBlockEdit([''], 0, 0).lines, ['```json', '', '```', ''], 'an empty line makes a block to type into');
+});
+
+test('JSON formatting relabels an existing block and is idempotent', async () => {
+  const { jsonBlockEdit } = await load();
+  const doc = ['Before', '  ~~~text title', '{"ok":true}', '  ~~~~', 'After'];
+  const edit = jsonBlockEdit(doc, 2, 2);
+  assert.deepEqual(edit.lines, ['Before', '  ~~~json title', '{"ok":true}', '  ~~~~', 'After']);
+  assert.deepEqual(edit.insertions, []);
+  assert.deepEqual(edit.body, { from: 2, to: 2 });
+  assert.deepEqual(jsonBlockEdit(edit.lines, 1, 3).lines, edit.lines, 'no nested fences on a second shortcut');
+  const padded = ['', '```text', '{"ok":true}', '```', ''];
+  const all = jsonBlockEdit(padded, 0, 4);
+  assert.deepEqual(all.lines, ['', '```json', '{"ok":true}', '```', ''], 'select-all includes the trailing blank, but still relabels');
+  assert.deepEqual(jsonBlockEdit(all.lines, 0, 4).lines, all.lines);
+  const empty = jsonBlockEdit(['```', '```', 'after'], 0, 1);
+  assert.deepEqual(empty.lines, ['```json', '', '```', 'after']);
+  assert.deepEqual(empty.body, { from: 1, to: 1 });
+  assert.deepEqual(empty.insertions, [{ at: 1, count: 1 }]);
+});
+
+test('JSON wrapping cannot be closed early by backticks in the content or split an existing block', async () => {
+  const { jsonBlockEdit, codeBlocks } = await load();
+  const doc = ['Before', '```text', '``` nested', 'value', '```', 'After'];
+  const edit = jsonBlockEdit(doc, 0, 3);
+  assert.deepEqual([edit.from, edit.to], [0, 4]);
+  assert.equal(edit.lines[0], '````json');
+  assert.deepEqual(edit.lines.slice(1, 6), doc.slice(0, 5));
+  assert.deepEqual(codeBlocks(edit.lines).map((b) => [b.open, b.close, b.lang]), [[0, 6, 'json']]);
+  assert.equal(edit.lines[7], 'After');
+  const crossingStart = jsonBlockEdit(doc, 3, 5);
+  assert.deepEqual([crossingStart.from, crossingStart.to], [1, 5]);
+  assert.equal(crossingStart.lines[0], 'Before');
+});
+
+test('JSON blocks inside answer text retain the answer prefixes and cannot swallow a card boundary', async () => {
+  const { jsonBlockEdit, parseLines } = await load();
+  const doc = ['@bart example?', 'bart> {', 'bart>   "ok": true', 'bart> }', 'bart> *Model · 1 s*', ''];
+  const edit = jsonBlockEdit(doc, 1, 3);
+  assert.deepEqual(edit.lines, [doc[0], 'bart> ```json', ...doc.slice(1, 4), 'bart> ```', ...doc.slice(4)]);
+  assert.ok(parseLines(edit.lines).slice(2, 5).every((p) => p.type === 'reply' && p.code === 'body'));
+  assert.deepEqual(jsonBlockEdit(edit.lines, 2, 4).lines, edit.lines);
+  assert.equal(jsonBlockEdit(doc, 0, 3), null);
+  assert.equal(jsonBlockEdit(['plain', 'bart~> pending', ''], 0, 1), null);
+  assert.equal(jsonBlockEdit(doc, -1, 1), null);
+  assert.equal(jsonBlockEdit(doc, 2, 1), null);
+});

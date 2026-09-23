@@ -7,8 +7,12 @@ const { redactOutput } = require('./environment.cjs');
 
 // A local process boundary. Attach listeners before handing the worker any work.
 function launchWorker(request, env, onEvent) {
+  // Only the local Claude process needs this user context. Do not inherit the
+  // rest of Electron's environment (including provider credentials).
+  const local = Object.fromEntries(['HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'LANG', 'CLAUDE_CONFIG_DIR']
+    .filter((key) => typeof process.env[key] === 'string').map((key) => [key, process.env[key]]));
   const child = fork(path.join(__dirname, 'worker.cjs'), [], {
-    env: { PATH: process.env.PATH, ...env, ELECTRON_RUN_AS_NODE: '1' },
+    env: { ...local, PATH: process.env.PATH, ...env, ELECTRON_RUN_AS_NODE: '1' },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
   let stderr = '';

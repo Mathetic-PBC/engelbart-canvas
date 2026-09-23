@@ -229,7 +229,7 @@ export default function Home({ projects, library, onCreateScreen, onOpenWorkspac
 
   return (
     <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: '#fff' }}>
-      <div style={{ flex: 'none', display: 'flex', alignItems: 'center', height: 46, padding: '0 18px', borderBottom: '1px solid #eaeaea' }}>
+      <div className="window-drag-region" style={{ flex: 'none', display: 'flex', alignItems: 'center', height: 46, padding: '0 18px 0 var(--window-header-inset, 18px)', borderBottom: '1px solid #eaeaea' }}>
         <span style={{ font: '500 17px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Engelbart</span>
       </div>
       <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>

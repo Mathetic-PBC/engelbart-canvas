@@ -15,6 +15,7 @@ const { expandDoc } = require('./context/expand-mentions.cjs');
 const { failureLines } = require('./bart/reply.cjs');
 const { readShellHistory } = require('./shell-history.cjs');
 const { createDescriber, createRepoIdentifier, createRemoteFileLister } = require('./store/page-meta.cjs');
+const { createRepoReadmeReader } = require('./store/repo-readme.cjs');
 const { inspectPdf } = require('./context/pdf-kind.cjs');
 const { githubRepo } = require('./sandbox/runs.cjs');
 
@@ -103,7 +104,7 @@ function createStore({ homeDir, fixturesDir, inspectPdf: readPdf = null }) {
   return { layout, context, config: describe, setTestMode, resetTestData, close: closeAll };
 }
 
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, sandbox, readModels, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister() }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, sandbox, readModels, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), readRepoReadme = createRepoReadmeReader() }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const withCtx = (fn) => async (...args) => fn(await store.context(), ...args);
   let changingMode = false;
@@ -289,6 +290,13 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // "Choose from disk…": the native picker, files and folders, several at once.
   handle('pick-library-paths', () => pickPaths());
   handle('preview-library-item', withCtx((ctx, id) => library.previewItem(ctx, str(id, 'library id', 64), { listRemoteFiles })));
+  handle('repository-readme', withCtx(async (ctx, id, options = {}) => {
+    if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some((key) => key !== 'refresh')
+        || (options.refresh !== undefined && typeof options.refresh !== 'boolean')) throw new TypeError('Invalid README options');
+    const row = await ctx.libraryDb.get(str(id, 'library id', 64));
+    if (!row || !githubRepo(row.url)) throw new Error('Choose a saved GitHub repository.');
+    return readRepoReadme(row.url, { refresh: options.refresh === true });
+  }));
   handle('rename-library-item', withCtx(async (ctx, id, name) => {
     const row = await ctx.libraryDb.get(str(id, 'library id', 64));
     if (!row) throw new Error('Unknown library item');

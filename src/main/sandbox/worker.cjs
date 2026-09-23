@@ -6,6 +6,8 @@ const { githubRepo } = require('./runs.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const { redact, redactOutput, redactEvent } = require('./environment.cjs');
+const { prepareLocalClaude } = require('./local-claude.cjs');
+const { runLocalSetup } = require('./local-setup.cjs');
 const ADAPTER_DIR = '/home/user/.engelbart-canvas';
 const ADAPTER = `${ADAPTER_DIR}/launch.py`;
 const quote = (value) => `'${String(value).replace(/'/g, "'\\''")}'`;
@@ -40,7 +42,7 @@ async function wantsDocker(repo) {
   } catch { return false; }
 }
 
-function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = async () => {}, detectDocker = wantsDocker, checkPreview = previewResponds }) {
+function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = async () => {}, detectDocker = wantsDocker, checkPreview = previewResponds, prepareClaude = prepareLocalClaude, localSetup = runLocalSetup }) {
   const secrets = [env.E2B_API_KEY, env.ANTHROPIC_API_KEY].filter(Boolean);
   const emit = (event) => send(redactEvent(event, secrets));
   let sandbox = null;
@@ -48,9 +50,11 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
   let ready = false;
   let stopPromise = null;
   let detached = false;
+  const localController = new AbortController();
   async function stop() {
     if (detached) return;
     cancelled = true;
+    localController.abort();
     if (!sandbox) return;
     if (!stopPromise) stopPromise = sandbox.kill({ requestTimeoutMs: 10_000 }).catch((error) => { stopPromise = null; throw error; });
     await stopPromise;
@@ -96,7 +100,25 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
     try {
       const repo = githubRepo(request.github_url);
       if (!repo) throw new Error('A GitHub repository URL is required');
-      if (!env.E2B_API_KEY || !env.ANTHROPIC_API_KEY) throw new Error('Set E2B_API_KEY and ANTHROPIC_API_KEY in ~/.engelbart/sandbox.env');
+      const provider = env.ENGELBART_SANDBOX_SETUP || 'auto';
+      if (!['auto', 'api', 'claude-local'].includes(provider)) throw new Error('ENGELBART_SANDBOX_SETUP must be auto, api or claude-local');
+      if (!env.E2B_API_KEY) throw new Error('Set E2B_API_KEY in ~/.engelbart/sandbox.env');
+      if (!restarting && provider === 'api' && !env.ANTHROPIC_API_KEY) throw new Error('Set ANTHROPIC_API_KEY, or select ENGELBART_SANDBOX_SETUP=auto in ~/.engelbart/sandbox.env');
+      function fallbackToApi(error) {
+        checkCancelled(); // Stop must never turn into another setup attempt.
+        if (provider !== 'auto') throw error;
+        const reason = redactOutput(String(error.message || 'Local Claude unavailable'), secrets).slice(-800);
+        if (!env.ANTHROPIC_API_KEY) throw new Error(`${reason} No ANTHROPIC_API_KEY is configured for fallback. Check Claude sign-in/usage or add a fallback key in ~/.engelbart/sandbox.env.`);
+        emit({ event: 'progress', kind: 'status', message: `Local Claude setup unavailable or unsuccessful: ${reason} Falling back to Anthropic API-key setup (API usage is billed separately).`,
+          data: { phase: 'setup', status: 'fallback', provider: 'api', previous_provider: 'claude-local' } });
+      }
+      let auth;
+      if (!restarting && provider !== 'api') {
+        emit({ event: 'progress', message: 'Checking local Claude subscription sign-in' });
+        try { auth = await prepareClaude(env); }
+        catch (error) { fallbackToApi(error); }
+        checkCancelled();
+      }
       emit({ event: 'progress', message: restarting ? 'Connecting to existing sandbox' : 'Creating sandbox' });
       const docker = restarting ? false : await detectDocker(repo);
       checkCancelled();
@@ -137,9 +159,52 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
         await sandbox.commands.run(`python3 ${ADAPTER} --stop`, { timeoutMs: 20_000 });
         await sandbox.setTimeout(HOUR);
       }
-      // Secrets travel as a file, never as shell arguments or template env.
-      await sandbox.files.write(`${ADAPTER_DIR}/environment.json`, JSON.stringify(request.environment || { values: {}, removed: [] }));
-      await sandbox.commands.run(`chmod 600 ${ADAPTER_DIR}/environment.json`, { timeoutMs: 10_000 });
+      const environment = request.environment || { values: {}, removed: [] };
+      async function writeEnvironment() {
+        // Secrets travel as a file, never as shell arguments or template env.
+        await sandbox.files.write(`${ADAPTER_DIR}/environment.json`, JSON.stringify(environment));
+        await sandbox.commands.run(`chmod 600 ${ADAPTER_DIR}/environment.json`, { timeoutMs: 10_000 });
+      }
+      await writeEnvironment();
+      if (auth) {
+        deadline = setTimeout(() => localController.abort(new Error('Local Claude setup exceeded 15 minutes')), 15 * 60_000);
+        let launched;
+        try {
+          launched = await localSetup({ sandbox, auth, environment,
+            model: env.ENGELBART_SANDBOX_CLAUDE_MODEL || 'sonnet', signal: localController.signal, checkPreview,
+            onEvent(event) {
+              if (localController.signal.aborted) return;
+              const kind = event.phase === 'stage' ? 'command' : event.phase === 'log' ? (event.stream === 'stderr' ? 'stderr' : 'stdout') : 'status';
+              const message = String(event.command || event.text || event.message || event.phase || '').slice(-2000);
+              const data = { ...event };
+              for (const key of ['text', 'message', 'command']) if (typeof data[key] === 'string') data[key] = redactOutput(data[key].slice(-8000), secrets);
+              emit({ event: 'progress', message: redactOutput(message, secrets), kind, data: redact(data, secrets) });
+            },
+          });
+        } catch (error) {
+          clearTimeout(deadline);
+          localController.abort();
+          fallbackToApi(error);
+          // The local task has closed its bridge and drained its tools. Keep the
+          // same sandbox/files, but confirm its app stopped and discard the local
+          // recipe so launch.py enters the API pipeline, not the old app command.
+          await sandbox.commands.run(`python3 ${ADAPTER} --stop --reset-local`, { timeoutMs: 20_000 });
+          checkCancelled();
+          await writeEnvironment(); // a local launch may have consumed this file
+        } finally { clearTimeout(deadline); }
+        if (launched) {
+          checkCancelled();
+          ready = true;
+          emit({ event: 'progress', message: 'Preview verified', kind: 'status', data: { phase: 'check', status: 'ok', provider: 'claude-local' } });
+          emit({ event: 'ready', preview_url: launched.preview_url, port: launched.port });
+          await launched.done; // failures after readiness do not start another setup
+          await stop();
+          emit({ event: 'stopped' });
+          return;
+        }
+      }
+      checkCancelled();
+      if (!restarting) emit({ event: 'progress', kind: 'status', message: 'Using Anthropic API-key setup (API usage is billed separately)', data: { phase: 'setup', status: 'starting', provider: 'api' } });
       emit({ event: 'progress', message: restarting ? 'Restarting application with saved environment' : 'Analyzing and setting up repository' });
       let resolveReady, rejectReady;
       const outcome = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
@@ -211,7 +276,7 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
       const handle = await sandbox.commands.run(`python3 -u ${ADAPTER}${restarting ? ' --restart' : ''}`, {
         background: true, timeoutMs: HOUR,
         envs: {
-          ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY, HC_USE_API_KEY: '1', HC_CHAT_PROVIDER: 'claude',
+          ANTHROPIC_API_KEY: restarting ? '' : env.ANTHROPIC_API_KEY, HC_USE_API_KEY: '1', HC_CHAT_PROVIDER: 'claude',
           HC_EXPERIMENTAL: '1', HC_DISPOSABLE_HOST: '1', PIP_NO_CACHE_DIR: '1', HUMAN_COMPACT_HOME: '/home/user/.human-compact',
           ENGELBART_CANVAS_PORT: String(request.port || 0),
           ...Object.fromEntries(Object.entries(env).filter(([key]) => /^HC_.*_(MODEL|BUDGET_USD)$/.test(key))),

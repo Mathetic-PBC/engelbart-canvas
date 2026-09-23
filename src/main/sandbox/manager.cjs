@@ -71,8 +71,10 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
       await update(ctx, run, { sandbox_id: event.sandbox_id }, { message: 'Sandbox created' });
     } else if (event.event === 'ready') {
       if (!run.sandbox_id || !Number.isInteger(event.port) || event.port < 1 || event.port > 65535) throw new Error('Invalid ready event');
-      // Open on completion, but not again for repeated ready events or snapshots.
-      await update(ctx, run, { status: 'ready', preview_url: safePreview(event.preview_url), port: event.port }, { message: 'Preview ready', open: run.status !== 'ready' });
+      // Completion is an inbox notification, never a navigation request. Ignore
+      // duplicates so the persisted completion time/read state stays stable.
+      if (run.status === 'ready') return;
+      await update(ctx, run, { status: 'ready', preview_url: safePreview(event.preview_url), port: event.port }, { message: 'Preview ready', notification: 'preview-ready' });
     } else if (event.event === 'failed' || event.event === 'stopped') {
       await end(ctx, run, event.event, event.event === 'failed' ? String(event.error || 'Setup failed').slice(0, 4000) : null);
     } else throw new Error('Unknown sandbox event');
@@ -119,7 +121,7 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
         // A local worker proves setup is active. Ready runs still need a live preview check.
         if (run.status === 'ready') {
           const { state } = await control(ctx, 'probe', run);
-          if (state === 'ready') { publish(ctx, run, { open: !automatic, message: 'Preview ready' }); return run; }
+          if (state === 'ready') { publish(ctx, run, { message: 'Preview ready' }); return run; }
           if (state === 'unreachable') throw new Error('The preview is temporarily unreachable. Stop the run or retry the check.');
           await stopRun(ctx, run.id);
         } else if (workers.has(run.id)) { publish(ctx, run); return run; }

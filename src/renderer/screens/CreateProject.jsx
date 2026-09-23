@@ -36,7 +36,7 @@ export default function CreateProject({ onCreate, onBack, busy, error }) {
 
   return (
     <div data-screen-label="Create a new project" style={{ position: 'absolute', inset: 0, overflow: 'auto', background: '#fff', color: '#171717', fontFamily: 'var(--font-sans)' }}>
-      <div style={{ position: 'absolute', left: 24, top: 18, display: 'flex', alignItems: 'baseline', gap: 10 }}>
+      <div className="window-drag-region" style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 56, padding: '18px 24px 0 var(--window-header-inset, 24px)', display: 'flex', alignItems: 'baseline', gap: 10 }}>
         {onBack
           ? <button type="button" onClick={onBack} title="All projects" style={{ padding: 0, border: 0, background: 'transparent', cursor: 'pointer', font: '500 17px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Engelbart</button>
           : <span style={{ font: '500 17px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Engelbart</span>}

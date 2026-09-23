@@ -94,6 +94,48 @@ export function parseLines(lines) {
   return ps;
 }
 
+/** Whole lines touched by a selection; the next line is not included when the selection ends at its start. */
+export function selectedLineRange({ anchor, focus }) {
+  const [start, end] = anchor.line < focus.line || (anchor.line === focus.line && anchor.offset <= focus.offset) ? [anchor, focus] : [focus, anchor];
+  return { from: start.line, to: end.line - (end.line > start.line && end.offset === 0 ? 1 : 0) };
+}
+
+/**
+ * Make the selected lines a JSON block without parsing/reformatting their text. Inside one existing block, change
+ * its language instead of nesting fences. A selection crossing a block's edge includes that whole block, and an
+ * outer fence longer than any backticks in the content keeps those characters literal. Answer text keeps its card.
+ * Returns the affected source range, the code-body range to select, and insertions for shifting line-local state.
+ */
+export function jsonBlockEdit(lines, from, to) {
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < from || to >= lines.length) return null;
+  const ps = parseLines(lines);
+  let head = from, tail = to;
+  // Select-all also selects the blank line the editor keeps after a block; that is still a relabel, not nesting.
+  while (head < tail && !lines[head].trim()) head++;
+  while (tail > head && !lines[tail].trim()) tail--;
+  const first = ps[head].block, last = ps[tail].block;
+  if (first && last && first.open === last.open && first.close === last.close) {
+    const out = [...lines], p = ps[first.open], rest = p.text.slice(first.fence.length).trimStart().replace(/^\S*/, '');
+    out[first.open] = sameLine(p, `${first.fence}json${rest}`);
+    const insertions = [];
+    let end = first.close - 1;
+    if (end === first.open) { out.splice(first.close, 0, sameLine(p, '')); end++; insertions.push({ at: first.close, count: 1 }); }
+    if (ps[first.open].type !== 'reply' && first.close === lines.length - 1) out.push('');
+    return { lines: out, from: first.open, to: first.close, body: { from: first.open + 1, to: end }, insertions };
+  }
+  from = ps[from].block ? ps[from].block.open : from; to = ps[to].block ? ps[to].block.close : to;
+  const selected = ps.slice(from, to + 1), answer = selected.every((p) => p.type === 'reply');
+  // Never turn an answer and the document around it into one block (that would break the card's boundaries).
+  if (!answer && selected.some((p) => p.type === 'reply' || p.type === 'pending')) return null;
+  const body = lines.slice(from, to + 1), contents = answer ? selected.map((p) => p.text) : body;
+  let longest = 2;
+  for (const line of contents) for (const match of line.matchAll(/`+/g)) longest = Math.max(longest, match[0].length);
+  const fence = '`'.repeat(longest + 1), wrap = (text) => answer ? replyLine(text, selected[0].folded) : text;
+  const out = [...lines.slice(0, from), wrap(`${fence}json`), ...body, wrap(fence), ...lines.slice(to + 1)];
+  if (!answer && to === lines.length - 1) out.push(''); // one undoable edit, including the editor's trailing line
+  return { lines: out, from, to, body: { from: from + 1, to: to + 1 }, insertions: [{ at: from, count: 1 }, { at: to + 2, count: 1 }] };
+}
+
 /** A line that opens or closes a code block, in the document or in an answer. */
 export const isFence = (p) => !!p && (p.type === 'fence' || p.code === 'open' || p.code === 'close');
 /** A line of code, in the document or in an answer: what it shows is exactly its text. */

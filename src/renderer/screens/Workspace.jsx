@@ -100,7 +100,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const [activeTab, setActiveTab] = React.useState(opening.active);
   const [docs, setDocs] = React.useState({});
   const [rightMode, setRightMode] = React.useState('preview');
-  const [buildRepoId, setBuildRepoId] = React.useState(null);
+  const [repoId, setRepoId] = React.useState(null);
   // A link clicked in the terminal opens in the Browser (which adds the tab); the pane turns to show it.
   React.useEffect(() => {
     const show = () => setRightMode('preview');
@@ -322,7 +322,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return library.filter((row) => (row.type === 'image' ? shown.has(row.id) : names.has(row.name.toLowerCase())));
   }, [docs, topic, library]);
 
-  const activeRowId = rightMode === 'build' && buildRepoId ? buildRepoId : activeTab !== 'ws' ? activeTab : (rightMode === 'paper' && paper ? paper.id : 'ws');
+  const activeRowId = rightMode === 'repo' && repoId ? repoId : activeTab !== 'ws' ? activeTab : (rightMode === 'paper' && paper ? paper.id : 'ws');
 
   const rows = React.useMemo(() => {
     const out = [{ id: 'ws', name: 'Workspace', type: 'workspace', depth: 0, on: activeRowId === 'ws', editing: false }];
@@ -420,7 +420,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     if (isNote(row)) { openTab(row.id, row.name); return; }
     if (row.type === 'pdf') { void openPaper(row); return; } // any pdf, paper or not; a paper added by its address is a website and opens as a link
     if (row.type === 'image') return;
-    if (canRunRepository(row)) { setBuildRepoId(row.id); setRightMode('build'); return; }
+    if (canRunRepository(row)) { setRepoId(row.id); setRightMode('repo'); return; }
     if (row.url) api.openExternal(row.url).catch((error) => onError(error));
   }, [openTab, openPaper, onError]);
 
@@ -481,9 +481,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const linkIds = async (ids, arriving = []) => {
     if (!topic || !ids.length) return;
     const repo = ids.map((id) => byId.get(id) || arriving.find((row) => row.id === id)).find(canRunRepository);
-    // Select Build before attaching: reusing a ready run may immediately open
-    // its preview, which must not be hidden when this request finishes.
-    if (repo) { setBuildRepoId(repo.id); setRightMode('build'); }
+    // Select Repo when attaching. Build completion only notifies; opening the
+    // live preview remains an explicit user action.
+    if (repo) { setRepoId(repo.id); setRightMode('repo'); }
     const saved = await api.linkToWorkspace(project.id, topic.id, ids);
     await reload();
     flash(ids[ids.length - 1]);
@@ -707,8 +707,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   return (
     <div data-screen-label="Workspace" style={style}>
-      <header style={{ display: 'grid', gridTemplateColumns: columns, alignItems: 'stretch', minHeight: 46, background: '#fafafa', flex: 'none' }}>
-        <div style={{ flex: 'none', width: rail, boxSizing: 'border-box', borderBottom: '1px solid #eaeaea', display: 'flex', alignItems: 'center', gap: 8, padding: '0 16px', minWidth: 0, overflow: 'hidden' }}>
+      <header className="window-drag-region" style={{ display: 'grid', gridTemplateColumns: columns, alignItems: 'stretch', minHeight: 46, background: '#fafafa', flex: 'none' }}>
+        <div style={{ flex: 'none', width: rail, boxSizing: 'border-box', borderBottom: '1px solid #eaeaea', display: 'flex', alignItems: 'center', gap: 8, padding: '0 16px 0 var(--window-header-inset, 16px)', minWidth: 0, overflow: 'hidden' }}>
           <button type="button" onClick={onHome} title="All projects" style={{ flex: 'none', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', font: '500 17px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Engelbart</button>
           <span style={{ flex: 'none', font: '15px/1 var(--font-sans)', color: '#c9c9c9' }}>/</span>
           <span title={project.directory || project.dir} style={{ flex: '0 1 auto', minWidth: 0, font: '400 14px/1.3 var(--font-sans)', color: '#4d4d4d', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{project.name}</span>
@@ -814,8 +814,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
         <RightPane
           mode={rightMode}
           repositories={library.filter(canRunRepository)}
-          buildRepoId={buildRepoId}
-          onBuildRepo={setBuildRepoId}
+          repoId={repoId}
+          onRepo={setRepoId}
           paper={paper}
           onMarksChange={(id, marks) => api.writeAnnotations(id, marks).catch((error) => onError(error))}
           projectDir={project.directory || null}

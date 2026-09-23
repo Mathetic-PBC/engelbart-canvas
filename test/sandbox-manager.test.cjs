@@ -47,7 +47,8 @@ test('duplicate starts reuse one run; progress, persistence, ready and stop pres
   assert.equal((await f.store.get(a.id)).sandbox_id, 'sb-123');
   await f.starts[0].receive({ event: 'ready', preview_url: 'https://preview.example/', port: 3000 });
   assert.equal((await f.store.get(a.id)).status, 'ready');
-  assert.equal(f.events.at(-1).open, true, 'completion opens the verified preview automatically');
+  assert.equal(f.events.at(-1).notification, 'preview-ready', 'completion notifies without changing the active pane');
+  assert.equal(f.events.some((event) => event.open), false);
   assert.deepEqual((await f.store.get(a.id)).build_log.map((entry) => entry.message), ['Starting repository setup', 'Sandbox created', 'Installing dependencies', 'Preview ready']);
   await f.manager.start(f.ctx, f.repo.id);
   assert.equal(f.starts.length, 1, 'ready run is probed and reused');
@@ -58,7 +59,7 @@ test('duplicate starts reuse one run; progress, persistence, ready and stop pres
   assert.deepEqual(await f.ctx.libraryDb.get(f.repo.id), f.repo);
 });
 
-test('environment restart hands off the same sandbox, applies removals, and opens its new preview', async (t) => {
+test('environment restart hands off the same sandbox, applies removals, and notifies about its new preview', async (t) => {
   const f = await fixture(t);
   const first = await f.manager.saveEnvironment(f.ctx, f.repo.id, [{ name: 'KEY', value: 'old-secret' }], null);
   const run = await f.manager.start(f.ctx, f.repo.id);
@@ -80,7 +81,8 @@ test('environment restart hands off the same sandbox, applies removals, and open
   await f.starts[1].receive({ event: 'progress', message: 'new-secret', data: { text: 'new-secret' } });
   assert.ok(!JSON.stringify(f.events).includes('new-secret'));
   await f.starts[1].receive({ event: 'ready', preview_url: 'https://preview.example/', port: 3000 });
-  assert.equal(f.events.at(-1).open, true);
+  assert.equal(f.events.at(-1).notification, 'preview-ready');
+  assert.equal(f.events.some((event) => event.open), false);
   assert.equal((await f.ctx.libraryDb.query('select * from sandbox_runs')).length, 1);
 });
 
@@ -124,7 +126,7 @@ test('automatic preparation runs once per session and respects Stop and failures
   assert.equal(f.starts.length, 2);
 });
 
-test('automatic builds open their persisted preview once on completion, not on replay or refresh', async (t) => {
+test('automatic builds notify once on completion without opening previews on completion, replay or refresh', async (t) => {
   const f = await fixture(t);
   const run = await f.manager.start(f.ctx, f.repo.id, { automatic: true });
   const worker = f.starts[0];
@@ -133,13 +135,17 @@ test('automatic builds open their persisted preview once on completion, not on r
   assert.equal(f.events.some((event) => event.open), false);
   const ready = { event: 'ready', preview_url: 'https://preview.example/', port: 3000 };
   await worker.receive(ready);
-  assert.equal(f.events.at(-1).open, true);
+  assert.equal(f.events.at(-1).notification, 'preview-ready');
   assert.equal(f.events.at(-1).run.preview_url, ready.preview_url);
   assert.equal((await f.store.get(run.id)).status, 'ready');
   await worker.receive(ready);
   await f.manager.list(f.ctx);
   await f.manager.start(f.ctx, f.repo.id, { automatic: true });
-  assert.equal(f.events.filter((event) => event.open).length, 1);
+  assert.equal(f.events.filter((event) => event.notification === 'preview-ready').length, 1);
+  assert.equal(f.events.some((event) => event.open), false);
+  assert.equal((await f.store.get(run.id)).build_log.filter((entry) => entry.message === 'Preview ready').length, 1);
+  await f.manager.start(f.ctx, f.repo.id);
+  assert.equal(f.events.some((event) => event.open), false, 'reusing a ready repo does not navigate either');
 });
 
 test('failed attempts stay in history and a retry creates a new run', async (t) => {
@@ -174,7 +180,7 @@ test('startup reuses a live saved preview without switching panes', async (t) =>
   const resumed = await f.manager.start(f.ctx, f.repo.id, { automatic: true });
   assert.equal(resumed.id, saved.id);
   assert.equal(f.starts.length, 0);
-  assert.equal(f.events.at(-1).open, false);
+  assert.equal(!!f.events.at(-1).open, false);
 });
 
 test('startup rebuilds an interrupted run but leaves uncertain remote state intact', async (t) => {

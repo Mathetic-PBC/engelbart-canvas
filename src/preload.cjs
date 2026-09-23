@@ -2,6 +2,11 @@
 
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
+// Reserve space for macOS's inset traffic lights without shifting the other platforms.
+window.addEventListener('DOMContentLoaded', () => {
+  document.documentElement.dataset.platform = process.platform;
+}, { once: true });
+
 function subscribe(channel, callback) {
   if (typeof callback !== 'function') throw new TypeError('Listener must be a function');
   const listener = (_event, payload) => callback(payload);
@@ -77,6 +82,7 @@ const engelbartAPI = Object.freeze({
   linkToWorkspace: invoke('link-to-workspace'),
   unlinkFromWorkspace: invoke('unlink-from-workspace'),
   previewLibraryItem: invoke('preview-library-item'),
+  repositoryReadme: invoke('repository-readme'),
   // A file dropped on the window: where it is on disk (the renderer's File no longer says).
   pathForFile: (file) => { try { return webUtils.getPathForFile(file) || null; } catch { return null; } },
   renameLibraryItem: invoke('rename-library-item'),

@@ -1,6 +1,6 @@
 # Canvas Build timeline
 
-The Build tab ports `components/run-timeline.tsx` and `lib/run-steps.ts` from
+The Repo tab's **Build** overview ports `components/run-timeline.tsx` and `lib/run-steps.ts` from
 `divadbaroon/engelbart-web` at `afd4af9351850b454d438082f5c8d5ac3a34a8e0`.
 That version has seven setup steps plus an eighth **Live** row.
 
@@ -10,6 +10,12 @@ styles are translated into scoped `run-timeline.css`; no Tailwind runtime or
 web application dependencies are required. The bounded Canvas log renders
 directly instead of using the web's virtualizer. The font's license is beside
 the bundled font asset.
+
+The inspector opens with **Build** selected, alongside **Logs** and **Environment**.
+Logs reuses the expanded-step log renderer for chronological output from the current
+attempt. Completion copy is shortened only in presentation; step outcomes, durations,
+and saved events are unchanged. Repo identity, status, GitHub, and Close live in the
+header; sandbox state and Stop / Retry live in the footer.
 
 `canvas-build.js` adapts Canvas's run statuses and persisted log entries to the
 web model. The worker and manager retain pipeline `kind` and `data` alongside

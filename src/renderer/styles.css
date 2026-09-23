@@ -12,6 +12,12 @@ a{color:#0070f3;text-decoration:underline;text-underline-offset:3px}
 a:hover{color:#0761d1}
 button{font:inherit;color:inherit}
 button:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(0,112,243,.18)}
+/* The hidden native title bar needs a real drag surface. Keep every header control
+   (including the document tabs' own drag gestures) out of that surface. */
+.window-drag-region{-webkit-app-region:drag;user-select:none}
+.window-drag-region :is(button,a,input,textarea,select,[contenteditable="true"],[role="button"],[role="tab"],[data-doc-tab]),
+.window-no-drag{-webkit-app-region:no-drag}
+html[data-platform="darwin"]{--window-header-inset:90px}
 input,textarea{outline:none}
 textarea::placeholder,input::placeholder{color:#8f8f8f;font-style:italic}
 @keyframes blink{50%{opacity:0}}

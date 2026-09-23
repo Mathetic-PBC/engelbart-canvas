@@ -1,8 +1,9 @@
 import React from 'react';
 import Button from './Button.jsx';
+import SandboxNotifications from './SandboxNotifications.jsx';
 
-/** The controls that exist on every screen, fixed top-right: the settings gear (test mode only)
- *  and the test pill. The gear resets the whole test root after a native confirmation. */
+/** Shared top-right controls: settings (test mode only), notifications, and the test pill.
+ *  The gear resets the whole test root after a native confirmation. */
 export default function TestToggle({ testMode, onToggle, onReset, onReveal, busy }) {
   const [open, setOpen] = React.useState(false);
   React.useEffect(() => {
@@ -12,7 +13,7 @@ export default function TestToggle({ testMode, onToggle, onReset, onReveal, busy
     return () => window.removeEventListener('mousedown', close);
   }, [open]);
   return (
-    <div style={{ position: 'fixed', top: 14, right: 16, zIndex: 200, display: 'flex', alignItems: 'center', gap: 8 }}>
+    <div className="window-controls window-no-drag" style={{ position: 'fixed', top: 8, right: 16, zIndex: 200, display: 'flex', alignItems: 'center', gap: 8 }}>
       {testMode && (
         <div style={{ position: 'relative' }} onMouseDown={(event) => event.stopPropagation()}>
           <button
@@ -35,6 +36,7 @@ export default function TestToggle({ testMode, onToggle, onReset, onReveal, busy
           )}
         </div>
       )}
+      <SandboxNotifications />
       <Button caps size="sm" variant={testMode ? 'filled' : 'outline'} disabled={busy} onClick={onToggle} title={testMode ? 'Test mode is on — everything lives in ~/.engelbart/test' : 'Test mode is off — everything lives in ~/.engelbart'}>
         Test · {testMode ? 'on' : 'off'}
       </Button>

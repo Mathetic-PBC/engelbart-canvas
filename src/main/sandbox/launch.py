@@ -12,7 +12,10 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import urllib.error
+import urllib.request
 
 ROOT = Path('/home/user/repository')
 STATE = Path('/home/user/.engelbart-canvas')
@@ -151,10 +154,20 @@ def process_snapshot():
     return processes
 
 
-def launcher_roots(processes):
-    return {pid for pid, (_, _, command) in processes.items() if
-            WRAPPER in command or '/opt/engelbart/proxy.mjs' in command or
-            (str(STATE / 'launch.py') in command and '--stop' not in command and '--check' not in command)}
+def launcher_roots(processes, local_tools=False):
+    roots = {pid for pid, (_, _, command) in processes.items() if
+             WRAPPER in command or '/opt/engelbart/proxy.mjs' in command or
+             (str(STATE / 'launch.py') in command and '--stop' not in command and '--check' not in command)}
+    if local_tools:
+        # E2B request cancellation can disconnect without killing the command.
+        # Include only our marked tool processes, not unrelated VM services.
+        for pid in processes:
+            try:
+                if b'ENGELBART_CANVAS_LOCAL_TOOL=1' in Path(f'/proc/{pid}/environ').read_bytes().split(b'\0'):
+                    roots.add(pid)
+            except OSError:
+                pass  # Exited processes or inaccessible system-owned services.
+    return roots
 
 
 def retire_launch_records(processes):
@@ -190,11 +203,11 @@ def retire_launch_records(processes):
         write_private(file, record)  # Preserve the plan, attempts, and logs.
 
 
-def stop_launch():
+def stop_launch(local_tools=False):
     # Stop the wrapper and its descendants, including services that do not own
     # the entry port. Docker/local databases outside that tree are preserved.
     processes = process_snapshot()
-    victims = launcher_roots(processes)
+    victims = launcher_roots(processes, local_tools)
     while True:
         children = {pid for pid, (parent, _, _) in processes.items() if parent in victims}
         if children <= victims:
@@ -212,11 +225,83 @@ def stop_launch():
         for _ in range(20):
             current = process_snapshot()
             live = {pid for pid in victims if pid in current and current[pid][1] == processes[pid][1]}
-            if not live and not launcher_roots(current):
+            if not live and not launcher_roots(current, local_tools):
                 retire_launch_records(current)
                 return
             time.sleep(0.05)
     raise RestartBlocked('Could not confirm the previous application stopped. No replacement was started; retry the restart.')
+
+
+def local_recipe(recipe):
+    cwd = Path(recipe.get('cwd', str(ROOT))).resolve()
+    port = recipe.get('port')
+    command = recipe.get('command')
+    route = recipe.get('path', '/')
+    if (not cwd.is_relative_to(ROOT.resolve()) or not cwd.is_dir()
+            or not isinstance(port, int) or isinstance(port, bool) or not 1024 <= port <= 65535 or port == 43110
+            or not isinstance(command, str) or not command.strip() or len(command) > 8000 or '\0' in command
+            or not isinstance(route, str) or not route.startswith('/') or route.startswith('//')
+            or any(c in route for c in ('\r', '\n', '\\'))):
+        raise ValueError('Invalid local Claude launch plan')
+    return cwd, command, port, route
+
+
+def launch_local(recipe):
+    # No hc imports or model calls: this is also the subscription-mode restart.
+    cwd, command, port, route = local_recipe(recipe)
+    payload = read_json(STATE / 'environment.json', {'values': {}, 'removed': []})
+    (STATE / 'environment.json').unlink(missing_ok=True)
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.startswith(('ANTHROPIC_', 'CLAUDE_', 'HC_')) and key != 'E2B_API_KEY'}
+    for key in payload.get('removed', []):
+        environment.pop(key, None)
+    environment.update(payload.get('values', {}))
+
+    output_lock = threading.Lock()
+
+    def emit(**event):
+        # The log reader and health-check thread share stdout. Unbuffered print
+        # writes the JSON and newline separately; without a lock they can merge
+        # two events into an invalid line and permanently lose "ready".
+        with output_lock:
+            print(json.dumps(event), flush=True)
+
+    proc = subprocess.Popen(['bash', '-c', command], cwd=cwd, env=environment,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+
+    def logs():
+        while True:
+            chunk = proc.stdout.readline(8192)
+            if not chunk:
+                break
+            emit(phase='log', stream='stdout', text=chunk.decode(errors='replace'))
+
+    thread = threading.Thread(target=logs, daemon=True)
+    thread.start()
+    url = f'http://127.0.0.1:{port}{route}'
+    # Ignore proxy environment configuration when probing this machine's app.
+    client = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    deadline = time.monotonic() + 75
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            thread.join(timeout=1)
+            raise ValueError('Application exited before becoming healthy')
+        try:
+            with client.open(url, timeout=2) as response:
+                healthy = response.status < 500
+        except urllib.error.HTTPError as error:
+            healthy = error.code < 500
+        except (OSError, urllib.error.URLError):
+            healthy = False
+        if healthy:
+            emit(phase='ready', port=port, url=url)
+            code = proc.wait()
+            thread.join(timeout=1)
+            if code:
+                raise ValueError('Application stopped with an error')
+            return
+        time.sleep(0.5)
+    raise ValueError('Application did not become healthy')
 
 
 def main():
@@ -224,7 +309,18 @@ def main():
     os.environ.setdefault('HUMAN_COMPACT_HOME', '/home/user/.human-compact')
     if '--stop' in sys.argv:
         STEP = 'stopping the previous application'
-        stop_launch()
+        stop_launch(local_tools='--reset-local' in sys.argv)
+        if '--reset-local' in sys.argv:
+            # Only after a confirmed stop: a leftover local recipe would cause
+            # the API fallback to relaunch that app instead of running setup.
+            (STATE / 'recipe.json').unlink(missing_ok=True)
+        return
+    recipe = read_json(STATE / 'recipe.json', None)
+    if recipe and recipe.get('kind') == 'claude-local':
+        STEP = 'starting the saved local Claude launch plan'
+        local_recipe(recipe)
+        if '--check' not in sys.argv:
+            launch_local(recipe)
         return
     wrapper = load_wrapper()
     from human_compact.trajectory import project_environment as PE, project_run as PR, project_supabase as PS

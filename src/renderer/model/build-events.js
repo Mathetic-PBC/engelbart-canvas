@@ -28,24 +28,33 @@ function mergeEvents(existing, incoming) {
 function terminalLines(events) {
   const lines = [];
   let open = null;
+  let replace = false;
+  let stage;
+  let phase;
   for (const e of events) {
-    if (e.kind === "stdout" || e.kind === "stderr") {
-      const parts = e.text.replace(/\r\n/g, "\n").split("\n");
-      for (let i = 0; i < parts.length; i++) {
-        const frame = parts[i].split("\r").pop() ?? "";
-        const last = i === parts.length - 1;
-        if (open && open.kind === e.kind) open.text = parts[i].includes("\r") ? frame : open.text + frame;
-        else if (!(last && frame === "")) {
-          open = { kind: e.kind, text: frame };
-          lines.push(open);
-        }
-        if (!last) open = null;
-      }
-      continue;
-    }
-    open = null;
+    const stream = e.kind === "stdout" || e.kind === "stderr";
+    // Never join separate status/error records, streams, or command stages.
+    if (!stream || open?.kind !== e.kind || stage !== e.data?.stage || phase !== e.data?.phase) { open = null; replace = false; }
+    stage = e.data?.stage;
+    phase = e.data?.phase;
     if (e.kind === "metrics") continue;
-    lines.push({ kind: e.kind, text: e.text });
+    // Plain log output, not a terminal emulator: remove color/erase-line escapes.
+    const text = String(e.text || "").replace(/\x1b\[[0-9;]*[mK]/g, "");
+    for (const part of text.split(/(\r\n|\r|\n)/)) {
+      if (part === "\r") {
+        // Defer replacement until more text arrives. A trailing CR must not erase
+        // the latest progress frame, including when CR/LF crosses chunk boundaries.
+        replace = true;
+      } else if (part === "\n" || part === "\r\n") {
+        if (!open) lines.push({ kind: e.kind, text: "" });
+        open = null; replace = false;
+      } else if (part) {
+        if (!open) { open = { kind: e.kind, text: part }; lines.push(open); }
+        else open.text = replace ? part : open.text + part;
+        replace = false;
+      }
+    }
+    if (!stream) { open = null; replace = false; }
   }
   return lines;
 }

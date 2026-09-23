@@ -54,6 +54,10 @@ At the bottom, three pictures that size with the sidebar: the **trash** (a row d
 
 The Browser's address ends in the page's place in the library: **+ Save** (a card names it; *Library only* or *Workspace*), **+ Workspace** (in the library, not here: one click), or **✓**. The `@` menu lists **Bart**, **Task**, **Note** (`@Note name` + Enter makes that note here and mentions it), the page open in the Browser (a **+** when the library does not hold it yet: picking it adds it), then the library. Whatever an `@` mention names comes into the workspace.
 
+## JSON code blocks
+
+Select text in a workspace document, note, or post-it and press **⌘⇧J** (**Ctrl+Shift+J** on Windows/Linux). The selected lines become a syntax-highlighted JSON code block; their contents and indentation stay unchanged. Inside an existing code block, the shortcut sets its language to JSON instead of nesting another block. With no selection it formats the current line (an empty line makes an empty block). **⌘Z** / **Ctrl+Z** undoes the change.
+
 ## Copy and @bart
 
 **Copy** (the papers at the bottom of the sidebar) puts the open document on the clipboard with every `@[mentioned]` file's content in `<file>` tags directly under the line that mentions it: notes whole (with their own mentions), anything else as its path or URL plus its summary.

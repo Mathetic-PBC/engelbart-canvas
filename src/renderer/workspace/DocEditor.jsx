@@ -12,11 +12,11 @@
 //     lands on the clicked character even inside bold/mention markup.
 //   * fenced code blocks (2026-09-22): the lines between two fences are code, read with parseLines() (a `# x` in a block
 //     is not a heading). Typing a fence and Enter closes it and puts the caret inside; in a block Enter keeps the line's
-//     indent and Tab indents by two spaces.
+//     indent and Tab indents by two spaces. Select lines and press Cmd/Ctrl+Shift+J to make a JSON block.
 //   * where a document was scrolled to is kept per workspace (props.viewOf / props.onView, 2026-09-22), apart from the
 //     caret: coming back to a document shows what was on screen, not where the last edit was.
 import React from 'react';
-import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, threads, turnText, INLINE, LABELS, HELD, ATTRIBUTION_RE, FENCE_RE } from '../model/doc.js';
+import { parseLine, parseLines, codeBlocks, selectedLineRange, jsonBlockEdit, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, threads, turnText, INLINE, LABELS, HELD, ATTRIBUTION_RE, FENCE_RE } from '../model/doc.js';
 import { readFlags, readQuestion, withChoice, modelOf, effortOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
 import BartPicker from './BartPicker.jsx';
 import MentionMenu from './MentionMenu.jsx';
@@ -600,16 +600,17 @@ export default class DocEditor extends React.Component {
     if (c && !had && (hadFocus || this.wantFocus)) { ed.focus({ preventScroll: true }); this.caret = c; this.applyCaret(); }
     this.wantFocus = false; this.syncing = false;
   }
-  applyCaret() { const c = this.caret; this.caret = null; if (!c) return; if (c.sel) this.setSelection(c.line, c.sel[0], c.sel[1]); else this.setSelection(c.line, c.offset, c.offset); }
+  applyCaret() { const c = this.caret; this.caret = null; if (!c) return; if (c.sel) this.setSelection(c.line, c.sel[0], c.sel[1], c.endLine); else this.setSelection(c.line, c.offset, c.offset); }
   posIn(t, offset) {
     const walker = document.createTreeWalker(t, NodeFilter.SHOW_TEXT); let node, rest = offset;
     while ((node = walker.nextNode())) { if (rest <= node.length) return { node, offset: rest }; rest -= node.length; }
     if (t.firstChild && t.firstChild.nodeName === 'BR') return { node: t, offset: 0 };
     const last = t.lastChild; return last && last.nodeType === 3 ? { node: last, offset: last.length } : { node: t, offset: t.childNodes.length };
   }
-  setSelection(line, a, b) {
-    const ed = this.editorEl(); if (!ed) return; const d = ed.querySelector(`[data-line="${line}"]`); const t = d && d.querySelector('.t'); if (!t) return;
-    const s = this.posIn(t, this.rawToDisplay(t, a)), e = this.posIn(t, this.rawToDisplay(t, b)), range = document.createRange();
+  setSelection(line, a, b, endLine = line) {
+    const ed = this.editorEl(); if (!ed) return; const d = ed.querySelector(`[data-line="${line}"]`), last = ed.querySelector(`[data-line="${endLine}"]`);
+    const t = d && d.querySelector('.t'), end = last && last.querySelector('.t'); if (!t || !end) return;
+    const s = this.posIn(t, this.rawToDisplay(t, a)), e = this.posIn(end, this.rawToDisplay(end, b)), range = document.createRange();
     range.setStart(s.node, s.offset); range.setEnd(e.node, e.offset);
     const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
   }
@@ -740,6 +741,11 @@ export default class DocEditor extends React.Component {
   };
   editorKey = (e) => {
     if (this.state.picker) this.closePicker();
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'j') {
+      e.preventDefault();
+      if (!this.composing && !e.isComposing && !e.repeat) this.makeJsonBlock();
+      return;
+    }
     const s = this.state, c = this.caretInfo(); if (!c) return; const ls = this.lines();
     const ps = this.parsedOf(ls), i = c.anchor.line, line = ls[i] ?? '', p = ps[i] || parseLine(line), cur = lineText(p, line), mod = e.metaKey || e.ctrlKey;
     const same = c.anchor.line === c.focus.line, a = Math.min(c.anchor.offset, c.focus.offset), b = Math.max(c.anchor.offset, c.focus.offset), collapsed = same && a === b;
@@ -1095,6 +1101,27 @@ export default class DocEditor extends React.Component {
     const n = (cur.match(/^ {1,2}|^\t/) || [''])[0].length; if (!n) return;
     this.writeText(i, cur.slice(n), { line: i, sel: [Math.max(0, a - n), Math.max(0, b - n)] });
   }
+  makeJsonBlock() {
+    const ls = this.lines(), ed = this.editorEl(), sel = ed ? getSelection() : null;
+    const range = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+    if (ed && (!range || !ed.contains(range.startContainer) || !ed.contains(range.endContainer))) return;
+    const c = this.caretInfo();
+    let span = c && range?.startContainer !== ed && range?.endContainer !== ed ? selectedLineRange(c) : null;
+    if (!span) {
+      // Select-all may put both range endpoints on the contentEditable root, outside any individual line.
+      if (!range || sel.isCollapsed) return;
+      const selected = [...ed.querySelectorAll('[data-line]')].filter((line) => range.intersectsNode(line));
+      if (!selected.length) return;
+      span = { from: Number(selected[0].dataset.line), to: Number(selected[selected.length - 1].dataset.line) };
+    }
+    const edit = jsonBlockEdit(ls, span.from, span.to); if (!edit) return;
+    for (let i = edit.from; i <= edit.to; i++) if (this.lockedAt(ls, i) || HELD.includes(this.status(i))) return;
+    const text = edit.lines.join('\n'); if (text === this.props.text) return;
+    const end = parseLines(edit.lines)[edit.body.to];
+    this.setDoc(text, { line: edit.body.from, sel: [0, lineText(end, edit.lines[edit.body.to]).length], endLine: edit.body.to });
+    for (const { at, count } of edit.insertions) this.shiftStatuses(at, count);
+    this.wantFocus = true; this.setState({ activeLine: edit.body.from, mention: null });
+  }
   wrap(i, cur, st, en, mark) { this.writeText(i, cur.slice(0, st) + mark + cur.slice(st, en) + mark + cur.slice(en), { line: i, sel: [st + mark.length, en + mark.length] }); }
   link(i, cur, st, en) { const sel = cur.slice(st, en) || 'link'; const a = st + sel.length + 3; this.writeText(i, cur.slice(0, st) + `[${sel}](url)` + cur.slice(en), { line: i, sel: [a, a + 3] }); }
   indent(i, dir) {
@@ -1160,6 +1187,7 @@ export default class DocEditor extends React.Component {
               role="textbox"
               aria-multiline="true"
               aria-label={compact ? 'Post-it' : 'Document'}
+              aria-keyshortcuts="Meta+Shift+J Control+Shift+J"
               style={{ marginTop: compact ? 0 : 18, outline: 'none', minHeight: compact ? 28 : 240, font: '17px/1.6 var(--font-sans)', color: '#171717', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', caretColor: '#171717', cursor: 'text' }}
             />
           </div>

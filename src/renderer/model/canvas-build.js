@@ -24,8 +24,9 @@ export function buildEvents(run) {
     if (text === 'Cloning repository') text = 'cloning';
     if (text === 'Creating sandbox') text = 'creating';
     if (data.lifecycle === 'cloned') text = 'cloned';
-    // Canvas stores complete log entries, whereas the web receives chunks.
-    if ((kind === 'stdout' || kind === 'stderr') && !text.endsWith('\n')) text += '\n';
+    // Structured log events retain stream chunks; legacy records are independent
+    // lines. Keep explicit CR progress updates intact in either format.
+    if ((kind === 'stdout' || kind === 'stderr') && data.phase !== 'log' && !/[\r\n]$/.test(text)) text += '\n';
     return { id: index, seq: index, runId: run.id, at: entry.time, text, kind, data };
   });
 }

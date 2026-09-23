@@ -77,6 +77,7 @@ function stepOf(e, seenReady) {
     case "error": {
       const step = typeof d.step === "string" ? d.step : "";
       if (step === "discover" || step === "order" || step === "plan") return "plan";
+      if (step === "setup" || step === "install") return "start";
       if (step === "environment") return "environment";
       if (step === "supabase") return "services";
       return seenReady ? "live" : "health";
@@ -161,6 +162,17 @@ function runSteps(run, events, repoName) {
   if (steps.trail.state === "skipped") steps.trail.summary ||= "Not recorded";
   if (run?.status === "paused") steps.sandbox.summary = `${steps.sandbox.summary} \xB7 paused`;
   if (!run) steps.sandbox.summary ||= "Not prepared yet";
+  // Advancing to a later stage does not turn an explicitly failed outcome into
+  // success. A later recorded success for that same step can resolve it; stderr
+  // and prose alone are not evidence of failure.
+  for (const step of Object.values(steps)) {
+    if (step.state !== "done") continue;
+    const outcome = step.events.findLast((e) => e.kind === "error" || e.data?.phase === "error" || ["failed", "error", "ok", "done", "ready", "answering"].includes(e.data?.status));
+    if (outcome && (outcome.kind === "error" || outcome.data?.phase === "error" || ["failed", "error"].includes(outcome.data?.status))) {
+      step.state = "warned";
+      step.error ||= String(outcome.data?.reason || outcome.data?.output || outcome.text);
+    }
+  }
   return STEP_ORDER.map((id) => {
     const { flag: _flag, ...step } = steps[id];
     return step;
@@ -254,11 +266,18 @@ function summarize(steps, run, repoName) {
     const commands = starts.length ? stages.slice(starts[starts.length - 1]).map((e) => e.text.trim()) : [];
     const unique = commands.filter((c, i) => commands.indexOf(c) === i);
     const setup = last("start", (e) => e.data?.phase === "setup");
+    const setupFailure = last("start", (e) => e.data?.phase === "setup" && e.data?.status === "failed" || e.kind === "error");
     const sd = data(setup);
     if (setup) {
-      steps.start.summary = sd.status === "starting" ? `The setup agent is installing the repository for use (attempt ${sd.attempt ?? 1})\u2026` : sd.status === "replaying" ? "Replaying the saved setup script\u2026" : sd.status === "done" ? `Set up: ${String(sd.summary ?? "installed").slice(0, 160)}` : `Setup failed: ${String(sd.reason ?? sd.output ?? "").slice(-160)}`;
-      if (sd.status === "failed") steps.start.flag = "warned";
+      const summaries = { starting: "Installing and preparing…", working: "Preparing repository…", replaying: "Replaying saved setup…", reusing: "Restarting application…", fallback: "Switching setup provider…" };
+      steps.start.summary = sd.status === "failed" ? (run?.status === "running" ? "Initial setup failed" : "Setup failed")
+        : sd.status === "done" ? (setupFailure ? "Recovered after setup failure" : `Set up: ${String(sd.summary ?? "installed").slice(0, 160)}`)
+        : summaries[sd.status] || "Setup activity recorded";
     } else steps.start.summary = unique.length ? `${unique.join(" \xB7 ")}${starts.length > 1 ? ` (${starts.length} passes)` : ""}` : steps.start.events.length ? "Starting\u2026" : "";
+    if (setupFailure) {
+      steps.start.flag = "warned";
+      steps.start.error = String(data(setupFailure).reason || data(setupFailure).output || setupFailure.text);
+    }
   }
   {
     const patch = last("health", (e) => e.data?.phase === "patch" && e.data?.status !== "starting");
@@ -276,15 +295,15 @@ function summarize(steps, run, repoName) {
     const resolving = last("health", (e) => e.data?.phase === "resolve" && (e.data?.status === "starting" || e.data?.status === "reading"));
     const rd = data(resolved);
     const blocker = rd.blocker ?? data(concluded).blocker;
-    const started = last("health", (e) => e.data?.phase === "start");
-    if (started && data(started).status === "failed") {
-      steps.health.summary = `The application did not start: ${String(data(started).reason ?? "").slice(0, 160)}`;
+    const outcome = last("health", (e) => e.data?.phase === "start" || e.data?.phase === "check");
+    if (outcome?.data?.phase === "start" && data(outcome).status === "failed") {
+      steps.health.summary = `The application did not start: ${String(data(outcome).reason ?? "").slice(0, 160)}`;
       steps.health.flag = "warned";
-    } else if (started && data(started).status === "answering") steps.health.summary = `The application answers at ${String(data(started).url ?? "")}`;
-    else if (check && data(check).status === "checking") steps.health.summary = "Verifying live preview…";
-    else if (check) {
-      steps.health.summary = data(check).status === "ok" ? "The check passed" : `The check failed: ${String(data(check).reason ?? data(check).output ?? "").slice(-160)}`;
-      if (data(check).status !== "ok") steps.health.flag = "warned";
+    } else if (outcome?.data?.phase === "start" && data(outcome).status === "answering") steps.health.summary = "Application responding";
+    else if (outcome?.data?.phase === "check") {
+      const failed = ["failed", "error"].includes(data(check).status);
+      steps.health.summary = data(check).status === "ok" ? "The check passed" : failed ? `The check failed: ${String(data(check).reason ?? data(check).output ?? "").slice(-160)}` : "Verifying live preview…";
+      if (failed) steps.health.flag = "warned";
     } else if (concluded && data(concluded).status === "blocked") {
       steps.health.summary = `Blocked${blocker?.kind ? ` (${blocker.kind})` : ""}: ${String(blocker?.what ?? data(concluded).reason ?? "").slice(0, 200)}`;
       steps.health.flag = "warned";
@@ -306,7 +325,7 @@ function summarize(steps, run, repoName) {
       steps.health.summary = `Saved edits applied again (${count(files, "file")})`;
       steps.health.flag = "warned";
     } else if (d.status === "none") steps.health.summary = "The repair agent found nothing to change";
-    else if (d.status === "failed") steps.health.summary = `Repair attempt ${attempt ?? 1} failed${d.reason ? `: ${String(d.reason).slice(0, 120)}` : ""}`;
+    else if (d.status === "failed") { steps.health.summary = `Repair attempt ${attempt ?? 1} failed${d.reason ? `: ${String(d.reason).slice(0, 120)}` : ""}`; steps.health.flag = "warned"; }
     else if (d.status === "stale") steps.health.summary = "The saved edits no longer fit the repository";
     else if (starting) steps.health.summary = `Repair attempt ${attempt ?? 1}: the agent is looking for a fix\u2026`;
     else if (need) steps.health.summary = `Not answering: ${String(data(need).reason ?? "").slice(0, 160)}`;
@@ -324,7 +343,7 @@ function summarize(steps, run, repoName) {
     const usable = last("live", (e) => e.data?.phase === "usable");
     const ub = data(usable).blocker ?? run?.usage?.blocker;
     const parts = [
-      isOver(run) ? "" : run?.status === "usable" || usable ? ub ? `Set up; blocked by ${ub.kind ?? "something"}: ${String(ub.what ?? "").slice(0, 120)}` : `Set up and ready to use${data(usable).summary ? `: ${String(data(usable).summary).slice(0, 120)}` : ""}` : run?.status === "running" && run.previewUrl ? `Live at ${run.previewUrl}` : ready ? "Up" : "",
+      isOver(run) ? "" : run?.status === "usable" || usable ? ub ? `Set up; blocked by ${ub.kind ?? "something"}: ${String(ub.what ?? "").slice(0, 120)}` : `Set up and ready to use${data(usable).summary ? `: ${String(data(usable).summary).slice(0, 120)}` : ""}` : run?.status === "running" && run.previewUrl ? "Preview ready" : ready ? "Ready" : "",
       services > 1 ? count(services, "service") : "",
       shared ? "command list saved and shared" : captured ? "command list saved" : ""
     ].filter(Boolean);

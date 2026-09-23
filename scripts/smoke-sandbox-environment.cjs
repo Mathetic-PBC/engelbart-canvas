@@ -14,7 +14,9 @@ const { runStore } = require('../src/main/sandbox/runs.cjs');
 const db = require('../src/main/store/db.cjs');
 
 async function main() {
+  const localOnly = process.argv.includes('--local');
   const env = readSandboxEnv(path.join(os.homedir(), '.engelbart'));
+  if (localOnly) { env.ENGELBART_SANDBOX_SETUP = 'claude-local'; env.ANTHROPIC_API_KEY = ''; }
   Object.assign(process.env, env);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canvas-env-smoke-'));
   const ctx = { root, dataRoot: root, libraryDb: await db.openLibraryDb(root) };
@@ -35,6 +37,9 @@ async function main() {
     await sandbox.files.write('/home/user/repository/app.py', `import json, os\nfrom http.server import BaseHTTPRequestHandler, HTTPServer\nclass Handler(BaseHTTPRequestHandler):\n def do_GET(self):\n  body=json.dumps({"value":os.environ.get("CANVAS_TEST_VALUE"),"removedPresent":"CANVAS_TEST_REMOVE" in os.environ,"empty":os.environ.get("CANVAS_TEST_EMPTY"),"platformKeyPresent":"ANTHROPIC_API_KEY" in os.environ}).encode()\n  self.send_response(200);self.send_header("Content-Type","application/json");self.end_headers();self.wfile.write(body)\nHTTPServer.allow_reuse_address=True\nserver=HTTPServer(("0.0.0.0",3000),Handler)\nprint("Serving at http://localhost:3000",flush=True)\nserver.serve_forever()\n`);
     await sandbox.files.write('/home/user/repository/.engelbart/start.sh', 'exec python3 /home/user/repository/app.py\n');
     await sandbox.files.write('/home/user/repository/installed-sentinel', 'keep-me');
+    if (localOnly) await sandbox.files.write('/home/user/.engelbart-canvas/recipe.json', JSON.stringify({
+      kind: 'claude-local', command: 'python3 app.py', cwd: '/home/user/repository', port: 3000, path: '/',
+    }));
     await runs.update(run.id, { sandbox_id: sandbox.sandboxId, status: 'ready', port: 3000, preview_url: `https://${sandbox.getHost(43110)}/` });
     let saved = await manager.saveEnvironment(ctx, id, [{ name: 'CANVAS_TEST_VALUE', value: 'first' }, { name: 'CANVAS_TEST_REMOVE', value: 'remove-me' }, { name: 'CANVAS_TEST_EMPTY', value: '' }], null);
     const deadline = Date.now() + 4 * 60_000;
@@ -54,6 +59,10 @@ async function main() {
     await restart({ value: 'first', removedPresent: true, empty: '', platformKeyPresent: false });
     saved = await manager.saveEnvironment(ctx, id, [{ name: 'CANVAS_TEST_VALUE', value: 'updated "$value"\nline' }, { name: 'CANVAS_TEST_REMOVE', value: null }], saved.revision);
     await restart({ value: 'updated "$value"\nline', removedPresent: false, empty: '', platformKeyPresent: false });
+    if (localOnly) {
+      console.log('PASS: local Claude recipe restarts apply add/update/remove/empty values, keep installed files, and require no model/API key.');
+      return;
+    }
     console.log('PASS: fallback launcher updated and removed variables in the same sandbox.');
     await sandbox.files.write('/home/user/.engelbart-canvas/recipe.json', JSON.stringify({ version: 1, kind: 'railpack', cwd: '.', plan: { steps: [], deploy: { startCommand: 'python3 app.py' } } }));
     await restart({ value: 'updated "$value"\nline', removedPresent: false, empty: '', platformKeyPresent: false });

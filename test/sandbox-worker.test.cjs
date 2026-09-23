@@ -28,7 +28,7 @@ test('worker waits for persisted sandbox ID, streams split JSON events, verifies
       assert.equal(options.metadata.canvasRunId, 'run-test');
       assert.equal(options.metadata.runId, undefined, 'web worker must not adopt or sweep Canvas sandboxes');
       return sandbox;
-    } }, env: { E2B_API_KEY: 'test', ANTHROPIC_API_KEY: 'test' },
+    } }, env: { E2B_API_KEY: 'test', ANTHROPIC_API_KEY: 'test', ENGELBART_SANDBOX_SETUP: 'api' },
     detectDocker: async () => false, waitForAck: async () => { assert.equal(events.at(-1).event, 'sandbox_created'); ack = true; },
     checkPreview: async (url) => { assert.equal(url, 'https://preview.example/app'); return true; },
     emit(event) { events.push(event); if (event.event === 'ready') finish(); },
@@ -61,7 +61,9 @@ test('restart reconnects without cloning/installing; configuration failures keep
     } },
   };
   const runtime = createRuntime({ Sandbox: { connect: async (id) => { assert.equal(id, 'existing'); return sandbox; }, create: () => assert.fail('must reuse sandbox') },
-    env: { E2B_API_KEY: 'test', ANTHROPIC_API_KEY: 'test' }, emit: (event) => events.push(event),
+    env: { E2B_API_KEY: 'test' }, emit: (event) => events.push(event),
+    prepareClaude: () => assert.fail('environment restart must not check Claude sign-in'),
+    localSetup: () => assert.fail('environment restart must not run setup'),
   });
   await runtime.run({ command: 'restart', sandbox_id: 'existing', run_id: 'run-test', github_url: 'https://github.com/owner/app', environment: { values: { NEW: 'new' }, removed: ['OLD'] } });
   assert.equal(kills, 0);
@@ -78,7 +80,7 @@ test('clone failure kills the sandbox and reports failure', async () => {
   let killed = false;
   const runtime = createRuntime({
     Sandbox: { create: async () => ({ sandboxId: 'sb-test', kill: async () => { killed = true; }, commands: { run: async () => { throw new Error('Repository not found'); } } }) },
-    env: { E2B_API_KEY: 'test', ANTHROPIC_API_KEY: 'test' }, detectDocker: async () => false, emit: (event) => events.push(event),
+    env: { E2B_API_KEY: 'test', ANTHROPIC_API_KEY: 'test', ENGELBART_SANDBOX_SETUP: 'api' }, detectDocker: async () => false, emit: (event) => events.push(event),
   });
   await runtime.run({ run_id: 'run-test', github_url: 'https://github.com/owner/missing' });
   assert.equal(killed, true);

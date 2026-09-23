@@ -1,0 +1,181 @@
+<div id="engelbart-repo-directions" aria-label="Repo reading and runtime layout">
+  <style>
+    #engelbart-repo-directions{color-scheme:light dark;--rp-bg:light-dark(#fff,#191919);--rp-wash:light-dark(#f7f7f7,#222);--rp-ink:light-dark(#202020,#ececec);--rp-dim:light-dark(#707070,#aaa);--rp-line:light-dark(#e7e7e7,#363636);--rp-button:light-dark(#202020,#eee);--rp-on-button:light-dark(#fff,#171717);--rp-link:light-dark(#2359bd,#98b5fa);--rp-error:light-dark(#a7352b,#f3a69f);--rp-shadow:light-dark(#00000015,#00000050);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--rp-ink);width:100%}
+    #engelbart-repo-directions *{box-sizing:border-box}
+    #engelbart-repo-directions [hidden]{display:none!important}
+    #engelbart-repo-directions .rp-window{position:relative;background:var(--rp-bg);border:1px solid var(--rp-line);border-radius:9px;overflow:hidden}
+    #engelbart-repo-directions button{font:inherit;color:inherit;cursor:pointer}
+    #engelbart-repo-directions .rp-chrome{display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:9px 12px;border-bottom:1px solid var(--rp-line);background:var(--rp-bg)}
+    #engelbart-repo-directions .rp-tabs{display:flex;gap:3px;align-items:center;flex-wrap:wrap}
+    #engelbart-repo-directions .rp-tab{border:0;background:none;padding:6px 8px;border-radius:5px;color:var(--rp-dim);font-size:12px}
+    #engelbart-repo-directions .rp-tab[aria-selected="true"]{background:var(--rp-wash);color:var(--rp-ink);font-weight:500}
+    #engelbart-repo-directions .rp-tab:disabled{cursor:default;opacity:.6}
+    #engelbart-repo-directions .rp-actions{display:flex;gap:6px;align-items:center;margin-left:auto}
+    #engelbart-repo-directions .rp-primary{border:1px solid var(--rp-button);border-radius:5px;padding:5px 10px;color:var(--rp-on-button);background:var(--rp-button);font-size:12px;white-space:nowrap}
+    #engelbart-repo-directions .rp-icon{display:flex;align-items:center;justify-content:center;width:30px;height:30px;border:1px solid var(--rp-line);border-radius:5px;background:var(--rp-bg)}
+    #engelbart-repo-directions .rp-icon i{width:16px;height:16px}
+    #engelbart-repo-directions .rp-subtabs{display:flex;gap:18px;padding:0 24px;border-bottom:1px solid var(--rp-line)}
+    #engelbart-repo-directions .rp-subtab{font-size:12px;padding:11px 0;border:0;border-bottom:2px solid transparent;background:none;color:var(--rp-dim)}
+    #engelbart-repo-directions .rp-subtab[aria-selected="true"]{border-bottom-color:var(--rp-ink);color:var(--rp-ink)}
+    #engelbart-repo-directions .rp-stage{position:relative;min-height:490px}
+    #engelbart-repo-directions .rp-document{max-width:78ch;padding:29px 28px 38px;margin:0 auto;overflow-wrap:anywhere}
+    #engelbart-repo-directions .rp-source{font-size:12px;color:var(--rp-dim);margin-bottom:22px;display:flex;align-items:center;gap:8px}
+    #engelbart-repo-directions .rp-source i{width:15px;height:15px}
+    #engelbart-repo-directions .rp-document h1{font-size:25px;line-height:1.3;font-weight:600;letter-spacing:-.55px;margin:0 0 8px}
+    #engelbart-repo-directions .rp-document .rp-subtitle{font-size:18px;line-height:1.45;color:var(--rp-dim);margin:0 0 17px}
+    #engelbart-repo-directions .rp-document p{margin:0 0 18px}
+    #engelbart-repo-directions a{color:var(--rp-link);text-decoration:none}
+    #engelbart-repo-directions .rp-document h2{font-size:17px;font-weight:500;margin:22px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--rp-line)}
+    #engelbart-repo-directions .rp-document blockquote{margin:23px 0;padding:2px 0 2px 15px;border-left:3px solid var(--rp-line);color:var(--rp-dim)}
+    #engelbart-repo-directions .rp-document pre{margin:0;padding:16px;background:var(--rp-wash);border-radius:6px;font:12px/1.8 ui-monospace,SFMono-Regular,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
+    #engelbart-repo-directions .rp-menu{position:absolute;z-index:4;top:47px;right:10px;width:204px;padding:5px;background:var(--rp-bg);border:1px solid var(--rp-line);border-radius:7px;box-shadow:0 7px 24px var(--rp-shadow)}
+    #engelbart-repo-directions .rp-menu button{display:block;width:100%;border:0;border-radius:4px;text-align:left;padding:8px 10px;background:none;font-size:12px}
+    #engelbart-repo-directions .rp-menu button:hover{background:var(--rp-wash)}
+    #engelbart-repo-directions .rp-menu hr{margin:5px;border:0;border-top:1px solid var(--rp-line)}
+    #engelbart-repo-directions .rp-sheet{position:absolute;z-index:3;inset:0 0 0 auto;width:min(390px,90%);background:var(--rp-bg);border-left:1px solid var(--rp-line);box-shadow:-12px 0 30px var(--rp-shadow)}
+    #engelbart-repo-directions .rp-sheet.rp-full{position:relative;inset:auto;width:100%;min-height:490px;border:0;box-shadow:none}
+    #engelbart-repo-directions .rp-sheet-heading{display:flex;align-items:center;justify-content:space-between;padding:15px 19px;border-bottom:1px solid var(--rp-line);font-weight:500}
+    #engelbart-repo-directions .rp-sheet .rp-subtabs{padding:0 19px}
+    #engelbart-repo-directions .rp-detail{padding:20px;font-size:13px}
+    #engelbart-repo-directions .rp-caption{font-size:12px;color:var(--rp-dim);margin:0 0 16px}
+    #engelbart-repo-directions .rp-step{display:flex;align-items:center;gap:9px;padding:10px 0;border-bottom:1px solid var(--rp-line)}
+    #engelbart-repo-directions .rp-step i{width:14px;height:14px;flex:none}
+    #engelbart-repo-directions .rp-step span:last-child{margin-left:auto;font-size:12px;color:var(--rp-dim)}
+    #engelbart-repo-directions .rp-log{padding:13px;margin:15px 0;background:var(--rp-wash);border-radius:5px;font:12px/1.7 ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
+    #engelbart-repo-directions .rp-secondary{background:var(--rp-bg);border:1px solid var(--rp-line);padding:6px 10px;border-radius:5px;font-size:12px}
+    #engelbart-repo-directions .rp-env-row{display:block;margin:0 0 19px;font-size:12px}
+    #engelbart-repo-directions .rp-env-row>span{display:block;margin-bottom:7px;font-family:ui-monospace,monospace}
+    #engelbart-repo-directions .rp-env-row input{display:block;width:100%;padding:9px 10px;background:var(--rp-wash);color:var(--rp-ink);border:1px solid var(--rp-line);border-radius:5px;font:inherit}
+    #engelbart-repo-directions .rp-error{color:var(--rp-error)}
+    #engelbart-repo-directions .rp-preview{min-height:490px;padding:24px;background:var(--rp-wash)}
+    #engelbart-repo-directions .rp-address{background:var(--rp-bg);border:1px solid var(--rp-line);border-radius:6px;padding:10px 14px;font:12px ui-monospace,monospace;overflow-wrap:anywhere}
+    #engelbart-repo-directions .rp-preview-body{display:grid;place-content:center;min-height:340px;text-align:center;color:var(--rp-dim)}
+    #engelbart-repo-directions .rp-preview-body strong{font-size:30px;letter-spacing:2px;color:var(--rp-ink)}
+    @media(max-width:470px){#engelbart-repo-directions .rp-chrome{gap:8px}#engelbart-repo-directions .rp-tabs{gap:0}#engelbart-repo-directions .rp-tab{padding:5px}#engelbart-repo-directions .rp-document{padding:23px 18px 30px}#engelbart-repo-directions .rp-document h1{font-size:22px}#engelbart-repo-directions .rp-sheet{width:100%;box-shadow:none}#engelbart-repo-directions .rp-sheet-heading{padding:11px 16px}#engelbart-repo-directions .rp-detail{padding:16px}}
+    @media(pointer:coarse){#engelbart-repo-directions button{min-height:44px}#engelbart-repo-directions .rp-icon{width:44px}#engelbart-repo-directions input{font-size:16px!important}#engelbart-repo-directions .rp-menu{top:65px}}
+  </style>
+  <section class="rp-window" aria-label="Repo pane proposal">
+    <header class="rp-chrome">
+      <nav class="rp-tabs" role="tablist" aria-label="Workspace panes">
+        <button type="button" class="rp-tab" role="tab" data-pane="browser" aria-selected="false">Browser</button>
+        <button type="button" class="rp-tab" role="tab" aria-selected="false" disabled>Terminal</button>
+        <button type="button" class="rp-tab" role="tab" aria-selected="false" disabled>Paper</button>
+        <button type="button" class="rp-tab" role="tab" data-pane="repo" aria-selected="true">Repo</button>
+      </nav>
+      <div class="rp-actions">
+        <button type="button" class="rp-primary" data-primary>Building…</button>
+        <button type="button" class="rp-secondary" data-menu-toggle aria-label="Build logs and environment variables">Build logs &amp; env</button>
+      </div>
+    </header>
+    <div class="rp-menu" data-menu hidden>
+      <button type="button" data-show="build">Build logs</button>
+      <button type="button" data-show="environment">Environment variables</button>
+      <hr>
+      <button type="button" data-restart>Restart app</button>
+      <button type="button" data-stop>Stop sandbox</button>
+      <hr>
+      <button type="button" data-refresh>Refresh README</button>
+    </div>
+    <nav class="rp-subtabs" data-secondary-tabs aria-label="Repository views" hidden>
+      <button type="button" class="rp-subtab" data-view="readme" aria-selected="true">README</button>
+      <button type="button" class="rp-subtab" data-view="build" aria-selected="false">Build</button>
+      <button type="button" class="rp-subtab" data-view="environment" aria-selected="false">Environment</button>
+    </nav>
+    <div class="rp-stage" data-stage>
+      <article class="rp-document" data-readme aria-label="README">
+        <div class="rp-source"><i data-lucide="github" aria-hidden="true"></i><span>mqo00 / rope</span><span>·</span><span>README.md</span></div>
+        <h1>What Should We Engineer in Prompts?</h1>
+        <p class="rp-subtitle">Training Humans in Requirement-Driven LLM Use</p>
+        <p><a href="https://github.com/mqo00/rope" target="_blank" rel="noreferrer">View repository ↗</a> <span style="color:var(--rp-dim)">· TOCHI 2025</span></p>
+        <blockquote>Requirement-Oriented Prompt Engineering</blockquote>
+        <p>Deliberate practice in adding and clarifying requirements, with automated feedback.</p>
+        <h2>Content directory</h2>
+        <pre>├── README.md
+└── study_material</pre>
+      </article>
+      <aside class="rp-sheet" data-sheet aria-label="Run details" hidden>
+        <header class="rp-sheet-heading"><span>mqo00/rope</span><button type="button" class="rp-icon" data-close aria-label="Close run details"><i data-lucide="x" aria-hidden="true"></i></button></header>
+        <nav class="rp-subtabs" data-sheet-tabs aria-label="Run detail views">
+          <button type="button" class="rp-subtab" data-show="build" aria-selected="true">Build logs</button>
+          <button type="button" class="rp-subtab" data-show="environment" aria-selected="false">Environment</button>
+        </nav>
+        <div class="rp-detail" data-build>
+          <p class="rp-caption" data-run-label>Running · example build</p>
+          <div class="rp-step"><i data-lucide="check" aria-hidden="true"></i><span>Clone repository</span><span>4s</span></div>
+          <div class="rp-step"><i data-lucide="check" aria-hidden="true"></i><span>Install dependencies</span><span>18s</span></div>
+          <div class="rp-step"><i data-lucide="terminal" aria-hidden="true"></i><span data-step-label>Start application</span><span data-step-status>Ready</span></div>
+          <pre class="rp-log" data-log>$ npm run dev
+Application listening on port 3000
+Live preview verified</pre>
+          <button type="button" class="rp-secondary" data-build-action>Stop sandbox</button>
+        </div>
+        <div class="rp-detail" data-environment hidden>
+          <p class="rp-caption">Example values · masked after saving</p>
+          <label class="rp-env-row"><span>API_KEY</span><input type="password" value="example-value" autocomplete="off" aria-label="Example API key"></label>
+          <button type="button" class="rp-primary" data-save>Save &amp; restart app</button>
+          <p class="rp-caption" style="margin-top:15px">Same sandbox. Installed files are kept.</p>
+        </div>
+      </aside>
+    </div>
+    <section class="rp-preview" data-preview hidden aria-label="Browser preview destination">
+      <div class="rp-address">https://example-preview-host.example</div>
+      <div class="rp-preview-body"><strong>ROPE</strong><span>Live preview · illustrative content</span></div>
+    </section>
+    <span data-announcement aria-live="polite" style="position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)"></span>
+  </section>
+  <script>
+    (() => {
+      const root = document.getElementById('engelbart-repo-directions');
+      const get = selector => root.querySelector(selector);
+      const state = { layout: 'reading', run: 'building' };
+      let pane = 'repo', view = 'readme', menuOpen = false;
+      function render() {
+        const reading = state.layout === 'reading';
+        const inRepo = pane === 'repo';
+        get('[data-stage]').hidden = !inRepo;
+        get('[data-preview]').hidden = inRepo;
+        get('[data-secondary-tabs]').hidden = reading || !inRepo;
+        get('[data-menu]').hidden = !menuOpen;
+        get('[data-menu-toggle]').setAttribute('aria-expanded', String(menuOpen));
+        get('[data-readme]').hidden = !reading && view !== 'readme';
+        get('[data-sheet]').hidden = view === 'readme';
+        get('[data-sheet]').classList.toggle('rp-full', !reading);
+        get('[data-sheet-tabs]').hidden = !reading;
+        get('[data-close]').hidden = !reading;
+        get('[data-build]').hidden = view !== 'build';
+        get('[data-environment]').hidden = view !== 'environment';
+        root.querySelectorAll('[data-pane]').forEach(button => button.setAttribute('aria-selected', String(button.dataset.pane === pane)));
+        root.querySelectorAll('[data-view]').forEach(button => button.setAttribute('aria-selected', String(button.dataset.view === view)));
+        root.querySelectorAll('[data-sheet-tabs] [data-show]').forEach(button => button.setAttribute('aria-selected', String(button.dataset.show === view)));
+        get('[data-primary]').textContent = { running: 'Open live', building: 'Building…', failed: 'View failure', stopped: 'Run' }[state.run];
+        get('[data-run-label]').textContent = { running: 'Running · example build', building: 'Building · installing dependencies', failed: 'Build failed · application did not start', stopped: 'Stopped · previous build retained' }[state.run];
+        get('[data-run-label]').classList.toggle('rp-error', state.run === 'failed');
+        get('[data-step-label]').textContent = state.run === 'building' ? 'Install dependencies' : 'Start application';
+        get('[data-step-status]').textContent = { running: 'Ready', building: 'In progress', failed: 'Failed', stopped: 'Stopped' }[state.run];
+        get('[data-log]').textContent = { running: '$ npm run dev\nApplication listening on port 3000\nLive preview verified', building: '$ npm install\nResolving dependencies…', failed: '$ npm run dev\nError: required API_KEY is missing', stopped: 'Sandbox stopped.\nPrevious build logs are available.' }[state.run];
+        get('[data-build-action]').textContent = ['running', 'building'].includes(state.run) ? 'Stop sandbox' : 'Retry build';
+      }
+      function show(next) { pane = 'repo'; view = next; menuOpen = false; render(); }
+      root.querySelectorAll('[data-show]').forEach(button => button.addEventListener('click', () => show(button.dataset.show)));
+      root.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => show(button.dataset.view)));
+      root.querySelectorAll('[data-pane]').forEach(button => button.addEventListener('click', () => { pane = button.dataset.pane; menuOpen = false; render(); }));
+      get('[data-close]').addEventListener('click', () => { show('readme'); get('[data-menu-toggle]').focus(); });
+      get('[data-menu-toggle]').addEventListener('click', () => show('build'));
+      get('[data-primary]').addEventListener('click', () => {
+        if (state.run === 'running') { pane = 'browser'; menuOpen = false; render(); }
+        else { if (state.run === 'stopped') state.run = 'building'; show('build'); }
+      });
+      get('[data-build-action]').addEventListener('click', () => { state.run = ['running', 'building'].includes(state.run) ? 'stopped' : 'building'; render(); });
+      get('[data-stop]').addEventListener('click', () => { state.run = 'stopped'; menuOpen = false; render(); });
+      get('[data-restart]').addEventListener('click', () => { state.run = 'building'; show('build'); });
+      get('[data-save]').addEventListener('click', () => { state.run = 'building'; show('build'); });
+      get('[data-refresh]').addEventListener('click', () => { show('readme'); get('[data-announcement]').textContent = 'README refreshed in this mockup.'; });
+      root.addEventListener('keydown', event => { if (event.key === 'Escape') { menuOpen = false; view = 'readme'; render(); get('[data-menu-toggle]').focus(); } });
+      render();
+      if (globalThis.Tweak) {
+        const tweak = new Tweak({ container: root, onChange: () => { pane = 'repo'; view = 'readme'; menuOpen = false; render(); } });
+        tweak.addSelect(state, 'run', { label: 'Sandbox state', options: [{ label: 'Running', value: 'running' }, { label: 'Building', value: 'building' }, { label: 'Failed', value: 'failed' }, { label: 'Stopped', value: 'stopped' }] });
+      }
+    })();
+  </script>
+</div>
