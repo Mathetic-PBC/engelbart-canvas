@@ -80,3 +80,14 @@ test('@Bart, as the menu writes it, is a question like a typed @bart; both rende
   assert.match(doc.inlineHtml('@Bart hi'), /<span style="color:#0070f3;font-weight:500">@Bart<\/span> hi/);
   assert.equal(doc.parseLine('@Barty').type === 'bart', false);
 });
+
+test('sections: Notes, Websites, GitHub, Files, Sub-Workspaces in that order; Files takes everything else; empty ones are left out (Sidebar.dc.html, 2026-09-23)', async () => {
+  const { railSections, sectionOf } = await load();
+  const rows = [...library, row('k1', 'Evaluation harness', 'child'), row('g2', 'engelbart-canvas', 'folder', ['git'], { folder_path: '/Users/h/e' }), row('h1', 'saved.html', 'html')];
+  const sections = railSections(rows);
+  assert.deepEqual(sections.map((s) => s.label), ['Notes', 'Websites', 'GitHub', 'Files', 'Sub-Workspaces']);
+  assert.deepEqual(sections.map((s) => s.rows.map((r) => r.id)), [['n1'], ['w1'], ['g1', 'g2'], ['p1', 'i1', 'c1', 'f1', 'h1'], ['k1']]);
+  assert.equal(sectionOf(row('m1', 'README', 'md')), 'Files', 'an outside md is a file, not a note');
+  assert.deepEqual(railSections([row('p1', 'ColBERT', 'pdf', ['paper'])]).map((s) => s.key), ['Files']);
+  assert.deepEqual(railSections([]), []);
+});

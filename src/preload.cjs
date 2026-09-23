@@ -49,9 +49,7 @@ const engelbartAPI = Object.freeze({
   githubDisconnect: invoke('github-disconnect'),
   githubRepos: invoke('github-repos'),
   githubOpen: invoke('github-open'),
-  githubPaste: invoke('github-paste'),
   onGithub: (callback) => subscribe('engelbart:github', callback),
-  onGithubOpen: (callback) => subscribe('engelbart:github-open', callback),
   // ⌘J pressed while a Browser page has the keyboard (src/main/browser/views.cjs); the app's own pages see the key themselves.
   onNextWorkspace: (callback) => subscribe('engelbart:next-workspace', callback),
   listProjects: invoke('list-projects'),

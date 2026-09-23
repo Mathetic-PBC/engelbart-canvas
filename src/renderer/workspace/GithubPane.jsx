@@ -2,14 +2,10 @@ import React from 'react';
 import { api, errorMessage } from '../api.js';
 import { KIND } from '../ui/Icons.jsx';
 import { githubRows } from '../model/github.js';
+import { useGithubStatus } from './useGithubStatus.js';
 
-// The + menu's "Add from GitHub…" (2026-09-22): the menu's panel turns into GitHub. Signed out, opening it starts
-// GitHub's device flow (src/main/github/connection.cjs): the code shows here, already on the clipboard, and a window
-// opens on github.com/login/device, sharing the Browser pane's sign-in, to paste it into; Browser does the same in the
-// default browser (a passkey only works there). The window closes itself once GitHub says yes. Signed in, the
-// repositories the App can read: a search, the list (the lock marks a private one; `here` one already in this
-// workspace), and the App's install page for an account whose repositories are missing. Picking one adds it (or, when
-// the library holds it, brings it here); the menu closes.
+// The + menu stays open while authorization happens in the default browser.
+// On return the same view becomes the repository picker; website cookies remain in the browser.
 
 const text = (size, color = '#171717', weight = 400) => ({ font: `${weight} ${size}px/1.4 var(--font-sans)`, color });
 const plainButton = { padding: 0, border: 0, background: 'transparent', cursor: 'pointer' };
@@ -22,30 +18,6 @@ const LOCK = (
 
 function GhGlyph({ size = 14, color = '#171717' }) {
   return <span className="glyph-fit" style={{ flex: 'none', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', color }}><span style={{ display: 'flex', width: size, height: size }}>{KIND.git.glyph}</span></span>;
-}
-
-/** What the main process says of the sign-in, kept current. */
-function useGithubStatus() {
-  const [status, setStatus] = React.useState(null);
-  React.useEffect(() => {
-    let live = true;
-    api.githubStatus().then((value) => { if (live) setStatus(value); }).catch(() => {});
-    const off = api.onGithub((value) => { if (live && value) setStatus(value); });
-    return () => { live = false; off(); };
-  }, []);
-  return [status, setStatus];
-}
-
-function Code({ code }) {
-  const [copied, setCopied] = React.useState(false);
-  const copy = () => { api.copyText(code).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1400); }).catch(() => {}); };
-  React.useEffect(() => { copy(); }, [code]); // eslint-disable-line react-hooks/exhaustive-deps
-  return (
-    <button type="button" data-github-code={code} onClick={copy} title="Copy" style={{ ...plainButton, position: 'relative', display: 'block', width: '100%', padding: '14px 0 12px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fafafa', font: '600 21px/1 var(--font-mono)', letterSpacing: '2.5px', color: '#171717', textAlign: 'center', cursor: 'copy' }}>
-      {code}
-      <span style={{ position: 'absolute', right: 8, bottom: 4, ...text(10.5, '#8f8f8f'), letterSpacing: 0, opacity: copied ? 1 : 0, transition: 'opacity 160ms' }}>Copied</span>
-    </button>
-  );
 }
 
 export default function GithubPane({ library, inRail, onBack, onPick, busy }) {
@@ -113,12 +85,12 @@ export default function GithubPane({ library, inRail, onBack, onPick, busy }) {
       {status && !status.configured && <div style={{ ...text(12, '#e70022'), overflowWrap: 'anywhere' }}>{problem || 'GitHub is not set up: put the GitHub App’s client id in ~/.engelbart/config.json (github.clientId).'}</div>}
       {status && status.configured && !connected && (
         <>
-          {pending && <Code code={pending.userCode} />}
           {pending && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 10 }}>
-              <button type="button" className="hov-dim" data-github-window="1" onClick={() => api.githubOpen('device').catch((failure) => setProblem(errorMessage(failure)))} style={{ ...plainButton, padding: '7px 12px', borderRadius: 6, background: '#171717', ...text(12.5, '#fff', 500) }}>Open GitHub</button>
-              <button type="button" className="hov-ink" data-github-browser="1" onClick={() => api.openExternal(pending.verificationUri).catch((failure) => setProblem(errorMessage(failure)))} style={{ ...plainButton, ...text(12.5, '#4d4d4d') }}>Browser</button>
-              <span aria-hidden="true" className="github-wait" style={{ marginLeft: 'auto', width: 6, height: 6, borderRadius: '50%', background: '#0070f3' }} />
+            <div>
+              <div data-github-waiting="1" style={{ ...text(12), marginBottom: 8 }}>Finish signing in with GitHub in your browser. Engelbart will return automatically.</div>
+              {pending.userCode && <div style={{ marginBottom: 8 }}><code>{pending.userCode}</code>{' '}<button type="button" onClick={() => api.copyText(pending.userCode).catch((failure) => setProblem(errorMessage(failure)))} style={plainButton}>Copy code</button></div>}
+              <button type="button" data-github-window="1" onClick={() => api.githubOpen('device').catch((failure) => setProblem(errorMessage(failure)))} style={{ ...plainButton, ...text(12, '#171717', 500) }}>Open browser again</button>
+              <button type="button" data-github-cancel="1" onClick={() => api.githubCancel().then(setStatus).catch((failure) => setProblem(errorMessage(failure)))} style={{ ...plainButton, marginLeft: 14, ...text(12, '#8f8f8f') }}>Cancel</button>
             </div>
           )}
           {!pending && (
@@ -151,7 +123,7 @@ export default function GithubPane({ library, inRail, onBack, onPick, busy }) {
           {status.installUrl && (
             <button type="button" className="hov-ink-wash" data-github-install="1" onClick={() => api.githubOpen('install').catch((failure) => setProblem(errorMessage(failure)))} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', margin: '4px 0 0', padding: '7px 8px', border: 0, borderRadius: 6, background: 'transparent', textAlign: 'left', cursor: 'pointer', color: '#8f8f8f', transition: 'color 120ms' }}>
               <span style={{ flex: 'none', width: 16, textAlign: 'center', font: '500 13px/1 var(--font-sans)' }}>+</span>
-              <span style={{ ...text(13, 'inherit') }}>Install on an account…</span>
+              <span style={{ ...text(13, 'inherit') }}>Choose repositories in browser…</span>
             </button>
           )}
           {error && <div data-github-error="1" style={{ marginTop: 6, ...text(12, '#e70022'), overflowWrap: 'anywhere' }}>{error}</div>}

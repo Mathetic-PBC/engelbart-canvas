@@ -1,92 +1,65 @@
-# The GitHub App behind "Add from GitHub…"
+# GitHub sign-in
 
-Engelbart signs in to GitHub through a **GitHub App owned by Mathetic-PBC**, using GitHub's **device flow**
-(`src/main/github/connection.cjs`). The app on the desktop holds only the App's **client ID**, which is public. It
-never holds a client secret: the device flow needs none, neither for the first token nor for refreshing it (GitHub:
-`client_secret` is "Required unless the user access token was generated using the device flow").
+The shared **Engelbart Mathetic** GitHub App (`engelbart-mathetic`, client ID `Iv23liAZNYl96zlluMDs`) belongs to
+Mathetic-PBC. It is public, with **Contents: Read-only** and **Metadata: Read-only**. Users authorize access and install
+it on the repositories they choose; they never visit Developer Settings.
 
-Why a GitHub App and not an OAuth App: an OAuth App's only scope that reads private repositories is `repo`, which is
-read *and write* to every repository the person can reach. A GitHub App asks for **Contents: Read-only** and reads only
-where it is installed.
+## User experience
 
-## 1. Register the App (an owner of Mathetic-PBC does this once)
+**+ → Add from GitHub…** opens the user's default browser. GitHub can use that browser's existing login, saved
+passwords, and passkeys. The app menu shows **Finish signing in with GitHub in your browser**, **Open browser again**,
+and **Cancel**. There is no device code to copy for the shared registration.
 
-github.com → your picture → **Your organizations** → Mathetic-PBC → **Settings** → **Developer settings** →
-**GitHub Apps** → **New GitHub App**.
+After authorization the browser redirects to a temporary listener on `127.0.0.1`. Engelbart exchanges the one-use code,
+verifies the account, brings its window forward, and shows the repository picker. The browser shows a completion page.
+**Choose repositories in browser…** opens the GitHub App installation page. Returning to Engelbart refreshes the list.
 
-| Field | Value |
-|---|---|
-| GitHub App name | `Engelbart` (unique across GitHub, 34 characters at most; `Engelbart by Mathetic` if taken) |
-| Homepage URL | the Mathetic or Engelbart site (any full URL) |
-| Callback URL | leave empty (the device flow does not use one) |
-| Expire user authorization tokens | **keep checked** (8-hour tokens, 6-month refresh tokens; Engelbart refreshes them itself) |
-| Request user authorization (OAuth) during installation | unchecked |
-| **Enable Device Flow** | **checked** (without it GitHub answers `device_flow_disabled`) |
-| Setup URL | empty |
-| Webhook → Active | **unchecked** (Engelbart has no server to receive events) |
-| Repository permissions → **Contents** | **Read-only** |
-| Repository permissions → Metadata | Read-only (GitHub sets this itself) |
-| Everything else | No access |
-| Where can this GitHub App be installed? | **Any account** if people outside Mathetic-PBC will use Engelbart with their own repositories; **Only on this account** while it is only for Mathetic-PBC |
+GitHub website links (github.com, www.github.com, gist.github.com) open in the default browser, including links clicked
+inside Stage pages and popup/redirect requests. Repository listing and file access continue through GitHub's API in
+Engelbart. Website cookies remain in the external browser; they are never imported.
 
-**Create GitHub App.** On the page that follows, copy the **Client ID** (it starts `Iv23li…`; it is *not* the numeric
-App ID). Do **not** generate a client secret or a private key: nothing here uses them, and a secret that is never
-made can never leak.
+## Server setup
 
-The App's page address ends in its **slug**: `github.com/apps/<slug>` (for the name `Engelbart`, the slug is
-`engelbart`).
+The broker source lives in the `Mathetic-PBC/engelbart` website checkout:
 
-## 2. Install it on Mathetic-PBC
+- `lib/github-auth.cjs`: stateless authorization, callback and token/refresh exchange.
+- `api/github/{start,callback,token}.js`: Vercel entrypoints.
+- Fixed public origin: `https://engelbart.mathetic.com`.
+- GitHub App callback URL: `https://engelbart.mathetic.com/api/github/callback`.
+- Server-only Vercel environment variable: `GITHUB_CLIENT_SECRET`.
 
-On the App's settings page → **Install App** → Mathetic-PBC → **All repositories** (or only the ones Engelbart
-should see) → **Install**. A person's own repositories appear once they install it on their own account too:
-the GitHub view in Engelbart has **Install on an account…** for that.
+The new authorization-code flow requires one client secret, unlike the previous device flow. It belongs only in the
+server's encrypted environment, never the desktop app, config.json, Git history, logs, or renderer. No private key is
+needed. Until the secret is provisioned, the broker returns 503 `not_configured`. Deploy the broker and register the
+callback before distributing the updated desktop app.
 
-What a signed-in person sees is the intersection of what *they* can read and where the App is installed.
+Activated on September 23, 2026: the callback is registered, the secret is provisioned as a sensitive production
+variable, and the broker is deployed. Live authorization, account/installation lookup, and token refresh were verified.
+People installing Engelbart do not provision secrets or register their own GitHub Apps. Mathetic maintains this endpoint.
 
-## 3. Bundled registration (no user configuration)
+Desktop defaults remain the public client ID and slug in `src/main/store/home.cjs`. Custom registrations use the older
+device flow in the external browser; existing device-flow tokens still refresh directly with GitHub without a secret.
 
-Engelbart ships with the public **Engelbart Mathetic** registration owned by Mathetic-PBC:
+## Security and lifecycle
 
-```json
-"github": {
-  "clientId": "Iv23liAZNYl96zlluMDs",
-  "appSlug": "engelbart-mathetic"
-}
-```
+The desktop generates a random state and PKCE verifier in main. The broker signs a short-lived state containing the
+loopback port, state and PKCE challenge. Its callback redirects only to literal `127.0.0.1`, carrying a code and signed
+ticket, never access/refresh tokens. Token exchange requires the matching verifier, and GitHub enforces code reuse
+and expiry. The broker stores no user tokens or sessions, and refreshes tokens only on request from the desktop.
 
-These public identifiers are the `GITHUB_DEFAULTS` in `src/main/store/home.cjs`. Fresh installs and older
-configs with an absent or empty `github` block use them automatically. Users do not create a GitHub App
-or visit Developer Settings: they sign in and install Engelbart on the accounts/repositories they choose.
-The shared registration must allow **Any account** to install it. Its installation page is
-https://github.com/apps/engelbart-mathetic/installations/new.
+The loopback listener checks the Host, path, state and method, rejects requests with an Origin header, expires after
+ten minutes, and closes on cancellation/completion. Cancelled sign-ins and stale refreshes cannot resurrect a session.
+All broker responses disable caching; callback responses suppress referrers. The server does not log credentials.
 
-`~/.engelbart/config.json` can still override both identifiers for a separate registration; it is read
-again on every use. Never bundle access tokens, refresh tokens, client secrets, or private keys.
+Tokens are encrypted with Electron safeStorage in `~/.engelbart/github.json`; without a keychain, they remain only in
+memory. Sign out deletes them. Revocation is available in GitHub Settings → Applications → Authorized GitHub Apps.
 
-## 4. Sign in
+## Verification
 
-In a workspace: the sidebar's **+** → **Add from GitHub…**. A code appears (already on the clipboard) and a small
-window opens on github.com/login/device. That window shares the Browser pane's cookies, so if you are signed in to
-GitHub there you only paste the code and press **Authorize**. **Browser** does the same in your default browser
-instead: use it if you sign in to GitHub with a passkey kept on this Mac (Touch ID), which the unsigned build cannot offer. The window closes
-itself when GitHub says yes, and the list of repositories appears.
+- Desktop: `npm test` and `npm run build`.
+- Headless app: `npx electron scripts/smoke-github-signin.cjs` (local service fixture, disposable app data).
+- Broker: `node --test test/github-auth.test.cjs` in the website checkout.
 
-The token is kept in `~/.engelbart/github.json`, encrypted by the macOS keychain (Electron `safeStorage`); it is
-not readable as text. **Sign out** deletes it. To revoke Engelbart's access entirely: github.com → Settings →
-Applications → **Authorized GitHub Apps** → Engelbart → Revoke.
-
-## What the connection is used for
-
-- **Add from GitHub…**: the repositories the App can read, newest push first, searchable; a lock marks a private
-  one; picking one adds it to the library (or brings the library's row for it into the workspace).
-- **Adding any GitHub address** (the + field, the search, Save in the Browser): the repository's GitHub id, name and
-  description are now read signed in, so a private repository (such as `Mathetic-PBC/engelbart-canvas`) gets its id
-  too instead of falling back to its address.
-- **Hovering a repository with no clone**: its top-level files, for private repositories too.
-
-## Testing without GitHub
-
-`ENGELBART_GITHUB_WEB=http://127.0.0.1:<port>` (with `ENGELBART_GITHUB_CLIENT_ID` and `ENGELBART_GITHUB_APP_SLUG`)
-points the sign-in at a fake GitHub that answers `/login/device/code`, `/login/oauth/access_token`, `/user`,
-`/user/installations` and `/user/installations/<id>/repositories`. For scripted runs only.
+The headless check exercises external-browser handoff, no code-entry UI, cancel/retry/reopen, the real loopback callback,
+PKCE, automatic app return, repository picking, and external installation/website navigation. It does not authorize a
+real GitHub account. `ENGELBART_GITHUB_BROKER`, `ENGELBART_GITHUB_WEB`, and `ENGELBART_GITHUB_API` are test overrides.

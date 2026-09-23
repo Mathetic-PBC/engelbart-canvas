@@ -404,3 +404,24 @@ test('views: find in the page, and the keys a page cannot keep (⌘T, ⌘W; ⇧�
   views.shortcut('find-next');
   assert.deepEqual(sent.at(-1), ['browser:shortcut', { name: 'find-next', tab: 'a' }]);
 });
+
+test('GitHub webpages open in the default browser from direct loads, links, redirects and popups', () => {
+  const f = fakeElectron();
+  const external = [];
+  f.electron.shell = { openExternal: async url => { external.push(url); } };
+  const views = createBrowserViews({ electron: f.electron, getWindow: () => f.win, send() {} });
+  views.open('github', 'https://github.com/Mathetic-PBC/engelbart-canvas');
+  assert.equal(external.length, 1);
+  assert.equal(f.made.length, 0);
+  views.open('web', 'https://example.com');
+  const contents = f.made[0].webContents;
+  for (const event of ['will-navigate', 'will-redirect']) {
+    let stopped = false;
+    contents.emit(event, { preventDefault() { stopped = true; } }, 'https://github.com/login');
+    assert.equal(stopped, true);
+  }
+  assert.deepEqual(contents.windowOpen({ url: 'https://github.com/login', disposition: 'new-window' }), { action: 'deny' });
+  assert.equal(external.length, 4);
+  views.open('lookalike', 'https://github.com.evil.example');
+  assert.equal(external.length, 4);
+});

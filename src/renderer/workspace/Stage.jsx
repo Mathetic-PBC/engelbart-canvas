@@ -1,4 +1,5 @@
 import React from 'react';
+import { isGithubPage } from '../../shared/github.cjs';
 import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
 import { KindGlyph, SEARCH, FOLDER } from '../ui/Icons.jsx';
@@ -6,7 +7,6 @@ import { kindOf, stripScheme, OPEN_IN_BROWSER } from '../model/address.js';
 import { MAX_TABS, addressKey, afterClose, looksLikePlace, placeTab, stageRows, tabKey, tabPlace, parseTable } from '../model/stage.js';
 import { markdownBlocks, inlineRuns } from '../model/markdown.js';
 import PaperView from '../pdf/PaperView.jsx';
-import GithubSignIn, { useGithubStatus } from './GithubSignIn.jsx';
 
 // The Stage (Claude Design "Add - Mention Stage.dc.html", 2026-09-23): the Browser and the Paper pane made one. A tab
 // shows whatever it was given — a library row, a link, a file on disk — in the way its format asks:
@@ -309,7 +309,6 @@ const clearRanges = () => { const h = highlights(); if (h) { h.delete(FIND); h.d
 /* --------------------------------------------------------------------------------------------------- Stage */
 
 const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull, onShow, onPage, onFront, save, library, inRail, onError }, ref) {
-  const [githubStatus] = useGithubStatus();
   const [tabs, setTabs] = React.useState(() => [blankTab()]);
   const [activeId, setActiveId] = React.useState(() => null);
   const [draft, setDraft] = React.useState('');
@@ -485,6 +484,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
 
   // A library row in a tab of its own: its file when it has one (read here), else its address.
   const showRow = (id, row) => {
+    if (isGithubPage(row.url) && !row.path) { quiet(api.openExternal(row.url)); return; }
     update(id, (t) => ({ ...t, item: row.id, row }));
     if (row.type === 'pdf' && row.path) {
       const seq = (pdfSeq.current += 1);
@@ -501,6 +501,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
 
   // Typed (or picked) into the tab in front: a path is read, anything else is where the page goes.
   const navigate = async (id, input) => {
+    if (isGithubPage(kindOf(input).url)) { await api.openExternal(kindOf(input).url); setTyping(false); setDraft(stripScheme(tab.url)); return; }
     update(id, (t) => ({ ...t, pdf: null, pdfForward: null, item: null, row: null }));
     let next = kindOf(input);
     const path = next.kind === 'disk' || next.kind === 'file' || (!hasScheme(input) && next.kind !== 'local' && next.kind !== 'sandbox' && next.kind !== 'blank' && looksLikePlace(input) && /^[.~/]|\.[a-z0-9]{1,8}(?:[#?].*)?$/i.test(input) && !/\.(com|org|net|io|dev|ai|app|edu|gov|co|xyz|me)(?:[/:#?].*)?$/i.test(input));
@@ -527,36 +528,15 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
 
   // Opened from elsewhere — the sidebar, an @mention, a link in the document or the terminal, the all-projects screen.
   const openRow = (row) => {
+    if (isGithubPage(row.url) && !row.path) { quiet(api.openExternal(row.url)); return; }
     const id = claim(`i:${row.id}`);
     if (id) showRow(id, row);
   };
   const openInput = (input) => {
     const k0 = kindOf(input);
+    if (isGithubPage(k0.url)) { quiet(api.openExternal(k0.url)); return; }
     const id = claim(isPage(k0) && !DISK_URL.test(input) ? `l:${addressKey(k0.url)}` : '');
     if (id) void navigate(id, input);
-  };
-  // Keep a dedicated sign-in tab: code help survives closing the sidebar, switching modes,
-  // and GitHub's login redirects. Reopening it must not reset a login already in progress.
-  const openGithub = ({ url }) => {
-    if (!url) return;
-    const current = tabsRef.current;
-    const existing = current.find((t) => t.github);
-    const empty = current.find((t) => t.url === 'about:blank' && !t.claimed && !t.file && !t.pdf && !t.opened);
-    if (!existing && !empty && current.length >= MAX_TABS) {
-      if (onError) onError(new Error('Close a Stage tab, then reopen GitHub sign-in.'));
-      return;
-    }
-    const next = existing || { ...blankTab(), id: empty ? empty.id : newId(), github: true };
-    const reload = !existing || existing.githubStart !== url;
-    const changed = { ...next, github: true, githubStart: url, ...(reload ? { url, file: null, pdf: null, web: null } : {}) };
-    const list = existing || empty ? current.map((t) => t.id === next.id ? changed : t) : [...current, changed];
-    tabsRef.current = list;
-    setTabs(list);
-    setActiveId(next.id);
-    setTyping(false);
-    setFinding(false);
-    if (onShow) onShow();
-    if (reload) load(next.id, url);
   };
   // Files from the computer open as tabs of their own; + Save is what puts them in the library. Past 15, the rest are left.
   const openPaths = (paths) => {
@@ -627,10 +607,9 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     const offClosed = api.onBrowserClosed(({ id }) => dropTab(id));
     const offLogin = api.onBrowserLogin((request) => setLogins((current) => [...current, request]));
     const offFocus = api.onBrowserFocusAddress(() => { if (addressRef.current) { addressRef.current.focus(); addressRef.current.select(); } });
-    const offGithub = api.onGithubOpen((request) => { if (keys.current) keys.current.openGithub(request); });
     const onAsk = (event) => { if (event.detail && event.detail.url && keys.current) keys.current.openInput(event.detail.url); }; // a link clicked in the terminal
     window.addEventListener(OPEN_IN_BROWSER, onAsk);
-    return () => { offState(); offPdf(); offFound(); offShortcut(); offOpen(); offClosed(); offLogin(); offFocus(); offGithub(); window.removeEventListener(OPEN_IN_BROWSER, onAsk); quiet(api.browserCloseAll()); };
+    return () => { offState(); offPdf(); offFound(); offShortcut(); offOpen(); offClosed(); offLogin(); offFocus(); window.removeEventListener(OPEN_IN_BROWSER, onAsk); quiet(api.browserCloseAll()); };
   }, [adoptTab, dropTab, receivePdf]);
 
   // The address follows the tab unless it is being typed in.
@@ -797,7 +776,6 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     tabId: tab.id,
     finding,
     openInput,
-    openGithub,
     shortcut: (name, from) => {
       if (name === 'new-tab') { if (onShow) onShow(); newTab(); return; }
       if (name === 'close-tab') { if (onShow) onShow(); closeTab(from || tab.id); return; }
@@ -984,7 +962,6 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
         )}
       </div>
 
-      {tab.github && <GithubSignIn tabId={tab.id} status={githubStatus} />}
       <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column', background: '#fafafa' }}>
         {finding && <FindCard inputRef={findRef} text={findText} found={matches} onText={setFindText} onStep={(step) => runFind(findText, step)} onClose={closeFind} />}
         {/* a page sits under a band while the find card is open: a native view would cover it */}

@@ -1,18 +1,9 @@
 'use strict';
 
-// The connection to GitHub behind "Add from GitHub…" (2026-09-22). The person signs in once to the GitHub App that
-// Mathetic-PBC owns (how to make it: docs/github-app-setup.md) through GitHub's device flow: GitHub gives a code, a
-// window opens on github.com/login/device, the person types the code and authorizes, and this module, which has been
-// asking GitHub every few seconds, receives a user token. The app holds only the App's client id, which is public: the
-// device flow needs no client secret, neither for the first token nor for refreshing it.
-//
-// The token lasts 8 hours and its refresh token 6 months (unless the App opted out of expiring tokens: then it lasts
-// until revoked). Both are kept in <root>/github.json, encrypted by the system keychain (Electron safeStorage, passed
-// in as `crypt`); without a keychain they live only as long as the app runs. What the token reads is the intersection
-// of what the person can read and where the App is installed, so repositories come from the App's installations.
-//
-// Electron-free: the network (`fetch`), the keychain (`crypt`), the window (`openVerification` / `closeVerification`)
-// and the clock are passed in, and test/github.test.cjs drives all of it with fakes.
+// GitHub App access for the repository picker. The shared registration uses browser authorization
+// with PKCE through the server broker; a random loopback callback returns to Engelbart automatically.
+// Old device-flow tokens and custom registrations remain supported. Tokens stay in main, encrypted
+// with the system keychain. tokenFlow records whether refresh needs the broker or GitHub directly.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -63,6 +54,8 @@ function createGithub({
   crypt = { available: () => false, encrypt: () => { throw new Error('no keychain'); }, decrypt: () => { throw new Error('no keychain'); } },
   openVerification = () => {},
   closeVerification = () => {},
+  browserAuth = () => null,
+  onConnected = () => {},
   onChange = () => {},
   now = Date.now,
   sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
@@ -74,6 +67,8 @@ function createGithub({
   let problem = '';
   let persisted = true;
   let refreshing = null;
+  let starting = null;
+  let generation = 0;
 
   const clientId = () => String((settings() || {}).clientId || '');
   const appSlug = () => String((settings() || {}).appSlug || '');
@@ -105,6 +100,7 @@ function createGithub({
           accessExpiresAt: positive(raw.accessExpiresAt),
           refresh: typeof raw.refresh === 'string' ? crypt.decrypt(raw.refresh) : null,
           refreshExpiresAt: positive(raw.refreshExpiresAt),
+          tokenFlow: raw.tokenFlow === 'browser' ? 'browser' : 'device',
         };
       }
     } catch {
@@ -121,6 +117,7 @@ function createGithub({
       v: 1, login: next.login, name: next.name, avatarUrl: next.avatarUrl, id: next.id,
       access: crypt.encrypt(next.access), accessExpiresAt: next.accessExpiresAt,
       refresh: next.refresh ? crypt.encrypt(next.refresh) : null, refreshExpiresAt: next.refreshExpiresAt,
+      tokenFlow: next.tokenFlow || 'device',
     };
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const temporary = `${file}.${process.pid}.tmp`;
@@ -157,7 +154,7 @@ function createGithub({
       name: account ? account.name : '',
       avatarUrl: account ? account.avatarUrl : '',
       persisted: account ? persisted : true,
-      pending: pending ? { userCode: pending.userCode, verificationUri: pending.verificationUri, expiresAt: pending.expiresAt } : null,
+      pending: pending ? { kind: pending.kind || 'device', ...(pending.userCode ? { userCode: pending.userCode } : {}), verificationUri: pending.verificationUri, expiresAt: pending.expiresAt } : null,
       error: problem,
       installUrl: appSlug() ? `${web}/apps/${appSlug()}/installations/new` : '',
     };
@@ -166,12 +163,40 @@ function createGithub({
   /* ---------------------------------------------------------- device flow */
 
   /** Starts signing in (or shows the window again for a sign-in already waiting). Answers the status, with the code. */
-  async function connect() {
+  function connect() {
+    if (!starting) starting = begin().finally(() => { starting = null; });
+    return starting;
+  }
+
+  async function begin() {
     if (!clientId()) throw new GithubError('GitHub is not set up: put the GitHub App’s client id in ~/.engelbart/config.json (github.clientId).', 'unconfigured');
-    if (pending && now() < pending.expiresAt) { openVerification(pending.verificationUri); return status(); }
+    if (pending && now() < pending.expiresAt) { await openVerification(pending.verificationUri); return status(); }
+    if (pending && pending.cancel) pending.cancel();
+    const attempt = ++generation;
     problem = '';
+    const browser = browserAuth();
+    if (browser) {
+      const auth = await browser.start();
+      if (attempt !== generation) { auth.cancel(); return status(); }
+      const flow = { kind: 'browser', verificationUri: auth.url, expiresAt: auth.expiresAt, cancel: auth.cancel };
+      pending = flow;
+      changed();
+      void auth.result.then(async data => {
+        if (pending !== flow) return;
+        await accept(data, () => pending === flow, 'browser');
+        if (pending !== flow) return;
+        pending = null; problem = ''; changed(); onConnected();
+      }).catch(error => {
+        if (pending !== flow) return;
+        pending = null; problem = error.message; changed();
+      });
+      try { await openVerification(flow.verificationUri); }
+      catch (error) { cancel(); problem = 'Could not open your browser. Try signing in again.'; changed(); throw error; }
+      return status();
+    }
     const answer = await call(`${web}/login/device/code`, { method: 'POST', form: { client_id: clientId() } });
     const data = answer.data || {};
+    if (attempt !== generation) return status();
     if (!answer.ok || !data.device_code || !data.user_code) {
       problem = FAILURES[data.error] || data.error_description || `GitHub answered ${answer.status}.`;
       changed();
@@ -186,7 +211,7 @@ function createGithub({
     };
     pending = flow;
     changed();
-    openVerification(flow.verificationUri);
+    await openVerification(flow.verificationUri);
     void wait(flow);
     return status();
   }
@@ -203,9 +228,11 @@ function createGithub({
         continue; // the network blinked: keep waiting until the code expires
       }
       const data = answer.data || {};
+      if (pending !== flow) return;
       if (data.access_token) {
         try {
-          await accept(data);
+          await accept(data, () => pending === flow);
+          if (pending !== flow) return;
           problem = '';
         } catch (error) {
           problem = error.message;
@@ -213,6 +240,7 @@ function createGithub({
         if (pending === flow) pending = null;
         closeVerification();
         changed();
+        if (saved) onConnected();
         return;
       }
       if (data.error === 'authorization_pending') continue;
@@ -228,15 +256,18 @@ function createGithub({
   }
 
   /** A token arrived: who it belongs to, then keep it. */
-  async function accept(data) {
+  async function accept(data, active = () => true, tokenFlow = 'device') {
     const tokens = tokensFrom(data, now());
     const who = await call(`${api}/user`, { token: tokens.access });
     if (!who.ok || !who.data || typeof who.data.login !== 'string') throw new GithubError('GitHub gave a token but would not say whose it is.', 'user');
-    keep({ login: who.data.login, name: typeof who.data.name === 'string' ? who.data.name : '', avatarUrl: typeof who.data.avatar_url === 'string' ? who.data.avatar_url : '', id: who.data.id == null ? null : String(who.data.id), ...tokens });
+    if (!active()) return;
+    keep({ login: who.data.login, name: typeof who.data.name === 'string' ? who.data.name : '', avatarUrl: typeof who.data.avatar_url === 'string' ? who.data.avatar_url : '', id: who.data.id == null ? null : String(who.data.id), ...tokens, tokenFlow });
   }
 
   function cancel() {
+    generation += 1;
     if (!pending) return status();
+    if (pending.cancel) pending.cancel();
     pending = null;
     closeVerification();
     changed();
@@ -244,8 +275,7 @@ function createGithub({
   }
 
   function disconnect() {
-    pending = null;
-    closeVerification();
+    cancel();
     forget('');
     changed();
     return status();
@@ -267,11 +297,16 @@ function createGithub({
       refreshing = (async () => {
         let answer;
         try {
-          answer = await call(`${web}/login/oauth/access_token`, { method: 'POST', form: { client_id: clientId(), grant_type: 'refresh_token', refresh_token: account.refresh } });
+          if (account.tokenFlow === 'browser') {
+            const browser = browserAuth();
+            if (!browser) throw new Error('Browser authorization unavailable');
+            answer = { data: await browser.refresh(account.refresh) };
+          } else answer = await call(`${web}/login/oauth/access_token`, { method: 'POST', form: { client_id: clientId(), grant_type: 'refresh_token', refresh_token: account.refresh } });
         } catch {
           return null; // offline: nothing works now; the refresh token is still good for later
         }
         const data = answer.data || {};
+        if (saved !== account) return null;
         if (!data.access_token && !data.error) return null; // GitHub had a bad moment: keep the sign-in for later
         if (!data.access_token) {
           forget(data.error === 'bad_refresh_token' ? 'The GitHub sign-in expired. Sign in again.' : (data.error_description || 'GitHub would not renew the sign-in. Sign in again.'));

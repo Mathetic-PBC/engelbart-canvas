@@ -31,7 +31,7 @@ const { assertTrustedRenderer, parseExternalUrl } = require('./ipc-validation.cj
 const { createStore, registerEngelbartIpc } = require('./ipc.cjs');
 const { PARTITION: BROWSER_PARTITION, createBrowserViews, registerBrowserIpc } = require('./browser/views.cjs');
 const { createGithub } = require('./github/connection.cjs');
-const { pasteDeviceCode } = require('./github/paste.cjs');
+const { createBrowserAuth, CLIENT_ID: GITHUB_CLIENT_ID } = require('./github/browser-auth.cjs');
 const { createRepoIdentifier, createRemoteFileLister } = require('./store/page-meta.cjs');
 const { checkWebPdfs, readPdfResponse } = require('./store/web-pdfs.cjs');
 const { createPostItViews } = require('./post-its/views.cjs');
@@ -402,10 +402,11 @@ if (!hasSingleInstanceLock) {
       onLayerChange: () => postItViews.raise(),
     });
     registerBrowserIpc({ ipcMain, trustedHandler, views: browserViews });
-    // GitHub (src/main/github): device-flow sign-in in the Stage's native browser and the token
+    // GitHub (src/main/github): default-browser sign-in with an automatic loopback return, and the token
     // that lets the library read private repositories. ENGELBART_GITHUB_* name a fake GitHub, for scripted runs only.
     const githubWeb = process.env.ENGELBART_GITHUB_WEB || null;
-    const openGithubPage = (url) => sendToRenderer('engelbart:github-open', { url });
+    const openGithubPage = (url) => electronShell.openExternal(parseExternalUrl(url).href);
+    const githubBrowserAuth = createBrowserAuth({ ...(process.env.ENGELBART_GITHUB_BROKER ? { broker: process.env.ENGELBART_GITHUB_BROKER } : {}) });
     const github = createGithub({
       settings: () => {
         const chosen = store.config().github || {};
@@ -418,17 +419,14 @@ if (!hasSingleInstanceLock) {
         decrypt: (text) => safeStorage.decryptString(Buffer.from(text, 'base64')),
       },
       openVerification: openGithubPage,
+      browserAuth: () => (process.env.ENGELBART_GITHUB_CLIENT_ID || (store.config().github || {}).clientId) === GITHUB_CLIENT_ID ? githubBrowserAuth : null,
+      onConnected: () => { if (mainWindow && !mainWindow.isDestroyed()) { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); } },
       onChange: (status) => sendToRenderer('engelbart:github', status),
       ...(githubWeb ? { web: githubWeb, api: process.env.ENGELBART_GITHUB_API || githubWeb } : {}),
     });
     registerEngelbartIpc({
       github,
       openGithubPage,
-      pasteGithubCode: async (id) => {
-        const { pending } = github.status();
-        if (!pending || Date.now() >= pending.expiresAt) throw new Error('The code expired. Start GitHub sign-in again.');
-        return pasteDeviceCode(browserViews.visibleContents(id), pending, githubWeb || 'https://github.com');
-      },
       identifyRepo: createRepoIdentifier({ auth: github.authHeaders }),
       listRemoteFiles: createRemoteFileLister({ auth: github.authHeaders }),
       ipcMain,

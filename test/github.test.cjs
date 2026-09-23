@@ -219,3 +219,31 @@ test('page-meta asks GitHub signed in when there is a token, and again signed ou
   await createRepoIdentifier({ fetch, auth: async () => ({}) })('o', 'r');
   assert.deepEqual(seen, [null], 'signed out: no header at all');
 });
+
+test('browser flow shares a pending attempt, saves the token method, refreshes through broker, and ignores cancelled results', async () => {
+  let resolveFlow, refreshed = 0, started = 0, cancelled = 0, connected = 0;
+  const browserAuth = {
+    start: async () => { started += 1; return { url: 'https://engelbart.example/start', expiresAt: 9999999, result: new Promise(r => { resolveFlow = r; }), cancel: () => { cancelled += 1; } }; },
+    refresh: async () => { refreshed += 1; return { access_token: 'ghu_refreshed', expires_in: 28800 }; },
+  };
+  const f = setup(() => user, { browserAuth: () => browserAuth, onConnected: () => { connected += 1; } });
+  await Promise.all([f.github.connect(), f.github.connect()]);
+  assert.equal(started, 1);
+  assert.equal(f.github.status().pending.kind, 'browser');
+  assert.equal(f.github.status().pending.userCode, undefined);
+  resolveFlow({ access_token: 'ghu_browser', refresh_token: 'ghr_browser', expires_in: 28800 });
+  await until(() => f.github.status().connected);
+  assert.equal(connected, 1);
+  assert.equal(JSON.parse(fs.readFileSync(f.file)).tokenFlow, 'browser');
+  f.clock.t += 8 * 3600 * 1000;
+  assert.equal(await f.github.token(), 'ghu_refreshed');
+  assert.equal(refreshed, 1);
+  f.github.disconnect();
+  await f.github.connect();
+  f.github.cancel();
+  resolveFlow({ access_token: 'ghu_cancelled' });
+  await settle(); await settle();
+  assert.equal(f.github.status().connected, false);
+  assert.equal(cancelled, 1);
+  fs.rmSync(f.dir, { recursive: true, force: true });
+});

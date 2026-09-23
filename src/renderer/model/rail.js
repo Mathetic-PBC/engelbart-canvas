@@ -1,7 +1,35 @@
 // What the workspace sidebar's search and the document's @ menu list (Claude Design "Canvas.dc.html" and
 // "Add - Mention.dc.html", 2026-09-22). Pure: the rows come in, the lists go out; the screen does the adding.
 
-import { kindLabel } from './kind.js';
+import { hasTag, isNote, kindLabel } from './kind.js';
+
+/**
+ * The sidebar's sections, in order (Claude Design "Sidebar.dc.html", 2026-09-23): Notes, Websites, GitHub, Files and
+ * Sub-Workspaces. Files is everything else (papers, folders, pages on disk, data, images: "files should be de facto other").
+ */
+export const RAIL_SECTIONS = [
+  { key: 'Notes', label: 'Notes' },
+  { key: 'Websites', label: 'Websites' },
+  { key: 'GitHub', label: 'GitHub' },
+  { key: 'Files', label: 'Files' },
+  { key: 'Workspaces', label: 'Sub-Workspaces' },
+];
+
+/** Which section a rail row sorts into: a repository by its tag whether it is an address or a clone. */
+export function sectionOf(row) {
+  if (row.type === 'child' || row.type === 'workspace') return 'Workspaces';
+  if (isNote(row)) return 'Notes';
+  if (hasTag(row, 'git')) return 'GitHub';
+  if (row.type === 'website') return 'Websites';
+  return 'Files';
+}
+
+/** The rail's rows under their sections, each keeping the rows' order; a section with nothing in it is not shown. */
+export function railSections(rows) {
+  const by = new Map(RAIL_SECTIONS.map((section) => [section.key, []]));
+  for (const row of rows) by.get(sectionOf(row)).push(row);
+  return RAIL_SECTIONS.map((section) => ({ ...section, rows: by.get(section.key) })).filter((section) => section.rows.length > 0);
+}
 
 /** Something the library could add, by its spelling alone: a web address, an arXiv or DOI id, a git remote, a path from / or ~/. The main process decides for real. */
 export function looksAddable(value) {

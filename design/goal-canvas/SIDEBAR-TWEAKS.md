@@ -161,3 +161,31 @@ i should be able to drag the right, too. what i mean is the right boundary.
 
 ### 58
 Apply drawing  *(drawing: "get rid of this dividing line" under Browser / Terminal / Paper)*
+
+## Sidebar.dc.html — chat "Sidebar editing file" (read 2026-09-23)
+
+Read from the project record in a signed-in Chrome tab (`claude_design` MCP answered 403). User messages verbatim, repeats and empty/attachment-only turns dropped; implemented in `src/renderer/workspace/Rail.jsx` + `model/rail.js railSections`, spec §2 #92.
+
+- create a new file allowing me to just edit this sidebar
+- it should look like this *(two screenshots)*
+- add other library types like pdfs, sub workspaces, notes, etc.
+- Add "Workspace" above the workspace at the top to make it clear it is a workspace. Get rid of the 3/3 or 9/9 thing. get rid of the csv. also instead of the grey around the library stuff put it around the workspace
+- grey should go around workspace text too
+- add labels that auto organize the library items. in order: Notes, Websites, Papers, Folders, Workspaces, Other — they should be collapsable but default all fully expanded
+- Add context next to the plus
+- sorry add a github section too. Other should by default be collapsed. also workspaces should be below other.
+- add a collapse all and expand all
+- it should just say expand if i hit it then it should say collapse. so simplify it
+- other shouold be expanded by default too
+- make the title font for workspaces and the library label match the rest of our fonts
+- the library workspace icon shoulkd be the real one
+- make workspace icon larger
+- For Workspaces it should say "Sub-Workspaces"
+- make workspace icon at the top (not library) 2x size
+- makje it 0.8 the current size
+- put collap[se inline with notes just to add back some space
+- make it black tho
+- Collapse all actually
+- is there anything we could do to make this simpler?
+  - *[assistant offered: 1 fewer sections / merge to Notes, Links, Files, Sub-Workspaces; 2 drop Collapse all; 3 drop the "Workspace" label; 4 one field for search + URL; 5 quieter headers, › only on hover]*
+- ok yeah merge papers and folders and other to files, and files should be de facto other. Quieter headers. Hide the › chevrons until you hover, so the list reads as plain grey labels.

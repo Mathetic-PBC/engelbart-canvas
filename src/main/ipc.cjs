@@ -105,7 +105,7 @@ function createStore({ homeDir, fixturesDir, inspectPdf: readPdf = null, afterOp
   return { layout, context, config: describe, setTestMode, resetTestData, close: closeAll };
 }
 
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, pasteGithubCode = async () => false }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {} }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const withCtx = (fn) => async (...args) => fn(await store.context(), ...args);
 
@@ -127,21 +127,20 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   const navChanged = () => notify('engelbart:nav', {});
   handle('nav', withCtx((ctx) => projects.readNav(ctx)));
 
-  // GitHub (src/main/github/connection.cjs): signing in through the device flow, and the repositories the App can read.
+  // GitHub (src/main/github/connection.cjs): signing in through the default browser, and the repositories the App can read.
   // Every change of the sign-in is announced on `engelbart:github` with the status. `github-open` shows GitHub's device
-  // page again, or the App's install page, on Stage. The paste action uses the current code in main.
+  // authorization page again, or the App's install page, in the default browser.
   const gh = () => { if (!github) throw new Error('GitHub is not available'); return github; };
   handle('github-status', () => (github ? github.status() : { configured: false, connected: false, pending: null, error: '', installUrl: '' }));
   handle('github-connect', () => gh().connect());
   handle('github-cancel', () => gh().cancel());
   handle('github-disconnect', () => gh().disconnect());
   handle('github-repos', () => gh().repos());
-  handle('github-paste', (id) => pasteGithubCode(str(id, 'browser tab id', 128)));
-  handle('github-open', (which) => {
+  handle('github-open', async (which) => {
     const status = gh().status();
     const url = which === 'install' ? status.installUrl : status.pending && status.pending.verificationUri;
     if (!url) throw new Error(which === 'install' ? 'The GitHub App has no slug in ~/.engelbart/config.json (github.appSlug).' : 'No sign-in is waiting');
-    openGithubPage(url);
+    await openGithubPage(url);
     return true;
   });
   handle('record-edit', withCtx((ctx, pid, wid) => { projects.recordEdit(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); navChanged(); return true; }));
