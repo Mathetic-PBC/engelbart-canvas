@@ -1,0 +1,11 @@
+/* A post-it (2026-09-22): a flat yellow rectangle, no shadow, tilt or folded corner. */
+.postit-face{position:absolute;inset:0;box-sizing:border-box;display:flex;flex-direction:column;background:#fff2a0;color:#171717;overflow:hidden;transition:background 120ms}
+.postit-head{flex:none;height:14px}
+.postit-body{flex:1;min-height:0;overflow:hidden;padding:0 16px;position:relative}
+.postit-fit{transform-origin:0 0}
+.postit-foot{flex:none;height:28px;display:flex;align-items:center;justify-content:space-between;padding:0 26px 0 10px}
+.postit-btn{display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:6px;background:transparent;color:#705717;cursor:pointer;padding:0}
+.postit-btn:hover{background:rgba(112,87,23,.1);color:#171717}
+.postit-btn:focus-visible{outline:2px solid #a08f52;outline-offset:-2px}
+.postit-copy{width:24px;height:22px}
+.postit-note{height:22px;padding:0 7px;font:500 12px/1 var(--font-sans)}

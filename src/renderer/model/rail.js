@@ -14,17 +14,13 @@ export function looksAddable(value) {
 /** What a row is searched by: its name, where it is, and the words shown beside it. */
 const hay = (row) => [row.name, row.url || '', row.path || '', row.folder_path || '', kindLabel(row)].join(' ').toLowerCase();
 
-const NEW_NOTE = { kind: 'note', key: 'new:note', name: 'Note', glyph: 'note', tag: 'new' };
-const NEW_WORKSPACE = { kind: 'child', key: 'new:workspace', name: 'Workspace', glyph: 'workspace', tag: 'new' };
-const MAX_SEARCH = 40;
-
 /**
- * The search field under Workspace (Canvas.dc.html `results`): it brings into this workspace what the library already
- * holds. Empty, it offers a new Note or Workspace and four things from the library that are not here yet; typed, the
- * library's matches, then Note and Workspace (named after what was typed). An address or a path is the one row the
- * library has for it (`here` when it is on the rail already) or a new one — that needs `found`, the main process's
- * answer (library.lookupItem): undefined while it is on its way.
- * Rows: { kind: 'item' | 'fresh' | 'note' | 'child', key, name, tag, row?, found? }; a tag that starts with "new" draws a +.
+ * The search field under the workspace's name (Canvas.dc.html `results`): it finds anything the library holds and brings
+ * it into this workspace. Empty, it offers four things from the library that are not here yet; typed, every match in the
+ * library (no cap), what is here already included (`here`: picking one opens it). An address or a path is the one row the library
+ * has for it (`here` when it is on the rail already) or a new one — that needs `found`, the main process's answer
+ * (library.lookupItem): undefined while it is on its way. Making a note or a nested workspace is the +'s job (2026-09-22).
+ * Rows: { kind: 'item' | 'fresh', key, name, tag, row?, found? }; a tag that starts with "new" draws a +.
  */
 export function searchRows({ query, library, inRail, found }) {
   const typed = String(query || '').trim();
@@ -34,11 +30,10 @@ export function searchRows({ query, library, inRail, found }) {
     return found.found ? [{ kind: 'fresh', key: `fresh:${typed}`, found: found.found, name: found.found.name, tag: `new ${kindLabel(found.found)}` }] : [];
   }
   const needle = typed.toLowerCase();
-  const pool = library.filter((row) => !inRail(row.id));
-  const hits = (needle ? pool.filter((row) => hay(row).includes(needle)) : pool.filter((row) => !row.tags.includes('note') && row.type !== 'image').slice(0, 4))
-    .slice(0, MAX_SEARCH)
-    .map((row) => ({ kind: 'item', key: row.id, row, name: row.name, tag: kindLabel(row) }));
-  return needle ? [...hits, NEW_NOTE, NEW_WORKSPACE] : [NEW_NOTE, NEW_WORKSPACE, ...hits];
+  const hits = needle
+    ? library.filter((row) => hay(row).includes(needle))
+    : library.filter((row) => !inRail(row.id) && !row.tags.includes('note') && row.type !== 'image').slice(0, 4);
+  return hits.map((row) => ({ kind: 'item', key: row.id, row, name: row.name, tag: inRail(row.id) ? 'here' : kindLabel(row) }));
 }
 
 export const BART_VERB = { kind: 'verb', verb: 'bart', key: 'verb:bart', name: 'Bart', glyph: 'chat', token: '@Bart ' };

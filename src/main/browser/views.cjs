@@ -16,8 +16,15 @@
 // Pages on disk (decision 51): a file: address opens when the file is inside the home directory,
 // the same line the text viewer draws. The person can type one and a page on disk can link to
 // another; a page from the web can do neither.
+//
+// Pdfs (2026-09-22): a tab never shows Chromium's pdf viewer. A page that answers with a pdf is
+// turned into a download, a download that is a pdf (by its type, its file name, or an address
+// ending .pdf: a site serving one as octet-stream) is saved to a temporary file, and its bytes go
+// to the renderer, which draws them with the Paper pane's viewer. A pdf on disk is read directly.
+// The page under it stays where it was, so Back leaves the pdf.
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { fileURLToPath } = require('node:url');
 
@@ -31,6 +38,9 @@ const COOKIE_FLUSH_MS = 1000;
 const ASKED_PERMISSIONS = { media: 'the camera or microphone', geolocation: 'your location', notifications: 'notifications', 'clipboard-read': 'the clipboard' };
 // Never handed to another app: these either reach into this one or are not addresses at all.
 const INTERNAL_SCHEMES = new Set(['http:', 'https:', 'file:', 'about:', 'blob:', 'data:', 'javascript:', 'chrome:', 'devtools:', 'view-source:', 'engelbart:']);
+const MAX_PDF_BYTES = 200 * 1024 * 1024; // the library's limit
+const PDF_TYPE = /^\s*application\/(?:x-)?pdf\b/i;
+const FIND_MAX = 1000;
 
 /** http(s) only. 0.0.0.0 is what dev servers print, not an address to visit. */
 function parseBrowserUrl(value) {
@@ -94,6 +104,41 @@ function cleanUserAgent(userAgent, appName) {
   return String(userAgent || '').replace(new RegExp(` (?:${names.join('|')})/\\S+`, 'gi'), '');
 }
 
+/** An address whose path ends in .pdf. */
+function pdfAddress(value) {
+  try { return /\.pdf$/i.test(new URL(String(value)).pathname); } catch { return false; }
+}
+
+function headerValue(headers, name) {
+  for (const [key, value] of Object.entries(headers || {})) if (key.toLowerCase() === name) return [].concat(value).join(', ');
+  return '';
+}
+
+/** A pdf response as a download, file name kept: that is how its bytes reach the viewer. Anything else: null. */
+function pdfAsDownload(headers) {
+  if (!PDF_TYPE.test(headerValue(headers, 'content-type'))) return null;
+  const name = headerValue(headers, 'content-disposition').replace(/^\s*(?:inline|attachment)\b\s*;?\s*/i, '').trim(); // `filename="…"`, if any
+  const out = {};
+  for (const [key, value] of Object.entries(headers)) if (key.toLowerCase() !== 'content-disposition') out[key] = value;
+  out['Content-Disposition'] = [name ? `attachment; ${name}` : 'attachment'];
+  return out;
+}
+
+/** What a pdf's tab is called: its file name without .pdf, else the last part of its address. */
+function pdfName(fileName, url) {
+  let name = String(fileName || '');
+  if (!name) { try { name = decodeURIComponent(new URL(String(url)).pathname.split('/').filter(Boolean).pop() || ''); } catch { name = ''; } }
+  return name.replace(/\.pdf$/i, '') || 'pdf';
+}
+
+function readPdf(file) {
+  const stat = fs.statSync(file);
+  if (!stat.isFile()) throw new Error('The pdf is not a file');
+  if (stat.size > MAX_PDF_BYTES) throw new Error('The pdf is larger than 200 MB');
+  const buffer = fs.readFileSync(file);
+  return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+}
+
 function boundsFrom(rect, zoom) {
   if (!rect || typeof rect !== 'object') throw new TypeError('Bounds are required');
   const scale = Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
@@ -108,10 +153,10 @@ function boundsFrom(rect, zoom) {
   return out;
 }
 
-function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLayerChange = () => {} }) {
+function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLayerChange = () => {}, pdfDir = path.join(os.tmpdir(), 'engelbart-pdf') }) {
   const { WebContentsView, session, Menu, clipboard, dialog, shell } = electron;
   const decided = new Map(); // `${origin} ${permission}` -> the person's answer, for this run
-  const entries = new Map(); // tab id -> { view, error, requested, pending, seq }
+  const entries = new Map(); // tab id -> { view, error, requested, pending, seq, found }
   const popups = new Set(); // child windows opened by pages
   const logins = new Map(); // request id -> answer(credentials | null)
   let counter = 0;
@@ -145,6 +190,51 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       timer = setTimeout(() => { timer = null; browsing.cookies.flushStore().catch(() => {}); }, COOKIE_FLUSH_MS);
       if (typeof timer.unref === 'function') timer.unref();
     });
+    // A tab's page that is a pdf becomes a download, which receivePdf hands to the renderer's viewer.
+    browsing.webRequest.onHeadersReceived({ urls: ['http://*/*', 'https://*/*'], types: ['mainFrame'] }, (details, callback) => {
+      const headers = details.resourceType === 'mainFrame' && details.webContents && tabOf(details.webContents) ? pdfAsDownload(details.responseHeaders) : null;
+      callback(headers ? { responseHeaders: headers } : {});
+    });
+    browsing.on('will-download', (_event, item, contents) => { receivePdf(item, contents); });
+  }
+
+  function tabOf(contents) {
+    for (const [id, entry] of entries) if (entry.view.webContents === contents) return id;
+    return null;
+  }
+
+  /** A tab's download that is a pdf goes to a temporary file and then to the viewer. Any other download is Electron's to ask about. */
+  function receivePdf(item, contents) {
+    const id = tabOf(contents);
+    const url = item.getURL();
+    if (!id || !(PDF_TYPE.test(item.getMimeType()) || /\.pdf$/i.test(item.getFilename()) || pdfAddress(url))) return false;
+    fs.mkdirSync(pdfDir, { recursive: true, mode: 0o700 });
+    const file = path.join(pdfDir, `${nextId('pdf')}.pdf`);
+    item.setSavePath(file);
+    const shown = { id, url, name: pdfName(item.getFilename(), url), under: contents.getURL() || 'about:blank' };
+    send('browser:pdf', { ...shown, loading: true });
+    item.on('updated', () => { if (item.getReceivedBytes() > MAX_PDF_BYTES) item.cancel(); });
+    item.once('done', (_event, state) => {
+      let result;
+      try {
+        if (state !== 'completed') throw new Error(item.getReceivedBytes() > MAX_PDF_BYTES ? 'The pdf is larger than 200 MB' : 'The pdf did not download');
+        result = { bytes: readPdf(file) };
+      } catch (failure) {
+        result = { error: failure.message };
+      }
+      fs.rm(file, { force: true }, () => {});
+      if (entries.has(id)) send('browser:pdf', { ...shown, ...result });
+    });
+    return true;
+  }
+
+  /** A pdf on disk: read here, never loaded into the page. */
+  function openPdfFile(id, url) {
+    const entry = entries.get(id);
+    const shown = { id, url: url.href, name: pdfName('', url.href), under: (entry && entry.view.webContents.getURL()) || 'about:blank' };
+    let result;
+    try { result = { bytes: readPdf(fileURLToPath(url)) }; } catch (failure) { result = { error: failure.code === 'ENOENT' ? 'Nothing is at that path' : failure.message }; }
+    send('browser:pdf', { ...shown, ...result });
   }
 
   async function ask(message, detail, yes) {
@@ -221,7 +311,13 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
   /** What every page gets, in a tab or in a popup: http(s) or the disk, loopback certificates, a sign-in prompt. */
   function protect(contents, tab) {
     const guard = (event, url) => {
-      if (allowed(url, contents)) return;
+      if (allowed(url, contents)) {
+        // a page on disk linking to a pdf on disk: the viewer reads it, as when it is typed
+        if (!(isFileUrl(url) && pdfAddress(url) && tab && tabOf(contents) === tab)) return;
+        event.preventDefault();
+        openPdfFile(tab, new URL(url));
+        return;
+      }
       event.preventDefault();
       void handOver(url);
     };
@@ -314,7 +410,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     view.setVisible(false);
     win.contentView.addChildView(view);
     onLayerChange();
-    const entry = { view, error: null, requested: '', pending: '', seq: 0 };
+    const entry = { view, error: null, requested: '', pending: '', seq: 0, found: '' };
     entries.set(id, entry);
 
     const contents = view.webContents;
@@ -329,10 +425,13 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       entry.pending = '';
       emit(id);
     });
-    contents.on('did-navigate', () => { entry.error = null; entry.pending = ''; emit(id); });
+    contents.on('did-navigate', () => { entry.error = null; entry.pending = ''; entry.found = ''; emit(id); });
     contents.on('did-stop-loading', () => { entry.pending = ''; }); // a stopped load is headed nowhere
     for (const name of ['did-navigate-in-page', 'did-start-loading', 'did-stop-loading', 'page-title-updated']) contents.on(name, () => emit(id));
     contents.on('context-menu', (_event, params) => contextMenu(contents, params, id));
+    contents.on('found-in-page', (_event, result) => send('browser:found', { id, matches: result.matches, active: result.activeMatchOrdinal }));
+    // ⌘T and ⌘W are the pane's, as in Chrome, where a page cannot take them. ⌘F is the Edit menu's
+    // (shortcut below), which a page that has its own find (Google Docs) gets to first.
     contents.on('before-input-event', (event, input) => {
       if (input.type !== 'keyDown' || input.alt || !(process.platform === 'darwin' ? input.meta : input.control)) return;
       const key = String(input.key).toLowerCase();
@@ -340,10 +439,49 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       else if (key === 'l') focusAddress();
       else if (key === '[') command(id, 'back');
       else if (key === ']') command(id, 'forward');
+      else if (key === 'j') send('engelbart:next-workspace', {}); // the workspace's ⌘J, which a page in front would otherwise swallow
+      else if (key === 't' && !input.shift) { focusApp(); send('browser:shortcut', { name: 'new-tab', tab: id }); }
+      else if (key === 'w' && !input.shift) send('browser:shortcut', { name: 'close-tab', tab: id }); // ⇧⌘W is the window's
       else return;
       event.preventDefault();
     });
     return entry;
+  }
+
+  function focusApp() {
+    const win = getWindow();
+    if (win && !win.isDestroyed()) win.webContents.focus();
+  }
+
+  /** Find in the page: a new query starts over, the same one steps. An empty one stops. */
+  function find(id, text, options) {
+    assertId(id);
+    const entry = entries.get(id);
+    if (!entry) return false;
+    const contents = entry.view.webContents;
+    if (typeof text !== 'string' || text.length > FIND_MAX) throw new TypeError('Find text must be a bounded string');
+    if (!text) { contents.stopFindInPage('clearSelection'); entry.found = ''; return true; }
+    const forward = !(options && options.backward);
+    contents.findInPage(text, { forward, findNext: entry.found !== text, matchCase: false });
+    entry.found = text;
+    return true;
+  }
+
+  function stopFind(id) {
+    assertId(id);
+    const entry = entries.get(id);
+    if (!entry) return false;
+    entry.found = '';
+    entry.view.webContents.stopFindInPage('keepSelection');
+    return true;
+  }
+
+  /** The Edit menu's Find items: to the renderer, with the tab whose page has the keyboard (null: the app has it). */
+  function shortcut(name) {
+    let tab = null;
+    for (const [id, entry] of entries) if (entry.view.getVisible() && entry.view.webContents.isFocused()) tab = id;
+    if (tab && name === 'find') focusApp();
+    send('browser:shortcut', { name, tab });
   }
 
   // A retry keeps the failure on screen until a page actually arrives (did-navigate clears it).
@@ -358,7 +496,8 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
   function open(id, value) {
     assertId(id);
     const url = pageUrl(value);
-    load(entries.get(id) || create(id), url.href);
+    if (url.protocol === 'file:' && pdfAddress(url.href)) openPdfFile(id, url);
+    else load(entries.get(id) || create(id), url.href);
     return true;
   }
 
@@ -455,7 +594,13 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     if (configured) await session.fromPartition(PARTITION).cookies.flushStore();
   }
 
-  return { open, show, hide, command, close, closeAll, answerLogin, flush, has: (id) => entries.has(id) };
+  // Main-process use only: never exposed through the general browser IPC bridge.
+  const visibleContents = (id) => {
+    assertId(id);
+    const entry = entries.get(id);
+    return entry && entry.view.getVisible() ? entry.view.webContents : null;
+  };
+  return { open, show, hide, command, find, stopFind, shortcut, close, closeAll, answerLogin, flush, visibleContents, has: (id) => entries.has(id) };
 }
 
 function registerBrowserIpc({ ipcMain, trustedHandler, views }) {
@@ -463,9 +608,11 @@ function registerBrowserIpc({ ipcMain, trustedHandler, views }) {
   ipcMain.handle('browser:show', trustedHandler((id, rect) => views.show(id, rect)));
   ipcMain.handle('browser:hide', trustedHandler((options) => views.hide(options)));
   ipcMain.handle('browser:command', trustedHandler((id, name) => views.command(id, name)));
+  ipcMain.handle('browser:find', trustedHandler((id, text, options) => views.find(id, text, options)));
+  ipcMain.handle('browser:stop-find', trustedHandler((id) => views.stopFind(id)));
   ipcMain.handle('browser:close', trustedHandler((id) => views.close(id)));
   ipcMain.handle('browser:login-reply', trustedHandler((requestId, credentials) => views.answerLogin(requestId, credentials)));
   ipcMain.handle('browser:close-all', trustedHandler(() => { views.closeAll(); return true; }));
 }
 
-module.exports = { PARTITION, parseBrowserUrl, parseFileUrl, externalScheme, isLoopback, cleanUserAgent, boundsFrom, createBrowserViews, registerBrowserIpc };
+module.exports = { PARTITION, parseBrowserUrl, parseFileUrl, externalScheme, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews, registerBrowserIpc };

@@ -46,7 +46,7 @@ export default function BartPicker({ models, current, anchor, onPick, onSend, on
   // Measured, not estimated: under the chip, above it near the bottom of the window, cut to the room there if neither fits.
   const [ref, placed] = usePlaced(anchor, { align: anchor.left != null ? 'start' : 'end' });
   return (
-    <div ref={ref} data-bart-picker="1" data-overlay="1" role="dialog" aria-label="Model and effort" onMouseEnter={onEnter} onMouseLeave={onLeave} onMouseDown={(e) => e.preventDefault()} style={{ ...placed, zIndex: 60, width: WIDTH, boxSizing: 'border-box', display: 'flex', padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 12, animation: `rise 160ms ${EASE}` }}>
+    <div ref={ref} data-bart-picker="1" data-overlay="1" data-hover="1" role="dialog" aria-label="Model and effort" onMouseEnter={onEnter} onMouseLeave={onLeave} onMouseDown={(e) => e.preventDefault()} style={{ ...placed, zIndex: 60, width: WIDTH, boxSizing: 'border-box', display: 'flex', padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 12, animation: `rise 160ms ${EASE}` }}>
       <div style={{ flex: '1 1 0', minWidth: 0, padding: 4 }}>
         <div style={{ position: 'relative', marginBottom: 4 }}>
           <div role="button" aria-haspopup="listbox" aria-expanded={listing} onMouseDown={(e) => { e.preventDefault(); if (ids.length > 1) setListing((open) => !open); }} style={{ display: 'flex', alignItems: 'center', gap: 8, height: 32, padding: '0 10px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', cursor: ids.length > 1 ? 'pointer' : 'default', font: '500 13px/1 var(--font-sans)', color: '#171717' }}>

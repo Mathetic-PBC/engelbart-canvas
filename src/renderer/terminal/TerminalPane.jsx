@@ -317,15 +317,15 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
     if (inputRef.current) inputRef.current.focus();
   };
 
-  // ⌘T opens a new terminal while the pane is showing; ⌘W closes the current tab and ⌘1–9 switch
-  // tabs while focus is in the pane.
+  // While focus is in the pane: ⌘T opens a new terminal, ⌘W closes the current tab and ⌘1–9 switch tabs.
   useEffect(() => {
     if (!visible) return undefined;
     const onKey = (event) => {
       const mod = event.metaKey || event.ctrlKey;
       if (!mod) return;
       const inside = rootRef.current && event.target && rootRef.current.contains(event.target);
-      if (event.metaKey && event.key.toLowerCase() === 't' && !event.shiftKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); void launch('shell', projectCwd); return; }
+      // ⌘T is the Stage's everywhere else (2026-09-23): here only while the terminal has the keyboard.
+      if (inside && event.metaKey && event.key.toLowerCase() === 't' && !event.shiftKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); void launch('shell', projectCwd); return; }
       if (inside && currentId && event.metaKey && event.key.toLowerCase() === 'w' && !event.shiftKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); void close(currentId); return; }
       if (inside && event.metaKey && /^[1-9]$/.test(event.key)) {
         const record = sessions[Number(event.key) - 1];

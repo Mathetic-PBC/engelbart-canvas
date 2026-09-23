@@ -193,6 +193,58 @@ test('views: each workspace keeps its tabs, the document in front and its scroll
   assert.throws(() => projects.writeView(ctx, project.id, ws, null), /invalid/);
 });
 
+test('where to next: state.json keeps the last three workspaces written in and the agents, beside the views; stale rows are not read (2026-09-22)', async () => {
+  const project = await projects.createProject(ctx, 'Next place');
+  const a = await projects.createWorkspace(ctx, project.id, { name: 'Alpha' });
+  const b = await projects.createWorkspace(ctx, project.id, { name: 'Beta' });
+  const c = await projects.createWorkspace(ctx, project.id, { name: 'Gamma', parentId: b.id });
+  const d = await projects.createWorkspace(ctx, project.id, { name: 'Delta' });
+  projects.writeLastOpen(ctx, { projectId: project.id, workspaceId: a.id });
+  projects.writeView(ctx, project.id, a.id, { active: 'ws', tabs: [], positions: {} });
+
+  for (const workspace of [a, b, c, a, d]) projects.recordEdit(ctx, project.id, workspace.id);
+  let nav = projects.readNav(ctx);
+  assert.deepEqual(nav.recent.map((entry) => entry.name), ['Delta', 'Alpha', 'Gamma'], 'newest first, once each, three at most');
+  assert.deepEqual([nav.recent[2].path, nav.recent[2].projectName], ['Beta/Gamma', 'Next place']);
+  assert.ok(nav.recent.every((entry) => !Number.isNaN(Date.parse(entry.at))));
+  assert.throws(() => projects.recordEdit(ctx, project.id, '99999999-9999-4999-8999-999999999999'), /Unknown workspace/);
+
+  projects.agentStarted(ctx, { id: 'ask-1', kind: 'bart', projectId: project.id, workspaceId: b.id, doc: { kind: 'workspace', workspaceId: b.id } });
+  projects.agentStarted(ctx, { id: 'ask-2', kind: 'bart', projectId: project.id, workspaceId: c.id, doc: { kind: 'note', id: 'not-an-id' } });
+  nav = projects.readNav(ctx);
+  assert.deepEqual(nav.agents.map((agent) => [agent.id, agent.status, agent.name]), [['ask-1', 'running', 'Beta'], ['ask-2', 'running', 'Gamma']]);
+  assert.deepEqual(nav.agents[1].doc, null, 'a document reference that is not one is dropped, the agent kept');
+  projects.agentFinished(ctx, 'ask-1');
+  projects.agentStopped(ctx, 'ask-2');
+  nav = projects.readNav(ctx);
+  assert.deepEqual(nav.agents.map((agent) => [agent.id, agent.status]), [['ask-1', 'waiting']], 'a stopped agent leaves nothing waiting');
+  assert.ok(nav.agents[0].finished);
+  assert.equal(projects.seenAgents(ctx, project.id, a.id), 0, 'looking elsewhere sees nothing');
+  assert.equal(projects.seenAgents(ctx, project.id, b.id), 1);
+  assert.deepEqual(projects.readNav(ctx).agents, []);
+
+  const file = path.join(layout.testRoot, 'state.json');
+  const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual([state.projectId, state.workspaceId], [project.id, a.id], 'where the app reopens is kept');
+  assert.ok(state.views[project.id][a.id], 'and every view');
+  assert.equal(state.recent.length, 3);
+  projects.writeView(ctx, project.id, b.id, { active: 'ws', tabs: [], positions: {} });
+  projects.writeLastOpen(ctx, { projectId: project.id, workspaceId: b.id });
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).recent.length, 3, 'saving a view or where the app reopens keeps the recent ones');
+
+  // A running row written by an earlier run of the app (its id not live here), a waiting one whose workspace is gone, junk.
+  fs.writeFileSync(file, JSON.stringify({ ...state, agents: [
+    { id: 'old-run', kind: 'bart', projectId: project.id, workspaceId: a.id, status: 'running', started: '2026-09-21T10:00:00.000Z' },
+    { id: 'gone', kind: 'bart', projectId: project.id, workspaceId: '99999999-9999-4999-8999-999999999999', status: 'waiting', finished: '2026-09-21T10:00:00.000Z' },
+    { id: 'kept', kind: 'bart', projectId: project.id, workspaceId: d.id, status: 'waiting', finished: '2026-09-21T10:00:00.000Z' },
+    { id: 'odd', kind: 'robot', projectId: project.id, workspaceId: d.id, status: 'waiting' },
+    'nonsense',
+  ], recent: [...state.recent, { projectId: project.id, workspaceId: 'nope', at: 'x' }] }));
+  nav = projects.readNav(ctx);
+  assert.deepEqual(nav.agents.map((agent) => agent.id), ['kept']);
+  assert.equal(nav.recent.length, 3);
+});
+
 test('read-text-file: project-relative, ~/ and absolute paths inside the home directory only', async () => {
   const project = await projects.createProject(ctx, 'Browser');
   fs.writeFileSync(path.join(project.dir, 'notes.txt'), 'hello\nworld\n');
@@ -231,6 +283,8 @@ test('resolve-page-file: an html file by full path, or relative to the project, 
   assert.equal((await projects.resolvePageFile(ctx, project.id, `${path.basename(project.dir)}/My Workspace/report.html`)).path, report); // from the engelbart folder
   assert.equal((await projects.resolvePageFile(ctx, project.id, 'docs/index.htm')).path, real(path.join(code, 'docs', 'index.htm'))); // from the code directory
   assert.equal((await projects.resolvePageFile(ctx, project.id, 'My Workspace/report.html#results?x')).url, `${pathToFileURL(report).href}#results?x`);
+  fs.writeFileSync(path.join(project.dir, 'My Workspace', 'paper.pdf'), '%PDF-1.4');
+  assert.equal((await projects.resolvePageFile(ctx, project.id, 'My Workspace/paper.pdf')).url, pathToFileURL(real(path.join(project.dir, 'My Workspace', 'paper.pdf'))).href); // not printed as text
 
   for (const not of ['notes.txt', 'missing.html', 'apple.com', 'example.com/index.html', '/etc/hosts', 'My Workspace']) {
     assert.equal(await projects.resolvePageFile(ctx, project.id, not), null, not);

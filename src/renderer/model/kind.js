@@ -19,7 +19,7 @@ export function kindKey(row) {
 }
 
 /** The library rail's order; a kind that is not listed (image) sorts last. */
-export const KIND_ORDER = ['note', 'md', 'pdf', 'git', 'folder', 'website', 'html', 'data'];
+export const KIND_ORDER = ['note', 'md', 'docx', 'pdf', 'git', 'folder', 'website', 'html', 'data'];
 export const kindRank = (row) => { const at = KIND_ORDER.indexOf(kindKey(row)); return at < 0 ? KIND_ORDER.length : at; };
 
 /** The words beside a row: its type ("link" for a website), then its tags. */

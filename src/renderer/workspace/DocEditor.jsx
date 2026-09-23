@@ -1144,12 +1144,13 @@ export default class DocEditor extends React.Component {
   render() {
     const s = this.state;
     const compact = this.props.compact;
+    // Compact (a post-it, 2026-09-22) never scrolls: it is as tall as its lines, and the card fits the type to its size.
     return (
       <>
         <style>{RISE_CSS + CARD_CSS}</style>
         {/* Past the last line the page keeps going for about half a window (2026-09-22), so the end of a document can be read and written mid-screen. */}
-        <div ref={this.scrollRef} onClick={this.docClick} onScroll={this.onScroll} onWheel={this.stopSettling} onPointerDown={this.stopSettling} onKeyDown={this.stopSettling} style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: compact ? '4px 4px 24px' : '28px clamp(12px, 4%, 40px) max(120px, calc(50vh - 40px))', cursor: compact ? 'grab' : 'text' }}>
-          <div style={{ maxWidth: '65ch', marginInline: 'auto', paddingInline: compact ? 0 : 'clamp(0px, 3%, 24px)', cursor: 'auto', fontSize: 17 }}>
+        <div ref={this.scrollRef} onClick={this.docClick} onScroll={this.onScroll} onWheel={this.stopSettling} onPointerDown={this.stopSettling} onKeyDown={this.stopSettling} style={compact ? { flex: 'none', overflow: 'visible', padding: '0 0 2px', cursor: 'grab' } : { flex: 1, minHeight: 0, overflow: 'auto', padding: '28px clamp(12px, 4%, 40px) max(120px, calc(50vh - 40px))', cursor: 'text' }}>
+          <div style={{ maxWidth: compact ? 'none' : '65ch', marginInline: 'auto', paddingInline: compact ? 0 : 'clamp(0px, 3%, 24px)', cursor: 'auto', fontSize: 17 }}>
             {this.props.header}
             <div
               data-editor="1"

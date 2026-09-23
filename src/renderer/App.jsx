@@ -62,6 +62,9 @@ export default function App() {
     return list;
   }, []);
 
+  // Rows the main process changed on its own (a pdf saved as a link became a saved pdf): the library is read again.
+  React.useEffect(() => api.onLibraryChanged(() => { api.library().then(setLibrary).catch(() => {}); }), []);
+
   const reload = React.useCallback(async () => {
     if (!tree) return null;
     try {
@@ -87,7 +90,7 @@ export default function App() {
     setLibrary(rows);
     // A note opened from the library lands in the workspace it was made in.
     const made = prefer && prefer.tab && !prefer.workspaceId ? next.notes.find((note) => note.id === prefer.tab.id) : null;
-    setEntry({ workspaceId: (prefer && prefer.workspaceId) || (made && made.workspaceId) || next.workspaces[0].id, tab: (prefer && prefer.tab) || null, views });
+    setEntry({ workspaceId: (prefer && prefer.workspaceId) || (made && made.workspaceId) || next.workspaces[0].id, tab: (prefer && prefer.tab) || null, stage: (prefer && prefer.stage) || null, views });
     setPhase('workspace');
     setError('');
   }, []);
@@ -209,7 +212,16 @@ export default function App() {
           library={library}
           error={error}
           onCreateScreen={() => setPhase('create')}
-          onOpenWorkspace={(id, workspaceId) => openProject(id, workspaceId ? { workspaceId } : null).catch(fail)}
+          onOpenWorkspace={(id, workspaceId, stage) => openProject(id, workspaceId || stage ? { workspaceId, stage } : null).catch(fail)}
+          // a library row no project holds opens on the Stage of the project last open (else the first)
+          onOpenOnStage={async (row) => {
+            try {
+              const last = await api.lastOpen().catch(() => null);
+              const known = last && projects.some((project) => project.id === last.projectId);
+              const id = known ? last.projectId : projects[0] && projects[0].id;
+              if (id) await openProject(id, { workspaceId: known ? last.workspaceId : null, stage: row });
+            } catch (candidate) { fail(candidate); }
+          }}
           onOpenNote={(row) => openProject(row.project_id, { tab: { id: row.id, title: row.name } }).catch(fail)}
           onLibraryChanged={() => loadHome().catch(fail)}
           onRename={async (id, name) => { try { await api.renameProject(id, name); await loadHome(); } catch (candidate) { fail(candidate); } }}
@@ -225,6 +237,7 @@ export default function App() {
           library={library}
           initialWorkspaceId={entry ? entry.workspaceId : null}
           initialTab={entry ? entry.tab : null}
+          initialStage={entry ? entry.stage : null}
           initialViews={entry ? entry.views : null}
           style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: '#fff', ...(tree.project.directory ? {} : { filter: 'blur(6px)', pointerEvents: 'none', userSelect: 'none' }) }}
           active={!!tree.project.directory}
@@ -232,6 +245,7 @@ export default function App() {
           onClose={goHome}
           onHome={goHome}
           onVisit={onVisit}
+          onOpenElsewhere={(projectId, workspaceId) => openProject(projectId, { workspaceId }).catch(fail)}
           onError={fail}
         />
       )}

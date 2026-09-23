@@ -25,9 +25,10 @@ test('config defaults to test mode and persists a toggle atomically', () => {
   const { root } = ensureHome(tempHome());
   const summarizer = { provider: 'openai', openai: { model: 'gpt-5.6-luna', effort: 'high' }, anthropic: { model: 'claude-opus-5', effort: 'high' } };
   const providers = ['openai', 'anthropic'];
-  assert.deepEqual(readConfig(root), { testMode: true, providers, summarizer }, 'summaries default to Codex, gpt-5.6-luna, high; @bart offers both providers');
-  assert.deepEqual(writeConfig(root, { testMode: false }), { testMode: false, providers, summarizer });
-  assert.deepEqual(readConfig(root), { testMode: false, providers, summarizer });
+  const github = { clientId: 'Iv23liAZNYl96zlluMDs', appSlug: 'engelbart-mathetic' };
+  assert.deepEqual(readConfig(root), { testMode: true, providers, summarizer, github }, 'summaries default to Codex, gpt-5.6-luna, high; @bart offers both providers; GitHub sign-in is configured without manual setup');
+  assert.deepEqual(writeConfig(root, { testMode: false }), { testMode: false, providers, summarizer, github });
+  assert.deepEqual(readConfig(root), { testMode: false, providers, summarizer, github });
 
   // Switching is one word; each provider keeps its own model and effort; nonsense falls back to the defaults.
   const file = path.join(root, 'config.json');
@@ -38,7 +39,17 @@ test('config defaults to test mode and persists a toggle atomically', () => {
   // A config file from before the setting existed gains it on the next launch.
   fs.writeFileSync(file, JSON.stringify({ testMode: false }));
   ensureHome(path.dirname(root));
-  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { testMode: false, providers, summarizer });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { testMode: false, providers, summarizer, github });
+
+  // Earlier builds wrote empty GitHub settings; these users also get the shared app without editing config.
+  fs.writeFileSync(file, JSON.stringify({ testMode: false, providers, summarizer, github: { clientId: '', appSlug: '' } }));
+  assert.deepEqual(readConfig(root).github, github);
+
+  // The GitHub App's client id and slug are kept through a toggle; anything that is not one is dropped.
+  fs.writeFileSync(file, JSON.stringify({ testMode: false, providers, summarizer, github: { clientId: ' Iv23liAbCdEf1234567890 ', appSlug: 'engelbart-mathetic' } }));
+  assert.deepEqual(writeConfig(root, { testMode: true }).github, { clientId: 'Iv23liAbCdEf1234567890', appSlug: 'engelbart-mathetic' });
+  fs.writeFileSync(file, JSON.stringify({ testMode: false, providers, summarizer, github: { clientId: 'x y', appSlug: 'Not A Slug' } }));
+  assert.deepEqual(readConfig(root).github, github);
 
   // The providers @bart offers: aliases are read, a name listed twice counts once, and a list naming none of them is the default.
   fs.writeFileSync(file, JSON.stringify({ testMode: false, providers: ['claude', 'Anthropic', 'gemini'], summarizer }));

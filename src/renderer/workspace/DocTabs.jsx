@@ -1,13 +1,16 @@
 import React from 'react';
 import { isUntitled } from '../model/names.js';
+import { KindGlyph } from '../ui/Icons.jsx';
 
 const SLIDE = 'transform 160ms cubic-bezier(.25,.1,.25,1)';
 const THRESHOLD = 4; // px of travel before a press becomes a drag
 
 /** Document tabs, rendered inside the header's middle column (design 2026-09-17): Workspace plus opened notes.
+ *  The Workspace tab carries the workspace icon after its name (2026-09-22), so it never reads as a note.
  *  A note tab drags the way a browser tab does: the tab itself follows the pointer along the strip,
  *  its neighbours slide out of the way as its leading edge passes their middle, and it settles into the gap on
- *  release. Workspace stays first and nothing moves past it. */
+ *  release. Workspace stays first and nothing moves past it.
+ *  Any tab closes while another is left, Workspace too (Stage design, 2026-09-23); the sidebar brings Workspace back. */
 export default function DocTabs({ tabs, activeTab, onSelect, onClose, onMove }) {
   const els = React.useRef(new Map()); // tab id → element
   const drag = React.useRef(null); // { id, pointerId, startX, x, moved }
@@ -73,7 +76,7 @@ export default function DocTabs({ tabs, activeTab, onSelect, onClose, onMove }) 
     const left = el.offsetLeft + dx, right = left + el.offsetWidth;
     const index = tabs.findIndex((tab) => tab.id === d.id);
     const next = tabs[index + 1] && els.current.get(tabs[index + 1].id);
-    const prev = index > 1 ? els.current.get(tabs[index - 1].id) : null; // index 0 is Workspace
+    const prev = index > 0 && tabs[index - 1].id !== 'ws' ? els.current.get(tabs[index - 1].id) : null; // nothing moves past Workspace
     if (next && right > next.offsetLeft + next.offsetWidth / 2) onMove(d.id, tabs[index + 1].id);
     else if (prev && left < prev.offsetLeft + prev.offsetWidth / 2) onMove(d.id, tabs[index - 1].id);
   };
@@ -108,7 +111,8 @@ export default function DocTabs({ tabs, activeTab, onSelect, onClose, onMove }) 
         style={{ position: 'relative', zIndex: dragging ? 2 : undefined, display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, maxWidth: 220, flex: '0 1 auto', padding: '7px 12px 8px', marginBottom: -1, border: `1px solid ${on || dragging ? '#eaeaea' : 'transparent'}`, borderBottomColor: on ? '#fff' : 'transparent', borderRadius: '8px 8px 0 0', background: on ? '#fff' : (dragging ? '#fafafa' : 'transparent'), cursor: 'pointer', userSelect: 'none', WebkitUserSelect: 'none', touchAction: 'none', font: `${on ? 500 : 400} 12.5px/1.3 var(--font-sans)`, color: on ? '#171717' : '#4d4d4d', whiteSpace: 'nowrap' }}
       >
         <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', color: isUntitled(tab.title) ? '#8f8f8f' : undefined }}>{tab.title}</span>
-        {tab.id !== 'ws' && (
+        {tab.id === 'ws' && <span data-ws-icon="1" style={{ display: 'flex', marginLeft: -2 }}><KindGlyph kind="workspace" item={{ type: 'workspace' }} box={14} color="currentColor" /></span>}
+        {tabs.length > 1 && (
           <button type="button" className="hov-del" onClick={(event) => { event.stopPropagation(); onClose(tab.id); }} aria-label="Close tab" style={{ flex: 'none', padding: '0 2px', border: 0, background: 'transparent', cursor: 'pointer', font: '13px/1 var(--font-sans)', color: '#c9c9c9' }}>×</button>
         )}
       </div>
