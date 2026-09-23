@@ -2,11 +2,12 @@
 
 // The root library: seeds for test mode, file bytes for papers, PDF annotations, adding by address,
 // and the two questions the all-projects screen asks (what a project holds, where an item is held).
-// Nothing here copies user files; the seeds are the app's own fixtures (spec §2 #7, #15).
+// Nothing here copies user files; the seeds are the app's own fixtures (spec §2 #7, #15). The one
+// copy is a pdf read from the web and saved (addPdfCopy): it lives in <data root>/assets/pdfs.
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHash } = require('node:crypto');
 const { fileURLToPath, pathToFileURL } = require('node:url');
 const { DIR_MODE } = require('./home.cjs');
 const projects = require('./projects.cjs');
@@ -65,16 +66,57 @@ function annotationFile(ctx, id) {
   return path.join(ctx.dataRoot, 'annotations', `${id}.json`);
 }
 
+const readJson = (file) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
+
+/** A row's ink; for a row with none yet, the ink its pdf got on the Stage before the library held it (by its file, else its address). */
 async function readAnnotations(ctx, id) {
-  try {
-    return JSON.parse(fs.readFileSync(annotationFile(ctx, id), 'utf8'));
-  } catch {
-    return null;
+  const own = readJson(annotationFile(ctx, id));
+  if (own) return own;
+  const row = await ctx.libraryDb.get(id);
+  if (!row) return null;
+  const addresses = [inkAddress(row), row.path && row.url ? String(row.url).replace(/#.*$/, '') : ''].filter(Boolean);
+  for (const address of addresses) {
+    const ink = readJson(pageAnnotationFile(ctx, address));
+    if (ink) return ink;
   }
+  return null;
 }
 
 async function writeAnnotations(ctx, id, value) {
-  const file = annotationFile(ctx, id);
+  return writeJson(annotationFile(ctx, id), value);
+}
+
+// Ink on a pdf read in the Browser pane (2026-09-22). With the library's row when the library holds
+// the pdf (a file, or an address it knows: the Paper pane shows the same ink), else kept by the
+// address the library would give it, so a row added later finds it (readAnnotations).
+
+/** What ink is kept by: a file's real path, or the address as the library spells it (arXiv's abstract page for its pdf). */
+function inkAddress(row) {
+  if (row.path) { try { return pathToFileURL(fs.realpathSync(row.path)).href; } catch { return pathToFileURL(path.resolve(row.path)).href; } }
+  return row.url ? String(row.url).replace(/#.*$/, '') : '';
+}
+
+function pageAnnotationFile(ctx, address) {
+  return path.join(ctx.dataRoot, 'annotations', 'pages', `${createHash('sha256').update(address).digest('hex')}.json`);
+}
+
+async function inkPlace(ctx, input) {
+  const found = resolveAddition(input, { homeDir: ctx.homeDir });
+  const row = sameAs(await ctx.libraryDb.list(), found);
+  return row ? { id: row.id } : { file: pageAnnotationFile(ctx, inkAddress(found)) };
+}
+
+async function readPageAnnotations(ctx, input) {
+  const place = await inkPlace(ctx, input);
+  return place.id ? readAnnotations(ctx, place.id) : readJson(place.file);
+}
+
+async function writePageAnnotations(ctx, input, value) {
+  const place = await inkPlace(ctx, input);
+  return writeJson(place.id ? annotationFile(ctx, place.id) : place.file, value);
+}
+
+function writeJson(file, value) {
   let text;
   try {
     text = JSON.stringify(value ?? {});
@@ -212,7 +254,7 @@ const folderThere = (folder) => { try { return !!folder && fs.statSync(folder).i
 // written in Engelbart has it (projects.createNote).
 const ARXIV_RE = /^(?:arxiv:\s*|https?:\/\/(?:www\.)?arxiv\.org\/(?:abs|pdf)\/)?(\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?\/?$/i;
 const DOI_RE = /^(?:doi:\s*|https?:\/\/(?:dx\.)?doi\.org\/)?(10\.\d{4,9}\/\S+)$/i;
-const FILE_TYPES = new Map([['.md', 'md'], ['.markdown', 'md'], ['.pdf', 'pdf'], ['.html', 'html'], ['.htm', 'html'], ['.csv', 'csv'], ['.tsv', 'tsv'], ['.json', 'json'], ['.jsonl', 'jsonl'], ['.ndjson', 'jsonl'], ['.parquet', 'parquet'], ['.xlsx', 'xlsx'],
+const FILE_TYPES = new Map([['.md', 'md'], ['.markdown', 'md'], ['.pdf', 'pdf'], ['.html', 'html'], ['.htm', 'html'], ['.csv', 'csv'], ['.tsv', 'tsv'], ['.json', 'json'], ['.jsonl', 'jsonl'], ['.ndjson', 'jsonl'], ['.parquet', 'parquet'], ['.xlsx', 'xlsx'], ['.docx', 'docx'],
   // a picture on disk is linked where it is, like any file (a pasted one is copied into the project: projects.saveImage)
   ['.png', 'image'], ['.jpg', 'image'], ['.jpeg', 'image'], ['.gif', 'image'], ['.webp', 'image'], ['.heic', 'image'], ['.svg', 'image']]);
 const TEXT_TYPES = new Set(['csv', 'tsv', 'json', 'jsonl']); // what the peek can show the first lines of
@@ -300,7 +342,8 @@ function sameAs(rows, found, who = null) {
   }
   // A repository with an id was matched by it above; an address equal to another row's is then a different repository.
   const page = !found.path && !found.folder_path && !found.github_id && found.url ? pageKey(found.url) : null;
-  return rows.find((row) => (found.path && row.path === found.path) || (found.folder_path && row.folder_path === found.folder_path) || (page && !row.path && row.url && pageKey(row.url) === page)) || null;
+  // (a row with a file answers for its address too: a pdf saved from the web keeps where it came from, 2026-09-23)
+  return rows.find((row) => (found.path && row.path === found.path) || (found.folder_path && row.folder_path === found.folder_path) || (page && row.url && pageKey(row.url) === page)) || null;
 }
 
 /**
@@ -394,6 +437,59 @@ async function addItem(ctx, input, { describe, identifyRepo, inspectPdf, name: g
   }
   const description = about && typeof about.description === 'string' ? about.description.replace(/\s+/g, ' ').trim().slice(0, 1200) : '';
   if (description) return ctx.libraryDb.setSummary(row.id, description, new Date());
+  return row;
+}
+
+/** Bytes that are a pdf: `%PDF-` within the first 1024, as readers allow. */
+function isPdfBytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || !bytes.byteLength) return false;
+  return Buffer.from(bytes.buffer, bytes.byteOffset, Math.min(1024, bytes.byteLength)).toString('latin1').includes('%PDF-');
+}
+
+/** Where a row's saved pdf lives, written whole or not at all: <data root>/assets/pdfs/<id>.pdf. */
+function writePdfCopy(ctx, id, bytes) {
+  if (typeof id !== 'string' || !UUID_RE.test(id)) throw new TypeError('library id is invalid');
+  const dir = path.join(ctx.dataRoot, 'assets', 'pdfs');
+  fs.mkdirSync(dir, { recursive: true, mode: DIR_MODE });
+  const file = path.join(dir, `${id}.pdf`);
+  const temporary = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, bytes, { mode: 0o600 });
+  fs.renameSync(temporary, file);
+  return file;
+}
+
+/**
+ * A pdf read from the web, saved as itself (2026-09-23, Hudson: "save the PDF then instead of just saving the website"):
+ * the bytes the Stage drew go to <data root>/assets/pdfs/<id>.pdf and the row is a `pdf` whose `path` is that copy and
+ * whose `url` is where it came from (an arXiv or DOI address as the library spells it, `paper` kept). Something the
+ * library already holds by that address throws EXISTS, as addItem does. Ink drawn before saving comes along.
+ */
+async function addPdfCopy(ctx, input, bytes, { inspectPdf, name: given = null } = {}) {
+  if (typeof input !== 'string' || !/^https?:\/\//i.test(input.trim())) throw new TypeError('Only a pdf from the web is saved as a copy');
+  if (!isPdfBytes(bytes)) throw new TypeError('That is not a pdf');
+  if (bytes.byteLength > MAX_PDF_BYTES) throw new Error('The pdf is larger than 200 MB');
+  const found = resolveAddition(input, { homeDir: ctx.homeDir });
+  const same = sameAs(await ctx.libraryDb.list(), found);
+  if (same) throw alreadyThere(same);
+  const id = randomUUID();
+  const file = writePdfCopy(ctx, id, bytes);
+  let fromAddress = '';
+  try { fromAddress = decodeURIComponent(new URL(input.trim()).pathname.split('/').pop() || '').replace(/\.pdf$/i, ''); } catch { fromAddress = ''; }
+  const named = typeof given === 'string' ? given.replace(/\s+/g, ' ').trim().slice(0, 200) : '';
+  let row;
+  try {
+    row = await ctx.libraryDb.insert({ id, name: named || fromAddress.slice(0, 200) || found.name, type: 'pdf', tags: found.tags, path: file, url: found.url, folder_path: null, project_id: null, github_id: null, categorized: null });
+  } catch (error) {
+    fs.rmSync(file, { force: true });
+    throw error;
+  }
+  // ink made on it while it was only an address becomes the row's
+  const before = pageAnnotationFile(ctx, inkAddress(found));
+  const own = annotationFile(ctx, id);
+  if (fs.existsSync(before) && !fs.existsSync(own)) { fs.mkdirSync(path.dirname(own), { recursive: true, mode: DIR_MODE }); fs.copyFileSync(before, own); }
+  if (inspectPdf) {
+    try { row = await ctx.libraryDb.setCategory(id, { type: 'pdf', tags: [...new Set([...found.tags, ...(await inspectPdf(file))])] }, CATEGORY_RULES); } catch { /* not readable now: recategorize tries again */ }
+  }
   return row;
 }
 
@@ -495,4 +591,4 @@ async function previewItem(ctx, id, { listRemoteFiles } = {}) {
   return out;
 }
 
-module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, projectsForLibraryItem, libraryForProject, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, lookupItem, recategorize, CATEGORY_RULES, previewItem };
+module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, writePageAnnotations, projectsForLibraryItem, libraryForProject, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem };

@@ -1,0 +1,1030 @@
+import React from 'react';
+import { isGithubPage } from '../../shared/github.cjs';
+import { createPortal } from 'react-dom';
+import { api, errorMessage } from '../api.js';
+import { KindGlyph, SEARCH, FOLDER } from '../ui/Icons.jsx';
+import { kindOf, stripScheme, OPEN_IN_BROWSER } from '../model/address.js';
+import { MAX_TABS, addressKey, afterClose, looksLikePlace, placeTab, stageRows, tabKey, tabPlace, parseTable } from '../model/stage.js';
+import { markdownBlocks, inlineRuns } from '../model/markdown.js';
+import PaperView from '../pdf/PaperView.jsx';
+
+// The Stage (Claude Design "Add - Mention Stage.dc.html", 2026-09-23): the Browser and the Paper pane made one. A tab
+// shows whatever it was given — a library row, a link, a file on disk — in the way its format asks:
+//  · a page (the web, a local server, an html file) is a WebContentsView in the main process (src/main/browser/
+//    views.cjs), laid over the placeholder here, so no site can refuse it as a frame; while a menu or a card reaches
+//    over the placeholder the view is hidden behind a picture of itself (anything floating needs data-overlay="1");
+//  · a pdf — from the web (main turns it into bytes: browser:pdf), from disk or from the library — is drawn by
+//    PaperView, with its ink: a row's own, else kept by its address;
+//  · a docx (macOS textutil) is a page made from it; markdown is drawn as text, a csv or tsv as a table, a picture
+//    (heic through sips) as itself, other text as it is (main: stage-file).
+// Tabs: at most 15; what is opened comes forward if it is open already, takes a blank tab in front, else gets its own
+// (at 15 it takes the place of the tab in front). ⌘T and ⌘W work from anywhere but the terminal and bring the Stage
+// forward; ⌘F finds in whatever is in front. The address field opens anything: a link or a path goes there, words list
+// this workspace, then the library (never notes: they open in the middle), then a web search. Its right end is the
+// thing's place in the library (+ Save / + Workspace / ✓, Add - Mention.dc.html); a web pdf is saved as a copy.
+
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const EASE = 'cubic-bezier(.25,.1,.25,1)';
+const DEVICES = [
+  { id: 'fit', name: 'Fit panel', w: 0, h: 0 },
+  { id: 'se', name: 'iPhone SE', w: 375, h: 667 },
+  { id: '12', name: 'iPhone 12 Pro', w: 390, h: 844 },
+  { id: '15', name: 'iPhone 15 Pro Max', w: 430, h: 932 },
+  { id: 'px8', name: 'Pixel 8', w: 412, h: 915 },
+  { id: 'ipad', name: 'iPad mini', w: 768, h: 1024 },
+];
+const ERR_CONNECTION_REFUSED = -102;
+const RETRY_MS = 2000;
+const HOVER_MS = 650; // a tab's card, the first time; then quickly while moving along the strip
+const newId = () => (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : String(Date.now() + Math.random()));
+const blankTab = () => ({ id: newId(), url: 'about:blank', web: null, item: null, file: null, pdf: null });
+const isPage = (k) => k.kind === 'web' || k.kind === 'local' || k.kind === 'disk';
+const hasScheme = (input) => /^https?:\/\//i.test(input);
+const quiet = (promise) => promise.catch(() => {});
+const DISK_URL = /^file:/i;
+const WEB_URL = /^https?:/i;
+const fileUrl = (file) => `file://${String(file).split('/').map(encodeURIComponent).join('/')}`;
+const editable = (el) => !!(el && el.closest && el.closest('input, textarea, [contenteditable="true"], [data-terminal]'));
+const inTerminal = (el) => !!(el && el.closest && el.closest('[data-terminal]'));
+const basename = (value) => String(value || '').split('/').pop();
+const SAVE_LABEL = { none: '+ Save', lib: '+ Workspace', here: '✓' };
+const VIEWS = new Set(['md', 'table', 'text', 'image', 'folder', 'unsupported', 'error', 'loading']); // a file drawn here, not in the view
+
+const ICON_BUTTON = { width: 26, height: 26, padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', font: '14px/1 var(--font-sans)' };
+
+// A file, for its glyph: what the library would call it.
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|heic|heif|svg)$/i;
+function glyphItem(tab) {
+  if (!tab) return { type: 'website' };
+  if (tab.row) return tab.row;
+  if (tab.pdf) return { type: 'pdf' };
+  const where = tab.file && tab.file.path ? tab.file.path : '';
+  if (where) {
+    if (IMAGE_EXT.test(where)) return { type: 'image' };
+    const ext = (where.match(/\.([a-z0-9]+)$/i) || [])[1] || '';
+    if (/^(md|markdown)$/i.test(ext)) return { type: 'md' };
+    if (/^docx?$/i.test(ext)) return { type: 'docx' };
+    if (/^(csv|tsv|json|jsonl)$/i.test(ext)) return { type: 'csv' };
+    if (/^html?$/i.test(ext)) return { type: 'html' };
+    if (tab.file.kind === 'folder') return { type: 'folder' };
+    return { type: 'md' };
+  }
+  return kindOf(tab.url).kind === 'disk' ? { type: 'html' } : { type: 'website' };
+}
+
+/* ------------------------------------------------------------------------------------------------- small views */
+
+// Three books on a shelf, one of them banded (Hudson's reference, Add - Mention.dc.html).
+const Shelf = () => (
+  <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block', flex: 'none', fill: 'currentColor', stroke: 'none' }}>
+    <rect x="1.5" y="3" width="3.2" height="11" rx="1" />
+    <path fillRule="evenodd" d="M6 5a1 1 0 0 1 1-1h1.4a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1zM6.85 6.4a.5.5 0 0 1 .5-.5h.7a.5.5 0 0 1 0 1h-.7a.5.5 0 0 1-.5-.5zm0 5.2a.5.5 0 0 1 .5-.5h.7a.5.5 0 0 1 0 1h-.7a.5.5 0 0 1-.5-.5z" />
+    <rect x="10.8" y="2" width="3.2" height="12" rx="1" />
+  </svg>
+);
+const Grid = () => (
+  <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block', flex: 'none', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinejoin: 'round', strokeLinecap: 'round' }}>
+    <path d="M2.5 1.5h2.5a1 1 0 0 1 1 1v2.5a1 1 0 0 1-1 1h-2.5a1 1 0 0 1-1-1v-2.5a1 1 0 0 1 1-1z M9 1.5h4.5a1 1 0 0 1 1 1v2.5a1 1 0 0 1-1 1h-4.5a1 1 0 0 1-1-1v-2.5a1 1 0 0 1 1-1z M2.5 8h4.5a1 1 0 0 1 1 1v4.5a1 1 0 0 1-1 1h-4.5a1 1 0 0 1-1-1v-4.5a1 1 0 0 1 1-1z M11 8h2.5a1 1 0 0 1 1 1v2.5a1 1 0 0 1-1 1h-2.5a1 1 0 0 1-1-1v-2.5a1 1 0 0 1 1-1z" />
+  </svg>
+);
+// Full screen: arrows out to take the middle, arrows in to give it back (Hudson's two pictures).
+const Expand = () => <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block', fill: 'none', stroke: '#171717', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round' }}><path d="M9.3 2.5h4.2v4.2M13.5 2.5L9 7M6.7 13.5H2.5V9.3M2.5 13.5L7 9" /></svg>;
+const Collapse = () => <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block', fill: 'none', stroke: '#171717', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round' }}><path d="M13.5 2.5L9.5 6.5M9.5 3.3v3.2h3.2M2.5 13.5l4-4M6.5 12.7V9.5H3.3" /></svg>;
+
+function SaveTip({ text }) {
+  return <div role="tooltip" style={{ position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 50, padding: '6px 9px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fff', color: '#4d4d4d', font: '400 11.5px/1.3 var(--font-sans)', whiteSpace: 'nowrap', pointerEvents: 'none', animation: `rise 120ms ${EASE}` }}>{text}</div>;
+}
+
+// "+ Save": the thing's name in the library, then where it goes — the library alone, or the library and this workspace
+// (the heavier button, and what Enter does).
+function SaveCard({ title, onSave, onClose, cardRef }) {
+  const [name, setName] = React.useState(title);
+  const [tip, setTip] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState('');
+  const commit = async (here) => {
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    try { await onSave(name.trim() || title, here); onClose(); } catch (failure) { setError(errorMessage(failure)); } finally { setBusy(false); }
+  };
+  const button = { display: 'flex', alignItems: 'center', gap: 7, height: 28, padding: '0 9px 0 7px', borderRadius: 6, cursor: 'pointer', font: '500 12.5px/1 var(--font-sans)' };
+  return (
+    <div ref={cardRef} data-overlay="1" data-save-card="1" style={{ position: 'absolute', right: 10, top: 44, zIndex: 40, width: 360, maxWidth: 'calc(100% - 20px)', boxSizing: 'border-box', padding: '14px 16px 14px', background: '#fff', border: '1px solid #c9c9c9', borderRadius: 8, boxShadow: '0 12px 32px rgba(0,0,0,.06)', textAlign: 'left', animation: `rise 160ms ${EASE}` }}>
+      <input
+        ref={(element) => { if (element && !element.dataset.focused) { element.dataset.focused = '1'; element.focus({ preventScroll: true }); element.select(); } }}
+        value={name}
+        readOnly={busy}
+        onChange={(event) => { setName(event.target.value); setError(''); }}
+        onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void commit(true); } else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose(); } }}
+        aria-label="Name in the library"
+        spellCheck={false}
+        className="save-name"
+        style={{ display: 'block', width: '100%', boxSizing: 'border-box', marginTop: 9, padding: '0 0 4px', border: 0, borderBottom: '1px solid #eaeaea', background: 'transparent', font: '500 14.5px/1.4 var(--font-sans)', color: '#171717', transition: 'border-color 120ms' }}
+      />
+      {error && <div style={{ paddingTop: 6, font: '12px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere' }}>{error}</div>}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, marginTop: 14 }}>
+        <div style={{ position: 'relative', display: 'flex' }}>
+          <button type="button" className="hov-outline" disabled={busy} onClick={() => commit(false)} onMouseEnter={() => setTip('lib')} onMouseLeave={() => setTip(null)} aria-label="Add to library only" style={{ ...button, border: '1px solid transparent', background: 'transparent', color: '#4d4d4d', transition: 'color 120ms, border-color 120ms' }}>
+            <Shelf /><span>Library only</span>
+          </button>
+          {tip === 'lib' && <SaveTip text="Add to library only" />}
+        </div>
+        <div style={{ position: 'relative', display: 'flex' }}>
+          <button type="button" className="hov-save" disabled={busy} onClick={() => commit(true)} onMouseEnter={() => setTip('ws')} onMouseLeave={() => setTip(null)} aria-label="Add to library and this workspace" style={{ ...button, border: '1px solid #eaeaea', background: '#f2f2f2', color: '#171717', transition: 'border-color 120ms, background 120ms' }}>
+            <Grid /><span style={{ fontWeight: 600 }}>Workspace</span>
+          </button>
+          {tip === 'ws' && <SaveTip text="Add to library and this workspace" />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ⌘F: a card at the top right of what is in front (the design's "Find on stage"): the query, where the match in front is
+// among all of them, previous, next, close. Enter and ⇧Enter step; Escape closes.
+function FindCard({ inputRef, text, found, onText, onStep, onClose }) {
+  const small = { width: 24, height: 24, padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', font: '13px/1 var(--font-sans)', color: '#4d4d4d' };
+  const none = text && found && !found.matches;
+  return (
+    <div data-find-bar="1" data-overlay="1" style={{ position: 'absolute', top: 10, right: 14, left: 14, maxWidth: 360, marginLeft: 'auto', zIndex: 30, display: 'flex', alignItems: 'center', gap: 4, height: 34, boxSizing: 'border-box', padding: '0 4px 0 12px', background: '#fff', border: '1px solid #c9c9c9', borderRadius: 8, animation: `rise 160ms ${EASE}` }}>
+      <input
+        ref={inputRef}
+        value={text}
+        onChange={(event) => onText(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') { event.preventDefault(); onStep(event.shiftKey ? -1 : 1); }
+          else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose(); }
+        }}
+        aria-label="Find on this page"
+        spellCheck={false}
+        style={{ flex: 1, width: 'auto', minWidth: 60, padding: 0, border: 0, background: 'transparent', font: '13px/1.4 var(--font-sans)', color: '#171717' }}
+      />
+      <span data-find-count="1" style={{ flex: 'none', textAlign: 'right', font: '11px/1 var(--font-mono)', color: none ? '#e70022' : '#8f8f8f' }}>{text && found ? (found.matches ? `${found.active} of ${found.matches}` : 'no match') : ''}</span>
+      <span style={{ flex: 'none', width: 1, height: 16, margin: '0 4px', background: '#eaeaea' }} />
+      <button type="button" className="hov-ink-wash" onClick={() => onStep(-1)} aria-label="Previous match" title="⇧⏎" style={small}>↑</button>
+      <button type="button" className="hov-ink-wash" onClick={() => onStep(1)} aria-label="Next match" title="⏎" style={small}>↓</button>
+      <button type="button" className="hov-ink-wash" onClick={onClose} aria-label="Close find" title="esc" style={{ ...small, color: '#8f8f8f' }}>×</button>
+    </div>
+  );
+}
+
+// HTTP authentication (a staging site, a proxy). In the document, not in the pane: a popup can ask too.
+function LoginPrompt({ request, onAnswer }) {
+  const [username, setUsername] = React.useState('');
+  const [password, setPassword] = React.useState('');
+  const field = { padding: '8px 10px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fafafa', font: '13px/1.4 var(--font-sans)', color: '#171717' };
+  return (
+    <div data-overlay="1" role="dialog" aria-modal="true" aria-label={`Sign in to ${request.host}`} onKeyDown={(event) => { if (event.key === 'Escape') onAnswer(null); }} style={{ position: 'fixed', inset: 0, zIndex: 130, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: '18vh', background: 'rgba(255,255,255,.35)' }}>
+      <form onSubmit={(event) => { event.preventDefault(); onAnswer({ username, password }); }} style={{ width: 'min(360px, calc(100vw - 32px))', display: 'flex', flexDirection: 'column', gap: 10, padding: 18, background: '#fff', border: '1px solid #c9c9c9', borderRadius: 12, boxShadow: '0 12px 40px #0000001f', animation: `rise 160ms ${EASE}` }}>
+        <span style={{ font: '500 14px/1.4 var(--font-sans)', color: '#171717', overflowWrap: 'anywhere' }}>{request.host}</span>
+        {request.realm && <span style={{ marginTop: -6, font: '12px/1.5 var(--font-mono)', color: '#8f8f8f', overflowWrap: 'anywhere' }}>{request.realm}</span>}
+        <input autoFocus value={username} onChange={(event) => setUsername(event.target.value)} aria-label="Username" autoComplete="off" spellCheck={false} style={field} />
+        <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} aria-label="Password" autoComplete="off" style={field} />
+        <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 14, marginTop: 4 }}>
+          <button type="button" className="hov-ink" onClick={() => onAnswer(null)} style={{ padding: 0, border: 0, background: 'transparent', cursor: 'pointer', font: '13px/1 var(--font-sans)', color: '#8f8f8f' }}>Cancel</button>
+          <button type="submit" style={{ padding: '9px 14px', border: 0, borderRadius: 8, background: '#0070f3', color: '#fff', cursor: 'pointer', font: '500 13px/1 var(--font-sans)' }}>Sign in</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// A markdown file, drawn from its blocks: nothing in it is read as html.
+function Runs({ text }) {
+  return inlineRuns(text).map((run, i) => {
+    if (run.code) return <code key={i} style={{ padding: '1px 4px', borderRadius: 4, background: '#f2f2f2', font: '0.88em/1 var(--font-mono)' }}>{run.text}</code>;
+    if (run.href) return <a key={i} href={run.href} data-stage-link={run.href}>{run.text}</a>;
+    if (run.bold) return <b key={i} style={{ fontWeight: 600 }}>{run.text}</b>;
+    if (run.italic) return <i key={i}>{run.text}</i>;
+    return <React.Fragment key={i}>{run.text}</React.Fragment>;
+  });
+}
+const H_SIZE = { 1: 22, 2: 18, 3: 16, 4: 14.5, 5: 14.5, 6: 14.5 };
+function MarkdownView({ text }) {
+  const blocks = React.useMemo(() => markdownBlocks(text), [text]);
+  return (
+    <div style={{ boxSizing: 'border-box', padding: 24 }}>
+      <div style={{ maxWidth: '65ch', margin: '0 auto', font: '400 14.5px/1.7 var(--font-sans)', color: '#171717' }}>
+        {blocks.map((b, i) => {
+          if (b.type === 'h') return <div key={i} style={{ margin: `${i ? 22 : 0}px 0 0`, font: `${b.level <= 2 ? 500 : 600} ${H_SIZE[b.level]}px/1.35 var(--font-sans)`, letterSpacing: b.level === 1 ? '-0.2px' : 0, textWrap: 'pretty' }}><Runs text={b.text} /></div>;
+          if (b.type === 'p') return <p key={i} style={{ margin: '10px 0 0', textWrap: 'pretty' }}><Runs text={b.text} /></p>;
+          if (b.type === 'li') {
+            return (
+              <div key={i} style={{ display: 'flex', gap: 10, margin: '4px 0 0', paddingLeft: b.depth * 22 }}>
+                <span style={{ flex: 'none', minWidth: 12, color: '#8f8f8f', fontVariantNumeric: 'tabular-nums' }}>{b.checked != null ? (b.checked ? '☑' : '☐') : b.ordered ? b.marker : '•'}</span>
+                <span style={{ minWidth: 0, textWrap: 'pretty', color: b.checked ? '#8f8f8f' : undefined }}><Runs text={b.text} /></span>
+              </div>
+            );
+          }
+          if (b.type === 'quote') return <div key={i} style={{ margin: '12px 0 0', padding: '2px 0 2px 14px', borderLeft: '3px solid #eaeaea', color: '#4d4d4d', textWrap: 'pretty' }}><Runs text={b.text} /></div>;
+          if (b.type === 'code') return <pre key={i} style={{ margin: '12px 0 0', padding: '12px 14px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fafafa', overflowX: 'auto', font: '12.5px/1.6 var(--font-mono)', color: '#171717' }}>{b.text}</pre>;
+          return <hr key={i} style={{ margin: '18px 0 0', border: 0, borderTop: '1px solid #eaeaea' }} />;
+        })}
+      </div>
+    </div>
+  );
+}
+
+const TABLE_ROWS = 2000;
+function TableView({ text, delimiter, truncated }) {
+  const rows = React.useMemo(() => parseTable(text, delimiter, TABLE_ROWS + 1), [text, delimiter]);
+  const width = rows.reduce((most, row) => Math.max(most, row.length), 0);
+  const shown = rows.slice(0, TABLE_ROWS);
+  const cell = { flex: 'none', width: 200, boxSizing: 'border-box', padding: '8px 12px', borderRight: '1px solid #eaeaea', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '12px/1.5 var(--font-mono)', color: '#171717' };
+  return (
+    <div style={{ boxSizing: 'border-box', padding: 16 }}>
+      <div style={{ background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, overflow: 'auto' }}>
+        {shown.map((row, i) => (
+          <div key={i} style={{ display: 'flex', minWidth: 'max-content', borderBottom: i === shown.length - 1 ? 0 : '1px solid #eaeaea', background: i === 0 ? '#fafafa' : '#fff' }}>
+            <div style={{ flex: 'none', width: 48, boxSizing: 'border-box', padding: '8px 10px', borderRight: '1px solid #eaeaea', textAlign: 'right', font: '11px/1.5 var(--font-mono)', color: '#8f8f8f' }}>{i === 0 ? '' : i}</div>
+            {Array.from({ length: width }, (_, j) => <div key={j} title={row[j] || ''} style={{ ...cell, fontWeight: i === 0 ? 500 : 400 }}>{row[j] || ''}</div>)}
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 10, font: '11.5px/1.5 var(--font-sans)', color: '#8f8f8f' }}>{`${Math.max(0, shown.length - 1)}${rows.length > TABLE_ROWS || truncated ? '+' : ''} rows · ${width} columns`}</div>
+    </div>
+  );
+}
+
+function ImageView({ file }) {
+  const [src, setSrc] = React.useState(null);
+  React.useEffect(() => {
+    const url = URL.createObjectURL(new Blob([file.bytes], { type: file.mime || 'application/octet-stream' }));
+    setSrc(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+  return (
+    <div style={{ minHeight: '100%', boxSizing: 'border-box', padding: 24, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      {src && <img src={src} alt={file.name} draggable={false} style={{ display: 'block', maxWidth: '100%', maxHeight: 'calc(100vh - 200px)', objectFit: 'contain', background: '#fff' }} />}
+    </div>
+  );
+}
+
+// What cannot be drawn here (a folder, a format the Stage does not read, a path with nothing at it): its name and where it is.
+function Plain({ title, detail, error }) {
+  return (
+    <div style={{ minHeight: '100%', boxSizing: 'border-box', padding: 24, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, textAlign: 'center' }}>
+      <span style={{ font: '500 14px/1.4 var(--font-sans)', color: '#171717', overflowWrap: 'anywhere' }}>{title}</span>
+      {detail && <span style={{ font: '12px/1.6 var(--font-mono)', color: error ? '#e70022' : '#8f8f8f', overflowWrap: 'anywhere' }}>{detail}</span>}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------------------ find in a file drawn here */
+// CSS Custom Highlights over the view's text nodes (the page's DOM is never changed), as PaperView does for a pdf.
+const FIND = 'stage-find', FIND_ON = 'stage-find-cur';
+const highlights = () => (typeof CSS !== 'undefined' && CSS.highlights && typeof Highlight === 'function' ? CSS.highlights : null);
+function textRanges(root, query) {
+  const needle = String(query || '').toLowerCase();
+  if (!root || !needle.trim()) return [];
+  const ranges = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const hay = node.data.toLowerCase();
+    for (let at = hay.indexOf(needle); at >= 0; at = hay.indexOf(needle, at + needle.length)) {
+      const range = document.createRange();
+      range.setStart(node, at);
+      range.setEnd(node, at + needle.length);
+      ranges.push(range);
+    }
+  }
+  return ranges;
+}
+function paintRanges(ranges, active, scroller) {
+  const h = highlights();
+  if (h) {
+    h.set(FIND, new Highlight(...ranges.filter((range, i) => i !== active)));
+    const on = new Highlight(...(ranges[active] ? [ranges[active]] : []));
+    on.priority = 1;
+    h.set(FIND_ON, on);
+  }
+  const range = ranges[active];
+  if (!range || !scroller) return;
+  const box = scroller.getBoundingClientRect(), r = range.getBoundingClientRect();
+  if (r.top < box.top + 24 || r.bottom > box.bottom - 24) scroller.scrollTop += r.top - box.top - scroller.clientHeight / 3;
+}
+const clearRanges = () => { const h = highlights(); if (h) { h.delete(FIND); h.delete(FIND_ON); } };
+
+/* --------------------------------------------------------------------------------------------------- Stage */
+
+const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull, onShow, onPage, onFront, save, library, inRail, onError }, ref) {
+  const [tabs, setTabs] = React.useState(() => [blankTab()]);
+  const [activeId, setActiveId] = React.useState(() => null);
+  const [draft, setDraft] = React.useState('');
+  const [menu, setMenu] = React.useState(null); // { x, y }
+  const [device, setDevice] = React.useState('fit');
+  const [customW, setCustomW] = React.useState('390');
+  const [occluded, setOccluded] = React.useState(false);
+  const [snapshot, setSnapshot] = React.useState(null);
+  const [logins, setLogins] = React.useState([]); // HTTP authentication a page (or a popup) is waiting on
+  const [typing, setTyping] = React.useState(false); // the address has the keyboard: its list is open, Save steps aside
+  const [pick, setPick] = React.useState(0); // the row of the address list Enter takes
+  const [found, setFound] = React.useState(null); // the library's answer for a typed place: { input, row }
+  const [saving, setSaving] = React.useState(false); // the Save card is open
+  const [finding, setFinding] = React.useState(false); // the find card is open
+  const [findText, setFindText] = React.useState('');
+  const [matches, setMatches] = React.useState(null); // { matches, active } in the tab in front
+  const [findFocus, setFindFocus] = React.useState(0); // bumped to put the keyboard in the find field
+  const [hover, setHover] = React.useState(null); // { id, left, width }: the tab whose card shows
+  const hoverTimer = React.useRef(0);
+  const hoverWarm = React.useRef(false);
+  const warmTimer = React.useRef(0);
+  const findRef = React.useRef(null);
+  const paperRef = React.useRef(null);
+  const rootRef = React.useRef(null);
+  const viewRef = React.useRef(null); // a file drawn here: what find searches, and what scrolls
+  const fileRanges = React.useRef({ ranges: [], active: -1, query: '' });
+  const pdfSeq = React.useRef(0);
+  const keys = React.useRef(null); // the handlers the key listeners call, current every render
+  const saveCard = React.useRef(null);
+  const saveButton = React.useRef(null);
+  const addressRef = React.useRef(null);
+  const menuRef = React.useRef(null);
+  const slotRef = React.useRef(null); // where the page goes
+  // What claim() decides from: the tabs and the one in front as of the last decision, not the last render — several
+  // things opened in one go (files picked together) each see where the one before them went.
+  const tabsRef = React.useRef(tabs);
+  const frontRef = React.useRef(activeId);
+  tabsRef.current = tabs;
+  frontRef.current = activeId;
+
+  const tab = tabs.find((t) => t.id === activeId) || tabs[0];
+  const activeIndex = tabs.indexOf(tab);
+  const pdf = tab.pdf || null; // { url, input, name, under, seq, loading, bytes, error, marks (undefined until read), rowId }
+  const view = !pdf && tab.file && VIEWS.has(tab.file.kind) ? tab.file : null; // a file drawn here
+  const k = kindOf(tab.url); // under a pdf: the page that led to it
+  const page = !pdf && !view && (isPage(k) || !!tab.opened);
+  const blank = !pdf && !view && !page && k.kind === 'blank';
+  const web = tab.web;
+  const failed = page && web && web.error ? web.error : null;
+  const showing = visible && page && !failed && !occluded;
+  // Where the tab is, as the address field shows it: a file by its path (a docx too, though a page made from it is shown).
+  const shownUrl = pdf ? (pdf.input || pdf.url) : tab.file && tab.file.path ? tab.file.path : tab.url;
+  const shownDraft = stripScheme(shownUrl);
+
+  const update = React.useCallback((id, fn) => setTabs((current) => current.map((t) => (t.id === id ? fn(t) : t))), []);
+
+  // The thing in front, for the library: its address or path, and for a pdf from the web its bytes (Save keeps a copy).
+  const pageInput = pdf ? (pdf.error ? null : pdf.input || (DISK_URL.test(pdf.url) ? stripScheme(pdf.url) : pdf.url))
+    : view ? (view.path && view.kind !== 'error' && view.kind !== 'loading' ? view.path : null)
+      : tab.file && tab.file.kind === 'doc' ? tab.file.path
+        : page ? ((web && web.url) || tab.url) : null;
+  const pageTitle = tab.row ? tab.row.name : pdf ? pdf.name : view || (tab.file && tab.file.kind === 'doc') ? (tab.file.name || basename(pageInput)) : page ? ((web && web.title) || stripScheme(pageInput || '')) : '';
+  const savable = !!pageInput && !/^about:/i.test(pageInput) && kindOf(pdf ? pdf.url : tab.url).kind !== 'local';
+  const pdfBytes = pdf && !pdf.rowId && WEB_URL.test(pdf.url) ? pdf.bytes : null;
+  React.useEffect(() => { if (onPage) onPage(savable ? { input: pageInput, title: pageTitle || stripScheme(pageInput), bytes: pdfBytes || null } : null); }, [savable, pageInput, pageTitle, pdfBytes, onPage]);
+  React.useEffect(() => { if (onFront) onFront(tab.item || null); }, [tab.item, onFront]);
+  React.useEffect(() => { setSaving(false); }, [tab.id, pageInput]);
+  // The card closes on a press anywhere else.
+  React.useEffect(() => {
+    if (!saving) return undefined;
+    const away = (event) => { if (![saveCard, saveButton].some((r) => r.current && r.current.contains(event.target))) setSaving(false); };
+    document.addEventListener('mousedown', away, true);
+    return () => document.removeEventListener('mousedown', away, true);
+  }, [saving]);
+  const saveState = save && savable ? save.state : null;
+  const onSaveClick = () => {
+    if (saveState === 'none') setSaving((open) => !open);
+    else if (saveState === 'lib') save.onLink().catch(() => {});
+  };
+
+  React.useEffect(() => {
+    if (!menu) return undefined;
+    const close = (event) => { if (menuRef.current && !menuRef.current.contains(event.target)) setMenu(null); };
+    window.addEventListener('mousedown', close);
+    return () => window.removeEventListener('mousedown', close);
+  }, [menu]);
+
+  /* -------------------------------------------------------------------------------------------- tabs */
+
+  const dropTab = React.useCallback((id) => {
+    setTabs((current) => {
+      const at = current.findIndex((t) => t.id === id);
+      if (at < 0) return current;
+      const rest = current.filter((t) => t.id !== id);
+      if (!rest.length) {
+        const fresh = blankTab();
+        setActiveId(fresh.id);
+        return [fresh];
+      }
+      const gone = current[at];
+      setActiveId((active) => {
+        const front = current.findIndex((t) => t.id === (active || current[0].id));
+        if (front !== at) return active;
+        const back = rest.find((t) => t.id === gone.from); // back to the tab that opened it, as a sign-in expects
+        return back ? back.id : rest[afterClose(current.length, front, at)].id;
+      });
+      return rest;
+    });
+  }, []);
+
+  // A tab a page opened arrives with its view already made (id); nothing else is loaded here.
+  const adoptTab = React.useCallback((url, id, from) => {
+    const next = { ...blankTab(), id, url: url || 'about:blank', from: from || null, opened: true };
+    setTabs((current) => [...current, next]);
+    setActiveId(next.id);
+  }, []);
+
+  // Where something being opened goes (model/stage.js placeTab); answers the tab's id, or null when it was open already.
+  const claim = (key) => {
+    const current = tabsRef.current;
+    const front = Math.max(0, current.findIndex((t) => t.id === (frontRef.current || current[0].id)));
+    const place = placeTab(current, front, key);
+    if (place.focus != null) { frontRef.current = current[place.focus].id; setActiveId(frontRef.current); return null; }
+    const fresh = { ...blankTab(), claimed: true };
+    if (place.replace != null) {
+      const old = current[place.replace];
+      quiet(api.browserClose(old.id));
+      tabsRef.current = current.map((t) => (t.id === old.id ? fresh : t));
+      setTabs((list) => list.map((t) => (t.id === old.id ? fresh : t)));
+    } else {
+      tabsRef.current = [...current, fresh];
+      setTabs((list) => [...list, fresh]);
+    }
+    frontRef.current = fresh.id;
+    setActiveId(fresh.id);
+    return fresh.id;
+  };
+
+  /* -------------------------------------------------------------------------------------------- loading */
+
+  // A page main refuses (a file outside the home directory) fails like one that did not load.
+  const load = (id, url) => api.browserOpen(id, url).catch((error) => update(id, (t) => ({ ...t, web: { ...(t.web || {}), id, url, error: { code: 0, description: errorMessage(error), url } } })));
+
+  // A pdf's ink: a library row's own, else kept by the pdf's address.
+  const readInk = (id, bytes, rowId, url) => {
+    const read = rowId ? api.readAnnotations(rowId) : api.readPageAnnotations(url);
+    read.catch(() => null).then((marks) => update(id, (t) => (t.pdf && t.pdf.bytes === bytes ? { ...t, pdf: { ...t.pdf, marks: marks || {} } } : t)));
+  };
+
+  // What main read at a path (stage-file) goes into the tab: a pdf to the viewer, a page (or a docx made one) to the view,
+  // anything else drawn here.
+  const apply = (id, result, rowId) => {
+    if (result.kind === 'pdf') {
+      const seq = (pdfSeq.current += 1);
+      update(id, (t) => ({ ...t, url: 'about:blank', file: null, pdfForward: null, pdf: { url: result.url, input: t.row ? (t.row.url || t.row.path) : result.path, name: t.row ? t.row.name : result.name, under: 'about:blank', seq, loading: false, bytes: result.bytes, error: '', marks: undefined, rowId: rowId || null } }));
+      readInk(id, result.bytes, rowId, result.url);
+      return;
+    }
+    if (result.kind === 'page' || result.kind === 'doc') {
+      update(id, (t) => ({ ...t, url: result.url, pdf: null, pdfForward: null, opened: false, file: result.kind === 'doc' ? result : null, web: t.web ? { ...t.web, error: null } : null }));
+      load(id, result.url);
+      return;
+    }
+    update(id, (t) => ({ ...t, url: 'about:blank', pdf: null, pdfForward: null, file: result }));
+  };
+
+  const readPath = (id, input, rowId) => {
+    update(id, (t) => ({ ...t, url: 'about:blank', pdf: null, pdfForward: null, file: { kind: 'loading', path: input, name: basename(input) } }));
+    api.stageFile(projectId, input)
+      .then((result) => apply(id, result, rowId)) // a tab closed meanwhile is simply not there to update
+      .catch((error) => update(id, (t) => ({ ...t, file: { kind: 'error', path: input, name: basename(input), message: errorMessage(error) } })));
+  };
+
+  // A library row in a tab of its own: its file when it has one (read here), else its address.
+  const showRow = (id, row) => {
+    if (isGithubPage(row.url) && !row.path) { quiet(api.openExternal(row.url)); return; }
+    update(id, (t) => ({ ...t, item: row.id, row }));
+    if (row.type === 'pdf' && row.path) {
+      const seq = (pdfSeq.current += 1);
+      update(id, (t) => ({ ...t, url: 'about:blank', file: null, pdf: { url: row.url || fileUrl(row.path), input: row.url || row.path, name: row.name, under: 'about:blank', seq, loading: true, bytes: null, error: '', marks: undefined, rowId: row.id } }));
+      api.readLibraryFile(row.id).then((file) => {
+        update(id, (t) => (t.pdf && t.pdf.seq === seq ? { ...t, pdf: { ...t.pdf, loading: false, bytes: file.bytes } } : t));
+        readInk(id, file.bytes, row.id, null);
+      }).catch((error) => update(id, (t) => (t.pdf && t.pdf.seq === seq ? { ...t, pdf: { ...t.pdf, loading: false, error: errorMessage(error) } } : t)));
+      return;
+    }
+    if (row.url && (row.type !== 'html' || !row.path)) { update(id, (t) => ({ ...t, url: row.url, file: null, pdf: null })); load(id, row.url); return; }
+    if (row.path) readPath(id, row.path, row.id);
+  };
+
+  // Typed (or picked) into the tab in front: a path is read, anything else is where the page goes.
+  const navigate = async (id, input) => {
+    if (isGithubPage(kindOf(input).url)) { await api.openExternal(kindOf(input).url); setTyping(false); setDraft(stripScheme(tab.url)); return; }
+    update(id, (t) => ({ ...t, pdf: null, pdfForward: null, item: null, row: null }));
+    let next = kindOf(input);
+    const path = next.kind === 'disk' || next.kind === 'file' || (!hasScheme(input) && next.kind !== 'local' && next.kind !== 'sandbox' && next.kind !== 'blank' && looksLikePlace(input) && /^[.~/]|\.[a-z0-9]{1,8}(?:[#?].*)?$/i.test(input) && !/\.(com|org|net|io|dev|ai|app|edu|gov|co|xyz|me)(?:[/:#?].*)?$/i.test(input));
+    if (path) {
+      const place = next.kind === 'disk' ? next.url : input;
+      try {
+        const result = await api.stageFile(projectId, place);
+        apply(id, result, null);
+        setDraft(stripScheme(result.path || place));
+        return;
+      } catch (error) {
+        if (next.kind === 'file' || next.kind === 'disk') {
+          update(id, (t) => ({ ...t, url: 'about:blank', file: { kind: 'error', path: input, name: basename(input), message: errorMessage(error) } }));
+          setDraft(input);
+          return;
+        }
+        next = kindOf(`https://${input}`); // `report.html` that is no file here: a site after all
+      }
+    }
+    if (isPage(next)) load(id, next.url);
+    update(id, (t) => ({ ...t, opened: false, file: null, url: next.url || input, web: isPage(next) && t.web ? { ...t.web, error: null } : t.web }));
+    setDraft(stripScheme(next.url || input));
+  };
+
+  // Opened from elsewhere — the sidebar, an @mention, a link in the document or the terminal, the all-projects screen.
+  const openRow = (row) => {
+    if (isGithubPage(row.url) && !row.path) { quiet(api.openExternal(row.url)); return; }
+    const id = claim(`i:${row.id}`);
+    if (id) showRow(id, row);
+  };
+  const openInput = (input) => {
+    const k0 = kindOf(input);
+    if (isGithubPage(k0.url)) { quiet(api.openExternal(k0.url)); return; }
+    const id = claim(isPage(k0) && !DISK_URL.test(input) ? `l:${addressKey(k0.url)}` : '');
+    if (id) void navigate(id, input);
+  };
+  // Files from the computer open as tabs of their own; + Save is what puts them in the library. Past 15, the rest are left.
+  const openPaths = (paths) => {
+    let room = MAX_TABS - tabsRef.current.filter((t) => tabKey(t) || t.pdf || t.file).length;
+    for (const file of paths) {
+      if (room <= 0) break;
+      const id = claim(`l:${addressKey(fileUrl(file))}`);
+      if (id) { readPath(id, file, null); room -= 1; }
+    }
+  };
+  const chooseFiles = async () => {
+    setTyping(false);
+    if (addressRef.current) addressRef.current.blur();
+    try { const paths = await api.pickLibraryPaths(); if (paths && paths.length) openPaths(paths); } catch (error) { if (onError) onError(error); }
+  };
+
+  const newTab = () => {
+    if (tabsRef.current.length >= MAX_TABS) return;
+    const fresh = blankTab();
+    setTabs((current) => [...current, fresh]);
+    setActiveId(fresh.id);
+    setDraft('');
+    setFinding(false);
+    // the caret goes to the address, once the new tab is in front
+    const go = () => { if (addressRef.current) { addressRef.current.focus({ preventScroll: true }); addressRef.current.select(); } };
+    requestAnimationFrame(() => { go(); requestAnimationFrame(go); });
+  };
+  const closeTab = (id) => { quiet(api.browserClose(id)); dropTab(id); setHover(null); };
+  const select = (t) => { setActiveId(t.id); setMenu(null); setTyping(false); setHover(null); };
+
+  React.useImperativeHandle(ref, () => ({ openRow, openInput, openPaths, newTab, closeTab: () => closeTab(tab.id) }));
+
+  // A tab's pdf from a page: loading, then its bytes (and the ink kept for its address) or why not. A new one is a new viewer.
+  const receivePdf = React.useCallback((got) => {
+    const fresh = (pdfSeq.current += 1);
+    setTabs((current) => current.map((t) => {
+      if (t.id !== got.id) return t;
+      const seq = t.pdf && t.pdf.loading && t.pdf.url === got.url ? t.pdf.seq : fresh;
+      const rowId = t.row && t.row.url && addressKey(t.row.url) === addressKey(got.url) ? t.row.id : null; // a library row that is this pdf's address
+      const next = { url: got.url, input: got.url, name: t.row && rowId ? t.row.name : got.name, under: got.under || 'about:blank', seq, loading: !!got.loading, bytes: got.bytes || null, error: got.error || '', marks: undefined, rowId };
+      return { ...t, url: next.under, pdf: next, pdfForward: null, file: null };
+    }));
+    if (!got.bytes) return;
+    api.readPageAnnotations(got.url).catch(() => null).then((marks) => setTabs((current) => current.map((t) => (
+      t.id === got.id && t.pdf && t.pdf.bytes === got.bytes ? { ...t, pdf: { ...t.pdf, marks: marks || {} } } : t
+    ))));
+  }, []);
+
+  // The page reports where it is; a tab showing a file keeps its own address. When the page under a pdf goes somewhere
+  // else (a reload answered with a page), the pdf is gone, and so is Forward to one.
+  React.useEffect(() => {
+    const offState = api.onBrowserState((state) => setTabs((current) => current.map((t) => {
+      if (t.id !== state.id) return t;
+      const next = { ...t, web: state, url: (t.opened || isPage(kindOf(t.url))) && state.url ? state.url : t.url };
+      const moved = (under) => !state.loading && (state.url || 'about:blank') !== (under || 'about:blank');
+      // (a pdf that no page led to — from disk or the library — is not the page's to take away)
+      if (t.pdf && !t.pdf.loading && t.pdf.under !== 'about:blank' && moved(t.pdf.under)) next.pdf = null;
+      if (t.pdfForward && moved(t.pdfForward.under)) next.pdfForward = null;
+      // a page that went elsewhere by a link is no longer the library row the tab was opened with
+      if (t.row && t.row.url && state.url && !state.loading && !t.pdf && addressKey(state.url) !== addressKey(t.row.url) && !(t.file && t.file.kind === 'doc')) { next.item = null; next.row = null; }
+      if (t.file && t.file.kind === 'doc' && state.url && !state.loading && !DISK_URL.test(state.url)) next.file = null;
+      return next;
+    })));
+    const offPdf = api.onBrowserPdf(receivePdf);
+    const offFound = api.onBrowserFound((result) => { const h = keys.current; if (h && h.finding && result.id === h.tabId) setMatches({ matches: result.matches, active: result.active }); });
+    const offShortcut = api.onBrowserShortcut(({ name, tab: from }) => { if (keys.current) keys.current.shortcut(name, from); });
+    const offOpen = api.onBrowserOpenTab(({ url, id, from }) => adoptTab(url, id, from));
+    const offClosed = api.onBrowserClosed(({ id }) => dropTab(id));
+    const offLogin = api.onBrowserLogin((request) => setLogins((current) => [...current, request]));
+    const offFocus = api.onBrowserFocusAddress(() => { if (addressRef.current) { addressRef.current.focus(); addressRef.current.select(); } });
+    const onAsk = (event) => { if (event.detail && event.detail.url && keys.current) keys.current.openInput(event.detail.url); }; // a link clicked in the terminal
+    window.addEventListener(OPEN_IN_BROWSER, onAsk);
+    return () => { offState(); offPdf(); offFound(); offShortcut(); offOpen(); offClosed(); offLogin(); offFocus(); window.removeEventListener(OPEN_IN_BROWSER, onAsk); quiet(api.browserCloseAll()); };
+  }, [adoptTab, dropTab, receivePdf]);
+
+  // The address follows the tab unless it is being typed in.
+  React.useEffect(() => {
+    if (document.activeElement !== addressRef.current) setDraft(shownDraft);
+  }, [tab.id, shownDraft]);
+
+  // Anything marked data-overlay that reaches over the page would sit under the native view.
+  React.useEffect(() => {
+    if (!visible || !page) { setOccluded(false); return undefined; }
+    let timer = 0; // a timer, not a frame: frames stop while the window is covered
+    const check = () => {
+      timer = 0;
+      const slot = slotRef.current;
+      if (!slot) return;
+      const r = slot.getBoundingClientRect();
+      let hit = false;
+      for (const overlay of document.querySelectorAll('[data-overlay]')) {
+        if (overlay.dataset.findBar) continue; // the find card sits in a band above the page, never over it
+        const b = overlay.getBoundingClientRect();
+        if (b.width && b.height && b.left < r.right && b.right > r.left && b.top < r.bottom && b.bottom > r.top) { hit = true; break; }
+      }
+      setOccluded(hit);
+    };
+    const schedule = () => { if (!timer) timer = setTimeout(check, 16); };
+    const observer = new MutationObserver(schedule);
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'data-overlay'] });
+    check();
+    return () => { observer.disconnect(); clearTimeout(timer); };
+  }, [visible, page, tab.id]);
+
+  // The view follows the placeholder; one page shows at a time, and none when there is no place for it.
+  React.useLayoutEffect(() => {
+    let cancelled = false;
+    if (!showing) {
+      quiet(api.browserHide({ snapshot: visible && page && !failed && occluded }).then((picture) => { if (!cancelled) setSnapshot(picture || null); }));
+      return () => { cancelled = true; };
+    }
+    const slot = slotRef.current;
+    const place = () => {
+      const r = slot.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) { quiet(api.browserHide()); return; }
+      quiet(api.browserShow(tab.id, { x: r.left, y: r.top, width: r.width, height: r.height }).then(() => { if (!cancelled) setSnapshot(null); }));
+    };
+    const observer = new ResizeObserver(place);
+    observer.observe(slot);
+    if (slot.parentElement) observer.observe(slot.parentElement);
+    window.addEventListener('resize', place);
+    place();
+    return () => { cancelled = true; observer.disconnect(); window.removeEventListener('resize', place); };
+  }, [showing, visible, page, !!failed, occluded, tab.id, device, customW, finding, full]);
+
+  // A local server that is not up yet: keep knocking while its tab is in front.
+  React.useEffect(() => {
+    if (!visible || k.kind !== 'local' || !failed || failed.code !== ERR_CONNECTION_REFUSED) return undefined;
+    const timer = setTimeout(() => quiet(api.browserCommand(tab.id, 'reload')), RETRY_MS);
+    return () => clearTimeout(timer);
+  }, [visible, k.kind, failed, tab.id]);
+
+  // Back and forward are the page's own history; from a pdf, the page that led to it, and forward from there is the pdf again.
+  const canBack = pdf ? pdf.under !== 'about:blank' || !!(web && web.url) : page ? !!(web && web.canGoBack) : !!(web && web.url);
+  const canForward = !pdf && (!!tab.pdfForward || (page && !!(web && web.canGoForward)));
+  const back = () => {
+    if (!canBack) return;
+    if (pdf) update(tab.id, (t) => ({ ...t, pdf: null, pdfForward: t.pdf, url: t.pdf.under !== 'about:blank' ? t.pdf.under : (t.web && t.web.url) || 'about:blank' }));
+    else if (page) quiet(api.browserCommand(tab.id, 'back'));
+    else update(tab.id, (t) => ({ ...t, file: null, url: t.web.url }));
+  };
+  const forward = () => {
+    if (!canForward) return;
+    if (tab.pdfForward) update(tab.id, (t) => ({ ...t, pdf: t.pdfForward, pdfForward: null }));
+    else quiet(api.browserCommand(tab.id, 'forward'));
+  };
+  const loading = page && !!(web && web.loading) && !failed;
+  const reload = () => {
+    if (pdf) { if (pdf.rowId && tab.row) showRow(tab.id, tab.row); else if (!pdf.loading && WEB_URL.test(pdf.url)) load(tab.id, pdf.url); else if (DISK_URL.test(pdf.url)) readPath(tab.id, stripScheme(pdf.url), null); }
+    else if (page) quiet(api.browserCommand(tab.id, loading ? 'stop' : 'reload'));
+    else if (tab.file && tab.file.path) readPath(tab.id, tab.file.path, tab.item);
+  };
+
+  /* ------------------------------------------------------------------------------------------ the address list */
+
+  const query = typing && draft !== shownDraft ? draft.trim() : '';
+  React.useEffect(() => {
+    if (!query || !looksLikePlace(query)) { setFound(null); return undefined; }
+    let live = true;
+    const timer = setTimeout(() => {
+      api.lookupLibraryItem(query).then((answer) => { if (live) setFound({ input: query, row: answer.row || null }); }).catch(() => { if (live) setFound(null); });
+    }, 120);
+    return () => { live = false; clearTimeout(timer); };
+  }, [query]);
+  const rows = React.useMemo(
+    () => (typing ? stageRows({ query, library: library || [], inRail: inRail || (() => false), found: found && found.input === query ? found : undefined }) : []),
+    [typing, query, library, inRail, found],
+  );
+  React.useEffect(() => { setPick(0); }, [query]);
+  const leaveAddress = () => { setTyping(false); if (addressRef.current) addressRef.current.blur(); };
+  const choose = (r) => {
+    if (!r) return;
+    if (r.kind === 'disk') { void chooseFiles(); return; }
+    leaveAddress();
+    if (r.kind === 'item') { openRow(r.row); return; }
+    void navigate(tab.id, r.input); // a place goes there; words are a web search (model/address.js kindOf)
+  };
+  // Enter takes the row picked with the arrows; with nothing typed and nothing picked it goes to the address again (a reload).
+  const arrowed = React.useRef(false);
+  React.useEffect(() => { arrowed.current = false; }, [query, typing]);
+  const onAddressKey = (event) => {
+    if (event.key === 'ArrowDown') { event.preventDefault(); arrowed.current = true; setPick((i) => (i + 1) % Math.max(1, rows.length)); }
+    else if (event.key === 'ArrowUp') { event.preventDefault(); arrowed.current = true; setPick((i) => (i - 1 + rows.length) % Math.max(1, rows.length)); }
+    else if (event.key === 'Enter') {
+      event.preventDefault();
+      if (!query && !arrowed.current) { if (draft.trim()) reload(); leaveAddress(); return; }
+      choose(rows[pick] || rows[0]);
+    } else if (event.key === 'Escape') { setDraft(shownDraft); leaveAddress(); }
+  };
+
+  /* ---------------------------------------------------------------------------------------------- find */
+  // One query for the pane; it follows the tab in front. A page is searched by Chromium (main: findInPage), a pdf by its
+  // viewer, a file drawn here by its text. A new query starts over; Enter, ↓ and ⌘G step (1), ⇧Enter, ↑ and ⇧⌘G back (-1).
+  const pdfReady = !!(pdf && pdf.bytes && pdf.marks !== undefined);
+  const runFind = (text, step) => {
+    if (pdf) { setMatches(pdfReady && paperRef.current ? paperRef.current.find(text, step) : null); return; }
+    if (view) {
+      const box = fileRanges.current;
+      if (!text.trim()) { clearRanges(); fileRanges.current = { ranges: [], active: -1, query: '' }; setMatches(null); return; }
+      if (text !== box.query || step === 0) {
+        const ranges = textRanges(viewRef.current, text);
+        const keep = text === box.query ? Math.min(box.active, ranges.length - 1) : 0;
+        fileRanges.current = { ranges, active: ranges.length ? Math.max(0, keep) : -1, query: text };
+      } else if (box.ranges.length) {
+        box.active = (box.active + step + box.ranges.length) % box.ranges.length;
+      }
+      const now = fileRanges.current;
+      paintRanges(now.ranges, now.active, viewRef.current);
+      setMatches({ matches: now.ranges.length, active: now.active + 1 });
+      return;
+    }
+    if (!page || !web) { setMatches(null); return; }
+    if (!text) { quiet(api.browserFind(tab.id, '')); setMatches(null); return; }
+    quiet(api.browserFind(tab.id, text, { backward: step < 0 }));
+  };
+  React.useEffect(() => {
+    if (!finding) return undefined;
+    runFind(findText, 0);
+    const id = tab.id, inPdf = !!pdf, inView = !!view;
+    return () => {
+      if (inPdf) { if (paperRef.current) paperRef.current.stopFind(); }
+      else if (inView) { clearRanges(); fileRanges.current = { ranges: [], active: -1, query: '' }; }
+      else quiet(api.browserStopFind(id));
+    };
+  }, [finding, findText, tab.id, !!pdf, pdfReady, !!view, view && view.kind, page && !!web]); // eslint-disable-line react-hooks/exhaustive-deps
+  React.useEffect(() => {
+    if (!findFocus || !findRef.current) return;
+    findRef.current.focus();
+    findRef.current.select();
+  }, [findFocus]);
+  const openFind = () => { setFinding(true); setFindFocus((n) => n + 1); };
+  const closeFind = () => { setFinding(false); setMatches(null); };
+
+  // ⌘T and ⌘W from anywhere but the terminal, bringing the Stage forward; ⌘F while the Stage shows and has the keyboard
+  // (its fields, a pdf, a page: main forwards those) or nothing else that takes typing does; ⌘G / ⇧⌘G while finding.
+  keys.current = {
+    tabId: tab.id,
+    finding,
+    openInput,
+    shortcut: (name, from) => {
+      if (name === 'new-tab') { if (onShow) onShow(); newTab(); return; }
+      if (name === 'close-tab') { if (onShow) onShow(); closeTab(from || tab.id); return; }
+      if (!visible) return;
+      if (name === 'find') { if (from || !editable(document.activeElement) || (rootRef.current && rootRef.current.contains(document.activeElement))) openFind(); }
+      else if ((name === 'find-next' || name === 'find-previous') && finding) runFind(findText, name === 'find-next' ? 1 : -1);
+    },
+  };
+  React.useEffect(() => {
+    const onKey = (event) => {
+      if (!event.metaKey || event.altKey || event.ctrlKey || event.defaultPrevented) return;
+      const key = event.key.toLowerCase();
+      const inside = rootRef.current && event.target && rootRef.current.contains(event.target);
+      const take = () => { event.preventDefault(); event.stopPropagation(); };
+      if ((key === 't' || key === 'w') && !event.shiftKey) {
+        if (inTerminal(event.target)) return; // the terminal's own tabs
+        take();
+        keys.current.shortcut(key === 't' ? 'new-tab' : 'close-tab', null);
+      } else if (!visible) {
+        /* the rest only while the Stage shows */
+      } else if (key === 'f' && !event.shiftKey && (inside || !editable(event.target))) { take(); keys.current.shortcut('find', null); }
+      else if (key === 'g' && keys.current.finding) { take(); keys.current.shortcut(event.shiftKey ? 'find-previous' : 'find-next', null); }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [visible]);
+
+  // A link in a markdown file opens here too.
+  const onViewClick = (event) => {
+    const link = event.target.closest && event.target.closest('a[data-stage-link]');
+    if (!link) return;
+    event.preventDefault();
+    openInput(link.dataset.stageLink);
+  };
+
+  /* ------------------------------------------------------------------------------------------ tab cards */
+  const enterTab = (event, t) => {
+    clearTimeout(hoverTimer.current);
+    if (t.id === tab.id) return;
+    const r = event.currentTarget.getBoundingClientRect();
+    const pane = rootRef.current ? rootRef.current.getBoundingClientRect() : { left: 0, right: window.innerWidth };
+    const width = Math.max(160, Math.min(260, pane.right - pane.left - 16));
+    const left = Math.max(pane.left + 8, Math.min(r.left + 4, pane.right - 8 - width));
+    hoverTimer.current = setTimeout(() => { hoverWarm.current = true; setHover({ id: t.id, left: Math.round(left - r.left), width: Math.round(width) }); }, hoverWarm.current ? 60 : HOVER_MS);
+  };
+  const leaveTab = () => {
+    clearTimeout(hoverTimer.current);
+    setHover(null);
+    clearTimeout(warmTimer.current);
+    warmTimer.current = setTimeout(() => { hoverWarm.current = false; }, 400);
+  };
+  React.useEffect(() => () => { clearTimeout(hoverTimer.current); clearTimeout(warmTimer.current); }, []);
+
+  const titleOf = (t) => {
+    if (t.row) return t.row.name;
+    if (t.pdf) return t.pdf.name;
+    if (t.file && t.file.name) return t.file.name;
+    if (t.url === 'about:blank') return 'New tab';
+    return (isPage(kindOf(t.url)) && t.web && t.web.title) || stripScheme(t.url);
+  };
+  const placeOf = (t) => (t.url === 'about:blank' && !t.pdf && !t.file ? 'new tab' : tabPlace(t.pdf ? (t.pdf.input || t.pdf.url) : t.file && t.file.path ? t.file.path : (t.web && t.web.url) || t.url));
+
+  const dev = DEVICES.find((d) => d.id === device);
+  const width = device === 'custom' ? (Number(customW) || 390) : (dev ? dev.w : 0);
+  const slotStyle = width ? { flex: 'none', width, height: '100%', background: '#fff', margin: '0 auto' } : { flex: 1, width: '100%', background: '#fff' };
+  const menuW = Math.min(240, (window.innerWidth || 1200) - 16);
+  const tabsFull = tabs.length >= MAX_TABS;
+  const listOpen = typing && rows.length > 0;
+
+  return (
+    <div ref={rootRef} data-stage="1" data-browser="1" style={{ flex: 1, minHeight: 0, display: visible ? 'flex' : 'none', flexDirection: 'column', background: '#fff', overflow: 'hidden' }}>
+      {/* The tabs: the one in front is white and runs into the address row below; the rest have no box. */}
+      <div style={{ flex: 'none', position: 'relative', zIndex: 5, display: 'flex', alignItems: 'flex-end', height: 40, boxSizing: 'border-box', padding: '0 8px 0 10px', background: '#fafafa' }}>
+        <div style={{ flex: '0 1 auto', minWidth: 0, display: 'flex', alignItems: 'flex-end', height: '100%' }}>
+          {tabs.map((t, i) => {
+            const on = t.id === tab.id;
+            const sep = !on && tabs[i + 1] && tabs[i + 1].id !== tab.id;
+            const isBlank = t.url === 'about:blank' && !t.pdf && !t.file;
+            const title = titleOf(t);
+            const glyph = <KindGlyph item={glyphItem(t)} box={16} color={on ? '#4d4d4d' : '#8f8f8f'} />;
+            const titleSpan = <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', WebkitMaskImage: 'linear-gradient(90deg,#000 calc(100% - 22px),transparent)', maskImage: 'linear-gradient(90deg,#000 calc(100% - 22px),transparent)', font: '400 12.5px/1.3 var(--font-sans)', color: isBlank ? '#8f8f8f' : on ? '#171717' : '#4d4d4d' }}>{title}</span>;
+            const close = <button type="button" className="hov-x" onClick={(event) => { event.stopPropagation(); closeTab(t.id); }} onMouseDown={(event) => event.stopPropagation()} aria-label="Close tab" title="⌘W" style={{ flex: 'none', width: 20, height: 20, padding: 0, border: 0, borderRadius: '50%', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '14px/1 var(--font-sans)', color: '#8f8f8f', transition: 'background 120ms' }}>×</button>;
+            return (
+              <div key={t.id} data-stage-tab={t.id} onMouseEnter={(event) => enterTab(event, t)} onMouseLeave={leaveTab} style={{ position: 'relative', flex: '0 1 220px', width: 220, minWidth: 44, height: 34, display: 'flex', alignItems: 'stretch' }}>
+                {on ? (
+                  <div onMouseDown={(event) => { if (event.button === 0) select(t); }} style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, boxSizing: 'border-box', padding: '0 6px 0 12px', background: '#fff', borderRadius: '10px 10px 0 0', cursor: 'default' }}>
+                    <span aria-hidden="true" style={{ position: 'absolute', left: -10, bottom: 0, width: 10, height: 10, background: 'radial-gradient(circle at 0 0, transparent 9.5px, #fff 10px)' }} />
+                    <span aria-hidden="true" style={{ position: 'absolute', right: -10, bottom: 0, width: 10, height: 10, background: 'radial-gradient(circle at 100% 0, transparent 9.5px, #fff 10px)' }} />
+                    {glyph}{titleSpan}{close}
+                  </div>
+                ) : (
+                  <div className="hov-tab" onMouseDown={(event) => { if (event.button === 0) select(t); }} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, boxSizing: 'border-box', margin: '0 2px 4px', padding: '0 4px 0 10px', borderRadius: 8, background: 'transparent', cursor: 'default', transition: 'background 120ms' }}>
+                    {glyph}{titleSpan}{close}
+                  </div>
+                )}
+                {sep && <span aria-hidden="true" style={{ position: 'absolute', right: 0, top: 9, width: 1, height: 16, background: '#c9c9c9' }} />}
+                {hover && hover.id === t.id && !on && (
+                  <div data-overlay="1" style={{ position: 'absolute', left: hover.left, top: 'calc(100% + 6px)', zIndex: 60, width: hover.width, boxSizing: 'border-box', padding: '10px 12px', background: '#fff', border: '1px solid #c9c9c9', borderRadius: 8, pointerEvents: 'none', animation: `rise 160ms ${EASE}` }}>
+                    <div style={{ font: '500 13px/1.4 var(--font-sans)', color: '#171717', overflowWrap: 'anywhere', textWrap: 'pretty' }}>{title}</div>
+                    <div style={{ marginTop: 3, font: '12px/1.4 var(--font-sans)', color: '#8f8f8f', overflowWrap: 'anywhere' }}>{placeOf(t)}</div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <button type="button" className="hov-tab-plus" onClick={newTab} disabled={tabsFull} aria-label="New tab" title={tabsFull ? '15 tabs is the most — close one first' : '⌘T'} style={{ flex: 'none', opacity: tabsFull ? 0.4 : 1, alignSelf: 'center', width: 28, height: 28, margin: '2px 0 0 6px', padding: 0, border: 0, borderRadius: '50%', background: 'transparent', cursor: tabsFull ? 'default' : 'pointer', font: '18px/1 var(--font-sans)', color: '#4d4d4d', transition: 'background 120ms' }}>+</button>
+        {onFull && (
+          <button type="button" className="hov-wash2" onClick={() => { setHover(null); onFull(); }} aria-label={full ? 'Exit full screen' : 'Full screen'} title={full ? 'Exit full screen' : 'Full screen'} data-stage-full={full ? '1' : '0'} style={{ flex: 'none', alignSelf: 'center', width: 28, height: 28, margin: '2px 0 0 auto', padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 120ms' }}>{full ? <Collapse /> : <Expand />}</button>
+        )}
+      </div>
+
+      <div style={{ position: 'relative', flex: 'none', display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px', borderBottom: '1px solid #eaeaea' }}>
+        <button type="button" className="hov-wash" onClick={back} aria-label="Back" style={{ ...ICON_BUTTON, color: canBack ? '#171717' : '#c9c9c9' }}>←</button>
+        <button type="button" className="hov-wash" onClick={forward} aria-label="Forward" style={{ ...ICON_BUTTON, color: canForward ? '#171717' : '#c9c9c9' }}>→</button>
+        <button type="button" className="hov-wash" onClick={reload} aria-label={loading ? 'Stop' : 'Reload'} style={{ ...ICON_BUTTON, color: '#4d4d4d' }}>{loading ? '×' : '↻'}</button>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, height: 30, boxSizing: 'border-box', padding: saveState && !typing ? '0 3px 0 10px' : '0 10px', border: `1px solid ${typing ? '#c9c9c9' : 'transparent'}`, borderRadius: 8, background: '#fafafa', transition: 'border-color 120ms' }}>
+          <KindGlyph item={glyphItem(tab)} box={14} color="#8f8f8f" />
+          <input
+            ref={addressRef}
+            value={draft}
+            onChange={(event) => { setDraft(event.target.value); setTyping(true); }}
+            onFocus={(event) => { const el = event.target; setTyping(true); setTimeout(() => { try { el.select(); } catch { /* gone */ } }, 0); }}
+            onBlur={() => { setTyping(false); if (document.activeElement !== addressRef.current) setDraft((d) => (d.trim() ? d : shownDraft)); }}
+            onKeyDown={onAddressKey}
+            spellCheck={false}
+            aria-label="Open on stage"
+            style={{ flex: 1, minWidth: 0, padding: 0, border: 0, outline: 'none', background: 'transparent', font: '400 13px/1.4 var(--font-sans)', color: '#171717', textAlign: 'left' }}
+          />
+          {saveState && !typing && (
+            <button
+              ref={saveButton}
+              type="button"
+              data-page-save={saveState}
+              className={saveState === 'here' ? undefined : 'hov-ink'}
+              onClick={onSaveClick}
+              aria-expanded={saving}
+              style={{ flex: 'none', height: 24, padding: '0 8px', border: 0, borderRadius: 5, background: saving ? '#eaeaea' : 'transparent', cursor: saveState === 'here' ? 'default' : 'pointer', font: '500 12px/1 var(--font-sans)', color: saveState === 'here' ? '#8f8f8f' : saving ? '#171717' : '#4d4d4d', whiteSpace: 'nowrap', transition: 'background 120ms, color 120ms' }}
+            >{SAVE_LABEL[saveState]}</button>
+          )}
+        </div>
+        {saving && saveState === 'none' && <SaveCard key={pageInput} title={pageTitle || stripScheme(pageInput)} onSave={save.onSave} onClose={() => setSaving(false)} cardRef={saveCard} />}
+        <div style={{ position: 'relative' }} ref={menuRef}>
+          <button type="button" className="hov-wash" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setMenu(menu ? null : { x: r.right, y: r.bottom }); }} aria-label="More" style={{ ...ICON_BUTTON, background: menu ? '#f2f2f2' : 'transparent', font: '600 16px/1 var(--font-sans)', color: '#4d4d4d' }}>⋮</button>
+          {menu && (
+            <div data-overlay="1" style={{ position: 'fixed', left: clamp(menu.x - menuW, 8, (window.innerWidth || 1200) - menuW - 8), top: menu.y + 6, zIndex: 60, width: menuW, padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, animation: `rise 160ms ${EASE}` }}>
+              <div style={{ padding: '6px 10px', font: '500 9px/1 var(--font-sans)', letterSpacing: '1.6px', textTransform: 'uppercase', color: '#8f8f8f' }}>Device preset</div>
+              {DEVICES.map((d) => (
+                <div key={d.id} className="hov-wash" onClick={() => { setDevice(d.id); setMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px', borderRadius: 6, cursor: 'pointer' }}>
+                  <span style={{ flex: 'none', width: 14, textAlign: 'center', font: '12px/1 var(--font-sans)', color: '#171717' }}>{device === d.id ? '✓' : ''}</span>
+                  <span style={{ flex: 1, font: '13px/1.4 var(--font-sans)', color: '#171717' }}>{d.name}</span>
+                  <span style={{ font: '11px/1 var(--font-mono)', color: '#8f8f8f' }}>{d.w ? `${d.w}×${d.h}` : ''}</span>
+                </div>
+              ))}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderTop: '1px solid #eaeaea', marginTop: 4 }}>
+                <span style={{ flex: 1, font: '13px/1.4 var(--font-sans)', color: '#171717' }}>Custom width</span>
+                <input value={customW} onChange={(event) => { setCustomW(event.target.value.replace(/\D/g, '')); setDevice('custom'); }} inputMode="numeric" aria-label="Custom width" style={{ width: 64, padding: '4px 8px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fafafa', font: '12px/1.4 var(--font-mono)', color: '#171717', textAlign: 'right' }} />
+              </div>
+              {((page && web) || (pdf && WEB_URL.test(pdf.url))) && (
+                <div style={{ borderTop: '1px solid #eaeaea', marginTop: 4, paddingTop: 4 }}>
+                  <div className="hov-wash" onClick={() => { quiet(api.openExternal(pdf ? pdf.url : web.url || tab.url)); setMenu(null); }} style={{ padding: '7px 10px 7px 34px', borderRadius: 6, cursor: 'pointer', font: '13px/1.4 var(--font-sans)', color: '#171717' }}>Open in default browser</div>
+                  {page && <div className="hov-wash" onClick={() => { quiet(api.browserCommand(tab.id, 'devtools')); setMenu(null); }} style={{ padding: '7px 10px 7px 34px', borderRadius: 6, cursor: 'pointer', font: '13px/1.4 var(--font-sans)', color: '#171717' }}>Developer tools</div>}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        {listOpen && (
+          <div data-overlay="1" data-stage-list="1" onMouseDown={(event) => event.preventDefault()} style={{ position: 'absolute', left: 92, right: 10, top: 44, zIndex: 40, maxHeight: 420, overflowY: 'auto', boxSizing: 'border-box', padding: 6, background: '#fff', border: '1px solid #c9c9c9', borderRadius: 8, boxShadow: '0 12px 32px rgba(0,0,0,.06)', animation: `rise 160ms ${EASE}` }}>
+            {rows.map((r, i) => {
+              const glyph = r.kind === 'item' ? <KindGlyph item={r.row} box={16} color="#4d4d4d" />
+                : r.kind === 'search' ? <span className="glyph-fit" style={{ display: 'flex', width: 13, height: 13, margin: '0 1.5px', color: '#4d4d4d' }}><SEARCH /></span>
+                  : r.kind === 'disk' ? <span className="glyph-fit" style={{ display: 'flex', width: 12, height: 12, margin: '0 2px', color: '#4d4d4d' }}><FOLDER /></span>
+                    : <KindGlyph item={glyphItem({ url: kindOf(r.input).url || 'about:blank', file: /^[.~/]/.test(r.input) ? { path: r.input } : null })} box={16} color="#4d4d4d" />;
+              const name = r.kind === 'item' ? r.row.name : r.kind === 'disk' ? 'Choose a file from your computer…' : r.input;
+              return (
+                <button key={r.key} type="button" data-stage-row={r.kind} onClick={() => choose(r)} onMouseMove={() => { arrowed.current = true; if (pick !== i) setPick(i); }} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: 0, borderRadius: 6, background: i === pick ? '#f2f2f2' : 'transparent', cursor: 'pointer', textAlign: 'left' }}>
+                  <span style={{ flex: 'none', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{glyph}</span>
+                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '400 13px/1.4 var(--font-sans)', color: '#171717' }}>{name}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column', background: '#fafafa' }}>
+        {finding && <FindCard inputRef={findRef} text={findText} found={matches} onText={setFindText} onStep={(step) => runFind(findText, step)} onClose={closeFind} />}
+        {/* a page sits under a band while the find card is open: a native view would cover it */}
+        {finding && page && <div style={{ flex: 'none', height: 54 }} />}
+
+        {pdf && (
+          pdfReady ? (
+            <PaperView
+              key={`${tab.id}:${pdf.seq}`}
+              ref={paperRef}
+              bytes={pdf.bytes}
+              marks={pdf.marks}
+              onFind={(result) => { if (keys.current && keys.current.finding) setMatches(result); }}
+              onMarksChange={(marks) => {
+                const { seq, url, rowId } = pdf;
+                update(tab.id, (t) => (t.pdf && t.pdf.seq === seq ? { ...t, pdf: { ...t.pdf, marks } } : t));
+                (rowId ? api.writeAnnotations(rowId, marks) : api.writePageAnnotations(url, marks)).catch((error) => { if (onError) onError(error); });
+              }}
+            />
+          ) : (
+            pdf.error ? <Plain title={stripScheme(pdf.input || pdf.url)} detail={pdf.error} error /> : <Plain title="" detail="" />
+          )
+        )}
+        {view && (
+          <div ref={viewRef} onClick={onViewClick} data-stage-view={view.kind} style={{ flex: 1, minHeight: 0, overflow: 'auto', background: view.kind === 'md' || view.kind === 'text' ? '#fff' : '#fafafa' }}>
+            {view.kind === 'md' && <MarkdownView text={view.text} />}
+            {view.kind === 'table' && <TableView text={view.text} delimiter={view.delimiter} truncated={view.truncated} />}
+            {view.kind === 'text' && <pre style={{ margin: 0, padding: '14px 16px', font: '12.5px/1.7 var(--font-mono)', color: '#171717', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{view.text}</pre>}
+            {view.kind === 'image' && <ImageView file={view} />}
+            {view.kind === 'folder' && <Plain title={view.name} detail={view.path} />}
+            {view.kind === 'unsupported' && <Plain title={view.name} detail={view.path} />}
+            {view.kind === 'error' && <Plain title={view.path} detail={view.message} error />}
+          </div>
+        )}
+        {blank && (
+          <div style={{ flex: 1, minHeight: 0, boxSizing: 'border-box', padding: 24, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, textAlign: 'center' }}>
+            <div style={{ marginTop: -48, font: '500 34px/1 var(--font-sans)', letterSpacing: '-0.4px', color: '#171717', userSelect: 'none' }}>Engelbart</div>
+            <button type="button" className="hov-bd2" onClick={chooseFiles} style={{ marginTop: 22, height: 32, padding: '0 14px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#171717', transition: 'border-color 120ms' }}>Choose a file…</button>
+          </div>
+        )}
+        {page && (
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', justifyContent: 'center', background: '#f2f2f2', overflow: 'hidden' }}>
+            <div ref={slotRef} data-browser-slot="1" style={{ ...slotStyle, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
+              {failed ? (
+                <div style={{ position: 'absolute', inset: 0, background: '#fafafa' }}><Plain title={stripScheme(failed.url || tab.url)} detail={failed.description || `error ${failed.code}`} /></div>
+              ) : snapshot && !showing ? (
+                <img src={snapshot} alt="" draggable={false} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'left top', userSelect: 'none' }} />
+              ) : null}
+            </div>
+          </div>
+        )}
+        {!pdf && !view && !page && k.kind === 'sandbox' && <Plain title={k.name} detail="" />}
+      </div>
+      {logins[0] && createPortal(
+        <LoginPrompt
+          key={logins[0].requestId}
+          request={logins[0]}
+          onAnswer={(credentials) => { quiet(api.browserLoginReply(logins[0].requestId, credentials)); setLogins((current) => current.slice(1)); }}
+        />,
+        document.body,
+      )}
+    </div>
+  );
+});
+
+export default Stage;

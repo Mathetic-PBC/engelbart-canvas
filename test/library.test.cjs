@@ -55,3 +55,50 @@ test('annotations round-trip per library id', async () => {
   assert.deepEqual(await library.readAnnotations(ctx, id), marks);
   await assert.rejects(() => library.writeAnnotations(ctx, 'bad', {}), TypeError);
 });
+
+test('ink on a pdf in the Browser pane: the row\'s when the library holds it, else by address until a row is added', async () => {
+  const { pathToFileURL } = require('node:url');
+  const ink = (note) => ({ 1: [{ id: note, rects: [], side: null, y: 0, note, text: '', pos: { x: 0, y: 0 } }] });
+  const rows = await library.listLibrary(ctx);
+  // A pdf on disk the library holds shares the Paper pane's ink.
+  const paper = rows.find((row) => row.type === 'pdf');
+  await library.writePageAnnotations(ctx, pathToFileURL(paper.path).href, ink('disk'));
+  assert.deepEqual(await library.readAnnotations(ctx, paper.id), ink('disk'));
+  // arXiv's pdf is the paper its abstract page names.
+  const arxiv = rows.find((row) => row.url === 'https://arxiv.org/abs/2310.05292');
+  await library.writePageAnnotations(ctx, 'https://arxiv.org/pdf/2310.05292v2', ink('arxiv'));
+  assert.deepEqual(await library.readAnnotations(ctx, arxiv.id), ink('arxiv'));
+  // A pdf the library does not hold keeps its ink by address (a place in it is the same pdf), and a row added later finds it.
+  assert.equal(await library.readPageAnnotations(ctx, 'https://example.com/a.pdf'), null);
+  await library.writePageAnnotations(ctx, 'https://example.com/a.pdf#page=2', ink('web'));
+  assert.deepEqual(await library.readPageAnnotations(ctx, 'https://example.com/a.pdf'), ink('web'));
+  const added = await library.addItem(ctx, 'https://example.com/a.pdf');
+  assert.deepEqual(await library.readAnnotations(ctx, added.id), ink('web'));
+  await library.writePageAnnotations(ctx, 'https://example.com/a.pdf', ink('after'));
+  assert.deepEqual(await library.readAnnotations(ctx, added.id), ink('after'));
+});
+
+test('a web pdf saved as a copy (2026-09-23): the file under assets/pdfs, the address kept, found by it, ink carried, no twice', async () => {
+  const ink = (note) => ({ 1: [{ id: note, rects: [], side: null, y: 0, note, text: '', pos: { x: 0, y: 0 } }] });
+  const bytes = new Uint8Array(Buffer.from('%PDF-1.7 copy'));
+  await library.writePageAnnotations(ctx, 'https://papers.example.org/files/Retrieval%20Study.pdf', ink('before'));
+  const row = await library.addPdfCopy(ctx, 'https://papers.example.org/files/Retrieval%20Study.pdf', bytes, { inspectPdf: async () => ['paper'] });
+  assert.equal(row.type, 'pdf');
+  assert.equal(row.name, 'Retrieval Study');
+  assert.equal(row.url, 'https://papers.example.org/files/Retrieval%20Study.pdf');
+  assert.equal(row.path, path.join(layout.testRoot, 'assets', 'pdfs', `${row.id}.pdf`));
+  assert.deepEqual(row.tags, ['paper']);
+  assert.equal(fs.readFileSync(row.path, 'utf8'), '%PDF-1.7 copy');
+  assert.deepEqual(await library.readAnnotations(ctx, row.id), ink('before'));
+  assert.equal(Buffer.from((await library.readLibraryFile(ctx, row.id)).bytes).toString(), '%PDF-1.7 copy');
+  // the address answers for the row: the Save button reads ✓ / + Workspace, and ink on the page goes to the row
+  assert.equal((await library.lookupItem(ctx, 'http://www.papers.example.org/files/Retrieval%20Study.pdf')).row.id, row.id);
+  await library.writePageAnnotations(ctx, 'https://papers.example.org/files/Retrieval%20Study.pdf', ink('after'));
+  assert.deepEqual(await library.readAnnotations(ctx, row.id), ink('after'));
+  await assert.rejects(() => library.addPdfCopy(ctx, 'https://papers.example.org/files/Retrieval%20Study.pdf', bytes), (error) => error.code === 'EXISTS');
+  await assert.rejects(() => library.addPdfCopy(ctx, 'https://x.example.org/b.pdf', new Uint8Array(Buffer.from('<html>'))), /not a pdf/);
+  await assert.rejects(() => library.addPdfCopy(ctx, '/Users/h/a.pdf', bytes), /from the web/);
+  // an arXiv pdf is the paper its abstract page names
+  const arxiv = await library.addPdfCopy(ctx, 'https://arxiv.org/pdf/1706.03762v7', bytes, { name: 'Attention' });
+  assert.deepEqual([arxiv.name, arxiv.url, arxiv.tags], ['Attention', 'https://arxiv.org/abs/1706.03762', ['paper']]);
+});

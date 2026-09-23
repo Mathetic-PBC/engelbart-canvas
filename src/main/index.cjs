@@ -11,6 +11,7 @@ const {
   Menu,
   powerMonitor,
   protocol,
+  safeStorage,
   session: electronSession,
   shell: electronShell,
   WebContentsView,
@@ -28,7 +29,11 @@ const { SettingsStore } = require('./terminal/settings.cjs');
 const { RendererLifecycle, shouldHideWindowOnClose } = require('./terminal/window-lifecycle.cjs');
 const { assertTrustedRenderer, parseExternalUrl } = require('./ipc-validation.cjs');
 const { createStore, registerEngelbartIpc } = require('./ipc.cjs');
-const { createBrowserViews, registerBrowserIpc } = require('./browser/views.cjs');
+const { PARTITION: BROWSER_PARTITION, createBrowserViews, registerBrowserIpc } = require('./browser/views.cjs');
+const { createGithub } = require('./github/connection.cjs');
+const { createBrowserAuth, CLIENT_ID: GITHUB_CLIENT_ID } = require('./github/browser-auth.cjs');
+const { createRepoIdentifier, createRemoteFileLister } = require('./store/page-meta.cjs');
+const { checkWebPdfs, readPdfResponse } = require('./store/web-pdfs.cjs');
 const { createPostItViews } = require('./post-its/views.cjs');
 
 const DIST = path.join(__dirname, '../../dist');
@@ -244,6 +249,17 @@ function buildMenu() {
       submenu: [
         { role: 'undo' }, { role: 'redo' }, { type: 'separator' },
         { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' },
+        { type: 'separator' },
+        // The Browser pane's find (src/main/browser/views.cjs). A menu item, not a key the pane
+        // takes first, so a page with its own find (Google Docs) keeps it.
+        {
+          label: 'Find',
+          submenu: [
+            { label: 'Find…', accelerator: 'CmdOrCtrl+F', click: () => { if (browserViews) browserViews.shortcut('find'); } },
+            { label: 'Find Next', accelerator: 'CmdOrCtrl+G', click: () => { if (browserViews) browserViews.shortcut('find-next'); } },
+            { label: 'Find Previous', accelerator: 'Shift+CmdOrCtrl+G', click: () => { if (browserViews) browserViews.shortcut('find-previous'); } },
+          ],
+        },
       ],
     },
     {
@@ -338,7 +354,15 @@ if (!hasSingleInstanceLock) {
     providerStatus = createProviderStatus(process.env);
     void providerStatus.refresh().catch(() => {});
     const homeDir = process.env.ENGELBART_HOME_DIR || app.getPath('home');
-    store = createStore({ homeDir, fixturesDir: FIXTURES, inspectPdf });
+    // Pdfs saved as links before the Stage kept copies: every library that opens is checked, and what is left is
+    // downloaded in the background with the Stage's cookies (a paper behind a sign-in comes too). ENGELBART_WEB_PDFS=off
+    // disables it (scripted runs).
+    let changedTimer = null;
+    const libraryChanged = () => { clearTimeout(changedTimer); changedTimer = setTimeout(() => sendToRenderer('engelbart:library-changed', {}), 400); };
+    const fetchPdf = async (url) => readPdfResponse(await electronSession.fromPartition(BROWSER_PARTITION).fetch(url, { signal: AbortSignal.timeout(120000) }));
+    const afterOpen = process.env.ENGELBART_WEB_PDFS === 'off' ? null
+      : (ctx) => checkWebPdfs(ctx, { fetchPdf, inspectPdf, onChange: libraryChanged, log: (line) => console.warn(`[engelbart] ${line}`) });
+    store = createStore({ homeDir, fixturesDir: FIXTURES, inspectPdf, afterOpen });
     // Catalog summaries (src/main/context): swept once a minute while the app is open, at launch,
     // and when the computer wakes. ENGELBART_SUMMARIES=off disables it; the _FAKE / _QUIET_MS /
     // _INTERVAL_MS variables exist for scripted runs only.
@@ -381,7 +405,33 @@ if (!hasSingleInstanceLock) {
     });
     registerBrowserIpc({ ipcMain, trustedHandler, views: browserViews });
     sandbox = require('./sandbox/manager.cjs').createSandboxManager({ secure: require('electron').safeStorage, notify: (event) => sendToRenderer('engelbart:sandbox-progress', event) });
+    // GitHub (src/main/github): default-browser sign-in with an automatic loopback return, and the token
+    // that lets the library read private repositories. ENGELBART_GITHUB_* name a fake GitHub, for scripted runs only.
+    const githubWeb = process.env.ENGELBART_GITHUB_WEB || null;
+    const openGithubPage = (url) => electronShell.openExternal(parseExternalUrl(url).href);
+    const githubBrowserAuth = createBrowserAuth({ ...(process.env.ENGELBART_GITHUB_BROKER ? { broker: process.env.ENGELBART_GITHUB_BROKER } : {}) });
+    const github = createGithub({
+      settings: () => {
+        const chosen = store.config().github || {};
+        return { clientId: process.env.ENGELBART_GITHUB_CLIENT_ID || chosen.clientId, appSlug: process.env.ENGELBART_GITHUB_APP_SLUG || chosen.appSlug };
+      },
+      file: path.join(store.layout.root, 'github.json'),
+      crypt: {
+        available: () => safeStorage.isEncryptionAvailable(),
+        encrypt: (text) => safeStorage.encryptString(text).toString('base64'),
+        decrypt: (text) => safeStorage.decryptString(Buffer.from(text, 'base64')),
+      },
+      openVerification: openGithubPage,
+      browserAuth: () => (process.env.ENGELBART_GITHUB_CLIENT_ID || (store.config().github || {}).clientId) === GITHUB_CLIENT_ID ? githubBrowserAuth : null,
+      onConnected: () => { if (mainWindow && !mainWindow.isDestroyed()) { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); } },
+      onChange: (status) => sendToRenderer('engelbart:github', status),
+      ...(githubWeb ? { web: githubWeb, api: process.env.ENGELBART_GITHUB_API || githubWeb } : {}),
+    });
     registerEngelbartIpc({
+      github,
+      openGithubPage,
+      identifyRepo: createRepoIdentifier({ auth: github.authHeaders }),
+      listRemoteFiles: createRemoteFileLister({ auth: github.authHeaders }),
       ipcMain,
       trustedHandler,
       store,

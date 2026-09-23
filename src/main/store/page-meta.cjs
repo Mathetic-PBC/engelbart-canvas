@@ -4,8 +4,10 @@
 // and description; a GitHub repository, added by address or as a clone, is asked once who it is
 // (its id, which is what the library knows it by, its current name and its description); and a
 // repository that has no clone is asked for its top-level files when its row is hovered. Best
-// effort: a timeout, a size cap, http(s) only, no credentials; any failure means "nothing to say"
-// and the row keeps what it has.
+// effort: a timeout, a size cap, http(s) only, no cookies; any failure means "nothing to say"
+// and the row keeps what it has. GitHub's API is asked signed in when the person has connected
+// GitHub (`auth`, src/main/github/connection.cjs), so a private repository answers too; a token
+// GitHub refuses is dropped for that request and the question asked again signed out.
 
 const TIMEOUT_MS = 4000;
 const MAX_HTML_CHARS = 300000;
@@ -46,9 +48,19 @@ async function get(url, { fetch, headers }) {
  * its old name too (GitHub redirects), with the name and address it has now. Signed out: a private
  * repository answers 404 like one that does not exist, and the caller falls back to the address.
  */
-function createRepoIdentifier({ fetch = globalThis.fetch } = {}) {
+/** A GET of GitHub's API, signed in when `auth` gives headers; a refused token is tried once more without them. */
+async function githubGet(url, { fetch, auth }) {
+  const plain = { accept: 'application/vnd.github+json' };
+  const signed = auth ? await auth().catch(() => ({})) : {};
+  if (signed && signed.authorization) {
+    try { return await get(url, { fetch, headers: { ...plain, ...signed } }); } catch (error) { if (!/ 40[13]$/.test(error.message)) throw error; }
+  }
+  return get(url, { fetch, headers: plain });
+}
+
+function createRepoIdentifier({ fetch = globalThis.fetch, auth = null } = {}) {
   return async function identifyRepo(owner, name) {
-    const repo = await (await get(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`, { fetch, headers: { accept: 'application/vnd.github+json' } })).json();
+    const repo = await (await githubGet(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`, { fetch, auth })).json();
     if (!repo || !Number.isSafeInteger(repo.id) || repo.id <= 0) throw new Error('GitHub did not give the repository an id');
     const fullName = typeof repo.full_name === 'string' && /^[\w.-]+\/[\w.-]+$/.test(repo.full_name) ? repo.full_name : `${owner}/${name}`;
     return { id: String(repo.id), fullName, url: `https://github.com/${fullName}`, description: typeof repo.description === 'string' ? repo.description : '' };
@@ -65,12 +77,12 @@ function createDescriber({ fetch = globalThis.fetch } = {}) {
 }
 
 /** Top-level files of a GitHub repository, folders first; remembered for as long as the app runs. */
-function createRemoteFileLister({ fetch = globalThis.fetch, limit = 40 } = {}) {
+function createRemoteFileLister({ fetch = globalThis.fetch, auth = null, limit = 40 } = {}) {
   const known = new Map();
   return async function listRemoteFiles(owner, repo) {
     const key = `${owner}/${repo}`.toLowerCase();
     if (known.has(key)) return known.get(key);
-    const entries = await (await get(`https://api.github.com/repos/${owner}/${repo}/contents`, { fetch, headers: { accept: 'application/vnd.github+json' } })).json();
+    const entries = await (await githubGet(`https://api.github.com/repos/${owner}/${repo}/contents`, { fetch, auth })).json();
     const files = (Array.isArray(entries) ? entries : [])
       .filter((entry) => entry && typeof entry.name === 'string')
       .sort((a, b) => Number(b.type === 'dir') - Number(a.type === 'dir') || a.name.localeCompare(b.name))

@@ -15,7 +15,9 @@ const { PGlite } = require('@electric-sql/pglite');
 // `folder`, `website`, `image` for the three that are not a file with an extension. What a row is
 // *for* is inferred and lives in `tags`, beside the type and never instead of it: a pdf may or may
 // not be a paper, and a paper may be a pdf or an address (2026-09-21).
-const LIBRARY_TYPES = Object.freeze(['md', 'pdf', 'html', 'csv', 'tsv', 'json', 'jsonl', 'parquet', 'xlsx', 'folder', 'website', 'image']);
+// `docx` (2026-09-23): a Word document, read on the Stage through macOS textutil. A library that holds one cannot be
+// opened by a build from before it (the type check below is re-made on every open and would refuse the row).
+const LIBRARY_TYPES = Object.freeze(['md', 'pdf', 'html', 'csv', 'tsv', 'json', 'jsonl', 'parquet', 'xlsx', 'docx', 'folder', 'website', 'image']);
 // `paper`: an arXiv or DOI address, or a pdf that reads like one (src/main/context/pdf-kind.cjs).
 // `git`: a repository, by its address or as a folder with a `.git`. `note`: written in Engelbart;
 // nothing that is added from outside can get it.
@@ -120,6 +122,8 @@ create table if not exists post_its (
   created timestamptz not null default now(),
   last_edited timestamptz not null default now()
 );
+-- In the trash since (2026-09-22): hidden, restorable, and purged a week later (main/post-its/views.cjs).
+alter table post_its add column if not exists deleted timestamptz;
 `;
 
 const instances = new Map();
@@ -316,6 +320,16 @@ async function openLibraryDb(testRoot) {
       );
       return plain(result.rows[0]);
     },
+    // A page that was a pdf all along becomes its saved copy (library web-pdfs, 2026-09-23): the same row — its id,
+    // name, address, tags, summary — now a pdf with a file. Only a row that is still a page without a file changes;
+    // null when it is not (gone, or given a file meanwhile). Not an edit: last_edited stays. The category rules run again.
+    async adoptPdf(id, file) {
+      const result = await db.query(
+        "update library set type = 'pdf', path = $2, categorized = null where id = $1 and type = 'website' and path is null and folder_path is null returning *",
+        [requireText(id, 'id', { max: 64 }), requireText(file, 'path', { max: 4096 })],
+      );
+      return result.rows.length ? plain(result.rows[0]) : null;
+    },
     // Notes whose length has never been recorded (created before the column existed).
     async uncountedNotes() {
       const result = await db.query("select id, path from library where 'note' = any(tags) and path is not null and char_count is null");
@@ -366,8 +380,9 @@ async function openNotesDb(projectDir) {
   return {
     dir,
     postIts: {
+      // The cards on screen; the trash holds the rest (trashed / restore / purge).
       async list() {
-        return (await db.query('select * from post_its order by z, created, id')).rows.map(plain);
+        return (await db.query('select * from post_its where deleted is null order by z, created, id')).rows.map(plain);
       },
       async create(row) {
         const values = postItValues(row);
@@ -375,9 +390,27 @@ async function openNotesDb(projectDir) {
         return plain(result.rows[0]);
       },
       async update(id, row) {
-        // UPDATE, never UPSERT: a save already in flight must not resurrect a deleted card.
+        // UPDATE, never UPSERT: a save already in flight must not resurrect a purged card. It leaves `deleted` alone.
         const result = await db.query('update post_its set text=$2, nx=$3, ny=$4, width=$5, height=$6, z=$7, last_edited=now() where id=$1 returning *', [requireText(id, 'id', { max: 64 }), ...postItValues(row)]);
         return plain(result.rows[0]);
+      },
+      async trash(id) {
+        const result = await db.query('update post_its set deleted=now() where id=$1 and deleted is null returning *', [requireText(id, 'id', { max: 64 })]);
+        return plain(result.rows[0]);
+      },
+      async restore(id) {
+        const result = await db.query('update post_its set deleted=null where id=$1 and deleted is not null returning *', [requireText(id, 'id', { max: 64 })]);
+        return plain(result.rows[0]);
+      },
+      async trashed() {
+        return (await db.query('select * from post_its where deleted is not null order by deleted desc, id')).rows.map(plain);
+      },
+      // Gone for good: cards in the trash since before `before`.
+      async purge(before) {
+        const when = new Date(before);
+        if (Number.isNaN(when.getTime())) throw new TypeError('purge needs a date');
+        const result = await db.query('delete from post_its where deleted is not null and deleted < $1', [when.toISOString()]);
+        return result.affectedRows || 0;
       },
       async remove(id) {
         const result = await db.query('delete from post_its where id=$1', [requireText(id, 'id', { max: 64 })]);

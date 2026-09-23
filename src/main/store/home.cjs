@@ -24,7 +24,7 @@ function ensureHome(homeDir) {
     // A config written before a setting existed gains it, so every switch is there to be edited.
     let onDisk = null;
     try { onDisk = JSON.parse(fs.readFileSync(configFile, 'utf8')); } catch { onDisk = null; }
-    if (!onDisk || typeof onDisk !== 'object' || !onDisk.summarizer || !Array.isArray(onDisk.providers)) writeConfig(root, {});
+    if (!onDisk || typeof onDisk !== 'object' || !onDisk.summarizer || !Array.isArray(onDisk.providers) || !onDisk.github) writeConfig(root, {});
   }
   return { root, testRoot, configFile };
 }
@@ -65,12 +65,27 @@ function normalizeProviders(value) {
   return named.length ? [...new Set(named)] : [...PROVIDERS_DEFAULT];
 }
 
+// The GitHub App that "Add from GitHub…" signs in to (src/main/github/connection.cjs; how to make one:
+// docs/github-app-setup.md). `clientId` is the App's client id (public: the device flow needs no secret);
+// `appSlug` is the last part of the App's page, github.com/apps/<slug>, where it is installed on an account.
+// Shared public registration: every install can sign in without creating an App or editing config.
+// Each person still authorizes their own access and selects repositories on GitHub.
+const GITHUB_DEFAULTS = Object.freeze({ clientId: 'Iv23liAZNYl96zlluMDs', appSlug: 'engelbart-mathetic' });
+
+function normalizeGithub(value) {
+  const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const clientId = typeof input.clientId === 'string' && /^[A-Za-z0-9._-]{8,64}$/.test(input.clientId.trim()) ? input.clientId.trim() : GITHUB_DEFAULTS.clientId;
+  const appSlug = typeof input.appSlug === 'string' && /^[a-z0-9][a-z0-9-]{0,99}$/.test(input.appSlug.trim()) ? input.appSlug.trim() : GITHUB_DEFAULTS.appSlug;
+  return { clientId, appSlug };
+}
+
 function normalizeConfig(value) {
   const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   return {
     testMode: typeof input.testMode === 'boolean' ? input.testMode : true,
     providers: normalizeProviders(input.providers),
     summarizer: normalizeSummarizer(input.summarizer),
+    github: normalizeGithub(input.github),
   };
 }
 
@@ -87,7 +102,7 @@ function writeConfig(root, patch) {
     throw new TypeError('Config update must be an object');
   }
   for (const key of Object.keys(patch)) {
-    if (key !== 'testMode' && key !== 'summarizer' && key !== 'providers') throw new TypeError(`Unsupported config key: ${key}`);
+    if (key !== 'testMode' && key !== 'summarizer' && key !== 'providers' && key !== 'github') throw new TypeError(`Unsupported config key: ${key}`);
   }
   if (Object.hasOwn(patch, 'testMode') && typeof patch.testMode !== 'boolean') {
     throw new TypeError('testMode must be a boolean');
@@ -146,4 +161,4 @@ function writeJson(file, value) {
   fs.renameSync(temporary, file);
 }
 
-module.exports = { SUMMARIZER_DEFAULTS, normalizeSummarizer, ensureHome, normalizeConfig, readConfig, writeConfig, sanitizeName, slugify, uniqueName, readJson, writeJson, DIR_MODE };
+module.exports = { SUMMARIZER_DEFAULTS, GITHUB_DEFAULTS, normalizeGithub, normalizeSummarizer, ensureHome, normalizeConfig, readConfig, writeConfig, sanitizeName, slugify, uniqueName, readJson, writeJson, DIR_MODE };

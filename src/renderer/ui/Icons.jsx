@@ -100,6 +100,7 @@ export const TASK = () => (
 export const KIND = {
   note: { glyph: <NOTE />, label: 'note' },
   md: { glyph: <NOTE />, label: 'md' },
+  docx: { glyph: <NOTE />, label: 'docx' },
   pdf: { glyph: <PDF />, label: 'pdf' },
   git: { glyph: <GH />, label: 'git repo' },
   folder: { glyph: <FOLDER />, label: 'folder' },

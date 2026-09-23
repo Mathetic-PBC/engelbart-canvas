@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { pathToFileURL } = require('node:url');
-const { parseBrowserUrl, isLoopback, cleanUserAgent, boundsFrom, createBrowserViews } = require('../src/main/browser/views.cjs');
+const { parseBrowserUrl, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews } = require('../src/main/browser/views.cjs');
 
 const address = () => import(pathToFileURL(path.join(__dirname, '../src/renderer/model/address.js')).href);
 
@@ -91,6 +91,8 @@ function fakeElectron() {
         loadURL(url) { this.loaded.push(url); this.url = url; return Promise.resolve(); },
         getURL() { return this.url; }, getTitle: () => 'Title', isLoading: () => false, isDestroyed() { return this.closed; },
         close() { this.closed = true; }, reload() { this.reloaded = (this.reloaded || 0) + 1; }, stop() {},
+        finds: [], findInPage(text, options) { this.finds.push([text, options]); return this.finds.length; }, stopFindInPage(action) { this.finds.push(['stop', action]); },
+        focused: false, isFocused() { return this.focused; },
         setWindowOpenHandler(handler) { this.windowOpen = handler; },
         navigationHistory: { canGoBack: () => false, canGoForward: () => false, goBack() {}, goForward() {} },
       });
@@ -102,7 +104,11 @@ function fakeElectron() {
     getVisible() { return this.visible; }
     setBounds(bounds) { this.bounds = bounds; }
   }
-  const browsing = { flushed: 0, cookies: { on() {}, flushStore: async () => { browsing.flushed += 1; } }, ua: 'X Electron/44.4.1 Y', setUserAgent(value) { this.ua = value; }, getUserAgent() { return this.ua; }, setPermissionRequestHandler(handler) { this.permission = handler; } };
+  const browsing = {
+    flushed: 0, cookies: { on() {}, flushStore: async () => { browsing.flushed += 1; } }, ua: 'X Electron/44.4.1 Y', setUserAgent(value) { this.ua = value; }, getUserAgent() { return this.ua; }, setPermissionRequestHandler(handler) { this.permission = handler; },
+    webRequest: { onHeadersReceived(filter, handler) { browsing.headersFilter = filter; browsing.headers = handler; } },
+    on(name, handler) { browsing[name] = handler; },
+  };
   const children = [];
   const questions = [];
   const handed = [];
@@ -110,7 +116,7 @@ function fakeElectron() {
   const shell = { openExternal: async (url) => { handed.push(url); } };
   const win = {
     isDestroyed: () => false,
-    webContents: { getZoomFactor: () => 2, focus() {} },
+    webContents: { getZoomFactor: () => 2, focus() { win.focused = (win.focused || 0) + 1; } },
     contentView: { addChildView: (view) => children.push(view), removeChildView: (view) => children.splice(children.indexOf(view), 1) },
   };
   return { made, browsing, children, win, dialog, questions, handed, electron: { WebContentsView, session: { fromPartition: () => browsing }, Menu: {}, clipboard: {}, dialog, shell } };
@@ -271,4 +277,151 @@ test('views: a page on disk opens from inside the home directory only, and only 
   const b = fake.made[1].webContents;
   assert.equal(navigate(b, inside), true); // the web never reaches the disk
   assert.deepEqual(b.windowOpen({ url: inside, disposition: 'foreground-tab' }), { action: 'deny' });
+});
+
+test('pdf helpers: a pdf answer becomes a download that keeps its file name', () => {
+  assert.equal(pdfAddress('https://example.com/papers/a.PDF?x=1'), true);
+  assert.equal(pdfAddress('https://arxiv.org/pdf/2310.05292'), false); // known only by its type, when it answers
+  assert.equal(pdfAddress('not a url'), false);
+  assert.equal(pdfAsDownload({ 'content-type': ['text/html'] }), null);
+  assert.deepEqual(pdfAsDownload({ 'Content-Type': ['application/pdf'], 'x-a': ['1'] }), { 'Content-Type': ['application/pdf'], 'x-a': ['1'], 'Content-Disposition': ['attachment'] });
+  assert.deepEqual(pdfAsDownload({ 'content-type': ['application/pdf; qs=0.001'], 'content-disposition': ['inline; filename="2310.05292v2.pdf"'] })['Content-Disposition'], ['attachment; filename="2310.05292v2.pdf"']);
+  assert.equal(pdfName('2310.05292v2.pdf', 'https://arxiv.org/pdf/2310.05292'), '2310.05292v2');
+  assert.equal(pdfName('', 'https://example.com/a%20b.pdf'), 'a b');
+  assert.equal(pdfName('', 'https://example.com/'), 'pdf');
+});
+
+test('views: a tab\'s pdf is saved aside and sent to the viewer; other downloads, subframes and popups are left alone', async () => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-pdfs-')));
+  const pdfDir = path.join(home, 'tmp');
+  const fake = fakeElectron();
+  const sent = [];
+  const views = createBrowserViews({ electron: fake.electron, getWindow: () => fake.win, send: (channel, payload) => sent.push([channel, payload]), appName: 'Engelbart', fileRoot: () => home, pdfDir });
+  views.open('a', 'https://arxiv.org/abs/2310.05292');
+  const a = fake.made[0].webContents;
+  a.url = 'https://arxiv.org/abs/2310.05292';
+
+  // The answer's headers: only a tab's main frame is turned into a download.
+  assert.deepEqual(fake.browsing.headersFilter.types, ['mainFrame']);
+  const headers = (details) => new Promise((resolve) => fake.browsing.headers({ resourceType: 'mainFrame', responseHeaders: { 'content-type': ['application/pdf'] }, ...details }, resolve));
+  assert.deepEqual((await headers({ webContents: a })).responseHeaders['Content-Disposition'], ['attachment']);
+  assert.deepEqual(await headers({ webContents: {} }), {}); // a popup's pdf is Chromium's
+  assert.deepEqual(await headers({ webContents: a, resourceType: 'subFrame' }), {});
+  assert.deepEqual(await headers({ webContents: a, responseHeaders: { 'content-type': ['text/html'] } }), {});
+
+  const download = (url, mime, fileName) => Object.assign(new EventEmitter(), {
+    getURL: () => url, getMimeType: () => mime, getFilename: () => fileName, getReceivedBytes: () => 12,
+    setSavePath(file) { this.saved = file; }, cancel() { this.cancelled = true; },
+  });
+  const item = download('https://arxiv.org/pdf/2310.05292', 'application/pdf', '2310.05292v2.pdf');
+  fake.browsing['will-download']({}, item, a);
+  assert.ok(item.saved.startsWith(pdfDir + path.sep));
+  assert.deepEqual(sent.at(-1), ['browser:pdf', { id: 'a', url: 'https://arxiv.org/pdf/2310.05292', name: '2310.05292v2', under: 'https://arxiv.org/abs/2310.05292', loading: true }]);
+  fs.writeFileSync(item.saved, '%PDF-1.4 x');
+  item.emit('done', {}, 'completed');
+  const [channel, payload] = sent.at(-1);
+  assert.equal(channel, 'browser:pdf');
+  assert.equal(Buffer.from(payload.bytes).toString(), '%PDF-1.4 x');
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(fs.existsSync(item.saved), false); // the temporary copy goes once read
+
+  // Served as octet-stream, a .pdf address is still a pdf; a failed one says so.
+  const octet = download('https://example.com/b.pdf', 'application/octet-stream', 'b.pdf');
+  fake.browsing['will-download']({}, octet, a);
+  octet.emit('done', {}, 'interrupted');
+  assert.deepEqual(sent.at(-1)[1], { id: 'a', url: 'https://example.com/b.pdf', name: 'b', under: 'https://arxiv.org/abs/2310.05292', error: 'The pdf did not download' });
+  // A zip, or a pdf from something that is not a tab, is Electron's to ask about.
+  const zip = download('https://example.com/c.zip', 'application/zip', 'c.zip');
+  fake.browsing['will-download']({}, zip, a);
+  assert.equal(zip.saved, undefined);
+  const stray = download('https://example.com/d.pdf', 'application/pdf', 'd.pdf');
+  fake.browsing['will-download']({}, stray, {});
+  assert.equal(stray.saved, undefined);
+
+  // A pdf on disk is read, never loaded into the page: typed, or linked from a page on disk. Outside home: refused.
+  fs.writeFileSync(path.join(home, 'paper.pdf'), '%PDF-1.4 disk');
+  const disk = pathToFileURL(path.join(home, 'paper.pdf')).href;
+  const before = a.loaded.length;
+  views.open('a', disk);
+  assert.equal(a.loaded.length, before);
+  assert.equal(sent.at(-1)[1].name, 'paper');
+  assert.equal(Buffer.from(sent.at(-1)[1].bytes).toString(), '%PDF-1.4 disk');
+  views.open('a', pathToFileURL(path.join(home, 'missing.pdf')).href);
+  assert.equal(sent.at(-1)[1].error, 'Nothing is at that path');
+  assert.throws(() => views.open('a', 'file:///etc/x.pdf'), TypeError);
+  views.open('b', pathToFileURL(path.join(home, 'index.html')).href);
+  const b = fake.made[1].webContents;
+  b.url = pathToFileURL(path.join(home, 'index.html')).href;
+  const link = { prevented: false, preventDefault() { this.prevented = true; } };
+  b.emit('will-navigate', link, disk);
+  assert.equal(link.prevented, true);
+  assert.deepEqual([sent.at(-1)[1].id, sent.at(-1)[1].url], ['b', disk]);
+});
+
+test('views: find in the page, and the keys a page cannot keep (⌘T, ⌘W; ⇧⌘W stays the window\'s)', () => {
+  const fake = fakeElectron();
+  const sent = [];
+  const views = createBrowserViews({ electron: fake.electron, getWindow: () => fake.win, send: (channel, payload) => sent.push([channel, payload]), appName: 'Engelbart' });
+  views.open('a', 'https://example.com/');
+  const a = fake.made[0].webContents;
+
+  views.find('a', 'hello');
+  views.find('a', 'hello');
+  views.find('a', 'hello', { backward: true });
+  views.find('a', 'help');
+  views.stopFind('a');
+  views.find('a', 'help'); // after a stop, the same words start over
+  views.find('a', '');
+  assert.deepEqual(a.finds, [
+    ['hello', { forward: true, findNext: true, matchCase: false }],
+    ['hello', { forward: true, findNext: false, matchCase: false }],
+    ['hello', { forward: false, findNext: false, matchCase: false }],
+    ['help', { forward: true, findNext: true, matchCase: false }],
+    ['stop', 'keepSelection'],
+    ['help', { forward: true, findNext: true, matchCase: false }],
+    ['stop', 'clearSelection'],
+  ]);
+  assert.throws(() => views.find('a', 'x'.repeat(1001)), TypeError);
+  a.emit('found-in-page', {}, { requestId: 1, matches: 4, activeMatchOrdinal: 2, finalUpdate: true });
+  assert.deepEqual(sent.at(-1), ['browser:found', { id: 'a', matches: 4, active: 2 }]);
+
+  const key = (input) => { const event = { prevented: false, preventDefault() { this.prevented = true; } }; a.emit('before-input-event', event, { type: 'keyDown', meta: process.platform === 'darwin', control: process.platform !== 'darwin', alt: false, shift: false, ...input }); return event.prevented; };
+  assert.equal(key({ key: 't' }), true);
+  assert.deepEqual(sent.at(-1), ['browser:shortcut', { name: 'new-tab', tab: 'a' }]);
+  assert.equal(fake.win.focused, 1); // the address, in the app, takes the keyboard
+  assert.equal(key({ key: 'w' }), true);
+  assert.deepEqual(sent.at(-1), ['browser:shortcut', { name: 'close-tab', tab: 'a' }]);
+  const count = sent.length;
+  assert.equal(key({ key: 'W', shift: true }), false);
+  assert.equal(key({ key: 'f' }), false); // the Edit menu's, after the page
+  assert.equal(sent.length, count);
+
+  // The Edit menu's Find names the tab whose page has the keyboard, else none.
+  views.shortcut('find');
+  assert.deepEqual(sent.at(-1), ['browser:shortcut', { name: 'find', tab: null }]);
+  views.show('a', { x: 0, y: 0, width: 10, height: 10 });
+  a.focused = true;
+  views.shortcut('find-next');
+  assert.deepEqual(sent.at(-1), ['browser:shortcut', { name: 'find-next', tab: 'a' }]);
+});
+
+test('GitHub webpages open in the default browser from direct loads, links, redirects and popups', () => {
+  const f = fakeElectron();
+  const external = [];
+  f.electron.shell = { openExternal: async url => { external.push(url); } };
+  const views = createBrowserViews({ electron: f.electron, getWindow: () => f.win, send() {} });
+  views.open('github', 'https://github.com/Mathetic-PBC/engelbart-canvas');
+  assert.equal(external.length, 1);
+  assert.equal(f.made.length, 0);
+  views.open('web', 'https://example.com');
+  const contents = f.made[0].webContents;
+  for (const event of ['will-navigate', 'will-redirect']) {
+    let stopped = false;
+    contents.emit(event, { preventDefault() { stopped = true; } }, 'https://github.com/login');
+    assert.equal(stopped, true);
+  }
+  assert.deepEqual(contents.windowOpen({ url: 'https://github.com/login', disposition: 'new-window' }), { action: 'deny' });
+  assert.equal(external.length, 4);
+  views.open('lookalike', 'https://github.com.evil.example');
+  assert.equal(external.length, 4);
 });

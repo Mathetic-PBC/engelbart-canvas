@@ -20,6 +20,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const stageFiles = require('../stage/files.cjs');
 const { randomUUID } = require('node:crypto');
 const { fileURLToPath, pathToFileURL } = require('node:url');
 const { sanitizeName, slugify, uniqueName, readJson, writeJson, DIR_MODE } = require('./home.cjs');
@@ -563,11 +564,12 @@ async function writeDoc(ctx, projectId, ref, text) {
 
 /* ------------------------------------------------------------- last opened */
 
-// Where the app reopens: <dataRoot>/state.json { projectId, workspaceId, views }. Missing or stale ids
+// Where the app reopens: <dataRoot>/state.json { projectId, workspaceId, views, recent, agents }. Missing or stale ids
 // fall back to the first project / workspace. (Files written before the layout change carry
 // `topicId`, which is the same id.)
 // `views[projectId][workspaceId]` is what a workspace had open when it was left (2026-09-22): the document in front
-// (`active`: 'ws' or a note's library id), its note tabs, and where each document was scrolled to, keyed as the editor
+// (`active`: 'ws', a note's library id, or a workspace tab's workspace id), its tabs (notes, and since 2026-09-23 other
+// workspaces' documents, `kind: 'workspace'`), and where each document was scrolled to, keyed as the editor
 // keys documents (`ws:<id>`, `note:<id>`). Positions belong to the workspace, so one note can be halfway down in one
 // workspace and at the top in another. Scrolling writes here and nowhere else: a document's edit time never moves.
 const STATE_FILE = 'state.json';
@@ -585,15 +587,16 @@ function readLastOpen(ctx) {
   return { projectId: idOrNull(value.projectId), workspaceId: idOrNull(value.workspaceId) || idOrNull(value.topicId) };
 }
 
-/** Rewrites state.json with the reopen ids given and the views it already held. */
-function writeState(ctx, last, views) {
-  writeJson(path.join(ctx.dataRoot, STATE_FILE), { ...last, ...(plainObject(views) ? { views } : {}) });
+/** Rewrites state.json with the fields given; every other field it held is kept (a topic-era `topicId` becomes `workspaceId`). */
+function writeState(ctx, patch) {
+  const { topicId, goalId, ...held } = readState(ctx); // eslint-disable-line no-unused-vars
+  writeJson(path.join(ctx.dataRoot, STATE_FILE), { ...held, ...readLastOpen(ctx), ...patch });
 }
 
 function writeLastOpen(ctx, value) {
   const input = plainObject(value) || {};
   const next = { projectId: idOrNull(input.projectId), workspaceId: idOrNull(input.workspaceId) };
-  writeState(ctx, next, readState(ctx).views);
+  writeState(ctx, next);
   return next;
 }
 
@@ -614,7 +617,10 @@ function cleanView(value) {
   const tabs = [], seen = new Set();
   for (const tab of Array.isArray(input.tabs) ? input.tabs : []) {
     const id = idOrNull(tab && tab.id); if (!id || seen.has(id)) continue;
-    seen.add(id); tabs.push({ id, title: typeof tab.title === 'string' ? tab.title.slice(0, 200) : '' });
+    seen.add(id);
+    const clean = { id, title: typeof tab.title === 'string' ? tab.title.slice(0, 200) : '' };
+    if (tab.kind === 'workspace') clean.kind = 'workspace'; // another workspace's document open here as a tab (2026-09-23)
+    tabs.push(clean);
     if (tabs.length >= MAX_TABS) break;
   }
   const positions = {};
@@ -642,9 +648,135 @@ function writeView(ctx, projectId, workspaceId, view) {
   const pid = idOrNull(projectId), wid = idOrNull(workspaceId);
   if (!pid || !wid) throw new TypeError('a view needs a project id and a workspace id');
   const clean = cleanView(view); if (!clean) throw new TypeError('view is invalid');
-  const state = readState(ctx), views = plainObject(state.views) || {};
-  writeState(ctx, { projectId: idOrNull(state.projectId), workspaceId: idOrNull(state.workspaceId) || idOrNull(state.topicId) }, { ...views, [pid]: { ...(plainObject(views[pid]) || {}), [wid]: clean } });
+  const views = plainObject(readState(ctx).views) || {};
+  writeState(ctx, { views: { ...views, [pid]: { ...(plainObject(views[pid]) || {}), [wid]: clean } } });
   return clean;
+}
+
+/* ------------------------------------------------------------- where to next */
+
+// What the sidebar's "next" row and ⌘J go to (2026-09-22), kept in state.json beside the views:
+//   recent: [{ projectId, workspaceId, at }]  the workspaces written in, newest first: every one written in during the last
+//           thirty minutes, or the last three, whichever is more (2026-09-23, Hudson: "whichever group contains MORE
+//           workspaces"). A workspace is written in when it is made, or when its document or a note open in it is typed
+//           into; looking around does not count.
+//   agents: [{ id, kind, projectId, workspaceId, doc, status, started, finished }]  every agent the app started that is
+//           still `running`, or has finished and is `waiting` for you to look (it is dropped when its workspace is
+//           visited). `kind` is 'bart' (the inline @bart asks) for now; `workspaceId` may be null for an agent that
+//           belongs to no workspace. A `running` row from an earlier run of the app is stale and is not read.
+const RECENT_KEEP = 3;
+const RECENT_WINDOW = 30 * 60 * 1000;
+const MAX_RECENT = 100;
+const MAX_AGENTS = 50;
+const AGENT_KINDS = new Set(['bart']);
+const AGENT_STATUSES = new Set(['running', 'waiting']);
+const liveAgents = new Set(); // ids of the agents running in this process
+const isoOrNull = (value) => (typeof value === 'string' && value.length <= 40 && !Number.isNaN(Date.parse(value)) ? value : null);
+
+/** Newest first, once each: the first three whatever their age, then any other written in during the last thirty minutes. */
+function cleanRecent(value, now = Date.now()) {
+  const out = [];
+  for (const entry of Array.isArray(value) ? value : []) {
+    const input = plainObject(entry) || {};
+    const projectId = idOrNull(input.projectId), workspaceId = idOrNull(input.workspaceId), at = isoOrNull(input.at);
+    if (!projectId || !workspaceId || !at || out.some((held) => held.projectId === projectId && held.workspaceId === workspaceId)) continue;
+    if (out.length >= RECENT_KEEP && !(now - Date.parse(at) <= RECENT_WINDOW)) continue;
+    out.push({ projectId, workspaceId, at });
+    if (out.length >= MAX_RECENT) break;
+  }
+  return out;
+}
+
+function cleanDocRef(value) {
+  const input = plainObject(value);
+  if (input && input.kind === 'workspace' && idOrNull(input.workspaceId)) return { kind: 'workspace', workspaceId: input.workspaceId };
+  if (input && input.kind === 'note' && idOrNull(input.id)) return { kind: 'note', id: input.id };
+  return null;
+}
+
+function cleanAgents(value) {
+  const out = [];
+  for (const entry of Array.isArray(value) ? value : []) {
+    const input = plainObject(entry) || {};
+    const id = typeof input.id === 'string' && /^[\w-]{1,64}$/.test(input.id) ? input.id : null;
+    if (!id || !AGENT_KINDS.has(input.kind) || !AGENT_STATUSES.has(input.status) || out.some((held) => held.id === id)) continue;
+    if (input.status === 'running' && !liveAgents.has(id)) continue;
+    out.push({ id, kind: input.kind, projectId: idOrNull(input.projectId), workspaceId: idOrNull(input.workspaceId), doc: cleanDocRef(input.doc), status: input.status, started: isoOrNull(input.started), finished: isoOrNull(input.finished) });
+  }
+  return out.slice(-MAX_AGENTS);
+}
+
+/**
+ * The recent workspaces and the agents, each with the names it is shown by ({ name, path, projectName }); an entry whose
+ * project or workspace is gone is left out.
+ */
+function readNav(ctx) {
+  const state = readState(ctx);
+  const places = new Map(); // projectId → { name, byId } | null
+  const place = (projectId, workspaceId) => {
+    if (!places.has(projectId)) {
+      let found = null;
+      try {
+        const project = findProject(ctx, projectId);
+        found = { name: project.name, byId: new Map(flattenWorkspaces(project.dir).map((workspace) => [workspace.id, workspace])) };
+      } catch { found = null; }
+      places.set(projectId, found);
+    }
+    const project = places.get(projectId), workspace = project && project.byId.get(workspaceId);
+    return workspace ? { name: workspace.name, path: workspace.path, projectName: project.name } : null;
+  };
+  const recent = cleanRecent(state.recent).flatMap((entry) => { const at = place(entry.projectId, entry.workspaceId); return at ? [{ ...entry, ...at }] : []; });
+  const agents = cleanAgents(state.agents).flatMap((agent) => {
+    if (!agent.workspaceId) return [agent];
+    const at = agent.projectId && place(agent.projectId, agent.workspaceId);
+    return at ? [{ ...agent, ...at }] : [];
+  });
+  return { recent, agents };
+}
+
+/** A workspace was written in (or made): it moves to the front of `recent`, with the time. */
+function recordEdit(ctx, projectId, workspaceId) {
+  findWorkspace(ctx, projectId, workspaceId);
+  const held = readState(ctx).recent;
+  const recent = cleanRecent([{ projectId, workspaceId, at: nowIso() }, ...(Array.isArray(held) ? held : [])]);
+  writeState(ctx, { recent });
+  return recent;
+}
+
+function writeAgents(ctx, change) {
+  const agents = change(cleanAgents(readState(ctx).agents));
+  writeState(ctx, { agents: agents.slice(-MAX_AGENTS) });
+  return agents;
+}
+
+/** An agent starts: `running`, in the workspace it was asked from. */
+function agentStarted(ctx, { id, kind = 'bart', projectId, workspaceId = null, doc = null }) {
+  if (typeof id !== 'string' || !/^[\w-]{1,64}$/.test(id) || !AGENT_KINDS.has(kind)) throw new TypeError('agent is invalid');
+  liveAgents.add(id);
+  writeAgents(ctx, (agents) => [...agents.filter((agent) => agent.id !== id), { id, kind, projectId: idOrNull(projectId), workspaceId: idOrNull(workspaceId), doc: cleanDocRef(doc), status: 'running', started: nowIso(), finished: null }]);
+}
+
+/** It finished (an answer or a failure, both of which land in the document): `waiting` until its workspace is visited. */
+function agentFinished(ctx, id) {
+  writeAgents(ctx, (agents) => agents.map((agent) => (agent.id === id ? { ...agent, status: 'waiting', finished: nowIso() } : agent)));
+  liveAgents.delete(id);
+}
+
+/** It was stopped: nothing came of it, so nothing waits. */
+function agentStopped(ctx, id) {
+  liveAgents.delete(id);
+  writeAgents(ctx, (agents) => agents.filter((agent) => agent.id !== id));
+}
+
+/** A workspace is being looked at: whatever was waiting there has been seen. Answers how many were. */
+function seenAgents(ctx, projectId, workspaceId) {
+  const pid = idOrNull(projectId), wid = idOrNull(workspaceId);
+  if (!pid || !wid) throw new TypeError('seen needs a project id and a workspace id');
+  let seen = 0;
+  const held = cleanAgents(readState(ctx).agents);
+  const kept = held.filter((agent) => { const here = agent.status === 'waiting' && agent.projectId === pid && agent.workspaceId === wid; if (here) seen += 1; return !here; });
+  if (seen) writeState(ctx, { agents: kept });
+  return seen;
 }
 
 /* ---------------------------------------------------------------- text files */
@@ -668,9 +800,9 @@ function resolveTypedPath(ctx, project, input) {
   return resolved;
 }
 
-const PAGE_FILE = /\.html?$/i;
+const PAGE_FILE = /\.(?:html?|pdf)$/i;
 
-/** What the Browser pane renders rather than prints: an html file that exists. Anything else is null. */
+/** What the Browser pane renders rather than prints: an html file or a pdf that exists (a pdf is drawn by the Paper viewer). Anything else is null. */
 async function resolvePageFile(ctx, projectId, input) {
   const project = findProject(ctx, projectId);
   const typed = String(input || '').trim();
@@ -684,6 +816,12 @@ async function resolvePageFile(ctx, projectId, input) {
     }
   }
   return null;
+}
+
+/** What the Stage shows for a path typed or picked in this project (src/main/stage/files.cjs). */
+async function readStageFile(ctx, projectId, input) {
+  const file = resolveTypedPath(ctx, findProject(ctx, projectId), input);
+  return stageFiles.readStageFile(file, { cacheDir: path.join(ctx.dataRoot, '.cache', 'stage') });
 }
 
 async function readProjectTextFile(ctx, projectId, input) {
@@ -734,11 +872,18 @@ module.exports = {
   readDoc,
   writeDoc,
   readProjectTextFile,
+  readStageFile,
   resolvePageFile,
   readLastOpen,
   writeLastOpen,
   readViews,
   writeView,
+  readNav,
+  recordEdit,
+  agentStarted,
+  agentFinished,
+  agentStopped,
+  seenAgents,
   projectRecords,
   findProject,
   flattenWorkspaces,

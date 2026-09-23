@@ -26,17 +26,18 @@ test('looksAddable: addresses, arXiv and DOI ids, remotes and paths, by their sp
   for (const no of ['', 'colbert', 'Contextual Retrieval', 'notes/today.md', 'https://', 'a b']) assert.equal(looksAddable(no), false, no);
 });
 
-test('search: empty offers Note, Workspace and four things not here yet; typed, the matches first; nothing already on the rail', async () => {
+test('search: empty offers four things not here yet; typed, every match in the library, what is here included as `here`; no Note or Workspace rows (2026-09-22)', async () => {
   const { searchRows } = await load();
   const inRail = (id) => id === 'p1';
   const empty = searchRows({ query: '', library, inRail });
-  assert.deepEqual(empty.map((r) => r.key), ['new:note', 'new:workspace', 'g1', 'w1', 'c1', 'f1'], 'no notes, no pictures, nothing already here, at most four');
-  assert.deepEqual(empty.slice(2).map((r) => r.tag), ['link · git', 'link', 'csv', 'folder']);
-  const typed = searchRows({ query: 'retriev', library, inRail });
-  assert.deepEqual(typed.map((r) => r.key), ['w1', 'new:note', 'new:workspace'], 'the Note and Workspace rows keep their names whatever is typed');
-  assert.deepEqual(searchRows({ query: 'colbert', library, inRail }).map((r) => r.key), ['new:note', 'new:workspace'], 'what is here already is not offered again');
+  assert.deepEqual(empty.map((r) => r.key), ['g1', 'w1', 'c1', 'f1'], 'no notes, no pictures, nothing already here, at most four');
+  assert.deepEqual(empty.map((r) => r.tag), ['link · git', 'link', 'csv', 'folder']);
+  assert.deepEqual(searchRows({ query: 'retriev', library, inRail }).map((r) => r.key), ['w1'], 'making a note or a workspace is the +\'s job now');
+  assert.deepEqual(searchRows({ query: 'colbert', library, inRail }).map((r) => [r.key, r.tag]), [['p1', 'here']], 'what is here already is found too');
   assert.deepEqual(searchRows({ query: 'import', library, inRail }).map((r) => r.key)[0], 'n1', 'a note is found by name');
   assert.deepEqual(searchRows({ query: 'anthropic.com', library, inRail }).map((r) => r.key)[0], 'w1', 'and a page by its address');
+  const many = Array.from({ length: 60 }, (_, i) => row(`m${i}`, `Match ${i}`, 'website', [], { url: `https://example.org/${i}` }));
+  assert.equal(searchRows({ query: 'match', library: many, inRail }).length, 60, 'no cap: all of the library is searched and shown');
 });
 
 test('search: an address or a path is the one row the library has for it, or a new one, once the main process has answered', async () => {
@@ -78,4 +79,15 @@ test('@Bart, as the menu writes it, is a question like a typed @bart; both rende
   assert.deepEqual('@Bart hi'.split(doc.INLINE).filter(Boolean), ['@Bart', ' hi']);
   assert.match(doc.inlineHtml('@Bart hi'), /<span style="color:#0070f3;font-weight:500">@Bart<\/span> hi/);
   assert.equal(doc.parseLine('@Barty').type === 'bart', false);
+});
+
+test('sections: Notes, Websites, GitHub, Files, Sub-Workspaces in that order; Files takes everything else; empty ones are left out (Sidebar.dc.html, 2026-09-23)', async () => {
+  const { railSections, sectionOf } = await load();
+  const rows = [...library, row('k1', 'Evaluation harness', 'child'), row('g2', 'engelbart-canvas', 'folder', ['git'], { folder_path: '/Users/h/e' }), row('h1', 'saved.html', 'html')];
+  const sections = railSections(rows);
+  assert.deepEqual(sections.map((s) => s.label), ['Notes', 'Websites', 'GitHub', 'Files', 'Sub-Workspaces']);
+  assert.deepEqual(sections.map((s) => s.rows.map((r) => r.id)), [['n1'], ['w1'], ['g1', 'g2'], ['p1', 'i1', 'c1', 'f1', 'h1'], ['k1']]);
+  assert.equal(sectionOf(row('m1', 'README', 'md')), 'Files', 'an outside md is a file, not a note');
+  assert.deepEqual(railSections([row('p1', 'ColBERT', 'pdf', ['paper'])]).map((s) => s.key), ['Files']);
+  assert.deepEqual(railSections([]), []);
 });

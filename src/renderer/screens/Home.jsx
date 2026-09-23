@@ -113,7 +113,7 @@ export function ItemPeek({ row, more, onOpenWorkspace }) {
   );
 }
 
-export default function Home({ projects, library, onCreateScreen, onOpenWorkspace, onOpenNote, onRename, onLibraryChanged, error }) {
+export default function Home({ projects, library, onCreateScreen, onOpenWorkspace, onOpenNote, onOpenOnStage, onRename, onLibraryChanged, error }) {
   const [renaming, setRenaming] = React.useState(null);
   const [query, setQuery] = React.useState('');
   const [adding, setAdding] = React.useState(false);
@@ -213,12 +213,14 @@ export default function Home({ projects, library, onCreateScreen, onOpenWorkspac
   async function openRow(row) {
     setPeek(null);
     if (isNote(row) && row.project_id) { onOpenNote(row); return; }
-    if (row.url && !row.path) { api.openExternal(row.url).catch(() => {}); return; } // a repository with a clone still opens at its address
+    // Anything else opens on a workspace's Stage (2026-09-23), never in the default browser: a workspace that holds it,
+    // else the project it is in, else the one last open.
     try {
       const held = await api.projectsForLibraryItem(row.id);
       const project = held.find((candidate) => candidate.workspaces.length) || held[0];
-      if (project) onOpenWorkspace(project.id, project.workspaces[0] ? project.workspaces[0].id : null);
-    } catch { /* nowhere to open it from here */ }
+      if (project) onOpenWorkspace(project.id, project.workspaces[0] ? project.workspaces[0].id : null, row);
+      else onOpenOnStage(row);
+    } catch { onOpenOnStage(row); }
   }
 
   /* ---------------------------------------------------------------- render */
@@ -356,6 +358,7 @@ export default function Home({ projects, library, onCreateScreen, onOpenWorkspac
         <div
           data-peek={peek.kind}
           data-overlay="1"
+          data-hover="1"
           onMouseEnter={hold}
           onMouseLeave={closePeek}
           style={{ position: 'fixed', zIndex: 60, left: peekLeft, top: peekTop, [peekOnRight ? 'paddingLeft' : 'paddingRight']: PEEK_GAP }}

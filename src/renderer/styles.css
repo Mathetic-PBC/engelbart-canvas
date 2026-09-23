@@ -66,3 +66,16 @@ textarea::placeholder,input::placeholder{color:#8f8f8f;font-style:italic}
 .hov-save:hover{border-color:#c9c9c9!important;background:#eaeaea!important}
 .glyph-fit svg{width:100%;height:100%}
 .save-name:focus{border-bottom-color:#171717!important}
+/* the GitHub sign-in waiting for GitHub (workspace/GithubPane.jsx) */
+@keyframes github-wait{0%,100%{opacity:.25}50%{opacity:1}}
+.github-wait{animation:github-wait 1.2s ease-in-out infinite}
+/* The Stage (Add - Mention Stage.dc.html, 2026-09-23): tabs not in front wash grey, the round + and × darken; find paints blue. */
+.hov-tab:hover{background:#e6e6e6!important}
+.hov-tab-plus:not(:disabled):hover{background:#e6e6e6!important;color:#171717!important}
+.hov-x:hover{background:#e3e3e3!important;color:#171717!important}
+::highlight(stage-find){background-color:rgba(0,112,243,.16);color:inherit}
+::highlight(stage-find-cur){background-color:rgba(0,112,243,.4);color:inherit}
+/* A rail row's minus (2026-09-23): only while the pointer is on the row; red-free, it darkens on its own hover. */
+.rail-minus{opacity:0;transition:opacity 120ms,color 120ms}
+[data-rail-row]:hover .rail-minus,.rail-minus:focus-visible{opacity:1}
+.rail-minus:hover{color:#171717!important}

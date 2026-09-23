@@ -43,7 +43,9 @@ function projectInput(value) {
 }
 
 // `inspectPdf` (the app passes pdf-kind's) is how a pdf is read for whether it is a paper when a library is re-categorized.
-function createStore({ homeDir, fixturesDir, inspectPdf: readPdf = null }) {
+// `afterOpen(ctx)` runs each time a library is opened and ready, not awaited: background work that must not hold the
+// library back (the app checks for pdfs saved as links: store/web-pdfs.cjs).
+function createStore({ homeDir, fixturesDir, inspectPdf: readPdf = null, afterOpen = null }) {
   const layout = home.ensureHome(homeDir);
   const contexts = new Map();
 
@@ -69,6 +71,7 @@ function createStore({ homeDir, fixturesDir, inspectPdf: readPdf = null }) {
       // rules) is brought up to them before anyone reads it: about 30 ms a pdf, once. Summaries are
       // not touched. A failure leaves the rows due for the next launch; the library still opens.
       try { await library.recategorize(next, { inspectPdf: readPdf }); } catch { /* still due */ }
+      if (afterOpen) setTimeout(() => { Promise.resolve().then(() => afterOpen(next)).catch(() => {}); }, 0);
       return next;
     })();
     contexts.set(current, opening);
@@ -104,7 +107,7 @@ function createStore({ homeDir, fixturesDir, inspectPdf: readPdf = null }) {
   return { layout, context, config: describe, setTestMode, resetTestData, close: closeAll };
 }
 
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, sandbox, readModels, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), readRepoReadme = createRepoReadmeReader() }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, sandbox, readModels, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), readRepoReadme = createRepoReadmeReader(), github = null, openGithubPage = () => {} }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const withCtx = (fn) => async (...args) => fn(await store.context(), ...args);
   let changingMode = false;
@@ -135,6 +138,29 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('set-last-open', withCtx((ctx, value) => projects.writeLastOpen(ctx, value)));
   handle('views', withCtx((ctx, projectId) => projects.readViews(ctx, projectId)));
   handle('set-view', withCtx((ctx, projectId, workspaceId, view) => projects.writeView(ctx, projectId, workspaceId, view)));
+  // Where to go next (the sidebar's next row, ⌘J): the workspaces written in last and the agents running or waiting.
+  // Every change is announced on `engelbart:nav`; the renderer reads `nav` again.
+  const navChanged = () => notify('engelbart:nav', {});
+  handle('nav', withCtx((ctx) => projects.readNav(ctx)));
+
+  // GitHub (src/main/github/connection.cjs): signing in through the default browser, and the repositories the App can read.
+  // Every change of the sign-in is announced on `engelbart:github` with the status. `github-open` shows GitHub's device
+  // authorization page again, or the App's install page, in the default browser.
+  const gh = () => { if (!github) throw new Error('GitHub is not available'); return github; };
+  handle('github-status', () => (github ? github.status() : { configured: false, connected: false, pending: null, error: '', installUrl: '' }));
+  handle('github-connect', () => gh().connect());
+  handle('github-cancel', () => gh().cancel());
+  handle('github-disconnect', () => gh().disconnect());
+  handle('github-repos', () => gh().repos());
+  handle('github-open', async (which) => {
+    const status = gh().status();
+    const url = which === 'install' ? status.installUrl : status.pending && status.pending.verificationUri;
+    if (!url) throw new Error(which === 'install' ? 'The GitHub App has no slug in ~/.engelbart/config.json (github.appSlug).' : 'No sign-in is waiting');
+    await openGithubPage(url);
+    return true;
+  });
+  handle('record-edit', withCtx((ctx, pid, wid) => { projects.recordEdit(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); navChanged(); return true; }));
+  handle('seen-agents', withCtx((ctx, pid, wid) => { const seen = projects.seenAgents(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); if (seen) navChanged(); return seen; }));
   handle('list-projects', withCtx((ctx) => projects.listProjects(ctx)));
   handle('create-project', withCtx((ctx, input) => projects.createProject(ctx, projectInput(input))));
   handle('create-project-with-welcome', withCtx((ctx, input) => projects.createProjectWithWelcome(ctx, projectInput(input))));
@@ -143,9 +169,14 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
 
   handle('set-project-directory', withCtx((ctx, id, directory) => projects.setProjectDirectory(ctx, str(id, 'project id', 64), str(directory, 'directory', 4096))));
 
-  handle('create-workspace', withCtx((ctx, pid, input) => {
+  // Making a workspace counts as writing in it (⌘J's recent ones), typed in or not (2026-09-23).
+  handle('create-workspace', withCtx(async (ctx, pid, input) => {
     const value = input && typeof input === 'object' ? input : {};
-    return projects.createWorkspace(ctx, str(pid, 'project id', 64), { name: optStr(value.name, 'name'), parentId: optStr(value.parentId, 'parent id', 64) });
+    const projectId = str(pid, 'project id', 64);
+    const created = await projects.createWorkspace(ctx, projectId, { name: optStr(value.name, 'name'), parentId: optStr(value.parentId, 'parent id', 64) });
+    projects.recordEdit(ctx, projectId, created.id);
+    navChanged();
+    return created;
   }));
   handle('rename-workspace', withCtx((ctx, pid, wid, name) => projects.renameWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(name, 'name'))));
   handle('set-workspace-status', withCtx((ctx, pid, wid, status) => projects.setWorkspaceStatus(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(status, 'status', 32))));
@@ -212,14 +243,24 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     const value = input && typeof input === 'object' ? input : {};
     const askId = str(value.askId, 'ask id', 64);
     if (!/^[\w-]+$/.test(askId)) throw new TypeError('ask id is invalid');
+    // Keeping the agent's row is bookkeeping: it never stands between a question and its answer.
+    const track = (change) => { try { change(); navChanged(); return true; } catch { return false; } };
+    let started = false;
     try {
       // `turns`: the earlier turns of the exchange this question continues, read from the document. `choice`: Regenerate's selector.
       const turns = (Array.isArray(value.turns) ? value.turns : []).slice(-40).map((turn) => ({ question: str(turn && turn.question, 'earlier question', 8000), answer: str(turn && turn.answer, 'earlier answer', 40000) }));
       const choice = value.choice && typeof value.choice === 'object' ? { model: str(value.choice.model, 'model', 24), effort: str(value.choice.effort, 'effort', 24) } : null;
       if (choice && !/^[a-z][a-z0-9]*$/.test(choice.model + choice.effort)) throw new TypeError('choice is invalid');
-      return await bart.ask(ctx, str(pid, 'project id', 64), { askId, ref: docRef(value.ref), workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice }, { onProgress: (progress) => notify('engelbart:bart-progress', { askId, ...progress }) });
+      const question = { askId, ref: docRef(value.ref), workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice };
+      // The ask is an agent of its workspace: running now, waiting for you once its answer (or failure) has landed.
+      started = track(() => projects.agentStarted(ctx, { id: askId, kind: 'bart', projectId: pid, workspaceId: question.workspaceId, doc: question.ref }));
+      const out = await bart.ask(ctx, str(pid, 'project id', 64), question, { onProgress: (progress) => notify('engelbart:bart-progress', { askId, ...progress }) });
+      if (started) track(() => projects.agentFinished(ctx, askId));
+      return out;
     } catch (error) {
-      if (error && error.kind === 'stopped') return { stopped: true };
+      const stopped = !!(error && error.kind === 'stopped');
+      if (started) track(() => (stopped ? projects.agentStopped(ctx, askId) : projects.agentFinished(ctx, askId)));
+      if (stopped) return { stopped: true };
       return { failed: true, lines: failureLines(error && error.message) };
     }
   }));
@@ -232,6 +273,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
 
   handle('resolve-page-file', withCtx((ctx, pid, input) => projects.resolvePageFile(ctx, str(pid, 'project id', 64), str(input, 'path', 4096))));
   handle('read-text-file', withCtx((ctx, pid, input) => projects.readProjectTextFile(ctx, str(pid, 'project id', 64), str(input, 'path', 4096))));
+  // The Stage: what is at a path, and what drawing it needs (a pdf's bytes, a picture's, text, a page's address).
+  handle('stage-file', withCtx((ctx, pid, input) => projects.readStageFile(ctx, str(pid, 'project id', 64), str(input, 'path', 4096))));
   handle('library', withCtx((ctx) => library.listLibrary(ctx)));
   // Both directions of "who holds what", derived from the workspaces on disk (no join table).
   handle('projects-for-library-item', withCtx((ctx, id) => library.projectsForLibraryItem(ctx, str(id, 'library id', 64))));
@@ -286,6 +329,11 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     if (changingMode) throw new Error('Wait for the data mode change to finish');
     return sandbox.restart(ctx, str(id, 'library id', 64));
   }));
+  // A pdf read from the web, saved as a copy with its address (library.addPdfCopy; the Stage's Save sends its bytes).
+  handle('add-library-pdf', withCtx((ctx, input, bytes, options) => {
+    if (!(bytes instanceof Uint8Array)) throw new TypeError('pdf bytes are missing');
+    return library.addPdfCopy(ctx, str(input, 'address', 8192), bytes, { inspectPdf, name: optStr(options && typeof options === 'object' ? options.name : null, 'name', 200) });
+  }));
   handle('lookup-library-item', withCtx((ctx, input) => library.lookupItem(ctx, str(input, 'link or path', 4096))));
   // "Choose from disk…": the native picker, files and folders, several at once.
   handle('pick-library-paths', () => pickPaths());
@@ -309,6 +357,9 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('read-library-file', withCtx((ctx, id) => library.readLibraryFile(ctx, str(id, 'library id', 64))));
   handle('read-annotations', withCtx((ctx, id) => library.readAnnotations(ctx, str(id, 'library id', 64))));
   handle('write-annotations', withCtx((ctx, id, value) => library.writeAnnotations(ctx, str(id, 'library id', 64), value)));
+  // Ink on a pdf in the Browser pane, by its address (a link, or a file: address inside the home directory).
+  handle('read-page-annotations', withCtx((ctx, input) => library.readPageAnnotations(ctx, str(input, 'address', 8192))));
+  handle('write-page-annotations', withCtx((ctx, input, value) => library.writePageAnnotations(ctx, str(input, 'address', 8192), value)));
 
   handle('shell-history', () => readShellHistory({ homeDir: require('node:os').homedir() }));
   handle('open-external', (url) => openExternal(url));
