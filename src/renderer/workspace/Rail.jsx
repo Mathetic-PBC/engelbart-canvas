@@ -85,9 +85,11 @@ function WsMark({ size, stroke = 1.3 }) {
 }
 
 // The sidebar's head (Sidebar.dc.html, 2026-09-23): a grey box, "Workspace" over the workspace's icon and name (no
-// "n / m"). A click opens the switcher under it: a search that finds any workspace of the project by name, the sibling
-// workspaces (each mark steps it through todo · in progress · done; the current one, bold, opens its own document), and
-// "+ New". A double-click on the name renames it.
+// "n / m"). Hovering it opens the switcher under it again (2026-09-23, Hudson: "add back hover on the workspace and
+// search"), and moving off closes it unless its search holds text or the keyboard; a click opens it with the caret in
+// the search. The switcher: a search that finds any workspace of the project by name, the sibling workspaces (each mark
+// steps it through todo · in progress · done; the current one, bold, opens its own document), and "+ New". A
+// double-click on the name renames it.
 function WorkspaceHeader({ topics, topic, all, onOpenDoc, onSelectTopic, onCycleTopic, onRenameTopic, onAddTopic }) {
   const [hover, setHover] = React.useState(false); // the switcher is open
   const [editing, setEditing] = React.useState(false);
@@ -106,14 +108,16 @@ function WorkspaceHeader({ topics, topic, all, onOpenDoc, onSelectTopic, onCycle
   const items = found || topics;
   const lit = idx >= 0 && idx < items.length ? items[idx] : null;
   const shut = React.useCallback(() => { clearTimeout(timer.current); setHover(false); setQ(''); setIdx(-1); if (fieldRef.current && document.activeElement === fieldRef.current) fieldRef.current.blur(); }, []);
-  // A click opens it (a second click shuts it), the search taking the keyboard; the double-click that renames waits out
-  // the first click's toggle.
-  const toggle = () => {
-    if (editing) return;
+  // A hover opens it; a click opens it too and gives the search the keyboard.
+  const open = () => { clearTimeout(timer.current); if (!editing) setHover(true); };
+  const close = () => {
     clearTimeout(timer.current);
-    if (hover) { shut(); return; }
-    setHover(true);
-    timer.current = setTimeout(() => { if (fieldRef.current) fieldRef.current.focus({ preventScroll: true }); }, 0);
+    timer.current = setTimeout(() => { if (!(fieldRef.current && document.activeElement === fieldRef.current) && !fieldRef.current?.value) shut(); }, MENU_CLOSE);
+  };
+  const focusSearch = () => {
+    if (editing) return;
+    open();
+    setTimeout(() => { if (fieldRef.current) fieldRef.current.focus({ preventScroll: true }); }, 0);
   };
   // A press anywhere else closes it, typed or not.
   React.useEffect(() => {
@@ -140,7 +144,7 @@ function WorkspaceHeader({ topics, topic, all, onOpenDoc, onSelectTopic, onCycle
   const untitled = !topic || isUntitled(topic.name);
   const menuRow = { display: 'flex', alignItems: 'center', gap: 12, padding: '8px 10px', borderRadius: 6, cursor: 'pointer', transition: 'background 120ms' };
   return (
-    <div ref={boxRef} data-workspace-header="1" style={{ flex: 'none', position: 'relative', zIndex: 6, marginBottom: 18 }}>
+    <div ref={boxRef} data-workspace-header="1" onMouseEnter={open} onMouseLeave={close} style={{ flex: 'none', position: 'relative', zIndex: 6, marginBottom: 18 }}>
       <div style={{ padding: '12px 12px 10px', background: '#f2f2f2', borderRadius: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div style={{ font: '500 12.5px/1.3 var(--font-sans)', color: '#8f8f8f' }}>Workspace</div>
         <div
@@ -149,7 +153,7 @@ function WorkspaceHeader({ topics, topic, all, onOpenDoc, onSelectTopic, onCycle
           aria-label="Switch workspace"
           aria-expanded={hover}
           data-switch-workspace="1"
-          onClick={toggle}
+          onClick={focusSearch}
           onDoubleClick={() => { if (!topic) return; shut(); setDraft(untitled ? '' : topic.name); setEditing(true); }}
           style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer', color: '#171717' }}
         >
@@ -726,7 +730,8 @@ function NextRow({ next, projectId, onGo }) {
 const barButton = (enabled) => ({ flex: 'none', width: BAR_SIZE, aspectRatio: '1', boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, border: 0, borderRadius: 10, background: 'transparent', cursor: enabled ? 'pointer' : 'default' });
 const barPicture = { display: 'block', objectFit: 'contain', pointerEvents: 'none', userSelect: 'none' };
 
-/** The two pictures at the bottom: they size with the sidebar (52–96px) and name themselves on hover. */
+/** The two pictures at the bottom, the trash at the far left and the sticky note at the far right (2026-09-23): they size
+ *  with the sidebar (52–96px) and name themselves on hover. */
 function BottomBar({ trashRef, full, dragging, over, onTrashDragOver, onTrashDragEnter, onTrashDragLeave, onTrashDrop, postItTrash, onPostIt }) {
   const [tip, setTip] = React.useState(null);
   const [opened, setOpened] = React.useState(null); // the trash panel's anchor (the can's rect) while it is open
@@ -740,7 +745,7 @@ function BottomBar({ trashRef, full, dragging, over, onTrashDragOver, onTrashDra
   };
   return (
     <div data-rail-bar="1" style={{ flex: 'none', containerType: 'inline-size', padding: '6px 16px 14px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 'clamp(4px, 4cqw, 16px)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ position: 'relative', display: 'flex' }}>
           <div
             ref={trashRef}
