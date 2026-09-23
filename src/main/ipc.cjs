@@ -103,7 +103,7 @@ function createStore({ homeDir, fixturesDir, inspectPdf: readPdf = null }) {
   return { layout, context, config: describe, setTestMode, resetTestData, close: closeAll };
 }
 
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, sandbox, readModels, notify, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister() }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, sandbox, readModels, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister() }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const withCtx = (fn) => async (...args) => fn(await store.context(), ...args);
   let changingMode = false;
@@ -114,7 +114,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     if (typeof value !== 'boolean') throw new TypeError('testMode must be a boolean');
     if (changingMode) throw new Error('Data mode is already changing');
     changingMode = true;
-    try { await additions.catch(() => {}); await sandbox?.close(); return await store.setTestMode(value); }
+    try { await additions.catch(() => {}); await beforeContextChange(); await sandbox?.close(); return await store.setTestMode(value); }
     finally { changingMode = false; }
   });
   handle('reset-test-data', async () => {
@@ -123,6 +123,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     changingMode = true;
     try {
       await additions.catch(() => {});
+      await beforeContextChange();
       await sandbox?.close();
       const config = await store.resetTestData();
       return { reset: true, ...config };
@@ -131,6 +132,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
 
   handle('last-open', withCtx((ctx) => projects.readLastOpen(ctx)));
   handle('set-last-open', withCtx((ctx, value) => projects.writeLastOpen(ctx, value)));
+  handle('views', withCtx((ctx, projectId) => projects.readViews(ctx, projectId)));
+  handle('set-view', withCtx((ctx, projectId, workspaceId, view) => projects.writeView(ctx, projectId, workspaceId, view)));
   handle('list-projects', withCtx((ctx) => projects.listProjects(ctx)));
   handle('create-project', withCtx((ctx, input) => projects.createProject(ctx, projectInput(input))));
   handle('create-project-with-welcome', withCtx((ctx, input) => projects.createProjectWithWelcome(ctx, projectInput(input))));
@@ -145,13 +148,16 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   }));
   handle('rename-workspace', withCtx((ctx, pid, wid, name) => projects.renameWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(name, 'name'))));
   handle('set-workspace-status', withCtx((ctx, pid, wid, status) => projects.setWorkspaceStatus(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(status, 'status', 32))));
-  handle('set-workspace-context', (pid, wid, entries) => {
+  // All attachment paths share the same handoff: persist context first, then
+  // prepare newly linked repositories. Mode changes drain this queue too.
+  const changeWorkspaceContext = (pid, wid, change) => {
     if (changingMode) throw new Error('Wait for the data mode change to finish');
     const projectId = str(pid, 'project id', 64), workspaceId = str(wid, 'workspace id', 64);
     const attached = additions.catch(() => {}).then(async () => {
       const ctx = await store.context();
-      const previous = new Set(projects.findWorkspace(ctx, projectId, workspaceId).workspace.context);
-      const workspace = await projects.setWorkspaceContext(ctx, projectId, workspaceId, entries);
+      const held = projects.findWorkspace(ctx, projectId, workspaceId).workspace;
+      const previous = new Set(held.context.filter((id) => !held.removed.includes(id)));
+      const workspace = await change(ctx, projectId, workspaceId);
       const errors = [];
       if (sandbox) for (const id of workspace.context) {
         if (previous.has(id)) continue;
@@ -166,6 +172,16 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     });
     additions = attached;
     return attached;
+  };
+  handle('set-workspace-context', (pid, wid, entries) => changeWorkspaceContext(pid, wid, (ctx, projectId, workspaceId) => projects.setWorkspaceContext(ctx, projectId, workspaceId, entries)));
+  // The sidebar: search, +, Save and an @mention bring a library item into a workspace; the trash takes it out (and remembers that it did).
+  handle('link-to-workspace', (pid, wid, ids) => {
+    const entries = (Array.isArray(ids) ? ids : [ids]).slice(0, 200).map((id) => str(id, 'library id', 64));
+    return changeWorkspaceContext(pid, wid, (ctx, projectId, workspaceId) => projects.linkToWorkspace(ctx, projectId, workspaceId, entries));
+  });
+  handle('unlink-from-workspace', (pid, wid, id) => {
+    const entry = str(id, 'library id', 64);
+    return changeWorkspaceContext(pid, wid, (ctx, projectId, workspaceId) => projects.unlinkFromWorkspace(ctx, projectId, workspaceId, entry));
   });
 
   handle('create-note', withCtx((ctx, pid, input) => {
@@ -219,12 +235,15 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // Both directions of "who holds what", derived from the workspaces on disk (no join table).
   handle('projects-for-library-item', withCtx((ctx, id) => library.projectsForLibraryItem(ctx, str(id, 'library id', 64))));
   handle('library-for-project', withCtx((ctx, pid) => library.libraryForProject(ctx, str(pid, 'project id', 64))));
-  handle('add-library-item', (input) => {
+  // Duplicate adds retain the library's explicit error; existing items enter
+  // a workspace via lookup + link. Browser Save may supply a display name.
+  handle('add-library-item', (input, options) => {
     if (changingMode) throw new Error('Wait for the data mode change to finish');
     const value = str(input, 'link or path', 4096);
+    const name = optStr(options && typeof options === 'object' ? options.name : null, 'name', 200);
     const added = additions.catch(() => {}).then(async () => {
       const ctx = await store.context();
-      const row = await library.addItem(ctx, value, { describe, identifyRepo, inspectPdf });
+      const row = await library.addItem(ctx, value, { describe, identifyRepo, inspectPdf, name });
       // Adding a local clone or a non-GitHub item does not start remote work.
       if (sandbox && /^(?:https?:\/\/(?:www\.)?github\.com\/|git@github\.com:)/i.test(value.trim())) {
         try { await sandbox.start(ctx, row.id); }
@@ -266,6 +285,9 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     if (changingMode) throw new Error('Wait for the data mode change to finish');
     return sandbox.restart(ctx, str(id, 'library id', 64));
   }));
+  handle('lookup-library-item', withCtx((ctx, input) => library.lookupItem(ctx, str(input, 'link or path', 4096))));
+  // "Choose from disk…": the native picker, files and folders, several at once.
+  handle('pick-library-paths', () => pickPaths());
   handle('preview-library-item', withCtx((ctx, id) => library.previewItem(ctx, str(id, 'library id', 64), { listRemoteFiles })));
   handle('rename-library-item', withCtx(async (ctx, id, name) => {
     const row = await ctx.libraryDb.get(str(id, 'library id', 64));

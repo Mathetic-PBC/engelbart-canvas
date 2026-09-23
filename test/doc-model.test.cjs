@@ -240,3 +240,76 @@ test('threads: a question, what stands under it, and the follow-ups asked right 
   assert.deepEqual([found[2].turns[0].foot, turnText(doc, found[2].turns[0]).answer], [-1, '**No answer.** Codex was not found'], 'a run that failed has no closing line');
   assert.deepEqual(threads(['bart> orphaned', 'text']), []);
 });
+
+test('fenced code blocks: a closed fence makes a block, and every line inside it is code (2026-09-22)', async () => {
+  const { codeBlocks, parseLines, parseLine, fenceShown, threads } = await load();
+  const doc = [
+    'intro',          // 0
+    '```json',        // 1
+    '{',              // 2
+    '  # not a heading', // 3
+    '- not a bullet', // 4
+    '@bart not a question', // 5
+    '```',            // 6
+    '# a heading',    // 7
+    '~~~',            // 8
+    'tilde body',     // 9
+    '```',            // 10 a backtick fence does not close a tilde one
+    '~~~~',           // 11
+    '```python',      // 12 still being typed: no closing fence below it, so no block
+    'x = 1',          // 13
+  ];
+  assert.deepEqual(codeBlocks(doc).map((b) => [b.open, b.close, b.lang, b.fence]), [[1, 6, 'json', '```'], [8, 11, '', '~~~']]);
+  const ps = parseLines(doc);
+  assert.deepEqual(ps.map((p) => p.type), ['p', 'fence', 'code', 'code', 'code', 'code', 'fence', 'h', 'fence', 'code', 'code', 'fence', 'p', 'p']);
+  assert.equal(ps[1].open, true); assert.equal(ps[6].open, false);
+  assert.equal(ps[3].text, '  # not a heading', 'a code line keeps its whole source');
+  assert.deepEqual(ps[7], parseLine('# a heading'), 'outside a block a line reads as it always did');
+  assert.equal(fenceShown(ps[1]), 'json'); assert.equal(fenceShown(ps[6]), '');
+  assert.deepEqual(threads(doc), [], '@bart inside a block is not a question');
+  assert.deepEqual(codeBlocks(['```js title', 'a', '````']).map((b) => [b.lang, b.close]), [['js', 2]], 'a longer closing fence closes; the language is the first word');
+  assert.deepEqual(codeBlocks(['````', '```', 'x']), [], 'a shorter fence does not close a longer one');
+  assert.deepEqual(codeBlocks(['use ```json``` inline', 'x', '```']), [], 'backticks inside a line are not a fence');
+  assert.deepEqual(codeBlocks(['    ```', 'x', '```']), [], 'four spaces of indent is not a fence');
+});
+
+test('highlight: JSON is coloured without changing a character; other languages are escaped text', async () => {
+  const { highlight } = await load();
+  const plain = (html) => html.replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+  const samples = ['  "name": "Engelbart", "n": -1.5e3, "ok": true, "none": null,', '{"a":[1,2,{"b":"<x> & \\"y\\""}]}', '  // a jsonc comment', '"unterminated'];
+  for (const line of samples) assert.equal(plain(highlight(line, 'json')), line);
+  const html = highlight('  "name": "Engelbart",', 'JSON');
+  assert.match(html, /<span style="color:#171717">&quot;name&quot;<\/span><span style="color:#8f8f8f">:<\/span> <span style="color:#0761d1">&quot;Engelbart&quot;<\/span>/);
+  assert.match(highlight('"n": 12', 'json'), /<span style="color:#4d4d4d">12<\/span>/);
+  assert.equal(highlight('const a = "<b>";', 'js'), 'const a = &quot;&lt;b&gt;&quot;;');
+  assert.equal(highlight('x', ''), 'x');
+});
+
+test('code blocks inside an @bart answer: the lines stay answer lines and say which part of the block they are (2026-09-22)', async () => {
+  const { parseLines, threads, turnText, isFence, isCode, fenceShown } = await load();
+  const doc = [
+    '@bart how?',          // 0
+    'bart> Like this:',    // 1
+    'bart> ```json',       // 2
+    'bart> {',             // 3
+    'bart>   "a": 1',      // 4
+    'bart>',               // 5
+    'bart> }',             // 6
+    'bart> ```',           // 7
+    'bart>',               // 8
+    'bart> *Sol · medium · 3 s*', // 9
+    '@bart and ```?',      // 10 a fence inside a question is not one
+    'bart> ```',           // 11 an answer's lone fence opens nothing
+    'bart> *Sol · medium · 2 s*', // 12
+  ];
+  const ps = parseLines(doc);
+  assert.deepEqual(ps.map((p) => p.code || p.type), ['bart', 'reply', 'open', 'body', 'body', 'body', 'body', 'close', 'reply', 'reply', 'bart', 'reply', 'reply']);
+  assert.ok(ps.slice(2, 8).every((p) => p.type === 'reply'), 'still answer lines: the card folds, deletes and copies them');
+  assert.deepEqual([ps[2].block.open, ps[2].block.close, ps[2].lang], [2, 7, 'json'], 'block indexes are document lines');
+  assert.equal(ps[4].text, '  "a": 1', 'indent kept');
+  assert.equal(fenceShown(ps[2]), 'json');
+  assert.ok(isFence(ps[2]) && isFence(ps[7]) && isCode(ps[4]) && !isCode(ps[1]) && !isFence(ps[11]));
+  const [thread] = threads(doc);
+  assert.deepEqual(thread.turns.map((turn) => [turn.q, turn.from, turn.to, turn.foot]), [[0, 1, 9, 9], [10, 11, 12, 12]]);
+  assert.equal(turnText(doc, thread.turns[0]).answer, 'Like this:\n```json\n{\n  "a": 1\n\n}\n```', 'a follow-up sends the block back as markdown');
+});

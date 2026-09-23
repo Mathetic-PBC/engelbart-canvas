@@ -13,11 +13,11 @@ export const RIGHT_MODES = [
   { id: 'build', label: 'Build' },
 ];
 
-export default function RightPane({ mode, repositories, buildRepoId, onBuildRepo, paper, onMarksChange, projectDir, projectId, onExpand, style }) {
+export default function RightPane({ mode, repositories, buildRepoId, onBuildRepo, paper, onMarksChange, projectDir, projectId, onExpand, onPage, save, style }) {
   return (
     <section aria-label="Preview" style={style}>
       {mode === 'build' && <BuildPane repositories={repositories} selectedId={buildRepoId} onSelect={onBuildRepo} />}
-      <Browser projectId={projectId} visible={mode === 'preview'} onExpand={onExpand} />
+      <Browser projectId={projectId} visible={mode === 'preview'} onExpand={onExpand} onPage={onPage} save={save} />
       <TerminalPane cwd={projectDir} projectId={projectId} visible={mode === 'terminal'} />
       {mode === 'paper' && (
         paper && paper.bytes

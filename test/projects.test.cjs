@@ -166,6 +166,33 @@ test('last-open state: stored per data root, stale ids become null, files from t
   assert.deepEqual(projects.readLastOpen(ctx), { projectId: project.id, workspaceId: project.id });
 });
 
+test('views: each workspace keeps its tabs, the document in front and its scroll positions; last-open keeps them (2026-09-22)', async () => {
+  const project = await projects.createProject(ctx, 'Views');
+  const other = await projects.createProject(ctx, 'Views elsewhere');
+  const ws = '11111111-1111-4111-8111-111111111111', ws2 = '22222222-2222-4222-8222-222222222222';
+  const note = '33333333-3333-4333-8333-333333333333', gone = '44444444-4444-4444-8444-444444444444';
+  projects.writeLastOpen(ctx, { projectId: project.id, workspaceId: ws });
+  const saved = projects.writeView(ctx, project.id, ws, {
+    active: note,
+    tabs: [{ id: note, title: 'Middle Canvas' }, { id: note, title: 'twice' }, { id: 'not-an-id', title: 'x' }],
+    positions: { [`ws:${ws}`]: { top: 120.4, line: 7, offset: 12.6, hash: 'abc12' }, [`note:${note}`]: { top: 900 }, 'bad:key': { top: 1 }, [`note:${gone}`]: { top: 'x' } },
+    extra: true,
+  });
+  assert.deepEqual(saved, { active: note, tabs: [{ id: note, title: 'Middle Canvas' }], positions: { [`ws:${ws}`]: { top: 120, line: 7, offset: 13, hash: 'abc12' }, [`note:${note}`]: { top: 900 } } });
+  projects.writeView(ctx, project.id, ws2, { active: gone, tabs: [] });
+  projects.writeView(ctx, other.id, ws, { active: 'ws', tabs: [], positions: {} });
+  const views = projects.readViews(ctx, project.id);
+  assert.deepEqual(views[ws], saved);
+  assert.deepEqual(views[ws2], { active: 'ws', tabs: [], positions: {} }, 'a document in front that is not one of its tabs falls back to the workspace');
+  assert.deepEqual(Object.keys(projects.readViews(ctx, other.id)), [ws], 'views are per project');
+  assert.deepEqual(projects.readLastOpen(ctx), { projectId: project.id, workspaceId: ws }, 'saving a view keeps where the app reopens');
+  projects.writeLastOpen(ctx, { projectId: other.id, workspaceId: ws2 });
+  assert.deepEqual(projects.readViews(ctx, project.id)[ws], saved, 'moving to another workspace keeps every view');
+  assert.deepEqual(projects.readViews(ctx, 'nope'), {});
+  assert.throws(() => projects.writeView(ctx, project.id, 'nope', {}), /workspace id/);
+  assert.throws(() => projects.writeView(ctx, project.id, ws, null), /invalid/);
+});
+
 test('read-text-file: project-relative, ~/ and absolute paths inside the home directory only', async () => {
   const project = await projects.createProject(ctx, 'Browser');
   fs.writeFileSync(path.join(project.dir, 'notes.txt'), 'hello\nworld\n');

@@ -10,8 +10,13 @@
 //   * image paste/drop is not supported (spec §2 #19); `![alt](http…)` lines still render.
 //   * clicking into a rendered (non-active) line maps the display offset through rawOffset(), so the caret
 //     lands on the clicked character even inside bold/mention markup.
+//   * fenced code blocks (2026-09-22): the lines between two fences are code, read with parseLines() (a `# x` in a block
+//     is not a heading). Typing a fence and Enter closes it and puts the caret inside; in a block Enter keeps the line's
+//     indent and Tab indents by two spaces.
+//   * where a document was scrolled to is kept per workspace (props.viewOf / props.onView, 2026-09-22), apart from the
+//     caret: coming back to a document shows what was on screen, not where the last edit was.
 import React from 'react';
-import { parseLine, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, threads, turnText, INLINE, LABELS, HELD, ATTRIBUTION_RE } from '../model/doc.js';
+import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, threads, turnText, INLINE, LABELS, HELD, ATTRIBUTION_RE, FENCE_RE } from '../model/doc.js';
 import { readFlags, readQuestion, withChoice, modelOf, effortOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
 import BartPicker from './BartPicker.jsx';
 import MentionMenu from './MentionMenu.jsx';
@@ -25,6 +30,10 @@ export const BART_ITEM = { id: 'bart', type: 'chat', name: 'bart', title: 'Bart'
 export const TASK_ITEM = { id: 'task', type: 'task', name: 'Task', title: 'Task', summary: 'A task row: check it off, \u2318\u23ce builds it, and a run of them shares one card.', facts: 'stored as - [ ]' };
 
 const UNDER_BART = ['pending', 'reply'];
+// `@Note` (the @ menu's Note) and the name after it, to the end of the line.
+const NOTE_VERB_RE = /(^|\s)@Note(?:\s+(.*))?$/;
+// A short fingerprint of a line (FNV-1a), so a remembered scroll position finds its line again without keeping its text.
+const hashLine = (line) => { let h = 0x811c9dc5; const s = String(line ?? ''); for (let k = 0; k < s.length; k++) { h ^= s.charCodeAt(k); h = Math.imul(h, 0x01000193); } return (h >>> 0).toString(36); };
 const newAskId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
 const RISE_CSS = '@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}@keyframes thinking{0%,100%{opacity:.25}50%{opacity:1}}';
@@ -36,7 +45,9 @@ const CARD_CSS = '.bart-ic{display:inline-flex;align-items:center;justify-conten
   + '.bart-ic:hover+.bart-tip,.bart-ic:focus-visible+.bart-tip{opacity:1;visibility:visible}'
   + '.bart-chip{transition:border-color 120ms}.bart-chip:hover{border-color:#c9c9c9!important}.bart-send{transition:background 120ms}.bart-send:hover{opacity:.86}'
   + '.bart-text{padding:4px 2px;border:0;background:transparent;color:#8f8f8f;font:500 12px/1.4 var(--font-sans);cursor:pointer}.bart-text:hover{color:#171717}'
-  + '[data-follow-input]::placeholder{color:#8f8f8f;font-style:italic;font-size:14.5px}';
+  + '[data-follow-input]::placeholder{color:#8f8f8f;font-style:italic;font-size:14.5px}'
+  // Near the bottom of the window a name goes above its icon instead (editorOver sets the mark).
+  + '[data-tip-up]>.bart-tip{top:auto;bottom:100%;margin-top:0;margin-bottom:4px}';
 // Lucide's drawings at the design's weight: 16px, 1.5px stroke, round caps.
 const icon = (paths, size = 16, width = 1.5, caps = 'round') => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${width}" stroke-linecap="${caps}" stroke-linejoin="${caps === 'round' ? 'round' : 'miter'}" aria-hidden="true">${paths}</svg>`;
 const ICON = {
@@ -65,6 +76,11 @@ export default class DocEditor extends React.Component {
   // A follow-up being typed and the model picked for it, by the first line of its card. Neither is in the document, and
   // neither is in the editor's HTML: the field keeps its text across redraws because it is put back after each one.
   followText = new Map(); followChoice = new Map();
+  scrollRef = React.createRef();
+  parsedCache = new WeakMap();
+  // Where the open document was scrolled to: reported (onView) a moment after scrolling stops and whenever it is left;
+  // put back (viewOf) when it opens, and again while images above it load, until the person scrolls.
+  viewT = null; wantView = false; settle = null; resizeObs = null;
 
   /* ---------------------------------------------------------------- lifecycle */
   componentDidMount() {
@@ -91,12 +107,25 @@ export default class DocEditor extends React.Component {
       compositionend: (e) => { this.composing = false; if (inEd(e) && !inFollow(e)) this.editorInput(); },
     };
     Object.entries(this.docListeners).forEach(([k, f]) => document.addEventListener(k, f));
+    window.addEventListener('resize', this.fitFollows);
     this.syncEditor();
+    this.wantView = true; this.maybeRestoreView();
+    if (typeof ResizeObserver === 'function' && this.editorEl()) {
+      this.resizeObs = new ResizeObserver(() => { const s = this.settle; if (s && s.key === this.key() && Date.now() < s.until) this.applyView(s.pos); });
+      this.resizeObs.observe(this.editorEl());
+    }
     if (Array.isArray(this.props.initialBuild) && this.props.initialBuild.length) this.buildIdx(this.props.initialBuild);
+  }
+
+  // The document on screen is about to be replaced by another: what it was scrolled to is reported first, while it is still there.
+  getSnapshotBeforeUpdate(prevProps) {
+    if (prevProps.docKey !== this.props.docKey && this.lastKey === prevProps.docKey) this.reportView(prevProps, true);
+    return null;
   }
 
   componentDidUpdate(prevProps) {
     if (prevProps.docKey !== this.props.docKey) {
+      this.wantView = true; this.settle = null;
       this.history = []; this.future = []; this.caret = null; this.lastHtml = ''; this.lastKey = null; this.selRaw = null; this.openKey = '';
       const s = this.state;
       if (s.activeLine != null || s.mention || s.pop || s.picker) { this.setState({ activeLine: null, mention: null, pop: null, picker: null }); return; }
@@ -105,10 +134,14 @@ export default class DocEditor extends React.Component {
     // stand: the rest of the editor, the caret and a selection in it are not touched.
     if (prevProps.asks !== this.props.asks && prevProps.text === this.props.text && prevProps.docKey === this.props.docKey && this.patchPending()) return;
     this.syncEditor();
+    this.maybeRestoreView();
   }
 
   componentWillUnmount() {
-    this.mounted = false; clearTimeout(this.pickerT);
+    if (this.lastKey === this.key()) this.reportView(this.props, true);
+    this.mounted = false; clearTimeout(this.pickerT); clearTimeout(this.viewT);
+    if (this.resizeObs) this.resizeObs.disconnect();
+    window.removeEventListener('resize', this.fitFollows);
     Object.entries(this.docListeners || {}).forEach(([k, f]) => document.removeEventListener(k, f));
     for (const id of this.timers) clearTimeout(id);
     this.timers.clear();
@@ -122,9 +155,72 @@ export default class DocEditor extends React.Component {
   /** True while a line is being edited or the mention menu is open (the parent's Esc handler checks this). */
   isActive() { return this.state.activeLine != null || !!this.state.mention; }
 
+  /* ---------------------------------------------------------------- where the document was scrolled to */
+  // → { top, line, offset, hash }: the scroll offset, and the first line on screen with how far its top sits above the
+  // pane's top edge and a hash of its text. The line is what is put back; `top` only when that line is gone.
+  captureView() {
+    const box = this.scrollRef.current, ed = this.editorEl(); if (!box || !ed) return null;
+    const edge = box.getBoundingClientRect().top;
+    for (const d of ed.children) {
+      if (d.dataset.line == null) continue;
+      const r = d.getBoundingClientRect(); if (!r.height || r.bottom <= edge + 1) continue;
+      return { top: Math.round(box.scrollTop), line: Number(d.dataset.line), offset: Math.round(edge - r.top), hash: hashLine(d.dataset.raw || '') };
+    }
+    return { top: Math.round(box.scrollTop) };
+  }
+  reportView(props, now) {
+    clearTimeout(this.viewT); this.viewT = null;
+    if (!props.onView || !props.viewScope || !props.docKey) return;
+    const position = this.captureView(); if (position) props.onView({ scope: props.viewScope, key: props.docKey, position, now: !!now });
+  }
+  maybeRestoreView() {
+    if (!this.wantView || this.lastKey !== this.key() || !this.editorEl()) return;
+    this.wantView = false;
+    if (!this.props.viewOf) return;
+    const pos = this.props.viewOf(this.props.viewScope, this.key());
+    this.settle = pos ? { key: this.key(), pos, until: Date.now() + 4000 } : null;
+    this.applyView(pos);
+  }
+  applyView(pos) {
+    const box = this.scrollRef.current, ed = this.editorEl(); if (!box || !ed) return;
+    if (!pos) { box.scrollTop = 0; return; }
+    let i = null;
+    if (Number.isInteger(pos.line)) {
+      const ls = this.lines();
+      i = pos.line < ls.length ? pos.line : null;
+      // Lines were added or taken away above it (in another app, by an answer): the nearest line with the same text.
+      if (pos.hash && (i == null || hashLine(ls[i]) !== pos.hash)) {
+        for (let d = 0; d < ls.length; d++) {
+          if (pos.line - d >= 0 && pos.line - d < ls.length && hashLine(ls[pos.line - d]) === pos.hash) { i = pos.line - d; break; }
+          if (pos.line + d < ls.length && hashLine(ls[pos.line + d]) === pos.hash) { i = pos.line + d; break; }
+        }
+      }
+    }
+    const d = i == null ? null : ed.querySelector(`[data-line="${i}"]`);
+    const r = d && d.getBoundingClientRect();
+    if (r && r.height) box.scrollTop += r.top - box.getBoundingClientRect().top + (pos.offset || 0);
+    else box.scrollTop = pos.top || 0;
+  }
+  onScroll = () => {
+    // A popup placed against what has now moved would point at the wrong thing: the selector and the hover card close,
+    // the @ menu follows the caret.
+    if (this.state.picker) this.closePicker();
+    if (this.state.pop) this.setState({ pop: null });
+    if (this.state.mention) { const anchor = this.caretRect(); if (anchor) this.setState((s) => (s.mention ? { mention: { ...s.mention, anchor } } : null)); }
+    clearTimeout(this.viewT); this.viewT = setTimeout(() => { if (this.mounted && this.lastKey === this.key()) this.reportView(this.props, false); }, 300);
+  };
+  // The person scrolled, clicked or typed: what they do from now on wins over putting the old place back.
+  stopSettling = () => { this.settle = null; };
+  caretRect() {
+    const sel = getSelection(); if (!sel || !sel.rangeCount) return null;
+    const r = sel.getRangeAt(0).getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+  }
+
   /* ---------------------------------------------------------------- document access */
   key() { return this.props.docKey; }
   lines() { return String(this.props.text ?? '').split('\n'); }
+  // Each line read in place (a line inside a code block is code). Kept per array, so a loop over one array reads it once.
+  parsedOf(ls) { let ps = this.parsedCache.get(ls); if (!ps) { ps = parseLines(ls); this.parsedCache.set(ls, ps); } return ps; }
   editorEl() { return this.edRef.current; }
   statusesFor(key = this.key()) { return this.state.statuses[key] || {}; }
   status(i) { return this.statusesFor()[i] || ''; }
@@ -132,13 +228,14 @@ export default class DocEditor extends React.Component {
   // answer (it is the card's foot), an answer folded away, and the prototype's `> ` replies. The text of an answer can be
   // edited (2026-09-21): it is a drawn-prefix line, as a bullet is.
   lockedAt(ls, i) {
-    const p = parseLine(ls[i] ?? '');
-    if (p.type === 'reply') return p.folded || (ATTRIBUTION_RE.test(p.text) && parseLine(ls[i + 1] ?? '').type !== 'reply');
-    if (p.type === 'bart') return ls[i + 1] != null && UNDER_BART.includes(parseLine(ls[i + 1]).type);
+    const ps = this.parsedOf(ls), p = ps[i] || parseLine('');
+    if (p.type === 'reply') return p.folded || (ATTRIBUTION_RE.test(p.text) && (ps[i + 1] || parseLine('')).type !== 'reply');
+    if (p.type === 'bart') return ls[i + 1] != null && UNDER_BART.includes(ps[i + 1].type);
     return isAnswer(p.type);
   }
   // A card is closed by its foot, never by a line the caret can sit on: the document needs a line of its own after it.
-  endsOnCard(ls) { const last = ls.length - 1; return this.lockedAt(ls, last) || parseLine(ls[last] ?? '').type === 'reply'; }
+  // So does a code block, or the caret below it would land on its closing fence and type into it.
+  endsOnCard(ls) { const last = ls.length - 1; return this.lockedAt(ls, last) || ['reply', 'fence'].includes((this.parsedOf(ls)[last] || parseLine('')).type); }
   speed() { return SPEED[this.props.buildSpeed] || 1; }
   timer(fn, ms) { const id = setTimeout(() => { this.timers.delete(id); if (this.mounted) fn(); }, ms); this.timers.add(id); return id; }
 
@@ -154,7 +251,7 @@ export default class DocEditor extends React.Component {
   }
   setLines(fn, caret) { this.setDoc(fn(this.lines()).join('\n'), caret); }
   writeText(i, text, caret) {
-    this.setLines((ls) => ls.map((l, j) => { if (j !== i) return l; return sameLine(parseLine(l), text); }), caret);
+    this.setLines((ls) => { const ps = this.parsedOf(ls); return ls.map((l, j) => (j !== i ? l : sameLine(ps[j], text))); }, caret);
   }
   setStatus(key, i, status, done) {
     this.setState((s) => ({ statuses: { ...s.statuses, [key]: { ...(s.statuses[key] || {}), [i]: status } } }));
@@ -194,7 +291,7 @@ export default class DocEditor extends React.Component {
     return tokens.map((tok, k) => {
       if (flags && flags.has(k)) return `<span data-src="${esc(tok)}" data-open="1" style="${FLAG_LOOK}">${esc(tok)}</span>`;
       const isOpen = !tokShown(tok).pre || open.includes(k);
-      return `<span data-src="${esc(tok)}" data-open="${isOpen ? 1 : 0}">${isOpen && tok !== '@bart' ? esc(tok) : inlineHtml(tok)}</span>`;
+      return `<span data-src="${esc(tok)}" data-open="${isOpen ? 1 : 0}">${isOpen && !/^@bart$/i.test(tok) ? esc(tok) : inlineHtml(tok)}</span>`;
     }).join('');
   }
   // An @bart line in pieces: its recognised flags (src/main/bart/question.cjs reads them, as the run will) each a token of
@@ -237,6 +334,7 @@ export default class DocEditor extends React.Component {
   // `at` says where a line of an @bart card stands in it (this.layout); every other line has none.
   lineHtml(i, line, p, active, status, first, at, locked) {
     const raw = `data-line="${i}" data-raw="${esc(line)}"`;
+    if (p.type === 'code' || p.type === 'fence') return this.codeHtml(i, line, p, active);
     if (p.type === 'todo') {
       const held = HELD.includes(status), done = p.done, label = done ? 'Done' : (LABELS[status] || '');
       const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(p.text);
@@ -282,8 +380,18 @@ export default class DocEditor extends React.Component {
       // The answer so far is not the answer: smaller and grey, with a mark pulsing where the next words go. No rule beside
       // it (2026-09-21); it starts where the answer's text will, so nothing moves sideways when the answer lands.
       const cursor = '<span style="display:inline-block;width:7px;height:13px;margin-left:3px;vertical-align:-1px;border-radius:2px;background:#c9c9c9;animation:thinking 1.2s ease-in-out infinite"></span>';
-      const written = ((ask && ask.lines) || []).map((text, n, all) => { const a = this.answerLook(text), end = n === all.length - 1; a.content = a.content.replace(/color:#171717;font-weight:600/g, 'font-weight:600'); // all of it grey until it is the answer
-        return `<span style="display:block;min-height:${text ? 22 : 10}px;padding:1px 0 1px 14px;${a.look}color:#8f8f8f;font-size:14px;line-height:1.65;${end ? 'margin-bottom:10px;' : ''}">${end ? (/<\/span><\/span>$/.test(a.content) ? a.content.replace(/<\/span><\/span>$/, `${cursor}</span></span>`) : a.content + cursor) : (a.content || '<br>')}</span>`; }).join('');
+      // Code arriving shows as code: mono, grey like the rest, its fences a little space (bodyLines closes a block still
+      // being written, so the lines under an opening fence are code as soon as they come).
+      const so = (ask && ask.lines) || [], role = new Map();
+      for (const b of codeBlocks(so)) { role.set(b.open, 'fence'); role.set(b.close, 'fence'); for (let k = b.open + 1; k < b.close; k++) role.set(k, 'code'); }
+      let tip = so.length - 1; while (tip >= 0 && role.get(tip) === 'fence') tip--;
+      const written = so.map((text, n) => {
+        if (role.get(n) === 'fence') return '<span style="display:block;height:6px"></span>';
+        const end = n === tip;
+        if (role.get(n) === 'code') return `<span style="display:block;min-height:22px;padding:0 0 0 14px;font:13px/1.7 var(--font-mono);color:#8f8f8f;tab-size:2;${end ? 'margin-bottom:10px;' : ''}">${esc(text) || (end ? '' : '<br>')}${end ? cursor : ''}</span>`;
+        const a = this.answerLook(text); a.content = a.content.replace(/color:#171717;font-weight:600/g, 'font-weight:600'); // all of it grey until it is the answer
+        return `<span style="display:block;min-height:${text ? 22 : 10}px;padding:1px 0 1px 14px;${a.look}color:#8f8f8f;font-size:14px;line-height:1.65;${end ? 'margin-bottom:10px;' : ''}">${end ? (/<\/span><\/span>$/.test(a.content) ? a.content.replace(/<\/span><\/span>$/, `${cursor}</span></span>`) : a.content + cursor) : (a.content || '<br>')}</span>`;
+      }).join('');
       const closes = !at || at.closes;
       return `<div ${raw} data-pending="${esc(p.id)}" contenteditable="false" data-readonly="1" style="user-select:none;cursor:default;padding:2px 16px 12px;background:#fafafa;border-radius:${radius(!at, closes)};margin-bottom:${closes ? '14px' : '0'};color:#8f8f8f;font:13px/1.5 var(--font-sans)">`
         + written
@@ -301,9 +409,10 @@ export default class DocEditor extends React.Component {
       if (p.folded || (at && at.gap)) return `<div ${raw} contenteditable="false" data-readonly="1" style="display:none"></div>`;
       // One line of an answer, in the grey card with one continuous rule down its left. The caret's line shows its source
       // on the design's focus tint; the rule and the card stay where they are.
-      const a = this.answerLook(p.text), content = active ? this.activeHtml(tokensOf(p, line)) : a.content;
       // (An answer with no question above it, left by an edit outside the app, is a card of its own.)
       const near = at ? null : this.lines(), first = at ? at.first : parseLine(near[i - 1] ?? '').type !== 'reply', closes = at ? at.closes : parseLine(near[i + 1] ?? '').type !== 'reply', last = at ? at.lastBody : closes;
+      if (p.code) return this.answerCodeHtml(i, raw, p, active, first, closes, last, !at);
+      const a = this.answerLook(p.text), content = active ? this.activeHtml(tokensOf(p, line)) : a.content;
       return `<div ${raw} style="padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(!at && first, closes)};margin-bottom:${closes ? 14 : 0}px;color:#4d4d4d;font-size:16px;line-height:1.65;cursor:text"><span style="display:block;padding:${first ? 2 : 0}px 0 ${last ? 2 : 0}px 12px;border-left:2px solid #dcdcdc"><span class="t" style="display:block;min-height:${a.minHeight}px;border-radius:4px;${a.look}${active ? 'background:#f2f2f2;box-shadow:0 0 0 4px #f2f2f2;' : ''}">${content || '<br>'}</span></span></div>`;
     }
     if (p.type === 'quote') {
@@ -318,6 +427,34 @@ export default class DocEditor extends React.Component {
     }
     const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(line);
     return `<div ${raw} style="padding:4px 0;min-height:35px"><span class="t">${content || '<br>'}</span></div>`;
+  }
+  // One line of a fenced code block, on the grey of the cards, in the mono face. The opening fence is the block's head:
+  // its language and Copy, or the fence as typed while the caret is on it. The closing fence is the block's foot, a
+  // strip of grey, or the fence while the caret is on it. A line of code shows its source whether or not the caret is
+  // on it (display and source are the same characters), so JSON keeps its colours while it is edited.
+  codeHtml(i, line, p, active) {
+    const raw = `data-line="${i}" data-raw="${esc(line)}" data-kind="${p.type}"`, mono = 'font:14px/1.7 var(--font-mono)';
+    if (p.type === 'code') return `<div ${raw} style="padding:0 16px;background:#fafafa;${mono};color:#171717"><span class="t" style="display:block;min-height:24px;tab-size:2">${highlight(line, p.lang) || '<br>'}</span></div>`;
+    if (!p.open) return `<div ${raw} style="padding:0 16px ${active ? 8 : 4}px;margin-bottom:14px;background:#fafafa;border-radius:0 0 10px 10px"><span class="t" style="display:block;${active ? `${mono};color:#8f8f8f` : 'font:8px/1 var(--font-sans)'}">${active ? esc(line) : '<br>'}</span></div>`;
+    const shown = active ? esc(line) : esc(fenceShown(p));
+    return `<div ${raw} style="display:flex;align-items:center;gap:8px;min-height:36px;margin-top:6px;padding:4px 6px 0 16px;background:#fafafa;border-radius:10px 10px 0 0"><span class="t" style="flex:1;min-width:0;${active ? `${mono};color:#8f8f8f` : 'font:12px/1.6 var(--font-sans);color:#8f8f8f'}">${shown || '<br>'}</span>${this.copyCodeHtml(i)}</div>`;
+  }
+  // A code block inside an @bart answer (2026-09-22): a white box on the card's grey, inside the answer's rule, drawn
+  // the way a block in the document is (language and Copy at its head, a fence as typed while the caret is on it).
+  answerCodeHtml(i, raw, p, active, first, closes, last, alone) {
+    const mono = 'font:14px/1.7 var(--font-mono)', sides = 'border-left:1px solid #eaeaea;border-right:1px solid #eaeaea';
+    let inner;
+    if (p.code === 'body') inner = `<span class="t" style="display:block;min-height:24px;padding:0 12px;background:#fff;${sides};${mono};color:#171717;tab-size:2">${highlight(p.text, p.lang) || '<br>'}</span>`;
+    else if (p.code === 'close') inner = `<span class="t" style="display:block;padding:0 12px ${active ? 6 : 4}px;background:#fff;${sides};border-bottom:1px solid #eaeaea;border-radius:0 0 8px 8px;${active ? `${mono};color:#8f8f8f` : 'font:8px/1 var(--font-sans)'}">${active ? esc(p.text) : '<br>'}</span>`;
+    else inner = `<span style="display:flex;align-items:center;gap:8px;min-height:32px;padding:2px 4px 0 12px;background:#fff;${sides};border-top:1px solid #eaeaea;border-radius:8px 8px 0 0"><span class="t" style="flex:1;min-width:0;${active ? `${mono};color:#8f8f8f` : 'font:12px/1.6 var(--font-sans);color:#8f8f8f'}">${(active ? esc(p.text) : esc(fenceShown(p))) || '<br>'}</span>${this.copyCodeHtml(i)}</span>`;
+    // The space around the box is the rule's padding, not a margin: a margin would fall through the line's wrappers and
+    // cut a white strip across the card.
+    const above = first ? 2 : p.code === 'open' ? 6 : 0, below = last ? 2 : p.code === 'close' ? 6 : 0;
+    return `<div ${raw} data-kind="${p.code === 'body' ? 'code' : 'fence'}" style="padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(alone && first, closes)};margin-bottom:${closes ? 14 : 0}px;cursor:text"><span style="display:block;padding:${above}px 0 ${below}px 12px;border-left:2px solid #dcdcdc">${inner}</span></div>`;
+  }
+  copyCodeHtml(i) {
+    const copied = this.copied === `code${i}`;
+    return `<span contenteditable="false" style="user-select:none;flex:none;position:relative;display:inline-flex"><button class="bart-ic" data-act="copycode" data-row="${i}" aria-label="Copy" ${copied ? 'style="color:#8f8f8f"' : ''}>${ICON.copy}</button><span class="bart-tip" style="right:0">${copied ? 'Copied' : 'Copy'}</span></span>`;
   }
   // How one line of an answer reads: a heading, a bullet, or plain text; bold is ink on the answer's grey. An answer in the
   // document and one still being written (the pending row) look the same. A paragraph is one line and an empty line is
@@ -342,7 +479,7 @@ export default class DocEditor extends React.Component {
   // what is drawn after it that is not a line (a foot for an answer that has no closing line; the follow-up field).
   layout(ls) {
     const at = new Map();
-    for (const thread of threads(ls)) {
+    for (const thread of threads(ls, this.parsedOf(ls))) {
       const end = thread.turns[thread.turns.length - 1];
       const follow = end.answered && !end.pending && !end.folded && !!this.props.onAsk;
       for (const turn of thread.turns) {
@@ -388,10 +525,12 @@ export default class DocEditor extends React.Component {
   followHtml(ls, thread) {
     const { step } = this.followStep(ls, thread), from = thread.from;
     const open = !!(this.state.picker && this.state.picker.kind === 'follow' && this.state.picker.i === from);
-    return `<div contenteditable="false" data-followup="${from}" style="user-select:none;display:flex;align-items:center;gap:10px;padding:16px 16px 18px;margin-bottom:14px;background:#fafafa;border-radius:0 0 10px 10px">`
-      + '<span style="flex:none;color:#0070f3;font-weight:500;font-size:16px">@bart</span>'
-      + `<input data-follow-input="${from}" placeholder="Respond…" aria-label="Ask a follow-up" spellcheck="false" autocomplete="off" style="flex:1;min-width:0;padding:0;border:0;background:none;outline:none;font:16px/1.5 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text">`
-      + `<span data-chip="f${from}" style="flex:none;position:relative;display:inline-flex"><span class="bart-chip" data-act="pickfollow" data-thread="${from}" role="button" aria-haspopup="dialog" aria-expanded="${open}" style="display:inline-flex;align-items:center;gap:6px;padding:5px 6px 5px 12px;border:1px solid ${open ? '#c9c9c9' : '#eaeaea'};border-radius:999px;background:#fff;cursor:pointer;font:13px/1 var(--font-sans);color:#171717">`
+    // A textarea one line tall that grows as it wraps, as the @bart line above it does (2026-09-22); the question is still
+    // one line of the document, so Enter sends and a pasted line break becomes a space. The chip sits on the first line.
+    return `<div contenteditable="false" data-followup="${from}" style="user-select:none;display:flex;align-items:flex-start;gap:10px;padding:22px 16px 18px;margin-bottom:14px;background:#fafafa;border-radius:0 0 10px 10px">`
+      + '<span style="flex:none;color:#0070f3;font-weight:500;font-size:16px;line-height:24px">@bart</span>'
+      + `<textarea data-follow-input="${from}" rows="1" placeholder="Respond…" aria-label="Ask a follow-up" spellcheck="false" autocomplete="off" style="flex:1;min-width:0;display:block;height:24px;margin:0;padding:0;border:0;background:none;outline:none;resize:none;overflow:hidden;font:16px/1.5 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text"></textarea>`
+      + `<span data-chip="f${from}" style="flex:none;position:relative;display:inline-flex;margin-top:-6px"><span class="bart-chip" data-act="pickfollow" data-thread="${from}" role="button" aria-haspopup="dialog" aria-expanded="${open}" style="display:inline-flex;align-items:center;gap:6px;padding:5px 6px 5px 12px;border:1px solid ${open ? '#c9c9c9' : '#eaeaea'};border-radius:999px;background:#fff;cursor:pointer;font:13px/1 var(--font-sans);color:#171717">`
       + (step ? `<span>${esc(step.name)} ${esc(EFFORT_LABELS[step.effort] || step.effort)}</span>${ICON.chevron}<span style="width:1px;height:14px;background:#eaeaea;margin:0 2px"></span>` : '')
       + `<button class="bart-send" data-act="sendfollow" data-thread="${from}" aria-label="Send" style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:50%;background:#f2f2f2;color:#8f8f8f;cursor:pointer">${ICON.send}</button>`
       + '</span></span></div>';
@@ -402,24 +541,27 @@ export default class DocEditor extends React.Component {
     for (const input of ed.querySelectorAll('[data-follow-input]')) {
       const text = this.followText.get(Number(input.dataset.followInput)) || '';
       if (text) input.value = text;
-      this.paintSend(input);
+      this.paintSend(input); this.fitFollow(input);
       if (had && had.key === input.dataset.followInput) { input.focus({ preventScroll: true }); try { input.setSelectionRange(had.a, had.b); } catch { /* not a text selection */ } }
     }
   }
+  // The field is as tall as its wrapped text.
+  fitFollow(input) { input.style.height = 'auto'; input.style.height = `${Math.max(24, input.scrollHeight)}px`; }
+  fitFollows = () => { const ed = this.editorEl(); if (ed) for (const input of ed.querySelectorAll('[data-follow-input]')) this.fitFollow(input); };
   paintSend(input) {
     const send = input.parentElement && input.parentElement.querySelector('[data-act="sendfollow"]'); if (!send) return;
     const ready = !!input.value.trim(); send.style.background = ready ? '#0070f3' : '#f2f2f2'; send.style.color = ready ? '#fff' : '#8f8f8f';
   }
   editorHtml() {
-    const ls = this.lines(), st = this.statusesFor(), active = this.state.activeLine, at = this.layout(ls); let out = '', group = [];
+    const ls = this.lines(), ps = this.parsedOf(ls), st = this.statusesFor(), active = this.state.activeLine, at = this.layout(ls); let out = '', group = [];
     ls.forEach((line, i) => {
-      const p = parseLine(line), where = at.get(i);
+      const p = ps[i], where = at.get(i);
       out += this.lineHtml(i, line, p, active === i, st[i] || '', p.type === 'todo' && !group.length, where, this.lockedAt(ls, i));
       if (where && where.footAfter) out += this.footHtml({ q: where.turn.q, text: '', folded: where.turn.folded, closes: where.tail && !where.followAfter });
       if (where && where.followAfter) out += this.followHtml(ls, where.thread);
       if (p.type === 'todo') group.push({ i, p, status: st[i] || '' });
       const next = ls[i + 1];
-      if (p.type === 'todo' && (next == null || parseLine(next).type !== 'todo')) { out += this.groupHtml(group); group = []; }
+      if (p.type === 'todo' && (next == null || ps[i + 1].type !== 'todo')) { out += this.groupHtml(group); group = []; }
     });
     return out;
   }
@@ -480,7 +622,11 @@ export default class DocEditor extends React.Component {
       const isActive = Number(d.dataset.line) === this.state.activeLine;
       let raw = null;
       if (t && (isActive || t.querySelector('[data-src]'))) raw = this.displayToRaw(t, off);
-      if (raw == null) { const line = d.dataset.raw || '', p = parseLine(line); raw = isActive ? off : p.type === 'img' ? 0 : p.type === 'reply' ? replyRawOffset(p, off) : rawOffset(p, off, line); }
+      if (raw == null) {
+        // Code shows its own characters; a fence shown as its language puts the caret at the end of the fence.
+        const line = d.dataset.raw || '', kind = d.dataset.kind, p = parseLine(line);
+        raw = isActive || kind === 'code' ? off : kind === 'fence' ? lineText(p, line).length : p.type === 'img' ? 0 : p.type === 'reply' ? replyRawOffset(p, off) : rawOffset(p, off, line);
+      }
       return { line: Number(d.dataset.line), offset: raw };
     };
     const anchor = info(sel.anchorNode, sel.anchorOffset), focus = info(sel.focusNode, sel.focusOffset) || anchor;
@@ -511,11 +657,11 @@ export default class DocEditor extends React.Component {
       this.setState({ activeLine: c.anchor.line, mention: null }); return;
     }
     this.selRaw = { line: c.anchor.line, a, b };
-    const line = ls[c.anchor.line] ?? '', p = parseLine(line), key = p.type === 'img' ? '' : this.openIdx(tokensOf(p, line), a, b).join(',');
+    const line = ls[c.anchor.line] ?? '', p = this.parsedOf(ls)[c.anchor.line] || parseLine(line), key = p.type === 'img' || isCode(p) || isFence(p) ? '' : this.openIdx(tokensOf(p, line), a, b).join(',');
     if (key !== this.openKey) { this.caret = { line: c.anchor.line, sel: [a, b] }; this.forceUpdate(); }
   }
   editorInput = () => {
-    const ed = this.editorEl(); if (!ed || this.composing) return; const old = this.lines();
+    const ed = this.editorEl(); if (!ed || this.composing) return; const old = this.lines(), psOld = this.parsedOf(old);
     const divs = [...ed.querySelectorAll('[data-raw]')], c = this.caretInfo(), activeId = c ? c.anchor.line : null;
     // Text the browser put outside the line structure (a caret that landed on the root) is folded into the last line.
     const strayText = [...ed.childNodes]
@@ -527,9 +673,11 @@ export default class DocEditor extends React.Component {
     const bulk = this.bulkDelete || !!(this.selRaw && (this.selRaw.multi || this.selRaw.a !== this.selRaw.b)); this.bulkDelete = false;
     const textOf = (d) => {
       const raw = d.dataset.raw ?? ''; if (Number(d.dataset.line) !== activeId) return raw;
-      const p = parseLine(raw); if (this.lockedAt(old, Number(d.dataset.line))) return raw;
+      const p = psOld[Number(d.dataset.line)] || parseLine(raw); if (this.lockedAt(old, Number(d.dataset.line))) return raw;
       const t = d.querySelector('.t'); let txt = t ? this.activeRaw(t) : '';
       if (p.type === 'h' && Number(d.dataset.line) !== this.state.activeLine && !/^#{1,3} /.test(txt)) txt = raw.slice(0, p.level + 1) + txt;
+      // Typed into a fence still drawn as its language: the backticks are put back in front of what was typed.
+      if (isFence(p) && Number(d.dataset.line) !== this.state.activeLine) txt = p.text.slice(0, p.text.length - fenceShown(p).length) + txt;
       if (p.type === 'reply') return sameLine(p, txt);
       if (!isMarked(p.type)) return txt;
       // A bulk deletion that empties a row leaves a plain empty line, as deleting everything should.
@@ -548,11 +696,11 @@ export default class DocEditor extends React.Component {
     // question with it: those the browser removed are put back where they stood. The one deletion that may take answer
     // lines is one made inside a single answer, where its text is the person's to edit.
     const kept = new Map(divs.map((d) => [Number(d.dataset.line), d]));
-    const span = this.selRaw && this.selRaw.multi ? this.selRaw.lines : null, inside = !!span && old.slice(span[0], span[1] + 1).every((l) => parseLine(l).type === 'reply');
+    const span = this.selRaw && this.selRaw.multi ? this.selRaw.lines : null, inside = !!span && psOld.slice(span[0], span[1] + 1).every((q) => q.type === 'reply');
     let ls = [], pos = -1, restored = false;
     old.forEach((rawLine, j) => {
       const d = kept.get(j);
-      if (!d) { if (this.lockedAt(old, j) || (parseLine(rawLine).type === 'reply' && !inside)) { ls.push(rawLine); restored = true; } return; }
+      if (!d) { if (this.lockedAt(old, j) || (psOld[j].type === 'reply' && !inside)) { ls.push(rawLine); restored = true; } return; }
       if (j === activeId) pos = ls.length;
       ls.push(textOf(d));
     });
@@ -565,13 +713,15 @@ export default class DocEditor extends React.Component {
       ls[last] = sameLine(q, lineText(q, ls[last]) + strayText);
       pos = last; caret = { line: last, offset: base + strayText.length }; this.lastHtml = null;
     }
-    // `@Task …`, `- []` and `* x` are stored as the row they make, so the line reads the same way tomorrow.
-    if (pos >= 0 && ls[pos] != null) ls[pos] = canonicalLine(ls[pos]);
+    // `@Task …`, `- []` and `* x` are stored as the row they make, so the line reads the same way tomorrow. Code is kept
+    // exactly as typed.
+    const psNew = parseLines(ls), inCode = pos >= 0 && (isCode(psNew[pos]) || isFence(psNew[pos]));
+    if (pos >= 0 && ls[pos] != null && !inCode) ls[pos] = canonicalLine(ls[pos]);
     // A row that just took a marker (or swapped one) holds fewer characters than the caret counted: the caret moves by
     // the difference between the two markers, so it stays where the person is typing.
     if (caret && activeId != null) {
       const was = old[activeId] ?? '', now = ls[pos] ?? '';
-      const before = parseLine(was), after = parseLine(now);
+      const before = psOld[activeId] || parseLine(was), after = inCode ? psNew[pos] : parseLine(now);
       const grew = (now.length - lineText(after, now).length) - (was.length - lineText(before, was).length);
       if (grew) caret = { line: pos, offset: Math.max(0, caret.offset - grew) };
     }
@@ -580,17 +730,18 @@ export default class DocEditor extends React.Component {
     // A strip or clear that leaves the stored text as it was still has to redraw the line the browser altered.
     if (unchanged && (strip || cleared)) this.syncEditor();
     if (caret) {
-      const p = parseLine(ls[pos] ?? ''), txt = lineText(p, ls[pos]), m = txt.slice(0, caret.offset).match(/@([^\s@\[\]]{0,30})$/);
+      // No @ menu inside code: an `@` there is code.
+      const p = parseLine(ls[pos] ?? ''), txt = lineText(p, ls[pos]), m = inCode ? null : txt.slice(0, caret.offset).match(/@([^\s@\[\]]{0,30})$/);
       if (m) {
-        const r = getSelection().getRangeAt(0).getBoundingClientRect();
-        this.setState({ activeLine: pos, mention: { i: pos, query: m[1], start: caret.offset - m[0].length, caret: caret.offset, x: clamp(r.left, 8, (window.innerWidth || 1200) - 300), y: r.bottom + 6 }, mentionIdx: 0 });
+        const anchor = this.caretRect();
+        this.setState({ activeLine: pos, mention: { i: pos, query: m[1], start: caret.offset - m[0].length, caret: caret.offset, anchor }, mentionIdx: 0 });
       } else this.setState((s) => (s.mention || s.activeLine !== pos ? { mention: null, activeLine: pos } : null));
     }
   };
   editorKey = (e) => {
     if (this.state.picker) this.closePicker();
     const s = this.state, c = this.caretInfo(); if (!c) return; const ls = this.lines();
-    const i = c.anchor.line, line = ls[i] ?? '', p = parseLine(line), cur = lineText(p, line), mod = e.metaKey || e.ctrlKey;
+    const ps = this.parsedOf(ls), i = c.anchor.line, line = ls[i] ?? '', p = ps[i] || parseLine(line), cur = lineText(p, line), mod = e.metaKey || e.ctrlKey;
     const same = c.anchor.line === c.focus.line, a = Math.min(c.anchor.offset, c.focus.offset), b = Math.max(c.anchor.offset, c.focus.offset), collapsed = same && a === b;
     if (s.mention) {
       const items = this.mentionList(), n = Math.max(1, items.length);
@@ -604,10 +755,24 @@ export default class DocEditor extends React.Component {
     if (mod && same && e.key.toLowerCase() === 'i') { e.preventDefault(); this.wrap(i, cur, a, b, '*'); return; }
     if (mod && same && e.key.toLowerCase() === 'k') { e.preventDefault(); this.link(i, cur, a, b); return; }
     if (mod && e.key === 'Enter') { e.preventDefault(); if (p.type === 'todo') this.buildIdx([i]); return; }
-    if (e.key === 'Tab') { e.preventDefault(); if (isMarked(p.type)) { this.indent(i, e.shiftKey ? -1 : 1); this.caret = { line: i, offset: a }; } return; }
+    if (e.key === 'Tab') { e.preventDefault(); if (isMarked(p.type)) { this.indent(i, e.shiftKey ? -1 : 1); this.caret = { line: i, offset: a }; } else if (isCode(p) && same) this.indentCode(i, cur, a, b, e.shiftKey); return; }
+    // `@Note name` + Enter (the @ menu's Note, 2026-09-22): a note by that name is made in this workspace and the words become its mention.
+    if (e.key === 'Enter' && !e.shiftKey && !mod && this.props.onNoteVerb && NOTE_VERB_RE.test(cur)) { e.preventDefault(); this.noteVerb(i); return; }
     if (e.key === 'Enter' && !e.shiftKey && !mod && p.type === 'bart') { e.preventDefault(); this.askInline(i); return; }
     if (e.key === 'Enter' && !e.shiftKey && !mod) {
       e.preventDefault(); if (!same) return;
+      // A fence typed on a line of its own, with nothing below to close it: Enter closes it and the caret goes inside.
+      const fence = p.type === 'p' && a === cur.length ? line.match(FENCE_RE) : null;
+      if (fence) {
+        this.setLines((x) => { const out = [...x]; out.splice(i + 1, 0, '', fence[1] + fence[2]); return out; }, { line: i + 1, offset: 0 });
+        this.shiftStatuses(i + 1, 2); this.setState({ activeLine: i + 1, mention: null }); return;
+      }
+      // In code the new line starts at the indent of the one it came from, one step deeper after an opening bracket.
+      if (isCode(p)) {
+        const head = cur.slice(0, a); let lead = head.match(/^[ \t]*/)[0]; if (/[[{(]\s*$/.test(head)) lead += '  ';
+        this.setLines((x) => { const out = [...x]; out[i] = sameLine(p, head); out.splice(i + 1, 0, sameLine(p, lead + cur.slice(b))); return out; }, { line: i + 1, offset: lead.length });
+        this.shiftStatuses(i + 1, 1); this.setState({ activeLine: i + 1, mention: null }); return;
+      }
       if (isMarked(p.type) && !p.text.trim()) {
         if (p.depth > 0) { this.indent(i, -1); this.caret = { line: i, offset: 0 }; } else this.setLines((x) => x.map((l, j) => (j === i ? '' : l)), { line: i, offset: 0 });
         return;
@@ -623,7 +788,11 @@ export default class DocEditor extends React.Component {
         return;
       }
       if (i > 0) {
-        e.preventDefault(); const q = parseLine(ls[i - 1]);
+        e.preventDefault(); const q = ps[i - 1];
+        // A fence is not merged into the line next to it (that would undo the block): the caret steps over it instead.
+        if ((isFence(p) || isFence(q)) && cur !== '' && lineText(q, ls[i - 1]) !== '') {
+          this.caret = { line: i - 1, offset: lineText(q, ls[i - 1]).length }; this.wantFocus = true; this.setState({ activeLine: i - 1, mention: null }); return;
+        }
         if (this.lockedAt(ls, i - 1)) {
           // Answers are read-only: an empty line right after one goes away; a line with text stays.
           if (cur !== '' || ls.length < 2) return;
@@ -640,7 +809,8 @@ export default class DocEditor extends React.Component {
       return;
     }
     if (e.key === 'Delete' && collapsed && a === cur.length && i < ls.length - 1) {
-      e.preventDefault(); const q = parseLine(ls[i + 1]); if (this.lockedAt(ls, i + 1)) return; const nt = lineText(q, ls[i + 1]);
+      e.preventDefault(); const q = ps[i + 1]; if (this.lockedAt(ls, i + 1)) return; const nt = lineText(q, ls[i + 1]);
+      if ((isFence(p) || isFence(q)) && cur !== '' && nt !== '') return;
       this.setLines((x) => { const out = [...x]; out[i] = sameLine(p, cur + nt); out.splice(i + 1, 1); return out; }, { line: i, offset: cur.length });
       this.shiftStatuses(i + 1, -1); return;
     }
@@ -676,7 +846,7 @@ export default class DocEditor extends React.Component {
     if (pasted.length && this.props.onPasteImage) { e.preventDefault(); void this.pasteImages(pasted, { line: c.anchor.line, offset: Math.min(c.anchor.offset, c.focus.offset) }); return; }
     e.preventDefault();
     const text = ((e.clipboardData || window.clipboardData).getData('text/plain') || '').replace(/\r/g, ''); if (!text) return;
-    const ls = this.lines(), i = c.anchor.line, line = ls[i] ?? '', p = parseLine(line), cur = lineText(p, line);
+    const ls = this.lines(), i = c.anchor.line, line = ls[i] ?? '', p = this.parsedOf(ls)[i] || parseLine(line), cur = lineText(p, line);
     const same = c.anchor.line === c.focus.line, a = same ? Math.min(c.anchor.offset, c.focus.offset) : c.anchor.offset, b = same ? Math.max(c.anchor.offset, c.focus.offset) : a;
     const parts = text.split('\n');
     if (parts.length === 1) { this.writeText(i, cur.slice(0, a) + text + cur.slice(b), { line: i, offset: a + text.length }); return; }
@@ -720,6 +890,16 @@ export default class DocEditor extends React.Component {
         this.copiedT = this.timer(() => { this.copied = null; this.lastHtml = null; this.forceUpdate(); }, 1400);
         return;
       }
+      if (k === 'copycode') {
+        // The code alone: no fences, and no `bart> ` in front of a block that is part of an answer.
+        const ls = this.lines(), ps = this.parsedOf(ls), p = ps[i]; if (!isFence(p) || !p.open) return;
+        const text = ls.slice(p.block.open + 1, p.block.close).map((l, n) => (ps[p.block.open + 1 + n].type === 'reply' ? ps[p.block.open + 1 + n].text : l)).join('\n');
+        (this.props.onCopyText ? Promise.resolve(this.props.onCopyText(text)) : navigator.clipboard.writeText(text)).catch(() => {});
+        this.copied = `code${i}`; this.lastHtml = null; this.forceUpdate();
+        if (this.copiedT) clearTimeout(this.copiedT);
+        this.copiedT = this.timer(() => { this.copied = null; this.lastHtml = null; this.forceUpdate(); }, 1400);
+        return;
+      }
       if (k === 'asklog') { const id = act.dataset.ask; if (this.openLogs.has(id)) this.openLogs.delete(id); else this.openLogs.add(id); this.patchPending(); return; }
       if (k === 'stopask') { if (this.props.onStopAsk) this.props.onStopAsk(act.dataset.ask); return; }
       if (k === 'toggle') this.toggleTodo(i);
@@ -738,6 +918,9 @@ export default class DocEditor extends React.Component {
   };
   editorOver = (e) => {
     const m = e.target.closest('[data-mention]'); if (m) this.showPop(this.findRes(m.dataset.mention), { currentTarget: m });
+    // An icon's name goes under it, or above it when under would leave the pane.
+    const ic = e.target.closest('.bart-ic'), box = this.scrollRef.current;
+    if (ic && ic.parentElement && box) ic.parentElement.toggleAttribute('data-tip-up', ic.getBoundingClientRect().bottom + 32 > Math.min(box.getBoundingClientRect().bottom, window.innerHeight || 800));
     const pick = e.target.closest('[data-act="pick"],[data-act="pickfollow"],[data-act="regen"]'); if (pick) this.openPicker(pick, { pick: 'line', pickfollow: 'follow', regen: 'regen' }[pick.dataset.act]);
   };
   // Leaving what opened the selector starts its closing clock, unless the pointer went straight onto the selector: React has
@@ -789,10 +972,14 @@ export default class DocEditor extends React.Component {
   }
   followKey(e) {
     if (this.state.picker) this.closePicker();
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); this.sendFollow(Number(e.target.dataset.followInput)); }
+    if (e.key === 'Enter' && e.shiftKey) e.preventDefault(); // one line of the document: no line breaks
+    else if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); this.sendFollow(Number(e.target.dataset.followInput)); }
     else if (e.key === 'Escape') e.target.blur();
   }
-  followInput(input) { this.followText.set(Number(input.dataset.followInput), input.value); this.paintSend(input); }
+  followInput(input) {
+    if (/[\r\n]/.test(input.value)) { const a = input.selectionStart, b = input.selectionEnd; input.value = input.value.replace(/[\r\n]/g, ' '); input.setSelectionRange(a, b); }
+    this.followText.set(Number(input.dataset.followInput), input.value); this.paintSend(input); this.fitFollow(input);
+  }
   // What answered turn `q`, read from its closing line ("Sol · medium · 31 s"); the question's own first step when there is
   // none. → { current } for the selector to mark, and { choice } to regenerate with the same model and effort.
   ranWith(ls, q) {
@@ -854,7 +1041,8 @@ export default class DocEditor extends React.Component {
     if (pk.kind === 'regen') { this.setState({ picker: { ...pk, choice } }); return; }
     if (pk.kind === 'follow') { this.followChoice.set(pk.i, choice); this.lastHtml = null; this.forceUpdate(); return; }
     const ls = this.lines(), p = parseLine(ls[pk.i] || ''); if (p.type !== 'bart' || this.lockedAt(ls, pk.i)) { this.closePicker(); return; }
-    const text = withChoice(p.text, models, choice), line = `@bart ${text}${readFlags(text, models).rest ? '' : ' '}`;
+    const lead = (ls[pk.i].match(/^@bart/i) || ['@bart'])[0]; // "@Bart" (the @ menu's) or "@bart" (typed) stays as it was written
+    const text = withChoice(p.text, models, choice), line = `${lead} ${text}${readFlags(text, models).rest ? '' : ' '}`;
     this.setLines((x) => x.map((l, j) => (j === pk.i ? line : l)), this.state.activeLine === pk.i ? { line: pk.i, offset: line.length } : undefined);
   };
   sendPicked = () => {
@@ -866,29 +1054,55 @@ export default class DocEditor extends React.Component {
   bartItem() { return (this.props.mentionable || []).find((r) => r && r.id === 'bart') || BART_ITEM; }
   mentionList() {
     const q = (this.state.mention?.query || '').toLowerCase();
+    if (this.props.mentionItems) return this.props.mentionItems(q); // the workspace's list: Bart, Task, Note, the open page, the library (model/rail.js)
     return (this.props.mentionable || []).filter((r) => r && ((r.name || '').toLowerCase().includes(q) || (r.title || '').toLowerCase().includes(q)));
   }
   pickMention(r) {
     const m = this.state.mention; if (!m || !r) return; const ls = this.lines(), p = parseLine(ls[m.i] || '');
     const cur = lineText(p, ls[m.i]);
-    if (r.id === 'task') {
+    const verb = r.kind === 'verb' ? r.verb : r.id === 'task' || r.id === 'bart' ? r.id : null;
+    if (verb === 'task') {
       // `@Task` is a trigger, not text: the line becomes the task row it names, keeping whatever else was on it.
       const rest = (cur.slice(0, m.start) + cur.slice(m.caret)).replace(/\s+$/, '');
       this.setLines((x) => x.map((l, j) => (j === m.i ? todoLine(isMarked(p.type) ? p.depth : 0, p.type === 'todo' && p.done, rest) : l)), { line: m.i, offset: rest.length });
       this.wantFocus = true; this.setState({ mention: null, activeLine: m.i }); return;
     }
-    const ins = r.id === 'bart' ? '@bart ' : `@[${r.name}] `;
+    // Bart and Note are words the line keeps (Enter asks, or makes the note); anything else is a mention, and what it names
+    // comes into this workspace (the open page is added to the library first: props.onMentionPicked).
+    const ins = verb === 'bart' ? '@Bart ' : verb === 'note' ? '@Note ' : `@[${r.name}] `;
     this.writeText(m.i, cur.slice(0, m.start) + ins + cur.slice(m.caret), { line: m.i, offset: m.start + ins.length });
     this.wantFocus = true; this.setState({ mention: null, activeLine: m.i });
+    if (!verb && this.props.onMentionPicked) this.props.onMentionPicked(r);
+  }
+  // Enter on a line holding `@Note name`: the note is made (named, or untitled when nothing follows), and the words
+  // become its mention if the line still holds them once it exists.
+  async noteVerb(i) {
+    const ls = this.lines(), p = parseLine(ls[i] || ''), cur = lineText(p, ls[i]), m = cur.match(NOTE_VERB_RE);
+    if (!m) return;
+    const said = cur.slice(m.index + m[1].length), name = (m[2] || '').replace(/[[\]]/g, '').trim();
+    let note = null;
+    try { note = await this.props.onNoteVerb(name); } catch { return; }
+    if (!note || !this.mounted) return;
+    const now = this.lines(), q = parseLine(now[i] || ''), text = lineText(q, now[i]), at = text.lastIndexOf(said);
+    if (at < 0) return;
+    const next = `${text.slice(0, at)}@[${note.name}] `;
+    this.writeText(i, next, { line: i, offset: next.length });
+    this.wantFocus = true; this.setState({ activeLine: i, mention: null });
+  }
+  // Tab in code: two spaces at the caret (in place of a selection inside the line); Shift+Tab takes up to two off the line's start.
+  indentCode(i, cur, a, b, out) {
+    if (!out) { this.writeText(i, cur.slice(0, a) + '  ' + cur.slice(b), { line: i, offset: a + 2 }); return; }
+    const n = (cur.match(/^ {1,2}|^\t/) || [''])[0].length; if (!n) return;
+    this.writeText(i, cur.slice(n), { line: i, sel: [Math.max(0, a - n), Math.max(0, b - n)] });
   }
   wrap(i, cur, st, en, mark) { this.writeText(i, cur.slice(0, st) + mark + cur.slice(st, en) + mark + cur.slice(en), { line: i, sel: [st + mark.length, en + mark.length] }); }
   link(i, cur, st, en) { const sel = cur.slice(st, en) || 'link'; const a = st + sel.length + 3; this.writeText(i, cur.slice(0, st) + `[${sel}](url)` + cur.slice(en), { line: i, sel: [a, a + 3] }); }
   indent(i, dir) {
     this.setLines((ls) => {
-      const p = parseLine(ls[i] || ''); if (!isMarked(p.type)) return ls; const nd = clamp(p.depth + dir, 0, 8); if (nd === p.depth) return ls;
-      if (dir > 0) { const prev = parseLine(ls[i - 1] || ''); if (!isMarked(prev.type) || nd > prev.depth + 1) return ls; }
+      const ps = this.parsedOf(ls), p = ps[i] || parseLine(''); if (!isMarked(p.type)) return ls; const nd = clamp(p.depth + dir, 0, 8); if (nd === p.depth) return ls;
+      if (dir > 0) { const prev = ps[i - 1] || parseLine(''); if (!isMarked(prev.type) || nd > prev.depth + 1) return ls; }
       const out = [...ls]; out[i] = sameLine({ ...p, depth: nd }, p.text);
-      for (let j = i + 1; j < ls.length; j++) { const q = parseLine(ls[j]); if (!isMarked(q.type) || q.depth <= p.depth) break; out[j] = sameLine({ ...q, depth: clamp(q.depth + dir, 0, 8) }, q.text); }
+      for (let j = i + 1; j < ls.length; j++) { const q = ps[j]; if (!isMarked(q.type) || q.depth <= p.depth) break; out[j] = sameLine({ ...q, depth: clamp(q.depth + dir, 0, 8) }, q.text); }
       return out;
     });
   }
@@ -913,7 +1127,7 @@ export default class DocEditor extends React.Component {
     return (this.props.mentionable || []).find((r) => r && r.id !== 'bart' && (r.name || '').toLowerCase() === n)
       || { id: '?', type: 'note', name, title: name, summary: 'Not attached to this topic yet.', facts: 'unresolved' };
   }
-  showPop(res, e) { const r = e.currentTarget.getBoundingClientRect(); this.setState({ pop: { res, x: clamp(r.left, 8, (window.innerWidth || 1200) - 340), y: r.bottom + 8 } }); }
+  showPop(res, e) { const r = e.currentTarget.getBoundingClientRect(); this.setState({ pop: { res, anchor: { left: r.left, right: r.right, top: r.top, bottom: r.bottom } } }); }
   hidePop = () => { if (this.state.pop) this.setState({ pop: null }); };
 
   /* ---------------------------------------------------------------- render */
@@ -929,11 +1143,13 @@ export default class DocEditor extends React.Component {
   }
   render() {
     const s = this.state;
+    const compact = this.props.compact;
     return (
       <>
         <style>{RISE_CSS + CARD_CSS}</style>
-        <div onClick={this.docClick} style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '28px clamp(12px, 4%, 40px) 120px', cursor: 'text' }}>
-          <div style={{ maxWidth: '65ch', marginInline: 'auto', paddingInline: 'clamp(0px, 3%, 24px)', cursor: 'auto', fontSize: 17 }}>
+        {/* Past the last line the page keeps going for about half a window (2026-09-22), so the end of a document can be read and written mid-screen. */}
+        <div ref={this.scrollRef} onClick={this.docClick} onScroll={this.onScroll} onWheel={this.stopSettling} onPointerDown={this.stopSettling} onKeyDown={this.stopSettling} style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: compact ? '4px 4px 24px' : '28px clamp(12px, 4%, 40px) max(120px, calc(50vh - 40px))', cursor: compact ? 'grab' : 'text' }}>
+          <div style={{ maxWidth: '65ch', marginInline: 'auto', paddingInline: compact ? 0 : 'clamp(0px, 3%, 24px)', cursor: 'auto', fontSize: 17 }}>
             {this.props.header}
             <div
               data-editor="1"
@@ -943,13 +1159,13 @@ export default class DocEditor extends React.Component {
               spellCheck={false}
               role="textbox"
               aria-multiline="true"
-              aria-label="Document"
-              style={{ marginTop: 18, outline: 'none', minHeight: 240, font: '17px/1.6 var(--font-sans)', color: '#171717', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', caretColor: '#171717', cursor: 'text' }}
+              aria-label={compact ? 'Post-it' : 'Document'}
+              style={{ marginTop: compact ? 0 : 18, outline: 'none', minHeight: compact ? 28 : 240, font: '17px/1.6 var(--font-sans)', color: '#171717', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', caretColor: '#171717', cursor: 'text' }}
             />
           </div>
         </div>
-        {s.mention && <MentionMenu items={this.mentionList()} index={s.mentionIdx} x={s.mention.x} y={s.mention.y} onPick={(r) => this.pickMention(r)} />}
-        {s.pop && <Popover item={s.pop.res} x={s.pop.x} y={s.pop.y} />}
+        {s.mention && s.mention.anchor && <MentionMenu items={this.mentionList()} index={s.mentionIdx} anchor={s.mention.anchor} onPick={(r) => this.pickMention(r)} onHover={(i) => this.setState({ mentionIdx: i })} />}
+        {s.pop && <Popover item={s.pop.res} anchor={s.pop.anchor} />}
         {this.pickerView()}
       </>
     );

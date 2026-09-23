@@ -42,9 +42,21 @@ The model is chosen in `~/.engelbart/config.json`, which is read again for every
 
 `provider` is `openai` (Codex CLI) or `anthropic` (Claude Code CLI); effort is `low`, `medium`, `high`, `xhigh` or `max`. Both run as hidden processes on your subscription sign-in, never an API key, and isolated from your own Codex and Claude Code configuration. `ENGELBART_SUMMARIES=off` turns the sweep off.
 
+## The sidebar
+
+The current workspace's name on top (its hover lists the workspaces beside it and **+ New**), then **Workspace**, its own document, then the workspace's library on a grey card:
+
+- **Search** brings in what the library already holds. Empty, it offers a new **Note** and a nested **Workspace** and four things that are not here yet; typed, the library's matches first, then Note and Workspace named after what you typed. A pasted link or path is the one row the library has for it (or a new one). Hover a result for its card.
+- The rows: hover for the item's card (what it is, where it is, its summary, who holds it), double-click to rename, drag onto the trash to take it out of this workspace.
+- **+** (hover) adds something new to the library and to this workspace: a link or path in the field, **Choose from disk…** (files and folders, several at once, linked where they are, never copied), **Add from GitHub…**. Something the library already holds is refused ("Already in the library as …"); pages compare without scheme, `www.`, trailing slash or `#fragment`.
+
+At the bottom, three pictures that size with the sidebar: the **trash** (a row dropped on it leaves this workspace, never the library — meta.json `removed` keeps it off the rail whatever put it there, until it is brought back; a post-it dropped on it is deleted; the can shows paper while something is in it), the **sticky note** (a post-it), and **Copy**. The sidebar's edge resizes only the document; the edge between document and right pane moves those two (double-click either for its default).
+
+The Browser's address ends in the page's place in the library: **+ Save** (a card names it; *Library only* or *Workspace*), **+ Workspace** (in the library, not here: one click), or **✓**. The `@` menu lists **Bart**, **Task**, **Note** (`@Note name` + Enter makes that note here and mentions it), the page open in the Browser (a **+** when the library does not hold it yet: picking it adds it), then the library. Whatever an `@` mention names comes into the workspace.
+
 ## Copy and @bart
 
-**Copy** (sidebar, lower left) puts the open document on the clipboard with every `@[mentioned]` file's content in `<file>` tags directly under the line that mentions it: notes whole (with their own mentions), anything else as its path or URL plus its summary.
+**Copy** (the papers at the bottom of the sidebar) puts the open document on the clipboard with every `@[mentioned]` file's content in `<file>` tags directly under the line that mentions it: notes whole (with their own mentions), anything else as its path or URL plus its summary.
 
 **`@bart <question>`** then Enter asks an agent that can read the project's notes and library, read (never edit) the code directory, and search the web. The answer appears under the question as a draft: **Hide** removes it, **Save** keeps it, read-only, ending with which model said it. It runs hidden on your Claude Code or Codex subscription, never an API key.
 
@@ -54,6 +66,20 @@ The model is chosen in `~/.engelbart/config.json`, which is read again for every
 - Which providers are offered at all: `providers` in `~/.engelbart/config.json` (`["openai", "anthropic"]`).
 - The list, the ladders and the default provider: `~/.engelbart/model-effort-inline-question.json`, read again for every question.
 - The instructions it runs under: `src/main/bart/system-prompt.cjs`, or your own in `<data root>/.context/bart-system-prompt.md`.
+
+## Project post-its (prototype)
+
+The sticky note at the bottom of the sidebar adds a titleless post-it. The card uses `design/assets/yellow-sticky-note.svg`, including its paper texture, curled corner, and transparent shadow. The card uses the note editor's font and inline Markdown. Click text to edit; drag blank space to move; drag the curled corner to resize (or focus the grip and use arrow keys). Let go over the sidebar's trash can to delete it permanently (the can lifts while the pointer is over it, and the card takes a red tint). Escape cancels a drag.
+
+Cards belong to the project and remain visible across its workspaces and notes. Content and preferred layout persist in `post_its` inside the project's `notes.pglite`. A smaller window temporarily clamps the cards into view. There is no hidden/completed state, drawer, attachment picker, or `@btw` command in this prototype.
+
+Each card is an app-owned `WebContentsView` above the live browser. Its restricted preload can edit only that card. Native browser tabs are restacked below cards, and cards temporarily yield to app dialogs/menus. Each view has a substantial renderer cost: approximately 100 MB working set per card in the development smoke run; this architecture is intended for trying the interaction, not hundreds of cards.
+
+Verification: `npm test`, then `npm run build && npx electron scripts/smoke-post-its.cjs`. The smoke test uses a hidden window and disposable data, checks editing/geometry/browser interaction/trash, and prints a checkpoint directory. To check a full relaunch:
+
+```sh
+ENGELBART_POST_IT_SMOKE_ROOT=/path/from/checkpoint ENGELBART_POST_IT_SMOKE_RESTORE=1 npx electron scripts/smoke-post-its.cjs
+```
 
 ## Terminal pane
 
@@ -89,12 +115,12 @@ The pill top-right exists on every screen. **Test · on** roots the app at `~/.e
   .backups/<project>-<time>/          copies taken before a layout conversion
   <project>/
     project.json                      { id, name, created, directory }   directory = where the code lives
-    notes.pglite/                     table `notes` (topic_id holds the workspace id)
+    notes.pglite/                     tables `notes` (topic_id holds the workspace id), `post_its` (text and preferred layout)
     <Note>.md                         notes, flat
     assets/<id>.png                   pasted images (library rows of type `image`)
     .context/catalog.json             what the project holds, with summaries, for agents that read files
     <Workspace>/workspace.md          a workspace's document
-    <Workspace>/meta.json             { id, status, context: [library ids], created }
+    <Workspace>/meta.json             { id, status, context: [library ids], removed: [library ids the trash took off], created }
     <Workspace>/<Child>/…             workspaces nest to any depth
     .legacy/                          goal directories from the first layout, parked, never deleted
 ```
@@ -112,10 +138,11 @@ src/main/browser/            views.cjs: the Browser pane's pages as WebContentsV
 src/preload.cjs              window.terminalAPI (ET contract) + window.engelbartAPI
 src/renderer/App.jsx         create | all projects | workspace; reopens the last topic; the test pill
 src/renderer/screens/        CreateProject, Home (all projects), Workspace (three-column header: crumbs + goal menu, doc tabs, pane switcher)
-src/renderer/workspace/      Rail (topic header + sibling switcher + context tree), DocTabs, DocEditor (+ MentionMenu, Popover), CtxModal, RightPane, Browser
+src/renderer/workspace/      Rail (workspace header, library card: search, rows, +; trash / sticky note / copy), DocTabs, DocEditor (+ MentionMenu, Popover), RightPane, Browser (+ Save)
 src/renderer/pdf/PaperView   pdf.js + rough.js + Caveat
 src/renderer/terminal/       the Terminal pane (tabs, cwd chip, Terminal / Claude Code / Codex switcher) over terminalAPI; sessions survive navigation
 src/renderer/model/doc.js    the pure editor model (regexes, task and bullet lines, caret offset mapping)
+src/renderer/model/rail.js   what the sidebar's search and the @ menu list
 scripts/drive.mjs            CDP driver for exploratory testing (screenshots, clicks, typing)
 ```
 

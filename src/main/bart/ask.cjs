@@ -278,7 +278,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
   return { ask, stop, stopAll: () => { for (const controller of running.values()) controller.abort(); } };
 }
 
-/** Scripted runs only (ENGELBART_BART_FAKE=1): no model. A question containing "hard" moves up one step. */
+/** Scripted runs only (ENGELBART_BART_FAKE=1): no model. A question containing "hard" moves up one step; one containing "code" is answered with a JSON code block too. */
 function createFakeBart({ readModels, delayMs = 1200, threads = createThreads() }) {
   const waits = new Map();
   return {
@@ -305,7 +305,7 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads() 
           steps, pinned, onProgress,
           first: message, session: held ? held.session : null,
           // What it was sent is what it reports: a resumed session gets the question alone, a new one gets everything.
-          turn: async ({ message: sent }) => ({ session: 'fake', text: await act(/hard/.test(question) && /step 1 of/.test(sent) ? 'ESCALATE: the question says it is hard' : `FAKE ANSWER to "${question}".\n\n## Seen\n- **${context.documents.length}** characters of documents\n- \`${steps.length}\` steps${prior.length ? `\n- ${/<conversation>/.test(sent) ? `a new session, given ${prior.length} earlier ${prior.length === 1 ? 'turn' : 'turns'}` : /<engelbart>/.test(sent) ? 'a new session, given no earlier turns' : 'the same session, given the question alone'}` : ''}`) }),
+          turn: async ({ message: sent }) => ({ session: 'fake', text: await act(/hard/.test(question) && /step 1 of/.test(sent) ? 'ESCALATE: the question says it is hard' : `FAKE ANSWER to "${question}".\n\n## Seen\n- **${context.documents.length}** characters of documents\n- \`${steps.length}\` steps${prior.length ? `\n- ${/<conversation>/.test(sent) ? `a new session, given ${prior.length} earlier ${prior.length === 1 ? 'turn' : 'turns'}` : /<engelbart>/.test(sent) ? 'a new session, given no earlier turns' : 'the same session, given the question alone'}` : ''}${/code/.test(question) ? `\n\nThe same as JSON:\n\n\`\`\`json\n{\n  "fake": true,\n  "steps": ${steps.length},\n  "note": "# not a heading"\n}\n\`\`\`` : ''}`) }),
         });
         const meta = { provider, level: out.level, trail: out.trail, ms: out.ms, pinned };
         threads.keep(threadKey(projectId, ref, [...prior, { question: String(text).trim(), answer: answerText(out.text) }]), { provider, session: out.session, projectId, workspaceId });

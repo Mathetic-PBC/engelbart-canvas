@@ -6,6 +6,7 @@
 // carries a round blue button in its lower right that regenerates with what is marked (`onSend`).
 import React from 'react';
 import { EFFORT_LABELS } from '../../main/bart/question.cjs';
+import { usePlaced } from '../ui/usePlaced.js';
 
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
 const WIDTH = 332;
@@ -42,11 +43,10 @@ export default function BartPicker({ models, current, anchor, onPick, onSend, on
   const pair = (model) => (entry.ladder.find((step) => step.model === model) || { effort: entry.efforts[0] }).effort;
   const pickModel = (model) => onPick({ model, effort: here && entry.efforts.includes(current.effort) ? current.effort : pair(model) });
   const pickEffort = (effort) => onPick({ model: here ? current.model : entry.ladder[0].model, effort });
-  const height = 58 + 32 * Math.max(Object.keys(entry.models).length + 1, entry.efforts.length) + (onSend ? 34 : 0);
-  const left = Math.max(8, Math.min(anchor.left != null ? anchor.left : anchor.right - WIDTH, (window.innerWidth || 1200) - WIDTH - 8));
-  const top = anchor.bottom + 6 + height > (window.innerHeight || 800) && anchor.top - 6 - height > 0 ? anchor.top - 6 - height : anchor.bottom + 6;
+  // Measured, not estimated: under the chip, above it near the bottom of the window, cut to the room there if neither fits.
+  const [ref, placed] = usePlaced(anchor, { align: anchor.left != null ? 'start' : 'end' });
   return (
-    <div data-bart-picker="1" data-overlay="1" role="dialog" aria-label="Model and effort" onMouseEnter={onEnter} onMouseLeave={onLeave} onMouseDown={(e) => e.preventDefault()} style={{ position: 'fixed', left, top, zIndex: 60, width: WIDTH, boxSizing: 'border-box', display: 'flex', padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 12, animation: `rise 160ms ${EASE}` }}>
+    <div ref={ref} data-bart-picker="1" data-overlay="1" role="dialog" aria-label="Model and effort" onMouseEnter={onEnter} onMouseLeave={onLeave} onMouseDown={(e) => e.preventDefault()} style={{ ...placed, zIndex: 60, width: WIDTH, boxSizing: 'border-box', display: 'flex', padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 12, animation: `rise 160ms ${EASE}` }}>
       <div style={{ flex: '1 1 0', minWidth: 0, padding: 4 }}>
         <div style={{ position: 'relative', marginBottom: 4 }}>
           <div role="button" aria-haspopup="listbox" aria-expanded={listing} onMouseDown={(e) => { e.preventDefault(); if (ids.length > 1) setListing((open) => !open); }} style={{ display: 'flex', alignItems: 'center', gap: 8, height: 32, padding: '0 10px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', cursor: ids.length > 1 ? 'pointer' : 'default', font: '500 13px/1 var(--font-sans)', color: '#171717' }}>

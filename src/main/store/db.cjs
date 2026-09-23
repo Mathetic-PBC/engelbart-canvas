@@ -109,6 +109,17 @@ create table if not exists notes (
   created timestamptz not null default now(),
   last_edited timestamptz not null default now()
 );
+create table if not exists post_its (
+  id uuid primary key,
+  text text not null default '',
+  nx double precision not null check (nx between 0 and 1),
+  ny double precision not null check (ny between 0 and 1),
+  width double precision not null check (width between 180 and 2400),
+  height double precision not null check (height between 140 and 2400),
+  z double precision not null default 0,
+  created timestamptz not null default now(),
+  last_edited timestamptz not null default now()
+);
 `;
 
 const instances = new Map();
@@ -354,6 +365,25 @@ async function openNotesDb(projectDir) {
   const db = await openRaw(dir, NOTES_SCHEMA);
   return {
     dir,
+    postIts: {
+      async list() {
+        return (await db.query('select * from post_its order by z, created, id')).rows.map(plain);
+      },
+      async create(row) {
+        const values = postItValues(row);
+        const result = await db.query('insert into post_its (id, text, nx, ny, width, height, z) values ($1,$2,$3,$4,$5,$6,$7) returning *', [requireText(row.id, 'id', { max: 64 }), ...values]);
+        return plain(result.rows[0]);
+      },
+      async update(id, row) {
+        // UPDATE, never UPSERT: a save already in flight must not resurrect a deleted card.
+        const result = await db.query('update post_its set text=$2, nx=$3, ny=$4, width=$5, height=$6, z=$7, last_edited=now() where id=$1 returning *', [requireText(id, 'id', { max: 64 }), ...postItValues(row)]);
+        return plain(result.rows[0]);
+      },
+      async remove(id) {
+        const result = await db.query('delete from post_its where id=$1', [requireText(id, 'id', { max: 64 })]);
+        return (result.affectedRows || 0) > 0;
+      },
+    },
     async insert(row) {
       const result = await db.query(
         `insert into notes (id, name, path, goal_id, topic_id) values ($1, $2, $3, $4, $5) returning *`,
@@ -388,6 +418,16 @@ async function openNotesDb(projectDir) {
     },
     close: () => closeDb(dir),
   };
+}
+
+function postItValues(row) {
+  if (!row || typeof row.text !== 'string' || row.text.length > 400000) throw new TypeError('Post-it text must be at most 400000 characters');
+  const values = [row.text];
+  for (const [key, min, max] of [['nx', 0, 1], ['ny', 0, 1], ['width', 180, 2400], ['height', 140, 2400], ['z', 0, Number.MAX_SAFE_INTEGER]]) {
+    if (!Number.isFinite(row[key]) || row[key] < min || row[key] > max) throw new TypeError(`Post-it ${key} is out of range`);
+    values.push(row[key]);
+  }
+  return values;
 }
 
 module.exports = { LIBRARY_TYPES, LIBRARY_TAGS, openLibraryDb, openNotesDb, closeDb, closeAll };

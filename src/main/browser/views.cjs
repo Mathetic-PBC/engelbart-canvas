@@ -108,7 +108,7 @@ function boundsFrom(rect, zoom) {
   return out;
 }
 
-function createBrowserViews({ electron, getWindow, send, appName, fileRoot }) {
+function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLayerChange = () => {} }) {
   const { WebContentsView, session, Menu, clipboard, dialog, shell } = electron;
   const decided = new Map(); // `${origin} ${permission}` -> the person's answer, for this run
   const entries = new Map(); // tab id -> { view, error, requested, pending, seq }
@@ -313,6 +313,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot }) {
     view.setBackgroundColor('#ffffff');
     view.setVisible(false);
     win.contentView.addChildView(view);
+    onLayerChange();
     const entry = { view, error: null, requested: '', pending: '', seq: 0 };
     entries.set(id, entry);
 
@@ -374,6 +375,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot }) {
     entry.seq += 1;
     entry.view.setBounds(bounds);
     entry.view.setVisible(true);
+    onLayerChange();
     return true;
   }
 

@@ -9,3 +9,15 @@ export function panelSplit(clientX, left, width) {
 export function panelColumns(rail, split) {
   return `${rail}px 1px minmax(0, ${split}fr) 1px minmax(0, ${1 - split}fr)`;
 }
+
+// Keep Hudson's fixed right-pane width while dragging the sidebar, and allow
+// the E2B pane to cover the document completely when its own edge is dragged.
+export function workspacePanels(viewWidth, railWidth, rightWidth = null) {
+  const usable = Math.max(0, viewWidth - 2);
+  const railMin = Math.min(220, usable);
+  const railMax = Math.min(520, Math.max(railMin, usable - 320));
+  const rail = Math.max(railMin, Math.min(railMax, railWidth));
+  const available = usable - rail;
+  const right = Math.max(Math.min(320, available), Math.min(available, rightWidth ?? Math.round(available / 2)));
+  return { rail, right, available, documentWidth: available - right, columns: `${rail}px 1px minmax(0, 1fr) 1px ${right}px` };
+}

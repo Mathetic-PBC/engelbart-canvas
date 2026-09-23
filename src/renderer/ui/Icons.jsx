@@ -61,9 +61,21 @@ export const SEARCH = () => (
   </svg>
 );
 
+// Bart: two speech bubbles, one answering the other (Add - Mention.dc.html, 2026-09-22).
 export const CHAT = () => (
-  <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinejoin="round" aria-hidden="true">
-    <path d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v6a1.5 1.5 0 0 1-1.5 1.5H6l-3.5 3v-3A1.5 1.5 0 0 1 2 9.5z" />
+  <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" aria-hidden="true">
+    <path d="M3 2.5h6.5a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H6.5L4 11.5v-2H3a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2z" />
+    <path d="M12.5 5.5h.5a2 2 0 0 1 2 2v2.5a2 2 0 0 1-2 2h-.5v2l-2.5-2H7.5" />
+  </svg>
+);
+
+// A website with no favicon of its own (none are fetched): the generic globe (Add - Mention.dc.html, 2026-09-22).
+export const GLOBE = () => (
+  <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" aria-hidden="true">
+    <path d="M8 1.75a6.25 6.25 0 1 1 0 12.5 6.25 6.25 0 0 1 0-12.5z" />
+    <path d="M1.75 8h12.5" />
+    <path d="M8 1.75c1.8 1.7 2.7 3.8 2.7 6.25S9.8 12.55 8 14.25" />
+    <path d="M8 1.75C6.2 3.45 5.3 5.55 5.3 8s.9 4.55 2.7 6.25" />
   </svg>
 );
 
@@ -75,10 +87,12 @@ export const IMAGE = () => (
   </svg>
 );
 
+// A task: a clipboard with a check on it (Add - Mention.dc.html, 2026-09-22).
 export const TASK = () => (
   <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" aria-hidden="true">
-    <rect x={2} y={2.5} width={12} height={11} rx={2} />
-    <path d="M5 8.2l2.2 2.2L11 6.2" />
+    <path d="M5.75 3H5a2 2 0 0 0-2 2v7.5a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-.75" />
+    <path d="M6.75 1.75h2.5a1 1 0 0 1 1 1v.5a1 1 0 0 1-1 1h-2.5a1 1 0 0 1-1-1v-.5a1 1 0 0 1 1-1z" />
+    <path d="M6.25 9.25l1.25 1.25 2.5-2.5" />
   </svg>
 );
 
@@ -89,7 +103,7 @@ export const KIND = {
   pdf: { glyph: <PDF />, label: 'pdf' },
   git: { glyph: <GH />, label: 'git repo' },
   folder: { glyph: <FOLDER />, label: 'folder' },
-  website: { glyph: '↗', label: 'link' },
+  website: { glyph: <GLOBE />, label: 'link' },
   html: { glyph: <CODE />, label: 'html' },
   data: { glyph: <LAYERS />, label: 'data file' },
   chat: { glyph: <CHAT />, label: 'chat', fixed: true },
@@ -102,4 +116,18 @@ export const KIND = {
 export function kindOf(item) {
   const kind = KIND[kindKey(item)] || KIND.note;
   return kind.fixed || !item || !item.type ? kind : { glyph: kind.glyph, label: kindLabel(item) };
+}
+
+// The design draws a note at 15px, a globe at 14 and every other kind at 12, centred in a box of 16 (18 in a list):
+// the workspace sidebar's rows and search, and the @ menu (Canvas.dc.html, Add - Mention.dc.html `icon`).
+const GLYPH_SIZE = { note: 15, md: 15, website: 14 };
+export function KindGlyph({ item, kind: key = null, box = 16, color = '#171717' }) {
+  const name = key || (item.type === 'workspace' || item.type === 'child' ? 'workspace' : kindKey(item));
+  const kind = KIND[name] || kindOf(item || {});
+  const size = GLYPH_SIZE[name] || 12;
+  return (
+    <span style={{ flex: 'none', width: box, height: box, display: 'flex', alignItems: 'center', justifyContent: 'center', color }}>
+      <span className="glyph-fit" style={{ display: 'flex', width: size, height: size }}>{kind.glyph}</span>
+    </span>
+  );
 }

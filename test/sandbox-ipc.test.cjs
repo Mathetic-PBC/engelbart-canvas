@@ -48,11 +48,17 @@ test('adding a GitHub URL through IPC persists the library item before starting;
     sandbox: { async start(ctx, id) { assert.ok(await ctx.libraryDb.get(id)); launched.push(id); }, async close() {} },
   });
   const add = handlers.get('engelbart:add-library-item');
-  const [first, duplicate] = await Promise.all([add('https://github.com/owner/app'), add('https://github.com/owner/app')]);
-  assert.equal(first.id, duplicate.id);
-  assert.deepEqual(launched, [first.id, first.id]);
+  const [created, duplicate] = await Promise.allSettled([add('https://github.com/owner/app', { name: 'Saved app' }), add('https://github.com/owner/app')]);
+  assert.equal(created.status, 'fulfilled');
+  const first = created.value;
+  assert.equal(first.name, 'Saved app', 'Browser Save keeps its chosen display name');
+  assert.equal(duplicate.status, 'rejected');
+  assert.match(duplicate.reason.message, /Already in the library/);
+  assert.deepEqual(launched, [first.id], 'a rejected duplicate add does not start another build');
+  const found = await handlers.get('engelbart:lookup-library-item')('https://github.com/owner/app');
+  assert.equal(found.row.id, first.id, 'existing items can still be found and linked from the sidebar');
   await add('https://example.org/');
-  assert.equal(launched.length, 2);
+  assert.equal(launched.length, 1);
   const ctx = await store.context();
   assert.equal((await ctx.libraryDb.list()).length, 2);
 });
@@ -73,7 +79,7 @@ test('a worker handoff error does not undo the library addition', async (t) => {
   assert.equal((await (await store.context()).libraryDb.get(result.id)).url, 'https://github.com/owner/app');
 });
 
-async function workspaceFixture(t, sandbox) {
+async function workspaceFixture(t, sandbox, options = {}) {
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'canvas-attach-repo-'));
   const store = createStore({ homeDir });
   await store.setTestMode(false);
@@ -84,9 +90,11 @@ async function workspaceFixture(t, sandbox) {
   const repo = await ctx.libraryDb.insert({ id: randomUUID(), name: 'owner/app', type: 'website', tags: ['git'], url: 'https://github.com/owner/app' });
   const site = await ctx.libraryDb.insert({ id: randomUUID(), name: 'Website', type: 'website', url: 'https://example.org' });
   const handlers = new Map();
-  registerEngelbartIpc({ store, sandbox, ipcMain: { handle: (name, handler) => handlers.set(name, handler) }, trustedHandler: (fn) => fn });
+  registerEngelbartIpc({ store, sandbox, ipcMain: { handle: (name, handler) => handlers.set(name, handler) }, trustedHandler: (fn) => fn, ...options });
   return { ctx, project, workspace, repo, site, handlers,
     attach: (entries) => handlers.get('engelbart:set-workspace-context')(project.id, workspace.id, entries),
+    link: (entries) => handlers.get('engelbart:link-to-workspace')(project.id, workspace.id, entries),
+    unlink: (id) => handlers.get('engelbart:unlink-from-workspace')(project.id, workspace.id, id),
     saved: () => projects.findWorkspace(ctx, project.id, workspace.id).workspace.context,
   };
 }
@@ -108,6 +116,32 @@ test('attaching an existing repository starts it once after saving; only new att
   assert.equal(starts.length, 2, 'explicit reattachment requests setup again; the manager reuses an active run');
   await assert.rejects(f.attach([42]), /id or a folder/);
   assert.equal(starts.length, 2, 'invalid context does not start work');
+});
+
+test('sidebar, Browser Save and mention links retain trash behavior while starting newly attached repos', async (t) => {
+  const starts = [];
+  const f = await workspaceFixture(t, { async start(ctx, id) {
+    assert.ok(f.saved().includes(id));
+    starts.push(id);
+  } });
+  await Promise.all([f.link([f.repo.id]), f.link([f.site.id]), f.link([f.repo.id])]);
+  assert.deepEqual(f.saved(), [f.repo.id, f.site.id]);
+  assert.deepEqual(starts, [f.repo.id]);
+  const trashed = await f.unlink(f.repo.id);
+  assert.deepEqual(trashed.removed, [f.repo.id]);
+  assert.deepEqual(f.saved(), [f.site.id]);
+  assert.equal(starts.length, 1, 'removing context does not launch a run');
+  const linked = await f.link(f.repo.id);
+  assert.deepEqual(linked.removed, []);
+  assert.deepEqual(starts, [f.repo.id, f.repo.id]);
+});
+
+test('new sidebar links preserve attachments when sandbox handoff fails', async (t) => {
+  const f = await workspaceFixture(t, { async start() { throw new Error('Sandbox unavailable'); } });
+  const saved = await f.link([f.repo.id]);
+  assert.deepEqual(saved.context, [f.repo.id]);
+  assert.deepEqual(f.saved(), [f.repo.id]);
+  assert.equal(saved.sandbox_error, 'owner/app: Sandbox unavailable');
 });
 
 test('a canvas attachment survives a setup handoff failure and reports its cause', async (t) => {
@@ -139,4 +173,26 @@ test('changing data modes waits for the build handoff from a canvas attachment',
   } finally { release(); }
   await Promise.all([attachment, mode]);
   assert.equal(closed, true);
+});
+
+test('mode switches drain sidebar handoffs and hide post-its before closing the sandbox context', async (t) => {
+  let release, entered;
+  const waiting = new Promise((resolve) => { release = resolve; });
+  const started = new Promise((resolve) => { entered = resolve; });
+  const order = [];
+  const f = await workspaceFixture(t, {
+    async start() { entered(); await waiting; order.push('attached'); },
+    async close() { order.push('sandbox-closed'); },
+  }, { beforeContextChange: async () => { order.push('post-its-hidden'); } });
+  const attachment = f.link([f.repo.id]);
+  await started;
+  const mode = f.handlers.get('engelbart:set-test-mode')(false);
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(order, []);
+    assert.throws(() => f.link([f.site.id]), /data mode change/);
+    assert.throws(() => f.unlink(f.repo.id), /data mode change/);
+  } finally { release(); }
+  await Promise.all([attachment, mode]);
+  assert.deepEqual(order, ['attached', 'post-its-hidden', 'sandbox-closed']);
 });
