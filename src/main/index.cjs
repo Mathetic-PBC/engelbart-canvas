@@ -56,6 +56,7 @@ let settings = null;
 let store = null;
 let sweeper = null;
 let bart = null;
+let sandbox = null;
 let providerStatus = null;
 let browserViews = null;
 let quitPending = false;
@@ -136,6 +137,7 @@ async function requestQuit() {
   try {
     if (sweeper) await sweeper.stop();
     if (bart) bart.stopAll();
+    if (sandbox) await sandbox.close();
     if (browserViews) await browserViews.flush().catch(() => {});
     if (manager) await manager.shutdown();
     if (store) await store.close();
@@ -363,6 +365,7 @@ if (!hasSingleInstanceLock) {
       fileRoot: () => homeDir,
     });
     registerBrowserIpc({ ipcMain, trustedHandler, views: browserViews });
+    sandbox = require('./sandbox/manager.cjs').createSandboxManager({ secure: require('electron').safeStorage, notify: (event) => sendToRenderer('engelbart:sandbox-progress', event) });
     registerEngelbartIpc({
       ipcMain,
       trustedHandler,
@@ -377,6 +380,7 @@ if (!hasSingleInstanceLock) {
       },
       writeClipboard: (text) => clipboard.writeText(text),
       bart,
+      sandbox,
       readModels,
       notify: sendToRenderer,
       confirmReset: async () => {

@@ -6,9 +6,10 @@ import DocEditor, { BART_ITEM, TASK_ITEM } from '../workspace/DocEditor.jsx';
 import CtxModal from '../workspace/CtxModal.jsx';
 import RightPane, { RIGHT_MODES } from '../workspace/RightPane.jsx';
 import { kindOf } from '../ui/Icons.jsx';
-import { hasTag, isNote } from '../model/kind.js';
+import { hasTag, isNote, canRunRepository } from '../model/kind.js';
 import { isUntitled, nextUntitled } from '../model/names.js';
 import { OPEN_IN_BROWSER } from '../model/address.js';
+import { panelSplit, panelColumns } from '../model/panel-layout.js';
 
 // The workspace screen (design 2026-09-17): a header in three columns — Engelbart / project /
 // parent workspaces over the sidebar, the document tabs over the document, the Browser ·
@@ -36,9 +37,9 @@ function describe(row) {
   return { ...row, title: row.name, summary, facts: `${kind.label}${row.last_edited ? ` · edited ${String(row.last_edited).slice(0, 10)}` : ''}` };
 }
 
-function Separator({ onDown, onMove, onUp, onReset }) {
+function Separator({ onDown, onMove, onUp, onReset, label = 'Resize sidebar' }) {
   return (
-    <div role="separator" aria-orientation="vertical" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onDoubleClick={onReset} style={{ position: 'relative', flex: 'none', width: 1, background: '#eaeaea', cursor: 'col-resize', touchAction: 'none' }}>
+    <div role="separator" aria-label={label} title={`${label} · double-click to reset`} aria-orientation="vertical" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} onDoubleClick={onReset} style={{ position: 'relative', flex: 'none', width: 1, background: '#eaeaea', cursor: 'col-resize', touchAction: 'none' }}>
       <div style={{ position: 'absolute', inset: '0 -6px', zIndex: 4 }} />
     </div>
   );
@@ -67,6 +68,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const [activeTab, setActiveTab] = React.useState(initialTab ? initialTab.id : 'ws');
   const [docs, setDocs] = React.useState({});
   const [rightMode, setRightMode] = React.useState('preview');
+  const [buildRepoId, setBuildRepoId] = React.useState(null);
   // A link clicked in the terminal opens in the Browser (which adds the tab); the pane turns to show it.
   React.useEffect(() => {
     const show = () => setRightMode('preview');
@@ -246,7 +248,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return library.filter((row) => (row.type === 'image' ? shown.has(row.id) : names.has(row.name.toLowerCase())));
   }, [docs, topic, library]);
 
-  const activeRowId = activeTab !== 'ws' ? activeTab : (rightMode === 'paper' && paper ? paper.id : 'ws');
+  const activeRowId = rightMode === 'build' && buildRepoId ? buildRepoId : activeTab !== 'ws' ? activeTab : (rightMode === 'paper' && paper ? paper.id : 'ws');
 
   const rows = React.useMemo(() => {
     const out = [{ id: 'ws', name: 'Workspace', type: 'workspace', depth: 0, on: activeRowId === 'ws', editing: false }];
@@ -321,6 +323,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     if (isNote(row)) { openTab(row.id, row.name); return; }
     if (row.type === 'pdf') { void openPaper(row); return; } // any pdf, paper or not; a paper added by its address is a website and opens as a link
     if (row.type === 'image') return;
+    if (canRunRepository(row)) { setBuildRepoId(row.id); setRightMode('build'); return; }
     if (row.url) api.openExternal(row.url).catch((error) => onError(error));
   }, [openTab, openPaper, onError]);
 
@@ -334,8 +337,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const saveContext = async (entries) => {
     if (!topic) return;
     try {
-      await api.setWorkspaceContext(project.id, topic.id, entries);
+      const saved = await api.setWorkspaceContext(project.id, topic.id, entries);
       await reload();
+      if (saved.sandbox_error) onError(new Error(saved.sandbox_error));
     } catch (error) {
       onError(error);
     }
@@ -396,8 +400,14 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   const attachContext = async (row) => {
     if (!topic) return;
-    await saveContext([...topic.context, row.id]);
     setCtxModal(null);
+    if (canRunRepository(row)) {
+      setBuildRepoId(row.id);
+      setRightMode('build');
+    }
+    // Select Build before the request: reusing a ready sandbox can open its
+    // Browser immediately, and completing this attachment must not hide it.
+    await saveContext([...topic.context, row.id]);
   };
 
   const renameRow = async (row, name) => {
@@ -476,10 +486,11 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const railMove = (event) => { if (!event.currentTarget.hasPointerCapture(event.pointerId)) return; const box = railBox.current || event.currentTarget.parentElement.getBoundingClientRect(); setRailWidth(clamp(event.clientX - box.left, 180, railMax())); };
   const pointerUp = (event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); };
   const splitDown = (event) => { event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); const body = event.currentTarget.parentElement.getBoundingClientRect(); const rail = event.currentTarget.parentElement.firstElementChild.getBoundingClientRect(); splitBox.current = { left: rail.right + 1, width: body.right - rail.right - 2 }; };
-  const splitMove = (event) => { if (!event.currentTarget.hasPointerCapture(event.pointerId) || !splitBox.current) return; const { left, width } = splitBox.current; const lo = Math.min(0.6, 420 / Math.max(1, width)); const hi = 1 - Math.min(0.4, 300 / Math.max(1, width)); setSplit(clamp((event.clientX - left) / width, lo, hi)); };
+  const splitMove = (event) => { if (!event.currentTarget.hasPointerCapture(event.pointerId) || !splitBox.current) return; const { left, width } = splitBox.current; setSplit(panelSplit(event.clientX, left, width)); };
 
   const text = docKey ? docs[docKey] : undefined;
   const rail = Math.min(railWidth, railMax());
+  const columns = panelColumns(rail, split);
   const headWide = rail >= 260;
 
   const header = (
@@ -506,7 +517,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   return (
     <div data-screen-label="Workspace" style={style}>
-      <header style={{ display: 'flex', alignItems: 'stretch', minHeight: 46, borderBottom: '1px solid #eaeaea', background: '#fafafa', flex: 'none' }}>
+      <header style={{ display: 'grid', gridTemplateColumns: columns, alignItems: 'stretch', minHeight: 46, borderBottom: '1px solid #eaeaea', background: '#fafafa', flex: 'none' }}>
         <div style={{ flex: 'none', width: rail, display: 'flex', alignItems: 'center', gap: 8, padding: '0 16px', minWidth: 0, overflow: 'hidden' }}>
           <button type="button" onClick={onHome} title="All projects" style={{ flex: 'none', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', font: '500 17px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Engelbart</button>
           <span style={{ flex: 'none', font: '15px/1 var(--font-sans)', color: '#c9c9c9' }}>/</span>
@@ -519,11 +530,13 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           ))}
         </div>
         <div style={{ flex: 'none', width: 1, background: '#eaeaea' }} />
-        <div style={{ flex: `${split} 1 0`, minWidth: 'min(420px, 55%)', display: 'flex', alignItems: 'flex-end', gap: 2, padding: '8px 8px 0', overflow: 'hidden' }}>
-          <DocTabs tabs={tabs} activeTab={activeTab} onSelect={setActiveTab} onClose={closeTab} onMove={moveTab} />
+        <div inert={split === 0} style={{ minWidth: 0, overflow: 'hidden' }}>
+          <div style={{ height: '100%', display: 'flex', alignItems: 'flex-end', gap: 2, padding: '8px 8px 0' }}>
+            <DocTabs tabs={tabs} activeTab={activeTab} onSelect={setActiveTab} onClose={closeTab} onMove={moveTab} />
+          </div>
         </div>
         <div style={{ flex: 'none', width: 1, background: '#eaeaea' }} />
-        <div style={{ flex: `${1 - split} 1 0`, minWidth: 0, display: 'flex', alignItems: 'center', gap: 16, padding: '0 20px' }}>
+        <div style={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 16, padding: '0 20px', overflow: 'hidden' }}>
           {RIGHT_MODES.map((mode) => {
             const on = rightMode === mode.id;
             return (
@@ -533,7 +546,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
         </div>
       </header>
 
-      <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+      <div style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: columns }}>
         <Rail
           width={rail}
           topics={topics}
@@ -556,7 +569,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
         <Separator onDown={railDown} onMove={railMove} onUp={pointerUp} onReset={() => setRailWidth(300)} />
 
-        <main style={{ flex: `${split} 1 0`, minWidth: 'min(420px, 55%)', minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+        <main inert={split === 0} style={{ minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
+          <div style={{ flex: 1, width: '100%', minWidth: 420, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           {docKey && text !== undefined ? (
             <DocEditor
               ref={editorRef}
@@ -586,12 +600,16 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
               ) : <span style={{ font: '13px/1.6 var(--font-sans)', color: '#8f8f8f' }}>Opening…</span>}
             </div>
           )}
+          </div>
         </main>
 
-        <Separator onDown={splitDown} onMove={splitMove} onUp={pointerUp} onReset={() => setSplit(0.5)} />
+        <Separator label="Resize right panel" onDown={splitDown} onMove={splitMove} onUp={pointerUp} onReset={() => setSplit(0.5)} />
 
         <RightPane
           mode={rightMode}
+          repositories={library.filter(canRunRepository)}
+          buildRepoId={buildRepoId}
+          onBuildRepo={setBuildRepoId}
           paper={paper}
           onMarksChange={(id, marks) => api.writeAnnotations(id, marks).catch((error) => onError(error))}
           projectDir={project.directory || null}

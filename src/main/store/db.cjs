@@ -4,7 +4,7 @@
 // directory). The SQL is plain Postgres so the same statements run on a Supabase project
 // later; this module is the swap point (spec §2 #3).
 //
-//   <testRoot>/library.pglite    table `library`  — every mentionable thing, all projects
+//   <testRoot>/library.pglite    tables `library` and `sandbox_runs` — items and their sandbox attempts
 //   <project>/notes.pglite       table `notes`    — the notes created in that project
 
 const fs = require('node:fs');
@@ -69,6 +69,34 @@ update library set type = 'html' where type = 'website' and path is not null;
 alter table library add constraint library_type_check check (type in (${typeList}));
 alter table library drop constraint if exists library_note_is_md;
 alter table library add constraint library_note_is_md check (type = 'md' or not ('note' = any(tags)));
+
+-- Each attempt belongs to a library item; retrying creates another run. Keep the run's
+-- sandbox handle when a library deletion is attempted: cleanup must be explicit first.
+create table if not exists sandbox_runs (
+  id uuid primary key,
+  library_id uuid not null references library (id) on delete restrict,
+  sandbox_id text,
+  status text not null default 'starting' check (status in ('starting', 'ready', 'failed', 'stopped')),
+  preview_url text,
+  port integer check (port between 1 and 65535),
+  error text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  finished_at timestamptz
+);
+create index if not exists sandbox_runs_library_created on sandbox_runs (library_id, created_at desc);
+alter table sandbox_runs add column if not exists build_log jsonb not null default '[]';
+alter table sandbox_runs add column if not exists env_revision uuid;
+-- Keep discovered names after their event rolls out of the bounded build log.
+alter table sandbox_runs add column if not exists env_report jsonb;
+create table if not exists sandbox_environments (
+  library_id uuid primary key references library (id) on delete cascade,
+  revision uuid not null,
+  encrypted text not null,
+  updated_at timestamptz not null default now()
+);
+create unique index if not exists sandbox_runs_one_active on sandbox_runs (library_id)
+  where status in ('starting', 'ready');
 `;
 
 const NOTES_SCHEMA = `

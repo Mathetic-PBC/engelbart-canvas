@@ -8,6 +8,10 @@ export const hasTag = (row, tag) => !!row && Array.isArray(row.tags) && row.tags
 /** Written in Engelbart: opens as a tab, is renamed through its project, is read whole by Copy. */
 export const isNote = (row) => hasTag(row, 'note');
 
+/** A saved GitHub repository can be started even when it was added before sandbox support. */
+export const canRunRepository = (row) => hasTag(row, 'git') && typeof row.url === 'string'
+  && /^https?:\/\/(?:www\.)?github\.com\/[\w.-]+\/[\w.-]+(?:[/?#].*)?$/i.test(row.url);
+
 const DATA_TYPES = new Set(['csv', 'tsv', 'json', 'jsonl', 'parquet', 'xlsx']);
 
 /** Which glyph stands for the row and where it sorts. A repository keeps its mark whether it is an address or a folder; every data format shares one. */

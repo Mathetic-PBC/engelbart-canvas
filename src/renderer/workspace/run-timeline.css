@@ -1,0 +1,40 @@
+/* The web timeline's exact sizes/colors, scoped to the Canvas Build tab. */
+@font-face{font-family:Build Geist;src:url('../assets/geist-latin.woff2') format('woff2');font-style:normal;font-weight:100 900;font-display:swap}
+.build-timeline{display:flex;flex-direction:column;color:#0a0a0a;font:13px/1.5 'Build Geist',Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.build-timeline ol{display:flex;flex-direction:column;list-style:none;margin:0;padding:0}
+.build-step{border-bottom:1px solid #e5e5e5}
+.build-step:last-child{border-bottom:0}
+.build-step-failed{background:hsl(0 84.2% 60.2% / .03)}
+.build-step-button{display:flex;align-items:center;gap:12px;width:100%;margin:0;border:0;padding:8px 22px;background:transparent;font:inherit;text-align:left;cursor:pointer}
+.build-step-button:disabled{cursor:default}
+.build-step-button:not(:disabled):hover{background:#fafafa}
+.build-step-title{width:130px;flex-shrink:0}
+.build-step-number{margin-right:6px;color:hsl(0 0% 45.1% / .5);font-variant-numeric:tabular-nums}
+.build-step-waiting .build-step-title{color:hsl(0 0% 45.1% / .6)}
+.build-step-summary{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#737373}
+.build-step-failed .build-step-title{color:#ef4444}
+.build-step-failed .build-step-summary{color:hsl(0 84.2% 60.2% / .9)}
+.build-step-duration{width:54px;flex-shrink:0;white-space:nowrap;text-align:right;font-size:12px;line-height:16px;color:hsl(0 0% 45.1% / .7);font-variant-numeric:tabular-nums}
+.build-step-chevron{width:14px;height:14px;flex-shrink:0;color:hsl(0 0% 45.1% / .6);opacity:0;transition:transform .15s,opacity .15s}
+.build-step-button:hover .build-step-chevron,.build-step-button:focus-visible .build-step-chevron{opacity:1}
+.build-step-failed .build-step-chevron{opacity:1;color:#ef4444}
+.build-step-chevron.expanded{transform:rotate(90deg);opacity:1;color:#737373}
+.build-state{display:flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:9999px;flex-shrink:0}
+.build-state svg{display:block;width:10px;height:10px}
+.build-state-waiting{border:1px solid #d4d4d4}
+.build-state-done{background:#262626;color:#fff}
+.build-state-warned{background:#f59e0b;color:#fff}
+.build-state-failed{background:#ef4444;color:#fff}
+.build-state-skipped{border:1px solid #d4d4d4;color:#a3a3a3}
+.build-state-active svg{width:14px;height:14px;color:#404040;animation:build-spin 1s linear infinite}
+@keyframes build-spin{to{transform:rotate(360deg)}}
+.build-step-output{border-top:1px solid #e5e5e5;background:#fafafa}
+.build-step-error{margin:0;padding:8px 22px;color:#ef4444;white-space:pre-wrap;overflow-wrap:anywhere}
+.build-log{height:100%;overflow-y:auto;padding:0 22px 18px;font:13px/1.75 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;color:#737373}
+.build-log p{margin:0}
+.build-log-line{display:flex;gap:10px;white-space:pre-wrap;overflow-wrap:anywhere}
+.build-log-line>span:last-child{min-width:0;flex:1}
+.build-log-prompt{width:10px;flex-shrink:0;color:hsl(0 0% 45.1% / .6)}
+.build-log-command{color:#0a0a0a}
+.build-log-error{color:#ef4444}
+.build-log-status{color:hsl(0 0% 45.1% / .6);font-style:italic}

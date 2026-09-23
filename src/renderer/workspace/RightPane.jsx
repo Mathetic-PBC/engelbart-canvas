@@ -1,19 +1,22 @@
 import PaperView from '../pdf/PaperView.jsx';
 import TerminalPane from '../terminal/TerminalPane.jsx';
 import Browser from './Browser.jsx';
+import BuildPane from './BuildPane.jsx';
 
 // Right pane (design 2026-09-17): edge to edge, no padding; the switcher lives in the header.
-// Browser | Terminal | Paper. Browser and Terminal stay mounted while hidden.
+// Browser | Terminal | Paper | Build. Browser and Terminal stay mounted while hidden.
 
 export const RIGHT_MODES = [
   { id: 'preview', label: 'Browser' },
   { id: 'terminal', label: 'Terminal' },
   { id: 'paper', label: 'Paper' },
+  { id: 'build', label: 'Build' },
 ];
 
-export default function RightPane({ mode, paper, onMarksChange, projectDir, projectId, onExpand, style }) {
+export default function RightPane({ mode, repositories, buildRepoId, onBuildRepo, paper, onMarksChange, projectDir, projectId, onExpand, style }) {
   return (
     <section aria-label="Preview" style={style}>
+      {mode === 'build' && <BuildPane repositories={repositories} selectedId={buildRepoId} onSelect={onBuildRepo} />}
       <Browser projectId={projectId} visible={mode === 'preview'} onExpand={onExpand} />
       <TerminalPane cwd={projectDir} projectId={projectId} visible={mode === 'terminal'} />
       {mode === 'paper' && (

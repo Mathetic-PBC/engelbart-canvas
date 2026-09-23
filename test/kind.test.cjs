@@ -7,6 +7,20 @@ const { pathToFileURL } = require('node:url');
 
 const load = () => import(pathToFileURL(path.join(__dirname, '../src/renderer/model/kind.js')).href);
 
+test('Run is available for saved GitHub repositories, including existing clones', async () => {
+  const { canRunRepository } = await load();
+  for (const type of ['website', 'folder']) {
+    assert.equal(canRunRepository({ type, tags: ['git'], url: 'https://github.com/mqo00/rope' }), true);
+  }
+  for (const row of [null, {}, { tags: ['git'] },
+    { tags: [], url: 'https://github.com/mqo00/rope' },
+    { tags: ['git'], url: 'https://github.com/mqo00' },
+    { tags: ['git'], url: 'https://github.com.evil.example/mqo00/rope' },
+    { tags: ['git'], url: 'https://gitlab.com/mqo00/rope' }]) {
+    assert.equal(canRunRepository(row), false);
+  }
+});
+
 test('how a row is shown: the type says what it is, the tags say the rest, and nothing is read out of the type alone', async () => {
   const { kindKey, kindLabel, kindRank, isNote } = await load();
   const rows = {

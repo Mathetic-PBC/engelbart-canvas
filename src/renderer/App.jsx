@@ -4,6 +4,7 @@ import TestToggle from './ui/TestToggle.jsx';
 import Home from './screens/Home.jsx';
 import CreateProject from './screens/CreateProject.jsx';
 import Workspace from './screens/Workspace.jsx';
+import SandboxProgress from './ui/SandboxProgress.jsx';
 
 // Screens: the app opens straight into the workspace you were last in — "Getting started" in a
 // fresh project — and the first run shows the create screen. "Engelbart" in the header (or
@@ -201,6 +202,7 @@ export default function App() {
   if (!config || phase === 'boot') return <div style={{ position: 'absolute', inset: 0, background: '#fff' }} />;
 
   return (
+    <SandboxProgress key={config.dataRoot} dataRoot={config.dataRoot} library={library} inWorkspace={phase === 'workspace' && !!tree?.project.directory}>
     <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#fff' }}>
       {phase === 'home' && (
         <Home
@@ -250,5 +252,6 @@ export default function App() {
         onReveal={() => api.reveal(config.testRoot).catch(fail)}
       />
     </div>
+    </SandboxProgress>
   );
 }

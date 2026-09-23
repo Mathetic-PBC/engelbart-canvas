@@ -1,0 +1,5 @@
+.build-repository-field{position:relative;min-width:0}
+.build-repository-select{display:block;appearance:none;width:100%;min-width:0;height:38px;padding:8px 36px 8px 12px;border:1px solid var(--gray-700);border-radius:8px;background:var(--surface-page);color:var(--text-body);font:13px/1.5 var(--font-sans);text-overflow:ellipsis;cursor:pointer;transition:background 120ms,box-shadow 120ms}
+.build-repository-select:hover{background:var(--surface-field)}
+.build-repository-select:focus{outline:none;box-shadow:0 0 0 3px rgba(77,77,77,.14)}
+.build-repository-field>svg{position:absolute;right:12px;top:50%;width:14px;height:14px;transform:translateY(-50%);color:var(--gray-700);pointer-events:none}

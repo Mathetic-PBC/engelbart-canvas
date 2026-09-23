@@ -16,6 +16,7 @@ const { failureLines } = require('./bart/reply.cjs');
 const { readShellHistory } = require('./shell-history.cjs');
 const { createDescriber, createRepoIdentifier, createRemoteFileLister } = require('./store/page-meta.cjs');
 const { inspectPdf } = require('./context/pdf-kind.cjs');
+const { githubRepo } = require('./sandbox/runs.cjs');
 
 const MAX_NAME = 512;
 
@@ -102,16 +103,30 @@ function createStore({ homeDir, fixturesDir, inspectPdf: readPdf = null }) {
   return { layout, context, config: describe, setTestMode, resetTestData, close: closeAll };
 }
 
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, notify, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister() }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, sandbox, readModels, notify, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister() }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const withCtx = (fn) => async (...args) => fn(await store.context(), ...args);
+  let changingMode = false;
+  let additions = Promise.resolve();
 
   handle('config', () => store.config());
-  handle('set-test-mode', (value) => store.setTestMode(value));
+  handle('set-test-mode', async (value) => {
+    if (typeof value !== 'boolean') throw new TypeError('testMode must be a boolean');
+    if (changingMode) throw new Error('Data mode is already changing');
+    changingMode = true;
+    try { await additions.catch(() => {}); await sandbox?.close(); return await store.setTestMode(value); }
+    finally { changingMode = false; }
+  });
   handle('reset-test-data', async () => {
     if (!(await confirmReset())) return { reset: false, ...store.config() };
-    const config = await store.resetTestData();
-    return { reset: true, ...config };
+    if (changingMode) throw new Error('Data mode is already changing');
+    changingMode = true;
+    try {
+      await additions.catch(() => {});
+      await sandbox?.close();
+      const config = await store.resetTestData();
+      return { reset: true, ...config };
+    } finally { changingMode = false; }
   });
 
   handle('last-open', withCtx((ctx) => projects.readLastOpen(ctx)));
@@ -130,7 +145,28 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   }));
   handle('rename-workspace', withCtx((ctx, pid, wid, name) => projects.renameWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(name, 'name'))));
   handle('set-workspace-status', withCtx((ctx, pid, wid, status) => projects.setWorkspaceStatus(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(status, 'status', 32))));
-  handle('set-workspace-context', withCtx((ctx, pid, wid, entries) => projects.setWorkspaceContext(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), entries)));
+  handle('set-workspace-context', (pid, wid, entries) => {
+    if (changingMode) throw new Error('Wait for the data mode change to finish');
+    const projectId = str(pid, 'project id', 64), workspaceId = str(wid, 'workspace id', 64);
+    const attached = additions.catch(() => {}).then(async () => {
+      const ctx = await store.context();
+      const previous = new Set(projects.findWorkspace(ctx, projectId, workspaceId).workspace.context);
+      const workspace = await projects.setWorkspaceContext(ctx, projectId, workspaceId, entries);
+      const errors = [];
+      if (sandbox) for (const id of workspace.context) {
+        if (previous.has(id)) continue;
+        const row = await ctx.libraryDb.get(id);
+        if (!githubRepo(row?.url)) continue;
+        // Attaching a repo is a new request to use it, even if the session's
+        // automatic library preparation already failed or was stopped.
+        try { await sandbox.start(ctx, id); }
+        catch (error) { errors.push(`${row.name}: ${error.message}`); }
+      }
+      return errors.length ? { ...workspace, sandbox_error: errors.join('\n') } : workspace;
+    });
+    additions = attached;
+    return attached;
+  });
 
   handle('create-note', withCtx((ctx, pid, input) => {
     const value = input && typeof input === 'object' ? input : {};
@@ -183,7 +219,53 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // Both directions of "who holds what", derived from the workspaces on disk (no join table).
   handle('projects-for-library-item', withCtx((ctx, id) => library.projectsForLibraryItem(ctx, str(id, 'library id', 64))));
   handle('library-for-project', withCtx((ctx, pid) => library.libraryForProject(ctx, str(pid, 'project id', 64))));
-  handle('add-library-item', withCtx((ctx, input) => library.addItem(ctx, str(input, 'link or path', 4096), { describe, identifyRepo, inspectPdf })));
+  handle('add-library-item', (input) => {
+    if (changingMode) throw new Error('Wait for the data mode change to finish');
+    const value = str(input, 'link or path', 4096);
+    const added = additions.catch(() => {}).then(async () => {
+      const ctx = await store.context();
+      const row = await library.addItem(ctx, value, { describe, identifyRepo, inspectPdf });
+      // Adding a local clone or a non-GitHub item does not start remote work.
+      if (sandbox && /^(?:https?:\/\/(?:www\.)?github\.com\/|git@github\.com:)/i.test(value.trim())) {
+        try { await sandbox.start(ctx, row.id); }
+        catch (error) { return { ...row, sandbox_error: error.message }; }
+      }
+      return row;
+    });
+    additions = added;
+    return added;
+  });
+  handle('sandbox-runs', withCtx((ctx) => sandbox.list(ctx)));
+  handle('sandbox-ensure', () => {
+    if (changingMode) throw new Error('Wait for the data mode change to finish');
+    const ensured = additions.catch(() => {}).then(async () => {
+      const ctx = await store.context();
+      const errors = [];
+      for (const row of await ctx.libraryDb.list()) {
+        if (!row.tags.includes('git')) continue;
+        try { await sandbox.start(ctx, row.id, { automatic: true }); }
+        catch (error) { errors.push(`${row.name}: ${error.message}`); }
+      }
+      if (errors.length) throw new Error(errors.join('\n'));
+      return sandbox.list(ctx);
+    });
+    additions = ensured;
+    return ensured;
+  });
+  handle('sandbox-start', withCtx((ctx, id) => {
+    if (changingMode) throw new Error('Wait for the data mode change to finish');
+    return sandbox.start(ctx, str(id, 'library id', 64));
+  }));
+  handle('sandbox-stop', withCtx((ctx, id) => sandbox.stop(ctx, str(id, 'run id', 64))));
+  handle('sandbox-environment', withCtx((ctx, id) => sandbox.environment(ctx, str(id, 'library id', 64))));
+  handle('sandbox-save-environment', withCtx((ctx, id, changes, revision) => {
+    if (changingMode) throw new Error('Wait for the data mode change to finish');
+    return sandbox.saveEnvironment(ctx, str(id, 'library id', 64), changes, revision);
+  }));
+  handle('sandbox-restart', withCtx((ctx, id) => {
+    if (changingMode) throw new Error('Wait for the data mode change to finish');
+    return sandbox.restart(ctx, str(id, 'library id', 64));
+  }));
   handle('preview-library-item', withCtx((ctx, id) => library.previewItem(ctx, str(id, 'library id', 64), { listRemoteFiles })));
   handle('rename-library-item', withCtx(async (ctx, id, name) => {
     const row = await ctx.libraryDb.get(str(id, 'library id', 64));

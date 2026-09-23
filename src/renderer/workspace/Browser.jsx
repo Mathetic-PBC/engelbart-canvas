@@ -57,7 +57,7 @@ function LoginPrompt({ request, onAnswer }) {
   );
 }
 
-export default function Browser({ projectId, visible, onExpand }) {
+export default function Browser({ projectId, visible, onExpand, initialUrl }) {
   const [tabs, setTabs] = React.useState(() => [blankTab()]); // { id, url, web: the page's state from main | null }
   const [activeId, setActiveId] = React.useState(() => null);
   const [draft, setDraft] = React.useState('');
@@ -123,6 +123,8 @@ export default function Browser({ projectId, visible, onExpand }) {
     setActiveId(next.id);
   }, []);
 
+  React.useEffect(() => { if (initialUrl) openTab(initialUrl); }, [initialUrl, openTab]);
+
   // The page reports where it is; a tab showing a file or a sandbox keeps its own address.
   React.useEffect(() => {
     const offState = api.onBrowserState((state) => setTabs((current) => current.map((t) => (
@@ -153,6 +155,7 @@ export default function Browser({ projectId, visible, onExpand }) {
       const r = slot.getBoundingClientRect();
       let hit = false;
       for (const overlay of document.querySelectorAll('[data-overlay]')) {
+        if (overlay.contains(slot)) continue; // the browser may itself be inside a preview dialog
         const b = overlay.getBoundingClientRect();
         if (b.width && b.height && b.left < r.right && b.right > r.left && b.top < r.bottom && b.bottom > r.top) { hit = true; break; }
       }

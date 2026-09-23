@@ -172,7 +172,10 @@ export default function Home({ projects, library, onCreateScreen, onOpenWorkspac
     let last = null;
     const problems = [];
     for (const input of inputs) {
-      try { last = await api.addLibraryItem(input); } catch (candidate) { problems.push(errorMessage(candidate)); }
+      try {
+        last = await api.addLibraryItem(input);
+        if (last.sandbox_error) problems.push(last.sandbox_error);
+      } catch (candidate) { problems.push(errorMessage(candidate)); }
     }
     setAddBusy(false);
     if (last) {
