@@ -568,7 +568,8 @@ async function writeDoc(ctx, projectId, ref, text) {
 // fall back to the first project / workspace. (Files written before the layout change carry
 // `topicId`, which is the same id.)
 // `views[projectId][workspaceId]` is what a workspace had open when it was left (2026-09-22): the document in front
-// (`active`: 'ws' or a note's library id), its note tabs, and where each document was scrolled to, keyed as the editor
+// (`active`: 'ws', a note's library id, or a workspace tab's workspace id), its tabs (notes, and since 2026-09-23 other
+// workspaces' documents, `kind: 'workspace'`), and where each document was scrolled to, keyed as the editor
 // keys documents (`ws:<id>`, `note:<id>`). Positions belong to the workspace, so one note can be halfway down in one
 // workspace and at the top in another. Scrolling writes here and nowhere else: a document's edit time never moves.
 const STATE_FILE = 'state.json';
@@ -616,7 +617,10 @@ function cleanView(value) {
   const tabs = [], seen = new Set();
   for (const tab of Array.isArray(input.tabs) ? input.tabs : []) {
     const id = idOrNull(tab && tab.id); if (!id || seen.has(id)) continue;
-    seen.add(id); tabs.push({ id, title: typeof tab.title === 'string' ? tab.title.slice(0, 200) : '' });
+    seen.add(id);
+    const clean = { id, title: typeof tab.title === 'string' ? tab.title.slice(0, 200) : '' };
+    if (tab.kind === 'workspace') clean.kind = 'workspace'; // another workspace's document open here as a tab (2026-09-23)
+    tabs.push(clean);
     if (tabs.length >= MAX_TABS) break;
   }
   const positions = {};
@@ -652,25 +656,31 @@ function writeView(ctx, projectId, workspaceId, view) {
 /* ------------------------------------------------------------- where to next */
 
 // What the sidebar's "next" row and ⌘J go to (2026-09-22), kept in state.json beside the views:
-//   recent: [{ projectId, workspaceId, at }]  the last three workspaces written in, newest first. A workspace is written
-//           in when its document or a note open in it is typed into; looking around does not count.
+//   recent: [{ projectId, workspaceId, at }]  the workspaces written in, newest first: every one written in during the last
+//           thirty minutes, or the last three, whichever is more (2026-09-23, Hudson: "whichever group contains MORE
+//           workspaces"). A workspace is written in when it is made, or when its document or a note open in it is typed
+//           into; looking around does not count.
 //   agents: [{ id, kind, projectId, workspaceId, doc, status, started, finished }]  every agent the app started that is
 //           still `running`, or has finished and is `waiting` for you to look (it is dropped when its workspace is
 //           visited). `kind` is 'bart' (the inline @bart asks) for now; `workspaceId` may be null for an agent that
 //           belongs to no workspace. A `running` row from an earlier run of the app is stale and is not read.
-const MAX_RECENT = 3;
+const RECENT_KEEP = 3;
+const RECENT_WINDOW = 30 * 60 * 1000;
+const MAX_RECENT = 100;
 const MAX_AGENTS = 50;
 const AGENT_KINDS = new Set(['bart']);
 const AGENT_STATUSES = new Set(['running', 'waiting']);
 const liveAgents = new Set(); // ids of the agents running in this process
 const isoOrNull = (value) => (typeof value === 'string' && value.length <= 40 && !Number.isNaN(Date.parse(value)) ? value : null);
 
-function cleanRecent(value) {
+/** Newest first, once each: the first three whatever their age, then any other written in during the last thirty minutes. */
+function cleanRecent(value, now = Date.now()) {
   const out = [];
   for (const entry of Array.isArray(value) ? value : []) {
     const input = plainObject(entry) || {};
     const projectId = idOrNull(input.projectId), workspaceId = idOrNull(input.workspaceId), at = isoOrNull(input.at);
     if (!projectId || !workspaceId || !at || out.some((held) => held.projectId === projectId && held.workspaceId === workspaceId)) continue;
+    if (out.length >= RECENT_KEEP && !(now - Date.parse(at) <= RECENT_WINDOW)) continue;
     out.push({ projectId, workspaceId, at });
     if (out.length >= MAX_RECENT) break;
   }
@@ -724,7 +734,7 @@ function readNav(ctx) {
   return { recent, agents };
 }
 
-/** A workspace was written in: it moves to the front of `recent`, with the time. */
+/** A workspace was written in (or made): it moves to the front of `recent`, with the time. */
 function recordEdit(ctx, projectId, workspaceId) {
   findWorkspace(ctx, projectId, workspaceId);
   const held = readState(ctx).recent;

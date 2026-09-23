@@ -69,3 +69,7 @@ textarea::placeholder,input::placeholder{color:#8f8f8f;font-style:italic}
 .hov-x:hover{background:#e3e3e3!important;color:#171717!important}
 ::highlight(stage-find){background-color:rgba(0,112,243,.16);color:inherit}
 ::highlight(stage-find-cur){background-color:rgba(0,112,243,.4);color:inherit}
+/* A rail row's minus (2026-09-23): only while the pointer is on the row; red-free, it darkens on its own hover. */
+.rail-minus{opacity:0;transition:opacity 120ms,color 120ms}
+[data-rail-row]:hover .rail-minus,.rail-minus:focus-visible{opacity:1}
+.rail-minus:hover{color:#171717!important}

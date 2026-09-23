@@ -12,7 +12,6 @@ import trashPng from '../../../design/assets/trash.png';
 import trashFullPng from '../../../design/assets/trash-full.png';
 import TrashPanel from '../post-its/TrashPanel.jsx';
 import notePng from '../../../design/assets/yellow-sticky-note.png';
-import copyPng from '../../../design/assets/copy-papers.png';
 
 // The sidebar (Claude Design "Sidebar.dc.html", 2026-09-23, over "Canvas.dc.html" and "Add - Mention.dc.html" of
 // 2026-09-22; Hudson's tweaks in design/goal-canvas/SIDEBAR-TWEAKS.md). From the top: the current workspace in a grey box,
@@ -22,10 +21,10 @@ import copyPng from '../../../design/assets/copy-papers.png';
 // Sub-Workspaces (model/rail.js railSections; each folds, the first carries Collapse all) — where a hover peeks, a
 // double-click renames and a drag onto the trash takes one out of this workspace; and "+ Add context", whose menu makes a
 // Note or a Sub-Workspace here or adds something new to the library and to this workspace. At the bottom, the workspace
-// to go to next (an agent waiting there, else the one written in before; ⌘J), then three pictures that size with the
+// to go to next (an agent waiting there, else the one written in before; ⌘J), then two pictures that size with the
 // sidebar: the trash (it takes post-its too and keeps them a week; a click lists them to restore; it shows paper once
-// something is in it), a sticky note that makes a post-it, and Copy (the open document with every @mentioned file placed
-// where it is mentioned, src/main/context/expand-mentions.cjs). Every row's name is its own; nothing here explains itself.
+// something is in it) and a sticky note that makes a post-it. Copy left for the document's lower left (2026-09-23).
+// Every row's name is its own; nothing here explains itself.
 
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
 const PEEK_OPEN = 350;
@@ -53,13 +52,6 @@ function statusTitle(status) {
 
 function blurOnEnter(event) {
   if (event.key === 'Enter' || event.key === 'Escape') event.target.blur();
-}
-
-function copiedLabel(copied) {
-  const parts = ['Copied'];
-  if (copied.files) parts.push(`${copied.files} file${copied.files === 1 ? '' : 's'}`);
-  if (copied.missing) parts.push(`${copied.missing} missing`);
-  return parts.join(' · ');
 }
 
 /** The switcher's search field (Sidebar.dc.html): a grey well with the library search's magnifier, smaller. */
@@ -213,7 +205,15 @@ function WorkspaceHeader({ topics, topic, all, onOpenDoc, onSelectTopic, onCycle
   );
 }
 
-function RailRow({ row, flash, faded, onClick, onRenameStart, onRename, onRenameEnd, onDragStart, onDragEnd, onEnter, onLeave }) {
+// The minus on a row's right (2026-09-23, Hudson's flaticon "minus" 992683: a ring with a bar, the + row's mirror).
+const CIRCLE_MINUS = (
+  <svg aria-hidden="true" width="16" height="16" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" style={{ flex: 'none', display: 'block' }}>
+    <circle cx="9" cy="9" r="7.5" />
+    <path d="M5.5 9h7" />
+  </svg>
+);
+
+function RailRow({ row, flash, faded, onClick, onRenameStart, onRename, onRenameEnd, onDragStart, onDragEnd, onEnter, onLeave, onRemove }) {
   const inputRef = React.useRef(null);
   const [draft, setDraft] = React.useState(row.name);
   React.useEffect(() => { setDraft(row.name); }, [row.name, row.editing]);
@@ -265,6 +265,20 @@ function RailRow({ row, flash, faded, onClick, onRenameStart, onRename, onRename
           />
         )
         : <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: `${row.on ? 600 : 400} 14px/1.5 var(--font-sans)`, color: isUntitled(row.name) ? '#8f8f8f' : '#171717' }}>{row.name}</span>}
+      {onRemove && !row.editing && (
+        <button
+          type="button"
+          className="rail-minus"
+          data-rail-remove={row.id}
+          aria-label={`Take ${row.name} out of this workspace`}
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={(event) => { event.stopPropagation(); onRemove(row); }}
+          onDoubleClick={(event) => event.stopPropagation()}
+          style={{ flex: 'none', display: 'flex', margin: '-2px -2px -2px 0', padding: 2, border: 0, background: 'transparent', cursor: 'pointer', color: '#8f8f8f' }}
+        >
+          {CIRCLE_MINUS}
+        </button>
+      )}
     </div>
   );
 }
@@ -458,8 +472,9 @@ function LibrarySearch({ library, inRail, onPick, previews, onPreview, onOpenHel
 }
 
 // "+ Add context" under the sections (Sidebar.dc.html, 2026-09-23; hovering it opens its menu too, as Hudson asked of the
-// + on 2026-09-22): a new Note or Sub-Workspace made here, then a link, a path or files from disk, or a repository from
-// GitHub, that become new rows, in the library and in this workspace.
+// + on 2026-09-22): a search over the library first (the sidebar's search again, closer to hand: typing lists what it finds
+// in place of the rest), then a new Note or Sub-Workspace made here, then a link, a path or files from disk, or a
+// repository from GitHub, that become new rows, in the library and in this workspace.
 const CIRCLE_PLUS = (
   <svg aria-hidden="true" width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" style={{ flex: 'none', display: 'block' }}>
     <circle cx="9" cy="9" r="7.5" />
@@ -467,8 +482,12 @@ const CIRCLE_PLUS = (
   </svg>
 );
 
-function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickRepo, library, inRail, onOpenChange, shut }) {
+function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickRepo, onSearchPick, library, inRail, onOpenChange, shut }) {
   const [open, setOpen] = React.useState(false);
+  const [q, setQ] = React.useState(''); // the search at the top of the menu
+  const [idx, setIdx] = React.useState(0);
+  const [found, setFound] = React.useState(null); // { query, result }: what the main process said an address or a path is
+  const searchRef = React.useRef(null);
   const [view, setView] = React.useState('menu'); // 'menu' | 'github' (GithubPane: signing in, then the repositories)
   const [value, setValue] = React.useState('');
   const [error, setError] = React.useState('');
@@ -481,7 +500,7 @@ function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickRepo, li
   const wantFocus = React.useRef(false);
   const settled = React.useRef(false); // just added: the rows grew under a still pointer, which is not a hover
   const live = React.useRef({ value: '', busy: false, view: 'menu' });
-  live.current = { value, busy, view };
+  live.current = { value: value || q, busy, view };
   React.useEffect(() => () => clearTimeout(timer.current), []);
   React.useEffect(() => { onOpenChange(open); }, [open, onOpenChange]);
   // The field takes the keyboard as soon as the menu shows, so a link can be pasted straight away. Not in the ref: the
@@ -491,12 +510,12 @@ function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickRepo, li
     const timer = setTimeout(() => {
       const naming = document.activeElement && document.activeElement.matches && document.activeElement.matches('[data-rename]'); // a name being typed on the rail keeps the keyboard
       if (naming) { wantFocus.current = false; return; }
-      if (fieldRef.current) { fieldRef.current.focus({ preventScroll: true }); wantFocus.current = false; }
+      if (searchRef.current) { searchRef.current.focus({ preventScroll: true }); wantFocus.current = false; }
     }, 0);
     return () => clearTimeout(timer);
   }, [open, anchor]);
 
-  const hide = React.useCallback(() => { clearTimeout(timer.current); setOpen(false); setValue(''); setError(''); setView('menu'); }, []);
+  const hide = React.useCallback(() => { clearTimeout(timer.current); setOpen(false); setValue(''); setError(''); setView('menu'); setQ(''); setIdx(0); }, []);
   React.useEffect(() => { if (shut && open && !live.current.busy) hide(); }, [shut]); // eslint-disable-line react-hooks/exhaustive-deps
   const show = () => {
     clearTimeout(timer.current);
@@ -513,7 +532,7 @@ function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickRepo, li
     clearTimeout(timer.current);
     timer.current = setTimeout(() => {
       if (live.current.value.trim() || live.current.busy || live.current.view !== 'menu') return;
-      if (fieldRef.current && document.activeElement === fieldRef.current) fieldRef.current.blur();
+      for (const ref of [fieldRef, searchRef]) if (ref.current && document.activeElement === ref.current) ref.current.blur();
       hide();
     }, MENU_CLOSE);
   };
@@ -542,6 +561,32 @@ function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickRepo, li
   const fromGithub = () => { setError(''); setView('github'); };
 
   const addable = looksAddable(value);
+
+  // The search: the same rows as the sidebar's (model/rail.js searchRows), listed in the menu itself.
+  const typed = q.trim();
+  const typedAddable = looksAddable(typed);
+  React.useEffect(() => {
+    if (!open || !typedAddable) return undefined;
+    let alive = true;
+    const wait = setTimeout(() => {
+      api.lookupLibraryItem(typed)
+        .then((result) => { if (alive) setFound({ query: typed, result }); })
+        .catch((failure) => { if (alive) setFound({ query: typed, result: { row: null, found: null, error: errorMessage(failure) } }); });
+    }, 120);
+    return () => { alive = false; clearTimeout(wait); };
+  }, [open, typedAddable, typed]);
+  const answer = typedAddable && found && found.query === typed ? found.result : undefined;
+  const results = typed ? searchRows({ query: typed, library, inRail, found: answer }) : [];
+  const at = results.length ? Math.min(idx, results.length - 1) : -1;
+  const pickResult = (result) => { if (result && !busy) void run(async () => { await onSearchPick(result, typed); return []; }); };
+  const onSearchKey = (event) => {
+    const n = results.length;
+    if (event.key === 'ArrowDown') { event.preventDefault(); if (n) setIdx((at + 1) % n); }
+    else if (event.key === 'ArrowUp') { event.preventDefault(); if (n) setIdx((at - 1 + n) % n); }
+    else if (event.key === 'Enter') { event.preventDefault(); if (at >= 0) pickResult(results[at]); }
+    else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (q) { setQ(''); setIdx(0); } else hide(); }
+  };
+  const searchProblem = (answer && answer.error) || '';
   const border = error ? '#e70022' : value ? '#c9c9c9' : '#eaeaea';
   const menuRow = { display: 'flex', alignItems: 'center', gap: 12, width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: 0, borderRadius: 6, background: 'transparent', textAlign: 'left', cursor: 'pointer', transition: 'background 120ms' };
   const menuText = { flex: 1, minWidth: 0, font: '14px/1.5 var(--font-sans)', color: '#171717' };
@@ -559,6 +604,33 @@ function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickRepo, li
               {error && <div data-add-error="1" style={{ padding: '6px 2px 0', font: '12px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere' }}>{error}</div>}
             </>
           ) : (<>
+          <div className="rail-field" data-add-search="1" style={{ display: 'flex', alignItems: 'center', gap: 8, boxSizing: 'border-box', padding: '0 10px', marginBottom: 6, border: `1px solid ${q ? '#c9c9c9' : '#eaeaea'}`, borderRadius: 6, background: '#fff', transition: 'border-color 120ms' }}>
+            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#171717" strokeWidth="2.6" strokeLinecap="round" style={{ flex: 'none' }}><circle cx="10" cy="10" r="6.5" /><line x1="15" y1="15" x2="21" y2="21" /></svg>
+            <input
+              ref={searchRef}
+              value={q}
+              readOnly={busy}
+              onChange={(event) => { setQ(event.target.value); setIdx(0); setError(''); }}
+              onKeyDown={onSearchKey}
+              placeholder="Search"
+              aria-label="Search the library"
+              spellCheck={false}
+              style={{ flex: 1, minWidth: 0, padding: '6px 0', border: 0, background: 'transparent', font: '14px/1.5 var(--font-sans)', color: '#171717', opacity: busy ? 0.5 : 1 }}
+            />
+            {q && <button type="button" className="hov-ink" onMouseDown={(event) => event.preventDefault()} onClick={() => { setQ(''); setIdx(0); if (searchRef.current) searchRef.current.focus(); }} aria-label="Clear" style={{ flex: 'none', padding: '0 2px', border: 0, background: 'transparent', cursor: 'pointer', font: '13px/1 var(--font-sans)', color: '#c9c9c9' }}>×</button>}
+          </div>
+          {typed ? (<>
+            {results.map((result, i) => (
+              <button key={result.key} type="button" data-add-result={result.key} disabled={busy} onMouseDown={(event) => event.preventDefault()} onClick={() => pickResult(result)} onMouseMove={() => { if (idx !== i) setIdx(i); }} style={{ ...menuRow, background: i === at ? '#f2f2f2' : 'transparent' }}>
+                <Glyph item={glyphItem(result)} />
+                <span style={{ ...menuText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{result.name}</span>
+                {/^new\b/.test(result.tag)
+                  ? <span style={{ flex: 'none', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', font: '15px/1 var(--font-sans)', color: '#8f8f8f' }}>+</span>
+                  : <span style={{ flex: 'none', font: '500 10px/1 var(--font-sans)', letterSpacing: '1.2px', textTransform: 'uppercase', color: '#8f8f8f' }}>{result.tag}</span>}
+              </button>
+            ))}
+            {(searchProblem || error) && <div data-add-error="1" style={{ padding: '6px 2px 0', font: '12px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere' }}>{searchProblem || error}</div>}
+          </>) : (<>
           <button type="button" className="hov-wash" data-new="note" disabled={busy} onClick={() => make(onNewNote)} style={menuRow}>
             <Glyph item={{ type: 'md', tags: ['note'] }} />
             <span style={menuText}>Note</span>
@@ -598,6 +670,7 @@ function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickRepo, li
               <button type="button" className="hov-dim" disabled={busy} onClick={commit} style={{ padding: '7px 12px', border: 0, borderRadius: 6, background: '#171717', cursor: 'pointer', font: '500 12.5px/1 var(--font-sans)', color: '#fff' }}>Add to library</button>
             </div>
           )}
+          </>)}
           </>)}
         </Hanging>
       )}
@@ -653,8 +726,8 @@ function NextRow({ next, projectId, onGo }) {
 const barButton = (enabled) => ({ flex: 'none', width: BAR_SIZE, aspectRatio: '1', boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, border: 0, borderRadius: 10, background: 'transparent', cursor: enabled ? 'pointer' : 'default' });
 const barPicture = { display: 'block', objectFit: 'contain', pointerEvents: 'none', userSelect: 'none' };
 
-/** The three pictures at the bottom: they size with the sidebar (52–96px) and name themselves on hover. */
-function BottomBar({ trashRef, full, dragging, over, onTrashDragOver, onTrashDragEnter, onTrashDragLeave, onTrashDrop, postItTrash, onPostIt, onCopy, copied, copyLabel }) {
+/** The two pictures at the bottom: they size with the sidebar (52–96px) and name themselves on hover. */
+function BottomBar({ trashRef, full, dragging, over, onTrashDragOver, onTrashDragEnter, onTrashDragLeave, onTrashDrop, postItTrash, onPostIt }) {
   const [tip, setTip] = React.useState(null);
   const [opened, setOpened] = React.useState(null); // the trash panel's anchor (the can's rect) while it is open
   const off = () => setTip(null);
@@ -700,12 +773,6 @@ function BottomBar({ trashRef, full, dragging, over, onTrashDragOver, onTrashDra
           </button>
           {tip === 'note' && <BarTip text="Note" align="center" />}
         </div>
-        <div style={{ position: 'relative', display: 'flex' }}>
-          <button type="button" className="bar-press" data-copy-doc="1" aria-label="Copy" disabled={!onCopy} onClick={onCopy || undefined} onMouseEnter={() => setTip('copy')} onMouseLeave={off} style={barButton(!!onCopy)}>
-            <img src={copyPng} alt="" draggable={false} style={{ ...barPicture, width: '92%', height: '92%' }} />
-          </button>
-          {copied ? <BarTip text={copiedLabel(copied)} align="center" color="#171717" /> : tip === 'copy' && copyLabel ? <BarTip text={copyLabel} align="center" /> : null}
-        </div>
       </div>
     </div>
   );
@@ -717,7 +784,7 @@ export default function Rail({
   library, inRail, onSearchPick, onAddInput, onPickDisk, onNewNote, onNewChild, onPickRepo, onOpenHeld,
   onTrashRow, trashFull, postItTrash, postItDrag, trashRef,
   next, projectId, onGoNext,
-  onPostIt, onCopy, copied, copyLabel,
+  onPostIt,
 }) {
   const [peek, setPeek] = React.useState(null); // { row, rect }
   const [previews, setPreviews] = React.useState({}); // `${id}:${last_edited}` → previewLibraryItem's answer
@@ -809,11 +876,12 @@ export default function Rail({
                     onDragEnd={dragEnd}
                     onEnter={openPeek}
                     onLeave={closePeek}
+                    onRemove={row.type === 'child' ? null : (removed) => { hold(); setPeek(null); onTrashRow(removed); }}
                   />
                 ))}
               </RailSection>
             ))}
-            <AddToLibrary onAdd={onAddInput} onPickDisk={onPickDisk} onNewNote={onNewNote} onNewChild={onNewChild} onPickRepo={onPickRepo} library={library} inRail={inRail} onOpenChange={setAddOpen} shut={menus.search} />
+            <AddToLibrary onAdd={onAddInput} onPickDisk={onPickDisk} onNewNote={onNewNote} onNewChild={onNewChild} onPickRepo={onPickRepo} onSearchPick={onSearchPick} library={library} inRail={inRail} onOpenChange={setAddOpen} shut={menus.search} />
           </div>
         )}
       </div>
@@ -829,9 +897,6 @@ export default function Rail({
         onTrashDrop={trashDrop}
         postItTrash={postItTrash}
         onPostIt={onPostIt}
-        onCopy={onCopy}
-        copied={copied}
-        copyLabel={copyLabel}
       />
       {peek && !dragging && !busyMenus && createPortal(
         // The wrapper reaches back over the gap to the row, so crossing the gap still counts as hovering.

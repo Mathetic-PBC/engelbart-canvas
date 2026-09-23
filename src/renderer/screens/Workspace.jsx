@@ -39,6 +39,13 @@ const EASE = 'cubic-bezier(.25,.1,.25,1)';
 
 const basename = (value) => String(value || '').split('/').pop();
 
+function copiedLabel(copied) {
+  const parts = ['Copied'];
+  if (copied.files) parts.push(`${copied.files} file${copied.files === 1 ? '' : 's'}`);
+  if (copied.missing) parts.push(`${copied.missing} missing`);
+  return parts.join(' · ');
+}
+
 function describe(row) {
   const kind = kindOf(row);
   let summary;
@@ -61,12 +68,22 @@ function Separator({ onDown, onMove, onUp, onReset }) {
 const WS_TAB = { id: 'ws', title: 'Workspace' };
 const VIEW_SAVE_DELAY = 400;
 
-/** A workspace's remembered tabs, less notes that are gone, with their current names; `extra` is a note being opened into it. */
-function restoredTabs(view, notesById, extra) {
+/**
+ * A workspace's remembered tabs, less notes and workspaces that are gone, with their current names; `extra` is a note
+ * being opened into it. A tab of `kind: 'workspace'` is another workspace's document (a sub-workspace made here opens as
+ * one, 2026-09-23); `selfId` is the workspace itself, whose document is always the Workspace tab.
+ */
+function restoredTabs(view, notesById, extra, index, selfId) {
   const tabs = [WS_TAB];
   for (const tab of (view && view.tabs) || []) {
+    if (tabs.some((held) => held.id === tab.id)) continue;
+    if (tab.kind === 'workspace') {
+      const held = index && tab.id !== selfId ? index.get(tab.id) : null;
+      if (held) tabs.push({ id: tab.id, title: held.node.name, kind: 'workspace' });
+      continue;
+    }
     const row = notesById.get(tab.id);
-    if (row && !tabs.some((held) => held.id === tab.id)) tabs.push({ id: tab.id, title: row.name });
+    if (row) tabs.push({ id: tab.id, title: row.name });
   }
   if (extra && !tabs.some((held) => held.id === extra.id)) tabs.push(extra);
   const active = extra ? extra.id : view && tabs.some((tab) => tab.id === view.active) ? view.active : 'ws';
@@ -101,7 +118,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
   }, []);
-  const [opening] = React.useState(() => restoredTabs(topicId ? views.current[topicId] : null, notesById, initialTab || null));
+  const [opening] = React.useState(() => restoredTabs(topicId ? views.current[topicId] : null, notesById, initialTab || null, index, topicId));
   const [tabs, setTabs] = React.useState(opening.tabs);
   const [activeTab, setActiveTab] = React.useState(opening.active);
   const [docs, setDocs] = React.useState({});
@@ -135,11 +152,15 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const rightBox = React.useRef(null);
 
   const topic = topics.find((candidate) => candidate.id === topicId) || null;
-  const docKey = activeTab === 'ws' ? (topic ? `ws:${topic.id}` : null) : `note:${activeTab}`;
+  // The document in front: this workspace's (the Workspace tab), a note's, or another workspace's open here as a tab.
+  const frontTab = tabs.find((tab) => tab.id === activeTab) || null;
+  const wsTab = !!frontTab && frontTab.kind === 'workspace';
+  const docWorkspaceId = activeTab === 'ws' ? (topic ? topic.id : null) : wsTab ? activeTab : null;
+  const docKey = docWorkspaceId ? `ws:${docWorkspaceId}` : activeTab === 'ws' ? null : `note:${activeTab}`;
   const docRef = React.useMemo(() => {
     if (!docKey) return null;
-    return activeTab === 'ws' ? { kind: 'workspace', workspaceId: topic.id } : { kind: 'note', id: activeTab };
-  }, [docKey, activeTab, topic]);
+    return docWorkspaceId ? { kind: 'workspace', workspaceId: docWorkspaceId } : { kind: 'note', id: activeTab };
+  }, [docKey, docWorkspaceId, activeTab]);
 
   // Remember where we are, so the app reopens here.
   React.useEffect(() => { if (topic && onVisit) onVisit(topic.id); }, [topic && topic.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -162,7 +183,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   React.useEffect(() => {
     if (!topicId) return;
     const held = views.current[topicId] || { positions: {} };
-    const open = tabs.filter((tab) => tab.id !== 'ws').map((tab) => ({ id: tab.id, title: tab.title }));
+    const open = tabs.filter((tab) => tab.id !== 'ws').map((tab) => (tab.kind === 'workspace' ? { id: tab.id, title: tab.title, kind: 'workspace' } : { id: tab.id, title: tab.title }));
     if (held.active === activeTab && JSON.stringify(held.tabs) === JSON.stringify(open)) return;
     views.current[topicId] = { ...held, active: activeTab, tabs: open };
     saveView(topicId);
@@ -213,10 +234,11 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     if (docKey && docRef) changeDoc(docKey, docRef, text);
     const typed = mainRef.current && mainRef.current.contains(document.activeElement);
     const now = Date.now(), last = lastEdit.current;
-    if (!typed || !topic || (last.id === topic.id && now - last.at < 30000)) return;
-    lastEdit.current = { id: topic.id, at: now };
-    api.recordEdit(project.id, topic.id).catch(() => {});
-  }, [docKey, docRef, changeDoc, topic, project.id]);
+    const wrote = wsTab ? activeTab : topic && topic.id; // a sub-workspace's document open as a tab is written in there
+    if (!typed || !wrote || (last.id === wrote && now - last.at < 30000)) return;
+    lastEdit.current = { id: wrote, at: now };
+    api.recordEdit(project.id, wrote).catch(() => {});
+  }, [docKey, docRef, changeDoc, topic, project.id, wsTab, activeTab]);
 
   React.useEffect(() => () => {
     for (const key of [...pending.current.keys()]) flush(key);
@@ -272,7 +294,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     try {
       await new Promise((resolve) => { setTimeout(resolve, 0); }); // let the pending line reach `pending` before flushing it
       await Promise.all([...pending.current.keys()].map((held) => flush(held)));
-      const out = await api.askBart(project.id, { askId, ref, workspaceId: topic.id, text, turns: turns || [], choice: choice || null });
+      const out = await api.askBart(project.id, { askId, ref, workspaceId: ref.kind === 'workspace' ? ref.workspaceId : topic.id, text, turns: turns || [], choice: choice || null });
       place(out.stopped ? [] : out.lines);
     } catch (error) {
       place([`bart> **No answer.** ${errorMessage(error)}`]);
@@ -281,8 +303,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     }
   }, [docKey, docRef, topic, project.id, flush, changeDoc]);
 
-  // Copy (the sidebar's lower left): the open document with every @mentioned file's content
-  // placed where it is mentioned. It is read from disk, so every open tab is saved first.
+  // Copy (the document's lower left, plain text since 2026-09-23; it was a picture in the sidebar): the open document with
+  // every @mentioned file's content placed where it is mentioned. It is read from disk, so every open tab is saved first.
   const [copied, setCopied] = React.useState(null);
   const copiedTimer = React.useRef(null);
   React.useEffect(() => () => clearTimeout(copiedTimer.current), []);
@@ -364,7 +386,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
         out.push({ ...row, depth: 0, on: activeRowId === row.id, editing: renaming === row.id });
       }
     }
-    for (const child of here ? here.node.children || [] : []) out.push({ id: child.id, name: child.name, type: 'child', depth: 0, on: false, editing: renaming === child.id });
+    for (const child of here ? here.node.children || [] : []) out.push({ id: child.id, name: child.name, type: 'child', depth: 0, on: activeRowId === child.id, editing: renaming === child.id });
     return out;
   }, [topic, here, byId, renaming, activeRowId, tree.notes, mentioned]);
 
@@ -395,15 +417,34 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   /* --------------------------------------------------------------- opening */
 
-  const openTab = React.useCallback((id, title) => {
-    setTabs((current) => (current.some((tab) => tab.id === id) ? current : [...current, { id, title }]));
-    setActiveTab(id);
+  // A note, or another workspace's document (`kind` 'workspace'), as a tab; `behind` adds it without bringing it to the front.
+  const openTab = React.useCallback((id, title, kind, behind) => {
+    setTabs((current) => (current.some((tab) => tab.id === id) ? current : [...current, kind === 'workspace' ? { id, title, kind } : { id, title }]));
+    if (!behind) setActiveTab(id);
   }, []);
+
+  // A workspace open as a tab follows the tree: renamed, its tab is too; gone (or become the workspace we are in), its tab closes.
+  React.useEffect(() => {
+    setTabs((current) => {
+      let changed = false;
+      const next = current.flatMap((tab) => {
+        if (tab.kind !== 'workspace') return [tab];
+        const held = tab.id !== topicId ? index.get(tab.id) : null;
+        if (!held) { changed = true; return []; }
+        if (held.node.name !== tab.title) { changed = true; return [{ ...tab, title: held.node.name }]; }
+        return [tab];
+      });
+      if (!changed) return current;
+      if (!next.some((tab) => tab.id === activeTab)) setActiveTab(next.length ? next[next.length - 1].id : 'ws');
+      return next.length ? next : [WS_TAB];
+    });
+  }, [index, topicId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Any tab closes, Workspace too, while another is left (Stage design, 2026-09-23); the workspace's name in the sidebar
   // brings it back, first again (showWs).
   const closeTab = (id) => {
-    flush(id === 'ws' ? (topic ? `ws:${topic.id}` : '') : `note:${id}`);
+    const closing = tabs.find((tab) => tab.id === id);
+    flush(id === 'ws' ? (topic ? `ws:${topic.id}` : '') : closing && closing.kind === 'workspace' ? `ws:${id}` : `note:${id}`);
     setTabs((current) => {
       if (current.length < 2 && current.some((tab) => tab.id === id)) return current;
       const next = current.filter((tab) => tab.id !== id);
@@ -456,7 +497,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // Going to another workspace opens what it had open when it was left; its own name again opens its document.
   const selectTopic = (id) => {
     if (id === topicId) { showWs(); return; }
-    const restored = restoredTabs(views.current[id], notesById, null);
+    const restored = restoredTabs(views.current[id], notesById, null, index, id);
     setTopicId(id);
     setTabs(restored.tabs);
     setActiveTab(restored.active);
@@ -570,24 +611,26 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return problems;
   };
 
-  // A note made from the sidebar's + or the @ menu's Note: named after what was typed, else untitled; made here.
+  // A note made from the sidebar's + or the @ menu's Note: named after what was typed, else untitled; made here. Every new
+  // note opens as a tab (2026-09-23): in front with the caret in its title from the +, behind the document from the @
+  // menu, whose line is still being typed.
   const makeNote = async (name, openIt) => {
     const given = String(name || '').trim();
     const note = await api.createNote(project.id, { name: given || nextUntitled('Note', (tree.notes || []).map((candidate) => candidate.name)), workspaceId: topic.id });
     await linkIds([note.id]);
-    if (openIt) {
-      if (!given) wantTitleFocus.current = true;
-      openTab(note.id, note.name);
-    }
+    if (openIt && !given) wantTitleFocus.current = true;
+    openTab(note.id, note.name, null, !openIt);
     return note;
   };
 
-  // A workspace nested in this one, from the +'s Sub-Workspace: it arrives on the rail with its name ready to be typed; nothing else moves.
+  // A workspace nested in this one, from the +'s Sub-Workspace: it arrives on the rail and its document opens here as a
+  // tab, the caret in its title (2026-09-23; it used to wait on the rail in rename mode).
   const makeChild = async () => {
     const created = await api.createWorkspace(project.id, { name: nextUntitled('Workspace', (here && here.node.children ? here.node.children : []).map((candidate) => candidate.name)), parentId: topic.id });
     await reload();
     flash(created.id);
-    setRenaming(created.id);
+    wantTitleFocus.current = true;
+    openTab(created.id, created.name, 'workspace');
   };
 
   // A repository picked from the +'s GitHub view: the library's row for it comes in, else it is added by its address
@@ -651,7 +694,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   /* ----------------------------------------------------------------- title */
 
   const currentTab = tabs.find((tab) => tab.id === activeTab);
-  const docTitle = activeTab === 'ws' ? (topic ? topic.name : '') : (currentTab ? currentTab.title : '');
+  const docTitle = activeTab === 'ws' ? (topic ? topic.name : '') : wsTab && index.has(activeTab) ? index.get(activeTab).node.name : (currentTab ? currentTab.title : '');
   const shownTitle = isUntitled(docTitle) ? '' : docTitle; // an untitled name is the field's hint, not its value
   React.useEffect(() => { setTitleDraft(shownTitle); }, [shownTitle, docKey]);
 
@@ -662,8 +705,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       return;
     }
     try {
-      if (activeTab === 'ws') {
-        if (topic) await api.renameWorkspace(project.id, topic.id, next);
+      if (activeTab === 'ws' || wsTab) {
+        if (docWorkspaceId) await api.renameWorkspace(project.id, docWorkspaceId, next);
       } else {
         const renamed = await api.renameNote(project.id, activeTab, next);
         setTabs((current) => current.map((tab) => (tab.id === activeTab ? { ...tab, title: renamed.name } : tab)));
@@ -847,9 +890,6 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           projectId={project.id}
           onGoNext={goTo}
           onPostIt={active ? () => api.postItsCreate(project.id).catch(onError) : null}
-          onCopy={docRef ? copyDoc : null}
-          copied={copied}
-          copyLabel={docRef ? (activeTab === 'ws' ? 'Copy current workspace' : 'Copy current note') : ''}
         />
 
         <Separator onDown={railDown} onMove={railMove} onUp={pointerUp} onReset={() => setRailWidth(300)} />
@@ -889,6 +929,18 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
                 </div>
               ) : <span style={{ font: '13px/1.6 var(--font-sans)', color: '#8f8f8f' }}>Opening…</span>}
             </div>
+          )}
+          {docKey && text !== undefined && (
+            <button
+              type="button"
+              className="hov-ink"
+              data-copy-doc="1"
+              onClick={copyDoc}
+              title={docWorkspaceId ? 'Copy current workspace' : 'Copy current note'}
+              style={{ position: 'absolute', left: 'calc(clamp(12px, 4%, 40px) - 4px)', bottom: 12, zIndex: 3, padding: '2px 4px', border: 0, borderRadius: 4, background: '#fff', cursor: 'pointer', font: '400 13px/1.4 var(--font-sans)', color: copied ? '#171717' : '#8f8f8f', transition: 'color 120ms' }}
+            >
+              {copied ? copiedLabel(copied) : 'Copy'}
+            </button>
           )}
         </main>
 

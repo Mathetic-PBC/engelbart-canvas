@@ -191,6 +191,10 @@ test('views: each workspace keeps its tabs, the document in front and its scroll
   assert.deepEqual(projects.readViews(ctx, 'nope'), {});
   assert.throws(() => projects.writeView(ctx, project.id, 'nope', {}), /workspace id/);
   assert.throws(() => projects.writeView(ctx, project.id, ws, null), /invalid/);
+  // Another workspace's document open as a tab keeps its kind; any other kind is dropped (2026-09-23).
+  const withWs = projects.writeView(ctx, project.id, ws, { active: ws2, tabs: [{ id: note, title: 'n', kind: 'note?' }, { id: ws2, title: 'Child', kind: 'workspace' }], positions: {} });
+  assert.deepEqual(withWs.tabs, [{ id: note, title: 'n' }, { id: ws2, title: 'Child', kind: 'workspace' }]);
+  assert.equal(withWs.active, ws2);
 });
 
 test('where to next: state.json keeps the last three workspaces written in and the agents, beside the views; stale rows are not read (2026-09-22)', async () => {
@@ -204,7 +208,7 @@ test('where to next: state.json keeps the last three workspaces written in and t
 
   for (const workspace of [a, b, c, a, d]) projects.recordEdit(ctx, project.id, workspace.id);
   let nav = projects.readNav(ctx);
-  assert.deepEqual(nav.recent.map((entry) => entry.name), ['Delta', 'Alpha', 'Gamma'], 'newest first, once each, three at most');
+  assert.deepEqual(nav.recent.map((entry) => entry.name), ['Delta', 'Alpha', 'Gamma', 'Beta'], 'newest first, once each; every one written in the last thirty minutes');
   assert.deepEqual([nav.recent[2].path, nav.recent[2].projectName], ['Beta/Gamma', 'Next place']);
   assert.ok(nav.recent.every((entry) => !Number.isNaN(Date.parse(entry.at))));
   assert.throws(() => projects.recordEdit(ctx, project.id, '99999999-9999-4999-8999-999999999999'), /Unknown workspace/);
@@ -227,10 +231,10 @@ test('where to next: state.json keeps the last three workspaces written in and t
   const state = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.deepEqual([state.projectId, state.workspaceId], [project.id, a.id], 'where the app reopens is kept');
   assert.ok(state.views[project.id][a.id], 'and every view');
-  assert.equal(state.recent.length, 3);
+  assert.equal(state.recent.length, 4);
   projects.writeView(ctx, project.id, b.id, { active: 'ws', tabs: [], positions: {} });
   projects.writeLastOpen(ctx, { projectId: project.id, workspaceId: b.id });
-  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).recent.length, 3, 'saving a view or where the app reopens keeps the recent ones');
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).recent.length, 4, 'saving a view or where the app reopens keeps the recent ones');
 
   // A running row written by an earlier run of the app (its id not live here), a waiting one whose workspace is gone, junk.
   fs.writeFileSync(file, JSON.stringify({ ...state, agents: [
@@ -242,7 +246,26 @@ test('where to next: state.json keeps the last three workspaces written in and t
   ], recent: [...state.recent, { projectId: project.id, workspaceId: 'nope', at: 'x' }] }));
   nav = projects.readNav(ctx);
   assert.deepEqual(nav.agents.map((agent) => agent.id), ['kept']);
-  assert.equal(nav.recent.length, 3);
+  assert.equal(nav.recent.length, 4);
+
+  // Older than thirty minutes: only the newest three stay, however many there were (2026-09-23).
+  const old = (minutes) => new Date(Date.now() - minutes * 60000).toISOString();
+  fs.writeFileSync(file, JSON.stringify({ ...state, agents: [], recent: [
+    { projectId: project.id, workspaceId: d.id, at: old(5) },
+    { projectId: project.id, workspaceId: a.id, at: old(40) },
+    { projectId: project.id, workspaceId: c.id, at: old(50) },
+    { projectId: project.id, workspaceId: b.id, at: old(60) },
+  ] }));
+  assert.deepEqual(projects.readNav(ctx).recent.map((entry) => entry.name), ['Delta', 'Alpha', 'Gamma'], 'the last three when fewer than three are fresh');
+  fs.writeFileSync(file, JSON.stringify({ ...state, agents: [], recent: [
+    { projectId: project.id, workspaceId: d.id, at: old(1) },
+    { projectId: project.id, workspaceId: a.id, at: old(2) },
+    { projectId: project.id, workspaceId: c.id, at: old(3) },
+    { projectId: project.id, workspaceId: b.id, at: old(29) },
+  ] }));
+  assert.equal(projects.readNav(ctx).recent.length, 4, 'all four when all four are fresh');
+  projects.recordEdit(ctx, project.id, a.id);
+  assert.deepEqual(projects.readNav(ctx).recent.map((entry) => entry.name), ['Alpha', 'Delta', 'Gamma', 'Beta']);
 });
 
 test('read-text-file: project-relative, ~/ and absolute paths inside the home directory only', async () => {

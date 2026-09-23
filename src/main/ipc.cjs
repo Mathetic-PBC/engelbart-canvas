@@ -153,9 +153,14 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
 
   handle('set-project-directory', withCtx((ctx, id, directory) => projects.setProjectDirectory(ctx, str(id, 'project id', 64), str(directory, 'directory', 4096))));
 
-  handle('create-workspace', withCtx((ctx, pid, input) => {
+  // Making a workspace counts as writing in it (⌘J's recent ones), typed in or not (2026-09-23).
+  handle('create-workspace', withCtx(async (ctx, pid, input) => {
     const value = input && typeof input === 'object' ? input : {};
-    return projects.createWorkspace(ctx, str(pid, 'project id', 64), { name: optStr(value.name, 'name'), parentId: optStr(value.parentId, 'parent id', 64) });
+    const projectId = str(pid, 'project id', 64);
+    const created = await projects.createWorkspace(ctx, projectId, { name: optStr(value.name, 'name'), parentId: optStr(value.parentId, 'parent id', 64) });
+    projects.recordEdit(ctx, projectId, created.id);
+    navChanged();
+    return created;
   }));
   handle('rename-workspace', withCtx((ctx, pid, wid, name) => projects.renameWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(name, 'name'))));
   handle('set-workspace-status', withCtx((ctx, pid, wid, status) => projects.setWorkspaceStatus(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(status, 'status', 32))));
