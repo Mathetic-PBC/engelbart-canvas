@@ -55,7 +55,7 @@ test('header status follows saved lifecycle state without inventing live or fail
   assert.deepEqual(repoToolbarStatus(run('failed', { build_log: [{ data: { phase: 'usable' } }] })), { label: 'Needs attention', kind: 'failed' });
 });
 
-test('Repo header groups GitHub identity and runtime status with Build on the right outside the scrolling README', () => {
+test('Repo header groups runtime status with Build on the right outside the scrolling README', () => {
   for (const value of [undefined, run('starting'), run('ready'), run('ready', { preview_url: null }), run('failed'), run('stopped')]) {
     const html = render(value);
     const actions = toolbar(html);
@@ -64,7 +64,7 @@ test('Repo header groups GitHub identity and runtime status with Build on the ri
     assert.ok(actions.includes(status.label));
     assert.match(actions, /<a class="repo-toolbar-identity repo-repository-link" href="https:\/\/github.com\/owner\/app"[^>]*><svg[^>]+aria-hidden="true"/);
     assert.match(actions, /class="repo-toolbar-name">owner\/app<\/span>/);
-    assert.match(actions, /class="repo-toolbar-repository">[\s\S]*class="repo-runtime">[\s\S]*repo-toolbar-status[\s\S]*<\/div><div class="repo-toolbar-actions">/);
+    assert.match(actions, /class="repo-toolbar-actions"><button[^>]+class="repo-toolbar-build"[^>]*>Build<\/button><span class="repo-runtime">[\s\S]*repo-toolbar-status/);
     assert.match(actions, /class="repo-toolbar-repository">[\s\S]*<\/div><div class="repo-toolbar-actions"><button[^>]+class="repo-toolbar-build"/);
     assert.doesNotMatch(actions, /repo-toolbar-breadcrumb|repo-toolbar-separator/);
     assert.doesNotMatch(actions, /<select|>Working…<|repo-button-primary|>Open live<|>Retry</);
@@ -192,6 +192,8 @@ test('Build surface separates repo navigation in the header from lifecycle contr
   assert.match(header, /repo-toolbar-identity[\s\S]*<svg/);
   assert.doesNotMatch(header, /repo-toolbar-separator|repo-details-section|>Build</);
   assert.match(header, /repo-details-repository[\s\S]*repo-toolbar-name[\s\S]*repo-runtime[\s\S]*repo-toolbar-status-live/);
+  assert.doesNotMatch(header, /repo-toolbar-open|↗/);
+  assert.match(toolbar(ready), /class="repo-toolbar-open" aria-hidden="true">↗<\/span>/);
   assert.match(header, /<a[^>]+href="https:\/\/github.com\/owner\/app"[^>]+aria-label="Open owner\/app on GitHub"/);
   assert.doesNotMatch(header, /View on GitHub/);
   assert.match(header, /aria-label="Close build details" title="Close">×<\/button>/);

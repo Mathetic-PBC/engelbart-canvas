@@ -168,13 +168,13 @@ export function Repository({ repo, repositories = [], onSelect, item, busy, act,
   const statusContent = <>
     {statusIcon}
     {status.label}
-    {status.kind === 'live' && <span className="repo-toolbar-open" aria-hidden="true">↗</span>}
   </>;
-  const runtimeStatus = <span className="repo-runtime">
+  const runtimeStatus = (showArrow = false) => <span className="repo-runtime">
     <span className="repo-runtime-separator" aria-hidden="true">/</span>
     {status.kind === 'live'
       ? <button type="button" className="repo-toolbar-status repo-toolbar-status-live" aria-label={`Open live preview for ${repo.name}`}
-        disabled={working} aria-busy={working} onClick={openPreview}>{statusContent}</button>
+        disabled={working} aria-busy={working} onClick={openPreview}>{statusContent}
+        {showArrow && <span className="repo-toolbar-open" aria-hidden="true">↗</span>}</button>
       : <span className={`repo-toolbar-status repo-toolbar-status-${status.kind}`} role="status">{statusContent}</span>}
   </span>;
   return <div className="repo-selected" onKeyDown={(event) => {
@@ -185,11 +185,11 @@ export function Repository({ repo, repositories = [], onSelect, item, busy, act,
       <div className="repo-toolbar-repository">
         {identity}
         {canSwitch && <RepoSwitcher repo={repo} repositories={repositories} onSelect={onSelect} />}
-        {runtimeStatus}
       </div>
       <div className="repo-toolbar-actions">
         <button ref={detailsButton} type="button" className="repo-toolbar-build" aria-haspopup="dialog" aria-expanded={detailsOpen} aria-controls={detailsId}
           onClick={() => detailsOpen ? closeDetails() : showDetails()}>Build</button>
+        {runtimeStatus(true)}
       </div>
     </header>
     {error && !detailsOpen && <p role="alert" className="repo-error">{error}</p>}
@@ -205,7 +205,7 @@ export function Repository({ repo, repositories = [], onSelect, item, busy, act,
           if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) closeDetails();
         }}>
         <header className="repo-details-heading">
-          <div className="repo-details-repository">{identity}{runtimeStatus}</div>
+          <div className="repo-details-repository">{identity}{runtimeStatus()}</div>
           <div className="repo-details-actions">
             <button ref={closeButton} type="button" className="repo-details-action repo-details-close" onClick={closeDetails} aria-label="Close build details" title="Close">×</button>
           </div>
