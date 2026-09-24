@@ -1165,6 +1165,15 @@ export default class DocEditor extends React.Component {
             />
           </div>
         </div>
+        {/* The footer (the document's Copy, 2026-09-23) sits under the text's left edge, not the pane's: this column
+            repeats the scroller's padding and 65ch measure, so it stays with the note when panes split. */}
+        {!compact && this.props.footer && (
+          <div style={{ position: 'absolute', left: 0, right: 0, bottom: 14, zIndex: 3, paddingInline: 'clamp(12px, 4%, 40px)', pointerEvents: 'none' }}>
+            <div style={{ maxWidth: '65ch', marginInline: 'auto', paddingInline: 'clamp(0px, 3%, 24px)', fontSize: 17, display: 'flex' }}>
+              <span style={{ pointerEvents: 'auto' }}>{this.props.footer}</span>
+            </div>
+          </div>
+        )}
         {s.mention && s.mention.anchor && <MentionMenu items={this.mentionList()} index={s.mentionIdx} anchor={s.mention.anchor} onPick={(r) => this.pickMention(r)} onHover={(i) => this.setState({ mentionIdx: i })} />}
         {s.pop && <Popover item={s.pop.res} anchor={s.pop.anchor} />}
         {this.pickerView()}

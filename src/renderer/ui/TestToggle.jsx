@@ -12,7 +12,7 @@ export default function TestToggle({ testMode, onToggle, onReset, onReveal, busy
     return () => window.removeEventListener('mousedown', close);
   }, [open]);
   return (
-    <div style={{ position: 'fixed', top: 14, right: 16, zIndex: 200, display: 'flex', alignItems: 'center', gap: 8 }}>
+    <div data-no-drag="1" style={{ position: 'fixed', top: 18, right: 16, zIndex: 200, display: 'flex', alignItems: 'center', gap: 8 }}>
       {testMode && (
         <div style={{ position: 'relative' }} onMouseDown={(event) => event.stopPropagation()}>
           <button

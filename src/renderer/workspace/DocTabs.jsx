@@ -103,6 +103,7 @@ export default function DocTabs({ tabs, activeTab, onSelect, onClose, onMove }) 
         key={tab.id}
         ref={(element) => { if (element) els.current.set(tab.id, element); else els.current.delete(tab.id); }}
         className="hov-ink"
+        data-no-drag="1"
         onClick={() => onSelect(tab.id)}
         onPointerDown={(event) => onPointerDown(event, tab)}
         onPointerMove={onPointerMove}

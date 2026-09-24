@@ -108,17 +108,13 @@ function WorkspaceHeader({ topics, topic, all, onOpenDoc, onSelectTopic, onCycle
   const items = found || topics;
   const lit = idx >= 0 && idx < items.length ? items[idx] : null;
   const shut = React.useCallback(() => { clearTimeout(timer.current); setHover(false); setQ(''); setIdx(-1); if (fieldRef.current && document.activeElement === fieldRef.current) fieldRef.current.blur(); }, []);
-  // A hover opens it; a click opens it too and gives the search the keyboard.
+  // A hover opens it. A click on the name does not (2026-09-23): it closes the menu and opens this workspace's document.
   const open = () => { clearTimeout(timer.current); if (!editing) setHover(true); };
   const close = () => {
     clearTimeout(timer.current);
     timer.current = setTimeout(() => { if (!(fieldRef.current && document.activeElement === fieldRef.current) && !fieldRef.current?.value) shut(); }, MENU_CLOSE);
   };
-  const focusSearch = () => {
-    if (editing) return;
-    open();
-    setTimeout(() => { if (fieldRef.current) fieldRef.current.focus({ preventScroll: true }); }, 0);
-  };
+  const openOwn = () => { if (editing || !topic) return; shut(); onOpenDoc(); };
   // A press anywhere else closes it, typed or not.
   React.useEffect(() => {
     if (!hover) return undefined;
@@ -150,10 +146,10 @@ function WorkspaceHeader({ topics, topic, all, onOpenDoc, onSelectTopic, onCycle
         <div
           role="button"
           tabIndex={-1}
-          aria-label="Switch workspace"
+          aria-label="Open workspace"
           aria-expanded={hover}
           data-switch-workspace="1"
-          onClick={focusSearch}
+          onClick={openOwn}
           onDoubleClick={() => { if (!topic) return; shut(); setDraft(untitled ? '' : topic.name); setEditing(true); }}
           style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer', color: '#171717' }}
         >
@@ -596,7 +592,9 @@ function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickRepo, on
   const menuText = { flex: 1, minWidth: 0, font: '14px/1.5 var(--font-sans)', color: '#171717' };
   return (
     <div data-rail-add="1" style={{ flex: 'none', position: 'relative' }} onMouseEnter={() => { if (!settled.current) show(); }} onMouseLeave={() => { settled.current = false; leave(); }}>
-      <button ref={rowRef} type="button" className="hov-wash" onClick={() => (open ? hide() : show())} aria-label="Add context" aria-expanded={open} style={{ display: 'flex', alignItems: 'center', width: '100%', boxSizing: 'border-box', padding: '6px 10px 8px', border: 0, borderRadius: 6, background: open ? '#f2f2f2' : 'transparent', color: open ? '#171717' : '#8f8f8f', textAlign: 'left', cursor: 'pointer', transition: 'background 120ms, color 120ms' }}>
+      {/* Hover opens the menu, so a click on the row changes nothing (2026-09-23): it neither closes the menu nor takes the
+          keyboard from its search. It still opens a closed one (keyboard, or the still pointer just after an add). */}
+      <button ref={rowRef} type="button" className="hov-wash" onMouseDown={(event) => { if (open) event.preventDefault(); }} onClick={show} aria-label="Add context" aria-expanded={open} style={{ display: 'flex', alignItems: 'center', width: '100%', boxSizing: 'border-box', padding: '6px 10px 8px', border: 0, borderRadius: 6, background: open ? '#f2f2f2' : 'transparent', color: open ? '#171717' : '#8f8f8f', textAlign: 'left', cursor: 'pointer', transition: 'background 120ms, color 120ms' }}>
         {CIRCLE_PLUS}
         <span style={{ marginLeft: 9, font: '14px/1.5 var(--font-sans)' }}>Add context</span>
       </button>
@@ -692,46 +690,83 @@ function BarTip({ text, align, color = '#4d4d4d' }) {
 
 // Above the bottom pictures (2026-09-22): the workspace to go to next — the one where an agent has finished and waits
 // for you (the icon wears a blue dot), else the one written in before (model/nav.js). A click on it, or ⌘J, goes there
-// with its tabs; its time and the key show on hover.
-function NextRow({ next, projectId, onGo }) {
-  const [tip, setTip] = React.useState(false);
+// with its tabs. Hovering it (2026-09-23) lists every workspace kept for going back to (model/nav.js placesToGo), each
+// with its time, ⌘J's one marked; a click on one opens it in place of this one.
+function NextRow({ next, places = [], projectId, onGo }) {
+  const [open, setOpen] = React.useState(false);
+  const timer = React.useRef(null);
+  React.useEffect(() => () => clearTimeout(timer.current), []);
   if (!next) return null;
-  const when = ago(next.at);
-  const words = [next.why === 'agent' ? `Bart answered ${when === 'now' ? 'just now' : `${when} ago`}` : `Edited ${when === 'now' ? 'just now' : `${when} ago`}`];
-  if (next.waiting > 1) words.push(`${next.waiting} waiting`);
-  words.push('⌘J');
-  const elsewhere = next.projectId !== projectId;
+  const enter = () => { clearTimeout(timer.current); setOpen(true); };
+  const leave = () => { clearTimeout(timer.current); timer.current = setTimeout(() => setOpen(false), MENU_CLOSE); };
+  const go = (place) => { clearTimeout(timer.current); setOpen(false); onGo(place); };
+  const when = (at) => { const since = ago(at); return since === 'now' ? 'just now' : since ? `${since} ago` : ''; };
+  const list = places.length ? places : [{ ...next, next: true }];
   return (
-    <div style={{ flex: 'none', position: 'relative', padding: '0 8px' }}>
+    <div data-next-row="1" onMouseEnter={enter} onMouseLeave={leave} style={{ flex: 'none', position: 'relative', padding: '0 8px' }}>
       <button
         type="button"
         className="hov-wash2"
         data-next-workspace={next.workspaceId}
         data-next-why={next.why}
-        onClick={() => { setTip(false); onGo(next); }}
-        onMouseEnter={() => setTip(true)}
-        onMouseLeave={() => setTip(false)}
-        style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', padding: '8px 10px', border: 0, borderRadius: 6, background: 'transparent', textAlign: 'left', cursor: 'pointer', transition: 'background 120ms' }}
+        onClick={() => go(next)}
+        style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', padding: '8px 10px', border: 0, borderRadius: 6, background: open ? '#f2f2f2' : 'transparent', textAlign: 'left', cursor: 'pointer', transition: 'background 120ms' }}
       >
-        <span style={{ position: 'relative', flex: 'none', display: 'flex' }}>
-          <Glyph item={{ type: 'workspace' }} />
-          {next.why === 'agent' && <span data-needs-you="1" style={{ position: 'absolute', top: -2, right: -3, width: 7, height: 7, borderRadius: '50%', background: '#0070f3', boxShadow: '0 0 0 1.5px #fafafa' }} />}
-        </span>
-        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '13.5px/1.5 var(--font-sans)', color: isUntitled(next.name) ? '#8f8f8f' : '#171717' }}>
-          {elsewhere && <span style={{ color: '#8f8f8f' }}>{next.projectName} / </span>}{next.name}
-        </span>
+        <PlaceMark why={next.why} ground="#fafafa" />
+        <PlaceName place={next} projectId={projectId} size={13.5} />
         <span aria-hidden="true" style={{ flex: 'none', font: '14px/1 var(--font-sans)', color: '#4d4d4d' }}>→</span>
       </button>
-      {tip && <BarTip text={words.join(' · ')} align="center" />}
+      {open && (
+        // The wrapper reaches down over the gap to the row, so crossing it still counts as hovering.
+        <div style={{ position: 'absolute', left: 8, right: 8, bottom: '100%', zIndex: 50, paddingBottom: 4 }}>
+          <div role="menu" data-overlay="1" data-next-list="1" style={{ maxHeight: 'min(360px, calc(100vh - 200px))', overflowY: 'auto', boxSizing: 'border-box', padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, display: 'flex', flexDirection: 'column', gap: 2, animation: `rise 120ms ${EASE}` }}>
+            {list.map((place) => (
+              <button
+                key={`${place.projectId}/${place.workspaceId}`}
+                type="button"
+                role="menuitem"
+                className="hov-wash"
+                data-next-place={place.workspaceId}
+                onClick={() => go(place)}
+                style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', padding: '7px 8px', border: 0, borderRadius: 6, background: 'transparent', textAlign: 'left', cursor: 'pointer', transition: 'background 120ms' }}
+              >
+                <PlaceMark why={place.why} ground="#fff" />
+                <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+                  <PlaceName place={place} projectId={projectId} size={13.5} />
+                  <span style={{ font: '11.5px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{place.why === 'agent' ? `Bart answered ${when(place.at)}` : `Edited ${when(place.at)}`}</span>
+                </span>
+                {place.next && <span style={{ flex: 'none', font: '11.5px/1 var(--font-sans)', color: '#8f8f8f' }}>⌘J</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+function PlaceMark({ why, ground }) {
+  return (
+    <span style={{ position: 'relative', flex: 'none', display: 'flex' }}>
+      <Glyph item={{ type: 'workspace' }} />
+      {why === 'agent' && <span data-needs-you="1" style={{ position: 'absolute', top: -2, right: -3, width: 7, height: 7, borderRadius: '50%', background: '#0070f3', boxShadow: `0 0 0 1.5px ${ground}` }} />}
+    </span>
+  );
+}
+
+function PlaceName({ place, projectId, size }) {
+  return (
+    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: `${size}px/1.5 var(--font-sans)`, color: isUntitled(place.name) ? '#8f8f8f' : '#171717' }}>
+      {place.projectId !== projectId && <span style={{ color: '#8f8f8f' }}>{place.projectName} / </span>}{place.name}
+    </span>
   );
 }
 
 const barButton = (enabled) => ({ flex: 'none', width: BAR_SIZE, aspectRatio: '1', boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, border: 0, borderRadius: 10, background: 'transparent', cursor: enabled ? 'pointer' : 'default' });
 const barPicture = { display: 'block', objectFit: 'contain', pointerEvents: 'none', userSelect: 'none' };
 
-/** The two pictures at the bottom, the trash at the far left and the sticky note at the far right (2026-09-23): they size
- *  with the sidebar (52–96px) and name themselves on hover. */
+/** The two pictures at the bottom left, the trash and the sticky note beside it (2026-09-23): they size with the sidebar
+ *  (52–96px) and name themselves on hover. */
 function BottomBar({ trashRef, full, dragging, over, onTrashDragOver, onTrashDragEnter, onTrashDragLeave, onTrashDrop, postItTrash, onPostIt }) {
   const [tip, setTip] = React.useState(null);
   const [opened, setOpened] = React.useState(null); // the trash panel's anchor (the can's rect) while it is open
@@ -745,7 +780,7 @@ function BottomBar({ trashRef, full, dragging, over, onTrashDragOver, onTrashDra
   };
   return (
     <div data-rail-bar="1" style={{ flex: 'none', containerType: 'inline-size', padding: '6px 16px 14px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: 6 }}>
         <div style={{ position: 'relative', display: 'flex' }}>
           <div
             ref={trashRef}
@@ -764,8 +799,8 @@ function BottomBar({ trashRef, full, dragging, over, onTrashDragOver, onTrashDra
             onDragLeave={onTrashDragLeave}
             onDrop={onTrashDrop}
             // Something held over it (a row, or a post-it crumpling into it): the can grows, darkens its ground and shows
-            // itself full, so letting go visibly lands (2026-09-22).
-            style={{ ...barButton(!!postItTrash), transition: 'transform 120ms, opacity 120ms, background 120ms, box-shadow 120ms', transform: over ? 'scale(1.22)' : 'none', opacity: dragging || over || opened ? 1 : 0.7, background: over ? '#e8e8e8' : opened ? '#f2f2f2' : 'transparent', boxShadow: over ? 'inset 0 0 0 2px #171717' : 'none' }}
+            // itself full, so letting go visibly lands (2026-09-22). No ring around it, drawn or focus (2026-09-23).
+            style={{ ...barButton(!!postItTrash), outline: 'none', transition: 'transform 120ms, opacity 120ms, background 120ms', transform: over ? 'scale(1.22)' : 'none', opacity: dragging || over || opened ? 1 : 0.7, background: over ? '#e8e8e8' : opened ? '#f2f2f2' : 'transparent' }}
           >
             <img src={full || over ? trashFullPng : trashPng} alt="" draggable={false} style={{ ...barPicture, width: '90%', height: '90%' }} />
           </div>
@@ -776,7 +811,7 @@ function BottomBar({ trashRef, full, dragging, over, onTrashDragOver, onTrashDra
           <button type="button" className="bar-press" data-add-post-it="1" aria-label="Note" disabled={!onPostIt} onClick={onPostIt || undefined} onMouseEnter={() => setTip('note')} onMouseLeave={off} style={barButton(!!onPostIt)}>
             <img src={notePng} alt="" draggable={false} style={{ ...barPicture, width: '100%', height: '100%', transform: 'translateY(10%)' }} />
           </button>
-          {tip === 'note' && <BarTip text="Note" align="center" />}
+          {tip === 'note' && <BarTip text="Note" align="flex-start" />}
         </div>
       </div>
     </div>
@@ -788,7 +823,7 @@ export default function Rail({
   rows, flashId, onRowClick, onRowRenameStart, onRowRename, onRowRenameEnd,
   library, inRail, onSearchPick, onAddInput, onPickDisk, onNewNote, onNewChild, onPickRepo, onOpenHeld,
   onTrashRow, trashFull, postItTrash, postItDrag, trashRef,
-  next, projectId, onGoNext,
+  next, places, projectId, onGoNext,
   onPostIt,
 }) {
   const [peek, setPeek] = React.useState(null); // { row, rect }
@@ -890,7 +925,7 @@ export default function Rail({
           </div>
         )}
       </div>
-      <NextRow next={next} projectId={projectId} onGo={onGoNext} />
+      <NextRow next={next} places={places} projectId={projectId} onGo={onGoNext} />
       <BottomBar
         trashRef={trashRef}
         full={trashFull}

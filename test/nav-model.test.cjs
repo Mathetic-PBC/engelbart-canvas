@@ -60,3 +60,18 @@ test('ago, and the workspace switcher\'s search over every workspace of the tree
   assert.deepEqual(findWorkspaces(all, 'user attention').map((w) => w.id), ['3'], 'every word, in any order');
   assert.deepEqual(findWorkspaces(all, '  '), []);
 });
+
+test('places to go: waiting agents first (longest waiting, once each), then the recent ones newest first; never here; ⌘J\'s one marked', async () => {
+  const { placesToGo, nextPlace } = await load();
+  const recent = [place('a', '2026-09-22T12:00:00.000Z'), place('b', '2026-09-22T11:00:00.000Z'), place('c', '2026-09-22T10:00:00.000Z')];
+  const agents = [agent('1', 'd', 'waiting', '2026-09-22T12:10:00.000Z'), agent('2', 'c', 'waiting', '2026-09-22T12:02:00.000Z'), agent('3', 'e', 'running', null), agent('4', 'd', 'waiting', '2026-09-22T12:20:00.000Z')];
+  const list = placesToGo({ here: here('a'), recent, agents });
+  assert.deepEqual(list.map((entry) => entry.workspaceId), ['c', 'd', 'b']);
+  assert.deepEqual(list.map((entry) => entry.why), ['agent', 'agent', 'recent']);
+  assert.deepEqual(list.filter((entry) => entry.next).map((entry) => entry.workspaceId), [nextPlace({ here: here('a'), recent, agents }).workspaceId]);
+  const quiet = placesToGo({ here: here('b'), recent });
+  assert.deepEqual(quiet.map((entry) => entry.workspaceId), ['a', 'c'], 'newest first, not in ⌘J\'s turn order');
+  assert.deepEqual(quiet.filter((entry) => entry.next).map((entry) => entry.workspaceId), ['c'], '⌘J from b goes on to c');
+  assert.deepEqual(placesToGo({ here: here('a'), recent: [place('a', '2026-09-22T12:00:00.000Z')] }), [], 'only here: nothing');
+  assert.equal(placesToGo({ here: here('a', Q), recent }).length, 3, 'another project\'s a is another place');
+});

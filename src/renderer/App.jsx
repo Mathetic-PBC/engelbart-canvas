@@ -1,6 +1,7 @@
 import React from 'react';
 import { api, errorMessage } from './api.js';
 import TestToggle from './ui/TestToggle.jsx';
+import WindowEdges from './ui/WindowEdges.jsx';
 import Home from './screens/Home.jsx';
 import CreateProject from './screens/CreateProject.jsx';
 import Workspace from './screens/Workspace.jsx';
@@ -258,6 +259,7 @@ export default function App() {
           <button type="button" onClick={() => setError('')} style={{ padding: '0 2px', border: 0, background: 'transparent', cursor: 'pointer', color: '#c9c9c9', font: '14px/1 var(--font-sans)' }}>×</button>
         </div>
       )}
+      <WindowEdges />
       <TestToggle
         testMode={config.testMode}
         busy={busy}

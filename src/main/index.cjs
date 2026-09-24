@@ -35,6 +35,7 @@ const { createBrowserAuth, CLIENT_ID: GITHUB_CLIENT_ID } = require('./github/bro
 const { createRepoIdentifier, createRemoteFileLister } = require('./store/page-meta.cjs');
 const { checkWebPdfs, readPdfResponse } = require('./store/web-pdfs.cjs');
 const { createPostItViews } = require('./post-its/views.cjs');
+const { EDGES: WINDOW_EDGES, resizedBounds } = require('./window-edges.cjs');
 
 const DIST = path.join(__dirname, '../../dist');
 const FIXTURES = path.join(__dirname, '../../fixtures');
@@ -184,6 +185,22 @@ function registerTerminalIpc() {
     return true;
   }));
   ipcMain.handle('terminal:close', trustedHandler((id) => closeSession(id)));
+  // The renderer's resize strips: a press names the edge, every move after it re-reads the cursor (2026-09-23).
+  let edgeResize = null; // { edge, start: bounds, from: cursor point }
+  ipcMain.on('window:edge-resize', (event, phase, edge) => {
+    try {
+      assertTrustedRenderer(event, APP_URL);
+      if (!mainWindow || mainWindow.isFullScreen()) return;
+      const cursor = require('electron').screen.getCursorScreenPoint();
+      if (phase === 'start' && WINDOW_EDGES.has(edge)) edgeResize = { edge, start: mainWindow.getBounds(), from: cursor };
+      else if (phase === 'move' && edgeResize) {
+        const [width, height] = mainWindow.getMinimumSize();
+        mainWindow.setBounds(resizedBounds(edgeResize.start, edgeResize.edge, cursor.x - edgeResize.from.x, cursor.y - edgeResize.from.y, { width, height }));
+      } else if (phase === 'end') edgeResize = null;
+    } catch {
+      // A send-only gesture is deliberately ignored when malformed.
+    }
+  });
   ipcMain.on('terminal:acknowledge', (event, id, sequence) => {
     try {
       assertTrustedRenderer(event, APP_URL);
@@ -289,6 +306,8 @@ function createWindow() {
     backgroundColor: '#ffffff',
     title: 'Engelbart',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    // Centred on the 54px header; the header leaves them room until the window goes full screen (2026-09-23).
+    trafficLightPosition: { x: 18, y: 20 },
     webPreferences: {
       preload: PRELOAD_FILE,
       contextIsolation: true,
@@ -312,6 +331,11 @@ function createWindow() {
   mainWindow.webContents.on('did-start-loading', () => { rendererLifecycle.detach(); browserViews.closeAll(); void postItViews.activate(null).catch(console.error); });
   mainWindow.webContents.on('render-process-gone', () => { rendererLifecycle.detach(); void postItViews.activate(null).catch(console.error); });
   mainWindow.on('resize', () => postItViews.layout());
+  // The header clears the traffic lights only while they are there (preload marks <html data-fullscreen>).
+  const sendFullScreen = () => { if (mainWindow) mainWindow.webContents.send('window:fullscreen', mainWindow.isFullScreen()); };
+  mainWindow.on('enter-full-screen', sendFullScreen);
+  mainWindow.on('leave-full-screen', sendFullScreen);
+  mainWindow.webContents.on('did-finish-load', sendFullScreen);
   mainWindow.on('blur', () => postItViews.cancelGesture());
   mainWindow.on('close', (event) => {
     if (shouldHideWindowOnClose(process.platform, quitReady)) {

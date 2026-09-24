@@ -1,4 +1,5 @@
 import React from 'react';
+import { EDGE as WINDOW_EDGE } from '../ui/WindowEdges.jsx';
 import { isGithubPage } from '../../shared/github.cjs';
 import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
@@ -652,7 +653,9 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     const place = () => {
       const r = slot.getBoundingClientRect();
       if (r.width < 1 || r.height < 1) { quiet(api.browserHide()); return; }
-      quiet(api.browserShow(tab.id, { x: r.left, y: r.top, width: r.width, height: r.height }).then(() => { if (!cancelled) setSnapshot(null); }));
+      // The page stops short of the window's right and bottom edges, where the resize strips are (WindowEdges.jsx).
+      const width = Math.min(r.width, window.innerWidth - WINDOW_EDGE - r.left), height = Math.min(r.height, window.innerHeight - WINDOW_EDGE - r.top);
+      quiet(api.browserShow(tab.id, { x: r.left, y: r.top, width, height }).then(() => { if (!cancelled) setSnapshot(null); }));
     };
     const observer = new ResizeObserver(place);
     observer.observe(slot);

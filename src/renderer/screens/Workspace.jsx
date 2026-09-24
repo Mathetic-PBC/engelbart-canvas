@@ -9,7 +9,7 @@ import { hasTag, isNote } from '../model/kind.js';
 import { isUntitled, nextUntitled } from '../model/names.js';
 import { OPEN_IN_BROWSER } from '../model/address.js';
 import { mentionRows } from '../model/rail.js';
-import { flatWorkspaces, nextPlace } from '../model/nav.js';
+import { flatWorkspaces, nextPlace, placesToGo } from '../model/nav.js';
 import { onStage } from '../model/stage.js';
 import ProjectPostIts from '../post-its/ProjectPostIts.jsx';
 
@@ -525,6 +525,12 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     const held = index.get(place.workspaceId);
     return held ? { ...place, name: held.node.name } : null; // this project's names are the tree's, current after a rename
   }, [nav, topic, project.id, index]);
+  // All of them, for the next row's hover list; this project's by the tree's names, gone ones left out.
+  const places = React.useMemo(() => placesToGo({ here: topic ? { projectId: project.id, workspaceId: topic.id } : null, recent: nav.recent, agents: nav.agents }).flatMap((place) => {
+    if (place.projectId !== project.id) return [place];
+    const held = index.get(place.workspaceId);
+    return held ? [{ ...place, name: held.node.name }] : [];
+  }), [nav, topic, project.id, index]);
   const goTo = (place) => {
     if (!place) return;
     if (place.projectId === project.id) selectTopic(place.workspaceId);
@@ -820,8 +826,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   return (
     <div data-screen-label="Workspace" style={style}>
-      <header style={{ display: 'flex', alignItems: 'stretch', minHeight: 46, background: '#fafafa', flex: 'none' }}>
-        <div style={{ flex: 'none', width: rail, boxSizing: 'border-box', borderBottom: '1px solid #eaeaea', display: 'flex', alignItems: 'center', gap: 8, padding: '0 16px', minWidth: 0, overflow: 'hidden' }}>
+      <header className="title-bar" style={{ display: 'flex', alignItems: 'stretch', minHeight: 54, background: '#fafafa', flex: 'none' }}>
+        <div className="title-lead" style={{ flex: 'none', width: rail, boxSizing: 'border-box', borderBottom: '1px solid #eaeaea', display: 'flex', alignItems: 'center', gap: 8, padding: '0 16px', minWidth: 0, overflow: 'hidden' }}>
           <button type="button" onClick={onHome} title="All projects" style={{ flex: 'none', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', font: '500 17px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Engelbart</button>
           <span style={{ flex: 'none', font: '15px/1 var(--font-sans)', color: '#c9c9c9' }}>/</span>
           <span title={project.directory || project.dir} style={{ flex: '0 4 auto', minWidth: 20, font: '400 14px/1.3 var(--font-sans)', color: '#4d4d4d', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{project.name}</span>
@@ -889,6 +895,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           next={next}
           projectId={project.id}
           onGoNext={goTo}
+          places={places}
           onPostIt={active ? () => api.postItsCreate(project.id).catch(onError) : null}
         />
 
@@ -919,6 +926,18 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
               viewOf={viewOf}
               onView={recordPosition}
               header={header}
+              footer={(
+                <button
+                  type="button"
+                  className="hov-ink"
+                  data-copy-doc="1"
+                  onClick={copyDoc}
+                  title={docWorkspaceId ? 'Copy current workspace' : 'Copy current note'}
+                  style={{ marginLeft: -6, padding: '3px 6px', border: 0, borderRadius: 5, background: '#fff', cursor: 'pointer', font: '400 15px/1.4 var(--font-sans)', color: copied ? '#171717' : '#8f8f8f', transition: 'color 120ms' }}
+                >
+                  {copied ? copiedLabel(copied) : 'Copy'}
+                </button>
+              )}
             />
           ) : (
             <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40 }}>
@@ -929,18 +948,6 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
                 </div>
               ) : <span style={{ font: '13px/1.6 var(--font-sans)', color: '#8f8f8f' }}>Opening…</span>}
             </div>
-          )}
-          {docKey && text !== undefined && (
-            <button
-              type="button"
-              className="hov-ink"
-              data-copy-doc="1"
-              onClick={copyDoc}
-              title={docWorkspaceId ? 'Copy current workspace' : 'Copy current note'}
-              style={{ position: 'absolute', left: 'calc(clamp(12px, 4%, 40px) - 4px)', bottom: 12, zIndex: 3, padding: '2px 4px', border: 0, borderRadius: 4, background: '#fff', cursor: 'pointer', font: '400 13px/1.4 var(--font-sans)', color: copied ? '#171717' : '#8f8f8f', transition: 'color 120ms' }}
-            >
-              {copied ? copiedLabel(copied) : 'Copy'}
-            </button>
           )}
         </main>
 

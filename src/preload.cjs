@@ -9,6 +9,20 @@ function subscribe(channel, callback) {
   return () => ipcRenderer.removeListener(channel, listener);
 }
 
+// The window has no title bar on macOS: styles.css moves the header off the traffic lights by these two marks.
+function markWindow() {
+  const root = document.documentElement;
+  if (!root) return;
+  root.dataset.platform = process.platform;
+}
+if (document.documentElement) markWindow(); else document.addEventListener('DOMContentLoaded', markWindow, { once: true });
+ipcRenderer.on('window:fullscreen', (_event, on) => { if (document.documentElement) document.documentElement.toggleAttribute('data-fullscreen', !!on); });
+
+// Wider resize edges: App.jsx's strips report press / move / release; main reads the cursor itself.
+contextBridge.exposeInMainWorld('engelbartWindow', Object.freeze({
+  edgeResize: (phase, edge) => ipcRenderer.send('window:edge-resize', String(phase), edge == null ? null : String(edge)),
+}));
+
 // Experimental Terminal bridge, v1 — unchanged contract (see docs in that repo).
 const terminalAPI = Object.freeze({
   bootstrap: () => ipcRenderer.invoke('terminal:bootstrap'),

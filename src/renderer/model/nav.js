@@ -27,6 +27,27 @@ export function nextPlace({ here, recent = [], agents = [] }) {
   return null;
 }
 
+/**
+ * Every place the next row could take you, for its hover list (2026-09-23): the workspaces with an agent waiting (the
+ * longest waiting first, once each), then the ones written in, newest first; never where you are, never twice. The
+ * one ⌘J goes to is marked `next`.
+ * → [{ projectId, workspaceId, name, path, projectName, why: 'agent' | 'recent', at, next }]
+ */
+export function placesToGo({ here, recent = [], agents = [] }) {
+  const target = nextPlace({ here, recent, agents });
+  const out = [];
+  const add = (entry, why, at) => {
+    if (!entry.workspaceId || same(entry, here) || out.some((held) => same(held, entry))) return;
+    out.push({ projectId: entry.projectId, workspaceId: entry.workspaceId, name: entry.name, path: entry.path, projectName: entry.projectName, why, at, next: same(entry, target) });
+  };
+  agents
+    .filter((agent) => agent.status === 'waiting')
+    .sort((a, b) => String(a.finished || '').localeCompare(String(b.finished || '')))
+    .forEach((agent) => add(agent, 'agent', agent.finished));
+  recent.forEach((entry) => add(entry, 'recent', entry.at));
+  return out;
+}
+
 /** How long ago, the short way: "now", "4 min", "2 h", "3 d". */
 export function ago(iso, now = Date.now()) {
   const then = Date.parse(iso || '');
