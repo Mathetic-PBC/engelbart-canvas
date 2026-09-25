@@ -2,17 +2,20 @@
 
 // Which model answers an @bart question, and at what effort (2026-09-19). One file for every
 // project, <home>/model-effort-inline-question.json, written with these defaults when it is
-// missing and read again for every question, so an edit needs no restart.
+// missing and read again for every question, so an edit needs no restart. A default changed in a
+// later build reaches the file too, unless the person changed that value (2026-09-23,
+// ../store/defaults.cjs): what they edited stays, what they left alone follows the new defaults.
 //
 // A question starts on the first step of the default provider's ladder. The agent may ask to move
 // up a step (src/main/bart/ask.cjs), which resumes the same session: what it has read stays read.
 // `@bart --opus --high …` picks by hand and turns that off. Flags are matched loosely: case,
 // dashes, spaces, dots and version numbers are ignored, and "extra high" is xhigh.
 
-const fs = require('node:fs');
 const path = require('node:path');
-const { readJson, writeJson } = require('../store/home.cjs');
+const { readJson } = require('../store/home.cjs');
+const { carryDefaults } = require('../store/defaults.cjs');
 const { EFFORTS, effortOf, modelOf, readFlags, readQuestion, withChoice } = require('./question.cjs');
+const { TOOL_OF } = require('../tools/requirements.cjs');
 
 const MODELS_FILE = 'model-effort-inline-question.json';
 const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
@@ -45,6 +48,20 @@ const DEFAULT_MODELS = {
     },
   },
 };
+
+// Every earlier DEFAULT_MODELS, oldest first. A file written before defaults were carried forward is
+// compared with these to tell the values its owner left alone from the ones they chose.
+const PAST_DEFAULT_MODELS = [
+  // 2026-09-20 (9b50bad): no ultra or max yet, and the last sentence of `about` ended at xhigh.
+  {
+    ...DEFAULT_MODELS,
+    about: DEFAULT_MODELS.about.replace('; ultra (Codex) and max (Claude Code) are the most either will spend, by hand only: no ladder reaches them.', '.'),
+    providers: {
+      openai: { ...DEFAULT_MODELS.providers.openai, efforts: ['medium', 'high', 'xhigh'] },
+      anthropic: { ...DEFAULT_MODELS.providers.anthropic, efforts: ['medium', 'high', 'xhigh'] },
+    },
+  },
+];
 
 const isObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
 
@@ -80,13 +97,35 @@ function onlyProviders(models, only) {
   return { ...models, provider: kept.includes(models.provider) ? models.provider : kept[0], providers: Object.fromEntries(kept.map((key) => [key, models.providers[key]])) };
 }
 
-/** The list in force, writing the defaults the first time so there is a file to edit. `only`: the providers config.json offers. */
+/**
+ * The saved default provider, or another one when the saved one cannot run (2026-09-23; design D4).
+ * `usable`: the CLIs the last tool check found installed, recent enough and not signed out
+ * (['claude', 'codex'] or fewer), or null before the first check. Nothing is written: the saved
+ * choice comes back as soon as its CLI does. A model picked by flag is never moved.
+ */
+function preferUsable(models, usable) {
+  if (!Array.isArray(usable)) return models;
+  const can = (provider) => usable.includes(TOOL_OF[provider]);
+  if (can(models.provider)) return models;
+  const other = Object.keys(models.providers).find(can);
+  return other ? { ...models, provider: other } : models;
+}
+
+/**
+ * The list in force: the file, with the defaults written the first time so there is a file to edit, and
+ * any default changed since carried into it where the person left that value alone. `only`: the
+ * providers config.json offers.
+ */
 function loadModels(homeRoot, { only } = {}) {
   const file = path.join(homeRoot, MODELS_FILE);
-  const held = readJson(file);
-  if (!held) { try { if (!fs.existsSync(file)) writeJson(file, DEFAULT_MODELS); } catch { /* read-only home: the defaults still apply */ } }
+  let held;
+  try {
+    held = carryDefaults({ file, defaults: DEFAULT_MODELS, past: PAST_DEFAULT_MODELS, backupDir: path.join(homeRoot, '.backups') }).value;
+  } catch {
+    held = readJson(file); // read-only home: what is there (or the defaults) still applies
+  }
   const models = normalizeModels(held || DEFAULT_MODELS);
   return only ? onlyProviders(models, only) : models;
 }
 
-module.exports = { MODELS_FILE, EFFORTS, DEFAULT_MODELS, normalizeModels, onlyProviders, loadModels, effortOf, modelOf, readFlags, readQuestion, withChoice };
+module.exports = { MODELS_FILE, EFFORTS, DEFAULT_MODELS, PAST_DEFAULT_MODELS, normalizeModels, onlyProviders, preferUsable, loadModels, effortOf, modelOf, readFlags, readQuestion, withChoice };

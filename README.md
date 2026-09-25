@@ -81,6 +81,14 @@ Verification: `npm test`, then `npm run build && npx electron scripts/smoke-post
 ENGELBART_POST_IT_SMOKE_ROOT=/path/from/checkpoint ENGELBART_POST_IT_SMOKE_RESTORE=1 npx electron scripts/smoke-post-its.cjs
 ```
 
+## Git, Claude Code and Codex
+
+Checked at every launch, in the background (`src/main/tools/`; design: `docs/superpowers/specs/2026-09-23-tools-and-defaults-design.md`). What the last check saw is written to `~/.engelbart/config.json` → `tools`: for each, `installed` (false until a check finds it), `version`, `requires` (from `src/main/tools/requirements.cjs`: Git ≥ 2.30.0, Claude Code ≥ 2.1.278, Codex ≥ 0.155.0), `status`, `signedIn`, `path`, `source`, `error`. These are rewritten by every check; edit only `skip`, `pin` (a version Engelbart must never update) and `tools.updates` (`auto` | `ask`).
+
+When something needs you — Git missing, neither agent installed, no agent signed in, an update waiting for approval, an install that failed — a dialog opens after the check: Install (Git through Apple's Command Line Tools dialog; Claude Code and Codex through their vendors' installers), Update, Sign in (the CLI's own login, which opens the browser), Skip (with a warning; remembered per tool). **Engelbart ▸ Set Up Tools…** shows all three at any time, with Ask again and Update automatically. A tool below its minimum is updated by itself at launch unless it is pinned, skipped, `updates` is `ask`, or you turned the CLI's own updater off (`autoUpdates: false` in `~/.claude.json`, `DISABLE_AUTOUPDATER`, Codex's `check_for_update_on_startup = false`).
+
+@bart starts on the saved default provider when its CLI can run, else on the other one; nothing is written. `config.json` and `model-effort-inline-question.json` take new defaults from later builds wherever you left a value alone (`src/main/store/defaults.cjs`).
+
 ## Terminal pane
 
 Each tab is a real PTY (the Experimental Terminal engine). While the shell is idle you type into the **Run commands** box at the bottom, like a chat: Enter sends, ↑/↓ recall your shell history, and the transcript above starts empty and does not take keys. While a program runs — an arrow-key menu, a REPL, Claude Code or Codex, started from the dropdown or by typing its name — the keyboard belongs to the transcript, as in any terminal, and the box comes back when the program ends. The dropdown at the right of the tab strip turns an untouched terminal into the agent in place, so to choose an agent's directory: click the `▭` chip, pick the folder, pick the agent. The mechanism (a launcher plus zsh wrapper startup files that blank the prompt and emit shell-integration marks, then hand your configuration back) is described in `src/main/shell-rc.cjs`; bash and fish are left alone.
@@ -107,12 +115,14 @@ The pill top-right exists on every screen. **Test · on** roots the app at `~/.e
 
 ```
 ~/.engelbart/                         (test mode: ~/.engelbart/test/, same shape, plus seed/)
-  config.json  state.json             test toggle; { projectId, workspaceId } to reopen
+  config.json  state.json             test toggle, providers, summarizer, github, tools; { projectId, workspaceId } to reopen
+  model-effort-inline-question.json   @bart's models, efforts and ladders
+  .defaults/<file>                    the defaults each of those two was last given (how new defaults reach them)
   library.pglite/                     table `library`: every md, pdf, folder, website, data file, image; `type` is the format, `tags` what was inferred: paper, git, note (+ summary, summary_edited, char_count)
   .context/status.json                the last summary sweep that did something
   .context/summary-system-prompt.md   optional: replaces the built-in summary prompt
   annotations/<library id>.json       PDF highlights and margin notes
-  .backups/<project>-<time>/          copies taken before a layout conversion
+  .backups/<project>-<time>/          copies taken before a layout conversion (and of a settings file's first merge)
   <project>/
     project.json                      { id, name, created, directory }   directory = where the code lives
     notes.pglite/                     tables `notes` (topic_id holds the workspace id), `post_its` (text and preferred layout)
@@ -133,7 +143,8 @@ Terminals, Claude Code and Codex start in the project's `directory`. A project w
 src/main/index.cjs           app lifecycle, window, engelbart:// protocol, menu, terminal IPC (from Experimental Terminal)
 src/main/ipc.cjs             engelbart:* handlers, argument validation, lazy store context + seeding
 src/main/store/              home layout + config, PGlite databases, projects/goals/topics/notes/docs, library + annotations
-src/main/terminal/           Experimental Terminal engine, unchanged (session manager, launch, providers, settings)
+src/main/terminal/           Experimental Terminal engine (session manager, launch, settings)
+src/main/tools/              Git, Claude Code, Codex: requirements, detect, install/update/rollback, lock, sign-in, manager; repository checks for Build
 src/main/browser/            views.cjs: the Browser pane's pages as WebContentsViews (decision 48)
 src/preload.cjs              window.terminalAPI (ET contract) + window.engelbartAPI
 src/renderer/App.jsx         create | all projects | workspace; reopens the last topic; the test pill
@@ -169,7 +180,7 @@ ENGELBART_HOME_DIR=/tmp/eb-home electron . --user-data-dir=/tmp/eb-userdata --re
 ENGELBART_DEBUG_PORT=9223 node scripts/drive.mjs text
 ```
 
-`ENGELBART_CONFIRM_ALL=1` makes the native confirmation dialogs (reset) answer yes, for scripted runs only. So are `ENGELBART_SUMMARY_FAKE=1` (no model, a recognisable blurb), `ENGELBART_SUMMARY_QUIET_MS` and `ENGELBART_SUMMARY_INTERVAL_MS` (shorten the 30-minute and one-minute clocks).
+`ENGELBART_TOOLS_FAKE='{"git":"missing","claude":"2.1.300 signed-out","codex":"0.150.0","failInstall":["codex"]}'` pretends a machine (each tool `missing`, `broken`, or a version with an optional ` signed-out`) so the setup dialog can be driven without touching real installs; `ENGELBART_TOOLS=off` skips the launch check. `ENGELBART_CONFIRM_ALL=1` makes the native confirmation dialogs (reset) answer yes, for scripted runs only. So are `ENGELBART_SUMMARY_FAKE=1` (no model, a recognisable blurb), `ENGELBART_SUMMARY_QUIET_MS` and `ENGELBART_SUMMARY_INTERVAL_MS` (shorten the 30-minute and one-minute clocks).
 
 ## Known kinks (deliberately open)
 

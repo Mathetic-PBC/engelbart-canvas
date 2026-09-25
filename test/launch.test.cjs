@@ -10,7 +10,6 @@ const {
   validateCreateRequest,
 } = require('../src/main/terminal/launch.cjs');
 const { normalizeSettings, mergeSettings } = require('../src/main/terminal/settings.cjs');
-const { discoverProviders, createProviderStatus } = require('../src/main/terminal/provider-discovery.cjs');
 
 function temporaryDirectory(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'experimental-terminal-'));
@@ -175,67 +174,3 @@ test('mergeSettings accepts only supported keys and validates the working direct
   assert.throws(() => mergeSettings(current, { transcript: 'not-app-owned' }, home), /setting/i);
 });
 
-test('provider discovery reports aliases without exposing their definitions', async (t) => {
-  const root = temporaryDirectory(t);
-  const bin = path.join(root, 'bin');
-  fs.mkdirSync(bin);
-  const codex = path.join(bin, 'codex');
-  fs.writeFileSync(codex, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
-  fs.writeFileSync(path.join(root, '.zshrc'), "alias claude='printf super-secret-definition'\n");
-
-  const providers = await discoverProviders({
-    HOME: root,
-    ZDOTDIR: root,
-    SHELL: '/bin/zsh',
-    PATH: `${bin}:/usr/bin:/bin`,
-  });
-
-  const { checkedAt: claudeAt, ...claude } = providers.find((provider) => provider.id === 'claude');
-  const { checkedAt: codexAt, ...codexFound } = providers.find((provider) => provider.id === 'codex');
-  assert.deepEqual(claude, {
-    id: 'claude', name: 'Claude Code', available: true, path: 'shell alias/function', authenticated: null,
-  });
-  assert.deepEqual(codexFound, {
-    id: 'codex', name: 'Codex', available: true, path: codex, authenticated: null,
-  });
-  assert.ok(Date.parse(claudeAt) && Date.parse(codexAt));
-  assert.doesNotMatch(JSON.stringify(providers), /super-secret-definition/);
-});
-
-test('provider discovery reads sign-in from each CLI and keeps the account details to itself', async (t) => {
-  const root = temporaryDirectory(t);
-  const bin = path.join(root, 'bin');
-  fs.mkdirSync(bin);
-  fs.writeFileSync(path.join(root, '.zshrc'), '');
-  fs.writeFileSync(path.join(bin, 'claude'), '#!/bin/sh\nprintf \'{"loggedIn": true, "email": "someone@example.com"}\\n\'\n', { mode: 0o700 });
-  fs.writeFileSync(path.join(bin, 'codex'), '#!/bin/sh\necho "Not logged in"\nexit 1\n', { mode: 0o700 });
-
-  const providers = await discoverProviders({ HOME: root, ZDOTDIR: root, SHELL: '/bin/zsh', PATH: `${bin}:/usr/bin:/bin` });
-
-  assert.equal(providers.find((provider) => provider.id === 'claude').authenticated, true);
-  assert.equal(providers.find((provider) => provider.id === 'codex').authenticated, false);
-  assert.equal(providers.find((provider) => provider.id === 'shell').authenticated, undefined);
-  assert.doesNotMatch(JSON.stringify(providers), /someone@example/);
-});
-
-test('provider status: one check at a time, answered from memory, rerun while a sign-in is unknown', async () => {
-  let runs = 0;
-  let answer = null;
-  const status = createProviderStatus({}, async () => {
-    runs += 1;
-    return [{ id: 'shell', available: true }, { id: 'claude', available: true, authenticated: answer }, { id: 'codex', available: false, authenticated: null }];
-  });
-
-  assert.equal(status.peek(), null);
-  await Promise.all([status.get(), status.get(), status.refresh()]);
-  assert.equal(runs, 1, 'concurrent callers share the running check');
-
-  answer = true;
-  await status.get();
-  assert.equal(runs, 2, 'an unknown sign-in is checked again');
-  await status.get();
-  assert.equal(runs, 2, 'a known one is answered from memory; a CLI that is not installed is not unknown');
-
-  await status.refresh();
-  assert.equal(runs, 3, 'launch always checks');
-});

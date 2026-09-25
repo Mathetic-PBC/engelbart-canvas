@@ -16,6 +16,7 @@ const { failureLines } = require('./bart/reply.cjs');
 const { readShellHistory } = require('./shell-history.cjs');
 const { createDescriber, createRepoIdentifier, createRemoteFileLister } = require('./store/page-meta.cjs');
 const { inspectPdf } = require('./context/pdf-kind.cjs');
+const { TOOL_NAMES } = require('./tools/requirements.cjs');
 
 const MAX_NAME = 512;
 
@@ -105,7 +106,7 @@ function createStore({ homeDir, fixturesDir, inspectPdf: readPdf = null, afterOp
   return { layout, context, config: describe, setTestMode, resetTestData, close: closeAll };
 }
 
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {} }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, tools = null }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const withCtx = (fn) => async (...args) => fn(await store.context(), ...args);
 
@@ -258,6 +259,22 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // Ink on a pdf in the Browser pane, by its address (a link, or a file: address inside the home directory).
   handle('read-page-annotations', withCtx((ctx, input) => library.readPageAnnotations(ctx, str(input, 'address', 8192))));
   handle('write-page-annotations', withCtx((ctx, input, value) => library.writePageAnnotations(ctx, str(input, 'address', 8192), value)));
+
+  // Git, Claude Code and Codex (src/main/tools/manager.cjs): the setup dialog's snapshot and its buttons. Installs,
+  // updates and sign-ins answer at once and report through `engelbart:tools` as they go.
+  if (tools) {
+    const toolName = (value) => { if (!TOOL_NAMES.includes(value)) throw new TypeError('Unknown tool'); return value; };
+    const toolNames = (value) => (Array.isArray(value) ? value : [value]).slice(0, 3).map(toolName);
+    handle('tools', () => tools.snapshot());
+    handle('tools-check', () => tools.check());
+    handle('tools-install', (names) => { void tools.install(toolNames(names)).catch(() => {}); return tools.snapshot(); });
+    handle('tools-update', (name) => { void tools.update(toolName(name)).catch(() => {}); return tools.snapshot(); });
+    handle('tools-sign-in', (name) => { void tools.signIn(toolName(name)).catch(() => {}); return tools.snapshot(); });
+    handle('tools-cancel-sign-in', (name) => tools.cancelSignIn(toolName(name)));
+    handle('tools-skip', (names) => tools.skip(toolNames(names)));
+    handle('tools-ask-again', (name) => tools.askAgain(toolName(name)));
+    handle('tools-set-updates', (value) => tools.setUpdates(value === 'ask' ? 'ask' : 'auto'));
+  }
 
   handle('shell-history', () => readShellHistory({ homeDir: require('node:os').homedir() }));
   handle('open-external', (url) => openExternal(url));
