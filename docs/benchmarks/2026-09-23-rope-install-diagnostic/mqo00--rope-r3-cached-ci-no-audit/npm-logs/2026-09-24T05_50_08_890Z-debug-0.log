@@ -1,0 +1,19 @@
+0 verbose cli /usr/bin/node /usr/bin/npm
+1 info using npm@10.9.8
+2 info using node@v22.23.2
+3 timing npm:load:whichnode Completed in 1ms
+4 silly config load:file:/usr/lib/node_modules/npm/npmrc
+5 silly config load:file:/home/user/repository/system/.npmrc
+6 silly config load:file:/home/user/install-diagnostics/user.npmrc
+7 silly config load:file:/home/user/install-diagnostics/global.npmrc
+8 timing npm:load:configload Completed in 9ms
+9 timing config:load:flatten Completed in 1ms
+10 timing npm:load:mkdirpcache Completed in 1ms
+11 timing npm:load:mkdirplogs Completed in 0ms
+12 verbose title npm run dev
+13 verbose argv "run" "dev"
+14 timing npm:load:setTitle Completed in 1ms
+15 verbose logfile logs-max:10 dir:/home/user/install-diagnostics/npm-logs/2026-09-24T05_50_08_890Z-
+16 verbose logfile /home/user/install-diagnostics/npm-logs/2026-09-24T05_50_08_890Z-debug-0.log
+17 timing npm:load Completed in 27ms
+18 silly logfile done cleaning log files

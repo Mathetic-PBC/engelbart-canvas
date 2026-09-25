@@ -1,6 +1,6 @@
 import React from 'react';
 import { api, errorMessage } from './api.js';
-import TestToggle from './ui/TestToggle.jsx';
+import WindowControls from './ui/WindowControls.jsx';
 import Home from './screens/Home.jsx';
 import CreateProject from './screens/CreateProject.jsx';
 import Workspace from './screens/Workspace.jsx';
@@ -82,21 +82,17 @@ export default function App() {
   // Open a project straight into a workspace: the remembered one, else the first. Each of its workspaces reopens with
   // the tabs, the document and the scroll position it was left with (state.json `views`).
   const openProject = React.useCallback(async (id, prefer) => {
-    let [next, rows, views] = await Promise.all([api.loadProject(id), api.library(), api.views(id).catch(() => ({}))]);
-    if (!next.workspaces.length) {
-      await api.createWorkspace(id, { name: 'Getting started' });
-      next = await api.loadProject(id);
-    }
+    const [next, rows, views] = await Promise.all([api.loadProject(id), api.library(), api.views(id).catch(() => ({}))]);
     setTree(next);
     setLibrary(rows);
     // A note opened from the library lands in the workspace it was made in.
     const made = prefer && prefer.tab && !prefer.workspaceId ? next.notes.find((note) => note.id === prefer.tab.id) : null;
-    setEntry({ workspaceId: (prefer && prefer.workspaceId) || (made && made.workspaceId) || next.workspaces[0].id, tab: (prefer && prefer.tab) || null, stage: (prefer && prefer.stage) || null, views });
+    setEntry({ workspaceId: (prefer && prefer.workspaceId) || (made && made.workspaceId) || next.workspaces[0]?.id || null, tab: (prefer && prefer.tab) || null, stage: (prefer && prefer.stage) || null, views });
     setPhase('workspace');
     setError('');
   }, []);
 
-  // Startup (and after the data root changes): the last project you were in, or the create screen.
+  // Startup: the last project you were in, or the create screen.
   const start = React.useCallback(async () => {
     const list = await loadHome();
     if (!list.length) { setPhase('create'); return; }
@@ -127,40 +123,6 @@ export default function App() {
   function leaveProject() {
     setTree(null);
     setEntry(null);
-  }
-
-  async function toggleTest() {
-    if (!config || busy) return;
-    setBusy(true);
-    setError('');
-    try {
-      const next = await api.setTestMode(!config.testMode);
-      setConfig(next);
-      leaveProject();
-      await start();
-    } catch (candidate) {
-      fail(candidate);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function resetTest() {
-    if (busy) return;
-    setBusy(true);
-    setError('');
-    try {
-      const result = await api.resetTestData();
-      if (result.reset) {
-        setConfig(result);
-        leaveProject();
-        await start();
-      }
-    } catch (candidate) {
-      fail(candidate);
-    } finally {
-      setBusy(false);
-    }
   }
 
   // First run and + Project: create, then land in the workspace with the Welcome! note open.
@@ -260,13 +222,7 @@ export default function App() {
           <button type="button" onClick={() => setError('')} style={{ padding: '0 2px', border: 0, background: 'transparent', cursor: 'pointer', color: '#c9c9c9', font: '14px/1 var(--font-sans)' }}>×</button>
         </div>
       )}
-      <TestToggle
-        testMode={config.testMode}
-        busy={busy}
-        onToggle={toggleTest}
-        onReset={resetTest}
-        onReveal={() => api.reveal(config.testRoot).catch(fail)}
-      />
+      <WindowControls />
     </div>
     </SandboxProgress>
   );

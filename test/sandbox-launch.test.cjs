@@ -7,3 +7,8 @@ test('sandbox adapter applies environment overrides and safely retires stopped n
   const result = spawnSync('python3', [path.join(__dirname, 'sandbox_launch_check.py')], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stdout + result.stderr);
 });
+
+test('application ownership, socket diagnostics, delayed-start fencing, and cleanup are deterministic', () => {
+  const result = spawnSync('python3', [path.join(__dirname, 'sandbox_app_check.py')], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});

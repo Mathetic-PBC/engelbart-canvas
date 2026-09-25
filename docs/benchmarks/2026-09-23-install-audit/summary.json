@@ -1,0 +1,1333 @@
+{
+  "suite": "audit",
+  "complete": true,
+  "repositories": [
+    {
+      "repository": "mqo00/rope",
+      "comparable": true,
+      "inputs_unchanged": true,
+      "note": "Comparability requires matching before AND after manifest hashes. npm install may rewrite a lockfile identically across treatments; inputs_unchanged reports that separately.",
+      "signatures": [
+        "2453ecd82f958362000f820dc33398b5fe16320094aac6183134beb5b0538c19",
+        "2453ecd82f958362000f820dc33398b5fe16320094aac6183134beb5b0538c19",
+        "2453ecd82f958362000f820dc33398b5fe16320094aac6183134beb5b0538c19",
+        "2453ecd82f958362000f820dc33398b5fe16320094aac6183134beb5b0538c19"
+      ],
+      "cases": [
+        {
+          "case": "audit-on",
+          "template": "engelbart-runner",
+          "command": [
+            "npm",
+            "install",
+            "--timing"
+          ],
+          "trials_ms": [
+            55361,
+            61096
+          ],
+          "median_ms": 58228.5,
+          "mean_ms": 58228.5,
+          "exit_codes": [
+            0,
+            0
+          ],
+          "timer_medians_ms": {
+            "idealTree": 261,
+            "reify:loadTrees": 264.5,
+            "reify:unpack": 56916,
+            "reify:build": 39,
+            "reify:audit": 45964,
+            "auditReport:getReport": 665,
+            "auditReport:init": 45296.5,
+            "reify:save": 128.5,
+            "reify": 57542.5,
+            "npm": 58127
+          },
+          "user_cpu_median_seconds": null,
+          "system_cpu_median_seconds": null,
+          "output_blocks_median": null,
+          "http": [
+            {
+              "fetch_lines": 785,
+              "tarball_fetch_lines": 709,
+              "tarball_cache_misses": 709,
+              "metadata_or_audit_fetch_lines": 76,
+              "longest_tarball_ms": 53899,
+              "hosts": {
+                "cdn.npmmirror.com": 676,
+                "registry.npmjs.org": 109
+              },
+              "note": "Counts are log records, not a packet trace. http cache labels are excluded: a cold run also emits those before a later tarball cache-miss fetch."
+            },
+            {
+              "fetch_lines": 785,
+              "tarball_fetch_lines": 709,
+              "tarball_cache_misses": 709,
+              "metadata_or_audit_fetch_lines": 76,
+              "longest_tarball_ms": 59355,
+              "hosts": {
+                "cdn.npmmirror.com": 676,
+                "registry.npmjs.org": 109
+              },
+              "note": "Counts are log records, not a packet trace. http cache labels are excluded: a cold run also emits those before a later tarball cache-miss fetch."
+            }
+          ],
+          "fingerprints": [
+            "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3"
+          ],
+          "startup": [
+            {
+              "round": 2,
+              "ok": true,
+              "command": [
+                "npm",
+                "run",
+                "dev"
+              ],
+              "port": 3333,
+              "elapsed_ms": 12017,
+              "attempts": [
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 52
+                },
+                {
+                  "status": 200,
+                  "elapsed_ms": 12017
+                }
+              ],
+              "scope": "Development server and root HTML only. No keys supplied; AI/database features not exercised."
+            }
+          ],
+          "cleaned_up": true
+        },
+        {
+          "case": "audit-off",
+          "template": "engelbart-runner",
+          "command": [
+            "npm",
+            "install",
+            "--no-audit",
+            "--timing"
+          ],
+          "trials_ms": [
+            22019,
+            27122
+          ],
+          "median_ms": 24570.5,
+          "mean_ms": 24570.5,
+          "exit_codes": [
+            0,
+            0
+          ],
+          "timer_medians_ms": {
+            "idealTree": 259.5,
+            "reify:loadTrees": 262,
+            "reify:unpack": 23631,
+            "reify:build": 41,
+            "reify:audit": null,
+            "auditReport:getReport": null,
+            "auditReport:init": null,
+            "reify:save": 137.5,
+            "reify": 24240.5,
+            "npm": 24496.5
+          },
+          "user_cpu_median_seconds": null,
+          "system_cpu_median_seconds": null,
+          "output_blocks_median": null,
+          "http": [
+            {
+              "fetch_lines": 706,
+              "tarball_fetch_lines": 706,
+              "tarball_cache_misses": 706,
+              "metadata_or_audit_fetch_lines": 0,
+              "longest_tarball_ms": 20830,
+              "hosts": {
+                "cdn.npmmirror.com": 673,
+                "registry.npmjs.org": 33
+              },
+              "note": "Counts are log records, not a packet trace. http cache labels are excluded: a cold run also emits those before a later tarball cache-miss fetch."
+            },
+            {
+              "fetch_lines": 707,
+              "tarball_fetch_lines": 707,
+              "tarball_cache_misses": 707,
+              "metadata_or_audit_fetch_lines": 0,
+              "longest_tarball_ms": 25742,
+              "hosts": {
+                "cdn.npmmirror.com": 674,
+                "registry.npmjs.org": 33
+              },
+              "note": "Counts are log records, not a packet trace. http cache labels are excluded: a cold run also emits those before a later tarball cache-miss fetch."
+            }
+          ],
+          "fingerprints": [
+            "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3"
+          ],
+          "startup": [
+            {
+              "round": 2,
+              "ok": true,
+              "command": [
+                "npm",
+                "run",
+                "dev"
+              ],
+              "port": 3333,
+              "elapsed_ms": 10037,
+              "attempts": [
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 233
+                },
+                {
+                  "status": 200,
+                  "elapsed_ms": 10037
+                }
+              ],
+              "scope": "Development server and root HTML only. No keys supplied; AI/database features not exercised."
+            }
+          ],
+          "cleaned_up": true
+        }
+      ]
+    },
+    {
+      "repository": "kjfeng/cocoa-canvas",
+      "comparable": true,
+      "inputs_unchanged": false,
+      "note": "Comparability requires matching before AND after manifest hashes. npm install may rewrite a lockfile identically across treatments; inputs_unchanged reports that separately.",
+      "signatures": [
+        "384706b94e733fb43c245491cc41107498c04a5d90e94d31157449532bd49e38",
+        "384706b94e733fb43c245491cc41107498c04a5d90e94d31157449532bd49e38",
+        "384706b94e733fb43c245491cc41107498c04a5d90e94d31157449532bd49e38",
+        "384706b94e733fb43c245491cc41107498c04a5d90e94d31157449532bd49e38"
+      ],
+      "cases": [
+        {
+          "case": "audit-on",
+          "template": "engelbart-runner",
+          "command": [
+            "npm",
+            "install",
+            "--timing"
+          ],
+          "trials_ms": [
+            17049,
+            15014
+          ],
+          "median_ms": 16031.5,
+          "mean_ms": 16031.5,
+          "exit_codes": [
+            0,
+            0
+          ],
+          "timer_medians_ms": {
+            "idealTree": 165.5,
+            "reify:loadTrees": 166,
+            "reify:unpack": 15036,
+            "reify:build": 94.5,
+            "reify:audit": 10870.5,
+            "auditReport:getReport": 637.5,
+            "auditReport:init": 10231,
+            "reify:save": 197,
+            "reify": 15681,
+            "npm": 15954
+          },
+          "user_cpu_median_seconds": null,
+          "system_cpu_median_seconds": null,
+          "output_blocks_median": null,
+          "http": [
+            {
+              "fetch_lines": 680,
+              "tarball_fetch_lines": 637,
+              "tarball_cache_misses": 637,
+              "metadata_or_audit_fetch_lines": 43,
+              "longest_tarball_ms": 15642,
+              "hosts": {
+                "registry.npmjs.org": 680
+              },
+              "note": "Counts are log records, not a packet trace. http cache labels are excluded: a cold run also emits those before a later tarball cache-miss fetch."
+            },
+            {
+              "fetch_lines": 680,
+              "tarball_fetch_lines": 637,
+              "tarball_cache_misses": 637,
+              "metadata_or_audit_fetch_lines": 43,
+              "longest_tarball_ms": 13882,
+              "hosts": {
+                "registry.npmjs.org": 680
+              },
+              "note": "Counts are log records, not a packet trace. http cache labels are excluded: a cold run also emits those before a later tarball cache-miss fetch."
+            }
+          ],
+          "fingerprints": [
+            "bc5942ab0e9055a93d4c49d41a991215846c275c749a14bafd52ed576666e278"
+          ],
+          "startup": [
+            {
+              "round": 2,
+              "ok": false,
+              "command": [
+                "npm",
+                "run",
+                "dev"
+              ],
+              "port": 5173,
+              "attempts": [
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 28
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 1030
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 2033
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 3057
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 4059
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 5061
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 6064
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 7067
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 8071
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 9073
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 10075
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 11077
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 12079
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 13081
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 14083
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 15085
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 16087
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 17089
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 18090
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 19093
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 20094
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 21095
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 22097
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 23099
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 24100
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 25103
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 26104
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 27107
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 28109
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 29111
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 30113
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 31115
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 32117
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 33118
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 34121
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 35122
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 36124
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 37125
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 38127
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 39128
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 40129
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 41130
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 42131
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 43134
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 44135
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 45136
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 46137
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 47138
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 48139
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 49140
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 50141
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 51143
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 52144
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 53149
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 54150
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 55151
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 56153
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 57156
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 58157
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 59160
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 60161
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 61162
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 62163
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 63164
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 64165
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 65168
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 66169
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 67170
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 68171
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 69171
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 70174
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 71176
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 72177
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 73178
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 74179
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 75181
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 76182
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 77183
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 78184
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 79187
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 80188
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 81189
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 82190
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 83191
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 84192
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 85194
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 86196
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 87197
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 88198
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 89199
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 90200
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 91202
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 92204
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 93204
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 94205
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 95206
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 96207
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 97208
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 98209
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 99210
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 100211
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 101212
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 102213
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 103214
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 104216
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 105217
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 106218
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 107219
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 108220
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 109221
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 110224
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 111225
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 112227
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 113228
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 114229
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 115230
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 116231
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 117232
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 118233
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 119234
+                }
+              ],
+              "exit_code": null,
+              "error": "No successful root HTML response within 120 seconds"
+            }
+          ],
+          "cleaned_up": true
+        },
+        {
+          "case": "audit-off",
+          "template": "engelbart-runner",
+          "command": [
+            "npm",
+            "install",
+            "--no-audit",
+            "--timing"
+          ],
+          "trials_ms": [
+            14771,
+            17154
+          ],
+          "median_ms": 15962.5,
+          "mean_ms": 15962.5,
+          "exit_codes": [
+            0,
+            0
+          ],
+          "timer_medians_ms": {
+            "idealTree": 207.5,
+            "reify:loadTrees": 208.5,
+            "reify:unpack": 14686.5,
+            "reify:build": 125.5,
+            "reify:audit": null,
+            "auditReport:getReport": null,
+            "auditReport:init": null,
+            "reify:save": 333.5,
+            "reify": 15556.5,
+            "npm": 15839
+          },
+          "user_cpu_median_seconds": null,
+          "system_cpu_median_seconds": null,
+          "output_blocks_median": null,
+          "http": [
+            {
+              "fetch_lines": 637,
+              "tarball_fetch_lines": 637,
+              "tarball_cache_misses": 637,
+              "metadata_or_audit_fetch_lines": 0,
+              "longest_tarball_ms": 13440,
+              "hosts": {
+                "registry.npmjs.org": 637
+              },
+              "note": "Counts are log records, not a packet trace. http cache labels are excluded: a cold run also emits those before a later tarball cache-miss fetch."
+            },
+            {
+              "fetch_lines": 637,
+              "tarball_fetch_lines": 637,
+              "tarball_cache_misses": 637,
+              "metadata_or_audit_fetch_lines": 0,
+              "longest_tarball_ms": 15344,
+              "hosts": {
+                "registry.npmjs.org": 637
+              },
+              "note": "Counts are log records, not a packet trace. http cache labels are excluded: a cold run also emits those before a later tarball cache-miss fetch."
+            }
+          ],
+          "fingerprints": [
+            "bc5942ab0e9055a93d4c49d41a991215846c275c749a14bafd52ed576666e278"
+          ],
+          "startup": [
+            {
+              "round": 2,
+              "ok": false,
+              "command": [
+                "npm",
+                "run",
+                "dev"
+              ],
+              "port": 5173,
+              "attempts": [
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 67
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 1070
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 2072
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 3074
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 4077
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 5079
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 6086
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 7090
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 8093
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 9095
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 10097
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 11100
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 12103
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 13104
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 14106
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 15107
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 16108
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 17110
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 18113
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 19114
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 20116
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 21120
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 22121
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 23123
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 24124
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 25127
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 26129
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 27131
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 28132
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 29135
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 30136
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 31138
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 32139
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 33140
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 34142
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 35143
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 36144
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 37145
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 38146
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 39146
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 40148
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 41149
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 42150
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 43152
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 44153
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 45155
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 46156
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 47157
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 48158
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 49159
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 50160
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 51160
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 52162
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 53163
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 54165
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 55166
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 56167
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 57168
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 58171
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 59173
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 60175
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 61177
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 62179
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 63181
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 64183
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 65185
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 66186
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 67187
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 68188
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 69190
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 70191
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 71192
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 72194
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 73196
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 74198
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 75201
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 76202
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 77204
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 78206
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 79207
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 80208
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 81208
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 82210
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 83211
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 84212
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 85212
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 86214
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 87215
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 88216
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 89218
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 90218
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 91221
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 92222
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 93223
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 94224
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 95227
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 96228
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 97229
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 98230
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 99231
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 100232
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 101233
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 102234
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 103235
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 104236
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 105238
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 106239
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 107240
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 108241
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 109242
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 110242
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 111244
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 112245
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 113246
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 114246
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 115248
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 116249
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 117250
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 118251
+                },
+                {
+                  "error": "TypeError",
+                  "elapsed_ms": 119252
+                }
+              ],
+              "exit_code": null,
+              "error": "No successful root HTML response within 120 seconds"
+            }
+          ],
+          "cleaned_up": true
+        }
+      ]
+    }
+  ],
+  "notes": [
+    "Durations are install-only, not end-to-end preview latency.",
+    "Nested/concurrent npm timers and request durations must not be added.",
+    "CPU and IO counters, when present, cover the entire npm process tree; they do not isolate phases. No /usr/bin/time was present for the earlier audit comparison."
+  ]
+}

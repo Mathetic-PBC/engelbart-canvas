@@ -1,0 +1,198 @@
+{
+  "id": "e132dd47-609a-4108-960d-f103c8765643",
+  "template": "engelbart-canvas-cached",
+  "round": 2,
+  "repository": "mqo00/rope",
+  "pinned_commit": "1ada01830031e5882f2585577720b182deac6246",
+  "started_at": "2026-09-24T08:45:54.075Z",
+  "provider": "claude-local",
+  "model_requested": "sonnet",
+  "sandbox_id": "igwqh7pzo8cdck8mbnlsj",
+  "variant": "baseline",
+  "baseline_kind": "current",
+  "artifact_directory": "mqo00--rope-r2-baseline",
+  "template_id": "5mqfzddjuicidc1w92y5",
+  "resources": {
+    "cpu": 8,
+    "memory_mb": 8192
+  },
+  "commit": "1ada01830031e5882f2585577720b182deac6246",
+  "agent": {
+    "started_ms": 4906,
+    "prompt_bytes": 8238,
+    "models": [
+      "claude-sonnet-5"
+    ],
+    "assistant_messages": 8,
+    "tool_calls": [
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 7420,
+        "finished_ms": 7541,
+        "elapsed_ms": 121,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__list_files",
+        "started_ms": 7657,
+        "finished_ms": 7802,
+        "elapsed_ms": 145,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__list_files",
+        "started_ms": 7937,
+        "finished_ms": 8078,
+        "elapsed_ms": 141,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 9473,
+        "finished_ms": 9548,
+        "elapsed_ms": 75,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 9797,
+        "finished_ms": 9870,
+        "elapsed_ms": 73,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 10061,
+        "finished_ms": 10142,
+        "elapsed_ms": 81,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__list_files",
+        "started_ms": 12789,
+        "finished_ms": 13002,
+        "elapsed_ms": 213,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__dependency_install",
+        "started_ms": 13140,
+        "install_action": "start",
+        "finished_ms": 13339,
+        "elapsed_ms": 199,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__dependency_install",
+        "started_ms": 15145,
+        "install_action": "status",
+        "finished_ms": 31127,
+        "elapsed_ms": 15982,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__list_files",
+        "started_ms": 33577,
+        "finished_ms": 33740,
+        "elapsed_ms": 163,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 35085,
+        "finished_ms": 35225,
+        "elapsed_ms": 140,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__start_app",
+        "started_ms": 40152,
+        "wait_for_install": true,
+        "finished_ms": 53211,
+        "elapsed_ms": 13059,
+        "is_error": false
+      }
+    ],
+    "cli_result": {
+      "subtype": "success",
+      "is_error": false,
+      "usage": {
+        "input_tokens": 16,
+        "output_tokens": 1769,
+        "cache_creation_input_tokens": 14877,
+        "cache_read_input_tokens": 120968
+      },
+      "duration_ms": 49975,
+      "duration_api_ms": 20263,
+      "num_turns": 13
+    },
+    "finished_ms": 55814,
+    "wall_ms": 50908
+  },
+  "worker_ready_ms": 55926,
+  "preview_url": "https://43110-igwqh7pzo8cdck8mbnlsj.e2b.app/",
+  "port": 3333,
+  "public_check": {
+    "status": 200,
+    "html": true,
+    "ok": true
+  },
+  "preview_only_ms": 56102,
+  "services_check": {
+    "ok": true,
+    "checks": [],
+    "note": "No separate backend in this pinned fixture"
+  },
+  "end_to_end_ms": 56102,
+  "status": "ready",
+  "installed": {
+    "packages": {
+      "npm:system": {
+        "fingerprint": {
+          "hash": "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3",
+          "packages": 732,
+          "version_mismatches": 0
+        }
+      }
+    },
+    "node": "v22.23.2",
+    "npm": "10.9.8",
+    "python": "Python 3.11.6",
+    "arch": "x64",
+    "platform": "linux",
+    "cache": {
+      "npm_prefer_offline": "true",
+      "seed_present": true
+    },
+    "manifest_hashes": {
+      "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+      "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+    },
+    "install_changes": "",
+    "package_evidence_hash": "efd9de41a0d76588f1c75afef6400468b67d1b9ffe0b836c6b2c42f5a6045f41"
+  },
+  "cleaned_up": true,
+  "phases": {
+    "worker_ready_ms": 55925,
+    "auth_ms": 873,
+    "detection_and_creation_ms": 856,
+    "clone_ms": 2059,
+    "agent_started_ms": 4906,
+    "agent_wall_ms": 50908,
+    "first_app_start_ms": 40757,
+    "first_start_to_ready_ms": 15168,
+    "installs": [
+      {
+        "id": "fd0dfa41-99f9-451c-9967-f484e612afdb",
+        "command": "npm install",
+        "started_ms": 13148,
+        "status": "succeeded",
+        "finished_ms": 31119,
+        "elapsed_ms": 17972,
+        "exit_code": 0
+      }
+    ],
+    "note": "Agent wall time contains tool waits and overlaps installation/startup. CLI duration_api_ms is reported as-is, not pure thinking time. Tool round trips may overlap/queue. Do not sum these phases."
+  },
+  "finished_at": "2026-09-24T08:46:51.076Z"
+}

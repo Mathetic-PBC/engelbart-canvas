@@ -164,3 +164,27 @@ test('failed API fallback ends the run without looping back to Claude', async ()
   assert.deepEqual(f.counts, { prepare: 1, local: 1, api: 1, create: 1, kill: 1 });
   assert.match(f.events.at(-1).error, /API setup failed/);
 });
+
+test('early readiness is emitted once and late summary failure never triggers API fallback', async () => {
+  const f = fixture({ setup: async ({ onReady, done }) => {
+    onReady({ preview_url: 'https://preview.example/', port: 3000, done });
+    throw new Error('Late summary failed');
+  } });
+  await f.runtime.run(REQUEST);
+  assert.equal(f.counts.api, 0);
+  assert.equal(f.events.filter(e => e.event === 'ready').length, 1);
+  assert.equal(f.events.at(-1).event, 'stopped');
+});
+
+test('early-ready app exit interrupts Claude finalization and still reports the application failure', async () => {
+  let fail;
+  const done = new Promise((_, reject) => { fail = reject; });
+  const f = fixture({ setup: async ({ onReady, signal }) => {
+    onReady({ preview_url: 'https://preview.example/', port: 3000, done });
+    await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+    signal.throwIfAborted();
+  }, onEvent: e => { if (e.event === 'ready') fail(new Error('App crashed while finalizing')); } });
+  await f.runtime.run(REQUEST);
+  assert.equal(f.counts.api, 0);
+  assert.match(f.events.at(-1).error, /App crashed while finalizing/);
+});

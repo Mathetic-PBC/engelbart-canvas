@@ -26,18 +26,112 @@ test('looksAddable: addresses, arXiv and DOI ids, remotes and paths, by their sp
   for (const no of ['', 'colbert', 'Contextual Retrieval', 'notes/today.md', 'https://', 'a b']) assert.equal(looksAddable(no), false, no);
 });
 
-test('search: empty offers four things not here yet; typed, every match in the library, what is here included as `here`; no Note or Workspace rows (2026-09-22)', async () => {
+test('search: empty offers creation and new context; typed, it also finds what is already on the rail', async () => {
   const { searchRows } = await load();
   const inRail = (id) => id === 'p1';
   const empty = searchRows({ query: '', library, inRail });
-  assert.deepEqual(empty.map((r) => r.key), ['g1', 'w1', 'c1', 'f1'], 'no notes, no pictures, nothing already here, at most four');
-  assert.deepEqual(empty.map((r) => r.tag), ['link · git', 'link', 'csv', 'folder']);
-  assert.deepEqual(searchRows({ query: 'retriev', library, inRail }).map((r) => r.key), ['w1'], 'making a note or a workspace is the +\'s job now');
-  assert.deepEqual(searchRows({ query: 'colbert', library, inRail }).map((r) => [r.key, r.tag]), [['p1', 'here']], 'what is here already is found too');
+  assert.deepEqual(empty.map((r) => r.key), ['new:note', 'new:workspace', 'g1', 'w1', 'c1', 'f1'], 'no notes, no pictures, nothing already here, at most four');
+  assert.deepEqual(empty.slice(2).map((r) => r.tag), ['link · git', 'link', 'csv', 'folder']);
+  const typed = searchRows({ query: 'retriev', library, inRail });
+  assert.deepEqual(typed.map((r) => r.key), ['w1', 'new:note', 'new:workspace'], 'the Note and Workspace rows keep their names whatever is typed');
+  assert.deepEqual(searchRows({ query: 'colbert', library, inRail }).map((r) => [r.key, r.tag]), [['p1', 'here'], ['new:note', 'new'], ['new:workspace', 'new']], 'existing context can be opened from search');
   assert.deepEqual(searchRows({ query: 'import', library, inRail }).map((r) => r.key)[0], 'n1', 'a note is found by name');
   assert.deepEqual(searchRows({ query: 'anthropic.com', library, inRail }).map((r) => r.key)[0], 'w1', 'and a page by its address');
   const many = Array.from({ length: 60 }, (_, i) => row(`m${i}`, `Match ${i}`, 'website', [], { url: `https://example.org/${i}` }));
-  assert.equal(searchRows({ query: 'match', library: many, inRail }).length, 60, 'no cap: all of the library is searched and shown');
+  assert.equal(searchRows({ query: 'match', library: many, inRail }).filter((result) => result.kind === 'item').length, 60, 'no cap: all of the library is searched and shown');
+});
+
+test('sidebar sections use semantic tags and keep every remaining context item', async () => {
+  const { sidebarSections } = await load();
+  const rows = [...library, row('p2', 'Research link', 'website', ['paper']), row('m1', 'Readme', 'md'), row('x', 'Child', 'child')];
+  assert.deepEqual(sidebarSections(rows).map((section) => [section.label, section.rows.map((item) => item.id)]), [
+    ['GitHub', ['g1']], ['Overleaf', []], ['Papers', ['p1', 'p2']], ['Documents', ['n1']], ['Other context', ['f1']],
+  ]);
+  const other = sidebarSections(rows).find((section) => section.id === 'other');
+  assert.deepEqual(other.children.map((category) => [category.label, category.rows.map((item) => item.id)]), [
+    ['Images', ['i1']], ['Datasets', ['c1']], ['Web pages', ['w1']], ['Conversations', []], ['Notes', ['m1']],
+  ]);
+  assert.deepEqual(sidebarSections([]).map((section) => section.label), ['GitHub', 'Overleaf', 'Papers', 'Documents', 'Other context'], 'empty sections remain visible in the same order');
+});
+
+test('Other context groups existing file kinds without losing, duplicating, or mutating sources', async () => {
+  const { sidebarSections } = await load();
+  const types = ['image', 'csv', 'tsv', 'json', 'jsonl', 'parquet', 'xlsx', 'website', 'html', 'folder', 'md', 'docx'];
+  const rows = types.map((type) => row(type, type, type));
+  const before = structuredClone(rows);
+  const other = sidebarSections(rows).find((section) => section.id === 'other');
+  assert.deepEqual(other.children.map((category) => category.rows.map((item) => item.type)), [
+    ['image'], ['csv', 'tsv', 'json', 'jsonl', 'parquet', 'xlsx'], ['website', 'html'], [], ['md'],
+  ]);
+  assert.deepEqual(other.rows.map((item) => item.type), ['folder', 'docx'], 'unrelated source types keep their existing location');
+  const grouped = [...other.rows, ...other.children.flatMap((category) => category.rows)];
+  assert.equal(grouped.length, rows.length);
+  assert.equal(new Set(grouped).size, rows.length, 'each original row is retained once');
+  assert.deepEqual(rows, before);
+  assert.deepEqual(sidebarSections([]).find((section) => section.id === 'other').children.map((category) => category.rows), [[], [], [], [], []]);
+});
+
+test('PDFs stay out of Other context: papers use Papers and general PDFs use Documents', async () => {
+  const { sidebarSections, sidebarSectionOf } = await load();
+  const general = row('general', 'Handbook', 'pdf');
+  const research = row('research', 'Research', 'pdf', ['paper']);
+  const downloaded = row('downloaded', 'Saved handbook', 'pdf', [], { url: 'https://example.com/handbook' });
+  const sections = sidebarSections([general, research, downloaded]);
+  assert.deepEqual(sections.find((section) => section.id === 'papers').rows, [research]);
+  assert.deepEqual(sections.find((section) => section.id === 'notes').rows, [general, downloaded]);
+  assert.equal(sidebarSectionOf(general), 'notes');
+  const other = sections.find((section) => section.id === 'other');
+  assert.deepEqual(other.rows, []);
+  assert.ok(other.children.every((category) => category.rows.length === 0));
+});
+
+test('saved sticky notes are grouped under Other context > Notes while Documents keep their existing notes', async () => {
+  const { sidebarSections } = await load();
+  const { isNote } = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/kind.js')).href);
+  const sticky = row('sticky', 'Remember this', 'md', ['note', 'sticky']);
+  const sections = sidebarSections([library[0], sticky]);
+  assert.equal(isNote(sticky), true);
+  const other = sections.find((section) => section.id === 'other');
+  assert.deepEqual(other.rows, []);
+  assert.deepEqual(other.children.find((category) => category.id === 'other-notes').rows, [sticky]);
+  assert.deepEqual(sections.find((section) => section.id === 'notes').rows, [library[0]]);
+});
+
+test('Overleaf is a separate section immediately above Papers while ordinary websites remain in Other context', async () => {
+  const { sidebarSections } = await load();
+  const project = row('latex', 'Paper draft', 'website', [], { url: 'https://www.overleaf.com/project/123' });
+  const unrelated = row('web', 'Overleaf tips', 'website', [], { url: 'https://example.com/overleaf.com' });
+  const sections = sidebarSections([project, unrelated]);
+  assert.equal(sections[sections.findIndex((section) => section.id === 'papers') - 1].id, 'overleaf');
+  assert.deepEqual(sections.find((section) => section.id === 'overleaf').rows, [project]);
+  assert.deepEqual(sections.find((section) => section.id === 'other').children.find((category) => category.id === 'web-pages').rows, [unrelated]);
+});
+
+test('Conversations lists Claude and Codex sessions, including an agent launched in a shell', async () => {
+  const { conversationRows, sidebarSections } = await load();
+  const sessions = [
+    { snapshot: { id: 'claude', provider: 'claude' }, displayTitle: 'Review the design' },
+    { snapshot: { id: 'codex', provider: 'codex' }, displayTitle: 'Build the sidebar' },
+    { snapshot: { id: 'shell', provider: 'shell' }, shell: { busy: false, command: '' } },
+    { snapshot: { id: 'agent-in-shell', provider: 'shell' }, shell: { busy: true, command: 'codex resume' } },
+  ];
+  const rows = conversationRows(sessions, 'codex');
+  assert.deepEqual(rows.map(({ id, provider, on }) => [id, provider, on]), [['claude', 'claude', false], ['codex', 'codex', true], ['agent-in-shell', 'codex', false]]);
+  assert.equal(rows[0].name, 'Review the design');
+  assert.equal(rows[2].name, 'Codex');
+  const sections = sidebarSections(rows);
+  assert.equal(sections.some((section) => section.id === 'conversations'), false);
+  assert.deepEqual(sections.find((section) => section.id === 'other').children.find((category) => category.id === 'conversations').rows, rows);
+});
+
+test('search finds nested workspaces by their name or their parent path', async () => {
+  const { searchRows } = await load();
+  const workspaces = [{ id: 'root', name: 'Research', children: [{ id: 'child', name: 'Agents', children: [{ id: 'deep', name: 'Evaluation' }] }] }, { id: 'other', name: 'Writing' }];
+  const search = (query) => searchRows({ query, library: [], workspaces, inRail: () => false }).filter((result) => result.kind === 'workspace');
+  assert.deepEqual(search('evaluation').map((result) => [result.id, result.path]), [['deep', 'Research / Agents / Evaluation']]);
+  assert.deepEqual(search('research').map((result) => result.id), ['root', 'child', 'deep']);
+  assert.equal(search('writing')[0].key, 'workspace:other');
+  assert.deepEqual(search(''), [], 'empty search remains a compact creation menu');
 });
 
 test('search: an address or a path is the one row the library has for it, or a new one, once the main process has answered', async () => {

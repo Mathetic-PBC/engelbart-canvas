@@ -10,6 +10,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { PGlite } = require('@electric-sql/pglite');
+const { collectBuildMilestones } = require('../../shared/build-history.cjs');
 
 // `type` is what a row is, read off the thing itself and never guessed: a file's format, or
 // `folder`, `website`, `image` for the three that are not a file with an extension. What a row is
@@ -88,6 +89,9 @@ create table if not exists sandbox_runs (
 );
 create index if not exists sandbox_runs_library_created on sandbox_runs (library_id, created_at desc);
 alter table sandbox_runs add column if not exists build_log jsonb not null default '[]';
+-- Null marks pre-upgrade runs for a one-time backfill from whatever history remains.
+alter table sandbox_runs add column if not exists build_milestones jsonb;
+alter table sandbox_runs alter column build_milestones set default '{}';
 alter table sandbox_runs add column if not exists env_revision uuid;
 -- Keep discovered names after their event rolls out of the bounded build log.
 alter table sandbox_runs add column if not exists env_report jsonb;
@@ -217,6 +221,10 @@ function requireText(value, name, { optional = false, max = 4096 } = {}) {
 async function openLibraryDb(testRoot) {
   const dir = path.join(testRoot, 'library.pglite');
   const db = await openRaw(dir, LIBRARY_SCHEMA, { setAsideIf: typedTheOldWay });
+  for (const run of (await db.query('select id, build_log from sandbox_runs where build_milestones is null')).rows) {
+    await db.query('update sandbox_runs set build_milestones = $2::jsonb where id = $1 and build_milestones is null',
+      [run.id, JSON.stringify(collectBuildMilestones(run.build_log))]);
+  }
   return {
     dir,
     async insert(row) {

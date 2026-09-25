@@ -1,0 +1,188 @@
+{
+  "command": [
+    "npm",
+    "install",
+    "--no-audit",
+    "--timing"
+  ],
+  "cwd": "system",
+  "wall_ms": 22019,
+  "exit_code": 0,
+  "signal": null,
+  "error": null,
+  "runtime": {
+    "node": "v22.23.2",
+    "npm": "10.9.8",
+    "python": "Python 3.11.6",
+    "arch": "x64",
+    "platform": "linux"
+  },
+  "config_hash": "85d1b22e37d850858dfae75b70791a496789747fccc4a51509c2d37605d862c8",
+  "cache": {
+    "size_before_kib": 0,
+    "seed": null
+  },
+  "fingerprint": {
+    "hash": "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3",
+    "packages": 732,
+    "version_mismatches": 0
+  },
+  "input_hashes": {
+    "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+    "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+  },
+  "after_hashes": {
+    "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+    "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+  },
+  "timing_files": [
+    "2026-09-24T05_32_09_976Z-timing.json"
+  ],
+  "analysis": {
+    "timers_ms": {
+      "npm:load:whichnode": 1,
+      "npm:load:configload": 7,
+      "npm:load:mkdirpcache": 0,
+      "npm:load:mkdirplogs": 0,
+      "npm:load:setTitle": 1,
+      "npm:load": 23,
+      "idealTree:buildDeps": 2,
+      "idealTree": 231,
+      "reify:loadTrees": 233,
+      "reify:diffTrees": 6,
+      "reify:unpack": 21105,
+      "build:deps": 43,
+      "build": 43,
+      "reify:build": 44,
+      "reify:save": 135,
+      "reify": 21677,
+      "command:install": 21690,
+      "npm": 21945
+    },
+    "longest_package_timers": [
+      [
+        "reifyNode:node_modules/@iconify/json",
+        21102
+      ],
+      [
+        "reifyNode:node_modules/next",
+        21049
+      ],
+      [
+        "reifyNode:node_modules/@next/swc-linux-x64-musl",
+        18343
+      ],
+      [
+        "reifyNode:node_modules/lucide-react",
+        18199
+      ],
+      [
+        "reifyNode:node_modules/@mui/material",
+        17242
+      ],
+      [
+        "reifyNode:node_modules/@next/swc-linux-x64-gnu",
+        16466
+      ],
+      [
+        "reifyNode:node_modules/@mui/joy",
+        15304
+      ],
+      [
+        "reifyNode:node_modules/@mui/base",
+        14414
+      ],
+      [
+        "reifyNode:node_modules/@opentelemetry/api",
+        14147
+      ],
+      [
+        "reifyNode:node_modules/es-abstract",
+        13789
+      ],
+      [
+        "reifyNode:node_modules/@mui/lab",
+        12847
+      ],
+      [
+        "reifyNode:node_modules/caniuse-lite",
+        12685
+      ],
+      [
+        "reifyNode:node_modules/@typescript-eslint/scope-manager",
+        12291
+      ],
+      [
+        "reifyNode:node_modules/@mui/utils",
+        12019
+      ],
+      [
+        "reifyNode:node_modules/postcss-load-config/node_modules/yaml",
+        11735
+      ]
+    ],
+    "longest_script_timers": [],
+    "http": {
+      "lines": 1464,
+      "cache_hits": 758,
+      "cache_misses": 706,
+      "cache_revalidated": 0,
+      "aggregate_request_ms_NOT_wall_time": 4093470,
+      "slowest": [
+        {
+          "line": "2987 http fetch GET 200 https://cdn.npmmirror.com/packages/next/14.2.3/next-14.2.3.tgz 20830ms (cache miss)",
+          "duration_ms": 20830
+        },
+        {
+          "line": "2989 http fetch GET 200 https://cdn.npmmirror.com/packages/%40iconify/json/2.2.248/json-2.2.248.tgz 20794ms (cache miss)",
+          "duration_ms": 20794
+        },
+        {
+          "line": "2985 http fetch GET 200 https://cdn.npmmirror.com/packages/%40next/swc-linux-x64-musl/14.2.3/swc-linux-x64-musl-14.2.3.tgz 18040ms (cache miss)",
+          "duration_ms": 18040
+        },
+        {
+          "line": "2983 http fetch GET 200 https://cdn.npmmirror.com/packages/lucide-react/0.377.0/lucide-react-0.377.0.tgz 17969ms (cache miss)",
+          "duration_ms": 17969
+        },
+        {
+          "line": "2981 http fetch GET 200 https://cdn.npmmirror.com/packages/%40mui/material/5.16.7/material-5.16.7.tgz 16936ms (cache miss)",
+          "duration_ms": 16936
+        },
+        {
+          "line": "2979 http fetch GET 200 https://cdn.npmmirror.com/packages/%40next/swc-linux-x64-gnu/14.2.3/swc-linux-x64-gnu-14.2.3.tgz 16163ms (cache miss)",
+          "duration_ms": 16163
+        },
+        {
+          "line": "2977 http fetch GET 200 https://cdn.npmmirror.com/packages/%40mui/joy/5.0.0-beta.48/joy-5.0.0-beta.48.tgz 14996ms (cache miss)",
+          "duration_ms": 14996
+        },
+        {
+          "line": "2975 http fetch GET 200 https://cdn.npmmirror.com/packages/%40mui/base/5.0.0-beta.40/base-5.0.0-beta.40.tgz 14107ms (cache miss)",
+          "duration_ms": 14107
+        },
+        {
+          "line": "2973 http fetch GET 200 https://cdn.npmmirror.com/packages/%40opentelemetry/api/1.9.0/api-1.9.0.tgz 13843ms (cache miss)",
+          "duration_ms": 13843
+        },
+        {
+          "line": "2971 http fetch GET 200 https://cdn.npmmirror.com/packages/es-abstract/1.23.3/es-abstract-1.23.3.tgz 13521ms (cache miss)",
+          "duration_ms": 13521
+        },
+        {
+          "line": "2969 http fetch GET 200 https://cdn.npmmirror.com/packages/%40mui/lab/5.0.0-alpha.173/lab-5.0.0-alpha.173.tgz 12539ms (cache miss)",
+          "duration_ms": 12539
+        },
+        {
+          "line": "2967 http fetch GET 200 https://cdn.npmmirror.com/packages/caniuse-lite/1.0.30001660/caniuse-lite-1.0.30001660.tgz 12408ms (cache miss)",
+          "duration_ms": 12408
+        }
+      ]
+    },
+    "warning": "Timers are nested/overlapping, not additive. reify:unpack includes retrieval, extraction and filesystem work; npm does not isolate disk-write wall time."
+  },
+  "script_events": [],
+  "install_changes": "",
+  "resources": null,
+  "after_startup_changes": ""
+}

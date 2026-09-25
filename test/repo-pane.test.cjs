@@ -223,17 +223,59 @@ test('lifecycle status sits beside the modal repository name and leaves the foot
   }
 });
 
-test('repo identity and Stop actions retain the original targets and error-handling path', () => {
+test('Build tab row shows time to live on the right, outside the keyboard tablist', () => {
+  const value = run('ready', { build_log: [{ time: '2026-09-22T01:01:24Z', message: 'Preview ready' }] });
+  const html = render(value);
+  const header = html.match(/<header class="repo-details-heading">[\s\S]*?<\/header>/)[0];
+  assert.doesNotMatch(header, /Time to live/);
+  const row = elements.find((element) => element.props.className === 'repo-details-tab-row');
+  const [tabs, duration] = React.Children.toArray(row.props.children);
+  assert.equal(tabs.props.role, 'tablist');
+  assert.equal(duration.props.className, 'repo-build-duration');
+  assert.match(renderToStaticMarkup(duration), /Time to live <time dateTime="PT84S">1m 24s<\/time>/);
+  assert.doesNotMatch(renderToStaticMarkup(tabs), /Time to live/);
+  assert.equal((html.match(/repo-build-duration/g) || []).length, 1);
+  assert.doesNotMatch(toolbar(html), /Time to live/);
+  const css = fs.readFileSync(path.join(__dirname, '../src/renderer/workspace/repo-pane.css'), 'utf8');
+  assert.match(css, /\.repo-details-tab-row\{[^}]*justify-content:space-between;[^}]*flex:none/);
+  assert.match(css, /\.repo-build-duration time\{[^}]*font-variant-numeric:tabular-nums/);
+});
+
+test('Build tab row hides time to live while building or when readiness timing is unavailable', () => {
+  for (const value of [undefined, run('ready'), run('failed'), run('starting', {
+    build_log: [{ time: '2026-09-22T01:01:24Z', message: 'Preview ready' }],
+  })]) assert.doesNotMatch(render(value), /repo-build-duration|Time to live/);
+  assert.match(render(run('ready', { build_log: [{ time: '2026-09-22T01:00:00Z', message: 'Preview ready' }] })), /<time dateTime="PT0S">0s<\/time>/);
+});
+
+test('repo identity opens GitHub directly in Stage and Stop keeps its original target', () => {
   stopped.length = 0; external.length = 0;
   const targets = [];
-  render(run('ready'), { act: (target, action) => { targets.push(target.id); return action(); } });
-  let prevented = false;
-  elements.find((element) => element.type === 'a' && element.props['aria-label'] === 'Open owner/app on GitHub').props.onClick({ preventDefault() { prevented = true; } });
-  assert.equal(prevented, true);
+  const navigations = [];
+  const html = render(run('ready'), { act: (target, action) => { targets.push(target.id); return action(); } });
+  assert.doesNotMatch(html, /repo-visit-confirm|Open repository on GitHub\?/);
+  const identity = elements.find((element) => element.type === 'a' && element.props['aria-label'] === 'Open owner/app on GitHub');
+  const previousWindow = global.window;
+  global.window = { dispatchEvent: (event) => navigations.push([event.type, event.detail]) };
+  try {
+    for (const handler of ['onClick', 'onAuxClick']) {
+      navigations.length = 0;
+      let prevented = false;
+      identity.props[handler]({ button: 1, preventDefault() { prevented = true; } });
+      assert.equal(prevented, true);
+      assert.deepEqual(navigations, [['engelbart:open-in-browser', { url: repo.url }]], 'Clicking the repo name opens it immediately in Stage');
+      assert.deepEqual(external, []);
+    }
+    navigations.length = 0;
+    identity.props.onAuxClick({ button: 2, preventDefault() { assert.fail('Right click should retain its default behavior'); } });
+    assert.deepEqual(navigations, []);
+  } finally {
+    if (previousWindow === undefined) delete global.window; else global.window = previousWindow;
+  }
   button('Stop sandbox').props.onClick();
-  assert.deepEqual(external, [repo.url]);
+  assert.deepEqual(external, [], 'Repo links keep using Stage');
   assert.deepEqual(stopped, ['run']);
-  assert.deepEqual(targets, ['run', 'run']);
+  assert.deepEqual(targets, ['run']);
   render(run('ready'), { busy: { run: true } });
   assert.equal(button('Stop sandbox').props.disabled, true);
   assert.equal(elements.find((element) => element.type === 'button' && element.props['aria-label'] === 'Close build details').props.disabled, undefined);

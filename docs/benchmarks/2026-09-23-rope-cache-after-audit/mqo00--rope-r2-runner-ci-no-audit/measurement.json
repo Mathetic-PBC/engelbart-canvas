@@ -1,0 +1,200 @@
+{
+  "command": [
+    "npm",
+    "ci",
+    "--prefer-offline",
+    "--no-audit",
+    "--timing"
+  ],
+  "cwd": "system",
+  "wall_ms": 20371,
+  "exit_code": 0,
+  "signal": null,
+  "error": null,
+  "runtime": {
+    "node": "v22.23.2",
+    "npm": "10.9.8",
+    "python": "Python 3.11.6",
+    "arch": "x64",
+    "platform": "linux"
+  },
+  "config_hash": "e6cf3cf9776de08593445f3e51fbd6db9e928274ce1cadb821125b05c770d125",
+  "cache": {
+    "size_before_kib": 0,
+    "seed": null
+  },
+  "fingerprint": {
+    "hash": "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3",
+    "packages": 732,
+    "version_mismatches": 0
+  },
+  "input_hashes": {
+    "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+    "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+  },
+  "after_hashes": {
+    "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+    "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+  },
+  "timing_files": [
+    "2026-09-24T05_53_10_163Z-timing.json"
+  ],
+  "analysis": {
+    "timers_ms": {
+      "npm:load:whichnode": 1,
+      "npm:load:configload": 7,
+      "npm:load:mkdirpcache": 1,
+      "npm:load:mkdirplogs": 0,
+      "npm:load:setTitle": 1,
+      "npm:load": 21,
+      "idealTree:buildDeps": 1,
+      "idealTree": 108,
+      "npm-ci:rm": 1,
+      "reify:loadTrees": 3,
+      "reify:diffTrees": 4,
+      "reify:unpack": 19439,
+      "build:deps": 32,
+      "build": 32,
+      "reify:build": 33,
+      "reify": 19673,
+      "command:ci": 19878,
+      "npm": 20093
+    },
+    "longest_package_timers": [
+      [
+        "reifyNode:node_modules/@iconify/json",
+        19435
+      ],
+      [
+        "reifyNode:node_modules/@next/swc-linux-x64-musl",
+        18166
+      ],
+      [
+        "reifyNode:node_modules/next",
+        17841
+      ],
+      [
+        "reifyNode:node_modules/@next/swc-linux-x64-gnu",
+        16495
+      ],
+      [
+        "reifyNode:node_modules/@mui/material",
+        15193
+      ],
+      [
+        "reifyNode:node_modules/lucide-react",
+        14626
+      ],
+      [
+        "reifyNode:node_modules/@mui/joy",
+        13903
+      ],
+      [
+        "reifyNode:node_modules/@mui/base",
+        13185
+      ],
+      [
+        "reifyNode:node_modules/@opentelemetry/api",
+        12900
+      ],
+      [
+        "reifyNode:node_modules/es-abstract",
+        12554
+      ],
+      [
+        "reifyNode:node_modules/@mui/lab",
+        11963
+      ],
+      [
+        "reifyNode:node_modules/@typescript-eslint/scope-manager",
+        11416
+      ],
+      [
+        "reifyNode:node_modules/caniuse-lite",
+        11380
+      ],
+      [
+        "reifyNode:node_modules/@mui/utils",
+        11365
+      ],
+      [
+        "reifyNode:node_modules/postcss-load-config/node_modules/yaml",
+        11207
+      ]
+    ],
+    "longest_script_timers": [],
+    "http": {
+      "lines": 1464,
+      "cache_hits": 760,
+      "cache_misses": 704,
+      "cache_revalidated": 0,
+      "aggregate_request_ms_NOT_wall_time": 3923299,
+      "slowest": [
+        {
+          "line": "2990 http fetch GET 200 https://cdn.npmmirror.com/packages/%40iconify/json/2.2.248/json-2.2.248.tgz 19165ms (cache miss)",
+          "duration_ms": 19165
+        },
+        {
+          "line": "2988 http fetch GET 200 https://cdn.npmmirror.com/packages/%40next/swc-linux-x64-musl/14.2.3/swc-linux-x64-musl-14.2.3.tgz 17900ms (cache miss)",
+          "duration_ms": 17900
+        },
+        {
+          "line": "2986 http fetch GET 200 https://cdn.npmmirror.com/packages/next/14.2.3/next-14.2.3.tgz 17659ms (cache miss)",
+          "duration_ms": 17659
+        },
+        {
+          "line": "2984 http fetch GET 200 https://cdn.npmmirror.com/packages/%40next/swc-linux-x64-gnu/14.2.3/swc-linux-x64-gnu-14.2.3.tgz 16229ms (cache miss)",
+          "duration_ms": 16229
+        },
+        {
+          "line": "2982 http fetch GET 200 https://cdn.npmmirror.com/packages/%40mui/material/5.16.7/material-5.16.7.tgz 14924ms (cache miss)",
+          "duration_ms": 14924
+        },
+        {
+          "line": "2980 http fetch GET 200 https://cdn.npmmirror.com/packages/lucide-react/0.377.0/lucide-react-0.377.0.tgz 14432ms (cache miss)",
+          "duration_ms": 14432
+        },
+        {
+          "line": "2978 http fetch GET 200 https://cdn.npmmirror.com/packages/%40mui/joy/5.0.0-beta.48/joy-5.0.0-beta.48.tgz 13634ms (cache miss)",
+          "duration_ms": 13634
+        },
+        {
+          "line": "2976 http fetch GET 200 https://cdn.npmmirror.com/packages/%40mui/base/5.0.0-beta.40/base-5.0.0-beta.40.tgz 12915ms (cache miss)",
+          "duration_ms": 12915
+        },
+        {
+          "line": "2974 http fetch GET 200 https://cdn.npmmirror.com/packages/%40opentelemetry/api/1.9.0/api-1.9.0.tgz 12634ms (cache miss)",
+          "duration_ms": 12634
+        },
+        {
+          "line": "2972 http fetch GET 200 https://cdn.npmmirror.com/packages/es-abstract/1.23.3/es-abstract-1.23.3.tgz 12323ms (cache miss)",
+          "duration_ms": 12323
+        },
+        {
+          "line": "2970 http fetch GET 200 https://cdn.npmmirror.com/packages/%40mui/lab/5.0.0-alpha.173/lab-5.0.0-alpha.173.tgz 11693ms (cache miss)",
+          "duration_ms": 11693
+        },
+        {
+          "line": "2968 http fetch GET 200 https://cdn.npmmirror.com/packages/%40typescript-eslint/scope-manager/7.2.0/scope-manager-7.2.0.tgz 11160ms (cache miss)",
+          "duration_ms": 11160
+        }
+      ]
+    },
+    "warning": "Timers are nested/overlapping, not additive. reify:unpack includes retrieval, extraction and filesystem work; npm does not isolate disk-write wall time."
+  },
+  "script_events": [],
+  "install_changes": "",
+  "resources": {
+    "wall_seconds": 20.152417645000003,
+    "user_seconds": 14.859137,
+    "system_seconds": 10.913376,
+    "max_rss_kib": 355900,
+    "input_blocks": 4728,
+    "output_blocks": 2462800,
+    "major_page_faults": 27,
+    "minor_page_faults": 110711,
+    "voluntary_context_switches": 685152,
+    "involuntary_context_switches": 94
+  },
+  "after_startup_changes": ""
+}

@@ -42,14 +42,29 @@ permanent bottom panel. **Build** always opens the existing centered modal on it
 lifecycle rows; **Logs** shows the recorded output in chronological order using
 the same terminal/progress normalization; **Environment** keeps its existing editor.
 The compact repo/build header contains run status, View on GitHub, and an × close
-control. A quiet footer holds the current sandbox state and the existing Run / Retry
+control. The Build inspector also shows **Time to live** when both timestamps
+are known: run creation (or the latest restart) to the first verified preview.
+This is wall time, not the sum of overlapping steps; later agent narration and
+runtime monitoring do not extend it. A quiet footer holds the current sandbox state and the existing Run / Retry
 and Stop actions. README utilities and retention-limit text are not shown here.
 Close, Escape, or clicking
 the backdrop returns to the README without losing its scroll position; unsaved
 environment edits survive tab changes and closing/reopening the modal for the
 same selected repository. The latest 300 events
-are saved with each run and survive reloads and app restarts. Older runs begin
-recording activity after this update. When a build finishes successfully, the
+are saved with each run and survive reloads and app restarts. Compact lifecycle
+milestones are retained separately, so live process snapshots cannot erase the
+Build overview. Local-Claude builds replace the empty Run Plan placeholder with
+**Setup agent**, including initiation, assistant messages, tool activity, and its
+explicit outcome. Agent activity has its own bounded 200-event tail, independent
+of application output. Its duration can overlap installation, not add to it.
+**Services** shows observed owned processes/listening ports and the preview HTTP
+check, not a claim that every backend or credential-dependent feature works.
+**Environment** distinguishes saved names applied to launch from a requirements
+scan; local setup does not currently run that scan. Values are never recorded.
+Logs and expanded steps combine those records with the recent output; raw output
+beyond the rolling limits is not retained. On upgrade, any
+remaining lifecycle evidence is preserved; already-discarded steps show “Not
+recorded” without made-up durations. When a build finishes successfully, the
 top-right notification bell receives an unread preview-ready notification; the
 current pane and browser tabs stay unchanged. Clicking the notification or **Live ↗**
 opens the verified preview on demand. The bell is also available on Home and Create
@@ -81,6 +96,10 @@ Supabase, or the web worker. Repositories with Compose/Supabase configuration us
 tries the desktop Claude CLI subscription before the API pipeline.
 For repositories with a root `yarn.lock`, the adapter installs Yarn Classic in
 the disposable sandbox if it is missing from the template.
+
+An optional [warmed-cache template](sandbox-cache.md) inherits that runner and
+seeds npm/pip caches. It leaves repository installs, setup agents, and Docker
+templates unchanged.
 
 ### Local Claude subscription — default, with API fallback
 
@@ -138,9 +157,15 @@ user's Claude billing settings still apply; E2B compute is separate.
 
 The local CLI runs in restricted mode with built-in tools disabled, hooks disabled,
 and only the per-run MCP configuration. A private stdio adapter calls a random,
-authenticated loopback endpoint in the worker. Six tools can read/write/list repository
+authenticated loopback endpoint in the worker. Eight tools can read/write/list repository
 files, control a managed dependency install, run foreground commands, or start a web
 app **inside that one E2B VM**.
+`app_status` reports current owned processes, listening addresses/ports, local HTTP
+health and a bounded log tail; an optional `port` checks a particular conflict or
+backend listener. `stop_app` stops only the managed app and confirms its descendants
+are gone, preserving the VM/files. Other tool replies include the latest observed
+app snapshot and up to four compact changes. These are observations delivered at
+tool boundaries, not a second agent continually consuming tokens.
 The bridge accepts no sandbox ID from the agent, validates every argument itself,
 serializes agent tool calls, bounds returned output, and redacts saved environment
 values. The managed install runs independently of that tool queue, so file reads and
@@ -156,9 +181,33 @@ inspection, install/build decisions, and repairs using the sandbox tools. The wo
 saves a `kind: "claude-local"` recipe with command/cwd/port/path in the VM, starts the
 app under `launch.py`, and verifies the public proxy URL independently. The normal
 `sandbox_runs` log/status events drive Repo's build logs and preview-ready notifications.
+The local `start_app` publishes readiness immediately after its owned-process,
+local HTTP and public-preview checks pass, without waiting for Claude's final message.
+The tool bridge then rejects further setup mutations (including queued calls);
+read-only inspection remains available. Claude has up to 30 seconds to finish its
+summary, outside readiness timing. A summary error/timeout does not stop the verified
+app or trigger API fallback. App supervision, user Stop, and cancellation remain active
+during finalization; an application exit still stops/fails the run normally.
 No new database table or Claude credential record is created. The local attempt is
 bounded to 32 Claude turns and 15 minutes. The API setup deadline is 45 minutes;
 the sandbox lifetime remains one hour, including both attempts when falling back.
+
+The local launcher samples its owned processes/listeners and HTTP health about once
+a second while running (checks can take longer). Only changes emit `app_status`
+build events. It persists a private, bounded `app.json` inside the sandbox, with an
+attempt tag and PID start times so orphaned children remain identifiable after their
+supervisor exits. Starts are locked, cancelled attempts are fenced, and replacement
+waits for a confirmed stop. Unknown/unowned listeners on the requested preview port
+block launch; they are never killed to free a port. Health checks target the actual
+owned IPv4/IPv6 loopback listener, and the preview proxy uses that same address.
+Running processes, successful local HTTP, and a verified public preview are distinct
+facts. A failed start returns its failed-check snapshot plus post-cleanup state, and
+the original error appears in build events. Common duplicate-server and broad-kill
+commands are rejected by `run_command`; this is a guardrail, not a shell security
+boundary. The prompt directs diagnostics through `app_status`, not another server.
+This observes multi-process launches but does not assert all backend routes or API
+credentials work merely because the frontend responds. Existing API-mode/hc setup
+is unchanged; saved local-Claude recipes also use this supervisor on env restart.
 
 Before starting Claude, the worker runs a bounded read-only preflight and automatically
 starts a managed install for an unambiguous root Node project with one recognized
@@ -179,6 +228,112 @@ ambiguity/prerequisite before starting the same managed job; runtime-only creden
 must not delay an independent install. The tool supports agent-chosen commands for other
 languages too; only automatic selection is currently limited to clear Node setups.
 
+Before the Claude call, bounded Railpack-assisted discovery runs alongside the
+deterministic install preflight. The existing template's `railpack prepare` analyzes
+up to three install roots concurrently (six-second timeout per root); it does not
+execute its plan, install packages, build an image, or receive app credentials.
+Up to eight manifest components are discovered within three directory levels;
+generated/dependency directories and symlink traversal are excluded. Workspace
+children retain their scripts but are not separately analyzed as install roots.
+
+Claude receives at most 12 KB of discovery JSON: component paths, selected launch/
+build scripts, lockfiles, declared runtimes/workspaces, local proxy evidence, relevant
+file paths, providers/package managers/frameworks, Railpack install/build/start hints,
+and bounded warnings. Build layers, assets, caches, environment values and the full
+Railpack plan are excluded. Missing/truncated/unsupported discovery stays explicit
+and falls back to agent inspection. Railpack production defaults are advisory, not
+authority to change runtimes or force a production build. The prompt prefers an
+existing development server when appropriate and plans required backend services
+during installation rather than claiming a frontend-only launch is a complete app.
+Railpack's output contract is documented in its
+[production integration guide](https://railpack.com/platforms/running-railpack-in-production).
+
+Each tool reply also includes a compact `dependency_install` snapshot sampled after
+that operation, so a file read can report that installation has just finished without
+an extra status request. Full install output stays in the explicit status tool.
+Claude is instructed to prepare the launch command, directory, port and required
+prelaunch steps during installation, then stop general exploration. Once installation
+succeeds and no known startup prerequisite remains, its next tool call should be
+`start_app` (or a specific required build/configuration step first), not another broad
+README, source or optional-feature review. Readiness is based on repository evidence,
+not a numerical confidence score. If the recipe is ready while installation is still
+running, Claude can call `start_app` with `wait_for_install: true`: the same tool call
+waits up to 30 seconds for confirmed install success, then launches without another
+agent round trip. If that wait expires, no launch is queued; Claude must wait for the
+install result and retry. Failure, stop, cancellation and incomplete cleanup still
+block launch. All existing health checks, credential rules and targeted-retry
+safeguards remain in place. The prompt guides when Claude submits a recipe; it does
+not guarantee a fixed model-response latency before submission.
+
+Validation on 2026-09-23 (Pacific): **128 sandbox tests passed**, including an
+install completing during a file read, same-call launch after success, and no launch
+after install failure, incomplete cleanup, stop, cancellation, close or wait timeout.
+Two fresh cached-template Rope checks with real local Claude both reached public
+HTTP 200 HTML and were cleaned up:
+
+- [Prompt/status-only attempt](benchmarks/2026-09-23-prompt-launch-smoke/measurement.json):
+  17.157 s install, then 14.676 s until the launch stage; 60.534 s total.
+- [Prepared-launch-capable attempt](benchmarks/2026-09-23-install-launch-handoff-smoke/measurement.json):
+  19.461 s install, then 9.187 s until the launch stage; 57.841 s total.
+
+These are development smoke checks, not a controlled speedup estimate. The agent
+chose `npm install` in the first and `npm ci` in the second; both installed the same
+732-package fingerprint without tracked source changes. In the second check Claude
+still inspected startup imports after install and submitted its launch **after**
+completion, so the pre-completion handoff was verified by automated tests, not
+exercised by that real-agent run. It does not establish a zero-delay guarantee or
+prove secret-dependent features work. Existing user previews/configuration were
+untouched by these checks.
+
+For independent npm frontend + Python `requirements.txt` backend directories, Claude
+can request one managed parallel job:
+
+```json
+{
+  "action": "start",
+  "parallel": [
+    { "manager": "npm", "cwd": "system/frontend" },
+    { "manager": "pip", "cwd": "system/backend" }
+  ]
+}
+```
+
+The worker validates both targets before starting either: disjoint real repository
+paths, no shared parent manifests/configuration or linked dependencies, a compatible
+npm lockfile/runtime without custom install scripts, and plain Python requirements
+without local/editable/include directives or custom bootstrap configuration. npm uses
+`npm ci --no-audit`; Python creates a directory-local `.venv` then installs its
+requirements. Existing Python environments and ambiguous layouts defer to sequential
+agent-chosen commands. In particular, an npm workspace is still installed once at its
+workspace root, never split into competing jobs. Output identifies each target. Both
+must succeed; stop/replacement cleans up the entire owned process tree. Claude can
+continue read-only inspection while both installs run.
+
+npm's inline audit is disabled through process-scoped `npm_config_audit=false` in
+managed installs and setup commands (including API fallback). No global npm config,
+dependency versions, install scripts, or devDependency selection is changed. After a
+new build's preview is verified, a separate read-only `npm audit --json --audit=true`
+checks installed npm lockfile roots and reports severity counts and affected-package
+summaries to the existing Build **Logs** view. Findings are not hidden: npm's normal
+nonzero exit with vulnerabilities is a report, not a setup failure. The audit never
+runs `fix`, blocks preview readiness, or changes the run's ready status. Missing/
+unavailable reports are labelled as such, not treated as clean. Scanning is bounded to
+200 directories/depth 5/10 npm roots; audits have a 30-second per-root and 90-second
+overall time budget. Workspaces are audited once. Non-npm projects are not audited by
+this npm-specific task. Environment-only restarts do not repeat installation or audit.
+
+Validation (2026-09-23): fresh `engelbart-runner` sandboxes, Hypocompass commit
+`7bc855e7316aeb17e9919013a26aa0427138d480`, 8 CPU / 8192 MiB, Node 22.23.2 /
+npm 10.9.8. Two alternating-order runs each measured sequential Python + `npm ci
+--audit=true` at 42.738s / 39.972s, versus the managed parallel pair with inline audit
+disabled at 16.793s / 21.338s (means 41.355s vs 19.066s, about 54% less install time).
+This isolates the combined install optimizations, not total preview time or the prior
+`npm install` cache benchmark. All four cases had identical installed-package
+fingerprints (2097 npm entries, 25 Python distributions) and no tracked file changes.
+A separate end-to-end managed-install smoke took 25.216s including validation/transport
+and confirmed deferred audit findings were emitted. Timings vary; no warmed-cache
+template was enabled. All five disposable verification sandboxes were removed.
+
 Each install is bounded to ten minutes within the existing fifteen-minute local setup
 deadline. Its output streams to the existing build log, and status includes command,
 directory, timestamps, exit code and a bounded redacted log tail. Status may wait up to
@@ -187,11 +342,12 @@ arbitrary shell commands and writes require the active install to finish or be s
 app launch additionally requires success or an explicit skip. Failed/stopped jobs are
 never silently treated as successful. Cleanup tags and stops only the owned job's process
 tree, checks process identities to avoid PID reuse, and fences delayed starts. Setup exit
-stops an unfinished install before any API handoff. No new database schema, renderer UI,
-API-mode pipeline or environment-only restart behavior is introduced by this change.
+stops an unfinished install before any API handoff. No new database schema or renderer
+UI is introduced; the API pipeline is otherwise unchanged, and environment-only
+restarts still reuse installed dependencies and the saved launch recipe.
 
-First-version scope: one foreground web-server launch command, not full hc parity
-for multi-service orchestration, Railpack recipes, or automatic environment-variable
+Scope: one foreground launch command (which may supervise required child services),
+not full hc parity for multi-service orchestration, execution of Railpack recipes, or automatic environment-variable
 discovery. Saved manual environment overrides are supported, including same-sandbox
 add/update/remove restarts with no model call, clone, or dependency reinstall. Changing
 the application's listening port requires a new launch plan. Production frontend
@@ -261,7 +417,13 @@ already-built JavaScript. Such public variables must not contain secrets.
 repository through `sandbox_runs.library_id → library.id`; run updates do not
 change the library row. Run records survive restarts. The `build_log` JSONB
 column stores the latest 300 timestamped progress and lifecycle messages for
-each run; the latest status message is also kept in memory. Deleting a library
+each run. `build_milestones` retains the first/latest redacted record per lifecycle
+phase, stage, and outcome independently of that tail, plus the latest 200 setup
+agent activity records and first/latest valid process observations. Runtime
+snapshots and audit reports are not build transitions. Event sequences preserve order
+when timestamps tie; UI merging deduplicates records. Application restarts clear
+the milestone set and preserve their new restart boundary, without changing the
+run or sandbox identity. The latest status message is also kept in memory. Deleting a library
 entry with run records is restricted.
 
 1. Save or reuse the library entry and check its GitHub URL.

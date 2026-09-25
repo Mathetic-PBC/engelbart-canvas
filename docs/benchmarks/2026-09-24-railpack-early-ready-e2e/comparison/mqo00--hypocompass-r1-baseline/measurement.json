@@ -1,0 +1,235 @@
+{
+  "id": "45cdd4b1-95e4-4b2c-81b2-43eead772c30",
+  "template": "engelbart-canvas-cached",
+  "round": 1,
+  "repository": "mqo00/hypocompass",
+  "pinned_commit": "7bc855e7316aeb17e9919013a26aa0427138d480",
+  "started_at": "2026-09-24T08:39:30.091Z",
+  "provider": "claude-local",
+  "model_requested": "sonnet",
+  "sandbox_id": "ifuuiid9vjkcxhpeushc2",
+  "variant": "baseline",
+  "baseline_kind": "current",
+  "artifact_directory": "mqo00--hypocompass-r1-baseline",
+  "template_id": "5mqfzddjuicidc1w92y5",
+  "resources": {
+    "cpu": 8,
+    "memory_mb": 8192
+  },
+  "commit": "7bc855e7316aeb17e9919013a26aa0427138d480",
+  "agent": {
+    "started_ms": 4632,
+    "prompt_bytes": 8238,
+    "models": [
+      "claude-sonnet-5"
+    ],
+    "assistant_messages": 8,
+    "tool_calls": [
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 6629,
+        "finished_ms": 6751,
+        "elapsed_ms": 122,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__list_files",
+        "started_ms": 6843,
+        "finished_ms": 6965,
+        "elapsed_ms": 122,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__list_files",
+        "started_ms": 7061,
+        "finished_ms": 7182,
+        "elapsed_ms": 121,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 8777,
+        "finished_ms": 8846,
+        "elapsed_ms": 69,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__list_files",
+        "started_ms": 9060,
+        "finished_ms": 9186,
+        "elapsed_ms": 126,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__list_files",
+        "started_ms": 9239,
+        "finished_ms": 9370,
+        "elapsed_ms": 131,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 13550,
+        "finished_ms": 13690,
+        "elapsed_ms": 140,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 13917,
+        "finished_ms": 13989,
+        "elapsed_ms": 72,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 14142,
+        "finished_ms": 14220,
+        "elapsed_ms": 78,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__list_files",
+        "started_ms": 24978,
+        "finished_ms": 25177,
+        "elapsed_ms": 199,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__app_status",
+        "started_ms": 25012,
+        "finished_ms": 25303,
+        "elapsed_ms": 291,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 26799,
+        "finished_ms": 26943,
+        "elapsed_ms": 144,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__dependency_install",
+        "started_ms": 29002,
+        "install_action": "start",
+        "parallel_install_managers": [
+          "npm",
+          "pip"
+        ],
+        "finished_ms": 31262,
+        "elapsed_ms": 2260,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__start_app",
+        "started_ms": 34738,
+        "wait_for_install": true,
+        "finished_ms": 57392,
+        "elapsed_ms": 22654,
+        "is_error": false
+      }
+    ],
+    "cli_result": {
+      "subtype": "success",
+      "is_error": false,
+      "usage": {
+        "input_tokens": 16,
+        "output_tokens": 2677,
+        "cache_creation_input_tokens": 18948,
+        "cache_read_input_tokens": 127307
+      },
+      "duration_ms": 53886,
+      "duration_api_ms": 28276,
+      "num_turns": 15
+    },
+    "finished_ms": 59431,
+    "wall_ms": 54799
+  },
+  "worker_ready_ms": 59496,
+  "preview_url": "https://43110-ifuuiid9vjkcxhpeushc2.e2b.app/",
+  "port": 8080,
+  "public_check": {
+    "status": 200,
+    "html": true,
+    "ok": true
+  },
+  "preview_only_ms": 59637,
+  "services_check": {
+    "ok": true,
+    "checks": [
+      {
+        "port": 8090,
+        "path": "/",
+        "ok": true,
+        "owned": true,
+        "status": 200,
+        "expected_content": true
+      }
+    ]
+  },
+  "end_to_end_ms": 59767,
+  "status": "ready",
+  "installed": {
+    "packages": {
+      "pip:system/backend": {
+        "interpreter": "system/backend/.venv/bin/python",
+        "candidates": [
+          "system/backend/.venv/bin/python"
+        ],
+        "version": "Python 3.11.6",
+        "fingerprint": {
+          "hash": "1bfc3096b52a8abb4ac62363ee0c3705cac0f547a9b4a3606259092dcc1368d5",
+          "packages": 25
+        }
+      },
+      "npm:system/frontend": {
+        "fingerprint": {
+          "hash": "dde528bef3af20444904c791702f1d8dd48cc2532894d23aebaeeadb6eaa7bcc",
+          "packages": 2097,
+          "version_mismatches": 0
+        }
+      }
+    },
+    "node": "v22.23.2",
+    "npm": "10.9.8",
+    "python": "Python 3.11.6",
+    "arch": "x64",
+    "platform": "linux",
+    "cache": {
+      "npm_prefer_offline": "true",
+      "seed_present": true
+    },
+    "manifest_hashes": {
+      "system/frontend/package.json": "995face2ce22984946aed81beba66031852050c55e5138878736473f719fb362",
+      "system/frontend/package-lock.json": "9f2eec5ef2b2babe6ce82389f8fb6dc355d5301f99a8d78559f153cf1dfaff53",
+      "system/backend/requirements.txt": "ffb9292f5843b9e2f254a41a4509b118c268a496261b58b3b5fc6b572715263c"
+    },
+    "install_changes": "",
+    "package_evidence_hash": "1f8d0ebf9b65dcae2a4a35d228dc699e5cdf2b3529a296d9c3ac9f64eb985ce2"
+  },
+  "cleaned_up": true,
+  "phases": {
+    "worker_ready_ms": 59495,
+    "auth_ms": 907,
+    "detection_and_creation_ms": 1067,
+    "clone_ms": 1602,
+    "agent_started_ms": 4632,
+    "agent_wall_ms": 54799,
+    "first_app_start_ms": 44618,
+    "first_start_to_ready_ms": 14877,
+    "installs": [
+      {
+        "id": "19f3592a-f2b4-4fda-862a-87c0f8a64748",
+        "command": "Parallel dependency installs: npm (system/frontend) + pip (system/backend)",
+        "started_ms": 29013,
+        "status": "succeeded",
+        "finished_ms": 44087,
+        "elapsed_ms": 15074,
+        "exit_code": 0
+      }
+    ],
+    "note": "Agent wall time contains tool waits and overlaps installation/startup. CLI duration_api_ms is reported as-is, not pure thinking time. Tool round trips may overlap/queue. Do not sum these phases."
+  },
+  "finished_at": "2026-09-24T08:40:31.402Z"
+}

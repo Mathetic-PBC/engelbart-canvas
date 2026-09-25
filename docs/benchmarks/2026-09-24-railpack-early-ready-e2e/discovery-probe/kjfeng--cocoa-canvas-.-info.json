@@ -1,0 +1,52 @@
+{
+  "railpackVersion": "0.39.0",
+  "resolvedPackages": {
+    "node": {
+      "name": "node",
+      "requestedVersion": "lts",
+      "resolvedVersion": "24.21.0",
+      "source": "railpack default"
+    }
+  },
+  "metadata": {
+    "nodePackageManager": "npm",
+    "nodeRuntime": "node",
+    "providers": "node"
+  },
+  "detectedProviders": [
+    "node"
+  ],
+  "logs": [
+    {
+      "Level": "warn",
+      "Msg": "package-lock.json detected, assuming npm",
+      "DocsPath": ""
+    },
+    {
+      "Level": "suggestion",
+      "Msg": "Specify the package manager and version explicitly",
+      "DocsPath": "/config/recommendations#specify-the-node-package-manager-version"
+    },
+    {
+      "Level": "info",
+      "Msg": "Detected Node",
+      "DocsPath": ""
+    },
+    {
+      "Level": "info",
+      "Msg": "Using npm package manager",
+      "DocsPath": ""
+    },
+    {
+      "Level": "info",
+      "Msg": "Found workspace with 2 packages",
+      "DocsPath": ""
+    },
+    {
+      "Level": "warn",
+      "Msg": "No start command detected. Specify a start command: https://railpack.com/config/file#deploy\n\nTo configure your start command, Railpack will check:\n\n1. A \"start\" script in your package.json:\n   \"scripts\": {\n     \"start\": \"node index.js\"\n   }\n\n2. A \"main\" field in your package.json pointing to your entry file:\n   \"main\": \"src/server.js\"\n\n3. An index.js or index.ts file in your project root\n\n4. An Nx workspace with a Next.js app (nx.json + next)\n\nIf you have a static site, you can set the RAILPACK_SPA_OUTPUT_DIR environment variable\ncontaining the directory of your built static files.\n\nFor multi-app Nx workspaces, set RAILPACK_NX_APP to select which app to deploy.\n\nFor more information, see the Node.js production deployment guide: https://railway.app/docs/deploy/node",
+      "DocsPath": ""
+    }
+  ],
+  "success": true
+}

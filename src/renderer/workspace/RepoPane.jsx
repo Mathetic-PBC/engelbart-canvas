@@ -1,6 +1,9 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api.js';
+import { OPEN_IN_BROWSER } from '../model/address.js';
+import { timeToLive } from '../model/canvas-build.js';
+import { formatDuration } from '../model/run-steps.js';
 import { useSandboxes } from '../ui/SandboxProgress.jsx';
 import { GH } from '../ui/Icons.jsx';
 import { usePlaced } from '../ui/usePlaced.js';
@@ -111,6 +114,7 @@ export function RepoSwitcher({ repo, repositories, onSelect }) {
 
 export function Repository({ repo, repositories = [], onSelect, item, busy, act, open, error }) {
   const run = item?.run;
+  const liveDuration = React.useMemo(() => timeToLive(run), [run]);
   const log = run?.build_log || [];
   const active = run && ['starting', 'ready'].includes(run.status);
   const actionTarget = run || { id: repo.id };
@@ -130,7 +134,8 @@ export function Repository({ repo, repositories = [], onSelect, item, busy, act,
   const openPreview = () => { closeDetails(); open(run); };
   const visitRepository = (event) => {
     event.preventDefault();
-    void act(actionTarget, () => api.openExternal(repo.url));
+    closeDetails();
+    window.dispatchEvent(new CustomEvent(OPEN_IN_BROWSER, { detail: { url: repo.url } }));
   };
   const identity = <a className="repo-toolbar-identity repo-repository-link" href={repo.url} title={`Open ${repo.name} on GitHub`}
     aria-label={`Open ${repo.name} on GitHub`} onClick={visitRepository} onAuxClick={(event) => { if (event.button === 1) visitRepository(event); }}>
@@ -210,10 +215,15 @@ export function Repository({ repo, repositories = [], onSelect, item, busy, act,
             <button ref={closeButton} type="button" className="repo-details-action repo-details-close" onClick={closeDetails} aria-label="Close build details" title="Close">×</button>
           </div>
         </header>
-        <div role="tablist" aria-label="Build details" className="repo-details-tabs" onKeyDown={tabKeys}>
-          {DETAILS_TABS.map((tab) => <button key={tab} type="button" role="tab" data-tab={tab} id={`${detailsId}-${tab}-tab`}
-            aria-selected={detailsTab === tab} aria-controls={`${detailsId}-${tab}`} tabIndex={detailsTab === tab ? 0 : -1}
-            onClick={() => chooseTab(tab)}>{tab[0].toUpperCase() + tab.slice(1)}</button>)}
+        <div className="repo-details-tab-row">
+          <div role="tablist" aria-label="Build details" className="repo-details-tabs" onKeyDown={tabKeys}>
+            {DETAILS_TABS.map((tab) => <button key={tab} type="button" role="tab" data-tab={tab} id={`${detailsId}-${tab}-tab`}
+              aria-selected={detailsTab === tab} aria-controls={`${detailsId}-${tab}`} tabIndex={detailsTab === tab ? 0 : -1}
+              onClick={() => chooseTab(tab)}>{tab[0].toUpperCase() + tab.slice(1)}</button>)}
+          </div>
+          {liveDuration !== null && <span className="repo-build-duration" title="Wall-clock time from setup start (or the latest restart) to the first verified live preview.">
+            Time to live <time dateTime={`PT${Math.round(liveDuration / 1000)}S`}>{formatDuration(liveDuration)}</time>
+          </span>}
         </div>
         {error && <p role="alert" className="repo-error">{error}</p>}
         <div className="repo-details-scroll repo-details-build-pane" id={`${detailsId}-build`} role="tabpanel" aria-labelledby={`${detailsId}-build-tab`} hidden={detailsTab !== 'build'}>

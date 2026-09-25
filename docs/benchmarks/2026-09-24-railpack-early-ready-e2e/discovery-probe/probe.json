@@ -1,0 +1,132 @@
+{
+  "sandbox_id": "ih02pfyyazpl6n4prdjk0",
+  "created_at": "2026-09-24T08:27:09.608Z",
+  "trials": [
+    {
+      "repo": "mqo00/rope",
+      "cwd": ".",
+      "elapsed_ms": 1333.0583340000003,
+      "exitCode": 1,
+      "stdout": "                   \n╭─────────────────╮\n│ Railpack 0.39.0 │\n╰─────────────────╯\n\n  ⚠ Script start.sh not found\n  ✖ Railpack could not determine how to build the app.\n  \n  The following languages are supported:\n  - Php\n  - Golang\n  - Java\n  - Rust\n  - Ruby\n  - Elixir\n  - Python\n  - Deno\n  - Dotnet\n  - Node\n  - Gleam\n  - Cpp\n  - Staticfile\n  - Shell\n  \n  The app contents that Railpack analyzed contains:\n  \n  ./\n  ├── .git/\n  ├── study_material/\n  ├── system/\n  ├── .gitignore\n  ├── LICENSE\n  └── README.md\n  \n  Check out the docs for more information: https://railpack.com\n\n\n",
+      "stderr": "",
+      "error": "exit status 1",
+      "info_bytes": 679,
+      "info_keys": [
+        "logs",
+        "success"
+      ]
+    },
+    {
+      "repo": "mqo00/rope",
+      "cwd": "system",
+      "elapsed_ms": 188.48841600000014,
+      "exitCode": 0,
+      "stdout": "                   \n╭─────────────────╮\n│ Railpack 0.39.0 │\n╰─────────────────╯\n\n  ⚠ Package-lock.json detected, assuming npm\n  → Specify the package manager and version explicitly https://railpack.com/config/recommendations#specify-the-node-package-manager-version\n  ↳ Detected Node\n  ↳ Using npm package manager\n            \n  Packages  \n  ──────────\n  node  │  24.21.0  │  railpack default (lts)\n            \n  Steps     \n  ──────────\n  ▸ install\n    $ npm install\n         \n  ▸ build\n    $ npm run build\n            \n  Deploy    \n  ──────────\n    $ npm run start\n\n",
+      "stderr": "",
+      "plan_bytes": 4290,
+      "plan_keys": [
+        "$schema",
+        "caches",
+        "deploy",
+        "steps"
+      ],
+      "info_bytes": 883,
+      "info_keys": [
+        "railpackVersion",
+        "resolvedPackages",
+        "metadata",
+        "detectedProviders",
+        "logs",
+        "success"
+      ]
+    },
+    {
+      "repo": "kjfeng/cocoa-canvas",
+      "cwd": ".",
+      "elapsed_ms": 112.59120900000016,
+      "exitCode": 0,
+      "stdout": "                   \n╭─────────────────╮\n│ Railpack 0.39.0 │\n╰─────────────────╯\n\n  ⚠ Package-lock.json detected, assuming npm\n  → Specify the package manager and version explicitly https://railpack.com/config/recommendations#specify-the-node-package-manager-version\n  ↳ Detected Node\n  ↳ Using npm package manager\n  ↳ Found workspace with 2 packages\n  ⚠ No start command detected. Specify a start command: https://railpack.com/config/file#deploy          \n                                                                                                         \n  To configure your start command, Railpack will check:                                                  \n                                                                                                         \n  1. A \"start\" script in your package.json:                                                              \n     \"scripts\": {                                                                                        \n       \"start\": \"node index.js\"                                                                          \n     }                                                                                                   \n                                                                                                         \n  2. A \"main\" field in your package.json pointing to your entry file:                                    \n     \"main\": \"src/server.js\"                                                                             \n                                                                                                         \n  3. An index.js or index.ts file in your project root                                                   \n                                                                                                         \n  4. An Nx workspace with a Next.js app (nx.json + next)                                                 \n                                                                                                         \n  If you have a static site, you can set the RAILPACK_SPA_OUTPUT_DIR environment variable                \n  containing the directory of your built static files.                                                   \n                                                                                                         \n  For multi-app Nx workspaces, set RAILPACK_NX_APP to select which app to deploy.                        \n                                                                                                         \n  For more information, see the Node.js production deployment guide: https://railway.app/docs/deploy/node\n            \n  Packages  \n  ──────────\n  node  │  24.21.0  │  railpack default (lts)\n            \n  Steps     \n  ──────────\n  ▸ install\n    $ npm install\n\n\n",
+      "stderr": "",
+      "plan_bytes": 4332,
+      "plan_keys": [
+        "$schema",
+        "caches",
+        "deploy",
+        "steps"
+      ],
+      "info_bytes": 1871,
+      "info_keys": [
+        "railpackVersion",
+        "resolvedPackages",
+        "metadata",
+        "detectedProviders",
+        "logs",
+        "success"
+      ]
+    },
+    {
+      "repo": "mqo00/hypocompass",
+      "cwd": ".",
+      "elapsed_ms": 75.17341699999997,
+      "exitCode": 1,
+      "stdout": "                   \n╭─────────────────╮\n│ Railpack 0.39.0 │\n╰─────────────────╯\n\n  ⚠ Script start.sh not found\n  ✖ Railpack could not determine how to build the app.\n  \n  The following languages are supported:\n  - Php\n  - Golang\n  - Java\n  - Rust\n  - Ruby\n  - Elixir\n  - Python\n  - Deno\n  - Dotnet\n  - Node\n  - Gleam\n  - Cpp\n  - Staticfile\n  - Shell\n  \n  The app contents that Railpack analyzed contains:\n  \n  ./\n  ├── .git/\n  ├── study_material/\n  ├── system/\n  ├── .gitignore\n  ├── LICENSE\n  └── README.md\n  \n  Check out the docs for more information: https://railpack.com\n\n\n",
+      "stderr": "",
+      "error": "exit status 1",
+      "info_bytes": 679,
+      "info_keys": [
+        "logs",
+        "success"
+      ]
+    },
+    {
+      "repo": "mqo00/hypocompass",
+      "cwd": "system/backend",
+      "elapsed_ms": 1222.3760420000008,
+      "exitCode": 0,
+      "stdout": "                   \n╭─────────────────╮\n│ Railpack 0.39.0 │\n╰─────────────────╯\n\n  ↳ Detected Python\n  ↳ Using pip\n  ⚠ No start command detected. Specify a start command: https://railpack.com/config/file#deploy\n                                                                                               \n  To start your Python application, Railpack will automatically:                               \n                                                                                               \n  1. Start FastHTML projects with uvicorn                                                      \n  2. Start FastAPI projects with uvicorn                                                       \n  3. Start Flask projects with gunicorn                                                        \n  4. Start Django projects with the gunicorn production server                                 \n                                                                                               \n  Otherwise, it will run the main.py or app.py file in your project root                       \n            \n  Packages  \n  ──────────\n  python  │  3.13.15  │  railpack default (3.13)\n            \n  Steps     \n  ──────────\n  ▸ install\n    $ python -m venv /app/.venv\n    $ pip install -r requirements.txt\n\n\n",
+      "stderr": "",
+      "plan_bytes": 3272,
+      "plan_keys": [
+        "$schema",
+        "caches",
+        "deploy",
+        "steps"
+      ],
+      "info_bytes": 1064,
+      "info_keys": [
+        "railpackVersion",
+        "resolvedPackages",
+        "metadata",
+        "detectedProviders",
+        "logs",
+        "success"
+      ]
+    },
+    {
+      "repo": "mqo00/hypocompass",
+      "cwd": "system/frontend",
+      "elapsed_ms": 114.83070899999984,
+      "exitCode": 0,
+      "stdout": "                   \n╭─────────────────╮\n│ Railpack 0.39.0 │\n╰─────────────────╯\n\n  ⚠ Package-lock.json detected, assuming npm\n  → Specify the package manager and version explicitly https://railpack.com/config/recommendations#specify-the-node-package-manager-version\n  ↳ Detected Node\n  ↳ Using npm package manager\n  ↳ Custom start command detected, skipping Caddy start\n            \n  Packages  \n  ──────────\n  node  │  24.21.0  │  railpack default (lts)\n            \n  Steps     \n  ──────────\n  ▸ install\n    $ npm install\n         \n  ▸ build\n    $ npm run build\n            \n  Deploy    \n  ──────────\n    $ npm run start\n\n",
+      "stderr": "",
+      "plan_bytes": 4122,
+      "plan_keys": [
+        "$schema",
+        "caches",
+        "deploy",
+        "steps"
+      ],
+      "info_bytes": 1008,
+      "info_keys": [
+        "railpackVersion",
+        "resolvedPackages",
+        "metadata",
+        "detectedProviders",
+        "logs",
+        "success"
+      ]
+    }
+  ],
+  "version": "railpack version 0.39.0",
+  "cleaned_up": true
+}

@@ -65,6 +65,10 @@ const ICON = {
 const radius = (top, closes) => `${top ? '10px 10px' : '0 0'} ${closes ? '10px 10px' : '0 0'}`;
 // A flag the models file recognises is a little bolder than the text around it; a `--word` it does not know stays plain.
 const FLAG_LOOK = 'font-weight:500';
+// Center-pane exchanges keep their source rows as siblings: only the question has a box.
+const MESSAGE_LOOK = 'padding:12px 16px;background:#f5f5f5;border-radius:10px;font-size:16px;line-height:25px;';
+const REPLY_INLINE = { codeStyle: 'font:14px/26px "SF Mono",Menlo,monospace;color:#5a5a5a;overflow-wrap:anywhere' };
+const replyLook = (first, last) => `margin-top:${first ? 12 : 0}px;margin-left:16px;padding:${first ? 16 : 0}px 0 ${last ? 4 : 0}px 16px;border-left:2px solid #e2e2e2;color:#4d4d4d;font-size:16px;line-height:26px;cursor:text;`;
 
 export default class DocEditor extends React.Component {
   state = { activeLine: null, mention: null, mentionIdx: 0, pop: null, picker: null, statuses: {} };
@@ -286,12 +290,12 @@ export default class DocEditor extends React.Component {
   // shows (in the heading's font) for as long as the caret is on the line and goes away when the caret leaves (2026-09-18: hiding it
   // left an empty span the browser typed into, and those characters were lost).
   openIdx(tokens, a, b) { const out = []; let acc = 0; tokens.forEach((tok, k) => { const end = acc + tok.length, pre = tokShown(tok).pre; if (pre && a <= end && b >= acc) out.push(k); acc = end; }); return out; }
-  activeHtml(tokens, flags) {
+  activeHtml(tokens, flags, inlineOptions) {
     const [a, b] = this.revealRange(), open = this.openIdx(tokens, a, b); this.openKey = open.join(',');
     return tokens.map((tok, k) => {
       if (flags && flags.has(k)) return `<span data-src="${esc(tok)}" data-open="1" style="${FLAG_LOOK}">${esc(tok)}</span>`;
       const isOpen = !tokShown(tok).pre || open.includes(k);
-      return `<span data-src="${esc(tok)}" data-open="${isOpen ? 1 : 0}">${isOpen && !/^@bart$/i.test(tok) ? esc(tok) : inlineHtml(tok)}</span>`;
+      return `<span data-src="${esc(tok)}" data-open="${isOpen ? 1 : 0}">${isOpen && !/^@bart$/i.test(tok) ? esc(tok) : inlineHtml(tok, inlineOptions)}</span>`;
     }).join('');
   }
   // An @bart line in pieces: its recognised flags (src/main/bart/question.cjs reads them, as the run will) each a token of
@@ -363,9 +367,10 @@ export default class DocEditor extends React.Component {
       // The chip: what the question starts on, and (hovered) where that is changed. The arrow sits inside it, one unit.
       const open = !!(this.state.picker && this.state.picker.kind === 'line' && this.state.picker.i === i);
       const chip = read ? `<span contenteditable="false" data-chip="${i}" style="user-select:none;flex:none;display:inline-flex;align-items:center;gap:8px;margin:-2px -6px 0 0;padding:2px 2px 2px 12px;border:1px solid #eaeaea;border-radius:999px;background:#fff"><span data-act="pick" data-row="${i}" role="button" aria-haspopup="dialog" aria-expanded="${open}" style="display:inline-flex;align-items:center;gap:7px;height:26px;font:13px/1 var(--font-sans);color:#4d4d4d;cursor:default;white-space:nowrap">${esc(read.steps[0].name)} ${esc(EFFORT_LABELS[read.steps[0].effort] || read.steps[0].effort)}<span style="display:inline-flex;align-items:center;justify-content:center;width:10px;height:12px;font:12px/1 var(--font-sans);color:#8f8f8f"><span style="position:relative;top:${open ? '3px' : '-3px'}">${open ? '⌃' : '⌄'}</span></span></span>${send}</span>` : `<span contenteditable="false" style="flex:none;margin-top:3px">${send}</span>`;
-      // The question opens its card, or follows an answer inside one. Once it is answered its chip goes: the foot says who answered.
+      // Once answered, the question keeps its own box and the reply starts immediately below it.
       const top = !at || at.top, closes = !at || at.closes;
-      return `<div ${raw} ${locked ? 'contenteditable="false" data-readonly="1"' : ''} style="display:flex;align-items:flex-start;gap:10px;padding:${top ? 12 : 10}px 16px ${closes ? '10px' : '4px'};min-height:35px;background:#fafafa;border-radius:${radius(top, closes)};margin-bottom:${closes ? '14px' : '0'};font-size:16px;line-height:1.6;${locked ? 'user-select:text;cursor:default' : ''}"><span class="t" style="flex:1;min-width:0">${content || '<br>'}</span>`
+      const look = this.props.compact ? `padding:${top ? 12 : 10}px 16px ${closes ? '10px' : '4px'};background:#fafafa;border-radius:${radius(top, closes)};font-size:16px;line-height:1.6;` : MESSAGE_LOOK;
+      return `<div ${raw} ${locked ? 'contenteditable="false" data-readonly="1"' : ''} style="display:flex;align-items:flex-start;gap:10px;min-height:35px;${look}margin-bottom:${closes ? '14px' : '0'};${locked ? 'user-select:text;cursor:default' : ''}"><span class="t" style="flex:1;min-width:0">${content || '<br>'}</span>`
         + (closes ? chip : '')
         + '</div>';
     }
@@ -377,8 +382,7 @@ export default class DocEditor extends React.Component {
       const doing = ask ? (ask.activity || (ask.movedUp ? 'Thinking harder' : 'Thinking')) : '';
       const label = ask ? `${esc(doing)}${ask.name ? ` · ${esc(ask.name)} ${esc(ask.effort)}` : ''}` : 'No answer came back: the run was interrupted.';
       const log = (ask && ask.log) || [], open = this.openLogs.has(p.id);
-      // The answer so far is not the answer: smaller and grey, with a mark pulsing where the next words go. No rule beside
-      // it (2026-09-21); it starts where the answer's text will, so nothing moves sideways when the answer lands.
+      // Streaming prose uses the same inset and typography as the completed answer, with a pulsing cursor.
       const cursor = '<span style="display:inline-block;width:7px;height:13px;margin-left:3px;vertical-align:-1px;border-radius:2px;background:#c9c9c9;animation:thinking 1.2s ease-in-out infinite"></span>';
       // Code arriving shows as code: mono, grey like the rest, its fences a little space (bodyLines closes a block still
       // being written, so the lines under an opening fence are code as soon as they come).
@@ -389,11 +393,13 @@ export default class DocEditor extends React.Component {
         if (role.get(n) === 'fence') return '<span style="display:block;height:6px"></span>';
         const end = n === tip;
         if (role.get(n) === 'code') return `<span style="display:block;min-height:22px;padding:0 0 0 14px;font:13px/1.7 var(--font-mono);color:#8f8f8f;tab-size:2;${end ? 'margin-bottom:10px;' : ''}">${esc(text) || (end ? '' : '<br>')}${end ? cursor : ''}</span>`;
-        const a = this.answerLook(text); a.content = a.content.replace(/color:#171717;font-weight:600/g, 'font-weight:600'); // all of it grey until it is the answer
-        return `<span style="display:block;min-height:${text ? 22 : 10}px;padding:1px 0 1px 14px;${a.look}color:#8f8f8f;font-size:14px;line-height:1.65;${end ? 'margin-bottom:10px;' : ''}">${end ? (/<\/span><\/span>$/.test(a.content) ? a.content.replace(/<\/span><\/span>$/, `${cursor}</span></span>`) : a.content + cursor) : (a.content || '<br>')}</span>`;
+        const a = this.answerLook(text, { first: n === 0, previous: so[n - 1], next: so[n + 1] }); a.content = a.content.replace(/color:#171717;font-weight:600/g, 'font-weight:600');
+        const look = this.props.compact ? `min-height:${text ? 22 : 10}px;padding:1px 0 1px 14px;${a.look}color:#8f8f8f;font-size:14px;line-height:1.65;` : `min-height:${a.minHeight}px;font-size:16px;line-height:26px;${a.look}`;
+        return `<span style="display:block;${look}${end ? 'margin-bottom:10px;' : ''}">${end ? (/<\/span><\/span>$/.test(a.content) ? a.content.replace(/<\/span><\/span>$/, `${cursor}</span></span>`) : a.content + cursor) : (a.content || '<br>')}</span>`;
       }).join('');
       const closes = !at || at.closes;
-      return `<div ${raw} data-pending="${esc(p.id)}" contenteditable="false" data-readonly="1" style="user-select:none;cursor:default;padding:2px 16px 12px;background:#fafafa;border-radius:${radius(!at, closes)};margin-bottom:${closes ? '14px' : '0'};color:#8f8f8f;font:13px/1.5 var(--font-sans)">`
+      const look = this.props.compact ? `padding:2px 16px 12px;background:#fafafa;border-radius:${radius(!at, closes)};` : replyLook(true, true);
+      return `<div ${raw} data-pending="${esc(p.id)}" contenteditable="false" data-readonly="1" style="${look}user-select:none;cursor:default;margin-bottom:${closes ? '14px' : '0'};color:#8f8f8f;font:13px/1.5 var(--font-sans)">`
         + written
         + (open && log.length ? `<div style="margin:0 0 8px 16px;font:12px/1.7 var(--font-sans);color:#8f8f8f">${log.map((entry) => `<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(entry)}</div>`).join('')}</div>` : '')
         + '<div style="display:flex;align-items:center;gap:10px">'
@@ -407,12 +413,14 @@ export default class DocEditor extends React.Component {
       if (at && at.role === 'foot') return this.footHtml({ raw, q: at.turn.q, text: p.text.slice(1, -1), folded: at.turn.folded, closes: at.closes });
       // Folded away, or the empty line the runner leaves before the closing line: in the document, not on the page.
       if (p.folded || (at && at.gap)) return `<div ${raw} contenteditable="false" data-readonly="1" style="display:none"></div>`;
-      // One line of an answer, in the grey card with one continuous rule down its left. The caret's line shows its source
-      // on the design's focus tint; the rule and the card stay where they are.
-      // (An answer with no question above it, left by an edit outside the app, is a card of its own.)
+      // Each source line stays a direct child of the editor for selection and serialization. Their borders join into
+      // one reply rule outside the question's box; compact post-its retain their existing card treatment.
       const near = at ? null : this.lines(), first = at ? at.first : parseLine(near[i - 1] ?? '').type !== 'reply', closes = at ? at.closes : parseLine(near[i + 1] ?? '').type !== 'reply', last = at ? at.lastBody : closes;
       if (p.code) return this.answerCodeHtml(i, raw, p, active, first, closes, last, !at);
-      const a = this.answerLook(p.text), content = active ? this.activeHtml(tokensOf(p, line)) : a.content;
+      const ls = this.lines();
+      const a = this.answerLook(p.text, { first, previous: first ? '' : parseLine(ls[i - 1] || '').text, next: last ? '' : parseLine(ls[i + 1] || '').text });
+      const content = active ? this.activeHtml(tokensOf(p, line), undefined, this.props.compact ? undefined : REPLY_INLINE) : a.content;
+      if (!this.props.compact) return `<div ${raw} style="${replyLook(first, last)}${closes ? 'margin-bottom:14px;' : ''}"><span class="t" style="display:block;min-height:${a.minHeight}px;${a.look}">${content || '<br>'}</span></div>`;
       return `<div ${raw} style="padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(!at && first, closes)};margin-bottom:${closes ? 14 : 0}px;color:#4d4d4d;font-size:16px;line-height:1.65;cursor:text"><span style="display:block;padding:${first ? 2 : 0}px 0 ${last ? 2 : 0}px 12px;border-left:2px solid #dcdcdc"><span class="t" style="display:block;min-height:${a.minHeight}px;border-radius:4px;${a.look}${active ? 'background:#f2f2f2;box-shadow:0 0 0 4px #f2f2f2;' : ''}">${content || '<br>'}</span></span></div>`;
     }
     if (p.type === 'quote') {
@@ -447,6 +455,7 @@ export default class DocEditor extends React.Component {
     if (p.code === 'body') inner = `<span class="t" style="display:block;min-height:24px;padding:0 12px;background:#fff;${sides};${mono};color:#171717;tab-size:2">${highlight(p.text, p.lang) || '<br>'}</span>`;
     else if (p.code === 'close') inner = `<span class="t" style="display:block;padding:0 12px ${active ? 6 : 4}px;background:#fff;${sides};border-bottom:1px solid #eaeaea;border-radius:0 0 8px 8px;${active ? `${mono};color:#8f8f8f` : 'font:8px/1 var(--font-sans)'}">${active ? esc(p.text) : '<br>'}</span>`;
     else inner = `<span style="display:flex;align-items:center;gap:8px;min-height:32px;padding:2px 4px 0 12px;background:#fff;${sides};border-top:1px solid #eaeaea;border-radius:8px 8px 0 0"><span class="t" style="flex:1;min-width:0;${active ? `${mono};color:#8f8f8f` : 'font:12px/1.6 var(--font-sans);color:#8f8f8f'}">${(active ? esc(p.text) : esc(fenceShown(p))) || '<br>'}</span>${this.copyCodeHtml(i)}</span>`;
+    if (!this.props.compact) return `<div ${raw} data-kind="${p.code === 'body' ? 'code' : 'fence'}" style="${replyLook(first, last)}${closes ? 'margin-bottom:14px;' : ''}"><span style="display:block;padding:${!first && p.code === 'open' ? 6 : 0}px 0 ${!last && p.code === 'close' ? 6 : 0}px">${inner}</span></div>`;
     // The space around the box is the rule's padding, not a margin: a margin would fall through the line's wrappers and
     // cut a white strip across the card.
     const above = first ? 2 : p.code === 'open' ? 6 : 0, below = last ? 2 : p.code === 'close' ? 6 : 0;
@@ -456,11 +465,19 @@ export default class DocEditor extends React.Component {
     const copied = this.copied === `code${i}`;
     return `<span contenteditable="false" style="user-select:none;flex:none;position:relative;display:inline-flex"><button class="bart-ic" data-act="copycode" data-row="${i}" aria-label="Copy" ${copied ? 'style="color:#8f8f8f"' : ''}>${ICON.copy}</button><span class="bart-tip" style="right:0">${copied ? 'Copied' : 'Copy'}</span></span>`;
   }
-  // How one line of an answer reads: a heading, a bullet, or plain text; bold is ink on the answer's grey. An answer in the
-  // document and one still being written (the pending row) look the same. A paragraph is one line and an empty line is
-  // the 22px between two of them; a bullet keeps 8px to the next.
-  answerLook(text) {
+  // Shared prose rendering for completed and streaming replies; fenced code never passes through this formatter.
+  answerLook(text, { first = false, previous = '', next = '' } = {}) {
     const q = parseLine(text), ink = (html) => html.replace(/<strong style="font-weight:600">/g, '<strong style="color:#171717;font-weight:600">');
+    if (!this.props.compact) {
+      const html = (value) => ink(inlineHtml(value, REPLY_INLINE));
+      const bullet = isMarked(q.type), prevBullet = isMarked(parseLine(previous).type);
+      if (!text) {
+        const height = prevBullet && isMarked(parseLine(next).type) ? 8 : 18;
+        return { content: '', look: `line-height:${height}px;`, minHeight: height };
+      }
+      if (bullet) return { content: `<span style="display:flex;gap:10px;padding-left:${q.depth * 18}px"><span contenteditable="false" style="flex:none;color:#8f8f8f;user-select:none">•</span><span style="flex:1;min-width:0">${html(q.text)}</span></span>`, look: `padding-top:${first || !previous ? 0 : prevBullet ? 8 : 18}px;`, minHeight: 26 };
+      return { content: html(q.type === 'h' ? q.text : text), look: `text-wrap:pretty;${q.type === 'h' ? 'font-weight:600;' : first ? 'font-weight:400;' : ''}`, minHeight: 26 };
+    }
     if (q.type === 'h') return { content: ink(inlineHtml(q.text)), look: `font:600 ${[18, 17, 16][q.level - 1]}px/1.5 var(--font-sans);color:#171717;padding-top:8px;`, minHeight: 26 };
     if (isMarked(q.type)) return { content: `<span style="display:flex;gap:10px;padding-left:${q.depth * 18}px"><span contenteditable="false" style="flex:none;color:#8f8f8f;user-select:none">•</span><span style="flex:1;min-width:0">${ink(inlineHtml(q.text))}</span></span>`, look: 'padding-top:4px;padding-bottom:4px;', minHeight: 26 };
     return { content: ink(inlineHtml(text)), look: 'text-wrap:pretty;', minHeight: text ? 26 : 22 };
@@ -503,10 +520,11 @@ export default class DocEditor extends React.Component {
     const wrap = (inner, extra = '') => `<span style="flex:none;position:relative;display:inline-flex;${extra}">${inner}</span>`;
     const tip = (label, side) => `<span class="bart-tip" style="${side}:0">${label}</span>`;
     const copied = this.copied === `bart${q}`;
-    return `<div ${raw || ''} contenteditable="false" data-readonly="1" data-foot="${q}" style="user-select:none;cursor:default;display:flex;align-items:center;gap:4px;padding:8px 12px 10px;background:#fafafa;border-radius:${radius(false, closes)};margin-bottom:${closes ? '14px' : '0'}">`
+    const look = this.props.compact ? `padding:8px 12px 10px;background:#fafafa;border-radius:${radius(false, closes)};margin-bottom:${closes ? '14px' : '0'};` : 'padding:4px 0 0 34px;margin-bottom:20px;';
+    return `<div ${raw || ''} contenteditable="false" data-readonly="1" data-foot="${q}" style="user-select:none;cursor:default;display:flex;align-items:center;gap:4px;${look}">`
       + wrap(`<button class="bart-ic" data-act="copybart" data-turn="${q}" aria-label="Copy" ${copied ? 'style="color:#8f8f8f"' : ''}>${ICON.copy}</button>${tip(copied ? 'Copied' : 'Copy', 'left')}`)
       + wrap(`<button class="bart-ic" data-act="regen" data-turn="${q}" aria-label="Regenerate" aria-haspopup="dialog">${ICON.regenerate}</button>`, 'margin-right:auto;')
-      + `<span class="t" style="flex:0 1 auto;min-width:0;margin-right:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12px/1.6 var(--font-sans);color:#8f8f8f">${esc(text || '')}</span>`
+      + `<span class="t" style="${this.props.compact ? 'flex:0 1 auto;min-width:0;margin-right:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12px/1.6 var(--font-sans);color:#8f8f8f' : 'display:none'}">${esc(text || '')}</span>`
       + wrap(`<button class="bart-ic" data-act="fold" data-turn="${q}" aria-label="${folded ? 'Expand' : 'Collapse'}" aria-expanded="${!folded}">${folded ? ICON.expand : ICON.collapse}</button>${tip(folded ? 'Expand' : 'Collapse', 'right')}`)
       + wrap(`<button class="bart-ic" data-danger="1" data-act="dropturn" data-turn="${q}" aria-label="Delete">${ICON.trash}</button>${tip('Delete', 'right')}`)
       + '</div>';
@@ -527,7 +545,8 @@ export default class DocEditor extends React.Component {
     const open = !!(this.state.picker && this.state.picker.kind === 'follow' && this.state.picker.i === from);
     // A textarea one line tall that grows as it wraps, as the @bart line above it does (2026-09-22); the question is still
     // one line of the document, so Enter sends and a pasted line break becomes a space. The chip sits on the first line.
-    return `<div contenteditable="false" data-followup="${from}" style="user-select:none;display:flex;align-items:flex-start;gap:10px;padding:22px 16px 18px;margin-bottom:14px;background:#fafafa;border-radius:0 0 10px 10px">`
+    const look = this.props.compact ? 'padding:22px 16px 18px;background:#fafafa;border-radius:0 0 10px 10px;' : MESSAGE_LOOK;
+    return `<div contenteditable="false" data-followup="${from}" style="user-select:none;display:flex;align-items:flex-start;gap:10px;${look}margin-bottom:14px;">`
       + '<span style="flex:none;color:#0070f3;font-weight:500;font-size:16px;line-height:24px">@bart</span>'
       + `<textarea data-follow-input="${from}" rows="1" placeholder="Respond…" aria-label="Ask a follow-up" spellcheck="false" autocomplete="off" style="flex:1;min-width:0;display:block;height:24px;margin:0;padding:0;border:0;background:none;outline:none;resize:none;overflow:hidden;font:16px/1.5 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text"></textarea>`
       + `<span data-chip="f${from}" style="flex:none;position:relative;display:inline-flex;margin-top:-6px"><span class="bart-chip" data-act="pickfollow" data-thread="${from}" role="button" aria-haspopup="dialog" aria-expanded="${open}" style="display:inline-flex;align-items:center;gap:6px;padding:5px 6px 5px 12px;border:1px solid ${open ? '#c9c9c9' : '#eaeaea'};border-radius:999px;background:#fff;cursor:pointer;font:13px/1 var(--font-sans);color:#171717">`

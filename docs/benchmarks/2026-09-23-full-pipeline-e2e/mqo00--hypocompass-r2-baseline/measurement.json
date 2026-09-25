@@ -1,0 +1,149 @@
+{
+  "id": "dff87234-2ad9-4ece-bad1-d30913d769e0",
+  "template": "engelbart-runner",
+  "round": 2,
+  "repository": "mqo00/hypocompass",
+  "pinned_commit": "7bc855e7316aeb17e9919013a26aa0427138d480",
+  "started_at": "2026-09-24T07:08:54.851Z",
+  "provider": "claude-local",
+  "model_requested": "sonnet",
+  "sandbox_id": "iafukmsrwp3gdzos2rbrp",
+  "variant": "baseline",
+  "baseline_kind": "sequential",
+  "artifact_directory": "mqo00--hypocompass-r2-baseline",
+  "template_id": "zyc96dk7q7adnb1uzy40",
+  "resources": {
+    "cpu": 8,
+    "memory_mb": 8192
+  },
+  "commit": "7bc855e7316aeb17e9919013a26aa0427138d480",
+  "agent": {
+    "started_ms": 3562,
+    "models": [
+      "claude-sonnet-5"
+    ],
+    "assistant_messages": 7,
+    "tool_calls": [
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 6020,
+        "finished_ms": 6134,
+        "elapsed_ms": 114,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__list_files",
+        "started_ms": 6098,
+        "finished_ms": 6305,
+        "elapsed_ms": 207,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__list_files",
+        "started_ms": 6461,
+        "finished_ms": 6588,
+        "elapsed_ms": 127,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 7861,
+        "finished_ms": 7931,
+        "elapsed_ms": 70,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__list_files",
+        "started_ms": 8105,
+        "finished_ms": 8230,
+        "elapsed_ms": 125,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__list_files",
+        "started_ms": 8332,
+        "finished_ms": 8470,
+        "elapsed_ms": 138,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 10307,
+        "finished_ms": 10377,
+        "elapsed_ms": 70,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 10729,
+        "finished_ms": 10797,
+        "elapsed_ms": 68,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 10894,
+        "finished_ms": 10967,
+        "elapsed_ms": 73,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__list_files",
+        "started_ms": 35509,
+        "finished_ms": 35719,
+        "elapsed_ms": 210,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 35687,
+        "finished_ms": 35853,
+        "elapsed_ms": 166,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 37472,
+        "finished_ms": 37545,
+        "elapsed_ms": 73,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__dependency_install",
+        "started_ms": 40556,
+        "install_action": "start",
+        "finished_ms": 40566,
+        "elapsed_ms": 10,
+        "is_error": true
+      },
+      {
+        "name": "mcp__canvas__dependency_install",
+        "started_ms": 43512,
+        "install_action": "start",
+        "finished_ms": 43523,
+        "elapsed_ms": 11,
+        "is_error": true
+      }
+    ],
+    "cli_result": null,
+    "finished_ms": 45450,
+    "wall_ms": 41888
+  },
+  "status": "failed",
+  "error": "Benchmark interrupted",
+  "failure_ms": 45232,
+  "cleaned_up": true,
+  "phases": {
+    "worker_ready_ms": null,
+    "auth_ms": 892,
+    "detection_and_creation_ms": 675,
+    "clone_ms": 1049,
+    "agent_started_ms": 3562,
+    "agent_wall_ms": 41888,
+    "first_app_start_ms": null,
+    "first_start_to_ready_ms": null,
+    "installs": [],
+    "note": "Agent wall time contains tool waits and overlaps installation/startup. CLI duration_api_ms is reported as-is, not pure thinking time. Tool round trips may overlap/queue. Do not sum these phases."
+  },
+  "finished_at": "2026-09-24T07:09:40.303Z"
+}

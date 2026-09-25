@@ -13,6 +13,8 @@ const TITLES = {
 };
 const isOver = (run) => run?.status === "failed" || run?.status === "killed" || run?.status === "paused" || run?.status === "no_service";
 const HEALTH_RUN_STATUS = /* @__PURE__ */ new Set(["needs_input", "setup_planning", "failed", "stopped", "error", "unhealthy"]);
+const railpackDiscovery = (e) => e.data?.phase === "plan" && e.data.source === "railpack"
+  && !e.data.plan && !e.data.start && ["running", "ok", "unavailable"].includes(e.data.status);
 const short = (sha) => typeof sha === "string" && sha ? sha.slice(0, 7) : "";
 const day = (iso) => typeof iso === "string" ? formatDay(iso) : "";
 function formatDay(iso) {
@@ -28,6 +30,9 @@ function planner(source) {
 function stepOf(e, seenReady) {
   const d = e.data ?? {};
   const phase = typeof d.phase === "string" ? d.phase : null;
+  if (railpackDiscovery(e)) return "trail";
+  // Claude can finish its final response after readiness is already published.
+  if (seenReady && phase === "setup") return "live";
   switch (phase) {
     case "trail":
       return d.status === "saved" || d.status === "shared" && d.saved === true ? "live" : "trail";
@@ -106,11 +111,21 @@ function runSteps(run, events, repoName) {
   let current = "sandbox";
   let seenReady = false;
   let openSince = null;
+  const runtimeEvents = [];
   const ms = (iso) => new Date(iso).getTime();
   for (const e of events) {
+    // Monitoring and deferred audits are Live details, not pipeline transitions.
+    // In particular, a tail containing only snapshots must not become Sandbox.
+    if (["app_status", "audit"].includes(e.data?.phase)) { runtimeEvents.push(e); continue; }
+    if (railpackDiscovery(e) && current === "start") {
+      steps.trail.events.push(e);
+      steps.trail.startedAt ??= e.at;
+      continue;
+    }
     const to = stepOf(e, seenReady);
     if (to && to !== current) {
-      if (openSince) steps[current].elapsed += Math.max(0, ms(e.at) - ms(openSince));
+      if (openSince && e.at) steps[current].elapsed += Math.max(0, ms(e.at) - ms(openSince));
+      else if (openSince) steps[current].durationUnknown = true;
       current = to;
       openSince = e.at;
     }
@@ -124,7 +139,7 @@ function runSteps(run, events, repoName) {
   const live = run?.status === "running" || run?.status === "usable";
   if (openSince) {
     if (over) steps[current].elapsed += Math.max(0, ms(events[events.length - 1].at) - ms(openSince));
-    else steps[current].since = openSince;
+    else if (!live) steps[current].since = openSince;
   }
   summarize(steps, run, repoName);
   const reached = Math.max(0, ...STEP_ORDER.map((id, i) => steps[id].events.length ? i : -1));
@@ -173,6 +188,23 @@ function runSteps(run, events, repoName) {
       step.error ||= String(outcome.data?.reason || outcome.data?.output || outcome.text);
     }
   }
+  // Discovery can overlap installation. Its explicit outcome and measured
+  // duration take precedence over the old sequential timeline assumption.
+  const discovery = steps.trail.events.findLast(railpackDiscovery);
+  if (discovery) {
+    const step = steps.trail;
+    if (discovery.data.status !== "running" && step.state !== "failed") {
+      step.state = discovery.data.status === "ok" ? "done" : "skipped";
+      step.since = null;
+      step.elapsed = discovery.data.elapsed_ms ?? step.elapsed;
+    } else if (!over && !live) {
+      step.state = "active";
+      step.elapsed = 0;
+      step.since = discovery.at;
+    }
+  }
+  steps.live.events.push(...runtimeEvents);
+  steps.live.events.sort((a, b) => new Date(a.at) - new Date(b.at));
   return STEP_ORDER.map((id) => {
     const { flag: _flag, ...step } = steps[id];
     return step;
@@ -193,6 +225,7 @@ function summarize(steps, run, repoName) {
     steps.sandbox.summary = [box, what].filter(Boolean).join(" \xB7 ");
   }
   {
+    const discovery = last("trail", railpackDiscovery);
     const trail = last("trail", (e) => e.data?.phase === "trail");
     const replay = last("trail", (e) => e.data?.phase === "recipe");
     const d = data(trail);
@@ -205,6 +238,7 @@ function summarize(steps, run, repoName) {
       steps.trail.flag = "warned";
     }
     if (!text && steps.plan.events.length) text = "No command list; analyzed from scratch";
+    if (discovery) text = { running: "Discovering launch hints…", ok: "Launch hints ready", unavailable: "Launch hints unavailable" }[discovery.data.status];
     steps.trail.summary = text;
   }
   {
@@ -388,7 +422,7 @@ function runState(run, steps) {
   return { headline: STATUS_LABEL[run.status], detail: current ? `Step ${at + 1} of ${steps.length} \xB7 ${current.title}` : "", tone };
 }
 function stepDuration(step, now) {
-  if (!step.startedAt) return null;
+  if (!step.startedAt || step.durationUnknown) return null;
   return step.elapsed + (step.since && now !== null ? Math.max(0, now - new Date(step.since).getTime()) : 0);
 }
 function runDuration(steps, now) {

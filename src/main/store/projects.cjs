@@ -412,6 +412,32 @@ async function renameWorkspace(ctx, projectId, workspaceId, name) {
   return publicWorkspace(workspaceRecord(next));
 }
 
+// Keep the deleted directory recoverable, outside the workspace tree. Notes and library files
+// belong to the project/library and stay there, even when their original workspace is deleted.
+async function deleteWorkspace(ctx, projectId, workspaceId) {
+  const { project, workspace, parentDir } = findWorkspace(ctx, projectId, workspaceId);
+  const deletedIds = [workspace.id, ...flattenWorkspaces(workspace.dir).map((child) => child.id)];
+  const deleted = new Set(deletedIds);
+  const siblings = workspaceRecords(parentDir);
+  const at = siblings.findIndex((candidate) => candidate.id === workspace.id);
+  const next = siblings[at + 1] || siblings[at - 1] || (parentDir !== project.dir ? workspaceRecord(parentDir) : null);
+  const nextWorkspaceId = next ? next.id : null;
+  const state = readState(ctx), views = { ...(plainObject(state.views) || {}) };
+  const mine = { ...(plainObject(views[project.id]) || {}) };
+  for (const id of deletedIds) delete mine[id];
+  if (views[project.id]) views[project.id] = mine;
+  const last = readLastOpen(ctx);
+  if (last.projectId === project.id && deleted.has(last.workspaceId)) last.workspaceId = nextWorkspaceId;
+
+  const trash = path.join(project.dir, '.trash');
+  fs.mkdirSync(trash, { recursive: true, mode: DIR_MODE });
+  const archived = path.join(trash, `${workspace.id}-${workspace.name}`);
+  fs.renameSync(workspace.dir, archived);
+  try { writeState(ctx, { ...last, views }); }
+  catch (error) { fs.renameSync(archived, workspace.dir); throw error; }
+  return { deletedIds, nextWorkspaceId };
+}
+
 function patchWorkspaceMeta(workspace, patch) {
   const meta = readJson(path.join(workspace.dir, 'meta.json'));
   writeJson(path.join(workspace.dir, 'meta.json'), { ...meta, ...patch });
@@ -859,6 +885,7 @@ module.exports = {
   loadProject,
   createWorkspace,
   renameWorkspace,
+  deleteWorkspace,
   setWorkspaceStatus,
   setWorkspaceContext,
   linkToWorkspace,

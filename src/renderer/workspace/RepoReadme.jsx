@@ -5,6 +5,7 @@ import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
 import GithubSlugger from 'github-slugger';
 import { api, errorMessage } from '../api.js';
+import { OPEN_IN_BROWSER } from '../model/address.js';
 
 // Resolve paths relative to the actual README, including READMEs in .github/.
 // Repository-root paths must retain the default branch, not point at github.com/.
@@ -90,9 +91,9 @@ function RepoReadme({ repo, refreshVersion = 0 }) {
     );
     return () => { live = false; };
   }, [repo.id, request, refreshVersion]);
-  const open = React.useCallback(async (url) => {
+  const open = React.useCallback((url) => {
     setLinkError('');
-    try { await api.openExternal(url); } catch (error) { setLinkError(errorMessage(error)); }
+    try { window.dispatchEvent(new CustomEvent(OPEN_IN_BROWSER, { detail: { url } })); } catch (error) { setLinkError(errorMessage(error)); }
   }, []);
   return <div className="repo-document" aria-busy={state.status === 'loading'}>
     {state.status === 'ready' ? <ReadmeContent readme={state} onOpenLink={open} /> : <div className="repo-readme-status">

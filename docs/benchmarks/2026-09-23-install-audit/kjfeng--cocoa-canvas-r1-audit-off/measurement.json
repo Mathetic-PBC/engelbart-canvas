@@ -1,0 +1,213 @@
+{
+  "command": [
+    "npm",
+    "install",
+    "--no-audit",
+    "--timing"
+  ],
+  "cwd": ".",
+  "wall_ms": 14771,
+  "exit_code": 0,
+  "signal": null,
+  "error": null,
+  "runtime": {
+    "node": "v22.23.2",
+    "npm": "10.9.8",
+    "python": "Python 3.11.6",
+    "arch": "x64",
+    "platform": "linux"
+  },
+  "config_hash": "85d1b22e37d850858dfae75b70791a496789747fccc4a51509c2d37605d862c8",
+  "cache": {
+    "size_before_kib": 0,
+    "seed": null
+  },
+  "fingerprint": {
+    "hash": "bc5942ab0e9055a93d4c49d41a991215846c275c749a14bafd52ed576666e278",
+    "packages": 641,
+    "version_mismatches": 0
+  },
+  "input_hashes": {
+    "package.json": "a72f54674cfee8e27721cc1d67e447bf73328008b590f1a200d917068395a172",
+    "package-lock.json": "396eeca89f69f4db9b97004f4d2fe3ce8f9e2957c9c066c21bf038ddea2e9cf3",
+    "client/package.json": "590f4f01067d75e7f2c84ff09335bc27da0f7a04aa70ec8df46cf669ebd84234",
+    "server/package.json": "200a49f95f2ed93c50f290b7a04c5980aee3bd132111f7cc777cb93e61ce824e"
+  },
+  "after_hashes": {
+    "package.json": "a72f54674cfee8e27721cc1d67e447bf73328008b590f1a200d917068395a172",
+    "package-lock.json": "4ee058d8e423ae2cb834fb932fbc3508f83479eb4b8116e51cc9cdc905b9f08b",
+    "client/package.json": "590f4f01067d75e7f2c84ff09335bc27da0f7a04aa70ec8df46cf669ebd84234",
+    "server/package.json": "200a49f95f2ed93c50f290b7a04c5980aee3bd132111f7cc777cb93e61ce824e"
+  },
+  "timing_files": [
+    "2026-09-24T05_33_00_720Z-timing.json"
+  ],
+  "analysis": {
+    "timers_ms": {
+      "npm:load:whichnode": 0,
+      "npm:load:configload": 7,
+      "npm:load:mkdirpcache": 1,
+      "npm:load:mkdirplogs": 0,
+      "npm:load:setTitle": 1,
+      "npm:load": 24,
+      "idealTree:buildDeps": 4,
+      "idealTree": 207,
+      "reify:loadTrees": 207,
+      "reify:diffTrees": 10,
+      "reify:unpack": 13713,
+      "build:run:postinstall:node_modules/esbuild": 56,
+      "build:run:postinstall:node_modules/vite/node_modules/esbuild": 48,
+      "build:run:postinstall": 58,
+      "build:deps": 104,
+      "build": 105,
+      "reify:build": 106,
+      "reify:save": 240,
+      "reify": 14440,
+      "command:install": 14454,
+      "npm": 14691
+    },
+    "longest_package_timers": [
+      [
+        "reifyNode:node_modules/date-fns",
+        13710
+      ],
+      [
+        "reifyNode:node_modules/lucide-react",
+        13574
+      ],
+      [
+        "reifyNode:node_modules/rxjs",
+        12640
+      ],
+      [
+        "reifyNode:node_modules/openai",
+        11575
+      ],
+      [
+        "reifyNode:node_modules/highlight.js",
+        11094
+      ],
+      [
+        "reifyNode:node_modules/caniuse-lite",
+        10372
+      ],
+      [
+        "reifyNode:node_modules/@aws-sdk/nested-clients",
+        10080
+      ],
+      [
+        "reifyNode:node_modules/@anthropic-ai/sdk",
+        10070
+      ],
+      [
+        "reifyNode:node_modules/lib0",
+        9805
+      ],
+      [
+        "reifyNode:node_modules/typescript",
+        9619
+      ],
+      [
+        "reifyNode:node_modules/lodash",
+        9606
+      ],
+      [
+        "reifyNode:node_modules/json-schema-to-ts",
+        9568
+      ],
+      [
+        "reifyNode:node_modules/@smithy/core",
+        9508
+      ],
+      [
+        "reifyNode:node_modules/@aws-sdk/core",
+        9331
+      ],
+      [
+        "reifyNode:node_modules/tailwindcss",
+        9326
+      ]
+    ],
+    "longest_script_timers": [
+      [
+        "build:run:postinstall",
+        58
+      ],
+      [
+        "build:run:postinstall:node_modules/esbuild",
+        56
+      ],
+      [
+        "build:run:postinstall:node_modules/vite/node_modules/esbuild",
+        48
+      ]
+    ],
+    "http": {
+      "lines": 1274,
+      "cache_hits": 637,
+      "cache_misses": 637,
+      "cache_revalidated": 0,
+      "aggregate_request_ms_NOT_wall_time": 2141777,
+      "slowest": [
+        {
+          "line": "2797 http fetch GET 200 https://registry.npmjs.org/date-fns/-/date-fns-2.30.0.tgz 13440ms (cache miss)",
+          "duration_ms": 13440
+        },
+        {
+          "line": "2795 http fetch GET 200 https://registry.npmjs.org/lucide-react/-/lucide-react-0.575.0.tgz 13325ms (cache miss)",
+          "duration_ms": 13325
+        },
+        {
+          "line": "2793 http fetch GET 200 https://registry.npmjs.org/rxjs/-/rxjs-7.8.2.tgz 12423ms (cache miss)",
+          "duration_ms": 12423
+        },
+        {
+          "line": "2791 http fetch GET 200 https://registry.npmjs.org/openai/-/openai-6.25.0.tgz 11347ms (cache miss)",
+          "duration_ms": 11347
+        },
+        {
+          "line": "2789 http fetch GET 200 https://registry.npmjs.org/highlight.js/-/highlight.js-11.11.1.tgz 10835ms (cache miss)",
+          "duration_ms": 10835
+        },
+        {
+          "line": "2787 http fetch GET 200 https://registry.npmjs.org/caniuse-lite/-/caniuse-lite-1.0.30001770.tgz 10096ms (cache miss)",
+          "duration_ms": 10096
+        },
+        {
+          "line": "2785 http fetch GET 200 https://registry.npmjs.org/@aws-sdk/nested-clients/-/nested-clients-3.996.1.tgz 9766ms (cache miss)",
+          "duration_ms": 9766
+        },
+        {
+          "line": "2783 http fetch GET 200 https://registry.npmjs.org/@anthropic-ai/sdk/-/sdk-0.78.0.tgz 9749ms (cache miss)",
+          "duration_ms": 9749
+        },
+        {
+          "line": "2781 http fetch GET 200 https://registry.npmjs.org/lib0/-/lib0-0.2.117.tgz 9553ms (cache miss)",
+          "duration_ms": 9553
+        },
+        {
+          "line": "2779 http fetch GET 200 https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz 9414ms (cache miss)",
+          "duration_ms": 9414
+        },
+        {
+          "line": "2777 http fetch GET 200 https://registry.npmjs.org/lodash/-/lodash-4.17.23.tgz 9354ms (cache miss)",
+          "duration_ms": 9354
+        },
+        {
+          "line": "2775 http fetch GET 200 https://registry.npmjs.org/json-schema-to-ts/-/json-schema-to-ts-3.1.1.tgz 9316ms (cache miss)",
+          "duration_ms": 9316
+        }
+      ]
+    },
+    "warning": "Timers are nested/overlapping, not additive. reify:unpack includes retrieval, extraction and filesystem work; npm does not isolate disk-write wall time."
+  },
+  "script_events": [
+    "2833 info run esbuild@0.27.3 postinstall node_modules/esbuild node install.js",
+    "2834 info run esbuild@0.21.5 postinstall node_modules/vite/node_modules/esbuild node install.js",
+    "2835 info run esbuild@0.27.3 postinstall { code: 0, signal: null }",
+    "2837 info run esbuild@0.21.5 postinstall { code: 0, signal: null }"
+  ],
+  "install_changes": " M package-lock.json\n",
+  "resources": null,
+  "after_startup_changes": " M package-lock.json\n"
+}

@@ -1,0 +1,242 @@
+{
+  "suite": "cache",
+  "complete": true,
+  "repositories": [
+    {
+      "repository": "mqo00/rope",
+      "comparable": true,
+      "inputs_unchanged": true,
+      "note": "Comparability requires matching before AND after manifest hashes. npm install may rewrite a lockfile identically across treatments; inputs_unchanged reports that separately.",
+      "signatures": [
+        "c595882b1a5cc05f15bb7a4715d1af89398be39d1c7a4879a614fbbf8d7576ff",
+        "c595882b1a5cc05f15bb7a4715d1af89398be39d1c7a4879a614fbbf8d7576ff",
+        "c595882b1a5cc05f15bb7a4715d1af89398be39d1c7a4879a614fbbf8d7576ff",
+        "c595882b1a5cc05f15bb7a4715d1af89398be39d1c7a4879a614fbbf8d7576ff",
+        "c595882b1a5cc05f15bb7a4715d1af89398be39d1c7a4879a614fbbf8d7576ff",
+        "c595882b1a5cc05f15bb7a4715d1af89398be39d1c7a4879a614fbbf8d7576ff"
+      ],
+      "cases": [
+        {
+          "case": "runner-ci-no-audit",
+          "template": "engelbart-runner",
+          "command": [
+            "npm",
+            "ci",
+            "--prefer-offline",
+            "--no-audit",
+            "--timing"
+          ],
+          "trials_ms": [
+            31378,
+            20371,
+            21890
+          ],
+          "median_ms": 21890,
+          "mean_ms": 24546.333333333332,
+          "exit_codes": [
+            0,
+            0,
+            0
+          ],
+          "timer_medians_ms": {
+            "idealTree": 108,
+            "reify:loadTrees": 4,
+            "reify:unpack": 20979,
+            "reify:build": 37,
+            "reify:audit": null,
+            "auditReport:getReport": null,
+            "auditReport:init": null,
+            "reify:save": null,
+            "reify": 21186,
+            "npm": 21738
+          },
+          "user_cpu_median_seconds": 16.606932,
+          "system_cpu_median_seconds": 12.248944,
+          "output_blocks_median": 2462800,
+          "http": [
+            {
+              "fetch_lines": 703,
+              "tarball_fetch_lines": 703,
+              "tarball_cache_misses": 703,
+              "metadata_or_audit_fetch_lines": 0,
+              "longest_tarball_ms": 29936,
+              "hosts": {
+                "cdn.npmmirror.com": 670,
+                "registry.npmjs.org": 33
+              },
+              "note": "Counts are log records, not a packet trace. http cache labels are excluded: a cold run also emits those before a later tarball cache-miss fetch."
+            },
+            {
+              "fetch_lines": 704,
+              "tarball_fetch_lines": 704,
+              "tarball_cache_misses": 704,
+              "metadata_or_audit_fetch_lines": 0,
+              "longest_tarball_ms": 19165,
+              "hosts": {
+                "cdn.npmmirror.com": 671,
+                "registry.npmjs.org": 33
+              },
+              "note": "Counts are log records, not a packet trace. http cache labels are excluded: a cold run also emits those before a later tarball cache-miss fetch."
+            },
+            {
+              "fetch_lines": 706,
+              "tarball_fetch_lines": 706,
+              "tarball_cache_misses": 706,
+              "metadata_or_audit_fetch_lines": 0,
+              "longest_tarball_ms": 20681,
+              "hosts": {
+                "cdn.npmmirror.com": 673,
+                "registry.npmjs.org": 33
+              },
+              "note": "Counts are log records, not a packet trace. http cache labels are excluded: a cold run also emits those before a later tarball cache-miss fetch."
+            }
+          ],
+          "fingerprints": [
+            "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3"
+          ],
+          "startup": [
+            {
+              "round": 3,
+              "ok": true,
+              "command": [
+                "npm",
+                "run",
+                "dev"
+              ],
+              "port": 3333,
+              "host": "127.0.0.1",
+              "elapsed_ms": 9484,
+              "attempts": [
+                {
+                  "host": "127.0.0.1",
+                  "error": "TypeError",
+                  "elapsed_ms": 40
+                },
+                {
+                  "host": "[::1]",
+                  "error": "TypeError",
+                  "elapsed_ms": 46
+                },
+                {
+                  "host": "127.0.0.1",
+                  "status": 200,
+                  "elapsed_ms": 9484
+                }
+              ],
+              "scope": "Development server and root HTML only. No keys supplied; AI/database features not exercised."
+            }
+          ],
+          "cleaned_up": true
+        },
+        {
+          "case": "cached-ci-no-audit",
+          "template": "engelbart-canvas-cached",
+          "command": [
+            "npm",
+            "ci",
+            "--prefer-offline",
+            "--no-audit",
+            "--timing"
+          ],
+          "trials_ms": [
+            16236,
+            13955,
+            17943
+          ],
+          "median_ms": 16236,
+          "mean_ms": 16044.666666666666,
+          "exit_codes": [
+            0,
+            0,
+            0
+          ],
+          "timer_medians_ms": {
+            "idealTree": 128,
+            "reify:loadTrees": 5,
+            "reify:unpack": 14866,
+            "reify:build": 37,
+            "reify:audit": null,
+            "auditReport:getReport": null,
+            "auditReport:init": null,
+            "reify:save": null,
+            "reify": 15079,
+            "npm": 15866
+          },
+          "user_cpu_median_seconds": 13.060405,
+          "system_cpu_median_seconds": 10.31662,
+          "output_blocks_median": 2020600,
+          "http": [
+            {
+              "fetch_lines": 0,
+              "tarball_fetch_lines": 0,
+              "tarball_cache_misses": 0,
+              "metadata_or_audit_fetch_lines": 0,
+              "longest_tarball_ms": 0,
+              "hosts": {},
+              "note": "Counts are log records, not a packet trace. http cache labels are excluded: a cold run also emits those before a later tarball cache-miss fetch."
+            },
+            {
+              "fetch_lines": 0,
+              "tarball_fetch_lines": 0,
+              "tarball_cache_misses": 0,
+              "metadata_or_audit_fetch_lines": 0,
+              "longest_tarball_ms": 0,
+              "hosts": {},
+              "note": "Counts are log records, not a packet trace. http cache labels are excluded: a cold run also emits those before a later tarball cache-miss fetch."
+            },
+            {
+              "fetch_lines": 0,
+              "tarball_fetch_lines": 0,
+              "tarball_cache_misses": 0,
+              "metadata_or_audit_fetch_lines": 0,
+              "longest_tarball_ms": 0,
+              "hosts": {},
+              "note": "Counts are log records, not a packet trace. http cache labels are excluded: a cold run also emits those before a later tarball cache-miss fetch."
+            }
+          ],
+          "fingerprints": [
+            "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3"
+          ],
+          "startup": [
+            {
+              "round": 3,
+              "ok": true,
+              "command": [
+                "npm",
+                "run",
+                "dev"
+              ],
+              "port": 3333,
+              "host": "127.0.0.1",
+              "elapsed_ms": 10095,
+              "attempts": [
+                {
+                  "host": "127.0.0.1",
+                  "error": "TypeError",
+                  "elapsed_ms": 35
+                },
+                {
+                  "host": "[::1]",
+                  "error": "TypeError",
+                  "elapsed_ms": 42
+                },
+                {
+                  "host": "127.0.0.1",
+                  "status": 200,
+                  "elapsed_ms": 10094
+                }
+              ],
+              "scope": "Development server and root HTML only. No keys supplied; AI/database features not exercised."
+            }
+          ],
+          "cleaned_up": true
+        }
+      ]
+    }
+  ],
+  "notes": [
+    "Durations are install-only, not end-to-end preview latency.",
+    "Nested/concurrent npm timers and request durations must not be added.",
+    "CPU and IO counters, when present, cover the entire npm process tree; they do not isolate phases. No /usr/bin/time was present for the earlier audit comparison."
+  ]
+}

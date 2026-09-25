@@ -1,0 +1,354 @@
+{
+  "complete": true,
+  "successful_artifacts_comparable": true,
+  "cases": [
+    {
+      "template": "engelbart-runner",
+      "successes": 3,
+      "trials": 3,
+      "medians_ms": {
+        "total_ms": 66078,
+        "worker_ready_ms": 65999,
+        "auth_ms": 894,
+        "detection_and_creation_ms": 916,
+        "clone_ms": 1394,
+        "agent_ms": 61762,
+        "cli_api_ms": 44888,
+        "tool_roundtrip_union_ms": 17745,
+        "start_to_ready_ms": 17953
+      },
+      "installs": [
+        [
+          {
+            "command": "npm ci",
+            "status": "succeeded",
+            "elapsed_ms": 25436
+          }
+        ],
+        [
+          {
+            "command": "npm ci",
+            "status": "succeeded",
+            "elapsed_ms": 26221
+          }
+        ],
+        [
+          {
+            "command": "npm ci",
+            "status": "succeeded",
+            "elapsed_ms": 24079
+          }
+        ]
+      ],
+      "mean_total_ms": 67915.33333333333
+    },
+    {
+      "template": "engelbart-canvas-cached",
+      "successes": 3,
+      "trials": 3,
+      "medians_ms": {
+        "total_ms": 52759,
+        "worker_ready_ms": 52679,
+        "auth_ms": 848,
+        "detection_and_creation_ms": 930,
+        "clone_ms": 1959,
+        "agent_ms": 47114,
+        "cli_api_ms": 28141,
+        "tool_roundtrip_union_ms": 18865,
+        "start_to_ready_ms": 15405
+      },
+      "installs": [
+        [
+          {
+            "command": "npm ci",
+            "status": "succeeded",
+            "elapsed_ms": 17255
+          }
+        ],
+        [
+          {
+            "command": "npm ci",
+            "status": "succeeded",
+            "elapsed_ms": 24078
+          }
+        ],
+        [
+          {
+            "command": "npm ci",
+            "status": "succeeded",
+            "elapsed_ms": 19109
+          }
+        ]
+      ],
+      "mean_total_ms": 54963
+    }
+  ],
+  "rows": [
+    {
+      "template": "engelbart-runner",
+      "round": 1,
+      "status": "ready",
+      "total_ms": 71697,
+      "worker_ready_ms": 71618,
+      "auth_ms": 1114,
+      "detection_and_creation_ms": 1086,
+      "clone_ms": 1394,
+      "agent_ms": 66729,
+      "cli_api_ms": 48769,
+      "tool_roundtrip_union_ms": 17745,
+      "tool_count": 18,
+      "start_to_ready_ms": 15562,
+      "installs": [
+        {
+          "id": "65b79601-97c0-43a3-99e2-21443a778962",
+          "command": "npm ci",
+          "started_ms": 16490,
+          "status": "succeeded",
+          "finished_ms": 41926,
+          "elapsed_ms": 25436,
+          "exit_code": 0
+        }
+      ],
+      "models": [
+        "claude-sonnet-5"
+      ],
+      "usage": {
+        "input_tokens": 20,
+        "output_tokens": 2744,
+        "cache_creation_input_tokens": 26585,
+        "cache_read_input_tokens": 159121
+      },
+      "fingerprint": {
+        "hash": "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3",
+        "packages": 732,
+        "version_mismatches": 0
+      },
+      "tracked_changes": "",
+      "error": null,
+      "cleaned_up": true
+    },
+    {
+      "template": "engelbart-canvas-cached",
+      "round": 1,
+      "status": "ready",
+      "total_ms": 50280,
+      "worker_ready_ms": 50199,
+      "auth_ms": 857,
+      "detection_and_creation_ms": 933,
+      "clone_ms": 1622,
+      "agent_ms": 45419,
+      "cli_api_ms": 28217,
+      "tool_roundtrip_union_ms": 17188,
+      "tool_count": 17,
+      "start_to_ready_ms": 13621,
+      "installs": [
+        {
+          "id": "fe0fdbbd-6348-42e0-909b-dc0add5ce33a",
+          "command": "npm ci",
+          "started_ms": 13845,
+          "status": "succeeded",
+          "finished_ms": 31099,
+          "elapsed_ms": 17255,
+          "exit_code": 0
+        }
+      ],
+      "models": [
+        "claude-sonnet-5"
+      ],
+      "usage": {
+        "input_tokens": 24,
+        "output_tokens": 2528,
+        "cache_creation_input_tokens": 17354,
+        "cache_read_input_tokens": 196882
+      },
+      "fingerprint": {
+        "hash": "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3",
+        "packages": 732,
+        "version_mismatches": 0
+      },
+      "tracked_changes": "",
+      "error": null,
+      "cleaned_up": true
+    },
+    {
+      "template": "engelbart-canvas-cached",
+      "round": 2,
+      "status": "ready",
+      "total_ms": 61850,
+      "worker_ready_ms": 61658,
+      "auth_ms": 846,
+      "detection_and_creation_ms": 930,
+      "clone_ms": 1959,
+      "agent_ms": 56444,
+      "cli_api_ms": 19367,
+      "tool_roundtrip_union_ms": 36859,
+      "tool_count": 11,
+      "start_to_ready_ms": 17742,
+      "installs": [
+        {
+          "id": "c02124b9-2b0f-4594-bb3c-bc20205b0a6f",
+          "command": "npm ci",
+          "started_ms": 14049,
+          "status": "succeeded",
+          "finished_ms": 38126,
+          "elapsed_ms": 24078,
+          "exit_code": 0
+        }
+      ],
+      "models": [
+        "claude-sonnet-5"
+      ],
+      "usage": {
+        "input_tokens": 16,
+        "output_tokens": 1660,
+        "cache_creation_input_tokens": 12466,
+        "cache_read_input_tokens": 110799
+      },
+      "fingerprint": {
+        "hash": "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3",
+        "packages": 732,
+        "version_mismatches": 0
+      },
+      "tracked_changes": "",
+      "error": null,
+      "cleaned_up": true
+    },
+    {
+      "template": "engelbart-runner",
+      "round": 2,
+      "status": "ready",
+      "total_ms": 65971,
+      "worker_ready_ms": 65884,
+      "auth_ms": 894,
+      "detection_and_creation_ms": 916,
+      "clone_ms": 1816,
+      "agent_ms": 60890,
+      "cli_api_ms": 44888,
+      "tool_roundtrip_union_ms": 15947,
+      "tool_count": 17,
+      "start_to_ready_ms": 17953,
+      "installs": [
+        {
+          "id": "82d32d87-8db3-433b-a422-2b1e4e5aa26a",
+          "command": "npm ci",
+          "started_ms": 17887,
+          "status": "succeeded",
+          "finished_ms": 44108,
+          "elapsed_ms": 26221,
+          "exit_code": 0
+        }
+      ],
+      "models": [
+        "claude-sonnet-5"
+      ],
+      "usage": {
+        "input_tokens": 22,
+        "output_tokens": 2575,
+        "cache_creation_input_tokens": 17776,
+        "cache_read_input_tokens": 181455
+      },
+      "fingerprint": {
+        "hash": "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3",
+        "packages": 732,
+        "version_mismatches": 0
+      },
+      "tracked_changes": "",
+      "error": null,
+      "cleaned_up": true
+    },
+    {
+      "template": "engelbart-runner",
+      "round": 3,
+      "status": "ready",
+      "total_ms": 66078,
+      "worker_ready_ms": 65999,
+      "auth_ms": 870,
+      "detection_and_creation_ms": 768,
+      "clone_ms": 1289,
+      "agent_ms": 61762,
+      "cli_api_ms": 33479,
+      "tool_roundtrip_union_ms": 28528,
+      "tool_count": 16,
+      "start_to_ready_ms": 19428,
+      "installs": [
+        {
+          "id": "8275d4aa-00be-479b-a8e7-34d06fff041d",
+          "command": "npm ci",
+          "started_ms": 18922,
+          "status": "succeeded",
+          "finished_ms": 43000,
+          "elapsed_ms": 24079,
+          "exit_code": 0
+        }
+      ],
+      "models": [
+        "claude-sonnet-5"
+      ],
+      "usage": {
+        "input_tokens": 18,
+        "output_tokens": 2087,
+        "cache_creation_input_tokens": 15429,
+        "cache_read_input_tokens": 134437
+      },
+      "fingerprint": {
+        "hash": "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3",
+        "packages": 732,
+        "version_mismatches": 0
+      },
+      "tracked_changes": "",
+      "error": null,
+      "cleaned_up": true
+    },
+    {
+      "template": "engelbart-canvas-cached",
+      "round": 3,
+      "status": "ready",
+      "total_ms": 52759,
+      "worker_ready_ms": 52679,
+      "auth_ms": 848,
+      "detection_and_creation_ms": 799,
+      "clone_ms": 2095,
+      "agent_ms": 47114,
+      "cli_api_ms": 28141,
+      "tool_roundtrip_union_ms": 18865,
+      "tool_count": 15,
+      "start_to_ready_ms": 15405,
+      "installs": [
+        {
+          "id": "ec361b99-96da-4e2d-a237-370391c30b4e",
+          "command": "npm ci",
+          "started_ms": 13976,
+          "status": "succeeded",
+          "finished_ms": 33085,
+          "elapsed_ms": 19109,
+          "exit_code": 0
+        }
+      ],
+      "models": [
+        "claude-sonnet-5"
+      ],
+      "usage": {
+        "input_tokens": 20,
+        "output_tokens": 2177,
+        "cache_creation_input_tokens": 16914,
+        "cache_read_input_tokens": 159549
+      },
+      "fingerprint": {
+        "hash": "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3",
+        "packages": 732,
+        "version_mismatches": 0
+      },
+      "tracked_changes": "",
+      "error": null,
+      "cleaned_up": true
+    }
+  ],
+  "notes": [
+    "This is real-agent worker-request-to-public-preview time, not Electron UI/library/IPC/paint time.",
+    "Agent wall time includes tool waits and overlaps install/startup. CLI API duration is not pure thinking; do not add these phases.",
+    "Tool round-trip union avoids double counting simultaneous tool requests, but includes local queue/CLI/transport overhead.",
+    "Fresh sandboxes do not reset Claude prompt caches. Cache token usage is retained; sampling, service latency, and agent decisions may differ.",
+    "Comparability checks source revision, hardware, runtimes, actual model, installed packages and manifest hashes—not identical agent trajectories.",
+    "Medians include successful trials only; all failures remain in rows and success counts."
+  ]
+}

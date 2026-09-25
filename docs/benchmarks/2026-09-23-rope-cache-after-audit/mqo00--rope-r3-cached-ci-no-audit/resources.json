@@ -1,0 +1,1 @@
+{"wall_seconds": 17.631075253, "user_seconds": 14.589078, "system_seconds": 11.520678, "max_rss_kib": 1335412, "input_blocks": 450240, "output_blocks": 2020600, "major_page_faults": 49, "minor_page_faults": 382321, "voluntary_context_switches": 562935, "involuntary_context_switches": 77}

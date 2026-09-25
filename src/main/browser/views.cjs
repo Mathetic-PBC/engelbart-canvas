@@ -1,5 +1,4 @@
 'use strict';
-const { isGithubPage } = require('../../shared/github.cjs');
 
 // The Browser pane's pages (decision 48). Each browser tab is a WebContentsView: a native view
 // with its own top-level webContents, laid over a placeholder the renderer measures. A page is
@@ -28,6 +27,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { fileURLToPath } = require('node:url');
+const { createAnnotations } = require('./annotations.cjs');
 
 const PARTITION = 'persist:browser';
 const ERR_ABORTED = -3;
@@ -312,7 +312,6 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
   /** What every page gets, in a tab or in a popup: http(s) or the disk, loopback certificates, a sign-in prompt. */
   function protect(contents, tab) {
     const guard = (event, url) => {
-      if (isGithubPage(url)) { event.preventDefault(); void shell.openExternal(url).catch(() => {}); return; }
       if (allowed(url, contents)) {
         // a page on disk linking to a pdf on disk: the viewer reads it, as when it is typed
         if (!(isFileUrl(url) && pdfAddress(url) && tab && tabOf(contents) === tab)) return;
@@ -356,7 +355,6 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
   /** New windows keep their opener. With features it is a popup; otherwise a tab around the contents Chromium made. */
   function windowOpenHandler(from, contents) {
     return ({ url, disposition }) => {
-      if (isGithubPage(url)) { void shell.openExternal(url).catch(() => {}); return { action: 'deny' }; }
       if (!allowed(url, contents)) return { action: 'deny' };
       if (disposition === 'new-window') {
         const parent = getWindow();
@@ -456,6 +454,17 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     if (win && !win.isDestroyed()) win.webContents.focus();
   }
 
+  function annotate(id, message) {
+    assertId(id);
+    const entry = entries.get(id);
+    if (!entry) throw new Error('This browser tab is closed');
+    if (!entry.annotations) entry.annotations = createAnnotations(entry.view.webContents, (event) => {
+      if (event.type === 'picked' || event.type === 'marker') focusApp();
+      send('browser:annotation', { ...event, tabId: id, url: entry.view.webContents.getURL() });
+    });
+    return entry.annotations.command(message);
+  }
+
   /** Find in the page: a new query starts over, the same one steps. An empty one stops. */
   function find(id, text, options) {
     assertId(id);
@@ -499,7 +508,6 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
   function open(id, value) {
     assertId(id);
     const url = pageUrl(value);
-    if (isGithubPage(url.href)) return shell.openExternal(url.href).then(() => true);
     if (url.protocol === 'file:' && pdfAddress(url.href)) openPdfFile(id, url);
     else load(entries.get(id) || create(id), url.href);
     return true;
@@ -569,6 +577,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     const entry = entries.get(id);
     if (!entry) return null;
     entries.delete(id);
+    entry.annotations?.dispose();
     const win = getWindow();
     try {
       if (win && !win.isDestroyed()) win.contentView.removeChildView(entry.view);
@@ -598,10 +607,11 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     if (configured) await session.fromPartition(PARTITION).cookies.flushStore();
   }
 
-  return { open, show, hide, command, find, stopFind, shortcut, close, closeAll, answerLogin, flush, has: (id) => entries.has(id) };
+  return { open, show, hide, command, annotate, find, stopFind, shortcut, close, closeAll, answerLogin, flush, has: (id) => entries.has(id) };
 }
 
 function registerBrowserIpc({ ipcMain, trustedHandler, views }) {
+  ipcMain.handle('browser:annotate', trustedHandler((id, message) => views.annotate(id, message)));
   ipcMain.handle('browser:open', trustedHandler((id, url) => views.open(id, url)));
   ipcMain.handle('browser:show', trustedHandler((id, rect) => views.show(id, rect)));
   ipcMain.handle('browser:hide', trustedHandler((options) => views.hide(options)));

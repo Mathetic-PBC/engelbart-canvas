@@ -1,0 +1,1159 @@
+{
+  "complete": true,
+  "baseline_kind": "current",
+  "repositories": [
+    {
+      "repository": "mqo00/rope",
+      "comparable_successful_artifacts": true,
+      "all_succeeded": true,
+      "variants": [
+        {
+          "variant": "baseline",
+          "successes": 3,
+          "trials": 3,
+          "rows": [
+            {
+              "round": 1,
+              "status": "ready",
+              "total_ms": 55080,
+              "failure_ms": null,
+              "agent_ms": 49920,
+              "cli_api_ms": 30952,
+              "tool_roundtrip_union_ms": 18823,
+              "installs": [
+                {
+                  "id": "e1cb6c63-63eb-41cb-99ad-2771fc5b1e3f",
+                  "command": "npm ci",
+                  "started_ms": 17845,
+                  "status": "succeeded",
+                  "finished_ms": 36752,
+                  "elapsed_ms": 18906,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 18907,
+              "last_install_to_launch_ms": 545,
+              "launch_request_before_install_end": true,
+              "launch_wait_requested": true,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 51591,
+              "verified_launch_to_worker_ready_ms": 3411,
+              "parallel_install_used": false,
+              "tool_count": 20,
+              "usage": {
+                "input_tokens": 22,
+                "output_tokens": 2823,
+                "cache_creation_input_tokens": 19757,
+                "cache_read_input_tokens": 193776
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "preview_only_ms": 55080,
+              "services_check": {
+                "ok": true,
+                "checks": [],
+                "note": "No separate backend in this pinned fixture"
+              },
+              "prompt_bytes": 8238,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "mqo00--rope-r1-baseline"
+            },
+            {
+              "round": 2,
+              "status": "ready",
+              "total_ms": 56102,
+              "failure_ms": null,
+              "agent_ms": 50908,
+              "cli_api_ms": 20263,
+              "tool_roundtrip_union_ms": 30392,
+              "installs": [
+                {
+                  "id": "fd0dfa41-99f9-451c-9967-f484e612afdb",
+                  "command": "npm install",
+                  "started_ms": 13148,
+                  "status": "succeeded",
+                  "finished_ms": 31119,
+                  "elapsed_ms": 17972,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 17971,
+              "last_install_to_launch_ms": 9638,
+              "launch_request_before_install_end": false,
+              "launch_wait_requested": true,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 53211,
+              "verified_launch_to_worker_ready_ms": 2715,
+              "parallel_install_used": false,
+              "tool_count": 12,
+              "usage": {
+                "input_tokens": 16,
+                "output_tokens": 1769,
+                "cache_creation_input_tokens": 14877,
+                "cache_read_input_tokens": 120968
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "preview_only_ms": 56102,
+              "services_check": {
+                "ok": true,
+                "checks": [],
+                "note": "No separate backend in this pinned fixture"
+              },
+              "prompt_bytes": 8238,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "mqo00--rope-r2-baseline"
+            },
+            {
+              "round": 3,
+              "status": "ready",
+              "total_ms": 60144,
+              "failure_ms": null,
+              "agent_ms": 54759,
+              "cli_api_ms": 40564,
+              "tool_roundtrip_union_ms": 14721,
+              "installs": [
+                {
+                  "id": "c2b969b8-bfc6-4a0d-b73a-df4ded7d2caf",
+                  "command": "npm install",
+                  "started_ms": 14051,
+                  "status": "succeeded",
+                  "finished_ms": 33222,
+                  "elapsed_ms": 19172,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 19171,
+              "last_install_to_launch_ms": 11536,
+              "launch_request_before_install_end": false,
+              "launch_wait_requested": true,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 56603,
+              "verified_launch_to_worker_ready_ms": 3384,
+              "parallel_install_used": false,
+              "tool_count": 19,
+              "usage": {
+                "input_tokens": 22,
+                "output_tokens": 3581,
+                "cache_creation_input_tokens": 21263,
+                "cache_read_input_tokens": 197934
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "preview_only_ms": 60144,
+              "services_check": {
+                "ok": true,
+                "checks": [],
+                "note": "No separate backend in this pinned fixture"
+              },
+              "prompt_bytes": 8238,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "mqo00--rope-r3-baseline"
+            }
+          ],
+          "median_ms": 56102,
+          "mean_ms": 57108.666666666664,
+          "median_install_job_union_ms": 18907,
+          "median_agent_ms": 50908
+        },
+        {
+          "variant": "optimized",
+          "successes": 3,
+          "trials": 3,
+          "rows": [
+            {
+              "round": 1,
+              "status": "ready",
+              "total_ms": 61112,
+              "failure_ms": null,
+              "agent_ms": 57744,
+              "cli_api_ms": 17192,
+              "tool_roundtrip_union_ms": 39858,
+              "installs": [
+                {
+                  "id": "3943f6e1-54ca-4288-be18-743cc56e438c",
+                  "command": "npm ci",
+                  "started_ms": 18014,
+                  "status": "succeeded",
+                  "finished_ms": 45148,
+                  "elapsed_ms": 27133,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 27134,
+              "last_install_to_launch_ms": 693,
+              "launch_request_before_install_end": true,
+              "launch_wait_requested": true,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 61007,
+              "verified_launch_to_worker_ready_ms": -10,
+              "parallel_install_used": false,
+              "tool_count": 5,
+              "usage": {
+                "input_tokens": 8,
+                "output_tokens": 1107,
+                "cache_creation_input_tokens": 9887,
+                "cache_read_input_tokens": 46472
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "preview_only_ms": 61112,
+              "services_check": {
+                "ok": true,
+                "checks": [],
+                "note": "No separate backend in this pinned fixture"
+              },
+              "prompt_bytes": 10512,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "mqo00--rope-r1-optimized"
+            },
+            {
+              "round": 2,
+              "status": "ready",
+              "total_ms": 47475,
+              "failure_ms": null,
+              "agent_ms": 43985,
+              "cli_api_ms": 29541,
+              "tool_roundtrip_union_ms": 14340,
+              "installs": [
+                {
+                  "id": "c9612f06-1890-4f70-90a5-d031809d1324",
+                  "command": "npm install",
+                  "started_ms": 9753,
+                  "status": "succeeded",
+                  "finished_ms": 28465,
+                  "elapsed_ms": 18713,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 18712,
+              "last_install_to_launch_ms": 6959,
+              "launch_request_before_install_end": false,
+              "launch_wait_requested": true,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 47363,
+              "verified_launch_to_worker_ready_ms": -12,
+              "parallel_install_used": false,
+              "tool_count": 14,
+              "usage": {
+                "input_tokens": 16,
+                "output_tokens": 2713,
+                "cache_creation_input_tokens": 18936,
+                "cache_read_input_tokens": 138711
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "preview_only_ms": 47475,
+              "services_check": {
+                "ok": true,
+                "checks": [],
+                "note": "No separate backend in this pinned fixture"
+              },
+              "prompt_bytes": 10512,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "mqo00--rope-r2-optimized"
+            },
+            {
+              "round": 3,
+              "status": "ready",
+              "total_ms": 44864,
+              "failure_ms": null,
+              "agent_ms": 40656,
+              "cli_api_ms": 26640,
+              "tool_roundtrip_union_ms": 14433,
+              "installs": [
+                {
+                  "id": "4b0d1785-8baa-4772-a1a7-1ceb20c18475",
+                  "command": "npm ci",
+                  "started_ms": 10405,
+                  "status": "succeeded",
+                  "finished_ms": 29393,
+                  "elapsed_ms": 18987,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 18988,
+              "last_install_to_launch_ms": 3226,
+              "launch_request_before_install_end": false,
+              "launch_wait_requested": true,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 44766,
+              "verified_launch_to_worker_ready_ms": -11,
+              "parallel_install_used": false,
+              "tool_count": 14,
+              "usage": {
+                "input_tokens": 16,
+                "output_tokens": 2498,
+                "cache_creation_input_tokens": 17618,
+                "cache_read_input_tokens": 130717
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "preview_only_ms": 44864,
+              "services_check": {
+                "ok": true,
+                "checks": [],
+                "note": "No separate backend in this pinned fixture"
+              },
+              "prompt_bytes": 10512,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "mqo00--rope-r3-optimized"
+            }
+          ],
+          "median_ms": 47475,
+          "mean_ms": 51150.333333333336,
+          "median_install_job_union_ms": 18988,
+          "median_agent_ms": 43985
+        }
+      ],
+      "median_reduction_ms": 8627,
+      "percent_reduction": 15.37734840112652
+    },
+    {
+      "repository": "kjfeng/cocoa-canvas",
+      "comparable_successful_artifacts": false,
+      "all_succeeded": true,
+      "variants": [
+        {
+          "variant": "baseline",
+          "successes": 3,
+          "trials": 3,
+          "rows": [
+            {
+              "round": 1,
+              "status": "ready",
+              "total_ms": 39003,
+              "failure_ms": null,
+              "agent_ms": 32420,
+              "cli_api_ms": 24842,
+              "tool_roundtrip_union_ms": 7346,
+              "installs": [
+                {
+                  "id": "dfd52ddd-31fa-4918-82b4-7784bf9c0a8c",
+                  "command": "npm ci",
+                  "started_ms": 17613,
+                  "status": "succeeded",
+                  "finished_ms": 32396,
+                  "elapsed_ms": 14784,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 14783,
+              "last_install_to_launch_ms": 561,
+              "launch_request_before_install_end": true,
+              "launch_wait_requested": true,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 35281,
+              "verified_launch_to_worker_ready_ms": 3387,
+              "parallel_install_used": false,
+              "tool_count": 10,
+              "usage": {
+                "input_tokens": 12,
+                "output_tokens": 1842,
+                "cache_creation_input_tokens": 11746,
+                "cache_read_input_tokens": 76082
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "preview_only_ms": 38810,
+              "services_check": {
+                "ok": true,
+                "checks": [
+                  {
+                    "port": 3001,
+                    "path": "/api/health",
+                    "ok": true,
+                    "owned": true,
+                    "status": 200,
+                    "expected_content": true
+                  }
+                ]
+              },
+              "prompt_bytes": 8662,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "kjfeng--cocoa-canvas-r1-baseline"
+            },
+            {
+              "round": 2,
+              "status": "ready",
+              "total_ms": 37495,
+              "failure_ms": null,
+              "agent_ms": 31254,
+              "cli_api_ms": 23699,
+              "tool_roundtrip_union_ms": 7675,
+              "installs": [
+                {
+                  "id": "d6547403-9787-4bba-9898-9f6e57be6d3a",
+                  "command": "npm ci",
+                  "started_ms": 17780,
+                  "status": "succeeded",
+                  "finished_ms": 31118,
+                  "elapsed_ms": 13338,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 13338,
+              "last_install_to_launch_ms": 513,
+              "launch_request_before_install_end": true,
+              "launch_wait_requested": true,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 33700,
+              "verified_launch_to_worker_ready_ms": 3517,
+              "parallel_install_used": false,
+              "tool_count": 11,
+              "usage": {
+                "input_tokens": 10,
+                "output_tokens": 1715,
+                "cache_creation_input_tokens": 11840,
+                "cache_read_input_tokens": 60568
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "preview_only_ms": 37356,
+              "services_check": {
+                "ok": true,
+                "checks": [
+                  {
+                    "port": 3001,
+                    "path": "/api/health",
+                    "ok": true,
+                    "owned": true,
+                    "status": 200,
+                    "expected_content": true
+                  }
+                ]
+              },
+              "prompt_bytes": 8662,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "kjfeng--cocoa-canvas-r2-baseline"
+            },
+            {
+              "round": 3,
+              "status": "ready",
+              "total_ms": 27069,
+              "failure_ms": null,
+              "agent_ms": 21706,
+              "cli_api_ms": 12627,
+              "tool_roundtrip_union_ms": 8918,
+              "installs": [
+                {
+                  "id": "aacd9c11-2f87-41fd-8114-1dfa46383767",
+                  "command": "npm ci",
+                  "started_ms": 8777,
+                  "status": "succeeded",
+                  "finished_ms": 21176,
+                  "elapsed_ms": 12398,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 12399,
+              "last_install_to_launch_ms": 526,
+              "launch_request_before_install_end": true,
+              "launch_wait_requested": true,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 23774,
+              "verified_launch_to_worker_ready_ms": 3006,
+              "parallel_install_used": false,
+              "tool_count": 8,
+              "usage": {
+                "input_tokens": 8,
+                "output_tokens": 1222,
+                "cache_creation_input_tokens": 9249,
+                "cache_read_input_tokens": 44264
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "preview_only_ms": 26911,
+              "services_check": {
+                "ok": true,
+                "checks": [
+                  {
+                    "port": 3001,
+                    "path": "/api/health",
+                    "ok": true,
+                    "owned": true,
+                    "status": 200,
+                    "expected_content": true
+                  }
+                ]
+              },
+              "prompt_bytes": 8662,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "kjfeng--cocoa-canvas-r3-baseline"
+            }
+          ],
+          "median_ms": 37495,
+          "mean_ms": 34522.333333333336,
+          "median_install_job_union_ms": 13338,
+          "median_agent_ms": 31254
+        },
+        {
+          "variant": "optimized",
+          "successes": 3,
+          "trials": 3,
+          "rows": [
+            {
+              "round": 1,
+              "status": "ready",
+              "total_ms": 36917,
+              "failure_ms": null,
+              "agent_ms": 33153,
+              "cli_api_ms": 19015,
+              "tool_roundtrip_union_ms": 13852,
+              "installs": [
+                {
+                  "id": "5b7b587e-3955-437f-9ee0-5df4fa06401e",
+                  "command": "npm install",
+                  "started_ms": 19227,
+                  "status": "succeeded",
+                  "finished_ms": 33878,
+                  "elapsed_ms": 14652,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 14651,
+              "last_install_to_launch_ms": 568,
+              "launch_request_before_install_end": true,
+              "launch_wait_requested": true,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 36705,
+              "verified_launch_to_worker_ready_ms": -13,
+              "parallel_install_used": false,
+              "tool_count": 8,
+              "usage": {
+                "input_tokens": 8,
+                "output_tokens": 1344,
+                "cache_creation_input_tokens": 12907,
+                "cache_read_input_tokens": 50599
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "preview_only_ms": 36759,
+              "services_check": {
+                "ok": true,
+                "checks": [
+                  {
+                    "port": 3001,
+                    "path": "/api/health",
+                    "ok": true,
+                    "owned": true,
+                    "status": 200,
+                    "expected_content": true
+                  }
+                ]
+              },
+              "prompt_bytes": 11585,
+              "tracked_source_changes": " M package-lock.json\n",
+              "artifact_error": null,
+              "directory": "kjfeng--cocoa-canvas-r1-optimized"
+            },
+            {
+              "round": 2,
+              "status": "ready",
+              "total_ms": 26218,
+              "failure_ms": null,
+              "agent_ms": 23178,
+              "cli_api_ms": 16896,
+              "tool_roundtrip_union_ms": 5989,
+              "installs": [
+                {
+                  "id": "fd4f7b73-b9a8-43c2-8e69-412352b51d62",
+                  "command": "npm install",
+                  "started_ms": 11547,
+                  "status": "succeeded",
+                  "finished_ms": 23451,
+                  "elapsed_ms": 11904,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 11904,
+              "last_install_to_launch_ms": 491,
+              "launch_request_before_install_end": true,
+              "launch_wait_requested": true,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 26002,
+              "verified_launch_to_worker_ready_ms": -8,
+              "parallel_install_used": false,
+              "tool_count": 7,
+              "usage": {
+                "input_tokens": 8,
+                "output_tokens": 1151,
+                "cache_creation_input_tokens": 11373,
+                "cache_read_input_tokens": 48485
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "preview_only_ms": 26058,
+              "services_check": {
+                "ok": true,
+                "checks": [
+                  {
+                    "port": 3001,
+                    "path": "/api/health",
+                    "ok": true,
+                    "owned": true,
+                    "status": 200,
+                    "expected_content": true
+                  }
+                ]
+              },
+              "prompt_bytes": 11585,
+              "tracked_source_changes": " M package-lock.json\n",
+              "artifact_error": null,
+              "directory": "kjfeng--cocoa-canvas-r2-optimized"
+            },
+            {
+              "round": 3,
+              "status": "ready",
+              "total_ms": 28620,
+              "failure_ms": null,
+              "agent_ms": 32428,
+              "cli_api_ms": 24655,
+              "tool_roundtrip_union_ms": 7527,
+              "installs": [
+                {
+                  "id": "602e399b-b38e-4e2c-93d0-4bebc8fc6a78",
+                  "command": "npm ci",
+                  "started_ms": 11942,
+                  "status": "succeeded",
+                  "finished_ms": 25679,
+                  "elapsed_ms": 13737,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 13737,
+              "last_install_to_launch_ms": 516,
+              "launch_request_before_install_end": true,
+              "launch_wait_requested": true,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 28402,
+              "verified_launch_to_worker_ready_ms": -9,
+              "parallel_install_used": false,
+              "tool_count": 7,
+              "usage": {
+                "input_tokens": 10,
+                "output_tokens": 1170,
+                "cache_creation_input_tokens": 10833,
+                "cache_read_input_tokens": 61281
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "preview_only_ms": 28460,
+              "services_check": {
+                "ok": true,
+                "checks": [
+                  {
+                    "port": 3001,
+                    "path": "/api/health",
+                    "ok": true,
+                    "owned": true,
+                    "status": 200,
+                    "expected_content": true
+                  }
+                ]
+              },
+              "prompt_bytes": 11585,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "kjfeng--cocoa-canvas-r3-optimized"
+            }
+          ],
+          "median_ms": 28620,
+          "mean_ms": 30585,
+          "median_install_job_union_ms": 13737,
+          "median_agent_ms": 32428
+        }
+      ],
+      "median_reduction_ms": null,
+      "percent_reduction": null
+    },
+    {
+      "repository": "mqo00/hypocompass",
+      "comparable_successful_artifacts": true,
+      "all_succeeded": true,
+      "variants": [
+        {
+          "variant": "baseline",
+          "successes": 3,
+          "trials": 3,
+          "rows": [
+            {
+              "round": 1,
+              "status": "ready",
+              "total_ms": 59767,
+              "failure_ms": null,
+              "agent_ms": 54799,
+              "cli_api_ms": 28276,
+              "tool_roundtrip_union_ms": 26364,
+              "installs": [
+                {
+                  "id": "19f3592a-f2b4-4fda-862a-87c0f8a64748",
+                  "command": "Parallel dependency installs: npm (system/frontend) + pip (system/backend)",
+                  "started_ms": 29013,
+                  "status": "succeeded",
+                  "finished_ms": 44087,
+                  "elapsed_ms": 15074,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 15074,
+              "last_install_to_launch_ms": 531,
+              "launch_request_before_install_end": true,
+              "launch_wait_requested": true,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 57392,
+              "verified_launch_to_worker_ready_ms": 2104,
+              "parallel_install_used": true,
+              "tool_count": 14,
+              "usage": {
+                "input_tokens": 16,
+                "output_tokens": 2677,
+                "cache_creation_input_tokens": 18948,
+                "cache_read_input_tokens": 127307
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "preview_only_ms": 59637,
+              "services_check": {
+                "ok": true,
+                "checks": [
+                  {
+                    "port": 8090,
+                    "path": "/",
+                    "ok": true,
+                    "owned": true,
+                    "status": 200,
+                    "expected_content": true
+                  }
+                ]
+              },
+              "prompt_bytes": 8238,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "mqo00--hypocompass-r1-baseline"
+            },
+            {
+              "round": 2,
+              "status": "ready",
+              "total_ms": 87647,
+              "failure_ms": null,
+              "agent_ms": 81874,
+              "cli_api_ms": 53392,
+              "tool_roundtrip_union_ms": 28444,
+              "installs": [
+                {
+                  "id": "2f276a0d-12c8-46a1-bb26-1b7b0f5e94f7",
+                  "command": "Parallel dependency installs: npm (system/frontend) + pip (system/backend)",
+                  "started_ms": 35491,
+                  "status": "succeeded",
+                  "finished_ms": 51902,
+                  "elapsed_ms": 16411,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 16411,
+              "last_install_to_launch_ms": 13469,
+              "launch_request_before_install_end": false,
+              "launch_wait_requested": true,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 82104,
+              "verified_launch_to_worker_ready_ms": 5336,
+              "parallel_install_used": true,
+              "tool_count": 14,
+              "usage": {
+                "input_tokens": 18,
+                "output_tokens": 5077,
+                "cache_creation_input_tokens": 27804,
+                "cache_read_input_tokens": 166333
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "preview_only_ms": 87502,
+              "services_check": {
+                "ok": true,
+                "checks": [
+                  {
+                    "port": 8090,
+                    "path": "/",
+                    "ok": true,
+                    "owned": true,
+                    "status": 200,
+                    "expected_content": true
+                  }
+                ]
+              },
+              "prompt_bytes": 8238,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "mqo00--hypocompass-r2-baseline"
+            },
+            {
+              "round": 3,
+              "status": "ready",
+              "total_ms": 58087,
+              "failure_ms": null,
+              "agent_ms": 53391,
+              "cli_api_ms": 32228,
+              "tool_roundtrip_union_ms": 21160,
+              "installs": [
+                {
+                  "id": "ce3ba967-8510-432b-8fce-1b3907629a3e",
+                  "command": "Parallel dependency installs: npm (system/frontend) + pip (system/backend)",
+                  "started_ms": 16113,
+                  "status": "succeeded",
+                  "finished_ms": 29535,
+                  "elapsed_ms": 13422,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 13422,
+              "last_install_to_launch_ms": 13493,
+              "launch_request_before_install_end": false,
+              "launch_wait_requested": true,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 55823,
+              "verified_launch_to_worker_ready_ms": 2062,
+              "parallel_install_used": true,
+              "tool_count": 16,
+              "usage": {
+                "input_tokens": 20,
+                "output_tokens": 3039,
+                "cache_creation_input_tokens": 28287,
+                "cache_read_input_tokens": 186845
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "preview_only_ms": 57947,
+              "services_check": {
+                "ok": true,
+                "checks": [
+                  {
+                    "port": 8090,
+                    "path": "/",
+                    "ok": true,
+                    "owned": true,
+                    "status": 200,
+                    "expected_content": true
+                  }
+                ]
+              },
+              "prompt_bytes": 8238,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "mqo00--hypocompass-r3-baseline"
+            }
+          ],
+          "median_ms": 59767,
+          "mean_ms": 68500.33333333333,
+          "median_install_job_union_ms": 15074,
+          "median_agent_ms": 54799
+        },
+        {
+          "variant": "optimized",
+          "successes": 3,
+          "trials": 3,
+          "rows": [
+            {
+              "round": 1,
+              "status": "ready",
+              "total_ms": 53610,
+              "failure_ms": null,
+              "agent_ms": 49000,
+              "cli_api_ms": 30715,
+              "tool_roundtrip_union_ms": 18566,
+              "installs": [
+                {
+                  "id": "94077b55-d677-4478-9172-2b8bebebb918",
+                  "command": "Parallel dependency installs: npm (system/frontend) + pip (system/backend)",
+                  "started_ms": 11085,
+                  "status": "succeeded",
+                  "finished_ms": 27337,
+                  "elapsed_ms": 16251,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 16252,
+              "last_install_to_launch_ms": 10773,
+              "launch_request_before_install_end": false,
+              "launch_wait_requested": true,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 53389,
+              "verified_launch_to_worker_ready_ms": -11,
+              "parallel_install_used": true,
+              "tool_count": 10,
+              "usage": {
+                "input_tokens": 14,
+                "output_tokens": 2596,
+                "cache_creation_input_tokens": 25572,
+                "cache_read_input_tokens": 142449
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "preview_only_ms": 53475,
+              "services_check": {
+                "ok": true,
+                "checks": [
+                  {
+                    "port": 8090,
+                    "path": "/",
+                    "ok": true,
+                    "owned": true,
+                    "status": 200,
+                    "expected_content": true
+                  }
+                ]
+              },
+              "prompt_bytes": 11214,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "mqo00--hypocompass-r1-optimized"
+            },
+            {
+              "round": 2,
+              "status": "ready",
+              "total_ms": 49701,
+              "failure_ms": null,
+              "agent_ms": 45797,
+              "cli_api_ms": 25747,
+              "tool_roundtrip_union_ms": 20562,
+              "installs": [
+                {
+                  "id": "4d6a6f3e-546d-41a6-b44a-e5c99259bd19",
+                  "command": "Parallel dependency installs: npm (system/frontend) + pip (system/backend)",
+                  "started_ms": 9882,
+                  "status": "succeeded",
+                  "finished_ms": 25347,
+                  "elapsed_ms": 15465,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 15465,
+              "last_install_to_launch_ms": 7371,
+              "launch_request_before_install_end": false,
+              "launch_wait_requested": true,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 49511,
+              "verified_launch_to_worker_ready_ms": -9,
+              "parallel_install_used": true,
+              "tool_count": 14,
+              "usage": {
+                "input_tokens": 16,
+                "output_tokens": 2527,
+                "cache_creation_input_tokens": 28448,
+                "cache_read_input_tokens": 173555
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "preview_only_ms": 49564,
+              "services_check": {
+                "ok": true,
+                "checks": [
+                  {
+                    "port": 8090,
+                    "path": "/",
+                    "ok": true,
+                    "owned": true,
+                    "status": 200,
+                    "expected_content": true
+                  }
+                ]
+              },
+              "prompt_bytes": 11214,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "mqo00--hypocompass-r2-optimized"
+            },
+            {
+              "round": 3,
+              "status": "ready",
+              "total_ms": 53913,
+              "failure_ms": null,
+              "agent_ms": 47737,
+              "cli_api_ms": 25540,
+              "tool_roundtrip_union_ms": 23299,
+              "installs": [
+                {
+                  "id": "bbb3e30a-5d1f-4972-a6da-6d44aaf9110c",
+                  "command": "Parallel dependency installs: npm (system/frontend) + pip (system/backend)",
+                  "started_ms": 12233,
+                  "status": "succeeded",
+                  "finished_ms": 27941,
+                  "elapsed_ms": 15708,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 15708,
+              "last_install_to_launch_ms": 5497,
+              "launch_request_before_install_end": false,
+              "launch_wait_requested": false,
+              "launch_attempts": 2,
+              "failed_launch_attempts": 1,
+              "first_verified_launch_ms": 53687,
+              "verified_launch_to_worker_ready_ms": -13,
+              "parallel_install_used": true,
+              "tool_count": 17,
+              "usage": {
+                "input_tokens": 20,
+                "output_tokens": 2512,
+                "cache_creation_input_tokens": 29832,
+                "cache_read_input_tokens": 233219
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "preview_only_ms": 53743,
+              "services_check": {
+                "ok": true,
+                "checks": [
+                  {
+                    "port": 8090,
+                    "path": "/",
+                    "ok": true,
+                    "owned": true,
+                    "status": 200,
+                    "expected_content": true
+                  }
+                ]
+              },
+              "prompt_bytes": 11214,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "mqo00--hypocompass-r3-optimized"
+            }
+          ],
+          "median_ms": 53610,
+          "mean_ms": 52408,
+          "median_install_job_union_ms": 15708,
+          "median_agent_ms": 47737
+        }
+      ],
+      "median_reduction_ms": 6157,
+      "percent_reduction": 10.301671490956547
+    }
+  ],
+  "trials": 18,
+  "all_test_sandboxes_cleaned_up": true,
+  "notes": [
+    "End-to-end means worker request through independent HTTP 200 HTML preview; Electron UI/IPC and backend feature correctness are not measured.",
+    "Frozen pre-change optimized baseline and new implementation both use the cached template; this is an incremental comparison.",
+    "Agent time overlaps installs/tool waits. CLI API duration is not pure thinking time. Do not sum phases.",
+    "Each median uses successful trials; failures and success counts remain visible. Do not call a faster failure an improvement.",
+    "Three trials per case are a small sample. Claude decisions, prompt cache, network and service latency vary.",
+    "A feature being enabled is not proof the agent used it; parallel install and early handoff usage are recorded."
+  ]
+}

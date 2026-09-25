@@ -41,7 +41,7 @@
 .repo-toolbar-status-live:disabled{opacity:.5;cursor:default}
 .repo-toolbar-status-failed{color:#a14343}
 .repo-toolbar-dot{flex:none;width:6px;height:6px;box-sizing:border-box;border:1px solid #a3a3a3;border-radius:50%}
-.repo-toolbar-status-live .repo-toolbar-dot{border-color:#262626;background:#262626}
+.repo-toolbar-status-live .repo-toolbar-dot{border-color:#639b76;background:#639b76}
 .repo-toolbar-warning{flex:none}
 .repo-toolbar-open{color:#8f8f8f}
 .repo-toolbar-spinner{flex:none;width:12px;height:12px;box-sizing:border-box;border:1.5px solid currentColor;border-right-color:transparent;border-radius:50%;animation:repo-toolbar-spin 1s linear infinite}
@@ -65,6 +65,8 @@
 .repo-details-heading{display:flex;align-items:center;gap:16px;flex:none;min-height:44px;box-sizing:border-box;padding:0 22px;border-bottom:1px solid #eaeaea}
 .repo-details-repository{display:flex;align-items:center;flex:1;min-width:0}
 .repo-details-actions{display:flex;align-items:center;gap:14px;flex:none}
+.repo-build-duration{display:inline-flex;align-items:baseline;gap:6px;flex:none;white-space:nowrap;color:#8a8a8a;font:12px/1.5 var(--font-sans)}
+.repo-build-duration time{color:#525252;font-variant-numeric:tabular-nums}
 .repo-details-action{display:inline-flex;align-items:center;justify-content:center;min-height:28px;padding:4px 0;border:0;background:transparent;color:#666;font:12px/1.5 var(--font-sans);white-space:nowrap;cursor:pointer}
 .repo-details-action:hover:not(:disabled){color:#171717}
 .repo-details-action:disabled{opacity:.5;cursor:default}
@@ -72,7 +74,8 @@
 .repo-details-action-primary:hover:not(:disabled){background:#333;color:#fff}
 .repo-details-close{flex:none;width:28px;font-size:20px;line-height:1}
 .repo-details-footer{display:flex;align-items:center;justify-content:flex-end;gap:16px;flex:none;min-height:44px;box-sizing:border-box;padding:8px 22px;border-top:1px solid #eaeaea;color:#737373;font-size:12px}
-.repo-details-tabs{display:flex;gap:22px;padding:0 22px;border-bottom:1px solid #eaeaea;flex:none}
+.repo-details-tab-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 22px;border-bottom:1px solid #eaeaea;flex:none}
+.repo-details-tabs{display:flex;gap:22px;flex:none}
 .repo-details-tabs>button{border:0;border-bottom:2px solid transparent;background:none;padding:8px 0;color:#737373;font:13px/1.5 var(--font-sans);cursor:pointer}
 .repo-details-tabs>button[aria-selected="true"]{border-bottom-color:#171717;color:#171717}
 .repo-details-scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain}

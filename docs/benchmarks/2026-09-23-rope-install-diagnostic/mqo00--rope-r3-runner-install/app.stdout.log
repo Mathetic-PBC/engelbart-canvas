@@ -1,0 +1,13 @@
+
+> game-gpt-ts@0.1.0 dev
+> next dev -p 3333
+
+  ▲ Next.js 14.2.3
+  - Local:        http://localhost:3333
+
+ ✓ Starting...
+ ✓ Ready in 901ms
+ ○ Compiling / ...
+ ✓ Compiled / in 7.3s (2745 modules)
+ GET / 200 in 7707ms
+[?25h

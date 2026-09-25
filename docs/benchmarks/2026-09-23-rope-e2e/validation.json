@@ -1,0 +1,22 @@
+{
+  "trials": 6,
+  "unique_test_sandboxes": 6,
+  "all_cleanup_confirmed": true,
+  "all_public_http_200_html": true,
+  "all_commits_match_pin": true,
+  "all_tracked_repository_files_unchanged": true,
+  "all_artifact_collections_succeeded": true,
+  "production_source_hashes_unchanged": true,
+  "model": "claude-sonnet-5",
+  "claude_code_version_checked_after_benchmark": "2.1.280",
+  "node": "v22.23.2",
+  "npm": "10.9.8",
+  "cpu_count": 8,
+  "memory_mb": 8192,
+  "package_records": 732,
+  "package_fingerprint": "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3",
+  "tests_passed": 21,
+  "syntax_checks_passed": true,
+  "git_diff_check_passed": true,
+  "no_application_behavior_config_or_template_changes": true
+}

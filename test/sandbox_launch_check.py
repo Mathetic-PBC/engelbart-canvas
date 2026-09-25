@@ -202,10 +202,14 @@ with tempfile.TemporaryDirectory() as temp:
         def __exit__(self, *args):
             pass
 
-    process = SimpleNamespace(stdout=io.BytesIO(b'concurrent app log\n' * 100), poll=lambda: None, wait=lambda: 0)
+    outcomes = iter([None, 0])
+    process = SimpleNamespace(pid=701, stdout=io.BytesIO(b'concurrent app log\n' * 100), poll=lambda: next(outcomes), wait=lambda: 0)
     captured = SlowOutput()
     with patch.dict(os.environ, {'ANTHROPIC_API_KEY': 'runner-key', 'CLAUDE_CODE_OAUTH_TOKEN': 'runner-token', 'REMOVED': 'old'}), \
          patch.object(launch.subprocess, 'Popen', return_value=process) as popen, \
+         patch.object(launch, 'process_snapshot', return_value={701: (1, '100', 'npm start')}), \
+         patch.object(launch, 'app_listeners', side_effect=lambda processes, owned, port: [{'ownership': 'owned', 'port': port, 'address': '127.0.0.1', 'pids': [701]}] if owned else []), \
+         patch.object(launch, 'stop_owned_app') as stop, \
          patch.object(launch.urllib.request, 'build_opener', return_value=SimpleNamespace(open=lambda *args, **kwargs: Response())), \
          contextlib.redirect_stdout(captured):
         launch.launch_local(recipe)
@@ -213,6 +217,9 @@ with tempfile.TemporaryDirectory() as temp:
     assert sum(event['phase'] == 'ready' for event in events) == 1
     assert sum(event['phase'] == 'log' for event in events) == 100
     assert popen.call_args.kwargs['env']['APP_SECRET'] == 'fixture'
+    assert popen.call_args.kwargs['start_new_session'] is True
+    assert popen.call_args.kwargs['env']['ENGELBART_CANVAS_APP_ATTEMPT']
+    stop.assert_called_once_with(popen.call_args.kwargs['env']['ENGELBART_CANVAS_APP_ATTEMPT'])
     assert all(key not in popen.call_args.kwargs['env'] for key in ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'REMOVED'])
     assert not (launch.STATE / 'environment.json').exists()
 print('Concurrent application logs and readiness retain separate JSON lines; only app environment reaches the process.')

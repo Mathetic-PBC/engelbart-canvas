@@ -25,6 +25,22 @@ function editor(text, selection) {
   return instance;
 }
 const range = (from, to, offset = 1) => ({ anchor: { line: from, offset: 0 }, focus: { line: to, offset } });
+
+test('reply borders start 12px outside the user box without changing the text inset', () => {
+  for (const answer of ['bart> First line\nbart> Second line', 'bart~> pending', 'bart> ```json\nbart> {}\nbart> ```']) {
+    const ed = editor(`@bart Check this\n${answer}`);
+    const html = ed.editorHtml();
+    const question = html.match(/data-line="0"[^>]*style="([^"]*)"/)[1];
+    const reply = html.match(/data-line="1"[^>]*style="([^"]*)"/)[1];
+    assert.match(question, /background:#f5f5f5;/);
+    assert.match(reply, /^margin-top:12px;margin-left:16px;padding:16px 0 \d+px 16px;border-left:2px solid #e2e2e2;/);
+    if (answer.startsWith('bart> First')) {
+      const continuation = html.match(/data-line="2"[^>]*style="([^"]*)"/)[1];
+      assert.match(continuation, /^margin-top:0px;/, 'the rule remains continuous within a reply');
+    }
+  }
+});
+
 function shortcut(instance, options = {}) {
   let prevented = false;
   instance.editorKey({ key: 'J', metaKey: true, shiftKey: true, preventDefault: () => { prevented = true; }, ...options });

@@ -6,6 +6,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const Module = require('node:module');
 const React = require('react');
+const jsxRuntime = require('react/jsx-runtime');
 const { renderToStaticMarkup } = require('react-dom/server');
 const { buildSync } = require('esbuild');
 
@@ -14,11 +15,25 @@ const built = buildSync({ entryPoints: [path.join(__dirname, '../src/renderer/wo
   format: 'cjs', jsx: 'automatic', write: false, external: ['react', 'react-dom'] });
 const compiled = new Module(filename, module);
 compiled.paths = module.paths;
+const elements = [];
+const recordingRuntime = { ...jsxRuntime };
+for (const method of ['jsx', 'jsxs']) recordingRuntime[method] = (...args) => {
+  const element = jsxRuntime[method](...args);
+  elements.push(element);
+  return element;
+};
+let loadedReadme;
+const fixtureReact = { ...React, useState: (initial) => React.useState(loadedReadme && initial?.status === 'loading' ? loadedReadme : initial) };
+compiled.require = function (id) {
+  if (id === 'react') return fixtureReact;
+  if (id === 'react/jsx-runtime') return recordingRuntime;
+  return Module.prototype.require.call(this, id);
+};
 const previousWindow = global.window;
 global.window = { engelbartAPI: {} };
 try { compiled._compile(built.outputFiles[0].text, filename); }
 finally { if (previousWindow === undefined) delete global.window; else global.window = previousWindow; }
-const { ReadmeContent, readmeUrl } = compiled.exports;
+const { default: RepoReadme, ReadmeContent, readmeUrl } = compiled.exports;
 const readme = { path: '.github/README.md', htmlUrl: 'https://github.com/owner/app/blob/main/.github/README.md',
   rawUrl: 'https://raw.githubusercontent.com/owner/app/main/.github/README.md', format: 'markdown' };
 const render = (content, extra = {}) => renderToStaticMarkup(React.createElement(ReadmeContent, { readme: { ...readme, content, ...extra } }));
@@ -95,4 +110,30 @@ test('README images do not loosen script, connection, frame or object CSP', () =
   assert.match(html, /script-src 'self';/);
   assert.match(html, /connect-src 'self';/);
   assert.match(html, /frame-src 'none'; object-src 'none';/);
+});
+
+test('README web links navigate in Stage while section anchors stay inside the README', () => {
+  const navigations = [];
+  const previousWindow = global.window;
+  global.window = { dispatchEvent: (event) => navigations.push([event.type, event.detail]) };
+  loadedReadme = { ...readme, status: 'ready', content: '## Setup\n\n[Repository](https://github.com/owner/app) [Docs](https://docs.example.org/) [Jump](#setup)' };
+  elements.length = 0;
+  try {
+    renderToStaticMarkup(React.createElement(RepoReadme, { repo: { id: 'repo' } }));
+    for (const href of ['https://github.com/owner/app', 'https://docs.example.org/']) {
+      const link = elements.find((element) => element.type === 'a' && element.props.href === href);
+      for (const handler of ['onClick', 'onAuxClick']) {
+        let prevented = false;
+        link.props[handler]({ button: 1, preventDefault() { prevented = true; } });
+        assert.equal(prevented, true);
+        assert.deepEqual(navigations.at(-1), ['engelbart:open-in-browser', { url: href }]);
+      }
+    }
+    assert.equal(navigations.length, 4);
+    elements.find((element) => element.type === 'a' && element.props.href === '#setup').props.onClick({ preventDefault() {} });
+    assert.equal(navigations.length, 4, 'Section anchors do not open Stage');
+  } finally {
+    loadedReadme = undefined;
+    if (previousWindow === undefined) delete global.window; else global.window = previousWindow;
+  }
 });

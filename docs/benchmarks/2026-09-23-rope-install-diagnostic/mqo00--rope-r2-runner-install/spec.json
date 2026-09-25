@@ -1,0 +1,1 @@
+{"repo":{"name":"mqo00/rope","commit":"1ada01830031e5882f2585577720b182deac6246","files":["system/package.json","system/package-lock.json"],"installs":[{"manager":"npm","cwd":"system"}]},"args":["install","--prefer-offline","--timing"],"preferOffline":true,"resourceStats":true,"verify":false}

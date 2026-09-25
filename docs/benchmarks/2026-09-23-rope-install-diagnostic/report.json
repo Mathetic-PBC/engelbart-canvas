@@ -1,0 +1,4270 @@
+{
+  "id": "6b8863f7-675a-489a-928b-73d81cb1d2b5",
+  "suite": "rope",
+  "started_at": "2026-09-24T05:40:26.490Z",
+  "rounds": 3,
+  "profile_hash": "c0f1d0ec8e7f363619160720a55334cd78e1336a2759e3d1c610902fd1b4140d",
+  "cases": [
+    {
+      "id": "runner-install",
+      "template": "engelbart-runner",
+      "args": [
+        "install",
+        "--prefer-offline",
+        "--timing"
+      ]
+    },
+    {
+      "id": "cached-install",
+      "template": "engelbart-canvas-cached",
+      "args": [
+        "install",
+        "--prefer-offline",
+        "--timing"
+      ]
+    },
+    {
+      "id": "cached-ci",
+      "template": "engelbart-canvas-cached",
+      "args": [
+        "ci",
+        "--prefer-offline",
+        "--timing"
+      ]
+    },
+    {
+      "id": "cached-ci-no-audit",
+      "template": "engelbart-canvas-cached",
+      "args": [
+        "ci",
+        "--prefer-offline",
+        "--no-audit",
+        "--timing"
+      ]
+    }
+  ],
+  "schedule": [
+    {
+      "round": 1,
+      "repo": "mqo00/rope",
+      "case": "runner-install"
+    },
+    {
+      "round": 1,
+      "repo": "mqo00/rope",
+      "case": "cached-install"
+    },
+    {
+      "round": 1,
+      "repo": "mqo00/rope",
+      "case": "cached-ci"
+    },
+    {
+      "round": 1,
+      "repo": "mqo00/rope",
+      "case": "cached-ci-no-audit"
+    },
+    {
+      "round": 2,
+      "repo": "mqo00/rope",
+      "case": "cached-ci-no-audit"
+    },
+    {
+      "round": 2,
+      "repo": "mqo00/rope",
+      "case": "cached-ci"
+    },
+    {
+      "round": 2,
+      "repo": "mqo00/rope",
+      "case": "cached-install"
+    },
+    {
+      "round": 2,
+      "repo": "mqo00/rope",
+      "case": "runner-install"
+    },
+    {
+      "round": 3,
+      "repo": "mqo00/rope",
+      "case": "cached-install"
+    },
+    {
+      "round": 3,
+      "repo": "mqo00/rope",
+      "case": "cached-ci"
+    },
+    {
+      "round": 3,
+      "repo": "mqo00/rope",
+      "case": "cached-ci-no-audit"
+    },
+    {
+      "round": 3,
+      "repo": "mqo00/rope",
+      "case": "runner-install"
+    }
+  ],
+  "trials": [
+    {
+      "repository": "mqo00/rope",
+      "commit": "1ada01830031e5882f2585577720b182deac6246",
+      "case": "runner-install",
+      "template": "engelbart-runner",
+      "round": 1,
+      "artifact_directory": "mqo00--rope-r1-runner-install",
+      "started_at": "2026-09-24T05:40:26.492Z",
+      "sandbox_id": "id914qd91fscmz4xad7nz",
+      "template_id": "zyc96dk7q7adnb1uzy40",
+      "resources": {
+        "cpu": 8,
+        "memory_mb": 8192
+      },
+      "artifacts": [
+        {
+          "file": "install.stdout.log",
+          "bytes": 365
+        },
+        {
+          "file": "npm.cjs",
+          "bytes": 11512
+        },
+        {
+          "file": "config-logs/2026-09-24T05_40_30_031Z-debug-0.log",
+          "bytes": 1353
+        },
+        {
+          "file": "config-logs/2026-09-24T05_40_30_031Z-timing.json",
+          "bytes": 446
+        },
+        {
+          "file": "packages.json",
+          "bytes": 182456
+        },
+        {
+          "file": "package.before.json",
+          "bytes": 1614
+        },
+        {
+          "file": "npm-config.json",
+          "bytes": 3594
+        },
+        {
+          "file": "spec.json",
+          "bytes": 293
+        },
+        {
+          "file": "resources.json",
+          "bytes": 286
+        },
+        {
+          "file": "global.npmrc",
+          "bytes": 0
+        },
+        {
+          "file": "user.npmrc",
+          "bytes": 0
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_40_31_099Z-timing.json",
+          "bytes": 125991
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_40_31_099Z-debug-0.log",
+          "bytes": 598615
+        },
+        {
+          "file": "measurement.json",
+          "bytes": 6256
+        },
+        {
+          "file": "install.stderr.log",
+          "bytes": 164499
+        }
+      ],
+      "measurement": {
+        "command": [
+          "npm",
+          "install",
+          "--prefer-offline",
+          "--timing"
+        ],
+        "cwd": "system",
+        "wall_ms": 59424,
+        "exit_code": 0,
+        "signal": null,
+        "error": null,
+        "runtime": {
+          "node": "v22.23.2",
+          "npm": "10.9.8",
+          "python": "Python 3.11.6",
+          "arch": "x64",
+          "platform": "linux"
+        },
+        "config_hash": "0e1c8e50f6b2e9c54cb9a469942db81c99ef531288f06bcc8f66f8512a431ee8",
+        "cache": {
+          "size_before_kib": 0,
+          "seed": null
+        },
+        "fingerprint": {
+          "hash": "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3",
+          "packages": 732,
+          "version_mismatches": 0
+        },
+        "input_hashes": {
+          "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+          "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+        },
+        "after_hashes": {
+          "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+          "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+        },
+        "timing_files": [
+          "2026-09-24T05_40_31_099Z-timing.json"
+        ],
+        "analysis": {
+          "timers_ms": {
+            "npm:load:whichnode": 1,
+            "npm:load:configload": 7,
+            "npm:load:mkdirpcache": 0,
+            "npm:load:mkdirplogs": 0,
+            "npm:load:setTitle": 1,
+            "npm:load": 23,
+            "idealTree:buildDeps": 1,
+            "idealTree": 277,
+            "reify:loadTrees": 281,
+            "reify:diffTrees": 6,
+            "auditReport:getReport": 762,
+            "auditReport:init": 47463,
+            "reify:audit": 48227,
+            "reify:unpack": 57826,
+            "build:deps": 43,
+            "build": 44,
+            "reify:build": 45,
+            "reify:save": 144,
+            "reify": 58500,
+            "command:install": 58867,
+            "npm": 59102
+          },
+          "longest_package_timers": [
+            [
+              "reifyNode:node_modules/next",
+              57823
+            ],
+            [
+              "reifyNode:node_modules/@iconify/json",
+              55261
+            ],
+            [
+              "reifyNode:node_modules/lucide-react",
+              54419
+            ],
+            [
+              "reifyNode:node_modules/@mui/material",
+              53301
+            ],
+            [
+              "reifyNode:node_modules/@next/swc-linux-x64-musl",
+              52975
+            ],
+            [
+              "reifyNode:node_modules/@next/swc-linux-x64-gnu",
+              52381
+            ],
+            [
+              "reifyNode:node_modules/@mui/joy",
+              51323
+            ],
+            [
+              "reifyNode:node_modules/@mui/base",
+              50448
+            ],
+            [
+              "reifyNode:node_modules/es-abstract",
+              50205
+            ],
+            [
+              "reifyNode:node_modules/@opentelemetry/api",
+              50174
+            ],
+            [
+              "reifyNode:node_modules/caniuse-lite",
+              49241
+            ],
+            [
+              "reifyNode:node_modules/@mui/lab",
+              49124
+            ],
+            [
+              "reifyNode:node_modules/@typescript-eslint/scope-manager",
+              48841
+            ],
+            [
+              "reifyNode:node_modules/@mui/utils",
+              48453
+            ],
+            [
+              "reifyNode:node_modules/postcss-load-config/node_modules/yaml",
+              40668
+            ]
+          ],
+          "longest_script_timers": [],
+          "http": {
+            "lines": 1540,
+            "cache_hits": 755,
+            "cache_misses": 784,
+            "cache_revalidated": 0,
+            "aggregate_request_ms_NOT_wall_time": 6877299,
+            "slowest": [
+              {
+                "line": "4007 http fetch GET 200 https://cdn.npmmirror.com/packages/next/14.2.3/next-14.2.3.tgz 57553ms (cache miss)",
+                "duration_ms": 57553
+              },
+              {
+                "line": "4005 http fetch GET 200 https://cdn.npmmirror.com/packages/%40iconify/json/2.2.248/json-2.2.248.tgz 54870ms (cache miss)",
+                "duration_ms": 54870
+              },
+              {
+                "line": "4003 http fetch GET 200 https://cdn.npmmirror.com/packages/lucide-react/0.377.0/lucide-react-0.377.0.tgz 54132ms (cache miss)",
+                "duration_ms": 54132
+              },
+              {
+                "line": "4001 http fetch GET 200 https://cdn.npmmirror.com/packages/%40mui/material/5.16.7/material-5.16.7.tgz 52914ms (cache miss)",
+                "duration_ms": 52914
+              },
+              {
+                "line": "3999 http fetch GET 200 https://cdn.npmmirror.com/packages/%40next/swc-linux-x64-musl/14.2.3/swc-linux-x64-musl-14.2.3.tgz 52589ms (cache miss)",
+                "duration_ms": 52589
+              },
+              {
+                "line": "3997 http fetch GET 200 https://cdn.npmmirror.com/packages/%40next/swc-linux-x64-gnu/14.2.3/swc-linux-x64-gnu-14.2.3.tgz 51993ms (cache miss)",
+                "duration_ms": 51993
+              },
+              {
+                "line": "3995 http fetch GET 200 https://cdn.npmmirror.com/packages/%40mui/joy/5.0.0-beta.48/joy-5.0.0-beta.48.tgz 50933ms (cache miss)",
+                "duration_ms": 50933
+              },
+              {
+                "line": "3993 http fetch GET 200 https://cdn.npmmirror.com/packages/%40mui/base/5.0.0-beta.40/base-5.0.0-beta.40.tgz 50059ms (cache miss)",
+                "duration_ms": 50059
+              },
+              {
+                "line": "3991 http fetch GET 200 https://cdn.npmmirror.com/packages/es-abstract/1.23.3/es-abstract-1.23.3.tgz 49869ms (cache miss)",
+                "duration_ms": 49869
+              },
+              {
+                "line": "3989 http fetch GET 200 https://cdn.npmmirror.com/packages/%40opentelemetry/api/1.9.0/api-1.9.0.tgz 49787ms (cache miss)",
+                "duration_ms": 49787
+              },
+              {
+                "line": "3987 http fetch GET 200 https://cdn.npmmirror.com/packages/caniuse-lite/1.0.30001660/caniuse-lite-1.0.30001660.tgz 48890ms (cache miss)",
+                "duration_ms": 48890
+              },
+              {
+                "line": "3985 http fetch GET 200 https://cdn.npmmirror.com/packages/%40mui/lab/5.0.0-alpha.173/lab-5.0.0-alpha.173.tgz 48732ms (cache miss)",
+                "duration_ms": 48732
+              }
+            ]
+          },
+          "warning": "Timers are nested/overlapping, not additive. reify:unpack includes retrieval, extraction and filesystem work; npm does not isolate disk-write wall time."
+        },
+        "script_events": [],
+        "install_changes": "",
+        "resources": {
+          "wall_seconds": 59.201870755,
+          "user_seconds": 55.646618,
+          "system_seconds": 13.816195,
+          "max_rss_kib": 951032,
+          "input_blocks": 5296,
+          "output_blocks": 2623480,
+          "major_page_faults": 32,
+          "minor_page_faults": 273820,
+          "voluntary_context_switches": 666454,
+          "involuntary_context_switches": 225
+        },
+        "after_startup_changes": ""
+      },
+      "cleaned_up": true,
+      "finished_at": "2026-09-24T05:41:31.571Z"
+    },
+    {
+      "repository": "mqo00/rope",
+      "commit": "1ada01830031e5882f2585577720b182deac6246",
+      "case": "cached-install",
+      "template": "engelbart-canvas-cached",
+      "round": 1,
+      "artifact_directory": "mqo00--rope-r1-cached-install",
+      "started_at": "2026-09-24T05:41:31.572Z",
+      "sandbox_id": "ilr3o7qb8zu8ieawioujy",
+      "template_id": "5mqfzddjuicidc1w92y5",
+      "resources": {
+        "cpu": 8,
+        "memory_mb": 8192
+      },
+      "artifacts": [
+        {
+          "file": "install.stdout.log",
+          "bytes": 365
+        },
+        {
+          "file": "npm.cjs",
+          "bytes": 11512
+        },
+        {
+          "file": "config-logs/2026-09-24T05_41_36_319Z-timing.json",
+          "bytes": 446
+        },
+        {
+          "file": "config-logs/2026-09-24T05_41_36_319Z-debug-0.log",
+          "bytes": 1353
+        },
+        {
+          "file": "packages.json",
+          "bytes": 182456
+        },
+        {
+          "file": "package.before.json",
+          "bytes": 1614
+        },
+        {
+          "file": "npm-config.json",
+          "bytes": 3594
+        },
+        {
+          "file": "spec.json",
+          "bytes": 293
+        },
+        {
+          "file": "resources.json",
+          "bytes": 294
+        },
+        {
+          "file": "global.npmrc",
+          "bytes": 0
+        },
+        {
+          "file": "user.npmrc",
+          "bytes": 0
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_41_37_275Z-debug-0.log",
+          "bytes": 395035
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_41_37_275Z-timing.json",
+          "bytes": 125834
+        },
+        {
+          "file": "measurement.json",
+          "bytes": 8007
+        },
+        {
+          "file": "install.stderr.log",
+          "bytes": 164342
+        }
+      ],
+      "measurement": {
+        "command": [
+          "npm",
+          "install",
+          "--prefer-offline",
+          "--timing"
+        ],
+        "cwd": "system",
+        "wall_ms": 47358,
+        "exit_code": 0,
+        "signal": null,
+        "error": null,
+        "runtime": {
+          "node": "v22.23.2",
+          "npm": "10.9.8",
+          "python": "Python 3.11.6",
+          "arch": "x64",
+          "platform": "linux"
+        },
+        "config_hash": "0e1c8e50f6b2e9c54cb9a469942db81c99ef531288f06bcc8f66f8512a431ee8",
+        "cache": {
+          "size_before_kib": 329232,
+          "seed": {
+            "version": 1,
+            "profile": "c0f1d0ec8e7f363619160720a55334cd78e1336a2759e3d1c610902fd1b4140d",
+            "seeded_at": "2026-09-24T02:52:38.805Z",
+            "duration_ms": 73764,
+            "node": "v22.23.2",
+            "repositories": [
+              {
+                "name": "mqo00/rope",
+                "commit": "1ada01830031e5882f2585577720b182deac6246"
+              },
+              {
+                "name": "kjfeng/cocoa-canvas",
+                "commit": "e49079a413497d4fe363af4e8a6e6fefd7539597"
+              },
+              {
+                "name": "mqo00/hypocompass",
+                "commit": "7bc855e7316aeb17e9919013a26aa0427138d480"
+              }
+            ],
+            "manifests": [
+              {
+                "repo": "mqo00/rope",
+                "file": "system/package.json",
+                "sha256": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8"
+              },
+              {
+                "repo": "mqo00/rope",
+                "file": "system/package-lock.json",
+                "sha256": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "package.json",
+                "sha256": "a72f54674cfee8e27721cc1d67e447bf73328008b590f1a200d917068395a172"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "package-lock.json",
+                "sha256": "396eeca89f69f4db9b97004f4d2fe3ce8f9e2957c9c066c21bf038ddea2e9cf3"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "client/package.json",
+                "sha256": "590f4f01067d75e7f2c84ff09335bc27da0f7a04aa70ec8df46cf669ebd84234"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "server/package.json",
+                "sha256": "200a49f95f2ed93c50f290b7a04c5980aee3bd132111f7cc777cb93e61ce824e"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/frontend/package.json",
+                "sha256": "995face2ce22984946aed81beba66031852050c55e5138878736473f719fb362"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/frontend/package-lock.json",
+                "sha256": "9f2eec5ef2b2babe6ce82389f8fb6dc355d5301f99a8d78559f153cf1dfaff53"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/backend/requirements.txt",
+                "sha256": "ffb9292f5843b9e2f254a41a4509b118c268a496261b58b3b5fc6b572715263c"
+              }
+            ]
+          }
+        },
+        "fingerprint": {
+          "hash": "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3",
+          "packages": 732,
+          "version_mismatches": 0
+        },
+        "input_hashes": {
+          "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+          "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+        },
+        "after_hashes": {
+          "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+          "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+        },
+        "timing_files": [
+          "2026-09-24T05_41_37_275Z-timing.json"
+        ],
+        "analysis": {
+          "timers_ms": {
+            "npm:load:whichnode": 1,
+            "npm:load:configload": 8,
+            "npm:load:mkdirpcache": 1,
+            "npm:load:mkdirplogs": 0,
+            "npm:load:setTitle": 1,
+            "npm:load": 23,
+            "idealTree:buildDeps": 1,
+            "idealTree": 284,
+            "reify:loadTrees": 289,
+            "reify:diffTrees": 6,
+            "auditReport:getReport": 2054,
+            "auditReport:init": 40923,
+            "reify:audit": 42980,
+            "reify:unpack": 45644,
+            "build:deps": 28,
+            "build": 28,
+            "reify:build": 29,
+            "reify:save": 92,
+            "reify": 46213,
+            "command:install": 46475,
+            "npm": 46981
+          },
+          "longest_package_timers": [
+            [
+              "reifyNode:node_modules/next",
+              45643
+            ],
+            [
+              "reifyNode:node_modules/lucide-react",
+              43752
+            ],
+            [
+              "reifyNode:node_modules/@iconify/json",
+              43703
+            ],
+            [
+              "reifyNode:node_modules/@mui/material",
+              36380
+            ],
+            [
+              "reifyNode:node_modules/@next/swc-linux-x64-musl",
+              15888
+            ],
+            [
+              "reifyNode:node_modules/@next/swc-linux-x64-gnu",
+              15622
+            ],
+            [
+              "reifyNode:node_modules/es-abstract",
+              15394
+            ],
+            [
+              "reifyNode:node_modules/@mui/joy",
+              15342
+            ],
+            [
+              "reifyNode:node_modules/@mui/base",
+              14446
+            ],
+            [
+              "reifyNode:node_modules/@opentelemetry/api",
+              14182
+            ],
+            [
+              "reifyNode:node_modules/openai",
+              14061
+            ],
+            [
+              "reifyNode:node_modules/caniuse-lite",
+              13805
+            ],
+            [
+              "reifyNode:node_modules/@typescript-eslint/scope-manager",
+              12822
+            ],
+            [
+              "reifyNode:node_modules/@mui/lab",
+              12770
+            ],
+            [
+              "reifyNode:node_modules/eslint",
+              12408
+            ]
+          ],
+          "longest_script_timers": [],
+          "http": {
+            "lines": 808,
+            "cache_hits": 732,
+            "cache_misses": 75,
+            "cache_revalidated": 0,
+            "aggregate_request_ms_NOT_wall_time": 98067,
+            "slowest": [
+              {
+                "line": "1878 http fetch GET 200 https://registry.npmjs.org/next 6664ms (cache miss)",
+                "duration_ms": 6664
+              },
+              {
+                "line": "1803 http fetch GET 200 https://registry.npmjs.org/ai 4379ms (cache miss)",
+                "duration_ms": 4379
+              },
+              {
+                "line": "1773 http fetch GET 200 https://registry.npmjs.org/svelte 4190ms (cache miss)",
+                "duration_ms": 4190
+              },
+              {
+                "line": "1696 http fetch GET 200 https://registry.npmjs.org/ajv 3781ms (cache miss)",
+                "duration_ms": 3781
+              },
+              {
+                "line": "1682 http fetch GET 200 https://registry.npmjs.org/postcss 3728ms (cache miss)",
+                "duration_ms": 3728
+              },
+              {
+                "line": "1676 http fetch GET 200 https://registry.npmjs.org/@babel%2fruntime 3724ms (cache miss)",
+                "duration_ms": 3724
+              },
+              {
+                "line": "1667 http fetch GET 200 https://registry.npmjs.org/nanoid 3681ms (cache miss)",
+                "duration_ms": 3681
+              },
+              {
+                "line": "1653 http fetch GET 200 https://registry.npmjs.org/minimatch 3664ms (cache miss)",
+                "duration_ms": 3664
+              },
+              {
+                "line": "1639 http fetch GET 200 https://registry.npmjs.org/@ai-sdk%2fprovider-utils 3623ms (cache miss)",
+                "duration_ms": 3623
+              },
+              {
+                "line": "1629 http fetch GET 200 https://registry.npmjs.org/glob 3610ms (cache miss)",
+                "duration_ms": 3610
+              },
+              {
+                "line": "1574 http fetch GET 200 https://registry.npmjs.org/mdast-util-to-hast 3531ms (cache miss)",
+                "duration_ms": 3531
+              },
+              {
+                "line": "1525 http fetch GET 200 https://registry.npmjs.org/lodash 3470ms (cache miss)",
+                "duration_ms": 3470
+              }
+            ]
+          },
+          "warning": "Timers are nested/overlapping, not additive. reify:unpack includes retrieval, extraction and filesystem work; npm does not isolate disk-write wall time."
+        },
+        "script_events": [],
+        "install_changes": "",
+        "resources": {
+          "wall_seconds": 47.108437355999996,
+          "user_seconds": 47.371881,
+          "system_seconds": 10.02089,
+          "max_rss_kib": 1802024,
+          "input_blocks": 452888,
+          "output_blocks": 2179984,
+          "major_page_faults": 74,
+          "minor_page_faults": 523120,
+          "voluntary_context_switches": 648892,
+          "involuntary_context_switches": 149
+        },
+        "after_startup_changes": ""
+      },
+      "cleaned_up": true,
+      "finished_at": "2026-09-24T05:42:25.600Z"
+    },
+    {
+      "repository": "mqo00/rope",
+      "commit": "1ada01830031e5882f2585577720b182deac6246",
+      "case": "cached-ci",
+      "template": "engelbart-canvas-cached",
+      "round": 1,
+      "artifact_directory": "mqo00--rope-r1-cached-ci",
+      "started_at": "2026-09-24T05:42:25.601Z",
+      "sandbox_id": "i8553cm4cfu695jwfon4u",
+      "template_id": "5mqfzddjuicidc1w92y5",
+      "resources": {
+        "cpu": 8,
+        "memory_mb": 8192
+      },
+      "artifacts": [
+        {
+          "file": "install.stdout.log",
+          "bytes": 365
+        },
+        {
+          "file": "npm.cjs",
+          "bytes": 11512
+        },
+        {
+          "file": "config-logs/2026-09-24T05_42_29_525Z-timing.json",
+          "bytes": 446
+        },
+        {
+          "file": "config-logs/2026-09-24T05_42_29_525Z-debug-0.log",
+          "bytes": 1353
+        },
+        {
+          "file": "packages.json",
+          "bytes": 182456
+        },
+        {
+          "file": "package.before.json",
+          "bytes": 1614
+        },
+        {
+          "file": "npm-config.json",
+          "bytes": 3594
+        },
+        {
+          "file": "spec.json",
+          "bytes": 288
+        },
+        {
+          "file": "resources.json",
+          "bytes": 289
+        },
+        {
+          "file": "global.npmrc",
+          "bytes": 0
+        },
+        {
+          "file": "user.npmrc",
+          "bytes": 0
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_42_30_456Z-timing.json",
+          "bytes": 125755
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_42_30_456Z-debug-0.log",
+          "bytes": 394949
+        },
+        {
+          "file": "measurement.json",
+          "bytes": 7986
+        },
+        {
+          "file": "install.stderr.log",
+          "bytes": 164268
+        }
+      ],
+      "measurement": {
+        "command": [
+          "npm",
+          "ci",
+          "--prefer-offline",
+          "--timing"
+        ],
+        "cwd": "system",
+        "wall_ms": 50958,
+        "exit_code": 0,
+        "signal": null,
+        "error": null,
+        "runtime": {
+          "node": "v22.23.2",
+          "npm": "10.9.8",
+          "python": "Python 3.11.6",
+          "arch": "x64",
+          "platform": "linux"
+        },
+        "config_hash": "0e1c8e50f6b2e9c54cb9a469942db81c99ef531288f06bcc8f66f8512a431ee8",
+        "cache": {
+          "size_before_kib": 329232,
+          "seed": {
+            "version": 1,
+            "profile": "c0f1d0ec8e7f363619160720a55334cd78e1336a2759e3d1c610902fd1b4140d",
+            "seeded_at": "2026-09-24T02:52:38.805Z",
+            "duration_ms": 73764,
+            "node": "v22.23.2",
+            "repositories": [
+              {
+                "name": "mqo00/rope",
+                "commit": "1ada01830031e5882f2585577720b182deac6246"
+              },
+              {
+                "name": "kjfeng/cocoa-canvas",
+                "commit": "e49079a413497d4fe363af4e8a6e6fefd7539597"
+              },
+              {
+                "name": "mqo00/hypocompass",
+                "commit": "7bc855e7316aeb17e9919013a26aa0427138d480"
+              }
+            ],
+            "manifests": [
+              {
+                "repo": "mqo00/rope",
+                "file": "system/package.json",
+                "sha256": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8"
+              },
+              {
+                "repo": "mqo00/rope",
+                "file": "system/package-lock.json",
+                "sha256": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "package.json",
+                "sha256": "a72f54674cfee8e27721cc1d67e447bf73328008b590f1a200d917068395a172"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "package-lock.json",
+                "sha256": "396eeca89f69f4db9b97004f4d2fe3ce8f9e2957c9c066c21bf038ddea2e9cf3"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "client/package.json",
+                "sha256": "590f4f01067d75e7f2c84ff09335bc27da0f7a04aa70ec8df46cf669ebd84234"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "server/package.json",
+                "sha256": "200a49f95f2ed93c50f290b7a04c5980aee3bd132111f7cc777cb93e61ce824e"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/frontend/package.json",
+                "sha256": "995face2ce22984946aed81beba66031852050c55e5138878736473f719fb362"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/frontend/package-lock.json",
+                "sha256": "9f2eec5ef2b2babe6ce82389f8fb6dc355d5301f99a8d78559f153cf1dfaff53"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/backend/requirements.txt",
+                "sha256": "ffb9292f5843b9e2f254a41a4509b118c268a496261b58b3b5fc6b572715263c"
+              }
+            ]
+          }
+        },
+        "fingerprint": {
+          "hash": "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3",
+          "packages": 732,
+          "version_mismatches": 0
+        },
+        "input_hashes": {
+          "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+          "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+        },
+        "after_hashes": {
+          "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+          "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+        },
+        "timing_files": [
+          "2026-09-24T05_42_30_456Z-timing.json"
+        ],
+        "analysis": {
+          "timers_ms": {
+            "npm:load:whichnode": 0,
+            "npm:load:configload": 8,
+            "npm:load:mkdirpcache": 0,
+            "npm:load:mkdirplogs": 0,
+            "npm:load:setTitle": 1,
+            "npm:load": 20,
+            "idealTree:buildDeps": 1,
+            "idealTree": 123,
+            "npm-ci:rm": 0,
+            "reify:loadTrees": 4,
+            "reify:diffTrees": 6,
+            "auditReport:getReport": 4232,
+            "auditReport:init": 40792,
+            "reify:audit": 45028,
+            "reify:unpack": 49278,
+            "build:deps": 40,
+            "build": 41,
+            "reify:build": 41,
+            "reify": 49497,
+            "command:ci": 50033,
+            "npm": 50603
+          },
+          "longest_package_timers": [
+            [
+              "reifyNode:node_modules/next",
+              49276
+            ],
+            [
+              "reifyNode:node_modules/lucide-react",
+              47029
+            ],
+            [
+              "reifyNode:node_modules/@iconify/json",
+              46975
+            ],
+            [
+              "reifyNode:node_modules/@mui/material",
+              45946
+            ],
+            [
+              "reifyNode:node_modules/@next/swc-linux-x64-musl",
+              45577
+            ],
+            [
+              "reifyNode:node_modules/@next/swc-linux-x64-gnu",
+              45335
+            ],
+            [
+              "reifyNode:node_modules/es-abstract",
+              45084
+            ],
+            [
+              "reifyNode:node_modules/@mui/joy",
+              45027
+            ],
+            [
+              "reifyNode:node_modules/@mui/base",
+              15529
+            ],
+            [
+              "reifyNode:node_modules/@opentelemetry/api",
+              15319
+            ],
+            [
+              "reifyNode:node_modules/openai",
+              15272
+            ],
+            [
+              "reifyNode:node_modules/caniuse-lite",
+              15138
+            ],
+            [
+              "reifyNode:node_modules/@typescript-eslint/scope-manager",
+              14108
+            ],
+            [
+              "reifyNode:node_modules/@mui/lab",
+              14026
+            ],
+            [
+              "reifyNode:node_modules/eslint",
+              13536
+            ]
+          ],
+          "longest_script_timers": [],
+          "http": {
+            "lines": 808,
+            "cache_hits": 732,
+            "cache_misses": 75,
+            "cache_revalidated": 0,
+            "aggregate_request_ms_NOT_wall_time": 51041,
+            "slowest": [
+              {
+                "line": "1879 http fetch GET 200 https://registry.npmjs.org/next 5050ms (cache miss)",
+                "duration_ms": 5050
+              },
+              {
+                "line": "792 http fetch POST 200 https://registry.npmjs.org/-/npm/v1/security/advisories/bulk 4173ms",
+                "duration_ms": 4173
+              },
+              {
+                "line": "1805 http fetch GET 200 https://registry.npmjs.org/ai 2334ms (cache miss)",
+                "duration_ms": 2334
+              },
+              {
+                "line": "1774 http fetch GET 200 https://registry.npmjs.org/svelte 2144ms (cache miss)",
+                "duration_ms": 2144
+              },
+              {
+                "line": "1706 http fetch GET 200 https://registry.npmjs.org/ajv 1723ms (cache miss)",
+                "duration_ms": 1723
+              },
+              {
+                "line": "1691 http fetch GET 200 https://registry.npmjs.org/@babel%2fruntime 1671ms (cache miss)",
+                "duration_ms": 1671
+              },
+              {
+                "line": "1663 http fetch GET 200 https://registry.npmjs.org/nanoid 1610ms (cache miss)",
+                "duration_ms": 1610
+              },
+              {
+                "line": "1654 http fetch GET 200 https://registry.npmjs.org/minimatch 1605ms (cache miss)",
+                "duration_ms": 1605
+              },
+              {
+                "line": "1645 http fetch GET 200 https://registry.npmjs.org/@ai-sdk%2fprovider-utils 1563ms (cache miss)",
+                "duration_ms": 1563
+              },
+              {
+                "line": "1641 http fetch GET 200 https://registry.npmjs.org/glob 1548ms (cache miss)",
+                "duration_ms": 1548
+              },
+              {
+                "line": "1600 http fetch GET 200 https://registry.npmjs.org/qs 1503ms (cache miss)",
+                "duration_ms": 1503
+              },
+              {
+                "line": "1576 http fetch GET 200 https://registry.npmjs.org/postcss 1447ms (cache miss)",
+                "duration_ms": 1447
+              }
+            ]
+          },
+          "warning": "Timers are nested/overlapping, not additive. reify:unpack includes retrieval, extraction and filesystem work; npm does not isolate disk-write wall time."
+        },
+        "script_events": [],
+        "install_changes": "",
+        "resources": {
+          "wall_seconds": 50.724993287,
+          "user_seconds": 50.550393,
+          "system_seconds": 10.436866,
+          "max_rss_kib": 1842828,
+          "input_blocks": 452864,
+          "output_blocks": 2179288,
+          "major_page_faults": 73,
+          "minor_page_faults": 532017,
+          "voluntary_context_switches": 640893,
+          "involuntary_context_switches": 320
+        },
+        "after_startup_changes": ""
+      },
+      "cleaned_up": true,
+      "finished_at": "2026-09-24T05:43:22.446Z"
+    },
+    {
+      "repository": "mqo00/rope",
+      "commit": "1ada01830031e5882f2585577720b182deac6246",
+      "case": "cached-ci-no-audit",
+      "template": "engelbart-canvas-cached",
+      "round": 1,
+      "artifact_directory": "mqo00--rope-r1-cached-ci-no-audit",
+      "started_at": "2026-09-24T05:43:22.446Z",
+      "sandbox_id": "izzqav13zhe6gjixosgpz",
+      "template_id": "5mqfzddjuicidc1w92y5",
+      "resources": {
+        "cpu": 8,
+        "memory_mb": 8192
+      },
+      "artifacts": [
+        {
+          "file": "install.stdout.log",
+          "bytes": 94
+        },
+        {
+          "file": "npm.cjs",
+          "bytes": 11512
+        },
+        {
+          "file": "config-logs/2026-09-24T05_43_26_276Z-timing.json",
+          "bytes": 459
+        },
+        {
+          "file": "config-logs/2026-09-24T05_43_26_276Z-debug-0.log",
+          "bytes": 1366
+        },
+        {
+          "file": "packages.json",
+          "bytes": 182456
+        },
+        {
+          "file": "package.before.json",
+          "bytes": 1614
+        },
+        {
+          "file": "npm-config.json",
+          "bytes": 3595
+        },
+        {
+          "file": "spec.json",
+          "bytes": 301
+        },
+        {
+          "file": "resources.json",
+          "bytes": 287
+        },
+        {
+          "file": "global.npmrc",
+          "bytes": 0
+        },
+        {
+          "file": "user.npmrc",
+          "bytes": 0
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_43_27_235Z-debug-0.log",
+          "bytes": 183205
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_43_27_235Z-timing.json",
+          "bytes": 38086
+        },
+        {
+          "file": "measurement.json",
+          "bytes": 8113
+        },
+        {
+          "file": "install.stderr.log",
+          "bytes": 57626
+        }
+      ],
+      "measurement": {
+        "command": [
+          "npm",
+          "ci",
+          "--prefer-offline",
+          "--no-audit",
+          "--timing"
+        ],
+        "cwd": "system",
+        "wall_ms": 15535,
+        "exit_code": 0,
+        "signal": null,
+        "error": null,
+        "runtime": {
+          "node": "v22.23.2",
+          "npm": "10.9.8",
+          "python": "Python 3.11.6",
+          "arch": "x64",
+          "platform": "linux"
+        },
+        "config_hash": "e6cf3cf9776de08593445f3e51fbd6db9e928274ce1cadb821125b05c770d125",
+        "cache": {
+          "size_before_kib": 329232,
+          "seed": {
+            "version": 1,
+            "profile": "c0f1d0ec8e7f363619160720a55334cd78e1336a2759e3d1c610902fd1b4140d",
+            "seeded_at": "2026-09-24T02:52:38.805Z",
+            "duration_ms": 73764,
+            "node": "v22.23.2",
+            "repositories": [
+              {
+                "name": "mqo00/rope",
+                "commit": "1ada01830031e5882f2585577720b182deac6246"
+              },
+              {
+                "name": "kjfeng/cocoa-canvas",
+                "commit": "e49079a413497d4fe363af4e8a6e6fefd7539597"
+              },
+              {
+                "name": "mqo00/hypocompass",
+                "commit": "7bc855e7316aeb17e9919013a26aa0427138d480"
+              }
+            ],
+            "manifests": [
+              {
+                "repo": "mqo00/rope",
+                "file": "system/package.json",
+                "sha256": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8"
+              },
+              {
+                "repo": "mqo00/rope",
+                "file": "system/package-lock.json",
+                "sha256": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "package.json",
+                "sha256": "a72f54674cfee8e27721cc1d67e447bf73328008b590f1a200d917068395a172"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "package-lock.json",
+                "sha256": "396eeca89f69f4db9b97004f4d2fe3ce8f9e2957c9c066c21bf038ddea2e9cf3"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "client/package.json",
+                "sha256": "590f4f01067d75e7f2c84ff09335bc27da0f7a04aa70ec8df46cf669ebd84234"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "server/package.json",
+                "sha256": "200a49f95f2ed93c50f290b7a04c5980aee3bd132111f7cc777cb93e61ce824e"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/frontend/package.json",
+                "sha256": "995face2ce22984946aed81beba66031852050c55e5138878736473f719fb362"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/frontend/package-lock.json",
+                "sha256": "9f2eec5ef2b2babe6ce82389f8fb6dc355d5301f99a8d78559f153cf1dfaff53"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/backend/requirements.txt",
+                "sha256": "ffb9292f5843b9e2f254a41a4509b118c268a496261b58b3b5fc6b572715263c"
+              }
+            ]
+          }
+        },
+        "fingerprint": {
+          "hash": "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3",
+          "packages": 732,
+          "version_mismatches": 0
+        },
+        "input_hashes": {
+          "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+          "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+        },
+        "after_hashes": {
+          "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+          "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+        },
+        "timing_files": [
+          "2026-09-24T05_43_27_235Z-timing.json"
+        ],
+        "analysis": {
+          "timers_ms": {
+            "npm:load:whichnode": 1,
+            "npm:load:configload": 7,
+            "npm:load:mkdirpcache": 0,
+            "npm:load:mkdirplogs": 0,
+            "npm:load:setTitle": 0,
+            "npm:load": 24,
+            "idealTree:buildDeps": 1,
+            "idealTree": 138,
+            "npm-ci:rm": 1,
+            "reify:loadTrees": 4,
+            "reify:diffTrees": 5,
+            "reify:unpack": 14178,
+            "build:deps": 36,
+            "build": 36,
+            "reify:build": 37,
+            "reify": 14383,
+            "command:ci": 14652,
+            "npm": 15182
+          },
+          "longest_package_timers": [
+            [
+              "reifyNode:node_modules/next",
+              14175
+            ],
+            [
+              "reifyNode:node_modules/lucide-react",
+              12349
+            ],
+            [
+              "reifyNode:node_modules/@iconify/json",
+              12293
+            ],
+            [
+              "reifyNode:node_modules/@mui/material",
+              11304
+            ],
+            [
+              "reifyNode:node_modules/@next/swc-linux-x64-musl",
+              10920
+            ],
+            [
+              "reifyNode:node_modules/@next/swc-linux-x64-gnu",
+              10677
+            ],
+            [
+              "reifyNode:node_modules/es-abstract",
+              10458
+            ],
+            [
+              "reifyNode:node_modules/@mui/joy",
+              10402
+            ],
+            [
+              "reifyNode:node_modules/@mui/base",
+              9975
+            ],
+            [
+              "reifyNode:node_modules/@opentelemetry/api",
+              9860
+            ],
+            [
+              "reifyNode:node_modules/openai",
+              9819
+            ],
+            [
+              "reifyNode:node_modules/caniuse-lite",
+              9771
+            ],
+            [
+              "reifyNode:node_modules/@typescript-eslint/scope-manager",
+              9272
+            ],
+            [
+              "reifyNode:node_modules/@mui/lab",
+              9239
+            ],
+            [
+              "reifyNode:node_modules/eslint",
+              8988
+            ]
+          ],
+          "longest_script_timers": [],
+          "http": {
+            "lines": 732,
+            "cache_hits": 732,
+            "cache_misses": 0,
+            "cache_revalidated": 0,
+            "aggregate_request_ms_NOT_wall_time": 5,
+            "slowest": [
+              {
+                "line": "158 http cache semver@https://registry.npmmirror.com/semver/-/semver-7.6.3.tgz 1ms (cache hit)",
+                "duration_ms": 1
+              },
+              {
+                "line": "202 http cache prelude-ls@https://registry.npmmirror.com/prelude-ls/-/prelude-ls-1.2.1.tgz 1ms (cache hit)",
+                "duration_ms": 1
+              },
+              {
+                "line": "223 http cache path-exists@https://registry.npmmirror.com/path-exists/-/path-exists-4.0.0.tgz 1ms (cache hit)",
+                "duration_ms": 1
+              },
+              {
+                "line": "327 http cache json5@https://registry.npmmirror.com/json5/-/json5-1.0.2.tgz 1ms (cache hit)",
+                "duration_ms": 1
+              },
+              {
+                "line": "670 http cache @iconify/types@https://registry.npmmirror.com/@iconify/types/-/types-2.0.0.tgz 1ms (cache hit)",
+                "duration_ms": 1
+              },
+              {
+                "line": "59 http cache zwitch@https://registry.npmmirror.com/zwitch/-/zwitch-2.0.4.tgz 0ms (cache hit)",
+                "duration_ms": 0
+              },
+              {
+                "line": "60 http cache zod-to-json-schema@https://registry.npmmirror.com/zod-to-json-schema/-/zod-to-json-schema-3.23.2.tgz 0ms (cache hit)",
+                "duration_ms": 0
+              },
+              {
+                "line": "61 http cache zod@https://registry.npmmirror.com/zod/-/zod-3.23.8.tgz 0ms (cache hit)",
+                "duration_ms": 0
+              },
+              {
+                "line": "62 http cache yocto-queue@https://registry.npmmirror.com/yocto-queue/-/yocto-queue-0.1.0.tgz 0ms (cache hit)",
+                "duration_ms": 0
+              },
+              {
+                "line": "63 http cache yaml@https://registry.npmmirror.com/yaml/-/yaml-1.10.2.tgz 0ms (cache hit)",
+                "duration_ms": 0
+              },
+              {
+                "line": "64 http cache wrappy@https://registry.npmmirror.com/wrappy/-/wrappy-1.0.2.tgz 0ms (cache hit)",
+                "duration_ms": 0
+              },
+              {
+                "line": "65 http cache wrap-ansi-cjs@https://registry.npmmirror.com/wrap-ansi/-/wrap-ansi-7.0.0.tgz 0ms (cache hit)",
+                "duration_ms": 0
+              }
+            ]
+          },
+          "warning": "Timers are nested/overlapping, not additive. reify:unpack includes retrieval, extraction and filesystem work; npm does not isolate disk-write wall time."
+        },
+        "script_events": [],
+        "install_changes": "",
+        "resources": {
+          "wall_seconds": 15.301313749,
+          "user_seconds": 12.708439,
+          "system_seconds": 9.903803,
+          "max_rss_kib": 1337128,
+          "input_blocks": 450240,
+          "output_blocks": 2020576,
+          "major_page_faults": 49,
+          "minor_page_faults": 379803,
+          "voluntary_context_switches": 617442,
+          "involuntary_context_switches": 74
+        },
+        "after_startup_changes": ""
+      },
+      "cleaned_up": true,
+      "finished_at": "2026-09-24T05:43:43.877Z"
+    },
+    {
+      "repository": "mqo00/rope",
+      "commit": "1ada01830031e5882f2585577720b182deac6246",
+      "case": "cached-ci-no-audit",
+      "template": "engelbart-canvas-cached",
+      "round": 2,
+      "artifact_directory": "mqo00--rope-r2-cached-ci-no-audit",
+      "started_at": "2026-09-24T05:43:43.878Z",
+      "sandbox_id": "i3hfefi07ttix8i817a6a",
+      "template_id": "5mqfzddjuicidc1w92y5",
+      "resources": {
+        "cpu": 8,
+        "memory_mb": 8192
+      },
+      "artifacts": [
+        {
+          "file": "install.stdout.log",
+          "bytes": 94
+        },
+        {
+          "file": "npm.cjs",
+          "bytes": 11512
+        },
+        {
+          "file": "config-logs/2026-09-24T05_43_47_975Z-timing.json",
+          "bytes": 459
+        },
+        {
+          "file": "config-logs/2026-09-24T05_43_47_975Z-debug-0.log",
+          "bytes": 1366
+        },
+        {
+          "file": "packages.json",
+          "bytes": 182456
+        },
+        {
+          "file": "package.before.json",
+          "bytes": 1614
+        },
+        {
+          "file": "npm-config.json",
+          "bytes": 3595
+        },
+        {
+          "file": "spec.json",
+          "bytes": 301
+        },
+        {
+          "file": "resources.json",
+          "bytes": 288
+        },
+        {
+          "file": "global.npmrc",
+          "bytes": 0
+        },
+        {
+          "file": "user.npmrc",
+          "bytes": 0
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_43_48_996Z-debug-0.log",
+          "bytes": 183231
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_43_48_996Z-timing.json",
+          "bytes": 38112
+        },
+        {
+          "file": "measurement.json",
+          "bytes": 8185
+        },
+        {
+          "file": "install.stderr.log",
+          "bytes": 57652
+        }
+      ],
+      "measurement": {
+        "command": [
+          "npm",
+          "ci",
+          "--prefer-offline",
+          "--no-audit",
+          "--timing"
+        ],
+        "cwd": "system",
+        "wall_ms": 16582,
+        "exit_code": 0,
+        "signal": null,
+        "error": null,
+        "runtime": {
+          "node": "v22.23.2",
+          "npm": "10.9.8",
+          "python": "Python 3.11.6",
+          "arch": "x64",
+          "platform": "linux"
+        },
+        "config_hash": "e6cf3cf9776de08593445f3e51fbd6db9e928274ce1cadb821125b05c770d125",
+        "cache": {
+          "size_before_kib": 329232,
+          "seed": {
+            "version": 1,
+            "profile": "c0f1d0ec8e7f363619160720a55334cd78e1336a2759e3d1c610902fd1b4140d",
+            "seeded_at": "2026-09-24T02:52:38.805Z",
+            "duration_ms": 73764,
+            "node": "v22.23.2",
+            "repositories": [
+              {
+                "name": "mqo00/rope",
+                "commit": "1ada01830031e5882f2585577720b182deac6246"
+              },
+              {
+                "name": "kjfeng/cocoa-canvas",
+                "commit": "e49079a413497d4fe363af4e8a6e6fefd7539597"
+              },
+              {
+                "name": "mqo00/hypocompass",
+                "commit": "7bc855e7316aeb17e9919013a26aa0427138d480"
+              }
+            ],
+            "manifests": [
+              {
+                "repo": "mqo00/rope",
+                "file": "system/package.json",
+                "sha256": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8"
+              },
+              {
+                "repo": "mqo00/rope",
+                "file": "system/package-lock.json",
+                "sha256": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "package.json",
+                "sha256": "a72f54674cfee8e27721cc1d67e447bf73328008b590f1a200d917068395a172"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "package-lock.json",
+                "sha256": "396eeca89f69f4db9b97004f4d2fe3ce8f9e2957c9c066c21bf038ddea2e9cf3"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "client/package.json",
+                "sha256": "590f4f01067d75e7f2c84ff09335bc27da0f7a04aa70ec8df46cf669ebd84234"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "server/package.json",
+                "sha256": "200a49f95f2ed93c50f290b7a04c5980aee3bd132111f7cc777cb93e61ce824e"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/frontend/package.json",
+                "sha256": "995face2ce22984946aed81beba66031852050c55e5138878736473f719fb362"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/frontend/package-lock.json",
+                "sha256": "9f2eec5ef2b2babe6ce82389f8fb6dc355d5301f99a8d78559f153cf1dfaff53"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/backend/requirements.txt",
+                "sha256": "ffb9292f5843b9e2f254a41a4509b118c268a496261b58b3b5fc6b572715263c"
+              }
+            ]
+          }
+        },
+        "fingerprint": {
+          "hash": "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3",
+          "packages": 732,
+          "version_mismatches": 0
+        },
+        "input_hashes": {
+          "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+          "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+        },
+        "after_hashes": {
+          "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+          "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+        },
+        "timing_files": [
+          "2026-09-24T05_43_48_996Z-timing.json"
+        ],
+        "analysis": {
+          "timers_ms": {
+            "npm:load:whichnode": 0,
+            "npm:load:configload": 7,
+            "npm:load:mkdirpcache": 0,
+            "npm:load:mkdirplogs": 0,
+            "npm:load:setTitle": 0,
+            "npm:load": 23,
+            "idealTree:buildDeps": 1,
+            "idealTree": 149,
+            "npm-ci:rm": 0,
+            "reify:loadTrees": 4,
+            "reify:diffTrees": 6,
+            "reify:unpack": 15244,
+            "build:deps": 44,
+            "build": 44,
+            "reify:build": 45,
+            "reify": 15487,
+            "command:ci": 15784,
+            "npm": 16204
+          },
+          "longest_package_timers": [
+            [
+              "reifyNode:node_modules/next",
+              15243
+            ],
+            [
+              "reifyNode:node_modules/lucide-react",
+              12992
+            ],
+            [
+              "reifyNode:node_modules/@iconify/json",
+              12878
+            ],
+            [
+              "reifyNode:node_modules/@mui/material",
+              11760
+            ],
+            [
+              "reifyNode:node_modules/@next/swc-linux-x64-musl",
+              11276
+            ],
+            [
+              "reifyNode:node_modules/@next/swc-linux-x64-gnu",
+              11006
+            ],
+            [
+              "reifyNode:node_modules/es-abstract",
+              10798
+            ],
+            [
+              "reifyNode:node_modules/@mui/joy",
+              10723
+            ],
+            [
+              "reifyNode:node_modules/@mui/base",
+              10219
+            ],
+            [
+              "reifyNode:node_modules/@opentelemetry/api",
+              10090
+            ],
+            [
+              "reifyNode:node_modules/openai",
+              10036
+            ],
+            [
+              "reifyNode:node_modules/caniuse-lite",
+              9975
+            ],
+            [
+              "reifyNode:node_modules/@typescript-eslint/scope-manager",
+              9383
+            ],
+            [
+              "reifyNode:node_modules/@mui/lab",
+              9341
+            ],
+            [
+              "reifyNode:node_modules/eslint",
+              9038
+            ]
+          ],
+          "longest_script_timers": [],
+          "http": {
+            "lines": 732,
+            "cache_hits": 732,
+            "cache_misses": 0,
+            "cache_revalidated": 0,
+            "aggregate_request_ms_NOT_wall_time": 7,
+            "slowest": [
+              {
+                "line": "62 http cache yocto-queue@https://registry.npmmirror.com/yocto-queue/-/yocto-queue-0.1.0.tgz 1ms (cache hit)",
+                "duration_ms": 1
+              },
+              {
+                "line": "67 http cache which-typed-array@https://registry.npmmirror.com/which-typed-array/-/which-typed-array-1.1.15.tgz 1ms (cache hit)",
+                "duration_ms": 1
+              },
+              {
+                "line": "347 http cache is-set@https://registry.npmmirror.com/is-set/-/is-set-2.0.3.tgz 1ms (cache hit)",
+                "duration_ms": 1
+              },
+              {
+                "line": "518 http cache client-only@https://registry.npmmirror.com/client-only/-/client-only-0.0.1.tgz 1ms (cache hit)",
+                "duration_ms": 1
+              },
+              {
+                "line": "529 http cache callsites@https://registry.npmmirror.com/callsites/-/callsites-3.1.0.tgz 1ms (cache hit)",
+                "duration_ms": 1
+              },
+              {
+                "line": "572 http cache @vue/runtime-dom@https://registry.npmjs.org/@vue/runtime-dom/-/runtime-dom-3.5.13.tgz 1ms (cache hit)",
+                "duration_ms": 1
+              },
+              {
+                "line": "775 http cache brace-expansion@https://registry.npmmirror.com/brace-expansion/-/brace-expansion-2.0.1.tgz 1ms (cache hit)",
+                "duration_ms": 1
+              },
+              {
+                "line": "59 http cache zwitch@https://registry.npmmirror.com/zwitch/-/zwitch-2.0.4.tgz 0ms (cache hit)",
+                "duration_ms": 0
+              },
+              {
+                "line": "60 http cache zod-to-json-schema@https://registry.npmmirror.com/zod-to-json-schema/-/zod-to-json-schema-3.23.2.tgz 0ms (cache hit)",
+                "duration_ms": 0
+              },
+              {
+                "line": "61 http cache zod@https://registry.npmmirror.com/zod/-/zod-3.23.8.tgz 0ms (cache hit)",
+                "duration_ms": 0
+              },
+              {
+                "line": "63 http cache yaml@https://registry.npmmirror.com/yaml/-/yaml-1.10.2.tgz 0ms (cache hit)",
+                "duration_ms": 0
+              },
+              {
+                "line": "64 http cache wrap-ansi-cjs@https://registry.npmmirror.com/wrap-ansi/-/wrap-ansi-7.0.0.tgz 0ms (cache hit)",
+                "duration_ms": 0
+              }
+            ]
+          },
+          "warning": "Timers are nested/overlapping, not additive. reify:unpack includes retrieval, extraction and filesystem work; npm does not isolate disk-write wall time."
+        },
+        "script_events": [],
+        "install_changes": "",
+        "resources": {
+          "wall_seconds": 16.320617073,
+          "user_seconds": 12.838825,
+          "system_seconds": 11.284736,
+          "max_rss_kib": 1318936,
+          "input_blocks": 450240,
+          "output_blocks": 2020576,
+          "major_page_faults": 49,
+          "minor_page_faults": 375923,
+          "voluntary_context_switches": 561260,
+          "involuntary_context_switches": 85
+        },
+        "after_startup_changes": ""
+      },
+      "cleaned_up": true,
+      "finished_at": "2026-09-24T05:44:06.520Z"
+    },
+    {
+      "repository": "mqo00/rope",
+      "commit": "1ada01830031e5882f2585577720b182deac6246",
+      "case": "cached-ci",
+      "template": "engelbart-canvas-cached",
+      "round": 2,
+      "artifact_directory": "mqo00--rope-r2-cached-ci",
+      "started_at": "2026-09-24T05:44:06.520Z",
+      "sandbox_id": "ijnnxce23kj84499j2dti",
+      "template_id": "5mqfzddjuicidc1w92y5",
+      "resources": {
+        "cpu": 8,
+        "memory_mb": 8192
+      },
+      "artifacts": [
+        {
+          "file": "install.stdout.log",
+          "bytes": 365
+        },
+        {
+          "file": "npm.cjs",
+          "bytes": 11512
+        },
+        {
+          "file": "config-logs/2026-09-24T05_44_09_824Z-timing.json",
+          "bytes": 445
+        },
+        {
+          "file": "config-logs/2026-09-24T05_44_09_824Z-debug-0.log",
+          "bytes": 1352
+        },
+        {
+          "file": "packages.json",
+          "bytes": 182456
+        },
+        {
+          "file": "package.before.json",
+          "bytes": 1614
+        },
+        {
+          "file": "npm-config.json",
+          "bytes": 3594
+        },
+        {
+          "file": "spec.json",
+          "bytes": 288
+        },
+        {
+          "file": "resources.json",
+          "bytes": 289
+        },
+        {
+          "file": "global.npmrc",
+          "bytes": 0
+        },
+        {
+          "file": "user.npmrc",
+          "bytes": 0
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_44_10_432Z-debug-0.log",
+          "bytes": 394958
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_44_10_432Z-timing.json",
+          "bytes": 125765
+        },
+        {
+          "file": "measurement.json",
+          "bytes": 7988
+        },
+        {
+          "file": "install.stderr.log",
+          "bytes": 164278
+        }
+      ],
+      "measurement": {
+        "command": [
+          "npm",
+          "ci",
+          "--prefer-offline",
+          "--timing"
+        ],
+        "cwd": "system",
+        "wall_ms": 52824,
+        "exit_code": 0,
+        "signal": null,
+        "error": null,
+        "runtime": {
+          "node": "v22.23.2",
+          "npm": "10.9.8",
+          "python": "Python 3.11.6",
+          "arch": "x64",
+          "platform": "linux"
+        },
+        "config_hash": "0e1c8e50f6b2e9c54cb9a469942db81c99ef531288f06bcc8f66f8512a431ee8",
+        "cache": {
+          "size_before_kib": 329232,
+          "seed": {
+            "version": 1,
+            "profile": "c0f1d0ec8e7f363619160720a55334cd78e1336a2759e3d1c610902fd1b4140d",
+            "seeded_at": "2026-09-24T02:52:38.805Z",
+            "duration_ms": 73764,
+            "node": "v22.23.2",
+            "repositories": [
+              {
+                "name": "mqo00/rope",
+                "commit": "1ada01830031e5882f2585577720b182deac6246"
+              },
+              {
+                "name": "kjfeng/cocoa-canvas",
+                "commit": "e49079a413497d4fe363af4e8a6e6fefd7539597"
+              },
+              {
+                "name": "mqo00/hypocompass",
+                "commit": "7bc855e7316aeb17e9919013a26aa0427138d480"
+              }
+            ],
+            "manifests": [
+              {
+                "repo": "mqo00/rope",
+                "file": "system/package.json",
+                "sha256": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8"
+              },
+              {
+                "repo": "mqo00/rope",
+                "file": "system/package-lock.json",
+                "sha256": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "package.json",
+                "sha256": "a72f54674cfee8e27721cc1d67e447bf73328008b590f1a200d917068395a172"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "package-lock.json",
+                "sha256": "396eeca89f69f4db9b97004f4d2fe3ce8f9e2957c9c066c21bf038ddea2e9cf3"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "client/package.json",
+                "sha256": "590f4f01067d75e7f2c84ff09335bc27da0f7a04aa70ec8df46cf669ebd84234"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "server/package.json",
+                "sha256": "200a49f95f2ed93c50f290b7a04c5980aee3bd132111f7cc777cb93e61ce824e"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/frontend/package.json",
+                "sha256": "995face2ce22984946aed81beba66031852050c55e5138878736473f719fb362"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/frontend/package-lock.json",
+                "sha256": "9f2eec5ef2b2babe6ce82389f8fb6dc355d5301f99a8d78559f153cf1dfaff53"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/backend/requirements.txt",
+                "sha256": "ffb9292f5843b9e2f254a41a4509b118c268a496261b58b3b5fc6b572715263c"
+              }
+            ]
+          }
+        },
+        "fingerprint": {
+          "hash": "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3",
+          "packages": 732,
+          "version_mismatches": 0
+        },
+        "input_hashes": {
+          "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+          "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+        },
+        "after_hashes": {
+          "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+          "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+        },
+        "timing_files": [
+          "2026-09-24T05_44_10_432Z-timing.json"
+        ],
+        "analysis": {
+          "timers_ms": {
+            "npm:load:whichnode": 1,
+            "npm:load:configload": 7,
+            "npm:load:mkdirpcache": 1,
+            "npm:load:mkdirplogs": 0,
+            "npm:load:setTitle": 1,
+            "npm:load": 24,
+            "idealTree:buildDeps": 2,
+            "idealTree": 131,
+            "npm-ci:rm": 0,
+            "reify:loadTrees": 4,
+            "reify:diffTrees": 6,
+            "auditReport:getReport": 4075,
+            "auditReport:init": 42487,
+            "reify:audit": 46566,
+            "reify:unpack": 51300,
+            "build:deps": 39,
+            "build": 39,
+            "reify:build": 40,
+            "reify": 51536,
+            "command:ci": 52172,
+            "npm": 52594
+          },
+          "longest_package_timers": [
+            [
+              "reifyNode:node_modules/next",
+              51298
+            ],
+            [
+              "reifyNode:node_modules/lucide-react",
+              48726
+            ],
+            [
+              "reifyNode:node_modules/@iconify/json",
+              48614
+            ],
+            [
+              "reifyNode:node_modules/@mui/material",
+              47643
+            ],
+            [
+              "reifyNode:node_modules/@next/swc-linux-x64-musl",
+              47197
+            ],
+            [
+              "reifyNode:node_modules/@next/swc-linux-x64-gnu",
+              46934
+            ],
+            [
+              "reifyNode:node_modules/es-abstract",
+              46724
+            ],
+            [
+              "reifyNode:node_modules/@mui/joy",
+              46661
+            ],
+            [
+              "reifyNode:node_modules/@mui/base",
+              16362
+            ],
+            [
+              "reifyNode:node_modules/@opentelemetry/api",
+              15809
+            ],
+            [
+              "reifyNode:node_modules/openai",
+              15674
+            ],
+            [
+              "reifyNode:node_modules/caniuse-lite",
+              15606
+            ],
+            [
+              "reifyNode:node_modules/@typescript-eslint/scope-manager",
+              14252
+            ],
+            [
+              "reifyNode:node_modules/@mui/lab",
+              14158
+            ],
+            [
+              "reifyNode:node_modules/eslint",
+              13575
+            ]
+          ],
+          "longest_script_timers": [],
+          "http": {
+            "lines": 808,
+            "cache_hits": 732,
+            "cache_misses": 75,
+            "cache_revalidated": 0,
+            "aggregate_request_ms_NOT_wall_time": 50856,
+            "slowest": [
+              {
+                "line": "1879 http fetch GET 200 https://registry.npmjs.org/next 4846ms (cache miss)",
+                "duration_ms": 4846
+              },
+              {
+                "line": "792 http fetch POST 200 https://registry.npmjs.org/-/npm/v1/security/advisories/bulk 4069ms",
+                "duration_ms": 4069
+              },
+              {
+                "line": "1805 http fetch GET 200 https://registry.npmjs.org/ai 2325ms (cache miss)",
+                "duration_ms": 2325
+              },
+              {
+                "line": "1774 http fetch GET 200 https://registry.npmjs.org/svelte 2111ms (cache miss)",
+                "duration_ms": 2111
+              },
+              {
+                "line": "1698 http fetch GET 200 https://registry.npmjs.org/ajv 1724ms (cache miss)",
+                "duration_ms": 1724
+              },
+              {
+                "line": "1678 http fetch GET 200 https://registry.npmjs.org/@babel%2fruntime 1659ms (cache miss)",
+                "duration_ms": 1659
+              },
+              {
+                "line": "1682 http fetch GET 200 https://registry.npmjs.org/postcss 1656ms (cache miss)",
+                "duration_ms": 1656
+              },
+              {
+                "line": "1654 http fetch GET 200 https://registry.npmjs.org/nanoid 1596ms (cache miss)",
+                "duration_ms": 1596
+              },
+              {
+                "line": "1645 http fetch GET 200 https://registry.npmjs.org/minimatch 1591ms (cache miss)",
+                "duration_ms": 1591
+              },
+              {
+                "line": "1628 http fetch GET 200 https://registry.npmjs.org/@ai-sdk%2fprovider-utils 1544ms (cache miss)",
+                "duration_ms": 1544
+              },
+              {
+                "line": "1624 http fetch GET 200 https://registry.npmjs.org/glob 1530ms (cache miss)",
+                "duration_ms": 1530
+              },
+              {
+                "line": "1609 http fetch GET 200 https://registry.npmjs.org/yaml 1490ms (cache miss)",
+                "duration_ms": 1490
+              }
+            ]
+          },
+          "warning": "Timers are nested/overlapping, not additive. reify:unpack includes retrieval, extraction and filesystem work; npm does not isolate disk-write wall time."
+        },
+        "script_events": [],
+        "install_changes": "",
+        "resources": {
+          "wall_seconds": 52.734607622,
+          "user_seconds": 51.083544,
+          "system_seconds": 11.579011,
+          "max_rss_kib": 1883452,
+          "input_blocks": 452904,
+          "output_blocks": 2179304,
+          "major_page_faults": 75,
+          "minor_page_faults": 543631,
+          "voluntary_context_switches": 586069,
+          "involuntary_context_switches": 156
+        },
+        "after_startup_changes": ""
+      },
+      "cleaned_up": true,
+      "finished_at": "2026-09-24T05:45:04.526Z"
+    },
+    {
+      "repository": "mqo00/rope",
+      "commit": "1ada01830031e5882f2585577720b182deac6246",
+      "case": "cached-install",
+      "template": "engelbart-canvas-cached",
+      "round": 2,
+      "artifact_directory": "mqo00--rope-r2-cached-install",
+      "started_at": "2026-09-24T05:45:04.529Z",
+      "sandbox_id": "io0dap4nfxbcdcukhotdr",
+      "template_id": "5mqfzddjuicidc1w92y5",
+      "resources": {
+        "cpu": 8,
+        "memory_mb": 8192
+      },
+      "artifacts": [
+        {
+          "file": "install.stdout.log",
+          "bytes": 365
+        },
+        {
+          "file": "npm.cjs",
+          "bytes": 11512
+        },
+        {
+          "file": "config-logs/2026-09-24T05_45_08_752Z-debug-0.log",
+          "bytes": 1353
+        },
+        {
+          "file": "config-logs/2026-09-24T05_45_08_752Z-timing.json",
+          "bytes": 446
+        },
+        {
+          "file": "packages.json",
+          "bytes": 182456
+        },
+        {
+          "file": "package.before.json",
+          "bytes": 1614
+        },
+        {
+          "file": "npm-config.json",
+          "bytes": 3594
+        },
+        {
+          "file": "spec.json",
+          "bytes": 293
+        },
+        {
+          "file": "resources.json",
+          "bytes": 289
+        },
+        {
+          "file": "global.npmrc",
+          "bytes": 0
+        },
+        {
+          "file": "user.npmrc",
+          "bytes": 0
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_45_09_598Z-debug-0.log",
+          "bytes": 394949
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_45_09_598Z-timing.json",
+          "bytes": 125751
+        },
+        {
+          "file": "measurement.json",
+          "bytes": 8001
+        },
+        {
+          "file": "install.stderr.log",
+          "bytes": 164259
+        }
+      ],
+      "measurement": {
+        "command": [
+          "npm",
+          "install",
+          "--prefer-offline",
+          "--timing"
+        ],
+        "cwd": "system",
+        "wall_ms": 55759,
+        "exit_code": 0,
+        "signal": null,
+        "error": null,
+        "runtime": {
+          "node": "v22.23.2",
+          "npm": "10.9.8",
+          "python": "Python 3.11.6",
+          "arch": "x64",
+          "platform": "linux"
+        },
+        "config_hash": "0e1c8e50f6b2e9c54cb9a469942db81c99ef531288f06bcc8f66f8512a431ee8",
+        "cache": {
+          "size_before_kib": 329232,
+          "seed": {
+            "version": 1,
+            "profile": "c0f1d0ec8e7f363619160720a55334cd78e1336a2759e3d1c610902fd1b4140d",
+            "seeded_at": "2026-09-24T02:52:38.805Z",
+            "duration_ms": 73764,
+            "node": "v22.23.2",
+            "repositories": [
+              {
+                "name": "mqo00/rope",
+                "commit": "1ada01830031e5882f2585577720b182deac6246"
+              },
+              {
+                "name": "kjfeng/cocoa-canvas",
+                "commit": "e49079a413497d4fe363af4e8a6e6fefd7539597"
+              },
+              {
+                "name": "mqo00/hypocompass",
+                "commit": "7bc855e7316aeb17e9919013a26aa0427138d480"
+              }
+            ],
+            "manifests": [
+              {
+                "repo": "mqo00/rope",
+                "file": "system/package.json",
+                "sha256": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8"
+              },
+              {
+                "repo": "mqo00/rope",
+                "file": "system/package-lock.json",
+                "sha256": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "package.json",
+                "sha256": "a72f54674cfee8e27721cc1d67e447bf73328008b590f1a200d917068395a172"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "package-lock.json",
+                "sha256": "396eeca89f69f4db9b97004f4d2fe3ce8f9e2957c9c066c21bf038ddea2e9cf3"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "client/package.json",
+                "sha256": "590f4f01067d75e7f2c84ff09335bc27da0f7a04aa70ec8df46cf669ebd84234"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "server/package.json",
+                "sha256": "200a49f95f2ed93c50f290b7a04c5980aee3bd132111f7cc777cb93e61ce824e"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/frontend/package.json",
+                "sha256": "995face2ce22984946aed81beba66031852050c55e5138878736473f719fb362"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/frontend/package-lock.json",
+                "sha256": "9f2eec5ef2b2babe6ce82389f8fb6dc355d5301f99a8d78559f153cf1dfaff53"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/backend/requirements.txt",
+                "sha256": "ffb9292f5843b9e2f254a41a4509b118c268a496261b58b3b5fc6b572715263c"
+              }
+            ]
+          }
+        },
+        "fingerprint": {
+          "hash": "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3",
+          "packages": 732,
+          "version_mismatches": 0
+        },
+        "input_hashes": {
+          "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+          "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+        },
+        "after_hashes": {
+          "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+          "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+        },
+        "timing_files": [
+          "2026-09-24T05_45_09_598Z-timing.json"
+        ],
+        "analysis": {
+          "timers_ms": {
+            "npm:load:whichnode": 1,
+            "npm:load:configload": 7,
+            "npm:load:mkdirpcache": 1,
+            "npm:load:mkdirplogs": 0,
+            "npm:load:setTitle": 2,
+            "npm:load": 23,
+            "idealTree:buildDeps": 1,
+            "idealTree": 293,
+            "reify:loadTrees": 295,
+            "reify:diffTrees": 6,
+            "auditReport:getReport": 4377,
+            "auditReport:init": 45147,
+            "reify:audit": 49528,
+            "reify:unpack": 53911,
+            "build:deps": 45,
+            "build": 46,
+            "reify:build": 47,
+            "reify:save": 147,
+            "reify": 54582,
+            "command:install": 54949,
+            "npm": 55399
+          },
+          "longest_package_timers": [
+            [
+              "reifyNode:node_modules/next",
+              53908
+            ],
+            [
+              "reifyNode:node_modules/lucide-react",
+              51005
+            ],
+            [
+              "reifyNode:node_modules/@iconify/json",
+              50911
+            ],
+            [
+              "reifyNode:node_modules/@mui/material",
+              49895
+            ],
+            [
+              "reifyNode:node_modules/@next/swc-linux-x64-musl",
+              42099
+            ],
+            [
+              "reifyNode:node_modules/@next/swc-linux-x64-gnu",
+              41792
+            ],
+            [
+              "reifyNode:node_modules/es-abstract",
+              41535
+            ],
+            [
+              "reifyNode:node_modules/@mui/joy",
+              41482
+            ],
+            [
+              "reifyNode:node_modules/@mui/base",
+              16866
+            ],
+            [
+              "reifyNode:node_modules/@opentelemetry/api",
+              16616
+            ],
+            [
+              "reifyNode:node_modules/openai",
+              16428
+            ],
+            [
+              "reifyNode:node_modules/caniuse-lite",
+              16360
+            ],
+            [
+              "reifyNode:node_modules/@typescript-eslint/scope-manager",
+              15245
+            ],
+            [
+              "reifyNode:node_modules/@mui/lab",
+              15011
+            ],
+            [
+              "reifyNode:node_modules/eslint",
+              14625
+            ]
+          ],
+          "longest_script_timers": [],
+          "http": {
+            "lines": 808,
+            "cache_hits": 732,
+            "cache_misses": 75,
+            "cache_revalidated": 0,
+            "aggregate_request_ms_NOT_wall_time": 55172,
+            "slowest": [
+              {
+                "line": "1878 http fetch GET 200 https://registry.npmjs.org/next 5335ms (cache miss)",
+                "duration_ms": 5335
+              },
+              {
+                "line": "791 http fetch POST 200 https://registry.npmjs.org/-/npm/v1/security/advisories/bulk 4372ms",
+                "duration_ms": 4372
+              },
+              {
+                "line": "1792 http fetch GET 200 https://registry.npmjs.org/ai 2619ms (cache miss)",
+                "duration_ms": 2619
+              },
+              {
+                "line": "1779 http fetch GET 200 https://registry.npmjs.org/svelte 2432ms (cache miss)",
+                "duration_ms": 2432
+              },
+              {
+                "line": "1705 http fetch GET 200 https://registry.npmjs.org/ajv 1893ms (cache miss)",
+                "duration_ms": 1893
+              },
+              {
+                "line": "1682 http fetch GET 200 https://registry.npmjs.org/@babel%2fruntime 1834ms (cache miss)",
+                "duration_ms": 1834
+              },
+              {
+                "line": "1665 http fetch GET 200 https://registry.npmjs.org/nanoid 1748ms (cache miss)",
+                "duration_ms": 1748
+              },
+              {
+                "line": "1655 http fetch GET 200 https://registry.npmjs.org/minimatch 1735ms (cache miss)",
+                "duration_ms": 1735
+              },
+              {
+                "line": "1644 http fetch GET 200 https://registry.npmjs.org/@ai-sdk%2fprovider-utils 1685ms (cache miss)",
+                "duration_ms": 1685
+              },
+              {
+                "line": "1629 http fetch GET 200 https://registry.npmjs.org/glob 1660ms (cache miss)",
+                "duration_ms": 1660
+              },
+              {
+                "line": "1619 http fetch GET 200 https://registry.npmjs.org/postcss 1623ms (cache miss)",
+                "duration_ms": 1623
+              },
+              {
+                "line": "1596 http fetch GET 200 https://registry.npmjs.org/qs 1604ms (cache miss)",
+                "duration_ms": 1604
+              }
+            ]
+          },
+          "warning": "Timers are nested/overlapping, not additive. reify:unpack includes retrieval, extraction and filesystem work; npm does not isolate disk-write wall time."
+        },
+        "script_events": [],
+        "install_changes": "",
+        "resources": {
+          "wall_seconds": 55.542922008,
+          "user_seconds": 53.084489,
+          "system_seconds": 12.399886,
+          "max_rss_kib": 1890852,
+          "input_blocks": 452944,
+          "output_blocks": 2180224,
+          "major_page_faults": 75,
+          "minor_page_faults": 544511,
+          "voluntary_context_switches": 577535,
+          "involuntary_context_switches": 211
+        },
+        "after_startup_changes": ""
+      },
+      "cleaned_up": true,
+      "finished_at": "2026-09-24T05:46:06.490Z"
+    },
+    {
+      "repository": "mqo00/rope",
+      "commit": "1ada01830031e5882f2585577720b182deac6246",
+      "case": "runner-install",
+      "template": "engelbart-runner",
+      "round": 2,
+      "artifact_directory": "mqo00--rope-r2-runner-install",
+      "started_at": "2026-09-24T05:46:06.495Z",
+      "sandbox_id": "iewgwstpd8bfznac07jyb",
+      "template_id": "zyc96dk7q7adnb1uzy40",
+      "resources": {
+        "cpu": 8,
+        "memory_mb": 8192
+      },
+      "artifacts": [
+        {
+          "file": "install.stdout.log",
+          "bytes": 365
+        },
+        {
+          "file": "npm.cjs",
+          "bytes": 11512
+        },
+        {
+          "file": "config-logs/2026-09-24T05_46_10_131Z-timing.json",
+          "bytes": 446
+        },
+        {
+          "file": "config-logs/2026-09-24T05_46_10_131Z-debug-0.log",
+          "bytes": 1353
+        },
+        {
+          "file": "packages.json",
+          "bytes": 182456
+        },
+        {
+          "file": "package.before.json",
+          "bytes": 1614
+        },
+        {
+          "file": "npm-config.json",
+          "bytes": 3594
+        },
+        {
+          "file": "spec.json",
+          "bytes": 293
+        },
+        {
+          "file": "resources.json",
+          "bytes": 292
+        },
+        {
+          "file": "global.npmrc",
+          "bytes": 0
+        },
+        {
+          "file": "user.npmrc",
+          "bytes": 0
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_46_11_231Z-debug-0.log",
+          "bytes": 598570
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_46_11_231Z-timing.json",
+          "bytes": 126005
+        },
+        {
+          "file": "measurement.json",
+          "bytes": 6231
+        },
+        {
+          "file": "install.stderr.log",
+          "bytes": 164513
+        }
+      ],
+      "measurement": {
+        "command": [
+          "npm",
+          "install",
+          "--prefer-offline",
+          "--timing"
+        ],
+        "cwd": "system",
+        "wall_ms": 59526,
+        "exit_code": 0,
+        "signal": null,
+        "error": null,
+        "runtime": {
+          "node": "v22.23.2",
+          "npm": "10.9.8",
+          "python": "Python 3.11.6",
+          "arch": "x64",
+          "platform": "linux"
+        },
+        "config_hash": "0e1c8e50f6b2e9c54cb9a469942db81c99ef531288f06bcc8f66f8512a431ee8",
+        "cache": {
+          "size_before_kib": 0,
+          "seed": null
+        },
+        "fingerprint": {
+          "hash": "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3",
+          "packages": 732,
+          "version_mismatches": 0
+        },
+        "input_hashes": {
+          "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+          "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+        },
+        "after_hashes": {
+          "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+          "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+        },
+        "timing_files": [
+          "2026-09-24T05_46_11_231Z-timing.json"
+        ],
+        "analysis": {
+          "timers_ms": {
+            "npm:load:whichnode": 1,
+            "npm:load:configload": 7,
+            "npm:load:mkdirpcache": 0,
+            "npm:load:mkdirplogs": 1,
+            "npm:load:setTitle": 0,
+            "npm:load": 23,
+            "idealTree:buildDeps": 1,
+            "idealTree": 273,
+            "reify:loadTrees": 277,
+            "reify:diffTrees": 6,
+            "auditReport:getReport": 787,
+            "auditReport:init": 47080,
+            "reify:audit": 47871,
+            "reify:unpack": 57916,
+            "build:deps": 42,
+            "build": 42,
+            "reify:build": 43,
+            "reify:save": 150,
+            "reify": 58582,
+            "command:install": 58927,
+            "npm": 59178
+          },
+          "longest_package_timers": [
+            [
+              "reifyNode:node_modules/next",
+              57915
+            ],
+            [
+              "reifyNode:node_modules/@next/swc-linux-x64-musl",
+              56938
+            ],
+            [
+              "reifyNode:node_modules/@iconify/json",
+              55569
+            ],
+            [
+              "reifyNode:node_modules/lucide-react",
+              55220
+            ],
+            [
+              "reifyNode:node_modules/@mui/material",
+              53397
+            ],
+            [
+              "reifyNode:node_modules/@next/swc-linux-x64-gnu",
+              52477
+            ],
+            [
+              "reifyNode:node_modules/@mui/joy",
+              51252
+            ],
+            [
+              "reifyNode:node_modules/es-abstract",
+              50862
+            ],
+            [
+              "reifyNode:node_modules/@mui/base",
+              50292
+            ],
+            [
+              "reifyNode:node_modules/@opentelemetry/api",
+              49983
+            ],
+            [
+              "reifyNode:node_modules/caniuse-lite",
+              49463
+            ],
+            [
+              "reifyNode:node_modules/@mui/lab",
+              48827
+            ],
+            [
+              "reifyNode:node_modules/@typescript-eslint/scope-manager",
+              48592
+            ],
+            [
+              "reifyNode:node_modules/@mui/utils",
+              48104
+            ],
+            [
+              "reifyNode:node_modules/openai",
+              47925
+            ]
+          ],
+          "longest_script_timers": [],
+          "http": {
+            "lines": 1540,
+            "cache_hits": 758,
+            "cache_misses": 781,
+            "cache_revalidated": 0,
+            "aggregate_request_ms_NOT_wall_time": 6443228,
+            "slowest": [
+              {
+                "line": "4007 http fetch GET 200 https://cdn.npmmirror.com/packages/next/14.2.3/next-14.2.3.tgz 57609ms (cache miss)",
+                "duration_ms": 57609
+              },
+              {
+                "line": "4005 http fetch GET 200 https://cdn.npmmirror.com/packages/%40next/swc-linux-x64-musl/14.2.3/swc-linux-x64-musl-14.2.3.tgz 56522ms (cache miss)",
+                "duration_ms": 56522
+              },
+              {
+                "line": "4003 http fetch GET 200 https://cdn.npmmirror.com/packages/%40iconify/json/2.2.248/json-2.2.248.tgz 55145ms (cache miss)",
+                "duration_ms": 55145
+              },
+              {
+                "line": "4001 http fetch GET 200 https://cdn.npmmirror.com/packages/lucide-react/0.377.0/lucide-react-0.377.0.tgz 54897ms (cache miss)",
+                "duration_ms": 54897
+              },
+              {
+                "line": "3999 http fetch GET 200 https://cdn.npmmirror.com/packages/%40mui/material/5.16.7/material-5.16.7.tgz 52979ms (cache miss)",
+                "duration_ms": 52979
+              },
+              {
+                "line": "3997 http fetch GET 200 https://cdn.npmmirror.com/packages/%40next/swc-linux-x64-gnu/14.2.3/swc-linux-x64-gnu-14.2.3.tgz 52062ms (cache miss)",
+                "duration_ms": 52062
+              },
+              {
+                "line": "3995 http fetch GET 200 https://cdn.npmmirror.com/packages/%40mui/joy/5.0.0-beta.48/joy-5.0.0-beta.48.tgz 50832ms (cache miss)",
+                "duration_ms": 50832
+              },
+              {
+                "line": "3993 http fetch GET 200 https://cdn.npmmirror.com/packages/es-abstract/1.23.3/es-abstract-1.23.3.tgz 50493ms (cache miss)",
+                "duration_ms": 50493
+              },
+              {
+                "line": "3991 http fetch GET 200 https://cdn.npmmirror.com/packages/%40mui/base/5.0.0-beta.40/base-5.0.0-beta.40.tgz 49872ms (cache miss)",
+                "duration_ms": 49872
+              },
+              {
+                "line": "3989 http fetch GET 200 https://cdn.npmmirror.com/packages/%40opentelemetry/api/1.9.0/api-1.9.0.tgz 49568ms (cache miss)",
+                "duration_ms": 49568
+              },
+              {
+                "line": "3987 http fetch GET 200 https://cdn.npmmirror.com/packages/caniuse-lite/1.0.30001660/caniuse-lite-1.0.30001660.tgz 49079ms (cache miss)",
+                "duration_ms": 49079
+              },
+              {
+                "line": "3985 http fetch GET 200 https://cdn.npmmirror.com/packages/%40mui/lab/5.0.0-alpha.173/lab-5.0.0-alpha.173.tgz 48408ms (cache miss)",
+                "duration_ms": 48408
+              }
+            ]
+          },
+          "warning": "Timers are nested/overlapping, not additive. reify:unpack includes retrieval, extraction and filesystem work; npm does not isolate disk-write wall time."
+        },
+        "script_events": [],
+        "install_changes": "",
+        "resources": {
+          "wall_seconds": 59.286568171999996,
+          "user_seconds": 56.043592,
+          "system_seconds": 13.971479,
+          "max_rss_kib": 908720,
+          "input_blocks": 5576,
+          "output_blocks": 2622904,
+          "major_page_faults": 34,
+          "minor_page_faults": 266616,
+          "voluntary_context_switches": 672711,
+          "involuntary_context_switches": 199
+        },
+        "after_startup_changes": ""
+      },
+      "cleaned_up": true,
+      "finished_at": "2026-09-24T05:47:11.878Z"
+    },
+    {
+      "repository": "mqo00/rope",
+      "commit": "1ada01830031e5882f2585577720b182deac6246",
+      "case": "cached-install",
+      "template": "engelbart-canvas-cached",
+      "round": 3,
+      "artifact_directory": "mqo00--rope-r3-cached-install",
+      "started_at": "2026-09-24T05:47:11.879Z",
+      "sandbox_id": "iyye0yhjx37dq9tdspkak",
+      "template_id": "5mqfzddjuicidc1w92y5",
+      "resources": {
+        "cpu": 8,
+        "memory_mb": 8192
+      },
+      "artifacts": [
+        {
+          "file": "install.stdout.log",
+          "bytes": 365
+        },
+        {
+          "file": "npm.cjs",
+          "bytes": 11512
+        },
+        {
+          "file": "config-logs/2026-09-24T05_47_16_147Z-debug-0.log",
+          "bytes": 1354
+        },
+        {
+          "file": "config-logs/2026-09-24T05_47_16_147Z-timing.json",
+          "bytes": 447
+        },
+        {
+          "file": "packages.json",
+          "bytes": 182456
+        },
+        {
+          "file": "package.before.json",
+          "bytes": 1614
+        },
+        {
+          "file": "npm-config.json",
+          "bytes": 3594
+        },
+        {
+          "file": "app.stdout.log",
+          "bytes": 233
+        },
+        {
+          "file": "app.stderr.log",
+          "bytes": 324
+        },
+        {
+          "file": "app.html",
+          "bytes": 16837
+        },
+        {
+          "file": "spec.json",
+          "bytes": 292
+        },
+        {
+          "file": "resources.json",
+          "bytes": 294
+        },
+        {
+          "file": "global.npmrc",
+          "bytes": 0
+        },
+        {
+          "file": "user.npmrc",
+          "bytes": 0
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_47_17_158Z-debug-0.log",
+          "bytes": 395135
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_48_12_645Z-debug-0.log",
+          "bytes": 955
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_47_17_158Z-timing.json",
+          "bytes": 125935
+        },
+        {
+          "file": "measurement.json",
+          "bytes": 8599
+        },
+        {
+          "file": "install.stderr.log",
+          "bytes": 164443
+        }
+      ],
+      "measurement": {
+        "command": [
+          "npm",
+          "install",
+          "--prefer-offline",
+          "--timing"
+        ],
+        "cwd": "system",
+        "wall_ms": 55677,
+        "exit_code": 0,
+        "signal": null,
+        "error": null,
+        "runtime": {
+          "node": "v22.23.2",
+          "npm": "10.9.8",
+          "python": "Python 3.11.6",
+          "arch": "x64",
+          "platform": "linux"
+        },
+        "config_hash": "0e1c8e50f6b2e9c54cb9a469942db81c99ef531288f06bcc8f66f8512a431ee8",
+        "cache": {
+          "size_before_kib": 329232,
+          "seed": {
+            "version": 1,
+            "profile": "c0f1d0ec8e7f363619160720a55334cd78e1336a2759e3d1c610902fd1b4140d",
+            "seeded_at": "2026-09-24T02:52:38.805Z",
+            "duration_ms": 73764,
+            "node": "v22.23.2",
+            "repositories": [
+              {
+                "name": "mqo00/rope",
+                "commit": "1ada01830031e5882f2585577720b182deac6246"
+              },
+              {
+                "name": "kjfeng/cocoa-canvas",
+                "commit": "e49079a413497d4fe363af4e8a6e6fefd7539597"
+              },
+              {
+                "name": "mqo00/hypocompass",
+                "commit": "7bc855e7316aeb17e9919013a26aa0427138d480"
+              }
+            ],
+            "manifests": [
+              {
+                "repo": "mqo00/rope",
+                "file": "system/package.json",
+                "sha256": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8"
+              },
+              {
+                "repo": "mqo00/rope",
+                "file": "system/package-lock.json",
+                "sha256": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "package.json",
+                "sha256": "a72f54674cfee8e27721cc1d67e447bf73328008b590f1a200d917068395a172"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "package-lock.json",
+                "sha256": "396eeca89f69f4db9b97004f4d2fe3ce8f9e2957c9c066c21bf038ddea2e9cf3"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "client/package.json",
+                "sha256": "590f4f01067d75e7f2c84ff09335bc27da0f7a04aa70ec8df46cf669ebd84234"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "server/package.json",
+                "sha256": "200a49f95f2ed93c50f290b7a04c5980aee3bd132111f7cc777cb93e61ce824e"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/frontend/package.json",
+                "sha256": "995face2ce22984946aed81beba66031852050c55e5138878736473f719fb362"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/frontend/package-lock.json",
+                "sha256": "9f2eec5ef2b2babe6ce82389f8fb6dc355d5301f99a8d78559f153cf1dfaff53"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/backend/requirements.txt",
+                "sha256": "ffb9292f5843b9e2f254a41a4509b118c268a496261b58b3b5fc6b572715263c"
+              }
+            ]
+          }
+        },
+        "fingerprint": {
+          "hash": "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3",
+          "packages": 732,
+          "version_mismatches": 0
+        },
+        "input_hashes": {
+          "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+          "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+        },
+        "after_hashes": {
+          "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+          "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+        },
+        "timing_files": [
+          "2026-09-24T05_47_17_158Z-timing.json"
+        ],
+        "analysis": {
+          "timers_ms": {
+            "npm:load:whichnode": 1,
+            "npm:load:configload": 10,
+            "npm:load:mkdirpcache": 0,
+            "npm:load:mkdirplogs": 0,
+            "npm:load:setTitle": 0,
+            "npm:load": 28,
+            "idealTree:buildDeps": 1,
+            "idealTree": 287,
+            "reify:loadTrees": 290,
+            "reify:diffTrees": 7,
+            "auditReport:getReport": 2216,
+            "auditReport:init": 46977,
+            "reify:audit": 49198,
+            "reify:unpack": 53688,
+            "build:deps": 43,
+            "build": 44,
+            "reify:build": 44,
+            "reify:save": 150,
+            "reify": 54359,
+            "command:install": 54739,
+            "npm": 55260
+          },
+          "longest_package_timers": [
+            [
+              "reifyNode:node_modules/next",
+              53686
+            ],
+            [
+              "reifyNode:node_modules/lucide-react",
+              51219
+            ],
+            [
+              "reifyNode:node_modules/@iconify/json",
+              51126
+            ],
+            [
+              "reifyNode:node_modules/@mui/material",
+              50160
+            ],
+            [
+              "reifyNode:node_modules/@next/swc-linux-x64-musl",
+              49725
+            ],
+            [
+              "reifyNode:node_modules/@next/swc-linux-x64-gnu",
+              49474
+            ],
+            [
+              "reifyNode:node_modules/es-abstract",
+              49264
+            ],
+            [
+              "reifyNode:node_modules/@mui/joy",
+              49201
+            ],
+            [
+              "reifyNode:node_modules/@mui/base",
+              17860
+            ],
+            [
+              "reifyNode:node_modules/@opentelemetry/api",
+              17284
+            ],
+            [
+              "reifyNode:node_modules/openai",
+              17136
+            ],
+            [
+              "reifyNode:node_modules/caniuse-lite",
+              16931
+            ],
+            [
+              "reifyNode:node_modules/@typescript-eslint/scope-manager",
+              15420
+            ],
+            [
+              "reifyNode:node_modules/@mui/lab",
+              15371
+            ],
+            [
+              "reifyNode:node_modules/eslint",
+              14989
+            ]
+          ],
+          "longest_script_timers": [],
+          "http": {
+            "lines": 808,
+            "cache_hits": 732,
+            "cache_misses": 75,
+            "cache_revalidated": 0,
+            "aggregate_request_ms_NOT_wall_time": 111012,
+            "slowest": [
+              {
+                "line": "1878 http fetch GET 200 https://registry.npmjs.org/next 7926ms (cache miss)",
+                "duration_ms": 7926
+              },
+              {
+                "line": "1803 http fetch GET 200 https://registry.npmjs.org/ai 5102ms (cache miss)",
+                "duration_ms": 5102
+              },
+              {
+                "line": "1775 http fetch GET 200 https://registry.npmjs.org/svelte 4900ms (cache miss)",
+                "duration_ms": 4900
+              },
+              {
+                "line": "1696 http fetch GET 200 https://registry.npmjs.org/ajv 4429ms (cache miss)",
+                "duration_ms": 4429
+              },
+              {
+                "line": "1683 http fetch GET 200 https://registry.npmjs.org/@babel%2fruntime 4373ms (cache miss)",
+                "duration_ms": 4373
+              },
+              {
+                "line": "1666 http fetch GET 200 https://registry.npmjs.org/postcss 4317ms (cache miss)",
+                "duration_ms": 4317
+              },
+              {
+                "line": "1656 http fetch GET 200 https://registry.npmjs.org/nanoid 4289ms (cache miss)",
+                "duration_ms": 4289
+              },
+              {
+                "line": "1647 http fetch GET 200 https://registry.npmjs.org/minimatch 4282ms (cache miss)",
+                "duration_ms": 4282
+              },
+              {
+                "line": "1637 http fetch GET 200 https://registry.npmjs.org/@ai-sdk%2fprovider-utils 4234ms (cache miss)",
+                "duration_ms": 4234
+              },
+              {
+                "line": "1621 http fetch GET 200 https://registry.npmjs.org/glob 4205ms (cache miss)",
+                "duration_ms": 4205
+              },
+              {
+                "line": "1592 http fetch GET 200 https://registry.npmjs.org/qs 4150ms (cache miss)",
+                "duration_ms": 4150
+              },
+              {
+                "line": "1559 http fetch GET 200 https://registry.npmjs.org/mdast-util-to-hast 4054ms (cache miss)",
+                "duration_ms": 4054
+              }
+            ]
+          },
+          "warning": "Timers are nested/overlapping, not additive. reify:unpack includes retrieval, extraction and filesystem work; npm does not isolate disk-write wall time."
+        },
+        "script_events": [],
+        "install_changes": "",
+        "resources": {
+          "wall_seconds": 55.40929103399999,
+          "user_seconds": 53.380355,
+          "system_seconds": 13.178459,
+          "max_rss_kib": 1896896,
+          "input_blocks": 452888,
+          "output_blocks": 2180200,
+          "major_page_faults": 75,
+          "minor_page_faults": 545897,
+          "voluntary_context_switches": 591069,
+          "involuntary_context_switches": 183
+        },
+        "startup": {
+          "ok": true,
+          "command": [
+            "npm",
+            "run",
+            "dev"
+          ],
+          "port": 3333,
+          "host": "127.0.0.1",
+          "elapsed_ms": 10860,
+          "attempts": [
+            {
+              "host": "127.0.0.1",
+              "error": "TypeError",
+              "elapsed_ms": 40
+            },
+            {
+              "host": "[::1]",
+              "error": "TypeError",
+              "elapsed_ms": 47
+            },
+            {
+              "host": "127.0.0.1",
+              "status": 200,
+              "elapsed_ms": 10859
+            }
+          ],
+          "scope": "Development server and root HTML only. No keys supplied; AI/database features not exercised."
+        },
+        "after_startup_changes": ""
+      },
+      "cleaned_up": true,
+      "finished_at": "2026-09-24T05:48:25.382Z"
+    },
+    {
+      "repository": "mqo00/rope",
+      "commit": "1ada01830031e5882f2585577720b182deac6246",
+      "case": "cached-ci",
+      "template": "engelbart-canvas-cached",
+      "round": 3,
+      "artifact_directory": "mqo00--rope-r3-cached-ci",
+      "started_at": "2026-09-24T05:48:25.387Z",
+      "sandbox_id": "ih3m067d2jljw7j8xof9g",
+      "template_id": "5mqfzddjuicidc1w92y5",
+      "resources": {
+        "cpu": 8,
+        "memory_mb": 8192
+      },
+      "artifacts": [
+        {
+          "file": "install.stdout.log",
+          "bytes": 365
+        },
+        {
+          "file": "npm.cjs",
+          "bytes": 11512
+        },
+        {
+          "file": "config-logs/2026-09-24T05_48_29_554Z-timing.json",
+          "bytes": 447
+        },
+        {
+          "file": "config-logs/2026-09-24T05_48_29_554Z-debug-0.log",
+          "bytes": 1354
+        },
+        {
+          "file": "packages.json",
+          "bytes": 182456
+        },
+        {
+          "file": "package.before.json",
+          "bytes": 1614
+        },
+        {
+          "file": "npm-config.json",
+          "bytes": 3594
+        },
+        {
+          "file": "app.stdout.log",
+          "bytes": 235
+        },
+        {
+          "file": "app.stderr.log",
+          "bytes": 324
+        },
+        {
+          "file": "app.html",
+          "bytes": 16837
+        },
+        {
+          "file": "spec.json",
+          "bytes": 287
+        },
+        {
+          "file": "resources.json",
+          "bytes": 289
+        },
+        {
+          "file": "global.npmrc",
+          "bytes": 0
+        },
+        {
+          "file": "user.npmrc",
+          "bytes": 0
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_48_30_637Z-debug-0.log",
+          "bytes": 395142
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_49_28_993Z-debug-0.log",
+          "bytes": 955
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_48_30_637Z-timing.json",
+          "bytes": 125946
+        },
+        {
+          "file": "measurement.json",
+          "bytes": 8580
+        },
+        {
+          "file": "install.stderr.log",
+          "bytes": 164459
+        }
+      ],
+      "measurement": {
+        "command": [
+          "npm",
+          "ci",
+          "--prefer-offline",
+          "--timing"
+        ],
+        "cwd": "system",
+        "wall_ms": 58512,
+        "exit_code": 0,
+        "signal": null,
+        "error": null,
+        "runtime": {
+          "node": "v22.23.2",
+          "npm": "10.9.8",
+          "python": "Python 3.11.6",
+          "arch": "x64",
+          "platform": "linux"
+        },
+        "config_hash": "0e1c8e50f6b2e9c54cb9a469942db81c99ef531288f06bcc8f66f8512a431ee8",
+        "cache": {
+          "size_before_kib": 329232,
+          "seed": {
+            "version": 1,
+            "profile": "c0f1d0ec8e7f363619160720a55334cd78e1336a2759e3d1c610902fd1b4140d",
+            "seeded_at": "2026-09-24T02:52:38.805Z",
+            "duration_ms": 73764,
+            "node": "v22.23.2",
+            "repositories": [
+              {
+                "name": "mqo00/rope",
+                "commit": "1ada01830031e5882f2585577720b182deac6246"
+              },
+              {
+                "name": "kjfeng/cocoa-canvas",
+                "commit": "e49079a413497d4fe363af4e8a6e6fefd7539597"
+              },
+              {
+                "name": "mqo00/hypocompass",
+                "commit": "7bc855e7316aeb17e9919013a26aa0427138d480"
+              }
+            ],
+            "manifests": [
+              {
+                "repo": "mqo00/rope",
+                "file": "system/package.json",
+                "sha256": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8"
+              },
+              {
+                "repo": "mqo00/rope",
+                "file": "system/package-lock.json",
+                "sha256": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "package.json",
+                "sha256": "a72f54674cfee8e27721cc1d67e447bf73328008b590f1a200d917068395a172"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "package-lock.json",
+                "sha256": "396eeca89f69f4db9b97004f4d2fe3ce8f9e2957c9c066c21bf038ddea2e9cf3"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "client/package.json",
+                "sha256": "590f4f01067d75e7f2c84ff09335bc27da0f7a04aa70ec8df46cf669ebd84234"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "server/package.json",
+                "sha256": "200a49f95f2ed93c50f290b7a04c5980aee3bd132111f7cc777cb93e61ce824e"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/frontend/package.json",
+                "sha256": "995face2ce22984946aed81beba66031852050c55e5138878736473f719fb362"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/frontend/package-lock.json",
+                "sha256": "9f2eec5ef2b2babe6ce82389f8fb6dc355d5301f99a8d78559f153cf1dfaff53"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/backend/requirements.txt",
+                "sha256": "ffb9292f5843b9e2f254a41a4509b118c268a496261b58b3b5fc6b572715263c"
+              }
+            ]
+          }
+        },
+        "fingerprint": {
+          "hash": "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3",
+          "packages": 732,
+          "version_mismatches": 0
+        },
+        "input_hashes": {
+          "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+          "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+        },
+        "after_hashes": {
+          "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+          "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+        },
+        "timing_files": [
+          "2026-09-24T05_48_30_637Z-timing.json"
+        ],
+        "analysis": {
+          "timers_ms": {
+            "npm:load:whichnode": 1,
+            "npm:load:configload": 8,
+            "npm:load:mkdirpcache": 1,
+            "npm:load:mkdirplogs": 0,
+            "npm:load:setTitle": 1,
+            "npm:load": 25,
+            "idealTree:buildDeps": 1,
+            "idealTree": 154,
+            "npm-ci:rm": 0,
+            "reify:loadTrees": 5,
+            "reify:diffTrees": 6,
+            "auditReport:getReport": 2171,
+            "auditReport:init": 51436,
+            "reify:audit": 53619,
+            "reify:unpack": 56676,
+            "build:deps": 37,
+            "build": 38,
+            "reify:build": 39,
+            "reify": 56931,
+            "command:ci": 57600,
+            "npm": 58117
+          },
+          "longest_package_timers": [
+            [
+              "reifyNode:node_modules/next",
+              56673
+            ],
+            [
+              "reifyNode:node_modules/lucide-react",
+              54466
+            ],
+            [
+              "reifyNode:node_modules/@iconify/json",
+              54386
+            ],
+            [
+              "reifyNode:node_modules/@mui/material",
+              21086
+            ],
+            [
+              "reifyNode:node_modules/@next/swc-linux-x64-musl",
+              20443
+            ],
+            [
+              "reifyNode:node_modules/@next/swc-linux-x64-gnu",
+              20086
+            ],
+            [
+              "reifyNode:node_modules/es-abstract",
+              19741
+            ],
+            [
+              "reifyNode:node_modules/@mui/joy",
+              19627
+            ],
+            [
+              "reifyNode:node_modules/@mui/base",
+              18858
+            ],
+            [
+              "reifyNode:node_modules/@opentelemetry/api",
+              18232
+            ],
+            [
+              "reifyNode:node_modules/openai",
+              18049
+            ],
+            [
+              "reifyNode:node_modules/caniuse-lite",
+              17934
+            ],
+            [
+              "reifyNode:node_modules/@typescript-eslint/scope-manager",
+              15919
+            ],
+            [
+              "reifyNode:node_modules/@mui/lab",
+              15856
+            ],
+            [
+              "reifyNode:node_modules/eslint",
+              15401
+            ]
+          ],
+          "longest_script_timers": [],
+          "http": {
+            "lines": 808,
+            "cache_hits": 732,
+            "cache_misses": 75,
+            "cache_revalidated": 0,
+            "aggregate_request_ms_NOT_wall_time": 109749,
+            "slowest": [
+              {
+                "line": "1879 http fetch GET 200 https://registry.npmjs.org/next 7819ms (cache miss)",
+                "duration_ms": 7819
+              },
+              {
+                "line": "1804 http fetch GET 200 https://registry.npmjs.org/ai 4905ms (cache miss)",
+                "duration_ms": 4905
+              },
+              {
+                "line": "1774 http fetch GET 200 https://registry.npmjs.org/svelte 4690ms (cache miss)",
+                "duration_ms": 4690
+              },
+              {
+                "line": "1705 http fetch GET 200 https://registry.npmjs.org/ajv 4209ms (cache miss)",
+                "duration_ms": 4209
+              },
+              {
+                "line": "1688 http fetch GET 200 https://registry.npmjs.org/@babel%2fruntime 4157ms (cache miss)",
+                "duration_ms": 4157
+              },
+              {
+                "line": "1664 http fetch GET 200 https://registry.npmjs.org/minimatch 4089ms (cache miss)",
+                "duration_ms": 4089
+              },
+              {
+                "line": "1657 http fetch GET 200 https://registry.npmjs.org/nanoid 4080ms (cache miss)",
+                "duration_ms": 4080
+              },
+              {
+                "line": "1641 http fetch GET 200 https://registry.npmjs.org/@ai-sdk%2fprovider-utils 4033ms (cache miss)",
+                "duration_ms": 4033
+              },
+              {
+                "line": "1624 http fetch GET 200 https://registry.npmjs.org/glob 4008ms (cache miss)",
+                "duration_ms": 4008
+              },
+              {
+                "line": "1618 http fetch GET 200 https://registry.npmjs.org/yaml 3991ms (cache miss)",
+                "duration_ms": 3991
+              },
+              {
+                "line": "1571 http fetch GET 200 https://registry.npmjs.org/postcss 3904ms (cache miss)",
+                "duration_ms": 3904
+              },
+              {
+                "line": "1554 http fetch GET 200 https://registry.npmjs.org/mdast-util-to-hast 3882ms (cache miss)",
+                "duration_ms": 3882
+              }
+            ]
+          },
+          "warning": "Timers are nested/overlapping, not additive. reify:unpack includes retrieval, extraction and filesystem work; npm does not isolate disk-write wall time."
+        },
+        "script_events": [],
+        "install_changes": "",
+        "resources": {
+          "wall_seconds": 58.271506244,
+          "user_seconds": 56.902603,
+          "system_seconds": 13.428446,
+          "max_rss_kib": 1736824,
+          "input_blocks": 452864,
+          "output_blocks": 2179456,
+          "major_page_faults": 73,
+          "minor_page_faults": 507355,
+          "voluntary_context_switches": 582818,
+          "involuntary_context_switches": 244
+        },
+        "startup": {
+          "ok": true,
+          "command": [
+            "npm",
+            "run",
+            "dev"
+          ],
+          "port": 3333,
+          "host": "127.0.0.1",
+          "elapsed_ms": 14400,
+          "attempts": [
+            {
+              "host": "127.0.0.1",
+              "error": "TypeError",
+              "elapsed_ms": 41
+            },
+            {
+              "host": "[::1]",
+              "error": "TypeError",
+              "elapsed_ms": 48
+            },
+            {
+              "host": "127.0.0.1",
+              "status": 200,
+              "elapsed_ms": 14400
+            }
+          ],
+          "scope": "Development server and root HTML only. No keys supplied; AI/database features not exercised."
+        },
+        "after_startup_changes": ""
+      },
+      "cleaned_up": true,
+      "finished_at": "2026-09-24T05:49:45.319Z"
+    },
+    {
+      "repository": "mqo00/rope",
+      "commit": "1ada01830031e5882f2585577720b182deac6246",
+      "case": "cached-ci-no-audit",
+      "template": "engelbart-canvas-cached",
+      "round": 3,
+      "artifact_directory": "mqo00--rope-r3-cached-ci-no-audit",
+      "started_at": "2026-09-24T05:49:45.321Z",
+      "sandbox_id": "iu5nta67gdxtdjmrpxfqw",
+      "template_id": "5mqfzddjuicidc1w92y5",
+      "resources": {
+        "cpu": 8,
+        "memory_mb": 8192
+      },
+      "artifacts": [
+        {
+          "file": "install.stdout.log",
+          "bytes": 94
+        },
+        {
+          "file": "npm.cjs",
+          "bytes": 11512
+        },
+        {
+          "file": "config-logs/2026-09-24T05_49_50_297Z-debug-0.log",
+          "bytes": 1366
+        },
+        {
+          "file": "config-logs/2026-09-24T05_49_50_297Z-timing.json",
+          "bytes": 459
+        },
+        {
+          "file": "packages.json",
+          "bytes": 182456
+        },
+        {
+          "file": "package.before.json",
+          "bytes": 1614
+        },
+        {
+          "file": "npm-config.json",
+          "bytes": 3595
+        },
+        {
+          "file": "app.stdout.log",
+          "bytes": 233
+        },
+        {
+          "file": "app.stderr.log",
+          "bytes": 324
+        },
+        {
+          "file": "app.html",
+          "bytes": 16837
+        },
+        {
+          "file": "spec.json",
+          "bytes": 300
+        },
+        {
+          "file": "resources.json",
+          "bytes": 294
+        },
+        {
+          "file": "global.npmrc",
+          "bytes": 0
+        },
+        {
+          "file": "user.npmrc",
+          "bytes": 0
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_49_51_318Z-timing.json",
+          "bytes": 38115
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_49_51_318Z-debug-0.log",
+          "bytes": 183234
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_50_08_890Z-debug-0.log",
+          "bytes": 955
+        },
+        {
+          "file": "measurement.json",
+          "bytes": 8777
+        },
+        {
+          "file": "install.stderr.log",
+          "bytes": 57655
+        }
+      ],
+      "measurement": {
+        "command": [
+          "npm",
+          "ci",
+          "--prefer-offline",
+          "--no-audit",
+          "--timing"
+        ],
+        "cwd": "system",
+        "wall_ms": 17764,
+        "exit_code": 0,
+        "signal": null,
+        "error": null,
+        "runtime": {
+          "node": "v22.23.2",
+          "npm": "10.9.8",
+          "python": "Python 3.11.6",
+          "arch": "x64",
+          "platform": "linux"
+        },
+        "config_hash": "e6cf3cf9776de08593445f3e51fbd6db9e928274ce1cadb821125b05c770d125",
+        "cache": {
+          "size_before_kib": 329232,
+          "seed": {
+            "version": 1,
+            "profile": "c0f1d0ec8e7f363619160720a55334cd78e1336a2759e3d1c610902fd1b4140d",
+            "seeded_at": "2026-09-24T02:52:38.805Z",
+            "duration_ms": 73764,
+            "node": "v22.23.2",
+            "repositories": [
+              {
+                "name": "mqo00/rope",
+                "commit": "1ada01830031e5882f2585577720b182deac6246"
+              },
+              {
+                "name": "kjfeng/cocoa-canvas",
+                "commit": "e49079a413497d4fe363af4e8a6e6fefd7539597"
+              },
+              {
+                "name": "mqo00/hypocompass",
+                "commit": "7bc855e7316aeb17e9919013a26aa0427138d480"
+              }
+            ],
+            "manifests": [
+              {
+                "repo": "mqo00/rope",
+                "file": "system/package.json",
+                "sha256": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8"
+              },
+              {
+                "repo": "mqo00/rope",
+                "file": "system/package-lock.json",
+                "sha256": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "package.json",
+                "sha256": "a72f54674cfee8e27721cc1d67e447bf73328008b590f1a200d917068395a172"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "package-lock.json",
+                "sha256": "396eeca89f69f4db9b97004f4d2fe3ce8f9e2957c9c066c21bf038ddea2e9cf3"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "client/package.json",
+                "sha256": "590f4f01067d75e7f2c84ff09335bc27da0f7a04aa70ec8df46cf669ebd84234"
+              },
+              {
+                "repo": "kjfeng/cocoa-canvas",
+                "file": "server/package.json",
+                "sha256": "200a49f95f2ed93c50f290b7a04c5980aee3bd132111f7cc777cb93e61ce824e"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/frontend/package.json",
+                "sha256": "995face2ce22984946aed81beba66031852050c55e5138878736473f719fb362"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/frontend/package-lock.json",
+                "sha256": "9f2eec5ef2b2babe6ce82389f8fb6dc355d5301f99a8d78559f153cf1dfaff53"
+              },
+              {
+                "repo": "mqo00/hypocompass",
+                "file": "system/backend/requirements.txt",
+                "sha256": "ffb9292f5843b9e2f254a41a4509b118c268a496261b58b3b5fc6b572715263c"
+              }
+            ]
+          }
+        },
+        "fingerprint": {
+          "hash": "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3",
+          "packages": 732,
+          "version_mismatches": 0
+        },
+        "input_hashes": {
+          "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+          "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+        },
+        "after_hashes": {
+          "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+          "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+        },
+        "timing_files": [
+          "2026-09-24T05_49_51_318Z-timing.json"
+        ],
+        "analysis": {
+          "timers_ms": {
+            "npm:load:whichnode": 0,
+            "npm:load:configload": 8,
+            "npm:load:mkdirpcache": 0,
+            "npm:load:mkdirplogs": 0,
+            "npm:load:setTitle": 1,
+            "npm:load": 24,
+            "idealTree:buildDeps": 1,
+            "idealTree": 191,
+            "npm-ci:rm": 1,
+            "reify:loadTrees": 5,
+            "reify:diffTrees": 8,
+            "reify:unpack": 16193,
+            "build:deps": 44,
+            "build": 44,
+            "reify:build": 45,
+            "reify": 16433,
+            "command:ci": 16785,
+            "npm": 17372
+          },
+          "longest_package_timers": [
+            [
+              "reifyNode:node_modules/next",
+              16191
+            ],
+            [
+              "reifyNode:node_modules/lucide-react",
+              13871
+            ],
+            [
+              "reifyNode:node_modules/@iconify/json",
+              13757
+            ],
+            [
+              "reifyNode:node_modules/@mui/material",
+              12673
+            ],
+            [
+              "reifyNode:node_modules/@next/swc-linux-x64-musl",
+              12226
+            ],
+            [
+              "reifyNode:node_modules/@next/swc-linux-x64-gnu",
+              11883
+            ],
+            [
+              "reifyNode:node_modules/es-abstract",
+              11662
+            ],
+            [
+              "reifyNode:node_modules/@mui/joy",
+              11592
+            ],
+            [
+              "reifyNode:node_modules/@mui/base",
+              11073
+            ],
+            [
+              "reifyNode:node_modules/@opentelemetry/api",
+              10944
+            ],
+            [
+              "reifyNode:node_modules/openai",
+              10881
+            ],
+            [
+              "reifyNode:node_modules/caniuse-lite",
+              10807
+            ],
+            [
+              "reifyNode:node_modules/@typescript-eslint/scope-manager",
+              10202
+            ],
+            [
+              "reifyNode:node_modules/@mui/lab",
+              10158
+            ],
+            [
+              "reifyNode:node_modules/eslint",
+              9846
+            ]
+          ],
+          "longest_script_timers": [],
+          "http": {
+            "lines": 732,
+            "cache_hits": 732,
+            "cache_misses": 0,
+            "cache_revalidated": 0,
+            "aggregate_request_ms_NOT_wall_time": 5,
+            "slowest": [
+              {
+                "line": "68 http cache yaml@https://registry.npmmirror.com/yaml/-/yaml-1.10.2.tgz 1ms (cache hit)",
+                "duration_ms": 1
+              },
+              {
+                "line": "630 http cache @radix-ui/react-focus-guards@https://registry.npmmirror.com/@radix-ui/react-focus-guards/-/react-focus-guards-1.1.0.tgz 1ms (cache hit)",
+                "duration_ms": 1
+              },
+              {
+                "line": "739 http cache @types/unist@https://registry.npmmirror.com/@types/unist/-/unist-2.0.11.tgz 1ms (cache hit)",
+                "duration_ms": 1
+              },
+              {
+                "line": "759 http cache doctrine@https://registry.npmmirror.com/doctrine/-/doctrine-2.1.0.tgz 1ms (cache hit)",
+                "duration_ms": 1
+              },
+              {
+                "line": "769 http cache glob-parent@https://registry.npmmirror.com/glob-parent/-/glob-parent-5.1.2.tgz 1ms (cache hit)",
+                "duration_ms": 1
+              },
+              {
+                "line": "59 http cache zwitch@https://registry.npmmirror.com/zwitch/-/zwitch-2.0.4.tgz 0ms (cache hit)",
+                "duration_ms": 0
+              },
+              {
+                "line": "60 http cache zod-to-json-schema@https://registry.npmmirror.com/zod-to-json-schema/-/zod-to-json-schema-3.23.2.tgz 0ms (cache hit)",
+                "duration_ms": 0
+              },
+              {
+                "line": "61 http cache yocto-queue@https://registry.npmmirror.com/yocto-queue/-/yocto-queue-0.1.0.tgz 0ms (cache hit)",
+                "duration_ms": 0
+              },
+              {
+                "line": "62 http cache wrappy@https://registry.npmmirror.com/wrappy/-/wrappy-1.0.2.tgz 0ms (cache hit)",
+                "duration_ms": 0
+              },
+              {
+                "line": "63 http cache zod@https://registry.npmmirror.com/zod/-/zod-3.23.8.tgz 0ms (cache hit)",
+                "duration_ms": 0
+              },
+              {
+                "line": "64 http cache wrap-ansi-cjs@https://registry.npmmirror.com/wrap-ansi/-/wrap-ansi-7.0.0.tgz 0ms (cache hit)",
+                "duration_ms": 0
+              },
+              {
+                "line": "65 http cache wrap-ansi@https://registry.npmmirror.com/wrap-ansi/-/wrap-ansi-8.1.0.tgz 0ms (cache hit)",
+                "duration_ms": 0
+              }
+            ]
+          },
+          "warning": "Timers are nested/overlapping, not additive. reify:unpack includes retrieval, extraction and filesystem work; npm does not isolate disk-write wall time."
+        },
+        "script_events": [],
+        "install_changes": "",
+        "resources": {
+          "wall_seconds": 17.496887606999998,
+          "user_seconds": 14.423387,
+          "system_seconds": 11.602742,
+          "max_rss_kib": 1291816,
+          "input_blocks": 450280,
+          "output_blocks": 2020592,
+          "major_page_faults": 51,
+          "minor_page_faults": 371910,
+          "voluntary_context_switches": 550950,
+          "involuntary_context_switches": 82
+        },
+        "startup": {
+          "ok": true,
+          "command": [
+            "npm",
+            "run",
+            "dev"
+          ],
+          "port": 3333,
+          "host": "127.0.0.1",
+          "elapsed_ms": 11174,
+          "attempts": [
+            {
+              "host": "127.0.0.1",
+              "error": "TypeError",
+              "elapsed_ms": 45
+            },
+            {
+              "host": "[::1]",
+              "error": "TypeError",
+              "elapsed_ms": 53
+            },
+            {
+              "host": "127.0.0.1",
+              "status": 200,
+              "elapsed_ms": 11174
+            }
+          ],
+          "scope": "Development server and root HTML only. No keys supplied; AI/database features not exercised."
+        },
+        "after_startup_changes": ""
+      },
+      "cleaned_up": true,
+      "finished_at": "2026-09-24T05:50:21.995Z"
+    },
+    {
+      "repository": "mqo00/rope",
+      "commit": "1ada01830031e5882f2585577720b182deac6246",
+      "case": "runner-install",
+      "template": "engelbart-runner",
+      "round": 3,
+      "artifact_directory": "mqo00--rope-r3-runner-install",
+      "started_at": "2026-09-24T05:50:21.999Z",
+      "sandbox_id": "i153myeu4m77okdfhu67b",
+      "template_id": "zyc96dk7q7adnb1uzy40",
+      "resources": {
+        "cpu": 8,
+        "memory_mb": 8192
+      },
+      "artifacts": [
+        {
+          "file": "install.stdout.log",
+          "bytes": 365
+        },
+        {
+          "file": "npm.cjs",
+          "bytes": 11512
+        },
+        {
+          "file": "config-logs/2026-09-24T05_50_25_925Z-timing.json",
+          "bytes": 446
+        },
+        {
+          "file": "config-logs/2026-09-24T05_50_25_925Z-debug-0.log",
+          "bytes": 1353
+        },
+        {
+          "file": "packages.json",
+          "bytes": 182456
+        },
+        {
+          "file": "package.before.json",
+          "bytes": 1614
+        },
+        {
+          "file": "npm-config.json",
+          "bytes": 3594
+        },
+        {
+          "file": "app.stdout.log",
+          "bytes": 232
+        },
+        {
+          "file": "app.stderr.log",
+          "bytes": 324
+        },
+        {
+          "file": "app.html",
+          "bytes": 16837
+        },
+        {
+          "file": "spec.json",
+          "bytes": 292
+        },
+        {
+          "file": "resources.json",
+          "bytes": 286
+        },
+        {
+          "file": "global.npmrc",
+          "bytes": 0
+        },
+        {
+          "file": "user.npmrc",
+          "bytes": 0
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_50_26_993Z-timing.json",
+          "bytes": 125900
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_50_26_993Z-debug-0.log",
+          "bytes": 598641
+        },
+        {
+          "file": "npm-logs/2026-09-24T05_51_20_852Z-debug-0.log",
+          "bytes": 955
+        },
+        {
+          "file": "measurement.json",
+          "bytes": 6794
+        },
+        {
+          "file": "install.stderr.log",
+          "bytes": 164408
+        }
+      ],
+      "measurement": {
+        "command": [
+          "npm",
+          "install",
+          "--prefer-offline",
+          "--timing"
+        ],
+        "cwd": "system",
+        "wall_ms": 54020,
+        "exit_code": 0,
+        "signal": null,
+        "error": null,
+        "runtime": {
+          "node": "v22.23.2",
+          "npm": "10.9.8",
+          "python": "Python 3.11.6",
+          "arch": "x64",
+          "platform": "linux"
+        },
+        "config_hash": "0e1c8e50f6b2e9c54cb9a469942db81c99ef531288f06bcc8f66f8512a431ee8",
+        "cache": {
+          "size_before_kib": 0,
+          "seed": null
+        },
+        "fingerprint": {
+          "hash": "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3",
+          "packages": 732,
+          "version_mismatches": 0
+        },
+        "input_hashes": {
+          "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+          "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+        },
+        "after_hashes": {
+          "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+          "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+        },
+        "timing_files": [
+          "2026-09-24T05_50_26_993Z-timing.json"
+        ],
+        "analysis": {
+          "timers_ms": {
+            "npm:load:whichnode": 1,
+            "npm:load:configload": 7,
+            "npm:load:mkdirpcache": 0,
+            "npm:load:mkdirplogs": 1,
+            "npm:load:setTitle": 0,
+            "npm:load": 20,
+            "idealTree:buildDeps": 1,
+            "idealTree": 219,
+            "reify:loadTrees": 223,
+            "reify:diffTrees": 5,
+            "auditReport:getReport": 595,
+            "auditReport:init": 36061,
+            "reify:audit": 36658,
+            "reify:unpack": 52601,
+            "build:deps": 35,
+            "build": 35,
+            "reify:build": 36,
+            "reify:save": 121,
+            "reify": 53170,
+            "command:install": 53434,
+            "npm": 53706
+          },
+          "longest_package_timers": [
+            [
+              "reifyNode:node_modules/@iconify/json",
+              52596
+            ],
+            [
+              "reifyNode:node_modules/next",
+              51414
+            ],
+            [
+              "reifyNode:node_modules/@next/swc-linux-x64-musl",
+              51123
+            ],
+            [
+              "reifyNode:node_modules/@next/swc-linux-x64-gnu",
+              49031
+            ],
+            [
+              "reifyNode:node_modules/@mui/material",
+              48305
+            ],
+            [
+              "reifyNode:node_modules/@mui/joy",
+              47069
+            ],
+            [
+              "reifyNode:node_modules/@mui/base",
+              46313
+            ],
+            [
+              "reifyNode:node_modules/lucide-react",
+              46291
+            ],
+            [
+              "reifyNode:node_modules/@opentelemetry/api",
+              45841
+            ],
+            [
+              "reifyNode:node_modules/@mui/lab",
+              45053
+            ],
+            [
+              "reifyNode:node_modules/@mui/utils",
+              44513
+            ],
+            [
+              "reifyNode:node_modules/postcss-load-config/node_modules/yaml",
+              44336
+            ],
+            [
+              "reifyNode:node_modules/@mui/system",
+              44044
+            ],
+            [
+              "reifyNode:node_modules/es-abstract",
+              43975
+            ],
+            [
+              "reifyNode:node_modules/@babel/runtime",
+              43959
+            ]
+          ],
+          "longest_script_timers": [],
+          "http": {
+            "lines": 1540,
+            "cache_hits": 759,
+            "cache_misses": 780,
+            "cache_revalidated": 0,
+            "aggregate_request_ms_NOT_wall_time": 20750845,
+            "slowest": [
+              {
+                "line": "4007 http fetch GET 200 https://cdn.npmmirror.com/packages/%40iconify/json/2.2.248/json-2.2.248.tgz 52273ms (cache miss)",
+                "duration_ms": 52273
+              },
+              {
+                "line": "4005 http fetch GET 200 https://cdn.npmmirror.com/packages/next/14.2.3/next-14.2.3.tgz 51190ms (cache miss)",
+                "duration_ms": 51190
+              },
+              {
+                "line": "4003 http fetch GET 200 https://cdn.npmmirror.com/packages/%40next/swc-linux-x64-musl/14.2.3/swc-linux-x64-musl-14.2.3.tgz 50804ms (cache miss)",
+                "duration_ms": 50804
+              },
+              {
+                "line": "4001 http fetch GET 200 https://cdn.npmmirror.com/packages/%40next/swc-linux-x64-gnu/14.2.3/swc-linux-x64-gnu-14.2.3.tgz 48711ms (cache miss)",
+                "duration_ms": 48711
+              },
+              {
+                "line": "3999 http fetch GET 200 https://cdn.npmmirror.com/packages/%40mui/material/5.16.7/material-5.16.7.tgz 47983ms (cache miss)",
+                "duration_ms": 47983
+              },
+              {
+                "line": "3997 http fetch GET 200 https://cdn.npmmirror.com/packages/%40mui/joy/5.0.0-beta.48/joy-5.0.0-beta.48.tgz 46746ms (cache miss)",
+                "duration_ms": 46746
+              },
+              {
+                "line": "3993 http fetch GET 200 https://cdn.npmmirror.com/packages/lucide-react/0.377.0/lucide-react-0.377.0.tgz 46054ms (cache miss)",
+                "duration_ms": 46054
+              },
+              {
+                "line": "3995 http fetch GET 200 https://cdn.npmmirror.com/packages/%40mui/base/5.0.0-beta.40/base-5.0.0-beta.40.tgz 45990ms (cache miss)",
+                "duration_ms": 45990
+              },
+              {
+                "line": "3991 http fetch GET 200 https://cdn.npmmirror.com/packages/%40opentelemetry/api/1.9.0/api-1.9.0.tgz 45520ms (cache miss)",
+                "duration_ms": 45520
+              },
+              {
+                "line": "3989 http fetch GET 200 https://cdn.npmmirror.com/packages/%40mui/lab/5.0.0-alpha.173/lab-5.0.0-alpha.173.tgz 44729ms (cache miss)",
+                "duration_ms": 44729
+              },
+              {
+                "line": "3987 http fetch GET 200 https://cdn.npmmirror.com/packages/%40mui/utils/5.16.6/utils-5.16.6.tgz 44191ms (cache miss)",
+                "duration_ms": 44191
+              },
+              {
+                "line": "3985 http fetch GET 200 https://cdn.npmmirror.com/packages/yaml/2.5.1/yaml-2.5.1.tgz 43986ms (cache miss)",
+                "duration_ms": 43986
+              }
+            ]
+          },
+          "warning": "Timers are nested/overlapping, not additive. reify:unpack includes retrieval, extraction and filesystem work; npm does not isolate disk-write wall time."
+        },
+        "script_events": [],
+        "install_changes": "",
+        "resources": {
+          "wall_seconds": 53.787219948,
+          "user_seconds": 52.294974,
+          "system_seconds": 10.488181,
+          "max_rss_kib": 808672,
+          "input_blocks": 5360,
+          "output_blocks": 2622776,
+          "major_page_faults": 32,
+          "minor_page_faults": 236270,
+          "voluntary_context_switches": 706582,
+          "involuntary_context_switches": 137
+        },
+        "startup": {
+          "ok": true,
+          "command": [
+            "npm",
+            "run",
+            "dev"
+          ],
+          "port": 3333,
+          "host": "127.0.0.1",
+          "elapsed_ms": 9082,
+          "attempts": [
+            {
+              "host": "127.0.0.1",
+              "error": "TypeError",
+              "elapsed_ms": 30
+            },
+            {
+              "host": "[::1]",
+              "error": "TypeError",
+              "elapsed_ms": 36
+            },
+            {
+              "host": "127.0.0.1",
+              "status": 200,
+              "elapsed_ms": 9082
+            }
+          ],
+          "scope": "Development server and root HTML only. No keys supplied; AI/database features not exercised."
+        },
+        "after_startup_changes": ""
+      },
+      "cleaned_up": true,
+      "finished_at": "2026-09-24T05:51:31.985Z"
+    }
+  ],
+  "notes": [
+    "Sequential fresh sandboxes; reverse alternate rounds, rotate the third.",
+    "Cold node_modules in every trial. Published cache contents are neither cleaned nor changed.",
+    "Lifecycle scripts/devDependencies enabled. Isolated identical npm user/global config; audit/command/cache are treatment variables.",
+    "Wall time excludes clone, diagnostics, package fingerprinting and startup. Never fall back from ci."
+  ],
+  "resources": {
+    "cpu": 8,
+    "memory_mb": 8192
+  },
+  "finished_at": "2026-09-24T05:51:31.985Z"
+}

@@ -20,6 +20,8 @@ test.after(async () => {
 
 test('test mode and normal mode use different roots, libraries and project lists', async () => {
   const store = createStore({ homeDir, fixturesDir: fixtures });
+  assert.equal(store.config().mode, 'normal');
+  await store.setTestMode(true);
   assert.equal(store.config().mode, 'test');
   const testCtx = await store.context();
   assert.equal(testCtx.dataRoot, store.layout.testRoot);
@@ -46,6 +48,17 @@ test('test mode and normal mode use different roots, libraries and project lists
   const again = await store.context();
   assert.equal((await projects.listProjects(again)).length, 1, 'the test project is back');
   assert.equal((await projects.listProjects(again))[0].id, made.project.id);
+
+  // Old installations may have saved test mode. Restart into normal mode without
+  // deleting either library or the projects in the previous test root.
+  await store.close();
+  const reopened = createStore({ homeDir, fixturesDir: fixtures });
+  assert.equal(reopened.config().testMode, false);
+  assert.equal(reopened.config().mode, 'normal');
+  assert.equal((await projects.listProjects(await reopened.context()))[0].id, real.id);
+  await reopened.setTestMode(true);
+  assert.equal((await projects.listProjects(await reopened.context()))[0].id, made.project.id);
+  await reopened.close();
 
   const reset = await store.resetTestData();
   assert.equal(reset.mode, 'test');

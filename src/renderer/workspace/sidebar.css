@@ -1,0 +1,61 @@
+/* Compact section headers above nested navigation with page toggles and tree guides. */
+.workspace-sidebar{--rail-row-font:13px/17px var(--font-sans);--rail-row-height:33px;--rail-icon-size:16px}
+.rail-workspace-wrap{flex:none;padding:18px 8px 0;position:relative;z-index:8}
+.rail-search-wrap{flex:none;padding:0 14px 4px}
+.rail-sections{flex:1;min-height:0;padding:4px 10px 8px;overflow:auto;overflow-x:hidden}
+.rail-section{margin:0 0 8px}
+.rail-section-head{display:flex;align-items:center;gap:8px;min-height:var(--rail-row-height);padding:0 6px}
+.rail-section-heading{display:flex;align-items:center;gap:7px;flex:1;min-width:0;padding:8px 0;border:0;background:transparent;text-align:left;color:#737373;cursor:pointer;font:var(--rail-row-font);font-weight:500}
+.rail-section-heading:hover{color:#171717}
+.rail-section-icon{display:flex;flex:none;width:var(--rail-icon-size);height:var(--rail-icon-size)}
+.rail-section-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rail-empty{display:block;margin:0;padding:7px 10px 7px 25px;color:#a3a3a3;font:400 12px/1.5 var(--font-sans)}
+.rail-chevron{display:block;flex:none;transition:transform 120ms}
+.rail-chevron[data-open="1"]{transform:rotate(90deg)}
+.rail-icon-action{display:inline-flex;align-items:center;justify-content:center;flex:none;width:22px;height:24px;padding:0;border:0;border-radius:4px;background:transparent;color:#8f8f8f;cursor:pointer;font:17px/1 var(--font-sans)}
+.rail-icon-action:hover{background:#e5e5e5;color:#171717}
+.rail-icon-action:disabled{color:#b5b5b5;cursor:default}
+.rail-icon-action:focus-visible,.rail-row-open:focus-visible{outline:2px solid #c9c9c9;outline-offset:2px}
+.rail-context-row{position:relative}
+.rail-row-open{display:flex;align-items:center;gap:10px;flex:1;min-width:0;min-height:var(--rail-row-height);box-sizing:border-box;padding:8px 10px;border:0;border-radius:6px;background:transparent;text-align:left;cursor:pointer}
+.rail-section-add,.rail-row-add{opacity:0;pointer-events:none;transition:opacity 120ms}
+.rail-row-add{position:absolute;right:6px;top:50%;transform:translateY(-50%)}
+/* Keyboard focus reveals actions; lingering mouse focus must not keep them visible. */
+.rail-section-head:hover .rail-section-add,.rail-section-head:has(:focus-visible) .rail-section-add,.rail-context-row:hover .rail-row-add,.rail-context-row:has(:focus-visible) .rail-row-add{opacity:1;pointer-events:auto}
+.rail-context-row:hover .rail-row-open,.rail-context-row:has(:focus-visible) .rail-row-open{padding-right:36px}
+@media (hover:none){.rail-section-add,.rail-row-add{opacity:1;pointer-events:auto}.rail-row-open{padding-right:36px}}
+.workspace-tree,.workspace-children{list-style:none;padding:0;margin:0}
+.workspace-tree li{position:relative;min-width:0}
+.workspace-tree-row{position:relative;display:flex;align-items:center;gap:6px;min-height:var(--rail-row-height);padding:0 6px 0 2px;border-radius:6px;transition:background 120ms}
+.workspace-tree-row:hover{background:#f0f0f0}
+.workspace-tree-row[data-active="1"]{background:#eaeaea}
+.workspace-toggle,.workspace-toggle-space{flex:none;width:20px;height:24px}
+.workspace-tree-name{flex:1;min-width:0;padding:8px 0;border:0;background:transparent;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;color:#525252;font:var(--rail-row-font)}
+.workspace-tree-row[data-active="1"] .workspace-tree-name{font-weight:500;color:#171717}
+.workspace-tree-name[data-untitled="1"]{color:#8f8f8f}
+.workspace-tree-input{width:0;cursor:text}
+.workspace-tree-actions{position:absolute;right:4px;display:flex;gap:1px;opacity:0;pointer-events:none;transition:opacity 120ms}
+.workspace-row:hover>button.workspace-tree-name,.workspace-row:has(:focus-visible)>button.workspace-tree-name{padding-right:47px}
+.workspace-row:hover .workspace-tree-actions,.workspace-row:has(:focus-visible) .workspace-tree-actions{opacity:1;pointer-events:auto}
+.workspace-children{margin-left:12px;padding-left:16px}
+/* A nested leaf sits beside its connector, without an empty disclosure-button slot. */
+.workspace-children>li>.workspace-tree-row>.workspace-toggle-space{display:none}
+.workspace-children>li::before{content:"";position:absolute;left:-16px;top:0;bottom:0;border-left:1px solid #dedede;pointer-events:none}
+.workspace-children>li:last-child::before{bottom:auto;height:calc(var(--rail-row-height) / 2)}
+.workspace-children>li>.workspace-tree-row::before{content:"";position:absolute;left:-16px;top:calc(var(--rail-row-height) / 2);width:14px;border-top:1px solid #dedede;pointer-events:none}
+.rail-text-action{display:flex;align-items:center;gap:7px;width:100%;min-height:var(--rail-row-height);box-sizing:border-box;padding:8px 0;border:0;background:transparent;color:#8a8a8a;cursor:pointer;text-align:left;font:var(--rail-row-font);transition:color 120ms}
+.rail-action-plus{display:block;flex:none}
+.rail-text-action>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rail-text-action:hover{color:#171717}
+.rail-text-action:focus-visible{outline:2px solid #c9c9c9;outline-offset:2px;border-radius:3px}
+.rail-text-action:disabled{opacity:.45;cursor:default}
+.rail-add-context{padding:2px 4px 6px}
+.rail-add-context .rail-text-action{gap:8px;padding:8px 10px;color:#525252;font:var(--rail-row-font);font-weight:500}
+.rail-add-context .rail-text-action:hover{color:#171717}
+
+/* Leave room for the current remove action alongside restored row additions. */
+.rail-row-remove{position:absolute;right:6px;top:50%;transform:translateY(-50%);opacity:0;pointer-events:none}
+.rail-has-remove .rail-row-add{right:30px}
+.rail-context-row:hover .rail-row-remove,.rail-context-row:has(:focus-visible) .rail-row-remove{opacity:1;pointer-events:auto}
+.rail-has-remove:hover .rail-row-open,.rail-has-remove:has(:focus-visible) .rail-row-open{padding-right:60px}
+@media (hover:none){.rail-row-remove{opacity:1;pointer-events:auto}.rail-has-remove .rail-row-open{padding-right:60px}.workspace-tree-actions{opacity:1;pointer-events:auto}.workspace-row>button.workspace-tree-name{padding-right:47px}}

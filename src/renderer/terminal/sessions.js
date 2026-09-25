@@ -159,7 +159,7 @@ function makeTerminalRecord(snapshot, projectId) {
   view.id = `terminal-${snapshot.id}`;
   view.setAttribute('role', 'tabpanel');
   view.setAttribute('aria-label', `${providerName(snapshot.provider)} terminal`);
-  view.style.cssText = 'position:absolute;inset:10px 0 0 14px;'; // the stage's padding does not reach an absolute child; text kept off the pane's edge and its resize handle
+  // Geometry lives in terminal.css, shared with the shell's command dock.
 
   const record = {
     snapshot: { ...snapshot, history: undefined },

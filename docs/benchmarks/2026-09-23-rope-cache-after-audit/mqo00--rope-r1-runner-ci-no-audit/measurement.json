@@ -1,0 +1,200 @@
+{
+  "command": [
+    "npm",
+    "ci",
+    "--prefer-offline",
+    "--no-audit",
+    "--timing"
+  ],
+  "cwd": "system",
+  "wall_ms": 31378,
+  "exit_code": 0,
+  "signal": null,
+  "error": null,
+  "runtime": {
+    "node": "v22.23.2",
+    "npm": "10.9.8",
+    "python": "Python 3.11.6",
+    "arch": "x64",
+    "platform": "linux"
+  },
+  "config_hash": "e6cf3cf9776de08593445f3e51fbd6db9e928274ce1cadb821125b05c770d125",
+  "cache": {
+    "size_before_kib": 0,
+    "seed": null
+  },
+  "fingerprint": {
+    "hash": "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3",
+    "packages": 732,
+    "version_mismatches": 0
+  },
+  "input_hashes": {
+    "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+    "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+  },
+  "after_hashes": {
+    "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+    "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+  },
+  "timing_files": [
+    "2026-09-24T05_51_50_960Z-timing.json"
+  ],
+  "analysis": {
+    "timers_ms": {
+      "npm:load:whichnode": 0,
+      "npm:load:configload": 7,
+      "npm:load:mkdirpcache": 0,
+      "npm:load:mkdirplogs": 0,
+      "npm:load:setTitle": 1,
+      "npm:load": 22,
+      "idealTree:buildDeps": 1,
+      "idealTree": 142,
+      "npm-ci:rm": 1,
+      "reify:loadTrees": 4,
+      "reify:diffTrees": 5,
+      "reify:unpack": 30306,
+      "build:deps": 43,
+      "build": 44,
+      "reify:build": 45,
+      "reify": 30553,
+      "command:ci": 30844,
+      "npm": 31085
+    },
+    "longest_package_timers": [
+      [
+        "reifyNode:node_modules/@iconify/json",
+        30299
+      ],
+      [
+        "reifyNode:node_modules/@next/swc-linux-x64-musl",
+        26478
+      ],
+      [
+        "reifyNode:node_modules/next",
+        18887
+      ],
+      [
+        "reifyNode:node_modules/@next/swc-linux-x64-gnu",
+        17966
+      ],
+      [
+        "reifyNode:node_modules/@ai-sdk/solid/node_modules/@ai-sdk/provider",
+        16910
+      ],
+      [
+        "reifyNode:node_modules/@ai-sdk/svelte/node_modules/@ai-sdk/provider",
+        16898
+      ],
+      [
+        "reifyNode:node_modules/@mui/material",
+        16745
+      ],
+      [
+        "reifyNode:node_modules/@ai-sdk/react/node_modules/@ai-sdk/provider",
+        16535
+      ],
+      [
+        "reifyNode:node_modules/@ai-sdk/ui-utils/node_modules/@ai-sdk/provider",
+        16533
+      ],
+      [
+        "reifyNode:node_modules/@ai-sdk/vue/node_modules/@ai-sdk/provider",
+        16368
+      ],
+      [
+        "reifyNode:node_modules/ai/node_modules/@ai-sdk/provider",
+        16282
+      ],
+      [
+        "reifyNode:node_modules/eslint/node_modules/has-flag",
+        15874
+      ],
+      [
+        "reifyNode:node_modules/@mui/joy",
+        15851
+      ],
+      [
+        "reifyNode:node_modules/chokidar/node_modules/glob-parent",
+        15525
+      ],
+      [
+        "reifyNode:node_modules/@ai-sdk/solid/node_modules/@ai-sdk/provider-utils",
+        15452
+      ]
+    ],
+    "longest_script_timers": [],
+    "http": {
+      "lines": 1464,
+      "cache_hits": 761,
+      "cache_misses": 703,
+      "cache_revalidated": 0,
+      "aggregate_request_ms_NOT_wall_time": 5269315,
+      "slowest": [
+        {
+          "line": "2990 http fetch GET 200 https://cdn.npmmirror.com/packages/%40iconify/json/2.2.248/json-2.2.248.tgz 29936ms (cache miss)",
+          "duration_ms": 29936
+        },
+        {
+          "line": "2988 http fetch GET 200 https://cdn.npmmirror.com/packages/%40next/swc-linux-x64-musl/14.2.3/swc-linux-x64-musl-14.2.3.tgz 26119ms (cache miss)",
+          "duration_ms": 26119
+        },
+        {
+          "line": "2986 http fetch GET 200 https://cdn.npmmirror.com/packages/next/14.2.3/next-14.2.3.tgz 18637ms (cache miss)",
+          "duration_ms": 18637
+        },
+        {
+          "line": "2984 http fetch GET 200 https://cdn.npmmirror.com/packages/%40next/swc-linux-x64-gnu/14.2.3/swc-linux-x64-gnu-14.2.3.tgz 17608ms (cache miss)",
+          "duration_ms": 17608
+        },
+        {
+          "line": "2982 http cache https://cdn.npmmirror.com/packages/%40ai-sdk/provider/0.0.23/provider-0.0.23.tgz 16512ms (cache hit)",
+          "duration_ms": 16512
+        },
+        {
+          "line": "2980 http cache https://cdn.npmmirror.com/packages/%40ai-sdk/provider/0.0.23/provider-0.0.23.tgz 16499ms (cache hit)",
+          "duration_ms": 16499
+        },
+        {
+          "line": "2978 http fetch GET 200 https://cdn.npmmirror.com/packages/%40mui/material/5.16.7/material-5.16.7.tgz 16385ms (cache miss)",
+          "duration_ms": 16385
+        },
+        {
+          "line": "2975 http cache https://cdn.npmmirror.com/packages/%40ai-sdk/provider/0.0.23/provider-0.0.23.tgz 16123ms (cache hit)",
+          "duration_ms": 16123
+        },
+        {
+          "line": "2974 http cache https://cdn.npmmirror.com/packages/%40ai-sdk/provider/0.0.23/provider-0.0.23.tgz 16121ms (cache hit)",
+          "duration_ms": 16121
+        },
+        {
+          "line": "2972 http cache https://cdn.npmmirror.com/packages/%40ai-sdk/provider/0.0.23/provider-0.0.23.tgz 15968ms (cache hit)",
+          "duration_ms": 15968
+        },
+        {
+          "line": "2970 http fetch GET 200 https://cdn.npmmirror.com/packages/%40ai-sdk/provider/0.0.23/provider-0.0.23.tgz 15889ms (cache miss)",
+          "duration_ms": 15889
+        },
+        {
+          "line": "2966 http fetch GET 200 https://cdn.npmmirror.com/packages/%40mui/joy/5.0.0-beta.48/joy-5.0.0-beta.48.tgz 15490ms (cache miss)",
+          "duration_ms": 15490
+        }
+      ]
+    },
+    "warning": "Timers are nested/overlapping, not additive. reify:unpack includes retrieval, extraction and filesystem work; npm does not isolate disk-write wall time."
+  },
+  "script_events": [],
+  "install_changes": "",
+  "resources": {
+    "wall_seconds": 31.165041691,
+    "user_seconds": 18.993052,
+    "system_seconds": 14.24421,
+    "max_rss_kib": 318000,
+    "input_blocks": 5552,
+    "output_blocks": 2462184,
+    "major_page_faults": 34,
+    "minor_page_faults": 97257,
+    "voluntary_context_switches": 633114,
+    "involuntary_context_switches": 131
+  },
+  "after_startup_changes": ""
+}

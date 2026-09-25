@@ -1,0 +1,1 @@
+{"repo":{"name":"kjfeng/cocoa-canvas","commit":"e49079a413497d4fe363af4e8a6e6fefd7539597","files":["package.json","package-lock.json","client/package.json","server/package.json"],"installs":[{"manager":"npm","cwd":"."}]},"args":["install","--no-audit","--timing"],"preferOffline":false,"resourceStats":false,"verify":true}

@@ -4,9 +4,10 @@
 // Claude Code or Codex, however it was started — the keyboard belongs to the transcript, as in
 // any terminal, and the box steps aside until the program ends. The shell tells us which state
 // it is in through the marks emitted by the zsh wrappers (src/main/shell-rc.cjs); they also
-// keep the directory chip true. Every tab is a real PTY from the Experimental Terminal engine.
+// keep the session's working directory current. Every tab is a real PTY from the Experimental Terminal engine.
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { api } from '../api.js';
+import './terminal.css';
 import {
   bootstrap,
   closeSession,
@@ -17,7 +18,6 @@ import {
   focusSession,
   getState,
   mountView,
-  pickDirectory,
   providerName,
   selectionText,
   sendInput,
@@ -44,6 +44,21 @@ const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const agentOfCommand = (command) => { const match = AGENT_COMMAND.exec(command || ''); return match ? match[1] : null; };
 
+function displayPath(value, homeDirectory) {
+  const root = String(homeDirectory || '').replace(/[\\/]+$/, '');
+  if (!root || !value) return value;
+  if (value === root) return '~';
+  return value.startsWith(`${root}/`) || value.startsWith(`${root}\\`) ? `~${value.slice(root.length)}` : value;
+}
+
+function fitCommandInput(input) {
+  if (!input?.clientWidth) return;
+  input.style.overflowY = 'hidden';
+  input.style.height = 'auto';
+  input.style.height = `${input.scrollHeight}px`; // CSS caps the height for long commands.
+  input.style.overflowY = input.scrollHeight > input.clientHeight ? 'auto' : 'hidden';
+}
+
 /** What a tab is right now: a plain terminal, or an agent (by dropdown launch or by typing its name). */
 function describe(record) {
   const shell = record.shell || {};
@@ -66,7 +81,7 @@ function errorText(error) {
   return error instanceof Error ? error.message : String(error || 'Unknown error');
 }
 
-export default function TerminalPane({ cwd, projectId, visible = true }) {
+export default function TerminalPane({ cwd, projectId, visible = true, requestedSession, onActiveSession }) {
   useSyncExternalStore(subscribeVersion, getVersion);
   const state = getState();
   const stageRef = useRef(null);
@@ -79,7 +94,6 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
   const [draft, setDraft] = useState('');
   const [history, setHistory] = useState([]);
   const [histIdx, setHistIdx] = useState(null);
-  const [cwdOverride, setCwdOverride] = useState({}); // session id → directory picked while no shell could cd
   const [touched, setTouched] = useState({}); // session id → a command was sent from the box
   const [takeover, setTakeover] = useState(false); // the running program has the keyboard
   const autoStarted = useRef(new Set());
@@ -88,14 +102,35 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
   const active = sessions.find((record) => record.snapshot.id === activeId) || null;
   const current = active || sessions[0] || null;
   const currentId = current ? current.snapshot.id : null;
+  useEffect(() => {
+    if (requestedSession && sessionsFor(projectId).some((record) => record.snapshot.id === requestedSession.id)) setActiveId(requestedSession.id);
+  }, [requestedSession, projectId]);
+  useEffect(() => { onActiveSession?.(currentId); }, [currentId, onActiveSession]);
   const running = !!current && current.snapshot.status === 'running';
   const now = current ? describe(current) : { integrated: false, busy: false, agent: 'shell', command: '', cwd: null };
-  const cwdOf = (record) => describe(record).cwd || cwdOverride[record.snapshot.id] || record.snapshot.cwd;
+  const cwdOf = (record) => describe(record).cwd || record.snapshot.cwd;
   const projectCwd = cwd || state.home || null; // the project's code directory; your home directory if a terminal is ever asked for without one
   const currentCwd = current ? cwdOf(current) : projectCwd;
   const agentLabel = LABEL[now.agent] || LABEL.shell;
-  const boxIsInput = running && now.integrated && !takeover; // the box owns typing; the transcript is locked
-  const showBox = running && !takeover;
+  const showBox = running && now.agent === 'shell' && !takeover;
+  const boxIsInput = showBox && now.integrated; // the box owns typing; the transcript is locked
+
+  useLayoutEffect(() => {
+    if (visible) fitCommandInput(inputRef.current);
+  }, [draft, showBox, visible]);
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input || !visible) return undefined;
+    let cancelled = false, width = input.getBoundingClientRect().width;
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => {
+      const next = input.getBoundingClientRect().width;
+      // Ignore our own height changes; refit wrapped lines only when width changes.
+      if (next !== width) { width = next; fitCommandInput(input); }
+    });
+    observer?.observe(input);
+    document.fonts?.ready.then(() => { if (!cancelled) fitCommandInput(input); });
+    return () => { cancelled = true; observer?.disconnect(); };
+  }, [showBox, visible]);
 
   // Bootstrap once; start one shell in the project directory when this project has none.
   useEffect(() => {
@@ -147,11 +182,14 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
     }
     if (currentId && visible) {
       mountView(currentId, stage);
+      let cancelled = false;
       const raf = requestAnimationFrame(() => requestAnimationFrame(() => { fitSession(currentId); }));
-      return () => cancelAnimationFrame(raf);
+      // The first grid can be measured before the bundled monospace font loads.
+      document.fonts?.ready.then(() => { if (!cancelled) fitSession(currentId); });
+      return () => { cancelled = true; cancelAnimationFrame(raf); };
     }
     return undefined;
-  }, [currentId, visible, state.sessions.size]);
+  }, [currentId, visible, state.sessions.size, now.agent]);
 
   // Refit whenever the stage resizes.
   useEffect(() => {
@@ -225,8 +263,8 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
     }
   };
 
-  // The dropdown. An untouched idle terminal becomes the agent in place — that is how you choose
-  // its directory: pick the folder, then pick the agent. Otherwise the agent gets its own tab here.
+  // The dropdown. An untouched idle terminal becomes the agent in place, in its current
+  // directory. Otherwise the agent gets its own tab here.
   const pickAgent = (agent) => {
     setMenu(null);
     if (current && running && now.agent === agent) { if (takeover) focusSession(currentId); else if (inputRef.current) inputRef.current.focus(); return; }
@@ -253,18 +291,8 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
     }
   };
 
-  // The directory chip: pick a folder. An idle shell changes into it (and reports it back through
-  // its marks); otherwise the choice is kept for the next thing started from this tab.
-  const changeCwd = async () => {
-    const chosen = await pickDirectory(currentCwd).catch(() => null);
-    if (!chosen || !currentId) return;
-    if (running && now.integrated && !now.busy) sendInput(currentId, `cd -- ${shellQuote(chosen)}\r`);
-    else if (running && !now.integrated && now.agent === 'shell') { sendInput(currentId, `cd -- ${shellQuote(chosen)}\r`); setCwdOverride((map) => ({ ...map, [currentId]: chosen })); }
-    else setCwdOverride((map) => ({ ...map, [currentId]: chosen }));
-    if (inputRef.current) inputRef.current.focus();
-  };
-
-  // The box: Enter sends the line; ↑/↓ walk the shell's history and what you typed here;
+  // The box: Enter sends the draft, Shift+Enter adds a line; ↑/↓ walk history
+  // at the edges of a multiline draft, leaving normal caret movement intact.
   // ^C ^D ^L reach the shell; ⌘C with nothing selected in the box copies the transcript selection.
   const onInputKey = (event) => {
     if (!currentId) return;
@@ -281,13 +309,13 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
       setDraft('');
       return;
     }
-    if (key === 'ArrowUp' && history.length) {
+    if (key === 'ArrowUp' && history.length && (!draft.includes('\n') || event.currentTarget.selectionStart === 0 && event.currentTarget.selectionEnd === 0)) {
       event.preventDefault();
       const idx = histIdx == null ? history.length - 1 : Math.max(0, histIdx - 1);
       setHistIdx(idx); setDraft(history[idx]);
       return;
     }
-    if (key === 'ArrowDown' && histIdx != null) {
+    if (key === 'ArrowDown' && histIdx != null && (!draft.includes('\n') || event.currentTarget.selectionStart === draft.length && event.currentTarget.selectionEnd === draft.length)) {
       event.preventDefault();
       const idx = histIdx + 1;
       if (idx >= history.length) { setHistIdx(null); setDraft(''); } else { setHistIdx(idx); setDraft(history[idx]); }
@@ -340,7 +368,7 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
   const menuW = 200;
 
   return (
-    <div ref={rootRef} data-terminal="1" onKeyDown={stopKeys} onKeyUp={stopKeys} style={{ flex: 1, minHeight: 0, display: visible ? 'flex' : 'none', flexDirection: 'column', background: '#fff' }}>
+    <div ref={rootRef} className="terminal-pane" data-terminal="1" data-agent={now.agent} onKeyDown={stopKeys} onKeyUp={stopKeys} style={{ display: visible ? 'flex' : 'none' }}>
       <div style={{ display: 'flex', alignItems: 'stretch', gap: 2, padding: '6px 8px 0', background: '#fafafa', borderBottom: '1px solid #eaeaea', flex: 'none', overflow: 'hidden' }}>
         {sessions.map((record) => {
           const id = record.snapshot.id;
@@ -380,7 +408,7 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
         </div>
       </div>
 
-      <div ref={stageRef} onClick={onStageClick} data-term-stage="1" style={{ position: 'relative', flex: 1, minHeight: 0, padding: '10px 14px 0', background: '#fff', cursor: boxIsInput ? 'default' : 'text', overflow: 'hidden' }}>
+      <div ref={stageRef} className="terminal-stage" onClick={onStageClick} data-term-stage="1" style={{ cursor: boxIsInput ? 'default' : 'text' }}>
         {!currentId && (
           <div style={{ font: `12.5px/1.7 ${MONO}`, color: '#8f8f8f' }}>{!state.bootstrapComplete ? 'starting…' : (cwd ? 'no terminal yet — press + or ⌘T' : 'no project directory')}</div>
         )}
@@ -393,13 +421,9 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
         ))}
       </div>
 
-      <div style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 10, padding: '10px 14px 12px', borderTop: '1px solid #eaeaea', background: '#fafafa' }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 6px' }}>
-          <span data-agent-chip="1" style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fff', font: `500 11.5px/1.4 ${MONO}`, color: '#171717', whiteSpace: 'nowrap' }}><span style={{ color: '#8f8f8f' }}>›_</span>{agentLabel}</span>
-          <button type="button" className="hov-bd2" onClick={() => void changeCwd()} disabled={!currentId} title="Change working directory…" data-cwd-chip="1" style={{ flex: '0 1 auto', minWidth: 0, display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fff', font: `11.5px/1.4 ${MONO}`, color: '#4d4d4d', whiteSpace: 'nowrap', overflow: 'hidden', cursor: currentId ? 'pointer' : 'default', textAlign: 'left', transition: 'border-color 120ms' }}><span style={{ color: '#8f8f8f' }}>▭</span><span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentCwd || '~'}</span></button>
-        </div>
-        {currentId && (showBox ? (
-          <input
+      {(now.agent === 'shell' || (currentId && !running)) && <div className={now.agent === 'shell' ? 'terminal-dock' : 'terminal-ended'} data-term-footer="1">
+        {showBox && (
+          <textarea
             ref={inputRef}
             data-term-input="1"
             value={draft}
@@ -408,16 +432,18 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
             spellCheck={false}
             autoComplete="off"
             aria-label="Terminal input"
-            placeholder="Run commands"
-            style={{ display: 'block', width: '100%', padding: '2px 0', border: 0, background: 'transparent', font: `12.5px/1.7 ${MONO}`, color: '#171717', caretColor: '#0070f3' }}
+            placeholder="Run commands…"
+            rows={1}
+            className="terminal-command"
           />
-        ) : (
-          // Same height as the box, so the transcript (and the program drawing in it) is not resized.
-          <div data-term-hint="1" style={{ padding: '2px 0', font: `12.5px/1.7 ${MONO}`, color: '#8f8f8f', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {running ? '\u00a0' : 'this terminal has exited — press + for a new one'}
-          </div>
-        ))}
-      </div>
+        )}
+        {currentId && !showBox && <div className={now.agent === 'shell' ? 'terminal-hint' : 'terminal-exited'} data-term-hint="1">
+          {running ? '\u00a0' : 'Exited · press + for a new terminal'}
+        </div>}
+        {now.agent === 'shell' && currentCwd && <div className="terminal-path" data-term-path="1" aria-label="Current working directory" title={currentCwd}>
+          {displayPath(currentCwd, state.home)}
+        </div>}
+      </div>}
     </div>
   );
 }

@@ -21,14 +21,14 @@ test('ensureHome creates ~/.engelbart, test root and annotations', () => {
   assert.throws(() => ensureHome('relative/path'), TypeError);
 });
 
-test('config defaults to test mode and persists a toggle atomically', () => {
+test('config defaults to normal mode and persists explicit settings atomically', () => {
   const { root } = ensureHome(tempHome());
   const summarizer = { provider: 'openai', openai: { model: 'gpt-5.6-luna', effort: 'high' }, anthropic: { model: 'claude-opus-5', effort: 'high' } };
   const providers = ['openai', 'anthropic'];
   const github = { clientId: 'Iv23liAZNYl96zlluMDs', appSlug: 'engelbart-mathetic' };
-  assert.deepEqual(readConfig(root), { testMode: true, providers, summarizer, github }, 'summaries default to Codex, gpt-5.6-luna, high; @bart offers both providers; GitHub sign-in is configured without manual setup');
-  assert.deepEqual(writeConfig(root, { testMode: false }), { testMode: false, providers, summarizer, github });
-  assert.deepEqual(readConfig(root), { testMode: false, providers, summarizer, github });
+  assert.deepEqual(readConfig(root), { testMode: false, providers, summarizer, github }, 'summaries default to Codex, gpt-5.6-luna, high; @bart offers both providers; GitHub sign-in is configured without manual setup');
+  assert.deepEqual(writeConfig(root, { testMode: true }), { testMode: true, providers, summarizer, github });
+  assert.deepEqual(readConfig(root), { testMode: true, providers, summarizer, github });
 
   // Switching is one word; each provider keeps its own model and effort; nonsense falls back to the defaults.
   const file = path.join(root, 'config.json');

@@ -56,6 +56,8 @@ textarea::placeholder,input::placeholder{color:#8f8f8f;font-style:italic}
 /* The workspace sidebar (Canvas.dc.html, Add - Mention.dc.html, 2026-09-22): rows on the grey library card wash one grey
    darker; the search pill takes a soft ring; the bottom bar's pictures give a quick zoom when pressed. */
 .hov-wash2:hover{background:#eaeaea!important}
+.workspace-delete{opacity:0;pointer-events:none}
+.workspace-row:hover .workspace-delete,.workspace-row:focus-within .workspace-delete{opacity:1;pointer-events:auto}
 .hov-ink-wash2:hover{color:#171717!important;background:#eaeaea!important}
 .rail-search:focus-within{box-shadow:0 0 0 3px #e2e2e2}
 .rail-field input::placeholder{font-style:normal;color:#8f8f8f}

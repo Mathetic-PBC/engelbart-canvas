@@ -1,0 +1,346 @@
+{
+  "repository": "kjfeng/cocoa-canvas",
+  "commit": "e49079a413497d4fe363af4e8a6e6fefd7539597",
+  "case": "audit-off",
+  "template": "engelbart-runner",
+  "round": 2,
+  "artifact_directory": "2026-09-23-cocoa-startup-recheck",
+  "started_at": "2026-09-24T05:55:09.277Z",
+  "sandbox_id": "i1jot5n551y1l0fx3wyvo",
+  "template_id": "zyc96dk7q7adnb1uzy40",
+  "resources": {
+    "cpu": 8,
+    "memory_mb": 8192
+  },
+  "artifacts": [
+    {
+      "file": "install.stdout.log",
+      "bytes": 94
+    },
+    {
+      "file": "npm.cjs",
+      "bytes": 11512
+    },
+    {
+      "file": "config-logs/2026-09-24T05_55_12_209Z-debug-0.log",
+      "bytes": 1333
+    },
+    {
+      "file": "config-logs/2026-09-24T05_55_12_209Z-timing.json",
+      "bytes": 440
+    },
+    {
+      "file": "packages.json",
+      "bytes": 166072
+    },
+    {
+      "file": "package.before.json",
+      "bytes": 327
+    },
+    {
+      "file": "npm-config.json",
+      "bytes": 3596
+    },
+    {
+      "file": "app.stdout.log",
+      "bytes": 1199
+    },
+    {
+      "file": "app.stderr.log",
+      "bytes": 325
+    },
+    {
+      "file": "app.html",
+      "bytes": 586
+    },
+    {
+      "file": "spec.json",
+      "bytes": 322
+    },
+    {
+      "file": "global.npmrc",
+      "bytes": 0
+    },
+    {
+      "file": "user.npmrc",
+      "bytes": 0
+    },
+    {
+      "file": "npm-logs/2026-09-24T05_55_13_080Z-debug-0.log",
+      "bytes": 362624
+    },
+    {
+      "file": "npm-logs/2026-09-24T05_55_28_867Z-debug-0.log",
+      "bytes": 971
+    },
+    {
+      "file": "npm-logs/2026-09-24T05_55_28_598Z-debug-0.log",
+      "bytes": 949
+    },
+    {
+      "file": "npm-logs/2026-09-24T05_55_28_883Z-debug-0.log",
+      "bytes": 971
+    },
+    {
+      "file": "npm-logs/2026-09-24T05_55_13_080Z-timing.json",
+      "bytes": 43913
+    },
+    {
+      "file": "measurement.json",
+      "bytes": 7343
+    },
+    {
+      "file": "install.stderr.log",
+      "bytes": 62365
+    }
+  ],
+  "measurement": {
+    "command": [
+      "npm",
+      "install",
+      "--no-audit",
+      "--timing"
+    ],
+    "cwd": ".",
+    "wall_ms": 15433,
+    "exit_code": 0,
+    "signal": null,
+    "error": null,
+    "runtime": {
+      "node": "v22.23.2",
+      "npm": "10.9.8",
+      "python": "Python 3.11.6",
+      "arch": "x64",
+      "platform": "linux"
+    },
+    "config_hash": "85d1b22e37d850858dfae75b70791a496789747fccc4a51509c2d37605d862c8",
+    "cache": {
+      "size_before_kib": 0,
+      "seed": null
+    },
+    "fingerprint": {
+      "hash": "bc5942ab0e9055a93d4c49d41a991215846c275c749a14bafd52ed576666e278",
+      "packages": 641,
+      "version_mismatches": 0
+    },
+    "input_hashes": {
+      "package.json": "a72f54674cfee8e27721cc1d67e447bf73328008b590f1a200d917068395a172",
+      "package-lock.json": "396eeca89f69f4db9b97004f4d2fe3ce8f9e2957c9c066c21bf038ddea2e9cf3",
+      "client/package.json": "590f4f01067d75e7f2c84ff09335bc27da0f7a04aa70ec8df46cf669ebd84234",
+      "server/package.json": "200a49f95f2ed93c50f290b7a04c5980aee3bd132111f7cc777cb93e61ce824e"
+    },
+    "after_hashes": {
+      "package.json": "a72f54674cfee8e27721cc1d67e447bf73328008b590f1a200d917068395a172",
+      "package-lock.json": "4ee058d8e423ae2cb834fb932fbc3508f83479eb4b8116e51cc9cdc905b9f08b",
+      "client/package.json": "590f4f01067d75e7f2c84ff09335bc27da0f7a04aa70ec8df46cf669ebd84234",
+      "server/package.json": "200a49f95f2ed93c50f290b7a04c5980aee3bd132111f7cc777cb93e61ce824e"
+    },
+    "timing_files": [
+      "2026-09-24T05_55_13_080Z-timing.json"
+    ],
+    "analysis": {
+      "timers_ms": {
+        "npm:load:whichnode": 1,
+        "npm:load:configload": 8,
+        "npm:load:mkdirpcache": 0,
+        "npm:load:mkdirplogs": 0,
+        "npm:load:setTitle": 1,
+        "npm:load": 24,
+        "idealTree:buildDeps": 5,
+        "idealTree": 199,
+        "reify:loadTrees": 199,
+        "reify:diffTrees": 13,
+        "reify:unpack": 14353,
+        "build:run:postinstall:node_modules/esbuild": 72,
+        "build:run:postinstall:node_modules/vite/node_modules/esbuild": 53,
+        "build:run:postinstall": 73,
+        "build:deps": 109,
+        "build": 109,
+        "reify:build": 110,
+        "reify:save": 228,
+        "reify": 15089,
+        "command:install": 15101,
+        "npm": 15357
+      },
+      "longest_package_timers": [
+        [
+          "reifyNode:node_modules/date-fns",
+          14350
+        ],
+        [
+          "reifyNode:node_modules/lucide-react",
+          14218
+        ],
+        [
+          "reifyNode:node_modules/rxjs",
+          13346
+        ],
+        [
+          "reifyNode:node_modules/openai",
+          12331
+        ],
+        [
+          "reifyNode:node_modules/highlight.js",
+          11838
+        ],
+        [
+          "reifyNode:node_modules/caniuse-lite",
+          10993
+        ],
+        [
+          "reifyNode:node_modules/@aws-sdk/nested-clients",
+          10652
+        ],
+        [
+          "reifyNode:node_modules/@anthropic-ai/sdk",
+          10631
+        ],
+        [
+          "reifyNode:node_modules/lib0",
+          10332
+        ],
+        [
+          "reifyNode:node_modules/typescript",
+          10126
+        ],
+        [
+          "reifyNode:node_modules/lodash",
+          10122
+        ],
+        [
+          "reifyNode:node_modules/json-schema-to-ts",
+          10072
+        ],
+        [
+          "reifyNode:node_modules/@smithy/core",
+          9994
+        ],
+        [
+          "reifyNode:node_modules/tailwindcss",
+          9807
+        ],
+        [
+          "reifyNode:node_modules/@aws-sdk/core",
+          9804
+        ]
+      ],
+      "longest_script_timers": [
+        [
+          "build:run:postinstall",
+          73
+        ],
+        [
+          "build:run:postinstall:node_modules/esbuild",
+          72
+        ],
+        [
+          "build:run:postinstall:node_modules/vite/node_modules/esbuild",
+          53
+        ]
+      ],
+      "http": {
+        "lines": 1274,
+        "cache_hits": 637,
+        "cache_misses": 637,
+        "cache_revalidated": 0,
+        "aggregate_request_ms_NOT_wall_time": 2261439,
+        "slowest": [
+          {
+            "line": "2797 http fetch GET 200 https://registry.npmjs.org/date-fns/-/date-fns-2.30.0.tgz 14041ms (cache miss)",
+            "duration_ms": 14041
+          },
+          {
+            "line": "2795 http fetch GET 200 https://registry.npmjs.org/lucide-react/-/lucide-react-0.575.0.tgz 13931ms (cache miss)",
+            "duration_ms": 13931
+          },
+          {
+            "line": "2793 http fetch GET 200 https://registry.npmjs.org/rxjs/-/rxjs-7.8.2.tgz 13096ms (cache miss)",
+            "duration_ms": 13096
+          },
+          {
+            "line": "2791 http fetch GET 200 https://registry.npmjs.org/openai/-/openai-6.25.0.tgz 12069ms (cache miss)",
+            "duration_ms": 12069
+          },
+          {
+            "line": "2789 http fetch GET 200 https://registry.npmjs.org/highlight.js/-/highlight.js-11.11.1.tgz 11542ms (cache miss)",
+            "duration_ms": 11542
+          },
+          {
+            "line": "2787 http fetch GET 200 https://registry.npmjs.org/caniuse-lite/-/caniuse-lite-1.0.30001770.tgz 10677ms (cache miss)",
+            "duration_ms": 10677
+          },
+          {
+            "line": "2785 http fetch GET 200 https://registry.npmjs.org/@aws-sdk/nested-clients/-/nested-clients-3.996.1.tgz 10297ms (cache miss)",
+            "duration_ms": 10297
+          },
+          {
+            "line": "2783 http fetch GET 200 https://registry.npmjs.org/@anthropic-ai/sdk/-/sdk-0.78.0.tgz 10270ms (cache miss)",
+            "duration_ms": 10270
+          },
+          {
+            "line": "2781 http fetch GET 200 https://registry.npmjs.org/lib0/-/lib0-0.2.117.tgz 10041ms (cache miss)",
+            "duration_ms": 10041
+          },
+          {
+            "line": "2779 http fetch GET 200 https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz 9889ms (cache miss)",
+            "duration_ms": 9889
+          },
+          {
+            "line": "2777 http fetch GET 200 https://registry.npmjs.org/lodash/-/lodash-4.17.23.tgz 9832ms (cache miss)",
+            "duration_ms": 9832
+          },
+          {
+            "line": "2775 http fetch GET 200 https://registry.npmjs.org/json-schema-to-ts/-/json-schema-to-ts-3.1.1.tgz 9781ms (cache miss)",
+            "duration_ms": 9781
+          }
+        ]
+      },
+      "warning": "Timers are nested/overlapping, not additive. reify:unpack includes retrieval, extraction and filesystem work; npm does not isolate disk-write wall time."
+    },
+    "script_events": [
+      "2833 info run esbuild@0.27.3 postinstall node_modules/esbuild node install.js",
+      "2834 info run esbuild@0.21.5 postinstall node_modules/vite/node_modules/esbuild node install.js",
+      "2835 info run esbuild@0.27.3 postinstall { code: 0, signal: null }",
+      "2837 info run esbuild@0.21.5 postinstall { code: 0, signal: null }"
+    ],
+    "install_changes": " M package-lock.json\n",
+    "resources": null,
+    "startup": {
+      "ok": true,
+      "command": [
+        "npm",
+        "run",
+        "dev"
+      ],
+      "port": 5173,
+      "host": "[::1]",
+      "elapsed_ms": 1087,
+      "attempts": [
+        {
+          "host": "127.0.0.1",
+          "error": "TypeError",
+          "elapsed_ms": 45
+        },
+        {
+          "host": "[::1]",
+          "error": "TypeError",
+          "elapsed_ms": 51
+        },
+        {
+          "host": "127.0.0.1",
+          "error": "TypeError",
+          "elapsed_ms": 1053
+        },
+        {
+          "host": "[::1]",
+          "status": 200,
+          "elapsed_ms": 1086
+        }
+      ],
+      "scope": "Development server and root HTML only. No keys supplied; AI/database features not exercised."
+    },
+    "after_startup_changes": " M package-lock.json\n"
+  },
+  "cleaned_up": true,
+  "finished_at": "2026-09-24T05:55:31.794Z"
+}

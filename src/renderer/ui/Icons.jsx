@@ -69,6 +69,13 @@ export const CHAT = () => (
   </svg>
 );
 
+export const LEAF = () => (
+  <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" aria-hidden="true">
+    <path d="M3.5 11.5C.5 5.5 6 2 14 2c0 8-3.5 13.5-9.5 10.5" />
+    <path d="M2 14 10.5 5.5" />
+  </svg>
+);
+
 // A website with no favicon of its own (none are fetched): the generic globe (Add - Mention.dc.html, 2026-09-22).
 export const GLOBE = () => (
   <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" aria-hidden="true">
@@ -108,6 +115,7 @@ export const KIND = {
   html: { glyph: <CODE />, label: 'html' },
   data: { glyph: <LAYERS />, label: 'data file' },
   chat: { glyph: <CHAT />, label: 'chat', fixed: true },
+  overleaf: { glyph: <LEAF />, label: 'Overleaf', fixed: true },
   task: { glyph: <TASK />, label: 'task', fixed: true },
   workspace: { glyph: <WS />, label: 'workspace', fixed: true },
   image: { glyph: <IMAGE />, label: 'image' },
@@ -122,13 +130,13 @@ export function kindOf(item) {
 // The design draws a note at 15px, a globe at 14 and every other kind at 12, centred in a box of 16 (18 in a list):
 // the workspace sidebar's rows and search, and the @ menu (Canvas.dc.html, Add - Mention.dc.html `icon`).
 const GLYPH_SIZE = { note: 15, md: 15, website: 14 };
-export function KindGlyph({ item, kind: key = null, box = 16, color = '#171717' }) {
+export function KindGlyph({ item, kind: key = null, box = 16, size = null, color = '#171717' }) {
   const name = key || (item.type === 'workspace' || item.type === 'child' ? 'workspace' : kindKey(item));
   const kind = KIND[name] || kindOf(item || {});
-  const size = GLYPH_SIZE[name] || 12;
+  const glyphSize = size ?? (GLYPH_SIZE[name] || 12);
   return (
     <span style={{ flex: 'none', width: box, height: box, display: 'flex', alignItems: 'center', justifyContent: 'center', color }}>
-      <span className="glyph-fit" style={{ display: 'flex', width: size, height: size }}>{kind.glyph}</span>
+      <span className="glyph-fit" style={{ display: 'flex', width: glyphSize, height: glyphSize }}>{kind.glyph}</span>
     </span>
   );
 }

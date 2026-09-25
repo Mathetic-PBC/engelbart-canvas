@@ -3,7 +3,9 @@ import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
 import { KIND, kindOf, KindGlyph as Glyph } from '../ui/Icons.jsx';
 import { isUntitled } from '../model/names.js';
-import { looksAddable, railSections, RAIL_SECTIONS, searchRows } from '../model/rail.js';
+import { linkedSidebarSection, looksAddable, searchRows, sidebarSectionOf, sidebarSections } from '../model/rail.js';
+import WorkspaceTree, { Chevron } from './WorkspaceTree.jsx';
+import './sidebar.css';
 import { ago, findWorkspaces } from '../model/nav.js';
 import GithubPane from './GithubPane.jsx';
 import { usePlaced } from '../ui/usePlaced.js';
@@ -13,18 +15,7 @@ import trashFullPng from '../../../design/assets/trash-full.png';
 import TrashPanel from '../post-its/TrashPanel.jsx';
 import notePng from '../../../design/assets/yellow-sticky-note.png';
 
-// The sidebar (Claude Design "Sidebar.dc.html", 2026-09-23, over "Canvas.dc.html" and "Add - Mention.dc.html" of
-// 2026-09-22; Hudson's tweaks in design/goal-canvas/SIDEBAR-TWEAKS.md). From the top: the current workspace in a grey box,
-// "Workspace" over its icon and name (a click opens the switcher: a search over every workspace of the project, the
-// siblings with their status marks, "+ New"; a double-click renames); the library search, which finds anything the library
-// holds and brings it in; this workspace's rows under quiet section labels — Notes, Websites, GitHub, Files,
-// Sub-Workspaces (model/rail.js railSections; each folds, the first carries Collapse all) — where a hover peeks, a
-// double-click renames and a drag onto the trash takes one out of this workspace; and "+ Add context", whose menu makes a
-// Note or a Sub-Workspace here or adds something new to the library and to this workspace. At the bottom, the workspace
-// to go to next (an agent waiting there, else the one written in before; ⌘J), then two pictures that size with the
-// sidebar: the trash (it takes post-its too and keeps them a week; a click lists them to restore; it shows paper once
-// something is in it) and a sticky note that makes a post-it. Copy left for the document's lower left (2026-09-23).
-// Every row's name is its own; nothing here explains itself.
+// The current workspace card stays above search, the workspace tree, and grouped context.
 
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
 const PEEK_OPEN = 350;
@@ -68,7 +59,7 @@ function SwitcherSearch({ value, onChange, onKeyDown, inputRef }) {
         aria-label="Search workspaces"
         data-workspace-search="1"
         spellCheck={false}
-        style={{ flex: 1, minWidth: 0, padding: '6px 0', border: 0, background: 'transparent', font: '13px/1.5 var(--font-sans)', color: '#171717' }}
+        style={{ flex: 1, minWidth: 0, padding: '6px 0', border: 0, background: 'transparent', font: 'var(--rail-row-font)', color: '#171717' }}
       />
       {value && <button type="button" className="hov-ink" onMouseDown={(event) => event.preventDefault()} onClick={() => onChange({ target: { value: '' } })} aria-label="Clear" style={{ flex: 'none', padding: '0 2px', border: 0, background: 'transparent', cursor: 'pointer', font: '13px/1 var(--font-sans)', color: '#c9c9c9' }}>×</button>}
     </div>
@@ -145,7 +136,7 @@ function WorkspaceHeader({ topics, topic, all, onOpenDoc, onSelectTopic, onCycle
   const menuRow = { display: 'flex', alignItems: 'center', gap: 12, padding: '8px 10px', borderRadius: 6, cursor: 'pointer', transition: 'background 120ms' };
   return (
     <div ref={boxRef} data-workspace-header="1" onMouseEnter={open} onMouseLeave={close} style={{ flex: 'none', position: 'relative', zIndex: 6, marginBottom: 18 }}>
-      <div style={{ padding: '12px 12px 10px', background: '#f2f2f2', borderRadius: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ padding: '8px 12px', background: '#f2f2f2', borderRadius: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
         <div style={{ font: '500 12.5px/1.3 var(--font-sans)', color: '#8f8f8f' }}>Workspace</div>
         <div
           role="button"
@@ -170,10 +161,10 @@ function WorkspaceHeader({ topics, topic, all, onOpenDoc, onSelectTopic, onCycle
                 placeholder={topic && isUntitled(topic.name) ? topic.name : ''}
                 aria-label="Name"
                 spellCheck={false}
-                style={{ flex: 1, minWidth: 0, padding: 0, border: 0, background: 'transparent', font: '600 14px/1.5 var(--font-sans)', color: '#171717' }}
+                style={{ flex: 1, minWidth: 0, padding: 0, border: 0, background: 'transparent', font: '600 15px/1.5 var(--font-sans)', color: '#171717' }}
               />
             )
-            : <span data-workspace-name="1" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '600 14px/1.5 var(--font-sans)', color: untitled ? '#8f8f8f' : '#171717' }}>{topic ? topic.name : 'no workspace yet…'}</span>}
+            : <span data-workspace-name="1" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '600 15px/1.5 var(--font-sans)', color: untitled ? '#8f8f8f' : '#171717' }}>{topic ? topic.name : 'no workspace yet…'}</span>}
         </div>
       </div>
       {hover && !editing && (
@@ -217,7 +208,7 @@ const CIRCLE_MINUS = (
   </svg>
 );
 
-function RailRow({ row, flash, faded, onClick, onRenameStart, onRename, onRenameEnd, onDragStart, onDragEnd, onEnter, onLeave, onRemove }) {
+export function RailRow({ row, flash, faded, glyphKind, onClick, onRenameStart, onRename, onRenameEnd, onDragStart, onDragEnd, onEnter, onLeave, onAdd, addDisabled, addLabel = 'Add context', onRemove }) {
   const inputRef = React.useRef(null);
   const [draft, setDraft] = React.useState(row.name);
   React.useEffect(() => { setDraft(row.name); }, [row.name, row.editing]);
@@ -233,27 +224,30 @@ function RailRow({ row, flash, faded, onClick, onRenameStart, onRename, onRename
     onRenameEnd();
   };
   const draggable = !!onDragStart && !row.editing;
+  const name = <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: 'var(--rail-row-font)', fontWeight: row.on ? 500 : 400, color: isUntitled(row.name) ? '#8f8f8f' : '#171717' }}>{row.name}</span>;
   return (
     <div
       data-rail-row={row.id}
-      className="hov-wash"
+      className={`rail-context-row hov-wash${onRemove ? ' rail-has-remove' : ''}`}
+      role={row.editing || onAdd ? undefined : "button"}
+      tabIndex={row.editing || onAdd ? undefined : 0}
+      aria-label={row.name}
+      onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); onClick(row); } }}
       draggable={draggable}
       onDragStart={draggable ? (event) => onDragStart(row, event) : undefined}
       onDragEnd={draggable ? onDragEnd : undefined}
-      onClick={() => { if (!row.editing) onClick(row); }}
-      onDoubleClick={(event) => { if (row.type === 'workspace') return; event.stopPropagation(); onRenameStart(row); }}
+      onClick={onAdd ? undefined : () => { if (!row.editing) onClick(row); }}
+      onDoubleClick={(event) => { if (row.type === 'workspace' || !onRenameStart) return; event.stopPropagation(); onRenameStart(row); }}
       onMouseEnter={onEnter ? (event) => onEnter(row, event.currentTarget) : undefined}
       onMouseLeave={onLeave}
       style={{
         flex: 'none', display: 'flex', alignItems: 'center', gap: 10, boxSizing: 'border-box', borderRadius: 6, cursor: 'pointer',
-        width: '100%', margin: 0, padding: '8px 10px',
-        background: row.on ? '#fff' : 'transparent', boxShadow: row.on ? '0 1px 3px #0000000a, 0 0 0 1px #eaeaea' : 'none',
+        width: '100%', minHeight: 'var(--rail-row-height)', margin: '0 0 2px', padding: onAdd && !row.editing ? 0 : '8px 10px',
+        background: row.on ? '#eaeaea' : 'transparent',
         opacity: faded ? 0.4 : 1, animation: flash ? 'added 1600ms ease-out' : undefined, transition: 'background 120ms',
       }}
     >
-      {row.type === 'child'
-        ? <span style={{ flex: 'none', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#171717' }}><WsMark size={15} stroke={1.5} /></span>
-        : <Glyph item={row} />}
+      {(!onAdd || row.editing) && <Glyph item={row} kind={glyphKind} box="var(--rail-icon-size)" size="var(--rail-icon-size)" />}
       {row.editing
         ? (
           <input
@@ -265,67 +259,22 @@ function RailRow({ row, flash, faded, onClick, onRenameStart, onRename, onRename
             onKeyDown={blurOnEnter}
             onClick={(event) => event.stopPropagation()}
             spellCheck={false}
-            style={{ flex: 1, minWidth: 0, padding: 0, border: 0, background: 'transparent', font: `${row.on ? 600 : 400} 14px/1.5 var(--font-sans)`, color: '#171717' }}
+            style={{ flex: 1, minWidth: 0, padding: 0, border: 0, background: 'transparent', font: 'var(--rail-row-font)', fontWeight: row.on ? 500 : 400, color: '#171717' }}
           />
         )
-        : <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: `${row.on ? 600 : 400} 14px/1.5 var(--font-sans)`, color: isUntitled(row.name) ? '#8f8f8f' : '#171717' }}>{row.name}</span>}
-      {onRemove && !row.editing && (
-        <button
-          type="button"
-          className="rail-minus"
-          data-rail-remove={row.id}
-          aria-label={`Take ${row.name} out of this workspace`}
-          onMouseDown={(event) => event.stopPropagation()}
-          onClick={(event) => { event.stopPropagation(); onRemove(row); }}
-          onDoubleClick={(event) => event.stopPropagation()}
-          style={{ flex: 'none', display: 'flex', margin: '-2px -2px -2px 0', padding: 2, border: 0, background: 'transparent', cursor: 'pointer', color: '#8f8f8f' }}
-        >
-          {CIRCLE_MINUS}
-        </button>
-      )}
+        : onAdd ? <button type="button" className="rail-row-open" aria-label={row.name} onClick={() => onClick(row)}><Glyph item={row} kind={glyphKind} box="var(--rail-icon-size)" size="var(--rail-icon-size)" />{name}</button> : name}
+      {onAdd && !row.editing && <button type="button" className="rail-icon-action rail-row-add" aria-label={addLabel} title={addLabel} disabled={addDisabled} draggable={false}
+        onClick={(event) => { event.stopPropagation(); onAdd(event); }} onDoubleClick={(event) => event.stopPropagation()}
+        onDragStart={(event) => { event.preventDefault(); event.stopPropagation(); }}>+</button>}
+      {onRemove && !row.editing && <button type="button" className="rail-icon-action rail-row-remove" data-rail-remove={row.id}
+        aria-label={`Take ${row.name} out of this workspace`} title="Remove from workspace" draggable={false}
+        onClick={(event) => { event.stopPropagation(); onRemove(row); }} onDoubleClick={(event) => event.stopPropagation()}
+        onDragStart={(event) => { event.preventDefault(); event.stopPropagation(); }}>{CIRCLE_MINUS}</button>}
     </div>
   );
 }
 
-// One of the sidebar's sections (Sidebar.dc.html): a quiet grey label whose › shows only while the pointer is on it and
-// turns down while the section is open; a click folds it. The first section carries "Collapse all" / "Expand all".
-function RailSection({ section, open, onToggle, all, children }) {
-  const [hover, setHover] = React.useState(false);
-  return (
-    <div data-rail-section={section.key} style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <div style={{ display: 'flex', alignItems: 'flex-end' }}>
-        <button
-          type="button"
-          className="hov-ink"
-          onClick={onToggle}
-          onMouseEnter={() => setHover(true)}
-          onMouseLeave={() => setHover(false)}
-          aria-expanded={open}
-          style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6, boxSizing: 'border-box', padding: '10px 10px 4px', border: 0, background: 'transparent', textAlign: 'left', cursor: 'pointer', color: '#8f8f8f', transition: 'color 120ms' }}
-        >
-          <span style={{ font: '500 12.5px/1.3 var(--font-sans)' }}>{section.label}</span>
-          <span aria-hidden="true" style={{ flex: 'none', width: 10, display: 'inline-flex', justifyContent: 'center', font: '400 12px/1 var(--font-sans)', opacity: hover ? 1 : 0, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 140ms, opacity 120ms' }}>›</span>
-        </button>
-        {all && <button type="button" data-rail-fold-all="1" onClick={all.onClick} style={{ flex: 'none', margin: '10px 10px 4px 0', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', font: '400 11.5px/1.4 var(--font-sans)', color: '#171717' }}>{all.label}</button>}
-      </div>
-      {open && <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>{children}</div>}
-    </div>
-  );
-}
-
-// Which sections are folded, kept for the next time the app opens (a convenience of this machine: storage may refuse).
-const SHUT_KEY = 'engelbart.rail.shut';
-function readShut() {
-  try { const saved = JSON.parse(window.localStorage.getItem(SHUT_KEY) || '{}'); return saved && typeof saved === 'object' ? saved : {}; } catch { return {}; }
-}
-function useShut() {
-  const [shut, setShut] = React.useState(readShut);
-  React.useEffect(() => { try { window.localStorage.setItem(SHUT_KEY, JSON.stringify(shut)); } catch { /* not remembered */ } }, [shut]);
-  return [shut, setShut];
-}
-
-// A panel that hangs from something in the sidebar (the search field, the + row). Fixed to the window, so the sidebar's
-// scrolling never cuts it off; under what it hangs from, or above it near the bottom (ui/usePlaced.js).
+// Position popup menus within the available window.
 function Hanging({ anchor, width, gap = 6, cap, panelRef, zIndex = 70, style, children, ...rest }) {
   const [ref, placed] = usePlaced(anchor, { gap, cap });
   const setRef = (element) => { ref.current = element; if (panelRef) panelRef.current = element; };
@@ -338,7 +287,7 @@ function Hanging({ anchor, width, gap = 6, cap, panelRef, zIndex = 70, style, ch
 }
 
 const rectOf = (element) => { const r = element.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width }; };
-const glyphItem = (result) => (result.kind === 'item' ? result.row : result.found);
+const glyphItem = (result) => result.kind === 'workspace' || result.kind === 'child' ? { type: 'workspace' } : result.kind === 'note' ? { type: 'md', tags: ['note'] } : result.kind === 'item' ? result.row : result.found;
 const cardStyle = { padding: '14px 16px 16px', background: '#fff', border: '1px solid #c9c9c9', borderRadius: 8, boxShadow: '0 12px 32px rgba(0,0,0,.06)', animation: `rise 160ms ${EASE}` };
 
 // What a new address or path would be, before the library holds it: its kind, the name it would get, where it is.
@@ -357,7 +306,7 @@ function FreshPeek({ found }) {
 }
 
 /** The search field: what the library already holds comes into this workspace from here (Canvas.dc.html `results`). */
-function LibrarySearch({ library, inRail, onPick, previews, onPreview, onOpenHeld, onOpenChange, shut }) {
+function LibrarySearch({ library, workspaces, canAdd, searchRef, inRail, onPick, previews, onPreview, onOpenHeld, onOpenChange, shut }) {
   const [q, setQ] = React.useState('');
   const [open, setOpen] = React.useState(false);
   const [idx, setIdx] = React.useState(0);
@@ -366,7 +315,7 @@ function LibrarySearch({ library, inRail, onPick, previews, onPreview, onOpenHel
   const [busy, setBusy] = React.useState(false);
   const [anchor, setAnchor] = React.useState(null);
   const boxRef = React.useRef(null);
-  const inputRef = React.useRef(null);
+  const inputRef = searchRef;
   const listRef = React.useRef(null);
   const peekRef = React.useRef(null);
 
@@ -383,7 +332,7 @@ function LibrarySearch({ library, inRail, onPick, previews, onPreview, onOpenHel
     return () => { live = false; clearTimeout(timer); };
   }, [open, addable, typed]);
   const answer = addable && found && found.query === typed ? found.result : undefined;
-  const rows = open ? searchRows({ query: q, library, inRail, found: answer }) : [];
+  const rows = open ? searchRows({ query: q, library, workspaces, inRail, found: answer }).filter((row) => canAdd || row.kind === 'workspace' || row.kind === 'child') : [];
   const at = rows.length ? Math.min(idx, rows.length - 1) : -1;
   const lit = at >= 0 ? rows[at] : null;
   const problem = note || (answer && answer.error) || '';
@@ -432,9 +381,9 @@ function LibrarySearch({ library, inRail, onPick, previews, onPreview, onOpenHel
   const showList = open && anchor && (rows.length > 0 || !!problem);
   const peekItem = showList && lit && (lit.kind === 'item' || lit.kind === 'fresh') ? lit : null;
   return (
-    <div data-rail-search="1" style={{ flex: 'none', position: 'relative', margin: '0 0 2px' }}>
-      <div ref={boxRef} className="rail-field" style={{ display: 'flex', alignItems: 'center', gap: 8, boxSizing: 'border-box', padding: '0 10px', border: `1px solid ${open ? '#c9c9c9' : '#eaeaea'}`, borderRadius: 8, background: '#fff', transition: 'border-color 120ms' }}>
-        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#171717" strokeWidth="2.6" strokeLinecap="round" style={{ flex: 'none' }}><circle cx="10" cy="10" r="6.5" /><line x1="15" y1="15" x2="21" y2="21" /></svg>
+    <div data-rail-search="1" style={{ flex: 'none', position: 'relative' }}>
+      <div ref={boxRef} className="rail-search rail-field" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 10px', border: '1px solid #e5e5e5', borderRadius: 7, background: '#fff', transition: 'box-shadow 120ms' }}>
+        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="#171717" strokeWidth="2.6" strokeLinecap="round" style={{ flex: 'none', width: 'var(--rail-icon-size)', height: 'var(--rail-icon-size)' }}><circle cx="10" cy="10" r="6.5" /><line x1="15" y1="15" x2="21" y2="21" /></svg>
         <input
           ref={inputRef}
           value={q}
@@ -442,19 +391,19 @@ function LibrarySearch({ library, inRail, onPick, previews, onPreview, onOpenHel
           onChange={(event) => { setQ(event.target.value); setIdx(0); setNote(''); setOpen(true); }}
           onKeyDown={onKey}
           onFocus={() => { if (!open) { setOpen(true); setIdx(0); } }}
-          placeholder="Search"
-          aria-label="Search the library"
+          placeholder="Search…"
+          aria-label="Search workspaces and context"
           spellCheck={false}
-          style={{ flex: 1, minWidth: 0, padding: '7px 0', border: 0, background: 'transparent', font: '14px/1.5 var(--font-sans)', color: '#171717', opacity: busy ? 0.5 : 1 }}
+          style={{ flex: 1, minWidth: 0, padding: '8px 0', border: 0, background: 'transparent', font: 'var(--rail-row-font)', color: '#171717', opacity: busy ? 0.5 : 1 }}
         />
         {q && <button type="button" className="hov-ink" onMouseDown={(event) => event.preventDefault()} onClick={() => { setQ(''); setIdx(0); setNote(''); if (inputRef.current) inputRef.current.focus(); }} aria-label="Clear" style={{ flex: 'none', padding: '0 2px', border: 0, background: 'transparent', cursor: 'pointer', font: '13px/1 var(--font-sans)', color: '#c9c9c9' }}>×</button>}
       </div>
       {showList && (
         <Hanging anchor={anchor} width={anchor.width} cap={Math.max(160, window.innerHeight - 220)} panelRef={listRef} data-rail-results="1" style={{ padding: 4, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
           {rows.map((result, i) => (
-            <button key={result.key} type="button" data-result={result.key} onMouseDown={(event) => event.preventDefault()} onClick={() => pick(result)} onMouseEnter={() => { if (idx !== i) setIdx(i); }} style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: 0, borderRadius: 6, background: i === at ? '#f2f2f2' : 'transparent', textAlign: 'left', cursor: 'pointer' }}>
-              <Glyph item={glyphItem(result)} />
-              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '14px/1.5 var(--font-sans)', color: '#171717' }}>{result.name}</span>
+            <button key={result.key} type="button" data-result={result.key} title={result.path || result.name} onMouseDown={(event) => event.preventDefault()} onClick={() => pick(result)} onMouseEnter={() => { if (idx !== i) setIdx(i); }} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: 0, borderRadius: 6, background: i === at ? '#f2f2f2' : 'transparent', textAlign: 'left', cursor: 'pointer' }}>
+              <Glyph item={glyphItem(result)} box={18} color="#4d4d4d" />
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '13px/1.4 var(--font-sans)', color: '#171717' }}>{result.name}</span>
               {/^new\b/.test(result.tag)
                 ? <span style={{ flex: 'none', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', font: '15px/1 var(--font-sans)', color: '#8f8f8f' }}>+</span>
                 : <span style={{ flex: 'none', font: '500 10px/1 var(--font-sans)', letterSpacing: '1.2px', textTransform: 'uppercase', color: '#8f8f8f' }}>{result.tag}</span>}
@@ -475,19 +424,22 @@ function LibrarySearch({ library, inRail, onPick, previews, onPreview, onOpenHel
   );
 }
 
-// "+ Add context" under the sections (Sidebar.dc.html, 2026-09-23; hovering it opens its menu too, as Hudson asked of the
-// + on 2026-09-22): a search over the library first (the sidebar's search again, closer to hand: typing lists what it finds
+// "+ Add context" under the sections opens on click: a search over the library first
+// (the sidebar's search again, closer to hand: typing lists what it finds
 // in place of the rest), then a new Note or Sub-Workspace made here, then a link, a path or files from disk, or a
 // repository from GitHub, that become new rows, in the library and in this workspace.
 const CIRCLE_PLUS = (
-  <svg aria-hidden="true" width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" style={{ flex: 'none', display: 'block' }}>
+  <svg aria-hidden="true" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" style={{ flex: 'none', display: 'block', width: 'var(--rail-icon-size)', height: 'var(--rail-icon-size)' }}>
     <circle cx="9" cy="9" r="7.5" />
     <path d="M9 5.5v7 M5.5 9h7" />
   </svg>
 );
 
-function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickRepo, onSearchPick, library, inRail, onOpenChange, shut }) {
+function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onNewConversation, onPickRepo, onSearchPick, library, workspaces, inRail, onOpenChange, shut, request, disabled }) {
   const [open, setOpen] = React.useState(false);
+  const [kind, setKind] = React.useState('context');
+  const linkSection = kind === 'overleaf';
+  const triggerRef = React.useRef(null);
   const [q, setQ] = React.useState(''); // the search at the top of the menu
   const [idx, setIdx] = React.useState(0);
   const [found, setFound] = React.useState(null); // { query, result }: what the main process said an address or a path is
@@ -502,7 +454,6 @@ function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickRepo, on
   const fieldRef = React.useRef(null);
   const timer = React.useRef(null);
   const wantFocus = React.useRef(false);
-  const settled = React.useRef(false); // just added: the rows grew under a still pointer, which is not a hover
   const live = React.useRef({ value: '', busy: false, view: 'menu' });
   live.current = { value: value || q, busy, view };
   React.useEffect(() => () => clearTimeout(timer.current), []);
@@ -514,22 +465,29 @@ function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickRepo, on
     const timer = setTimeout(() => {
       const naming = document.activeElement && document.activeElement.matches && document.activeElement.matches('[data-rename]'); // a name being typed on the rail keeps the keyboard
       if (naming) { wantFocus.current = false; return; }
-      if (searchRef.current) { searchRef.current.focus({ preventScroll: true }); wantFocus.current = false; }
+      const field = kind === 'conversations' ? menuRef.current?.querySelector('[data-conversation-provider]') : linkSection ? fieldRef.current : searchRef.current;
+      if (field) { field.focus({ preventScroll: true }); wantFocus.current = false; }
     }, 0);
     return () => clearTimeout(timer);
   }, [open, anchor]);
 
   const hide = React.useCallback(() => { clearTimeout(timer.current); setOpen(false); setValue(''); setError(''); setView('menu'); setQ(''); setIdx(0); }, []);
-  React.useEffect(() => { if (shut && open && !live.current.busy) hide(); }, [shut]); // eslint-disable-line react-hooks/exhaustive-deps
-  const show = () => {
+  React.useEffect(() => { if ((shut || disabled) && open && !live.current.busy) hide(); }, [shut, disabled]); // eslint-disable-line react-hooks/exhaustive-deps
+  const show = (nextKind = 'context', trigger = rowRef.current) => {
     clearTimeout(timer.current);
-    if (open) return;
-    if (rowRef.current) setAnchor(rectOf(rowRef.current));
+    if (disabled || busy || (open && triggerRef.current === trigger && kind === nextKind)) return;
+    triggerRef.current = trigger;
+    if (trigger) setAnchor(rectOf(trigger));
+    setKind(nextKind);
+    setView('menu');
+    setQ('');
+    setIdx(0);
     wantFocus.current = true;
     setValue('');
     setError('');
     setOpen(true);
   };
+  React.useEffect(() => { if (request) show(request.kind, request.trigger); }, [request]); // eslint-disable-line react-hooks/exhaustive-deps
   // Moving off closes it after a short grace, unless something has been typed, it is busy, or GitHub is open in it (its
   // repository picker should stay open while reading it).
   const leave = () => {
@@ -542,7 +500,7 @@ function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickRepo, on
   };
   React.useEffect(() => {
     if (!open) return undefined;
-    const away = (event) => { if (live.current.busy) return; if (![rowRef, menuRef].some((ref) => ref.current && ref.current.contains(event.target))) hide(); };
+    const away = (event) => { if (live.current.busy) return; if (![rowRef, menuRef, triggerRef].some((ref) => ref.current && ref.current.contains(event.target))) hide(); };
     document.addEventListener('mousedown', away, true);
     return () => document.removeEventListener('mousedown', away, true);
   }, [open, hide]);
@@ -553,14 +511,26 @@ function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickRepo, on
     try {
       const problems = await work();
       if (problems && problems.length) setError(problems.join(' · '));
-      else { settled.current = true; hide(); setTimeout(() => { settled.current = false; }, 600); } // the next real hover opens it again, wherever the rows put the +
+      else hide();
     } catch (failure) {
       setError(errorMessage(failure));
     } finally {
       setBusy(false);
     }
   };
-  const commit = () => { const input = value.trim(); if (input && !busy) void run(async () => { await onAdd(input); return []; }); };
+  const commit = () => {
+    const input = value.trim();
+    if (input && !busy) void run(async () => {
+      if (linkSection && linkedSidebarSection(input) !== kind) throw new Error('Enter an Overleaf project URL.');
+      if (linkSection) {
+        const result = await api.lookupLibraryItem(input);
+        if (result.error) throw new Error(result.error);
+        if (result.row) { await onSearchPick({ kind: 'item', row: result.row }, input); return []; }
+      }
+      await onAdd(input);
+      return [];
+    });
+  };
   const make = (work) => { if (!busy) void run(async () => { await work(); return []; }); };
   const fromGithub = () => { setError(''); setView('github'); };
 
@@ -580,7 +550,8 @@ function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickRepo, on
     return () => { alive = false; clearTimeout(wait); };
   }, [open, typedAddable, typed]);
   const answer = typedAddable && found && found.query === typed ? found.result : undefined;
-  const results = typed ? searchRows({ query: typed, library, inRail, found: answer }) : [];
+  const results = typed ? searchRows({ query: typed, library, workspaces, inRail, found: answer })
+    .filter((result) => !linkSection || (result.row || result.found) && sidebarSectionOf(result.row || result.found) === kind) : [];
   const at = results.length ? Math.min(idx, results.length - 1) : -1;
   const pickResult = (result) => { if (result && !busy) void run(async () => { await onSearchPick(result, typed); return []; }); };
   const onSearchKey = (event) => {
@@ -590,24 +561,38 @@ function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickRepo, on
     else if (event.key === 'Enter') { event.preventDefault(); if (at >= 0) pickResult(results[at]); }
     else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (q) { setQ(''); setIdx(0); } else hide(); }
   };
+  const actionLabel = SECTION_ADD_LABEL[kind] || 'Add context';
+  const placeholder = SECTION_PLACEHOLDER[kind] || 'Upload URL or path';
   const searchProblem = (answer && answer.error) || '';
   const border = error ? '#e70022' : value ? '#c9c9c9' : '#eaeaea';
   const menuRow = { display: 'flex', alignItems: 'center', gap: 12, width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: 0, borderRadius: 6, background: 'transparent', textAlign: 'left', cursor: 'pointer', transition: 'background 120ms' };
   const menuText = { flex: 1, minWidth: 0, font: '14px/1.5 var(--font-sans)', color: '#171717' };
   return (
-    <div data-rail-add="1" style={{ flex: 'none', position: 'relative' }} onMouseEnter={() => { if (!settled.current) show(); }} onMouseLeave={() => { settled.current = false; leave(); }}>
-      <button ref={rowRef} type="button" className="hov-wash" onClick={() => (open ? hide() : show())} aria-label="Add context" aria-expanded={open} style={{ display: 'flex', alignItems: 'center', width: '100%', boxSizing: 'border-box', padding: '6px 10px 8px', border: 0, borderRadius: 6, background: open ? '#f2f2f2' : 'transparent', color: open ? '#171717' : '#8f8f8f', textAlign: 'left', cursor: 'pointer', transition: 'background 120ms, color 120ms' }}>
+    <div data-rail-add="1" style={{ flex: 'none', position: 'relative' }} onMouseEnter={() => clearTimeout(timer.current)} onMouseLeave={leave}>
+      <button ref={rowRef} type="button" className="hov-wash" disabled={disabled} onClick={() => (open && triggerRef.current === rowRef.current ? hide() : show())} aria-label="Add context" aria-expanded={open && triggerRef.current === rowRef.current} style={{ display: 'flex', alignItems: 'center', width: '100%', minHeight: 'var(--rail-row-height)', boxSizing: 'border-box', padding: '8px 10px', border: 0, borderRadius: 6, background: open ? '#f2f2f2' : 'transparent', color: open ? '#171717' : '#8f8f8f', textAlign: 'left', cursor: 'pointer', transition: 'background 120ms, color 120ms' }}>
         {CIRCLE_PLUS}
-        <span style={{ marginLeft: 9, font: '14px/1.5 var(--font-sans)' }}>Add context</span>
+        <span style={{ marginLeft: 9, font: 'var(--rail-row-font)' }}>Add context</span>
       </button>
       {open && anchor && (
-        <Hanging anchor={anchor} width={anchor.width} gap={4} panelRef={menuRef} data-rail-add-menu="1" onMouseEnter={() => clearTimeout(timer.current)} onMouseLeave={leave} style={{ padding: 10 }}>
-          {view === 'github' ? (
+        <Hanging anchor={anchor} width={Math.max(285, anchor.width)} gap={4} panelRef={menuRef} data-rail-add-menu="1" onMouseEnter={() => clearTimeout(timer.current)} onMouseLeave={leave} style={{ padding: 10 }}>
+          {kind === 'conversations' ? (
+            <>
+              <div style={{ padding: '2px 10px 8px', font: '500 12px/1.4 var(--font-sans)', color: '#737373' }}>New conversation</div>
+              {[['claude', 'Claude Code'], ['codex', 'Codex']].map(([provider, label]) => (
+                <button key={provider} type="button" className="hov-wash" data-conversation-provider={provider} disabled={busy}
+                  onClick={() => make(() => onNewConversation(provider))} style={menuRow}>
+                  <Glyph item={{ type: 'chat' }} /><span style={menuText}>{label}</span>
+                </button>
+              ))}
+              {error && <div data-add-error="1" style={{ padding: '6px 10px 0', font: '12px/1.5 var(--font-sans)', color: '#e70022' }}>{error}</div>}
+            </>
+          ) : view === 'github' ? (
             <>
               <GithubPane library={library} inRail={inRail} busy={busy} onBack={() => { setView('menu'); setError(''); }} onPick={(entry) => make(() => onPickRepo(entry))} />
               {error && <div data-add-error="1" style={{ padding: '6px 2px 0', font: '12px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere' }}>{error}</div>}
             </>
           ) : (<>
+          {kind !== 'context' && <div style={{ padding: '2px 2px 9px', font: '500 12px/1.4 var(--font-sans)', color: '#525252' }}>{actionLabel}</div>}
           <div className="rail-field" data-add-search="1" style={{ display: 'flex', alignItems: 'center', gap: 8, boxSizing: 'border-box', padding: '0 10px', marginBottom: 6, border: `1px solid ${q ? '#c9c9c9' : '#eaeaea'}`, borderRadius: 6, background: '#fff', transition: 'border-color 120ms' }}>
             <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#171717" strokeWidth="2.6" strokeLinecap="round" style={{ flex: 'none' }}><circle cx="10" cy="10" r="6.5" /><line x1="15" y1="15" x2="21" y2="21" /></svg>
             <input
@@ -635,15 +620,17 @@ function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickRepo, on
             ))}
             {(searchProblem || error) && <div data-add-error="1" style={{ padding: '6px 2px 0', font: '12px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere' }}>{searchProblem || error}</div>}
           </>) : (<>
+          {kind === 'context' && <>
           <button type="button" className="hov-wash" data-new="note" disabled={busy} onClick={() => make(onNewNote)} style={menuRow}>
             <Glyph item={{ type: 'md', tags: ['note'] }} />
-            <span style={menuText}>Note</span>
+            <span style={menuText}>Document</span>
           </button>
           <button type="button" className="hov-wash" data-new="workspace" disabled={busy} onClick={() => make(onNewChild)} style={{ ...menuRow, marginTop: 2 }}>
             <span style={{ flex: 'none', width: 16, display: 'flex', justifyContent: 'center', color: '#171717' }}><WsMark size={12} stroke={1.6} /></span>
             <span style={menuText}>Sub-Workspace</span>
           </button>
           <div style={{ height: 1, margin: '6px 0 8px', background: '#eaeaea' }} />
+          </>}
           <div className="rail-field" style={{ display: 'flex', alignItems: 'center', boxSizing: 'border-box', padding: '0 10px', marginBottom: 4, background: '#fafafa', border: `1px solid ${border}`, borderRadius: 6, transition: 'border-color 120ms' }}>
             <input
               ref={fieldRef}
@@ -654,24 +641,24 @@ function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickRepo, on
                 if (event.key === 'Enter') { event.preventDefault(); commit(); }
                 else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); hide(); }
               }}
-              placeholder="Upload URL or path"
+              placeholder={placeholder}
               aria-label="Link or path"
               spellCheck={false}
               style={{ flex: 1, minWidth: 0, padding: '6px 0', border: 0, background: 'transparent', font: '14px/1.5 var(--font-sans)', color: '#171717', opacity: busy ? 0.5 : 1 }}
             />
           </div>
           {error && <div data-add-error="1" style={{ padding: '6px 2px 0', font: '12px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere' }}>{error}</div>}
-          <button type="button" className="hov-wash" disabled={busy} onClick={() => run(onPickDisk)} style={menuRow}>
+          {!linkSection && <button type="button" className="hov-wash" disabled={busy} onClick={() => run(onPickDisk)} style={menuRow}>
             <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" style={{ flex: 'none', display: 'block', fill: 'none', stroke: '#171717', strokeWidth: 1.3, strokeLinejoin: 'round' }}><path d="M1.5 4a1 1 0 0 1 1-1h3.5l1.5 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" /></svg>
             <span style={menuText}>Choose from disk…</span>
-          </button>
-          <button type="button" className="hov-wash" data-add-github="1" disabled={busy} onClick={fromGithub} style={{ ...menuRow, marginTop: 2 }}>
+          </button>}
+          {!linkSection && <button type="button" className="hov-wash" data-add-github="1" disabled={busy} onClick={fromGithub} style={{ ...menuRow, marginTop: 2 }}>
             <span className="glyph-fit" style={{ flex: 'none', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#171717' }}><span style={{ display: 'flex', width: 13, height: 13 }}>{KIND.git.glyph}</span></span>
             <span style={menuText}>Add from GitHub…</span>
-          </button>
+          </button>}
           {addable && (
             <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '8px 0 0' }}>
-              <button type="button" className="hov-dim" disabled={busy} onClick={commit} style={{ padding: '7px 12px', border: 0, borderRadius: 6, background: '#171717', cursor: 'pointer', font: '500 12.5px/1 var(--font-sans)', color: '#fff' }}>Add to library</button>
+              <button type="button" className="hov-dim" disabled={busy} onClick={commit} style={{ padding: '7px 12px', border: 0, borderRadius: 6, background: '#171717', cursor: 'pointer', font: '500 12.5px/1 var(--font-sans)', color: '#fff' }}>{actionLabel}</button>
             </div>
           )}
           </>)}
@@ -711,13 +698,13 @@ function NextRow({ next, projectId, onGo }) {
         onClick={() => { setTip(false); onGo(next); }}
         onMouseEnter={() => setTip(true)}
         onMouseLeave={() => setTip(false)}
-        style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', padding: '8px 10px', border: 0, borderRadius: 6, background: 'transparent', textAlign: 'left', cursor: 'pointer', transition: 'background 120ms' }}
+        style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', minHeight: 'var(--rail-row-height)', boxSizing: 'border-box', padding: '8px 10px', border: 0, borderRadius: 6, background: 'transparent', textAlign: 'left', cursor: 'pointer', transition: 'background 120ms' }}
       >
         <span style={{ position: 'relative', flex: 'none', display: 'flex' }}>
-          <Glyph item={{ type: 'workspace' }} />
+          <Glyph item={{ type: 'workspace' }} box="var(--rail-icon-size)" size="var(--rail-icon-size)" />
           {next.why === 'agent' && <span data-needs-you="1" style={{ position: 'absolute', top: -2, right: -3, width: 7, height: 7, borderRadius: '50%', background: '#0070f3', boxShadow: '0 0 0 1.5px #fafafa' }} />}
         </span>
-        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '13.5px/1.5 var(--font-sans)', color: isUntitled(next.name) ? '#8f8f8f' : '#171717' }}>
+        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: 'var(--rail-row-font)', color: isUntitled(next.name) ? '#8f8f8f' : '#171717' }}>
           {elsewhere && <span style={{ color: '#8f8f8f' }}>{next.projectName} / </span>}{next.name}
         </span>
         <span aria-hidden="true" style={{ flex: 'none', font: '14px/1 var(--font-sans)', color: '#4d4d4d' }}>→</span>
@@ -730,7 +717,7 @@ function NextRow({ next, projectId, onGo }) {
 const barButton = (enabled) => ({ flex: 'none', width: BAR_SIZE, aspectRatio: '1', boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, border: 0, borderRadius: 10, background: 'transparent', cursor: enabled ? 'pointer' : 'default' });
 const barPicture = { display: 'block', objectFit: 'contain', pointerEvents: 'none', userSelect: 'none' };
 
-/** The two pictures at the bottom, the trash at the far left and the sticky note at the far right (2026-09-23): they size
+/** The trash and sticky note sit together at the bottom left: they size
  *  with the sidebar (52–96px) and name themselves on hover. */
 function BottomBar({ trashRef, full, dragging, over, onTrashDragOver, onTrashDragEnter, onTrashDragLeave, onTrashDrop, postItTrash, onPostIt }) {
   const [tip, setTip] = React.useState(null);
@@ -745,7 +732,7 @@ function BottomBar({ trashRef, full, dragging, over, onTrashDragOver, onTrashDra
   };
   return (
     <div data-rail-bar="1" style={{ flex: 'none', containerType: 'inline-size', padding: '6px 16px 14px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: 8 }}>
         <div style={{ position: 'relative', display: 'flex' }}>
           <div
             ref={trashRef}
@@ -783,8 +770,49 @@ function BottomBar({ trashRef, full, dragging, over, onTrashDragOver, onTrashDra
   );
 }
 
+const SECTION_KIND = { workspaces: 'workspace', notes: 'note', github: 'git', papers: 'pdf', overleaf: 'overleaf', conversations: 'chat', other: 'folder' };
+const SECTION_ADD_LABEL = { workspaces: 'Add workspace', notes: 'Add document', github: 'Add repository', papers: 'Add paper', overleaf: 'Add Overleaf project', conversations: 'Add conversation', other: 'Add context' };
+const SECTION_EMPTY = { notes: 'No documents yet', github: 'No repositories yet', papers: 'No papers yet', overleaf: 'No Overleaf projects yet', conversations: 'No conversations yet' };
+const SECTION_PLACEHOLDER = { github: 'GitHub repository URL', papers: 'Paper URL, DOI, or file path', overleaf: 'Overleaf project URL' };
+
+export function RailSection({ id, label, children, onAdd, addDisabled, revealId }) {
+  const [open, setOpen] = React.useState(!!revealId);
+  React.useEffect(() => { if (revealId) setOpen(true); }, [revealId]);
+  return <section className="rail-section" data-rail-section={id} aria-label={label}>
+    <div className="rail-section-head">
+      <button type="button" className="rail-section-heading" aria-label={label} title={label} aria-expanded={open} aria-controls={`rail-section-${id}`} onClick={() => setOpen(!open)}>
+        <Chevron open={open} /><span className="rail-section-icon glyph-fit" aria-hidden="true">{KIND[SECTION_KIND[id]].glyph}</span>
+        <span className="rail-section-label">{label}</span>
+      </button>
+      {onAdd && <button type="button" className="rail-icon-action rail-section-add" aria-label={SECTION_ADD_LABEL[id]} title={SECTION_ADD_LABEL[id]} disabled={addDisabled} onClick={onAdd}>+</button>}
+    </div>
+    <div id={`rail-section-${id}`} hidden={!open}>{children}</div>
+  </section>;
+}
+
+function RailSubsection({ category, renderRow, onAdd, addDisabled, revealId }) {
+  const [open, setOpen] = React.useState(!!revealId);
+  React.useEffect(() => { if (revealId) setOpen(true); }, [revealId]);
+  const contentId = `rail-subsection-${category.id}`;
+  const toggle = () => setOpen((value) => !value);
+  return <li data-rail-subsection={category.id}>
+    <div className="workspace-tree-row rail-section-head">
+      <button type="button" className="workspace-toggle rail-icon-action" aria-label={`${open ? 'Collapse' : 'Expand'} ${category.label}`} aria-expanded={open} aria-controls={contentId} onClick={toggle}><Chevron open={open} /></button>
+      <Glyph kind={category.kind} box="var(--rail-icon-size)" size="var(--rail-icon-size)" color="#737373" />
+      <button type="button" className="workspace-tree-name" aria-expanded={open} aria-controls={contentId} onClick={toggle}>{category.label}</button>
+      {onAdd && <button type="button" className="rail-icon-action rail-section-add" aria-label={SECTION_ADD_LABEL[category.id]} title={SECTION_ADD_LABEL[category.id]} disabled={addDisabled} onClick={onAdd}>+</button>}
+    </div>
+    <div className="workspace-children" id={contentId} hidden={!open}>
+      {category.rows.length === 0 && <p className="rail-empty">{category.empty}</p>}
+      {category.rows.map(renderRow)}
+    </div>
+  </li>;
+}
+
 export default function Rail({
-  width, topics, topic, allWorkspaces, onOpenDoc, onSelectTopic, onCycleTopic, onRenameTopic, onAddTopic,
+  width, topics = [], topic, allWorkspaces = [], onOpenDoc, onSelectTopic, onCycleTopic, onRenameTopic, onAddTopic,
+  workspaces, onSelectWorkspace, onCreateWorkspace, onRenameWorkspace, onDeleteWorkspace,
+  conversations = [], onNewConversation, onOpenConversation,
   rows, flashId, onRowClick, onRowRenameStart, onRowRename, onRowRenameEnd,
   library, inRail, onSearchPick, onAddInput, onPickDisk, onNewNote, onNewChild, onPickRepo, onOpenHeld,
   onTrashRow, trashFull, postItTrash, postItDrag, trashRef,
@@ -796,12 +824,11 @@ export default function Rail({
   const [dragging, setDragging] = React.useState(null);
   const [overTrash, setOverTrash] = React.useState(false);
   const [menus, setMenus] = React.useState({ search: false, add: false });
-  const [shut, setShut] = useShut(); // section key → folded
+  const [addRequest, setAddRequest] = React.useState(null);
+  const searchRef = React.useRef(null);
   const timer = React.useRef(null);
-  const itemRows = rows;
-  const sections = railSections(rows);
-  const anyShut = sections.some((section) => shut[section.key]);
-  const foldAll = { label: anyShut ? 'Expand all' : 'Collapse all', onClick: () => setShut(anyShut ? {} : Object.fromEntries(RAIL_SECTIONS.map((section) => [section.key, true]))) };
+  const itemRows = rows.filter((row) => row.type !== 'workspace' && row.type !== 'child');
+  const sections = sidebarSections([...itemRows, ...conversations]);
 
   /* ------------------------------------------------------------------ peek */
   // After a beat on a row, what it is: the same card as the all-projects screen's library.
@@ -819,6 +846,12 @@ export default function Rail({
     }, peek ? PEEK_SWITCH : PEEK_OPEN);
   };
   const closePeek = () => { hold(); timer.current = setTimeout(() => setPeek(null), PEEK_CLOSE); };
+  const dismissPeek = () => { hold(); setPeek(null); };
+  const requestAdd = (section, event) => {
+    dismissPeek();
+    if (section === 'notes') onNewNote();
+    else setAddRequest({ kind: section === 'other' ? 'context' : section, trigger: event.currentTarget });
+  };
   const asked = React.useRef(new Set());
   const preview = React.useCallback((row) => {
     const key = `${row.id}:${row.last_edited || ''}`;
@@ -852,43 +885,58 @@ export default function Rail({
 
   const peekLeft = peek ? Math.max(peek.rect.right, peek.edge) : 0;
   const peekTop = peek ? Math.max(54, Math.min(peek.rect.top - 12, window.innerHeight - 380)) : 0;
+  const revealIdFor = (section) => section.rows.find((row) => row.id === flashId && row.tags?.includes('sticky'))?.id
+    || section.children?.map(revealIdFor).find(Boolean);
+  const renderRow = (row, section) => (
+    <RailRow
+      key={row.id}
+      row={row}
+      glyphKind={section.id === 'overleaf' || section.id === 'conversations' ? SECTION_KIND[section.id] : null}
+      flash={flashId === row.id}
+      faded={dragging === row.id}
+      onClick={section.id === 'conversations' ? (row) => onOpenConversation(row.id) : onRowClick}
+      onRenameStart={section.id === 'conversations' ? undefined : onRowRenameStart}
+      onRename={onRowRename}
+      onRenameEnd={onRowRenameEnd}
+      onDragStart={section.id === 'conversations' ? undefined : dragStart}
+      onDragEnd={dragEnd}
+      onEnter={section.id === 'github' || section.id === 'conversations' ? dismissPeek : openPeek}
+      onLeave={closePeek}
+      onAdd={(event) => requestAdd(section.id, event)}
+      addDisabled={!topic}
+      addLabel={SECTION_ADD_LABEL[section.id]}
+      onRemove={section.id === 'conversations' ? undefined : (removed) => { dismissPeek(); onTrashRow(removed); }}
+    />
+  );
   return (
-    <aside aria-label="Sidebar" style={{ flex: 'none', width, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 7, background: '#fafafa' }}>
-      <div onScroll={() => { hold(); setPeek(null); }} style={{ flex: 1, minHeight: 0, boxSizing: 'border-box', padding: '30px 8px 8px', display: 'flex', flexDirection: 'column', overflowY: 'auto', overflowX: 'hidden' }}>
+    <aside className="workspace-sidebar" aria-label="Sidebar" style={{ flex: 'none', width, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 7, background: '#fafafa' }}>
+      <div className="rail-workspace-wrap">
         <WorkspaceHeader topics={topics} topic={topic} all={allWorkspaces} onOpenDoc={onOpenDoc} onSelectTopic={onSelectTopic} onCycleTopic={onCycleTopic} onRenameTopic={onRenameTopic} onAddTopic={onAddTopic} />
-        {topic && (
-          <div data-screen-label="Library" data-rail-library="1" style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <LibrarySearch library={library} inRail={inRail} onPick={onSearchPick} previews={previews} onPreview={preview} onOpenHeld={onOpenHeld} onOpenChange={setSearchOpen} shut={menus.add} />
-            {sections.map((section, i) => (
-              <RailSection
-                key={section.key}
-                section={section}
-                open={!shut[section.key]}
-                onToggle={() => setShut((now) => ({ ...now, [section.key]: !now[section.key] }))}
-                all={i === 0 ? foldAll : null}
-              >
-                {section.rows.map((row) => (
-                  <RailRow
-                    key={row.id}
-                    row={row}
-                    flash={flashId === row.id}
-                    faded={dragging === row.id}
-                    onClick={onRowClick}
-                    onRenameStart={onRowRenameStart}
-                    onRename={onRowRename}
-                    onRenameEnd={onRowRenameEnd}
-                    onDragStart={row.type === 'child' ? null : dragStart}
-                    onDragEnd={dragEnd}
-                    onEnter={openPeek}
-                    onLeave={closePeek}
-                    onRemove={row.type === 'child' ? null : (removed) => { hold(); setPeek(null); onTrashRow(removed); }}
-                  />
-                ))}
-              </RailSection>
-            ))}
-            <AddToLibrary onAdd={onAddInput} onPickDisk={onPickDisk} onNewNote={onNewNote} onNewChild={onNewChild} onPickRepo={onPickRepo} onSearchPick={onSearchPick} library={library} inRail={inRail} onOpenChange={setAddOpen} shut={menus.search} />
-          </div>
-        )}
+      </div>
+      <div className="rail-search-wrap">
+        <LibrarySearch library={library} workspaces={workspaces} canAdd={!!topic} searchRef={searchRef} inRail={inRail} onPick={onSearchPick} previews={previews} onPreview={preview} onOpenHeld={onOpenHeld} onOpenChange={setSearchOpen} shut={menus.add} />
+      </div>
+      <div className="rail-sections" onScroll={() => { hold(); setPeek(null); }}>
+        <RailSection id="workspaces" label="Sub-workspaces" onAdd={() => { dismissPeek(); onCreateWorkspace(null); }}>
+          <WorkspaceTree workspaces={workspaces} currentId={topic?.id} onSelect={onSelectWorkspace} onCreate={onCreateWorkspace} onDelete={onDeleteWorkspace} onRename={onRenameWorkspace} flashId={flashId} />
+        </RailSection>
+        <div data-screen-label="Library" data-rail-library="1">
+          {sections.map((section) => <RailSection key={section.id} id={section.id} label={section.label}
+            revealId={revealIdFor(section)}
+            onAdd={(event) => requestAdd(section.id, event)} addDisabled={!topic}>
+            {section.children && <ul className="workspace-tree workspace-children">
+              {section.children.map((category) => <RailSubsection key={category.id} category={category}
+                revealId={revealIdFor(category)}
+                onAdd={SECTION_ADD_LABEL[category.id] ? (event) => requestAdd(category.id, event) : undefined} addDisabled={!topic}
+                renderRow={(row) => renderRow(row, SECTION_ADD_LABEL[category.id] ? category : section)} />)}
+            </ul>}
+            {section.rows.length === 0 && SECTION_EMPTY[section.id] && <p className="rail-empty">{SECTION_EMPTY[section.id]}</p>}
+            {section.rows.map((row) => renderRow(row, section))}
+          </RailSection>)}
+        </div>
+        <div className="rail-add-context">
+          <AddToLibrary onAdd={onAddInput} onPickDisk={onPickDisk} onNewNote={onNewNote} onNewChild={onNewChild} onNewConversation={onNewConversation} onPickRepo={onPickRepo} onSearchPick={onSearchPick} library={library} workspaces={workspaces} inRail={inRail} onOpenChange={setAddOpen} shut={menus.search} request={addRequest} disabled={!topic} />
+        </div>
       </div>
       <NextRow next={next} projectId={projectId} onGo={onGoNext} />
       <BottomBar

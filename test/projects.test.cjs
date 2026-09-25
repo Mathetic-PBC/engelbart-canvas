@@ -105,6 +105,66 @@ test('workspace context is a flat list: folders sent by an old client are flatte
   await assert.rejects(projects.setWorkspaceContext(ctx, project.id, workspace.id, [42]), /id or a folder/);
 });
 
+test('deleting a workspace removes its subtree and saved views, preserving notes, library items and other workspaces', async () => {
+  const project = await projects.createProject(ctx, 'Delete subtree');
+  const top = await projects.createWorkspace(ctx, project.id, { name: 'Parent' });
+  const child = await projects.createWorkspace(ctx, project.id, { name: 'Child', parentId: top.id });
+  const grandchild = await projects.createWorkspace(ctx, project.id, { name: 'Grandchild', parentId: child.id });
+  const sibling = await projects.createWorkspace(ctx, project.id, { name: 'Keep' });
+  const other = await projects.createProject(ctx, 'Deletion elsewhere');
+  const note = await projects.createNote(ctx, project.id, { name: 'Kept note', workspaceId: child.id, text: 'Shared content' });
+  await projects.setWorkspaceContext(ctx, project.id, child.id, [note.id]);
+  await projects.writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: grandchild.id }, 'Recoverable content');
+  for (const workspace of [top, child, grandchild, sibling]) projects.writeView(ctx, project.id, workspace.id, { active: note.id, tabs: [{ id: note.id, title: note.name }] });
+  projects.writeView(ctx, other.id, top.id, { active: 'ws' });
+  projects.writeLastOpen(ctx, { projectId: project.id, workspaceId: grandchild.id });
+
+  assert.deepEqual(await projects.deleteWorkspace(ctx, project.id, top.id), { deletedIds: [top.id, child.id, grandchild.id], nextWorkspaceId: sibling.id });
+  const tree = await projects.loadProject(ctx, project.id);
+  assert.deepEqual(tree.workspaces.map((workspace) => workspace.id), [sibling.id]);
+  assert.equal((await projects.listProjects(ctx)).find((row) => row.id === project.id).workspaceCount, 1);
+  assert.deepEqual(Object.keys(projects.readViews(ctx, project.id)), [sibling.id]);
+  assert.deepEqual(Object.keys(projects.readViews(ctx, other.id)), [top.id]);
+  assert.deepEqual(projects.readLastOpen(ctx), { projectId: project.id, workspaceId: sibling.id });
+  assert.equal(await projects.readDoc(ctx, project.id, { kind: 'note', id: note.id }), 'Shared content');
+  assert.ok(await ctx.libraryDb.get(note.id));
+  assert.ok(tree.notes.some((row) => row.id === note.id));
+  assert.equal(fs.existsSync(path.join(project.dir, top.name)), false);
+  assert.equal(fs.readFileSync(path.join(project.dir, '.trash', `${top.id}-${top.name}`, child.name, grandchild.name, 'workspace.md'), 'utf8'), 'Recoverable content');
+  for (const workspace of [top, child, grandchild]) {
+    await assert.rejects(projects.readDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id }), /Unknown workspace/);
+  }
+  await assert.rejects(projects.deleteWorkspace(ctx, project.id, top.id), /Unknown workspace/);
+});
+
+test('deleting a nested or final workspace falls back to its parent or an empty project', async () => {
+  const project = await projects.createProject(ctx, 'Delete last');
+  const top = await projects.createWorkspace(ctx, project.id, { name: 'Parent' });
+  const child = await projects.createWorkspace(ctx, project.id, { name: 'Only child', parentId: top.id });
+  projects.writeLastOpen(ctx, { projectId: project.id, workspaceId: child.id });
+  assert.equal((await projects.deleteWorkspace(ctx, project.id, child.id)).nextWorkspaceId, top.id);
+  assert.equal(projects.readLastOpen(ctx).workspaceId, top.id);
+  assert.deepEqual((await projects.loadProject(ctx, project.id)).workspaces[0].children, []);
+  assert.equal((await projects.deleteWorkspace(ctx, project.id, top.id)).nextWorkspaceId, null);
+  assert.deepEqual(projects.readLastOpen(ctx), { projectId: project.id, workspaceId: null });
+  assert.deepEqual((await projects.loadProject(ctx, project.id)).workspaces, []);
+  assert.equal((await projects.createWorkspace(ctx, project.id, { name: 'Parent' })).name, 'Parent', 'deleted names can be reused');
+});
+
+test('workspace deletion validates project ownership and leaves an unrelated selection alone', async () => {
+  const project = await projects.createProject(ctx, 'Delete ownership');
+  const other = await projects.createProject(ctx, 'Other owner');
+  const workspace = await projects.createWorkspace(ctx, project.id, { name: 'Owned' });
+  const selected = await projects.createWorkspace(ctx, other.id, { name: 'Selected' });
+  const last = projects.writeLastOpen(ctx, { projectId: other.id, workspaceId: selected.id });
+  await assert.rejects(projects.deleteWorkspace(ctx, other.id, workspace.id), /Unknown workspace/);
+  await assert.rejects(projects.deleteWorkspace(ctx, project.id, '../'), /workspace id is invalid/);
+  assert.equal((await projects.loadProject(ctx, project.id)).workspaces[0].id, workspace.id);
+  await projects.deleteWorkspace(ctx, project.id, workspace.id);
+  assert.deepEqual(projects.readLastOpen(ctx), last);
+  assert.equal((await projects.loadProject(ctx, other.id)).workspaces[0].id, selected.id);
+});
+
 test('pasted images: bytes land in <project>/assets, the library gets an image row, and only images are accepted', async () => {
   const project = await projects.createProject(ctx, 'Images');
   const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');

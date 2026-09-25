@@ -64,6 +64,7 @@ test('tool validation rejects path escape, type confusion, unknown fields and un
     ['run_command', { command: 12 }], ['run_command', { command: 'ls', sandbox_id: 'another' }],
     ['run_command', { command: 'ls', timeout_seconds: 1000 }], ['run_command', { command: '' }],
     ['start_app', { command: 'npm start', port: 43110 }], ['start_app', { command: 'npm start', port: 3000, path: '//other.example/' }],
+    ['start_app', { command: 'npm start', port: 3000, wait_for_install: 'true' }],
     ['read_file', { path: '../../secret' }], ['write_file', { path: 'a', content: {} }], ['delete_sandbox', {}],
   ]) assert.throws(() => validateTool(name, args));
 });
@@ -86,6 +87,9 @@ test('sandbox tools execute only remotely, bound output, redact secrets and seri
   assert.equal(results[0].output, '[redacted]\n');
   assert.equal((await tools('read_file', { path: 'package.json' })).content, '[redacted]');
   assert.ok(!JSON.stringify(events).includes('test-secret'));
+  assert.ok(events.some(event => event.phase === 'agent' && event.message === 'Reading package.json'));
+  assert.ok(events.some(event => event.phase === 'agent' && event.tool_status === 'done'));
+  assert.ok(events.filter(event => ['stage', 'log'].includes(event.phase)).every(event => event.actor === 'setup-agent'));
 });
 
 test('file reads stop at the output limit and cancel the remote stream', async () => {
@@ -159,7 +163,7 @@ test('real stdio MCP adapter advertises sandbox-only tools and forwards a reques
   const client = new Client({ name: 'canvas-test', version: '1.0.0' });
   try {
     await client.connect(new StdioClientTransport({ command: process.execPath, args: [path.resolve(__dirname, '../src/main/sandbox/local-mcp.cjs'), config], env: { ELECTRON_RUN_AS_NODE: '1' } }));
-    assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name), ['run_command', 'read_file', 'write_file', 'start_app', 'list_files', 'dependency_install']);
+    assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name), ['run_command', 'read_file', 'write_file', 'start_app', 'app_status', 'stop_app', 'list_files', 'dependency_install']);
     const result = await client.callTool({ name: 'read_file', arguments: { path: 'package.json' } });
     assert.equal(JSON.parse(result.content[0].text).content, 'fixture');
   } finally { await client.close(); await bridge.close(); fs.unlinkSync(config); fs.rmdirSync(directory); }
@@ -175,6 +179,15 @@ test('local setup prompt overlaps managed installation with inspection and requi
   assert.match(prompt, /Do not wait for installation before doing this preparation/);
   assert.match(prompt, /always check its actual result before building or starting/);
   assert.match(prompt, /status with wait_seconds=180/);
+  assert.match(prompt, /Tool replies include a compact dependency_install snapshot/);
+  assert.match(prompt, /A succeeded snapshot in a tool reply is sufficient/);
+  assert.match(prompt, /call start_app immediately with wait_for_install:true, even if installation is still running/);
+  assert.match(prompt, /If the wait expires, no app is started or queued/);
+  assert.match(prompt, /once installation has succeeded.*no known startup prerequisite remains unresolved, make start_app your next tool call/);
+  assert.match(prompt, /not a self-reported confidence percentage/);
+  assert.match(prompt, /inspect only the missing launch facts/);
+  assert.match(prompt, /specific build\/code-generation\/configuration step is required.*then call start_app/);
+  assert.match(prompt, /do not fabricate credentials, ignore a known startup blocker, or claim those features work/);
   assert.match(prompt, /Respect declared package-manager versions and lockfiles/);
   for (const exception of ['ambiguous roots', 'conflicting package managers', 'missing runtimes/system dependencies',
     'custom bootstrap steps', 'install-time credentials/services']) {
@@ -185,27 +198,60 @@ test('local setup prompt overlaps managed installation with inspection and requi
   assert.match(prompt, /already installed or no install is needed, verify that and use action=skip/);
   assert.match(prompt, /action=stop BEFORE changing manifests, lockfiles, runtime or prerequisites/);
   assert.match(prompt, /If installation fails, inspect its error before retrying/);
-  assert.match(prompt, /never overlaps two installs/);
+  assert.match(prompt, /never overlaps two managed jobs/);
+  assert.match(prompt, /"parallel":\[\{"manager":"npm"/);
+  assert.match(prompt, /Both children must succeed before starting the app/);
+  assert.match(prompt, /Do not split one npm workspace into separate installs/);
+  assert.match(prompt, /audit reports to Build logs AFTER the preview is ready/);
   assert.doesNotMatch(prompt, /Keep installation in the foreground/);
   assert.match(prompt, /Never request, print or search for credentials/);
   assert.match(prompt, /stop before the operation that needs them rather than fabricate them/);
   assert.match(prompt, /Do not claim success without a successful start_app/);
+  assert.match(prompt, /app_status for a fresh check/);
+  assert.match(prompt, /Process running, local HTTP healthy, and public preview reachable are separate facts/);
+  assert.match(prompt, /Unowned\/unknown listeners are not yours to kill/);
+});
+
+test('tool errors expose compact install state through MCP without exposing credentials or the full log', async () => {
+  const tools = createSandboxTools({
+    sandbox: { files: { read: async () => { throw new Error('File not found'); } } },
+    install: { status: () => ({ status: 'failed', exitCode: 1, error: 'fixture-secret install failed', output: 'private long log' }) },
+    onEvent() {},
+  });
+  const bridge = await openToolBridge(tools, { secrets: ['fixture-secret'] });
+  try {
+    const result = await (await fetch(bridge.connection.url, { method: 'POST', headers: { authorization: `Bearer ${bridge.connection.token}` },
+      body: JSON.stringify({ name: 'read_file', args: { path: 'missing.md' } }) })).json();
+    assert.equal(result.isError, true);
+    const detail = JSON.parse(result.content[0].text);
+    assert.equal(detail.error, 'File not found');
+    assert.equal(detail.dependency_install.status, 'failed');
+    assert.equal(detail.dependency_install.exitCode, 1);
+    assert.equal(detail.dependency_install.error, '[redacted] install failed');
+    assert.ok(!JSON.stringify(result).includes('private long log'));
+  } finally { await bridge.close(); await tools.close(); }
 });
 
 test('local setup requires actual start_app, saves restart plan, checks preview, and does not pass Claude auth to E2B', async () => {
   const commands = [], files = new Map(), events = [];
+  let running = false;
   const sandbox = { getHost: () => 'preview.example', files: { write: async (file, value) => files.set(file, value) }, commands: { run: async (command, options) => {
     commands.push({ command, options });
     assert.equal(options.envs?.ANTHROPIC_API_KEY, undefined);
     if (command.includes('--local')) {
-      options.onStdout('{"phase":"log","stream":"stdout","text":"app log"}\n{"phase":"ready","port":3000}\n');
+      running = true;
+      options.onStdout('{"phase":"log","stream":"stdout","text":"app log"}\n{"phase":"ready","port":3000,"host":"::1"}\n');
       return { wait: () => new Promise(() => {}) };
     }
+    if (command.includes('--app-status')) return { exitCode: 0, stdout: JSON.stringify({ status: running ? 'healthy' : 'idle', running, processes: [], listeners: [] }) };
     return { exitCode: 0 };
   } } };
   const args = { sandbox, auth: { file: 'claude', env: {} }, environment: { values: { APP_KEY: 'app-value' }, removed: [] }, signal: new AbortController().signal, onEvent: (event) => events.push(event), checkPreview: async (url) => { assert.equal(url, 'https://preview.example/'); return true; } };
   await assert.rejects(runLocalSetup({ ...args, runAgent: async () => {} }), /without a verified/);
-  const result = await runLocalSetup({ ...args, runAgent: async ({ bridge }) => {
+  assert.ok(events.some(event => event.phase === 'agent' && event.status === 'failed'));
+  events.length = 0;
+  const result = await runLocalSetup({ ...args, runAgent: async ({ bridge, onMessage }) => {
+    onMessage('Reading launch prerequisites while dependencies install.');
     const skipped = await fetch(bridge.url, { method: 'POST', headers: { authorization: `Bearer ${bridge.token}` }, body: JSON.stringify({ name: 'dependency_install', args: { action: 'skip', reason: 'Fixture app has no dependencies.' } }) });
     assert.equal((await skipped.json()).isError, undefined);
     const response = await fetch(bridge.url, { method: 'POST', headers: { authorization: `Bearer ${bridge.token}` }, body: JSON.stringify({ name: 'start_app', args: { command: 'npm start', port: 3000 } }) });
@@ -215,6 +261,90 @@ test('local setup requires actual start_app, saves restart plan, checks preview,
   assert.equal(JSON.parse(files.get('/home/user/.engelbart-canvas/recipe.json')).kind, 'claude-local');
   assert.ok(events.some((event) => event.text === 'app log'));
   assert.ok(commands.some(({ command }) => command.includes('proxy.mjs')));
+  assert.ok(commands.some(({ command, options }) => command.includes('43110:3000:::1') && options.envs.ENGELBART_CANVAS_APP_ATTEMPT));
+  const agent = events.filter(event => event.phase === 'agent');
+  assert.equal(agent[0].status, 'starting');
+  assert.ok(agent.some(event => event.message === 'Reading launch prerequisites while dependencies install.'));
+  assert.equal(agent.at(-1).status, 'done');
+  assert.ok(Number.isFinite(agent.at(-1).elapsed_ms));
+  assert.ok(events.some(event => event.phase === 'app_status' && event.app.running));
+});
+
+test('failed start returns pre-cleanup diagnostics and confirmed stopped state, not a hidden error or orphaned server', async () => {
+  const calls = [], events = [];
+  let app = { status: 'idle', running: false, processes: [], listeners: [] };
+  const sandbox = { getHost: () => 'preview.example', files: { write: async () => {} }, commands: { run: async (command, options) => {
+    calls.push(command);
+    if (command.includes('--app-status')) return { exitCode: 0, stdout: JSON.stringify(app) };
+    if (command.includes('--stop-app')) { app = { ...app, status: 'stopped', running: false, processes: [], listeners: [] }; return { exitCode: 0 }; }
+    if (command.includes('--local')) {
+      const attempt = command.match(/--attempt ([a-f0-9-]+)/)[1];
+      app = { attempt_id: attempt, status: 'unhealthy', running: true, processes: [{ pid: 701, name: 'node' }],
+        listeners: [{ port: 3001, address: '::', ownership: 'owned', pids: [701] }],
+        health: { ok: false, error: 'No owned listener on port 5173' }, output: 'fixture-secret meaningful error' };
+      options.onStdout(`${JSON.stringify({ phase: 'app_status', message: 'App unhealthy', app })}\n`);
+      options.onStdout('{"phase":"error","message":"Local HTTP check failed on port 5173"}\n');
+      return { wait: () => new Promise(() => {}) };
+    }
+    return { exitCode: 0, stdout: '{}' };
+  } } };
+  await assert.rejects(runLocalSetup({ sandbox, auth: {}, environment: { values: { APP_KEY: 'fixture-secret' }, removed: [] }, onEvent: (event) => events.push(event),
+    checkPreview: () => assert.fail('Failed local readiness must not check public preview'), runAgent: async ({ bridge }) => {
+      const call = async (name, args) => (await fetch(bridge.url, { method: 'POST', headers: { authorization: `Bearer ${bridge.token}` }, body: JSON.stringify({ name, args }) })).json();
+      await call('dependency_install', { action: 'skip', reason: 'Fixture dependencies exist' });
+      const result = await call('start_app', { command: 'npm run dev', port: 5173 });
+      assert.equal(result.isError, true);
+      assert.ok(!JSON.stringify(result).includes('fixture-secret'));
+      const details = JSON.parse(result.content[0].text);
+      assert.equal(details.failed_check.running, true);
+      assert.equal(details.failed_check.listeners[0].port, 3001);
+      assert.equal(details.app.running, false);
+      assert.match(details.error, /Local HTTP check failed/);
+      const status = JSON.parse((await call('app_status', { port: 3001 })).content[0].text);
+      assert.equal(status.running, false);
+      for (const command of ['npm run dev -w server > /tmp/server.log 2>&1 &', 'pkill -9 -f concurrently', 'kill -9 701']) {
+        assert.equal((await call('run_command', { command })).isError, true);
+        assert.ok(!calls.some((actual) => actual.endsWith(command)), 'Diagnostic duplicates/kill bypasses must not execute');
+      }
+    },
+  }), /without a verified web preview/);
+  assert.equal(app.running, false);
+  assert.ok(calls.some((command) => command.includes('--stop-app')));
+  assert.ok(events.some((event) => event.phase === 'error' && event.message.includes('5173')), 'The original error must appear in build events');
+});
+
+test('start does not proceed when the previous launch cannot be confirmed stopped', async () => {
+  const commands = [];
+  const sandbox = { files: { write: async () => {} }, commands: { run: async (command) => {
+    commands.push(command);
+    return { exitCode: command.endsWith('--stop') ? 1 : 0, stdout: '{}' };
+  } } };
+  await assert.rejects(runLocalSetup({ sandbox, auth: {}, environment: { values: {}, removed: [] }, onEvent() {}, checkPreview: async () => true,
+    runAgent: async ({ bridge }) => {
+      const call = async (name, args) => (await fetch(bridge.url, { method: 'POST', headers: { authorization: `Bearer ${bridge.token}` }, body: JSON.stringify({ name, args }) })).json();
+      await call('dependency_install', { action: 'skip', reason: 'Fixture needs no install' });
+      const result = await call('start_app', { command: 'npm start', port: 3000 });
+      assert.equal(result.isError, true);
+      assert.match(result.content[0].text, /no replacement was started/);
+    },
+  }), /without a verified web preview/);
+  assert.ok(!commands.some((command) => command.includes('--local')));
+});
+
+test('tool replies include observed changes and app_status refreshes state without starting or stopping anything', async () => {
+  let app = { status: 'healthy', running: true }, changes = [{ status: 'healthy' }], stopped = 0;
+  const tools = createSandboxTools({ sandbox: { files: { read: async () => { app = { status: 'exited', running: false }; changes.push({ status: 'exited' }); return new Response('readme').body; } } },
+    appState: () => { const result = { app, app_changes: changes }; changes = []; return result; },
+    appStatus: async ({ port }) => { assert.equal(port, 3001); return { ...app, checked: true }; }, stopApp: () => { stopped++; return app; }, onEvent() {} });
+  const result = await tools('read_file', { path: 'README.md' });
+  assert.equal(result.app.running, false);
+  assert.deepEqual(result.app_changes.map((row) => row.status), ['healthy', 'exited']);
+  assert.equal((await tools('app_status', { port: 3001 })).checked, true);
+  assert.equal(stopped, 0);
+  await tools('stop_app', {});
+  assert.equal(stopped, 1);
+  assert.throws(() => validateTool('app_status', { port: 0 }));
+  assert.throws(() => validateTool('stop_app', { pid: 123 }));
 });
 
 test('explicit claude-local checks subscription before provisioning and never falls back to API mode', async () => {
@@ -238,6 +368,78 @@ test('worker integrates subscription setup with normal ready/log/stop events wit
   await runtime.run({ run_id: 'local-test', github_url: 'https://github.com/owner/repo' });
   assert.deepEqual(events.filter((event) => event.event !== 'progress').map((event) => event.event), ['sandbox_created', 'ready', 'stopped']);
   assert.equal(kills, 1);
-  assert.ok(!commands.some((command) => /python3 -u/.test(command)), 'API pipeline must not run');
+  assert.ok(!commands.some((command) => /python3 -u .*\/launch\.py/.test(command)), 'API pipeline must not run');
   assert.ok(events.some((event) => event.message === 'npm ci'));
+});
+
+test('verified preview freezes queued and future mutations but keeps read-only status available', async () => {
+  let started, complete;
+  const waiting = new Promise(resolve => { started = resolve; });
+  const gate = new Promise(resolve => { complete = resolve; });
+  const tools = createSandboxTools({ sandbox: {}, onEvent() {}, startApp: async () => {
+    started(); await gate; tools.freeze(); return { ready: true };
+  }, stopApp: () => assert.fail('late stop must not execute'), appStatus: async () => ({ running: true }),
+  install: { assertReady() {}, status: () => ({ status: 'succeeded' }) } });
+  const launch = tools('start_app', { command: 'npm start', port: 3000 });
+  await waiting;
+  const queued = tools('stop_app', {});
+  const rejected = assert.rejects(queued, /already verified/);
+  complete(); await launch; await rejected;
+  for (const [name, args] of [['write_file', { path: 'x', content: 'x' }], ['run_command', { command: 'echo x' }],
+    ['start_app', { command: 'npm start', port: 3000 }], ['dependency_install', { action: 'start', command: 'npm ci' }]]) {
+    await assert.rejects(tools(name, args), /already verified/);
+  }
+  assert.equal((await tools('app_status', {})).running, true);
+  await tools.close();
+});
+
+test('readiness is published before the final Claude message; late summary failure leaves the app intact', async () => {
+  let published = false, stopped = 0, checks = 0;
+  const events = [];
+  const sandbox = { getHost: () => 'preview.example', files: { write: async () => {} }, commands: { run: async (command, options) => {
+    if (command.endsWith('--stop')) stopped++;
+    if (command.includes('--app-status')) return { stdout: JSON.stringify({ running: stopped > 0, processes: [], listeners: [] }), exitCode: 0 };
+    if (command.includes('--local')) {
+      options.onStdout('{"phase":"ready","port":3000}\n');
+      return { wait: () => new Promise(() => {}) };
+    }
+    return { exitCode: 0, stdout: '{}' };
+  } } };
+  // First status is idle; the one after launch is running.
+  let statusCalls = 0;
+  const run = sandbox.commands.run;
+  sandbox.commands.run = (command, options) => command.includes('--app-status')
+    ? Promise.resolve({ exitCode: 0, stdout: JSON.stringify({ running: ++statusCalls > 1, processes: [], listeners: [] }) }) : run(command, options);
+  const result = await runLocalSetup({ sandbox, auth: {}, environment: { values: {}, removed: [] },
+    discover: async () => ({ components: [] }), onEvent: e => events.push(e), checkPreview: async () => { checks++; return true; },
+    onReady: value => { assert.equal(value.preview_url, 'https://preview.example/'); assert.equal(published, false); published = true; },
+    runAgent: async ({ bridge }) => {
+      const call = async (name, args) => (await fetch(bridge.url, { method: 'POST', headers: { authorization: `Bearer ${bridge.token}` }, body: JSON.stringify({ name, args }) })).json();
+      await call('dependency_install', { action: 'skip', reason: 'Fixture' });
+      assert.equal((await call('start_app', { command: 'npm start', port: 3000 })).isError, undefined);
+      assert.equal(published, true, 'ready must not wait for runAgent to return');
+      assert.equal((await call('stop_app', {})).isError, true);
+      throw new Error('Final model response failed');
+    } });
+  assert.equal(result.port, 3000);
+  assert.equal(checks, 1, 'public check is not repeated after the final message');
+  assert.equal(stopped, 1, 'no post-ready cleanup of the healthy app');
+  assert.ok(events.some(e => e.status === 'summary_unavailable'));
+  assert.ok(!events.some(e => e.phase === 'agent' && e.status === 'done'), 'a missing final result is not reported as agent completion');
+});
+
+test('Railpack hints finish before Claude starts and do not replace the install preflight', async () => {
+  let resolveDiscovery, inspecting = false, agentStarted = false;
+  const result = runLocalSetup({ sandbox: { files: { write: async () => {} }, commands: { run: async () => { inspecting = true; return { exitCode: 0, stdout: '{}' }; } } },
+    auth: {}, environment: { values: {}, removed: [] }, onEvent() {}, checkPreview: async () => true,
+    discover: async () => new Promise(resolve => { resolveDiscovery = resolve; }),
+    runAgent: async ({ prompt }) => { agentStarted = true; assert.match(prompt, /railpack-evidence-fixture/); },
+  });
+  const rejected = assert.rejects(result, /without a verified/);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(inspecting, true);
+  assert.equal(agentStarted, false);
+  resolveDiscovery({ components: [{ cwd: '.', railpack: { start_hint: 'railpack-evidence-fixture' } }] });
+  await rejected;
+  assert.equal(agentStarted, true);
 });

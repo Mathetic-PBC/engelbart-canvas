@@ -405,23 +405,30 @@ test('views: find in the page, and the keys a page cannot keep (⌘T, ⌘W; ⇧�
   assert.deepEqual(sent.at(-1), ['browser:shortcut', { name: 'find-next', tab: 'a' }]);
 });
 
-test('GitHub webpages open in the default browser from direct loads, links, redirects and popups', () => {
+test('GitHub webpages stay in Stage from direct loads, links, redirects and new tabs', () => {
   const f = fakeElectron();
-  const external = [];
-  f.electron.shell = { openExternal: async url => { external.push(url); } };
-  const views = createBrowserViews({ electron: f.electron, getWindow: () => f.win, send() {} });
+  const sent = [];
+  const views = createBrowserViews({ electron: f.electron, getWindow: () => f.win, send: (channel, payload) => sent.push([channel, payload]) });
   views.open('github', 'https://github.com/Mathetic-PBC/engelbart-canvas');
-  assert.equal(external.length, 1);
-  assert.equal(f.made.length, 0);
+  assert.deepEqual(f.made[0].webContents.loaded, ['https://github.com/Mathetic-PBC/engelbart-canvas']);
   views.open('web', 'https://example.com');
-  const contents = f.made[0].webContents;
+  const contents = f.made[1].webContents;
   for (const event of ['will-navigate', 'will-redirect']) {
     let stopped = false;
     contents.emit(event, { preventDefault() { stopped = true; } }, 'https://github.com/login');
-    assert.equal(stopped, true);
+    assert.equal(stopped, false);
   }
-  assert.deepEqual(contents.windowOpen({ url: 'https://github.com/login', disposition: 'new-window' }), { action: 'deny' });
-  assert.equal(external.length, 4);
+  const tab = contents.windowOpen({ url: 'https://github.com/owner/app', disposition: 'foreground-tab' });
+  assert.equal(tab.action, 'allow');
+  const child = new EventEmitter();
+  assert.equal(tab.createWindow({ webContents: child }), child);
+  assert.equal(sent.at(-1)[0], 'browser:open-tab');
+  assert.equal(views.has(sent.at(-1)[1].id), true);
+  assert.equal(contents.windowOpen({ url: 'https://github.com/login', disposition: 'new-window' }).action, 'allow');
   views.open('lookalike', 'https://github.com.evil.example');
-  assert.equal(external.length, 4);
+  assert.deepEqual(f.handed, [], 'Web navigation must not launch the personal browser');
+  // Renderer entry points must also let GitHub reach these native Stage views.
+  const source = fs.readFileSync(path.join(__dirname, '../src/renderer/workspace/Stage.jsx'), 'utf8');
+  assert.doesNotMatch(source, /isGithubPage/);
+  assert.match(source, /Open in default browser/, 'The explicit external-browser menu action remains available');
 });

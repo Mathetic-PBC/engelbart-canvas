@@ -1,0 +1,157 @@
+{
+  "id": "790fe8cf-81ca-463f-8265-805e992bece3",
+  "template": "engelbart-canvas-cached",
+  "round": 1,
+  "repository": "kjfeng/cocoa-canvas",
+  "pinned_commit": "e49079a413497d4fe363af4e8a6e6fefd7539597",
+  "started_at": "2026-09-24T07:02:26.820Z",
+  "provider": "claude-local",
+  "model_requested": "sonnet",
+  "sandbox_id": "it98c97lsgtif1fu24wtv",
+  "variant": "optimized",
+  "baseline_kind": "sequential",
+  "artifact_directory": "kjfeng--cocoa-canvas-r1-optimized",
+  "template_id": "5mqfzddjuicidc1w92y5",
+  "resources": {
+    "cpu": 8,
+    "memory_mb": 8192
+  },
+  "commit": "e49079a413497d4fe363af4e8a6e6fefd7539597",
+  "agent": {
+    "started_ms": 4524,
+    "models": [
+      "claude-sonnet-5"
+    ],
+    "assistant_messages": 4,
+    "tool_calls": [
+      {
+        "name": "mcp__canvas__dependency_install",
+        "started_ms": 8689,
+        "install_action": "start",
+        "finished_ms": 9038,
+        "elapsed_ms": 349,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 9050,
+        "finished_ms": 9132,
+        "elapsed_ms": 82,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 9431,
+        "finished_ms": 9501,
+        "elapsed_ms": 70,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 9686,
+        "finished_ms": 9762,
+        "elapsed_ms": 76,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 12307,
+        "finished_ms": 12377,
+        "elapsed_ms": 70,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 12581,
+        "finished_ms": 12650,
+        "elapsed_ms": 69,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__start_app",
+        "started_ms": 14982,
+        "wait_for_install": true,
+        "finished_ms": 23054,
+        "elapsed_ms": 8072,
+        "is_error": false
+      }
+    ],
+    "cli_result": {
+      "subtype": "success",
+      "is_error": false,
+      "usage": {
+        "input_tokens": 8,
+        "output_tokens": 1163,
+        "cache_creation_input_tokens": 10304,
+        "cache_read_input_tokens": 44969
+      },
+      "duration_ms": 19628,
+      "duration_api_ms": 11434,
+      "num_turns": 8
+    },
+    "finished_ms": 25517,
+    "wall_ms": 20993
+  },
+  "worker_ready_ms": 25580,
+  "preview_url": "https://43110-it98c97lsgtif1fu24wtv.e2b.app/",
+  "port": 5173,
+  "public_check": {
+    "status": 200,
+    "html": true,
+    "ok": true
+  },
+  "end_to_end_ms": 25732,
+  "status": "ready",
+  "installed": {
+    "packages": {
+      "npm:.": {
+        "fingerprint": {
+          "hash": "bc5942ab0e9055a93d4c49d41a991215846c275c749a14bafd52ed576666e278",
+          "packages": 641,
+          "version_mismatches": 0
+        }
+      }
+    },
+    "node": "v22.23.2",
+    "npm": "10.9.8",
+    "python": "Python 3.11.6",
+    "arch": "x64",
+    "platform": "linux",
+    "cache": {
+      "npm_prefer_offline": "true",
+      "seed_present": true
+    },
+    "manifest_hashes": {
+      "package.json": "a72f54674cfee8e27721cc1d67e447bf73328008b590f1a200d917068395a172",
+      "package-lock.json": "396eeca89f69f4db9b97004f4d2fe3ce8f9e2957c9c066c21bf038ddea2e9cf3",
+      "client/package.json": "590f4f01067d75e7f2c84ff09335bc27da0f7a04aa70ec8df46cf669ebd84234",
+      "server/package.json": "200a49f95f2ed93c50f290b7a04c5980aee3bd132111f7cc777cb93e61ce824e"
+    },
+    "install_changes": "",
+    "package_evidence_hash": "0ffb1fbf2a858cb8aa2e4360c53483f489a35cb2278ae774ed936a0ed454e3a2"
+  },
+  "cleaned_up": true,
+  "phases": {
+    "worker_ready_ms": 25579,
+    "auth_ms": 818,
+    "detection_and_creation_ms": 747,
+    "clone_ms": 1220,
+    "agent_started_ms": 4524,
+    "agent_wall_ms": 20993,
+    "first_app_start_ms": 21069,
+    "first_start_to_ready_ms": 4510,
+    "installs": [
+      {
+        "id": "2de11f48-c6bf-4b52-aeec-2a8c7537b99f",
+        "command": "npm ci",
+        "started_ms": 8720,
+        "status": "succeeded",
+        "finished_ms": 20512,
+        "elapsed_ms": 11793,
+        "exit_code": 0
+      }
+    ],
+    "note": "Agent wall time contains tool waits and overlaps installation/startup. CLI duration_api_ms is reported as-is, not pure thinking time. Tool round trips may overlap/queue. Do not sum these phases."
+  },
+  "finished_at": "2026-09-24T07:02:53.659Z"
+}

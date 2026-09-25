@@ -1,0 +1,708 @@
+{
+  "command": [
+    "npm",
+    "install",
+    "--timing"
+  ],
+  "cwd": ".",
+  "wall_ms": 15014,
+  "exit_code": 0,
+  "signal": null,
+  "error": null,
+  "runtime": {
+    "node": "v22.23.2",
+    "npm": "10.9.8",
+    "python": "Python 3.11.6",
+    "arch": "x64",
+    "platform": "linux"
+  },
+  "config_hash": "02c809fe8b136ec3694672b62845552d1d6c5f07b6ff8c4e6ff676643d025a12",
+  "cache": {
+    "size_before_kib": 0,
+    "seed": null
+  },
+  "fingerprint": {
+    "hash": "bc5942ab0e9055a93d4c49d41a991215846c275c749a14bafd52ed576666e278",
+    "packages": 641,
+    "version_mismatches": 0
+  },
+  "input_hashes": {
+    "package.json": "a72f54674cfee8e27721cc1d67e447bf73328008b590f1a200d917068395a172",
+    "package-lock.json": "396eeca89f69f4db9b97004f4d2fe3ce8f9e2957c9c066c21bf038ddea2e9cf3",
+    "client/package.json": "590f4f01067d75e7f2c84ff09335bc27da0f7a04aa70ec8df46cf669ebd84234",
+    "server/package.json": "200a49f95f2ed93c50f290b7a04c5980aee3bd132111f7cc777cb93e61ce824e"
+  },
+  "after_hashes": {
+    "package.json": "a72f54674cfee8e27721cc1d67e447bf73328008b590f1a200d917068395a172",
+    "package-lock.json": "4ee058d8e423ae2cb834fb932fbc3508f83479eb4b8116e51cc9cdc905b9f08b",
+    "client/package.json": "590f4f01067d75e7f2c84ff09335bc27da0f7a04aa70ec8df46cf669ebd84234",
+    "server/package.json": "200a49f95f2ed93c50f290b7a04c5980aee3bd132111f7cc777cb93e61ce824e"
+  },
+  "timing_files": [
+    "2026-09-24T05_37_50_392Z-timing.json"
+  ],
+  "analysis": {
+    "timers_ms": {
+      "npm:load:whichnode": 1,
+      "npm:load:configload": 7,
+      "npm:load:mkdirpcache": 0,
+      "npm:load:mkdirplogs": 1,
+      "npm:load:setTitle": 0,
+      "npm:load": 22,
+      "idealTree:buildDeps": 3,
+      "idealTree": 141,
+      "reify:loadTrees": 141,
+      "reify:diffTrees": 7,
+      "auditReport:getReport": 539,
+      "auditReport:init": 9585,
+      "reify:audit": 10126,
+      "reify:unpack": 14124,
+      "build:run:postinstall:node_modules/esbuild": 49,
+      "build:run:postinstall:node_modules/vite/node_modules/esbuild": 44,
+      "build:run:postinstall": 53,
+      "build:deps": 88,
+      "build": 90,
+      "reify:build": 91,
+      "reify:save": 163,
+      "reify": 14673,
+      "command:install": 14704,
+      "npm": 14942
+    },
+    "longest_package_timers": [
+      [
+        "reifyNode:node_modules/date-fns",
+        14122
+      ],
+      [
+        "reifyNode:node_modules/lucide-react",
+        14019
+      ],
+      [
+        "reifyNode:node_modules/rxjs",
+        13236
+      ],
+      [
+        "reifyNode:node_modules/openai",
+        12280
+      ],
+      [
+        "reifyNode:node_modules/highlight.js",
+        11810
+      ],
+      [
+        "reifyNode:node_modules/caniuse-lite",
+        11138
+      ],
+      [
+        "reifyNode:node_modules/@aws-sdk/nested-clients",
+        10859
+      ],
+      [
+        "reifyNode:node_modules/@anthropic-ai/sdk",
+        10846
+      ],
+      [
+        "reifyNode:node_modules/lib0",
+        10586
+      ],
+      [
+        "reifyNode:node_modules/typescript",
+        10411
+      ],
+      [
+        "reifyNode:node_modules/lodash",
+        10390
+      ],
+      [
+        "reifyNode:node_modules/json-schema-to-ts",
+        10353
+      ],
+      [
+        "reifyNode:node_modules/@smithy/core",
+        10292
+      ],
+      [
+        "reifyNode:node_modules/@aws-sdk/core",
+        10126
+      ],
+      [
+        "reifyNode:node_modules/tailwindcss",
+        10113
+      ]
+    ],
+    "longest_script_timers": [
+      [
+        "build:run:postinstall",
+        53
+      ],
+      [
+        "build:run:postinstall:node_modules/esbuild",
+        49
+      ],
+      [
+        "build:run:postinstall:node_modules/vite/node_modules/esbuild",
+        44
+      ]
+    ],
+    "http": {
+      "lines": 1317,
+      "cache_hits": 637,
+      "cache_misses": 679,
+      "cache_revalidated": 0,
+      "aggregate_request_ms_NOT_wall_time": 2204786,
+      "slowest": [
+        {
+          "line": "3279 http fetch GET 200 https://registry.npmjs.org/date-fns/-/date-fns-2.30.0.tgz 13882ms (cache miss)",
+          "duration_ms": 13882
+        },
+        {
+          "line": "3277 http fetch GET 200 https://registry.npmjs.org/lucide-react/-/lucide-react-0.575.0.tgz 13795ms (cache miss)",
+          "duration_ms": 13795
+        },
+        {
+          "line": "3275 http fetch GET 200 https://registry.npmjs.org/rxjs/-/rxjs-7.8.2.tgz 13042ms (cache miss)",
+          "duration_ms": 13042
+        },
+        {
+          "line": "3273 http fetch GET 200 https://registry.npmjs.org/openai/-/openai-6.25.0.tgz 12077ms (cache miss)",
+          "duration_ms": 12077
+        },
+        {
+          "line": "3271 http fetch GET 200 https://registry.npmjs.org/highlight.js/-/highlight.js-11.11.1.tgz 11579ms (cache miss)",
+          "duration_ms": 11579
+        },
+        {
+          "line": "3269 http fetch GET 200 https://registry.npmjs.org/caniuse-lite/-/caniuse-lite-1.0.30001770.tgz 10892ms (cache miss)",
+          "duration_ms": 10892
+        },
+        {
+          "line": "3267 http fetch GET 200 https://registry.npmjs.org/@aws-sdk/nested-clients/-/nested-clients-3.996.1.tgz 10580ms (cache miss)",
+          "duration_ms": 10580
+        },
+        {
+          "line": "3265 http fetch GET 200 https://registry.npmjs.org/@anthropic-ai/sdk/-/sdk-0.78.0.tgz 10561ms (cache miss)",
+          "duration_ms": 10561
+        },
+        {
+          "line": "3263 http fetch GET 200 https://registry.npmjs.org/lib0/-/lib0-0.2.117.tgz 10360ms (cache miss)",
+          "duration_ms": 10360
+        },
+        {
+          "line": "3261 http fetch GET 200 https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz 10224ms (cache miss)",
+          "duration_ms": 10224
+        },
+        {
+          "line": "3259 http fetch GET 200 https://registry.npmjs.org/lodash/-/lodash-4.17.23.tgz 10164ms (cache miss)",
+          "duration_ms": 10164
+        },
+        {
+          "line": "3257 http fetch GET 200 https://registry.npmjs.org/json-schema-to-ts/-/json-schema-to-ts-3.1.1.tgz 10126ms (cache miss)",
+          "duration_ms": 10126
+        }
+      ]
+    },
+    "warning": "Timers are nested/overlapping, not additive. reify:unpack includes retrieval, extraction and filesystem work; npm does not isolate disk-write wall time."
+  },
+  "script_events": [
+    "3315 info run esbuild@0.27.3 postinstall node_modules/esbuild node install.js",
+    "3316 info run esbuild@0.21.5 postinstall node_modules/vite/node_modules/esbuild node install.js",
+    "3317 info run esbuild@0.27.3 postinstall { code: 0, signal: null }",
+    "3319 info run esbuild@0.21.5 postinstall { code: 0, signal: null }"
+  ],
+  "install_changes": " M package-lock.json\n",
+  "resources": null,
+  "startup": {
+    "ok": false,
+    "command": [
+      "npm",
+      "run",
+      "dev"
+    ],
+    "port": 5173,
+    "attempts": [
+      {
+        "error": "TypeError",
+        "elapsed_ms": 28
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 1030
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 2033
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 3057
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 4059
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 5061
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 6064
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 7067
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 8071
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 9073
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 10075
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 11077
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 12079
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 13081
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 14083
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 15085
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 16087
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 17089
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 18090
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 19093
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 20094
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 21095
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 22097
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 23099
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 24100
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 25103
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 26104
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 27107
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 28109
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 29111
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 30113
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 31115
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 32117
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 33118
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 34121
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 35122
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 36124
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 37125
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 38127
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 39128
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 40129
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 41130
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 42131
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 43134
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 44135
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 45136
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 46137
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 47138
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 48139
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 49140
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 50141
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 51143
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 52144
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 53149
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 54150
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 55151
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 56153
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 57156
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 58157
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 59160
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 60161
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 61162
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 62163
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 63164
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 64165
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 65168
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 66169
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 67170
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 68171
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 69171
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 70174
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 71176
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 72177
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 73178
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 74179
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 75181
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 76182
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 77183
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 78184
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 79187
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 80188
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 81189
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 82190
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 83191
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 84192
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 85194
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 86196
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 87197
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 88198
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 89199
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 90200
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 91202
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 92204
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 93204
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 94205
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 95206
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 96207
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 97208
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 98209
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 99210
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 100211
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 101212
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 102213
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 103214
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 104216
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 105217
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 106218
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 107219
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 108220
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 109221
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 110224
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 111225
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 112227
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 113228
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 114229
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 115230
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 116231
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 117232
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 118233
+      },
+      {
+        "error": "TypeError",
+        "elapsed_ms": 119234
+      }
+    ],
+    "exit_code": null,
+    "error": "No successful root HTML response within 120 seconds"
+  },
+  "after_startup_changes": " M package-lock.json\n"
+}

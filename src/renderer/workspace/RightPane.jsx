@@ -12,12 +12,12 @@ export const RIGHT_MODES = [
   { id: 'repo', label: 'Repo' },
 ];
 
-const RightPane = React.forwardRef(function RightPane({ mode, repositories, repoId, onRepo, projectDir, projectId, full, onFull, onShowStage, onPage, onFront, save, library, inRail, onError, style }, stageRef) {
+const RightPane = React.forwardRef(function RightPane({ mode, repositories, repoId, onRepo, projectDir, projectId, terminalRequest, onActiveTerminal, full, onFull, onShowStage, onPage, onFront, onAskAnnotation, save, library, inRail, onError, style }, stageRef) {
   return (
     <section aria-label="Right pane" style={style}>
       {mode === 'repo' && <RepoPane repositories={repositories} selectedId={repoId} onSelect={onRepo} />}
-      <Stage ref={stageRef} projectId={projectId} visible={mode === 'stage'} full={full} onFull={onFull} onShow={onShowStage} onPage={onPage} onFront={onFront} save={save} library={library} inRail={inRail} onError={onError} />
-      <TerminalPane cwd={projectDir} projectId={projectId} visible={mode === 'terminal'} />
+      <Stage ref={stageRef} projectId={projectId} visible={mode === 'stage'} full={full} onFull={onFull} onShow={onShowStage} onPage={onPage} onFront={onFront} onAskAnnotation={onAskAnnotation} save={save} library={library} inRail={inRail} onError={onError} />
+      <TerminalPane cwd={projectDir} projectId={projectId} visible={mode === 'terminal'} requestedSession={terminalRequest} onActiveSession={onActiveTerminal} />
     </section>
   );
 });

@@ -1,9 +1,13 @@
 import importlib.util
+import contextlib
+import io
 import json
 from pathlib import Path
+import shlex
 import signal
 import sys
 import tempfile
+import time
 from unittest.mock import patch
 from types import SimpleNamespace
 
@@ -54,16 +58,16 @@ with tempfile.TemporaryDirectory() as temporary:
     assert listing['truncated'] and len(listing['entries']) == 200
 
     # Exact job tags select only that job, plus children that dropped the tag.
-    snapshot = {301: (1, 'a', 'install'), 302: (301, 'b', 'child'),
+    snapshot = {301: (1, 'a', 'install'), 302: (301, 'b', 'npm'), 305: (301, 'e', 'pip'),
                 303: (1, 'c', 'other job'), 304: (302, 'd', 'grandchild')}
     marker = f'ENGELBART_CANVAS_INSTALL_JOB={job_id}'.encode()
     environments = {301: b'PATH=/bin\0' + marker + b'\0', 302: b'PATH=/bin\0',
-                    303: marker + b'-different\0', 304: b'PATH=/bin\0'}
+                    303: marker + b'-different\0', 304: b'PATH=/bin\0', 305: marker + b'\0'}
     def proc_path(value):
         pid = int(str(value).split('/')[2])
         return SimpleNamespace(read_bytes=lambda: environments[pid])
     with patch.object(helper, 'process_snapshot', return_value=snapshot), patch.object(helper, 'Path', side_effect=proc_path):
-        assert set(helper.marked(job_id)) == {301, 302, 304}
+        assert set(helper.marked(job_id)) == {301, 302, 304, 305}
 
     # A child which ignores TERM remains tracked after losing its parent/tag.
     processes = {101: (1, 'parent-start', 'install'), 102: (101, 'child-start', 'child')}
@@ -105,5 +109,79 @@ with tempfile.TemporaryDirectory() as temporary:
             raise AssertionError('unconfirmed stop accepted')
         except RuntimeError as error:
             assert 'no replacement' in str(error)
+
+with tempfile.TemporaryDirectory() as temporary:
+    helper.ROOT = Path(temporary).resolve()
+    frontend, backend = helper.ROOT / 'frontend', helper.ROOT / 'backend'
+    frontend.mkdir()
+    backend.mkdir()
+    (frontend / 'package.json').write_text(json.dumps({'name': 'app', 'dependencies': {'react': '^19'}}))
+    (frontend / 'package-lock.json').write_text('{"lockfileVersion":3}')
+    (backend / 'requirements.txt').write_text('flask==3.0.0\nnumpy>=1.0; python_version >= "3.9"\n# comment\nfunc_timeout\n')
+    spec = {'parallel': [{'manager': 'npm', 'cwd': 'frontend'}, {'manager': 'pip', 'cwd': 'backend'}]}
+    with patch.object(helper, 'version', return_value='22.15.0'):
+        plan = helper.parallel_plan(spec)
+        assert plan['npmFacts']['package']['name'] == 'app'
+        assert plan['tasks'][0]['command'] == 'npm ci --no-audit'
+        assert '.venv/bin/python -m pip install' in plan['tasks'][1]['command']
+
+        def rejected():
+            try:
+                helper.parallel_plan(spec)
+                raise AssertionError('Unsafe parallel plan accepted')
+            except (ValueError, FileNotFoundError):
+                pass
+
+        for name in ('package.json', '.npmrc', '.nvmrc', 'pyproject.toml'):
+            file = helper.ROOT / name
+            file.write_text('{}')
+            rejected()
+            file.unlink()
+        for name in ('pyproject.toml', 'setup.py', 'package.json'):
+            file = backend / name
+            file.write_text('{}')
+            rejected()
+            file.unlink()
+        for req in ('-r ../requirements.txt', '-e .', '../local', 'package @ file:///tmp/local', 'git+https://example/repo'):
+            (backend / 'requirements.txt').write_text(req)
+            rejected()
+        (backend / 'requirements.txt').write_text('flask==3.0.0')
+        (frontend / 'package.json').write_text('{"dependencies":{"local":"file:../backend"}}')
+        rejected()
+        (frontend / 'package.json').write_text('{}')
+        (backend / '.venv').symlink_to(frontend, target_is_directory=True)
+        rejected()
+        (backend / '.venv').unlink()
+        spec['parallel'][1]['cwd'] = 'frontend/nested'
+        rejected()
+        spec['parallel'][1]['cwd'] = '../escape'
+        rejected()
+
+    # Real child processes rendezvous through files: a sequential implementation
+    # times out rather than passing on lucky scheduling/timing thresholds.
+    tasks = []
+    for index, root in enumerate((frontend, backend)):
+        code = f'''from pathlib import Path
+import time
+root = Path({str(helper.ROOT)!r})
+(root / 'started-{index}').touch()
+deadline = time.monotonic() + 3
+while not (root / 'started-{1-index}').exists():
+    assert time.monotonic() < deadline, 'Other install did not start in parallel'
+    time.sleep(0.01)
+print('installed-{index}')
+'''
+        tasks.append({'manager': ('npm', 'pip')[index], 'cwd': str(root),
+                      'command': f'{shlex.quote(sys.executable)} -c {shlex.quote(code)}'})
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        assert helper.run_parallel(tasks) == 0
+    assert '[npm frontend] installed-0' in output.getvalue()
+    assert '[pip backend] installed-1' in output.getvalue()
+    tasks[0]['command'] = 'exit 1'
+    tasks[1]['command'] = f'{shlex.quote(sys.executable)} -c "print(\'backend still completes\')"'
+    with contextlib.redirect_stdout(output):
+        assert helper.run_parallel(tasks) == 1
+    assert 'backend still completes' in output.getvalue()
 
 print('Dependency install helper checks passed')

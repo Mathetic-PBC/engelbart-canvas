@@ -2,7 +2,7 @@ import React from 'react';
 import { api, errorMessage } from '../api.js';
 import Browser from '../workspace/Browser.jsx';
 import { OPEN_IN_BROWSER } from '../model/address.js';
-import { readNotifications, writeNotifications, sandboxProgressState, sandboxProgressReducer } from '../model/sandbox-notifications.js';
+import { readNotificationState, writeNotificationState, sandboxProgressState, sandboxProgressReducer } from '../model/sandbox-notifications.js';
 
 const SandboxContext = React.createContext(null);
 export const useSandboxes = () => React.useContext(SandboxContext);
@@ -11,11 +11,11 @@ export const useSandboxes = () => React.useContext(SandboxContext);
 // The snapshot restores state after renderer reloads; events carry later changes.
 export default function SandboxProgress({ dataRoot, library, inWorkspace, children }) {
   const [state, dispatch] = React.useReducer(sandboxProgressReducer, dataRoot, (root) => {
-    let saved = [];
-    try { saved = readNotifications(window.localStorage, root); } catch { /* Storage may be unavailable. */ }
+    let saved;
+    try { saved = readNotificationState(window.localStorage, root); } catch { /* Storage may be unavailable. */ }
     return sandboxProgressState(root, saved);
   });
-  const { items, notifications } = state;
+  const { items, notifications, dismissed } = state;
   const [collapsed, setCollapsed] = React.useState(false);
   const [preview, setPreview] = React.useState(null);
   const [error, setError] = React.useState('');
@@ -30,16 +30,17 @@ export default function SandboxProgress({ dataRoot, library, inWorkspace, childr
     else setPreview(run.preview_url);
   }, [notifications]);
   const markNotificationsRead = React.useCallback((ids) => dispatch({ type: 'read', ids }), []);
+  const clearNotifications = React.useCallback((ids) => dispatch({ type: 'clear', ids }), []);
   React.useEffect(() => {
     if (state.dataRoot !== dataRoot) return;
-    try { writeNotifications(window.localStorage, dataRoot, notifications); } catch { /* Storage may be unavailable. */ }
-  }, [dataRoot, state.dataRoot, notifications]);
+    try { writeNotificationState(window.localStorage, dataRoot, { notifications, dismissed }); } catch { /* Storage may be unavailable. */ }
+  }, [dataRoot, state.dataRoot, notifications, dismissed]);
   React.useEffect(() => {
     let live = true;
     const seen = new Set();
-    let saved = [];
-    try { saved = readNotifications(window.localStorage, dataRoot); } catch { /* Storage may be unavailable. */ }
-    dispatch({ type: 'reset', dataRoot, notifications: saved }); setPreview(null); setError('');
+    let saved;
+    try { saved = readNotificationState(window.localStorage, dataRoot); } catch { /* Storage may be unavailable. */ }
+    dispatch({ type: 'reset', dataRoot, saved }); setPreview(null); setError('');
     const merge = (event) => dispatch({ type: 'progress', event: { ...event, dataRoot } });
     const off = api.onSandboxProgress((event) => {
       if (event.dataRoot !== dataRoot) return;
@@ -62,7 +63,7 @@ export default function SandboxProgress({ dataRoot, library, inWorkspace, childr
   };
   const rows = Object.values(items).sort((a, b) => b.run.created_at.localeCompare(a.run.created_at));
   const button = { border: 0, background: 'transparent', color: '#0070f3', cursor: 'pointer', font: '12px var(--font-sans)', padding: '4px 6px' };
-  return <SandboxContext.Provider value={{ items, library, notifications, markNotificationsRead, error, busy, act, open }}>
+  return <SandboxContext.Provider value={{ items, library, notifications, markNotificationsRead, clearNotifications, error, busy, act, open }}>
     {children}
     {!inWorkspace && !preview && (rows.length > 0 || error) && <section data-overlay="1" aria-label="Sandbox runs" style={{ position: 'fixed', bottom: 52, left: inWorkspace ? 18 : undefined, right: inWorkspace ? undefined : 18, zIndex: 151, width: inWorkspace ? 280 : 340, maxWidth: 'calc(100vw - 36px)', background: '#fff', border: '1px solid #eaeaea', borderRadius: 10, boxShadow: '0 4px 18px #00000012', font: '12px/1.5 var(--font-sans)' }}>
       <button onClick={() => setCollapsed(!collapsed)} aria-expanded={!collapsed} style={{ ...button, color: '#171717', padding: '10px 12px', width: '100%', textAlign: 'left' }}>Sandbox runs · {rows.length} <span style={{ float: 'right' }}>{collapsed ? '+' : '−'}</span></button>

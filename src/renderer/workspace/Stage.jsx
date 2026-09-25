@@ -1,5 +1,4 @@
 import React from 'react';
-import { isGithubPage } from '../../shared/github.cjs';
 import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
 import { KindGlyph, SEARCH, FOLDER } from '../ui/Icons.jsx';
@@ -7,6 +6,7 @@ import { kindOf, stripScheme, OPEN_IN_BROWSER } from '../model/address.js';
 import { MAX_TABS, addressKey, afterClose, looksLikePlace, placeTab, stageRows, tabKey, tabPlace, parseTable } from '../model/stage.js';
 import { markdownBlocks, inlineRuns } from '../model/markdown.js';
 import PaperView from '../pdf/PaperView.jsx';
+import InterfaceAnnotations from './InterfaceAnnotations.jsx';
 
 // The Stage (Claude Design "Add - Mention Stage.dc.html", 2026-09-23): the Browser and the Paper pane made one. A tab
 // shows whatever it was given — a library row, a link, a file on disk — in the way its format asks:
@@ -308,7 +308,7 @@ const clearRanges = () => { const h = highlights(); if (h) { h.delete(FIND); h.d
 
 /* --------------------------------------------------------------------------------------------------- Stage */
 
-const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull, onShow, onPage, onFront, save, library, inRail, onError }, ref) {
+const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull, onShow, onPage, onFront, onAskAnnotation, save, library, inRail, onError }, ref) {
   const [tabs, setTabs] = React.useState(() => [blankTab()]);
   const [activeId, setActiveId] = React.useState(() => null);
   const [draft, setDraft] = React.useState('');
@@ -322,6 +322,9 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const [pick, setPick] = React.useState(0); // the row of the address list Enter takes
   const [found, setFound] = React.useState(null); // the library's answer for a typed place: { input, row }
   const [saving, setSaving] = React.useState(false); // the Save card is open
+  const [annotationMode, setAnnotationMode] = React.useState(null); // select directly, or explicitly browse saved notes
+  const annotating = annotationMode === 'select';
+  const closeAnnotations = React.useCallback(() => setAnnotationMode(null), []);
   const [finding, setFinding] = React.useState(false); // the find card is open
   const [findText, setFindText] = React.useState('');
   const [matches, setMatches] = React.useState(null); // { matches, active } in the tab in front
@@ -359,6 +362,9 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const web = tab.web;
   const failed = page && web && web.error ? web.error : null;
   const showing = visible && page && !failed && !occluded;
+  React.useEffect(() => {
+    setAnnotationMode((mode) => !visible || !page || failed || mode === 'select' ? null : mode);
+  }, [tab.id, tab.url, visible, page, !!failed]);
   // Where the tab is, as the address field shows it: a file by its path (a docx too, though a page made from it is shown).
   const shownUrl = pdf ? (pdf.input || pdf.url) : tab.file && tab.file.path ? tab.file.path : tab.url;
   const shownDraft = stripScheme(shownUrl);
@@ -484,7 +490,6 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
 
   // A library row in a tab of its own: its file when it has one (read here), else its address.
   const showRow = (id, row) => {
-    if (isGithubPage(row.url) && !row.path) { quiet(api.openExternal(row.url)); return; }
     update(id, (t) => ({ ...t, item: row.id, row }));
     if (row.type === 'pdf' && row.path) {
       const seq = (pdfSeq.current += 1);
@@ -501,7 +506,6 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
 
   // Typed (or picked) into the tab in front: a path is read, anything else is where the page goes.
   const navigate = async (id, input) => {
-    if (isGithubPage(kindOf(input).url)) { await api.openExternal(kindOf(input).url); setTyping(false); setDraft(stripScheme(tab.url)); return; }
     update(id, (t) => ({ ...t, pdf: null, pdfForward: null, item: null, row: null }));
     let next = kindOf(input);
     const path = next.kind === 'disk' || next.kind === 'file' || (!hasScheme(input) && next.kind !== 'local' && next.kind !== 'sandbox' && next.kind !== 'blank' && looksLikePlace(input) && /^[.~/]|\.[a-z0-9]{1,8}(?:[#?].*)?$/i.test(input) && !/\.(com|org|net|io|dev|ai|app|edu|gov|co|xyz|me)(?:[/:#?].*)?$/i.test(input));
@@ -528,13 +532,11 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
 
   // Opened from elsewhere — the sidebar, an @mention, a link in the document or the terminal, the all-projects screen.
   const openRow = (row) => {
-    if (isGithubPage(row.url) && !row.path) { quiet(api.openExternal(row.url)); return; }
     const id = claim(`i:${row.id}`);
     if (id) showRow(id, row);
   };
   const openInput = (input) => {
     const k0 = kindOf(input);
-    if (isGithubPage(k0.url)) { quiet(api.openExternal(k0.url)); return; }
     const id = claim(isPage(k0) && !DISK_URL.test(input) ? `l:${addressKey(k0.url)}` : '');
     if (id) void navigate(id, input);
   };
@@ -918,10 +920,12 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
           )}
         </div>
         {saving && saveState === 'none' && <SaveCard key={pageInput} title={pageTitle || stripScheme(pageInput)} onSave={save.onSave} onClose={() => setSaving(false)} cardRef={saveCard} />}
+        {page && !failed && <button type="button" data-annotate-toggle="1" aria-label={annotating ? 'Cancel annotation' : 'Annotate page'} aria-pressed={annotating} disabled={loading} onClick={() => { setAnnotationMode(annotating ? null : 'select'); setMenu(null); }} style={{ ...ICON_BUTTON, width: 'auto', padding: '0 7px', fontSize: 12, whiteSpace: 'nowrap', color: annotating ? '#171717' : '#4d4d4d', background: annotating ? '#f2f2f2' : 'transparent' }}>{annotating ? 'Annotating · Esc to cancel' : 'Annotate'}</button>}
         <div style={{ position: 'relative' }} ref={menuRef}>
           <button type="button" className="hov-wash" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setMenu(menu ? null : { x: r.right, y: r.bottom }); }} aria-label="More" style={{ ...ICON_BUTTON, background: menu ? '#f2f2f2' : 'transparent', font: '600 16px/1 var(--font-sans)', color: '#4d4d4d' }}>⋮</button>
           {menu && (
             <div data-overlay="1" style={{ position: 'fixed', left: clamp(menu.x - menuW, 8, (window.innerWidth || 1200) - menuW - 8), top: menu.y + 6, zIndex: 60, width: menuW, padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, animation: `rise 160ms ${EASE}` }}>
+              {page && !failed && <button type="button" data-annotations-browse="1" className="hov-wash" onClick={() => { setAnnotationMode('browse'); setMenu(null); }} style={{ display: 'block', width: '100%', border: 0, background: 'transparent', textAlign: 'left', padding: '7px 10px', borderRadius: 6, cursor: 'pointer', font: '13px/1.4 var(--font-sans)', color: '#171717' }}>Annotations</button>}
               <div style={{ padding: '6px 10px', font: '500 9px/1 var(--font-sans)', letterSpacing: '1.6px', textTransform: 'uppercase', color: '#8f8f8f' }}>Device preset</div>
               {DEVICES.map((d) => (
                 <div key={d.id} className="hov-wash" onClick={() => { setDevice(d.id); setMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px', borderRadius: 6, cursor: 'pointer' }}>
@@ -1003,7 +1007,8 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
           </div>
         )}
         {page && (
-          <div style={{ flex: 1, minHeight: 0, display: 'flex', justifyContent: 'center', background: '#f2f2f2', overflow: 'hidden' }}>
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', background: '#f2f2f2', overflow: 'hidden' }}>
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', justifyContent: 'center', overflow: 'hidden' }}>
             <div ref={slotRef} data-browser-slot="1" style={{ ...slotStyle, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
               {failed ? (
                 <div style={{ position: 'absolute', inset: 0, background: '#fafafa' }}><Plain title={stripScheme(failed.url || tab.url)} detail={failed.description || `error ${failed.code}`} /></div>
@@ -1011,6 +1016,8 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
                 <img src={snapshot} alt="" draggable={false} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'left top', userSelect: 'none' }} />
               ) : null}
             </div>
+            </div>
+            {annotationMode && visible && !failed && <InterfaceAnnotations key={`${projectId}:${tab.id}:${tab.url}:${annotationMode}`} mode={annotationMode} slotRef={slotRef} projectId={projectId} tabId={tab.id} url={tab.url} loading={!!web?.loading} onClose={closeAnnotations} onSelect={() => setAnnotationMode('select')} onNavigate={(url) => navigate(tab.id, url)} onAsk={onAskAnnotation} />}
           </div>
         )}
         {!pdf && !view && !page && k.kind === 'sandbox' && <Plain title={k.name} detail="" />}

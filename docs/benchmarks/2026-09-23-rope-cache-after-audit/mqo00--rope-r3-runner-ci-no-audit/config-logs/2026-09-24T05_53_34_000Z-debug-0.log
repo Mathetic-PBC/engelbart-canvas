@@ -1,0 +1,28 @@
+0 verbose cli /usr/bin/node /usr/bin/npm
+1 info using npm@10.9.8
+2 info using node@v22.23.2
+3 timing npm:load:whichnode Completed in 1ms
+4 silly config load:file:/usr/lib/node_modules/npm/npmrc
+5 silly config load:file:/home/user/repository/system/.npmrc
+6 silly config load:file:/home/user/install-diagnostics/user.npmrc
+7 silly config load:file:/home/user/install-diagnostics/global.npmrc
+8 timing npm:load:configload Completed in 9ms
+9 timing config:load:flatten Completed in 2ms
+10 timing npm:load:mkdirpcache Completed in 0ms
+11 timing npm:load:mkdirplogs Completed in 1ms
+12 verbose title npm config list
+13 verbose argv "config" "list" "--json" "--prefer-offline" "--no-audit" "--timing"
+14 timing npm:load:setTitle Completed in 1ms
+15 verbose logfile logs-max:10 dir:/home/user/install-diagnostics/config-logs/2026-09-24T05_53_34_000Z-
+16 verbose logfile /home/user/install-diagnostics/config-logs/2026-09-24T05_53_34_000Z-debug-0.log
+17 timing npm:load Completed in 35ms
+18 silly logfile done cleaning log files
+19 timing command:config Completed in 1ms
+20 timing npm Completed in 523ms
+21 info timing Timing info written to: /home/user/install-diagnostics/config-logs/2026-09-24T05_53_34_000Z-timing.json
+22 verbose cwd /home/user/repository/system
+23 verbose os Linux 6.1.158+
+24 verbose node v22.23.2
+25 verbose npm  v10.9.8
+26 verbose exit 0
+27 info ok

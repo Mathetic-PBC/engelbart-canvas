@@ -293,14 +293,14 @@ export function turnText(lines, turn) {
 }
 
 /** Rendered HTML for inline markup (bold, code, italic, @bart, @[mention], [link](url), bare urls). */
-export function inlineHtml(text) {
+export function inlineHtml(text, { codeStyle = 'padding:1px 4px;border-radius:4px;background:#f2f2f2;font:.92em/1.6 var(--font-mono)' } = {}) {
   return text.split(INLINE).map((p) => {
     if (!p) return '';
     // A pasted image inside a todo or a chat line reads as [Attachment n]; on a line of its own it renders as the image.
     const attachment = p.match(ATTACH_RE);
     if (attachment) return `<span data-attachment="${esc(attachment[2])}" style="padding:1px 6px;border-radius:4px;background:#f2f2f2;border:1px solid #eaeaea;font:.86em/1.6 var(--font-mono);color:#4d4d4d;white-space:nowrap">[${esc(attachment[1] || 'Attachment')}]</span>`;
     if (p.startsWith('**') && p.endsWith('**') && p.length > 4) return `<strong style="font-weight:600">${esc(p.slice(2, -2))}</strong>`;
-    if (p.startsWith('`') && p.endsWith('`') && p.length > 2) return `<code style="padding:1px 4px;border-radius:4px;background:#f2f2f2;font:.92em/1.6 var(--font-mono)">${esc(p.slice(1, -1))}</code>`;
+    if (p.startsWith('`') && p.endsWith('`') && p.length > 2) return `<code style="${esc(codeStyle)}">${esc(p.slice(1, -1))}</code>`;
     if (p.startsWith('*') && p.endsWith('*') && p.length > 2) return `<em>${esc(p.slice(1, -1))}</em>`;
     if (/^@bart$/i.test(p)) return `<span style="color:#0070f3;font-weight:500">${esc(p)}</span>`;
     if (p.startsWith('@[')) { const name = p.slice(2, -1), shown = name.startsWith('bart') ? 'bart' : name; return `<span data-mention="${esc(name)}" style="color:#0070f3;font-weight:500;cursor:pointer;border-bottom:1px dotted #c9c9c9">@${esc(shown)}</span>`; }

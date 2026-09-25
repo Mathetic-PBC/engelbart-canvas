@@ -54,6 +54,10 @@ At the bottom, three pictures that size with the sidebar: the **trash** (a row d
 
 The Browser's address ends in the page's place in the library: **+ Save** (a card names it; *Library only* or *Workspace*), **+ Workspace** (in the library, not here: one click), or **✓**. The `@` menu lists **Bart**, **Task**, **Note** (`@Note name` + Enter makes that note here and mentions it), the page open in the Browser (a **+** when the library does not hold it yet: picking it adds it), then the library. Whatever an `@` mention names comes into the workspace.
 
+## Interface annotations
+
+In **Stage**, choose **Annotate**, click an element of the running page, and save a note beside it. Saved notes have numbered markers and support editing, deletion, and **Ask Bart**. They survive reloads and stay with the project and site (or repository for sandbox previews). Matching reports when an element has changed or is missing. See [interface annotations](docs/interface-annotations.md) for architecture, limits, and verification.
+
 ## JSON code blocks
 
 Select text in a workspace document, note, or post-it and press **⌘⇧J** (**Ctrl+Shift+J** on Windows/Linux). The selected lines become a syntax-highlighted JSON code block; their contents and indentation stay unchanged. Inside an existing code block, the shortcut sets its language to JSON instead of nesting another block. With no selection it formats the current line (an empty line makes an empty block). **⌘Z** / **Ctrl+Z** undoes the change.
@@ -101,17 +105,17 @@ It works from a terminal inside Engelbart too (say, from a Claude Code session r
 
 Both use the real data root, `~/.engelbart`. The packaged app under `release/` only changes when it is repackaged, so opening it from Finder after a code change shows the old build. `ENGELBART_HOME_DIR` (a different data root) is for scripted test runs only; the relaunch script clears it.
 
-## First run, test mode, reset
+## First run and local data
 
 With no project in the current root the app opens on **Create a new project** (name + `./slug` path). Creating a project makes `<root>/<slug>/`, a first goal *First steps*, a first topic *Getting started* and a *Welcome!* note, and opens the workspace with that note. From then on the app opens straight into the topic you were last in (`<root>/state.json`); `Engelbart` in the header, or Escape, shows all projects — a card grid that ends with a dashed **+ Project** card. There is no kanban screen: the goal crumb in the header lists the project's goals and adds new ones.
 
-The pill top-right exists on every screen. **Test · on** roots the app at `~/.engelbart/test/` and seeds that library once (the HypoCompass paper, its repository, the arXiv page, a small dataset); the `⚙` beside the pill can reveal the folder or **Reset everything** (native confirmation, then `~/.engelbart/test/` is deleted and recreated). **Test · off** roots the same app at `~/.engelbart/` with its own library database and no seeds.
+Canvas starts in normal mode at `~/.engelbart/`, with no seeded library items. The notification bell is available on every screen. The former test toggle and test reset menu have been removed; an earlier saved test-mode setting is turned off on launch. Existing data under `~/.engelbart/test/` stays intact and is separate from the normal library and projects. Scripted tests can still explicitly enable the isolated test root through the store API.
 
 ## What lands on disk
 
 ```
 ~/.engelbart/                         (test mode: ~/.engelbart/test/, same shape, plus seed/)
-  config.json  state.json             test toggle; { projectId, workspaceId } to reopen
+  config.json  state.json             app settings; { projectId, workspaceId } to reopen
   library.pglite/                     table `library`: every md, pdf, folder, website, data file, image; `type` is the format, `tags` what was inferred: paper, git, note (+ summary, summary_edited, char_count)
   .context/status.json                the last summary sweep that did something
   .context/summary-system-prompt.md   optional: replaces the built-in summary prompt
@@ -140,7 +144,7 @@ src/main/store/              home layout + config, PGlite databases, projects/go
 src/main/terminal/           Experimental Terminal engine, unchanged (session manager, launch, providers, settings)
 src/main/browser/            views.cjs: the Browser pane's pages as WebContentsViews (decision 48)
 src/preload.cjs              window.terminalAPI (ET contract) + window.engelbartAPI
-src/renderer/App.jsx         create | all projects | workspace; reopens the last topic; the test pill
+src/renderer/App.jsx         create | all projects | workspace; reopens the last topic; shared notifications
 src/renderer/screens/        CreateProject, Home (all projects), Workspace (three-column header: crumbs + goal menu, doc tabs, pane switcher)
 src/renderer/workspace/      Rail (workspace header, library card: search, rows, +; trash / sticky note / copy), DocTabs, DocEditor (+ MentionMenu, Popover), RightPane, Browser (+ Save)
 src/renderer/pdf/PaperView   pdf.js + rough.js + Caveat

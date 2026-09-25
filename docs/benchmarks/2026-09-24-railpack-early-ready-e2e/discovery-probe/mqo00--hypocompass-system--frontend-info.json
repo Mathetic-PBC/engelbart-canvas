@@ -1,0 +1,47 @@
+{
+  "railpackVersion": "0.39.0",
+  "resolvedPackages": {
+    "node": {
+      "name": "node",
+      "requestedVersion": "lts",
+      "resolvedVersion": "24.21.0",
+      "source": "railpack default"
+    }
+  },
+  "metadata": {
+    "nodePackageManager": "npm",
+    "nodeRuntime": "node",
+    "providers": "node"
+  },
+  "detectedProviders": [
+    "node"
+  ],
+  "logs": [
+    {
+      "Level": "warn",
+      "Msg": "package-lock.json detected, assuming npm",
+      "DocsPath": ""
+    },
+    {
+      "Level": "suggestion",
+      "Msg": "Specify the package manager and version explicitly",
+      "DocsPath": "/config/recommendations#specify-the-node-package-manager-version"
+    },
+    {
+      "Level": "info",
+      "Msg": "Detected Node",
+      "DocsPath": ""
+    },
+    {
+      "Level": "info",
+      "Msg": "Using npm package manager",
+      "DocsPath": ""
+    },
+    {
+      "Level": "info",
+      "Msg": "Custom start command detected, skipping Caddy start",
+      "DocsPath": ""
+    }
+  ],
+  "success": true
+}

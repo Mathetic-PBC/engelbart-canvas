@@ -1,0 +1,225 @@
+{
+  "id": "fff9d981-3e0b-49b4-a86d-84c0b58996ee",
+  "template": "engelbart-runner",
+  "round": 1,
+  "repository": "mqo00/rope",
+  "pinned_commit": "1ada01830031e5882f2585577720b182deac6246",
+  "started_at": "2026-09-24T06:57:59.019Z",
+  "provider": "claude-local",
+  "model_requested": "sonnet",
+  "sandbox_id": "ijdcmfza0f6sb60o9jlwd",
+  "variant": "baseline",
+  "baseline_kind": "sequential",
+  "artifact_directory": "mqo00--rope-r1-baseline",
+  "template_id": "zyc96dk7q7adnb1uzy40",
+  "resources": {
+    "cpu": 8,
+    "memory_mb": 8192
+  },
+  "commit": "1ada01830031e5882f2585577720b182deac6246",
+  "agent": {
+    "started_ms": 4865,
+    "models": [
+      "claude-sonnet-5"
+    ],
+    "assistant_messages": 11,
+    "tool_calls": [
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 7215,
+        "finished_ms": 7330,
+        "elapsed_ms": 115,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__list_files",
+        "started_ms": 7485,
+        "finished_ms": 7638,
+        "elapsed_ms": 153,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__list_files",
+        "started_ms": 7751,
+        "finished_ms": 7898,
+        "elapsed_ms": 147,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 9210,
+        "finished_ms": 9276,
+        "elapsed_ms": 66,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 9456,
+        "finished_ms": 9519,
+        "elapsed_ms": 63,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 9772,
+        "finished_ms": 9842,
+        "elapsed_ms": 70,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__list_files",
+        "started_ms": 13131,
+        "finished_ms": 13350,
+        "elapsed_ms": 219,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__run_command",
+        "started_ms": 13580,
+        "finished_ms": 13724,
+        "elapsed_ms": 144,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 15243,
+        "finished_ms": 15389,
+        "elapsed_ms": 146,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__list_files",
+        "started_ms": 17855,
+        "finished_ms": 18087,
+        "elapsed_ms": 232,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 19177,
+        "finished_ms": 19422,
+        "elapsed_ms": 245,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 19390,
+        "finished_ms": 19486,
+        "elapsed_ms": 96,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__read_file",
+        "started_ms": 22914,
+        "finished_ms": 22985,
+        "elapsed_ms": 71,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__list_files",
+        "started_ms": 23130,
+        "finished_ms": 23333,
+        "elapsed_ms": 203,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__dependency_install",
+        "started_ms": 28217,
+        "install_action": "start",
+        "finished_ms": 134497,
+        "elapsed_ms": 106280,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__run_command",
+        "started_ms": 138324,
+        "finished_ms": 138407,
+        "elapsed_ms": 83,
+        "is_error": false
+      },
+      {
+        "name": "mcp__canvas__start_app",
+        "started_ms": 142077,
+        "wait_for_install": false,
+        "finished_ms": 154689,
+        "elapsed_ms": 12612,
+        "is_error": false
+      }
+    ],
+    "cli_result": {
+      "subtype": "success",
+      "is_error": false,
+      "usage": {
+        "input_tokens": 22,
+        "output_tokens": 2836,
+        "cache_creation_input_tokens": 25907,
+        "cache_read_input_tokens": 181862
+      },
+      "duration_ms": 151874,
+      "duration_api_ms": 31958,
+      "num_turns": 18
+    },
+    "finished_ms": 157775,
+    "wall_ms": 152910
+  },
+  "worker_ready_ms": 157889,
+  "preview_url": "https://43110-ijdcmfza0f6sb60o9jlwd.e2b.app/",
+  "port": 3333,
+  "public_check": {
+    "status": 200,
+    "html": true,
+    "ok": true
+  },
+  "end_to_end_ms": 158069,
+  "status": "ready",
+  "installed": {
+    "packages": {
+      "npm:system": {
+        "fingerprint": {
+          "hash": "ab4468696a09568954c65fcec3f40a07a770b1e65bcfb1f34236b19c0bea7ee3",
+          "packages": 732,
+          "version_mismatches": 0
+        }
+      }
+    },
+    "node": "v22.23.2",
+    "npm": "10.9.8",
+    "python": "Python 3.11.6",
+    "arch": "x64",
+    "platform": "linux",
+    "cache": {
+      "npm_prefer_offline": "false",
+      "seed_present": false
+    },
+    "manifest_hashes": {
+      "system/package.json": "608bfe7070ee956ffa4e19fba24ea21f6aa867eb6aad49c7b8d8bb5fdf6e1da8",
+      "system/package-lock.json": "90668d54663b272270696a84b3a282eec3e0eae6f2a58e400bc0bf6a0be03ed0"
+    },
+    "install_changes": "",
+    "package_evidence_hash": "efd9de41a0d76588f1c75afef6400468b67d1b9ffe0b836c6b2c42f5a6045f41"
+  },
+  "cleaned_up": true,
+  "phases": {
+    "worker_ready_ms": 157888,
+    "auth_ms": 1268,
+    "detection_and_creation_ms": 1001,
+    "clone_ms": 1364,
+    "agent_started_ms": 4865,
+    "agent_wall_ms": 152910,
+    "first_app_start_ms": 142625,
+    "first_start_to_ready_ms": 15263,
+    "installs": [
+      {
+        "id": "d01ccf12-5574-43df-bdc3-fcc174e4a51a",
+        "command": "npm install",
+        "started_ms": 28223,
+        "status": "succeeded",
+        "finished_ms": 134455,
+        "elapsed_ms": 106228,
+        "exit_code": 0
+      }
+    ],
+    "note": "Agent wall time contains tool waits and overlaps installation/startup. CLI duration_api_ms is reported as-is, not pure thinking time. Tool round trips may overlap/queue. Do not sum these phases."
+  },
+  "finished_at": "2026-09-24T07:00:38.394Z"
+}

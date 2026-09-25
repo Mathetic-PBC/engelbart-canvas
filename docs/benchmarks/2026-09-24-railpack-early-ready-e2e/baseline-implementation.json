@@ -1,0 +1,38 @@
+{
+  "kind": "optimized",
+  "revision": null,
+  "source_hashes": {
+    "src/main/sandbox/worker.cjs": "dfabb0006c7866622d00149da23b0533915e37833c68ab06f13e48bfe68c1ac7",
+    "src/main/sandbox/local-claude.cjs": "462bdd01d247433c888e20e863d34cfc5c9029ff1944999a180c6f2ee5ed5b7a",
+    "src/main/sandbox/local-mcp.cjs": "b1cc2fa0b8eab7255f65e9bb2bc7e1634b0be152f460a986957fb9f853fc88fa",
+    "src/main/sandbox/local-setup.cjs": "af7e5eb1b321b8fc4298597cf8c0d5d36fe6d40bde024953d1f53cb00e2d934e",
+    "src/main/sandbox/local-tools.cjs": "30bf4f42b9c5a2e000fad940ad3fabc42190a8828d62262bd182bd00265893c0",
+    "src/main/sandbox/local-install.cjs": "5aab0eba6ad56ff9cd24e75c9b5e535cb3fc8fc5f11ecefd2eda91caf61f8486",
+    "src/main/sandbox/install-job.py": "3d04d837bc938f36f190de4b6a37fb332aa8e052fa7055fa0b5352dbc0b73f71",
+    "src/main/sandbox/launch.py": "74c20a13749846e31fa6df662dd39fab3947c34d0e73c39dc3d39ad116c0ddbd",
+    "src/main/sandbox/npm-audit.cjs": "92774b875fe0888513f244ef2e0407a9400c66992e510e43a3b74d2d4d8ab07b",
+    "src/main/sandbox/npm-audit.py": "38609ee754505ed198890ba97195fc6e91e360a3f438dea39a3b4c7c4216fed9",
+    "src/main/sandbox/environment.cjs": "a82bc4db92d14a13f32aa5c7376fa8b31a58cd54f360316a9c703a436d88e7bb",
+    "src/main/sandbox/runs.cjs": "7988bf9120c3ecf87540881eea6f720eb95522abd860864b58a5d15fb683f069",
+    "src/main/terminal/launch.cjs": "5e991dccec88e175e96bc03bb8502ea827a0f686ff1b4ec18c911b38b3e56950",
+    "src/shared/environment.cjs": "f8df40d97cf97861712f8832a5c1329abb16db927e47a0eb7da276b797f6ea4d"
+  },
+  "original_source_hashes": {
+    "src/main/sandbox/worker.cjs": "dfabb0006c7866622d00149da23b0533915e37833c68ab06f13e48bfe68c1ac7",
+    "src/main/sandbox/local-claude.cjs": "462bdd01d247433c888e20e863d34cfc5c9029ff1944999a180c6f2ee5ed5b7a",
+    "src/main/sandbox/local-mcp.cjs": "b1cc2fa0b8eab7255f65e9bb2bc7e1634b0be152f460a986957fb9f853fc88fa",
+    "src/main/sandbox/local-setup.cjs": "af7e5eb1b321b8fc4298597cf8c0d5d36fe6d40bde024953d1f53cb00e2d934e",
+    "src/main/sandbox/local-tools.cjs": "30bf4f42b9c5a2e000fad940ad3fabc42190a8828d62262bd182bd00265893c0",
+    "src/main/sandbox/local-install.cjs": "5aab0eba6ad56ff9cd24e75c9b5e535cb3fc8fc5f11ecefd2eda91caf61f8486",
+    "src/main/sandbox/install-job.py": "3d04d837bc938f36f190de4b6a37fb332aa8e052fa7055fa0b5352dbc0b73f71",
+    "src/main/sandbox/launch.py": "74c20a13749846e31fa6df662dd39fab3947c34d0e73c39dc3d39ad116c0ddbd",
+    "src/main/sandbox/npm-audit.cjs": "92774b875fe0888513f244ef2e0407a9400c66992e510e43a3b74d2d4d8ab07b",
+    "src/main/sandbox/npm-audit.py": "38609ee754505ed198890ba97195fc6e91e360a3f438dea39a3b4c7c4216fed9",
+    "src/main/sandbox/environment.cjs": "a82bc4db92d14a13f32aa5c7376fa8b31a58cd54f360316a9c703a436d88e7bb",
+    "src/main/sandbox/runs.cjs": "7988bf9120c3ecf87540881eea6f720eb95522abd860864b58a5d15fb683f069",
+    "src/main/terminal/launch.cjs": "5e991dccec88e175e96bc03bb8502ea827a0f686ff1b4ec18c911b38b3e56950",
+    "src/shared/environment.cjs": "f8df40d97cf97861712f8832a5c1329abb16db927e47a0eb7da276b797f6ea4d"
+  },
+  "reconstructed": false,
+  "directory": "docs/benchmarks/2026-09-24-railpack-early-ready-e2e/implementations/baseline"
+}

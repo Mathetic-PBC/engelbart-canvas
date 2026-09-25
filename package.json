@@ -12,6 +12,8 @@
     "migrate": "node scripts/migrate-structure.cjs",
     "test": "node --test test/*.test.cjs",
     "test:pty": "ELECTRON_RUN_AS_NODE=1 electron --test test/*.integration.cjs",
+    "sandbox:cache:build": "node scripts/build-sandbox-cache.cjs",
+    "sandbox:cache:bench": "node scripts/benchmark-sandbox-cache.cjs",
     "rebuild": "electron-rebuild -f -w node-pty",
     "postinstall": "npm run rebuild",
     "package": "npm run build && electron-packager . Engelbart --platform=darwin --arch=arm64 --out=release --app-bundle-id=dev.engelbart.desktop --asar.unpackDir='{node_modules/node-pty,node_modules/@electric-sql/pglite}' --ignore='^/((test|docs|design|release|[.]superpowers|[.]git)($|/)|[.]env)' --overwrite",

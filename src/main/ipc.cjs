@@ -11,6 +11,7 @@ const home = require('./store/home.cjs');
 const db = require('./store/db.cjs');
 const projects = require('./store/projects.cjs');
 const library = require('./store/library.cjs');
+const interfaceAnnotations = require('./store/interface-annotations.cjs');
 const { expandDoc } = require('./context/expand-mentions.cjs');
 const { failureLines } = require('./bart/reply.cjs');
 const { readShellHistory } = require('./shell-history.cjs');
@@ -47,6 +48,9 @@ function projectInput(value) {
 // library back (the app checks for pdfs saved as links: store/web-pdfs.cjs).
 function createStore({ homeDir, fixturesDir, inspectPdf: readPdf = null, afterOpen = null }) {
   const layout = home.ensureHome(homeDir);
+  // The app starts in normal mode now that the test controls are gone. Keep the old
+  // test data intact; scripted tests can still opt in with setTestMode after opening.
+  if (home.readConfig(layout.root).testMode) home.writeConfig(layout.root, { testMode: false });
   const contexts = new Map();
 
   function mode() {
@@ -179,6 +183,11 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     return created;
   }));
   handle('rename-workspace', withCtx((ctx, pid, wid, name) => projects.renameWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(name, 'name'))));
+  handle('delete-workspace', withCtx(async (ctx, pid, wid) => {
+    const result = await projects.deleteWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64));
+    navChanged();
+    return result;
+  }));
   handle('set-workspace-status', withCtx((ctx, pid, wid, status) => projects.setWorkspaceStatus(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(status, 'status', 32))));
   // All attachment paths share the same handoff: persist context first, then
   // prepare newly linked repositories. Mode changes drain this queue too.
@@ -356,6 +365,10 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   }));
   handle('read-library-file', withCtx((ctx, id) => library.readLibraryFile(ctx, str(id, 'library id', 64))));
   handle('read-annotations', withCtx((ctx, id) => library.readAnnotations(ctx, str(id, 'library id', 64))));
+  handle('interface-annotations', withCtx((ctx, scope) => interfaceAnnotations.list(ctx, scope)));
+  handle('create-interface-annotation', withCtx((ctx, scope, note) => interfaceAnnotations.create(ctx, scope, note)));
+  handle('edit-interface-annotation', withCtx((ctx, scope, id, body) => interfaceAnnotations.edit(ctx, scope, str(id, 'annotation id', 64), body)));
+  handle('delete-interface-annotation', withCtx((ctx, scope, id) => interfaceAnnotations.remove(ctx, scope, str(id, 'annotation id', 64))));
   handle('write-annotations', withCtx((ctx, id, value) => library.writeAnnotations(ctx, str(id, 'library id', 64), value)));
   // Ink on a pdf in the Browser pane, by its address (a link, or a file: address inside the home directory).
   handle('read-page-annotations', withCtx((ctx, input) => library.readPageAnnotations(ctx, str(input, 'address', 8192))));

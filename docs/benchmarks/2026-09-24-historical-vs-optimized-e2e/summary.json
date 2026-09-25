@@ -1,0 +1,955 @@
+{
+  "complete": true,
+  "baseline_kind": "historical",
+  "repositories": [
+    {
+      "repository": "mqo00/rope",
+      "comparable_successful_artifacts": true,
+      "all_succeeded": true,
+      "variants": [
+        {
+          "variant": "baseline",
+          "successes": 3,
+          "trials": 3,
+          "rows": [
+            {
+              "round": 1,
+              "status": "ready",
+              "total_ms": 141077,
+              "failure_ms": null,
+              "agent_ms": 136009,
+              "cli_api_ms": 41488,
+              "tool_roundtrip_union_ms": 94987,
+              "installs": [
+                {
+                  "id": "17de2194-65a7-47d8-9c21-1d6688105ba0",
+                  "command": "npm ci",
+                  "started_ms": 14022,
+                  "status": "succeeded",
+                  "finished_ms": 112949,
+                  "elapsed_ms": 98928,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 98927,
+              "last_install_to_launch_ms": 12227,
+              "launch_request_before_install_end": false,
+              "launch_wait_requested": false,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 137008,
+              "verified_launch_to_worker_ready_ms": 3990,
+              "parallel_install_used": false,
+              "tool_count": 23,
+              "usage": {
+                "input_tokens": 30,
+                "output_tokens": 3620,
+                "cache_creation_input_tokens": 25219,
+                "cache_read_input_tokens": 250684
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "mqo00--rope-r1-baseline"
+            },
+            {
+              "round": 2,
+              "status": "ready",
+              "total_ms": 144257,
+              "failure_ms": null,
+              "agent_ms": 140074,
+              "cli_api_ms": 60593,
+              "tool_roundtrip_union_ms": 79942,
+              "installs": [
+                {
+                  "id": "9ac0d9c9-8ab5-44c2-93a3-573e21abd89b",
+                  "command": "npm ci",
+                  "started_ms": 16701,
+                  "status": "succeeded",
+                  "finished_ms": 97003,
+                  "elapsed_ms": 80302,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 80302,
+              "last_install_to_launch_ms": 30589,
+              "launch_request_before_install_end": false,
+              "launch_wait_requested": false,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 139409,
+              "verified_launch_to_worker_ready_ms": 4677,
+              "parallel_install_used": false,
+              "tool_count": 24,
+              "usage": {
+                "input_tokens": 30,
+                "output_tokens": 3695,
+                "cache_creation_input_tokens": 20078,
+                "cache_read_input_tokens": 260476
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "mqo00--rope-r2-baseline"
+            },
+            {
+              "round": 3,
+              "status": "ready",
+              "total_ms": 103807,
+              "failure_ms": null,
+              "agent_ms": 99848,
+              "cli_api_ms": 32796,
+              "tool_roundtrip_union_ms": 67515,
+              "installs": [
+                {
+                  "id": "d191f50e-7d82-4bd6-aca9-10bb94e00f00",
+                  "command": "npm ci",
+                  "started_ms": 11131,
+                  "status": "succeeded",
+                  "finished_ms": 74981,
+                  "elapsed_ms": 63850,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 63850,
+              "last_install_to_launch_ms": 14156,
+              "launch_request_before_install_end": false,
+              "launch_wait_requested": false,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 100937,
+              "verified_launch_to_worker_ready_ms": 2691,
+              "parallel_install_used": false,
+              "tool_count": 22,
+              "usage": {
+                "input_tokens": 26,
+                "output_tokens": 3138,
+                "cache_creation_input_tokens": 17763,
+                "cache_read_input_tokens": 211195
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "mqo00--rope-r3-baseline"
+            }
+          ],
+          "median_ms": 141077,
+          "mean_ms": 129713.66666666667,
+          "median_install_job_union_ms": 80302,
+          "median_agent_ms": 136009
+        },
+        {
+          "variant": "optimized",
+          "successes": 3,
+          "trials": 3,
+          "rows": [
+            {
+              "round": 1,
+              "status": "ready",
+              "total_ms": 63593,
+              "failure_ms": null,
+              "agent_ms": 58708,
+              "cli_api_ms": 43521,
+              "tool_roundtrip_union_ms": 15328,
+              "installs": [
+                {
+                  "id": "03b27ca9-1725-4827-9a75-1f08a65a32fb",
+                  "command": "npm ci",
+                  "started_ms": 17484,
+                  "status": "succeeded",
+                  "finished_ms": 35221,
+                  "elapsed_ms": 17738,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 17737,
+              "last_install_to_launch_ms": 11270,
+              "launch_request_before_install_end": false,
+              "launch_wait_requested": true,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 58638,
+              "verified_launch_to_worker_ready_ms": 4759,
+              "parallel_install_used": false,
+              "tool_count": 18,
+              "usage": {
+                "input_tokens": 22,
+                "output_tokens": 2517,
+                "cache_creation_input_tokens": 19620,
+                "cache_read_input_tokens": 191707
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "mqo00--rope-r1-optimized"
+            },
+            {
+              "round": 2,
+              "status": "ready",
+              "total_ms": 49995,
+              "failure_ms": null,
+              "agent_ms": 46027,
+              "cli_api_ms": 20535,
+              "tool_roundtrip_union_ms": 25137,
+              "installs": [
+                {
+                  "id": "5a432985-fb16-4185-811a-381604483248",
+                  "command": "npm ci",
+                  "started_ms": 18502,
+                  "status": "succeeded",
+                  "finished_ms": 34606,
+                  "elapsed_ms": 16104,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 16104,
+              "last_install_to_launch_ms": 567,
+              "launch_request_before_install_end": true,
+              "launch_wait_requested": true,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 45666,
+              "verified_launch_to_worker_ready_ms": 4250,
+              "parallel_install_used": false,
+              "tool_count": 9,
+              "usage": {
+                "input_tokens": 12,
+                "output_tokens": 1466,
+                "cache_creation_input_tokens": 12802,
+                "cache_read_input_tokens": 80734
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "mqo00--rope-r2-optimized"
+            },
+            {
+              "round": 3,
+              "status": "ready",
+              "total_ms": 54812,
+              "failure_ms": null,
+              "agent_ms": 50793,
+              "cli_api_ms": 25780,
+              "tool_roundtrip_union_ms": 25345,
+              "installs": [
+                {
+                  "id": "be3009f5-c595-4b77-a307-16cd855cb49f",
+                  "command": "npm ci",
+                  "started_ms": 26328,
+                  "status": "succeeded",
+                  "finished_ms": 41573,
+                  "elapsed_ms": 15245,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 15245,
+              "last_install_to_launch_ms": 495,
+              "launch_request_before_install_end": true,
+              "launch_wait_requested": true,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 51866,
+              "verified_launch_to_worker_ready_ms": 2793,
+              "parallel_install_used": false,
+              "tool_count": 15,
+              "usage": {
+                "input_tokens": 16,
+                "output_tokens": 2229,
+                "cache_creation_input_tokens": 17093,
+                "cache_read_input_tokens": 126062
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "mqo00--rope-r3-optimized"
+            }
+          ],
+          "median_ms": 54812,
+          "mean_ms": 56133.333333333336,
+          "median_install_job_union_ms": 16104,
+          "median_agent_ms": 50793
+        }
+      ],
+      "median_reduction_ms": 86265,
+      "percent_reduction": 61.14745848012078
+    },
+    {
+      "repository": "kjfeng/cocoa-canvas",
+      "comparable_successful_artifacts": false,
+      "all_succeeded": true,
+      "variants": [
+        {
+          "variant": "baseline",
+          "successes": 3,
+          "trials": 3,
+          "rows": [
+            {
+              "round": 1,
+              "status": "ready",
+              "total_ms": 256403,
+              "failure_ms": null,
+              "agent_ms": 249696,
+              "cli_api_ms": 47937,
+              "tool_roundtrip_union_ms": 201977,
+              "installs": [
+                {
+                  "id": "b4821c96-de5c-4738-9136-19a27fa52aae",
+                  "command": "npm ci",
+                  "started_ms": 21661,
+                  "status": "succeeded",
+                  "finished_ms": 38139,
+                  "elapsed_ms": 16478,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 16478,
+              "last_install_to_launch_ms": 1839,
+              "launch_request_before_install_end": false,
+              "launch_wait_requested": false,
+              "launch_attempts": 3,
+              "failed_launch_attempts": 2,
+              "first_verified_launch_ms": 253516,
+              "verified_launch_to_worker_ready_ms": 2740,
+              "parallel_install_used": false,
+              "tool_count": 22,
+              "usage": {
+                "input_tokens": 32,
+                "output_tokens": 4490,
+                "cache_creation_input_tokens": 13671,
+                "cache_read_input_tokens": 232811
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "tracked_source_changes": " M client/vite.config.ts\n",
+              "artifact_error": null,
+              "directory": "kjfeng--cocoa-canvas-r1-baseline"
+            },
+            {
+              "round": 2,
+              "status": "ready",
+              "total_ms": 314472,
+              "failure_ms": null,
+              "agent_ms": 308622,
+              "cli_api_ms": 52149,
+              "tool_roundtrip_union_ms": 256551,
+              "installs": [
+                {
+                  "id": "67ccfcf5-2f47-4c9e-ba38-d1663f362d84",
+                  "command": "npm install",
+                  "started_ms": 8214,
+                  "status": "succeeded",
+                  "finished_ms": 24038,
+                  "elapsed_ms": 15823,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 15824,
+              "last_install_to_launch_ms": 1992,
+              "launch_request_before_install_end": false,
+              "launch_wait_requested": false,
+              "launch_attempts": 4,
+              "failed_launch_attempts": 3,
+              "first_verified_launch_ms": 310753,
+              "verified_launch_to_worker_ready_ms": 3582,
+              "parallel_install_used": false,
+              "tool_count": 23,
+              "usage": {
+                "input_tokens": 36,
+                "output_tokens": 5131,
+                "cache_creation_input_tokens": 15182,
+                "cache_read_input_tokens": 273772
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "tracked_source_changes": " M client/vite.config.ts\n M package-lock.json\n",
+              "artifact_error": null,
+              "directory": "kjfeng--cocoa-canvas-r2-baseline"
+            },
+            {
+              "round": 3,
+              "status": "ready",
+              "total_ms": 373064,
+              "failure_ms": null,
+              "agent_ms": 365424,
+              "cli_api_ms": 90694,
+              "tool_roundtrip_union_ms": 275007,
+              "installs": [
+                {
+                  "id": "6c55071e-92ce-46ab-aec6-b7ba0d608fc2",
+                  "command": "npm install",
+                  "started_ms": 27101,
+                  "status": "succeeded",
+                  "finished_ms": 44472,
+                  "elapsed_ms": 17371,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 17371,
+              "last_install_to_launch_ms": 3964,
+              "launch_request_before_install_end": false,
+              "launch_wait_requested": false,
+              "launch_attempts": 4,
+              "failed_launch_attempts": 3,
+              "first_verified_launch_ms": 369049,
+              "verified_launch_to_worker_ready_ms": 3855,
+              "parallel_install_used": false,
+              "tool_count": 29,
+              "usage": {
+                "input_tokens": 44,
+                "output_tokens": 6208,
+                "cache_creation_input_tokens": 17406,
+                "cache_read_input_tokens": 369579
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "tracked_source_changes": " M client/vite.config.ts\n M package-lock.json\n",
+              "artifact_error": null,
+              "directory": "kjfeng--cocoa-canvas-r3-baseline"
+            }
+          ],
+          "median_ms": 314472,
+          "mean_ms": 314646.3333333333,
+          "median_install_job_union_ms": 16478,
+          "median_agent_ms": 308622
+        },
+        {
+          "variant": "optimized",
+          "successes": 3,
+          "trials": 3,
+          "rows": [
+            {
+              "round": 1,
+              "status": "ready",
+              "total_ms": 25368,
+              "failure_ms": null,
+              "agent_ms": 20053,
+              "cli_api_ms": 11826,
+              "tool_roundtrip_union_ms": 7874,
+              "installs": [
+                {
+                  "id": "a45263e9-0e87-45cd-b2ac-4e65c550a13a",
+                  "command": "npm ci",
+                  "started_ms": 8836,
+                  "status": "succeeded",
+                  "finished_ms": 20339,
+                  "elapsed_ms": 11504,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 11503,
+              "last_install_to_launch_ms": 514,
+              "launch_request_before_install_end": true,
+              "launch_wait_requested": true,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 22748,
+              "verified_launch_to_worker_ready_ms": 2470,
+              "parallel_install_used": false,
+              "tool_count": 8,
+              "usage": {
+                "input_tokens": 8,
+                "output_tokens": 1267,
+                "cache_creation_input_tokens": 10820,
+                "cache_read_input_tokens": 45899
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "kjfeng--cocoa-canvas-r1-optimized"
+            },
+            {
+              "round": 2,
+              "status": "ready",
+              "total_ms": 42204,
+              "failure_ms": null,
+              "agent_ms": 35653,
+              "cli_api_ms": 26685,
+              "tool_roundtrip_union_ms": 9101,
+              "installs": [
+                {
+                  "id": "6a56c7e4-6a68-4739-837a-7572a87040d7",
+                  "command": "npm ci",
+                  "started_ms": 19717,
+                  "status": "succeeded",
+                  "finished_ms": 33221,
+                  "elapsed_ms": 13504,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 13504,
+              "last_install_to_launch_ms": 523,
+              "launch_request_before_install_end": true,
+              "launch_wait_requested": true,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 35866,
+              "verified_launch_to_worker_ready_ms": 6192,
+              "parallel_install_used": false,
+              "tool_count": 10,
+              "usage": {
+                "input_tokens": 10,
+                "output_tokens": 1795,
+                "cache_creation_input_tokens": 11529,
+                "cache_read_input_tokens": 59911
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "kjfeng--cocoa-canvas-r2-optimized"
+            },
+            {
+              "round": 3,
+              "status": "ready",
+              "total_ms": 37127,
+              "failure_ms": null,
+              "agent_ms": 30004,
+              "cli_api_ms": 19628,
+              "tool_roundtrip_union_ms": 10422,
+              "installs": [
+                {
+                  "id": "d31955a3-1c4c-48d1-9eed-e30a183a3a8a",
+                  "command": "npm ci",
+                  "started_ms": 12184,
+                  "status": "succeeded",
+                  "finished_ms": 27424,
+                  "elapsed_ms": 15240,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 15240,
+              "last_install_to_launch_ms": 3798,
+              "launch_request_before_install_end": false,
+              "launch_wait_requested": true,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 33653,
+              "verified_launch_to_worker_ready_ms": 3324,
+              "parallel_install_used": false,
+              "tool_count": 10,
+              "usage": {
+                "input_tokens": 10,
+                "output_tokens": 1452,
+                "cache_creation_input_tokens": 11621,
+                "cache_read_input_tokens": 62547
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "kjfeng--cocoa-canvas-r3-optimized"
+            }
+          ],
+          "median_ms": 37127,
+          "mean_ms": 34899.666666666664,
+          "median_install_job_union_ms": 13504,
+          "median_agent_ms": 30004
+        }
+      ],
+      "median_reduction_ms": null,
+      "percent_reduction": null
+    },
+    {
+      "repository": "mqo00/hypocompass",
+      "comparable_successful_artifacts": false,
+      "all_succeeded": true,
+      "variants": [
+        {
+          "variant": "baseline",
+          "successes": 3,
+          "trials": 3,
+          "rows": [
+            {
+              "round": 1,
+              "status": "ready",
+              "total_ms": 114556,
+              "failure_ms": null,
+              "agent_ms": 108913,
+              "cli_api_ms": 57411,
+              "tool_roundtrip_union_ms": 51731,
+              "installs": [
+                {
+                  "id": "d2e46b9d-b602-4b13-acbb-f6282cebe2a7",
+                  "command": "npm install",
+                  "started_ms": 30110,
+                  "status": "succeeded",
+                  "finished_ms": 56997,
+                  "elapsed_ms": 26887,
+                  "exit_code": 0
+                },
+                {
+                  "id": "e127caed-4c7a-4ba7-8fab-4ace27f2fe6b",
+                  "command": "python3 -m venv .venv && .venv/bin/python -m pip install --upgrade pip && .venv/bin/pip install -r requirements.txt",
+                  "started_ms": 60079,
+                  "status": "succeeded",
+                  "finished_ms": 71262,
+                  "elapsed_ms": 11182,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 38070,
+              "last_install_to_launch_ms": 22010,
+              "launch_request_before_install_end": false,
+              "launch_wait_requested": false,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 110688,
+              "verified_launch_to_worker_ready_ms": 3720,
+              "parallel_install_used": false,
+              "tool_count": 21,
+              "usage": {
+                "input_tokens": 26,
+                "output_tokens": 4200,
+                "cache_creation_input_tokens": 23186,
+                "cache_read_input_tokens": 242801
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "mqo00--hypocompass-r1-baseline"
+            },
+            {
+              "round": 2,
+              "status": "ready",
+              "total_ms": 134165,
+              "failure_ms": null,
+              "agent_ms": 130067,
+              "cli_api_ms": 41687,
+              "tool_roundtrip_union_ms": 89011,
+              "installs": [
+                {
+                  "id": "e2d03bd1-807b-4086-b5a1-69b2963dc8a8",
+                  "command": "npm install",
+                  "started_ms": 34301,
+                  "status": "succeeded",
+                  "finished_ms": 62525,
+                  "elapsed_ms": 28225,
+                  "exit_code": 0
+                },
+                {
+                  "id": "3009d1d0-5011-4696-8ace-9fb846f59177",
+                  "command": "python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt",
+                  "started_ms": 64439,
+                  "status": "succeeded",
+                  "finished_ms": 78598,
+                  "elapsed_ms": 14158,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 42383,
+              "last_install_to_launch_ms": 38256,
+              "launch_request_before_install_end": false,
+              "launch_wait_requested": false,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 132480,
+              "verified_launch_to_worker_ready_ms": 1622,
+              "parallel_install_used": false,
+              "tool_count": 23,
+              "usage": {
+                "input_tokens": 28,
+                "output_tokens": 3707,
+                "cache_creation_input_tokens": 29223,
+                "cache_read_input_tokens": 289178
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "mqo00--hypocompass-r2-baseline"
+            },
+            {
+              "round": 3,
+              "status": "ready",
+              "total_ms": 138433,
+              "failure_ms": null,
+              "agent_ms": 128706,
+              "cli_api_ms": 43731,
+              "tool_roundtrip_union_ms": 85258,
+              "installs": [
+                {
+                  "id": "54f6f2fa-3e52-4c3b-a404-6190c570b0b0",
+                  "command": "cd /home/user/repository/system/frontend && npm install && cd /home/user/repository/system/backend && python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt",
+                  "started_ms": 40382,
+                  "status": "succeeded",
+                  "finished_ms": 80221,
+                  "elapsed_ms": 39840,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 39839,
+              "last_install_to_launch_ms": 39379,
+              "launch_request_before_install_end": false,
+              "launch_wait_requested": false,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 135943,
+              "verified_launch_to_worker_ready_ms": 2349,
+              "parallel_install_used": false,
+              "tool_count": 19,
+              "usage": {
+                "input_tokens": 24,
+                "output_tokens": 4119,
+                "cache_creation_input_tokens": 25980,
+                "cache_read_input_tokens": 220199
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "mqo00--hypocompass-r3-baseline"
+            }
+          ],
+          "median_ms": 134165,
+          "mean_ms": 129051.33333333333,
+          "median_install_job_union_ms": 39839,
+          "median_agent_ms": 128706
+        },
+        {
+          "variant": "optimized",
+          "successes": 3,
+          "trials": 3,
+          "rows": [
+            {
+              "round": 1,
+              "status": "ready",
+              "total_ms": 72349,
+              "failure_ms": null,
+              "agent_ms": 67626,
+              "cli_api_ms": 36088,
+              "tool_roundtrip_union_ms": 31426,
+              "installs": [
+                {
+                  "id": "8394fbe4-7fa0-47ac-9d9d-576429dec909",
+                  "command": "Parallel dependency installs: npm (system/frontend) + pip (system/backend)",
+                  "started_ms": 29091,
+                  "status": "succeeded",
+                  "finished_ms": 45342,
+                  "elapsed_ms": 16251,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 16251,
+              "last_install_to_launch_ms": 6069,
+              "launch_request_before_install_end": false,
+              "launch_wait_requested": true,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 67139,
+              "verified_launch_to_worker_ready_ms": 5147,
+              "parallel_install_used": true,
+              "tool_count": 12,
+              "usage": {
+                "input_tokens": 14,
+                "output_tokens": 3325,
+                "cache_creation_input_tokens": 25189,
+                "cache_read_input_tokens": 111416
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "mqo00--hypocompass-r1-optimized"
+            },
+            {
+              "round": 2,
+              "status": "ready",
+              "total_ms": 108502,
+              "failure_ms": null,
+              "agent_ms": 103718,
+              "cli_api_ms": 68749,
+              "tool_roundtrip_union_ms": 35043,
+              "installs": [
+                {
+                  "id": "c63f12ba-70fa-40bb-bb7e-091db57308ec",
+                  "command": "Parallel dependency installs: npm (system/frontend) + pip (system/backend)",
+                  "started_ms": 29453,
+                  "status": "succeeded",
+                  "finished_ms": 45399,
+                  "elapsed_ms": 15946,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 15946,
+              "last_install_to_launch_ms": 26653,
+              "launch_request_before_install_end": false,
+              "launch_wait_requested": true,
+              "launch_attempts": 2,
+              "failed_launch_attempts": 1,
+              "first_verified_launch_ms": 102324,
+              "verified_launch_to_worker_ready_ms": 6040,
+              "parallel_install_used": true,
+              "tool_count": 19,
+              "usage": {
+                "input_tokens": 28,
+                "output_tokens": 4696,
+                "cache_creation_input_tokens": 30963,
+                "cache_read_input_tokens": 321851
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "mqo00--hypocompass-r2-optimized"
+            },
+            {
+              "round": 3,
+              "status": "ready",
+              "total_ms": 64765,
+              "failure_ms": null,
+              "agent_ms": 60930,
+              "cli_api_ms": 32948,
+              "tool_roundtrip_union_ms": 28365,
+              "installs": [
+                {
+                  "id": "66686453-9794-49e2-80a2-8a4060fdf8df",
+                  "command": "Parallel dependency installs: npm (system/frontend) + pip (system/backend)",
+                  "started_ms": 28514,
+                  "status": "succeeded",
+                  "finished_ms": 43952,
+                  "elapsed_ms": 15438,
+                  "exit_code": 0
+                }
+              ],
+              "install_job_union_ms": 15438,
+              "last_install_to_launch_ms": 3095,
+              "launch_request_before_install_end": false,
+              "launch_wait_requested": true,
+              "launch_attempts": 1,
+              "failed_launch_attempts": 0,
+              "first_verified_launch_ms": 62396,
+              "verified_launch_to_worker_ready_ms": 2225,
+              "parallel_install_used": true,
+              "tool_count": 15,
+              "usage": {
+                "input_tokens": 16,
+                "output_tokens": 3109,
+                "cache_creation_input_tokens": 30512,
+                "cache_read_input_tokens": 142736
+              },
+              "public_check": {
+                "status": 200,
+                "html": true,
+                "ok": true
+              },
+              "cleaned_up": true,
+              "error": null,
+              "tracked_source_changes": "",
+              "artifact_error": null,
+              "directory": "mqo00--hypocompass-r3-optimized"
+            }
+          ],
+          "median_ms": 72349,
+          "mean_ms": 81872,
+          "median_install_job_union_ms": 15946,
+          "median_agent_ms": 67626
+        }
+      ],
+      "median_reduction_ms": null,
+      "percent_reduction": null
+    }
+  ],
+  "trials": 18,
+  "all_test_sandboxes_cleaned_up": true,
+  "notes": [
+    "End-to-end means worker request through independent HTTP 200 HTML preview; Electron UI/IPC and backend feature correctness are not measured.",
+    "Exact earliest local-Claude Git sources; this historical baseline already overlaps installation with inspection and is not fully unoptimized.",
+    "Agent time overlaps installs/tool waits. CLI API duration is not pure thinking time. Do not sum phases.",
+    "Each median uses successful trials; failures and success counts remain visible. Do not call a faster failure an improvement.",
+    "Three trials per case are a small sample. Claude decisions, prompt cache, network and service latency vary.",
+    "A feature being enabled is not proof the agent used it; parallel install and early handoff usage are recorded."
+  ]
+}

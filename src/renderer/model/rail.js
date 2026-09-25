@@ -1,7 +1,7 @@
 // What the workspace sidebar's search and the document's @ menu list (Claude Design "Canvas.dc.html" and
 // "Add - Mention.dc.html", 2026-09-22). Pure: the rows come in, the lists go out; the screen does the adding.
 
-import { hasTag, isNote, kindLabel } from './kind.js';
+import { hasTag, isNote, kindKey, kindLabel } from './kind.js';
 
 /**
  * The sidebar's sections, in order (Claude Design "Sidebar.dc.html", 2026-09-23): Notes, Websites, GitHub, Files and
@@ -31,6 +31,69 @@ export function railSections(rows) {
   return RAIL_SECTIONS.map((section) => ({ ...section, rows: by.get(section.key) })).filter((section) => section.rows.length > 0);
 }
 
+// Source categories use the existing file kinds; they do not create new stored library types.
+const OTHER_CONTEXT_CATEGORIES = [
+  { id: 'images', label: 'Images', kind: 'image', empty: 'No images yet' },
+  { id: 'datasets', label: 'Datasets', kind: 'data', empty: 'No datasets yet' },
+  { id: 'web-pages', label: 'Web pages', kind: 'website', empty: 'No web pages yet' },
+  { id: 'conversations', label: 'Conversations', kind: 'chat', type: 'conversation', empty: 'No conversations yet' },
+  { id: 'other-notes', label: 'Notes', kind: 'note', type: 'md', empty: 'No notes yet' },
+];
+
+/** Each sidebar node has direct rows and optional child categories; no item is duplicated or dropped. */
+export function sidebarSections(rows) {
+  const sections = [
+    { id: 'github', label: 'GitHub', rows: [] },
+    { id: 'overleaf', label: 'Overleaf', rows: [] },
+    { id: 'papers', label: 'Papers', rows: [] },
+    { id: 'notes', label: 'Documents', rows: [] },
+    { id: 'other', label: 'Other context', rows: [], children: OTHER_CONTEXT_CATEGORIES.map((category) => ({ ...category, rows: [] })) },
+  ];
+  const byId = new Map(sections.flatMap((section) => [section, ...(section.children || [])]).map((section) => [section.id, section]));
+  for (const row of rows) {
+    if (row.type === 'workspace' || row.type === 'child') continue;
+    const section = byId.get(sidebarSectionOf(row));
+    const kind = row.type === 'html' ? 'website' : kindKey(row);
+    const category = section.children?.find((child) => child.type ? child.type === row.type : child.kind === kind);
+    (category || section).rows.push(row);
+  }
+  return sections;
+}
+
+/** Linked projects retain their category when they are reopened from the library. */
+export function sidebarSectionOf(row) {
+  if (row.type === 'conversation') return 'other';
+  if (row.type === 'pdf') return hasTag(row, 'paper') ? 'papers' : 'notes';
+  if (hasTag(row, 'sticky')) return 'other';
+  if (hasTag(row, 'git')) return 'github';
+  const linked = linkedSidebarSection(row.url);
+  if (linked) return linked;
+  if (isNote(row)) return 'notes';
+  if (hasTag(row, 'paper')) return 'papers';
+  return 'other';
+}
+
+export function linkedSidebarSection(value) {
+  let url;
+  try { url = new URL(value); } catch { return null; }
+  if (!['https:', 'http:'].includes(url.protocol)) return null;
+  const host = url.hostname.toLowerCase().replace(/^www\./, '');
+  if (host === 'overleaf.com') return 'overleaf';
+  return null;
+}
+
+/** Claude and Codex sessions already owned by this project, including agents started from a shell. */
+export function conversationRows(sessions, activeId) {
+  return sessions.flatMap((record) => {
+    const provider = ['claude', 'codex'].includes(record.snapshot.provider) ? record.snapshot.provider
+      : record.shell?.busy ? /^(?:\s*(?:command|exec|noglob|nocorrect|sudo)\s+|\s*[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*\s*(?:\S*\/)?(claude|codex)(?:\s|$)/.exec(record.shell.command || '')?.[1] : null;
+    if (!provider) return [];
+    const label = provider === 'claude' ? 'Claude Code' : 'Codex';
+    return [{ id: record.snapshot.id, name: record.snapshot.provider === 'shell' ? label : record.displayTitle || label,
+      type: 'conversation', provider, tags: [], on: record.snapshot.id === activeId }];
+  });
+}
+
 /** Something the library could add, by its spelling alone: a web address, an arXiv or DOI id, a git remote, a path from / or ~/. The main process decides for real. */
 export function looksAddable(value) {
   const v = String(value || '').trim().replace(/^["'](.*)["']$/, '$1').trim();
@@ -42,15 +105,17 @@ export function looksAddable(value) {
 /** What a row is searched by: its name, where it is, and the words shown beside it. */
 const hay = (row) => [row.name, row.url || '', row.path || '', row.folder_path || '', kindLabel(row)].join(' ').toLowerCase();
 
+const NEW_NOTE = { kind: 'note', key: 'new:note', name: 'New document', glyph: 'note', tag: 'new' };
+const NEW_WORKSPACE = { kind: 'child', key: 'new:workspace', name: 'New workspace', glyph: 'workspace', tag: 'new' };
+
 /**
- * The search field under the workspace's name (Canvas.dc.html `results`): it finds anything the library holds and brings
- * it into this workspace. Empty, it offers four things from the library that are not here yet; typed, every match in the
- * library (no cap), what is here already included (`here`: picking one opens it). An address or a path is the one row the library
- * has for it (`here` when it is on the rail already) or a new one — that needs `found`, the main process's answer
- * (library.lookupItem): undefined while it is on its way. Making a note or a nested workspace is the +'s job (2026-09-22).
- * Rows: { kind: 'item' | 'fresh', key, name, tag, row?, found? }; a tag that starts with "new" draws a +.
+ * Search sits below the current workspace card. It finds workspaces throughout the project and items already in context as well
+ * as the rest of the library. Empty, it offers creation actions and four items that are not here yet. An address or path is the row the
+ * library has for it (`here` when it is on the rail already) or a new one — that needs `found`, the main process's
+ * answer (library.lookupItem): undefined while it is on its way.
+ * Rows: { kind: 'workspace' | 'item' | 'fresh' | 'note' | 'child', key, name, tag, row?, found? }; a tag starting with "new" draws a +.
  */
-export function searchRows({ query, library, inRail, found }) {
+export function searchRows({ query, library, inRail, found, workspaces = [] }) {
   const typed = String(query || '').trim();
   if (looksAddable(typed)) {
     if (!found || found.error) return [];
@@ -58,10 +123,16 @@ export function searchRows({ query, library, inRail, found }) {
     return found.found ? [{ kind: 'fresh', key: `fresh:${typed}`, found: found.found, name: found.found.name, tag: `new ${kindLabel(found.found)}` }] : [];
   }
   const needle = typed.toLowerCase();
-  const hits = needle
-    ? library.filter((row) => hay(row).includes(needle))
-    : library.filter((row) => !inRail(row.id) && !row.tags.includes('note') && row.type !== 'image').slice(0, 4);
-  return hits.map((row) => ({ kind: 'item', key: row.id, row, name: row.name, tag: inRail(row.id) ? 'here' : kindLabel(row) }));
+  const workspaceHits = [];
+  const walk = (nodes, parents = []) => { for (const node of nodes) {
+    const path = [...parents, node.name];
+    if (path.join(' / ').toLowerCase().includes(needle)) workspaceHits.push({ kind: 'workspace', key: `workspace:${node.id}`, id: node.id, name: node.name, path: path.join(' / '), tag: 'workspace' });
+    walk(node.children || [], path);
+  } };
+  if (needle) walk(workspaces);
+  const hits = (needle ? library.filter((row) => hay(row).includes(needle)) : library.filter((row) => !inRail(row.id) && !isNote(row) && row.type !== 'image').slice(0, 4))
+    .map((row) => ({ kind: 'item', key: row.id, row, name: row.name, tag: inRail(row.id) ? 'here' : kindLabel(row) }));
+  return needle ? [...workspaceHits, ...hits, NEW_NOTE, NEW_WORKSPACE] : [NEW_NOTE, NEW_WORKSPACE, ...hits];
 }
 
 export const BART_VERB = { kind: 'verb', verb: 'bart', key: 'verb:bart', name: 'Bart', glyph: 'chat', token: '@Bart ' };

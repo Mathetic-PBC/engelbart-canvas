@@ -82,7 +82,7 @@ function normalizeGithub(value) {
 function normalizeConfig(value) {
   const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   return {
-    testMode: typeof input.testMode === 'boolean' ? input.testMode : true,
+    testMode: typeof input.testMode === 'boolean' ? input.testMode : false,
     providers: normalizeProviders(input.providers),
     summarizer: normalizeSummarizer(input.summarizer),
     github: normalizeGithub(input.github),
