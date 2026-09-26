@@ -199,3 +199,36 @@ test('expandDoc: a pasted image is its file on disk', async () => {
   assert.equal(result.text, `# Shot\n\n![Attachment 1](${row.path})`);
   assert.ok(fs.existsSync(row.path));
 });
+
+test('a mentioned workspace is included as a note is: its document, under its current name, once (2026-09-25)', async () => {
+  const workspaces = {
+    w1: { name: 'Agents renamed', path: '/p/Agents/workspace.md', text: 'plan it\nsee @[Plan]' },
+  };
+  const source = { ...sourceOf([note('Plan', 'step one')]), workspace: async (id) => workspaces[id] || null };
+  const result = await expand('Look at @[Agents](ws:w1) then @[Agents](ws:w1) and @[Gone](ws:w2).', source);
+  assert.equal(result.text, [
+    'Look at @[Agents](ws:w1) then @[Agents](ws:w1) and @[Gone](ws:w2).',
+    '',
+    '<file name="Agents renamed" type="workspace" path="/p/Agents/workspace.md">',
+    'plan it',
+    'see @[Plan]',
+    '',
+    '<file name="Plan" type="md" tags="note" path="/p/Plan.md">',
+    'step one',
+    '</file>',
+    '</file>',
+    '',
+    '<file name="Gone" type="workspace" missing="true" />',
+  ].join('\n'));
+  assert.deepEqual({ files: result.files, missing: result.missing }, { files: 2, missing: 1 });
+});
+
+test('expandDoc: a workspace mentioned from another is read from disk; one that mentions itself is not included in itself', async () => {
+  const here = await projects.createWorkspace(ctx, project.id, { name: 'Here' });
+  const there = await projects.createWorkspace(ctx, project.id, { name: 'There' });
+  await projects.writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: there.id }, 'what there holds');
+  await projects.writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: here.id }, `Me @[Here](ws:${here.id}), then @[Old name](ws:${there.id}).`);
+  const result = await expandDoc(ctx, project.id, { kind: 'workspace', workspaceId: here.id });
+  assert.match(result.text, /^# Here\n\nMe @\[Here\]\(ws:[\w-]+\), then @\[Old name\]\(ws:[\w-]+\)\.\n\n<file name="There" type="workspace" path="[^"]+\/There\/workspace\.md">\nwhat there holds\n<\/file>$/);
+  assert.deepEqual({ files: result.files, missing: result.missing }, { files: 1, missing: 0 });
+});

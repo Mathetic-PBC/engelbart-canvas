@@ -16,11 +16,12 @@
 //   * where a document was scrolled to is kept per workspace (props.viewOf / props.onView, 2026-09-22), apart from the
 //     caret: coming back to a document shows what was on screen, not where the last edit was.
 import React from 'react';
-import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, threads, turnText, INLINE, LABELS, HELD, ATTRIBUTION_RE, FENCE_RE } from '../model/doc.js';
+import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, threads, turnText, wsMention, INLINE, LABELS, HELD, ATTRIBUTION_RE, FENCE_RE } from '../model/doc.js';
 import { readFlags, readQuestion, withChoice, modelOf, effortOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
 import BartPicker from './BartPicker.jsx';
 import MentionMenu from './MentionMenu.jsx';
 import Popover from './Popover.jsx';
+import WorkspacePeek from './WorkspacePeek.jsx';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const SPEED = { fast: 0.45, normal: 1, slow: 2.2 };
@@ -911,13 +912,14 @@ export default class DocEditor extends React.Component {
     const a = e.target.closest('a[data-link]');
     if (a) { e.preventDefault(); this.openLink(a.getAttribute('href')); return; }
     const m = e.target.closest('[data-mention]');
+    if (m && m.dataset.ws) { e.preventDefault(); this.hidePop(); if (this.props.onOpenWorkspace) this.props.onOpenWorkspace(m.dataset.ws); return; } // goes there: one workspace at a time
     if (m) {
       e.preventDefault(); this.hidePop(); const nm = m.dataset.mention; if (nm.startsWith('bart')) return;
       const res = this.findRes(nm); if (res.id !== '?' && this.props.onOpenItem) this.props.onOpenItem(res);
     }
   };
   editorOver = (e) => {
-    const m = e.target.closest('[data-mention]'); if (m) this.showPop(this.findRes(m.dataset.mention), { currentTarget: m });
+    const m = e.target.closest('[data-mention]'); if (m) this.showPop(m.dataset.ws ? { ws: m.dataset.ws, name: m.dataset.mention } : this.findRes(m.dataset.mention), { currentTarget: m });
     // An icon's name goes under it, or above it when under would leave the pane.
     const ic = e.target.closest('.bart-ic'), box = this.scrollRef.current;
     if (ic && ic.parentElement && box) ic.parentElement.toggleAttribute('data-tip-up', ic.getBoundingClientRect().bottom + 32 > Math.min(box.getBoundingClientRect().bottom, window.innerHeight || 800));
@@ -1069,10 +1071,10 @@ export default class DocEditor extends React.Component {
     }
     // Bart and Note are words the line keeps (Enter asks, or makes the note); anything else is a mention, and what it names
     // comes into this workspace (the open page is added to the library first: props.onMentionPicked).
-    const ins = verb === 'bart' ? '@Bart ' : verb === 'note' ? '@Note ' : `@[${r.name}] `;
+    const ins = verb === 'bart' ? '@Bart ' : verb === 'note' ? '@Note ' : r.kind === 'workspace' ? `${wsMention(r.name, r.id)} ` : `@[${r.name}] `;
     this.writeText(m.i, cur.slice(0, m.start) + ins + cur.slice(m.caret), { line: m.i, offset: m.start + ins.length });
     this.wantFocus = true; this.setState({ mention: null, activeLine: m.i });
-    if (!verb && this.props.onMentionPicked) this.props.onMentionPicked(r);
+    if (!verb && r.kind !== 'workspace' && this.props.onMentionPicked) this.props.onMentionPicked(r); // a workspace is not a library row
   }
   // Enter on a line holding `@Note name`: the note is made (named, or untitled when nothing follows), and the words
   // become its mention if the line still holds them once it exists.
@@ -1175,7 +1177,7 @@ export default class DocEditor extends React.Component {
           </div>
         )}
         {s.mention && s.mention.anchor && <MentionMenu items={this.mentionList()} index={s.mentionIdx} anchor={s.mention.anchor} onPick={(r) => this.pickMention(r)} onHover={(i) => this.setState({ mentionIdx: i })} />}
-        {s.pop && <Popover item={s.pop.res} anchor={s.pop.anchor} />}
+        {s.pop && (s.pop.res.ws ? <WorkspacePeek id={s.pop.res.ws} name={s.pop.res.name} anchor={s.pop.anchor} peek={this.props.workspacePeek} /> : <Popover item={s.pop.res} anchor={s.pop.anchor} />)}
         {this.pickerView()}
       </>
     );

@@ -313,3 +313,20 @@ test('code blocks inside an @bart answer: the lines stay answer lines and say wh
   assert.deepEqual(thread.turns.map((turn) => [turn.q, turn.from, turn.to, turn.foot]), [[0, 1, 9, 9], [10, 11, 12, 12]]);
   assert.equal(turnText(doc, thread.turns[0]).answer, 'Like this:\n```json\n{\n  "a": 1\n\n}\n```', 'a follow-up sends the block back as markdown');
 });
+
+test('a workspace mention is one token that keeps its id and shows the workspace icon in place of the @, then the name (2026-09-25)', async () => {
+  const { INLINE, WS_MENTION_RE, wsMention, tokShown, inlineHtml, parseLine, rawOffset } = await load();
+  const id = '0a1b2c3d-0000-4000-8000-000000000000';
+  const token = wsMention('Pulling [in] workspaces', id);
+  assert.equal(token, `@[Pulling in workspaces](ws:${id})`, 'brackets would end the name early');
+  assert.deepEqual(`see ${token} and @[Plan].`.split(INLINE).filter(Boolean), ['see ', token, ' and ', '@[Plan]', '.']);
+  assert.deepEqual(token.match(WS_MENTION_RE).slice(1), ['Pulling in workspaces', id]);
+  assert.deepEqual(tokShown(token), { shown: 'Pulling in workspaces', pre: 2 }, 'the icon is not text, so offsets count the name alone');
+  const html = inlineHtml(token);
+  assert.match(html, new RegExp(`data-mention="Pulling in workspaces" data-ws="${id}"`));
+  assert.match(html, /"><svg [^>]*>.*<\/svg>Pulling in workspaces<\/span>$/, 'the icon, then the name: no @');
+  assert.doesNotMatch(inlineHtml('@[Plan]'), /<svg/, 'a note mention has no icon');
+  const p = parseLine(`- ${token} next`);
+  assert.equal(rawOffset(p, 'Pulling in workspaces next'.length), `${token} next`.length, 'a click after the mention maps past the id');
+  assert.equal(rawOffset(p, 1), 3, 'a click after the first letter of the name lands after it in the source');
+});

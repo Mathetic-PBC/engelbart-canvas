@@ -74,7 +74,6 @@ const engelbartAPI = Object.freeze({
   setProjectDirectory: invoke('set-project-directory'),
   createWorkspace: invoke('create-workspace'),
   renameWorkspace: invoke('rename-workspace'),
-  setWorkspaceStatus: invoke('set-workspace-status'),
   setWorkspaceContext: invoke('set-workspace-context'),
   saveImage: invoke('save-image'),
   readImage: invoke('read-image'),

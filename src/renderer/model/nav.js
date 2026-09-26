@@ -64,7 +64,7 @@ export function flatWorkspaces(roots) {
   const out = [];
   const walk = (list, above) => {
     for (const node of list || []) {
-      out.push({ id: node.id, name: node.name, status: node.status, above });
+      out.push({ id: node.id, name: node.name, above });
       walk(node.children, [...above, node.name]);
     }
   };

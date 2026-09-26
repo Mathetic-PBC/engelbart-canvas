@@ -2,6 +2,7 @@
 // "Add - Mention.dc.html", 2026-09-22). Pure: the rows come in, the lists go out; the screen does the adding.
 
 import { hasTag, isNote, kindLabel } from './kind.js';
+import { findWorkspaces } from './nav.js';
 
 /**
  * The sidebar's sections, in order (Claude Design "Sidebar.dc.html", 2026-09-23): Notes, Websites, GitHub, Files and
@@ -68,13 +69,17 @@ export const BART_VERB = { kind: 'verb', verb: 'bart', key: 'verb:bart', name: '
 export const TASK_VERB = { kind: 'verb', verb: 'task', key: 'verb:task', name: 'Task', glyph: 'task', token: '@Task ' };
 export const NOTE_VERB = { kind: 'verb', verb: 'note', key: 'verb:note', name: 'Note', glyph: 'note', token: '@Note ' };
 const MAX_MENTIONS = 10;
+const MAX_WORKSPACES = 6; // typed
+const FIRST_WORKSPACES = 3; // before anything is typed
 
 /**
  * The @ menu (Add - Mention.dc.html `menu`): Bart, Task and Note first, matched from their first letter; then the page
- * open in the Browser, which the library may not hold yet (`page` { input, title }, `pageRow` its row or null); then up to
- * ten things from the library. No workspaces.
+ * open in the Browser, which the library may not hold yet (`page` { input, title }, `pageRow` its row or null); then the
+ * project's other workspaces (2026-09-25; `workspaces` as model/nav.js flatWorkspaces gives them, the ones written in
+ * last first, never `hereId`): three before anything is typed, else up to six whose names hold the words; then up to ten
+ * things from the library.
  */
-export function mentionRows({ query, library, page, pageRow }) {
+export function mentionRows({ query, library, page, pageRow, workspaces = [], hereId = null }) {
   const needle = String(query || '').trim().toLowerCase();
   const verbs = [BART_VERB, TASK_VERB, NOTE_VERB].filter((verb) => !needle || verb.name.toLowerCase().startsWith(needle));
   const pool = library.filter((row) => row.type !== 'image');
@@ -84,7 +89,10 @@ export function mentionRows({ query, library, page, pageRow }) {
     if (pageRow) { out.push({ kind: 'item', key: pageRow.id, row: pageRow, name: pageRow.name, open: true }); hits = hits.filter((hit) => hit.key !== pageRow.id); }
     else out.push({ kind: 'fresh', key: `page:${page.input}`, name: mentionName(page.title), input: page.input, open: true });
   }
-  return [...out, ...hits.slice(0, MAX_MENTIONS)];
+  const others = workspaces.filter((workspace) => workspace.id !== hereId);
+  const spaces = (needle ? findWorkspaces(others, needle).slice(0, MAX_WORKSPACES) : others.slice(0, FIRST_WORKSPACES))
+    .map((workspace) => ({ kind: 'workspace', key: `ws:${workspace.id}`, id: workspace.id, name: workspace.name, above: workspace.above || [] }));
+  return [...out, ...spaces, ...hits.slice(0, MAX_MENTIONS)];
 }
 
 /** A name a mention can carry: `@[…]` ends at the first `]` and stays on one line. */

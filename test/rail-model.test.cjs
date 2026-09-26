@@ -91,3 +91,21 @@ test('sections: Notes, Websites, GitHub, Files, Sub-Workspaces in that order; Fi
   assert.deepEqual(railSections([row('p1', 'ColBERT', 'pdf', ['paper'])]).map((s) => s.key), ['Files']);
   assert.deepEqual(railSections([]), []);
 });
+
+test('the @ menu offers the project\'s other workspaces after the page and before the library (2026-09-25)', async () => {
+  const { mentionRows } = await load();
+  const workspaces = [
+    { id: 'a', name: 'Agents', above: [] },
+    { id: 'b', name: 'Inline chat agent', above: ['Agents'] },
+    { id: 'c', name: 'Pulling in workspaces', above: [] },
+    { id: 'd', name: 'Reading', above: [] },
+    { id: 'e', name: 'Writing', above: [] },
+  ];
+  const empty = mentionRows({ query: '', library, page: null, pageRow: null, workspaces, hereId: 'a' });
+  assert.deepEqual(empty.filter((r) => r.kind === 'workspace').map((r) => r.id), ['b', 'c', 'd'], 'three, in the order given, never the one you are in');
+  assert.equal(empty.findIndex((r) => r.kind === 'workspace'), 3, 'right after Bart, Task and Note');
+  const typed = mentionRows({ query: 'ag', library, page: null, pageRow: null, workspaces, hereId: 'c' });
+  assert.deepEqual(typed.filter((r) => r.kind === 'workspace').map((r) => [r.id, r.above]), [['a', []], ['b', ['Agents']]], 'names that start with the words first, each with what is above it');
+  assert.deepEqual(typed[0], { kind: 'workspace', key: 'ws:a', id: 'a', name: 'Agents', above: [] });
+  assert.deepEqual(mentionRows({ query: 'colbert', library, page: null, pageRow: null, workspaces }).map((r) => r.key), ['p1']);
+});

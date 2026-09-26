@@ -16,7 +16,7 @@ import notePng from '../../../design/assets/yellow-sticky-note.png';
 // The sidebar (Claude Design "Sidebar.dc.html", 2026-09-23, over "Canvas.dc.html" and "Add - Mention.dc.html" of
 // 2026-09-22; Hudson's tweaks in design/goal-canvas/SIDEBAR-TWEAKS.md). From the top: the current workspace in a grey box,
 // "Workspace" over its icon and name (a click opens the switcher: a search over every workspace of the project, the
-// siblings with their status marks, "+ New"; a double-click renames); the library search, which finds anything the library
+// siblings, "+ New"; a double-click renames); the library search, which finds anything the library
 // holds and brings it in; this workspace's rows under quiet section labels — Notes, Websites, GitHub, Files,
 // Sub-Workspaces (model/rail.js railSections; each folds, the first carries Collapse all) — where a hover peeks, a
 // double-click renames and a drag onto the trash takes one out of this workspace; and "+ Add context", whose menu makes a
@@ -34,21 +34,6 @@ const MENU_CLOSE = 220;
 const PEEK_GAP = 8;
 const ROW_DRAG = 'application/x-engelbart-row';
 const BAR_SIZE = 'clamp(52px, 24cqw, 96px)';
-
-function markStyle(status, interactive = true) {
-  const done = status === 'done';
-  const prog = status === 'progress';
-  const base = done
-    ? { background: '#171717', color: '#fff', font: '600 9px/13px var(--font-sans)', textAlign: 'center', border: 0 }
-    : { border: `1.5px ${prog ? 'dashed' : 'solid'} #171717`, background: 'transparent' };
-  return { ...base, flex: 'none', width: 13, height: 13, borderRadius: '50%', padding: 0, cursor: interactive ? 'pointer' : 'default', boxSizing: 'border-box', appearance: 'none', display: 'inline-block' };
-}
-
-function statusTitle(status) {
-  if (status === 'done') return 'Done — click for todo';
-  if (status === 'progress') return 'In progress — click for done';
-  return 'Todo — click for in progress';
-}
 
 function blurOnEnter(event) {
   if (event.key === 'Enter' || event.key === 'Escape') event.target.blur();
@@ -87,10 +72,10 @@ function WsMark({ size, stroke = 1.3 }) {
 // The sidebar's head (Sidebar.dc.html, 2026-09-23): a grey box, "Workspace" over the workspace's icon and name (no
 // "n / m"). Hovering it opens the switcher under it again (2026-09-23, Hudson: "add back hover on the workspace and
 // search"), and moving off closes it unless its search holds text or the keyboard; a click opens it with the caret in
-// the search. The switcher: a search that finds any workspace of the project by name, the sibling workspaces (each mark
-// steps it through todo · in progress · done; the current one, bold, opens its own document), and "+ New". A
+// the search. The switcher: a search that finds any workspace of the project by name, the sibling workspaces (the current
+// one, bold, opens its own document), and "+ New". A
 // double-click on the name renames it.
-function WorkspaceHeader({ topics, topic, all, onOpenDoc, onSelectTopic, onCycleTopic, onRenameTopic, onAddTopic }) {
+function WorkspaceHeader({ topics, topic, all, onOpenDoc, onSelectTopic, onRenameTopic, onAddTopic }) {
   const [hover, setHover] = React.useState(false); // the switcher is open
   const [editing, setEditing] = React.useState(false);
   const [draft, setDraft] = React.useState('');
@@ -185,7 +170,6 @@ function WorkspaceHeader({ topics, topic, all, onOpenDoc, onSelectTopic, onCycle
             const above = found ? candidate.above : [];
             return (
               <div key={candidate.id} data-workspace-item={candidate.id} className={i === idx || on ? undefined : 'hov-wash'} onClick={() => go(candidate)} style={{ ...menuRow, background: i === idx || on ? '#f2f2f2' : 'transparent' }}>
-                <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={(event) => { event.stopPropagation(); onCycleTopic(candidate); }} title={statusTitle(candidate.status)} aria-label={statusTitle(candidate.status)} style={markStyle(candidate.status)}>{candidate.status === 'done' ? '✓' : ''}</button>
                 <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: `${on ? 600 : 400} 14px/1.5 var(--font-sans)`, color: isUntitled(candidate.name) ? '#8f8f8f' : '#171717' }}>{candidate.name}</span>
                   {above.length > 0 && <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '11.5px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{above.join(' / ')}</span>}
@@ -819,7 +803,7 @@ function BottomBar({ trashRef, full, dragging, over, onTrashDragOver, onTrashDra
 }
 
 export default function Rail({
-  width, topics, topic, allWorkspaces, onOpenDoc, onSelectTopic, onCycleTopic, onRenameTopic, onAddTopic,
+  width, topics, topic, allWorkspaces, onOpenDoc, onSelectTopic, onRenameTopic, onAddTopic,
   rows, flashId, onRowClick, onRowRenameStart, onRowRename, onRowRenameEnd,
   library, inRail, onSearchPick, onAddInput, onPickDisk, onNewNote, onNewChild, onPickRepo, onOpenHeld,
   onTrashRow, trashFull, postItTrash, postItDrag, trashRef,
@@ -890,7 +874,7 @@ export default function Rail({
   return (
     <aside aria-label="Sidebar" style={{ flex: 'none', width, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 7, background: '#fafafa' }}>
       <div onScroll={() => { hold(); setPeek(null); }} style={{ flex: 1, minHeight: 0, boxSizing: 'border-box', padding: '30px 8px 8px', display: 'flex', flexDirection: 'column', overflowY: 'auto', overflowX: 'hidden' }}>
-        <WorkspaceHeader topics={topics} topic={topic} all={allWorkspaces} onOpenDoc={onOpenDoc} onSelectTopic={onSelectTopic} onCycleTopic={onCycleTopic} onRenameTopic={onRenameTopic} onAddTopic={onAddTopic} />
+        <WorkspaceHeader topics={topics} topic={topic} all={allWorkspaces} onOpenDoc={onOpenDoc} onSelectTopic={onSelectTopic} onRenameTopic={onRenameTopic} onAddTopic={onAddTopic} />
         {topic && (
           <div data-screen-label="Library" data-rail-library="1" style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 2 }}>
             <LibrarySearch library={library} inRail={inRail} onPick={onSearchPick} previews={previews} onPreview={preview} onOpenHeld={onOpenHeld} onOpenChange={setSearchOpen} shut={menus.add} />

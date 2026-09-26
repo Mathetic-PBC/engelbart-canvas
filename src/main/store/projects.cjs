@@ -27,6 +27,8 @@ const { sanitizeName, slugify, uniqueName, readJson, writeJson, DIR_MODE } = req
 const db = require('./db.cjs');
 const { migrateProjectDir } = require('./migrate.cjs');
 
+// A workspace's meta.json `status` is no longer shown or changed (2026-09-25: the todo / in progress / done marks were
+// deleted). It stays on disk only as the mark that a folder is a workspace and not an older layout's goal (migrate.cjs).
 const STATUSES = Object.freeze(['open', 'progress', 'done']);
 const RESERVED = new Set(['annotations', 'seed', 'test']);
 const PROJECT_RESERVED = new Set(['assets']);
@@ -312,7 +314,7 @@ function workspaceRecord(dir) {
   // Kept by every save through the app; a workspace last saved before the count existed is measured.
   const chars = Number.isInteger(meta.chars) && meta.chars >= 0 ? meta.chars : docChars(dir);
   const removed = Array.isArray(meta.removed) ? meta.removed.filter((id) => typeof id === 'string' && UUID_RE.test(id)) : [];
-  return { id: meta.id, name: path.basename(dir), status: meta.status, context, removed, chars, dir, created: meta.created || null };
+  return { id: meta.id, name: path.basename(dir), context, removed, chars, dir, created: meta.created || null };
 }
 
 function docChars(dir) {
@@ -341,7 +343,7 @@ function findWorkspace(ctx, projectId, workspaceId) {
 }
 
 function publicWorkspace(workspace) {
-  return { id: workspace.id, name: workspace.name, status: workspace.status, context: workspace.context, removed: workspace.removed, chars: workspace.chars, created: workspace.created };
+  return { id: workspace.id, name: workspace.name, context: workspace.context, removed: workspace.removed, chars: workspace.chars, created: workspace.created };
 }
 
 /** Every workspace of a project, flat, with its path from the project directory ("Agents/Inline chat agent"). */
@@ -416,12 +418,6 @@ function patchWorkspaceMeta(workspace, patch) {
   const meta = readJson(path.join(workspace.dir, 'meta.json'));
   writeJson(path.join(workspace.dir, 'meta.json'), { ...meta, ...patch });
   return publicWorkspace(workspaceRecord(workspace.dir));
-}
-
-async function setWorkspaceStatus(ctx, projectId, workspaceId, status) {
-  const { workspace } = findWorkspace(ctx, projectId, workspaceId);
-  if (!STATUSES.includes(status)) throw new TypeError('Unknown status');
-  return patchWorkspaceMeta(workspace, { status });
 }
 
 async function setWorkspaceContext(ctx, projectId, workspaceId, entries) {
@@ -859,7 +855,6 @@ module.exports = {
   loadProject,
   createWorkspace,
   renameWorkspace,
-  setWorkspaceStatus,
   setWorkspaceContext,
   linkToWorkspace,
   unlinkFromWorkspace,

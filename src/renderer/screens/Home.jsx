@@ -2,7 +2,7 @@ import React from 'react';
 import InlineField from '../ui/InlineField.jsx';
 import { api, errorMessage } from '../api.js';
 import { KIND, kindOf, SEARCH } from '../ui/Icons.jsx';
-import { parseLines, inlineHtml } from '../model/doc.js';
+import DocPreview from '../ui/DocPreview.jsx';
 import { hasTag, isNote, kindKey, kindRank, KIND_ORDER } from '../model/kind.js';
 
 // All projects (Claude Design "Projects.dc.html", 2026-09-21): the library as a rail on the left
@@ -31,36 +31,6 @@ function relative(iso) {
   if (hours < 24) return `${hours} h ago`;
   const days = Math.round(hours / 24);
   return days === 1 ? 'yesterday' : `${days} days ago`;
-}
-
-/** A document the way the workspace shows it, read-only: bold, italic, code, links and mentions; tasks and bullets as dashes. */
-function DocPreview({ text, maxLines, size = 10.5 }) {
-  const lines = String(text || '').replace(/^\s*\n/, '').split('\n');
-  const shown = maxLines ? lines.slice(0, maxLines) : lines, parsed = parseLines(lines);
-  return (
-    <div className="doc-preview" style={{ font: `${size}px/1.45 var(--font-sans)`, color: '#171717', overflowWrap: 'anywhere' }}>
-      {shown.map((line, index) => {
-        const p = parsed[index];
-        if (p.type === 'pending' || p.type === 'img' || p.type === 'fence' || p.code === 'open' || p.code === 'close') return null;
-        if (p.code === 'body') return <div key={index} style={{ paddingLeft: '0.7em', borderLeft: '2px solid #eaeaea', font: '0.92em/1.5 var(--font-mono)', color: '#4d4d4d', whiteSpace: 'pre-wrap' }}>{p.text || '\u00a0'}</div>;
-        if (p.type === 'code') return <div key={index} style={{ padding: '0 0.6em', background: '#fafafa', font: '0.92em/1.5 var(--font-mono)', whiteSpace: 'pre-wrap' }}>{line || '\u00a0'}</div>;
-        if (p.type === 'p' && !p.text.trim()) return <div key={index} style={{ height: '0.6em' }} />;
-        const html = { __html: inlineHtml(p.type === 'bart' ? `@bart ${p.text}` : p.text || '') };
-        if (p.type === 'h') return <div key={index} style={{ margin: '0.35em 0 0.15em', fontWeight: 600 }} dangerouslySetInnerHTML={html} />;
-        if (p.type === 'todo' || p.type === 'list') {
-          const done = p.type === 'todo' && p.done;
-          return (
-            <div key={index} style={{ display: 'flex', gap: '0.45em', paddingLeft: `${0.6 + p.depth * 0.9}em`, color: done ? '#8f8f8f' : undefined }}>
-              <span style={{ flex: 'none' }}>{done ? '✓' : '–'}</span>
-              <span style={{ minWidth: 0, textDecoration: done ? 'line-through' : undefined }} dangerouslySetInnerHTML={html} />
-            </div>
-          );
-        }
-        const answer = p.type === 'draft' || p.type === 'reply' || p.type === 'quote';
-        return <div key={index} style={answer ? { paddingLeft: '0.7em', borderLeft: '2px solid #eaeaea', color: '#4d4d4d' } : undefined} dangerouslySetInnerHTML={html} />;
-      })}
-    </div>
-  );
 }
 
 /** The kinds a project holds, once each, in the rail's order; then how many items they stand for. */
