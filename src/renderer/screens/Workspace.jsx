@@ -2,6 +2,7 @@ import React from 'react';
 import { api, errorMessage } from '../api.js';
 import Rail from '../workspace/Rail.jsx';
 import DocTabs from '../workspace/DocTabs.jsx';
+import NotePicker from '../workspace/NotePicker.jsx';
 import DocEditor, { BART_ITEM, TASK_ITEM } from '../workspace/DocEditor.jsx';
 import RightPane, { RIGHT_MODES } from '../workspace/RightPane.jsx';
 import { kindOf } from '../ui/Icons.jsx';
@@ -105,6 +106,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   for (let up = here && here.parent; up; up = index.get(up.id).parent) ancestors.unshift(up);
   const allWorkspaces = React.useMemo(() => flatWorkspaces(tree.workspaces), [tree.workspaces]);
   const [railWidth, setRailWidth] = React.useState(300);
+  const [notePlus, setNotePlus] = React.useState(null); // the +'s note menu beside the tabs: the +'s rect while it is open
   const [rightWidth, setRightWidth] = React.useState(null); // px, or null: half of what the sidebar leaves
   const [viewWidth, setViewWidth] = React.useState(() => window.innerWidth || 1440);
   React.useEffect(() => {
@@ -409,10 +411,10 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     if (!behind) setActiveTab(id);
   }, []);
 
-  // Any tab closes, Workspace too, while another is left (Stage design, 2026-09-23); the workspace's name in the sidebar
-  // brings it back, first again (showWs).
+  // Any note's tab closes; Workspace is always there (2026-09-25; from 2026-09-23 it closed too while another tab was left).
   const closeTab = (id) => {
-    flush(id === 'ws' ? (topic ? `ws:${topic.id}` : '') : `note:${id}`);
+    if (id === 'ws') return;
+    flush(`note:${id}`);
     setTabs((current) => {
       if (current.length < 2 && current.some((tab) => tab.id === id)) return current;
       const next = current.filter((tab) => tab.id !== id);
@@ -420,6 +422,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       return next;
     });
   };
+  const closeNotePlus = React.useCallback(() => setNotePlus(null), []);
   const showWs = React.useCallback(() => {
     setTabs((current) => (current.some((tab) => tab.id === 'ws') ? current : [WS_TAB, ...current]));
     setActiveTab('ws');
@@ -844,7 +847,19 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           <div style={{ flex: '0 1 auto', minWidth: 0, display: 'flex', alignItems: 'flex-end', height: '100%' }}>
             <DocTabs tabs={tabs} activeTab={activeTab} onSelect={setActiveTab} onClose={closeTab} onMove={moveTab} />
           </div>
-          {topic && <button type="button" className="hov-tab-plus" onClick={() => { makeNote('', true).catch(onError); }} aria-label="New note tab" title="new note" style={{ flex: 'none', alignSelf: 'flex-end', width: 28, height: 28, margin: '0 0 3px 6px', padding: 0, border: 0, borderRadius: '50%', background: 'transparent', cursor: 'pointer', font: '18px/1 var(--font-sans)', color: '#4d4d4d', transition: 'background 120ms' }}>+</button>}
+          {notePlus && topic && (
+            <NotePicker
+              anchor={notePlus}
+              library={library}
+              openIds={tabs.map((tab) => tab.id)}
+              inRail={inRail}
+              onPick={(row) => openTab(row.id, row.name)}
+              onNew={(name) => makeNote(name, true)}
+              onClose={closeNotePlus}
+              onError={onError}
+            />
+          )}
+          {topic && <button type="button" className="hov-tab-plus" data-note-plus="1" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setNotePlus(notePlus ? null : { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width }); }} aria-label="Open or make a note" aria-expanded={!!notePlus} title="Open a note or make one" style={{ flex: 'none', alignSelf: 'flex-end', width: 28, height: 28, margin: '0 0 3px 6px', padding: 0, border: 0, borderRadius: '50%', background: 'transparent', cursor: 'pointer', font: '18px/1 var(--font-sans)', color: '#4d4d4d', transition: 'background 120ms' }}>+</button>}
         </div>
         <div style={{ flex: 'none', width: 1, background: '#eaeaea', display: full ? 'none' : undefined }} />
         <div style={{ flex: 'none', width: paneWidth, minWidth: 0, boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 16, padding: '0 20px', overflow: 'hidden' }}>

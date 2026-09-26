@@ -773,7 +773,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const openFind = () => { setFinding(true); setFindFocus((n) => n + 1); };
   const closeFind = () => { setFinding(false); setMatches(null); };
 
-  // ⌘T and ⌘W from anywhere but the terminal, bringing the Stage forward; ⌘F while the Stage shows and has the keyboard
+  // ⌘T while the Stage shows and ⌘W from anywhere but the terminal, bringing the Stage forward; ⌘F while the Stage shows and has the keyboard
   // (its fields, a pdf, a page: main forwards those) or nothing else that takes typing does; ⌘G / ⇧⌘G while finding.
   keys.current = {
     tabId: tab.id,
@@ -795,6 +795,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
       const take = () => { event.preventDefault(); event.stopPropagation(); };
       if ((key === 't' || key === 'w') && !event.shiftKey) {
         if (inTerminal(event.target)) return; // the terminal's own tabs
+        if (key === 't' && !visible) return; // the Terminal shows: ⌘T opens a terminal there (TerminalPane, 2026-09-25)
         take();
         keys.current.shortcut(key === 't' ? 'new-tab' : 'close-tab', null);
       } else if (!visible) {

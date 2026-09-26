@@ -7,8 +7,10 @@
 // keep the directory chip true. Every tab is a real PTY from the Experimental Terminal engine.
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { api } from '../api.js';
+import { FluidTab, TabCard, TabClose, TabTitle, useTabCard } from '../ui/FluidTab.jsx';
 import {
   bootstrap,
+  clearSession,
   closeSession,
   createSession,
   dismissError,
@@ -83,6 +85,7 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
   const [touched, setTouched] = useState({}); // session id → a command was sent from the box
   const [takeover, setTakeover] = useState(false); // the running program has the keyboard
   const autoStarted = useRef(new Set());
+  const card = useTabCard();
 
   const sessions = sessionsFor(projectId);
   const active = sessions.find((record) => record.snapshot.id === activeId) || null;
@@ -241,7 +244,24 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
     if (here) activate(here.snapshot.id); else void launch(agent, currentCwd);
   };
 
+  // The last terminal never goes (2026-09-25: "it should sort of always stay there and if there is only one it should just
+  // clear the terminal but not delete that tab"): an idle shell is cleared in place; a program running in it, or a
+  // terminal that has exited, gives way to a fresh shell where it was, as × would have ended it in any other tab.
   const close = async (id) => {
+    const only = sessions.length === 1 && sessions[0].snapshot.id === id ? sessions[0] : null;
+    if (only) {
+      const shell = describe(only);
+      setDraft('');
+      setHistIdx(null);
+      if (only.snapshot.status === 'running' && shell.integrated && !shell.busy) {
+        clearSession(id);
+        if (inputRef.current) inputRef.current.focus();
+        return;
+      }
+      const fresh = await launch('shell', cwdOf(only));
+      if (fresh) await closeSession(id);
+      return;
+    }
     const ids = sessions.map((record) => record.snapshot.id);
     const index = ids.indexOf(id);
     const closed = await closeSession(id);
@@ -324,8 +344,9 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
       const mod = event.metaKey || event.ctrlKey;
       if (!mod) return;
       const inside = rootRef.current && event.target && rootRef.current.contains(event.target);
-      // ⌘T is the Stage's everywhere else (2026-09-23): here only while the terminal has the keyboard.
-      if (inside && event.metaKey && event.key.toLowerCase() === 't' && !event.shiftKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); void launch('shell', projectCwd); return; }
+      // ⌘T opens a terminal whenever the Terminal shows, wherever the keyboard is (2026-09-25: "cmd t in terminal new
+      // terminal not browser"); while the Stage shows it is the Stage's.
+      if (event.metaKey && event.key.toLowerCase() === 't' && !event.shiftKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); void launch('shell', projectCwd); return; }
       if (inside && currentId && event.metaKey && event.key.toLowerCase() === 'w' && !event.shiftKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); void close(currentId); return; }
       if (inside && event.metaKey && /^[1-9]$/.test(event.key)) {
         const record = sessions[Number(event.key) - 1];
@@ -341,21 +362,31 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
 
   return (
     <div ref={rootRef} data-terminal="1" onKeyDown={stopKeys} onKeyUp={stopKeys} style={{ flex: 1, minHeight: 0, display: visible ? 'flex' : 'none', flexDirection: 'column', background: '#fff' }}>
-      <div style={{ display: 'flex', alignItems: 'stretch', gap: 2, padding: '6px 8px 0', background: '#fafafa', borderBottom: '1px solid #eaeaea', flex: 'none', overflow: 'hidden' }}>
-        {sessions.map((record) => {
-          const id = record.snapshot.id;
-          const on = id === currentId;
-          const alive = record.snapshot.status === 'running';
-          const title = `${basename(cwdOf(record))}${alive ? '' : ` · exited${Number.isInteger(record.snapshot.exitCode) ? ` ${record.snapshot.exitCode}` : ''}`}`;
-          return (
-            <div key={id} className="hov-ink" onClick={() => activate(id)} title={`${LABEL[describe(record).agent] || 'Terminal'} · ${cwdOf(record)}`} style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: '0 1 auto', maxWidth: 220, padding: '7px 10px 8px', border: `1px solid ${on ? '#eaeaea' : 'transparent'}`, borderBottomColor: on ? '#fff' : 'transparent', borderRadius: '8px 8px 0 0', marginBottom: -1, background: on ? '#fff' : 'transparent', cursor: 'pointer', font: `${on ? 500 : 400} 12.5px/1.3 var(--font-sans)`, color: on ? '#171717' : '#4d4d4d', whiteSpace: 'nowrap', transition: 'color 120ms' }}>
-              <span style={{ flex: 'none', font: `11px/1 ${MONO}`, color: '#8f8f8f' }}>›_</span>
-              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</span>
-              <button type="button" className="hov-del" onClick={(event) => { event.stopPropagation(); void close(id); }} aria-label="Close terminal" style={{ flex: 'none', padding: '0 2px', border: 0, background: 'transparent', cursor: 'pointer', font: '13px/1 var(--font-sans)', color: '#c9c9c9' }}>×</button>
-            </div>
-          );
-        })}
-        <button type="button" className="hov-ink-wash" onClick={() => void launch('shell', projectCwd)} title="New terminal (⌘T) in the project's code directory" style={{ flex: 'none', alignSelf: 'center', width: 26, height: 26, padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', font: '16px/1 var(--font-sans)', color: '#4d4d4d' }}>+</button>
+      {/* The tabs, drawn as the Stage's (ui/FluidTab.jsx, 2026-09-25): no rule under them; the one in front runs into the transcript. */}
+      <div data-term-tabs="1" style={{ flex: 'none', position: 'relative', zIndex: 5, display: 'flex', alignItems: 'flex-end', height: 40, boxSizing: 'border-box', padding: '0 8px 0 10px', background: '#fafafa', overflow: 'hidden' }}>
+        <div style={{ flex: '0 1 auto', minWidth: 0, display: 'flex', alignItems: 'flex-end', height: '100%' }}>
+          {sessions.map((record, i) => {
+            const id = record.snapshot.id;
+            const on = id === currentId;
+            const alive = record.snapshot.status === 'running';
+            const next = sessions[i + 1];
+            const sep = !on && next && next.snapshot.id !== currentId;
+            const title = `${basename(cwdOf(record))}${alive ? '' : ` · exited${Number.isInteger(record.snapshot.exitCode) ? ` ${record.snapshot.exitCode}` : ''}`}`;
+            const last = sessions.length === 1;
+            return (
+              <FluidTab key={id} on={on} sep={sep} data-term-tab={id} onMouseDown={(event) => { if (event.button === 0) { card.hide(); activate(id); } }} onMouseEnter={(event) => { if (!on) card.enter(event, id); }} onMouseLeave={card.leave}>
+                <span style={{ flex: 'none', font: `11px/1 ${MONO}`, color: on ? '#4d4d4d' : '#8f8f8f' }}>›_</span>
+                <TabTitle color={on ? '#171717' : '#4d4d4d'}>{title}</TabTitle>
+                <TabClose onClose={() => void close(id)} label={last ? 'Clear terminal' : 'Close terminal'} title={last ? 'Clear — the last terminal stays' : 'Close'} />
+              </FluidTab>
+            );
+          })}
+        </div>
+        {(() => {
+          const record = card.card && sessions.find((candidate) => candidate.snapshot.id === card.card.id);
+          return record ? <TabCard card={card.card} title={LABEL[describe(record).agent] || 'Terminal'} detail={cwdOf(record)} /> : null;
+        })()}
+        <button type="button" className="hov-tab-plus" onClick={() => void launch('shell', projectCwd)} aria-label="New terminal" title="New terminal (⌘T) in the project's code directory" style={{ flex: 'none', alignSelf: 'center', width: 28, height: 28, margin: '2px 0 0 6px', padding: 0, border: 0, borderRadius: '50%', background: 'transparent', cursor: 'pointer', font: '18px/1 var(--font-sans)', color: '#4d4d4d', transition: 'background 120ms' }}>+</button>
         <div ref={menuRef} style={{ marginLeft: 'auto', alignSelf: 'center', flex: 'none', position: 'relative' }}>
           <button type="button" className="hov-ink-wash" data-agent-menu="1" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setMenu(menu ? null : { x: r.right, y: r.bottom }); }} title="Terminal, Claude Code or Codex — started in this tab's directory" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 8px', border: 0, borderRadius: 6, background: menu ? '#eaeaea' : 'transparent', cursor: 'pointer', font: '500 12.5px/1.3 var(--font-sans)', color: '#171717', whiteSpace: 'nowrap' }}>
             <span>{agentLabel}</span>
