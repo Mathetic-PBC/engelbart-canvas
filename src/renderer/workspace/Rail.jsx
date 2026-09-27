@@ -197,7 +197,19 @@ const CIRCLE_MINUS = (
   </svg>
 );
 
-function RailRow({ row, flash, faded, onClick, onRenameStart, onRename, onRenameEnd, onDragStart, onDragEnd, onEnter, onLeave, onRemove }) {
+// An archived version of the workspace (2026-09-25): a sheet in a box, the Archived section's rows.
+const ARCHIVE_MARK = (
+  <svg aria-hidden="true" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" strokeLinecap="round" style={{ flex: 'none', display: 'block' }}>
+    <rect x="1.75" y="2.5" width="12.5" height="3.25" rx="0.8" />
+    <path d="M2.75 5.75v6.75a1 1 0 0 0 1 1h8.5a1 1 0 0 0 1-1V5.75" />
+    <path d="M6.5 8.5h3" />
+  </svg>
+);
+
+/** When a version was cleared, the short way: "Sep 25, 14:03". */
+const clearedLabel = (iso) => { const at = new Date(iso || ''); return Number.isNaN(at.getTime()) ? '' : `${at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}, ${at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`; };
+
+function RailRow({ row, flash, faded, onClick, onRenameStart, onRename, onRenameEnd, onDragStart, onDragEnd, onEnter, onLeave, onRemove, onRestore }) {
   const inputRef = React.useRef(null);
   const [draft, setDraft] = React.useState(row.name);
   React.useEffect(() => { setDraft(row.name); }, [row.name, row.editing]);
@@ -221,7 +233,7 @@ function RailRow({ row, flash, faded, onClick, onRenameStart, onRename, onRename
       onDragStart={draggable ? (event) => onDragStart(row, event) : undefined}
       onDragEnd={draggable ? onDragEnd : undefined}
       onClick={() => { if (!row.editing) onClick(row); }}
-      onDoubleClick={(event) => { if (row.type === 'workspace') return; event.stopPropagation(); onRenameStart(row); }}
+      onDoubleClick={(event) => { if (row.type === 'workspace' || row.type === 'archive') return; event.stopPropagation(); onRenameStart(row); }}
       onMouseEnter={onEnter ? (event) => onEnter(row, event.currentTarget) : undefined}
       onMouseLeave={onLeave}
       style={{
@@ -233,7 +245,9 @@ function RailRow({ row, flash, faded, onClick, onRenameStart, onRename, onRename
     >
       {row.type === 'child'
         ? <span style={{ flex: 'none', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#171717' }}><WsMark size={15} stroke={1.5} /></span>
-        : <Glyph item={row} />}
+        : row.type === 'archive'
+          ? <span style={{ flex: 'none', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#4d4d4d' }}>{ARCHIVE_MARK}</span>
+          : <Glyph item={row} />}
       {row.editing
         ? (
           <input
@@ -248,7 +262,28 @@ function RailRow({ row, flash, faded, onClick, onRenameStart, onRename, onRename
             style={{ flex: 1, minWidth: 0, padding: 0, border: 0, background: 'transparent', font: `${row.on ? 600 : 400} 14px/1.5 var(--font-sans)`, color: '#171717' }}
           />
         )
-        : <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: `${row.on ? 600 : 400} 14px/1.5 var(--font-sans)`, color: isUntitled(row.name) ? '#8f8f8f' : '#171717' }}>{row.name}</span>}
+        : row.type === 'archive'
+          ? (
+            <span data-archive={row.file} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '400 14px/1.4 var(--font-sans)', color: '#4d4d4d' }}>{row.name}</span>
+              <span style={{ font: '11.5px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{clearedLabel(row.clearedAt)}</span>
+            </span>
+          )
+          : <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: `${row.on ? 600 : 400} 14px/1.5 var(--font-sans)`, color: isUntitled(row.name) ? '#8f8f8f' : '#171717' }}>{row.name}</span>}
+      {onRestore && (
+        <button
+          type="button"
+          className="rail-minus"
+          data-rail-restore={row.file}
+          aria-label={`Make ${row.name} the current document again`}
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={(event) => { event.stopPropagation(); onRestore(row); }}
+          onDoubleClick={(event) => event.stopPropagation()}
+          style={{ flex: 'none', margin: '-2px 0', padding: '2px 4px', border: 0, background: 'transparent', cursor: 'pointer', font: '12.5px/1.4 var(--font-sans)', color: '#8f8f8f' }}
+        >
+          Restore
+        </button>
+      )}
       {onRemove && !row.editing && (
         <button
           type="button"
@@ -717,7 +752,7 @@ function NextRow({ next, places = [], projectId, onGo }) {
                 <PlaceMark why={place.why} ground="#fff" />
                 <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
                   <PlaceName place={place} projectId={projectId} size={13.5} />
-                  <span style={{ font: '11.5px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{place.why === 'agent' ? `Bart answered ${when(place.at)}` : `Edited ${when(place.at)}`}</span>
+                  <span style={{ font: '11.5px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{place.why === 'agent' ? `${place.kind === 'build' ? 'Build finished a turn' : 'Bart answered'} ${when(place.at)}` : `Edited ${when(place.at)}`}</span>
                 </span>
                 {place.next && <span style={{ flex: 'none', font: '11.5px/1 var(--font-sans)', color: '#8f8f8f' }}>⌘J</span>}
               </button>
@@ -750,8 +785,9 @@ const barButton = (enabled) => ({ flex: 'none', width: BAR_SIZE, aspectRatio: '1
 const barPicture = { display: 'block', objectFit: 'contain', pointerEvents: 'none', userSelect: 'none' };
 
 /** The two pictures at the bottom left, the trash and the sticky note beside it (2026-09-23): they size with the sidebar
- *  (52–96px) and name themselves on hover. */
-function BottomBar({ trashRef, full, dragging, over, onTrashDragOver, onTrashDragEnter, onTrashDragLeave, onTrashDrop, postItTrash, onPostIt }) {
+ *  (52–96px) and name themselves on hover. At the note's lower right (2026-09-25) the word Hide or Show takes every
+ *  post-it out of sight or brings them back; it never makes or deletes one. */
+function BottomBar({ trashRef, full, dragging, over, onTrashDragOver, onTrashDragEnter, onTrashDragLeave, onTrashDrop, postItTrash, onPostIt, postItsHidden, onTogglePostIts }) {
   const [tip, setTip] = React.useState(null);
   const [opened, setOpened] = React.useState(null); // the trash panel's anchor (the can's rect) while it is open
   const off = () => setTip(null);
@@ -795,6 +831,18 @@ function BottomBar({ trashRef, full, dragging, over, onTrashDragOver, onTrashDra
           <button type="button" className="bar-press" data-add-post-it="1" aria-label="Note" disabled={!onPostIt} onClick={onPostIt || undefined} onMouseEnter={() => setTip('note')} onMouseLeave={off} style={barButton(!!onPostIt)}>
             <img src={notePng} alt="" draggable={false} style={{ ...barPicture, width: '100%', height: '100%', transform: 'translateY(10%)' }} />
           </button>
+          {onTogglePostIts && (
+            <button
+              type="button"
+              className="hov-ink"
+              data-toggle-post-its={postItsHidden ? 'hidden' : 'shown'}
+              aria-pressed={!!postItsHidden}
+              onClick={onTogglePostIts}
+              style={{ position: 'absolute', left: '100%', bottom: 0, padding: '2px 4px', border: 0, borderRadius: 5, background: 'transparent', cursor: 'pointer', font: '400 12.5px/1.3 var(--font-sans)', color: '#8f8f8f', whiteSpace: 'nowrap' }}
+            >
+              {postItsHidden ? 'Show' : 'Hide'}
+            </button>
+          )}
           {tip === 'note' && <BarTip text="Note" align="flex-start" />}
         </div>
       </div>
@@ -806,9 +854,9 @@ export default function Rail({
   width, topics, topic, allWorkspaces, onOpenDoc, onSelectTopic, onRenameTopic, onAddTopic,
   rows, flashId, onRowClick, onRowRenameStart, onRowRename, onRowRenameEnd,
   library, inRail, onSearchPick, onAddInput, onPickDisk, onNewNote, onNewChild, onPickRepo, onOpenHeld,
-  onTrashRow, trashFull, postItTrash, postItDrag, trashRef,
+  onTrashRow, onRestoreArchive, trashFull, postItTrash, postItDrag, trashRef,
   next, places, projectId, onGoNext,
-  onPostIt,
+  onPostIt, postItsHidden, onTogglePostIts,
 }) {
   const [peek, setPeek] = React.useState(null); // { row, rect }
   const [previews, setPreviews] = React.useState({}); // `${id}:${last_edited}` → previewLibraryItem's answer
@@ -828,7 +876,7 @@ export default function Rail({
   React.useEffect(() => hold, []);
   const openPeek = (row, element) => {
     hold();
-    if (row.type === 'child' || dragging) return;
+    if (row.type === 'child' || row.type === 'archive' || dragging) return;
     if (peek && peek.row.id === row.id) return;
     timer.current = setTimeout(() => {
       if (!element.isConnected) return;
@@ -896,11 +944,12 @@ export default function Rail({
                     onRenameStart={onRowRenameStart}
                     onRename={onRowRename}
                     onRenameEnd={onRowRenameEnd}
-                    onDragStart={row.type === 'child' ? null : dragStart}
+                    onDragStart={row.type === 'child' || row.type === 'archive' ? null : dragStart}
                     onDragEnd={dragEnd}
                     onEnter={openPeek}
                     onLeave={closePeek}
-                    onRemove={row.type === 'child' ? null : (removed) => { hold(); setPeek(null); onTrashRow(removed); }}
+                    onRemove={row.type === 'child' || row.type === 'archive' ? null : (removed) => { hold(); setPeek(null); onTrashRow(removed); }}
+                    onRestore={row.type === 'archive' && onRestoreArchive ? onRestoreArchive : null}
                   />
                 ))}
               </RailSection>
@@ -921,6 +970,8 @@ export default function Rail({
         onTrashDrop={trashDrop}
         postItTrash={postItTrash}
         onPostIt={onPostIt}
+        postItsHidden={postItsHidden}
+        onTogglePostIts={onTogglePostIts}
       />
       {peek && !dragging && !busyMenus && createPortal(
         // The wrapper reaches back over the gap to the row, so crossing the gap still counts as hovering.

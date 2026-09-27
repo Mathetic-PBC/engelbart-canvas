@@ -14,10 +14,13 @@ export const RAIL_SECTIONS = [
   { key: 'GitHub', label: 'GitHub' },
   { key: 'Files', label: 'Files' },
   { key: 'Workspaces', label: 'Sub-Workspaces' },
+  // This workspace's earlier versions, one per Clear (2026-09-25): shown only when there are some, as every section is.
+  { key: 'Archived', label: 'Archived' },
 ];
 
 /** Which section a rail row sorts into: a repository by its tag whether it is an address or a clone. */
 export function sectionOf(row) {
+  if (row.type === 'archive') return 'Archived';
   if (row.type === 'child' || row.type === 'workspace') return 'Workspaces';
   if (isNote(row)) return 'Notes';
   if (hasTag(row, 'git')) return 'GitHub';

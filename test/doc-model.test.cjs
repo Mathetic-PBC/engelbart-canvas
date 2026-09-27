@@ -330,3 +330,15 @@ test('a workspace mention is one token that keeps its id and shows the workspace
   assert.equal(rawOffset(p, 'Pulling in workspaces next'.length), `${token} next`.length, 'a click after the mention maps past the id');
   assert.equal(rawOffset(p, 1), 3, 'a click after the first letter of the name lands after it in the source');
 });
+
+test('a Build\'s line holds its id alone; it is its own kind of line, and it ends an @bart card (2026-09-25)', async () => {
+  const { parseLine, parseLines, threads, buildLine, BUILD_RE } = await load();
+  assert.equal(buildLine('0123456789'), 'build> 0123456789');
+  assert.deepEqual(parseLine('build> 0123456789'), { type: 'build', id: '0123456789', text: '' });
+  assert.equal(parseLine('build> not-an-id').type, 'p', 'only a Build id makes the line a card');
+  assert.equal(parseLine('build>0123456789').type, 'p');
+  assert.ok(BUILD_RE.test('build> abcdef0123'));
+  const lines = ['@bart why?', 'bart> because', 'build> 0123456789', '@bart and?'];
+  assert.deepEqual(threads(lines).map((t) => [t.from, t.to]), [[0, 1], [3, 3]], 'a Build between two questions keeps them apart');
+  assert.equal(parseLines(['```', 'build> 0123456789', '```'])[1].type, 'code', 'inside a code block it is code');
+});

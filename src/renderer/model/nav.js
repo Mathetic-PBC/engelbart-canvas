@@ -17,7 +17,7 @@ export function nextPlace({ here, recent = [], agents = [] }) {
   if (waiting.length) {
     const first = waiting[0];
     const places = new Set(waiting.map((agent) => `${agent.projectId}/${agent.workspaceId}`));
-    return { projectId: first.projectId, workspaceId: first.workspaceId, name: first.name, path: first.path, projectName: first.projectName, why: 'agent', at: first.finished, waiting: places.size };
+    return { projectId: first.projectId, workspaceId: first.workspaceId, name: first.name, path: first.path, projectName: first.projectName, why: 'agent', kind: first.kind || 'bart', at: first.finished, waiting: places.size };
   }
   const at = recent.findIndex((entry) => same(entry, here));
   for (let step = 1; step <= recent.length; step += 1) {
@@ -38,7 +38,7 @@ export function placesToGo({ here, recent = [], agents = [] }) {
   const out = [];
   const add = (entry, why, at) => {
     if (!entry.workspaceId || same(entry, here) || out.some((held) => same(held, entry))) return;
-    out.push({ projectId: entry.projectId, workspaceId: entry.workspaceId, name: entry.name, path: entry.path, projectName: entry.projectName, why, at, next: same(entry, target) });
+    out.push({ projectId: entry.projectId, workspaceId: entry.workspaceId, name: entry.name, path: entry.path, projectName: entry.projectName, why, ...(why === 'agent' ? { kind: entry.kind || 'bart' } : {}), at, next: same(entry, target) });
   };
   agents
     .filter((agent) => agent.status === 'waiting')

@@ -87,6 +87,32 @@ const engelbartAPI = Object.freeze({
   bartModels: invoke('bart-models'),
   copyText: invoke('copy-text'),
   onBartProgress: (callback) => subscribe('engelbart:bart-progress', callback),
+  // Build (src/main/build): a workspace's coding agent in a worktree of its own. Every change of one arrives on onBuild as
+  // its record; onBuildProgress carries what a running turn is doing ({ projectId, id, activity, log, lines }).
+  buildModels: invoke('build-models'),
+  buildPreflight: invoke('build-preflight'),
+  buildInit: invoke('build-init'),
+  buildStart: invoke('build-start'),
+  buildList: invoke('build-list'),
+  buildGet: invoke('build-get'),
+  buildReply: invoke('build-reply'),
+  buildStop: invoke('build-stop'),
+  buildResume: invoke('build-resume'),
+  buildReview: invoke('build-review'),
+  buildAccept: invoke('build-accept'),
+  buildFix: invoke('build-fix'),
+  buildDiscard: invoke('build-discard'),
+  buildPromote: invoke('build-promote'),
+  onBuild: (callback) => subscribe('engelbart:build', callback),
+  onBuildProgress: (callback) => subscribe('engelbart:build-progress', callback),
+  // A post-it's Build button asks the window for the Build dialog, with the card's text ({ projectId, postItId, text }).
+  onBuildQuick: (callback) => subscribe('engelbart:build-quick', callback),
+  // A click on a post-it's quick-task state: that task, in the window ({ projectId, id, postItId }).
+  onBuildQuickOpen: (callback) => subscribe('engelbart:build-quick-open', callback),
+  // Clear and the archived versions of a workspace (src/main/store/archive.cjs).
+  clearWorkspace: invoke('clear-workspace'),
+  restoreArchive: invoke('restore-archive'),
+  readArchive: invoke('read-archive'),
   readTextFile: invoke('read-text-file'),
   resolvePageFile: invoke('resolve-page-file'),
   stageFile: invoke('stage-file'),
@@ -149,6 +175,9 @@ const engelbartAPI = Object.freeze({
   // The app's own open menus and dialogs (window CSS px): a card under one of them steps aside until it closes.
   postItsBlock: (rects) => ipcRenderer.invoke('post-its:block', rects),
   postItsLayout: () => ipcRenderer.invoke('post-its:layout'),
+  // The sidebar's show/hide toggle: every card out of sight (true) or back (false); nothing is created or deleted.
+  postItsHide: (hidden) => ipcRenderer.invoke('post-its:hide', !!hidden),
+  onPostItsHidden: (callback) => subscribe('post-its:hidden', callback),
   // The trash (2026-09-22): the cards in it, newest first, each { id, text, deleted, expires }; and taking one back out.
   postItsTrashed: (projectId) => ipcRenderer.invoke('post-its:trashed', projectId),
   postItsRestore: (projectId, id) => ipcRenderer.invoke('post-its:restore', projectId, id),

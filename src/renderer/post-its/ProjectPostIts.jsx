@@ -12,10 +12,14 @@ function blockingRects() {
 // A project's post-its: native cards above the window (main/post-its/views.cjs). This keeps them to the workspace screen,
 // moves a card aside while one of the app's menus or dialogs is open over it, reports a card being dragged (`onDrag`
 // { active, over, thrown }) to the sidebar's trash can, and hands on what main tells the workspace: a note to open
-// (`onOpenNote`), how many cards are in the trash (`onTrashCount`).
-export default function ProjectPostIts({ projectId, active, onError, onDrag, onOpenNote, onTrashCount }) {
+// (`onOpenNote`), how many cards are in the trash (`onTrashCount`), and that main showed hidden cards again because one
+// was made or restored (`onShown`). `hidden` is the sidebar's show/hide toggle; it only changes what is drawn.
+export default function ProjectPostIts({ projectId, active, hidden, onError, onDrag, onOpenNote, onTrashCount, onShown }) {
   const props = React.useRef({});
-  props.current = { onError, onDrag, onOpenNote, onTrashCount };
+  props.current = { onError, onDrag, onOpenNote, onTrashCount, onShown };
+  // Before the cards are activated below, so a hidden set never flashes up.
+  React.useEffect(() => { api.postItsHide(!!hidden).catch((e) => props.current.onError(e)); }, [hidden]);
+  React.useEffect(() => api.onPostItsHidden((now) => { if (!now && props.current.onShown) props.current.onShown(); }), []);
   React.useEffect(() => {
     if (!active) return undefined;
     const fail = (e) => props.current.onError(e);

@@ -41,10 +41,12 @@ function noteName(text) {
 }
 
 // Native siblings of the browser, each with only its own card's IPC capability.
-function createPostItViews({ electron, getWindow, getContext, send, now = () => Date.now() }) {
+// `buildFor(projectId, postItId)` (2026-09-25): the card's latest quick task (main/build), so a card opened later shows its state.
+function createPostItViews({ electron, getWindow, getContext, send, buildFor = async () => null, now = () => Date.now() }) {
   const { WebContentsView, clipboard, shell } = electron;
   const entries = new Map();
   let projectId = null, database = null, gesture = null, trash = null, blocking = [];
+  let hidden = false; // the sidebar's show/hide toggle (2026-09-25): every card out of sight, none touched
   let operations = Promise.resolve();
   const exclusive = (work) => {
     const result = operations.then(work);
@@ -89,10 +91,10 @@ function createPostItViews({ electron, getWindow, getContext, send, now = () => 
     if (typing) typing.view.webContents.focus();
   }
 
-  // A card hides only while one of the app's own menus or dialogs is open over it (hover previews do not count: the
-  // renderer leaves those out), and never the one being dragged.
+  // A card hides while the toggle hides them all, or while one of the app's own menus or dialogs is open over it (hover
+  // previews do not count: the renderer leaves those out), and never the one being dragged.
   function visible(entry) {
-    if (!entry.ready || !alive(entry)) return false;
+    if (!entry.ready || !alive(entry) || hidden) return false;
     if (gesture?.entry === entry) return true;
     const own = cssRect(entry.view.getBounds());
     return !blocking.some((rect) => overlaps(own, rect));
@@ -184,12 +186,31 @@ function createPostItViews({ electron, getWindow, getContext, send, now = () => 
   function create(id) {
     return exclusive(async () => {
       if (projectId !== id || !database) throw new Error('Open this project before adding a post-it');
+      unhide();
       const offset = entries.size % 8;
       const row = await database.create({ id: randomUUID(), text: '', nx: .22 + offset * .045, ny: .16 + offset * .045, width: SIDE, height: SIDE, z: now() });
       attach(row, true);
       raise();
       return row.id;
     });
+  }
+
+  // Show/hide only changes what is drawn: no row is written, created or deleted.
+  function setHidden(value) {
+    hidden = !!value;
+    if (hidden) {
+      cancelGesture();
+      if ([...entries.values()].some((entry) => alive(entry) && entry.view.webContents.isFocused())) windowNow()?.webContents.focus();
+    }
+    refresh();
+    return hidden;
+  }
+  // A card made or brought back out of the trash while they are hidden would be invisible: they all show again.
+  function unhide() {
+    if (!hidden) return;
+    hidden = false;
+    refresh();
+    send('post-its:hidden', false);
   }
 
   function setBlocking(rects) {
@@ -206,11 +227,35 @@ function createPostItViews({ electron, getWindow, getContext, send, now = () => 
     return entry;
   }
 
-  function ready(entry) {
+  async function ready(entry) {
     entry.ready = true;
     refresh();
     if (entry.fresh && entry.view.getVisible()) entry.view.webContents.focus();
-    return { id: entry.row.id, text: entry.row.text, fresh: entry.fresh };
+    let build = null;
+    try { build = briefBuild(await buildFor(projectId, entry.row.id)); } catch { build = null; }
+    return { id: entry.row.id, text: entry.row.text, fresh: entry.fresh, build };
+  }
+
+  // A post-it's quick task (2026-09-25; design B23): the card asks the window for the Build dialog with its text, shows
+  // where its latest quick task stands, and a click on that opens the task in the window.
+  const briefBuild = (task) => (task ? { id: task.id, status: task.status, final: !!task.final, kind: task.kind } : null);
+  async function askBuild(entry) {
+    await entry.pending.catch(() => {});
+    windowNow()?.webContents.focus();
+    send('engelbart:build-quick', { projectId, postItId: entry.row.id, text: entry.row.text });
+    return true;
+  }
+  function openBuild(entry, id) {
+    if (typeof id !== 'string' || !/^[0-9a-f]{10}$/.test(id)) throw new TypeError('build id is invalid');
+    windowNow()?.webContents.focus();
+    send('engelbart:build-quick-open', { projectId, id, postItId: entry.row.id });
+    return true;
+  }
+  /** A Build changed: the card it came from (if it is open) shows its state. */
+  function buildState(task) {
+    if (!task || !task.postItId || task.projectId !== projectId) return;
+    const entry = entries.get(task.postItId);
+    if (entry && entry.ready && alive(entry)) entry.view.webContents.send('post-it:build-state', briefBuild(task));
   }
 
   function edit(entry, text) {
@@ -258,6 +303,7 @@ function createPostItViews({ electron, getWindow, getContext, send, now = () => 
       if (projectId !== id || !database) throw new Error('Open this project before restoring a post-it');
       const row = await database.restore(String(cardId));
       if (!row) return false;
+      unhide();
       row.z = Math.max(now(), ...[...entries.values()].map((e) => e.row.z + 1));
       await database.update(row.id, row);
       attach(row);
@@ -353,6 +399,7 @@ function createPostItViews({ electron, getWindow, getContext, send, now = () => 
     ipcMain.handle('post-its:activate', trustedHandler(activate));
     ipcMain.handle('post-its:create', trustedHandler(create));
     ipcMain.handle('post-its:block', trustedHandler(setBlocking));
+    ipcMain.handle('post-its:hide', trustedHandler(setHidden));
     ipcMain.handle('post-its:layout', trustedHandler(layout));
     ipcMain.handle('post-its:trash-rect', trustedHandler((rect) => { trash = readTrashRect(rect); return true; }));
     ipcMain.handle('post-its:trashed', trustedHandler(trashed));
@@ -361,6 +408,8 @@ function createPostItViews({ electron, getWindow, getContext, send, now = () => 
     ipcMain.handle('post-it:edit', (event, text) => edit(forEvent(event), text));
     ipcMain.handle('post-it:grow', (event, height) => grow(forEvent(event), height));
     ipcMain.handle('post-it:to-note', (event) => toNote(forEvent(event)));
+    ipcMain.handle('post-it:build', (event) => askBuild(forEvent(event)));
+    ipcMain.handle('post-it:build-open', (event, id) => openBuild(forEvent(event), id));
     ipcMain.handle('post-it:copy', (event, text) => {
       forEvent(event);
       if (typeof text !== 'string' || text.length > 400000) throw new TypeError('Invalid text');
@@ -370,7 +419,7 @@ function createPostItViews({ electron, getWindow, getContext, send, now = () => 
     ipcMain.on('post-it:gesture', (event, input) => { try { move(forEvent(event), input); } catch (error) { report(error); } });
   }
 
-  return { activate, create, register, raise, layout, setBlocking, flush, cancelGesture };
+  return { activate, create, register, raise, layout, setBlocking, setHidden, flush, cancelGesture, buildState };
 }
 
 module.exports = { createPostItViews, CARD_URL, noteName, TRASH_DAYS };

@@ -17,6 +17,11 @@ const { readShellHistory } = require('./shell-history.cjs');
 const { createDescriber, createRepoIdentifier, createRemoteFileLister } = require('./store/page-meta.cjs');
 const { inspectPdf } = require('./context/pdf-kind.cjs');
 const { TOOL_NAMES } = require('./tools/requirements.cjs');
+const archive = require('./store/archive.cjs');
+const { buildChoices } = require('./bart/models.cjs');
+
+const BUILD_LINE_RE = /^build> ([a-z0-9]{6,32})$/;
+const buildId = (value) => { if (typeof value !== 'string' || !/^[0-9a-f]{10}$/.test(value)) throw new TypeError('build id is invalid'); return value; };
 
 const MAX_NAME = 512;
 
@@ -106,7 +111,7 @@ function createStore({ homeDir, fixturesDir, inspectPdf: readPdf = null, afterOp
   return { layout, context, config: describe, setTestMode, resetTestData, close: closeAll };
 }
 
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, tools = null }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, tools = null, builds = null }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const withCtx = (fn) => async (...args) => fn(await store.context(), ...args);
 
@@ -223,6 +228,49 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('bart-models', () => { const { provider, providers } = readModels(); return { provider, providers }; });
   // Copy all under an answer: a question and its answer, as they read in the document.
   handle('copy-text', (text) => { writeClipboard(str(text, 'text', 400000)); return true; });
+
+  // Build (src/main/build; docs/superpowers/specs/2026-09-25-build-workflow-design.md): a workspace handed to Claude Code
+  // or Codex in a worktree of its own. Every change of a Build is announced on `engelbart:build` with its public record,
+  // and what its turn is doing on `engelbart:build-progress`.
+  if (builds) {
+    const b = () => builds;
+    const pidOf = (pid) => str(pid, 'project id', 64);
+    handle('build-models', () => buildChoices(readModels()));
+    handle('build-preflight', withCtx((ctx, pid) => b().preflight(ctx, pidOf(pid))));
+    handle('build-init', withCtx((ctx, pid) => b().initRepository(ctx, pidOf(pid))));
+    handle('build-start', withCtx((ctx, pid, input) => {
+      const value = input && typeof input === 'object' ? input : {};
+      return b().start(ctx, pidOf(pid), {
+        kind: value.kind === 'quick' ? 'quick' : 'build',
+        workspaceId: optStr(value.workspaceId, 'workspace id', 64),
+        postItId: optStr(value.postItId, 'post-it id', 64),
+        text: optStr(value.text, 'text', 200000),
+        provider: optStr(value.provider, 'provider', 24),
+        model: optStr(value.model, 'model', 24),
+        effort: optStr(value.effort, 'effort', 24),
+        attach: (Array.isArray(value.attach) ? value.attach : []).slice(0, 50).map((id) => str(id, 'library id', 64)),
+      });
+    }));
+    handle('build-list', withCtx((ctx, pid) => b().list(ctx, pidOf(pid))));
+    handle('build-get', withCtx((ctx, pid, id) => b().get(ctx, pidOf(pid), buildId(id))));
+    handle('build-reply', withCtx((ctx, pid, id, text, options) => b().reply(ctx, pidOf(pid), buildId(id), str(text, 'reply', 100000), { interrupt: !!(options && options.interrupt) })));
+    handle('build-stop', (pid, id) => b().stop(pidOf(pid), buildId(id)));
+    handle('build-resume', withCtx((ctx, pid, id) => b().resume(ctx, pidOf(pid), buildId(id))));
+    handle('build-review', withCtx((ctx, pid, id) => b().review(ctx, pidOf(pid), buildId(id))));
+    handle('build-accept', withCtx((ctx, pid, id) => b().accept(ctx, pidOf(pid), buildId(id))));
+    handle('build-fix', withCtx((ctx, pid, id) => b().fix(ctx, pidOf(pid), buildId(id))));
+    handle('build-discard', withCtx((ctx, pid, id) => b().discard(ctx, pidOf(pid), buildId(id))));
+    handle('build-promote', withCtx((ctx, pid, id, wid) => b().promote(ctx, pidOf(pid), buildId(id), str(wid, 'workspace id', 64))));
+  }
+  // Clear (B21): the document archived and started blank, keeping the lines of Builds still open; what it mentioned stays
+  // on the sidebar. Restore (B22) brings an archived version back, the current one archived first.
+  const keepOpenBuilds = (ctx, pid) => {
+    const open = builds ? builds.openIds(ctx, pid) : new Set();
+    return (line) => { const m = BUILD_LINE_RE.exec(line.trim()); return !!m && open.has(m[1]); };
+  };
+  handle('clear-workspace', withCtx((ctx, pid, wid) => archive.clearWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), { keep: keepOpenBuilds(ctx, pid) })));
+  handle('restore-archive', withCtx((ctx, pid, wid, file) => archive.restoreArchive(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(file, 'archive', 64), { keep: keepOpenBuilds(ctx, pid) })));
+  handle('read-archive', withCtx((ctx, pid, wid, file) => { const got = archive.readArchive(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(file, 'archive', 64)); return { path: got.path, text: got.text }; }));
 
   handle('resolve-page-file', withCtx((ctx, pid, input) => projects.resolvePageFile(ctx, str(pid, 'project id', 64), str(input, 'path', 4096))));
   handle('read-text-file', withCtx((ctx, pid, input) => projects.readProjectTextFile(ctx, str(pid, 'project id', 64), str(input, 'path', 4096))));

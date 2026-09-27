@@ -232,3 +232,13 @@ test('expandDoc: a workspace mentioned from another is read from disk; one that 
   assert.match(result.text, /^# Here\n\nMe @\[Here\]\(ws:[\w-]+\), then @\[Old name\]\(ws:[\w-]+\)\.\n\n<file name="There" type="workspace" path="[^"]+\/There\/workspace\.md">\nwhat there holds\n<\/file>$/);
   assert.deepEqual({ files: result.files, missing: result.missing }, { files: 1, missing: 0 });
 });
+
+test('Copy reads a Build\'s line as what its card says, not as an id (2026-09-25)', async () => {
+  const store = require('../src/main/build/store.cjs');
+  const project = await projects.createProject(ctx, 'Copy builds');
+  const workspace = await projects.createWorkspace(ctx, project.id, { name: 'Plan' });
+  store.writeTask(projects.findProject(ctx, project.id), { id: '0123456789', title: 'Plan', status: 'review', messages: [] });
+  await projects.writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id }, 'Do it.\nbuild> 0123456789\nbuild> abcdefabcd');
+  const out = await expandDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id });
+  assert.equal(out.body, 'Do it.\nBuild "Plan" (review)\nbuild> abcdefabcd', 'a Build this project does not hold stays as written');
+});

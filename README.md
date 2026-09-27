@@ -67,6 +67,18 @@ The Browser's address ends in the page's place in the library: **+ Save** (a car
 - The list, the ladders and the default provider: `~/.engelbart/model-effort-inline-question.json`, read again for every question.
 - The instructions it runs under: `src/main/bart/system-prompt.cjs`, or your own in `<data root>/.context/bart-system-prompt.md`.
 
+## Build
+
+**Build** (beside Copy, on the Workspace tab) hands the workspace to Claude Code or Codex, hidden, on your subscription, in a git worktree of its own (`<data root>/worktrees/<project>/<id>`, branch `engelbart/<id>`), so several workspaces can build at once without touching each other or your folder. Design: `docs/superpowers/specs/2026-09-25-build-workflow-design.md`.
+
+- The dialog: the model and effort (defaults in `model-effort-inline-question.json` → `build`: GPT-6-Sol high, Opus high), library items to attach, and a line when uncommitted files are left out (a Build starts from your last commit) or the folder cannot take a Build (**Start history** gives a folder without git its first commit).
+- What the agent gets: @bart's context (the document with every mention in place, the library as Context.json), what you attached, and the newest archived version of the workspace marked as history; frozen when you press send. It writes only in its worktree (Claude Code `--restricted` + auto mode; Codex's workspace-write sandbox + auto-review), with no MCP servers, hooks or computer use (`src/main/build/policy.cjs` is where the sandbox will go).
+- The card: the document gets one `build> <id>` line, drawn from the Build's record — what it is doing, what it said, `NEEDS YOU:` questions, a reply field (a reply while it works waits for the turn; **Stop & send** cuts it short), **Review** (the diff since it started), **Accept**, **Discard** (two clicks), **Resume** (after Stop, a failure or a quit), **Send to agent** (a conflict or failed checks).
+- Every turn ends in a checkpoint commit. **Accept** squashes them into one commit on the branch your folder is on, after replaying past whatever you committed meanwhile, running the checks (`project.json` → `build.check`, else `npm test` when there is one) and refusing, with nothing changed, on a conflict, leftover conflict markers, failed checks or your own uncommitted edits to the same files.
+- **Clear** saves the document to `<Workspace>/.archive/<time>.md` (plus the ids of what it mentioned) and starts it blank; everything it mentioned stays on the sidebar, and the **Archived** section lists the old versions (click to read, **Restore** to bring one back, the current one archived first).
+- A post-it's **Build** opens the same dialog as a quick task: no questions, a slot of its own, lands by itself when clean, **Too big** when the agent escalates (then **Run as big task** moves it into the workspace in front).
+- `ENGELBART_BUILD_FAKE=1` runs a fake agent (git and records stay real) for scripted runs.
+
 ## Project post-its (prototype)
 
 The sticky note at the bottom of the sidebar adds a titleless post-it. The card uses `design/assets/yellow-sticky-note.svg`, including its paper texture, curled corner, and transparent shadow. The card uses the note editor's font and inline Markdown. Click text to edit; drag blank space to move; drag the curled corner to resize (or focus the grip and use arrow keys). Let go over the sidebar's trash can to delete it permanently (the can lifts while the pointer is over it, and the card takes a red tint). Escape cancels a drag.
@@ -130,8 +142,12 @@ The pill top-right exists on every screen. **Test · on** roots the app at `~/.e
     assets/<id>.png                   pasted images (library rows of type `image`)
     .context/catalog.json             what the project holds, with summaries, for agents that read files
     <Workspace>/workspace.md          a workspace's document
-    <Workspace>/meta.json             { id, status, context: [library ids], removed: [library ids the trash took off], created }
+    <Workspace>/meta.json             { id, status, context: [library ids], removed: [library ids the trash took off], created, builds: [ids], archives: [{ file, clearedAt, title }] }
+    <Workspace>/.archive/<time>.md    the document when Clear was pressed; <time>.json: what it had linked and mentioned (ids)
     <Workspace>/<Child>/…             workspaces nest to any depth
+    builds/<id>/task.json             a Build: provider, model, session, worktree, branch, base, status, checkpoints, conversation
+    builds/<id>/context.md            what it was given, frozen at Build
+  worktrees/<project>/<id>/           a running Build's checkout (removed at Accept or Discard)
     .legacy/                          goal directories from the first layout, parked, never deleted
 ```
 
@@ -145,6 +161,8 @@ src/main/ipc.cjs             engelbart:* handlers, argument validation, lazy sto
 src/main/store/              home layout + config, PGlite databases, projects/goals/topics/notes/docs, library + annotations
 src/main/terminal/           Experimental Terminal engine (session manager, launch, settings)
 src/main/tools/              Git, Claude Code, Codex: requirements, detect, install/update/rollback, lock, sign-in, manager; repository checks for Build
+src/main/build/              Build: git (worktrees, checkpoints, Accept), store (task records), context, prompt, policy (the sandbox stub), runner (one CLI turn), manager
+src/main/store/archive.cjs   Clear, the archived versions of a workspace, Restore
 src/main/browser/            views.cjs: the Browser pane's pages as WebContentsViews (decision 48)
 src/preload.cjs              window.terminalAPI (ET contract) + window.engelbartAPI
 src/renderer/App.jsx         create | all projects | workspace; reopens the last topic; the test pill

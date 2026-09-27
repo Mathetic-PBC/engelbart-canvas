@@ -16,6 +16,10 @@ export const BART_RE = /^@bart(?:\s(.*))?$/i; // `@Bart` is what the @ menu writ
 // can be edited; `bart+> ` is the same line folded away by Collapse, so a fold is in the file and survives everything
 // else. `bart?> ` was the unsaved draft of the 09-19 build and reads as a reply.
 export const PENDING_RE = /^bart~> ?([\w-]*)$/;
+// A Build (2026-09-25): the line holds its id alone, and the editor draws the Build's card from its record (main/build):
+// what it is doing, what it said, the reply field, Review / Accept / Discard. Nothing the agent says is in the document.
+export const BUILD_RE = /^build> ([0-9a-f]{10})$/;
+export const buildLine = (id) => `build> ${id}`;
 export const DRAFT_RE = /^bart\?> ?(.*)$/;
 export const REPLY_RE = /^bart(\+?)> ?(.*)$/;
 // The closing line of an answer: which model said it and how long it took. It is drawn as the card's foot.
@@ -43,6 +47,7 @@ const depthOf = (indent) => Math.min(8, Math.floor(indent.length / 2));
 export const parseLine = (l) => {
   let m;
   if ((m = l.match(BART_RE))) return { type: 'bart', text: m[1] || '' };
+  if ((m = l.match(BUILD_RE))) return { type: 'build', id: m[1], text: '' };
   if ((m = l.match(PENDING_RE))) return { type: 'pending', id: m[1], text: '' };
   if ((m = l.match(DRAFT_RE))) return { type: 'reply', text: m[1], folded: false };
   if ((m = l.match(REPLY_RE))) return { type: 'reply', text: m[2], folded: m[1] === '+' };

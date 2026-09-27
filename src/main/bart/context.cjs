@@ -35,6 +35,21 @@ function conversationBlock(turns) {
 
 const block = (tag, name, text) => `<${tag} name="${String(name).replace(/[<>"\n\r]/g, ' ').slice(0, 200)}">\n${text}\n</${tag}>`;
 
+/** The project's library as the agent is shown it (Context.json): every item but pictures, `mentioned` when `seen` holds it. */
+function catalogEntries(project, rows, seen) {
+  const catalog = buildCatalog(project, projects.flattenWorkspaces(project.dir), rows, null);
+  return catalog.entries.filter((entry) => entry.type !== 'image').map((entry) => ({
+    name: entry.name,
+    type: entry.type,
+    tags: entry.tags,
+    path: entry.path ? path.resolve(project.dir, entry.path) : null,
+    url: entry.url,
+    summary: entry.summaryStale ? null : entry.summary,
+    lastEdited: entry.lastEdited,
+    mentioned: seen.has(entry.id),
+  }));
+}
+
 /**
  * → { project, dirs, head, contextJson, documents }. `head` and the documents are text; the
  * caller adds the level and the question (./ask.cjs), which differ per step.
@@ -57,17 +72,7 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId }) {
     const space = await expandDoc(ctx, projectId, ref, { seen });
     documents.push(block('workspace', space.title, markPlace(space.body, askId)));
   }
-  const catalog = buildCatalog(project, projects.flattenWorkspaces(project.dir), rows, null);
-  const entries = catalog.entries.filter((entry) => entry.type !== 'image').map((entry) => ({
-    name: entry.name,
-    type: entry.type,
-    tags: entry.tags,
-    path: entry.path ? path.resolve(project.dir, entry.path) : null,
-    url: entry.url,
-    summary: entry.summaryStale ? null : entry.summary,
-    lastEdited: entry.lastEdited,
-    mentioned: seen.has(entry.id),
-  }));
+  const entries = catalogEntries(project, rows, seen);
   const head = [
     '<engelbart>',
     `project: ${project.name}`,
@@ -79,4 +84,4 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId }) {
   return { project, dirs: [project.directory, ctx.dataRoot].filter(Boolean), head, contextJson: `<context_json>\n${JSON.stringify(entries, null, 1)}\n</context_json>`, documents: documents.join('\n\n') };
 }
 
-module.exports = { HERE, markPlace, buildContext, conversationBlock };
+module.exports = { HERE, markPlace, buildContext, conversationBlock, catalogEntries, block };

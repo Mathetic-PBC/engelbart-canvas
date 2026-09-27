@@ -13,6 +13,17 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const projects = require('../store/projects.cjs');
+const buildStore = require('../build/store.cjs');
+
+// A Build's line (`build> <id>`, 2026-09-25) is a card drawn from its record: outside the app it reads as what the card says.
+const BUILD_LINE_RE = /^build> ([0-9a-f]{10})$/;
+function buildLines(text, project) {
+  return String(text || '').split('\n').map((line) => {
+    const m = BUILD_LINE_RE.exec(line.trim());
+    const task = m && project ? buildStore.readTask(project, m[1]) : null;
+    return task ? `Build "${task.title}" (${task.status})` : line;
+  }).join('\n');
+}
 
 // The editor's inline tokens (src/renderer/model/doc.js), so a mention inside `code` stays text
 // here as it does on screen. test/expand-mentions.test.cjs holds the two together.
@@ -112,16 +123,21 @@ async function expandMentions(text, source, seen = new Set()) {
   return { lines, ...tally };
 }
 
-/**
- * The document `ref` of a project, under its name, with its mentions in place. `seen` may carry
- * library ids that are already included elsewhere and comes back holding every id placed here.
- * → { title, body, text, chars, files, missing }
- */
-async function expandDoc(ctx, projectId, ref, { seen = new Set() } = {}) {
-  const rows = await ctx.libraryDb.list();
-  const body = await projects.readDoc(ctx, projectId, ref);
-  const self = ref.kind === 'note' ? rows.find((row) => row.id === ref.id) : null;
-  const title = ref.kind === 'note' ? (self ? self.name : '') : projects.findWorkspace(ctx, projectId, ref.workspaceId).workspace.name;
+/** Library rows placed as if each were mentioned on a line of its own (a Build's attached items), those in `seen` skipped. → { lines, files, missing } */
+async function expandRows(rows, source, seen = new Set()) {
+  const tally = { files: 0, missing: 0 };
+  const lines = [];
+  for (const row of rows) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    if (lines.length) lines.push('');
+    lines.push(...(await fileBlock(row, source, seen, tally)));
+  }
+  return { lines, ...tally };
+}
+
+/** Where the mentions of a project's documents lead (the `source` expandMentions takes), from the library's rows. */
+function projectSource(ctx, projectId, rows) {
   // Two projects can each hold a file of the same name: this project's is the one meant.
   const byName = new Map();
   for (const row of rows) {
@@ -131,7 +147,7 @@ async function expandDoc(ctx, projectId, ref, { seen = new Set() } = {}) {
     if (!held || (held.project_id !== projectId && row.project_id === projectId)) byName.set(key, row);
   }
   const images = new Map(rows.filter((row) => row.type === 'image' && row.path).map((row) => [row.id, row.path]));
-  const source = {
+  return {
     find: (name) => byName.get(name.toLowerCase()) || null,
     // Not readDoc: that reads a file that is gone as an empty document, and here it is a missing one.
     read: async (row) => fs.readFileSync((await projects.resolveDoc(ctx, row.project_id, { kind: 'note', id: row.id })).file, 'utf8'),
@@ -145,11 +161,26 @@ async function expandDoc(ctx, projectId, ref, { seen = new Set() } = {}) {
       return { name: found.workspace.name, path: file, text };
     },
   };
+}
+
+/**
+ * The document `ref` of a project, under its name, with its mentions in place. `seen` may carry
+ * library ids that are already included elsewhere and comes back holding every id placed here.
+ * → { title, body, text, chars, files, missing }
+ */
+async function expandDoc(ctx, projectId, ref, { seen = new Set() } = {}) {
+  const rows = await ctx.libraryDb.list();
+  const body = await projects.readDoc(ctx, projectId, ref);
+  const self = ref.kind === 'note' ? rows.find((row) => row.id === ref.id) : null;
+  const title = ref.kind === 'note' ? (self ? self.name : '') : projects.findWorkspace(ctx, projectId, ref.workspaceId).workspace.name;
+  const source = projectSource(ctx, projectId, rows);
   if (self) seen.add(self.id);
   if (ref.kind === 'workspace') seen.add(`ws:${ref.workspaceId}`); // mentioned back from inside, it is already here
-  const { lines, files, missing } = await expandMentions(body, source, seen);
+  let project = null;
+  try { project = projects.findProject(ctx, projectId); } catch { project = null; }
+  const { lines, files, missing } = await expandMentions(buildLines(body, project), source, seen);
   const text = [...(title ? [`# ${title}`, ''] : []), ...lines].join('\n').trimEnd();
   return { title, body: lines.join('\n').trimEnd(), text, chars: text.length, files, missing };
 }
 
-module.exports = { INLINE, expandMentions, expandDoc };
+module.exports = { INLINE, expandMentions, expandRows, expandDoc, projectSource };

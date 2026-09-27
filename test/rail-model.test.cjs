@@ -109,3 +109,12 @@ test('the @ menu offers the project\'s other workspaces after the page and befor
   assert.deepEqual(typed[0], { kind: 'workspace', key: 'ws:a', id: 'a', name: 'Agents', above: [] });
   assert.deepEqual(mentionRows({ query: 'colbert', library, page: null, pageRow: null, workspaces }).map((r) => r.key), ['p1']);
 });
+
+test('the Archived section: a workspace\'s earlier versions, last, and only when there are some (2026-09-25)', async () => {
+  const { railSections, sectionOf, RAIL_SECTIONS } = await load();
+  assert.equal(RAIL_SECTIONS[RAIL_SECTIONS.length - 1].label, 'Archived');
+  assert.equal(sectionOf({ type: 'archive' }), 'Archived');
+  const rows = [{ id: 'archive:2026-09-25T21-03-12Z', type: 'archive', name: 'Storage plan' }, { id: 'n1', type: 'md', tags: ['note'], name: 'Spec' }];
+  assert.deepEqual(railSections(rows).map((s) => [s.key, s.rows.map((r) => r.id)]), [['Notes', ['n1']], ['Archived', ['archive:2026-09-25T21-03-12Z']]]);
+  assert.ok(!railSections([rows[1]]).some((s) => s.key === 'Archived'), 'no versions, no section');
+});

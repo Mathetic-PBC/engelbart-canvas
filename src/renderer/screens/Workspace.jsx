@@ -12,7 +12,11 @@ import { OPEN_IN_BROWSER } from '../model/address.js';
 import { mentionRows } from '../model/rail.js';
 import { flatWorkspaces, nextPlace, placesToGo } from '../model/nav.js';
 import { onStage } from '../model/stage.js';
+import { buildLine } from '../model/doc.js';
 import ProjectPostIts from '../post-its/ProjectPostIts.jsx';
+import BuildModal from '../workspace/BuildModal.jsx';
+import BuildReview from '../workspace/BuildReview.jsx';
+import QuickTask from '../workspace/QuickTask.jsx';
 
 // The workspace screen (design 2026-09-17): a header in three columns — Engelbart / project /
 // parent workspaces over the sidebar, the document tabs over the document, the Stage · Terminal
@@ -66,7 +70,9 @@ function Separator({ onDown, onMove, onUp, onReset }) {
 }
 
 const WS_TAB = { id: 'ws', title: 'Workspace' };
+const FOOT_BUTTON = { padding: '3px 6px', border: 0, borderRadius: 5, background: '#fff', cursor: 'pointer', font: '400 15px/1.4 var(--font-sans)', color: '#8f8f8f', transition: 'color 120ms' };
 const VIEW_SAVE_DELAY = 400;
+const POST_ITS_HIDDEN = 'engelbart.postIts.hidden';
 
 /**
  * A workspace's remembered tabs, less notes that are gone, with their current names; `extra` is a note being opened
@@ -136,6 +142,10 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const [postItDrag, setPostItDrag] = React.useState({ active: false, over: false });
   const [postItTrash, setPostItTrash] = React.useState(0); // how many post-its are in the trash (main keeps them a week)
   const onPostItDrag = React.useCallback((drag) => { setPostItDrag({ active: !!drag.active, over: !!drag.over }); }, []);
+  // The toggle at the sticky note's lower right (2026-09-25): all post-its out of sight or back, remembered across launches.
+  const [postItsHidden, setPostItsHidden] = React.useState(() => { try { return window.localStorage.getItem(POST_ITS_HIDDEN) === '1'; } catch { return false; } });
+  React.useEffect(() => { try { window.localStorage.setItem(POST_ITS_HIDDEN, postItsHidden ? '1' : '0'); } catch { /* not remembered */ } }, [postItsHidden]);
+  const showPostIts = React.useCallback(() => setPostItsHidden(false), []);
   const [openPage, setOpenPage] = React.useState(null); // the page in front in the Browser: { input, title } | null
   const [pageInfo, setPageInfo] = React.useState(null); // what the library holds for it: { input, row, addable }
   const [renaming, setRenaming] = React.useState(null);
@@ -297,6 +307,140 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     }
   }, [docKey, docRef, topic, project.id, flush, changeDoc]);
 
+  /* ----------------------------------------------------------------- Build */
+
+  // Build (2026-09-25; docs/superpowers/specs/2026-09-25-build-workflow-design.md): the project's Builds by id, as main
+  // announces them, and what each running turn is doing. A workspace document holds a `build> <id>` line per Build, which
+  // the editor draws as its card from these; the conversation lives in the Build's record, never in the document.
+  const [builds, setBuilds] = React.useState({});
+  const [buildProgress, setBuildProgress] = React.useState({});
+  const [buildDialog, setBuildDialog] = React.useState(null); // { quick: null | { postItId, text } } while the Build dialog is open
+  const [review, setReview] = React.useState(null); // { id, title, review, error } while Review is open
+  const [quickTask, setQuickTask] = React.useState(null); // the id of a post-it's quick task open in its dialog
+  // A post-it's Build button, and a click on its quick task's state (post-its/Card.jsx through main/post-its/views.cjs).
+  React.useEffect(() => {
+    if (!active) return undefined;
+    const offAsk = api.onBuildQuick(({ projectId, postItId, text }) => { if (projectId === project.id) setBuildDialog({ quick: { postItId, text } }); });
+    const offOpen = api.onBuildQuickOpen(({ projectId, id }) => { if (projectId === project.id) setQuickTask(id); });
+    return () => { offAsk(); offOpen(); };
+  }, [active, project.id]);
+  React.useEffect(() => {
+    let live = true;
+    setBuilds({});
+    api.buildList(project.id).then((list) => { if (live) setBuilds(Object.fromEntries(list.map((task) => [task.id, task]))); }).catch(() => {});
+    const offBuild = api.onBuild((task) => {
+      if (!task || task.projectId !== project.id) return;
+      setBuilds((current) => ({ ...current, [task.id]: task }));
+      // a turn that ended leaves nothing to show as progress
+      if (!['running', 'queued', 'setting-up', 'accepting'].includes(task.status)) setBuildProgress((current) => { if (!current[task.id]) return current; const next = { ...current }; delete next[task.id]; return next; });
+    });
+    const offProgress = api.onBuildProgress(({ projectId, id, log, lines, ...progress }) => { // the card shows what it is doing, not the text so far
+      if (projectId !== project.id || !progress.activity) return;
+      setBuildProgress((current) => {
+        const held = current[id] || {};
+        const next = { ...held, ...progress };
+        if (log && progress.activity) next.log = [...(held.log || []), progress.activity].slice(-80);
+        return { ...current, [id]: next };
+      });
+    });
+    return () => { live = false; offBuild(); offProgress(); };
+  }, [project.id]);
+
+  // Send in the dialog: the Build starts from what is saved, so everything open is saved first; its line goes at the end
+  // of the workspace's document, and its card shows there at once.
+  const startBuild = React.useCallback(async (input) => {
+    const quick = buildDialog && buildDialog.quick;
+    await Promise.all([...pending.current.keys()].map((key) => flush(key)));
+    if (quick) {
+      const task = await api.buildStart(project.id, { kind: 'quick', postItId: quick.postItId, text: quick.text, ...input });
+      setBuilds((current) => ({ ...current, [task.id]: task }));
+      setBuildDialog(null);
+      return;
+    }
+    if (!topic) throw new Error('Open a workspace first');
+    const task = await api.buildStart(project.id, { workspaceId: topic.id, ...input });
+    setBuilds((current) => ({ ...current, [task.id]: task }));
+    const key = `ws:${topic.id}`, ref = { kind: 'workspace', workspaceId: topic.id };
+    const held = docsRef.current[key] !== undefined ? docsRef.current[key] : await api.readDoc(project.id, ref);
+    const body = String(held || '').replace(/\n+$/, '');
+    changeDoc(key, ref, `${body ? `${body}\n\n` : ''}${buildLine(task.id)}\n`);
+    setBuildDialog(null);
+    if (input.attach && input.attach.length) await reload(); // what was attached is linked to the workspace: the sidebar shows it
+  }, [buildDialog, flush, project.id, topic, changeDoc, reload]);
+
+  // What a card's buttons do. Accept's refusals and a turn's failures are on the card (the record carries them); only a
+  // call that could not be made at all is reported. → false when the call failed (the reply field keeps its text)
+  const onBuildAction = React.useCallback(async (id, action, payload = {}) => {
+    try {
+      if (action === 'reply') await api.buildReply(project.id, id, payload.text, { interrupt: !!payload.interrupt });
+      else if (action === 'stop') await api.buildStop(project.id, id);
+      else if (action === 'resume') await api.buildResume(project.id, id);
+      else if (action === 'fix') await api.buildFix(project.id, id);
+      else if (action === 'discard') await api.buildDiscard(project.id, id);
+      else if (action === 'accept') await api.buildAccept(project.id, id).catch(() => {}); // refused: the card says why
+      else if (action === 'review') {
+        const title = (builds[id] && builds[id].title) || '';
+        setReview({ id, title, review: null, error: '' });
+        try { const got = await api.buildReview(project.id, id); setReview((now) => (now && now.id === id ? { ...now, review: got } : now)); } catch (error) { setReview((now) => (now && now.id === id ? { ...now, error: errorMessage(error) } : now)); }
+      }
+      return true;
+    } catch (error) {
+      onError(error);
+      return false;
+    }
+  }, [project.id, builds, onError]);
+
+  // Run as big task: the quick task becomes a Build of the workspace in front, its card goes at the end of that workspace's
+  // document, and its session goes on (main/build promote).
+  const promoteQuick = React.useCallback(async (id) => {
+    if (!topic) return;
+    try {
+      await Promise.all([...pending.current.keys()].map((key) => flush(key)));
+      const task = await api.buildPromote(project.id, id, topic.id);
+      setBuilds((current) => ({ ...current, [task.id]: task }));
+      const key = `ws:${topic.id}`, ref = { kind: 'workspace', workspaceId: topic.id };
+      const held = docsRef.current[key] !== undefined ? docsRef.current[key] : await api.readDoc(project.id, ref);
+      const body = String(held || '').replace(/\n+$/, '');
+      changeDoc(key, ref, `${body ? `${body}\n\n` : ''}${buildLine(task.id)}\n`);
+      setQuickTask(null);
+      showWs();
+    } catch (error) {
+      onError(error);
+    }
+  }, [topic, flush, project.id, changeDoc, onError]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ----------------------------------------------------------------- Clear */
+
+  // Clear (B21): the document is archived and starts blank (Builds still open keep their lines); everything it mentioned
+  // stays on the sidebar. The editor's undo can still bring the text back, and Restore brings back any archived version.
+  const clearDoc = React.useCallback(async () => {
+    if (!topic || docKey !== `ws:${topic.id}`) return;
+    const key = docKey;
+    try {
+      await flush(key);
+      const out = await api.clearWorkspace(project.id, topic.id);
+      setDocs((current) => ({ ...current, [key]: out.text }));
+      await reload();
+    } catch (error) {
+      onError(error);
+    }
+  }, [topic, docKey, flush, project.id, reload, onError]);
+
+  // Restore (B22): the current document is archived first, then the chosen version is the document again.
+  const restoreVersion = React.useCallback(async (file) => {
+    if (!topic) return;
+    const key = `ws:${topic.id}`;
+    try {
+      await flush(key);
+      const out = await api.restoreArchive(project.id, topic.id, file);
+      setDocs((current) => ({ ...current, [key]: out.text }));
+      showWs();
+      await reload();
+    } catch (error) {
+      onError(error);
+    }
+  }, [topic, flush, project.id, reload, onError]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Copy (the document's lower left, plain text since 2026-09-23; it was a picture in the sidebar): the open document with
   // every @mentioned file's content placed where it is mentioned. It is read from disk, so every open tab is saved first.
   const [copied, setCopied] = React.useState(null);
@@ -381,13 +525,15 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       }
     }
     for (const child of here ? here.node.children || [] : []) out.push({ id: child.id, name: child.name, type: 'child', depth: 0, on: activeRowId === child.id, editing: renaming === child.id });
+    // This workspace's earlier versions, one per Clear, newest first (2026-09-25; the sidebar's Archived section).
+    for (const entry of [...(topic.archives || [])].reverse()) out.push({ id: `archive:${entry.file}`, name: entry.title || 'Untitled', type: 'archive', file: entry.file, clearedAt: entry.clearedAt, depth: 0, on: false, editing: false });
     return out;
   }, [topic, here, byId, renaming, activeRowId, tree.notes, mentioned]);
 
   const mentionable = React.useMemo(() => [BART_ITEM, TASK_ITEM, ...library.filter((row) => row.type !== 'image').map(describe)], [library]);
 
   // On the rail: what the search does not offer again, and what makes the Browser's Save read ✓.
-  const railIds = React.useMemo(() => new Set(rows.filter((row) => row.type !== 'child').map((row) => row.id)), [rows]);
+  const railIds = React.useMemo(() => new Set(rows.filter((row) => row.type !== 'child' && row.type !== 'archive').map((row) => row.id)), [rows]);
   const inRail = React.useCallback((id) => railIds.has(id), [railIds]);
 
   // The page in front in the Browser, and what the library holds for it (asked again whenever the library changes).
@@ -460,7 +606,18 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   const onRowClick = (row) => {
     if (row.type === 'child') { selectTopic(row.id); return; }
+    if (row.type === 'archive') { openArchive(row.file); return; }
     openItem(row);
+  };
+
+  // An archived version opens on the Stage, read-only, as the markdown file it is (B22).
+  const openArchive = (file) => {
+    if (!topic) return;
+    api.readArchive(project.id, topic.id, file).then((got) => {
+      if (!stageRef.current) return;
+      setRightMode('stage');
+      stageRef.current.openPaths([got.path]);
+    }).catch((error) => onError(error));
   };
 
   /* ---------------------------------------------------------------- topics */
@@ -898,6 +1055,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onPickRepo={pickRepo}
           onOpenHeld={(projectId, workspaceId) => { if (projectId === project.id && workspaceId && index.has(workspaceId)) selectTopic(workspaceId); }}
           onTrashRow={trashRow}
+          onRestoreArchive={(row) => restoreVersion(row.file)}
           trashFull={!!(topic && topic.removed && topic.removed.length) || postItTrash > 0}
           postItTrash={active ? { count: postItTrash, load: () => api.postItsTrashed(project.id), restore: (id) => api.postItsRestore(project.id, id) } : null}
           postItDrag={postItDrag}
@@ -907,6 +1065,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onGoNext={goTo}
           places={places}
           onPostIt={active ? () => api.postItsCreate(project.id).catch(onError) : null}
+          postItsHidden={postItsHidden}
+          onTogglePostIts={active ? () => setPostItsHidden((now) => !now) : null}
         />
 
         <Separator onDown={railDown} onMove={railMove} onUp={pointerUp} onReset={() => setRailWidth(300)} />
@@ -931,6 +1091,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
               onPasteImage={pasteImage}
               asks={asks}
               models={bartModels}
+              builds={builds}
+              buildProgress={buildProgress}
+              onBuildAction={onBuildAction}
               onCopyText={(value) => api.copyText(value)}
               onAsk={askBart}
               onStopAsk={(askId) => api.stopBart(askId).catch((error) => onError(error))}
@@ -939,16 +1102,22 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
               onView={recordPosition}
               header={header}
               footer={(
-                <button
-                  type="button"
-                  className="hov-ink"
-                  data-copy-doc="1"
-                  onClick={copyDoc}
-                  title={docWorkspaceId ? 'Copy current workspace' : 'Copy current note'}
-                  style={{ marginLeft: -6, padding: '3px 6px', border: 0, borderRadius: 5, background: '#fff', cursor: 'pointer', font: '400 15px/1.4 var(--font-sans)', color: copied ? '#171717' : '#8f8f8f', transition: 'color 120ms' }}
-                >
-                  {copied ? copiedLabel(copied) : 'Copy'}
-                </button>
+                // Copy, then (on the Workspace tab: a workspace is one Build) Build and Clear (2026-09-25). Build sits beside
+                // Copy until it replaces it.
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <button
+                    type="button"
+                    className="hov-ink"
+                    data-copy-doc="1"
+                    onClick={copyDoc}
+                    title={docWorkspaceId ? 'Copy current workspace' : 'Copy current note'}
+                    style={{ ...FOOT_BUTTON, marginLeft: -6, color: copied ? '#171717' : '#8f8f8f' }}
+                  >
+                    {copied ? copiedLabel(copied) : 'Copy'}
+                  </button>
+                  {docWorkspaceId && !copied && <button type="button" className="hov-ink" data-build-doc="1" onClick={() => setBuildDialog({ quick: null })} title="Hand this workspace to a coding agent" style={FOOT_BUTTON}>Build</button>}
+                  {docWorkspaceId && !copied && <button type="button" className="hov-ink" data-clear-doc="1" onClick={clearDoc} title="Archive this document and start it blank" style={FOOT_BUTTON}>Clear</button>}
+                </span>
               )}
             />
           ) : (
@@ -983,9 +1152,34 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
         />
       </div>
 
+      {buildDialog && (
+        <BuildModal
+          projectId={project.id}
+          title={buildDialog.quick ? '' : (topic ? topic.name : '')}
+          quick={buildDialog.quick}
+          library={library}
+          inRail={inRail}
+          onClose={() => setBuildDialog(null)}
+          onStart={startBuild}
+        />
+      )}
+      {quickTask && builds[quickTask] && (
+        <QuickTask
+          task={builds[quickTask]}
+          progress={buildProgress[quickTask]}
+          workspaceName={topic ? topic.name : ''}
+          onAction={(action) => onBuildAction(quickTask, action)}
+          onPromote={() => promoteQuick(quickTask)}
+          onClose={() => setQuickTask(null)}
+        />
+      )}
+      {review && <BuildReview title={review.title} review={review.review} error={review.error} onClose={() => setReview(null)} />}
+
       <ProjectPostIts
         projectId={project.id}
         active={active}
+        hidden={postItsHidden}
+        onShown={showPostIts}
         onError={onError}
         onDrag={onPostItDrag}
         onTrashCount={setPostItTrash}

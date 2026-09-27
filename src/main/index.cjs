@@ -41,6 +41,9 @@ const { createBrowserAuth, CLIENT_ID: GITHUB_CLIENT_ID } = require('./github/bro
 const { createRepoIdentifier, createRemoteFileLister } = require('./store/page-meta.cjs');
 const { checkWebPdfs, readPdfResponse } = require('./store/web-pdfs.cjs');
 const { createPostItViews } = require('./post-its/views.cjs');
+const { createGit } = require('./build/git.cjs');
+const { createBuilds } = require('./build/manager.cjs');
+const { createRunner: createBuildRunner, createFakeRunner: createFakeBuildRunner } = require('./build/runner.cjs');
 const { EDGES: WINDOW_EDGES, resizedBounds } = require('./window-edges.cjs');
 
 const DIST = path.join(__dirname, '../../dist');
@@ -69,6 +72,7 @@ let settings = null;
 let store = null;
 let sweeper = null;
 let bart = null;
+let builds = null;
 let tools = null;
 let browserViews = null;
 let postItViews = null;
@@ -157,6 +161,7 @@ async function requestQuit() {
   try {
     if (sweeper) await sweeper.stop();
     if (bart) bart.stopAll();
+    if (builds) await builds.stopAll(); // each running turn stops, saves a checkpoint and is marked interrupted
     if (browserViews) await browserViews.flush().catch(() => {});
     if (postItViews) await postItViews.activate(null);
     if (manager) await manager.shutdown();
@@ -435,6 +440,24 @@ if (!hasSingleInstanceLock) {
       sweeper.start();
       powerMonitor.on('resume', () => sweeper.sweepSoon());
     }
+    // Build (src/main/build): a workspace handed to Claude Code or Codex in a git worktree of its own, writing only there.
+    // Git is the one the tool check found; a scripted run with the check off (ENGELBART_TOOLS=off) uses PATH's.
+    // ENGELBART_BUILD_FAKE=1 runs the fake agent (git and records stay real), for scripted runs only.
+    const gitRecord = () => tools.snapshot().tools.git;
+    const gitReady = () => process.env.ENGELBART_TOOLS === 'off' || (gitRecord().installed && gitRecord().status === 'ready');
+    builds = createBuilds({
+      git: createGit({ gitPath: () => { const record = gitRecord(); return record.status === 'ready' && record.path ? record.path : 'git'; } }),
+      runner: process.env.ENGELBART_BUILD_FAKE === '1'
+        ? createFakeBuildRunner()
+        : createBuildRunner({ runDirectory: path.join(app.getPath('userData'), 'build-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-build'), tools }),
+      readModels,
+      // A quick task's changes also reach the post-it it came from (post-its/views.cjs).
+      notify: (channel, payload) => { sendToRenderer(channel, payload); if (channel === 'engelbart:build' && payload && payload.postItId && postItViews) postItViews.buildState(payload); },
+      tools,
+      gitReady,
+    });
+    // Records a closed app left working are interrupted (Resume goes on), before anything lists them.
+    store.context().then((ctx) => builds.reconcile(ctx)).catch(() => {});
     manager.on('data', (payload) => sendToRenderer('terminal:data', payload));
     manager.on('exit', (payload) => sendToRenderer('terminal:exit', payload));
     registerTerminalIpc();
@@ -443,6 +466,10 @@ if (!hasSingleInstanceLock) {
       getWindow: () => mainWindow,
       getContext: () => store.context(),
       send: sendToRenderer,
+      buildFor: async (projectId, postItId) => {
+        const list = builds.list(await store.context(), projectId).filter((task) => task.postItId === postItId);
+        return list[list.length - 1] || null;
+      },
     });
     postItViews.register({ ipcMain, trustedHandler });
     browserViews = createBrowserViews({
@@ -495,6 +522,7 @@ if (!hasSingleInstanceLock) {
       },
       writeClipboard: (text) => clipboard.writeText(text),
       bart,
+      builds,
       readModels,
       tools,
       notify: sendToRenderer,

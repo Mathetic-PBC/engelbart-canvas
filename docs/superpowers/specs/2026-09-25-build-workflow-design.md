@@ -1,0 +1,111 @@
+# Build: one workspace, one coding agent — design
+
+Date: 2026-09-25. Sources: Hudson's note "Large task build workflow" (project Engelbart, workspace "Agents / Bart build
+agents"), the @bart answers inside it, his answers in the session that built this (Clear keeps the sidebar; an "Archived"
+section; start from the last commit; one commit per Build; post-it quick tasks after big Builds; Opus high / GPT-6-Sol
+high by default), and "no more questions, just build". Status: implemented from this spec without an approval gate;
+every interpretation is a row of §2 so it can be overridden.
+
+Builds on `docs/superpowers/specs/2026-09-23-tools-and-defaults-design.md` (Git detection, D17 repository checks) and
+narrows `2026-09-18-agentic-pipelines-design.md` §3/§6 (worktree per code task, serialized integration) to what is
+built now. No agent panel (Hudson designs it separately); no MCP servers, hooks or computer use (his "Engelbart
+sandbox" note is empty: `src/main/build/policy.cjs` is where it plugs in).
+
+## 1. What a Build is
+
+Pressing **Build** under a workspace's document hands the workspace to Claude Code or Codex, hidden, on the person's
+subscription. The agent works in its own git worktree on its own branch, so several Builds (one per workspace) run at
+once without touching each other or the person's folder. Every turn ends in a checkpoint commit. The agent either
+finishes (ready to review) or stops with a question (`NEEDS YOU:`); a reply continues the same CLI session. **Accept**
+lands the work on the person's current branch as one commit; **Discard** throws it away. Nothing reaches the person's
+folder before Accept.
+
+## 2. Decisions
+
+| # | Question | Decision | Why |
+|---|---|---|---|
+| B1 | Where the button is | **Build** beside **Copy** at the document's lower left, only on the Workspace tab (a note tab shows Copy alone). Copy stays until Build replaces it. **Clear** sits after Build. | "for now build should be next to it because we are building, but eventually it will replace." Each workspace is one large run. |
+| B2 | The modal | Title (the workspace), the model chip (the @bart selector, `BartPicker`, listing Build's models), a library search that attaches items, the attached items, a line when uncommitted files are left out or the folder cannot take a Build, and the round blue send. Esc or × closes. No explanatory copy. | Hudson's GUI section; bare bones for Claude Design. |
+| B3 | Models | A `build` block in `~/.engelbart/model-effort-inline-question.json` (added to existing files by `carryDefaults`): its own model list per provider and a `default`. Codex: Luna/Sol/Astra = `gpt-6-luna` / `gpt-6-sol` / `gpt-6-astra`, default **Sol high**. Claude Code: Sonnet/Opus/Fable aliases, default **Opus high**. The modal starts on the default provider (the file's `provider`, moved by `preferUsable` when its CLI cannot run). | "opus 5.5 high … sol 6 high for oai"; his `models.json` note wants Build's models in the models file, not in code. A separate list keeps @bart's Sol (`gpt-5.6-sol`) as it is. |
+| B4 | Where records live | `<dataRoot>/<slug>/builds/<id>/task.json` (state, conversation, checkpoints) and `context.md` (the frozen first message). `meta.json → builds: [id]` for workspace Builds. `builds` joins `PROJECT_RESERVED`; the project's last-edited time ignores it. | Bart's storage answer, which Hudson asked to implement. |
+| B5 | Ids and names | Id: 10 lowercase hex characters. Branch `engelbart/<id>`. Worktree `<dataRoot>/worktrees/<slug>/<id>` (`worktrees` is kept from project slugs). | "Use `~/.engelbart/worktrees/<project>/<id>`" under the data root, so test mode stays apart. |
+| B6 | What the agent is given | `context.md`: an `<engelbart>` head (worktree, branch, base, the person's folder not to touch), `<task>`, the workspace document with every mention in `<file>` tags (the Copy/@bart expansion), `<attached>` (items attached in the modal and not already mentioned), `<history>` (the newest archived version of this workspace, its mentions expanded, marked context-only), and `<context_json>` (@bart's catalog). Frozen at Build: later edits do not reach a running Build. | "same type of context that @bart has"; "the previous archived features and their attachments … only as context". |
+| B7 | Start point | The worktree starts from the person's **last commit** (`HEAD` of their folder). Uncommitted files are left out; the modal says how many. Nothing in their folder is touched before Accept. | Hudson: "Leave them out". |
+| B8 | Setup | After `git worktree add`: top-level `.env*` files are copied in; a `node_modules` in the person's folder is cloned into the worktree with APFS copy-on-write (`cp -cR`: instant, no network, isolated). `project.json → build.setup` (a shell command, run in the worktree) replaces this when set. | "A new worktree has no node_modules." Cloning beats `npm install` (minutes, network) and a symlink (an agent's `npm install` would change the person's copy). |
+| B9 | The agent's powers | The CLI's own coding tools, writes confined to the worktree, auto mode. **Claude Code**: `-p --restricted --tools "Read,Grep,Glob,Edit,Write,Bash,WebSearch,WebFetch" --strict-mcp-config --permission-mode auto --permission-prompts none --append-system-prompt-file`, plus `--add-dir <dataRoot>` made read-only by `--settings` deny rules (so attached papers can be opened). **Codex**: `exec -c sandbox_mode="workspace-write" -c approval_policy="on-request" -c approvals_reviewer="auto_review"` (what `--approve-for-me` sets; `exec resume` takes only `-c`) in a private `CODEX_HOME` whose `AGENTS.md` is Build's prompt. No MCP servers, hooks, personal settings or personal CLAUDE.md; the repository's own CLAUDE.md / AGENTS.md are read, as in a terminal. | Probed 2026-09-25 on Claude Code 2.1.283 and codex-cli 0.157.0 in a scratch worktree: edits and commands inside work, writes outside are refused, resume works, the repo CLAUDE.md loads and the personal one does not. Bash is not confined by `--restricted`; Claude Code's auto-mode classifier is what stands there until the Engelbart sandbox. |
+| B10 | Turns and checkpoints | One CLI process per turn (as @bart). After every turn Engelbart runs `git add -A` and commits in the worktree ("Build <title>: turn n"), hooks off (`core.hooksPath=/dev/null`, `--no-verify`), the person's git name and email when set, else `Engelbart <build@engelbart.local>`. Turn limit 180 min (quick: 20); a turn stopped by it keeps its work and Resume goes on. | "Have Engelbart commit after every turn." Hooks are the person's rules for their own commits; checkpoints are not. |
+| B11 | How a turn ends | Last line `NEEDS YOU: …` → **needs you** (the question shows on the card). Otherwise → **review**. A failed run → **failed** (its message on the card; a reply retries). Stop → **stopped**. Quick task: `ESCALATE: …` (or a NEEDS YOU) → **escalated**. | The design's markers. |
+| B12 | Replies | The card's field. While a turn runs, a reply waits and is sent when it ends; **Stop & send** interrupts first. A reply resumes the same session (`--resume` / `exec resume`); a session that will not resume starts again from `context.md` plus the conversation so far. Sessions are kept until Accept or Discard. | "your reply resumes the same session … kept until merge". |
+| B13 | Where the conversation shows | The document holds one line, `build> <id>`, drawn as a card from the task record (title, model, state, what it is doing, the conversation, reply field, Review / Accept / Discard). The text lives in `task.json`, never in the document, so Clear, typing and autosave cannot break it. | "Replies go to the task, so clearing the document doesn't break the thread." |
+| B14 | Review | A dialog with the changed files and the diff from where the Build started (`git diff <baseSha>`; uncommitted work in the worktree included). | "Review shows the diff from where the task started." |
+| B15 | Accept | In the worktree: commit leftovers; squash everything since the merge base with the person's current branch into **one commit** (message: the Build's title, then the agent's last summary); rebase it onto that branch's tip; run the checks (`project.json → build.check`, else `npm test` when package.json has a test script, else none); then in the person's folder `git merge --ff-only`. A conflict or failed check changes nothing, puts the Build in **conflict** / **review** with the files or output, and "Send to agent" resumes the session with them (for a conflict Engelbart first merges the branch in the worktree so the markers are there to resolve). Uncommitted edits of theirs in the same files make git refuse; the card names the files. On success the worktree and branch are removed; the record stays (**accepted**). | "One per Build"; "Merge rebases the branch …, reruns the checks and fast-forwards. If there's a conflict, it goes back to the same session"; "Merge into whichever branch their folder is on". |
+| B16 | Discard | Stops the turn, removes worktree and branch (`--force`), keeps the record (**discarded**). | Nothing half-kept. |
+| B17 | A folder that cannot take a Build | `inspectRepository` (D17): not a repository or no commit → the modal offers **Start history** (`git init`, a `.gitignore` of `node_modules` and `.env*` when none exists, a first commit of everything); detached HEAD, an unfinished merge/rebase, `index.lock` → the modal says which and Send stays off. No code directory → Build is off. | "Run git init and make a first commit on the first Build." |
+| B18 | Concurrency | Three big Build turns at once, one quick-task slot of its own; more wait (**queued**). Setup and Accept are serialized per repository (one git writer at a time). A Build holds its CLI's tool lock while a turn runs (updates wait). | "it gets its own reserved slot, so it never waits behind a big task"; D14. |
+| B19 | Recovery | Quitting stops every turn and saves a checkpoint. At launch, records left `running`/`setting-up`/`queued`/`accepting` become **interrupted**; **Resume** continues the same session in the same worktree. A missing worktree fails the Build with that said. | "What happens if I close my laptop?" |
+| B20 | Where to go next | `state.json → agents` gains kind `build`: `running` while a turn runs, `waiting` when it ends (the sidebar's next row and ⌘J go there, blue dot). | Bart's monitoring answer; no panel. |
+| B21 | Clear | A workspace-document action beside Build. The document is saved to `<Workspace>/.archive/<UTC time>.md`, with `<time>.json` = `{ clearedAt, title, context, removed, mentions, builds }` (ids only: no note text). Every library item the document @mentioned is linked to the workspace, so the sidebar shows exactly what it showed before; the document starts blank except for the `build>` lines of Builds still open. `meta.json → archives: [{ file, clearedAt, title }]`. An empty document is not archived. | Hudson: "see all of the workspace-specific library items in the new version of workspace, but it should still be a blank workspace"; "Do not save the version of the notes … just the fact that they were @mentioned." |
+| B22 | Archived section | **Archived**, last among the sidebar's sections, shown only when the current workspace has archives: one row per Clear, newest first (first line of the document, then the date). A click opens that version read-only on the Stage; **Restore** on the row archives the current document first, then makes that version the current one (and links what it mentioned). | "an 'Archived' section … iff there are previous versions … open that or replace current workspace … only previous versions of the current workspace". |
+| B23 | Quick tasks (post-its) | A **Build** button on each post-it opens the same modal in quick mode (the card's text as the task, same defaults and selector). The task has `kind: 'quick'`, `workspaceId: null`, the project's catalog as context, the quick-task paragraph in its prompt (no questions; `ESCALATE:` when it is not small), the quick slot and the 20-minute limit. A clean finish accepts itself (same Accept, checks included); anything else waits for review. The post-it shows the state; a click on it opens the quick task's dialog (the conversation, Review, Accept, Discard, and **Run as big task** for an escalated one, which moves it into the current workspace as a Build card and continues the same session). | "sending a quick task from a post it note and it just quickly makes the change in the background"; "opus … high default with model selector … sol 6 high"; "build post its without asking me". |
+| B24 | Scripted runs | `ENGELBART_BUILD_FAKE=1`: no model; the fake agent writes `BUILD-FAKE.md` in the worktree and answers; a task containing "question" ends with `NEEDS YOU:`, "escalate" escalates. Everything else (git, records, cards) is real. | So the whole loop can be driven and tested without a subscription. |
+
+## 3. Storage
+
+```
+<dataRoot>/<slug>/builds/<id>/task.json        see below
+<dataRoot>/<slug>/builds/<id>/context.md       the frozen first message (B6)
+<dataRoot>/<slug>/<Workspace>/meta.json        … builds: [id], archives: [{ file, clearedAt, title }]
+<dataRoot>/<slug>/<Workspace>/.archive/<t>.md  the document at Clear
+<dataRoot>/<slug>/<Workspace>/.archive/<t>.json { clearedAt, title, context, removed, mentions, builds }
+<dataRoot>/worktrees/<slug>/<id>/              the Build's checkout (branch engelbart/<id>)
+<userData>/build-runs/                         0600 input files while a turn runs; removed after
+<userData>/codex-home-build/                   Codex's private home for Builds (auth link + AGENTS.md)
+```
+
+`task.json`:
+
+```json
+{
+  "id": "3f9a0c1d2e", "kind": "build", "projectId": "…", "workspaceId": "…", "postItId": null,
+  "title": "Bart build agents",
+  "provider": "anthropic", "model": "opus", "modelId": "opus", "modelName": "Opus", "effort": "high",
+  "sessionId": "…", "repo": "/Users/…/engelbart-canvas", "worktree": "/Users/…/.engelbart/worktrees/engelbart/3f9a0c1d2e",
+  "branch": "engelbart/3f9a0c1d2e", "baseBranch": "hudson-working-branch-prototype", "baseSha": "471e439…",
+  "status": "review", "question": null, "error": null, "queued": null, "turn": 2,
+  "checkpoints": [{ "sha": "…", "turn": 1, "at": "…" }],
+  "messages": [{ "role": "agent", "text": "…", "at": "…" }, { "role": "you", "text": "…", "at": "…" }],
+  "attach": ["<library id>"], "archive": "2026-09-25T21-03-12Z", "checks": null, "accepted": null,
+  "created": "…", "updated": "…", "finished": null
+}
+```
+
+Statuses: `setting-up`, `queued`, `running`, `needs-you`, `review`, `stopped`, `failed`, `escalated`, `interrupted`,
+`accepting`, `conflict`, `accepted`, `discarded`. The last two are final.
+
+## 4. Pieces
+
+- `src/main/build/git.cjs` — every git command Build runs (worktree add/remove, checkpoint, diff, squash, rebase,
+  fast-forward, init), through `execFile` with the tool check's git, hooks off, one writer per repository.
+- `src/main/build/store.cjs` — task records: ids, create/read/write (atomic), list, public view.
+- `src/main/build/context.cjs` — the frozen first message (B6), the reply messages, the fallback for a lost session.
+- `src/main/build/prompt.cjs` — Build's system prompt (appended to the CLI's own) and the quick-task paragraph.
+- `src/main/build/policy.cjs` — the sandbox stub: what a Build may reach beyond its worktree (now: the data root,
+  read-only; no MCP, no computer use).
+- `src/main/build/runner.cjs` — one turn of Claude Code or Codex (and the fake), streaming progress through
+  `bart/activity.cjs`.
+- `src/main/build/manager.cjs` — the lifecycle: start, turns, replies, stop, review, accept, discard, escalate,
+  recovery, slots, events.
+- `src/main/store/projects.cjs` — `clearWorkspace`, `readArchive`, `restoreArchive`, `meta.json` `builds`/`archives`.
+- Renderer: `workspace/BuildModal.jsx`, `workspace/BuildReview.jsx`, the `build` line in `model/doc.js` and
+  `DocEditor.jsx`, the footer and handlers in `screens/Workspace.jsx`, the Archived section in `model/rail.js` and
+  `Rail.jsx`, the post-it's Build button and state (`post-its/Card.jsx`, `main/post-its/views.cjs`).
+
+## 5. Left open
+
+- The Engelbart sandbox: Bash is guarded by the CLIs' auto mode, not confined to the worktree; network is the CLIs'
+  default. `policy.cjs` is the one place that changes.
+- Agents editing Engelbart notes, and specs propagating to derived notes (the design's last step), are not built.
+- The agent panel (everything waiting on the person across workspaces) is Hudson's to design; `task.json` records and
+  the `engelbart:build` event carry what it needs.
+- A Build's checks run in its worktree with the person's environment; ports and test data are not isolated between
+  concurrent Builds (§6 of the pipelines design).

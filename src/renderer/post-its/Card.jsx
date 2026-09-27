@@ -30,12 +30,14 @@ function Card() {
   const [crumple, setCrumple] = React.useState(null); // { scale, width, height } while it nears the trash
   const [noted, setNoted] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
+  const [build, setBuild] = React.useState(null); // the card's latest quick task: { id, status, final } (2026-09-25)
   const editor = React.useRef(null), held = React.useRef(null), suppressClick = React.useRef(false);
   const box = React.useRef(null), fit = React.useRef(null);
   const revision = React.useRef(0);
   React.useEffect(() => {
-    api.ready().then(setCard).catch((e) => setError(e.message));
+    api.ready().then((ready) => { setCard(ready); setBuild(ready.build || null); }).catch((e) => setError(e.message));
     const offs = [
+      api.onBuildState((state) => setBuild(state || null)),
       api.onTrash(setOverTrash),
       api.onCrumple((value) => setCrumple(value && value.scale < 1 ? value : null)),
       api.onCancel(() => { held.current = null; setOverTrash(false); setCrumple(null); document.body.classList.remove('moving'); }),
@@ -85,6 +87,11 @@ function Card() {
   const toNote = () => {
     api.toNote().then(() => { setNoted(true); setTimeout(() => setNoted(false), 1600); }, (e) => setError(e.message));
   };
+  // Build (2026-09-25): the window's Build dialog opens with this card's text as a quick task. Once there is one, its state
+  // shows beside the button; a click on it opens the task in the window (Review, Accept, Discard, Run as big task).
+  const askBuild = () => { api.build().catch((e) => setError(e.message)); };
+  const working = build && ['setting-up', 'queued', 'running', 'accepting'].includes(build.status);
+  const stateWord = !build || build.status === 'discarded' ? '' : build.status === 'accepted' ? 'Merged' : working ? 'Building…' : build.status === 'escalated' ? 'Too big' : build.status === 'failed' ? 'Failed' : 'Review';
 
   // Crumpling: the card's view shrinks around it (main), and the face is drawn at its full size, scaled into it.
   const faceStyle = crumple ? { right: 'auto', bottom: 'auto', width: crumple.width, height: crumple.height, transform: `scale(${crumple.scale})`, transformOrigin: '0 0' } : undefined;
@@ -103,7 +110,11 @@ function Card() {
             ? <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 7.5 6 10.5 11.5 4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
             : <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><rect x="4.5" y="4.5" width="7.5" height="7.5" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.2" /><path d="M9.5 2.5V2.2c0-.7-.5-1.2-1.2-1.2H3.2C2.5 1 2 1.5 2 2.2v5.1c0 .7.5 1.2 1.2 1.2h.3" fill="none" stroke="currentColor" strokeWidth="1.2" /></svg>}
         </button>
-        <button type="button" data-note-post-it="1" className="postit-btn postit-note" title="Copy this into a new note" onClick={toNote}>{noted ? 'Opened' : '+Note'}</button>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+          {stateWord && <button type="button" data-post-it-build-state={build.status} className="postit-btn postit-note" title="Open this quick task" onClick={() => api.openBuild(build.id).catch((e) => setError(e.message))} style={{ fontWeight: 400 }}>{stateWord}</button>}
+          {!working && <button type="button" data-build-post-it="1" className="postit-btn postit-note" title="Hand this to a coding agent as a quick task" disabled={!card || !card.text.trim()} onClick={askBuild}>Build</button>}
+          <button type="button" data-note-post-it="1" className="postit-btn postit-note" title="Copy this into a new note" onClick={toNote}>{noted ? 'Opened' : '+Note'}</button>
+        </span>
       </div>
       {error && <div role="alert" className="post-error">Couldn’t save: {error}</div>}
       <button type="button" data-resize-post-it="1" className="post-resize" aria-label="Resize post-it" title="Drag to resize" onKeyDown={(event) => {

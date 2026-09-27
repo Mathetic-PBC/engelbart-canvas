@@ -19,6 +19,10 @@ contextBridge.exposeInMainWorld('postItAPI', Object.freeze({
   // The text needs more room than the card has: → the height (CSS px) main could give it.
   grow: (height) => ipcRenderer.invoke('post-it:grow', height),
   toNote: () => flush().then(() => ipcRenderer.invoke('post-it:to-note')),
+  // Build (2026-09-25): the window opens the Build dialog with this card's text; a click on the card's state opens its task.
+  build: () => flush().then(() => ipcRenderer.invoke('post-it:build')),
+  openBuild: (id) => ipcRenderer.invoke('post-it:build-open', id),
+  onBuildState: (fn) => subscribe('post-it:build-state', fn),
   copy: (text) => ipcRenderer.invoke('post-it:copy', text),
   openLink: (url) => ipcRenderer.invoke('post-it:open-link', url),
   onTrash: (fn) => subscribe('post-it:trash', fn),
