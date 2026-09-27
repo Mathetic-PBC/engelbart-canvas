@@ -32,8 +32,8 @@ test('flags are matched loosely, from either end, and pin one step', () => {
     ['why --sonnet', 'why', 'Sonnet medium'],
     ['--high hm', 'hm', 'Sol high'],
     ['--fable5.1 --XHIGH q', 'q', 'Fable xhigh'],
-    ['--gpt-5.6-sol --med q', 'q', 'Sol medium'],
-    ['--claude-opus-5 q --max', 'q', 'Opus max'], // Claude Code's top effort (2026-09-21)
+    ['--gpt-6-sol --med q', 'q', 'Sol medium'],
+    ['--claude-opus-5-5 q --max', 'q', 'Opus max'], // Claude Code's top effort (2026-09-21)
     ['--sol --ultra q', 'q', 'Sol ultra'], // Codex's top effort
     ['--astra --max q', 'q', 'Astra ultra'], // max is not in Codex's list: of the two equally near, the higher
     ['--opus --ultra q', 'q', 'Opus max'], // ultra is not in Claude Code's list: the nearest that is
@@ -137,6 +137,18 @@ test('a file written before defaults were carried (Hudson\'s: 09-20 wording, 09-
   const copies = fs.readdirSync(path.join(root, '.backups'));
   assert.equal(copies.length, 1);
   assert.equal(JSON.parse(fs.readFileSync(path.join(root, '.backups', copies[0]), 'utf8')).about, PAST_DEFAULT_MODELS[0].about);
+});
+
+test('untouched 5.6 models move to 6 in a model file without a saved defaults base', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-models-upgrade-'));
+  const file = path.join(root, MODELS_FILE);
+  const old = JSON.parse(JSON.stringify(PAST_DEFAULT_MODELS.at(-1)));
+  old.providers.openai.models.astra.use = 'My own words.';
+  fs.writeFileSync(file, JSON.stringify(old));
+  const models = loadModels(root);
+  assert.equal(models.providers.openai.models.sol.id, 'gpt-6-sol');
+  assert.equal(models.providers.openai.models.luna.id, 'gpt-6-luna');
+  assert.equal(models.providers.openai.models.astra.use, 'My own words.');
 });
 
 test('climb: an answer ends it; ESCALATE resumes the same session one step up; the top step is told to answer', async () => {

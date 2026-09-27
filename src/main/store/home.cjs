@@ -35,8 +35,8 @@ function ensureHome(homeDir) {
 // again for every summary, so an edit takes effect without a restart.
 const SUMMARIZER_DEFAULTS = Object.freeze({
   provider: 'openai',
-  openai: Object.freeze({ model: 'gpt-5.6-luna', effort: 'high' }),
-  anthropic: Object.freeze({ model: 'claude-opus-5', effort: 'high' }),
+  openai: Object.freeze({ model: 'gpt-6-luna', effort: 'high' }),
+  anthropic: Object.freeze({ model: 'claude-opus-5-5', effort: 'high' }),
 });
 const PROVIDER_ALIASES = { openai: 'openai', codex: 'openai', anthropic: 'anthropic', claude: 'anthropic' };
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -91,9 +91,14 @@ function normalizeConfig(value) {
 }
 
 // Every config.json default shipped before defaults were carried forward, oldest first (git history of
-// this file). No value ever changed; settings were added: summarizer 09-19, providers 09-21, github 09-23.
+// this file). Settings were added: summarizer 09-19, providers 09-21, github 09-23. Keep the old
+// summarizer IDs here so installs without a saved defaults base can inherit their replacements.
 const PAST_CONFIG_DEFAULTS = (() => {
-  const summarizer = normalizeSummarizer({});
+  const summarizer = {
+    provider: 'openai',
+    openai: { model: 'gpt-5.6-luna', effort: 'high' },
+    anthropic: { model: 'claude-opus-5', effort: 'high' },
+  };
   const providers = [...PROVIDERS_DEFAULT];
   const github = { ...GITHUB_DEFAULTS };
   return [

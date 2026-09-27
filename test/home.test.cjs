@@ -24,18 +24,18 @@ test('ensureHome creates ~/.engelbart, test root and annotations', () => {
 
 test('config defaults to test mode and persists a toggle atomically', () => {
   const { root } = ensureHome(tempHome());
-  const summarizer = { provider: 'openai', openai: { model: 'gpt-5.6-luna', effort: 'high' }, anthropic: { model: 'claude-opus-5', effort: 'high' } };
+  const summarizer = { provider: 'openai', openai: { model: 'gpt-6-luna', effort: 'high' }, anthropic: { model: 'claude-opus-5-5', effort: 'high' } };
   const providers = ['openai', 'anthropic'];
   const github = { clientId: 'Iv23liAZNYl96zlluMDs', appSlug: 'engelbart-mathetic' };
   const tools = normalizeTools({});
-  assert.deepEqual(readConfig(root), { testMode: true, providers, summarizer, github, tools }, 'summaries default to Codex, gpt-5.6-luna, high; @bart offers both providers; GitHub sign-in is configured without manual setup');
+  assert.deepEqual(readConfig(root), { testMode: true, providers, summarizer, github, tools }, 'summaries default to Codex, gpt-6-luna, high; @bart offers both providers; GitHub sign-in is configured without manual setup');
   assert.deepEqual(writeConfig(root, { testMode: false }), { testMode: false, providers, summarizer, github, tools });
   assert.deepEqual(readConfig(root), { testMode: false, providers, summarizer, github, tools });
 
   // Switching is one word; each provider keeps its own model and effort; nonsense falls back to the defaults.
   const file = path.join(root, 'config.json');
   fs.writeFileSync(file, JSON.stringify({ testMode: false, summarizer: { provider: 'claude', anthropic: { model: 'claude-sonnet-5', effort: 'low' }, openai: { model: 'rm -rf /', effort: 'extreme' } } }));
-  assert.deepEqual(readConfig(root).summarizer, { provider: 'anthropic', openai: { model: 'gpt-5.6-luna', effort: 'high' }, anthropic: { model: 'claude-sonnet-5', effort: 'low' } });
+  assert.deepEqual(readConfig(root).summarizer, { provider: 'anthropic', openai: { model: 'gpt-6-luna', effort: 'high' }, anthropic: { model: 'claude-sonnet-5', effort: 'low' } });
   assert.equal(writeConfig(root, { testMode: true }).summarizer.anthropic.model, 'claude-sonnet-5', 'toggling test mode keeps the summarizer settings');
 
   // A config file from before the setting existed gains it on the next launch.
@@ -72,19 +72,40 @@ test('a config default changed by a later build reaches an existing config.json;
   assert.ok(fs.existsSync(base), 'the defaults this file was given are kept beside it');
   // this install was given an older summarizer default, then chose Claude Code for summaries and left test mode off
   const given = JSON.parse(fs.readFileSync(base, 'utf8'));
-  given.summarizer.openai.model = 'gpt-5.5-old';
+  given.summarizer.openai.model = 'gpt-5.6-luna';
+  given.summarizer.anthropic.model = 'claude-opus-5';
   given.summarizer.anthropic.effort = 'medium';
   fs.writeFileSync(base, JSON.stringify(given));
   const mine = JSON.parse(fs.readFileSync(file, 'utf8'));
   mine.testMode = false;
   mine.summarizer.provider = 'anthropic';
-  mine.summarizer.openai.model = 'gpt-5.5-old';
+  mine.summarizer.openai.model = 'gpt-5.6-luna';
+  mine.summarizer.anthropic.model = 'claude-opus-5';
   mine.summarizer.anthropic.effort = 'low';
   fs.writeFileSync(file, JSON.stringify(mine));
   ensureHome(home);
   const now = readConfig(root);
-  assert.equal(now.summarizer.openai.model, 'gpt-5.6-luna', 'the model they never touched follows the new default');
+  assert.equal(now.summarizer.openai.model, 'gpt-6-luna', 'the model they never touched follows the new default');
+  assert.equal(now.summarizer.anthropic.model, 'claude-opus-5-5', 'the other provider also follows the new default');
   assert.deepEqual([now.testMode, now.summarizer.provider, now.summarizer.anthropic.effort], [false, 'anthropic', 'low'], 'what they chose stays');
+});
+
+test('untouched summary models upgrade without a saved defaults base', () => {
+  const home = tempHome();
+  const { root } = ensureHome(home);
+  const file = path.join(root, 'config.json');
+  const config = readConfig(root);
+  config.summarizer.openai.model = 'gpt-5.6-luna';
+  config.summarizer.anthropic.model = 'claude-opus-5';
+  config.summarizer.anthropic.effort = 'medium';
+  fs.writeFileSync(file, JSON.stringify(config));
+  fs.unlinkSync(path.join(root, '.defaults', 'config.json'));
+  ensureHome(home);
+  assert.deepEqual(readConfig(root).summarizer, {
+    provider: 'openai',
+    openai: { model: 'gpt-6-luna', effort: 'high' },
+    anthropic: { model: 'claude-opus-5-5', effort: 'medium' },
+  });
 });
 
 test('a config.json that does not parse is never overwritten by a launch or by the tool check', () => {

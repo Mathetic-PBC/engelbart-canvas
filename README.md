@@ -35,8 +35,8 @@ The model is chosen in `~/.engelbart/config.json`, which is read again for every
 ```json
 "summarizer": {
   "provider": "openai",
-  "openai":    { "model": "gpt-5.6-luna",  "effort": "high" },
-  "anthropic": { "model": "claude-opus-5", "effort": "high" }
+  "openai":    { "model": "gpt-6-luna",    "effort": "high" },
+  "anthropic": { "model": "claude-opus-5-5", "effort": "high" }
 }
 ```
 

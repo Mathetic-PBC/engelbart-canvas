@@ -22,8 +22,7 @@ const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
 const KEY_RE = /^[a-z][a-z0-9]{0,23}$/;
 
 // Build (2026-09-25; docs/superpowers/specs/2026-09-25-build-workflow-design.md B3): the models a Build can run on, per
-// provider, and the one its dialog starts on. A list of its own, so @bart's Sol stays gpt-5.6-sol while a Build's Sol is
-// GPT-6-Sol ("opus 5.5 high … sol 6 high for oai"). The dialog starts on the file's `provider`, as @bart does.
+// provider, and the one its dialog starts on. The dialog starts on the file's `provider`, as @bart does.
 const DEFAULT_BUILD = {
   about: 'Models and efforts for Build, the coding agent a workspace hands its document to, and for a post-it\'s quick task. The Build dialog starts on the default provider\'s `default` and lists these models and efforts to pick from.',
   providers: {
@@ -55,8 +54,8 @@ const BART_DEFAULTS = {
     openai: {
       name: 'Codex',
       models: {
-        luna: { id: 'gpt-5.6-luna', name: 'Luna', use: 'Fastest. Lookups, definitions, rewording.' },
-        sol: { id: 'gpt-5.6-sol', name: 'Sol', use: 'The default. Most questions about the project.' },
+        luna: { id: 'gpt-6-luna', name: 'Luna', use: 'Fastest. Lookups, definitions, rewording.' },
+        sol: { id: 'gpt-6-sol', name: 'Sol', use: 'The default. Most questions about the project.' },
         astra: { id: 'gpt-6-astra', name: 'Astra', use: 'Deepest. Hard reasoning across many files; slow.' },
       },
       efforts: ['medium', 'high', 'xhigh', 'ultra'],
@@ -78,20 +77,38 @@ const BART_DEFAULTS = {
 
 const DEFAULT_MODELS = { ...BART_DEFAULTS, build: DEFAULT_BUILD };
 
+// Keep the shipped 5.6 defaults as migration bases, so untouched model IDs move to 6.
+const PREVIOUS_BART_DEFAULTS = {
+  ...BART_DEFAULTS,
+  providers: {
+    ...BART_DEFAULTS.providers,
+    openai: {
+      ...BART_DEFAULTS.providers.openai,
+      models: {
+        ...BART_DEFAULTS.providers.openai.models,
+        luna: { ...BART_DEFAULTS.providers.openai.models.luna, id: 'gpt-5.6-luna' },
+        sol: { ...BART_DEFAULTS.providers.openai.models.sol, id: 'gpt-5.6-sol' },
+      },
+    },
+  },
+};
+
 // Every earlier DEFAULT_MODELS, oldest first. A file written before defaults were carried forward is
 // compared with these to tell the values its owner left alone from the ones they chose.
 const PAST_DEFAULT_MODELS = [
   // 2026-09-20 (9b50bad): no ultra or max yet, and the last sentence of `about` ended at xhigh.
   {
-    ...BART_DEFAULTS,
-    about: BART_DEFAULTS.about.replace('; ultra (Codex) and max (Claude Code) are the most either will spend, by hand only: no ladder reaches them.', '.'),
+    ...PREVIOUS_BART_DEFAULTS,
+    about: PREVIOUS_BART_DEFAULTS.about.replace('; ultra (Codex) and max (Claude Code) are the most either will spend, by hand only: no ladder reaches them.', '.'),
     providers: {
-      openai: { ...BART_DEFAULTS.providers.openai, efforts: ['medium', 'high', 'xhigh'] },
-      anthropic: { ...BART_DEFAULTS.providers.anthropic, efforts: ['medium', 'high', 'xhigh'] },
+      openai: { ...PREVIOUS_BART_DEFAULTS.providers.openai, efforts: ['medium', 'high', 'xhigh'] },
+      anthropic: { ...PREVIOUS_BART_DEFAULTS.providers.anthropic, efforts: ['medium', 'high', 'xhigh'] },
     },
   },
   // 2026-09-21 to 2026-09-25: @bart alone, before Build had models of its own.
-  BART_DEFAULTS,
+  PREVIOUS_BART_DEFAULTS,
+  // 2026-09-25 to 2026-09-27: Build had its own GPT-6 models; @bart still used 5.6.
+  { ...PREVIOUS_BART_DEFAULTS, build: DEFAULT_BUILD },
 ];
 
 const isObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
