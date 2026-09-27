@@ -70,6 +70,7 @@ function Separator({ onDown, onMove, onUp, onReset }) {
 }
 
 const WS_TAB = { id: 'ws', title: 'Workspace' };
+const ARCHIVE_TAB = 'archive:'; // an archived version's tab (2026-09-27: it opens in the middle, read-only, not on the Stage)
 const FOOT_BUTTON = { padding: '3px 6px', border: 0, borderRadius: 5, background: '#fff', cursor: 'pointer', font: '400 15px/1.4 var(--font-sans)', color: '#8f8f8f', transition: 'color 120ms' };
 const VIEW_SAVE_DELAY = 400;
 const POST_ITS_HIDDEN = 'engelbart.postIts.hidden';
@@ -158,13 +159,15 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const rightBox = React.useRef(null);
 
   const topic = topics.find((candidate) => candidate.id === topicId) || null;
-  // The document in front: this workspace's (the Workspace tab) or a note's.
+  // The document in front: this workspace's (the Workspace tab), an archived version of it (read-only), or a note's.
   const docWorkspaceId = activeTab === 'ws' ? (topic ? topic.id : null) : null;
-  const docKey = docWorkspaceId ? `ws:${docWorkspaceId}` : activeTab === 'ws' ? null : `note:${activeTab}`;
+  const docArchive = activeTab.startsWith(ARCHIVE_TAB) && topic ? activeTab.slice(ARCHIVE_TAB.length) : null;
+  const docKey = docWorkspaceId ? `ws:${docWorkspaceId}` : docArchive ? `archive:${topic.id}:${docArchive}` : activeTab === 'ws' || activeTab.startsWith(ARCHIVE_TAB) ? null : `note:${activeTab}`;
   const docRef = React.useMemo(() => {
     if (!docKey) return null;
+    if (docArchive) return { kind: 'archive', workspaceId: topic.id, file: docArchive };
     return docWorkspaceId ? { kind: 'workspace', workspaceId: docWorkspaceId } : { kind: 'note', id: activeTab };
-  }, [docKey, docWorkspaceId, activeTab]);
+  }, [docKey, docWorkspaceId, docArchive, activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Remember where we are, so the app reopens here.
   React.useEffect(() => { if (topic && onVisit) onVisit(topic.id); }, [topic && topic.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -208,7 +211,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   React.useEffect(() => {
     if (!docKey || docs[docKey] !== undefined || !docRef) return;
     let cancelled = false;
-    api.readDoc(project.id, docRef).then((text) => {
+    const read = docRef.kind === 'archive' ? api.readArchive(project.id, docRef.workspaceId, docRef.file).then((got) => got.text) : api.readDoc(project.id, docRef);
+    read.then((text) => {
       if (!cancelled) setDocs((current) => (current[docKey] === undefined ? { ...current, [docKey]: text } : current));
     }).catch((error) => onError(error));
     return () => { cancelled = true; };
@@ -235,6 +239,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const mainRef = React.useRef(null);
   const lastEdit = React.useRef({ id: null, at: 0 });
   const onDocChange = React.useCallback((text) => {
+    if (docRef && docRef.kind === 'archive') return; // an archived version is only read
     if (docKey && docRef) changeDoc(docKey, docRef, text);
     const typed = mainRef.current && mainRef.current.contains(document.activeElement);
     const now = Date.now(), last = lastEdit.current;
@@ -606,18 +611,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   const onRowClick = (row) => {
     if (row.type === 'child') { selectTopic(row.id); return; }
-    if (row.type === 'archive') { openArchive(row.file); return; }
+    if (row.type === 'archive') { openTab(`${ARCHIVE_TAB}${row.file}`, row.name); return; }
     openItem(row);
-  };
-
-  // An archived version opens on the Stage, read-only, as the markdown file it is (B22).
-  const openArchive = (file) => {
-    if (!topic) return;
-    api.readArchive(project.id, topic.id, file).then((got) => {
-      if (!stageRef.current) return;
-      setRightMode('stage');
-      stageRef.current.openPaths([got.path]);
-    }).catch((error) => onError(error));
   };
 
   /* ---------------------------------------------------------------- topics */
@@ -859,7 +854,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   const commitTitle = async () => {
     const next = titleDraft.trim();
-    if (!next || next === docTitle) {
+    if (!next || next === docTitle || docArchive) {
       setTitleDraft(shownTitle);
       return;
     }
@@ -959,6 +954,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     <input
       ref={(element) => { if (element && wantTitleFocus.current) { wantTitleFocus.current = false; element.focus(); } }}
       value={titleDraft}
+      readOnly={!!docArchive}
       onChange={(event) => setTitleDraft(event.target.value.replace(/[/\\]/g, '-'))} // a title is a file name: slashes become hyphens as you type
       onBlur={commitTitle}
       onKeyDown={(event) => {
@@ -1077,6 +1073,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
               ref={editorRef}
               docKey={docKey}
               text={text}
+              readOnly={!!docArchive}
               onChange={onDocChange}
               mentionable={mentionable}
               mentionItems={mentionItems}
@@ -1104,6 +1101,10 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
               footer={(
                 // Copy, then (on the Workspace tab: a workspace is one Build) Build and Clear (2026-09-25). Build sits beside
                 // Copy until it replaces it.
+                // An archived version has Restore alone.
+                docArchive ? (
+                  <button type="button" className="hov-ink" data-restore-doc="1" onClick={() => restoreVersion(docArchive)} title="Make this version the workspace's document again" style={{ ...FOOT_BUTTON, marginLeft: -6 }}>Restore</button>
+                ) : (
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                   <button
                     type="button"
@@ -1118,6 +1119,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
                   {docWorkspaceId && !copied && <button type="button" className="hov-ink" data-build-doc="1" onClick={() => setBuildDialog({ quick: null })} title="Hand this workspace to a coding agent" style={FOOT_BUTTON}>Build</button>}
                   {docWorkspaceId && !copied && <button type="button" className="hov-ink" data-clear-doc="1" onClick={clearDoc} title="Archive this document and start it blank" style={FOOT_BUTTON}>Clear</button>}
                 </span>
+                )
               )}
             />
           ) : (

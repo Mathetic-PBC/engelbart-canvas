@@ -1328,7 +1328,7 @@ export default class DocEditor extends React.Component {
             <div
               data-editor="1"
               ref={this.edRef}
-              contentEditable
+              contentEditable={!this.props.readOnly}
               suppressContentEditableWarning
               spellCheck={false}
               role="textbox"

@@ -103,7 +103,7 @@ function archiveFile(ctx, projectId, workspaceId, stamp, ext) {
   return { workspace, file: path.join(archiveDir(workspace), `${stamp}${ext}`) };
 }
 
-/** One archived version: where it is (the Stage opens it read-only), its text, and what the workspace had then. */
+/** One archived version: where it is, its text (opened read-only in the middle), and what the workspace had then. */
 function readArchive(ctx, projectId, workspaceId, stamp) {
   const { file } = archiveFile(ctx, projectId, workspaceId, stamp, '.md');
   let text;
