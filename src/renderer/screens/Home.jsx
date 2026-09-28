@@ -4,12 +4,14 @@ import { api, errorMessage } from '../api.js';
 import { KIND, kindOf, SEARCH } from '../ui/Icons.jsx';
 import DocPreview from '../ui/DocPreview.jsx';
 import { hasTag, isNote, kindKey, kindRank, KIND_ORDER } from '../model/kind.js';
+import { AddToLibrary } from '../workspace/Rail.jsx';
 
 // All projects (Claude Design "Projects.dc.html", 2026-09-21): the library as a rail on the left
-// — one list sorted by kind, a search field, + Add — and the projects beside it as cards that
+// — one list sorted by kind, a search field, Add context — and the projects beside it as cards that
 // size to their content: name, the kinds of library items the project holds, and its most
 // recently edited workspaces as page tiles. A card opens the project; a tile opens that workspace.
-// Hovering a library row or a tile for a beat opens a peek you can move onto and scroll.
+// Hovering a library row or a tile for a beat opens a peek you can move onto and scroll. Add context is the workspace
+// sidebar's (Rail.jsx AddToLibrary, 2026-09-28): a link or a path, files from disk, a repository from GitHub.
 
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
 const MAX_ICONS = 5;
@@ -86,9 +88,7 @@ export function ItemPeek({ row, more, onOpenWorkspace }) {
 export default function Home({ projects, library, onCreateScreen, onOpenWorkspace, onOpenNote, onOpenOnStage, onRename, onLibraryChanged, error }) {
   const [renaming, setRenaming] = React.useState(null);
   const [query, setQuery] = React.useState('');
-  const [adding, setAdding] = React.useState(false);
-  const [addValue, setAddValue] = React.useState('');
-  const [addError, setAddError] = React.useState('');
+  const [addError, setAddError] = React.useState(''); // what a drop could not add
   const [addBusy, setAddBusy] = React.useState(false);
   const [dropping, setDropping] = React.useState(false);
   const [justAdded, setJustAdded] = React.useState(null);
@@ -98,7 +98,6 @@ export default function Home({ projects, library, onCreateScreen, onOpenWorkspac
   const timer = React.useRef(null);
   const column = React.useRef(null);
   const list = React.useRef(null);
-  const addField = React.useRef(null);
 
   const rows = React.useMemo(() => {
     return library.filter((row) => row.type !== 'image').sort((a, b) => kindRank(a) - kindRank(b) || String(b.last_edited || '').localeCompare(String(a.last_edited || '')));
@@ -137,28 +136,40 @@ export default function Home({ projects, library, onCreateScreen, onOpenWorkspac
   }, [peek, previews]);
 
   /* ---------------------------------------------------------------- adding */
-  async function addAll(inputs) {
-    if (addBusy) return;
-    setAddBusy(true);
-    setAddError('');
+  // Each input its own row; the last one added flashes. What could not be added is returned, said by whoever asked.
+  async function addEach(inputs) {
     let last = null;
     const problems = [];
     for (const input of inputs) {
       try { last = await api.addLibraryItem(input); } catch (candidate) { problems.push(errorMessage(candidate)); }
     }
-    setAddBusy(false);
     if (last) {
       setQuery('');
       setJustAdded(last.id);
       await onLibraryChanged();
     }
-    if (problems.length) { setAdding(true); setAddError(problems.join(' · ')); } else { setAddValue(''); setAdding(false); }
+    return problems;
   }
 
-  // What could not be added stays in the field, selected: typing replaces it, Escape leaves.
-  React.useEffect(() => {
-    if (addError && addField.current) { addField.current.focus(); addField.current.select(); }
-  }, [addError]);
+  // Add context's menu: a link or a path (thrown back when refused), files from disk, a repository or a search result —
+  // what the library holds already opens, anything else is added.
+  const addOne = async (input) => { const problems = await addEach([input]); if (problems.length) throw new Error(problems.join(' · ')); };
+  const pickFromDisk = async () => addEach((await api.pickLibraryPaths()) || []);
+  const pickRepo = async ({ repo, row }) => { if (row) await openRow(row); else await addOne(repo.url); };
+  const searchPick = async (result, typed) => {
+    if (result.kind === 'item') await openRow(result.row);
+    else if (result.kind === 'fresh') await addOne(typed);
+  };
+  const inLibraryOnly = React.useCallback(() => false, []);
+
+  async function dropAll(paths) {
+    if (addBusy) return;
+    setAddBusy(true);
+    setAddError('');
+    const problems = await addEach(paths);
+    setAddBusy(false);
+    setAddError(problems.join(' · '));
+  }
 
   React.useEffect(() => {
     if (!justAdded || !list.current) return undefined;
@@ -174,7 +185,7 @@ export default function Home({ projects, library, onCreateScreen, onOpenWorkspac
     event.preventDefault();
     setDropping(false);
     const paths = [...event.dataTransfer.files].map((file) => api.pathForFile(file)).filter(Boolean);
-    if (paths.length) void addAll(paths);
+    if (paths.length) void dropAll(paths);
   };
 
   async function openRow(row) {
@@ -211,29 +222,11 @@ export default function Home({ projects, library, onCreateScreen, onOpenWorkspac
         >
           <div style={{ flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '19px 19px 0 18px' }}>
             <span style={{ font: '500 14px/1.3 var(--font-sans)', color: '#171717' }}>Library</span>
-            <span role="button" tabIndex={0} className="hov-ink" data-library-add="1" onClick={() => { setAdding((value) => !value); setAddError(''); }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setAdding((value) => !value); } }} style={{ font: '14px/1.3 var(--font-sans)', color: '#4d4d4d', cursor: 'pointer', transition: 'color 120ms' }}>+ Add</span>
           </div>
-          {adding && (
-            <div style={{ flex: 'none', padding: '12px 12px 0', animation: `rise 160ms ${EASE}` }}>
-              <div className="ring home-add" style={{ display: 'flex', alignItems: 'center', height: 36, padding: '0 12px', background: '#fff', borderRadius: 8 }}>
-                <input
-                  ref={addField}
-                  autoFocus
-                  value={addValue}
-                  readOnly={addBusy}
-                  spellCheck={false}
-                  placeholder="Link or path"
-                  onChange={(event) => { setAddValue(event.target.value); setAddError(''); }}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' && addValue.trim()) { event.preventDefault(); void addAll([addValue]); }
-                    if (event.key === 'Escape') { event.stopPropagation(); setAdding(false); setAddError(''); }
-                  }}
-                  style={{ flex: 1, minWidth: 0, border: 0, background: 'transparent', font: '14px/1.4 var(--font-sans)', color: '#171717', opacity: addBusy ? 0.5 : 1 }}
-                />
-              </div>
-              {addError && <div style={{ padding: '6px 6px 0', font: '12px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere' }}>{addError}</div>}
-            </div>
-          )}
+          <div data-library-add="1" style={{ flex: 'none', padding: '10px 8px 0' }}>
+            <AddToLibrary onAdd={addOne} onPickDisk={pickFromDisk} onPickRepo={pickRepo} onSearchPick={searchPick} library={library} inRail={inLibraryOnly} />
+            {addError && <div style={{ padding: '4px 10px 0', font: '12px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere' }}>{addError}</div>}
+          </div>
           <div style={{ flex: 'none', padding: '12px 12px 0' }}>
             <label className="ring home-search" style={{ display: 'flex', alignItems: 'center', gap: 9, height: 36, padding: '0 12px', background: '#fff', borderRadius: 8, color: '#171717', cursor: 'text' }}>
               <SEARCH />

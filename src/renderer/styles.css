@@ -46,7 +46,7 @@ textarea::placeholder,input::placeholder{color:#8f8f8f;font-style:italic}
 /* All-projects screen (Projects.dc.html): one soft grey ring for every hover/focus outline but a workspace tile's. */
 .ring{transition:box-shadow 120ms,border-color 120ms,color 120ms}
 .ring:hover,.ring:focus-within,.ring[data-on="1"]{box-shadow:0 0 0 3px rgba(0,0,0,.07)}
-.home-search input::placeholder,.home-add input::placeholder{font-style:normal;color:#8f8f8f}
+.home-search input::placeholder{font-style:normal;color:#8f8f8f}
 .glyph16{flex:none;display:flex;align-items:center;justify-content:center;width:16px;height:16px;font:500 14px/1 var(--font-sans)}
 .glyph16 svg{width:16px;height:16px}
 .glyph14{flex:none;display:flex;align-items:center;justify-content:center;width:14px;height:14px;font:500 12.5px/1 var(--font-sans)}

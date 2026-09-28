@@ -493,7 +493,8 @@ function LibrarySearch({ library, inRail, onPick, previews, onPreview, onOpenHel
 // "+ Add context" under the sections (Sidebar.dc.html, 2026-09-23; hovering it opens its menu too, as Hudson asked of the
 // + on 2026-09-22): a search over the library first (the sidebar's search again, closer to hand: typing lists what it finds
 // in place of the rest), then a new Note or Sub-Workspace made here, then a link, a path or files from disk, or a
-// repository from GitHub, that become new rows, in the library and in this workspace.
+// repository from GitHub, that become new rows, in the library and in this workspace. The home page's library uses the
+// same menu (2026-09-28), without Note and Sub-Workspace: there is no workspace there to make them in.
 const CIRCLE_PLUS = (
   <svg aria-hidden="true" width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" style={{ flex: 'none', display: 'block' }}>
     <circle cx="9" cy="9" r="7.5" />
@@ -501,7 +502,7 @@ const CIRCLE_PLUS = (
   </svg>
 );
 
-function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickRepo, onSearchPick, library, inRail, onOpenChange, shut }) {
+export function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickRepo, onSearchPick, library, inRail, onOpenChange, shut }) {
   const [open, setOpen] = React.useState(false);
   const [q, setQ] = React.useState(''); // the search at the top of the menu
   const [idx, setIdx] = React.useState(0);
@@ -521,7 +522,7 @@ function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickRepo, on
   const live = React.useRef({ value: '', busy: false, view: 'menu' });
   live.current = { value: value || q, busy, view };
   React.useEffect(() => () => clearTimeout(timer.current), []);
-  React.useEffect(() => { onOpenChange(open); }, [open, onOpenChange]);
+  React.useEffect(() => { if (onOpenChange) onOpenChange(open); }, [open, onOpenChange]);
   // The field takes the keyboard as soon as the menu shows, so a link can be pasted straight away. Not in the ref: the
   // panel is invisible for the frame in which it measures itself (ui/usePlaced.js), and an invisible field takes no focus.
   React.useEffect(() => {
@@ -652,15 +653,19 @@ function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickRepo, on
             ))}
             {(searchProblem || error) && <div data-add-error="1" style={{ padding: '6px 2px 0', font: '12px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere' }}>{searchProblem || error}</div>}
           </>) : (<>
-          <button type="button" className="hov-wash" data-new="note" disabled={busy} onClick={() => make(onNewNote)} style={menuRow}>
-            <Glyph item={{ type: 'md', tags: ['note'] }} />
-            <span style={menuText}>Note</span>
-          </button>
-          <button type="button" className="hov-wash" data-new="workspace" disabled={busy} onClick={() => make(onNewChild)} style={{ ...menuRow, marginTop: 2 }}>
-            <span style={{ flex: 'none', width: 16, display: 'flex', justifyContent: 'center', color: '#171717' }}><WsMark size={12} stroke={1.6} /></span>
-            <span style={menuText}>Sub-Workspace</span>
-          </button>
-          <div style={{ height: 1, margin: '6px 0 8px', background: '#eaeaea' }} />
+          {onNewNote && (
+            <button type="button" className="hov-wash" data-new="note" disabled={busy} onClick={() => make(onNewNote)} style={menuRow}>
+              <Glyph item={{ type: 'md', tags: ['note'] }} />
+              <span style={menuText}>Note</span>
+            </button>
+          )}
+          {onNewChild && (
+            <button type="button" className="hov-wash" data-new="workspace" disabled={busy} onClick={() => make(onNewChild)} style={{ ...menuRow, marginTop: 2 }}>
+              <span style={{ flex: 'none', width: 16, display: 'flex', justifyContent: 'center', color: '#171717' }}><WsMark size={12} stroke={1.6} /></span>
+              <span style={menuText}>Sub-Workspace</span>
+            </button>
+          )}
+          {(onNewNote || onNewChild) && <div style={{ height: 1, margin: '6px 0 8px', background: '#eaeaea' }} />}
           <div className="rail-field" style={{ display: 'flex', alignItems: 'center', boxSizing: 'border-box', padding: '0 10px', marginBottom: 4, background: '#fafafa', border: `1px solid ${border}`, borderRadius: 6, transition: 'border-color 120ms' }}>
             <input
               ref={fieldRef}
