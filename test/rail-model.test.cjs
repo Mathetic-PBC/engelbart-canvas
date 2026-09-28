@@ -118,3 +118,17 @@ test('the Archived section: a workspace\'s earlier versions, last, and only when
   assert.deepEqual(railSections(rows).map((s) => [s.key, s.rows.map((r) => r.id)]), [['Notes', ['n1']], ['Archived', ['archive:2026-09-25T21-03-12Z']]]);
   assert.ok(!railSections([rows[1]]).some((s) => s.key === 'Archived'), 'no versions, no section');
 });
+
+test('"Add from library" in the Build panel: the ones written in last before anything is typed, then every match; no pictures, nothing attached already (2026-09-27)', async () => {
+  const { attachRows } = await load();
+  const dated = library.map((r, i) => ({ ...r, last_edited: `2026-09-${String(10 + i).padStart(2, '0')}T00:00:00Z` }));
+  const inRail = (id) => id === 'p1';
+  const empty = attachRows({ query: '', library: dated, taken: ['f1'], inRail });
+  assert.deepEqual(empty.map((r) => r.key), ['c1', 'w1', 'g1', 'p1', 'n1'], 'newest first; the picture and what is attached are left out');
+  assert.deepEqual(empty.find((r) => r.key === 'p1').tag, 'here');
+  assert.deepEqual(attachRows({ query: 'retrieval contextual', library: dated }).map((r) => r.key), ['w1'], 'every word, in any order');
+  assert.deepEqual(attachRows({ query: 'c', library: dated }).map((r) => r.key).slice(0, 3), ['w1', 'p1', 'c1'], 'names that start with it first, then the newest');
+  const many = Array.from({ length: 30 }, (_, i) => row(`m${i}`, `Match ${i}`, 'website'));
+  assert.equal(attachRows({ query: '', library: many }).length, 8);
+  assert.equal(attachRows({ query: 'match', library: many }).length, 30);
+});

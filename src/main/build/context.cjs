@@ -5,6 +5,7 @@
 // workspace document with every mention in place, and the library as Context.json — plus what the Build dialog attached,
 // the newest archived version of the workspace marked as history, and where the Build works. Replies after that are
 // short messages in the same session; a session that will not resume starts again from context.md and the conversation.
+// A post-it added to a workspace (2026-09-27) is a Build of that workspace whose task is the post-it, not the document.
 
 const projects = require('../store/projects.cjs');
 const archive = require('../store/archive.cjs');
@@ -23,7 +24,8 @@ async function expandText(text, source, seen) {
 
 /**
  * The frozen first message. `task` carries where the Build works (worktree, branch, baseBranch, baseSha, repo);
- * `attach` library ids; `postIt` the quick task's text. → { text, archive: file | null }
+ * `attach` library ids; `postIt` the post-it's text: a quick task's (no `workspaceId`), or one added to the workspace.
+ * → { text, archive: file | null }
  */
 async function freezeContext(ctx, projectId, { task, workspaceId = null, attach = [], postIt = null }) {
   const project = projects.findProject(ctx, projectId);
@@ -32,19 +34,22 @@ async function freezeContext(ctx, projectId, { task, workspaceId = null, attach 
   const seen = new Set();
   const parts = [];
   let history = null;
-  let from;
+  let from = 'a post-it';
   const blocks = [];
+  const fromPostIt = postIt != null;
+  if (fromPostIt) blocks.push(`<post-it>\n${String(postIt || '').trim()}\n</post-it>`);
   if (workspaceId) {
     const { workspace } = projects.findWorkspace(ctx, projectId, workspaceId);
     seen.add(`ws:${workspaceId}`);
-    let text = '';
-    try { text = await projects.readDoc(ctx, projectId, { kind: 'workspace', workspaceId }); } catch { text = ''; }
-    blocks.push(`<workspace name="${attr(workspace.name)}">\n${await expandText(text, source, seen)}\n</workspace>`);
-    from = `the workspace "${workspace.name}"`;
+    if (fromPostIt) {
+      from = `a post-it added to the workspace "${workspace.name}"`;
+    } else {
+      let text = '';
+      try { text = await projects.readDoc(ctx, projectId, { kind: 'workspace', workspaceId }); } catch { text = ''; }
+      blocks.push(`<workspace name="${attr(workspace.name)}">\n${await expandText(text, source, seen)}\n</workspace>`);
+      from = `the workspace "${workspace.name}"`;
+    }
     history = archive.latestArchive(ctx, projectId, workspaceId);
-  } else {
-    blocks.push(`<post-it>\n${String(postIt || '').trim()}\n</post-it>`);
-    from = 'a post-it';
   }
   const extra = rows.filter((row) => attach.includes(row.id) && !seen.has(row.id) && row.type !== 'image');
   if (extra.length) blocks.push(`<attached>\n${(await expandRows(extra, source, seen)).lines.join('\n')}\n</attached>`);
@@ -61,9 +66,11 @@ async function freezeContext(ctx, projectId, { task, workspaceId = null, attach 
     `built from: ${from}`,
     '</engelbart>',
   ].join('\n'));
-  parts.push(workspaceId
+  parts.push(!fromPostIt
     ? '<task>\nDo what the workspace document below asks: it is the person\'s plan for this Build, usually ending with what to build now. Where it discusses options, follow what it settles on; where something it asks for is still undecided, choose sensibly and say what you chose, or ask with NEEDS YOU when the choice is theirs.\n</task>'
-    : '<task>\nDo what the post-it below asks. It is a quick task: a small change, made without questions.\n</task>');
+    : workspaceId
+      ? '<task>\nDo what the post-it below asks. The person added it to a workspace as a full Build: larger changes are fine, and you may ask with NEEDS YOU when a choice is theirs.\n</task>'
+      : '<task>\nDo what the post-it below asks. It is a quick task: a small change, made without questions.\n</task>');
   parts.push(...blocks);
   parts.push(`<context_json>\n${JSON.stringify(catalogEntries(project, rows, seen), null, 1)}\n</context_json>`);
   return { text: parts.join('\n\n'), archive: history ? history.file : null };

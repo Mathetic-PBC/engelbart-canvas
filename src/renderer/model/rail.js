@@ -68,6 +68,24 @@ export function searchRows({ query, library, inRail, found }) {
   return hits.map((row) => ({ kind: 'item', key: row.id, row, name: row.name, tag: inRail(row.id) ? 'here' : kindLabel(row) }));
 }
 
+const ATTACH_RECENT = 8; // what "Add from library" lists before anything is typed
+const when = (row) => Date.parse(row.last_edited || row.created || '') || 0;
+
+/**
+ * "Add from library" in the Build panel (2026-09-27): what can be attached to a Build. Empty, the things written in last;
+ * typed, everything whose name, place or kind holds all the words, names that start with them first. Never an image
+ * (a Build is not given pictures) nor what is attached already (`taken`, ids). Rows: { key, row, name, tag }.
+ */
+export function attachRows({ query, library, taken = [], inRail = () => false }) {
+  const words = String(query || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const held = new Set(taken);
+  const pool = library.filter((row) => row.type !== 'image' && !held.has(row.id));
+  const hits = words.length ? pool.filter((row) => words.every((word) => hay(row).includes(word))) : pool;
+  const starts = (row) => (words.length && String(row.name).toLowerCase().startsWith(words[0]) ? 0 : 1);
+  const sorted = [...hits].sort((a, b) => starts(a) - starts(b) || when(b) - when(a));
+  return (words.length ? sorted : sorted.slice(0, ATTACH_RECENT)).map((row) => ({ key: row.id, row, name: row.name, tag: inRail(row.id) ? 'here' : kindLabel(row) }));
+}
+
 export const BART_VERB = { kind: 'verb', verb: 'bart', key: 'verb:bart', name: 'Bart', glyph: 'chat', token: '@Bart ' };
 export const TASK_VERB = { kind: 'verb', verb: 'task', key: 'verb:task', name: 'Task', glyph: 'task', token: '@Task ' };
 export const NOTE_VERB = { kind: 'verb', verb: 'note', key: 'verb:note', name: 'Note', glyph: 'note', token: '@Note ' };

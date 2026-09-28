@@ -448,7 +448,7 @@ if (!hasSingleInstanceLock) {
     builds = createBuilds({
       git: createGit({ gitPath: () => { const record = gitRecord(); return record.status === 'ready' && record.path ? record.path : 'git'; } }),
       runner: process.env.ENGELBART_BUILD_FAKE === '1'
-        ? createFakeBuildRunner()
+        ? createFakeBuildRunner({ delayMs: Number(process.env.ENGELBART_BUILD_FAKE_MS) || 900 }) // _MS: how long a fake turn takes
         : createBuildRunner({ runDirectory: path.join(app.getPath('userData'), 'build-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-build'), tools }),
       readModels,
       // A quick task's changes also reach the post-it it came from (post-its/views.cjs).

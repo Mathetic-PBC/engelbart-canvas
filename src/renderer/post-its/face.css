@@ -3,9 +3,20 @@
 .postit-head{flex:none;height:14px}
 .postit-body{flex:1;min-height:0;overflow:hidden;padding:0 16px;position:relative}
 .postit-fit{transform-origin:0 0}
-.postit-foot{flex:none;height:28px;display:flex;align-items:center;justify-content:space-between;padding:0 26px 0 10px}
-.postit-btn{display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:6px;background:transparent;color:#705717;cursor:pointer;padding:0}
-.postit-btn:hover{background:rgba(112,87,23,.1);color:#171717}
-.postit-btn:focus-visible{outline:2px solid #a08f52;outline-offset:-2px}
-.postit-copy{width:24px;height:22px}
-.postit-note{height:22px;padding:0 7px;font:500 12px/1 var(--font-sans)}
+.postit-foot{flex:none;height:30px;display:flex;align-items:center;justify-content:space-between;padding:0 26px 0 10px}
+/* Footer words (Claude Design "Post-it Quick Task", 2026-09-27): plain text on the yellow, no background; hover darkens. */
+.postit-btn{display:inline-flex;align-items:center;justify-content:center;border:0;background:transparent;color:#705717;cursor:pointer;padding:0;transition:color 120ms}
+.postit-btn:hover:not(:disabled){color:#171717}
+.postit-btn:disabled{cursor:default}
+.postit-btn:focus-visible{outline:2px solid #a08f52;outline-offset:2px;border-radius:4px}
+.postit-copy{width:22px;height:22px}
+.postit-actions{display:inline-flex;align-items:center;gap:14px;min-width:0}
+.postit-word{gap:5px;height:22px;font:500 12px/1 var(--font-sans);white-space:nowrap}
+.postit-word[data-strong="1"]{color:#171717;gap:6px}
+.postit-word-text{max-width:120px;overflow:hidden;text-overflow:ellipsis}
+/* Building's three dots: small circles that rise in turn. */
+.postit-dots{display:inline-flex;align-items:center;gap:3px}
+.postit-dots span{display:block;flex:none;width:4px;height:4px;border-radius:999px;background:currentColor;animation:postit-dot 1.1s ease-in-out infinite}
+.postit-dots span:nth-child(2){animation-delay:.15s}
+.postit-dots span:nth-child(3){animation-delay:.3s}
+@keyframes postit-dot{0%,80%,100%{opacity:.25;transform:translateY(0)}40%{opacity:1;transform:translateY(-2px)}}

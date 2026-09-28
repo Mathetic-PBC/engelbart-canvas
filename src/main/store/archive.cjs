@@ -8,6 +8,7 @@
 // fact that they were @mentioned"). Everything the document mentioned is linked to the workspace at Clear, so the
 // sidebar shows after Clear what it showed before. Restore archives the current document first, so nothing is ever
 // overwritten. The folder starts with a dot, so no listing takes it for a workspace and no edit time counts it.
+// A post-it added to a workspace (2026-09-27) is put in as one more archived version, the current document untouched.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -15,6 +16,8 @@ const projects = require('./projects.cjs');
 const { INLINE } = require('../context/expand-mentions.cjs');
 
 const ARCHIVE_DIR = '.archive';
+const IMPORTED = 'Imported from Task:';
+const BUILD_ID_RE = /^[0-9a-f]{10}$/;
 const IMAGE_TOKEN = /^!\[[^\]\n]*\]\(img:([\w-]+)\)$/;
 const WS_TOKEN = /^@\[[^\]\n]+\]\(ws:([\w-]+)\)$/;
 
@@ -97,6 +100,29 @@ async function clearWorkspace(ctx, projectId, workspaceId, { keep = () => false,
   return { text: next, archive: entry, linked };
 }
 
+/**
+ * A post-it added to a workspace (2026-09-27: "it should not clear the current workspace … it is treated as if it is an
+ * old version of the workspace it was added to"). Its text becomes an archived version headed "Imported from Task:",
+ * with the Build's line under it as any archived version has, so the Build shows in the workspace's history. The
+ * document, its links and its edit time are left as they are. → { file, clearedAt, title }
+ */
+async function importTask(ctx, projectId, workspaceId, { text, buildId, now = () => new Date() }) {
+  if (typeof buildId !== 'string' || !BUILD_ID_RE.test(buildId)) throw new TypeError('build id is invalid');
+  const { workspace } = projects.findWorkspace(ctx, projectId, workspaceId);
+  const body = String(text || '').trim();
+  const doc = `${IMPORTED}\n${body}\n\nbuild> ${buildId}\n`;
+  const mentions = await mentionsIn(ctx, projectId, body);
+  const dir = archiveDir(workspace);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const at = now();
+  const stamp = freeStamp(dir, at);
+  const entry = { file: stamp, clearedAt: at.toISOString(), title: `${IMPORTED} ${titleOf(body)}`.slice(0, 120) };
+  projects.writeTextAtomic(path.join(dir, `${stamp}.md`), doc);
+  projects.writeTextAtomic(path.join(dir, `${stamp}.json`), `${JSON.stringify({ ...entry, imported: { buildId }, context: workspace.context, removed: workspace.removed, mentions: mentions.ids, workspaces: mentions.workspaces, builds: [buildId] }, null, 2)}\n`);
+  projects.patchWorkspace(ctx, projectId, workspaceId, { archives: [...workspace.archives, entry].slice(-500) });
+  return entry;
+}
+
 function archiveFile(ctx, projectId, workspaceId, stamp, ext) {
   if (typeof stamp !== 'string' || !projects.ARCHIVE_RE.test(stamp)) throw new TypeError('archive is invalid');
   const { workspace } = projects.findWorkspace(ctx, projectId, workspaceId);
@@ -138,4 +164,4 @@ async function restoreArchive(ctx, projectId, workspaceId, stamp, { keep = () =>
   return { text: next, archive: cleared.archive };
 }
 
-module.exports = { ARCHIVE_DIR, stampOf, titleOf, mentionsIn, clearWorkspace, readArchive, latestArchive, restoreArchive };
+module.exports = { ARCHIVE_DIR, IMPORTED, stampOf, titleOf, mentionsIn, clearWorkspace, importTask, readArchive, latestArchive, restoreArchive };

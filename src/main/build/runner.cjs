@@ -22,10 +22,11 @@ const CLAUDE_TOOLS = 'Read,Grep,Glob,Edit,Write,Bash,WebSearch,WebFetch';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 class TurnError extends Error {
-  constructor(kind, message) {
+  constructor(kind, message, session = null) {
     super(message);
     this.name = 'TurnError';
     this.kind = kind; // 'unavailable' | 'failed' | 'stopped'
+    this.session = session; // a turn stopped part way keeps its session, so the next one can go on with it
   }
 }
 
@@ -48,7 +49,8 @@ function createRunner({ environment = process.env, runDirectory = path.join(os.t
 
   /**
    * One turn. `task` gives provider, modelId, effort, worktree; `session` is the session to go on with (null: a new one).
-   * `system` is Build's prompt, `policy` ./policy.cjs's. → { text, session }; throws TurnError.
+   * `system` is Build's prompt, `policy` ./policy.cjs's. → { text, session }; throws TurnError (a stopped one carries the
+   * session when it had one: Claude Code's is named before it starts, Codex's is read from what it printed so far).
    */
   async function turn({ task, message, session = null, system, policy, signal, timeoutMs, onUpdate = () => {} }) {
     fs.mkdirSync(runDirectory, { recursive: true, mode: 0o700 });
@@ -68,7 +70,7 @@ function createRunner({ environment = process.env, runDirectory = path.join(os.t
         const env = childEnvironment({ ...programEnv('claude'), ENGELBART_BUILD_SESSION: id, ENGELBART_BUILD_MODEL: task.modelId, ENGELBART_BUILD_PROMPT: promptFile, ENGELBART_BUILD_SETTINGS: settingsFile, ENGELBART_BUILD_INPUT: input, ...Object.fromEntries(policy.readOnly.map((dir, n) => [`ENGELBART_BUILD_READ${n}`, dir])) });
         try {
           const { stdout, failure } = await execute(command, task.worktree, env, { signal, timeoutMs, onEvent: (event) => onUpdate(claudeUpdate(event, short)) });
-          if (signal && signal.aborted) throw new TurnError('stopped', 'Stopped.');
+          if (signal && signal.aborted) throw new TurnError('stopped', 'Stopped.', id);
           const result = lastResultLine(stdout);
           if (!result) throw new TurnError(notFound(failure) ? 'unavailable' : 'failed', notFound(failure) ? 'Claude Code was not found on the login shell PATH.' : timedOut(failure) ? 'The turn ran past its time limit and was stopped.' : `Claude Code did not return a result${failure ? ` (${failure.message.split('\n')[0]})` : ''}.`);
           if (result.is_error || typeof result.result !== 'string') throw new TurnError('failed', String(result.result || result.subtype || 'The model returned no text.').slice(0, 500));
@@ -85,14 +87,14 @@ function createRunner({ environment = process.env, runDirectory = path.join(os.t
       const env = childEnvironment({ ...programEnv('codex'), CODEX_HOME: codexHome, ENGELBART_BUILD_SESSION: session || '', ENGELBART_BUILD_MODEL: task.modelId, ENGELBART_BUILD_OUTPUT: outFile, ENGELBART_BUILD_INPUT: input });
       try {
         const { stdout, failure } = await execute(command, task.worktree, env, { signal, timeoutMs, onEvent: (event) => onUpdate(codexUpdate(event, short)) });
-        if (signal && signal.aborted) throw new TurnError('stopped', 'Stopped.');
-        let text = '';
-        try { text = fs.readFileSync(outFile, 'utf8'); } catch { text = ''; }
         let thread = session;
         for (const line of String(stdout || '').split(/\r?\n/)) {
           if (thread || !line.startsWith('{')) continue;
           try { const event = JSON.parse(line); if (event.type === 'thread.started' && UUID_RE.test(event.thread_id)) thread = event.thread_id; } catch { /* not an event */ }
         }
+        if (signal && signal.aborted) throw new TurnError('stopped', 'Stopped.', thread);
+        let text = '';
+        try { text = fs.readFileSync(outFile, 'utf8'); } catch { text = ''; }
         if (!text.trim()) {
           if (notFound(failure)) throw new TurnError('unavailable', 'Codex was not found on the login shell PATH.');
           const reason = String(stdout || '').split(/\r?\n/).reverse().find((line) => /"type":"(error|turn\.failed)"|^ERROR/.test(line) && !/resuming with/.test(line)) || (timedOut(failure) ? 'The turn ran past its time limit and was stopped.' : failure ? failure.message.split('\n')[0] : 'Codex returned no message.');
@@ -121,7 +123,7 @@ function createFakeRunner({ delayMs = 900 } = {}) {
     async turn({ task, message, session = null, signal, onUpdate = () => {} }) {
       const pause = (ms) => new Promise((resolve, reject) => {
         const timer = setTimeout(resolve, ms);
-        const stop = () => { clearTimeout(timer); reject(new TurnError('stopped', 'Stopped.')); };
+        const stop = () => { clearTimeout(timer); reject(new TurnError('stopped', 'Stopped.', session || 'fake-session')); };
         if (signal) { if (signal.aborted) stop(); else signal.addEventListener('abort', stop, { once: true }); }
       });
       const said = String(message || '');

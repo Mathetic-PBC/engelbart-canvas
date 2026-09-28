@@ -3,10 +3,11 @@
 // Build's lifecycle (2026-09-25; design docs/superpowers/specs/2026-09-25-build-workflow-design.md). One manager for the
 // app, holding what runs now; everything that must outlive the app is in the task records (./store.cjs).
 //
-//   start      the record, the frozen context, then in the background the worktree (git), its setup, the first turn
+//   start      the record, the frozen context, then in the background the worktree (git), its setup, the first turn. A
+//              post-it added to a workspace is a Build of it whose task is the post-it, put in as an archived version
 //   turn       a slot (three for Builds, one of its own for quick tasks), the agent (./runner.cjs) under its CLI's tool
 //              lock, a checkpoint commit, the ending read (NEEDS YOU / ESCALATE / done), a reply that waited sent next
-//   reply      the next turn in the same session; while a turn runs it waits, or Stop & send cuts the turn short
+//   reply      the next turn in the same session; while a turn runs it waits, or (`interrupt`) the turn is cut short
 //   review     the diff from where the Build started
 //   accept     leftovers committed, everything squashed into one commit, replayed onto the person's current branch, the
 //              checks, a fast-forward of their folder; worktree and branch removed. Refusals change nothing
@@ -18,6 +19,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 const projects = require('../store/projects.cjs');
+const archive = require('../store/archive.cjs');
 const { readJson } = require('../store/home.cjs');
 const { inspectRepository } = require('../tools/repository.cjs');
 const { resolveBuildChoice } = require('../bart/models.cjs');
@@ -39,6 +41,14 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 const fromEngelbart = (text) => `<from_engelbart>\n${text}\n</from_engelbart>`;
 const tail = (text, n = 4000) => { const value = String(text || ''); return value.length > n ? `…${value.slice(-n)}` : value; };
+/** A post-it's title: its first line with words in it, without its markdown. */
+const postItTitle = (text) => (String(text || '').split('\n').map((line) => line.replace(/^(#{1,3} |- \[[ xX]?\] |[-*] |> )/, '').trim()).find(Boolean) || 'Quick task').slice(0, 80);
+/** A quick task's post-it, from its record or (a record from before 2026-09-27) from its frozen context. */
+const postItOf = (task, context) => {
+  if (typeof task.postIt === 'string') return task.postIt;
+  const found = /<post-it>\n([\s\S]*?)\n<\/post-it>/.exec(String(context || ''));
+  return found ? found[1] : task.title;
+};
 
 /** A shell command in the login shell (the PATH the terminal has), in `cwd`. → { ok, output } */
 function createShell({ environment = process.env, run = execFile } = {}) {
@@ -135,16 +145,17 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     if (!pre.ok) throw new Error(pre.problems[0].message);
     const project = projectOf(ctx, projectId);
     const kind = input.kind === 'quick' ? 'quick' : 'build';
+    // A post-it's text: a quick task's, or a post-it added to a workspace (a Build of it whose task is the post-it).
+    const postIt = kind === 'quick' || typeof input.text === 'string' ? String(input.text || '').trim() : null;
+    if (postIt === '') throw new Error('The post-it is empty.');
     let workspaceId = null;
     let title;
     if (kind === 'build') {
       const { workspace } = projects.findWorkspace(ctx, projectId, input.workspaceId);
       workspaceId = workspace.id;
-      title = workspace.name;
+      title = postIt ? postItTitle(postIt) : workspace.name;
     } else {
-      const text = String(input.text || '').trim();
-      if (!text) throw new Error('The post-it is empty.');
-      title = (text.split('\n').map((line) => line.replace(/^(#{1,3} |- \[[ xX]?\] |[-*] |> )/, '').trim()).find(Boolean) || 'Quick task').slice(0, 80);
+      title = postItTitle(postIt);
     }
     const choice = resolveBuildChoice(readModels(), input);
     const at = await git.head(pre.top);
@@ -154,7 +165,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     const inside = path.relative(pre.top, project.directory);
     const attach = [...new Set((Array.isArray(input.attach) ? input.attach : []).filter((value) => typeof value === 'string' && UUID_RE.test(value)))].slice(0, MAX_ATTACH);
     const task = {
-      id, kind, projectId, workspaceId, postItId: kind === 'quick' && typeof input.postItId === 'string' ? input.postItId : null, title,
+      id, kind, projectId, workspaceId, postItId: postIt && typeof input.postItId === 'string' ? input.postItId : null, postIt, version: null, title,
       ...choice, sessionId: null,
       repo: pre.top, worktree, cwd: inside && !inside.startsWith('..') ? path.join(worktree, inside) : worktree,
       branch: `engelbart/${id}`, baseBranch: at.branch, baseSha: at.sha,
@@ -162,13 +173,16 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
       messages: [say('engelbart', `Started on ${choice.modelName} ${choice.effort} from ${at.branch} at ${at.sha.slice(0, 7)}${pre.dirty ? `; ${pre.dirty} uncommitted ${pre.dirty === 1 ? 'file' : 'files'} left out` : ''}.`)],
       attach, archive: null, checks: null, conflict: null, accepted: null, created: now().toISOString(), finished: null,
     };
-    const frozen = await freezeContext(ctx, projectId, { task, workspaceId, attach, postIt: input.text });
+    const frozen = await freezeContext(ctx, projectId, { task, workspaceId, attach, postIt });
     task.archive = frozen.archive;
+    // A post-it added to a workspace is put in as an archived version of it, after the one it is given as history.
+    if (workspaceId && postIt) task.version = await archive.importTask(ctx, projectId, workspaceId, { text: postIt, buildId: id, now });
     store.writeContext(project, id, frozen.text);
     const saved = store.writeTask(project, task, now());
     if (workspaceId) {
       projects.addWorkspaceBuild(ctx, projectId, workspaceId, id);
       if (attach.length) await projects.linkToWorkspace(ctx, projectId, workspaceId, attach); // what was attached shows on the sidebar
+      if (postIt) track(() => projects.recordEdit(ctx, projectId, workspaceId)); // ⌘J's recent workspaces
     }
     emit(saved);
     void prepare(ctx, projectId, id);
@@ -258,7 +272,8 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
       try {
         if (tools) await tools.ensure(agent);
         try {
-          out = await once(fresh ? null : task.sessionId, message);
+          // No session to go on with (the first turn was cut short before one was named): everything again, and what was said.
+          out = !fresh && !task.sessionId ? await once(null, freshMessage(store.readContext(project, id), task.messages, message)) : await once(fresh ? null : task.sessionId, message);
         } catch (error) {
           if (error.kind === 'stopped' || fresh || !task.sessionId) throw error;
           // A session that will not resume (its file is gone, the CLI changed): everything again, and what was said.
@@ -277,11 +292,14 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
       else { try { sha = await git.concludeMerge(task.worktree, `Build ${task.title}: turn ${task.turn}`, await git.identity(task.repo)); } catch (error) { kept = error.message; } }
       const stopping = entry.stopping;
       task = save(ctx, projectId, id, (held) => {
-        const next = { sessionId: out && out.session ? out.session : held.sessionId, checkpoints: sha ? [...held.checkpoints, { sha, turn: held.turn, at: now().toISOString() }] : held.checkpoints };
+        const next = { sessionId: (out && out.session) || (failure && failure.session) || held.sessionId, checkpoints: sha ? [...held.checkpoints, { sha, turn: held.turn, at: now().toISOString() }] : held.checkpoints };
         const notes = kept ? [say('engelbart', `The turn's work could not be saved as a checkpoint: ${kept}`)] : [];
         if (unresolved) {
           next.status = stopping === 'quit' ? 'interrupted' : 'conflict';
           next.messages = [...held.messages, say('engelbart', `${failure.kind === 'stopped' ? 'Stopped' : failure.message} The conflict was left as it was before.`)];
+        } else if (failure && failure.kind === 'stopped' && stopping === 'reply' && held.queued) {
+          next.status = 'running'; // cut short for the reply, which goes on at once in the same session: nothing to say
+          next.messages = [...held.messages, ...notes];
         } else if (failure && failure.kind === 'stopped') {
           next.status = stopping === 'quit' ? 'interrupted' : 'stopped';
           next.messages = [...held.messages, ...notes, say('engelbart', stopping === 'quit' ? 'Engelbart closed while this turn was working. What it had done is saved.' : 'Stopped. What it had done is saved.')];
@@ -317,7 +335,10 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     if (after.kind === 'quick' && after.status === 'review') void accept(ctx, projectId, id, { auto: true }).catch(() => {});
   }
 
-  /** The person's reply: the next turn now, or after the one running (Stop & send cuts that one short). */
+  /**
+   * The person's reply: the next turn now, or after the one running. With `interrupt` (the card's send, 2026-09-27: no
+   * Stop & send to press) a turn that is running is cut short, its work saved, and the reply goes on in the same session.
+   */
   async function reply(ctx, projectId, id, text, { interrupt = false } = {}) {
     reconcile(ctx);
     const said = String(text || '').trim();
@@ -327,7 +348,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     if (task.status === 'accepting') throw new Error('It is being accepted; reply once that is done.');
     if (live.has(id) || task.status === 'setting-up') {
       const next = save(ctx, projectId, id, (held) => ({ queued: held.queued ? `${held.queued}\n\n${said}` : said }));
-      if (interrupt) stop(projectId, id);
+      if (interrupt && task.status === 'running') stop(projectId, id, 'reply');
       return store.publicTask(next);
     }
     if (!fs.existsSync(task.worktree)) throw new Error('This Build\'s copy is gone; discard it.');
@@ -336,10 +357,10 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     return store.publicTask(next);
   }
 
-  function stop(projectId, id) {
+  function stop(projectId, id, why = 'stop') {
     const entry = live.get(id);
     if (!entry) return false;
-    entry.stopping = entry.stopping || 'stop';
+    entry.stopping = entry.stopping || why;
     entry.controller.abort();
     return true;
   }
@@ -522,14 +543,28 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     return store.publicTask(next);
   }
 
-  /** A quick task that turned out big (B23): it becomes a Build of `workspaceId`, and the same session goes on. */
-  async function promote(ctx, projectId, id, workspaceId) {
+  /**
+   * A quick task that turned out big (B23): it becomes a Build of `workspaceId`, and the same session goes on. Its post-it
+   * is put in as an archived version of the workspace (2026-09-27), and the workspace joins ⌘J's recent ones.
+   */
+  async function promote(ctx, projectId, id, workspaceId, picked = null) {
     reconcile(ctx);
     const task = read(ctx, projectId, id);
     if (task.kind !== 'quick' || store.FINAL.has(task.status) || live.has(id)) throw new Error('Only a quick task that is not working can become a Build.');
     const { workspace } = projects.findWorkspace(ctx, projectId, workspaceId);
+    // The post-it's "Needs you" card offers the model again, set to what the task ran on (2026-09-27). Another model of the
+    // same provider goes on in the same session; another provider cannot, so its first turn gets everything again.
+    const choice = picked ? resolveBuildChoice(readModels(), picked) : null;
+    const moved = choice && choice.provider !== task.provider;
+    const version = await archive.importTask(ctx, projectId, workspace.id, { text: postItOf(task, store.readContext(projectOf(ctx, projectId), id)), buildId: id, now });
     projects.addWorkspaceBuild(ctx, projectId, workspace.id, id);
-    const next = save(ctx, projectId, id, (held) => ({ kind: 'build', workspaceId: workspace.id, escalation: null, messages: [...held.messages, say('engelbart', `Moved to the workspace "${workspace.name}" as a Build.`)] }));
+    track(() => projects.recordEdit(ctx, projectId, workspace.id));
+    const changed = choice && (choice.provider !== task.provider || choice.model !== task.model || choice.effort !== task.effort);
+    const next = save(ctx, projectId, id, (held) => ({
+      kind: 'build', workspaceId: workspace.id, version, escalation: null,
+      ...(choice || {}), ...(moved ? { sessionId: null } : {}),
+      messages: [...held.messages, say('engelbart', `Moved to the workspace "${workspace.name}" as a Build${changed ? ` on ${choice.modelName} ${choice.effort}` : ''}.`)],
+    }));
     void runTurn(ctx, projectId, id, { message: fromEngelbart('This is now a full Build, not a quick task: larger changes are fine, and you may ask the person a question with NEEDS YOU. Go ahead with what the post-it asked for.') });
     return store.publicTask(next);
   }

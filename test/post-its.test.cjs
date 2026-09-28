@@ -129,6 +129,7 @@ test('a growing card keeps its top edge until the window bottom stops it; overla
   assert.equal(overlaps({ x: 0, y: 0, width: 10, height: 10 }, { x: 10, y: 0, width: 5, height: 5 }), false, 'touching is not overlapping');
   assert.equal(overlaps({ x: 0, y: 0, width: 10, height: 10 }, { x: 9, y: 9, width: 5, height: 5 }), true);
   assert.deepEqual(blockingRects([]), []);
+  assert.deepEqual(blockingRects([{ x: 1, y: 2, width: 3, height: 4, cover: true }, { x: 1, y: 2, width: 3, height: 4, cover: 'yes' }]), [{ x: 1, y: 2, width: 3, height: 4, cover: true }, { x: 1, y: 2, width: 3, height: 4 }], 'a covering panel is marked, and only by true');
   assert.throws(() => blockingRects(new Array(65).fill({ x: 0, y: 0, width: 1, height: 1 })), /at most 64/);
 });
 

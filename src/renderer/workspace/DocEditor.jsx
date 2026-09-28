@@ -533,7 +533,7 @@ export default class DocEditor extends React.Component {
     if (status === 'needs-you' && task.question) body += `<div style="margin:10px 0 2px;padding:8px 12px;border-left:2px solid #0070f3;background:#fff;color:#171717"><strong style="font-weight:600">Needs you:</strong> ${inlineHtml(task.question)}</div>`;
     if (status === 'escalated' && task.escalation) body += `<div style="margin:10px 0 2px;color:#171717">${esc(task.escalation)}</div>`;
     if (task.checks && !task.checks.ok && !final) body += `<div style="margin:8px 0 0;font:12px/1.6 var(--font-mono);color:#4d4d4d;white-space:pre-wrap;max-height:160px;overflow:auto;padding:8px 10px;background:#fff;border-radius:6px">$ ${esc(task.checks.command)}\n${esc(String(task.checks.output || '').split('\n').slice(-12).join('\n'))}</div>`;
-    if (task.queued) body += `<div style="margin:8px 0 0;font:12.5px/1.5 var(--font-sans);color:#8f8f8f">Sent when this turn ends: ${esc(task.queued.length > 140 ? `${task.queued.slice(0, 139)}…` : task.queued)}</div>`;
+    if (task.queued) body += `<div style="margin:8px 0 0;font:12.5px/1.5 var(--font-sans);color:#8f8f8f">Sending: ${esc(task.queued.length > 140 ? `${task.queued.slice(0, 139)}…` : task.queued)}</div>`;
     // While it works: what it is doing, the steps behind a count, Stop.
     let live = '';
     if (working) {
@@ -548,10 +548,10 @@ export default class DocEditor extends React.Component {
         + '</div>'
         + (steps && log.length ? `<div style="margin:4px 0 0 16px;font:12px/1.7 var(--font-sans);color:#8f8f8f">${log.map((entry) => `<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(entry)}</div>`).join('')}</div>` : '');
     }
-    // The reply field (the typed text is not in this string: restoreBuilds puts it back after a redraw).
+    // The reply field (the typed text is not in this string: restoreBuilds puts it back after a redraw). A reply sent while
+    // a turn runs reaches the agent at once (2026-09-27: no Stop & send to press or see; main cuts the turn short for it).
     const reply = final || status === 'accepting' ? '' : '<div style="display:flex;align-items:flex-start;gap:10px;margin-top:12px">'
-      + `<textarea data-build-input="${esc(id)}" rows="1" placeholder="${working ? 'Reply after this turn…' : status === 'needs-you' ? 'Answer…' : 'Reply…'}" aria-label="Reply to the Build" spellcheck="false" autocomplete="off" style="flex:1;min-width:0;display:block;height:24px;margin:0;padding:0;border:0;background:none;outline:none;resize:none;overflow:hidden;font:15px/1.6 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text"></textarea>`
-      + (status === 'running' ? this.buildButton('buildstopsend', id, 'Stop & send', { extra: 'flex:none;' }) : '')
+      + `<textarea data-build-input="${esc(id)}" rows="1" placeholder="${status === 'needs-you' ? 'Answer…' : 'Reply…'}" aria-label="Reply to the Build" spellcheck="false" autocomplete="off" style="flex:1;min-width:0;display:block;height:24px;margin:0;padding:0;border:0;background:none;outline:none;resize:none;overflow:hidden;font:15px/1.6 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text"></textarea>`
       + `<button class="bart-send" data-act="buildsend" data-build-id="${esc(id)}" aria-label="Send" style="flex:none;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;padding:0;border:0;border-radius:50%;background:#f2f2f2;color:#8f8f8f;cursor:pointer">${ICON.send}</button>`
       + '</div>';
     // What can be done with it now.
@@ -604,12 +604,12 @@ export default class DocEditor extends React.Component {
   buildInput(input) { this.buildText.set(input.dataset.buildInput, input.value); this.paintBuildSend(input); this.fitFollow(input); }
   // Enter sends; Shift+Enter is a new line of the reply (unlike a follow-up, a reply is not a line of the document).
   buildKey(e) {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); this.sendBuild(e.target.dataset.buildInput, false); }
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); this.sendBuild(e.target.dataset.buildInput); }
     else if (e.key === 'Escape') e.target.blur();
   }
-  sendBuild(id, interrupt) {
+  sendBuild(id) {
     const text = (this.buildText.get(id) || '').trim(); if (!text || !this.props.onBuildAction) return;
-    Promise.resolve(this.props.onBuildAction(id, 'reply', { text, interrupt })).then((ok) => {
+    Promise.resolve(this.props.onBuildAction(id, 'reply', { text, interrupt: true })).then((ok) => {
       if (ok === false) return;
       this.buildText.delete(id);
       const input = this.editorEl() && this.editorEl().querySelector(`[data-build-input="${id}"]`);
@@ -620,8 +620,7 @@ export default class DocEditor extends React.Component {
     const act = this.props.onBuildAction; if (!act) return;
     if (k === 'buildhistory') { if (this.buildOpen.has(id)) this.buildOpen.delete(id); else this.buildOpen.add(id); this.patchBuilds(); return; }
     if (k === 'buildsteps') { if (this.buildSteps.has(id)) this.buildSteps.delete(id); else this.buildSteps.add(id); this.patchBuilds(); return; }
-    if (k === 'buildsend') { this.sendBuild(id, false); return; }
-    if (k === 'buildstopsend') { this.sendBuild(id, true); return; }
+    if (k === 'buildsend') { this.sendBuild(id); return; }
     if (k === 'builddiscard') {
       // Discarding throws the agent's work away: it takes a second click within four seconds.
       if (!(this.buildConfirm && this.buildConfirm.id === id && this.buildConfirm.until > Date.now())) {
@@ -1339,11 +1338,12 @@ export default class DocEditor extends React.Component {
           </div>
         </div>
         {/* The footer (the document's Copy, 2026-09-23) sits under the text's left edge, not the pane's: this column
-            repeats the scroller's padding and 65ch measure, so it stays with the note when panes split. */}
+            repeats the scroller's padding and 65ch measure, so it stays with the note when panes split. Since 2026-09-27 it
+            is a strip of its own under the page ("the text editor stops above these buttons"), no longer floating over it. */}
         {!compact && this.props.footer && (
-          <div style={{ position: 'absolute', left: 0, right: 0, bottom: 14, zIndex: 3, paddingInline: 'clamp(12px, 4%, 40px)', pointerEvents: 'none' }}>
-            <div style={{ maxWidth: '65ch', marginInline: 'auto', paddingInline: 'clamp(0px, 3%, 24px)', fontSize: 17, display: 'flex' }}>
-              <span style={{ pointerEvents: 'auto' }}>{this.props.footer}</span>
+          <div data-doc-footer="1" style={{ flex: 'none', borderTop: '1px solid #eaeaea', background: '#fff', paddingInline: 'clamp(12px, 4%, 40px)' }}>
+            <div style={{ maxWidth: '65ch', minHeight: 44, marginInline: 'auto', paddingInline: 'clamp(0px, 3%, 24px)', boxSizing: 'border-box', fontSize: 17, display: 'flex', alignItems: 'center' }}>
+              {this.props.footer}
             </div>
           </div>
         )}

@@ -214,6 +214,34 @@ test('NEEDS YOU, a reply in the same session, a reply that waits for the turn, S
   assert.equal(task.status, 'stopped');
 });
 
+test('a reply sent while a turn runs cuts it short and goes on in the same session, with nothing said about stopping (2026-09-27)', async () => {
+  const { project, workspace } = await scene();
+  const cut = ({ task, signal }) => { write(path.join(task.worktree, 'half.txt'), 'half done\n'); return new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(Object.assign(new Error('Stopped.'), { kind: 'stopped', session: 'session-cut' })))); };
+  const agent = scripted([cut, ({ message }) => { assert.match(message, /^<reply>\nUse the blue one\.\n<\/reply>$/); return 'Blue it is.'; }]);
+  const { builds } = manager(agent);
+  const { id } = await builds.start(ctx, project.id, { workspaceId: workspace.id });
+  await settled(project, id, ['setting-up', 'queued']);
+  await builds.reply(ctx, project.id, id, 'Use the blue one.', { interrupt: true });
+  const task = await turned(project, id, 2);
+  assert.equal(task.status, 'review');
+  assert.equal(agent.calls[1].session, 'session-cut', 'the turn cut short kept its session');
+  assert.deepEqual(task.messages.filter((m) => m.role !== 'engelbart').map((m) => `${m.role}: ${m.text}`), ['you: Use the blue one.', 'agent: Blue it is.']);
+  assert.ok(!task.messages.some((m) => /Stopped/.test(m.text)), 'no "Stopped" note: the person only replied');
+  assert.deepEqual(task.checkpoints.map((c) => c.turn), [1], 'what the cut turn had done was saved');
+
+  // a first turn cut short before it had a session: the reply goes to a new one with everything again
+  const bare = scripted([({ signal }) => new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(Object.assign(new Error('Stopped.'), { kind: 'stopped' })))), 'Started again.']);
+  const other = manager(bare).builds;
+  const second = await other.start(ctx, project.id, { workspaceId: workspace.id });
+  await settled(project, second.id, ['setting-up', 'queued']);
+  await other.reply(ctx, project.id, second.id, 'Smaller, please.', { interrupt: true });
+  await turned(project, second.id, 2);
+  assert.equal(bare.calls[1].session, null);
+  assert.match(bare.calls[1].message, /<workspace name="Feature">[\s\S]*<reply>\nSmaller, please\.\n<\/reply>$/);
+  // a reply while it waits for a slot or is being set up never cuts anything
+  assert.equal(other.stop(project.id, 'ffffffffff'), false);
+});
+
 test('Accept: one commit on the person\'s current branch, after theirs, checks run, worktree and branch gone', async () => {
   const { code, project, workspace } = await scene({ files: { 'a.txt': 'one\ntwo\nthree\n', 'package.json': '{"scripts":{"test":"node t.js"}}' } });
   const agent = scripted([
@@ -373,11 +401,75 @@ test('quick tasks: their own slot, no workspace, a clean finish lands by itself;
   quickIds.add(hard.id);
   const escalated = await settled(project, hard.id);
   assert.deepEqual([escalated.status, escalated.escalation], ['escalated', 'needs a schema change.']);
-  await builds.promote(ctx, project.id, hard.id, workspace.id);
+  // a record from before 2026-09-27 has no `postIt`: its post-it is read back from the frozen context
+  const record = store.readTask(projects.findProject(ctx, project.id), hard.id);
+  delete record.postIt;
+  store.writeTask(projects.findProject(ctx, project.id), record);
+  const promoted = await builds.promote(ctx, project.id, hard.id, workspace.id);
   const moved = await turned(project, hard.id, 2);
   assert.deepEqual([moved.kind, moved.workspaceId, moved.status], ['build', workspace.id, 'review']);
   assert.equal(quickAgent.calls[quickAgent.calls.length - 1].session, 'q', 'the same session goes on');
   assert.ok(projects.findWorkspace(ctx, project.id, workspace.id).workspace.builds.includes(hard.id));
+  // Run as big task puts the post-it in as an archived version of the workspace (2026-09-27); the document is not touched
+  assert.equal(promoted.version.title, 'Imported from Task: escalate: rework the storage');
+  assert.equal(archive.readArchive(ctx, project.id, workspace.id, promoted.version.file).text, `Imported from Task:\nescalate: rework the storage\n\nbuild> ${hard.id}\n`);
+  assert.equal(await projects.readDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id }), 'Build the thing.');
+  assert.deepEqual(projects.readNav(ctx).recent.map((entry) => [entry.projectId, entry.workspaceId])[0], [project.id, workspace.id], 'first of ⌘J\'s recent workspaces');
+});
+
+test('the "Needs you" card\'s model: another model of the same provider goes on in the session, another provider starts again with everything (2026-09-27)', async () => {
+  const { project, workspace } = await scene();
+  const agent = { calls: [], async turn(input) { this.calls.push(input); if (/escalate/.test(input.message)) return { text: 'ESCALATE: too big.', session: 'q1' }; return { text: 'Done properly.', session: input.session || 'fresh' }; } };
+  const { builds } = manager(agent);
+  const first = await builds.start(ctx, project.id, { kind: 'quick', text: 'escalate: one', provider: 'openai', model: 'sol', effort: 'high' });
+  await settled(project, first.id);
+  const same = await builds.promote(ctx, project.id, first.id, workspace.id, { provider: 'openai', model: 'astra', effort: 'xhigh' });
+  assert.deepEqual([same.provider, same.model, same.effort], ['openai', 'astra', 'xhigh']);
+  await turned(project, first.id, 2);
+  const went = agent.calls[agent.calls.length - 1];
+  assert.equal(went.session, 'q1', 'same provider: the session goes on');
+  assert.equal(went.task.model, 'astra');
+  assert.match(same.messages[same.messages.length - 1].text, /as a Build on .* xhigh\./);
+
+  const second = await builds.start(ctx, project.id, { kind: 'quick', text: 'escalate: two', provider: 'openai', model: 'sol', effort: 'high' });
+  await settled(project, second.id);
+  const other = await builds.promote(ctx, project.id, second.id, workspace.id, { provider: 'anthropic', model: 'opus', effort: 'max' });
+  assert.deepEqual([other.provider, other.model, other.effort], ['anthropic', 'opus', 'max']);
+  await turned(project, second.id, 2);
+  const fresh = agent.calls[agent.calls.length - 1];
+  assert.equal(fresh.session, null, 'another provider cannot resume the session');
+  assert.match(fresh.message, /<post-it>\nescalate: two\n<\/post-it>/, 'so it is given everything again');
+  assert.match(fresh.message, /full Build/);
+});
+
+test('a post-it added to a workspace: a Build of it whose task is the post-it, put in as an archived version, the document untouched (2026-09-27)', async () => {
+  const { project, workspace } = await scene({ doc: 'Old plan.' });
+  const ref = { kind: 'workspace', workspaceId: workspace.id };
+  await archive.clearWorkspace(ctx, project.id, workspace.id, { keep: () => false });
+  await projects.writeDoc(ctx, project.id, ref, 'The plan in front now.');
+  const agent = scripted(['Renamed it.\n\nNEEDS YOU: Keep the old name as an alias?']);
+  const { builds } = manager(agent);
+  const task = await builds.start(ctx, project.id, { kind: 'build', workspaceId: workspace.id, postItId: 'card-9', text: '- [ ] rename the header\n' });
+  assert.deepEqual([task.kind, task.workspaceId, task.postItId, task.title], ['build', workspace.id, 'card-9', 'rename the header']);
+  assert.equal(task.version.title, 'Imported from Task: rename the header');
+  const done = await settled(project, task.id);
+  assert.equal(done.status, 'needs-you', 'a full Build: it may ask');
+  const context = agent.calls[0].message;
+  assert.match(context, /<post-it>\n- \[ \] rename the header\n<\/post-it>/);
+  assert.match(context, /added it to a workspace as a full Build/);
+  assert.match(context, /built from: a post-it added to the workspace "Feature"/);
+  assert.match(context, /<history [^>]*>\nOld plan\.\n<\/history>/, 'the version before it, as history');
+  assert.ok(!/The plan in front now/.test(context), 'the document in front is not its task');
+  assert.doesNotMatch(agent.calls[0].system, /This is a quick task/);
+  const held = projects.findWorkspace(ctx, project.id, workspace.id).workspace;
+  assert.deepEqual(held.archives[held.archives.length - 1], task.version, 'the newest archived version');
+  assert.ok(held.builds.includes(task.id));
+  const version = archive.readArchive(ctx, project.id, workspace.id, task.version.file);
+  assert.equal(version.text, `Imported from Task:\n- [ ] rename the header\n\nbuild> ${task.id}\n`);
+  assert.deepEqual([version.held.imported, version.held.builds], [{ buildId: task.id }, [task.id]]);
+  assert.equal(await projects.readDoc(ctx, project.id, ref), 'The plan in front now.', 'the workspace is not cleared');
+  assert.deepEqual(projects.readNav(ctx).recent.map((entry) => [entry.projectId, entry.workspaceId])[0], [project.id, workspace.id], 'first of ⌘J\'s recent workspaces');
+  await assert.rejects(builds.start(ctx, project.id, { kind: 'build', workspaceId: workspace.id, text: '  ' }), /empty/);
 });
 
 /* --------------------------------------------------------------------- the runner */
@@ -415,6 +507,12 @@ test('the real runner: command lines for both CLIs, the worktree as the working 
   await runner.turn({ task: { id: 'abcdef0123', provider: 'openai', modelId: 'gpt-6-sol', effort: 'high', worktree }, message: 'again', session: codex.session, system: 'SYSTEM', policy });
   assert.match(calls[3].command, /^exec codex exec resume "\$ENGELBART_BUILD_SESSION" -m/);
   assert.equal(fs.readdirSync(path.join(homeDir, 'build-runs')).length, 0, 'nothing of a turn stays on disk');
+  // a turn stopped part way keeps its session: Claude Code's was named before it started, Codex's is in what it printed
+  const cut = createRunner({ environment: { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir }, runDirectory: path.join(homeDir, 'build-runs'), codexHome, codexAuthFile: authFile, run: (shell, args, options, callback) => { callback(Object.assign(new Error('aborted'), { code: 'ABORT_ERR' }), /codex/.test(args[args.length - 1]) ? '{"type":"thread.started","thread_id":"01a0bc2d-7c18-77d2-8b21-3cc7e942cbcd"}\n' : ''); return null; } });
+  const stopped = new AbortController();
+  stopped.abort();
+  await assert.rejects(cut.turn({ task: { id: 'abcdef0123', provider: 'anthropic', modelId: 'opus', effort: 'high', worktree }, message: 'x', system: 'SYSTEM', policy, signal: stopped.signal }), (error) => error.kind === 'stopped' && /^[0-9a-f-]{36}$/.test(error.session));
+  await assert.rejects(cut.turn({ task: { id: 'abcdef0123', provider: 'openai', modelId: 'gpt-6-sol', effort: 'high', worktree }, message: 'x', system: 'SYSTEM', policy, signal: stopped.signal }), (error) => error.kind === 'stopped' && error.session === '01a0bc2d-7c18-77d2-8b21-3cc7e942cbcd');
 });
 
 test('the fake agent (scripted runs) edits its worktree, asks when told to, and stops', async () => {
@@ -473,6 +571,24 @@ test('Clear: the document archived, the blank one keeps open Builds\' lines, eve
   assert.equal(restored.archive.title, 'Third, unsaved thoughts.');
   assert.equal(projects.findWorkspace(ctx, project.id, workspace.id).workspace.archives.length, 3);
   assert.throws(() => archive.readArchive(ctx, project.id, workspace.id, '../../x'), /invalid/);
+});
+
+test('importTask: one more archived version, headed "Imported from Task:", the document, links and edit time untouched (2026-09-27)', async () => {
+  const { project, workspace } = await scene({ doc: 'Stays.' });
+  const note = await projects.createNote(ctx, project.id, { name: 'Header spec', text: 'h' });
+  await projects.unlinkFromWorkspace(ctx, project.id, workspace.id, note.id);
+  const before = projects.findWorkspace(ctx, project.id, workspace.id).workspace;
+  const at = new Date('2026-09-27T20:00:00.000Z');
+  const entry = await archive.importTask(ctx, project.id, workspace.id, { text: '## Fix it\nper @[Header spec]', buildId: '0123456789', now: () => at });
+  assert.deepEqual(entry, { file: '2026-09-27T20-00-00Z', clearedAt: at.toISOString(), title: 'Imported from Task: Fix it' });
+  const after = projects.findWorkspace(ctx, project.id, workspace.id).workspace;
+  assert.deepEqual([after.context, after.removed, after.chars], [before.context, before.removed, before.chars]);
+  assert.equal(await projects.readDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id }), 'Stays.');
+  const saved = archive.readArchive(ctx, project.id, workspace.id, entry.file);
+  assert.equal(saved.text, 'Imported from Task:\n## Fix it\nper @[Header spec]\n\nbuild> 0123456789\n');
+  assert.deepEqual(saved.held.mentions, [note.id]);
+  assert.equal(archive.latestArchive(ctx, project.id, workspace.id).file, entry.file, 'the next Build of the workspace is given it as history');
+  await assert.rejects(archive.importTask(ctx, project.id, workspace.id, { text: 'x', buildId: '../x' }), /invalid/);
 });
 
 test('a Build after a Clear is given the newest archived version as history, with its mentions, and no Build lines', async () => {

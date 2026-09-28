@@ -23,6 +23,7 @@ html[data-fullscreen] [data-window-edge]{display:none}
 textarea::placeholder,input::placeholder{color:#8f8f8f;font-style:italic}
 @keyframes blink{50%{opacity:0}}
 @keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes pdot{0%,80%,100%{opacity:.25;transform:translateY(0)}40%{opacity:1;transform:translateY(-2px)}}
 [data-idea-row]:hover button{opacity:1!important}
 [data-idea-row] button::after{content:'×'}
 .pdf-text{position:absolute;overflow:hidden;line-height:1;text-align:initial;text-size-adjust:none;forced-color-adjust:none}

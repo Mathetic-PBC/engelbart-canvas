@@ -260,7 +260,11 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     handle('build-accept', withCtx((ctx, pid, id) => b().accept(ctx, pidOf(pid), buildId(id))));
     handle('build-fix', withCtx((ctx, pid, id) => b().fix(ctx, pidOf(pid), buildId(id))));
     handle('build-discard', withCtx((ctx, pid, id) => b().discard(ctx, pidOf(pid), buildId(id))));
-    handle('build-promote', withCtx((ctx, pid, id, wid) => b().promote(ctx, pidOf(pid), buildId(id), str(wid, 'workspace id', 64))));
+    handle('build-promote', withCtx((ctx, pid, id, wid, choice) => {
+      const value = choice && typeof choice === 'object' ? choice : null;
+      const picked = value ? { provider: optStr(value.provider, 'provider', 24), model: optStr(value.model, 'model', 24), effort: optStr(value.effort, 'effort', 24) } : null;
+      return b().promote(ctx, pidOf(pid), buildId(id), str(wid, 'workspace id', 64), picked);
+    }));
   }
   // Clear (B21): the document archived and started blank, keeping the lines of Builds still open; what it mentioned stays
   // on the sidebar. Restore (B22) brings an archived version back, the current one archived first.

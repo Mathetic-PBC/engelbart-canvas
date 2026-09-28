@@ -14,9 +14,10 @@ import { flatWorkspaces, nextPlace, placesToGo } from '../model/nav.js';
 import { onStage } from '../model/stage.js';
 import { buildLine } from '../model/doc.js';
 import ProjectPostIts from '../post-its/ProjectPostIts.jsx';
-import BuildModal from '../workspace/BuildModal.jsx';
+import BuildPanel from '../workspace/BuildPanel.jsx';
 import BuildReview from '../workspace/BuildReview.jsx';
-import QuickTask from '../workspace/QuickTask.jsx';
+import PostItBuild from '../post-its/PostItBuild.jsx';
+import PostItTask from '../post-its/PostItTask.jsx';
 
 // The workspace screen (design 2026-09-17): a header in three columns — Engelbart / project /
 // parent workspaces over the sidebar, the document tabs over the document, the Stage · Terminal
@@ -318,15 +319,34 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // announces them, and what each running turn is doing. A workspace document holds a `build> <id>` line per Build, which
   // the editor draws as its card from these; the conversation lives in the Build's record, never in the document.
   const [builds, setBuilds] = React.useState({});
+  const buildsRef = React.useRef(builds);
+  buildsRef.current = builds;
   const [buildProgress, setBuildProgress] = React.useState({});
-  const [buildDialog, setBuildDialog] = React.useState(null); // { quick: null | { postItId, text } } while the Build dialog is open
+  // { anchor } while the workspace's Build panel is open above its Build button
+  const [buildDialog, setBuildDialog] = React.useState(null);
   const [review, setReview] = React.useState(null); // { id, title, review, error } while Review is open
-  const [quickTask, setQuickTask] = React.useState(null); // the id of a post-it's quick task open in its dialog
-  // A post-it's Build button, and a click on its quick task's state (post-its/Card.jsx through main/post-its/views.cjs).
+  // A post-it's Build popup, and its quick task's card (Claude Design "Post-it Quick Task", 2026-09-27), each hanging from
+  // the card's button that opened it: { postItId, text, anchor } and { id, postItId, anchor }. A second press on the same
+  // button closes what it opened.
+  const [postItBuild, setPostItBuild] = React.useState(null);
+  const [quickTask, setQuickTask] = React.useState(null);
+  const cardAnchor = (rect) => (rect && Number.isFinite(rect.x) && Number.isFinite(rect.y) ? { left: rect.x, right: rect.x + rect.width, top: rect.y, bottom: rect.y + rect.height, width: rect.width } : null);
+  // A post-it that was added to a workspace is a Build there: its state goes to the version it was put in as (2026-09-27).
+  const goToVersionRef = React.useRef(null);
   React.useEffect(() => {
     if (!active) return undefined;
-    const offAsk = api.onBuildQuick(({ projectId, postItId, text }) => { if (projectId === project.id) setBuildDialog({ quick: { postItId, text } }); });
-    const offOpen = api.onBuildQuickOpen(({ projectId, id }) => { if (projectId === project.id) setQuickTask(id); });
+    const offAsk = api.onBuildQuick(({ projectId, postItId, text, button }) => {
+      if (projectId !== project.id) return;
+      setQuickTask(null);
+      setPostItBuild((now) => (now && now.postItId === postItId ? null : { postItId, text, anchor: cardAnchor(button) }));
+    });
+    const offOpen = api.onBuildQuickOpen(({ projectId, id, postItId, button }) => {
+      if (projectId !== project.id) return;
+      const task = buildsRef.current[id];
+      setPostItBuild(null);
+      if (task && task.kind === 'build' && task.workspaceId && task.version) { setQuickTask(null); void goToVersionRef.current(task.workspaceId, task.version); }
+      else setQuickTask((now) => (now && now.id === id ? null : { id, postItId, anchor: cardAnchor(button) }));
+    });
     return () => { offAsk(); offOpen(); };
   }, [active, project.id]);
   React.useEffect(() => {
@@ -351,17 +371,24 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return () => { live = false; offBuild(); offProgress(); };
   }, [project.id]);
 
-  // Send in the dialog: the Build starts from what is saved, so everything open is saved first; its line goes at the end
-  // of the workspace's document, and its card shows there at once.
-  const startBuild = React.useCallback(async (input) => {
-    const quick = buildDialog && buildDialog.quick;
+  // A post-it added to a workspace (2026-09-27: "it should take me to that workspace"): that workspace, with the archived
+  // version the post-it was put in as open in the middle, where its Build's card is. Main has already made it one of ⌘J's
+  // recent workspaces.
+  const selectRef = React.useRef(null); // selectTopic and openTab, defined further down
+  const openTabRef = React.useRef(null);
+  const goToVersion = React.useCallback(async (workspaceId, version) => {
+    await reload();
+    if (!version) return;
+    selectRef.current(workspaceId);
+    openTabRef.current(`${ARCHIVE_TAB}${version.file}`, version.title);
+  }, [reload]);
+  goToVersionRef.current = goToVersion;
+
+  // Send in the panel: the Build starts from what is saved, so everything open is saved first; its line goes at the end
+  // of the workspace's document, and its card shows there at once. "Automatically clear workspace" then clears it, as
+  // Clear does, after the Build froze what it is given: the blank document keeps the new card (2026-09-27).
+  const startBuild = React.useCallback(async ({ clear = false, ...input }) => {
     await Promise.all([...pending.current.keys()].map((key) => flush(key)));
-    if (quick) {
-      const task = await api.buildStart(project.id, { kind: 'quick', postItId: quick.postItId, text: quick.text, ...input });
-      setBuilds((current) => ({ ...current, [task.id]: task }));
-      setBuildDialog(null);
-      return;
-    }
     if (!topic) throw new Error('Open a workspace first');
     const task = await api.buildStart(project.id, { workspaceId: topic.id, ...input });
     setBuilds((current) => ({ ...current, [task.id]: task }));
@@ -370,8 +397,26 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     const body = String(held || '').replace(/\n+$/, '');
     changeDoc(key, ref, `${body ? `${body}\n\n` : ''}${buildLine(task.id)}\n`);
     setBuildDialog(null);
-    if (input.attach && input.attach.length) await reload(); // what was attached is linked to the workspace: the sidebar shows it
-  }, [buildDialog, flush, project.id, topic, changeDoc, reload]);
+    if (clear) {
+      try {
+        await flush(key);
+        const out = await api.clearWorkspace(project.id, topic.id);
+        setDocs((current) => ({ ...current, [key]: out.text }));
+        await reload();
+      } catch (error) {
+        onError(error);
+      }
+    } else if (input.attach && input.attach.length) await reload(); // what was attached is linked to the workspace: the sidebar shows it
+  }, [flush, project.id, topic, changeDoc, reload, onError]);
+
+  // The post-it's popup sends it as a quick task.
+  const startQuick = React.useCallback(async (input) => {
+    const quick = postItBuild;
+    if (!quick) return;
+    const task = await api.buildStart(project.id, { kind: 'quick', postItId: quick.postItId, text: quick.text, ...input });
+    setBuilds((current) => ({ ...current, [task.id]: task }));
+    setPostItBuild(null);
+  }, [postItBuild, project.id]);
 
   // What a card's buttons do. Accept's refusals and a turn's failures are on the card (the record carries them); only a
   // call that could not be made at all is reported. → false when the call failed (the reply field keeps its text)
@@ -395,24 +440,19 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     }
   }, [project.id, builds, onError]);
 
-  // Run as big task: the quick task becomes a Build of the workspace in front, its card goes at the end of that workspace's
-  // document, and its session goes on (main/build promote).
-  const promoteQuick = React.useCallback(async (id) => {
-    if (!topic) return;
-    try {
-      await Promise.all([...pending.current.keys()].map((key) => flush(key)));
-      const task = await api.buildPromote(project.id, id, topic.id);
-      setBuilds((current) => ({ ...current, [task.id]: task }));
-      const key = `ws:${topic.id}`, ref = { kind: 'workspace', workspaceId: topic.id };
-      const held = docsRef.current[key] !== undefined ? docsRef.current[key] : await api.readDoc(project.id, ref);
-      const body = String(held || '').replace(/\n+$/, '');
-      changeDoc(key, ref, `${body ? `${body}\n\n` : ''}${buildLine(task.id)}\n`);
-      setQuickTask(null);
-      showWs();
-    } catch (error) {
-      onError(error);
-    }
-  }, [topic, flush, project.id, changeDoc, onError]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A quick task added to a workspace (the "Needs you" card): it becomes a Build of the workspace picked there, on the model
+  // picked there, and its session goes on (main/build promote). Its post-it is put in as an archived version of that
+  // workspace, and the workspace, with that version open, is where Engelbart goes (the card stays to ask keep or delete).
+  const promoteQuick = React.useCallback(async (id, workspaceId, choice) => {
+    const task = await api.buildPromote(project.id, id, workspaceId, choice);
+    setBuilds((current) => ({ ...current, [task.id]: task }));
+    return task;
+  }, [project.id]);
+  const goToTask = React.useCallback((task) => { if (task && task.version) goToVersion(task.workspaceId, task.version).catch(onError); }, [goToVersion, onError]);
+
+  const closeBuildDialog = React.useCallback(() => setBuildDialog(null), []);
+  const closePostItBuild = React.useCallback(() => setPostItBuild(null), []);
+  const closeQuickTask = React.useCallback(() => setQuickTask(null), []);
 
   /* ----------------------------------------------------------------- Clear */
 
@@ -562,6 +602,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     if (!behind) setActiveTab(id);
   }, []);
 
+  openTabRef.current = openTab;
+
   // Any note's tab closes; Workspace is always there (2026-09-25; from 2026-09-23 it closed too while another tab was left).
   const closeTab = (id) => {
     if (id === 'ws') return;
@@ -625,6 +667,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     setTabs(restored.tabs);
     setActiveTab(restored.active);
   };
+  selectRef.current = selectTopic;
 
   /* ------------------------------------------------------------ next place */
 
@@ -1116,7 +1159,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
                   >
                     {copied ? copiedLabel(copied) : 'Copy'}
                   </button>
-                  {docWorkspaceId && !copied && <button type="button" className="hov-ink" data-build-doc="1" onClick={() => setBuildDialog({ quick: null })} title="Hand this workspace to a coding agent" style={FOOT_BUTTON}>Build</button>}
+                  {docWorkspaceId && !copied && <button type="button" className="hov-ink" data-build-doc="1" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setBuildDialog((now) => (now ? null : { anchor: { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width } })); }} aria-expanded={!!buildDialog} title="Hand this workspace to a coding agent" style={FOOT_BUTTON}>Build</button>}
                   {docWorkspaceId && !copied && <button type="button" className="hov-ink" data-clear-doc="1" onClick={clearDoc} title="Archive this document and start it blank" style={FOOT_BUTTON}>Clear</button>}
                 </span>
                 )
@@ -1155,24 +1198,42 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       </div>
 
       {buildDialog && (
-        <BuildModal
+        <BuildPanel
           projectId={project.id}
-          title={buildDialog.quick ? '' : (topic ? topic.name : '')}
-          quick={buildDialog.quick}
+          title={topic ? topic.name : ''}
+          anchor={buildDialog.anchor}
           library={library}
           inRail={inRail}
-          onClose={() => setBuildDialog(null)}
+          onClose={closeBuildDialog}
           onStart={startBuild}
         />
       )}
-      {quickTask && builds[quickTask] && (
-        <QuickTask
-          task={builds[quickTask]}
-          progress={buildProgress[quickTask]}
-          workspaceName={topic ? topic.name : ''}
-          onAction={(action) => onBuildAction(quickTask, action)}
-          onPromote={() => promoteQuick(quickTask)}
-          onClose={() => setQuickTask(null)}
+      {postItBuild && (
+        <PostItBuild
+          key={postItBuild.postItId}
+          projectId={project.id}
+          quick={postItBuild}
+          anchor={postItBuild.anchor}
+          library={library}
+          inRail={inRail}
+          onClose={closePostItBuild}
+          onStart={startQuick}
+          onLibraryChanged={reload}
+        />
+      )}
+      {quickTask && builds[quickTask.id] && (
+        <PostItTask
+          key={quickTask.id}
+          task={builds[quickTask.id]}
+          progress={buildProgress[quickTask.id]}
+          anchor={quickTask.anchor}
+          workspaces={allWorkspaces}
+          hereId={topic ? topic.id : null}
+          onAction={(action) => onBuildAction(quickTask.id, action)}
+          onPromote={(workspaceId, choice) => promoteQuick(quickTask.id, workspaceId, choice)}
+          onGo={goToTask}
+          onDelete={() => { if (quickTask.postItId) api.postItsThrowOut(project.id, quickTask.postItId).catch(onError); }}
+          onClose={closeQuickTask}
         />
       )}
       {review && <BuildReview title={review.title} review={review.review} error={review.error} onClose={() => setReview(null)} />}

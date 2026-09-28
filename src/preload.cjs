@@ -105,9 +105,10 @@ const engelbartAPI = Object.freeze({
   buildPromote: invoke('build-promote'),
   onBuild: (callback) => subscribe('engelbart:build', callback),
   onBuildProgress: (callback) => subscribe('engelbart:build-progress', callback),
-  // A post-it's Build button asks the window for the Build dialog, with the card's text ({ projectId, postItId, text }).
+  // A post-it's Build button asks the window for its Build popup, with the card's text, and where the card and the
+  // button are ({ projectId, postItId, text, card, button }, CSS px of the window).
   onBuildQuick: (callback) => subscribe('engelbart:build-quick', callback),
-  // A click on a post-it's quick-task state: that task, in the window ({ projectId, id, postItId }).
+  // A click on a post-it's quick-task state: that task, beside the card ({ projectId, id, postItId, card, button }).
   onBuildQuickOpen: (callback) => subscribe('engelbart:build-quick-open', callback),
   // Clear and the archived versions of a workspace (src/main/store/archive.cjs).
   clearWorkspace: invoke('clear-workspace'),
@@ -187,6 +188,10 @@ const engelbartAPI = Object.freeze({
   postItsTrashRect: (rect) => ipcRenderer.invoke('post-its:trash-rect', rect),
   onPostItsDrag: (callback) => subscribe('post-its:drag', callback),
   onPostItsError: (callback) => subscribe('post-its:error', callback),
+  // Pictures of the cards a covering panel is over, to draw under it ({ projectId, cards: [{ id, x, y, width, height, url }] }).
+  onPostItsStandIns: (callback) => subscribe('post-its:stand-ins', callback),
+  // "Delete task": the post-it into the trash, once its task went to a workspace.
+  postItsThrowOut: (projectId, id) => ipcRenderer.invoke('post-its:throw-out', projectId, id),
 });
 
 contextBridge.exposeInMainWorld('terminalAPI', terminalAPI);

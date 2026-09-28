@@ -1,12 +1,18 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../api.js';
 
-const plainRect = (r) => ({ x: r.left, y: r.top, width: r.width, height: r.height });
 const shown = (r) => r.width > 0 && r.height > 0;
 
-/** The app's open menus and dialogs (hover previews, marked data-hover, are left out: a card stays over those, 2026-09-22). */
+/**
+ * The app's open menus and dialogs (hover previews, marked data-hover, are left out: a card stays over those, 2026-09-22).
+ * A panel marked data-cover (the Build panels, 2026-09-27) covers the cards under it instead of moving them aside.
+ */
 function blockingRects() {
-  return [...document.querySelectorAll('[data-overlay]:not([data-hover])')].map((el) => el.getBoundingClientRect()).filter(shown).slice(0, 64).map(plainRect);
+  return [...document.querySelectorAll('[data-overlay]:not([data-hover])')]
+    .map((el) => ({ r: el.getBoundingClientRect(), cover: el.hasAttribute('data-cover') }))
+    .filter(({ r }) => shown(r)).slice(0, 64)
+    .map(({ r, cover }) => ({ x: r.left, y: r.top, width: r.width, height: r.height, ...(cover ? { cover: true } : {}) }));
 }
 
 // A project's post-its: native cards above the window (main/post-its/views.cjs). This keeps them to the workspace screen,
@@ -15,6 +21,10 @@ function blockingRects() {
 // (`onOpenNote`), how many cards are in the trash (`onTrashCount`), and that main showed hidden cards again because one
 // was made or restored (`onShown`). `hidden` is the sidebar's show/hide toggle; it only changes what is drawn.
 export default function ProjectPostIts({ projectId, active, hidden, onError, onDrag, onOpenNote, onTrashCount, onShown }) {
+  // Cards a covering panel is over, as pictures of themselves (main swaps the native card for its picture): drawn here,
+  // under the panels (z-index 54; covering panels are 55 and up), where the cards are.
+  const [standIns, setStandIns] = React.useState([]);
+  React.useEffect(() => api.onPostItsStandIns((state) => setStandIns(state && state.projectId === projectId ? state.cards : [])), [projectId]);
   const props = React.useRef({});
   props.current = { onError, onDrag, onOpenNote, onTrashCount, onShown };
   // Before the cards are activated below, so a hidden set never flashes up.
@@ -50,5 +60,9 @@ export default function ProjectPostIts({ projectId, active, hidden, onError, onD
       api.postItsActivate(null).catch(fail);
     };
   }, [projectId, active]);
-  return null;
+  if (!active || hidden || !standIns.length) return null;
+  return createPortal(
+    standIns.map((card) => <img key={card.id} data-post-it-stand-in={card.id} src={card.url} alt="" draggable={false} style={{ position: 'fixed', left: card.x, top: card.y, width: card.width, height: card.height, zIndex: 54, pointerEvents: 'none', userSelect: 'none' }} />),
+    document.body,
+  );
 }
