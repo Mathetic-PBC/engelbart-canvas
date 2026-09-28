@@ -22,7 +22,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
-const { resolveShell, sanitizeEnvironment } = require('../terminal/launch.cjs');
+const { resolveShell, sanitizeEnvironment, loginShellArgs } = require('../terminal/launch.cjs');
 const { scrubAgentSession } = require('../shell-rc.cjs');
 const { normalizeSummarizer } = require('../store/home.cjs');
 const { SUMMARY_SYSTEM_PROMPT } = require('./summary-prompt.cjs');
@@ -120,14 +120,13 @@ function createCliSummarizer({ readSettings, environment = process.env, runDirec
   const shell = resolveShell(environment);
   const program = (name) => (tools && tools.binaryFor(name) ? `"$ENGELBART_${name.toUpperCase()}_BIN"` : name);
   const programEnv = (name) => (tools && tools.binaryFor(name) ? { [`ENGELBART_${name.toUpperCase()}_BIN`]: tools.binaryFor(name) } : {});
-  const shellArgs = (command) => (path.basename(shell) === 'fish' ? ['--login', '--interactive', '--command', command] : ['-ilc', command]);
   const childEnvironment = (extra) => {
     const base = sanitizeEnvironment(scrubAgentSession(environment));
     for (const key of NOT_THE_SUBSCRIPTION) delete base[key];
-    return { ...base, ...extra };
+    return { ...base, ...(tools && tools.environment ? tools.environment() : {}), ...extra }; // Engelbart's own Git, when it stands in (../tools/bundled-git.cjs)
   };
   const execute = (command, env, signal) => new Promise((resolve) => {
-    run(shell, shellArgs(command), { cwd: runDirectory, env, timeout: TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024, signal }, (error, out) => resolve({ stdout: out, failure: error }));
+    run(shell, loginShellArgs(shell, command, env), { cwd: runDirectory, env, timeout: TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024, signal }, (error, out) => resolve({ stdout: out, failure: error }));
   });
   const notFound = (failure) => failure && (failure.code === 127 || failure.code === 'ENOENT');
 

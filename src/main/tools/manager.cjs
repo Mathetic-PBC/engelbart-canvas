@@ -9,15 +9,21 @@
 //   maintain   after the launch check: a tool below its minimum is updated when `tools.updates` is auto,
 //              it is not pinned or skipped, its own updater is on, and the same update has not failed
 //              in the last day. Everything else waits for the person.
+//   first      after the launch check on a Mac with neither agent (a first launch, 2026-09-28): the agents
+//              named in `installAtLaunch` are installed without being asked for, unless skipped. The setup
+//              dialog shows them installing; signing in is still the person's.
 //   install    one at a time, each holding its tool's lock alone (./lock.cjs), then found again: an
 //              installer that says it finished is not believed until the program answers.
 //   update     the same, and a launcher left broken by the update is pointed back at the version that
 //              worked (./install.cjs rollback), when the install keeps one.
 //   use        what a run of a program (an @bart turn, a summary) holds while it runs.
+//   environment  what everything Engelbart starts is given: the folder of Engelbart's own Git while it
+//              stands in for a missing one (./bundled-git.cjs), which ../terminal/launch.cjs puts first on PATH.
 //
 // What changes is sent on as a snapshot (`onChange`), which the renderer's dialog draws.
 
 const fs = require('node:fs');
+const path = require('node:path');
 const { TOOL_NAMES, AGENTS, REQUIREMENTS } = require('./requirements.cjs');
 const { normalizeTools } = require('./record.cjs');
 const { createLock } = require('./lock.cjs');
@@ -31,7 +37,7 @@ const WORKS = new Set(['ready', 'signed-out']);
 
 const pick = (found) => Object.fromEntries(OBSERVED.filter((key) => Object.hasOwn(found, key)).map((key) => [key, found[key]]));
 
-function createTools({ readTools, writeTools, detect, actions, signInProcess = null, rollbackOptions = {}, now = () => new Date(), setTimer = setTimeout, clearTimer = clearTimeout, onChange = () => {}, platform = process.platform }) {
+function createTools({ readTools, writeTools, detect, actions, signInProcess = null, rollbackOptions = {}, installAtLaunch = [], now = () => new Date(), setTimer = setTimeout, clearTimer = clearTimeout, onChange = () => {}, platform = process.platform }) {
   // What the checks saw (starting from what the last launch wrote), and what is happening now.
   const disk = () => normalizeTools(readTools());
   const seen = {};
@@ -43,6 +49,7 @@ function createTools({ readTools, writeTools, detect, actions, signInProcess = n
   let records = disk();
   let aliases = []; // names the login shell defines as an alias or function: the terminal can run them
   let checked = false;
+  let lookupError = null; // the last full check could not ask the login shell, so `missing` may only mean unseen
   let launch = null;
 
   function persist(choices = {}) {
@@ -98,7 +105,7 @@ function createTools({ readTools, writeTools, detect, actions, signInProcess = n
       if (found[name]) seen[name] = { ...seen[name], ...pick(found[name]) };
     }
     if (Array.isArray(found.aliases)) aliases = [...aliases.filter((name) => !names.includes(name)), ...found.aliases.filter((name) => names.includes(name))];
-    if (TOOL_NAMES.every((name) => names.includes(name))) checked = true;
+    if (TOOL_NAMES.every((name) => names.includes(name))) { checked = true; lookupError = found.lookupError || null; }
     persist();
     emit();
     return snapshot();
@@ -151,8 +158,15 @@ function createTools({ readTools, writeTools, detect, actions, signInProcess = n
   }
 
   function start() {
-    if (!launch) launch = check().then(() => maintain()).then(() => snapshot());
+    if (!launch) launch = check().then(() => { installFirst(); return maintain(); }).then(() => snapshot());
     return launch;
+  }
+
+  /** Neither agent on this Mac: the ones named in `installAtLaunch` are installed now, in the background. */
+  function installFirst() {
+    if (lookupError || AGENTS.some((name) => records[name].installed)) return;
+    const names = installAtLaunch.filter((name) => AGENTS.includes(name) && records[name].status === 'missing' && !records[name].skip && !busy[name]);
+    if (names.length) void install(names).catch(() => {});
   }
 
   async function installOne(name) {
@@ -255,6 +269,14 @@ function createTools({ readTools, writeTools, detect, actions, signInProcess = n
     return AGENTS.filter((name) => records[name].installed && records[name].status === 'ready');
   }
 
+  /** What every program Engelbart starts gets besides its own environment: ENGELBART_GIT_BIN while Engelbart's own Git stands in. */
+  function environment() {
+    const git = records.git;
+    if (git.source !== 'bundled' || git.status !== 'ready' || !git.path) return {};
+    try { if (!fs.existsSync(git.path)) return {}; } catch { return {}; } // the app moved since the last check; the next one finds it
+    return { ENGELBART_GIT_BIN: path.dirname(git.path) };
+  }
+
   /** The full path to run a program by, when the login shell's PATH does not reach it; else null (its name is enough). */
   function binaryFor(name) {
     const record = records[name];
@@ -274,7 +296,7 @@ function createTools({ readTools, writeTools, detect, actions, signInProcess = n
     ];
   }
 
-  return { start, check, update, install, signIn, cancelSignIn, skip, askAgain, setUpdates, ensure, use, usableAgents, binaryFor, providers, snapshot, canAutoUpdate };
+  return { start, check, update, install, signIn, cancelSignIn, skip, askAgain, setUpdates, ensure, use, usableAgents, binaryFor, environment, providers, snapshot, canAutoUpdate };
 }
 
 module.exports = { createTools, STALE_MS, RETRY_UPDATE_MS };

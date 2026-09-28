@@ -6,7 +6,7 @@
 #   npm run relaunch -- --dev        # quit, rebuild, run `electron .` in the background (~5 s, same ~/.engelbart)
 #   npm run relaunch -- --no-build   # quit and reopen only
 #   npm run relaunch -- --dry-run    # say what would happen, touch nothing
-#   npm run relaunch -- --new-mac    # --dev, pretending Git, Claude Code and Codex are not installed: the setup dialog
+#   npm run relaunch -- --new-mac    # --dev, pretending Claude Code and Codex are not installed and Git is Engelbart's own: the setup dialog
 #                                    # shows as on a new Mac; installs are pretend (2.5 s) and nothing is written to
 #                                    # config.json. Agents cannot run in this mode: relaunch without it afterwards.
 #
@@ -22,8 +22,10 @@
 set -eu
 cd "$(dirname "$0")/.."
 REPO="$PWD"
-APP="$REPO/release/Engelbart-darwin-arm64/Engelbart.app"
+# `npm run package` (scripts/package-mac.mjs) builds for the architecture node runs as.
+if [ "$(node -p process.arch 2>/dev/null)" = arm64 ]; then APP="$REPO/release/mac-arm64/Engelbart.app"; else APP="$REPO/release/mac/Engelbart.app"; fi
 PACKAGED="$APP/Contents/MacOS/Engelbart"
+OLD_PACKAGED="$REPO/release/Engelbart-darwin-arm64/Engelbart.app/Contents/MacOS/Engelbart" # electron-packager's, before 2026-09-28
 DEV_BIN="$REPO/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"
 DEV_LOG="$HOME/Library/Logs/Engelbart-dev.log"
 RELAUNCH_LOG="$HOME/Library/Logs/Engelbart-relaunch.log"
@@ -42,7 +44,7 @@ for arg in "$@"; do
 done
 unset ENGELBART_HOME_DIR ENGELBART_CONFIRM_ALL
 unset ENGELBART_TOOLS_FAKE
-if [ "$NEWMAC" = 1 ]; then export ENGELBART_TOOLS_FAKE='{"git":"missing","claude":"missing","codex":"missing"}'; fi
+if [ "$NEWMAC" = 1 ]; then export ENGELBART_TOOLS_FAKE='{"git":"bundled","claude":"missing","codex":"missing"}'; fi
 
 # Is one of this shell's ancestors an Engelbart started from this checkout?
 inside_engelbart() {
@@ -50,7 +52,7 @@ inside_engelbart() {
   while [ -n "$pid" ] && [ "$pid" != "0" ] && [ "$pid" != "1" ]; do
     command=$(ps -o command= -p "$pid" 2>/dev/null || true)
     case "$command" in
-      "$PACKAGED"*|"$DEV_BIN"*) return 0 ;;
+      "$PACKAGED"*|"$OLD_PACKAGED"*|"$DEV_BIN"*) return 0 ;;
     esac
     pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ' || true)
   done
@@ -75,7 +77,7 @@ quit() { # $1: full-command-line pattern
 
 if [ "$DRY" = 1 ]; then
   if inside_engelbart; then echo "this shell runs inside Engelbart: the restart would continue detached (log: $RELAUNCH_LOG) and this terminal would close"; else echo "this shell is outside Engelbart: the restart would run here"; fi
-  echo "packaged copies running: $(running "$PACKAGED" | tr '\n' ' ')"
+  echo "packaged copies running: $(running "$PACKAGED" | tr '\n' ' ')$(running "$OLD_PACKAGED" | tr '\n' ' ')"
   echo "dev copies running: $(running "$DEV_BIN" | tr '\n' ' ')"
   echo "would: quit them$( [ "$BUILD" = 1 ] && { [ "$DEV" = 1 ] && echo ', npm run build' || echo ', npm run package (a developer build)'; } ), then $( [ "$DEV" = 1 ] && echo 'run electron .' || echo "open $APP" )"
   exit 0
@@ -95,6 +97,7 @@ fi
 unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_EXECPATH CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN CLAUDE_CODE_SESSION_ATTENDED CLAUDE_PID CLAUDE_EFFORT 2>/dev/null || true
 
 quit "$PACKAGED"
+quit "$OLD_PACKAGED"
 quit "$DEV_BIN"
 
 if [ "$DEV" = 1 ]; then
@@ -120,4 +123,4 @@ done
 MODE=$(sed -n 's/.*"testMode": *\([a-z]*\).*/\1/p' "$HOME/.engelbart/config.json" 2>/dev/null || true)
 echo "Engelbart is running: $WHAT"
 echo "data root: ~/.engelbart (test mode: ${MODE:-unknown}; test data under ~/.engelbart/test)"
-if [ "$NEWMAC" = 1 ]; then echo "pretending a new Mac: Git, Claude Code and Codex look missing (relaunch without --new-mac to use the real tools)"; fi
+if [ "$NEWMAC" = 1 ]; then echo "pretending a new Mac: Git is the one built into Engelbart, Claude Code and Codex look missing (relaunch without --new-mac to use the real tools)"; fi

@@ -17,14 +17,20 @@ npm start            # build the renderer and open the app
 npm run start:debug  # same, with a DevTools port for scripts/drive.mjs
 ```
 
-Install as an app:
+Install as an app on this Mac:
 
 ```sh
-npm run package
-open "release/Engelbart-darwin-arm64/Engelbart.app"
+npm run package                            # release/mac-arm64/Engelbart.app (release/mac/ on an Intel Mac), signed ad hoc
+open release/mac-arm64/Engelbart.app
 ```
 
-Unsigned and not notarised: first launch needs right-click → Open. The first launch creates `~/.engelbart/`.
+A release for other people's Macs (both kinds, a .dmg and a .zip each, an install command and a download page):
+
+```sh
+ENGELBART_DOWNLOAD_URL=https://example.com/engelbart npm run dist:mac   # then upload release/upload/ there
+```
+
+People install it with `curl -fsSL https://example.com/engelbart/install.sh | bash`, and it updates itself from that folder. The whole procedure, what they see, and signing and notarizing: `docs/releasing-mac.md`. The first launch creates `~/.engelbart/`; a release has no test mode (see First run, test mode, reset).
 
 ## Catalog and summaries
 
@@ -97,6 +103,8 @@ ENGELBART_POST_IT_SMOKE_ROOT=/path/from/checkpoint ENGELBART_POST_IT_SMOKE_RESTO
 
 Checked at every launch, in the background (`src/main/tools/`; design: `docs/superpowers/specs/2026-09-23-tools-and-defaults-design.md`). What the last check saw is written to `~/.engelbart/config.json` → `tools`: for each, `installed` (false until a check finds it), `version`, `requires` (from `src/main/tools/requirements.cjs`: Git ≥ 2.30.0, Claude Code ≥ 2.1.278, Codex ≥ 0.155.0), `status`, `signedIn`, `path`, `source`, `error`. These are rewritten by every check; edit only `skip`, `pin` (a version Engelbart must never update) and `tools.updates` (`auto` | `ask`).
 
+The app carries its own Git (2.53.0 from dugite-native, GitHub Desktop's build; `scripts/fetch-git.mjs` puts it in `vendor/git` for a checkout, electron-builder in the app's Resources). It stands in only when the Mac has no Git of its own that works (a Mac without Apple's developer tools has just `/usr/bin/git`, a stub that opens Apple's installer): then its record says `source: "bundled"`, the dialog shows it as `· built in`, and its folder goes first on PATH for everything Engelbart starts (@bart, Build, summaries, the terminal), after the login shell's startup files (`src/main/tools/bundled-git.cjs`, `src/main/terminal/launch.cjs`). On a Mac with neither Claude Code nor Codex, Claude Code is installed at launch without asking (unless skipped); signing in is still yours.
+
 When something needs you — Git missing, neither agent installed, no agent signed in, an update waiting for approval, an install that failed — a dialog opens after the check: Install (Git through Apple's Command Line Tools dialog; Claude Code and Codex through their vendors' installers), Update, Sign in (the CLI's own login, which opens the browser), Skip (with a warning; remembered per tool). **Engelbart ▸ Set Up Tools…** shows all three at any time, with Ask again and Update automatically. A tool below its minimum is updated by itself at launch unless it is pinned, skipped, `updates` is `ask`, or you turned the CLI's own updater off (`autoUpdates: false` in `~/.claude.json`, `DISABLE_AUTOUPDATER`, Codex's `check_for_update_on_startup = false`).
 
 @bart starts on the saved default provider when its CLI can run, else on the other one; nothing is written. `config.json` and `model-effort-inline-question.json` take new defaults from later builds wherever you left a value alone (`src/main/store/defaults.cjs`).
@@ -162,7 +170,8 @@ src/main/index.cjs           app lifecycle, window, engelbart:// protocol, menu,
 src/main/ipc.cjs             engelbart:* handlers, argument validation, lazy store context + seeding
 src/main/store/              home layout + config, PGlite databases, projects/goals/topics/notes/docs, library + annotations
 src/main/terminal/           Experimental Terminal engine (session manager, launch, settings)
-src/main/tools/              Git, Claude Code, Codex: requirements, detect, install/update/rollback, lock, sign-in, manager; repository checks for Build
+src/main/tools/              Git, Claude Code, Codex: requirements, detect, install/update/rollback, lock, sign-in, manager; repository checks for Build; bundled-git (the app's own Git)
+src/main/updates.cjs         new versions of the packaged app (docs/releasing-mac.md)
 src/main/build/              Build: git (worktrees, checkpoints, Accept), store (task records), context, prompt, policy (the sandbox stub), runner (one CLI turn), manager
 src/main/store/archive.cjs   Clear, the archived versions of a workspace, Restore
 src/main/browser/            views.cjs: the Browser pane's pages as WebContentsViews (decision 48)
@@ -175,6 +184,7 @@ src/renderer/terminal/       the Terminal pane (tabs, cwd chip, Terminal / Claud
 src/renderer/model/doc.js    the pure editor model (regexes, task and bullet lines, caret offset mapping)
 src/renderer/model/rail.js   what the sidebar's search and the @ menu list
 scripts/drive.mjs            CDP driver for exploratory testing (screenshots, clicks, typing)
+scripts/package-mac.mjs      npm run package / dist:mac (electron-builder.config.cjs); fetch-git, install-mac.sh, release-site, make-icon: the rest of a release
 ```
 
 ## Tests
@@ -200,7 +210,7 @@ ENGELBART_HOME_DIR=/tmp/eb-home electron . --user-data-dir=/tmp/eb-userdata --re
 ENGELBART_DEBUG_PORT=9223 node scripts/drive.mjs text
 ```
 
-`ENGELBART_TOOLS_FAKE='{"git":"missing","claude":"2.1.300 signed-out","codex":"0.150.0","failInstall":["codex"]}'` pretends a machine (each tool `missing`, `broken`, or a version with an optional ` signed-out`) so the setup dialog can be driven without touching real installs; `ENGELBART_TOOLS=off` skips the launch check. `ENGELBART_CONFIRM_ALL=1` makes the native confirmation dialogs (reset) answer yes, for scripted runs only. So are `ENGELBART_SUMMARY_FAKE=1` (no model, a recognisable blurb), `ENGELBART_SUMMARY_QUIET_MS` and `ENGELBART_SUMMARY_INTERVAL_MS` (shorten the 30-minute and one-minute clocks).
+`ENGELBART_TOOLS_FAKE='{"git":"missing","claude":"2.1.300 signed-out","codex":"0.150.0","failInstall":["codex"]}'` pretends a machine (each tool `missing`, `broken`, or a version with an optional ` signed-out`; Git also `bundled`) so the setup dialog can be driven without touching real installs; `ENGELBART_TOOLS=off` skips the launch check; `ENGELBART_GIT=bundled` uses the app's own Git even where the Mac has one; `ENGELBART_UPDATES=off` stops a packaged app checking for new versions. `ENGELBART_CONFIRM_ALL=1` makes the native confirmation dialogs (reset, a new version's offer) answer yes, for scripted runs only. So are `ENGELBART_SUMMARY_FAKE=1` (no model, a recognisable blurb), `ENGELBART_SUMMARY_QUIET_MS` and `ENGELBART_SUMMARY_INTERVAL_MS` (shorten the 30-minute and one-minute clocks).
 
 ## Known kinks (deliberately open)
 

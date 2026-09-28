@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { prepareZshDir, prepareLauncher, environmentForSessions } = require('../src/main/shell-rc.cjs');
-const { createLaunchSpec } = require('../src/main/terminal/launch.cjs');
+const { createLaunchSpec, loginShellArgs } = require('../src/main/terminal/launch.cjs');
 const { parseHistory, unmetafy, readShellHistory } = require('../src/main/shell-history.cjs');
 
 function temporaryDirectory(t) {
@@ -82,6 +82,28 @@ test('a ZDOTDIR the user sets in ~/.zshenv is honoured and handed back', { skip:
   const result = spawnSync(launcher, ['-ilc', 'print -r -- "custom=$FROM_CUSTOM zdotdir=[$ZDOTDIR]"'], { env: { HOME: home, PATH: '/usr/bin:/bin', TERM: 'dumb' }, encoding: 'utf8', timeout: 10000 });
   assert.equal(result.status, 0, result.stderr);
   assert.ok(result.stdout.includes(`custom=1 zdotdir=[${custom}]`), result.stdout);
+});
+
+test('Engelbart\'s own Git comes first on PATH after the person\'s startup files (and macOS\'s path_helper) rebuilt it, and only while it stands in (2026-09-28)', { skip: !fs.existsSync('/bin/zsh') }, (t) => {
+  const userData = temporaryDirectory(t);
+  const home = temporaryDirectory(t);
+  const bin = path.join(temporaryDirectory(t), 'Application Support', 'engelbart-bin');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, 'git'), '#!/bin/sh\necho engelbart-git\n', { mode: 0o755 });
+  // Startup files that rebuild PATH from scratch, as some do; /etc/zprofile's path_helper puts /usr/bin first on its own.
+  fs.writeFileSync(path.join(home, '.zshrc'), 'export PATH=/usr/bin:/bin:/usr/sbin:/sbin\n');
+  const env = { HOME: home, PATH: `${bin}:/usr/bin:/bin`, TERM: 'dumb', ENGELBART_GIT_BIN: bin };
+  const hidden = spawnSync('/bin/zsh', loginShellArgs('/bin/zsh', 'command -v git', env), { env, encoding: 'utf8', timeout: 10000 });
+  assert.equal(hidden.status, 0, hidden.stderr);
+  assert.equal(hidden.stdout.trim().split('\n').pop(), path.join(bin, 'git'), 'a hidden run (@bart, Build, summaries)');
+  const launcher = prepareLauncher(userData, '/bin/zsh');
+  const terminal = spawnSync(launcher, ['-il'], { env, input: 'command -v git\nexit\n', encoding: 'utf8', timeout: 10000 });
+  assert.equal(terminal.status, 0, terminal.stderr);
+  assert.ok(terminal.stdout.includes(path.join(bin, 'git')), `the terminal: ${terminal.stdout}`);
+  const without = { HOME: home, PATH: `${bin}:/usr/bin:/bin`, TERM: 'dumb' };
+  assert.deepEqual(loginShellArgs('/bin/zsh', 'command -v git', without), ['-ilc', 'command -v git'], 'the person\'s own Git: the command is left as it is');
+  const own = spawnSync(launcher, ['-il'], { env: without, input: 'command -v git\nexit\n', encoding: 'utf8', timeout: 10000 });
+  assert.ok(!own.stdout.includes(path.join(bin, 'git')), own.stdout);
 });
 
 test('shell history: extended-format prefixes, continuation lines, metafied bytes, latest-use order', (t) => {

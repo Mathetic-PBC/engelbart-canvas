@@ -27,6 +27,7 @@ const { resolveShell } = require('./terminal/launch.cjs');
 const home = require('./store/home.cjs');
 const { createRunner } = require('./tools/run.cjs');
 const { detectTools } = require('./tools/detect.cjs');
+const { findBundledGit } = require('./tools/bundled-git.cjs');
 const { createActions } = require('./tools/install.cjs');
 const { createTools } = require('./tools/manager.cjs');
 const { createFakeTools } = require('./tools/fake.cjs');
@@ -46,6 +47,7 @@ const { createBuilds } = require('./build/manager.cjs');
 const { createRunner: createBuildRunner, createFakeRunner: createFakeBuildRunner } = require('./build/runner.cjs');
 const { EDGES: WINDOW_EDGES, resizedBounds } = require('./window-edges.cjs');
 const { hasTestMode } = require('./developer.cjs');
+const { createUpdates } = require('./updates.cjs');
 
 const DIST = path.join(__dirname, '../../dist');
 const FIXTURES = path.join(__dirname, '../../fixtures');
@@ -77,6 +79,7 @@ let builds = null;
 let tools = null;
 let browserViews = null;
 let postItViews = null;
+let updates = null;
 let quitPending = false;
 let quitReady = false;
 
@@ -260,6 +263,7 @@ function buildMenu() {
       label: app.name,
       submenu: [
         { role: 'about' },
+        ...(updates && updates.enabled ? [updates.menuItem()] : []),
         { type: 'separator' },
         { label: 'Set Up Tools…', click: () => sendToWindow('engelbart:tools-open', {}) },
         { type: 'separator' },
@@ -390,7 +394,7 @@ if (!hasSingleInstanceLock) {
   app.on('activate', createWindow);
   app.whenReady().then(() => {
     registerProtocol();
-    manager = new SessionManager({ environment: environmentForSessions(process.env, app.getPath('userData')) });
+    manager = new SessionManager({ environment: environmentForSessions(process.env, app.getPath('userData')), extraEnvironment: () => (tools ? tools.environment() : {}) });
     rendererLifecycle = new RendererLifecycle(manager);
     rendererLifecycle.detach();
     settings = new SettingsStore(app.getPath('userData'), app.getPath('home'));
@@ -406,19 +410,24 @@ if (!hasSingleInstanceLock) {
     // Test mode only in a developer's copy: run from a checkout, or packaged by `npm run relaunch` (./developer.cjs).
     store = createStore({ homeDir, rootDir: process.env.ENGELBART_ROOT_DIR || null, fixturesDir: FIXTURES, inspectPdf, afterOpen, testMode: hasTestMode({ packaged: app.isPackaged, distDir: DIST, env: process.env }) });
     // Git, Claude Code and Codex (src/main/tools): checked at every launch in the background and recorded in
-    // config.json → tools; installed, updated and signed in to from the setup dialog. ENGELBART_TOOLS_FAKE (JSON)
-    // pretends a machine and ENGELBART_TOOLS=off skips the launch check, for scripted runs only.
+    // config.json → tools; installed, updated and signed in to from the setup dialog. The Git that comes with
+    // Engelbart stands in when the Mac has none of its own (tools/bundled-git.cjs), and on a Mac with neither agent
+    // Claude Code is installed at launch without asking. ENGELBART_TOOLS_FAKE (JSON) pretends a machine,
+    // ENGELBART_TOOLS=off skips the launch check and ENGELBART_GIT=bundled uses Engelbart's Git even where there is
+    // another, for scripted runs only.
     // A pretend machine keeps its records in memory: config.json keeps what the real machine has (and the choices made
     // on it), so `npm run relaunch -- --new-mac` never leaves a fake path or a "skip" behind.
     const toolsFake = process.env.ENGELBART_TOOLS_FAKE ? createFakeTools(process.env.ENGELBART_TOOLS_FAKE) : null;
     const toolRunner = createRunner({ environment: process.env });
+    const bundledGit = findBundledGit({ appRoot: app.getAppPath() });
     let pretendTools = {};
     tools = createTools({
       readTools: () => (toolsFake ? pretendTools : home.readConfig(store.layout.root).tools),
       writeTools: (value) => { if (toolsFake) { pretendTools = value; return null; } return home.writeTools(store.layout.root, value); },
-      detect: toolsFake ? toolsFake.detect : (only) => detectTools({ runner: toolRunner, only }),
+      detect: toolsFake ? toolsFake.detect : (only) => detectTools({ runner: toolRunner, only, bundledGit, preferBundledGit: process.env.ENGELBART_GIT === 'bundled' }),
       actions: toolsFake ? toolsFake.actions : createActions({ runner: toolRunner }),
       signInProcess: toolsFake ? toolsFake.signInProcess : createSignInProcess({ pty: require('node-pty'), shell: toolRunner.shellPath }),
+      installAtLaunch: ['claude'],
       onChange: (snapshot) => sendToWindow('engelbart:tools', snapshot),
     });
     if (process.env.ENGELBART_TOOLS !== 'off') void tools.start().catch((error) => console.warn(`[engelbart] tool check: ${error.message}`));
@@ -563,6 +572,9 @@ if (!hasSingleInstanceLock) {
         return result.response === 0;
       },
     });
+    // New versions (updates.cjs): only in a packaged app built with a download folder. ENGELBART_UPDATES=off stops it.
+    updates = createUpdates({ app, dialog, getWindow: () => mainWindow, requestQuit, onChange: () => buildMenu() });
+    updates.start();
     buildMenu();
     electronSession.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
     createWindow();

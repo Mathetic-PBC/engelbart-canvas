@@ -65,6 +65,8 @@ class SessionManager extends EventEmitter {
   constructor(options = {}) {
     super();
     this.environment = options.environment || process.env;
+    // Read at each start: what changes while the app runs (Engelbart's own Git once the tool check chose it).
+    this.extraEnvironment = options.extraEnvironment || (() => ({}));
     this.pty = options.pty || pty;
     this.maxSessions = options.maxSessions || DEFAULT_MAX_SESSIONS;
     this.maxReplayBytes = options.maxReplayBytes || DEFAULT_MAX_REPLAY_BYTES;
@@ -83,7 +85,7 @@ class SessionManager extends EventEmitter {
     if (this.sessions.size >= this.maxSessions) {
       throw new Error(`At most ${this.maxSessions} sessions may be open`);
     }
-    const launch = createLaunchSpec(request, this.environment);
+    const launch = createLaunchSpec(request, { ...this.environment, ...this.extraEnvironment() });
     const id = randomUUID();
     const processHandle = this.pty.spawn(launch.file, launch.args, {
       name: 'xterm-256color',

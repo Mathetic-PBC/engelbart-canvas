@@ -1,9 +1,12 @@
 import { build } from 'esbuild';
-import { mkdir, copyFile } from 'node:fs/promises';
+import { mkdir, copyFile, rm } from 'node:fs/promises';
 
 const mode = process.env.NODE_ENV === 'production' ? 'production' : 'development';
+// A release (npm run dist:mac) ships the renderer minified and without source maps, which would carry the source.
+const release = mode === 'production';
 
 await mkdir('dist', { recursive: true });
+for (const map of ['index.js.map', 'index.css.map', 'post-it.js.map', 'post-it.css.map']) await rm(`dist/${map}`, { force: true }); // a development build's
 await build({
   entryPoints: { index: 'src/renderer/index.jsx', 'post-it': 'src/renderer/post-its/Card.jsx' },
   bundle: true,
@@ -13,7 +16,8 @@ await build({
   format: 'iife',
   jsx: 'automatic',
   target: 'chrome148',
-  sourcemap: true,
+  sourcemap: !release,
+  minify: release,
   loader: { '.css': 'css', '.woff2': 'file', '.woff': 'file', '.ttf': 'file', '.svg': 'file', '.png': 'file' },
   define: { 'process.env.NODE_ENV': JSON.stringify(mode) },
   logLevel: 'warning',

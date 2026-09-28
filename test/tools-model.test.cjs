@@ -51,6 +51,7 @@ test('rows say what a tool is doing in a few words, with one button', async () =
   const { rowOf } = await load();
   const tools = snapshot({ git: { status: 'missing' }, claude: { status: 'outdated', version: '2.1.200', error: 'The installer could not be reached: no internet connection.' }, codex: { status: 'signed-out' } }).tools;
   assert.deepEqual([rowOf(tools.git).state, rowOf(tools.git).action], ['Not installed', 'install']);
+  assert.deepEqual([rowOf({ ...tools.git, status: 'ready', version: '2.53.0', source: 'bundled' }).state, rowOf({ ...tools.git, status: 'ready', version: '2.53.0', source: 'bundled' }).tone], ['2.53.0 · built in', 'ok'], 'the Git that came with Engelbart');
   assert.deepEqual([rowOf(tools.claude).state, rowOf(tools.claude).action, rowOf(tools.claude).detail], ['2.1.200 · needs 2.1.278', 'update', 'The installer could not be reached: no internet connection.']);
   assert.deepEqual([rowOf(tools.codex).state, rowOf(tools.codex).action], ['Not signed in', 'sign-in']);
   assert.equal(rowOf({ ...tools.git, busy: { action: 'install', phase: 'Waiting for Apple’s installer' } }).state, 'Waiting for Apple’s installer');

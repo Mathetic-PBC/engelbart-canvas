@@ -11,7 +11,9 @@
 //   * emit shell-integration marks (OSC 633: A prompt, C command started, E command line,
 //     P Cwd=…) that the pane reads to show or hide the box and keep the directory chip true;
 //   * hand ZDOTDIR back to your own value, so ~/.zlogin runs as usual and anything started from
-//     the shell (installers that edit ${ZDOTDIR:-$HOME}/.zshrc, nested shells) sees your setup.
+//     the shell (installers that edit ${ZDOTDIR:-$HOME}/.zshrc, nested shells) sees your setup;
+//   * put Engelbart's own Git first on PATH while it stands in for a missing one (ENGELBART_GIT_BIN,
+//     src/main/tools/bundled-git.cjs), after your .zshrc, which may have rebuilt PATH.
 // Because the launcher is also $TERMINAL_USER_SHELL, the shell that replaces Claude Code or
 // Codex when they exit gets the same treatment. bash and fish run through the launcher untouched.
 
@@ -39,6 +41,7 @@ ZDOTDIR="$ENGELBART_ZDOTDIR"
 # and marks that tell the pane when a command starts, when the shell is ready, and where it is.
 ZDOTDIR="\${ENGELBART_USER_ZDOTDIR:-$HOME}"
 [[ -r "$ZDOTDIR/.zshrc" ]] && source "$ZDOTDIR/.zshrc"
+[[ -n "\${ENGELBART_GIT_BIN:-}" ]] && path=("$ENGELBART_GIT_BIN" $path)
 engelbart_hide_prompt() { PROMPT='' PS1='' RPROMPT='' RPS1='' PROMPT_EOL_MARK='' }
 engelbart_precmd() { engelbart_hide_prompt; printf '\\e]633;P;Cwd=%s\\a\\e]633;A\\a' "$PWD" }
 engelbart_preexec() { local line="\${1//[[:cntrl:]]/ }"; printf '\\e]633;E;%s\\a\\e]633;C\\a' "\${line[1,400]}" }

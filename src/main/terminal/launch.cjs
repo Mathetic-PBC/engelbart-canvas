@@ -37,6 +37,24 @@ const FISH_PROVIDER_SCRIPTS = Object.freeze({
   codex: `${FISH_STARTUP_UNSET}codex; set provider_status $status; printf "\\r\\n[Codex exited with status %d]\\r\\n" $provider_status; exec "$TERMINAL_USER_SHELL" --login --interactive`,
 });
 
+// Engelbart's own Git, while it stands in for a missing one (../tools/bundled-git.cjs), goes first on PATH for what a
+// login shell runs. It has to be put there by the command, after the person's startup files: those rebuild PATH
+// (macOS's path_helper puts /usr/bin first, and with it Apple's stub, which opens Apple's installer).
+const POSIX_GIT_PATH = 'PATH="$ENGELBART_GIT_BIN:$PATH"; ';
+const FISH_GIT_PATH = 'set -gx PATH $ENGELBART_GIT_BIN $PATH; ';
+
+const isFish = (shell) => path.basename(shell) === 'fish';
+const gitPathFor = (shell, environment) => (environment && environment.ENGELBART_GIT_BIN ? (isFish(shell) ? FISH_GIT_PATH : POSIX_GIT_PATH) : '');
+
+/**
+ * How `command` runs in the person's login shell, the PATH the terminal has (an app opened from Finder has none
+ * worth using). `environment`: what the shell will be started with; ENGELBART_GIT_BIN in it goes first on PATH.
+ */
+function loginShellArgs(shell, command, environment = {}) {
+  const full = `${gitPathFor(shell, environment)}${command}`;
+  return isFish(shell) ? ['--login', '--interactive', '--command', full] : ['-ilc', full];
+}
+
 function isTransientEnvironmentKey(key, value) {
   return TRANSIENT_KEYS.has(key)
     || key.startsWith('ELECTRON_')
@@ -120,15 +138,11 @@ function validateCreateRequest(request) {
   return { provider, cwd: path.resolve(cwd), cols, rows };
 }
 
-function shellArguments(shell, provider) {
-  const shellName = path.basename(shell);
+function shellArguments(shell, provider, environment = {}) {
   if (provider === 'shell') {
-    return shellName === 'fish' ? ['--login', '--interactive'] : ['-il'];
+    return isFish(shell) ? ['--login', '--interactive'] : ['-il']; // zsh's own startup files put Engelbart's Git first (../shell-rc.cjs)
   }
-  if (shellName === 'fish') {
-    return ['--login', '--interactive', '--command', FISH_PROVIDER_SCRIPTS[provider]];
-  }
-  return ['-ilc', ZSH_PROVIDER_SCRIPTS[provider]];
+  return loginShellArgs(shell, (isFish(shell) ? FISH_PROVIDER_SCRIPTS : ZSH_PROVIDER_SCRIPTS)[provider], environment);
 }
 
 function createLaunchSpec(request, sourceEnvironment = process.env) {
@@ -139,7 +153,7 @@ function createLaunchSpec(request, sourceEnvironment = process.env) {
   environment.TERMINAL_USER_SHELL = shell;
   return {
     file: shell,
-    args: shellArguments(shell, validated.provider),
+    args: shellArguments(shell, validated.provider, environment),
     cwd: validated.cwd,
     cols: validated.cols,
     rows: validated.rows,
@@ -151,6 +165,7 @@ function createLaunchSpec(request, sourceEnvironment = process.env) {
 module.exports = {
   PROVIDERS,
   createLaunchSpec,
+  loginShellArgs,
   resolveShell,
   sanitizeEnvironment,
   validateCreateRequest,

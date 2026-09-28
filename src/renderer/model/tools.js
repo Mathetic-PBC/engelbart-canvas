@@ -45,8 +45,8 @@ export function rowOf(tool) {
   if (busy && busy.action === 'sign-in') return { ...row, state: 'Finish signing in in your browser', tone: 'busy', action: 'cancel', page: busy.url || null };
   const version = tool.version || '';
   switch (tool.status) {
-    case 'ready':
-      return { ...row, state: version ? `${version}${tool.untested ? ' · untested' : ''}` : 'Installed', tone: 'ok', detail: version ? null : tool.error };
+    case 'ready': // `bundled`: the Git that came with Engelbart, standing in for a Mac without one
+      return { ...row, state: version ? `${version}${tool.untested ? ' · untested' : ''}${tool.source === 'bundled' ? ' · built in' : ''}` : 'Installed', tone: 'ok', detail: version ? null : tool.error };
     case 'signed-out':
       return { ...row, state: 'Not signed in', tone: 'warn', action: 'sign-in', detail: tool.error };
     case 'missing':

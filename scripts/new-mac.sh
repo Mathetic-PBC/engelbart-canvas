@@ -8,7 +8,8 @@
 # Its Engelbart home is ~/.engelbart/test/.new-mac/root (not ~/.engelbart), and its Electron profile (window state,
 # browser cookies, remembered sidebar folds) is ~/.engelbart/test/.new-mac/electron. Both are wiped at every start, so
 # each run is a first launch. Your home directory is still yours: file pickers see it, and "Create a folder for me"
-# makes ~/<project> there. Git, Claude Code and Codex look missing and their installs are pretend (nothing is written
+# makes ~/<project> there. Git is the one that comes with Engelbart (as in the app people download, on a Mac without
+# Apple's developer tools), Claude Code and Codex look missing, and their installs are pretend (nothing is written
 # to any config.json); @bart and Build cannot run in the copy. There is no test mode in it, as in the app people
 # download (ENGELBART_TEST_MODE=off, src/main/developer.cjs). Close it like any window (⌘Q in it).
 set -eu
@@ -17,7 +18,7 @@ DEMO="$HOME/.engelbart/test/.new-mac"
 BIN="$PWD/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"
 LOG="$HOME/Library/Logs/Engelbart-new-mac.log"
 BUILD=1
-FAKE='{"git":"missing","claude":"missing","codex":"missing"}'
+FAKE='{"git":"bundled","claude":"missing","codex":"missing"}'
 for arg in "$@"; do
   case "$arg" in
     --no-build) BUILD=0 ;;

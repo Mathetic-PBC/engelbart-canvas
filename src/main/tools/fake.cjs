@@ -3,7 +3,8 @@
 // Scripted runs only (ENGELBART_TOOLS_FAKE): a pretend machine, so the setup dialog can be driven
 // without touching real installs. The spec names each tool's state:
 //   {"git":"missing","claude":"2.1.300","codex":"0.150.0 signed-out"}
-// "missing", "broken", or a version optionally followed by " signed-out". Installing takes `delayMs`
+// "missing", "broken", or a version optionally followed by " signed-out"; for git also "bundled" (the Git that
+// came with Engelbart, standing in: ./bundled-git.cjs). Installing takes `delayMs`
 // and gives the tool its minimum version; updating does the same; signing in takes `delayMs` too.
 // `failInstall` names tools whose install fails with a network error.
 
@@ -17,6 +18,7 @@ function parseSpec(value) {
   for (const name of TOOL_NAMES) {
     const text = String(input[name] || (name === 'git' ? '2.50.1' : `${REQUIREMENTS[name].minimum}`)).trim();
     if (text === 'missing') state[name] = { present: false };
+    else if (text === 'bundled' && name === 'git') state[name] = { present: true, bundled: true, version: '2.53.0' };
     else if (text === 'broken') state[name] = { present: true, broken: true };
     else { const [version, flag] = text.split(/\s+/); state[name] = { present: true, version, signedIn: flag !== 'signed-out' }; }
   }
@@ -25,7 +27,7 @@ function parseSpec(value) {
 
 function createFakeTools(spec, { delayMs = 2500, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), now = () => new Date() } = {}) {
   const { state, failInstall } = parseSpec(spec);
-  const fakePath = (name) => (name === 'git' ? '/usr/bin/git' : `/Users/fake/.local/bin/${name}`);
+  const fakePath = (name) => (name === 'git' ? (state.git.bundled ? '/Users/fake/Applications/Engelbart.app/Contents/Resources/git/engelbart-bin/git' : '/usr/bin/git') : `/Users/fake/.local/bin/${name}`);
 
   async function detect(only = TOOL_NAMES) {
     await sleep(Math.min(400, delayMs));
@@ -36,7 +38,7 @@ function createFakeTools(spec, { delayMs = 2500, sleep = (ms) => new Promise((re
         ? observed(name, {})
         : tool.broken
           ? observed(name, { file: fakePath(name), onPath: true, source: 'other', ran: false, error: `${REQUIREMENTS[name].name} did not start: exit status 1` })
-          : observed(name, { file: fakePath(name), onPath: true, source: name === 'git' ? 'apple' : 'native', ran: true, version: tool.version, signedIn: name === 'git' ? null : tool.signedIn });
+          : observed(name, { file: fakePath(name), onPath: !tool.bundled, source: name === 'git' ? (tool.bundled ? 'bundled' : 'apple') : 'native', ran: true, version: tool.version, signedIn: name === 'git' ? null : tool.signedIn });
       out[name] = { ...found, checkedAt: now().toISOString() };
     }
     return out;

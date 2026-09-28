@@ -7,6 +7,8 @@
 // its version; Claude Code and Codex are asked whether they are signed in, and whether the person turned
 // their own updater off. On macOS /usr/bin/git is Apple's stub: it is only run once `xcode-select -p`
 // names a developer folder that holds git, because otherwise running it opens Apple's installer unasked.
+// When the person's own Git is missing, cannot run or is too old, the Git that came with Engelbart stands
+// in (2026-09-28; ./bundled-git.cjs), recorded with the source `bundled`.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -181,7 +183,8 @@ function observed(name, { file = null, onPath = null, source = null, version = n
   return out;
 }
 
-async function detectGit(runner, candidates) {
+/** The person's own Git: the first on the login shell's PATH (Apple's stub read through, never run bare). */
+async function detectOwnGit(runner, candidates) {
   const first = candidates[0] || null;
   if (!first) return observed('git', {});
   if (realPath(first) !== APPLE_GIT_STUB) {
@@ -203,6 +206,15 @@ async function detectGit(runner, candidates) {
   return observed('git', { file: first, onPath: true, source: 'apple', ...read });
 }
 
+/** Their own Git when it works; else Engelbart's (`bundled`: its launcher), unless that cannot run either. `preferBundled`: tests of the stand-in on a Mac that has Git. */
+async function detectGit(runner, candidates, { bundled = null, preferBundled = false } = {}) {
+  const own = preferBundled && bundled ? observed('git', {}) : await detectOwnGit(runner, candidates);
+  if (!bundled || own.status === 'ready') return own;
+  const read = await readVersion(runner, 'git', bundled, { direct: true });
+  if (!read.ran && own.installed) return own;
+  return observed('git', { file: bundled, onPath: false, source: 'bundled', ...read });
+}
+
 async function detectAgent(runner, name, candidates, { env, home, systemBins }) {
   let file = candidates[0] || null;
   let onPath = !!file;
@@ -222,15 +234,16 @@ async function detectAgent(runner, name, candidates, { env, home, systemBins }) 
 /**
  * Looks for all three, or only the ones named. → { git?, claude?, codex? } (each the observed half of a
  * record), `aliases` (names the shell defines as an alias or function) and `lookupError` when the login
- * shell could not be asked (then only the installers' folders are).
+ * shell could not be asked (then only the installers' folders are). `bundledGit`: the launcher of the Git
+ * that came with Engelbart (./bundled-git.cjs), or null.
  */
-async function detectTools({ runner, only = ['git', 'claude', 'codex'], home = os.homedir(), systemBins = SYSTEM_BINS, now = () => new Date() }) {
+async function detectTools({ runner, only = ['git', 'claude', 'codex'], home = os.homedir(), systemBins = SYSTEM_BINS, now = () => new Date(), bundledGit = null, preferBundledGit = false }) {
   const lookup = await runner.shell(lookupCommand(runner.fish), { timeout: LOOKUP_TIMEOUT_MS });
   const { paths, aliases, env } = parseLookup(lookup.stdout);
   const lookupError = lookup.marked ? null : `The login shell (${runner.shellPath}) did not answer${lookup.timedOut ? ` within ${LOOKUP_TIMEOUT_MS / 1000} seconds` : ''}.`;
   const checkedAt = now().toISOString();
   const jobs = only.map(async (name) => {
-    const found = name === 'git' ? await detectGit(runner, paths.git) : await detectAgent(runner, name, paths[name], { env, home, systemBins });
+    const found = name === 'git' ? await detectGit(runner, paths.git, { bundled: bundledGit, preferBundled: preferBundledGit }) : await detectAgent(runner, name, paths[name], { env, home, systemBins });
     return [name, { ...found, error: found.error || (found.status === 'missing' ? lookupError : null), checkedAt }];
   });
   return { ...Object.fromEntries(await Promise.all(jobs)), aliases, lookupError };

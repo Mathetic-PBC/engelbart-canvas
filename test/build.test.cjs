@@ -15,7 +15,7 @@ const { ensureHome } = require('../src/main/store/home.cjs');
 const projects = require('../src/main/store/projects.cjs');
 const archive = require('../src/main/store/archive.cjs');
 const { createGit } = require('../src/main/build/git.cjs');
-const { createBuilds } = require('../src/main/build/manager.cjs');
+const { createBuilds, createShell } = require('../src/main/build/manager.cjs');
 const store = require('../src/main/build/store.cjs');
 const { readEnding, loadBuildPrompt, BUILD_SYSTEM_PROMPT } = require('../src/main/build/prompt.cjs');
 const { buildPolicy, claudeSettings } = require('../src/main/build/policy.cjs');
@@ -473,6 +473,33 @@ test('a post-it added to a workspace: a Build of it whose task is the post-it, p
 });
 
 /* --------------------------------------------------------------------- the runner */
+
+test('while Engelbart\'s own Git stands in, a Build\'s agent, setup and checks find it first on PATH (2026-09-28)', async () => {
+  const authFile = path.join(homeDir, 'auth-git.json');
+  fs.writeFileSync(authFile, JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'x' } }));
+  const gitBin = '/Applications/Engelbart.app/Contents/Resources/git/engelbart-bin';
+  const tools = { binaryFor: () => null, environment: () => ({ ENGELBART_GIT_BIN: gitBin }) };
+  const calls = [];
+  const run = (shell, args, options, callback) => {
+    calls.push({ command: args[args.length - 1], env: options.env });
+    callback(null, `${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'done' })}\n`, '');
+    return null;
+  };
+  const environment = { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir };
+  const worktree = path.join(homeDir, 'wt-git');
+  fs.mkdirSync(worktree, { recursive: true });
+  const policy = buildPolicy({ project: { dir: path.join(ctx.dataRoot, 'p') }, dataRoot: ctx.dataRoot });
+  const runner = createRunner({ environment, runDirectory: path.join(homeDir, 'build-runs-git'), codexHome: path.join(homeDir, 'codex-home-git'), codexAuthFile: authFile, run, tools });
+  await runner.turn({ task: { id: 'abcdef0124', provider: 'anthropic', modelId: 'opus', effort: 'high', worktree }, message: 'do it', system: 'SYSTEM', policy });
+  assert.match(calls[0].command, /^PATH="\$ENGELBART_GIT_BIN:\$PATH"; exec claude -p /);
+  assert.equal(calls[0].env.ENGELBART_GIT_BIN, gitBin);
+  const shell = createShell({ environment, run, tools });
+  await shell('npm test', worktree);
+  assert.equal(calls[1].command, 'PATH="$ENGELBART_GIT_BIN:$PATH"; npm test');
+  assert.deepEqual([calls[1].env.ENGELBART_GIT_BIN, calls[1].env.CI], [gitBin, '1']);
+  await createShell({ environment, run })('npm test', worktree);
+  assert.equal(calls[2].command, 'npm test', 'without the tool check (or with the person\'s own Git) the command is left as it is');
+});
 
 test('the real runner: command lines for both CLIs, the worktree as the working directory, no API key (CLIs stubbed)', async () => {
   const authFile = path.join(homeDir, 'auth.json');

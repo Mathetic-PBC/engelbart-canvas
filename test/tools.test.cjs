@@ -119,6 +119,37 @@ test('detectTools: Apple git is read from the developer folder, and an unaccepte
   assert.match(license.git.error, /license/);
 });
 
+test('detectTools: with no Git of the person\'s own, the one that came with Engelbart stands in, and Apple\'s stub is never run (2026-09-28)', async () => {
+  const home = temp();
+  const bundled = '/Applications/Engelbart.app/Contents/Resources/git/engelbart-bin/git';
+  const exec = { '/usr/bin/xcode-select -p': { code: 2 }, [`${bundled} --version`]: { stdout: 'git version 2.53.0\n' } };
+  const runner = fakeRunner({ lookup: '@tool git\n/usr/bin/git\n@tool claude\n@tool codex\n', exec });
+  const found = await detectTools({ runner, only: ['git'], home, bundledGit: bundled });
+  assert.deepEqual([found.git.status, found.git.installed, found.git.source, found.git.path, found.git.version, found.git.onPath], ['ready', true, 'bundled', bundled, '2.53.0', false]);
+  assert.ok(!runner.calls.some((call) => call.kind === 'exec' && call.file === '/usr/bin/git'), 'the stub was not run');
+});
+
+test('detectTools: the person\'s own Git is used when it works; Engelbart\'s only when theirs is broken or too old', async () => {
+  const home = temp();
+  const bundled = '/Applications/Engelbart.app/Contents/Resources/git/engelbart-bin/git';
+  const lookup = '@tool git\n/opt/homebrew/bin/git\n@tool claude\n@tool codex\n';
+  const answers = (own) => ({ '/opt/homebrew/bin/git --version': own, [`${bundled} --version`]: { stdout: 'git version 2.53.0' } });
+  const theirs = fakeRunner({ lookup, exec: answers({ stdout: 'git version 2.51.0' }) });
+  const works = await detectTools({ runner: theirs, only: ['git'], home, bundledGit: bundled });
+  assert.deepEqual([works.git.source, works.git.path, works.git.version], ['homebrew', '/opt/homebrew/bin/git', '2.51.0']);
+  assert.ok(!theirs.calls.some((call) => call.file === bundled), 'Engelbart\'s is not even asked');
+  const old = await detectTools({ runner: fakeRunner({ lookup, exec: answers({ stdout: 'git version 2.20.1' }) }), only: ['git'], home, bundledGit: bundled });
+  assert.deepEqual([old.git.status, old.git.source], ['ready', 'bundled'], 'Build needs 2.30');
+  const broken = await detectTools({ runner: fakeRunner({ lookup, exec: answers({ code: 1, stderr: 'dyld: Library not loaded' }) }), only: ['git'], home, bundledGit: bundled });
+  assert.deepEqual([broken.git.status, broken.git.source], ['ready', 'bundled']);
+  const forced = await detectTools({ runner: fakeRunner({ lookup, exec: answers({ stdout: 'git version 2.51.0' }) }), only: ['git'], home, bundledGit: bundled, preferBundledGit: true });
+  assert.equal(forced.git.source, 'bundled', 'ENGELBART_GIT=bundled');
+  const neither = await detectTools({ runner: fakeRunner({ lookup: '@tool git\n', exec: { [`${bundled} --version`]: { code: 126, stderr: 'bad CPU type in executable' } } }), only: ['git'], home, bundledGit: bundled });
+  assert.deepEqual([neither.git.status, neither.git.source], ['failed', 'bundled'], 'the dialog then offers Apple\'s installer through Try again');
+  const brokenBoth = await detectTools({ runner: fakeRunner({ lookup, exec: { '/opt/homebrew/bin/git --version': { code: 1 }, [`${bundled} --version`]: { code: 126 } } }), only: ['git'], home, bundledGit: bundled });
+  assert.deepEqual([brokenBoth.git.status, brokenBoth.git.path], ['failed', '/opt/homebrew/bin/git'], 'their own is reported when neither runs');
+});
+
 test('detectTools: an agent off the login PATH is found where its installer puts it, run by full path, and asked about sign-in', async () => {
   const home = temp();
   fs.mkdirSync(path.join(home, '.local', 'bin'), { recursive: true });
@@ -282,6 +313,7 @@ function managerFor(spec, options = {}) {
     signInProcess: fake.signInProcess,
     onChange: (snapshot) => seen.push(snapshot),
     ...(options.now ? { now: options.now } : {}),
+    ...(options.installAtLaunch ? { installAtLaunch: options.installAtLaunch } : {}),
   });
   return { tools, fake, root, seen };
 }
@@ -421,6 +453,54 @@ test('manager: the terminal\'s menu keeps its old shape, and a program off PATH 
   const menu = await tools.providers('/bin/zsh');
   assert.deepEqual(menu.map((item) => [item.id, item.available]), [['shell', true], ['claude', true], ['codex', false]]);
   assert.equal(tools.binaryFor('claude'), null, 'on PATH: its name is enough');
+});
+
+test('manager: while Engelbart\'s own Git stands in, everything it starts is given its folder; the record survives config.json (2026-09-28)', async () => {
+  const { tools, root } = managerFor({ git: 'bundled' });
+  assert.deepEqual(tools.environment(), {}, 'nothing before a check');
+  await tools.start();
+  assert.deepEqual([readConfig(root).tools.git.source, readConfig(root).tools.git.status], ['bundled', 'ready']);
+  assert.deepEqual(tools.environment(), {}, 'the launcher named by the record is not on this disk (the app moved): nothing, until the next check');
+  const launcher = path.join(temp(), 'engelbart-bin', 'git');
+  fs.mkdirSync(path.dirname(launcher));
+  fs.writeFileSync(launcher, '#!/bin/sh\n', { mode: 0o755 });
+  const byDisk = createTools({ readTools: () => readConfig(root).tools, writeTools: (value) => writeTools(root, value), detect: async () => ({ git: { ...observed('git', { file: launcher, onPath: false, source: 'bundled', ran: true, version: '2.53.0' }), checkedAt: new Date().toISOString() } }), actions: {} });
+  await byDisk.check(['git']);
+  assert.deepEqual(byDisk.environment(), { ENGELBART_GIT_BIN: path.dirname(launcher) });
+  const own = managerFor({ git: '2.50.1' });
+  await own.tools.start();
+  assert.deepEqual(own.tools.environment(), {}, 'the person\'s own Git: PATH is left as it is');
+});
+
+test('manager: on a Mac with neither agent, Claude Code is installed at launch without asking; never over a skip, beside Codex, or on a check that could not ask the shell', async () => {
+  const fresh = managerFor({ claude: 'missing', codex: 'missing' }, { installAtLaunch: ['claude'] });
+  await fresh.tools.start();
+  for (let i = 0; i < 20 && fresh.tools.snapshot().tools.claude.status !== 'signed-out'; i += 1) await tick();
+  const written = readConfig(fresh.root).tools;
+  assert.deepEqual([written.claude.installed, written.claude.status, written.codex.installed], [true, 'signed-out', false], 'Claude Code installed, waiting for its sign-in; Codex left to the person');
+  assert.ok(fresh.seen.some((snapshot) => snapshot.checked && snapshot.tools.claude.busy && snapshot.tools.claude.busy.action === 'install'), 'the dialog saw it installing');
+
+  const skipped = managerFor({ claude: 'missing', codex: 'missing' }, { installAtLaunch: ['claude'] });
+  writeTools(skipped.root, { ...readConfig(skipped.root).tools, claude: { skip: true } });
+  await skipped.tools.start();
+  await tick();
+  assert.equal(readConfig(skipped.root).tools.claude.installed, false, 'skipped');
+
+  const hasCodex = managerFor({ claude: 'missing', codex: '0.155.1' }, { installAtLaunch: ['claude'] });
+  await hasCodex.tools.start();
+  await tick();
+  assert.equal(readConfig(hasCodex.root).tools.claude.installed, false, 'an agent is already there');
+
+  const notAsked = managerFor({ claude: 'missing', codex: 'missing' });
+  await notAsked.tools.start();
+  await tick();
+  assert.equal(readConfig(notAsked.root).tools.claude.installed, false, 'only when asked for (index.cjs does)');
+
+  const { root } = ensureHome(temp());
+  const blind = createTools({ readTools: () => readConfig(root).tools, writeTools: (value) => writeTools(root, value), installAtLaunch: ['claude'], actions: { installAgent: async () => { throw new Error('must not install'); } }, detect: async (only) => ({ ...Object.fromEntries(only.map((name) => [name, observed(name, {})])), lookupError: 'The login shell (/bin/zsh) did not answer.' }) });
+  await blind.start();
+  await tick();
+  assert.equal(blind.snapshot().tools.claude.busy, null, 'the shell did not answer: missing may only mean unseen');
 });
 
 test('inspectRepository reads every case Build must handle straight from .git', () => {

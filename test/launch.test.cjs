@@ -6,6 +6,7 @@ const path = require('node:path');
 
 const {
   createLaunchSpec,
+  loginShellArgs,
   sanitizeEnvironment,
   validateCreateRequest,
 } = require('../src/main/terminal/launch.cjs');
@@ -150,6 +151,18 @@ test('createLaunchSpec uses login-interactive shell args and fixed provider comm
 
   const codex = createLaunchSpec({ provider: 'codex', cwd, cols: 80, rows: 24 }, environment);
   assert.deepEqual(codex.args.slice(0, 2), ['-ilc', 'unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID CLAUDE_AGENT_ID CLAUDE_PARENT_SESSION_ID CODEX_SESSION_ID CODEX_THREAD_ID CODEX_CI CODEX_VERSION NO_COLOR; codex; provider_status=$?; printf "\\r\\n[Codex exited with status %d]\\r\\n" "$provider_status"; exec "$TERMINAL_USER_SHELL" -il']);
+});
+
+test('an agent started from the terminal gets Engelbart\'s own Git first on PATH while it stands in; bash and fish too (2026-09-28)', (t) => {
+  const cwd = temporaryDirectory(t);
+  const environment = { HOME: cwd, SHELL: '/bin/zsh', PATH: '/usr/bin:/bin', ENGELBART_GIT_BIN: '/Applications/Engelbart.app/Contents/Resources/git/engelbart-bin' };
+  const claude = createLaunchSpec({ provider: 'claude', cwd, cols: 80, rows: 24 }, environment);
+  assert.equal(claude.args[0], '-ilc');
+  assert.ok(claude.args[1].startsWith('PATH="$ENGELBART_GIT_BIN:$PATH"; unset CLAUDECODE '), claude.args[1]);
+  assert.equal(claude.env.ENGELBART_GIT_BIN, environment.ENGELBART_GIT_BIN);
+  assert.deepEqual(createLaunchSpec({ provider: 'shell', cwd, cols: 80, rows: 24 }, environment).args, ['-il'], 'a plain zsh gets it from its startup files');
+  assert.deepEqual(loginShellArgs('/usr/local/bin/fish', 'codex', environment), ['--login', '--interactive', '--command', 'set -gx PATH $ENGELBART_GIT_BIN $PATH; codex']);
+  assert.deepEqual(loginShellArgs('/bin/bash', 'codex', environment), ['-ilc', 'PATH="$ENGELBART_GIT_BIN:$PATH"; codex']);
 });
 
 test('normalizeSettings clamps corrupt persisted values to app-owned defaults', (t) => {

@@ -25,7 +25,7 @@ const { inspectRepository } = require('../tools/repository.cjs');
 const { resolveBuildChoice } = require('../bart/models.cjs');
 const { TOOL_OF } = require('../tools/requirements.cjs');
 const { createFeed } = require('../bart/activity.cjs');
-const { resolveShell, sanitizeEnvironment } = require('../terminal/launch.cjs');
+const { resolveShell, sanitizeEnvironment, loginShellArgs } = require('../terminal/launch.cjs');
 const { scrubAgentSession } = require('../shell-rc.cjs');
 const store = require('./store.cjs');
 const { freezeContext, replyMessage, freshMessage } = require('./context.cjs');
@@ -50,19 +50,19 @@ const postItOf = (task, context) => {
   return found ? found[1] : task.title;
 };
 
-/** A shell command in the login shell (the PATH the terminal has), in `cwd`. → { ok, output } */
-function createShell({ environment = process.env, run = execFile } = {}) {
+/** A shell command in the login shell (the PATH the terminal has), in `cwd`. `tools`: Engelbart's own Git goes first on PATH when it stands in. → { ok, output } */
+function createShell({ environment = process.env, run = execFile, tools = null } = {}) {
   const shell = resolveShell(environment);
-  const args = (command) => (path.basename(shell) === 'fish' ? ['--login', '--interactive', '--command', command] : ['-ilc', command]);
   return (command, cwd, { env = {}, timeoutMs = SHELL_MS, signal } = {}) => new Promise((resolve) => {
     const base = sanitizeEnvironment(scrubAgentSession(environment));
-    run(shell, args(command), { cwd, env: { ...base, CI: '1', ...env }, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024, signal }, (error, stdout, stderr) => {
+    const full = { ...base, CI: '1', ...(tools && tools.environment ? tools.environment() : {}), ...env };
+    run(shell, loginShellArgs(shell, command, full), { cwd, env: full, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024, signal }, (error, stdout, stderr) => {
       resolve({ ok: !error, output: tail(`${stdout || ''}${stderr || ''}`), timedOut: !!(error && error.killed) });
     });
   });
 }
 
-function createBuilds({ git, runner, readModels, notify = () => {}, tools = null, gitReady = () => true, runShell = createShell(), copyTree = null, limits = LIMITS, turnMs = TURN_MS, now = () => new Date() }) {
+function createBuilds({ git, runner, readModels, notify = () => {}, tools = null, gitReady = () => true, runShell = createShell({ tools }), copyTree = null, limits = LIMITS, turnMs = TURN_MS, now = () => new Date() }) {
   const live = new Map(); // id → { controller, stopping: null | 'stop' | 'quit', done: Promise }
   const active = { build: 0, quick: 0 };
   const waiting = { build: [], quick: [] };

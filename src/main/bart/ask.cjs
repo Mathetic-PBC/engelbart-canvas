@@ -34,7 +34,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { randomUUID, createHash } = require('node:crypto');
-const { resolveShell, sanitizeEnvironment } = require('../terminal/launch.cjs');
+const { resolveShell, sanitizeEnvironment, loginShellArgs } = require('../terminal/launch.cjs');
 const { scrubAgentSession } = require('../shell-rc.cjs');
 const { NOT_THE_SUBSCRIPTION, prepareCodexHome, lastResultLine } = require('../context/summarizer.cjs');
 const { BART_SYSTEM_PROMPT } = require('./system-prompt.cjs');
@@ -167,16 +167,15 @@ function createBart({ readModels, environment = process.env, runDirectory = path
   // The CLI by name, or by the full path the tool check found it at when PATH misses it (then through the environment, never quoted).
   const program = (name) => (tools && tools.binaryFor(name) ? `"$ENGELBART_${name.toUpperCase()}_BIN"` : name);
   const programEnv = (name) => (tools && tools.binaryFor(name) ? { [`ENGELBART_${name.toUpperCase()}_BIN`]: tools.binaryFor(name) } : {});
-  const shellArgs = (command) => (path.basename(shell) === 'fish' ? ['--login', '--interactive', '--command', command] : ['-ilc', command]);
   const running = new Map(); // askId → AbortController
   const childEnvironment = (extra) => {
     const base = sanitizeEnvironment(scrubAgentSession(environment));
     for (const key of NOT_THE_SUBSCRIPTION) delete base[key];
-    return { ...base, ...extra };
+    return { ...base, ...(tools && tools.environment ? tools.environment() : {}), ...extra }; // Engelbart's own Git, when it stands in (../tools/bundled-git.cjs)
   };
   // execFile still collects stdout for the result; the same stream is also read line by line as it arrives.
   const execute = (command, cwd, env, signal, onEvent) => new Promise((resolve) => {
-    const child = run(shell, shellArgs(command), { cwd, env, timeout: STEP_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024, signal }, (error, out) => resolve({ stdout: out, failure: error }));
+    const child = run(shell, loginShellArgs(shell, command, env), { cwd, env, timeout: STEP_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024, signal }, (error, out) => resolve({ stdout: out, failure: error }));
     if (onEvent && child && child.stdout) child.stdout.on('data', eventReader(onEvent));
   });
   const notFound = (failure) => failure && (failure.code === 127 || failure.code === 'ENOENT');

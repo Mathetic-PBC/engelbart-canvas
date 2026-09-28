@@ -11,7 +11,8 @@ const { isVersion } = require('./version.cjs');
 
 const STATUSES = Object.freeze(['unknown', 'checking', 'ready', 'missing', 'outdated', 'incompatible', 'signed-out', 'installing', 'updating', 'signing-in', 'failed']);
 // Where a program came from, which decides how it is updated and whether an update can be undone.
-const SOURCES = Object.freeze(['apple', 'homebrew', 'native', 'standalone', 'npm', 'bun', 'other']);
+// `bundled`: the Git that came with Engelbart (./bundled-git.cjs), updated with the app.
+const SOURCES = Object.freeze(['apple', 'homebrew', 'bundled', 'native', 'standalone', 'npm', 'bun', 'other']);
 const UPDATES = Object.freeze(['auto', 'ask']);
 const MAX_ERROR = 300;
 

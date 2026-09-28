@@ -1,12 +1,13 @@
 'use strict';
 
-// Installing and updating what Engelbart needs (2026-09-23; design D9–D13). Only ever started by the
-// person (Install, Update) or, for an update that brings a tool up to its minimum, by the launch check
-// when they allow it (./manager.cjs decides which).
+// Installing and updating what Engelbart needs (2026-09-23; design D9–D13). Started by the person (Install,
+// Update); by the launch check for an update that brings a tool up to its minimum, when they allow it; and,
+// on a Mac with neither agent, by the first launch for Claude Code (2026-09-28; ./manager.cjs decides which).
 //
 //   Git          Apple's Command Line Tools: `xcode-select --install` opens Apple's own dialog, which is
 //                the permission request; then this waits for the tools to arrive, and notices when the
-//                installer is closed without finishing.
+//                installer is closed without finishing. Only when the Git that comes with Engelbart
+//                (./bundled-git.cjs) is missing too: it stands in for a Mac without one.
 //   Claude Code  https://claude.ai/install.sh      } each vendor's installer: SHA-256 checked, into the
 //   Codex        https://chatgpt.com/codex/install.sh } home folder, no admin password. Downloaded to a
 //                file first, so a failed download is not mistaken for a finished install.
@@ -130,6 +131,7 @@ function createActions({ runner, home = os.homedir(), tmpDir = os.tmpdir(), slee
   }
 
   async function updateGit(source) {
+    if (source === 'bundled') return { ok: false, kind: 'other', error: 'This Git came with Engelbart and is updated with it.' };
     if (source !== 'homebrew') return { ok: false, kind: 'other', error: 'Apple’s Git is updated by macOS: System Settings › General › Software Update.' };
     const out = await runner.shell('brew upgrade git < /dev/null 2>&1', { timeout: INSTALL_TIMEOUT_MS });
     if (out.code !== 0) return { ok: false, ...classifyFailure(`${out.stdout}\n${out.stderr}`, out.code) };
