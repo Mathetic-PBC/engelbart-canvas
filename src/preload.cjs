@@ -69,6 +69,13 @@ const engelbartAPI = Object.freeze({
   listProjects: invoke('list-projects'),
   createProject: invoke('create-project'),
   createProjectWithWelcome: invoke('create-project-with-welcome'),
+  // Onboarding (src/main/store/onboarding.cjs).
+  instructions: invoke('instructions'),
+  setInstructions: invoke('set-instructions'),
+  freeFolder: invoke('free-folder'),
+  checkFolder: invoke('check-folder'),
+  startProject: invoke('start-project'),
+  discardLibraryItem: invoke('discard-library-item'),
   renameProject: invoke('rename-project'),
   loadProject: invoke('load-project'),
   setProjectDirectory: invoke('set-project-directory'),

@@ -5,7 +5,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createStore } = require('../src/main/ipc.cjs');
+const { createStore, registerEngelbartIpc } = require('../src/main/ipc.cjs');
+const { readConfig } = require('../src/main/store/home.cjs');
 const projects = require('../src/main/store/projects.cjs');
 const db = require('../src/main/store/db.cjs');
 
@@ -19,8 +20,9 @@ test.after(async () => {
 });
 
 test('test mode and normal mode use different roots, libraries and project lists', async () => {
-  const store = createStore({ homeDir, fixturesDir: fixtures });
-  assert.equal(store.config().mode, 'test');
+  const store = createStore({ homeDir, fixturesDir: fixtures, testMode: true });
+  assert.equal(store.config().mode, 'normal', 'a new install starts on ~/.engelbart');
+  assert.equal((await store.setTestMode(true)).mode, 'test');
   const testCtx = await store.context();
   assert.equal(testCtx.dataRoot, store.layout.testRoot);
   assert.equal((await testCtx.libraryDb.list()).length, 4, 'the test library is seeded');
@@ -54,6 +56,58 @@ test('test mode and normal mode use different roots, libraries and project lists
   assert.deepEqual(await projects.listProjects(fresh), []);
   assert.equal((await fresh.libraryDb.list()).length, 4, 'reseeded after the reset');
   assert.ok(fs.existsSync(path.join(store.layout.root, 'real', 'project.json')), 'the normal root is untouched by a test reset');
+
+  // "Start as a new user": the same wipe, and the library stays empty as a new install has it, until a plain reset.
+  await projects.createProject(fresh, { name: 'Left over' });
+  const anew = await store.resetTestData({ fresh: true });
+  assert.equal(anew.mode, 'test');
+  const empty = await store.context();
+  assert.deepEqual(await projects.listProjects(empty), []);
+  assert.equal((await empty.libraryDb.list()).length, 0, 'no sample library for a new user');
+  await store.resetTestData();
+  assert.equal((await (await store.context()).libraryDb.list()).length, 4, 'a plain reset seeds again');
+  assert.ok(fs.existsSync(path.join(store.layout.root, 'real', 'project.json')));
+  await store.close();
+});
+
+// What ships (2026-09-28): src/main/developer.cjs decides; the store and its handlers are tested here.
+test('a copy without test mode is on ~/.engelbart whatever config.json says, never makes the test root, and switches and resets nothing', async () => {
+  const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-shipped-'));
+  const first = createStore({ homeDir: fresh, fixturesDir: fixtures });
+  const ctx = await first.context();
+  assert.equal(ctx.dataRoot, first.layout.root);
+  assert.equal((await ctx.libraryDb.list()).length, 0, 'no sample library');
+  assert.ok(!fs.existsSync(first.layout.testRoot), 'no ~/.engelbart/test');
+  assert.equal(readConfig(first.layout.root).testMode, false);
+  await first.close();
+
+  // A developer's copy on the same Mac left test mode on: the shipped copy still uses ~/.engelbart, and leaves the setting.
+  const developer = createStore({ homeDir: fresh, fixturesDir: fixtures, testMode: true });
+  await developer.setTestMode(true);
+  await developer.close();
+  const store = createStore({ homeDir: fresh, fixturesDir: fixtures });
+  const config = store.config();
+  assert.deepEqual([config.testModeAvailable, config.testMode, config.mode, config.dataRoot], [false, false, 'normal', store.layout.root]);
+  assert.equal((await store.context()).dataRoot, store.layout.root);
+  await assert.rejects(() => store.setTestMode(false), /only in developer builds/);
+  await assert.rejects(() => store.resetTestData(), /only in developer builds/);
+  assert.equal(readConfig(store.layout.root).testMode, true, "the developer's copy keeps its setting");
+
+  // The renderer's calls are refused before anything is closed or a confirmation is shown.
+  const handlers = new Map();
+  const calls = [];
+  registerEngelbartIpc({
+    ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
+    trustedHandler: (handler) => (_event, ...args) => handler(...args),
+    store,
+    notify: () => {},
+    confirmReset: async () => { calls.push('confirm'); return true; },
+    beforeContextChange: async () => { calls.push('before'); },
+  });
+  await assert.rejects(() => handlers.get('engelbart:set-test-mode')({}, true), /only in developer builds/);
+  await assert.rejects(() => handlers.get('engelbart:reset-test-data')({}), /only in developer builds/);
+  assert.deepEqual(calls, []);
+  assert.equal((await handlers.get('engelbart:config')({})).testModeAvailable, false);
   await store.close();
 });
 
@@ -73,7 +127,6 @@ test('an installed library opens already re-categorized: the first read sees the
   fs.mkdirSync(pdfs);
   for (const name of ['attention.pdf', 'receipt.pdf']) fs.writeFileSync(path.join(pdfs, name), 'x');
   const store = createStore({ homeDir: installed, fixturesDir: fixtures, inspectPdf: async (file) => (/attention/.test(file) ? ['paper'] : []) });
-  await store.setTestMode(false);
   await store.close();
   const old = new PGlite(path.join(store.layout.root, 'library.pglite'));
   await old.waitReady;

@@ -1,7 +1,7 @@
 'use strict';
 
 // The Engelbart home: ~/.engelbart. Everything the app writes lives under it.
-// In test mode the data root is ~/.engelbart/test (spec §2 #1–2).
+// In test mode the data root is ~/.engelbart/test (spec §2 #1–2); only a developer's copy has test mode (../developer.cjs).
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -11,15 +11,21 @@ const { normalizeTools } = require('../tools/record.cjs');
 const DIR_MODE = 0o700;
 const MAX_NAME = 120;
 
-function ensureHome(homeDir) {
+// `rootDir` (ENGELBART_ROOT_DIR, `npm run new-mac` only) puts the Engelbart home somewhere else while the person's home
+// directory stays theirs: a second copy of the app runs beside the first on data of its own.
+// `test`: false in a copy without test mode, which never makes ~/.engelbart/test (one already there is left alone).
+function ensureHome(homeDir, rootDir = null, { test = true } = {}) {
   if (typeof homeDir !== 'string' || !path.isAbsolute(homeDir)) {
     throw new TypeError('homeDir must be an absolute path');
   }
-  const root = path.join(homeDir, '.engelbart');
+  if (rootDir != null && (typeof rootDir !== 'string' || !path.isAbsolute(rootDir))) throw new TypeError('rootDir must be an absolute path');
+  const root = rootDir || path.join(homeDir, '.engelbart');
   const testRoot = path.join(root, 'test');
   fs.mkdirSync(root, { recursive: true, mode: DIR_MODE });
-  fs.mkdirSync(testRoot, { recursive: true, mode: DIR_MODE });
-  fs.mkdirSync(path.join(testRoot, 'annotations'), { recursive: true, mode: DIR_MODE });
+  if (test) {
+    fs.mkdirSync(testRoot, { recursive: true, mode: DIR_MODE });
+    fs.mkdirSync(path.join(testRoot, 'annotations'), { recursive: true, mode: DIR_MODE });
+  }
   const configFile = path.join(root, 'config.json');
   // Every setting is in the file to be edited, and a default changed by a later build reaches it
   // wherever the person left that setting alone (./defaults.cjs). A file that does not parse is left
@@ -81,7 +87,8 @@ function normalizeGithub(value) {
 function normalizeConfig(value) {
   const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   return {
-    testMode: typeof input.testMode === 'boolean' ? input.testMode : true,
+    // Off by default (2026-09-28; it was on): a new install starts on ~/.engelbart. A copy without test mode ignores it.
+    testMode: typeof input.testMode === 'boolean' ? input.testMode : false,
     providers: normalizeProviders(input.providers),
     summarizer: normalizeSummarizer(input.summarizer),
     github: normalizeGithub(input.github),

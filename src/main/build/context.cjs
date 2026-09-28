@@ -11,6 +11,7 @@ const projects = require('../store/projects.cjs');
 const archive = require('../store/archive.cjs');
 const { expandMentions, expandRows, projectSource } = require('../context/expand-mentions.cjs');
 const { catalogEntries } = require('../bart/context.cjs');
+const { instructionsBlock } = require('../store/onboarding.cjs');
 
 const BUILD_LINE_RE = /^build> [a-z0-9]{6,32}$/;
 const attr = (value) => String(value).replace(/[<>"\n\r]/g, ' ').slice(0, 200);
@@ -59,6 +60,7 @@ async function freezeContext(ctx, projectId, { task, workspaceId = null, attach 
   parts.push([
     '<engelbart>',
     `project: ${project.name}`,
+    ...(project.description ? [`project description: ${project.description.replace(/\s+/g, ' ')}`] : []),
     `your working copy (make every change here): ${task.worktree}`,
     `branch: ${task.branch}, started from ${task.baseBranch || 'a detached commit'} at ${String(task.baseSha || '').slice(0, 12)}`,
     `the person's own folder (do not touch): ${task.repo}`,
@@ -66,6 +68,8 @@ async function freezeContext(ctx, projectId, { task, workspaceId = null, attach 
     `built from: ${from}`,
     '</engelbart>',
   ].join('\n'));
+  const instructions = instructionsBlock(ctx.dataRoot);
+  if (instructions) parts.push(instructions);
   parts.push(!fromPostIt
     ? '<task>\nDo what the workspace document below asks: it is the person\'s plan for this Build, usually ending with what to build now. Where it discusses options, follow what it settles on; where something it asks for is still undecided, choose sensibly and say what you chose, or ask with NEEDS YOU when the choice is theirs.\n</task>'
     : workspaceId

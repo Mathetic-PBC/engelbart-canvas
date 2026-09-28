@@ -45,6 +45,7 @@ const { createGit } = require('./build/git.cjs');
 const { createBuilds } = require('./build/manager.cjs');
 const { createRunner: createBuildRunner, createFakeRunner: createFakeBuildRunner } = require('./build/runner.cjs');
 const { EDGES: WINDOW_EDGES, resizedBounds } = require('./window-edges.cjs');
+const { hasTestMode } = require('./developer.cjs');
 
 const DIST = path.join(__dirname, '../../dist');
 const FIXTURES = path.join(__dirname, '../../fixtures');
@@ -398,19 +399,23 @@ if (!hasSingleInstanceLock) {
     // downloaded in the background with the Stage's cookies (a paper behind a sign-in comes too). ENGELBART_WEB_PDFS=off
     // disables it (scripted runs).
     let changedTimer = null;
-    const libraryChanged = () => { clearTimeout(changedTimer); changedTimer = setTimeout(() => sendToRenderer('engelbart:library-changed', {}), 400); };
+    const libraryChanged = () => { clearTimeout(changedTimer); changedTimer = setTimeout(() => sendToWindow('engelbart:library-changed', {}), 400); };
     const fetchPdf = async (url) => readPdfResponse(await electronSession.fromPartition(BROWSER_PARTITION).fetch(url, { signal: AbortSignal.timeout(120000) }));
     const afterOpen = process.env.ENGELBART_WEB_PDFS === 'off' ? null
       : (ctx) => checkWebPdfs(ctx, { fetchPdf, inspectPdf, onChange: libraryChanged, log: (line) => console.warn(`[engelbart] ${line}`) });
-    store = createStore({ homeDir, fixturesDir: FIXTURES, inspectPdf, afterOpen });
+    // Test mode only in a developer's copy: run from a checkout, or packaged by `npm run relaunch` (./developer.cjs).
+    store = createStore({ homeDir, rootDir: process.env.ENGELBART_ROOT_DIR || null, fixturesDir: FIXTURES, inspectPdf, afterOpen, testMode: hasTestMode({ packaged: app.isPackaged, distDir: DIST, env: process.env }) });
     // Git, Claude Code and Codex (src/main/tools): checked at every launch in the background and recorded in
     // config.json → tools; installed, updated and signed in to from the setup dialog. ENGELBART_TOOLS_FAKE (JSON)
     // pretends a machine and ENGELBART_TOOLS=off skips the launch check, for scripted runs only.
+    // A pretend machine keeps its records in memory: config.json keeps what the real machine has (and the choices made
+    // on it), so `npm run relaunch -- --new-mac` never leaves a fake path or a "skip" behind.
     const toolsFake = process.env.ENGELBART_TOOLS_FAKE ? createFakeTools(process.env.ENGELBART_TOOLS_FAKE) : null;
     const toolRunner = createRunner({ environment: process.env });
+    let pretendTools = {};
     tools = createTools({
-      readTools: () => home.readConfig(store.layout.root).tools,
-      writeTools: (value) => home.writeTools(store.layout.root, value),
+      readTools: () => (toolsFake ? pretendTools : home.readConfig(store.layout.root).tools),
+      writeTools: (value) => { if (toolsFake) { pretendTools = value; return null; } return home.writeTools(store.layout.root, value); },
       detect: toolsFake ? toolsFake.detect : (only) => detectTools({ runner: toolRunner, only }),
       actions: toolsFake ? toolsFake.actions : createActions({ runner: toolRunner }),
       signInProcess: toolsFake ? toolsFake.signInProcess : createSignInProcess({ pty: require('node-pty'), shell: toolRunner.shellPath }),
@@ -491,7 +496,9 @@ if (!hasSingleInstanceLock) {
         const chosen = store.config().github || {};
         return { clientId: process.env.ENGELBART_GITHUB_CLIENT_ID || chosen.clientId, appSlug: process.env.ENGELBART_GITHUB_APP_SLUG || chosen.appSlug };
       },
-      file: path.join(store.layout.root, 'github.json'),
+      // Each data root keeps its own sign-in (2026-09-28): test mode starts signed out after "Start as a new user"; the real
+      // root's file is where it always was.
+      file: () => path.join(store.config().dataRoot, 'github.json'),
       crypt: {
         available: () => safeStorage.isEncryptionAvailable(),
         encrypt: (text) => safeStorage.encryptString(text).toString('base64'),
@@ -500,7 +507,7 @@ if (!hasSingleInstanceLock) {
       openVerification: openGithubPage,
       browserAuth: () => (process.env.ENGELBART_GITHUB_CLIENT_ID || (store.config().github || {}).clientId) === GITHUB_CLIENT_ID ? githubBrowserAuth : null,
       onConnected: () => { if (mainWindow && !mainWindow.isDestroyed()) { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); } },
-      onChange: (status) => sendToRenderer('engelbart:github', status),
+      onChange: (status) => sendToWindow('engelbart:github', status),
       ...(githubWeb ? { web: githubWeb, api: process.env.ENGELBART_GITHUB_API || githubWeb } : {}),
     });
     registerEngelbartIpc({
@@ -527,22 +534,27 @@ if (!hasSingleInstanceLock) {
       tools,
       notify: sendToRenderer,
       // "Choose from disk…" in the sidebar's + menu: files and folders together, several at once (macOS allows both in one panel).
-      pickPaths: async () => {
+      // Onboarding's Papers step asks for pdfs only (`kind` 'pdf').
+      pickPaths: async (kind) => {
         if (process.env.ENGELBART_PICK_PATHS) return JSON.parse(process.env.ENGELBART_PICK_PATHS); // driver harness only (scripts/drive.mjs)
-        const options = { properties: ['openFile', 'openDirectory', 'multiSelections'] };
+        const options = kind === 'pdf'
+          ? { properties: ['openFile', 'multiSelections'], filters: [{ name: 'Papers', extensions: ['pdf'] }] }
+          : { properties: ['openFile', 'openDirectory', 'multiSelections'] };
         const result = mainWindow && !mainWindow.isDestroyed() ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
         return result.canceled ? [] : result.filePaths;
       },
-      confirmReset: async () => {
+      confirmReset: async ({ fresh = false } = {}) => {
         if (process.env.ENGELBART_CONFIRM_ALL === '1') return true; // driver harness only (scripts/drive.mjs)
         const options = {
           type: 'warning',
-          buttons: ['Reset test data', 'Cancel'],
+          buttons: [fresh ? 'Start as a new user' : 'Reset test data', 'Cancel'],
           defaultId: 1,
           cancelId: 1,
-          title: 'Reset test data?',
+          title: fresh ? 'Start as a new user?' : 'Reset test data?',
           message: 'Delete everything under ~/.engelbart/test?',
-          detail: 'Projects, notes, the test library and paper annotations are removed. The library is seeded again on the next start.',
+          detail: fresh
+            ? 'Projects, notes, the test library, custom instructions and test mode\'s GitHub sign-in are removed, and onboarding starts. Your real ~/.engelbart is not touched.'
+            : 'Projects, notes, the test library and paper annotations are removed. The library is seeded again on the next start.',
           noLink: true,
         };
         const result = mainWindow && !mainWindow.isDestroyed()

@@ -3,13 +3,13 @@ import { api, errorMessage } from './api.js';
 import TestToggle from './ui/TestToggle.jsx';
 import WindowEdges from './ui/WindowEdges.jsx';
 import Home from './screens/Home.jsx';
-import CreateProject from './screens/CreateProject.jsx';
+import Onboarding from './screens/Onboarding.jsx';
 import Workspace from './screens/Workspace.jsx';
 import ToolSetup from './ui/ToolSetup.jsx';
 import { launchRows, TOOL_ORDER } from './model/tools.js';
 
-// Screens: the app opens straight into the workspace you were last in — "Getting started" in a
-// fresh project — and the first run shows the create screen. "Engelbart" in the header (or
+// Screens: the app opens straight into the workspace you were last in, and the first run (no projects yet) is
+// onboarding (screens/Onboarding.jsx, 2026-09-28); + Project runs its last two screens. "Engelbart" in the header (or
 // Escape) shows all projects. A project whose project.json has no code directory yet is held
 // behind a modal until one is chosen (2026-09-18).
 
@@ -54,10 +54,12 @@ export default function App() {
   const [tree, setTree] = React.useState(null);
   const [entry, setEntry] = React.useState(null); // { workspaceId, tab, views } for the project being opened
   const [phase, setPhase] = React.useState('boot'); // boot | create | home | workspace
+  const [run, setRun] = React.useState(0); // a reset starts onboarding over from its first screen
   const [, setTick] = React.useState(0);
   // Git, Claude Code and Codex (src/main/tools): the last snapshot, and the setup dialog when it is open.
   const [tools, setTools] = React.useState(null);
   const [setup, setSetup] = React.useState(null); // { mode: 'launch' | 'all', ids }
+  const [launchAsk, setLaunchAsk] = React.useState(null); // what the launch check asks about, until the dialog can open
   const askedAtLaunch = React.useRef(false);
 
   const fail = (candidate) => setError(errorMessage(candidate));
@@ -81,12 +83,32 @@ export default function App() {
       if (askedAtLaunch.current || !snapshot.checked) return;
       askedAtLaunch.current = true;
       const ids = launchRows(snapshot);
-      if (ids.length) setSetup((current) => current || { mode: 'launch', ids });
+      if (ids.length) setLaunchAsk(ids);
     };
     const offTools = api.onTools(take);
     const offOpen = api.onToolsOpen(() => setSetup({ mode: 'all', ids: TOOL_ORDER }));
     api.tools().then(take).catch(() => {});
     return () => { offTools(); offOpen(); };
+  }, []);
+
+  // A new install's onboarding asks on a screen of its own (2026-09-28), so the dialog waits until it is over. Its
+  // Install all leaves 'after': once the installs end, the dialog asks only what is left (signing in, a failure). Its
+  // Skip for now asks nothing more until the next launch.
+  const onboardingNew = phase === 'boot' || (phase === 'create' && !projects.length);
+  React.useEffect(() => {
+    if (!launchAsk || onboardingNew || !tools) return;
+    if (launchAsk === 'after') {
+      if (TOOL_ORDER.some((id) => tools.tools[id] && tools.tools[id].busy)) return;
+      const ids = launchRows(tools);
+      if (ids.length) setSetup((current) => current || { mode: 'launch', ids });
+    } else {
+      setSetup((current) => current || { mode: 'launch', ids: launchAsk });
+    }
+    setLaunchAsk(null);
+  }, [launchAsk, onboardingNew, tools]);
+  const onboardingTools = React.useCallback((choice) => {
+    askedAtLaunch.current = true;
+    setLaunchAsk(choice === 'install' ? 'after' : null);
   }, []);
 
   const reload = React.useCallback(async () => {
@@ -168,15 +190,21 @@ export default function App() {
     }
   }
 
-  async function resetTest() {
+  // fresh: "Start as a new user…" — no sample library, no remembered sidebar folds or hidden post-its, onboarding from
+  // its first screen.
+  async function resetTest(fresh = false) {
     if (busy) return;
     setBusy(true);
     setError('');
     try {
-      const result = await api.resetTestData();
+      const result = await api.resetTestData({ fresh });
       if (result.reset) {
+        if (fresh) {
+          try { Object.keys(localStorage).filter((key) => key.startsWith('engelbart.')).forEach((key) => localStorage.removeItem(key)); } catch { /* storage unavailable */ }
+        }
         setConfig(result);
         leaveProject();
+        setRun((n) => n + 1);
         await start();
       }
     } catch (candidate) {
@@ -186,19 +214,11 @@ export default function App() {
     }
   }
 
-  // First run and + Project: create, then land in the workspace with the Welcome! note open.
-  async function createProject(input) {
-    if (busy) return;
-    setBusy(true);
+  // Onboarding made the project (api.startProject): land in its Welcome workspace with the Welcome! note open.
+  async function onboarded(made) {
     setError('');
-    try {
-      const made = await api.createProjectWithWelcome(input);
-      await openProject(made.project.id, { workspaceId: made.workspaceId, tab: { id: made.noteId, title: made.noteName } });
-    } catch (candidate) {
-      fail(candidate);
-    } finally {
-      setBusy(false);
-    }
+    await loadHome();
+    await openProject(made.project.id, { workspaceId: made.workspaceId, tab: { id: made.noteId, title: made.noteName } });
   }
 
   async function goHome() {
@@ -252,7 +272,7 @@ export default function App() {
         />
       )}
       {phase === 'create' && (
-        <CreateProject onCreate={createProject} onBack={projects.length ? goHome : null} busy={busy} error={error} />
+        <Onboarding key={run} mode={projects.length ? 'existing' : 'new'} tools={tools} onTools={onboardingTools} onDone={onboarded} onBack={projects.length ? goHome : null} />
       )}
       {phase === 'workspace' && tree && (
         <Workspace
@@ -284,13 +304,17 @@ export default function App() {
       )}
       {setup && tools && <ToolSetup snapshot={tools} ids={setup.ids} mode={setup.mode} onClose={() => setSetup(null)} />}
       <WindowEdges />
-      <TestToggle
-        testMode={config.testMode}
-        busy={busy}
-        onToggle={toggleTest}
-        onReset={resetTest}
-        onReveal={() => api.reveal(config.testRoot).catch(fail)}
-      />
+      {/* only in a developer's copy (src/main/developer.cjs): the app people download has no test mode */}
+      {config.testModeAvailable && (
+        <TestToggle
+          testMode={config.testMode}
+          busy={busy}
+          onToggle={toggleTest}
+          onReset={() => resetTest(false)}
+          onStartNew={() => resetTest(true)}
+          onReveal={() => api.reveal(config.testRoot).catch(fail)}
+        />
+      )}
     </div>
   );
 }

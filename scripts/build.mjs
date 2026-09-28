@@ -26,3 +26,7 @@ import { cp } from 'node:fs/promises';
 for (const folder of ['standard_fonts', 'cmaps', 'wasm']) {
   await cp(`node_modules/pdfjs-dist/${folder}`, `dist/${folder}`, { recursive: true, force: true });
 }
+// A developer build (ENGELBART_DEVELOPER=1; `npm run relaunch` makes one) keeps test mode once packaged; any other
+// package, which is what ships, has none (src/main/developer.cjs). Written on every build, so none lingers from before.
+import { writeFile } from 'node:fs/promises';
+await writeFile('dist/build.json', `${JSON.stringify({ developer: process.env.ENGELBART_DEVELOPER === '1' })}\n`);

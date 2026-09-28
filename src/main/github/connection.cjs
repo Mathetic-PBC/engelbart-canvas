@@ -87,12 +87,18 @@ function createGithub({
 
   /* ------------------------------------------------------------- storage */
 
+  // `file` may be a function: the sign-in then follows it (one per data root), read again whenever it names another file.
+  let savedFor = null;
+  const fileNow = () => (typeof file === 'function' ? file() : file);
+
   function load() {
-    if (saved !== undefined) return saved;
+    const at = fileNow();
+    if (saved !== undefined && savedFor === at) return saved;
+    savedFor = at;
     saved = null;
-    if (!file) return saved;
+    if (!at) return saved;
     try {
-      const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const raw = JSON.parse(fs.readFileSync(at, 'utf8'));
       if (raw && raw.v === 1 && typeof raw.access === 'string' && crypt.available()) {
         saved = {
           login: String(raw.login || ''), name: String(raw.name || ''), avatarUrl: String(raw.avatarUrl || ''), id: raw.id == null ? null : String(raw.id),
@@ -111,7 +117,9 @@ function createGithub({
 
   function keep(next) {
     saved = next;
-    persisted = !!file && crypt.available();
+    const at = fileNow();
+    savedFor = at;
+    persisted = !!at && crypt.available();
     if (!persisted) return;
     const out = {
       v: 1, login: next.login, name: next.name, avatarUrl: next.avatarUrl, id: next.id,
@@ -119,16 +127,17 @@ function createGithub({
       refresh: next.refresh ? crypt.encrypt(next.refresh) : null, refreshExpiresAt: next.refreshExpiresAt,
       tokenFlow: next.tokenFlow || 'device',
     };
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const temporary = `${file}.${process.pid}.tmp`;
+    fs.mkdirSync(path.dirname(at), { recursive: true });
+    const temporary = `${at}.${process.pid}.tmp`;
     fs.writeFileSync(temporary, `${JSON.stringify(out, null, 2)}\n`, { mode: 0o600 });
-    fs.renameSync(temporary, file);
+    fs.renameSync(temporary, at);
   }
 
   function forget(reason = '') {
     saved = null;
     refreshing = null;
-    if (file) { try { fs.rmSync(file, { force: true }); } catch { /* already gone */ } }
+    const at = fileNow();
+    if (at) { try { fs.rmSync(at, { force: true }); } catch { /* already gone */ } }
     problem = reason;
   }
 

@@ -6,6 +6,9 @@
 #   npm run relaunch -- --dev        # quit, rebuild, run `electron .` in the background (~5 s, same ~/.engelbart)
 #   npm run relaunch -- --no-build   # quit and reopen only
 #   npm run relaunch -- --dry-run    # say what would happen, touch nothing
+#   npm run relaunch -- --new-mac    # --dev, pretending Git, Claude Code and Codex are not installed: the setup dialog
+#                                    # shows as on a new Mac; installs are pretend (2.5 s) and nothing is written to
+#                                    # config.json. Agents cannot run in this mode: relaunch without it afterwards.
 #
 # It can be run from a terminal INSIDE Engelbart (for instance from a Claude Code session there).
 # Quitting Engelbart closes that terminal and everything in it, this script included, so in that
@@ -14,6 +17,8 @@
 #
 # Both forms read and write ~/.engelbart. Only scripted test runs should ever set
 # ENGELBART_HOME_DIR; this script clears it so a stray shell export cannot point the app elsewhere.
+# Both keep test mode: the package is a developer build (ENGELBART_DEVELOPER=1, src/main/developer.cjs).
+# A package built any other way, which is what ships, has no test mode.
 set -eu
 cd "$(dirname "$0")/.."
 REPO="$PWD"
@@ -25,15 +30,19 @@ RELAUNCH_LOG="$HOME/Library/Logs/Engelbart-relaunch.log"
 DEV=0
 BUILD=1
 DRY=0
+NEWMAC=0
 for arg in "$@"; do
   case "$arg" in
     --dev) DEV=1 ;;
     --no-build) BUILD=0 ;;
     --dry-run) DRY=1 ;;
+    --new-mac) DEV=1; NEWMAC=1 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
 done
 unset ENGELBART_HOME_DIR ENGELBART_CONFIRM_ALL
+unset ENGELBART_TOOLS_FAKE
+if [ "$NEWMAC" = 1 ]; then export ENGELBART_TOOLS_FAKE='{"git":"missing","claude":"missing","codex":"missing"}'; fi
 
 # Is one of this shell's ancestors an Engelbart started from this checkout?
 inside_engelbart() {
@@ -68,7 +77,7 @@ if [ "$DRY" = 1 ]; then
   if inside_engelbart; then echo "this shell runs inside Engelbart: the restart would continue detached (log: $RELAUNCH_LOG) and this terminal would close"; else echo "this shell is outside Engelbart: the restart would run here"; fi
   echo "packaged copies running: $(running "$PACKAGED" | tr '\n' ' ')"
   echo "dev copies running: $(running "$DEV_BIN" | tr '\n' ' ')"
-  echo "would: quit them$( [ "$BUILD" = 1 ] && { [ "$DEV" = 1 ] && echo ', npm run build' || echo ', npm run package'; } ), then $( [ "$DEV" = 1 ] && echo 'run electron .' || echo "open $APP" )"
+  echo "would: quit them$( [ "$BUILD" = 1 ] && { [ "$DEV" = 1 ] && echo ', npm run build' || echo ', npm run package (a developer build)'; } ), then $( [ "$DEV" = 1 ] && echo 'run electron .' || echo "open $APP" )"
   exit 0
 fi
 
@@ -95,7 +104,7 @@ if [ "$DEV" = 1 ]; then
   PATTERN="$DEV_BIN"
   WHAT="electron . (log: $DEV_LOG)"
 else
-  [ "$BUILD" = 1 ] && npm run package
+  [ "$BUILD" = 1 ] && ENGELBART_DEVELOPER=1 npm run package
   [ -x "$PACKAGED" ] || { echo "no packaged app at $APP — run without --no-build" >&2; exit 1; }
   open "$APP"
   PATTERN="$PACKAGED"
@@ -111,3 +120,4 @@ done
 MODE=$(sed -n 's/.*"testMode": *\([a-z]*\).*/\1/p' "$HOME/.engelbart/config.json" 2>/dev/null || true)
 echo "Engelbart is running: $WHAT"
 echo "data root: ~/.engelbart (test mode: ${MODE:-unknown}; test data under ~/.engelbart/test)"
+if [ "$NEWMAC" = 1 ]; then echo "pretending a new Mac: Git, Claude Code and Codex look missing (relaunch without --new-mac to use the real tools)"; fi

@@ -44,6 +44,7 @@ const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_TREE_ENTRIES = 500;
 const MAX_TREE_DEPTH = 6;
+const MAX_DESCRIPTION = 4000;
 
 const WELCOME_NOTE = [
   'This is a note. Notes are plain markdown files in your project folder, and the sidebar lists what this workspace can see.',
@@ -170,7 +171,8 @@ function projectRecord(dir) {
   let exists = false;
   try { exists = !!saved && fs.statSync(saved).isDirectory(); } catch { exists = false; }
   // A saved directory that is gone (moved, unmounted) counts as not chosen: the project asks again.
-  return { id: meta.id, name, slug: path.basename(dir), dir, created: meta.created || null, directory: exists ? saved : null, directoryMissing: saved && !exists ? saved : null };
+  const description = typeof meta.description === 'string' ? meta.description.trim() : '';
+  return { id: meta.id, name, slug: path.basename(dir), dir, created: meta.created || null, directory: exists ? saved : null, directoryMissing: saved && !exists ? saved : null, description };
 }
 
 function projectRecords(ctx) {
@@ -185,7 +187,7 @@ function findProject(ctx, id) {
 }
 
 function publicProject(project, extra = {}) {
-  return { id: project.id, name: project.name, slug: project.slug, dir: project.dir, created: project.created, directory: project.directory, directoryMissing: project.directoryMissing, ...extra };
+  return { id: project.id, name: project.name, slug: project.slug, dir: project.dir, created: project.created, directory: project.directory, directoryMissing: project.directoryMissing, description: project.description || '', ...extra };
 }
 
 const countWorkspaces = (dir) => workspaceRecords(dir).reduce((n, workspace) => n + 1 + countWorkspaces(workspace.dir), 0);
@@ -257,22 +259,26 @@ async function createProject(ctx, input) {
   const options = typeof input === 'string' ? { name: input } : (input || {});
   const name = sanitizeName(options.name);
   const directory = options.directory == null ? null : checkDirectory(options.directory);
+  const description = typeof options.description === 'string' ? options.description.trim().slice(0, MAX_DESCRIPTION) : '';
   const slug = resolveSlug(ctx, name, options.path);
   const dir = path.join(ctx.dataRoot, slug);
   fs.mkdirSync(dir, { mode: DIR_MODE });
-  const meta = { id: randomUUID(), name, created: nowIso(), ...(directory ? { directory } : {}) };
+  const meta = { id: randomUUID(), name, created: nowIso(), ...(directory ? { directory } : {}), ...(description ? { description } : {}) };
   writeJson(path.join(dir, 'project.json'), meta);
   migrated.add(dir);
   await db.openNotesDb(dir);
   return publicProject(projectRecord(dir), { workspaceCount: 0, lastEdited: meta.created });
 }
 
-// First-run flow: the project, a first workspace, and a "Welcome!" note open in its context.
-async function createProjectWithWelcome(ctx, input) {
+// First-run flow: the project, a first workspace, and a "Welcome!" note open in its context. Onboarding
+// (2026-09-28, ./onboarding.cjs) names the workspace "Welcome", starts its document with the project's
+// description, and puts the library rows chosen on its last screen in context after the note.
+async function createProjectWithWelcome(ctx, input, { workspaceName = 'Getting started', context = [] } = {}) {
   const project = await createProject(ctx, input);
-  const workspace = await createWorkspace(ctx, project.id, { name: 'Getting started' });
+  const workspace = await createWorkspace(ctx, project.id, { name: workspaceName });
   const note = await createNote(ctx, project.id, { name: 'Welcome!', workspaceId: workspace.id, text: WELCOME_NOTE });
-  await setWorkspaceContext(ctx, project.id, workspace.id, [note.id]);
+  await setWorkspaceContext(ctx, project.id, workspace.id, [note.id, ...context.filter((id) => id !== note.id)]);
+  if (project.description) await writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id }, `${project.description}\n`);
   return { project, workspaceId: workspace.id, noteId: note.id, noteName: note.name };
 }
 

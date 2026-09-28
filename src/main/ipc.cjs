@@ -4,6 +4,7 @@
 // its arguments before touching the store. The data root follows the test toggle:
 // ~/.engelbart (test off) or ~/.engelbart/test (test on), each with its own library
 // database; the test root is seeded once and can be reset from the settings gear.
+// Only a developer's copy has the toggle (./developer.cjs); any other is always on ~/.engelbart.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -18,12 +19,15 @@ const { createDescriber, createRepoIdentifier, createRemoteFileLister } = requir
 const { inspectPdf } = require('./context/pdf-kind.cjs');
 const { TOOL_NAMES } = require('./tools/requirements.cjs');
 const archive = require('./store/archive.cjs');
+const onboarding = require('./store/onboarding.cjs');
 const { buildChoices } = require('./bart/models.cjs');
 
 const BUILD_LINE_RE = /^build> ([a-z0-9]{6,32})$/;
 const buildId = (value) => { if (typeof value !== 'string' || !/^[0-9a-f]{10}$/.test(value)) throw new TypeError('build id is invalid'); return value; };
 
 const MAX_NAME = 512;
+// In ~/.engelbart/test after "Start as a new user": the sample library is not seeded.
+const FRESH_MARK = '.fresh';
 
 function str(value, what, max = MAX_NAME) {
   if (typeof value !== 'string' || value.length > max) throw new TypeError(`${what} must be a string of at most ${max} characters`);
@@ -49,28 +53,35 @@ function projectInput(value) {
 // `inspectPdf` (the app passes pdf-kind's) is how a pdf is read for whether it is a paper when a library is re-categorized.
 // `afterOpen(ctx)` runs each time a library is opened and ready, not awaited: background work that must not hold the
 // library back (the app checks for pdfs saved as links: store/web-pdfs.cjs).
-function createStore({ homeDir, fixturesDir, inspectPdf: readPdf = null, afterOpen = null }) {
-  const layout = home.ensureHome(homeDir);
+// `testMode`: whether this copy has test mode at all (./developer.cjs). Without it config.json's `testMode` is read as
+// off but never rewritten, so a developer's copy sharing the file keeps its setting.
+function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf = null, afterOpen = null, testMode: available = false }) {
+  const layout = home.ensureHome(homeDir, rootDir, { test: available });
   const contexts = new Map();
 
   function mode() {
-    return home.readConfig(layout.root).testMode ? 'test' : 'normal';
+    return available && home.readConfig(layout.root).testMode ? 'test' : 'normal';
   }
 
   function describe() {
     const current = mode();
-    return { ...home.readConfig(layout.root), mode: current, home: layout.root, testRoot: layout.testRoot, dataRoot: current === 'test' ? layout.testRoot : layout.root };
+    return { ...home.readConfig(layout.root), testMode: current === 'test', testModeAvailable: available, mode: current, home: layout.root, testRoot: layout.testRoot, dataRoot: current === 'test' ? layout.testRoot : layout.root };
+  }
+
+  function requireTestMode() {
+    if (!available) throw new Error('Test mode is only in developer builds of Engelbart');
   }
 
   async function context() {
     const current = mode();
     if (contexts.has(current)) return contexts.get(current);
     const opening = (async () => {
-      home.ensureHome(homeDir);
+      home.ensureHome(homeDir, rootDir, { test: available });
       const dataRoot = current === 'test' ? layout.testRoot : layout.root;
       const libraryDb = await db.openLibraryDb(dataRoot);
       const next = { homeDir, root: layout.root, dataRoot, mode: current, libraryDb };
-      if (current === 'test') await library.seedIfEmpty(next, fixturesDir);
+      // Test mode's sample library, except after "Start as a new user" (a new install has an empty library).
+      if (current === 'test' && !fs.existsSync(path.join(dataRoot, FRESH_MARK))) await library.seedIfEmpty(next, fixturesDir);
       // A library behind the category rules (converted from the old types, or from before a change of
       // rules) is brought up to them before anyone reads it: about 30 ms a pdf, once. Summaries are
       // not touched. A failure leaves the rows due for the next launch; the library still opens.
@@ -93,22 +104,27 @@ function createStore({ homeDir, fixturesDir, inspectPdf: readPdf = null, afterOp
   }
 
   async function setTestMode(value) {
+    requireTestMode();
     if (typeof value !== 'boolean') throw new TypeError('testMode must be a boolean');
     await closeAll();
     home.writeConfig(layout.root, { testMode: value });
     return describe();
   }
 
-  // Wipes ~/.engelbart/test entirely (projects, library, annotations, seeds) and recreates it.
-  async function resetTestData() {
+  // Wipes ~/.engelbart/test entirely (projects, library, annotations, seeds, instructions, test mode's GitHub sign-in)
+  // and recreates it. `fresh` (the gear's "Start as a new user…", 2026-09-28) leaves the library empty, as a new install
+  // has it, until the next plain reset: onboarding then runs exactly as it would on a new machine.
+  async function resetTestData({ fresh = false } = {}) {
+    requireTestMode();
     if (mode() !== 'test') throw new Error('Test mode is off');
     await closeAll();
     fs.rmSync(layout.testRoot, { recursive: true, force: true });
-    home.ensureHome(homeDir);
+    home.ensureHome(homeDir, rootDir);
+    if (fresh) fs.writeFileSync(path.join(layout.testRoot, FRESH_MARK), `${new Date().toISOString()}\n`);
     return describe();
   }
 
-  return { layout, context, config: describe, setTestMode, resetTestData, close: closeAll };
+  return { layout, context, config: describe, setTestMode, resetTestData, requireTestMode, close: closeAll };
 }
 
 function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, tools = null, builds = null }) {
@@ -116,11 +132,14 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   const withCtx = (fn) => async (...args) => fn(await store.context(), ...args);
 
   handle('config', () => store.config());
-  handle('set-test-mode', async (value) => { await beforeContextChange(); return store.setTestMode(value); });
-  handle('reset-test-data', async () => {
-    if (!(await confirmReset())) return { reset: false, ...store.config() };
+  // Refused before anything closes or asks in a copy without test mode.
+  handle('set-test-mode', async (value) => { store.requireTestMode(); await beforeContextChange(); return store.setTestMode(value); });
+  handle('reset-test-data', async (options) => {
+    store.requireTestMode();
+    const fresh = !!(options && typeof options === 'object' && options.fresh === true);
+    if (!(await confirmReset({ fresh }))) return { reset: false, ...store.config() };
     await beforeContextChange();
-    const config = await store.resetTestData();
+    const config = await store.resetTestData({ fresh });
     return { reset: true, ...config };
   });
 
@@ -154,6 +173,19 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('list-projects', withCtx((ctx) => projects.listProjects(ctx)));
   handle('create-project', withCtx((ctx, input) => projects.createProject(ctx, projectInput(input))));
   handle('create-project-with-welcome', withCtx((ctx, input) => projects.createProjectWithWelcome(ctx, projectInput(input))));
+  // Onboarding (./store/onboarding.cjs): custom instructions, the folder "Create a folder for me" would make, the project
+  // the last two screens describe, and a repository unticked again before the project exists.
+  handle('instructions', withCtx((ctx) => onboarding.readInstructions(ctx)));
+  handle('set-instructions', withCtx((ctx, text) => onboarding.writeInstructions(ctx, str(text, 'instructions', 40000))));
+  handle('free-folder', withCtx((ctx, name) => onboarding.freeFolder(ctx, str(name, 'name'))));
+  handle('check-folder', withCtx((ctx, value) => onboarding.existingFolder(ctx, str(value, 'directory', 4096))));
+  handle('start-project', withCtx((ctx, input) => {
+    const value = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+    const folder = value.folder === 'existing' ? 'existing' : 'new';
+    const context = (Array.isArray(value.context) ? value.context : []).slice(0, 500).map((id) => str(id, 'library id', 64));
+    return onboarding.startProject(ctx, { name: str(value.name, 'name'), description: optStr(value.description, 'description', 8000) || '', folder, directory: folder === 'existing' ? str(value.directory, 'directory', 4096) : '', context });
+  }));
+  handle('discard-library-item', withCtx((ctx, id) => onboarding.discardItem(ctx, str(id, 'library id', 64))));
   handle('rename-project', withCtx((ctx, id, name) => projects.renameProject(ctx, str(id, 'project id', 64), str(name, 'name'))));
   handle('load-project', withCtx((ctx, id) => projects.loadProject(ctx, str(id, 'project id', 64))));
 
@@ -293,7 +325,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   }));
   handle('lookup-library-item', withCtx((ctx, input) => library.lookupItem(ctx, str(input, 'link or path', 4096))));
   // "Choose from disk…": the native picker, files and folders, several at once.
-  handle('pick-library-paths', () => pickPaths());
+  handle('pick-library-paths', (kind) => pickPaths(kind === 'pdf' ? 'pdf' : 'any'));
   handle('preview-library-item', withCtx((ctx, id) => library.previewItem(ctx, str(id, 'library id', 64), { listRemoteFiles })));
   handle('rename-library-item', withCtx(async (ctx, id, name) => {
     const row = await ctx.libraryDb.get(str(id, 'library id', 64));

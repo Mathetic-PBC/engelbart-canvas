@@ -20,17 +20,22 @@ test('ensureHome creates ~/.engelbart, test root and annotations', () => {
   assert.ok(fs.statSync(layout.testRoot).isDirectory());
   assert.ok(fs.statSync(path.join(layout.testRoot, 'annotations')).isDirectory());
   assert.throws(() => ensureHome('relative/path'), TypeError);
+  // A copy without test mode (what ships) never makes the test root.
+  const shipped = ensureHome(tempHome(), null, { test: false });
+  assert.ok(fs.statSync(shipped.root).isDirectory());
+  assert.ok(fs.existsSync(shipped.configFile));
+  assert.ok(!fs.existsSync(shipped.testRoot));
 });
 
-test('config defaults to test mode and persists a toggle atomically', () => {
+test('config defaults to test mode off and persists a toggle atomically', () => {
   const { root } = ensureHome(tempHome());
   const summarizer = { provider: 'openai', openai: { model: 'gpt-6-luna', effort: 'high' }, anthropic: { model: 'claude-opus-5-5', effort: 'high' } };
   const providers = ['openai', 'anthropic'];
   const github = { clientId: 'Iv23liAZNYl96zlluMDs', appSlug: 'engelbart-mathetic' };
   const tools = normalizeTools({});
-  assert.deepEqual(readConfig(root), { testMode: true, providers, summarizer, github, tools }, 'summaries default to Codex, gpt-6-luna, high; @bart offers both providers; GitHub sign-in is configured without manual setup');
-  assert.deepEqual(writeConfig(root, { testMode: false }), { testMode: false, providers, summarizer, github, tools });
-  assert.deepEqual(readConfig(root), { testMode: false, providers, summarizer, github, tools });
+  assert.deepEqual(readConfig(root), { testMode: false, providers, summarizer, github, tools }, 'a new install is on ~/.engelbart; summaries default to Codex, gpt-6-luna, high; @bart offers both providers; GitHub sign-in is configured without manual setup');
+  assert.deepEqual(writeConfig(root, { testMode: true }), { testMode: true, providers, summarizer, github, tools });
+  assert.deepEqual(readConfig(root), { testMode: true, providers, summarizer, github, tools });
 
   // Switching is one word; each provider keeps its own model and effort; nonsense falls back to the defaults.
   const file = path.join(root, 'config.json');
@@ -70,14 +75,14 @@ test('a config default changed by a later build reaches an existing config.json;
   const file = path.join(root, 'config.json');
   const base = path.join(root, '.defaults', 'config.json');
   assert.ok(fs.existsSync(base), 'the defaults this file was given are kept beside it');
-  // this install was given an older summarizer default, then chose Claude Code for summaries and left test mode off
+  // this install was given an older summarizer default, then chose Claude Code for summaries and turned test mode on
   const given = JSON.parse(fs.readFileSync(base, 'utf8'));
   given.summarizer.openai.model = 'gpt-5.6-luna';
   given.summarizer.anthropic.model = 'claude-opus-5';
   given.summarizer.anthropic.effort = 'medium';
   fs.writeFileSync(base, JSON.stringify(given));
   const mine = JSON.parse(fs.readFileSync(file, 'utf8'));
-  mine.testMode = false;
+  mine.testMode = true;
   mine.summarizer.provider = 'anthropic';
   mine.summarizer.openai.model = 'gpt-5.6-luna';
   mine.summarizer.anthropic.model = 'claude-opus-5';
@@ -87,7 +92,29 @@ test('a config default changed by a later build reaches an existing config.json;
   const now = readConfig(root);
   assert.equal(now.summarizer.openai.model, 'gpt-6-luna', 'the model they never touched follows the new default');
   assert.equal(now.summarizer.anthropic.model, 'claude-opus-5-5', 'the other provider also follows the new default');
-  assert.deepEqual([now.testMode, now.summarizer.provider, now.summarizer.anthropic.effort], [false, 'anthropic', 'low'], 'what they chose stays');
+  assert.deepEqual([now.testMode, now.summarizer.provider, now.summarizer.anthropic.effort], [true, 'anthropic', 'low'], 'what they chose stays');
+});
+
+test('test mode left on by the old default goes off; turned on since, it stays on (2026-09-28)', () => {
+  const home = tempHome();
+  const { root } = ensureHome(home);
+  const file = path.join(root, 'config.json');
+  const base = path.join(root, '.defaults', 'config.json');
+  const old = (value) => ({ ...JSON.parse(fs.readFileSync(value, 'utf8')), testMode: true });
+  // given the old default and never touched
+  fs.writeFileSync(base, JSON.stringify(old(base)));
+  fs.writeFileSync(file, JSON.stringify(old(file)));
+  ensureHome(home);
+  assert.equal(readConfig(root).testMode, false);
+  // the same from before there were bases
+  fs.writeFileSync(file, JSON.stringify(old(file)));
+  fs.unlinkSync(base);
+  ensureHome(home);
+  assert.equal(readConfig(root).testMode, false);
+  // turned on under the new default: theirs
+  writeConfig(root, { testMode: true });
+  ensureHome(home);
+  assert.equal(readConfig(root).testMode, true);
 });
 
 test('untouched summary models upgrade without a saved defaults base', () => {
@@ -115,7 +142,7 @@ test('a config.json that does not parse is never overwritten by a launch or by t
   fs.writeFileSync(file, '{ "testMode": fal');
   ensureHome(home);
   assert.equal(fs.readFileSync(file, 'utf8'), '{ "testMode": fal');
-  assert.equal(readConfig(root).testMode, true, 'reads fall back to the defaults meanwhile');
+  assert.equal(readConfig(root).testMode, false, 'reads fall back to the defaults meanwhile');
   assert.equal(writeTools(root, normalizeTools({ git: { installed: true } })), null);
   assert.equal(fs.readFileSync(file, 'utf8'), '{ "testMode": fal');
 });

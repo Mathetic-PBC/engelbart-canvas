@@ -247,3 +247,22 @@ test('browser flow shares a pending attempt, saves the token method, refreshes t
   assert.equal(cancelled, 1);
   fs.rmSync(f.dir, { recursive: true, force: true });
 });
+
+test('the sign-in follows its file when the file is a function: one per data root, the other root signed out', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-github-roots-'));
+  const roots = { real: path.join(dir, 'real'), test: path.join(dir, 'test') };
+  fs.mkdirSync(roots.real);
+  fs.mkdirSync(roots.test);
+  const kept = { v: 1, login: 'hudsonmp', name: '', avatarUrl: '', id: '7', access: crypt.encrypt('ghu_real'), accessExpiresAt: Date.now() + 3600e3, refresh: null, refreshExpiresAt: null, tokenFlow: 'browser' };
+  fs.writeFileSync(path.join(roots.real, 'github.json'), JSON.stringify(kept));
+  let mode = 'real';
+  const github = createGithub({ fetch: async () => reply(500, {}), settings: () => ({ clientId: CLIENT }), file: () => path.join(roots[mode], 'github.json'), crypt });
+  assert.equal(github.status().login, 'hudsonmp');
+  mode = 'test';
+  assert.equal(github.status().connected, false, 'test mode has its own, empty sign-in');
+  await github.disconnect();
+  mode = 'real';
+  assert.equal(github.status().login, 'hudsonmp', 'signing out of test mode leaves the real sign-in');
+  assert.ok(fs.existsSync(path.join(roots.real, 'github.json')));
+  fs.rmSync(dir, { recursive: true, force: true });
+});

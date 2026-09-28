@@ -11,6 +11,7 @@ const projects = require('../store/projects.cjs');
 const { buildCatalog } = require('../context/catalog.cjs');
 const { expandDoc } = require('../context/expand-mentions.cjs');
 const { PENDING_RE } = require('./reply.cjs');
+const { instructionsBlock } = require('../store/onboarding.cjs');
 
 const HERE = '<<< this is the question being asked now >>>';
 
@@ -76,11 +77,13 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId }) {
   const head = [
     '<engelbart>',
     `project: ${project.name}`,
+    ...(project.description ? [`project description: ${project.description.replace(/\s+/g, ' ')}`] : []),
     `code directory: ${project.directory || 'none set'}`,
     `notes and workspaces: ${project.dir}`,
     `asked from: ${from}`,
     '</engelbart>',
-  ].join('\n');
+    instructionsBlock(ctx.dataRoot),
+  ].filter(Boolean).join('\n');
   return { project, dirs: [project.directory, ctx.dataRoot].filter(Boolean), head, contextJson: `<context_json>\n${JSON.stringify(entries, null, 1)}\n</context_json>`, documents: documents.join('\n\n') };
 }
 
