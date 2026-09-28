@@ -8,6 +8,10 @@ import './card.css';
 
 const api = window.postItAPI;
 
+const NOTE_ICON = <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true" style={{ flex: 'none', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, strokeLinejoin: 'round', strokeLinecap: 'round' }}><path d="M4.5 1.5h4.5L12 4.5v9a1 1 0 0 1-1 1H4.5a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1z M9 1.5v3h3 M5.75 8h4.5 M5.75 10.5h4.5" /></svg>;
+const BUILD_ICON = <svg width="13" height="13" viewBox="0 0 24 24" aria-hidden="true" style={{ flex: 'none', fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round' }}><circle cx="12" cy="12" r="10.5" /><path d="M12 17.5V6.5 M7.2 11.3 12 6.5l4.8 4.8" /></svg>;
+const WORKSPACE_ICON = <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true" style={{ flex: 'none', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, strokeLinejoin: 'round' }}><path d="M2.5 1.5h2.5a1 1 0 0 1 1 1v2.5a1 1 0 0 1-1 1h-2.5a1 1 0 0 1-1-1v-2.5a1 1 0 0 1 1-1z M9 1.5h4.5a1 1 0 0 1 1 1v2.5a1 1 0 0 1-1 1h-4.5a1 1 0 0 1-1-1v-2.5a1 1 0 0 1 1-1z M2.5 8h4.5a1 1 0 0 1 1 1v4.5a1 1 0 0 1-1 1h-4.5a1 1 0 0 1-1-1v-4.5a1 1 0 0 1 1-1z M11 8h2.5a1 1 0 0 1 1 1v2.5a1 1 0 0 1-1 1h-2.5a1 1 0 0 1-1-1v-2.5a1 1 0 0 1 1-1z" /></svg>;
+
 // Element hit testing treats the whole editable line as text. Test the actual glyph
 // rectangles instead, leaving the whitespace beside and below a line draggable.
 function hitsText(x, y) {
@@ -30,12 +34,14 @@ function Card() {
   const [crumple, setCrumple] = React.useState(null); // { scale, width, height } while it nears the trash
   const [noted, setNoted] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
+  const [build, setBuild] = React.useState(null); // the card's latest quick task: { id, status, final } (2026-09-25)
   const editor = React.useRef(null), held = React.useRef(null), suppressClick = React.useRef(false);
   const box = React.useRef(null), fit = React.useRef(null);
   const revision = React.useRef(0);
   React.useEffect(() => {
-    api.ready().then(setCard).catch((e) => setError(e.message));
+    api.ready().then((ready) => { setCard(ready); setBuild(ready.build || null); }).catch((e) => setError(e.message));
     const offs = [
+      api.onBuildState((state) => setBuild(state || null)),
       api.onTrash(setOverTrash),
       api.onCrumple((value) => setCrumple(value && value.scale < 1 ? value : null)),
       api.onCancel(() => { held.current = null; setOverTrash(false); setCrumple(null); document.body.classList.remove('moving'); }),
@@ -85,6 +91,23 @@ function Card() {
   const toNote = () => {
     api.toNote().then(() => { setNoted(true); setTimeout(() => setNoted(false), 1600); }, (e) => setError(e.message));
   };
+  // Build (2026-09-25; drawn from Claude Design "Post-it Quick Task", 2026-09-27): the window's Build popup opens from the
+  // button with this card's text as a quick task. Once there is one, its state takes the button's place — Building with
+  // three dots, Needs you, Stopped — and a click on it opens the task beside the card. A merged one says so and Build is
+  // back; one added to a workspace shows that workspace's name, and a click goes there.
+  const rectIn = (event) => { const r = event.currentTarget.getBoundingClientRect(); return { x: r.left, y: r.top, width: r.width, height: r.height }; };
+  const askBuild = (event) => { api.build(rectIn(event)).catch((e) => setError(e.message)); };
+  const status = build ? build.status : null;
+  const working = ['setting-up', 'queued', 'running', 'accepting'].includes(status);
+  const moved = !!(build && build.kind === 'build' && build.workspace);
+  const idle = !build || status === 'discarded' || (status === 'accepted' && !moved);
+  const stateWord = !build || status === 'discarded' ? ''
+    : moved ? build.workspace
+      : status === 'accepted' ? 'Merged'
+        : working ? 'Building'
+          : ['stopped', 'interrupted'].includes(status) ? 'Stopped'
+            : 'Needs you';
+  const openState = (event) => { if (build) api.openBuild(build.id, rectIn(event)).catch((e) => setError(e.message)); };
 
   // Crumpling: the card's view shrinks around it (main), and the face is drawn at its full size, scaled into it.
   const faceStyle = crumple ? { right: 'auto', bottom: 'auto', width: crumple.width, height: crumple.height, transform: `scale(${crumple.scale})`, transformOrigin: '0 0' } : undefined;
@@ -103,7 +126,23 @@ function Card() {
             ? <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 7.5 6 10.5 11.5 4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
             : <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><rect x="4.5" y="4.5" width="7.5" height="7.5" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.2" /><path d="M9.5 2.5V2.2c0-.7-.5-1.2-1.2-1.2H3.2C2.5 1 2 1.5 2 2.2v5.1c0 .7.5 1.2 1.2 1.2h.3" fill="none" stroke="currentColor" strokeWidth="1.2" /></svg>}
         </button>
-        <button type="button" data-note-post-it="1" className="postit-btn postit-note" title="Copy this into a new note" onClick={toNote}>{noted ? 'Opened' : '+Note'}</button>
+        <span className="postit-actions">
+          {stateWord && (
+            <button type="button" data-post-it-build-state={build.status} className="postit-btn postit-word" data-strong={idle || moved ? '0' : '1'} title={moved ? `Open ${build.workspace}` : 'Open this quick task'} onClick={openState} disabled={status === 'accepted' && !moved}>
+              {moved && WORKSPACE_ICON}
+              <span className="postit-word-text">{stateWord}</span>
+              {working && <span className="postit-dots" aria-hidden="true"><span /><span /><span /></span>}
+            </button>
+          )}
+          <button type="button" data-note-post-it="1" className="postit-btn postit-word" title="Copy this into a new note" onClick={toNote}>
+            {NOTE_ICON}<span>{noted ? 'Opened' : 'Note'}</span>
+          </button>
+          {idle && (
+            <button type="button" data-build-post-it="1" className="postit-btn postit-word" title="Hand this to a coding agent as a quick task" disabled={!card || !card.text.trim()} onClick={askBuild}>
+              <span>Build</span>{BUILD_ICON}
+            </button>
+          )}
+        </span>
       </div>
       {error && <div role="alert" className="post-error">Couldn’t save: {error}</div>}
       <button type="button" data-resize-post-it="1" className="post-resize" aria-label="Resize post-it" title="Drag to resize" onKeyDown={(event) => {

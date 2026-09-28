@@ -26,6 +26,8 @@ const { resolveShell, sanitizeEnvironment } = require('../terminal/launch.cjs');
 const { scrubAgentSession } = require('../shell-rc.cjs');
 const { normalizeSummarizer } = require('../store/home.cjs');
 const { SUMMARY_SYSTEM_PROMPT } = require('./summary-prompt.cjs');
+const { TOOL_OF } = require('../tools/requirements.cjs');
+const { claudeSubscriptionCommand } = require('../bart/claude-command.cjs');
 
 const MAX_SUMMARY_CHARS = 999; // "less than 1000 characters"
 const MAX_INPUT_CHARS = 1_500_000; // beyond this a note does not fit a request; it is reported, never truncated
@@ -113,8 +115,12 @@ function lastUsage(stdout) {
  * asked again on every call, so switching provider, model or effort needs no restart.
  * `run` (execFile by default) and `codexAuthFile` are injectable for tests.
  */
-function createCliSummarizer({ readSettings, environment = process.env, runDirectory = os.tmpdir(), codexHome = path.join(os.tmpdir(), 'engelbart-codex-home'), codexAuthFile, run = execFile, textOnly = false } = {}) {
+// `tools` (../tools/manager.cjs, optional): as for @bart (../bart/ask.cjs), a summary holds its CLI's lock while it
+// runs, and a CLI the login shell's PATH does not reach is run by its full path.
+function createCliSummarizer({ readSettings, environment = process.env, runDirectory = os.tmpdir(), codexHome = path.join(os.tmpdir(), 'engelbart-codex-home'), codexAuthFile, run = execFile, tools = null, textOnly = false } = {}) {
   const shell = resolveShell(environment);
+  const program = (name) => (tools && tools.binaryFor(name) ? `"$ENGELBART_${name.toUpperCase()}_BIN"` : name);
+  const programEnv = (name) => (tools && tools.binaryFor(name) ? { [`ENGELBART_${name.toUpperCase()}_BIN`]: tools.binaryFor(name) } : {});
   const shellArgs = (command) => (path.basename(shell) === 'fish' ? ['--login', '--interactive', '--command', command] : ['-ilc', command]);
   const childEnvironment = (extra) => {
     const base = sanitizeEnvironment(scrubAgentSession(environment));
@@ -132,8 +138,8 @@ function createCliSummarizer({ readSettings, environment = process.env, runDirec
     const promptFile = `${stem}.system.md`;
     fs.writeFileSync(promptFile, request.system, { mode: 0o600 });
     try {
-      const command = `exec claude -p --output-format json --no-session-persistence --setting-sources "" --strict-mcp-config --tools "" --model "$ENGELBART_SUMMARY_MODEL" --effort ${effort} --system-prompt-file "$ENGELBART_SUMMARY_PROMPT" < "$ENGELBART_SUMMARY_INPUT"`;
-      const { stdout, failure } = await execute(command, childEnvironment({ ENGELBART_SUMMARY_MODEL: model, ENGELBART_SUMMARY_PROMPT: promptFile, ENGELBART_SUMMARY_INPUT: `${stem}.input.txt` }), signal);
+      const command = `exec ${claudeSubscriptionCommand(program('claude'))} -p --output-format json --no-session-persistence --setting-sources "" --strict-mcp-config --tools "" --model "$ENGELBART_SUMMARY_MODEL" --effort ${effort} --system-prompt-file "$ENGELBART_SUMMARY_PROMPT" < "$ENGELBART_SUMMARY_INPUT"`;
+      const { stdout, failure } = await execute(command, childEnvironment({ ...programEnv('claude'), ENGELBART_SUMMARY_MODEL: model, ENGELBART_SUMMARY_PROMPT: promptFile, ENGELBART_SUMMARY_INPUT: `${stem}.input.txt` }), signal);
       const result = lastResultLine(stdout);
       if (!result) throw new SummaryError('unavailable', notFound(failure) ? 'Claude Code was not found on the login shell PATH' : `Claude Code did not return a result${failure ? ` (${failure.message.split('\n')[0]})` : ''}`);
       if (result.is_error || result.subtype !== 'success' || typeof result.result !== 'string' || !result.result.trim()) throw new SummaryError('failed', String(result.result || result.subtype || 'the model returned no text').slice(0, 300));
@@ -151,8 +157,8 @@ function createCliSummarizer({ readSettings, environment = process.env, runDirec
       // Recording labels are untrusted page text. That request needs only a final
       // text response, with no filesystem, browser, connector or agent tools.
       const textFlags = textOnly ? `--ignore-user-config --ignore-rules ${['shell_tool', 'unified_exec', 'apps', 'browser_use', 'computer_use', 'in_app_browser', 'image_generation', 'view_image', 'multi_agent', 'plugins', 'remote_plugin', 'skill_search', 'goals', 'sleep_tool', 'code_mode', 'code_mode_host'].map(name => `--disable ${name}`).join(' ')} -c 'web_search="disabled"'` : '';
-      const command = `exec codex exec --skip-git-repo-check --ephemeral -s read-only ${textFlags} -m "$ENGELBART_SUMMARY_MODEL" -c 'model_reasoning_effort="${effort}"' -c project_doc_max_bytes=0 --color never --json -o "$ENGELBART_SUMMARY_OUTPUT" - < "$ENGELBART_SUMMARY_INPUT"`;
-      const { stdout, failure } = await execute(command, childEnvironment({ CODEX_HOME: codexHome, ENGELBART_SUMMARY_MODEL: model, ENGELBART_SUMMARY_OUTPUT: outFile, ENGELBART_SUMMARY_INPUT: `${stem}.input.txt` }), signal);
+      const command = `exec ${program('codex')} exec --skip-git-repo-check --ephemeral -s read-only ${textFlags} -m "$ENGELBART_SUMMARY_MODEL" -c 'model_reasoning_effort="${effort}"' -c project_doc_max_bytes=0 --color never --json -o "$ENGELBART_SUMMARY_OUTPUT" - < "$ENGELBART_SUMMARY_INPUT"`;
+      const { stdout, failure } = await execute(command, childEnvironment({ ...programEnv('codex'), CODEX_HOME: codexHome, ENGELBART_SUMMARY_MODEL: model, ENGELBART_SUMMARY_OUTPUT: outFile, ENGELBART_SUMMARY_INPUT: `${stem}.input.txt` }), signal);
       let text = '';
       try { text = fs.readFileSync(outFile, 'utf8'); } catch { text = ''; }
       if (!text.trim()) {
@@ -175,8 +181,10 @@ function createCliSummarizer({ readSettings, environment = process.env, runDirec
     const stem = path.join(runDirectory, `summary-${randomUUID()}`);
     fs.writeFileSync(`${stem}.input.txt`, request.input, { mode: 0o600 });
     const started = Date.now();
+    const agent = TOOL_OF[settings.provider];
+    const runIt = () => (settings.provider === 'anthropic' ? viaClaudeCode : viaCodex)({ request, model, effort, stem, signal });
     try {
-      const out = await (settings.provider === 'anthropic' ? viaClaudeCode : viaCodex)({ request, model, effort, stem, signal });
+      const out = tools ? await tools.use(agent, runIt) : await runIt();
       return { summary: fitSummary(out.text), meta: { provider: settings.provider, model: out.model, effort, durationMs: Date.now() - started, costUsd: out.costUsd, usage: out.usage } };
     } finally {
       try { fs.unlinkSync(`${stem}.input.txt`); } catch { /* already gone */ }

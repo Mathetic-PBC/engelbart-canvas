@@ -3,7 +3,7 @@ import { api } from '../api.js';
 import './local-preview.css';
 
 const BUSY = new Set(['planning', 'confirming', 'building', 'installing', 'starting', 'checking', 'repairing']);
-const LABELS = { planning: 'Planning', confirming: 'Ready to build', building: 'Building', installing: 'Installing', starting: 'Starting', checking: 'Checking', repairing: 'Repairing', ready: 'Build finished', failed: 'Build failed', stopped: 'Stopped' };
+const LABELS = { planning: 'Planning', confirming: 'Ready to build', building: 'Building', installing: 'Installing', starting: 'Starting', checking: 'Checking', repairing: 'Repairing', ready: 'Build finished', 'handed-off': 'Build started', failed: 'Build failed', stopped: 'Stopped' };
 
 export function useLocalPreview(projectId, workspaceId, onReady) {
   const [preview, setPreview] = React.useState(null);

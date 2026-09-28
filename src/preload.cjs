@@ -14,6 +14,20 @@ function subscribe(channel, callback) {
   return () => ipcRenderer.removeListener(channel, listener);
 }
 
+// The window has no title bar on macOS: styles.css moves the header off the traffic lights by these two marks.
+function markWindow() {
+  const root = document.documentElement;
+  if (!root) return;
+  root.dataset.platform = process.platform;
+}
+if (document.documentElement) markWindow(); else document.addEventListener('DOMContentLoaded', markWindow, { once: true });
+ipcRenderer.on('window:fullscreen', (_event, on) => { if (document.documentElement) document.documentElement.toggleAttribute('data-fullscreen', !!on); });
+
+// Wider resize edges: App.jsx's strips report press / move / release; main reads the cursor itself.
+contextBridge.exposeInMainWorld('engelbartWindow', Object.freeze({
+  edgeResize: (phase, edge) => ipcRenderer.send('window:edge-resize', String(phase), edge == null ? null : String(edge)),
+}));
+
 // Experimental Terminal bridge, v1 — unchanged contract (see docs in that repo).
 const terminalAPI = Object.freeze({
   bootstrap: () => ipcRenderer.invoke('terminal:bootstrap'),
@@ -88,7 +102,6 @@ const engelbartAPI = Object.freeze({
   createWorkspace: invoke('create-workspace'),
   renameWorkspace: invoke('rename-workspace'),
   deleteWorkspace: invoke('delete-workspace'),
-  setWorkspaceStatus: invoke('set-workspace-status'),
   setWorkspaceContext: invoke('set-workspace-context'),
   saveImage: invoke('save-image'),
   readImage: invoke('read-image'),
@@ -117,6 +130,36 @@ const engelbartAPI = Object.freeze({
   saveSandboxEnvironment: invoke('sandbox-save-environment'),
   restartSandbox: invoke('sandbox-restart'),
   onSandboxProgress: (callback) => subscribe('engelbart:sandbox-progress', callback),
+  // Build (src/main/build): a workspace's coding agent in a worktree of its own. Every change of one arrives on onBuild as
+  // its record; onBuildProgress carries what a running turn is doing ({ projectId, id, activity, log, lines }).
+  buildModels: invoke('build-models'),
+  buildPreflight: invoke('build-preflight'),
+  buildInit: invoke('build-init'),
+  buildStart: invoke('build-start'),
+  setWorkspaceStatus: invoke('set-workspace-status'),
+  buildList: invoke('build-list'),
+  buildGet: invoke('build-get'),
+  buildReply: invoke('build-reply'),
+  buildStop: invoke('build-stop'),
+  buildResume: invoke('build-resume'),
+  buildReview: invoke('build-review'),
+  buildPreview: invoke('build-preview'),
+  buildAccept: invoke('build-accept'),
+  buildFix: invoke('build-fix'),
+  buildDiscard: invoke('build-discard'),
+  buildPromote: invoke('build-promote'),
+  onBuild: (callback) => subscribe('engelbart:build', callback),
+  onNextWorkspace: (callback) => subscribe('engelbart:next-workspace', callback),
+  onBuildProgress: (callback) => subscribe('engelbart:build-progress', callback),
+  // A post-it's Build button asks the window for its Build popup, with the card's text, and where the card and the
+  // button are ({ projectId, postItId, text, card, button }, CSS px of the window).
+  onBuildQuick: (callback) => subscribe('engelbart:build-quick', callback),
+  // A click on a post-it's quick-task state: that task, beside the card ({ projectId, id, postItId, card, button }).
+  onBuildQuickOpen: (callback) => subscribe('engelbart:build-quick-open', callback),
+  // Clear and the archived versions of a workspace (src/main/store/archive.cjs).
+  clearWorkspace: invoke('clear-workspace'),
+  restoreArchive: invoke('restore-archive'),
+  readArchive: invoke('read-archive'),
   readTextFile: invoke('read-text-file'),
   resolvePageFile: invoke('resolve-page-file'),
   stageFile: invoke('stage-file'),
@@ -138,6 +181,19 @@ const engelbartAPI = Object.freeze({
   repoThumbnail: invoke('repo-thumbnail'),
   readAnnotations: invoke('read-annotations'),
   writeAnnotations: invoke('write-annotations'),
+  // Git, Claude Code and Codex (src/main/tools): what the last check saw, and the setup dialog's buttons.
+  // Every change arrives on onTools as a whole snapshot; onToolsOpen is Engelbart ▸ Set Up Tools….
+  tools: invoke('tools'),
+  toolsCheck: invoke('tools-check'),
+  toolsInstall: invoke('tools-install'),
+  toolsUpdate: invoke('tools-update'),
+  toolsSignIn: invoke('tools-sign-in'),
+  toolsCancelSignIn: invoke('tools-cancel-sign-in'),
+  toolsSkip: invoke('tools-skip'),
+  toolsAskAgain: invoke('tools-ask-again'),
+  toolsSetUpdates: invoke('tools-set-updates'),
+  onTools: (callback) => subscribe('engelbart:tools', callback),
+  onToolsOpen: (callback) => subscribe('engelbart:tools-open', callback),
   shellHistory: invoke('shell-history'),
   openExternal: invoke('open-external'),
   reveal: invoke('reveal'),
@@ -182,6 +238,9 @@ const engelbartAPI = Object.freeze({
   // The app's own open menus and dialogs (window CSS px): a card under one of them steps aside until it closes.
   postItsBlock: (rects) => ipcRenderer.invoke('post-its:block', rects),
   postItsLayout: () => ipcRenderer.invoke('post-its:layout'),
+  // The sidebar's show/hide toggle: every card out of sight (true) or back (false); nothing is created or deleted.
+  postItsHide: (hidden) => ipcRenderer.invoke('post-its:hide', !!hidden),
+  onPostItsHidden: (callback) => subscribe('post-its:hidden', callback),
   // The trash (2026-09-22): the cards in it, newest first, each { id, text, deleted, expires }; and taking one back out.
   postItsTrashed: (projectId) => ipcRenderer.invoke('post-its:trashed', projectId),
   postItsRestore: (projectId, id) => ipcRenderer.invoke('post-its:restore', projectId, id),
@@ -191,6 +250,10 @@ const engelbartAPI = Object.freeze({
   postItsTrashRect: (rect) => ipcRenderer.invoke('post-its:trash-rect', rect),
   onPostItsDrag: (callback) => subscribe('post-its:drag', callback),
   onPostItsError: (callback) => subscribe('post-its:error', callback),
+  // Pictures of the cards a covering panel is over, to draw under it ({ projectId, cards: [{ id, x, y, width, height, url }] }).
+  onPostItsStandIns: (callback) => subscribe('post-its:stand-ins', callback),
+  // "Delete task": the post-it into the trash, once its task went to a workspace.
+  postItsThrowOut: (projectId, id) => ipcRenderer.invoke('post-its:throw-out', projectId, id),
 });
 
 contextBridge.exposeInMainWorld('terminalAPI', terminalAPI);

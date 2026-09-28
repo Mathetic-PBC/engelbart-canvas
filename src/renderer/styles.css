@@ -19,9 +19,17 @@ button:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(0,112,243,.18)}
 .window-no-drag{-webkit-app-region:no-drag}
 html[data-platform="darwin"]{--window-header-inset:90px}
 input,textarea{outline:none}
+/* Title bar (2026-09-23): the window has no native one (hiddenInset), so the header row drags the window and its controls
+   opt out; menus and dialogs over it opt out too, or a click on them would move the window. On macOS the first column
+   starts after the traffic lights until the window goes full screen (preload sets both marks). */
+.title-bar{-webkit-app-region:drag}
+.title-bar :is(button,input,a,[role=button],[data-no-drag]),[data-overlay],[data-no-drag]{-webkit-app-region:no-drag}
+html[data-platform=darwin]:not([data-fullscreen]) .title-lead{padding-left:84px!important}
+html[data-fullscreen] [data-window-edge]{display:none}
 textarea::placeholder,input::placeholder{color:#8f8f8f;font-style:italic}
 @keyframes blink{50%{opacity:0}}
 @keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes pdot{0%,80%,100%{opacity:.25;transform:translateY(0)}40%{opacity:1;transform:translateY(-2px)}}
 [data-idea-row]:hover button{opacity:1!important}
 [data-idea-row] button::after{content:'×'}
 .pdf-text{position:absolute;overflow:hidden;line-height:1;text-align:initial;text-size-adjust:none;forced-color-adjust:none}

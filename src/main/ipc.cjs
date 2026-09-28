@@ -19,6 +19,12 @@ const { createDescriber, createRepoIdentifier, createRemoteFileLister } = requir
 const { createRepoReadmeReader } = require('./store/repo-readme.cjs');
 const { inspectPdf } = require('./context/pdf-kind.cjs');
 const { githubRepo } = require('./sandbox/runs.cjs');
+const { TOOL_NAMES } = require('./tools/requirements.cjs');
+const archive = require('./store/archive.cjs');
+const { buildChoices } = require('./bart/models.cjs');
+
+const BUILD_LINE_RE = /^build> ([a-z0-9]{6,32})$/;
+const buildId = (value) => { if (typeof value !== 'string' || !/^[0-9a-f]{10}$/.test(value)) throw new TypeError('build id is invalid'); return value; };
 
 const MAX_NAME = 512;
 
@@ -115,7 +121,7 @@ function createStore({ homeDir, fixturesDir, inspectPdf: readPdf = null, afterOp
   return { layout, context, config: describe, setTestMode, resetTestData, close: closeAll };
 }
 
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, localPreviews = null, sandbox, readModels, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), readRepoReadme = createRepoReadmeReader(), github = null, google = null, zotero = null, overleaf = null, openGithubPage = () => {} }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, localPreviews = null, builds = null, tools = null, sandbox, readModels, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), readRepoReadme = createRepoReadmeReader(), github = null, google = null, zotero = null, overleaf = null, openGithubPage = () => {} }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const withCtx = (fn) => async (...args) => fn(await store.context(), ...args);
   let changingMode = false;
@@ -126,7 +132,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     if (typeof value !== 'boolean') throw new TypeError('testMode must be a boolean');
     if (changingMode) throw new Error('Data mode is already changing');
     changingMode = true;
-    try { await additions.catch(() => {}); await beforeContextChange(); await localPreviews?.close(); await sandbox?.close(); return await store.setTestMode(value); }
+    try { await additions.catch(() => {}); await beforeContextChange(); await localPreviews?.close(); await builds?.stopAll(); await sandbox?.close(); return await store.setTestMode(value); }
     finally { changingMode = false; }
   });
   handle('reset-test-data', async () => {
@@ -137,6 +143,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       await additions.catch(() => {});
       await beforeContextChange();
       await localPreviews?.close();
+      await builds?.stopAll();
       await sandbox?.close();
       const config = await store.resetTestData();
       return { reset: true, ...config };
@@ -224,6 +231,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     return created;
   }));
   handle('rename-workspace', withCtx((ctx, pid, wid, name) => projects.renameWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(name, 'name'))));
+  handle('set-workspace-status', withCtx((ctx, pid, wid, status) => projects.setWorkspaceStatus(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(status, 'status', 24))));
   handle('delete-workspace', withCtx(async (ctx, pid, wid) => {
     if (localPreviews) {
       const { workspace } = projects.findWorkspace(ctx, pid, wid);
@@ -233,7 +241,6 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     navChanged();
     return result;
   }));
-  handle('set-workspace-status', withCtx((ctx, pid, wid, status) => projects.setWorkspaceStatus(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(status, 'status', 32))));
   // All attachment paths share the same handoff: persist context first, then
   // prepare newly linked repositories. Mode changes drain this queue too.
   const changeWorkspaceContext = (pid, wid, change) => {
@@ -358,6 +365,54 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // Copy all under an answer: a question and its answer, as they read in the document.
   handle('copy-text', (text) => { writeClipboard(str(text, 'text', 400000)); return true; });
 
+  // Build (src/main/build; docs/superpowers/specs/2026-09-25-build-workflow-design.md): a workspace handed to Claude Code
+  // or Codex in a worktree of its own. Every change of a Build is announced on `engelbart:build` with its public record,
+  // and what its turn is doing on `engelbart:build-progress`.
+  if (builds) {
+    const b = () => builds;
+    const pidOf = (pid) => str(pid, 'project id', 64);
+    handle('build-models', () => buildChoices(readModels()));
+    handle('build-preflight', withCtx((ctx, pid) => b().preflight(ctx, pidOf(pid))));
+    handle('build-init', withCtx((ctx, pid) => b().initRepository(ctx, pidOf(pid))));
+    handle('build-start', withCtx((ctx, pid, input) => {
+      const value = input && typeof input === 'object' ? input : {};
+      return b().start(ctx, pidOf(pid), {
+        kind: value.kind === 'quick' ? 'quick' : 'build',
+        workspaceId: optStr(value.workspaceId, 'workspace id', 64),
+        postItId: optStr(value.postItId, 'post-it id', 64),
+        text: optStr(value.text, 'text', 200000),
+        provider: optStr(value.provider, 'provider', 24),
+        model: optStr(value.model, 'model', 24),
+        effort: optStr(value.effort, 'effort', 24),
+        attach: (Array.isArray(value.attach) ? value.attach : []).slice(0, 50).map((id) => str(id, 'library id', 64)),
+      });
+    }));
+    handle('build-list', withCtx((ctx, pid) => b().list(ctx, pidOf(pid))));
+    handle('build-get', withCtx((ctx, pid, id) => b().get(ctx, pidOf(pid), buildId(id))));
+    handle('build-reply', withCtx((ctx, pid, id, text, options) => b().reply(ctx, pidOf(pid), buildId(id), str(text, 'reply', 100000), { interrupt: !!(options && options.interrupt) })));
+    handle('build-stop', (pid, id) => b().stop(pidOf(pid), buildId(id)));
+    handle('build-resume', withCtx((ctx, pid, id) => b().resume(ctx, pidOf(pid), buildId(id))));
+    handle('build-review', withCtx((ctx, pid, id) => b().review(ctx, pidOf(pid), buildId(id))));
+    handle('build-preview', withCtx((ctx, pid, id) => b().preview(ctx, pidOf(pid), buildId(id))));
+    handle('build-accept', withCtx((ctx, pid, id) => b().accept(ctx, pidOf(pid), buildId(id))));
+    handle('build-fix', withCtx((ctx, pid, id) => b().fix(ctx, pidOf(pid), buildId(id))));
+    handle('build-discard', withCtx((ctx, pid, id) => b().discard(ctx, pidOf(pid), buildId(id))));
+    handle('build-promote', withCtx((ctx, pid, id, wid, choice) => {
+      const value = choice && typeof choice === 'object' ? choice : null;
+      const picked = value ? { provider: optStr(value.provider, 'provider', 24), model: optStr(value.model, 'model', 24), effort: optStr(value.effort, 'effort', 24) } : null;
+      return b().promote(ctx, pidOf(pid), buildId(id), str(wid, 'workspace id', 64), picked);
+    }));
+  }
+  // Clear (B21): the document archived and started blank, keeping the lines of Builds still open; what it mentioned stays
+  // on the sidebar. Restore (B22) brings an archived version back, the current one archived first.
+  const keepOpenBuilds = (ctx, pid) => {
+    const open = builds ? builds.openIds(ctx, pid) : new Set();
+    return (line) => { const m = BUILD_LINE_RE.exec(line.trim()); return !!m && open.has(m[1]); };
+  };
+  handle('clear-workspace', withCtx((ctx, pid, wid) => archive.clearWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), { keep: keepOpenBuilds(ctx, pid) })));
+  handle('restore-archive', withCtx((ctx, pid, wid, file) => archive.restoreArchive(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(file, 'archive', 64), { keep: keepOpenBuilds(ctx, pid) })));
+  handle('read-archive', withCtx((ctx, pid, wid, file) => { const got = archive.readArchive(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(file, 'archive', 64)); return { path: got.path, text: got.text }; }));
+
   handle('resolve-page-file', withCtx((ctx, pid, input) => projects.resolvePageFile(ctx, str(pid, 'project id', 64), str(input, 'path', 4096))));
   handle('read-text-file', withCtx((ctx, pid, input) => projects.readProjectTextFile(ctx, str(pid, 'project id', 64), str(input, 'path', 4096))));
   // The Stage: what is at a path, and what drawing it needs (a pdf's bytes, a picture's, text, a page's address).
@@ -456,6 +511,22 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // Ink on a pdf in the Browser pane, by its address (a link, or a file: address inside the home directory).
   handle('read-page-annotations', withCtx((ctx, input) => library.readPageAnnotations(ctx, str(input, 'address', 8192))));
   handle('write-page-annotations', withCtx((ctx, input, value) => library.writePageAnnotations(ctx, str(input, 'address', 8192), value)));
+
+  // Git, Claude Code and Codex (src/main/tools/manager.cjs): the setup dialog's snapshot and its buttons. Installs,
+  // updates and sign-ins answer at once and report through `engelbart:tools` as they go.
+  if (tools) {
+    const toolName = (value) => { if (!TOOL_NAMES.includes(value)) throw new TypeError('Unknown tool'); return value; };
+    const toolNames = (value) => (Array.isArray(value) ? value : [value]).slice(0, 3).map(toolName);
+    handle('tools', () => tools.snapshot());
+    handle('tools-check', () => tools.check());
+    handle('tools-install', (names) => { void tools.install(toolNames(names)).catch(() => {}); return tools.snapshot(); });
+    handle('tools-update', (name) => { void tools.update(toolName(name)).catch(() => {}); return tools.snapshot(); });
+    handle('tools-sign-in', (name) => { void tools.signIn(toolName(name)).catch(() => {}); return tools.snapshot(); });
+    handle('tools-cancel-sign-in', (name) => tools.cancelSignIn(toolName(name)));
+    handle('tools-skip', (names) => tools.skip(toolNames(names)));
+    handle('tools-ask-again', (name) => tools.askAgain(toolName(name)));
+    handle('tools-set-updates', (value) => tools.setUpdates(value === 'ask' ? 'ask' : 'auto'));
+  }
 
   handle('shell-history', () => readShellHistory({ homeDir: require('node:os').homedir() }));
   handle('open-external', (url) => openExternal(url));

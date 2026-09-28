@@ -98,7 +98,7 @@ const callbackFor = (url, values) => {
       stageWidth:rect('[data-stage]').width, entry:rect('[data-rail-connections] button'), bar:rect('[data-rail-bar]'),
       trash:rect('[data-trash]'), note:rect('[data-add-post-it]'), header:rect('[data-workspace-header]'),
       trashArt:rect('[data-trash] img'), noteArt:rect('[data-add-post-it] img'),
-      sidebar:rect('aside[aria-label="Sidebar"]'), workspaces:rect('[data-rail-section="Workspaces"]'), search:rect('[data-rail-search]')
+      sidebar:rect('aside[aria-label="Sidebar"]'), search:rect('[data-rail-search]')
     }})()`);
     const checkFooter = layout => {
       assert.ok(layout.bar.height <= 64, 'footer stays one compact row');
@@ -111,27 +111,20 @@ const callbackFor = (url, values) => {
     const before = await geometry();
     const originalIds = await js(wc, 'window.engelbartAPI.library().then(rows=>rows.map(row=>row.id).sort())');
     checkFooter(before);
-    assert.equal(before.header.top - before.sidebar.top, 18, 'workspace card has the reference top inset');
-    assert.ok(before.header.bottom < before.search.top && before.search.bottom <= before.workspaces.top, 'Sub-workspaces is its own section below search');
+    assert.equal(before.header.top - before.sidebar.top, 10, 'workspace card keeps the current compact top inset');
+    assert.ok(before.header.bottom < before.search.top, 'search stays below the workspace selector');
     assert.equal(await js(wc, '!!document.querySelector("[data-next-workspace]")'), false, 'no standalone workspace shortcut');
     assert.equal(await js(wc, '[...document.querySelectorAll("[data-rail-section-toggle]")].every(button=>button.querySelectorAll("svg").length===2)'), true, 'every section has a leading chevron and kind icon');
     assert.equal(await js(wc, '[...document.querySelectorAll("[data-rail-section-toggle]")].every(e=>e.getAttribute("aria-expanded")==="false")'), true, 'all groups start collapsed');
     assert.equal(await js(wc, '!!document.querySelector("[data-rail-subsection]")'), false);
     await shot('sidebar');
-    const subworkspaces = '[data-rail-section-toggle="Workspaces"]';
-    await click(wc, subworkspaces);
-    await until(() => js(wc, `!!document.querySelector('[data-rail-row="${second.id}"]')`), 'Sub-workspaces expands');
-    await click(wc, subworkspaces);
-    await until(() => js(wc, `!document.querySelector('[data-rail-row="${second.id}"]')`), 'Sub-workspaces collapses');
-    await click(wc, subworkspaces);
-    await click(wc, `[data-rail-row="${second.id}"]`);
+    await switchWorkspace(second.id, 'Second workspace');
     await until(() => js(wc, 'document.querySelector("[data-workspace-name]")?.textContent==="Second workspace"'), 'sub-workspace opens its existing workspace');
     await switchWorkspace(made.workspaceId, 'Getting started');
     await until(() => js(wc, 'document.querySelector("[data-workspace-name]")?.textContent==="Getting started"'), 'return to initial workspace');
     await js(wc, `[...document.querySelectorAll('[data-rail-section-toggle][aria-expanded="true"]')].forEach(button=>button.click())`);
     await pause(160);
     await shot('sidebar-sections');
-    await click(wc, subworkspaces);
     await click(wc, '[data-rail-section-toggle="Documents"]');
     await click(wc, entry);
     await until(async () => (await state()) === 'Not connected', 'signed-out status');
@@ -291,7 +284,7 @@ const callbackFor = (url, values) => {
     await click(wc, `[data-restore-post-it="${cardId}"]`);
     await until(() => cards().length === 1, 'trashed post-it remains restorable');
     await js(wc, 'window.terminalAPI.bootstrap().then(state=>Promise.all(state.sessions.map(session=>window.terminalAPI.closeSession(session.id))))');
-    console.log(JSON.stringify({ ok: true, root, checks: ['18px top inset', 'icon-led section headers', 'Sub-workspaces section expands, collapses and navigates', 'workspace search', 'single aligned fixed footer', 'note before trash; smaller art with unchanged click targets', '220px sidebar without clipping', 'compact trash control', 'create, drag-to-trash and restore native post-it', 'no layout shift', 'GitHub and Stage-based Google Docs, Overleaf, and Zotero connections', 'Escape/focus/outside click', 'no automatic sign-in', 'connect/cancel/reopen/reconnect in Stage', 'redirected sign-in tab reused without losing input', 'real PKCE callback through Stage', 'manage access in Stage', 'shared repository-picker account', 'workspace switching', 'viewport placement', 'disconnect', 'no external browser, imports or sandbox runs'] }));
+    console.log(JSON.stringify({ ok: true, root, checks: ['current compact top inset', 'icon-led section headers', 'sub-workspace navigation through the workspace switcher', 'workspace search', 'single aligned fixed footer', 'note before trash; smaller art with unchanged click targets', '220px sidebar without clipping', 'compact trash control', 'create, drag-to-trash and restore native post-it', 'no layout shift', 'GitHub and Stage-based Google Docs, Overleaf, and Zotero connections', 'Escape/focus/outside click', 'no automatic sign-in', 'connect/cancel/reopen/reconnect in Stage', 'redirected sign-in tab reused without losing input', 'real PKCE callback through Stage', 'manage access in Stage', 'shared repository-picker account', 'workspace switching', 'viewport placement', 'disconnect', 'no external browser, imports or sandbox runs'] }));
     server.closeAllConnections(); server.close(); app.exit(0);
   } catch (error) {
     console.error(error); console.error('Artifacts:', root);

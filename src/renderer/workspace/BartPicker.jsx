@@ -33,7 +33,9 @@ const HEAD = { padding: '6px 10px 6px', font: '500 9px/1 var(--font-sans)', lett
 
 const REGENERATE = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /></svg>;
 
-export default function BartPicker({ models, current, anchor, onPick, onSend, onEnter, onLeave }) {
+// `hover` (the default) marks it a hover preview, which post-its stay above; the Build panel's (2026-09-27) is opened by a
+// click and, with `cover`, covers them as the panel does.
+export default function BartPicker({ models, current, anchor, onPick, onSend, onEnter, onLeave, hover = true, cover = false }) {
   const ids = Object.keys(models.providers);
   const [viewed, setViewed] = React.useState(current.provider);
   const [listing, setListing] = React.useState(false);
@@ -46,7 +48,7 @@ export default function BartPicker({ models, current, anchor, onPick, onSend, on
   // Measured, not estimated: under the chip, above it near the bottom of the window, cut to the room there if neither fits.
   const [ref, placed] = usePlaced(anchor, { align: anchor.left != null ? 'start' : 'end' });
   return (
-    <div ref={ref} data-bart-picker="1" data-overlay="1" data-hover="1" role="dialog" aria-label="Model and effort" onMouseEnter={onEnter} onMouseLeave={onLeave} onMouseDown={(e) => e.preventDefault()} style={{ ...placed, zIndex: 60, width: WIDTH, boxSizing: 'border-box', display: 'flex', padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 12, animation: `rise 160ms ${EASE}` }}>
+    <div ref={ref} data-bart-picker="1" data-overlay="1" data-hover={hover ? '1' : undefined} data-cover={cover ? '1' : undefined} role="dialog" aria-label="Model and effort" onMouseEnter={onEnter} onMouseLeave={onLeave} onMouseDown={(e) => e.preventDefault()} style={{ ...placed, zIndex: 60, width: WIDTH, boxSizing: 'border-box', display: 'flex', padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 12, animation: `rise 160ms ${EASE}` }}>
       <div style={{ flex: '1 1 0', minWidth: 0, padding: 4 }}>
         <div style={{ position: 'relative', marginBottom: 4 }}>
           <div role="button" aria-haspopup="listbox" aria-expanded={listing} onMouseDown={(e) => { e.preventDefault(); if (ids.length > 1) setListing((open) => !open); }} style={{ display: 'flex', alignItems: 'center', gap: 8, height: 32, padding: '0 10px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', cursor: ids.length > 1 ? 'pointer' : 'default', font: '500 13px/1 var(--font-sans)', color: '#171717' }}>

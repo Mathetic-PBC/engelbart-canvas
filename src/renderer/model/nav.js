@@ -17,7 +17,7 @@ export function nextPlace({ here, recent = [], agents = [] }) {
   if (waiting.length) {
     const first = waiting[0];
     const places = new Set(waiting.map((agent) => `${agent.projectId}/${agent.workspaceId}`));
-    return { projectId: first.projectId, workspaceId: first.workspaceId, name: first.name, path: first.path, projectName: first.projectName, why: 'agent', at: first.finished, waiting: places.size };
+    return { projectId: first.projectId, workspaceId: first.workspaceId, name: first.name, path: first.path, projectName: first.projectName, why: 'agent', kind: first.kind || 'bart', at: first.finished, waiting: places.size };
   }
   const at = recent.findIndex((entry) => same(entry, here));
   for (let step = 1; step <= recent.length; step += 1) {
@@ -25,6 +25,27 @@ export function nextPlace({ here, recent = [], agents = [] }) {
     if (entry && !same(entry, here)) return { projectId: entry.projectId, workspaceId: entry.workspaceId, name: entry.name, path: entry.path, projectName: entry.projectName, why: 'recent', at: entry.at, waiting: 0 };
   }
   return null;
+}
+
+/**
+ * Every place the next row could take you, for its hover list (2026-09-23): the workspaces with an agent waiting (the
+ * longest waiting first, once each), then the ones written in, newest first; never where you are, never twice. The
+ * one ⌘J goes to is marked `next`.
+ * → [{ projectId, workspaceId, name, path, projectName, why: 'agent' | 'recent', at, next }]
+ */
+export function placesToGo({ here, recent = [], agents = [] }) {
+  const target = nextPlace({ here, recent, agents });
+  const out = [];
+  const add = (entry, why, at) => {
+    if (!entry.workspaceId || same(entry, here) || out.some((held) => same(held, entry))) return;
+    out.push({ projectId: entry.projectId, workspaceId: entry.workspaceId, name: entry.name, path: entry.path, projectName: entry.projectName, why, ...(why === 'agent' ? { kind: entry.kind || 'bart' } : {}), at, next: same(entry, target) });
+  };
+  agents
+    .filter((agent) => agent.status === 'waiting')
+    .sort((a, b) => String(a.finished || '').localeCompare(String(b.finished || '')))
+    .forEach((agent) => add(agent, 'agent', agent.finished));
+  recent.forEach((entry) => add(entry, 'recent', entry.at));
+  return out;
 }
 
 /** How long ago, the short way: "now", "4 min", "2 h", "3 d". */
@@ -43,7 +64,7 @@ export function flatWorkspaces(roots) {
   const out = [];
   const walk = (list, above) => {
     for (const node of list || []) {
-      out.push({ id: node.id, name: node.name, status: node.status, above });
+      out.push({ id: node.id, name: node.name, above });
       walk(node.children, [...above, node.name]);
     }
   };

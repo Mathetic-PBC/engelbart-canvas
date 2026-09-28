@@ -1,4 +1,5 @@
 import React from 'react';
+import { EDGE as WINDOW_EDGE } from '../ui/WindowEdges.jsx';
 import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
 import { KindGlyph, SEARCH, FOLDER, ANNOTATE, RECORD, STOP_RECORDING } from '../ui/Icons.jsx';
@@ -392,6 +393,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   // things opened in one go (files picked together) each see where the one before them went.
   const tabsRef = React.useRef(tabs);
   const frontRef = React.useRef(activeId);
+  const beforeBuild = React.useRef(new Map());
   tabsRef.current = tabs;
   frontRef.current = activeId;
 
@@ -659,7 +661,33 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     setActiveId(held.id);
     void navigate(held.id, input);
   };
-  React.useImperativeHandle(ref, () => ({ openRow, openInput, openPreview, openPaths, newTab, closeTab: () => closeTab(tab.id) }));
+  const applyBuildPreview = (id, preview, focus = true) => {
+    if (!preview) return;
+    const requestKey = `build-preview:${id}`;
+    const held = tabsRef.current.find(t => t.requestKey === requestKey);
+    if (preview.mode === 'restored' || (preview.mode === 'accepted' && preview.status === 'failed')) {
+      // Git may have landed even when the replacement server cannot launch. Do
+      // not leave Stage on the now-stopped review URL; the Build card shows why.
+      const restoredUrl = preview.url || preview.previousUrl;
+      const wasFront = held && frontRef.current === held.id;
+      const previous = beforeBuild.current.get(id);
+      beforeBuild.current.delete(id);
+      if (held) closeTab(held.id);
+      if (wasFront) {
+        const accepted = restoredUrl && tabsRef.current.find(t => t.id !== held.id && t.url === restoredUrl);
+        if (accepted) setActiveId(accepted.id);
+        else if (restoredUrl) openInput(restoredUrl, 'accepted-build-preview');
+        else if (previous && previous !== held.id && tabsRef.current.some(t => t.id === previous)) setActiveId(previous);
+      }
+      return;
+    }
+    if (!preview.url || preview.status !== 'ready') return;
+    if (!held && !focus) return;
+    if (!beforeBuild.current.has(id)) beforeBuild.current.set(id, frontRef.current);
+    if (focus) openPreview(preview.url, requestKey);
+    else if (held.url !== preview.url) void navigate(held.id, preview.url);
+  };
+  React.useImperativeHandle(ref, () => ({ openRow, openInput, openPreview, applyBuildPreview, openPaths, newTab, closeTab: () => closeTab(tab.id) }));
 
   // A tab's pdf from a page: loading, then its bytes (and the ink kept for its address) or why not. A new one is a new viewer.
   const receivePdf = React.useCallback((got) => {
@@ -750,7 +778,9 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     const place = () => {
       const r = slot.getBoundingClientRect();
       if (r.width < 1 || r.height < 1) { quiet(api.browserHide()); return; }
-      quiet(api.browserShow(tab.id, { x: r.left, y: r.top, width: r.width, height: r.height }).then(() => { if (!cancelled) setSnapshot(null); }));
+      // The page stops short of the window's right and bottom edges, where the resize strips are (WindowEdges.jsx).
+      const width = Math.min(r.width, window.innerWidth - WINDOW_EDGE - r.left), height = Math.min(r.height, window.innerHeight - WINDOW_EDGE - r.top);
+      quiet(api.browserShow(tab.id, { x: r.left, y: r.top, width, height }).then(() => { if (!cancelled) setSnapshot(null); }));
     };
     const observer = new ResizeObserver(place);
     observer.observe(slot);
@@ -868,7 +898,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const openFind = () => { setFinding(true); setFindFocus((n) => n + 1); };
   const closeFind = () => { setFinding(false); setMatches(null); };
 
-  // ⌘T and ⌘W from anywhere but the terminal, bringing the Stage forward; ⌘F while the Stage shows and has the keyboard
+  // ⌘T while the Stage shows and ⌘W from anywhere but the terminal, bringing the Stage forward; ⌘F while the Stage shows and has the keyboard
   // (its fields, a pdf, a page: main forwards those) or nothing else that takes typing does; ⌘G / ⇧⌘G while finding.
   keys.current = {
     tabId: tab.id,
@@ -891,6 +921,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
       const take = () => { event.preventDefault(); event.stopPropagation(); };
       if ((key === 't' || key === 'w') && !event.shiftKey) {
         if (inTerminal(event.target)) return; // the terminal's own tabs
+        if (key === 't' && !visible) return; // the Terminal shows: ⌘T opens a terminal there (TerminalPane, 2026-09-25)
         take();
         keys.current.shortcut(key === 't' ? 'new-tab' : 'close-tab', null);
       } else if (!visible) {

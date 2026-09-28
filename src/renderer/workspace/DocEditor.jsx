@@ -16,11 +16,12 @@
 //   * where a document was scrolled to is kept per workspace (props.viewOf / props.onView, 2026-09-22), apart from the
 //     caret: coming back to a document shows what was on screen, not where the last edit was.
 import React from 'react';
-import { parseLine, parseLines, codeBlocks, selectedLineRange, jsonBlockEdit, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, threads, turnText, INLINE, LABELS, HELD, ATTRIBUTION_RE, FENCE_RE } from '../model/doc.js';
+import { parseLine, parseLines, codeBlocks, selectedLineRange, jsonBlockEdit, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, threads, turnText, wsMention, INLINE, LABELS, HELD, ATTRIBUTION_RE, FENCE_RE } from '../model/doc.js';
 import { readFlags, readQuestion, withChoice, modelOf, effortOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
 import BartPicker from './BartPicker.jsx';
 import MentionMenu from './MentionMenu.jsx';
 import Popover from './Popover.jsx';
+import WorkspacePeek from './WorkspacePeek.jsx';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const SPEED = { fast: 0.45, normal: 1, slow: 2.2 };
@@ -30,6 +31,9 @@ export const BART_ITEM = { id: 'bart', type: 'chat', name: 'bart', title: 'Bart'
 export const TASK_ITEM = { id: 'task', type: 'task', name: 'Task', title: 'Task', summary: 'A task row: check it off, \u2318\u23ce builds it, and a run of them shares one card.', facts: 'stored as - [ ]' };
 
 const UNDER_BART = ['pending', 'reply'];
+// A Build's state as its card names it (main/build/store.cjs STATUSES).
+const BUILD_STATUS = { 'setting-up': 'Setting up', queued: 'Waiting for a slot', running: 'Working', 'needs-you': 'Needs you', review: 'Ready to review', stopped: 'Stopped', failed: 'Failed', escalated: 'Too big for a quick task', interrupted: 'Interrupted', accepting: 'Accepting', conflict: 'Conflict', accepted: 'Accepted', discarded: 'Discarded' };
+const BUILD_WORKING = new Set(['setting-up', 'queued', 'running', 'accepting']);
 // `@Note` (the @ menu's Note) and the name after it, to the end of the line.
 const NOTE_VERB_RE = /(^|\s)@Note(?:\s+(.*))?$/;
 // A short fingerprint of a line (FNV-1a), so a remembered scroll position finds its line again without keeping its text.
@@ -80,6 +84,9 @@ export default class DocEditor extends React.Component {
   // A follow-up being typed and the model picked for it, by the first line of its card. Neither is in the document, and
   // neither is in the editor's HTML: the field keeps its text across redraws because it is put back after each one.
   followText = new Map(); followChoice = new Map();
+  // A Build card's reply being typed (by Build id), which cards show their earlier messages and their steps, a Discard
+  // waiting for its second click, and the HTML each part of each card was last drawn with (patchBuilds compares these).
+  buildText = new Map(); buildOpen = new Set(); buildSteps = new Set(); buildConfirm = null; buildDrawn = new Map();
   scrollRef = React.createRef();
   parsedCache = new WeakMap();
   // Where the open document was scrolled to: reported (onView) a moment after scrolling stops and whenever it is left;
@@ -90,12 +97,14 @@ export default class DocEditor extends React.Component {
   componentDidMount() {
     this.mounted = true;
     const inEd = (e) => e.target && e.target.closest && e.target.closest('[data-editor]') === this.editorEl();
-    // The follow-up field is an <input> inside the editor: its keys and text are its own, not the document's.
-    const inFollow = (e) => !!(e.target && e.target.matches && e.target.matches('[data-follow-input]'));
+    // The follow-up field is an <input> inside the editor: its keys and text are its own, not the document's. So is a
+    // Build card's reply field.
+    const inFollow = (e) => !!(e.target && e.target.matches && e.target.matches('[data-follow-input], [data-build-input]'));
+    const inBuild = (e) => !!(e.target && e.target.matches && e.target.matches('[data-build-input]'));
     this.docListeners = {
-      keydown: (e) => { if (!inEd(e)) return; if (inFollow(e)) this.followKey(e); else this.editorKey(e); },
-      input: (e) => { if (!inEd(e)) return; if (inFollow(e)) this.followInput(e.target); else this.editorInput(); },
-      beforeinput: (e) => { if (!inEd(e) || inFollow(e)) return; this.beforeBartInput(e); const sel = getSelection(); this.bulkDelete = /^delete/.test(e.inputType || '') && !!sel && !sel.isCollapsed; },
+      keydown: (e) => { if (!inEd(e)) return; if (inBuild(e)) this.buildKey(e); else if (inFollow(e)) this.followKey(e); else this.editorKey(e); },
+      input: (e) => { if (!inEd(e)) return; if (inBuild(e)) this.buildInput(e.target); else if (inFollow(e)) this.followInput(e.target); else this.editorInput(); },
+      beforeinput: (e) => { if (!inEd(e) || inFollow(e) || inBuild(e)) return; this.beforeBartInput(e); const sel = getSelection(); this.bulkDelete = /^delete/.test(e.inputType || '') && !!sel && !sel.isCollapsed; },
       paste: (e) => { if (inEd(e) && !inFollow(e)) this.editorPaste(e); },
       // A press on one of the editor's buttons must not move the keyboard: leaving a line redraws the editor, and a button
       // redrawn between the press and the release never gets its click (found with Delete, while an answer was being edited).
@@ -134,9 +143,11 @@ export default class DocEditor extends React.Component {
       const s = this.state;
       if (s.activeLine != null || s.mention || s.pop || s.picker) { this.setState({ activeLine: null, mention: null, pop: null, picker: null }); return; }
     }
-    // Progress of a run arrives many times a second. It changes pending rows only, and those are replaced where they
-    // stand: the rest of the editor, the caret and a selection in it are not touched.
-    if (prevProps.asks !== this.props.asks && prevProps.text === this.props.text && prevProps.docKey === this.props.docKey && this.patchPending()) return;
+    // Progress of a run arrives many times a second. It changes pending rows and Build cards only, and those are replaced
+    // where they stand: the rest of the editor, the caret and a selection in it are not touched.
+    const asked = prevProps.asks !== this.props.asks, built = prevProps.builds !== this.props.builds || prevProps.buildProgress !== this.props.buildProgress;
+    // Builds first: each patch ends by redrawing the editor's HTML in memory, which is where the cards' parts are remembered.
+    if ((asked || built) && prevProps.text === this.props.text && prevProps.docKey === this.props.docKey && prevProps.models === this.props.models && (!built || this.patchBuilds()) && (!asked || this.patchPending())) return;
     this.syncEditor();
     this.maybeRestoreView();
   }
@@ -246,6 +257,7 @@ export default class DocEditor extends React.Component {
   // edited (2026-09-21): it is a drawn-prefix line, as a bullet is.
   lockedAt(ls, i) {
     const ps = this.parsedOf(ls), p = ps[i] || parseLine('');
+    if (p.type === 'build') return true;
     if (p.type === 'reply') return p.folded || (ATTRIBUTION_RE.test(p.text) && (ps[i + 1] || parseLine('')).type !== 'reply');
     if (p.type === 'bart') return ls[i + 1] != null && UNDER_BART.includes(ps[i + 1].type);
     return isAnswer(p.type);
@@ -366,6 +378,7 @@ export default class DocEditor extends React.Component {
   // `at` says where a line of an @bart card stands in it (this.layout); every other line has none.
   lineHtml(i, line, p, active, status, first, at, locked) {
     const raw = `data-line="${i}" data-raw="${esc(line)}"`;
+    if (p.type === 'build') return this.buildHtml(i, line, p);
     if (p.type === 'code' || p.type === 'fence') return this.codeHtml(i, line, p, active);
     if (p.type === 'todo') {
       const held = HELD.includes(status), done = p.done, label = done ? 'Done' : (LABELS[status] || '');
@@ -518,6 +531,164 @@ export default class DocEditor extends React.Component {
     if (isMarked(q.type)) return { content: `<span style="display:flex;gap:10px;padding-left:${q.depth * 18}px"><span contenteditable="false" style="flex:none;color:#8f8f8f;user-select:none">•</span><span style="flex:1;min-width:0">${ink(inlineHtml(q.text))}</span></span>`, look: 'padding-top:4px;padding-bottom:4px;', minHeight: 26 };
     return { content: ink(inlineHtml(text)), look: 'text-wrap:pretty;', minHeight: text ? 26 : 22 };
   }
+  /* ---------------------------------------------------------------- Build cards (2026-09-25) */
+  // A `build> <id>` line is drawn as its Build's card, from props.builds (the record main sends) and props.buildProgress
+  // (what a running turn is doing). The card is in parts — head, body, live, reply, actions — so a progress update
+  // replaces only the parts it changes (patchBuilds) and a reply being typed keeps its field.
+  buildHtml(i, line, p) {
+    const task = (this.props.builds || {})[p.id];
+    const raw = `data-line="${i}" data-raw="${esc(line)}" data-build="${esc(p.id)}"`;
+    const parts = this.buildParts(p.id, task);
+    for (const [name, html] of parts) this.buildDrawn.set(`${p.id}:${name}`, html);
+    return `<div ${raw} contenteditable="false" data-readonly="1" style="user-select:text;cursor:default;margin:6px 0 14px;padding:12px 16px 14px;background:#fafafa;border-radius:10px;font:14px/1.6 var(--font-sans);color:#4d4d4d">`
+      + parts.map(([name, html]) => `<div data-build-part="${name}">${html}</div>`).join('')
+      + '</div>';
+  }
+  // A text button of the card: grey, ink on hover (the answer card's .bart-text); `strong` is Accept's blue.
+  buildButton(act, id, label, { strong = false, extra = '' } = {}) {
+    return `<button class="bart-text" data-act="${act}" data-build-id="${esc(id)}" style="user-select:none;${strong ? 'color:#0070f3;' : ''}${extra}">${esc(label)}</button>`;
+  }
+  // One message of the conversation. The agent's is markdown (drawn as an answer is), the person's is theirs as typed,
+  // Engelbart's own notes are one grey line.
+  buildMessageHtml(m) {
+    if (m.role === 'engelbart') return `<div style="margin:4px 0;font:12.5px/1.5 var(--font-sans);color:#8f8f8f">${esc(m.text)}</div>`;
+    if (m.role === 'you') return `<div style="margin:10px 0 6px;padding-left:12px;border-left:2px solid #c9c9c9;color:#171717;white-space:pre-wrap">${esc(m.text)}</div>`;
+    const lines = String(m.text || '').split('\n'), role = new Map();
+    for (const b of codeBlocks(lines)) { role.set(b.open, 'fence'); role.set(b.close, 'fence'); for (let k = b.open + 1; k < b.close; k++) role.set(k, 'code'); }
+    const body = lines.map((text, n) => {
+      if (role.get(n) === 'fence') return '<span style="display:block;height:6px"></span>';
+      if (role.get(n) === 'code') return `<span style="display:block;min-height:22px;padding:0 10px;background:#fff;font:13px/1.7 var(--font-mono);color:#171717;white-space:pre-wrap">${esc(text) || '<br>'}</span>`;
+      const a = this.answerLook(text);
+      return `<span style="display:block;min-height:${text ? 22 : 10}px;${a.look}color:#4d4d4d;font-size:15px;line-height:1.65">${a.content || '<br>'}</span>`;
+    }).join('');
+    return `<div style="margin:6px 0">${body}</div>`;
+  }
+  buildParts(id, task) {
+    if (!task) {
+      return [['head', `<div style="display:flex;align-items:center;gap:10px"><span style="font-weight:600;color:#171717">Build</span><span style="flex:1;color:#8f8f8f">${esc(id)} is not in this project.</span>${this.buildButton('buildremove', id, 'Remove')}</div>`]];
+    }
+    const status = task.status, working = BUILD_WORKING.has(status) || !!task.working, final = !!task.final;
+    const statusColor = status === 'needs-you' || status === 'review' ? '#0070f3' : status === 'failed' || status === 'conflict' ? '#e70022' : '#8f8f8f';
+    const head = '<div style="display:flex;align-items:baseline;gap:10px">'
+      + '<span style="flex:none;font-weight:600;color:#171717">Build</span>'
+      + `<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#171717">${esc(task.title)}</span>`
+      + `<span style="flex:none;font-size:12.5px;color:#8f8f8f">${esc(task.modelName || task.model)} · ${esc(EFFORT_LABELS[task.effort] || task.effort)}</span>`
+      + `<span data-build-status="${esc(status)}" style="flex:none;font-size:12.5px;font-weight:500;color:${statusColor}">${esc(BUILD_STATUS[status] || status)}</span>`
+      + '</div>';
+    // The conversation: from the agent's last message on; the earlier ones behind a count. A closed Build shows only its last note.
+    const messages = task.messages || [];
+    let from = 0;
+    for (let k = messages.length - 1; k >= 0; k--) if (messages[k].role === 'agent') { from = k; break; }
+    if (final) from = Math.max(0, messages.length - 1);
+    const open = this.buildOpen.has(id), hidden = open ? 0 : from;
+    let body = hidden ? `<button class="bart-text" data-act="buildhistory" data-build-id="${esc(id)}" style="user-select:none;padding-left:0">${hidden} earlier ${hidden === 1 ? 'message' : 'messages'}</button>` : (open && from ? `<button class="bart-text" data-act="buildhistory" data-build-id="${esc(id)}" style="user-select:none;padding-left:0">Hide earlier messages</button>` : '');
+    body += messages.slice(hidden).map((m) => this.buildMessageHtml(m)).join('');
+    if (status === 'needs-you' && task.question) body += `<div style="margin:10px 0 2px;padding:8px 12px;border-left:2px solid #0070f3;background:#fff;color:#171717"><strong style="font-weight:600">Needs you:</strong> ${inlineHtml(task.question)}</div>`;
+    if (status === 'escalated' && task.escalation) body += `<div style="margin:10px 0 2px;color:#171717">${esc(task.escalation)}</div>`;
+    if (task.checks && !task.checks.ok && !final) body += `<div style="margin:8px 0 0;font:12px/1.6 var(--font-mono);color:#4d4d4d;white-space:pre-wrap;max-height:160px;overflow:auto;padding:8px 10px;background:#fff;border-radius:6px">$ ${esc(task.checks.command)}\n${esc(String(task.checks.output || '').split('\n').slice(-12).join('\n'))}</div>`;
+    if (task.queued) body += `<div style="margin:8px 0 0;font:12.5px/1.5 var(--font-sans);color:#8f8f8f">Sending: ${esc(task.queued.length > 140 ? `${task.queued.slice(0, 139)}…` : task.queued)}</div>`;
+    // While it works: what it is doing, the steps behind a count, Stop.
+    let live = '';
+    if (working) {
+      const progress = (this.props.buildProgress || {})[id] || {};
+      const doing = status === 'running' ? (progress.activity || 'Thinking') : BUILD_STATUS[status];
+      const log = progress.log || [], steps = this.buildSteps.has(id);
+      live = '<div style="display:flex;align-items:center;gap:10px;margin-top:10px;font:13px/1.5 var(--font-sans);color:#8f8f8f">'
+        + '<span style="flex:none;width:6px;height:6px;border-radius:50%;background:#0070f3;animation:thinking 1.2s ease-in-out infinite"></span>'
+        + `<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(doing)}</span>`
+        + (log.length ? `<button class="bart-text" data-act="buildsteps" data-build-id="${esc(id)}" aria-expanded="${steps}" style="user-select:none;display:inline-flex;align-items:center;gap:6px;font-weight:400">${log.length} ${log.length === 1 ? 'step' : 'steps'}${steps ? ICON.stepsOpen : ICON.stepsShut}</button>` : '')
+        + (status === 'running' || status === 'queued' ? this.buildButton('buildstop', id, 'Stop') : '')
+        + '</div>'
+        + (steps && log.length ? `<div style="margin:4px 0 0 16px;font:12px/1.7 var(--font-sans);color:#8f8f8f">${log.map((entry) => `<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(entry)}</div>`).join('')}</div>` : '');
+    }
+    // The reply field (the typed text is not in this string: restoreBuilds puts it back after a redraw). A reply sent while
+    // a turn runs reaches the agent at once (2026-09-27: no Stop & send to press or see; main cuts the turn short for it).
+    const reply = final || status === 'accepting' ? '' : '<div style="display:flex;align-items:flex-start;gap:10px;margin-top:12px">'
+      + `<textarea data-build-input="${esc(id)}" rows="1" placeholder="${status === 'needs-you' ? 'Answer…' : 'Reply…'}" aria-label="Reply to the Build" spellcheck="false" autocomplete="off" style="flex:1;min-width:0;display:block;height:24px;margin:0;padding:0;border:0;background:none;outline:none;resize:none;overflow:hidden;font:15px/1.6 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text"></textarea>`
+      + `<button class="bart-send" data-act="buildsend" data-build-id="${esc(id)}" aria-label="Send" style="flex:none;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;padding:0;border:0;border-radius:50%;background:#f2f2f2;color:#8f8f8f;cursor:pointer">${ICON.send}</button>`
+      + '</div>';
+    // What can be done with it now.
+    const acts = [];
+    if (!working && status !== 'discarded' && (task.preview || task.interfaceIntent)) acts.push(this.buildButton('buildpreview', id, task.preview?.url ? 'Live preview' : 'Start preview'));
+    if (task.preview?.error) body += `<div role="status" style="margin-top:8px;font-size:12.5px;color:#777">Preview: ${esc(task.preview.error)}</div>`;
+    if (!working && !final) {
+      acts.push(this.buildButton('buildreview', id, 'Review'));
+      if (status === 'conflict' || (task.checks && !task.checks.ok)) acts.push(this.buildButton('buildfix', id, 'Send to agent'));
+      if (['interrupted', 'stopped', 'failed'].includes(status)) acts.push(this.buildButton('buildresume', id, 'Resume'));
+      acts.push(this.buildButton('buildaccept', id, 'Accept', { strong: true }));
+      const confirming = this.buildConfirm && this.buildConfirm.id === id && this.buildConfirm.until > Date.now();
+      acts.push(this.buildButton('builddiscard', id, confirming ? 'Discard for good?' : 'Discard', { extra: confirming ? 'color:#e70022;' : '' }));
+    } else if (final) {
+      if (status === 'accepted' && task.accepted) acts.push(this.buildButton('buildreview', id, 'Review'));
+      acts.push(this.buildButton('buildremove', id, 'Remove'));
+    }
+    // The error in red, unless the conversation's last note already says it.
+    const lastNote = messages.length ? messages[messages.length - 1].text : '';
+    const errorLine = task.error && !final && !lastNote.includes(task.error) ? `<div style="margin-top:8px;font:12.5px/1.5 var(--font-sans);color:#e70022">${esc(task.error)}</div>` : '';
+    const actions = acts.length || errorLine ? `${errorLine}<div style="display:flex;align-items:center;gap:6px;margin:10px 0 0 -2px">${acts.join('')}</div>` : '';
+    return [['head', head], ['body', body], ['live', live], ['reply', reply], ['actions', actions]];
+  }
+  // Only the parts that changed are replaced; a reply field that was replaced gets its text and the keyboard back.
+  patchBuilds() {
+    const ed = this.editorEl(); if (!ed || this.lastKey !== this.key()) return false;
+    const ls = this.lines();
+    for (const d of ed.querySelectorAll('[data-build]')) {
+      const i = Number(d.dataset.line), p = parseLine(ls[i] ?? ''); if (p.type !== 'build' || p.id !== d.dataset.build) return false;
+      for (const [name, html] of this.buildParts(p.id, (this.props.builds || {})[p.id])) {
+        const key = `${p.id}:${name}`; if (this.buildDrawn.get(key) === html) continue;
+        const part = d.querySelector(`[data-build-part="${name}"]`); if (!part) return false;
+        const field = document.activeElement, had = field && part.contains(field) && field.matches('[data-build-input]') ? { a: field.selectionStart, b: field.selectionEnd } : null;
+        part.innerHTML = html; this.buildDrawn.set(key, html);
+        this.restoreBuilds(part, had ? { key: p.id, ...had } : null);
+      }
+    }
+    this.lastHtml = this.editorHtml(); return true;
+  }
+  restoreBuilds(root, had) {
+    for (const input of root.querySelectorAll('[data-build-input]')) {
+      const text = this.buildText.get(input.dataset.buildInput) || '';
+      if (text) input.value = text;
+      this.paintBuildSend(input); this.fitFollow(input);
+      if (had && had.key === input.dataset.buildInput) { input.focus({ preventScroll: true }); try { input.setSelectionRange(had.a, had.b); } catch { /* not a text selection */ } }
+    }
+  }
+  paintBuildSend(input) {
+    const send = input.parentElement && input.parentElement.querySelector('[data-act="buildsend"]'); if (!send) return;
+    const ready = !!input.value.trim(); send.style.background = ready ? '#0070f3' : '#f2f2f2'; send.style.color = ready ? '#fff' : '#8f8f8f';
+  }
+  buildInput(input) { this.buildText.set(input.dataset.buildInput, input.value); this.paintBuildSend(input); this.fitFollow(input); }
+  // Enter sends; Shift+Enter is a new line of the reply (unlike a follow-up, a reply is not a line of the document).
+  buildKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); this.sendBuild(e.target.dataset.buildInput); }
+    else if (e.key === 'Escape') e.target.blur();
+  }
+  sendBuild(id) {
+    const text = (this.buildText.get(id) || '').trim(); if (!text || !this.props.onBuildAction) return;
+    Promise.resolve(this.props.onBuildAction(id, 'reply', { text, interrupt: true })).then((ok) => {
+      if (ok === false) return;
+      this.buildText.delete(id);
+      const input = this.editorEl() && this.editorEl().querySelector(`[data-build-input="${id}"]`);
+      if (input) { input.value = ''; this.paintBuildSend(input); this.fitFollow(input); }
+    }).catch(() => {});
+  }
+  buildAct(k, id) {
+    const act = this.props.onBuildAction; if (!act) return;
+    if (k === 'buildhistory') { if (this.buildOpen.has(id)) this.buildOpen.delete(id); else this.buildOpen.add(id); this.patchBuilds(); return; }
+    if (k === 'buildsteps') { if (this.buildSteps.has(id)) this.buildSteps.delete(id); else this.buildSteps.add(id); this.patchBuilds(); return; }
+    if (k === 'buildsend') { this.sendBuild(id); return; }
+    if (k === 'builddiscard') {
+      // Discarding throws the agent's work away: it takes a second click within four seconds.
+      if (!(this.buildConfirm && this.buildConfirm.id === id && this.buildConfirm.until > Date.now())) {
+        this.buildConfirm = { id, until: Date.now() + 4000 }; this.patchBuilds();
+        this.timer(() => { if (this.buildConfirm && this.buildConfirm.id === id) { this.buildConfirm = null; this.patchBuilds(); } }, 4100);
+        return;
+      }
+      this.buildConfirm = null;
+    }
+    if (k === 'buildremove') { this.setLines((ls) => { const out = ls.filter((l) => !(parseLine(l).type === 'build' && parseLine(l).id === id)); return out.length ? out : ['']; }); return; }
+    act(id, { buildstop: 'stop', buildreview: 'review', buildpreview: 'preview', buildaccept: 'accept', builddiscard: 'discard', buildresume: 'resume', buildfix: 'fix' }[k]);
+  }
+
   // The foot of a todo card: Copy all on the left, Build all on the right while anything is open; clicking its whitespace adds a line below the card.
   groupHtml(group) {
     const lastIdx = group[group.length - 1].i;
@@ -652,8 +823,9 @@ export default class DocEditor extends React.Component {
     let c = this.caret || (hadFocus ? this.caretInfo()?.anchor : null);
     if (!c && hadFocus && !ed.querySelector('[data-line]')) { const ls = this.lines(), last = ls.length - 1, p = parseLine(ls[last]); c = { line: last, offset: lineText(p, ls[last]).length }; }
     if (c && !this.caret) this.caret = c;
-    this.syncing = true; ed.innerHTML = html; this.lastHtml = html; this.lastKey = key; this.restoreFollow(ed, had);
-    if (c && !had && (hadFocus || this.wantFocus)) { ed.focus({ preventScroll: true }); this.caret = c; this.applyCaret(); }
+    const buildField = field && field.matches && field.matches('[data-build-input]') && ed.contains(field) ? { key: field.dataset.buildInput, a: field.selectionStart, b: field.selectionEnd } : null;
+    this.syncing = true; ed.innerHTML = html; this.lastHtml = html; this.lastKey = key; this.restoreFollow(ed, had); this.restoreBuilds(ed, buildField);
+    if (c && !had && !buildField && (hadFocus || this.wantFocus)) { ed.focus({ preventScroll: true }); this.caret = c; this.applyCaret(); }
     this.wantFocus = false; this.syncing = false;
   }
   applyCaret() { const c = this.caret; this.caret = null; if (!c) return; if (c.sel) this.setSelection(c.line, c.sel[0], c.sel[1], c.endLine); else this.setSelection(c.line, c.offset, c.offset); }
@@ -1004,6 +1176,7 @@ export default class DocEditor extends React.Component {
         return;
       }
       if (k === 'asklog') { const id = act.dataset.ask; if (this.openLogs.has(id)) this.openLogs.delete(id); else this.openLogs.add(id); this.patchPending(); return; }
+      if (k.startsWith('build') && act.dataset.buildId) { this.buildAct(k, act.dataset.buildId); return; }
       if (k === 'stopask') { if (this.props.onStopAsk) this.props.onStopAsk(act.dataset.ask); return; }
       if (k === 'showbuild') { this.props.onShowLocalBuild?.(act.dataset.build); return; }
       if (k === 'toggle') this.toggleTodo(i);
@@ -1015,13 +1188,14 @@ export default class DocEditor extends React.Component {
     const a = e.target.closest('a[data-link]');
     if (a) { e.preventDefault(); this.openLink(a.getAttribute('href')); return; }
     const m = e.target.closest('[data-mention]');
+    if (m && m.dataset.ws) { e.preventDefault(); this.hidePop(); if (this.props.onOpenWorkspace) this.props.onOpenWorkspace(m.dataset.ws); return; } // goes there: one workspace at a time
     if (m) {
       e.preventDefault(); this.hidePop(); const nm = m.dataset.mention; if (nm.startsWith('bart')) return;
       const res = this.findRes(nm); if (res.id !== '?' && this.props.onOpenItem) this.props.onOpenItem(res);
     }
   };
   editorOver = (e) => {
-    const m = e.target.closest('[data-mention]'); if (m) this.showPop(this.findRes(m.dataset.mention), { currentTarget: m });
+    const m = e.target.closest('[data-mention]'); if (m) this.showPop(m.dataset.ws ? { ws: m.dataset.ws, name: m.dataset.mention } : this.findRes(m.dataset.mention), { currentTarget: m });
     // An icon's name goes under it, or above it when under would leave the pane.
     const ic = e.target.closest('.bart-ic'), box = this.scrollRef.current;
     if (ic && ic.parentElement && box) ic.parentElement.toggleAttribute('data-tip-up', ic.getBoundingClientRect().bottom + 32 > Math.min(box.getBoundingClientRect().bottom, window.innerHeight || 800));
@@ -1173,10 +1347,10 @@ export default class DocEditor extends React.Component {
     }
     // Bart and Note are words the line keeps (Enter asks, or makes the note); anything else is a mention, and what it names
     // comes into this workspace (the open page is added to the library first: props.onMentionPicked).
-    const ins = verb === 'bart' ? '@Bart ' : verb === 'note' ? '@Note ' : `@[${r.name}] `;
+    const ins = verb === 'bart' ? '@Bart ' : verb === 'note' ? '@Note ' : r.kind === 'workspace' ? `${wsMention(r.name, r.id)} ` : `@[${r.name}] `;
     this.writeText(m.i, cur.slice(0, m.start) + ins + cur.slice(m.caret), { line: m.i, offset: m.start + ins.length });
     this.wantFocus = true; this.setState({ mention: null, activeLine: m.i });
-    if (!verb && this.props.onMentionPicked) this.props.onMentionPicked(r);
+    if (!verb && r.kind !== 'workspace' && this.props.onMentionPicked) this.props.onMentionPicked(r); // a workspace is not a library row
   }
   // Enter on a line holding `@Note name`: the note is made (named, or untitled when nothing follows), and the words
   // become its mention if the line still holds them once it exists.
@@ -1280,7 +1454,7 @@ export default class DocEditor extends React.Component {
             <div
               data-editor="1"
               ref={this.edRef}
-              contentEditable
+              contentEditable={!this.props.readOnly}
               suppressContentEditableWarning
               spellCheck={false}
               role="textbox"
@@ -1291,8 +1465,18 @@ export default class DocEditor extends React.Component {
             />
           </div>
         </div>
+        {/* The footer (the document's Copy, 2026-09-23) sits under the text's left edge, not the pane's: this column
+            repeats the scroller's padding and 65ch measure, so it stays with the note when panes split. Since 2026-09-27 it
+            is a strip of its own under the page ("the text editor stops above these buttons"), no longer floating over it. */}
+        {!compact && this.props.footer && (
+          <div data-doc-footer="1" style={{ flex: 'none', borderTop: '1px solid #eaeaea', background: '#fff', paddingInline: 'clamp(12px, 4%, 40px)' }}>
+            <div style={{ maxWidth: '65ch', minHeight: 44, marginInline: 'auto', paddingInline: 'clamp(0px, 3%, 24px)', boxSizing: 'border-box', fontSize: 17, display: 'flex', alignItems: 'center' }}>
+              {this.props.footer}
+            </div>
+          </div>
+        )}
         {s.mention && s.mention.anchor && <MentionMenu items={this.mentionList()} index={s.mentionIdx} anchor={s.mention.anchor} onPick={(r) => this.pickMention(r)} onHover={(i) => this.setState({ mentionIdx: i })} />}
-        {s.pop && <Popover item={s.pop.res} anchor={s.pop.anchor} />}
+        {s.pop && (s.pop.res.ws ? <WorkspacePeek id={s.pop.res.ws} name={s.pop.res.name} anchor={s.pop.anchor} peek={this.props.workspacePeek} /> : <Popover item={s.pop.res} anchor={s.pop.anchor} />)}
         {this.pickerView()}
       </>
     );

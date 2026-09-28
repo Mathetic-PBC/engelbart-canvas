@@ -9,7 +9,7 @@ const { pathToFileURL } = require('node:url');
 const db = require('../src/main/store/db.cjs');
 const { ensureHome } = require('../src/main/store/home.cjs');
 const projects = require('../src/main/store/projects.cjs');
-const { DEFAULT_MODELS, MODELS_FILE, normalizeModels, onlyProviders, loadModels, effortOf, modelOf, readFlags, readQuestion, withChoice } = require('../src/main/bart/models.cjs');
+const { DEFAULT_MODELS, PAST_DEFAULT_MODELS, MODELS_FILE, normalizeModels, onlyProviders, preferUsable, loadModels, effortOf, modelOf, readFlags, readQuestion, withChoice } = require('../src/main/bart/models.cjs');
 const { climb, levelBlock, createBart, createFakeBart, createThreads, threadKey, cleanTurns, THREAD_IDLE_MS } = require('../src/main/bart/ask.cjs');
 const { PENDING_RE, replyLines, answerText, failureLines, attribution } = require('../src/main/bart/reply.cjs');
 const { buildContext, markPlace, conversationBlock, HERE } = require('../src/main/bart/context.cjs');
@@ -32,8 +32,8 @@ test('flags are matched loosely, from either end, and pin one step', () => {
     ['why --sonnet', 'why', 'Sonnet medium'],
     ['--high hm', 'hm', 'Sol high'],
     ['--fable5.1 --XHIGH q', 'q', 'Fable xhigh'],
-    ['--gpt-5.6-sol --med q', 'q', 'Sol medium'],
-    ['--claude-opus-5 q --max', 'q', 'Opus max'], // Claude Code's top effort (2026-09-21)
+    ['--gpt-6-sol --med q', 'q', 'Sol medium'],
+    ['--claude-opus-5-5 q --max', 'q', 'Opus max'], // Claude Code's top effort (2026-09-21)
     ['--sol --ultra q', 'q', 'Sol ultra'], // Codex's top effort
     ['--astra --max q', 'q', 'Astra ultra'], // max is not in Codex's list: of the two equally near, the higher
     ['--opus --ultra q', 'q', 'Opus max'], // ultra is not in Claude Code's list: the nearest that is
@@ -73,7 +73,20 @@ test('only the providers config.json lists are offered: the rest have no models,
   assert.deepEqual(Object.keys(loadModels(root, { only: ['openai'] }).providers), ['openai']);
 });
 
-test('the models file is written once with the defaults, read again each time, and a broken one falls back', () => {
+test('@bart starts on a CLI that can run: the saved default when it can, else the other; nothing is written (2026-09-23)', () => {
+  const start = (usable, models = MODELS) => readQuestion('why?', preferUsable(models, usable)).steps[0].name;
+  assert.equal(start(null), 'Sol', 'before the first check: the saved default');
+  assert.equal(start(['codex', 'claude']), 'Sol', 'both: the saved default');
+  assert.equal(start(['claude']), 'Sonnet', 'only Claude Code');
+  assert.equal(start(['codex']), 'Sol', 'only Codex');
+  assert.equal(start([]), 'Sol', 'neither: the saved default, which reports what is missing');
+  assert.equal(start(['codex'], { ...MODELS, provider: 'anthropic' }), 'Sol', 'a saved Claude default moves to Codex while Claude Code cannot run');
+  const picked = readQuestion('--opus why?', preferUsable(MODELS, ['codex']));
+  assert.deepEqual([picked.provider, picked.pinned], ['anthropic', true], 'a model picked by flag is never moved');
+  assert.equal(preferUsable(onlyProviders(MODELS, ['openai']), ['claude']).provider, 'openai', 'a provider config.json does not offer is never chosen');
+});
+
+test('the models file is written with the defaults, read again each time, keeps what the person edited, and a broken one falls back', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-models-'));
   assert.deepEqual(loadModels(root), normalizeModels(DEFAULT_MODELS));
   const file = path.join(root, MODELS_FILE);
@@ -86,6 +99,56 @@ test('the models file is written once with the defaults, read again each time, a
   assert.deepEqual(edited.providers.openai.ladder, DEFAULT_MODELS.providers.openai.ladder);
   fs.writeFileSync(file, '{ not json');
   assert.equal(loadModels(root).provider, 'openai');
+  assert.equal(fs.readFileSync(file, 'utf8'), '{ not json', 'a file being edited is never overwritten');
+});
+
+test('a default changed in a later build reaches installs that already have the file; what the person changed stays (2026-09-23)', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-models-carry-'));
+  const file = path.join(root, MODELS_FILE);
+  loadModels(root);
+  // this install's file was given an older set of defaults, and its owner changed Claude Code's ladder
+  const given = JSON.parse(JSON.stringify(DEFAULT_MODELS));
+  given.provider = 'anthropic';
+  given.providers.openai.ladder = [{ model: 'luna', effort: 'medium' }];
+  fs.writeFileSync(path.join(root, '.defaults', MODELS_FILE), JSON.stringify(given));
+  const theirs = JSON.parse(JSON.stringify(given));
+  theirs.providers.anthropic.ladder = [{ model: 'opus', effort: 'high' }];
+  fs.writeFileSync(file, JSON.stringify(theirs));
+  const loaded = loadModels(root);
+  assert.equal(loaded.provider, 'openai', 'the default provider they never touched follows the new default');
+  assert.deepEqual(loaded.providers.openai.ladder, DEFAULT_MODELS.providers.openai.ladder, 'so does the ladder they never touched');
+  assert.deepEqual(loaded.providers.anthropic.ladder, [{ model: 'opus', effort: 'high' }], 'the ladder they changed is theirs');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, '.defaults', MODELS_FILE), 'utf8')), DEFAULT_MODELS);
+});
+
+test('a file written before defaults were carried (Hudson\'s: 09-20 wording, 09-21 efforts added by hand) comes up to date and is backed up', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-models-legacy-'));
+  const file = path.join(root, MODELS_FILE);
+  const legacy = JSON.parse(JSON.stringify(PAST_DEFAULT_MODELS[0]));
+  legacy.providers.openai.efforts = [...DEFAULT_MODELS.providers.openai.efforts];
+  legacy.providers.anthropic.efforts = [...DEFAULT_MODELS.providers.anthropic.efforts];
+  legacy.providers.anthropic.models.sonnet.use = 'My own words.';
+  fs.writeFileSync(file, JSON.stringify(legacy, null, 2));
+  loadModels(root);
+  const now = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(now.about, DEFAULT_MODELS.about);
+  assert.deepEqual(now.providers.openai.efforts, ['medium', 'high', 'xhigh', 'ultra']);
+  assert.equal(now.providers.anthropic.models.sonnet.use, 'My own words.');
+  const copies = fs.readdirSync(path.join(root, '.backups'));
+  assert.equal(copies.length, 1);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, '.backups', copies[0]), 'utf8')).about, PAST_DEFAULT_MODELS[0].about);
+});
+
+test('untouched 5.6 models move to 6 in a model file without a saved defaults base', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-models-upgrade-'));
+  const file = path.join(root, MODELS_FILE);
+  const old = JSON.parse(JSON.stringify(PAST_DEFAULT_MODELS.at(-1)));
+  old.providers.openai.models.astra.use = 'My own words.';
+  fs.writeFileSync(file, JSON.stringify(old));
+  const models = loadModels(root);
+  assert.equal(models.providers.openai.models.sol.id, 'gpt-6-sol');
+  assert.equal(models.providers.openai.models.luna.id, 'gpt-6-luna');
+  assert.equal(models.providers.openai.models.astra.use, 'My own words.');
 });
 
 test('climb: an answer ends it; ESCALATE resumes the same session one step up; the top step is told to answer', async () => {
@@ -201,6 +264,31 @@ test('the fake agent (scripted runs) answers through the same loop, moves up on 
   const waiting = slow.ask(ctx, project.id, { askId: 'f2', ref, workspaceId: workspace.id, text: 'q' });
   setTimeout(() => slow.stop('f2'), 20);
   await assert.rejects(waiting, (error) => error.kind === 'stopped');
+});
+
+test('with the tool check: a question holds its CLI\'s lock, and a CLI the login PATH misses runs by its full path (2026-09-23)', async () => {
+  const authFile = path.join(homeDir, 'auth-tools.json');
+  fs.writeFileSync(authFile, JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'x' } }));
+  const calls = [];
+  const events = [];
+  const run = (shell, args, options, callback) => {
+    calls.push({ command: args[args.length - 1], env: options.env });
+    events.push('run');
+    fs.writeFileSync(options.env.ENGELBART_BART_OUTPUT, 'answer');
+    callback(null, '{"type":"thread.started","thread_id":"01a0bc2d-7c18-77d2-8b21-3cc7e942cbcc"}\n');
+  };
+  const tools = {
+    binaryFor: (name) => (name === 'codex' ? '/Users/someone/.local/bin/codex' : null),
+    ensure: async (name) => { events.push(`ensure ${name}`); },
+    use: async (name, fn) => { events.push(`lock ${name}`); try { return await fn(); } finally { events.push(`unlock ${name}`); } },
+    check: async () => {},
+  };
+  const bart = createBart({ readModels: () => MODELS, environment: { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir }, runDirectory: path.join(homeDir, 'runs-tools'), codexHome: path.join(homeDir, 'codex-home-tools'), codexAuthFile: authFile, run, tools });
+  const out = await bart.ask(ctx, project.id, { askId: 't1', ref: { kind: 'workspace', workspaceId: workspace.id }, workspaceId: workspace.id, text: 'why?' });
+  assert.equal(out.lines[0], 'bart> answer');
+  assert.deepEqual(events, ['ensure codex', 'lock codex', 'run', 'unlock codex']);
+  assert.match(calls[0].command, /^exec "\$ENGELBART_CODEX_BIN" exec --color never /);
+  assert.equal(calls[0].env.ENGELBART_CODEX_BIN, '/Users/someone/.local/bin/codex');
 });
 
 test('the real runner: command lines, private folders, the subscription, and a resumed session (the CLI itself is stubbed)', async () => {

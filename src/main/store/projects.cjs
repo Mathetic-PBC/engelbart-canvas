@@ -9,9 +9,11 @@
 //   <dataRoot>/<slug>/notes.pglite/
 //   <dataRoot>/<slug>/<Note>.md
 //   <dataRoot>/<slug>/assets/<id>.<ext>
-//   <dataRoot>/<slug>/<Workspace>/meta.json          { id, status, context, created, chars }
+//   <dataRoot>/<slug>/<Workspace>/meta.json          { id, status, context, created, chars, builds, archives }
 //   <dataRoot>/<slug>/<Workspace>/workspace.md
+//   <dataRoot>/<slug>/<Workspace>/.archive/<t>.md    the document as it was when Clear was pressed (./archive.cjs)
 //   <dataRoot>/<slug>/<Workspace>/<Child>/…          the same, recursively
+//   <dataRoot>/<slug>/builds/<id>/                   a Build's record (../build/store.cjs)
 //
 // `directory` is where the project's code lives: terminals and agents start there.
 // A workspace's `context` records where library items were attached. The sidebar
@@ -29,9 +31,15 @@ const db = require('./db.cjs');
 const { migrateProjectDir } = require('./migrate.cjs');
 const sharedContext = require('./project-context.cjs');
 
+// Keep the local workspace status independently of a Build's lifecycle.
 const STATUSES = Object.freeze(['open', 'progress', 'done']);
 const RESERVED = new Set(['annotations', 'seed', 'test']);
-const PROJECT_RESERVED = new Set(['assets']);
+// A project's own folders, never workspaces: pasted images, and Build records (2026-09-25).
+const PROJECT_RESERVED = new Set(['assets', 'builds']);
+// Folders of the data root that are not projects: Build's worktrees (<dataRoot>/worktrees/<slug>/<id>).
+const ROOT_RESERVED = new Set([...RESERVED, 'worktrees']);
+const BUILD_ID_RE = /^[a-z0-9]{6,32}$/;
+const ARCHIVE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z(?:-\d{1,3})?$/;
 const IMAGE_TYPES = Object.freeze({ 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' });
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -76,6 +84,7 @@ function writeTextAtomic(file, text) {
   fs.renameSync(temporary, file);
 }
 
+// When a project was last written in. A Build writing its record (`builds/`) is not the person writing.
 function latestMtime(dir, depth = 3) {
   let latest = 0;
   const walk = (current, level) => {
@@ -86,7 +95,7 @@ function latestMtime(dir, depth = 3) {
       return;
     }
     for (const entry of entries) {
-      if (entry.name.endsWith('.pglite') || entry.name.startsWith('.')) continue;
+      if (entry.name.endsWith('.pglite') || entry.name.startsWith('.') || (level === 0 && entry.name === 'builds')) continue;
       const full = path.join(current, entry.name);
       try {
         latest = Math.max(latest, fs.statSync(full).mtimeMs);
@@ -234,7 +243,7 @@ function resolveSlug(ctx, name, requested) {
 // for itself, and then never be listed.
 function freeSlug(ctx, raw) {
   const slug = slugify(raw) || 'engelbart';
-  return uniqueName(ctx.dataRoot, RESERVED.has(slug) ? `${slug}-project` : slug);
+  return uniqueName(ctx.dataRoot, ROOT_RESERVED.has(slug) ? `${slug}-project` : slug);
 }
 
 // The project's code directory: absolute, existing, a directory.
@@ -306,7 +315,7 @@ async function renameProject(ctx, id, name) {
 
 function workspaceRecord(dir) {
   const meta = readJson(path.join(dir, 'meta.json'));
-  if (!meta || typeof meta.id !== 'string' || !STATUSES.includes(meta.status)) return null;
+  if (!meta || typeof meta.id !== 'string' || (meta.status != null && !STATUSES.includes(meta.status))) return null;
   let context = [];
   try {
     context = flatContext(meta.context || []);
@@ -316,7 +325,12 @@ function workspaceRecord(dir) {
   // Kept by every save through the app; a workspace last saved before the count existed is measured.
   const chars = Number.isInteger(meta.chars) && meta.chars >= 0 ? meta.chars : docChars(dir);
   const removed = Array.isArray(meta.removed) ? meta.removed.filter((id) => typeof id === 'string' && UUID_RE.test(id)) : [];
-  return { id: meta.id, name: path.basename(dir), status: meta.status, context, removed, chars, dir, created: meta.created || null };
+  // The Builds started from this workspace (2026-09-25), and its archived versions, oldest first (./archive.cjs).
+  const builds = Array.isArray(meta.builds) ? meta.builds.filter((id) => typeof id === 'string' && BUILD_ID_RE.test(id)) : [];
+  const archives = (Array.isArray(meta.archives) ? meta.archives : [])
+    .filter((entry) => entry && typeof entry.file === 'string' && ARCHIVE_RE.test(entry.file))
+    .map((entry) => ({ file: entry.file, clearedAt: typeof entry.clearedAt === 'string' ? entry.clearedAt : null, title: typeof entry.title === 'string' ? entry.title.slice(0, 200) : '' }));
+  return { id: meta.id, name: path.basename(dir), status: meta.status || 'open', context, removed, chars, builds, archives, dir, created: meta.created || null };
 }
 
 function docChars(dir) {
@@ -324,7 +338,9 @@ function docChars(dir) {
 }
 
 function workspaceRecords(parentDir) {
-  return subdirs(parentDir).filter((dir) => !PROJECT_RESERVED.has(path.basename(dir))).map(workspaceRecord).filter(Boolean).sort(byCreated);
+  // Build records have task.json, not workspace meta.json. An older workspace
+  // actually named "builds" must remain visible without being moved or renamed.
+  return subdirs(parentDir).filter((dir) => path.basename(dir) !== 'assets').map(workspaceRecord).filter(Boolean).sort(byCreated);
 }
 
 function findWorkspaceIn(parentDir, id, depth = 0) {
@@ -345,7 +361,7 @@ function findWorkspace(ctx, projectId, workspaceId) {
 }
 
 function publicWorkspace(workspace) {
-  return { id: workspace.id, name: workspace.name, status: workspace.status, context: workspace.context, removed: workspace.removed, chars: workspace.chars, created: workspace.created };
+  return { id: workspace.id, name: workspace.name, status: workspace.status, context: workspace.context, removed: workspace.removed, chars: workspace.chars, builds: workspace.builds || [], archives: workspace.archives || [], created: workspace.created };
 }
 
 /** Every workspace of a project, flat, with its path from the project directory ("Agents/Inline chat agent"). */
@@ -448,12 +464,6 @@ function patchWorkspaceMeta(workspace, patch) {
   return publicWorkspace(workspaceRecord(workspace.dir));
 }
 
-async function setWorkspaceStatus(ctx, projectId, workspaceId, status) {
-  const { workspace } = findWorkspace(ctx, projectId, workspaceId);
-  if (!STATUSES.includes(status)) throw new TypeError('Unknown status');
-  return patchWorkspaceMeta(workspace, { status });
-}
-
 async function setWorkspaceContext(ctx, projectId, workspaceId, entries) {
   const { project, workspace } = findWorkspace(ctx, projectId, workspaceId);
   const context = flatContext(entries);
@@ -461,6 +471,20 @@ async function setWorkspaceContext(ctx, projectId, workspaceId, entries) {
   const updated = patchWorkspaceMeta(workspace, { context });
   sharedContext.change(project, { add: context });
   return updated;
+}
+
+async function setWorkspaceStatus(ctx, projectId, workspaceId, status) {
+  const { workspace } = findWorkspace(ctx, projectId, workspaceId);
+  if (!STATUSES.includes(status)) throw new TypeError('Unknown status');
+  return patchWorkspaceMeta(workspace, { status });
+}
+
+/** A Build started from this workspace (2026-09-25): its id joins meta.json `builds`. */
+function addWorkspaceBuild(ctx, projectId, workspaceId, buildId) {
+  if (typeof buildId !== 'string' || !BUILD_ID_RE.test(buildId)) throw new TypeError('build id is invalid');
+  const { workspace } = findWorkspace(ctx, projectId, workspaceId);
+  if (workspace.builds.includes(buildId)) return publicWorkspace(workspace);
+  return patchWorkspaceMeta(workspace, { builds: [...workspace.builds, buildId].slice(-500) });
 }
 
 // Workspace attachment metadata keeps provenance. The project collection is
@@ -709,13 +733,14 @@ function writeView(ctx, projectId, workspaceId, view) {
 //           into; looking around does not count.
 //   agents: [{ id, kind, projectId, workspaceId, doc, status, started, finished }]  every agent the app started that is
 //           still `running`, or has finished and is `waiting` for you to look (it is dropped when its workspace is
-//           visited). `kind` is 'bart' (the inline @bart asks) for now; `workspaceId` may be null for an agent that
-//           belongs to no workspace. A `running` row from an earlier run of the app is stale and is not read.
+//           visited). `kind` is 'bart' (the inline @bart asks) or 'build' (a Build's turn, 2026-09-25); `workspaceId`
+//           may be null for an agent that belongs to no workspace (a post-it's quick task). A `running` row from an
+//           earlier run of the app is stale and is not read.
 const RECENT_KEEP = 3;
 const RECENT_WINDOW = 30 * 60 * 1000;
 const MAX_RECENT = 100;
 const MAX_AGENTS = 50;
-const AGENT_KINDS = new Set(['bart']);
+const AGENT_KINDS = new Set(['bart', 'build']);
 const AGENT_STATUSES = new Set(['running', 'waiting']);
 const liveAgents = new Set(); // ids of the agents running in this process
 const isoOrNull = (value) => (typeof value === 'string' && value.length <= 40 && !Number.isNaN(Date.parse(value)) ? value : null);
@@ -912,11 +937,17 @@ module.exports = {
   setProjectDirectory,
   renameProject,
   loadProject,
+  ensureProjectContext,
   createWorkspace,
   renameWorkspace,
   deleteWorkspace,
-  setWorkspaceStatus,
   setWorkspaceContext,
+  setWorkspaceStatus,
+  addWorkspaceBuild,
+  patchWorkspace: (ctx, projectId, workspaceId, patch) => patchWorkspaceMeta(findWorkspace(ctx, projectId, workspaceId).workspace, patch),
+  writeTextAtomic,
+  BUILD_ID_RE,
+  ARCHIVE_RE,
   linkToWorkspace,
   unlinkFromWorkspace,
   createNote,

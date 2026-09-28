@@ -1,22 +1,25 @@
 import React from 'react';
 import { isUntitled } from '../model/names.js';
 import { KindGlyph } from '../ui/Icons.jsx';
+import { FluidTab, TabCard, TabClose, TabTitle, useTabCard } from '../ui/FluidTab.jsx';
 
 const SLIDE = 'transform 160ms cubic-bezier(.25,.1,.25,1)';
 const THRESHOLD = 4; // px of travel before a press becomes a drag
 
-/** Document tabs, rendered inside the header's middle column (design 2026-09-17): Workspace plus opened notes, and
- *  sub-workspaces' documents opened here (2026-09-23).
- *  A workspace's tab carries the workspace icon after its name (2026-09-22), so it never reads as a note.
+/** Document tabs, rendered inside the header's middle column (design 2026-09-17): Workspace plus opened notes.
+ *  The Workspace tab carries the workspace icon before its name and is in bold (2026-09-25; after it from 2026-09-22).
  *  A note tab drags the way a browser tab does: the tab itself follows the pointer along the strip,
  *  its neighbours slide out of the way as its leading edge passes their middle, and it settles into the gap on
  *  release. Workspace stays first and nothing moves past it.
- *  Any tab closes while another is left, Workspace too (Stage design, 2026-09-23); the sidebar brings Workspace back. */
+ *  Every note tab closes; Workspace is always there and has no × (2026-09-25; it closed too from 2026-09-23).
+ *  The Workspace tab is the only workspace document in the strip (2026-09-25). */
 export default function DocTabs({ tabs, activeTab, onSelect, onClose, onMove }) {
   const els = React.useRef(new Map()); // tab id → element
   const drag = React.useRef(null); // { id, pointerId, startX, x, moved }
   const lefts = React.useRef(new Map()); // tab id → offsetLeft at the last layout
   const [draggingId, setDraggingId] = React.useState(null);
+  const card = useTabCard();
+  const hovered = card.card && tabs.find((tab) => tab.id === card.card.id);
 
   const place = () => {
     const d = drag.current;
@@ -95,28 +98,41 @@ export default function DocTabs({ tabs, activeTab, onSelect, onClose, onMove }) 
     setDraggingId(null);
   };
 
-  return tabs.map((tab) => {
-    const on = tab.id === activeTab;
-    const dragging = draggingId === tab.id;
-    return (
-      <div
-        key={tab.id}
-        ref={(element) => { if (element) els.current.set(tab.id, element); else els.current.delete(tab.id); }}
-        className="hov-ink"
-        onClick={() => onSelect(tab.id)}
-        onPointerDown={(event) => onPointerDown(event, tab)}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerEnd}
-        onPointerCancel={onPointerEnd}
-        data-doc-tab={tab.id}
-        style={{ position: 'relative', zIndex: dragging ? 2 : undefined, display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, maxWidth: 220, flex: '0 1 auto', padding: '7px 12px 8px', marginBottom: -1, border: `1px solid ${on || dragging ? '#eaeaea' : 'transparent'}`, borderBottomColor: on ? '#fff' : 'transparent', borderRadius: '8px 8px 0 0', background: on ? '#fff' : (dragging ? '#fafafa' : 'transparent'), cursor: 'pointer', userSelect: 'none', WebkitUserSelect: 'none', touchAction: 'none', font: `${on ? 500 : 400} 12.5px/1.3 var(--font-sans)`, color: on ? '#171717' : '#4d4d4d', whiteSpace: 'nowrap' }}
-      >
-        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', color: isUntitled(tab.title) ? '#8f8f8f' : undefined }}>{tab.title}</span>
-        {(tab.id === 'ws' || tab.kind === 'workspace') && <span data-ws-icon="1" style={{ display: 'flex', marginLeft: -2 }}><KindGlyph kind="workspace" item={{ type: 'workspace' }} box={14} color="currentColor" /></span>}
-        {tabs.length > 1 && (
-          <button type="button" className="hov-del" onClick={(event) => { event.stopPropagation(); onClose(tab.id); }} aria-label="Close tab" style={{ flex: 'none', padding: '0 2px', border: 0, background: 'transparent', cursor: 'pointer', font: '13px/1 var(--font-sans)', color: '#c9c9c9' }}>×</button>
-        )}
-      </div>
-    );
-  });
+  // Drawn as the Stage draws its tabs (ui/FluidTab.jsx), each as long as its title up to the most a tab may be (2026-09-25).
+  // Workspace is always there and first, in bold with its icon before its name; it has no ×.
+  return (
+    <>
+      {tabs.map((tab, i) => {
+        const on = tab.id === activeTab;
+        const dragging = draggingId === tab.id;
+        const ws = tab.id === 'ws';
+        const sep = !on && tabs[i + 1] && tabs[i + 1].id !== activeTab;
+        const untitled = isUntitled(tab.title);
+        return (
+          <FluidTab
+            key={tab.id}
+            ref={(element) => { if (element) els.current.set(tab.id, element); else els.current.delete(tab.id); }}
+            on={on}
+            sep={sep}
+            lifted={dragging}
+            data-no-drag="1"
+            data-doc-tab={tab.id}
+            onClick={() => onSelect(tab.id)}
+            onPointerDown={(event) => { card.hide(); onPointerDown(event, tab); }}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerEnd}
+            onPointerCancel={onPointerEnd}
+            onMouseEnter={(event) => { if (!on && !ws && !drag.current) card.enter(event, tab.id); }}
+            onMouseLeave={card.leave}
+            style={{ touchAction: 'none' }}
+          >
+            {ws && <span data-ws-icon="1" style={{ flex: 'none', display: 'flex', color: on ? '#4d4d4d' : '#8f8f8f' }}><KindGlyph kind="workspace" item={{ type: 'workspace' }} box={14} color="currentColor" /></span>}
+            <TabTitle weight={ws ? 600 : 400} color={untitled ? '#8f8f8f' : on || ws ? '#171717' : '#4d4d4d'}>{tab.title}</TabTitle>
+            {!ws && <TabClose onClose={() => onClose(tab.id)} title="Close" />}
+          </FluidTab>
+        );
+      })}
+      {hovered && <TabCard card={card.card} title={hovered.title} detail="Note" />}
+    </>
+  );
 }

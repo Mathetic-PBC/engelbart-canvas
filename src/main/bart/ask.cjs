@@ -39,11 +39,12 @@ const { scrubAgentSession } = require('../shell-rc.cjs');
 const { NOT_THE_SUBSCRIPTION, prepareCodexHome, lastResultLine } = require('../context/summarizer.cjs');
 const { BART_SYSTEM_PROMPT } = require('./system-prompt.cjs');
 const { BUILD_PROPOSAL_PROMPT, parseBuildProposal } = require('./build-proposal.cjs');
-const { CLAUDE_SUBSCRIPTION_COMMAND } = require('./claude-command.cjs');
+const { claudeSubscriptionCommand } = require('./claude-command.cjs');
 const { readQuestion, withChoice } = require('./models.cjs');
 const { buildContext, conversationBlock } = require('./context.cjs');
 const { replyLines, answerText } = require('./reply.cjs');
 const { pathLabeller, claudeUpdate, codexUpdate, eventReader, createFeed } = require('./activity.cjs');
+const { TOOL_OF } = require('../tools/requirements.cjs');
 
 const STEP_TIMEOUT_MS = 15 * 60_000;
 const THREAD_IDLE_MS = 30 * 60_000;
@@ -161,8 +162,14 @@ async function climb({ steps, pinned, first, turn, session: resumed = null, onPr
   }
 }
 
-function createBart({ readModels, environment = process.env, runDirectory = path.join(os.tmpdir(), 'engelbart-bart-runs'), codexHome = path.join(os.tmpdir(), 'engelbart-codex-home-bart'), codexAuthFile, run = execFile, threads = createThreads() } = {}) {
+// `tools` (../tools/manager.cjs, optional): a question waits for an install or update of its CLI to end and
+// holds one off while it runs, a stale check is redone in the background, and a CLI the login shell's PATH
+// does not reach is run by its full path.
+function createBart({ readModels, environment = process.env, runDirectory = path.join(os.tmpdir(), 'engelbart-bart-runs'), codexHome = path.join(os.tmpdir(), 'engelbart-codex-home-bart'), codexAuthFile, run = execFile, threads = createThreads(), tools = null } = {}) {
   const shell = resolveShell(environment);
+  // The CLI by name, or by the full path the tool check found it at when PATH misses it (then through the environment, never quoted).
+  const program = (name) => (tools && tools.binaryFor(name) ? `"$ENGELBART_${name.toUpperCase()}_BIN"` : name);
+  const programEnv = (name) => (tools && tools.binaryFor(name) ? { [`ENGELBART_${name.toUpperCase()}_BIN`]: tools.binaryFor(name) } : {});
   const shellArgs = (command) => (path.basename(shell) === 'fish' ? ['--login', '--interactive', '--command', command] : ['-ilc', command]);
   const running = new Map(); // askId → AbortController
   const childEnvironment = (extra) => {
@@ -189,8 +196,8 @@ function createBart({ readModels, environment = process.env, runDirectory = path
       done: () => { try { fs.unlinkSync(promptFile); } catch { /* already gone */ } },
       turn: async ({ level, message, session }) => {
         fs.writeFileSync(`${stem}.input.txt`, message, { mode: 0o600 });
-        const command = `exec ${CLAUDE_SUBSCRIPTION_COMMAND} -p --output-format stream-json --verbose --include-partial-messages ${session ? '--resume' : '--session-id'} "$ENGELBART_BART_SESSION" --restricted --setting-sources "" --strict-mcp-config --tools "${CLAUDE_TOOLS}" --allowedTools "${CLAUDE_TOOLS}" ${grants} --model "$ENGELBART_BART_MODEL" --effort ${level.effort} --system-prompt-file "$ENGELBART_BART_PROMPT" < "$ENGELBART_BART_INPUT"`;
-        const env = childEnvironment({ ENGELBART_BART_SESSION: id, ENGELBART_BART_MODEL: level.model, ENGELBART_BART_PROMPT: promptFile, ENGELBART_BART_INPUT: `${stem}.input.txt`, ...Object.fromEntries(dirs.map((dir, n) => [`ENGELBART_BART_DIR${n}`, dir])) });
+        const command = `exec ${claudeSubscriptionCommand(program('claude'))} -p --output-format stream-json --verbose --include-partial-messages ${session ? '--resume' : '--session-id'} "$ENGELBART_BART_SESSION" --restricted --setting-sources "" --strict-mcp-config --tools "${CLAUDE_TOOLS}" --allowedTools "${CLAUDE_TOOLS}" ${grants} --model "$ENGELBART_BART_MODEL" --effort ${level.effort} --system-prompt-file "$ENGELBART_BART_PROMPT" < "$ENGELBART_BART_INPUT"`;
+        const env = childEnvironment({ ...programEnv('claude'), ENGELBART_BART_SESSION: id, ENGELBART_BART_MODEL: level.model, ENGELBART_BART_PROMPT: promptFile, ENGELBART_BART_INPUT: `${stem}.input.txt`, ...Object.fromEntries(dirs.map((dir, n) => [`ENGELBART_BART_DIR${n}`, dir])) });
         const { stdout, failure } = await execute(command, cwd, env, signal, (event) => onUpdate(claudeUpdate(event, short)));
         if (stopped(signal)) throw new BartError('stopped', 'Stopped.');
         const result = lastResultLine(stdout);
@@ -211,8 +218,8 @@ function createBart({ readModels, environment = process.env, runDirectory = path
         fs.writeFileSync(`${stem}.input.txt`, message, { mode: 0o600 });
         try { fs.unlinkSync(outFile); } catch { /* none */ }
         const shared = `--skip-git-repo-check -m "$ENGELBART_BART_MODEL" -c 'model_reasoning_effort="${level.effort}"' -c 'sandbox_mode="read-only"' -c 'tools.web_search=true' -c project_doc_max_bytes=0 --json -o "$ENGELBART_BART_OUTPUT" - < "$ENGELBART_BART_INPUT"`;
-        const command = session ? `exec codex exec resume "$ENGELBART_BART_SESSION" ${shared}` : `exec codex exec --color never ${shared}`;
-        const env = childEnvironment({ CODEX_HOME: codexHome, ENGELBART_BART_SESSION: session || '', ENGELBART_BART_MODEL: level.model, ENGELBART_BART_OUTPUT: outFile, ENGELBART_BART_INPUT: `${stem}.input.txt` });
+        const command = session ? `exec ${program('codex')} exec resume "$ENGELBART_BART_SESSION" ${shared}` : `exec ${program('codex')} exec --color never ${shared}`;
+        const env = childEnvironment({ ...programEnv('codex'), CODEX_HOME: codexHome, ENGELBART_BART_SESSION: session || '', ENGELBART_BART_MODEL: level.model, ENGELBART_BART_OUTPUT: outFile, ENGELBART_BART_INPUT: `${stem}.input.txt` });
         const { stdout, failure } = await execute(command, cwd, env, signal, (event) => onUpdate(codexUpdate(event, short)));
         if (stopped(signal)) throw new BartError('stopped', 'Stopped.');
         let text = '';
@@ -257,10 +264,22 @@ function createBart({ readModels, environment = process.env, runDirectory = path
         return await climb({ steps, pinned, first: firstMessage({ context, prior, question, resumed: !!session }), session, turn: (input) => { feed.reset(); return cli.turn(input); }, onProgress });
       } finally { if (cli) cli.done(); }
     };
+    const agent = TOOL_OF[provider];
+    // While it runs, the CLI is not installed or updated under it (the tool lock); a CLI that was not found is looked for again.
+    const guarded = async (session) => {
+      if (!tools) return once(session);
+      try {
+        return await tools.use(agent, () => once(session));
+      } catch (error) {
+        if (error && error.kind === 'unavailable') void tools.check([agent]).catch(() => {});
+        throw error;
+      }
+    };
+    if (tools) await tools.ensure(agent);
     try {
       let out;
       // A session that will not resume (its file is gone, the CLI changed) is not the person's problem: start again from the document.
-      try { out = await once(held ? held.session : null); } catch (error) { if (!held || error.kind === 'stopped') throw error; out = await once(null); }
+      try { out = await guarded(held ? held.session : null); } catch (error) { if (!held || error.kind === 'stopped') throw error; out = await guarded(null); }
       const meta = { provider, level: { name: out.level.name, effort: out.level.effort, model: out.level.model }, trail: out.trail.map((step) => ({ name: step.name, effort: step.effort, why: step.why })), ms: out.ms, pinned };
       const buildProposal = parseBuildProposal(out.text);
       // A build's eventual answer differs from this routing result; do not keep

@@ -35,8 +35,8 @@ The model is chosen in `~/.engelbart/config.json`, which is read again for every
 ```json
 "summarizer": {
   "provider": "openai",
-  "openai":    { "model": "gpt-5.6-luna",  "effort": "high" },
-  "anthropic": { "model": "claude-opus-5", "effort": "high" }
+  "openai":    { "model": "gpt-6-luna",    "effort": "high" },
+  "anthropic": { "model": "claude-opus-5-5", "effort": "high" }
 }
 ```
 
@@ -75,6 +75,22 @@ Select text in a workspace document, note, or post-it and press **⌘⇧J** (**C
 - The list, the ladders and the default provider: `~/.engelbart/model-effort-inline-question.json`, read again for every question.
 - The instructions it runs under: `src/main/bart/system-prompt.cjs`, or your own in `<data root>/.context/bart-system-prompt.md`.
 
+## Build
+
+**Build** (beside Copy, in the strip under the Workspace tab's document) hands the workspace to Claude Code or Codex, hidden, on your subscription, in a git worktree of its own (`<data root>/worktrees/<project>/<id>`, branch `engelbart/<id>`), so several workspaces can build at once without touching each other or your folder. Design: `docs/superpowers/specs/2026-09-25-build-workflow-design.md`.
+
+- The panel (it opens above the button, no backdrop; the post-it it lands on hides under it, the others stay): **Add from library** (a ringed +, then a search) for items to attach, **Automatically clear workspace** (unticked each time: ticked, Send archives the document right after the Build froze it, the blank one keeping the new card), a line when uncommitted files are left out (a Build starts from your last commit) or the folder cannot take a Build (**Start history** gives a folder without git its first commit), and at the lower right the model and effort chip with the send in it, as on an @bart line (defaults in `model-effort-inline-question.json` → `build`: GPT-6-Sol high, Opus high).
+- What the agent gets: @bart's context (the document with every mention in place, the library as Context.json), what you attached, and the newest archived version of the workspace marked as history; frozen when you press send. It writes only in its worktree (Claude Code `--restricted` + auto mode; Codex's workspace-write sandbox + auto-review), with no MCP servers, hooks or computer use (`src/main/build/policy.cjs` is where the sandbox will go).
+- The card: the document gets one `build> <id>` line, drawn from the Build's record — what it is doing, what it said, `NEEDS YOU:` questions, a reply field (a reply while it works cuts the turn short, its work saved, and goes on in the same session), **Review** (the diff since it started), **Accept**, **Discard** (two clicks), **Resume** (after Stop, a failure or a quit), **Send to agent** (a conflict or failed checks).
+- Every turn ends in a checkpoint commit. **Accept** squashes them into one commit on the branch your folder is on, after replaying past whatever you committed meanwhile, running the checks (`project.json` → `build.check`, else `npm test` when there is one) and refusing, with nothing changed, on a conflict, leftover conflict markers, failed checks or your own uncommitted edits to the same files.
+- **Clear** saves the document to `<Workspace>/.archive/<time>.md` (plus the ids of what it mentioned) and starts it blank; everything it mentioned stays on the sidebar, and the **Archived** section lists the old versions (click to read, **Restore** to bring one back, the current one archived first).
+- A post-it's **Build** (Claude Design "Post-it Quick Task", `design/post-it-quick-task/TWEAKS.md`) opens a popup from the card: the model and effort grid, **Context** (a library search in a popout beside it), and the send. It runs as a quick task: no questions, a slot of its own, lands by itself when clean. The card's footer then shows **Building** (three dots), **Needs you** or **Stopped**; a click opens the task beside the card: Stop while it works, otherwise a search over every workspace (sub-workspaces too), the model (set to what the task ran on) and the send, which adds it to that workspace. It is put in there as an archived version (`Imported from Task:`, the post-it, the Build's card), the document untouched; the app goes to that workspace (first of ⌘J's recent ones) with that version open, and the card asks **Keep task** or **Delete task** (into the post-it trash). Panels opened by a click (the Build panels) cover the post-its under them: main swaps each covered card for a picture of itself drawn under the panel.
+- `ENGELBART_BUILD_FAKE=1` runs a fake agent (git and records stay real) for scripted runs.
+
+The local integration keeps Context shared across the project; Clear, Restore and imported tasks never undo project-wide removals. Documents and their archives remain per workspace. Post-it Build shows its destination before Send (the open workspace by default); every Build resolves code through the existing project code-directory setting.
+
+Bart interface proposals still require explicit approval in notifications. After approval they use this Build engine, not a separate local generator. Runnable worktrees use `engelbart-preview.json` with the existing local-server verifier: review previews serve the isolated copy, successful Accept switches Stage to the accepted folder, and Discard restores the previous accepted preview. Failed Accept retains the review preview. Existing `.local-apps` records, files and restart controls remain in place. See [Hudson integration and validation](docs/hudson-build-integration.md).
+
 ## Project post-its (prototype)
 
 The sticky note at the bottom of the sidebar adds a titleless post-it. The card uses `design/assets/yellow-sticky-note.svg`, including its paper texture, curled corner, and transparent shadow. The card uses the note editor's font and inline Markdown. Click text to edit; drag blank space to move; drag the curled corner to resize (or focus the grip and use arrow keys). Let go over the sidebar's trash can to delete it permanently (the can lifts while the pointer is over it, and the card takes a red tint). Escape cancels a drag.
@@ -88,6 +104,14 @@ Verification: `npm test`, then `npm run build && npx electron scripts/smoke-post
 ```sh
 ENGELBART_POST_IT_SMOKE_ROOT=/path/from/checkpoint ENGELBART_POST_IT_SMOKE_RESTORE=1 npx electron scripts/smoke-post-its.cjs
 ```
+
+## Git, Claude Code and Codex
+
+Checked at every launch, in the background (`src/main/tools/`; design: `docs/superpowers/specs/2026-09-23-tools-and-defaults-design.md`). What the last check saw is written to `~/.engelbart/config.json` → `tools`: for each, `installed` (false until a check finds it), `version`, `requires` (from `src/main/tools/requirements.cjs`: Git ≥ 2.30.0, Claude Code ≥ 2.1.278, Codex ≥ 0.155.0), `status`, `signedIn`, `path`, `source`, `error`. These are rewritten by every check; edit only `skip`, `pin` (a version Engelbart must never update) and `tools.updates` (`auto` | `ask`).
+
+When something needs you — Git missing, neither agent installed, no agent signed in, an update waiting for approval, an install that failed — a dialog opens after the check: Install (Git through Apple's Command Line Tools dialog; Claude Code and Codex through their vendors' installers), Update, Sign in (the CLI's own login, which opens the browser), Skip (with a warning; remembered per tool). **Engelbart ▸ Set Up Tools…** shows all three at any time, with Ask again and Update automatically. A tool below its minimum is updated by itself at launch unless it is pinned, skipped, `updates` is `ask`, or you turned the CLI's own updater off (`autoUpdates: false` in `~/.claude.json`, `DISABLE_AUTOUPDATER`, Codex's `check_for_update_on_startup = false`).
+
+@bart starts on the saved default provider when its CLI can run, else on the other one; nothing is written. `config.json` and `model-effort-inline-question.json` take new defaults from later builds wherever you left a value alone (`src/main/store/defaults.cjs`).
 
 ## Terminal pane
 
@@ -115,12 +139,14 @@ Canvas starts in normal mode at `~/.engelbart/`, with no seeded library items. T
 
 ```
 ~/.engelbart/                         (test mode: ~/.engelbart/test/, same shape, plus seed/)
-  config.json  state.json             app settings; { projectId, workspaceId } to reopen
+  config.json  state.json             providers, summarizer, github, tools; { projectId, workspaceId } to reopen
+  model-effort-inline-question.json   @bart's models, efforts and ladders
+  .defaults/<file>                    the defaults each of those two was last given (how new defaults reach them)
   library.pglite/                     table `library`: every md, pdf, folder, website, data file, image; `type` is the format, `tags` what was inferred: paper, git, note (+ summary, summary_edited, char_count)
   .context/status.json                the last summary sweep that did something
   .context/summary-system-prompt.md   optional: replaces the built-in summary prompt
   annotations/<library id>.json       PDF highlights and margin notes
-  .backups/<project>-<time>/          copies taken before a layout conversion
+  .backups/<project>-<time>/          copies taken before a layout conversion (and of a settings file's first merge)
   <project>/
     project.json                      { id, name, created, directory }   directory = where the code lives
     notes.pglite/                     tables `notes` (topic_id holds the workspace id), `post_its` (text and preferred layout)
@@ -128,8 +154,12 @@ Canvas starts in normal mode at `~/.engelbart/`, with no seeded library items. T
     assets/<id>.png                   pasted images (library rows of type `image`)
     .context/catalog.json             what the project holds, with summaries, for agents that read files
     <Workspace>/workspace.md          a workspace's document
-    <Workspace>/meta.json             { id, status, context: [library ids], removed: [library ids the trash took off], created }
+    <Workspace>/meta.json             { id, status, context: [library ids], removed: [library ids the trash took off], created, builds: [ids], archives: [{ file, clearedAt, title }] }
+    <Workspace>/.archive/<time>.md    the document when Clear was pressed; <time>.json: what it had linked and mentioned (ids)
     <Workspace>/<Child>/…             workspaces nest to any depth
+    builds/<id>/task.json             a Build: provider, model, session, worktree, branch, base, status, checkpoints, conversation
+    builds/<id>/context.md            what it was given, frozen at Build
+  worktrees/<project>/<id>/           a running Build's checkout (removed at Accept or Discard)
     .legacy/                          goal directories from the first layout, parked, never deleted
 ```
 
@@ -141,7 +171,10 @@ Terminals, Claude Code and Codex start in the project's `directory`. A project w
 src/main/index.cjs           app lifecycle, window, engelbart:// protocol, menu, terminal IPC (from Experimental Terminal)
 src/main/ipc.cjs             engelbart:* handlers, argument validation, lazy store context + seeding
 src/main/store/              home layout + config, PGlite databases, projects/goals/topics/notes/docs, library + annotations
-src/main/terminal/           Experimental Terminal engine, unchanged (session manager, launch, providers, settings)
+src/main/terminal/           Experimental Terminal engine (session manager, launch, settings)
+src/main/tools/              Git, Claude Code, Codex: requirements, detect, install/update/rollback, lock, sign-in, manager; repository checks for Build
+src/main/build/              Build: git (worktrees, checkpoints, Accept), store (task records), context, prompt, policy (the sandbox stub), runner (one CLI turn), manager
+src/main/store/archive.cjs   Clear, the archived versions of a workspace, Restore
 src/main/browser/            views.cjs: the Browser pane's pages as WebContentsViews (decision 48)
 src/preload.cjs              window.terminalAPI (ET contract) + window.engelbartAPI
 src/renderer/App.jsx         create | all projects | workspace; reopens the last topic; shared notifications
@@ -177,7 +210,7 @@ ENGELBART_HOME_DIR=/tmp/eb-home electron . --user-data-dir=/tmp/eb-userdata --re
 ENGELBART_DEBUG_PORT=9223 node scripts/drive.mjs text
 ```
 
-`ENGELBART_CONFIRM_ALL=1` makes the native confirmation dialogs (reset) answer yes, for scripted runs only. So are `ENGELBART_SUMMARY_FAKE=1` (no model, a recognisable blurb), `ENGELBART_SUMMARY_QUIET_MS` and `ENGELBART_SUMMARY_INTERVAL_MS` (shorten the 30-minute and one-minute clocks).
+`ENGELBART_TOOLS_FAKE='{"git":"missing","claude":"2.1.300 signed-out","codex":"0.150.0","failInstall":["codex"]}'` pretends a machine (each tool `missing`, `broken`, or a version with an optional ` signed-out`) so the setup dialog can be driven without touching real installs; `ENGELBART_TOOLS=off` skips the launch check. `ENGELBART_CONFIRM_ALL=1` makes the native confirmation dialogs (reset) answer yes, for scripted runs only. So are `ENGELBART_SUMMARY_FAKE=1` (no model, a recognisable blurb), `ENGELBART_SUMMARY_QUIET_MS` and `ENGELBART_SUMMARY_INTERVAL_MS` (shorten the 30-minute and one-minute clocks).
 
 ## Known kinks (deliberately open)
 

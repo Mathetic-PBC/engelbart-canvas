@@ -5,6 +5,8 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { carryDefaults } = require('./defaults.cjs');
+const { normalizeTools } = require('../tools/record.cjs');
 
 const DIR_MODE = 0o700;
 const MAX_NAME = 120;
@@ -19,13 +21,10 @@ function ensureHome(homeDir) {
   fs.mkdirSync(testRoot, { recursive: true, mode: DIR_MODE });
   fs.mkdirSync(path.join(testRoot, 'annotations'), { recursive: true, mode: DIR_MODE });
   const configFile = path.join(root, 'config.json');
-  if (!fs.existsSync(configFile)) writeConfig(root, {});
-  else {
-    // A config written before a setting existed gains it, so every switch is there to be edited.
-    let onDisk = null;
-    try { onDisk = JSON.parse(fs.readFileSync(configFile, 'utf8')); } catch { onDisk = null; }
-    if (!onDisk || typeof onDisk !== 'object' || !onDisk.summarizer || !Array.isArray(onDisk.providers) || !onDisk.github) writeConfig(root, {});
-  }
+  // Every setting is in the file to be edited, and a default changed by a later build reaches it
+  // wherever the person left that setting alone (./defaults.cjs). A file that does not parse is left
+  // for its editor to finish; the settings read from it are the defaults until then.
+  carryDefaults({ file: configFile, defaults: normalizeConfig({}), past: PAST_CONFIG_DEFAULTS, normalize: normalizeConfig, fillMissing: true, backupDir: path.join(root, '.backups') });
   return { root, testRoot, configFile };
 }
 
@@ -36,8 +35,8 @@ function ensureHome(homeDir) {
 // again for every summary, so an edit takes effect without a restart.
 const SUMMARIZER_DEFAULTS = Object.freeze({
   provider: 'openai',
-  openai: Object.freeze({ model: 'gpt-5.6-luna', effort: 'high' }),
-  anthropic: Object.freeze({ model: 'claude-opus-5', effort: 'high' }),
+  openai: Object.freeze({ model: 'gpt-6-luna', effort: 'high' }),
+  anthropic: Object.freeze({ model: 'claude-opus-5-5', effort: 'high' }),
 });
 const PROVIDER_ALIASES = { openai: 'openai', codex: 'openai', anthropic: 'anthropic', claude: 'anthropic' };
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -86,8 +85,29 @@ function normalizeConfig(value) {
     providers: normalizeProviders(input.providers),
     summarizer: normalizeSummarizer(input.summarizer),
     github: normalizeGithub(input.github),
+    // Git, Claude Code and Codex as the last check saw them, and what the person chose about them (../tools/record.cjs).
+    tools: normalizeTools(input.tools),
   };
 }
+
+// Every config.json default shipped before defaults were carried forward, oldest first (git history of
+// this file). Settings were added: summarizer 09-19, providers 09-21, github 09-23. Keep the old
+// summarizer IDs here so installs without a saved defaults base can inherit their replacements.
+const PAST_CONFIG_DEFAULTS = (() => {
+  const summarizer = {
+    provider: 'openai',
+    openai: { model: 'gpt-5.6-luna', effort: 'high' },
+    anthropic: { model: 'claude-opus-5', effort: 'high' },
+  };
+  const providers = [...PROVIDERS_DEFAULT];
+  const github = { ...GITHUB_DEFAULTS };
+  return [
+    { testMode: true },
+    { testMode: true, summarizer },
+    { testMode: true, providers, summarizer },
+    { testMode: true, providers, summarizer, github },
+  ];
+})();
 
 function readConfig(root) {
   try {
@@ -102,7 +122,7 @@ function writeConfig(root, patch) {
     throw new TypeError('Config update must be an object');
   }
   for (const key of Object.keys(patch)) {
-    if (key !== 'testMode' && key !== 'summarizer' && key !== 'providers' && key !== 'github') throw new TypeError(`Unsupported config key: ${key}`);
+    if (key !== 'testMode' && key !== 'summarizer' && key !== 'providers' && key !== 'github' && key !== 'tools') throw new TypeError(`Unsupported config key: ${key}`);
   }
   if (Object.hasOwn(patch, 'testMode') && typeof patch.testMode !== 'boolean') {
     throw new TypeError('testMode must be a boolean');
@@ -113,6 +133,18 @@ function writeConfig(root, patch) {
   fs.writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
   fs.renameSync(temporary, file);
   return next;
+}
+
+/**
+ * The tool check's record, written into config.json only while the file parses: a background check
+ * must never overwrite a file someone is halfway through editing. → the config written, or null.
+ */
+function writeTools(root, tools) {
+  const file = path.join(root, 'config.json');
+  let onDisk;
+  try { onDisk = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+  if (!onDisk || typeof onDisk !== 'object' || Array.isArray(onDisk)) return null;
+  return writeConfig(root, { tools });
 }
 
 // A display name → a filesystem-safe directory or file stem. Keeps spaces and
@@ -161,4 +193,4 @@ function writeJson(file, value) {
   fs.renameSync(temporary, file);
 }
 
-module.exports = { SUMMARIZER_DEFAULTS, GITHUB_DEFAULTS, normalizeGithub, normalizeSummarizer, ensureHome, normalizeConfig, readConfig, writeConfig, sanitizeName, slugify, uniqueName, readJson, writeJson, DIR_MODE };
+module.exports = { SUMMARIZER_DEFAULTS, GITHUB_DEFAULTS, PAST_CONFIG_DEFAULTS, normalizeGithub, normalizeSummarizer, ensureHome, normalizeConfig, readConfig, writeConfig, writeTools, sanitizeName, slugify, uniqueName, readJson, writeJson, DIR_MODE };

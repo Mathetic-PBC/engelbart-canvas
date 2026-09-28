@@ -109,6 +109,13 @@ export const LEAF = () => (
   </svg>
 );
 
+const WRITING = () => (
+  <svg viewBox="0 0 16 16" width={16} height={16} fill="none" stroke="currentColor" strokeWidth={1.35} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M7.3 6.6C4.2 6.6 2.2 8.5 2.2 11c0 2.1 1.5 3.5 3.4 3.5 2.4 0 4.1-2 4.1-4.2 0-1.8-1.1-3-2.8-3.3" />
+    <path d="M3.1 8.8C4 4.8 7.9 1.4 13.8 1.5c-1.9 2.8-4.4 3.9-7.9 3.9M5.9 5.4l5.5-2.5" />
+  </svg>
+);
+
 // Generic website glyph, also used when a Stage tab has no usable favicon.
 export const GLOBE = () => (
   <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" aria-hidden="true">
@@ -148,7 +155,8 @@ export const KIND = {
   html: { glyph: <CODE />, label: 'html' },
   data: { glyph: <LAYERS />, label: 'data file' },
   chat: { glyph: <CHAT />, label: 'chat', fixed: true },
-  overleaf: { glyph: <LEAF />, label: 'Overleaf', fixed: true },
+  overleaf: { glyph: <WRITING />, label: 'Overleaf', fixed: true },
+  literature: { glyph: <LAYERS />, label: 'Literature', fixed: true },
   'google-docs': { glyph: <GOOGLE_DOCS />, label: 'Google Docs', fixed: true },
   task: { glyph: <TASK />, label: 'task', fixed: true },
   workspace: { glyph: <WS />, label: 'workspace', fixed: true },

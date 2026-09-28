@@ -40,6 +40,10 @@ function claudeTool(name, input, short) {
   if (name === 'Glob') return `Listing ${clip(given.pattern, 40) || 'files'}`;
   if (name === 'WebSearch') return `Searching the web${quoted(given.query)}`;
   if (name === 'WebFetch') return `Reading ${host(given.url)}`;
+  // A Build's tools (2026-09-25); @bart never has these.
+  if (name === 'Edit' || name === 'MultiEdit' || name === 'NotebookEdit') return `Editing ${short(given.file_path || given.notebook_path)}`;
+  if (name === 'Write') return `Writing ${short(given.file_path)}`;
+  if (name === 'Bash') return commandLabel(given.command, short);
   return `Using ${clip(name, 24)}`;
 }
 
@@ -90,6 +94,8 @@ function codexUpdate(event, short) {
     return started ? { activity: 'Searching the web' } : null;
   }
   if (item.type === 'reasoning') return { activity: 'Thinking' };
+  // A Build's patch (2026-09-25): the first file it touches names it.
+  if (item.type === 'file_change' && !started) { const first = Array.isArray(item.changes) && item.changes[0]; return { activity: `Editing ${first ? short(first.path) : 'files'}`, log: true }; }
   if (item.type === 'agent_message' && !started) return { text: String(item.text || '') };
   return null;
 }

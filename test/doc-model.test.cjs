@@ -380,3 +380,32 @@ test('JSON blocks inside answer text retain the answer prefixes and cannot swall
   assert.equal(jsonBlockEdit(doc, -1, 1), null);
   assert.equal(jsonBlockEdit(doc, 2, 1), null);
 });
+
+test('a workspace mention is one token that keeps its id and shows the workspace icon in place of the @, then the name (2026-09-25)', async () => {
+  const { INLINE, WS_MENTION_RE, wsMention, tokShown, inlineHtml, parseLine, rawOffset } = await load();
+  const id = '0a1b2c3d-0000-4000-8000-000000000000';
+  const token = wsMention('Pulling [in] workspaces', id);
+  assert.equal(token, `@[Pulling in workspaces](ws:${id})`, 'brackets would end the name early');
+  assert.deepEqual(`see ${token} and @[Plan].`.split(INLINE).filter(Boolean), ['see ', token, ' and ', '@[Plan]', '.']);
+  assert.deepEqual(token.match(WS_MENTION_RE).slice(1), ['Pulling in workspaces', id]);
+  assert.deepEqual(tokShown(token), { shown: 'Pulling in workspaces', pre: 2 }, 'the icon is not text, so offsets count the name alone');
+  const html = inlineHtml(token);
+  assert.match(html, new RegExp(`data-mention="Pulling in workspaces" data-ws="${id}"`));
+  assert.match(html, /"><svg [^>]*>.*<\/svg>Pulling in workspaces<\/span>$/, 'the icon, then the name: no @');
+  assert.doesNotMatch(inlineHtml('@[Plan]'), /<svg/, 'a note mention has no icon');
+  const p = parseLine(`- ${token} next`);
+  assert.equal(rawOffset(p, 'Pulling in workspaces next'.length), `${token} next`.length, 'a click after the mention maps past the id');
+  assert.equal(rawOffset(p, 1), 3, 'a click after the first letter of the name lands after it in the source');
+});
+
+test('a Build\'s line holds its id alone; it is its own kind of line, and it ends an @bart card (2026-09-25)', async () => {
+  const { parseLine, parseLines, threads, buildLine, BUILD_RE } = await load();
+  assert.equal(buildLine('0123456789'), 'build> 0123456789');
+  assert.deepEqual(parseLine('build> 0123456789'), { type: 'build', id: '0123456789', text: '' });
+  assert.equal(parseLine('build> not-an-id').type, 'p', 'only a Build id makes the line a card');
+  assert.equal(parseLine('build>0123456789').type, 'p');
+  assert.ok(BUILD_RE.test('build> abcdef0123'));
+  const lines = ['@bart why?', 'bart> because', 'build> 0123456789', '@bart and?'];
+  assert.deepEqual(threads(lines).map((t) => [t.from, t.to]), [[0, 1], [3, 3]], 'a Build between two questions keeps them apart');
+  assert.equal(parseLines(['```', 'build> 0123456789', '```'])[1].type, 'code', 'inside a code block it is code');
+});

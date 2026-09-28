@@ -50,7 +50,7 @@ const server = http.createServer(async (req, res) => {
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   origin = `http://127.0.0.1:${server.address().port}`;
   app.setPath('userData', path.join(root, 'electron'));
-  Object.assign(process.env, { ENGELBART_HOME_DIR: root, ENGELBART_SUMMARIES: 'off', ENGELBART_BART_FAKE: '1', ENGELBART_HEADLESS: '1', ENGELBART_GITHUB_BROKER: origin, ENGELBART_GITHUB_WEB: origin });
+  Object.assign(process.env, { ENGELBART_HOME_DIR: root, ENGELBART_SUMMARIES: 'off', ENGELBART_TOOLS: 'off', ENGELBART_BART_FAKE: '1', ENGELBART_HEADLESS: '1', ENGELBART_GITHUB_BROKER: origin, ENGELBART_GITHUB_WEB: origin });
   require('../src/main/index.cjs');
   await app.whenReady();
   await session.fromPartition('persist:browser').protocol.handle('https', () => new Response('<title>Repository fixture</title><h1>Repository fixture</h1>', { headers: { 'content-type': 'text/html' } }));

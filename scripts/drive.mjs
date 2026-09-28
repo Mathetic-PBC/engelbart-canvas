@@ -17,7 +17,8 @@ const PORT = Number(process.env.ENGELBART_DEBUG_PORT || 9222);
 
 async function connect() {
   const targets = await (await fetch(`http://127.0.0.1:${PORT}/json`)).json();
-  const page = targets.find((t) => t.type === 'page' && String(t.url).startsWith('engelbart://')) || targets.find((t) => t.type === 'page');
+  // The app's window, not a post-it's (post-it.html pages are listed first once a project has post-its).
+  const page = targets.find((t) => t.type === 'page' && String(t.url).startsWith('engelbart://app/index.html')) || targets.find((t) => t.type === 'page' && String(t.url).startsWith('engelbart://')) || targets.find((t) => t.type === 'page');
   if (!page) throw new Error('No page target; is the app running with --remote-debugging-port?');
   const ws = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject; });

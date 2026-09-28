@@ -67,7 +67,7 @@ test('createProjectWithWelcome makes a first workspace and a Welcome! note in it
   assert.ok(fs.existsSync(path.join(made.project.dir, 'Welcome!.md')));
 });
 
-test('workspaces nest to any depth; docs, status, context and renames work at every level', async () => {
+test('workspaces nest to any depth; docs, context and renames work at every level', async () => {
   const project = await projects.createProject(ctx, 'Nesting');
   const top = await projects.createWorkspace(ctx, project.id, { name: 'User Interface' });
   const child = await projects.createWorkspace(ctx, project.id, { name: 'Terminal', parentId: top.id });
@@ -78,6 +78,12 @@ test('workspaces nest to any depth; docs, status, context and renames work at ev
   await projects.writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: grandchild.id }, '# deep\n');
   assert.equal(await projects.readDoc(ctx, project.id, { kind: 'workspace', workspaceId: grandchild.id }), '# deep\n');
   assert.equal((await projects.setWorkspaceStatus(ctx, project.id, child.id, 'progress')).status, 'progress');
+  assert.equal((await projects.renameWorkspace(ctx, project.id, child.id, 'Terminal')).status, 'progress', 'local workspace status remains independent of Build state');
+  const grandchildMeta = path.join(project.dir, 'User Interface', 'Terminal', 'History', 'meta.json');
+  const withoutStatus = JSON.parse(fs.readFileSync(grandchildMeta, 'utf8'));
+  delete withoutStatus.status;
+  fs.writeFileSync(grandchildMeta, JSON.stringify(withoutStatus));
+  assert.equal(projects.findWorkspace(ctx, project.id, grandchild.id).workspace.status, 'open', 'Hudson-era records without a status still load');
   const note = await projects.createNote(ctx, project.id, { name: 'Reading', workspaceId: grandchild.id });
   assert.ok(fs.existsSync(path.join(project.dir, 'Reading.md')), 'notes stay flat in the project');
   assert.deepEqual((await projects.setWorkspaceContext(ctx, project.id, grandchild.id, [note.id])).context, [note.id]);
@@ -205,7 +211,7 @@ test('the goal/topic layout converts in place: topics become workspaces, ids and
   assert.ok(fs.existsSync(path.join(dir, 'First steps', 'User Interface', 'workspace.md')), 'a dry run moves nothing');
 
   const tree = await projects.loadProject(legacyCtx, pid); // the store converts on first touch
-  assert.deepEqual(tree.workspaces.map((workspace) => [workspace.id, workspace.name, workspace.status]), [[ui, 'User Interface', 'open'], [other, 'User Interface 2', 'done']]);
+  assert.deepEqual(tree.workspaces.map((workspace) => [workspace.id, workspace.name]), [[ui, 'User Interface'], [other, 'User Interface 2']]);
   assert.equal(await projects.readDoc(legacyCtx, pid, { kind: 'workspace', workspaceId: ui }), 'ui notes\n');
   assert.deepEqual(tree.workspaces[0].context, held, 'what the context folder held stays, flat and in order');
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'User Interface', 'meta.json'), 'utf8')).context, held);

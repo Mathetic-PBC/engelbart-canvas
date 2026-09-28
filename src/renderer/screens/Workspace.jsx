@@ -2,6 +2,7 @@ import React from 'react';
 import { api, errorMessage } from '../api.js';
 import Rail from '../workspace/Rail.jsx';
 import DocTabs from '../workspace/DocTabs.jsx';
+import NotePicker from '../workspace/NotePicker.jsx';
 import DocEditor, { BART_ITEM, TASK_ITEM } from '../workspace/DocEditor.jsx';
 import RightPane, { RIGHT_MODES } from '../workspace/RightPane.jsx';
 import { useLocalPreview } from '../workspace/LocalPreview.jsx';
@@ -14,10 +15,15 @@ import { OPEN_IN_BROWSER } from '../model/address.js';
 import { workspacePanels } from '../model/panel-layout.js';
 import { conversationRows, mentionRows } from '../model/rail.js';
 import { createSession as createTerminalSession, sessionsFor, subscribe as subscribeTerminal } from '../terminal/sessions.js';
-import { flatWorkspaces } from '../model/nav.js';
+import { flatWorkspaces, nextPlace, placesToGo } from '../model/nav.js';
 import { onStage } from '../model/stage.js';
+import { buildLine } from '../model/doc.js';
 import ProjectPostIts from '../post-its/ProjectPostIts.jsx';
 import { targetLabel as annotationTargetLabel } from '../../shared/interface-annotations.cjs';
+import BuildPanel from '../workspace/BuildPanel.jsx';
+import BuildReview from '../workspace/BuildReview.jsx';
+import PostItBuild from '../post-its/PostItBuild.jsx';
+import PostItTask from '../post-its/PostItTask.jsx';
 
 // The workspace screen (design 2026-09-17): a header in three columns — Engelbart / project /
 // parent workspaces over the sidebar, the document tabs over the document, the Stage · Terminal
@@ -36,9 +42,9 @@ import { targetLabel as annotationTargetLabel } from '../../shared/interface-ann
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const IMAGE_REF_RE = /\]\(img:([\w-]+)\)/g;
-const MENTION_RE = /@\[([^\]\n]+)\]/g;
-const NEXT_STATUS = { open: 'progress', progress: 'done', done: 'open' };
+const MENTION_RE = /@\[([^\]\n]+)\](?!\(ws:)/g; // a note or a library row by its name; `@[Name](ws:<id>)` is a workspace
 const SAVE_DELAY = 400;
+const NEXT_STATUS = { open: 'progress', progress: 'done', done: 'open' };
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
 const DEFAULT_RAIL_WIDTH = 300;
 
@@ -64,22 +70,20 @@ function Separator({ onDown, onMove, onUp, onReset, hidden = false, label = 'Res
 }
 
 const WS_TAB = { id: 'ws', title: 'Workspace' };
+const ARCHIVE_TAB = 'archive:'; // an archived version's tab (2026-09-27: it opens in the middle, read-only, not on the Stage)
+const FOOT_BUTTON = { padding: '3px 6px', border: 0, borderRadius: 5, background: '#fff', cursor: 'pointer', font: '400 15px/1.4 var(--font-sans)', color: '#8f8f8f', transition: 'color 120ms' };
 const VIEW_SAVE_DELAY = 400;
+const POST_ITS_HIDDEN = 'engelbart.postIts.hidden';
 
 /**
- * A workspace's remembered tabs, less notes and workspaces that are gone, with their current names; `extra` is a note
- * being opened into it. A tab of `kind: 'workspace'` is another workspace's document (a sub-workspace made here opens as
- * one, 2026-09-23); `selfId` is the workspace itself, whose document is always the Workspace tab.
+ * A workspace's remembered tabs, less notes that are gone, with their current names; `extra` is a note being opened
+ * into it. The Workspace tab is the only workspace document in the strip (2026-09-25: "I should not be able to have two
+ * workspace tabs open"); another workspace's tab remembered from the 2026-09-23 build is left behind.
  */
-function restoredTabs(view, notesById, extra, index, selfId) {
+function restoredTabs(view, notesById, extra) {
   const tabs = [WS_TAB];
   for (const tab of (view && view.tabs) || []) {
-    if (tabs.some((held) => held.id === tab.id)) continue;
-    if (tab.kind === 'workspace') {
-      const held = index && tab.id !== selfId ? index.get(tab.id) : null;
-      if (held) tabs.push({ id: tab.id, title: held.node.name, kind: 'workspace' });
-      continue;
-    }
+    if (tabs.some((held) => held.id === tab.id) || tab.kind === 'workspace') continue;
     const row = notesById.get(tab.id);
     if (row) tabs.push({ id: tab.id, title: row.name });
   }
@@ -114,13 +118,14 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const allWorkspaces = React.useMemo(() => flatWorkspaces(tree.workspaces), [tree.workspaces]);
   const [railWidth, setRailWidth] = React.useState(DEFAULT_RAIL_WIDTH);
   const [rightWidth, setRightWidth] = React.useState(null); // px, or null: browser-favored default with room for the document
+  const [notePlus, setNotePlus] = React.useState(null); // the +'s note menu beside the tabs: the +'s rect while it is open
   const [viewWidth, setViewWidth] = React.useState(() => window.innerWidth || 1440);
   React.useEffect(() => {
     const measure = () => setViewWidth(window.innerWidth || 1440);
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
   }, []);
-  const [opening] = React.useState(() => restoredTabs(topicId ? views.current[topicId] : null, notesById, initialTab || null, index, topicId));
+  const [opening] = React.useState(() => restoredTabs(topicId ? views.current[topicId] : null, notesById, initialTab || null));
   const [tabs, setTabs] = React.useState(opening.tabs);
   const [activeTab, setActiveTab] = React.useState(opening.active);
   const [docs, setDocs] = React.useState({});
@@ -159,6 +164,14 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const [postItDrag, setPostItDrag] = React.useState({ active: false, over: false });
   const [postItTrash, setPostItTrash] = React.useState(0); // how many post-its are in the trash (main keeps them a week)
   const onPostItDrag = React.useCallback((drag) => { setPostItDrag({ active: !!drag.active, over: !!drag.over }); }, []);
+  // The toggle at the sticky note's lower right (2026-09-25): all post-its out of sight or back, remembered across launches.
+  const [postItsHidden, setPostItsHidden] = React.useState(() => { try { return window.localStorage.getItem(POST_ITS_HIDDEN) === '1'; } catch { return false; } });
+  React.useEffect(() => { try { window.localStorage.setItem(POST_ITS_HIDDEN, postItsHidden ? '1' : '0'); } catch { /* not remembered */ } }, [postItsHidden]);
+  const showPostIts = React.useCallback(() => setPostItsHidden(false), []);
+  const cycleTopic = async candidate => {
+    try { await api.setWorkspaceStatus(project.id, candidate.id, NEXT_STATUS[candidate.status] || 'progress'); await reload(); }
+    catch (error) { onError(error); }
+  };
   const [openPage, setOpenPage] = React.useState(null); // the page in front in the Browser: { input, title } | null
   const [pageInfo, setPageInfo] = React.useState(null); // what the library holds for it: { input, row, addable }
   const [renaming, setRenaming] = React.useState(null);
@@ -171,15 +184,15 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const rightBox = React.useRef(null);
 
   const topic = topics.find((candidate) => candidate.id === topicId) || null;
-  // The document in front: this workspace's (the Workspace tab), a note's, or another workspace's open here as a tab.
-  const frontTab = tabs.find((tab) => tab.id === activeTab) || null;
-  const wsTab = !!frontTab && frontTab.kind === 'workspace';
-  const docWorkspaceId = activeTab === 'ws' ? (topic ? topic.id : null) : wsTab ? activeTab : null;
-  const docKey = docWorkspaceId ? `ws:${docWorkspaceId}` : activeTab === 'ws' ? null : `note:${activeTab}`;
+  // The document in front: this workspace's (the Workspace tab), an archived version of it (read-only), or a note's.
+  const docWorkspaceId = activeTab === 'ws' ? (topic ? topic.id : null) : null;
+  const docArchive = activeTab.startsWith(ARCHIVE_TAB) && topic ? activeTab.slice(ARCHIVE_TAB.length) : null;
+  const docKey = docWorkspaceId ? `ws:${docWorkspaceId}` : docArchive ? `archive:${topic.id}:${docArchive}` : activeTab === 'ws' || activeTab.startsWith(ARCHIVE_TAB) ? null : `note:${activeTab}`;
   const docRef = React.useMemo(() => {
     if (!docKey) return null;
+    if (docArchive) return { kind: 'archive', workspaceId: topic.id, file: docArchive };
     return docWorkspaceId ? { kind: 'workspace', workspaceId: docWorkspaceId } : { kind: 'note', id: activeTab };
-  }, [docKey, docWorkspaceId, activeTab]);
+  }, [docKey, docWorkspaceId, docArchive, activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Remember where we are, so the app reopens here.
   React.useEffect(() => { if (topic && !deletedWorkspaces.current.has(topic.id) && onVisit) onVisit(topic.id); }, [topic && topic.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -202,7 +215,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   React.useEffect(() => {
     if (!topicId || deletedWorkspaces.current.has(topicId)) return;
     const held = views.current[topicId] || { positions: {} };
-    const open = tabs.filter((tab) => tab.id !== 'ws').map((tab) => (tab.kind === 'workspace' ? { id: tab.id, title: tab.title, kind: 'workspace' } : { id: tab.id, title: tab.title }));
+    const open = tabs.filter((tab) => tab.id !== 'ws').map((tab) => ({ id: tab.id, title: tab.title }));
     if (held.active === activeTab && JSON.stringify(held.tabs) === JSON.stringify(open)) return;
     views.current[topicId] = { ...held, active: activeTab, tabs: open };
     saveView(topicId);
@@ -225,7 +238,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     if (!docKey || docs[docKey] !== undefined || !docRef) return;
     if (docRef.kind === 'workspace' && deletedWorkspaces.current.has(docRef.workspaceId)) return;
     let cancelled = false;
-    api.readDoc(project.id, docRef).then((text) => {
+    const read = docRef.kind === 'archive' ? api.readArchive(project.id, docRef.workspaceId, docRef.file).then((got) => got.text) : api.readDoc(project.id, docRef);
+    read.then((text) => {
       if (!cancelled) setDocs((current) => (current[docKey] === undefined ? { ...current, [docKey]: text } : current));
     }).catch((error) => onError(error));
     return () => { cancelled = true; };
@@ -253,14 +267,15 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const mainRef = React.useRef(null);
   const lastEdit = React.useRef({ id: null, at: 0 });
   const onDocChange = React.useCallback((text) => {
+    if (docRef && docRef.kind === 'archive') return; // an archived version is only read
     if (docKey && docRef) changeDoc(docKey, docRef, text);
     const typed = mainRef.current && mainRef.current.contains(document.activeElement);
     const now = Date.now(), last = lastEdit.current;
-    const wrote = wsTab ? activeTab : topic && topic.id; // a sub-workspace's document open as a tab is written in there
+    const wrote = topic && topic.id;
     if (!typed || !wrote || (last.id === wrote && now - last.at < 30000)) return;
     lastEdit.current = { id: wrote, at: now };
     api.recordEdit(project.id, wrote).catch(() => {});
-  }, [docKey, docRef, changeDoc, topic, project.id, wsTab, activeTab]);
+  }, [docKey, docRef, changeDoc, topic, project.id]);
 
   React.useEffect(() => () => {
     for (const key of [...pending.current.keys()]) flush(key);
@@ -340,6 +355,209 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     changeDoc(docKey, docRef, next);
     void askBart({ askId, text });
   }, [docKey, docRef, topic, changeDoc, askBart]);
+  /* ----------------------------------------------------------------- Build */
+
+  // Build (2026-09-25; docs/superpowers/specs/2026-09-25-build-workflow-design.md): the project's Builds by id, as main
+  // announces them, and what each running turn is doing. A workspace document holds a `build> <id>` line per Build, which
+  // the editor draws as its card from these; the conversation lives in the Build's record, never in the document.
+  const [builds, setBuilds] = React.useState({});
+  const buildsRef = React.useRef(builds);
+  buildsRef.current = builds;
+  const activeRef = React.useRef(active);
+  activeRef.current = active;
+  const previewRevisions = React.useRef(new Map());
+  const [buildProgress, setBuildProgress] = React.useState({});
+  // { anchor } while the workspace's Build panel is open above its Build button
+  const [buildDialog, setBuildDialog] = React.useState(null);
+  const [review, setReview] = React.useState(null); // { id, title, review, error } while Review is open
+  // A post-it's Build popup, and its quick task's card (Claude Design "Post-it Quick Task", 2026-09-27), each hanging from
+  // the card's button that opened it: { postItId, text, anchor } and { id, postItId, anchor }. A second press on the same
+  // button closes what it opened.
+  const [postItBuild, setPostItBuild] = React.useState(null);
+  const [quickTask, setQuickTask] = React.useState(null);
+  const cardAnchor = (rect) => (rect && Number.isFinite(rect.x) && Number.isFinite(rect.y) ? { left: rect.x, right: rect.x + rect.width, top: rect.y, bottom: rect.y + rect.height, width: rect.width } : null);
+  // A post-it that was added to a workspace is a Build there: its state goes to the version it was put in as (2026-09-27).
+  const goToVersionRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!active) return undefined;
+    const offAsk = api.onBuildQuick(({ projectId, postItId, text, button }) => {
+      if (projectId !== project.id) return;
+      setQuickTask(null);
+      setPostItBuild((now) => (now && now.postItId === postItId ? null : { postItId, text, anchor: cardAnchor(button) }));
+    });
+    const offOpen = api.onBuildQuickOpen(({ projectId, id, postItId, button }) => {
+      if (projectId !== project.id) return;
+      const task = buildsRef.current[id];
+      setPostItBuild(null);
+      if (task && task.kind === 'build' && task.workspaceId && task.version) { setQuickTask(null); void goToVersionRef.current(task.workspaceId, task.version); }
+      else setQuickTask((now) => (now && now.id === id ? null : { id, postItId, anchor: cardAnchor(button) }));
+    });
+    return () => { offAsk(); offOpen(); };
+  }, [active, project.id]);
+  React.useEffect(() => {
+    let live = true;
+    setBuilds({});
+    api.buildList(project.id).then((list) => { if (live) setBuilds(Object.fromEntries(list.map((task) => [task.id, task]))); }).catch(() => {});
+    const offBuild = api.onBuild((task) => {
+      if (!task || task.projectId !== project.id) return;
+      setBuilds((current) => ({ ...current, [task.id]: task }));
+      const preview = task.preview;
+      if (preview?.revision && previewRevisions.current.get(task.id) !== preview.revision) {
+        previewRevisions.current.set(task.id, preview.revision);
+        const focus = activeRef.current && task.workspaceId === currentTopicId.current;
+        stageRef.current?.applyBuildPreview(task.id, preview, focus);
+        if (focus && preview.status === 'ready') setRightMode('stage');
+      }
+      // a turn that ended leaves nothing to show as progress
+      if (!['running', 'queued', 'setting-up', 'accepting'].includes(task.status)) setBuildProgress((current) => { if (!current[task.id]) return current; const next = { ...current }; delete next[task.id]; return next; });
+    });
+    const offProgress = api.onBuildProgress(({ projectId, id, log, lines, ...progress }) => { // the card shows what it is doing, not the text so far
+      if (projectId !== project.id || !progress.activity) return;
+      setBuildProgress((current) => {
+        const held = current[id] || {};
+        const next = { ...held, ...progress };
+        if (log && progress.activity) next.log = [...(held.log || []), progress.activity].slice(-80);
+        return { ...current, [id]: next };
+      });
+    });
+    return () => { live = false; offBuild(); offProgress(); };
+  }, [project.id]);
+
+  // A post-it added to a workspace (2026-09-27: "it should take me to that workspace"): that workspace, with the archived
+  // version the post-it was put in as open in the middle, where its Build's card is. Main has already made it one of ⌘J's
+  // recent workspaces.
+  const selectRef = React.useRef(null); // selectTopic and openTab, defined further down
+  const openTabRef = React.useRef(null);
+  const goToVersion = React.useCallback(async (workspaceId, version) => {
+    await reload();
+    if (!version) return;
+    selectRef.current(workspaceId);
+    openTabRef.current(`${ARCHIVE_TAB}${version.file}`, version.title);
+  }, [reload]);
+  goToVersionRef.current = goToVersion;
+
+  // Send in the panel: the Build starts from what is saved, so everything open is saved first; its line goes at the end
+  // of the workspace's document, and its card shows there at once. "Automatically clear workspace" then clears it, as
+  // Clear does, after the Build froze what it is given: the blank document keeps the new card (2026-09-27).
+  const startBuild = React.useCallback(async ({ clear = false, ...input }) => {
+    await Promise.all([...pending.current.keys()].map((key) => flush(key)));
+    if (!topic) throw new Error('Open a workspace first');
+    const task = await api.buildStart(project.id, { workspaceId: topic.id, ...input });
+    setBuilds((current) => ({ ...current, [task.id]: task }));
+    const key = `ws:${topic.id}`, ref = { kind: 'workspace', workspaceId: topic.id };
+    const held = docsRef.current[key] !== undefined ? docsRef.current[key] : await api.readDoc(project.id, ref);
+    const body = String(held || '').replace(/\n+$/, '');
+    changeDoc(key, ref, `${body ? `${body}\n\n` : ''}${buildLine(task.id)}\n`);
+    setBuildDialog(null);
+    if (clear) {
+      try {
+        await flush(key);
+        const out = await api.clearWorkspace(project.id, topic.id);
+        setDocs((current) => ({ ...current, [key]: out.text }));
+        await reload();
+      } catch (error) {
+        onError(error);
+      }
+    } else if (input.attach && input.attach.length) await reload(); // what was attached is linked to the workspace: the sidebar shows it
+  }, [flush, project.id, topic, changeDoc, reload, onError]);
+
+  // The post-it's popup sends it as a quick task.
+  const startQuick = React.useCallback(async (input) => {
+    const quick = postItBuild;
+    if (!quick) return;
+    const task = await api.buildStart(project.id, { kind: 'quick', postItId: quick.postItId, text: quick.text, ...input });
+    setBuilds((current) => ({ ...current, [task.id]: task }));
+    setPostItBuild(null);
+  }, [postItBuild, project.id]);
+
+  // What a card's buttons do. Accept's refusals and a turn's failures are on the card (the record carries them); only a
+  // call that could not be made at all is reported. → false when the call failed (the reply field keeps its text)
+  const onBuildAction = React.useCallback(async (id, action, payload = {}) => {
+    try {
+      if (action === 'reply') await api.buildReply(project.id, id, payload.text, { interrupt: !!payload.interrupt });
+      else if (action === 'stop') await api.buildStop(project.id, id);
+      else if (action === 'resume') await api.buildResume(project.id, id);
+      else if (action === 'fix') await api.buildFix(project.id, id);
+      else if (action === 'discard') await api.buildDiscard(project.id, id);
+      else if (action === 'accept') await api.buildAccept(project.id, id).catch(() => {}); // refused: the card says why
+      else if (action === 'preview') {
+        const task = await api.buildPreview(project.id, id);
+        if (task.preview?.url) { setRightMode('stage'); stageRef.current?.applyBuildPreview(id, task.preview, true); }
+      }
+      else if (action === 'review') {
+        const title = (builds[id] && builds[id].title) || '';
+        setReview({ id, title, review: null, error: '' });
+        try { const got = await api.buildReview(project.id, id); setReview((now) => (now && now.id === id ? { ...now, review: got } : now)); } catch (error) { setReview((now) => (now && now.id === id ? { ...now, error: errorMessage(error) } : now)); }
+      }
+      return true;
+    } catch (error) {
+      onError(error);
+      return false;
+    }
+  }, [project.id, builds, onError]);
+
+  // A quick task added to a workspace (the "Needs you" card): it becomes a Build of the workspace picked there, on the model
+  // picked there, and its session goes on (main/build promote). Its post-it is put in as an archived version of that
+  // workspace, and the workspace, with that version open, is where Engelbart goes (the card stays to ask keep or delete).
+  const promoteQuick = React.useCallback(async (id, workspaceId, choice) => {
+    const task = await api.buildPromote(project.id, id, workspaceId, choice);
+    setBuilds((current) => ({ ...current, [task.id]: task }));
+    return task;
+  }, [project.id]);
+  const goToTask = React.useCallback((task) => { if (task && task.version) goToVersion(task.workspaceId, task.version).catch(onError); }, [goToVersion, onError]);
+
+  const closeBuildDialog = React.useCallback(() => setBuildDialog(null), []);
+  const closePostItBuild = React.useCallback(() => setPostItBuild(null), []);
+  const closeQuickTask = React.useCallback(() => setQuickTask(null), []);
+
+  /* ----------------------------------------------------------------- Clear */
+
+  // Clear (B21): the document is archived and starts blank (Builds still open keep their lines); everything it mentioned
+  // stays on the sidebar. The editor's undo can still bring the text back, and Restore brings back any archived version.
+  const clearDoc = React.useCallback(async () => {
+    if (!topic || docKey !== `ws:${topic.id}`) return;
+    const key = docKey;
+    try {
+      await flush(key);
+      const out = await api.clearWorkspace(project.id, topic.id);
+      setDocs((current) => ({ ...current, [key]: out.text }));
+      await reload();
+    } catch (error) {
+      onError(error);
+    }
+  }, [topic, docKey, flush, project.id, reload, onError]);
+
+  // Restore (B22): the current document is archived first, then the chosen version is the document again.
+  const restoreVersion = React.useCallback(async (file) => {
+    if (!topic) return;
+    const key = `ws:${topic.id}`;
+    try {
+      await flush(key);
+      const out = await api.restoreArchive(project.id, topic.id, file);
+      setDocs((current) => ({ ...current, [key]: out.text }));
+      showWs();
+      await reload();
+    } catch (error) {
+      onError(error);
+    }
+  }, [topic, flush, project.id, reload, onError]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Copy (the document's lower left, plain text since 2026-09-23; it was a picture in the sidebar): the open document with
+  // every @mentioned file's content placed where it is mentioned. It is read from disk, so every open tab is saved first.
+  const [copied, setCopied] = React.useState(null);
+  const copiedTimer = React.useRef(null);
+  React.useEffect(() => () => clearTimeout(copiedTimer.current), []);
+  const copyDoc = React.useCallback(async () => {
+    if (!docRef) return;
+    try {
+      await Promise.all([...pending.current.keys()].map((key) => flush(key)));
+      setCopied(await api.copyDoc(project.id, docRef));
+      clearTimeout(copiedTimer.current);
+      copiedTimer.current = setTimeout(() => setCopied(null), 1800);
+    } catch (error) {
+      onError(error);
+    }
+  }, [docRef, flush, project.id, onError]);
 
   /* ---------------------------------------------------------------- images */
 
@@ -410,13 +628,15 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       }
     }
     for (const child of here ? here.node.children || [] : []) out.push({ id: child.id, name: child.name, type: 'child', depth: 0, on: activeRowId === child.id, editing: renaming === child.id });
+    // This workspace's earlier versions, one per Clear, newest first (2026-09-25; the sidebar's Archived section).
+    for (const entry of [...(topic.archives || [])].reverse()) out.push({ id: `archive:${entry.file}`, name: entry.title || 'Untitled', type: 'archive', file: entry.file, clearedAt: entry.clearedAt, depth: 0, on: docArchive === entry.file, editing: false });
     return out;
-  }, [topic, project.context, project.removedContext, here, byId, renaming, activeRowId, tree.notes, mentioned]);
+  }, [topic, project.context, project.removedContext, here, byId, renaming, activeRowId, tree.notes, mentioned, docArchive]);
 
   const mentionable = React.useMemo(() => [BART_ITEM, TASK_ITEM, ...library.filter((row) => row.type !== 'image').map(describe)], [library]);
 
   // On the rail: what the search does not offer again, and what makes the Browser's Save read ✓.
-  const railIds = React.useMemo(() => new Set(rows.filter((row) => row.type !== 'child').map((row) => row.id)), [rows]);
+  const railIds = React.useMemo(() => new Set(rows.filter((row) => row.type !== 'child' && row.type !== 'archive').map((row) => row.id)), [rows]);
   const inRail = React.useCallback((id) => railIds.has(id), [railIds]);
 
   // The page in front in the Browser, and what the library holds for it (asked again whenever the library changes).
@@ -432,42 +652,20 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const pageKnown = openPage && pageInfo && pageInfo.input === openPage.input && pageInfo.addable ? pageInfo : null;
   const pageState = pageKnown ? (pageKnown.row ? (railIds.has(pageKnown.row.id) ? 'here' : 'lib') : 'none') : null;
 
-  // The @ menu: Bart, Task, Note, the open page, then the library (model/rail.js).
-  const mentionItems = React.useCallback(
-    (query) => mentionRows({ query, library, page: pageKnown ? openPage : null, pageRow: pageKnown ? pageKnown.row : null }),
-    [library, openPage, pageKnown],
-  );
-
   /* --------------------------------------------------------------- opening */
 
-  // A note, or another workspace's document (`kind` 'workspace'), as a tab; `behind` adds it without bringing it to the front.
-  const openTab = React.useCallback((id, title, kind, behind) => {
-    setTabs((current) => (current.some((tab) => tab.id === id) ? current : [...current, kind === 'workspace' ? { id, title, kind } : { id, title }]));
+  // A note as a tab; `behind` adds it without bringing it to the front.
+  const openTab = React.useCallback((id, title, behind) => {
+    setTabs((current) => (current.some((tab) => tab.id === id) ? current : [...current, { id, title }]));
     if (!behind) setActiveTab(id);
   }, []);
 
-  // A workspace open as a tab follows the tree: renamed, its tab is too; gone (or become the workspace we are in), its tab closes.
-  React.useEffect(() => {
-    setTabs((current) => {
-      let changed = false;
-      const next = current.flatMap((tab) => {
-        if (tab.kind !== 'workspace') return [tab];
-        const held = tab.id !== topicId ? index.get(tab.id) : null;
-        if (!held) { changed = true; return []; }
-        if (held.node.name !== tab.title) { changed = true; return [{ ...tab, title: held.node.name }]; }
-        return [tab];
-      });
-      if (!changed) return current;
-      if (!next.some((tab) => tab.id === activeTab)) setActiveTab(next.length ? next[next.length - 1].id : 'ws');
-      return next.length ? next : [WS_TAB];
-    });
-  }, [index, topicId]); // eslint-disable-line react-hooks/exhaustive-deps
+  openTabRef.current = openTab;
 
-  // Any tab closes, Workspace too, while another is left (Stage design, 2026-09-23); the workspace's name in the sidebar
-  // brings it back, first again (showWs).
+  // Any note's tab closes; Workspace is always there (2026-09-25; from 2026-09-23 it closed too while another tab was left).
   const closeTab = (id) => {
-    const closing = tabs.find((tab) => tab.id === id);
-    flush(id === 'ws' ? (topic ? `ws:${topic.id}` : '') : closing && closing.kind === 'workspace' ? `ws:${id}` : `note:${id}`);
+    if (id === 'ws') return;
+    flush(`note:${id}`);
     setTabs((current) => {
       if (current.length < 2 && current.some((tab) => tab.id === id)) return current;
       const next = current.filter((tab) => tab.id !== id);
@@ -475,6 +673,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       return next;
     });
   };
+  const closeNotePlus = React.useCallback(() => setNotePlus(null), []);
   const showWs = React.useCallback(() => {
     setTabs((current) => (current.some((tab) => tab.id === 'ws') ? current : [WS_TAB, ...current]));
     setActiveTab('ws');
@@ -514,6 +713,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   const onRowClick = (row) => {
     if (row.type === 'child') { selectTopic(row.id); return; }
+    if (row.type === 'archive') { openTab(`${ARCHIVE_TAB}${row.file}`, row.name); return; }
     openItem(row);
   };
 
@@ -523,11 +723,12 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const selectTopic = (id) => {
     if (deletedWorkspaces.current.has(id)) return;
     if (id === topicId) { showWs(); return; }
-    const restored = restoredTabs(views.current[id], notesById, null, index, id);
+    const restored = restoredTabs(views.current[id], notesById, null);
     setTopicId(id);
     setTabs(restored.tabs);
     setActiveTab(restored.active);
   };
+  selectRef.current = selectTopic;
 
   /* -------------------------------------------------------- agent activity */
 
@@ -545,6 +746,74 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     if (!active || !topic) return;
     if (nav.agents.some((agent) => agent.status === 'waiting' && agent.projectId === project.id && agent.workspaceId === topic.id)) api.seenAgents(project.id, topic.id).catch(() => {});
   }, [active, nav, topic && topic.id, project.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const next = React.useMemo(() => {
+    const place = nextPlace({ here: topic ? { projectId: project.id, workspaceId: topic.id } : null, recent: nav.recent, agents: nav.agents });
+    if (!place || place.projectId !== project.id) return place;
+    const held = index.get(place.workspaceId);
+    return held ? { ...place, name: held.node.name } : null; // this project's names are the tree's, current after a rename
+  }, [nav, topic, project.id, index]);
+  // The @ menu: Bart, Task, Note, the open page, the project's other workspaces (written in last first), then the library
+  // (model/rail.js).
+  const mentionSpaces = React.useMemo(() => {
+    const order = new Map();
+    nav.recent.forEach((entry, i) => { if (entry.projectId === project.id && !order.has(entry.workspaceId)) order.set(entry.workspaceId, i); });
+    const rank = (workspace) => (order.has(workspace.id) ? order.get(workspace.id) : Infinity);
+    return allWorkspaces.map((workspace, i) => ({ workspace, i })).sort((a, b) => rank(a.workspace) - rank(b.workspace) || a.i - b.i).map(({ workspace }) => workspace);
+  }, [allWorkspaces, nav.recent, project.id]);
+  const mentionItems = React.useCallback(
+    (query) => mentionRows({ query, library, page: pageKnown ? openPage : null, pageRow: pageKnown ? pageKnown.row : null, workspaces: mentionSpaces, hereId: topic ? topic.id : null }),
+    [library, openPage, pageKnown, mentionSpaces, topic],
+  );
+  // A mentioned workspace's peek (workspace/WorkspacePeek.jsx): the tree, state.json's agents and recent edits, and its
+  // document as open here (unsaved words included) or as saved.
+  const peekRef = React.useRef(null);
+  peekRef.current = { nav, docs, index };
+  const workspacePeek = React.useMemo(() => ({
+    info: (id) => {
+      const { nav: held, index: tree } = peekRef.current;
+      const at = tree.get(id);
+      if (!at) return null;
+      const above = [];
+      for (let up = at.parent; up; up = tree.get(up.id).parent) above.unshift(up.name);
+      const theirs = held.agents.filter((agent) => agent.projectId === project.id && agent.workspaceId === id);
+      const bart = theirs.some((agent) => agent.status === 'waiting') ? 'waiting' : theirs.some((agent) => agent.status === 'running') ? 'running' : null;
+      const edit = held.recent.find((entry) => entry.projectId === project.id && entry.workspaceId === id);
+      return { name: at.node.name, above, bart, editedAt: edit ? edit.at : null };
+    },
+    read: (id) => {
+      const open = peekRef.current.docs[`ws:${id}`];
+      return open !== undefined ? Promise.resolve(open) : api.readDoc(project.id, { kind: 'workspace', workspaceId: id });
+    },
+  }), [project.id]);
+  // A click on a workspace's mention goes there (the one workspace in the strip changes; nothing opens beside it).
+  const openMentionedWorkspace = (id) => { if (index.has(id)) selectTopic(id); };
+  // All of them, for the next row's hover list; this project's by the tree's names, gone ones left out.
+  const places = React.useMemo(() => placesToGo({ here: topic ? { projectId: project.id, workspaceId: topic.id } : null, recent: nav.recent, agents: nav.agents }).flatMap((place) => {
+    if (place.projectId !== project.id) return [place];
+    const held = index.get(place.workspaceId);
+    return held ? [{ ...place, name: held.node.name }] : [];
+  }), [nav, topic, project.id, index]);
+  const goTo = (place) => {
+    if (!place) return;
+    if (place.projectId === project.id) selectTopic(place.workspaceId);
+    else if (onOpenElsewhere) onOpenElsewhere(place.projectId, place.workspaceId);
+  };
+  // ⌘J, wherever the keyboard is: the app's pages see it in the capture phase, before the editor or a terminal can; a
+  // Browser page has the main process send it (src/main/browser/views.cjs).
+  const goNext = React.useRef(null);
+  goNext.current = () => goTo(next);
+  React.useEffect(() => {
+    if (!active) return undefined;
+    const onKey = (event) => {
+      if (!event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || String(event.key).toLowerCase() !== 'j') return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!event.repeat) goNext.current();
+    };
+    window.addEventListener('keydown', onKey, true);
+    const off = api.onNextWorkspace(() => goNext.current());
+    return () => { window.removeEventListener('keydown', onKey, true); off(); };
+  }, [active]);
 
   // The section's Add workspace creates a root; a row's + creates a child of that row.
   const addTopic = async (parentId = null, name = '') => {
@@ -555,15 +824,6 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       wantTitleFocus.current = !name.trim();
       selectTopic(created.id);
       flash(created.id);
-    } catch (error) {
-      onError(error);
-    }
-  };
-
-  const cycleTopic = async (candidate) => {
-    try {
-      await api.setWorkspaceStatus(project.id, candidate.id, NEXT_STATUS[candidate.status] || 'progress');
-      await reload();
     } catch (error) {
       onError(error);
     }
@@ -653,18 +913,17 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     const note = await api.createNote(project.id, { name: given || nextUntitled('Note', (tree.notes || []).map((candidate) => candidate.name)), workspaceId: topic.id });
     await linkIds([note.id]);
     if (openIt && !given) wantTitleFocus.current = true;
-    openTab(note.id, note.name, null, !openIt);
+    openTab(note.id, note.name, !openIt);
     return note;
   };
 
-  // A workspace nested in this one, from the +'s Sub-Workspace: it arrives on the rail and its document opens here as a
-  // tab, the caret in its title (2026-09-23; it used to wait on the rail in rename mode).
+  // A workspace nested in this one, from the +'s Sub-Workspace: made, then gone into, the caret in its title. It opened
+  // as a tab here from 2026-09-23 until 2026-09-25, when one workspace in the strip became the rule.
   const makeChild = async () => {
     const created = await api.createWorkspace(project.id, { name: nextUntitled('Workspace', (here && here.node.children ? here.node.children : []).map((candidate) => candidate.name)), parentId: topic.id });
     await reload();
-    flash(created.id);
     wantTitleFocus.current = true;
-    openTab(created.id, created.name, 'workspace');
+    selectTopic(created.id);
   };
 
   // A repository picked from the +'s GitHub view: the library's row for it comes in, else it is added by its address
@@ -734,18 +993,18 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   /* ----------------------------------------------------------------- title */
 
   const currentTab = tabs.find((tab) => tab.id === activeTab);
-  const docTitle = activeTab === 'ws' ? (topic ? topic.name : '') : wsTab && index.has(activeTab) ? index.get(activeTab).node.name : (currentTab ? currentTab.title : '');
+  const docTitle = activeTab === 'ws' ? (topic ? topic.name : '') : (currentTab ? currentTab.title : '');
   const shownTitle = isUntitled(docTitle) ? '' : docTitle; // an untitled name is the field's hint, not its value
   React.useEffect(() => { setTitleDraft(shownTitle); }, [shownTitle, docKey]);
 
   const commitTitle = async () => {
     const next = titleDraft.trim();
-    if (!next || next === docTitle) {
+    if (!next || next === docTitle || docArchive) {
       setTitleDraft(shownTitle);
       return;
     }
     try {
-      if (activeTab === 'ws' || wsTab) {
+      if (activeTab === 'ws') {
         if (docWorkspaceId) await api.renameWorkspace(project.id, docWorkspaceId, next);
       } else {
         const renamed = await api.renameNote(project.id, activeTab, next);
@@ -839,6 +1098,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     <input
       ref={(element) => { if (element && wantTitleFocus.current) { wantTitleFocus.current = false; element.focus(); } }}
       value={titleDraft}
+      readOnly={!!docArchive}
       onChange={(event) => setTitleDraft(event.target.value.replace(/[/\\]/g, '-'))} // a title is a file name: slashes become hyphens as you type
       onBlur={commitTitle}
       onKeyDown={(event) => {
@@ -879,11 +1139,24 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           )}
         </div>
         <div style={{ flex: 'none', width: 1, background: '#eaeaea' }} />
-        <div inert={documentHidden} style={{ minWidth: 0, borderBottom: '1px solid #eaeaea', overflow: 'hidden' }}>
-          <div style={{ height: '100%', boxSizing: 'border-box', display: 'flex', alignItems: 'flex-end', gap: 2, padding: '8px 8px 0' }}>
+        {/* The document's tabs, drawn as the Stage's (2026-09-25): no rule under them; the tab in front runs into the page. */}
+        <div data-doc-strip="1" inert={documentHidden} style={{ minWidth: 0, boxSizing: 'border-box', display: 'flex', alignItems: 'flex-end', padding: '0 8px 0 10px', overflow: 'hidden' }}>
+          <div style={{ flex: '0 1 auto', minWidth: 0, display: 'flex', alignItems: 'flex-end', height: '100%' }}>
             <DocTabs tabs={tabs} activeTab={activeTab} onSelect={setActiveTab} onClose={closeTab} onMove={moveTab} />
-            {topic && <button type="button" className="hov-ink-wash" onClick={() => { makeNote('', true).catch(onError); }} aria-label="New note tab" title="new note" style={{ flex: 'none', alignSelf: 'center', width: 26, height: 26, margin: '0 0 4px 4px', padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', font: '16px/1 var(--font-sans)', color: '#8f8f8f' }}>+</button>}
           </div>
+          {notePlus && topic && (
+            <NotePicker
+              anchor={notePlus}
+              library={library}
+              openIds={tabs.map((tab) => tab.id)}
+              inRail={inRail}
+              onPick={(row) => openTab(row.id, row.name)}
+              onNew={(name) => makeNote(name, true)}
+              onClose={closeNotePlus}
+              onError={onError}
+            />
+          )}
+          {topic && <button type="button" className="hov-tab-plus" data-note-plus="1" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setNotePlus(notePlus ? null : { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width }); }} aria-label="Open or make a note" aria-expanded={!!notePlus} title="Open a note or make one" style={{ flex: 'none', alignSelf: 'flex-end', width: 28, height: 28, margin: '0 0 3px 6px', padding: 0, border: 0, borderRadius: '50%', background: 'transparent', cursor: 'pointer', font: '18px/1 var(--font-sans)', color: '#4d4d4d', transition: 'background 120ms' }}>+</button>}
         </div>
         <div style={{ flex: 'none', width: 1, background: '#eaeaea', visibility: full ? 'hidden' : undefined }} />
         <div style={{ flex: 'none', width: paneWidth, minWidth: 0, boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 16, padding: '0 20px', overflow: 'hidden' }}>
@@ -936,7 +1209,11 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           postItTrash={active ? { count: postItTrash, load: () => api.postItsTrashed(project.id), restore: (id) => api.postItsRestore(project.id, id) } : null}
           postItDrag={postItDrag}
           trashRef={trashRef}
+          onRestoreArchive={(row) => restoreVersion(row.file)}
+          projectId={project.id}
           onPostIt={active ? () => api.postItsCreate(project.id).catch(onError) : null}
+          postItsHidden={postItsHidden}
+          onTogglePostIts={active ? () => setPostItsHidden((now) => !now) : null}
         />
 
         <Separator onDown={railDown} onMove={railMove} onUp={pointerUp} onReset={() => setRailWidth(DEFAULT_RAIL_WIDTH)} />
@@ -948,10 +1225,13 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
               ref={editorRef}
               docKey={docKey}
               text={text}
+              readOnly={!!docArchive}
               onChange={onDocChange}
               mentionable={mentionable}
               mentionItems={mentionItems}
               onMentionPicked={mentionPicked}
+              workspacePeek={workspacePeek}
+              onOpenWorkspace={openMentionedWorkspace}
               onNoteVerb={(name) => makeNote(name, false)}
               onOpenItem={openItem}
               onOpenLink={openLink}
@@ -960,6 +1240,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
               onPasteImage={pasteImage}
               asks={asks}
               models={bartModels}
+              builds={builds}
+              buildProgress={buildProgress}
+              onBuildAction={onBuildAction}
               onCopyText={(value) => api.copyText(value)}
               onAsk={askBart}
               onStopAsk={(askId) => api.stopBart(askId).catch((error) => onError(error))}
@@ -968,6 +1251,29 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
               viewOf={viewOf}
               onView={recordPosition}
               header={header}
+              footer={(
+                // Copy, then (on the Workspace tab: a workspace is one Build) Build and Clear (2026-09-25). Build sits beside
+                // Copy until it replaces it.
+                // An archived version has Restore alone.
+                docArchive ? (
+                  <button type="button" className="hov-ink" data-restore-doc="1" onClick={() => restoreVersion(docArchive)} title="Make this version the workspace's document again" style={{ ...FOOT_BUTTON, marginLeft: -6 }}>Restore</button>
+                ) : (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <button
+                    type="button"
+                    className="hov-ink"
+                    data-copy-doc="1"
+                    onClick={copyDoc}
+                    title={docWorkspaceId ? 'Copy current workspace' : 'Copy current note'}
+                    style={{ ...FOOT_BUTTON, marginLeft: -6, color: copied ? '#171717' : '#8f8f8f' }}
+                  >
+                    {copied ? copiedLabel(copied) : 'Copy'}
+                  </button>
+                  {docWorkspaceId && !copied && <button type="button" className="hov-ink" data-build-doc="1" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setBuildDialog((now) => (now ? null : { anchor: { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width } })); }} aria-expanded={!!buildDialog} title="Hand this workspace to a coding agent" style={FOOT_BUTTON}>Build</button>}
+                  {docWorkspaceId && !copied && <button type="button" className="hov-ink" data-clear-doc="1" onClick={clearDoc} title="Archive this document and start it blank" style={FOOT_BUTTON}>Clear</button>}
+                </span>
+                )
+              )}
             />
           ) : (
             <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40 }}>
@@ -1005,9 +1311,54 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
         />
       </div>
 
+      {buildDialog && (
+        <BuildPanel
+          projectId={project.id}
+          title={topic ? topic.name : ''}
+          anchor={buildDialog.anchor}
+          library={library}
+          inRail={inRail}
+          onClose={closeBuildDialog}
+          onStart={startBuild}
+        />
+      )}
+      {postItBuild && (
+        <PostItBuild
+          key={postItBuild.postItId}
+          projectId={project.id}
+          quick={postItBuild}
+          workspaces={allWorkspaces}
+          hereId={topicId}
+          anchor={postItBuild.anchor}
+          library={library}
+          inRail={inRail}
+          onClose={closePostItBuild}
+          onStart={startQuick}
+          onLibraryChanged={reload}
+        />
+      )}
+      {quickTask && builds[quickTask.id] && (
+        <PostItTask
+          key={quickTask.id}
+          task={builds[quickTask.id]}
+          progress={buildProgress[quickTask.id]}
+          anchor={quickTask.anchor}
+          workspaces={allWorkspaces}
+          hereId={topic ? topic.id : null}
+          onAction={(action) => onBuildAction(quickTask.id, action)}
+          onPromote={(workspaceId, choice) => promoteQuick(quickTask.id, workspaceId, choice)}
+          onGo={goToTask}
+          onDelete={() => { if (quickTask.postItId) api.postItsThrowOut(project.id, quickTask.postItId).catch(onError); }}
+          onClose={closeQuickTask}
+        />
+      )}
+      {review && <BuildReview title={review.title} review={review.review} error={review.error} onClose={() => setReview(null)} />}
+
       <ProjectPostIts
         projectId={project.id}
         active={active}
+        hidden={postItsHidden}
+        onShown={showPostIts}
         onError={onError}
         onDrag={onPostItDrag}
         onTrashCount={setPostItTrash}

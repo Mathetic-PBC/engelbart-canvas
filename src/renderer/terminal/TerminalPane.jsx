@@ -8,8 +8,10 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { api } from '../api.js';
 import './terminal.css';
+import { FluidTab, TabCard, TabClose, TabTitle, useTabCard } from '../ui/FluidTab.jsx';
 import {
   bootstrap,
+  clearSession,
   closeSession,
   createSession,
   dismissError,
@@ -97,6 +99,7 @@ export default function TerminalPane({ cwd, projectId, visible = true, requested
   const [touched, setTouched] = useState({}); // session id → a command was sent from the box
   const [takeover, setTakeover] = useState(false); // the running program has the keyboard
   const autoStarted = useRef(new Set());
+  const card = useTabCard();
 
   const sessions = sessionsFor(projectId);
   const active = sessions.find((record) => record.snapshot.id === activeId) || null;
@@ -279,7 +282,24 @@ export default function TerminalPane({ cwd, projectId, visible = true, requested
     if (here) activate(here.snapshot.id); else void launch(agent, currentCwd);
   };
 
+  // The last terminal never goes (2026-09-25: "it should sort of always stay there and if there is only one it should just
+  // clear the terminal but not delete that tab"): an idle shell is cleared in place; a program running in it, or a
+  // terminal that has exited, gives way to a fresh shell where it was, as × would have ended it in any other tab.
   const close = async (id) => {
+    const only = sessions.length === 1 && sessions[0].snapshot.id === id ? sessions[0] : null;
+    if (only) {
+      const shell = describe(only);
+      setDraft('');
+      setHistIdx(null);
+      if (only.snapshot.status === 'running' && shell.integrated && !shell.busy) {
+        clearSession(id);
+        if (inputRef.current) inputRef.current.focus();
+        return;
+      }
+      const fresh = await launch('shell', cwdOf(only));
+      if (fresh) await closeSession(id);
+      return;
+    }
     const ids = sessions.map((record) => record.snapshot.id);
     const index = ids.indexOf(id);
     const closed = await closeSession(id);
@@ -352,8 +372,9 @@ export default function TerminalPane({ cwd, projectId, visible = true, requested
       const mod = event.metaKey || event.ctrlKey;
       if (!mod) return;
       const inside = rootRef.current && event.target && rootRef.current.contains(event.target);
-      // ⌘T is the Stage's everywhere else (2026-09-23): here only while the terminal has the keyboard.
-      if (inside && event.metaKey && event.key.toLowerCase() === 't' && !event.shiftKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); void launch('shell', projectCwd); return; }
+      // ⌘T opens a terminal whenever the Terminal shows, wherever the keyboard is (2026-09-25: "cmd t in terminal new
+      // terminal not browser"); while the Stage shows it is the Stage's.
+      if (event.metaKey && event.key.toLowerCase() === 't' && !event.shiftKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); void launch('shell', projectCwd); return; }
       if (inside && currentId && event.metaKey && event.key.toLowerCase() === 'w' && !event.shiftKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); void close(currentId); return; }
       if (inside && event.metaKey && /^[1-9]$/.test(event.key)) {
         const record = sessions[Number(event.key) - 1];

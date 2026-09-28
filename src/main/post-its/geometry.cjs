@@ -78,10 +78,13 @@ function overlaps(a, b) {
   return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
 }
 
-/** Rects of the app's own menus and dialogs, as the renderer measured them (CSS px of the content): at most 64, all finite. */
+/**
+ * Rects of the app's own menus and dialogs, as the renderer measured them (CSS px of the content): at most 64, all finite.
+ * One marked `cover` (a panel opened by a click, 2026-09-27) covers the cards under it rather than moving them aside.
+ */
 function blockingRects(value) {
   if (!Array.isArray(value) || value.length > 64) throw new TypeError('Blocking rects must be a list of at most 64');
-  return value.map(trashRect).filter(Boolean);
+  return value.map((rect) => { const r = trashRect(rect); return r && rect.cover === true ? { ...r, cover: true } : r; }).filter(Boolean);
 }
 
 /** The tallest a card can show in this window (CSS px): the preferred height is clamped to it on screen. */

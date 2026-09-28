@@ -58,7 +58,7 @@ const rowElement = id => elements.find(element => element.props['data-rail-row']
 test('sidebar keeps workspace navigation and orders the material groups by purpose', () => {
   const html = renderRail([repo, child, paper, website, note]);
   assert.deepEqual([...html.matchAll(/data-rail-section="([^"]+)"/g)].map(match => match[1]),
-    ['Workspaces', 'GitHub', 'Papers', 'Overleaf', 'Documents', 'Files']);
+    ['GitHub', 'Overleaf', 'Papers', 'Documents', 'Files']);
   assert.ok(html.indexOf('data-workspace-header="1"') < html.indexOf('data-rail-search="1"'));
   assert.ok(html.indexOf('data-rail-search="1"') < html.indexOf('data-rail-section="GitHub"'));
   assert.match(html, /My workspace/);
@@ -69,10 +69,10 @@ test('sidebar keeps workspace navigation and orders the material groups by purpo
   assert.doesNotMatch(html, /rail-row-add|rail-section-add|data-repo-thumbnail/);
 });
 
-test('all six main sections remain visible when empty, including Other context', () => {
+test('all five main sections remain visible when empty, including Other context', () => {
   const html = renderRail([]);
   assert.deepEqual([...html.matchAll(/data-rail-section="([^"]+)"/g)].map(match => match[1]),
-    ['Workspaces', 'GitHub', 'Papers', 'Overleaf', 'Documents', 'Files']);
+    ['GitHub', 'Overleaf', 'Papers', 'Documents', 'Files']);
   assert.match(html, /Add context/);
   assert.match(html, /Other context/);
   assert.match(renderRail([{ id: 'image', name: 'Image', type: 'image', tags: [] }]), /data-rail-row="image"/);
@@ -80,14 +80,16 @@ test('all six main sections remain visible when empty, including Other context',
   assert.doesNotMatch(noWorkspace, /data-rail-library|data-rail-section=/);
 });
 
-test('repo and sub-workspace clicks use the existing Workspace handler', () => {
+test('repos use their existing handler and workspaces remain in the header switcher', () => {
   const opened = [];
-  renderRail([repo, child], { onRowClick: row => opened.push(row.id) });
+  renderRail([repo, child], { allWorkspaces: [child], onRowClick: row => opened.push(row.id), onSelectTopic: id => opened.push(id) });
   rowElement(repo.id).props.onClick();
-  rowElement(child.id).props.onClick();
+  const header = component('WorkspaceHeader');
+  assert.deepEqual(header.props.all, [child]);
+  header.props.onSelectTopic(child.id);
   assert.deepEqual(opened, [repo.id, child.id]);
   assert.equal(rowElement(repo.id).props.draggable, true);
-  assert.equal(rowElement(child.id).props.draggable, false);
+  assert.equal(rowElement(child.id), undefined);
 });
 
 test('saved provider links stay directly in their sections with existing row actions', () => {
@@ -106,8 +108,9 @@ test('saved provider links stay directly in their sections with existing row act
   }
   assert.deepEqual(opened, ['google', 'overleaf']);
   assert.match(html, /data-rail-section="Overleaf"/);
-  for (const key of ['github', 'google', 'overleaf', 'zotero']) assert.match(html, new RegExp(`data-browse-source="${key}"`));
-  assert.doesNotMatch(html, /data-rail-subsection/);
+  for (const key of ['google', 'overleaf', 'zotero']) assert.match(html, new RegExp(`data-browse-source="${key}"`));
+  assert.match(html, /data-github-projects-toggle/);
+  assert.doesNotMatch(html, /data-browse-source="github"/);
 });
 
 test('context removal does not open the row and is not offered for sub-workspaces', () => {
@@ -139,7 +142,7 @@ test('saved repo thumbnails and ordinary hover previews keep the existing delay;
   try {
     rowElement(repo.id).props.onMouseEnter({ currentTarget: {} });
     rowElement(website.id).props.onMouseEnter({ currentTarget: {} });
-    rowElement(child.id).props.onMouseEnter({ currentTarget: {} });
+    assert.equal(rowElement(child.id), undefined);
     assert.deepEqual(delays, [350, 350]);
   } finally { global.setTimeout = prior; }
 });
@@ -183,16 +186,15 @@ test('Add context has an explicit click toggle and no hover-open or hover-close 
   assert.equal(typeof trigger.props.onClick, 'function');
 });
 
-test('top inset and icon-led sections match the reference, with Sub-workspaces first below search', () => {
+test('top inset and icon-led sections match the reference, with workspace navigation in the header', () => {
   const html = renderRail([repo, child, { id: 'file', name: 'Data', type: 'csv', tags: [] }]);
   const aside = elements.find(element => element.type === 'aside');
-  assert.equal(aside.props.children[0].props.style.padding, '18px 8px 8px');
-  assert.ok(html.indexOf('data-rail-search') < html.indexOf('data-rail-section="Workspaces"'));
-  assert.ok(html.indexOf('data-rail-section="Workspaces"') < html.indexOf('data-rail-section="GitHub"'));
-  assert.equal(component('RailSection', props => props.section.key === 'Workspaces').props.section.rows[0].id, child.id);
-  assert.match(html, /Sub-workspaces/);
+  assert.equal(aside.props.children[0].props.style.padding, '10px 10px 8px');
+  assert.ok(html.indexOf('data-rail-search') < html.indexOf('data-rail-section="GitHub"'));
+  assert.doesNotMatch(html, /data-rail-section="Workspaces"/);
+  assert.match(html, /aria-label="Switch workspace"/);
   assert.doesNotMatch(html, /data-next-workspace/);
-  for (const [key, icon] of [['Workspaces', 'workspace'], ['GitHub', 'git'], ['Papers', 'pdf'], ['Overleaf', 'overleaf'], ['Documents', 'note'], ['Files', 'folder']]) {
+  for (const [key, icon] of [['GitHub', 'git'], ['Overleaf', 'overleaf'], ['Papers', 'literature'], ['Documents', 'note'], ['Files', 'folder']]) {
     const heading = elements.find(element => element.props['data-rail-section-toggle'] === key);
     const [chevron, glyph, label] = heading.props.children;
     assert.equal(chevron.type, 'svg');
@@ -209,7 +211,7 @@ test('initial load ignores previously saved expansion and keeps every section an
   global.window = { localStorage: { getItem: () => JSON.stringify({ Workspaces: false, GitHub: false, Documents: false }) } };
   try {
     const html = renderRail([repo, child, note], { expansion: null });
-    assert.equal([...html.matchAll(/data-rail-section-toggle=/g)].length, 6);
+    assert.equal([...html.matchAll(/data-rail-section-toggle=/g)].length, 5);
     for (const heading of elements.filter(element => element.props['data-rail-section-toggle'])) {
       assert.equal(heading.props['aria-expanded'], false);
       assert.equal(heading.props.children[0].props.style.transform, 'none');
@@ -268,14 +270,17 @@ test('Connections shares a compact fixed footer with the existing bottom control
   assert.match(renderRail([], { topic: null, topics: [] }), /data-rail-connections/);
 });
 
-test('opening sections shows saved items and one Browse entry without loading account catalogs', () => {
+test('opening sections shows saved items and a collapsed My Projects group without loading account catalogs', () => {
   const html = renderRail([repo, note, paper], { expansion: { GitHub: true, Papers: true, Documents: true, Overleaf: true, Files: true } });
-  assert.match(html, /Browse repositories…|Browse Google Docs…|Browse projects…|Browse Zotero…/);
+  assert.match(html, /My Projects|Browse Google Docs…|Browse projects…|Browse Zotero…/);
   for (const trigger of elements.filter(element => element.props['data-browse-source'])) assert.equal(trigger.props['aria-expanded'], false);
   assert.match(html, /data-rail-row="repo"/);
   assert.match(html, /data-rail-row="note"/);
   assert.match(html, /data-rail-row="paper"/);
-  assert.doesNotMatch(html, /data-rail-subsection|data-source-browser|data-github-account=|data-google-account=|data-overleaf-account=|data-zotero-account=/);
+  const projects = elements.find(element => element.props['data-github-projects-toggle']);
+  assert.equal(projects.props['aria-expanded'], false);
+  assert.equal(component('GithubRepositories'), undefined);
+  assert.doesNotMatch(html, /data-source-browser|data-github-account=|data-google-account=|data-overleaf-account=|data-zotero-account=/);
 });
 
 test('Workspace supplies children to Hudson sidebar and uses its original default width', () => {

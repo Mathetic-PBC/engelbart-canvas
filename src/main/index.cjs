@@ -26,9 +26,15 @@ const { createSweeper } = require('./context/sweeper.cjs');
 const { inspectPdf } = require('./context/pdf-kind.cjs');
 const { createCliSummarizer, createFakeSummarizer } = require('./context/summarizer.cjs');
 const { createBart, createFakeBart, createThreads } = require('./bart/ask.cjs');
-const { loadModels } = require('./bart/models.cjs');
+const { loadModels, preferUsable } = require('./bart/models.cjs');
 const { resolveShell } = require('./terminal/launch.cjs');
-const { createProviderStatus } = require('./terminal/provider-discovery.cjs');
+const home = require('./store/home.cjs');
+const { createRunner } = require('./tools/run.cjs');
+const { detectTools } = require('./tools/detect.cjs');
+const { createActions } = require('./tools/install.cjs');
+const { createTools } = require('./tools/manager.cjs');
+const { createFakeTools } = require('./tools/fake.cjs');
+const { createSignInProcess } = require('./tools/sign-in.cjs');
 const { SettingsStore } = require('./terminal/settings.cjs');
 const { RendererLifecycle, shouldHideWindowOnClose } = require('./terminal/window-lifecycle.cjs');
 const { assertTrustedRenderer, parseExternalUrl } = require('./ipc-validation.cjs');
@@ -45,6 +51,10 @@ const { createBrowserAuth, CLIENT_ID: GITHUB_CLIENT_ID } = require('./github/bro
 const { createRepoIdentifier, createRemoteFileLister } = require('./store/page-meta.cjs');
 const { checkWebPdfs, readPdfResponse } = require('./store/web-pdfs.cjs');
 const { createPostItViews } = require('./post-its/views.cjs');
+const { createGit } = require('./build/git.cjs');
+const { createBuilds } = require('./build/manager.cjs');
+const { createRunner: createBuildRunner, createFakeRunner: createFakeBuildRunner } = require('./build/runner.cjs');
+const { EDGES: WINDOW_EDGES, resizedBounds } = require('./window-edges.cjs');
 
 const DIST = path.join(__dirname, '../../dist');
 const FIXTURES = path.join(__dirname, '../../fixtures');
@@ -74,7 +84,8 @@ let sweeper = null;
 let bart = null;
 let localPreviews = null;
 let sandbox = null;
-let providerStatus = null;
+let builds = null;
+let tools = null;
 let browserViews = null;
 let recordings = null;
 let postItViews = null;
@@ -94,6 +105,13 @@ function trustedHandler(handler) {
 
 function sendToRenderer(channel, payload) {
   return rendererLifecycle ? rendererLifecycle.send(mainWindow, channel, payload) : false;
+}
+
+// sendToRenderer waits for the terminal to attach (RendererLifecycle), which never happens on the create and
+// all-projects screens; the setup dialog can open on any screen, so its events go to the window directly.
+function sendToWindow(channel, payload) {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return false;
+  try { mainWindow.webContents.send(channel, payload); return true; } catch { return false; }
 }
 
 function registerProtocol() {
@@ -158,6 +176,7 @@ async function requestQuit() {
     if (sweeper) await sweeper.stop();
     if (bart) bart.stopAll();
     if (localPreviews) await localPreviews.close();
+    if (builds) await builds.stopAll(); // stop proposal handoffs first, then checkpoint agents and close worktree previews
     if (sandbox) await sandbox.close();
     if (browserViews) await browserViews.flush().catch(() => {});
     if (recordings) await recordings.cancelTitles();
@@ -185,7 +204,7 @@ function registerTerminalIpc() {
       sessions,
     };
   }));
-  ipcMain.handle('terminal:providers', trustedHandler(() => providerStatus.get()));
+  ipcMain.handle('terminal:providers', trustedHandler(() => tools.providers(resolveShell(process.env))));
   ipcMain.handle('terminal:create', trustedHandler((request) => manager.create({
     provider: request && request.provider,
     cwd: request && request.cwd,
@@ -201,6 +220,22 @@ function registerTerminalIpc() {
     return true;
   }));
   ipcMain.handle('terminal:close', trustedHandler((id) => closeSession(id)));
+  // The renderer's resize strips: a press names the edge, every move after it re-reads the cursor (2026-09-23).
+  let edgeResize = null; // { edge, start: bounds, from: cursor point }
+  ipcMain.on('window:edge-resize', (event, phase, edge) => {
+    try {
+      assertTrustedRenderer(event, APP_URL);
+      if (!mainWindow || mainWindow.isFullScreen()) return;
+      const cursor = require('electron').screen.getCursorScreenPoint();
+      if (phase === 'start' && WINDOW_EDGES.has(edge)) edgeResize = { edge, start: mainWindow.getBounds(), from: cursor };
+      else if (phase === 'move' && edgeResize) {
+        const [width, height] = mainWindow.getMinimumSize();
+        mainWindow.setBounds(resizedBounds(edgeResize.start, edgeResize.edge, cursor.x - edgeResize.from.x, cursor.y - edgeResize.from.y, { width, height }));
+      } else if (phase === 'end') edgeResize = null;
+    } catch {
+      // A send-only gesture is deliberately ignored when malformed.
+    }
+  });
   ipcMain.on('terminal:acknowledge', (event, id, sequence) => {
     try {
       assertTrustedRenderer(event, APP_URL);
@@ -242,6 +277,8 @@ function buildMenu() {
       submenu: [
         { role: 'about' },
         { type: 'separator' },
+        { label: 'Set Up Tools…', click: () => sendToWindow('engelbart:tools-open', {}) },
+        { type: 'separator' },
         { role: 'services' },
         { type: 'separator' },
         { role: 'hide' },
@@ -255,6 +292,7 @@ function buildMenu() {
       label: 'File',
       submenu: [
         { label: 'Reveal Engelbart Folder', click: () => electronShell.showItemInFolder(store ? store.layout.root : app.getPath('home')) },
+        ...(isMac ? [] : [{ label: 'Set Up Tools…', click: () => sendToWindow('engelbart:tools-open', {}) }]),
         { type: 'separator' },
         ...(isMac ? [{ role: 'close', label: 'Close Window', accelerator: 'Cmd+Shift+W' }] : [{ label: 'Quit', accelerator: 'Ctrl+Q', click: requestQuit }]),
       ],
@@ -306,6 +344,8 @@ function createWindow() {
     backgroundColor: '#ffffff',
     title: 'Engelbart',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    // Centred on the 54px header; the header leaves them room until the window goes full screen (2026-09-23).
+    trafficLightPosition: { x: 18, y: 20 },
     webPreferences: {
       preload: PRELOAD_FILE,
       contextIsolation: true,
@@ -333,6 +373,11 @@ function createWindow() {
   });
   mainWindow.webContents.on('render-process-gone', () => { rendererLifecycle.detach(); void postItViews.activate(null).catch(console.error); });
   mainWindow.on('resize', () => postItViews.layout());
+  // The header clears the traffic lights only while they are there (preload marks <html data-fullscreen>).
+  const sendFullScreen = () => { if (mainWindow) mainWindow.webContents.send('window:fullscreen', mainWindow.isFullScreen()); };
+  mainWindow.on('enter-full-screen', sendFullScreen);
+  mainWindow.on('leave-full-screen', sendFullScreen);
+  mainWindow.webContents.on('did-finish-load', sendFullScreen);
   mainWindow.on('blur', () => postItViews.cancelGesture());
   mainWindow.on('close', (event) => {
     if (shouldHideWindowOnClose(process.platform, quitReady)) {
@@ -372,9 +417,6 @@ if (!hasSingleInstanceLock) {
     rendererLifecycle = new RendererLifecycle(manager);
     rendererLifecycle.detach();
     settings = new SettingsStore(app.getPath('userData'), app.getPath('home'));
-    // Which CLIs are installed and signed in: checked at every launch, in the background.
-    providerStatus = createProviderStatus(process.env);
-    void providerStatus.refresh().catch(() => {});
     const homeDir = process.env.ENGELBART_HOME_DIR || app.getPath('home');
     // Pdfs saved as links before the Stage kept copies: every library that opens is checked, and what is left is
     // downloaded in the background with the Stage's cookies (a paper behind a sign-in comes too). ENGELBART_WEB_PDFS=off
@@ -385,6 +427,20 @@ if (!hasSingleInstanceLock) {
     const afterOpen = process.env.ENGELBART_WEB_PDFS === 'off' ? null
       : (ctx) => checkWebPdfs(ctx, { fetchPdf, inspectPdf, onChange: libraryChanged, log: (line) => console.warn(`[engelbart] ${line}`) });
     store = createStore({ homeDir, fixturesDir: FIXTURES, inspectPdf, afterOpen });
+    // Git, Claude Code and Codex (src/main/tools): checked at every launch in the background and recorded in
+    // config.json → tools; installed, updated and signed in to from the setup dialog. ENGELBART_TOOLS_FAKE (JSON)
+    // pretends a machine and ENGELBART_TOOLS=off skips the launch check, for scripted runs only.
+    const toolsFake = process.env.ENGELBART_TOOLS_FAKE ? createFakeTools(process.env.ENGELBART_TOOLS_FAKE) : null;
+    const toolRunner = createRunner({ environment: process.env });
+    tools = createTools({
+      readTools: () => home.readConfig(store.layout.root).tools,
+      writeTools: (value) => home.writeTools(store.layout.root, value),
+      detect: toolsFake ? toolsFake.detect : (only) => detectTools({ runner: toolRunner, only }),
+      actions: toolsFake ? toolsFake.actions : createActions({ runner: toolRunner }),
+      signInProcess: toolsFake ? toolsFake.signInProcess : createSignInProcess({ pty: require('node-pty'), shell: toolRunner.shellPath }),
+      onChange: (snapshot) => sendToWindow('engelbart:tools', snapshot),
+    });
+    if (process.env.ENGELBART_TOOLS !== 'off') void tools.start().catch((error) => console.warn(`[engelbart] tool check: ${error.message}`));
     // Catalog summaries (src/main/context): swept once a minute while the app is open, at launch,
     // and when the computer wakes. ENGELBART_SUMMARIES=off disables it; the _FAKE / _QUIET_MS /
     // _INTERVAL_MS variables exist for scripted runs only.
@@ -393,20 +449,40 @@ if (!hasSingleInstanceLock) {
       getContext: () => store.context(),
       summarize: process.env.ENGELBART_SUMMARY_FAKE === '1'
         ? createFakeSummarizer()
-        : createCliSummarizer({ readSettings: () => store.config().summarizer, runDirectory: path.join(app.getPath('userData'), 'context-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home') }),
+        : createCliSummarizer({ readSettings: () => store.config().summarizer, runDirectory: path.join(app.getPath('userData'), 'context-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home'), tools }),
       quietMs: millis('ENGELBART_SUMMARY_QUIET_MS'),
       intervalMs: millis('ENGELBART_SUMMARY_INTERVAL_MS'),
     });
-    // @bart (src/main/bart): hidden Claude Code or Codex runs on the person's subscription, reading only.
+    // @bart (src/main/bart): hidden Claude Code or Codex runs on the person's subscription, reading only. It starts on
+    // the saved default provider, or on the other one while the saved one's CLI cannot run (preferUsable).
     // ENGELBART_BART_FAKE=1 answers without a model, for scripted runs only.
-    const readModels = () => loadModels(store.layout.root, { only: store.config().providers });
+    const readModels = () => preferUsable(loadModels(store.layout.root, { only: store.config().providers }), tools.usableAgents());
     bart = process.env.ENGELBART_BART_FAKE === '1'
       ? createFakeBart({ readModels, threads: createThreads({ file: path.join(app.getPath('userData'), 'bart-threads.json') }) })
-      : createBart({ readModels, runDirectory: path.join(app.getPath('userData'), 'bart-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-bart'), threads: createThreads({ file: path.join(app.getPath('userData'), 'bart-threads.json') }) });
+      : createBart({ readModels, runDirectory: path.join(app.getPath('userData'), 'bart-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-bart'), threads: createThreads({ file: path.join(app.getPath('userData'), 'bart-threads.json') }), tools });
     if (process.env.ENGELBART_SUMMARIES !== 'off') {
       sweeper.start();
       powerMonitor.on('resume', () => sweeper.sweepSoon());
     }
+    // Build (src/main/build): a workspace handed to Claude Code or Codex in a git worktree of its own, writing only there.
+    // Git is the one the tool check found; a scripted run with the check off (ENGELBART_TOOLS=off) uses PATH's.
+    // ENGELBART_BUILD_FAKE=1 runs the fake agent (git and records stay real), for scripted runs only.
+    const gitRecord = () => tools.snapshot().tools.git;
+    const gitReady = () => process.env.ENGELBART_TOOLS === 'off' || (gitRecord().installed && gitRecord().status === 'ready');
+    builds = createBuilds({
+      git: createGit({ gitPath: () => { const record = gitRecord(); return record.status === 'ready' && record.path ? record.path : 'git'; } }),
+      runner: process.env.ENGELBART_BUILD_FAKE === '1'
+        ? createFakeBuildRunner({ delayMs: Number(process.env.ENGELBART_BUILD_FAKE_MS) || 900 }) // _MS: how long a fake turn takes
+        : createBuildRunner({ runDirectory: path.join(app.getPath('userData'), 'build-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-build'), tools }),
+      readModels,
+      previews: require('./build/previews.cjs').createBuildPreviews({ verify: require('./local-preview/verify.cjs').createBrowserVerifier({ BrowserWindow }) }),
+      // A quick task's changes also reach the post-it it came from (post-its/views.cjs).
+      notify: (channel, payload) => { sendToRenderer(channel, payload); if (channel === 'engelbart:build' && payload && payload.postItId && postItViews) postItViews.buildState(payload); },
+      tools,
+      gitReady,
+    });
+    // Records a closed app left working are interrupted (Resume goes on), before anything lists them.
+    store.context().then((ctx) => builds.reconcile(ctx)).catch(() => {});
     manager.on('data', (payload) => sendToRenderer('terminal:data', payload));
     manager.on('exit', (payload) => sendToRenderer('terminal:exit', payload));
     registerTerminalIpc();
@@ -415,12 +491,16 @@ if (!hasSingleInstanceLock) {
       getWindow: () => mainWindow,
       getContext: () => store.context(),
       send: sendToRenderer,
+      buildFor: async (projectId, postItId) => {
+        const list = builds.list(await store.context(), projectId).filter((task) => task.postItId === postItId);
+        return list[list.length - 1] || null;
+      },
     });
     postItViews.register({ ipcMain, trustedHandler });
     const summarizeRecording = process.env.ENGELBART_RECORDING_TITLES_FAKE === '1'
       ? async () => ({ summary: '{"title":"Testing recorded page interactions"}', meta: { provider: 'fake', model: 'none' } })
       : process.env.ENGELBART_RECORDING_TITLES === 'off' || process.env.ENGELBART_SUMMARIES === 'off' ? undefined
-        : createCliSummarizer({ readSettings: () => store.config().summarizer, runDirectory: path.join(app.getPath('userData'), 'recording-title-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-recording-titles'), textOnly: true });
+        : createCliSummarizer({ readSettings: () => store.config().summarizer, runDirectory: path.join(app.getPath('userData'), 'recording-title-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-recording-titles'), tools, textOnly: true });
     recordings = require('./browser/recordings.cjs').createRecordings({ getContext: () => store.context(), send: sendToRenderer, summarizeTitle: summarizeRecording });
     ipcMain.handle('browser:record-start', trustedHandler(async (tabId, projectId) => {
       const recording = await recordings.start(tabId, projectId);
@@ -446,10 +526,15 @@ if (!hasSingleInstanceLock) {
     const localProcesses = require('./local-preview/process.cjs').createProcesses();
     localPreviews = require('./local-preview/manager.cjs').createLocalPreviews({
       processes: localProcesses,
-      planner: require('./local-preview/plan.cjs').createBuildPlanner({ readModels, processes: localProcesses, runDirectory: path.join(app.getPath('userData'), 'local-build-plans') }),
-      agent: require('./local-preview/agent.cjs').createBuildAgent({ readModels, processes: localProcesses, runDirectory: path.join(app.getPath('userData'), 'local-build-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-build') }),
       verify: require('./local-preview/verify.cjs').createBrowserVerifier({ BrowserWindow }),
       notify: event => { if (event.libraryChanged) { libraryChanged(); sendToRenderer('engelbart:nav', {}); } else sendToRenderer('engelbart:local-preview', event); },
+    });
+    const planningProcesses = require('./local-preview/process.cjs').createProcesses();
+    localPreviews = require('./build/interfaces.cjs').createInterfaceBuilds({
+      builds, legacy: localPreviews, readModels,
+      planner: require('./local-preview/plan.cjs').createBuildPlanner({ readModels, processes: planningProcesses, tools, runDirectory: path.join(app.getPath('userData'), 'local-build-plans') }),
+      closePlanner: () => planningProcesses.close(),
+      notify: event => sendToRenderer('engelbart:local-preview', event),
     });
     sandbox = require('./sandbox/manager.cjs').createSandboxManager({ secure: require('electron').safeStorage, notify: (event) => sendToRenderer('engelbart:sandbox-progress', event) });
     // GitHub (src/main/github): Stage sign-in with an automatic loopback return, and the token
@@ -557,7 +642,9 @@ if (!hasSingleInstanceLock) {
       bart,
       localPreviews,
       sandbox,
+      builds,
       readModels,
+      tools,
       notify: sendToRenderer,
       // "Choose from disk…" in the sidebar's + menu: files and folders together, several at once (macOS allows both in one panel).
       pickPaths: async () => {

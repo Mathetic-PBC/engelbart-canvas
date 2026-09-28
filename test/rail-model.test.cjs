@@ -180,9 +180,9 @@ test('rail matches the six reference groups with empty headings and flat, lossle
   const rows = [...library, row('k1', 'Child', 'child'), row('g2', 'Clone', 'folder', ['git']), row('h1', 'Saved page', 'html'),
     row('md', 'README', 'md'), row('pdf', 'Handbook', 'pdf'), row('sticky', 'Reminder', 'md', ['note', 'sticky']), row('chat', 'Codex', 'conversation')];
   const sections = railSections(rows);
-  assert.deepEqual(sections.map(s => s.label), ['Sub-workspaces', 'GitHub', 'Papers', 'Overleaf', 'Documents', 'Other context']);
-  assert.deepEqual(sections.map(s => s.icon), ['workspace', 'git', 'pdf', 'overleaf', 'note', 'folder']);
-  assert.deepEqual(railSections([]).map(s => s.key), ['Workspaces', 'GitHub', 'Papers', 'Overleaf', 'Documents', 'Files']);
+  assert.deepEqual(sections.map(s => s.label), ['Sub-workspaces', 'Code', 'Writing', 'Literature', 'Documents', 'Other context']);
+  assert.deepEqual(sections.map(s => s.icon), ['workspace', 'git', 'overleaf', 'literature', 'note', 'folder']);
+  assert.deepEqual(railSections([]).map(s => s.key), ['Workspaces', 'GitHub', 'Overleaf', 'Papers', 'Documents', 'Files']);
   assert.equal(sectionOf(row('md', 'README', 'md')), 'Documents');
   assert.equal(sectionOf(row('pdf', 'Handbook', 'pdf')), 'Documents');
   const leaves = sections.flatMap(s => s.rows);
@@ -206,10 +206,51 @@ test('saved provider links stay in the right sections with one catalog action pe
   assert.deepEqual(sections.find(c => c.key === 'Documents').rows, [library[0], google]);
   assert.deepEqual(sections.find(c => c.key === 'Overleaf').rows, [overleaf]);
   assert.deepEqual(sections.find(c => c.key === 'Papers').rows, [library[1], zotero, pdf]);
-  assert.deepEqual(sections.filter(c => c.catalog).map(c => c.catalog.provider), ['github', 'zotero', 'overleaf', 'google']);
+  assert.deepEqual(sections.filter(c => c.catalog).map(c => c.catalog.provider), ['github', 'overleaf', 'zotero', 'google']);
   for (const url of ['https://docs.google.com/', 'https://docs.google.com/spreadsheets/d/sheet/edit', 'https://www.overleaf.com/login', 'https://example.com/project/abc123', 'https://overleaf.com.example.org/project/abc123']) {
     assert.equal(documentProvider({ ...google, url }), null, url);
     assert.equal(sectionOf({ ...google, url }), 'Files', url);
   }
   assert.equal(JSON.stringify(rows), original);
+});
+
+test('the @ menu offers the project\'s other workspaces after the page and before the library (2026-09-25)', async () => {
+  const { mentionRows } = await load();
+  const workspaces = [
+    { id: 'a', name: 'Agents', above: [] },
+    { id: 'b', name: 'Inline chat agent', above: ['Agents'] },
+    { id: 'c', name: 'Pulling in workspaces', above: [] },
+    { id: 'd', name: 'Reading', above: [] },
+    { id: 'e', name: 'Writing', above: [] },
+  ];
+  const empty = mentionRows({ query: '', library, page: null, pageRow: null, workspaces, hereId: 'a' });
+  assert.deepEqual(empty.filter((r) => r.kind === 'workspace').map((r) => r.id), ['b', 'c', 'd'], 'three, in the order given, never the one you are in');
+  assert.equal(empty.findIndex((r) => r.kind === 'workspace'), 3, 'right after Bart, Task and Note');
+  const typed = mentionRows({ query: 'ag', library, page: null, pageRow: null, workspaces, hereId: 'c' });
+  assert.deepEqual(typed.filter((r) => r.kind === 'workspace').map((r) => [r.id, r.above]), [['a', []], ['b', ['Agents']]], 'names that start with the words first, each with what is above it');
+  assert.deepEqual(typed[0], { kind: 'workspace', key: 'ws:a', id: 'a', name: 'Agents', above: [] });
+  assert.deepEqual(mentionRows({ query: 'colbert', library, page: null, pageRow: null, workspaces }).map((r) => r.key), ['p1']);
+});
+
+test('the Archived section: a workspace\'s earlier versions, last, and only when there are some (2026-09-25)', async () => {
+  const { railSections, sectionOf, RAIL_SECTIONS } = await load();
+  assert.equal(RAIL_SECTIONS[RAIL_SECTIONS.length - 1].label, 'Archived');
+  assert.equal(sectionOf({ type: 'archive' }), 'Archived');
+  const rows = [{ id: 'archive:2026-09-25T21-03-12Z', type: 'archive', name: 'Storage plan' }, { id: 'n1', type: 'md', tags: ['note'], name: 'Spec' }];
+  assert.deepEqual(railSections(rows).filter(s => s.rows.length).map((s) => [s.key, s.rows.map((r) => r.id)]), [['Documents', ['n1']], ['Archived', ['archive:2026-09-25T21-03-12Z']]]);
+  assert.ok(!railSections([rows[1]]).some((s) => s.key === 'Archived'), 'no versions, no section');
+});
+
+test('"Add from library" in the Build panel: the ones written in last before anything is typed, then every match; no pictures, nothing attached already (2026-09-27)', async () => {
+  const { attachRows } = await load();
+  const dated = library.map((r, i) => ({ ...r, last_edited: `2026-09-${String(10 + i).padStart(2, '0')}T00:00:00Z` }));
+  const inRail = (id) => id === 'p1';
+  const empty = attachRows({ query: '', library: dated, taken: ['f1'], inRail });
+  assert.deepEqual(empty.map((r) => r.key), ['c1', 'w1', 'g1', 'p1', 'n1'], 'newest first; the picture and what is attached are left out');
+  assert.deepEqual(empty.find((r) => r.key === 'p1').tag, 'here');
+  assert.deepEqual(attachRows({ query: 'retrieval contextual', library: dated }).map((r) => r.key), ['w1'], 'every word, in any order');
+  assert.deepEqual(attachRows({ query: 'c', library: dated }).map((r) => r.key).slice(0, 3), ['w1', 'p1', 'c1'], 'names that start with it first, then the newest');
+  const many = Array.from({ length: 30 }, (_, i) => row(`m${i}`, `Match ${i}`, 'website'));
+  assert.equal(attachRows({ query: '', library: many }).length, 8);
+  assert.equal(attachRows({ query: 'match', library: many }).length, 30);
 });

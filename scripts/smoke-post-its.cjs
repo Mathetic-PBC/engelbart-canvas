@@ -14,6 +14,7 @@ const root = process.env.ENGELBART_POST_IT_SMOKE_ROOT || fs.mkdtempSync(path.joi
 app.setPath('userData', path.join(root, 'electron'));
 process.env.ENGELBART_HOME_DIR = root;
 process.env.ENGELBART_SUMMARIES = 'off';
+process.env.ENGELBART_TOOLS = 'off'; // no tool check or setup dialog over the cards (src/main/tools)
 process.env.ENGELBART_BART_FAKE = '1';
 process.env.ENGELBART_HEADLESS = '1';
 require('../src/main/index.cjs');
@@ -154,7 +155,6 @@ app.whenReady().then(async () => {
     console.log('PASS no scroll: the card grows with its text, and a card made smaller gets smaller type');
 
     /* ------------------------------------------------ hover previews leave cards alone; menus over a card move it aside */
-    await js(win.webContents, 'document.querySelector("input[aria-label=Name], [data-workspace-name]").closest("[data-workspace-name], div").parentElement.dispatchEvent(new MouseEvent("mouseover",{bubbles:true,relatedTarget:document.body}))');
     await js(win.webContents, '(()=>{const el=document.createElement("div");el.dataset.overlay="1";el.dataset.hover="1";el.id="smoke-hover";el.style="position:fixed;inset:0";document.body.append(el)})()');
     await pause(250);
     assert.equal(card.getVisible(), true, 'a hover preview, even one over the card, leaves it showing');
@@ -230,6 +230,42 @@ app.whenReady().then(async () => {
     }
     assert.equal(cards(win).length, 1, 'copying leaves the card');
     console.log('PASS Copy: the card’s markdown on the clipboard, from the lower left');
+
+    /* ------------------------------------------------ show/hide toggle: out of sight and back, nothing written */
+    const rowsNow = async () => JSON.stringify([await db.postIts.list(), await db.postIts.trashed()]);
+    const toggleState = () => js(win.webContents, 'document.querySelector("[data-toggle-post-its]").dataset.togglePostIts');
+    const toggle = () => js(win.webContents, 'document.querySelector("[data-toggle-post-its]").click()');
+    const place = await js(win.webContents, '(()=>{const n=document.querySelector("[data-add-post-it]").getBoundingClientRect(),t=document.querySelector("[data-toggle-post-its]").getBoundingClientRect();return{right:t.right-n.right,bottom:t.bottom-n.bottom,left:t.left-n.left,top:t.top-n.top}})()');
+    assert.ok(place.left > 0 && place.top > 0 && Math.abs(place.bottom) <= 1, `the toggle sits at the note's lower right: ${JSON.stringify(place)}`);
+    const word = () => js(win.webContents, 'document.querySelector("[data-toggle-post-its]").textContent');
+    assert.equal(await word(), 'Hide', 'plain text naming what a click does');
+    const saved = await rowsNow(), count = cards(win).length;
+    assert.equal(await toggleState(), 'shown');
+    await toggle();
+    await until(() => cards(win).every((v) => !v.getVisible()), 'hide takes every card out of sight');
+    assert.equal(await toggleState(), 'hidden');
+    assert.equal(await word(), 'Show');
+    await pause(300);
+    assert.equal(await rowsNow(), saved, 'hiding writes, creates and deletes nothing');
+    assert.equal(cards(win).length, count, 'hidden cards keep their views');
+    await shot(win.webContents, 'post-its-hidden');
+    await js(win.webContents, 'window.engelbartAPI.postItsActivate(null)');
+    await js(win.webContents, `window.engelbartAPI.postItsActivate(${JSON.stringify(pid)})`);
+    card = await readyCard(win, cardId);
+    await pause(200);
+    assert.equal(card.getVisible(), false, 'still hidden after the project is reopened');
+    const reopened = await rowsNow(); // closing a project flushes each card's text, which stamps last_edited
+    await toggle();
+    await until(() => cards(win).every((v) => v.getVisible()), 'show brings every card back');
+    await pause(300);
+    assert.equal(await rowsNow(), reopened, 'showing writes, creates and deletes nothing');
+    await toggle();
+    await until(() => !card.getVisible(), 'hidden again');
+    const add = await center(win.webContents, '[data-add-post-it]');
+    await click(win.webContents, add.x, add.y);
+    await until(() => cards(win).length === count + 1 && cards(win).every((v) => v.getVisible()), 'making a post-it while hidden shows them all');
+    await until(async () => (await toggleState()) === 'shown', 'the toggle follows');
+    console.log('PASS show/hide: every card out of sight and back, no row touched; a new post-it shows them again');
 
     /* ------------------------------------------------ persistence across project switches and the week-old purge */
     await js(win.webContents, 'window.engelbartAPI.postItsActivate(null)');

@@ -2,15 +2,17 @@
 // "Add - Mention.dc.html", 2026-09-22). Pure: the rows come in, the lists go out; the screen does the adding.
 
 import { hasTag, isNote, kindKey, kindLabel } from './kind.js';
+import { findWorkspaces } from './nav.js';
 
-/** Saved items sit directly under each heading; connected catalogs open on demand. */
+/** Stable keys preserve item routing; labels describe the work, not the connection. */
 export const RAIL_SECTIONS = [
   { key: 'Workspaces', label: 'Sub-workspaces', icon: 'workspace' },
-  { key: 'GitHub', label: 'GitHub', icon: 'git', catalog: { provider: 'github', label: 'Browse repositories…', title: 'Repositories' } },
-  { key: 'Papers', label: 'Papers', icon: 'pdf', catalog: { provider: 'zotero', label: 'Browse Zotero…', title: 'Zotero papers' } },
-  { key: 'Overleaf', label: 'Overleaf', icon: 'overleaf', catalog: { provider: 'overleaf', label: 'Browse projects…', title: 'Overleaf projects' } },
+  { key: 'GitHub', label: 'Code', icon: 'git', catalog: { provider: 'github', label: 'My Projects', title: 'Repositories' } },
+  { key: 'Overleaf', label: 'Writing', icon: 'overleaf', catalog: { provider: 'overleaf', label: 'Browse projects…', title: 'Overleaf projects' } },
+  { key: 'Papers', label: 'Literature', icon: 'literature', catalog: { provider: 'zotero', label: 'Browse Zotero…', title: 'Zotero papers' } },
   { key: 'Documents', label: 'Documents', icon: 'note', catalog: { provider: 'google', label: 'Browse Google Docs…', title: 'Google Docs' } },
   { key: 'Files', label: 'Other context', icon: 'folder' },
+  { key: 'Archived', label: 'Archived', icon: 'folder' },
 ];
 
 function webUrl(value) {
@@ -35,6 +37,7 @@ function isZoteroReference(row) {
 
 /** Route each saved item once, without changing its library type or tags. */
 export function sectionOf(row) {
+  if (row.type === 'archive') return 'Archived';
   if (row.type === 'child' || row.type === 'workspace') return 'Workspaces';
   if (hasTag(row, 'git')) return 'GitHub';
   if (documentProvider(row) === 'overleaf') return 'Overleaf';
@@ -49,7 +52,7 @@ export function railSections(rows) {
   const sections = RAIL_SECTIONS.map(section => ({ ...section, rows: [] }));
   const by = new Map(sections.map(section => [section.key, section]));
   for (const row of rows) by.get(sectionOf(row)).rows.push(row);
-  return sections;
+  return sections.filter(section => section.key !== 'Archived' || section.rows.length);
 }
 
 // Source categories use the existing file kinds; they do not create new stored library types.
@@ -156,17 +159,39 @@ export function searchRows({ query, library, inRail, found, workspaces = [] }) {
   return needle ? [...workspaceHits, ...hits, NEW_NOTE, NEW_WORKSPACE] : [NEW_NOTE, NEW_WORKSPACE, ...hits];
 }
 
+const ATTACH_RECENT = 8; // what "Add from library" lists before anything is typed
+const when = (row) => Date.parse(row.last_edited || row.created || '') || 0;
+
+/**
+ * "Add from library" in the Build panel (2026-09-27): what can be attached to a Build. Empty, the things written in last;
+ * typed, everything whose name, place or kind holds all the words, names that start with them first. Never an image
+ * (a Build is not given pictures) nor what is attached already (`taken`, ids). Rows: { key, row, name, tag }.
+ */
+export function attachRows({ query, library, taken = [], inRail = () => false }) {
+  const words = String(query || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const held = new Set(taken);
+  const pool = library.filter((row) => row.type !== 'image' && !held.has(row.id));
+  const hits = words.length ? pool.filter((row) => words.every((word) => hay(row).includes(word))) : pool;
+  const starts = (row) => (words.length && String(row.name).toLowerCase().startsWith(words[0]) ? 0 : 1);
+  const sorted = [...hits].sort((a, b) => starts(a) - starts(b) || when(b) - when(a));
+  return (words.length ? sorted : sorted.slice(0, ATTACH_RECENT)).map((row) => ({ key: row.id, row, name: row.name, tag: inRail(row.id) ? 'here' : kindLabel(row) }));
+}
+
 export const BART_VERB = { kind: 'verb', verb: 'bart', key: 'verb:bart', name: 'Bart', glyph: 'chat', token: '@Bart ' };
 export const TASK_VERB = { kind: 'verb', verb: 'task', key: 'verb:task', name: 'Task', glyph: 'task', token: '@Task ' };
 export const NOTE_VERB = { kind: 'verb', verb: 'note', key: 'verb:note', name: 'Note', glyph: 'note', token: '@Note ' };
 const MAX_MENTIONS = 10;
+const MAX_WORKSPACES = 6; // typed
+const FIRST_WORKSPACES = 3; // before anything is typed
 
 /**
  * The @ menu (Add - Mention.dc.html `menu`): Bart, Task and Note first, matched from their first letter; then the page
- * open in the Browser, which the library may not hold yet (`page` { input, title }, `pageRow` its row or null); then up to
- * ten things from the library. No workspaces.
+ * open in the Browser, which the library may not hold yet (`page` { input, title }, `pageRow` its row or null); then the
+ * project's other workspaces (2026-09-25; `workspaces` as model/nav.js flatWorkspaces gives them, the ones written in
+ * last first, never `hereId`): three before anything is typed, else up to six whose names hold the words; then up to ten
+ * things from the library.
  */
-export function mentionRows({ query, library, page, pageRow }) {
+export function mentionRows({ query, library, page, pageRow, workspaces = [], hereId = null }) {
   const needle = String(query || '').trim().toLowerCase();
   const verbs = [BART_VERB, TASK_VERB, NOTE_VERB].filter((verb) => !needle || verb.name.toLowerCase().startsWith(needle));
   const pool = library.filter((row) => row.type !== 'image');
@@ -176,7 +201,10 @@ export function mentionRows({ query, library, page, pageRow }) {
     if (pageRow) { out.push({ kind: 'item', key: pageRow.id, row: pageRow, name: pageRow.name, open: true }); hits = hits.filter((hit) => hit.key !== pageRow.id); }
     else out.push({ kind: 'fresh', key: `page:${page.input}`, name: mentionName(page.title), input: page.input, open: true });
   }
-  return [...out, ...hits.slice(0, MAX_MENTIONS)];
+  const others = workspaces.filter((workspace) => workspace.id !== hereId);
+  const spaces = (needle ? findWorkspaces(others, needle).slice(0, MAX_WORKSPACES) : others.slice(0, FIRST_WORKSPACES))
+    .map((workspace) => ({ kind: 'workspace', key: `ws:${workspace.id}`, id: workspace.id, name: workspace.name, above: workspace.above || [] }));
+  return [...out, ...spaces, ...hits.slice(0, MAX_MENTIONS)];
 }
 
 /** A name a mention can carry: `@[…]` ends at the first `]` and stays on one line. */

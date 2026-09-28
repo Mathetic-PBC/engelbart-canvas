@@ -1,5 +1,5 @@
 // The "@" mention menu (Add - Mention.dc.html, 2026-09-22): a 400px list with Bart, Task and Note on top, then the page
-// open in the Browser, then the library (model/rail.js mentionRows); something the library does not hold yet carries a
+// open in the Browser, then the project's other workspaces, then the library (model/rail.js mentionRows); something the library does not hold yet carries a
 // +. It hangs under the caret, or above it when the line is near the bottom of the window, and scrolls past a dozen rows.
 import React from 'react';
 import { KindGlyph } from '../ui/Icons.jsx';
@@ -9,6 +9,7 @@ const EASE = 'cubic-bezier(.25,.1,.25,1)';
 
 // A row of the menu, from model/rail.js; a library row itself (an editor that has no list of its own) is drawn as its kind.
 function Glyph({ m }) {
+  if (m.kind === 'workspace') return <KindGlyph kind="workspace" item={{ type: 'workspace' }} box={18} color="#4d4d4d" />;
   if (m.kind === 'verb') return <KindGlyph kind={m.glyph} item={m} box={18} color="#4d4d4d" />;
   if (m.kind === 'fresh') return <KindGlyph kind={/^https?:/i.test(m.input || '') ? 'website' : 'md'} item={m} box={18} color="#4d4d4d" />;
   return <KindGlyph item={m.row || m} box={18} color="#4d4d4d" />;
@@ -32,6 +33,7 @@ export default function MentionMenu({ items, index, anchor, onPick, onHover }) {
         >
           <Glyph m={m} />
           <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '14px/1.4 var(--font-sans)', color: '#171717' }}>{m.name}</span>
+          {m.kind === 'workspace' && m.above.length > 0 && <span style={{ flex: '0 1 auto', minWidth: 0, maxWidth: '45%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '12px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{m.above.join(' / ')}</span>}
           {m.kind === 'fresh' && <span style={{ flex: 'none', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', font: '15px/1 var(--font-sans)', color: '#8f8f8f' }}>+</span>}
         </div>
       ))}

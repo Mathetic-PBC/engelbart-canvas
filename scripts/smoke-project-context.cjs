@@ -16,7 +16,10 @@ async function until(fn, name) {
   throw new Error(`Timed out: ${name}`);
 }
 const click = (wc, selector) => js(wc, `document.querySelector(${JSON.stringify(selector)}).click()`);
-const rows = wc => js(wc, '[...document.querySelectorAll("[data-rail-row]")].map(row=>row.dataset.railRow)');
+const rows = async wc => {
+  await js(wc, `document.querySelectorAll('[data-rail-section-toggle][aria-expanded="false"]').forEach(button=>button.click())`);
+  return js(wc, '[...document.querySelectorAll("[data-rail-row]")].map(row=>row.dataset.railRow)');
+};
 async function switchTo(wc, workspace) {
   await click(wc, '[data-switch-workspace]');
   await until(() => js(wc, `!!document.querySelector('[data-workspace-item="${workspace.id}"]')`), 'workspace menu');

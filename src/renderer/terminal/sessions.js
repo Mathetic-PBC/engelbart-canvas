@@ -381,6 +381,15 @@ export async function closeSession(id) {
   }
 }
 
+/** Wipe a session's transcript, scrollback and all; whatever runs in it is left alone (the last tab's ×, 2026-09-25). */
+export function clearSession(id) {
+  const record = state.sessions.get(id);
+  if (!record) return false;
+  record.terminal.clear();
+  record.terminal.clearSelection();
+  return true;
+}
+
 /** Put a session's view into a stage element (opening xterm on first mount) and fit it. */
 export function mountView(id, stage) {
   const record = state.sessions.get(id);

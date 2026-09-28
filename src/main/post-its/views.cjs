@@ -4,10 +4,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { openNotesDb } = require('../store/db.cjs');
-const { findProject, createNote } = require('../store/projects.cjs');
+const { findProject, findWorkspace, createNote } = require('../store/projects.cjs');
 const { assertTrustedRenderer, parseExternalUrl } = require('../ipc-validation.cjs');
 const {
-  cardBounds, layoutFromBounds, inTrash, trashRect: readTrashRect, crumpleAmount, draggedBounds, overlaps, blockingRects, grown,
+  cardBounds, layoutFromBounds, inTrash, trashRect, crumpleAmount, draggedBounds, overlaps, blockingRects, grown,
 } = require('./geometry.cjs');
 
 const CARD_URL = 'engelbart://app/post-it.html';
@@ -24,6 +24,7 @@ function noteName(text) {
     let line = raw.replace(/^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+\[[ xX]?\]\s*|[-*+]\s+|\d+[.)]\s+)/, '');
     line = line
       .replace(/!\[([^\]]*)\]\([^)]*\)/g, '')
+      .replace(/@\[([^\]]*)\]\(ws:[\w-]+\)/g, '$1')
       .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
       .replace(/@\[([^\]]*)\]/g, '$1')
       .replace(/\*\*|__|~~|`|\*/g, '')
@@ -40,10 +41,13 @@ function noteName(text) {
 }
 
 // Native siblings of the browser, each with only its own card's IPC capability.
-function createPostItViews({ electron, getWindow, getContext, send, now = () => Date.now() }) {
+// `buildFor(projectId, postItId)` (2026-09-25): the card's latest quick task (main/build), so a card opened later shows its state.
+function createPostItViews({ electron, getWindow, getContext, send, buildFor = async () => null, now = () => Date.now() }) {
   const { WebContentsView, clipboard, shell } = electron;
   const entries = new Map();
   let projectId = null, database = null, gesture = null, trash = null, blocking = [];
+  let standIns = '[]'; // what the window was last told to draw in place of covered cards (JSON, to send only changes)
+  let hidden = false; // the sidebar's show/hide toggle (2026-09-25): every card out of sight, none touched
   let operations = Promise.resolve();
   const exclusive = (work) => {
     const result = operations.then(work);
@@ -88,19 +92,68 @@ function createPostItViews({ electron, getWindow, getContext, send, now = () => 
     if (typing) typing.view.webContents.focus();
   }
 
-  // A card hides only while one of the app's own menus or dialogs is open over it (hover previews do not count: the
-  // renderer leaves those out), and never the one being dragged.
+  // A card hides while the toggle hides them all, or while one of the app's own menus or dialogs is open over it (hover
+  // previews do not count: the renderer leaves those out), and never the one being dragged.
+  const overHere = (entry) => { const own = cssRect(entry.view.getBounds()); return blocking.filter((rect) => overlaps(own, rect)); };
   function visible(entry) {
-    if (!entry.ready || !alive(entry)) return false;
+    if (!entry.ready || !alive(entry) || hidden) return false;
     if (gesture?.entry === entry) return true;
-    const own = cssRect(entry.view.getBounds());
-    return !blocking.some((rect) => overlaps(own, rect));
+    return overHere(entry).length === 0;
   }
+  // Covered (2026-09-27: the Build panels "should be … the top layer so if any post its overlap this covers them"): every
+  // panel over the card is one that covers. A native card cannot go under the window's own drawing, so it is swapped for a
+  // picture of itself, which the window draws under the panel (post-its/ProjectPostIts.jsx) — the rest of it stays in sight.
+  function covered(entry) {
+    if (!entry.ready || !alive(entry) || hidden || gesture?.entry === entry) return false;
+    const over = overHere(entry);
+    return over.length > 0 && over.every((rect) => rect.cover);
+  }
+
+  // Pictures of the cards, kept ready (`entry.shot`, a data: URL) so a panel can cover a card at once. Anything that
+  // changes how a card looks marks its picture stale; a stale one is taken again while the card shows.
+  const capture = (entry) => entry.view.webContents.capturePage().then((image) => (image.isEmpty() ? null : image.toDataURL()), () => null);
+  function stale(entry, wait = 400) {
+    entry.shotStale = true;
+    clearTimeout(entry.shotTimer);
+    entry.shotTimer = setTimeout(() => { void freshShot(entry); }, wait);
+  }
+  async function freshShot(entry) {
+    if (!entry.ready || !alive(entry) || !entry.view.getVisible() || !entry.shotStale) return;
+    entry.shotStale = false;
+    const url = await capture(entry);
+    if (url && alive(entry)) entry.shot = url;
+  }
+
+  let refreshing = 0;
   function refresh() {
+    const turn = ++refreshing;
+    const waits = [];
     for (const entry of entries.values()) {
       const show = visible(entry);
+      // A card about to be covered whose picture is stale is pictured first, while it still shows, then hidden.
+      if (!show && covered(entry) && entry.view.getVisible() && (entry.shotStale || !entry.shot)) { waits.push(entry); continue; }
       if (entry.view.getVisible() !== show) entry.view.setVisible(show);
     }
+    if (!waits.length) { tellStandIns(); return; }
+    void Promise.all(waits.map(async (entry) => {
+      entry.shotStale = false;
+      const url = await capture(entry);
+      if (url && alive(entry)) entry.shot = url;
+    })).then(() => {
+      if (turn !== refreshing) return; // a later refresh has settled it
+      for (const entry of waits) if (entries.has(entry.row.id) && alive(entry)) entry.view.setVisible(visible(entry));
+      tellStandIns();
+    });
+  }
+  function tellStandIns() {
+    const list = [...entries.values()]
+      .filter((entry) => covered(entry) && entry.shot)
+      .sort((a, b) => a.row.z - b.row.z)
+      .map((entry) => ({ id: entry.row.id, ...cssRect(entry.view.getBounds()), url: entry.shot }));
+    const key = JSON.stringify(list);
+    if (key === standIns) return;
+    standIns = key;
+    send('post-its:stand-ins', { projectId, cards: list });
   }
 
   function announceTrash() {
@@ -114,6 +167,7 @@ function createPostItViews({ electron, getWindow, getContext, send, now = () => 
       if (gesture?.entry === entry) continue;
       entry.view.webContents.setZoomFactor(zoom());
       entry.view.setBounds(cardBounds(entry.row, viewport(), zoom()));
+      stale(entry);
     }
     refresh();
   }
@@ -156,6 +210,7 @@ function createPostItViews({ electron, getWindow, getContext, send, now = () => 
 
   function detach(entry) {
     entries.delete(entry.row.id);
+    clearTimeout(entry.shotTimer);
     if (gesture?.entry === entry) cancelGesture();
     windowNow()?.contentView.removeChildView(entry.view);
     if (!entry.view.webContents.isDestroyed()) entry.view.webContents.close();
@@ -168,6 +223,7 @@ function createPostItViews({ electron, getWindow, getContext, send, now = () => 
       cancelGesture();
       for (const entry of [...entries.values()]) detach(entry);
       projectId = null; database = null;
+      tellStandIns();
       if (id == null) return;
       const project = findProject(await getContext(), id);
       const db = (await openNotesDb(project.dir)).postIts;
@@ -183,12 +239,31 @@ function createPostItViews({ electron, getWindow, getContext, send, now = () => 
   function create(id) {
     return exclusive(async () => {
       if (projectId !== id || !database) throw new Error('Open this project before adding a post-it');
+      unhide();
       const offset = entries.size % 8;
       const row = await database.create({ id: randomUUID(), text: '', nx: .22 + offset * .045, ny: .16 + offset * .045, width: SIDE, height: SIDE, z: now() });
       attach(row, true);
       raise();
       return row.id;
     });
+  }
+
+  // Show/hide only changes what is drawn: no row is written, created or deleted.
+  function setHidden(value) {
+    hidden = !!value;
+    if (hidden) {
+      cancelGesture();
+      if ([...entries.values()].some((entry) => alive(entry) && entry.view.webContents.isFocused())) windowNow()?.webContents.focus();
+    }
+    refresh();
+    return hidden;
+  }
+  // A card made or brought back out of the trash while they are hidden would be invisible: they all show again.
+  function unhide() {
+    if (!hidden) return;
+    hidden = false;
+    refresh();
+    send('post-its:hidden', false);
   }
 
   function setBlocking(rects) {
@@ -205,16 +280,81 @@ function createPostItViews({ electron, getWindow, getContext, send, now = () => 
     return entry;
   }
 
-  function ready(entry) {
+  async function ready(entry) {
     entry.ready = true;
     refresh();
+    stale(entry, 250);
     if (entry.fresh && entry.view.getVisible()) entry.view.webContents.focus();
-    return { id: entry.row.id, text: entry.row.text, fresh: entry.fresh };
+    let build = null;
+    try { build = await briefBuild(await buildFor(projectId, entry.row.id)); } catch { build = null; }
+    return { id: entry.row.id, text: entry.row.text, fresh: entry.fresh, build };
+  }
+
+  // A post-it's quick task (2026-09-25; design B23): the card asks the window for its Build popup, shows where its latest
+  // quick task stands, and a click on that opens the task beside the card. Since 2026-09-27 (Claude Design "Post-it Quick
+  // Task") both hang from the button that was pressed: `rect` is where it is on the card, and the window is told where it
+  // is on the window (CSS px), with the card's own rect. A task the card was added to a workspace as carries that
+  // workspace's name, which the card shows in place of a state.
+  async function briefBuild(task) {
+    if (!task) return null;
+    let workspace = null;
+    if (task.kind === 'build' && task.workspaceId) {
+      try { workspace = findWorkspace(await getContext(), task.projectId, task.workspaceId).workspace.name; } catch { workspace = null; }
+    }
+    return { id: task.id, status: task.status, final: !!task.final, kind: task.kind, workspace };
+  }
+  function anchorOf(entry, rect) {
+    const card = cssRect(entry.view.getBounds());
+    const at = rect == null ? null : trashRect(rect); // four finite numbers, or it throws
+    const button = at ? { x: card.x + at.x, y: card.y + at.y, width: at.width, height: at.height } : card;
+    return { card, button };
+  }
+  async function askBuild(entry, rect) {
+    const where = anchorOf(entry, rect);
+    await entry.pending.catch(() => {});
+    windowNow()?.webContents.focus();
+    send('engelbart:build-quick', { projectId, postItId: entry.row.id, text: entry.row.text, ...where });
+    return true;
+  }
+  function openBuild(entry, id, rect) {
+    if (typeof id !== 'string' || !/^[0-9a-f]{10}$/.test(id)) throw new TypeError('build id is invalid');
+    const where = anchorOf(entry, rect);
+    windowNow()?.webContents.focus();
+    send('engelbart:build-quick-open', { projectId, id, postItId: entry.row.id, ...where });
+    return true;
+  }
+  /** A Build changed: the card it came from (if it is open) shows its state. */
+  function buildState(task) {
+    if (!task || !task.postItId || task.projectId !== projectId) return;
+    const entry = entries.get(task.postItId);
+    if (!entry || !entry.ready || !alive(entry)) return;
+    void briefBuild(task).then((brief) => {
+      if (!alive(entry)) return;
+      entry.view.webContents.send('post-it:build-state', brief);
+      // Its picture changes with it. A covered card is shown for a moment to be pictured again, else its stand-in
+      // would go on showing the old state under the panel.
+      if (covered(entry)) {
+        entry.view.setVisible(true);
+        setTimeout(() => { entry.shotStale = true; refresh(); }, 60);
+      } else stale(entry, 200);
+    });
+  }
+
+  // "Delete task" (2026-09-27): once its task went to a workspace, the post-it can go. Into the trash, as a drag there does.
+  function throwOut(id, cardId) {
+    return exclusive(async () => {
+      if (projectId !== id) throw new Error('Open this project first');
+      const entry = entries.get(String(cardId));
+      if (!entry) return false;
+      await throwAway(entry);
+      return true;
+    });
   }
 
   function edit(entry, text) {
     if (typeof text !== 'string' || text.length > 400000) throw new TypeError('Post-it text must be at most 400000 characters');
     entry.row.text = text;
+    stale(entry);
     return save(entry).then(() => true);
   }
 
@@ -225,6 +365,7 @@ function createPostItViews({ electron, getWindow, getContext, send, now = () => 
     if (gesture?.entry !== entry && height > entry.row.height) {
       Object.assign(entry.row, grown(entry.row, height, vp, scale));
       entry.view.setBounds(cardBounds(entry.row, vp, scale));
+      stale(entry);
       refresh();
       void save(entry).catch(() => {});
     }
@@ -257,6 +398,7 @@ function createPostItViews({ electron, getWindow, getContext, send, now = () => 
       if (projectId !== id || !database) throw new Error('Open this project before restoring a post-it');
       const row = await database.restore(String(cardId));
       if (!row) return false;
+      unhide();
       row.z = Math.max(now(), ...[...entries.values()].map((e) => e.row.z + 1));
       await database.update(row.id, row);
       attach(row);
@@ -344,6 +486,7 @@ function createPostItViews({ electron, getWindow, getContext, send, now = () => 
     if (g.kind === 'drag') { preferred.width = entry.row.width; preferred.height = entry.row.height; }
     Object.assign(entry.row, preferred);
     entry.view.setBounds(cardBounds(entry.row, vp, scale));
+    stale(entry);
     refresh();
     void save(entry).catch(() => {});
   }
@@ -352,14 +495,18 @@ function createPostItViews({ electron, getWindow, getContext, send, now = () => 
     ipcMain.handle('post-its:activate', trustedHandler(activate));
     ipcMain.handle('post-its:create', trustedHandler(create));
     ipcMain.handle('post-its:block', trustedHandler(setBlocking));
+    ipcMain.handle('post-its:hide', trustedHandler(setHidden));
     ipcMain.handle('post-its:layout', trustedHandler(layout));
-    ipcMain.handle('post-its:trash-rect', trustedHandler((rect) => { trash = readTrashRect(rect); return true; }));
+    ipcMain.handle('post-its:trash-rect', trustedHandler((rect) => { trash = trashRect(rect); return true; }));
     ipcMain.handle('post-its:trashed', trustedHandler(trashed));
     ipcMain.handle('post-its:restore', trustedHandler(restore));
     ipcMain.handle('post-it:ready', (event) => ready(forEvent(event)));
     ipcMain.handle('post-it:edit', (event, text) => edit(forEvent(event), text));
     ipcMain.handle('post-it:grow', (event, height) => grow(forEvent(event), height));
     ipcMain.handle('post-it:to-note', (event) => toNote(forEvent(event)));
+    ipcMain.handle('post-its:throw-out', trustedHandler(throwOut));
+    ipcMain.handle('post-it:build', (event, rect) => askBuild(forEvent(event), rect));
+    ipcMain.handle('post-it:build-open', (event, id, rect) => openBuild(forEvent(event), id, rect));
     ipcMain.handle('post-it:copy', (event, text) => {
       forEvent(event);
       if (typeof text !== 'string' || text.length > 400000) throw new TypeError('Invalid text');
@@ -369,7 +516,7 @@ function createPostItViews({ electron, getWindow, getContext, send, now = () => 
     ipcMain.on('post-it:gesture', (event, input) => { try { move(forEvent(event), input); } catch (error) { report(error); } });
   }
 
-  return { activate, create, register, raise, layout, setBlocking, flush, cancelGesture };
+  return { activate, create, register, raise, layout, setBlocking, setHidden, flush, cancelGesture, buildState };
 }
 
 module.exports = { createPostItViews, CARD_URL, noteName, TRASH_DAYS };
