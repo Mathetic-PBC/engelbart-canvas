@@ -1,6 +1,7 @@
 'use strict';
 
 const { randomUUID } = require('node:crypto');
+const { rememberPreview } = require('../store/captured-sites.cjs');
 const { environmentReport, environmentReportOf } = require('../../shared/environment.cjs');
 const { milestoneKey, isAgentActivity, AGENT_LOG_LIMIT } = require('../../shared/build-history.cjs');
 
@@ -56,6 +57,7 @@ function runStore(db) {
       [id, JSON.stringify(entry), report ? JSON.stringify(report) : null, key, isAgentActivity(entry)]))[0] || null;
     },
     async reopen(id, revision) {
+      await rememberPreview(db, await this.get(id));
       return (await db.query("update sandbox_runs set status = 'starting', preview_url = null, error = null, finished_at = null, build_milestones = '{}', env_revision = $2, updated_at = now() where id = $1 and status in ('ready', 'failed') returning *", [id, revision]))[0] || null;
     },
     async stoppedAfterFailure(id) {
@@ -66,7 +68,9 @@ function runStore(db) {
       const keys = Object.keys(fields);
       if (!keys.length || keys.some((key) => !allowed.includes(key))) throw new Error('Invalid sandbox run update');
       const set = keys.map((key, i) => `${key} = $${i + 2}`).join(', ');
-      return (await db.query(`update sandbox_runs set ${set}, updated_at = now() where id = $1 and status in ('starting', 'ready') returning *`, [id, ...keys.map((key) => fields[key])]))[0] || null;
+      const run = (await db.query(`update sandbox_runs set ${set}, updated_at = now() where id = $1 and status in ('starting', 'ready') returning *`, [id, ...keys.map((key) => fields[key])]))[0] || null;
+      if (fields.preview_url) await rememberPreview(db, run);
+      return run;
     },
   };
 }

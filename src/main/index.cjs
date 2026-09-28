@@ -9,6 +9,7 @@ const {
   dialog,
   ipcMain,
   Menu,
+  nativeTheme,
   powerMonitor,
   protocol,
   safeStorage,
@@ -16,6 +17,9 @@ const {
   shell: electronShell,
   WebContentsView,
 } = require('electron');
+const { installBrowserUserAgent } = require('./browser/user-agent.cjs');
+installBrowserUserAgent(app);
+
 const { SessionManager } = require('./terminal/session-manager.cjs');
 const { environmentForSessions } = require('./shell-rc.cjs');
 const { createSweeper } = require('./context/sweeper.cjs');
@@ -31,6 +35,12 @@ const { assertTrustedRenderer, parseExternalUrl } = require('./ipc-validation.cj
 const { createStore, registerEngelbartIpc } = require('./ipc.cjs');
 const { PARTITION: BROWSER_PARTITION, createBrowserViews, registerBrowserIpc } = require('./browser/views.cjs');
 const { createGithub } = require('./github/connection.cjs');
+const { createGoogleBrowser } = require('./google/browser-connection.cjs');
+const { createDriveReader } = require('./google/browser-reader.cjs');
+const { createZoteroBrowser } = require('./zotero/browser-connection.cjs');
+const { createZoteroReader } = require('./zotero/browser-reader.cjs');
+const { createOverleafBrowser } = require('./overleaf/browser-connection.cjs');
+const { createOverleafReader } = require('./overleaf/browser-reader.cjs');
 const { createBrowserAuth, CLIENT_ID: GITHUB_CLIENT_ID } = require('./github/browser-auth.cjs');
 const { createRepoIdentifier, createRemoteFileLister } = require('./store/page-meta.cjs');
 const { checkWebPdfs, readPdfResponse } = require('./store/web-pdfs.cjs');
@@ -62,9 +72,11 @@ let settings = null;
 let store = null;
 let sweeper = null;
 let bart = null;
+let localPreviews = null;
 let sandbox = null;
 let providerStatus = null;
 let browserViews = null;
+let recordings = null;
 let postItViews = null;
 let quitPending = false;
 let quitReady = false;
@@ -92,7 +104,8 @@ function registerProtocol() {
     } catch {
       return new Response('Bad request', { status: 400 });
     }
-    if (url.host !== 'app') return new Response('Not found', { status: 404 });
+    if (!['app', 'replay'].includes(url.host)) return new Response('Not found', { status: 404 });
+    if (url.host === 'replay' && !['/recording-player.html', '/recording-player.js', '/recording-player.css'].includes(url.pathname)) return new Response('Not found', { status: 404 });
     let relative = decodeURIComponent(url.pathname);
     if (relative === '/' || relative === '') relative = '/index.html';
     const file = path.normalize(path.join(DIST, relative));
@@ -144,8 +157,10 @@ async function requestQuit() {
   try {
     if (sweeper) await sweeper.stop();
     if (bart) bart.stopAll();
+    if (localPreviews) await localPreviews.close();
     if (sandbox) await sandbox.close();
     if (browserViews) await browserViews.flush().catch(() => {});
+    if (recordings) await recordings.cancelTitles();
     if (postItViews) await postItViews.activate(null);
     if (manager) await manager.shutdown();
     if (store) await store.close();
@@ -311,7 +326,11 @@ function createWindow() {
     if (url !== mainWindow.webContents.getURL()) event.preventDefault();
   });
   // The renderer's browser tabs live in its memory: when the page goes, their views go with it.
-  mainWindow.webContents.on('did-start-loading', () => { rendererLifecycle.detach(); browserViews.closeAll(); void postItViews.activate(null).catch(console.error); });
+  mainWindow.webContents.on('did-start-navigation', (_event, _url, inPlace, mainFrame) => {
+    // Loading a recording's isolated child frame must not tear down live Stage tabs.
+    if (!mainFrame || inPlace) return;
+    rendererLifecycle.detach(); void browserViews.closeAll(); void postItViews.activate(null).catch(console.error);
+  });
   mainWindow.webContents.on('render-process-gone', () => { rendererLifecycle.detach(); void postItViews.activate(null).catch(console.error); });
   mainWindow.on('resize', () => postItViews.layout());
   mainWindow.on('blur', () => postItViews.cancelGesture());
@@ -345,6 +364,9 @@ if (!hasSingleInstanceLock) {
   });
   app.on('activate', createWindow);
   app.whenReady().then(() => {
+    // The app's chrome is light only. Pages in the Stage follow this too, so a site that switches its
+    // favicon on prefers-color-scheme (GitHub's turns white in dark mode) keeps an icon that reads on the tab strip.
+    nativeTheme.themeSource = 'light';
     registerProtocol();
     manager = new SessionManager({ environment: environmentForSessions(process.env, app.getPath('userData')) });
     rendererLifecycle = new RendererLifecycle(manager);
@@ -395,20 +417,50 @@ if (!hasSingleInstanceLock) {
       send: sendToRenderer,
     });
     postItViews.register({ ipcMain, trustedHandler });
+    const summarizeRecording = process.env.ENGELBART_RECORDING_TITLES_FAKE === '1'
+      ? async () => ({ summary: '{"title":"Testing recorded page interactions"}', meta: { provider: 'fake', model: 'none' } })
+      : process.env.ENGELBART_RECORDING_TITLES === 'off' || process.env.ENGELBART_SUMMARIES === 'off' ? undefined
+        : createCliSummarizer({ readSettings: () => store.config().summarizer, runDirectory: path.join(app.getPath('userData'), 'recording-title-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-recording-titles'), textOnly: true });
+    recordings = require('./browser/recordings.cjs').createRecordings({ getContext: () => store.context(), send: sendToRenderer, summarizeTitle: summarizeRecording });
+    ipcMain.handle('browser:record-start', trustedHandler(async (tabId, projectId) => {
+      const recording = await recordings.start(tabId, projectId);
+      libraryChanged();
+      return recording;
+    }));
+    ipcMain.handle('browser:record-stop', trustedHandler(() => recordings.stop()));
+    ipcMain.handle('browser:record-current', trustedHandler(() => recordings.current()));
+    ipcMain.handle('browser:record-list', trustedHandler((projectId, url) => recordings.list(projectId, url)));
+    ipcMain.handle('browser:record-read', trustedHandler((projectId, id) => recordings.read(projectId, id)));
+    const repoThumbnails = require('./store/repo-thumbnails.cjs').createRepoThumbnails({ getContext: () => store.context(), onChange: libraryChanged });
+    ipcMain.handle('engelbart:repo-thumbnail', trustedHandler(id => repoThumbnails.read(id)));
     browserViews = createBrowserViews({
       electron: { WebContentsView, session: electronSession, Menu, clipboard, dialog, shell: electronShell },
       getWindow: () => mainWindow,
       send: sendToRenderer,
-      appName: app.getName(),
       fileRoot: () => homeDir,
+      recordings,
+      repoThumbnails,
       onLayerChange: () => postItViews.raise(),
     });
     registerBrowserIpc({ ipcMain, trustedHandler, views: browserViews });
+    const localProcesses = require('./local-preview/process.cjs').createProcesses();
+    localPreviews = require('./local-preview/manager.cjs').createLocalPreviews({
+      processes: localProcesses,
+      planner: require('./local-preview/plan.cjs').createBuildPlanner({ readModels, processes: localProcesses, runDirectory: path.join(app.getPath('userData'), 'local-build-plans') }),
+      agent: require('./local-preview/agent.cjs').createBuildAgent({ readModels, processes: localProcesses, runDirectory: path.join(app.getPath('userData'), 'local-build-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-build') }),
+      verify: require('./local-preview/verify.cjs').createBrowserVerifier({ BrowserWindow }),
+      notify: event => { if (event.libraryChanged) { libraryChanged(); sendToRenderer('engelbart:nav', {}); } else sendToRenderer('engelbart:local-preview', event); },
+    });
     sandbox = require('./sandbox/manager.cjs').createSandboxManager({ secure: require('electron').safeStorage, notify: (event) => sendToRenderer('engelbart:sandbox-progress', event) });
-    // GitHub (src/main/github): default-browser sign-in with an automatic loopback return, and the token
+    // GitHub (src/main/github): Stage sign-in with an automatic loopback return, and the token
     // that lets the library read private repositories. ENGELBART_GITHUB_* name a fake GitHub, for scripted runs only.
     const githubWeb = process.env.ENGELBART_GITHUB_WEB || null;
-    const openGithubPage = (url) => electronShell.openExternal(parseExternalUrl(url).href);
+    const openGithubPage = (value) => {
+      const url = parseExternalUrl(value).href;
+      if (!sendToRenderer('browser:open-tab', { url, requestKey: `github:${url}` })) {
+        throw new Error('Could not open GitHub in Stage. Try again when the workspace is ready.');
+      }
+    };
     const githubBrowserAuth = createBrowserAuth({ ...(process.env.ENGELBART_GITHUB_BROKER ? { broker: process.env.ENGELBART_GITHUB_BROKER } : {}) });
     const github = createGithub({
       settings: () => {
@@ -427,7 +479,64 @@ if (!hasSingleInstanceLock) {
       onChange: (status) => sendToRenderer('engelbart:github', status),
       ...(githubWeb ? { web: githubWeb, api: process.env.ENGELBART_GITHUB_API || githubWeb } : {}),
     });
+    const google = createGoogleBrowser({
+      reader: createDriveReader({ BrowserWindow, getSession: browserViews.getSession, getPages: browserViews.getPages,
+        ...(process.env.ENGELBART_GOOGLE_TEST_ORIGIN && process.env.ENGELBART_HEADLESS === '1' ? { origin: process.env.ENGELBART_GOOGLE_TEST_ORIGIN, timeoutMs: 4000, pollMs: 100 } : {}),
+      }),
+      file: path.join(store.layout.root, 'google-browser.json'),
+      crypt: {
+        available: () => safeStorage.isEncryptionAvailable(),
+        encrypt: text => safeStorage.encryptString(text).toString('base64'),
+        decrypt: text => safeStorage.decryptString(Buffer.from(text, 'base64')),
+      },
+      openStage: (value, requestKey) => {
+        const url = parseExternalUrl(value).href;
+        if (!sendToRenderer('browser:open-tab', { url, requestKey })) throw new Error('Open a workspace before connecting Google Docs.');
+        return true;
+      },
+      onChange: status => sendToRenderer('engelbart:google', status),
+    });
+    app.once('will-quit', () => google.close());
+    const overleaf = createOverleafBrowser({
+      reader: createOverleafReader({ BrowserWindow, getSession: browserViews.getSession, getPages: browserViews.getPages,
+        ...(process.env.ENGELBART_OVERLEAF_TEST_ORIGIN && process.env.ENGELBART_HEADLESS === '1' ? { origin: process.env.ENGELBART_OVERLEAF_TEST_ORIGIN, timeoutMs: 4000, pollMs: 100 } : {}),
+      }),
+      file: path.join(store.layout.root, 'overleaf-browser.json'),
+      crypt: {
+        available: () => safeStorage.isEncryptionAvailable(),
+        encrypt: text => safeStorage.encryptString(text).toString('base64'),
+        decrypt: text => safeStorage.decryptString(Buffer.from(text, 'base64')),
+      },
+      openStage: (value, requestKey) => {
+        const url = parseExternalUrl(value).href;
+        if (!sendToRenderer('browser:open-tab', { url, requestKey })) throw new Error('Open a workspace before connecting Overleaf.');
+        return true;
+      },
+      onChange: status => sendToRenderer('engelbart:overleaf', status),
+    });
+    app.once('will-quit', () => overleaf.close());
+    const zotero = createZoteroBrowser({
+      reader: createZoteroReader({ BrowserWindow, getSession: browserViews.getSession, getPages: browserViews.getPages,
+        ...(process.env.ENGELBART_ZOTERO_TEST_ORIGIN && process.env.ENGELBART_HEADLESS === '1' ? { origin: process.env.ENGELBART_ZOTERO_TEST_ORIGIN, timeoutMs: 4000, pollMs: 100 } : {}),
+      }),
+      file: path.join(store.layout.root, 'zotero-browser.json'),
+      crypt: {
+        available: () => safeStorage.isEncryptionAvailable(),
+        encrypt: text => safeStorage.encryptString(text).toString('base64'),
+        decrypt: text => safeStorage.decryptString(Buffer.from(text, 'base64')),
+      },
+      openStage: (value, requestKey) => {
+        const url = parseExternalUrl(value).href;
+        if (!sendToRenderer('browser:open-tab', { url, requestKey })) throw new Error('Open a workspace before connecting Zotero.');
+        return true;
+      },
+      onChange: status => sendToRenderer('engelbart:zotero', status),
+    });
+    app.once('will-quit', () => zotero.close());
     registerEngelbartIpc({
+      zotero,
+      overleaf,
+      google,
       github,
       openGithubPage,
       identifyRepo: createRepoIdentifier({ auth: github.authHeaders }),
@@ -435,7 +544,7 @@ if (!hasSingleInstanceLock) {
       ipcMain,
       trustedHandler,
       store,
-      beforeContextChange: () => postItViews.activate(null),
+      beforeContextChange: async () => { await recordings.stop(); await recordings.cancelTitles(); await postItViews.activate(null); },
       openExternal: async (value) => {
         await electronShell.openExternal(parseExternalUrl(value).href);
         return true;
@@ -446,6 +555,7 @@ if (!hasSingleInstanceLock) {
       },
       writeClipboard: (text) => clipboard.writeText(text),
       bart,
+      localPreviews,
       sandbox,
       readModels,
       notify: sendToRenderer,
@@ -477,6 +587,9 @@ if (!hasSingleInstanceLock) {
     buildMenu();
     electronSession.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
     createWindow();
+    google.resume();
+    zotero.resume();
+    overleaf.resume();
   }).catch((error) => {
     dialog.showErrorBox('Engelbart failed to start', error.message);
     app.exit(1);

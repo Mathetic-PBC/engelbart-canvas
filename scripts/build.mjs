@@ -19,6 +19,25 @@ await build({
   logLevel: 'warning',
 });
 await copyFile('src/renderer/index.html', 'dist/index.html');
+// A narrow, bundled preload for the remote Stage pages; no app bridge is exposed.
+await build({ entryPoints: ['src/main/browser/recording-preload.js'], bundle: true,
+  outfile: 'dist/recording-preload.cjs', platform: 'browser', format: 'cjs',
+  external: ['electron'], target: 'chrome148', logLevel: 'warning' });
+await build({ entryPoints: ['src/main/zotero/preload.js'], bundle: true,
+  outfile: 'dist/zotero-preload.cjs', platform: 'browser', format: 'cjs',
+  external: ['electron'], target: 'chrome148', logLevel: 'warning' });
+await build({ entryPoints: ['src/main/google/preload.js'], bundle: true,
+  outfile: 'dist/google-preload.cjs', platform: 'browser', format: 'cjs',
+  external: ['electron'], target: 'chrome148', logLevel: 'warning' });
+await build({ entryPoints: ['src/main/overleaf/preload.js'], bundle: true,
+  outfile: 'dist/overleaf-preload.cjs', platform: 'browser', format: 'cjs',
+  external: ['electron'], target: 'chrome148', logLevel: 'warning' });
+await build({ entryPoints: ['src/main/browser/catalog-preload.js'], bundle: true,
+  outfile: 'dist/catalog-preload.cjs', platform: 'browser', format: 'cjs',
+  external: ['electron'], target: 'chrome148', logLevel: 'warning' });
+await build({ entryPoints: ['src/renderer/recordings/player.js'], bundle: true,
+  outfile: 'dist/recording-player.js', format: 'iife', target: 'chrome148', logLevel: 'warning' });
+await copyFile('src/renderer/recordings/player.html', 'dist/recording-player.html');
 await copyFile('src/renderer/post-its/post-it.html', 'dist/post-it.html');
 await copyFile('node_modules/pdfjs-dist/build/pdf.worker.min.mjs', 'dist/pdf.worker.min.mjs');
 // pdf.js optional assets (fonts for PDFs without embedded fonts, CJK cmaps, JBIG2/JPX decoders).

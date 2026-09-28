@@ -6,13 +6,14 @@ const os = require('node:os');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { EventEmitter } = require('node:events');
+const vm = require('node:vm');
 const schema = require('../src/shared/interface-annotations.cjs');
 const notes = require('../src/main/store/interface-annotations.cjs');
 const db = require('../src/main/store/db.cjs');
 const projects = require('../src/main/store/projects.cjs');
 const { ensureHome } = require('../src/main/store/home.cjs');
 const { createAnnotations } = require('../src/main/browser/annotations.cjs');
-const { WORLD } = require('../src/main/browser/annotation-page.cjs');
+const { WORLD, source } = require('../src/main/browser/annotation-page.cjs');
 const picked = { element: { tag: 'button', selector: '#save', id: 'save', text: 'Save', value: 'private', classes: [] }, ancestors: [], frames: [], route: '/editor', documentTitle: 'Editor' };
 
 test('shared display labels prefer semantic names and never reveal selectors, IDs, tags, or dimensions', () => {
@@ -40,6 +41,30 @@ test('picker coordinates are ephemeral, bounded, and never become anchor identit
       assert.equal(reports.at(-1).bounds, undefined);
       assert.equal(reports.at(-1).anchor.element.text, 'Save');
     }
+  } finally { controller.dispose(); }
+});
+
+test('saved marker and locate events provide only validated ephemeral placement', async () => {
+  const bounds = { x: 12, y: 30, w: 80, h: 24, viewportWidth: 900, viewportHeight: 600 };
+  let events = ['marker', 'located'].map(type => ({ type, id: 'saved-note', bounds: { ...bounds, extra: 'omit' }, body: 'omit' }));
+  const reports = [];
+  const wc = Object.assign(new EventEmitter(), {
+    isDestroyed: () => false,
+    executeJavaScriptInIsolatedWorld: async () => events,
+  });
+  const controller = createAnnotations(wc, event => reports.push(event));
+  try {
+    await controller.command({ type: 'locate', id: 'saved-note' });
+    assert.deepEqual(reports, ['marker', 'located'].map(type => ({ type, id: 'saved-note', bounds })));
+    reports.length = 0;
+    events = [
+      { type: 'located', id: 'missing', bounds: null },
+      { type: 'marker', id: 'invalid-bounds', bounds: { ...bounds, x: Infinity } },
+      { type: 'marker', id: 'x'.repeat(65), bounds },
+      { type: 'located', id: 123, bounds },
+    ];
+    await controller.command({ type: 'locate', id: 'missing' });
+    assert.deepEqual(reports, [{ type: 'located', id: 'missing', bounds: null }, { type: 'marker', id: 'invalid-bounds', bounds: null }]);
   } finally { controller.dispose(); }
 });
 
@@ -133,7 +158,7 @@ test('a rejected execution from the old document cannot stop polling the new doc
   });
   const controller = createAnnotations(wc, () => {});
   try {
-    const old = controller.command({ type: 'mode', on: true }).catch(() => {});
+    const old = controller.command({ type: 'mode', on: true });
     await new Promise((resolve) => setImmediate(resolve));
     wc.emit('did-start-navigation', {}, 'https://example.com/next', false, true);
     const fresh = controller.command({ type: 'show', items: [] });
@@ -142,4 +167,110 @@ test('a rejected execution from the old document cannot stop polling the new doc
     await new Promise((resolve) => setTimeout(resolve, 280));
     assert.match(calls.at(-1), /"type":"poll"/);
   } finally { controller.dispose(); }
+});
+
+// Evaluate the bridge's actual generated JavaScript, replacing only the DOM
+// installer's body. Real Chromium coverage exercises that installer separately.
+function isolatedController() {
+  const world = vm.createContext({ installs: 0, messages: [] });
+  const bootstrap = `if (!globalThis.__engelbartAnnotations) {
+    installs++;
+    globalThis.__engelbartAnnotations = { command(message) { messages.push(message); return []; } };
+  }`;
+  const wc = Object.assign(new EventEmitter(), {
+    isDestroyed: () => false,
+    executeJavaScriptInIsolatedWorld: async (id, scripts) => {
+      assert.equal(id, WORLD);
+      return vm.runInContext(scripts[0].code.replace(source, bootstrap), world);
+    },
+  });
+  return { world, wc, controller: createAnnotations(wc, () => {}) };
+}
+
+test('clearing a page without an annotation helper is a no-op and does not install one', async () => {
+  const { world, controller } = isolatedController();
+  try {
+    await controller.command({ type: 'clear' });
+    await controller.command({ type: 'clear' });
+    assert.equal(world.installs, 0);
+    assert.equal(world.__engelbartAnnotations, undefined);
+    assert.equal(world.messages.length, 0);
+  } finally { controller.dispose(); }
+});
+
+test('cleanup tolerates a lost helper and subsequent actions reinstall only when needed', async () => {
+  const { world, controller } = isolatedController();
+  try {
+    await controller.command({ type: 'mode', on: true });
+    await controller.command({ type: 'mode', on: false });
+    assert.equal(world.installs, 1, 'ordinary actions reuse the page helper');
+    vm.runInContext('delete globalThis.__engelbartAnnotations', world);
+    await controller.command({ type: 'clear' });
+    assert.equal(world.installs, 1, 'cleanup must not recreate a missing helper');
+    assert.equal(world.__engelbartAnnotations, undefined);
+    for (const message of [
+      { type: 'mode', on: true },
+      { type: 'show', items: [{ id: 'saved', anchor: picked }] },
+      { type: 'locate', id: 'saved' },
+    ]) {
+      vm.runInContext('delete globalThis.__engelbartAnnotations', world);
+      const before = world.installs;
+      await controller.command(message);
+      assert.equal(world.installs, before + 1);
+      assert.equal(world.messages.at(-1).type, message.type);
+    }
+    await controller.command({ type: 'clear' });
+    assert.equal(world.messages.at(-1).type, 'clear', 'an existing helper still receives cleanup');
+  } finally { controller.dispose(); }
+});
+
+test('polling restores a missing page helper without throwing or installing duplicates', async () => {
+  const { world, controller } = isolatedController();
+  try {
+    await controller.command({ type: 'mode', on: true });
+    vm.runInContext('delete globalThis.__engelbartAnnotations', world);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(world.installs, 2);
+    assert.equal(world.messages.at(-1).type, 'poll');
+    await controller.command({ type: 'mode', on: false });
+    assert.equal(world.installs, 2);
+  } finally { controller.dispose(); }
+});
+
+test('real errors from the current page are still reported, including failed cleanup', async () => {
+  const { world, controller } = isolatedController();
+  try {
+    world.__engelbartAnnotations = { command() { throw new Error('Actual overlay failure'); } };
+    for (const message of [{ type: 'mode', on: true }, { type: 'clear' }]) {
+      await assert.rejects(controller.command(message), /Actual overlay failure/);
+    }
+  } finally { controller.dispose(); }
+});
+
+test('cancelled commands do not reject after cleanup, renderer loss, disposal, or tab destruction', async t => {
+  for (const reason of ['clear', 'render-process-gone', 'dispose', 'destroyed']) {
+    await t.test(reason, async () => {
+      let reject, calls = 0, destroyed = false;
+      const reports = [];
+      const wc = Object.assign(new EventEmitter(), {
+        isDestroyed: () => destroyed,
+        executeJavaScriptInIsolatedWorld: () => ++calls === 1
+          ? new Promise((_resolve, fail) => { reject = fail; }) : Promise.resolve([]),
+      });
+      const controller = createAnnotations(wc, event => reports.push(event));
+      try {
+        const pending = controller.command({ type: 'mode', on: true });
+        await new Promise(resolve => setImmediate(resolve));
+        let cleanup;
+        if (reason === 'clear') cleanup = controller.command({ type: 'clear' });
+        else if (reason === 'render-process-gone') wc.emit('render-process-gone');
+        else if (reason === 'dispose') controller.dispose();
+        else destroyed = true;
+        reject(new Error('Old execution context is gone'));
+        await assert.doesNotReject(pending);
+        if (cleanup) await cleanup;
+        assert.equal(reports.some(event => event.type === 'error'), false);
+      } finally { controller.dispose(); }
+    });
+  }
 });

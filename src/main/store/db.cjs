@@ -54,6 +54,11 @@ create unique index if not exists library_github_id on library (github_id) where
 -- change of rules without anyone adding its items again.
 alter table library add column if not exists tags text[] not null default '{}';
 alter table library add column if not exists categorized integer;
+-- Last captured live-preview viewport. The image path is relative to the data root,
+-- not the repository's path. Source run is provenance, not a second ownership link.
+alter table library add column if not exists thumbnail_path text;
+alter table library add column if not exists thumbnail_captured_at timestamptz;
+alter table library add column if not exists thumbnail_run_id uuid;
 -- Databases from before 2026-09-21 typed a row by what it was for (note, paper, git_repo, dataset;
 -- website also meant an html file). Each becomes its format plus the tag that says the rest. This
 -- is only what SQL can tell from the old type: categorized stays null, so library.recategorize
@@ -103,6 +108,12 @@ create table if not exists sandbox_environments (
 );
 create unique index if not exists sandbox_runs_one_active on sandbox_runs (library_id)
   where status in ('starting', 'ready');
+-- Captured pages retain their owner even when a resumed run replaces its URL.
+create table if not exists captured_sites (
+  site text primary key,
+  library_id uuid not null references library (id) on delete cascade
+);
+alter table captured_sites add column if not exists kind text not null default 'site' check (kind in ('site','repo'));
 `;
 
 const NOTES_SCHEMA = `

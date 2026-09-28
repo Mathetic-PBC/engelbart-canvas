@@ -14,7 +14,8 @@
 //   <dataRoot>/<slug>/<Workspace>/<Child>/…          the same, recursively
 //
 // `directory` is where the project's code lives: terminals and agents start there.
-// A workspace's `context` is a flat list of library ids. Grouping is done by nesting a workspace.
+// A workspace's `context` records where library items were attached. The sidebar
+// shares project.json.sidebarContext across every workspace in that project.
 // `chars` is the length of workspace.md, the workspace's counterpart of a note's library.char_count.
 // The earlier layout (<slug>/<Goal>/<Topic>/…) is converted on first touch: see ./migrate.cjs.
 
@@ -26,6 +27,7 @@ const { fileURLToPath, pathToFileURL } = require('node:url');
 const { sanitizeName, slugify, uniqueName, readJson, writeJson, DIR_MODE } = require('./home.cjs');
 const db = require('./db.cjs');
 const { migrateProjectDir } = require('./migrate.cjs');
+const sharedContext = require('./project-context.cjs');
 
 const STATUSES = Object.freeze(['open', 'progress', 'done']);
 const RESERVED = new Set(['annotations', 'seed', 'test']);
@@ -37,7 +39,7 @@ const MAX_TREE_ENTRIES = 500;
 const MAX_TREE_DEPTH = 6;
 
 const WELCOME_NOTE = [
-  'This is a note. Notes are plain markdown files in your project folder, and the sidebar lists what this workspace can see.',
+  'This is a note. Notes are plain markdown files in your project folder, and sidebar context is shared across this project\'s workspaces.',
   '',
   '- [ ] Type @Task or "- []" for a task, then press Build',
   '- [ ] Type @ to mention a paper, folder or note from your library',
@@ -160,7 +162,9 @@ function projectRecord(dir) {
   let exists = false;
   try { exists = !!saved && fs.statSync(saved).isDirectory(); } catch { exists = false; }
   // A saved directory that is gone (moved, unmounted) counts as not chosen: the project asks again.
-  return { id: meta.id, name, slug: path.basename(dir), dir, created: meta.created || null, directory: exists ? saved : null, directoryMissing: saved && !exists ? saved : null };
+  const project = { id: meta.id, name, slug: path.basename(dir), dir, created: meta.created || null, directory: exists ? saved : null, directoryMissing: saved && !exists ? saved : null };
+  const collection = sharedContext.read(project);
+  return { ...project, context: collection?.context || [], removedContext: collection?.removed || [] };
 }
 
 function projectRecords(ctx) {
@@ -175,7 +179,7 @@ function findProject(ctx, id) {
 }
 
 function publicProject(project, extra = {}) {
-  return { id: project.id, name: project.name, slug: project.slug, dir: project.dir, created: project.created, directory: project.directory, directoryMissing: project.directoryMissing, ...extra };
+  return { id: project.id, name: project.name, slug: project.slug, dir: project.dir, created: project.created, directory: project.directory, directoryMissing: project.directoryMissing, context: project.context || [], removedContext: project.removedContext || [], ...extra };
 }
 
 const countWorkspaces = (dir) => workspaceRecords(dir).reduce((n, workspace) => n + 1 + countWorkspaces(workspace.dir), 0);
@@ -349,7 +353,7 @@ function flattenWorkspaces(projectDir, prefix = '', depth = 0, out = []) {
   if (depth > 32) return out;
   for (const workspace of workspaceRecords(depth === 0 ? projectDir : path.join(projectDir, prefix))) {
     const at = prefix ? `${prefix}/${workspace.name}` : workspace.name;
-    out.push({ id: workspace.id, name: workspace.name, path: at, context: workspace.context, chars: workspace.chars });
+    out.push({ id: workspace.id, name: workspace.name, path: at, context: workspace.context, removed: workspace.removed, chars: workspace.chars });
     flattenWorkspaces(projectDir, at, depth + 1, out);
   }
   return out;
@@ -365,7 +369,7 @@ function referencedBy(workspaces) {
 }
 
 /** What a project holds: the rows made in it (`project_id`, the origin) and the rows one of its workspaces has in context. */
-const holds = (project, refs, row) => row.project_id === project.id || refs.has(row.id);
+const holds = (project, refs, row) => row.project_id === project.id || (!project.removedContext?.includes(row.id) && (project.context?.includes(row.id) || refs.has(row.id)));
 
 // A workspace.md written from outside the app (an agent in a terminal): the stored count follows
 // the file. Workspaces that never had a count are left alone; reading one measures the file.
@@ -451,31 +455,40 @@ async function setWorkspaceStatus(ctx, projectId, workspaceId, status) {
 }
 
 async function setWorkspaceContext(ctx, projectId, workspaceId, entries) {
-  const { workspace } = findWorkspace(ctx, projectId, workspaceId);
-  return patchWorkspaceMeta(workspace, { context: flatContext(entries) });
+  const { project, workspace } = findWorkspace(ctx, projectId, workspaceId);
+  const context = flatContext(entries);
+  await ensureProjectContext(ctx, project);
+  const updated = patchWorkspaceMeta(workspace, { context });
+  sharedContext.change(project, { add: context });
+  return updated;
 }
 
-// The sidebar's trash and its ways of bringing something in (2026-09-22). A workspace's rail shows
-// its context, the notes made in it and what its document @mentions; the trash takes a row off it
-// whatever put it there, so `removed` (meta.json) remembers what was thrown away and the rail leaves
-// it out. Nothing is deleted: the library keeps the row and the project keeps the note. Linking an
-// item again (search, +, Save, an @mention picked from the menu) puts it back in context and takes
-// it off `removed`. Both run here, one read and one write of meta.json, so quick adds never race.
+// Workspace attachment metadata keeps provenance. The project collection is
+// what every sidebar displays; its removals prevent old links and mentions from
+// resurrecting a source. Reattaching restores it without duplicating library data.
 const MAX_REMOVED = 1000;
 
 async function linkToWorkspace(ctx, projectId, workspaceId, ids) {
-  const { workspace } = findWorkspace(ctx, projectId, workspaceId);
+  const { project } = findWorkspace(ctx, projectId, workspaceId);
   const adding = (Array.isArray(ids) ? ids : [ids]).map((id) => assertId(id, 'library'));
+  await ensureProjectContext(ctx, project);
+  const { workspace } = findWorkspace(ctx, projectId, workspaceId);
   const context = [...workspace.context];
   for (const id of adding) if (!context.includes(id)) context.push(id);
-  return patchWorkspaceMeta(workspace, { context: flatContext(context), removed: workspace.removed.filter((id) => !adding.includes(id)) });
+  const updated = patchWorkspaceMeta(workspace, { context: flatContext(context), removed: workspace.removed.filter((id) => !adding.includes(id)) });
+  sharedContext.change(project, { add: adding });
+  return updated;
 }
 
 async function unlinkFromWorkspace(ctx, projectId, workspaceId, id) {
-  const { workspace } = findWorkspace(ctx, projectId, workspaceId);
+  const { project } = findWorkspace(ctx, projectId, workspaceId);
   const gone = assertId(id, 'library');
+  await ensureProjectContext(ctx, project);
+  const { workspace } = findWorkspace(ctx, projectId, workspaceId);
   const removed = [...workspace.removed.filter((held) => held !== gone), gone].slice(-MAX_REMOVED);
-  return patchWorkspaceMeta(workspace, { context: workspace.context.filter((held) => held !== gone), removed });
+  const updated = patchWorkspaceMeta(workspace, { context: workspace.context.filter((held) => held !== gone), removed });
+  sharedContext.change(project, { remove: [gone] });
+  return updated;
 }
 
 /* --------------------------------------------------------------------- notes */
@@ -585,6 +598,7 @@ async function writeDoc(ctx, projectId, ref, text) {
     await ctx.libraryDb.recordEdit(resolved.note.id, text.length); // the note's character count, current with every save
   }
   if (resolved.workspace) patchWorkspaceMeta(resolved.workspace, { chars: text.length }); // and the workspace's
+  if (resolved.workspace && (text.includes('@[') || text.includes('](img:'))) await ensureProjectContext(ctx, findProject(ctx, projectId));
   return { lastEdited: nowIso() };
 }
 
@@ -645,6 +659,13 @@ function cleanView(value) {
     const id = idOrNull(tab && tab.id); if (!id || seen.has(id)) continue;
     seen.add(id);
     const clean = { id, title: typeof tab.title === 'string' ? tab.title.slice(0, 200) : '' };
+    if (tab.kind === 'source' && (typeof tab.url === 'string' || typeof tab.path === 'string')) {
+      clean.kind = 'source';
+      if (typeof tab.url === 'string' && /^https?:/i.test(tab.url)) clean.url = tab.url.slice(0,8192);
+      if (typeof tab.path === 'string') clean.path = tab.path.slice(0,8192);
+      if (typeof tab.anchor === 'string') clean.anchor = tab.anchor.slice(0,500);
+      if (idOrNull(tab.libraryId)) clean.libraryId = tab.libraryId;
+    }
     if (tab.kind === 'workspace') clean.kind = 'workspace'; // another workspace's document open here as a tab (2026-09-23)
     tabs.push(clean);
     if (tabs.length >= MAX_TABS) break;
@@ -864,11 +885,19 @@ async function readProjectTextFile(ctx, projectId, input) {
 
 /* --------------------------------------------------------------------- tree */
 
+async function ensureProjectContext(ctx, project, notes = null) {
+  const library = await ctx.libraryDb.list();
+  if (!notes) notes = (await (await db.openNotesDb(project.dir)).list()).map(publicNote);
+  const collection = sharedContext.collect(project, flattenWorkspaces(project.dir), notes, library);
+  return { context: collection.context, removedContext: collection.removed };
+}
+
 async function loadProject(ctx, projectId) {
   const project = findProject(ctx, projectId);
   const notesDb = await db.openNotesDb(project.dir);
   const notes = (await notesDb.list()).map(publicNote);
-  return { project: publicProject(project), workspaces: workspaceTree(project.dir), notes };
+  const collection = await ensureProjectContext(ctx, project, notes);
+  return { project: publicProject(project, collection), workspaces: workspaceTree(project.dir), notes };
 }
 
 module.exports = {

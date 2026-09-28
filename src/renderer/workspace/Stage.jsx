@@ -1,12 +1,15 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
-import { KindGlyph, SEARCH, FOLDER } from '../ui/Icons.jsx';
+import { KindGlyph, SEARCH, FOLDER, ANNOTATE, RECORD, STOP_RECORDING } from '../ui/Icons.jsx';
 import { kindOf, stripScheme, OPEN_IN_BROWSER } from '../model/address.js';
-import { MAX_TABS, addressKey, afterClose, looksLikePlace, placeTab, stageRows, tabKey, tabPlace, parseTable } from '../model/stage.js';
+import { MAX_TABS, addressKey, afterClose, compactPageTitle, looksLikePlace, placeTab, stageRows, tabKey, tabPlace, parseTable } from '../model/stage.js';
 import { markdownBlocks, inlineRuns } from '../model/markdown.js';
 import PaperView from '../pdf/PaperView.jsx';
 import InterfaceAnnotations from './InterfaceAnnotations.jsx';
+import Recordings, { useRecording, isRecording, recordingTime } from './Recordings.jsx';
+import PreviewSizeMenu from './PreviewSizeMenu.jsx';
+import './stage.css';
 
 // The Stage (Claude Design "Add - Mention Stage.dc.html", 2026-09-23): the Browser and the Paper pane made one. A tab
 // shows whatever it was given — a library row, a link, a file on disk — in the way its format asks:
@@ -48,9 +51,10 @@ const editable = (el) => !!(el && el.closest && el.closest('input, textarea, [co
 const inTerminal = (el) => !!(el && el.closest && el.closest('[data-terminal]'));
 const basename = (value) => String(value || '').split('/').pop();
 const SAVE_LABEL = { none: '+ Save', lib: '+ Workspace', here: '✓' };
+const SAVE_HINT = { none: 'Save to library', lib: 'Add to project context', here: 'Saved to project context' };
 const VIEWS = new Set(['md', 'table', 'text', 'image', 'folder', 'unsupported', 'error', 'loading']); // a file drawn here, not in the view
 
-const ICON_BUTTON = { width: 26, height: 26, padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', font: '14px/1 var(--font-sans)' };
+const ICON_BUTTON = { flex: 'none', width: 26, height: 26, padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', font: '14px/1 var(--font-sans)' };
 
 // A file, for its glyph: what the library would call it.
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|heic|heif|svg)$/i;
@@ -72,6 +76,13 @@ function glyphItem(tab) {
   return kindOf(tab.url).kind === 'disk' ? { type: 'html' } : { type: 'website' };
 }
 
+function TabGlyph({ tab, color }) {
+  const [failed, setFailed] = React.useState(null);
+  const icon = !tab.pdf && !tab.file && WEB_URL.test(tab.url) && tab.web?.url === tab.url && !tab.web?.error ? tab.web?.favicon : null;
+  if (!icon || !icon.startsWith('data:image/') || icon === failed) return <KindGlyph item={glyphItem(tab)} box={16} color={color} />;
+  return <img key={icon} data-stage-favicon="1" src={icon} alt="" aria-hidden="true" draggable={false} onError={() => setFailed(icon)} style={{ display: 'block', flex: 'none', width: 16, height: 16, objectFit: 'contain' }} />;
+}
+
 /* ------------------------------------------------------------------------------------------------- small views */
 
 // Three books on a shelf, one of them banded (Hudson's reference, Add - Mention.dc.html).
@@ -91,8 +102,19 @@ const Grid = () => (
 const Expand = () => <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block', fill: 'none', stroke: '#171717', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round' }}><path d="M9.3 2.5h4.2v4.2M13.5 2.5L9 7M6.7 13.5H2.5V9.3M2.5 13.5L7 9" /></svg>;
 const Collapse = () => <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block', fill: 'none', stroke: '#171717', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round' }}><path d="M13.5 2.5L9.5 6.5M9.5 3.3v3.2h3.2M2.5 13.5l4-4M6.5 12.7V9.5H3.3" /></svg>;
 
-function SaveTip({ text }) {
-  return <div role="tooltip" style={{ position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 50, padding: '6px 9px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fff', color: '#4d4d4d', font: '400 11.5px/1.3 var(--font-sans)', whiteSpace: 'nowrap', pointerEvents: 'none', animation: `rise 120ms ${EASE}` }}>{text}</div>;
+function SaveTip({ text, id, overlay = false }) {
+  return <div id={id} role="tooltip" data-overlay={overlay ? '1' : undefined} style={{ position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 50, padding: '6px 9px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fff', color: '#4d4d4d', font: '400 11.5px/1.3 var(--font-sans)', whiteSpace: 'nowrap', pointerEvents: 'none', animation: `rise 120ms ${EASE}` }}>{text}</div>;
+}
+
+// A real hover/focus label, above the native website via Stage's existing overlay
+// mechanism. Clicking or pressing Escape dismisses it without changing the action.
+function StageAction({ hint, onClick, children, ...props }) {
+  const [tip, setTip] = React.useState(false);
+  const tipId = React.useId();
+  return <div style={{ position: 'relative', flex: 'none', display: 'flex' }} onMouseEnter={() => setTip(true)} onMouseLeave={() => setTip(false)} onFocus={() => setTip(true)} onBlur={() => setTip(false)} onKeyDown={event => { if (event.key === 'Escape') setTip(false); }}>
+    <button type="button" {...props} aria-describedby={tip ? tipId : undefined} onClick={event => { setTip(false); onClick(event); }}>{children}</button>
+    {tip && <SaveTip id={tipId} text={hint} overlay />}
+  </div>;
 }
 
 // "+ Save": the thing's name in the library, then where it goes — the library alone, or the library and this workspace
@@ -110,7 +132,7 @@ function SaveCard({ title, onSave, onClose, cardRef }) {
   };
   const button = { display: 'flex', alignItems: 'center', gap: 7, height: 28, padding: '0 9px 0 7px', borderRadius: 6, cursor: 'pointer', font: '500 12.5px/1 var(--font-sans)' };
   return (
-    <div ref={cardRef} data-overlay="1" data-save-card="1" style={{ position: 'absolute', right: 10, top: 44, zIndex: 40, width: 360, maxWidth: 'calc(100% - 20px)', boxSizing: 'border-box', padding: '14px 16px 14px', background: '#fff', border: '1px solid #c9c9c9', borderRadius: 8, boxShadow: '0 12px 32px rgba(0,0,0,.06)', textAlign: 'left', animation: `rise 160ms ${EASE}` }}>
+    <div ref={cardRef} data-overlay="1" data-save-card="1" style={{ position: 'absolute', right: 10, top: 'calc(100% + 4px)', zIndex: 40, width: 360, maxWidth: 'calc(100% - 20px)', boxSizing: 'border-box', padding: '14px 16px 14px', background: '#fff', border: '1px solid #c9c9c9', borderRadius: 8, boxShadow: '0 12px 32px rgba(0,0,0,.06)', textAlign: 'left', animation: `rise 160ms ${EASE}` }}>
       <input
         ref={(element) => { if (element && !element.dataset.focused) { element.dataset.focused = '1'; element.focus({ preventScroll: true }); element.select(); } }}
         value={name}
@@ -314,15 +336,34 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const [draft, setDraft] = React.useState('');
   const [menu, setMenu] = React.useState(null); // { x, y }
   const [device, setDevice] = React.useState('fit');
-  const [customW, setCustomW] = React.useState('390');
   const [occluded, setOccluded] = React.useState(false);
   const [snapshot, setSnapshot] = React.useState(null);
+  const [annotationSnapshot, setAnnotationSnapshot] = React.useState(0);
+  const refreshAnnotationSnapshot = React.useCallback(() => setAnnotationSnapshot(value => value + 1), []);
   const [logins, setLogins] = React.useState([]); // HTTP authentication a page (or a popup) is waiting on
-  const [typing, setTyping] = React.useState(false); // the address has the keyboard: its list is open, Save steps aside
+  const [typing, setTyping] = React.useState(false); // interacting with the address: its list is open, Save steps aside
   const [pick, setPick] = React.useState(0); // the row of the address list Enter takes
   const [found, setFound] = React.useState(null); // the library's answer for a typed place: { input, row }
   const [saving, setSaving] = React.useState(false); // the Save card is open
   const [annotationMode, setAnnotationMode] = React.useState(null); // select directly, or explicitly browse saved notes
+  const [annotationRevision, setAnnotationRevision] = React.useState(0);
+  React.useEffect(() => {
+    const changed = () => setAnnotationRevision(value => value + 1);
+    const states = new Map();
+    const offLibrary = api.onLibraryChanged(changed), offSandbox = api.onSandboxProgress(({ run }) => {
+      if (!run) return;
+      const state = `${run.status}:${run.preview_url}`;
+      if (states.get(run.library_id) !== state) { states.set(run.library_id, state); changed(); }
+    });
+    return () => { offLibrary(); offSandbox(); };
+  }, []);
+  const recording = useRecording();
+  const [recordingsOpen, setRecordingsOpen] = React.useState(false);
+  const [recordingBusy, setRecordingBusy] = React.useState(null);
+  const [recordingError, setRecordingError] = React.useState('');
+  const recordingActive = isRecording(recording);
+  const recordingPending = !!recordingBusy || recording?.status === 'starting';
+  const recordingLabel = recordingBusy === 'stop' ? 'Saving recording…' : recordingPending ? 'Starting recording…' : recordingActive ? 'Stop recording' : 'Record page';
   const annotating = annotationMode === 'select';
   const closeAnnotations = React.useCallback(() => setAnnotationMode(null), []);
   const [finding, setFinding] = React.useState(false); // the find card is open
@@ -343,8 +384,10 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const saveCard = React.useRef(null);
   const saveButton = React.useRef(null);
   const addressRef = React.useRef(null);
+  const quietAddressFocus = React.useRef(false);
   const menuRef = React.useRef(null);
   const slotRef = React.useRef(null); // where the page goes
+  const surfaceRef = React.useRef(null); // popover fallback when Stage has no live page
   // What claim() decides from: the tabs and the one in front as of the last decision, not the last render — several
   // things opened in one go (files picked together) each see where the one before them went.
   const tabsRef = React.useRef(tabs);
@@ -361,9 +404,26 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const blank = !pdf && !view && !page && k.kind === 'blank';
   const web = tab.web;
   const failed = page && web && web.error ? web.error : null;
+  const collectionUrl = page ? tab.url : null;
   const showing = visible && page && !failed && !occluded;
+  // One initial viewport per run, saved by main only if this really is a repo's
+  // current live preview. No background navigation, periodic capture, or build wait.
   React.useEffect(() => {
-    setAnnotationMode((mode) => !visible || !page || failed || mode === 'select' ? null : mode);
+    if (!showing || annotationMode || !web || web.loading || web.url !== tab.url || !WEB_URL.test(tab.url)) return undefined;
+    const timers = [1200, 4000].map(delay => setTimeout(() => quiet(api.captureRepoThumbnail(tab.id)), delay));
+    return () => timers.forEach(clearTimeout);
+  }, [showing, annotationMode, tab.id, tab.url, web?.url, web?.loading]);
+  React.useEffect(() => { setRecordingsOpen(false); setRecordingError(''); setAnnotationMode(null); }, [projectId]);
+  const toggleRecording = async () => {
+    setRecordingBusy(recordingActive ? 'stop' : 'start'); setRecordingError(''); setAnnotationMode(null); setMenu(null);
+    try {
+      if (recordingActive) { await api.recordingStop(); setRecordingsOpen(true); }
+      else await api.recordingStart(tab.id, projectId);
+    } catch (error) { setRecordingError(errorMessage(error)); }
+    finally { setRecordingBusy(null); }
+  };
+  React.useEffect(() => {
+    setAnnotationMode((mode) => !visible || mode === 'select' ? null : mode);
   }, [tab.id, tab.url, visible, page, !!failed]);
   // Where the tab is, as the address field shows it: a file by its path (a docx too, though a page made from it is shown).
   const shownUrl = pdf ? (pdf.input || pdf.url) : tab.file && tab.file.path ? tab.file.path : tab.url;
@@ -535,10 +595,25 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     const id = claim(`i:${row.id}`);
     if (id) showRow(id, row);
   };
-  const openInput = (input) => {
+  const openInput = (input, requestKey) => {
+    // A sign-in can redirect away from its starting URL. Reopening that same request
+    // should focus its existing tab, preserving entered credentials and 2FA progress.
+    const requested = requestKey && tabsRef.current.find(t => t.requestKey === requestKey);
+    if (requested) {
+      frontRef.current = requested.id;
+      setActiveId(requested.id);
+      if (requested.web?.error) void navigate(requested.id, input);
+      return;
+    }
     const k0 = kindOf(input);
     const id = claim(isPage(k0) && !DISK_URL.test(input) ? `l:${addressKey(k0.url)}` : '');
-    if (id) void navigate(id, input);
+    if (id) {
+      if (requestKey) {
+        tabsRef.current = tabsRef.current.map(t => t.id === id ? { ...t, requestKey } : t);
+        update(id, t => ({ ...t, requestKey }));
+      }
+      void navigate(id, input);
+    }
   };
   // Files from the computer open as tabs of their own; + Save is what puts them in the library. Past 15, the rest are left.
   const openPaths = (paths) => {
@@ -562,14 +637,29 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     setActiveId(fresh.id);
     setDraft('');
     setFinding(false);
-    // the caret goes to the address, once the new tab is in front
-    const go = () => { if (addressRef.current) { addressRef.current.focus({ preventScroll: true }); addressRef.current.select(); } };
+    setTyping(false);
+    // Put the caret in the new tab's address without opening the options list.
+    const go = () => {
+      if (!addressRef.current) return;
+      quietAddressFocus.current = true;
+      try { addressRef.current.focus({ preventScroll: true }); addressRef.current.select(); }
+      finally { quietAddressFocus.current = false; }
+    };
     requestAnimationFrame(() => { go(); requestAnimationFrame(go); });
   };
   const closeTab = (id) => { quiet(api.browserClose(id)); dropTab(id); setHover(null); };
   const select = (t) => { setActiveId(t.id); setMenu(null); setTyping(false); setHover(null); };
 
-  React.useImperativeHandle(ref, () => ({ openRow, openInput, openPaths, newTab, closeTab: () => closeTab(tab.id) }));
+  // Local servers can be restarted on a new port. Keep the artifact's tab identity,
+  // but navigate/reload it on each verified build instead of preserving an old URL.
+  const openPreview = (input, requestKey) => {
+    const held = tabsRef.current.find(t => t.requestKey === requestKey);
+    if (!held) { openInput(input, requestKey); return; }
+    frontRef.current = held.id;
+    setActiveId(held.id);
+    void navigate(held.id, input);
+  };
+  React.useImperativeHandle(ref, () => ({ openRow, openInput, openPreview, openPaths, newTab, closeTab: () => closeTab(tab.id) }));
 
   // A tab's pdf from a page: loading, then its bytes (and the ink kept for its address) or why not. A new one is a new viewer.
   const receivePdf = React.useCallback((got) => {
@@ -605,7 +695,13 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     const offPdf = api.onBrowserPdf(receivePdf);
     const offFound = api.onBrowserFound((result) => { const h = keys.current; if (h && h.finding && result.id === h.tabId) setMatches({ matches: result.matches, active: result.active }); });
     const offShortcut = api.onBrowserShortcut(({ name, tab: from }) => { if (keys.current) keys.current.shortcut(name, from); });
-    const offOpen = api.onBrowserOpenTab(({ url, id, from }) => adoptTab(url, id, from));
+    const offOpen = api.onBrowserOpenTab(({ url, id, from, requestKey }) => {
+      if (id) adoptTab(url, id, from);
+      else if (url && keys.current) {
+        keys.current.show();
+        keys.current.openInput(url, requestKey);
+      }
+    });
     const offClosed = api.onBrowserClosed(({ id }) => dropTab(id));
     const offLogin = api.onBrowserLogin((request) => setLogins((current) => [...current, request]));
     const offFocus = api.onBrowserFocusAddress(() => { if (addressRef.current) { addressRef.current.focus(); addressRef.current.select(); } });
@@ -647,7 +743,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   React.useLayoutEffect(() => {
     let cancelled = false;
     if (!showing) {
-      quiet(api.browserHide({ snapshot: visible && page && !failed && occluded }).then((picture) => { if (!cancelled) setSnapshot(picture || null); }));
+      quiet(api.browserHide({ snapshot: visible && page && !failed && occluded, tabId: tab.id }).then((picture) => { if (!cancelled) setSnapshot(picture || null); }));
       return () => { cancelled = true; };
     }
     const slot = slotRef.current;
@@ -662,7 +758,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     window.addEventListener('resize', place);
     place();
     return () => { cancelled = true; observer.disconnect(); window.removeEventListener('resize', place); };
-  }, [showing, visible, page, !!failed, occluded, tab.id, device, customW, finding, full]);
+  }, [showing, visible, page, !!failed, occluded, tab.id, device, finding, full, annotationSnapshot]);
 
   // A local server that is not up yet: keep knocking while its tab is in front.
   React.useEffect(() => {
@@ -778,6 +874,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     tabId: tab.id,
     finding,
     openInput,
+    show: () => { if (onShow) onShow(); },
     shortcut: (name, from) => {
       if (name === 'new-tab') { if (onShow) onShow(); newTab(); return; }
       if (name === 'close-tab') { if (onShow) onShow(); closeTab(from || tab.id); return; }
@@ -841,7 +938,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const placeOf = (t) => (t.url === 'about:blank' && !t.pdf && !t.file ? 'new tab' : tabPlace(t.pdf ? (t.pdf.input || t.pdf.url) : t.file && t.file.path ? t.file.path : (t.web && t.web.url) || t.url));
 
   const dev = DEVICES.find((d) => d.id === device);
-  const width = device === 'custom' ? (Number(customW) || 390) : (dev ? dev.w : 0);
+  const width = dev ? dev.w : 0;
   const slotStyle = width ? { flex: 'none', width, height: '100%', background: '#fff', margin: '0 auto' } : { flex: 1, width: '100%', background: '#fff' };
   const menuW = Math.min(240, (window.innerWidth || 1200) - 16);
   const tabsFull = tabs.length >= MAX_TABS;
@@ -849,31 +946,30 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
 
   return (
     <div ref={rootRef} data-stage="1" data-browser="1" style={{ flex: 1, minHeight: 0, display: visible ? 'flex' : 'none', flexDirection: 'column', background: '#fff', overflow: 'hidden' }}>
-      {/* The tabs: the one in front is white and runs into the address row below; the rest have no box. */}
-      <div style={{ flex: 'none', position: 'relative', zIndex: 5, display: 'flex', alignItems: 'flex-end', height: 40, boxSizing: 'border-box', padding: '0 8px 0 10px', background: '#fafafa' }}>
+      {/* The active tab uses Terminal's quiet outline and joins the address row below. */}
+      <div style={{ flex: 'none', position: 'relative', zIndex: 5, display: 'flex', alignItems: 'flex-end', height: 34, boxSizing: 'border-box', padding: '0 8px 0 10px', background: '#fafafa', borderBottom: '1px solid #eaeaea' }}>
         <div style={{ flex: '0 1 auto', minWidth: 0, display: 'flex', alignItems: 'flex-end', height: '100%' }}>
           {tabs.map((t, i) => {
             const on = t.id === tab.id;
             const sep = !on && tabs[i + 1] && tabs[i + 1].id !== tab.id;
             const isBlank = t.url === 'about:blank' && !t.pdf && !t.file;
             const title = titleOf(t);
-            const glyph = <KindGlyph item={glyphItem(t)} box={16} color={on ? '#4d4d4d' : '#8f8f8f'} />;
-            const titleSpan = <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', WebkitMaskImage: 'linear-gradient(90deg,#000 calc(100% - 22px),transparent)', maskImage: 'linear-gradient(90deg,#000 calc(100% - 22px),transparent)', font: '400 12.5px/1.3 var(--font-sans)', color: isBlank ? '#8f8f8f' : on ? '#171717' : '#4d4d4d' }}>{title}</span>;
+            const shortTitle = !t.row && !t.pdf && !t.file ? compactPageTitle(title, t.url) : title;
+            const glyph = <TabGlyph tab={t} color={on ? '#4d4d4d' : '#8f8f8f'} />;
+            const titleSpan = <span data-stage-tab-title="1" title={on ? title : undefined} style={{ flex: 1, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', font: '400 12.5px/1.3 var(--font-sans)', color: isBlank ? '#8f8f8f' : on ? '#171717' : '#4d4d4d' }}>{shortTitle}</span>;
             const close = <button type="button" className="hov-x" onClick={(event) => { event.stopPropagation(); closeTab(t.id); }} onMouseDown={(event) => event.stopPropagation()} aria-label="Close tab" title="⌘W" style={{ flex: 'none', width: 20, height: 20, padding: 0, border: 0, borderRadius: '50%', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '14px/1 var(--font-sans)', color: '#8f8f8f', transition: 'background 120ms' }}>×</button>;
             return (
-              <div key={t.id} data-stage-tab={t.id} onMouseEnter={(event) => enterTab(event, t)} onMouseLeave={leaveTab} style={{ position: 'relative', flex: '0 1 220px', width: 220, minWidth: 44, height: 34, display: 'flex', alignItems: 'stretch' }}>
+              <div key={t.id} data-stage-tab={t.id} onMouseEnter={(event) => enterTab(event, t)} onMouseLeave={leaveTab} style={{ position: 'relative', flex: '0 1 220px', width: 220, minWidth: 44, height: 30, display: 'flex', alignItems: 'stretch' }}>
                 {on ? (
-                  <div onMouseDown={(event) => { if (event.button === 0) select(t); }} style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, boxSizing: 'border-box', padding: '0 6px 0 12px', background: '#fff', borderRadius: '10px 10px 0 0', cursor: 'default' }}>
-                    <span aria-hidden="true" style={{ position: 'absolute', left: -10, bottom: 0, width: 10, height: 10, background: 'radial-gradient(circle at 0 0, transparent 9.5px, #fff 10px)' }} />
-                    <span aria-hidden="true" style={{ position: 'absolute', right: -10, bottom: 0, width: 10, height: 10, background: 'radial-gradient(circle at 100% 0, transparent 9.5px, #fff 10px)' }} />
+                  <div onMouseDown={(event) => { if (event.button === 0) select(t); }} style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, boxSizing: 'border-box', padding: '0 6px 0 12px', border: '1px solid #eaeaea', borderBottomColor: '#fff', borderRadius: '8px 8px 0 0', marginBottom: -1, background: '#fff', cursor: 'default' }}>
                     {glyph}{titleSpan}{close}
                   </div>
                 ) : (
-                  <div className="hov-tab" onMouseDown={(event) => { if (event.button === 0) select(t); }} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, boxSizing: 'border-box', margin: '0 2px 4px', padding: '0 4px 0 10px', borderRadius: 8, background: 'transparent', cursor: 'default', transition: 'background 120ms' }}>
+                  <div className="hov-tab" onMouseDown={(event) => { if (event.button === 0) select(t); }} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, boxSizing: 'border-box', margin: '0 2px 2px', padding: '0 4px 0 10px', borderRadius: 8, background: 'transparent', cursor: 'default', transition: 'background 120ms' }}>
                     {glyph}{titleSpan}{close}
                   </div>
                 )}
-                {sep && <span aria-hidden="true" style={{ position: 'absolute', right: 0, top: 9, width: 1, height: 16, background: '#c9c9c9' }} />}
+                {sep && <span aria-hidden="true" style={{ position: 'absolute', right: 0, top: 7, width: 1, height: 16, background: '#c9c9c9' }} />}
                 {hover && hover.id === t.id && !on && (
                   <div data-overlay="1" style={{ position: 'absolute', left: hover.left, top: 'calc(100% + 6px)', zIndex: 60, width: hover.width, boxSizing: 'border-box', padding: '10px 12px', background: '#fff', border: '1px solid #c9c9c9', borderRadius: 8, pointerEvents: 'none', animation: `rise 160ms ${EASE}` }}>
                     <div style={{ font: '500 13px/1.4 var(--font-sans)', color: '#171717', overflowWrap: 'anywhere', textWrap: 'pretty' }}>{title}</div>
@@ -884,23 +980,26 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
             );
           })}
         </div>
-        <button type="button" className="hov-tab-plus" onClick={newTab} disabled={tabsFull} aria-label="New tab" title={tabsFull ? '15 tabs is the most — close one first' : '⌘T'} style={{ flex: 'none', opacity: tabsFull ? 0.4 : 1, alignSelf: 'center', width: 28, height: 28, margin: '2px 0 0 6px', padding: 0, border: 0, borderRadius: '50%', background: 'transparent', cursor: tabsFull ? 'default' : 'pointer', font: '18px/1 var(--font-sans)', color: '#4d4d4d', transition: 'background 120ms' }}>+</button>
+        <button type="button" className="hov-tab-plus" onClick={newTab} disabled={tabsFull} aria-label="New tab" title={tabsFull ? '15 tabs is the most — close one first' : '⌘T'} style={{ flex: 'none', opacity: tabsFull ? 0.4 : 1, alignSelf: 'center', width: 28, height: 28, margin: '0 0 0 6px', padding: 0, border: 0, borderRadius: '50%', background: 'transparent', cursor: tabsFull ? 'default' : 'pointer', font: '18px/1 var(--font-sans)', color: '#4d4d4d', transition: 'background 120ms' }}>+</button>
         {onFull && (
-          <button type="button" className="hov-wash2" onClick={() => { setHover(null); onFull(); }} aria-label={full ? 'Exit full screen' : 'Full screen'} title={full ? 'Exit full screen' : 'Full screen'} data-stage-full={full ? '1' : '0'} style={{ flex: 'none', alignSelf: 'center', width: 28, height: 28, margin: '2px 0 0 auto', padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 120ms' }}>{full ? <Collapse /> : <Expand />}</button>
+          <button type="button" className="hov-wash2" onClick={() => { setHover(null); onFull(); }} aria-label={full ? 'Exit full screen' : 'Full screen'} title={full ? 'Exit full screen' : 'Full screen'} data-stage-full={full ? '1' : '0'} style={{ flex: 'none', alignSelf: 'center', width: 28, height: 28, margin: '0 0 0 auto', padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 120ms' }}>{full ? <Collapse /> : <Expand />}</button>
         )}
       </div>
 
-      <div style={{ position: 'relative', flex: 'none', display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px', borderBottom: '1px solid #eaeaea' }}>
-        <button type="button" className="hov-wash" onClick={back} aria-label="Back" style={{ ...ICON_BUTTON, color: canBack ? '#171717' : '#c9c9c9' }}>←</button>
-        <button type="button" className="hov-wash" onClick={forward} aria-label="Forward" style={{ ...ICON_BUTTON, color: canForward ? '#171717' : '#c9c9c9' }}>→</button>
-        <button type="button" className="hov-wash" onClick={reload} aria-label={loading ? 'Stop' : 'Reload'} style={{ ...ICON_BUTTON, color: '#4d4d4d' }}>{loading ? '×' : '↻'}</button>
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, height: 30, boxSizing: 'border-box', padding: saveState && !typing ? '0 3px 0 10px' : '0 10px', border: `1px solid ${typing ? '#c9c9c9' : 'transparent'}`, borderRadius: 8, background: '#fafafa', transition: 'border-color 120ms' }}>
-          <KindGlyph item={glyphItem(tab)} box={14} color="#8f8f8f" />
+      <div className="stage-toolbar" data-stage-toolbar="1">
+        <div className="stage-navigation" role="group" aria-label="Page navigation">
+          <button type="button" className="hov-wash" onClick={back} aria-label="Back" style={{ ...ICON_BUTTON, color: canBack ? '#171717' : '#c9c9c9' }}>←</button>
+          <button type="button" className="hov-wash" onClick={forward} aria-label="Forward" style={{ ...ICON_BUTTON, color: canForward ? '#171717' : '#c9c9c9' }}>→</button>
+          <button type="button" className="hov-wash" onClick={reload} aria-label={loading ? 'Stop' : 'Reload'} style={{ ...ICON_BUTTON, color: '#4d4d4d' }}>{loading ? '×' : '↻'}</button>
+        </div>
+        <div data-stage-address="1" style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, height: 30, boxSizing: 'border-box', padding: saveState && !typing ? '0 3px 0 10px' : '0 10px', border: `1px solid ${typing ? '#c9c9c9' : 'transparent'}`, borderRadius: 8, background: '#fafafa', transition: 'border-color 120ms' }}>
+          <TabGlyph key={tab.id} tab={tab} color="#8f8f8f" />
           <input
             ref={addressRef}
             value={draft}
             onChange={(event) => { setDraft(event.target.value); setTyping(true); }}
-            onFocus={(event) => { const el = event.target; setTyping(true); setTimeout(() => { try { el.select(); } catch { /* gone */ } }, 0); }}
+            onFocus={(event) => { const el = event.target; if (!quietAddressFocus.current) setTyping(true); setTimeout(() => { try { el.select(); } catch { /* gone */ } }, 0); }}
+            onClick={() => setTyping(true)}
             onBlur={() => { setTyping(false); if (document.activeElement !== addressRef.current) setDraft((d) => (d.trim() ? d : shownDraft)); }}
             onKeyDown={onAddressKey}
             spellCheck={false}
@@ -908,47 +1007,52 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
             style={{ flex: 1, minWidth: 0, padding: 0, border: 0, outline: 'none', background: 'transparent', font: '400 13px/1.4 var(--font-sans)', color: '#171717', textAlign: 'left' }}
           />
           {saveState && !typing && (
-            <button
-              ref={saveButton}
-              type="button"
-              data-page-save={saveState}
-              className={saveState === 'here' ? undefined : 'hov-ink'}
-              onClick={onSaveClick}
-              aria-expanded={saving}
-              style={{ flex: 'none', height: 24, padding: '0 8px', border: 0, borderRadius: 5, background: saving ? '#eaeaea' : 'transparent', cursor: saveState === 'here' ? 'default' : 'pointer', font: '500 12px/1 var(--font-sans)', color: saveState === 'here' ? '#8f8f8f' : saving ? '#171717' : '#4d4d4d', whiteSpace: 'nowrap', transition: 'background 120ms, color 120ms' }}
-            >{SAVE_LABEL[saveState]}</button>
-          )}
-        </div>
-        {saving && saveState === 'none' && <SaveCard key={pageInput} title={pageTitle || stripScheme(pageInput)} onSave={save.onSave} onClose={() => setSaving(false)} cardRef={saveCard} />}
-        {page && !failed && <button type="button" data-annotate-toggle="1" aria-label={annotating ? 'Cancel annotation' : 'Annotate page'} aria-pressed={annotating} disabled={loading} onClick={() => { setAnnotationMode(annotating ? null : 'select'); setMenu(null); }} style={{ ...ICON_BUTTON, width: 'auto', padding: '0 7px', fontSize: 12, whiteSpace: 'nowrap', color: annotating ? '#171717' : '#4d4d4d', background: annotating ? '#f2f2f2' : 'transparent' }}>{annotating ? 'Annotating · Esc to cancel' : 'Annotate'}</button>}
-        <div style={{ position: 'relative' }} ref={menuRef}>
-          <button type="button" className="hov-wash" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setMenu(menu ? null : { x: r.right, y: r.bottom }); }} aria-label="More" style={{ ...ICON_BUTTON, background: menu ? '#f2f2f2' : 'transparent', font: '600 16px/1 var(--font-sans)', color: '#4d4d4d' }}>⋮</button>
-          {menu && (
-            <div data-overlay="1" style={{ position: 'fixed', left: clamp(menu.x - menuW, 8, (window.innerWidth || 1200) - menuW - 8), top: menu.y + 6, zIndex: 60, width: menuW, padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, animation: `rise 160ms ${EASE}` }}>
-              {page && !failed && <button type="button" data-annotations-browse="1" className="hov-wash" onClick={() => { setAnnotationMode('browse'); setMenu(null); }} style={{ display: 'block', width: '100%', border: 0, background: 'transparent', textAlign: 'left', padding: '7px 10px', borderRadius: 6, cursor: 'pointer', font: '13px/1.4 var(--font-sans)', color: '#171717' }}>Annotations</button>}
-              <div style={{ padding: '6px 10px', font: '500 9px/1 var(--font-sans)', letterSpacing: '1.6px', textTransform: 'uppercase', color: '#8f8f8f' }}>Device preset</div>
-              {DEVICES.map((d) => (
-                <div key={d.id} className="hov-wash" onClick={() => { setDevice(d.id); setMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px', borderRadius: 6, cursor: 'pointer' }}>
-                  <span style={{ flex: 'none', width: 14, textAlign: 'center', font: '12px/1 var(--font-sans)', color: '#171717' }}>{device === d.id ? '✓' : ''}</span>
-                  <span style={{ flex: 1, font: '13px/1.4 var(--font-sans)', color: '#171717' }}>{d.name}</span>
-                  <span style={{ font: '11px/1 var(--font-mono)', color: '#8f8f8f' }}>{d.w ? `${d.w}×${d.h}` : ''}</span>
-                </div>
-              ))}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderTop: '1px solid #eaeaea', marginTop: 4 }}>
-                <span style={{ flex: 1, font: '13px/1.4 var(--font-sans)', color: '#171717' }}>Custom width</span>
-                <input value={customW} onChange={(event) => { setCustomW(event.target.value.replace(/\D/g, '')); setDevice('custom'); }} inputMode="numeric" aria-label="Custom width" style={{ width: 64, padding: '4px 8px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fafafa', font: '12px/1.4 var(--font-mono)', color: '#171717', textAlign: 'right' }} />
-              </div>
-              {((page && web) || (pdf && WEB_URL.test(pdf.url))) && (
-                <div style={{ borderTop: '1px solid #eaeaea', marginTop: 4, paddingTop: 4 }}>
-                  <div className="hov-wash" onClick={() => { quiet(api.openExternal(pdf ? pdf.url : web.url || tab.url)); setMenu(null); }} style={{ padding: '7px 10px 7px 34px', borderRadius: 6, cursor: 'pointer', font: '13px/1.4 var(--font-sans)', color: '#171717' }}>Open in default browser</div>
-                  {page && <div className="hov-wash" onClick={() => { quiet(api.browserCommand(tab.id, 'devtools')); setMenu(null); }} style={{ padding: '7px 10px 7px 34px', borderRadius: 6, cursor: 'pointer', font: '13px/1.4 var(--font-sans)', color: '#171717' }}>Developer tools</div>}
-                </div>
-              )}
+            <div className="stage-save-separator">
+              <button
+                ref={saveButton}
+                type="button"
+                data-page-save={saveState}
+                className={saveState === 'here' ? undefined : 'hov-ink'}
+                onClick={onSaveClick}
+                aria-expanded={saveState === 'none' ? saving : undefined}
+                aria-label={SAVE_HINT[saveState]}
+                title={SAVE_HINT[saveState]}
+                style={{ flex: 'none', height: 24, padding: '0 8px', border: 0, borderRadius: 5, background: saving ? '#eaeaea' : 'transparent', cursor: saveState === 'here' ? 'default' : 'pointer', font: '500 12px/1 var(--font-sans)', color: saveState === 'here' ? '#8f8f8f' : saving ? '#171717' : '#4d4d4d', whiteSpace: 'nowrap', transition: 'background 120ms, color 120ms' }}
+              ><span className="stage-save-label">{SAVE_LABEL[saveState]}</span><span className="stage-save-compact" aria-hidden="true">{saveState === 'here' ? '✓' : '+'}</span></button>
             </div>
           )}
         </div>
+        {saving && saveState === 'none' && <SaveCard key={pageInput} title={pageTitle || stripScheme(pageInput)} onSave={save.onSave} onClose={() => setSaving(false)} cardRef={saveCard} />}
+        <div className="stage-page-actions" role="group" aria-label="Page actions">
+          {page && !failed && <StageAction className="hov-wash" data-annotate-toggle="1" aria-label={annotating ? 'Cancel annotation' : 'Annotate page'} hint={annotating ? 'Annotating · Esc to cancel' : 'Annotate'} aria-pressed={annotating} disabled={loading} onClick={() => { setAnnotationMode(annotating ? null : 'select'); setRecordingsOpen(false); setMenu(null); }} style={{ ...ICON_BUTTON, flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', color: annotating ? '#171717' : '#4d4d4d', background: annotating ? '#f2f2f2' : 'transparent' }}>
+            <ANNOTATE />
+          </StageAction>}
+          {(recordingActive || (page && !failed && /^https?:/i.test(tab.url))) && <StageAction data-record-toggle="1" className="hov-wash stage-record-button" disabled={recordingBusy || (!recordingActive && (loading || recordingsOpen))} onClick={toggleRecording}
+            aria-label={recordingLabel} aria-pressed={recordingActive} aria-busy={recordingPending} hint={recordingPending ? recordingLabel : recordingActive ? `Stop recording · ${recordingTime(recording.durationMs)} · ${recording.name}` : 'Record'}
+            style={{ ...ICON_BUTTON, color: recordingActive && !recordingPending ? '#a65252' : '#4d4d4d', background: recordingActive ? '#f2f2f2' : 'transparent' }}>
+            {recordingPending ? <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><circle cx="8" cy="8" r="5.5" strokeDasharray="23 12" strokeLinecap="round" /></svg> : recordingActive ? <STOP_RECORDING /> : <RECORD />}
+          </StageAction>}
+          <div style={{ position: 'relative' }} ref={menuRef} onKeyDown={event => { if (event.key === 'Escape' && menu) { event.preventDefault(); event.stopPropagation(); setMenu(null); menuRef.current?.querySelector('button')?.focus(); } }}>
+            <button type="button" className="hov-wash" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setMenu(menu ? null : { x: r.right, y: r.bottom }); }} aria-label="More" aria-expanded={!!menu} style={{ ...ICON_BUTTON, background: menu ? '#f2f2f2' : 'transparent', font: '600 16px/1 var(--font-sans)', color: '#4d4d4d' }}>⋮</button>
+            {menu && (
+              <div data-overlay="1" data-stage-settings="1" style={{ position: 'fixed', left: clamp(menu.x - menuW, 8, (window.innerWidth || 1200) - menuW - 8), top: menu.y + 6, zIndex: 60, width: menuW, padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, animation: `rise 160ms ${EASE}` }}>
+                <button type="button" data-annotations-browse="1" className="hov-wash" onClick={() => { setAnnotationMode('browse'); setRecordingsOpen(false); setMenu(null); }} style={{ display: 'block', width: '100%', border: 0, background: 'transparent', textAlign: 'left', padding: '7px 10px', borderRadius: 6, cursor: 'pointer', font: '13px/1.4 var(--font-sans)', color: '#171717' }}>Annotations</button>
+                <button type="button" data-recordings-browse="1" className="hov-wash" onClick={() => { setRecordingsOpen(true); setAnnotationMode(null); setMenu(null); }} style={{ display: 'block', width: '100%', border: 0, background: 'transparent', textAlign: 'left', padding: '7px 10px', borderRadius: 6, cursor: 'pointer', font: '13px/1.4 var(--font-sans)', color: '#171717' }}>Recordings</button>
+                <div style={{ borderTop: '1px solid #eaeaea', marginTop: 4, paddingTop: 4 }}>
+                  <PreviewSizeMenu devices={DEVICES} device={device} onSelect={id => { setDevice(id); setMenu(null); menuRef.current?.querySelector('button')?.focus(); }} />
+                </div>
+                {((page && web) || (pdf && WEB_URL.test(pdf.url))) && (
+                  <div style={{ borderTop: '1px solid #eaeaea', marginTop: 4, paddingTop: 4 }}>
+                    <div className="hov-wash" onClick={() => { quiet(api.openExternal(pdf ? pdf.url : web.url || tab.url)); setMenu(null); }} style={{ padding: '7px 10px', borderRadius: 6, cursor: 'pointer', font: '13px/1.4 var(--font-sans)', color: '#171717' }}>Open in default browser</div>
+                    {page && <div className="hov-wash" onClick={() => { quiet(api.browserCommand(tab.id, 'devtools')); setMenu(null); }} style={{ padding: '7px 10px', borderRadius: 6, cursor: 'pointer', font: '13px/1.4 var(--font-sans)', color: '#171717' }}>Developer tools</div>}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
         {listOpen && (
-          <div data-overlay="1" data-stage-list="1" onMouseDown={(event) => event.preventDefault()} style={{ position: 'absolute', left: 92, right: 10, top: 44, zIndex: 40, maxHeight: 420, overflowY: 'auto', boxSizing: 'border-box', padding: 6, background: '#fff', border: '1px solid #c9c9c9', borderRadius: 8, boxShadow: '0 12px 32px rgba(0,0,0,.06)', animation: `rise 160ms ${EASE}` }}>
+          <div data-overlay="1" data-stage-list="1" onMouseDown={(event) => event.preventDefault()} style={{ position: 'absolute', left: 100, right: 10, top: 'calc(100% + 4px)', zIndex: 40, maxHeight: 420, overflowY: 'auto', boxSizing: 'border-box', padding: 6, background: '#fff', border: '1px solid #c9c9c9', borderRadius: 8, boxShadow: '0 12px 32px rgba(0,0,0,.06)', animation: `rise 160ms ${EASE}` }}>
             {rows.map((r, i) => {
               const glyph = r.kind === 'item' ? <KindGlyph item={r.row} box={16} color="#4d4d4d" />
                 : r.kind === 'search' ? <span className="glyph-fit" style={{ display: 'flex', width: 13, height: 13, margin: '0 1.5px', color: '#4d4d4d' }}><SEARCH /></span>
@@ -966,7 +1070,10 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
         )}
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column', background: '#fafafa' }}>
+      <div ref={surfaceRef} style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+      <div style={{ flex: 1, minWidth: 0, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column', background: '#fafafa' }}>
+        {recordingError && <p className="recording-error" role="alert">{recordingError}</p>}
+        {recordingsOpen && visible && <Recordings key={`${projectId}:${tab.id}:${collectionUrl}`} projectId={projectId} url={collectionUrl} recording={recording} slotRef={slotRef} surfaceRef={surfaceRef} onClose={() => setRecordingsOpen(false)} />}
         {finding && <FindCard inputRef={findRef} text={findText} found={matches} onText={setFindText} onStep={(step) => runFind(findText, step)} onClose={closeFind} />}
         {/* a page sits under a band while the find card is open: a native view would cover it */}
         {finding && page && <div style={{ flex: 'none', height: 54 }} />}
@@ -1017,10 +1124,11 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
               ) : null}
             </div>
             </div>
-            {annotationMode && visible && !failed && <InterfaceAnnotations key={`${projectId}:${tab.id}:${tab.url}:${annotationMode}`} mode={annotationMode} slotRef={slotRef} projectId={projectId} tabId={tab.id} url={tab.url} loading={!!web?.loading} onClose={closeAnnotations} onSelect={() => setAnnotationMode('select')} onNavigate={(url) => navigate(tab.id, url)} onAsk={onAskAnnotation} />}
           </div>
         )}
         {!pdf && !view && !page && k.kind === 'sandbox' && <Plain title={k.name} detail="" />}
+      </div>
+      {annotationMode && visible && <InterfaceAnnotations key={`${projectId}:${tab.id}:${collectionUrl}:${annotating ? 'select' : 'notes'}`} revision={annotationRevision} mode={annotationMode} slotRef={slotRef} surfaceRef={surfaceRef} projectId={projectId} tabId={tab.id} url={collectionUrl} loading={!!web?.loading || !!failed} onClose={closeAnnotations} onLocated={refreshAnnotationSnapshot} onNavigate={(url) => navigate(tab.id, url)} onAsk={onAskAnnotation} />}
       </div>
       {logins[0] && createPortal(
         <LoginPrompt

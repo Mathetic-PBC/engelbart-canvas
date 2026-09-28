@@ -4,20 +4,23 @@ import Rail from '../workspace/Rail.jsx';
 import DocTabs from '../workspace/DocTabs.jsx';
 import DocEditor, { BART_ITEM, TASK_ITEM } from '../workspace/DocEditor.jsx';
 import RightPane, { RIGHT_MODES } from '../workspace/RightPane.jsx';
+import { useLocalPreview } from '../workspace/LocalPreview.jsx';
+import { OPEN_LOCAL_BUILD_NOTIFICATION } from '../model/local-build-notifications.js';
 import { kindOf } from '../ui/Icons.jsx';
+import { useSandboxes } from '../ui/SandboxProgress.jsx';
 import { hasTag, isNote, canRunRepository } from '../model/kind.js';
 import { isUntitled, nextUntitled } from '../model/names.js';
 import { OPEN_IN_BROWSER } from '../model/address.js';
 import { workspacePanels } from '../model/panel-layout.js';
 import { conversationRows, mentionRows } from '../model/rail.js';
 import { createSession as createTerminalSession, sessionsFor, subscribe as subscribeTerminal } from '../terminal/sessions.js';
-import { flatWorkspaces, nextPlace } from '../model/nav.js';
+import { flatWorkspaces } from '../model/nav.js';
 import { onStage } from '../model/stage.js';
 import ProjectPostIts from '../post-its/ProjectPostIts.jsx';
 import { targetLabel as annotationTargetLabel } from '../../shared/interface-annotations.cjs';
 
 // The workspace screen (design 2026-09-17): a header in three columns — Engelbart / project /
-// parent workspaces over the sidebar, the document tabs over the document, the Stage · Terminal · Repo
+// parent workspaces over the sidebar, the document tabs over the document, the Stage · Terminal
 // switcher over the right pane — then sidebar, document, right pane. The Stage (2026-09-23, Add -
 // Mention Stage.dc.html) opens everything that is not a note: a sidebar row, an @mention, a link in
 // the document or the terminal; its full screen takes the document's place, never the sidebar's.
@@ -26,9 +29,8 @@ import { targetLabel as annotationTargetLabel } from '../../shared/interface-ann
 // front, and where each document was scrolled to. Leaving a workspace and coming back — or
 // quitting and reopening — shows it as it was left (state.json `views`, main/store/projects.cjs).
 // The sidebar (2026-09-22, Canvas.dc.html and Add - Mention.dc.html) brings library items in through its search, adds
-// new ones through its +, and takes them out on its trash (meta.json `removed`); the Browser's Save and the @ menu add
-// the page in front. Its next row and ⌘J go to the workspace an agent waits in, else the one written in before
-// (state.json `recent` and `agents`, model/nav.js); typing in a document here records this workspace as written in.
+// new ones through its +, and takes them out on its trash (project.json `sidebarContext.removed`); the Browser's Save and the @ menu add
+// the page in front. Typing in a document here records this workspace as written in (state.json `recent`).
 // Dragging the sidebar's edge resizes only the document; the right pane keeps its width until its own edge is dragged.
 // Post-its (2026-09-22) float over all of it (post-its/ProjectPostIts.jsx).
 
@@ -38,7 +40,7 @@ const MENTION_RE = /@\[([^\]\n]+)\]/g;
 const NEXT_STATUS = { open: 'progress', progress: 'done', done: 'open' };
 const SAVE_DELAY = 400;
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
-const DEFAULT_RAIL_WIDTH = 260;
+const DEFAULT_RAIL_WIDTH = 300;
 
 const basename = (value) => String(value || '').split('/').pop();
 
@@ -111,7 +113,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   for (let up = here && here.parent; up; up = index.get(up.id).parent) ancestors.unshift(up);
   const allWorkspaces = React.useMemo(() => flatWorkspaces(tree.workspaces), [tree.workspaces]);
   const [railWidth, setRailWidth] = React.useState(DEFAULT_RAIL_WIDTH);
-  const [rightWidth, setRightWidth] = React.useState(null); // px, or null: half of what the sidebar leaves
+  const [rightWidth, setRightWidth] = React.useState(null); // px, or null: browser-favored default with room for the document
   const [viewWidth, setViewWidth] = React.useState(() => window.innerWidth || 1440);
   React.useEffect(() => {
     const measure = () => setViewWidth(window.innerWidth || 1440);
@@ -133,8 +135,14 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     const record = await createTerminalSession({ provider, cwd: project.directory || project.dir, projectId: project.id });
     openConversation(record.snapshot.id);
   };
-  const [repoId, setRepoId] = React.useState(null);
+  const sandboxes = useSandboxes();
   const stageRef = React.useRef(null);
+  const openLocalPreview = React.useCallback(preview => {
+    if (!preview?.url || !stageRef.current) return;
+    setRightMode('stage');
+    stageRef.current.openPreview(preview.url, `local-preview:${preview.id}`);
+  }, []);
+  const localPreview = useLocalPreview(project.id, topicId, preview => { if (active) openLocalPreview(preview); void reload(); });
   const [stageFull, setStageFull] = React.useState(false); // the Stage takes the document's place
   const [stageFront, setStageFront] = React.useState(null); // the library row the Stage shows in front, for the sidebar
   const showStage = React.useCallback(() => setRightMode('stage'), []);
@@ -310,12 +318,13 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       await Promise.all([...pending.current.keys()].map((held) => flush(held)));
       const out = await api.askBart(project.id, { askId, ref, workspaceId: ref.kind === 'workspace' ? ref.workspaceId : topic.id, text, turns: turns || [], choice: choice || null });
       place(out.stopped ? [] : out.lines);
+      if (out.preview) await reload(); // reflect the new local repository's Context attachment
     } catch (error) {
       place([`bart> **No answer.** ${errorMessage(error)}`]);
     } finally {
       setAsks((current) => { const next = { ...current }; delete next[askId]; return next; });
     }
-  }, [docKey, docRef, topic, project.id, flush, changeDoc]);
+  }, [docKey, docRef, topic, project.id, flush, changeDoc, reload]);
 
   const askAnnotation = React.useCallback((note) => {
     if (!docKey || !docRef || !topic || typeof docsRef.current[docKey] !== 'string') throw new Error('Open a workspace document to ask Bart about this element.');
@@ -368,26 +377,28 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const byId = React.useMemo(() => new Map(library.map((row) => [row.id, row])), [library]);
 
   const mentioned = React.useMemo(() => {
-    const text = topic ? docs[`ws:${topic.id}`] || '' : '';
+    // Unsaved mentions stay visible during a workspace switch too. Saved
+    // mentions are collected into project.context by the main-process store.
+    const text = Object.entries(docs).filter(([key]) => key.startsWith('ws:')).map(([, text]) => text).join('\n');
     const names = new Set([...text.matchAll(MENTION_RE)].map((match) => match[1].toLowerCase()));
     const shown = new Set([...text.matchAll(IMAGE_REF_RE)].map((match) => match[1])); // pasted images are context without an @mention
     return library.filter((row) => (row.type === 'image' ? shown.has(row.id) : names.has(row.name.toLowerCase())));
-  }, [docs, topic, library]);
+  }, [docs, library]);
 
-  const activeRowId = rightMode === 'repo' && repoId ? repoId : activeTab !== 'ws' ? activeTab : (rightMode === 'stage' && stageFront ? stageFront : 'ws');
+  const activeRowId = activeTab !== 'ws' ? activeTab : (rightMode === 'stage' && stageFront ? stageFront : 'ws');
 
   const rows = React.useMemo(() => {
     const out = [];
     if (!topic) return out;
-    const present = new Set(topic.removed || []); // thrown away (the trash): not on this rail, whatever would put it there
-    for (const id of topic.context) {
+    const present = new Set(project.removedContext || []);
+    for (const id of project.context || []) {
       const row = byId.get(id);
       if (!row || present.has(row.id)) continue;
       present.add(row.id);
       out.push({ ...row, depth: 0, on: activeRowId === row.id, editing: renaming === row.id });
     }
     for (const note of tree.notes || []) {
-      if (note.workspaceId === topic.id && !present.has(note.id)) {
+      if (!present.has(note.id)) {
         present.add(note.id);
         out.push({ id: note.id, name: note.name, type: 'md', tags: ['note'], depth: 0, on: activeRowId === note.id, editing: renaming === note.id });
       }
@@ -398,8 +409,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
         out.push({ ...row, depth: 0, on: activeRowId === row.id, editing: renaming === row.id });
       }
     }
+    for (const child of here ? here.node.children || [] : []) out.push({ id: child.id, name: child.name, type: 'child', depth: 0, on: activeRowId === child.id, editing: renaming === child.id });
     return out;
-  }, [topic, byId, renaming, activeRowId, tree.notes, mentioned]);
+  }, [topic, project.context, project.removedContext, here, byId, renaming, activeRowId, tree.notes, mentioned]);
 
   const mentionable = React.useMemo(() => [BART_ITEM, TASK_ITEM, ...library.filter((row) => row.type !== 'image').map(describe)], [library]);
 
@@ -480,16 +492,17 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     });
   }, []);
 
-  // Repositories open in Repo; other files and pages open on the Stage.
+  // Repository names open GitHub in Stage; build and preview actions live in notifications.
   const openItem = React.useCallback((row) => {
     if (!row || row.id === 'chat') return;
     if (row.type === 'workspace') { showWs(); return; }
     if (isNote(row)) { openTab(row.id, row.name); return; }
-    if (canRunRepository(row)) { setRepoId(row.id); setRightMode('repo'); return; }
+    if (row.id === localPreview.preview?.libraryId && localPreview.preview.status === 'ready') { openLocalPreview(localPreview.preview); return; }
+    if (canRunRepository(row)) { sandboxes.openRepository(row); return; }
     if (!onStage(row) || !stageRef.current) return;
     setRightMode('stage');
     stageRef.current.openRow(row);
-  }, [openTab, showWs]);
+  }, [openTab, showWs, sandboxes, localPreview.preview, openLocalPreview]);
   // A link in a document goes to the Stage too, never to the default browser.
   const openLink = React.useCallback((href) => {
     if (!stageRef.current) return;
@@ -516,7 +529,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     setActiveTab(restored.active);
   };
 
-  /* ------------------------------------------------------------ next place */
+  /* -------------------------------------------------------- agent activity */
 
   // The recent workspaces and the agents (state.json, read again whenever the main process says they changed).
   const [nav, setNav] = React.useState({ recent: [], agents: [] });
@@ -532,33 +545,6 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     if (!active || !topic) return;
     if (nav.agents.some((agent) => agent.status === 'waiting' && agent.projectId === project.id && agent.workspaceId === topic.id)) api.seenAgents(project.id, topic.id).catch(() => {});
   }, [active, nav, topic && topic.id, project.id]); // eslint-disable-line react-hooks/exhaustive-deps
-  const next = React.useMemo(() => {
-    const place = nextPlace({ here: topic ? { projectId: project.id, workspaceId: topic.id } : null, recent: nav.recent, agents: nav.agents });
-    if (!place || place.projectId !== project.id) return place;
-    const held = index.get(place.workspaceId);
-    return held ? { ...place, name: held.node.name } : null; // this project's names are the tree's, current after a rename
-  }, [nav, topic, project.id, index]);
-  const goTo = (place) => {
-    if (!place) return;
-    if (place.projectId === project.id) selectTopic(place.workspaceId);
-    else if (onOpenElsewhere) onOpenElsewhere(place.projectId, place.workspaceId);
-  };
-  // ⌘J, wherever the keyboard is: the app's pages see it in the capture phase, before the editor or a terminal can; a
-  // Browser page has the main process send it (src/main/browser/views.cjs).
-  const goNext = React.useRef(null);
-  goNext.current = () => goTo(next);
-  React.useEffect(() => {
-    if (!active) return undefined;
-    const onKey = (event) => {
-      if (!event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || String(event.key).toLowerCase() !== 'j') return;
-      event.preventDefault();
-      event.stopPropagation();
-      if (!event.repeat) goNext.current();
-    };
-    window.addEventListener('keydown', onKey, true);
-    const off = api.onNextWorkspace(() => goNext.current());
-    return () => { window.removeEventListener('keydown', onKey, true); off(); };
-  }, [active]);
 
   // The section's Add workspace creates a root; a row's + creates a child of that row.
   const addTopic = async (parentId = null, name = '') => {
@@ -627,15 +613,12 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   };
 
   /* --------------------------------------------------------------- sidebar */
-  // Everything that brings a library item into this workspace links it (context, and off `removed`); adding makes the
+  // Context is shared by this project's workspaces. Linking records where it
+  // was added and includes it in the durable project collection; adding makes the
   // row first and is refused when the library already holds the thing (library.addItem). The row that arrives flashes.
 
-  const linkIds = async (ids, arriving = []) => {
+  const linkIds = async (ids) => {
     if (!topic || !ids.length) return;
-    const repo = ids.map((id) => byId.get(id) || arriving.find((row) => row.id === id)).find(canRunRepository);
-    // Select Repo when attaching. Build completion only notifies; opening the
-    // live preview remains an explicit user action.
-    if (repo) { setRepoId(repo.id); setRightMode('repo'); }
     const saved = await api.linkToWorkspace(project.id, topic.id, ids);
     await reload();
     flash(ids[ids.length - 1]);
@@ -646,7 +629,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const addInput = async (input, name) => {
     if (!topic) throw new Error('Open a workspace first');
     const row = await api.addLibraryItem(input, name ? { name } : undefined);
-    await linkIds([row.id], [row]);
+    await linkIds([row.id]);
     return row;
   };
 
@@ -704,7 +687,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     else if (result.kind === 'note') await makeNote(typed, true);
   };
 
-  // The trash: off this workspace, not out of the library. A note's tab closes and a paper leaves the right pane.
+  // The trash removes shared sidebar context, retaining the library entry/file.
   const trashRow = async (row) => {
     if (!topic) return;
     try {
@@ -946,15 +929,13 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onNewNote={() => makeNote('', true).catch(onError)}
           onNewChild={makeChild}
           onPickRepo={pickRepo}
+          onBrowseRepo={repo => openLink(repo.url)}
           onOpenHeld={(projectId, workspaceId) => { if (projectId === project.id && workspaceId && index.has(workspaceId)) selectTopic(workspaceId); }}
           onTrashRow={trashRow}
-          trashFull={!!(topic && topic.removed && topic.removed.length) || postItTrash > 0}
+          trashFull={!!project.removedContext?.length || postItTrash > 0}
           postItTrash={active ? { count: postItTrash, load: () => api.postItsTrashed(project.id), restore: (id) => api.postItsRestore(project.id, id) } : null}
           postItDrag={postItDrag}
           trashRef={trashRef}
-          next={next}
-          projectId={project.id}
-          onGoNext={goTo}
           onPostIt={active ? () => api.postItsCreate(project.id).catch(onError) : null}
         />
 
@@ -982,6 +963,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
               onCopyText={(value) => api.copyText(value)}
               onAsk={askBart}
               onStopAsk={(askId) => api.stopBart(askId).catch((error) => onError(error))}
+              onShowLocalBuild={id => window.dispatchEvent(new CustomEvent(OPEN_LOCAL_BUILD_NOTIFICATION, { detail: { id } }))}
               viewScope={topic ? topic.id : null}
               viewOf={viewOf}
               onView={recordPosition}
@@ -1007,9 +989,6 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           mode={rightMode}
           terminalRequest={terminalRequest}
           onActiveTerminal={setActiveTerminalId}
-          repositories={library.filter(canRunRepository)}
-          repoId={repoId}
-          onRepo={setRepoId}
           onError={onError}
           projectDir={project.directory || null}
           projectId={project.id}

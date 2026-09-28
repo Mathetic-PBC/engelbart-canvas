@@ -237,7 +237,9 @@ test('the real runner: command lines, private folders, the subscription, and a r
   const claude = await bart.ask(ctx, project.id, { askId: 'r2', ref, workspaceId: workspace.id, text: '--opus why?' });
   assert.equal(claude.lines[0], 'bart> from claude');
   const last = calls[calls.length - 1];
-  assert.match(last.command, /^exec claude -p --output-format stream-json --verbose --include-partial-messages --session-id "\$ENGELBART_BART_SESSION" --restricted --setting-sources "" --strict-mcp-config --tools "Read,Grep,Glob,WebSearch,WebFetch" --allowedTools "Read,Grep,Glob,WebSearch,WebFetch" --add-dir "\$ENGELBART_BART_DIR0" --add-dir "\$ENGELBART_BART_DIR1" --model "\$ENGELBART_BART_MODEL" --effort high /);
+  const subscriptionCommand = require('../src/main/bart/claude-command.cjs').CLAUDE_SUBSCRIPTION_COMMAND;
+  assert.ok(last.command.startsWith(`exec ${subscriptionCommand} `));
+  assert.match(last.command.slice(`exec ${subscriptionCommand} `.length), /^-p --output-format stream-json --verbose --include-partial-messages --session-id "\$ENGELBART_BART_SESSION" --restricted --setting-sources "" --strict-mcp-config --tools "Read,Grep,Glob,WebSearch,WebFetch" --allowedTools "Read,Grep,Glob,WebSearch,WebFetch" --add-dir "\$ENGELBART_BART_DIR0" --add-dir "\$ENGELBART_BART_DIR1" --model "\$ENGELBART_BART_MODEL" --effort high /);
   assert.deepEqual([last.env.ENGELBART_BART_MODEL, last.env.ENGELBART_BART_DIR0, last.env.ENGELBART_BART_DIR1], ['opus', project.directory, ctx.dataRoot]);
   assert.match(last.input, /chose this model and effort by hand/);
 });
@@ -361,13 +363,13 @@ test('a follow-up resumes the session inside the window and is given everything 
   assert.equal(second.lines[0], 'bart> answer 2');
   assert.match(calls[1].command, /^exec codex exec resume "\$ENGELBART_BART_SESSION" /);
   assert.equal(calls[1].env.ENGELBART_BART_SESSION, '01a0bc2d-7c18-77d2-8b21-3cc7e942cbcc');
-  assert.match(calls[1].input, /^<level>[^\n]+<\/level>\n\n<question>\nand then\?\n<\/question>$/, 'inside the window only the new question is sent');
+  assert.match(calls[1].input, /^<level>[^\n]+<\/level>\n\n<build_capability>[\s\S]+<\/build_capability>\n\n<question>\nand then\?\n<\/question>$/, 'inside the window the new question and current capability contract are sent');
 
   // The person edited the first answer: the session's memory and the document disagree, so the document wins.
   const edited = [{ question: 'why?', answer: 'answer 1, corrected' }, { question: 'and then?', answer: 'answer 2' }];
   await ask('f2', 'a third', edited);
   assert.match(calls[2].command, /^exec codex exec --color never /);
-  assert.match(calls[2].input, /^<engelbart>[\s\S]+<context_json>[\s\S]+<workspace name="Agents">[\s\S]+<<< this is the question being asked now >>>[\s\S]+<conversation>\n<turn n="1">\n<asked>\nwhy\?\n<\/asked>\n<answered>\nanswer 1, corrected\n<\/answered>[\s\S]+<turn n="2">[\s\S]+<\/conversation>\n\n<level>[^\n]+<\/level>\n\n<question>\na third\n<\/question>$/, 'the same context flow as a first question, with the earlier turns added');
+  assert.match(calls[2].input, /^<engelbart>[\s\S]+<context_json>[\s\S]+<workspace name="Agents">[\s\S]+<<< this is the question being asked now >>>[\s\S]+<conversation>\n<turn n="1">\n<asked>\nwhy\?\n<\/asked>\n<answered>\nanswer 1, corrected\n<\/answered>[\s\S]+<turn n="2">[\s\S]+<\/conversation>\n\n<level>[^\n]+<\/level>\n\n<build_capability>[\s\S]+<\/build_capability>\n\n<question>\na third\n<\/question>$/, 'the same context flow as a first question, with the earlier turns added');
 
   // Idle for 30 minutes (here: let go by hand): nothing to resume.
   const third = [...edited, { question: 'a third', answer: 'answer 3' }];

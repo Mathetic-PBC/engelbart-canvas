@@ -10,22 +10,40 @@ const { buildSync } = require('esbuild');
 const filename = path.join(__dirname, '__annotation-ui.cjs');
 const built = buildSync({ entryPoints: [path.join(__dirname, '../src/renderer/workspace/InterfaceAnnotations.jsx')], bundle: true, platform: 'node', format: 'cjs', jsx: 'automatic', write: false, external: ['react', 'react-dom'], loader: { '.css': 'empty' } });
 const compiled = new Module(filename, module); compiled.paths = module.paths;
+// Render portal contents inline for markup assertions; real placement and
+// dismissal are covered by the isolated Electron interaction test.
+compiled.require = function(id) { return id === 'react-dom' ? { createPortal: child => child } : Module.prototype.require.call(this, id); };
 const previousWindow = global.window;
 global.window = { engelbartAPI: {} };
 try { compiled._compile(built.outputFiles[0].text, filename); }
 finally { if (previousWindow === undefined) delete global.window; else global.window = previousWindow; }
-const { default: InterfaceAnnotations, annotationPosition } = compiled.exports;
+const { default: InterfaceAnnotations, annotationPosition, annotationListPosition } = compiled.exports;
 
 test('direct selection adds no sidebar, banner, or layout content; browsing notes is explicit', () => {
   const props = { projectId: 'project', tabId: 'tab', url: 'https://example.com', onClose() {} };
   assert.equal(renderToStaticMarkup(React.createElement(InterfaceAnnotations, { ...props, mode: 'select' })), '');
-  const browse = renderToStaticMarkup(React.createElement(InterfaceAnnotations, { ...props, mode: 'browse' }));
-  assert.match(browse, /<aside class="interface-annotations"/);
-  assert.doesNotMatch(browse, /Selecting · Esc to stop|Point at an element/);
+  const previousDocument = global.document;
+  let browse;
+  try {
+    global.document = { body: {} };
+    browse = renderToStaticMarkup(React.createElement(InterfaceAnnotations, { ...props, mode: 'browse' }));
+  } finally { if (previousDocument === undefined) delete global.document; else global.document = previousDocument; }
+  assert.match(browse, /role="dialog" aria-label="Annotations" data-overlay="1" class="stage-popover interface-annotations ia-popover ia-browser"/);
+  assert.match(browse, /class="ia-list" aria-busy="true"/);
+  assert.match(browse, /<strong>Annotations<\/strong>/);
+  assert.doesNotMatch(browse, /<aside|ia-pick|Select an element|Selecting · Esc to stop|Point at an element/);
   const source = fs.readFileSync(path.join(__dirname, '../src/renderer/workspace/Stage.jsx'), 'utf8');
   assert.match(source, /setAnnotationMode\(annotating \? null : 'select'\)/);
   assert.match(source, /data-annotations-browse="1"[\s\S]*?setAnnotationMode\('browse'\)/);
   assert.match(source, /Annotating · Esc to cancel/);
+  assert.doesNotMatch(source, /data-saved-annotations|annotationSummary|Notes ·/);
+  assert.match(source, /data-annotate-toggle="1"[^>]+aria-label=\{annotating[^>]+hint=\{annotating/);
+  assert.match(source, /data-annotate-toggle="1"[\s\S]*?<ANNOTATE \/>/);
+  assert.match(source, /data-record-toggle="1"[\s\S]*?aria-label=\{recordingLabel\}[^>]+aria-pressed=\{recordingActive\}/);
+  assert.match(source, /data-record-toggle="1"[\s\S]*?<svg/);
+  assert.match(source, /recordingActive \? <STOP_RECORDING \/> : <RECORD \/>/);
+  assert.match(source, /tip && <SaveTip id=\{tipId\} text=\{hint\} overlay/);
+  assert.doesNotMatch(source, /data-annotation-markers|Keep markers visible|ANNOTATION_MARKERS_KEY|keepAnnotationMarkers/);
 });
 
 test('composer stays near its target and flips or clamps within the browser slot', () => {
@@ -39,10 +57,18 @@ test('composer stays near its target and flips or clamps within the browser slot
   assert.equal(scaled.left, 400); assert.equal(scaled.top, 368);
 });
 
+test('saved-annotation browser stays compact and inside narrow or short Stage viewports', () => {
+  const slot = { left: 200, top: 100, right: 1000, bottom: 700, width: 800, height: 600 };
+  assert.deepEqual(annotationListPosition(slot), { left: 692, top: 108, width: 300, maxHeight: 420 });
+  assert.deepEqual(annotationListPosition({ ...slot, right: 460, width: 260 }), { left: 208, top: 108, width: 244, maxHeight: 420 });
+  assert.equal(annotationListPosition({ ...slot, height: 200, bottom: 300 }).maxHeight, 184);
+});
+
 test('annotation styles and owned page overlay use neutral, non-debug presentation', () => {
-  const css = fs.readFileSync(path.join(__dirname, '../src/renderer/workspace/interface-annotations.css'), 'utf8');
+  const css = ['interface-annotations.css', 'stage-popover.css'].map(file => fs.readFileSync(path.join(__dirname, '../src/renderer/workspace', file), 'utf8')).join('\n');
   const page = fs.readFileSync(path.join(__dirname, '../src/main/browser/annotation-page.cjs'), 'utf8');
   assert.doesNotMatch(css + page, /#2563eb|#1d4ed8|#eff6ff|crosshair|Math\.round\(r\.w\)/);
-  assert.match(page, /chip\.textContent = targetLabel\(describe\(hit\.el\)\)/);
-  assert.match(css, /\.interface-annotations\.ia-composer\{position:fixed/);
+  assert.doesNotMatch(page, /\bchip\b/);
+  assert.match(css, /\.stage-popover\{[^}]*position:fixed/);
+  assert.doesNotMatch(css, /flex:0 0 260px|border-left:/);
 });

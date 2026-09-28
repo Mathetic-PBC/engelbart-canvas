@@ -1,0 +1,7 @@
+.stage-toolbar{position:relative;flex:none;display:flex;align-items:center;gap:8px;padding:4px 10px;border-bottom:1px solid #eaeaea}
+[data-stage-address]{container:stage-address / inline-size}
+.stage-navigation,.stage-page-actions{flex:none;display:flex;align-items:center;gap:2px}
+.stage-page-actions{margin-left:4px}
+.stage-save-separator{flex:none;display:flex;align-items:center;height:18px;padding-left:4px;border-left:1px solid #e2e2e2}
+.stage-save-compact{display:none}
+@container stage-address (max-width:220px){.stage-save-label{display:none}.stage-save-compact{display:inline}}

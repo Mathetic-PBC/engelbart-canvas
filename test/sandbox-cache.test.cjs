@@ -49,6 +49,22 @@ test('derived template inherits the runner and copies only explicit cache toolin
   assert.throws(() => cacheTemplate(Template, 'runner; echo bad', profile));
 });
 
+test('cache builder accepts an optional disk target and rejects invalid values before building', () => {
+  const { spawnSync } = require('node:child_process');
+  const path = require('node:path');
+  const script = path.join(__dirname, '../scripts/build-sandbox-cache.cjs');
+  for (const value of ['0', '4096']) {
+    const run = spawnSync(process.execPath, [script, '--base', 'engelbart-runner', '--name', 'cache-dry-test', '--min-free-disk-mb', value, '--dry-run'], { encoding: 'utf8' });
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(JSON.parse(run.stdout).fromTemplate, 'engelbart-runner');
+  }
+  for (const value of ['-1', '1.5', 'invalid', '9007199254740992']) {
+    const run = spawnSync(process.execPath, [script, `--min-free-disk-mb=${value}`, '--dry-run'], { encoding: 'utf8' });
+    assert.equal(run.status, 1);
+    assert.match(run.stderr, /must be a non-negative integer/);
+  }
+});
+
 function fakeSandbox(failure) {
   const seen = { killed: 0, commands: [], writes: [] };
   const sandbox = {

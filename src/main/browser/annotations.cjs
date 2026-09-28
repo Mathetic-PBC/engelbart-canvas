@@ -3,11 +3,19 @@
 const { source, WORLD } = require('./annotation-page.cjs');
 const { anchor } = require('../../shared/interface-annotations.cjs');
 
+// Placement is transient UI data, never part of a saved anchor or matching.
+function placement(bounds) {
+  const keys = ['x', 'y', 'w', 'h', 'viewportWidth', 'viewportHeight'];
+  return bounds && keys.every(key => Number.isFinite(bounds[key]) && Math.abs(bounds[key]) <= 1e6)
+    && bounds.w >= 0 && bounds.h >= 0 && bounds.viewportWidth > 0 && bounds.viewportHeight > 0
+    ? Object.fromEntries(keys.map(key => [key, bounds[key]])) : null;
+}
+
 function createAnnotations(contents, report) {
-  let enabled = false, installed = false, revision = 0, timer = null, pending = Promise.resolve();
+  let enabled = false, revision = 0, timer = null, pending = Promise.resolve();
   const alive = () => !contents.isDestroyed();
   function reset() {
-    revision++; installed = false; enabled = false; clearTimeout(timer);
+    revision++; enabled = false; clearTimeout(timer);
     report({ type: 'navigated' });
   }
   function emit(events, at) {
@@ -15,20 +23,34 @@ function createAnnotations(contents, report) {
     for (const event of Array.isArray(events) ? events.slice(-30) : []) {
       if (event.type === 'picked') {
         // Ephemeral popover placement, never part of a saved anchor or matching.
-        const bounds = event.bounds;
-        const valid = bounds && ['x', 'y', 'w', 'h', 'viewportWidth', 'viewportHeight'].every((key) => Number.isFinite(bounds[key]) && Math.abs(bounds[key]) <= 1e6)
-          && bounds.w >= 0 && bounds.h >= 0 && bounds.viewportWidth > 0 && bounds.viewportHeight > 0;
-        report({ type: 'picked', anchor: anchor(event.anchor), ...(valid ? { bounds: Object.fromEntries(['x', 'y', 'w', 'h', 'viewportWidth', 'viewportHeight'].map((key) => [key, bounds[key]])) } : {}) });
+        const bounds = placement(event.bounds);
+        report({ type: 'picked', anchor: anchor(event.anchor), ...(bounds ? { bounds } : {}) });
       }
-      else if (['marker', 'exited', 'status', 'navigated'].includes(event.type)) report(event);
+      else if (['marker', 'located'].includes(event.type)) {
+        if (typeof event.id === 'string' && event.id.length <= 64) report({ type: event.type, id: event.id, bounds: placement(event.bounds) });
+      }
+      else if (['exited', 'status', 'navigated'].includes(event.type)) report(event);
     }
   }
   async function execute(message, at) {
     if (!alive() || revision !== at) return;
-    const code = `${installed ? '' : source}\nglobalThis.__engelbartAnnotations.command(${JSON.stringify(message)})`;
-    const result = await contents.executeJavaScriptInIsolatedWorld(WORLD, [{ code }]);
-    if (revision !== at) return;
-    installed = true; emit(result, at);
+    // Check in the actual page world, not a main-process "installed" cache:
+    // navigation can replace the context between commands. The installer is
+    // idempotent; cleanup must never install a helper just to remove its overlay.
+    const payload = JSON.stringify(message);
+    const code = message.type === 'clear'
+      ? `globalThis.__engelbartAnnotations?.command(${payload}) ?? []`
+      : `${source}\nglobalThis.__engelbartAnnotations.command(${payload})`;
+    let result;
+    try { result = await contents.executeJavaScriptInIsolatedWorld(WORLD, [{ code }]); }
+    catch (error) {
+      // A cancelled document/tab no longer has an overlay to update. Preserve
+      // real errors in the current document instead of swallowing all failures.
+      if (!alive() || revision !== at) return;
+      throw error;
+    }
+    if (!alive() || revision !== at) return;
+    emit(result, at);
   }
   function enqueue(message) {
     const at = revision;
@@ -74,9 +96,8 @@ function createAnnotations(contents, report) {
     if (!main) return;
     // An in-page navigation keeps the isolated world and its listeners alive.
     // Clear that world before the next show; a full navigation destroys it.
-    const hadScript = installed;
     reset();
-    if (inPlace && hadScript) void enqueue({ type: 'clear' }).catch(() => {});
+    if (inPlace) void enqueue({ type: 'clear' }).catch(() => {});
   };
   contents.on('did-start-navigation', navigate);
   contents.on('render-process-gone', reset);

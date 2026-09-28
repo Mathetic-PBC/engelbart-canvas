@@ -59,6 +59,25 @@ export function tabPlace(value) {
   return host || v;
 }
 
+/** Short labels omit repeated site branding; callers keep the full title for hover. */
+export function compactPageTitle(title, url) {
+  const text = String(title || '').trim();
+  let page;
+  try { page = new URL(url); } catch { return text; }
+  if (!/^https?:$/.test(page.protocol)) return text;
+  const brand = page.hostname.replace(/^www\./, '').split('.')[0];
+  if (!/^[a-z][a-z0-9-]+$/i.test(brand)) return text;
+  const short = text.replace(new RegExp(`^${brand}\\s+[-–—|·]\\s+`, 'i'), '')
+    .replace(new RegExp(`\\s+[-–—|·]\\s+${brand}$`, 'i'), '').trim() || text;
+  // GitHub repository landing pages often append the entire description.
+  // Subpages keep their own title so issues, pull requests and files stay distinct.
+  if (page.hostname === 'github.com' && /^\/[\w.-]+\/[\w.-]+\/?$/.test(page.pathname)) {
+    const repo = page.pathname.replace(/^\/|\/$/g, '');
+    if (short === repo || short.startsWith(`${repo}: `)) return repo;
+  }
+  return short;
+}
+
 /** A library row the Stage can show: anything but a note (notes open in the middle), a pasted image, or a folder that is only a folder. */
 export function onStage(row) {
   if (!row || isNote(row) || row.type === 'workspace' || row.type === 'child') return false;

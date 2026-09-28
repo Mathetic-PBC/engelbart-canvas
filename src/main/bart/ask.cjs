@@ -38,6 +38,8 @@ const { resolveShell, sanitizeEnvironment } = require('../terminal/launch.cjs');
 const { scrubAgentSession } = require('../shell-rc.cjs');
 const { NOT_THE_SUBSCRIPTION, prepareCodexHome, lastResultLine } = require('../context/summarizer.cjs');
 const { BART_SYSTEM_PROMPT } = require('./system-prompt.cjs');
+const { BUILD_PROPOSAL_PROMPT, parseBuildProposal } = require('./build-proposal.cjs');
+const { CLAUDE_SUBSCRIPTION_COMMAND } = require('./claude-command.cjs');
 const { readQuestion, withChoice } = require('./models.cjs');
 const { buildContext, conversationBlock } = require('./context.cjs');
 const { replyLines, answerText } = require('./reply.cjs');
@@ -122,8 +124,9 @@ function createThreads({ idleMs = THREAD_IDLE_MS, setTimer = setTimeout, clearTi
 /** What a question is given: everything, for a new session; the question alone, for a session that already holds the rest. */
 function firstMessage({ context, prior, question, resumed }) {
   const asked = `<question>\n${question}\n</question>`;
-  if (resumed) return (level) => [level, asked].join('\n\n');
-  return (level) => [context.head, context.contextJson, context.documents, conversationBlock(prior), level, asked].filter(Boolean).join('\n\n');
+  const capability = `<build_capability>\n${BUILD_PROPOSAL_PROMPT}\n</build_capability>`;
+  if (resumed) return (level) => [level, capability, asked].join('\n\n');
+  return (level) => [context.head, context.contextJson, context.documents, conversationBlock(prior), level, capability, asked].filter(Boolean).join('\n\n');
 }
 
 /**
@@ -186,7 +189,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
       done: () => { try { fs.unlinkSync(promptFile); } catch { /* already gone */ } },
       turn: async ({ level, message, session }) => {
         fs.writeFileSync(`${stem}.input.txt`, message, { mode: 0o600 });
-        const command = `exec claude -p --output-format stream-json --verbose --include-partial-messages ${session ? '--resume' : '--session-id'} "$ENGELBART_BART_SESSION" --restricted --setting-sources "" --strict-mcp-config --tools "${CLAUDE_TOOLS}" --allowedTools "${CLAUDE_TOOLS}" ${grants} --model "$ENGELBART_BART_MODEL" --effort ${level.effort} --system-prompt-file "$ENGELBART_BART_PROMPT" < "$ENGELBART_BART_INPUT"`;
+        const command = `exec ${CLAUDE_SUBSCRIPTION_COMMAND} -p --output-format stream-json --verbose --include-partial-messages ${session ? '--resume' : '--session-id'} "$ENGELBART_BART_SESSION" --restricted --setting-sources "" --strict-mcp-config --tools "${CLAUDE_TOOLS}" --allowedTools "${CLAUDE_TOOLS}" ${grants} --model "$ENGELBART_BART_MODEL" --effort ${level.effort} --system-prompt-file "$ENGELBART_BART_PROMPT" < "$ENGELBART_BART_INPUT"`;
         const env = childEnvironment({ ENGELBART_BART_SESSION: id, ENGELBART_BART_MODEL: level.model, ENGELBART_BART_PROMPT: promptFile, ENGELBART_BART_INPUT: `${stem}.input.txt`, ...Object.fromEntries(dirs.map((dir, n) => [`ENGELBART_BART_DIR${n}`, dir])) });
         const { stdout, failure } = await execute(command, cwd, env, signal, (event) => onUpdate(claudeUpdate(event, short)));
         if (stopped(signal)) throw new BartError('stopped', 'Stopped.');
@@ -259,6 +262,10 @@ function createBart({ readModels, environment = process.env, runDirectory = path
       // A session that will not resume (its file is gone, the CLI changed) is not the person's problem: start again from the document.
       try { out = await once(held ? held.session : null); } catch (error) { if (!held || error.kind === 'stopped') throw error; out = await once(null); }
       const meta = { provider, level: { name: out.level.name, effort: out.level.effort, model: out.level.model }, trail: out.trail.map((step) => ({ name: step.name, effort: step.effort, why: step.why })), ms: out.ms, pinned };
+      const buildProposal = parseBuildProposal(out.text);
+      // A build's eventual answer differs from this routing result; do not keep
+      // a resumable read-only session under text that never enters the document.
+      if (buildProposal) return { buildProposal, meta };
       // Kept under what the document will say once this answer is in it: the next follow-up is found by that.
       if (out.session) threads.keep(threadKey(projectId, ref, [...prior, { question: String(text).trim(), answer: answerText(out.text) }]), { provider, session: out.session, projectId, workspaceId });
       return { lines: replyLines(out.text, meta), meta };

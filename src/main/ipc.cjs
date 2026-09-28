@@ -75,6 +75,10 @@ function createStore({ homeDir, fixturesDir, inspectPdf: readPdf = null, afterOp
       // rules) is brought up to them before anyone reads it: about 30 ms a pdf, once. Summaries are
       // not touched. A failure leaves the rows due for the next launch; the library still opens.
       try { await library.recategorize(next, { inspectPdf: readPdf }); } catch { /* still due */ }
+      // Restore old captures before the initial library read, including sites
+      // that had never been explicitly saved to the library.
+      try { await interfaceAnnotations.restore(next); await require('./store/recordings.cjs').restore(next); }
+      catch (error) { console.warn('Could not restore capture sources:', error.message); }
       if (afterOpen) setTimeout(() => { Promise.resolve().then(() => afterOpen(next)).catch(() => {}); }, 0);
       return next;
     })();
@@ -111,7 +115,7 @@ function createStore({ homeDir, fixturesDir, inspectPdf: readPdf = null, afterOp
   return { layout, context, config: describe, setTestMode, resetTestData, close: closeAll };
 }
 
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, sandbox, readModels, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), readRepoReadme = createRepoReadmeReader(), github = null, openGithubPage = () => {} }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, localPreviews = null, sandbox, readModels, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), readRepoReadme = createRepoReadmeReader(), github = null, google = null, zotero = null, overleaf = null, openGithubPage = () => {} }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const withCtx = (fn) => async (...args) => fn(await store.context(), ...args);
   let changingMode = false;
@@ -122,7 +126,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     if (typeof value !== 'boolean') throw new TypeError('testMode must be a boolean');
     if (changingMode) throw new Error('Data mode is already changing');
     changingMode = true;
-    try { await additions.catch(() => {}); await beforeContextChange(); await sandbox?.close(); return await store.setTestMode(value); }
+    try { await additions.catch(() => {}); await beforeContextChange(); await localPreviews?.close(); await sandbox?.close(); return await store.setTestMode(value); }
     finally { changingMode = false; }
   });
   handle('reset-test-data', async () => {
@@ -132,6 +136,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     try {
       await additions.catch(() => {});
       await beforeContextChange();
+      await localPreviews?.close();
       await sandbox?.close();
       const config = await store.resetTestData();
       return { reset: true, ...config };
@@ -147,9 +152,9 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   const navChanged = () => notify('engelbart:nav', {});
   handle('nav', withCtx((ctx) => projects.readNav(ctx)));
 
-  // GitHub (src/main/github/connection.cjs): signing in through the default browser, and the repositories the App can read.
+  // GitHub (src/main/github/connection.cjs): signing in through Stage, and the repositories the App can read.
   // Every change of the sign-in is announced on `engelbart:github` with the status. `github-open` shows GitHub's device
-  // authorization page again, or the App's install page, in the default browser.
+  // authorization page again, or the App's install page, in Stage.
   const gh = () => { if (!github) throw new Error('GitHub is not available'); return github; };
   handle('github-status', () => (github ? github.status() : { configured: false, connected: false, pending: null, error: '', installUrl: '' }));
   handle('github-connect', () => gh().connect());
@@ -163,6 +168,42 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     await openGithubPage(url);
     return true;
   });
+  // Google Docs exposes only account status, explicit auth actions and recent
+  // document metadata. Authentication stays in Stage's browser session.
+  const docs = () => { if (!google) throw new Error('Google Docs is not available'); return google; };
+  handle('google-status', () => google ? google.status() : { configured: false, connected: false, pending: null, account: null, error: '' });
+  handle('google-connect', () => docs().connect());
+  handle('google-cancel', () => docs().cancel());
+  handle('google-disconnect', () => docs().disconnect());
+  handle('google-reopen', () => docs().reopen());
+  handle('google-documents', (refresh = false) => {
+    if (typeof refresh !== 'boolean') throw new TypeError('Refresh must be a boolean');
+    return docs().documents(refresh);
+  });
+  handle('google-open-document', id => docs().openDocument(str(id, 'Google document id', 200)));
+  const papers = () => { if (!zotero) throw new Error('Zotero is not available'); return zotero; };
+  handle('zotero-status', () => zotero ? zotero.status() : { configured: false, connected: false, pending: null, account: null, error: '' });
+  handle('zotero-connect', () => papers().connect());
+  handle('zotero-cancel', () => papers().cancel());
+  handle('zotero-disconnect', () => papers().disconnect());
+  handle('zotero-reopen', () => papers().reopen());
+  handle('zotero-papers', (refresh = false) => {
+    if (typeof refresh !== 'boolean') throw new TypeError('Refresh must be a boolean');
+    return papers().papers(refresh);
+  });
+  handle('zotero-open-paper', id => papers().openPaper(str(id, 'Zotero item key', 8)));
+
+  const leaf = () => { if (!overleaf) throw new Error('Overleaf is not available'); return overleaf; };
+  handle('overleaf-status', () => overleaf ? overleaf.status() : { configured: false, connected: false, pending: null, account: null, error: '' });
+  handle('overleaf-connect', () => leaf().connect());
+  handle('overleaf-cancel', () => leaf().cancel());
+  handle('overleaf-disconnect', () => leaf().disconnect());
+  handle('overleaf-reopen', () => leaf().reopen());
+  handle('overleaf-projects', (refresh = false) => {
+    if (typeof refresh !== 'boolean') throw new TypeError('Refresh must be a boolean');
+    return leaf().projects(refresh);
+  });
+  handle('overleaf-open-project', id => leaf().openProject(str(id, 'Overleaf project id', 24)));
   handle('record-edit', withCtx((ctx, pid, wid) => { projects.recordEdit(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); navChanged(); return true; }));
   handle('seen-agents', withCtx((ctx, pid, wid) => { const seen = projects.seenAgents(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); if (seen) navChanged(); return seen; }));
   handle('list-projects', withCtx((ctx) => projects.listProjects(ctx)));
@@ -184,6 +225,10 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   }));
   handle('rename-workspace', withCtx((ctx, pid, wid, name) => projects.renameWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(name, 'name'))));
   handle('delete-workspace', withCtx(async (ctx, pid, wid) => {
+    if (localPreviews) {
+      const { workspace } = projects.findWorkspace(ctx, pid, wid);
+      for (const id of [workspace.id, ...projects.flattenWorkspaces(workspace.dir).map(child => child.id)]) await localPreviews.stop(ctx, pid, id);
+    }
     const result = await projects.deleteWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64));
     navChanged();
     return result;
@@ -261,9 +306,19 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       const choice = value.choice && typeof value.choice === 'object' ? { model: str(value.choice.model, 'model', 24), effort: str(value.choice.effort, 'effort', 24) } : null;
       if (choice && !/^[a-z][a-z0-9]*$/.test(choice.model + choice.effort)) throw new TypeError('choice is invalid');
       const question = { askId, ref: docRef(value.ref), workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice };
+      if (changingMode) throw new Error('Data mode is changing. Try again when it finishes.');
+      const building = require('./bart/question.cjs').readFlags(question.text, readModels()).build;
+      if (building && !localPreviews) throw new Error('Local interface builds are not available.');
       // The ask is an agent of its workspace: running now, waiting for you once its answer (or failure) has landed.
       started = track(() => projects.agentStarted(ctx, { id: askId, kind: 'bart', projectId: pid, workspaceId: question.workspaceId, doc: question.ref }));
-      const out = await bart.ask(ctx, str(pid, 'project id', 64), question, { onProgress: (progress) => notify('engelbart:bart-progress', { askId, ...progress }) });
+      const options = { onProgress: progress => notify('engelbart:bart-progress', { askId, ...progress }) };
+      const projectId = str(pid, 'project id', 64);
+      let out = await (building ? localPreviews.build : bart.ask)(ctx, projectId, question, options);
+      if (!building && out.buildProposal) {
+        if (changingMode) throw new Error('Data mode is changing. Try again when it finishes.');
+        if (!localPreviews) throw new Error('Local interface builds are not available.');
+        out = await localPreviews.build(ctx, projectId, { ...question, buildRequest: out.buildProposal.request }, options);
+      }
       if (started) track(() => projects.agentFinished(ctx, askId));
       return out;
     } catch (error) {
@@ -273,7 +328,30 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       return { failed: true, lines: failureLines(error && error.message) };
     }
   }));
-  handle('stop-bart', (askId) => bart.stop(str(askId, 'ask id', 64)));
+  handle('stop-bart', (askId) => {
+    const id = str(askId, 'ask id', 64);
+    return localPreviews?.stopAsk(id) || bart.stop(id);
+  });
+  const local = () => { if (!localPreviews) throw new Error('Local previews are not available.'); return localPreviews; };
+  handle('local-preview-list', withCtx(ctx => local().list(ctx)));
+  handle('local-preview', withCtx((ctx, pid, wid) => local().get(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64))));
+  handle('local-preview-stop', withCtx((ctx, pid, wid) => local().stop(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64))));
+  handle('local-preview-approve', withCtx((ctx, pid, wid, approvalId, approved) => {
+    if (changingMode) throw new Error('Data mode is changing.');
+    if (typeof approved !== 'boolean') throw new TypeError('Approval must be true or false.');
+    return local().approve(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(approvalId, 'approval id', 64), approved);
+  }));
+  handle('local-preview-reveal', withCtx((ctx, pid, wid) => {
+    const preview = local().get(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64));
+    if (!preview) throw new Error('No local interface has been built in this workspace.');
+    return revealItem(preview.directory);
+  }));
+  handle('local-preview-restart', withCtx(async (ctx, pid, wid) => {
+    if (changingMode) throw new Error('Data mode is changing.');
+    const projectId = str(pid, 'project id', 64), workspaceId = str(wid, 'workspace id', 64);
+    try { return await local().restart(ctx, projectId, workspaceId); }
+    catch (error) { if (error.kind === 'stopped') return local().get(ctx, projectId, workspaceId); throw error; }
+  }));
   // What the @bart line's selector offers and what its flags are checked against: the models file,
   // cut down to the providers config.json lists. Names and keys only; the file's prose stays here.
   handle('bart-models', () => { const { provider, providers } = readModels(); return { provider, providers }; });
@@ -366,9 +444,14 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('read-library-file', withCtx((ctx, id) => library.readLibraryFile(ctx, str(id, 'library id', 64))));
   handle('read-annotations', withCtx((ctx, id) => library.readAnnotations(ctx, str(id, 'library id', 64))));
   handle('interface-annotations', withCtx((ctx, scope) => interfaceAnnotations.list(ctx, scope)));
-  handle('create-interface-annotation', withCtx((ctx, scope, note) => interfaceAnnotations.create(ctx, scope, note)));
-  handle('edit-interface-annotation', withCtx((ctx, scope, id, body) => interfaceAnnotations.edit(ctx, scope, str(id, 'annotation id', 64), body)));
-  handle('delete-interface-annotation', withCtx((ctx, scope, id) => interfaceAnnotations.remove(ctx, scope, str(id, 'annotation id', 64))));
+  const annotationChange = fn => withCtx(async (...args) => {
+    const result = await fn(...args);
+    notify('engelbart:library-changed', {});
+    return result;
+  });
+  handle('create-interface-annotation', annotationChange((ctx, scope, note) => interfaceAnnotations.create(ctx, scope, note)));
+  handle('edit-interface-annotation', annotationChange((ctx, scope, id, body) => interfaceAnnotations.edit(ctx, scope, str(id, 'annotation id', 64), body)));
+  handle('delete-interface-annotation', annotationChange((ctx, scope, id) => interfaceAnnotations.remove(ctx, scope, str(id, 'annotation id', 64))));
   handle('write-annotations', withCtx((ctx, id, value) => library.writeAnnotations(ctx, str(id, 'library id', 64), value)));
   // Ink on a pdf in the Browser pane, by its address (a link, or a file: address inside the home directory).
   handle('read-page-annotations', withCtx((ctx, input) => library.readPageAnnotations(ctx, str(input, 'address', 8192))));

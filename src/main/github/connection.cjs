@@ -191,7 +191,7 @@ function createGithub({
         pending = null; problem = error.message; changed();
       });
       try { await openVerification(flow.verificationUri); }
-      catch (error) { cancel(); problem = 'Could not open your browser. Try signing in again.'; changed(); throw error; }
+      catch (error) { cancel(); problem = 'Could not open GitHub in Stage. Try signing in again.'; changed(); throw error; }
       return status();
     }
     const answer = await call(`${web}/login/device/code`, { method: 'POST', form: { client_id: clientId() } });

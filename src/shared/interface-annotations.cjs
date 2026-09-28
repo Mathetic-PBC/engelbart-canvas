@@ -17,6 +17,13 @@ function pageAddress(value) {
   if (!url.hash.startsWith('#/')) url.hash = '';
   return { url: url.href, site: url.protocol === 'file:' ? `file://${url.pathname}` : url.origin, route: url.pathname + url.hash };
 }
+function routeUrl(route, base) {
+  const url = new URL(pageAddress(base).url), hash = route.indexOf('#');
+  // A pathname beginning with // is still a path, never a replacement host.
+  url.pathname = hash < 0 ? route : route.slice(0, hash);
+  url.hash = hash < 0 ? '' : route.slice(hash);
+  return url.href;
+}
 function target(value) {
   if (!value || typeof value !== 'object') throw new TypeError('Missing annotation element');
   const out = {};
@@ -39,4 +46,4 @@ function body(value) {
   if (typeof value !== 'string' || !value.trim() || value.length > MAX_BODY) throw new TypeError(`Write a note of 1–${MAX_BODY} characters`);
   return value.trim();
 }
-module.exports = { MAX_BODY, pageAddress, target, anchor, body, targetLabel };
+module.exports = { MAX_BODY, pageAddress, routeUrl, target, anchor, body, targetLabel };

@@ -3,8 +3,8 @@
 // The Browser pane's pages (decision 48). Each browser tab is a WebContentsView: a native view
 // with its own top-level webContents, laid over a placeholder the renderer measures. A page is
 // therefore never framed, so X-Frame-Options and CSP frame-ancestors do not apply to it, and
-// web security stays on. Pages get no preload and live in their own persistent session, apart
-// from the app's. Electron is passed in so the rules below can be tested without it.
+// web security stays on. Pages get only the isolated recording preload (no app API),
+// and live in their own persistent session, apart from the app's.
 //
 // Signing in (decision 49): a page that opens a window keeps its opener, because OAuth and 2FA
 // flows finish by talking back to it (postMessage, then window.close()). A popup (window.open
@@ -28,6 +28,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { fileURLToPath } = require('node:url');
 const { createAnnotations } = require('./annotations.cjs');
+const { faviconPage, readFaviconUrls, loadFavicon } = require('./favicons.cjs');
 
 const PARTITION = 'persist:browser';
 const ERR_ABORTED = -3;
@@ -99,12 +100,6 @@ function isLoopback(hostname) {
   return host === 'localhost' || host.endsWith('.localhost') || host === '[::1]' || host === '::1' || /^127(\.\d{1,3}){3}$/.test(host);
 }
 
-/** Sites sniff "Electron/x" and the app's own token and serve a refusal; a page here is Chromium. */
-function cleanUserAgent(userAgent, appName) {
-  const names = ['Electron', appName].filter(Boolean).map((name) => String(name).replace(/[^\w.-]/g, ''));
-  return String(userAgent || '').replace(new RegExp(` (?:${names.join('|')})/\\S+`, 'gi'), '');
-}
-
 /** An address whose path ends in .pdf. */
 function pdfAddress(value) {
   try { return /\.pdf$/i.test(new URL(String(value)).pathname); } catch { return false; }
@@ -154,7 +149,7 @@ function boundsFrom(rect, zoom) {
   return out;
 }
 
-function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLayerChange = () => {}, pdfDir = path.join(os.tmpdir(), 'engelbart-pdf') }) {
+function createBrowserViews({ electron, getWindow, send, fileRoot, recordings = null, repoThumbnails = null, onLayerChange = () => {}, pdfDir = path.join(os.tmpdir(), 'engelbart-pdf') }) {
   const { WebContentsView, session, Menu, clipboard, dialog, shell } = electron;
   const decided = new Map(); // `${origin} ${permission}` -> the person's answer, for this run
   const entries = new Map(); // tab id -> { view, error, requested, pending, seq, found }
@@ -163,6 +158,8 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
   let counter = 0;
   const nextId = (prefix) => `${prefix}-${Date.now().toString(36)}-${(counter += 1)}`;
   let configured = false;
+  // The bundled Stage preload also serves narrow Google account/listing reads.
+  const preferences = () => ({ ...WEB_PREFERENCES, preload: path.join(__dirname, `../../../dist/${recordings ? 'recording' : 'catalog'}-preload.cjs`) });
 
   const pageUrl = (value) => (isFileUrl(value) ? parseFileUrl(value, fileRoot ? fileRoot() : '') : parseBrowserUrl(value));
 
@@ -182,7 +179,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     if (configured) return;
     configured = true;
     const browsing = session.fromPartition(PARTITION);
-    browsing.setUserAgent(cleanUserAgent(browsing.getUserAgent(), appName));
+    // Inherit the startup app.userAgentFallback across pages, frames and workers.
     browsing.setPermissionRequestHandler((contents, permission, callback, details) => { void decide(contents, permission, details).then(callback, () => callback(false)); });
     // Sign-ins are cookies, and Chromium writes them lazily: a relaunch is a kill, not a quit.
     let timer = null;
@@ -280,6 +277,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       // Until a page commits, getURL() is still the page before it: report where the tab is headed.
       url: entry.error ? entry.error.url : entry.pending || contents.getURL(),
       title: contents.getTitle(),
+      favicon: !entry.error && !entry.pending && !entry.faviconNavigating && faviconPage(contents.getURL()) ? entry.favicon : null,
       loading: contents.isLoading(),
       canGoBack: contents.navigationHistory.canGoBack(),
       canGoForward: contents.navigationHistory.canGoForward(),
@@ -392,7 +390,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
 
   function adopt(options, from) {
     const win = getWindow();
-    const view = new WebContentsView({ webContents: options.webContents, webPreferences: { ...WEB_PREFERENCES } });
+    const view = new WebContentsView({ webContents: options.webContents, webPreferences: preferences() });
     const id = nextId('tab');
     attach(id, view, win);
     send('browser:open-tab', { id, url: view.webContents.getURL(), from });
@@ -403,7 +401,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     const win = getWindow();
     if (!win || win.isDestroyed()) throw new Error('No window for the browser');
     configureSession();
-    return attach(id, new WebContentsView({ webPreferences: { ...WEB_PREFERENCES } }), win);
+    return attach(id, new WebContentsView({ webPreferences: preferences() }), win);
   }
 
   function attach(id, view, win) {
@@ -411,23 +409,49 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     view.setVisible(false);
     win.contentView.addChildView(view);
     onLayerChange();
-    const entry = { view, error: null, requested: '', pending: '', seq: 0, found: '' };
+    const entry = { view, error: null, requested: '', pending: '', seq: 0, found: '', favicon: null, faviconTask: null, faviconNavigating: false, captureVersion: 0, thumbnailBlocked: false };
     entries.set(id, entry);
 
     const contents = view.webContents;
+    recordings?.attach(id, contents);
     protect(contents, id);
     contents.setWindowOpenHandler(windowOpenHandler(id, contents));
     contents.on('did-create-window', (popup) => watchPopup(popup, id));
     // window.close() from the page (the last step of many sign-ins) closes the tab.
     contents.on('destroyed', () => { if (entries.get(id) === entry) { detach(id); send('browser:closed', { id }); } });
+    contents.on('did-start-navigation', (_event, _url, inPlace, mainFrame) => {
+      if (mainFrame) {
+        entry.captureVersion++; entry.thumbnailAnnotation = false;
+        if (!inPlace) entry.thumbnailBlocked = false;
+      }
+      if (!mainFrame || inPlace) return;
+      clearFavicon(entry); entry.faviconNavigating = true; emit(id);
+    });
+    const updateFavicon = (candidates) => {
+      clearFavicon(entry); emit(id);
+      if (entry.error || entry.pending || entry.faviconNavigating || !faviconPage(contents.getURL())) return;
+      const task = entry.faviconTask = new AbortController();
+      void Promise.resolve().then(() => typeof candidates === 'function' ? candidates() : candidates).then(urls => {
+        if (task.signal.aborted) return null;
+        return loadFavicon(contents.session, urls, task.signal);
+      }).then(icon => {
+        if (entry.faviconTask !== task || entries.get(id) !== entry || contents.isDestroyed()) return;
+        entry.favicon = icon; emit(id);
+      }).catch(() => {});
+    };
+    contents.on('page-favicon-updated', (_event, urls) => updateFavicon(urls));
+    contents.on('did-finish-load', () => {
+      if (!entry.faviconTask) updateFavicon(() => readFaviconUrls(contents));
+    });
     contents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
       if (!isMainFrame || code === ERR_ABORTED) return;
+      clearFavicon(entry);
       entry.error = { code, description: String(description || ''), url: String(url || entry.requested) };
       entry.pending = '';
       emit(id);
     });
-    contents.on('did-navigate', () => { entry.error = null; entry.pending = ''; entry.found = ''; emit(id); });
-    contents.on('did-stop-loading', () => { entry.pending = ''; }); // a stopped load is headed nowhere
+    contents.on('did-navigate', (_event, _url, httpStatus) => { entry.thumbnailBlocked = httpStatus >= 400; entry.error = null; entry.pending = ''; entry.found = ''; entry.faviconNavigating = false; emit(id); });
+    contents.on('did-stop-loading', () => { entry.pending = ''; entry.faviconNavigating = false; }); // a stopped load is headed nowhere
     for (const name of ['did-navigate-in-page', 'did-start-loading', 'did-stop-loading', 'page-title-updated']) contents.on(name, () => emit(id));
     contents.on('context-menu', (_event, params) => contextMenu(contents, params, id));
     contents.on('found-in-page', (_event, result) => send('browser:found', { id, matches: result.matches, active: result.activeMatchOrdinal }));
@@ -440,7 +464,6 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       else if (key === 'l') focusAddress();
       else if (key === '[') command(id, 'back');
       else if (key === ']') command(id, 'forward');
-      else if (key === 'j') send('engelbart:next-workspace', {}); // the workspace's ⌘J, which a page in front would otherwise swallow
       else if (key === 't' && !input.shift) { focusApp(); send('browser:shortcut', { name: 'new-tab', tab: id }); }
       else if (key === 'w' && !input.shift) send('browser:shortcut', { name: 'close-tab', tab: id }); // ⇧⌘W is the window's
       else return;
@@ -458,6 +481,8 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     assertId(id);
     const entry = entries.get(id);
     if (!entry) throw new Error('This browser tab is closed');
+    entry.captureVersion++;
+    entry.thumbnailAnnotation = message?.type !== 'clear';
     if (!entry.annotations) entry.annotations = createAnnotations(entry.view.webContents, (event) => {
       if (event.type === 'picked' || event.type === 'marker') focusApp();
       send('browser:annotation', { ...event, tabId: id, url: entry.view.webContents.getURL() });
@@ -496,8 +521,14 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     send('browser:shortcut', { name, tab });
   }
 
+  function clearFavicon(entry) {
+    entry.faviconTask?.abort(); entry.faviconTask = null; entry.favicon = null;
+  }
+
   // A retry keeps the failure on screen until a page actually arrives (did-navigate clears it).
   function load(entry, href, keepError) {
+    entry.captureVersion++;
+    clearFavicon(entry); entry.faviconNavigating = true;
     if (!keepError) entry.error = null;
     entry.requested = href;
     entry.pending = href;
@@ -530,15 +561,15 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     return true;
   }
 
-  async function capture(entry) {
+  async function captureImage(entry) {
     let timer;
     try {
       const image = await Promise.race([
-        entry.view.webContents.capturePage(),
+        entry.view.webContents.capturePage(undefined, entry.view.getVisible() ? undefined : { stayHidden: true, stayAwake: true }),
         new Promise((resolve) => { timer = setTimeout(() => resolve(null), SNAPSHOT_TIMEOUT_MS); }),
       ]);
       if (!image || image.isEmpty()) return null;
-      return `data:image/jpeg;base64,${image.toJPEG(82).toString('base64')}`;
+      return image;
     } catch {
       return null;
     } finally {
@@ -546,15 +577,46 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     }
   }
 
+  async function capture(entry) {
+    try {
+      const image = await captureImage(entry);
+      return image ? `data:image/jpeg;base64,${image.toJPEG(82).toString('base64')}` : null;
+    } catch { return null; }
+  }
+
+  // Called after a visible Stage page has settled. Resolve the repo in main and
+  // recheck the document after asynchronous work; never capture a background tab.
+  async function captureRepoThumbnail(id) {
+    assertId(id);
+    const entry = entries.get(id);
+    if (!entry || !repoThumbnails) return false;
+    const contents = entry.view.webContents, url = contents.getURL(), version = entry.captureVersion;
+    const current = () => entries.get(id) === entry && !contents.isDestroyed() && entry.view.getVisible()
+      && !entry.error && !entry.pending && !entry.thumbnailBlocked && !entry.thumbnailAnnotation
+      && !contents.isLoading() && contents.getURL() === url && entry.captureVersion === version;
+    if (!current() || !/^https?:/.test(url)) return false;
+    return repoThumbnails.capture(url, async () => {
+      if (!current()) return null;
+      const image = await captureImage(entry);
+      if (!image || !current()) return null;
+      const { width, height } = image.getSize();
+      if (width < 64 || height < 64) return null;
+      const scale = Math.min(1, 640 / width, 480 / height);
+      return image.resize({ width: Math.round(width * scale), height: Math.round(height * scale), quality: 'good' }).toJPEG(70);
+    }, current);
+  }
+
   /** Hides whatever shows. With `snapshot`, the page's picture comes back first, so the renderer
-   *  can keep it on screen under a menu or a modal that the native view would have covered. */
+   *  can keep it on screen under a menu or a modal that the native view would have covered.
+   *  A tabId also lets a contextual annotation refresh an already-hidden page after locating its target. */
   async function hide(options) {
     let picture = null;
-    for (const entry of entries.values()) {
-      if (!entry.view.getVisible()) continue;
-      const seq = entry.seq;
-      if (options && options.snapshot) picture = await capture(entry);
-      if (entry.seq === seq) entry.view.setVisible(false);
+    if (options?.tabId) assertId(options.tabId);
+    const targets = [...entries].map(([id, entry]) => ({ id, entry, visible: entry.view.getVisible(), seq: entry.seq }));
+    for (const { id, entry, visible, seq } of targets) {
+      if (options?.snapshot && (options.tabId ? options.tabId === id : visible)) picture = await capture(entry);
+      // Dismissing a popover or switching tabs during capture must not hide the newly shown page.
+      if (visible && entry.seq === seq) entry.view.setVisible(false);
     }
     return picture;
   }
@@ -577,6 +639,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     const entry = entries.get(id);
     if (!entry) return null;
     entries.delete(id);
+    clearFavicon(entry);
     entry.annotations?.dispose();
     const win = getWindow();
     try {
@@ -589,6 +652,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
 
   function close(id) {
     assertId(id);
+    if (recordings?.current()?.tabId === id) return recordings.stopTab(id).then(() => close(id));
     const entry = detach(id);
     if (!entry) return false;
     if (!entry.view.webContents.isDestroyed()) entry.view.webContents.close();
@@ -596,18 +660,24 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
   }
 
   function closeAll() {
-    for (const id of [...entries.keys()]) close(id);
+    const closing = [...entries.keys()].map(id => close(id));
     for (const popup of [...popups]) { if (!popup.isDestroyed()) popup.destroy(); }
     popups.clear();
     for (const requestId of [...logins.keys()]) answerLogin(requestId, null);
+    return Promise.all(closing);
   }
 
   /** Sign-ins are cookies; Chromium writes them lazily, so quitting asks for them now. */
   async function flush() {
+    await recordings?.stop();
     if (configured) await session.fromPartition(PARTITION).cookies.flushStore();
   }
 
-  return { open, show, hide, command, annotate, find, stopFind, shortcut, close, closeAll, answerLogin, flush, has: (id) => entries.has(id) };
+  // Main-only access for session-backed document catalogs. Neither method is
+  // exposed through browser IPC or to remote pages.
+  const getSession = () => { configureSession(); return session.fromPartition(PARTITION); };
+  const getPages = () => [...entries.values()].map(entry => entry.view.webContents);
+  return { open, show, hide, command, annotate, find, stopFind, shortcut, close, closeAll, answerLogin, flush, captureRepoThumbnail, getSession, getPages, has: (id) => entries.has(id) };
 }
 
 function registerBrowserIpc({ ipcMain, trustedHandler, views }) {
@@ -615,12 +685,13 @@ function registerBrowserIpc({ ipcMain, trustedHandler, views }) {
   ipcMain.handle('browser:open', trustedHandler((id, url) => views.open(id, url)));
   ipcMain.handle('browser:show', trustedHandler((id, rect) => views.show(id, rect)));
   ipcMain.handle('browser:hide', trustedHandler((options) => views.hide(options)));
+  ipcMain.handle('browser:repo-thumbnail', trustedHandler((id) => views.captureRepoThumbnail(id)));
   ipcMain.handle('browser:command', trustedHandler((id, name) => views.command(id, name)));
   ipcMain.handle('browser:find', trustedHandler((id, text, options) => views.find(id, text, options)));
   ipcMain.handle('browser:stop-find', trustedHandler((id) => views.stopFind(id)));
   ipcMain.handle('browser:close', trustedHandler((id) => views.close(id)));
   ipcMain.handle('browser:login-reply', trustedHandler((requestId, credentials) => views.answerLogin(requestId, credentials)));
-  ipcMain.handle('browser:close-all', trustedHandler(() => { views.closeAll(); return true; }));
+  ipcMain.handle('browser:close-all', trustedHandler(async () => { await views.closeAll(); return true; }));
 }
 
-module.exports = { PARTITION, parseBrowserUrl, parseFileUrl, externalScheme, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews, registerBrowserIpc };
+module.exports = { PARTITION, parseBrowserUrl, parseFileUrl, externalScheme, isLoopback, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews, registerBrowserIpc };

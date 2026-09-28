@@ -1,7 +1,7 @@
 .notification-control{flex:none;display:flex;align-items:center}
 .notification-bell{position:relative;display:flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border:0;border-radius:5px;background:transparent;color:#171717;cursor:pointer}
 .notification-bell:hover,.notification-bell[aria-expanded="true"]{background:#ededed;color:#171717}
-.notification-bell:focus-visible,.notification-heading button:focus-visible,.notification-entry:focus-visible,.notification-dismiss:focus-visible{outline:2px solid #777;outline-offset:2px}
+.notification-bell:focus-visible,.notification-heading button:focus-visible,.notification-entry a:focus-visible,.notification-entry button:focus-visible,.notification-dismiss:focus-visible{outline:2px solid #777;outline-offset:2px}
 .notification-badge{position:absolute;top:0;right:-2px;min-width:13px;height:13px;box-sizing:border-box;padding:0 3px;border-radius:7px;background:#171717;color:#fff;font:600 9px/13px var(--font-sans);text-align:center}
 .notification-announcement{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .notification-panel{position:fixed;top:44px;right:14px;z-index:170;width:320px;max-width:calc(100vw - 28px);max-height:calc(100vh - 64px);display:flex;flex-direction:column;box-sizing:border-box;border:1px solid #dedede;border-radius:7px;background:#fff;color:#171717;font:12px/1.5 var(--font-sans)}
@@ -14,10 +14,27 @@
 .notification-empty{margin:0;padding:20px 10px;color:#888}
 .notification-row{position:relative;display:flex;align-items:center}
 .notification-row .notification-dismiss{margin-right:6px}
-.notification-entry{display:flex;flex:1;min-width:0;align-items:center;gap:12px;padding:10px 6px 10px 10px;border:0;border-radius:4px;background:transparent;color:#171717;text-align:left;font:12px/1.5 var(--font-sans);cursor:pointer}
-.notification-entry:hover:not(:disabled){background:#f5f5f5}
-.notification-entry:disabled{cursor:default;color:#888}
+.notification-entry{display:flex;flex:1;min-width:0;align-items:center;gap:10px;padding:10px 6px 10px 10px;color:#171717;text-align:left;font:12px/1.5 var(--font-sans)}
 .notification-copy{display:flex;flex:1;min-width:0;flex-direction:column;gap:2px}
-.notification-repo{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.notification-description{color:#777;font-size:11.5px}
+.notification-repo{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:inherit;text-decoration:none}
+a.notification-repo:hover{text-decoration:underline;text-underline-offset:3px}
+.notification-description{align-self:flex-start;border:0;border-radius:2px;padding:0;background:transparent;color:#777;text-align:left;font:11.5px/1.5 var(--font-sans);cursor:pointer}
+.notification-description:hover:not(:disabled){color:#171717;text-decoration:underline;text-underline-offset:3px}
+.notification-description:disabled{opacity:.5;cursor:default}
+.notification-detail{color:#777;font-size:11px;overflow-wrap:anywhere;max-height:64px;overflow:auto}
+.notification-error{margin:8px 10px;color:#b91c1c;overflow-wrap:anywhere}
+.notification-run-actions{display:flex;align-items:center;gap:6px;flex:none}
+.notification-build,.notification-open{border:0;border-radius:4px;padding:4px;background:transparent;font:11.5px/1.5 var(--font-sans);cursor:pointer}
+.notification-build{color:#777;white-space:nowrap}
 .notification-open{flex:none;color:#4d4d4d;white-space:nowrap}
+.notification-build:hover:not(:disabled),.notification-open:hover:not(:disabled){background:#f5f5f5;color:#171717}
+.notification-build:disabled,.notification-open:disabled{opacity:.5;cursor:default}
+.notification-local{align-items:flex-start}
+.notification-local>.local-preview{flex:1;min-width:0;border:0;background:transparent}
+.notification-local>.notification-dismiss{margin-top:9px}
+.notification-local .local-preview-bar{flex-wrap:wrap;padding:9px 6px 6px 10px;gap:4px}
+.notification-local .local-preview-label{display:block;padding:0 5px}
+.notification-local .local-preview-name{display:block}
+.notification-local .local-preview-label [role=status]{display:block;font-size:11px;font-weight:400}
+.notification-local .local-preview-actions{padding-left:1px}
+.notification-panel:has(.notification-local) .notification-list{max-height:min(660px,calc(100vh - 116px))}

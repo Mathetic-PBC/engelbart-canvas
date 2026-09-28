@@ -1,55 +1,27 @@
 import React from 'react';
-import { createPortal } from 'react-dom';
+import StagePopover from './StagePopover.jsx';
 import { api, errorMessage } from '../api.js';
-import { pageAddress, targetLabel } from '../../shared/interface-annotations.cjs';
+import { pageAddress, routeUrl, targetLabel } from '../../shared/interface-annotations.cjs';
 import './interface-annotations.css';
 
 const label = (anchor) => targetLabel(anchor.element);
 
-export function annotationPosition(bounds, slot, popup) {
-  const gap = 8, width = Math.max(0, Math.min(300, slot.width - gap * 2));
-  const sx = bounds ? slot.width / bounds.viewportWidth : 1, sy = bounds ? slot.height / bounds.viewportHeight : 1;
-  const target = bounds ? { x: slot.left + bounds.x * sx, y: slot.top + bounds.y * sy, h: bounds.h * sy } : { x: slot.left + gap, y: slot.top + gap, h: 0 };
-  const below = target.y + target.h + gap, above = target.y - popup.height - gap;
-  const top = below + popup.height <= slot.bottom - gap ? below : above >= slot.top + gap ? above : below;
-  return {
-    left: Math.max(slot.left + gap, Math.min(target.x, slot.right - width - gap)),
-    top: Math.max(slot.top + gap, Math.min(top, slot.bottom - popup.height - gap)),
-    width, maxHeight: Math.max(0, slot.height - gap * 2),
-  };
+export { annotationPosition, annotationListPosition } from './StagePopover.jsx';
+
+function AnnotationPopover({ kind = 'composer', name = 'Add annotation', ...props }) {
+  return <StagePopover {...props} name={name} kind={kind} className={`interface-annotations ia-popover ia-${kind}`} />;
 }
 
-// Reuse Stage's existing data-overlay/snapshot mechanism; note text never enters
-// the website. The browser slot stays the same size, including while composing.
-function Composer({ bounds, slotRef, children, onKeyDown }) {
-  const ref = React.useRef(null);
-  const [position, setPosition] = React.useState(null);
-  React.useLayoutEffect(() => {
-    const place = () => {
-      if (!slotRef.current || !ref.current) return;
-      const next = annotationPosition(bounds, slotRef.current.getBoundingClientRect(), ref.current.getBoundingClientRect());
-      setPosition((old) => old && Object.keys(next).every((key) => old[key] === next[key]) ? old : next);
-    };
-    const observer = new ResizeObserver(place);
-    observer.observe(ref.current); if (slotRef.current) observer.observe(slotRef.current);
-    window.addEventListener('resize', place); window.addEventListener('scroll', place, true); place();
-    return () => { observer.disconnect(); window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
-  }, [bounds, slotRef]);
-  React.useEffect(() => { if (position) ref.current?.querySelector('textarea')?.focus({ preventScroll: true }); }, [!!position]);
-  return createPortal(<div ref={ref} role="dialog" aria-label="Add annotation" data-overlay="1" className="interface-annotations ia-composer"
-    style={{ ...position, visibility: position ? 'visible' : 'hidden' }} onKeyDown={onKeyDown}>{children}</div>, document.body);
-}
-
-export default function InterfaceAnnotations({ projectId, tabId, url, loading, mode = 'browse', slotRef, onClose, onSelect, onNavigate, onAsk }) {
+export default function InterfaceAnnotations({ projectId, tabId, url, loading, revision = 0, mode = 'browse', slotRef, surfaceRef, onClose, onLocated, onNavigate, onAsk }) {
   const selecting = mode === 'select';
   const [notes, setNotes] = React.useState([]);
+  const [currentScope, setCurrentScope] = React.useState(null);
   const [picked, setPicked] = React.useState(null);
   const [bounds, setBounds] = React.useState(null);
   const [selected, setSelected] = React.useState(null);
+  const selectedRef = React.useRef(null);
   const [body, setBody] = React.useState('');
-  const [intent, setIntent] = React.useState('ask');
   const [editing, setEditing] = React.useState(false);
-  const [picking, setPicking] = React.useState(false);
   const [ready, setReady] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState('');
@@ -59,9 +31,12 @@ export default function InterfaceAnnotations({ projectId, tabId, url, loading, m
   const sending = React.useRef(false);
   const scope = React.useMemo(() => ({ projectId, url }), [projectId, url]);
   const note = notes.find((n) => n.id === selected);
-  const command = React.useCallback((message) => api.browserAnnotate(tabId, message), [tabId]);
+  const command = React.useCallback((message) => url && !loading ? api.browserAnnotate(tabId, message) : Promise.resolve(), [tabId, url, loading]);
   const fail = (e) => { if (alive.current) setError(errorMessage(e)); };
-  const marks = (list) => command({ type: 'show', items: list.map(({ id, anchor }) => ({ id, anchor })) });
+  const marks = (list, site = currentScope) => {
+    const items = list.filter(n => n.scope === site).map(({ id, anchor }) => ({ id, anchor }));
+    return command(items.length ? { type: 'show', items } : { type: 'clear' });
+  };
 
   React.useEffect(() => {
     alive.current = true;
@@ -69,28 +44,31 @@ export default function InterfaceAnnotations({ projectId, tabId, url, loading, m
   }, [command]);
   React.useEffect(() => api.onBrowserAnnotation((event) => {
     if (event.tabId !== tabId) return;
-    if (event.type === 'picked') { setPicked(event.anchor); setBounds(event.bounds || null); setSelected(null); setBody(''); setIntent('ask'); setEditing(false); setPicking(false); setError(''); }
-    if (event.type === 'marker') { setSelected(event.id); setPicked(null); setEditing(false); setPicking(false); setConfirmDelete(false); }
-    if (event.type === 'status') { setStatus(event); setPicking(event.active); }
-    if (event.type === 'exited') { setPicking(false); if (selecting) onClose(); }
-    if (event.type === 'navigated') { setPicked(null); setPicking(false); setEditing(false); if (selecting) onClose(); }
-    if (event.type === 'error') { setError(event.message); setPicking(false); }
-  }), [tabId, selecting, onClose]);
+    if (event.type === 'picked') { selectedRef.current = null; setPicked(event.anchor); setBounds(event.bounds || null); setSelected(null); setBody(''); setEditing(false); setError(''); }
+    if (event.type === 'marker') { selectedRef.current = event.id; setSelected(event.id); setBounds(event.bounds || null); setPicked(null); setEditing(false); setConfirmDelete(false); onLocated?.(); }
+    if (event.type === 'located' && event.id === selectedRef.current) { setBounds(event.bounds || null); onLocated?.(); }
+    if (event.type === 'status') setStatus(event);
+    if (event.type === 'exited' && selecting) onClose();
+    if (event.type === 'navigated') { selectedRef.current = null; setSelected(null); setBounds(null); setPicked(null); setEditing(false); if (selecting) onClose(); }
+    if (event.type === 'error') setError(event.message);
+  }), [tabId, selecting, onClose, onLocated]);
   React.useEffect(() => {
     let live = true;
-    setReady(false); setPicking(false); setPicked(null); setEditing(false); setSelected(null); setBody('');
-    if (loading) return undefined;
+    setReady(false); setPicked(null);
+    if (selecting) { setEditing(false); setSelected(null); setBody(''); }
+    if (!url) { setNotes([]); setCurrentScope(null); setReady(true); return undefined; }
+    if (selecting && loading) return undefined;
     // Direct annotation does not wait for saved notes or open their browser.
     const begin = selecting
-      ? command({ type: 'mode', on: true }).then(() => { if (live) { setPicking(true); setReady(true); } })
+      ? command({ type: 'mode', on: true }).then(() => { if (live) setReady(true); })
       : api.interfaceAnnotations(scope).then(async (data) => {
         if (!live) return;
-        setNotes(data.notes); await marks(data.notes);
+        setNotes(data.notes); setCurrentScope(data.scope); setError(data.warnings?.join(' ') || ''); await marks(data.notes, data.scope);
         if (live) setReady(true);
       });
     begin.catch((e) => { if (live) fail(e); });
     return () => { live = false; command({ type: 'clear' }).catch(() => {}); };
-  }, [scope, loading, command, selecting]);
+  }, [scope, loading, command, selecting, url, selecting ? 0 : revision]);
   React.useEffect(() => {
     if (!selecting) return undefined;
     const escape = (event) => {
@@ -101,15 +79,14 @@ export default function InterfaceAnnotations({ projectId, tabId, url, loading, m
     return () => window.removeEventListener('keydown', escape, true);
   }, [selecting, onClose]);
   React.useEffect(() => { if (picked || editing) input.current?.focus(); }, [picked, editing]);
-  const start = async () => {
-    if (onSelect) { onSelect(); return; }
-    setError(''); setPicked(null); setSelected(null); setEditing(false); setBody('');
-    try { await command({ type: 'mode', on: !picking }); setPicking(!picking); } catch (e) { fail(e); }
-  };
   const cancel = () => { if (selecting) { onClose(); return; } setPicked(null); setEditing(false); setBody(''); command({ type: 'mode', on: false }).catch(fail); };
   const open = async (next) => {
-    setPicked(null); setSelected(next.id); setEditing(false); setConfirmDelete(false); setError('');
-    try { await command({ type: 'locate', id: next.id }); setPicking(false); } catch (e) { fail(e); }
+    selectedRef.current = next.id; setBounds(null); setPicked(null); setSelected(next.id); setEditing(false); setConfirmDelete(false); setError('');
+    try { if (next.scope === currentScope) await command({ type: 'locate', id: next.id }); } catch (e) { fail(e); }
+  };
+  const back = () => {
+    selectedRef.current = null; setSelected(null); setBounds(null); setPicked(null); setEditing(false); setConfirmDelete(false);
+    command({ type: 'mode', on: false }).then(() => onLocated?.()).catch(fail);
   };
   const save = async () => {
     if (busy || !body.trim() || (!picked && !note)) return;
@@ -119,7 +96,7 @@ export default function InterfaceAnnotations({ projectId, tabId, url, loading, m
       if (!alive.current) return;
       if (selecting) { onClose(); return; }
       const next = notes.some((n) => n.id === saved.id) ? notes.map((n) => n.id === saved.id ? saved : n) : [...notes, saved];
-      setNotes(next); setPicked(null); setEditing(false); setSelected(saved.id); setBody('');
+      selectedRef.current = saved.id; setNotes(next); setPicked(null); setEditing(false); setSelected(saved.id); setBody('');
       await marks(next); await command({ type: 'locate', id: saved.id });
     } catch (e) { fail(e); } finally { if (alive.current) setBusy(false); }
   };
@@ -129,15 +106,16 @@ export default function InterfaceAnnotations({ projectId, tabId, url, loading, m
       await api.deleteInterfaceAnnotation(scope, note.id);
       if (!alive.current) return;
       const next = notes.filter((n) => n.id !== note.id);
-      setNotes(next); setSelected(null); setConfirmDelete(false);
+      selectedRef.current = null; setNotes(next); setSelected(null); setBounds(null); setConfirmDelete(false);
       await command({ type: 'mode', on: false }); await marks(next);
+      onLocated?.();
     } catch (e) { fail(e); } finally { if (alive.current) setBusy(false); }
   };
-  const resolution = note && status.resolutions[note.id];
-  const elsewhere = resolution?.reason === 'different-page';
-  const openPage = () => { try { onNavigate(new URL(note.anchor.route, url).href); } catch (e) { fail(e); } };
+  const resolution = note?.scope === currentScope && status.resolutions[note?.id];
+  const elsewhere = note && (!url || note.scope !== currentScope || note.anchor.route !== pageAddress(url).route);
+  const openPage = () => { try { onNavigate(note.scope === currentScope && url ? routeUrl(note.anchor.route, url) : note.sourceUrl); } catch (e) { fail(e); } };
   const ask = async () => { try { await onAsk(note); } catch (e) { fail(e); } };
-  const asking = selecting && !!picked && !!onAsk && intent === 'ask';
+  const asking = selecting && !!picked && !!onAsk;
   const askSelection = async () => {
     if (busy || sending.current || !onAsk || !picked || !body.trim()) return;
     sending.current = true; setBusy(true); setError('');
@@ -150,47 +128,45 @@ export default function InterfaceAnnotations({ projectId, tabId, url, loading, m
   const submit = () => asking ? askSelection() : save();
   const editor = (picked || editing) && <div className="ia-editor">
     <p className="ia-target" title={label(picked || note.anchor)}>{label(picked || note.anchor)}</p>
-    {selecting && onAsk && <div className="ia-intent" role="group" aria-label="Annotation action">
-      <button type="button" aria-pressed={intent === 'ask'} disabled={busy} onClick={() => setIntent('ask')}>Ask Bart</button>
-      <button type="button" aria-pressed={intent === 'note'} disabled={busy} onClick={() => setIntent('note')}>Add note</button>
-    </div>}
-    <textarea ref={input} aria-label={asking ? 'Question for Bart' : 'Annotation note'} placeholder={asking ? 'Ask Bart about this element…' : 'Add a note…'} rows={4} maxLength={4000} value={body} disabled={busy} onChange={(e) => setBody(e.target.value)} />
-    <div className="ia-actions"><button disabled={busy} onClick={cancel}>Cancel</button><button className="ia-primary" disabled={busy || !body.trim()} onClick={submit}>{asking ? (busy ? 'Sending…' : 'Ask Bart') : (busy ? 'Saving…' : 'Save note')}</button></div>
+    <textarea ref={input} aria-label={asking ? 'Question or note' : 'Annotation note'} placeholder={asking ? 'Ask Bart or add a note…' : 'Add a note…'} rows={4} maxLength={4000} value={body} disabled={busy} onChange={(e) => setBody(e.target.value)} />
+    {selecting ? <div className="ia-actions">
+      <button type="button" disabled={busy} onClick={cancel}>Cancel</button>
+      <button type="button" className={onAsk ? undefined : 'ia-primary'} disabled={busy || !body.trim()} onClick={save}>Add note</button>
+      {onAsk && <button type="button" className="ia-primary" disabled={busy || !body.trim()} onClick={askSelection}>Ask Bart</button>}
+    </div> : <div className="ia-actions"><button disabled={busy} onClick={cancel}>Cancel</button><button className="ia-primary" disabled={busy || !body.trim()} onClick={save}>{busy ? 'Saving…' : 'Save note'}</button></div>}
   </div>;
   const editorKeys = (e) => {
     if (e.key === 'Escape') { e.stopPropagation(); cancel(); }
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && (picked || editing)) { e.preventDefault(); void submit(); }
   };
-  if (selecting) return picked || error ? <Composer bounds={bounds} slotRef={slotRef} onKeyDown={editorKeys}>
+  if (selecting) return picked || error ? <AnnotationPopover bounds={bounds} slotRef={slotRef} surfaceRef={surfaceRef} onKeyDown={editorKeys} onDismiss={busy ? undefined : onClose}>
     {editor}
     {error && <p role="alert" className="ia-error">{error}</p>}
     {!picked && <button onClick={onClose}>Cancel</button>}
-  </Composer> : null;
+  </AnnotationPopover> : null;
   return (
-    <aside className="interface-annotations" aria-label="Interface annotations" onKeyDown={(e) => {
-      if (e.key === 'Escape') { e.stopPropagation(); if (picked || editing) cancel(); else if (picking) void start(); else onClose(); }
-      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && (picked || editing)) { e.preventDefault(); void save(); }
-    }}>
-      <div className="ia-heading"><strong>Annotations <span>{notes.length || ''}</span></strong><button aria-label="Close annotations" onClick={onClose}>×</button></div>
-      <button className={`ia-pick ${picking ? 'ia-active' : ''}`} disabled={!ready || busy} onClick={start}>{picking ? 'Cancel annotation' : '+ Select an element'}</button>
+    <AnnotationPopover bounds={note && !loading && resolution?.confidence !== 'unresolved' ? bounds : null} slotRef={slotRef} surfaceRef={surfaceRef} onKeyDown={editorKeys} onDismiss={busy ? undefined : onClose} name={note ? 'Annotation' : 'Annotations'} kind={note ? 'note' : 'browser'} focusKey={`${selected}:${editing}`}>
+      <div className="ia-heading stage-popover-heading" data-popover-heading="1">
+        {note ? <button type="button" className="ia-back" aria-label="All annotations" disabled={busy} onClick={back}>‹ Annotations</button> : <strong>Annotations</strong>}
+        <button type="button" aria-label="Close annotations" disabled={busy} onClick={onClose}>×</button>
+      </div>
       {!ready && !error && <p className="ia-muted">{loading ? 'Waiting for the page…' : 'Loading annotations…'}</p>}
-      {!!status.unavailable && <p className="ia-muted">{status.unavailable} embedded frame{status.unavailable === 1 ? '' : 's'} cannot be inspected. You can annotate the frame itself.</p>}
       {error && <p role="alert" className="ia-error">{error}</p>}
       {editor}
       {note && !editing && !picked && <div className="ia-detail">
         <p className="ia-target" title={label(note.anchor)}>{label(note.anchor)}</p>
         <p className="ia-body">{note.body}</p>
         <p className="ia-muted">{resolution?.confidence === 'resolved' ? 'Element found on this page.' : resolution?.confidence === 'approximate' ? 'Closest match — the element or its text has changed.' : elsewhere ? `Written on ${note.anchor.route}` : 'Element not found on this page.'}</p>
-        {elsewhere && <button onClick={openPage}>Open page</button>}
+        {elsewhere && (note.sourceUrl ? <button onClick={openPage}>Open page</button> : <p className="ia-muted">This repository's preview is offline. Rebuild it to locate the element; your note is saved.</p>)}
         <div className="ia-actions"><button disabled={busy} onClick={() => { setBody(note.body); setEditing(true); }}>Edit</button><button disabled={busy} onClick={() => setConfirmDelete(true)}>Delete</button>{onAsk && <button onClick={ask}>Ask Bart</button>}</div>
         {confirmDelete && <div className="ia-delete"><span>Delete this note?</span><button disabled={busy} onClick={() => setConfirmDelete(false)}>Keep</button><button disabled={busy} onClick={remove}>Delete</button></div>}
       </div>}
-      <div className="ia-list">
-        {ready && !notes.length && !picked && <p className="ia-muted">Notes you save here stay with this site or repository in this project.</p>}
-        {notes.map((n, i) => <button key={n.id} className={`ia-row ${selected === n.id ? 'ia-selected' : ''}`} onClick={() => open(n)} disabled={busy}>
-          <span className="ia-number">{i + 1}</span><span><span className="ia-row-body">{n.body}</span><span className="ia-row-target">{label(n.anchor)}</span></span>
+      {!note && <div className="ia-list" aria-busy={!ready}>
+        {ready && !notes.length && !picked && <p className="ia-muted">{url ? 'No annotations for this website yet.' : 'Open a website to see its annotations.'}</p>}
+        {notes.map(n => <button key={n.id} className="ia-row" onClick={() => open(n)} disabled={busy}>
+          <span className="ia-number">{n.scope === currentScope ? notes.filter(n => n.scope === currentScope).findIndex(item => item.id === n.id) + 1 : '·'}</span><span><span className="ia-row-body">{n.body}</span><span className="ia-row-target">{n.sourceName || pageAddress(n.url).site}</span></span>
         </button>)}
-      </div>
-    </aside>
+      </div>}
+    </AnnotationPopover>
   );
 }

@@ -175,13 +175,41 @@ test('@Bart, as the menu writes it, is a question like a typed @bart; both rende
   assert.equal(doc.parseLine('@Barty').type === 'bart', false);
 });
 
-test('sections: Notes, Websites, GitHub, Files, Sub-Workspaces in that order; Files takes everything else; empty ones are left out (Sidebar.dc.html, 2026-09-23)', async () => {
+test('rail matches the six reference groups with empty headings and flat, lossless item lists', async () => {
   const { railSections, sectionOf } = await load();
-  const rows = [...library, row('k1', 'Evaluation harness', 'child'), row('g2', 'engelbart-canvas', 'folder', ['git'], { folder_path: '/Users/h/e' }), row('h1', 'saved.html', 'html')];
+  const rows = [...library, row('k1', 'Child', 'child'), row('g2', 'Clone', 'folder', ['git']), row('h1', 'Saved page', 'html'),
+    row('md', 'README', 'md'), row('pdf', 'Handbook', 'pdf'), row('sticky', 'Reminder', 'md', ['note', 'sticky']), row('chat', 'Codex', 'conversation')];
   const sections = railSections(rows);
-  assert.deepEqual(sections.map((s) => s.label), ['Notes', 'Websites', 'GitHub', 'Files', 'Sub-Workspaces']);
-  assert.deepEqual(sections.map((s) => s.rows.map((r) => r.id)), [['n1'], ['w1'], ['g1', 'g2'], ['p1', 'i1', 'c1', 'f1', 'h1'], ['k1']]);
-  assert.equal(sectionOf(row('m1', 'README', 'md')), 'Files', 'an outside md is a file, not a note');
-  assert.deepEqual(railSections([row('p1', 'ColBERT', 'pdf', ['paper'])]).map((s) => s.key), ['Files']);
-  assert.deepEqual(railSections([]), []);
+  assert.deepEqual(sections.map(s => s.label), ['Sub-workspaces', 'GitHub', 'Papers', 'Overleaf', 'Documents', 'Other context']);
+  assert.deepEqual(sections.map(s => s.icon), ['workspace', 'git', 'pdf', 'overleaf', 'note', 'folder']);
+  assert.deepEqual(railSections([]).map(s => s.key), ['Workspaces', 'GitHub', 'Papers', 'Overleaf', 'Documents', 'Files']);
+  assert.equal(sectionOf(row('md', 'README', 'md')), 'Documents');
+  assert.equal(sectionOf(row('pdf', 'Handbook', 'pdf')), 'Documents');
+  const leaves = sections.flatMap(s => s.rows);
+  assert.ok(sections.every(s => !s.children));
+  assert.deepEqual(leaves.map(r => r.id).sort(), rows.map(r => r.id).sort());
+  assert.equal(new Set(leaves).size, rows.length);
+  const other = sections.find(s => s.key === 'Files');
+  assert.deepEqual(other.rows.map(r => r.id), ['w1', 'i1', 'c1', 'f1', 'h1', 'sticky', 'chat']);
+});
+
+test('saved provider links stay in the right sections with one catalog action per provider', async () => {
+  const { railSections, sectionOf, documentProvider } = await load();
+  const google = row('doc', 'Draft', 'website', [], { url: 'https://docs.google.com/document/d/draft_123/edit?tab=t.0' });
+  const overleaf = row('tex', 'Manuscript', 'website', [], { url: 'https://www.overleaf.com/project/abc123' });
+  const zotero = row('ref', 'Reference', 'website', [], { url: 'https://www.zotero.org/reader/items/ABCD1234/library' });
+  const pdf = row('attached', 'Full text', 'pdf', [], { url: 'https://www.zotero.org/groups/123/team/items/EFGH5678/library', path: '/papers/full-text.pdf' });
+  const rows = [...library, google, overleaf, zotero, pdf], original = JSON.stringify(rows);
+  const sections = railSections(rows);
+  assert.equal(documentProvider(google), 'google-docs'); assert.equal(documentProvider(overleaf), 'overleaf');
+  assert.equal(documentProvider({ ...google, url: 'https://docs.google.com/document/u/1/d/draft_123/edit' }), 'google-docs');
+  assert.deepEqual(sections.find(c => c.key === 'Documents').rows, [library[0], google]);
+  assert.deepEqual(sections.find(c => c.key === 'Overleaf').rows, [overleaf]);
+  assert.deepEqual(sections.find(c => c.key === 'Papers').rows, [library[1], zotero, pdf]);
+  assert.deepEqual(sections.filter(c => c.catalog).map(c => c.catalog.provider), ['github', 'zotero', 'overleaf', 'google']);
+  for (const url of ['https://docs.google.com/', 'https://docs.google.com/spreadsheets/d/sheet/edit', 'https://www.overleaf.com/login', 'https://example.com/project/abc123', 'https://overleaf.com.example.org/project/abc123']) {
+    assert.equal(documentProvider({ ...google, url }), null, url);
+    assert.equal(sectionOf({ ...google, url }), 'Files', url);
+  }
+  assert.equal(JSON.stringify(rows), original);
 });

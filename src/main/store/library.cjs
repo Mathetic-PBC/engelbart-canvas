@@ -147,7 +147,7 @@ async function projectsForLibraryItem(ctx, itemId) {
   for (const project of projects.projectRecords(ctx)) {
     const workspaces = projects.flattenWorkspaces(project.dir).filter((workspace) => workspace.context.includes(row.id));
     const origin = row.project_id === project.id;
-    if (origin || workspaces.length) out.push({ id: project.id, name: project.name, origin, workspaces: workspaces.map((workspace) => ({ id: workspace.id, name: workspace.name, path: workspace.path })) });
+    if (origin || (!project.removedContext?.includes(row.id) && (project.context?.includes(row.id) || workspaces.length))) out.push({ id: project.id, name: project.name, origin, workspaces: workspaces.map((workspace) => ({ id: workspace.id, name: workspace.name, path: workspace.path })) });
   }
   return out;
 }

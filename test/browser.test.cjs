@@ -7,7 +7,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { pathToFileURL } = require('node:url');
-const { parseBrowserUrl, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews } = require('../src/main/browser/views.cjs');
+const { parseBrowserUrl, isLoopback, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews } = require('../src/main/browser/views.cjs');
+const { cleanUserAgent, installBrowserUserAgent } = require('../src/main/browser/user-agent.cjs');
 
 const address = () => import(pathToFileURL(path.join(__dirname, '../src/renderer/model/address.js')).href);
 
@@ -78,6 +79,16 @@ test('loopback, user agent and bounds helpers', () => {
   assert.throws(() => boundsFrom({ x: NaN, y: 0, width: 1, height: 1 }, 1), TypeError);
 });
 
+test('browser identity retains the native Chromium version and platform across startup', () => {
+  const chrome = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7339.8 Safari/537.36';
+  const app = { userAgentFallback: `${chrome} Engelbart.Test/0.1.0 Electron/44.4.1`, getName: () => 'Engelbart.Test' };
+  installBrowserUserAgent(app);
+  assert.equal(app.userAgentFallback, chrome);
+  installBrowserUserAgent(app);
+  assert.equal(app.userAgentFallback, chrome);
+  assert.equal(cleanUserAgent(`${chrome} EngelbartXTest/1.0`, app.getName()), `${chrome} EngelbartXTest/1.0`);
+});
+
 function fakeElectron() {
   const made = [];
   class WebContentsView {
@@ -87,7 +98,7 @@ function fakeElectron() {
       this.bounds = null;
       const contents = options.webContents || new EventEmitter();
       Object.assign(contents, {
-        loaded: [], closed: false, url: '',
+        loaded: [], closed: false, url: '', session: browsing,
         loadURL(url) { this.loaded.push(url); this.url = url; return Promise.resolve(); },
         getURL() { return this.url; }, getTitle: () => 'Title', isLoading: () => false, isDestroyed() { return this.closed; },
         close() { this.closed = true; }, reload() { this.reloaded = (this.reloaded || 0) + 1; }, stop() {},
@@ -122,6 +133,39 @@ function fakeElectron() {
   return { made, browsing, children, win, dialog, questions, handed, electron: { WebContentsView, session: { fromPartition: () => browsing }, Menu: {}, clipboard: {}, dialog, shell } };
 }
 
+test('annotation popovers can refresh the hidden current tab snapshot without showing or resizing it', async () => {
+  const fake = fakeElectron();
+  const views = createBrowserViews({ electron: fake.electron, getWindow: () => fake.win, send() {}, appName: 'Engelbart' });
+  views.open('a', 'https://example.com/');
+  views.open('b', 'https://other.example/');
+  const [a, b] = fake.made;
+  let frame = 'initial', captured = 0, captureOptions;
+  a.webContents.capturePage = async (_rect, options) => { captured++; captureOptions = options; return { isEmpty: () => false, toJPEG: () => Buffer.from(frame) }; };
+  b.webContents.capturePage = async () => { throw Error('Never capture another tab for this popover'); };
+  views.show('a', { x: 10, y: 20, width: 300, height: 200 });
+  const bounds = { ...a.bounds };
+  assert.equal(await views.hide({ snapshot: true, tabId: 'a' }), `data:image/jpeg;base64,${Buffer.from(frame).toString('base64')}`);
+  assert.equal(a.visible, false);
+  frame = 'target located and scrolled into view';
+  assert.equal(await views.hide({ snapshot: true, tabId: 'a' }), `data:image/jpeg;base64,${Buffer.from(frame).toString('base64')}`);
+  assert.equal(captured, 2);
+  assert.deepEqual(captureOptions, { stayHidden: true, stayAwake: true }, 'refreshing a hidden page cannot expose it over the popover');
+  assert.equal(a.visible, false);
+  assert.deepEqual(a.bounds, bounds);
+  assert.equal(b.visible, false);
+  assert.equal(await views.hide({ snapshot: true, tabId: 'missing' }), null);
+  let finish;
+  a.webContents.capturePage = () => new Promise(resolve => { finish = resolve; });
+  const refreshing = views.hide({ snapshot: true, tabId: 'a' });
+  views.show('b', { x: 10, y: 20, width: 300, height: 200 });
+  finish({ isEmpty: () => false, toJPEG: () => Buffer.from('old page') });
+  await refreshing;
+  assert.equal(b.visible, true, 'switching tabs while a hidden snapshot is captured must not hide the new page');
+  assert.equal(await views.hide(), null, 'ordinary hide behavior is unchanged');
+  assert.equal(b.visible, false);
+  views.closeAll();
+});
+
 test('views: one page shows at a time, pages stay locked down, windows become tabs', async () => {
   const fake = fakeElectron();
   const sent = [];
@@ -134,9 +178,9 @@ test('views: one page shows at a time, pages stay locked down, windows become ta
   views.open('b', 'https://www.apple.com');
   const [a, b] = fake.made;
   assert.deepEqual(a.webContents.loaded, ['http://localhost:3000/']);
-  assert.deepEqual(a.options.webPreferences, { partition: 'persist:browser', nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true });
-  assert.equal(a.options.webPreferences.preload, undefined);
-  assert.equal(fake.browsing.ua, 'X Y');
+  assert.deepEqual(a.options.webPreferences, { partition: 'persist:browser', nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true,
+    preload: path.join(__dirname, '../dist/catalog-preload.cjs') });
+  assert.equal(fake.browsing.ua, 'X Electron/44.4.1 Y', 'Stage must inherit the process-wide identity without a session override');
   assert.equal(a.visible, false);
 
   views.show('a', { x: 10, y: 20, width: 300, height: 200 });
@@ -178,7 +222,8 @@ test('views: one page shows at a time, pages stay locked down, windows become ta
   // Signing in: a popup is a real child window with its opener, locked down like a tab and never given the preload.
   const popupAnswer = a.webContents.windowOpen({ url: 'about:blank', disposition: 'new-window' });
   assert.equal(popupAnswer.action, 'allow');
-  assert.deepEqual(popupAnswer.overrideBrowserWindowOptions.webPreferences, a.options.webPreferences);
+  const { preload, ...popupPreferences } = a.options.webPreferences;
+  assert.deepEqual(popupAnswer.overrideBrowserWindowOptions.webPreferences, popupPreferences);
   const popup = Object.assign(new EventEmitter(), { title: '', isDestroyed: () => false, setTitle(value) { this.title = value; }, destroy() { this.destroyed = true; } });
   popup.webContents = Object.assign(new EventEmitter(), { getURL: () => 'https://accounts.example.com/o/oauth2', getTitle: () => 'Sign in', setWindowOpenHandler() {} });
   a.webContents.emit('did-create-window', popup);
@@ -252,6 +297,96 @@ test('views: one page shows at a time, pages stay locked down, windows become ta
   await views.flush();
   assert.equal(fake.browsing.flushed, 1);
   assert.equal(views.show('a', { x: 0, y: 0, width: 1, height: 1 }), false);
+});
+
+test('favicons follow the page; navigation and closing cancel stale results; E2B stays generic', async () => {
+  const fake = fakeElectron(), sent = [];
+  const views = createBrowserViews({ electron: fake.electron, getWindow: () => fake.win, send: (channel, value) => sent.push([channel, value]), appName: 'Engelbart' });
+  views.open('a', 'https://example.com/');
+  const wc = fake.made[0].webContents;
+  const latest = () => sent.filter(([channel]) => channel === 'browser:state').at(-1)[1];
+  const tick = () => new Promise(resolve => setImmediate(resolve));
+  const svg = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>';
+  wc.emit('did-navigate');
+  wc.emit('page-favicon-updated', {}, [svg]); await tick();
+  assert.equal(latest().favicon, svg);
+  wc.emit('did-start-navigation', {}, 'https://example.com/frame', false, false);
+  wc.emit('did-start-navigation', {}, 'https://example.com/#section', true, true);
+  assert.equal(latest().favicon, svg, 'subframe and same-document navigation keep the icon');
+
+  let resolveFetch, request;
+  fake.browsing.fetch = (_url, options) => { request = options; return new Promise(resolve => { resolveFetch = resolve; }); };
+  wc.emit('page-favicon-updated', {}, ['https://example.com/slow.png']); await tick();
+  wc.emit('did-start-navigation', {}, 'https://other.example/', false, true);
+  assert.equal(latest().favicon, null); assert.equal(request.signal.aborted, true);
+  wc.url = 'https://other.example/'; wc.emit('did-navigate');
+  resolveFetch(new Response('old image', { headers: { 'content-type': 'image/png' } })); await tick();
+  assert.equal(latest().favicon, null, 'late image from the previous page cannot return');
+  wc.emit('page-favicon-updated', {}, [svg]); await tick();
+  assert.equal(latest().favicon, svg);
+  wc.emit('page-favicon-updated', {}, []); await tick();
+  assert.equal(latest().favicon, null);
+
+  // Electron can omit the favicon event when reloading with an unchanged icon.
+  wc.executeJavaScriptInIsolatedWorld = async () => [svg];
+  wc.emit('did-start-navigation', {}, wc.url, false, true);
+  wc.emit('did-navigate'); wc.emit('did-finish-load'); await tick();
+  assert.equal(latest().favicon, svg, 'reload reads the committed document when no favicon event arrives');
+  let finishReading;
+  wc.executeJavaScriptInIsolatedWorld = () => new Promise(resolve => { finishReading = resolve; });
+  wc.emit('did-start-navigation', {}, wc.url, false, true);
+  wc.emit('did-navigate'); wc.emit('did-finish-load'); await tick();
+  wc.emit('page-favicon-updated', {}, []);
+  finishReading([svg]); await tick();
+  assert.equal(latest().favicon, null, 'a late document read cannot override a newer favicon event');
+
+  for (const url of ['https://3000-example.e2b.app/', 'https://3000-example.e2b.dev/']) {
+    views.open('a', url); wc.emit('did-navigate');
+    wc.emit('page-favicon-updated', {}, [svg]); await tick();
+    assert.equal(latest().favicon, null, 'E2B never gets a site favicon');
+  }
+  views.open('a', 'https://example.com/'); wc.emit('did-navigate');
+  wc.emit('page-favicon-updated', {}, ['https://example.com/slow.png']); await tick();
+  views.close('a'); const count = sent.length;
+  assert.equal(request.signal.aborted, true);
+  resolveFetch(new Response('late image', { headers: { 'content-type': 'image/png' } })); await tick();
+  assert.equal(sent.length, count, 'a closed tab receives no late favicon state');
+});
+
+test('repo thumbnails capture only the settled visible viewport and discard navigation or visibility races', async () => {
+  const fake = fakeElectron();
+  let saved = 0, dimensions, captured = 0;
+  const bytes = Buffer.from([255, 216, 255, 224]);
+  const image = { isEmpty: () => false, getSize: () => ({ width: 1600, height: 1200 }),
+    resize(size) { dimensions = size; return { toJPEG: () => bytes }; } };
+  const repoThumbnails = { capture: async (_url, take, current) => { const picture = await take(); if (picture && current()) { saved++; return true; } return false; } };
+  const views = createBrowserViews({ electron: fake.electron, getWindow: () => fake.win, send() {}, appName: 'Engelbart', repoThumbnails });
+  views.open('a', 'https://3000-test.e2b.app/');
+  const wc = fake.made[0].webContents;
+  wc.capturePage = async () => { captured++; return image; };
+  wc.emit('did-navigate', {}, wc.url, 200);
+  assert.equal(await views.captureRepoThumbnail('a'), false, 'background pages are never captured');
+  views.show('a', { x: 0, y: 0, width: 800, height: 600 });
+  assert.equal(await views.captureRepoThumbnail('a'), true);
+  assert.deepEqual(dimensions, { width: 640, height: 480, quality: 'good' });
+  wc.isLoading = () => true;
+  assert.equal(await views.captureRepoThumbnail('a'), false);
+  wc.isLoading = () => false;
+  wc.emit('did-navigate', {}, wc.url, 500);
+  assert.equal(await views.captureRepoThumbnail('a'), false, 'HTTP error pages are not thumbnails');
+  wc.emit('did-navigate', {}, wc.url, 200);
+  let finish;
+  wc.capturePage = () => new Promise(resolve => { finish = resolve; });
+  const navigating = views.captureRepoThumbnail('a');
+  wc.emit('did-start-navigation', {}, wc.url, false, true); // same URL reload still invalidates the frame
+  wc.emit('did-navigate', {}, wc.url, 200);
+  finish(image); assert.equal(await navigating, false);
+  const hidden = views.captureRepoThumbnail('a');
+  await views.hide(); finish(image); assert.equal(await hidden, false);
+  views.show('a', { x: 0, y: 0, width: 800, height: 600 });
+  const closed = views.captureRepoThumbnail('a');
+  views.close('a'); finish(image); assert.equal(await closed, false);
+  assert.equal(saved, 1); assert.equal(captured, 1);
 });
 
 test('views: a page on disk opens from inside the home directory only, and only a page on disk may link to another', () => {

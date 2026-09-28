@@ -9,71 +9,36 @@ the run manager and a partial unique index. Stopped and failed runs are not
 restarted by background refreshes during the same app session; use **Retry build**
 to try again immediately, or relaunch the app for automatic preparation.
 Attaching an existing GitHub repo to a workspace also starts or reuses its build,
-including retrying a previously failed or stopped attempt. It selects that repo
-in **Repo** while setup runs, then posts a preview-ready notification without changing panes.
-Re-saving or reordering existing context does not start another build. A setup
-handoff error leaves the attachment saved and shows the error.
+including retrying a previously failed or stopped attempt. Adding or attaching a
+repo keeps the current document, pane and Stage tabs in place. Re-saving or
+reordering existing context does not start another build. A setup handoff error
+leaves the attachment saved and shows the error.
 
-The sidebar's GitHub section shows **Add repository** beneath the list only when
-empty. Hovering or keyboard-focusing the section header or a repository reveals a
-**+** that opens the same add-repository form. Repository rows no longer open hover
-cards; clicking their names still opens the Repo tab.
+The right pane has **Stage** and **Terminal**. There is no Repo tab or floating
+Sandbox runs panel. Clicking a repository name always opens its GitHub page in
+Stage, without starting or stopping a run. Sidebar rows show the repository name
+and removal control; saved screenshot previews remain available on hover. Build
+details and live-preview actions are available through the notification bell.
+The inspector keeps **Build**, **Logs**, and **Environment**, with **Stop sandbox**
+and the existing Run / Retry controls in its footer.
 
-Click a repository in the workspace sidebar to open the **Repo** tab, after
-**Paper**. It displays the repository's README with GitHub-flavored Markdown
-(headings, lists, code blocks, tables, task lists, images, and safe HTML).
-Relative links and images resolve against the README's path and default branch;
-heading links scroll within the README. Other links open externally.
-The README is fetched from GitHub independently of sandbox setup, cached in memory
-for five minutes, and can be refreshed. This currently supports public repositories;
-missing/private READMEs and network errors leave the build controls available.
-No README content or new fields are written to the library or sandbox tables.
+The header bell shows one notification per repository, updated through
+**Building…**, **Build finished**, or **Build failed**. The repo name opens GitHub
+in Stage; clicking **Building…**, **Build finished**, or **Build failed** opens the inspector, never stopping or retrying
+directly. A completed preview offers a separate **Open live ↗**; a failed build
+shows its error, with **Retry build** available inside the inspector. A completed
+run with no web preview says so and has no live-preview action.
+Completion never changes panes automatically. The bell is shared by the workspace,
+Home and Create Project screens.
 
-The Repo view has a compact 38px header directly below the existing pane tabs,
-outside the README's scroll container so it remains available while reading.
-It shows a GitHub icon and **repo / Build** breadcrumb on the
-left, with run status on the right: **Preparing…**, **Live ↗**, **Needs attention**,
-or **Inactive**. A ready run without a preview URL shows **Ready**, not Live.
-Only **Live ↗** opens the preview; the other statuses are informational.
-The README contains no injected controls or layout wrappers.
-Repository selection stays in the sidebar; there is no duplicate dropdown or
-permanent bottom panel. **Build** always opens the existing centered modal on its
-**Build** overview tab, without starting a build. **Build** keeps the expandable
-lifecycle rows; **Logs** shows the recorded output in chronological order using
-the same terminal/progress normalization; **Environment** keeps its existing editor.
-The compact repo/build header contains run status, View on GitHub, and an × close
-control. The Build inspector also shows **Time to live** when both timestamps
-are known: run creation (or the latest restart) to the first verified preview.
-This is wall time, not the sum of overlapping steps; later agent narration and
-runtime monitoring do not extend it. A quiet footer holds the current sandbox state and the existing Run / Retry
-and Stop actions. README utilities and retention-limit text are not shown here.
-Close, Escape, or clicking
-the backdrop returns to the README without losing its scroll position; unsaved
-environment edits survive tab changes and closing/reopening the modal for the
-same selected repository. The latest 300 events
-are saved with each run and survive reloads and app restarts. Compact lifecycle
-milestones are retained separately, so live process snapshots cannot erase the
-Build overview. Local-Claude builds replace the empty Run Plan placeholder with
-**Setup agent**, including initiation, assistant messages, tool activity, and its
-explicit outcome. Agent activity has its own bounded 200-event tail, independent
-of application output. Its duration can overlap installation, not add to it.
-**Services** shows observed owned processes/listening ports and the preview HTTP
-check, not a claim that every backend or credential-dependent feature works.
-**Environment** distinguishes saved names applied to launch from a requirements
-scan; local setup does not currently run that scan. Values are never recorded.
-Logs and expanded steps combine those records with the recent output; raw output
-beyond the rolling limits is not retained. On upgrade, any
-remaining lifecycle evidence is preserved; already-discarded steps show “Not
-recorded” without made-up durations. When a build finishes successfully, the
-top-right notification bell receives an unread preview-ready notification; the
-current pane and browser tabs stay unchanged. Clicking the notification or **Live ↗**
-opens the verified preview on demand. The bell is also available on Home and Create
-Project. Opening its dropdown marks the visible notifications read. It keeps the latest
-notification per repository (up to 40); notification IDs/read state are saved locally
-per data root, separately from sandbox records. Reloads/replayed events do not duplicate
-notifications or mark a previously read completion unread. Stopped/replaced previews
-remain identifiable but cannot be opened from an old notification.
-The home screen retains the compact sandbox status panel.
+Opening the dropdown marks visible notifications read. Clearing a building entry
+keeps later progress quiet while allowing its completion or failure to notify.
+Read/dismissal state is saved per data root, with up to 40 latest notifications.
+Repeated progress and restored snapshots do not create duplicates. Stopped or
+replaced runs are excluded. Inspecting a dismissed build does not put it back into
+the inbox. The underlying run records, logs, milestones and environment settings
+are unchanged; the existing inspector is shared by sidebar and notification controls.
+
 Packaged-app users must restart into a newly packaged build to receive changes;
 rebuilding the checkout alone does not update an already running release.
 
@@ -180,7 +145,7 @@ The existing hc AI pipeline is bypassed in this mode. The local Claude task perf
 inspection, install/build decisions, and repairs using the sandbox tools. The worker
 saves a `kind: "claude-local"` recipe with command/cwd/port/path in the VM, starts the
 app under `launch.py`, and verifies the public proxy URL independently. The normal
-`sandbox_runs` log/status events drive Repo's build logs and preview-ready notifications.
+`sandbox_runs` log/status events drive build notifications.
 The local `start_app` publishes readiness immediately after its owned-process,
 local HTTP and public-preview checks pass, without waiting for Claude's final message.
 The tool bridge then rejects further setup mutations (including queued calls);
@@ -362,7 +327,7 @@ See [programmatic Claude Code](https://code.claude.com/docs/en/headless) and the
 
 ### Application environment
 
-In **Repo → Build → Environment**, add or replace masked values, mark rows
+In **Build → Environment**, add or replace masked values, mark rows
 for removal, then choose **Save** or **Save & restart app**. Save affects future
 launches; restarting applies the saved snapshot now and notifies when the verified
 preview is ready again, without switching panes. An empty string is a value, not a removal. Names are

@@ -112,7 +112,10 @@ function eventReader(onEvent) {
 }
 
 // "ESCALATE: <why>" is the agent talking to the harness (./ask.cjs), not an answer: it is never previewed.
-const toHarness = (text) => { const head = text.trimStart().slice(0, 9); return head.length > 0 && 'ESCALATE:'.startsWith(head); };
+const toHarness = (text) => {
+  const head = text.trimStart();
+  return head.length > 0 && ['ESCALATE:', require('./build-proposal.cjs').PREFIX].some(prefix => prefix.startsWith(head) || head.startsWith(prefix));
+};
 
 /**
  * Updates → progress messages, the text at most once per interval: { activity, log? } when what it

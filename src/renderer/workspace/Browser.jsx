@@ -133,7 +133,6 @@ export default function Browser({ projectId, visible, onExpand, initialUrl, onPa
   const [draft, setDraft] = React.useState('');
   const [menu, setMenu] = React.useState(null); // { x, y }
   const [device, setDevice] = React.useState('fit');
-  const [customW, setCustomW] = React.useState('390');
   const [reloadKey, setReloadKey] = React.useState(0);
   const [file, setFile] = React.useState(null); // { path, text } | { error }
   const [occluded, setOccluded] = React.useState(false);
@@ -280,7 +279,7 @@ export default function Browser({ projectId, visible, onExpand, initialUrl, onPa
     window.addEventListener('resize', place);
     place();
     return () => { cancelled = true; observer.disconnect(); window.removeEventListener('resize', place); };
-  }, [showing, visible, page, !!failed, occluded, tab.id, device, customW]);
+  }, [showing, visible, page, !!failed, occluded, tab.id, device]);
 
   // A local server that is not up yet: keep knocking while its tab is in front.
   React.useEffect(() => {
@@ -332,7 +331,7 @@ export default function Browser({ projectId, visible, onExpand, initialUrl, onPa
   const go = (event) => { event.preventDefault(); const v = draft.trim(); if (v) navigate(v); };
 
   const dev = DEVICES.find((d) => d.id === device);
-  const width = device === 'custom' ? (Number(customW) || 390) : (dev ? dev.w : 0);
+  const width = dev ? dev.w : 0;
   const slotStyle = width ? { flex: 'none', width, height: '100%', background: '#fff', margin: '0 auto' } : { flex: 1, width: '100%', background: '#fff' };
   const menuW = Math.min(240, (window.innerWidth || 1200) - 16);
 
@@ -376,7 +375,6 @@ export default function Browser({ projectId, visible, onExpand, initialUrl, onPa
           <button type="button" className="hov-wash" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setMenu(menu ? null : { x: r.right, y: r.bottom }); }} aria-label="More" style={{ ...ICON_BUTTON, background: menu ? '#f2f2f2' : 'transparent', font: '600 16px/1 var(--font-sans)', color: '#4d4d4d' }}>⋮</button>
           {menu && (
             <div data-overlay="1" style={{ position: 'fixed', left: clamp(menu.x - menuW, 8, (window.innerWidth || 1200) - menuW - 8), top: menu.y + 6, zIndex: 60, width: menuW, padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, animation: `rise 160ms ${EASE}` }}>
-              <div style={{ padding: '6px 10px', font: '500 9px/1 var(--font-sans)', letterSpacing: '1.6px', textTransform: 'uppercase', color: '#8f8f8f' }}>Device preset</div>
               {DEVICES.map((d) => (
                 <div key={d.id} className="hov-wash" onClick={() => { setDevice(d.id); setMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px', borderRadius: 6, cursor: 'pointer' }}>
                   <span style={{ flex: 'none', width: 14, textAlign: 'center', font: '12px/1 var(--font-sans)', color: '#171717' }}>{device === d.id ? '✓' : ''}</span>
@@ -384,10 +382,6 @@ export default function Browser({ projectId, visible, onExpand, initialUrl, onPa
                   <span style={{ font: '11px/1 var(--font-mono)', color: '#8f8f8f' }}>{d.w ? `${d.w}×${d.h}` : ''}</span>
                 </div>
               ))}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderTop: '1px solid #eaeaea', marginTop: 4 }}>
-                <span style={{ flex: 1, font: '13px/1.4 var(--font-sans)', color: '#171717' }}>Custom width</span>
-                <input value={customW} onChange={(event) => { setCustomW(event.target.value.replace(/\D/g, '')); setDevice('custom'); }} inputMode="numeric" aria-label="Custom width" style={{ width: 64, padding: '4px 8px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fafafa', font: '12px/1.4 var(--font-mono)', color: '#171717', textAlign: 'right' }} />
-              </div>
               {page && web && (
                 <div style={{ borderTop: '1px solid #eaeaea', marginTop: 4, paddingTop: 4 }}>
                   <div className="hov-wash" onClick={() => { quiet(api.openExternal(web.url || tab.url)); setMenu(null); }} style={{ padding: '7px 10px 7px 34px', borderRadius: 6, cursor: 'pointer', font: '13px/1.4 var(--font-sans)', color: '#171717' }}>Open in default browser</div>

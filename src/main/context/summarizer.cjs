@@ -113,7 +113,7 @@ function lastUsage(stdout) {
  * asked again on every call, so switching provider, model or effort needs no restart.
  * `run` (execFile by default) and `codexAuthFile` are injectable for tests.
  */
-function createCliSummarizer({ readSettings, environment = process.env, runDirectory = os.tmpdir(), codexHome = path.join(os.tmpdir(), 'engelbart-codex-home'), codexAuthFile, run = execFile } = {}) {
+function createCliSummarizer({ readSettings, environment = process.env, runDirectory = os.tmpdir(), codexHome = path.join(os.tmpdir(), 'engelbart-codex-home'), codexAuthFile, run = execFile, textOnly = false } = {}) {
   const shell = resolveShell(environment);
   const shellArgs = (command) => (path.basename(shell) === 'fish' ? ['--login', '--interactive', '--command', command] : ['-ilc', command]);
   const childEnvironment = (extra) => {
@@ -148,7 +148,10 @@ function createCliSummarizer({ readSettings, environment = process.env, runDirec
     if (!prepareCodexHome({ codexHome, source, instructions: request.system })) throw new SummaryError('unavailable', 'Codex is not signed in with a ChatGPT account (run `codex login`); an API key is never used for summaries');
     const outFile = `${stem}.out.txt`;
     try {
-      const command = `exec codex exec --skip-git-repo-check --ephemeral -s read-only -m "$ENGELBART_SUMMARY_MODEL" -c 'model_reasoning_effort="${effort}"' -c project_doc_max_bytes=0 --color never --json -o "$ENGELBART_SUMMARY_OUTPUT" - < "$ENGELBART_SUMMARY_INPUT"`;
+      // Recording labels are untrusted page text. That request needs only a final
+      // text response, with no filesystem, browser, connector or agent tools.
+      const textFlags = textOnly ? `--ignore-user-config --ignore-rules ${['shell_tool', 'unified_exec', 'apps', 'browser_use', 'computer_use', 'in_app_browser', 'image_generation', 'view_image', 'multi_agent', 'plugins', 'remote_plugin', 'skill_search', 'goals', 'sleep_tool', 'code_mode', 'code_mode_host'].map(name => `--disable ${name}`).join(' ')} -c 'web_search="disabled"'` : '';
+      const command = `exec codex exec --skip-git-repo-check --ephemeral -s read-only ${textFlags} -m "$ENGELBART_SUMMARY_MODEL" -c 'model_reasoning_effort="${effort}"' -c project_doc_max_bytes=0 --color never --json -o "$ENGELBART_SUMMARY_OUTPUT" - < "$ENGELBART_SUMMARY_INPUT"`;
       const { stdout, failure } = await execute(command, childEnvironment({ CODEX_HOME: codexHome, ENGELBART_SUMMARY_MODEL: model, ENGELBART_SUMMARY_OUTPUT: outFile, ENGELBART_SUMMARY_INPUT: `${stem}.input.txt` }), signal);
       let text = '';
       try { text = fs.readFileSync(outFile, 'utf8'); } catch { text = ''; }

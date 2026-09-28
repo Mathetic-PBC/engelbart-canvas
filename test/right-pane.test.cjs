@@ -9,7 +9,7 @@ const { renderToStaticMarkup } = require('react-dom/server');
 const { buildSync } = require('esbuild');
 
 // Exercise the real pane switcher with inert children, not a real browser, terminal or sandbox.
-const panes = { './Stage.jsx': 'stage', './RepoPane.jsx': 'repo', '../terminal/TerminalPane.jsx': 'terminal' };
+const panes = { './Stage.jsx': 'stage', './RepoPane.jsx': 'repo', './LocalPreview.jsx': 'local-preview', '../terminal/TerminalPane.jsx': 'terminal' };
 const calls = [];
 const stubs = Object.fromEntries(Object.entries(panes).map(([id, name]) => [id, (props) => {
   calls.push({ name, props });
@@ -24,13 +24,13 @@ compiled.require = function (id) { return stubs[id] || Module.prototype.require.
 compiled._compile(built.outputFiles[0].text, filename);
 const { default: RightPane, RIGHT_MODES } = compiled.exports;
 
-test('Stage and Terminal stay mounted while Repo is mounted only for its own tab', () => {
-  assert.deepEqual(RIGHT_MODES, [{ id: 'stage', label: 'Stage' }, { id: 'terminal', label: 'Terminal' }, { id: 'repo', label: 'Repo' }]);
+test('Stage and Terminal are the only tabs and both remain mounted', () => {
+  assert.deepEqual(RIGHT_MODES, [{ id: 'stage', label: 'Stage' }, { id: 'terminal', label: 'Terminal' }]);
   for (const { id: mode } of RIGHT_MODES) {
     calls.length = 0;
-    renderToStaticMarkup(React.createElement(RightPane, { mode, repositories: [], repoId: 'repo',
+    renderToStaticMarkup(React.createElement(RightPane, { mode,
       projectId: 'project', projectDir: '/project' }));
-    assert.equal(calls.some((call) => call.name === 'repo'), mode === 'repo');
+    assert.deepEqual(calls.map(call => call.name).sort(), ['stage', 'terminal']);
     assert.equal(calls.find((call) => call.name === 'stage').props.visible, mode === 'stage');
     assert.equal(calls.find((call) => call.name === 'terminal').props.visible, mode === 'terminal');
   }

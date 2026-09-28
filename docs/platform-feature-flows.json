@@ -1,0 +1,2187 @@
+{
+  "title": "Engelbart feature flows",
+  "basis": "Current workspace implementation; reviewed 2026-09-27. Illustrative values; no proposed redesign.",
+  "numbering": "Starts at 2 to follow the supplied GitHub URL / sandbox flow.",
+  "conventions": [
+    "Before/After snapshots show relevant fields only; these are projections, not complete replacement records.",
+    "Each feature is an independent example; alternatives branch from the named step.",
+    "Wrappers such as recording, bundle, preview, document, status, catalog and session label examples; they are not SQL tables.",
+    "Requests use public preload method names with positional args; these envelopes document calls, not a new HTTP API.",
+    "Null file/object means absent; empty arrays mean no entries. Sample paths and IDs are placeholders.",
+    "Only library, captured_sites, sandbox_runs and notes refer to SQL tables here.",
+    "JSONL stores one complete JSON object per line; it is not one JSON document."
+  ],
+  "flows": [
+    {
+      "number": "2",
+      "behavior": "Record a Stage page",
+      "storage": [
+        "<dataRoot>/recordings/<projectId>/<recordingId>/meta.json",
+        "<dataRoot>/recordings/<projectId>/<recordingId>/capture.jsonl",
+        "library.pglite: library, captured_sites"
+      ],
+      "notes": [
+        "Example: existing repository preview; libraryId and runId already exist.",
+        "recording = meta.json; activeRecording = transient controller state.",
+        "Recording timestamps: Unix milliseconds."
+      ],
+      "steps": [
+        {
+          "number": "2.1",
+          "kind": "Decision",
+          "label": "Can recording start?",
+          "cases": [
+            {
+              "when": "Another recording is active",
+              "then": "Reject; stop the existing recording first."
+            },
+            {
+              "when": "Page loading, closed, or not HTTP(S)",
+              "then": "Reject."
+            },
+            {
+              "when": "Loaded HTTP(S) page; no active recording",
+              "then": "Resolve source; create capture files."
+            }
+          ]
+        },
+        {
+          "number": "2.2",
+          "kind": "Event",
+          "label": "Resolve the capture source",
+          "cases": [
+            {
+              "when": "Known sandbox preview",
+              "then": "Use repository library.id and sandbox_runs.id."
+            },
+            {
+              "when": "Known website",
+              "then": "Reuse library.id; sourceKind = site."
+            },
+            {
+              "when": "Unsaved website",
+              "then": "Create website library row; sourceKind = site; runId = null."
+            }
+          ],
+          "before": {
+            "captured_sites": []
+          },
+          "after": {
+            "captured_sites": [
+              {
+                "site": "https://example-preview-host.example",
+                "library_id": "a27b6e09-f342-4f91-8c58-64ba719312ef",
+                "kind": "repo"
+              }
+            ]
+          }
+        },
+        {
+          "number": "2.3",
+          "kind": "Event",
+          "label": "Create recording metadata and empty capture file",
+          "request": {
+            "method": "recordingStart",
+            "args": [
+              "stage-tab-1",
+              "11111111-1111-4111-8111-111111111111"
+            ]
+          },
+          "before": {
+            "recording": null,
+            "activeRecording": null
+          },
+          "after": {
+            "recording": {
+              "version": 1,
+              "id": "33333333-3333-4333-8333-333333333333",
+              "projectId": "11111111-1111-4111-8111-111111111111",
+              "name": "My app",
+              "url": "https://example-preview-host.example/settings",
+              "libraryId": "a27b6e09-f342-4f91-8c58-64ba719312ef",
+              "sourceKind": "repo",
+              "runId": "7e41c6b2-580a-4bda-9d9f-82f094312abc",
+              "status": "starting",
+              "createdAt": 1790524800000,
+              "startedAt": null,
+              "stoppedAt": null,
+              "durationMs": 0,
+              "bytes": 0,
+              "events": 0,
+              "snapshots": 0,
+              "frames": 0,
+              "warnings": []
+            },
+            "activeRecording": "33333333-3333-4333-8333-333333333333"
+          },
+          "effects": [
+            "Create capture.jsonl; send browser:record-command with type = start."
+          ]
+        },
+        {
+          "number": "2.4",
+          "kind": "Event",
+          "label": "Save first full snapshot; acknowledge batch",
+          "before": {
+            "recording": {
+              "id": "33333333-3333-4333-8333-333333333333",
+              "status": "starting",
+              "startedAt": null,
+              "events": 0,
+              "snapshots": 0
+            }
+          },
+          "after": {
+            "recording": {
+              "id": "33333333-3333-4333-8333-333333333333",
+              "status": "recording",
+              "startedAt": 1790524800100,
+              "events": 2,
+              "snapshots": 1
+            }
+          },
+          "effects": [
+            "Append one JSON object per capture.jsonl line; sync before acknowledgement.",
+            "Update bytes, durationMs, frames and warnings from saved batches.",
+            "Same-origin reload: new documentId; retain earlier batches.",
+            "Stage tab switch: continue recording the original tab."
+          ]
+        },
+        {
+          "number": "2.5",
+          "kind": "Event",
+          "label": "Stop and save recording",
+          "request": {
+            "method": "recordingStop",
+            "args": []
+          },
+          "before": {
+            "recording": {
+              "id": "33333333-3333-4333-8333-333333333333",
+              "status": "recording",
+              "stoppedAt": null
+            },
+            "activeRecording": "33333333-3333-4333-8333-333333333333"
+          },
+          "after": {
+            "recording": {
+              "id": "33333333-3333-4333-8333-333333333333",
+              "status": "saved",
+              "stoppedAt": 1790524830000,
+              "durationMs": 29800,
+              "warnings": []
+            },
+            "activeRecording": null
+          },
+          "effects": [
+            "Flush final batch; close capture file; open recordings list.",
+            "Sandbox run unchanged."
+          ]
+        },
+        {
+          "number": "2.6",
+          "kind": "Alternative",
+          "label": "Capture interrupted",
+          "branches_from": "2.4",
+          "before": {
+            "recording": {
+              "id": "33333333-3333-4333-8333-333333333333",
+              "status": "recording",
+              "stoppedAt": null,
+              "warnings": []
+            }
+          },
+          "after": {
+            "recording": {
+              "id": "33333333-3333-4333-8333-333333333333",
+              "status": "interrupted",
+              "stoppedAt": 1790524830000,
+              "warnings": [
+                "Recording stopped when the tab moved to a different site."
+              ]
+            }
+          },
+          "effects": [
+            "Other causes: page crash, capture limit, missing final flush, missing initial snapshot.",
+            "App restart: recover complete JSONL lines; ignore an incomplete final line."
+          ]
+        },
+        {
+          "number": "2.7",
+          "kind": "Event",
+          "label": "Generate descriptive title after saving",
+          "branches_from": "2.5",
+          "before": {
+            "recording": {
+              "id": "33333333-3333-4333-8333-333333333333",
+              "name": "My app"
+            }
+          },
+          "after": {
+            "recording": {
+              "id": "33333333-3333-4333-8333-333333333333",
+              "name": "Updating account settings",
+              "pageName": "My app",
+              "title": {
+                "version": 1,
+                "status": "ready",
+                "attempts": 1,
+                "updatedAt": 1790524860000,
+                "stats": {
+                  "rawEvents": 80,
+                  "actions": 3,
+                  "included": 3,
+                  "omitted": 0
+                }
+              }
+            }
+          },
+          "effects": [
+            "Queue after save or list opening; summarize observed actions through configured model.",
+            "Title states: pending, ready, fallback, failed.",
+            "No usable title: retain page title; capture.jsonl unchanged."
+          ]
+        },
+        {
+          "number": "2.8",
+          "kind": "Event",
+          "label": "Open saved playback",
+          "request": {
+            "method": "recordingRead",
+            "args": [
+              "11111111-1111-4111-8111-111111111111",
+              "33333333-3333-4333-8333-333333333333"
+            ]
+          },
+          "effects": [
+            "Read metadata and batches; replay locally at engelbart://replay.",
+            "Play, pause, scrub; close player to return to live page.",
+            "No replay network requests; original page actions are not executed.",
+            "List filtered by current project and source; capture file unchanged."
+          ]
+        }
+      ],
+      "sources": [
+        "src/main/store/recordings.cjs",
+        "src/main/browser/recordings.cjs",
+        "src/main/browser/recording-titles.cjs",
+        "src/main/store/captured-sites.cjs"
+      ]
+    },
+    {
+      "number": "3",
+      "behavior": "Annotate a Stage element",
+      "storage": [
+        "<dataRoot>/annotations/interface/<sha256(projectId + newline + scope)>.json",
+        "library.pglite: library, captured_sites"
+      ],
+      "notes": [
+        "bundle = saved JSON file; picker = transient UI state.",
+        "Example: same repository preview as recording flow."
+      ],
+      "steps": [
+        {
+          "number": "3.1",
+          "kind": "Event",
+          "label": "Enter annotation mode; select element",
+          "before": {
+            "picker": {
+              "active": false,
+              "selected": null
+            }
+          },
+          "after": {
+            "picker": {
+              "active": true,
+              "selected": "button#save-settings"
+            }
+          },
+          "effects": [
+            "Intercept selection click; open composer; keep page width.",
+            "Capture anchor; no saved annotation yet."
+          ]
+        },
+        {
+          "number": "3.2",
+          "kind": "Decision",
+          "label": "Choose composer action",
+          "cases": [
+            {
+              "when": "Add note",
+              "then": "Continue to 3.3."
+            },
+            {
+              "when": "Ask Bart",
+              "then": "Send text and element/page context to workspace Bart; no implicit saved note."
+            },
+            {
+              "when": "Cancel or Escape",
+              "then": "Discard draft; clear selection; restore normal interaction."
+            },
+            {
+              "when": "Save or Bart handoff fails",
+              "then": "Keep draft; display error."
+            }
+          ]
+        },
+        {
+          "number": "3.3",
+          "kind": "Event",
+          "label": "Add note",
+          "request": {
+            "method": "createInterfaceAnnotation",
+            "args": [
+              {
+                "projectId": "11111111-1111-4111-8111-111111111111",
+                "url": "https://example-preview-host.example/settings"
+              },
+              {
+                "body": "Make this button easier to find.",
+                "anchor": {
+                  "element": {
+                    "tag": "button",
+                    "selector": "#save-settings",
+                    "id": "save-settings",
+                    "role": "button",
+                    "text": "Save settings",
+                    "classes": [
+                      "primary"
+                    ]
+                  },
+                  "ancestors": [],
+                  "frames": [],
+                  "route": "/settings",
+                  "documentTitle": "My app"
+                }
+              }
+            ]
+          },
+          "before": {
+            "bundle": null
+          },
+          "after": {
+            "bundle": {
+              "version": 1,
+              "projectId": "11111111-1111-4111-8111-111111111111",
+              "scope": "repo:a27b6e09-f342-4f91-8c58-64ba719312ef",
+              "libraryId": "a27b6e09-f342-4f91-8c58-64ba719312ef",
+              "notes": [
+                {
+                  "id": "44444444-4444-4444-8444-444444444444",
+                  "body": "Make this button easier to find.",
+                  "anchor": {
+                    "element": {
+                      "tag": "button",
+                      "selector": "#save-settings",
+                      "id": "save-settings",
+                      "role": "button",
+                      "text": "Save settings",
+                      "classes": [
+                        "primary"
+                      ]
+                    },
+                    "ancestors": [],
+                    "frames": [],
+                    "route": "/settings",
+                    "documentTitle": "My app"
+                  },
+                  "url": "https://example-preview-host.example/settings",
+                  "libraryId": "a27b6e09-f342-4f91-8c58-64ba719312ef",
+                  "runId": "7e41c6b2-580a-4bda-9d9f-82f094312abc",
+                  "createdAt": "2026-09-27T16:00:00.000Z",
+                  "updatedAt": "2026-09-27T16:00:00.000Z"
+                }
+              ]
+            }
+          },
+          "effects": [
+            "Resolve or create library source; record captured_sites alias.",
+            "Validate text and anchor route; write bundle atomically.",
+            "Close composer; clear selection."
+          ]
+        },
+        {
+          "number": "3.4",
+          "kind": "Event",
+          "label": "Open Annotations; locate saved target",
+          "cases": [
+            {
+              "when": "Exact target",
+              "then": "Highlight; open note popover."
+            },
+            {
+              "when": "Closest match",
+              "then": "Highlight candidate; show matching feedback."
+            },
+            {
+              "when": "Missing target or different route",
+              "then": "Keep note readable; offer Open page when available."
+            }
+          ],
+          "effects": [
+            "Filter by project and source; include other routes on the same source.",
+            "Latest ready repository preview supplies sourceUrl; retain original note.url.",
+            "Bundle unchanged."
+          ]
+        },
+        {
+          "number": "3.5",
+          "kind": "Event",
+          "label": "Edit note",
+          "before": {
+            "notes": [
+              {
+                "id": "44444444-4444-4444-8444-444444444444",
+                "body": "Make this button easier to find.",
+                "updatedAt": "2026-09-27T16:00:00.000Z"
+              }
+            ]
+          },
+          "after": {
+            "notes": [
+              {
+                "id": "44444444-4444-4444-8444-444444444444",
+                "body": "Move this button above the form.",
+                "updatedAt": "2026-09-27T16:00:01.000Z"
+              }
+            ]
+          },
+          "effects": [
+            "Preserve id, createdAt, anchor and capture URL."
+          ]
+        },
+        {
+          "number": "3.6",
+          "kind": "Event",
+          "label": "Ask Bart about a saved note",
+          "effects": [
+            "Send note text and page/anchor context into the workspace conversation.",
+            "Saved annotation unchanged; continue with 6 or Builder Bart flow 5."
+          ]
+        },
+        {
+          "number": "3.7",
+          "kind": "Event",
+          "label": "Delete note",
+          "before": {
+            "notes": [
+              {
+                "id": "44444444-4444-4444-8444-444444444444",
+                "body": "Move this button above the form."
+              }
+            ]
+          },
+          "after": {
+            "notes": []
+          },
+          "effects": [
+            "Retain library source and other annotations."
+          ]
+        }
+      ],
+      "sources": [
+        "src/main/store/interface-annotations.cjs",
+        "src/shared/interface-annotations.cjs",
+        "src/renderer/workspace/InterfaceAnnotations.jsx"
+      ]
+    },
+    {
+      "number": "4",
+      "behavior": "Connect accounts; browse provider catalogs",
+      "storage": [
+        "<dataRoot>/github.json",
+        "<dataRoot>/google-browser.json",
+        "<dataRoot>/overleaf-browser.json",
+        "<dataRoot>/zotero-browser.json",
+        "Stage session: persist:browser"
+      ],
+      "notes": [
+        "Account state shared across workspaces; status and catalog examples are public responses.",
+        "Credentials/encrypted payloads omitted; no connections SQL table.",
+        "Opening catalog links in Stage leaves library and sandbox_runs unchanged."
+      ],
+      "steps": [
+        {
+          "number": "4.1.1",
+          "kind": "Event",
+          "label": "GitHub: start sign-in",
+          "before": {
+            "github": {
+              "connected": false,
+              "pending": null
+            }
+          },
+          "after": {
+            "github": {
+              "connected": false,
+              "pending": {
+                "kind": "browser"
+              }
+            }
+          },
+          "effects": [
+            "Open authorization in Stage; reuse pending sign-in tab.",
+            "Shared GitHub App: browser authorization and loopback callback.",
+            "Custom registration may use device code."
+          ]
+        },
+        {
+          "number": "4.1.2",
+          "kind": "Event",
+          "label": "GitHub: verify account; store encrypted tokens",
+          "before": {
+            "github": {
+              "configured": true,
+              "connected": false,
+              "login": "",
+              "name": "",
+              "avatarUrl": "",
+              "persisted": true,
+              "pending": {
+                "kind": "browser"
+              },
+              "error": "",
+              "installUrl": "https://github.com/apps/engelbart-mathetic/installations/new"
+            }
+          },
+          "after": {
+            "github": {
+              "configured": true,
+              "connected": true,
+              "login": "example-user",
+              "name": "Example User",
+              "avatarUrl": "https://avatars.githubusercontent.com/u/123456?v=4",
+              "persisted": true,
+              "pending": null,
+              "error": "",
+              "installUrl": "https://github.com/apps/engelbart-mathetic/installations/new"
+            }
+          },
+          "effects": [
+            "Complete callback/code exchange; clear pending sign-in.",
+            "Secure storage unavailable: persisted = false; tokens remain in memory."
+          ]
+        },
+        {
+          "number": "4.1.3",
+          "kind": "Event",
+          "label": "GitHub: browse authorized repositories",
+          "before": {
+            "catalog": {
+              "repos": []
+            }
+          },
+          "after": {
+            "catalog": {
+              "repos": [
+                {
+                  "id": "123456789",
+                  "fullName": "owner/my-app",
+                  "url": "https://github.com/owner/my-app",
+                  "private": true
+                }
+              ]
+            }
+          },
+          "effects": [
+            "List accessible GitHub App installation repositories.",
+            "Select result: open GitHub page in Stage.",
+            "Explicitly save/add repository to enter the library/build flow."
+          ]
+        },
+        {
+          "number": "4.1.4",
+          "kind": "Event",
+          "label": "GitHub: disconnect",
+          "before": {
+            "github": {
+              "connected": true,
+              "login": "example-user",
+              "pending": null
+            }
+          },
+          "after": {
+            "github": {
+              "connected": false,
+              "login": "",
+              "pending": null
+            }
+          },
+          "effects": [
+            "Remove stored connection; cancel pending authorization; clear account catalog.",
+            "Retain saved library repositories and existing sandbox runs."
+          ]
+        },
+        {
+          "number": "4.2.1",
+          "kind": "Event",
+          "label": "Google Docs: open Drive sign-in in Stage",
+          "before": {
+            "google": {
+              "configured": true,
+              "method": "stage",
+              "connected": false,
+              "account": null,
+              "persisted": false,
+              "pending": null,
+              "loading": false,
+              "error": "",
+              "updatedAt": 0
+            }
+          },
+          "after": {
+            "google": {
+              "configured": true,
+              "method": "stage",
+              "connected": false,
+              "account": null,
+              "persisted": false,
+              "pending": {
+                "kind": "stage"
+              },
+              "loading": false,
+              "error": "",
+              "updatedAt": 0
+            }
+          },
+          "effects": [
+            "Reuse Stage browser session; no OAuth registration required."
+          ]
+        },
+        {
+          "number": "4.2.2",
+          "kind": "Event",
+          "label": "Google Docs: read recent document catalog",
+          "before": {
+            "google": {
+              "connected": false,
+              "account": null
+            },
+            "catalog": null
+          },
+          "after": {
+            "google": {
+              "configured": true,
+              "method": "stage",
+              "connected": true,
+              "account": {
+                "id": "reader@example.com",
+                "email": "reader@example.com",
+                "name": "Example Reader"
+              },
+              "persisted": true,
+              "pending": null,
+              "loading": false,
+              "error": "",
+              "updatedAt": 1790524800000
+            },
+            "catalog": {
+              "accountId": "reader@example.com",
+              "since": "2026-09-20",
+              "documents": [
+                {
+                  "id": "example-document-id",
+                  "name": "Research notes",
+                  "url": "https://docs.google.com/document/d/example-document-id/edit?authuser=reader%40example.com",
+                  "modifiedTime": null
+                }
+              ],
+              "incomplete": false,
+              "updatedAt": 1790524800000,
+              "dateFiltered": true
+            }
+          },
+          "effects": [
+            "Filter: native Google Docs modified after the date seven calendar days earlier.",
+            "Unknown modification timestamp: null.",
+            "Cache metadata; document bodies are not fetched.",
+            "Select document: open its URL in Stage."
+          ]
+        },
+        {
+          "number": "4.3.1",
+          "kind": "Event",
+          "label": "Overleaf: connect and read project catalog",
+          "before": {
+            "overleaf": {
+              "configured": true,
+              "method": "stage",
+              "connected": false,
+              "account": null,
+              "persisted": false,
+              "pending": null,
+              "loading": false,
+              "error": "",
+              "updatedAt": 0
+            },
+            "catalog": null
+          },
+          "after": {
+            "overleaf": {
+              "configured": true,
+              "method": "stage",
+              "connected": true,
+              "account": {
+                "id": "64b000000000000000000001",
+                "email": "reader@example.com"
+              },
+              "persisted": true,
+              "pending": null,
+              "loading": false,
+              "error": "",
+              "updatedAt": 1790524800000
+            },
+            "catalog": {
+              "accountId": "64b000000000000000000001",
+              "projects": [
+                {
+                  "id": "64b000000000000000000002",
+                  "name": "Research paper",
+                  "modifiedTime": "2026-09-27T16:00:00.000Z",
+                  "archived": false,
+                  "url": "https://www.overleaf.com/project/64b000000000000000000002"
+                }
+              ],
+              "updatedAt": 1790524800000
+            }
+          },
+          "effects": [
+            "Open Overleaf in Stage; pending.kind = stage until signed in and loaded.",
+            "Include accessible non-trashed projects, including shared and archived; newest first.",
+            "No seven-day filter; no project-body extraction.",
+            "Select project: open in Stage."
+          ]
+        },
+        {
+          "number": "4.4.1",
+          "kind": "Event",
+          "label": "Zotero: connect and read personal library",
+          "before": {
+            "zotero": {
+              "configured": true,
+              "method": "stage",
+              "connected": false,
+              "account": null,
+              "persisted": false,
+              "pending": null,
+              "loading": false,
+              "error": "",
+              "updatedAt": 0
+            },
+            "catalog": null
+          },
+          "after": {
+            "zotero": {
+              "configured": true,
+              "method": "stage",
+              "connected": true,
+              "account": {
+                "id": "1234567",
+                "name": "example-reader"
+              },
+              "persisted": true,
+              "pending": null,
+              "loading": false,
+              "error": "",
+              "updatedAt": 1790524800000
+            },
+            "catalog": {
+              "accountId": "1234567",
+              "papers": [
+                {
+                  "id": "ABCD1234",
+                  "name": "Example research paper",
+                  "authors": "Example Author",
+                  "date": "2026",
+                  "itemType": "journalArticle",
+                  "dateAdded": "2026-09-27T16:00:00.000Z",
+                  "url": "https://www.zotero.org/example-reader/items/ABCD1234/library"
+                }
+              ],
+              "incomplete": false,
+              "updatedAt": 1790524800000
+            }
+          },
+          "effects": [
+            "Open Zotero in Stage; pending.kind = stage until signed in and loaded.",
+            "Read personal top-level items; exclude notes, annotations and child attachments.",
+            "Include standalone PDFs; group libraries excluded.",
+            "Select paper: open Zotero item in Stage; no automatic PDF download."
+          ]
+        },
+        {
+          "number": "4.5",
+          "kind": "Decision",
+          "label": "Google Docs / Overleaf / Zotero: refresh result",
+          "cases": [
+            {
+              "when": "Complete catalog",
+              "then": "Replace cached catalog; update updatedAt."
+            },
+            {
+              "when": "Confirmed empty catalog",
+              "then": "Clear previous entries."
+            },
+            {
+              "when": "Expired login",
+              "then": "Clear account/catalog; display reconnect error."
+            },
+            {
+              "when": "Temporary network or layout failure",
+              "then": "Keep previous catalog; display error and Retry."
+            },
+            {
+              "when": "Different authenticated account",
+              "then": "Replace account/catalog; do not merge accounts."
+            },
+            {
+              "when": "Secure storage unavailable",
+              "then": "Persist opt-in only; metadata remains in memory."
+            }
+          ]
+        },
+        {
+          "number": "4.6",
+          "kind": "Event",
+          "label": "Google Docs / Overleaf / Zotero: disconnect",
+          "before": {
+            "status": {
+              "configured": true,
+              "method": "stage",
+              "connected": true,
+              "account": {
+                "id": "reader@example.com",
+                "email": "reader@example.com",
+                "name": "Example Reader"
+              },
+              "persisted": true,
+              "pending": null,
+              "loading": false,
+              "error": "",
+              "updatedAt": 1790524800000
+            },
+            "catalog": {
+              "documents": [
+                {
+                  "id": "example-document-id",
+                  "name": "Research notes",
+                  "url": "https://docs.google.com/document/d/example-document-id/edit?authuser=reader%40example.com",
+                  "modifiedTime": null
+                }
+              ]
+            }
+          },
+          "after": {
+            "status": {
+              "configured": true,
+              "method": "stage",
+              "connected": false,
+              "account": null,
+              "persisted": false,
+              "pending": null,
+              "loading": false,
+              "error": "",
+              "updatedAt": 0
+            },
+            "catalog": null
+          },
+          "effects": [
+            "Example shown: Google Docs; same lifecycle for Overleaf and Zotero.",
+            "Cancel in-flight reads; delete provider cache; prevent late responses restoring it.",
+            "Keep provider sign-in in other Stage tabs; retain explicitly saved library items."
+          ]
+        },
+        {
+          "number": "4.7",
+          "kind": "Event",
+          "label": "Cancel pending connection",
+          "effects": [
+            "Abort pending work; clear pending state.",
+            "Reopening a still-pending sign-in focuses its Stage tab.",
+            "Saved library rows unchanged."
+          ]
+        }
+      ],
+      "sources": [
+        "src/main/github/connection.cjs",
+        "src/main/github/browser-auth.cjs",
+        "src/main/google/browser-connection.cjs",
+        "src/main/overleaf/browser-connection.cjs",
+        "src/main/zotero/browser-connection.cjs"
+      ]
+    },
+    {
+      "number": "5",
+      "behavior": "Build or update an interface through @bart",
+      "storage": [
+        "<dataRoot>/<project>/<workspace>/workspace.md",
+        "<dataRoot>/.local-apps/<projectId>/<workspaceId>/state.json",
+        "<dataRoot>/.local-apps/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/app/engelbart-preview.json",
+        "library.pglite: library",
+        "<project>/project.json: sidebarContext"
+      ],
+      "notes": [
+        "Example: @bart Make a timer using this workspace context.",
+        "preview = persisted local state projection; document.text = Markdown file contents.",
+        "One app folder per workspace; later approved builds update it.",
+        "Local preview uses state.json; it does not create a sandbox_runs row."
+      ],
+      "steps": [
+        {
+          "number": "5.1",
+          "kind": "Event",
+          "label": "Submit @bart request",
+          "request": {
+            "method": "askBart",
+            "args": [
+              "11111111-1111-4111-8111-111111111111",
+              {
+                "askId": "77777777-7777-4777-8777-777777777777",
+                "ref": {
+                  "kind": "workspace",
+                  "workspaceId": "22222222-2222-4222-8222-222222222222"
+                },
+                "workspaceId": "22222222-2222-4222-8222-222222222222",
+                "text": "Make a timer using this workspace context.",
+                "turns": []
+              }
+            ]
+          },
+          "before": {
+            "document": {
+              "text": "@bart Make a timer using this workspace context."
+            }
+          },
+          "after": {
+            "document": {
+              "text": "@bart Make a timer using this workspace context.\nbart~> 77777777-7777-4777-8777-777777777777"
+            }
+          }
+        },
+        {
+          "number": "5.2",
+          "kind": "Decision",
+          "label": "Route request",
+          "cases": [
+            {
+              "when": "Factual question or design discussion",
+              "then": "Read-only answer; continue to flow 6."
+            },
+            {
+              "when": "Create/update working browser interface",
+              "then": "Bart returns build proposal; start planning."
+            },
+            {
+              "when": "Explicit --build flag",
+              "then": "Start planning directly."
+            }
+          ],
+          "response": {
+            "buildProposal": {
+              "name": "Timer",
+              "request": "Build a timer with start, pause and reset using the workspace context."
+            }
+          },
+          "effects": [
+            "Model/effort flags select coding agent.",
+            "Proposal is not build approval."
+          ]
+        },
+        {
+          "number": "5.3",
+          "kind": "Event",
+          "label": "Claude prepares read-only plan",
+          "before": {
+            "preview": null
+          },
+          "after": {
+            "preview": {
+              "id": "11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222",
+              "projectId": "11111111-1111-4111-8111-111111111111",
+              "workspaceId": "22222222-2222-4222-8222-222222222222",
+              "directory": "<dataRoot>/.local-apps/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/app",
+              "name": "Timer",
+              "status": "planning",
+              "runId": "99999999-9999-4999-8999-999999999999",
+              "askId": "77777777-7777-4777-8777-777777777777",
+              "startedAt": "2026-09-27T16:00:00.000Z",
+              "readyAt": null,
+              "url": null,
+              "recipe": null,
+              "libraryId": null,
+              "plan": null,
+              "approval": null,
+              "error": null
+            }
+          },
+          "effects": [
+            "Read workspace, current note, mentioned notes and catalog.",
+            "Require Claude Code sign-in; planning failure becomes failed.",
+            "No coding, Git initialization, installs or server launch before approval."
+          ]
+        },
+        {
+          "number": "5.4",
+          "kind": "Event",
+          "label": "Show plan in Notifications; wait for approval",
+          "before": {
+            "preview": {
+              "status": "planning",
+              "plan": null,
+              "approval": null
+            }
+          },
+          "after": {
+            "preview": {
+              "status": "confirming",
+              "plan": {
+                "name": "Timer",
+                "summary": "Build a timer with start, pause and reset.",
+                "steps": [
+                  {
+                    "id": "step-1",
+                    "phase": "code",
+                    "title": "Create timer controls",
+                    "instructions": "Implement start, pause and reset; write the launch manifest.",
+                    "status": "pending"
+                  },
+                  {
+                    "id": "step-2",
+                    "phase": "install",
+                    "title": "Check dependencies",
+                    "instructions": "Install only if required by the manifest.",
+                    "status": "pending"
+                  },
+                  {
+                    "id": "step-3",
+                    "phase": "compile",
+                    "title": "Prepare timer app",
+                    "instructions": "Compile only if required by the manifest.",
+                    "status": "pending"
+                  },
+                  {
+                    "id": "step-4",
+                    "phase": "start",
+                    "title": "Start timer server",
+                    "instructions": "Run the foreground server on the allocated loopback port.",
+                    "status": "pending"
+                  },
+                  {
+                    "id": "step-5",
+                    "phase": "verify",
+                    "title": "Verify rendered timer",
+                    "instructions": "Confirm that the timer interface renders successfully.",
+                    "status": "pending"
+                  }
+                ],
+                "by": "Claude",
+                "model": null
+              },
+              "approval": {
+                "id": "88888888-8888-4888-8888-888888888888",
+                "workspaceId": "22222222-2222-4222-8222-222222222222",
+                "kind": "build",
+                "message": "Build a timer with start, pause and reset.",
+                "label": "Build locally"
+              }
+            }
+          },
+          "effects": [
+            "One to four coding steps, then install, compile, start and verify.",
+            "Plan review offers Build locally and Not now."
+          ]
+        },
+        {
+          "number": "5.5",
+          "kind": "Decision",
+          "label": "User approves this build?",
+          "cases": [
+            {
+              "when": "Build locally",
+              "then": "Consume one-time approval; continue to 5.6."
+            },
+            {
+              "when": "Not now",
+              "then": "Restore previous preview state; retain any existing live app."
+            },
+            {
+              "when": "Stale or different workspace approval",
+              "then": "Reject."
+            }
+          ],
+          "request": {
+            "method": "approveLocalPreview",
+            "args": [
+              "11111111-1111-4111-8111-111111111111",
+              "22222222-2222-4222-8222-222222222222",
+              "88888888-8888-4888-8888-888888888888",
+              true
+            ]
+          }
+        },
+        {
+          "number": "5.6",
+          "kind": "Event",
+          "label": "Initialize or reuse app folder; execute coding steps",
+          "before": {
+            "preview": {
+              "status": "confirming",
+              "approval": {
+                "id": "88888888-8888-4888-8888-888888888888",
+                "workspaceId": "22222222-2222-4222-8222-222222222222",
+                "kind": "build",
+                "message": "Build a timer with start, pause and reset.",
+                "label": "Build locally"
+              }
+            }
+          },
+          "after": {
+            "preview": {
+              "status": "building",
+              "approval": null
+            }
+          },
+          "effects": [
+            "Stop prior server after approval; git init if needed.",
+            "Run each coding step in its own bounded agent turn.",
+            "Write app files in workspace app folder; preserve original context files.",
+            "No automatic Git commit, remote creation or push."
+          ]
+        },
+        {
+          "number": "5.7",
+          "kind": "Event",
+          "label": "Write launch manifest",
+          "before": {
+            "manifest": null
+          },
+          "after": {
+            "manifest": {
+              "version": 1,
+              "kind": "interface",
+              "buildId": "77777777-7777-4777-8777-777777777777",
+              "name": "Timer",
+              "cwd": ".",
+              "install": null,
+              "build": null,
+              "command": "node server.cjs {port}",
+              "path": "/"
+            }
+          },
+          "effects": [
+            "File: app/engelbart-preview.json.",
+            "buildId must match current askId; command must contain {port}.",
+            "Example: dependency-free app; server binds to 127.0.0.1."
+          ]
+        },
+        {
+          "number": "5.8",
+          "kind": "Event",
+          "label": "Install, compile, start and verify",
+          "transitions": [
+            {
+              "phase": "install",
+              "preview_status": "installing",
+              "result": "done or skipped"
+            },
+            {
+              "phase": "compile",
+              "preview_status": "building",
+              "result": "done or skipped"
+            },
+            {
+              "phase": "start",
+              "preview_status": "starting",
+              "result": "done"
+            },
+            {
+              "phase": "verify",
+              "preview_status": "checking",
+              "result": "done"
+            }
+          ],
+          "effects": [
+            "Reuse unchanged dependencies when available; run configured compile command.",
+            "Allocate port; verify owned listener, HTML response and rendered interface.",
+            "Persist step outcomes, recipe and bounded logs."
+          ]
+        },
+        {
+          "number": "5.9",
+          "kind": "Event",
+          "label": "Attach app folder to Context; publish ready preview",
+          "before": {
+            "preview": {
+              "status": "checking",
+              "url": null,
+              "libraryId": null,
+              "readyAt": null
+            }
+          },
+          "after": {
+            "preview": {
+              "status": "ready",
+              "url": "http://127.0.0.1:43123/",
+              "libraryId": "66666666-6666-4666-8666-666666666666",
+              "readyAt": "2026-09-27T16:01:00.000Z",
+              "error": null
+            },
+            "library": [
+              {
+                "id": "66666666-6666-4666-8666-666666666666",
+                "name": "Timer",
+                "type": "folder",
+                "folder_path": "<dataRoot>/.local-apps/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/app",
+                "tags": [
+                  "git"
+                ]
+              }
+            ],
+            "sidebarContext": {
+              "version": 1,
+              "context": [
+                "66666666-6666-4666-8666-666666666666"
+              ],
+              "removed": []
+            }
+          },
+          "effects": [
+            "Reuse existing library folder entry on later builds.",
+            "Open/focus preview in requesting workspace; other workspaces receive notification only.",
+            "Replace pending Bart marker with answer and live-preview link.",
+            "Context indexing failure is logged; otherwise-valid preview can still become ready."
+          ]
+        },
+        {
+          "number": "5.10",
+          "kind": "Alternative",
+          "label": "Launch or verification fails",
+          "branches_from": "5.8",
+          "before": {
+            "preview": {
+              "status": "checking",
+              "url": null
+            }
+          },
+          "after": {
+            "preview": {
+              "status": "repairing",
+              "url": null
+            }
+          },
+          "effects": [
+            "Stop owned server; send actual error and recent logs to coding agent.",
+            "Allow one launch repair; retry runtime phases.",
+            "Coding/planning failures do not imply automatic launch repair."
+          ]
+        },
+        {
+          "number": "5.11",
+          "kind": "Alternative",
+          "label": "Retry fails",
+          "branches_from": "5.10",
+          "before": {
+            "preview": {
+              "status": "checking",
+              "url": null
+            }
+          },
+          "after": {
+            "preview": {
+              "status": "failed",
+              "url": null,
+              "error": "No HTML interface responded on the owned loopback port. Check the command, {port}, and 127.0.0.1 binding."
+            }
+          },
+          "effects": [
+            "Stop owned server; retain app files, recipe, plan and logs.",
+            "Bart reply shows failure."
+          ]
+        },
+        {
+          "number": "5.12",
+          "kind": "Event",
+          "label": "Stop preview",
+          "branches_from": "5.9",
+          "request": {
+            "method": "stopLocalPreview",
+            "args": [
+              "11111111-1111-4111-8111-111111111111",
+              "22222222-2222-4222-8222-222222222222"
+            ]
+          },
+          "before": {
+            "preview": {
+              "status": "ready",
+              "url": "http://127.0.0.1:43123/"
+            }
+          },
+          "after": {
+            "preview": {
+              "status": "stopped",
+              "url": null,
+              "error": null
+            }
+          },
+          "effects": [
+            "Stop owned process group; retain files and library association.",
+            "Closing Stage tab alone leaves server running."
+          ]
+        },
+        {
+          "number": "5.13",
+          "kind": "Event",
+          "label": "Restart saved preview",
+          "request": {
+            "method": "restartLocalPreview",
+            "args": [
+              "11111111-1111-4111-8111-111111111111",
+              "22222222-2222-4222-8222-222222222222"
+            ]
+          },
+          "before": {
+            "preview": {
+              "status": "stopped",
+              "url": null
+            }
+          },
+          "after": {
+            "preview": {
+              "status": "confirming",
+              "url": null,
+              "approval": {
+                "kind": "restart",
+                "label": "Run locally"
+              }
+            }
+          },
+          "effects": [
+            "Generate fresh approval ID; require Run locally.",
+            "Reread manifest; skip coding; rerun required runtime phases.",
+            "App relaunch restores files/state but never automatically starts the server or restores approval."
+          ]
+        }
+      ],
+      "sources": [
+        "src/main/ipc.cjs",
+        "src/main/bart/build-proposal.cjs",
+        "src/main/local-preview/manager.cjs",
+        "src/main/local-preview/plan.cjs",
+        "src/main/local-preview/files.cjs"
+      ]
+    },
+    {
+      "number": "6",
+      "behavior": "Ask @bart a question",
+      "storage": [
+        "<workspace>/workspace.md or <project>/<note>.md",
+        "<dataRoot>/state.json: agents"
+      ],
+      "notes": [
+        "document.text represents Markdown contents; no conversation SQL table."
+      ],
+      "steps": [
+        {
+          "number": "6.1",
+          "kind": "Event",
+          "label": "Submit question; insert pending marker",
+          "before": {
+            "document": {
+              "text": "@bart What should I test next?"
+            }
+          },
+          "after": {
+            "document": {
+              "text": "@bart What should I test next?\nbart~> 77777777-7777-4777-8777-777777777777"
+            }
+          },
+          "effects": [
+            "Read workspace/current note, mentioned notes and library catalog.",
+            "Read relevant source files; run signed-in provider CLI with read-only tools."
+          ]
+        },
+        {
+          "number": "6.2",
+          "kind": "Event",
+          "label": "Receive answer; replace pending marker",
+          "before": {
+            "document": {
+              "text": "@bart What should I test next?\nbart~> 77777777-7777-4777-8777-777777777777"
+            }
+          },
+          "after": {
+            "document": {
+              "text": "@bart What should I test next?\nbart> Test saving settings and reopening the page.\nbart>\nbart> *Sol · medium · 12 s*"
+            }
+          },
+          "effects": [
+            "Persist answer automatically; no separate Save step.",
+            "Track model, effort and elapsed time in attribution.",
+            "Automatic model escalation allowed unless choice pinned."
+          ]
+        },
+        {
+          "number": "6.3",
+          "kind": "Event",
+          "label": "Ask follow-up or regenerate",
+          "effects": [
+            "Follow-up: append @bart line; include prior turns from current document.",
+            "Reuse compatible live conversation when available; otherwise rebuild from document.",
+            "Regenerate: replace selected answer with a new pending marker."
+          ]
+        },
+        {
+          "number": "6.4",
+          "kind": "Alternative",
+          "label": "Question fails",
+          "branches_from": "6.1",
+          "before": {
+            "document": {
+              "text": "@bart What should I test next?\nbart~> 77777777-7777-4777-8777-777777777777"
+            }
+          },
+          "after": {
+            "document": {
+              "text": "@bart What should I test next?\nbart> **No answer.** The run failed."
+            }
+          }
+        },
+        {
+          "number": "6.5",
+          "kind": "Event",
+          "label": "Collapse, delete or stop",
+          "effects": [
+            "Collapse: bart> becomes bart+>; fold persists in Markdown.",
+            "Delete: remove selected question and answer; stop it if still running.",
+            "Stop: abort run; clear its pending marker."
+          ]
+        }
+      ],
+      "sources": [
+        "src/main/bart/ask.cjs",
+        "src/main/bart/reply.cjs",
+        "src/main/store/projects.cjs",
+        "src/renderer/workspace/DocEditor.jsx"
+      ]
+    },
+    {
+      "number": "7",
+      "behavior": "Create a project and nested workspaces",
+      "storage": [
+        "<project>/project.json",
+        "<workspace>/meta.json",
+        "<workspace>/workspace.md",
+        "<project>/notes.pglite"
+      ],
+      "notes": [
+        "Current hierarchy: project → nested workspaces; legacy notes.topic_id stores workspace ID."
+      ],
+      "steps": [
+        {
+          "number": "7.1",
+          "kind": "Event",
+          "label": "Create project",
+          "before": {
+            "project": null
+          },
+          "after": {
+            "project": {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "Example project",
+              "created": "2026-09-27T16:00:00.000Z"
+            }
+          },
+          "effects": [
+            "Create project directory and notes database.",
+            "Optional selected code directory stored as project.directory."
+          ]
+        },
+        {
+          "number": "7.2",
+          "kind": "Event",
+          "label": "Create workspace",
+          "before": {
+            "workspaceMeta": null,
+            "document": null
+          },
+          "after": {
+            "workspaceMeta": {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "status": "open",
+              "context": [],
+              "created": "2026-09-27T16:00:01.000Z",
+              "chars": 0
+            },
+            "document": {
+              "text": ""
+            }
+          },
+          "effects": [
+            "Create workspace directory under project or selected parent workspace.",
+            "Workspace name comes from directory name.",
+            "First-run welcome flow also creates Getting started workspace and Welcome! note."
+          ]
+        },
+        {
+          "number": "7.3",
+          "kind": "Event",
+          "label": "Change workspace status",
+          "before": {
+            "workspaceMeta": {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "status": "open"
+            }
+          },
+          "after": {
+            "workspaceMeta": {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "status": "progress"
+            }
+          },
+          "effects": [
+            "Allowed statuses: open, progress, done."
+          ]
+        },
+        {
+          "number": "7.4",
+          "kind": "Event",
+          "label": "Edit workspace document",
+          "before": {
+            "document": {
+              "text": ""
+            },
+            "workspaceMeta": {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "chars": 0
+            }
+          },
+          "after": {
+            "document": {
+              "text": "Plan the next test."
+            },
+            "workspaceMeta": {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "chars": 19
+            }
+          },
+          "effects": [
+            "Write workspace.md atomically; update character count."
+          ]
+        }
+      ],
+      "sources": [
+        "src/main/store/projects.cjs"
+      ]
+    },
+    {
+      "number": "8",
+      "behavior": "Create notes; edit text and tasks",
+      "storage": [
+        "<project>/<note>.md",
+        "<project>/notes.pglite: notes",
+        "library.pglite: library"
+      ],
+      "notes": [],
+      "steps": [
+        {
+          "number": "8.1",
+          "kind": "Event",
+          "label": "Create empty note",
+          "before": {
+            "notes": [],
+            "library": []
+          },
+          "after": {
+            "notes": [
+              {
+                "id": "55555555-5555-4555-8555-555555555555",
+                "name": "Test plan",
+                "path": "Test plan.md",
+                "goal_id": null,
+                "topic_id": "22222222-2222-4222-8222-222222222222",
+                "created": "2026-09-27T16:00:00.000Z",
+                "last_edited": "2026-09-27T16:00:00.000Z"
+              }
+            ],
+            "library": [
+              {
+                "id": "55555555-5555-4555-8555-555555555555",
+                "name": "Test plan",
+                "type": "md",
+                "path": "<dataRoot>/example-project/Test plan.md",
+                "url": null,
+                "folder_path": null,
+                "project_id": "11111111-1111-4111-8111-111111111111",
+                "created": "2026-09-27T16:00:00.000Z",
+                "last_edited": "2026-09-27T16:00:00.000Z",
+                "summary": null,
+                "summary_edited": null,
+                "char_count": 0,
+                "github_id": null,
+                "tags": [
+                  "note"
+                ],
+                "categorized": null,
+                "thumbnail_path": null,
+                "thumbnail_captured_at": null,
+                "thumbnail_run_id": null
+              }
+            ],
+            "document": {
+              "text": ""
+            }
+          },
+          "effects": [
+            "Same ID in notes and library; plain Markdown content on disk."
+          ]
+        },
+        {
+          "number": "8.2",
+          "kind": "Event",
+          "label": "Save note containing task",
+          "before": {
+            "document": {
+              "text": ""
+            },
+            "library": [
+              {
+                "id": "55555555-5555-4555-8555-555555555555",
+                "char_count": 0,
+                "last_edited": "2026-09-27T16:00:00.000Z"
+              }
+            ]
+          },
+          "after": {
+            "document": {
+              "text": "- [ ] Test save button"
+            },
+            "notes": [
+              {
+                "id": "55555555-5555-4555-8555-555555555555",
+                "last_edited": "2026-09-27T16:00:01.000Z"
+              }
+            ],
+            "library": [
+              {
+                "id": "55555555-5555-4555-8555-555555555555",
+                "char_count": 22,
+                "last_edited": "2026-09-27T16:00:01.000Z"
+              }
+            ]
+          },
+          "effects": [
+            "Update note and library edit timestamps; summary may refresh later."
+          ]
+        },
+        {
+          "number": "8.3",
+          "kind": "Event",
+          "label": "Complete task",
+          "before": {
+            "document": {
+              "text": "- [ ] Test save button"
+            }
+          },
+          "after": {
+            "document": {
+              "text": "- [x] Test save button"
+            }
+          },
+          "effects": [
+            "Task state stored in Markdown; normal document save updates metadata."
+          ]
+        },
+        {
+          "number": "8.4",
+          "kind": "Decision",
+          "label": "Did saved text change?",
+          "cases": [
+            {
+              "when": "Same text",
+              "then": "No write; no timestamp change."
+            },
+            {
+              "when": "Different text",
+              "then": "Save file; update timestamps and character count."
+            }
+          ]
+        }
+      ],
+      "sources": [
+        "src/main/store/projects.cjs",
+        "src/main/store/db.cjs",
+        "src/renderer/model/doc.js"
+      ]
+    },
+    {
+      "number": "9",
+      "behavior": "Attach or remove shared project context",
+      "storage": [
+        "<project>/project.json: sidebarContext",
+        "<workspace>/meta.json: context, removed"
+      ],
+      "notes": [
+        "Example: existing library row; shared context already initialized."
+      ],
+      "steps": [
+        {
+          "number": "9.1",
+          "kind": "Event",
+          "label": "Attach existing library item",
+          "before": {
+            "sidebarContext": {
+              "version": 1,
+              "context": [],
+              "removed": []
+            },
+            "workspaceMeta": {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "context": [],
+              "removed": []
+            }
+          },
+          "after": {
+            "sidebarContext": {
+              "version": 1,
+              "context": [
+                "a27b6e09-f342-4f91-8c58-64ba719312ef"
+              ],
+              "removed": []
+            },
+            "workspaceMeta": {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "context": [
+                "a27b6e09-f342-4f91-8c58-64ba719312ef"
+              ],
+              "removed": []
+            }
+          },
+          "effects": [
+            "Visible in every workspace sidebar in this project; library row reused."
+          ]
+        },
+        {
+          "number": "9.2",
+          "kind": "Event",
+          "label": "Remove source from sidebar",
+          "before": {
+            "sidebarContext": {
+              "version": 1,
+              "context": [
+                "a27b6e09-f342-4f91-8c58-64ba719312ef"
+              ],
+              "removed": []
+            },
+            "workspaceMeta": {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "context": [
+                "a27b6e09-f342-4f91-8c58-64ba719312ef"
+              ],
+              "removed": []
+            }
+          },
+          "after": {
+            "sidebarContext": {
+              "version": 1,
+              "context": [],
+              "removed": [
+                "a27b6e09-f342-4f91-8c58-64ba719312ef"
+              ]
+            },
+            "workspaceMeta": {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "context": [],
+              "removed": [
+                "a27b6e09-f342-4f91-8c58-64ba719312ef"
+              ]
+            }
+          },
+          "effects": [
+            "Hide across project; retain library row and underlying file.",
+            "Removed list prevents old mentions/attachments restoring it."
+          ]
+        },
+        {
+          "number": "9.3",
+          "kind": "Event",
+          "label": "Explicitly attach source again",
+          "before": {
+            "sidebarContext": {
+              "version": 1,
+              "context": [],
+              "removed": [
+                "a27b6e09-f342-4f91-8c58-64ba719312ef"
+              ]
+            }
+          },
+          "after": {
+            "sidebarContext": {
+              "version": 1,
+              "context": [
+                "a27b6e09-f342-4f91-8c58-64ba719312ef"
+              ],
+              "removed": []
+            }
+          },
+          "effects": [
+            "Restore shared visibility; update attaching workspace provenance."
+          ]
+        }
+      ],
+      "sources": [
+        "src/main/store/project-context.cjs",
+        "src/main/store/projects.cjs"
+      ]
+    },
+    {
+      "number": "10",
+      "behavior": "Highlight a PDF; add a margin note",
+      "storage": [
+        "<dataRoot>/annotations/<libraryId>.json",
+        "<dataRoot>/annotations/pages/<addressHash>.json for unsaved PDFs"
+      ],
+      "notes": [
+        "marks = actual page-number-keyed annotation object; independent of interface annotation bundles.",
+        "Geometry normalized by page width."
+      ],
+      "steps": [
+        {
+          "number": "10.1",
+          "kind": "Event",
+          "label": "Save highlight and margin note",
+          "before": {
+            "marks": {}
+          },
+          "after": {
+            "marks": {
+              "1": [
+                {
+                  "id": "44444444-4444-4444-8444-444444444444",
+                  "rects": [
+                    {
+                      "x": 0.12,
+                      "y": 0.2,
+                      "w": 0.48,
+                      "h": 0.025
+                    }
+                  ],
+                  "side": "right",
+                  "y": 0.2,
+                  "note": "Check this assumption.",
+                  "text": "Selected passage from the paper.",
+                  "pos": null
+                }
+              ]
+            }
+          },
+          "effects": [
+            "Use library ID when saved; otherwise hash canonical PDF address.",
+            "Original PDF bytes unchanged."
+          ]
+        },
+        {
+          "number": "10.2",
+          "kind": "Event",
+          "label": "Edit margin note",
+          "before": {
+            "marks": {
+              "1": [
+                {
+                  "id": "44444444-4444-4444-8444-444444444444",
+                  "rects": [
+                    {
+                      "x": 0.12,
+                      "y": 0.2,
+                      "w": 0.48,
+                      "h": 0.025
+                    }
+                  ],
+                  "side": "right",
+                  "y": 0.2,
+                  "note": "Check this assumption.",
+                  "text": "Selected passage from the paper.",
+                  "pos": null
+                }
+              ]
+            }
+          },
+          "after": {
+            "marks": {
+              "1": [
+                {
+                  "id": "44444444-4444-4444-8444-444444444444",
+                  "rects": [
+                    {
+                      "x": 0.12,
+                      "y": 0.2,
+                      "w": 0.48,
+                      "h": 0.025
+                    }
+                  ],
+                  "side": "right",
+                  "y": 0.2,
+                  "note": "Compare with the previous result.",
+                  "text": "Selected passage from the paper.",
+                  "pos": null
+                }
+              ]
+            }
+          }
+        },
+        {
+          "number": "10.3",
+          "kind": "Event",
+          "label": "Clear margin note",
+          "before": {
+            "marks": {
+              "1": [
+                {
+                  "id": "44444444-4444-4444-8444-444444444444",
+                  "rects": [
+                    {
+                      "x": 0.12,
+                      "y": 0.2,
+                      "w": 0.48,
+                      "h": 0.025
+                    }
+                  ],
+                  "side": "right",
+                  "y": 0.2,
+                  "note": "Compare with the previous result.",
+                  "text": "Selected passage from the paper.",
+                  "pos": null
+                }
+              ]
+            }
+          },
+          "after": {
+            "marks": {
+              "1": [
+                {
+                  "id": "44444444-4444-4444-8444-444444444444",
+                  "rects": [
+                    {
+                      "x": 0.12,
+                      "y": 0.2,
+                      "w": 0.48,
+                      "h": 0.025
+                    }
+                  ],
+                  "side": "right",
+                  "y": 0.2,
+                  "note": null,
+                  "text": "Selected passage from the paper.",
+                  "pos": null
+                }
+              ]
+            }
+          },
+          "effects": [
+            "Highlight remains; an empty note without highlight rectangles is removed."
+          ]
+        }
+      ],
+      "sources": [
+        "src/main/store/library.cjs",
+        "src/renderer/pdf/PaperView.jsx"
+      ]
+    },
+    {
+      "number": "11",
+      "behavior": "Add a website or local file to the library",
+      "storage": [
+        "library.pglite: library"
+      ],
+      "notes": [
+        "Independent example; user-provided GitHub/sandbox flow remains separate."
+      ],
+      "steps": [
+        {
+          "number": "11.1",
+          "kind": "Decision",
+          "label": "Resolve added URL or path",
+          "cases": [
+            {
+              "when": "Existing matching item",
+              "then": "Reuse through lookup/link flow; direct duplicate add may return EXISTS."
+            },
+            {
+              "when": "New HTTP(S) URL",
+              "then": "Create website row; infer supported tags."
+            },
+            {
+              "when": "Supported local file/folder",
+              "then": "Link original path; infer format and tags."
+            },
+            {
+              "when": "Invalid URL/path or unsupported format",
+              "then": "Show error; no library row."
+            }
+          ]
+        },
+        {
+          "number": "11.2",
+          "kind": "Event",
+          "label": "Add ordinary website",
+          "before": {
+            "library": []
+          },
+          "after": {
+            "library": [
+              {
+                "id": "a27b6e09-f342-4f91-8c58-64ba719312ef",
+                "name": "Example reference",
+                "type": "website",
+                "path": null,
+                "url": "https://example.com/reference",
+                "folder_path": null,
+                "project_id": null,
+                "created": "2026-09-27T16:00:00.000Z",
+                "last_edited": "2026-09-27T16:00:00.000Z",
+                "summary": null,
+                "summary_edited": null,
+                "char_count": null,
+                "github_id": null,
+                "tags": [],
+                "categorized": 1,
+                "thumbnail_path": null,
+                "thumbnail_captured_at": null,
+                "thumbnail_run_id": null
+              }
+            ]
+          },
+          "effects": [
+            "Attach to project context when added from a workspace.",
+            "Ordinary website does not start a repository sandbox."
+          ]
+        },
+        {
+          "number": "11.3",
+          "kind": "Event",
+          "label": "Background summary completes",
+          "before": {
+            "library": [
+              {
+                "id": "a27b6e09-f342-4f91-8c58-64ba719312ef",
+                "summary": null,
+                "summary_edited": null
+              }
+            ]
+          },
+          "after": {
+            "library": [
+              {
+                "id": "a27b6e09-f342-4f91-8c58-64ba719312ef",
+                "summary": "Reference material for the project.",
+                "summary_edited": "2026-09-27T16:01:00.000Z"
+              }
+            ]
+          },
+          "effects": [
+            "Only when summarization is enabled and content can be read."
+          ]
+        }
+      ],
+      "sources": [
+        "src/main/store/library.cjs",
+        "src/main/store/db.cjs",
+        "src/main/ipc.cjs"
+      ]
+    },
+    {
+      "number": "12",
+      "behavior": "Open and use a terminal session",
+      "storage": [
+        "Main-process PTY session memory"
+      ],
+      "notes": [
+        "session = live public session snapshot; not a database row."
+      ],
+      "steps": [
+        {
+          "number": "12.1",
+          "kind": "Event",
+          "label": "Create shell session",
+          "before": {
+            "session": null
+          },
+          "after": {
+            "session": {
+              "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              "provider": "shell",
+              "title": "zsh",
+              "cwd": "/Users/example/project",
+              "shell": "/bin/zsh",
+              "pid": 12345,
+              "cols": 100,
+              "rows": 30,
+              "status": "running",
+              "createdAt": "2026-09-27T16:00:00.000Z",
+              "history": []
+            }
+          },
+          "effects": [
+            "Validate launch request; spawn PTY.",
+            "Other supported providers use installed Claude Code or Codex CLIs."
+          ]
+        },
+        {
+          "number": "12.2",
+          "kind": "Event",
+          "label": "Write input; stream output",
+          "request": {
+            "method": "terminalAPI.writeSession",
+            "args": [
+              "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              "pwd\r"
+            ]
+          },
+          "effects": [
+            "Write to PTY; stream terminal:data batches; acknowledge sequence numbers.",
+            "Resize forwards cols/rows to PTY."
+          ]
+        },
+        {
+          "number": "12.3",
+          "kind": "Event",
+          "label": "Process exits",
+          "before": {
+            "session": {
+              "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              "status": "running"
+            }
+          },
+          "after": {
+            "session": {
+              "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              "status": "exited",
+              "exitCode": 0
+            }
+          },
+          "effects": [
+            "Emit terminal:exit; reject further writes to exited process."
+          ]
+        },
+        {
+          "number": "12.4",
+          "kind": "Event",
+          "label": "Close terminal session",
+          "request": {
+            "method": "terminalAPI.closeSession",
+            "args": [
+              "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+            ]
+          },
+          "effects": [
+            "Stop process if running; remove session and release PTY resources."
+          ]
+        }
+      ],
+      "sources": [
+        "src/main/terminal/session-manager.cjs",
+        "src/main/terminal/launch.cjs",
+        "src/preload.cjs"
+      ]
+    }
+  ]
+}

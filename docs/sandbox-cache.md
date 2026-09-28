@@ -1,5 +1,9 @@
 # Warm dependency caches
 
+The [2026-09-26 account migration](e2b-template-migration.md) records the new
+private template IDs and verification results. Earlier benchmark IDs below
+belong to the previous account; the configured aliases remain the same.
+
 Canvas can use a derived E2B template, `engelbart-canvas-cached`, with npm and pip
 download/build caches seeded from three public repositories. It inherits the
 existing `engelbart-runner`; it does not replace the runner, change agent prompts,
@@ -47,6 +51,21 @@ The builder only copies three explicitly named cache-tool files. It rejects usin
 the base template's name as the destination. The original runner stays available
 for rollback. Use `--base` explicitly when rebuilding after changing Canvas's
 configured template.
+
+Builds keep the established 8 vCPU / 8192 MiB allocation. Disk now uses the E2B
+project default, so rebuilding in a new account does not force the previous
+25 GiB free-space request. To request a plan-compatible minimum explicitly, use
+`--min-free-disk-mb N` (MiB; `0` requests no extra growth). This affects new
+template builds only, not existing templates or sandboxes.
+
+The base/Docker builder in `../engelbart-web/sandbox/build-template.mjs` can reuse
+its preserved `sandbox/.hc` source snapshot if the original temporary checkout
+is gone. It verifies that the instrumentation patch is already applied and
+matches the current module, instead of deleting the only surviving source copy.
+An explicit `HC_SOURCE` still selects a checkout; invalid sources fail before
+replacing the snapshot. `--dry-run` validates the build inputs without starting
+a cloud build. `E2B_MIN_FREE_DISK_MB` optionally sets that builder's disk target;
+otherwise it also uses the project default.
 
 The benchmark creates fresh, 15-minute-limit sandboxes sequentially and kills
 each one in `finally`, including on command failure. It never connects to,

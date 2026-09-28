@@ -9,8 +9,10 @@ const { cacheTemplate, hash } = require('./sandbox-cache/common.cjs');
 const profile = require('./sandbox-cache/profile.json');
 
 async function main() {
-  const { values } = parseArgs({ options: { base: { type: 'string' }, name: { type: 'string' }, 'dry-run': { type: 'boolean' }, help: { type: 'boolean' } } });
-  if (values.help) { console.log('Build an opt-in cached runner: node scripts/build-sandbox-cache.cjs --base engelbart-runner --name engelbart-canvas-cached [--dry-run]'); return; }
+  const { values } = parseArgs({ options: { base: { type: 'string' }, name: { type: 'string' }, 'min-free-disk-mb': { type: 'string' }, 'dry-run': { type: 'boolean' }, help: { type: 'boolean' } } });
+  if (values.help) { console.log('Build an opt-in cached runner: node scripts/build-sandbox-cache.cjs --base engelbart-runner --name engelbart-canvas-cached [--min-free-disk-mb N] [--dry-run]\nDisk defaults to the E2B project setting unless explicitly requested.'); return; }
+  const disk = values['min-free-disk-mb'];
+  if (disk !== undefined && (!/^\d+$/.test(disk) || !Number.isSafeInteger(Number(disk)))) throw new Error('--min-free-disk-mb must be a non-negative integer');
   const env = readSandboxEnv(path.join(os.homedir(), '.engelbart'));
   const base = values.base || env.E2B_TEMPLATE || 'engelbart-runner';
   const name = values.name || 'engelbart-canvas-cached';
@@ -18,7 +20,7 @@ async function main() {
   const template = cacheTemplate(Template, base, profile);
   if (values['dry-run']) { console.log(await Template.toJSON(template)); return; }
   if (!env.E2B_API_KEY) throw new Error('Set E2B_API_KEY in ~/.engelbart/sandbox.env');
-  const info = await Template.build(template, name, { apiKey: env.E2B_API_KEY, cpuCount: 8, memoryMB: 8192, minFreeDiskMb: 25 * 1024,
+  const info = await Template.build(template, name, { apiKey: env.E2B_API_KEY, cpuCount: 8, memoryMB: 8192, ...(disk === undefined ? {} : { minFreeDiskMb: Number(disk) }),
     onBuildLogs: defaultBuildLogger({ minLevel: 'info' }) });
   console.log(JSON.stringify({ ...info, base, profile: hash(profile) }, null, 2));
 }

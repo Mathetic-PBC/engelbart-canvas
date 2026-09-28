@@ -3,32 +3,53 @@
 
 import { hasTag, isNote, kindKey, kindLabel } from './kind.js';
 
-/**
- * The sidebar's sections, in order (Claude Design "Sidebar.dc.html", 2026-09-23): Notes, Websites, GitHub, Files and
- * Sub-Workspaces. Files is everything else (papers, folders, pages on disk, data, images: "files should be de facto other").
- */
+/** Saved items sit directly under each heading; connected catalogs open on demand. */
 export const RAIL_SECTIONS = [
-  { key: 'Notes', label: 'Notes' },
-  { key: 'Websites', label: 'Websites' },
-  { key: 'GitHub', label: 'GitHub' },
-  { key: 'Files', label: 'Files' },
-  { key: 'Workspaces', label: 'Sub-Workspaces' },
+  { key: 'Workspaces', label: 'Sub-workspaces', icon: 'workspace' },
+  { key: 'GitHub', label: 'GitHub', icon: 'git', catalog: { provider: 'github', label: 'Browse repositories…', title: 'Repositories' } },
+  { key: 'Papers', label: 'Papers', icon: 'pdf', catalog: { provider: 'zotero', label: 'Browse Zotero…', title: 'Zotero papers' } },
+  { key: 'Overleaf', label: 'Overleaf', icon: 'overleaf', catalog: { provider: 'overleaf', label: 'Browse projects…', title: 'Overleaf projects' } },
+  { key: 'Documents', label: 'Documents', icon: 'note', catalog: { provider: 'google', label: 'Browse Google Docs…', title: 'Google Docs' } },
+  { key: 'Files', label: 'Other context', icon: 'folder' },
 ];
 
-/** Which section a rail row sorts into: a repository by its tag whether it is an address or a clone. */
+function webUrl(value) {
+  try { const url = new URL(value); return ['https:', 'http:'].includes(url.protocol) ? url : null; } catch { return null; }
+}
+
+/** Provider identity for linked documents, without changing stored library types. */
+export function documentProvider(row) {
+  if (row.type !== 'website') return null;
+  const url = webUrl(row.url);
+  if (!url) return null;
+  if (url.hostname === 'docs.google.com' && /^\/document\/(?:u\/\d+\/)?d\/[^/]+/.test(url.pathname)) return 'google-docs';
+  if (['overleaf.com', 'www.overleaf.com'].includes(url.hostname) && /^\/project\/[^/]+/.test(url.pathname)) return 'overleaf';
+  return null;
+}
+
+function isZoteroReference(row) {
+  const url = webUrl(row.url);
+  return url && ['zotero.org', 'www.zotero.org'].includes(url.hostname)
+    && /^\/(?:groups\/\d+(?:\/[^/]+)?|[^/]+)\/items\/[^/]+/.test(url.pathname);
+}
+
+/** Route each saved item once, without changing its library type or tags. */
 export function sectionOf(row) {
   if (row.type === 'child' || row.type === 'workspace') return 'Workspaces';
-  if (isNote(row)) return 'Notes';
   if (hasTag(row, 'git')) return 'GitHub';
-  if (row.type === 'website') return 'Websites';
+  if (documentProvider(row) === 'overleaf') return 'Overleaf';
+  if (hasTag(row, 'paper') || isZoteroReference(row)) return 'Papers';
+  if (hasTag(row, 'sticky') || row.type === 'conversation') return 'Files';
+  if (isNote(row) || documentProvider(row) === 'google-docs' || ['pdf', 'md', 'docx', 'doc', 'txt', 'rtf', 'odt'].includes(row.type)) return 'Documents';
   return 'Files';
 }
 
-/** The rail's rows under their sections, each keeping the rows' order; a section with nothing in it is not shown. */
+/** Keep empty headings and material order, with no intermediate nesting. */
 export function railSections(rows) {
-  const by = new Map(RAIL_SECTIONS.map((section) => [section.key, []]));
-  for (const row of rows) by.get(sectionOf(row)).push(row);
-  return RAIL_SECTIONS.map((section) => ({ ...section, rows: by.get(section.key) })).filter((section) => section.rows.length > 0);
+  const sections = RAIL_SECTIONS.map(section => ({ ...section, rows: [] }));
+  const by = new Map(sections.map(section => [section.key, section]));
+  for (const row of rows) by.get(sectionOf(row)).rows.push(row);
+  return sections;
 }
 
 // Source categories use the existing file kinds; they do not create new stored library types.

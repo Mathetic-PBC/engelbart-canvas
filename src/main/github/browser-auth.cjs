@@ -18,7 +18,7 @@ function createBrowserAuth({ broker = BROKER, fetch = globalThis.fetch, timeoutM
   async function start() {
     const state = randomBytes(32).toString('base64url'), verifier = randomBytes(48).toString('base64url');
     const challenge = createHash('sha256').update(verifier).digest('base64url');
-    let resolve, reject, timer, finished = false, consuming = false;
+    let resolve, reject, timer, callbackPort, finished = false, consuming = false;
     const result = new Promise((yes, no) => { resolve = yes; reject = no; });
     // Cancel/timeout can happen before the caller attaches its continuation.
     result.catch(() => {});
@@ -32,8 +32,10 @@ function createBrowserAuth({ broker = BROKER, fetch = globalThis.fetch, timeoutM
       res.setHeader('Referrer-Policy', 'no-referrer');
       res.setHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      const answer = (status, text) => { res.statusCode = status; res.end(`<!doctype html><meta charset="utf-8"><title>Engelbart</title><h1>${text}</h1><p>You can close this tab and return to Engelbart.</p>`); };
-      if (req.headers.origin || req.headers.host !== `127.0.0.1:${server.address().port}`) return answer(403, 'Request refused');
+      const answer = (status, text) => { res.statusCode = status; res.end(`<!doctype html><meta charset="utf-8"><title>Engelbart</title><h1>${text}</h1><p>You can close this tab and return to your workspace.</p>`); };
+      // A browser can request a favicon on a keep-alive socket after finish()
+      // closes the listener. Its original port stays valid even then.
+      if (req.headers.origin || req.headers.host !== `127.0.0.1:${callbackPort}`) return answer(403, 'Request refused');
       const url = new URL(req.url, 'http://127.0.0.1');
       if (req.method !== 'GET' || url.pathname !== '/oauth/github/callback' || !same(url.searchParams.get('state'), state)) return answer(400, 'Invalid sign-in callback');
       if (finished || consuming) return answer(409, 'Sign-in already handled');
@@ -50,8 +52,9 @@ function createBrowserAuth({ broker = BROKER, fetch = globalThis.fetch, timeoutM
     });
     server.requestTimeout = 10000; server.headersTimeout = 10000;
     await new Promise((yes, no) => { server.once('error', no); server.listen(0, '127.0.0.1', yes); });
+    callbackPort = server.address().port;
     const url = new URL('/api/github/start', target);
-    url.search = new URLSearchParams({ port: String(server.address().port), state, challenge }).toString();
+    url.search = new URLSearchParams({ port: String(callbackPort), state, challenge }).toString();
     timer = setTimeout(() => finish(new Error('GitHub sign-in expired. Try again.')), timeoutMs);
     return { url: url.href, expiresAt: Date.now() + timeoutMs, result, cancel: () => finish(new Error('GitHub sign-in cancelled.')) };
   }

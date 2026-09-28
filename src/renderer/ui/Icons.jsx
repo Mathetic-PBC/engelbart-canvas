@@ -54,6 +54,39 @@ export const NOTE = () => (
   </svg>
 );
 
+// A restrained provider mark for Google Docs titles in the shared Documents group.
+export const GOOGLE_DOCS = () => (
+  <svg viewBox="0 0 16 16" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={1.3} strokeLinejoin="round" aria-hidden="true">
+    <path d="M3 1.5h6.5L13 5v9.5H3zM9.5 1.5V5H13" />
+    <path d="M5.5 7.5h5M5.5 9.75h5M5.5 12h3.5" />
+  </svg>
+);
+
+/*!
+ * Lucide icons (SquareDashedMousePointer, Circle, Square), as used by Engelbart Web.
+ * ISC License
+ * Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part
+ * of Feather (MIT). All other copyright (c) for Lucide are held by Lucide Contributors 2022.
+ * Permission to use, copy, modify, and/or distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ */
+export const ANNOTATE = () => (
+  <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M12.034 12.681a.498.498 0 0 1 .647-.647l9 3.5a.5.5 0 0 1-.033.943l-3.444 1.068a1 1 0 0 0-.66.66l-1.067 3.443a.5.5 0 0 1-.943.033z" />
+    <path d="M5 3a2 2 0 0 0-2 2M19 3a2 2 0 0 1 2 2M5 21a2 2 0 0 1-2-2M9 3h1M9 21h2M14 3h1M3 9v1M21 9v2M3 14v1" />
+  </svg>
+);
+export const RECORD = () => <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true"><circle cx={12} cy={12} r={10} /></svg>;
+export const STOP_RECORDING = () => <svg width={14} height={14} viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth={2} strokeLinejoin="round" aria-hidden="true"><rect width={18} height={18} x={3} y={3} rx={2} /></svg>;
+
 export const SEARCH = () => (
   <svg viewBox="0 0 16 16" width={16} height={16} fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" aria-hidden="true">
     <circle cx={6.75} cy={6.75} r={4.5} />
@@ -76,7 +109,7 @@ export const LEAF = () => (
   </svg>
 );
 
-// A website with no favicon of its own (none are fetched): the generic globe (Add - Mention.dc.html, 2026-09-22).
+// Generic website glyph, also used when a Stage tab has no usable favicon.
 export const GLOBE = () => (
   <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" aria-hidden="true">
     <path d="M8 1.75a6.25 6.25 0 1 1 0 12.5 6.25 6.25 0 0 1 0-12.5z" />
@@ -116,6 +149,7 @@ export const KIND = {
   data: { glyph: <LAYERS />, label: 'data file' },
   chat: { glyph: <CHAT />, label: 'chat', fixed: true },
   overleaf: { glyph: <LEAF />, label: 'Overleaf', fixed: true },
+  'google-docs': { glyph: <GOOGLE_DOCS />, label: 'Google Docs', fixed: true },
   task: { glyph: <TASK />, label: 'task', fixed: true },
   workspace: { glyph: <WS />, label: 'workspace', fixed: true },
   image: { glyph: <IMAGE />, label: 'image' },

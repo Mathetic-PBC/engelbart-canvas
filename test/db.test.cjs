@@ -29,7 +29,8 @@ test('library: schema, insert, type constraint, list order', async () => {
   const rows = await library.list();
   assert.equal(rows.length, 2);
   assert.equal(rows[0].name, 'A paper');
-  assert.deepEqual(Object.keys(rows[0]).sort(), ['categorized', 'char_count', 'created', 'folder_path', 'github_id', 'id', 'last_edited', 'name', 'path', 'project_id', 'summary', 'summary_edited', 'tags', 'type', 'url']);
+  assert.deepEqual(Object.keys(rows[0]).sort(), ['categorized', 'char_count', 'created', 'folder_path', 'github_id', 'id', 'last_edited', 'name', 'path', 'project_id', 'summary', 'summary_edited', 'tags', 'thumbnail_captured_at', 'thumbnail_path', 'thumbnail_run_id', 'type', 'url']);
+  assert.deepEqual([rows[0].thumbnail_path, rows[0].thumbnail_captured_at, rows[0].thumbnail_run_id], [null, null, null]);
   assert.deepEqual([rows[0].summary, rows[0].summary_edited, rows[0].char_count], [null, null, null], 'the catalog columns default to null');
   assert.deepEqual([rows[0].tags, rows[0].categorized], [[], null], 'no tags until something is inferred, and no category rules have been applied to it');
 });

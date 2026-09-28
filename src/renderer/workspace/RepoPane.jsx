@@ -1,27 +1,13 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { api } from '../api.js';
-import { OPEN_IN_BROWSER } from '../model/address.js';
-import { timeToLive } from '../model/canvas-build.js';
-import { formatDuration } from '../model/run-steps.js';
 import { useSandboxes } from '../ui/SandboxProgress.jsx';
 import { GH } from '../ui/Icons.jsx';
 import { usePlaced } from '../ui/usePlaced.js';
 import RepoReadme from './RepoReadme.jsx';
-import RunTimeline, { RunLogs } from './RunTimeline.jsx';
-import EnvironmentPanel from './EnvironmentPanel.jsx';
+import BuildDetails, { RepoIdentity, RepoRuntimeStatus } from './BuildDetails.jsx';
 import './repo-pane.css';
 
-export function repoToolbarStatus(run) {
-  if (run?.status === 'starting') return { label: 'Preparing…', kind: 'starting' };
-  if (run?.status === 'failed') return { label: 'Needs attention', kind: 'failed' };
-  if (run?.status === 'ready') return run.preview_url
-    ? { label: 'Live', kind: 'live' }
-    : { label: 'Ready', kind: 'ready' };
-  return { label: 'Inactive', kind: 'inactive' };
-}
-
-const DETAILS_TABS = ['build', 'logs', 'environment'];
+export { repoToolbarStatus } from './BuildDetails.jsx';
 
 export function RepoSwitcher({ repo, repositories, onSelect }) {
   const [anchor, setAnchor] = React.useState(null);
@@ -114,139 +100,29 @@ export function RepoSwitcher({ repo, repositories, onSelect }) {
 
 export function Repository({ repo, repositories = [], onSelect, item, busy, act, open, error }) {
   const run = item?.run;
-  const liveDuration = React.useMemo(() => timeToLive(run), [run]);
-  const log = run?.build_log || [];
-  const active = run && ['starting', 'ready'].includes(run.status);
-  const actionTarget = run || { id: repo.id };
-  const working = !!busy[actionTarget.id];
-  const status = repoToolbarStatus(run);
+  const working = !!busy[run?.id || repo.id];
   const canSwitch = repositories.length > 1 && !!onSelect;
   const [detailsOpen, setDetailsOpen] = React.useState(false);
-  const [detailsTab, setDetailsTab] = React.useState('build');
-  const [environmentVisited, setEnvironmentVisited] = React.useState(false);
   const detailsButton = React.useRef(null);
-  const detailsDialog = React.useRef(null);
-  const closeButton = React.useRef(null);
-  const wasDetailsOpen = React.useRef(false);
   const detailsId = React.useId();
-  const showDetails = () => { setDetailsTab('build'); setDetailsOpen(true); };
   const closeDetails = () => setDetailsOpen(false);
-  const openPreview = () => { closeDetails(); open(run); };
-  const visitRepository = (event) => {
-    event.preventDefault();
-    closeDetails();
-    window.dispatchEvent(new CustomEvent(OPEN_IN_BROWSER, { detail: { url: repo.url } }));
-  };
-  const identity = <a className="repo-toolbar-identity repo-repository-link" href={repo.url} title={`Open ${repo.name} on GitHub`}
-    aria-label={`Open ${repo.name} on GitHub`} onClick={visitRepository} onAuxClick={(event) => { if (event.button === 1) visitRepository(event); }}>
-    <GH /><span className="repo-toolbar-name">{repo.name}</span>
-  </a>;
-  React.useEffect(() => {
-    const dialog = detailsDialog.current;
-    if (detailsOpen) {
-      // The native modal sits above the whole workspace and keeps focus inside it.
-      if (!dialog.open) dialog.showModal();
-      closeButton.current?.focus({ preventScroll: true });
-    } else {
-      if (dialog.open) dialog.close();
-      // Restore focus to the toolbar after the modal closes.
-      if (wasDetailsOpen.current) detailsButton.current?.focus({ preventScroll: true });
-    }
-    wasDetailsOpen.current = detailsOpen;
-  }, [detailsOpen]);
-  const chooseTab = (tab) => {
-    setDetailsTab(tab);
-    if (tab === 'environment') setEnvironmentVisited(true);
-  };
-  const tabKeys = (event) => {
-    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-    event.preventDefault();
-    const index = DETAILS_TABS.indexOf(detailsTab);
-    const next = event.key === 'Home' ? DETAILS_TABS[0] : event.key === 'End' ? DETAILS_TABS.at(-1)
-      : DETAILS_TABS[(index + (event.key === 'ArrowRight' ? 1 : DETAILS_TABS.length - 1)) % DETAILS_TABS.length];
-    chooseTab(next);
-    event.currentTarget.querySelector(`[data-tab="${next}"]`)?.focus();
-  };
-  const statusIcon = status.kind === 'failed'
-    ? <svg className="repo-toolbar-warning" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M8 2 15 14H1Z" /><path d="M8 6v4m0 2v.01" /></svg>
-    : <span className={status.kind === 'starting' ? 'repo-toolbar-spinner' : 'repo-toolbar-dot'} aria-hidden="true" />;
-  const statusContent = <>
-    {statusIcon}
-    {status.label}
-  </>;
-  const runtimeStatus = (showArrow = false) => <span className="repo-runtime">
-    <span className="repo-runtime-separator" aria-hidden="true">/</span>
-    {status.kind === 'live'
-      ? <button type="button" className="repo-toolbar-status repo-toolbar-status-live" aria-label={`Open live preview for ${repo.name}`}
-        disabled={working} aria-busy={working} onClick={openPreview}>{statusContent}
-        {showArrow && <span className="repo-toolbar-open" aria-hidden="true">↗</span>}</button>
-      : <span className={`repo-toolbar-status repo-toolbar-status-${status.kind}`} role="status">{statusContent}</span>}
-  </span>;
-  return <div className="repo-selected" onKeyDown={(event) => {
-    // Escape closes the modal without also closing the workspace.
-    if (detailsOpen && event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeDetails(); }
-  }}>
+  return <div className="repo-selected">
     <header className="repo-toolbar" aria-label={`Controls for ${repo.name}`}>
       <div className="repo-toolbar-repository">
-        {identity}
+        <RepoIdentity repo={repo} />
         {canSwitch && <RepoSwitcher repo={repo} repositories={repositories} onSelect={onSelect} />}
       </div>
       <div className="repo-toolbar-actions">
         <button ref={detailsButton} type="button" className="repo-toolbar-build" aria-haspopup="dialog" aria-expanded={detailsOpen} aria-controls={detailsId}
-          onClick={() => detailsOpen ? closeDetails() : showDetails()}>Build</button>
-        {runtimeStatus(true)}
+          onClick={() => setDetailsOpen(value => !value)}>Build</button>
+        <RepoRuntimeStatus repo={repo} run={run} working={working} onOpen={() => open(run)} arrow />
       </div>
     </header>
     {error && !detailsOpen && <p role="alert" className="repo-error">{error}</p>}
     <div className="repo-body">
-      <div className="repo-reading" inert={detailsOpen}>
-        <RepoReadme repo={repo} />
-      </div>
-      <dialog ref={detailsDialog} id={detailsId} role="dialog" aria-modal="true" aria-label={`Build for ${repo.name}`} data-overlay="1" className="repo-details" hidden={!detailsOpen}
-        onCancel={(event) => { event.preventDefault(); closeDetails(); }}
-        onClick={(event) => {
-          if (event.target !== event.currentTarget) return;
-          const bounds = event.currentTarget.getBoundingClientRect();
-          if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) closeDetails();
-        }}>
-        <header className="repo-details-heading">
-          <div className="repo-details-repository">{identity}{runtimeStatus()}</div>
-          <div className="repo-details-actions">
-            <button ref={closeButton} type="button" className="repo-details-action repo-details-close" onClick={closeDetails} aria-label="Close build details" title="Close">×</button>
-          </div>
-        </header>
-        <div className="repo-details-tab-row">
-          <div role="tablist" aria-label="Build details" className="repo-details-tabs" onKeyDown={tabKeys}>
-            {DETAILS_TABS.map((tab) => <button key={tab} type="button" role="tab" data-tab={tab} id={`${detailsId}-${tab}-tab`}
-              aria-selected={detailsTab === tab} aria-controls={`${detailsId}-${tab}`} tabIndex={detailsTab === tab ? 0 : -1}
-              onClick={() => chooseTab(tab)}>{tab[0].toUpperCase() + tab.slice(1)}</button>)}
-          </div>
-          {liveDuration !== null && <span className="repo-build-duration" title="Wall-clock time from setup start (or the latest restart) to the first verified live preview.">
-            Time to live <time dateTime={`PT${Math.round(liveDuration / 1000)}S`}>{formatDuration(liveDuration)}</time>
-          </span>}
-        </div>
-        {error && <p role="alert" className="repo-error">{error}</p>}
-        <div className="repo-details-scroll repo-details-build-pane" id={`${detailsId}-build`} role="tabpanel" aria-labelledby={`${detailsId}-build-tab`} hidden={detailsTab !== 'build'}>
-          {detailsOpen && <RunTimeline key={run?.id || 'pending'} run={run} repoName={repo.name} visible={detailsTab === 'build'}
-            onOpenPreview={status.kind === 'live' ? openPreview : undefined} />}
-          {run?.error && <p role="alert" className="repo-error">{run.error}</p>}
-          {!log.length && <p className="repo-notice">{item?.message || (run ? 'Earlier build details are unavailable. New build activity will appear here.' : 'Build progress will appear here when setup starts.')}</p>}
-        </div>
-        <div className="repo-details-scroll repo-details-log-pane" id={`${detailsId}-logs`} role="tabpanel" aria-labelledby={`${detailsId}-logs-tab`} hidden={detailsTab !== 'logs'}>
-          {detailsOpen && <RunLogs key={run?.id || 'pending'} run={run} visible={detailsTab === 'logs'} />}
-        </div>
-        <div className="repo-details-scroll" id={`${detailsId}-environment`} role="tabpanel" aria-labelledby={`${detailsId}-environment-tab`} hidden={detailsTab !== 'environment'}>
-          {environmentVisited && <EnvironmentPanel repo={repo} run={run} embedded />}
-        </div>
-        <footer className="repo-details-footer">
-          <div className="repo-details-actions">
-            {active
-              ? <button type="button" className="repo-details-action repo-details-action-primary" disabled={working || status.kind !== 'live'} onClick={openPreview}>Open preview</button>
-              : <button type="button" className="repo-details-action repo-details-action-primary" disabled={working} onClick={() => act(actionTarget, () => api.startSandbox(repo.id))}>{run ? 'Retry build' : 'Run'}</button>}
-            {(active || (run?.status === 'failed' && run.sandbox_id)) && <button type="button" className="repo-details-action" disabled={working} onClick={() => act(run, () => api.stopSandbox(run.id))}>Stop sandbox</button>}
-          </div>
-        </footer>
-      </dialog>
+      <div className="repo-reading" inert={detailsOpen}><RepoReadme repo={repo} /></div>
+      <BuildDetails id={detailsId} repo={repo} item={item} busy={busy} act={act} open={open} error={error}
+        visible={detailsOpen} onClose={closeDetails} returnFocus={detailsButton} />
     </div>
   </div>;
 }

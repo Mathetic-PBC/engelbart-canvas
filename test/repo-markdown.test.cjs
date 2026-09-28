@@ -109,7 +109,9 @@ test('README images do not loosen script, connection, frame or object CSP', () =
   assert.match(html, /img-src 'self' data: blob: https:/);
   assert.match(html, /script-src 'self';/);
   assert.match(html, /connect-src 'self';/);
-  assert.match(html, /frame-src 'none'; object-src 'none';/);
+  // Only the local, separate-origin recording player is permitted. README HTML
+  // still cannot embed remote frames, and replay has no network or app APIs.
+  assert.match(html, /frame-src engelbart:\/\/replay; object-src 'none';/);
 });
 
 test('README web links navigate in Stage while section anchors stay inside the README', () => {

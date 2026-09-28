@@ -18,6 +18,9 @@ export function workspacePanels(viewWidth, railWidth, rightWidth = null) {
   const railMax = Math.min(520, Math.max(railMin, usable - 320));
   const rail = Math.max(railMin, Math.min(railMax, railWidth));
   const available = usable - rail;
-  const right = Math.max(Math.min(320, available), Math.min(available, rightWidth ?? Math.round(available / 2)));
+  // Favor the browser at the default split, retaining 380px for the document
+  // when possible. An explicitly dragged width still takes precedence.
+  const defaultRight = Math.min(Math.round(available * 0.58), Math.max(320, available - 380));
+  const right = Math.max(Math.min(320, available), Math.min(available, rightWidth ?? defaultRight));
   return { rail, right, available, documentWidth: available - right, columns: `${rail}px 1px minmax(0, 1fr) 1px ${right}px` };
 }

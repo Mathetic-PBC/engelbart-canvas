@@ -40,6 +40,7 @@ function readFlags(text, models) {
   const words = [...source.matchAll(/\S+/g)].map((match) => ({ word: match[0], start: match.index, end: match.index + match[0].length }));
   let chosen = null;
   let effort = null;
+  let build = false;
   const spans = [];
   const take = (from) => {
     for (;;) {
@@ -47,20 +48,22 @@ function readFlags(text, models) {
       const held = words[at];
       if (!held || !/^--\S/.test(held.word)) return;
       const flag = held.word.slice(2);
+      const building = flag.toLowerCase() === 'build';
       const model = modelOf(flag, models);
       let level = effortOf(flag);
       let used = 1;
       // "--extra high" and "--extra --high": two words, one effort.
       if (!model && !level && squash(flag) === 'extra' && from === 'start' && words[1] && effortOf(words[1].word.replace(/^--/, '')) === 'high') { level = 'xhigh'; used = 2; }
-      if (!model && !level) return;
-      if (model) chosen = model; else effort = level;
+      if (!model && !level && !building) return;
+      if (building) build = true;
+      else if (model) chosen = model; else effort = level;
       for (const taken of words.splice(from === 'start' ? 0 : at, used)) spans.push([taken.start, taken.end]);
     }
   };
   take('start');
   take('end');
   spans.sort((a, b) => a[0] - b[0]);
-  return { chosen, effort, spans, rest: words.map((held) => held.word).join(' ') };
+  return { chosen, effort, build, spans, rest: words.map((held) => held.word).join(' ') };
 }
 
 /**
@@ -68,7 +71,7 @@ function readFlags(text, models) {
  * { provider, key, model (the id the CLI gets), name, effort }, one when pinned.
  */
 function readQuestion(text, models) {
-  const { chosen, effort: asked, rest } = readFlags(text, models);
+  const { chosen, effort: asked, rest, build } = readFlags(text, models);
   let effort = asked;
   const provider = chosen ? chosen.provider : models.provider;
   const entry = models.providers[provider];
@@ -80,18 +83,18 @@ function readQuestion(text, models) {
   }
   const step = (rung) => ({ provider, key: rung.model, model: entry.models[rung.model].id, name: entry.models[rung.model].name, effort: rung.effort });
   const pinned = !!(chosen || effort);
-  if (!pinned) return { question: rest, provider, steps: entry.ladder.map(step), pinned };
+  if (!pinned) return { question: rest, provider, steps: entry.ladder.map(step), pinned, build };
   // One of the two by hand: the other comes from the ladder step that already pairs with it.
   const rung = chosen
     ? { model: chosen.model, effort: effort || (entry.ladder.find((candidate) => candidate.model === chosen.model) || { effort: 'medium' }).effort }
     : { model: (entry.ladder.find((candidate) => candidate.effort === effort) || entry.ladder[0]).model, effort };
-  return { question: rest, provider, steps: [step(rung)], pinned };
+  return { question: rest, provider, steps: [step(rung)], pinned, build };
 }
 
 /** The text after "@bart" with its flags replaced by the two that name this model and effort. */
 function withChoice(text, models, { model, effort }) {
-  const { rest } = readFlags(text, models);
-  return [`--${model}`, `--${effort}`, rest].filter(Boolean).join(' ');
+  const { rest, build } = readFlags(text, models);
+  return [build ? '--build' : '', `--${model}`, `--${effort}`, rest].filter(Boolean).join(' ');
 }
 
 module.exports = { EFFORTS, EFFORT_LABELS, effortOf, modelOf, readFlags, readQuestion, withChoice };

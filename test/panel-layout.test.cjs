@@ -24,7 +24,7 @@ test('narrow windows remain bounded and header/body share collapsible tracks', a
 test('sidebar resizing keeps the right pane fixed, but the preview can still cover the document', async () => {
   const { workspacePanels } = await import('../src/renderer/model/panel-layout.js');
   const initial = workspacePanels(1440, 300);
-  assert.equal(initial.right, 569);
+  assert.equal(initial.right, 660);
   const moved = workspacePanels(1440, 400, initial.right);
   assert.equal(moved.right, initial.right);
   assert.equal(moved.documentWidth, initial.documentWidth - 100);

@@ -25,7 +25,7 @@ import Popover from './Popover.jsx';
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const SPEED = { fast: 0.45, normal: 1, slow: 2.2 };
 
-export const BART_ITEM = { id: 'bart', type: 'chat', name: 'bart', title: 'Bart', summary: 'Ask a question about this document, the project\'s code or the web. Add --opus or --high to pick the model or the effort by hand.', facts: 'reads, never edits' };
+export const BART_ITEM = { id: 'bart', type: 'chat', name: 'bart', title: 'Bart', summary: 'Ask about this document, the code or the web, or ask to build an interface. Review and approve builds in Notifications. --build is an optional shortcut; --opus or --high chooses a model or effort.', facts: 'builds wait for approval' };
 // Picking this writes `@Task `, which the document stores as the `- [ ] ` row a typed `- []` also makes.
 export const TASK_ITEM = { id: 'task', type: 'task', name: 'Task', title: 'Task', summary: 'A task row: check it off, \u2318\u23ce builds it, and a run of them shares one card.', facts: 'stored as - [ ]' };
 
@@ -63,8 +63,8 @@ const ICON = {
   stepsShut: icon('<path d="m5 8.5 7 7 7-7"></path>', 10, 3, 'square'),
 };
 const radius = (top, closes) => `${top ? '10px 10px' : '0 0'} ${closes ? '10px 10px' : '0 0'}`;
-// A flag the models file recognises is a little bolder than the text around it; a `--word` it does not know stays plain.
-const FLAG_LOOK = 'font-weight:500';
+// Routing flags stay in the document source, but the model chip is their visible control.
+const flagHtml = (source) => `<span data-src="${esc(source)}" data-open="0" hidden></span>`;
 // Center-pane exchanges keep their source rows as siblings: only the question has a box.
 const MESSAGE_LOOK = 'padding:12px 16px;background:#f5f5f5;border-radius:10px;font-size:16px;line-height:25px;';
 const REPLY_INLINE = { codeStyle: 'font:14px/26px "SF Mono",Menlo,monospace;color:#5a5a5a;overflow-wrap:anywhere' };
@@ -95,7 +95,7 @@ export default class DocEditor extends React.Component {
     this.docListeners = {
       keydown: (e) => { if (!inEd(e)) return; if (inFollow(e)) this.followKey(e); else this.editorKey(e); },
       input: (e) => { if (!inEd(e)) return; if (inFollow(e)) this.followInput(e.target); else this.editorInput(); },
-      beforeinput: (e) => { if (!inEd(e) || inFollow(e)) return; const sel = getSelection(); this.bulkDelete = /^delete/.test(e.inputType || '') && !!sel && !sel.isCollapsed; },
+      beforeinput: (e) => { if (!inEd(e) || inFollow(e)) return; this.beforeBartInput(e); const sel = getSelection(); this.bulkDelete = /^delete/.test(e.inputType || '') && !!sel && !sel.isCollapsed; },
       paste: (e) => { if (inEd(e) && !inFollow(e)) this.editorPaste(e); },
       // A press on one of the editor's buttons must not move the keyboard: leaving a line redraws the editor, and a button
       // redrawn between the press and the release never gets its click (found with Delete, while an answer was being edited).
@@ -158,6 +158,19 @@ export default class DocEditor extends React.Component {
   focusEnd() { this.docClickInternal(); }
   /** True while a line is being edited or the mention menu is open (the parent's Esc handler checks this). */
   isActive() { return this.state.activeLine != null || !!this.state.mention; }
+  selectAll() {
+    const ed = this.editorEl(); if (!ed) return;
+    clearTimeout(this.pickerT);
+    this.caret = null;
+    // Finish any redraw before selecting: rendered questions and editable replies share this root.
+    this.setState({ activeLine: null, mention: null, picker: null }, () => {
+      const sel = getSelection(); if (!sel) return;
+      ed.focus({ preventScroll: true });
+      const range = document.createRange(); range.selectNodeContents(ed);
+      sel.removeAllRanges(); sel.addRange(range);
+      this.selRaw = { line: 0, a: 0, b: 0, multi: true, lines: [0, this.lines().length - 1] };
+    });
+  }
 
   /* ---------------------------------------------------------------- where the document was scrolled to */
   // → { top, line, offset, hash }: the scroll offset, and the first line on screen with how far its top sits above the
@@ -293,17 +306,30 @@ export default class DocEditor extends React.Component {
   activeHtml(tokens, flags, inlineOptions) {
     const [a, b] = this.revealRange(), open = this.openIdx(tokens, a, b); this.openKey = open.join(',');
     return tokens.map((tok, k) => {
-      if (flags && flags.has(k)) return `<span data-src="${esc(tok)}" data-open="1" style="${FLAG_LOOK}">${esc(tok)}</span>`;
+      if (flags && flags.has(k)) return flagHtml(tok);
       const isOpen = !tokShown(tok).pre || open.includes(k);
       return `<span data-src="${esc(tok)}" data-open="${isOpen ? 1 : 0}">${isOpen && !/^@bart$/i.test(tok) ? esc(tok) : inlineHtml(tok, inlineOptions)}</span>`;
     }).join('');
   }
-  // An @bart line in pieces: its recognised flags (src/main/bart/question.cjs reads them, as the run will) each a token of
-  // their own, the rest split as any line is. Shown verbatim, so offsets in the line are what they were.
+  // Keep recognised flags and their separating whitespace in hidden source tokens. Unknown flags and the question's
+  // own spacing/markdown stay visible; concatenating every token still recovers the exact original line.
   bartTokens(line, p) {
     const models = this.props.models, base = line.length - p.text.length, tokens = [], flags = new Set();
-    let at = 0;
+    const groups = [];
     for (const [from, to] of models ? readFlags(p.text, models).spans : []) {
+      if (p.text.slice(from, to).toLowerCase() === '--build') continue; // write-enabled intent must stay visible
+      const previous = groups[groups.length - 1];
+      if (previous && !p.text.slice(previous[1], from).trim()) previous[1] = to;
+      else groups.push([from, to]);
+    }
+    let at = 0;
+    for (let [from, to] of groups) {
+      if (!p.text.slice(0, from).trim()) {
+        from = 0; while (/\s/.test(p.text[to] || '') && to < p.text.length) to++;
+      } else {
+        while (from > 0 && /\s/.test(p.text[from - 1])) from--;
+        if (!p.text.slice(to).trim()) to = p.text.length;
+      }
       tokens.push(...line.slice(at, base + from).split(INLINE).filter(Boolean)); flags.add(tokens.length); tokens.push(line.slice(base + from, base + to)); at = base + to;
     }
     tokens.push(...line.slice(at).split(INLINE).filter(Boolean));
@@ -314,13 +340,15 @@ export default class DocEditor extends React.Component {
       const el = n.nodeType === 1 && n.dataset && n.dataset.src != null ? n : null;
       const txt = n.textContent.replace(/\u200b/g, '');
       const open = !el || el.dataset.open === '1';
-      return { dl: txt.length, src: open ? txt : el.dataset.src, open, rl: open ? txt.length : el.dataset.src.length };
+      return { node: n, dl: txt.length, src: open ? txt : el.dataset.src, open, rl: open ? txt.length : el.dataset.src.length };
     });
   }
-  displayToRaw(t, disp) {
+  displayToRaw(t, disp, node) {
     const segs = this.segs(t); if (!segs.length) return null; let accD = 0, accR = 0;
-    for (const s of segs) {
-      if (disp <= accD + s.dl) { const d = disp - accD; if (s.open) return accR + d; const { pre } = tokShown(s.src); return accR + (d === 0 ? 0 : Math.min(s.rl, pre + d)); }
+    // Empty flag tokens share a display offset with the next word. The caret's DOM node identifies which side it is on.
+    const target = node ? segs.findIndex((s) => s.node === node || s.node.contains(node)) : -1;
+    for (const [index, s] of segs.entries()) {
+      if (disp <= accD + s.dl && index >= target) { const d = disp - accD; if (s.open) return accR + d; const { pre } = tokShown(s.src); return accR + (d === 0 ? 0 : Math.min(s.rl, pre + d)); }
       accD += s.dl; accR += s.rl;
     }
     return accR;
@@ -361,7 +389,7 @@ export default class DocEditor extends React.Component {
     }
     if (p.type === 'bart') {
       const { tokens, flags } = this.bartTokens(line, p), models = this.props.models;
-      const content = active && !locked ? this.activeHtml(tokens, flags) : tokens.map((tok, k) => (flags.has(k) ? `<span style="${FLAG_LOOK}">${esc(tok)}</span>` : inlineHtml(tok))).join('');
+      const content = active && !locked ? this.activeHtml(tokens, flags) : tokens.map((tok, k) => flags.has(k) ? flagHtml(tok) : `<span data-src="${esc(tok)}" data-open="0">${inlineHtml(tok)}</span>`).join('');
       const read = models ? readQuestion(p.text, models) : null, ready = !!(read ? read.question : p.text).trim();
       const send = `<button contenteditable="false" data-act="ask" data-row="${i}" aria-label="Send" ${ready ? '' : 'disabled'} style="user-select:none;flex:none;width:26px;height:26px;padding:0;border:0;border-radius:50%;display:flex;align-items:center;justify-content:center;background:${ready ? '#0070f3' : '#eaeaea'};color:${ready ? '#fff' : '#8f8f8f'};cursor:${ready ? 'pointer' : 'default'};transition:background 160ms"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="square"><path d="M8 13.5V3.2M3.6 7.4 8 3l4.4 4.4"/></svg></button>`;
       // The chip: what the question starts on, and (hovered) where that is changed. The arrow sits inside it, one unit.
@@ -379,6 +407,13 @@ export default class DocEditor extends React.Component {
       // it is doing, the things it has done (behind the count, closed until clicked) and the answer so far. None of that is
       // in the document: it comes from props.asks, and the row's `data-raw` stays the bare pending line.
       const ask = (this.props.asks || {})[p.id];
+      if (ask?.buildApproval && ask.localBuild) {
+        const closes = !at || at.closes;
+        const look = this.props.compact ? `padding:12px 16px;background:#fafafa;border-radius:${radius(!at, closes)};` : replyLook(true, true);
+        return `<div ${raw} data-pending="${esc(p.id)}" contenteditable="false" data-readonly="1" style="${look}margin-bottom:${closes ? '14px' : '0'};cursor:default">`
+          + '<div style="font:15px/1.6 var(--font-sans);color:#4d4d4d">Your build plan is ready. Review it in Notifications to start.</div>'
+          + `<button type="button" class="bart-text" data-act="showbuild" data-build="${esc(ask.localBuild.id)}" style="margin-top:8px">View build plan ↗</button></div>`;
+      }
       const doing = ask ? (ask.activity || (ask.movedUp ? 'Thinking harder' : 'Thinking')) : '';
       const label = ask ? `${esc(doing)}${ask.name ? ` · ${esc(ask.name)} ${esc(ask.effort)}` : ''}` : 'No answer came back: the run was interrupted.';
       const log = (ask && ask.log) || [], open = this.openLogs.has(p.id);
@@ -406,6 +441,7 @@ export default class DocEditor extends React.Component {
         + (ask ? '<span style="flex:none;width:6px;height:6px;border-radius:50%;background:#0070f3;animation:thinking 1.2s ease-in-out infinite"></span>' : '')
         + `<span class="t" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</span>`
         + (log.length ? `<button class="bart-text" data-act="asklog" data-ask="${esc(p.id)}" aria-expanded="${open}" style="user-select:none;flex:none;display:inline-flex;align-items:center;gap:6px;font-weight:400">${log.length} ${log.length === 1 ? 'step' : 'steps'}${open ? ICON.stepsOpen : ICON.stepsShut}</button>` : '')
+        + (ask?.localBuild ? `<button class="bart-text" data-act="showbuild" data-build="${esc(ask.localBuild.id)}" style="flex:none">View build</button>` : '')
         + (ask ? `<button class="bart-text" data-act="stopask" data-ask="${esc(p.id)}" style="user-select:none;flex:none">Stop</button>` : `<button class="bart-text" data-act="dropline" data-row="${i}" style="user-select:none;flex:none">Hide</button>`)
         + '</div></div>';
     }
@@ -535,7 +571,8 @@ export default class DocEditor extends React.Component {
     const models = this.props.models; if (!models) return { flags: '', step: null };
     const choice = this.followChoice.get(thread.from);
     const last = parseLine(ls[thread.turns[thread.turns.length - 1].q]).text;
-    const flags = choice && modelOf(choice.model, models) ? `--${choice.model} --${choice.effort}` : readFlags(last, models).spans.map(([a, b]) => last.slice(a, b)).join(' ');
+    // Build permission is never silently inherited by a follow-up question.
+    const flags = choice && modelOf(choice.model, models) ? `--${choice.model} --${choice.effort}` : readFlags(last, models).spans.map(([a, b]) => last.slice(a, b)).filter(flag => flag.toLowerCase() !== '--build').join(' ');
     return { flags, step: readQuestion(flags, models).steps[0] };
   }
   // The field that asks a follow-up, closing the card: `@bart`, the text, and one pill with the model and a round send.
@@ -620,7 +657,17 @@ export default class DocEditor extends React.Component {
     this.wantFocus = false; this.syncing = false;
   }
   applyCaret() { const c = this.caret; this.caret = null; if (!c) return; if (c.sel) this.setSelection(c.line, c.sel[0], c.sel[1], c.endLine); else this.setSelection(c.line, c.offset, c.offset); }
-  posIn(t, offset) {
+  posIn(t, offset, raw) {
+    let display = 0, source = 0;
+    for (const s of this.segs(t)) {
+      // Restore a caret after hidden leading flags into the following word, not the space before the flags.
+      if (s.node.hidden && raw >= source + s.rl && offset === display && s.node.nextSibling) {
+        const next = s.node.nextSibling;
+        const node = next.nodeType === 3 ? next : document.createTreeWalker(next, NodeFilter.SHOW_TEXT).nextNode();
+        if (node) return { node, offset: 0 };
+      }
+      display += s.dl; source += s.rl;
+    }
     const walker = document.createTreeWalker(t, NodeFilter.SHOW_TEXT); let node, rest = offset;
     while ((node = walker.nextNode())) { if (rest <= node.length) return { node, offset: rest }; rest -= node.length; }
     if (t.firstChild && t.firstChild.nodeName === 'BR') return { node: t, offset: 0 };
@@ -629,7 +676,7 @@ export default class DocEditor extends React.Component {
   setSelection(line, a, b, endLine = line) {
     const ed = this.editorEl(); if (!ed) return; const d = ed.querySelector(`[data-line="${line}"]`), last = ed.querySelector(`[data-line="${endLine}"]`);
     const t = d && d.querySelector('.t'), end = last && last.querySelector('.t'); if (!t || !end) return;
-    const s = this.posIn(t, this.rawToDisplay(t, a)), e = this.posIn(end, this.rawToDisplay(end, b)), range = document.createRange();
+    const s = this.posIn(t, this.rawToDisplay(t, a), a), e = this.posIn(end, this.rawToDisplay(end, b), b), range = document.createRange();
     range.setStart(s.node, s.offset); range.setEnd(e.node, e.offset);
     const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
   }
@@ -641,7 +688,7 @@ export default class DocEditor extends React.Component {
       if (t && t.contains(n)) { const r = document.createRange(); r.selectNodeContents(t); r.setEnd(n, o); off = r.toString().replace(/\u200b/g, '').length; } else off = t ? t.textContent.length : 0;
       const isActive = Number(d.dataset.line) === this.state.activeLine;
       let raw = null;
-      if (t && (isActive || t.querySelector('[data-src]'))) raw = this.displayToRaw(t, off);
+      if (t && (isActive || t.querySelector('[data-src]'))) raw = this.displayToRaw(t, off, n);
       if (raw == null) {
         // Code shows its own characters; a fence shown as its language puts the caret at the end of the fence.
         const line = d.dataset.raw || '', kind = d.dataset.kind, p = parseLine(line);
@@ -677,8 +724,34 @@ export default class DocEditor extends React.Component {
       this.setState({ activeLine: c.anchor.line, mention: null }); return;
     }
     this.selRaw = { line: c.anchor.line, a, b };
-    const line = ls[c.anchor.line] ?? '', p = this.parsedOf(ls)[c.anchor.line] || parseLine(line), key = p.type === 'img' || isCode(p) || isFence(p) ? '' : this.openIdx(tokensOf(p, line), a, b).join(',');
+    const line = ls[c.anchor.line] ?? '', p = this.parsedOf(ls)[c.anchor.line] || parseLine(line), key = p.type === 'img' || isCode(p) || isFence(p) ? '' : this.openIdx(p.type === 'bart' ? this.bartTokens(line, p).tokens : tokensOf(p, line), a, b).join(',');
     if (key !== this.openKey) { this.caret = { line: c.anchor.line, sel: [a, b] }; this.forceUpdate(); }
+  }
+  beforeBartInput(e) {
+    if (this.composing || e.isComposing) return;
+    const c = this.caretInfo();
+    if (!c || c.anchor.line !== c.focus.line || c.anchor.offset !== c.focus.offset) return;
+    const ls = this.lines(), i = c.anchor.line, line = ls[i] || '', p = this.parsedOf(ls)[i];
+    if (p?.type !== 'bart' || this.lockedAt(ls, i)) return;
+    const { tokens, flags } = this.bartTokens(line, p), a = c.anchor.offset;
+    let from = 0;
+    for (const [k, token] of tokens.entries()) {
+      const to = from + token.length;
+      if (flags.has(k) && a >= from && a <= to) {
+        const leading = /^@bart\s*$/i.test(line.slice(0, from));
+        // Chromium inserts into the previous visible span at a hidden-token boundary. Place the text on the
+        // question's side instead, so the flags remain valid routing metadata, even in an otherwise empty draft.
+        if (e.inputType === 'insertText' && typeof e.data === 'string') {
+          e.preventDefault();
+          const at = leading ? to : from, text = (leading && !/\s$/.test(token) ? ' ' : '') + e.data;
+          this.writeText(i, line.slice(0, at) + text + line.slice(at), { line: i, offset: at + text.length });
+        } else if ((e.inputType === 'deleteContentBackward' && a === to) || (e.inputType === 'deleteContentForward' && a === from)) {
+          e.preventDefault(); // Delete visible question text, never an invisible model/effort flag.
+        }
+        return;
+      }
+      from = to;
+    }
   }
   editorInput = () => {
     const ed = this.editorEl(); if (!ed || this.composing) return; const old = this.lines(), psOld = this.parsedOf(old);
@@ -759,6 +832,11 @@ export default class DocEditor extends React.Component {
     }
   };
   editorKey = (e) => {
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'a') {
+      e.preventDefault();
+      if (!this.composing && !e.isComposing) this.selectAll();
+      return;
+    }
     if (this.state.picker) this.closePicker();
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'j') {
       e.preventDefault();
@@ -927,6 +1005,7 @@ export default class DocEditor extends React.Component {
       }
       if (k === 'asklog') { const id = act.dataset.ask; if (this.openLogs.has(id)) this.openLogs.delete(id); else this.openLogs.add(id); this.patchPending(); return; }
       if (k === 'stopask') { if (this.props.onStopAsk) this.props.onStopAsk(act.dataset.ask); return; }
+      if (k === 'showbuild') { this.props.onShowLocalBuild?.(act.dataset.build); return; }
       if (k === 'toggle') this.toggleTodo(i);
       else if (k === 'build') this.buildIdx([i]);
       else if (k === 'remove') this.removeLine(i);
@@ -1207,7 +1286,7 @@ export default class DocEditor extends React.Component {
               role="textbox"
               aria-multiline="true"
               aria-label={compact ? 'Post-it' : 'Document'}
-              aria-keyshortcuts="Meta+Shift+J Control+Shift+J"
+              aria-keyshortcuts="Meta+A Control+A Meta+Shift+J Control+Shift+J"
               style={{ marginTop: compact ? 0 : 18, outline: 'none', minHeight: compact ? 28 : 240, font: '17px/1.6 var(--font-sans)', color: '#171717', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', caretColor: '#171717', cursor: 'text' }}
             />
           </div>

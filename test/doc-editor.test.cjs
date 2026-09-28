@@ -17,6 +17,7 @@ const compiled = new Module(filename, module);
 compiled.paths = module.paths;
 compiled._compile(built.outputFiles[0].text, filename);
 const DocEditor = compiled.exports.default;
+const { DEFAULT_MODELS, readQuestion } = require('../src/main/bart/models.cjs');
 
 function editor(text, selection) {
   const instance = new DocEditor({ docKey: 'test', text, onChange: (next) => { instance.props = { ...instance.props, text: next }; } });
@@ -38,6 +39,84 @@ test('reply borders start 12px outside the user box without changing the text in
       const continuation = html.match(/data-line="2"[^>]*style="([^"]*)"/)[1];
       assert.match(continuation, /^margin-top:0px;/, 'the rule remains continuous within a reply');
     }
+  }
+});
+
+test('Bart messages hide routing flags while keeping question text and request settings', () => {
+  for (const question of [
+    '--astra --xhigh Explain **this** --verbose option',
+    'Explain **this** --verbose option --astra --xhigh',
+    '--astra Explain **this** --verbose option --xhigh',
+  ]) {
+    const source = `@bart ${question}`, ed = editor(source, null);
+    let asked;
+    ed.props = { ...ed.props, models: DEFAULT_MODELS, onAsk: (request) => { asked = request; } };
+    for (const activeLine of [null, 0]) {
+      ed.state.activeLine = activeLine;
+      const html = ed.editorHtml(), visible = html.replace(/<[^>]*>/g, '');
+      assert.doesNotMatch(visible, /--astra|--xhigh/);
+      assert.match(visible, /@bart Explain this --verbose option/);
+      assert.equal(ed.props.text, source);
+    }
+    ed.askInline(0);
+    assert.equal(asked.text, question);
+    assert.deepEqual(readQuestion(asked.text, DEFAULT_MODELS).steps.map(({ key, effort }) => ({ key, effort })), [{ key: 'astra', effort: 'xhigh' }]);
+    assert.doesNotMatch(ed.editorHtml().replace(/<[^>]*>/g, ''), /--astra|--xhigh/, 'sent messages also hide their routing flags');
+  }
+});
+
+test('Bart flag hiding leaves literal command text and unrecognised options visible', () => {
+  for (const text of ['@bart What does `--astra` do?', '@bart --unknown Explain this', '@bart Explain --astra in this command']) {
+    const ed = editor(text, null);
+    ed.props = { ...ed.props, models: DEFAULT_MODELS };
+    assert.match(ed.editorHtml().replace(/<[^>]*>/g, ''), text.includes('--unknown') ? /--unknown/ : /--astra/);
+  }
+});
+
+test('build intent stays visible and is never silently inherited by a follow-up', () => {
+  const ed = editor('@bart --build --astra --high Make a timer\nbart> Created.', null);
+  ed.props = { ...ed.props, models: DEFAULT_MODELS };
+  const visible = ed.editorHtml().replace(/<[^>]*>/g, '');
+  assert.match(visible, /--build/);
+  assert.doesNotMatch(visible, /--astra|--high/);
+  const follow = ed.followStep(ed.lines(), { from: 0, turns: [{ q: 0 }] });
+  assert.equal(follow.flags, '--astra --high');
+  assert.equal(readQuestion(follow.flags, DEFAULT_MODELS).build, false);
+});
+
+test('Bart links to notification approval instead of duplicating controls in the document', () => {
+  const source = '@bart --build Make a timer\nbart~> build-request';
+  const ed = editor(source, null), replies = [];
+  ed.props = { ...ed.props, asks: { 'build-request': { localBuild: { id: 'preview' }, buildApproval: { id: 'approval' } } }, onShowLocalBuild: id => replies.push(id) };
+  const html = ed.editorHtml();
+  assert.match(html, /Review it in Notifications/);
+  assert.match(html, /data-act="showbuild"/);
+  assert.doesNotMatch(html, /data-act="approvebuild"|data-act="declinebuild"/);
+  assert.doesNotMatch(html, /animation:thinking|Thinking|Build and Run Locally/);
+  assert.equal(ed.props.text, source, 'approval is transient UI, not document content');
+  ed.editorEl = () => null;
+  ed.editorClick({ preventDefault() {}, target: { closest: () => ({ dataset: { act: 'showbuild', build: 'preview' } }) } });
+  assert.deepEqual(replies, ['preview']);
+  ed.props.asks['build-request'] = { activity: 'Building the interface', buildApproval: null };
+  assert.doesNotMatch(ed.editorHtml(), /data-build-approval/);
+});
+
+test('typing beside hidden flags preserves the routing choice, including an empty draft', () => {
+  for (const [source, at, text, expected] of [
+    ['@bart --astra --xhigh Draft', 21, 'New ', '@bart --astra --xhigh New Draft'],
+    ['@bart --astra --xhigh ', 6, 'Hello', '@bart --astra --xhigh Hello'],
+    ['@bart --astra --xhigh', 6, 'Hello', '@bart --astra --xhigh Hello'],
+    ['@bart Draft --astra --xhigh', 11, '!', '@bart Draft! --astra --xhigh'],
+  ]) {
+    const position = { line: 0, offset: at }, ed = editor(source, { anchor: position, focus: position });
+    ed.props = { ...ed.props, models: DEFAULT_MODELS };
+    let prevented = false;
+    ed.beforeBartInput({ inputType: 'insertText', data: text, preventDefault: () => { prevented = true; } });
+    assert.equal(prevented, true);
+    assert.equal(ed.props.text, expected);
+    const chosen = readQuestion(ed.props.text.slice(6), DEFAULT_MODELS).steps[0];
+    assert.equal(chosen.key, 'astra');
+    assert.equal(chosen.effort, 'xhigh');
   }
 });
 

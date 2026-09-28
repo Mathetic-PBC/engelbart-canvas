@@ -237,6 +237,11 @@ test('providers: switched by the config on every call, both held to the subscrip
   assert.deepEqual([seen.env.OPENAI_API_KEY, seen.env.ANTHROPIC_API_KEY, seen.env.CLAUDECODE], [undefined, undefined, undefined], 'no API key, no outer agent session');
   assert.match(seen.input, /<current_summary>\nold/);
 
+  const textOnly = createCliSummarizer({ readSettings: () => settings, environment, runDirectory, codexHome, codexAuthFile: authFile, run, textOnly: true });
+  await textOnly({ name: 'Browser activity', text: '{"timeline":[]}', systemPrompt: 'Return a title from the supplied evidence only.' });
+  for (const flag of ['--ignore-user-config', '--ignore-rules', '--disable shell_tool', '--disable unified_exec', '--disable browser_use', '--disable apps', '--disable multi_agent', '--disable plugins', '--disable code_mode_host', 'web_search="disabled"']) assert.ok(seen.args[1].includes(flag), flag);
+  assert.equal(fs.readFileSync(path.join(codexHome, 'AGENTS.md'), 'utf8'), 'Return a title from the supplied evidence only.');
+
   settings = { ...settings, provider: 'claude' }; // the next call picks it up, no restart
   const viaClaude = await summarize({ name: 'Note', text: 'body' });
   assert.deepEqual([viaClaude.summary, viaClaude.meta.provider, viaClaude.meta.model, viaClaude.meta.effort, viaClaude.meta.costUsd], ['From Claude.', 'anthropic', 'claude-opus-5', 'medium', 0.0095]);

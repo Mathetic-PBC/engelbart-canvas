@@ -1,15 +1,13 @@
 'use strict';
 
-const { targetLabel } = require('../../shared/interface-annotations.cjs');
-
 // Runs only in Electron's isolated world. No Node, preload, postMessage receiver,
 // or app API is exposed to the website. Main pulls events from this private queue.
 // Target recognition follows engelbart-web's bridge: handles first, then a unique
 // best match by visible text and ancestors. Rectangles are never identity.
-function installAnnotationPage(targetLabel) {
+function installAnnotationPage() {
   if (globalThis.__engelbartAnnotations) return;
   let active = false, marks = [], selected = null, hover = null, events = [], docs = [], unavailable = 0;
-  let host, root, outline, chip, dots, blockers, lastSignature = '', lastRoute = '';
+  let host, root, outline, dots, blockers, lastSignature = '', lastRoute = '';
   const bindings = new Map();
   const markerNodes = new Map(), blockerNodes = new Map();
   let queryCache = new Map(), rootsCache = new Map(), descriptionCache = new WeakMap();
@@ -127,10 +125,9 @@ function installAnnotationPage(targetLabel) {
     host = document.createElement('div'); host.dataset.engelbartAnnotations = '1';
     style(host, { all: 'initial', position: 'fixed', inset: '0', pointerEvents: 'none', zIndex: '2147483647' });
     root = host.attachShadow({ mode: 'closed' });
-    outline = document.createElement('div'); chip = document.createElement('div'); dots = document.createElement('div'); blockers = document.createElement('div');
+    outline = document.createElement('div'); dots = document.createElement('div'); blockers = document.createElement('div');
     style(outline, { position: 'fixed', border: '1px solid #525252', boxSizing: 'border-box', background: 'rgba(115,115,115,.05)', boxShadow: '0 0 0 1px #ffffffcc', borderRadius: '3px', display: 'none' });
-    style(chip, { position: 'fixed', boxSizing: 'border-box', maxWidth: 'min(300px, calc(100vw - 16px))', padding: '3px 7px', border: '1px solid #d4d4d4', background: '#fafafa', color: '#262626', font: '12px/1.4 system-ui', borderRadius: '4px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'none' });
-    root.append(blockers, outline, chip, dots); document.documentElement.append(host);
+    root.append(blockers, outline, dots); document.documentElement.append(host);
   }
   // Convert nested document coordinates to the top viewport, including frame borders and CSS scaling.
   function rect(el, entry) {
@@ -147,15 +144,10 @@ function installAnnotationPage(targetLabel) {
   }
   function outlineAt(hit) {
     ensureOverlay();
-    if (!hit?.el?.isConnected) { outline.style.display = chip.style.display = 'none'; return; }
+    if (!hit?.el?.isConnected) { outline.style.display = 'none'; return; }
     const r = rect(hit.el, hit.entry);
-    if (!r.w || !r.h || r.x + r.w <= 0 || r.y + r.h <= 0 || r.x >= innerWidth || r.y >= innerHeight) { outline.style.display = chip.style.display = 'none'; return; }
+    if (!r.w || !r.h || r.x + r.w <= 0 || r.y + r.h <= 0 || r.x >= innerWidth || r.y >= innerHeight) { outline.style.display = 'none'; return; }
     style(outline, { display: 'block', left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
-    chip.textContent = targetLabel(describe(hit.el));
-    style(chip, { display: 'block' });
-    const box = chip.getBoundingClientRect(), gap = 6, margin = 8;
-    const top = r.y - box.height - gap >= margin ? r.y - box.height - gap : r.y + r.h + gap;
-    style(chip, { left: `${Math.max(margin, Math.min(r.x, innerWidth - box.width - margin))}px`, top: `${Math.max(margin, Math.min(top, innerHeight - box.height - margin))}px` });
   }
   function picked(el, entry) {
     if (!el) return;
@@ -165,6 +157,7 @@ function installAnnotationPage(targetLabel) {
     events.push({ type: 'picked', anchor: a, bounds: { ...rect(el, entry), viewportWidth: innerWidth, viewportHeight: innerHeight } });
     refresh();
   }
+  const selectedBounds = () => selected?.el?.isConnected ? { ...rect(selected.el, selected.entry), viewportWidth: innerWidth, viewportHeight: innerHeight } : null;
   function bind(entry) {
     if (bindings.has(entry.doc)) { Object.assign(bindings.get(entry.doc).entry, entry); return; }
     const win = entry.doc.defaultView, handlers = [];
@@ -233,7 +226,7 @@ function installAnnotationPage(targetLabel) {
       let dot = markerNodes.get(note.id);
       if (!dot) {
         dot = document.createElement('button'); markerNodes.set(note.id, dot); dots.append(dot);
-        dot.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); active = false; selected = { anchor: note.anchor, ...find(note.anchor) }; hover = null; events.push({ type: 'marker', id: note.id }); refresh(); });
+        dot.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); active = false; selected = { anchor: note.anchor, ...find(note.anchor) }; hover = null; refresh(); events.push({ type: 'marker', id: note.id, bounds: selectedBounds() }); });
       }
       dot.textContent = String(i + 1); dot.setAttribute('aria-label', `Open annotation ${i + 1}`);
       style(dot, { position: 'fixed', left: `${Math.max(0, Math.min(r.x + r.w - 12, innerWidth - 24))}px`, top: `${Math.max(0, r.y - 10)}px`, width: '23px', height: '23px', padding: '0', border: '2px solid white', borderRadius: '50%', background: '#525252', color: 'white', font: '600 11px/1 system-ui', boxShadow: '0 1px 3px #0003', cursor: 'pointer', pointerEvents: 'auto' });
@@ -257,12 +250,14 @@ function installAnnotationPage(targetLabel) {
       if (message.type === 'show') marks = message.items;
       if (message.type === 'mode') { active = message.on; selected = hover = null; }
       if (message.type === 'locate') {
-        active = false; scan(); const note = marks.find((n) => n.id === message.id);
+        active = false; selected = hover = null; scan(); const note = marks.find((n) => n.id === message.id);
         if (note) { const got = find(note.anchor); selected = { anchor: note.anchor, ...got }; got.el?.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }); for (const frame of [...(got.entry?.chain || [])].reverse()) frame.scrollIntoView({ block: 'center', behavior: 'instant' }); }
       }
-      refresh(); const result = events; events = []; return result.slice(-30);
+      refresh();
+      if (message.type === 'locate') events.push({ type: 'located', id: message.id, bounds: selectedBounds() });
+      const result = events; events = []; return result.slice(-30);
     },
   };
 }
 
-module.exports = { source: `(${installAnnotationPage.toString()})(${targetLabel.toString()});`, WORLD: 1739 };
+module.exports = { source: `(${installAnnotationPage.toString()})();`, WORLD: 1739 };

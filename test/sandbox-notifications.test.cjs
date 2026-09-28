@@ -20,8 +20,8 @@ function load(file) {
   finally { if (previous === undefined) delete global.window; else global.window = previous; }
   return compiled.exports;
 }
-const { sandboxProgressState, sandboxProgressReducer: reduce, readNotificationState, writeNotificationState, notificationStorageKey, availablePreviewNotifications } = load('model/sandbox-notifications.js');
-const { NotificationBell } = load('ui/SandboxNotifications.jsx');
+const { sandboxProgressState, sandboxProgressReducer: reduce, readNotificationState, writeNotificationState, notificationStorageKey, availableBuildNotifications } = load('model/sandbox-notifications.js');
+const { NotificationBell, BuildNotification } = load('ui/SandboxNotifications.jsx');
 const root = '/fixture/main';
 const at = (second) => `2026-09-23T12:00:${String(second).padStart(2, '0')}.000Z`;
 const run = (status, changes = {}) => ({ id: 'run', library_id: 'repo', status, created_at: at(0), updated_at: at(10),
@@ -31,26 +31,27 @@ const readyState = () => reduce(sandboxProgressState(root), progress(run('ready'
 
 test('unavailable preview notifications stay out of the inbox, including persisted alerts before snapshots load', () => {
   const state = readyState(), saved = JSON.stringify(state.notifications);
-  assert.deepEqual(availablePreviewNotifications(state.notifications, state.items), state.notifications);
-  assert.deepEqual(availablePreviewNotifications(state.notifications, {}), []);
-  for (const value of [run('starting'), run('failed'), run('stopped'), run('ready', { preview_url: null }), run('ready', { id: 'replacement' })]) {
-    assert.deepEqual(availablePreviewNotifications(state.notifications, { repo: { run: value } }), []);
+  assert.deepEqual(availableBuildNotifications(state.notifications, state.items), state.notifications);
+  assert.deepEqual(availableBuildNotifications(state.notifications, {}), []);
+  for (const value of [run('starting'), run('failed'), run('stopped'), run('ready', { id: 'replacement' })]) {
+    assert.deepEqual(availableBuildNotifications(state.notifications, { repo: { run: value } }), []);
   }
   assert.equal(JSON.stringify(state.notifications), saved, 'filtering does not mutate stored alerts or dismissal history');
   const restored = sandboxProgressState(root, { notifications: state.notifications });
-  assert.deepEqual(availablePreviewNotifications(restored.notifications, restored.items), []);
+  assert.deepEqual(availableBuildNotifications(restored.notifications, restored.items), []);
   const loaded = reduce(restored, progress(run('ready')));
-  assert.equal(availablePreviewNotifications(loaded.notifications, loaded.items).length, 1);
+  assert.equal(availableBuildNotifications(loaded.notifications, loaded.items).length, 1);
   const stopped = reduce(loaded, progress(run('stopped', { updated_at: at(20) })));
-  assert.deepEqual(availablePreviewNotifications(stopped.notifications, stopped.items), []);
+  assert.deepEqual(availableBuildNotifications(stopped.notifications, stopped.items), []);
 });
 
 test('a verified preview creates an unread notification but no navigation side effect', () => {
   let state = reduce(sandboxProgressState(root), progress(run('starting')));
-  assert.equal(state.notifications.length, 0);
+  assert.equal(state.notifications.length, 1);
+  assert.equal(state.notifications[0].status, 'starting');
   state = reduce(state, progress(run('ready'), { notification: 'preview-ready', open: true }));
   assert.equal(state.notifications.length, 1);
-  assert.deepEqual(state.notifications[0], { id: `run:${at(10)}`, runId: 'run', libraryId: 'repo', at: at(10), read: false });
+  assert.deepEqual(state.notifications[0], { id: `run:ready:${at(10)}`, runId: 'run', libraryId: 'repo', status: 'ready', at: at(10), read: false });
   assert.equal(state.items.repo.run.preview_url, 'https://preview.example/');
   assert.equal(state.open, undefined, 'legacy open flags do not become navigation state');
 });
@@ -80,16 +81,20 @@ test('restart completion refreshes that repository notification, not the whole i
   assert.equal(state.notifications.filter((row) => row.libraryId === 'repo').length, 1);
 });
 
-test('failures, no-service results, stale runs and other data roots do not create preview alerts', () => {
-  for (const value of [run('starting'), run('failed'), run('stopped'), run('ready', { preview_url: null })]) {
-    assert.equal(reduce(sandboxProgressState(root), progress(value)).notifications.length, 0);
+test('build phases notify, stopped runs stay hidden, and stale runs or other roots cannot overwrite current work', () => {
+  for (const value of [run('starting'), run('failed'), run('ready', { preview_url: null })]) {
+    const state = reduce(sandboxProgressState(root), progress(value));
+    assert.equal(availableBuildNotifications(state.notifications, state.items).length, 1);
+    assert.equal(state.notifications[0].status, value.status);
   }
+  assert.deepEqual(reduce(sandboxProgressState(root), progress(run('stopped'))).notifications, []);
   let state = readyState();
   assert.equal(reduce(state, { type: 'progress', event: { dataRoot: '/fixture/test', run: run('ready') } }), state);
   state = reduce(state, progress(run('starting', { id: 'new-run', created_at: at(30), updated_at: at(30) })));
   assert.equal(reduce(state, progress(run('ready'))), state);
   assert.equal(state.items.repo.run.id, 'new-run');
-  assert.notEqual(state.notifications[0].runId, state.items.repo.run.id, 'old notification cannot open the replacement build');
+  assert.equal(state.notifications[0].runId, 'new-run', 'new build replaces the old notification');
+  assert.equal(state.notifications[0].status, 'starting');
 });
 
 test('read state survives reloads and trimmed logs; storage is bounded and isolated by data root', () => {
@@ -190,7 +195,7 @@ test('bell is a quiet labelled header control, with badge only for unread notifi
   for (const items of [{}, { repo: { run: run('stopped') } }, { repo: { run: run('ready', { id: 'replacement' }) } }]) {
     const hidden = render(readyState().notifications, items);
     assert.match(hidden, /aria-label="Notifications"/);
-    assert.doesNotMatch(hidden, /notification-badge|unread preview notification/);
+    assert.doesNotMatch(hidden, /notification-badge|unread build notification/);
   }
   const mixed = reduce(readyState(), progress(run('ready', { id: 'other', library_id: 'other' })));
   mixed.items.repo = { run: run('stopped') };
@@ -215,8 +220,9 @@ test('bell is shared across screens and dropdown is marked for native-browser oc
 
 test('Open live and dismiss sit together at the right, centered beside the notification text', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/SandboxNotifications.jsx'), 'utf8');
-  assert.match(source, /className="notification-copy">\s*<span className="notification-repo"/);
-  assert.match(source, /className="notification-description"[^\n]*<\/span>\s*<\/span>\s*<span className="notification-open">Open live ↗<\/span>/);
+  assert.match(source, /<a className="notification-repo" href=\{repo.url\}/);
+  assert.match(source, /className="notification-open"/);
+  assert.match(source, /Open live ↗/);
   assert.doesNotMatch(source, /Preview no longer available/);
   const css = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/sandbox-notifications.css'), 'utf8');
   assert.match(css, /\.notification-row\{[^}]*align-items:center/);
@@ -224,4 +230,79 @@ test('Open live and dismiss sit together at the right, centered beside the notif
   assert.match(css, /\.notification-copy\{[^}]*flex:1;[^}]*min-width:0;[^}]*flex-direction:column/);
   assert.match(css, /\.notification-open\{flex:none/);
   assert.doesNotMatch(css.match(/\.notification-row \.notification-dismiss\{([^}]*)\}/)[1], /position:absolute/);
+});
+
+test('notification repo, build details and live preview are separate actions; no notification click stops or retries', () => {
+  const repo = { id: 'repo', name: 'owner/app', url: 'https://github.com/owner/app' };
+  const descendants = element => !React.isValidElement(element) ? [] : [element, ...React.Children.toArray(element.props.children).flatMap(descendants)];
+  for (const status of ['starting', 'ready', 'failed']) {
+    const value = run(status), calls = [];
+    const tree = BuildNotification({ notification: { id: 'notice' }, run: value, repo, onRepository: row => calls.push(['repo', row]),
+      onBuild: row => calls.push(['build', row]), onOpen: item => calls.push(['live', item]), onClear: ids => calls.push(['clear', ids]) });
+    const elements = descendants(tree);
+    const link = elements.find(element => element.type === 'a');
+    assert.equal(link.props.href, repo.url);
+    let prevented = false;
+    link.props.onClick({ preventDefault() { prevented = true; } });
+    assert.equal(prevented, true);
+    assert.deepEqual(calls.shift(), ['repo', repo]);
+    const build = elements.find(element => element.props.className === (status === 'starting' ? 'notification-build' : 'notification-description'));
+    assert.equal(build.type, 'button', 'build text supports pointer and keyboard activation');
+    assert.equal(build.props['aria-haspopup'], 'dialog');
+    assert.equal(build.props.disabled, false);
+    assert.equal(build.props.children, status === 'starting' ? 'Building…' : status === 'failed' ? 'Build failed' : 'Build finished');
+    if (status !== 'starting') assert.equal(elements.some(element => element.props.className === 'notification-build'), false, 'finished/failed status replaces the separate Build button');
+    build.props.onClick(); assert.deepEqual(calls.shift(), ['build', repo]);
+    const live = elements.find(element => element.props.className === 'notification-open');
+    if (status === 'ready') { live.props.onClick(); assert.deepEqual(calls.shift(), ['live', value]); }
+    else assert.equal(live, undefined);
+    assert.deepEqual(calls, []);
+    assert.doesNotMatch(renderToStaticMarkup(tree), />Stop<|>Retry<|Stop build/);
+  }
+  const noPreview = renderToStaticMarkup(React.createElement(BuildNotification, { notification: { id: 'notice' }, run: run('ready', { preview_url: null }), repo, onBuild() {} }));
+  assert.match(noPreview, /No web preview/);
+  assert.match(noPreview, /<button[^>]+class="notification-description"[^>]*>Build finished<\/button>/);
+  assert.doesNotMatch(noPreview, /class="notification-open"/);
+  const provider = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/SandboxProgress.jsx'), 'utf8');
+  assert.match(provider, /openRepository = React.useCallback\(row => \{ if \(row\?\.url\) openUrl\(row.url\); \}/);
+  assert.doesNotMatch(provider, /api.startSandbox|showNotifications/);
+});
+
+
+test('building progress does not re-alert and clearing it never hides completion or a failed outcome', () => {
+  let state = reduce(sandboxProgressState(root), progress(run('starting')));
+  const id = state.notifications[0].id;
+  state = reduce(state, { type: 'read', ids: [id] });
+  state = reduce(state, progress(run('starting', { updated_at: at(15) }), { message: 'Installing dependencies' }));
+  assert.equal(state.notifications[0].id, id);
+  assert.equal(state.notifications[0].read, true);
+  state = reduce(state, { type: 'clear', ids: [id] });
+  const saved = { notifications: state.notifications, dismissed: state.dismissed };
+  for (const status of ['ready', 'failed']) {
+    let restored = sandboxProgressState(root, saved);
+    restored = reduce(restored, progress(run('starting', { updated_at: at(15) })));
+    assert.equal(restored.notifications.length, 0, 'dismissed progress stays dismissed after reload');
+    restored = reduce(restored, progress(run(status, { updated_at: at(20), finished_at: status === 'failed' ? at(20) : null })));
+    assert.equal(restored.notifications.length, 1);
+    assert.equal(restored.notifications[0].status, status);
+    assert.equal(restored.notifications[0].read, false);
+  }
+  state = reduce(state, progress(run('starting', { updated_at: at(15) }), { reveal: true }));
+  assert.equal(state.notifications.length, 1, 'explicit repository click can reopen dismissed progress');
+});
+
+test('same-run restarts replace completion with building and survive a reload without duplicate alerts', () => {
+  let state = readyState();
+  const restarting = run('starting', { updated_at: at(30), build_log: [{ time: at(30), data: { lifecycle: 'restart' } }] });
+  state = reduce(state, progress(restarting));
+  assert.equal(state.notifications.length, 1);
+  assert.equal(state.notifications[0].status, 'starting');
+  assert.equal(state.notifications[0].at, at(30));
+  state = reduce(state, { type: 'clear', ids: state.notifications.map(row => row.id) });
+  state = reduce(sandboxProgressState(root, state), progress(restarting));
+  assert.deepEqual(state.notifications, []);
+  state = reduce(state, progress(run('ready', { updated_at: at(40), build_log: [{ time: at(40), message: 'Preview ready' }] })));
+  assert.equal(state.notifications.length, 1);
+  assert.equal(state.notifications[0].status, 'ready');
+  assert.equal(state.notifications[0].at, at(40));
 });

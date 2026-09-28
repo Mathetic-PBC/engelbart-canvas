@@ -4,8 +4,8 @@ import { KIND } from '../ui/Icons.jsx';
 import { githubRows } from '../model/github.js';
 import { useGithubStatus } from './useGithubStatus.js';
 
-// The + menu stays open while authorization happens in the default browser.
-// On return the same view becomes the repository picker; website cookies remain in the browser.
+// The + menu stays open while authorization happens in Stage.
+// On completion the same menu becomes the repository picker; Stage keeps its own website cookies.
 
 const text = (size, color = '#171717', weight = 400) => ({ font: `${weight} ${size}px/1.4 var(--font-sans)`, color });
 const plainButton = { padding: 0, border: 0, background: 'transparent', cursor: 'pointer' };
@@ -87,9 +87,9 @@ export default function GithubPane({ library, inRail, onBack, onPick, busy }) {
         <>
           {pending && (
             <div>
-              <div data-github-waiting="1" style={{ ...text(12), marginBottom: 8 }}>Finish signing in with GitHub in your browser. Engelbart will return automatically.</div>
+              <div data-github-waiting="1" style={{ ...text(12), marginBottom: 8 }}>Finish signing in with GitHub in Stage.</div>
               {pending.userCode && <div style={{ marginBottom: 8 }}><code>{pending.userCode}</code>{' '}<button type="button" onClick={() => api.copyText(pending.userCode).catch((failure) => setProblem(errorMessage(failure)))} style={plainButton}>Copy code</button></div>}
-              <button type="button" data-github-window="1" onClick={() => api.githubOpen('device').catch((failure) => setProblem(errorMessage(failure)))} style={{ ...plainButton, ...text(12, '#171717', 500) }}>Open browser again</button>
+              <button type="button" data-github-window="1" onClick={() => api.githubOpen('device').catch((failure) => setProblem(errorMessage(failure)))} style={{ ...plainButton, ...text(12, '#171717', 500) }}>Open sign-in in Stage</button>
               <button type="button" data-github-cancel="1" onClick={() => api.githubCancel().then(setStatus).catch((failure) => setProblem(errorMessage(failure)))} style={{ ...plainButton, marginLeft: 14, ...text(12, '#8f8f8f') }}>Cancel</button>
             </div>
           )}
@@ -123,7 +123,7 @@ export default function GithubPane({ library, inRail, onBack, onPick, busy }) {
           {status.installUrl && (
             <button type="button" className="hov-ink-wash" data-github-install="1" onClick={() => api.githubOpen('install').catch((failure) => setProblem(errorMessage(failure)))} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', margin: '4px 0 0', padding: '7px 8px', border: 0, borderRadius: 6, background: 'transparent', textAlign: 'left', cursor: 'pointer', color: '#8f8f8f', transition: 'color 120ms' }}>
               <span style={{ flex: 'none', width: 16, textAlign: 'center', font: '500 13px/1 var(--font-sans)' }}>+</span>
-              <span style={{ ...text(13, 'inherit') }}>Choose repositories in browser…</span>
+              <span style={{ ...text(13, 'inherit') }}>Choose repositories in Stage…</span>
             </button>
           )}
           {error && <div data-github-error="1" style={{ marginTop: 6, ...text(12, '#e70022'), overflowWrap: 'anywhere' }}>{error}</div>}

@@ -6,17 +6,29 @@ it on the repositories they choose; they never visit Developer Settings.
 
 ## User experience
 
-**+ → Add from GitHub…** opens the user's default browser. GitHub can use that browser's existing login, saved
-passwords, and passkeys. The app menu shows **Finish signing in with GitHub in your browser**, **Open browser again**,
-and **Cancel**. There is no device code to copy for the shared registration.
+Connections also supports [Google Docs](google-docs-setup.md). Overleaf and Zotero remain disabled placeholders
+marked **Not available yet**, without sign-in flows, network calls, or stored account state.
+
+**Connections → Connect** and **+ → Add from GitHub…** open sign-in in **Stage**, bringing Stage forward if Terminal
+was showing. The account controls show **Finish signing in in Stage**, **Open sign-in in Stage**, and **Cancel**.
+Reopening a pending attempt focuses its existing tab even after redirects, preserving the form instead of reloading
+it. If the tab was closed, it opens again. There is no device code to copy for the shared registration.
 
 After authorization the browser redirects to a temporary listener on `127.0.0.1`. Engelbart exchanges the one-use code,
-verifies the account, brings its window forward, and shows the repository picker. The browser shows a completion page.
-**Choose repositories in browser…** opens the GitHub App installation page. Returning to Engelbart refreshes the list.
+verifies the account, and updates Connections and the existing repository picker. Stage shows the completion page.
+**Repository access** in the GitHub **⋯** menu and **Choose repositories in Stage…** open the GitHub App installation page in Stage too.
 
-GitHub website links (github.com, www.github.com, gist.github.com) open in the default browser, including links clicked
-inside Stage pages and popup/redirect requests. Repository listing and file access continue through GitHub's API in
-Engelbart. Website cookies remain in the external browser; they are never imported.
+Sign-in uses Stage's existing isolated browser session; cookies are not imported from the user's personal browser.
+The remote page receives no Engelbart API. Repository listing and file access continue through GitHub's API, with
+access/refresh tokens kept in main. Opening Connections or signing in does not import repositories or start sandboxes.
+
+The sidebar's **GitHub** section shows saved workspace repositories directly, followed by **Browse repositories…**.
+Browse opens a searchable popover of repositories shared with the connected GitHub App, including private and
+permitted organization repositories. Names lead each result; owners appear as secondary text. Clicking a result
+opens its GitHub page in Stage and closes the popover without importing it or starting a build. The catalog fetches
+only while Browse is open and refreshes when the window regains focus. All main sections and source browsers start
+closed on app load. Signing out clears account results while retaining saved workspace repositories.
+**Refresh repositories**, **Repository access**, and **Disconnect** live in the GitHub **⋯** menu in Connections. Existing context additions, builds, and hover previews are unchanged.
 
 ## Server setup
 
@@ -38,7 +50,7 @@ variable, and the broker is deployed. Live authorization, account/installation l
 People installing Engelbart do not provision secrets or register their own GitHub Apps. Mathetic maintains this endpoint.
 
 Desktop defaults remain the public client ID and slug in `src/main/store/home.cjs`. Custom registrations use the older
-device flow in the external browser; existing device-flow tokens still refresh directly with GitHub without a secret.
+device flow in Stage; existing device-flow tokens still refresh directly with GitHub without a secret.
 
 ## Security and lifecycle
 
@@ -58,8 +70,10 @@ memory. Sign out deletes them. Revocation is available in GitHub Settings → Ap
 
 - Desktop: `npm test` and `npm run build`.
 - Headless app: `npx electron scripts/smoke-github-signin.cjs` (local service fixture, disposable app data).
+- Connections: `npx electron scripts/smoke-connections.cjs` (Stage redirects and callback, fixed footer, account controls).
+- Repository subsection: `npx electron scripts/smoke-repository-browser.cjs` (isolated catalog, collapsed startup/reload, nested folding, Stage links, compact layout, and account controls).
 - Broker: `node --test test/github-auth.test.cjs` in the website checkout.
 
-The headless check exercises external-browser handoff, no code-entry UI, cancel/retry/reopen, the real loopback callback,
-PKCE, automatic app return, repository picking, and external installation/website navigation. It does not authorize a
+The headless checks exercise Stage sign-in, no code-entry UI, cancel/retry/reopen, the real loopback callback,
+PKCE, tab reuse after redirects, repository picking, and account-management navigation. They do not authorize a
 real GitHub account. `ENGELBART_GITHUB_BROKER`, `ENGELBART_GITHUB_WEB`, and `ENGELBART_GITHUB_API` are test overrides.

@@ -36,7 +36,7 @@ Open a file when the answer depends on what it says. Do not answer from a summar
 - Say what you observed and what you inferred, and keep them apart: "src/main/ipc.cjs registers the handler" is observed, "so the renderer can probably call it" is inferred. Name the file, note, paper or page each claim rests on. Give file paths relative to the code directory.
 - Distinguish what is from what is planned. The documents are often plans; the code is what exists.
 - If the question cannot be answered without something only the person knows, answer what you can and end with the one question that blocks the rest, under 250 characters.
-- If the question asks you to change code or documents, do not. Say what the change would be and where.
+- If the question asks you to change code or documents, do not. Say what the change would be and where. For a requested browser interface, follow <build_capability> to propose an approved local build instead; proposing still makes no changes.
 - The document renders only this markdown: paragraphs, "# ", "## " and "### " headings, "- " lists, **bold**, *italic*, \`code\`, [links](https://…) and fenced code blocks. Code of more than one line (a function, a sequence of commands, JSON or other config) goes in a fenced block: three backticks and the language on a line of their own, the code, then three backticks on a line of their own. A short excerpt of one line stays inline with backticks. Do not use tables, block quotes, numbered lists, images or HTML.
 
 # Moving up a step

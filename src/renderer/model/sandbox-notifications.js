@@ -1,12 +1,15 @@
 const LIMIT = 40;
 export const notificationStorageKey = (root) => `engelbart:preview-notifications:${root}`;
 
-// Saved alerts can outlive their preview or load before its current run snapshot.
-// Only show alerts that can still open the repository's current live preview.
-export function availablePreviewNotifications(notifications, items) {
+const notificationStatus = row => row.status || 'ready'; // Existing saved preview alerts.
+const dismissalKey = row => notificationStatus(row) === 'ready' ? row.libraryId : `${row.libraryId}:${row.status}`;
+
+// Saved alerts can outlive a run or load before its current snapshot.
+// Show only the current build phase, never a stale preview or stopped run.
+export function availableBuildNotifications(notifications, items) {
   return notifications.filter((notification) => {
     const run = items[notification.libraryId]?.run;
-    return run?.id === notification.runId && run.status === 'ready' && !!run.preview_url;
+    return run?.id === notification.runId && ['starting', 'ready', 'failed'].includes(run.status) && run.status === notificationStatus(notification);
   });
 }
 
@@ -16,7 +19,7 @@ export function readNotificationState(storage, root) {
     // Older versions stored just the visible notifications.
     const rows = Array.isArray(saved) ? saved : saved?.notifications;
     const notifications = (Array.isArray(rows) ? rows : []).filter((row) => row && ['id', 'runId', 'libraryId', 'at'].every((key) => typeof row[key] === 'string' && row[key].length < 256)
-      && Number.isFinite(Date.parse(row.at)) && typeof row.read === 'boolean').slice(0, LIMIT);
+      && Number.isFinite(Date.parse(row.at)) && typeof row.read === 'boolean' && (row.status === undefined || ['starting', 'ready', 'failed'].includes(row.status))).slice(0, LIMIT);
     const dismissed = saved?.dismissed;
     return { notifications, dismissed: Object.fromEntries(Object.entries(dismissed && typeof dismissed === 'object' && !Array.isArray(dismissed) ? dismissed : {})
       .filter(([libraryId, at]) => libraryId.length < 256 && typeof at === 'string' && at.length < 256 && Number.isFinite(Date.parse(at)))) };
@@ -39,11 +42,12 @@ export function sandboxProgressReducer(state, action) {
     const ids = new Set(action.ids);
     const cleared = state.notifications.filter((row) => ids.has(row.id));
     if (!cleared.length) return state;
-    // Keep one completion timestamp per repository so snapshots and duplicate
-    // events cannot recreate cleared alerts, even after a renderer reload.
+    // Remember dismissal per phase, so clearing Building cannot hide completion.
+    // Ready keeps the legacy repository key for existing persisted dismissals.
     const dismissed = { ...state.dismissed };
     for (const row of cleared) {
-      if (!(Date.parse(dismissed[row.libraryId]) >= Date.parse(row.at))) dismissed[row.libraryId] = row.at;
+      const key = dismissalKey(row);
+      if (!(Date.parse(dismissed[key]) >= Date.parse(row.at))) dismissed[key] = row.at;
     }
     return { ...state, dismissed, notifications: state.notifications.filter((row) => !ids.has(row.id)) };
   }
@@ -58,13 +62,17 @@ export function sandboxProgressReducer(state, action) {
   const previous = state.items[run.library_id];
   if (previous && (previous.run.created_at > run.created_at || (previous.run.id === run.id && previous.run.updated_at > run.updated_at))) return state;
   let notifications = state.notifications;
-  if (run.status === 'ready' && run.preview_url && (previous?.run.id !== run.id || previous?.run.status !== 'ready' || action.event.notification === 'preview-ready')) {
-    const at = run.build_log?.findLast((entry) => entry.message === 'Preview ready')?.time || run.created_at;
+  if (['starting', 'ready', 'failed'].includes(run.status)) {
     const existing = notifications.find((row) => row.runId === run.id);
-    // The completion line can age out of the bounded build log. Keep the saved
-    // notification/read state rather than inventing a fresh alert on reload.
-    if (!(Date.parse(state.dismissed[run.library_id]) >= Date.parse(at)) && (!existing || Date.parse(at) > Date.parse(existing.at))) {
-      const row = { id: `${run.id}:${at}`, runId: run.id, libraryId: run.library_id, at, read: false };
+    const samePhase = existing && notificationStatus(existing) === run.status;
+    const changedPhase = previous?.run.id === run.id && previous.run.status !== run.status;
+    const boundary = run.status === 'ready' ? run.build_log?.findLast(entry => entry.message === 'Preview ready')?.time
+      : run.status === 'starting' ? run.build_log?.findLast(entry => entry.data?.lifecycle === 'restart')?.time
+      : run.finished_at;
+    // Preserve read/dismissed state as progress arrives and old log lines age out.
+    const at = boundary || (samePhase && existing.at) || (changedPhase || run.status === 'failed' ? run.updated_at : run.created_at);
+    const row = { id: `${run.id}:${run.status}:${at}`, runId: run.id, libraryId: run.library_id, status: run.status, at, read: false };
+    if ((action.event.reveal || !(Date.parse(state.dismissed[dismissalKey(row)]) >= Date.parse(at))) && (!samePhase || Date.parse(at) > Date.parse(existing.at))) {
       notifications = [row, ...notifications.filter((entry) => entry.libraryId !== run.library_id)].slice(0, LIMIT);
     }
   }
