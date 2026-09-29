@@ -2,6 +2,8 @@ import React from 'react';
 import { api, errorMessage } from './api.js';
 import TestToggle from './ui/TestToggle.jsx';
 import WindowEdges from './ui/WindowEdges.jsx';
+import WindowControls from './ui/WindowControls.jsx';
+import SandboxProgress from './ui/SandboxProgress.jsx';
 import Home from './screens/Home.jsx';
 import Onboarding from './screens/Onboarding.jsx';
 import Workspace from './screens/Workspace.jsx';
@@ -249,6 +251,7 @@ export default function App() {
   if (!config || phase === 'boot') return <div style={{ position: 'absolute', inset: 0, background: '#fff' }} />;
 
   return (
+    <SandboxProgress key={config.dataRoot} dataRoot={config.dataRoot} library={library} inWorkspace={phase === 'workspace' && !!tree}>
     <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#fff' }}>
       {phase === 'home' && (
         <Home
@@ -304,17 +307,20 @@ export default function App() {
       )}
       {setup && tools && <ToolSetup snapshot={tools} ids={setup.ids} mode={setup.mode} onClose={() => setSetup(null)} />}
       <WindowEdges />
-      {/* only in a developer's copy (src/main/developer.cjs): the app people download has no test mode */}
-      {config.testModeAvailable && (
-        <TestToggle
-          testMode={config.testMode}
-          busy={busy}
-          onToggle={toggleTest}
-          onReset={() => resetTest(false)}
-          onStartNew={() => resetTest(true)}
-          onReveal={() => api.reveal(config.testRoot).catch(fail)}
-        />
-      )}
+      <WindowControls>
+        {/* only in a developer's copy (src/main/developer.cjs): the app people download has no test mode */}
+        {config.testModeAvailable && (
+          <TestToggle
+            testMode={config.testMode}
+            busy={busy}
+            onToggle={toggleTest}
+            onReset={() => resetTest(false)}
+            onStartNew={() => resetTest(true)}
+            onReveal={() => api.reveal(config.testRoot).catch(fail)}
+          />
+        )}
+      </WindowControls>
     </div>
+    </SandboxProgress>
   );
 }

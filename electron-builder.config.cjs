@@ -48,6 +48,8 @@ module.exports = {
     ...(source
       ? [{ from: source, to: 'src', filter: ['main/**/*.cjs', 'shared/**/*.cjs', 'preload.cjs', 'post-it-preload.cjs'] }]
       : ['src/main/**/*.cjs', 'src/shared/**/*.cjs', 'src/preload.cjs', 'src/post-it-preload.cjs']),
+    // The E2B sandbox's helpers (src/main/sandbox): uploaded into each sandbox and run there, never on the Mac.
+    'src/main/sandbox/*.py',
     'dist/**/*',
     '!dist/**/*.map',
     'fixtures/**/*', // test mode's seed library

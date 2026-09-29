@@ -1,7 +1,7 @@
 import React from 'react';
 import Button from './Button.jsx';
 
-/** The controls that exist on every screen, fixed top-right: the settings gear (test mode only)
+/** Test mode's controls, in the top-right controls on every screen (WindowControls.jsx): the settings gear (test mode only)
  *  and the test pill. The gear resets the whole test root after a native confirmation: "Start as a new user…"
  *  leaves it as a new install has it (empty library, signed out of GitHub) and runs onboarding. */
 export default function TestToggle({ testMode, onToggle, onReset, onStartNew, onReveal, busy }) {
@@ -13,7 +13,7 @@ export default function TestToggle({ testMode, onToggle, onReset, onStartNew, on
     return () => window.removeEventListener('mousedown', close);
   }, [open]);
   return (
-    <div data-no-drag="1" style={{ position: 'fixed', top: 18, right: 16, zIndex: 200, display: 'flex', alignItems: 'center', gap: 8 }}>
+    <div data-no-drag="1" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
       {testMode && (
         <div style={{ position: 'relative' }} onMouseDown={(event) => event.stopPropagation()}>
           <button

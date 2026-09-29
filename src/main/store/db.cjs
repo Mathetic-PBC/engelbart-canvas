@@ -4,12 +4,14 @@
 // directory). The SQL is plain Postgres so the same statements run on a Supabase project
 // later; this module is the swap point (spec §2 #3).
 //
-//   <testRoot>/library.pglite    table `library`  — every mentionable thing, all projects
+//   <testRoot>/library.pglite    table `library`  — every mentionable thing, all projects; `sandbox_runs` and
+//                                `sandbox_environments` — a GitHub repository's E2B previews (src/main/sandbox)
 //   <project>/notes.pglite       table `notes`    — the notes created in that project
 
 const fs = require('node:fs');
 const path = require('node:path');
 const { PGlite } = require('@electric-sql/pglite');
+const { collectBuildMilestones } = require('../../shared/build-history.cjs');
 
 // `type` is what a row is, read off the thing itself and never guessed: a file's format, or
 // `folder`, `website`, `image` for the three that are not a file with an extension. What a row is
@@ -71,6 +73,37 @@ update library set type = 'html' where type = 'website' and path is not null;
 alter table library add constraint library_type_check check (type in (${typeList}));
 alter table library drop constraint if exists library_note_is_md;
 alter table library add constraint library_note_is_md check (type = 'md' or not ('note' = any(tags)));
+
+-- Each attempt belongs to a library item; retrying creates another run. Keep the run's
+-- sandbox handle when a library deletion is attempted: cleanup must be explicit first.
+create table if not exists sandbox_runs (
+  id uuid primary key,
+  library_id uuid not null references library (id) on delete restrict,
+  sandbox_id text,
+  status text not null default 'starting' check (status in ('starting', 'ready', 'failed', 'stopped')),
+  preview_url text,
+  port integer check (port between 1 and 65535),
+  error text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  finished_at timestamptz
+);
+create index if not exists sandbox_runs_library_created on sandbox_runs (library_id, created_at desc);
+alter table sandbox_runs add column if not exists build_log jsonb not null default '[]';
+-- Null marks pre-upgrade runs for a one-time backfill from whatever history remains.
+alter table sandbox_runs add column if not exists build_milestones jsonb;
+alter table sandbox_runs alter column build_milestones set default '{}';
+alter table sandbox_runs add column if not exists env_revision uuid;
+-- Keep discovered names after their event rolls out of the bounded build log.
+alter table sandbox_runs add column if not exists env_report jsonb;
+create table if not exists sandbox_environments (
+  library_id uuid primary key references library (id) on delete cascade,
+  revision uuid not null,
+  encrypted text not null,
+  updated_at timestamptz not null default now()
+);
+create unique index if not exists sandbox_runs_one_active on sandbox_runs (library_id)
+  where status in ('starting', 'ready');
 `;
 
 const NOTES_SCHEMA = `
@@ -189,6 +222,10 @@ function requireText(value, name, { optional = false, max = 4096 } = {}) {
 async function openLibraryDb(testRoot) {
   const dir = path.join(testRoot, 'library.pglite');
   const db = await openRaw(dir, LIBRARY_SCHEMA, { setAsideIf: typedTheOldWay });
+  for (const run of (await db.query('select id, build_log from sandbox_runs where build_milestones is null')).rows) {
+    await db.query('update sandbox_runs set build_milestones = $2::jsonb where id = $1 and build_milestones is null',
+      [run.id, JSON.stringify(collectBuildMilestones(run.build_log))]);
+  }
   return {
     dir,
     async insert(row) {

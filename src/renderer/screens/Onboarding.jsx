@@ -210,6 +210,8 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
     try {
       const row = await api.addLibraryItem(input);
       take(row, src, true);
+      // A GitHub repository is added even when its sandbox could not start (src/main/sandbox); that is said, not refused.
+      if (row.sandbox_error) setError(row.sandbox_error);
       return null;
     } catch (failure) {
       const message = errorMessage(failure);

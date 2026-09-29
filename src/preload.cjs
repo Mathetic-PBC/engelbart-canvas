@@ -133,6 +133,16 @@ const engelbartAPI = Object.freeze({
   pickLibraryPaths: invoke('pick-library-paths'),
   linkToWorkspace: invoke('link-to-workspace'),
   unlinkFromWorkspace: invoke('unlink-from-workspace'),
+  // E2B previews of saved GitHub repositories (src/main/sandbox). Adding or linking one starts it, and the answer carries
+  // `sandbox_error` when it could not start. onSandboxProgress: { dataRoot, run, message, notification? } per change.
+  sandboxRuns: invoke('sandbox-runs'),
+  ensureSandboxes: invoke('sandbox-ensure'),
+  startSandbox: invoke('sandbox-start'),
+  stopSandbox: invoke('sandbox-stop'),
+  sandboxEnvironment: invoke('sandbox-environment'),
+  saveSandboxEnvironment: invoke('sandbox-save-environment'),
+  restartSandbox: invoke('sandbox-restart'),
+  onSandboxProgress: (callback) => subscribe('engelbart:sandbox-progress', callback),
   previewLibraryItem: invoke('preview-library-item'),
   // A file dropped on the window: where it is on disk (the renderer's File no longer says).
   pathForFile: (file) => { try { return webUtils.getPathForFile(file) || null; } catch { return null; } },

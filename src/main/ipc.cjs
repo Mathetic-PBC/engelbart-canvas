@@ -21,6 +21,7 @@ const { TOOL_NAMES } = require('./tools/requirements.cjs');
 const archive = require('./store/archive.cjs');
 const onboarding = require('./store/onboarding.cjs');
 const { buildChoices } = require('./bart/models.cjs');
+const { githubRepo } = require('./sandbox/runs.cjs');
 
 const BUILD_LINE_RE = /^build> ([a-z0-9]{6,32})$/;
 const buildId = (value) => { if (typeof value !== 'string' || !/^[0-9a-f]{10}$/.test(value)) throw new TypeError('build id is invalid'); return value; };
@@ -127,19 +128,60 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
   return { layout, context, config: describe, setTestMode, resetTestData, requireTestMode, close: closeAll };
 }
 
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, tools = null, builds = null }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, tools = null, builds = null, sandbox = null }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const withCtx = (fn) => async (...args) => fn(await store.context(), ...args);
+  // E2B previews (src/main/sandbox): library additions and workspace links that can start one run one at a time, and a
+  // change of data mode waits for them, then stops every sandbox, before the old library closes.
+  let changingMode = false;
+  let additions = Promise.resolve();
+  const changing = async (change) => {
+    if (changingMode) throw new Error('Data mode is already changing');
+    changingMode = true;
+    try {
+      await additions.catch(() => {});
+      await beforeContextChange();
+      await sandbox?.close();
+      return await change();
+    } finally { changingMode = false; }
+  };
+  const queued = (work) => {
+    if (changingMode) throw new Error('Wait for the data mode change to finish');
+    const next = additions.catch(() => {}).then(work);
+    additions = next;
+    return next;
+  };
+  // A saved GitHub repository newly in a workspace is a request to use it: its sandbox starts, or the one already running
+  // is reused (even after this session's automatic preparation failed or was stopped). What was already there is left be.
+  const startLinked = async (ctx, before, workspace) => {
+    if (!sandbox) return workspace;
+    const errors = [];
+    for (const id of workspace.context) {
+      if (before.has(id)) continue;
+      const row = await ctx.libraryDb.get(id);
+      if (!githubRepo(row?.url)) continue;
+      try { await sandbox.start(ctx, id); } catch (error) { errors.push(`${row.name}: ${error.message}`); }
+    }
+    return errors.length ? { ...workspace, sandbox_error: errors.join('\n') } : workspace;
+  };
+  const changeWorkspaceContext = (pid, wid, change) => {
+    const projectId = str(pid, 'project id', 64), workspaceId = str(wid, 'workspace id', 64);
+    return queued(async () => {
+      const ctx = await store.context();
+      const held = projects.findWorkspace(ctx, projectId, workspaceId).workspace;
+      const before = new Set(held.context.filter((id) => !held.removed.includes(id)));
+      return startLinked(ctx, before, await change(ctx, projectId, workspaceId));
+    });
+  };
 
   handle('config', () => store.config());
   // Refused before anything closes or asks in a copy without test mode.
-  handle('set-test-mode', async (value) => { store.requireTestMode(); await beforeContextChange(); return store.setTestMode(value); });
+  handle('set-test-mode', async (value) => { store.requireTestMode(); return changing(() => store.setTestMode(value)); });
   handle('reset-test-data', async (options) => {
     store.requireTestMode();
     const fresh = !!(options && typeof options === 'object' && options.fresh === true);
     if (!(await confirmReset({ fresh }))) return { reset: false, ...store.config() };
-    await beforeContextChange();
-    const config = await store.resetTestData({ fresh });
+    const config = await changing(() => store.resetTestData({ fresh }));
     return { reset: true, ...config };
   });
 
@@ -185,7 +227,12 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     const context = (Array.isArray(value.context) ? value.context : []).slice(0, 500).map((id) => str(id, 'library id', 64));
     return onboarding.startProject(ctx, { name: str(value.name, 'name'), description: optStr(value.description, 'description', 8000) || '', folder, directory: folder === 'existing' ? str(value.directory, 'directory', 4096) : '', context });
   }));
-  handle('discard-library-item', withCtx((ctx, id) => onboarding.discardItem(ctx, str(id, 'library id', 64))));
+  // A repository's sandbox is stopped (and its runs forgotten) before its row can go.
+  handle('discard-library-item', (id) => queued(async () => {
+    const ctx = await store.context();
+    const libraryId = str(id, 'library id', 64);
+    return onboarding.discardItem(ctx, libraryId, { release: sandbox ? () => sandbox.release(ctx, libraryId) : null });
+  }));
   handle('rename-project', withCtx((ctx, id, name) => projects.renameProject(ctx, str(id, 'project id', 64), str(name, 'name'))));
   handle('load-project', withCtx((ctx, id) => projects.loadProject(ctx, str(id, 'project id', 64))));
 
@@ -201,10 +248,16 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     return created;
   }));
   handle('rename-workspace', withCtx((ctx, pid, wid, name) => projects.renameWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(name, 'name'))));
-  handle('set-workspace-context', withCtx((ctx, pid, wid, entries) => projects.setWorkspaceContext(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), entries)));
+  handle('set-workspace-context', (pid, wid, entries) => changeWorkspaceContext(pid, wid, (ctx, projectId, workspaceId) => projects.setWorkspaceContext(ctx, projectId, workspaceId, entries)));
   // The sidebar: search, +, Save and an @mention bring a library item into a workspace; the trash takes it out (and remembers that it did).
-  handle('link-to-workspace', withCtx((ctx, pid, wid, ids) => projects.linkToWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), (Array.isArray(ids) ? ids : [ids]).slice(0, 200).map((id) => str(id, 'library id', 64)))));
-  handle('unlink-from-workspace', withCtx((ctx, pid, wid, id) => projects.unlinkFromWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(id, 'library id', 64))));
+  handle('link-to-workspace', (pid, wid, ids) => {
+    const adding = (Array.isArray(ids) ? ids : [ids]).slice(0, 200).map((id) => str(id, 'library id', 64));
+    return changeWorkspaceContext(pid, wid, (ctx, projectId, workspaceId) => projects.linkToWorkspace(ctx, projectId, workspaceId, adding));
+  });
+  handle('unlink-from-workspace', (pid, wid, id) => {
+    const entry = str(id, 'library id', 64);
+    return changeWorkspaceContext(pid, wid, (ctx, projectId, workspaceId) => projects.unlinkFromWorkspace(ctx, projectId, workspaceId, entry));
+  });
 
   handle('create-note', withCtx((ctx, pid, input) => {
     const value = input && typeof input === 'object' ? input : {};
@@ -317,7 +370,57 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('projects-for-library-item', withCtx((ctx, id) => library.projectsForLibraryItem(ctx, str(id, 'library id', 64))));
   handle('library-for-project', withCtx((ctx, pid) => library.libraryForProject(ctx, str(pid, 'project id', 64))));
   // Adding makes a new row or throws "Already in the library as …" (library.addItem). `options.name` names it (the Browser's Save card).
-  handle('add-library-item', withCtx((ctx, input, options) => library.addItem(ctx, str(input, 'link or path', 4096), { describe, identifyRepo, inspectPdf, name: optStr(options && typeof options === 'object' ? options.name : null, 'name', 200) })));
+  // A GitHub repository's sandbox starts once the row is saved; a failure to start it leaves the row saved and says why.
+  handle('add-library-item', (input, options) => {
+    const value = str(input, 'link or path', 4096);
+    const name = optStr(options && typeof options === 'object' ? options.name : null, 'name', 200);
+    return queued(async () => {
+      const ctx = await store.context();
+      const row = await library.addItem(ctx, value, { describe, identifyRepo, inspectPdf, name });
+      // Adding a local clone or a non-GitHub item does not start remote work.
+      if (sandbox && /^(?:https?:\/\/(?:www\.)?github\.com\/|git@github\.com:)/i.test(value.trim())) {
+        try { await sandbox.start(ctx, row.id); } catch (error) { return { ...row, sandbox_error: error.message }; }
+      }
+      return row;
+    });
+  });
+  // E2B previews of saved GitHub repositories (src/main/sandbox; docs/sandbox-runs.md). Each renderer call names a library
+  // row or a run; sandbox ids, keys and paths never come from the renderer.
+  if (sandbox) {
+    handle('sandbox-runs', withCtx((ctx) => sandbox.list(ctx)));
+    // Every saved GitHub repository is prepared once per app session (manager.start's `automatic`).
+    handle('sandbox-ensure', () => queued(async () => {
+      const ctx = await store.context();
+      const errors = [];
+      for (const row of await ctx.libraryDb.list()) {
+        if (!row.tags.includes('git')) continue;
+        try { await sandbox.start(ctx, row.id, { automatic: true }); } catch (error) { errors.push(`${row.name}: ${error.message}`); }
+      }
+      if (errors.length) throw new Error(errors.join('\n'));
+      return sandbox.list(ctx);
+    }));
+    handle('sandbox-start', withCtx((ctx, id) => {
+      if (changingMode) throw new Error('Wait for the data mode change to finish');
+      return sandbox.start(ctx, str(id, 'library id', 64));
+    }));
+    handle('sandbox-stop', withCtx((ctx, id) => sandbox.stop(ctx, str(id, 'run id', 64))));
+    handle('sandbox-environment', withCtx((ctx, id) => sandbox.environment(ctx, str(id, 'library id', 64))));
+    handle('sandbox-save-environment', withCtx((ctx, id, changes, revision) => {
+      if (changingMode) throw new Error('Wait for the data mode change to finish');
+      return sandbox.saveEnvironment(ctx, str(id, 'library id', 64), changes, revision);
+    }));
+    handle('sandbox-restart', withCtx((ctx, id) => {
+      if (changingMode) throw new Error('Wait for the data mode change to finish');
+      return sandbox.restart(ctx, str(id, 'library id', 64));
+    }));
+  } else {
+    // Turned off (ENGELBART_SANDBOXES=off): nothing to show, and nothing starts.
+    handle('sandbox-runs', () => []);
+    handle('sandbox-ensure', () => []);
+    for (const channel of ['sandbox-start', 'sandbox-stop', 'sandbox-environment', 'sandbox-save-environment', 'sandbox-restart']) {
+      handle(channel, () => { throw new Error('Sandboxes are turned off in this copy of Engelbart'); });
+    }
+  }
   // A pdf read from the web, saved as a copy with its address (library.addPdfCopy; the Stage's Save sends its bytes).
   handle('add-library-pdf', withCtx((ctx, input, bytes, options) => {
     if (!(bytes instanceof Uint8Array)) throw new TypeError('pdf bytes are missing');

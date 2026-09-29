@@ -40,6 +40,7 @@ const { PARTITION: BROWSER_PARTITION, createBrowserViews, registerBrowserIpc } =
 const { createGithub } = require('./github/connection.cjs');
 const { createBrowserAuth, CLIENT_ID: GITHUB_CLIENT_ID } = require('./github/browser-auth.cjs');
 const { createE2bKey } = require('./github/e2b-key.cjs');
+const { createSandboxManager } = require('./sandbox/manager.cjs');
 const { createRepoIdentifier, createRemoteFileLister } = require('./store/page-meta.cjs');
 const { checkWebPdfs, readPdfResponse } = require('./store/web-pdfs.cjs');
 const { createPostItViews } = require('./post-its/views.cjs');
@@ -77,6 +78,7 @@ let store = null;
 let sweeper = null;
 let bart = null;
 let builds = null;
+let sandbox = null;
 let tools = null;
 let browserViews = null;
 let postItViews = null;
@@ -167,6 +169,9 @@ async function requestQuit() {
     if (sweeper) await sweeper.stop();
     if (bart) bart.stopAll();
     if (builds) await builds.stopAll(); // each running turn stops, saves a checkpoint and is marked interrupted
+    // Every E2B preview stops, none left running (and paid for) after quitting. One that cannot be stopped (offline)
+    // does not hold the quit: its sandbox ends at its one-hour timeout.
+    if (sandbox) await sandbox.dispose().catch((error) => console.warn(`[engelbart] sandbox shutdown: ${error.message}`));
     if (browserViews) await browserViews.flush().catch(() => {});
     if (postItViews) await postItViews.activate(null);
     if (manager) await manager.shutdown();
@@ -523,9 +528,17 @@ if (!hasSingleInstanceLock) {
       onChange: (status) => { if (!status.connected) e2bKey.forget(); sendToWindow('engelbart:github', status); },
       ...(githubWeb ? { web: githubWeb, api: process.env.ENGELBART_GITHUB_API || githubWeb } : {}),
     });
-    // The E2B API key for whoever is signed in (src/main/github/e2b-key.cjs), in memory only. Nothing uses it until the
-    // sandbox worker is ported; that passes E2B_API_KEY: await e2bKey.get(). ENGELBART_E2B_KEY_HOST is for scripted runs only.
+    // The E2B API key for whoever is signed in (src/main/github/e2b-key.cjs), in memory only. The sandbox worker does not
+    // use it yet: it reads E2B_API_KEY from ~/.engelbart/sandbox.env (sandbox/config.cjs). ENGELBART_E2B_KEY_HOST is for
+    // scripted runs only.
     const e2bKey = createE2bKey({ github, version: app.getVersion(), ...(process.env.ENGELBART_E2B_KEY_HOST ? { host: process.env.ENGELBART_E2B_KEY_HOST } : {}) });
+    // E2B previews (src/main/sandbox; docs/sandbox-runs.md): a saved GitHub repository cloned, set up and served in an E2B
+    // sandbox. Progress goes to the window on every screen, not only once a terminal is attached. ENGELBART_SANDBOXES=off
+    // turns them off, for scripted runs only.
+    sandbox = process.env.ENGELBART_SANDBOXES === 'off' ? null : createSandboxManager({
+      secure: safeStorage,
+      notify: (event) => sendToWindow('engelbart:sandbox-progress', event),
+    });
     registerEngelbartIpc({
       github,
       openGithubPage,
@@ -546,6 +559,7 @@ if (!hasSingleInstanceLock) {
       writeClipboard: (text) => clipboard.writeText(text),
       bart,
       builds,
+      sandbox,
       readModels,
       tools,
       notify: sendToRenderer,

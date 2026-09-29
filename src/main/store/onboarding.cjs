@@ -87,13 +87,15 @@ async function startProject(ctx, { name, description = '', folder = 'new', direc
 
 /**
  * A row added during onboarding and unticked again goes: only when it is not a note and no project holds it (no
- * workspace has it in context, none made it). Anything else stays and the answer is false.
+ * workspace has it in context, none made it). Anything else stays and the answer is false. `release` runs first when
+ * given: a GitHub repository's sandbox stopped and its runs forgotten (sandbox/manager.cjs), else the row cannot go.
  */
-async function discardItem(ctx, id) {
+async function discardItem(ctx, id, { release = null } = {}) {
   if (typeof id !== 'string' || !UUID_RE.test(id)) throw new TypeError('library id is invalid');
   const row = await ctx.libraryDb.get(id);
   if (!row || row.tags.includes('note') || row.project_id) return false;
   if ((await library.projectsForLibraryItem(ctx, id)).length) return false;
+  if (release) await release();
   return ctx.libraryDb.remove(id);
 }
 

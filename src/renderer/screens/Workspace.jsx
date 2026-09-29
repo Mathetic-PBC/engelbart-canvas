@@ -783,17 +783,21 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // Everything that brings a library item into this workspace links it (context, and off `removed`); adding makes the
   // row first and is refused when the library already holds the thing (library.addItem). The row that arrives flashes.
 
+  // A GitHub repository that comes in starts its sandbox (src/main/sandbox); one that could not start is still added and
+  // linked, and says why.
   const linkIds = async (ids) => {
     if (!topic || !ids.length) return;
-    await api.linkToWorkspace(project.id, topic.id, ids);
+    const linked = await api.linkToWorkspace(project.id, topic.id, ids);
     await reload();
     flash(ids[ids.length - 1]);
+    if (linked && linked.sandbox_error) onError(new Error(linked.sandbox_error));
   };
 
   const addInput = async (input, name) => {
     if (!topic) throw new Error('Open a workspace first');
     const row = await api.addLibraryItem(input, name ? { name } : undefined);
     await linkIds([row.id]);
+    if (row.sandbox_error) onError(new Error(row.sandbox_error));
     return row;
   };
 
@@ -871,6 +875,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     const row = openPage.bytes ? await api.addLibraryPdf(openPage.input, openPage.bytes, { name }) : await api.addLibraryItem(openPage.input, { name });
     if (here) await linkIds([row.id]);
     else await reload();
+    if (row.sandbox_error) onError(new Error(row.sandbox_error));
   };
 
   const renameRow = async (row, name) => {
