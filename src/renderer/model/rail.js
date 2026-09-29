@@ -14,7 +14,7 @@ export const RAIL_SECTIONS = [
   { key: 'GitHub', label: 'GitHub' },
   { key: 'Files', label: 'Files' },
   { key: 'Workspaces', label: 'Sub-Workspaces' },
-  // This workspace's earlier versions, one per Clear (2026-09-25): shown only when there are some, as every section is.
+  // This workspace's earlier versions, one per Clear (2026-09-25).
   { key: 'Archived', label: 'Archived' },
 ];
 
@@ -28,11 +28,11 @@ export function sectionOf(row) {
   return 'Files';
 }
 
-/** The rail's rows under their sections, each keeping the rows' order; a section with nothing in it is not shown. */
+/** The rail's rows under their sections, each keeping the rows' order; every section is shown, empty or not (2026-09-29). */
 export function railSections(rows) {
   const by = new Map(RAIL_SECTIONS.map((section) => [section.key, []]));
   for (const row of rows) by.get(sectionOf(row)).push(row);
-  return RAIL_SECTIONS.map((section) => ({ ...section, rows: by.get(section.key) })).filter((section) => section.rows.length > 0);
+  return RAIL_SECTIONS.map((section) => ({ ...section, rows: by.get(section.key) }));
 }
 
 /** Something the library could add, by its spelling alone: a web address, an arXiv or DOI id, a git remote, a path from / or ~/. The main process decides for real. */

@@ -18,7 +18,8 @@ import notePng from '../../../design/assets/yellow-sticky-note.png';
 // "Workspace" over its icon and name (a click opens the switcher: a search over every workspace of the project, the
 // siblings, "+ New"; a double-click renames); the library search, which finds anything the library
 // holds and brings it in; this workspace's rows under quiet section labels — Notes, Websites, GitHub, Files,
-// Sub-Workspaces (model/rail.js railSections; each folds, the first carries Collapse all) — where a hover peeks, a
+// Sub-Workspaces, Archived (model/rail.js railSections; always shown, closed until opened, the first carries Expand
+// all) — where a hover peeks, a
 // double-click renames and a drag onto the trash takes one out of this workspace; and "+ Add context", whose menu makes a
 // Note or a Sub-Workspace here or adds something new to the library and to this workspace. At the bottom, the workspace
 // to go to next (an agent waiting there, else the one written in before; ⌘J), then two pictures that size with the
@@ -323,20 +324,23 @@ function RailSection({ section, open, onToggle, all, children }) {
         </button>
         {all && <button type="button" data-rail-fold-all="1" onClick={all.onClick} style={{ flex: 'none', margin: '10px 10px 4px 0', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', font: '400 11.5px/1.4 var(--font-sans)', color: '#171717' }}>{all.label}</button>}
       </div>
-      {open && <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>{children}</div>}
+      {open && (section.rows.length
+        ? <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>{children}</div>
+        : <div data-rail-empty="1" style={{ padding: '4px 10px 6px', font: '400 12.5px/1.4 var(--font-sans)', color: '#c9c9c9' }}>None yet</div>)}
     </div>
   );
 }
 
-// Which sections are folded, kept for the next time the app opens (a convenience of this machine: storage may refuse).
-const SHUT_KEY = 'engelbart.rail.shut';
-function readShut() {
-  try { const saved = JSON.parse(window.localStorage.getItem(SHUT_KEY) || '{}'); return saved && typeof saved === 'object' ? saved : {}; } catch { return {}; }
+// Which sections are open, kept for the next time the app opens (a convenience of this machine: storage may refuse).
+// Every section starts closed (2026-09-29); the old key remembered the folded ones, so it is left behind.
+const OPEN_KEY = 'engelbart.rail.open';
+function readOpen() {
+  try { const saved = JSON.parse(window.localStorage.getItem(OPEN_KEY) || '{}'); return saved && typeof saved === 'object' ? saved : {}; } catch { return {}; }
 }
-function useShut() {
-  const [shut, setShut] = React.useState(readShut);
-  React.useEffect(() => { try { window.localStorage.setItem(SHUT_KEY, JSON.stringify(shut)); } catch { /* not remembered */ } }, [shut]);
-  return [shut, setShut];
+function useOpen() {
+  const [opened, setOpened] = React.useState(readOpen);
+  React.useEffect(() => { try { window.localStorage.setItem(OPEN_KEY, JSON.stringify(opened)); } catch { /* not remembered */ } }, [opened]);
+  return [opened, setOpened];
 }
 
 // A panel that hangs from something in the sidebar (the search field, the + row). Fixed to the window, so the sidebar's
@@ -868,12 +872,21 @@ export default function Rail({
   const [dragging, setDragging] = React.useState(null);
   const [overTrash, setOverTrash] = React.useState(false);
   const [menus, setMenus] = React.useState({ search: false, add: false });
-  const [shut, setShut] = useShut(); // section key → folded
+  const [opened, setOpened] = useOpen(); // section key → unfolded
   const timer = React.useRef(null);
   const itemRows = rows;
   const sections = railSections(rows);
-  const anyShut = sections.some((section) => shut[section.key]);
-  const foldAll = { label: anyShut ? 'Expand all' : 'Collapse all', onClick: () => setShut(anyShut ? {} : Object.fromEntries(RAIL_SECTIONS.map((section) => [section.key, true]))) };
+  const anyShut = sections.some((section) => !opened[section.key]);
+  const foldAll = { label: anyShut ? 'Expand all' : 'Collapse all', onClick: () => setOpened(anyShut ? Object.fromEntries(RAIL_SECTIONS.map((section) => [section.key, true])) : {}) };
+  // A row that just arrived (added from the search or Add context) opens its section, once, so it is seen arriving.
+  const shown = React.useRef(null);
+  React.useEffect(() => {
+    if (!flashId || shown.current === flashId) return;
+    const home = sections.find((section) => section.rows.some((row) => row.id === flashId));
+    if (!home) return;
+    shown.current = flashId;
+    setOpened((now) => (now[home.key] ? now : { ...now, [home.key]: true }));
+  }, [flashId, sections, setOpened]);
 
   /* ------------------------------------------------------------------ peek */
   // After a beat on a row, what it is: the same card as the all-projects screen's library.
@@ -935,8 +948,8 @@ export default function Rail({
               <RailSection
                 key={section.key}
                 section={section}
-                open={!shut[section.key]}
-                onToggle={() => setShut((now) => ({ ...now, [section.key]: !now[section.key] }))}
+                open={!!opened[section.key]}
+                onToggle={() => setOpened((now) => ({ ...now, [section.key]: !now[section.key] }))}
                 all={i === 0 ? foldAll : null}
               >
                 {section.rows.map((row) => (

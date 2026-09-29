@@ -81,15 +81,15 @@ test('@Bart, as the menu writes it, is a question like a typed @bart; both rende
   assert.equal(doc.parseLine('@Barty').type === 'bart', false);
 });
 
-test('sections: Notes, Websites, GitHub, Files, Sub-Workspaces in that order; Files takes everything else; empty ones are left out (Sidebar.dc.html, 2026-09-23)', async () => {
+test('sections: Notes, Websites, GitHub, Files, Sub-Workspaces, Archived in that order; Files takes everything else; empty ones stay (2026-09-29)', async () => {
   const { railSections, sectionOf } = await load();
   const rows = [...library, row('k1', 'Evaluation harness', 'child'), row('g2', 'engelbart-canvas', 'folder', ['git'], { folder_path: '/Users/h/e' }), row('h1', 'saved.html', 'html')];
   const sections = railSections(rows);
-  assert.deepEqual(sections.map((s) => s.label), ['Notes', 'Websites', 'GitHub', 'Files', 'Sub-Workspaces']);
-  assert.deepEqual(sections.map((s) => s.rows.map((r) => r.id)), [['n1'], ['w1'], ['g1', 'g2'], ['p1', 'i1', 'c1', 'f1', 'h1'], ['k1']]);
+  assert.deepEqual(sections.map((s) => s.label), ['Notes', 'Websites', 'GitHub', 'Files', 'Sub-Workspaces', 'Archived']);
+  assert.deepEqual(sections.map((s) => s.rows.map((r) => r.id)), [['n1'], ['w1'], ['g1', 'g2'], ['p1', 'i1', 'c1', 'f1', 'h1'], ['k1'], []]);
   assert.equal(sectionOf(row('m1', 'README', 'md')), 'Files', 'an outside md is a file, not a note');
-  assert.deepEqual(railSections([row('p1', 'ColBERT', 'pdf', ['paper'])]).map((s) => s.key), ['Files']);
-  assert.deepEqual(railSections([]), []);
+  assert.deepEqual(railSections([row('p1', 'ColBERT', 'pdf', ['paper'])]).map((s) => [s.key, s.rows.length]), [['Notes', 0], ['Websites', 0], ['GitHub', 0], ['Files', 1], ['Workspaces', 0], ['Archived', 0]]);
+  assert.deepEqual(railSections([]).map((s) => s.rows.length), [0, 0, 0, 0, 0, 0], 'a workspace with nothing in it still shows every section');
 });
 
 test('the @ menu offers the project\'s other workspaces after the page and before the library (2026-09-25)', async () => {
@@ -110,13 +110,13 @@ test('the @ menu offers the project\'s other workspaces after the page and befor
   assert.deepEqual(mentionRows({ query: 'colbert', library, page: null, pageRow: null, workspaces }).map((r) => r.key), ['p1']);
 });
 
-test('the Archived section: a workspace\'s earlier versions, last, and only when there are some (2026-09-25)', async () => {
+test('the Archived section: a workspace\'s earlier versions, last (2026-09-25)', async () => {
   const { railSections, sectionOf, RAIL_SECTIONS } = await load();
   assert.equal(RAIL_SECTIONS[RAIL_SECTIONS.length - 1].label, 'Archived');
   assert.equal(sectionOf({ type: 'archive' }), 'Archived');
   const rows = [{ id: 'archive:2026-09-25T21-03-12Z', type: 'archive', name: 'Storage plan' }, { id: 'n1', type: 'md', tags: ['note'], name: 'Spec' }];
-  assert.deepEqual(railSections(rows).map((s) => [s.key, s.rows.map((r) => r.id)]), [['Notes', ['n1']], ['Archived', ['archive:2026-09-25T21-03-12Z']]]);
-  assert.ok(!railSections([rows[1]]).some((s) => s.key === 'Archived'), 'no versions, no section');
+  assert.deepEqual(railSections(rows).filter((s) => s.rows.length).map((s) => [s.key, s.rows.map((r) => r.id)]), [['Notes', ['n1']], ['Archived', ['archive:2026-09-25T21-03-12Z']]]);
+  assert.deepEqual(railSections([rows[1]]).find((s) => s.key === 'Archived').rows, [], 'no versions: the section is there, empty');
 });
 
 test('"Add from library" in the Build panel: the ones written in last before anything is typed, then every match; no pictures, nothing attached already (2026-09-27)', async () => {
