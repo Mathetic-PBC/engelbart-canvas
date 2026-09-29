@@ -39,6 +39,7 @@ const { createStore, registerEngelbartIpc } = require('./ipc.cjs');
 const { PARTITION: BROWSER_PARTITION, createBrowserViews, registerBrowserIpc } = require('./browser/views.cjs');
 const { createGithub } = require('./github/connection.cjs');
 const { createBrowserAuth, CLIENT_ID: GITHUB_CLIENT_ID } = require('./github/browser-auth.cjs');
+const { createE2bKey } = require('./github/e2b-key.cjs');
 const { createRepoIdentifier, createRemoteFileLister } = require('./store/page-meta.cjs');
 const { checkWebPdfs, readPdfResponse } = require('./store/web-pdfs.cjs');
 const { createPostItViews } = require('./post-its/views.cjs');
@@ -515,10 +516,16 @@ if (!hasSingleInstanceLock) {
       },
       openVerification: openGithubPage,
       browserAuth: () => (process.env.ENGELBART_GITHUB_CLIENT_ID || (store.config().github || {}).clientId) === GITHUB_CLIENT_ID ? githubBrowserAuth : null,
-      onConnected: () => { if (mainWindow && !mainWindow.isDestroyed()) { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); } },
-      onChange: (status) => sendToWindow('engelbart:github', status),
+      onConnected: () => {
+        void e2bKey.get().catch(() => {}); // early, so the first sandbox need not wait; it asks again if this failed
+        if (mainWindow && !mainWindow.isDestroyed()) { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); }
+      },
+      onChange: (status) => { if (!status.connected) e2bKey.forget(); sendToWindow('engelbart:github', status); },
       ...(githubWeb ? { web: githubWeb, api: process.env.ENGELBART_GITHUB_API || githubWeb } : {}),
     });
+    // The E2B API key for whoever is signed in (src/main/github/e2b-key.cjs), in memory only. Nothing uses it until the
+    // sandbox worker is ported; that passes E2B_API_KEY: await e2bKey.get(). ENGELBART_E2B_KEY_HOST is for scripted runs only.
+    const e2bKey = createE2bKey({ github, version: app.getVersion(), ...(process.env.ENGELBART_E2B_KEY_HOST ? { host: process.env.ENGELBART_E2B_KEY_HOST } : {}) });
     registerEngelbartIpc({
       github,
       openGithubPage,

@@ -20,18 +20,23 @@ Engelbart. Website cookies remain in the external browser; they are never import
 
 ## Server setup
 
-The broker source lives in the `Mathetic-PBC/engelbart` website checkout:
+The server source lives in the `Mathetic-PBC/landing` checkout, deployed as the `landing` Vercel project (`mathetic.com`):
 
-- `lib/github-auth.cjs`: stateless authorization, callback and token/refresh exchange.
-- `api/github/{start,callback,token}.js`: Vercel entrypoints.
-- Fixed public origin: `https://engelbart.mathetic.com`.
+- `api/_lib/github-auth.cjs`: stateless authorization, callback and token/refresh exchange.
+- `api/github/{start,callback,token}.js`: Vercel entrypoints for the broker.
+- `api/_lib/e2b-key.cjs` and `api/e2b/key.js`: `POST /api/e2b/key`, which returns `{ e2bApiKey }` to any token GitHub's
+  check-token API confirms was issued to this App, sent with `x-engelbart-client: engelbart-desktop/<version>`.
+- Fixed public broker origin: `https://engelbart.mathetic.com`. Once `Mathetic-PBC/engelbart` PR #3 is merged, that site
+  rewrites `/api/github/*` to `https://mathetic.com/api/github/*`, so shipped desktop builds keep working. Until then it
+  still serves its own copy of the broker.
 - GitHub App callback URL: `https://engelbart.mathetic.com/api/github/callback`.
-- Server-only Vercel environment variable: `GITHUB_CLIENT_SECRET`.
+- E2B key origin: `https://mathetic.com` itself (`KEY_HOST` in `src/main/github/e2b-key.cjs`); it is not rewritten.
+- Server-only Vercel environment variables on the `landing` project: `GITHUB_CLIENT_SECRET` and `E2B_API_KEY`.
 
 The new authorization-code flow requires one client secret, unlike the previous device flow. It belongs only in the
 server's encrypted environment, never the desktop app, config.json, Git history, logs, or renderer. No private key is
-needed. Until the secret is provisioned, the broker returns 503 `not_configured`. Deploy the broker and register the
-callback before distributing the updated desktop app.
+needed. Until the secret is provisioned, the broker returns 503 `not_configured`; so does `/api/e2b/key` without
+`E2B_API_KEY`. Deploy the broker and register the callback before distributing the updated desktop app.
 
 Activated on September 23, 2026: the callback is registered, the secret is provisioned as a sensitive production
 variable, and the broker is deployed. Live authorization, account/installation lookup, and token refresh were verified.
@@ -58,8 +63,9 @@ memory. Sign out deletes them. Revocation is available in GitHub Settings → Ap
 
 - Desktop: `npm test` and `npm run build`.
 - Headless app: `npx electron scripts/smoke-github-signin.cjs` (local service fixture, disposable app data).
-- Broker: `node --test test/github-auth.test.cjs` in the website checkout.
+- Server: `node --test test/*.test.cjs` in the `Mathetic-PBC/landing` checkout.
 
 The headless check exercises external-browser handoff, no code-entry UI, cancel/retry/reopen, the real loopback callback,
 PKCE, automatic app return, repository picking, and external installation/website navigation. It does not authorize a
-real GitHub account. `ENGELBART_GITHUB_BROKER`, `ENGELBART_GITHUB_WEB`, and `ENGELBART_GITHUB_API` are test overrides.
+real GitHub account. `ENGELBART_GITHUB_BROKER`, `ENGELBART_GITHUB_WEB`, `ENGELBART_GITHUB_API`, and
+`ENGELBART_E2B_KEY_HOST` are test overrides.
