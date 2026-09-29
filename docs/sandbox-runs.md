@@ -47,13 +47,26 @@ rebuilding the checkout alone does not update an already running release.
 
 ## Configuration
 
-Install dependencies with `npm install`, then put `E2B_API_KEY` in
-`~/.engelbart/sandbox.env`. Setup uses the signed-in local Claude subscription
-first, with `ANTHROPIC_API_KEY` as an optional fallback. This file stays on the main/worker
+Install dependencies with `npm install` and sign in to GitHub in Engelbart: the E2B
+API key always comes from mathetic.com for whoever is signed in (`src/main/github/e2b-key.cjs`),
+held in memory only and handed to the sandbox worker as `E2B_API_KEY`. While nobody is
+signed in, automatic preparation waits instead of failing each saved repository; it
+runs once you sign in. An explicit Run/Retry or a newly added repository reports that a
+sign-in is needed, and records nothing. Signing out stops the running sandboxes.
+
+An `E2B_API_KEY` in `~/.engelbart/sandbox.env`, `.env.local`, the file named by
+`ENGELBART_SANDBOX_ENV_FILE`, or a packaged app's environment is ignored. Only an
+unpackaged build (`npm start`) honors `E2B_API_KEY`, and only from the process
+environment: it is then used instead of the sign-in, for development. The scripts in
+`scripts/` (template builds, benchmarks, smoke tests) are separate and still read
+`E2B_API_KEY` from `~/.engelbart/sandbox.env`.
+
+Setup uses the signed-in local Claude subscription first, with `ANTHROPIC_API_KEY`
+in `~/.engelbart/sandbox.env` as an optional fallback. This file stays on the main/worker
 side; its values are never returned through renderer IPC. `.env.example` lists
 the supported settings. A gitignored `.env.local` in this checkout is also read.
 `ENGELBART_SANDBOX_ENV_FILE` can point at an existing private environment file.
-Process environment values take precedence over file settings.
+For these settings, process environment values take precedence over file settings.
 `ENGELBART_SANDBOXES=off` turns sandboxes off entirely, for scripted runs.
 
 The default template is `engelbart-runner`, built by the web project's
@@ -105,7 +118,7 @@ Explicit overrides remain available: `claude-local` requires the local subscript
 and disables API fallback; `api` skips local Claude and requires `ANTHROPIC_API_KEY`.
 Remove an older override or set it to `auto` to use the new default behavior.
 
-Keep `E2B_API_KEY` in all modes. An old packaged release will not include these changes.
+The signed-in E2B key is needed in all modes. An old packaged release will not include these changes.
 A ready sandbox is reused; use **Stop sandbox**, then **Retry build**, to test the
 new setup provider on that repository.
 An environment-only restart reuses the saved launch plan rather than running

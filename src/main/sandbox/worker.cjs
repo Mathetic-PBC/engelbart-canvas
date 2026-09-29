@@ -14,6 +14,9 @@ const ADAPTER = `${ADAPTER_DIR}/launch.py`;
 const quote = (value) => `'${String(value).replace(/'/g, "'\\''")}'`;
 const HOUR = 60 * 60_000;
 const PROXY_PORT = 43110;
+const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+// The key comes only from the GitHub sign-in (manager.cjs); without it no E2B call is made.
+const MISSING_KEY = 'Sign in to GitHub in Engelbart to use sandboxes.';
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function safePreview(value) {
@@ -79,6 +82,7 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
     await target.files.write(ADAPTER, fs.readFileSync(path.join(__dirname, 'launch.py'), 'utf8'));
   }
   async function can_restart(request) {
+    if (!env.E2B_API_KEY) throw new Error(MISSING_KEY);
     const target = await Sandbox.connect(request.sandbox_id, { requestTimeoutMs: 10_000 });
     await installAdapter(target);
     await target.commands.run(`python3 ${ADAPTER} --check`, { timeoutMs: 20_000, envs: { ENGELBART_CANVAS_PORT: String(request.port || 0), HUMAN_COMPACT_HOME: '/home/user/.human-compact' } });
@@ -86,7 +90,7 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
   }
   function checkCancelled() { if (cancelled) throw new Error('Setup stopped'); }
   async function probe(request) {
-    if (!env.E2B_API_KEY) throw new Error('Set E2B_API_KEY in ~/.engelbart/sandbox.env');
+    if (!env.E2B_API_KEY) throw new Error(MISSING_KEY);
     // Recover the handle if Canvas died between E2B creation and saving the ID.
     if (!request.sandbox_id) {
       const list = Sandbox.list({ query: { metadata: { canvasRunId: request.run_id, app: 'engelbart-canvas' }, state: ['running', 'paused'] }, requestTimeoutMs: 10_000 });
@@ -104,7 +108,7 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
     }
   }
   async function kill(request) {
-    if (!env.E2B_API_KEY) throw new Error('Set E2B_API_KEY in ~/.engelbart/sandbox.env');
+    if (!env.E2B_API_KEY) throw new Error(MISSING_KEY);
     if (request.sandbox_id) await Sandbox.kill(request.sandbox_id, { requestTimeoutMs: 10_000 });
     return { state: 'gone' };
   }
@@ -117,7 +121,7 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
       if (!repo) throw new Error('A GitHub repository URL is required');
       const provider = env.ENGELBART_SANDBOX_SETUP || 'auto';
       if (!['auto', 'api', 'claude-local'].includes(provider)) throw new Error('ENGELBART_SANDBOX_SETUP must be auto, api or claude-local');
-      if (!env.E2B_API_KEY) throw new Error('Set E2B_API_KEY in ~/.engelbart/sandbox.env');
+      if (!env.E2B_API_KEY) throw new Error(MISSING_KEY);
       if (!restarting && provider === 'api' && !env.ANTHROPIC_API_KEY) throw new Error('Set ANTHROPIC_API_KEY, or select ENGELBART_SANDBOX_SETUP=auto in ~/.engelbart/sandbox.env');
       function fallbackToApi(error) {
         checkCancelled(); // Stop must never turn into another setup attempt.
@@ -143,7 +147,8 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
         timeoutMs: HOUR, requestTimeoutMs: 60_000,
         // The web worker sweeps every sandbox carrying `runId` if it is absent
         // from Supabase. Canvas owns its runs locally and must use a separate key.
-        metadata: { canvasRunId: request.run_id, repo: repo.url, app: 'engelbart-canvas' },
+        // githubLogin: who asked, as the desktop reported it (a hint for tracing, not proof).
+        metadata: { canvasRunId: request.run_id, repo: repo.url, app: 'engelbart-canvas', ...(typeof request.github_login === 'string' && GITHUB_LOGIN.test(request.github_login) ? { githubLogin: request.github_login } : {}) },
       });
       checkCancelled();
       emit({ event: 'sandbox_created', sandbox_id: sandbox.sandboxId });
@@ -374,4 +379,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createRuntime, safePreview, previewResponds };
+module.exports = { createRuntime, safePreview, previewResponds, MISSING_KEY };

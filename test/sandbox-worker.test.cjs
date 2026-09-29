@@ -110,5 +110,32 @@ test('real worker transport delivers configuration failure without network or se
   await worker.done;
   assert.equal(events.length, 1);
   assert.equal(events[0].event, 'failed');
-  assert.match(events[0].error, /E2B_API_KEY/);
+  assert.equal(events[0].error, 'Sign in to GitHub in Engelbart to use sandboxes.');
+});
+
+test('every E2B call needs the signed-in key, including the restart check', async () => {
+  const refuse = () => assert.fail('no E2B call without a key');
+  const runtime = createRuntime({ Sandbox: { connect: refuse, getInfo: refuse, kill: refuse, list: refuse }, env: {}, emit() {} });
+  await assert.rejects(runtime.probe({ sandbox_id: 'sb' }), /^Error: Sign in to GitHub in Engelbart to use sandboxes\.$/);
+  await assert.rejects(runtime.kill({ sandbox_id: 'sb' }), /Sign in to GitHub/);
+  await assert.rejects(runtime.can_restart({ sandbox_id: 'sb', port: 3000 }), /Sign in to GitHub/);
+});
+
+test('the sandbox metadata names the GitHub login only when a valid one is given', async () => {
+  const seen = [];
+  const attempt = async (request) => {
+    const events = [];
+    const runtime = createRuntime({
+      Sandbox: { create: async (_template, options) => { seen.push(options.metadata); throw new Error('stop after create'); } },
+      env: { E2B_API_KEY: 'test', ANTHROPIC_API_KEY: 'test', ENGELBART_SANDBOX_SETUP: 'api' }, detectDocker: async () => false, emit: (event) => events.push(event),
+    });
+    await runtime.run({ run_id: 'run-login', github_url: 'https://github.com/owner/app', ...request });
+    assert.equal(events.at(-1).event, 'failed');
+  };
+  await attempt({ github_login: 'octocat' });
+  await attempt({});
+  await attempt({ github_login: 'not a login' });
+  assert.deepEqual(seen[0], { canvasRunId: 'run-login', repo: 'https://github.com/owner/app', app: 'engelbart-canvas', githubLogin: 'octocat' });
+  assert.equal('githubLogin' in seen[1], false);
+  assert.equal('githubLogin' in seen[2], false);
 });

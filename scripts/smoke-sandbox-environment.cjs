@@ -24,7 +24,8 @@ async function main() {
   await ctx.libraryDb.insert({ id, name: 'Environment test', type: 'website', tags: ['git'], url: 'https://github.com/owner/environment-test' });
   const runs = runStore(ctx.libraryDb);
   let sandbox;
-  const manager = createSandboxManager({ readEnv: () => env,
+  // The manager takes its E2B key only as `e2bKey` (in the app, the GitHub sign-in's); this script's comes from sandbox.env.
+  const manager = createSandboxManager({ readEnv: () => env, e2bKey: async () => env.E2B_API_KEY || null,
     // Isolated test store, not the user's credentials or database.
     secure: { isEncryptionAvailable: () => true, encryptString: (value) => Buffer.from(value), decryptString: (value) => value.toString() },
     notify(event) { if (['ready', 'failed'].includes(event.run.status)) console.log('Run status:', event.run.status); },

@@ -169,8 +169,8 @@ async function requestQuit() {
     if (sweeper) await sweeper.stop();
     if (bart) bart.stopAll();
     if (builds) await builds.stopAll(); // each running turn stops, saves a checkpoint and is marked interrupted
-    // Every E2B preview stops, none left running (and paid for) after quitting. One that cannot be stopped (offline)
-    // does not hold the quit: its sandbox ends at its one-hour timeout.
+    // Every E2B preview stops, none left running (and paid for) after quitting. One that cannot be stopped (offline,
+    // signed out) does not hold the quit: its sandbox ends at its one-hour timeout.
     if (sandbox) await sandbox.dispose().catch((error) => console.warn(`[engelbart] sandbox shutdown: ${error.message}`));
     if (browserViews) await browserViews.flush().catch(() => {});
     if (postItViews) await postItViews.activate(null);
@@ -506,6 +506,9 @@ if (!hasSingleInstanceLock) {
     const githubWeb = process.env.ENGELBART_GITHUB_WEB || null;
     const openGithubPage = (url) => electronShell.openExternal(parseExternalUrl(url).href);
     const githubBrowserAuth = createBrowserAuth({ ...(process.env.ENGELBART_GITHUB_BROKER ? { broker: process.env.ENGELBART_GITHUB_BROKER } : {}) });
+    // An unpackaged copy may run sandboxes on the developer's own E2B_API_KEY (the process environment only, never a
+    // file); a release never does.
+    const devE2bKey = app.isPackaged ? null : process.env.E2B_API_KEY || null;
     const github = createGithub({
       settings: () => {
         const chosen = store.config().github || {};
@@ -525,19 +528,30 @@ if (!hasSingleInstanceLock) {
         void e2bKey.get().catch(() => {}); // early, so the first sandbox need not wait; it asks again if this failed
         if (mainWindow && !mainWindow.isDestroyed()) { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); }
       },
-      onChange: (status) => { if (!status.connected) e2bKey.forget(); sendToWindow('engelbart:github', status); },
+      // Signing out (or a sign-in that expired) drops the E2B key, and stops the sandboxes started with it. Signed out
+      // there are none, so a repeat is a no-op; a developer's own key (devE2bKey) is not tied to the sign-in at all.
+      onChange: (status) => {
+        if (!status.connected) { e2bKey.forget(); if (!devE2bKey) sandbox?.signedOut().catch(() => {}); }
+        sendToWindow('engelbart:github', status);
+      },
       ...(githubWeb ? { web: githubWeb, api: process.env.ENGELBART_GITHUB_API || githubWeb } : {}),
     });
-    // The E2B API key for whoever is signed in (src/main/github/e2b-key.cjs), in memory only. The sandbox worker does not
-    // use it yet: it reads E2B_API_KEY from ~/.engelbart/sandbox.env (sandbox/config.cjs). ENGELBART_E2B_KEY_HOST is for
-    // scripted runs only.
-    const e2bKey = createE2bKey({ github, version: app.getVersion(), ...(process.env.ENGELBART_E2B_KEY_HOST ? { host: process.env.ENGELBART_E2B_KEY_HOST } : {}) });
+    // The E2B API key for whoever is signed in (src/main/github/e2b-key.cjs), in memory only, and the only key the sandbox
+    // worker gets (sandbox/manager.cjs). ENGELBART_E2B_KEY_HOST is for scripted runs only.
+    const e2bKey = createE2bKey({
+      github,
+      version: app.getVersion(),
+      override: devE2bKey,
+      ...(process.env.ENGELBART_E2B_KEY_HOST ? { host: process.env.ENGELBART_E2B_KEY_HOST } : {}),
+    });
     // E2B previews (src/main/sandbox; docs/sandbox-runs.md): a saved GitHub repository cloned, set up and served in an E2B
     // sandbox. Progress goes to the window on every screen, not only once a terminal is attached. ENGELBART_SANDBOXES=off
     // turns them off, for scripted runs only.
     sandbox = process.env.ENGELBART_SANDBOXES === 'off' ? null : createSandboxManager({
       secure: safeStorage,
       notify: (event) => sendToWindow('engelbart:sandbox-progress', event),
+      e2bKey: () => e2bKey.get(),
+      githubLogin: () => github.status().login,
     });
     registerEngelbartIpc({
       github,

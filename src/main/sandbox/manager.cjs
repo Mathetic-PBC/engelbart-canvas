@@ -3,10 +3,14 @@
 const { githubRepo, runStore } = require('./runs.cjs');
 const { readSandboxEnv } = require('./config.cjs');
 const { launchWorker } = require('./transport.cjs');
-const { safePreview } = require('./worker.cjs');
+const { safePreview, MISSING_KEY } = require('./worker.cjs');
 const { environmentStore, redact, redactEvent } = require('./environment.cjs');
+const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 
-function createSandboxManager({ notify, launch = launchWorker, readEnv = readSandboxEnv, secure }) {
+// `e2bKey`: the E2B API key for whoever is signed in to GitHub (src/main/github/e2b-key.cjs), and the only one a worker
+// gets: an E2B_API_KEY in .env.local, ~/.engelbart/sandbox.env or the environment (readEnv) is dropped. `githubLogin`
+// names that account in each new sandbox's metadata.
+function createSandboxManager({ notify, launch = launchWorker, readEnv = readSandboxEnv, secure, e2bKey = async () => null, githubLogin = () => '' }) {
   const workers = new Map();
   const contexts = new Map();
   const locks = new Map();
@@ -22,6 +26,16 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
     locks.set(key, next);
     return next.finally(() => { if (locks.get(key) === next) locks.delete(key); });
   }
+  // A worker's environment: the rest of readEnv, and the signed-in key. Throws when there is none to give.
+  async function environmentFor(ctx) {
+    const env = { ...readEnv(ctx.root) };
+    delete env.E2B_API_KEY;
+    let key;
+    try { key = await e2bKey(); }
+    catch (error) { throw new Error(`Could not get the E2B key for your GitHub sign-in: ${error.message}`); }
+    if (!key) throw new Error(MISSING_KEY);
+    return { ...env, E2B_API_KEY: key };
+  }
   function publish(ctx, run, extra = {}) {
     if (!run) return;
     if (extra.message) messages.set(run.id, extra.message);
@@ -29,7 +43,7 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
   }
   async function control(ctx, command, run) {
     let result;
-    const worker = launch({ command, run_id: run.id, sandbox_id: run.sandbox_id, preview_url: run.preview_url, port: run.port }, readEnv(ctx.root), async (event) => {
+    const worker = launch({ command, run_id: run.id, sandbox_id: run.sandbox_id, preview_url: run.preview_url, port: run.port }, await environmentFor(ctx), async (event) => {
       if (event.event === 'failed') throw new Error(event.error || 'Sandbox check failed');
       if (event.event === 'result') result = event;
     });
@@ -79,11 +93,13 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
       await end(ctx, run, event.event, event.event === 'failed' ? String(event.error || 'Setup failed').slice(0, 4000) : null);
     } else throw new Error('Unknown sandbox event');
   }
-  function attach(ctx, run, repo, environment, restart = false) {
+  // `env` was resolved by the caller before anything was recorded or interrupted (environmentFor).
+  function attach(ctx, run, repo, environment, restart, env) {
     let worker;
-    const held = { ctx, detaching: false };
+    const held = { ctx, libraryId: run.library_id, detaching: false };
+    const login = String(githubLogin() || '');
     try {
-      worker = launch({ command: restart ? 'restart' : 'start', run_id: run.id, github_url: repo.url, sandbox_id: run.sandbox_id, port: run.port, environment }, readEnv(ctx.root), (event) => held.detaching ? undefined : receive(ctx, run.id, redactEvent(event, Object.values(environment.values))));
+      worker = launch({ command: restart ? 'restart' : 'start', run_id: run.id, github_url: repo.url, sandbox_id: run.sandbox_id, port: run.port, environment, ...(GITHUB_LOGIN.test(login) ? { github_login: login } : {}) }, env, (event) => held.detaching ? undefined : receive(ctx, run.id, redactEvent(event, Object.values(environment.values))));
     } catch (error) { return end(ctx, run, 'failed', error.message); }
     held.worker = worker;
     workers.set(run.id, held);
@@ -115,6 +131,14 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
       const store = runStore(ctx.libraryDb);
       // Prepare once per app session. Refreshes must not undo Stop or loop on failures.
       if (automatic && prepared.has(key)) return (await store.latest()).find((item) => item.library_id === libraryId) || null;
+      // The key comes first: without one (signed out of GitHub, mathetic.com unreachable) nothing is recorded.
+      // Automatic preparation waits quietly and runs once there is one; an explicit start says why it cannot.
+      let env;
+      try { env = await environmentFor(ctx); }
+      catch (error) {
+        if (automatic) return (await store.latest()).find((item) => item.library_id === libraryId) || null;
+        throw error;
+      }
       prepared.add(key);
       let run = await store.active(libraryId);
       if (run) {
@@ -136,7 +160,7 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
       run = await store.update(run.id, { env_revision: environment.revision });
       run = await store.record(run.id, 'Starting repository setup');
       publish(ctx, run, { message: 'Starting repository setup' });
-      return attach(ctx, run, repo, environment);
+      return attach(ctx, run, repo, environment, false, env);
     });
   }
   const envStore = (ctx) => environmentStore(ctx.libraryDb, secure);
@@ -156,7 +180,8 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
       const store = runStore(ctx.libraryDb);
       let run = (await store.latest()).find((row) => row.library_id === libraryId);
       if (!run?.sandbox_id || !['ready', 'failed'].includes(run.status)) throw new Error('Wait for a ready preview before restarting the application. Saved values will be used by the next build.');
-      // Confirm that the same machine can relaunch before interrupting anything.
+      // The key, then confirmation that the same machine can relaunch, before interrupting anything.
+      const env = await environmentFor(ctx);
       await control(ctx, 'can_restart', run);
       const held = workers.get(run.id);
       if (held) {
@@ -167,7 +192,7 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
       run = await store.reopen(run.id, values.revision);
       run = await store.record(run.id, 'Restarting app with saved environment (same sandbox)', { data: { phase: 'setup', status: 'reusing', lifecycle: 'restart' } });
       publish(ctx, run, { message: 'Restarting app with saved environment (same sandbox)' });
-      return attach(ctx, run, repo, values, true);
+      return attach(ctx, run, repo, values, true, env);
     });
   }
   async function stopRun(ctx, id) {
@@ -200,9 +225,13 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
     polling = true;
     try {
       for (const ctx of contexts.values()) {
+        let keyed = null;
         for (const run of await runStore(ctx.libraryDb).latest()) {
           if (closing) return;
           if (!['starting', 'ready'].includes(run.status)) continue;
+          // Every check needs the key: signed out, they wait instead of repeating the sign-in message every 15 seconds.
+          if (keyed === null) keyed = await environmentFor(ctx).then(() => true, () => false);
+          if (!keyed) break;
           await exclusive(`${ctx.dataRoot}:${run.library_id}`, async () => {
             const current = await runStore(ctx.libraryDb).get(run.id);
             if (!['starting', 'ready'].includes(current.status)) return;
@@ -259,7 +288,20 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
       prepared.delete(`${ctx.dataRoot}:${libraryId}`);
     });
   }
-  return { start, list, stop, environment, saveEnvironment, restart, release, close, poll, dispose: async () => { clearInterval(timer); await close(); } };
+  // Signed out of GitHub: each live run is stopped by its own worker, which still holds the key it started with (the
+  // manager has none now). A run without a live worker waits for the next sign-in's Stop, or its one-hour timeout.
+  async function signedOut() {
+    await Promise.allSettled([...workers.entries()].map(([id, held]) => exclusive(`${held.ctx.dataRoot}:${held.libraryId}`, async () => {
+      if (workers.get(id) !== held || held.detaching) return;
+      const run = await runStore(held.ctx.libraryDb).get(id);
+      if (run && ['starting', 'ready'].includes(run.status)) {
+        publish(held.ctx, await runStore(held.ctx.libraryDb).record(id, 'Stopping: signed out of GitHub'), { message: 'Stopping: signed out of GitHub' });
+      }
+      await held.worker.stop().catch(() => {});
+      await held.finished;
+    })));
+  }
+  return { start, list, stop, environment, saveEnvironment, restart, release, signedOut, close, poll, dispose: async () => { clearInterval(timer); await close(); } };
 }
 
 module.exports = { createSandboxManager };

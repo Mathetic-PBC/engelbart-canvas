@@ -10,12 +10,13 @@ const db = require('../src/main/store/db.cjs');
 const { createSandboxManager } = require('../src/main/sandbox/manager.cjs');
 const { runStore } = require('../src/main/sandbox/runs.cjs');
 
-async function fixture(t) {
+async function fixture(t, { readEnv = () => ({}), e2bKey = async () => 'e2b_signed_in', githubLogin = () => 'octocat' } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canvas-run-manager-'));
   const ctx = { root, dataRoot: root, libraryDb: await db.openLibraryDb(root) };
-  const events = [], starts = [], controls = [];
+  const events = [], starts = [], controls = [], envs = [];
   let probe = { state: 'ready' };
-  const manager = createSandboxManager({ secure: { isEncryptionAvailable: () => true, encryptString: (value) => Buffer.from(value), decryptString: (value) => value.toString() }, notify: (event) => events.push(event), readEnv: () => ({}), launch(request, env, receive) {
+  const manager = createSandboxManager({ secure: { isEncryptionAvailable: () => true, encryptString: (value) => Buffer.from(value), decryptString: (value) => value.toString() }, notify: (event) => events.push(event), readEnv, e2bKey, githubLogin, launch(request, env, receive) {
+    envs.push({ command: request.command, env });
     if (!['start', 'restart'].includes(request.command)) {
       controls.push(request);
       const done = Promise.resolve().then(() => {
@@ -32,7 +33,7 @@ async function fixture(t) {
   } });
   t.after(async () => { await manager.dispose(); await ctx.libraryDb.close(); });
   const repo = await ctx.libraryDb.insert({ id: randomUUID(), name: 'owner/app', type: 'website', url: 'https://github.com/owner/app', tags: ['git'] });
-  return { ctx, manager, events, starts, controls, repo, store: runStore(ctx.libraryDb), setProbe(value) { probe = value; } };
+  return { ctx, manager, events, starts, controls, envs, repo, store: runStore(ctx.libraryDb), setProbe(value) { probe = value; } };
 }
 
 test('duplicate starts reuse one run; progress, persistence, ready and stop preserve library row', async (t) => {
@@ -228,7 +229,7 @@ test('non-GitHub entries do not create a run; database rejects a second active a
 
 test('worker launch errors are saved as failures', async (t) => {
   const f = await fixture(t);
-  const manager = createSandboxManager({ notify() {}, readEnv: () => ({}), launch() { throw new Error('Cannot launch worker'); } });
+  const manager = createSandboxManager({ notify() {}, readEnv: () => ({}), e2bKey: async () => 'k', launch() { throw new Error('Cannot launch worker'); } });
   const run = await manager.start(f.ctx, f.repo.id);
   assert.equal(run.status, 'failed');
   assert.equal((await f.store.get(run.id)).error, 'Cannot launch worker');
@@ -255,6 +256,102 @@ test('shutdown waits for workers even after their terminal event was saved', asy
   assert.equal((await f.store.get(run.id)).status, 'failed');
 });
 
+test('the signed-in key is the only one a worker gets: a configured E2B_API_KEY is dropped, for start and for checks', async (t) => {
+  const f = await fixture(t, { readEnv: () => ({ E2B_API_KEY: 'e2b_configured', E2B_TEMPLATE: 'custom' }), e2bKey: async () => 'e2b_from_github' });
+  await f.manager.start(f.ctx, f.repo.id);
+  assert.deepEqual(f.envs[0], { command: 'start', env: { E2B_TEMPLATE: 'custom', E2B_API_KEY: 'e2b_from_github' } });
+  await f.starts[0].receive({ event: 'sandbox_created', sandbox_id: 'sb-key' });
+  const run = (await f.store.latest())[0];
+  await f.manager.stop(f.ctx, run.id);
+  const kill = f.envs.find((entry) => entry.command === 'kill');
+  assert.equal(kill.env.E2B_API_KEY, 'e2b_from_github');
+  assert.ok(!f.envs.some((entry) => entry.env.E2B_API_KEY === 'e2b_configured'));
+});
+
+test('an explicit start without a key records nothing and says why', async (t) => {
+  const signedOut = await fixture(t, { readEnv: () => ({ E2B_API_KEY: 'e2b_configured' }), e2bKey: async () => null });
+  await assert.rejects(signedOut.manager.start(signedOut.ctx, signedOut.repo.id), /^Error: Sign in to GitHub in Engelbart to use sandboxes\.$/);
+  assert.equal(signedOut.starts.length, 0);
+  assert.equal((await signedOut.store.latest()).length, 0);
+  const refused = await fixture(t, { e2bKey: async () => { throw new Error('E2B key request failed (401)'); } });
+  await assert.rejects(refused.manager.start(refused.ctx, refused.repo.id), /Could not get the E2B key for your GitHub sign-in: E2B key request failed \(401\)/);
+  assert.equal(refused.starts.length, 0);
+  assert.equal((await refused.store.latest()).length, 0);
+});
+
+test('a restart without a key interrupts nothing', async (t) => {
+  let key = 'e2b_signed_in';
+  const f = await fixture(t, { e2bKey: async () => key });
+  const run = await f.manager.start(f.ctx, f.repo.id);
+  await f.starts[0].receive({ event: 'sandbox_created', sandbox_id: 'sb-restart' });
+  await f.starts[0].receive({ event: 'ready', preview_url: 'https://preview.example/', port: 3000 });
+  key = null;
+  await assert.rejects(f.manager.restart(f.ctx, f.repo.id), /Sign in to GitHub/);
+  assert.ok(!f.controls.some((request) => request.command === 'can_restart'));
+  assert.equal(f.starts.length, 1);
+  assert.equal((await f.store.get(run.id)).status, 'ready');
+});
+
+test('the start message names the signed-in GitHub login, and only a valid one', async (t) => {
+  const f = await fixture(t);
+  await f.manager.start(f.ctx, f.repo.id);
+  assert.equal(f.starts[0].request.github_login, 'octocat');
+  for (const login of ['', 'not a login', '-leading-dash', 'x'.repeat(40)]) {
+    const g = await fixture(t, { githubLogin: () => login });
+    await g.manager.start(g.ctx, g.repo.id);
+    assert.equal('github_login' in g.starts[0].request, false, login);
+  }
+});
+
+test('background checks wait while signed out instead of repeating the sign-in message', async (t) => {
+  let key = 'e2b_signed_in';
+  const f = await fixture(t, { e2bKey: async () => key });
+  await f.manager.start(f.ctx, f.repo.id);
+  await f.starts[0].receive({ event: 'sandbox_created', sandbox_id: 'sb-poll' });
+  await f.starts[0].receive({ event: 'ready', preview_url: 'https://preview.example/', port: 3000 });
+  await f.manager.poll();
+  const probes = f.controls.filter((request) => request.command === 'probe').length;
+  assert.ok(probes >= 1, 'signed in, a ready run is checked');
+  key = null;
+  const published = f.events.length;
+  await f.manager.poll();
+  assert.equal(f.controls.filter((request) => request.command === 'probe').length, probes);
+  assert.ok(!f.events.slice(published).some((event) => /Sign in to GitHub/.test(event.message)));
+});
+
+test('signing out stops each live run through its own worker, without asking for a key', async (t) => {
+  let asked = 0, key = 'e2b_signed_in';
+  const f = await fixture(t, { e2bKey: async () => { asked++; return key; } });
+  const run = await f.manager.start(f.ctx, f.repo.id);
+  await f.starts[0].receive({ event: 'sandbox_created', sandbox_id: 'sb-signed-out' });
+  key = null;
+  asked = 0;
+  await f.manager.signedOut();
+  const stopped = await f.store.get(run.id);
+  assert.equal(stopped.status, 'stopped');
+  assert.equal(stopped.sandbox_id, 'sb-signed-out');
+  assert.ok(stopped.build_log.some((entry) => entry.message === 'Stopping: signed out of GitHub'));
+  assert.ok(!f.controls.some((request) => request.command === 'kill'), 'the worker stopped its own sandbox');
+  assert.equal(asked, 0);
+  await f.manager.signedOut(); // nothing live: a repeat does nothing
+  assert.equal(f.controls.length, 0);
+});
+
+test('automatic preparation waits for a key instead of failing every saved repository', async (t) => {
+  let key = null;
+  const f = await fixture(t, { readEnv: () => ({}), e2bKey: async () => key });
+  assert.equal(await f.manager.start(f.ctx, f.repo.id, { automatic: true }), null);
+  assert.equal(f.starts.length, 0);
+  assert.equal((await f.store.latest()).length, 0, 'no failed run is recorded while signed out');
+  key = 'e2b_from_github';
+  const run = await f.manager.start(f.ctx, f.repo.id, { automatic: true });
+  assert.equal(run.status, 'starting');
+  assert.equal(f.starts.length, 1);
+  assert.equal(f.starts[0].request.command, 'start');
+  await f.manager.start(f.ctx, f.repo.id, { automatic: true });
+  assert.equal(f.starts.length, 1, 'still once per session after the key arrived');
+});
+
 test('release stops a live sandbox and forgets its runs so the library row can be deleted', async (t) => {
   const f = await fixture(t);
   const run = await f.manager.start(f.ctx, f.repo.id);
@@ -273,7 +370,7 @@ test('release keeps the runs, and the row, when the sandbox cannot be confirmed 
   await f.starts[0].receive({ event: 'failed', error: 'Setup failed' });
   f.starts[0].finish();
   // A second manager over the same library whose kill fails.
-  const manager = createSandboxManager({ notify() {}, readEnv: () => ({}), launch(request, env, receive) {
+  const manager = createSandboxManager({ notify() {}, readEnv: () => ({}), e2bKey: async () => 'k', launch(request, env, receive) {
     const done = Promise.resolve().then(() => receive({ run_id: request.run_id, event: 'failed', error: 'E2B unreachable' }));
     return { done, stop: () => done };
   } });

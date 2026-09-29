@@ -56,6 +56,17 @@ test('a failed or malformed answer is not kept, and its error carries neither to
   assert.equal(f.sent.length, 3);
 });
 
+test('an override (an unpackaged copy\'s own key) answers as is, signed in or not, without asking', async () => {
+  let asked = 0;
+  const key = createE2bKey({ github: { token: async () => null }, version: '1.2.3', override: 'e2b_developer', fetch: async () => { asked++; throw new Error('must not ask'); } });
+  assert.equal(await key.get(), 'e2b_developer');
+  key.forget();
+  assert.equal(await key.get(), 'e2b_developer');
+  assert.equal(asked, 0);
+  const none = createE2bKey({ github: { token: async () => null }, version: '1.2.3', override: null, fetch: async () => { asked++; throw new Error('must not ask'); } });
+  assert.equal(await none.get(), null, 'no override: signed out is still null');
+});
+
 test('refuses a host that is neither HTTPS nor loopback', () => {
   const github = { token: async () => 'ghu_test' };
   assert.throws(() => createE2bKey({ github, version: '1.2.3', host: 'http://mathetic.com' }), /HTTPS/);

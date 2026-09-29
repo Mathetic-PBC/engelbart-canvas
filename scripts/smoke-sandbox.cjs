@@ -32,7 +32,8 @@ async function main() {
   const done = new Promise((yes, no) => { resolve = yes; reject = no; });
   done.catch(() => {});
   const timeout = setTimeout(() => reject(new Error('Smoke test exceeded 8 minutes')), 8 * 60_000);
-  const manager = createSandboxManager({ notify({ run, message }) {
+  // The manager takes its E2B key only as `e2bKey` (in the app, the GitHub sign-in's); this script's comes from sandbox.env.
+  const manager = createSandboxManager({ e2bKey: async () => env.E2B_API_KEY || null, notify({ run, message }) {
     if (run.sandbox_id && !report.sandbox_id) { report.sandbox_id = run.sandbox_id; save(); }
     if (message !== lastMessage) { console.log(run.status, String(message).slice(0, 180)); lastMessage = message; }
     if (run.status === 'ready') resolve(run);
