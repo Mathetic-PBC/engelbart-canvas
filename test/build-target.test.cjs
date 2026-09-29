@@ -1,7 +1,7 @@
 'use strict';
 
-// Where a project's Builds work (src/renderer/model/build-target.js): the pick remembered per project, the default repo
-// until there is one and again when the one picked is gone; storage that fails changes nothing.
+// Where a workspace's Builds work (src/renderer/model/build-target.js): the pick remembered per workspace, the default
+// repo until there is one and again when the one picked is gone; storage that fails changes nothing.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -16,20 +16,24 @@ function withStorage(storage, work) {
 }
 const memory = () => { const held = new Map(); return { getItem: (key) => (held.has(key) ? held.get(key) : null), setItem: (key, value) => held.set(key, String(value)) }; };
 
-test('the pick is remembered per project; the default repo until there is one, and when the one picked is gone', async () => {
+test('the pick is remembered per workspace; the default repo until there is one, and when the one picked is gone (2026-09-29)', async () => {
   const { pickedTarget, rememberTarget, DEFAULT_TARGET } = await load();
-  withStorage(memory(), () => {
-    assert.deepEqual(pickedTarget('p1', LIST), DEFAULT_TARGET);
-    rememberTarget('p1', { kind: 'library', id: 'row-1', name: 'ignored', folder: '/not/kept' });
-    assert.deepEqual(pickedTarget('p1', LIST), { kind: 'library', id: 'row-1' }, 'only what names it is kept');
-    assert.deepEqual(pickedTarget('p2', LIST), DEFAULT_TARGET, 'another project has its own');
-    assert.deepEqual(pickedTarget('p1', LIST.slice(0, 2)), DEFAULT_TARGET, 'a row no longer listed');
-    rememberTarget('p1', { kind: 'project' });
-    assert.deepEqual(pickedTarget('p1', LIST), { kind: 'project' });
+  const storage = memory();
+  withStorage(storage, () => {
+    assert.deepEqual(pickedTarget('p1', 'w1', LIST), DEFAULT_TARGET);
+    rememberTarget('p1', 'w1', { kind: 'library', id: 'row-1', name: 'ignored', folder: '/not/kept' });
+    assert.deepEqual(pickedTarget('p1', 'w1', LIST), { kind: 'library', id: 'row-1' }, 'only what names it is kept');
+    assert.deepEqual(pickedTarget('p1', 'w2', LIST), DEFAULT_TARGET, 'another workspace of the project has its own');
+    assert.deepEqual(pickedTarget('p2', 'w1', LIST), DEFAULT_TARGET, 'another project has its own');
+    assert.deepEqual(pickedTarget('p1', 'w1', LIST.slice(0, 2)), DEFAULT_TARGET, 'a row no longer listed');
+    assert.deepEqual(pickedTarget('p1', 'w1', []), DEFAULT_TARGET, 'a list that could not be read');
+    rememberTarget('p1', 'w2', { kind: 'project' });
+    assert.deepEqual(pickedTarget('p1', 'w2', LIST), { kind: 'project' });
+    assert.deepEqual(pickedTarget('p1', 'w1', LIST), { kind: 'library', id: 'row-1' }, 'the first workspace keeps its pick');
   });
   withStorage({ getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); } }, () => {
-    rememberTarget('p1', { kind: 'project' });
-    assert.deepEqual(pickedTarget('p1', LIST), DEFAULT_TARGET);
+    rememberTarget('p1', 'w1', { kind: 'project' });
+    assert.deepEqual(pickedTarget('p1', 'w1', LIST), DEFAULT_TARGET);
   });
 });
 

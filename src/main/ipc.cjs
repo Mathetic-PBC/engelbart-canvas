@@ -355,6 +355,10 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     handle('build-accept', withCtx((ctx, pid, id) => b().accept(ctx, pidOf(pid), buildId(id))));
     handle('build-fix', withCtx((ctx, pid, id) => b().fix(ctx, pidOf(pid), buildId(id))));
     handle('build-discard', withCtx((ctx, pid, id) => b().discard(ctx, pidOf(pid), buildId(id))));
+    // Its run step (build/run-step.cjs): a runnable it got running shown again (a UI's Stage tab, a terminal program's
+    // session), and Stop for one still working.
+    handle('build-run-show', withCtx((ctx, pid, id, name) => b().showRunnable(ctx, pidOf(pid), buildId(id), str(name, 'runnable name', 64))));
+    handle('build-run-stop', withCtx((ctx, pid, id) => b().stopRunning(ctx, pidOf(pid), buildId(id))));
     handle('build-promote', withCtx((ctx, pid, id, wid, choice) => {
       const value = choice && typeof choice === 'object' ? choice : null;
       const picked = value ? { provider: optStr(value.provider, 'provider', 24), model: optStr(value.model, 'model', 24), effort: optStr(value.effort, 'effort', 24) } : null;

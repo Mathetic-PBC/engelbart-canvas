@@ -26,7 +26,12 @@ function safePreview(value) {
 }
 
 async function previewResponds(url, fetcher = fetch) {
-  const response = await fetcher(safePreview(url), { redirect: 'manual', signal: AbortSignal.timeout(5000) });
+  return respondsAt(safePreview(url), fetcher);
+}
+
+/** Whether an address answers like a page: below 500, and not a dev server turning the host away. A Build's run step checks a web UI on this Mac with it too (../build/run-processes.cjs). */
+async function respondsAt(href, fetcher = fetch) {
+  const response = await fetcher(href, { redirect: 'manual', signal: AbortSignal.timeout(5000) });
   // Avoid downloading an unbounded page just to check reachability.
   const reader = response.body?.getReader();
   let text = '';
@@ -415,4 +420,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createRuntime, safePreview, previewResponds, MISSING_KEY };
+module.exports = { createRuntime, safePreview, previewResponds, respondsAt, MISSING_KEY };

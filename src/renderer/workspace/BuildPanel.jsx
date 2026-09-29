@@ -99,9 +99,10 @@ function Chip({ item, glyph, onRemove, ...rest }) {
 /**
  * `anchor` { left, right, top, bottom }: the Build button it opens above. `onStart({ provider, model, effort, attach,
  * clear, target })` starts it; the panel closes itself only on Esc, ×, or a press elsewhere in the window (never while
- * it is sending). `onLibraryChanged()` after a library repository was cloned (its row now has a folder).
+ * it is sending). A repository not on this Mac is cloned by the start itself (main/build start, 2026-09-29), so Send is
+ * all it takes. `workspaceId`: whose pick the panel remembers.
  */
-export default function BuildPanel({ projectId, title, anchor, library, inRail, onClose, onStart, onLibraryChanged }) {
+export default function BuildPanel({ projectId, workspaceId, title, anchor, library, inRail, onClose, onStart }) {
   const [models, setModels] = React.useState(null);
   const [choice, setChoice] = React.useState(null); // { provider, model, effort }
   const [targets, setTargets] = React.useState(null); // where a Build can work, the default repo first (main's list)
@@ -131,10 +132,10 @@ export default function BuildPanel({ projectId, title, anchor, library, inRail, 
     api.buildTargets(projectId).then((list) => {
       if (!live) return;
       setTargets(list);
-      setTarget(pickedTarget(projectId, list));
+      setTarget(pickedTarget(projectId, workspaceId, list));
     }).catch((e) => { if (live) { setError(errorMessage(e)); setTarget(DEFAULT_TARGET); } });
     return () => { live = false; };
-  }, [projectId]);
+  }, [projectId, workspaceId]);
   // What the picked repository says: whether it can take a Build, or must be made or cloned first.
   const picked = target ? targetKey(target) : '';
   React.useEffect(() => {
@@ -147,14 +148,17 @@ export default function BuildPanel({ projectId, title, anchor, library, inRail, 
   }, [projectId, picked]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const send = async () => {
-    if (!choice || !target || busy || !pre || !pre.ok) return;
+    if (!choice || !target || busy || !pre || !(pre.ok || pre.canClone)) return;
     setBusy(true);
+    setCloning(!pre.ok && !!pre.canClone);
     setError('');
     try {
       await onStart({ ...choice, attach: attached.map((row) => row.id), clear, target });
     } catch (e) {
       setError(errorMessage(e));
       setBusy(false);
+      setCloning(false);
+      if (pre.canClone) api.buildPreflight(projectId, target).then(setPre).catch(() => {}); // a clone that failed leaves nothing; one that worked is used next time
     }
   };
   const startHistory = async () => {
@@ -162,18 +166,9 @@ export default function BuildPanel({ projectId, title, anchor, library, inRail, 
     setError('');
     try { setPre(await api.buildInit(projectId, target)); } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
   };
-  const cloneHere = async () => {
-    setBusy(true); setCloning(true);
-    setError('');
-    try {
-      setPre(await api.buildClone(projectId, target));
-      setTargets(await api.buildTargets(projectId));
-      if (onLibraryChanged) onLibraryChanged();
-    } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); setCloning(false); }
-  };
   const pickTarget = (item) => {
     const next = item.kind === 'library' ? { kind: 'library', id: item.id } : { kind: item.kind };
-    rememberTarget(projectId, next);
+    rememberTarget(projectId, workspaceId, next);
     setTarget(next);
     setLookup(null);
   };
@@ -208,12 +203,13 @@ export default function BuildPanel({ projectId, title, anchor, library, inRail, 
   const openLookup = (kind, element) => { setPicker(null); setLookup((now) => (now && now.kind === kind ? null : { kind, anchor: rectOf(element) })); };
   const entry = models && choice ? models.providers[choice.provider] : null;
   const chosen = entry ? entry.models[choice.model] : null;
-  const ready = !!(choice && target && pre && pre.ok && !busy);
-  const problem = pre && !pre.ok ? pre.problems[0].message : '';
+  const ready = !!(choice && target && pre && (pre.ok || pre.canClone) && !busy);
+  const problem = pre && !pre.ok && !pre.canClone ? pre.problems[0].message : '';
   const note = pre && pre.ok && pre.create ? `Makes ${pre.target.name}/ in the project folder, with a history of its own.`
+    : pre && !pre.ok && pre.canClone ? (cloning ? `Cloning into ${pre.cloneTo}…` : `Clones it into ${pre.cloneTo} in the project folder first.`)
     : pre && pre.ok && pre.dirty ? `${pre.dirty} uncommitted ${pre.dirty === 1 ? 'file' : 'files'} left out` : '';
   const line = error || problem || note;
-  const alarming = !!(error || (problem && !(pre && pre.canClone)));
+  const alarming = !!(error || problem);
   const heading = 'Build';
   const named = title;
   const libraryRows = (query) => attachRows({ query, library, taken: attached.map((row) => row.id), inRail });
@@ -254,11 +250,10 @@ export default function BuildPanel({ projectId, title, anchor, library, inRail, 
             {attached.map((row) => <Chip key={row.id} item={row} data-build-attached={row.id} onRemove={() => setAttached((now) => now.filter((held) => held.id !== row.id))} />)}
           </div>
         )}
-        {(line || (pre && !pre.ok && (pre.canInit || pre.canClone))) && (
+        {(line || (pre && !pre.ok && pre.canInit)) && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span data-build-note="1" style={{ flex: 1, minWidth: 0, font: '12.5px/1.5 var(--font-sans)', color: alarming ? '#e70022' : '#8f8f8f' }}>{line}</span>
             {pre && !pre.ok && pre.canInit && <button type="button" className="bart-text" data-build-init="1" disabled={busy} onClick={startHistory} style={{ color: '#171717' }}>Start history</button>}
-            {pre && !pre.ok && pre.canClone && <button type="button" className="bart-text" data-build-clone="1" disabled={busy} onClick={cloneHere} title={`Clone into ${pre.cloneTo} in the project folder`} style={{ flex: 'none', color: '#171717' }}>{cloning ? 'Cloning…' : `Clone into ${pre.cloneTo}`}</button>}
           </div>
         )}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 32 }}>

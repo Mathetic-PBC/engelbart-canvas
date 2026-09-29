@@ -492,8 +492,8 @@ export default class DocEditor extends React.Component {
       + '</div>';
   }
   // A text button of the card: grey, ink on hover (the answer card's .bart-text); `strong` is Accept's blue.
-  buildButton(act, id, label, { strong = false, extra = '' } = {}) {
-    return `<button class="bart-text" data-act="${act}" data-build-id="${esc(id)}" style="user-select:none;${strong ? 'color:#0070f3;' : ''}${extra}">${esc(label)}</button>`;
+  buildButton(act, id, label, { strong = false, extra = '', run = null } = {}) {
+    return `<button class="bart-text" data-act="${act}" data-build-id="${esc(id)}"${run ? ` data-run-name="${esc(run)}"` : ''} style="user-select:none;${strong ? 'color:#0070f3;' : ''}${extra}">${esc(label)}</button>`;
   }
   // One message of the conversation. The agent's is markdown (drawn as an answer is), the person's is theirs as typed,
   // Engelbart's own notes are one grey line.
@@ -571,7 +571,30 @@ export default class DocEditor extends React.Component {
     const lastNote = messages.length ? messages[messages.length - 1].text : '';
     const errorLine = task.error && !final && !lastNote.includes(task.error) ? `<div style="margin-top:8px;font:12.5px/1.5 var(--font-sans);color:#e70022">${esc(task.error)}</div>` : '';
     const actions = acts.length || errorLine ? `${errorLine}<div style="display:flex;align-items:center;gap:6px;margin:10px 0 0 -2px">${acts.join('')}</div>` : '';
-    return [['head', head], ['body', body], ['live', live], ['reply', reply], ['actions', actions]];
+    return [['head', head], ['body', body], ['run', this.buildRunHtml(id, task)], ['live', live], ['reply', reply], ['actions', actions]];
+  }
+  // Its run step (main/build/run-step.cjs): what the repository runs, each with where to see it, while the Build is open.
+  buildRunHtml(id, task) {
+    const step = task.runStep;
+    if (!step || task.final || step.status === 'skipped') return '';
+    const working = step.status === 'running';
+    const kinds = { ui: 'web UI', app: 'desktop app', terminal: 'terminal' };
+    const rows = (step.runnables || []).map((item) => {
+      const where = item.status === 'running' && item.type === 'ui' ? this.buildButton('buildrunshow', id, 'Open', { extra: 'padding-top:0;padding-bottom:0;', run: item.name })
+        : item.status === 'running' && item.type === 'terminal' && item.sessionId ? this.buildButton('buildrunshow', id, 'Terminal', { extra: 'padding-top:0;padding-bottom:0;', run: item.name }) : '';
+      const state = { running: item.type === 'app' ? 'runs in its window' : item.url ? `runs at ${item.url}` : 'runs', failed: 'did not run', stopped: 'stopped', installing: 'installing', checking: 'checking' }[item.status] || 'waiting';
+      const color = item.status === 'running' ? '#1a7f37' : item.status === 'failed' ? '#e70022' : '#8f8f8f';
+      return `<div data-run-item="${esc(item.name)}" style="display:flex;align-items:baseline;gap:8px;min-width:0">`
+        + `<span style="flex:none;color:#171717">${esc(item.name)}</span><span style="flex:none;color:#8f8f8f">${esc(kinds[item.type] || item.type)}</span>`
+        + `<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${color}" title="${esc(item.error || '')}">${esc(state)}${item.status === 'failed' && item.error ? ` · ${esc(String(item.error).split('\n')[0])}` : ''}</span>${where}</div>`;
+    }).join('');
+    const head = '<div style="display:flex;align-items:center;gap:10px">'
+      + (working ? '<span style="flex:none;width:6px;height:6px;border-radius:50%;background:#0070f3;animation:thinking 1.2s ease-in-out infinite"></span>' : '')
+      + `<span style="flex:none;font-weight:500;color:#171717">Run step</span>`
+      + `<span data-run-status="${esc(step.status)}" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${step.status === 'failed' ? '#e70022' : '#8f8f8f'}">${esc(working ? (step.phase || 'Working') : step.status === 'failed' ? step.error || 'Failed' : step.status === 'stopped' ? 'Stopped' : (step.runnables || []).length ? '' : 'Nothing here to run')}</span>`
+      + (working ? this.buildButton('buildrunstop', id, 'Stop') : '')
+      + '</div>';
+    return `<div data-run-step="${esc(id)}" style="margin-top:10px;padding:8px 12px;border-radius:8px;background:#fff;font:12.5px/1.7 var(--font-sans)">${head}${rows}</div>`;
   }
   // Only the parts that changed are replaced; a reply field that was replaced gets its text and the keyboard back.
   patchBuilds() {
@@ -616,8 +639,10 @@ export default class DocEditor extends React.Component {
       if (input) { input.value = ''; this.paintBuildSend(input); this.fitFollow(input); }
     }).catch(() => {});
   }
-  buildAct(k, id) {
+  buildAct(k, id, runName) {
     const act = this.props.onBuildAction; if (!act) return;
+    if (k === 'buildrunshow') { act(id, 'runshow', { name: runName }); return; }
+    if (k === 'buildrunstop') { act(id, 'runstop'); return; }
     if (k === 'buildhistory') { if (this.buildOpen.has(id)) this.buildOpen.delete(id); else this.buildOpen.add(id); this.patchBuilds(); return; }
     if (k === 'buildsteps') { if (this.buildSteps.has(id)) this.buildSteps.delete(id); else this.buildSteps.add(id); this.patchBuilds(); return; }
     if (k === 'buildsend') { this.sendBuild(id); return; }
@@ -1071,7 +1096,7 @@ export default class DocEditor extends React.Component {
         return;
       }
       if (k === 'asklog') { const id = act.dataset.ask; if (this.openLogs.has(id)) this.openLogs.delete(id); else this.openLogs.add(id); this.patchPending(); return; }
-      if (k.startsWith('build') && act.dataset.buildId) { this.buildAct(k, act.dataset.buildId); return; }
+      if (k.startsWith('build') && act.dataset.buildId) { this.buildAct(k, act.dataset.buildId, act.dataset.runName); return; }
       if (k === 'stopask') { if (this.props.onStopAsk) this.props.onStopAsk(act.dataset.ask); return; }
       if (k === 'toggle') this.toggleTodo(i);
       else if (k === 'build') this.buildIdx([i]);

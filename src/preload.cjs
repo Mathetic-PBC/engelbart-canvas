@@ -116,6 +116,11 @@ const engelbartAPI = Object.freeze({
   buildPromote: invoke('build-promote'),
   onBuild: (callback) => subscribe('engelbart:build', callback),
   onBuildProgress: (callback) => subscribe('engelbart:build-progress', callback),
+  // A runnable its run step got running ({ projectId, id, kind: 'ui' | 'app' | 'terminal', name, url?, session? }):
+  // a UI opens in the Stage, a terminal program's session in the terminal.
+  onBuildRun: (callback) => subscribe('engelbart:build-run', callback),
+  buildRunShow: invoke('build-run-show'),
+  buildRunStop: invoke('build-run-stop'),
   // A post-it's Build button asks the window for its Build popup, with the card's text, and where the card and the
   // button are ({ projectId, postItId, text, card, button }, CSS px of the window).
   onBuildQuick: (callback) => subscribe('engelbart:build-quick', callback),

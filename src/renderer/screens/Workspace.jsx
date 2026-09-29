@@ -9,6 +9,7 @@ import { kindOf } from '../ui/Icons.jsx';
 import { hasTag, isNote } from '../model/kind.js';
 import { isUntitled, nextUntitled } from '../model/names.js';
 import { OPEN_IN_BROWSER } from '../model/address.js';
+import { adoptSession, dropSession, SHOW_TERMINAL } from '../terminal/sessions.js';
 import { mentionRows } from '../model/rail.js';
 import { flatWorkspaces, nextPlace, placesToGo } from '../model/nav.js';
 import { onStage } from '../model/stage.js';
@@ -139,6 +140,19 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     window.addEventListener(OPEN_IN_BROWSER, show);
     return () => window.removeEventListener(OPEN_IN_BROWSER, show);
   }, []);
+  // What a Build's run step got running (main/build/run-step.cjs): a web UI opens in a Stage tab, a terminal program's
+  // session (main's) in the terminal. A desktop app is in its own window already.
+  React.useEffect(() => api.onBuildRun((event) => {
+    if (event && event.kind === 'closed' && event.sessionId) { dropSession(event.sessionId); return; }
+    if (!event || event.projectId !== project.id) return;
+    if (event.kind === 'ui' && event.url) window.dispatchEvent(new CustomEvent(OPEN_IN_BROWSER, { detail: { url: event.url } }));
+    else if (event.kind === 'terminal' && event.session) {
+      adoptSession(event.session, project.id).then(() => {
+        setRightMode('terminal');
+        window.dispatchEvent(new CustomEvent(SHOW_TERMINAL, { detail: { id: event.session.id } }));
+      }).catch(() => {});
+    }
+  }), [project.id]);
   const [flashId, setFlashId] = React.useState(null); // a row that just arrived in the sidebar
   const flashTimer = React.useRef(null);
   React.useEffect(() => () => clearTimeout(flashTimer.current), []);
@@ -430,6 +444,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       else if (action === 'fix') await api.buildFix(project.id, id);
       else if (action === 'discard') await api.buildDiscard(project.id, id);
       else if (action === 'accept') await api.buildAccept(project.id, id).catch(() => {}); // refused: the card says why
+      else if (action === 'runshow') await api.buildRunShow(project.id, id, payload.name); // its Stage tab or its terminal, again
+      else if (action === 'runstop') await api.buildRunStop(project.id, id);
       else if (action === 'review') {
         const title = (builds[id] && builds[id].title) || '';
         setReview({ id, title, review: null, error: '' });
@@ -1213,13 +1229,13 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       {buildDialog && (
         <BuildPanel
           projectId={project.id}
+          workspaceId={topic ? topic.id : null}
           title={topic ? topic.name : ''}
           anchor={buildDialog.anchor}
           library={library}
           inRail={inRail}
           onClose={closeBuildDialog}
           onStart={startBuild}
-          onLibraryChanged={reload}
         />
       )}
       {postItBuild && (

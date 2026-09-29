@@ -3,12 +3,16 @@
 // Build's lifecycle (2026-09-25; design docs/superpowers/specs/2026-09-25-build-workflow-design.md). One manager for the
 // app, holding what runs now; everything that must outlive the app is in the task records (./store.cjs).
 //
-//   start      the record, the frozen context, then in the background the worktree (git), its setup, the first turn. A
-//              post-it added to a workspace is a Build of it whose task is the post-it, put in as an archived version
+//   start      the repository cloned first when it is not on this Mac, the record, the frozen context, then in the
+//              background the worktree (git), its setup, the first turn. A post-it added to a workspace is a Build of it
+//              whose task is the post-it, put in as an archived version
 //   turn       a slot (three for Builds, one of its own for quick tasks), the agent (./runner.cjs) under its CLI's tool
 //              lock, a checkpoint commit, the ending read (NEEDS YOU / ESCALATE / done), a reply that waited sent next
 //   reply      the next turn in the same session; while a turn runs it waits, or (`interrupt`) the turn is cut short
-//   review     the diff from where the Build started
+//   run step   after a turn that ends in review (a Build, never a quick task): what the repository can run is found,
+//              started, checked and shown (./run-step.cjs); what it changed is a checkpoint of its own. The processes of
+//              the last run step are stopped before the next, and everything it started on Accept, Discard and quit
+//   review     the diff from where the Build started, the run steps' changes apart
 //   accept     leftovers committed, everything squashed into one commit, replayed onto the person's current branch, the
 //              checks, a fast-forward of their folder; worktree and branch removed. Refusals change nothing
 //   discard    stopped, worktree and branch removed
@@ -22,11 +26,17 @@
 // next free name is (port-check-2/ …). The others are the project folder when it is a repository itself, and the
 // library's repositories: a local one as it is, a GitHub one (the kind that has a sandbox) once it is cloned into
 // `repos/<name>` in the project folder, which its row then keeps.
+//
+// Which ones (2026-09-29, later): the picker lists the default repo and the git rows this project holds (made in it, or
+// in one of its workspaces' context), never the whole library. The default repo is a library row of its own (a folder
+// tagged git, made in the project) from its first Build on. A post-it's Build always works in the default repo.
 
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
+const { randomUUID } = require('node:crypto');
 const projects = require('../store/projects.cjs');
+const { libraryForProject } = require('../store/library.cjs');
 const archive = require('../store/archive.cjs');
 const { readJson, slugify } = require('../store/home.cjs');
 const { inspectRepository } = require('../tools/repository.cjs');
@@ -116,12 +126,14 @@ function createShell({ environment = process.env, run = execFile, tools = null }
 }
 
 // `githubToken`: the GitHub sign-in (github/connection.cjs token), for cloning a private library repository on a Mac
-// whose Git has no GitHub credentials of its own (git.cjs clone).
-function createBuilds({ git, runner, readModels, notify = () => {}, tools = null, gitReady = () => true, runShell = createShell({ tools }), copyTree = null, githubToken = async () => null, limits = LIMITS, turnMs = TURN_MS, now = () => new Date() }) {
+// whose Git has no GitHub credentials of its own (git.cjs clone). `libraryChanged()`: a library row was made or given a
+// folder here (the sidebar reads the library again). `runStep`: ./run-step.cjs's, or null for no run step.
+function createBuilds({ git, runner, readModels, notify = () => {}, tools = null, gitReady = () => true, runShell = createShell({ tools }), copyTree = null, githubToken = async () => null, libraryChanged = () => {}, runStep = null, limits = LIMITS, turnMs = TURN_MS, now = () => new Date() }) {
   const live = new Map(); // id → { controller, stopping: null | 'stop' | 'quit', done: Promise }
   const active = { build: 0, quick: 0 };
   const waiting = { build: [], quick: [] };
   const chains = new Map(); // repository → the promise of its last git writer
+  const stepping = new Map(); // id → its run step while it works (the agent, then its checkpoint)
   const reconciled = new Set();
   let quitting = false;
 
@@ -182,18 +194,17 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     return { target: { ...target, name: row.name }, folder: folderThere(row.folder_path) ? row.folder_path : null, url: github ? github.url : null };
   }
 
-  /** The repositories a Build can work in, for the panel's picker: the default repo first. */
+  /**
+   * The repositories a Build can work in, for the panel's picker: the default repo first (its library row, once it has
+   * one, is not listed again), then the git rows this project holds.
+   */
   async function targets(ctx, projectId) {
     const project = projectOf(ctx, projectId);
     if (!project.directory) return [];
     const mine = defaultFolder(project);
     const list = [{ kind: 'default', name: path.basename(mine), folder: mine, place: 'default' }];
     const seen = new Set([path.resolve(mine)]);
-    if (inspectRepository(project.directory).repository) {
-      list.push({ kind: 'project', name: path.basename(project.directory), folder: project.directory, place: 'project' });
-      seen.add(path.resolve(project.directory));
-    }
-    for (const row of await ctx.libraryDb.list()) {
+    for (const row of await libraryForProject(ctx, projectId)) {
       if (!isRepo(row)) continue;
       const folder = folderThere(row.folder_path) ? row.folder_path : null;
       const github = githubRepo(row.url);
@@ -243,6 +254,18 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     });
   }
 
+  /** The default repo's library row: a folder tagged git, made in this project; one row per folder, never a second. → the row */
+  function recordDefault(ctx, projectId, folder) {
+    const at = path.resolve(folder);
+    return serial(`library:${at}`, async () => {
+      const held = (await ctx.libraryDb.list()).find((row) => row.folder_path && path.resolve(row.folder_path) === at);
+      if (held) return held;
+      const row = await ctx.libraryDb.insert({ id: randomUUID(), name: path.basename(folder), type: 'folder', tags: ['git'], folder_path: folder, project_id: projectId });
+      libraryChanged();
+      return row;
+    });
+  }
+
   /** A GitHub repository from the library, cloned into repos/<name> in the project folder; its row keeps the clone. */
   async function cloneRepository(ctx, projectId, input) {
     const project = projectOf(ctx, projectId);
@@ -261,7 +284,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
         try { await git.clone(where.url, into); } catch { throw cloneError(pre.target.name, error); }
       }
       const row = await ctx.libraryDb.get(pre.target.id);
-      if (row) await ctx.libraryDb.updateRepo(row.id, { name: row.name, url: row.url, folder_path: into, github_id: row.github_id || null });
+      if (row) { await ctx.libraryDb.updateRepo(row.id, { name: row.name, url: row.url, folder_path: into, github_id: row.github_id || null }); libraryChanged(); }
     });
     return preflight(ctx, projectId, input);
   }
@@ -270,18 +293,25 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
 
   async function start(ctx, projectId, input = {}) {
     reconcile(ctx);
-    let pre = await preflight(ctx, projectId, input.target);
-    if (pre.ok && pre.create) {
-      await makeDefault(pre.directory);
-      pre = await preflight(ctx, projectId, input.target);
-    }
-    if (!pre.ok) throw new Error(pre.problems[0].message);
-    if (pre.target.kind === 'default') projects.setDefaultRepo(ctx, projectId, path.basename(pre.directory)); // a rename never moves it
-    const project = projectOf(ctx, projectId);
     const kind = input.kind === 'quick' ? 'quick' : 'build';
     // A post-it's text: a quick task's, or a post-it added to a workspace (a Build of it whose task is the post-it).
     const postIt = kind === 'quick' || typeof input.text === 'string' ? String(input.text || '').trim() : null;
     if (postIt === '') throw new Error('The post-it is empty.');
+    const wanted = postIt === null ? input.target : { kind: 'default' }; // a post-it's Build: always the default repo
+    let pre = await preflight(ctx, projectId, wanted);
+    // A library repository that is not on this Mac (a sandbox's, from GitHub) is cloned into repos/<name> first, before
+    // anything else: its row keeps the clone (cloneRepository), and the Build works there.
+    if (!pre.ok && pre.canClone) pre = await cloneRepository(ctx, projectId, wanted);
+    if (pre.ok && pre.create) {
+      await makeDefault(pre.directory);
+      pre = await preflight(ctx, projectId, wanted);
+    }
+    if (!pre.ok) throw new Error(pre.problems[0].message);
+    if (pre.target.kind === 'default') {
+      projects.setDefaultRepo(ctx, projectId, path.basename(pre.directory)); // a rename never moves it
+      await recordDefault(ctx, projectId, pre.directory);
+    }
+    const project = projectOf(ctx, projectId);
     let workspaceId = null;
     let title;
     if (kind === 'build') {
@@ -385,6 +415,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     live.set(id, entry);
     let free = null;
     try {
+      await haltRunStep(id); // a run step still working ends (its changes a checkpoint) before the worktree is the agent's again
       if (active[pool] >= limits[pool]) save(ctx, projectId, id, { status: 'queued' });
       free = await slot(pool, controller.signal);
       if (!free) {
@@ -466,8 +497,109 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
       void runTurn(ctx, projectId, id, { message: replyMessage(text) });
       return;
     }
-    // A quick task that finished cleanly lands by itself (B23); anything else waits for the person.
+    // A quick task that finished cleanly lands by itself (B23); anything else waits for the person. A Build that finished
+    // a turn gets its run step (never a quick task: Accept would remove its worktree under what it started).
     if (after.kind === 'quick' && after.status === 'review') void accept(ctx, projectId, id, { auto: true }).catch(() => {});
+    else if (after.kind === 'build' && after.status === 'review') startRunStep(ctx, projectId, id);
+  }
+
+  /* ------------------------------------------------------------------- run step */
+
+  /** The library row of the repository a Build works in (the default repo's is made when it has none); null: none. */
+  async function repositoryRow(ctx, projectId, task) {
+    const target = task.target || {};
+    if (target.kind === 'library') return ctx.libraryDb.get(target.id);
+    if (target.kind === 'default') return recordDefault(ctx, projectId, task.source || task.repo);
+    const at = path.resolve(task.source || task.repo);
+    return (await ctx.libraryDb.list()).find((row) => isRepo(row) && row.folder_path && path.resolve(row.folder_path) === at) || null;
+  }
+
+  /** What a run step's runnables came to, in one line for the conversation. */
+  function runLine(result, failure) {
+    if (failure && failure.stopped) return 'Run step stopped.';
+    const list = result ? result.runnables : [];
+    const said = list.map((item) => `${item.name} (${item.type === 'ui' ? 'web UI' : item.type === 'app' ? 'desktop app' : 'terminal'}) ${item.status === 'running' ? (item.url ? `runs at ${item.url}` : 'runs') : 'did not run'}`);
+    if (failure) return `Run step failed: ${failure.message}${said.length ? ` ${said.join('; ')}.` : ''}`;
+    return said.length ? `Run step: ${said.join('; ')}.` : 'Run step: nothing here to run.';
+  }
+
+  /**
+   * After a turn that ended in review: what the last run step left running is stopped, and the run step runs again in the
+   * worktree, on the Build's model (Claude Code's default Build model for a Codex Build). Its changes are one checkpoint.
+   */
+  function startRunStep(ctx, projectId, id) {
+    if (!runStep || quitting) return;
+    const work = (async () => {
+      await runStep.stop(id);
+      const project = projectOf(ctx, projectId);
+      const task = store.readTask(project, id);
+      if (!task || task.status !== 'review' || live.has(id) || !fs.existsSync(task.worktree)) return;
+      const row = await repositoryRow(ctx, projectId, task).catch(() => null);
+      if (!row) {
+        save(ctx, projectId, id, { runStep: { status: 'skipped', turn: task.turn, runnables: [], error: 'This repository is not in the library, so nothing it runs can be kept.' } });
+        return;
+      }
+      const choice = task.provider === 'anthropic' ? { modelId: task.modelId, effort: task.effort } : resolveBuildChoice(readModels(), { provider: 'anthropic' });
+      const put = (change) => save(ctx, projectId, id, (held) => ({ runStep: { ...(held.runStep || {}), ...change } }));
+      put({ status: 'running', turn: task.turn, started: now().toISOString(), finished: null, error: null, phase: 'Starting', runnables: [] });
+      let result = null;
+      let failure = null;
+      try {
+        result = await runStep.run({
+          id, root: task.cwd, name: task.target ? task.target.name : path.basename(task.repo), libraryId: row.id, db: ctx.libraryDb,
+          model: choice.modelId, effort: choice.effort, head: () => git.revParse(task.worktree, 'HEAD'),
+          onState: (state) => put(state),
+          show: (kind, detail) => { try { notify('engelbart:build-run', { projectId, id, kind, ...detail }); } catch { /* a closed window */ } },
+        });
+      } catch (error) {
+        failure = error;
+      }
+      // What the run step changed: a checkpoint of its own, which Review shows apart from the Build's work.
+      let sha = null;
+      try { sha = await git.checkpoint(task.worktree, `Build ${task.title}: run step`, await git.identity(task.repo)); } catch { sha = null; }
+      if (sha && result && result.verified.length) await ctx.libraryDb.query('update repo_runnables set verified_commit = $2 where id = any($1::uuid[])', [result.verified, sha]).catch(() => {});
+      save(ctx, projectId, id, (held) => ({
+        checkpoints: sha ? [...held.checkpoints, { sha, turn: held.turn, at: now().toISOString(), step: 'run' }] : held.checkpoints,
+        runStep: { ...(held.runStep || {}), status: failure ? (failure.stopped ? 'stopped' : 'failed') : 'done', phase: null, error: failure && !failure.stopped ? failure.message : null, finished: now().toISOString(), changed: !!sha },
+        messages: [...held.messages, say('engelbart', runLine(result, failure))],
+      }));
+    })().catch(() => {}).finally(() => { if (stepping.get(id) === work) stepping.delete(id); });
+    stepping.set(id, work);
+  }
+
+  /** A run step that is working ends now: its agent stops, and its changes become its checkpoint. What passed keeps running. */
+  async function haltRunStep(id) {
+    const work = stepping.get(id);
+    if (!work) return;
+    if (runStep) await runStep.halt(id);
+    await work;
+  }
+
+  /** Everything a Build's run steps started is stopped (Accept, Discard). */
+  async function stopRunStep(id) {
+    await haltRunStep(id);
+    if (runStep) await runStep.stop(id);
+  }
+  /** The record's run step once what it started is stopped: nothing it lists runs any more. */
+  const stoppedRunStep = (held) => (held.runStep ? { runStep: { ...held.runStep, runnables: (held.runStep.runnables || []).map((item) => (item.status === 'running' ? { ...item, status: 'stopped', sessionId: null } : item)) } } : {});
+
+  /** A runnable the last run step got running, shown again: a UI's Stage tab, a terminal program's session. */
+  function showRunnable(ctx, projectId, id, name) {
+    const task = read(ctx, projectId, id);
+    const item = ((task.runStep && task.runStep.runnables) || []).find((entry) => entry.name === name);
+    if (!item || item.status !== 'running') throw new Error(`${name} is not running.`);
+    if (item.type === 'ui' && item.url) { notify('engelbart:build-run', { projectId, id, kind: 'ui', name, url: item.url }); return true; }
+    const session = item.type === 'terminal' && item.sessionId && runStep ? runStep.session(id, item.sessionId) : null;
+    if (!session) throw new Error(item.type === 'app' ? `${name} is in a window of its own.` : `${name}'s terminal was closed.`);
+    notify('engelbart:build-run', { projectId, id, kind: 'terminal', name, session });
+    return true;
+  }
+
+  /** The run step that is working stops; what already passed keeps running. */
+  async function stopRunning(ctx, projectId, id) {
+    read(ctx, projectId, id);
+    await haltRunStep(id);
+    return get(ctx, projectId, id);
   }
 
   /**
@@ -529,7 +661,15 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
       try { await git.concludeMerge(task.worktree, `Build ${task.title}: before review`, await git.identity(task.repo)); } catch { /* shown as it stands */ }
     }
     const d = await git.diff(task.worktree, task.baseSha, 'HEAD');
-    return { ...d, from: task.baseBranch, base: task.baseSha, running: live.has(id) };
+    const base = { from: task.baseBranch, base: task.baseSha, running: live.has(id), stepping: stepping.has(id) };
+    // The run steps' changes apart: the Build's own work is HEAD without them.
+    const runs = (task.checkpoints || []).filter((checkpoint) => checkpoint.step === 'run').map((checkpoint) => checkpoint.sha);
+    if (!runs.length) return { ...d, ...base };
+    const own = await git.treeWithout(task.worktree, runs).catch(() => null);
+    if (own) return { ...(await git.diff(task.worktree, task.baseSha, own)), ...base, runStep: { ...(await git.diff(task.worktree, own, 'HEAD')), apart: true } };
+    // A later turn changed the same lines: everything together, and each run step's own changes as it made them.
+    const parts = await Promise.all(runs.map((sha) => git.diff(task.worktree, `${sha}^`, sha)));
+    return { ...d, ...base, runStep: { files: parts.flatMap((part) => part.files), patch: parts.map((part) => part.patch).join('\n'), truncated: parts.some((part) => part.truncated), apart: false } };
   }
 
   /* --------------------------------------------------------------------- accept */
@@ -554,6 +694,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     if (store.FINAL.has(task.status)) return store.publicTask(task);
     if (live.has(id) || task.status === 'setting-up' || task.status === 'accepting') throw new Error('It is still working.');
     if (!fs.existsSync(task.worktree)) throw new Error('This Build\'s copy is gone; discard it.');
+    await haltRunStep(id); // what a working run step changed is part of what is accepted
     const before = task.status;
     save(ctx, projectId, id, { status: 'accepting', error: null, conflict: null });
     try {
@@ -597,8 +738,10 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
             throw error;
           }
         }
+        if (runStep) await runStep.stop(id); // what the run steps started runs in the worktree: stopped before it goes
         await removeCopy(task); // inside this repository's turn already: not cleanUp, which would wait for it
         const done = save(ctx, projectId, id, (held) => ({
+          ...stoppedRunStep(held),
           status: 'accepted', finished: now().toISOString(), checks, queued: null,
           accepted: sha ? { sha, branch: target.branch, at: now().toISOString() } : null,
           messages: [...held.messages, say('engelbart', sha ? `Accepted onto ${target.branch} as ${sha.slice(0, 7)}${auto ? ' (a quick task that finished cleanly lands by itself)' : ''}.` : 'Nothing had changed, so there was nothing to accept.')],
@@ -672,7 +815,8 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     const entry = live.get(id);
     if (entry) { stop(projectId, id); await entry.done; }
     if (read(ctx, projectId, id).status === 'accepting') throw new Error('It is being accepted.');
-    const next = save(ctx, projectId, id, (held) => ({ status: 'discarded', queued: null, finished: now().toISOString(), messages: [...held.messages, say('engelbart', 'Discarded.')] }));
+    await stopRunStep(id); // everything its run steps started
+    const next = save(ctx, projectId, id, (held) => ({ ...stoppedRunStep(held), status: 'discarded', queued: null, finished: now().toISOString(), messages: [...held.messages, say('engelbart', 'Discarded.')] }));
     track(() => projects.agentStopped(ctx, id));
     if (task.status !== 'setting-up') await cleanUp(task).catch(() => {}); // a Build still being set up is cleaned up when that ends
     return store.publicTask(next);
@@ -714,8 +858,10 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
       for (const task of store.listTasks(project)) {
         if (store.FINAL.has(task.status) || live.has(task.id)) continue;
         const gone = task.status !== 'setting-up' && !fs.existsSync(task.worktree);
-        if (gone) store.writeTask(project, { ...task, status: 'failed', error: 'This Build\'s copy is gone.', messages: [...task.messages, say('engelbart', 'This Build\'s copy is gone; discard it.')] }, now());
-        else if (store.WORKING.has(task.status)) store.writeTask(project, { ...task, status: 'interrupted', messages: [...task.messages, say('engelbart', 'Engelbart closed while this was working.')] }, now());
+        const runStepLeft = task.runStep && task.runStep.status === 'running' ? { runStep: { ...task.runStep, status: 'stopped', phase: null } } : {}; // Engelbart closed during it
+        if (gone) store.writeTask(project, { ...task, ...runStepLeft, status: 'failed', error: 'This Build\'s copy is gone.', messages: [...task.messages, say('engelbart', 'This Build\'s copy is gone; discard it.')] }, now());
+        else if (store.WORKING.has(task.status)) store.writeTask(project, { ...task, ...runStepLeft, status: 'interrupted', messages: [...task.messages, say('engelbart', 'Engelbart closed while this was working.')] }, now());
+        else if (runStepLeft.runStep) store.writeTask(project, { ...task, ...runStepLeft }, now());
       }
     }
   }
@@ -740,10 +886,11 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     quitting = true;
     const running = [...live.values()];
     for (const entry of running) { entry.stopping = 'quit'; entry.controller.abort(); }
-    await Promise.race([Promise.all(running.map((entry) => entry.done)), new Promise((resolve) => { const timer = setTimeout(resolve, QUIT_WAIT_MS); if (timer.unref) timer.unref(); })]);
+    const steps = runStep ? [runStep.stopAll(), ...stepping.values()] : [];
+    await Promise.race([Promise.all([...running.map((entry) => entry.done), ...steps]), new Promise((resolve) => { const timer = setTimeout(resolve, QUIT_WAIT_MS); if (timer.unref) timer.unref(); })]);
   }
 
-  return { targets, preflight, initRepository, cloneRepository, start, reply, stop, resume, review, accept, fix, discard, promote, reconcile, list, get, openIds, stopAll, running: () => [...live.keys()] };
+  return { targets, preflight, initRepository, cloneRepository, start, reply, stop, resume, review, accept, fix, discard, promote, reconcile, list, get, openIds, stopAll, running: () => [...live.keys()], stepping: (id) => stepping.has(id), showRunnable, stopRunning };
 }
 
 module.exports = { createBuilds, createShell, LIMITS, TURN_MS, CLONES };

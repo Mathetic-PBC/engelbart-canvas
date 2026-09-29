@@ -348,6 +348,18 @@ export function sessionsFor(projectId) {
   return [...state.sessions.values()].filter((record) => record.projectId === projectId);
 }
 
+// A session main opened itself (a Build's run step: a terminal program it checked, running in the Build's worktree,
+// src/main/build/run-step.cjs): the project's from now on; SHOW_TERMINAL ({ id }) asks the terminal pane to show it.
+export const SHOW_TERMINAL = 'engelbart:show-terminal';
+export async function adoptSession(snapshot, projectId) {
+  await bootstrap();
+  return addSession(snapshot, projectId);
+}
+/** A session main closed itself (the Build was accepted or discarded): its tab goes. */
+export function dropSession(id) {
+  removeSession(id);
+}
+
 /** Estimate cols/rows from a stage element before the PTY exists (ET estimateDimensions). */
 export function estimateDimensions(element, fontSize = state.settings.fontSize || DEFAULT_FONT_SIZE) {
   const bounds = element ? element.getBoundingClientRect() : { width: 800, height: 300 };

@@ -105,6 +105,8 @@ function publicTask(task) {
     conflict: task.conflict || null,
     accepted: task.accepted || null,
     version: task.version || null, // a post-it added to a workspace: the archived version it was put in as ({ file, title })
+    // its last run step (manager.cjs, run-step.cjs): { status, phase, runnables: [{ name, folder, type, status, url, error, sessionId }], error }
+    runStep: task.runStep || null,
     created: task.created,
     updated: task.updated,
     final: FINAL.has(task.status),

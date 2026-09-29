@@ -1,5 +1,6 @@
 // Review (2026-09-25; design B14): what a Build changed since it started — the files, then the diff — in a dialog. For an
 // accepted Build, its commit. Bare: added lines green, removed red, a file's header bold; Hudson redraws it in Claude Design.
+// What its run steps changed to make the repository run (2026-09-29, main/build/run-step.cjs) is a section of its own.
 import React from 'react';
 import { createPortal } from 'react-dom';
 
@@ -15,13 +16,29 @@ function lineStyle(line) {
   return { color: '#4d4d4d' };
 }
 
+function Files({ files, label }) {
+  return files.map((file) => (
+    <div key={`${label}:${file.status}:${file.path}`} style={{ display: 'flex', gap: 10, font: '13px/1.6 var(--font-mono)', color: '#171717' }}>
+      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.was ? `${file.was} → ${file.path}` : file.path}</span>
+      <span style={{ flex: 'none', color: '#8f8f8f', fontFamily: 'var(--font-sans)' }}>{STATUS[file.status] || file.status}</span>
+      <span style={{ flex: 'none', width: 90, textAlign: 'right' }}>{file.binary ? 'binary' : <><span style={{ color: '#1a7f37' }}>+{file.adds}</span> <span style={{ color: '#cf222e' }}>−{file.dels}</span></>}</span>
+    </div>
+  ));
+}
+
+const Patch = ({ patch }) => (
+  <pre style={{ margin: 0, font: '12.5px/1.6 var(--font-mono)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+    {String(patch || '').split('\n').map((line, n) => <div key={n} style={lineStyle(line)}>{line || ' '}</div>)}
+  </pre>
+);
+
 export default function BuildReview({ title, review, error, onClose }) {
   React.useEffect(() => {
     const onKey = (event) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose(); } };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, [onClose]);
-  const lines = review && review.patch ? review.patch.split('\n') : [];
+  const run = review && review.runStep && review.runStep.files.length ? review.runStep : null;
   return createPortal(
     <div data-overlay="1" data-build-review="1" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }} style={{ position: 'fixed', inset: 0, zIndex: 55, display: 'flex', alignItems: 'stretch', justifyContent: 'center', padding: '6vh 24px', background: 'rgba(255,255,255,.35)' }}>
       <div role="dialog" aria-modal="true" aria-label="Review" style={{ width: 'min(980px, 100%)', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', background: '#fff', border: '1px solid #eaeaea', borderRadius: 12, boxShadow: '0 12px 32px rgba(0,0,0,.08)', animation: `rise 160ms ${EASE}`, overflow: 'hidden' }}>
@@ -38,19 +55,22 @@ export default function BuildReview({ title, review, error, onClose }) {
             <>
               <div data-review-files="1" style={{ display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 10 }}>
                 {review.files.length === 0 && <div style={{ font: '13px/1.5 var(--font-sans)', color: '#8f8f8f' }}>Nothing has changed yet.</div>}
-                {review.files.map((file) => (
-                  <div key={`${file.status}:${file.path}`} style={{ display: 'flex', gap: 10, font: '13px/1.6 var(--font-mono)', color: '#171717' }}>
-                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.was ? `${file.was} → ${file.path}` : file.path}</span>
-                    <span style={{ flex: 'none', color: '#8f8f8f', fontFamily: 'var(--font-sans)' }}>{STATUS[file.status] || file.status}</span>
-                    <span style={{ flex: 'none', width: 90, textAlign: 'right' }}>{file.binary ? 'binary' : <><span style={{ color: '#1a7f37' }}>+{file.adds}</span> <span style={{ color: '#cf222e' }}>−{file.dels}</span></>}</span>
-                  </div>
-                ))}
+                <Files files={review.files} label="build" />
                 {review.running && <div style={{ font: '12.5px/1.5 var(--font-sans)', color: '#8f8f8f' }}>Still working: this is what its last finished turn saved.</div>}
               </div>
-              <pre style={{ margin: 0, font: '12.5px/1.6 var(--font-mono)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-                {lines.map((line, n) => <div key={n} style={lineStyle(line)}>{line || ' '}</div>)}
-              </pre>
+              <Patch patch={review.patch} />
               {review.truncated && <div style={{ marginTop: 8, font: '12.5px/1.5 var(--font-sans)', color: '#8f8f8f' }}>The diff is longer than this; the rest is cut.</div>}
+              {run && (
+                <div data-review-run="1" style={{ marginTop: 22, paddingTop: 14, borderTop: '1px solid #eaeaea' }}>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 6 }}>
+                    <span style={{ font: '600 13.5px/1.4 var(--font-sans)', color: '#171717' }}>Run step</span>
+                    <span style={{ font: '12.5px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{run.apart ? 'changed to make it run, apart from the Build\'s work above' : 'changed to make it run; a later turn changed the same lines, so the Build\'s work above includes these too'}</span>
+                  </div>
+                  <div data-review-run-files="1" style={{ display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 10 }}><Files files={run.files} label="run" /></div>
+                  <Patch patch={run.patch} />
+                  {run.truncated && <div style={{ marginTop: 8, font: '12.5px/1.5 var(--font-sans)', color: '#8f8f8f' }}>The diff is longer than this; the rest is cut.</div>}
+                </div>
+              )}
             </>
           )}
         </div>

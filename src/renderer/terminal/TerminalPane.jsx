@@ -25,6 +25,7 @@ import {
   sendInput,
   sessionsFor,
   setInputLock,
+  SHOW_TERMINAL,
   subscribe,
   unmountView,
 } from './sessions.js';
@@ -100,6 +101,13 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
   const boxIsInput = running && now.integrated && !takeover; // the box owns typing; the transcript is locked
   const showBox = running && !takeover;
   const conversation = running && now.agent !== 'shell'; // Claude Code or Codex: the program is the whole tab
+
+  // A session main opened for this project (a Build's terminal program) is the one shown.
+  useEffect(() => {
+    const show = (event) => { const id = event.detail && event.detail.id; if (id && sessionsFor(projectId).some((record) => record.snapshot.id === id)) setActiveId(id); };
+    window.addEventListener(SHOW_TERMINAL, show);
+    return () => window.removeEventListener(SHOW_TERMINAL, show);
+  }, [projectId]);
 
   // Bootstrap once; start one shell in the project directory when this project has none.
   useEffect(() => {

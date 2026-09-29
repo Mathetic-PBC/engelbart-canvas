@@ -1,0 +1,133 @@
+'use strict';
+
+// The processes a Build's run step starts (2026-09-29; ./run-step.cjs): Engelbart's, never the agent's. Each runs in the
+// person's login shell (the PATH the terminal has) as the leader of a process group of its own, so stopping it stops
+// everything it started; what it prints is kept (the last 32 KB) for the agent to read when a check fails. The checks are
+// Engelbart's own, and the same every time:
+//   ui        answers on the port Engelbart gave it (../sandbox/worker.cjs respondsAt, on 127.0.0.1 or ::1)
+//   app       still running 10 seconds after it started
+//   terminal  exits 0
+// A UI's port is a free one on this Mac, found at each start.
+
+const net = require('node:net');
+const { spawn } = require('node:child_process');
+const { resolveShell, sanitizeEnvironment, loginShellArgs } = require('../terminal/launch.cjs');
+const { scrubAgentSession } = require('../shell-rc.cjs');
+const { respondsAt } = require('../sandbox/worker.cjs');
+
+const OUTPUT_BYTES = 32_000;
+const APP_ALIVE_MS = 10_000;
+const UI_READY_MS = 90_000;
+const STOP_WAIT_MS = 5_000;
+
+const pause = (ms, signal) => new Promise((resolve) => {
+  const timer = setTimeout(resolve, ms);
+  if (signal) signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+});
+
+/** A port nothing listens on now, on 127.0.0.1. */
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => { const { port } = server.address(); server.close(() => resolve(port)); });
+  });
+}
+
+/**
+ * `environment`: what every process starts from (the app's, less what only the app or an agent session should have).
+ * `extraEnvironment()`: added at each start (Engelbart's own Git while it stands in).
+ */
+function createProcesses({ environment = process.env, extraEnvironment = () => ({}), spawnProcess = spawn, fetcher = fetch, appAliveMs = APP_ALIVE_MS, uiReadyMs = UI_READY_MS } = {}) {
+  const shell = resolveShell(environment);
+  const owned = new Map(); // key → record
+
+  function envFor(extra = {}) {
+    // BROWSER=none: a dev server opens no browser of its own; the Stage shows it.
+    return { ...sanitizeEnvironment(scrubAgentSession(environment)), ...extraEnvironment(), BROWSER: 'none', ...extra };
+  }
+
+  /** `command` started in `cwd` as `key`'s process (one running per key: an earlier one is stopped first). → the record */
+  async function start(key, command, cwd, { env = {}, input = false } = {}) {
+    await stop(key);
+    const full = envFor(env);
+    const child = spawnProcess(shell, loginShellArgs(shell, command, full), { cwd, env: full, detached: true, stdio: [input ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+    const record = { key, command, cwd, child, pid: child.pid, output: '', running: true, code: null, signal: null, startedAt: Date.now() };
+    const take = (chunk) => { record.output = (record.output + chunk.toString()).slice(-OUTPUT_BYTES); };
+    if (child.stdout) child.stdout.on('data', take);
+    if (child.stderr) child.stderr.on('data', take);
+    record.exited = new Promise((resolve) => {
+      const done = (code, signal) => { if (!record.running) return; record.running = false; record.code = code; record.signal = signal || null; resolve(); };
+      child.once('exit', done);
+      child.once('error', (error) => { take(`\n${error.message}\n`); done(-1, null); });
+    });
+    owned.set(key, record);
+    return record;
+  }
+
+  const kill = (record, signal) => { try { process.kill(-record.pid, signal); } catch { try { record.child.kill(signal); } catch { /* gone */ } } };
+
+  /** Its whole process group stopped, and confirmed gone. → whether there was one running */
+  async function stop(key) {
+    const record = owned.get(key);
+    if (!record) return false;
+    owned.delete(key);
+    if (!record.running) return false;
+    kill(record, 'SIGTERM');
+    const gone = await Promise.race([record.exited.then(() => true), pause(STOP_WAIT_MS).then(() => false)]);
+    if (!gone) { kill(record, 'SIGKILL'); await Promise.race([record.exited, pause(2000)]); }
+    kill(record, 'SIGKILL'); // what the leader left behind in its group
+    return true;
+  }
+
+  const stopAll = async () => { await Promise.all([...owned.keys()].map((key) => stop(key))); };
+
+  /** What the agent is shown of a process. */
+  function status(key) {
+    const record = owned.get(key);
+    if (!record) return { running: false };
+    return { running: record.running, pid: record.pid, exit_code: record.code, signal: record.signal, seconds: Math.round((Date.now() - record.startedAt) / 1000), output: record.output.slice(-8000) };
+  }
+
+  /** `command` run to its end (an install, a build, a terminal program's check): Engelbart's while it runs. → { code, output, timedOut } */
+  async function runToExit(key, command, cwd, { timeoutMs = 120_000, signal, env = {} } = {}) {
+    const record = await start(key, command, cwd, { env });
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; void stop(key); }, timeoutMs);
+    const abort = () => { void stop(key); };
+    if (signal) signal.addEventListener('abort', abort, { once: true });
+    try { await record.exited; } finally { clearTimeout(timer); if (signal) signal.removeEventListener('abort', abort); }
+    if (owned.get(key) === record) owned.delete(key);
+    return { code: timedOut ? null : record.code, output: record.output, timedOut };
+  }
+
+  /**
+   * The check for a runnable just started as `key`. → { ok, url?, failed_check?, output } (`url`: where a UI is shown).
+   * A terminal program is checked by running it (runToExit), not here.
+   */
+  async function check(key, type, { port = null, signal } = {}) {
+    const record = owned.get(key);
+    if (!record) return { ok: false, failed_check: 'The process is not running.', output: '' };
+    if (type === 'app') {
+      await Promise.race([record.exited, pause(appAliveMs, signal)]);
+      if (signal && signal.aborted) return { ok: false, failed_check: 'Stopped.', output: record.output };
+      if (!record.running) return { ok: false, failed_check: `It exited within ${appAliveMs / 1000} seconds (exit code ${record.code}${record.signal ? `, ${record.signal}` : ''}); a desktop app keeps running while its window is open.`, output: record.output };
+      return { ok: true, output: record.output };
+    }
+    const until = Date.now() + uiReadyMs;
+    while (Date.now() < until) {
+      if (signal && signal.aborted) return { ok: false, failed_check: 'Stopped.', output: record.output };
+      if (!record.running) return { ok: false, failed_check: `It exited (exit code ${record.code}${record.signal ? `, ${record.signal}` : ''}) before it answered on port ${port}.`, output: record.output };
+      for (const host of ['127.0.0.1', '[::1]']) {
+        if (await respondsAt(`http://${host}:${port}/`, fetcher).catch(() => false)) return { ok: true, url: `http://localhost:${port}/`, output: record.output };
+      }
+      await pause(500, signal);
+    }
+    return { ok: false, failed_check: `Nothing answered on port ${port} within ${uiReadyMs / 1000} seconds. It must listen on the port Engelbart gives it ({port} in its command), on localhost.`, output: record.output };
+  }
+
+  return { start, stop, stopAll, status, runToExit, check, running: (key) => !!(owned.get(key) && owned.get(key).running) };
+}
+
+module.exports = { createProcesses, freePort, APP_ALIVE_MS, UI_READY_MS };

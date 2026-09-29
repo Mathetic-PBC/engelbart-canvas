@@ -47,6 +47,8 @@ const { checkWebPdfs, readPdfResponse } = require('./store/web-pdfs.cjs');
 const { createPostItViews } = require('./post-its/views.cjs');
 const { createGit } = require('./build/git.cjs');
 const { createBuilds } = require('./build/manager.cjs');
+const { createRunStep, createFakeRunAgent } = require('./build/run-step.cjs');
+const { createProcesses: createRunProcesses } = require('./build/run-processes.cjs');
 const { createRunner: createBuildRunner, createFakeRunner: createFakeBuildRunner } = require('./build/runner.cjs');
 const { EDGES: WINDOW_EDGES, resizedBounds } = require('./window-edges.cjs');
 const { hasTestMode } = require('./developer.cjs');
@@ -478,6 +480,29 @@ if (!hasSingleInstanceLock) {
       gitReady,
       // Cloning a private library repository with the GitHub sign-in (github is made further down, long before a clone).
       githubToken: () => github.token(),
+      libraryChanged, // the default repo's row made, a clone kept on its row: the sidebar reads the library again
+      // The run step after a turn that ends in review (build/run-step.cjs): Claude Code on the person's subscription finds
+      // what the repository runs; Engelbart starts, checks and shows it (a UI in the Stage, a terminal program in a
+      // terminal of its own, an app in its window). ENGELBART_RUN_STEP=off leaves it out; a scripted run
+      // (ENGELBART_BUILD_FAKE=1 or ENGELBART_RUN_FAKE=1) uses the fake agent, which needs no model.
+      runStep: process.env.ENGELBART_RUN_STEP === 'off' ? null : createRunStep({
+        processes: createRunProcesses({ environment: process.env, extraEnvironment: () => tools.environment() }),
+        tools,
+        ...(process.env.ENGELBART_BUILD_FAKE === '1' || process.env.ENGELBART_RUN_FAKE === '1' ? { runAgent: createFakeRunAgent(), prepareClaude: async () => ({ file: 'fake', env: {} }) } : {}),
+        // The command is typed once the shell has drawn its prompt (quiet for a moment, at most 3s): typed sooner, the
+        // terminal echoes it and then the shell's line editor draws it again.
+        openTerminal: ({ cwd, command }) => {
+          const session = manager.create({ provider: 'shell', cwd, cols: 100, rows: 30 });
+          let quiet = null;
+          const type = () => { clearTimeout(quiet); clearTimeout(cap); manager.off('data', drawn); try { manager.write(session.id, `${command}\r`); } catch { /* closed already */ } };
+          const drawn = (payload) => { if (payload.id !== session.id) return; clearTimeout(quiet); quiet = setTimeout(type, 150); };
+          const cap = setTimeout(type, 3000);
+          manager.on('data', drawn);
+          return session;
+        },
+        closeTerminal: async (id) => { await manager.close(id); sendToRenderer('engelbart:build-run', { kind: 'closed', sessionId: id }); },
+        terminalSnapshot: (id) => manager.get(id),
+      }),
     });
     // Records a closed app left working are interrupted (Resume goes on), before anything lists them.
     store.context().then((ctx) => builds.reconcile(ctx)).catch(() => {});

@@ -398,7 +398,7 @@ test('the default repo: a folder named after the project, made with a history of
   const named = project.name.toLowerCase().replace(/ /g, '-'); // "Build 12" → build-12
   const mine = path.join(code, named);
   const list = await raw.targets(ctx, project.id);
-  assert.deepEqual(list.slice(0, 2).map((item) => [item.kind, item.name, item.folder]), [['default', named, mine], ['project', path.basename(code), code]]);
+  assert.deepEqual(list.map((item) => [item.kind, item.name, item.folder]), [['default', named, mine]], 'the project folder is not offered, though it is a repository');
   const pre = await raw.preflight(ctx, project.id);
   assert.deepEqual([pre.ok, pre.create, pre.target], [true, true, { kind: 'default', name: named }]);
   assert.ok(!fs.existsSync(mine), 'asking makes nothing');
@@ -410,6 +410,11 @@ test('the default repo: a folder named after the project, made with a history of
   assert.ok(fs.existsSync(path.join(mine, '.git')), 'a repository of its own');
   assert.equal(sh(mine, 'log', '--format=%s'), 'First snapshot (Engelbart)');
   assert.equal(sh(code, 'log', '--format=%s'), 'init', 'the project folder\'s own history is untouched');
+  // Its library row (2026-09-29): a folder tagged git, the project's; listed once, as the default repo.
+  const rows = () => ctx.libraryDb.query('select * from library where folder_path = $1', [mine]);
+  const [row] = await rows();
+  assert.deepEqual([row.name, row.type, row.tags, row.project_id], [named, 'folder', ['git'], project.id]);
+  assert.deepEqual((await raw.targets(ctx, project.id)).map((item) => [item.kind, item.folder]), [['default', mine]]);
   await raw.accept(ctx, project.id, task.id);
   assert.equal(fs.readFileSync(path.join(mine, 'b.txt'), 'utf8'), 'bee\n', 'Accept lands in the default repo');
   assert.ok(!fs.existsSync(path.join(code, 'b.txt')));
@@ -419,6 +424,39 @@ test('the default repo: a folder named after the project, made with a history of
   await projects.renameProject(ctx, project.id, `${project.name} renamed`);
   assert.equal((await raw.preflight(ctx, project.id)).top, mine);
   assert.equal((await raw.targets(ctx, project.id))[0].name, named);
+  // A second Build there makes no second row.
+  const agent2 = scripted(['Nothing to do.']);
+  const second = await manager(agent2).raw.start(ctx, project.id, { workspaceId: workspace.id });
+  await settled(project, second.id);
+  assert.equal((await rows()).length, 1);
+});
+
+test('the default repo that already has a row (added to the library by hand) is not given a second one (2026-09-29)', async () => {
+  const { code, project, workspace } = await scene();
+  const named = project.name.toLowerCase().replace(/ /g, '-');
+  const mine = path.join(code, named);
+  const theirs = await ctx.libraryDb.insert({ id: randomUUID(), name: 'my name for it', type: 'folder', tags: ['git'], folder_path: mine });
+  const { raw } = manager(scripted(['Done.']));
+  const started = await raw.start(ctx, project.id, { workspaceId: workspace.id });
+  await settled(project, started.id);
+  const rows = await ctx.libraryDb.query('select * from library where folder_path = $1', [mine]);
+  assert.deepEqual(rows.map((row) => [row.id, row.name]), [[theirs.id, 'my name for it']]);
+});
+
+test('the Build picker lists the git rows this project holds: made in it or in a workspace\'s context, not another project\'s (2026-09-29)', async () => {
+  const { project, workspace } = await scene();
+  const other = await projects.createProject(ctx, { name: `Elsewhere ${n}` });
+  const repo = (name, extra = {}) => { const dir = path.join(homeDir, `${name}-${n}`); fs.mkdirSync(dir); sh(dir, 'init', '-q', '-b', 'main'); return ctx.libraryDb.insert({ id: randomUUID(), name, type: 'folder', tags: ['git'], folder_path: dir, ...extra }); };
+  const made = await repo('made-here', { project_id: project.id });
+  const linked = await repo('in-context');
+  const theirs = await repo('theirs', { project_id: other.id });
+  const loose = await repo('nobodys');
+  const notes = await ctx.libraryDb.insert({ id: randomUUID(), name: 'A folder, not a repository', type: 'folder', folder_path: homeDir, project_id: project.id });
+  await projects.linkToWorkspace(ctx, project.id, workspace.id, [linked.id]);
+  const { raw } = manager(scripted([]));
+  const ids = (await raw.targets(ctx, project.id)).map((item) => item.id || item.kind);
+  assert.deepEqual(ids, ['default', made.id, linked.id]);
+  assert.ok(![theirs.id, loose.id, notes.id].some((id) => ids.includes(id)));
 });
 
 test('the default repo never takes a folder of the person\'s that has the project\'s name: the next free one (2026-09-29)', async () => {
@@ -449,8 +487,8 @@ test('library repositories: a local one works as it is, a GitHub one is cloned i
   write(path.join(local, 'lib.js'), 'lib\n');
   sh(local, 'add', '-A');
   sh(local, 'commit', '-qm', 'lib');
-  const hub = await ctx.libraryDb.insert({ id: randomUUID(), name: 'example/app', type: 'website', tags: ['git'], url: 'https://github.com/example/app' });
-  const mine = await ctx.libraryDb.insert({ id: randomUUID(), name: 'local-lib', type: 'folder', tags: ['git'], folder_path: local });
+  const hub = await ctx.libraryDb.insert({ id: randomUUID(), name: 'example/app', type: 'website', tags: ['git'], url: 'https://github.com/example/app', project_id: project.id });
+  const mine = await ctx.libraryDb.insert({ id: randomUUID(), name: 'local-lib', type: 'folder', tags: ['git'], folder_path: local, project_id: project.id });
   const agent = scripted([({ task }) => { write(path.join(task.worktree, 'more.js'), 'more\n'); return 'Added more.js.'; }]);
   const { raw } = manager(agent);
   const listed = (list, id) => list.find((item) => item.id === id);
@@ -461,7 +499,6 @@ test('library repositories: a local one works as it is, a GitHub one is cloned i
   const target = { kind: 'library', id: hub.id };
   const pre = await raw.preflight(ctx, project.id, target);
   assert.deepEqual([pre.ok, pre.canClone, pre.cloneTo, pre.problems[0].message], [false, true, path.join('repos', 'app'), 'example/app is not on this Mac yet.']);
-  await assert.rejects(raw.start(ctx, project.id, { workspaceId: workspace.id, target }), /not on this Mac yet/);
   const cloned = await raw.cloneRepository(ctx, project.id, target);
   const into = path.join(code, 'repos', 'app');
   assert.deepEqual([cloned.ok, cloned.top, cloned.target], [true, into, { kind: 'library', id: hub.id, name: 'example/app' }]);
@@ -478,6 +515,39 @@ test('library repositories: a local one works as it is, a GitHub one is cloned i
   await raw.accept(ctx, project.id, task.id);
   assert.equal(fs.readFileSync(path.join(local, 'more.js'), 'utf8'), 'more\n', 'Accept lands in the library repository');
   await assert.rejects(raw.preflight(ctx, project.id, { kind: 'library', id: randomUUID() }), /not in the library/);
+});
+
+test('a Build in a library repository not on this Mac clones it into repos/<name> before its agent starts, and its row keeps the clone (2026-09-29)', async () => {
+  const { code, project, workspace } = await scene();
+  const remotes = path.join(homeDir, `remotes-auto-${n}`);
+  const origin = path.join(remotes, 'sandboxed');
+  fs.mkdirSync(origin, { recursive: true });
+  sh(origin, 'init', '-q', '-b', 'main');
+  write(path.join(origin, 'index.js'), 'hi\n');
+  sh(origin, 'add', '-A');
+  sh(origin, 'commit', '-qm', 'first');
+  const into = path.join(code, 'repos', 'sandboxed');
+  let clonedFirst = null;
+  const stub = { ...git, clone: async (url, dir) => { assert.equal(url, 'https://github.com/example/sandboxed'); return git.clone(origin, dir); } };
+  const agent = scripted([({ task }) => { clonedFirst = fs.existsSync(path.join(into, 'index.js')); write(path.join(task.worktree, 'more.js'), 'more\n'); return 'Added more.js.'; }]);
+  let changed = 0;
+  const { raw } = manager(agent, { git: stub, libraryChanged: () => { changed += 1; } });
+  const row = await ctx.libraryDb.insert({ id: randomUUID(), name: 'example/sandboxed', type: 'website', tags: ['git'], url: 'https://github.com/example/sandboxed', project_id: project.id });
+  const started = await raw.start(ctx, project.id, { workspaceId: workspace.id, target: { kind: 'library', id: row.id } });
+  assert.deepEqual([started.target, started.status], [{ kind: 'library', id: row.id, name: 'example/sandboxed' }, 'setting-up']);
+  assert.equal((await ctx.libraryDb.get(row.id)).folder_path, into, 'the clone is on the row before start returns');
+  assert.ok(changed >= 1, 'the sidebar is told');
+  const task = await settled(project, started.id);
+  assert.deepEqual([task.status, task.repo, clonedFirst], ['review', into, true]);
+  const listed = (await raw.targets(ctx, project.id)).find((item) => item.id === row.id);
+  assert.deepEqual([listed.place, listed.folder], ['local', into]);
+  // A clone GitHub refuses stops the Build before anything is made.
+  const refused = await ctx.libraryDb.insert({ id: randomUUID(), name: 'example/refused', type: 'website', tags: ['git'], url: 'https://github.com/example/refused', project_id: project.id });
+  const failing = { ...git, clone: async () => { throw new Error('fatal: repository not found'); } };
+  const before = store.listTasks(projects.findProject(ctx, project.id)).length;
+  await assert.rejects(manager(scripted([]), { git: failing }).raw.start(ctx, project.id, { workspaceId: workspace.id, target: { kind: 'library', id: refused.id } }), /example\/refused could not be cloned: GitHub refused/);
+  assert.equal(store.listTasks(projects.findProject(ctx, project.id)).length, before, 'no record');
+  assert.equal((await ctx.libraryDb.get(refused.id)).folder_path, null);
 });
 
 test('cloning a library repository: the GitHub sign-in first, the person\'s own Git when GitHub turns it away, and a refusal says what to do (2026-09-29)', async () => {
@@ -523,7 +593,10 @@ test('quick tasks: their own slot, no workspace, a clean finish lands by itself;
   assert.deepEqual([quick.kind, quick.workspaceId, quick.postItId, quick.title], ['quick', null, 'card-1', 'fix the typo in the header']);
   const landed = await settled(project, quick.id, ['setting-up', 'queued', 'running', 'review', 'accepting']);
   assert.equal(landed.status, 'accepted', 'a quick task does not wait behind a running Build, and lands by itself');
-  assert.equal(fs.readFileSync(path.join(code, 'quick.txt'), 'utf8'), 'quick\n');
+  const named = project.name.toLowerCase().replace(/ /g, '-');
+  assert.deepEqual(landed.target, { kind: 'default', name: named }, 'a post-it\'s Build works in the default repo, whatever the panel picked');
+  assert.equal(fs.readFileSync(path.join(code, named, 'quick.txt'), 'utf8'), 'quick\n');
+  assert.ok(!fs.existsSync(path.join(code, 'quick.txt')));
   assert.match(quickAgent.calls[0].system, /This is a quick task/);
   assert.match(quickAgent.calls[0].message, /<post-it>\n- \[ \] fix the typo in the header\n<\/post-it>/);
   hold();
@@ -583,6 +656,7 @@ test('a post-it added to a workspace: a Build of it whose task is the post-it, p
   const { builds } = manager(agent);
   const task = await builds.start(ctx, project.id, { kind: 'build', workspaceId: workspace.id, postItId: 'card-9', text: '- [ ] rename the header\n' });
   assert.deepEqual([task.kind, task.workspaceId, task.postItId, task.title], ['build', workspace.id, 'card-9', 'rename the header']);
+  assert.equal(task.target.kind, 'default', 'a post-it\'s Build: the default repo, though the project folder was asked for');
   assert.equal(task.version.title, 'Imported from Task: rename the header');
   const done = await settled(project, task.id);
   assert.equal(done.status, 'needs-you', 'a full Build: it may ask');

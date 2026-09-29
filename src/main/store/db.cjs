@@ -5,7 +5,8 @@
 // later; this module is the swap point (spec §2 #3).
 //
 //   <testRoot>/library.pglite    table `library`  — every mentionable thing, all projects; `sandbox_runs` and
-//                                `sandbox_environments` — a GitHub repository's E2B previews (src/main/sandbox)
+//                                `sandbox_environments` — a GitHub repository's E2B previews (src/main/sandbox);
+//                                `repo_runnables` — what runs in a repository, and how (src/main/build/runnables.cjs)
 //   <project>/notes.pglite       table `notes`    — the notes created in that project
 
 const fs = require('node:fs');
@@ -102,6 +103,27 @@ create table if not exists sandbox_environments (
   encrypted text not null,
   updated_at timestamptz not null default now()
 );
+-- What runs in a repository (2026-09-29): each web UI, desktop app or terminal program a Build's run step found, in a
+-- folder relative to the repository's root ('.' for the root), and the commands that last passed Engelbart's own check
+-- there. A UI's run command holds {port}, where Engelbart puts the free port it gives it at each run; no port is kept.
+-- The commands change only when a check passes; a runnable that never passed in its time is 'failed', with the last
+-- error. verified_commit: the commit its commands were last checked at.
+create table if not exists repo_runnables (
+  id uuid primary key,
+  library_id uuid not null references library (id) on delete cascade,
+  folder text not null default '.',
+  name text not null,
+  type text not null check (type in ('ui', 'app', 'terminal')),
+  install_command text,
+  run_command text,
+  status text not null default 'pending' check (status in ('pending', 'verified', 'failed')),
+  last_error text,
+  verified_commit text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (type <> 'ui' or run_command is null or position('{port}' in run_command) > 0)
+);
+create unique index if not exists repo_runnables_one on repo_runnables (library_id, folder, name);
 create unique index if not exists sandbox_runs_one_active on sandbox_runs (library_id)
   where status in ('starting', 'ready');
 `;
