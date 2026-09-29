@@ -20,7 +20,7 @@ function load(file) {
   finally { if (previous === undefined) delete global.window; else global.window = previous; }
   return compiled.exports;
 }
-const { sandboxProgressState, sandboxProgressReducer: reduce, readNotificationState, writeNotificationState, notificationStorageKey, availableBuildNotifications } = load('model/sandbox-notifications.js');
+const { sandboxProgressState, sandboxProgressReducer: reduce, readNotificationState, writeNotificationState, notificationStorageKey, availableBuildNotifications, repositoryClick } = load('model/sandbox-notifications.js');
 const { NotificationBell, BuildNotification } = load('ui/SandboxNotifications.jsx');
 const root = '/fixture/main';
 const at = (second) => `2026-09-23T12:00:${String(second).padStart(2, '0')}.000Z`;
@@ -305,4 +305,14 @@ test('same-run restarts replace completion with building and survive a reload wi
   assert.equal(state.notifications.length, 1);
   assert.equal(state.notifications[0].status, 'ready');
   assert.equal(state.notifications[0].at, at(40));
+});
+
+test('a repository clicked in the sidebar opens its live preview, else its build; without a sandbox it opens as before', () => {
+  assert.equal(repositoryClick({ run: run('ready') }), 'preview');
+  assert.equal(repositoryClick({ run: run('ready', { preview_url: null }) }), 'details', 'ready without an address is not live yet');
+  for (const status of ['starting', 'failed', 'stopped']) assert.equal(repositoryClick({ run: run(status) }), 'details');
+  assert.equal(repositoryClick(undefined), null);
+  assert.equal(repositoryClick(null), null);
+  const workspace = fs.readFileSync(path.join(__dirname, '../src/renderer/screens/Workspace.jsx'), 'utf8');
+  assert.match(workspace, /const onRowClick = [\s\S]*?repositoryClick\(sandbox\)[\s\S]*?sandboxes\.open\(sandbox\.run\)[\s\S]*?sandboxes\.openBuild\(row\)[\s\S]*?openItem\(row\)/);
 });

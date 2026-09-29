@@ -18,6 +18,8 @@ import BuildPanel from '../workspace/BuildPanel.jsx';
 import BuildReview from '../workspace/BuildReview.jsx';
 import PostItBuild from '../post-its/PostItBuild.jsx';
 import PostItTask from '../post-its/PostItTask.jsx';
+import { useSandboxes } from '../ui/SandboxProgress.jsx';
+import { repositoryClick } from '../model/sandbox-notifications.js';
 
 // The workspace screen (design 2026-09-17): a header in three columns — Engelbart / project /
 // parent workspaces over the sidebar, the document tabs over the document, the Stage · Terminal
@@ -651,9 +653,15 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // Opened from the all-projects screen: shown once the Stage is there.
   React.useEffect(() => { if (initialStage && stageRef.current) openItem(initialStage); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const sandboxes = useSandboxes();
   const onRowClick = (row) => {
     if (row.type === 'child') { selectTopic(row.id); return; }
     if (row.type === 'archive') { openTab(`${ARCHIVE_TAB}${row.file}`, row.name); return; }
+    // A GitHub repository opens its live preview in the Stage; one still building (or failed, or stopped) shows its build.
+    const sandbox = sandboxes && hasTag(row, 'git') ? sandboxes.items[row.id] : null;
+    const click = repositoryClick(sandbox);
+    if (click === 'preview') { sandboxes.open(sandbox.run); return; }
+    if (click === 'details') { sandboxes.openBuild(row); return; }
     openItem(row);
   };
 

@@ -36,6 +36,13 @@ export function sandboxProgressState(dataRoot, { notifications = [], dismissed =
 
 // Progress can arrive before the initial snapshot. Never let an older snapshot
 // restore a stopped preview, replace a newer build, or create another alert.
+// A saved repository clicked in the workspace's sidebar (2026-09-29): its live preview when there is one, else its build
+// details (progress, why it failed, Run). Without a sandbox (signed out, sandboxes off) it opens as it always has.
+export function repositoryClick(item) {
+  if (!item?.run) return null;
+  return item.run.status === 'ready' && item.run.preview_url ? 'preview' : 'details';
+}
+
 export function sandboxProgressReducer(state, action) {
   if (action.type === 'reset') return sandboxProgressState(action.dataRoot, action.saved);
   if (action.type === 'clear') {
