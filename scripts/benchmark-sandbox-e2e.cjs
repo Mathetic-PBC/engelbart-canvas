@@ -64,7 +64,7 @@ async function trial({ template, round, directory, environment, onCreated, signa
   sandboxApi = Sandbox, runtimeFactory = createRuntime, setupRunner = runLocalSetup,
   agentRunner = runLocalClaude, collectArtifacts = artifacts, verifyServices = async () => ({ ok: true, checks: [] }) }) {
   const record = { id: randomUUID(), template, round, repository: repository.name, pinned_commit: repository.commit,
-    started_at: new Date().toISOString(), provider: 'claude-local', model_requested: environment.ENGELBART_SANDBOX_CLAUDE_MODEL || 'sonnet' };
+    started_at: new Date().toISOString(), provider: 'claude-local', model_requested: environment.ENGELBART_SANDBOX_CLAUDE_MODEL || 'claude-sonnet-5-5' };
   const secrets = [environment.E2B_API_KEY, environment.ANTHROPIC_API_KEY].filter(Boolean);
   const save = () => fs.writeFileSync(path.join(directory, 'measurement.json'), JSON.stringify(redact(record, secrets), null, 2));
   const start = performance.now(), now = () => Math.round(performance.now() - start);

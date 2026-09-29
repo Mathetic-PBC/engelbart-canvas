@@ -15,7 +15,11 @@ const FILES = [
     'local-tools.cjs', 'local-install.cjs', 'install-job.py', 'launch.py',
     'npm-audit.cjs', 'npm-audit.py', 'launch-discovery.cjs', 'launch-discovery.py', 'environment.cjs', 'runs.cjs'].map(f => `src/main/sandbox/${f}`),
   'src/main/terminal/launch.cjs', 'src/shared/environment.cjs', 'src/shared/build-history.cjs',
+  // local-claude.cjs looks where the installers put Claude Code when the login shell's PATH misses it (2026-09-29).
+  ...['detect.cjs', 'requirements.cjs', 'version.cjs'].map(f => `src/main/tools/${f}`),
 ];
+// Files the historical commit predates (its sources never load them).
+const NOT_HISTORICAL = /\/(npm-audit|launch-discovery|build-history)\.|^src\/main\/tools\//;
 
 function replaceOnce(source, from, to) {
   if (typeof from === 'string') {
@@ -71,7 +75,7 @@ function snapshot(directory, kind) {
   fs.mkdirSync(directory, { recursive: true });
   const hashes = {}, originals = {};
   for (const file of FILES) {
-    if (kind === 'historical' && /\/(npm-audit|launch-discovery|build-history)\./.test(file)) continue;
+    if (kind === 'historical' && NOT_HISTORICAL.test(file)) continue;
     const original = kind === 'historical'
       ? execFileSync('git', ['show', `${HISTORICAL_COMMIT}:${file}`], { cwd: ROOT, encoding: 'utf8' })
       : fs.readFileSync(path.join(ROOT, file), 'utf8');

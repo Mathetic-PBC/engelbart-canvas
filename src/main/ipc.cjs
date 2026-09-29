@@ -128,7 +128,7 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
   return { layout, context, config: describe, setTestMode, resetTestData, requireTestMode, close: closeAll };
 }
 
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, tools = null, builds = null, sandbox = null }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, tools = null, builds = null, sandbox = null }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const withCtx = (fn) => async (...args) => fn(await store.context(), ...args);
   // E2B previews (src/main/sandbox): library additions and workspace links that can start one run one at a time, and a
@@ -221,11 +221,18 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('set-instructions', withCtx((ctx, text) => onboarding.writeInstructions(ctx, str(text, 'instructions', 40000))));
   handle('free-folder', withCtx((ctx, name) => onboarding.freeFolder(ctx, str(name, 'name'))));
   handle('check-folder', withCtx((ctx, value) => onboarding.existingFolder(ctx, str(value, 'directory', 4096))));
+  // The launch check's first answer (a minute at most): until then Git's record may still be last launch's.
+  const toolsChecked = async () => { for (let n = 0; n < 60 && tools && !tools.snapshot().checked; n += 1) await new Promise((resolve) => { setTimeout(resolve, 1000); }); };
   handle('start-project', withCtx((ctx, input) => {
     const value = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
     const folder = value.folder === 'existing' ? 'existing' : 'new';
     const context = (Array.isArray(value.context) ? value.context : []).slice(0, 500).map((id) => str(id, 'library id', 64));
-    return onboarding.startProject(ctx, { name: str(value.name, 'name'), description: optStr(value.description, 'description', 8000) || '', folder, directory: folder === 'existing' ? str(value.directory, 'directory', 4096) : '', context });
+    return onboarding.startProject(ctx, { name: str(value.name, 'name'), description: optStr(value.description, 'description', 8000) || '', folder, directory: folder === 'existing' ? str(value.directory, 'directory', 4096) : '', context }).then((made) => {
+      // A folder Engelbart made gets its Build repository and first commit now, in the background, once the tool check
+      // has found Git (build/manager.cjs prepareDefault): the first Build never meets a folder without a history.
+      if (folder === 'new' && builds) void toolsChecked().then(() => builds.prepareDefault(ctx, made.project.id)).catch(() => {});
+      return made;
+    });
   }));
   // A repository's sandbox is stopped (and its runs forgotten) before its row can go.
   handle('discard-library-item', (id) => queued(async () => {
@@ -310,7 +317,15 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('stop-bart', (askId) => bart.stop(str(askId, 'ask id', 64)));
   // What the @bart line's selector offers and what its flags are checked against: the models file,
   // cut down to the providers config.json lists. Names and keys only; the file's prose stays here.
-  handle('bart-models', () => { const { provider, providers } = readModels(); return { provider, providers }; });
+  // A provider's `start` is where a question without flags starts: the last model and effort picked by hand (bart/choices.cjs).
+  handle('bart-models', () => { const { provider, providers } = readModels('bart'); return { provider, providers }; });
+  // The model and effort just picked in a Build panel ('build') or a post-it's Build ('quick'), kept as where the next one
+  // starts. @bart's are kept by the question that uses them (bart/ask.cjs onPicked).
+  handle('remember-model-choice', (place, choice) => {
+    if (place !== 'build' && place !== 'quick') throw new TypeError('place must be build or quick');
+    const value = choice && typeof choice === 'object' ? choice : {};
+    return rememberModelChoice(place, { provider: str(value.provider, 'provider', 24), model: str(value.model, 'model', 24), effort: str(value.effort, 'effort', 24) });
+  });
   // Copy all under an answer: a question and its answer, as they read in the document.
   handle('copy-text', (text) => { writeClipboard(str(text, 'text', 400000)); return true; });
 
@@ -327,7 +342,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       if (typeof value !== 'object' || Array.isArray(value) || !['default', 'project', 'library'].includes(value.kind)) throw new TypeError('target must name the default repo, the project folder or a library row');
       return value.kind === 'library' ? { kind: 'library', id: str(value.id, 'library id', 64) } : { kind: value.kind };
     };
-    handle('build-models', () => buildChoices(readModels()));
+    // What a Build panel ('build', the default) or a post-it's Build ('quick') offers, starting on what was last picked there.
+    handle('build-models', (place) => buildChoices(readModels(place === 'quick' ? 'quick' : 'build')));
     handle('build-targets', withCtx((ctx, pid) => b().targets(ctx, pidOf(pid))));
     handle('build-preflight', withCtx((ctx, pid, target) => b().preflight(ctx, pidOf(pid), targetOf(target))));
     handle('build-init', withCtx((ctx, pid, target) => b().initRepository(ctx, pidOf(pid), targetOf(target))));

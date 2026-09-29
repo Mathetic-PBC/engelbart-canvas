@@ -106,6 +106,24 @@ test('Engelbart\'s own Git comes first on PATH after the person\'s startup files
   assert.ok(!own.stdout.includes(path.join(bin, 'git')), own.stdout);
 });
 
+test('an agent whose folder the person\'s PATH misses is found by name in the terminal and in hidden runs, after their own (2026-09-29)', { skip: !fs.existsSync('/bin/zsh') }, (t) => {
+  const userData = temporaryDirectory(t);
+  const home = temporaryDirectory(t);
+  const bin = path.join(home, '.local', 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, 'claude'), '#!/bin/sh\necho engelbart-claude\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(home, '.zshrc'), 'export PATH=/usr/bin:/bin:/usr/sbin:/sbin\n'); // a new account's: no ~/.local/bin
+  const env = { HOME: home, PATH: '/usr/bin:/bin', TERM: 'dumb', ENGELBART_AGENT_PATH: bin };
+  const hidden = spawnSync('/bin/zsh', loginShellArgs('/bin/zsh', 'command -v claude', env), { env, encoding: 'utf8', timeout: 10000 });
+  assert.equal(hidden.stdout.trim().split('\n').pop(), path.join(bin, 'claude'), hidden.stderr);
+  const launcher = prepareLauncher(userData, '/bin/zsh');
+  const terminal = spawnSync(launcher, ['-il'], { env, input: 'command -v claude\nexit\n', encoding: 'utf8', timeout: 10000 });
+  assert.equal(terminal.status, 0, terminal.stderr);
+  assert.ok(terminal.stdout.includes(path.join(bin, 'claude')), `the terminal: ${terminal.stdout}`);
+  const without = spawnSync(launcher, ['-il'], { env: { HOME: home, PATH: '/usr/bin:/bin', TERM: 'dumb' }, input: 'command -v claude || echo none\nexit\n', encoding: 'utf8', timeout: 10000 });
+  assert.ok(!without.stdout.includes(path.join(bin, 'claude')), without.stdout);
+});
+
 test('shell history: extended-format prefixes, continuation lines, metafied bytes, latest-use order', (t) => {
   assert.deepEqual(parseHistory(': 1700000000:0;ls -la\n: 1700000001:0;git status\n: 1700000002:0;ls -la\nplain command\n'), ['git status', 'ls -la', 'plain command']);
   assert.deepEqual(parseHistory(': 1:0;echo one \\\ntwo\n: 2:0;pwd\n'), ['echo one \ntwo', 'pwd']);

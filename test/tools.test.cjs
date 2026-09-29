@@ -472,6 +472,18 @@ test('manager: while Engelbart\'s own Git stands in, everything it starts is giv
   assert.deepEqual(own.tools.environment(), {}, 'the person\'s own Git: PATH is left as it is');
 });
 
+test('manager: an agent installed where the login shell\'s PATH misses it hands its folder to everything Engelbart starts (2026-09-29)', async () => {
+  const home = temp();
+  const launcher = path.join(home, '.local', 'bin', 'claude');
+  fs.mkdirSync(path.dirname(launcher), { recursive: true });
+  fs.writeFileSync(launcher, '#!/bin/sh\n', { mode: 0o755 });
+  const { root } = ensureHome(temp());
+  const tools = createTools({ readTools: () => readConfig(root).tools, writeTools: (value) => writeTools(root, value), detect: async () => ({ claude: { ...observed('claude', { file: launcher, onPath: false, source: 'native', ran: true, version: '2.1.300', signedIn: false }), checkedAt: new Date().toISOString() } }), actions: {} });
+  await tools.check(['claude']);
+  assert.deepEqual(tools.environment(), { ENGELBART_AGENT_PATH: path.dirname(launcher) });
+  assert.equal(tools.binaryFor('claude'), launcher);
+});
+
 test('manager: on a Mac with neither agent, Claude Code is installed at launch without asking; never over a skip, beside Codex, or on a check that could not ask the shell', async () => {
   const fresh = managerFor({ claude: 'missing', codex: 'missing' }, { installAtLaunch: ['claude'] });
   await fresh.tools.start();

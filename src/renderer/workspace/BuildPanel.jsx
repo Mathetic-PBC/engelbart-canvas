@@ -4,7 +4,8 @@
 // post-its/ProjectPostIts.jsx). What it holds: the repository it works in (2026-09-29: a folder named after the project,
 // in the project folder, unless another is picked; the pick is remembered per project, model/build-target.js), "Add
 // from library" (a ringed + and a search that comes up over it), the attached items, "Automatically clear workspace" (off each time), a line when
-// the repository leaves something out, must be made or cloned first, or cannot take a Build, and at the lower right the
+// the repository leaves something out, must be cloned first, or cannot take a Build (a folder with no history is given one
+// when the Build starts, unasked: build/manager.cjs), and at the lower right the
 // model chip with the send inside it, drawn as the @bart line's. A post-it's Build has a popup of its own
 // (post-its/PostItBuild.jsx), which works in the repository picked here.
 import React from 'react';
@@ -122,7 +123,8 @@ export default function BuildPanel({ projectId, title, anchor, library, inRail, 
 
   React.useEffect(() => {
     let live = true;
-    api.buildModels().then((value) => {
+    // The list starts on the model last picked here (main keeps it), else on Build's default: Opus high while Claude Code can run.
+    api.buildModels('build').then((value) => {
       if (!live) return;
       setModels(value);
       const start = value.providers[value.provider].ladder[0];
@@ -156,11 +158,6 @@ export default function BuildPanel({ projectId, title, anchor, library, inRail, 
       setError(errorMessage(e));
       setBusy(false);
     }
-  };
-  const startHistory = async () => {
-    setBusy(true);
-    setError('');
-    try { setPre(await api.buildInit(projectId, target)); } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
   };
   const cloneHere = async () => {
     setBusy(true); setCloning(true);
@@ -254,10 +251,9 @@ export default function BuildPanel({ projectId, title, anchor, library, inRail, 
             {attached.map((row) => <Chip key={row.id} item={row} data-build-attached={row.id} onRemove={() => setAttached((now) => now.filter((held) => held.id !== row.id))} />)}
           </div>
         )}
-        {(line || (pre && !pre.ok && (pre.canInit || pre.canClone))) && (
+        {(line || (pre && !pre.ok && pre.canClone)) && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span data-build-note="1" style={{ flex: 1, minWidth: 0, font: '12.5px/1.5 var(--font-sans)', color: alarming ? '#e70022' : '#8f8f8f' }}>{line}</span>
-            {pre && !pre.ok && pre.canInit && <button type="button" className="bart-text" data-build-init="1" disabled={busy} onClick={startHistory} style={{ color: '#171717' }}>Start history</button>}
             {pre && !pre.ok && pre.canClone && <button type="button" className="bart-text" data-build-clone="1" disabled={busy} onClick={cloneHere} title={`Clone into ${pre.cloneTo} in the project folder`} style={{ flex: 'none', color: '#171717' }}>{cloning ? 'Cloning…' : `Clone into ${pre.cloneTo}`}</button>}
           </div>
         )}
@@ -304,7 +300,11 @@ export default function BuildPanel({ projectId, title, anchor, library, inRail, 
           anchor={picker}
           hover={false}
           cover
-          onPick={(pick) => setChoice({ provider: providerOf(models, pick.model), model: pick.model, effort: pick.effort })}
+          onPick={(pick) => {
+            const next = { provider: providerOf(models, pick.model), model: pick.model, effort: pick.effort };
+            setChoice(next);
+            api.rememberModelChoice('build', next).catch(() => {}); // the next Build panel starts here
+          }}
           onEnter={() => {}}
           onLeave={() => {}}
         />

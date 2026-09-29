@@ -64,6 +64,18 @@ function readFlags(text, models) {
 }
 
 /**
+ * The steps a question without flags climbs: the ladder, or, when the person last picked by hand (`start`, 2026-09-29:
+ * ./models.cjs startingAt), that pick and then the ladder's steps above it — a later model, or the same one at a higher effort.
+ */
+function ladderOf(entry) {
+  const start = entry.start;
+  if (!start || !entry.models[start.model] || !entry.efforts.includes(start.effort)) return entry.ladder;
+  const order = Object.keys(entry.models);
+  const above = (rung) => order.indexOf(rung.model) > order.indexOf(start.model) || (rung.model === start.model && EFFORTS.indexOf(rung.effort) > EFFORTS.indexOf(start.effort));
+  return [start, ...entry.ladder.filter(above)];
+}
+
+/**
  * The text after "@bart" → { question, provider, steps, pinned } where steps are
  * { provider, key, model (the id the CLI gets), name, effort }, one when pinned.
  */
@@ -80,11 +92,12 @@ function readQuestion(text, models) {
   }
   const step = (rung) => ({ provider, key: rung.model, model: entry.models[rung.model].id, name: entry.models[rung.model].name, effort: rung.effort });
   const pinned = !!(chosen || effort);
-  if (!pinned) return { question: rest, provider, steps: entry.ladder.map(step), pinned };
-  // One of the two by hand: the other comes from the ladder step that already pairs with it.
+  if (!pinned) return { question: rest, provider, steps: ladderOf(entry).map(step), pinned };
+  // One of the two by hand: the other comes from the step that already pairs with it, the one it would start on first.
+  const rungs = [...ladderOf(entry), ...entry.ladder];
   const rung = chosen
-    ? { model: chosen.model, effort: effort || (entry.ladder.find((candidate) => candidate.model === chosen.model) || { effort: 'medium' }).effort }
-    : { model: (entry.ladder.find((candidate) => candidate.effort === effort) || entry.ladder[0]).model, effort };
+    ? { model: chosen.model, effort: effort || (rungs.find((candidate) => candidate.model === chosen.model) || { effort: 'medium' }).effort }
+    : { model: (rungs.find((candidate) => candidate.effort === effort) || rungs[0]).model, effort };
   return { question: rest, provider, steps: [step(rung)], pinned };
 }
 
@@ -94,4 +107,4 @@ function withChoice(text, models, { model, effort }) {
   return [`--${model}`, `--${effort}`, rest].filter(Boolean).join(' ');
 }
 
-module.exports = { EFFORTS, EFFORT_LABELS, effortOf, modelOf, readFlags, readQuestion, withChoice };
+module.exports = { EFFORTS, EFFORT_LABELS, effortOf, modelOf, readFlags, ladderOf, readQuestion, withChoice };

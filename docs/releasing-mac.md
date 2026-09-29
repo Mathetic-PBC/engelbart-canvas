@@ -123,4 +123,5 @@ This is set up but has not been run, because there was no certificate to run it 
   Manager (~110 MB nothing uses). To move to a newer one, copy the two macOS entries (URL, checksum) from the npm package
   dugite's `script/embedded-git.json` into `scripts/fetch-git.mjs`.
 - Chromium's own strings in English only (`electronLanguages`), as Engelbart's are.
-- The icon (`build/icon.icns`) is a placeholder drawn by `scripts/make-icon.cjs`.
+- The icon (`build/icon.icns`) is drawn by `scripts/make-icon.cjs` from the artwork in `design/assets/app-icon.png`, set in
+  macOS's rounded icon shape (`npx electron scripts/make-icon.cjs [new-artwork.png]`).

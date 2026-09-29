@@ -8,7 +8,11 @@ const path = require('node:path');
 const { execFile, spawn } = require('node:child_process');
 const { promisify } = require('node:util');
 const { resolveShell } = require('../terminal/launch.cjs');
+const { knownPlaces } = require('../tools/detect.cjs');
 const execute = promisify(execFile);
+
+const isFile = (file) => { try { return !!file && fs.statSync(file).isFile(); } catch { return false; } };
+const isProgram = (file) => { try { fs.accessSync(file, fs.constants.X_OK); return isFile(file); } catch { return false; } };
 
 function subscriptionEnvironment(source = process.env) {
   const allowed = ['HOME', 'USER', 'LOGNAME', 'PATH', 'SHELL', 'TMPDIR', 'LANG', 'CLAUDE_CONFIG_DIR'];
@@ -26,31 +30,37 @@ async function prepareLocalClaude(source = process.env, run = execute) {
   const shell = resolveShell(env);
   // Resolve through the same login shell as the terminal, then invoke the binary
   // directly. Shell startup cannot reintroduce API keys into the Claude process.
+  // A login shell whose PATH misses it (a new account: Claude Code's installer puts it in ~/.local/bin, which a fresh
+  // .zshrc does not add) is not the end: where the installers put it is looked at too, as the tool check does.
   const fish = path.basename(shell) === 'fish';
   const query = fish ? 'command -s claude' : path.basename(shell) === 'bash' ? 'type -P claude' : 'whence -p claude';
   let file;
   try {
-    const { stdout } = await run(shell, fish ? ['--login', '--interactive', '--command', query] : ['-ilc', query], { env, cwd: os.tmpdir(), timeout: 15_000, maxBuffer: 64_000 });
-    file = stdout.trim().split(/\r?\n/).findLast((line) => path.isAbsolute(line.trim()))?.trim();
-    if (!file || !fs.statSync(file).isFile()) throw new Error('missing');
+    let found = null;
+    try {
+      const { stdout } = await run(shell, fish ? ['--login', '--interactive', '--command', query] : ['-ilc', query], { env, cwd: os.tmpdir(), timeout: 15_000, maxBuffer: 64_000 });
+      found = stdout.trim().split(/\r?\n/).findLast((line) => path.isAbsolute(line.trim()))?.trim();
+    } catch { /* not on PATH: exit 1 */ }
+    file = isFile(found) ? found : knownPlaces('claude', env.HOME || os.homedir()).find(isProgram);
+    if (!file) throw new Error('missing');
     const { stdout: version } = await run(file, ['--version'], { env, timeout: 15_000, maxBuffer: 64_000 });
     const match = version.match(/^(\d+)\.(\d+)\.(\d+)/);
     if (!match || (Number(match[1]) < 2 || (Number(match[1]) === 2 && (Number(match[2]) < 1 || (Number(match[2]) === 1 && Number(match[3]) < 248))))) {
       throw new Error('version');
     }
   } catch (error) {
-    throw new Error(error.message === 'version' ? 'Update Claude Code to 2.1.248 or newer for restricted sandbox setup.' : 'Claude Code was not found on your login shell PATH. Install it and sign in from the Canvas terminal.');
+    throw new Error(error.message === 'version' ? 'Update Claude Code to 2.1.248 or newer for restricted sandbox setup.' : 'Claude Code is not installed yet (Engelbart ▸ Set Up Tools… installs it).');
   }
   try {
     const { stdout } = await run(file, ['auth', 'status', '--json'], { env, cwd: os.tmpdir(), timeout: 15_000, maxBuffer: 64_000 });
     if (!subscriptionStatus(JSON.parse(stdout))) throw new Error('not subscription');
   } catch {
-    throw new Error('Sign in to your Claude subscription using Claude Code in the Canvas terminal.');
+    throw new Error('Claude Code is not signed in to a Claude subscription (Engelbart ▸ Set Up Tools… signs in).');
   }
   return { file, env };
 }
 
-function claudeArguments(config, model = 'sonnet') {
+function claudeArguments(config, model = 'claude-sonnet-5-5') {
   if (!/^[a-zA-Z0-9._:-]{1,100}$/.test(model)) throw new Error('Invalid local Claude model');
   return ['-p', '--output-format', 'stream-json', '--verbose', '--no-session-persistence',
     '--restricted', '--setting-sources', '', '--settings', '{"disableAllHooks":true}',
