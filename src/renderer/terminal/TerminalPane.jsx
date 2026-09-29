@@ -99,6 +99,7 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
   const agentLabel = LABEL[now.agent] || LABEL.shell;
   const boxIsInput = running && now.integrated && !takeover; // the box owns typing; the transcript is locked
   const showBox = running && !takeover;
+  const conversation = running && now.agent !== 'shell'; // Claude Code or Codex: the program is the whole tab
 
   // Bootstrap once; start one shell in the project directory when this project has none.
   useEffect(() => {
@@ -172,13 +173,14 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
     for (const record of getState().sessions.values()) { unmountView(record.snapshot.id); setInputLock(record.snapshot.id, false); }
   }, []);
 
-  // A running program takes the keyboard — after a beat, so `ls` does not make the focus jump.
+  // A running program takes the keyboard — after a beat, so `ls` does not make the focus jump. Claude Code and Codex take
+  // it at once: they are whole-screen programs, and the footer settles its height before they draw.
   useEffect(() => {
     if (!now.busy) { setTakeover(false); return undefined; }
-    if (!now.integrated) { setTakeover(true); return undefined; }
+    if (!now.integrated || now.agent !== 'shell') { setTakeover(true); return undefined; }
     const timer = setTimeout(() => setTakeover(true), TAKEOVER_DELAY);
     return () => clearTimeout(timer);
-  }, [now.busy, now.integrated, currentId]);
+  }, [now.busy, now.integrated, now.agent, currentId]);
 
   // While the box is the input, keys that reach the transcript are handed to the box.
   useEffect(() => {
@@ -442,8 +444,9 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
             placeholder="Run commands"
             style={{ display: 'block', width: '100%', padding: '2px 0', border: 0, background: 'transparent', font: `12.5px/1.7 ${MONO}`, color: '#171717', caretColor: '#0070f3' }}
           />
-        ) : (
-          // Same height as the box, so the transcript (and the program drawing in it) is not resized.
+        ) : conversation ? null : (
+          // Same height as the box, so the transcript (and the program drawing in it) is not resized. A Claude Code or
+          // Codex conversation keeps no room for a box it never shows (2026-09-29).
           <div data-term-hint="1" style={{ padding: '2px 0', font: `12.5px/1.7 ${MONO}`, color: '#8f8f8f', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {running ? '\u00a0' : 'this terminal has exited — press + for a new one'}
           </div>
