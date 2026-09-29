@@ -4,7 +4,7 @@
 // or app API is exposed to the website. Main pulls events from this private queue.
 // Target recognition follows engelbart-web's bridge: handles first, then a unique
 // best match by visible text and ancestors. Rectangles are never identity.
-function installAnnotationPage() {
+function installAnnotationPage(elementContext) {
   if (globalThis.__engelbartAnnotations) return;
   let active = false, marks = [], selected = null, hover = null, events = [], docs = [], unavailable = 0;
   let host, root, outline, dots, blockers, lastSignature = '', lastRoute = '';
@@ -245,6 +245,18 @@ function installAnnotationPage() {
     host?.remove(); host = null;
   }
   globalThis.__engelbartAnnotations = {
+    snapshot(anchor) {
+      if (anchor.route !== route()) return { status: 'unavailable', reason: 'The tab is on a different page.' };
+      queryCache = new Map(); rootsCache = new Map(); descriptionCache = new WeakMap();
+      let doc = document;
+      for (const hop of anchor.frames) {
+        try { doc = bySelector(doc, hop)?.contentDocument; } catch { doc = null; }
+        if (!doc?.documentElement) return { status: 'unavailable', reason: 'The selected frame is inaccessible.' };
+      }
+      const found = resolve(doc, anchor);
+      if (!found.el) return { status: 'unavailable', reason: 'The selected element is no longer on this page.' };
+      return { status: 'available', confidence: found.confidence, title: cap(doc.title), ...elementContext(found.el) };
+    },
     command(message) {
       if (message.type === 'clear') { clear(); return []; }
       if (message.type === 'show') marks = message.items;
@@ -260,4 +272,4 @@ function installAnnotationPage() {
   };
 }
 
-module.exports = { source: `(${installAnnotationPage.toString()})();`, WORLD: 1739 };
+module.exports = { source: `(${installAnnotationPage.toString()})(${require('./annotation-context.cjs').elementContext.toString()});`, WORLD: 1739 };

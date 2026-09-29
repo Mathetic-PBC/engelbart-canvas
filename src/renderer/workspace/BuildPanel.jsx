@@ -13,6 +13,7 @@ import { EFFORT_LABELS } from '../../main/bart/question.cjs';
 import { attachRows } from '../model/rail.js';
 import { KindGlyph as Glyph } from '../ui/Icons.jsx';
 import { usePlaced } from '../ui/usePlaced.js';
+import RepositoryRow from './RepositoryRow.jsx';
 
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
 const WIDTH = 420;
@@ -94,7 +95,7 @@ function Chip({ item, glyph, onRemove, ...rest }) {
  * clear })` starts it; the panel closes itself only on Esc, ×, or a press elsewhere in the window (never while it is
  * sending).
  */
-export default function BuildPanel({ projectId, title, anchor, library, inRail, onClose, onStart }) {
+export default function BuildPanel({ projectId, workspaceId, title, anchor, library, inRail, onClose, onStart }) {
   const [models, setModels] = React.useState(null);
   const [choice, setChoice] = React.useState(null); // { provider, model, effort }
   const [pre, setPre] = React.useState(null);
@@ -104,6 +105,10 @@ export default function BuildPanel({ projectId, title, anchor, library, inRail, 
   const [picker, setPicker] = React.useState(null); // the chip's rect while the selector is open
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState('');
+  const [repositoryRevision, setRepositoryRevision] = React.useState(0);
+  React.useEffect(() => api.onRepositoryChanged(event => {
+    if (event.projectId === projectId && (!event.workspaceId || event.workspaceId === workspaceId)) { setPre(null); setRepositoryRevision(n => n + 1); }
+  }), [projectId, workspaceId]);
   const chipRef = React.useRef(null);
   const libraryRef = React.useRef(null);
   const [ref, placed] = usePlaced(anchor || fallbackAnchor(), { gap: 8 });
@@ -116,16 +121,21 @@ export default function BuildPanel({ projectId, title, anchor, library, inRail, 
       const start = value.providers[value.provider].ladder[0];
       setChoice({ provider: value.provider, model: start.model, effort: start.effort });
     }).catch((e) => { if (live) setError(errorMessage(e)); });
-    api.buildPreflight(projectId).then((value) => { if (live) setPre(value); }).catch((e) => { if (live) setError(errorMessage(e)); });
     return () => { live = false; };
-  }, [projectId]);
+  }, [projectId, workspaceId]);
+  React.useEffect(() => {
+    let live = true;
+    setPre(null); setError('');
+    api.buildPreflight(projectId, workspaceId).then((value) => { if (live) setPre(value); }).catch((e) => { if (live) setError(errorMessage(e)); });
+    return () => { live = false; };
+  }, [projectId, workspaceId, repositoryRevision]);
 
   const send = async () => {
     if (!choice || busy || !pre || !pre.ok) return;
     setBusy(true);
     setError('');
     try {
-      await onStart({ ...choice, attach: attached.map((row) => row.id), clear });
+      await onStart({ ...choice, expectedRepoId: pre.repoId, attach: attached.map((row) => row.id), clear });
     } catch (e) {
       setError(errorMessage(e));
       setBusy(false);
@@ -134,13 +144,13 @@ export default function BuildPanel({ projectId, title, anchor, library, inRail, 
   const startHistory = async () => {
     setBusy(true);
     setError('');
-    try { setPre(await api.buildInit(projectId)); } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
+    try { setPre(await api.buildInit(projectId, workspaceId)); } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
   };
 
   React.useEffect(() => {
     const onKey = (event) => {
       if (event.key === 'Escape') {
-        if (lookup) return; // the search's own field clears, then closes it
+        if (lookup || document.querySelector('[data-repository-chooser]')) return; // nested menu owns Escape
         event.preventDefault(); event.stopPropagation();
         if (picker) setPicker(null); else if (!busy) onClose();
       } else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void send(); }
@@ -156,7 +166,7 @@ export default function BuildPanel({ projectId, title, anchor, library, inRail, 
       const inside = (selector) => !!(target && target.closest && target.closest(selector));
       if (picker && !inside('[data-bart-picker]') && !(chipRef.current && chipRef.current.contains(target))) setPicker(null);
       if (lookup && !inside('[data-build-lookup]') && !(libraryRef.current && libraryRef.current.contains(target))) setLookup(null);
-      if (!busy && !inside('[data-build-panel], [data-bart-picker], [data-build-lookup], [data-build-doc]')) onClose();
+      if (!busy && !inside('[data-build-panel], [data-bart-picker], [data-build-lookup], [data-build-doc], [data-repository-chooser]')) onClose();
     };
     document.addEventListener('mousedown', away, true);
     return () => document.removeEventListener('mousedown', away, true);
@@ -182,6 +192,7 @@ export default function BuildPanel({ projectId, title, anchor, library, inRail, 
           <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '15px/1.4 var(--font-sans)', color: '#4d4d4d' }}>{named}</span>
           <button type="button" className="hov-ink" onClick={() => { if (!busy) onClose(); }} aria-label="Close" style={{ flex: 'none', padding: '0 2px', border: 0, background: 'transparent', cursor: 'pointer', font: '18px/1 var(--font-sans)', color: '#8f8f8f' }}>×</button>
         </div>
+        <RepositoryRow projectId={projectId} workspaceId={workspaceId} label="Build in" disabled={busy} />
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 2, margin: '0 0 0 -6px' }}>
           <AddButton ref={libraryRef} label="Add from library" open={!!(lookup && lookup.kind === 'library')} onClick={(event) => openLookup('library', event.currentTarget)} data-build-attach="1" aria-haspopup="dialog" />
         </div>

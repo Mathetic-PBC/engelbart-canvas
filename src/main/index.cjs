@@ -12,6 +12,7 @@ const {
   nativeTheme,
   powerMonitor,
   protocol,
+  screen,
   safeStorage,
   session: electronSession,
   shell: electronShell,
@@ -27,7 +28,7 @@ const { inspectPdf } = require('./context/pdf-kind.cjs');
 const { createCliSummarizer, createFakeSummarizer } = require('./context/summarizer.cjs');
 const { createBart, createFakeBart, createThreads } = require('./bart/ask.cjs');
 const { loadModels, preferUsable } = require('./bart/models.cjs');
-const { resolveShell } = require('./terminal/launch.cjs');
+const { resolveShell, validateCreateRequest } = require('./terminal/launch.cjs');
 const home = require('./store/home.cjs');
 const { createRunner } = require('./tools/run.cjs');
 const { detectTools } = require('./tools/detect.cjs');
@@ -55,6 +56,7 @@ const { createGit } = require('./build/git.cjs');
 const { createBuilds } = require('./build/manager.cjs');
 const { createRunner: createBuildRunner, createFakeRunner: createFakeBuildRunner } = require('./build/runner.cjs');
 const { EDGES: WINDOW_EDGES, resizedBounds } = require('./window-edges.cjs');
+const { windowOptions, createWindowState } = require('./window-state.cjs');
 
 const DIST = path.join(__dirname, '../../dist');
 const FIXTURES = path.join(__dirname, '../../fixtures');
@@ -83,6 +85,7 @@ let store = null;
 let sweeper = null;
 let bart = null;
 let localPreviews = null;
+let engelbartIpc = null;
 let sandbox = null;
 let builds = null;
 let tools = null;
@@ -91,6 +94,17 @@ let recordings = null;
 let postItViews = null;
 let quitPending = false;
 let quitReady = false;
+let windowState = null, rendererSaveReady = false, pendingViewSave = null;
+
+function saveRendererView() {
+  if (!rendererSaveReady || !mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const id = require('node:crypto').randomUUID();
+    const timer = setTimeout(() => { pendingViewSave = null; reject(new Error('Canvas could not finish saving its view. Please try quitting again.')); }, 10000);
+    pendingViewSave = { id, finish(error) { clearTimeout(timer); pendingViewSave = null; error ? reject(new Error(error)) : resolve(); } };
+    sendToWindow('engelbart:prepare-quit', { id });
+  });
+}
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'engelbart', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: false, stream: true } },
@@ -173,8 +187,11 @@ async function requestQuit() {
     }
   }
   try {
+    await saveRendererView();
+    windowState?.save(mainWindow);
     if (sweeper) await sweeper.stop();
     if (bart) bart.stopAll();
+    await engelbartIpc?.stopAnnotationAsks();
     if (localPreviews) await localPreviews.close();
     if (builds) await builds.stopAll(); // stop proposal handoffs first, then checkpoint agents and close worktree previews
     if (sandbox) await sandbox.close();
@@ -182,6 +199,8 @@ async function requestQuit() {
     if (recordings) await recordings.cancelTitles();
     if (postItViews) await postItViews.activate(null);
     if (manager) await manager.shutdown();
+    // Final agent events can still update a document during shutdown.
+    await saveRendererView();
     if (store) await store.close();
   } catch (error) {
     quitPending = false;
@@ -193,6 +212,11 @@ async function requestQuit() {
 }
 
 function registerTerminalIpc() {
+  ipcMain.handle('engelbart:view-ready', trustedHandler(() => { rendererSaveReady = true; return true; }));
+  ipcMain.handle('engelbart:view-flushed', trustedHandler((id, error) => {
+    if (pendingViewSave?.id === id) pendingViewSave.finish(typeof error === 'string' ? error.slice(0, 1000) : null);
+    return true;
+  }));
   ipcMain.handle('terminal:bootstrap', trustedHandler(async () => {
     const sessions = rendererLifecycle.bootstrap(() => manager.list());
     return {
@@ -205,12 +229,15 @@ function registerTerminalIpc() {
     };
   }));
   ipcMain.handle('terminal:providers', trustedHandler(() => tools.providers(resolveShell(process.env))));
-  ipcMain.handle('terminal:create', trustedHandler((request) => manager.create({
-    provider: request && request.provider,
-    cwd: request && request.cwd,
-    cols: request && request.cols,
-    rows: request && request.rows,
-  })));
+  ipcMain.handle('terminal:create', trustedHandler(async (request) => {
+    // Terminals choose their own directory; a workspace's Build connection must
+    // never override it. Keep the relocation guard for folders being moved.
+    const input = validateCreateRequest(request);
+    const release = require('./store/workspace-repositories.cjs').lease(await store.context(), request.projectId, input.cwd, { independent: true });
+    try {
+      return manager.create({ ...input, projectId: request.projectId, workspaceId: request.workspaceId });
+    } finally { release(); }
+  }));
   ipcMain.handle('terminal:write', trustedHandler((id, data) => {
     manager.write(id, data);
     return true;
@@ -335,10 +362,11 @@ function createWindow() {
     mainWindow.focus();
     return;
   }
+  windowState ||= createWindowState(app.getPath('userData'));
+  const savedWindow = windowState.read();
   mainWindow = new BrowserWindow({
     show: process.env.ENGELBART_HEADLESS !== '1', // isolated automated checks; never take desktop focus
-    width: 1440,
-    height: 900,
+    ...windowOptions(savedWindow, screen.getAllDisplays().map(display => display.workArea)),
     minWidth: 900,
     minHeight: 560,
     backgroundColor: '#ffffff',
@@ -354,6 +382,9 @@ function createWindow() {
       webSecurity: true,
     },
   });
+  windowState.watch(mainWindow);
+  if (savedWindow.maximized === true) mainWindow.maximize();
+  if (savedWindow.fullscreen === true) mainWindow.setFullScreen(true);
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     try {
       void electronShell.openExternal(parseExternalUrl(url).href).catch(() => {});
@@ -369,9 +400,10 @@ function createWindow() {
   mainWindow.webContents.on('did-start-navigation', (_event, _url, inPlace, mainFrame) => {
     // Loading a recording's isolated child frame must not tear down live Stage tabs.
     if (!mainFrame || inPlace) return;
+    rendererSaveReady = false;
     rendererLifecycle.detach(); void browserViews.closeAll(); void postItViews.activate(null).catch(console.error);
   });
-  mainWindow.webContents.on('render-process-gone', () => { rendererLifecycle.detach(); void postItViews.activate(null).catch(console.error); });
+  mainWindow.webContents.on('render-process-gone', () => { rendererSaveReady = false; rendererLifecycle.detach(); void postItViews.activate(null).catch(console.error); });
   mainWindow.on('resize', () => postItViews.layout());
   // The header clears the traffic lights only while they are there (preload marks <html data-fullscreen>).
   const sendFullScreen = () => { if (mainWindow) mainWindow.webContents.send('window:fullscreen', mainWindow.isFullScreen()); };
@@ -426,7 +458,16 @@ if (!hasSingleInstanceLock) {
     const fetchPdf = async (url) => readPdfResponse(await electronSession.fromPartition(BROWSER_PARTITION).fetch(url, { signal: AbortSignal.timeout(120000) }));
     const afterOpen = process.env.ENGELBART_WEB_PDFS === 'off' ? null
       : (ctx) => checkWebPdfs(ctx, { fetchPdf, inspectPdf, onChange: libraryChanged, log: (line) => console.warn(`[engelbart] ${line}`) });
-    store = createStore({ homeDir, fixturesDir: FIXTURES, inspectPdf, afterOpen });
+    store = createStore({ homeDir, fixturesDir: FIXTURES, inspectPdf, afterOpen,
+      repositoryGit: createGit({ gitPath: () => tools?.snapshot().tools.git.path || 'git' }),
+      repositoryBusy: async ({ projectId, roots, workspaceIds = [] }) => {
+        const ctx = await store.context();
+        // Bart answers and starts hold location-scoped leases until completion;
+        // navigation badges are not a reliable source of live process ownership.
+        return require('./store/repository-activity.cjs').busyReason({ projectId, roots, workspaceIds }, { terminals: manager.list(), previews: await localPreviews?.list(ctx) || [], builds });
+      },
+      repositoryRelocated: async ({ from, to }) => { localPreviews?.relocated?.(from, to); },
+    });
     // Git, Claude Code and Codex (src/main/tools): checked at every launch in the background and recorded in
     // config.json → tools; installed, updated and signed in to from the setup dialog. ENGELBART_TOOLS_FAKE (JSON)
     // pretends a machine and ENGELBART_TOOLS=off skips the launch check, for scripted runs only.
@@ -618,7 +659,7 @@ if (!hasSingleInstanceLock) {
       onChange: status => sendToRenderer('engelbart:zotero', status),
     });
     app.once('will-quit', () => zotero.close());
-    registerEngelbartIpc({
+    engelbartIpc = registerEngelbartIpc({
       zotero,
       overleaf,
       google,
@@ -638,8 +679,10 @@ if (!hasSingleInstanceLock) {
         electronShell.showItemInFolder(target);
         return true;
       },
+      openFolder: async target => { const error = await electronShell.openPath(target); if (error) throw new Error(error); return true; },
       writeClipboard: (text) => clipboard.writeText(text),
       bart,
+      readAnnotationContext: (tabId, note) => browserViews.annotationContext(tabId, note),
       localPreviews,
       sandbox,
       builds,
@@ -672,7 +715,10 @@ if (!hasSingleInstanceLock) {
       },
     });
     buildMenu();
-    electronSession.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+    electronSession.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) => {
+      // The recording player can expand the trusted app; captured pages cannot.
+      callback(permission === 'fullscreen' && contents === mainWindow?.webContents && details.isMainFrame === true && details.requestingUrl === APP_URL);
+    });
     createWindow();
     google.resume();
     zotero.resume();

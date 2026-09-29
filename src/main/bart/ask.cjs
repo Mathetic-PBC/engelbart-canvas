@@ -115,7 +115,12 @@ function createThreads({ idleMs = THREAD_IDLE_MS, setTimer = setTimeout, clearTi
     } catch { /* no file yet, or not ours: nothing to resume */ }
   }
   return {
-    take(key, provider) { const entry = held.get(key); drop(key); if (entry) save(); return entry && entry.provider === provider && entry.session ? entry : null; },
+    take(key, provider, location) {
+      const entry = held.get(key); drop(key); if (entry) save();
+      // Older saved entries have no location stamp and intentionally start a
+      // fresh session from the document rather than resuming with stale paths.
+      return entry && entry.provider === provider && entry.session && (location === undefined || entry.location === location) ? entry : null;
+    },
     keep(key, entry) { drop(key); arm(key, { ...entry, at: now() }, idleMs); save(); },
     forget(match = () => true) { for (const [key, entry] of [...held]) if (match(entry)) drop(key); save(); },
     size: () => held.size,
@@ -125,7 +130,7 @@ function createThreads({ idleMs = THREAD_IDLE_MS, setTimer = setTimeout, clearTi
 /** What a question is given: everything, for a new session; the question alone, for a session that already holds the rest. */
 function firstMessage({ context, prior, question, resumed }) {
   const asked = `<question>\n${question}\n</question>`;
-  const capability = `<build_capability>\n${BUILD_PROPOSAL_PROMPT}\n</build_capability>`;
+  const capability = context.textOnly ? '' : `<build_capability>\n${BUILD_PROPOSAL_PROMPT}\n</build_capability>`;
   if (resumed) return (level) => [level, capability, asked].join('\n\n');
   return (level) => [context.head, context.contextJson, context.documents, conversationBlock(prior), level, capability, asked].filter(Boolean).join('\n\n');
 }
@@ -187,7 +192,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
 
   // Every flag is a literal, every value arrives through the environment: nothing is quoted by hand.
   // `effort` is one of six known words (./question.cjs). `resume`: the id of a session to go on with.
-  function claudeTurns({ system, cwd, dirs, stem, signal, short, onUpdate, resume }) {
+  function claudeTurns({ system, cwd, dirs, stem, signal, short, onUpdate, resume, textOnly }) {
     const promptFile = `${stem}.system.md`;
     fs.writeFileSync(promptFile, system, { mode: 0o600 });
     const id = resume || randomUUID();
@@ -196,7 +201,8 @@ function createBart({ readModels, environment = process.env, runDirectory = path
       done: () => { try { fs.unlinkSync(promptFile); } catch { /* already gone */ } },
       turn: async ({ level, message, session }) => {
         fs.writeFileSync(`${stem}.input.txt`, message, { mode: 0o600 });
-        const command = `exec ${claudeSubscriptionCommand(program('claude'))} -p --output-format stream-json --verbose --include-partial-messages ${session ? '--resume' : '--session-id'} "$ENGELBART_BART_SESSION" --restricted --setting-sources "" --strict-mcp-config --tools "${CLAUDE_TOOLS}" --allowedTools "${CLAUDE_TOOLS}" ${grants} --model "$ENGELBART_BART_MODEL" --effort ${level.effort} --system-prompt-file "$ENGELBART_BART_PROMPT" < "$ENGELBART_BART_INPUT"`;
+        const allowed = textOnly ? '' : CLAUDE_TOOLS;
+        const command = `exec ${claudeSubscriptionCommand(program('claude'))} -p --output-format stream-json --verbose --include-partial-messages ${session ? '--resume' : '--session-id'} "$ENGELBART_BART_SESSION" --restricted --setting-sources "" --strict-mcp-config --tools "${allowed}" --allowedTools "${allowed}" ${grants} --model "$ENGELBART_BART_MODEL" --effort ${level.effort} --system-prompt-file "$ENGELBART_BART_PROMPT" < "$ENGELBART_BART_INPUT"`;
         const env = childEnvironment({ ...programEnv('claude'), ENGELBART_BART_SESSION: id, ENGELBART_BART_MODEL: level.model, ENGELBART_BART_PROMPT: promptFile, ENGELBART_BART_INPUT: `${stem}.input.txt`, ...Object.fromEntries(dirs.map((dir, n) => [`ENGELBART_BART_DIR${n}`, dir])) });
         const { stdout, failure } = await execute(command, cwd, env, signal, (event) => onUpdate(claudeUpdate(event, short)));
         if (stopped(signal)) throw new BartError('stopped', 'Stopped.');
@@ -208,18 +214,22 @@ function createBart({ readModels, environment = process.env, runDirectory = path
     };
   }
 
-  function codexTurns({ system, cwd, stem, signal, short, onUpdate }) {
+  function codexTurns({ system, cwd, stem, signal, short, onUpdate, textOnly }) {
     const source = codexAuthFile || path.join(environment.CODEX_HOME || path.join(os.homedir(), '.codex'), 'auth.json');
-    if (!prepareCodexHome({ codexHome, source, instructions: system })) throw new BartError('unavailable', 'Codex is not signed in with a ChatGPT account (run `codex login`). An API key is never used.');
+    const agentHome = textOnly ? path.join(codexHome, 'annotation') : codexHome;
+    if (!prepareCodexHome({ codexHome: agentHome, source, instructions: system })) throw new BartError('unavailable', 'Codex is not signed in with a ChatGPT account (run `codex login`). An API key is never used.');
     const outFile = `${stem}.out.txt`;
     return {
       done: () => { try { fs.unlinkSync(outFile); } catch { /* none */ } },
       turn: async ({ level, message, session }) => {
         fs.writeFileSync(`${stem}.input.txt`, message, { mode: 0o600 });
         try { fs.unlinkSync(outFile); } catch { /* none */ }
-        const shared = `--skip-git-repo-check -m "$ENGELBART_BART_MODEL" -c 'model_reasoning_effort="${level.effort}"' -c 'sandbox_mode="read-only"' -c 'tools.web_search=true' -c project_doc_max_bytes=0 --json -o "$ENGELBART_BART_OUTPUT" - < "$ENGELBART_BART_INPUT"`;
+        // Same text-only restrictions used by recording-title generation; the
+        // ordinary workspace agent keeps its existing read-only tools.
+        const flags = textOnly ? `--ignore-user-config --ignore-rules ${['shell_tool', 'unified_exec', 'apps', 'browser_use', 'computer_use', 'in_app_browser', 'image_generation', 'view_image', 'multi_agent', 'plugins', 'remote_plugin', 'skill_search', 'goals', 'sleep_tool', 'code_mode', 'code_mode_host'].map(name => `--disable ${name}`).join(' ')} -c 'web_search="disabled"'` : `-c 'tools.web_search=true'`;
+        const shared = `--skip-git-repo-check -m "$ENGELBART_BART_MODEL" -c 'model_reasoning_effort="${level.effort}"' -c 'sandbox_mode="read-only"' ${flags} -c project_doc_max_bytes=0 --json -o "$ENGELBART_BART_OUTPUT" - < "$ENGELBART_BART_INPUT"`;
         const command = session ? `exec ${program('codex')} exec resume "$ENGELBART_BART_SESSION" ${shared}` : `exec ${program('codex')} exec --color never ${shared}`;
-        const env = childEnvironment({ ...programEnv('codex'), CODEX_HOME: codexHome, ENGELBART_BART_SESSION: session || '', ENGELBART_BART_MODEL: level.model, ENGELBART_BART_OUTPUT: outFile, ENGELBART_BART_INPUT: `${stem}.input.txt` });
+        const env = childEnvironment({ ...programEnv('codex'), CODEX_HOME: agentHome, ENGELBART_BART_SESSION: session || '', ENGELBART_BART_MODEL: level.model, ENGELBART_BART_OUTPUT: outFile, ENGELBART_BART_INPUT: `${stem}.input.txt` });
         const { stdout, failure } = await execute(command, cwd, env, signal, (event) => onUpdate(codexUpdate(event, short)));
         if (stopped(signal)) throw new BartError('stopped', 'Stopped.');
         let text = '';
@@ -244,13 +254,16 @@ function createBart({ readModels, environment = process.env, runDirectory = path
    * line says after "@bart"; `choice` ({ model, effort }, from Regenerate's selector) overrules its flags
    * for this run without rewriting the line; `turns` are the earlier turns of the exchange, when there are any.
    */
-  async function ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice }, { onProgress } = {}) {
+  async function ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, repository, annotation }, { onProgress } = {}) {
     const models = readModels();
     const { question, provider, steps, pinned } = readQuestion(choice ? withChoice(text, models, choice) : text, models);
     if (!question) throw new BartError('failed', 'There is no question on the line.');
     const prior = cleanTurns(turns);
-    const held = prior.length ? threads.take(threadKey(projectId, ref, prior), provider) : null;
-    const context = await buildContext(ctx, projectId, { ref, workspaceId, askId });
+    const context = annotation ? require('./annotation-context.cjs').annotationContext(annotation) : await buildContext(ctx, projectId, { ref, workspaceId, askId, repository });
+    const executionKey = `${projectId}:${workspaceId}:${context.repository?.repoId}`;
+    // Annotation follow-ups always receive a fresh DOM snapshot and their saved
+    // conversation, never a resumed agent's stale page or workspace context.
+    const held = !annotation && prior.length ? threads.take(threadKey(executionKey, ref, prior), provider, context.location) : null;
     const cwd = path.join(runDirectory, projectId);
     fs.mkdirSync(cwd, { recursive: true, mode: 0o700 });
     const stem = path.join(cwd, `ask-${randomUUID()}`);
@@ -260,7 +273,8 @@ function createBart({ readModels, environment = process.env, runDirectory = path
     const once = async (session) => {
       let cli = null;
       try {
-        cli = (provider === 'anthropic' ? claudeTurns : codexTurns)({ system: loadSystemPrompt(ctx.dataRoot), cwd, dirs: context.dirs, stem, signal: controller.signal, short: pathLabeller(context.dirs), onUpdate: feed.take, resume: session });
+        if (controller.signal.aborted) throw new BartError('stopped', 'Stopped.');
+        cli = (provider === 'anthropic' ? claudeTurns : codexTurns)({ system: context.system || loadSystemPrompt(ctx.dataRoot), textOnly: context.textOnly, cwd, dirs: context.dirs, stem, signal: controller.signal, short: pathLabeller(context.dirs), onUpdate: feed.take, resume: session });
         return await climb({ steps, pinned, first: firstMessage({ context, prior, question, resumed: !!session }), session, turn: (input) => { feed.reset(); return cli.turn(input); }, onProgress });
       } finally { if (cli) cli.done(); }
     };
@@ -275,18 +289,18 @@ function createBart({ readModels, environment = process.env, runDirectory = path
         throw error;
       }
     };
-    if (tools) await tools.ensure(agent);
     try {
+      if (tools) await tools.ensure(agent);
       let out;
       // A session that will not resume (its file is gone, the CLI changed) is not the person's problem: start again from the document.
       try { out = await guarded(held ? held.session : null); } catch (error) { if (!held || error.kind === 'stopped') throw error; out = await guarded(null); }
-      const meta = { provider, level: { name: out.level.name, effort: out.level.effort, model: out.level.model }, trail: out.trail.map((step) => ({ name: step.name, effort: step.effort, why: step.why })), ms: out.ms, pinned };
-      const buildProposal = parseBuildProposal(out.text);
+      const meta = { provider, repository: context.repository ? require('./history.cjs').snapshot(context.repository) : null, level: { name: out.level.name, effort: out.level.effort, model: out.level.model }, trail: out.trail.map((step) => ({ name: step.name, effort: step.effort, why: step.why })), ms: out.ms, pinned };
+      const buildProposal = !annotation && parseBuildProposal(out.text);
       // A build's eventual answer differs from this routing result; do not keep
       // a resumable read-only session under text that never enters the document.
       if (buildProposal) return { buildProposal, meta };
       // Kept under what the document will say once this answer is in it: the next follow-up is found by that.
-      if (out.session) threads.keep(threadKey(projectId, ref, [...prior, { question: String(text).trim(), answer: answerText(out.text) }]), { provider, session: out.session, projectId, workspaceId });
+      if (!annotation && out.session) threads.keep(threadKey(executionKey, ref, [...prior, { question: String(text).trim(), answer: answerText(out.text) }]), { provider, session: out.session, projectId, workspaceId, location: context.location });
       return { lines: replyLines(out.text, meta), meta };
     } finally {
       feed.end();
@@ -308,19 +322,20 @@ function createBart({ readModels, environment = process.env, runDirectory = path
 function createFakeBart({ readModels, delayMs = 1200, threads = createThreads() }) {
   const waits = new Map();
   return {
-    async ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice }, { onProgress } = {}) {
+    async ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, repository, annotation }, { onProgress } = {}) {
       const models = readModels();
       const { question, provider, steps, pinned } = readQuestion(choice ? withChoice(text, models, choice) : text, models);
       const prior = cleanTurns(turns);
-      const held = prior.length ? threads.take(threadKey(projectId, ref, prior), provider) : null;
-      const context = await buildContext(ctx, projectId, { ref, workspaceId, askId });
+      const context = annotation ? require('./annotation-context.cjs').annotationContext(annotation) : await buildContext(ctx, projectId, { ref, workspaceId, askId, repository });
+      const executionKey = `${projectId}:${workspaceId}:${context.repository?.repoId}`;
+      const held = !annotation && prior.length ? threads.take(threadKey(executionKey, ref, prior), provider, context.location) : null;
       const message = firstMessage({ context, prior, question, resumed: !!held });
       const pause = (ms) => new Promise((resolve, reject) => { const timer = setTimeout(resolve, ms); waits.set(askId, () => { clearTimeout(timer); reject(new BartError('stopped', 'Stopped.')); }); });
       const feed = createFeed({ onProgress, intervalMs: 0 });
       // The same kinds of update a real run sends, spread over the delay: two things done, then the answer in pieces.
       const act = async (text) => {
         feed.reset();
-        for (const activity of ['Reading notes.md', 'Searching the web for “fake”']) { feed.take({ activity, log: true }); await pause(delayMs / 4); }
+        for (const activity of annotation ? ['Reading selected element', 'Thinking about this element'] : ['Reading notes.md', 'Searching the web for “fake”']) { feed.take({ activity, log: true }); await pause(delayMs / 4); }
         feed.take({ textStart: true });
         const pieces = text.match(/[\s\S]{1,24}/g) || [];
         for (const delta of pieces) { feed.take({ delta }); await pause(delayMs / 2 / pieces.length); }
@@ -333,8 +348,8 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads() 
           // What it was sent is what it reports: a resumed session gets the question alone, a new one gets everything.
           turn: async ({ message: sent }) => ({ session: 'fake', text: await act(/hard/.test(question) && /step 1 of/.test(sent) ? 'ESCALATE: the question says it is hard' : `FAKE ANSWER to "${question}".\n\n## Seen\n- **${context.documents.length}** characters of documents\n- \`${steps.length}\` steps${prior.length ? `\n- ${/<conversation>/.test(sent) ? `a new session, given ${prior.length} earlier ${prior.length === 1 ? 'turn' : 'turns'}` : /<engelbart>/.test(sent) ? 'a new session, given no earlier turns' : 'the same session, given the question alone'}` : ''}${/code/.test(question) ? `\n\nThe same as JSON:\n\n\`\`\`json\n{\n  "fake": true,\n  "steps": ${steps.length},\n  "note": "# not a heading"\n}\n\`\`\`` : ''}`) }),
         });
-        const meta = { provider, level: out.level, trail: out.trail, ms: out.ms, pinned };
-        threads.keep(threadKey(projectId, ref, [...prior, { question: String(text).trim(), answer: answerText(out.text) }]), { provider, session: out.session, projectId, workspaceId });
+        const meta = { provider, repository: context.repository ? require('./history.cjs').snapshot(context.repository) : null, level: out.level, trail: out.trail, ms: out.ms, pinned };
+        if (!annotation) threads.keep(threadKey(executionKey, ref, [...prior, { question: String(text).trim(), answer: answerText(out.text) }]), { provider, session: out.session, projectId, workspaceId, location: context.location });
         return { lines: replyLines(out.text, meta), meta };
       } finally { feed.end(); waits.delete(askId); }
     },

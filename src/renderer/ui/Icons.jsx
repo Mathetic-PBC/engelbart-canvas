@@ -109,10 +109,11 @@ export const LEAF = () => (
   </svg>
 );
 
-const WRITING = () => (
-  <svg viewBox="0 0 16 16" width={16} height={16} fill="none" stroke="currentColor" strokeWidth={1.35} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M7.3 6.6C4.2 6.6 2.2 8.5 2.2 11c0 2.1 1.5 3.5 3.4 3.5 2.4 0 4.1-2 4.1-4.2 0-1.8-1.1-3-2.8-3.3" />
-    <path d="M3.1 8.8C4 4.8 7.9 1.4 13.8 1.5c-1.9 2.8-4.4 3.9-7.9 3.9M5.9 5.4l5.5-2.5" />
+// Overleaf mark from the supplied engelbart-icons.jsx (Simple Icons).
+// Brand reference: https://www.overleaf.com/for/partners/logos
+export const OVERLEAF = ({ size = 12 }) => (
+  <svg viewBox="0 0 24 24" width={size} height={size} fill="currentColor" aria-hidden="true">
+    <path d="M22.3515.7484C19.1109-.5101 7.365-.982 7.3452 6.0266c-3.4272 2.194-5.6967 5.768-5.6967 9.598a8.373 8.373 0 0 0 13.1225 6.898 8.373 8.373 0 0 0-1.7668-14.7194c-.6062-.2339-1.9234-.6481-2.9753-.559-1.5007.9544-3.3308 2.9155-4.1949 4.8693 2.5894-3.082 7.5046-2.425 9.1937 1.2287 1.6892 3.6538-.9944 7.8237-5.0198 7.7998a5.4995 5.4995 0 0 1-4.1949-1.9328c-1.485-1.7483-1.8678-3.6444-1.5615-5.4975 1.057-6.4947 8.759-10.1894 14.486-11.6094-1.8677.989-5.2373 2.6134-7.5948 4.3837C18.015 9.1382 19.1308 3.345 22.3515.7484z" />
   </svg>
 );
 
@@ -155,7 +156,7 @@ export const KIND = {
   html: { glyph: <CODE />, label: 'html' },
   data: { glyph: <LAYERS />, label: 'data file' },
   chat: { glyph: <CHAT />, label: 'chat', fixed: true },
-  overleaf: { glyph: <WRITING />, label: 'Overleaf', fixed: true },
+  overleaf: { glyph: <OVERLEAF />, label: 'Overleaf', fixed: true },
   literature: { glyph: <LAYERS />, label: 'Literature', fixed: true },
   'google-docs': { glyph: <GOOGLE_DOCS />, label: 'Google Docs', fixed: true },
   task: { glyph: <TASK />, label: 'task', fixed: true },

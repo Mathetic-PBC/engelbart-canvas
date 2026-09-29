@@ -117,7 +117,32 @@ async function edit(ctx, input, id, value) {
   return mutate(ctx, input, id, note => ({ ...note, body: clean, updatedAt: new Date().toISOString() }));
 }
 async function remove(ctx, input, id) { return mutate(ctx, input, id, () => null); }
-async function restore(ctx) {
-  for (const project of await projects.listProjects(ctx)) await list(ctx, { projectId: project.id });
+async function beginReply(ctx, input, id, askId, question) {
+  if (!UUID.test(askId)) throw new TypeError('Invalid ask id');
+  const clean = question === undefined ? undefined : body(question);
+  return mutate(ctx, input, id, note => {
+    if (note.reply?.status === 'pending') throw new Error('Bart is already replying to this annotation.');
+    const now = new Date().toISOString();
+    const replyHistory = [...(note.replyHistory || []), ...(note.reply ? [note.reply] : [])];
+    return { ...note, updatedAt: now, replyHistory, reply: { askId, status: 'pending', question: clean ?? note.body, text: '', updatedAt: now } };
+  });
 }
-module.exports = { list, create, edit, remove, restore };
+async function finishReply(ctx, input, id, askId, result) {
+  const text = (result.lines || []).map(line => String(line).replace(/^bart(?:\+|\?)?> ?/, '')).join('\n').slice(0, 40000);
+  return mutate(ctx, input, id, note => {
+    if (note.reply?.askId !== askId || note.reply.status !== 'pending') return note;
+    const now = new Date().toISOString();
+    return { ...note, updatedAt: now, reply: { ...note.reply, text, status: result.stopped ? 'stopped' : result.failed ? 'error' : 'complete', updatedAt: now } };
+  });
+}
+async function restore(ctx) {
+  for (const project of await projects.listProjects(ctx)) await serial(ctx, async () => {
+    for (const { file, saved } of await bundles(ctx, project.id)) {
+      if (!saved.notes.some(note => note.reply?.status === 'pending')) continue;
+      saved.notes = saved.notes.map(note => note.reply?.status === 'pending'
+        ? { ...note, reply: { ...note.reply, status: 'interrupted', text: '', updatedAt: new Date().toISOString() } } : note);
+      write(file, saved);
+    }
+  });
+}
+module.exports = { list, create, edit, remove, beginReply, finishReply, restore };

@@ -234,9 +234,9 @@ function findProjectClone(ctx, url) {
   if (!key) return null;
   const home = fs.realpathSync(ctx.homeDir);
   for (const project of projects.projectRecords(ctx)) {
-    if (!project.directory) continue;
-    try {
-      const real = fs.realpathSync(project.directory);
+    const directories = [project.directory, ...Object.values(project.repositories || {}).filter(repo => !repo.archived).map(repo => path.resolve(project.dir, repo.location))].filter(Boolean);
+    for (const directory of directories) try {
+      const real = fs.realpathSync(directory);
       if (real.startsWith(home + path.sep) && repoKey(readCloneRemote(real)) === key) return real;
     } catch { /* not there, not a clone */ }
   }

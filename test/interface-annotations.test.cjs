@@ -86,8 +86,8 @@ test('notes survive fresh reads and preview host changes; projects/sites/PDF ink
   const layout = ensureHome(homeDir);
   const ctx = { homeDir, root: layout.root, dataRoot: layout.testRoot, libraryDb: await db.openLibraryDb(layout.testRoot) };
   try {
-    const project = await projects.createProject(ctx, { name: 'Browser notes', directory: homeDir });
-    const other = await projects.createProject(ctx, { name: 'Other notes', directory: homeDir });
+    const project = await projects.createProject(ctx, { name: 'Browser notes' });
+    const other = await projects.createProject(ctx, { name: 'Other notes' });
     const scope = { projectId: project.id, url: 'https://old.example/editor?token=private' };
     const repo = randomUUID();
     await ctx.libraryDb.insert({ id: repo, type: 'website', name: 'Repository', url: 'https://github.com/example/repo', tags: ['git'] });
@@ -273,4 +273,26 @@ test('cancelled commands do not reject after cleanup, renderer loss, disposal, o
       } finally { controller.dispose(); }
     });
   }
+});
+
+test('live context uses the isolated world without enabling markers and rejects a navigated snapshot', async () => {
+  let finish;
+  const calls = [];
+  const wc = Object.assign(new EventEmitter(), {
+    isDestroyed: () => false,
+    executeJavaScriptInIsolatedWorld: (world, scripts) => { calls.push({ world, code: scripts[0].code }); return new Promise(resolve => { finish = resolve; }); },
+  });
+  const controller = createAnnotations(wc, () => {});
+  try {
+    const first = controller.snapshot(picked);
+    assert.equal(calls[0].world, WORLD);
+    assert.match(calls[0].code, /__engelbartAnnotations\.snapshot\(/);
+    finish({ status: 'available', surroundingText: 'Save changes' });
+    assert.equal((await first).status, 'available');
+    const stale = controller.snapshot(picked);
+    wc.emit('did-start-navigation', {}, 'https://elsewhere.example/', false, true);
+    finish({ status: 'available', surroundingText: 'Wrong page' });
+    assert.equal((await stale).status, 'unavailable');
+    assert.equal(calls.length, 2, 'snapshot never starts overlay polling');
+  } finally { controller.dispose(); }
 });

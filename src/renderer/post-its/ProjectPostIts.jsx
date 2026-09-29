@@ -19,7 +19,7 @@ function blockingRects() {
 // moves a card aside while one of the app's menus or dialogs is open over it, reports a card being dragged (`onDrag`
 // { active, over, thrown }) to the sidebar's trash can, and hands on what main tells the workspace: a note to open
 // (`onOpenNote`), how many cards are in the trash (`onTrashCount`), and that main showed hidden cards again because one
-// was made or restored (`onShown`). `hidden` is the sidebar's show/hide toggle; it only changes what is drawn.
+// was made or restored (`onShown`). Optional `hidden` only changes what is drawn; cards are visible by default.
 export default function ProjectPostIts({ projectId, active, hidden, onError, onDrag, onOpenNote, onTrashCount, onShown }) {
   // Cards a covering panel is over, as pictures of themselves (main swaps the native card for its picture): drawn here,
   // under the panels (z-index 54; covering panels are 55 and up), where the cards are.

@@ -10,31 +10,59 @@ const { setTimeout: delay } = require('node:timers/promises');
 const { readRecipe, installKey } = require('../local-preview/files.cjs');
 const { createProcesses, ownsListener } = require('../local-preview/process.cjs');
 const { freePort } = require('../local-preview/manager.cjs');
+const { canonical } = require('../store/workspace-repositories.cjs');
+const { affectedBy } = require('../store/repository-activity.cjs');
 
 function createBuildPreviews({ verify, processes = createProcesses(), listener = ownsListener, readyTimeoutMs = 60_000 } = {}) {
   const reviews = new Map();
   const accepted = new Map();
   const pending = new Map();
   const installed = new Map();
+  const launching = new Set();
+  const stopping = new Set();
+  const listeners = new Set();
   let closing = false;
   const check = signal => { if (signal.aborted) throw Object.assign(new Error('Preview stopped.'), { kind: 'stopped' }); };
-  const publicPreview = held => held ? { mode: held.mode, status: held.server.exited ? 'stopped' : 'ready', url: held.server.exited ? null : held.url, revision: held.revision, directory: held.directory, name: held.recipe.name } : null;
+  const publicPreview = held => held ? { serverId: held.revision, mode: held.mode, status: held.server.exited || stopping.has(held) ? 'stopped' : 'ready', url: held.server.exited || stopping.has(held) ? null : held.url, revision: held.revision, directory: held.directory, name: held.recipe.name } : null;
   const acceptedDirectory = task => path.join(task.repo, path.relative(task.worktree, task.cwd));
+  const repositoryKey = task => canonical(task.repo);
+  const stoppedPreview = held => ({ ...publicPreview(held), status: 'stopped', url: null, replacesUrl: held.url, revision: randomUUID() });
+  function changed(previous, preview) {
+    for (const listener of listeners) listener({ previous: { ...publicPreview(previous), url: previous.url }, preview: { ...preview, replacesUrl: previous.url, background: true } });
+  }
+  function watch(held, map, key) {
+    held.server.done?.then(async () => {
+      if (map.get(key) !== held || stopping.has(held)) return; // replaced/explicitly stopped elsewhere
+      held.stopping = true;
+      await stopHeld(held); // reap any remaining children before worktree cleanup
+      if (map.get(key) !== held) return;
+      map.delete(key);
+      changed(held, stoppedPreview(held));
+    }).catch(error => console.warn('[build-preview] Could not reconcile stopped preview:', error.message));
+  }
 
   async function stopHeld(held) {
-    if (held) { held.controller.abort(); await held.server.stop(); }
+    if (!held) return;
+    stopping.add(held);
+    try { held.controller.abort(); await held.server.stop(); }
+    finally { stopping.delete(held); }
   }
   async function stopReview(id) {
     const running = pending.get(id);
     if (running) { running.controller.abort(); await running.done.catch(() => {}); }
     const held = reviews.get(id);
-    if (held) { await stopHeld(held); reviews.delete(id); }
+    if (held) {
+      await stopHeld(held);
+      if (reviews.get(id) === held) reviews.delete(id);
+    }
   }
 
   async function launch(task, directory, mode, signal, progress) {
     const recipe = readRecipe(directory);
     if (mode === 'review' && task.interfaceIntent && recipe.buildId !== task.id) throw new Error('The launch recipe was not updated for this Build. Ask the Build agent to finish it.');
     const cwd = path.join(directory, recipe.cwd);
+    const activity = { projectId: task.projectId, workspaceId: task.workspaceId, repositories: [task.repo], paths: [directory] };
+    launching.add(activity);
     const controller = new AbortController();
     const aborted = () => controller.abort();
     signal.addEventListener('abort', aborted, { once: true });
@@ -86,12 +114,12 @@ function createBuildPreviews({ verify, processes = createProcesses(), listener =
       await verify(url, { signal });
       check(signal);
       if (server.exited || !(await listener(server, port))) throw new Error('The preview server stopped during verification.');
-      return { taskId: task.id, projectId: task.projectId, directory, mode, recipe, url, revision: randomUUID(), server, controller };
+      return { taskId: task.id, projectId: task.projectId, workspaceId: task.workspaceId, repo: task.repo, directory, mode, recipe, url, revision: randomUUID(), server, controller };
     } catch (error) {
       controller.abort();
       if (server) await server.stop();
       throw error;
-    } finally { signal.removeEventListener('abort', aborted); }
+    } finally { launching.delete(activity); signal.removeEventListener('abort', aborted); }
   }
 
   async function review(task, { signal = new AbortController().signal, progress = () => {} } = {}) {
@@ -107,6 +135,7 @@ function createBuildPreviews({ verify, processes = createProcesses(), listener =
     try {
       const held = await done;
       reviews.set(task.id, held);
+      watch(held, reviews, task.id);
       return publicPreview(held);
     } finally { pending.delete(task.id); signal.removeEventListener('abort', aborted); }
   }
@@ -122,22 +151,24 @@ function createBuildPreviews({ verify, processes = createProcesses(), listener =
       const directory = acceptedDirectory(task);
       if (fs.existsSync(path.join(directory, 'engelbart-preview.json'))) {
         const held = await launch(task, directory, 'accepted', signal, () => {});
-        const previous = accepted.get(task.repo);
-        accepted.set(task.repo, held);
+        const key = repositoryKey(task), previous = accepted.get(key);
+        accepted.set(key, held);
+        watch(held, accepted, key);
         await stopHeld(previous);
         next = publicPreview(held);
+        if (previous) changed(previous, next);
       }
-    } catch (error) { next = { mode: 'accepted', status: 'failed', url: null, previousUrl: publicPreview(accepted.get(task.repo))?.url || null, error: error.message.slice(-2000), revision: randomUUID() }; }
+    } catch (error) { next = { mode: 'accepted', status: 'failed', url: null, previousUrl: publicPreview(accepted.get(repositoryKey(task)))?.url || null, error: error.message.slice(-2000), revision: randomUUID() }; }
     await stopReview(task.id);
     return next;
   }
   async function discard(task) {
     await stopReview(task.id);
-    return { ...(publicPreview(accepted.get(task.repo)) || {}), mode: 'restored', revision: randomUUID() };
+    return { ...(publicPreview(accepted.get(repositoryKey(task))) || {}), mode: 'restored', revision: randomUUID() };
   }
   async function open(task, options) {
     if (task.status === 'discarded') return null;
-    const held = publicPreview(task.status === 'accepted' ? accepted.get(task.repo) : reviews.get(task.id));
+    const held = publicPreview(task.status === 'accepted' ? accepted.get(repositoryKey(task)) : reviews.get(task.id));
     if (held?.status === 'ready') return held;
     return task.status === 'accepted' ? accept(task, options) : review(task, options);
   }
@@ -146,12 +177,32 @@ function createBuildPreviews({ verify, processes = createProcesses(), listener =
     try {
       for (const running of pending.values()) running.controller.abort();
       await Promise.all([...pending.values()].map(row => row.done.catch(() => {})));
-      await Promise.all([...reviews.values(), ...accepted.values()].map(stopHeld));
+      const held = [...reviews.values(), ...accepted.values()];
+      reviews.clear(); accepted.clear();
+      await Promise.all(held.map(async row => { await stopHeld(row); changed(row, stoppedPreview(row)); }));
       await processes.close();
       reviews.clear(); accepted.clear(); installed.clear();
     } finally { closing = false; }
   }
-  return { review, accept, discard, open, stopReview, close };
+  function busy(projectId, roots, workspaceIds = []) {
+    const scope = { projectId, roots, workspaceIds };
+    if ([...launching].some(activity => affectedBy(scope, activity))) return true;
+    return [...new Set([...reviews.values(), ...accepted.values(), ...stopping])].some(held =>
+      (!held.server.exited || held.stopping || stopping.has(held))
+      && affectedBy(scope, { projectId: held.projectId, workspaceId: held.workspaceId, repositories: [held.repo], paths: [held.directory] }));
+  }
+  async function stopTask(task, expectedId = null) {
+    // The card's preview identifies one server. A review never owns the shared
+    // accepted server merely because both were built in the same repository.
+    const shared = ['accepted', 'restored'].includes(task.preview?.mode);
+    const map = shared ? accepted : reviews, key = shared ? repositoryKey(task) : task.id;
+    const held = map.get(key);
+    if (!held || expectedId && expectedId !== held.revision || (task.preview?.serverId ? task.preview.serverId !== held.revision : task.preview?.url !== held.url)) return;
+    await stopHeld(held);
+    if (map.get(key) === held) map.delete(key);
+    changed(held, stoppedPreview(held));
+  }
+  return { review, accept, discard, open, stopReview, stopTask, close, busy, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } };
 }
 
 module.exports = { createBuildPreviews };

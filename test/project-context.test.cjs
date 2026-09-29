@@ -13,7 +13,7 @@ async function setup(t) {
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-shared-context-'));
   const store = createStore({ homeDir, fixturesDir: path.join(__dirname, '../fixtures') });
   const ctx = await store.context();
-  const project = await projects.createProject(ctx, { name: 'Shared sources', directory: homeDir });
+  const project = await projects.createProject(ctx, { name: 'Shared sources' });
   const a = await projects.createWorkspace(ctx, project.id, { name: 'A' });
   const b = await projects.createWorkspace(ctx, project.id, { name: 'B' });
   t.after(async () => { await store.close(); fs.rmSync(homeDir, { recursive: true, force: true }); });

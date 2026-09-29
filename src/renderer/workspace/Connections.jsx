@@ -137,7 +137,7 @@ export default function Connections({ onOpenChange, shut, compact = false }) {
   return <div data-rail-connections="1" style={{ flex: 1, minWidth: 0, display: 'flex', justifyContent: 'flex-end' }}>
     <button ref={triggerRef} type="button" className="hov-ink-wash" aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined}
       onClick={() => open ? close() : setAnchor(triggerRef.current.getBoundingClientRect())}
-      style={{ display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%', padding: compact ? '7px 2px 7px 8px' : '9px 2px 9px 8px', border: 0, borderRadius: 6, background: open ? '#f2f2f2' : 'transparent', cursor: 'pointer', textAlign: 'left', ...text(compact ? 13 : 14, open ? '#171717' : '#8f8f8f') }}>
+      style={{ position: 'relative', top: 4, display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%', padding: compact ? '7px 2px 7px 8px' : '9px 2px 9px 8px', border: 0, borderRadius: 6, background: open ? '#f2f2f2' : 'transparent', cursor: 'pointer', textAlign: 'left', ...text(compact ? 13 : 14, open ? '#171717' : '#8f8f8f') }}>
       <svg aria-hidden="true" width={compact ? 16 : 18} height={compact ? 16 : 18} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" style={{ flex: 'none' }}>
         <path d="M5.5 1.5v3M10.5 1.5v3M4 4.5h8v2a4 4 0 0 1-8 0zM8 10.5v2a2 2 0 0 1-2 2H4" />
       </svg>

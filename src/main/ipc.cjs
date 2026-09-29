@@ -10,6 +10,7 @@ const path = require('node:path');
 const home = require('./store/home.cjs');
 const db = require('./store/db.cjs');
 const projects = require('./store/projects.cjs');
+const repositories = require('./store/workspace-repositories.cjs');
 const library = require('./store/library.cjs');
 const interfaceAnnotations = require('./store/interface-annotations.cjs');
 const { expandDoc } = require('./context/expand-mentions.cjs');
@@ -52,7 +53,7 @@ function projectInput(value) {
 // `inspectPdf` (the app passes pdf-kind's) is how a pdf is read for whether it is a paper when a library is re-categorized.
 // `afterOpen(ctx)` runs each time a library is opened and ready, not awaited: background work that must not hold the
 // library back (the app checks for pdfs saved as links: store/web-pdfs.cjs).
-function createStore({ homeDir, fixturesDir, inspectPdf: readPdf = null, afterOpen = null }) {
+function createStore({ homeDir, fixturesDir, inspectPdf: readPdf = null, afterOpen = null, repositoryBusy = null, repositoryRelocated = null, repositoryGit = null }) {
   const layout = home.ensureHome(homeDir);
   // The app starts in normal mode now that the test controls are gone. Keep the old
   // test data intact; scripted tests can still opt in with setTestMode after opening.
@@ -75,7 +76,7 @@ function createStore({ homeDir, fixturesDir, inspectPdf: readPdf = null, afterOp
       home.ensureHome(homeDir);
       const dataRoot = current === 'test' ? layout.testRoot : layout.root;
       const libraryDb = await db.openLibraryDb(dataRoot);
-      const next = { homeDir, root: layout.root, dataRoot, mode: current, libraryDb };
+      const next = { homeDir, root: layout.root, dataRoot, mode: current, libraryDb, repositoryBusy, repositoryRelocated, repositoryGit };
       if (current === 'test') await library.seedIfEmpty(next, fixturesDir);
       // A library behind the category rules (converted from the old types, or from before a change of
       // rules) is brought up to them before anyone reads it: about 30 ms a pdf, once. Summaries are
@@ -121,18 +122,19 @@ function createStore({ homeDir, fixturesDir, inspectPdf: readPdf = null, afterOp
   return { layout, context, config: describe, setTestMode, resetTestData, close: closeAll };
 }
 
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, localPreviews = null, builds = null, tools = null, sandbox, readModels, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), readRepoReadme = createRepoReadmeReader(), github = null, google = null, zotero = null, overleaf = null, openGithubPage = () => {} }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, openFolder = revealItem, confirmReset, writeClipboard, bart, readAnnotationContext, localPreviews = null, builds = null, tools = null, sandbox, readModels, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), readRepoReadme = createRepoReadmeReader(), github = null, google = null, zotero = null, overleaf = null, openGithubPage = () => {} }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const withCtx = (fn) => async (...args) => fn(await store.context(), ...args);
   let changingMode = false;
   let additions = Promise.resolve();
+  const annotationAsks = require('./bart/annotation-asks.cjs').createAnnotationAsks({ bart, notify, readPageContext: readAnnotationContext });
 
   handle('config', () => store.config());
   handle('set-test-mode', async (value) => {
     if (typeof value !== 'boolean') throw new TypeError('testMode must be a boolean');
     if (changingMode) throw new Error('Data mode is already changing');
     changingMode = true;
-    try { await additions.catch(() => {}); await beforeContextChange(); await localPreviews?.close(); await builds?.stopAll(); await sandbox?.close(); return await store.setTestMode(value); }
+    try { await additions.catch(() => {}); await annotationAsks.stopAll(); await beforeContextChange(); await localPreviews?.close(); await builds?.stopAll(); await sandbox?.close(); return await store.setTestMode(value); }
     finally { changingMode = false; }
   });
   handle('reset-test-data', async () => {
@@ -141,6 +143,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     changingMode = true;
     try {
       await additions.catch(() => {});
+      await annotationAsks.stopAll();
       await beforeContextChange();
       await localPreviews?.close();
       await builds?.stopAll();
@@ -151,6 +154,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   });
 
   handle('last-open', withCtx((ctx) => projects.readLastOpen(ctx)));
+  handle('session-ui', withCtx(ctx => require('./store/session-ui.cjs').read(ctx)));
+  handle('save-session-ui', withCtx((ctx, patch) => require('./store/session-ui.cjs').write(ctx, patch)));
   handle('set-last-open', withCtx((ctx, value) => projects.writeLastOpen(ctx, value)));
   handle('views', withCtx((ctx, projectId) => projects.readViews(ctx, projectId)));
   handle('set-view', withCtx((ctx, projectId, workspaceId, view) => projects.writeView(ctx, projectId, workspaceId, view)));
@@ -216,8 +221,31 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('list-projects', withCtx((ctx) => projects.listProjects(ctx)));
   handle('create-project', withCtx((ctx, input) => projects.createProject(ctx, projectInput(input))));
   handle('create-project-with-welcome', withCtx((ctx, input) => projects.createProjectWithWelcome(ctx, projectInput(input))));
-  handle('rename-project', withCtx((ctx, id, name) => projects.renameProject(ctx, str(id, 'project id', 64), str(name, 'name'))));
+  handle('rename-project', withCtx(async (ctx, id, name) => {
+    const result = await projects.renameProject(ctx, str(id, 'project id', 64), str(name, 'name'));
+    notify('engelbart:repository-changed', { projectId: id });
+    notify('engelbart:library-changed', {});
+    return result;
+  }));
   handle('load-project', withCtx((ctx, id) => projects.loadProject(ctx, str(id, 'project id', 64))));
+  handle('workspace-repository', withCtx(async (ctx, pid, wid) => { await repositories.ensure(ctx, pid); return repositories.describe(ctx, pid, wid); }));
+  handle('connect-workspace-repository', withCtx(async (ctx, pid, wid, input = {}) => {
+    await repositories.ensure(ctx, str(pid, 'project id', 64));
+    const result = await repositories.connect(ctx, pid, str(wid, 'workspace id', 64), { repoId: optStr(input.repoId, 'repository id', 64), directory: optStr(input.directory, 'directory', 4096), createDefault: input.createDefault === true, useProjectDefault: input.useProjectDefault === true });
+    notify('engelbart:repository-changed', { projectId: pid, workspaceId: wid });
+    notify('engelbart:library-changed', {});
+    return result;
+  }));
+  handle('set-project-default-repository', withCtx(async (ctx, pid, input = {}) => {
+    await repositories.ensure(ctx, str(pid, 'project id', 64));
+    const result = await repositories.setDefault(ctx, pid, { repoId: optStr(input.repoId, 'repository id', 64), directory: optStr(input.directory, 'directory', 4096), createDefault: input.createDefault === true });
+    notify('engelbart:repository-changed', { projectId: pid });
+    notify('engelbart:library-changed', {});
+    return result;
+  }));
+  handle('open-workspace-repository', withCtx(async (ctx, pid, wid) => { const repo = repositories.resolve(ctx, pid, wid); await openFolder(repo.directory); return true; }));
+  handle('move-workspace', withCtx((ctx, pid, wid, parentId) => projects.moveWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), optStr(parentId, 'parent id', 64))));
+  handle('restore-workspace', withCtx((ctx, pid, wid) => projects.restoreWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64))));
 
   handle('set-project-directory', withCtx((ctx, id, directory) => projects.setProjectDirectory(ctx, str(id, 'project id', 64), str(directory, 'directory', 4096))));
 
@@ -225,7 +253,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('create-workspace', withCtx(async (ctx, pid, input) => {
     const value = input && typeof input === 'object' ? input : {};
     const projectId = str(pid, 'project id', 64);
-    const created = await projects.createWorkspace(ctx, projectId, { name: optStr(value.name, 'name'), parentId: optStr(value.parentId, 'parent id', 64) });
+    const created = await projects.createWorkspace(ctx, projectId, { name: optStr(value.name, 'name'), parentId: optStr(value.parentId, 'parent id', 64), repoId: optStr(value.repoId, 'repository id', 64), directory: optStr(value.directory, 'directory', 4096), createDefault: value.createDefault === true });
     projects.recordEdit(ctx, projectId, created.id);
     navChanged();
     return created;
@@ -233,10 +261,6 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('rename-workspace', withCtx((ctx, pid, wid, name) => projects.renameWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(name, 'name'))));
   handle('set-workspace-status', withCtx((ctx, pid, wid, status) => projects.setWorkspaceStatus(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(status, 'status', 24))));
   handle('delete-workspace', withCtx(async (ctx, pid, wid) => {
-    if (localPreviews) {
-      const { workspace } = projects.findWorkspace(ctx, pid, wid);
-      for (const id of [workspace.id, ...projects.flattenWorkspaces(workspace.dir).map(child => child.id)]) await localPreviews.stop(ctx, pid, id);
-    }
     const result = await projects.deleteWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64));
     navChanged();
     return result;
@@ -300,13 +324,14 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
 
   // @bart: the answer comes back as draft lines for the document. A run that fails answers too, so
   // the question line never stays locked behind a pending line; only Stop returns nothing to place.
-  handle('ask-bart', withCtx(async (ctx, pid, input) => {
+  const askBart = async (ctx, pid, input) => {
     const value = input && typeof input === 'object' ? input : {};
     const askId = str(value.askId, 'ask id', 64);
     if (!/^[\w-]+$/.test(askId)) throw new TypeError('ask id is invalid');
     // Keeping the agent's row is bookkeeping: it never stands between a question and its answer.
     const track = (change) => { try { change(); navChanged(); return true; } catch { return false; } };
-    let started = false;
+    let started = false, releaseRepository = null, recorded = false;
+    const history = require('./bart/history.cjs');
     try {
       // `turns`: the earlier turns of the exchange this question continues, read from the document. `choice`: Regenerate's selector.
       const turns = (Array.isArray(value.turns) ? value.turns : []).slice(-40).map((turn) => ({ question: str(turn && turn.question, 'earlier question', 8000), answer: str(turn && turn.answer, 'earlier answer', 40000) }));
@@ -314,6 +339,12 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       if (choice && !/^[a-z][a-z0-9]*$/.test(choice.model + choice.effort)) throw new TypeError('choice is invalid');
       const question = { askId, ref: docRef(value.ref), workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice };
       if (changingMode) throw new Error('Data mode is changing. Try again when it finishes.');
+      await repositories.ensure(ctx, str(pid, 'project id', 64));
+      const contextRows = await ctx.libraryDb.list();
+      question.repository = repositories.resolve(ctx, pid, question.workspaceId);
+      const contextPaths = require('./bart/context.cjs').catalogEntries(projects.findProject(ctx, pid), contextRows, new Set()).map(entry => entry.path).filter(Boolean);
+      releaseRepository = repositories.lease(ctx, pid, question.repository.directory, { workspaceId: question.workspaceId, paths: contextPaths });
+      history.begin(ctx, pid, question, question.repository); recorded = true;
       const building = require('./bart/question.cjs').readFlags(question.text, readModels()).build;
       if (building && !localPreviews) throw new Error('Local interface builds are not available.');
       // The ask is an agent of its workspace: running now, waiting for you once its answer (or failure) has landed.
@@ -327,17 +358,20 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
         out = await localPreviews.build(ctx, projectId, { ...question, buildRequest: out.buildProposal.request }, options);
       }
       if (started) track(() => projects.agentFinished(ctx, askId));
+      history.finish(ctx, pid, askId, out.build ? 'build' : 'answered');
       return out;
     } catch (error) {
       const stopped = !!(error && error.kind === 'stopped');
       if (started) track(() => (stopped ? projects.agentStopped(ctx, askId) : projects.agentFinished(ctx, askId)));
+      if (recorded) history.finish(ctx, pid, askId, stopped ? 'stopped' : 'failed');
       if (stopped) return { stopped: true };
       return { failed: true, lines: failureLines(error && error.message) };
-    }
-  }));
+    } finally { releaseRepository?.(); }
+  };
+  handle('ask-bart', withCtx(askBart));
   handle('stop-bart', (askId) => {
     const id = str(askId, 'ask id', 64);
-    return localPreviews?.stopAsk(id) || bart.stop(id);
+    return annotationAsks.stop(id) || localPreviews?.stopAsk(id) || bart.stop(id);
   });
   const local = () => { if (!localPreviews) throw new Error('Local previews are not available.'); return localPreviews; };
   handle('local-preview-list', withCtx(ctx => local().list(ctx)));
@@ -372,13 +406,15 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     const b = () => builds;
     const pidOf = (pid) => str(pid, 'project id', 64);
     handle('build-models', () => buildChoices(readModels()));
-    handle('build-preflight', withCtx((ctx, pid) => b().preflight(ctx, pidOf(pid))));
-    handle('build-init', withCtx((ctx, pid) => b().initRepository(ctx, pidOf(pid))));
+    handle('build-stop-preview', withCtx((ctx, pid, id, serverId = null) => b().stopPreview(ctx, pidOf(pid), buildId(id), serverId == null ? null : str(serverId, 'preview server id', 64))));
+    handle('build-preflight', withCtx((ctx, pid, wid) => b().preflight(ctx, pidOf(pid), optStr(wid, 'workspace id', 64))));
+    handle('build-init', withCtx((ctx, pid, wid) => b().initRepository(ctx, pidOf(pid), str(wid, 'workspace id', 64))));
     handle('build-start', withCtx((ctx, pid, input) => {
       const value = input && typeof input === 'object' ? input : {};
       return b().start(ctx, pidOf(pid), {
         kind: value.kind === 'quick' ? 'quick' : 'build',
         workspaceId: optStr(value.workspaceId, 'workspace id', 64),
+        expectedRepoId: optStr(value.expectedRepoId, 'expected repository id', 64),
         postItId: optStr(value.postItId, 'post-it id', 64),
         text: optStr(value.text, 'text', 200000),
         provider: optStr(value.provider, 'provider', 24),
@@ -416,7 +452,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('resolve-page-file', withCtx((ctx, pid, input) => projects.resolvePageFile(ctx, str(pid, 'project id', 64), str(input, 'path', 4096))));
   handle('read-text-file', withCtx((ctx, pid, input) => projects.readProjectTextFile(ctx, str(pid, 'project id', 64), str(input, 'path', 4096))));
   // The Stage: what is at a path, and what drawing it needs (a pdf's bytes, a picture's, text, a page's address).
-  handle('stage-file', withCtx((ctx, pid, input) => projects.readStageFile(ctx, str(pid, 'project id', 64), str(input, 'path', 4096))));
+  handle('stage-file', withCtx((ctx, pid, input, wid) => projects.readStageFile(ctx, str(pid, 'project id', 64), str(input, 'path', 4096), optStr(wid, 'workspace id', 64))));
   handle('library', withCtx((ctx) => library.listLibrary(ctx)));
   // Both directions of "who holds what", derived from the workspaces on disk (no join table).
   handle('projects-for-library-item', withCtx((ctx, id) => library.projectsForLibraryItem(ctx, str(id, 'library id', 64))));
@@ -494,7 +530,17 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       const note = await projects.renameNote(ctx, row.project_id, row.id, str(name, 'name'));
       return ctx.libraryDb.get(note.id);
     }
-    return ctx.libraryDb.rename(row.id, str(name, 'name'));
+    const renamed = await ctx.libraryDb.rename(row.id, str(name, 'name'));
+    // Custom labels on generated repositories opt out immediately, including
+    // in already-mounted Code context / Build in selectors.
+    for (const project of projects.projectRecords(ctx)) {
+      if (!Object.values(project.repositories).some(repo => repo.libraryId === row.id && repo.managed)) continue;
+      await repositories.syncProjectRepositoryNames(ctx, project);
+      notify('engelbart:repository-changed', { projectId: project.id });
+    }
+    await require('./context/catalog.cjs').writeCatalogs(ctx);
+    notify('engelbart:library-changed', {});
+    return renamed;
   }));
   handle('read-library-file', withCtx((ctx, id) => library.readLibraryFile(ctx, str(id, 'library id', 64))));
   handle('read-annotations', withCtx((ctx, id) => library.readAnnotations(ctx, str(id, 'library id', 64))));
@@ -507,6 +553,18 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('create-interface-annotation', annotationChange((ctx, scope, note) => interfaceAnnotations.create(ctx, scope, note)));
   handle('edit-interface-annotation', annotationChange((ctx, scope, id, body) => interfaceAnnotations.edit(ctx, scope, str(id, 'annotation id', 64), body)));
   handle('delete-interface-annotation', annotationChange((ctx, scope, id) => interfaceAnnotations.remove(ctx, scope, str(id, 'annotation id', 64))));
+  handle('ask-interface-annotation', withCtx(async (ctx, input, id, askId, question) => {
+    const scope = { projectId: str(input?.projectId, 'project id', 64) };
+    const workspaceId = str(input?.workspaceId, 'workspace id', 64);
+    const tabId = optStr(input?.tabId, 'tab id', 128);
+    projects.findWorkspace(ctx, scope.projectId, workspaceId);
+    if (changingMode) throw new Error('Data mode is changing. Try again when it finishes.');
+    const note = await interfaceAnnotations.beginReply(ctx, scope, str(id, 'annotation id', 64), askId, question);
+    annotationAsks.start(ctx, scope.projectId, workspaceId, note, tabId);
+    notify('engelbart:library-changed', {});
+    return note;
+  }));
+  handle('annotation-reply-progress', (pid, id, askId) => annotationAsks.get(str(pid, 'project id', 64), str(id, 'annotation id', 64), str(askId, 'ask id', 64)));
   handle('write-annotations', withCtx((ctx, id, value) => library.writeAnnotations(ctx, str(id, 'library id', 64), value)));
   // Ink on a pdf in the Browser pane, by its address (a link, or a file: address inside the home directory).
   handle('read-page-annotations', withCtx((ctx, input) => library.readPageAnnotations(ctx, str(input, 'address', 8192))));
@@ -535,6 +593,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     if (!value.startsWith(store.layout.root + path.sep) && value !== store.layout.root) throw new Error('Only paths inside ~/.engelbart can be revealed');
     return revealItem(value);
   });
+  return { stopAnnotationAsks: () => annotationAsks.stopAll() };
 }
 
 module.exports = { createStore, registerEngelbartIpc };

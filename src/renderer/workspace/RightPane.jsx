@@ -10,11 +10,11 @@ export const RIGHT_MODES = [
   { id: 'terminal', label: 'Terminal' },
 ];
 
-const RightPane = React.forwardRef(function RightPane({ mode, projectDir, projectId, terminalRequest, onActiveTerminal, full, onFull, onShowStage, onPage, onFront, onAskAnnotation, save, library, inRail, onError, style }, stageRef) {
+const RightPane = React.forwardRef(function RightPane({ mode, projectDir, projectId, workspaceId, terminalRequest, onActiveTerminal, full, onFull, onShowStage, onPage, onFront, onAskAnnotation, save, library, inRail, onError, style }, stageRef) {
   return (
     <section aria-label="Right pane" style={style}>
-      <Stage ref={stageRef} projectId={projectId} visible={mode === 'stage'} full={full} onFull={onFull} onShow={onShowStage} onPage={onPage} onFront={onFront} onAskAnnotation={onAskAnnotation} save={save} library={library} inRail={inRail} onError={onError} />
-      <TerminalPane cwd={projectDir} projectId={projectId} visible={mode === 'terminal'} requestedSession={terminalRequest} onActiveSession={onActiveTerminal} />
+      <Stage ref={stageRef} projectId={projectId} workspaceId={workspaceId} visible={mode === 'stage'} full={full} onFull={onFull} onShow={onShowStage} onPage={onPage} onFront={onFront} onAskAnnotation={onAskAnnotation} save={save} library={library} inRail={inRail} onError={onError} />
+      <TerminalPane cwd={projectDir} projectId={projectId} workspaceId={workspaceId} visible={mode === 'terminal'} requestedSession={terminalRequest} onActiveSession={onActiveTerminal} />
     </section>
   );
 });

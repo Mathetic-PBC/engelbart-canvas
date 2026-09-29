@@ -27,6 +27,11 @@ for (const root of roots) {
     if (!entry.isDirectory() || entry.name.startsWith('.') || !fs.existsSync(path.join(dir, 'project.json'))) continue;
     const report = migrateProjectDir(dir, { dryRun });
     if (!report) { console.log(`ok       ${dir} (already workspaces)`); continue; }
+    if (report.deferred) {
+      console.log(`deferred ${dir} (open this project in Engelbart to finish its safe workspace migration)`);
+      for (const conflict of report.conflicts) console.log(`           ${conflict.message}`);
+      continue;
+    }
     converted += 1;
     console.log(`${dryRun ? 'would    ' : 'converted'} ${dir}`);
     for (const move of report.moved) console.log(`           ${move.from}  →  ${move.to}`);

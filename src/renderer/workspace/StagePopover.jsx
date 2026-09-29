@@ -20,6 +20,22 @@ export function annotationListPosition(slot) {
   return { left: slot.right - width - 8, top: slot.top + 8, width, maxHeight: Math.max(0, Math.min(420, slot.height - 16)) };
 }
 
+export function annotationChatPosition(bounds, slot, popup) {
+  const gap = 8, position = annotationPosition(bounds, slot, popup);
+  const sy = slot.height / bounds.viewportHeight;
+  const targetTop = slot.top + bounds.y * sy, below = targetTop + bounds.h * sy + gap;
+  const belowSpace = Math.max(0, slot.bottom - gap - below), aboveSpace = Math.max(0, targetTop - slot.top - gap * 2);
+  if (Math.max(belowSpace, aboveSpace) < 160) {
+    const maxHeight = Math.max(0, Math.min(420, slot.height - gap * 2));
+    return { ...position, top: Math.max(slot.top + gap, Math.min(below, slot.bottom - gap - Math.min(popup.height, maxHeight))), maxHeight };
+  }
+  // Choose a side from available space, not message height, so a reply never
+  // sends the conversation jumping between the top and bottom of the element.
+  const after = belowSpace >= Math.min(220, slot.height / 2) || belowSpace >= aboveSpace;
+  const maxHeight = Math.min(420, after ? belowSpace : aboveSpace, slot.height - gap * 2);
+  return { ...position, top: Math.max(slot.top + gap, after ? below : targetTop - gap - Math.min(popup.height, maxHeight)), maxHeight: Math.max(0, maxHeight) };
+}
+
 // Reuse Stage's existing data-overlay/snapshot mechanism; note text never enters
 // the website. Browsing, reading and composing all leave the page full width.
 export default function StagePopover({ bounds, slotRef, surfaceRef, children, onKeyDown, onDismiss, name, kind = 'browser', focusKey, className = '', ...rest }) {
@@ -30,7 +46,7 @@ export default function StagePopover({ bounds, slotRef, surfaceRef, children, on
     const place = () => {
       if (!slot || !ref.current) return;
       const box = slot.getBoundingClientRect();
-      const next = bounds ? annotationPosition(bounds, box, ref.current.getBoundingClientRect()) : annotationListPosition(box);
+      const next = bounds ? (kind === 'chat' ? annotationChatPosition : annotationPosition)(bounds, box, ref.current.getBoundingClientRect()) : annotationListPosition(box);
       if (kind !== 'composer') next.maxHeight = Math.min(420, next.maxHeight);
       setPosition((old) => old && Object.keys(next).every((key) => old[key] === next[key]) ? old : next);
     };
@@ -42,7 +58,7 @@ export default function StagePopover({ bounds, slotRef, surfaceRef, children, on
   React.useEffect(() => {
     if (position && ref.current) {
       ref.current.scrollTop = 0;
-      ref.current.querySelector('textarea, [data-popover-heading] button')?.focus({ preventScroll: true });
+      (ref.current.querySelector('textarea') || ref.current.querySelector('[data-popover-heading] button'))?.focus({ preventScroll: true });
     }
   }, [!!position, focusKey]);
   React.useEffect(() => {
@@ -56,4 +72,3 @@ export default function StagePopover({ bounds, slotRef, surfaceRef, children, on
   return createPortal(<div ref={ref} role="dialog" aria-label={name} data-overlay="1" className={`stage-popover ${className}`} {...rest}
     style={{ ...position, visibility: position ? 'visible' : 'hidden' }} onKeyDown={onKeyDown}>{children}</div>, document.body);
 }
-

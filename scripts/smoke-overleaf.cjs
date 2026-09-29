@@ -12,6 +12,7 @@ const { createOverleafBrowser } = require('../src/main/overleaf/browser-connecti
 const { createOverleafReader } = require('../src/main/overleaf/browser-reader.cjs');
 const { PARTITION } = require('../src/main/browser/views.cjs');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-overleaf-ui-'));
+require('node:child_process').execFileSync('git', ['init', '--quiet', root]);
 const external = [], requests = [];
 let phase = 'startup';
 setTimeout(() => { console.error(`Smoke test stalled: ${phase}`); console.error('Artifacts:', root); app.exit(1); }, 60000).unref();
@@ -74,7 +75,7 @@ const server = http.createServer((req, res) => {
     const entry = '[data-rail-connections] button', action = name => `[data-overleaf-action="${name}"]`;
     const browse = async () => {
       if (await js(wc, '!!document.querySelector("[data-connections-panel]")')) await click(wc, '[aria-label="Close connections"]');
-      if (!await js(wc, '!!document.querySelector("[data-source-browser=overleaf]")')) await click(wc, '[data-browse-source=overleaf]');
+      if (!await js(wc, '!!document.querySelector("[data-projects-list=overleaf]")')) await click(wc, '[data-projects-toggle=overleaf]');
     };
     const refresh = async () => {
       await click(wc, entry); await click(wc, '[data-overleaf-actions]');
@@ -124,13 +125,13 @@ const server = http.createServer((req, res) => {
     assert.equal(restored.status().account.email, email);
     assert.equal((await restored.projects()).projects.length, 35);
     assert.equal((await restored.projects(true)).projects.length, 35); restored.close();
-    assert.equal(await js(wc, '!!document.querySelector("[data-source-browser=overleaf] [data-overleaf-project] [data-document-provider=overleaf]")'), true, 'Overleaf projects appear with their provider icon under Overleaf');
+    assert.equal(await js(wc, '!!document.querySelector("[data-projects-list=overleaf] [data-overleaf-project] [data-document-provider=overleaf]")'), true, 'Overleaf projects appear with their provider icon under Overleaf');
     await click(wc, '[data-rail-section-toggle=Overleaf]'); wc.reload();
     await until(() => js(wc, '!!document.querySelector("[data-rail-section-toggle=Overleaf]")').catch(() => false), 'restored sidebar');
     assert.equal(await js(wc, 'document.querySelector("[data-rail-section-toggle=Overleaf]").getAttribute("aria-expanded")'), 'false');
     await click(wc, '[data-rail-section-toggle=Overleaf]'); await browse(); await until(async () => await count() === 35, 'metadata after reload');
-    await click(wc, '[data-rail-section-toggle=Workspaces]');
-    await click(wc, `[data-rail-row="${second.id}"]`);
+    await click(wc, '[aria-label="Switch workspace"]');
+    await click(wc, `[data-workspace-item="${second.id}"]`);
     await until(() => js(wc, 'document.querySelector("[data-workspace-header]")?.textContent.includes("Second workspace")'), 'workspace switch');
     await browse();
     await until(async () => await count() === 35, 'projects across workspaces');

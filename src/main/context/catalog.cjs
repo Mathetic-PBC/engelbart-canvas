@@ -41,12 +41,13 @@ function entryFor(row, project, referencedBy) {
 function buildCatalog(project, workspaces, rows, generated) {
   const referencedBy = projects.referencedBy(workspaces);
   return {
-    version: 2, // 2: `type` became the format and `tags` arrived (2026-09-21)
+    version: 4, // project default + optional workspace override, separate from attachments
     about: ABOUT,
     generated,
-    project: { id: project.id, name: project.name, root: project.dir, directory: project.directory || null },
-    workspaces: workspaces.map((workspace) => ({ id: workspace.id, name: workspace.name, path: workspace.path, document: `${workspace.path}/workspace.md`, chars: workspace.chars ?? null })),
-    entries: rows.filter((row) => projects.holds(project, referencedBy, row)).map((row) => entryFor(row, project, referencedBy)),
+    project: { id: project.id, name: project.name, root: project.dir, directory: project.directory || null, defaultRepoId: project.defaultRepoId || null },
+    workspaces: workspaces.map((workspace) => ({ id: workspace.id, repoId: workspace.repoId || null, resolvedRepoId: workspace.repoId || (workspace.repositoryIssue ? null : project.defaultRepoId) || null, inherited: !workspace.repoId, name: workspace.name, path: workspace.path, document: `${workspace.path}/workspace.md`, chars: workspace.chars ?? null })),
+    repositories: Object.values(project.repositories || {}).map(repo => ({ ...repo, isProjectDefault: repo.id === project.defaultRepoId, workspaces: workspaces.filter(workspace => (workspace.repoId || (!workspace.repositoryIssue && project.defaultRepoId)) === repo.id).map(workspace => ({ id: workspace.id, path: workspace.path, inherited: !workspace.repoId })) })),
+    entries: rows.filter((row) => projects.holds(project, referencedBy, row) || Object.values(project.repositories || {}).some(repo => repo.libraryId === row.id)).map((row) => entryFor(row, project, referencedBy)),
   };
 }
 
@@ -55,6 +56,9 @@ async function writeCatalogs(ctx, { now = () => new Date() } = {}) {
   const rows = await ctx.libraryDb.list();
   const written = [];
   for (const project of projects.projectRecords(ctx)) {
+    // A prior catalog can be evidence that a reserved-name folder was a real
+    // workspace. Do not erase that evidence while its ownership is unresolved.
+    if (require('../store/code-workspaces.cjs').inspect(project.dir).conflicts.length) continue;
     const catalog = buildCatalog(project, projects.flattenWorkspaces(project.dir), rows, now().toISOString());
     const dir = path.join(project.dir, '.context');
     const file = path.join(dir, 'catalog.json');

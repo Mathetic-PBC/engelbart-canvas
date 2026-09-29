@@ -217,8 +217,9 @@ let workspace;
 test.before(async () => {
   ctx = { homeDir, root: layout.root, dataRoot: layout.root, libraryDb: await db.openLibraryDb(layout.root) };
   const code = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-bart-code-'));
-  project = await projects.createProject(ctx, { name: 'Asking', directory: code });
+  project = await projects.createProject(ctx, { name: 'Asking' });
   workspace = await projects.createWorkspace(ctx, project.id, { name: 'Agents' });
+  project.directory = require('../src/main/store/workspace-repositories.cjs').resolve(ctx, project.id, workspace.id).directory; // expected code context, not project metadata
 });
 test.after(async () => { await db.closeAll(); });
 
@@ -231,10 +232,10 @@ test('context from a workspace: the document with mentions in place, and Context
   await projects.createNote(ctx, project.id, { name: 'Unrelated', text: 'not mentioned' });
   await projects.writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id }, 'See @[Plan].\n@bart why?\nbart~> a1\n');
   const context = await buildContext(ctx, project.id, { ref: { kind: 'workspace', workspaceId: workspace.id }, workspaceId: workspace.id, askId: 'a1' });
-  assert.match(context.head, /^<engelbart>\nproject: Asking\ncode directory: .+\nnotes and workspaces: .+\nasked from: the workspace "Agents"\n<\/engelbart>$/);
+  assert.match(context.head, /^<engelbart>\nproject: Asking\ncode directory: .+\nrepository ID: .+\nnotes and workspaces: .+\nworkspace directory: .+\nasked from: the workspace "Agents"\n<\/engelbart>$/);
   assert.match(context.documents, /^<workspace name="Agents">\nSee @\[Plan\]\.\n\n<file name="Plan" type="md" tags="note" path="[^"]+">\nthe plan\n<\/file>\n\n@bart why\?\n<<< this is the question being asked now >>>\n<\/workspace>$/);
   const entries = JSON.parse(context.contextJson.replace(/^<context_json>\n|\n<\/context_json>$/g, ''));
-  assert.deepEqual(entries.map((entry) => [entry.name, entry.mentioned]).sort(), [['Plan', true], ['Unrelated', false]]);
+  assert.deepEqual(entries.map((entry) => [entry.name, entry.mentioned]).sort(), [['Asking', false], ['Plan', true], ['Unrelated', false]]);
   assert.equal(entries.find((entry) => entry.name === 'Plan').path, (await ctx.libraryDb.get(plan.id)).path);
   assert.deepEqual(context.dirs, [project.directory, ctx.dataRoot]);
 });
@@ -259,7 +260,7 @@ test('the fake agent (scripted runs) answers through the same loop, moves up on 
   assert.ok(previews.every((text) => !/ESCALATE/.test(text)), 'a request to move up is never shown as an answer');
   assert.equal(out.lines[0], 'bart> FAKE ANSWER to "a hard one".');
   assert.equal(out.lines[out.lines.length - 1].startsWith('bart> *Sol · high · '), true);
-  assert.match(out.lines[out.lines.length - 1], /moved up from Sol medium\*$/);
+  assert.match(out.lines[out.lines.length - 1], /moved up from Sol medium · code: Asking\*$/);
   const slow = createFakeBart({ readModels: () => MODELS, delayMs: 5000 });
   const waiting = slow.ask(ctx, project.id, { askId: 'f2', ref, workspaceId: workspace.id, text: 'q' });
   setTimeout(() => slow.stop('f2'), 20);

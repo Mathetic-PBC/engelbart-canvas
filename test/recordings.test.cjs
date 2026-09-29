@@ -20,7 +20,7 @@ async function setup(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'engelbart-recordings-test-'));
   const store = createStore({ homeDir: root, fixturesDir: path.join(__dirname, '../fixtures') });
   const ctx = await store.context();
-  const project = await projects.createProject(ctx, { name: 'Recordings', directory: root });
+  const project = await projects.createProject(ctx, { name: 'Recordings' });
   t.after(async () => { await store.close(); await fs.rm(root, { recursive: true, force: true }); });
   return { ctx, project, store };
 }
@@ -69,7 +69,7 @@ test('local recording persists batches, metadata and assets; projects stay isola
   assert.deepEqual(read.batches, [batch]);
   assert.equal(read.metadata.url, 'https://example.com/');
   assert.ok((await fs.stat(path.join(recordings.directory(ctx, project.id, writer.metadata.id), 'capture.jsonl'))).mode & 0o600);
-  const other = await projects.createProject(ctx, { name: 'Other', directory: os.tmpdir() });
+  const other = await projects.createProject(ctx, { name: 'Other' });
   assert.deepEqual(await recordings.list(ctx, other.id), []);
   await assert.rejects(recordings.read(ctx, other.id, writer.metadata.id));
   await assert.rejects(recordings.read(ctx, project.id, '../secret'));
@@ -292,6 +292,6 @@ test('naming cannot mutate a running recording or cross project boundaries', asy
   const { ctx, project } = await setup(t), writer = await recordings.create(ctx, { projectId: project.id, url: 'https://example.com' });
   await assert.rejects(recordings.writeTitle(ctx, project.id, writer.metadata.id, { status: 'ready' }, 'Title'), /still running/);
   await writer.finish();
-  const other = await projects.createProject(ctx, { name: 'Other', directory: os.tmpdir() });
+  const other = await projects.createProject(ctx, { name: 'Other' });
   await assert.rejects(recordings.writeTitle(ctx, other.id, writer.metadata.id, { status: 'ready' }, 'Title'));
 });

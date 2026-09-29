@@ -3,22 +3,28 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
-const { writeJson } = require('../store/home.cjs');
+const { readJson, writeJson } = require('../store/home.cjs');
 const projects = require('../store/projects.cjs');
 const UUID = /^[0-9a-f-]{36}$/i;
 
 function locations(ctx, projectId, workspaceId, create = false) {
   if (!UUID.test(projectId) || !UUID.test(workspaceId)) throw new TypeError('Invalid local app identity.');
-  const { workspace } = projects.findWorkspace(ctx, projectId, workspaceId);
+  const { project, workspace } = projects.findWorkspace(ctx, projectId, workspaceId);
   // Hidden so this cannot be mistaken for another user-created project.
   const root = path.join(fs.realpathSync(ctx.dataRoot), '.local-apps', projectId, workspaceId);
-  const directory = path.join(root, 'app');
+  const saved = readJson(path.join(root, 'state.json'));
+  // The saved interface retains its original repository after connection changes.
+  // Only migration assigns this ID; do not use today's workspace connection.
+  const repo = saved?.repoId ? project.repositories?.[saved.repoId] : null;
+  if (saved?.repoId && (!repo || repo.archived)) throw new Error('This interface repository is unavailable. Restore its workspace or repository.');
+  const directory = repo ? path.resolve(project.dir, repo.location) : path.join(root, 'app');
   let part = fs.realpathSync(ctx.dataRoot);
-  for (const name of ['.local-apps', projectId, workspaceId, 'app']) {
+  for (const name of ['.local-apps', projectId, workspaceId, ...(repo ? [] : ['app'])]) {
     part = path.join(part, name);
     if (fs.existsSync(part) && (fs.lstatSync(part).isSymbolicLink() || !fs.statSync(part).isDirectory())) throw new Error('The local app folder must not be a symlink or file.');
     if (create) fs.mkdirSync(part, { recursive: true, mode: 0o700 });
   }
+  if (repo && !fs.existsSync(directory)) throw new Error(`Interface repository is missing: ${directory}`);
   return { root, directory, file: path.join(root, 'state.json'), name: workspace.name, projectId, workspaceId, id: `${projectId}:${workspaceId}` };
 }
 

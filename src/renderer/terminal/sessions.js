@@ -173,7 +173,7 @@ function makeTerminalRecord(snapshot, projectId) {
     inputChain: Promise.resolve(),
     lastDimensions: { cols: snapshot.cols, rows: snapshot.rows },
     disposables: [],
-    projectId: projectId || state.projectOf.get(snapshot.id) || null,
+    projectId: projectId || snapshot.projectId || state.projectOf.get(snapshot.id) || null,
     shell: { integrated: false, busy: snapshot.provider !== 'shell', command: '', cwd: snapshot.cwd },
     inputLocked: false,
     onLockedKey: null,
@@ -357,14 +357,14 @@ export function estimateDimensions(element, fontSize = state.settings.fontSize |
   };
 }
 
-export async function createSession({ provider = 'shell', cwd, projectId, cols, rows } = {}) {
+export async function createSession({ provider = 'shell', cwd, projectId, workspaceId, cols, rows } = {}) {
   await bootstrap();
   const dimensions = Number.isInteger(cols) && Number.isInteger(rows) ? { cols, rows } : estimateDimensions(null);
   const workingDirectory = cwd || state.settings.lastCwd || state.home;
-  const snapshot = await api().createSession({ provider, cwd: workingDirectory, ...dimensions });
+  const snapshot = await api().createSession({ provider, cwd: workingDirectory, projectId, workspaceId, ...dimensions });
   const record = addSession(snapshot, projectId);
-  state.settings.lastCwd = workingDirectory;
-  void api().saveSettings({ lastCwd: workingDirectory }).catch(() => {});
+  state.settings.lastCwd = snapshot.cwd;
+  void api().saveSettings({ lastCwd: snapshot.cwd }).catch(() => {});
   return record;
 }
 

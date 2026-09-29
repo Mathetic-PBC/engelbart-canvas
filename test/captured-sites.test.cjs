@@ -15,7 +15,7 @@ async function setup(t) {
   const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'engelbart-captured-sites-'));
   const store = createStore({ homeDir, fixturesDir: path.join(__dirname, '../fixtures') });
   const ctx = await store.context();
-  const project = await projects.createProject(ctx, { name: 'Captures', directory: homeDir });
+  const project = await projects.createProject(ctx, { name: 'Captures' });
   t.after(async () => { await store.close(); await fs.rm(homeDir, { recursive: true, force: true }); });
   return { store, ctx, project };
 }
@@ -30,14 +30,14 @@ test('simultaneous captures of an unsaved site share a library owner and survive
   await writer.finish();
   assert.ok(note.libraryId);
   assert.equal(writer.metadata.libraryId, note.libraryId);
-  const rows = await ctx.libraryDb.list();
+  const rows = (await ctx.libraryDb.list()).filter(row => row.type === 'website');
   assert.equal(rows.length, 1);
   assert.equal(rows[0].url, 'https://unsaved.example/editor');
-  const other = await projects.createProject(ctx, { name: 'Other', directory: ctx.homeDir });
+  const other = await projects.createProject(ctx, { name: 'Other' });
   assert.deepEqual((await annotations.list(ctx, { projectId: other.id })).notes, []);
   await store.close();
   const reopened = await store.context();
-  assert.equal((await reopened.libraryDb.list()).length, 1);
+  assert.equal((await reopened.libraryDb.list()).filter(row => row.type === 'website').length, 1);
   const [restored] = (await annotations.list(reopened, { projectId: project.id })).notes;
   assert.equal(restored.id, note.id);
   assert.equal(restored.sourceUrl, 'https://unsaved.example/editor');
@@ -62,7 +62,7 @@ test('collections include routes on the current website and exclude other origin
   assert.deepEqual(notes.notes.map(n => n.id).sort(), captures.slice(0, 2).map(c => c.note).sort());
   assert.deepEqual(rows.map(r => r.id).sort(), captures.slice(0, 2).map(c => c.recording).sort());
   assert.deepEqual(await recordings.list(ctx, project.id, null, 'https://empty.example'), []);
-  const other = await projects.createProject(ctx, { name: 'Other', directory: ctx.homeDir });
+  const other = await projects.createProject(ctx, { name: 'Other' });
   assert.deepEqual(await recordings.list(ctx, other.id, null, url), []);
   assert.equal((await recordings.list(ctx, project.id)).length, 4, 'filtering keeps all saved captures intact');
 });
@@ -93,7 +93,7 @@ test('repo resume clears the old URL without losing ownership; notes remain read
   assert.equal((await recordings.list(reopened, project.id, null, scope.url))[0].id, writer.metadata.id, 'old preview alias finds the same recording');
   assert.deepEqual(await recordings.list(reopened, project.id, null, 'https://unrelated.example/editor'), []);
   assert.deepEqual(await recordings.list(reopened, project.id, null, repo.url), [], 'the GitHub website is separate from its repo preview');
-  assert.equal((await reopened.libraryDb.list()).length, 1, 'preview URLs do not create extra website entries');
+  assert.equal((await reopened.libraryDb.list()).filter(row => row.type === 'website').length, 1, 'preview URLs do not create extra website entries');
   assert.deepEqual((await annotations.list(reopened, { ...next, url: 'https://unrelated.example/editor' })).notes, []);
   await annotations.edit(reopened, next, note.id, 'Still editable');
   assert.equal((await annotations.list(reopened, scope)).notes[0].body, 'Still editable');
@@ -101,7 +101,7 @@ test('repo resume clears the old URL without losing ownership; notes remain read
 
 test('startup adopts legacy unlinked notes and recordings, verifies project hashes, and preserves IDs and bodies', async t => {
   const { store, ctx, project } = await setup(t);
-  const other = await projects.createProject(ctx, { name: 'Other', directory: ctx.homeDir });
+  const other = await projects.createProject(ctx, { name: 'Other' });
   const url = 'https://legacy.example/editor', site = 'site:https://legacy.example';
   const note = { id: randomUUID(), url, runId: null, anchor, body: 'Existing note', createdAt: '2026-09-20T00:00:00Z', updatedAt: '2026-09-20T00:00:00Z' };
   const hash = createHash('sha256').update(`${project.id}\n${site}`).digest('hex');
@@ -119,7 +119,7 @@ test('startup adopts legacy unlinked notes and recordings, verifies project hash
   assert.equal(saved.id, note.id); assert.equal(saved.body, note.body);
   const [recording] = await recordings.list(reopened, project.id);
   assert.equal(recording.libraryId, saved.libraryId);
-  assert.equal((await reopened.libraryDb.list()).length, 1);
+  assert.equal((await reopened.libraryDb.list()).filter(row => row.type === 'website').length, 1);
   const migrated = JSON.parse(await fs.readFile(path.join(dir, `${hash}.json`), 'utf8'));
   assert.equal(migrated.projectId, project.id);
   assert.equal(migrated.libraryId, saved.libraryId);
@@ -137,7 +137,7 @@ test('legacy repo notes recover through run ID even if their hostname was alread
   const [note] = (await annotations.list(ctx, { projectId: project.id, url: 'https://replacement.example/editor' })).notes;
   assert.equal(note.libraryId, repo.id);
   assert.equal(note.sourceUrl, 'https://replacement.example/editor');
-  assert.equal((await ctx.libraryDb.list()).length, 1);
+  assert.equal((await ctx.libraryDb.list()).filter(row => row.type === 'website').length, 1);
 });
 
 test('an existing website is reused; catalog repo tags do not redirect captures of GitHub itself to a preview', async t => {
@@ -156,7 +156,7 @@ test('an existing website is reused; catalog repo tags do not redirect captures 
   const [restored] = (await annotations.list(reopened, github)).notes;
   assert.equal(restored.sourceUrl, github.url);
   assert.equal(restored.scope, 'site:https://github.com');
-  assert.equal((await reopened.libraryDb.list()).length, 2);
+  assert.equal((await reopened.libraryDb.list()).filter(row => row.type === 'website').length, 2);
 });
 
 test('route restoration preserves the source origin for double-slash paths and hash routes', () => {

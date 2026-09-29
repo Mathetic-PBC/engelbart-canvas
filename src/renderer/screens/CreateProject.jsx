@@ -13,7 +13,7 @@ export default function CreateProject({ onCreate, onBack, busy, error }) {
   const shownSlug = slugTouched ? slug : auto;
   const [directory, setDirectory] = React.useState('');
   const [picking, setPicking] = React.useState(false);
-  const disabled = busy || !name.trim() || !directory;
+  const disabled = busy || !name.trim();
 
   // The same native folder picker the terminal's directory chip uses.
   const pick = async () => {
@@ -29,9 +29,9 @@ export default function CreateProject({ onCreate, onBack, busy, error }) {
 
   const go = () => {
     const trimmed = name.trim();
-    if (!trimmed || busy || !directory) return;
+    if (!trimmed || busy) return;
     const path = slugTouched && slug.trim() ? slugify(slug) : auto;
-    onCreate({ name: trimmed, path: path || undefined, directory });
+    onCreate({ name: trimmed, path: path || undefined, directory: directory || null });
   };
 
   return (
@@ -74,12 +74,13 @@ export default function CreateProject({ onCreate, onBack, busy, error }) {
             </div>
           </label>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <span style={{ font: '500 15px/1.4 var(--font-sans)', color: '#171717' }}>Code directory</span>
-            <button type="button" className="hov-bd2" onClick={pick} data-pick-directory="1" title="Where this project's code lives: terminals and agents open here" style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '14px 16px', background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, cursor: 'pointer', textAlign: 'left', transition: 'border-color 120ms' }}>
+            <span style={{ font: '500 15px/1.4 var(--font-sans)', color: '#171717' }}>Project default repository</span>
+            <button type="button" className="hov-bd2" onClick={pick} data-pick-directory="1" title="All workspaces inherit this repository unless you choose an override" style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '14px 16px', background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, cursor: 'pointer', textAlign: 'left', transition: 'border-color 120ms' }}>
               <span style={{ flex: 'none', font: '14px/1.4 var(--font-mono)', color: '#8f8f8f' }}>▭</span>
-              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: `16px/1.4 var(${directory ? '--font-mono' : '--font-sans'})`, color: directory ? '#171717' : '#8f8f8f', fontStyle: directory ? 'normal' : 'italic' }}>{directory || 'Choose the folder where code changes are made…'}</span>
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: `16px/1.4 var(${directory ? '--font-mono' : '--font-sans'})`, color: directory ? '#171717' : '#8f8f8f', fontStyle: directory ? 'normal' : 'italic' }}>{directory || 'Create code/ in the project'}</span>
               <span style={{ flex: 'none', font: '500 13px/1 var(--font-sans)', color: '#4d4d4d' }}>{directory ? 'Change' : 'Choose'}</span>
             </button>
+            {directory && <button type="button" onClick={() => setDirectory('')} style={{ alignSelf: 'flex-start', border: 0, background: 'transparent', color: '#777', font: '12px var(--font-sans)', cursor: 'pointer' }}>Use a new code/ repository instead</button>}
           </div>
         </div>
 

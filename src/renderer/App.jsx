@@ -1,5 +1,6 @@
 import React from 'react';
 import { api, errorMessage } from './api.js';
+import { loadSessionUI, sessionValue, saveSessionValue, flushCanvasView } from './session-ui.js';
 import WindowControls from './ui/WindowControls.jsx';
 import Home from './screens/Home.jsx';
 import CreateProject from './screens/CreateProject.jsx';
@@ -11,40 +12,8 @@ import { launchRows, TOOL_ORDER } from './model/tools.js';
 
 // Screens: the app opens straight into the workspace you were last in — "Getting started" in a
 // fresh project — and the first run shows the create screen. "Engelbart" in the header (or
-// Escape) shows all projects. A project whose project.json has no code directory yet is held
-// behind a modal until one is chosen (2026-09-18).
-
-const pickFolder = (current) => window.terminalAPI.pickDirectory(current || undefined);
-
-/** The project exists but does not know where its code lives: nothing else works until it does. */
-function DirectoryGate({ project, onChosen, onHome, error }) {
-  const [busy, setBusy] = React.useState(false);
-  const choose = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const chosen = await pickFolder(null);
-      if (chosen) await onChosen(chosen);
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <div role="dialog" aria-modal="true" aria-label="Choose the project's code directory" data-directory-gate="1" data-overlay="1" style={{ position: 'fixed', inset: 0, zIndex: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(255,255,255,.35)' }}>
-      <div style={{ width: 'min(480px, 100%)', display: 'flex', flexDirection: 'column', gap: 18, padding: 28, background: '#fff', border: '1px solid #c9c9c9', borderRadius: 12, boxShadow: '0 12px 40px #0000001f', animation: 'rise 200ms cubic-bezier(.25,.1,.25,1)' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <h2 style={{ margin: 0, font: '500 20px/1.3 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Where does this project's code live?</h2>
-          {project.directoryMissing && <p style={{ margin: 0, font: '13px/1.6 var(--font-mono)', color: '#e70022', overflowWrap: 'anywhere' }}>{project.directoryMissing} is no longer there.</p>}
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          <button type="button" onClick={choose} disabled={busy} autoFocus style={{ minHeight: 40, padding: '10px 18px', border: 0, borderRadius: 8, background: '#0070f3', color: '#fff', cursor: busy ? 'default' : 'pointer', font: '500 13px/1 var(--font-sans)', opacity: busy ? 0.6 : 1 }}>{busy ? 'Choosing…' : 'Choose folder…'}</button>
-          <button type="button" className="hov-ink" onClick={onHome} style={{ padding: 0, border: 0, background: 'transparent', cursor: 'pointer', font: '13px/1 var(--font-sans)', color: '#8f8f8f' }}>All projects</button>
-        </div>
-        {error && <span style={{ font: '12.5px/1.5 var(--font-sans)', color: '#e70022' }}>{error}</span>}
-      </div>
-    </div>
-  );
-}
+// Escape) shows all projects. Workspaces inherit the project code target unless
+// overridden; unavailable connections are explained in the repository selectors.
 
 export default function App() {
   const [config, setConfig] = React.useState(null);
@@ -55,6 +24,7 @@ export default function App() {
   const [tree, setTree] = React.useState(null);
   const [entry, setEntry] = React.useState(null); // { workspaceId, tab, views } for the project being opened
   const [phase, setPhase] = React.useState('boot'); // boot | create | home | workspace
+  React.useEffect(() => { if (phase === 'home' || phase === 'workspace') saveSessionValue('app:screen', phase); }, [phase]);
   const [, setTick] = React.useState(0);
   // Git, Claude Code and Codex (src/main/tools): the last snapshot, and the setup dialog when it is open.
   const [tools, setTools] = React.useState(null);
@@ -93,7 +63,8 @@ export default function App() {
   const reload = React.useCallback(async () => {
     if (!tree) return null;
     try {
-      const [next, rows] = await Promise.all([api.loadProject(tree.project.id), api.library()]);
+      const next = await api.loadProject(tree.project.id);
+      const rows = await api.library(); // project migrations may refresh repository labels
       setTree(next);
       setLibrary(rows);
       return next;
@@ -106,7 +77,8 @@ export default function App() {
   // Open a project straight into a workspace: the remembered one, else the first. Each of its workspaces reopens with
   // the tabs, the document and the scroll position it was left with (state.json `views`).
   const openProject = React.useCallback(async (id, prefer) => {
-    const [next, rows, views] = await Promise.all([api.loadProject(id), api.library(), api.views(id).catch(() => ({}))]);
+    const next = await api.loadProject(id);
+    const [rows, views] = await Promise.all([api.library(), api.views(id).catch(() => ({}))]);
     setTree(next);
     setLibrary(rows);
     // A note opened from the library lands in the workspace it was made in.
@@ -120,22 +92,30 @@ export default function App() {
   const start = React.useCallback(async () => {
     const list = await loadHome();
     if (!list.length) { setPhase('create'); return; }
+    if (sessionValue('app:screen', 'workspace') === 'home') { setPhase('home'); return; }
     const last = await api.lastOpen().catch(() => null);
     const id = last && list.some((project) => project.id === last.projectId) ? last.projectId : list[0].id;
     await openProject(id, last && last.projectId === id ? last : null);
   }, [loadHome, openProject]);
 
   React.useEffect(() => {
+    const off = api.onPrepareQuit(async ({ id }) => {
+      try { await flushCanvasView(); await api.viewFlushed(id); }
+      catch (error) { await api.viewFlushed(id, errorMessage(error)); }
+    });
     (async () => {
       try {
+        await loadSessionUI();
         const initial = await api.config();
         setConfig(initial);
         await start();
+        await api.viewReady();
       } catch (candidate) {
         fail(candidate);
         setPhase((current) => (current === 'boot' ? 'home' : current));
       }
     })();
+    return off;
   }, [start]);
 
   React.useEffect(() => {
@@ -178,21 +158,10 @@ export default function App() {
     if (tree) api.setLastOpen({ projectId: tree.project.id, workspaceId }).catch(() => {});
   }, [tree]);
 
-  async function chooseDirectory(directory) {
-    if (!tree) return;
-    setError('');
-    try {
-      await api.setProjectDirectory(tree.project.id, directory);
-      await reload();
-    } catch (candidate) {
-      fail(candidate);
-    }
-  }
-
   if (!config || phase === 'boot') return <div style={{ position: 'absolute', inset: 0, background: '#fff' }} />;
 
   return (
-    <SandboxProgress key={config.dataRoot} dataRoot={config.dataRoot} library={library} inWorkspace={phase === 'workspace' && !!tree?.project.directory}>
+    <SandboxProgress key={config.dataRoot} dataRoot={config.dataRoot} library={library} inWorkspace={phase === 'workspace' && !!tree}>
     <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#fff' }}>
       {phase === 'home' && (
         <Home
@@ -227,8 +196,8 @@ export default function App() {
           initialTab={entry ? entry.tab : null}
           initialStage={entry ? entry.stage : null}
           initialViews={entry ? entry.views : null}
-          style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: '#fff', ...(tree.project.directory ? {} : { filter: 'blur(6px)', pointerEvents: 'none', userSelect: 'none' }) }}
-          active={!!tree.project.directory}
+          style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: '#fff' }}
+          active
           reload={reload}
           onClose={goHome}
           onHome={goHome}
@@ -237,10 +206,7 @@ export default function App() {
           onError={fail}
         />
       )}
-      {phase === 'workspace' && tree && !tree.project.directory && (
-        <DirectoryGate project={tree.project} onChosen={chooseDirectory} onHome={goHome} error={error} />
-      )}
-      {error && phase !== 'home' && phase !== 'create' && !(tree && !tree.project.directory) && (
+      {error && phase !== 'home' && phase !== 'create' && (
         <div data-overlay="1" style={{ position: 'fixed', left: 24, bottom: 18, zIndex: 150, padding: '7px 12px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', font: '12.5px/1.5 var(--font-sans)', color: '#e70022', display: 'flex', gap: 10, alignItems: 'center' }}>
           <span>{error}</span>
           <button type="button" onClick={() => setError('')} style={{ padding: '0 2px', border: 0, background: 'transparent', cursor: 'pointer', color: '#c9c9c9', font: '14px/1 var(--font-sans)' }}>×</button>

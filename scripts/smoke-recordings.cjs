@@ -10,6 +10,7 @@ const http = require('node:http');
 const restoreAt = process.argv.indexOf('--restore');
 const restoreRoot = restoreAt >= 0 ? process.argv[restoreAt + 1] : null;
 const root = restoreRoot || fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-recordings-smoke-'));
+if (!restoreRoot) require('node:child_process').execFileSync('git', ['init', '--quiet', root]);
 app.setPath('userData', path.join(root, 'electron'));
 Object.assign(process.env, { ENGELBART_HOME_DIR: root, ENGELBART_SUMMARIES: 'off', ENGELBART_WEB_PDFS: 'off', ENGELBART_BART_FAKE: '1', ENGELBART_HEADLESS: '1' });
 require('../src/main/index.cjs');
@@ -202,10 +203,12 @@ app.whenReady().then(async () => {
     const requestsBefore = requests;
     let replayRequests = 0;
     session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (_details, callback) => { replayRequests++; callback({}); });
-    await new Promise(r => server.close(r)); // Playback must work after the source is gone.
+    await new Promise(r => { server.close(r); server.closeAllConnections(); }); // Playback must work after the source is gone.
     await click(wc, '.recording-row');
     await until(() => js(wc, `!!document.querySelector('[aria-label="Play recording"]')&&!document.querySelector('[aria-label="Play recording"]').disabled`), 'replayer ready');
     assert.equal(page.isDestroyed(), false, 'opening replay does not tear down the live page');
+    assert.equal(await js(wc, '!!document.querySelector(".recording-warnings")'), false, 'capture limitations are absent from playback');
+    assert.equal(await js(wc, 'document.querySelector(".stage-recordings header").textContent.includes("Playback")'), false, 'header shows only the recording title and navigation');
     await click(wc, '[aria-label="Back to recordings"]');
     await until(() => js(wc, '!!document.querySelector(".recordings-popover") && !document.querySelector(".recording-screen")'), 'Back returns to compact list');
     win.setSize(980, 740); await pause(250);
@@ -223,6 +226,14 @@ app.whenReady().then(async () => {
     assert.equal(await replay.executeJavaScript('(()=>{const f=document.querySelector(".replayer-wrapper iframe");return f.contentWindow.getComputedStyle(f.contentDocument.body).backgroundColor})()'), 'rgb(248, 248, 247)', 'stylesheet survives offline');
     assert.ok(await replay.executeJavaScript('document.querySelector(".replayer-wrapper iframe").contentDocument.querySelector("img").src.startsWith("data:image/")'), 'image bytes survive offline');
     assert.deepEqual(await replayFields(replay), { text: 'Initial text 123', number: '12.5', multiline: 'Initial multiline', cleared: 'Clear me', editable: 'Initial rich text', password: '•••', masked: '•••' }, 'initial snapshot preserves ordinary input and masks private fields');
+    await click(wc, '[aria-label="Forward 10 seconds"]');
+    await until(() => js(wc, '(()=>{const s=document.querySelector(".recording-seek");return Math.abs(Number(s.value)-Number(s.max))<50})()'), 'skip forward clamps to recording end');
+    await click(wc, '[aria-label="Back 10 seconds"]');
+    await until(() => js(wc, 'Number(document.querySelector(".recording-seek").value)===0'), 'skip back clamps to recording start');
+    await click(wc, '.recording-screen-toggle');
+    await until(() => js(wc, 'document.querySelector(".recording-screen-toggle").getAttribute("aria-label") === "Pause video" && !document.querySelector(".recording-center-play")'), 'center play starts playback and clears the overlay');
+    await js(wc, 'document.querySelector(".stage-recordings").dispatchEvent(new KeyboardEvent("keydown",{key:"k",bubbles:true}))');
+    await until(() => js(wc, '!!document.querySelector(".recording-center-play")'), 'keyboard shortcut pauses playback');
     await click(wc, '[aria-label="Play recording"]'); await pause(500);
     await click(wc, '[aria-label="Pause recording"]');
     const seekPoint = await js(wc, `(()=>{const r=document.querySelector('[aria-label="Position in recording"]').getBoundingClientRect();return{x:Math.round(r.right-3),y:Math.round(r.y+r.height/2)}})()`);
@@ -241,6 +252,18 @@ app.whenReady().then(async () => {
     fs.writeFileSync(path.join(root, 'playback.png'), (await win.webContents.capturePage()).toPNG());
     win.setSize(980, 740); await pause(350);
     fs.writeFileSync(path.join(root, 'playback-narrow.png'), (await win.webContents.capturePage()).toPNG());
+    const controlsInside = await js(wc, '(()=>{const p=document.querySelector(".stage-recordings").getBoundingClientRect();return [...document.querySelectorAll(".recording-controls button,.recording-seek,.recording-clock")].every(el=>{const r=el.getBoundingClientRect();return r.left>=p.left&&r.right<=p.right&&r.bottom<=p.bottom})})()');
+    assert.ok(controlsInside, 'all video controls fit inside a narrow Stage');
+    assert.equal(await replay.executeJavaScript('document.documentElement.requestFullscreen().then(()=>true,()=>false)', true), false, 'isolated replay content cannot enter fullscreen');
+    await click(wc, '[aria-label="Enter fullscreen"]');
+    await until(() => js(wc, 'document.fullscreenElement === document.querySelector(".stage-recordings") && document.querySelector(".recording-fullscreen").getAttribute("aria-label") === "Exit fullscreen"'), 'fullscreen expands the recording player');
+    await until(() => win.isFullScreen(), 'native fullscreen transition');
+    await pause(600);
+    assert.ok(await replay.executeJavaScript('(()=>{const r=document.querySelector(".replayer-wrapper iframe").getBoundingClientRect();return r.width>innerWidth/4&&r.left>=-1&&r.top>=-1&&r.right<=innerWidth+1&&r.bottom<=innerHeight+1})()'), 'recorded page fits the fullscreen viewport');
+    fs.writeFileSync(path.join(root, 'playback-fullscreen.png'), (await wc.capturePage()).toPNG());
+    await click(wc, '[aria-label="Exit fullscreen"]');
+    await until(() => js(wc, '!document.fullscreenElement'), 'fullscreen returns to the Stage');
+    console.log('PASS video controls: center play, keyboard pause, skip bounds, narrow layout, fullscreen');
     await click(wc, '[aria-label="Return to page"]');
     assert.equal(await js(page, 'window.clicks'), noActionsBeforePlayback, 'playback never re-executed app actions');
     // Explicit tab close flushes the final batch before destroying its view.

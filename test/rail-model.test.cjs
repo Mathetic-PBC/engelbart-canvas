@@ -175,7 +175,7 @@ test('@Bart, as the menu writes it, is a question like a typed @bart; both rende
   assert.equal(doc.parseLine('@Barty').type === 'bart', false);
 });
 
-test('rail matches the six reference groups with empty headings and flat, lossless item lists', async () => {
+test('rail keeps the six main groups and sorts Other context into lossless subfolders', async () => {
   const { railSections, sectionOf } = await load();
   const rows = [...library, row('k1', 'Child', 'child'), row('g2', 'Clone', 'folder', ['git']), row('h1', 'Saved page', 'html'),
     row('md', 'README', 'md'), row('pdf', 'Handbook', 'pdf'), row('sticky', 'Reminder', 'md', ['note', 'sticky']), row('chat', 'Codex', 'conversation')];
@@ -185,12 +185,20 @@ test('rail matches the six reference groups with empty headings and flat, lossle
   assert.deepEqual(railSections([]).map(s => s.key), ['Workspaces', 'GitHub', 'Overleaf', 'Papers', 'Documents', 'Files']);
   assert.equal(sectionOf(row('md', 'README', 'md')), 'Documents');
   assert.equal(sectionOf(row('pdf', 'Handbook', 'pdf')), 'Documents');
-  const leaves = sections.flatMap(s => s.rows);
-  assert.ok(sections.every(s => !s.children));
+  const leaves = sections.flatMap(s => [...s.rows, ...(s.children || []).flatMap(child => child.rows)]);
+  assert.ok(sections.filter(s => s.key !== 'Files').every(s => !s.children));
   assert.deepEqual(leaves.map(r => r.id).sort(), rows.map(r => r.id).sort());
   assert.equal(new Set(leaves).size, rows.length);
   const other = sections.find(s => s.key === 'Files');
-  assert.deepEqual(other.rows.map(r => r.id), ['w1', 'i1', 'c1', 'f1', 'h1', 'sticky', 'chat']);
+  assert.deepEqual(other.rows, []);
+  assert.deepEqual(other.children.map(child => [child.label, child.rows.map(r => r.id)]), [
+    ['Images', ['i1']], ['Datasets', ['c1']], ['Web pages', ['w1', 'h1']],
+    ['Conversations', ['chat']], ['Notes', ['sticky']], ['Files', ['f1']],
+  ]);
+  const unknown = row('zip', 'Assets.zip', 'zip');
+  const folders = railSections([unknown]).find(s => s.key === 'Files').children;
+  assert.equal(folders.length, 6, 'empty subfolders remain visible');
+  assert.deepEqual(folders.find(folder => folder.id === 'files').rows, [unknown], 'unrecognized files are retained');
 });
 
 test('saved provider links stay in the right sections with one catalog action per provider', async () => {
@@ -207,6 +215,7 @@ test('saved provider links stay in the right sections with one catalog action pe
   assert.deepEqual(sections.find(c => c.key === 'Overleaf').rows, [overleaf]);
   assert.deepEqual(sections.find(c => c.key === 'Papers').rows, [library[1], zotero, pdf]);
   assert.deepEqual(sections.filter(c => c.catalog).map(c => c.catalog.provider), ['github', 'overleaf', 'zotero', 'google']);
+  assert.ok(sections.filter(c => c.catalog).every(c => c.catalog.label === 'My Projects'));
   for (const url of ['https://docs.google.com/', 'https://docs.google.com/spreadsheets/d/sheet/edit', 'https://www.overleaf.com/login', 'https://example.com/project/abc123', 'https://overleaf.com.example.org/project/abc123']) {
     assert.equal(documentProvider({ ...google, url }), null, url);
     assert.equal(sectionOf({ ...google, url }), 'Files', url);

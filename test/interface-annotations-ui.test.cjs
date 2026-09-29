@@ -17,7 +17,7 @@ const previousWindow = global.window;
 global.window = { engelbartAPI: {} };
 try { compiled._compile(built.outputFiles[0].text, filename); }
 finally { if (previousWindow === undefined) delete global.window; else global.window = previousWindow; }
-const { default: InterfaceAnnotations, annotationPosition, annotationListPosition } = compiled.exports;
+const { default: InterfaceAnnotations, annotationPosition, annotationListPosition, annotationChatPosition } = compiled.exports;
 
 test('direct selection adds no sidebar, banner, or layout content; browsing notes is explicit', () => {
   const props = { projectId: 'project', tabId: 'tab', url: 'https://example.com', onClose() {} };
@@ -64,11 +64,25 @@ test('saved-annotation browser stays compact and inside narrow or short Stage vi
   assert.equal(annotationListPosition({ ...slot, height: 200, bottom: 300 }).maxHeight, 184);
 });
 
+test('a growing conversation stays anchored on the same side and scrolls within available space', () => {
+  const slot = { left: 200, top: 100, right: 1000, bottom: 700, width: 800, height: 600 };
+  const bounds = { x: 20, y: 190, w: 100, h: 30, viewportWidth: 800, viewportHeight: 600 };
+  const first = annotationChatPosition(bounds, slot, { height: 200 });
+  const long = annotationChatPosition(bounds, slot, { height: 900 });
+  assert.equal(first.top, 328);
+  assert.deepEqual(long, first, 'messages cannot flip the chat above its target');
+  assert.equal(long.top + long.maxHeight, slot.bottom - 8);
+  const nearBottom = annotationChatPosition({ ...bounds, y: 540 }, slot, { height: 900 });
+  assert.equal(nearBottom.top + nearBottom.maxHeight, slot.top + 540 - 8);
+  const wholePage = annotationChatPosition({ ...bounds, y: 0, h: 600 }, slot, { height: 900 });
+  assert.ok(wholePage.maxHeight > 0 && wholePage.top >= slot.top && wholePage.top + wholePage.maxHeight <= slot.bottom);
+});
+
 test('annotation styles and owned page overlay use neutral, non-debug presentation', () => {
   const css = ['interface-annotations.css', 'stage-popover.css'].map(file => fs.readFileSync(path.join(__dirname, '../src/renderer/workspace', file), 'utf8')).join('\n');
   const page = fs.readFileSync(path.join(__dirname, '../src/main/browser/annotation-page.cjs'), 'utf8');
   assert.doesNotMatch(css + page, /#2563eb|#1d4ed8|#eff6ff|crosshair|Math\.round\(r\.w\)/);
   assert.doesNotMatch(page, /\bchip\b/);
   assert.match(css, /\.stage-popover\{[^}]*position:fixed/);
-  assert.doesNotMatch(css, /flex:0 0 260px|border-left:/);
+  assert.doesNotMatch(css, /flex:0 0 260px|\.interface-annotations\{[^}]*border-left:/);
 });

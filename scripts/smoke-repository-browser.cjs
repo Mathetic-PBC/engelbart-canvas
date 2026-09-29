@@ -9,6 +9,7 @@ const path = require('node:path');
 const http = require('node:http');
 const { randomUUID } = require('node:crypto');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-repository-browser-'));
+require('node:child_process').execFileSync('git', ['init', '--quiet', root]);
 app.setPath('userData', path.join(root, 'electron'));
 Object.assign(process.env, { ENGELBART_HOME_DIR: root, ENGELBART_HEADLESS: '1', ENGELBART_BART_FAKE: '1', ENGELBART_SUMMARIES: 'off', ENGELBART_WEB_PDFS: 'off' });
 const external = [];
@@ -77,7 +78,6 @@ const server = http.createServer((_req, res) => { res.setHeader('content-type', 
     const shot = async name => fs.writeFileSync(path.join(root, `${name}.png`), (await win.capturePage()).toPNG());
     const loaded = () => until(() => exists('[data-github-account-repo]'), 'catalog loaded');
     const closed = () => until(async () => !await exists(panel), 'browser closes');
-    const escape = () => js(wc, 'document.activeElement.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true}))');
     await until(() => exists('[data-rail-section-toggle=GitHub]').catch(() => false), 'sidebar');
     assert.deepEqual(await js(wc, '[...document.querySelectorAll("[data-rail-section-toggle]")].map(e=>e.textContent)'), ['Code','Writing','Literature','Documents','Other context']);
     assert.equal(await js(wc, '[...document.querySelectorAll("[data-rail-section-toggle]")].every(e=>e.getAttribute("aria-expanded")==="false")'), true);
@@ -121,9 +121,19 @@ const server = http.createServer((_req, res) => { res.setHeader('content-type', 
     mode = 'normal'; await js(wc, 'window.dispatchEvent(new Event("focus"))'); await loaded();
     for (const [section, provider] of [['Papers','zotero'],['Overleaf','overleaf'],['Documents','google']]) {
       await click(`[data-rail-section-toggle=${section}]`);
-      await click(`[data-browse-source=${provider}]`);
-      await until(() => exists(`[data-source-browser=${provider}]`), `${provider} browser`);
-      await escape();
+      const folder = `[data-projects-toggle=${provider}]`, list = `[data-projects-list=${provider}]`;
+      assert.equal(await js(wc, `document.querySelector('${folder}').textContent.trim()`), 'My Projects');
+      assert.equal(await exists(list), false);
+      await click(folder);
+      await until(() => exists(list), `${provider} inline projects`);
+      assert.equal(await exists('[data-source-browser]'), false, 'catalog stays inside the sidebar');
+      await click(folder);
+      assert.equal(await exists(list), false, 'folder folds independently');
+      await click(folder);
+      await click(`[data-rail-section-toggle=${section}]`);
+      assert.equal(await exists(list), false, 'folding the parent unmounts the catalog');
+      await click(`[data-rail-section-toggle=${section}]`);
+      assert.equal(await js(wc, `document.querySelector('${folder}').getAttribute('aria-expanded')`), 'false');
       await click(`[data-rail-section-toggle=${section}]`);
     }
     win.setSize(1080, 640); await pause(200);
@@ -140,12 +150,12 @@ const server = http.createServer((_req, res) => { res.setHeader('content-type', 
     wc.reload();
     await until(() => exists('[data-rail-section-toggle=GitHub]').catch(() => false), 'sidebar restored');
     assert.equal(await js(wc, '[...document.querySelectorAll("[data-rail-section-toggle]")].every(e=>e.getAttribute("aria-expanded")==="false")'), true, 'all groups reset closed on reload');
-    assert.equal(await exists('[data-browse-source], [data-source-browser], [data-github-projects-toggle]'), false);
+    assert.equal(await exists('[data-browse-source], [data-source-browser], [data-projects-toggle]'), false);
     assert.deepEqual(await js(wc, 'window.engelbartAPI.library().then(rows=>rows.map(row=>row.id).sort())'), originalIds);
     assert.deepEqual(await js(wc, 'window.engelbartAPI.sandboxRuns()'), originalRuns);
     assert.equal(launches, 0, 'browsing and account controls never start a build');
     assert.deepEqual(external, []);
-    console.log(JSON.stringify({ ok: true, root, checks: ['reference section names and order', 'workspace switcher', 'all groups closed on startup and reload', 'inline My Projects', 'private repository icons', 'Stage navigation', 'no width shift or overflow', 'Connections refresh', 'parent folding', 'other provider browsers', 'empty/error states', 'sign-out retains context', 'no imports or builds'] }));
+    console.log(JSON.stringify({ ok: true, root, checks: ['reference section names and order', 'workspace switcher', 'all groups closed on startup and reload', 'inline My Projects for all providers', 'private repository icons', 'Stage navigation', 'no width shift or overflow', 'Connections refresh', 'parent folding', 'empty/error states', 'sign-out retains context', 'no imports or builds'] }));
     server.closeAllConnections(); server.close(); app.exit(0);
   } catch (error) {
     console.error(error); console.error('Artifacts:', root);

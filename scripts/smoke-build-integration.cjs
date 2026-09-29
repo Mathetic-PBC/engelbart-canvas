@@ -59,12 +59,16 @@ const deadline = setTimeout(() => { console.error('Build integration timed out',
     const call = (name, ...args) => js(wc, `window.engelbartAPI.${name}(...${JSON.stringify(args)})`);
     const made = await call('createProjectWithWelcome', { name: 'Combined Build', directory: code });
     const pid = made.project.id, wid = made.workspaceId;
-    const other = await call('createWorkspace', pid, { name: 'Other workspace' });
+    const other = await call('createWorkspace', pid, { name: 'Other workspace', createDefault: true });
     const ref = { kind: 'workspace', workspaceId: wid };
     await call('writeDoc', pid, ref, '@bart --build Make a tiny interface\n');
     await call('setLastOpen', { projectId: pid, workspaceId: wid });
     wc.reload();
     await until(() => js(wc, '!!document.querySelector("[data-editor]")').catch(() => false), 'workspace');
+    await until(() => js(wc, '!!document.querySelector("[data-code-context]")'), 'Bart code context');
+    assert.equal(await js(wc, '!!document.querySelector("[data-workspace-repository]")'), false, 'no repository row beneath the title');
+    assert.equal(await js(wc, '!!document.querySelector("[data-directory-gate]")'), false);
+    fs.writeFileSync(path.join(root, 'workspace-repository.png'), (await wc.capturePage()).toPNG());
     // Natural proposal approval shares these same controls; explicit --build also
     // requires approval and cannot invoke the retired local coding agent.
     await js(wc, `(()=>{const send=document.querySelector('[data-act=ask]');if(send){send.click();return;}const el=document.querySelector('[data-raw^="@bart "] .t');el.focus();const r=document.createRange();r.selectNodeContents(el);r.collapse(false);getSelection().removeAllRanges();getSelection().addRange(r);document.querySelector('[data-editor]').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));})()`);
@@ -89,18 +93,35 @@ const deadline = setTimeout(() => { console.error('Build integration timed out',
     assert.equal(fs.existsSync(path.join(code, 'index.html')), false);
     await js(wc, `(()=>{const el=document.querySelector('[data-build-input="${first.id}"]');el.value='Refine the interface';el.dispatchEvent(new Event('input',{bubbles:true}));el.setSelectionRange(4,10);el.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',shiftKey:true,bubbles:true}));document.querySelector('[data-act=buildsend][data-build-id="${first.id}"]').click();})()`);
     await until(async () => (await call('buildGet', pid, first.id)).turn === 2, 'reply continues Build');
-    await ready(first.id);
+    const refined = await ready(first.id);
     await pause(250);
     fs.writeFileSync(path.join(root, 'review.png'), (await wc.capturePage()).toPNG());
-    page = await until(() => webContents.getAllWebContents().find(w => w.getURL().startsWith('http://127.0.0.1:') && w.getURL() !== first.preview.url), 'updated preview page');
-    fs.writeFileSync(path.join(root, 'preview-page.png'), (await page.capturePage()).toPNG());
+    page = await until(() => webContents.getAllWebContents().find(w => w.getURL() === refined.preview.url), 'updated preview page');
+    assert.equal(await js(page, 'document.querySelector("h1").textContent'), 'Version 2');
+    // An occluded native view can refuse GPU capture in a headless smoke run;
+    // the window screenshot and live DOM checks still verify this transition.
+    try { fs.writeFileSync(path.join(root, 'preview-page.png'), (await page.capturePage()).toPNG()); }
+    catch (error) { if (!String(error).includes('UnknownVizError')) throw error; console.warn('Native preview capture unavailable (occluded); continuing DOM checks.'); }
+    await call('setProjectDefaultRepository', pid, { repoId: other.repoId });
+    assert.equal((await call('workspaceRepository', pid, wid)).connected.repoId, other.repoId);
     await click(wc, `[data-act=buildaccept][data-build-id="${first.id}"]`);
     const accepted = await until(async () => { const task = await call('buildGet', pid, first.id); return task.status === 'accepted' && task; }, 'Accept');
     await until(() => webContents.getAllWebContents().find(w => w.getURL() === accepted.preview.url), 'Stage accepted page');
     assert.equal(fs.existsSync(first.worktree), false);
+    assert.equal(accepted.repoId, first.repoId);
+    assert.ok(fs.existsSync(path.join(code, 'index.html')), 'Accept lands in the recorded repository after a default change');
+    await call('setProjectDefaultRepository', pid, { repoId: first.repoId });
     const second = await call('buildStart', pid, { workspaceId: wid });
-    const review = await ready(second.id);
+    let review = await ready(second.id);
     await until(() => webContents.getAllWebContents().find(w => w.getURL() === review.preview.url), 'second review page');
+    const stoppedReviewUrl = review.preview.url;
+    await call('buildStopPreview', pid, second.id, review.preview.serverId);
+    await until(() => !webContents.getAllWebContents().some(w => w.getURL() === stoppedReviewUrl), 'stopped review tab closes');
+    assert.ok((await fetch(accepted.preview.url)).ok, 'Stop on review leaves the shared accepted server running');
+    assert.equal((await call('buildGet', pid, first.id)).preview.status, 'ready');
+    await call('buildPreview', pid, second.id);
+    review = await ready(second.id);
+    await until(() => webContents.getAllWebContents().find(w => w.getURL() === review.preview.url), 'reopened review page');
     fs.writeFileSync(path.join(code, 'index.html'), '<h1>User edit</h1>');
     await assert.rejects(call('buildAccept', pid, second.id));
     assert.equal((await call('buildGet', pid, second.id)).preview.url, review.preview.url);
@@ -119,6 +140,16 @@ const deadline = setTimeout(() => { console.error('Build integration timed out',
     await until(() => js(wc, `document.querySelector('[data-stage-address] input')?.value.includes(${JSON.stringify(new URL(accepted.preview.url).host)})`), 'accepted-server failure restores the previous Stage preview');
     await assert.rejects(fetch(thirdReview.preview.url));
     failAcceptedLaunch = false;
+    const fourth = await call('buildStart', pid, { workspaceId: wid });
+    await ready(fourth.id);
+    const replacement = await call('buildAccept', pid, fourth.id);
+    await until(() => !webContents.getAllWebContents().some(w => w.getURL() === accepted.preview.url), 'every old accepted Stage URL replaced');
+    await until(() => webContents.getAllWebContents().some(w => w.getURL() === replacement.preview.url), 'replacement accepted Stage page');
+    assert.equal((await call('buildGet', pid, first.id)).preview.serverId, replacement.preview.serverId);
+    await click(wc, `[data-act=buildstoppreview][data-build-id="${first.id}"]`);
+    await until(() => !webContents.getAllWebContents().some(w => w.getURL() === replacement.preview.url), 'shared Stop closes all accepted Stage tabs');
+    assert.equal((await call('buildGet', pid, fourth.id)).preview.status, 'stopped');
+    await assert.rejects(fetch(replacement.preview.url));
     // Clear/Archive is a middle-panel surface and does not replace the connector rail.
     await click(wc, '[data-clear-doc]');
     await until(() => js(wc, '!!document.querySelector("[data-rail-section-toggle=Archived]")'), 'Archived heading');
@@ -140,9 +171,11 @@ const deadline = setTimeout(() => { console.error('Build integration timed out',
     await click(wc, '[data-build-send]');
     const quick = await until(async () => (await call('buildList', pid)).find(task => task.kind === 'quick' && task.status === 'escalated'), 'quick task');
     assert.equal(quick.workspaceId, other.id);
+    assert.equal(quick.repoId, (await call('workspaceRepository', pid, other.id)).connected.repoId);
+    assert.notEqual(quick.repoId, first.repoId);
     await call('buildDiscard', pid, quick.id);
     assert.deepEqual(errors, [], 'renderer errors');
-    console.log(JSON.stringify({ ok: true, root, checks: ['notification approval before code', 'Hudson task card', 'Build reply input', 'real worktree preview and page interaction', 'Accept switches Stage', 'failed Accept retains preview', 'Discard restores accepted Stage', 'accepted-server failure fallback', 'archive opens read-only in middle', 'post-it popup and destination'] }));
+    console.log(JSON.stringify({ ok: true, root, checks: ['notification approval before code', 'Hudson task card', 'Build reply input', 'real worktree preview and page interaction', 'Accept switches Stage using its original repository after default changes', 'review Stop preserves accepted server', 'shared replacement/Stop synchronizes cards and Stage tabs', 'failed Accept retains preview', 'Discard restores accepted Stage', 'accepted-server failure fallback', 'archive opens read-only in middle', 'post-it popup and destination'] }));
     await finish(0);
   } catch (error) {
     console.error(error);

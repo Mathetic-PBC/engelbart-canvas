@@ -19,6 +19,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 const projects = require('../store/projects.cjs');
+const repositories = require('../store/workspace-repositories.cjs');
+const { affectedBy } = require('../store/repository-activity.cjs');
 const archive = require('../store/archive.cjs');
 const { readJson } = require('../store/home.cjs');
 const { inspectRepository } = require('../tools/repository.cjs');
@@ -70,14 +72,19 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
   const reconciled = new Set();
   const preparing = new Map();
   const opening = new Map();
-  const discarding = new Set();
+  const discarding = new Map();
+  const accepting = new Map();
+  const stoppingPreviews = new Map();
+  const starting = new Set();
+  const contexts = new Map();
   let quitting = false;
 
   const emit = (task) => { try { notify('engelbart:build', store.publicTask(task)); } catch { /* a closed window */ } };
   const navChanged = () => { try { notify('engelbart:nav', {}); } catch { /* a closed window */ } };
   const say = (role, text) => store.message(role, text, now());
 
-  function projectOf(ctx, projectId) { return projects.findProject(ctx, projectId); }
+  function projectOf(ctx, projectId) { contexts.set(ctx.dataRoot, ctx); return projects.findProject(ctx, projectId); }
+  const activityFor = (ctx, projectId, task) => ({ projectId, workspaceId: task.workspaceId, paths: [projectOf(ctx, projectId).dir, task.worktree, task.cwd], repositories: [task.repo, task.sourceDirectory] });
   function read(ctx, projectId, id) {
     const task = store.readTask(projectOf(ctx, projectId), id);
     if (!task) throw new Error('Unknown Build');
@@ -92,6 +99,16 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     emit(next);
     return next;
   }
+
+  // Accepted servers are shared, even across projects connected to the same
+  // checkout. Keep every referencing card (and its Stage tab) on the same server.
+  previews?.subscribe?.(({ previous, preview }) => {
+    for (const ctx of contexts.values()) for (const project of projects.projectRecords(ctx)) for (const task of store.listTasks(project)) {
+      const held = task.preview;
+      if (!held || !((previous.serverId && held.serverId === previous.serverId) || held.url === previous.url || held.previousUrl === previous.url)) continue;
+      save(ctx, project.id, task.id, { preview: { ...preview, mode: held.mode === 'restored' ? 'restored' : preview.mode } });
+    }
+  });
 
   /** One git writer per repository at a time: worktree add and remove, and Accept. */
   function serial(repo, work) {
@@ -120,24 +137,30 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
   /* ------------------------------------------------------------------ preflight */
 
   /** Whether the project's code folder can take a Build, and what the dialog should say. */
-  async function preflight(ctx, projectId) {
-    const project = projectOf(ctx, projectId);
-    if (!project.directory) return { ok: false, problems: [{ code: 'no-directory', message: 'This project has no code folder.' }], dirty: 0, canInit: false };
-    if (!gitReady()) return { ok: false, directory: project.directory, problems: [{ code: 'no-git', message: 'Git is not set up yet (Engelbart ▸ Set Up Tools…).' }], dirty: 0, canInit: false };
-    const report = inspectRepository(project.directory);
+  async function preflight(ctx, projectId, workspaceId) {
+    await repositories.ensure(ctx, projectId);
+    let repository;
+    try { repository = repositories.resolve(ctx, projectId, workspaceId); }
+    catch (error) { return { ok: false, problems: [{ code: error.code, message: error.message }], dirty: 0, canInit: false }; }
+    if (!gitReady()) return { ok: false, directory: repository.directory, problems: [{ code: 'no-git', message: 'Git is not set up yet (Engelbart ▸ Set Up Tools…).' }], dirty: 0, canInit: false };
+    const report = inspectRepository(repository.directory);
     const blocking = report.problems.filter((problem) => problem.code !== 'not-a-repository' && problem.code !== 'no-commits');
     const canInit = report.problems.length > 0 && !blocking.length;
     let dirty = 0;
     if (report.repository && report.commits) { try { dirty = (await git.dirtyPaths(report.top)).length; } catch { dirty = 0; } }
-    return { ok: !report.problems.length, directory: project.directory, top: report.top, branch: report.branch, dirty, problems: report.problems, canInit };
+    return { ok: !report.problems.length, repoId: repository.repoId, repositoryName: repository.name, directory: repository.directory, top: report.top, branch: report.branch, dirty, problems: report.problems, canInit };
   }
 
   /** "Start history": git init and a first commit in a folder that had none (B17). */
-  async function initRepository(ctx, projectId) {
-    const pre = await preflight(ctx, projectId);
+  async function initRepository(ctx, projectId, workspaceId) {
+    const pre = await preflight(ctx, projectId, workspaceId);
     if (!pre.canInit) throw new Error(pre.problems.length ? pre.problems[0].message : 'This folder already has a history.');
-    await serial(pre.directory, () => git.init(pre.directory));
-    return preflight(ctx, projectId);
+    const release = repositories.lease(ctx, projectId, pre.directory, { workspaceId });
+    const entry = { activity: activityFor(ctx, projectId, { workspaceId, repo: pre.directory }) };
+    starting.add(entry);
+    try { await serial(pre.directory, () => git.init(pre.directory)); }
+    finally { starting.delete(entry); release(); }
+    return preflight(ctx, projectId, workspaceId);
   }
 
   /* ---------------------------------------------------------------------- start */
@@ -145,8 +168,15 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
   async function start(ctx, projectId, input = {}) {
     if (quitting) throw new Error('Builds are shutting down.');
     reconcile(ctx);
-    const pre = await preflight(ctx, projectId);
+    const pre = await preflight(ctx, projectId, input.workspaceId);
     if (!pre.ok) throw new Error(pre.problems[0].message);
+    if (input.expectedRepoId && input.expectedRepoId !== pre.repoId) throw new Error('The workspace repository changed after approval. Review a new Build proposal before starting.');
+    const current = repositories.resolve(ctx, projectId, input.workspaceId);
+    if (current.repoId !== pre.repoId || current.directory !== pre.directory) throw new Error('The workspace repository changed while preparing this Build. Review its destination and try again.');
+    const release = repositories.lease(ctx, projectId, pre.directory, { workspaceId: input.workspaceId });
+    const startingEntry = { activity: activityFor(ctx, projectId, { workspaceId: input.workspaceId, repo: pre.top, sourceDirectory: pre.directory }) };
+    starting.add(startingEntry);
+    try {
     const project = projectOf(ctx, projectId);
     const kind = input.kind === 'quick' ? 'quick' : 'build';
     // A post-it's text: a quick task's, or a post-it added to a workspace (a Build of it whose task is the post-it).
@@ -166,11 +196,12 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     if (!at.branch) throw new Error('The code folder is not on a branch.');
     const id = await store.freeId(project, (candidate) => git.branchExists(pre.top, `engelbart/${candidate}`));
     const worktree = path.join(ctx.dataRoot, 'worktrees', project.slug, id);
-    const inside = path.relative(pre.top, project.directory);
+    const inside = path.relative(pre.top, pre.directory);
     const attach = [...new Set((Array.isArray(input.attach) ? input.attach : []).filter((value) => typeof value === 'string' && UUID_RE.test(value)))].slice(0, MAX_ATTACH);
     const task = {
       id, kind, projectId, workspaceId, postItId: postIt && typeof input.postItId === 'string' ? input.postItId : null, postIt, version: null, title,
       ...choice, sessionId: null,
+      schemaVersion: 2, repoId: pre.repoId, repositoryName: pre.repositoryName, sourceDirectory: pre.directory, sourceBuildId: input.sourceBuildId || null,
       repo: pre.top, worktree, cwd: inside && !inside.startsWith('..') ? path.join(worktree, inside) : worktree,
       branch: `engelbart/${id}`, baseBranch: at.branch, baseSha: at.sha,
       status: 'setting-up', question: null, error: null, queued: null, turn: 0, checkpoints: [],
@@ -192,6 +223,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     emit(saved);
     beginPrepare(ctx, projectId, id);
     return store.publicTask(saved);
+    } finally { starting.delete(startingEntry); release(); }
   }
 
   function beginPrepare(ctx, projectId, id) {
@@ -201,7 +233,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
       const task = read(ctx, projectId, id);
       if (!store.FINAL.has(task.status)) save(ctx, projectId, id, { status: quitting ? 'interrupted' : 'failed', error: error.message });
     }).finally(() => preparing.delete(id));
-    preparing.set(id, { controller, done });
+    preparing.set(id, { controller, done, activity: activityFor(ctx, projectId, read(ctx, projectId, id)) });
   }
 
   /** The worktree and its setup, then the first turn. A Build discarded meanwhile is cleaned up instead. */
@@ -229,7 +261,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
   async function setupWorktree(project, task, signal) {
     const own = readJson(path.join(project.dir, 'project.json')) || {};
     const custom = own.build && typeof own.build.setup === 'string' ? own.build.setup.trim() : null;
-    const source = project.directory;
+    const source = task.sourceDirectory || task.repo;
     for (const dir of [...new Set([task.repo, source])]) {
       const target = path.join(task.worktree, path.relative(task.repo, dir));
       let names = [];
@@ -266,7 +298,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     const pool = task.kind === 'quick' ? 'quick' : 'build';
     const controller = new AbortController();
     let settle;
-    const entry = { controller, stopping: null, done: new Promise((resolve) => { settle = resolve; }) };
+    const entry = { controller, stopping: null, done: new Promise((resolve) => { settle = resolve; }), activity: activityFor(ctx, projectId, task) };
     live.set(id, entry);
     let free = null;
     try {
@@ -451,6 +483,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     if (live.has(id) || opening.has(id) || task.status === 'setting-up' || task.status === 'accepting') throw new Error('It is still working.');
     if (!fs.existsSync(task.worktree)) throw new Error('This Build\'s copy is gone; discard it.');
     const before = task.status;
+    accepting.set(id, { activity: activityFor(ctx, projectId, task) });
     save(ctx, projectId, id, { status: 'accepting', error: null, conflict: null });
     try {
       return await serial(task.repo, async () => {
@@ -520,7 +553,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
       }));
       if (auto) return store.publicTask(next);
       throw error;
-    }
+    } finally { accepting.delete(id); }
   }
 
   /**
@@ -574,7 +607,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     if (store.FINAL.has(task.status)) return store.publicTask(task);
     if (task.status === 'accepting') throw new Error('It is being accepted.');
     if (discarding.has(id)) throw new Error('It is already being discarded.');
-    discarding.add(id); // prevents a queued reply or quick-task auto-Accept from racing cleanup
+    discarding.set(id, { activity: activityFor(ctx, projectId, task) }); // prevents a queued reply or quick-task auto-Accept from racing cleanup
     try {
       const entry = live.get(id), setup = preparing.get(id), launch = opening.get(id);
       setup?.controller.abort(); launch?.controller.abort();
@@ -594,10 +627,17 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
    * is put in as an archived version of the workspace (2026-09-27), and the workspace joins ⌘J's recent ones.
    */
   async function promote(ctx, projectId, id, workspaceId, picked = null) {
+    await repositories.ensure(ctx, projectId);
     reconcile(ctx);
     const task = read(ctx, projectId, id);
     if (task.kind !== 'quick' || store.FINAL.has(task.status) || live.has(id)) throw new Error('Only a quick task that is not working can become a Build.');
     const { workspace } = projects.findWorkspace(ctx, projectId, workspaceId);
+    const destination = repositories.resolve(ctx, projectId, workspace.id);
+    if (destination.repoId !== task.repoId && destination.directory !== task.repo) {
+      const next = await start(ctx, projectId, { ...(picked || { provider: task.provider, model: task.model, effort: task.effort }), workspaceId: workspace.id, text: postItOf(task, store.readContext(projectOf(ctx, projectId), id)), attach: task.attach, sourceBuildId: id });
+      save(ctx, projectId, id, held => ({ messages: [...held.messages, say('engelbart', `A new Build ${next.id} was started in “${workspace.name}” because its repository differs. This original worktree and history are preserved.`)] }));
+      return next;
+    }
     // The post-it's "Needs you" card offers the model again, set to what the task ran on (2026-09-27). Another model of the
     // same provider goes on in the same session; another provider cannot, so its first turn gets everything again.
     const choice = picked ? resolveBuildChoice(readModels(), picked) : null;
@@ -676,11 +716,21 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
       controller.signal.throwIfAborted();
       return store.publicTask(save(ctx, projectId, id, { preview: value }));
     }).finally(() => opening.delete(id));
-    opening.set(id, { controller, done });
+    opening.set(id, { controller, done, activity: activityFor(ctx, projectId, task) });
     return done;
   }
 
-  return { preflight, initRepository, start, reply, stop, resume, review, preview, accept, fix, discard, promote, reconcile, list, get, openIds, stopAll, running: () => [...live.keys()] };
+  const busy = (projectId, roots, workspaceIds = []) => [...starting, ...live.values(), ...preparing.values(), ...opening.values(), ...discarding.values(), ...accepting.values(), ...stoppingPreviews.values()].some(entry => affectedBy({ projectId, roots, workspaceIds }, entry.activity)) || !!previews?.busy?.(projectId, roots, workspaceIds);
+  async function stopPreview(ctx, projectId, id, expectedId = null) {
+    if (live.has(id) || preparing.has(id) || opening.has(id) || accepting.has(id) || discarding.has(id) || stoppingPreviews.has(id)) throw new Error('Wait for the Build to finish before stopping its preview.');
+    const task = read(ctx, projectId, id);
+    stoppingPreviews.set(id, { activity: activityFor(ctx, projectId, task) });
+    try {
+      await previews?.stopTask?.(task, expectedId);
+      return store.publicTask(read(ctx, projectId, id));
+    } finally { stoppingPreviews.delete(id); }
+  }
+  return { preflight, initRepository, start, reply, stop, resume, review, preview, stopPreview, accept, fix, discard, promote, reconcile, list, get, openIds, stopAll, busy, running: () => [...live.keys()] };
 }
 
 module.exports = { createBuilds, createShell, LIMITS, TURN_MS };

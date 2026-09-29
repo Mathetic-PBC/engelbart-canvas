@@ -4,6 +4,7 @@
 // Runs the real app, hidden, against disposable project/user data and a local interactive page, and drives the
 // post-its with real (synthetic) input: the 2026-09-22 round — flat face, fit instead of scroll, Enter keeps the caret,
 // hover previews leave cards alone, crumpling into the trash, the trash panel and Restore, +Note, Copy.
+// --startup-only checks the restricted renderer, editing, show/hide, and reopening without the drag/clipboard checks.
 const { app, BrowserWindow, clipboard } = require('electron');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -85,7 +86,7 @@ app.whenReady().then(async () => {
     win.setFocusable(false); // synthetic input only; do not capture the user's typing
     assert.equal(win.isVisible(), false, 'smoke tests must not show a desktop window');
     await until(() => js(win.webContents, '!!window.engelbartAPI && !!document.querySelector("button")').catch(() => false), 'app bootstrap');
-    const created = await js(win.webContents, `window.engelbartAPI.createProjectWithWelcome({name:'Post-it smoke', directory:${JSON.stringify(root)}})`);
+    const created = await js(win.webContents, "window.engelbartAPI.createProjectWithWelcome({name:'Post-it smoke'})");
     const pid = created.project.id;
     win.webContents.reload();
     await until(() => js(win.webContents, '!!document.querySelector("[data-add-post-it]") && !!document.querySelector("main [data-editor]")').catch(() => false), 'post-it icon and document');
@@ -97,6 +98,7 @@ app.whenReady().then(async () => {
     await click(win.webContents, button.x, button.y);
     let card = await until(() => cards(win)[0], 'native card creation');
     await until(() => js(card.webContents, '!!document.querySelector("[data-editor]") && document.activeElement === document.querySelector("[data-editor]")'), 'card editor focused');
+    assert.equal(card.getVisible(), true, 'the restricted post-it renderer starts and becomes visible');
     assert.deepEqual([card.getBounds().width, card.getBounds().height], [260, 260], 'a new card is square');
     assert.equal(await js(card.webContents, 'getComputedStyle(document.querySelector(".postit-face")).backgroundColor'), 'rgb(255, 242, 160)', 'flat yellow face');
     assert.equal(await js(card.webContents, 'getComputedStyle(document.querySelector(".postit-face")).boxShadow'), 'none');
@@ -109,7 +111,9 @@ app.whenReady().then(async () => {
     await click(card.webContents, 200, 6); // the head strip: leaves the line, so the markdown renders
     await until(() => js(card.webContents, '!!document.querySelector("[data-editor] strong")'), 'same inline markdown compiler');
     console.log('PASS square flat face, notes font, inline markdown, Enter continues a list');
+    const cardId = (await db.postIts.list())[0].id;
 
+    if (!process.argv.includes('--startup-only')) {
     /* ------------------------------------------------ raise() leaves a correct stack alone */
     const url = `http://127.0.0.1:${server.address().port}`;
     await js(win.webContents, `window.engelbartAPI.browserOpen('smoke-browser',${JSON.stringify(url)})`);
@@ -170,7 +174,6 @@ app.whenReady().then(async () => {
     console.log('PASS hover previews never hide cards; only a menu or dialog over a card does');
 
     /* ------------------------------------------------ crumple into the trash, the panel, Restore */
-    const cardId = (await db.postIts.list())[0].id;
     const can = await js(win.webContents, '(()=>{const r=document.querySelector("[data-trash]").getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+r.height/2,right:r.right}})()');
     const b1 = card.getBounds(), start = { x: 130, y: 6 };
     const from = { x: b1.x + start.x, y: b1.y + start.y };
@@ -230,21 +233,15 @@ app.whenReady().then(async () => {
     }
     assert.equal(cards(win).length, 1, 'copying leaves the card');
     console.log('PASS Copy: the card’s markdown on the clipboard, from the lower left');
+    }
 
-    /* ------------------------------------------------ show/hide toggle: out of sight and back, nothing written */
+    /* ------------------------------------------------ native visibility: out of sight and back, nothing written */
+    const lastText = (await db.postIts.list())[0].text;
     const rowsNow = async () => JSON.stringify([await db.postIts.list(), await db.postIts.trashed()]);
-    const toggleState = () => js(win.webContents, 'document.querySelector("[data-toggle-post-its]").dataset.togglePostIts');
-    const toggle = () => js(win.webContents, 'document.querySelector("[data-toggle-post-its]").click()');
-    const place = await js(win.webContents, '(()=>{const n=document.querySelector("[data-add-post-it]").getBoundingClientRect(),t=document.querySelector("[data-toggle-post-its]").getBoundingClientRect();return{right:t.right-n.right,bottom:t.bottom-n.bottom,left:t.left-n.left,top:t.top-n.top}})()');
-    assert.ok(place.left > 0 && place.top > 0 && Math.abs(place.bottom) <= 1, `the toggle sits at the note's lower right: ${JSON.stringify(place)}`);
-    const word = () => js(win.webContents, 'document.querySelector("[data-toggle-post-its]").textContent');
-    assert.equal(await word(), 'Hide', 'plain text naming what a click does');
+    const hide = (hidden) => js(win.webContents, `window.engelbartAPI.postItsHide(${hidden})`);
     const saved = await rowsNow(), count = cards(win).length;
-    assert.equal(await toggleState(), 'shown');
-    await toggle();
+    await hide(true);
     await until(() => cards(win).every((v) => !v.getVisible()), 'hide takes every card out of sight');
-    assert.equal(await toggleState(), 'hidden');
-    assert.equal(await word(), 'Show');
     await pause(300);
     assert.equal(await rowsNow(), saved, 'hiding writes, creates and deletes nothing');
     assert.equal(cards(win).length, count, 'hidden cards keep their views');
@@ -255,16 +252,15 @@ app.whenReady().then(async () => {
     await pause(200);
     assert.equal(card.getVisible(), false, 'still hidden after the project is reopened');
     const reopened = await rowsNow(); // closing a project flushes each card's text, which stamps last_edited
-    await toggle();
+    await hide(false);
     await until(() => cards(win).every((v) => v.getVisible()), 'show brings every card back');
     await pause(300);
     assert.equal(await rowsNow(), reopened, 'showing writes, creates and deletes nothing');
-    await toggle();
+    await hide(true);
     await until(() => !card.getVisible(), 'hidden again');
     const add = await center(win.webContents, '[data-add-post-it]');
     await click(win.webContents, add.x, add.y);
     await until(() => cards(win).length === count + 1 && cards(win).every((v) => v.getVisible()), 'making a post-it while hidden shows them all');
-    await until(async () => (await toggleState()) === 'shown', 'the toggle follows');
     console.log('PASS show/hide: every card out of sight and back, no row touched; a new post-it shows them again');
 
     /* ------------------------------------------------ persistence across project switches and the week-old purge */
@@ -272,6 +268,8 @@ app.whenReady().then(async () => {
     assert.equal(cards(win).length, 0);
     await js(win.webContents, `window.engelbartAPI.postItsActivate(${JSON.stringify(pid)})`);
     card = await readyCard(win, cardId);
+    assert.equal(card.getVisible(), true, 'reopening the project restores a visible sticky note');
+    assert.equal(await js(card.webContents, 'window.postItAPI.ready().then(c=>c.text)'), lastText, 'reopened note keeps its saved text');
     console.log(`Renderer working sets (KB): ${app.getAppMetrics().filter((m) => m.type === 'Tab').map((m) => m.memory.workingSetSize).join(', ')}`);
     await closeTerminals(win);
     await js(win.webContents, 'window.engelbartAPI.browserCloseAll()');

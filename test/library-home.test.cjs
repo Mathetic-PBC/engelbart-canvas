@@ -74,7 +74,7 @@ test('who holds what: both directions agree with each other and with the catalog
   await assert.rejects(library.projectsForLibraryItem(ctx, randomUUID()), /Unknown library item/);
 
   const inAlpha = await library.libraryForProject(ctx, a.id);
-  assert.deepEqual(inAlpha.map((row) => [row.name, row.origin, row.workspaces]).sort(), [['Made in Alpha', true, []], ['Shared paper', false, ['Outer/Inner']]]);
+  assert.deepEqual(inAlpha.map((row) => [row.name, row.origin, row.workspaces]).sort(), [['Alpha', true, []], ['Made in Alpha', true, []], ['Shared paper', false, ['Outer/Inner']]]);
   // The invariant: an item is in a project's list exactly when the project is in the item's list.
   for (const project of [a, b]) {
     const held = new Set((await library.libraryForProject(ctx, project.id)).map((row) => row.id));
@@ -105,7 +105,8 @@ test('the all-projects list carries each card: recent workspaces newest first wi
   assert.deepEqual(card.recent.map((w) => w.name), ['Five', 'Four', 'Three', 'Two']);
   assert.equal(card.recent[0].text, '**Five** body');
   assert.equal(card.recent[0].chars, 13);
-  assert.deepEqual(card.libraryIds, [note.id]);
+  const repoIds = Object.values(projects.findProject(ctx, project.id).repositories).map(repo => repo.libraryId);
+  assert.deepEqual(card.libraryIds.sort(), [...repoIds, note.id].sort());
 });
 
 test('a project named after a directory the data root keeps for itself is still a project', async () => {
@@ -436,15 +437,16 @@ test('a project\'s code directory is a clone the library already knows about: fo
   // added by address when the project is already there: linked at once, and nobody is asked to describe it
   const other = fakeClone(path.join(homeDir, 'code', 'tool'), 'git@github.com:acme/tool.git');
   await projects.createProject(ctx, { name: 'Tool', directory: other });
-  const added = await library.addItem(ctx, 'https://github.com/acme/tool', { identifyRepo: async () => ({ id: '106', fullName: 'acme/tool', url: 'https://github.com/acme/tool', description: 'One request: id and description.' }) });
-  assert.deepEqual([added.folder_path, added.summary, added.github_id, added.type], [other, 'One request: id and description.', '106', 'folder']);
+  const added = (await library.lookupItem(ctx, 'https://github.com/acme/tool')).row;
+  assert.deepEqual([added.folder_path, added.type], [other, 'folder']);
+  await assert.rejects(library.addItem(ctx, 'https://github.com/acme/tool'), /Already in the library/);
 
   fs.rmSync(other, { recursive: true });
   // the clone is deleted: the row stays in the library with its id and address, says its folder is missing, and the peek goes back to asking
   const gone = await library.previewItem(ctx, added.id, { listRemoteFiles: async () => ['README.md'] });
   assert.deepEqual([gone.files, gone.folder, gone.folderMissing], [['README.md'], null, '~/code/tool']);
   const kept = await ctx.libraryDb.get(added.id);
-  assert.deepEqual([kept.github_id, kept.url, kept.folder_path], ['106', 'https://github.com/acme/tool', other], 'nothing is removed, and the path is kept for the day the folder comes back');
+  assert.deepEqual([kept.id, kept.url, kept.folder_path], [added.id, 'https://github.com/acme/tool', other], 'nothing is removed, and the path is kept for the day the folder comes back');
 });
 
 /* The workspace sidebar (2026-09-22): what the Save button and the search ask, pictures from disk, the trash. */

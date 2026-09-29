@@ -1,6 +1,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
+import { useSessionState, useScrollMemory } from '../session-ui.js';
 import { KIND, kindOf, KindGlyph as Glyph } from '../ui/Icons.jsx';
 import { isUntitled } from '../model/names.js';
 import { documentProvider, looksAddable, railSections, searchRows } from '../model/rail.js';
@@ -10,7 +11,6 @@ import GithubRepositories from './GithubRepositories.jsx';
 import GoogleDocuments from './GoogleDocuments.jsx';
 import ZoteroPapers from './ZoteroPapers.jsx';
 import OverleafProjects from './OverleafProjects.jsx';
-import SourceBrowser from './SourceBrowser.jsx';
 import Connections from './Connections.jsx';
 import RepoThumbnail, { createThumbnailCache } from './RepoThumbnail.jsx';
 import { usePlaced } from '../ui/usePlaced.js';
@@ -235,7 +235,22 @@ const ARCHIVE_MARK = (
 /** When a version was cleared, the short way: "Sep 25, 14:03". */
 const clearedLabel = (iso) => { const at = new Date(iso || ''); return Number.isNaN(at.getTime()) ? '' : `${at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}, ${at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`; };
 
-function RailRow({ row, flash, faded, onClick, onRenameStart, onRename, onRenameEnd, onDragStart, onDragEnd, onEnter, onLeave, onRemove, onRestore }) {
+function RepositoryItemMenu({ anchor, onUse, onClose }) {
+  const [ref, placed] = usePlaced(anchor, { gap: 4 });
+  React.useEffect(() => {
+    const away = event => { if (!ref.current?.contains(event.target)) onClose(); };
+    const key = event => { if (event.key === 'Escape') { event.stopPropagation(); onClose(); } };
+    document.addEventListener('pointerdown', away); document.addEventListener('keydown', key);
+    return () => { document.removeEventListener('pointerdown', away); document.removeEventListener('keydown', key); };
+  }, [ref, onClose]);
+  return createPortal(<div ref={ref} data-overlay="1" data-repo-item-menu="1" role="menu" style={{ ...placed, zIndex: 65, padding: 5, border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', boxShadow: '0 8px 24px #0000000d' }} onClick={event => event.stopPropagation()}>
+    <button type="button" role="menuitem" className="hov-wash" onClick={() => { onClose(); onUse(); }} style={{ border: 0, borderRadius: 4, padding: '7px 10px', background: 'transparent', font: '13px/20px var(--font-sans)', cursor: 'pointer', color: '#3d3d3d' }}>Use for this workspace</button>
+  </div>, document.body);
+}
+
+function RailRow({ row, flash, faded, onClick, onRenameStart, onRename, onRenameEnd, onDragStart, onDragEnd, onEnter, onLeave, onRemove, onRestore, onUseRepository }) {
+  const [repositoryMenu, setRepositoryMenu] = React.useState(null);
+  const closeRepositoryMenu = React.useCallback(() => setRepositoryMenu(null), []);
   const inputRef = React.useRef(null);
   const [draft, setDraft] = React.useState(row.name);
   React.useEffect(() => { setDraft(row.name); }, [row.name, row.editing]);
@@ -296,6 +311,8 @@ function RailRow({ row, flash, faded, onClick, onRenameStart, onRename, onRename
             </span>
           )
           : <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: `${row.on ? 600 : 400} 14px/1.5 var(--font-sans)`, color: isUntitled(row.name) ? '#8f8f8f' : '#171717' }}>{row.name}</span>}
+      {onUseRepository && row.tags?.includes('git') && !row.editing && <button type="button" className="rail-minus" data-repo-item-actions={row.id} aria-label={`Repository actions for ${row.name}`} aria-haspopup="menu" aria-expanded={!!repositoryMenu} title="Repository actions" onMouseDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); setRepositoryMenu(event.currentTarget.getBoundingClientRect()); }} style={{ padding: '0 3px', border: 0, background: 'transparent', color: '#777', cursor: 'pointer' }}>⋯</button>}
+      {repositoryMenu && <RepositoryItemMenu anchor={repositoryMenu} onClose={closeRepositoryMenu} onUse={() => onUseRepository(row)} />}
       {onRestore && (
         <button
           type="button"
@@ -329,22 +346,23 @@ function RailRow({ row, flash, faded, onClick, onRenameStart, onRename, onRename
 }
 
 // Material headings share the reference's regular-weight text and a quiet disclosure chevron.
-function RailSection({ section, open, onToggle, children }) {
+function RailSection({ section, open, onToggle, children, nested = false }) {
   const id = React.useId();
   return (
-    <div data-rail-section={section.key} style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 2 }}>
+    <div data-rail-section={nested ? undefined : section.key} data-rail-subsection={nested ? section.key : undefined} style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 2 }}>
       <div style={{ display: 'flex', alignItems: 'flex-end' }}>
         <button
           type="button"
           className="hov-ink-wash"
-          data-rail-section-toggle={section.key}
+          data-rail-section-toggle={nested ? undefined : section.key}
+          data-rail-subsection-toggle={nested ? section.key : undefined}
           onClick={onToggle}
           aria-expanded={open}
           aria-controls={open ? id : undefined}
           style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6, boxSizing: 'border-box', padding: '6px 10px', minHeight: 32, border: 0, borderRadius: 6, background: 'transparent', textAlign: 'left', cursor: 'pointer', color: '#3d3d3d', transition: 'color 120ms, background 120ms' }}
         >
           <svg aria-hidden="true" width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ flex: 'none', color: '#8e8e8e', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 140ms' }}><path d="m6 3 5 5-5 5" /></svg>
-          <Glyph kind={section.icon} box={16} size={16} color="#555" />
+          <Glyph kind={section.icon} box={16} size={nested ? 14 : 16} color="#555" />
           <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '400 14px/20px var(--font-sans)' }}>{section.label}</span>
         </button>
       </div>
@@ -353,22 +371,21 @@ function RailSection({ section, open, onToggle, children }) {
   );
 }
 
-// Mounting the catalog is an explicit action; opening Code alone never fetches or builds a repository.
-function MyProjects({ onOpen }) {
-  const [open, setOpen] = React.useState(false);
+// Account catalogs mount only when their My Projects folder is explicitly expanded.
+function MyProjects({ catalog, projectId, children }) {
+  const [open, setOpen] = useSessionState(`sidebar:${projectId}:projects:${catalog.provider}`, false);
   const id = React.useId();
-  return <div data-rail-subsection="github-projects" style={{ marginLeft: -20, minWidth: 0 }}>
-    <button type="button" data-github-projects-toggle="1" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setOpen(value => !value)}
+  return <div data-rail-subsection={`${catalog.provider}-projects`} style={{ marginLeft: -20, minWidth: 0 }}>
+    <button type="button" data-projects-toggle={catalog.provider} data-github-projects-toggle={catalog.provider === 'github' ? '1' : undefined} aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setOpen(value => !value)}
       className="hov-wash" style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', minHeight: 32, boxSizing: 'border-box', padding: '6px 10px 6px 30px', border: 0, borderRadius: 8, background: open ? '#efefef' : 'transparent', color: '#555', textAlign: 'left', font: '400 13px/20px var(--font-sans)', cursor: 'pointer' }}>
       <svg aria-hidden="true" width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ flex: 'none', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 140ms' }}><path d="m6 3 5 5-5 5" /></svg>
-      My Projects
+      {catalog.label}
     </button>
-    {open && <div id={id} style={{ minWidth: 0, paddingLeft: 44 }}><GithubRepositories inline onOpen={onOpen} /></div>}
+    {open && <div id={id} data-projects-list={catalog.provider} style={{ minWidth: 0, paddingLeft: 44 }}>{children()}</div>}
   </div>;
 }
 
-// Expansion belongs to this app session. Old saved folds must not reopen groups
-// on launch; only an explicit click expands a section.
+// New projects start collapsed; subsequent launches restore the user's folders.
 const initialRailExpansion = () => ({});
 
 // A panel that hangs from something in the sidebar (the search field, the + row). Fixed to the window, so the sidebar's
@@ -728,7 +745,7 @@ const barButton = (enabled, size) => ({ flex: 'none', width: size, height: size,
 const barPicture = { display: 'block', objectFit: 'contain', pointerEvents: 'none', userSelect: 'none' };
 
 /** Illustrated controls at the left; Connections at the right. */
-function BottomBar({ children, compact, trashRef, full, dragging, over, onTrashDragOver, onTrashDragEnter, onTrashDragLeave, onTrashDrop, postItTrash, onPostIt, postItsHidden, onTogglePostIts }) {
+function BottomBar({ children, compact, trashRef, full, dragging, over, onTrashDragOver, onTrashDragEnter, onTrashDragLeave, onTrashDrop, postItTrash, onPostIt }) {
   const size = compact ? 40 : BAR_SIZE;
   const artSize = compact ? 36 : 40;
   const picture = { ...barPicture, width: artSize, height: artSize };
@@ -750,7 +767,6 @@ function BottomBar({ children, compact, trashRef, full, dragging, over, onTrashD
             <img src={notePng} alt="" draggable={false} style={{ ...picture, transform: 'translateY(10%)' }} />
           </button>
           {tip === 'note' && <BarTip text="Note" align="center" />}
-          {onTogglePostIts && <button type="button" data-toggle-post-its="1" aria-label={postItsHidden ? 'Show post-its' : 'Hide post-its'} title={postItsHidden ? 'Show post-its' : 'Hide post-its'} onClick={onTogglePostIts} style={{ position: 'absolute', right: -2, bottom: -2, padding: '1px 3px', border: 0, borderRadius: 3, background: '#fafafa', color: '#777', font: '10px/1.3 var(--font-sans)', cursor: 'pointer' }}>{postItsHidden ? '+' : '−'}</button>}
         </div>
         <div style={{ position: 'relative', display: 'flex' }}>
           <div
@@ -785,19 +801,20 @@ function BottomBar({ children, compact, trashRef, full, dragging, over, onTrashD
 }
 
 export default function Rail({
-  width, topics, topic, allWorkspaces, onOpenDoc, onSelectTopic, onCycleTopic, onRenameTopic, onAddTopic,
+  projectId, width, topics, topic, allWorkspaces, onOpenDoc, onSelectTopic, onCycleTopic, onRenameTopic, onAddTopic,
   rows, flashId, onRowClick, onRowRenameStart, onRowRename, onRowRenameEnd,
-  library, inRail, onSearchPick, onAddInput, onPickDisk, onNewNote, onNewChild, onPickRepo, onBrowseRepo, onOpenHeld,
+  library, inRail, onSearchPick, onAddInput, onPickDisk, onNewNote, onNewChild, onPickRepo, onBrowseRepo, onOpenHeld, onUseRepository,
   onTrashRow, onRestoreArchive, trashFull, postItTrash, postItDrag, trashRef,
-  onPostIt, postItsHidden, onTogglePostIts,
+  onPostIt,
 }) {
   const [peek, setPeek] = React.useState(null); // { row, element, rect, edge }
   const [previews, setPreviews] = React.useState({}); // `${id}:${last_edited}` → previewLibraryItem's answer
   const [thumbnailCache] = React.useState(createThumbnailCache);
   const [dragging, setDragging] = React.useState(null);
   const [overTrash, setOverTrash] = React.useState(false);
-  const [menus, setMenus] = React.useState({ search: false, add: false, connections: false, browse: null });
-  const [expanded, setExpanded] = React.useState(initialRailExpansion);
+  const [menus, setMenus] = React.useState({ search: false, add: false, connections: false });
+  const [expanded, setExpanded] = useSessionState(`sidebar:${projectId}:expanded`, initialRailExpansion);
+  const scrollMemory = useScrollMemory(`sidebar:${projectId}:scroll`);
   const toggleSection = key => setExpanded(now => ({ ...now, [key]: !now[key] }));
   const timer = React.useRef(null);
   const itemRows = rows;
@@ -830,14 +847,10 @@ export default function Rail({
     api.previewLibraryItem(row.id).then((more) => setPreviews((now) => ({ ...now, [key]: more }))).catch(() => setPreviews((now) => ({ ...now, [key]: {} })));
   }, []);
   React.useEffect(() => { if (peek && peek.row.type !== 'image' && !peek.row.tags?.includes('git')) preview(peek.row); }, [peek, preview]);
-  const busyMenus = menus.search || menus.add || menus.connections || !!menus.browse;
+  const busyMenus = menus.search || menus.add || menus.connections;
   const setSearchOpen = React.useCallback((value) => setMenus((current) => (current.search === value ? current : { ...current, search: value })), []);
   const setAddOpen = React.useCallback((value) => setMenus((current) => (current.add === value ? current : { ...current, add: value })), []);
   const setConnectionsOpen = React.useCallback((value) => setMenus((current) => (current.connections === value ? current : { ...current, connections: value })), []);
-  const setBrowseOpen = React.useCallback((provider, open) => setMenus(current => {
-    const browse = open ? provider : current.browse === provider ? null : current.browse;
-    return current.browse === browse ? current : { ...current, browse };
-  }), []);
 
   /* ----------------------------------------------------------------- trash */
   const dragStart = (row, event) => {
@@ -866,6 +879,7 @@ export default function Rail({
       onEnter={openPeek} onLeave={closePeek}
       onRemove={row.type === 'child' || row.type === 'archive' ? null : removed => { hold(); setPeek(null); onTrashRow(removed); }}
       onRestore={row.type === 'archive' && onRestoreArchive ? () => onRestoreArchive(row.file) : null}
+      onUseRepository={onUseRepository}
     />
   );
   const peekRow = peek && (itemRows.find(row => row.id === peek.row.id) || peek.row);
@@ -874,26 +888,30 @@ export default function Rail({
   const peekTop = peek ? Math.max(54, Math.min(peek.rect.top - 12, window.innerHeight - 380)) : 0;
   return (
     <aside aria-label="Sidebar" style={{ flex: 'none', width, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 7, background: '#f7f7f7' }}>
-      <div onScroll={() => { hold(); setPeek(null); }} style={{ flex: 1, minHeight: 0, boxSizing: 'border-box', padding: '10px 10px 8px', display: 'flex', flexDirection: 'column', overflowY: 'auto', overflowX: 'hidden' }}>
+      <div {...scrollMemory} onScroll={() => { scrollMemory.onScroll(); hold(); setPeek(null); }} style={{ flex: 1, minHeight: 0, boxSizing: 'border-box', padding: '16px 10px 8px', display: 'flex', flexDirection: 'column', overflowY: 'auto', overflowX: 'hidden' }}>
         <div data-rail-workspaces="1" style={{ flex: 'none', marginBottom: 16 }}>
           <WorkspaceHeader topic={topic} all={allWorkspaces} onOpenDoc={onOpenDoc} onSelectTopic={onSelectTopic} onCycleTopic={onCycleTopic} onRenameTopic={onRenameTopic} onAddTopic={onAddTopic} />
         </div>
         {topic && (
           <div data-screen-label="Library" data-rail-library="1" style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 0 }}>
-            <LibrarySearch library={library} inRail={inRail} onPick={onSearchPick} previews={previews} onPreview={preview} onOpenHeld={onOpenHeld} onOpenChange={setSearchOpen} shut={menus.add || menus.connections || !!menus.browse} />
+            <LibrarySearch library={library} inRail={inRail} onPick={onSearchPick} previews={previews} onPreview={preview} onOpenHeld={onOpenHeld} onOpenChange={setSearchOpen} shut={menus.add || menus.connections} />
             {sections.map(section => (
               <RailSection key={section.key} section={section} open={!!expanded[section.key]} onToggle={() => toggleSection(section.key)}>
                 {section.rows.map(renderRow)}
-                {section.catalog?.provider === 'github' ? <MyProjects onOpen={onBrowseRepo} /> : section.catalog && <SourceBrowser catalog={section.catalog} onOpenChange={setBrowseOpen}
-                  shut={menus.search || menus.add || menus.connections || !!(menus.browse && menus.browse !== section.catalog.provider)}>
-                  {onSelected => section.catalog.provider === 'google' ? <GoogleDocuments onSelected={onSelected} />
-                    : section.catalog.provider === 'overleaf' ? <OverleafProjects onSelected={onSelected} />
-                    : <ZoteroPapers onSelected={onSelected} />}
-                </SourceBrowser>}
-                {!section.catalog && !section.rows.length && <div role="status" style={{ padding: '6px 10px', font: '12px/1.5 var(--font-sans)', color: '#8f8f8f' }}>{section.key === 'Workspaces' ? 'No sub-workspaces yet.' : 'No items yet.'}</div>}
+                {section.children?.map(folder => <RailSection key={folder.key} section={folder} nested open={!!expanded[folder.key]} onToggle={() => toggleSection(folder.key)}>
+                  {folder.rows.map(renderRow)}
+                  {!folder.rows.length && <div role="status" style={{ padding: '6px 10px', font: '12px/1.5 var(--font-sans)', color: '#8f8f8f' }}>{folder.empty}.</div>}
+                </RailSection>)}
+                {section.catalog && <MyProjects catalog={section.catalog} projectId={projectId}>
+                  {() => section.catalog.provider === 'github' ? <GithubRepositories inline onOpen={onBrowseRepo} />
+                    : section.catalog.provider === 'google' ? <GoogleDocuments />
+                    : section.catalog.provider === 'overleaf' ? <OverleafProjects />
+                    : <ZoteroPapers />}
+                </MyProjects>}
+                {!section.catalog && !section.children && !section.rows.length && <div role="status" style={{ padding: '6px 10px', font: '12px/1.5 var(--font-sans)', color: '#8f8f8f' }}>{section.key === 'Workspaces' ? 'No sub-workspaces yet.' : 'No items yet.'}</div>}
               </RailSection>
             ))}
-            <AddToLibrary onAdd={onAddInput} onPickDisk={onPickDisk} onNewNote={onNewNote} onNewChild={onNewChild} onPickRepo={onPickRepo} onSearchPick={onSearchPick} library={library} inRail={inRail} onOpenChange={setAddOpen} shut={menus.search || menus.connections || !!menus.browse} />
+            <AddToLibrary onAdd={onAddInput} onPickDisk={onPickDisk} onNewNote={onNewNote} onNewChild={onNewChild} onPickRepo={onPickRepo} onSearchPick={onSearchPick} library={library} inRail={inRail} onOpenChange={setAddOpen} shut={menus.search || menus.connections} />
           </div>
         )}
       </div>
@@ -909,10 +927,8 @@ export default function Rail({
         onTrashDrop={trashDrop}
         postItTrash={postItTrash}
         onPostIt={onPostIt}
-        postItsHidden={postItsHidden}
-        onTogglePostIts={onTogglePostIts}
       >
-        <Connections compact={width < 260} onOpenChange={setConnectionsOpen} shut={menus.search || menus.add || !!menus.browse} />
+        <Connections compact={width < 260} onOpenChange={setConnectionsOpen} shut={menus.search || menus.add} />
       </BottomBar>
       {peek && !dragging && !busyMenus && (repoPeek ?
         <RepoThumbnail key={`${peekRow.id}:${peekRow.thumbnail_path}`} row={peekRow} cache={thumbnailCache} anchor={peek.element} gap={PEEK_GAP} onMouseEnter={hold} onMouseLeave={closePeek} /> : createPortal(

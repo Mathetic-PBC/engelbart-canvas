@@ -19,6 +19,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { uniqueName, readJson, writeJson, DIR_MODE } = require('./home.cjs');
+const codeWorkspaces = require('./code-workspaces.cjs');
 
 const BOXES = ['current', 'experimental', 'past'];
 const STATUSES = ['open', 'progress', 'done'];
@@ -26,7 +27,7 @@ const STATUSES = ['open', 'progress', 'done'];
 function subdirs(dir) {
   try {
     return fs.readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && !entry.name.endsWith('.pglite'))
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && !entry.name.endsWith('.pglite') && (entry.name.toLowerCase() !== 'code' || codeWorkspaces.classify(path.join(dir, entry.name)).kind === 'workspace'))
       .map((entry) => path.join(dir, entry.name));
   } catch {
     return [];
@@ -48,6 +49,10 @@ function workspacesUnder(dir, depth = 0, out = []) {
 
 /** What converting `projectDir` would do (or did): null when there is nothing to convert. */
 function migrateProjectDir(projectDir, { dryRun = false, now = new Date() } = {}) {
+  // Do not park ambiguous Code folders inside .legacy, or mutate a tree while
+  // its journaled compatibility rename is completing reference updates.
+  const { workspaces: reservedWorkspaces, conflicts } = codeWorkspaces.inspect(projectDir);
+  if (reservedWorkspaces.length || conflicts.length || fs.existsSync(path.join(projectDir, '.repository-relocation.json'))) return { project: projectDir, deferred: true, reservedWorkspaces, conflicts, moved: [], folders: [], goals: [] };
   const goals = subdirs(projectDir).filter(isGoal);
   const foldered = workspacesUnder(projectDir).filter((dir) => hasFolders((readJson(path.join(dir, 'meta.json')) || {}).context));
   if (!goals.length && !foldered.length) return null;

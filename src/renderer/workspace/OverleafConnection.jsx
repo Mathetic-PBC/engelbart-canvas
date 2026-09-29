@@ -1,6 +1,6 @@
 import React from 'react';
 import { api, errorMessage } from '../api.js';
-import { LEAF } from '../ui/Icons.jsx';
+import { OVERLEAF } from '../ui/Icons.jsx';
 import { useOverleafStatus } from './useOverleafStatus.js';
 import ConnectionActions, { ConnectionProgress } from './ConnectionActions.jsx';
 
@@ -15,7 +15,7 @@ export function OverleafConnectionRow({ status, busy, error, onAction }) {
   const connecting = busy === 'connect' || (pending && (!problem || !!busy || !!status.loading));
   return <div data-connection="overleaf" style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #eaeaea' }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-      <span className="glyph-fit" aria-hidden="true" style={{ flex: 'none', display: 'flex', width: 18, height: 18, color: '#4d4d4d' }}><LEAF /></span>
+      <span className="glyph-fit" aria-hidden="true" style={{ flex: 'none', display: 'flex', width: 18, height: 18, color: '#4d4d4d' }}><OVERLEAF /></span>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={text(13, '#171717', 500)}>Overleaf</div>
         {!connecting && <div role="status" style={{ ...text(11.5, '#8f8f8f'), overflowWrap: 'anywhere' }}>

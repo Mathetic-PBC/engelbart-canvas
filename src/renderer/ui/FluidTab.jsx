@@ -12,7 +12,7 @@ const CARD_MS = 650; // the first card; then quickly while moving along the stri
 const FADE = 'linear-gradient(90deg,#000 calc(100% - 18px),transparent)';
 
 /** A tab's name: it fades out at the tab's end only when the tab is too short for it, so a whole name never loses its last letters. */
-export function TabTitle({ children, weight = 400, color = '#4d4d4d' }) {
+export function TabTitle({ children, weight = 400, color = '#4d4d4d', size = 12.5 }) {
   const ref = React.useRef(null);
   const [clipped, setClipped] = React.useState(false);
   React.useLayoutEffect(() => {
@@ -26,27 +26,30 @@ export function TabTitle({ children, weight = 400, color = '#4d4d4d' }) {
     return () => observer.disconnect();
   }, [children]);
   const mask = clipped ? { WebkitMaskImage: FADE, maskImage: FADE } : null;
-  return <span ref={ref} data-clipped={clipped ? '1' : '0'} style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', ...mask, font: `${weight} 12.5px/1.3 var(--font-sans)`, color }}>{children}</span>;
+  return <span ref={ref} data-clipped={clipped ? '1' : '0'} style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', ...mask, font: `${weight} ${size}px/1.3 var(--font-sans)`, color }}>{children}</span>;
 }
 
 export function TabClose({ onClose, label = 'Close tab', title = '⌘W' }) {
   return (
-    <button type="button" className="hov-x" onClick={(event) => { event.stopPropagation(); onClose(); }} onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => event.stopPropagation()} aria-label={label} title={title} style={{ flex: 'none', width: 20, height: 20, marginLeft: 'auto', padding: 0, border: 0, borderRadius: '50%', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '14px/1 var(--font-sans)', color: '#8f8f8f', transition: 'background 120ms' }}>×</button>
+    <button type="button" className="hov-x" data-tab-close="1" onClick={(event) => { event.stopPropagation(); onClose(); }} onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => event.stopPropagation()} aria-label={label} title={title} style={{ flex: 'none', width: 20, height: 20, marginLeft: 'auto', padding: 0, border: 0, borderRadius: '50%', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '14px/1 var(--font-sans)', color: '#8f8f8f', transition: 'background 120ms' }}>×</button>
   );
 }
 
 /** The tab itself. Extra props (handlers, data-*) go on the outer element, which is what a strip measures and drags. */
-export const FluidTab = React.forwardRef(function FluidTab({ on, sep, lifted, children, style, ...rest }, ref) {
+export const FluidTab = React.forwardRef(function FluidTab({ on, sep, lifted, variant, children, style, ...rest }, ref) {
+  const document = variant === 'document';
   return (
-    <div ref={ref} data-on={on ? '1' : '0'} {...rest} style={{ position: 'relative', zIndex: lifted ? 2 : on ? 1 : undefined, flex: '0 1 auto', maxWidth: TAB_MAX, minWidth: 44, height: 34, display: 'flex', alignItems: 'stretch', cursor: 'default', userSelect: 'none', WebkitUserSelect: 'none', ...style }}>
+    <div ref={ref} data-on={on ? '1' : '0'} {...rest} style={{ position: 'relative', zIndex: lifted ? 2 : on ? 1 : undefined, flex: '0 1 auto', maxWidth: TAB_MAX, minWidth: 44, height: document ? 36 : 34, display: 'flex', alignItems: 'stretch', cursor: 'default', userSelect: 'none', WebkitUserSelect: 'none', ...style }}>
       {on ? (
-        <div style={{ position: 'relative', flex: '1 1 auto', minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, boxSizing: 'border-box', padding: '0 6px 0 12px', background: '#fff', borderRadius: '10px 10px 0 0' }}>
+        <div style={{ position: 'relative', flex: '1 1 auto', minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, boxSizing: 'border-box', padding: document ? '0 12px' : '0 6px 0 12px', background: '#fff', borderRadius: '10px 10px 0 0' }}>
+          {!document && <>
           <span aria-hidden="true" style={{ position: 'absolute', left: -10, bottom: 0, width: 10, height: 10, background: 'radial-gradient(circle at 0 0, transparent 9.5px, #fff 10px)' }} />
           <span aria-hidden="true" style={{ position: 'absolute', right: -10, bottom: 0, width: 10, height: 10, background: 'radial-gradient(circle at 100% 0, transparent 9.5px, #fff 10px)' }} />
+          </>}
           {children}
         </div>
       ) : (
-        <div className="hov-tab" style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, boxSizing: 'border-box', margin: '0 2px 4px', padding: '0 4px 0 10px', borderRadius: 8, background: lifted ? '#e6e6e6' : 'transparent', transition: 'background 120ms' }}>
+        <div className="hov-tab" style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, boxSizing: 'border-box', margin: document ? 0 : '0 2px 4px', padding: document ? '0 12px' : '0 4px 0 10px', borderRadius: document ? '10px 10px 0 0' : 8, background: lifted ? '#e6e6e6' : 'transparent', transition: 'background 120ms' }}>
           {children}
         </div>
       )}

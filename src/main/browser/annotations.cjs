@@ -13,8 +13,10 @@ function placement(bounds) {
 
 function createAnnotations(contents, report) {
   let enabled = false, revision = 0, timer = null, pending = Promise.resolve();
+  let documentVersion = 0, disposed = false;
   const alive = () => !contents.isDestroyed();
   function reset() {
+    documentVersion++;
     revision++; enabled = false; clearTimeout(timer);
     report({ type: 'navigated' });
   }
@@ -103,7 +105,23 @@ function createAnnotations(contents, report) {
   contents.on('render-process-gone', reset);
   return {
     command,
-    dispose() { enabled = false; revision++; clearTimeout(timer); contents.removeListener('did-start-navigation', navigate); contents.removeListener('render-process-gone', reset); },
+    async snapshot(value) {
+      const at = documentVersion, clean = anchor(value);
+      const unavailable = reason => ({ status: 'unavailable', reason });
+      if (!alive() || disposed) return unavailable('This browser tab is closed.');
+      let timeout;
+      try {
+        // Do not queue behind overlay polling or create an overlay. A hung page
+        // must not hold the answer (or Stop) indefinitely.
+        const result = await Promise.race([
+          contents.executeJavaScriptInIsolatedWorld(WORLD, [{ code: `${source}\nglobalThis.__engelbartAnnotations.snapshot(${JSON.stringify(clean)})` }]),
+          new Promise(resolve => { timeout = setTimeout(() => resolve(unavailable('The page took too long to inspect.')), 2000); }),
+        ]);
+        return alive() && !disposed && at === documentVersion ? result : unavailable('The page changed while it was being inspected.');
+      } catch { return unavailable('The live page could not be inspected.'); }
+      finally { clearTimeout(timeout); }
+    },
+    dispose() { disposed = true; documentVersion++; enabled = false; revision++; clearTimeout(timer); contents.removeListener('did-start-navigation', navigate); contents.removeListener('render-process-gone', reset); },
   };
 }
 module.exports = { createAnnotations };

@@ -40,11 +40,13 @@ test('a custom project path keeps its directory through renames', async () => {
   assert.equal((await projects.renameProject(ctx, created.id, 'Reading Circle')).slug, 'rg-2026');
 });
 
-test('the code directory: stored in project.json, must be an absolute existing directory', async () => {
+test('the optional initial repository is validated; the legacy directory field remains readable for migration', async () => {
   const code = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-code-'));
+  require('node:child_process').execFileSync('git', ['init', '-q', code]);
   const created = await projects.createProject(ctx, { name: 'With Code', directory: code });
-  assert.equal(created.directory, code);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(created.dir, 'project.json'), 'utf8')).directory, code);
+  assert.equal(created.directory, null);
+  const metadata = JSON.parse(fs.readFileSync(path.join(created.dir, 'project.json'), 'utf8'));
+  assert.equal(metadata.repositories[metadata.defaultRepoId].location, fs.realpathSync(code));
   const bare = await projects.createProject(ctx, 'No Code Yet');
   assert.equal(bare.directory, null);
   await assert.rejects(projects.setProjectDirectory(ctx, bare.id, 'relative/path'), /absolute/);
@@ -125,7 +127,10 @@ test('deleting a workspace removes its subtree and saved views, preserving notes
   projects.writeView(ctx, other.id, top.id, { active: 'ws' });
   projects.writeLastOpen(ctx, { projectId: project.id, workspaceId: grandchild.id });
 
-  assert.deepEqual(await projects.deleteWorkspace(ctx, project.id, top.id), { deletedIds: [top.id, child.id, grandchild.id], nextWorkspaceId: sibling.id });
+  const deletion = await projects.deleteWorkspace(ctx, project.id, top.id);
+  assert.deepEqual(deletion.deletedIds, [top.id, child.id, grandchild.id]);
+  assert.equal(deletion.nextWorkspaceId, sibling.id);
+  assert.ok(fs.existsSync(deletion.trashPath));
   const tree = await projects.loadProject(ctx, project.id);
   assert.deepEqual(tree.workspaces.map((workspace) => workspace.id), [sibling.id]);
   assert.equal((await projects.listProjects(ctx)).find((row) => row.id === project.id).workspaceCount, 1);
@@ -261,6 +266,10 @@ test('views: each workspace keeps its tabs, the document in front and its scroll
   const withWs = projects.writeView(ctx, project.id, ws, { active: ws2, tabs: [{ id: note, title: 'n', kind: 'note?' }, { id: ws2, title: 'Child', kind: 'workspace' }], positions: {} });
   assert.deepEqual(withWs.tabs, [{ id: note, title: 'n' }, { id: ws2, title: 'Child', kind: 'workspace' }]);
   assert.equal(withWs.active, ws2);
+  const file = '2026-09-28T10-11-12Z', id = `archive:${file}`;
+  const archived = projects.writeView(ctx, project.id, ws, { active: id, tabs: [{ id, title: 'Archived draft' }, { id: 'archive:../../other', title: 'unsafe' }], positions: { [`archive:${ws}:${file}`]: { top: 230 } } });
+  assert.deepEqual(archived, { active: id, tabs: [{ id, title: 'Archived draft' }], positions: { [`archive:${ws}:${file}`]: { top: 230 } } });
+  assert.deepEqual(projects.readViews(ctx, project.id)[ws], archived);
 });
 
 test('where to next: state.json keeps the last three workspaces written in and the agents, beside the views; stale rows are not read (2026-09-22)', async () => {
@@ -355,7 +364,8 @@ test('read-text-file: project-relative, ~/ and absolute paths inside the home di
 test('resolve-page-file: an html file by full path, or relative to the project, the engelbart folder or the code directory', async () => {
   const code = path.join(homeDir, 'code-pages');
   fs.mkdirSync(path.join(code, 'docs'), { recursive: true });
-  const project = await projects.createProject(ctx, { name: 'Pages', directory: code });
+  const project = await projects.createProject(ctx, { name: 'Pages' });
+  await projects.setProjectDirectory(ctx, project.id, code); // legacy relative-file compatibility
   fs.mkdirSync(path.join(project.dir, 'My Workspace'), { recursive: true });
   fs.writeFileSync(path.join(project.dir, 'My Workspace', 'report.html'), '<h1>r</h1>');
   fs.writeFileSync(path.join(project.dir, 'notes.txt'), 'text');

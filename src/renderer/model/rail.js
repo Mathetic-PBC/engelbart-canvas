@@ -8,9 +8,9 @@ import { findWorkspaces } from './nav.js';
 export const RAIL_SECTIONS = [
   { key: 'Workspaces', label: 'Sub-workspaces', icon: 'workspace' },
   { key: 'GitHub', label: 'Code', icon: 'git', catalog: { provider: 'github', label: 'My Projects', title: 'Repositories' } },
-  { key: 'Overleaf', label: 'Writing', icon: 'overleaf', catalog: { provider: 'overleaf', label: 'Browse projects…', title: 'Overleaf projects' } },
-  { key: 'Papers', label: 'Literature', icon: 'literature', catalog: { provider: 'zotero', label: 'Browse Zotero…', title: 'Zotero papers' } },
-  { key: 'Documents', label: 'Documents', icon: 'note', catalog: { provider: 'google', label: 'Browse Google Docs…', title: 'Google Docs' } },
+  { key: 'Overleaf', label: 'Writing', icon: 'overleaf', catalog: { provider: 'overleaf', label: 'My Projects', title: 'Overleaf projects' } },
+  { key: 'Papers', label: 'Literature', icon: 'literature', catalog: { provider: 'zotero', label: 'My Projects', title: 'Zotero papers' } },
+  { key: 'Documents', label: 'Documents', icon: 'note', catalog: { provider: 'google', label: 'My Projects', title: 'Google Docs' } },
   { key: 'Files', label: 'Other context', icon: 'folder' },
   { key: 'Archived', label: 'Archived', icon: 'folder' },
 ];
@@ -47,11 +47,22 @@ export function sectionOf(row) {
   return 'Files';
 }
 
-/** Keep empty headings and material order, with no intermediate nesting. */
+/** Keep empty headings; Other context groups its items into one level of subfolders. */
 export function railSections(rows) {
-  const sections = RAIL_SECTIONS.map(section => ({ ...section, rows: [] }));
+  const sections = RAIL_SECTIONS.map(section => ({ ...section, rows: [], ...(section.key === 'Files' ? {
+    children: [...OTHER_CONTEXT_CATEGORIES, { id: 'files', label: 'Files', kind: 'folder', empty: 'No files yet' }]
+      .map(category => ({ ...category, key: `Files/${category.id}`, icon: category.kind, rows: [] })),
+  } : {}) }));
   const by = new Map(sections.map(section => [section.key, section]));
-  for (const row of rows) by.get(sectionOf(row)).rows.push(row);
+  for (const row of rows) {
+    const section = by.get(sectionOf(row));
+    if (section.children) {
+      const kind = row.type === 'html' ? 'website' : kindKey(row);
+      const folder = section.children.find(child => child.type ? child.type === row.type : child.kind === kind)
+        || section.children.find(child => child.id === 'files');
+      folder.rows.push(row);
+    } else section.rows.push(row);
+  }
   return sections.filter(section => section.key !== 'Archived' || section.rows.length);
 }
 

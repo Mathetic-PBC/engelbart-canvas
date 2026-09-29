@@ -23,10 +23,11 @@ const { createRunner, createFakeRunner } = require('../src/main/build/runner.cjs
 const { CLAUDE_SUBSCRIPTION_COMMAND } = require('../src/main/bart/claude-command.cjs');
 const { createBuildPreviews } = require('../src/main/build/previews.cjs');
 const { createInterfaceBuilds } = require('../src/main/build/interfaces.cjs');
+const repositories = require('../src/main/store/workspace-repositories.cjs');
 const { createProcesses } = require('../src/main/local-preview/process.cjs');
 const { normalizeModels, buildChoices, resolveBuildChoice, DEFAULT_MODELS } = require('../src/main/bart/models.cjs');
 
-const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-build-'));
+const homeDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-build-')));
 const layout = ensureHome(homeDir);
 const environment = { PATH: process.env.PATH, HOME: homeDir, XDG_CONFIG_HOME: path.join(homeDir, '.config'), SHELL: '/bin/zsh' };
 const git = createGit({ environment });
@@ -130,9 +131,71 @@ test('shared Context survives Clear/Restore and project removals beat archived l
   assert.equal(projects.findWorkspace(ctx, project.id, workspace.id).workspace.archives.length, 2);
 });
 
-test('post-it destination is explicit, uses project code, and promotion keeps the destination document', async t => {
+test('connection changes leave existing replies and Accept in the recorded repository', async t => {
   const { project, workspace, code } = await scene();
-  const other = await projects.createWorkspace(ctx, project.id, { name: 'Destination' });
+  const other = await projects.createWorkspace(ctx, project.id, { name: 'Future work', createDefault: true });
+  const agent = scripted([
+    ({ task }) => { write(path.join(task.worktree, 'old-repo.txt'), 'first'); return 'NEEDS YOU: continue?'; },
+    ({ task }) => { write(path.join(task.worktree, 'old-repo.txt'), 'continued'); return 'Done'; },
+  ]);
+  const { builds } = manager(agent); t.after(() => builds.stopAll());
+  const task = await builds.start(ctx, project.id, { workspaceId: workspace.id });
+  await turned(project, task.id, 1);
+  await repositories.connect(ctx, project.id, workspace.id, { repoId: other.repoId });
+  assert.equal((await builds.preflight(ctx, project.id, workspace.id)).repoId, other.repoId);
+  await builds.reply(ctx, project.id, task.id, 'Continue');
+  await turned(project, task.id, 2);
+  assert.equal(agent.calls[1].cwd, task.worktree);
+  assert.equal((await builds.accept(ctx, project.id, task.id)).repoId, task.repoId);
+  assert.equal(fs.readFileSync(path.join(code, 'old-repo.txt'), 'utf8'), 'continued');
+  assert.equal(fs.existsSync(path.join(repositories.resolve(ctx, project.id, other.id).directory, 'old-repo.txt')), false);
+  await assert.rejects(builds.start(ctx, project.id, { workspaceId: workspace.id, expectedRepoId: task.repoId }), /changed after approval/);
+});
+
+test('changing the project default leaves a running inherited Build and its replies in the original repository', async t => {
+  const { project, workspace, code } = await scene();
+  const other = await projects.createWorkspace(ctx, project.id, { name: 'New default', createDefault: true });
+  const agent = scripted([
+    ({ task }) => { write(path.join(task.worktree, 'original.txt'), 'first'); return 'NEEDS YOU: Continue?'; },
+    ({ task }) => { write(path.join(task.worktree, 'original.txt'), 'finished'); return 'Done'; },
+  ]);
+  const { builds } = manager(agent); t.after(() => builds.stopAll());
+  const task = await builds.start(ctx, project.id, { workspaceId: workspace.id });
+  await turned(project, task.id, 1);
+  await repositories.setDefault(ctx, project.id, { repoId: other.repoId });
+  assert.equal(repositories.resolve(ctx, project.id, workspace.id).repoId, other.repoId);
+  await builds.reply(ctx, project.id, task.id, 'Continue'); await turned(project, task.id, 2);
+  assert.equal(agent.calls[1].cwd, task.worktree);
+  assert.equal((await builds.accept(ctx, project.id, task.id)).repoId, task.repoId);
+  assert.equal(fs.readFileSync(path.join(code, 'original.txt'), 'utf8'), 'finished');
+  assert.equal(fs.existsSync(path.join(repositories.resolve(ctx, project.id, other.id).directory, 'original.txt')), false);
+});
+
+test('post-it promotion across repositories creates a new Build and preserves the original work', async t => {
+  const { project, workspace } = await scene();
+  const other = await projects.createWorkspace(ctx, project.id, { name: 'Separate code', createDefault: true });
+  const agent = scripted([
+    ({ task }) => { write(path.join(task.worktree, 'original-work.txt'), 'keep this'); return 'ESCALATE: Larger change'; },
+    'NEEDS YOU: New repository confirmed?',
+  ]);
+  const { builds } = manager(agent); t.after(() => builds.stopAll());
+  const old = await builds.start(ctx, project.id, { kind: 'quick', text: 'Change the interface', workspaceId: workspace.id });
+  await turned(project, old.id, 1);
+  const promoted = await builds.promote(ctx, project.id, old.id, other.id);
+  await turned(project, promoted.id, 1);
+  assert.notEqual(promoted.id, old.id);
+  assert.notEqual(promoted.worktree, old.worktree);
+  assert.equal(promoted.sourceBuildId, old.id);
+  assert.equal(promoted.repoId, other.repoId);
+  assert.equal(fs.readFileSync(path.join(old.worktree, 'original-work.txt'), 'utf8'), 'keep this');
+  assert.equal(fs.existsSync(path.join(promoted.worktree, 'original-work.txt')), false);
+  assert.equal(builds.get(ctx, project.id, old.id).workspaceId, workspace.id);
+  await builds.discard(ctx, project.id, promoted.id); await builds.discard(ctx, project.id, old.id);
+});
+
+test('post-it destination is explicit, uses its workspace code, and promotion keeps the destination document', async t => {
+  const { project, workspace, code } = await scene();
+  const other = await projects.createWorkspace(ctx, project.id, { name: 'Destination', createDefault: true });
   await projects.writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: other.id }, 'Keep this plan');
   const agent = scripted(['ESCALATE: needs a larger change', 'Done']);
   const { builds } = manager(agent);
@@ -140,7 +203,7 @@ test('post-it destination is explicit, uses project code, and promotion keeps th
   const task = await builds.start(ctx, project.id, { kind: 'quick', workspaceId: other.id, text: 'A small post-it' });
   await turned(project, task.id, 1);
   assert.equal(builds.get(ctx, project.id, task.id).workspaceId, other.id);
-  assert.equal(store.readTask(project, task.id).repo, code);
+  assert.equal(store.readTask(project, task.id).repo, path.join(project.dir, 'Destination', 'code'));
   assert.match(agent.calls[0].message, /It is a quick task/);
   assert.equal(projects.findWorkspace(ctx, project.id, workspace.id).workspace.builds.length, 0);
   const promoted = await builds.promote(ctx, project.id, task.id, other.id);
@@ -221,12 +284,18 @@ test('worktree review → Accept → accepted preview; failed Accept retains rev
   const review = await ready(first.id);
   assert.equal(await (await fetch(review.preview.url)).text(), '<h1>Version 1</h1>');
   assert.equal(fs.readFileSync(path.join(code, 'index.html'), 'utf8'), '<h1>Original</h1>');
+  const another = await projects.createWorkspace(ctx, project.id, { name: 'Another repository', createDefault: true });
+  await repositories.connect(ctx, project.id, workspace.id, { repoId: another.repoId });
   const accepted = await builds.accept(ctx, project.id, first.id);
   assert.equal(accepted.status, 'accepted');
   assert.equal(accepted.preview.mode, 'accepted');
   assert.equal(accepted.preview.directory, code);
+  assert.equal(previews.busy(project.id, [], [workspace.id]), true, 'deleting a workspace must not strand its accepted server, even outside the workspace folder');
+  assert.equal(previews.busy(project.id, [], ['another-workspace']), false);
   assert.equal(fs.existsSync(first.worktree), false);
   assert.equal(await (await fetch(accepted.preview.url)).text(), '<h1>Version 1</h1>');
+  assert.equal(repositories.resolve(ctx, project.id, workspace.id).repoId, another.repoId, 'Accept does not change the new workspace connection');
+  await repositories.connect(ctx, project.id, workspace.id, { repoId: first.repoId });
   const second = await builds.start(ctx, project.id, { workspaceId: workspace.id, interfaceIntent: { request: 'Update interface' } });
   const secondReview = await ready(second.id);
   write(path.join(code, 'index.html'), '<h1>My unsaved edit</h1>');
@@ -265,6 +334,139 @@ test('Build has models of its own: Codex GPT-6-Sol high, Claude Code Opus high, 
   assert.equal(resolveBuildChoice(MODELS, { provider: 'openai', model: 'nope', effort: 'max' }).effort, 'high', 'what the list does not offer falls back to the default');
   const edited = normalizeModels({ ...MODELS, build: { providers: { openai: { models: { sol: { id: 'gpt-7-sol', name: 'Sol' } }, default: { model: 'sol', effort: 'xhigh' } } } } });
   assert.deepEqual(resolveBuildChoice(edited, {}), { provider: 'openai', model: 'sol', modelId: 'gpt-7-sol', modelName: 'Sol', effort: 'xhigh' });
+});
+
+test('Stop targets the exact review/accepted server and synchronizes shared cards across projects', async t => {
+  const server = `const http=require('node:http'),fs=require('node:fs'); http.createServer((q,r)=>{r.setHeader('content-type','text/html');r.end(fs.readFileSync('index.html'));}).listen(Number(process.argv[2]),'127.0.0.1');`;
+  const recipe = { version: 1, kind: 'interface', name: 'Shared interface', cwd: '.', command: 'node server.cjs {port}', path: '/' };
+  const { project, workspace, code } = await scene({ files: { 'index.html': '<h1>Original</h1>', 'server.cjs': server, 'engelbart-preview.json': JSON.stringify(recipe) } });
+  const processes = createProcesses({ environment }), servers = [], drained = new Set(), directories = new Map();
+  const previews = createBuildPreviews({ processes: { ...processes, start(...args) {
+    const server = processes.start(...args), stop = server.stop;
+    server.stop = async () => { await stop(); drained.add(server); };
+    servers.push(server); directories.set(server, args[1].cwd); return server;
+  } }, verify: async () => {}, readyTimeoutMs: 5000 });
+  const checkingGit = { ...git, removeWorktree: async (repo, dir) => {
+    for (const server of servers) if (directories.get(server) === dir) assert.ok(drained.has(server), 'process group fully drains before worktree removal, even when Stop races Discard');
+    return git.removeWorktree(repo, dir);
+  } };
+  let version = 0;
+  const { builds, events } = manager({ async turn({ task }) {
+    write(path.join(task.worktree, 'index.html'), `<h1>Version ${++version}</h1>`);
+    return { text: 'Ready', session: 'shared-server' };
+  } }, { previews, git: checkingGit });
+  t.after(() => builds.stopAll());
+  const ready = async (pid, id) => {
+    for (let n = 0; n < 400; n++) {
+      const task = builds.get(ctx, pid, id);
+      if (task.preview?.status === 'failed') throw new Error(task.preview.error);
+      if (task.preview?.url && !task.working) return task;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    throw new Error('Shared preview never became ready');
+  };
+  const a = await builds.start(ctx, project.id, { workspaceId: workspace.id });
+  await ready(project.id, a.id);
+  const acceptedA = await builds.accept(ctx, project.id, a.id);
+  const b = await builds.start(ctx, project.id, { workspaceId: workspace.id });
+  const reviewB = await ready(project.id, b.id);
+  const stoppedB = await builds.stopPreview(ctx, project.id, b.id, reviewB.preview.serverId);
+  assert.equal(stoppedB.preview.status, 'stopped');
+  assert.notEqual(stoppedB.preview.revision, reviewB.preview.revision);
+  await assert.rejects(fetch(reviewB.preview.url));
+  assert.ok((await fetch(acceptedA.preview.url)).ok, 'stopping B review leaves A accepted alive');
+  assert.deepEqual(builds.get(ctx, project.id, a.id).preview, acceptedA.preview);
+  await builds.preview(ctx, project.id, b.id);
+  const acceptedB = await builds.accept(ctx, project.id, b.id);
+  await assert.rejects(fetch(acceptedA.preview.url));
+  const updatedA = builds.get(ctx, project.id, a.id);
+  assert.equal(updatedA.preview.url, acceptedB.preview.url);
+  assert.equal(updatedA.preview.serverId, acceptedB.preview.serverId);
+  assert.equal(updatedA.preview.replacesUrl, acceptedA.preview.url);
+  assert.equal(updatedA.preview.background, true, 'shared updates do not focus historical cards');
+  assert.ok(events.some(row => row.payload.id === a.id && row.payload.preview?.url === acceptedB.preview.url));
+  await builds.stopPreview(ctx, project.id, a.id, acceptedA.preview.serverId);
+  assert.ok((await fetch(acceptedB.preview.url)).ok, 'a stale Stop request cannot stop a replacement server');
+
+  const other = await projects.createProject(ctx, { name: 'Shared preview other project', directory: code });
+  const otherSpace = await projects.createWorkspace(ctx, other.id, { name: 'Other' });
+  const c = await builds.start(ctx, other.id, { workspaceId: otherSpace.id });
+  const reviewC = await ready(other.id, c.id);
+  const stoppingC = builds.stopPreview(ctx, other.id, c.id, reviewC.preview.serverId);
+  const restored = await builds.discard(ctx, other.id, c.id);
+  await stoppingC;
+  assert.equal(restored.error, null);
+  assert.equal(restored.preview.url, acceptedB.preview.url);
+  assert.equal(previews.busy('unrelated-project-id', [code]), true, 'physical repository dependencies cross projects');
+  await builds.stopPreview(ctx, project.id, a.id, updatedA.preview.serverId);
+  await assert.rejects(fetch(acceptedB.preview.url));
+  for (const [pid, id] of [[project.id, a.id], [project.id, b.id], [other.id, c.id]]) {
+    const task = builds.get(ctx, pid, id);
+    assert.equal(task.preview.status, 'stopped'); assert.equal(task.preview.url, null);
+    assert.equal(task.preview.replacesUrl, acceptedB.preview.url);
+  }
+  const reopened = await builds.preview(ctx, project.id, b.id);
+  assert.equal(reopened.preview.status, 'ready');
+  await servers.at(-1).stop(); // unexpected exit is also reflected on the card/Stage
+  for (let n = 0; builds.get(ctx, project.id, b.id).preview.status !== 'stopped'; n++) {
+    assert.ok(n < 100); await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.equal(builds.get(ctx, project.id, b.id).preview.status, 'stopped');
+});
+
+test('busy checks follow starting, queued and cleaning Builds, not unrelated activity', async t => {
+  const { project, workspace, code } = await scene();
+  const idle = await projects.createWorkspace(ctx, project.id, { name: 'Unrelated' });
+  const queuedSpace = await projects.createWorkspace(ctx, project.id, { name: 'Queued', createDefault: true });
+  let starting, begin, unblock;
+  const startGate = new Promise(resolve => { unblock = resolve; });
+  const atStart = new Promise(resolve => { begin = resolve; });
+  let firstHead = true, runnerStarted;
+  const running = new Promise(resolve => { runnerStarted = resolve; });
+  let cleanupBegan, cleanupRelease, holdCleanup = false;
+  const cleanupGate = new Promise(resolve => { cleanupRelease = resolve; });
+  const atCleanup = new Promise(resolve => { cleanupBegan = resolve; });
+  const slowGit = { ...git, head: async dir => {
+    if (firstHead) { firstHead = false; begin(); await startGate; }
+    return git.head(dir);
+  }, removeWorktree: async (repo, dir) => {
+    await git.removeWorktree(repo, dir);
+    if (holdCleanup) { cleanupBegan(); await cleanupGate; }
+  } };
+  const { builds } = manager({ async turn({ signal }) {
+    runnerStarted();
+    await new Promise((_, reject) => signal.addEventListener('abort', () => reject(Object.assign(new Error('Stopped'), { kind: 'stopped' })), { once: true }));
+  } }, { git: slowGit, limits: { build: 1, quick: 1 } });
+  const previousBusy = ctx.repositoryBusy;
+  ctx.repositoryBusy = scope => builds.busy(scope.projectId, scope.roots, scope.workspaceIds) ? 'Dependent Build is busy' : null;
+  t.after(async () => { unblock(); cleanupRelease(); ctx.repositoryBusy = previousBusy; await starting?.catch(() => {}); await builds.stopAll(); });
+  starting = builds.start(ctx, project.id, { workspaceId: workspace.id });
+  await atStart;
+  assert.equal(builds.busy(project.id, [], [workspace.id]), true, 'start tracked before there is a task record');
+  assert.equal(builds.busy(project.id, [], [idle.id]), false);
+  assert.equal(builds.busy('another-project', [code]), true, 'shared repositories are protected regardless of project owner');
+  await assert.rejects(projects.renameWorkspace(ctx, project.id, workspace.id, 'Cannot move yet'), /Work is starting/);
+  await projects.renameWorkspace(ctx, project.id, idle.id, 'Unrelated renamed');
+  unblock(); const active = await starting; await running;
+  const queued = await builds.start(ctx, project.id, { workspaceId: queuedSpace.id });
+  for (let n = 0; builds.get(ctx, project.id, queued.id).status !== 'queued'; n++) {
+    assert.ok(n < 300); await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.equal(builds.busy(project.id, [], [queuedSpace.id]), true);
+  assert.equal(builds.busy(project.id, [], [idle.id]), false);
+  await projects.renameWorkspace(ctx, project.id, idle.id, 'Unrelated twice');
+  await assert.rejects(projects.renameWorkspace(ctx, project.id, queuedSpace.id, 'Cannot move queued'), /Finish or discard/);
+  await builds.discard(ctx, project.id, queued.id);
+  holdCleanup = true;
+  const cleaning = builds.discard(ctx, project.id, active.id);
+  await atCleanup;
+  assert.equal(builds.get(ctx, project.id, active.id).status, 'discarded');
+  assert.equal(fs.existsSync(active.worktree), false);
+  assert.equal(builds.busy('other-project', [code]), true, 'cleanup stays guarded after the worktree is removed');
+  assert.equal(builds.busy(project.id, [], [idle.id]), false);
+  await assert.rejects(repositories.relocate(ctx, project, code, code + '-moved'), /Dependent Build/);
+  cleanupRelease(); await cleaning;
+  assert.equal(builds.busy('other-project', [code]), false);
 });
 
 test('Discard drains setup and stops a running turn without sending its queued reply', async t => {
@@ -318,6 +520,9 @@ test('shutdown aborts an explicit preview launch before closing its process owne
   await settled(project, task.id);
   const opening = assert.rejects(builds.preview(ctx, project.id, task.id), /aborted/);
   await launching;
+  assert.equal(builds.busy(project.id, [], [workspace.id]), true, 'pending preview launch is guarded');
+  assert.equal(builds.busy(project.id, [], ['unrelated']), false);
+  assert.equal(builds.busy('another-project', [task.repo]), true);
   await builds.stopAll();
   await opening;
   assert.equal(closed, true);
@@ -357,7 +562,7 @@ test('Build: the record, the frozen context, a worktree from the last commit, a 
   write(path.join(code, 'a.txt'), 'uncommitted edit\n');
   const agent = scripted([({ task }) => { write(path.join(task.worktree, 'b.txt'), 'bee\n'); return 'Added b.txt.'; }]);
   const { builds, events } = manager(agent);
-  const pre = await builds.preflight(ctx, project.id);
+  const pre = await builds.preflight(ctx, project.id, workspace.id);
   assert.deepEqual([pre.ok, pre.dirty, pre.branch], [true, 1, 'main']);
   const started = await builds.start(ctx, project.id, { workspaceId: workspace.id, provider: 'anthropic', model: 'opus', effort: 'max', attach: [paper.id] });
   assert.equal(started.status, 'setting-up');
@@ -576,19 +781,21 @@ test('Discard, a failed turn, recovery after the app closed, and Resume in the s
 test('a folder that cannot take a Build says why; one without history can be given one', async () => {
   const code = path.join(homeDir, 'no-history');
   write(path.join(code, 'index.js'), 'x\n');
+  sh(code, 'init', '-q', '-b', 'main');
   const project = await projects.createProject(ctx, { name: 'No history', directory: code });
+  const workspace = await projects.createWorkspace(ctx, project.id);
   const { builds } = manager(scripted([]));
-  const pre = await builds.preflight(ctx, project.id);
-  assert.deepEqual([pre.ok, pre.canInit, pre.problems[0].code], [false, true, 'not-a-repository']);
-  await assert.rejects(builds.start(ctx, project.id, { workspaceId: (await projects.createWorkspace(ctx, project.id, {})).id }), /no history yet/);
-  const after = await builds.initRepository(ctx, project.id);
+  const pre = await builds.preflight(ctx, project.id, workspace.id);
+  assert.deepEqual([pre.ok, pre.canInit, pre.problems[0].code], [false, true, 'no-commits']);
+  await assert.rejects(builds.start(ctx, project.id, { workspaceId: workspace.id }), /history yet/);
+  const after = await builds.initRepository(ctx, project.id, workspace.id);
   assert.deepEqual([after.ok, after.dirty], [true, 0]);
   const bare = await projects.createProject(ctx, { name: 'No folder' });
-  assert.equal((await builds.preflight(ctx, bare.id)).problems[0].code, 'no-directory');
-  assert.equal((await manager(scripted([]), { gitReady: () => false }).builds.preflight(ctx, project.id)).problems[0].code, 'no-git');
+  assert.equal((await builds.preflight(ctx, bare.id)).problems[0].code, 'WORKSPACE_REQUIRED');
+  assert.equal((await manager(scripted([]), { gitReady: () => false }).builds.preflight(ctx, project.id, workspace.id)).problems[0].code, 'no-git');
 });
 
-test('quick tasks: their own slot, no workspace, a clean finish lands by itself; one that escalates becomes a Build', async () => {
+test('quick tasks: their own slot and workspace, a clean finish lands by itself; one that escalates becomes a Build', async () => {
   const { code, project, workspace } = await scene();
   let hold;
   const bigAgent = scripted([() => new Promise((resolve) => { hold = () => resolve('Big done.'); })]);
@@ -598,8 +805,8 @@ test('quick tasks: their own slot, no workspace, a clean finish lands by itself;
   const { builds } = manager(runner, { limits: { build: 1, quick: 1 } });
   const big = await builds.start(ctx, project.id, { workspaceId: workspace.id });
   await settled(project, big.id, ['setting-up']);
-  const quick = await builds.start(ctx, project.id, { kind: 'quick', text: '- [ ] fix the typo in the header', postItId: 'card-1' });
-  assert.deepEqual([quick.kind, quick.workspaceId, quick.postItId, quick.title], ['quick', null, 'card-1', 'fix the typo in the header']);
+  const quick = await builds.start(ctx, project.id, { kind: 'quick', workspaceId: workspace.id, text: '- [ ] fix the typo in the header', postItId: 'card-1' });
+  assert.deepEqual([quick.kind, quick.workspaceId, quick.postItId, quick.title], ['quick', workspace.id, 'card-1', 'fix the typo in the header']);
   const landed = await settled(project, quick.id, ['setting-up', 'queued', 'running', 'review', 'accepting']);
   assert.equal(landed.status, 'accepted', 'a quick task does not wait behind a running Build, and lands by itself');
   assert.equal(fs.readFileSync(path.join(code, 'quick.txt'), 'utf8'), 'quick\n');
@@ -608,7 +815,7 @@ test('quick tasks: their own slot, no workspace, a clean finish lands by itself;
   hold();
   await settled(project, big.id);
 
-  const hard = await builds.start(ctx, project.id, { kind: 'quick', text: 'escalate: rework the storage' });
+  const hard = await builds.start(ctx, project.id, { kind: 'quick', workspaceId: workspace.id, text: 'escalate: rework the storage' });
   quickIds.add(hard.id);
   const escalated = await settled(project, hard.id);
   assert.deepEqual([escalated.status, escalated.escalation], ['escalated', 'needs a schema change.']);
@@ -632,7 +839,7 @@ test('the "Needs you" card\'s model: another model of the same provider goes on 
   const { project, workspace } = await scene();
   const agent = { calls: [], async turn(input) { this.calls.push(input); if (/escalate/.test(input.message)) return { text: 'ESCALATE: too big.', session: 'q1' }; return { text: 'Done properly.', session: input.session || 'fresh' }; } };
   const { builds } = manager(agent);
-  const first = await builds.start(ctx, project.id, { kind: 'quick', text: 'escalate: one', provider: 'openai', model: 'sol', effort: 'high' });
+  const first = await builds.start(ctx, project.id, { kind: 'quick', workspaceId: workspace.id, text: 'escalate: one', provider: 'openai', model: 'sol', effort: 'high' });
   await settled(project, first.id);
   const same = await builds.promote(ctx, project.id, first.id, workspace.id, { provider: 'openai', model: 'astra', effort: 'xhigh' });
   assert.deepEqual([same.provider, same.model, same.effort], ['openai', 'astra', 'xhigh']);
@@ -642,7 +849,7 @@ test('the "Needs you" card\'s model: another model of the same provider goes on 
   assert.equal(went.task.model, 'astra');
   assert.match(same.messages[same.messages.length - 1].text, /as a Build on .* xhigh\./);
 
-  const second = await builds.start(ctx, project.id, { kind: 'quick', text: 'escalate: two', provider: 'openai', model: 'sol', effort: 'high' });
+  const second = await builds.start(ctx, project.id, { kind: 'quick', workspaceId: workspace.id, text: 'escalate: two', provider: 'openai', model: 'sol', effort: 'high' });
   await settled(project, second.id);
   const other = await builds.promote(ctx, project.id, second.id, workspace.id, { provider: 'anthropic', model: 'opus', effort: 'max' });
   assert.deepEqual([other.provider, other.model, other.effort], ['anthropic', 'opus', 'max']);

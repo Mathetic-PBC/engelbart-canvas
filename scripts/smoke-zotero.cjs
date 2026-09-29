@@ -11,6 +11,7 @@ const { PARTITION } = require('../src/main/browser/views.cjs');
 const { createZoteroBrowser } = require('../src/main/zotero/browser-connection.cjs');
 const { createZoteroReader } = require('../src/main/zotero/browser-reader.cjs');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-zotero-ui-'));
+require('node:child_process').execFileSync('git', ['init', '--quiet', root]);
 let origin, mode = 'normal', user = '1234', count = 3, pendingResponse, phase = 'startup';
 const requests = [], external = [];
 shell.openExternal = async url => external.push(url);
@@ -72,7 +73,7 @@ setTimeout(() => { console.error('Stalled:', phase, root); app.exit(1); }, 60000
     const entry = '[data-rail-connections] button', action = name => `[data-zotero-action="${name}"]`;
     const browse = async () => {
       if (await js(wc, '!!document.querySelector("[data-connections-panel]")')) await click(wc, '[aria-label="Close connections"]');
-      if (!await js(wc, '!!document.querySelector("[data-source-browser=zotero]")')) await click(wc, '[data-browse-source=zotero]');
+      if (!await js(wc, '!!document.querySelector("[data-projects-list=zotero]")')) await click(wc, '[data-projects-toggle=zotero]');
     };
     const refresh = async () => {
       if (!await js(wc, '!!document.querySelector("[data-connections-panel]")')) await click(wc, entry);
@@ -115,7 +116,7 @@ setTimeout(() => { console.error('Stalled:', phase, root); app.exit(1); }, 60000
     count = 135; await click(wc, action('retry')); await browse();
     await until(async () => await paperCount() === 135, 'all pages load and connection refresh updates sidebar');
     assert.ok(requests.some(url => url.includes('start=100')));
-    assert.equal(await js(wc, '!!document.querySelector("[data-source-browser=zotero] [data-zotero-paper]")'), true, 'Zotero papers are listed under Papers');
+    assert.equal(await js(wc, '!!document.querySelector("[data-projects-list=zotero] [data-zotero-paper]")'), true, 'Zotero papers are listed under Papers');
     assert.equal(await js(wc, '!!document.querySelector("[data-zotero-refresh]") || document.querySelector("[data-zotero-account]").textContent.includes("Recently added")'), false, 'Zotero list has no recently-added caption or refresh control');
     await screenshot('paper-list');
     await js(wc, `(()=>{const e=document.querySelector('[aria-label="Search Zotero"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,'paper 134');e.dispatchEvent(new Event('input',{bubbles:true}))})()`);
@@ -128,8 +129,8 @@ setTimeout(() => { console.error('Stalled:', phase, root); app.exit(1); }, 60000
     await until(() => !!opened, 'paper opens in Stage');
     assert.equal(opened, 'https://www.zotero.org/researcher/items/P0000000/library');
     assert.equal(stagePage.getURL(), `${origin}/mylibrary`, 'refresh leaves visible Stage pages unchanged');
-    await click(wc, '[data-rail-section-toggle=Workspaces]');
-    await click(wc, `[data-rail-row="${second.id}"]`);
+    await click(wc, '[aria-label="Switch workspace"]');
+    await click(wc, `[data-workspace-item="${second.id}"]`);
     await until(() => js(wc, 'document.querySelector("[data-workspace-header]")?.textContent.includes("Another workspace")'), 'workspace switch');
     await browse();
     await until(async () => await paperCount() === 135, 'papers remain across workspaces');
@@ -138,7 +139,7 @@ setTimeout(() => { console.error('Stalled:', phase, root); app.exit(1); }, 60000
     assert.equal(await js(wc, 'document.querySelector("[data-rail-section-toggle=Papers]").getAttribute("aria-expanded")'), 'false');
     await click(wc, '[data-rail-section-toggle=Papers]');
     await browse();
-    await until(async () => await paperCount() === 135, 'papers restored when Browse is opened after reload');
+    await until(async () => await paperCount() === 135, 'papers restored when My Projects is expanded after reload');
     const crypt = { available: () => safeStorage.isEncryptionAvailable(), encrypt: s => safeStorage.encryptString(s).toString('base64'), decrypt: s => safeStorage.decryptString(Buffer.from(s, 'base64')) };
     const restored = createZoteroBrowser({ file: cache, crypt, openStage: () => {}, reader: createZoteroReader({ BrowserWindow, getSession: () => session.fromPartition(PARTITION), origin, pollMs: 50 }) });
     assert.equal(restored.status().account.id, '1234'); assert.equal((await restored.papers(true)).papers.length, 135); restored.close();

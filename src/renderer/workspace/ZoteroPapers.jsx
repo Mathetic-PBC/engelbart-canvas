@@ -47,9 +47,9 @@ export default function ZoteroPapers({ onSelected }) {
     <div>
       {shown.map(doc => <button key={doc.id} type="button" className="hov-wash" data-zotero-paper={doc.id} onClick={() => open(doc)}
         title={`${doc.name}${doc.authors ? `\n${doc.authors}${doc.date ? ` · ${doc.date}` : ''}` : ''}\nOpens in Stage`}
-        style={{ ...plain, display: 'flex', alignItems: 'center', gap: 8, width: '100%', boxSizing: 'border-box', padding: '7px 10px', borderRadius: 6, textAlign: 'left', color: '#171717' }}>
+        style={{ ...plain, display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', padding: '6px 8px', minHeight: 32, borderRadius: 6, textAlign: 'left', color: '#3d3d3d' }}>
         <span className="glyph-fit" aria-hidden="true" style={{ flex: 'none', display: 'flex', width: 14, height: 14 }}><NOTE /></span>
-        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '13px/1.5 var(--font-sans)' }}>{doc.name}</span>
+        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '400 14px/20px var(--font-sans)' }}>{doc.name}</span>
       </button>)}
     </div>
     {!list && loading && <div role="status" style={{ ...muted, padding: '6px 10px' }}>Loading papers…</div>}

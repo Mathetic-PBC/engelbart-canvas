@@ -17,7 +17,8 @@ button:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(0,112,243,.18)}
 .window-drag-region{-webkit-app-region:drag;user-select:none}
 .window-drag-region :is(button,a,input,textarea,select,[contenteditable="true"],[role="button"],[role="tab"],[data-doc-tab]),
 .window-no-drag{-webkit-app-region:no-drag}
-html[data-platform="darwin"]{--window-header-inset:90px}
+/* Native macOS controls are centered at y=27; the 46px header needs a 4px text offset. */
+html[data-platform="darwin"]:not([data-fullscreen]){--window-header-inset:90px;--window-header-offset:8px}
 input,textarea{outline:none}
 /* Title bar (2026-09-23): the window has no native one (hiddenInset), so the header row drags the window and its controls
    opt out; menus and dialogs over it opt out too, or a click on them would move the window. On macOS the first column
@@ -86,6 +87,9 @@ textarea::placeholder,input::placeholder{color:#8f8f8f;font-style:italic}
 .hov-tab:hover{background:#e6e6e6!important}
 .hov-tab-plus:not(:disabled):hover{background:#e6e6e6!important;color:#171717!important}
 .hov-x:hover{background:#e3e3e3!important;color:#171717!important}
+/* Keep inactive document tabs quiet without shifting their labels when the close control appears. */
+[data-doc-tab][data-on="0"] [data-tab-close]{opacity:0}
+[data-doc-tab]:hover [data-tab-close],[data-doc-tab]:focus-within [data-tab-close]{opacity:1}
 ::highlight(stage-find){background-color:rgba(0,112,243,.16);color:inherit}
 ::highlight(stage-find-cur){background-color:rgba(0,112,243,.4);color:inherit}
 /* A rail row's minus (2026-09-23): only while the pointer is on the row; red-free, it darkens on its own hover. */

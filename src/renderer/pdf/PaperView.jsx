@@ -10,6 +10,7 @@
 // redraws. Pages are centered with no gutter of their own; a floating bar at the bottom shows the
 // page and zoom; a pinch (or ⌃ scroll) zooms around the pointer.
 import React from 'react';
+import { sessionValue, saveSessionValue, registerViewFlusher } from '../session-ui.js';
 import * as pdfjsLib from 'pdfjs-dist';
 import rough from 'roughjs';
 
@@ -147,6 +148,7 @@ export default class PaperView extends React.Component {
   }
 
   componentDidMount() {
+    this.offViewFlush = registerViewFlusher(() => { this.saveReadingPosition(); return this.flushSave(this.props.onMarksChange); });
     const host = this.host.current;
     host.addEventListener('mousedown', this.onDown);
     host.addEventListener('mouseup', this.onUp);
@@ -176,6 +178,7 @@ export default class PaperView extends React.Component {
   }
 
   componentWillUnmount() {
+    this.saveReadingPosition(); this.offViewFlush?.();
     const host = this.host.current;
     if (host) {
       host.removeEventListener('mousedown', this.onDown);
@@ -208,21 +211,25 @@ export default class PaperView extends React.Component {
     this.saveTimer = setTimeout(() => { this.saveTimer = null; this.emit(this.props.onMarksChange); }, 300);
   }
   flushSave(cb) {
-    if (!this.saveTimer) return;
+    if (!this.saveTimer && !this.dirty) return;
     clearTimeout(this.saveTimer);
     this.saveTimer = null;
-    this.emit(cb);
+    return this.emit(cb);
   }
   emit(cb) {
     if (typeof cb !== 'function') return;
     const out = {};
     for (const [page, list] of Object.entries(this.marks)) if (list && list.length) out[page] = clone(list);
-    cb(out);
+    const saving = cb(out);
+    saving?.catch(() => {}); // the caller reports errors; quit still awaits this promise
+    return saving;
   }
 
   /* ---------------------------------------------------------------- loading */
   async load() {
     const gen = ++this.gen;
+    const saved = sessionValue(this.props.sessionKey, null);
+    this.restoringPosition = true;
     this.cancelLayout();
     clearTimeout(this.pinchTimer); this.pinchTimer = null;
     if (this.doc) { const d = this.doc; this.doc = null; destroyDoc(d); }
@@ -239,9 +246,18 @@ export default class PaperView extends React.Component {
       this.doc = doc;
       this.setState({ note: '' });
       await this.layout(null);
+      if (saved && Number.isFinite(saved.zoom) && saved.anchor) {
+        this.zoom = clamp(saved.zoom, ZOOM_MIN, ZOOM_MAX);
+        await this.layout(null);
+        const point = this.hostPoint('top');
+        this.restoreAnchor({ ...saved.anchor, ...point });
+        this.syncBar();
+      }
     } catch (err) {
       if (gen !== this.gen) return;
       this.setState({ note: 'Could not open the paper — ' + ((err && err.message) || err) });
+    } finally {
+      if (gen === this.gen) { this.restoringPosition = false; this.syncBar(); }
     }
   }
 
@@ -515,6 +531,12 @@ export default class PaperView extends React.Component {
     const next = { page: this.currentPage(), pages: this.tops.length, pct: this.pct() };
     const s = this.state;
     if (next.page !== s.page || next.pages !== s.pages || next.pct !== s.pct) this.setState(next);
+    this.saveReadingPosition();
+  }
+  saveReadingPosition() {
+    if (!this.props.sessionKey || !this.doc || !this.tops.length || this.restoringPosition) return;
+    const point = this.hostPoint('top'), anchor = this.anchorAt(point.x, point.y);
+    if (anchor) saveSessionValue(this.props.sessionKey, { zoom: this.zoom, anchor: { n: anchor.n, fx: anchor.fx, fy: anchor.fy } });
   }
 
   /* ---------------------------------------------------------------- find */

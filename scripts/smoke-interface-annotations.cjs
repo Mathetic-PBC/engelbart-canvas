@@ -10,6 +10,7 @@ const { WORLD } = require('../src/main/browser/annotation-page.cjs');
 const restoreAt = process.argv.indexOf('--restore');
 const restoreRoot = restoreAt >= 0 ? process.argv[restoreAt + 1] : null;
 const root = restoreRoot || fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-annotations-smoke-'));
+if (!restoreRoot) require('node:child_process').execFileSync('git', ['init', '--quiet', root]);
 const restoreNotes = restoreRoot ? fs.readdirSync(path.join(root, '.engelbart', 'annotations', 'interface')).filter(name => name.endsWith('.json')).flatMap(name => JSON.parse(fs.readFileSync(path.join(root, '.engelbart', 'annotations', 'interface', name), 'utf8')).notes) : [];
 const restorePage = restoreNotes.find(note => new URL(note.url).hostname === '127.0.0.1');
 app.setPath('userData', path.join(root, 'electron'));
@@ -38,8 +39,8 @@ async function click(wc, selector) {
 async function button(wc, text) {
   await js(wc, `(()=>{const b=[...document.querySelectorAll('.interface-annotations button')].find(e=>e.textContent===${JSON.stringify(text)});if(!b)throw Error('Missing button '+${JSON.stringify(text)});b.click()})()`);
 }
-async function fill(wc, value) {
-  await js(wc, `(()=>{const e=document.querySelector('.ia-editor textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(e,${JSON.stringify(value)});e.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+async function fill(wc, value, selector = '.ia-editor textarea') {
+  await js(wc, `(()=>{const e=document.querySelector(${JSON.stringify(selector)});Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(e,${JSON.stringify(value)});e.dispatchEvent(new Event('input',{bubbles:true}))})()`);
 }
 async function browse(wc) {
   await click(wc, '[aria-label="More"]');
@@ -185,7 +186,7 @@ app.whenReady().then(async () => {
     const appearance = await overlay(page);
     assert.equal(appearance.overlayCount, 3, 'only blockers, outline and markers; no label box');
     assert.match(appearance.outline, /1px solid rgb\(82, 82, 82\)/);
-    fs.writeFileSync(path.join(root, 'hover.png'), (await page.capturePage()).toPNG());
+    fs.writeFileSync(path.join(root, 'hover.png'), (await page.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG());
     await js(page, `(()=>{const b=document.createElement('button');b.id='edge';b.textContent='Action';b.setAttribute('aria-label','A readable name that is longer than the available space beside this element');Object.assign(b.style,{position:'fixed',right:'0',bottom:'0'});document.body.append(b)})()`);
     await hover(page, '#edge');
     assert.match((await overlay(page)).outline, /display: block/);
@@ -226,6 +227,30 @@ app.whenReady().then(async () => {
     assert.ok(!JSON.stringify(saved).includes('do-not-capture'));
     assert.equal(saved.notes[0].anchor.bounds, undefined);
     console.log('PASS no sidebar/resize, outline-only hover, pointer, Escape cleanup, contextual composer, click interception, isolation, saved note');
+
+    const contextReader = require('../src/main/browser/annotations.cjs').createAnnotations(page, () => {});
+    try {
+      await js(page, `(()=>{const f=document.createElement('form');f.id='context-test';f.method='post';f.action='/join?token=omit-url-token';f.innerHTML='<h2>Join study</h2><label>Participant ID <input name="participant" value="omit-input"></label><label>Nickname <textarea>omit-textarea</textarea></label><input type="hidden" value="omit-hidden"><div data-private>omit-private</div><div class="rr-mask">omit-mask</div><div style="display:none">omit-css-hidden</div><div contenteditable>omit-editable</div><button id="context-submit" onclick="doNotCapture()">Submit</button>';document.body.append(f)})()`);
+      const target = { element: { tag: 'button', selector: '#context-submit', id: 'context-submit', text: 'Submit' }, ancestors: [], frames: [], route: '/editor' };
+      const captured = await contextReader.snapshot(target);
+      assert.equal(captured.status, 'available');
+      assert.equal(captured.element.attributes.type, 'submit');
+      assert.match(captured.surroundingText, /Participant ID.*Nickname.*Submit/);
+      assert.equal(captured.form.action, origin + '/join');
+      assert.equal(captured.form.method, 'post');
+      assert.doesNotMatch(JSON.stringify(captured), /omit-|onclick|doNotCapture/);
+      assert.equal(await js(page, '!!document.querySelector("[data-engelbart-annotations]")'), false, 'reading context does not create markers or a selection overlay');
+      await js(page, 'document.querySelector("#context-test").remove()');
+      assert.equal((await contextReader.snapshot(target)).status, 'unavailable', 'missing controls have an explicit fallback');
+      const nested = await contextReader.snapshot({ element: { tag: 'button', selector: '#deep', text: 'Nested action' }, ancestors: [], frames: ['#same', '#nested'], route: '/editor' });
+      assert.equal(nested.element.text, 'Nested action');
+      const shadow = await contextReader.snapshot({ element: { tag: 'button', selector: '#shadow >>> button', text: 'Shadow action' }, ancestors: [], frames: [], route: '/editor' });
+      assert.equal(shadow.element.text, 'Shadow action');
+      const cross = await contextReader.snapshot({ element: { tag: 'button', selector: '#inside' }, ancestors: [], frames: ['#cross'], route: '/editor' });
+      assert.equal(cross.status, 'unavailable');
+      assert.match(cross.reason, /inaccessible/);
+    } finally { contextReader.dispose(); }
+    console.log('PASS live DOM context, form semantics, private/value filtering, same-origin frames, shadow DOM, and inaccessible/missing-element fallback');
 
     await browse(wc);
     await until(() => !browser.getVisible(), 'list uses the existing Stage snapshot overlay');
@@ -286,19 +311,64 @@ app.whenReady().then(async () => {
     await fill(wc, 'Why does this publish control look unclear?');
     await pause(300);
     fs.writeFileSync(path.join(root, 'ask-bart.png'), (await wc.capturePage()).toPNG());
+    const workspaceBeforeAsk = await js(wc, `window.engelbartAPI.readDoc(${JSON.stringify(pid)},{kind:'workspace',workspaceId:${JSON.stringify(created.workspaceId)}})`);
+    const composerBounds = await js(wc, 'document.querySelector(".ia-composer").getBoundingClientRect().toJSON()');
     await button(wc, 'Ask Bart');
-    await until(() => js(wc, '!document.querySelector(".ia-composer") && document.querySelector("main")?.textContent.includes("Why does this publish control look unclear?")'), 'Ask Bart directly sends the shared draft to the existing Bart flow');
-    await until(() => js(page, '!document.querySelector("[data-engelbart-annotations]")'), 'asking clears the selection');
-    assert.equal((await js(wc, `window.engelbartAPI.interfaceAnnotations({projectId:${JSON.stringify(pid)},url:${JSON.stringify(origin + '/editor')}})`)).notes.length, 1, 'asking does not implicitly save a note');
-    await until(() => js(wc, 'document.querySelector("main")?.textContent.includes("FAKE ANSWER")'), 'scripted Bart response');
-    assert.equal(await js(wc, 'document.querySelector("main").textContent.includes("Annotation id: undefined")'), false);
+    await until(() => js(wc, '!!document.querySelector(".ia-chat [data-annotation-reply]") && !document.querySelector(".ia-composer")'), 'Ask Bart continues in an anchored chat');
+    const chatBounds = await js(wc, 'document.querySelector(".ia-chat").getBoundingClientRect().toJSON()');
+    assert.ok(Math.abs(chatBounds.left - composerBounds.left) < 1 && Math.abs(chatBounds.top - composerBounds.top) < 1, 'sending keeps the conversation at the selected element');
+    assert.equal(await js(wc, 'document.activeElement?.getAttribute("aria-label")'), 'Message Bart', 'follow-up input receives focus');
+    assert.equal(await js(wc, 'document.querySelector(".ia-body").textContent'), 'Why does this publish control look unclear?');
+    assert.equal(await js(wc, 'document.querySelector("main")?.textContent.includes("Why does this publish control look unclear?")'), false, 'question never enters the workspace');
+    await until(() => js(wc, 'document.querySelector(\'.ia-chat [data-annotation-reply][aria-busy="true"]\')?.textContent.includes("FAKE ANSWER")'), 'partial answer renders before completion');
+    assert.ok(await js(wc, 'document.querySelector(".ia-chat [role=status]")?.textContent.includes("Writing")'), 'the popup shows live progress');
+    fs.writeFileSync(path.join(root, 'annotation-streaming.png'), (await wc.capturePage()).toPNG());
+    await click(wc, '[data-browser-slot]');
+    await until(() => js(wc, '!document.querySelector(".ia-chat")'), 'outside click dismisses the conversation');
+    const readNotes = () => js(wc, `window.engelbartAPI.interfaceAnnotations({projectId:${JSON.stringify(pid)},url:${JSON.stringify(origin + '/editor')}})`);
+    await until(async () => (await readNotes()).notes.some(n => n.reply?.status === 'complete'), 'answer persists while the dropdown is closed');
+    assert.equal((await readNotes()).notes.length, 2, 'Ask Bart saves its question and selected element');
+    await browse(wc); await js(wc, 'document.querySelector(".ia-row:last-child").click()');
+    await until(() => js(wc, 'document.querySelector("[data-annotation-reply]")?.textContent.includes("FAKE ANSWER")'), 'scripted Bart response appears only in Annotations');
+    assert.equal(await js(wc, 'document.querySelectorAll(".ia-chat-user").length'), 1, 'reopening keeps the first message');
+    const reopenedBounds = await js(wc, 'document.querySelector(".ia-chat").getBoundingClientRect().toJSON()');
+    await fill(wc, 'Which label would you recommend, and why?', '.ia-chat-compose textarea');
+    await click(wc, '[aria-label="Send message"]');
+    await until(() => js(wc, 'document.querySelectorAll(".ia-chat-user").length === 2'), 'follow-up appends to the same thread');
+    await until(() => js(wc, 'document.querySelector(\'.ia-chat [data-annotation-reply][aria-busy="true"]\')?.textContent.includes("FAKE ANSWER")'), 'follow-up streams too');
+    await js(wc, 'document.querySelector(".ia-chat-messages").scrollTop=0');
+    await pause(100);
+    await until(() => js(wc, '[...document.querySelectorAll("[data-annotation-reply]")].at(-1)?.getAttribute("aria-busy")==="false"'), 'follow-up answer finishes');
+    const threadState = await js(wc, '(()=>{const p=document.querySelector(".ia-chat"),m=p.querySelector(".ia-chat-messages"),f=p.querySelector(".ia-chat-compose"),r=p.getBoundingClientRect(),c=f.getBoundingClientRect();return{left:r.left,top:r.top,scrolls:m.scrollHeight>m.clientHeight,readerAtTop:m.scrollTop===0,inputInside:c.bottom<=r.bottom&&c.top>=r.top,outerScroll:p.scrollTop}})()');
+    assert.ok(Math.abs(threadState.left-reopenedBounds.left)<1 && Math.abs(threadState.top-reopenedBounds.top)<1, 'answers keep the chat anchored');
+    assert.ok(threadState.scrolls && threadState.readerAtTop && threadState.inputInside && threadState.outerScroll===0, 'messages scroll independently, preserve reading position, and leave the input visible');
+    fs.writeFileSync(path.join(root, 'annotation-answer.png'), (await wc.capturePage()).toPNG());
+    assert.equal(await js(wc, 'document.querySelector("main")?.textContent.includes("FAKE ANSWER")'), false);
+    await click(wc, '[aria-label="Close annotations"]');
+    await browse(wc); await js(wc, 'document.querySelector(".ia-row:last-child").click()');
+    await until(() => js(wc, 'document.querySelectorAll(".ia-chat-user").length === 2'), 'closing and reopening preserves the entire thread');
+    await fill(wc, 'Make that recommendation shorter.', '.ia-chat-compose textarea');
+    await js(wc, '(()=>{const t=document.querySelector(".ia-chat-compose textarea");t.focus();t.setSelectionRange(t.value.length,t.value.length)})()');
+    wc.focus();
+    wc.sendInputEvent({ type: 'keyDown', keyCode: 'Enter', modifiers: ['shift'] }); wc.sendInputEvent({ type: 'char', keyCode: '\r', modifiers: ['shift'] }); wc.sendInputEvent({ type: 'keyUp', keyCode: 'Enter', modifiers: ['shift'] });
+    await until(() => js(wc, 'document.querySelector(".ia-chat-compose textarea").value.endsWith("\\n")'), 'Shift+Enter adds a newline');
+    assert.equal(await js(wc, 'document.querySelectorAll(".ia-chat-user").length'), 2, 'a newline does not send a message');
+    wc.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' }); wc.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
+    await until(() => js(wc, 'document.querySelectorAll(".ia-chat-user").length === 3 && [...document.querySelectorAll("[data-annotation-reply]")].at(-1)?.getAttribute("aria-busy")==="false"'), 'Enter sends a follow-up in the same chat');
+    fs.writeFileSync(path.join(root, 'annotation-followup.png'), (await wc.capturePage()).toPNG());
+    await click(wc, '[aria-label="Close annotations"]');
     await select(wc, page); await click(page, '#publish span');
     await until(() => js(wc, '!!document.querySelector(".ia-editor textarea")'), 'keyboard shortcut editor');
     await fill(wc, 'Suggest a clearer label for this control.');
     wc.focus(); wc.sendInputEvent({ type: 'keyDown', keyCode: 'Enter', modifiers: ['meta'] }); wc.sendInputEvent({ type: 'keyUp', keyCode: 'Enter', modifiers: ['meta'] });
-    await until(() => js(wc, '!document.querySelector(".ia-composer") && document.querySelector("main")?.textContent.includes("Suggest a clearer label for this control.")'), 'Cmd+Enter still defaults to asking Bart');
-    assert.equal((await js(wc, `window.engelbartAPI.interfaceAnnotations({projectId:${JSON.stringify(pid)},url:${JSON.stringify(origin + '/editor')}})`)).notes.length, 1, 'keyboard handoff does not save a note');
-    console.log('PASS single text box, Cancel left and submission actions right, Ask Bart click and keyboard handoff, no implicit note, scripted response');
+    await until(() => js(wc, 'document.querySelector(".ia-chat .ia-body")?.textContent === "Suggest a clearer label for this control."'), 'Cmd+Enter starts an anchored conversation');
+    await until(() => js(wc, 'document.querySelector("[data-annotation-reply]")?.getAttribute("aria-busy")==="false"'), 'keyboard question answered');
+    assert.deepEqual(await js(wc, `window.engelbartAPI.readDoc(${JSON.stringify(pid)},{kind:'workspace',workspaceId:${JSON.stringify(created.workspaceId)}})`), workspaceBeforeAsk, 'both asks leave the workspace document unchanged');
+    await click(wc, '[aria-label="Close annotations"]');
+    const askedNotes = (await readNotes()).notes.filter(n => n.reply);
+    assert.equal(askedNotes.length, 2);
+    for (const note of askedNotes) await js(wc, `window.engelbartAPI.deleteInterfaceAnnotation({projectId:${JSON.stringify(pid)}},${JSON.stringify(note.id)})`);
+    console.log('PASS anchored chat, follow-ups, fixed composer, internal scroll, outside dismissal, persisted conversation, unchanged workspace document');
 
     await select(wc, page);
     await js(page, 'document.querySelector("#private").style.setProperty("cursor","text","important")');
@@ -390,9 +460,13 @@ app.whenReady().then(async () => {
     console.log('PASS same-origin and nested-frame selection/restoration and saved-note placement, inaccessible frame tracking');
 
     await button(wc, 'Ask Bart');
-    await until(() => js(wc, 'document.querySelector("main")?.textContent.includes("interface annotation")'), 'annotation reaches workspace question');
-    await button(wc, 'Delete');
-    await js(wc, `document.querySelector('.ia-delete button:last-child')?.click()`);
+    await until(() => js(wc, 'document.querySelector(".ia-chat-send")?.getAttribute("aria-label")==="Stop response"'), 'saved note becomes a chat while Bart responds');
+    await click(wc, '[aria-label="Stop response"]');
+    await until(() => js(wc, 'document.querySelector(".ia-chat-messages")?.textContent.includes("Response stopped.")'), 'response can be stopped within the chat');
+    await button(wc, 'Try again');
+    await until(() => js(wc, '[...document.querySelectorAll("[data-annotation-reply]")].at(-1)?.textContent.includes("FAKE ANSWER")'), 'saved annotation receives its own answer');
+    await click(wc, '[aria-label="Delete conversation"]');
+    await js(wc, `document.querySelector('.ia-chat-delete button:last-child')?.click()`);
     await until(() => js(wc, 'document.querySelectorAll(".ia-row").length===1 && !document.querySelector("[aria-label=\\"Close annotations\\"]").disabled'), 'delete persisted');
     await click(wc, '[aria-label="Close annotations"]');
     await until(() => js(page, '!document.querySelector("[data-engelbart-annotations]")'), 'overlay removed');
@@ -482,7 +556,7 @@ app.whenReady().then(async () => {
     await js(wc, 'window.terminalAPI.bootstrap().then(s=>Promise.all(s.sessions.map(t=>window.terminalAPI.closeSession(t.id))))');
     win.hide();
     assert.equal(win.isVisible(), false);
-    console.log(JSON.stringify({ ok: true, screenshot, root, checks: ['full-width selection and browsing', 'floating list and contextual saved note', 'bounded long lists/notes and internal scrolling', 'Back/Escape/outside dismissal', 'snapshot refresh after locate', 'neutral overlay', 'no selection label box', 'pointer/reset', 'Escape in page and toolbar', 'contextual composer', 'single text box', 'Cancel on the left, Add note/Ask Bart grouped on the right', 'Cmd+Enter asks without saving a note', 'save/cancel cleanup', 'save', 'edit', 'reload', 'resolve', 'approximate', 'missing', 'frames/nested frames', 'shadow roots', 'privacy', 'Ask Bart from saved note', 'delete', 'cleanup', 'reopen', 'scroll', 'in-page navigation', 'open original route'] }));
+    console.log(JSON.stringify({ ok: true, screenshot, root, checks: ['full-width selection and browsing', 'floating list and contextual saved note', 'bounded long lists/notes and internal scrolling', 'Back/Escape/outside dismissal', 'snapshot refresh after locate', 'neutral overlay', 'no selection label box', 'pointer/reset', 'Escape in page and toolbar', 'contextual composer', 'single text box', 'Cancel on the left, Add note/Ask Bart grouped on the right', 'Ask Bart click and Cmd+Enter save to Annotations', 'answer persists with dropdown closed', 'workspace document unchanged', 'save/cancel cleanup', 'save', 'edit', 'reload', 'resolve', 'approximate', 'missing', 'frames/nested frames', 'shadow roots', 'privacy', 'Ask Bart from saved note', 'delete', 'cleanup', 'reopen', 'scroll', 'in-page navigation', 'open original route'] }));
     server.closeAllConnections(); server.close(); app.exit(0);
   } catch (error) {
     console.error(error); console.error('Fixture:', root);

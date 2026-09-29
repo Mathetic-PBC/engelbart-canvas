@@ -1,7 +1,9 @@
 import React from 'react';
+import { buildPreviewTabChanges } from './build-preview-tabs';
 import { EDGE as WINDOW_EDGE } from '../ui/WindowEdges.jsx';
 import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
+import { sessionValue, saveSessionValue, useSessionState, useScrollMemory, trackViewSave } from '../session-ui.js';
 import { KindGlyph, SEARCH, FOLDER, ANNOTATE, RECORD, STOP_RECORDING } from '../ui/Icons.jsx';
 import { kindOf, stripScheme, OPEN_IN_BROWSER } from '../model/address.js';
 import { MAX_TABS, addressKey, afterClose, compactPageTitle, looksLikePlace, placeTab, stageRows, tabKey, tabPlace, parseTable } from '../model/stage.js';
@@ -331,12 +333,13 @@ const clearRanges = () => { const h = highlights(); if (h) { h.delete(FIND); h.d
 
 /* --------------------------------------------------------------------------------------------------- Stage */
 
-const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull, onShow, onPage, onFront, onAskAnnotation, save, library, inRail, onError }, ref) {
+const Stage = React.forwardRef(function Stage({ projectId, workspaceId, visible, full, onFull, onShow, onPage, onFront, onAskAnnotation, save, library, inRail, onError }, ref) {
+  const initialPanel = React.useRef(sessionValue(`stage:${projectId}:panel`, null));
   const [tabs, setTabs] = React.useState(() => [blankTab()]);
   const [activeId, setActiveId] = React.useState(() => null);
   const [draft, setDraft] = React.useState('');
   const [menu, setMenu] = React.useState(null); // { x, y }
-  const [device, setDevice] = React.useState('fit');
+  const [device, setDevice] = useSessionState(`stage:${projectId}:device`, 'fit');
   const [occluded, setOccluded] = React.useState(false);
   const [snapshot, setSnapshot] = React.useState(null);
   const [annotationSnapshot, setAnnotationSnapshot] = React.useState(0);
@@ -346,7 +349,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const [pick, setPick] = React.useState(0); // the row of the address list Enter takes
   const [found, setFound] = React.useState(null); // the library's answer for a typed place: { input, row }
   const [saving, setSaving] = React.useState(false); // the Save card is open
-  const [annotationMode, setAnnotationMode] = React.useState(null); // select directly, or explicitly browse saved notes
+  const [annotationMode, setAnnotationMode] = React.useState(() => initialPanel.current?.kind === 'annotations' ? 'browse' : null);
   const [annotationRevision, setAnnotationRevision] = React.useState(0);
   React.useEffect(() => {
     const changed = () => setAnnotationRevision(value => value + 1);
@@ -359,14 +362,14 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     return () => { offLibrary(); offSandbox(); };
   }, []);
   const recording = useRecording();
-  const [recordingsOpen, setRecordingsOpen] = React.useState(false);
+  const [recordingsOpen, setRecordingsOpen] = React.useState(() => initialPanel.current?.kind === 'recordings');
   const [recordingBusy, setRecordingBusy] = React.useState(null);
   const [recordingError, setRecordingError] = React.useState('');
   const recordingActive = isRecording(recording);
   const recordingPending = !!recordingBusy || recording?.status === 'starting';
   const recordingLabel = recordingBusy === 'stop' ? 'Saving recording…' : recordingPending ? 'Starting recording…' : recordingActive ? 'Stop recording' : 'Record page';
   const annotating = annotationMode === 'select';
-  const closeAnnotations = React.useCallback(() => setAnnotationMode(null), []);
+  const closeAnnotations = React.useCallback(() => { setAnnotationMode(null); }, []);
   const [finding, setFinding] = React.useState(false); // the find card is open
   const [findText, setFindText] = React.useState('');
   const [matches, setMatches] = React.useState(null); // { matches, active } in the tab in front
@@ -406,7 +409,11 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const blank = !pdf && !view && !page && k.kind === 'blank';
   const web = tab.web;
   const failed = page && web && web.error ? web.error : null;
-  const collectionUrl = page ? tab.url : null;
+  const collectionUrl = page ? tab.url : (annotationMode || recordingsOpen) ? initialPanel.current?.url || null : null;
+  React.useEffect(() => {
+    const kind = annotationMode ? 'annotations' : recordingsOpen ? 'recordings' : null;
+    saveSessionValue(`stage:${projectId}:panel`, kind && collectionUrl ? { kind, url: collectionUrl } : null);
+  }, [projectId, annotationMode, recordingsOpen, collectionUrl]);
   const showing = visible && page && !failed && !occluded;
   // One initial viewport per run, saved by main only if this really is a repo's
   // current live preview. No background navigation, periodic capture, or build wait.
@@ -415,7 +422,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     const timers = [1200, 4000].map(delay => setTimeout(() => quiet(api.captureRepoThumbnail(tab.id)), delay));
     return () => timers.forEach(clearTimeout);
   }, [showing, annotationMode, tab.id, tab.url, web?.url, web?.loading]);
-  React.useEffect(() => { setRecordingsOpen(false); setRecordingError(''); setAnnotationMode(null); }, [projectId]);
+  React.useEffect(() => { setRecordingError(''); }, [projectId]);
   const toggleRecording = async () => {
     setRecordingBusy(recordingActive ? 'stop' : 'start'); setRecordingError(''); setAnnotationMode(null); setMenu(null);
     try {
@@ -439,6 +446,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
       : tab.file && tab.file.kind === 'doc' ? tab.file.path
         : page ? ((web && web.url) || tab.url) : null;
   const pageTitle = tab.row ? tab.row.name : pdf ? pdf.name : view || (tab.file && tab.file.kind === 'doc') ? (tab.file.name || basename(pageInput)) : page ? ((web && web.title) || stripScheme(pageInput || '')) : '';
+  const fileScroll = useScrollMemory(view?.path ? `local-position:${projectId}:${view.path}` : null);
   const savable = !!pageInput && !/^about:/i.test(pageInput) && kindOf(pdf ? pdf.url : tab.url).kind !== 'local';
   const pdfBytes = pdf && !pdf.rowId && WEB_URL.test(pdf.url) ? pdf.bytes : null;
   React.useEffect(() => { if (onPage) onPage(savable ? { input: pageInput, title: pageTitle || stripScheme(pageInput), bytes: pdfBytes || null } : null); }, [savable, pageInput, pageTitle, pdfBytes, onPage]);
@@ -545,7 +553,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
 
   const readPath = (id, input, rowId) => {
     update(id, (t) => ({ ...t, url: 'about:blank', pdf: null, pdfForward: null, file: { kind: 'loading', path: input, name: basename(input) } }));
-    api.stageFile(projectId, input)
+    api.stageFile(projectId, input, workspaceId)
       .then((result) => apply(id, result, rowId)) // a tab closed meanwhile is simply not there to update
       .catch((error) => update(id, (t) => ({ ...t, file: { kind: 'error', path: input, name: basename(input), message: errorMessage(error) } })));
   };
@@ -574,7 +582,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     if (path) {
       const place = next.kind === 'disk' ? next.url : input;
       try {
-        const result = await api.stageFile(projectId, place);
+        const result = await api.stageFile(projectId, place, workspaceId);
         apply(id, result, null);
         setDraft(stripScheme(result.path || place));
         return;
@@ -626,6 +634,31 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
       if (id) { readPath(id, file, null); room -= 1; }
     }
   };
+  // Only local artifacts are restored in this pass. Live pages and terminal
+  // processes are deliberately absent from the saved tab descriptions.
+  const localTab = t => {
+    const path = t.file?.path || t.row?.path || t.pdf?.input;
+    return typeof path === 'string' && path.startsWith('/') ? { path, rowId: t.row?.id || null } : null;
+  };
+  const [localTabsReady, setLocalTabsReady] = React.useState(false);
+  React.useEffect(() => {
+    const saved = sessionValue(`stage:${projectId}:local-tabs`, { tabs: [], active: null });
+    let active = null;
+    for (const descriptor of (Array.isArray(saved.tabs) ? saved.tabs : []).slice(0, MAX_TABS)) {
+      if (typeof descriptor.path !== 'string' || !descriptor.path.startsWith('/')) continue;
+      const row = library.find(item => item.id === descriptor.rowId && item.path === descriptor.path);
+      const id = claim(row ? `i:${row.id}` : `l:${addressKey(fileUrl(descriptor.path))}`);
+      if (!id) continue;
+      if (row && row.type === 'pdf') showRow(id, row); else readPath(id, descriptor.path, row?.id);
+      if (saved.active === descriptor.path) active = id;
+    }
+    if (active) { frontRef.current = active; setActiveId(active); }
+    else if (saved.tabs?.length) newTab();
+    setLocalTabsReady(true);
+  }, [projectId]);
+  React.useEffect(() => {
+    if (localTabsReady) saveSessionValue(`stage:${projectId}:local-tabs`, { tabs: tabs.map(localTab).filter(Boolean), active: localTab(tab)?.path || null });
+  }, [localTabsReady, projectId, tabs, activeId]);
   const chooseFiles = async () => {
     setTyping(false);
     if (addressRef.current) addressRef.current.blur();
@@ -663,6 +696,13 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   };
   const applyBuildPreview = (id, preview, focus = true) => {
     if (!preview) return;
+    for (const change of buildPreviewTabChanges(tabsRef.current, preview)) {
+      if (change.url) void navigate(change.id, change.url);
+      else closeTab(change.id);
+    }
+    // Shared-server notifications update existing tabs without opening a tab or
+    // stealing focus for each historical Build card that referenced the server.
+    if (preview.background) return;
     const requestKey = `build-preview:${id}`;
     const held = tabsRef.current.find(t => t.requestKey === requestKey);
     if (preview.mode === 'restored' || (preview.mode === 'accepted' && preview.status === 'failed')) {
@@ -1113,6 +1153,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
           pdfReady ? (
             <PaperView
               key={`${tab.id}:${pdf.seq}`}
+              sessionKey={tab.row?.path || pdf.input?.startsWith('/') ? `paper-position:${projectId}:${tab.row?.path || pdf.input}` : null}
               ref={paperRef}
               bytes={pdf.bytes}
               marks={pdf.marks}
@@ -1120,7 +1161,9 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
               onMarksChange={(marks) => {
                 const { seq, url, rowId } = pdf;
                 update(tab.id, (t) => (t.pdf && t.pdf.seq === seq ? { ...t, pdf: { ...t.pdf, marks } } : t));
-                (rowId ? api.writeAnnotations(rowId, marks) : api.writePageAnnotations(url, marks)).catch((error) => { if (onError) onError(error); });
+                const saving = trackViewSave(rowId ? api.writeAnnotations(rowId, marks) : api.writePageAnnotations(url, marks));
+                saving.catch((error) => { if (onError) onError(error); });
+                return saving;
               }}
             />
           ) : (
@@ -1128,7 +1171,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
           )
         )}
         {view && (
-          <div ref={viewRef} onClick={onViewClick} data-stage-view={view.kind} style={{ flex: 1, minHeight: 0, overflow: 'auto', background: view.kind === 'md' || view.kind === 'text' ? '#fff' : '#fafafa' }}>
+          <div {...fileScroll} ref={element => { viewRef.current = element; fileScroll.ref.current = element; }} onClick={onViewClick} data-stage-view={view.kind} style={{ flex: 1, minHeight: 0, overflow: 'auto', background: view.kind === 'md' || view.kind === 'text' ? '#fff' : '#fafafa' }}>
             {view.kind === 'md' && <MarkdownView text={view.text} />}
             {view.kind === 'table' && <TableView text={view.text} delimiter={view.delimiter} truncated={view.truncated} />}
             {view.kind === 'text' && <pre style={{ margin: 0, padding: '14px 16px', font: '12.5px/1.7 var(--font-mono)', color: '#171717', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{view.text}</pre>}
@@ -1159,7 +1202,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
         )}
         {!pdf && !view && !page && k.kind === 'sandbox' && <Plain title={k.name} detail="" />}
       </div>
-      {annotationMode && visible && <InterfaceAnnotations key={`${projectId}:${tab.id}:${collectionUrl}:${annotating ? 'select' : 'notes'}`} revision={annotationRevision} mode={annotationMode} slotRef={slotRef} surfaceRef={surfaceRef} projectId={projectId} tabId={tab.id} url={collectionUrl} loading={!!web?.loading || !!failed} onClose={closeAnnotations} onLocated={refreshAnnotationSnapshot} onNavigate={(url) => navigate(tab.id, url)} onAsk={onAskAnnotation} />}
+      {annotationMode && visible && <InterfaceAnnotations key={`${projectId}:${tab.id}:${collectionUrl}:${annotating ? 'select' : 'notes'}`} revision={annotationRevision} mode={annotationMode} onBrowse={() => setAnnotationMode('browse')} slotRef={slotRef} surfaceRef={surfaceRef} projectId={projectId} tabId={page ? tab.id : null} url={collectionUrl} loading={!!web?.loading || !!failed} onClose={closeAnnotations} onLocated={refreshAnnotationSnapshot} onNavigate={(url) => navigate(tab.id, url)} onAsk={onAskAnnotation} />}
       </div>
       {logins[0] && createPortal(
         <LoginPrompt

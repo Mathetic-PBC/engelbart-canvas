@@ -133,6 +133,32 @@ function fakeElectron() {
   return { made, browsing, children, win, dialog, questions, handed, electron: { WebContentsView, session: { fromPartition: () => browsing }, Menu: {}, clipboard: {}, dialog, shell } };
 }
 
+test('annotation context reads only its named tab and rejects wrong pages, closure, and navigation races', async () => {
+  const fake = fakeElectron();
+  const views = createBrowserViews({ electron: fake.electron, getWindow: () => fake.win, send() {} });
+  const note = { url: 'https://original.example/editor', sourceUrl: 'https://current.example/editor', anchor: { element: { tag: 'button', selector: '#submit' }, ancestors: [], frames: [], route: '/editor' } };
+  views.open('selected', 'https://current.example/editor?token=private');
+  const wc = fake.made[0].webContents;
+  let captures = 0;
+  wc.executeJavaScriptInIsolatedWorld = async () => { captures++; return { status: 'available', surroundingText: 'Join study' }; };
+  const snapshot = await views.annotationContext('selected', note);
+  assert.equal(snapshot.status, 'available');
+  assert.equal(snapshot.url, 'https://current.example/editor');
+  assert.ok(snapshot.capturedAt);
+  assert.equal((await views.annotationContext('missing', note)).status, 'unavailable');
+  views.open('selected', 'https://unrelated.example/editor');
+  assert.equal((await views.annotationContext('selected', note)).status, 'unavailable');
+  assert.equal(captures, 1, 'never reads another website just because the tab id matches');
+  views.open('selected', note.url);
+  let finish;
+  wc.executeJavaScriptInIsolatedWorld = () => new Promise(resolve => { finish = resolve; });
+  const pending = views.annotationContext('selected', note);
+  views.open('selected', 'https://unrelated.example/editor');
+  finish({ status: 'available', surroundingText: 'Wrong page' });
+  assert.equal((await pending).status, 'unavailable');
+  views.closeAll();
+});
+
 test('annotation popovers can refresh the hidden current tab snapshot without showing or resizing it', async () => {
   const fake = fakeElectron();
   const views = createBrowserViews({ electron: fake.electron, getWindow: () => fake.win, send() {}, appName: 'Engelbart' });

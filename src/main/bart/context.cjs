@@ -7,6 +7,7 @@
 // A follow-up carries all of that again, read again, and the earlier turns of its exchange as well.
 
 const path = require('node:path');
+const { createHash } = require('node:crypto');
 const projects = require('../store/projects.cjs');
 const { buildCatalog } = require('../context/catalog.cjs');
 const { expandDoc } = require('../context/expand-mentions.cjs');
@@ -42,7 +43,8 @@ function catalogEntries(project, rows, seen) {
     name: entry.name,
     type: entry.type,
     tags: entry.tags,
-    path: entry.path ? path.resolve(project.dir, entry.path) : null,
+    path: entry.path || entry.folderPath ? path.resolve(project.dir, entry.path || entry.folderPath) : null,
+    folderPath: entry.folderPath ? path.resolve(project.dir, entry.folderPath) : null,
     url: entry.url,
     summary: entry.summaryStale ? null : entry.summary,
     lastEdited: entry.lastEdited,
@@ -54,7 +56,10 @@ function catalogEntries(project, rows, seen) {
  * → { project, dirs, head, contextJson, documents }. `head` and the documents are text; the
  * caller adds the level and the question (./ask.cjs), which differ per step.
  */
-async function buildContext(ctx, projectId, { ref, workspaceId, askId }) {
+async function buildContext(ctx, projectId, { ref, workspaceId, askId, repository: captured }) {
+  const repositories = require('../store/workspace-repositories.cjs');
+  await repositories.ensure(ctx, projectId);
+  const repository = captured || repositories.resolve(ctx, projectId, workspaceId);
   const found = projects.findWorkspace(ctx, projectId, workspaceId);
   const { project, workspace } = found;
   const rows = await ctx.libraryDb.list();
@@ -73,15 +78,24 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId }) {
     documents.push(block('workspace', space.title, markPlace(space.body, askId)));
   }
   const entries = catalogEntries(project, rows, seen);
+  // Context repositories are readable sources, not a change to the working
+  // repository. Grant access to external sources even without an @mention.
+  const dirs = [repository.directory, ctx.dataRoot];
+  for (const entry of entries) if (entry.folderPath && entry.tags?.includes('git') && !dirs.some(dir => repositories.contains(dir, entry.folderPath))) dirs.push(entry.folderPath);
   const head = [
     '<engelbart>',
     `project: ${project.name}`,
-    `code directory: ${project.directory || 'none set'}`,
+    `code directory: ${repository.directory}`,
+    `repository ID: ${repository.repoId}`,
     `notes and workspaces: ${project.dir}`,
+    `workspace directory: ${workspace.dir}`,
     `asked from: ${from}`,
     '</engelbart>',
   ].join('\n');
-  return { project, dirs: [project.directory, ctx.dataRoot].filter(Boolean), head, contextJson: `<context_json>\n${JSON.stringify(entries, null, 1)}\n</context_json>`, documents: documents.join('\n\n') };
+  // A resumable CLI session has memorized these locations. IDs alone survive
+  // moves; include the current locations so persisted sessions are checked too.
+  const location = createHash('sha256').update(JSON.stringify([project.dir, workspace.dir, repository.directory, [...dirs].sort(), entries.map(entry => [entry.path, entry.folderPath]).sort()])).digest('hex');
+  return { project, repository, dirs, location, head, contextJson: `<context_json>\n${JSON.stringify(entries, null, 1)}\n</context_json>`, documents: documents.join('\n\n') };
 }
 
 module.exports = { HERE, markPlace, buildContext, conversationBlock, catalogEntries, block };

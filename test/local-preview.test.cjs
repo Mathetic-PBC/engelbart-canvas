@@ -27,7 +27,7 @@ let ctx, project;
 test.before(async () => {
   const layout = ensureHome(root);
   ctx = { homeDir: root, root: layout.root, dataRoot: layout.root, libraryDb: await db.openLibraryDb(layout.root) };
-  project = await projects.createProject(ctx, { name: 'Local interfaces', directory: root });
+  project = await projects.createProject(ctx, { name: 'Local interfaces' });
 });
 test.after(() => db.closeAll());
 

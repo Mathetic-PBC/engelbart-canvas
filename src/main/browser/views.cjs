@@ -490,6 +490,26 @@ function createBrowserViews({ electron, getWindow, send, fileRoot, recordings = 
     return entry.annotations.command(message);
   }
 
+  async function annotationContext(id, note) {
+    const unavailable = reason => ({ status: 'unavailable', reason });
+    if (!id || !entries.has(id)) return unavailable('The annotated tab is no longer open.');
+    const contents = entries.get(id).view.webContents;
+    const { pageAddress } = require('../../shared/interface-annotations.cjs');
+    let url;
+    try {
+      url = contents.getURL();
+      const current = pageAddress(url).url;
+      if (![note.url, note.sourceUrl].filter(Boolean).some(value => pageAddress(value).url === current)) return unavailable('The tab is showing a different website or page.');
+    } catch { return unavailable('The annotated page is unavailable.'); }
+    // A temporary helper does not alter the picker, its markers, or polling.
+    const helper = createAnnotations(contents, () => {});
+    try {
+      const result = await helper.snapshot(note.anchor);
+      if (contents.isDestroyed() || contents.getURL() !== url) return unavailable('The page changed while it was being inspected.');
+      return { ...result, url: pageAddress(url).url, capturedAt: new Date().toISOString() };
+    } finally { helper.dispose(); }
+  }
+
   /** Find in the page: a new query starts over, the same one steps. An empty one stops. */
   function find(id, text, options) {
     assertId(id);
@@ -677,7 +697,7 @@ function createBrowserViews({ electron, getWindow, send, fileRoot, recordings = 
   // exposed through browser IPC or to remote pages.
   const getSession = () => { configureSession(); return session.fromPartition(PARTITION); };
   const getPages = () => [...entries.values()].map(entry => entry.view.webContents);
-  return { open, show, hide, command, annotate, find, stopFind, shortcut, close, closeAll, answerLogin, flush, captureRepoThumbnail, getSession, getPages, has: (id) => entries.has(id) };
+  return { open, show, hide, command, annotate, annotationContext, find, stopFind, shortcut, close, closeAll, answerLogin, flush, captureRepoThumbnail, getSession, getPages, has: (id) => entries.has(id) };
 }
 
 function registerBrowserIpc({ ipcMain, trustedHandler, views }) {

@@ -114,6 +114,10 @@ export default function PostItBuild({ projectId, quick, anchor, library, inRail,
   const [choice, setChoice] = React.useState(null);
   const [efforts, setEfforts] = React.useState(() => (read() || {}).efforts || {});
   const [pre, setPre] = React.useState(null);
+  const [repositoryRevision, setRepositoryRevision] = React.useState(0);
+  React.useEffect(() => api.onRepositoryChanged(event => {
+    if (event.projectId === projectId && (!event.workspaceId || event.workspaceId === workspaceId)) { setPre(null); setRepositoryRevision(n => n + 1); }
+  }), [projectId, workspaceId]);
   const [picked, setPicked] = React.useState([]); // library rows for Context
   const [ctxOpen, setCtxOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
@@ -124,9 +128,14 @@ export default function PostItBuild({ projectId, quick, anchor, library, inRail,
   React.useEffect(() => {
     let live = true;
     api.buildModels().then((value) => { if (live) { setModels(value); setChoice(startingChoice(value)); } }).catch((e) => { if (live) setError(errorMessage(e)); });
-    api.buildPreflight(projectId).then((value) => { if (live) setPre(value); }).catch((e) => { if (live) setError(errorMessage(e)); });
     return () => { live = false; };
-  }, [projectId]);
+  }, [projectId, workspaceId]);
+  React.useEffect(() => {
+    let live = true;
+    setPre(null);
+    api.buildPreflight(projectId, workspaceId).then((value) => { if (live) setPre(value); }).catch((e) => { if (live) setError(errorMessage(e)); });
+    return () => { live = false; };
+  }, [projectId, workspaceId, repositoryRevision]);
 
   const choose = (next) => {
     setChoice(next);
@@ -138,11 +147,11 @@ export default function PostItBuild({ projectId, quick, anchor, library, inRail,
   const send = async () => {
     if (!ready) return;
     setBusy(true); setError('');
-    try { await onStart({ ...choice, workspaceId, attach: picked.map((row) => row.id) }); } catch (e) { setError(errorMessage(e)); setBusy(false); }
+    try { await onStart({ ...choice, workspaceId, expectedRepoId: pre.repoId, attach: picked.map((row) => row.id) }); } catch (e) { setError(errorMessage(e)); setBusy(false); }
   };
   const startHistory = async () => {
     setBusy(true); setError('');
-    try { setPre(await api.buildInit(projectId)); } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
+    try { setPre(await api.buildInit(projectId, workspaceId)); } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
   };
 
   React.useEffect(() => {
@@ -174,6 +183,7 @@ export default function PostItBuild({ projectId, quick, anchor, library, inRail,
             {workspaces.map(workspace => <option key={workspace.id} value={workspace.id}>{[...(workspace.above || []), workspace.name].join(' / ')}</option>)}
           </select>
         </label>
+        {pre?.directory && <div data-build-repository="1" title={pre.directory} style={{ padding: '6px 18px 0', font: '12px/1.5 var(--font-sans)', color: '#777', overflowWrap: 'anywhere' }}>{pre.repositoryName} · {pre.directory}</div>}
         {models && choice ? <ModelGrid models={models} choice={choice} efforts={efforts} onChoose={choose} /> : <div style={{ height: 180 }} />}
         <div style={{ height: 1, background: '#eaeaea' }} />
         {problem && (

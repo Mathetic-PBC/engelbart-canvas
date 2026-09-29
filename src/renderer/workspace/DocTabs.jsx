@@ -7,7 +7,7 @@ const SLIDE = 'transform 160ms cubic-bezier(.25,.1,.25,1)';
 const THRESHOLD = 4; // px of travel before a press becomes a drag
 
 /** Document tabs, rendered inside the header's middle column (design 2026-09-17): Workspace plus opened notes.
- *  The Workspace tab carries the workspace icon before its name and is in bold (2026-09-25; after it from 2026-09-22).
+ *  Each tab carries its document icon; the selected tab has a white background and darker label.
  *  A note tab drags the way a browser tab does: the tab itself follows the pointer along the strip,
  *  its neighbours slide out of the way as its leading edge passes their middle, and it settles into the gap on
  *  release. Workspace stays first and nothing moves past it.
@@ -28,7 +28,7 @@ export default function DocTabs({ tabs, activeTab, onSelect, onClose, onMove }) 
     // Between the end of Workspace and the end of the last tab, as a browser's strip holds its tabs.
     const ws = els.current.get('ws');
     const last = els.current.get(tabs[tabs.length - 1].id) || el;
-    const min = (ws ? ws.offsetLeft + ws.offsetWidth + 2 : 0) - el.offsetLeft;
+    const min = (ws ? ws.offsetLeft + ws.offsetWidth + 4 : 0) - el.offsetLeft;
     const max = last.offsetLeft + last.offsetWidth - el.offsetWidth - el.offsetLeft;
     const dx = Math.max(min, Math.min(Math.max(min, max), d.x - d.startX));
     el.style.transform = `translateX(${dx}px)`;
@@ -98,22 +98,21 @@ export default function DocTabs({ tabs, activeTab, onSelect, onClose, onMove }) 
     setDraggingId(null);
   };
 
-  // Drawn as the Stage draws its tabs (ui/FluidTab.jsx), each as long as its title up to the most a tab may be (2026-09-25).
-  // Workspace is always there and first, in bold with its icon before its name; it has no ×.
+  // Document tabs have rounded top corners and a flat bottom that meets the editor.
+  // Workspace is always there and first; it has no ×.
   return (
     <>
-      {tabs.map((tab, i) => {
+      {tabs.map((tab) => {
         const on = tab.id === activeTab;
         const dragging = draggingId === tab.id;
         const ws = tab.id === 'ws';
-        const sep = !on && tabs[i + 1] && tabs[i + 1].id !== activeTab;
         const untitled = isUntitled(tab.title);
         return (
           <FluidTab
             key={tab.id}
             ref={(element) => { if (element) els.current.set(tab.id, element); else els.current.delete(tab.id); }}
             on={on}
-            sep={sep}
+            variant="document"
             lifted={dragging}
             data-no-drag="1"
             data-doc-tab={tab.id}
@@ -126,8 +125,8 @@ export default function DocTabs({ tabs, activeTab, onSelect, onClose, onMove }) 
             onMouseLeave={card.leave}
             style={{ touchAction: 'none' }}
           >
-            {ws && <span data-ws-icon="1" style={{ flex: 'none', display: 'flex', color: on ? '#4d4d4d' : '#8f8f8f' }}><KindGlyph kind="workspace" item={{ type: 'workspace' }} box={14} color="currentColor" /></span>}
-            <TabTitle weight={ws ? 600 : 400} color={untitled ? '#8f8f8f' : on || ws ? '#171717' : '#4d4d4d'}>{tab.title}</TabTitle>
+            <span data-ws-icon={ws ? '1' : undefined} style={{ flex: 'none', display: 'flex', color: on ? '#737373' : '#8f8f8f' }}><KindGlyph kind={ws ? 'workspace' : 'note'} box={16} size={14} color="currentColor" /></span>
+            <TabTitle size={14} weight={on ? 500 : 400} color={untitled || !on ? '#8f8f8f' : '#171717'}>{tab.title}</TabTitle>
             {!ws && <TabClose onClose={() => onClose(tab.id)} title="Close" />}
           </FluidTab>
         );

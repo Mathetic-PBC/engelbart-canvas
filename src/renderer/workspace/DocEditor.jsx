@@ -16,6 +16,7 @@
 //   * where a document was scrolled to is kept per workspace (props.viewOf / props.onView, 2026-09-22), apart from the
 //     caret: coming back to a document shows what was on screen, not where the last edit was.
 import React from 'react';
+import { sessionValue, saveSessionValue, registerViewFlusher } from '../session-ui.js';
 import { parseLine, parseLines, codeBlocks, selectedLineRange, jsonBlockEdit, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, threads, turnText, wsMention, INLINE, LABELS, HELD, ATTRIBUTION_RE, FENCE_RE } from '../model/doc.js';
 import { readFlags, readQuestion, withChoice, modelOf, effortOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
 import BartPicker from './BartPicker.jsx';
@@ -96,6 +97,8 @@ export default class DocEditor extends React.Component {
   /* ---------------------------------------------------------------- lifecycle */
   componentDidMount() {
     this.mounted = true;
+    this.restoreDrafts();
+    this.offViewFlush = registerViewFlusher(() => { this.saveDrafts(); this.reportView(this.props, false); });
     const inEd = (e) => e.target && e.target.closest && e.target.closest('[data-editor]') === this.editorEl();
     // The follow-up field is an <input> inside the editor: its keys and text are its own, not the document's. So is a
     // Build card's reply field.
@@ -132,12 +135,13 @@ export default class DocEditor extends React.Component {
 
   // The document on screen is about to be replaced by another: what it was scrolled to is reported first, while it is still there.
   getSnapshotBeforeUpdate(prevProps) {
-    if (prevProps.docKey !== this.props.docKey && this.lastKey === prevProps.docKey) this.reportView(prevProps, true);
+    if ((prevProps.docKey !== this.props.docKey || prevProps.viewScope !== this.props.viewScope) && this.lastKey === prevProps.docKey) { this.reportView(prevProps, true); this.saveDrafts(prevProps); }
     return null;
   }
 
   componentDidUpdate(prevProps) {
-    if (prevProps.docKey !== this.props.docKey) {
+    if (prevProps.docKey !== this.props.docKey || prevProps.viewScope !== this.props.viewScope) {
+      this.restoreDrafts();
       this.wantView = true; this.settle = null;
       this.history = []; this.future = []; this.caret = null; this.lastHtml = ''; this.lastKey = null; this.selRaw = null; this.openKey = '';
       const s = this.state;
@@ -153,6 +157,7 @@ export default class DocEditor extends React.Component {
   }
 
   componentWillUnmount() {
+    this.saveDrafts(); this.offViewFlush?.();
     if (this.lastKey === this.key()) this.reportView(this.props, true);
     this.mounted = false; clearTimeout(this.pickerT); clearTimeout(this.viewT);
     if (this.resizeObs) this.resizeObs.disconnect();
@@ -163,6 +168,25 @@ export default class DocEditor extends React.Component {
   }
 
   /* ---------------------------------------------------------------- public (via ref) */
+  draftKey(props = this.props) { return props.viewScope && props.docKey ? `editor:${props.viewScope}:${props.docKey}` : null; }
+  saveDrafts(props = this.props) {
+    const key = this.draftKey(props); if (!key) return;
+    const lines = (props.text || '').split('\n');
+    const followups = [...new Set([...this.followText.keys(), ...this.followChoice.keys()])].filter(i => lines[i] != null).map(i => ({ line: i, hash: hashLine(lines[i]), text: this.followText.get(i) || '', choice: this.followChoice.get(i) || null }));
+    saveSessionValue(key, { followups, builds: [...this.buildText], buildOpen: [...this.buildOpen], buildSteps: [...this.buildSteps] });
+  }
+  restoreDrafts() {
+    const saved = sessionValue(this.draftKey(), {}), lines = this.lines();
+    this.followText = new Map(); this.followChoice = new Map();
+    for (const draft of saved.followups || []) {
+      const matches = lines.flatMap((line, i) => hashLine(line) === draft.hash ? [i] : []);
+      const i = matches.includes(draft.line) ? draft.line : matches.length === 1 ? matches[0] : -1;
+      if (i < 0) continue;
+      if (draft.text) this.followText.set(i, draft.text);
+      if (draft.choice) this.followChoice.set(i, draft.choice);
+    }
+    this.buildText = new Map(saved.builds || []); this.buildOpen = new Set(saved.buildOpen || []); this.buildSteps = new Set(saved.buildSteps || []);
+  }
   /** Put the caret at the start of the document (a freshly created note). */
   focusStart() { this.caret = { line: 0, offset: 0 }; this.wantFocus = true; this.setState({ activeLine: 0 }); }
   /** Put the caret at the end of the last line. */
@@ -411,8 +435,9 @@ export default class DocEditor extends React.Component {
       // Once answered, the question keeps its own box and the reply starts immediately below it.
       const top = !at || at.top, closes = !at || at.closes;
       const look = this.props.compact ? `padding:${top ? 12 : 10}px 16px ${closes ? '10px' : '4px'};background:#fafafa;border-radius:${radius(top, closes)};font-size:16px;line-height:1.6;` : MESSAGE_LOOK;
-      return `<div ${raw} ${locked ? 'contenteditable="false" data-readonly="1"' : ''} style="display:flex;align-items:flex-start;gap:10px;min-height:35px;${look}margin-bottom:${closes ? '14px' : '0'};${locked ? 'user-select:text;cursor:default' : ''}"><span class="t" style="flex:1;min-width:0">${content || '<br>'}</span>`
+      return `<div ${raw} ${locked ? 'contenteditable="false" data-readonly="1"' : ''} style="display:flex;flex-wrap:wrap;align-items:flex-start;gap:10px;min-height:35px;${look}margin-bottom:${closes ? '14px' : '0'};${locked ? 'user-select:text;cursor:default' : ''}"><span class="t" style="flex:1;min-width:0">${content || '<br>'}</span>`
         + (closes ? chip : '')
+        + (closes && !locked ? this.repositoryControl() : '')
         + '</div>';
     }
     if (p.type === 'pending') {
@@ -610,6 +635,7 @@ export default class DocEditor extends React.Component {
     // What can be done with it now.
     const acts = [];
     if (!working && status !== 'discarded' && (task.preview || task.interfaceIntent)) acts.push(this.buildButton('buildpreview', id, task.preview?.url ? 'Live preview' : 'Start preview'));
+    if (!working && task.preview?.url) acts.push(this.buildButton('buildstoppreview', id, 'Stop preview'));
     if (task.preview?.error) body += `<div role="status" style="margin-top:8px;font-size:12.5px;color:#777">Preview: ${esc(task.preview.error)}</div>`;
     if (!working && !final) {
       acts.push(this.buildButton('buildreview', id, 'Review'));
@@ -656,7 +682,7 @@ export default class DocEditor extends React.Component {
     const send = input.parentElement && input.parentElement.querySelector('[data-act="buildsend"]'); if (!send) return;
     const ready = !!input.value.trim(); send.style.background = ready ? '#0070f3' : '#f2f2f2'; send.style.color = ready ? '#fff' : '#8f8f8f';
   }
-  buildInput(input) { this.buildText.set(input.dataset.buildInput, input.value); this.paintBuildSend(input); this.fitFollow(input); }
+  buildInput(input) { this.buildText.set(input.dataset.buildInput, input.value); this.saveDrafts(); this.paintBuildSend(input); this.fitFollow(input); }
   // Enter sends; Shift+Enter is a new line of the reply (unlike a follow-up, a reply is not a line of the document).
   buildKey(e) {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); this.sendBuild(e.target.dataset.buildInput); }
@@ -667,14 +693,15 @@ export default class DocEditor extends React.Component {
     Promise.resolve(this.props.onBuildAction(id, 'reply', { text, interrupt: true })).then((ok) => {
       if (ok === false) return;
       this.buildText.delete(id);
+      this.saveDrafts();
       const input = this.editorEl() && this.editorEl().querySelector(`[data-build-input="${id}"]`);
       if (input) { input.value = ''; this.paintBuildSend(input); this.fitFollow(input); }
     }).catch(() => {});
   }
   buildAct(k, id) {
     const act = this.props.onBuildAction; if (!act) return;
-    if (k === 'buildhistory') { if (this.buildOpen.has(id)) this.buildOpen.delete(id); else this.buildOpen.add(id); this.patchBuilds(); return; }
-    if (k === 'buildsteps') { if (this.buildSteps.has(id)) this.buildSteps.delete(id); else this.buildSteps.add(id); this.patchBuilds(); return; }
+    if (k === 'buildhistory') { if (this.buildOpen.has(id)) this.buildOpen.delete(id); else this.buildOpen.add(id); this.saveDrafts(); this.patchBuilds(); return; }
+    if (k === 'buildsteps') { if (this.buildSteps.has(id)) this.buildSteps.delete(id); else this.buildSteps.add(id); this.saveDrafts(); this.patchBuilds(); return; }
     if (k === 'buildsend') { this.sendBuild(id); return; }
     if (k === 'builddiscard') {
       // Discarding throws the agent's work away: it takes a second click within four seconds.
@@ -686,7 +713,7 @@ export default class DocEditor extends React.Component {
       this.buildConfirm = null;
     }
     if (k === 'buildremove') { this.setLines((ls) => { const out = ls.filter((l) => !(parseLine(l).type === 'build' && parseLine(l).id === id)); return out.length ? out : ['']; }); return; }
-    act(id, { buildstop: 'stop', buildreview: 'review', buildpreview: 'preview', buildaccept: 'accept', builddiscard: 'discard', buildresume: 'resume', buildfix: 'fix' }[k]);
+    act(id, { buildstop: 'stop', buildreview: 'review', buildpreview: 'preview', buildstoppreview: 'stop-preview', buildaccept: 'accept', builddiscard: 'discard', buildresume: 'resume', buildfix: 'fix' }[k]);
   }
 
   // The foot of a todo card: Copy all on the left, Build all on the right while anything is open; clicking its whitespace adds a line below the card.
@@ -754,13 +781,18 @@ export default class DocEditor extends React.Component {
     // A textarea one line tall that grows as it wraps, as the @bart line above it does (2026-09-22); the question is still
     // one line of the document, so Enter sends and a pasted line break becomes a space. The chip sits on the first line.
     const look = this.props.compact ? 'padding:22px 16px 18px;background:#fafafa;border-radius:0 0 10px 10px;' : MESSAGE_LOOK;
-    return `<div contenteditable="false" data-followup="${from}" style="user-select:none;display:flex;align-items:flex-start;gap:10px;${look}margin-bottom:14px;">`
+    return `<div contenteditable="false" data-followup="${from}" style="user-select:none;display:flex;flex-wrap:wrap;align-items:flex-start;gap:10px;${look}margin-bottom:14px;">`
       + '<span style="flex:none;color:#0070f3;font-weight:500;font-size:16px;line-height:24px">@bart</span>'
       + `<textarea data-follow-input="${from}" rows="1" placeholder="Respond…" aria-label="Ask a follow-up" spellcheck="false" autocomplete="off" style="flex:1;min-width:0;display:block;height:24px;margin:0;padding:0;border:0;background:none;outline:none;resize:none;overflow:hidden;font:16px/1.5 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text"></textarea>`
       + `<span data-chip="f${from}" style="flex:none;position:relative;display:inline-flex;margin-top:-6px"><span class="bart-chip" data-act="pickfollow" data-thread="${from}" role="button" aria-haspopup="dialog" aria-expanded="${open}" style="display:inline-flex;align-items:center;gap:6px;padding:5px 6px 5px 12px;border:1px solid ${open ? '#c9c9c9' : '#eaeaea'};border-radius:999px;background:#fff;cursor:pointer;font:13px/1 var(--font-sans);color:#171717">`
       + (step ? `<span>${esc(step.name)} ${esc(EFFORT_LABELS[step.effort] || step.effort)}</span>${ICON.chevron}<span style="width:1px;height:14px;background:#eaeaea;margin:0 2px"></span>` : '')
       + `<button class="bart-send" data-act="sendfollow" data-thread="${from}" aria-label="Send" style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:50%;background:#f2f2f2;color:#8f8f8f;cursor:pointer">${ICON.send}</button>`
-      + '</span></span></div>';
+      + '</span></span>' + this.repositoryControl() + '</div>';
+  }
+  repositoryControl() {
+    if (!this.props.onChooseRepository) return '';
+    const repository = this.props.repository;
+    return `<button type="button" contenteditable="false" data-act="repository" data-code-context="1" title="${esc(repository?.directory || 'Choose a workspace repository')}" style="flex:1 0 100%;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;border:0;padding:0;background:none;font:12px/18px var(--font-sans);color:#777;cursor:pointer">Code context: ${esc(repository?.name || 'Choose a repository')} ⌄</button>`;
   }
   // After a redraw: what was being typed goes back into its field, the send turns blue again, and a field that had the
   // keyboard takes it back with its selection.
@@ -1150,6 +1182,7 @@ export default class DocEditor extends React.Component {
         return;
       }
       if (k === 'ask') { this.closePicker(); this.askInline(i); return; }
+      if (k === 'repository') { this.closePicker(); this.props.onChooseRepository?.(act); return; }
       if (k === 'pick') { this.openPicker(act, 'line'); return; }
       if (k === 'pickfollow') { this.openPicker(act, 'follow'); return; }
       if (k === 'sendfollow') { this.closePicker(); this.sendFollow(Number(act.dataset.thread)); return; }
@@ -1243,6 +1276,7 @@ export default class DocEditor extends React.Component {
     const askId = newAskId(), add = [`@bart ${asked}`, `bart~> ${askId}`]; if (thread.to + 1 >= ls.length) add.push('');
     const turns = thread.turns.filter((turn) => turn.answered && !turn.pending).map((turn) => turnText(ls, turn));
     this.followText.delete(from);
+    this.saveDrafts();
     const ed = this.editorEl(); if (ed && ed.contains(document.activeElement)) document.activeElement.blur();
     this.setLines((x) => { const out = [...x]; out.splice(thread.to + 1, 0, ...add); return out; }); this.shiftStatuses(thread.to + 1, add.length);
     this.setState({ activeLine: null, mention: null });
@@ -1256,7 +1290,7 @@ export default class DocEditor extends React.Component {
   }
   followInput(input) {
     if (/[\r\n]/.test(input.value)) { const a = input.selectionStart, b = input.selectionEnd; input.value = input.value.replace(/[\r\n]/g, ' '); input.setSelectionRange(a, b); }
-    this.followText.set(Number(input.dataset.followInput), input.value); this.paintSend(input); this.fitFollow(input);
+    this.followText.set(Number(input.dataset.followInput), input.value); this.saveDrafts(); this.paintSend(input); this.fitFollow(input);
   }
   // What answered turn `q`, read from its closing line ("Sol · medium · 31 s"); the question's own first step when there is
   // none. → { current } for the selector to mark, and { choice } to regenerate with the same model and effort.
@@ -1317,7 +1351,7 @@ export default class DocEditor extends React.Component {
   pickModel = (choice) => {
     const pk = this.state.picker, models = this.props.models; if (!pk || !models) return;
     if (pk.kind === 'regen') { this.setState({ picker: { ...pk, choice } }); return; }
-    if (pk.kind === 'follow') { this.followChoice.set(pk.i, choice); this.lastHtml = null; this.forceUpdate(); return; }
+    if (pk.kind === 'follow') { this.followChoice.set(pk.i, choice); this.saveDrafts(); this.lastHtml = null; this.forceUpdate(); return; }
     const ls = this.lines(), p = parseLine(ls[pk.i] || ''); if (p.type !== 'bart' || this.lockedAt(ls, pk.i)) { this.closePicker(); return; }
     const lead = (ls[pk.i].match(/^@bart/i) || ['@bart'])[0]; // "@Bart" (the @ menu's) or "@bart" (typed) stays as it was written
     const text = withChoice(p.text, models, choice), line = `${lead} ${text}${readFlags(text, models).rest ? '' : ' '}`;

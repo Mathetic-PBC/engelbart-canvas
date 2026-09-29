@@ -18,9 +18,10 @@ const MAX_REPLY_CHARS = 12000;
 const seconds = (ms) => `${Math.max(1, Math.round(ms / 1000))} s`;
 
 /** "Sol · high · 41 s · moved up from Sol medium": which model said this, kept with the answer. */
-function attribution({ level, trail, ms }) {
+function attribution({ level, trail, ms, repository }) {
   const parts = [level.name, level.effort, seconds(ms)];
   if (trail.length) parts.push(`moved up from ${trail.map((step) => `${step.name} ${step.effort}`).join(', then ')}`);
+  if (repository) parts.push(`code: ${String(repository.name).replace(/[\r\n*]/g, ' ')}`);
   return `*${parts.join(' · ')}*`;
 }
 

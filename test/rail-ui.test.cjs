@@ -21,7 +21,7 @@ for (const method of ['jsx', 'jsxs']) recordingRuntime[method] = (...args) => {
 };
 const filename = path.join(__dirname, '__rail-ui-unit.cjs');
 const built = buildSync({ entryPoints: [path.join(__dirname, '../src/renderer/workspace/Rail.jsx')], bundle: true,
-  platform: 'node', format: 'cjs', jsx: 'automatic', write: false, external: ['react', 'react-dom'],
+  platform: 'node', format: 'cjs', jsx: 'automatic', write: false, external: ['react', 'react-dom', '../session-ui.js'],
   loader: { '.css': 'empty', '.png': 'dataurl', '.svg': 'dataurl' } });
 const compiled = new Module(filename, module);
 compiled.paths = module.paths;
@@ -30,6 +30,10 @@ const testReact = { ...React, useState(initial) {
   return React.useState(initial?.name === 'initialRailExpansion' && testExpansion ? testExpansion : initial);
 } };
 compiled.require = function (id) {
+  if (id === '../session-ui.js') return {
+    useSessionState: (key, initial) => React.useState(key.endsWith(':expanded') && testExpansion ? testExpansion : initial),
+    useScrollMemory: () => ({ ref: { current: null } }),
+  };
   if (id === 'react') return testReact;
   return id === 'react/jsx-runtime' ? recordingRuntime : Module.prototype.require.call(this, id);
 };
@@ -47,7 +51,8 @@ const topic = { id: 'workspace', name: 'My workspace' };
 const renderRail = (rows, extra = {}) => {
   elements.length = 0;
   const { expansion, ...props } = extra;
-  testExpansion = expansion === undefined ? Object.fromEntries(['Workspaces', 'GitHub', 'Papers', 'Overleaf', 'Documents', 'Files'].map(key => [key, true])) : expansion;
+  testExpansion = expansion === undefined ? Object.fromEntries(['Workspaces', 'GitHub', 'Papers', 'Overleaf', 'Documents', 'Files',
+    ...['images', 'datasets', 'web-pages', 'conversations', 'other-notes', 'files'].map(id => `Files/${id}`)].map(key => [key, true])) : expansion;
   return renderToStaticMarkup(React.createElement(Rail, {
     width: 300, topics: [topic], topic, allWorkspaces: [], rows, library: rows, inRail: () => true, ...props,
   }));
@@ -100,7 +105,7 @@ test('saved provider links stay directly in their sections with existing row act
   const html = renderRail([note, paper, google, overleaf, zotero], { onRowClick: row => opened.push(row.id) });
   assert.deepEqual(component('RailSection', p => p.section.key === 'Documents').props.section.rows.map(row => row.id), ['note', 'google']);
   assert.deepEqual(component('RailSection', p => p.section.key === 'Papers').props.section.rows.map(row => row.id), ['paper', 'zotero']);
-  for (const name of ['GoogleDocuments', 'OverleafProjects', 'ZoteroPapers', 'GithubRepositories']) assert.equal(component(name), undefined, 'catalogs mount only after Browse is clicked');
+  for (const name of ['GoogleDocuments', 'OverleafProjects', 'ZoteroPapers', 'GithubRepositories']) assert.equal(component(name), undefined, 'catalogs mount only after My Projects is expanded');
   for (const [row, provider] of [[google, 'google-docs'], [overleaf, 'overleaf']]) {
     assert.equal(rowElement(row.id).props.children[0].props.kind, provider);
     rowElement(row.id).props.onClick();
@@ -108,9 +113,8 @@ test('saved provider links stay directly in their sections with existing row act
   }
   assert.deepEqual(opened, ['google', 'overleaf']);
   assert.match(html, /data-rail-section="Overleaf"/);
-  for (const key of ['google', 'overleaf', 'zotero']) assert.match(html, new RegExp(`data-browse-source="${key}"`));
-  assert.match(html, /data-github-projects-toggle/);
-  assert.doesNotMatch(html, /data-browse-source="github"/);
+  for (const key of ['github', 'google', 'overleaf', 'zotero']) assert.match(html, new RegExp(`data-projects-toggle="${key}"`));
+  assert.doesNotMatch(html, /data-browse-source/);
 });
 
 test('context removal does not open the row and is not offered for sub-workspaces', () => {
@@ -189,7 +193,7 @@ test('Add context has an explicit click toggle and no hover-open or hover-close 
 test('top inset and icon-led sections match the reference, with workspace navigation in the header', () => {
   const html = renderRail([repo, child, { id: 'file', name: 'Data', type: 'csv', tags: [] }]);
   const aside = elements.find(element => element.type === 'aside');
-  assert.equal(aside.props.children[0].props.style.padding, '10px 10px 8px');
+  assert.equal(aside.props.children[0].props.style.padding, '16px 10px 8px');
   assert.ok(html.indexOf('data-rail-search') < html.indexOf('data-rail-section="GitHub"'));
   assert.doesNotMatch(html, /data-rail-section="Workspaces"/);
   assert.match(html, /aria-label="Switch workspace"/);
@@ -206,7 +210,7 @@ test('top inset and icon-led sections match the reference, with workspace naviga
   }
 });
 
-test('initial load ignores previously saved expansion and keeps every section and overlay closed', () => {
+test('a project without saved expansion starts with every section and overlay closed', () => {
   const prior = global.window;
   global.window = { localStorage: { getItem: () => JSON.stringify({ Workspaces: false, GitHub: false, Documents: false }) } };
   try {
@@ -272,15 +276,19 @@ test('Connections shares a compact fixed footer with the existing bottom control
 
 test('opening sections shows saved items and a collapsed My Projects group without loading account catalogs', () => {
   const html = renderRail([repo, note, paper], { expansion: { GitHub: true, Papers: true, Documents: true, Overleaf: true, Files: true } });
-  assert.match(html, /My Projects|Browse Google Docs…|Browse projects…|Browse Zotero…/);
-  for (const trigger of elements.filter(element => element.props['data-browse-source'])) assert.equal(trigger.props['aria-expanded'], false);
+  assert.equal((html.match(/My Projects/g) || []).length, 4);
+  assert.doesNotMatch(html, /Browse Google Docs|Browse projects|Browse Zotero/);
+  for (const trigger of elements.filter(element => element.props['data-projects-toggle'])) assert.equal(trigger.props['aria-expanded'], false);
   assert.match(html, /data-rail-row="repo"/);
   assert.match(html, /data-rail-row="note"/);
   assert.match(html, /data-rail-row="paper"/);
   const projects = elements.find(element => element.props['data-github-projects-toggle']);
   assert.equal(projects.props['aria-expanded'], false);
-  assert.equal(component('GithubRepositories'), undefined);
+  for (const name of ['GoogleDocuments', 'OverleafProjects', 'ZoteroPapers', 'GithubRepositories']) assert.equal(component(name), undefined);
   assert.doesNotMatch(html, /data-source-browser|data-github-account=|data-google-account=|data-overleaf-account=|data-zotero-account=/);
+  const folders = elements.filter(element => element.props['data-rail-subsection-toggle']);
+  assert.deepEqual(folders.map(folder => folder.props.children[2].props.children), ['Images', 'Datasets', 'Web pages', 'Conversations', 'Notes', 'Files']);
+  assert.ok(folders.every(folder => folder.props['aria-expanded'] === false), 'Other context subfolders also start closed');
 });
 
 test('Workspace supplies children to Hudson sidebar and uses its original default width', () => {

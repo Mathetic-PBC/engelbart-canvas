@@ -30,12 +30,14 @@ const { sanitizeName, slugify, uniqueName, readJson, writeJson, DIR_MODE } = req
 const db = require('./db.cjs');
 const { migrateProjectDir } = require('./migrate.cjs');
 const sharedContext = require('./project-context.cjs');
+const repositories = require('./workspace-repositories.cjs');
+const codeWorkspaces = require('./code-workspaces.cjs');
 
 // Keep the local workspace status independently of a Build's lifecycle.
 const STATUSES = Object.freeze(['open', 'progress', 'done']);
 const RESERVED = new Set(['annotations', 'seed', 'test']);
 // A project's own folders, never workspaces: pasted images, and Build records (2026-09-25).
-const PROJECT_RESERVED = new Set(['assets', 'builds']);
+const PROJECT_RESERVED = new Set(['assets', 'builds', 'code']);
 // Folders of the data root that are not projects: Build's worktrees (<dataRoot>/worktrees/<slug>/<id>).
 const ROOT_RESERVED = new Set([...RESERVED, 'worktrees']);
 const BUILD_ID_RE = /^[a-z0-9]{6,32}$/;
@@ -95,7 +97,7 @@ function latestMtime(dir, depth = 3) {
       return;
     }
     for (const entry of entries) {
-      if (entry.name.endsWith('.pglite') || entry.name.startsWith('.') || (level === 0 && entry.name === 'builds')) continue;
+      if (entry.name.endsWith('.pglite') || entry.name.startsWith('.') || entry.name === 'code' || (level === 0 && entry.name === 'builds')) continue;
       const full = path.join(current, entry.name);
       try {
         latest = Math.max(latest, fs.statSync(full).mtimeMs);
@@ -163,8 +165,7 @@ function projectRecord(dir) {
   const meta = readJson(path.join(dir, 'project.json'));
   if (!meta || typeof meta.id !== 'string') return null;
   if (!migrated.has(dir)) {
-    migrated.add(dir);
-    try { migrateProjectDir(dir); } catch (error) { console.error(`Engelbart: could not convert ${dir} to the workspace layout: ${error.message}`); }
+    try { if (!migrateProjectDir(dir)?.deferred) migrated.add(dir); } catch (error) { console.error(`Engelbart: could not convert ${dir} to the workspace layout: ${error.message}`); }
   }
   const name = typeof meta.name === 'string' && meta.name.trim() ? meta.name : path.basename(dir);
   const saved = typeof meta.directory === 'string' && path.isAbsolute(meta.directory) ? meta.directory : null;
@@ -173,7 +174,7 @@ function projectRecord(dir) {
   // A saved directory that is gone (moved, unmounted) counts as not chosen: the project asks again.
   const project = { id: meta.id, name, slug: path.basename(dir), dir, created: meta.created || null, directory: exists ? saved : null, directoryMissing: saved && !exists ? saved : null };
   const collection = sharedContext.read(project);
-  return { ...project, context: collection?.context || [], removedContext: collection?.removed || [] };
+  return { ...project, defaultRepoId: meta.defaultRepoId || null, repositoryDefaultsMigration: meta.repositoryDefaultsMigration || null, repositories: meta.repositories || {}, repositoryMigration: meta.repositoryMigration || null, context: collection?.context || [], removedContext: collection?.removed || [] };
 }
 
 function projectRecords(ctx) {
@@ -188,7 +189,7 @@ function findProject(ctx, id) {
 }
 
 function publicProject(project, extra = {}) {
-  return { id: project.id, name: project.name, slug: project.slug, dir: project.dir, created: project.created, directory: project.directory, directoryMissing: project.directoryMissing, context: project.context || [], removedContext: project.removedContext || [], ...extra };
+  return { id: project.id, name: project.name, slug: project.slug, dir: project.dir, created: project.created, directory: project.directory, directoryMissing: project.directoryMissing, defaultRepoId: project.defaultRepoId || null, repositoryDefaultsMigration: project.repositoryDefaultsMigration || null, repositories: project.repositories || {}, repositoryMigration: project.repositoryMigration || null, context: project.context || [], removedContext: project.removedContext || [], ...extra };
 }
 
 const countWorkspaces = (dir) => workspaceRecords(dir).reduce((n, workspace) => n + 1 + countWorkspaces(workspace.dir), 0);
@@ -259,14 +260,17 @@ function checkDirectory(value) {
 async function createProject(ctx, input) {
   const options = typeof input === 'string' ? { name: input } : (input || {});
   const name = sanitizeName(options.name);
-  const directory = options.directory == null ? null : checkDirectory(options.directory);
+  const directory = !options.directory ? null : repositories.existing(checkDirectory(options.directory));
   const slug = resolveSlug(ctx, name, options.path);
   const dir = path.join(ctx.dataRoot, slug);
   fs.mkdirSync(dir, { mode: DIR_MODE });
-  const meta = { id: randomUUID(), name, created: nowIso(), ...(directory ? { directory } : {}) };
+  const meta = { id: randomUUID(), name, created: nowIso(), schemaVersion: 3, repositories: {}, defaultRepoId: null, repositoryMigration: { version: 1, status: 'complete' }, repositoryDefaultsMigration: { version: 1, status: 'pending' }, ...(directory ? { initialRepository: directory } : {}) };
   writeJson(path.join(dir, 'project.json'), meta);
   migrated.add(dir);
   await db.openNotesDb(dir);
+  // Use the same queued, repeatable provisioning path as a load/recovery. A
+  // concurrent catalog/startup reader may already be completing this intent.
+  await repositories.ensure(ctx, meta.id);
   return publicProject(projectRecord(dir), { workspaceCount: 0, lastEdited: meta.created });
 }
 
@@ -289,11 +293,10 @@ async function setProjectDirectory(ctx, id, directory) {
 }
 
 async function renameProject(ctx, id, name) {
+  await repositories.ensure(ctx, id);
   const project = findProject(ctx, id);
   const next = sanitizeName(name);
   if (next === project.name) return publicProject(project, summary(project));
-  const meta = readJson(path.join(project.dir, 'project.json')) || {};
-  writeJson(path.join(project.dir, 'project.json'), { ...meta, name: next });
   let dir = project.dir;
   // The directory follows the name only while it is still the name's own slug.
   if (project.slug === slugify(project.name)) {
@@ -301,12 +304,14 @@ async function renameProject(ctx, id, name) {
     const target = path.join(ctx.dataRoot, slug);
     if (target !== dir) {
       await db.closeDb(path.join(dir, 'notes.pglite'));
-      fs.renameSync(dir, target);
+      await repositories.relocate(ctx, project, dir, target, { projectName: next });
       migrated.add(target);
-      await ctx.libraryDb.rewritePathPrefix(dir + path.sep, target + path.sep);
       dir = target;
     }
   }
+  writeJson(path.join(dir, 'project.json'), { ...readJson(path.join(dir, 'project.json')), name: next });
+  await repositories.syncProjectRepositoryNames(ctx, { ...project, dir });
+  await require('../context/catalog.cjs').writeCatalogs(ctx);
   const renamed = projectRecord(dir);
   return publicProject(renamed, summary(renamed));
 }
@@ -330,7 +335,7 @@ function workspaceRecord(dir) {
   const archives = (Array.isArray(meta.archives) ? meta.archives : [])
     .filter((entry) => entry && typeof entry.file === 'string' && ARCHIVE_RE.test(entry.file))
     .map((entry) => ({ file: entry.file, clearedAt: typeof entry.clearedAt === 'string' ? entry.clearedAt : null, title: typeof entry.title === 'string' ? entry.title.slice(0, 200) : '' }));
-  return { id: meta.id, name: path.basename(dir), status: meta.status || 'open', context, removed, chars, builds, archives, dir, created: meta.created || null };
+  return { id: meta.id, repoId: meta.repoId || null, repositoryIssue: meta.repositoryIssue || null, name: path.basename(dir), status: meta.status || 'open', context, removed, chars, builds, archives, dir, created: meta.created || null };
 }
 
 function docChars(dir) {
@@ -340,7 +345,10 @@ function docChars(dir) {
 function workspaceRecords(parentDir) {
   // Build records have task.json, not workspace meta.json. An older workspace
   // actually named "builds" must remain visible without being moved or renamed.
-  return subdirs(parentDir).filter((dir) => path.basename(dir) !== 'assets').map(workspaceRecord).filter(Boolean).sort(byCreated);
+  return subdirs(parentDir).filter((dir) => {
+    const name = path.basename(dir).toLowerCase();
+    return name !== 'assets' && (name !== 'code' || codeWorkspaces.classify(dir).kind === 'workspace');
+  }).map(workspaceRecord).filter(Boolean).sort(byCreated);
 }
 
 function findWorkspaceIn(parentDir, id, depth = 0) {
@@ -361,7 +369,7 @@ function findWorkspace(ctx, projectId, workspaceId) {
 }
 
 function publicWorkspace(workspace) {
-  return { id: workspace.id, name: workspace.name, status: workspace.status, context: workspace.context, removed: workspace.removed, chars: workspace.chars, builds: workspace.builds || [], archives: workspace.archives || [], created: workspace.created };
+  return { id: workspace.id, repoId: workspace.repoId, repositoryIssue: workspace.repositoryIssue, name: workspace.name, status: workspace.status, context: workspace.context, removed: workspace.removed, chars: workspace.chars, builds: workspace.builds || [], archives: workspace.archives || [], created: workspace.created };
 }
 
 /** Every workspace of a project, flat, with its path from the project directory ("Agents/Inline chat agent"). */
@@ -369,7 +377,7 @@ function flattenWorkspaces(projectDir, prefix = '', depth = 0, out = []) {
   if (depth > 32) return out;
   for (const workspace of workspaceRecords(depth === 0 ? projectDir : path.join(projectDir, prefix))) {
     const at = prefix ? `${prefix}/${workspace.name}` : workspace.name;
-    out.push({ id: workspace.id, name: workspace.name, path: at, context: workspace.context, removed: workspace.removed, chars: workspace.chars });
+    out.push({ id: workspace.id, repoId: workspace.repoId, repositoryIssue: workspace.repositoryIssue, name: workspace.name, path: at, context: workspace.context, removed: workspace.removed, chars: workspace.chars });
     flattenWorkspaces(projectDir, at, depth + 1, out);
   }
   return out;
@@ -415,29 +423,59 @@ function workspaceDirName(parentDir, name, fallback) {
   return uniqueName(parentDir, base);
 }
 
-async function createWorkspace(ctx, projectId, { name, parentId } = {}) {
+async function createWorkspace(ctx, projectId, { name, parentId, repoId, directory, createDefault = false } = {}) {
+  await repositories.ensure(ctx, projectId);
+  if (directory) repositories.existing(directory);
+  if (repoId) {
+    const project = findProject(ctx, projectId), repo = repositories.registry(project)[repoId];
+    if (!repo || repo.archived) throw new Error('Choose an available repository for the new workspace.');
+    repositories.existing(repositories.absolute(project, repo));
+  }
   const parentDir = parentId ? findWorkspace(ctx, projectId, parentId).workspace.dir : findProject(ctx, projectId).dir;
   const dir = path.join(parentDir, workspaceDirName(parentDir, name, 'Untitled Workspace 1'));
   fs.mkdirSync(dir, { mode: DIR_MODE });
-  writeJson(path.join(dir, 'meta.json'), { id: randomUUID(), status: 'open', context: [], created: nowIso(), chars: 0 });
+  writeJson(path.join(dir, 'meta.json'), { id: randomUUID(), schemaVersion: 3, repoId: null, status: 'open', context: [], created: nowIso(), chars: 0 });
   writeTextAtomic(path.join(dir, 'workspace.md'), '');
+  await repositories.provision(ctx, projectId, workspaceRecord(dir).id, { repoId, directory, createDefault });
   return publicWorkspace(workspaceRecord(dir));
 }
 
 async function renameWorkspace(ctx, projectId, workspaceId, name) {
-  const { workspace, parentDir } = findWorkspace(ctx, projectId, workspaceId);
+  await repositories.ensure(ctx, projectId);
+  const { project, workspace, parentDir } = findWorkspace(ctx, projectId, workspaceId);
   if (sanitizeName(name) === workspace.name) return publicWorkspace(workspace);
   const next = path.join(parentDir, workspaceDirName(parentDir, name, workspace.name));
-  fs.renameSync(workspace.dir, next);
+  await repositories.relocate(ctx, project, workspace.dir, next);
+  return publicWorkspace(workspaceRecord(next));
+}
+
+async function moveWorkspace(ctx, projectId, workspaceId, parentId = null) {
+  await repositories.ensure(ctx, projectId);
+  const { project, workspace } = findWorkspace(ctx, projectId, workspaceId);
+  const parent = parentId ? findWorkspace(ctx, projectId, parentId).workspace.dir : project.dir;
+  if (repositories.contains(workspace.dir, parent)) throw new Error('A workspace cannot be moved inside itself.');
+  if (path.dirname(workspace.dir) === parent) return publicWorkspace(workspace);
+  const next = path.join(parent, workspaceDirName(parent, workspace.name, workspace.name));
+  await repositories.relocate(ctx, project, workspace.dir, next);
   return publicWorkspace(workspaceRecord(next));
 }
 
 // Keep the deleted directory recoverable, outside the workspace tree. Notes and library files
 // belong to the project/library and stay there, even when their original workspace is deleted.
 async function deleteWorkspace(ctx, projectId, workspaceId) {
+  await repositories.ensure(ctx, projectId);
   const { project, workspace, parentDir } = findWorkspace(ctx, projectId, workspaceId);
   const deletedIds = [workspace.id, ...flattenWorkspaces(workspace.dir).map((child) => child.id)];
   const deleted = new Set(deletedIds);
+  for (const owner of projectRecords(ctx)) {
+    const repo = repositories.registry(owner)[owner.defaultRepoId];
+    if (repo && repositories.contains(workspace.dir, repositories.absolute(owner, repo))) throw new Error('This workspace contains a project default repository. Change the project default before deleting.');
+  }
+  for (const owner of projectRecords(ctx)) for (const other of flattenWorkspaces(owner.dir)) {
+    const repo = repositories.registry(owner)[other.repoId || owner.defaultRepoId];
+    if (!(owner.id === project.id && deleted.has(other.id)) && repo && repositories.contains(workspace.dir, repositories.absolute(owner, repo))) throw new Error(`“${other.name}” uses a repository inside this workspace. Change its connection before deleting.`);
+  }
+  await repositories.assertIdle(ctx, project, [workspace.dir], { deletingIds: deletedIds });
   const siblings = workspaceRecords(parentDir);
   const at = siblings.findIndex((candidate) => candidate.id === workspace.id);
   const next = siblings[at + 1] || siblings[at - 1] || (parentDir !== project.dir ? workspaceRecord(parentDir) : null);
@@ -451,11 +489,26 @@ async function deleteWorkspace(ctx, projectId, workspaceId) {
 
   const trash = path.join(project.dir, '.trash');
   fs.mkdirSync(trash, { recursive: true, mode: DIR_MODE });
-  const archived = path.join(trash, `${workspace.id}-${workspace.name}`);
-  fs.renameSync(workspace.dir, archived);
-  try { writeState(ctx, { ...last, views }); }
-  catch (error) { fs.renameSync(archived, workspace.dir); throw error; }
-  return { deletedIds, nextWorkspaceId };
+  const archived = path.join(trash, uniqueName(trash, `${workspace.id}-${workspace.name}`));
+  const workspaceRecovery = { projectId, workspaceId, originalPath: path.relative(project.dir, workspace.dir), deletedIds, deletedAt: nowIso() };
+  await repositories.relocate(ctx, project, workspace.dir, archived, { archived: true, deletingIds: deletedIds, workspaceRecovery });
+  writeState(ctx, { ...last, views });
+  return { deletedIds, nextWorkspaceId, trashPath: archived };
+}
+
+async function restoreWorkspace(ctx, projectId, workspaceId) {
+  assertId(workspaceId, 'workspace');
+  await repositories.ensure(ctx, projectId);
+  const project = findProject(ctx, projectId), trash = path.join(project.dir, '.trash');
+  if (flattenWorkspaces(project.dir).some(workspace => workspace.id === workspaceId)) throw new Error('This workspace is already restored.');
+  const candidate = subdirs(trash).find(dir => readJson(path.join(dir, '.workspace-recovery.json'))?.workspaceId === workspaceId);
+  if (!candidate) throw new Error('No recoverable workspace with this ID was found in trash.');
+  const recovery = readJson(path.join(candidate, '.workspace-recovery.json'));
+  const target = path.resolve(project.dir, recovery.originalPath);
+  if (!repositories.contains(project.dir, target) || !fs.existsSync(path.dirname(target))) throw new Error('Restore the parent workspace first.');
+  const containedIds = Object.values(repositories.registry(project)).filter(repo => repositories.contains(candidate, repositories.absolute(project, repo))).map(repo => repo.id);
+  await repositories.relocate(ctx, project, candidate, target, { restoringIds: containedIds });
+  return publicWorkspace(workspaceRecord(target));
 }
 
 function patchWorkspaceMeta(workspace, patch) {
@@ -676,11 +729,12 @@ function cleanPosition(value) {
   return out;
 }
 
+const viewTabId = value => idOrNull(value) || (typeof value === 'string' && value.startsWith('archive:') && ARCHIVE_RE.test(value.slice(8)) ? value : null);
 function cleanView(value) {
   const input = plainObject(value); if (!input) return null;
   const tabs = [], seen = new Set();
   for (const tab of Array.isArray(input.tabs) ? input.tabs : []) {
-    const id = idOrNull(tab && tab.id); if (!id || seen.has(id)) continue;
+    const id = viewTabId(tab && tab.id); if (!id || seen.has(id)) continue;
     seen.add(id);
     const clean = { id, title: typeof tab.title === 'string' ? tab.title.slice(0, 200) : '' };
     if (tab.kind === 'source' && (typeof tab.url === 'string' || typeof tab.path === 'string')) {
@@ -698,8 +752,12 @@ function cleanView(value) {
   for (const [key, position] of Object.entries(plainObject(input.positions) || {}).slice(-MAX_POSITIONS)) {
     const m = /^(ws|note):(.+)$/.exec(key), clean = m && idOrNull(m[2]) ? cleanPosition(position) : null;
     if (clean) positions[`${m[1]}:${m[2]}`] = clean;
+    const archive = /^archive:([^:]+):(.+)$/.exec(key);
+    if (archive && idOrNull(archive[1]) && ARCHIVE_RE.test(archive[2])) {
+      const pos = cleanPosition(position); if (pos) positions[key] = pos;
+    }
   }
-  const active = input.active !== 'ws' && seen.has(idOrNull(input.active)) ? input.active : 'ws';
+  const active = input.active !== 'ws' && seen.has(viewTabId(input.active)) ? input.active : 'ws';
   return { active, tabs, positions };
 }
 
@@ -857,7 +915,7 @@ function seenAgents(ctx, projectId, workspaceId) {
 // read-only, kept inside the home directory, first 20 000 characters.
 /** A typed path, made real. Relative ones are looked for in the project, then the engelbart
  *  folder, then the project's code directory; the first that exists wins. Home directory only. */
-function resolveTypedPath(ctx, project, input) {
+function resolveTypedPath(ctx, project, input, workspaceId = null) {
   if (typeof input !== 'string' || !input.trim() || input.length > 4096 || input.includes('\0')) throw new TypeError('path is invalid');
   let target = input.trim();
   if (/^file:\/\//i.test(target)) target = fileURLToPath(target);
@@ -865,10 +923,16 @@ function resolveTypedPath(ctx, project, input) {
   if (target.startsWith('~/')) candidates = [path.join(ctx.homeDir, target.slice(2))];
   else if (target === '~') candidates = [ctx.homeDir];
   else if (path.isAbsolute(target)) candidates = [target];
-  else candidates = [project.dir, ctx.dataRoot, ctx.root, project.directory].filter(Boolean).map((base) => path.join(base, target));
+  else {
+    const code = workspaceId ? repositories.resolve(ctx, project.id, workspaceId).directory : project.directory;
+    candidates = [code, project.dir, ctx.dataRoot, ctx.root].filter(Boolean).map((base) => path.join(base, target));
+  }
   const resolved = fs.realpathSync(candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0]);
   const homeReal = fs.realpathSync(ctx.homeDir);
-  if (resolved !== homeReal && !resolved.startsWith(homeReal + path.sep)) throw new Error('Only files inside your home directory can be opened');
+  if (resolved !== homeReal && !resolved.startsWith(homeReal + path.sep)) {
+    const selected = workspaceId ? repositories.resolve(ctx, project.id, workspaceId) : null;
+    if (!selected || !repositories.contains(selected.directory, resolved)) throw new Error('Only files inside your home directory or the connected repository can be opened');
+  }
   return resolved;
 }
 
@@ -891,8 +955,8 @@ async function resolvePageFile(ctx, projectId, input) {
 }
 
 /** What the Stage shows for a path typed or picked in this project (src/main/stage/files.cjs). */
-async function readStageFile(ctx, projectId, input) {
-  const file = resolveTypedPath(ctx, findProject(ctx, projectId), input);
+async function readStageFile(ctx, projectId, input, workspaceId = null) {
+  const file = resolveTypedPath(ctx, findProject(ctx, projectId), input, workspaceId);
   return stageFiles.readStageFile(file, { cacheDir: path.join(ctx.dataRoot, '.cache', 'stage') });
 }
 
@@ -918,6 +982,7 @@ async function ensureProjectContext(ctx, project, notes = null) {
 }
 
 async function loadProject(ctx, projectId) {
+  await repositories.ensure(ctx, projectId);
   const project = findProject(ctx, projectId);
   const notesDb = await db.openNotesDb(project.dir);
   const notes = (await notesDb.list()).map(publicNote);
@@ -940,7 +1005,9 @@ module.exports = {
   ensureProjectContext,
   createWorkspace,
   renameWorkspace,
+  moveWorkspace,
   deleteWorkspace,
+  restoreWorkspace,
   setWorkspaceContext,
   setWorkspaceStatus,
   addWorkspaceBuild,

@@ -15,7 +15,10 @@ const built = buildSync({
 });
 const compiled = new Module(filename, module);
 compiled.paths = module.paths;
-compiled._compile(built.outputFiles[0].text, filename);
+const previousWindow = global.window;
+global.window = { engelbartAPI: { saveSessionUI: async () => true } };
+try { compiled._compile(built.outputFiles[0].text, filename); }
+finally { if (previousWindow === undefined) delete global.window; else global.window = previousWindow; }
 const DocEditor = compiled.exports.default;
 const { DEFAULT_MODELS, readQuestion } = require('../src/main/bart/models.cjs');
 
@@ -26,6 +29,35 @@ function editor(text, selection) {
   return instance;
 }
 const range = (from, to, offset = 1) => ({ anchor: { line: from, offset: 0 }, focus: { line: to, offset } });
+
+test('the shared editor loads in a sticky note with only the restricted post-it bridge', () => {
+  const filename = path.join(__dirname, '__post-it-editor-unit.cjs'), compiled = new Module(filename, module);
+  compiled.paths = module.paths;
+  const previous = global.window;
+  global.window = { postItAPI: {} };
+  try {
+    compiled._compile(built.outputFiles[0].text, filename);
+    const PostItEditor = compiled.exports.default;
+    const ed = new PostItEditor({ compact: true, docKey: 'sticky-note', text: '**My note**', onChange: () => {} });
+    ed.restoreDrafts(); ed.saveDrafts();
+    assert.match(ed.editorHtml(), /<strong\b[^>]*>My note<\/strong>/);
+    assert.equal(global.window.engelbartAPI, undefined, 'the editor never adds the main-window API');
+  } finally { if (previous === undefined) delete global.window; else global.window = previous; }
+});
+
+test('unsent replies reopen on the same question, including after surrounding lines move', () => {
+  const ed = editor('@bart Explain anchors\nbart> Answer.');
+  ed.props = { ...ed.props, viewScope: 'draft-test' };
+  ed.followText.set(0, 'What about a rebuild?'); ed.followChoice.set(0, 'astra'); ed.saveDrafts();
+  const reopened = editor('A new paragraph\n\n@bart Explain anchors\nbart> Answer.');
+  reopened.props = { ...reopened.props, viewScope: 'draft-test' }; reopened.restoreDrafts();
+  assert.equal(reopened.followText.get(2), 'What about a rebuild?');
+  assert.equal(reopened.followChoice.get(2), 'astra');
+  reopened.props = { ...reopened.props, text: '@bart Different question\nbart> Answer.' }; reopened.restoreDrafts();
+  assert.equal(reopened.followText.size, 0, 'a removed question never lends its draft to another thread');
+  reopened.props = { ...ed.props, viewScope: 'another-workspace' }; reopened.restoreDrafts();
+  assert.equal(reopened.followText.size, 0, 'drafts do not leak between workspaces');
+});
 
 test('reply borders start 12px outside the user box without changing the text inset', () => {
   for (const answer of ['bart> First line\nbart> Second line', 'bart~> pending', 'bart> ```json\nbart> {}\nbart> ```']) {
@@ -40,6 +72,26 @@ test('reply borders start 12px outside the user box without changing the text in
       assert.match(continuation, /^margin-top:0px;/, 'the rule remains continuous within a reply');
     }
   }
+});
+
+test('code context is a synchronized control, not editable question or reply text', () => {
+  const source = '@bart --astra Explain this code', ed = editor(source);
+  let asked;
+  ed.props = { ...ed.props, models: DEFAULT_MODELS, onAsk: value => { asked = value; }, onChooseRepository: () => {},
+    repository: { name: 'Project <code>', directory: '/project/code', inherited: true } };
+  assert.match(ed.editorHtml(), /data-code-context="1"/);
+  assert.match(ed.repositoryControl(), /Code context: Project &lt;code&gt; ⌄/);
+  assert.doesNotMatch(ed.repositoryControl(), /Project default/);
+  assert.match(ed.repositoryControl(), /title="\/project\/code"/);
+  ed.props = { ...ed.props, repository: { name: 'Override', directory: '/other', inherited: false } };
+  assert.match(ed.editorHtml(), /Code context: Override/);
+  assert.doesNotMatch(ed.repositoryControl(), /Project default/);
+  assert.equal(ed.props.text, source);
+  ed.askInline(0);
+  assert.equal(asked.text, '--astra Explain this code');
+  assert.equal(asked.repository, undefined, 'the renderer cannot choose a different target for one request');
+  ed.props = { ...ed.props, text: `${source}\nbart> Existing answer` };
+  assert.match(ed.editorHtml(), /data-code-context="1"/, 'follow-ups offer the same connection control');
 });
 
 test('Bart messages hide routing flags while keeping question text and request settings', () => {

@@ -290,6 +290,9 @@ function createLocalPreviews({ agent, planner, verify, processes = createProcess
   }
   return {
     build, stop, restart,
+    relocated(from) {
+      for (const [key, held] of entries) if (!held.server && !held.work && require('../store/workspace-repositories.cjs').contains(from, held.where.directory)) { clearTimeout(held.timer); entries.delete(key); }
+    },
     approve(ctx, pid, wid, approvalId, approved) {
       if (typeof approved !== 'boolean') throw new TypeError('Approval must be true or false.');
       const held = entry(ctx, pid, wid);
