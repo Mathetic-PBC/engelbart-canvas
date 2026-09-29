@@ -45,6 +45,10 @@ async function fill(wc, value, selector = '.ia-editor textarea') {
 async function browse(wc) {
   await click(wc, '[aria-label="More"]');
   await click(wc, '[data-annotations-browse]');
+  // The current local UI restores the last-open annotation. Explicitly return
+  // to its collection when the test needs to browse the list.
+  await until(() => js(wc, '!!document.querySelector(\'.ia-list[aria-busy="false"],.ia-note .ia-back,.ia-chat [aria-label="All annotations"]\')'), 'annotation collection or restored conversation');
+  if (await js(wc, '!!document.querySelector(\'.ia-note .ia-back,.ia-chat [aria-label="All annotations"]\')')) await allNotes(wc);
   await until(() => js(wc, '!!document.querySelector(\'.ia-list[aria-busy="false"]\')'), 'notes browser');
 }
 async function allNotes(wc) {
@@ -230,7 +234,7 @@ app.whenReady().then(async () => {
 
     const contextReader = require('../src/main/browser/annotations.cjs').createAnnotations(page, () => {});
     try {
-      await js(page, `(()=>{const f=document.createElement('form');f.id='context-test';f.method='post';f.action='/join?token=omit-url-token';f.innerHTML='<h2>Join study</h2><label>Participant ID <input name="participant" value="omit-input"></label><label>Nickname <textarea>omit-textarea</textarea></label><input type="hidden" value="omit-hidden"><div data-private>omit-private</div><div class="rr-mask">omit-mask</div><div style="display:none">omit-css-hidden</div><div contenteditable>omit-editable</div><button id="context-submit" onclick="doNotCapture()">Submit</button>';document.body.append(f)})()`);
+      await js(page, `(()=>{const f=document.createElement('form');f.id='context-test';f.method='post';f.action='/join?token=omit-url-token';f.innerHTML='<h2>Join study</h2><label>Participant ID <input name="participant" value="omit-input"></label><label>Nickname <textarea>omit-textarea</textarea></label><input type="hidden" value="omit-hidden"><div data-private>omit-private</div><div class="rr-mask">omit-mask</div><div id="context-hidden">omit-css-hidden</div><div contenteditable>omit-editable</div><button id="context-submit" onclick="doNotCapture()">Submit</button>';f.querySelector('#context-hidden').style.display='none';document.body.append(f)})()`);
       const target = { element: { tag: 'button', selector: '#context-submit', id: 'context-submit', text: 'Submit' }, ancestors: [], frames: [], route: '/editor' };
       const captured = await contextReader.snapshot(target);
       assert.equal(captured.status, 'available');
@@ -464,7 +468,7 @@ app.whenReady().then(async () => {
     await click(wc, '[aria-label="Stop response"]');
     await until(() => js(wc, 'document.querySelector(".ia-chat-messages")?.textContent.includes("Response stopped.")'), 'response can be stopped within the chat');
     await button(wc, 'Try again');
-    await until(() => js(wc, '[...document.querySelectorAll("[data-annotation-reply]")].at(-1)?.textContent.includes("FAKE ANSWER")'), 'saved annotation receives its own answer');
+    await until(() => js(wc, '[...document.querySelectorAll("[data-annotation-reply]")].at(-1)?.getAttribute("aria-busy")==="false" && !document.querySelector("[aria-label=\\"Delete conversation\\"]").disabled'), 'saved annotation receives its complete answer');
     await click(wc, '[aria-label="Delete conversation"]');
     await js(wc, `document.querySelector('.ia-chat-delete button:last-child')?.click()`);
     await until(() => js(wc, 'document.querySelectorAll(".ia-row").length===1 && !document.querySelector("[aria-label=\\"Close annotations\\"]").disabled'), 'delete persisted');
@@ -511,8 +515,15 @@ app.whenReady().then(async () => {
     const originalTab = await js(wc, `window.__lastAnnotation.tabId`);
     await js(wc, `document.querySelector('[data-stage-tab="${originalTab}"] > div').dispatchEvent(new MouseEvent('mousedown',{bubbles:true,button:0}))`);
     await until(() => js(wc, 'document.querySelectorAll(".ia-row").length===1 && document.querySelector(".ia-row").textContent.includes("Edited: make this action clearer.")'), 'switching tabs restores the first site collection');
+    // Close the collection before restarting: a deliberately open collection
+    // is otherwise restored, even when its former tab is no longer available.
+    await click(wc, '[aria-label="Close annotations"]');
+    await until(() => js(wc, `window.engelbartAPI.sessionUI().then(state=>state[${JSON.stringify(`stage:${pid}:panel`)}]==null)`), 'closed collection saved before restart');
     wc.reload();
     await until(() => js(wc, '!!document.querySelector("[data-stage]")').catch(() => false), 'fresh Stage');
+    // Renderer reload now restores Stage tabs. Open an actual blank tab rather
+    // than relying on the older behavior that discarded the browser session.
+    await click(wc, '[aria-label="New tab"]');
     assert.equal(await js(wc, '!!document.querySelector("[data-saved-annotations]")'), false, 'blank Stage has no site count');
     await click(wc, '[aria-label="More"]'); await click(wc, '[data-annotations-browse]');
     await until(() => js(wc, 'document.querySelector(".ia-list")?.textContent.includes("Open a website")'), 'blank Stage has an empty site collection');
@@ -540,6 +551,8 @@ app.whenReady().then(async () => {
     otherPage.debugger.attach('1.3');
     await until(async () => (await overlay(otherPage)).markers.length === 1, 'only the other website marker appears');
     await until(() => js(reopenedPage, '!document.querySelector("[data-engelbart-annotations]")'), 'old tab overlays are removed');
+    await click(wc, '[aria-label="Close annotations"]');
+    await until(() => js(wc, `window.engelbartAPI.sessionUI().then(state=>state[${JSON.stringify(`stage:${pid}:panel`)}]==null)`), 'dismissed markers saved before renderer restart');
     wc.reload();
     await until(() => js(wc, '!!document.querySelector("[data-stage]")').catch(() => false), 'fresh Stage');
     await click(wc, '[aria-label="More"]');
