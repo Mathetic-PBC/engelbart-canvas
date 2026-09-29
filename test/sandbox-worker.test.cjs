@@ -139,3 +139,59 @@ test('the sandbox metadata names the GitHub login only when a valid one is given
   assert.equal('githubLogin' in seen[1], false);
   assert.equal('githubLogin' in seen[2], false);
 });
+
+test('a private repository comes from the link the ack carries: in one command\'s environment, never its command line or output (2026-09-29)', async () => {
+  const LINK = 'https://codeload.github.com/owner/app/legacy.tar.gz/refs/heads/main?token=AAAAONEARCHIVEONLYTOKEN';
+  const events = [], runs = [];
+  let templates = [], finish;
+  const exited = new Promise((resolve) => { finish = resolve; });
+  const sandbox = {
+    sandboxId: 'sb-private', getHost: () => 'preview.example', kill: async () => { finish(); },
+    files: { write: async () => {} },
+    commands: { async run(command, options) {
+      runs.push({ command, envs: options.envs || {} });
+      if (command.includes('curl')) options.onStderr('curl: fetching AAAAONEARCHIVEONLYTOKEN\n');
+      if (command.includes('/launch.py') && !command.includes('--stop') && !command.includes('--check')) {
+        options.onStdout('{"phase":"ready","port":3000,"url":"http://localhost:3000/"}\n');
+        return { wait: () => exited };
+      }
+      return { exitCode: 0 };
+    } },
+  };
+  const runtime = createRuntime({
+    Sandbox: { create: async (template) => { templates.push(template); return sandbox; } },
+    env: { E2B_API_KEY: 'test', ANTHROPIC_API_KEY: 'test', ENGELBART_SANDBOX_SETUP: 'api' },
+    detectDocker: async () => assert.fail('Docker was decided with the sign-in'),
+    waitForAck: async () => ({ command: 'ack', archive_url: LINK, branch: 'main' }),
+    checkPreview: async () => true,
+    emit(event) { events.push(event); if (event.event === 'ready') finish(); },
+  });
+  await runtime.run({ run_id: 'run-private', github_url: 'https://github.com/owner/app', docker: true });
+  assert.deepEqual(templates, ['engelbart-runner-docker']);
+  const fetch = runs.find((item) => item.command.includes('curl'));
+  assert.ok(fetch, 'downloaded, not cloned');
+  assert.ok(!runs.some((item) => item.command.startsWith('git clone')));
+  assert.ok(!runs.some((item) => item.command.includes('codeload') || item.command.includes('AAAAONEARCHIVEONLYTOKEN')), 'the link is never in a command line');
+  assert.match(fetch.command, /curl -fsS --proto =https .*"\$ENGELBART_ARCHIVE_URL"/);
+  assert.match(fetch.command, /tar -xzf .* --strip-components=1 -C '\/home\/user\/repository'/);
+  assert.match(fetch.command, /git symbolic-ref HEAD "refs\/heads\/\$ENGELBART_BRANCH" && git add -A && git .*commit/);
+  assert.deepEqual(fetch.envs, { ENGELBART_ARCHIVE_URL: LINK, ENGELBART_BRANCH: 'main' });
+  assert.ok(!JSON.stringify(events).includes('AAAAONEARCHIVEONLYTOKEN'), 'its token is redacted from what the sandbox prints');
+  assert.ok(events.some((event) => event.data?.lifecycle === 'cloned'), 'the timeline sees it as cloned');
+});
+
+test('a download link that is not GitHub\'s codeload is refused before anything runs, and the sandbox goes', async () => {
+  const runs = [], events = [];
+  let killed = false;
+  const runtime = createRuntime({
+    Sandbox: { create: async () => ({ sandboxId: 'sb', kill: async () => { killed = true; }, files: { write: async () => {} }, commands: { run: async (command) => { runs.push(command); return { exitCode: 0 }; } } }) },
+    env: { E2B_API_KEY: 'test', ANTHROPIC_API_KEY: 'test', ENGELBART_SANDBOX_SETUP: 'api' },
+    detectDocker: async () => false,
+    waitForAck: async () => ({ command: 'ack', archive_url: 'https://evil.example/app.tar.gz' }),
+    emit: (event) => events.push(event),
+  });
+  await runtime.run({ run_id: 'run-evil', github_url: 'https://github.com/owner/app' });
+  assert.deepEqual([events.at(-1).event, events.at(-1).error], ['failed', 'Invalid repository download link']);
+  assert.equal(killed, true);
+  assert.ok(!runs.some((command) => /curl|git clone/.test(command)));
+});

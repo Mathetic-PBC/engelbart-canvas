@@ -40,6 +40,7 @@ const { PARTITION: BROWSER_PARTITION, createBrowserViews, registerBrowserIpc } =
 const { createGithub } = require('./github/connection.cjs');
 const { createBrowserAuth, CLIENT_ID: GITHUB_CLIENT_ID } = require('./github/browser-auth.cjs');
 const { createE2bKey } = require('./github/e2b-key.cjs');
+const { createRepoAccess } = require('./github/repo-access.cjs');
 const { createSandboxManager } = require('./sandbox/manager.cjs');
 const { createRepoIdentifier, createRemoteFileLister } = require('./store/page-meta.cjs');
 const { checkWebPdfs, readPdfResponse } = require('./store/web-pdfs.cjs');
@@ -475,6 +476,8 @@ if (!hasSingleInstanceLock) {
       notify: (channel, payload) => { sendToRenderer(channel, payload); if (channel === 'engelbart:build' && payload && payload.postItId && postItViews) postItViews.buildState(payload); },
       tools,
       gitReady,
+      // Cloning a private library repository with the GitHub sign-in (github is made further down, long before a clone).
+      githubToken: () => github.token(),
     });
     // Records a closed app left working are interrupted (Resume goes on), before anything lists them.
     store.context().then((ctx) => builds.reconcile(ctx)).catch(() => {});
@@ -552,6 +555,12 @@ if (!hasSingleInstanceLock) {
       notify: (event) => sendToWindow('engelbart:sandbox-progress', event),
       e2bKey: () => e2bKey.get(),
       githubLogin: () => github.status().login,
+      // A private repository reaches its sandbox as a one-archive download link, never as the sign-in (github/repo-access.cjs).
+      repoAccess: createRepoAccess({
+        token: () => github.token(),
+        installUrl: () => github.status().installUrl,
+        ...(githubWeb ? { api: process.env.ENGELBART_GITHUB_API || githubWeb } : {}),
+      }),
     });
     registerEngelbartIpc({
       github,

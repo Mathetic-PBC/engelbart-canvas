@@ -480,6 +480,35 @@ test('library repositories: a local one works as it is, a GitHub one is cloned i
   await assert.rejects(raw.preflight(ctx, project.id, { kind: 'library', id: randomUUID() }), /not in the library/);
 });
 
+test('cloning a library repository: the GitHub sign-in first, the person\'s own Git when GitHub turns it away, and a refusal says what to do (2026-09-29)', async () => {
+  const { code, project } = await scene();
+  const origin = path.join(homeDir, `origin-${n}`);
+  fs.mkdirSync(origin);
+  sh(origin, 'init', '-q', '-b', 'main');
+  write(path.join(origin, 'x.js'), 'x\n');
+  sh(origin, 'add', '-A');
+  sh(origin, 'commit', '-qm', 'x');
+  const row = await ctx.libraryDb.insert({ id: randomUUID(), name: 'example/private', type: 'website', tags: ['git'], url: 'https://github.com/example/private' });
+  const target = { kind: 'library', id: row.id };
+  const calls = [];
+  let theirs = true;
+  const stub = { ...git, clone: async (url, dir, options = {}) => {
+    calls.push({ url, token: options.token || null });
+    if (options.token || !theirs) throw new Error("fatal: Authentication failed for 'https://github.com/example/private.git/'");
+    return git.clone(origin, dir);
+  } };
+  const { raw } = manager(scripted([]), { git: stub, githubToken: async () => 'ghu_test_token' });
+  const cloned = await raw.cloneRepository(ctx, project.id, target);
+  assert.deepEqual(calls, [{ url: 'https://github.com/example/private', token: 'ghu_test_token' }, { url: 'https://github.com/example/private', token: null }]);
+  assert.deepEqual([cloned.ok, cloned.top], [true, path.join(code, 'repos', 'private')]);
+
+  const other = await ctx.libraryDb.insert({ id: randomUUID(), name: 'example/hidden', type: 'website', tags: ['git'], url: 'https://github.com/example/hidden' });
+  theirs = false;
+  await assert.rejects(raw.cloneRepository(ctx, project.id, { kind: 'library', id: other.id }),
+    /example\/hidden could not be cloned: GitHub refused \(.*Authentication failed.*\)\. If it is private, Engelbart's GitHub App must be installed where it lives, with access to it\./);
+  assert.equal((await ctx.libraryDb.get(other.id)).folder_path, null, 'nothing is kept of a refused clone');
+});
+
 test('quick tasks: their own slot, no workspace, a clean finish lands by itself; one that escalates becomes a Build', async () => {
   const { code, project, workspace } = await scene();
   let hold;

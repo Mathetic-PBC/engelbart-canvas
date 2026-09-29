@@ -10,12 +10,12 @@ const db = require('../src/main/store/db.cjs');
 const { createSandboxManager } = require('../src/main/sandbox/manager.cjs');
 const { runStore } = require('../src/main/sandbox/runs.cjs');
 
-async function fixture(t, { readEnv = () => ({}), e2bKey = async () => 'e2b_signed_in', githubLogin = () => 'octocat' } = {}) {
+async function fixture(t, { readEnv = () => ({}), e2bKey = async () => 'e2b_signed_in', githubLogin = () => 'octocat', repoAccess = null } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canvas-run-manager-'));
   const ctx = { root, dataRoot: root, libraryDb: await db.openLibraryDb(root) };
   const events = [], starts = [], controls = [], envs = [];
   let probe = { state: 'ready' };
-  const manager = createSandboxManager({ secure: { isEncryptionAvailable: () => true, encryptString: (value) => Buffer.from(value), decryptString: (value) => value.toString() }, notify: (event) => events.push(event), readEnv, e2bKey, githubLogin, launch(request, env, receive) {
+  const manager = createSandboxManager({ secure: { isEncryptionAvailable: () => true, encryptString: (value) => Buffer.from(value), decryptString: (value) => value.toString() }, notify: (event) => events.push(event), readEnv, e2bKey, githubLogin, repoAccess, launch(request, env, receive) {
     envs.push({ command: request.command, env });
     if (!['start', 'restart'].includes(request.command)) {
       controls.push(request);
@@ -378,4 +378,38 @@ test('release keeps the runs, and the row, when the sandbox cannot be confirmed 
   await assert.rejects(() => manager.release(f.ctx, f.repo.id), /E2B unreachable/);
   assert.equal((await f.store.get(run.id)).sandbox_id, 'sb-stuck');
   await assert.rejects(() => f.ctx.libraryDb.remove(f.repo.id), /violates RESTRICT/);
+});
+
+test('a private repository: the sandbox gets a one-archive link with the ack, made then, and never the sign-in (2026-09-29)', async (t) => {
+  const asked = [];
+  const LINK = 'https://codeload.github.com/owner/app/legacy.tar.gz/refs/heads/main?token=AAAAONEARCHIVEONLYTOKEN';
+  const repoAccess = {
+    async describe(repo) { asked.push(['describe', repo.url]); return { private: true, branch: 'main', docker: true }; },
+    async archive(repo) { asked.push(['archive', repo.url]); return LINK; },
+  };
+  const f = await fixture(t, { repoAccess });
+  const run = await f.manager.start(f.ctx, f.repo.id);
+  const worker = f.starts[0];
+  assert.equal(worker.request.docker, true, 'Docker is decided with the sign-in, before the sandbox is made');
+  assert.deepEqual(asked, [['describe', 'https://github.com/owner/app']], 'no link before the sandbox can use it');
+  assert.ok(!JSON.stringify(worker.request).includes('ghu_') && !('archive_url' in worker.request));
+  const reply = await worker.receive({ event: 'sandbox_created', sandbox_id: 'sb-private' });
+  assert.deepEqual(reply, { archive_url: LINK, branch: 'main' });
+  assert.deepEqual(asked.at(-1), ['archive', 'https://github.com/owner/app']);
+  assert.equal(await worker.receive({ event: 'progress', message: 'Cloning repository' }), undefined, 'only the ack carries it');
+  assert.ok(!JSON.stringify((await f.store.get(run.id)).build_log).includes(LINK), 'the link is never recorded');
+  assert.ok(!f.events.some((event) => JSON.stringify(event).includes(LINK)), 'nor announced');
+});
+
+test('a public repository gets no link; one GitHub will not show fails with what to do, and no sandbox is made (2026-09-29)', async (t) => {
+  let archives = 0;
+  const pub = await fixture(t, { repoAccess: { describe: async () => ({ private: false, branch: 'main', docker: false }), archive: async () => { archives += 1; return 'x'; } } });
+  await pub.manager.start(pub.ctx, pub.repo.id);
+  assert.equal(pub.starts[0].request.docker, false);
+  assert.equal(await pub.starts[0].receive({ event: 'sandbox_created', sandbox_id: 'sb-public' }), undefined);
+  assert.equal(archives, 0);
+  const hidden = await fixture(t, { repoAccess: { describe: async () => { throw new Error("Engelbart's GitHub App cannot see owner/app."); }, archive: async () => 'x' } });
+  const run = await hidden.manager.start(hidden.ctx, hidden.repo.id);
+  assert.deepEqual([run.status, run.error], ['failed', "Engelbart's GitHub App cannot see owner/app."]);
+  assert.equal(hidden.starts.length, 0);
 });

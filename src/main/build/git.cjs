@@ -27,6 +27,13 @@ class GitError extends Error {
 
 const firstLine = (text) => String(text || '').split('\n').map((line) => line.trim()).find(Boolean) || '';
 
+// A clone's credential helper for the GitHub sign-in (clone): it answers `get` for https://github.com alone, from
+// ENGELBART_GITHUB_TOKEN, and ignores `store` and `erase`. An empty credential.helper first leaves the person's own
+// helpers out of that command (their keychain would otherwise be asked to store the token). Config through
+// GIT_CONFIG_COUNT (Git 2.31+) keeps it off the command line; an older Git ignores it and uses the person's own.
+const GITHUB_HELPER = '!f() { test "$1" = get || exit 0; protocol=; host=; while IFS== read -r key value; do test -z "$key" && break; case "$key" in protocol) protocol=$value ;; host) host=$value ;; esac; done; test "$protocol" = https && test "$host" = github.com && test -n "$ENGELBART_GITHUB_TOKEN" || exit 0; printf \'username=x-access-token\\npassword=%s\\n\' "$ENGELBART_GITHUB_TOKEN"; }; f';
+const credentialEnv = () => ({ GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'credential.helper', GIT_CONFIG_VALUE_0: '', GIT_CONFIG_KEY_1: 'credential.helper', GIT_CONFIG_VALUE_1: GITHUB_HELPER });
+
 function createGit({ gitPath = () => 'git', run = execFile, environment = process.env } = {}) {
   const env = () => {
     const base = { ...environment };
@@ -34,10 +41,10 @@ function createGit({ gitPath = () => 'git', run = execFile, environment = proces
     return { ...base, GIT_TERMINAL_PROMPT: '0', GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true', GIT_MERGE_AUTOEDIT: 'no', GIT_PAGER: 'cat', PAGER: 'cat', LC_MESSAGES: 'C', LANGUAGE: 'en' };
   };
 
-  /** → { code, stdout, stderr }; never throws. */
-  function exec(cwd, args, { timeout = TIMEOUT_MS, input = null } = {}) {
+  /** → { code, stdout, stderr }; never throws. `extra`: environment for this one command. */
+  function exec(cwd, args, { timeout = TIMEOUT_MS, input = null, env: extra = {} } = {}) {
     return new Promise((resolve) => {
-      const child = run(gitPath(), ['-c', 'core.hooksPath=/dev/null', '-c', 'core.quotepath=off', '-c', 'advice.detachedHead=false', ...args], { cwd, env: env(), timeout, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
+      const child = run(gitPath(), ['-c', 'core.hooksPath=/dev/null', '-c', 'core.quotepath=off', '-c', 'advice.detachedHead=false', ...args], { cwd, env: { ...env(), ...extra }, timeout, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
         resolve({ code: error ? (typeof error.code === 'number' ? error.code : -1) : 0, stdout: String(stdout || ''), stderr: String(stderr || ''), missing: !!(error && error.code === 'ENOENT') });
       });
       if (child && child.stdin) { if (input != null) child.stdin.end(input); else child.stdin.end(); }
@@ -246,10 +253,16 @@ function createGit({ gitPath = () => 'git', run = execFile, environment = proces
     return head(dir);
   }
 
-  /** `url` cloned into `dir` (which must not exist yet), with the person's own credentials and never a prompt. */
-  async function clone(url, dir) {
+  /**
+   * `url` cloned into `dir` (which must not exist yet), never with a prompt. With `token` (the GitHub sign-in), GitHub's
+   * request for a password is answered by GITHUB_HELPER, the only credential helper of this one command: the token is in
+   * its environment, never on a command line, and nothing is kept (not in the clone's config, whose remote is the plain
+   * address, nor in the person's keychain, whose helper is left out). Without it, the person's own Git credentials.
+   */
+  async function clone(url, dir, { token = null } = {}) {
     fs.mkdirSync(path.dirname(dir), { recursive: true });
-    await must(path.dirname(dir), ['clone', '--quiet', '--', url, dir], { timeout: LONG_MS });
+    const extra = token ? { ...credentialEnv(), ENGELBART_GITHUB_TOKEN: token } : {};
+    await must(path.dirname(dir), ['clone', '--quiet', '--', url, dir], { timeout: LONG_MS, env: extra });
   }
 
   const message = (dir, sha = 'HEAD') => trim(dir, ['log', '-1', '--format=%B', sha]);
@@ -269,4 +282,4 @@ function createGit({ gitPath = () => 'git', run = execFile, environment = proces
   return { exec, top, head, revParse, dirtyPaths, identity, addWorktree, removeWorktree, deleteBranch, branchExists, merging, abortMerge, checkpoint, diff, mergeBase, isAncestor, conflicted, squashOnto, checkoutBranch, fastForward, mergeInto, concludeMerge, init, clone, message, markers };
 }
 
-module.exports = { createGit, GitError, FALLBACK_NAME, FALLBACK_EMAIL };
+module.exports = { createGit, GitError, GITHUB_HELPER, credentialEnv, FALLBACK_NAME, FALLBACK_EMAIL };

@@ -10,7 +10,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { createGit, GitError, FALLBACK_NAME } = require('../src/main/build/git.cjs');
+const { createGit, GitError, FALLBACK_NAME, credentialEnv } = require('../src/main/build/git.cjs');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-build-git-'));
 const home = path.join(root, 'home');
@@ -159,4 +159,34 @@ test('a folder with no history gets one', async () => {
   assert.equal(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8').split('\n')[0], 'node_modules/');
   assert.deepEqual(sh(dir, 'ls-files').split('\n').sort(), ['.gitignore', 'index.js']);
   assert.deepEqual(await git.dirtyPaths(dir), []);
+});
+
+test('a clone with the GitHub sign-in: its helper answers https://github.com alone, the person\'s own helpers are left out, and nothing is kept (2026-09-29)', async () => {
+  // A helper of the person's own (their keychain, say) that would answer anything.
+  const theirs = path.join(root, 'their-helper.sh');
+  write(theirs, '#!/bin/sh\ntest "$1" = get && printf "username=person\\npassword=their-password\\n"\n');
+  fs.chmodSync(theirs, 0o755);
+  fs.writeFileSync(path.join(home, '.gitconfig'), `[credential]\n\thelper = ${theirs}\n`);
+  const fill = (host, extra) => {
+    try { return execFileSync('git', ['credential', 'fill'], { input: `protocol=https\nhost=${host}\n\n`, env: { ...environment, GIT_TERMINAL_PROMPT: '0', ...extra }, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }); } catch { return null; }
+  };
+  const signedIn = { ...credentialEnv(), ENGELBART_GITHUB_TOKEN: 'ghu_test_token' };
+  assert.match(fill('github.com', signedIn), /username=x-access-token\npassword=ghu_test_token\n/);
+  assert.equal(fill('example.com', signedIn), null, 'the sign-in goes to github.com alone, and their helper is not asked');
+  assert.match(fill('example.com', {}), /password=their-password/, 'without the sign-in, their own helper as always');
+  fs.rmSync(path.join(home, '.gitconfig'));
+
+  // The clone itself: the token only in that command's environment, the clone's config without it.
+  const origin = repo();
+  const seen = [];
+  const spy = createGit({ environment, run: (file, args, options, done) => { seen.push({ args, env: options.env }); return require('node:child_process').execFile(file, args, options, done); } });
+  const into = path.join(root, 'clones', 'app');
+  await spy.clone(origin, into, { token: 'ghu_test_token' });
+  assert.ok(fs.existsSync(path.join(into, 'a.txt')));
+  assert.ok(!seen[0].args.join(' ').includes('ghu_test_token'), 'never on the command line');
+  assert.equal(seen[0].env.ENGELBART_GITHUB_TOKEN, 'ghu_test_token');
+  assert.ok(!fs.readFileSync(path.join(into, '.git', 'config'), 'utf8').includes('ghu_test_token'), 'never kept in the clone');
+  assert.ok(!fs.readFileSync(path.join(into, '.git', 'config'), 'utf8').includes('helper'));
+  await spy.clone(origin, path.join(root, 'clones', 'plain'));
+  assert.equal(seen.at(-1).env.ENGELBART_GITHUB_TOKEN, undefined, 'signed out: nothing of it');
 });

@@ -9,8 +9,11 @@ const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 
 // `e2bKey`: the E2B API key for whoever is signed in to GitHub (src/main/github/e2b-key.cjs), and the only one a worker
 // gets: an E2B_API_KEY in .env.local, ~/.engelbart/sandbox.env or the environment (readEnv) is dropped. `githubLogin`
-// names that account in each new sandbox's metadata.
-function createSandboxManager({ notify, launch = launchWorker, readEnv = readSandboxEnv, secure, e2bKey = async () => null, githubLogin = () => '' }) {
+// names that account in each new sandbox's metadata. `repoAccess` (src/main/github/repo-access.cjs) reads the repository
+// with the GitHub sign-in: whether it is private and wants Docker before the sandbox is made, and for a private one a
+// download link for its code, made when the sandbox is ready to use it and handed over with the worker's ack. The
+// sign-in itself never reaches the worker or the sandbox.
+function createSandboxManager({ notify, launch = launchWorker, readEnv = readSandboxEnv, secure, e2bKey = async () => null, githubLogin = () => '', repoAccess = null }) {
   const workers = new Map();
   const contexts = new Map();
   const locks = new Map();
@@ -94,12 +97,25 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
     } else throw new Error('Unknown sandbox event');
   }
   // `env` was resolved by the caller before anything was recorded or interrupted (environmentFor).
-  function attach(ctx, run, repo, environment, restart, env) {
+  function attach(ctx, run, repo, environment, restart, env, access = null) {
     let worker;
     const held = { ctx, libraryId: run.library_id, detaching: false };
     const login = String(githubLogin() || '');
+    const request = {
+      command: restart ? 'restart' : 'start', run_id: run.id, github_url: repo.url, sandbox_id: run.sandbox_id, port: run.port, environment,
+      ...(GITHUB_LOGIN.test(login) ? { github_login: login } : {}),
+      ...(access && typeof access.docker === 'boolean' ? { docker: access.docker } : {}),
+    };
+    // The ack after sandbox_created is the worker's go-ahead to fetch the code: a private repository's download link
+    // goes with it, made now because it lasts minutes.
+    const onEvent = async (event) => {
+      if (held.detaching) return undefined;
+      await receive(ctx, run.id, redactEvent(event, Object.values(environment.values)));
+      if (event.event !== 'sandbox_created' || !access || !access.private || held.detaching) return undefined;
+      return { archive_url: await repoAccess.archive(repo), ...(access.branch ? { branch: access.branch } : {}) };
+    };
     try {
-      worker = launch({ command: restart ? 'restart' : 'start', run_id: run.id, github_url: repo.url, sandbox_id: run.sandbox_id, port: run.port, environment, ...(GITHUB_LOGIN.test(login) ? { github_login: login } : {}) }, env, (event) => held.detaching ? undefined : receive(ctx, run.id, redactEvent(event, Object.values(environment.values))));
+      worker = launch(request, env, onEvent);
     } catch (error) { return end(ctx, run, 'failed', error.message); }
     held.worker = worker;
     workers.set(run.id, held);
@@ -160,7 +176,12 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
       run = await store.update(run.id, { env_revision: environment.revision });
       run = await store.record(run.id, 'Starting repository setup');
       publish(ctx, run, { message: 'Starting repository setup' });
-      return attach(ctx, run, repo, environment, false, env);
+      let access = null;
+      if (repoAccess) {
+        try { access = await repoAccess.describe(repo); }
+        catch (error) { return end(ctx, run, 'failed', error.message); }
+      }
+      return attach(ctx, run, repo, environment, false, env, access);
     });
   }
   const envStore = (ctx) => environmentStore(ctx.libraryDb, secure);

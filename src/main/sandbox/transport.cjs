@@ -25,8 +25,10 @@ function launchWorker(request, env, onEvent) {
       if (line.length > 256_000) throw new Error('Worker event is too large');
       const event = JSON.parse(line);
       if (event.run_id !== request.run_id) throw new Error('Worker run id does not match');
-      await onEvent(event);
-      if (event.event === 'sandbox_created' && child.connected) child.send({ command: 'ack' });
+      const reply = await onEvent(event);
+      // A private repository's download link rides on the ack (manager.cjs); nothing else does.
+      const source = reply && typeof reply.archive_url === 'string' ? { archive_url: reply.archive_url, ...(typeof reply.branch === 'string' ? { branch: reply.branch } : {}) } : {};
+      if (event.event === 'sandbox_created' && child.connected) child.send({ command: 'ack', ...source });
     }).catch((error) => {
       failed = error;
       if (child.connected) child.send({ command: 'stop' });

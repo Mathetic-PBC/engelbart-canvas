@@ -86,6 +86,12 @@ function defaultFolder(project) {
   throw new Error('No free folder for the default repository');
 }
 
+// What git says when GitHub turns a clone's credentials away (or hides a private repository behind "not found").
+const REFUSED = /authentication failed|could not read (username|password)|repository not found|returned error: 40[134]|access denied|not found/i;
+const cloneError = (name, error) => new Error(REFUSED.test(error.message)
+  ? `${name} could not be cloned: GitHub refused (${error.message}). If it is private, Engelbart's GitHub App must be installed where it lives, with access to it.`
+  : `${name} could not be cloned: ${error.message}`);
+
 /** Where a GitHub repository is cloned for a Build: repos/<name> in the project folder, else repos/<name>-2 … */
 function cloneFolder(project, url) {
   const parent = path.join(project.directory, CLONES);
@@ -109,7 +115,9 @@ function createShell({ environment = process.env, run = execFile, tools = null }
   });
 }
 
-function createBuilds({ git, runner, readModels, notify = () => {}, tools = null, gitReady = () => true, runShell = createShell({ tools }), copyTree = null, limits = LIMITS, turnMs = TURN_MS, now = () => new Date() }) {
+// `githubToken`: the GitHub sign-in (github/connection.cjs token), for cloning a private library repository on a Mac
+// whose Git has no GitHub credentials of its own (git.cjs clone).
+function createBuilds({ git, runner, readModels, notify = () => {}, tools = null, gitReady = () => true, runShell = createShell({ tools }), copyTree = null, githubToken = async () => null, limits = LIMITS, turnMs = TURN_MS, now = () => new Date() }) {
   const live = new Map(); // id → { controller, stopping: null | 'stop' | 'quit', done: Promise }
   const active = { build: 0, quick: 0 };
   const waiting = { build: [], quick: [] };
@@ -244,7 +252,14 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
       const where = await locate(ctx, project, input);
       if (where.folder) return; // cloned meanwhile
       const into = cloneFolder(project, where.url);
-      await git.clone(where.url, into);
+      // The GitHub sign-in first (a private repository the App can read); if GitHub refuses it, the person's own Git
+      // credentials, which may reach a repository the App is not installed for.
+      const token = await Promise.resolve().then(githubToken).catch(() => null);
+      try { await git.clone(where.url, into, { token }); }
+      catch (error) {
+        if (!token || !REFUSED.test(error.message)) throw cloneError(pre.target.name, error);
+        try { await git.clone(where.url, into); } catch { throw cloneError(pre.target.name, error); }
+      }
       const row = await ctx.libraryDb.get(pre.target.id);
       if (row) await ctx.libraryDb.updateRepo(row.id, { name: row.name, url: row.url, folder_path: into, github_id: row.github_id || null });
     });

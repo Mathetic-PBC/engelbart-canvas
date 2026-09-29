@@ -435,6 +435,40 @@ the public proxy responds. The manager saves URL/port/status, updates
 subscribes before requests can be submitted and loads a snapshot after reloads.
 Opening a ready preview uses the workspace browser or a browser dialog on Home.
 
+### Private repositories (2026-09-29)
+
+Signing in to GitHub in Engelbart is what lets a sandbox read a private
+repository, but the sign-in itself never leaves the app's main process: not to
+the worker, the sandbox, a command line, a log, or a stored remote address.
+
+- Before the sandbox is made, the manager asks GitHub's API with the sign-in
+  whether the repository is private, its default branch, and whether it wants
+  Docker (compose or Supabase files), so a private one gets the right template
+  (`src/main/github/repo-access.cjs`). A repository GitHub will not show fails
+  the run at once with what to do: install the Engelbart App where it lives
+  (signed in), or sign in.
+- A public repository is cloned in the sandbox as before, without credentials.
+- For a private one, the manager asks `/repos/{owner}/{repo}/tarball` without
+  following its redirect when the worker reports `sandbox_created`, and sends
+  the `codeload.github.com` address GitHub answers with in the ack. That link
+  carries a token of its own for that one archive, for about five minutes; it
+  cannot read another repository or write anything. The worker accepts only an
+  https codeload address, puts it in one command's environment
+  (`ENGELBART_ARCHIVE_URL`, never the command line), redacts its token from
+  what the sandbox prints, downloads and unpacks it into
+  `/home/user/repository`, and commits it as one snapshot on the default
+  branch with `origin` set to the plain address, as a shallow clone would be.
+  The timeline shows it as the clone.
+- A Build's clone of a library repository (Build panel, "Clone into
+  repos/<name>") uses the sign-in the same way on this Mac: a credential helper
+  for that one git command answers github.com alone from its environment, the
+  person's own helpers are left out of it (so their keychain never stores the
+  token), and the clone keeps the plain address. If GitHub refuses the
+  sign-in, the person's own Git credentials are tried.
+
+The Engelbart App needs only **Contents: Read-only** for this
+(`docs/github-app-setup.md`).
+
 On an initial setup failure, the worker attempts sandbox cleanup and emits `failed` with an error.
 Canvas records the error and `finished_at`. Cleanup errors retain the sandbox ID;
 a retry attempts cleanup before starting again. Retries append a run and keep

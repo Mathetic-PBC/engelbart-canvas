@@ -35,6 +35,19 @@ async function previewResponds(url, fetcher = fetch) {
   return response.status < 500 && !/Invalid Host header|not allowed/i.test(text);
 }
 
+// A private repository comes as GitHub's archive, from the download link the ack carries (manager.cjs,
+// ../github/repo-access.cjs): one archive, minutes long, never the GitHub sign-in. Anything else there is refused.
+const ARCHIVE_HOSTS = ['codeload.github.com'];
+const BRANCH = /^(?![-/])(?!.*\.\.)(?!.*\/\/)(?!.*\/$)[\w./-]{1,200}$/;
+function archiveSource(ack) {
+  if (!ack || typeof ack.archive_url !== 'string') return null;
+  let url;
+  try { url = new URL(ack.archive_url); } catch { url = null; }
+  if (!url || url.protocol !== 'https:' || !ARCHIVE_HOSTS.includes(url.hostname) || url.username || url.password) throw new Error('Invalid repository download link');
+  return { url: url.href, branch: typeof ack.branch === 'string' && BRANCH.test(ack.branch) ? ack.branch : null };
+}
+
+// Public repositories only: the manager asks GitHub with the sign-in and says (request.docker) when it can.
 async function wantsDocker(repo) {
   try {
     const response = await fetch(`https://api.github.com/repos/${repo.owner}/${repo.name}/git/trees/HEAD?recursive=1`, {
@@ -140,7 +153,7 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
         checkCancelled();
       }
       emit({ event: 'progress', message: restarting ? 'Connecting to existing sandbox' : 'Creating sandbox' });
-      const docker = restarting ? false : await detectDocker(repo);
+      const docker = restarting ? false : typeof request.docker === 'boolean' ? request.docker : await detectDocker(repo);
       checkCancelled();
       const template = env.E2B_TEMPLATE || 'engelbart-runner';
       sandbox = restarting ? await Sandbox.connect(request.sandbox_id, { requestTimeoutMs: 10_000 }) : await Sandbox.create(docker ? (env.E2B_DOCKER_TEMPLATE || `${template}-docker`) : template, {
@@ -152,15 +165,38 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
       });
       checkCancelled();
       emit({ event: 'sandbox_created', sandbox_id: sandbox.sandboxId });
-      await waitForAck(); // do not clone until Canvas has persisted the handle
+      const source = archiveSource(await waitForAck()); // do not clone until Canvas has persisted the handle
+      // The link's own token is what must not show (the address around it is only the repository's name). Not the whole
+      // link: output that ends in "https" would lose its tail to redactOutput's split-value guard.
+      if (source) secrets.push(...[...new URL(source.url).searchParams.values()].filter((value) => value.length >= 16));
       checkCancelled();
       const workdir = '/home/user/repository';
       const progress = (text) => { if (String(text).trim()) emit({ event: 'progress', message: redactOutput(text, secrets).trim().slice(-2000) }); };
       if (!restarting) {
       emit({ event: 'progress', message: 'Cloning repository' });
-      await sandbox.commands.run(`git clone --progress --depth 1 ${quote(`${repo.url}.git`)} ${quote(workdir)}`, {
-        timeoutMs: 5 * 60_000, envs: { GIT_TERMINAL_PROMPT: '0' }, onStdout: progress, onStderr: progress,
-      });
+      if (source) {
+        // A private repository: its archive, unpacked into a history of one commit as a shallow clone would leave it.
+        // The link is in this one command's environment, never in the command line or anything it prints.
+        const archive = '/tmp/engelbart-repository.tar.gz';
+        await sandbox.commands.run([
+          `mkdir -p ${quote(workdir)}`,
+          `curl -fsS --proto =https --max-time 280 -o ${archive} "$ENGELBART_ARCHIVE_URL"`,
+          `tar -xzf ${archive} --strip-components=1 -C ${quote(workdir)}`,
+          `rm -f ${archive}`,
+          `cd ${quote(workdir)}`,
+          'git init -q',
+          ...(source.branch ? ['git symbolic-ref HEAD "refs/heads/$ENGELBART_BRANCH"'] : []),
+          'git add -A',
+          `git -c user.name=Engelbart -c user.email=sandbox@engelbart.local commit -q --no-verify --allow-empty -m ${quote(`Snapshot of ${repo.url}`)}`,
+          `git remote add origin ${quote(`${repo.url}.git`)}`,
+        ].join(' && '), {
+          timeoutMs: 5 * 60_000, envs: { ENGELBART_ARCHIVE_URL: source.url, ...(source.branch ? { ENGELBART_BRANCH: source.branch } : {}) }, onStdout: progress, onStderr: progress,
+        });
+      } else {
+        await sandbox.commands.run(`git clone --progress --depth 1 ${quote(`${repo.url}.git`)} ${quote(workdir)}`, {
+          timeoutMs: 5 * 60_000, envs: { GIT_TERMINAL_PROMPT: '0' }, onStdout: progress, onStderr: progress,
+        });
+      }
       emit({ event: 'progress', message: 'Repository cloned', kind: 'status', data: { lifecycle: 'cloned' } });
       checkCancelled();
       // The existing runner includes npm/pnpm/bun but not Yarn. hc deliberately
@@ -353,14 +389,14 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
 if (require.main === module) {
   const { Sandbox } = require('e2b');
   let runtime, request, acknowledge;
-  const ack = new Promise((resolve) => { acknowledge = resolve; });
+  const ack = new Promise((resolve) => { acknowledge = resolve; }); // resolves to the ack itself: a private repository's download link rides on it
   const secrets = [process.env.E2B_API_KEY, process.env.ANTHROPIC_API_KEY].filter(Boolean);
   const emit = (event) => {
     const line = JSON.stringify({ run_id: request.run_id, ...redactEvent(event, secrets) });
     process.stdout.write(line + '\n');
   };
   process.on('message', async (message) => {
-    if (message.command === 'ack') { acknowledge(); return; }
+    if (message.command === 'ack') { acknowledge(message); return; }
     if (message.command === 'detach') { runtime?.detach(); process.disconnect?.(); process.exit(0); return; }
     if (message.command === 'stop') { acknowledge(); await runtime?.stop().catch(() => {}); return; }
     if (request) return;
