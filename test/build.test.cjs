@@ -10,6 +10,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { randomUUID } = require('node:crypto');
+const { pathToFileURL } = require('node:url');
 const db = require('../src/main/store/db.cjs');
 const { ensureHome } = require('../src/main/store/home.cjs');
 const projects = require('../src/main/store/projects.cjs');
@@ -68,16 +70,27 @@ function scripted(steps) {
   };
 }
 
+/**
+ * `builds` works in the project folder (scene makes it the repository) unless a test names another target; `raw` is
+ * the manager as the app has it, whose Builds go to the default repo (repo/ in the project folder).
+ */
 function manager(runner, extra = {}) {
   const events = [];
   const shells = [];
-  const builds = createBuilds({
+  const raw = createBuilds({
     git, runner, readModels: () => MODELS,
     notify: (channel, payload) => events.push({ channel, payload }),
     runShell: async (command, cwd) => { shells.push({ command, cwd }); return command.includes('fail') ? { ok: false, output: 'test failed: 1 of 3' } : { ok: true, output: 'ok' }; },
     ...extra,
   });
-  return { builds, events, shells };
+  const PROJECT = { kind: 'project' };
+  const builds = {
+    ...raw,
+    start: (c, pid, input = {}) => raw.start(c, pid, { target: PROJECT, ...input }),
+    preflight: (c, pid, target = PROJECT) => raw.preflight(c, pid, target),
+    initRepository: (c, pid, target = PROJECT) => raw.initRepository(c, pid, target),
+  };
+  return { builds, raw, events, shells };
 }
 
 /** Until the Build has taken `turns` turns and is not working. */
@@ -162,7 +175,8 @@ test('Build: the record, the frozen context, a worktree from the last commit, a 
   assert.equal(task.checkpoints.length, 1);
   assert.equal(sh(task.worktree, 'log', '-1', '--format=%s'), 'Build Feature: turn 1');
   assert.deepEqual(task.messages.map((m) => m.role), ['engelbart', 'agent']);
-  assert.match(task.messages[0].text, /Started on Opus max from main at [0-9a-f]{7}; 1 uncommitted file left out\./);
+  assert.match(task.messages[0].text, /Started on Opus max in code\d+, from main at [0-9a-f]{7}; 1 uncommitted file left out\./);
+  assert.deepEqual(task.target, { kind: 'project', name: path.basename(code) });
   // what it was given: the document with the note in place, the attached paper, its working copy; no build lines
   const context = fs.readFileSync(path.join(project.dir, 'builds', task.id, 'context.md'), 'utf8');
   assert.equal(agent.calls[0].message, context);
@@ -375,6 +389,95 @@ test('a folder that cannot take a Build says why; one without history can be giv
   const bare = await projects.createProject(ctx, { name: 'No folder' });
   assert.equal((await builds.preflight(ctx, bare.id)).problems[0].code, 'no-directory');
   assert.equal((await manager(scripted([]), { gitReady: () => false }).builds.preflight(ctx, project.id)).problems[0].code, 'no-git');
+});
+
+test('the default repo: a folder named after the project, made with a history of its own by the first Build, never a commit around it (2026-09-29)', async () => {
+  const { code, project, workspace } = await scene();
+  const agent = scripted([({ task }) => { write(path.join(task.worktree, 'b.txt'), 'bee\n'); return 'Added b.txt.'; }]);
+  const { raw } = manager(agent);
+  const named = project.name.toLowerCase().replace(/ /g, '-'); // "Build 12" → build-12
+  const mine = path.join(code, named);
+  const list = await raw.targets(ctx, project.id);
+  assert.deepEqual(list.slice(0, 2).map((item) => [item.kind, item.name, item.folder]), [['default', named, mine], ['project', path.basename(code), code]]);
+  const pre = await raw.preflight(ctx, project.id);
+  assert.deepEqual([pre.ok, pre.create, pre.target], [true, true, { kind: 'default', name: named }]);
+  assert.ok(!fs.existsSync(mine), 'asking makes nothing');
+  const started = await raw.start(ctx, project.id, { workspaceId: workspace.id });
+  const task = await settled(project, started.id);
+  assert.equal(task.status, 'review');
+  assert.deepEqual([task.repo, task.source, task.target], [mine, mine, { kind: 'default', name: named }]);
+  assert.match(task.messages[0].text, new RegExp(`in ${named}, from \\S+ at [0-9a-f]{7}\\.`));
+  assert.ok(fs.existsSync(path.join(mine, '.git')), 'a repository of its own');
+  assert.equal(sh(mine, 'log', '--format=%s'), 'First snapshot (Engelbart)');
+  assert.equal(sh(code, 'log', '--format=%s'), 'init', 'the project folder\'s own history is untouched');
+  await raw.accept(ctx, project.id, task.id);
+  assert.equal(fs.readFileSync(path.join(mine, 'b.txt'), 'utf8'), 'bee\n', 'Accept lands in the default repo');
+  assert.ok(!fs.existsSync(path.join(code, 'b.txt')));
+  const again = await raw.preflight(ctx, project.id, { kind: 'default' });
+  assert.deepEqual([again.ok, !!again.create, again.top], [true, false, mine]);
+  // Renaming the project never moves it: its folder is kept in project.json.
+  await projects.renameProject(ctx, project.id, `${project.name} renamed`);
+  assert.equal((await raw.preflight(ctx, project.id)).top, mine);
+  assert.equal((await raw.targets(ctx, project.id))[0].name, named);
+});
+
+test('the default repo never takes a folder of the person\'s that has the project\'s name: the next free one (2026-09-29)', async () => {
+  const { code, project } = await scene();
+  const named = project.name.toLowerCase().replace(/ /g, '-');
+  write(path.join(code, named, 'module.py'), 'x = 1\n'); // e.g. a Python package named like the project
+  fs.mkdirSync(path.join(code, `${named}-2`)); // an empty one is fine to use
+  const { raw } = manager(scripted([]));
+  const pre = await raw.preflight(ctx, project.id);
+  assert.deepEqual([pre.ok, pre.create, pre.directory, pre.target.name], [true, true, path.join(code, `${named}-2`), `${named}-2`]);
+  assert.ok(!fs.existsSync(path.join(code, named, '.git')));
+});
+
+test('library repositories: a local one works as it is, a GitHub one is cloned into repos/<name> first and its row keeps the clone (2026-09-29)', async () => {
+  const { code, project, workspace } = await scene();
+  // github.com/example/… comes from folders here, so nothing reaches the network.
+  const remotes = path.join(homeDir, 'remotes');
+  const origin = path.join(remotes, 'app');
+  fs.mkdirSync(origin, { recursive: true });
+  sh(origin, 'init', '-q', '-b', 'main');
+  write(path.join(origin, 'app.js'), 'app\n');
+  sh(origin, 'add', '-A');
+  sh(origin, 'commit', '-qm', 'app');
+  fs.appendFileSync(path.join(homeDir, '.gitconfig'), `[url "${pathToFileURL(remotes).href}/"]\n\tinsteadOf = https://github.com/example/\n`);
+  const local = path.join(homeDir, `local-lib-${n}`);
+  fs.mkdirSync(local);
+  sh(local, 'init', '-q', '-b', 'main');
+  write(path.join(local, 'lib.js'), 'lib\n');
+  sh(local, 'add', '-A');
+  sh(local, 'commit', '-qm', 'lib');
+  const hub = await ctx.libraryDb.insert({ id: randomUUID(), name: 'example/app', type: 'website', tags: ['git'], url: 'https://github.com/example/app' });
+  const mine = await ctx.libraryDb.insert({ id: randomUUID(), name: 'local-lib', type: 'folder', tags: ['git'], folder_path: local });
+  const agent = scripted([({ task }) => { write(path.join(task.worktree, 'more.js'), 'more\n'); return 'Added more.js.'; }]);
+  const { raw } = manager(agent);
+  const listed = (list, id) => list.find((item) => item.id === id);
+  let list = await raw.targets(ctx, project.id);
+  assert.deepEqual([listed(list, hub.id).place, listed(list, hub.id).folder], ['github', null]);
+  assert.deepEqual([listed(list, mine.id).place, listed(list, mine.id).folder], ['local', local]);
+
+  const target = { kind: 'library', id: hub.id };
+  const pre = await raw.preflight(ctx, project.id, target);
+  assert.deepEqual([pre.ok, pre.canClone, pre.cloneTo, pre.problems[0].message], [false, true, path.join('repos', 'app'), 'example/app is not on this Mac yet.']);
+  await assert.rejects(raw.start(ctx, project.id, { workspaceId: workspace.id, target }), /not on this Mac yet/);
+  const cloned = await raw.cloneRepository(ctx, project.id, target);
+  const into = path.join(code, 'repos', 'app');
+  assert.deepEqual([cloned.ok, cloned.top, cloned.target], [true, into, { kind: 'library', id: hub.id, name: 'example/app' }]);
+  assert.equal(fs.readFileSync(path.join(into, 'app.js'), 'utf8'), 'app\n');
+  const row = await ctx.libraryDb.get(hub.id);
+  assert.deepEqual([row.folder_path, row.type, row.url], [into, 'folder', 'https://github.com/example/app'], 'the row keeps its clone, and its address (its sandbox is found by it)');
+  await assert.rejects(raw.cloneRepository(ctx, project.id, target), /already on this Mac/);
+  list = await raw.targets(ctx, project.id);
+  assert.equal(listed(list, hub.id).place, 'local');
+
+  const started = await raw.start(ctx, project.id, { workspaceId: workspace.id, target: { kind: 'library', id: mine.id } });
+  const task = await settled(project, started.id);
+  assert.deepEqual([task.status, task.repo, task.target.name], ['review', local, 'local-lib']);
+  await raw.accept(ctx, project.id, task.id);
+  assert.equal(fs.readFileSync(path.join(local, 'more.js'), 'utf8'), 'more\n', 'Accept lands in the library repository');
+  await assert.rejects(raw.preflight(ctx, project.id, { kind: 'library', id: randomUUID() }), /not in the library/);
 });
 
 test('quick tasks: their own slot, no workspace, a clean finish lands by itself; one that escalates becomes a Build', async () => {

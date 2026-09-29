@@ -234,8 +234,9 @@ function createGit({ gitPath = () => 'git', run = execFile, environment = proces
   }
 
   /** A folder with no history gets one: git init, a .gitignore when there is none, and everything in a first commit. */
-  async function init(dir) {
-    const inside = await exec(dir, ['rev-parse', '--is-inside-work-tree']);
+  /** `own`: `dir` gets a repository of its own even inside another one (the default repo, never a parent's commit). */
+  async function init(dir, { own = false } = {}) {
+    const inside = own ? { code: fs.existsSync(path.join(dir, '.git')) ? 0 : 1 } : await exec(dir, ['rev-parse', '--is-inside-work-tree']);
     if (inside.code !== 0) await must(dir, ['init', '--quiet']);
     const ignore = path.join(dir, '.gitignore');
     if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, 'node_modules/\n.env\n.env.*\n.DS_Store\n');
@@ -243,6 +244,12 @@ function createGit({ gitPath = () => 'git', run = execFile, environment = proces
     await must(dir, ['add', '-A'], { timeout: LONG_MS });
     await must(dir, [...as(who), 'commit', '--quiet', '--no-verify', '--allow-empty', '-m', 'First snapshot (Engelbart)'], { timeout: LONG_MS });
     return head(dir);
+  }
+
+  /** `url` cloned into `dir` (which must not exist yet), with the person's own credentials and never a prompt. */
+  async function clone(url, dir) {
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    await must(path.dirname(dir), ['clone', '--quiet', '--', url, dir], { timeout: LONG_MS });
   }
 
   const message = (dir, sha = 'HEAD') => trim(dir, ['log', '-1', '--format=%B', sha]);
@@ -259,7 +266,7 @@ function createGit({ gitPath = () => 'git', run = execFile, environment = proces
     return [...files];
   }
 
-  return { exec, top, head, revParse, dirtyPaths, identity, addWorktree, removeWorktree, deleteBranch, branchExists, merging, abortMerge, checkpoint, diff, mergeBase, isAncestor, conflicted, squashOnto, checkoutBranch, fastForward, mergeInto, concludeMerge, init, message, markers };
+  return { exec, top, head, revParse, dirtyPaths, identity, addWorktree, removeWorktree, deleteBranch, branchExists, merging, abortMerge, checkpoint, diff, mergeBase, isAncestor, conflicted, squashOnto, checkoutBranch, fastForward, mergeInto, concludeMerge, init, clone, message, markers };
 }
 
 module.exports = { createGit, GitError, FALLBACK_NAME, FALLBACK_EMAIL };

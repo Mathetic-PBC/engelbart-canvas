@@ -320,9 +320,18 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   if (builds) {
     const b = () => builds;
     const pidOf = (pid) => str(pid, 'project id', 64);
+    // The repository a Build works in: the renderer names it (the default repo, the project folder, a library row);
+    // main finds its folder. A path never comes from the renderer.
+    const targetOf = (value) => {
+      if (value == null) return null;
+      if (typeof value !== 'object' || Array.isArray(value) || !['default', 'project', 'library'].includes(value.kind)) throw new TypeError('target must name the default repo, the project folder or a library row');
+      return value.kind === 'library' ? { kind: 'library', id: str(value.id, 'library id', 64) } : { kind: value.kind };
+    };
     handle('build-models', () => buildChoices(readModels()));
-    handle('build-preflight', withCtx((ctx, pid) => b().preflight(ctx, pidOf(pid))));
-    handle('build-init', withCtx((ctx, pid) => b().initRepository(ctx, pidOf(pid))));
+    handle('build-targets', withCtx((ctx, pid) => b().targets(ctx, pidOf(pid))));
+    handle('build-preflight', withCtx((ctx, pid, target) => b().preflight(ctx, pidOf(pid), targetOf(target))));
+    handle('build-init', withCtx((ctx, pid, target) => b().initRepository(ctx, pidOf(pid), targetOf(target))));
+    handle('build-clone', withCtx((ctx, pid, target) => b().cloneRepository(ctx, pidOf(pid), targetOf(target))));
     handle('build-start', withCtx((ctx, pid, input) => {
       const value = input && typeof input === 'object' ? input : {};
       return b().start(ctx, pidOf(pid), {
@@ -334,6 +343,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
         model: optStr(value.model, 'model', 24),
         effort: optStr(value.effort, 'effort', 24),
         attach: (Array.isArray(value.attach) ? value.attach : []).slice(0, 50).map((id) => str(id, 'library id', 64)),
+        target: targetOf(value.target),
       });
     }));
     handle('build-list', withCtx((ctx, pid) => b().list(ctx, pidOf(pid))));

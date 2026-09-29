@@ -1211,6 +1211,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           inRail={inRail}
           onClose={closeBuildDialog}
           onStart={startBuild}
+          onLibraryChanged={reload}
         />
       )}
       {postItBuild && (

@@ -14,13 +14,21 @@
 //   discard    stopped, worktree and branch removed
 //   recovery   a record left working when the app closed is `interrupted`; Resume continues its session
 // Git writes that touch the shared repository's worktrees (add, remove) and Accept run one at a time per repository.
+//
+// Where a Build works (2026-09-29): the repository chosen in the Build panel. The default is a folder in the project
+// folder named after the project (its name as a folder name: "Port check" → port-check/), Engelbart's to make: it is
+// made, with a history of its own, when the first Build starts there, and its name is kept in project.json so a rename
+// never moves it. A folder of that name that is the person's own (not empty, no history of its own) is never taken: the
+// next free name is (port-check-2/ …). The others are the project folder when it is a repository itself, and the
+// library's repositories: a local one as it is, a GitHub one (the kind that has a sandbox) once it is cloned into
+// `repos/<name>` in the project folder, which its row then keeps.
 
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 const projects = require('../store/projects.cjs');
 const archive = require('../store/archive.cjs');
-const { readJson } = require('../store/home.cjs');
+const { readJson, slugify } = require('../store/home.cjs');
 const { inspectRepository } = require('../tools/repository.cjs');
 const { resolveBuildChoice } = require('../bart/models.cjs');
 const { TOOL_OF } = require('../tools/requirements.cjs');
@@ -31,7 +39,9 @@ const store = require('./store.cjs');
 const { freezeContext, replyMessage, freshMessage } = require('./context.cjs');
 const { loadBuildPrompt, readEnding } = require('./prompt.cjs');
 const { buildPolicy } = require('./policy.cjs');
+const { githubRepo } = require('../sandbox/runs.cjs');
 
+const CLONES = 'repos';
 const LIMITS = Object.freeze({ build: 3, quick: 1 });
 const TURN_MS = Object.freeze({ build: 180 * 60_000, quick: 20 * 60_000 }); // a turn past this is stopped (its work saved); Resume goes on
 const SHELL_MS = 10 * 60_000;
@@ -49,6 +59,43 @@ const postItOf = (task, context) => {
   const found = /<post-it>\n([\s\S]*?)\n<\/post-it>/.exec(String(context || ''));
   return found ? found[1] : task.title;
 };
+
+/** What the Build panel names: the default repo, the project folder, or a library row. */
+function targetOf(input) {
+  const value = input && typeof input === 'object' ? input : {};
+  if (value.kind === 'project') return { kind: 'project' };
+  if (value.kind === 'library' && typeof value.id === 'string' && UUID_RE.test(value.id)) return { kind: 'library', id: value.id };
+  return { kind: 'default' };
+}
+const isRepo = (row) => !!row && Array.isArray(row.tags) && row.tags.includes('git');
+const folderThere = (dir) => { try { return !!dir && fs.statSync(dir).isDirectory(); } catch { return false; } };
+const ownRepository = (dir) => { try { return fs.statSync(path.join(dir, '.git')).isDirectory(); } catch { return false; } };
+const emptyFolder = (dir) => { try { return fs.readdirSync(dir).every((name) => name === '.DS_Store'); } catch { return false; } };
+
+/**
+ * The default repo's folder: the one made (project.json → defaultRepo), else the first of <project name>, <name>-2 …
+ * that is missing, empty, or a repository of its own; never a folder of the person's that has no history of its own.
+ */
+function defaultFolder(project) {
+  if (project.defaultRepo) return path.join(project.directory, project.defaultRepo);
+  const base = slugify(project.name) || 'repo';
+  for (let n = 1; n < 100; n += 1) {
+    const at = path.join(project.directory, n === 1 ? base : `${base}-${n}`);
+    if (!fs.existsSync(at) || ownRepository(at) || emptyFolder(at)) return at;
+  }
+  throw new Error('No free folder for the default repository');
+}
+
+/** Where a GitHub repository is cloned for a Build: repos/<name> in the project folder, else repos/<name>-2 … */
+function cloneFolder(project, url) {
+  const parent = path.join(project.directory, CLONES);
+  const name = githubRepo(url).name.replace(/\.git$/i, '') || 'repository';
+  for (let n = 1; n < 100; n += 1) {
+    const at = path.join(parent, n === 1 ? name : `${name}-${n}`);
+    if (!fs.existsSync(at)) return at;
+  }
+  throw new Error('No free folder for the clone');
+}
 
 /** A shell command in the login shell (the PATH the terminal has), in `cwd`. `tools`: Engelbart's own Git goes first on PATH when it stands in. → { ok, output } */
 function createShell({ environment = process.env, run = execFile, tools = null } = {}) {
@@ -116,33 +163,105 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
 
   /* ------------------------------------------------------------------ preflight */
 
-  /** Whether the project's code folder can take a Build, and what the dialog should say. */
-  async function preflight(ctx, projectId) {
+  /** Where a target is → { target: { kind, id, name }, folder, url }; `folder` is null for a library repository not on this Mac. */
+  async function locate(ctx, project, input) {
+    const target = targetOf(input);
+    if (target.kind === 'default') { const folder = defaultFolder(project); return { target: { ...target, name: path.basename(folder) }, folder, url: null }; }
+    if (target.kind === 'project') return { target: { ...target, name: path.basename(project.directory) }, folder: project.directory, url: null };
+    const row = await ctx.libraryDb.get(target.id);
+    if (!isRepo(row)) throw new Error('That repository is not in the library.');
+    const github = githubRepo(row.url);
+    return { target: { ...target, name: row.name }, folder: folderThere(row.folder_path) ? row.folder_path : null, url: github ? github.url : null };
+  }
+
+  /** The repositories a Build can work in, for the panel's picker: the default repo first. */
+  async function targets(ctx, projectId) {
+    const project = projectOf(ctx, projectId);
+    if (!project.directory) return [];
+    const mine = defaultFolder(project);
+    const list = [{ kind: 'default', name: path.basename(mine), folder: mine, place: 'default' }];
+    const seen = new Set([path.resolve(mine)]);
+    if (inspectRepository(project.directory).repository) {
+      list.push({ kind: 'project', name: path.basename(project.directory), folder: project.directory, place: 'project' });
+      seen.add(path.resolve(project.directory));
+    }
+    for (const row of await ctx.libraryDb.list()) {
+      if (!isRepo(row)) continue;
+      const folder = folderThere(row.folder_path) ? row.folder_path : null;
+      const github = githubRepo(row.url);
+      if ((!folder && !github) || (folder && seen.has(path.resolve(folder)))) continue;
+      list.push({ kind: 'library', id: row.id, name: row.name, folder, url: github ? github.url : null, place: folder ? 'local' : 'github' });
+    }
+    return list;
+  }
+
+  /** Whether the chosen repository (the default repo when none is) can take a Build, and what the panel should say. */
+  async function preflight(ctx, projectId, input) {
     const project = projectOf(ctx, projectId);
     if (!project.directory) return { ok: false, problems: [{ code: 'no-directory', message: 'This project has no code folder.' }], dirty: 0, canInit: false };
-    if (!gitReady()) return { ok: false, directory: project.directory, problems: [{ code: 'no-git', message: 'Git is not set up yet (Engelbart ▸ Set Up Tools…).' }], dirty: 0, canInit: false };
-    const report = inspectRepository(project.directory);
+    const where = await locate(ctx, project, input);
+    const base = { target: where.target, directory: where.folder };
+    if (!gitReady()) return { ...base, ok: false, problems: [{ code: 'no-git', message: 'Git is not set up yet (Engelbart ▸ Set Up Tools…).' }], dirty: 0, canInit: false };
+    if (!where.folder) {
+      const problem = where.url ? `${where.target.name} is not on this Mac yet.` : `${where.target.name}'s folder is gone.`;
+      return { ...base, ok: false, problems: [{ code: 'not-here', message: problem }], dirty: 0, canInit: false, canClone: !!where.url, cloneTo: where.url ? path.relative(project.directory, cloneFolder(project, where.url)) : null };
+    }
+    // The default repo is Engelbart's to make: missing, or without a history of its own, it is made when the Build starts.
+    const report = where.target.kind === 'default' && !ownRepository(where.folder) ? null : inspectRepository(where.folder);
+    if (where.target.kind === 'default' && (!report || (report.problems.length === 1 && report.problems[0].code === 'no-commits'))) {
+      return { ...base, ok: true, create: true, dirty: 0, problems: [], canInit: false };
+    }
     const blocking = report.problems.filter((problem) => problem.code !== 'not-a-repository' && problem.code !== 'no-commits');
     const canInit = report.problems.length > 0 && !blocking.length;
     let dirty = 0;
     if (report.repository && report.commits) { try { dirty = (await git.dirtyPaths(report.top)).length; } catch { dirty = 0; } }
-    return { ok: !report.problems.length, directory: project.directory, top: report.top, branch: report.branch, dirty, problems: report.problems, canInit };
+    return { ...base, ok: !report.problems.length, top: report.top, branch: report.branch, dirty, problems: report.problems, canInit };
   }
 
   /** "Start history": git init and a first commit in a folder that had none (B17). */
-  async function initRepository(ctx, projectId) {
-    const pre = await preflight(ctx, projectId);
+  async function initRepository(ctx, projectId, input) {
+    const pre = await preflight(ctx, projectId, input);
     if (!pre.canInit) throw new Error(pre.problems.length ? pre.problems[0].message : 'This folder already has a history.');
     await serial(pre.directory, () => git.init(pre.directory));
-    return preflight(ctx, projectId);
+    return preflight(ctx, projectId, input);
+  }
+
+  /** The default repo, made: its folder, and a history of its own with a first commit (never a parent repository's). */
+  function makeDefault(folder) {
+    return serial(folder, async () => {
+      if (ownRepository(folder) && inspectRepository(folder).commits) return;
+      fs.mkdirSync(folder, { recursive: true });
+      await git.init(folder, { own: true });
+    });
+  }
+
+  /** A GitHub repository from the library, cloned into repos/<name> in the project folder; its row keeps the clone. */
+  async function cloneRepository(ctx, projectId, input) {
+    const project = projectOf(ctx, projectId);
+    const pre = await preflight(ctx, projectId, input);
+    if (!pre.canClone) throw new Error(pre.ok ? `${pre.target.name} is already on this Mac.` : pre.problems[0].message);
+    await serial(`clone:${pre.target.id}`, async () => {
+      const where = await locate(ctx, project, input);
+      if (where.folder) return; // cloned meanwhile
+      const into = cloneFolder(project, where.url);
+      await git.clone(where.url, into);
+      const row = await ctx.libraryDb.get(pre.target.id);
+      if (row) await ctx.libraryDb.updateRepo(row.id, { name: row.name, url: row.url, folder_path: into, github_id: row.github_id || null });
+    });
+    return preflight(ctx, projectId, input);
   }
 
   /* ---------------------------------------------------------------------- start */
 
   async function start(ctx, projectId, input = {}) {
     reconcile(ctx);
-    const pre = await preflight(ctx, projectId);
+    let pre = await preflight(ctx, projectId, input.target);
+    if (pre.ok && pre.create) {
+      await makeDefault(pre.directory);
+      pre = await preflight(ctx, projectId, input.target);
+    }
     if (!pre.ok) throw new Error(pre.problems[0].message);
+    if (pre.target.kind === 'default') projects.setDefaultRepo(ctx, projectId, path.basename(pre.directory)); // a rename never moves it
     const project = projectOf(ctx, projectId);
     const kind = input.kind === 'quick' ? 'quick' : 'build';
     // A post-it's text: a quick task's, or a post-it added to a workspace (a Build of it whose task is the post-it).
@@ -162,15 +281,16 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     if (!at.branch) throw new Error('The code folder is not on a branch.');
     const id = await store.freeId(project, (candidate) => git.branchExists(pre.top, `engelbart/${candidate}`));
     const worktree = path.join(ctx.dataRoot, 'worktrees', project.slug, id);
-    const inside = path.relative(pre.top, project.directory);
+    const inside = path.relative(pre.top, pre.directory);
     const attach = [...new Set((Array.isArray(input.attach) ? input.attach : []).filter((value) => typeof value === 'string' && UUID_RE.test(value)))].slice(0, MAX_ATTACH);
     const task = {
       id, kind, projectId, workspaceId, postItId: postIt && typeof input.postItId === 'string' ? input.postItId : null, postIt, version: null, title,
       ...choice, sessionId: null,
+      target: pre.target, source: pre.directory,
       repo: pre.top, worktree, cwd: inside && !inside.startsWith('..') ? path.join(worktree, inside) : worktree,
       branch: `engelbart/${id}`, baseBranch: at.branch, baseSha: at.sha,
       status: 'setting-up', question: null, error: null, queued: null, turn: 0, checkpoints: [],
-      messages: [say('engelbart', `Started on ${choice.modelName} ${choice.effort} from ${at.branch} at ${at.sha.slice(0, 7)}${pre.dirty ? `; ${pre.dirty} uncommitted ${pre.dirty === 1 ? 'file' : 'files'} left out` : ''}.`)],
+      messages: [say('engelbart', `Started on ${choice.modelName} ${choice.effort} in ${pre.target.name}, from ${at.branch} at ${at.sha.slice(0, 7)}${pre.dirty ? `; ${pre.dirty} uncommitted ${pre.dirty === 1 ? 'file' : 'files'} left out` : ''}.`)],
       attach, archive: null, checks: null, conflict: null, accepted: null, created: now().toISOString(), finished: null,
     };
     const frozen = await freezeContext(ctx, projectId, { task, workspaceId, attach, postIt });
@@ -209,7 +329,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
   async function setupWorktree(project, task) {
     const own = readJson(path.join(project.dir, 'project.json')) || {};
     const custom = own.build && typeof own.build.setup === 'string' ? own.build.setup.trim() : null;
-    const source = project.directory;
+    const source = task.source || project.directory; // the chosen repository's folder; a record from before 2026-09-29 has none
     for (const dir of [...new Set([task.repo, source])]) {
       const target = path.join(task.worktree, path.relative(task.repo, dir));
       let names = [];
@@ -608,7 +728,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     await Promise.race([Promise.all(running.map((entry) => entry.done)), new Promise((resolve) => { const timer = setTimeout(resolve, QUIT_WAIT_MS); if (timer.unref) timer.unref(); })]);
   }
 
-  return { preflight, initRepository, start, reply, stop, resume, review, accept, fix, discard, promote, reconcile, list, get, openIds, stopAll, running: () => [...live.keys()] };
+  return { targets, preflight, initRepository, cloneRepository, start, reply, stop, resume, review, accept, fix, discard, promote, reconcile, list, get, openIds, stopAll, running: () => [...live.keys()] };
 }
 
-module.exports = { createBuilds, createShell, LIMITS, TURN_MS };
+module.exports = { createBuilds, createShell, LIMITS, TURN_MS, CLONES };

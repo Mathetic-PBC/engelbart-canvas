@@ -95,6 +95,7 @@ function publicTask(task) {
     error: task.error || null,
     queued: task.queued || null,
     turn: task.turn || 0,
+    target: task.target || null, // the repository it works in ({ kind, id, name }); null for a record from before 2026-09-29
     branch: task.branch,
     baseBranch: task.baseBranch,
     worktree: task.worktree,

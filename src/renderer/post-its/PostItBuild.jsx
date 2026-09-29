@@ -7,6 +7,7 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
 import { attachRows } from '../model/rail.js';
+import { pickedTarget } from '../model/build-target.js';
 import { usePlaced } from '../ui/usePlaced.js';
 import { KIND } from '../ui/Icons.jsx';
 import GithubPane from '../workspace/GithubPane.jsx';
@@ -113,6 +114,7 @@ export default function PostItBuild({ projectId, quick, anchor, library, inRail,
   const [choice, setChoice] = React.useState(null);
   const [efforts, setEfforts] = React.useState(() => (read() || {}).efforts || {});
   const [pre, setPre] = React.useState(null);
+  const [target, setTarget] = React.useState(null); // the repository the Build panel last picked for this project
   const [picked, setPicked] = React.useState([]); // library rows for Context
   const [ctxOpen, setCtxOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
@@ -123,7 +125,11 @@ export default function PostItBuild({ projectId, quick, anchor, library, inRail,
   React.useEffect(() => {
     let live = true;
     api.buildModels().then((value) => { if (live) { setModels(value); setChoice(startingChoice(value)); } }).catch((e) => { if (live) setError(errorMessage(e)); });
-    api.buildPreflight(projectId).then((value) => { if (live) setPre(value); }).catch((e) => { if (live) setError(errorMessage(e)); });
+    api.buildTargets(projectId).then((list) => {
+      const where = pickedTarget(projectId, list);
+      if (live) setTarget(where);
+      return api.buildPreflight(projectId, where);
+    }).then((value) => { if (live) setPre(value); }).catch((e) => { if (live) setError(errorMessage(e)); });
     return () => { live = false; };
   }, [projectId]);
 
@@ -133,15 +139,15 @@ export default function PostItBuild({ projectId, quick, anchor, library, inRail,
     setEfforts(kept);
     write({ ...next, efforts: kept });
   };
-  const ready = !!(choice && pre && pre.ok && !busy && quick && quick.text.trim());
+  const ready = !!(choice && target && pre && pre.ok && !busy && quick && quick.text.trim());
   const send = async () => {
     if (!ready) return;
     setBusy(true); setError('');
-    try { await onStart({ ...choice, attach: picked.map((row) => row.id) }); } catch (e) { setError(errorMessage(e)); setBusy(false); }
+    try { await onStart({ ...choice, attach: picked.map((row) => row.id), target }); } catch (e) { setError(errorMessage(e)); setBusy(false); }
   };
   const startHistory = async () => {
     setBusy(true); setError('');
-    try { setPre(await api.buildInit(projectId)); } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
+    try { setPre(await api.buildInit(projectId, target)); } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
   };
 
   React.useEffect(() => {
@@ -175,7 +181,7 @@ export default function PostItBuild({ projectId, quick, anchor, library, inRail,
           </div>
         )}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, padding: '8px 8px 8px 18px' }}>
-          <span data-build-choice="1" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '12px/1.3 var(--font-sans)', color: '#4d4d4d' }}>{choiceLabel(models, choice)}</span>
+          <span data-build-choice="1" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '12px/1.3 var(--font-sans)', color: '#4d4d4d' }}>{choiceLabel(models, choice)}{pre && pre.target ? ` · in ${pre.target.name}` : ''}</span>
           <button type="button" data-build-context="1" onClick={() => setCtxOpen((open) => !open)} aria-expanded={ctxOpen} aria-label="Add context from the library" title="Add context from the library" className="hov-wash"
             style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 5, minWidth: 30, height: 30, padding: '0 10px 0 8px', border: 0, borderRadius: 999, background: ctxOpen ? '#f2f2f2' : 'transparent', color: ctxOpen || nCtx ? '#171717' : '#4d4d4d', cursor: 'pointer', font: '500 12px/1 var(--font-sans)', transition: 'background 120ms' }}>
             {CIRCLE_PLUS}<span>Context</span>{nCtx > 0 && <span style={{ color: '#8f8f8f' }}>· {nCtx}</span>}

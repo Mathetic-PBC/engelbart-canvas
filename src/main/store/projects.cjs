@@ -172,7 +172,9 @@ function projectRecord(dir) {
   try { exists = !!saved && fs.statSync(saved).isDirectory(); } catch { exists = false; }
   // A saved directory that is gone (moved, unmounted) counts as not chosen: the project asks again.
   const description = typeof meta.description === 'string' ? meta.description.trim() : '';
-  return { id: meta.id, name, slug: path.basename(dir), dir, created: meta.created || null, directory: exists ? saved : null, directoryMissing: saved && !exists ? saved : null, description };
+  // The folder the Builds' default repo was made as, in `directory` (build/manager.cjs): kept, so a rename never moves it.
+  const defaultRepo = typeof meta.defaultRepo === 'string' && /^[^/\\\0]{1,255}$/.test(meta.defaultRepo) && !['.', '..'].includes(meta.defaultRepo) ? meta.defaultRepo : null;
+  return { id: meta.id, name, slug: path.basename(dir), dir, created: meta.created || null, directory: exists ? saved : null, directoryMissing: saved && !exists ? saved : null, description, defaultRepo };
 }
 
 function projectRecords(ctx) {
@@ -289,6 +291,14 @@ async function setProjectDirectory(ctx, id, directory) {
   writeJson(path.join(project.dir, 'project.json'), { ...meta, directory: resolved });
   const next = projectRecord(project.dir);
   return publicProject(next, summary(next));
+}
+
+/** The default repo's folder name, once Build has made it (a name, never a path). */
+function setDefaultRepo(ctx, id, name) {
+  const project = findProject(ctx, id);
+  if (typeof name !== 'string' || !/^[^/\\\0]{1,255}$/.test(name) || ['.', '..'].includes(name)) throw new TypeError('default repo must be a folder name');
+  const meta = readJson(path.join(project.dir, 'project.json')) || {};
+  if (meta.defaultRepo !== name) writeJson(path.join(project.dir, 'project.json'), { ...meta, defaultRepo: name });
 }
 
 async function renameProject(ctx, id, name) {
@@ -879,6 +889,7 @@ module.exports = {
   createProject,
   createProjectWithWelcome,
   setProjectDirectory,
+  setDefaultRepo,
   renameProject,
   loadProject,
   createWorkspace,
