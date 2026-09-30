@@ -240,12 +240,15 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     }
     const blocking = report.problems.filter((problem) => problem.code !== 'not-a-repository' && problem.code !== 'no-commits');
     const canInit = report.problems.length > 0 && !blocking.length;
+    // A folder with no history of its own, or none saved yet, is not the person's to fix (2026-09-29): the Build gives it
+    // one when it starts (git init and a first commit, as "Start history" did), and the panel says nothing about it.
+    if (canInit) return { ...base, ok: true, init: true, top: report.top, branch: report.branch, dirty: 0, problems: [], canInit };
     let dirty = 0;
     if (report.repository && report.commits) { try { dirty = (await git.dirtyPaths(report.top)).length; } catch { dirty = 0; } }
     return { ...base, ok: !report.problems.length, top: report.top, branch: report.branch, dirty, problems: report.problems, canInit };
   }
 
-  /** "Start history": git init and a first commit in a folder that had none (B17). */
+  /** git init and a first commit in a folder that had none (B17's "Start history"; since 2026-09-29 start does it unasked). */
   async function initRepository(ctx, projectId, input) {
     const pre = await preflight(ctx, projectId, input);
     if (!pre.canInit) throw new Error(pre.problems.length ? pre.problems[0].message : 'This folder already has a history.');
@@ -272,6 +275,19 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
       libraryChanged();
       return row;
     });
+  }
+
+  /**
+   * A project whose folder Engelbart made (onboarding's "Create a folder for me", 2026-09-29): its default repo, made
+   * now, so the first Build finds a history waiting. Nothing while Git is not ready: the first Build makes it then.
+   */
+  async function prepareDefault(ctx, projectId) {
+    const project = projectOf(ctx, projectId);
+    if (!project.directory || !gitReady()) return null;
+    const folder = defaultFolder(project);
+    await makeDefault(folder);
+    projects.setDefaultRepo(ctx, projectId, path.basename(folder));
+    return folder;
   }
 
   /** A GitHub repository from the library, cloned into repos/<name> in the project folder; its row keeps the clone. */
@@ -310,8 +326,9 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     // A library repository that is not on this Mac (a sandbox's, from GitHub) is cloned into repos/<name> first, before
     // anything else: its row keeps the clone (cloneRepository), and the Build works there.
     if (!pre.ok && pre.canClone) pre = await cloneRepository(ctx, projectId, wanted);
-    if (pre.ok && pre.create) {
-      await makeDefault(pre.directory);
+    if (pre.ok && (pre.create || pre.init)) {
+      if (pre.create) await makeDefault(pre.directory);
+      else await serial(pre.directory, () => git.init(pre.directory));
       pre = await preflight(ctx, projectId, wanted);
     }
     if (!pre.ok) throw new Error(pre.problems[0].message);
@@ -999,7 +1016,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     await Promise.race([Promise.all([...running.map((entry) => entry.done), ...steps]), new Promise((resolve) => { const timer = setTimeout(resolve, QUIT_WAIT_MS); if (timer.unref) timer.unref(); })]);
   }
 
-  return { targets, preflight, initRepository, cloneRepository, start, reply, stop, resume, review, accept, fix, discard, promote, reconcile, list, get, openIds, stopAll, running: () => [...live.keys()], stepping: (id) => stepping.has(id), showRunnable, stopRunning, stopRunnable, sweeping: () => Promise.all([...sweeps]) };
+  return { targets, preflight, initRepository, prepareDefault, cloneRepository, start, reply, stop, resume, review, accept, fix, discard, promote, reconcile, list, get, openIds, stopAll, running: () => [...live.keys()], stepping: (id) => stepping.has(id), showRunnable, stopRunning, stopRunnable, sweeping: () => Promise.all([...sweeps]) };
 }
 
 module.exports = { createBuilds, createShell, LIMITS, TURN_MS, CLONES };

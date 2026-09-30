@@ -279,15 +279,17 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // `choice`, a model and effort for that run alone.
   const [asks, setAsks] = React.useState({});
   // What the @bart line's chip offers and what its flags are checked against. The files behind it are read again for every
-  // question, so this is read again whenever the window comes back to the front.
+  // question, so this is read again whenever the window comes back to the front, and once a question has been sent: one
+  // asked with a model picked by hand makes that where the next one starts (main: bart/choices.cjs).
   const [bartModels, setBartModels] = React.useState(null);
+  const liveRef = React.useRef(true);
+  const loadBartModels = React.useCallback(() => api.bartModels().then((models) => { if (liveRef.current) setBartModels(models); }).catch(() => {}), []);
   React.useEffect(() => {
-    let live = true;
-    const load = () => api.bartModels().then((models) => { if (live) setBartModels(models); }).catch(() => {});
-    load();
-    window.addEventListener('focus', load);
-    return () => { live = false; window.removeEventListener('focus', load); };
-  }, []);
+    liveRef.current = true;
+    loadBartModels();
+    window.addEventListener('focus', loadBartModels);
+    return () => { liveRef.current = false; window.removeEventListener('focus', loadBartModels); };
+  }, [loadBartModels]);
   const docsRef = React.useRef(docs);
   docsRef.current = docs;
 
@@ -320,14 +322,16 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     try {
       await new Promise((resolve) => { setTimeout(resolve, 0); }); // let the pending line reach `pending` before flushing it
       await Promise.all([...pending.current.keys()].map((held) => flush(held)));
-      const out = await api.askBart(project.id, { askId, ref, workspaceId: ref.kind === 'workspace' ? ref.workspaceId : topic.id, text, turns: turns || [], choice: choice || null });
+      const asked = api.askBart(project.id, { askId, ref, workspaceId: ref.kind === 'workspace' ? ref.workspaceId : topic.id, text, turns: turns || [], choice: choice || null });
+      loadBartModels(); // main has kept a pick by hand before this is read
+      const out = await asked;
       place(out.stopped ? [] : out.lines);
     } catch (error) {
       place([`bart> **No answer.** ${errorMessage(error)}`]);
     } finally {
       setAsks((current) => { const next = { ...current }; delete next[askId]; return next; });
     }
-  }, [docKey, docRef, topic, project.id, flush, changeDoc]);
+  }, [docKey, docRef, topic, project.id, flush, changeDoc, loadBartModels]);
 
   /* ----------------------------------------------------------------- Build */
 

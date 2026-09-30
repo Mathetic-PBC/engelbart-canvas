@@ -247,7 +247,7 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
         }
         try {
           launched = await localSetup({ sandbox, auth, environment,
-            model: env.ENGELBART_SANDBOX_CLAUDE_MODEL || 'sonnet', signal: localController.signal, checkPreview,
+            model: env.ENGELBART_SANDBOX_CLAUDE_MODEL || 'claude-sonnet-5-5', signal: localController.signal, checkPreview,
             onReady: publishPreview,
             onEvent(event) {
               if (localController.signal.aborted) return;

@@ -6,8 +6,9 @@ const AGENTS = ['claude', 'codex'];
 
 /**
  * The tools the dialog opens with after the launch check, or [] for no dialog: Git missing (or unable
- * to run); neither agent installed; no agent able to run a question; an update waiting for the
- * person. A skipped tool is not asked about again until Ask again.
+ * to run); neither agent installed; no agent able to run a question; an agent installed but not signed
+ * in (2026-09-29: often one Engelbart installed in the background, which then still needs its sign-in);
+ * an update waiting for the person. A skipped tool is not asked about again until Ask again.
  */
 export function launchRows(snapshot) {
   if (!snapshot || !snapshot.checked) return [];
@@ -22,9 +23,22 @@ export function launchRows(snapshot) {
   }
   for (const name of AGENTS) {
     const tool = tools[name];
-    if (!rows.includes(name) && !tool.skip && (tool.status === 'outdated' || tool.status === 'incompatible') && !tool.autoUpdate && !tool.busy) rows.push(name);
+    if (rows.includes(name) || tool.skip || tool.busy) continue;
+    if (tool.status === 'signed-out' || ((tool.status === 'outdated' || tool.status === 'incompatible') && !tool.autoUpdate)) rows.push(name);
   }
   return TOOL_ORDER.filter((name) => rows.includes(name));
+}
+
+/**
+ * The agents an install has just brought in without a sign-in: installing in `before`, done and signed out in `after`,
+ * not skipped. The dialog asks them to sign in once the install is over (App.jsx), whenever it ends.
+ */
+export function installedSignedOut(before, after) {
+  if (!before || !after) return [];
+  return AGENTS.filter((name) => {
+    const was = before.tools[name], now = after.tools[name];
+    return !!(was && now && was.busy && was.busy.action === 'install' && !now.busy && now.status === 'signed-out' && !now.skip);
+  });
 }
 
 /** A tool needs the person when it is not installed, cannot run, or waits on them (the rows Skip applies to). */

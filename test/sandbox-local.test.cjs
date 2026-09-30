@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
-const { subscriptionEnvironment, subscriptionStatus, claudeArguments, runLocalClaude } = require('../src/main/sandbox/local-claude.cjs');
+const { subscriptionEnvironment, subscriptionStatus, prepareLocalClaude, claudeArguments, runLocalClaude } = require('../src/main/sandbox/local-claude.cjs');
 const { ROOT, repoPath, validateTool, createSandboxTools, openToolBridge } = require('../src/main/sandbox/local-tools.cjs');
 const { runLocalSetup } = require('../src/main/sandbox/local-setup.cjs');
 const { createRuntime } = require('../src/main/sandbox/worker.cjs');
@@ -17,6 +17,25 @@ test('subscription environment excludes every API, OAuth, parent-session and Ele
   assert.deepEqual(subscriptionEnvironment(source), { HOME: '/users/test', SHELL: '/bin/zsh', PATH: '/bin', CLAUDE_CONFIG_DIR: '/users/test/.claude' });
   assert.equal(subscriptionStatus({ loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty', subscriptionType: 'max' }), true);
   for (const status of [{}, { loggedIn: true }, { loggedIn: true, authMethod: 'api_key' }, { loggedIn: true, authMethod: 'claude.ai', apiProvider: 'bedrock', subscriptionType: 'max' }]) assert.equal(subscriptionStatus(status), false);
+});
+
+test('local Claude missing from the login shell\'s PATH is found where its installer put it (a new account, 2026-09-29)', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-local-claude-'));
+  const launcher = path.join(home, '.local', 'bin', 'claude');
+  fs.mkdirSync(path.dirname(launcher), { recursive: true });
+  fs.writeFileSync(launcher, '#!/bin/sh\n', { mode: 0o755 });
+  const asked = [];
+  const run = async (file, args) => {
+    asked.push([file, args[0]]);
+    if (args[0] === '-ilc') throw Object.assign(new Error('not found'), { code: 1 }); // whence -p finds nothing
+    if (args[0] === '--version') return { stdout: '2.1.285 (Claude Code)\n' };
+    return { stdout: JSON.stringify({ loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty', subscriptionType: 'max' }) };
+  };
+  const auth = await prepareLocalClaude({ HOME: home, SHELL: '/bin/zsh', PATH: '/usr/bin:/bin' }, run);
+  assert.equal(auth.file, launcher);
+  assert.deepEqual(asked.map(([, first]) => first), ['-ilc', '--version', 'auth']);
+  const signedOut = async (file, args) => (args[0] === '-ilc' ? { stdout: `${launcher}\n` } : args[0] === '--version' ? { stdout: '2.1.285\n' } : { stdout: '{"loggedIn":false}' });
+  await assert.rejects(prepareLocalClaude({ HOME: home, SHELL: '/bin/zsh' }, signedOut), /not signed in/);
 });
 
 test('local Claude has only per-run MCP tools, no built-in tools/hooks, and a bounded session', () => {

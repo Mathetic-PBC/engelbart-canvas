@@ -96,7 +96,8 @@ const engelbartAPI = Object.freeze({
   onBartProgress: (callback) => subscribe('engelbart:bart-progress', callback),
   // Build (src/main/build): a workspace's coding agent in a worktree of its own. Every change of one arrives on onBuild as
   // its record; onBuildProgress carries what a running turn is doing ({ projectId, id, activity, log, lines }).
-  buildModels: invoke('build-models'),
+  buildModels: invoke('build-models'), // ('quick' for a post-it's Build)
+  rememberModelChoice: invoke('remember-model-choice'), // ('build' | 'quick', { provider, model, effort })
   // Where a Build works: the default repo (a folder named after the project, in the project folder), the project folder,
   // or a library repository ({ kind, id }); a GitHub one is cloned into repos/<name> first (buildClone).
   buildTargets: invoke('build-targets'),

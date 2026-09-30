@@ -6,7 +6,8 @@
 // later build reaches the file too, unless the person changed that value (2026-09-23,
 // ../store/defaults.cjs): what they edited stays, what they left alone follows the new defaults.
 //
-// A question starts on the first step of the default provider's ladder. The agent may ask to move
+// A question starts on the first step of the default provider's ladder, or where the last question picked by hand did
+// (2026-09-29, startingAt and ./choices.cjs). The agent may ask to move
 // up a step (src/main/bart/ask.cjs), which resumes the same session: what it has read stays read.
 // `@bart --opus --high …` picks by hand and turns that off. Flags are matched loosely: case,
 // dashes, spaces, dots and version numbers are ignored, and "extra high" is xhigh.
@@ -22,14 +23,16 @@ const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
 const KEY_RE = /^[a-z][a-z0-9]{0,23}$/;
 
 // Build (2026-09-25; docs/superpowers/specs/2026-09-25-build-workflow-design.md B3): the models a Build can run on, per
-// provider, and the one its dialog starts on. The dialog starts on the file's `provider`, as @bart does.
+// provider, and the one its dialog starts on. Since 2026-09-29 Build has a provider of its own (Claude Code, Opus high),
+// and the dialog starts on what was last picked in it (./choices.cjs), a post-it's quick task on its own last pick.
 const DEFAULT_BUILD = {
-  about: 'Models and efforts for Build, the coding agent a workspace hands its document to, and for a post-it\'s quick task. The Build dialog starts on the default provider\'s `default` and lists these models and efforts to pick from.',
+  about: 'Models and efforts for Build, the coding agent a workspace hands its document to, and for a post-it\'s quick task. The Build dialog starts on the model and effort last picked in it (a post-it\'s on its own last pick; model-choices.json), else on `provider`\'s `default`, and lists these models and efforts to pick from. When `provider`\'s CLI cannot run (not installed or not signed in), it starts on the other provider\'s `default`.',
+  provider: 'anthropic',
   providers: {
     openai: {
       models: {
         luna: { id: 'gpt-6-luna', name: 'Luna', use: 'Fastest. Small, clear changes.' },
-        sol: { id: 'gpt-6-sol', name: 'Sol', use: 'The default. Most Builds.' },
+        sol: { id: 'gpt-6.1-sol', name: 'Sol', use: 'The default. Most Builds.' },
         astra: { id: 'gpt-6-astra', name: 'Astra', use: 'Deepest. Hard changes across many files; slow.' },
       },
       efforts: ['medium', 'high', 'xhigh', 'ultra'],
@@ -37,7 +40,7 @@ const DEFAULT_BUILD = {
     },
     anthropic: {
       models: {
-        sonnet: { id: 'sonnet', name: 'Sonnet', use: 'Fast. Small, clear changes.' },
+        sonnet: { id: 'claude-sonnet-5-5', name: 'Sonnet', use: 'Fast. Small, clear changes.' },
         opus: { id: 'opus', name: 'Opus', use: 'The default. Most Builds.' },
         fable: { id: 'fable', name: 'Fable', use: 'Deepest. Hard changes across many files; slow.' },
       },
@@ -48,14 +51,14 @@ const DEFAULT_BUILD = {
 };
 
 const BART_DEFAULTS = {
-  about: 'Models and efforts for @bart, the inline question agent. This file applies to every project and is read again for each question. A question starts on the first step of the default provider\'s ladder; the agent may move up a step when the question needs more than it was given, and it keeps what it has read. `@bart --opus --high …` picks a model and an effort by hand and turns that off. Luna and Sonnet: lookups, definitions, rewording. Sol and Opus: questions that need several files read or careful reasoning. Astra and Fable: the hardest questions, where a slow answer is acceptable. Medium effort answers in seconds; high and xhigh think longer before answering; ultra (Codex) and max (Claude Code) are the most either will spend, by hand only: no ladder reaches them.',
-  provider: 'openai',
+  about: 'Models and efforts for @bart, the inline question agent. This file applies to every project and is read again for each question. A question starts where the last one picked by hand did (model-choices.json), else on the first step of the default provider\'s ladder, or on the other provider\'s when the default one\'s CLI cannot run (not installed or not signed in). The agent may move up a step when the question needs more than it was given, and it keeps what it has read. `@bart --opus --high …` picks a model and an effort by hand and turns that off. Luna and Sonnet: lookups, definitions, rewording. Sol and Opus: questions that need several files read or careful reasoning. Astra and Fable: the hardest questions, where a slow answer is acceptable. Medium effort answers in seconds; high and xhigh think longer before answering; ultra (Codex) and max (Claude Code) are the most either will spend, by hand only: no ladder reaches them.',
+  provider: 'anthropic',
   providers: {
     openai: {
       name: 'Codex',
       models: {
         luna: { id: 'gpt-6-luna', name: 'Luna', use: 'Fastest. Lookups, definitions, rewording.' },
-        sol: { id: 'gpt-6-sol', name: 'Sol', use: 'The default. Most questions about the project.' },
+        sol: { id: 'gpt-6.1-sol', name: 'Sol', use: 'The default. Most questions about the project.' },
         astra: { id: 'gpt-6-astra', name: 'Astra', use: 'Deepest. Hard reasoning across many files; slow.' },
       },
       efforts: ['medium', 'high', 'xhigh', 'ultra'],
@@ -63,35 +66,50 @@ const BART_DEFAULTS = {
     },
     anthropic: {
       name: 'Claude Code',
-      // Aliases, not versions: Claude Code resolves each to the latest model of that name.
+      // Opus and Fable are aliases, not versions: Claude Code resolves each to the latest model of that name. Sonnet is
+      // named by version (2026-09-29), since a Claude Code older than 2.1.284 still resolves `sonnet` to Sonnet 5.
       models: {
-        sonnet: { id: 'sonnet', name: 'Sonnet', use: 'Fast. Lookups, definitions, rewording, most questions.' },
+        sonnet: { id: 'claude-sonnet-5-5', name: 'Sonnet', use: 'Fast. Lookups, definitions, rewording, most questions.' },
         opus: { id: 'opus', name: 'Opus', use: 'Questions that need several files read or careful reasoning.' },
         fable: { id: 'fable', name: 'Fable', use: 'Deepest. The hardest questions; slow.' },
       },
       efforts: ['medium', 'high', 'xhigh', 'max'],
-      ladder: [{ model: 'sonnet', effort: 'medium' }, { model: 'opus', effort: 'high' }, { model: 'fable', effort: 'xhigh' }],
+      ladder: [{ model: 'sonnet', effort: 'high' }, { model: 'opus', effort: 'high' }, { model: 'fable', effort: 'xhigh' }],
     },
   },
 };
 
 const DEFAULT_MODELS = { ...BART_DEFAULTS, build: DEFAULT_BUILD };
 
+/** `defaults` with some models' ids replaced: { openai: { sol: 'gpt-6-sol' } }. */
+function withIds(defaults, ids) {
+  const providers = { ...defaults.providers };
+  for (const [provider, changes] of Object.entries(ids)) {
+    const models = { ...providers[provider].models };
+    for (const [key, id] of Object.entries(changes)) models[key] = { ...models[key], id };
+    providers[provider] = { ...providers[provider], models };
+  }
+  return { ...defaults, providers };
+}
+
+// What shipped from 2026-09-25 (Build) and 2026-09-27 (@bart on GPT-6) until 2026-09-29: GPT-6 Sol, Claude Code's
+// `sonnet` alias, @bart on Codex first (Sol medium) and Claude Code's ladder from Sonnet medium, Build on @bart's provider.
+const BUILD_0925 = withIds({
+  about: 'Models and efforts for Build, the coding agent a workspace hands its document to, and for a post-it\'s quick task. The Build dialog starts on the default provider\'s `default` and lists these models and efforts to pick from.',
+  providers: DEFAULT_BUILD.providers,
+}, { openai: { sol: 'gpt-6-sol' }, anthropic: { sonnet: 'sonnet' } });
+const BART_0927 = (() => {
+  const shipped = withIds(BART_DEFAULTS, { openai: { sol: 'gpt-6-sol' }, anthropic: { sonnet: 'sonnet' } });
+  return {
+    ...shipped,
+    about: 'Models and efforts for @bart, the inline question agent. This file applies to every project and is read again for each question. A question starts on the first step of the default provider\'s ladder; the agent may move up a step when the question needs more than it was given, and it keeps what it has read. `@bart --opus --high …` picks a model and an effort by hand and turns that off. Luna and Sonnet: lookups, definitions, rewording. Sol and Opus: questions that need several files read or careful reasoning. Astra and Fable: the hardest questions, where a slow answer is acceptable. Medium effort answers in seconds; high and xhigh think longer before answering; ultra (Codex) and max (Claude Code) are the most either will spend, by hand only: no ladder reaches them.',
+    provider: 'openai',
+    providers: { ...shipped.providers, anthropic: { ...shipped.providers.anthropic, ladder: [{ model: 'sonnet', effort: 'medium' }, { model: 'opus', effort: 'high' }, { model: 'fable', effort: 'xhigh' }] } },
+  };
+})();
+
 // Keep the shipped 5.6 defaults as migration bases, so untouched model IDs move to 6.
-const PREVIOUS_BART_DEFAULTS = {
-  ...BART_DEFAULTS,
-  providers: {
-    ...BART_DEFAULTS.providers,
-    openai: {
-      ...BART_DEFAULTS.providers.openai,
-      models: {
-        ...BART_DEFAULTS.providers.openai.models,
-        luna: { ...BART_DEFAULTS.providers.openai.models.luna, id: 'gpt-5.6-luna' },
-        sol: { ...BART_DEFAULTS.providers.openai.models.sol, id: 'gpt-5.6-sol' },
-      },
-    },
-  },
-};
+const PREVIOUS_BART_DEFAULTS = withIds(BART_0927, { openai: { luna: 'gpt-5.6-luna', sol: 'gpt-5.6-sol' } });
 
 // Every earlier DEFAULT_MODELS, oldest first. A file written before defaults were carried forward is
 // compared with these to tell the values its owner left alone from the ones they chose.
@@ -108,7 +126,9 @@ const PAST_DEFAULT_MODELS = [
   // 2026-09-21 to 2026-09-25: @bart alone, before Build had models of its own.
   PREVIOUS_BART_DEFAULTS,
   // 2026-09-25 to 2026-09-27: Build had its own GPT-6 models; @bart still used 5.6.
-  { ...PREVIOUS_BART_DEFAULTS, build: DEFAULT_BUILD },
+  { ...PREVIOUS_BART_DEFAULTS, build: BUILD_0925 },
+  // 2026-09-27 to 2026-09-29: both on GPT-6, @bart on Codex first.
+  { ...BART_0927, build: BUILD_0925 },
 ];
 
 const isObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -139,7 +159,7 @@ function normalizeBuild(value) {
     const start = usable(wanted) ? wanted : usable(fallback.default) ? fallback.default : { model: Object.keys(models)[0], effort: efforts.includes('high') ? 'high' : efforts[0] };
     providers[key] = { models, efforts, default: { model: start.model, effort: start.effort } };
   }
-  return { about: typeof given.about === 'string' ? given.about : DEFAULT_BUILD.about, providers };
+  return { about: typeof given.about === 'string' ? given.about : DEFAULT_BUILD.about, provider: providers[given.provider] ? given.provider : DEFAULT_BUILD.provider, providers };
 }
 
 /** Whatever the file holds, made safe to run: unknown providers dropped, bad models, efforts and steps replaced by the defaults. */
@@ -162,8 +182,8 @@ function normalizeModels(value) {
 
 /**
  * What the Build dialog offers, in the shape the @bart selector draws (`BartPicker`): per provider its name, Build's
- * models and efforts, and a one-step `ladder` holding the default. `models` is the list in force (after onlyProviders and
- * preferUsable), so the dialog starts on the provider @bart would start on.
+ * models and efforts, and a one-step `ladder` holding the default. `models` is the list in force (after startingAt,
+ * onlyProviders and preferUsable), so the dialog starts on Build's provider, or on the other one while its CLI cannot run.
  */
 function buildChoices(models) {
   const build = models.build || normalizeBuild(null);
@@ -173,7 +193,8 @@ function buildChoices(models) {
     if (!entry) continue;
     providers[key] = { name: models.providers[key].name, models: entry.models, efforts: entry.efforts, ladder: [entry.default] };
   }
-  return { provider: providers[models.provider] ? models.provider : Object.keys(providers)[0], providers };
+  const provider = [build.provider, models.provider].find((key) => providers[key]) || Object.keys(providers)[0];
+  return { provider, providers };
 }
 
 /** A pick from the dialog made real: the model's id and name, the effort; the defaults when the pick names nothing Build knows. */
@@ -190,21 +211,44 @@ function resolveBuildChoice(models, { provider, model, effort } = {}) {
 function onlyProviders(models, only) {
   const kept = Object.keys(models.providers).filter((key) => Array.isArray(only) && only.includes(key));
   if (!kept.length) return models;
-  return { ...models, provider: kept.includes(models.provider) ? models.provider : kept[0], providers: Object.fromEntries(kept.map((key) => [key, models.providers[key]])) };
+  const build = models.build && !kept.includes(models.build.provider) ? { ...models.build, provider: kept[0] } : models.build;
+  return { ...models, provider: kept.includes(models.provider) ? models.provider : kept[0], providers: Object.fromEntries(kept.map((key) => [key, models.providers[key]])), ...(build ? { build } : {}) };
 }
 
 /**
- * The saved default provider, or another one when the saved one cannot run (2026-09-23; design D4).
- * `usable`: the CLIs the last tool check found installed, recent enough and not signed out
+ * The saved default provider, or another one when the saved one cannot run (2026-09-23; design D4), for @bart and for
+ * Build alike. `usable`: the CLIs the last tool check found installed, recent enough and not signed out
  * (['claude', 'codex'] or fewer), or null before the first check. Nothing is written: the saved
  * choice comes back as soon as its CLI does. A model picked by flag is never moved.
  */
 function preferUsable(models, usable) {
   if (!Array.isArray(usable)) return models;
   const can = (provider) => usable.includes(TOOL_OF[provider]);
-  if (can(models.provider)) return models;
-  const other = Object.keys(models.providers).find(can);
-  return other ? { ...models, provider: other } : models;
+  const moved = (provider) => (can(provider) ? provider : Object.keys(models.providers).find(can) || provider);
+  const provider = moved(models.provider);
+  const build = models.build && moved(models.build.provider) !== models.build.provider ? { ...models.build, provider: moved(models.build.provider) } : models.build;
+  if (provider === models.provider && build === models.build) return models;
+  return { ...models, provider, ...(build ? { build } : {}) };
+}
+
+/**
+ * The list starting where the person last picked (2026-09-29; `held` { provider, model, effort } from ./choices.cjs) for
+ * `place`: 'bart' → that provider becomes the default and its `start` the step a question without flags starts on (the
+ * ladder goes on above it, ./question.cjs); 'build' or 'quick' → Build's provider and that provider's `default`. A pick the
+ * list no longer offers is ignored. Applied before preferUsable, so a pick whose CLI cannot run gives way as the saved
+ * default does.
+ */
+function startingAt(models, place, held) {
+  if (!isObject(held) || typeof held.provider !== 'string' || typeof held.model !== 'string' || typeof held.effort !== 'string') return models;
+  if (place === 'bart') {
+    const entry = models.providers[held.provider];
+    if (!entry || !entry.models[held.model] || !entry.efforts.includes(held.effort)) return models;
+    return { ...models, provider: held.provider, providers: { ...models.providers, [held.provider]: { ...entry, start: { model: held.model, effort: held.effort } } } };
+  }
+  const build = models.build;
+  const entry = build && models.providers[held.provider] ? build.providers[held.provider] : null;
+  if (!entry || !entry.models[held.model] || !entry.efforts.includes(held.effort)) return models;
+  return { ...models, build: { ...build, provider: held.provider, providers: { ...build.providers, [held.provider]: { ...entry, default: { model: held.model, effort: held.effort } } } } };
 }
 
 /**
@@ -224,4 +268,4 @@ function loadModels(homeRoot, { only } = {}) {
   return only ? onlyProviders(models, only) : models;
 }
 
-module.exports = { MODELS_FILE, EFFORTS, DEFAULT_MODELS, DEFAULT_BUILD, PAST_DEFAULT_MODELS, normalizeModels, normalizeBuild, buildChoices, resolveBuildChoice, onlyProviders, preferUsable, loadModels, effortOf, modelOf, readFlags, readQuestion, withChoice };
+module.exports = { MODELS_FILE, EFFORTS, DEFAULT_MODELS, DEFAULT_BUILD, PAST_DEFAULT_MODELS, normalizeModels, normalizeBuild, buildChoices, resolveBuildChoice, onlyProviders, preferUsable, startingAt, loadModels, effortOf, modelOf, readFlags, readQuestion, withChoice };

@@ -323,15 +323,24 @@ export function bootstrap() {
       state.bootstrapComplete = true;
       notify();
     }
-    void api().providers().then((available) => {
-      for (const provider of available) state.providers.set(provider.id, provider);
-      notify();
-    }).catch((error) => {
+    void refreshProviders().catch((error) => {
       pushError(`CLI availability could not be checked: ${errorMessage(error)}`);
     });
+    // Claude Code or Codex installed (or signed in) while the app is open, often in the background at first launch: the
+    // agent menu offers it as soon as the tool check has found it, not at the next launch.
+    const engelbart = window.engelbartAPI;
+    if (engelbart && engelbart.onTools) engelbart.onTools(() => { void refreshProviders().catch(() => {}); });
     return state;
   })();
   return state.bootstrapping;
+}
+
+/** What the agent menu offers, asked of main again (tools/manager.cjs providers). */
+function refreshProviders() {
+  return api().providers().then((available) => {
+    for (const provider of available) state.providers.set(provider.id, provider);
+    notify();
+  });
 }
 
 export function getState() {

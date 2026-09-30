@@ -18,7 +18,9 @@
 //              worked (./install.cjs rollback), when the install keeps one.
 //   use        what a run of a program (an @bart turn, a summary) holds while it runs.
 //   environment  what everything Engelbart starts is given: the folder of Engelbart's own Git while it
-//              stands in for a missing one (./bundled-git.cjs), which ../terminal/launch.cjs puts first on PATH.
+//              stands in for a missing one (./bundled-git.cjs), which ../terminal/launch.cjs puts first on PATH,
+//              and the folders of Claude Code and Codex when the login shell's PATH misses them (a new account:
+//              their installers put them in ~/.local/bin, which a fresh .zshrc does not add), which it puts last.
 //
 // What changes is sent on as a snapshot (`onChange`), which the renderer's dialog draws.
 
@@ -269,12 +271,19 @@ function createTools({ readTools, writeTools, detect, actions, signInProcess = n
     return AGENTS.filter((name) => records[name].installed && records[name].status === 'ready');
   }
 
-  /** What every program Engelbart starts gets besides its own environment: ENGELBART_GIT_BIN while Engelbart's own Git stands in. */
+  /**
+   * What every program Engelbart starts gets besides its own environment: ENGELBART_GIT_BIN while Engelbart's own Git
+   * stands in, and ENGELBART_AGENT_PATH (folders, joined by ":") while an agent is installed where PATH does not reach.
+   */
   function environment() {
+    const out = {};
     const git = records.git;
-    if (git.source !== 'bundled' || git.status !== 'ready' || !git.path) return {};
-    try { if (!fs.existsSync(git.path)) return {}; } catch { return {}; } // the app moved since the last check; the next one finds it
-    return { ENGELBART_GIT_BIN: path.dirname(git.path) };
+    // A path that is gone: the app moved (or the program was removed) since the last check; the next one finds it.
+    const there = (file) => { try { return fs.existsSync(file); } catch { return false; } };
+    if (git.source === 'bundled' && git.status === 'ready' && git.path && there(git.path)) out.ENGELBART_GIT_BIN = path.dirname(git.path);
+    const folders = [...new Set(AGENTS.filter((name) => binaryFor(name) && there(records[name].path)).map((name) => path.dirname(records[name].path)))];
+    if (folders.length) out.ENGELBART_AGENT_PATH = folders.join(':');
+    return out;
   }
 
   /** The full path to run a program by, when the login shell's PATH does not reach it; else null (its name is enough). */

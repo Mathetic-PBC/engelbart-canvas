@@ -114,16 +114,19 @@ async function settled(project, id, not = ['setting-up', 'queued', 'running', 'a
 
 /* ------------------------------------------------------------------ models and prompt */
 
-test('Build has models of its own: Codex GPT-6-Sol high, Claude Code Opus high, the dialog on @bart\'s provider', () => {
-  assert.equal(DEFAULT_MODELS.build.providers.openai.models.sol.id, 'gpt-6-sol');
+test('Build has models of its own: Codex GPT-6.1-Sol high, Claude Code Opus high, the dialog on Build\'s own provider, Claude Code (2026-09-29)', () => {
+  assert.equal(DEFAULT_MODELS.build.providers.openai.models.sol.id, 'gpt-6.1-sol');
+  assert.equal(DEFAULT_MODELS.build.providers.anthropic.models.sonnet.id, 'claude-sonnet-5-5');
   const choices = buildChoices(MODELS);
-  assert.equal(choices.provider, 'openai');
+  assert.equal(choices.provider, 'anthropic');
+  assert.equal(buildChoices({ ...MODELS, provider: 'openai' }).provider, 'anthropic', 'not @bart\'s');
   assert.deepEqual(choices.providers.openai.ladder, [{ model: 'sol', effort: 'high' }]);
   assert.deepEqual(choices.providers.anthropic.ladder, [{ model: 'opus', effort: 'high' }]);
   assert.deepEqual(resolveBuildChoice(MODELS, { provider: 'anthropic' }), { provider: 'anthropic', model: 'opus', modelId: 'opus', modelName: 'Opus', effort: 'high' });
   assert.deepEqual(resolveBuildChoice(MODELS, { provider: 'openai', model: 'astra', effort: 'ultra' }).modelId, 'gpt-6-astra');
   assert.equal(resolveBuildChoice(MODELS, { provider: 'openai', model: 'nope', effort: 'max' }).effort, 'high', 'what the list does not offer falls back to the default');
-  const edited = normalizeModels({ ...MODELS, build: { providers: { openai: { models: { sol: { id: 'gpt-7-sol', name: 'Sol' } }, default: { model: 'sol', effort: 'xhigh' } } } } });
+  assert.deepEqual(resolveBuildChoice(MODELS, {}), { provider: 'anthropic', model: 'opus', modelId: 'opus', modelName: 'Opus', effort: 'high' });
+  const edited = normalizeModels({ ...MODELS, build: { provider: 'openai', providers: { openai: { models: { sol: { id: 'gpt-7-sol', name: 'Sol' } }, default: { model: 'sol', effort: 'xhigh' } } } } });
   assert.deepEqual(resolveBuildChoice(edited, {}), { provider: 'openai', model: 'sol', modelId: 'gpt-7-sol', modelName: 'Sol', effort: 'xhigh' });
 });
 
@@ -275,7 +278,7 @@ test('Accept: one commit on the person\'s current branch, after theirs, checks r
   assert.equal(done.status, 'accepted');
   assert.equal(done.accepted.branch, 'feature', 'the branch their folder is on, not main');
   assert.deepEqual(sh(code, 'log', '--format=%s', '-3').split('\n'), ['Feature', 'theirs meanwhile', 'init']);
-  assert.match(sh(code, 'log', '-1', '--format=%b'), /Added c\.[\s\S]*Engelbart Build [0-9a-f]{10} · Sol high · 2 turns/);
+  assert.match(sh(code, 'log', '-1', '--format=%b'), /Added c\.[\s\S]*Engelbart Build [0-9a-f]{10} · Opus high · 2 turns/);
   assert.equal(fs.readFileSync(path.join(code, 'c.txt'), 'utf8'), 'see\n');
   assert.deepEqual(shells.map((s) => s.command), ['npm test']);
   task = store.readTask(projects.findProject(ctx, project.id), id);
@@ -376,19 +379,41 @@ test('Discard, a failed turn, recovery after the app closed, and Resume in the s
   await assert.rejects(second.reply(ctx, project.id, id, 'hello'), /closed/);
 });
 
-test('a folder that cannot take a Build says why; one without history can be given one', async () => {
+test('a folder that cannot take a Build says why; one without history is given one when the Build starts, unasked (2026-09-29)', async () => {
   const code = path.join(homeDir, 'no-history');
   write(path.join(code, 'index.js'), 'x\n');
   const project = await projects.createProject(ctx, { name: 'No history', directory: code });
   const { builds } = manager(scripted([]));
   const pre = await builds.preflight(ctx, project.id);
-  assert.deepEqual([pre.ok, pre.canInit, pre.problems[0].code], [false, true, 'not-a-repository']);
-  await assert.rejects(builds.start(ctx, project.id, { workspaceId: (await projects.createWorkspace(ctx, project.id, {})).id }), /no history yet/);
+  assert.deepEqual([pre.ok, pre.init, pre.problems], [true, true, []], 'nothing for the panel to say');
   const after = await builds.initRepository(ctx, project.id);
-  assert.deepEqual([after.ok, after.dirty], [true, 0]);
+  assert.deepEqual([after.ok, after.init, after.dirty], [true, undefined, 0]);
+  const other = path.join(homeDir, 'no-history-2');
+  write(path.join(other, 'index.js'), 'y\n');
+  const second = await projects.createProject(ctx, { name: 'No history 2', directory: other });
+  const agent = scripted([() => 'Looked.']);
+  const started = await manager(agent).builds.start(ctx, second.id, { workspaceId: (await projects.createWorkspace(ctx, second.id, {})).id });
+  assert.ok(fs.existsSync(path.join(other, '.git')), 'the history was started by the Build');
+  assert.match(sh(other, 'log', '-1', '--format=%s'), /First snapshot \(Engelbart\)/);
+  assert.equal((await turned(second, started.id, 1)).turn, 1, 'and the Build went on from it');
   const bare = await projects.createProject(ctx, { name: 'No folder' });
   assert.equal((await builds.preflight(ctx, bare.id)).problems[0].code, 'no-directory');
   assert.equal((await manager(scripted([]), { gitReady: () => false }).builds.preflight(ctx, project.id)).problems[0].code, 'no-git');
+});
+
+test('a project folder Engelbart made gets its default repo and first commit in the background, before any Build (2026-09-29)', async () => {
+  const code = path.join(homeDir, 'made-by-engelbart');
+  fs.mkdirSync(code);
+  const project = await projects.createProject(ctx, { name: 'Made Here', directory: code });
+  assert.equal(await manager(scripted([]), { gitReady: () => false }).raw.prepareDefault(ctx, project.id), null, 'not while Git is not ready: the first Build makes it');
+  const { raw } = manager(scripted([]));
+  const folder = await raw.prepareDefault(ctx, project.id);
+  assert.equal(folder, path.join(code, 'made-here'));
+  assert.match(sh(folder, 'log', '-1', '--format=%s'), /First snapshot \(Engelbart\)/);
+  assert.equal(projects.findProject(ctx, project.id).defaultRepo, 'made-here');
+  const pre = await raw.preflight(ctx, project.id, { kind: 'default' });
+  assert.deepEqual([pre.ok, pre.create, pre.directory], [true, undefined, folder], 'the first Build finds it ready');
+  assert.ok(!fs.existsSync(path.join(code, '.git')), 'the project folder itself is left alone');
 });
 
 test('the default repo: a folder named after the project, made with a history of its own by the first Build, never a commit around it (2026-09-29)', async () => {

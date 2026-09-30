@@ -165,6 +165,17 @@ test('an agent started from the terminal gets Engelbart\'s own Git first on PATH
   assert.deepEqual(loginShellArgs('/bin/bash', 'codex', environment), ['-ilc', 'PATH="$ENGELBART_GIT_BIN:$PATH"; codex']);
 });
 
+test('Claude Code and Codex installed where the login shell\'s PATH misses them run by name in the terminal: their folders go last on PATH (2026-09-29)', (t) => {
+  const cwd = temporaryDirectory(t);
+  const environment = { HOME: cwd, SHELL: '/bin/zsh', PATH: '/usr/bin:/bin', ENGELBART_AGENT_PATH: `${cwd}/.local/bin` };
+  const claude = createLaunchSpec({ provider: 'claude', cwd, cols: 80, rows: 24 }, environment);
+  assert.ok(claude.args[1].startsWith('PATH="$PATH:$ENGELBART_AGENT_PATH"; unset CLAUDECODE '), claude.args[1]);
+  assert.equal(claude.env.ENGELBART_AGENT_PATH, environment.ENGELBART_AGENT_PATH);
+  assert.deepEqual(loginShellArgs('/bin/zsh', 'codex', { ...environment, ENGELBART_GIT_BIN: '/git/bin' }), ['-ilc', 'PATH="$ENGELBART_GIT_BIN:$PATH"; PATH="$PATH:$ENGELBART_AGENT_PATH"; codex'], 'Engelbart\'s Git first, the agents last');
+  assert.deepEqual(loginShellArgs('/usr/local/bin/fish', 'codex', environment), ['--login', '--interactive', '--command', 'set -gx PATH $PATH (string split : -- $ENGELBART_AGENT_PATH); codex']);
+  assert.deepEqual(loginShellArgs('/bin/zsh', 'codex', { HOME: cwd }), ['-ilc', 'codex'], 'on PATH already: left as it is');
+});
+
 test('normalizeSettings clamps corrupt persisted values to app-owned defaults', (t) => {
   const home = temporaryDirectory(t);
   assert.deepEqual(

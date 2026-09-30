@@ -159,10 +159,16 @@ async function climb({ steps, pinned, first, turn, session: resumed = null, onPr
   }
 }
 
+/** A pick handed on to be kept; keeping it never stands in a question's way. */
+function remember(onPicked, step) {
+  try { onPicked({ provider: step.provider, model: step.key, effort: step.effort }); } catch { /* a convenience only */ }
+}
+
 // `tools` (../tools/manager.cjs, optional): a question waits for an install or update of its CLI to end and
 // holds one off while it runs, a stale check is redone in the background, and a CLI the login shell's PATH
-// does not reach is run by its full path.
-function createBart({ readModels, environment = process.env, runDirectory = path.join(os.tmpdir(), 'engelbart-bart-runs'), codexHome = path.join(os.tmpdir(), 'engelbart-codex-home-bart'), codexAuthFile, run = execFile, threads = createThreads(), tools = null } = {}) {
+// does not reach is run by its full path. `onPicked({ provider, model, effort })`: a question asked with a model or an
+// effort picked by hand (flags, or Regenerate's choice), so the next question starts there (./choices.cjs).
+function createBart({ readModels, environment = process.env, runDirectory = path.join(os.tmpdir(), 'engelbart-bart-runs'), codexHome = path.join(os.tmpdir(), 'engelbart-codex-home-bart'), codexAuthFile, run = execFile, threads = createThreads(), tools = null, onPicked = () => {} } = {}) {
   const shell = resolveShell(environment);
   // The CLI by name, or by the full path the tool check found it at when PATH misses it (then through the environment, never quoted).
   const program = (name) => (tools && tools.binaryFor(name) ? `"$ENGELBART_${name.toUpperCase()}_BIN"` : name);
@@ -244,6 +250,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
     const models = readModels();
     const { question, provider, steps, pinned } = readQuestion(choice ? withChoice(text, models, choice) : text, models);
     if (!question) throw new BartError('failed', 'There is no question on the line.');
+    if (pinned) remember(onPicked, steps[0]);
     const prior = cleanTurns(turns);
     const held = prior.length ? threads.take(threadKey(projectId, ref, prior), provider) : null;
     const context = await buildContext(ctx, projectId, { ref, workspaceId, askId });
@@ -297,12 +304,13 @@ function createBart({ readModels, environment = process.env, runDirectory = path
 }
 
 /** Scripted runs only (ENGELBART_BART_FAKE=1): no model. A question containing "hard" moves up one step; one containing "code" is answered with a JSON code block too. */
-function createFakeBart({ readModels, delayMs = 1200, threads = createThreads() }) {
+function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(), onPicked = () => {} }) {
   const waits = new Map();
   return {
     async ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice }, { onProgress } = {}) {
       const models = readModels();
       const { question, provider, steps, pinned } = readQuestion(choice ? withChoice(text, models, choice) : text, models);
+      if (pinned && question) remember(onPicked, steps[0]);
       const prior = cleanTurns(turns);
       const held = prior.length ? threads.take(threadKey(projectId, ref, prior), provider) : null;
       const context = await buildContext(ctx, projectId, { ref, workspaceId, askId });

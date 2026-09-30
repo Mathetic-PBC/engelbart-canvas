@@ -39,10 +39,16 @@ test('Git missing, and neither agent installed, are asked about; a skip is remem
   assert.deepEqual(launchRows(snapshot({ git: { status: 'failed', error: "Xcode's license has not been accepted" } })), ['git'], 'a Git that cannot run is asked about too');
 });
 
-test('agents that are installed but cannot run a question are asked about; one that can run is enough', async () => {
-  const { launchRows } = await load();
+test('agents that are installed but cannot run a question are asked about, and one not signed in always is (2026-09-29)', async () => {
+  const { launchRows, installedSignedOut } = await load();
   assert.deepEqual(launchRows(snapshot({ claude: { status: 'signed-out' }, codex: { status: 'missing' } })), ['claude']);
-  assert.deepEqual(launchRows(snapshot({ claude: { status: 'signed-out' } })), [], 'Codex can run it');
+  assert.deepEqual(launchRows(snapshot({ claude: { status: 'signed-out' } })), ['claude'], 'Codex could run a question, but Claude Code still asks to sign in');
+  assert.deepEqual(launchRows(snapshot({ claude: { status: 'signed-out', skip: true } })), [], 'unless skipped');
+  const installing = snapshot({ claude: { status: 'installing', installed: false, busy: { action: 'install' } }, codex: { status: 'missing' } });
+  const installed = snapshot({ claude: { status: 'signed-out' }, codex: { status: 'missing' } });
+  assert.deepEqual(installedSignedOut(installing, installed), ['claude'], 'an install that ends without a sign-in asks for one');
+  assert.deepEqual(installedSignedOut(installing, snapshot({ codex: { status: 'missing' } })), [], 'one signed in already asks nothing');
+  assert.deepEqual(installedSignedOut(null, installed), []);
   assert.deepEqual(launchRows(snapshot({ codex: { status: 'outdated', version: '0.150.0' } })), ['codex'], 'an update waiting for the person');
   assert.deepEqual(launchRows(snapshot({ codex: { status: 'outdated', version: '0.150.0', autoUpdate: true } })), [], 'an update that happens by itself asks nothing');
 });

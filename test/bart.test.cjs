@@ -9,19 +9,25 @@ const { pathToFileURL } = require('node:url');
 const db = require('../src/main/store/db.cjs');
 const { ensureHome } = require('../src/main/store/home.cjs');
 const projects = require('../src/main/store/projects.cjs');
-const { DEFAULT_MODELS, PAST_DEFAULT_MODELS, MODELS_FILE, normalizeModels, onlyProviders, preferUsable, loadModels, effortOf, modelOf, readFlags, readQuestion, withChoice } = require('../src/main/bart/models.cjs');
+const { DEFAULT_MODELS, PAST_DEFAULT_MODELS, MODELS_FILE, normalizeModels, onlyProviders, preferUsable, startingAt, buildChoices, loadModels, effortOf, modelOf, readFlags, readQuestion, withChoice } = require('../src/main/bart/models.cjs');
+const { CHOICES_FILE, readChoices, rememberChoice } = require('../src/main/bart/choices.cjs');
 const { climb, levelBlock, createBart, createFakeBart, createThreads, threadKey, cleanTurns, THREAD_IDLE_MS } = require('../src/main/bart/ask.cjs');
 const { PENDING_RE, replyLines, answerText, failureLines, attribution } = require('../src/main/bart/reply.cjs');
 const { buildContext, markPlace, conversationBlock, HERE } = require('../src/main/bart/context.cjs');
 const { BART_SYSTEM_PROMPT } = require('../src/main/bart/system-prompt.cjs');
 
-const MODELS = normalizeModels(null);
-const ladder = (text) => readQuestion(text, MODELS).steps.map((step) => `${step.name} ${step.effort}`);
+const DEFAULTS = normalizeModels(null);
+// Most tests below were written while Codex was the default provider (until 2026-09-29). They test flags, the loop and
+// the runners, not the default, so they keep Codex as it; the defaults themselves are tested with DEFAULTS.
+const MODELS = { ...DEFAULTS, provider: 'openai' };
+const ladder = (text, models = MODELS) => readQuestion(text, models).steps.map((step) => `${step.name} ${step.effort}`);
 
-test('the ladders are the ones asked for: Sol medium, Sol high, Astra xhigh; Sonnet medium, Opus high, Fable xhigh', () => {
+test('the ladders are the ones asked for: Sol medium, Sol high, Astra xhigh; Sonnet high, Opus high, Fable xhigh; Claude Code first (2026-09-29)', () => {
   assert.deepEqual(ladder('why?'), ['Sol medium', 'Sol high', 'Astra xhigh']);
-  assert.deepEqual(readQuestion('why?', { ...MODELS, provider: 'anthropic' }).steps.map((step) => `${step.model} ${step.effort}`), ['sonnet medium', 'opus high', 'fable xhigh']);
+  assert.deepEqual(readQuestion('why?', { ...MODELS, provider: 'anthropic' }).steps.map((step) => `${step.model} ${step.effort}`), ['claude-sonnet-5-5 high', 'opus high', 'fable xhigh']);
   assert.equal(readQuestion('why?', MODELS).pinned, false);
+  assert.deepEqual(ladder('why?', DEFAULTS), ['Sonnet high', 'Opus high', 'Fable xhigh'], '@bart starts on Sonnet high');
+  assert.deepEqual([DEFAULTS.providers.openai.models.sol.id, DEFAULTS.providers.openai.models.luna.id, DEFAULTS.providers.anthropic.models.sonnet.id], ['gpt-6.1-sol', 'gpt-6-luna', 'claude-sonnet-5-5'], 'GPT-6.1 Sol (2026-09-29), GPT-6 Luna (still the latest), Sonnet 5.5 by version');
 });
 
 test('flags are matched loosely, from either end, and pin one step', () => {
@@ -29,7 +35,7 @@ test('flags are matched loosely, from either end, and pin one step', () => {
     ['--fable why', 'why', 'Fable xhigh'],
     ['--Opus --Extra-High prove it', 'prove it', 'Opus xhigh'],
     ['--extra high how', 'how', 'Astra xhigh'],
-    ['why --sonnet', 'why', 'Sonnet medium'],
+    ['why --sonnet', 'why', 'Sonnet high'],
     ['--high hm', 'hm', 'Sol high'],
     ['--fable5.1 --XHIGH q', 'q', 'Fable xhigh'],
     ['--gpt-6-sol --med q', 'q', 'Sol medium'],
@@ -64,7 +70,7 @@ test('flags are found where they stand, so the editor can mark them, and a choic
 test('only the providers config.json lists are offered: the rest have no models, no flags and cannot be the default', () => {
   const claude = onlyProviders(MODELS, ['anthropic']);
   assert.deepEqual([Object.keys(claude.providers), claude.provider], [['anthropic'], 'anthropic']);
-  assert.deepEqual(readQuestion('why?', claude).steps.map((s) => `${s.name} ${s.effort}`), ['Sonnet medium', 'Opus high', 'Fable xhigh']);
+  assert.deepEqual(readQuestion('why?', claude).steps.map((s) => `${s.name} ${s.effort}`), ['Sonnet high', 'Opus high', 'Fable xhigh']);
   const kept = readQuestion('--sol why?', claude);
   assert.deepEqual([kept.question, kept.pinned], ['--sol why?', false], 'a model of a provider that is not offered is not a flag');
   assert.equal(onlyProviders(MODELS, ['openai', 'anthropic']).provider, 'openai');
@@ -84,6 +90,41 @@ test('@bart starts on a CLI that can run: the saved default when it can, else th
   const picked = readQuestion('--opus why?', preferUsable(MODELS, ['codex']));
   assert.deepEqual([picked.provider, picked.pinned], ['anthropic', true], 'a model picked by flag is never moved');
   assert.equal(preferUsable(onlyProviders(MODELS, ['openai']), ['claude']).provider, 'openai', 'a provider config.json does not offer is never chosen');
+  assert.equal(start(['codex', 'claude'], DEFAULTS), 'Sonnet', 'the default since 2026-09-29: Claude Code, Sonnet high');
+  assert.equal(start(['codex'], DEFAULTS), 'Sol', 'signed in to Codex only: Codex, as before');
+});
+
+test('Build and a post-it\'s quick task start on Opus high while Claude Code can run, else on Codex (2026-09-29)', () => {
+  const opening = (usable, models = DEFAULTS) => { const choices = buildChoices(preferUsable(models, usable)); const step = choices.providers[choices.provider].ladder[0]; return `${choices.provider} ${step.model} ${step.effort}`; };
+  assert.equal(opening(null), 'anthropic opus high');
+  assert.equal(opening(['codex', 'claude']), 'anthropic opus high');
+  assert.equal(opening(['codex']), 'openai sol high', 'only signed in to Codex');
+  assert.equal(opening(['claude'], { ...DEFAULTS, provider: 'openai' }), 'anthropic opus high', 'Build has a provider of its own, not @bart\'s');
+});
+
+test('what was last picked by hand is where @bart, Build and a quick task start next time, each on its own (2026-09-29)', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-choices-'));
+  assert.deepEqual(readChoices(root), {});
+  assert.deepEqual(rememberChoice(root, 'bart', { provider: 'anthropic', model: 'opus', effort: 'high' }), { provider: 'anthropic', model: 'opus', effort: 'high' });
+  rememberChoice(root, 'build', { provider: 'openai', model: 'astra', effort: 'xhigh' });
+  assert.equal(rememberChoice(root, 'quick', { provider: 'openai', model: 'rm -rf', effort: 'high' }), null, 'a pick that is not one is not kept');
+  assert.equal(rememberChoice(root, 'elsewhere', { provider: 'openai', model: 'sol', effort: 'high' }), null);
+  assert.deepEqual(readChoices(root), { bart: { provider: 'anthropic', model: 'opus', effort: 'high' }, build: { provider: 'openai', model: 'astra', effort: 'xhigh' } });
+  assert.ok(JSON.parse(fs.readFileSync(path.join(root, CHOICES_FILE), 'utf8')).about.length > 50);
+  const held = readChoices(root);
+  // @bart: a question without flags starts on the pick, and the ladder goes on above it.
+  assert.deepEqual(ladder('why?', startingAt(DEFAULTS, 'bart', held.bart)), ['Opus high', 'Fable xhigh']);
+  assert.deepEqual(ladder('why?', startingAt(DEFAULTS, 'bart', { provider: 'anthropic', model: 'sonnet', effort: 'medium' })), ['Sonnet medium', 'Sonnet high', 'Opus high', 'Fable xhigh']);
+  assert.deepEqual(ladder('why?', startingAt(DEFAULTS, 'bart', { provider: 'openai', model: 'luna', effort: 'high' })), ['Luna high', 'Sol medium', 'Sol high', 'Astra xhigh']);
+  assert.deepEqual(ladder('--sonnet why?', startingAt(DEFAULTS, 'bart', held.bart)), ['Sonnet high'], 'flags still pick by hand');
+  assert.deepEqual(ladder('--max why?', startingAt(DEFAULTS, 'bart', held.bart)), ['Opus max'], 'an effort alone keeps the model it would start on');
+  assert.deepEqual(ladder('why?', preferUsable(startingAt(DEFAULTS, 'bart', held.bart), ['codex'])), ['Sol medium', 'Sol high', 'Astra xhigh'], 'a pick whose CLI cannot run gives way');
+  assert.deepEqual(ladder('why?', startingAt(DEFAULTS, 'bart', { provider: 'anthropic', model: 'gone', effort: 'high' })), ['Sonnet high', 'Opus high', 'Fable xhigh'], 'a model no longer listed is not started on');
+  // Build and a quick task: the pick is the dialog's first choice.
+  const build = buildChoices(startingAt(DEFAULTS, 'build', held.build));
+  assert.deepEqual([build.provider, build.providers.openai.ladder], ['openai', [{ model: 'astra', effort: 'xhigh' }]]);
+  assert.deepEqual(buildChoices(startingAt(DEFAULTS, 'quick', held.quick)).providers.anthropic.ladder, [{ model: 'opus', effort: 'high' }], 'nothing picked for a quick task: the default');
+  assert.equal(buildChoices(preferUsable(startingAt(DEFAULTS, 'build', held.build), ['claude'])).provider, 'anthropic');
 });
 
 test('the models file is written with the defaults, read again each time, keeps what the person edited, and a broken one falls back', () => {
@@ -98,7 +139,7 @@ test('the models file is written with the defaults, read again each time, keeps 
   assert.deepEqual(edited.providers.anthropic.ladder, [{ model: 'opus', effort: 'xhigh' }]);
   assert.deepEqual(edited.providers.openai.ladder, DEFAULT_MODELS.providers.openai.ladder);
   fs.writeFileSync(file, '{ not json');
-  assert.equal(loadModels(root).provider, 'openai');
+  assert.equal(loadModels(root).provider, DEFAULT_MODELS.provider);
   assert.equal(fs.readFileSync(file, 'utf8'), '{ not json', 'a file being edited is never overwritten');
 });
 
@@ -108,14 +149,14 @@ test('a default changed in a later build reaches installs that already have the 
   loadModels(root);
   // this install's file was given an older set of defaults, and its owner changed Claude Code's ladder
   const given = JSON.parse(JSON.stringify(DEFAULT_MODELS));
-  given.provider = 'anthropic';
+  given.provider = 'openai';
   given.providers.openai.ladder = [{ model: 'luna', effort: 'medium' }];
   fs.writeFileSync(path.join(root, '.defaults', MODELS_FILE), JSON.stringify(given));
   const theirs = JSON.parse(JSON.stringify(given));
   theirs.providers.anthropic.ladder = [{ model: 'opus', effort: 'high' }];
   fs.writeFileSync(file, JSON.stringify(theirs));
   const loaded = loadModels(root);
-  assert.equal(loaded.provider, 'openai', 'the default provider they never touched follows the new default');
+  assert.equal(loaded.provider, 'anthropic', 'the default provider they never touched follows the new default');
   assert.deepEqual(loaded.providers.openai.ladder, DEFAULT_MODELS.providers.openai.ladder, 'so does the ladder they never touched');
   assert.deepEqual(loaded.providers.anthropic.ladder, [{ model: 'opus', effort: 'high' }], 'the ladder they changed is theirs');
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, '.defaults', MODELS_FILE), 'utf8')), DEFAULT_MODELS);
@@ -139,16 +180,32 @@ test('a file written before defaults were carried (Hudson\'s: 09-20 wording, 09-
   assert.equal(JSON.parse(fs.readFileSync(path.join(root, '.backups', copies[0]), 'utf8')).about, PAST_DEFAULT_MODELS[0].about);
 });
 
-test('untouched 5.6 models move to 6 in a model file without a saved defaults base', () => {
+test('untouched 5.6 models move to the latest in a model file without a saved defaults base', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-models-upgrade-'));
   const file = path.join(root, MODELS_FILE);
-  const old = JSON.parse(JSON.stringify(PAST_DEFAULT_MODELS.at(-1)));
+  const old = JSON.parse(JSON.stringify(PAST_DEFAULT_MODELS[2]));
   old.providers.openai.models.astra.use = 'My own words.';
   fs.writeFileSync(file, JSON.stringify(old));
   const models = loadModels(root);
-  assert.equal(models.providers.openai.models.sol.id, 'gpt-6-sol');
+  assert.equal(models.providers.openai.models.sol.id, 'gpt-6.1-sol');
   assert.equal(models.providers.openai.models.luna.id, 'gpt-6-luna');
   assert.equal(models.providers.openai.models.astra.use, 'My own words.');
+});
+
+test('a file left as 2026-09-27 wrote it moves to GPT-6.1 Sol, Sonnet 5.5, Claude Code first and Build on Opus; a choice of its own stays', () => {
+  for (const withBase of [true, false]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-models-0929-'));
+    const shipped = JSON.parse(JSON.stringify(PAST_DEFAULT_MODELS.at(-1)));
+    const mine = JSON.parse(JSON.stringify(shipped));
+    mine.providers.openai.ladder = [{ model: 'luna', effort: 'high' }];
+    fs.writeFileSync(path.join(root, MODELS_FILE), JSON.stringify(mine));
+    if (withBase) { fs.mkdirSync(path.join(root, '.defaults')); fs.writeFileSync(path.join(root, '.defaults', MODELS_FILE), JSON.stringify(shipped)); }
+    const models = loadModels(root);
+    assert.deepEqual([models.provider, models.providers.openai.models.sol.id, models.providers.anthropic.models.sonnet.id], ['anthropic', 'gpt-6.1-sol', 'claude-sonnet-5-5'], withBase ? 'with a base' : 'without one');
+    assert.deepEqual(models.providers.anthropic.ladder[0], { model: 'sonnet', effort: 'high' });
+    assert.deepEqual([models.build.provider, models.build.providers.openai.models.sol.id, models.build.providers.anthropic.models.sonnet.id], ['anthropic', 'gpt-6.1-sol', 'claude-sonnet-5-5']);
+    assert.deepEqual(models.providers.openai.ladder, [{ model: 'luna', effort: 'high' }], 'what they changed stays');
+  }
 });
 
 test('climb: an answer ends it; ESCALATE resumes the same session one step up; the top step is told to answer', async () => {
@@ -264,6 +321,16 @@ test('the fake agent (scripted runs) answers through the same loop, moves up on 
   const waiting = slow.ask(ctx, project.id, { askId: 'f2', ref, workspaceId: workspace.id, text: 'q' });
   setTimeout(() => slow.stop('f2'), 20);
   await assert.rejects(waiting, (error) => error.kind === 'stopped');
+});
+
+test('a question asked with a model picked by hand hands it on to be kept; one without flags does not', async () => {
+  const picked = [];
+  const bart = createFakeBart({ readModels: () => DEFAULTS, delayMs: 5, onPicked: (choice) => picked.push(choice) });
+  const ref = { kind: 'workspace', workspaceId: workspace.id };
+  await bart.ask(ctx, project.id, { askId: 'p1', ref, workspaceId: workspace.id, text: 'why?' });
+  await bart.ask(ctx, project.id, { askId: 'p2', ref, workspaceId: workspace.id, text: '--opus --xhigh why?' });
+  await bart.ask(ctx, project.id, { askId: 'p3', ref, workspaceId: workspace.id, text: 'why?', choice: { model: 'sol', effort: 'high' } });
+  assert.deepEqual(picked, [{ provider: 'anthropic', model: 'opus', effort: 'xhigh' }, { provider: 'openai', model: 'sol', effort: 'high' }]);
 });
 
 test('with the tool check: a question holds its CLI\'s lock, and a CLI the login PATH misses runs by its full path (2026-09-23)', async () => {

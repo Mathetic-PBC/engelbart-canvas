@@ -22,7 +22,8 @@ const { createSweeper } = require('./context/sweeper.cjs');
 const { inspectPdf } = require('./context/pdf-kind.cjs');
 const { createCliSummarizer, createFakeSummarizer } = require('./context/summarizer.cjs');
 const { createBart, createFakeBart, createThreads } = require('./bart/ask.cjs');
-const { loadModels, preferUsable } = require('./bart/models.cjs');
+const { loadModels, preferUsable, startingAt } = require('./bart/models.cjs');
+const { readChoices, rememberChoice } = require('./bart/choices.cjs');
 const { resolveShell } = require('./terminal/launch.cjs');
 const home = require('./store/home.cjs');
 const { createRunner } = require('./tools/run.cjs');
@@ -453,12 +454,16 @@ if (!hasSingleInstanceLock) {
       intervalMs: millis('ENGELBART_SUMMARY_INTERVAL_MS'),
     });
     // @bart (src/main/bart): hidden Claude Code or Codex runs on the person's subscription, reading only. It starts on
-    // the saved default provider, or on the other one while the saved one's CLI cannot run (preferUsable).
+    // what was last picked by hand for that place (`place`: 'bart', 'build' or 'quick'; bart/choices.cjs), else on the
+    // saved default provider, or on the other one while that one's CLI cannot run (preferUsable).
     // ENGELBART_BART_FAKE=1 answers without a model, for scripted runs only.
-    const readModels = () => preferUsable(loadModels(store.layout.root, { only: store.config().providers }), tools.usableAgents());
+    const readModels = (place = 'bart') => preferUsable(startingAt(loadModels(store.layout.root, { only: store.config().providers }), place, readChoices(store.layout.root)[place]), tools.usableAgents());
+    const rememberModelChoice = (place, choice) => rememberChoice(store.layout.root, place, choice);
+    const bartModels = () => readModels('bart');
+    const bartPicked = (choice) => rememberModelChoice('bart', choice);
     bart = process.env.ENGELBART_BART_FAKE === '1'
-      ? createFakeBart({ readModels, threads: createThreads({ file: path.join(app.getPath('userData'), 'bart-threads.json') }) })
-      : createBart({ readModels, runDirectory: path.join(app.getPath('userData'), 'bart-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-bart'), threads: createThreads({ file: path.join(app.getPath('userData'), 'bart-threads.json') }), tools });
+      ? createFakeBart({ readModels: bartModels, onPicked: bartPicked, threads: createThreads({ file: path.join(app.getPath('userData'), 'bart-threads.json') }) })
+      : createBart({ readModels: bartModels, onPicked: bartPicked, runDirectory: path.join(app.getPath('userData'), 'bart-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-bart'), threads: createThreads({ file: path.join(app.getPath('userData'), 'bart-threads.json') }), tools });
     if (process.env.ENGELBART_SUMMARIES !== 'off') {
       sweeper.start();
       powerMonitor.on('resume', () => sweeper.sweepSoon());
@@ -473,7 +478,7 @@ if (!hasSingleInstanceLock) {
       runner: process.env.ENGELBART_BUILD_FAKE === '1'
         ? createFakeBuildRunner({ delayMs: Number(process.env.ENGELBART_BUILD_FAKE_MS) || 900 }) // _MS: how long a fake turn takes
         : createBuildRunner({ runDirectory: path.join(app.getPath('userData'), 'build-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-build'), tools }),
-      readModels,
+      readModels: () => readModels('build'),
       // A quick task's changes also reach the post-it it came from (post-its/views.cjs).
       notify: (channel, payload) => { sendToRenderer(channel, payload); if (channel === 'engelbart:build' && payload && payload.postItId && postItViews) postItViews.buildState(payload); },
       tools,
@@ -609,6 +614,7 @@ if (!hasSingleInstanceLock) {
       builds,
       sandbox,
       readModels,
+      rememberModelChoice,
       tools,
       notify: sendToRenderer,
       // "Choose from disk…" in the sidebar's + menu: files and folders together, several at once (macOS allows both in one panel).

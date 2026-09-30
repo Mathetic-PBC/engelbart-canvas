@@ -13,7 +13,8 @@
 //   * hand ZDOTDIR back to your own value, so ~/.zlogin runs as usual and anything started from
 //     the shell (installers that edit ${ZDOTDIR:-$HOME}/.zshrc, nested shells) sees your setup;
 //   * put Engelbart's own Git first on PATH while it stands in for a missing one (ENGELBART_GIT_BIN,
-//     src/main/tools/bundled-git.cjs), after your .zshrc, which may have rebuilt PATH.
+//     src/main/tools/bundled-git.cjs), after your .zshrc, which may have rebuilt PATH, and Claude Code's and Codex's
+//     folders last when your PATH misses them (ENGELBART_AGENT_PATH, src/main/tools/manager.cjs environment).
 // Because the launcher is also $TERMINAL_USER_SHELL, the shell that replaces Claude Code or
 // Codex when they exit gets the same treatment. bash and fish run through the launcher untouched.
 
@@ -42,6 +43,7 @@ ZDOTDIR="$ENGELBART_ZDOTDIR"
 ZDOTDIR="\${ENGELBART_USER_ZDOTDIR:-$HOME}"
 [[ -r "$ZDOTDIR/.zshrc" ]] && source "$ZDOTDIR/.zshrc"
 [[ -n "\${ENGELBART_GIT_BIN:-}" ]] && path=("$ENGELBART_GIT_BIN" $path)
+[[ -n "\${ENGELBART_AGENT_PATH:-}" ]] && path=($path \${(s.:.)ENGELBART_AGENT_PATH})
 engelbart_hide_prompt() { PROMPT='' PS1='' RPROMPT='' RPS1='' PROMPT_EOL_MARK='' }
 engelbart_precmd() { engelbart_hide_prompt; printf '\\e]633;P;Cwd=%s\\a\\e]633;A\\a' "$PWD" }
 engelbart_preexec() { local line="\${1//[[:cntrl:]]/ }"; printf '\\e]633;E;%s\\a\\e]633;C\\a' "\${line[1,400]}" }

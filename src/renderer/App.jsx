@@ -8,7 +8,7 @@ import Home from './screens/Home.jsx';
 import Onboarding from './screens/Onboarding.jsx';
 import Workspace from './screens/Workspace.jsx';
 import ToolSetup from './ui/ToolSetup.jsx';
-import { launchRows, TOOL_ORDER } from './model/tools.js';
+import { launchRows, installedSignedOut, TOOL_ORDER } from './model/tools.js';
 
 // Screens: the app opens straight into the workspace you were last in, and the first run (no projects yet) is
 // onboarding (screens/Onboarding.jsx, 2026-09-28); + Project runs its last two screens. "Engelbart" in the header (or
@@ -63,6 +63,7 @@ export default function App() {
   const [setup, setSetup] = React.useState(null); // { mode: 'launch' | 'all', ids }
   const [launchAsk, setLaunchAsk] = React.useState(null); // what the launch check asks about, until the dialog can open
   const askedAtLaunch = React.useRef(false);
+  const lastTools = React.useRef(null);
 
   const fail = (candidate) => setError(errorMessage(candidate));
 
@@ -77,11 +78,15 @@ export default function App() {
   React.useEffect(() => api.onLibraryChanged(() => { api.library().then(setLibrary).catch(() => {}); }), []);
 
   // The launch check's first answer opens the setup dialog once, and only when something needs you; Engelbart ▸
-  // Set Up Tools… opens it with all three tools at any time.
+  // Set Up Tools… opens it with all three tools at any time. An agent installed while the app is open (Claude Code, in
+  // the background, on a Mac that had neither) asks for its sign-in once the install is over, whatever was answered before.
   React.useEffect(() => {
     const take = (snapshot) => {
       if (!snapshot || !snapshot.tools) return;
       setTools(snapshot);
+      const before = lastTools.current;
+      lastTools.current = snapshot;
+      if (askedAtLaunch.current && installedSignedOut(before, snapshot).length) setLaunchAsk((current) => current || 'after');
       if (askedAtLaunch.current || !snapshot.checked) return;
       askedAtLaunch.current = true;
       const ids = launchRows(snapshot);
