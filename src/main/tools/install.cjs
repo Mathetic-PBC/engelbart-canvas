@@ -21,6 +21,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { REQUIREMENTS } = require('./requirements.cjs');
+const { shellSilent } = require('./detect.cjs');
 
 const INSTALLERS = Object.freeze({
   claude: Object.freeze({ url: 'https://claude.ai/install.sh', interpreter: 'bash', env: {} }),
@@ -66,7 +67,8 @@ function roomFor(name, where) {
   return { ok: false, kind: 'disk', error: `${REQUIREMENTS[name].name} needs about ${gb(NEEDS_BYTES[name])} free; ${gb(free)} is left.` };
 }
 
-function createActions({ runner, home = os.homedir(), tmpDir = os.tmpdir(), sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), now = Date.now, gitWaitMs = GIT_WAIT_MS, gitPollMs = GIT_POLL_MS } = {}) {
+// `installers`: where each agent's installer is fetched from (INSTALLERS; scripts/mac-states gives local pretend ones).
+function createActions({ runner, home = os.homedir(), tmpDir = os.tmpdir(), installers = INSTALLERS, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), now = Date.now, gitWaitMs = GIT_WAIT_MS, gitPollMs = GIT_POLL_MS } = {}) {
   async function gitArrived() {
     const selected = await runner.exec('/usr/bin/xcode-select', ['-p'], { timeout: 5000 });
     const developer = selected.code === 0 ? String(selected.stdout).trim().split(/\r?\n/)[0] : '';
@@ -105,7 +107,7 @@ function createActions({ runner, home = os.homedir(), tmpDir = os.tmpdir(), slee
   async function installAgent(name) {
     const full = roomFor(name, home);
     if (full) return full;
-    const installer = INSTALLERS[name];
+    const installer = installers[name];
     const script = path.join(tmpDir, `engelbart-${name}-install-${process.pid}-${now()}.sh`);
     try {
       const out = await runner.shell(`curl -fsSL --retry 2 --connect-timeout 20 -o "$ENGELBART_INSTALLER" "$ENGELBART_INSTALLER_URL" && ${installer.interpreter} "$ENGELBART_INSTALLER" < /dev/null 2>&1`, {
@@ -113,6 +115,7 @@ function createActions({ runner, home = os.homedir(), tmpDir = os.tmpdir(), slee
         timeout: INSTALL_TIMEOUT_MS,
       });
       if (out.timedOut) return { ok: false, kind: 'other', error: `The installer had not finished after ${INSTALL_TIMEOUT_MS / 60_000} minutes.` };
+      if (out.marked === false) return { ok: false, kind: 'other', error: shellSilent(runner) }; // it never ran
       if (out.code !== 0) return { ok: false, ...classifyFailure(`${out.stdout}\n${out.stderr}`, out.code) };
       return { ok: true };
     } finally {
@@ -126,6 +129,7 @@ function createActions({ runner, home = os.homedir(), tmpDir = os.tmpdir(), slee
     if (full) return full;
     const out = await runner.shell('exec "$ENGELBART_TOOL" update < /dev/null 2>&1', { env: { ENGELBART_TOOL: file, CODEX_NON_INTERACTIVE: '1' }, timeout: INSTALL_TIMEOUT_MS });
     if (out.timedOut) return { ok: false, kind: 'other', error: `The update had not finished after ${INSTALL_TIMEOUT_MS / 60_000} minutes.` };
+    if (out.marked === false) return { ok: false, kind: 'other', error: shellSilent(runner) };
     if (out.code !== 0) return { ok: false, ...classifyFailure(`${out.stdout}\n${out.stderr}`, out.code) };
     return { ok: true };
   }

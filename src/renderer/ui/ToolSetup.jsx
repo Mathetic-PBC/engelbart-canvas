@@ -34,7 +34,7 @@ function Row({ row, onAct, onAskAgain, onOpenPage, showAskAgain }) {
           <button type="button" data-tool-action={row.action} data-tool={row.id} className="hov-wash" onClick={() => onAct(row)} style={{ minHeight: 30, padding: '6px 12px', border: '1px solid #eaeaea', borderRadius: 7, background: '#fff', cursor: 'pointer', font: '500 12.5px/1 var(--font-sans)', color: '#171717' }}>{LABEL[row.action]}</button>
         )}
       </span>
-      {row.detail && <span data-tool-detail style={{ gridColumn: '1 / -1', font: '12px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere' }}>{row.detail}</span>}
+      {row.detail && <span data-tool-detail style={{ gridColumn: '1 / -1', font: '12px/1.5 var(--font-sans)', color: TONE[row.detailTone] || TONE.error, overflowWrap: 'anywhere' }}>{row.detail}</span>}
     </div>
   );
 }

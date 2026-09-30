@@ -30,6 +30,7 @@ function blankTool(name) {
     updaterOff: false,
     checkedAt: null,
     error: null,
+    note: null,
     failedUpdate: null,
     skip: false,
     pin: null,
@@ -54,6 +55,7 @@ function normalizeTool(name, value) {
   out.updaterOff = input.updaterOff === true;
   out.checkedAt = isoTime(input.checkedAt);
   out.error = oneLine(input.error);
+  out.note = oneLine(input.note);
   if (isObject(input.failedUpdate) && isVersion(input.failedUpdate.from) && isoTime(input.failedUpdate.at)) out.failedUpdate = { from: input.failedUpdate.from, at: input.failedUpdate.at };
   out.skip = input.skip === true;
   if (isVersion(input.pin)) out.pin = input.pin;

@@ -11,6 +11,7 @@
     "start": "npm run build && electron .",
     "relaunch": "sh scripts/relaunch.sh",
     "new-mac": "sh scripts/new-mac.sh",
+    "mac-states": "node scripts/mac-states/run.cjs",
     "migrate": "node scripts/migrate-structure.cjs",
     "test": "node --test test/*.test.cjs",
     "test:pty": "ELECTRON_RUN_AS_NODE=1 electron --test test/*.integration.cjs",

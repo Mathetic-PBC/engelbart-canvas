@@ -5,7 +5,13 @@
 // program (Hudson's vault shim) is seen through for where the program came from. A program missing from
 // that PATH is looked for where its installers put it, and is then run by its full path. Each is asked
 // its version; Claude Code and Codex are asked whether they are signed in, and whether the person turned
-// their own updater off. On macOS /usr/bin/git is Apple's stub: it is only run once `xcode-select -p`
+// their own updater off.
+//
+// Every copy counts (2026-09-30, scripts/mac-states): the copies PATH reaches, in its order, then those where the
+// installers put them; the first recent enough is used, by its full path when its name runs another (an old Homebrew
+// copy first on PATH), and the row says which comes first and how to remove it. A program of the same name that does
+// not print Claude Code's or Codex's own version line is another program, and is passed over. A login shell that
+// never runs what it is given (a .zshrc that ends in `exec tmux`) makes every program in it fail, and says why. On macOS /usr/bin/git is Apple's stub: it is only run once `xcode-select -p`
 // names a developer folder that holds git, because otherwise running it opens Apple's installer unasked.
 // When the person's own Git is missing, cannot run or is too old, the Git that came with Engelbart stands
 // in (2026-09-28; ./bundled-git.cjs), recorded with the source `bundled`.
@@ -116,6 +122,20 @@ function sourceOf(name, file) {
   return 'other';
 }
 
+const RC_FILE = { zsh: '.zshrc', bash: '.bash_profile', fish: 'config.fish' };
+
+/** Why nothing ran: the login shell exited without running the command it was given. */
+function shellSilent(runner) {
+  const shell = runner.shellPath || '/bin/zsh';
+  const rc = RC_FILE[path.basename(shell)] || 'startup files';
+  return `Your login shell (${shell}) never runs Engelbart's commands: something in your ${rc} starts another program, such as \`exec tmux\` or \`exec bash\`. Put that line inside \`if [[ -t 1 ]]; then … fi\`, so it only runs in a terminal window.`;
+}
+
+/**
+ * What `file --version` says. → { ran, version, text, code, error, other, silent }. `other`: it ran, but is not Claude
+ * Code or Codex (their own version line is missing: another program of the same name). `silent`: the login shell never
+ * ran it (shellSilent).
+ */
 async function readVersion(runner, name, file, { direct = false } = {}) {
   const label = REQUIREMENTS[name].name;
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -123,8 +143,10 @@ async function readVersion(runner, name, file, { direct = false } = {}) {
       ? await runner.exec(file, ['--version'], { timeout: VERSION_TIMEOUT_MS })
       : await runner.shell('exec "$ENGELBART_TOOL" --version 2>&1', { env: { ENGELBART_TOOL: file }, timeout: VERSION_TIMEOUT_MS });
     if (out.timedOut) continue;
+    if (!direct && out.marked === false) return { ran: false, version: null, text: '', code: out.code, silent: true, error: shellSilent(runner) };
     const text = `${out.stdout}\n${direct ? out.stderr : ''}`;
     if (out.code !== 0) return { ran: false, version: null, text, code: out.code, error: `${label} did not start: ${firstLine(text) || `exit status ${out.code}`}` };
+    if (name !== 'git' && !REQUIREMENTS[name].version.test(text)) return { ran: true, version: null, text, code: 0, other: true, error: `${file} is another program called ${name}, not ${label} (it says "${firstLine(text).slice(0, 60)}").` };
     const version = parseVersion(text, name);
     return { ran: true, version, text, code: 0, error: version ? null : `Could not read the version ${label} printed: "${firstLine(text).slice(0, 80)}"` };
   }
@@ -151,6 +173,7 @@ const AUTH = {
 
 async function readSignIn(runner, name, file) {
   const out = await runner.shell(AUTH[name].command, { env: { ENGELBART_TOOL: file }, timeout: AUTH_TIMEOUT_MS });
+  if (out.marked === false) return { signedIn: null };
   return AUTH[name].read(out.stdout);
 }
 
@@ -168,9 +191,10 @@ function updaterOff(name, { env, home }) {
 }
 
 /** The observed half of a tool's record (./record.cjs), from what was found. */
-function observed(name, { file = null, onPath = null, source = null, version = null, ran = false, error = null, signedIn = null, updater = false }) {
+function observed(name, { file = null, onPath = null, source = null, version = null, ran = false, error = null, signedIn = null, updater = false, note = null }) {
   // `installed`: a program is there. Whether it can be used is `status` (a broken one is installed and failed).
-  const out = { installed: !!file, version, status: 'missing', path: file, onPath, source, untested: false, error, updaterOff: updater };
+  // `onPath`: running it by its name runs this copy; else Engelbart runs it by its full path. `note`: what the row adds.
+  const out = { installed: !!file, version, status: 'missing', path: file, onPath, source, untested: false, error, updaterOff: updater, note };
   if (name !== 'git') out.signedIn = file && ran ? signedIn : null;
   if (!file) return out;
   if (!ran) return { ...out, status: 'failed' };
@@ -215,20 +239,69 @@ async function detectGit(runner, candidates, { bundled = null, preferBundled = f
   return observed('git', { file: bundled, onPath: false, source: 'bundled', ...read });
 }
 
+// What to type to take a copy away, from where it really is.
+function removal(name, file) {
+  const real = realPath(file);
+  const cask = /\/Caskroom\/([^/]+)\//.exec(real);
+  if (cask) return `brew uninstall --cask ${cask[1]}`;
+  const formula = /\/Cellar\/([^/]+)\//.exec(real);
+  if (formula) return `brew uninstall ${formula[1]}`;
+  const npm = /\/node_modules\/((?:@[^/]+\/)?[^/]+)\//.exec(real);
+  if (npm) return `npm uninstall -g ${npm[1]}`;
+  return null;
+}
+
+/** Every copy of `name`: those PATH reaches, in its order, then those where installers put them; each file once. */
+function copiesOf(name, candidates, { home, systemBins }) {
+  const seen = new Set();
+  const copies = [];
+  const add = (file, onPath) => {
+    const key = realPath(file);
+    if (seen.has(key)) return;
+    seen.add(key);
+    copies.push({ file, onPath });
+  };
+  for (const file of candidates) add(file, true);
+  for (const file of knownPlaces(name, home, systemBins)) if (isExecutable(file)) add(file, false);
+  return copies;
+}
+
 async function detectAgent(runner, name, candidates, { env, home, systemBins }) {
-  let file = candidates[0] || null;
-  let onPath = !!file;
-  if (!file) {
-    file = knownPlaces(name, home, systemBins).find(isExecutable) || null;
-    onPath = false;
-  }
+  const label = REQUIREMENTS[name].name;
   const updater = updaterOff(name, { env: { ...process.env, ...env }, home });
-  if (!file) return observed(name, { updater });
+  // The first copy recent enough, else the first that is this program at all (its row offers Update, or Try again).
+  let first = null;
+  let chosen = null;
+  let other = null; // the first program of the same name that is not it
+  for (const copy of copiesOf(name, candidates, { home, systemBins })) {
+    const read = await readVersion(runner, name, copy.file);
+    if (read.other) { other = other || { ...copy, read }; continue; }
+    const entry = { ...copy, read };
+    first = first || entry;
+    if (read.ran && judge(name, read.version).status !== 'outdated' && judge(name, read.version).status !== 'incompatible') { chosen = entry; break; }
+    if (read.silent) break; // the login shell runs nothing: every other copy would fail the same way
+  }
+  chosen = chosen || first;
+  if (!chosen) return observed(name, { updater, error: other ? other.read.error : null });
+  const { file, read } = chosen;
+  // Its name runs this copy only when it is the first on PATH; otherwise it runs by its full path, and the row says why.
+  const byName = candidates[0] || null;
+  const onPath = chosen.onPath && byName === file;
+  let note = null;
+  if (byName && byName !== file) {
+    const shadow = other && other.file === byName ? other : null;
+    const hint = removal(name, byName);
+    // What to do first, the path last: the record keeps a note to 300 characters, and paths can be long.
+    const where = byName.startsWith(`${home}${path.sep}`) ? `~${byName.slice(home.length)}` : byName;
+    note = shadow
+      ? `Typing ${name} in a terminal runs another program of the same name; Engelbart runs ${label} by its full path. The other one is at ${where}.`
+      : `An older ${label} comes first on your PATH, so typing ${name} in a terminal runs it; Engelbart uses a newer one.${hint ? ` To remove the older one: ${hint}.` : ''} It is at ${where}.`;
+  }
   // A wrapper script in front of the program says nothing about where the program came from: the next one on PATH does.
-  const origin = (isScript(file) && candidates.slice(1).find((candidate) => !isScript(candidate))) || file;
-  const read = await readVersion(runner, name, file);
+  const after = candidates.slice(candidates.indexOf(file) + 1);
+  const origin = (isScript(file) && after.find((candidate) => !isScript(candidate))) || file;
   const auth = read.ran ? await readSignIn(runner, name, file) : { signedIn: null };
-  return observed(name, { file, onPath, source: sourceOf(name, origin), ...read, signedIn: auth.signedIn, error: read.error || auth.error || null, updater });
+  return observed(name, { file, onPath, source: sourceOf(name, origin), ...read, signedIn: auth.signedIn, error: read.error || auth.error || null, updater, note });
 }
 
 /**
@@ -240,7 +313,7 @@ async function detectAgent(runner, name, candidates, { env, home, systemBins }) 
 async function detectTools({ runner, only = ['git', 'claude', 'codex'], home = os.homedir(), systemBins = SYSTEM_BINS, now = () => new Date(), bundledGit = null, preferBundledGit = false }) {
   const lookup = await runner.shell(lookupCommand(runner.fish), { timeout: LOOKUP_TIMEOUT_MS });
   const { paths, aliases, env } = parseLookup(lookup.stdout);
-  const lookupError = lookup.marked ? null : `The login shell (${runner.shellPath}) did not answer${lookup.timedOut ? ` within ${LOOKUP_TIMEOUT_MS / 1000} seconds` : ''}.`;
+  const lookupError = lookup.marked ? null : lookup.timedOut ? `The login shell (${runner.shellPath}) did not answer within ${LOOKUP_TIMEOUT_MS / 1000} seconds.` : shellSilent(runner);
   const checkedAt = now().toISOString();
   const jobs = only.map(async (name) => {
     const found = name === 'git' ? await detectGit(runner, paths.git, { bundled: bundledGit, preferBundled: preferBundledGit }) : await detectAgent(runner, name, paths[name], { env, home, systemBins });
@@ -249,4 +322,4 @@ async function detectTools({ runner, only = ['git', 'claude', 'codex'], home = o
   return { ...Object.fromEntries(await Promise.all(jobs)), aliases, lookupError };
 }
 
-module.exports = { detectTools, lookupCommand, parseLookup, knownPlaces, sourceOf, observed, readVersion, AUTH, APPLE_GIT_STUB };
+module.exports = { detectTools, lookupCommand, parseLookup, knownPlaces, sourceOf, observed, readVersion, removal, shellSilent, AUTH, APPLE_GIT_STUB };

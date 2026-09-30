@@ -83,3 +83,14 @@ test('Install all takes the rows not installed; the dialog is done when every ro
   assert.equal(allDone(snapshot({}), ['git', 'claude']), true);
   assert.equal(allDone(snapshot({ claude: { status: 'signed-out' } }), ['claude']), false, 'installed but not signed in is not done');
 });
+
+test('a ready row shows its note (an older copy first on PATH) in amber; a failed row its message in red (2026-09-30)', async () => {
+  const { rowOf } = await load();
+  const note = 'An older Claude Code comes first on your PATH, so typing claude in a terminal runs it; Engelbart uses a newer one. To remove the older one: brew uninstall --cask claude-code. It is at /opt/homebrew/bin/claude.';
+  const ready = rowOf(snapshot({ claude: { status: 'ready', note } }).tools.claude);
+  assert.deepEqual([ready.tone, ready.detail, ready.detailTone, ready.action], ['ok', note, 'warn', null]);
+  assert.equal(rowOf(snapshot({}).tools.claude).detail, null, 'no note, no line');
+  const failed = rowOf(snapshot({ claude: { status: 'failed', error: 'Your login shell (/bin/zsh) never runs Engelbart\'s commands' } }).tools.claude);
+  assert.deepEqual([failed.state, failed.detailTone, failed.action], ['Not working', 'error', 'retry']);
+  assert.equal(normalizeTools({ claude: { note: `  ${note}\n` } }).claude.note, note, 'kept on one line');
+});

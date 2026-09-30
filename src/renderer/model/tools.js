@@ -48,19 +48,20 @@ export function needsAction(tool) {
 
 /**
  * One row: `state` (what it says), `tone` (ok | muted | busy | warn | error), `action` (the one button:
- * install | update | sign-in | retry | cancel, or null), `detail` (a line under it, in red), `page` (an
- * address to open again while signing in), `skipped`.
+ * install | update | sign-in | retry | cancel, or null), `detail` (a line under it), `detailTone` (error, in red, or
+ * warn: the record's `note`, such as an older copy first on PATH), `page` (an address to open again while signing in),
+ * `skipped`.
  */
 export function rowOf(tool) {
   const busy = tool.busy || null;
-  const row = { id: tool.id, name: tool.name, state: '', tone: 'muted', action: null, detail: null, page: null, skipped: !!tool.skip };
+  const row = { id: tool.id, name: tool.name, state: '', tone: 'muted', action: null, detail: null, detailTone: 'error', page: null, skipped: !!tool.skip };
   if (busy && busy.action === 'install') return { ...row, state: busy.phase || 'Installing…', tone: 'busy' };
   if (busy && busy.action === 'update') return { ...row, state: 'Updating…', tone: 'busy' };
   if (busy && busy.action === 'sign-in') return { ...row, state: 'Finish signing in in your browser', tone: 'busy', action: 'cancel', page: busy.url || null };
   const version = tool.version || '';
   switch (tool.status) {
     case 'ready': // `bundled`: the Git that came with Engelbart, standing in for a Mac without one
-      return { ...row, state: version ? `${version}${tool.untested ? ' · untested' : ''}${tool.source === 'bundled' ? ' · built in' : ''}` : 'Installed', tone: 'ok', detail: version ? null : tool.error };
+      return { ...row, state: version ? `${version}${tool.untested ? ' · untested' : ''}${tool.source === 'bundled' ? ' · built in' : ''}` : 'Installed', tone: 'ok', detail: version ? (tool.note || null) : tool.error, detailTone: version ? 'warn' : 'error' };
     case 'signed-out':
       return { ...row, state: 'Not signed in', tone: 'warn', action: 'sign-in', detail: tool.error };
     case 'missing':
