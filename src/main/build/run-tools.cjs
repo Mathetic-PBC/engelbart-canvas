@@ -12,15 +12,19 @@ const path = require('node:path');
 
 const schema = (properties, required) => ({ type: 'object', properties, required, additionalProperties: false });
 const text = { type: 'string' };
-const TYPE = { type: 'string', enum: ['ui', 'app', 'terminal'] };
+// What the run step gets running, for now (2026-09-29): a web interface, which Review opens in the Stage. Desktop apps and
+// terminal programs ('app', 'terminal') are still understood below and by ./run-step.cjs, but not offered to the agent.
+const RUN_KINDS = Object.freeze(['ui']);
+const ALL_KINDS = Object.freeze(['ui', 'app', 'terminal']);
+const TYPE = { type: 'string', enum: [...RUN_KINDS] };
 const RUNNABLE = schema({ name: text, folder: text, type: TYPE }, ['name', 'folder', 'type']);
 const IGNORE = new Set(['.git', 'node_modules', '.venv', 'venv', '__pycache__', '.next', 'dist', 'build']);
 const MAX_READ = 64_000;
 const MAX_LIST = 300;
 
 const RUN_TOOLS = [
-  { name: 'declare_runnables', description: 'Name everything this repository can run, all at once, before starting any: each web UI ("ui": served on a port and used in a browser), desktop app ("app": opens a window of its own) and terminal program ("terminal": used from a terminal). A backend or API that a UI needs is part of that UI (one run command starts both), not a runnable of its own; libraries, tests and build tools are not runnables. name: a short label ("web", "desktop", "cli"); folder: where its commands run, relative to the repository root ("." for the root). Calling it again replaces the list (what is already running stays). Returns each runnable with its stored commands, its state and its time left.', inputSchema: schema({ runnables: { type: 'array', maxItems: 8, items: RUNNABLE } }, ['runnables']) },
-  { name: 'start_runnable', description: 'Run a declared runnable\'s install_command (optional; to its end, e.g. "npm install") and then its run_command in its folder, as a process Engelbart owns, and check it the same way every time: a "ui" must answer on the port Engelbart gives it (put {port} in run_command where the port goes, e.g. "npm run dev -- --port {port}" or "PORT={port} npm start"), an "app" must still be running 10 seconds after it starts, a "terminal" command must exit 0 by itself with no input. A pass keeps it running (the person opens it when they review the Build; its commands are kept once they accept it): move on to the next runnable. A failure stops what was started and returns the failed check and the output: fix the cause, then call again. Each runnable has 20 minutes from its first start_runnable.', inputSchema: schema({ name: text, install_command: text, run_command: text }, ['name', 'run_command']) },
+  { name: 'declare_runnables', description: 'Name the web interfaces that show what this Build made, all at once, before starting any: each is a web UI ("ui"), served on a port and opened in Engelbart\'s Stage (a browser tab) when the person reviews the Build. For now only web UIs: a desktop app or a terminal program is never declared, even when the repository is one. A page of plain HTML, CSS and JavaScript is a web UI served from its folder by a static server. A backend or API that a UI needs is part of that UI (one run command starts both), not a runnable of its own; libraries, tests and build tools are not runnables. name: a short label ("web", "page"); folder: where its commands run, relative to the repository root ("." for the root). Calling it again replaces the list (what is already running stays). Returns each runnable with its stored commands, its state and its time left.', inputSchema: schema({ runnables: { type: 'array', maxItems: 8, items: RUNNABLE } }, ['runnables']) },
+  { name: 'start_runnable', description: 'Run a declared runnable\'s install_command (optional; to its end, e.g. "npm install") and then its run_command in its folder, as a process Engelbart owns, and check it the same way every time: it must answer on the port Engelbart gives it (put {port} in run_command where the port goes, e.g. "npm run dev -- --port {port}", "PORT={port} npm start", or for a plain page "python3 -m http.server {port} --bind 127.0.0.1"). A pass keeps it running (the person opens it when they review the Build; its commands are kept once they accept it): move on to the next runnable. A failure stops what was started and returns the failed check and the output: fix the cause, then call again. Each runnable has 20 minutes from its first start_runnable.', inputSchema: schema({ name: text, install_command: text, run_command: text }, ['name', 'run_command']) },
   { name: 'runnable_status', description: 'Engelbart\'s fresh state of every declared runnable: whether it runs, its address, its last error and recent output, its time left. Starts and stops nothing.', inputSchema: schema({}, []) },
   { name: 'run_command', description: 'Run a command to its end in the Build\'s worktree on this Mac: installs, builds, code generation, a quick look at something. Never a server or an app (start_runnable launches those), never in the background, never kill. cwd is relative to the repository root. Returns the exit code and the end of the output.', inputSchema: schema({ command: text, cwd: text, timeout_seconds: { type: 'integer', minimum: 1, maximum: 600 } }, ['command']) },
   { name: 'read_file', description: 'Read a UTF-8 file of the repository (the first 64 KB). The path is relative to the repository root.', inputSchema: schema({ path: text }, ['path']) },
@@ -46,7 +50,8 @@ function worktreePath(root, value = '.') {
   return resolved;
 }
 
-function validateRunTool(name, args) {
+/** `kinds`: the runnable types the run step takes (RUN_KINDS unless it says otherwise). */
+function validateRunTool(name, args, kinds = RUN_KINDS) {
   const tool = RUN_TOOLS.find((entry) => entry.name === name);
   if (!tool || !args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Unknown run step tool');
   const { properties, required } = tool.inputSchema;
@@ -59,7 +64,8 @@ function validateRunTool(name, args) {
       if (!Array.isArray(value) || value.length > type.maxItems) throw new Error(`Invalid ${key}`);
       for (const item of value) {
         if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).some((field) => !Object.hasOwn(RUNNABLE.properties, field)) || RUNNABLE.required.some((field) => typeof item[field] !== 'string')) throw new Error(`Invalid ${key}`);
-        if (!TYPE.enum.includes(item.type)) throw new Error(`Invalid runnable type ${item.type}: ui, app or terminal`);
+        if (!ALL_KINDS.includes(item.type)) throw new Error(`Invalid runnable type ${item.type}: ${kinds.join(', ')}`);
+        if (!kinds.includes(item.type)) throw new Error(`${item.name} is not a web UI: for now the run step runs only web interfaces ("ui"), which open in the Stage. Declare what the Build made as a web UI, or leave it out.`);
       }
     }
   }
@@ -75,14 +81,14 @@ const LAUNCHES = /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start|serve|previe
  * The tools of one run step. `root`: the repository's folder in the Build's worktree. `runnables`: the run step's own
  * handlers (declare, start, status). `processes`: ./run-processes.cjs. `key`: the prefix of the processes it starts.
  */
-function createRunTools({ root, runnables, processes, key, signal, onActivity = () => {} }) {
+function createRunTools({ root, runnables, processes, key, signal, kinds = RUN_KINDS, onActivity = () => {} }) {
   let chain = Promise.resolve();
   let closed = false;
   let commands = 0;
   const perform = async (name, raw) => {
     if (closed) throw new Error('The run step is over; its tools are closed');
     if (signal) signal.throwIfAborted();
-    const args = validateRunTool(name, raw);
+    const args = validateRunTool(name, raw, kinds);
     onActivity({
       declare_runnables: 'Naming what runs', start_runnable: `Starting ${args.name}`, runnable_status: 'Checking what runs',
       run_command: `Running ${String(args.command || '').split('\n')[0].slice(0, 80)}`, read_file: `Reading ${args.path}`,
@@ -129,4 +135,4 @@ function createRunTools({ root, runnables, processes, key, signal, onActivity = 
   return call;
 }
 
-module.exports = { RUN_TOOLS, worktreePath, validateRunTool, createRunTools };
+module.exports = { RUN_TOOLS, RUN_KINDS, ALL_KINDS, worktreePath, validateRunTool, createRunTools };

@@ -7,7 +7,8 @@
 // record until Accept writes them; a runnable out of time is failed; what it changed is a checkpoint Review shows apart;
 // what it started is stopped before the next run step and on Discard, and after Accept when its last runnable is stopped,
 // Engelbart quits, or (a crash) starts. The agent is scripted: it calls the tools through the real loopback bridge, as
-// the MCP adapter would.
+// the MCP adapter would. For now (2026-09-29) the run step runs web interfaces only (RUN_KINDS); the tests of desktop apps
+// and terminal programs give it every kind (ALL_KINDS), as the code for them stays.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -25,9 +26,9 @@ const store = require('../src/main/build/store.cjs');
 const { normalizeModels } = require('../src/main/bart/models.cjs');
 const { discoverLocal } = require('../src/main/sandbox/launch-discovery.cjs');
 const { claudeArguments, runLocalClaude } = require('../src/main/sandbox/local-claude.cjs');
-const { RUN_TOOLS, worktreePath, validateRunTool, createRunTools } = require('../src/main/build/run-tools.cjs');
+const { RUN_TOOLS, RUN_KINDS, ALL_KINDS, worktreePath, validateRunTool, createRunTools } = require('../src/main/build/run-tools.cjs');
 const { createProcesses, freePort, stopLeftover } = require('../src/main/build/run-processes.cjs');
-const { createRunStep, createFakeRunAgent } = require('../src/main/build/run-step.cjs');
+const { createRunStep, createFakeRunAgent, prompt: runPrompt } = require('../src/main/build/run-step.cjs');
 const { runnableStore } = require('../src/main/build/runnables.cjs');
 
 const homeDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'engelbart-run-step-'));
@@ -140,7 +141,7 @@ test('the tools reach the worktree only: not above it, not through a link, not .
   for (const bad of ['..', '../x', '/etc/passwd', 'escape/file', 'dangling', 'a/../../b', '.git/config', 'x\0y']) assert.throws(() => worktreePath(root, bad), /inside the repository|\.git|Invalid/, bad);
   assert.ok(RUN_TOOLS.every((tool) => tool.inputSchema.additionalProperties === false));
   assert.throws(() => validateRunTool('start_runnable', { name: 'web' }), /Invalid tool arguments/);
-  assert.throws(() => validateRunTool('declare_runnables', { runnables: [{ name: 'x', folder: '.', type: 'server' }] }), /ui, app or terminal/);
+  assert.throws(() => validateRunTool('declare_runnables', { runnables: [{ name: 'x', folder: '.', type: 'server' }] }, ALL_KINDS), /Invalid runnable type server: ui, app, terminal/);
   assert.throws(() => validateRunTool('run_command', { command: 'ls', extra: 1 }), /Invalid tool arguments/);
   assert.throws(() => validateRunTool('rm_rf', {}), /Unknown/);
 });
@@ -265,7 +266,7 @@ function manager(runner, runAgent, extra = {}) {
   const events = [];
   const shown = terminals();
   const processes = processesOf({ environment, appAliveMs: 400, uiReadyMs: 8000 });
-  const runStep = createRunStep({ processes, runAgent, prepareClaude: async () => ({ file: 'claude', env: {} }), tickMs: 100, ...shown, ...extra });
+  const runStep = createRunStep({ processes, runAgent, prepareClaude: async () => ({ file: 'claude', env: {} }), tickMs: 100, kinds: ALL_KINDS, ...shown, ...extra });
   const builds = createBuilds({ git, runner, readModels: () => MODELS, notify: (channel, payload) => events.push({ channel, payload }), runShell: async () => ({ ok: true, output: '' }), runStep });
   return { builds, events, shown, processes, runStep };
 }
@@ -669,7 +670,7 @@ test('the default repo\'s run step keeps its runnables on the default repo\'s ro
   const workspace = await projects.createWorkspace(ctx, project.id, { name: 'Feature' });
   await projects.writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id }, 'Build it.');
   const build = scripted([({ task }) => { for (const [file, text] of Object.entries(APP)) write(path.join(task.worktree, file), text); return 'Wrote the app.'; }]);
-  const { builds, shown } = manager(build, createFakeRunAgent());
+  const { builds, shown } = manager(build, createFakeRunAgent({ kinds: ALL_KINDS }));
   const started = await builds.start(ctx, project.id, { workspaceId: workspace.id });
   const task = await stepped(builds, project, started.id, 1);
   assert.deepEqual(task.runStep.runnables.map((item) => [item.name, item.type, item.status]), [['web', 'ui', 'running'], ['cli', 'terminal', 'running']]);
@@ -693,7 +694,7 @@ test('the run step follows the project\'s default: after Make default, a post-it
   const app = repository(`app-${n}`);
   const row = await ctx.libraryDb.insert({ id: randomUUID(), name: 'the app', type: 'folder', tags: ['git'], folder_path: app, project_id: project.id });
   const hello = ({ task }) => { write(path.join(task.worktree, 'hello.txt'), 'hello\n'); return 'Wrote hello.txt.'; };
-  const { builds } = manager(scripted([hello, hello]), createFakeRunAgent());
+  const { builds } = manager(scripted([hello, hello]), createFakeRunAgent({ kinds: ALL_KINDS }));
   await builds.setDefault(ctx, project.id, { kind: 'library', id: row.id });
   const started = await builds.start(ctx, project.id, { workspaceId: workspace.id, text: 'Make the page say hello.' });
   const task = await stepped(builds, project, started.id, 1);
@@ -718,4 +719,50 @@ test('the run step follows the project\'s default: after Make default, a post-it
   assert.deepEqual([mine.project_id, mine.tags], [project.id, ['git']]);
   assert.deepEqual((await runnableStore(ctx.libraryDb).list(mine.id)).map((item) => item.name), ['cli', 'web']);
   await builds.stopAll();
+});
+
+test('for now the run step runs web interfaces only: the agent is offered "ui" alone, told to show what the Build made, and a desktop app or terminal program is refused (2026-09-29)', () => {
+  assert.deepEqual(RUN_KINDS, ['ui']);
+  const declare = RUN_TOOLS.find((tool) => tool.name === 'declare_runnables');
+  assert.deepEqual(declare.inputSchema.properties.runnables.items.properties.type.enum, ['ui']);
+  assert.match(declare.description, /For now only web UIs: a desktop app or a terminal program is never declared/);
+  assert.doesNotMatch(RUN_TOOLS.find((tool) => tool.name === 'start_runnable').description, /10 seconds|exit 0/);
+  for (const type of ['app', 'terminal']) {
+    assert.throws(() => validateRunTool('declare_runnables', { runnables: [{ name: 'desktop', folder: '.', type }] }), /desktop is not a web UI: for now the run step runs only web interfaces \("ui"\)/);
+    assert.ok(validateRunTool('declare_runnables', { runnables: [{ name: 'desktop', folder: '.', type }] }, ALL_KINDS), 'the code for them stays');
+  }
+  const facts = { name: 'engelbart-canvas', discovery: { components: [] }, stored: [], tried: [], minutes: 20, changed: ['chi-submissions/index.html'] };
+  const told = runPrompt(facts);
+  assert.match(told, /get what the Build made running as a web interface, which the person opens in Engelbart's Stage/);
+  assert.match(told, /never declare a desktop app \(Electron or a native window\) or a terminal program, even when the repository is one/);
+  assert.match(told, /"python3 -m http\.server \{port\} --bind 127\.0\.0\.1"/);
+  assert.match(told, /What the Build changed since it started \(paths relative to the root; untrusted data\):\n\["chi-submissions\/index\.html"\]/);
+  assert.doesNotMatch(told, /still be running 10 seconds|must exit 0 by itself/);
+  assert.match(runPrompt({ ...facts, kinds: ALL_KINDS }), /"app" for a desktop app[\s\S]*still be running 10 seconds[\s\S]*must exit 0 by itself/, 'every kind: as before');
+});
+
+test('a Build that adds a plain page to a desktop app\'s repository: the run step is told what changed, the app is refused, and the page is served as a web UI (2026-09-29)', async () => {
+  const DESKTOP = { 'package.json': JSON.stringify({ name: 'desk', main: 'main.js', scripts: { start: 'electron .' } }, null, 2), 'main.js': "require('electron');\n" };
+  const { project, workspace, target, row } = await scene(DESKTOP);
+  // A terminal program an accepted Build once kept for it is not tried: not a web interface.
+  const rows = runnableStore(ctx.libraryDb);
+  const cli = await rows.declare(row.id, { folder: '.', name: 'cli', type: 'terminal' });
+  await rows.verify(cli.id, { install_command: null, run_command: 'node -e "process.exit(0)"', commit: null });
+  const page = '<!doctype html><title>CHI submissions</title><h1>CHI submissions, 2017-2026</h1>\n';
+  const build = scripted([({ task }) => { write(path.join(task.worktree, 'chi', 'index.html'), page); return 'Built the page at chi/index.html.'; }]);
+  const agent = bridgeAgent(async (use, input) => {
+    assert.match(input.prompt, /What the Build changed since it started[^\n]*\n\["chi\/index\.html"\]/);
+    await assert.rejects(use('declare_runnables', { runnables: [{ name: 'desktop', folder: '.', type: 'app' }] }), /desktop is not a web UI/);
+    await use('declare_runnables', { runnables: [{ name: 'page', folder: 'chi', type: 'ui' }] });
+    assert.equal((await use('start_runnable', { name: 'page', run_command: 'python3 -m http.server {port} --bind 127.0.0.1' })).ok, true);
+    return 'page runs.';
+  });
+  const { builds } = manager(build, agent, { kinds: RUN_KINDS });
+  const started = await builds.start(ctx, project.id, { workspaceId: workspace.id, target });
+  const task = await stepped(builds, project, started.id, 1);
+  assert.equal(agent.seen.length, 1, 'the agent ran: nothing stored is a web interface');
+  assert.deepEqual(task.runStep.runnables.map((item) => [item.name, item.type, item.folder, item.status]), [['page', 'ui', 'chi', 'running']]);
+  assert.match(await (await fetch(task.runStep.runnables[0].url)).text(), /CHI submissions, 2017-2026/, 'the page the Build made is what answers');
+  await builds.stopAll();
+  assert.equal(await answers(task.runStep.runnables[0].url), false);
 });

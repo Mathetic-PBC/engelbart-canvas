@@ -455,10 +455,16 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       else if (action === 'review') {
         const task = builds[id];
         const title = (task && task.title) || '';
+        // For now (2026-09-29, later): what its run step got running opens in the Stage, and that is all Review does; its
+        // dialog (the diff, what did not run and why) opens only when nothing runs, or what runs could not be opened.
+        const shown = ((task && task.runStep && task.runStep.runnables) || []).filter((item) => item.status === 'running' && item.type === 'ui');
+        if (shown.length) {
+          try {
+            for (const item of [...shown].reverse()) await api.buildRunShow(project.id, id, item.name); // the first ends in front
+            return true;
+          } catch { /* stopped meanwhile: the dialog instead */ }
+        }
         setReview({ id, title, review: null, error: '' });
-        // What runs comes first (2026-09-29): the first web UI its run step got running opens in the Stage at once.
-        const first = ((task && task.runStep && task.runStep.runnables) || []).find((item) => item.status === 'running' && item.type === 'ui');
-        if (first) api.buildRunShow(project.id, id, first.name).catch(onError);
         try { const got = await api.buildReview(project.id, id); setReview((now) => (now && now.id === id ? { ...now, review: got } : now)); } catch (error) { setReview((now) => (now && now.id === id ? { ...now, error: errorMessage(error) } : now)); }
       }
       return true;

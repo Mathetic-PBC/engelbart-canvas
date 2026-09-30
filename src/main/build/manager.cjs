@@ -697,13 +697,16 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
         return;
       }
       const choice = task.provider === 'anthropic' ? { modelId: task.modelId, effort: task.effort } : resolveBuildChoice(readModels(), { provider: 'anthropic' });
+      // What the Build changed since it started, as paths in the folder it works in: where the run step looks first.
+      const diff = await git.exec(task.cwd, ['diff', '--name-only', '--no-renames', '--relative', task.baseSha, 'HEAD']).catch(() => null);
+      const changed = diff ? diff.stdout.split('\n').map((line) => line.trim()).filter(Boolean).slice(0, 200) : [];
       const put = (change) => save(ctx, projectId, id, (held) => ({ runStep: { ...(held.runStep || {}), ...change } }));
       put({ status: 'running', turn: task.turn, started: now().toISOString(), finished: null, error: null, phase: 'Starting', runnables: [] });
       let result = null;
       let failure = null;
       try {
         result = await runStep.run({
-          id, root: task.cwd, name: task.target ? task.target.name : path.basename(task.repo), libraryId: row.id, db: ctx.libraryDb,
+          id, root: task.cwd, name: task.target ? task.target.name : path.basename(task.repo), libraryId: row.id, db: ctx.libraryDb, changed,
           model: choice.modelId, effort: choice.effort,
           onState: (state) => put(state),
         });
