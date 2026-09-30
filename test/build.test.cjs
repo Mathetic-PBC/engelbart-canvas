@@ -17,7 +17,7 @@ const { ensureHome } = require('../src/main/store/home.cjs');
 const projects = require('../src/main/store/projects.cjs');
 const archive = require('../src/main/store/archive.cjs');
 const { createGit } = require('../src/main/build/git.cjs');
-const { createBuilds, createShell } = require('../src/main/build/manager.cjs');
+const { createBuilds, createShell, checkOutput } = require('../src/main/build/manager.cjs');
 const store = require('../src/main/build/store.cjs');
 const { readEnding, loadBuildPrompt, BUILD_SYSTEM_PROMPT } = require('../src/main/build/prompt.cjs');
 const { buildPolicy, claudeSettings } = require('../src/main/build/policy.cjs');
@@ -876,4 +876,18 @@ test('storage: builds/ is the project\'s, never a workspace, and does not count 
   assert.equal(made.name, 'builds workspace');
   const slugged = await projects.createProject(ctx, 'worktrees');
   assert.equal(slugged.slug, 'worktrees-project');
+});
+
+test('a check runs without Engelbart\'s terminal, and what failed keeps its name when the output is cut (2026-09-29)', async () => {
+  const seen = [];
+  const long = ['TAP version 13', 'ok 1 - first', 'not ok 2 - the shell reads its input', 'ok 3 - third', '# Subtest: second', 'not ok 4 - second', `  output: ${'x'.repeat(6000)}`, 'ok 5 - last', '# fail 2'].join('\n');
+  const run = (shell, args, options, callback) => { seen.push(options); callback(Object.assign(new Error('failed'), { code: 1 }), long, ''); return null; };
+  const ran = await createShell({ environment: { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir }, run })('npm test', homeDir);
+  assert.equal(seen[0].detached, true, 'a session of its own: an interactive zsh in the tests never reads the terminal Engelbart was started from');
+  assert.equal(ran.ok, false);
+  assert.match(ran.output, /^What failed, before what is shown below:\nnot ok 2 - the shell reads its input\nnot ok 4 - second\n\n…/);
+  assert.match(ran.output, /ok 5 - last\n# fail 2$/);
+  assert.ok(ran.output.length < 4200);
+  assert.equal(checkOutput('ok 1\nnot ok 2 - short'), 'ok 1\nnot ok 2 - short', 'what fits is kept as it is');
+  assert.match(checkOutput(`✖ spec: fails\n${'y'.repeat(5000)}`), /^What failed[^\n]*\n✖ spec: fails\n/, "node's spec reporter too");
 });

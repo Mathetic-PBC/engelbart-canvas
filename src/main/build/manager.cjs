@@ -71,6 +71,17 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 const fromEngelbart = (text) => `<from_engelbart>\n${text}\n</from_engelbart>`;
 const tail = (text, n = 4000) => { const value = String(text || ''); return value.length > n ? `…${value.slice(-n)}` : value; };
+// A failed test's line, in what the common runners print: node's TAP and spec, Jest, pytest.
+const FAILED_LINE = /^\s*(not ok \d+ - |✖ |FAIL |FAILED |● )/;
+/**
+ * The last 4000 characters of a check's output, and first the names of what failed before them (2026-09-29): node's
+ * TAP reports each failure where it happens, so a long run's failures scroll out of the tail and nobody sees which.
+ */
+function checkOutput(text, n = 4000) {
+  const value = String(text || '');
+  const failed = [...new Set(value.slice(0, Math.max(0, value.length - n)).split('\n').filter((line) => FAILED_LINE.test(line)).map((line) => line.trim().slice(0, 300)))].slice(0, 40);
+  return `${failed.length ? `What failed, before what is shown below:\n${failed.join('\n')}\n\n` : ''}${tail(value, n)}`;
+}
 /** A post-it's title: its first line with words in it, without its markdown. */
 const postItTitle = (text) => (String(text || '').split('\n').map((line) => line.replace(/^(#{1,3} |- \[[ xX]?\] |[-*] |> )/, '').trim()).find(Boolean) || 'Quick task').slice(0, 80);
 /** A quick task's post-it, from its record or (a record from before 2026-09-27) from its frozen context. */
@@ -132,8 +143,11 @@ function createShell({ environment = process.env, run = execFile, tools = null }
   return (command, cwd, { env = {}, timeoutMs = SHELL_MS, signal } = {}) => new Promise((resolve) => {
     const base = sanitizeEnvironment(scrubAgentSession(environment));
     const full = { ...base, CI: '1', ...(tools && tools.environment ? tools.environment() : {}), ...env };
-    run(shell, loginShellArgs(shell, command, full), { cwd, env: full, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024, signal }, (error, stdout, stderr) => {
-      resolve({ ok: !error, output: tail(`${stdout || ''}${stderr || ''}`), timedOut: !!(error && error.killed) });
+    // `detached`: a session of its own, without Engelbart's controlling terminal (2026-09-29). Started from a terminal
+    // (npm start), Engelbart has one, and an interactive zsh a check starts would read the keyboard of that terminal
+    // instead of its own input: the project's tests of such shells failed only when Accept ran them.
+    run(shell, loginShellArgs(shell, command, full), { cwd, env: full, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024, signal, detached: true }, (error, stdout, stderr) => {
+      resolve({ ok: !error, output: checkOutput(`${stdout || ''}${stderr || ''}`), timedOut: !!(error && error.killed) });
     });
   });
 }
@@ -1154,4 +1168,4 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
   return { targets, setDefault, preflight, initRepository, prepareDefault, cloneRepository, start, reply, stop, resume, review, accept, fix, discard, promote, reconcile, list, get, openIds, stopAll, running: () => [...live.keys()], stepping: (id) => stepping.has(id), showRunnable, stopRunning, stopRunnable, sweeping: () => Promise.all([...sweeps]) };
 }
 
-module.exports = { createBuilds, createShell, LIMITS, TURN_MS, CLONES };
+module.exports = { createBuilds, createShell, checkOutput, LIMITS, TURN_MS, CLONES };
