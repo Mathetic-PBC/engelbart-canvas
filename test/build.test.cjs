@@ -410,7 +410,8 @@ test('a project folder Engelbart made gets its default repo and first commit in 
   const folder = await raw.prepareDefault(ctx, project.id);
   assert.equal(folder, path.join(code, 'made-here'));
   assert.match(sh(folder, 'log', '-1', '--format=%s'), /First snapshot \(Engelbart\)/);
-  assert.equal(projects.findProject(ctx, project.id).defaultRepo, 'made-here');
+  const [row] = await ctx.libraryDb.query('select * from library where folder_path = $1', [folder]);
+  assert.deepEqual(projects.findProject(ctx, project.id).defaultTarget, { kind: 'library', id: row.id }, 'kept as the project\'s default, as its row');
   const pre = await raw.preflight(ctx, project.id, { kind: 'default' });
   assert.deepEqual([pre.ok, pre.create, pre.directory], [true, undefined, folder], 'the first Build finds it ready');
   assert.ok(!fs.existsSync(path.join(code, '.git')), 'the project folder itself is left alone');
@@ -423,7 +424,7 @@ test('the default repo: a folder named after the project, made with a history of
   const named = project.name.toLowerCase().replace(/ /g, '-'); // "Build 12" → build-12
   const mine = path.join(code, named);
   const list = await raw.targets(ctx, project.id);
-  assert.deepEqual(list.map((item) => [item.kind, item.name, item.folder]), [['default', named, mine]], 'the project folder is not offered, though it is a repository');
+  assert.deepEqual(list.map((item) => [item.kind, item.name, item.folder]), [['default', named, mine], ['project', path.basename(code), code]], 'the code directory is offered after it, as a repository (Make default)');
   const pre = await raw.preflight(ctx, project.id);
   assert.deepEqual([pre.ok, pre.create, pre.target], [true, true, { kind: 'default', name: named }]);
   assert.ok(!fs.existsSync(mine), 'asking makes nothing');
@@ -439,7 +440,8 @@ test('the default repo: a folder named after the project, made with a history of
   const rows = () => ctx.libraryDb.query('select * from library where folder_path = $1', [mine]);
   const [row] = await rows();
   assert.deepEqual([row.name, row.type, row.tags, row.project_id], [named, 'folder', ['git'], project.id]);
-  assert.deepEqual((await raw.targets(ctx, project.id)).map((item) => [item.kind, item.folder]), [['default', mine]]);
+  assert.deepEqual((await raw.targets(ctx, project.id)).map((item) => [item.kind, item.folder]), [['default', mine], ['project', code]]);
+  assert.deepEqual(projects.findProject(ctx, project.id).defaultTarget, { kind: 'library', id: row.id }, 'kept as its row: a rename never moves it');
   await raw.accept(ctx, project.id, task.id);
   assert.equal(fs.readFileSync(path.join(mine, 'b.txt'), 'utf8'), 'bee\n', 'Accept lands in the default repo');
   assert.ok(!fs.existsSync(path.join(code, 'b.txt')));
@@ -480,7 +482,7 @@ test('the Build picker lists the git rows this project holds: made in it or in a
   await projects.linkToWorkspace(ctx, project.id, workspace.id, [linked.id]);
   const { raw } = manager(scripted([]));
   const ids = (await raw.targets(ctx, project.id)).map((item) => item.id || item.kind);
-  assert.deepEqual(ids, ['default', made.id, linked.id]);
+  assert.deepEqual(ids, ['default', 'project', made.id, linked.id]);
   assert.ok(![theirs.id, loose.id, notes.id].some((id) => ids.includes(id)));
 });
 

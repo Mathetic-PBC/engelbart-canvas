@@ -158,6 +158,13 @@ function treeContains(entries, id) {
 /* ------------------------------------------------------------------ projects */
 
 const migrated = new Set();
+/** A default repo as project.json keeps it: { kind: 'project' } (the code directory) or { kind: 'library', id }; else null. */
+const targetOrNull = (value) => {
+  if (!value || typeof value !== 'object') return null;
+  if (value.kind === 'project') return { kind: 'project' };
+  if (value.kind === 'library' && typeof value.id === 'string' && UUID_RE.test(value.id)) return { kind: 'library', id: value.id };
+  return null;
+};
 
 function projectRecord(dir) {
   const meta = readJson(path.join(dir, 'project.json'));
@@ -172,9 +179,11 @@ function projectRecord(dir) {
   try { exists = !!saved && fs.statSync(saved).isDirectory(); } catch { exists = false; }
   // A saved directory that is gone (moved, unmounted) counts as not chosen: the project asks again.
   const description = typeof meta.description === 'string' ? meta.description.trim() : '';
-  // The folder the Builds' default repo was made as, in `directory` (build/manager.cjs): kept, so a rename never moves it.
+  // Where the Builds' default repo is (build/manager.cjs, 2026-09-29): the code directory, or a library row.
+  const defaultTarget = targetOrNull(meta.defaultTarget);
+  // Before defaultTarget: the folder the default repo was made as, in `directory`; read once, to convert it (build/manager.cjs).
   const defaultRepo = typeof meta.defaultRepo === 'string' && /^[^/\\\0]{1,255}$/.test(meta.defaultRepo) && !['.', '..'].includes(meta.defaultRepo) ? meta.defaultRepo : null;
-  return { id: meta.id, name, slug: path.basename(dir), dir, created: meta.created || null, directory: exists ? saved : null, directoryMissing: saved && !exists ? saved : null, description, defaultRepo };
+  return { id: meta.id, name, slug: path.basename(dir), dir, created: meta.created || null, directory: exists ? saved : null, directoryMissing: saved && !exists ? saved : null, description, defaultTarget, defaultRepo };
 }
 
 function projectRecords(ctx) {
@@ -293,12 +302,14 @@ async function setProjectDirectory(ctx, id, directory) {
   return publicProject(next, summary(next));
 }
 
-/** The default repo's folder name, once Build has made it (a name, never a path). */
-function setDefaultRepo(ctx, id, name) {
+/** Where the project's Builds work by default: { kind: 'project' } or { kind: 'library', id } (build/manager.cjs checks it first). */
+function setDefaultTarget(ctx, id, target) {
   const project = findProject(ctx, id);
-  if (typeof name !== 'string' || !/^[^/\\\0]{1,255}$/.test(name) || ['.', '..'].includes(name)) throw new TypeError('default repo must be a folder name');
+  const value = targetOrNull(target);
+  if (!value) throw new TypeError('the default repo must be the code directory or a library row');
   const meta = readJson(path.join(project.dir, 'project.json')) || {};
-  if (meta.defaultRepo !== name) writeJson(path.join(project.dir, 'project.json'), { ...meta, defaultRepo: name });
+  if (JSON.stringify(targetOrNull(meta.defaultTarget)) !== JSON.stringify(value)) writeJson(path.join(project.dir, 'project.json'), { ...meta, defaultTarget: value });
+  return value;
 }
 
 async function renameProject(ctx, id, name) {
@@ -889,7 +900,7 @@ module.exports = {
   createProject,
   createProjectWithWelcome,
   setProjectDirectory,
-  setDefaultRepo,
+  setDefaultTarget,
   renameProject,
   loadProject,
   createWorkspace,

@@ -37,6 +37,21 @@ test('the pick is remembered per workspace; the default repo until there is one,
   });
 });
 
+test('a pick saved per project before picks were per workspace is read when the workspace has none of its own (2026-09-29)', async () => {
+  const { pickedTarget, rememberTarget, DEFAULT_TARGET } = await load();
+  const storage = memory();
+  storage.setItem('engelbart:build-target:p1', JSON.stringify({ kind: 'project' }));
+  withStorage(storage, () => {
+    assert.deepEqual(pickedTarget('p1', 'w1', LIST), { kind: 'project' }, 'the old pick');
+    assert.deepEqual(pickedTarget('p1', 'w2', LIST), { kind: 'project' }, 'for every workspace without its own');
+    assert.deepEqual(pickedTarget('p2', 'w1', LIST), DEFAULT_TARGET, 'another project\'s is not read');
+    assert.deepEqual(pickedTarget('p1', 'w1', LIST.filter((item) => item.kind !== 'project')), DEFAULT_TARGET, 'gone from the list (it is the default now): the default');
+    rememberTarget('p1', 'w1', { kind: 'library', id: 'row-1' });
+    assert.deepEqual(pickedTarget('p1', 'w1', LIST), { kind: 'library', id: 'row-1' }, 'the workspace\'s own pick comes first');
+    assert.deepEqual(pickedTarget('p1', 'w2', LIST), { kind: 'project' });
+  });
+});
+
 test('a picker row says what kind of repository it is; one with a sandbox says so', async () => {
   const { targetTag, sameTarget, targetKey } = await load();
   assert.deepEqual(LIST.map((item) => targetTag(item)), ['default', 'project', 'github']);

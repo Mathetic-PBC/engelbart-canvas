@@ -23,13 +23,17 @@
 //   recovery   a record left working when the app closed is `interrupted`; Resume continues its session
 // Git writes that touch the shared repository's worktrees (add, remove) and Accept run one at a time per repository.
 //
-// Where a Build works (2026-09-29): the repository chosen in the Build panel. The default is a folder in the project
-// folder named after the project (its name as a folder name: "Port check" → port-check/), Engelbart's to make: it is
-// made, with a history of its own, when the first Build starts there, and its name is kept in project.json so a rename
-// never moves it. A folder of that name that is the person's own (not empty, no history of its own) is never taken: the
-// next free name is (port-check-2/ …). The others are the project folder when it is a repository itself, and the
-// library's repositories: a local one as it is, a GitHub one (the kind that has a sandbox) once it is cloned into
-// `repos/<name>` in the project folder, which its row then keeps.
+// Where a Build works (2026-09-29): the repository chosen in the Build panel, else the project's default repo, which
+// project.json keeps as a target (defaultTarget): the code directory ({ kind: 'project' }) or a library row ({ kind:
+// 'library', id }); the person changes it in the panel's picker (Make default). A project with none gets one Engelbart
+// makes: a folder in the code directory named after the project ("Port check" → port-check/), made with a history of
+// its own when the first Build starts there, and then kept as its library row, so a rename never moves it. A folder of
+// that name that is the person's own (not empty, no history of its own) is never taken: the next free name is
+// (port-check-2/ …). When the default's row is deleted or its folder is gone, the code directory takes its place if it
+// has a history, else a new folder is made as above. Nothing is ever git-initialised in a folder the person chose.
+// project.json from before defaultTarget is converted once (migrateDefault). The others are the project folder when it
+// is a repository itself, and the library's repositories: a local one as it is, a GitHub one (the kind that has a
+// sandbox) once it is cloned into `repos/<name>` in the project folder, which its row then keeps.
 //
 // Which ones (2026-09-29, later): the picker lists the default repo and the git rows this project holds (made in it, or
 // in one of its workspaces' context), never the whole library. The default repo is a library row of its own (a folder
@@ -88,12 +92,15 @@ const folderThere = (dir) => { try { return !!dir && fs.statSync(dir).isDirector
 const ownRepository = (dir) => { try { return fs.statSync(path.join(dir, '.git')).isDirectory(); } catch { return false; } };
 const emptyFolder = (dir) => { try { return fs.readdirSync(dir).every((name) => name === '.DS_Store'); } catch { return false; } };
 
+const canonical = (dir) => { try { return fs.realpathSync(dir); } catch { return path.resolve(dir); } };
+const sameFolder = (a, b) => !!a && !!b && canonical(a) === canonical(b);
+const hasGit = (dir) => { try { return fs.existsSync(path.join(dir, '.git')); } catch { return false; } };
+
 /**
- * The default repo's folder: the one made (project.json → defaultRepo), else the first of <project name>, <name>-2 …
- * that is missing, empty, or a repository of its own; never a folder of the person's that has no history of its own.
+ * A default repo Engelbart makes, for a project that has none: the first of <project name>, <name>-2 … in the code
+ * directory that is missing, empty, or a repository of its own; never a folder of the person's with no history of its own.
  */
-function defaultFolder(project) {
-  if (project.defaultRepo) return path.join(project.directory, project.defaultRepo);
+function newFolder(project) {
   const base = slugify(project.name) || 'repo';
   for (let n = 1; n < 100; n += 1) {
     const at = path.join(project.directory, n === 1 ? base : `${base}-${n}`);
@@ -194,7 +201,10 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
   /** Where a target is → { target: { kind, id, name }, folder, url }; `folder` is null for a library repository not on this Mac. */
   async function locate(ctx, project, input) {
     const target = targetOf(input);
-    if (target.kind === 'default') { const folder = defaultFolder(project); return { target: { ...target, name: path.basename(folder) }, folder, url: null }; }
+    if (target.kind === 'default') {
+      const mine = await defaultFolder(ctx, project.id);
+      return mine && { target: { ...target, name: mine.name }, folder: mine.folder, url: null, fresh: mine.fresh };
+    }
     if (target.kind === 'project') return { target: { ...target, name: path.basename(project.directory) }, folder: project.directory, url: null };
     const row = await ctx.libraryDb.get(target.id);
     if (!isRepo(row)) throw new Error('That repository is not in the library.');
@@ -203,20 +213,25 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
   }
 
   /**
-   * The repositories a Build can work in, for the panel's picker: the default repo first (its library row, once it has
-   * one, is not listed again), then the git rows this project holds.
+   * The repositories a Build can work in, for the panel's picker: the default repo first, then the code directory when
+   * it is a repository, then the git rows this project holds; a folder is listed once (the default's is not again).
    */
   async function targets(ctx, projectId) {
     const project = projectOf(ctx, projectId);
-    if (!project.directory) return [];
-    const mine = defaultFolder(project);
-    const list = [{ kind: 'default', name: path.basename(mine), folder: mine, place: 'default' }];
-    const seen = new Set([path.resolve(mine)]);
+    const mine = await defaultFolder(ctx, projectId);
+    const list = mine ? [{ kind: 'default', name: mine.name, folder: mine.folder, place: 'default' }] : [];
+    if (!project.directory) return list;
+    const seen = new Set(mine ? [canonical(mine.folder)] : []);
+    if (!seen.has(canonical(project.directory)) && inspectRepository(project.directory).repository) {
+      list.push({ kind: 'project', name: path.basename(project.directory), folder: project.directory, place: 'project' });
+      seen.add(canonical(project.directory));
+    }
     for (const row of await libraryForProject(ctx, projectId)) {
       if (!isRepo(row)) continue;
       const folder = folderThere(row.folder_path) ? row.folder_path : null;
       const github = githubRepo(row.url);
-      if ((!folder && !github) || (folder && seen.has(path.resolve(folder)))) continue;
+      if ((!folder && !github) || (folder && seen.has(canonical(folder)))) continue;
+      if (folder) seen.add(canonical(folder));
       list.push({ kind: 'library', id: row.id, name: row.name, folder, url: github ? github.url : null, place: folder ? 'local' : 'github' });
     }
     return list;
@@ -225,24 +240,29 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
   /** Whether the chosen repository (the default repo when none is) can take a Build, and what the panel should say. */
   async function preflight(ctx, projectId, input) {
     const project = projectOf(ctx, projectId);
-    if (!project.directory) return { ok: false, problems: [{ code: 'no-directory', message: 'This project has no code folder.' }], dirty: 0, canInit: false };
+    const noFolder = { ok: false, problems: [{ code: 'no-directory', message: 'This project has no code folder.' }], dirty: 0, canInit: false };
+    // The default repo can be a library row somewhere else; anything else needs the code directory.
+    if (!project.directory && targetOf(input).kind !== 'default') return noFolder;
     const where = await locate(ctx, project, input);
+    if (!where) return noFolder;
     const base = { target: where.target, directory: where.folder };
     if (!gitReady()) return { ...base, ok: false, problems: [{ code: 'no-git', message: 'Git is not set up yet (Engelbart ▸ Set Up Tools…).' }], dirty: 0, canInit: false };
     if (!where.folder) {
       const problem = where.url ? `${where.target.name} is not on this Mac yet.` : `${where.target.name}'s folder is gone.`;
       return { ...base, ok: false, problems: [{ code: 'not-here', message: problem }], dirty: 0, canInit: false, canClone: !!where.url, cloneTo: where.url ? path.relative(project.directory, cloneFolder(project, where.url)) : null };
     }
-    // The default repo is Engelbart's to make: missing, or without a history of its own, it is made when the Build starts.
-    const report = where.target.kind === 'default' && !ownRepository(where.folder) ? null : inspectRepository(where.folder);
-    if (where.target.kind === 'default' && (!report || (report.problems.length === 1 && report.problems[0].code === 'no-commits'))) {
+    // A default repo Engelbart makes (the project has none, or its folder is gone): missing, or without a history of its
+    // own, it is made when the Build starts. Never one the person chose (defaultTarget): that is checked as it is.
+    const report = where.fresh && !ownRepository(where.folder) ? null : inspectRepository(where.folder);
+    if (where.fresh && (!report || (report.problems.length === 1 && report.problems[0].code === 'no-commits'))) {
       return { ...base, ok: true, create: true, dirty: 0, problems: [], canInit: false };
     }
     const blocking = report.problems.filter((problem) => problem.code !== 'not-a-repository' && problem.code !== 'no-commits');
     const canInit = report.problems.length > 0 && !blocking.length;
     // A folder with no history of its own, or none saved yet, is not the person's to fix (2026-09-29): the Build gives it
-    // one when it starts (git init and a first commit, as "Start history" did), and the panel says nothing about it.
-    if (canInit) return { ...base, ok: true, init: true, top: report.top, branch: report.branch, dirty: 0, problems: [], canInit };
+    // one when it starts (git init and a first commit, as "Start history" did), and the panel says nothing about it. Not
+    // the default repo the person chose (defaultTarget): that is never git-initialised; it says what is wrong instead.
+    if (canInit && where.target.kind !== 'default') return { ...base, ok: true, init: true, top: report.top, branch: report.branch, dirty: 0, problems: [], canInit };
     let dirty = 0;
     if (report.repository && report.commits) { try { dirty = (await git.dirtyPaths(report.top)).length; } catch { dirty = 0; } }
     return { ...base, ok: !report.problems.length, top: report.top, branch: report.branch, dirty, problems: report.problems, canInit };
@@ -266,28 +286,139 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
   }
 
   /** The default repo's library row: a folder tagged git, made in this project; one row per folder, never a second. → the row */
-  function recordDefault(ctx, projectId, folder) {
-    const at = path.resolve(folder);
+  function recordDefault(ctx, projectId, folder, name = null) {
+    const at = canonical(folder);
     return serial(`library:${at}`, async () => {
-      const held = (await ctx.libraryDb.list()).find((row) => row.folder_path && path.resolve(row.folder_path) === at);
+      const held = await rowAt(ctx, folder);
       if (held) return held;
-      const row = await ctx.libraryDb.insert({ id: randomUUID(), name: path.basename(folder), type: 'folder', tags: ['git'], folder_path: folder, project_id: projectId });
+      const row = await ctx.libraryDb.insert({ id: randomUUID(), name: name || path.basename(folder), type: 'folder', tags: ['git'], folder_path: folder, project_id: projectId });
       libraryChanged();
       return row;
     });
   }
 
+  /** The library row of a folder (a git row first; `preferred`, when it is that folder's) → the row, or null. */
+  async function rowAt(ctx, folder, preferred = null) {
+    if (preferred && UUID_RE.test(preferred)) {
+      const row = await ctx.libraryDb.get(preferred);
+      if (row && sameFolder(row.folder_path, folder)) return row;
+    }
+    const rows = (await ctx.libraryDb.list()).filter((row) => row.folder_path && sameFolder(row.folder_path, folder));
+    return rows.find(isRepo) || rows[0] || null;
+  }
+
+  /* ---------------------------------------------------------------- the default repo */
+
+  /**
+   * project.json from before defaultTarget, converted once (while it has none; nothing is moved or deleted):
+   *   a. defaultRepoId → repositories[id].location (another branch's registry; relative to the project's data folder),
+   *      when that folder is a repository of its own: the code directory → { kind: 'project' }, else its library row
+   *      (repositories[id].libraryId when it is that folder's; made when there is none). It wins over defaultRepo,
+   *      which this branch may have written wrongly: a folder made from defaultRepo that is no longer the default is
+   *      named in the project's builds/history.log, for the person to decide about.
+   *   b. else defaultRepo (a folder name in the code directory, made by a Build) → its library row, made if missing.
+   *   c. else nothing: the first Build makes one (defaultFolder, start).
+   * → the project record, as it is afterwards
+   */
+  function migrateDefault(ctx, projectId) {
+    const first = projectOf(ctx, projectId);
+    if (first.defaultTarget) return Promise.resolve(first);
+    return serial(`default:${first.dir}`, async () => {
+      const project = projectOf(ctx, projectId);
+      if (project.defaultTarget) return project;
+      const meta = readJson(path.join(project.dir, 'project.json')) || {};
+      const made = project.defaultRepo && project.directory ? path.join(project.directory, project.defaultRepo) : null;
+      const registry = meta.repositories && typeof meta.repositories === 'object' ? meta.repositories : {};
+      const registered = typeof meta.defaultRepoId === 'string' && registry[meta.defaultRepoId] && typeof registry[meta.defaultRepoId] === 'object' ? registry[meta.defaultRepoId] : null;
+      let target = null;
+      let note = null;
+      if (registered && typeof registered.location === 'string' && registered.location && !registered.archived) {
+        const at = path.resolve(project.dir, registered.location); // an absolute location stays as it is
+        if (folderThere(at) && hasGit(at)) {
+          if (project.directory && sameFolder(at, project.directory)) target = { kind: 'project' };
+          else {
+            const row = (await rowAt(ctx, at, registered.libraryId)) || (await recordDefault(ctx, projectId, at, typeof registered.name === 'string' && registered.name.trim() ? registered.name.trim().slice(0, 200) : null));
+            target = { kind: 'library', id: row.id };
+          }
+          if (made && folderThere(made) && !sameFolder(made, at)) note = `The default repo for Builds is now ${at} (project.json → defaultRepoId). ${made} was made as the default repo before and is no longer used by Builds; nothing was moved or deleted.`;
+        }
+      }
+      if (!target && made && folderThere(made) && hasGit(made)) target = { kind: 'library', id: (await recordDefault(ctx, projectId, made)).id };
+      if (!target) return project;
+      projects.setDefaultTarget(ctx, projectId, target);
+      if (note) unused(project, note);
+      return projectOf(ctx, projectId);
+    });
+  }
+
+  /** One line for the person in the project's Build history (builds/history.log), and in the log. */
+  function unused(project, line) {
+    const text = `${now().toISOString()} ${line}`;
+    try { fs.mkdirSync(path.join(project.dir, 'builds'), { recursive: true }); fs.appendFileSync(path.join(project.dir, 'builds', 'history.log'), `${text}\n`); } catch { /* the log below still has it */ }
+    console.log(`Engelbart: ${project.name}: ${line}`);
+  }
+
+  /**
+   * The default repo now → { folder, name, fresh, keep }, or null (no code directory and no default elsewhere).
+   * defaultTarget first: the code directory, or its library row's folder. With none, a folder Engelbart makes (`fresh`:
+   * start() makes it and keeps its row). When the default's row is deleted or its folder is gone: the code directory
+   * when it has a history, else a new folder as for none. `keep`: what start() stores when it works there.
+   */
+  async function defaultFolder(ctx, projectId) {
+    const project = await migrateDefault(ctx, projectId);
+    const stored = project.defaultTarget;
+    if (stored && stored.kind === 'project' && project.directory) return { folder: project.directory, name: path.basename(project.directory), fresh: false, keep: null };
+    if (stored && stored.kind === 'library') {
+      const row = await ctx.libraryDb.get(stored.id);
+      if (row && row.folder_path && folderThere(row.folder_path)) return { folder: row.folder_path, name: row.name || path.basename(row.folder_path), fresh: false, keep: null };
+    }
+    if (!project.directory) return null;
+    if (stored) {
+      const code = inspectRepository(project.directory);
+      if (code.repository && code.commits) return { folder: project.directory, name: path.basename(project.directory), fresh: false, keep: { kind: 'project' } };
+    }
+    const folder = newFolder(project);
+    return { folder, name: path.basename(folder), fresh: true, keep: 'made' };
+  }
+
+  /** After a Build starts in the default repo: a default made or fallen back to is kept in project.json (a made one as its row). */
+  async function keepDefault(ctx, projectId, folder) {
+    const mine = await defaultFolder(ctx, projectId);
+    if (!mine || !mine.keep || !sameFolder(mine.folder, folder)) return;
+    const project = projectOf(ctx, projectId);
+    const target = mine.keep === 'made' ? { kind: 'library', id: (await recordDefault(ctx, projectId, folder)).id } : mine.keep;
+    await serial(`default:${project.dir}`, async () => { projects.setDefaultTarget(ctx, projectId, target); });
+  }
+
+  /**
+   * The project's default repo, changed by the person (the picker's Make default): the code directory or a library row
+   * that is on this Mac and can take a Build now. Only project.json changes; no folder is moved or deleted. → the picker's list
+   */
+  async function setDefault(ctx, projectId, input) {
+    const target = input && (input.kind === 'project' || input.kind === 'library') ? targetOf(input) : null;
+    if (!target || target.kind === 'default') throw new Error('Choose the code directory or a repository from the library.');
+    const pre = await preflight(ctx, projectId, target);
+    if (!pre.ok) throw new Error(pre.problems.length ? pre.problems[0].message : `${pre.target.name} cannot take a Build.`);
+    // A folder a Build would give a history first (preflight's init) is not one yet: the default is never git-initialised.
+    if (pre.init) throw new Error(inspectRepository(pre.directory).problems[0].message);
+    const project = await migrateDefault(ctx, projectId);
+    await serial(`default:${project.dir}`, async () => { projects.setDefaultTarget(ctx, projectId, target); });
+    return targets(ctx, projectId);
+  }
+
   /**
    * A project whose folder Engelbart made (onboarding's "Create a folder for me", 2026-09-29): its default repo, made
-   * now, so the first Build finds a history waiting. Nothing while Git is not ready: the first Build makes it then.
+   * now, so the first Build finds a history waiting, and kept as the project's default (its row). Nothing while Git is
+   * not ready: the first Build makes it then. A project whose default is already set (or converted) is left as it is.
    */
   async function prepareDefault(ctx, projectId) {
     const project = projectOf(ctx, projectId);
     if (!project.directory || !gitReady()) return null;
-    const folder = defaultFolder(project);
-    await makeDefault(folder);
-    projects.setDefaultRepo(ctx, projectId, path.basename(folder));
-    return folder;
+    const mine = await defaultFolder(ctx, projectId);
+    if (!mine) return null;
+    if (mine.fresh) await makeDefault(mine.folder);
+    await keepDefault(ctx, projectId, mine.folder);
+    return mine.folder;
   }
 
   /** A GitHub repository from the library, cloned into repos/<name> in the project folder; its row keeps the clone. */
@@ -326,16 +457,13 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     // A library repository that is not on this Mac (a sandbox's, from GitHub) is cloned into repos/<name> first, before
     // anything else: its row keeps the clone (cloneRepository), and the Build works there.
     if (!pre.ok && pre.canClone) pre = await cloneRepository(ctx, projectId, wanted);
-    if (pre.ok && (pre.create || pre.init)) {
+    if (pre.ok && (pre.create || pre.init)) { // create: only a default Engelbart makes; init: a folder picked here with no history
       if (pre.create) await makeDefault(pre.directory);
       else await serial(pre.directory, () => git.init(pre.directory));
       pre = await preflight(ctx, projectId, wanted);
     }
     if (!pre.ok) throw new Error(pre.problems[0].message);
-    if (pre.target.kind === 'default') {
-      projects.setDefaultRepo(ctx, projectId, path.basename(pre.directory)); // a rename never moves it
-      await recordDefault(ctx, projectId, pre.directory);
-    }
+    if (pre.target.kind === 'default') await keepDefault(ctx, projectId, pre.directory); // a rename never moves it
     const project = projectOf(ctx, projectId);
     let workspaceId = null;
     let title;
@@ -530,13 +658,17 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
 
   /* ------------------------------------------------------------------- run step */
 
-  /** The library row of the repository a Build works in (the default repo's is made when it has none); null: none. */
+  /**
+   * The library row of the repository a Build works in: the one it was started in (task.source), whatever the default is
+   * now. The default repo's is made when it has none (the code directory's too, when that is the default); null: none.
+   */
   async function repositoryRow(ctx, projectId, task) {
     const target = task.target || {};
     if (target.kind === 'library') return ctx.libraryDb.get(target.id);
-    if (target.kind === 'default') return recordDefault(ctx, projectId, task.source || task.repo);
-    const at = path.resolve(task.source || task.repo);
-    return (await ctx.libraryDb.list()).find((row) => isRepo(row) && row.folder_path && path.resolve(row.folder_path) === at) || null;
+    const at = task.source || task.repo;
+    if (target.kind === 'default') return recordDefault(ctx, projectId, at);
+    const row = await rowAt(ctx, at);
+    return isRepo(row) ? row : null;
   }
 
   /** What a run step's runnables came to, in one line for the conversation. */
@@ -1016,7 +1148,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     await Promise.race([Promise.all([...running.map((entry) => entry.done), ...steps]), new Promise((resolve) => { const timer = setTimeout(resolve, QUIT_WAIT_MS); if (timer.unref) timer.unref(); })]);
   }
 
-  return { targets, preflight, initRepository, prepareDefault, cloneRepository, start, reply, stop, resume, review, accept, fix, discard, promote, reconcile, list, get, openIds, stopAll, running: () => [...live.keys()], stepping: (id) => stepping.has(id), showRunnable, stopRunning, stopRunnable, sweeping: () => Promise.all([...sweeps]) };
+  return { targets, setDefault, preflight, initRepository, prepareDefault, cloneRepository, start, reply, stop, resume, review, accept, fix, discard, promote, reconcile, list, get, openIds, stopAll, running: () => [...live.keys()], stepping: (id) => stepping.has(id), showRunnable, stopRunning, stopRunnable, sweeping: () => Promise.all([...sweeps]) };
 }
 
 module.exports = { createBuilds, createShell, LIMITS, TURN_MS, CLONES };

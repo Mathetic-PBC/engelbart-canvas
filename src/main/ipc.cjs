@@ -345,6 +345,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     // What a Build panel ('build', the default) or a post-it's Build ('quick') offers, starting on what was last picked there.
     handle('build-models', (place) => buildChoices(readModels(place === 'quick' ? 'quick' : 'build')));
     handle('build-targets', withCtx((ctx, pid) => b().targets(ctx, pidOf(pid))));
+    // The project's default repo (Make default in the picker): the code directory or a library row, never a path.
+    handle('build-set-default', withCtx((ctx, pid, target) => b().setDefault(ctx, pidOf(pid), targetOf(target))));
     handle('build-preflight', withCtx((ctx, pid, target) => b().preflight(ctx, pidOf(pid), targetOf(target))));
     handle('build-init', withCtx((ctx, pid, target) => b().initRepository(ctx, pidOf(pid), targetOf(target))));
     handle('build-clone', withCtx((ctx, pid, target) => b().cloneRepository(ctx, pidOf(pid), targetOf(target))));

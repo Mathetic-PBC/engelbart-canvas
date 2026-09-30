@@ -101,6 +101,7 @@ const engelbartAPI = Object.freeze({
   // Where a Build works: the default repo (a folder named after the project, in the project folder), the project folder,
   // or a library repository ({ kind, id }); a GitHub one is cloned into repos/<name> first (buildClone).
   buildTargets: invoke('build-targets'),
+  buildSetDefault: invoke('build-set-default'),
   buildPreflight: invoke('build-preflight'),
   buildInit: invoke('build-init'),
   buildClone: invoke('build-clone'),

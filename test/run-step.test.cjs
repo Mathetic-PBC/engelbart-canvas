@@ -683,3 +683,39 @@ test('the default repo\'s run step keeps its runnables on the default repo\'s ro
   await builds.stopAll();
   assert.equal(await answers(url), false, 'quitting stops what it started');
 });
+
+test('the run step follows the project\'s default: after Make default, a post-it\'s Build runs in it and its runnables are kept on its row (2026-09-29)', async () => {
+  n += 1;
+  const code = repository(`code-${n}`, { 'README.md': 'x\n' });
+  const project = await projects.createProject(ctx, { name: `Follows ${n}`, directory: code });
+  const workspace = await projects.createWorkspace(ctx, project.id, { name: 'Feature' });
+  await projects.writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id }, 'Build it.');
+  const app = repository(`app-${n}`);
+  const row = await ctx.libraryDb.insert({ id: randomUUID(), name: 'the app', type: 'folder', tags: ['git'], folder_path: app, project_id: project.id });
+  const hello = ({ task }) => { write(path.join(task.worktree, 'hello.txt'), 'hello\n'); return 'Wrote hello.txt.'; };
+  const { builds } = manager(scripted([hello, hello]), createFakeRunAgent());
+  await builds.setDefault(ctx, project.id, { kind: 'library', id: row.id });
+  const started = await builds.start(ctx, project.id, { workspaceId: workspace.id, text: 'Make the page say hello.' });
+  const task = await stepped(builds, project, started.id, 1);
+  assert.deepEqual([task.repo, task.target], [app, { kind: 'default', name: 'the app' }]);
+  assert.deepEqual(task.runStep.runnables.map((item) => [item.name, item.status]), [['web', 'running'], ['cli', 'running']]);
+  await builds.accept(ctx, project.id, task.id);
+  const { sha } = store.readTask(projects.findProject(ctx, project.id), task.id).accepted;
+  assert.deepEqual((await runnableStore(ctx.libraryDb).list(row.id)).map((item) => [item.name, item.verified_commit]), [['cli', sha], ['web', sha]], 'on the default\'s own row');
+  assert.deepEqual(await ctx.libraryDb.query('select id from library where folder_path = $1', [code]), [], 'no row made for the code directory');
+
+  // Made the code directory instead: the next run step keeps its runnables on the code directory's row (made for it).
+  write(path.join(code, 'package.json'), APP['package.json']);
+  write(path.join(code, 'server.cjs'), APP['server.cjs']);
+  write(path.join(code, 'cli.cjs'), APP['cli.cjs']);
+  sh(code, 'add', '-A');
+  sh(code, 'commit', '-qm', 'the app');
+  await builds.setDefault(ctx, project.id, { kind: 'project' });
+  const next = await stepped(builds, project, (await builds.start(ctx, project.id, { workspaceId: workspace.id })).id, 1);
+  assert.equal(next.repo, code);
+  await builds.accept(ctx, project.id, next.id);
+  const [mine] = await ctx.libraryDb.query('select * from library where folder_path = $1', [code]);
+  assert.deepEqual([mine.project_id, mine.tags], [project.id, ['git']]);
+  assert.deepEqual((await runnableStore(ctx.libraryDb).list(mine.id)).map((item) => item.name), ['cli', 'web']);
+  await builds.stopAll();
+});
