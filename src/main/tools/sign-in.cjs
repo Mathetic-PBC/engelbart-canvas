@@ -3,11 +3,13 @@
 // Signing in to Claude Code or Codex (2026-09-23; design D16): the CLI's own sign-in, run in a hidden
 // terminal (a PTY, so it behaves as it does in one). The CLI opens the browser itself and ends when the
 // browser hands it the sign-in. The page's address, when it prints one, is passed on so the dialog can
-// open it again; a "press Enter" before opening the browser is answered.
+// open it again; a "press Enter" before opening the browser is answered. The CLI's folder goes last on PATH, as in
+// the terminal (../terminal/launch.cjs): Claude Code found where the login shell's PATH does not reach (~/.local/bin
+// on a new account) otherwise signs in saying its installation "is not in your PATH" (2026-09-29).
 
 const os = require('node:os');
 const path = require('node:path');
-const { sanitizeEnvironment } = require('../terminal/launch.cjs');
+const { sanitizeEnvironment, loginShellArgs } = require('../terminal/launch.cjs');
 
 const COMMANDS = Object.freeze({
   claude: 'exec "$ENGELBART_TOOL" auth login --claudeai',
@@ -17,16 +19,14 @@ const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 const URL_RE = /https:\/\/[^\s"'<>]+/;
 
 function createSignInProcess({ pty, shell, environment = process.env }) {
-  const fish = path.basename(shell) === 'fish';
   return (name, file, { onUrl = () => {} } = {}) => {
-    const command = COMMANDS[name];
-    const args = fish ? ['--login', '--interactive', '--command', command] : ['-ilc', command];
-    const child = pty.spawn(shell, args, {
+    const env = { ...sanitizeEnvironment(environment), ENGELBART_TOOL: file, ENGELBART_AGENT_PATH: path.dirname(file) };
+    const child = pty.spawn(shell, loginShellArgs(shell, COMMANDS[name], env), {
       name: 'xterm-256color',
       cols: 400, // wide, so a long sign-in address is never wrapped
       rows: 40,
       cwd: os.homedir(),
-      env: { ...sanitizeEnvironment(environment), ENGELBART_TOOL: file },
+      env,
     });
     let output = '';
     let url = null;
