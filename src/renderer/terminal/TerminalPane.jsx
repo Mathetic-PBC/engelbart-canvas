@@ -434,7 +434,8 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
         ))}
       </div>
 
-      <div style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 10, padding: '10px 14px 12px', borderTop: '1px solid #eaeaea', background: '#fafafa' }}>
+      {/* A conversation's footer is the chips alone, with as much room below them as above (2026-09-29). */}
+      <div style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 10, padding: conversation ? '10px 14px' : '10px 14px 12px', borderTop: '1px solid #eaeaea', background: '#fafafa' }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 6px' }}>
           <span data-agent-chip="1" style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fff', font: `500 11.5px/1.4 ${MONO}`, color: '#171717', whiteSpace: 'nowrap' }}><span style={{ color: '#8f8f8f' }}>›_</span>{agentLabel}</span>
           <button type="button" className="hov-bd2" onClick={() => void changeCwd()} disabled={!currentId} title="Change working directory…" data-cwd-chip="1" style={{ flex: '0 1 auto', minWidth: 0, display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fff', font: `11.5px/1.4 ${MONO}`, color: '#4d4d4d', whiteSpace: 'nowrap', overflow: 'hidden', cursor: currentId ? 'pointer' : 'default', textAlign: 'left', transition: 'border-color 120ms' }}><span style={{ color: '#8f8f8f' }}>▭</span><span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentCwd || '~'}</span></button>
