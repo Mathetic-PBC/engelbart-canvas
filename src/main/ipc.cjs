@@ -359,6 +359,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     // session), and Stop for one still working.
     handle('build-run-show', withCtx((ctx, pid, id, name) => b().showRunnable(ctx, pidOf(pid), buildId(id), str(name, 'runnable name', 64))));
     handle('build-run-stop', withCtx((ctx, pid, id) => b().stopRunning(ctx, pidOf(pid), buildId(id))));
+    handle('build-run-stop-runnable', withCtx((ctx, pid, id, name) => b().stopRunnable(ctx, pidOf(pid), buildId(id), name === null ? null : str(name, 'runnable name', 64))));
     handle('build-promote', withCtx((ctx, pid, id, wid, choice) => {
       const value = choice && typeof choice === 'object' ? choice : null;
       const picked = value ? { provider: optStr(value.provider, 'provider', 24), model: optStr(value.model, 'model', 24), effort: optStr(value.effort, 'effort', 24) } : null;

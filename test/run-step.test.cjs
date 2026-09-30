@@ -2,10 +2,12 @@
 
 // A Build's run step (src/main/build/run-step.cjs and its parts): the launch facts of a folder on this Mac, the tools and
 // the paths they may reach, Engelbart's own processes and checks, and the step itself inside the Build's lifecycle — after
-// a turn that ends in review only, never for a quick task; the stored commands first; a pass saves the commands (a UI's
-// with {port}), a runnable out of time is failed; what it changed is a checkpoint Review shows apart; what it started is
-// stopped before the next run step, and on Accept and Discard. The agent is scripted: it calls the tools through the real
-// loopback bridge, as the MCP adapter would.
+// a turn that ends in review only, never for a quick task; the stored commands first (the agent only when something is
+// left to find); what passes keeps running unseen until it is opened, its commands (a UI's with {port}) on the Build's
+// record until Accept writes them; a runnable out of time is failed; what it changed is a checkpoint Review shows apart;
+// what it started is stopped before the next run step and on Discard, and after Accept when its last runnable is stopped,
+// Engelbart quits, or (a crash) starts. The agent is scripted: it calls the tools through the real loopback bridge, as
+// the MCP adapter would.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -24,7 +26,7 @@ const { normalizeModels } = require('../src/main/bart/models.cjs');
 const { discoverLocal } = require('../src/main/sandbox/launch-discovery.cjs');
 const { claudeArguments, runLocalClaude } = require('../src/main/sandbox/local-claude.cjs');
 const { RUN_TOOLS, worktreePath, validateRunTool, createRunTools } = require('../src/main/build/run-tools.cjs');
-const { createProcesses, freePort } = require('../src/main/build/run-processes.cjs');
+const { createProcesses, freePort, stopLeftover } = require('../src/main/build/run-processes.cjs');
 const { createRunStep, createFakeRunAgent } = require('../src/main/build/run-step.cjs');
 const { runnableStore } = require('../src/main/build/runnables.cjs');
 
@@ -41,7 +43,10 @@ let ctx;
 test.before(async () => {
   ctx = { homeDir, root: layout.root, dataRoot: layout.testRoot, libraryDb: await db.openLibraryDb(layout.testRoot) };
 });
-test.after(async () => { await db.closeAll(); });
+// Every process group a test started is stopped when the file ends, also after a test that failed partway.
+const started = [];
+const processesOf = (options) => { const processes = createProcesses(options); started.push(processes); return processes; };
+test.after(async () => { await Promise.all(started.map((processes) => processes.stopAll().catch(() => {}))); await db.closeAll(); });
 
 const answers = async (url) => { try { const response = await fetch(url, { signal: AbortSignal.timeout(1500) }); return response.status < 500; } catch { return false; } };
 
@@ -83,9 +88,9 @@ function terminals() {
   const closed = [];
   return {
     opened, closed,
-    openTerminal: ({ cwd, command }) => { const session = { id: `term-${opened.length + 1}`, cwd, command }; opened.push(session); return session; },
-    closeTerminal: async (id) => { closed.push(id); },
-    terminalSnapshot: (id) => opened.find((session) => session.id === id) || null,
+    openTerminal: ({ cwd, command }) => { const session = { id: `term-${opened.length + 1}`, cwd, command, status: 'running' }; opened.push(session); return session; },
+    closeTerminal: async (id) => { closed.push(id); const session = opened.find((entry) => entry.id === id); if (session) session.status = 'exited'; },
+    terminalSnapshot: (id) => opened.find((session) => session.id === id && session.status === 'running') || null,
   };
 }
 
@@ -142,7 +147,7 @@ test('the tools reach the worktree only: not above it, not through a link, not .
 
 test('run_command runs to its end in the worktree and refuses launches, the background and kill; files are read and written there', async () => {
   const root = repository('commands');
-  const processes = createProcesses({ environment });
+  const processes = processesOf({ environment });
   const handlers = { declare: async () => ({}), start: async () => ({}), status: async () => ({}) };
   const call = createRunTools({ root, runnables: handlers, processes, key: 'test' });
   const ran = await call('run_command', { command: 'pwd && echo made > made.txt', cwd: '.' });
@@ -169,7 +174,7 @@ test('run_command runs to its end in the worktree and refuses launches, the back
 
 test('Engelbart\'s processes: a UI answers on its port, an app is alive after its wait, a terminal program exits 0; stopping stops the whole group', async () => {
   const root = repository('processes');
-  const processes = createProcesses({ environment, appAliveMs: 400, uiReadyMs: 8000 });
+  const processes = processesOf({ environment, appAliveMs: 400, uiReadyMs: 8000 });
   const port = await freePort();
   await processes.start('web', `PORT=${port} node server.cjs`, root);
   const web = await processes.check('web', 'ui', { port });
@@ -259,7 +264,7 @@ function scripted(steps) {
 function manager(runner, runAgent, extra = {}) {
   const events = [];
   const shown = terminals();
-  const processes = createProcesses({ environment, appAliveMs: 400, uiReadyMs: 8000 });
+  const processes = processesOf({ environment, appAliveMs: 400, uiReadyMs: 8000 });
   const runStep = createRunStep({ processes, runAgent, prepareClaude: async () => ({ file: 'claude', env: {} }), tickMs: 100, ...shown, ...extra });
   const builds = createBuilds({ git, runner, readModels: () => MODELS, notify: (channel, payload) => events.push({ channel, payload }), runShell: async () => ({ ok: true, output: '' }), runStep });
   return { builds, events, shown, processes, runStep };
@@ -282,7 +287,7 @@ async function settled(project, id) {
   throw new Error('the Build never settled');
 }
 
-test('after a turn ends in review: the runnables named, started and checked, their commands kept ({port}, never a port), and shown', async () => {
+test('after a turn ends in review: the runnables named, started and checked, their commands kept ({port}, never a port); nothing shown until it is opened', async () => {
   const { project, workspace, target, row } = await scene();
   const agent = bridgeAgent(async (use) => {
     await assert.rejects(use('start_runnable', { name: 'web', run_command: 'PORT={port} npm start' }), /not declared/);
@@ -314,29 +319,34 @@ test('after a turn ends in review: the runnables named, started and checked, the
   assert.equal(await answers(web.url), true, 'it runs');
   assert.deepEqual([agent.seen[0].model, agent.seen[0].effort, path.basename(agent.seen[0].server)], ['opus', 'max', 'run-mcp.cjs'], 'the Build\'s own model and effort');
   assert.match(agent.seen[0].prompt, /"cwd":"\."/, 'the launch facts are in the prompt');
-  const rows = await runnableStore(ctx.libraryDb).list(row.id);
-  assert.deepEqual(rows.map((item) => [item.name, item.type, item.status, item.run_command]), [['cli', 'terminal', 'verified', 'node cli.cjs --help'], ['web', 'ui', 'verified', 'PORT={port} npm start']]);
-  assert.ok(rows.every((item) => /^[0-9a-f]{40}$/.test(item.verified_commit)));
-  const run = events.filter((event) => event.channel === 'engelbart:build-run').map((event) => event.payload);
-  assert.deepEqual(run.map((event) => [event.kind, event.name]), [['ui', 'web'], ['terminal', 'cli']]);
-  assert.equal(run[0].url, web.url);
-  assert.deepEqual(shown.opened.map((session) => [session.command, session.cwd]), [['node cli.cjs --help', fs.realpathSync(task.cwd)]], 'the terminal program runs in a terminal of its own');
+  assert.deepEqual(await runnableStore(ctx.libraryDb).list(row.id), [], 'nothing is written to the repository\'s rows while it runs');
+  const run = () => events.filter((event) => event.channel === 'engelbart:build-run').map((event) => event.payload);
+  assert.deepEqual([run(), shown.opened], [[], []], 'nothing is shown when it passes: it runs in the background until Review');
+  assert.deepEqual(task.runStep.runnables.map((item) => [item.name, item.passed, item.install_command, item.run_command]), [['web', true, null, 'PORT={port} npm start'], ['cli', true, null, 'node cli.cjs --help']], 'the commands that passed, on the record');
   assert.match(task.messages[task.messages.length - 1].text, /^Run step: web \(web UI\) runs at http:\/\/localhost:\d+\/; cli \(terminal\) runs\.$/);
   assert.ok(!task.checkpoints.some((checkpoint) => checkpoint.step === 'run'), 'nothing changed, so no run step checkpoint');
-  // Shown again from the card; Discard stops everything it started.
-  builds.showRunnable(ctx, project.id, task.id, 'web');
-  assert.equal(events[events.length - 1].payload.url, web.url);
+  // Opened (from Review): a UI in the Stage, a terminal program in a terminal of its own, opened then, and the same one again.
+  await builds.showRunnable(ctx, project.id, task.id, 'web');
+  assert.deepEqual(run().map((event) => [event.kind, event.name, event.url]), [['ui', 'web', web.url]]);
+  await builds.showRunnable(ctx, project.id, task.id, 'cli');
+  assert.deepEqual(shown.opened.map((session) => [session.command, session.cwd]), [['node cli.cjs --help', fs.realpathSync(task.cwd)]], 'the terminal program runs in a terminal of its own');
+  assert.deepEqual(run().slice(1).map((event) => [event.kind, event.name, event.session.id]), [['terminal', 'cli', 'term-1']]);
+  await builds.showRunnable(ctx, project.id, task.id, 'cli');
+  assert.equal(shown.opened.length, 1, 'its terminal again, not another');
+  assert.equal(store.readTask(projects.findProject(ctx, project.id), task.id).runStep.runnables.find((item) => item.name === 'cli').sessionId, 'term-1');
+  await assert.rejects(builds.showRunnable(ctx, project.id, task.id, 'nothing'), /not running/);
   await builds.discard(ctx, project.id, task.id);
   assert.equal(await answers(web.url), false, 'Discard stops it');
   assert.deepEqual(shown.closed, ['term-1']);
   const gone = store.readTask(projects.findProject(ctx, project.id), task.id);
   assert.ok(gone.runStep.runnables.every((item) => item.status === 'stopped'));
+  assert.deepEqual(await runnableStore(ctx.libraryDb).list(row.id), [], 'Discard writes nothing');
 });
 
-test('what the run step changes is its own checkpoint, apart in Review; the next run step stops what the last one started and tries its stored commands first; Accept stops everything', async () => {
-  const { project, workspace, target, repo } = await scene({ ...APP, 'server.cjs': "require('node:http').createServer((q, r) => r.end('hi')).listen(4999, 'localhost');\n" });
+test('what the run step changes is its own checkpoint, apart in Review; the next run step stops what the last one started; Accept keeps what passed, and the next Build tries it first', async () => {
+  const { project, workspace, target, repo, row } = await scene({ ...APP, 'server.cjs': "require('node:http').createServer((q, r) => r.end('hi')).listen(4999, 'localhost');\n" });
   const agent = bridgeAgent(async (use, input) => {
-    assert.match(input.prompt, /Nothing has been verified here before/);
+    assert.match(input.prompt, /Nothing has been verified here before/, 'nothing is kept before an Accept');
     // A fixed port: the one change it takes, made by the run step.
     await use('declare_runnables', { runnables: [{ name: 'web', folder: '.', type: 'ui' }] });
     await use('write_file', { path: 'server.cjs', content: "require('node:http').createServer((q, r) => r.end('hi')).listen(Number(process.env.PORT), 'localhost');\n" });
@@ -346,6 +356,7 @@ test('what the run step changes is its own checkpoint, apart in Review; the next
   const build = scripted([
     ({ task }) => { write(path.join(task.worktree, 'feature.js'), 'one\n'); return 'Added feature.js.'; },
     ({ task }) => { write(path.join(task.worktree, 'feature.js'), 'two\n'); return 'Changed feature.js.'; },
+    ({ task }) => { write(path.join(task.worktree, 'more.js'), 'more\n'); return 'Added more.js.'; },
   ]);
   const { builds } = manager(build, agent);
   const started = await builds.start(ctx, project.id, { workspaceId: workspace.id, target });
@@ -361,48 +372,109 @@ test('what the run step changes is its own checkpoint, apart in Review; the next
   await builds.reply(ctx, project.id, task.id, 'Change it.');
   task = await stepped(builds, project, task.id, 2);
   assert.equal(await answers(first), false, 'the last run step\'s processes were stopped first');
-  assert.equal(agent.seen.length, 1, 'its stored commands passed again: nothing to explore, so no agent');
-  assert.deepEqual([task.runStep.status, task.runStep.runnables.map((item) => [item.name, item.status])], ['done', [['web', 'running']]]);
-  assert.match(task.messages[task.messages.length - 1].text, /^Run step: web \(web UI\) runs at http:\/\/localhost:\d+\/\.$/);
+  assert.equal(agent.seen.length, 2, 'nothing is kept until Accept: the agent finds it again');
+  assert.deepEqual(await runnableStore(ctx.libraryDb).list(row.id), []);
   const now = task.runStep.runnables[0].url;
   assert.equal(await answers(now), true);
   review = await builds.review(ctx, project.id, task.id);
   assert.deepEqual([review.files.map((file) => file.path), review.runStep.files.map((file) => file.path)], [['feature.js'], ['server.cjs']]);
 
   await builds.accept(ctx, project.id, task.id);
-  assert.equal(await answers(now), false, 'Accept stops it');
+  const accepted = store.readTask(projects.findProject(ctx, project.id), task.id).accepted;
+  assert.equal(await answers(now), true, 'Accept keeps it running, on what landed');
   assert.match(fs.readFileSync(path.join(repo, 'server.cjs'), 'utf8'), /process\.env\.PORT/, 'the run step\'s change lands with the Build');
   assert.equal(fs.readFileSync(path.join(repo, 'feature.js'), 'utf8'), 'two\n');
+  const kept = await runnableStore(ctx.libraryDb).list(row.id);
+  assert.deepEqual(kept.map((item) => [item.name, item.type, item.status, item.install_command, item.run_command, item.verified_commit]), [['web', 'ui', 'verified', null, 'PORT={port} node server.cjs', accepted.sha]], 'Accept keeps what passed, at the commit that landed');
+
+  // The next Build of the repository: what the accepted one kept is tried first, and it is all it takes.
+  const next = await builds.start(ctx, project.id, { workspaceId: workspace.id, target });
+  const again = await stepped(builds, project, next.id, 1);
+  assert.equal(agent.seen.length, 2, 'the stored commands passed: no agent');
+  assert.deepEqual(again.runStep.runnables.map((item) => [item.name, item.status, item.passed]), [['web', 'running', true]]);
+  assert.match(again.messages[again.messages.length - 1].text, /^Run step: web \(web UI\) runs at http:\/\/localhost:\d+\/\.$/);
+  await builds.discard(ctx, project.id, next.id);
+  assert.deepEqual((await runnableStore(ctx.libraryDb).list(row.id)).map((item) => item.verified_commit), [accepted.sha], 'Discard writes nothing');
+  await builds.stopRunnable(ctx, project.id, task.id, null);
+  assert.equal(await answers(now), false);
 });
 
-test('a stored command that no longer works: the agent is told, what already passed stays running, and what works instead is stored', async () => {
+test('a stored command that no longer works: the agent is told, what already passed stays running, and what works instead is kept on Accept', async () => {
   const { project, workspace, target, row } = await scene();
+  const runnables = runnableStore(ctx.libraryDb);
+  for (const [name, type, command] of [['web', 'ui', 'PORT={port} node server.cjs'], ['cli', 'terminal', 'node cli.cjs --help']]) {
+    const declared = await runnables.declare(row.id, { folder: '.', name, type });
+    await runnables.verify(declared.id, { install_command: null, run_command: command, commit: null });
+  }
   const agent = bridgeAgent(async (use, input) => {
-    if (/Nothing has been verified here before/.test(input.prompt)) {
-      await use('declare_runnables', { runnables: [{ name: 'web', folder: '.', type: 'ui' }, { name: 'cli', folder: '.', type: 'terminal' }] });
-      assert.equal((await use('start_runnable', { name: 'web', run_command: 'PORT={port} node server.cjs' })).ok, true);
-      assert.equal((await use('start_runnable', { name: 'cli', run_command: 'node cli.cjs --help' })).ok, true);
-      return 'Both run.';
-    }
     assert.match(input.prompt, /"name":"cli","folder":"\.","type":"terminal","passed":false/, 'told which stored command failed, and how');
-    const declared = await use('declare_runnables', { runnables: [{ name: 'web', folder: '.', type: 'ui' }, { name: 'cli', folder: '.', type: 'terminal' }] });
-    assert.deepEqual(declared.runnables.map((item) => [item.name, item.status, item.stored.run_command]), [['web', 'running', 'PORT={port} node server.cjs'], ['cli', 'waiting', 'node cli.cjs --help']]);
+    assert.match(input.prompt, /Failed on them: cli\./);
+    const declared = await use('declare_runnables', { runnables: [{ name: 'cli', folder: '.', type: 'terminal' }] });
+    assert.deepEqual(declared.runnables.map((item) => [item.name, item.status, item.stored.run_command]), [['cli', 'waiting', 'node cli.cjs --help'], ['web', 'running', 'PORT={port} node server.cjs']]);
     assert.equal((await use('start_runnable', { name: 'cli', run_command: 'node tool.cjs --help' })).ok, true);
     return 'cli is tool.cjs now.';
   });
-  const build = scripted([
-    'Built it.',
-    ({ task }) => { fs.renameSync(path.join(task.worktree, 'cli.cjs'), path.join(task.worktree, 'tool.cjs')); return 'Renamed the CLI.'; },
-  ]);
+  const build = scripted([({ task }) => { fs.renameSync(path.join(task.worktree, 'cli.cjs'), path.join(task.worktree, 'tool.cjs')); return 'Renamed the CLI.'; }]);
   const { builds } = manager(build, agent);
   const started = await builds.start(ctx, project.id, { workspaceId: workspace.id, target });
-  let task = await stepped(builds, project, started.id, 1);
-  await builds.reply(ctx, project.id, task.id, 'Rename the CLI.');
-  task = await stepped(builds, project, task.id, 2);
-  assert.equal(agent.seen.length, 2, 'a stored command failed: the agent explores');
-  assert.deepEqual(task.runStep.runnables.map((item) => [item.name, item.status]), [['web', 'running'], ['cli', 'running']]);
-  const rows = await runnableStore(ctx.libraryDb).list(row.id);
-  assert.deepEqual(rows.map((item) => [item.name, item.status, item.run_command]), [['cli', 'verified', 'node tool.cjs --help'], ['web', 'verified', 'PORT={port} node server.cjs']], 'what works instead replaces it');
+  const task = await stepped(builds, project, started.id, 1);
+  assert.equal(agent.seen.length, 1, 'a stored command failed: the agent explores');
+  assert.deepEqual(task.runStep.runnables.map((item) => [item.name, item.status, item.run_command]), [['cli', 'running', 'node tool.cjs --help'], ['web', 'running', 'PORT={port} node server.cjs']]);
+  const rowsOf = async () => (await runnables.list(row.id)).map((item) => [item.name, item.status, item.run_command, item.verified_commit]);
+  assert.deepEqual(await rowsOf(), [['cli', 'verified', 'node cli.cjs --help', null], ['web', 'verified', 'PORT={port} node server.cjs', null]], 'unchanged until Accept');
+  await builds.accept(ctx, project.id, task.id);
+  const { sha } = store.readTask(projects.findProject(ctx, project.id), task.id).accepted;
+  assert.deepEqual(await rowsOf(), [['cli', 'verified', 'node tool.cjs --help', sha], ['web', 'verified', 'PORT={port} node server.cjs', sha]], 'what works instead replaces it');
+  await builds.stopRunnable(ctx, project.id, task.id, null);
+});
+
+test('every stored command passes, but the launch facts name a folder no row covers: the agent is told what runs, and declares and starts only what is new', async () => {
+  const { project, workspace, target, row } = await scene();
+  const runnables = runnableStore(ctx.libraryDb);
+  const stored = await runnables.declare(row.id, { folder: '.', name: 'web', type: 'ui' });
+  await runnables.verify(stored.id, { install_command: null, run_command: 'PORT={port} node server.cjs', commit: null });
+  const agent = bridgeAgent(async (use, input) => {
+    assert.match(input.prompt, /Already running on them, and they stay running: web\./);
+    assert.match(input.prompt, /Folders no stored runnable covers[^\n]*\["admin"\]/);
+    const declared = await use('declare_runnables', { runnables: [{ name: 'admin', folder: 'admin', type: 'ui' }] });
+    assert.deepEqual(declared.runnables.map((item) => [item.name, item.status]), [['admin', 'waiting'], ['web', 'running']], 'what runs stays, though not declared again');
+    assert.equal((await use('start_runnable', { name: 'admin', run_command: 'PORT={port} node admin.cjs' })).ok, true);
+    return 'admin runs too.';
+  });
+  const build = scripted([({ task }) => {
+    write(path.join(task.worktree, 'admin', 'package.json'), JSON.stringify({ name: 'admin', scripts: { start: 'node admin.cjs' } }));
+    write(path.join(task.worktree, 'admin', 'admin.cjs'), "require('node:http').createServer((q, r) => r.end('admin')).listen(Number(process.env.PORT), 'localhost');\n");
+    return 'Added an admin UI.';
+  }]);
+  const { builds } = manager(build, agent);
+  const started = await builds.start(ctx, project.id, { workspaceId: workspace.id, target });
+  const task = await stepped(builds, project, started.id, 1);
+  assert.equal(agent.seen.length, 1, 'a folder no row covers: the agent looks');
+  assert.deepEqual(task.runStep.runnables.map((item) => [item.name, item.status]), [['admin', 'running'], ['web', 'running']]);
+  for (const item of task.runStep.runnables) assert.equal(await answers(item.url), true, `${item.name} answers`);
+  await builds.discard(ctx, project.id, task.id);
+});
+
+test('a desktop app opened from Review: its window is brought forward, found among the processes of its group', async () => {
+  const { project, workspace, target } = await scene();
+  const agent = bridgeAgent(async (use) => {
+    await use('declare_runnables', { runnables: [{ name: 'desk', folder: '.', type: 'app' }] });
+    assert.equal((await use('start_runnable', { name: 'desk', run_command: 'node -e "setInterval(() => {}, 1000)"' })).ok, true);
+    return 'desk runs.';
+  });
+  const asked = [];
+  let answer = true;
+  const { builds } = manager(scripted(['Built it.']), agent, { focusWindow: async (pids) => { asked.push(pids); return answer; } });
+  const started = await builds.start(ctx, project.id, { workspaceId: workspace.id, target });
+  const task = await stepped(builds, project, started.id, 1);
+  assert.deepEqual(task.runStep.runnables.map((item) => [item.name, item.type, item.status]), [['desk', 'app', 'running']]);
+  assert.equal(await builds.showRunnable(ctx, project.id, task.id, 'desk'), true);
+  assert.equal(asked.length, 1);
+  assert.ok(asked[0].length >= 1 && asked[0].every(Number.isInteger));
+  const commands = execFileSync('/bin/ps', ['-o', 'command=', '-p', asked[0].join(',')], { encoding: 'utf8' });
+  assert.match(commands, /setInterval/, 'the app is among them');
+  answer = false;
+  await assert.rejects(builds.showRunnable(ctx, project.id, task.id, 'desk'), /could not be brought to the front/);
   await builds.discard(ctx, project.id, task.id);
 });
 
@@ -443,10 +515,14 @@ test('a runnable out of time is failed with its last error, and the agent is tol
   const started = await builds.start(ctx, project.id, { workspaceId: workspace.id, target });
   const task = await stepped(builds, project, started.id, 1);
   assert.deepEqual([task.status, task.runStep.status, task.runStep.runnables[0].status], ['review', 'done', 'failed']);
+  assert.match(task.runStep.runnables[0].error, /Cannot find module/, 'its last error, on the record');
+  assert.deepEqual(await runnableStore(ctx.libraryDb).list(row.id), [], 'nothing is written before Accept');
+  await builds.accept(ctx, project.id, task.id);
   const [stored] = await runnableStore(ctx.libraryDb).list(row.id);
-  assert.deepEqual([stored.status, stored.run_command], ['failed', null], 'no command is kept that never passed');
+  assert.deepEqual([stored.status, stored.run_command], ['failed', null], 'accepted: its failure is kept, and no command that never passed');
   assert.match(stored.last_error, /Cannot find module/);
-  await builds.discard(ctx, project.id, task.id);
+  const accepted = store.readTask(projects.findProject(ctx, project.id), task.id);
+  assert.deepEqual([accepted.keptCopy || false, fs.existsSync(task.worktree)], [false, false], 'nothing ran: its copy goes at once, as before');
 });
 
 test('no run step for a quick task, or a turn that ends needing the person; a failing agent leaves the Build as it was', async () => {
@@ -489,9 +565,101 @@ test('a reply while the run step works halts it first: its change is still its o
   const steps = task.checkpoints.map((checkpoint) => checkpoint.step || 'turn');
   assert.deepEqual(steps, ['turn', 'run', 'turn'], 'the halted run step\'s change, then the next turn');
   assert.ok(task.messages.some((message) => message.text === 'Run step stopped.'));
-  const [stored] = await runnableStore(ctx.libraryDb).list(row.id);
-  assert.equal(stored.status, 'pending', 'halted: nothing recorded against it');
+  assert.deepEqual(await runnableStore(ctx.libraryDb).list(row.id), [], 'halted: nothing recorded against it');
   await builds.discard(ctx, project.id, task.id);
+});
+
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const detachedAt = (dir) => { try { execFileSync('git', ['symbolic-ref', '-q', 'HEAD'], { cwd: dir, env: environment }); return null; } catch { return sh(dir, 'rev-parse', 'HEAD'); } };
+const branchThere = (repo, branch) => { try { sh(repo, 'show-ref', '--verify', '--quiet', `refs/heads/${branch}`); return true; } catch { return false; } };
+
+test('Accept keeps what runs up on the code that landed, its copy detached there; Stop stops one runnable at a time, and the copy goes with the last', async () => {
+  const { project, workspace, target } = await scene();
+  const agent = bridgeAgent(async (use) => {
+    await use('declare_runnables', { runnables: [{ name: 'web', folder: '.', type: 'ui' }, { name: 'desk', folder: '.', type: 'app' }, { name: 'cli', folder: '.', type: 'terminal' }] });
+    for (const [name, command] of [['web', 'PORT={port} node server.cjs'], ['desk', 'node -e "setInterval(() => {}, 1000)"'], ['cli', 'node cli.cjs --help']]) assert.equal((await use('start_runnable', { name, run_command: command })).ok, true);
+    return 'All three run.';
+  });
+  const { builds, shown } = manager(scripted([({ task }) => { write(path.join(task.worktree, 'feature.js'), 'new\n'); return 'Added feature.js.'; }]), agent);
+  const started = await builds.start(ctx, project.id, { workspaceId: workspace.id, target });
+  let task = await stepped(builds, project, started.id, 1);
+  const url = task.runStep.runnables.find((item) => item.name === 'web').url;
+  const desk = task.runStep.runnables.find((item) => item.name === 'desk').pid;
+  assert.ok(Number.isInteger(desk) && alive(desk), 'its process group, on the record');
+  await builds.showRunnable(ctx, project.id, task.id, 'cli');
+  await builds.accept(ctx, project.id, task.id);
+  task = store.readTask(projects.findProject(ctx, project.id), task.id);
+  assert.deepEqual([task.status, task.keptCopy, fs.existsSync(task.worktree)], ['accepted', true, true]);
+  assert.equal(detachedAt(task.worktree), task.accepted.sha, 'the copy is detached at the commit that landed');
+  assert.match(task.messages[task.messages.length - 1].text, /web, desk, cli keep running on it until you stop them\.$/);
+  assert.deepEqual([await answers(url), alive(desk)], [true, true]);
+  assert.equal(store.publicTask(task).keptCopy, true);
+
+  await builds.stopRunnable(ctx, project.id, task.id, 'web');
+  assert.deepEqual([await answers(url), alive(desk), fs.existsSync(task.worktree)], [false, true, true], 'web alone stops');
+  await assert.rejects(builds.stopRunnable(ctx, project.id, task.id, 'web'), /web is not running/);
+  await builds.stopRunnable(ctx, project.id, task.id, 'cli');
+  assert.deepEqual(shown.closed, ['term-1'], 'its terminal closes');
+  task = store.readTask(projects.findProject(ctx, project.id), task.id);
+  assert.deepEqual(task.runStep.runnables.map((item) => [item.name, item.status]), [['web', 'stopped'], ['desk', 'running'], ['cli', 'stopped']]);
+  await builds.stopRunnable(ctx, project.id, task.id, 'desk');
+  await pause(100);
+  task = store.readTask(projects.findProject(ctx, project.id), task.id);
+  assert.deepEqual([alive(desk), task.keptCopy, fs.existsSync(task.worktree), branchThere(task.repo, task.branch)], [false, false, false, false], 'the last one: the copy and its branch go');
+  assert.ok(task.runStep.runnables.every((item) => item.status === 'stopped' && item.pid === null));
+  assert.equal(task.messages[task.messages.length - 1].text, 'Stopped desk. Nothing of it runs now, and its copy is removed.');
+  await assert.rejects(builds.stopRunnable(ctx, project.id, task.id, null), /Nothing of this Build is running/);
+});
+
+test('a kept copy goes when Engelbart quits, and one a crash left behind is swept when it starts: its processes stopped only while they are still its own', async () => {
+  const { project, workspace, target } = await scene();
+  const agent = bridgeAgent(async (use) => {
+    await use('declare_runnables', { runnables: [{ name: 'web', folder: '.', type: 'ui' }] });
+    assert.equal((await use('start_runnable', { name: 'web', run_command: 'PORT={port} node server.cjs' })).ok, true);
+    return 'web runs.';
+  });
+  const accepted = async (builds) => {
+    const started = await builds.start(ctx, project.id, { workspaceId: workspace.id, target });
+    const task = await stepped(builds, project, started.id, 1);
+    await builds.accept(ctx, project.id, task.id);
+    return store.readTask(projects.findProject(ctx, project.id), task.id);
+  };
+  // Quit.
+  const first = manager(scripted([({ task }) => { write(path.join(task.worktree, 'a.js'), 'a\n'); return 'a'; }]), agent);
+  let quit = await accepted(first.builds);
+  assert.equal(quit.keptCopy, true);
+  await first.builds.stopAll();
+  quit = store.readTask(projects.findProject(ctx, project.id), quit.id);
+  assert.deepEqual([await answers(quit.runStep.runnables[0].url), quit.keptCopy, fs.existsSync(quit.worktree)], [false, false, false], 'quitting stops it and the copy goes');
+  assert.match(quit.messages[quit.messages.length - 1].text, /^Engelbart closed: what ran on it was stopped/);
+
+  // A crash: the app that kept it is gone without stopping anything; the next one to start sweeps it.
+  const crashed = manager(scripted([({ task }) => { write(path.join(task.worktree, 'b.js'), 'b\n'); return 'b'; }]), agent);
+  const left = await accepted(crashed.builds);
+  const { url, pid } = left.runStep.runnables[0];
+  assert.deepEqual([left.keptCopy, await answers(url)], [true, true]);
+  const next = manager(scripted([]), agent);
+  next.builds.list(ctx, project.id);
+  await next.builds.sweeping();
+  const swept = store.readTask(projects.findProject(ctx, project.id), left.id);
+  assert.deepEqual([await answers(url), alive(pid), swept.keptCopy, fs.existsSync(left.worktree), branchThere(left.repo, left.branch)], [false, false, false, false, false]);
+  assert.ok(swept.runStep.runnables.every((item) => item.status === 'stopped'));
+  assert.match(swept.messages[swept.messages.length - 1].text, /it was stopped when Engelbart started again/);
+  await crashed.builds.stopAll();
+});
+
+test('a process group left behind is stopped only while its leader is the one started there: a folder elsewhere is never touched', async () => {
+  const inside = fs.mkdtempSync(path.join(homeDir, 'leftover-'));
+  const elsewhere = fs.mkdtempSync(path.join(homeDir, 'elsewhere-'));
+  const { spawn } = require('node:child_process');
+  const child = spawn('/bin/sleep', ['30'], { cwd: inside, detached: true, stdio: 'ignore' });
+  await pause(200);
+  assert.equal(await stopLeftover(child.pid, elsewhere), false, 'not in that copy: left alone');
+  assert.equal(alive(child.pid), true);
+  assert.equal(await stopLeftover(123456789, inside), false, 'nothing by that number');
+  assert.equal(await stopLeftover(child.pid, inside), true);
+  await pause(100);
+  assert.equal(alive(child.pid), false);
 });
 
 test('the default repo\'s run step keeps its runnables on the default repo\'s row; the fake agent finds a start script and a bin', async () => {
@@ -506,9 +674,12 @@ test('the default repo\'s run step keeps its runnables on the default repo\'s ro
   const task = await stepped(builds, project, started.id, 1);
   assert.deepEqual(task.runStep.runnables.map((item) => [item.name, item.type, item.status]), [['web', 'ui', 'running'], ['cli', 'terminal', 'running']]);
   const [mine] = await ctx.libraryDb.query('select * from library where folder_path = $1', [task.repo]);
-  assert.deepEqual((await runnableStore(ctx.libraryDb).list(mine.id)).map((item) => item.run_command), ['node cli.cjs --help', 'PORT={port} npm start']);
-  assert.equal(shown.opened.length, 1);
+  assert.deepEqual(await runnableStore(ctx.libraryDb).list(mine.id), [], 'kept only on Accept');
+  assert.equal(shown.opened.length, 0, 'no terminal until it is opened');
   const url = task.runStep.runnables[0].url;
+  await builds.accept(ctx, project.id, task.id);
+  const { sha } = store.readTask(projects.findProject(ctx, project.id), task.id).accepted;
+  assert.deepEqual((await runnableStore(ctx.libraryDb).list(mine.id)).map((item) => [item.run_command, item.verified_commit]), [['node cli.cjs --help', sha], ['PORT={port} npm start', sha]], 'on the default repo\'s row');
   await builds.stopAll();
   assert.equal(await answers(url), false, 'quitting stops what it started');
 });

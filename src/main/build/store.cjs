@@ -105,8 +105,10 @@ function publicTask(task) {
     conflict: task.conflict || null,
     accepted: task.accepted || null,
     version: task.version || null, // a post-it added to a workspace: the archived version it was put in as ({ file, title })
-    // its last run step (manager.cjs, run-step.cjs): { status, phase, runnables: [{ name, folder, type, status, url, error, sessionId }], error }
+    // its last run step (manager.cjs, run-step.cjs): { status, phase, runnables: [{ name, folder, type, status, passed,
+    // install_command, run_command, url, error, sessionId, pid }], error }
     runStep: task.runStep || null,
+    keptCopy: !!task.keptCopy, // accepted while something ran: its copy stays, detached at what landed, until it is stopped
     created: task.created,
     updated: task.updated,
     final: FINAL.has(task.status),

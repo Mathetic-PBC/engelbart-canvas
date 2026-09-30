@@ -140,8 +140,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     window.addEventListener(OPEN_IN_BROWSER, show);
     return () => window.removeEventListener(OPEN_IN_BROWSER, show);
   }, []);
-  // What a Build's run step got running (main/build/run-step.cjs): a web UI opens in a Stage tab, a terminal program's
-  // session (main's) in the terminal. A desktop app is in its own window already.
+  // What a Build's run step got running (main/build/run-step.cjs), opened from Review: a web UI in a Stage tab, a terminal
+  // program's session (main's) in the terminal. A desktop app's window comes forward by itself (main).
   React.useEffect(() => api.onBuildRun((event) => {
     if (event && event.kind === 'closed' && event.sessionId) { dropSession(event.sessionId); return; }
     if (!event || event.projectId !== project.id) return;
@@ -446,9 +446,15 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       else if (action === 'accept') await api.buildAccept(project.id, id).catch(() => {}); // refused: the card says why
       else if (action === 'runshow') await api.buildRunShow(project.id, id, payload.name); // its Stage tab or its terminal, again
       else if (action === 'runstop') await api.buildRunStop(project.id, id);
+      else if (action === 'runstopone') await api.buildRunStopRunnable(project.id, id, payload.name); // an accepted Build's, on what landed
+      else if (action === 'runstopall') await api.buildRunStopRunnable(project.id, id, null);
       else if (action === 'review') {
-        const title = (builds[id] && builds[id].title) || '';
+        const task = builds[id];
+        const title = (task && task.title) || '';
         setReview({ id, title, review: null, error: '' });
+        // What runs comes first (2026-09-29): the first web UI its run step got running opens in the Stage at once.
+        const first = ((task && task.runStep && task.runStep.runnables) || []).find((item) => item.status === 'running' && item.type === 'ui');
+        if (first) api.buildRunShow(project.id, id, first.name).catch(onError);
         try { const got = await api.buildReview(project.id, id); setReview((now) => (now && now.id === id ? { ...now, review: got } : now)); } catch (error) { setReview((now) => (now && now.id === id ? { ...now, error: errorMessage(error) } : now)); }
       }
       return true;
@@ -1266,7 +1272,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onClose={closeQuickTask}
         />
       )}
-      {review && <BuildReview title={review.title} review={review.review} error={review.error} onClose={() => setReview(null)} />}
+      {review && <BuildReview key={review.id} title={review.title} review={review.review} error={review.error} task={builds[review.id] || null} aside={full ? 0 : paneWidth + 1} onOpen={(name) => { void onBuildAction(review.id, 'runshow', { name }); }} onClose={() => setReview(null)} />}
 
       <ProjectPostIts
         projectId={project.id}

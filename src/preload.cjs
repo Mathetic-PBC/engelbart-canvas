@@ -121,6 +121,7 @@ const engelbartAPI = Object.freeze({
   onBuildRun: (callback) => subscribe('engelbart:build-run', callback),
   buildRunShow: invoke('build-run-show'),
   buildRunStop: invoke('build-run-stop'),
+  buildRunStopRunnable: invoke('build-run-stop-runnable'), // (projectId, id, name | null): an accepted Build's runnable, or all
   // A post-it's Build button asks the window for its Build popup, with the card's text, and where the card and the
   // button are ({ projectId, postItId, text, card, button }, CSS px of the window).
   onBuildQuick: (callback) => subscribe('engelbart:build-quick', callback),

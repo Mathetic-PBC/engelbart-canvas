@@ -10,11 +10,15 @@
 //              lock, a checkpoint commit, the ending read (NEEDS YOU / ESCALATE / done), a reply that waited sent next
 //   reply      the next turn in the same session; while a turn runs it waits, or (`interrupt`) the turn is cut short
 //   run step   after a turn that ends in review (a Build, never a quick task): what the repository can run is found,
-//              started, checked and shown (./run-step.cjs); what it changed is a checkpoint of its own. The processes of
-//              the last run step are stopped before the next, and everything it started on Accept, Discard and quit
-//   review     the diff from where the Build started, the run steps' changes apart
+//              started and checked (./run-step.cjs), and runs in the background until Review opens it; the card waits
+//              for it (no Review, no Accept) while it works. What it changed is a checkpoint of its own. The processes of
+//              the last run step are stopped before the next, and everything it started on Discard and quit
+//   review     the diff from where the Build started, the run steps' changes apart; what runs comes first (the renderer)
 //   accept     leftovers committed, everything squashed into one commit, replayed onto the person's current branch, the
-//              checks, a fast-forward of their folder; worktree and branch removed. Refusals change nothing
+//              checks, a fast-forward of their folder; then what the run step found is written to the repository's rows
+//              (only here). Worktree and branch removed, unless something runs: then the copy stays, detached at what
+//              landed, until its last runnable is stopped or Engelbart quits (a crash: swept when it starts). Refusals
+//              change nothing
 //   discard    stopped, worktree and branch removed
 //   recovery   a record left working when the app closed is `interrupted`; Resume continues its session
 // Git writes that touch the shared repository's worktrees (add, remove) and Accept run one at a time per repository.
@@ -50,6 +54,8 @@ const { freezeContext, replyMessage, freshMessage } = require('./context.cjs');
 const { loadBuildPrompt, readEnding } = require('./prompt.cjs');
 const { buildPolicy } = require('./policy.cjs');
 const { githubRepo } = require('../sandbox/runs.cjs');
+const { worktreePath } = require('./run-tools.cjs');
+const { runnableStore } = require('./runnables.cjs');
 
 const CLONES = 'repos';
 const LIMITS = Object.freeze({ build: 3, quick: 1 });
@@ -135,6 +141,8 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
   const chains = new Map(); // repository → the promise of its last git writer
   const stepping = new Map(); // id → its run step while it works (the agent, then its checkpoint)
   const reconciled = new Set();
+  const keptCopies = new Map(); // id → { ctx, projectId }: accepted Builds whose copy stays while what they run is up
+  const sweeps = new Set(); // kept copies an Engelbart that crashed left, being cleaned up
   let quitting = false;
 
   const emit = (task) => { try { notify('engelbart:build', store.publicTask(task)); } catch { /* a closed window */ } };
@@ -547,9 +555,8 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
       try {
         result = await runStep.run({
           id, root: task.cwd, name: task.target ? task.target.name : path.basename(task.repo), libraryId: row.id, db: ctx.libraryDb,
-          model: choice.modelId, effort: choice.effort, head: () => git.revParse(task.worktree, 'HEAD'),
+          model: choice.modelId, effort: choice.effort,
           onState: (state) => put(state),
-          show: (kind, detail) => { try { notify('engelbart:build-run', { projectId, id, kind, ...detail }); } catch { /* a closed window */ } },
         });
       } catch (error) {
         failure = error;
@@ -557,7 +564,6 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
       // What the run step changed: a checkpoint of its own, which Review shows apart from the Build's work.
       let sha = null;
       try { sha = await git.checkpoint(task.worktree, `Build ${task.title}: run step`, await git.identity(task.repo)); } catch { sha = null; }
-      if (sha && result && result.verified.length) await ctx.libraryDb.query('update repo_runnables set verified_commit = $2 where id = any($1::uuid[])', [result.verified, sha]).catch(() => {});
       save(ctx, projectId, id, (held) => ({
         checkpoints: sha ? [...held.checkpoints, { sha, turn: held.turn, at: now().toISOString(), step: 'run' }] : held.checkpoints,
         runStep: { ...(held.runStep || {}), status: failure ? (failure.stopped ? 'stopped' : 'failed') : 'done', phase: null, error: failure && !failure.stopped ? failure.message : null, finished: now().toISOString(), changed: !!sha },
@@ -581,18 +587,98 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     if (runStep) await runStep.stop(id);
   }
   /** The record's run step once what it started is stopped: nothing it lists runs any more. */
-  const stoppedRunStep = (held) => (held.runStep ? { runStep: { ...held.runStep, runnables: (held.runStep.runnables || []).map((item) => (item.status === 'running' ? { ...item, status: 'stopped', sessionId: null } : item)) } } : {});
+  const stoppedRunStep = (held) => (held.runStep ? { runStep: { ...held.runStep, runnables: (held.runStep.runnables || []).map((item) => (item.status === 'running' ? { ...item, status: 'stopped', sessionId: null, pid: null } : item)) } } : {});
 
-  /** A runnable the last run step got running, shown again: a UI's Stage tab, a terminal program's session. */
-  function showRunnable(ctx, projectId, id, name) {
+  /**
+   * What the Build's last run step found, written to the repository's rows once the Build is accepted (`commit`: what
+   * landed, or the commit it ran on when nothing changed): a runnable that passed with its commands, verified at that
+   * commit; one that failed with its last error. Only then: the stored commands are always ones an accepted Build ran.
+   */
+  async function recordRunnables(ctx, projectId, task, commit) {
+    const list = ((task.runStep && task.runStep.runnables) || []).filter((item) => item.passed || item.status === 'failed');
+    if (!list.length) return 0;
+    const row = await repositoryRow(ctx, projectId, task);
+    if (!row) return 0;
+    const rows = runnableStore(ctx.libraryDb);
+    for (const item of list) {
+      const kept = await rows.declare(row.id, { folder: item.folder, name: item.name, type: item.type });
+      if (item.passed) await rows.verify(kept.id, { install_command: item.install_command, run_command: item.run_command, commit });
+      else await rows.fail(kept.id, item.error || 'It did not pass its check.');
+    }
+    return list.length;
+  }
+
+  /**
+   * A runnable the run step got running, opened for the person (from Review; nothing is shown before): a UI in a Stage
+   * tab, a terminal program in Engelbart's terminal (a session of its own, opened now when it has none open), a desktop
+   * app's window brought to the front.
+   */
+  async function showRunnable(ctx, projectId, id, name) {
     const task = read(ctx, projectId, id);
     const item = ((task.runStep && task.runStep.runnables) || []).find((entry) => entry.name === name);
     if (!item || item.status !== 'running') throw new Error(`${name} is not running.`);
     if (item.type === 'ui' && item.url) { notify('engelbart:build-run', { projectId, id, kind: 'ui', name, url: item.url }); return true; }
-    const session = item.type === 'terminal' && item.sessionId && runStep ? runStep.session(id, item.sessionId) : null;
-    if (!session) throw new Error(item.type === 'app' ? `${name} is in a window of its own.` : `${name}'s terminal was closed.`);
+    if (!runStep) throw new Error(`${name} cannot be opened here.`);
+    if (item.type === 'app') {
+      if (!(await runStep.focus(id, item))) throw new Error(`${name}'s window could not be brought to the front.`);
+      return true;
+    }
+    if (!item.run_command) throw new Error(`${name} has no command to open.`);
+    const session = runStep.terminal(id, { name, cwd: worktreePath(task.cwd, item.folder), command: item.run_command, sessionId: item.sessionId });
+    if (session.id !== item.sessionId) {
+      save(ctx, projectId, id, (held) => (held.runStep ? { runStep: { ...held.runStep, runnables: (held.runStep.runnables || []).map((entry) => (entry.name === name ? { ...entry, sessionId: session.id } : entry)) } } : {}));
+    }
     notify('engelbart:build-run', { projectId, id, kind: 'terminal', name, session });
     return true;
+  }
+
+  /**
+   * An accepted Build's kept copy goes (its last runnable stopped, Engelbart quitting): what its run steps started is
+   * stopped, then its worktree and branch are removed.
+   */
+  async function releaseCopy(ctx, projectId, id, note) {
+    keptCopies.delete(id);
+    if (runStep) await runStep.stop(id);
+    const task = store.readTask(projectOf(ctx, projectId), id);
+    if (!task) return;
+    await cleanUp(task).catch(() => {});
+    save(ctx, projectId, id, (held) => ({ ...stoppedRunStep(held), keptCopy: false, messages: [...held.messages, say('engelbart', note)] }));
+  }
+
+  /**
+   * On an accepted Build's card (its copy kept while something runs): one runnable stopped (`name`), or all of them
+   * (null). The copy goes with the last one.
+   */
+  async function stopRunnable(ctx, projectId, id, name = null) {
+    const task = read(ctx, projectId, id);
+    if (task.status !== 'accepted' || !task.keptCopy) throw new Error('Nothing of this Build is running.');
+    const runnables = (task.runStep && task.runStep.runnables) || [];
+    const item = name === null ? null : runnables.find((entry) => entry.name === name && entry.status === 'running');
+    if (name !== null && !item) throw new Error(`${name} is not running.`);
+    if (item && runnables.some((entry) => entry !== item && entry.status === 'running')) {
+      if (runStep) await runStep.stopOne(id, item);
+      save(ctx, projectId, id, (held) => ({ runStep: { ...held.runStep, runnables: held.runStep.runnables.map((entry) => (entry.name === name ? { ...entry, status: 'stopped', sessionId: null, pid: null } : entry)) } }));
+    } else {
+      const names = runnables.filter((entry) => entry.status === 'running').map((entry) => entry.name);
+      await releaseCopy(ctx, projectId, id, `Stopped ${names.join(', ')}. Nothing of it runs now, and its copy is removed.`);
+    }
+    return get(ctx, projectId, id);
+  }
+
+  /**
+   * A copy an accepted Build kept when Engelbart closed without stopping it (it crashed): what it ran is stopped (a
+   * process group only while it is still the one started there), then the copy goes.
+   */
+  async function sweepCopy(ctx, project, task) {
+    const runnables = (task.runStep && task.runStep.runnables) || [];
+    if (fs.existsSync(task.worktree)) {
+      for (const item of runnables) if (item.pid && runStep) await runStep.stopLeftover(item.pid, task.worktree).catch(() => false);
+      await cleanUp(task).catch(() => {});
+    } else {
+      await serial(task.repo, () => git.deleteBranch(task.repo, task.branch)).catch(() => false);
+    }
+    const held = store.readTask(project, task.id);
+    if (held) emit(store.writeTask(project, { ...held, ...stoppedRunStep(held), keptCopy: false, messages: [...held.messages, say('engelbart', 'Engelbart closed without stopping what ran on it; it was stopped when Engelbart started again, and its copy removed.')] }, now()));
   }
 
   /** The run step that is working stops; what already passed keeps running. */
@@ -738,13 +824,26 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
             throw error;
           }
         }
-        if (runStep) await runStep.stop(id); // what the run steps started runs in the worktree: stopped before it goes
-        await removeCopy(task); // inside this repository's turn already: not cleanUp, which would wait for it
+        // It landed: what its run step found is the repository's now (its rows), at the commit that landed.
+        const landed = store.readTask(project, id);
+        let unkept = null;
+        try { await recordRunnables(ctx, projectId, landed, sha || tip); } catch (error) { unkept = error.message; }
+        // What runs stays up (2026-09-29): the copy stays, detached at what landed (squashOnto left it there), so the
+        // preview is the code that landed, until its last runnable is stopped, Engelbart quits, or (after a crash) starts.
+        const up = ((landed.runStep && landed.runStep.runnables) || []).filter((item) => item.status === 'running').map((item) => item.name);
+        const keep = !!runStep && up.length > 0 && runStep.holds(id);
+        if (keep) {
+          if (!sha) await git.exec(task.worktree, ['checkout', '--quiet', '--detach']).catch(() => null);
+          keptCopies.set(id, { ctx, projectId });
+        } else {
+          if (runStep) await runStep.stop(id); // what the run steps started runs in the worktree: stopped before it goes
+          await removeCopy(task); // inside this repository's turn already: not cleanUp, which would wait for it
+        }
         const done = save(ctx, projectId, id, (held) => ({
-          ...stoppedRunStep(held),
+          ...(keep ? { keptCopy: true } : stoppedRunStep(held)),
           status: 'accepted', finished: now().toISOString(), checks, queued: null,
           accepted: sha ? { sha, branch: target.branch, at: now().toISOString() } : null,
-          messages: [...held.messages, say('engelbart', sha ? `Accepted onto ${target.branch} as ${sha.slice(0, 7)}${auto ? ' (a quick task that finished cleanly lands by itself)' : ''}.` : 'Nothing had changed, so there was nothing to accept.')],
+          messages: [...held.messages, say('engelbart', `${sha ? `Accepted onto ${target.branch} as ${sha.slice(0, 7)}${auto ? ' (a quick task that finished cleanly lands by itself)' : ''}.` : 'Nothing had changed, so there was nothing to accept.'}${keep ? ` ${up.join(', ')} ${up.length === 1 ? 'keeps' : 'keep'} running on it until you stop ${up.length === 1 ? 'it' : 'them'}.` : ''}${unkept ? ` What its run step found could not be kept: ${unkept}` : ''}`)],
         }));
         track(() => projects.agentStopped(ctx, id));
         return store.publicTask(done);
@@ -854,8 +953,10 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
   function reconcile(ctx) {
     if (reconciled.has(ctx.dataRoot)) return;
     reconciled.add(ctx.dataRoot);
+    const left = [];
     for (const project of projects.projectRecords(ctx)) {
       for (const task of store.listTasks(project)) {
+        if (store.FINAL.has(task.status) && task.keptCopy && !keptCopies.has(task.id)) left.push({ project, task }); // Engelbart crashed while it ran
         if (store.FINAL.has(task.status) || live.has(task.id)) continue;
         const gone = task.status !== 'setting-up' && !fs.existsSync(task.worktree);
         const runStepLeft = task.runStep && task.runStep.status === 'running' ? { runStep: { ...task.runStep, status: 'stopped', phase: null } } : {}; // Engelbart closed during it
@@ -863,6 +964,10 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
         else if (store.WORKING.has(task.status)) store.writeTask(project, { ...task, ...runStepLeft, status: 'interrupted', messages: [...task.messages, say('engelbart', 'Engelbart closed while this was working.')] }, now());
         else if (runStepLeft.runStep) store.writeTask(project, { ...task, ...runStepLeft }, now());
       }
+    }
+    for (const { project, task } of left) {
+      const work = sweepCopy(ctx, project, task).catch(() => {}).finally(() => sweeps.delete(work));
+      sweeps.add(work);
     }
   }
 
@@ -881,16 +986,20 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     return new Set(store.listTasks(projectOf(ctx, projectId)).filter((task) => !store.FINAL.has(task.status)).map((task) => task.id));
   }
 
-  /** Quit: every turn is stopped and its checkpoint saved (at most QUIT_WAIT_MS), and becomes `interrupted`. */
+  /**
+   * Quit: every turn is stopped and its checkpoint saved (at most QUIT_WAIT_MS), and becomes `interrupted`; what run steps
+   * started is stopped, and the copies accepted Builds kept for it go.
+   */
   async function stopAll() {
     quitting = true;
     const running = [...live.values()];
     for (const entry of running) { entry.stopping = 'quit'; entry.controller.abort(); }
-    const steps = runStep ? [runStep.stopAll(), ...stepping.values()] : [];
+    const kept = [...keptCopies.entries()];
+    const steps = runStep ? [runStep.stopAll().then(() => Promise.all(kept.map(([id, where]) => releaseCopy(where.ctx, where.projectId, id, 'Engelbart closed: what ran on it was stopped, and its copy removed.').catch(() => {})))), ...stepping.values(), ...sweeps] : [];
     await Promise.race([Promise.all([...running.map((entry) => entry.done), ...steps]), new Promise((resolve) => { const timer = setTimeout(resolve, QUIT_WAIT_MS); if (timer.unref) timer.unref(); })]);
   }
 
-  return { targets, preflight, initRepository, cloneRepository, start, reply, stop, resume, review, accept, fix, discard, promote, reconcile, list, get, openIds, stopAll, running: () => [...live.keys()], stepping: (id) => stepping.has(id), showRunnable, stopRunning };
+  return { targets, preflight, initRepository, cloneRepository, start, reply, stop, resume, review, accept, fix, discard, promote, reconcile, list, get, openIds, stopAll, running: () => [...live.keys()], stepping: (id) => stepping.has(id), showRunnable, stopRunning, stopRunnable, sweeping: () => Promise.all([...sweeps]) };
 }
 
 module.exports = { createBuilds, createShell, LIMITS, TURN_MS, CLONES };

@@ -2,11 +2,11 @@
 // a panel since 2026-09-27). It opens above the Build button under the document with no backdrop. It is the top layer:
 // post-its it reaches are covered by it, not moved aside (data-cover: main draws them as pictures under it,
 // post-its/ProjectPostIts.jsx). What it holds: the repository it works in (2026-09-29: a folder named after the project,
-// in the project folder, unless another is picked; the pick is remembered per project, model/build-target.js), "Add
+// in the project folder, unless another is picked; the pick is remembered per workspace, model/build-target.js), "Add
 // from library" (a ringed + and a search that comes up over it), the attached items, "Automatically clear workspace" (off each time), a line when
 // the repository leaves something out, must be made or cloned first, or cannot take a Build, and at the lower right the
 // model chip with the send inside it, drawn as the @bart line's. A post-it's Build has a popup of its own
-// (post-its/PostItBuild.jsx), which works in the repository picked here.
+// (post-its/PostItBuild.jsx), which always works in the default repo, whatever is picked here.
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';

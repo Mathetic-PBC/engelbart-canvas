@@ -9,8 +9,10 @@
 //   terminal  exits 0
 // A UI's port is a free one on this Mac, found at each start.
 
+const fs = require('node:fs');
 const net = require('node:net');
-const { spawn } = require('node:child_process');
+const path = require('node:path');
+const { spawn, execFile } = require('node:child_process');
 const { resolveShell, sanitizeEnvironment, loginShellArgs } = require('../terminal/launch.cjs');
 const { scrubAgentSession } = require('../shell-rc.cjs');
 const { respondsAt } = require('../sandbox/worker.cjs');
@@ -33,6 +35,48 @@ function freePort() {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', () => { const { port } = server.address(); server.close(() => resolve(port)); });
   });
+}
+
+/** The processes of a process group now (its leader's pid), from ps. */
+function groupPids(pgid, { run = execFile } = {}) {
+  return new Promise((resolve) => run('/bin/ps', ['-A', '-o', 'pid=,pgid='], { timeout: 5000 }, (error, stdout) => {
+    if (error) { resolve([]); return; }
+    resolve(String(stdout).split('\n').map((line) => line.trim().split(/\s+/).map(Number)).filter(([pid, group]) => group === pgid && Number.isInteger(pid)).map(([pid]) => pid));
+  }));
+}
+
+/**
+ * A desktop app's window to the front: the first of `pids` that is an app with a Dock icon is activated (macOS AppKit,
+ * NSRunningApplication; it asks for no permission). → whether there was one
+ */
+function focusApp(pids, { run = execFile } = {}) {
+  const list = pids.filter((pid) => Number.isInteger(pid) && pid > 0);
+  if (process.platform !== 'darwin' || !list.length) return Promise.resolve(false);
+  const script = `ObjC.import('AppKit'); var done = false; [${list.join(',')}].forEach(function (pid) { if (done) return; var app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(pid); if (!app.isNil() && app.activationPolicy == 0) { app.activateWithOptions(3); done = true; } }); done ? 'yes' : 'no'`;
+  return new Promise((resolve) => run('/usr/bin/osascript', ['-l', 'JavaScript', '-e', script], { timeout: 5000 }, (error, stdout) => resolve(!error && String(stdout).trim() === 'yes')));
+}
+
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
+
+/**
+ * A process group an Engelbart that closed without stopping it left behind (it crashed): stopped only while its leader
+ * is still the process that was started, a group leader whose folder is inside `within` (the Build's copy), so a pid used
+ * again since is never touched. → whether it was stopped
+ */
+async function stopLeftover(pgid, within, { run = execFile, waitMs = STOP_WAIT_MS } = {}) {
+  if (!Number.isInteger(pgid) || pgid <= 1 || !alive(pgid)) return false;
+  let base;
+  try { base = fs.realpathSync(within); } catch { return false; }
+  const cwd = await new Promise((resolve) => run('/usr/sbin/lsof', ['-a', '-p', String(pgid), '-d', 'cwd', '-Fn'], { timeout: 5000 }, (error, stdout) => {
+    const line = error ? null : String(stdout).split('\n').find((entry) => entry.startsWith('n'));
+    resolve(line ? line.slice(1) : null);
+  }));
+  if (!cwd || !(cwd === base || cwd.startsWith(`${base}${path.sep}`))) return false;
+  if (!(await groupPids(pgid, { run })).includes(pgid)) return false;
+  try { process.kill(-pgid, 'SIGTERM'); } catch { return false; }
+  for (const until = Date.now() + waitMs; alive(pgid) && Date.now() < until;) await pause(100);
+  try { process.kill(-pgid, 'SIGKILL'); } catch { /* gone */ }
+  return true;
 }
 
 /**
@@ -127,7 +171,14 @@ function createProcesses({ environment = process.env, extraEnvironment = () => (
     return { ok: false, failed_check: `Nothing answered on port ${port} within ${uiReadyMs / 1000} seconds. It must listen on the port Engelbart gives it ({port} in its command), on localhost.`, output: record.output };
   }
 
-  return { start, stop, stopAll, status, runToExit, check, running: (key) => !!(owned.get(key) && owned.get(key).running) };
+  /** A running app's window brought to the front (`focus`: focusApp, or a stand-in). → whether one was */
+  async function bringForward(key, focus = focusApp) {
+    const record = owned.get(key);
+    if (!record || !record.running) return false;
+    return focus(await groupPids(record.pid));
+  }
+
+  return { start, stop, stopAll, status, runToExit, check, bringForward, running: (key) => !!(owned.get(key) && owned.get(key).running) };
 }
 
-module.exports = { createProcesses, freePort, APP_ALIVE_MS, UI_READY_MS };
+module.exports = { createProcesses, freePort, focusApp, groupPids, stopLeftover, APP_ALIVE_MS, UI_READY_MS };

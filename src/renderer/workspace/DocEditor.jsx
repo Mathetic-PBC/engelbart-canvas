@@ -515,12 +515,14 @@ export default class DocEditor extends React.Component {
       return [['head', `<div style="display:flex;align-items:center;gap:10px"><span style="font-weight:600;color:#171717">Build</span><span style="flex:1;color:#8f8f8f">${esc(id)} is not in this project.</span>${this.buildButton('buildremove', id, 'Remove')}</div>`]];
     }
     const status = task.status, working = BUILD_WORKING.has(status) || !!task.working, final = !!task.final;
-    const statusColor = status === 'needs-you' || status === 'review' ? '#0070f3' : status === 'failed' || status === 'conflict' ? '#e70022' : '#8f8f8f';
+    // A turn that ended in review whose run step is still getting it running (2026-09-29): Review and Accept wait for it.
+    const stepping = status === 'review' && !!task.runStep && task.runStep.status === 'running';
+    const statusColor = stepping ? '#8f8f8f' : status === 'needs-you' || status === 'review' ? '#0070f3' : status === 'failed' || status === 'conflict' ? '#e70022' : '#8f8f8f';
     const head = '<div style="display:flex;align-items:baseline;gap:10px">'
       + '<span style="flex:none;font-weight:600;color:#171717">Build</span>'
       + `<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#171717">${esc(task.title)}</span>`
       + `<span style="flex:none;font-size:12.5px;color:#8f8f8f">${esc(task.modelName || task.model)} · ${esc(EFFORT_LABELS[task.effort] || task.effort)}</span>`
-      + `<span data-build-status="${esc(status)}" style="flex:none;font-size:12.5px;font-weight:500;color:${statusColor}">${esc(BUILD_STATUS[status] || status)}</span>`
+      + `<span data-build-status="${esc(stepping ? 'getting-it-running' : status)}" style="flex:none;font-size:12.5px;font-weight:500;color:${statusColor}">${esc(stepping ? 'Getting it running…' : BUILD_STATUS[status] || status)}</span>`
       + '</div>';
     // The conversation: from the agent's last message on; the earlier ones behind a count. A closed Build shows only its last note.
     const messages = task.messages || [];
@@ -557,15 +559,15 @@ export default class DocEditor extends React.Component {
     // What can be done with it now.
     const acts = [];
     if (!working && !final) {
-      acts.push(this.buildButton('buildreview', id, 'Review'));
+      if (!stepping) acts.push(this.buildButton('buildreview', id, 'Review'));
       if (status === 'conflict' || (task.checks && !task.checks.ok)) acts.push(this.buildButton('buildfix', id, 'Send to agent'));
       if (['interrupted', 'stopped', 'failed'].includes(status)) acts.push(this.buildButton('buildresume', id, 'Resume'));
-      acts.push(this.buildButton('buildaccept', id, 'Accept', { strong: true }));
+      if (!stepping) acts.push(this.buildButton('buildaccept', id, 'Accept', { strong: true }));
       const confirming = this.buildConfirm && this.buildConfirm.id === id && this.buildConfirm.until > Date.now();
       acts.push(this.buildButton('builddiscard', id, confirming ? 'Discard for good?' : 'Discard', { extra: confirming ? 'color:#e70022;' : '' }));
     } else if (final) {
       if (status === 'accepted' && task.accepted) acts.push(this.buildButton('buildreview', id, 'Review'));
-      acts.push(this.buildButton('buildremove', id, 'Remove'));
+      if (!task.keptCopy) acts.push(this.buildButton('buildremove', id, 'Remove')); // what still runs is stopped first
     }
     // The error in red, unless the conversation's last note already says it.
     const lastNote = messages.length ? messages[messages.length - 1].text : '';
@@ -573,26 +575,34 @@ export default class DocEditor extends React.Component {
     const actions = acts.length || errorLine ? `${errorLine}<div style="display:flex;align-items:center;gap:6px;margin:10px 0 0 -2px">${acts.join('')}</div>` : '';
     return [['head', head], ['body', body], ['run', this.buildRunHtml(id, task)], ['live', live], ['reply', reply], ['actions', actions]];
   }
-  // Its run step (main/build/run-step.cjs): what the repository runs, each with where to see it, while the Build is open.
+  // Its run step (main/build/run-step.cjs): while the Build is open, what the repository runs and where each stands (Review
+  // opens them, 2026-09-29); while it gets them running, "Getting it running…" with its phase. An accepted Build whose copy
+  // was kept for what runs: each still running on the code that landed, with Open and Stop, and Stop all (the copy goes
+  // with the last one).
   buildRunHtml(id, task) {
     const step = task.runStep;
-    if (!step || task.final || step.status === 'skipped') return '';
+    const kept = !!task.final && task.status === 'accepted' && !!task.keptCopy;
+    if (!step || step.status === 'skipped' || (task.final && !kept)) return '';
     const working = step.status === 'running';
     const kinds = { ui: 'web UI', app: 'desktop app', terminal: 'terminal' };
-    const rows = (step.runnables || []).map((item) => {
-      const where = item.status === 'running' && item.type === 'ui' ? this.buildButton('buildrunshow', id, 'Open', { extra: 'padding-top:0;padding-bottom:0;', run: item.name })
-        : item.status === 'running' && item.type === 'terminal' && item.sessionId ? this.buildButton('buildrunshow', id, 'Terminal', { extra: 'padding-top:0;padding-bottom:0;', run: item.name }) : '';
+    const tight = 'padding-top:0;padding-bottom:0;';
+    const rows = (step.runnables || []).filter((item) => !kept || item.passed || item.status === 'running').map((item) => {
+      const runs = item.status === 'running';
+      const opens = kept && runs ? this.buildButton('buildrunshow', id, item.type === 'ui' ? 'Open' : item.type === 'app' ? 'Window' : 'Terminal', { extra: tight, run: item.name }) + this.buildButton('buildrunstopone', id, 'Stop', { extra: tight, run: item.name }) : '';
       const state = { running: item.type === 'app' ? 'runs in its window' : item.url ? `runs at ${item.url}` : 'runs', failed: 'did not run', stopped: 'stopped', installing: 'installing', checking: 'checking' }[item.status] || 'waiting';
-      const color = item.status === 'running' ? '#1a7f37' : item.status === 'failed' ? '#e70022' : '#8f8f8f';
+      const color = runs ? '#1a7f37' : item.status === 'failed' ? '#e70022' : '#8f8f8f';
       return `<div data-run-item="${esc(item.name)}" style="display:flex;align-items:baseline;gap:8px;min-width:0">`
         + `<span style="flex:none;color:#171717">${esc(item.name)}</span><span style="flex:none;color:#8f8f8f">${esc(kinds[item.type] || item.type)}</span>`
-        + `<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${color}" title="${esc(item.error || '')}">${esc(state)}${item.status === 'failed' && item.error ? ` · ${esc(String(item.error).split('\n')[0])}` : ''}</span>${where}</div>`;
+        + `<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${color}" title="${esc(item.error || '')}">${esc(state)}${item.status === 'failed' && item.error ? ` · ${esc(String(item.error).split('\n')[0])}` : ''}</span>${opens}</div>`;
     }).join('');
+    const label = kept ? 'Running on what landed' : working ? 'Getting it running…' : 'Run step';
+    const note = kept ? '' : working ? (step.phase || 'Working') : step.status === 'failed' ? step.error || 'Failed' : step.status === 'stopped' ? 'Stopped' : (step.runnables || []).length ? 'Review opens what runs' : 'Nothing here to run';
     const head = '<div style="display:flex;align-items:center;gap:10px">'
-      + (working ? '<span style="flex:none;width:6px;height:6px;border-radius:50%;background:#0070f3;animation:thinking 1.2s ease-in-out infinite"></span>' : '')
-      + `<span style="flex:none;font-weight:500;color:#171717">Run step</span>`
-      + `<span data-run-status="${esc(step.status)}" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${step.status === 'failed' ? '#e70022' : '#8f8f8f'}">${esc(working ? (step.phase || 'Working') : step.status === 'failed' ? step.error || 'Failed' : step.status === 'stopped' ? 'Stopped' : (step.runnables || []).length ? '' : 'Nothing here to run')}</span>`
-      + (working ? this.buildButton('buildrunstop', id, 'Stop') : '')
+      + (working && !kept ? '<span style="flex:none;width:6px;height:6px;border-radius:50%;background:#0070f3;animation:thinking 1.2s ease-in-out infinite"></span>' : '')
+      + `<span style="flex:none;font-weight:500;color:#171717">${label}</span>`
+      + `<span data-run-status="${esc(kept ? 'kept' : step.status)}" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${step.status === 'failed' && !kept ? '#e70022' : '#8f8f8f'}">${esc(note)}</span>`
+      + (working && !kept ? this.buildButton('buildrunstop', id, 'Stop') : '')
+      + (kept ? this.buildButton('buildrunstopall', id, 'Stop all') : '')
       + '</div>';
     return `<div data-run-step="${esc(id)}" style="margin-top:10px;padding:8px 12px;border-radius:8px;background:#fff;font:12.5px/1.7 var(--font-sans)">${head}${rows}</div>`;
   }
@@ -643,6 +653,8 @@ export default class DocEditor extends React.Component {
     const act = this.props.onBuildAction; if (!act) return;
     if (k === 'buildrunshow') { act(id, 'runshow', { name: runName }); return; }
     if (k === 'buildrunstop') { act(id, 'runstop'); return; }
+    if (k === 'buildrunstopone') { act(id, 'runstopone', { name: runName }); return; }
+    if (k === 'buildrunstopall') { act(id, 'runstopall'); return; }
     if (k === 'buildhistory') { if (this.buildOpen.has(id)) this.buildOpen.delete(id); else this.buildOpen.add(id); this.patchBuilds(); return; }
     if (k === 'buildsteps') { if (this.buildSteps.has(id)) this.buildSteps.delete(id); else this.buildSteps.add(id); this.patchBuilds(); return; }
     if (k === 'buildsend') { this.sendBuild(id); return; }
