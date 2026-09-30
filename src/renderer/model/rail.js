@@ -87,14 +87,13 @@ export function attachRows({ query, library, taken = [], inRail = () => false })
 }
 
 export const BART_VERB = { kind: 'verb', verb: 'bart', key: 'verb:bart', name: 'Bart', glyph: 'chat', token: '@Bart ' };
-export const TASK_VERB = { kind: 'verb', verb: 'task', key: 'verb:task', name: 'Task', glyph: 'task', token: '@Task ' };
 export const NOTE_VERB = { kind: 'verb', verb: 'note', key: 'verb:note', name: 'Note', glyph: 'note', token: '@Note ' };
 const MAX_MENTIONS = 10;
 const MAX_WORKSPACES = 6; // typed
 const FIRST_WORKSPACES = 3; // before anything is typed
 
 /**
- * The @ menu (Add - Mention.dc.html `menu`): Bart, Task and Note first, matched from their first letter; then the page
+ * The @ menu (Add - Mention.dc.html `menu`): Bart and Note first (Task went on 2026-09-29), matched from their first letter; then the page
  * open in the Browser, which the library may not hold yet (`page` { input, title }, `pageRow` its row or null); then the
  * project's other workspaces (2026-09-25; `workspaces` as model/nav.js flatWorkspaces gives them, the ones written in
  * last first, never `hereId`): three before anything is typed, else up to six whose names hold the words; then up to ten
@@ -102,7 +101,7 @@ const FIRST_WORKSPACES = 3; // before anything is typed
  */
 export function mentionRows({ query, library, page, pageRow, workspaces = [], hereId = null }) {
   const needle = String(query || '').trim().toLowerCase();
-  const verbs = [BART_VERB, TASK_VERB, NOTE_VERB].filter((verb) => !needle || verb.name.toLowerCase().startsWith(needle));
+  const verbs = [BART_VERB, NOTE_VERB].filter((verb) => !needle || verb.name.toLowerCase().startsWith(needle));
   const pool = library.filter((row) => row.type !== 'image');
   let hits = (needle ? pool.filter((row) => hay(row).includes(needle)) : pool).map((row) => ({ kind: 'item', key: row.id, row, name: row.name }));
   const out = [...verbs];

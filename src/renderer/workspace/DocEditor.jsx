@@ -16,19 +16,17 @@
 //   * where a document was scrolled to is kept per workspace (props.viewOf / props.onView, 2026-09-22), apart from the
 //     caret: coming back to a document shows what was on screen, not where the last edit was.
 import React from 'react';
-import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, threads, turnText, wsMention, INLINE, LABELS, HELD, ATTRIBUTION_RE, FENCE_RE } from '../model/doc.js';
+import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, threads, turnText, wsMention, INLINE, ATTRIBUTION_RE, FENCE_RE } from '../model/doc.js';
 import { readFlags, readQuestion, withChoice, modelOf, effortOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
 import BartPicker from './BartPicker.jsx';
 import MentionMenu from './MentionMenu.jsx';
 import Popover from './Popover.jsx';
 import WorkspacePeek from './WorkspacePeek.jsx';
+import { diffRows, diffTotals, nextAttachment } from '../model/build-diff.js';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const SPEED = { fast: 0.45, normal: 1, slow: 2.2 };
 
 export const BART_ITEM = { id: 'bart', type: 'chat', name: 'bart', title: 'Bart', summary: 'Ask a question about this document, the project\'s code or the web. Add --opus or --high to pick the model or the effort by hand.', facts: 'reads, never edits' };
-// Picking this writes `@Task `, which the document stores as the `- [ ] ` row a typed `- []` also makes.
-export const TASK_ITEM = { id: 'task', type: 'task', name: 'Task', title: 'Task', summary: 'A task row: check it off, \u2318\u23ce builds it, and a run of them shares one card.', facts: 'stored as - [ ]' };
 
 const UNDER_BART = ['pending', 'reply'];
 // A Build's state as its card names it (main/build/store.cjs STATUSES).
@@ -71,18 +69,19 @@ const radius = (top, closes) => `${top ? '10px 10px' : '0 0'} ${closes ? '10px 1
 const FLAG_LOOK = 'font-weight:500';
 
 export default class DocEditor extends React.Component {
-  state = { activeLine: null, mention: null, mentionIdx: 0, pop: null, picker: null, statuses: {} };
+  state = { activeLine: null, mention: null, mentionIdx: 0, pop: null, picker: null };
   edRef = React.createRef();
   history = []; future = []; caret = null; lastHtml = ''; lastKey = null; selRaw = null; openKey = ''; copied = null; copiedT = null;
-  syncing = false; wantFocus = false; composing = false; mounted = false; timers = new Set();
+  syncing = false; wantFocus = false; composing = false; mounted = false; timers = new Set(); held = false;
   openLogs = new Set(); // asks whose list of steps is open
   pickerT = null;
   // A follow-up being typed and the model picked for it, by the first line of its card. Neither is in the document, and
   // neither is in the editor's HTML: the field keeps its text across redraws because it is put back after each one.
   followText = new Map(); followChoice = new Map();
-  // A Build card's reply being typed (by Build id), which cards show their earlier messages and their steps, a Discard
-  // waiting for its second click, and the HTML each part of each card was last drawn with (patchBuilds compares these).
-  buildText = new Map(); buildOpen = new Set(); buildSteps = new Set(); buildConfirm = null; buildDrawn = new Map();
+  // A Build card's reply being typed (by Build id) and the images pasted into it ([{ n, id }]), which cards show their
+  // earlier messages and their steps, where each card's diff is scrolled to, and the HTML each part of each card was last
+  // drawn with (patchBuilds compares these).
+  buildText = new Map(); buildImages = new Map(); buildOpen = new Set(); buildSteps = new Set(); buildScroll = new Map(); buildDrawn = new Map();
   scrollRef = React.createRef();
   parsedCache = new WeakMap();
   // Where the open document was scrolled to: reported (onView) a moment after scrolling stops and whenever it is left;
@@ -98,24 +97,35 @@ export default class DocEditor extends React.Component {
     const inFollow = (e) => !!(e.target && e.target.matches && e.target.matches('[data-follow-input], [data-build-input]'));
     const inBuild = (e) => !!(e.target && e.target.matches && e.target.matches('[data-build-input]'));
     this.docListeners = {
-      keydown: (e) => { if (!inEd(e)) return; if (inBuild(e)) this.buildKey(e); else if (inFollow(e)) this.followKey(e); else this.editorKey(e); },
+      keydown: (e) => { if (!inEd(e)) return; this.held = false; if (inBuild(e)) this.buildKey(e); else if (inFollow(e)) this.followKey(e); else this.editorKey(e); },
       input: (e) => { if (!inEd(e)) return; if (inBuild(e)) this.buildInput(e.target); else if (inFollow(e)) this.followInput(e.target); else this.editorInput(); },
       beforeinput: (e) => { if (!inEd(e) || inFollow(e)) return; const sel = getSelection(); this.bulkDelete = /^delete/.test(e.inputType || '') && !!sel && !sel.isCollapsed; },
-      paste: (e) => { if (inEd(e) && !inFollow(e)) this.editorPaste(e); },
+      paste: (e) => { if (!inEd(e)) return; if (inBuild(e)) this.buildPaste(e); else if (!inFollow(e)) this.editorPaste(e); },
       // A press on one of the editor's buttons must not move the keyboard: leaving a line redraws the editor, and a button
       // redrawn between the press and the release never gets its click (found with Delete, while an answer was being edited).
-      mousedown: (e) => { if (inEd(e) && e.target.closest('button[data-act], .bart-chip')) e.preventDefault(); },
+      // A link or a mention is pressed to open it (2026-09-29): the press must not put the caret there, or the line would
+      // redraw as its source and the click land on plain text (links in answers did nothing).
+      mousedown: (e) => {
+        if (!inEd(e)) return;
+        if (e.target.closest('button[data-act], .bart-chip, a[data-link], [data-mention]')) { e.preventDefault(); return; }
+        if (e.button === 0 && !inFollow(e)) this.held = true;
+      },
+      // While the button is down a selection is only noted: redrawing the line under a drag (to show its source) lost the
+      // highlight. The line becomes the caret's once the button comes up, after this click is handled.
+      mouseup: () => { if (!this.held) return; this.held = false; this.timer(() => this.onSel(), 0); },
       click: (e) => { if (inEd(e)) this.editorClick(e); },
       mouseover: (e) => { if (inEd(e)) this.editorOver(e); },
       mouseout: (e) => { if (inEd(e)) this.editorOut(e); },
       selectionchange: () => this.onSel(),
       dragover: (e) => { if (inEd(e)) e.preventDefault(); },
       drop: (e) => { if (inEd(e)) e.preventDefault(); },
-      focusout: (e) => { if (inEd(e) && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-mention-menu]'))) this.setState({ activeLine: null, mention: null }); },
+      // Switching to another app blurs the page too; that is not leaving the line, and redrawing it would drop a selection.
+      focusout: (e) => { if (inEd(e) && document.hasFocus() && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-mention-menu]'))) this.setState({ activeLine: null, mention: null }); },
       compositionstart: () => { this.composing = true; },
       compositionend: (e) => { this.composing = false; if (inEd(e) && !inFollow(e)) this.editorInput(); },
     };
     Object.entries(this.docListeners).forEach(([k, f]) => document.addEventListener(k, f));
+    document.addEventListener('scroll', this.buildScrolled, true); // a card's diff scrolls on its own; redraws put it back
     window.addEventListener('resize', this.fitFollows);
     this.syncEditor();
     this.wantView = true; this.maybeRestoreView();
@@ -123,7 +133,6 @@ export default class DocEditor extends React.Component {
       this.resizeObs = new ResizeObserver(() => { const s = this.settle; if (s && s.key === this.key() && Date.now() < s.until) this.applyView(s.pos); });
       this.resizeObs.observe(this.editorEl());
     }
-    if (Array.isArray(this.props.initialBuild) && this.props.initialBuild.length) this.buildIdx(this.props.initialBuild);
   }
 
   // The document on screen is about to be replaced by another: what it was scrolled to is reported first, while it is still there.
@@ -141,7 +150,7 @@ export default class DocEditor extends React.Component {
     }
     // Progress of a run arrives many times a second. It changes pending rows and Build cards only, and those are replaced
     // where they stand: the rest of the editor, the caret and a selection in it are not touched.
-    const asked = prevProps.asks !== this.props.asks, built = prevProps.builds !== this.props.builds || prevProps.buildProgress !== this.props.buildProgress;
+    const asked = prevProps.asks !== this.props.asks, built = prevProps.builds !== this.props.builds || prevProps.buildProgress !== this.props.buildProgress || prevProps.buildDiffs !== this.props.buildDiffs;
     // Builds first: each patch ends by redrawing the editor's HTML in memory, which is where the cards' parts are remembered.
     if ((asked || built) && prevProps.text === this.props.text && prevProps.docKey === this.props.docKey && prevProps.models === this.props.models && (!built || this.patchBuilds()) && (!asked || this.patchPending())) return;
     this.syncEditor();
@@ -154,6 +163,7 @@ export default class DocEditor extends React.Component {
     if (this.resizeObs) this.resizeObs.disconnect();
     window.removeEventListener('resize', this.fitFollows);
     Object.entries(this.docListeners || {}).forEach(([k, f]) => document.removeEventListener(k, f));
+    document.removeEventListener('scroll', this.buildScrolled, true);
     for (const id of this.timers) clearTimeout(id);
     this.timers.clear();
   }
@@ -233,8 +243,6 @@ export default class DocEditor extends React.Component {
   // Each line read in place (a line inside a code block is code). Kept per array, so a loop over one array reads it once.
   parsedOf(ls) { let ps = this.parsedCache.get(ls); if (!ps) { ps = parseLines(ls); this.parsedCache.set(ls, ps); } return ps; }
   editorEl() { return this.edRef.current; }
-  statusesFor(key = this.key()) { return this.state.statuses[key] || {}; }
-  status(i) { return this.statusesFor()[i] || ''; }
   // Lines the person cannot type in: an @bart line once something stands under it, a run at work, the closing line of an
   // answer (it is the card's foot), an answer folded away, and the prototype's `> ` replies. The text of an answer can be
   // edited (2026-09-21): it is a drawn-prefix line, as a bullet is.
@@ -248,7 +256,6 @@ export default class DocEditor extends React.Component {
   // A card is closed by its foot, never by a line the caret can sit on: the document needs a line of its own after it.
   // So does a code block, or the caret below it would land on its closing fence and type into it.
   endsOnCard(ls) { const last = ls.length - 1; return this.lockedAt(ls, last) || ['reply', 'fence'].includes((this.parsedOf(ls)[last] || parseLine('')).type); }
-  speed() { return SPEED[this.props.buildSpeed] || 1; }
   timer(fn, ms) { const id = setTimeout(() => { this.timers.delete(id); if (this.mounted) fn(); }, ms); this.timers.add(id); return id; }
 
   setDoc(text, caret) {
@@ -264,21 +271,6 @@ export default class DocEditor extends React.Component {
   setLines(fn, caret) { this.setDoc(fn(this.lines()).join('\n'), caret); }
   writeText(i, text, caret) {
     this.setLines((ls) => { const ps = this.parsedOf(ls); return ls.map((l, j) => (j !== i ? l : sameLine(ps[j], text))); }, caret);
-  }
-  setStatus(key, i, status, done) {
-    this.setState((s) => ({ statuses: { ...s.statuses, [key]: { ...(s.statuses[key] || {}), [i]: status } } }));
-    if (done && key === this.key()) {
-      const ls = this.lines(); const p = parseLine(ls[i] || '');
-      if (p.type === 'todo' && !p.done) { ls[i] = todoLine(p.depth, true, p.text); this.props.onChange(ls.join('\n')); }
-    }
-  }
-  shiftStatuses(from, delta) {
-    const key = this.key();
-    this.setState((s) => {
-      const st = {};
-      Object.entries(s.statuses[key] || {}).forEach(([k, v]) => { const i = Number(k); if (i < from) st[i] = v; else if (!(delta < 0 && i < from - delta)) st[i + delta] = v; });
-      return { statuses: { ...s.statuses, [key]: st } };
-    });
   }
   undo = () => {
     const h = this.history.pop(); if (!h) return;
@@ -344,18 +336,17 @@ export default class DocEditor extends React.Component {
   activeRaw(t) { return this.segs(t).map((s) => s.src).join(''); }
 
   // `at` says where a line of an @bart card stands in it (this.layout); every other line has none.
-  lineHtml(i, line, p, active, status, first, at, locked) {
+  lineHtml(i, line, p, active, first, at, locked) {
     const raw = `data-line="${i}" data-raw="${esc(line)}"`;
     if (p.type === 'build') return this.buildHtml(i, line, p);
     if (p.type === 'code' || p.type === 'fence') return this.codeHtml(i, line, p, active);
     if (p.type === 'todo') {
-      const held = HELD.includes(status), done = p.done, label = done ? 'Done' : (LABELS[status] || '');
+      const done = p.done;
       const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(p.text);
       return `<div ${raw} style="display:flex;align-items:flex-start;gap:10px;background:#fafafa;padding:${first ? '10px' : '0'} 16px 0 ${16 + p.depth * 24}px;border-radius:${first ? '10px 10px 0 0' : '0'}">`
-        + `<span contenteditable="false" data-act="toggle" data-row="${i}" role="button" style="user-select:none;flex:none;width:14px;margin-top:12px;text-align:center;font:15px/1 var(--font-sans);color:${held ? '#c9c9c9' : done ? '#8f8f8f' : '#171717'};cursor:${held ? 'default' : 'pointer'}">${done ? '✓' : '–'}</span>`
-        + `<span class="t" style="flex:1;min-width:0;padding:6px 0;min-height:39px;color:${(held || done) ? '#8f8f8f' : '#171717'};text-decoration:${done ? 'line-through' : 'none'}">${content || '<br>'}</span>`
-        + (label ? `<span contenteditable="false" style="user-select:none;flex:none;margin-top:11px;font:600 11px/1.5 var(--font-sans);color:${status === 'failed' ? '#e70022' : '#8f8f8f'}">${label}</span>` : '')
-        + (!held ? `<button contenteditable="false" data-act="remove" data-row="${i}" aria-label="Remove todo" style="user-select:none;flex:none;margin-top:12px;padding:0 2px;border:0;background:transparent;font:14px/1 var(--font-sans);color:#c9c9c9;cursor:pointer">×</button>` : '')
+        + `<span contenteditable="false" data-act="toggle" data-row="${i}" role="button" style="user-select:none;flex:none;width:14px;margin-top:12px;text-align:center;font:15px/1 var(--font-sans);color:${done ? '#8f8f8f' : '#171717'};cursor:pointer">${done ? '✓' : '–'}</span>`
+        + `<span class="t" style="flex:1;min-width:0;padding:6px 0;min-height:39px;color:${done ? '#8f8f8f' : '#171717'};text-decoration:${done ? 'line-through' : 'none'}">${content || '<br>'}</span>`
+        + `<button contenteditable="false" data-act="remove" data-row="${i}" aria-label="Remove todo" style="user-select:none;flex:none;margin-top:12px;padding:0 2px;border:0;background:transparent;font:14px/1 var(--font-sans);color:#c9c9c9;cursor:pointer">×</button>`
         + '</div>';
     }
     if (p.type === 'list') {
@@ -479,9 +470,10 @@ export default class DocEditor extends React.Component {
     return { content: ink(inlineHtml(text)), look: 'text-wrap:pretty;', minHeight: text ? 26 : 22 };
   }
   /* ---------------------------------------------------------------- Build cards (2026-09-25) */
-  // A `build> <id>` line is drawn as its Build's card, from props.builds (the record main sends) and props.buildProgress
-  // (what a running turn is doing). The card is in parts — head, body, live, reply, actions — so a progress update
-  // replaces only the parts it changes (patchBuilds) and a reply being typed keeps its field.
+  // A `build> <id>` line is drawn as its Build's card, from props.builds (the record main sends), props.buildProgress
+  // (what a running turn is doing) and props.buildDiffs (what it has changed). The card is in parts — head, body, live,
+  // diff, reply, actions — so an update replaces only the parts it changes (patchBuilds) and a reply being typed keeps
+  // its field.
   buildHtml(i, line, p) {
     const task = (this.props.builds || {})[p.id];
     const raw = `data-line="${i}" data-raw="${esc(line)}" data-build="${esc(p.id)}"`;
@@ -492,9 +484,37 @@ export default class DocEditor extends React.Component {
       + '</div>';
   }
   // A text button of the card: grey, ink on hover (the answer card's .bart-text); `strong` is Accept's blue.
-  buildButton(act, id, label, { strong = false, extra = '' } = {}) {
-    return `<button class="bart-text" data-act="${act}" data-build-id="${esc(id)}" style="user-select:none;${strong ? 'color:#0070f3;' : ''}${extra}">${esc(label)}</button>`;
+  buildButton(act, id, label, { strong = false, extra = '', run = null } = {}) {
+    return `<button class="bart-text" data-act="${act}" data-build-id="${esc(id)}"${run ? ` data-run-name="${esc(run)}"` : ''} style="user-select:none;${strong ? 'color:#0070f3;' : ''}${extra}">${esc(label)}</button>`;
   }
+  // The card's own buttons (2026-09-29): Accept blue, the rest white with a hairline, as in Bart's mockup.
+  buildBox(act, id, label, { primary = false, disabled = false, title = '' } = {}) {
+    const look = primary
+      ? `padding:9px 16px;border:0;background:#0070f3;color:#fff${disabled ? ';opacity:.45' : ''}`
+      : `padding:8px 12px;border:1px solid #e5e5e5;background:#fff;color:${disabled ? '#b3b3b3' : '#4d4d4d'}`;
+    return `<button class="${disabled ? '' : primary ? 'hov-dim' : 'hov-ink'}" data-act="${act}" data-build-id="${esc(id)}"${disabled ? ' disabled aria-disabled="true"' : ''}${title ? ` title="${esc(title)}"` : ''} style="user-select:none;display:inline-flex;align-items:center;${look};border-radius:8px;font:500 13px/1 var(--font-sans);cursor:${disabled ? 'default' : 'pointer'}">${esc(label)}</button>`;
+  }
+  // What the Build has changed since it started, streamed while it works (main sends it after each step): a count, then
+  // the diff in a box of its own height that scrolls, each file's header held at its top (2026-09-29).
+  buildDiffHtml(id, task) {
+    if (task.status === 'discarded') return '';
+    const diff = (this.props.buildDiffs || {})[id];
+    if (!diff) {
+      if (this.props.onBuildDiffWanted && task.status !== 'setting-up') { const want = this.props.onBuildDiffWanted; Promise.resolve().then(() => want(id)); }
+      return '';
+    }
+    if (!diff.files || !diff.files.length) return '';
+    const totals = diffTotals(diff.files), { rows, cut, truncated } = diffRows(diff);
+    const counts = (adds, dels) => `<span style="color:#1a7f37">+${adds}</span> <span style="color:#cf222e">−${dels}</span>`;
+    const look = { hunk: 'color:#8f8f8f;background:#f8f8ff', add: 'color:#171717;background:#e6ffec', del: 'color:#171717;background:#ffebe9', ctx: 'color:#4d4d4d', note: 'color:#8f8f8f;font-family:var(--font-sans)' };
+    const body = rows.map((row) => (row.kind === 'file'
+      ? `<div style="position:sticky;top:0;z-index:1;display:flex;gap:8px;padding:6px 10px;background:#f5f5f5;border-bottom:1px solid #ededed;font:500 12.5px/1.4 var(--font-sans);color:#171717;white-space:nowrap"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(row.was ? `${row.was} → ${row.path}` : row.path)}</span><span style="flex:none;font-weight:400">${row.binary ? 'binary' : counts(row.adds, row.dels)}</span></div>`
+      : `<div style="padding:0 10px;white-space:pre;${look[row.kind]}">${esc(row.text) || ' '}</div>`)).join('')
+      + (cut || truncated ? '<div style="padding:4px 10px;font:12px/1.6 var(--font-sans);color:#8f8f8f;white-space:normal">The diff is longer than this; the rest is cut.</div>' : '');
+    return `<div style="display:flex;align-items:center;gap:6px;margin-top:10px;font:12.5px/1.5 var(--font-sans);color:#8f8f8f">${totals.files} ${totals.files === 1 ? 'file' : 'files'} changed ${counts(totals.adds, totals.dels)}</div>`
+      + `<div data-build-diff="${esc(id)}" style="margin-top:6px;max-height:260px;overflow:auto;overscroll-behavior:contain;background:#fff;border:1px solid #ededed;border-radius:8px;font:12px/1.7 var(--font-mono);user-select:text"><div style="min-width:max-content">${body}</div></div>`;
+  }
+  buildScrolled = (e) => { const box = e.target; if (box && box.dataset && box.dataset.buildDiff) this.buildScroll.set(box.dataset.buildDiff, { top: box.scrollTop, left: box.scrollLeft }); };
   // One message of the conversation. The agent's is markdown (drawn as an answer is), the person's is theirs as typed,
   // Engelbart's own notes are one grey line.
   buildMessageHtml(m) {
@@ -515,12 +535,14 @@ export default class DocEditor extends React.Component {
       return [['head', `<div style="display:flex;align-items:center;gap:10px"><span style="font-weight:600;color:#171717">Build</span><span style="flex:1;color:#8f8f8f">${esc(id)} is not in this project.</span>${this.buildButton('buildremove', id, 'Remove')}</div>`]];
     }
     const status = task.status, working = BUILD_WORKING.has(status) || !!task.working, final = !!task.final;
-    const statusColor = status === 'needs-you' || status === 'review' ? '#0070f3' : status === 'failed' || status === 'conflict' ? '#e70022' : '#8f8f8f';
+    // A turn that ended in review whose run step is still getting it running (2026-09-29): Review and Accept wait for it.
+    const stepping = status === 'review' && !!task.runStep && task.runStep.status === 'running';
+    const statusColor = stepping ? '#8f8f8f' : status === 'needs-you' || status === 'review' ? '#0070f3' : status === 'failed' || status === 'conflict' ? '#e70022' : '#8f8f8f';
     const head = '<div style="display:flex;align-items:baseline;gap:10px">'
       + '<span style="flex:none;font-weight:600;color:#171717">Build</span>'
       + `<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#171717">${esc(task.title)}</span>`
       + `<span style="flex:none;font-size:12.5px;color:#8f8f8f">${esc(task.modelName || task.model)} · ${esc(EFFORT_LABELS[task.effort] || task.effort)}</span>`
-      + `<span data-build-status="${esc(status)}" style="flex:none;font-size:12.5px;font-weight:500;color:${statusColor}">${esc(BUILD_STATUS[status] || status)}</span>`
+      + `<span data-build-status="${esc(stepping ? 'getting-it-running' : status)}" style="flex:none;font-size:12.5px;font-weight:500;color:${statusColor}">${esc(stepping ? 'Getting it running…' : BUILD_STATUS[status] || status)}</span>`
       + '</div>';
     // The conversation: from the agent's last message on; the earlier ones behind a count. A closed Build shows only its last note.
     const messages = task.messages || [];
@@ -554,24 +576,57 @@ export default class DocEditor extends React.Component {
       + `<textarea data-build-input="${esc(id)}" rows="1" placeholder="${status === 'needs-you' ? 'Answer…' : 'Reply…'}" aria-label="Reply to the Build" spellcheck="false" autocomplete="off" style="flex:1;min-width:0;display:block;height:24px;margin:0;padding:0;border:0;background:none;outline:none;resize:none;overflow:hidden;font:15px/1.6 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text"></textarea>`
       + `<button class="bart-send" data-act="buildsend" data-build-id="${esc(id)}" aria-label="Send" style="flex:none;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;padding:0;border:0;border-radius:50%;background:#f2f2f2;color:#8f8f8f;cursor:pointer">${ICON.send}</button>`
       + '</div>';
-    // What can be done with it now.
+    // What can be done with it now (2026-09-29): Preview on the left, Reject and Accept on the right. A refused Accept
+    // goes to the agent by itself (main), so there is no Send to agent; the diff is shown above.
     const acts = [];
     if (!working && !final) {
-      acts.push(this.buildButton('buildreview', id, 'Review'));
-      if (status === 'conflict' || (task.checks && !task.checks.ok)) acts.push(this.buildButton('buildfix', id, 'Send to agent'));
+      // Preview (2026-09-29): what the run step got running, opened in the Stage (main's review); not while it gets it
+      // running.
+      acts.push(this.buildBox('buildpreview', id, 'Preview', stepping ? { disabled: true, title: 'Getting it running…' } : {}));
       if (['interrupted', 'stopped', 'failed'].includes(status)) acts.push(this.buildButton('buildresume', id, 'Resume'));
-      acts.push(this.buildButton('buildaccept', id, 'Accept', { strong: true }));
-      const confirming = this.buildConfirm && this.buildConfirm.id === id && this.buildConfirm.until > Date.now();
-      acts.push(this.buildButton('builddiscard', id, confirming ? 'Discard for good?' : 'Discard', { extra: confirming ? 'color:#e70022;' : '' }));
+      acts.push('<span style="flex:1"></span>');
+      acts.push(this.buildBox('buildreject', id, 'Reject'));
+      acts.push(this.buildBox('buildaccept', id, 'Accept', { primary: true, disabled: stepping, title: stepping ? 'Getting it running…' : '' }));
     } else if (final) {
       if (status === 'accepted' && task.accepted) acts.push(this.buildButton('buildreview', id, 'Review'));
-      acts.push(this.buildButton('buildremove', id, 'Remove'));
+      if (!task.keptCopy) acts.push(this.buildButton('buildremove', id, 'Remove')); // what still runs is stopped first
     }
     // The error in red, unless the conversation's last note already says it.
     const lastNote = messages.length ? messages[messages.length - 1].text : '';
     const errorLine = task.error && !final && !lastNote.includes(task.error) ? `<div style="margin-top:8px;font:12.5px/1.5 var(--font-sans);color:#e70022">${esc(task.error)}</div>` : '';
-    const actions = acts.length || errorLine ? `${errorLine}<div style="display:flex;align-items:center;gap:6px;margin:10px 0 0 -2px">${acts.join('')}</div>` : '';
-    return [['head', head], ['body', body], ['live', live], ['reply', reply], ['actions', actions]];
+    const actions = acts.length || errorLine ? `${errorLine}<div style="display:flex;align-items:center;gap:8px;margin-top:12px">${acts.join('')}</div>` : '';
+    return [['head', head], ['body', body], ['run', this.buildRunHtml(id, task)], ['live', live], ['diff', this.buildDiffHtml(id, task)], ['reply', reply], ['actions', actions]];
+  }
+  // Its run step (main/build/run-step.cjs): while the Build is open, what the repository runs and where each stands (Review
+  // opens them, 2026-09-29); while it gets them running, "Getting it running…" with its phase. An accepted Build whose copy
+  // was kept for what runs: each still running on the code that landed, with Open and Stop, and Stop all (the copy goes
+  // with the last one).
+  buildRunHtml(id, task) {
+    const step = task.runStep;
+    const kept = !!task.final && task.status === 'accepted' && !!task.keptCopy;
+    if (!step || step.status === 'skipped' || (task.final && !kept)) return '';
+    const working = step.status === 'running';
+    const kinds = { ui: 'web UI', app: 'desktop app', terminal: 'terminal' };
+    const tight = 'padding-top:0;padding-bottom:0;';
+    const rows = (step.runnables || []).filter((item) => !kept || item.passed || item.status === 'running').map((item) => {
+      const runs = item.status === 'running';
+      const opens = kept && runs ? this.buildButton('buildrunshow', id, item.type === 'ui' ? 'Open' : item.type === 'app' ? 'Window' : 'Terminal', { extra: tight, run: item.name }) + this.buildButton('buildrunstopone', id, 'Stop', { extra: tight, run: item.name }) : '';
+      const state = { running: item.type === 'app' ? 'runs in its window' : item.url ? `runs at ${item.url}` : 'runs', failed: 'did not run', stopped: 'stopped', installing: 'installing', checking: 'checking' }[item.status] || 'waiting';
+      const color = runs ? '#1a7f37' : item.status === 'failed' ? '#e70022' : '#8f8f8f';
+      return `<div data-run-item="${esc(item.name)}" style="display:flex;align-items:baseline;gap:8px;min-width:0">`
+        + `<span style="flex:none;color:#171717">${esc(item.name)}</span><span style="flex:none;color:#8f8f8f">${esc(kinds[item.type] || item.type)}</span>`
+        + `<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${color}" title="${esc(item.error || '')}">${esc(state)}${item.status === 'failed' && item.error ? ` · ${esc(String(item.error).split('\n')[0])}` : ''}</span>${opens}</div>`;
+    }).join('');
+    const label = kept ? 'Running on what landed' : working ? 'Getting it running…' : 'Run step';
+    const note = kept ? '' : working ? (step.phase || 'Working') : step.status === 'failed' ? step.error || 'Failed' : step.status === 'stopped' ? 'Stopped' : (step.runnables || []).length ? 'Preview opens what runs' : 'Nothing here to run';
+    const head = '<div style="display:flex;align-items:center;gap:10px">'
+      + (working && !kept ? '<span style="flex:none;width:6px;height:6px;border-radius:50%;background:#0070f3;animation:thinking 1.2s ease-in-out infinite"></span>' : '')
+      + `<span style="flex:none;font-weight:500;color:#171717">${label}</span>`
+      + `<span data-run-status="${esc(kept ? 'kept' : step.status)}" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${step.status === 'failed' && !kept ? '#e70022' : '#8f8f8f'}">${esc(note)}</span>`
+      + (working && !kept ? this.buildButton('buildrunstop', id, 'Stop') : '')
+      + (kept ? this.buildButton('buildrunstopall', id, 'Stop all') : '')
+      + '</div>';
+    return `<div data-run-step="${esc(id)}" style="margin-top:10px;padding:8px 12px;border-radius:8px;background:#fff;font:12.5px/1.7 var(--font-sans)">${head}${rows}</div>`;
   }
   // Only the parts that changed are replaced; a reply field that was replaced gets its text and the keyboard back.
   patchBuilds() {
@@ -590,6 +645,10 @@ export default class DocEditor extends React.Component {
     this.lastHtml = this.editorHtml(); return true;
   }
   restoreBuilds(root, had) {
+    for (const box of root.querySelectorAll('[data-build-diff]')) {
+      const at = this.buildScroll.get(box.dataset.buildDiff);
+      if (at) { box.scrollTop = at.top; box.scrollLeft = at.left; }
+    }
     for (const input of root.querySelectorAll('[data-build-input]')) {
       const text = this.buildText.get(input.dataset.buildInput) || '';
       if (text) input.value = text;
@@ -607,42 +666,68 @@ export default class DocEditor extends React.Component {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); this.sendBuild(e.target.dataset.buildInput); }
     else if (e.key === 'Escape') e.target.blur();
   }
+  // An image pasted into a reply (2026-09-29) is saved as a pasted image of the document is (the parent's onPasteImage)
+  // and named in the text as [Attachment n], numbered across the Build; main hands the agent the file for each one.
+  buildPaste(e) {
+    const input = e.target, id = input.dataset.buildInput;
+    const pasted = [...(((e.clipboardData || {}).files) || [])].filter((file) => /^image\/(png|jpeg|gif|webp)$/.test(file.type));
+    if (!pasted.length || !this.props.onPasteImage) return; // text pastes as text
+    e.preventDefault();
+    void (async () => {
+      for (const file of pasted) {
+        const task = (this.props.builds || {})[id], draft = this.buildImages.get(id) || [];
+        const n = nextAttachment(task && task.messages, draft);
+        this.buildImages.set(id, [...draft, { n, id: null }]); // holds the number while it saves
+        let saved = null;
+        try { saved = await this.props.onPasteImage(file, `Attachment ${n}`); } catch { saved = null; }
+        const held = (this.buildImages.get(id) || []).filter((image) => image.n !== n);
+        if (!saved || !saved.id || !this.mounted) { this.buildImages.set(id, held); continue; }
+        this.buildImages.set(id, [...held, { n, id: saved.id }]);
+        const field = this.editorEl() && this.editorEl().querySelector(`[data-build-input="${id}"]`);
+        const token = `[Attachment ${n}]`;
+        if (field) {
+          const a = field.selectionStart ?? field.value.length, b = field.selectionEnd ?? a, before = field.value.slice(0, a);
+          const ins = `${before && !/\s$/.test(before) ? ' ' : ''}${token} `;
+          field.setRangeText(ins, a, b, 'end');
+          this.buildInput(field);
+        } else {
+          const text = this.buildText.get(id) || '';
+          this.buildText.set(id, `${text}${text && !/\s$/.test(text) ? ' ' : ''}${token} `);
+        }
+      }
+    })();
+  }
   sendBuild(id) {
     const text = (this.buildText.get(id) || '').trim(); if (!text || !this.props.onBuildAction) return;
-    Promise.resolve(this.props.onBuildAction(id, 'reply', { text, interrupt: true })).then((ok) => {
+    const images = (this.buildImages.get(id) || []).filter((image) => image.id && text.includes(`[Attachment ${image.n}]`));
+    Promise.resolve(this.props.onBuildAction(id, 'reply', { text, interrupt: true, images })).then((ok) => {
       if (ok === false) return;
-      this.buildText.delete(id);
+      this.buildText.delete(id); this.buildImages.delete(id);
       const input = this.editorEl() && this.editorEl().querySelector(`[data-build-input="${id}"]`);
       if (input) { input.value = ''; this.paintBuildSend(input); this.fitFollow(input); }
     }).catch(() => {});
   }
-  buildAct(k, id) {
+  buildAct(k, id, runName) {
     const act = this.props.onBuildAction; if (!act) return;
+    if (k === 'buildrunshow') { act(id, 'runshow', { name: runName }); return; }
+    if (k === 'buildrunstop') { act(id, 'runstop'); return; }
+    if (k === 'buildrunstopone') { act(id, 'runstopone', { name: runName }); return; }
+    if (k === 'buildrunstopall') { act(id, 'runstopall'); return; }
     if (k === 'buildhistory') { if (this.buildOpen.has(id)) this.buildOpen.delete(id); else this.buildOpen.add(id); this.patchBuilds(); return; }
     if (k === 'buildsteps') { if (this.buildSteps.has(id)) this.buildSteps.delete(id); else this.buildSteps.add(id); this.patchBuilds(); return; }
     if (k === 'buildsend') { this.sendBuild(id); return; }
-    if (k === 'builddiscard') {
-      // Discarding throws the agent's work away: it takes a second click within four seconds.
-      if (!(this.buildConfirm && this.buildConfirm.id === id && this.buildConfirm.until > Date.now())) {
-        this.buildConfirm = { id, until: Date.now() + 4000 }; this.patchBuilds();
-        this.timer(() => { if (this.buildConfirm && this.buildConfirm.id === id) { this.buildConfirm = null; this.patchBuilds(); } }, 4100);
-        return;
-      }
-      this.buildConfirm = null;
-    }
     if (k === 'buildremove') { this.setLines((ls) => { const out = ls.filter((l) => !(parseLine(l).type === 'build' && parseLine(l).id === id)); return out.length ? out : ['']; }); return; }
-    act(id, { buildstop: 'stop', buildreview: 'review', buildaccept: 'accept', builddiscard: 'discard', buildresume: 'resume', buildfix: 'fix' }[k]);
+    // Reject asks first (the parent's modal), then discards.
+    // Preview (and an accepted Build's Review) is main's review: what the run step got running, in the Stage.
+    act(id, { buildstop: 'stop', buildpreview: 'review', buildreview: 'review', buildaccept: 'accept', buildreject: 'reject', buildresume: 'resume' }[k]);
   }
 
-  // The foot of a todo card: Copy all on the left, Build all on the right while anything is open; clicking its whitespace adds a line below the card.
+  // The foot of a checklist card: Copy all; clicking its whitespace adds a line below the card. (Build all and ⌘⏎,
+  // which only pretended to build, went with @Task on 2026-09-29.)
   groupHtml(group) {
     const lastIdx = group[group.length - 1].i;
     const copy = `<button data-act="copyall" data-lines="${group.map((t) => t.i).join(',')}" style="margin-right:auto;display:inline-flex;align-items:center;min-height:32px;padding:8px 12px;border:1px solid #eaeaea;border-radius:8px;background:#fff;color:#171717;font:500 13px/1 var(--font-sans);cursor:pointer">${this.copied === group[0].i ? 'Copied' : 'Copy all'}</button>`;
-    const open = group.filter((t) => t.p.text.trim() && !t.p.done);
-    if (!open.length) return `<div contenteditable="false" data-act="after" data-after="${lastIdx}" style="user-select:none;display:flex;align-items:center;padding:8px 16px 14px;margin-bottom:14px;background:#fafafa;border-radius:0 0 10px 10px;cursor:text">${copy}</div>`;
-    const busy = open.filter((t) => HELD.includes(t.status)), ready = open.filter((t) => !HELD.includes(t.status));
-    const label = busy.length && !ready.length ? 'Building…' : ready.length && busy.length ? `Queue ${ready.length}` : 'Build all';
-    return `<div contenteditable="false" data-act="after" data-after="${lastIdx}" style="user-select:none;display:flex;justify-content:flex-end;align-items:center;gap:12px;padding:12px 16px 14px;margin-bottom:14px;background:#fafafa;border-radius:0 0 10px 10px;cursor:text">${copy}<button data-act="buildall" data-lines="${ready.map((t) => t.i).join(',')}" ${ready.length ? '' : 'disabled'} style="display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;padding:8px 14px;border:0;border-radius:8px;background:#0070f3;color:#fff;font:500 13px/1 var(--font-sans);cursor:pointer;opacity:${ready.length ? 1 : .4}">${label}</button></div>`;
+    return `<div contenteditable="false" data-act="after" data-after="${lastIdx}" style="user-select:none;display:flex;align-items:center;padding:8px 16px 14px;margin-bottom:14px;background:#fafafa;border-radius:0 0 10px 10px;cursor:text">${copy}</div>`;
   }
   // Where every line of an @bart card stands in it: which turn it belongs to, whether it opens or closes the card, and
   // what is drawn after it that is not a line (a foot for an answer that has no closing line; the follow-up field).
@@ -722,13 +807,13 @@ export default class DocEditor extends React.Component {
     const ready = !!input.value.trim(); send.style.background = ready ? '#0070f3' : '#f2f2f2'; send.style.color = ready ? '#fff' : '#8f8f8f';
   }
   editorHtml() {
-    const ls = this.lines(), ps = this.parsedOf(ls), st = this.statusesFor(), active = this.state.activeLine, at = this.layout(ls); let out = '', group = [];
+    const ls = this.lines(), ps = this.parsedOf(ls), active = this.state.activeLine, at = this.layout(ls); let out = '', group = [];
     ls.forEach((line, i) => {
       const p = ps[i], where = at.get(i);
-      out += this.lineHtml(i, line, p, active === i, st[i] || '', p.type === 'todo' && !group.length, where, this.lockedAt(ls, i));
+      out += this.lineHtml(i, line, p, active === i, p.type === 'todo' && !group.length, where, this.lockedAt(ls, i));
       if (where && where.footAfter) out += this.footHtml({ q: where.turn.q, text: '', folded: where.turn.folded, closes: where.tail && !where.followAfter });
       if (where && where.followAfter) out += this.followHtml(ls, where.thread);
-      if (p.type === 'todo') group.push({ i, p, status: st[i] || '' });
+      if (p.type === 'todo') group.push({ i, p });
       const next = ls[i + 1];
       if (p.type === 'todo' && (next == null || ps[i + 1].type !== 'todo')) { out += this.groupHtml(group); group = []; }
     });
@@ -739,7 +824,7 @@ export default class DocEditor extends React.Component {
     const ls = this.lines(), at = this.layout(ls);
     for (const d of ed.querySelectorAll('[data-pending]')) {
       const i = Number(d.dataset.line), p = parseLine(ls[i] ?? ''); if (p.type !== 'pending' || p.id !== d.dataset.pending) return false;
-      const html = this.lineHtml(i, ls[i], p, false, '', false, at.get(i), true);
+      const html = this.lineHtml(i, ls[i], p, false, false, at.get(i), true);
       if (html !== d.outerHTML) { const holder = document.createElement('div'); holder.innerHTML = html; if (holder.firstElementChild.outerHTML !== d.outerHTML) d.replaceWith(holder.firstElementChild); }
     }
     this.lastHtml = this.editorHtml(); return true;
@@ -751,7 +836,7 @@ export default class DocEditor extends React.Component {
     // Nor does it start on one. Chromium will not select from inside a block that cannot be edited, so with a locked
     // question as the first line, select-all from a caret selected nothing; and nothing could be typed above that card.
     if (this.lockedAt(tail, 0)) {
-      this.shiftStatuses(0, 1); if (this.caret) this.caret = { ...this.caret, line: this.caret.line + 1 };
+      if (this.caret) this.caret = { ...this.caret, line: this.caret.line + 1 };
       if (this.state.activeLine != null) this.setState((st) => ({ activeLine: st.activeLine == null ? null : st.activeLine + 1 }));
       this.props.onChange('\n' + tail.join('\n')); return;
     }
@@ -770,7 +855,8 @@ export default class DocEditor extends React.Component {
     if (c && !had && !buildField && (hadFocus || this.wantFocus)) { ed.focus({ preventScroll: true }); this.caret = c; this.applyCaret(); }
     this.wantFocus = false; this.syncing = false;
   }
-  applyCaret() { const c = this.caret; this.caret = null; if (!c) return; if (c.sel) this.setSelection(c.line, c.sel[0], c.sel[1]); else this.setSelection(c.line, c.offset, c.offset); }
+  // A selection made backwards (shift+←) is put back backwards, so the next shift+arrow moves the end being moved.
+  applyCaret() { const c = this.caret; this.caret = null; if (!c) return; if (c.sel) { if (c.back) this.setSelection(c.line, c.sel[1], c.sel[0]); else this.setSelection(c.line, c.sel[0], c.sel[1]); } else this.setSelection(c.line, c.offset, c.offset); }
   posIn(t, offset) {
     const walker = document.createTreeWalker(t, NodeFilter.SHOW_TEXT); let node, rest = offset;
     while ((node = walker.nextNode())) { if (rest <= node.length) return { node, offset: rest }; rest -= node.length; }
@@ -779,9 +865,8 @@ export default class DocEditor extends React.Component {
   }
   setSelection(line, a, b) {
     const ed = this.editorEl(); if (!ed) return; const d = ed.querySelector(`[data-line="${line}"]`); const t = d && d.querySelector('.t'); if (!t) return;
-    const s = this.posIn(t, this.rawToDisplay(t, a)), e = this.posIn(t, this.rawToDisplay(t, b)), range = document.createRange();
-    range.setStart(s.node, s.offset); range.setEnd(e.node, e.offset);
-    const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
+    const s = this.posIn(t, this.rawToDisplay(t, a)), e = this.posIn(t, this.rawToDisplay(t, b));
+    getSelection().setBaseAndExtent(s.node, s.offset, e.node, e.offset);
   }
   caretInfo() {
     const sel = getSelection(); if (!sel || !sel.rangeCount) return null; const ed = this.editorEl(); if (!ed || !ed.contains(sel.anchorNode)) return null;
@@ -820,15 +905,15 @@ export default class DocEditor extends React.Component {
     const ls = this.lines(); if (this.lockedAt(ls, c.anchor.line)) return;
     // A selection across lines (⌘A, shift-click) is left to the browser; the next input rebuilds whatever lines survive it.
     if (c.anchor.line !== c.focus.line || this.multiLine()) { this.selRaw = { line: c.anchor.line, a: c.anchor.offset, b: c.anchor.offset, multi: true, lines: this.selLines() }; return; }
-    const a = Math.min(c.anchor.offset, c.focus.offset), b = Math.max(c.anchor.offset, c.focus.offset);
+    const a = Math.min(c.anchor.offset, c.focus.offset), b = Math.max(c.anchor.offset, c.focus.offset), back = c.focus.offset < c.anchor.offset;
+    this.selRaw = { line: c.anchor.line, a, b };
+    if (this.held) return; // the mouse is still selecting: mouseup finishes this
     if (c.anchor.line !== this.state.activeLine) {
-      this.selRaw = { line: c.anchor.line, a, b };
-      if (!this.caret) this.caret = { line: c.anchor.line, sel: [a, b] };
+      if (!this.caret) this.caret = { line: c.anchor.line, sel: [a, b], back };
       this.setState({ activeLine: c.anchor.line, mention: null }); return;
     }
-    this.selRaw = { line: c.anchor.line, a, b };
     const line = ls[c.anchor.line] ?? '', p = this.parsedOf(ls)[c.anchor.line] || parseLine(line), key = p.type === 'img' || isCode(p) || isFence(p) ? '' : this.openIdx(tokensOf(p, line), a, b).join(',');
-    if (key !== this.openKey) { this.caret = { line: c.anchor.line, sel: [a, b] }; this.forceUpdate(); }
+    if (key !== this.openKey) { this.caret = { line: c.anchor.line, sel: [a, b], back }; this.forceUpdate(); }
   }
   editorInput = () => {
     const ed = this.editorEl(); if (!ed || this.composing) return; const old = this.lines(), psOld = this.parsedOf(old);
@@ -856,7 +941,7 @@ export default class DocEditor extends React.Component {
       // the row: an empty row never starts with one.
       if (!p.text && /^ /.test(txt)) { const lead = txt.match(/^ +/)[0].length; strip += lead; txt = txt.slice(lead); }
       // A marker just typed at the head of a row that already draws one re-types the row instead of standing as text:
-      // `- ` makes it a bullet, `- [] ` / `@Task ` make it a task. The caret must sit right after the marker, so a
+      // `- ` makes it a bullet, `- [] ` makes it a checkbox. The caret must sit right after the marker, so a
       // deletion that happens to leave one at the head does not eat it.
       const again = retypedRow(p, txt);
       if (again && c && c.anchor.offset === strip + again.ate) { strip += again.ate; return again.line; }
@@ -883,7 +968,7 @@ export default class DocEditor extends React.Component {
       ls[last] = sameLine(q, lineText(q, ls[last]) + strayText);
       pos = last; caret = { line: last, offset: base + strayText.length }; this.lastHtml = null;
     }
-    // `@Task …`, `- []` and `* x` are stored as the row they make, so the line reads the same way tomorrow. Code is kept
+    // `- []` and `* x` are stored as the row they make, so the line reads the same way tomorrow. Code is kept
     // exactly as typed.
     const psNew = parseLines(ls), inCode = pos >= 0 && (isCode(psNew[pos]) || isFence(psNew[pos]));
     if (pos >= 0 && ls[pos] != null && !inCode) ls[pos] = canonicalLine(ls[pos]);
@@ -924,7 +1009,7 @@ export default class DocEditor extends React.Component {
     if (mod && same && e.key.toLowerCase() === 'b') { e.preventDefault(); this.wrap(i, cur, a, b, '**'); return; }
     if (mod && same && e.key.toLowerCase() === 'i') { e.preventDefault(); this.wrap(i, cur, a, b, '*'); return; }
     if (mod && same && e.key.toLowerCase() === 'k') { e.preventDefault(); this.link(i, cur, a, b); return; }
-    if (mod && e.key === 'Enter') { e.preventDefault(); if (p.type === 'todo') this.buildIdx([i]); return; }
+    if (mod && e.key === 'Enter') { e.preventDefault(); return; }
     if (e.key === 'Tab') { e.preventDefault(); if (isMarked(p.type)) { this.indent(i, e.shiftKey ? -1 : 1); this.caret = { line: i, offset: a }; } else if (isCode(p) && same) this.indentCode(i, cur, a, b, e.shiftKey); return; }
     // `@Note name` + Enter (the @ menu's Note, 2026-09-22): a note by that name is made in this workspace and the words become its mention.
     if (e.key === 'Enter' && !e.shiftKey && !mod && this.props.onNoteVerb && NOTE_VERB_RE.test(cur)) { e.preventDefault(); this.noteVerb(i); return; }
@@ -935,13 +1020,13 @@ export default class DocEditor extends React.Component {
       const fence = p.type === 'p' && a === cur.length ? line.match(FENCE_RE) : null;
       if (fence) {
         this.setLines((x) => { const out = [...x]; out.splice(i + 1, 0, '', fence[1] + fence[2]); return out; }, { line: i + 1, offset: 0 });
-        this.shiftStatuses(i + 1, 2); this.setState({ activeLine: i + 1, mention: null }); return;
+        this.setState({ activeLine: i + 1, mention: null }); return;
       }
       // In code the new line starts at the indent of the one it came from, one step deeper after an opening bracket.
       if (isCode(p)) {
         const head = cur.slice(0, a); let lead = head.match(/^[ \t]*/)[0]; if (/[[{(]\s*$/.test(head)) lead += '  ';
         this.setLines((x) => { const out = [...x]; out[i] = sameLine(p, head); out.splice(i + 1, 0, sameLine(p, lead + cur.slice(b))); return out; }, { line: i + 1, offset: lead.length });
-        this.shiftStatuses(i + 1, 1); this.setState({ activeLine: i + 1, mention: null }); return;
+        this.setState({ activeLine: i + 1, mention: null }); return;
       }
       if (isMarked(p.type) && !p.text.trim()) {
         if (p.depth > 0) { this.indent(i, -1); this.caret = { line: i, offset: 0 }; } else this.setLines((x) => x.map((l, j) => (j === i ? '' : l)), { line: i, offset: 0 });
@@ -949,7 +1034,7 @@ export default class DocEditor extends React.Component {
       }
       const head = cur.slice(0, a), tail = cur.slice(b), l1 = sameLine(p, head), l2 = p.type === 'todo' ? todoLine(p.depth, false, tail) : sameLine(p, tail);
       this.setLines((x) => { const out = [...x]; out[i] = l1; out.splice(i + 1, 0, l2); return out; }, { line: i + 1, offset: 0 });
-      this.shiftStatuses(i + 1, 1); this.setState({ activeLine: i + 1, mention: null }); return;
+      this.setState({ activeLine: i + 1, mention: null }); return;
     }
     if (e.key === 'Backspace' && collapsed && a === 0) {
       if (isMarked(p.type)) {
@@ -968,13 +1053,13 @@ export default class DocEditor extends React.Component {
           if (cur !== '' || ls.length < 2) return;
           let k = i - 1; while (k >= 0 && this.lockedAt(ls, k)) k--;
           const target = k >= 0 ? { line: k, offset: lineText(parseLine(ls[k]), ls[k]).length } : null;
-          this.setLines((x) => x.filter((_, j) => j !== i), target); this.shiftStatuses(i, -1);
+          this.setLines((x) => x.filter((_, j) => j !== i), target);
           if (target) this.setState({ activeLine: k, mention: null }); else { const ed = this.editorEl(); if (ed) ed.blur(); this.setState({ activeLine: null, mention: null }); }
           return;
         }
         const off = lineText(q, ls[i - 1]).length;
         this.setLines((x) => { const out = [...x]; out[i - 1] = sameLine(q, lineText(q, x[i - 1]) + cur); out.splice(i, 1); return out; }, { line: i - 1, offset: off });
-        this.shiftStatuses(i, -1); this.setState({ activeLine: i - 1, mention: null });
+        this.setState({ activeLine: i - 1, mention: null });
       }
       return;
     }
@@ -982,7 +1067,7 @@ export default class DocEditor extends React.Component {
       e.preventDefault(); const q = ps[i + 1]; if (this.lockedAt(ls, i + 1)) return; const nt = lineText(q, ls[i + 1]);
       if ((isFence(p) || isFence(q)) && cur !== '' && nt !== '') return;
       this.setLines((x) => { const out = [...x]; out[i] = sameLine(p, cur + nt); out.splice(i + 1, 1); return out; }, { line: i, offset: cur.length });
-      this.shiftStatuses(i + 1, -1); return;
+      return;
     }
     if (e.key === 'Escape') { const ed = this.editorEl(); if (ed) ed.blur(); }
   };
@@ -1002,10 +1087,10 @@ export default class DocEditor extends React.Component {
         at = { line: i, offset: a + ins.length };
       } else if (!line.trim()) {
         this.setLines((x) => { const out = [...x]; out.splice(i, 1, token, ''); return out; }, { line: i + 1, offset: 0 });
-        this.shiftStatuses(i + 1, 1); this.setState({ activeLine: i + 1, mention: null }); at = { line: i + 1, offset: 0 };
+        this.setState({ activeLine: i + 1, mention: null }); at = { line: i + 1, offset: 0 };
       } else {
         this.setLines((x) => { const out = [...x]; out.splice(i + 1, 0, token, ''); return out; }, { line: i + 2, offset: 0 });
-        this.shiftStatuses(i + 1, 2); this.setState({ activeLine: i + 2, mention: null }); at = { line: i + 2, offset: 0 };
+        this.setState({ activeLine: i + 2, mention: null }); at = { line: i + 2, offset: 0 };
       }
       this.wantFocus = true;
     }
@@ -1023,7 +1108,7 @@ export default class DocEditor extends React.Component {
     const first = cur.slice(0, a) + parts[0], last = parts[parts.length - 1] + cur.slice(b);
     const inAnswer = (text) => (p.type === 'reply' ? sameLine(p, text) : text);
     this.setLines((x) => { const out = [...x]; out[i] = sameLine(p, first); out.splice(i + 1, 0, ...parts.slice(1, -1).map(inAnswer), inAnswer(last)); return out; }, { line: i + parts.length - 1, offset: parts[parts.length - 1].length });
-    this.shiftStatuses(i + 1, parts.length - 1); this.setState({ activeLine: i + parts.length - 1, mention: null });
+    this.setState({ activeLine: i + parts.length - 1, mention: null });
   };
   editorClick = (e) => {
     if (e.target === this.editorEl()) { this.focusEnd(); return; } // the editor's own empty space below the last line
@@ -1040,7 +1125,7 @@ export default class DocEditor extends React.Component {
       }
       if (k === 'after') {
         const at = Number(act.dataset.after) + 1;
-        this.setLines((x) => { const out = [...x]; out.splice(at, 0, ''); return out; }); this.shiftStatuses(at, 1);
+        this.setLines((x) => { const out = [...x]; out.splice(at, 0, ''); return out; });
         this.caret = { line: at, offset: 0 }; this.wantFocus = true; this.setState({ activeLine: at, mention: null });
         return;
       }
@@ -1071,12 +1156,10 @@ export default class DocEditor extends React.Component {
         return;
       }
       if (k === 'asklog') { const id = act.dataset.ask; if (this.openLogs.has(id)) this.openLogs.delete(id); else this.openLogs.add(id); this.patchPending(); return; }
-      if (k.startsWith('build') && act.dataset.buildId) { this.buildAct(k, act.dataset.buildId); return; }
+      if (k.startsWith('build') && act.dataset.buildId) { this.buildAct(k, act.dataset.buildId, act.dataset.runName); return; }
       if (k === 'stopask') { if (this.props.onStopAsk) this.props.onStopAsk(act.dataset.ask); return; }
       if (k === 'toggle') this.toggleTodo(i);
-      else if (k === 'build') this.buildIdx([i]);
       else if (k === 'remove') this.removeLine(i);
-      else if (k === 'buildall' && act.dataset.lines) this.buildIdx(act.dataset.lines.split(',').map(Number));
       return;
     }
     const a = e.target.closest('a[data-link]');
@@ -1119,7 +1202,7 @@ export default class DocEditor extends React.Component {
     const ls = this.lines(), p = parseLine(ls[i] || ''); if (p.type !== 'bart' || !p.text.trim() || !this.props.onAsk || this.lockedAt(ls, i)) return;
     const askId = newAskId(), add = [`bart~> ${askId}`]; if (i + 1 >= ls.length) add.push('');
     const turns = this.turnsBefore(ls, i);
-    this.setLines((x) => { const out = [...x]; out.splice(i + 1, 0, ...add); return out; }); this.shiftStatuses(i + 1, add.length);
+    this.setLines((x) => { const out = [...x]; out.splice(i + 1, 0, ...add); return out; });
     const ed = this.editorEl(); if (ed) ed.blur(); this.setState({ activeLine: null, mention: null });
     this.props.onAsk({ askId, text: p.text.trim(), turns });
   }
@@ -1138,7 +1221,7 @@ export default class DocEditor extends React.Component {
     const turns = thread.turns.filter((turn) => turn.answered && !turn.pending).map((turn) => turnText(ls, turn));
     this.followText.delete(from);
     const ed = this.editorEl(); if (ed && ed.contains(document.activeElement)) document.activeElement.blur();
-    this.setLines((x) => { const out = [...x]; out.splice(thread.to + 1, 0, ...add); return out; }); this.shiftStatuses(thread.to + 1, add.length);
+    this.setLines((x) => { const out = [...x]; out.splice(thread.to + 1, 0, ...add); return out; });
     this.setState({ activeLine: null, mention: null });
     this.props.onAsk({ askId, text: asked, turns });
   }
@@ -1170,7 +1253,6 @@ export default class DocEditor extends React.Component {
     const { turn } = found, p = parseLine(ls[q]); if (!p.text.trim()) return;
     const askId = newAskId(), gone = turn.to - turn.q, turns = this.turnsBefore(ls, q);
     this.setLines((x) => { const out = [...x]; out.splice(turn.from, gone, `bart~> ${askId}`); return out; });
-    if (gone > 1) this.shiftStatuses(turn.from + 1, -(gone - 1)); else if (!gone) this.shiftStatuses(turn.from, 1);
     this.setState({ activeLine: null, mention: null });
     this.props.onAsk({ askId, text: p.text.trim(), turns, choice: choice && this.props.models && modelOf(choice.model, this.props.models) ? choice : undefined });
   }
@@ -1181,13 +1263,22 @@ export default class DocEditor extends React.Component {
     this.setLines((x) => x.map((l, j) => { if (j < turn.from || j > turn.to) return l; const p = parseLine(l); return p.type === 'reply' ? replyLine(p.text, to).trimEnd() : l; }));
     this.setState({ activeLine: null, mention: null });
   }
+  // Collapse all / Expand all (2026-09-29): every answer in the document at once, folded as each card's own Collapse
+  // folds it. A run still at work is left as it is.
+  foldable(ls) { return threads(ls, this.parsedOf(ls)).flatMap((thread) => thread.turns).filter((turn) => turn.answered && !turn.pending); }
+  foldAll(to) {
+    const turns = this.foldable(this.lines()); if (!turns.length) return;
+    const under = (j) => turns.some((turn) => j >= turn.from && j <= turn.to);
+    this.setLines((x) => x.map((l, j) => { if (!under(j)) return l; const p = parseLine(l); return p.type === 'reply' && p.folded !== to ? replyLine(p.text, to).trimEnd() : l; }));
+    this.setState({ activeLine: null, mention: null });
+  }
   // Delete: this turn leaves the document, its question and its answer; the turns around it stay. A run still at work is stopped.
   deleteTurn(q) {
     const ls = this.lines(), found = this.findTurn(ls, q); if (!found) return;
     const { turn } = found, n = turn.to - turn.q + 1;
     if (turn.pending && this.props.onStopAsk) this.props.onStopAsk(turn.pending);
     this.setLines((x) => { const out = x.filter((_, j) => j < turn.q || j > turn.to); return out.length ? out : ['']; });
-    this.shiftStatuses(turn.q, -n); this.setState({ activeLine: null, mention: null });
+    this.setState({ activeLine: null, mention: null });
   }
   // Copy: the question as asked (no flags) and the answer as written (no prefixes, no closing line).
   copyText(q) {
@@ -1226,19 +1317,13 @@ export default class DocEditor extends React.Component {
   bartItem() { return (this.props.mentionable || []).find((r) => r && r.id === 'bart') || BART_ITEM; }
   mentionList() {
     const q = (this.state.mention?.query || '').toLowerCase();
-    if (this.props.mentionItems) return this.props.mentionItems(q); // the workspace's list: Bart, Task, Note, the open page, the library (model/rail.js)
+    if (this.props.mentionItems) return this.props.mentionItems(q); // the workspace's list: Bart, Note, the open page, the library (model/rail.js)
     return (this.props.mentionable || []).filter((r) => r && ((r.name || '').toLowerCase().includes(q) || (r.title || '').toLowerCase().includes(q)));
   }
   pickMention(r) {
     const m = this.state.mention; if (!m || !r) return; const ls = this.lines(), p = parseLine(ls[m.i] || '');
     const cur = lineText(p, ls[m.i]);
-    const verb = r.kind === 'verb' ? r.verb : r.id === 'task' || r.id === 'bart' ? r.id : null;
-    if (verb === 'task') {
-      // `@Task` is a trigger, not text: the line becomes the task row it names, keeping whatever else was on it.
-      const rest = (cur.slice(0, m.start) + cur.slice(m.caret)).replace(/\s+$/, '');
-      this.setLines((x) => x.map((l, j) => (j === m.i ? todoLine(isMarked(p.type) ? p.depth : 0, p.type === 'todo' && p.done, rest) : l)), { line: m.i, offset: rest.length });
-      this.wantFocus = true; this.setState({ mention: null, activeLine: m.i }); return;
-    }
+    const verb = r.kind === 'verb' ? r.verb : r.id === 'bart' ? r.id : null;
     // Bart and Note are words the line keeps (Enter asks, or makes the note); anything else is a mention, and what it names
     // comes into this workspace (the open page is added to the library first: props.onMentionPicked).
     const ins = verb === 'bart' ? '@Bart ' : verb === 'note' ? '@Note ' : r.kind === 'workspace' ? `${wsMention(r.name, r.id)} ` : `@[${r.name}] `;
@@ -1278,21 +1363,9 @@ export default class DocEditor extends React.Component {
       return out;
     });
   }
-  removeLine(i) { this.setLines((ls) => (ls.length > 1 ? ls.filter((_, j) => j !== i) : [''])); this.shiftStatuses(i, -1); this.setState({ mention: null }); }
+  removeLine(i) { this.setLines((ls) => (ls.length > 1 ? ls.filter((_, j) => j !== i) : [''])); this.setState({ mention: null }); }
   toggleTodo(i) {
     this.setLines((ls) => ls.map((l, j) => { if (j !== i) return l; const p = parseLine(l); return todoLine(p.depth, !p.done, p.text); }));
-    const key = this.key();
-    this.setState((s) => ({ statuses: { ...s.statuses, [key]: { ...(s.statuses[key] || {}), [i]: '' } } }));
-  }
-  buildIdx(idxs) {
-    const ls = this.lines(), open = idxs.filter((i) => { const p = parseLine(ls[i] || ''); return p.type === 'todo' && p.text.trim() && !p.done && !HELD.includes(this.status(i)); });
-    if (!open.length) return; const key = this.key();
-    this.setState((s) => { const st = { ...(s.statuses[key] || {}) }; open.forEach((i) => { st[i] = 'building'; }); return { statuses: { ...s.statuses, [key]: st }, mention: null }; });
-    const k = this.speed();
-    open.forEach((i, n) => {
-      this.timer(() => this.setStatus(key, i, 'checking'), (1600 + n * 400) * k);
-      this.timer(() => this.setStatus(key, i, 'done', true), (3000 + n * 400) * k);
-    });
   }
   findRes(name) {
     const n = String(name).toLowerCase(); if (n.startsWith('bart')) return this.bartItem();
@@ -1316,6 +1389,7 @@ export default class DocEditor extends React.Component {
   render() {
     const s = this.state;
     const compact = this.props.compact;
+    const answers = compact || this.props.readOnly ? [] : this.foldable(this.lines()), anyOpen = answers.some((turn) => !turn.folded);
     // Compact (a post-it, 2026-09-22) never scrolls: it is as tall as its lines, and the card fits the type to its size.
     return (
       <>
@@ -1332,7 +1406,7 @@ export default class DocEditor extends React.Component {
               spellCheck={false}
               role="textbox"
               aria-multiline="true"
-              aria-label={compact ? 'Post-it' : 'Document'}
+              aria-label={compact ? 'Sticky' : 'Document'}
               style={{ marginTop: compact ? 0 : 18, outline: 'none', minHeight: compact ? 28 : 240, font: '17px/1.6 var(--font-sans)', color: '#171717', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', caretColor: '#171717', cursor: 'text' }}
             />
           </div>
@@ -1346,6 +1420,10 @@ export default class DocEditor extends React.Component {
               {this.props.footer}
             </div>
           </div>
+        )}
+        {/* Top right of the page: every answer folded or unfolded at once, as plain words (2026-09-29). */}
+        {answers.length > 0 && (
+          <button type="button" className="hov-ink" data-fold-all={anyOpen ? 'collapse' : 'expand'} onClick={() => this.foldAll(anyOpen)} title={anyOpen ? 'Collapse every @bart answer' : 'Expand every @bart answer'} style={{ position: 'absolute', top: 8, right: 22, zIndex: 2, padding: '4px 6px', border: 0, borderRadius: 6, background: '#fff', cursor: 'pointer', font: '400 12.5px/1.3 var(--font-sans)', color: '#8f8f8f', whiteSpace: 'nowrap' }}>{anyOpen ? 'Collapse all' : 'Expand all'}</button>
         )}
         {s.mention && s.mention.anchor && <MentionMenu items={this.mentionList()} index={s.mentionIdx} anchor={s.mention.anchor} onPick={(r) => this.pickMention(r)} onHover={(i) => this.setState({ mentionIdx: i })} />}
         {s.pop && (s.pop.res.ws ? <WorkspacePeek id={s.pop.res.ws} name={s.pop.res.name} anchor={s.pop.anchor} peek={this.props.workspacePeek} /> : <Popover item={s.pop.res} anchor={s.pop.anchor} />)}

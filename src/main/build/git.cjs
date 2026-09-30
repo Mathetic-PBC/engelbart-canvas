@@ -7,8 +7,10 @@
 // arguments, never through a shell. `gitPath()` is the git the tool check found (../tools); tests pass the one on PATH.
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
+const { randomBytes } = require('node:crypto');
 
 const FALLBACK_NAME = 'Engelbart';
 const FALLBACK_EMAIL = 'build@engelbart.local';
@@ -167,6 +169,25 @@ function createGit({ gitPath = () => 'git', run = execFile, environment = proces
     return { files, patch: patch.length > maxPatch ? patch.slice(0, maxPatch) : patch, truncated: patch.length > maxPatch };
   }
 
+  /**
+   * What changed since `from` as the worktree stands now, new files too, with nothing committed (2026-09-29: the Build
+   * card's diff, while the agent works). The files go into a copy of the worktree's index, never the index itself, so
+   * the agent's own `git status` is untouched. → as diff
+   */
+  async function workingDiff(dir, from, options) {
+    const gitDir = path.resolve(dir, (await trim(dir, ['rev-parse', '--git-dir'])));
+    const index = path.join(gitDir, `engelbart-live-${process.pid}-${Math.random().toString(36).slice(2)}.index`);
+    const own = { env: { GIT_INDEX_FILE: index } };
+    try {
+      try { fs.copyFileSync(path.join(gitDir, 'index'), index); } catch { await must(dir, ['read-tree', 'HEAD'], own); }
+      await must(dir, ['add', '-A'], own);
+      const tree = (await must(dir, ['write-tree'], own)).trim();
+      return await diff(dir, from, tree, options);
+    } finally {
+      try { fs.unlinkSync(index); } catch { /* never made */ }
+    }
+  }
+
   const mergeBase = (dir, a, b) => trim(dir, ['merge-base', a, b]);
   const isAncestor = async (dir, a, b) => (await exec(dir, ['merge-base', '--is-ancestor', a, b])).code === 0;
   const conflicted = async (dir) => (await exec(dir, ['diff', '--name-only', '--diff-filter=U'])).stdout.split('\n').map((line) => line.trim()).filter(Boolean);
@@ -240,6 +261,28 @@ function createGit({ gitPath = () => 'git', run = execFile, environment = proces
     return checkpoint(dir, message, who);
   }
 
+  /**
+   * HEAD's tree with the changes of `shas` (commits in its history: a Build's run steps) taken back out, newest first, in
+   * a scratch index: the worktree and its own index are never touched. What is left is the Build's own work (Review shows
+   * the two apart). → the tree, or null when a later commit changed the same lines and they cannot be taken out.
+   */
+  async function treeWithout(dir, shas) {
+    const index = path.join(os.tmpdir(), `engelbart-index-${process.pid}-${randomBytes(6).toString('hex')}`);
+    const scratch = { env: { GIT_INDEX_FILE: index } };
+    try {
+      await must(dir, ['read-tree', 'HEAD'], scratch);
+      for (const sha of [...shas].reverse()) {
+        const patch = await must(dir, ['diff', '--binary', '--full-index', `${sha}^`, sha]);
+        if (!patch.trim()) continue;
+        const out = await exec(dir, ['apply', '--cached', '--reverse', '--whitespace=nowarn', '-'], { ...scratch, input: patch });
+        if (out.code !== 0) return null;
+      }
+      return (await must(dir, ['write-tree'], scratch)).trim();
+    } finally {
+      try { fs.unlinkSync(index); } catch { /* never made */ }
+    }
+  }
+
   /** A folder with no history gets one: git init, a .gitignore when there is none, and everything in a first commit. */
   /** `own`: `dir` gets a repository of its own even inside another one (the default repo, never a parent's commit). */
   async function init(dir, { own = false } = {}) {
@@ -279,7 +322,7 @@ function createGit({ gitPath = () => 'git', run = execFile, environment = proces
     return [...files];
   }
 
-  return { exec, top, head, revParse, dirtyPaths, identity, addWorktree, removeWorktree, deleteBranch, branchExists, merging, abortMerge, checkpoint, diff, mergeBase, isAncestor, conflicted, squashOnto, checkoutBranch, fastForward, mergeInto, concludeMerge, init, clone, message, markers };
+  return { exec, top, head, revParse, dirtyPaths, identity, addWorktree, removeWorktree, deleteBranch, branchExists, merging, abortMerge, checkpoint, diff, workingDiff, treeWithout, mergeBase, isAncestor, conflicted, squashOnto, checkoutBranch, fastForward, mergeInto, concludeMerge, init, clone, message, markers };
 }
 
 module.exports = { createGit, GitError, GITHUB_HELPER, credentialEnv, FALLBACK_NAME, FALLBACK_EMAIL };

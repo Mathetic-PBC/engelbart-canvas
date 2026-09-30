@@ -121,7 +121,7 @@ function Card() {
         {card && !card.text && <span className="post-placeholder">Write something…</span>}
       </div>
       <div className="postit-foot">
-        <button type="button" data-copy-post-it="1" className="postit-btn postit-copy" aria-label="Copy" title="Copy this post-it" onClick={copy}>
+        <button type="button" data-copy-post-it="1" className="postit-btn postit-copy" aria-label="Copy" title="Copy this sticky" onClick={copy}>
           {copied
             ? <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 7.5 6 10.5 11.5 4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
             : <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><rect x="4.5" y="4.5" width="7.5" height="7.5" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.2" /><path d="M9.5 2.5V2.2c0-.7-.5-1.2-1.2-1.2H3.2C2.5 1 2 1.5 2 2.2v5.1c0 .7.5 1.2 1.2 1.2h.3" fill="none" stroke="currentColor" strokeWidth="1.2" /></svg>}
@@ -145,7 +145,7 @@ function Card() {
         </span>
       </div>
       {error && <div role="alert" className="post-error">Couldn’t save: {error}</div>}
-      <button type="button" data-resize-post-it="1" className="post-resize" aria-label="Resize post-it" title="Drag to resize" onKeyDown={(event) => {
+      <button type="button" data-resize-post-it="1" className="post-resize" aria-label="Resize sticky" title="Drag to resize" onKeyDown={(event) => {
         // Keyboard resize shares the native geometry path.
         const dx = event.key === 'ArrowRight' ? 20 : event.key === 'ArrowLeft' ? -20 : 0;
         const dy = event.key === 'ArrowDown' ? 20 : event.key === 'ArrowUp' ? -20 : 0;

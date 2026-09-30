@@ -1,4 +1,4 @@
-// The "@" mention menu (Add - Mention.dc.html, 2026-09-22): a 400px list with Bart, Task and Note on top, then the page
+// The "@" mention menu (Add - Mention.dc.html, 2026-09-22): a 400px list with Bart and Note on top, then the page
 // open in the Browser, then the project's other workspaces, then the library (model/rail.js mentionRows); something the library does not hold yet carries a
 // +. It hangs under the caret, or above it when the line is near the bottom of the window, and scrolls past a dozen rows.
 import React from 'react';

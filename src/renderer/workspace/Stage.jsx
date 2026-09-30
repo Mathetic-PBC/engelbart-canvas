@@ -1,6 +1,6 @@
 import React from 'react';
 import { EDGE as WINDOW_EDGE } from '../ui/WindowEdges.jsx';
-import { isGithubPage } from '../../shared/github.cjs';
+import { isGithubSignIn } from '../../shared/github.cjs';
 import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
 import { KindGlyph, SEARCH, FOLDER } from '../ui/Icons.jsx';
@@ -485,7 +485,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
 
   // A library row in a tab of its own: its file when it has one (read here), else its address.
   const showRow = (id, row) => {
-    if (isGithubPage(row.url) && !row.path) { quiet(api.openExternal(row.url)); return; }
+    if (isGithubSignIn(row.url) && !row.path) { quiet(api.openExternal(row.url)); return; }
     update(id, (t) => ({ ...t, item: row.id, row }));
     if (row.type === 'pdf' && row.path) {
       const seq = (pdfSeq.current += 1);
@@ -502,7 +502,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
 
   // Typed (or picked) into the tab in front: a path is read, anything else is where the page goes.
   const navigate = async (id, input) => {
-    if (isGithubPage(kindOf(input).url)) { await api.openExternal(kindOf(input).url); setTyping(false); setDraft(stripScheme(tab.url)); return; }
+    if (isGithubSignIn(kindOf(input).url)) { await api.openExternal(kindOf(input).url); setTyping(false); setDraft(stripScheme(tab.url)); return; }
     update(id, (t) => ({ ...t, pdf: null, pdfForward: null, item: null, row: null }));
     let next = kindOf(input);
     const path = next.kind === 'disk' || next.kind === 'file' || (!hasScheme(input) && next.kind !== 'local' && next.kind !== 'sandbox' && next.kind !== 'blank' && looksLikePlace(input) && /^[.~/]|\.[a-z0-9]{1,8}(?:[#?].*)?$/i.test(input) && !/\.(com|org|net|io|dev|ai|app|edu|gov|co|xyz|me)(?:[/:#?].*)?$/i.test(input));
@@ -529,13 +529,13 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
 
   // Opened from elsewhere — the sidebar, an @mention, a link in the document or the terminal, the all-projects screen.
   const openRow = (row) => {
-    if (isGithubPage(row.url) && !row.path) { quiet(api.openExternal(row.url)); return; }
+    if (isGithubSignIn(row.url) && !row.path) { quiet(api.openExternal(row.url)); return; }
     const id = claim(`i:${row.id}`);
     if (id) showRow(id, row);
   };
   const openInput = (input) => {
     const k0 = kindOf(input);
-    if (isGithubPage(k0.url)) { quiet(api.openExternal(k0.url)); return; }
+    if (isGithubSignIn(k0.url)) { quiet(api.openExternal(k0.url)); return; }
     const id = claim(isPage(k0) && !DISK_URL.test(input) ? `l:${addressKey(k0.url)}` : '');
     if (id) void navigate(id, input);
   };

@@ -43,7 +43,7 @@ function noteName(text) {
 // Native siblings of the browser, each with only its own card's IPC capability.
 // `buildFor(projectId, postItId)` (2026-09-25): the card's latest quick task (main/build), so a card opened later shows its state.
 function createPostItViews({ electron, getWindow, getContext, send, buildFor = async () => null, now = () => Date.now() }) {
-  const { WebContentsView, clipboard, shell } = electron;
+  const { WebContentsView, clipboard } = electron;
   const entries = new Map();
   let projectId = null, database = null, gesture = null, trash = null, blocking = [];
   let standIns = '[]'; // what the window was last told to draw in place of covered cards (JSON, to send only changes)
@@ -197,7 +197,7 @@ function createPostItViews({ electron, getWindow, getContext, send, buildFor = a
     wc.on('will-navigate', (event) => event.preventDefault());
     wc.on('will-redirect', (event) => event.preventDefault());
     wc.on('focus', () => focus(entry));
-    wc.on('render-process-gone', () => { entry.crashed = true; cancelGesture(); report(new Error('A post-it stopped responding. Reopen the project to restore it.')); });
+    wc.on('render-process-gone', () => { entry.crashed = true; cancelGesture(); report(new Error('A sticky stopped responding. Reopen the project to restore it.')); });
     wc.on('before-input-event', (event, input) => {
       if (input.type === 'keyDown' && input.key === 'Escape') {
         cancelGesture();
@@ -238,7 +238,7 @@ function createPostItViews({ electron, getWindow, getContext, send, buildFor = a
 
   function create(id) {
     return exclusive(async () => {
-      if (projectId !== id || !database) throw new Error('Open this project before adding a post-it');
+      if (projectId !== id || !database) throw new Error('Open this project before adding a sticky');
       unhide();
       const offset = entries.size % 8;
       const row = await database.create({ id: randomUUID(), text: '', nx: .22 + offset * .045, ny: .16 + offset * .045, width: SIDE, height: SIDE, z: now() });
@@ -276,7 +276,7 @@ function createPostItViews({ electron, getWindow, getContext, send, buildFor = a
   function forEvent(event) {
     assertTrustedRenderer(event, CARD_URL);
     const entry = [...entries.values()].find((e) => e.view.webContents === event.sender);
-    if (!entry) throw new Error('IPC rejected: unknown post-it');
+    if (!entry) throw new Error('IPC rejected: unknown sticky');
     return entry;
   }
 
@@ -352,7 +352,7 @@ function createPostItViews({ electron, getWindow, getContext, send, buildFor = a
   }
 
   function edit(entry, text) {
-    if (typeof text !== 'string' || text.length > 400000) throw new TypeError('Post-it text must be at most 400000 characters');
+    if (typeof text !== 'string' || text.length > 400000) throw new TypeError('Sticky text must be at most 400000 characters');
     entry.row.text = text;
     stale(entry);
     return save(entry).then(() => true);
@@ -360,7 +360,7 @@ function createPostItViews({ electron, getWindow, getContext, send, buildFor = a
 
   // Text that no longer fits: the card grows downwards, as far as the window lets it (the card shrinks its type after that).
   function grow(entry, height) {
-    if (!Number.isFinite(height) || height < 0 || height > 100000) throw new TypeError('Invalid post-it height');
+    if (!Number.isFinite(height) || height < 0 || height > 100000) throw new TypeError('Invalid sticky height');
     const scale = zoom(), vp = viewport();
     if (gesture?.entry !== entry && height > entry.row.height) {
       Object.assign(entry.row, grown(entry.row, height, vp, scale));
@@ -395,7 +395,7 @@ function createPostItViews({ electron, getWindow, getContext, send, buildFor = a
 
   function restore(id, cardId) {
     return exclusive(async () => {
-      if (projectId !== id || !database) throw new Error('Open this project before restoring a post-it');
+      if (projectId !== id || !database) throw new Error('Open this project before restoring a sticky');
       const row = await database.restore(String(cardId));
       if (!row) return false;
       unhide();
@@ -512,7 +512,8 @@ function createPostItViews({ electron, getWindow, getContext, send, buildFor = a
       if (typeof text !== 'string' || text.length > 400000) throw new TypeError('Invalid text');
       clipboard.writeText(text);
     });
-    ipcMain.handle('post-it:open-link', (event, url) => { forEvent(event); return shell.openExternal(parseExternalUrl(url).href); });
+    // A link on a sticky opens on the Stage, as every website does (2026-09-29): the window is told, not the default browser.
+    ipcMain.handle('post-it:open-link', (event, url) => { forEvent(event); send('post-its:open-link', { projectId, url: parseExternalUrl(url).href }); return true; });
     ipcMain.on('post-it:gesture', (event, input) => { try { move(forEvent(event), input); } catch (error) { report(error); } });
   }
 

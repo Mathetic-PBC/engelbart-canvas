@@ -60,29 +60,34 @@ async function prepareLocalClaude(source = process.env, run = execute) {
   return { file, env };
 }
 
-function claudeArguments(config, model = 'claude-sonnet-5-5') {
+// `maxTurns` and `effort`: a Build's run step (../build/run-step.cjs) works through several runnables, on the Build's
+// own model and effort.
+function claudeArguments(config, model = 'claude-sonnet-5-5', { maxTurns = 32, effort = null } = {}) {
   if (!/^[a-zA-Z0-9._:-]{1,100}$/.test(model)) throw new Error('Invalid local Claude model');
+  if (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > 500) throw new Error('Invalid local Claude turn limit');
+  if (effort != null && !/^[a-z]{1,16}$/.test(effort)) throw new Error('Invalid local Claude effort');
   return ['-p', '--output-format', 'stream-json', '--verbose', '--no-session-persistence',
     '--restricted', '--setting-sources', '', '--settings', '{"disableAllHooks":true}',
     '--strict-mcp-config', '--mcp-config', config, '--tools', '',
     '--allowedTools', 'mcp__canvas__*', '--permission-mode', 'dontAsk',
-    '--model', model, '--max-turns', '32'];
+    '--model', model, ...(effort ? ['--effort', effort] : []), '--max-turns', String(maxTurns)];
 }
 
-async function runLocalClaude({ auth, bridge, prompt, model, signal, onMessage = () => {}, spawnProcess = spawn }) {
+// `server`: the stdio adapter that serves the tools (the sandbox setup's by default). → the final result text
+async function runLocalClaude({ auth, bridge, prompt, model, effort = null, maxTurns = 32, server = path.join(__dirname, 'local-mcp.cjs'), signal, onMessage = () => {}, spawnProcess = spawn }) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'canvas-claude-setup-'));
   fs.chmodSync(directory, 0o700);
   const config = path.join(directory, 'mcp.json');
   const connection = path.join(directory, 'bridge.json');
   fs.writeFileSync(connection, JSON.stringify(bridge), { mode: 0o600 });
   fs.writeFileSync(config, JSON.stringify({ mcpServers: { canvas: {
-    command: process.execPath, args: [path.join(__dirname, 'local-mcp.cjs'), connection],
+    command: process.execPath, args: [server, connection],
     env: { ELECTRON_RUN_AS_NODE: '1' },
   } } }), { mode: 0o600 });
   let child, killTimer, abort;
   try {
     signal?.throwIfAborted();
-    child = spawnProcess(auth.file, claudeArguments(config, model), {
+    child = spawnProcess(auth.file, claudeArguments(config, model, { maxTurns, effort }), {
       cwd: directory, env: { ...auth.env, MCP_TOOL_TIMEOUT: '240000' },
       stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32',
     });
@@ -127,6 +132,7 @@ async function runLocalClaude({ auth, bridge, prompt, model, signal, onMessage =
       const reason = String(result?.result || result?.subtype || 'Claude Code exited without a result').slice(0, 800);
       throw new Error(`Local Claude setup did not finish: ${reason}. Check your subscription sign-in and usage limits in the Canvas terminal.`);
     }
+    return typeof result.result === 'string' ? result.result : '';
   } finally {
     if (abort) signal?.removeEventListener('abort', abort);
     clearTimeout(killTimer);

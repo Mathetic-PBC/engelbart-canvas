@@ -7,7 +7,7 @@
 //     during onboarding is discarded (`discardItem`), and only if nothing holds it;
 //   - the custom instructions, `<dataRoot>/instructions.md`, read by @bart and Build (`instructionsBlock`);
 //   - the project (`startProject`): its folder, made under the home directory when Engelbart is asked to make one,
-//     a "Welcome" workspace whose document starts with the description, the "Welcome!" note, and the chosen library
+//     a "Getting started" workspace (the welcome tour's name for it, 2026-09-29) whose document starts with the description, the "Welcome!" note, and the chosen library
 //     rows in the workspace's context.
 
 const fs = require('node:fs');
@@ -82,7 +82,7 @@ async function startProject(ctx, { name, description = '', folder = 'new', direc
   const known = new Map(rows.map((row) => [row.id, row]));
   const chosen = [...new Set((Array.isArray(context) ? context : []).filter((id) => typeof id === 'string' && UUID_RE.test(id)))]
     .filter((id) => known.has(id) && !known.get(id).tags.includes('note'));
-  return projects.createProjectWithWelcome(ctx, { name, description, directory: dir }, { workspaceName: 'Welcome', context: chosen });
+  return projects.createProjectWithWelcome(ctx, { name, description, directory: dir }, { workspaceName: 'Getting started', context: chosen });
 }
 
 /**

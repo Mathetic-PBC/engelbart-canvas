@@ -2,11 +2,10 @@
 // Ported verbatim from design/goal-canvas/Goal Canvas.dc.html (lines 403–404, 439–456, 692–730, 801–812).
 // One markdown string per document; the caret's line shows its source, every other line renders.
 
-// A task is a checkbox line: `- [ ] text` (2026-09-20). Two things start one — the checkbox itself, typed as `- []`
-// or `- [ ]`, and `@Task ` (either case, what the @ menu inserts), which is stored as the checkbox line it makes.
-// A bare `- text` is a bullet, not a task: lists are their own kind of line, nested two spaces at a time.
+// A checkbox line: `- [ ] text` (2026-09-20), typed as `- []` or `- [ ]`. `@Task` is gone (2026-09-29): stickies
+// took its place, and a checkbox is a checklist, nothing more. A bare `- text` is a bullet: lists are their own kind of
+// line, nested two spaces at a time.
 export const TODO_RE = /^( *)- \[([ xX]?)\](?: (.*))?$/;
-export const TASK_RE = /^( *)@task[ \t](.*)$/i;
 export const LIST_RE = /^( *)[-*] (.*)$/;
 export const HEAD_RE = /^(#{1,3}) (.*)$/;
 export const IMG_RE = /^!\[([^\]]*)\]\((img:[\w-]+|https?:[^)\s]+|data:image[^)\s]+)\)$/;
@@ -29,18 +28,15 @@ export const ATTACH_RE = /^!\[([^\]\n]*)\]\(img:([\w-]+)\)$/;
 export const INLINE = /(!\[[^\]\n]*\]\(img:[\w-]+\)|@[Bb]art(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`])/g;
 const LINK_RE = /^\[([^\]]+)\]\(([^)]+)\)$/;
 // Another workspace of the project, mentioned (2026-09-25): `@[Name](ws:<id>)`. The id finds it after a rename (workspaces
-// are born "Untitled Workspace n" and named later); the line shows the workspace icon where a note's mention shows its @,
-// then the name, so it never reads as a note of the same name. Before the plain mention in INLINE, so the id stays part of the token.
+// are born "Untitled Workspace n" and named later); the line shows the @, the workspace icon right after it, then the name
+// (2026-09-29), so it never reads as a note of the same name. Before the plain mention in INLINE, so the id stays part of the token.
 export const WS_MENTION_RE = /^@\[([^\]\n]+)\]\(ws:([\w-]+)\)$/;
 /** The token that mentions a workspace. */
 export const wsMention = (name, id) => `@[${String(name || '').replace(/[[\]\n]/g, '').trim() || 'Workspace'}](ws:${id})`;
 // ui/Icons.jsx WS, as markup for the rendered line: 0.8em square, on the text's baseline.
-const WS_ICON = '<svg viewBox="0 0 16 16" width="0.8em" height="0.8em" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true" style="display:inline-block;vertical-align:-0.06em;margin:0 0.25em 0 0.05em"><rect x="1.5" y="1.5" width="4.5" height="4.5" rx="1"/><rect x="8" y="1.5" width="6.5" height="4.5" rx="1"/><rect x="1.5" y="8" width="6.5" height="6.5" rx="1"/><rect x="10" y="8" width="4.5" height="4.5" rx="1"/></svg>';
+const WS_ICON = '<svg viewBox="0 0 16 16" width="0.8em" height="0.8em" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true" style="display:inline-block;vertical-align:-0.06em;margin:0 0.2em 0 0.1em"><rect x="1.5" y="1.5" width="4.5" height="4.5" rx="1"/><rect x="8" y="1.5" width="6.5" height="4.5" rx="1"/><rect x="1.5" y="8" width="6.5" height="6.5" rx="1"/><rect x="10" y="8" width="4.5" height="4.5" rx="1"/></svg>';
 // A bare address, typed, pasted or written by @bart, is a link as it stands (closing punctuation is not part of it).
 const URL_RE = /^https?:\/\/\S+$/;
-
-export const LABELS = { queued: 'Queued', building: 'Building…', checking: 'Checking…', fixing: 'Fixing…', needs_user: 'Needs you', done: 'Done', failed: 'Failed' };
-export const HELD = ['queued', 'building', 'checking', 'fixing'];
 
 const depthOf = (indent) => Math.min(8, Math.floor(indent.length / 2));
 
@@ -54,7 +50,6 @@ export const parseLine = (l) => {
   if ((m = l.match(QUOTE_RE))) return { type: 'quote', text: m[1] };
   if ((m = l.match(IMG_RE))) return { type: 'img', text: m[1], src: m[2] };
   if ((m = l.match(TODO_RE))) return { type: 'todo', depth: depthOf(m[1]), done: !!m[2] && m[2] !== ' ', text: m[3] || '' };
-  if ((m = l.match(TASK_RE))) return { type: 'todo', depth: depthOf(m[1]), done: false, text: m[2] };
   if ((m = l.match(LIST_RE))) return { type: 'list', depth: depthOf(m[1]), text: m[2] };
   if ((m = l.match(HEAD_RE))) return { type: 'h', level: m[1].length, text: m[2] };
   return { type: 'p', text: l };
@@ -147,7 +142,7 @@ export const listLine = (depth, text) => `${'  '.repeat(depth)}- ${text}`;
 // No trimming: a space typed at the end of an answer line has to survive the round trip, or no second word can follow.
 export const replyLine = (text, folded) => `bart${folded ? '+' : ''}> ${text}`;
 
-/** Rows of a list: a task or a bullet. They nest, Enter continues them, an empty one steps out. */
+/** Rows of a list: a checkbox or a bullet. They nest, Enter continues them, an empty one steps out. */
 export const isMarked = (type) => type === 'todo' || type === 'list';
 /** Lines whose prefix is drawn, not typed: the caret's line shows `p.text`, never the `- `, `- [ ] ` or `bart> ` in front of it. */
 export const isDrawn = (type) => isMarked(type) || type === 'reply';
@@ -155,16 +150,16 @@ export const isDrawn = (type) => isMarked(type) || type === 'reply';
 export const lineText = (p, line) => (isDrawn(p.type) ? p.text : line);
 /** That line again with different text, keeping its kind. */
 export const sameLine = (p, text) => (p.type === 'todo' ? todoLine(p.depth, p.done, text) : p.type === 'list' ? listLine(p.depth, text) : p.type === 'reply' ? replyLine(text, p.folded) : text);
-/** How a line the person just typed is stored: `@Task …`, `- []` and `* x` become the line they make. */
+/** How a line the person just typed is stored: `- []` and `* x` become the line they make. */
 export const canonicalLine = (l) => { const p = parseLine(l); return isMarked(p.type) ? sameLine(p, p.text) : l; };
 
 /**
  * A marker typed into a row that already draws one (an empty bullet or task): the row takes that marker instead of
- * holding it as literal text — `- [ ] `, `- []` and `@Task ` make it a task, `- ` makes it a bullet.
+ * holding it as literal text — `- [ ] ` and `- []` make it a checkbox, `- ` makes it a bullet.
  * Returns the row's new source and how many characters the marker ate, or null when nothing was typed but text.
  */
 export function retypedRow(p, txt) {
-  const task = txt.match(/^(?:- \[([ xX]?)\](?: |$)|@task[ \t])/i);
+  const task = txt.match(/^- \[([ xX]?)\](?: |$)/);
   if (task) return { line: todoLine(p.depth, (task[1] || ' ') !== ' ', txt.slice(task[0].length)), ate: task[0].length };
   const bullet = txt.match(/^[-*] /);
   if (bullet) return { line: listLine(p.depth, txt.slice(bullet[0].length)), ate: bullet[0].length };
@@ -177,7 +172,7 @@ export function tokShown(tok) {
   if (tok.startsWith('**') && tok.endsWith('**') && tok.length > 4) return { shown: tok.slice(2, -2), pre: 2 };
   if (tok.startsWith('`') && tok.endsWith('`') && tok.length > 2) return { shown: tok.slice(1, -1), pre: 1 };
   if (tok.startsWith('*') && tok.endsWith('*') && tok.length > 2) return { shown: tok.slice(1, -1), pre: 1 };
-  const ws = tok.match(WS_MENTION_RE); if (ws) return { shown: ws[1], pre: 2 }; // the icon stands for `@[` and is not text
+  const ws = tok.match(WS_MENTION_RE); if (ws) return { shown: '@' + ws[1], pre: 1 }; // the icon after the @ is not text
   if (tok.startsWith('@[')) { const nm = tok.slice(2, -1); return { shown: '@' + (nm.startsWith('bart') ? 'bart' : nm), pre: 1 }; }
   const m = tok.match(LINK_RE); if (m) return { shown: m[1], pre: 1 };
   return { shown: tok, pre: 0 };
@@ -276,7 +271,7 @@ export function inlineHtml(text) {
     if (p.startsWith('*') && p.endsWith('*') && p.length > 2) return `<em>${esc(p.slice(1, -1))}</em>`;
     if (/^@bart$/i.test(p)) return `<span style="color:#0070f3;font-weight:500">${esc(p)}</span>`;
     const ws = p.match(WS_MENTION_RE);
-    if (ws) return `<span data-mention="${esc(ws[1])}" data-ws="${esc(ws[2])}" style="color:#0070f3;font-weight:500;cursor:pointer;border-bottom:1px dotted #c9c9c9;white-space:nowrap">${WS_ICON}${esc(ws[1])}</span>`;
+    if (ws) return `<span data-mention="${esc(ws[1])}" data-ws="${esc(ws[2])}" style="color:#0070f3;font-weight:500;cursor:pointer;border-bottom:1px dotted #c9c9c9;white-space:nowrap">@${WS_ICON}${esc(ws[1])}</span>`;
     if (p.startsWith('@[')) { const name = p.slice(2, -1), shown = name.startsWith('bart') ? 'bart' : name; return `<span data-mention="${esc(name)}" style="color:#0070f3;font-weight:500;cursor:pointer;border-bottom:1px dotted #c9c9c9">@${esc(shown)}</span>`; }
     const m = p.match(LINK_RE);
     if (m) return `<a href="${esc(m[2])}" data-link="1" style="color:#0070f3;text-decoration:underline;text-underline-offset:3px">${esc(m[1])}</a>`;

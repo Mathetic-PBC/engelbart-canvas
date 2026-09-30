@@ -3,18 +3,20 @@ import { api, errorMessage } from '../api.js';
 import Rail from '../workspace/Rail.jsx';
 import DocTabs from '../workspace/DocTabs.jsx';
 import NotePicker from '../workspace/NotePicker.jsx';
-import DocEditor, { BART_ITEM, TASK_ITEM } from '../workspace/DocEditor.jsx';
+import DocEditor, { BART_ITEM } from '../workspace/DocEditor.jsx';
 import RightPane, { RIGHT_MODES } from '../workspace/RightPane.jsx';
 import { kindOf } from '../ui/Icons.jsx';
 import { hasTag, isNote } from '../model/kind.js';
 import { isUntitled, nextUntitled } from '../model/names.js';
 import { OPEN_IN_BROWSER } from '../model/address.js';
+import { adoptSession, dropSession, SHOW_TERMINAL } from '../terminal/sessions.js';
 import { mentionRows } from '../model/rail.js';
 import { flatWorkspaces, nextPlace, placesToGo } from '../model/nav.js';
 import { onStage } from '../model/stage.js';
 import { buildLine } from '../model/doc.js';
 import ProjectPostIts from '../post-its/ProjectPostIts.jsx';
 import BuildPanel from '../workspace/BuildPanel.jsx';
+import BuildReject from '../workspace/BuildReject.jsx';
 import BuildReview from '../workspace/BuildReview.jsx';
 import PostItBuild from '../post-its/PostItBuild.jsx';
 import PostItTask from '../post-its/PostItTask.jsx';
@@ -139,6 +141,19 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     window.addEventListener(OPEN_IN_BROWSER, show);
     return () => window.removeEventListener(OPEN_IN_BROWSER, show);
   }, []);
+  // What a Build's run step got running (main/build/run-step.cjs), opened from Review: a web UI in a Stage tab, a terminal
+  // program's session (main's) in the terminal. A desktop app's window comes forward by itself (main).
+  React.useEffect(() => api.onBuildRun((event) => {
+    if (event && event.kind === 'closed' && event.sessionId) { dropSession(event.sessionId); return; }
+    if (!event || event.projectId !== project.id) return;
+    if (event.kind === 'ui' && event.url) window.dispatchEvent(new CustomEvent(OPEN_IN_BROWSER, { detail: { url: event.url } }));
+    else if (event.kind === 'terminal' && event.session) {
+      adoptSession(event.session, project.id).then(() => {
+        setRightMode('terminal');
+        window.dispatchEvent(new CustomEvent(SHOW_TERMINAL, { detail: { id: event.session.id } }));
+      }).catch(() => {});
+    }
+  }), [project.id]);
   const [flashId, setFlashId] = React.useState(null); // a row that just arrived in the sidebar
   const flashTimer = React.useRef(null);
   React.useEffect(() => () => clearTimeout(flashTimer.current), []);
@@ -330,7 +345,12 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const [buildProgress, setBuildProgress] = React.useState({});
   // { anchor } while the workspace's Build panel is open above its Build button
   const [buildDialog, setBuildDialog] = React.useState(null);
-  const [review, setReview] = React.useState(null); // { id, title, review, error } while Review is open
+  // What each Build has changed, for its card (2026-09-29: it replaced the Review dialog): { files, patch, truncated,
+  // running } by id, sent by main after each thing a turn does and when it ends; read once for a card drawn before any.
+  const [buildDiffs, setBuildDiffs] = React.useState({});
+  const diffAsked = React.useRef(new Set());
+  const [rejecting, setRejecting] = React.useState(null); // { id, title } while Reject asks to confirm
+  const [review, setReview] = React.useState(null); // { id, title, review, error } while Preview's fallback dialog is open
   // A post-it's Build popup, and its quick task's card (Claude Design "Post-it Quick Task", 2026-09-27), each hanging from
   // the card's button that opened it: { postItId, text, anchor } and { id, postItId, anchor }. A second press on the same
   // button closes what it opened.
@@ -374,7 +394,16 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
         return { ...current, [id]: next };
       });
     });
-    return () => { live = false; offBuild(); offProgress(); };
+    const offDiff = api.onBuildDiff(({ projectId, id, ...diff }) => {
+      if (projectId === project.id) setBuildDiffs((current) => ({ ...current, [id]: diff }));
+    });
+    return () => { live = false; offBuild(); offProgress(); offDiff(); };
+  }, [project.id]);
+  React.useEffect(() => { setBuildDiffs({}); diffAsked.current = new Set(); }, [project.id]);
+  const wantBuildDiff = React.useCallback((id) => {
+    if (diffAsked.current.has(id)) return;
+    diffAsked.current.add(id);
+    api.buildReview(project.id, id).then((diff) => setBuildDiffs((current) => (current[id] ? current : { ...current, [id]: diff }))).catch(() => {});
   }, [project.id]);
 
   // A post-it added to a workspace (2026-09-27: "it should take me to that workspace"): that workspace, with the archived
@@ -428,14 +457,29 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // call that could not be made at all is reported. → false when the call failed (the reply field keeps its text)
   const onBuildAction = React.useCallback(async (id, action, payload = {}) => {
     try {
-      if (action === 'reply') await api.buildReply(project.id, id, payload.text, { interrupt: !!payload.interrupt });
+      if (action === 'reply') await api.buildReply(project.id, id, payload.text, { interrupt: !!payload.interrupt, images: payload.images || [] });
       else if (action === 'stop') await api.buildStop(project.id, id);
       else if (action === 'resume') await api.buildResume(project.id, id);
       else if (action === 'fix') await api.buildFix(project.id, id);
       else if (action === 'discard') await api.buildDiscard(project.id, id);
       else if (action === 'accept') await api.buildAccept(project.id, id).catch(() => {}); // refused: the card says why
+      else if (action === 'reject') setRejecting({ id, title: (builds[id] && builds[id].title) || '' });
+      else if (action === 'runshow') await api.buildRunShow(project.id, id, payload.name); // its Stage tab or its terminal, again
+      else if (action === 'runstop') await api.buildRunStop(project.id, id);
+      else if (action === 'runstopone') await api.buildRunStopRunnable(project.id, id, payload.name); // an accepted Build's, on what landed
+      else if (action === 'runstopall') await api.buildRunStopRunnable(project.id, id, null);
       else if (action === 'review') {
-        const title = (builds[id] && builds[id].title) || '';
+        const task = builds[id];
+        const title = (task && task.title) || '';
+        // The card's Preview (2026-09-29): what its run step got running opens in the Stage, and that is all it does; the
+        // Review dialog (what did not run and why, the diff) opens only when nothing runs, or what runs could not be opened.
+        const shown = ((task && task.runStep && task.runStep.runnables) || []).filter((item) => item.status === 'running' && item.type === 'ui');
+        if (shown.length) {
+          try {
+            for (const item of [...shown].reverse()) await api.buildRunShow(project.id, id, item.name); // the first ends in front
+            return true;
+          } catch { /* stopped meanwhile: the dialog instead */ }
+        }
         setReview({ id, title, review: null, error: '' });
         try { const got = await api.buildReview(project.id, id); setReview((now) => (now && now.id === id ? { ...now, review: got } : now)); } catch (error) { setReview((now) => (now && now.id === id ? { ...now, error: errorMessage(error) } : now)); }
       }
@@ -448,7 +492,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   // A quick task added to a workspace (the "Needs you" card): it becomes a Build of the workspace picked there, on the model
   // picked there, and its session goes on (main/build promote). Its post-it is put in as an archived version of that
-  // workspace, and the workspace, with that version open, is where Engelbart goes (the card stays to ask keep or delete).
+  // workspace, and the workspace, with that version open, is where Engelbart goes; the post-it is thrown out (2026-09-29).
   const promoteQuick = React.useCallback(async (id, workspaceId, choice) => {
     const task = await api.buildPromote(project.id, id, workspaceId, choice);
     setBuilds((current) => ({ ...current, [task.id]: task }));
@@ -581,7 +625,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return out;
   }, [topic, here, byId, renaming, activeRowId, tree.notes, mentioned]);
 
-  const mentionable = React.useMemo(() => [BART_ITEM, TASK_ITEM, ...library.filter((row) => row.type !== 'image').map(describe)], [library]);
+  const mentionable = React.useMemo(() => [BART_ITEM, ...library.filter((row) => row.type !== 'image').map(describe)], [library]);
 
   // On the rail: what the search does not offer again, and what makes the Browser's Save read ✓.
   const railIds = React.useMemo(() => new Set(rows.filter((row) => row.type !== 'child' && row.type !== 'archive').map((row) => row.id)), [rows]);
@@ -1037,7 +1081,10 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     <div data-screen-label="Workspace" style={style}>
       <header className="title-bar" style={{ display: 'flex', alignItems: 'stretch', minHeight: 54, background: '#fafafa', flex: 'none' }}>
         <div className="title-lead" style={{ flex: 'none', width: rail, boxSizing: 'border-box', borderBottom: '1px solid #eaeaea', display: 'flex', alignItems: 'center', gap: 8, padding: '0 16px', minWidth: 0, overflow: 'hidden' }}>
-          <button type="button" onClick={onHome} title="All projects" style={{ flex: 'none', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', font: '500 17px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Engelbart</button>
+          {/* All projects is a dot, not the word Engelbart (2026-09-29), so the trail has the room. */}
+          <button type="button" className="hov-crumb-home" onClick={onHome} title="All projects" aria-label="All projects" data-crumb-home="1" style={{ flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, margin: '0 -4px 0 -7px', padding: 0, border: 0, borderRadius: '50%', background: 'transparent', color: '#171717', cursor: 'pointer', transition: 'background 120ms' }}>
+            <span style={{ display: 'block', width: 6, height: 6, borderRadius: '50%', background: 'currentColor' }} />
+          </button>
           <span style={{ flex: 'none', font: '15px/1 var(--font-sans)', color: '#c9c9c9' }}>/</span>
           <span title={project.directory || project.dir} style={{ flex: '0 4 auto', minWidth: 20, font: '400 14px/1.3 var(--font-sans)', color: '#4d4d4d', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{project.name}</span>
           {headWide && ancestors.map((ancestor, i) => (
@@ -1143,13 +1190,14 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
               onNoteVerb={(name) => makeNote(name, false)}
               onOpenItem={openItem}
               onOpenLink={openLink}
-              buildSpeed="normal"
               images={images}
               onPasteImage={pasteImage}
               asks={asks}
               models={bartModels}
               builds={builds}
               buildProgress={buildProgress}
+              buildDiffs={buildDiffs}
+              onBuildDiffWanted={wantBuildDiff}
               onBuildAction={onBuildAction}
               onCopyText={(value) => api.copyText(value)}
               onAsk={askBart}
@@ -1217,13 +1265,13 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       {buildDialog && (
         <BuildPanel
           projectId={project.id}
+          workspaceId={topic ? topic.id : null}
           title={topic ? topic.name : ''}
           anchor={buildDialog.anchor}
           library={library}
           inRail={inRail}
           onClose={closeBuildDialog}
           onStart={startBuild}
-          onLibraryChanged={reload}
         />
       )}
       {postItBuild && (
@@ -1254,7 +1302,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onClose={closeQuickTask}
         />
       )}
-      {review && <BuildReview title={review.title} review={review.review} error={review.error} onClose={() => setReview(null)} />}
+      {rejecting && <BuildReject title={rejecting.title} onConfirm={() => onBuildAction(rejecting.id, 'discard')} onClose={() => setRejecting(null)} />}
+      {review && <BuildReview key={review.id} title={review.title} review={review.review} error={review.error} task={builds[review.id] || null} aside={full ? 0 : paneWidth + 1} onOpen={(name) => { void onBuildAction(review.id, 'runshow', { name }); }} onClose={() => setReview(null)} />}
 
       <ProjectPostIts
         projectId={project.id}
@@ -1266,6 +1315,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
         onTrashCount={setPostItTrash}
         // +Note on a card: a note in no workspace, opened here as a tab once the library knows it.
         onOpenNote={async ({ id, name }) => { await reload(); openTab(id, name); }}
+        onOpenLink={openLink}
       />
     </div>
   );

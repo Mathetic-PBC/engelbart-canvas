@@ -37,13 +37,13 @@ export default function TrashPanel({ anchor, trash, onClose }) {
   const restore = (id) => trash.restore(id).then(load, (error) => setProblem(errorMessage(error)));
   return createPortal(
     <div ref={ref} data-overlay="1" data-trash-panel="1" role="dialog" aria-label="Trash" style={{ ...placed, zIndex: 80, width: 320, boxSizing: 'border-box', padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, animation: `rise 160ms ${EASE}` }}>
-      <div style={{ padding: '8px 10px 6px', font: '12px/1.5 var(--font-sans)', color: '#8f8f8f' }}>Post-its in the trash are deleted a week after they’re thrown away.</div>
-      {rows && rows.length === 0 && <div style={{ padding: '6px 10px 10px', font: '13px/1.5 var(--font-sans)', color: '#4d4d4d' }}>No post-its in the trash.</div>}
+      <div style={{ padding: '8px 10px 6px', font: '12px/1.5 var(--font-sans)', color: '#8f8f8f' }}>Stickies in the trash are deleted a week after they’re thrown away.</div>
+      {rows && rows.length === 0 && <div style={{ padding: '6px 10px 10px', font: '13px/1.5 var(--font-sans)', color: '#4d4d4d' }}>No stickies in the trash.</div>}
       {(rows || []).map((row) => (
         <div key={row.id} data-trashed-post-it={row.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 6px 7px 10px', borderRadius: 6 }}>
           <span aria-hidden="true" style={{ flex: 'none', width: 14, height: 14, background: '#fff2a0', border: '1px solid #e8d77a' }} />
           <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '13px/1.4 var(--font-sans)', color: preview(row.text) ? '#171717' : '#8f8f8f' }}>{preview(row.text) || 'Empty post-it'}</span>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '13px/1.4 var(--font-sans)', color: preview(row.text) ? '#171717' : '#8f8f8f' }}>{preview(row.text) || 'Empty sticky'}</span>
             <span style={{ font: '11px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{timeLeft(row.expires)}</span>
           </span>
           <button type="button" className="hov-bd2" data-restore-post-it={row.id} onClick={() => restore(row.id)} style={{ flex: 'none', padding: '6px 10px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fff', cursor: 'pointer', font: '500 12px/1 var(--font-sans)', color: '#171717' }}>Restore</button>

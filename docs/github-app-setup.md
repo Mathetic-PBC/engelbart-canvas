@@ -14,9 +14,10 @@ After authorization the browser redirects to a temporary listener on `127.0.0.1`
 verifies the account, brings its window forward, and shows the repository picker. The browser shows a completion page.
 **Choose repositories in browser…** opens the GitHub App installation page. Returning to Engelbart refreshes the list.
 
-GitHub website links (github.com, www.github.com, gist.github.com) open in the default browser, including links clicked
-inside Stage pages and popup/redirect requests. Repository listing and file access continue through GitHub's API in
-Engelbart. Website cookies remain in the external browser; they are never imported.
+GitHub website pages open on the Stage like any other site. Only GitHub's sign-in pages (login, sessions, sign-up,
+password reset, app installation and authorization) open in the default browser, including when a Stage page links,
+redirects or pops up to one. Repository listing and file access continue through GitHub's API in Engelbart. Cookies
+from the external browser are never imported.
 
 ## Server setup
 

@@ -14,7 +14,7 @@ const { EFFORTS } = require('./question.cjs');
 const CHOICES_FILE = 'model-choices.json';
 const PLACES = Object.freeze(['bart', 'build', 'quick']);
 const KEY_RE = /^[a-z][a-z0-9]{0,23}$/;
-const ABOUT = 'The model and effort last picked by hand for @bart, Build and a post-it\'s quick task: where the next one starts. Written by Engelbart whenever you pick; the lists themselves are in model-effort-inline-question.json.';
+const ABOUT = 'The model and effort last picked by hand for @bart, Build and a sticky\'s quick task: where the next one starts. Written by Engelbart whenever you pick; the lists themselves are in model-effort-inline-question.json.';
 
 const isObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
 

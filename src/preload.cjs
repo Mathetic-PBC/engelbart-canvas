@@ -101,6 +101,7 @@ const engelbartAPI = Object.freeze({
   // Where a Build works: the default repo (a folder named after the project, in the project folder), the project folder,
   // or a library repository ({ kind, id }); a GitHub one is cloned into repos/<name> first (buildClone).
   buildTargets: invoke('build-targets'),
+  buildSetDefault: invoke('build-set-default'),
   buildPreflight: invoke('build-preflight'),
   buildInit: invoke('build-init'),
   buildClone: invoke('build-clone'),
@@ -117,6 +118,15 @@ const engelbartAPI = Object.freeze({
   buildPromote: invoke('build-promote'),
   onBuild: (callback) => subscribe('engelbart:build', callback),
   onBuildProgress: (callback) => subscribe('engelbart:build-progress', callback),
+  // What a Build has changed since it started, as its worktree stands: after each thing a turn does, and when it ends
+  // ({ projectId, id, files, patch, truncated, running }).
+  onBuildDiff: (callback) => subscribe('engelbart:build-diff', callback),
+  // A runnable its run step got running ({ projectId, id, kind: 'ui' | 'app' | 'terminal', name, url?, session? }):
+  // a UI opens in the Stage, a terminal program's session in the terminal.
+  onBuildRun: (callback) => subscribe('engelbart:build-run', callback),
+  buildRunShow: invoke('build-run-show'),
+  buildRunStop: invoke('build-run-stop'),
+  buildRunStopRunnable: invoke('build-run-stop-runnable'), // (projectId, id, name | null): an accepted Build's runnable, or all
   // A post-it's Build button asks the window for its Build popup, with the card's text, and where the card and the
   // button are ({ projectId, postItId, text, card, button }, CSS px of the window).
   onBuildQuick: (callback) => subscribe('engelbart:build-quick', callback),
@@ -168,6 +178,8 @@ const engelbartAPI = Object.freeze({
   toolsSetUpdates: invoke('tools-set-updates'),
   onTools: (callback) => subscribe('engelbart:tools', callback),
   onToolsOpen: (callback) => subscribe('engelbart:tools-open', callback),
+  // Engelbart ▸ Welcome Tour (screens/WelcomeTour.jsx).
+  onTourOpen: (callback) => subscribe('engelbart:tour-open', callback),
   shellHistory: invoke('shell-history'),
   openExternal: invoke('open-external'),
   reveal: invoke('reveal'),
@@ -206,6 +218,7 @@ const engelbartAPI = Object.freeze({
   postItsRestore: (projectId, id) => ipcRenderer.invoke('post-its:restore', projectId, id),
   onPostItsTrash: (callback) => subscribe('post-its:trash', callback),
   onPostItsOpenNote: (callback) => subscribe('post-its:open-note', callback),
+  onPostItsOpenLink: (callback) => subscribe('post-its:open-link', callback),
   // Where the sidebar's trash can is (window pixels), so a post-it dropped on it is thrown away; null when there is none.
   postItsTrashRect: (rect) => ipcRenderer.invoke('post-its:trash-rect', rect),
   onPostItsDrag: (callback) => subscribe('post-its:drag', callback),

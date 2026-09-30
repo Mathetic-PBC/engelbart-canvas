@@ -1,5 +1,5 @@
 'use strict';
-const { isGithubPage } = require('../../shared/github.cjs');
+const { isGithubSignIn } = require('../../shared/github.cjs');
 
 // The Browser pane's pages (decision 48). Each browser tab is a WebContentsView: a native view
 // with its own top-level webContents, laid over a placeholder the renderer measures. A page is
@@ -312,7 +312,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
   /** What every page gets, in a tab or in a popup: http(s) or the disk, loopback certificates, a sign-in prompt. */
   function protect(contents, tab) {
     const guard = (event, url) => {
-      if (isGithubPage(url)) { event.preventDefault(); void shell.openExternal(url).catch(() => {}); return; }
+      if (isGithubSignIn(url)) { event.preventDefault(); void shell.openExternal(url).catch(() => {}); return; }
       if (allowed(url, contents)) {
         // a page on disk linking to a pdf on disk: the viewer reads it, as when it is typed
         if (!(isFileUrl(url) && pdfAddress(url) && tab && tabOf(contents) === tab)) return;
@@ -356,7 +356,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
   /** New windows keep their opener. With features it is a popup; otherwise a tab around the contents Chromium made. */
   function windowOpenHandler(from, contents) {
     return ({ url, disposition }) => {
-      if (isGithubPage(url)) { void shell.openExternal(url).catch(() => {}); return { action: 'deny' }; }
+      if (isGithubSignIn(url)) { void shell.openExternal(url).catch(() => {}); return { action: 'deny' }; }
       if (!allowed(url, contents)) return { action: 'deny' };
       if (disposition === 'new-window') {
         const parent = getWindow();
@@ -499,7 +499,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
   function open(id, value) {
     assertId(id);
     const url = pageUrl(value);
-    if (isGithubPage(url.href)) return shell.openExternal(url.href).then(() => true);
+    if (isGithubSignIn(url.href)) return shell.openExternal(url.href).then(() => true);
     if (url.protocol === 'file:' && pdfAddress(url.href)) openPdfFile(id, url);
     else load(entries.get(id) || create(id), url.href);
     return true;

@@ -345,6 +345,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     // What a Build panel ('build', the default) or a post-it's Build ('quick') offers, starting on what was last picked there.
     handle('build-models', (place) => buildChoices(readModels(place === 'quick' ? 'quick' : 'build')));
     handle('build-targets', withCtx((ctx, pid) => b().targets(ctx, pidOf(pid))));
+    // The project's default repo (Make default in the picker): the code directory or a library row, never a path.
+    handle('build-set-default', withCtx((ctx, pid, target) => b().setDefault(ctx, pidOf(pid), targetOf(target))));
     handle('build-preflight', withCtx((ctx, pid, target) => b().preflight(ctx, pidOf(pid), targetOf(target))));
     handle('build-init', withCtx((ctx, pid, target) => b().initRepository(ctx, pidOf(pid), targetOf(target))));
     handle('build-clone', withCtx((ctx, pid, target) => b().cloneRepository(ctx, pidOf(pid), targetOf(target))));
@@ -364,13 +366,18 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     }));
     handle('build-list', withCtx((ctx, pid) => b().list(ctx, pidOf(pid))));
     handle('build-get', withCtx((ctx, pid, id) => b().get(ctx, pidOf(pid), buildId(id))));
-    handle('build-reply', withCtx((ctx, pid, id, text, options) => b().reply(ctx, pidOf(pid), buildId(id), str(text, 'reply', 100000), { interrupt: !!(options && options.interrupt) })));
+    handle('build-reply', withCtx((ctx, pid, id, text, options) => b().reply(ctx, pidOf(pid), buildId(id), str(text, 'reply', 100000), { interrupt: !!(options && options.interrupt), images: options && Array.isArray(options.images) ? options.images.slice(0, 50).map((image) => ({ n: image && image.n, id: image && image.id })) : [] })));
     handle('build-stop', (pid, id) => b().stop(pidOf(pid), buildId(id)));
     handle('build-resume', withCtx((ctx, pid, id) => b().resume(ctx, pidOf(pid), buildId(id))));
     handle('build-review', withCtx((ctx, pid, id) => b().review(ctx, pidOf(pid), buildId(id))));
     handle('build-accept', withCtx((ctx, pid, id) => b().accept(ctx, pidOf(pid), buildId(id))));
     handle('build-fix', withCtx((ctx, pid, id) => b().fix(ctx, pidOf(pid), buildId(id))));
     handle('build-discard', withCtx((ctx, pid, id) => b().discard(ctx, pidOf(pid), buildId(id))));
+    // Its run step (build/run-step.cjs): a runnable it got running shown again (a UI's Stage tab, a terminal program's
+    // session), and Stop for one still working.
+    handle('build-run-show', withCtx((ctx, pid, id, name) => b().showRunnable(ctx, pidOf(pid), buildId(id), str(name, 'runnable name', 64))));
+    handle('build-run-stop', withCtx((ctx, pid, id) => b().stopRunning(ctx, pidOf(pid), buildId(id))));
+    handle('build-run-stop-runnable', withCtx((ctx, pid, id, name) => b().stopRunnable(ctx, pidOf(pid), buildId(id), name === null ? null : str(name, 'runnable name', 64))));
     handle('build-promote', withCtx((ctx, pid, id, wid, choice) => {
       const value = choice && typeof choice === 'object' ? choice : null;
       const picked = value ? { provider: optStr(value.provider, 'provider', 24), model: optStr(value.model, 'model', 24), effort: optStr(value.effort, 'effort', 24) } : null;

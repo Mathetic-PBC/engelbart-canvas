@@ -46,7 +46,7 @@ test('a folder made for the project sits in the home directory and never takes o
   assert.equal(onboarding.existingFolder(ctx, '~/teachable-agents'), first.path);
 });
 
-test('startProject: folder, Welcome workspace starting with the description, note first, chosen rows in context', async () => {
+test('startProject: folder, Getting started workspace starting with the description, note first, chosen rows in context', async () => {
   const pdf = path.join(homeDir, 'paper.pdf');
   fs.writeFileSync(pdf, '%PDF-1.4\n%%EOF\n');
   const paper = await library.addItem(ctx, pdf);
@@ -56,7 +56,7 @@ test('startProject: folder, Welcome workspace starting with the description, not
   assert.ok(fs.statSync(made.project.directory).isDirectory());
   assert.equal(made.project.description, 'How learners find what a system should do.');
   const tree = await projects.loadProject(ctx, made.project.id);
-  assert.deepEqual(tree.workspaces.map((w) => w.name), ['Welcome']);
+  assert.deepEqual(tree.workspaces.map((w) => w.name), ['Getting started']);
   assert.deepEqual(tree.workspaces[0].context, [made.noteId, paper.id]);
   assert.equal(await projects.readDoc(ctx, made.project.id, { kind: 'workspace', workspaceId: made.workspaceId }), 'How learners find what a system should do.\n');
 
@@ -82,7 +82,7 @@ test('discardItem removes a row only while nothing holds it', async () => {
   assert.equal(await ctx.libraryDb.get(loose.id), null);
 
   const held = await library.addItem(ctx, path.join(homeDir, 'paper.pdf')).catch((error) => error.row);
-  assert.equal(await onboarding.discardItem(ctx, held.id), false); // in the Welcome workspace's context above
+  assert.equal(await onboarding.discardItem(ctx, held.id), false); // in the Getting started workspace's context above
   assert.ok(await ctx.libraryDb.get(held.id));
 });
 

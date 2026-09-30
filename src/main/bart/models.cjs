@@ -26,7 +26,7 @@ const KEY_RE = /^[a-z][a-z0-9]{0,23}$/;
 // provider, and the one its dialog starts on. Since 2026-09-29 Build has a provider of its own (Claude Code, Opus high),
 // and the dialog starts on what was last picked in it (./choices.cjs), a post-it's quick task on its own last pick.
 const DEFAULT_BUILD = {
-  about: 'Models and efforts for Build, the coding agent a workspace hands its document to, and for a post-it\'s quick task. The Build dialog starts on the model and effort last picked in it (a post-it\'s on its own last pick; model-choices.json), else on `provider`\'s `default`, and lists these models and efforts to pick from. When `provider`\'s CLI cannot run (not installed or not signed in), it starts on the other provider\'s `default`.',
+  about: 'Models and efforts for Build, the coding agent a workspace hands its document to, and for a sticky\'s quick task. The Build dialog starts on the model and effort last picked in it (a sticky\'s on its own last pick; model-choices.json), else on `provider`\'s `default`, and lists these models and efforts to pick from. When `provider`\'s CLI cannot run (not installed or not signed in), it starts on the other provider\'s `default`.',
   provider: 'anthropic',
   providers: {
     openai: {
@@ -95,7 +95,7 @@ function withIds(defaults, ids) {
 // What shipped from 2026-09-25 (Build) and 2026-09-27 (@bart on GPT-6) until 2026-09-29: GPT-6 Sol, Claude Code's
 // `sonnet` alias, @bart on Codex first (Sol medium) and Claude Code's ladder from Sonnet medium, Build on @bart's provider.
 const BUILD_0925 = withIds({
-  about: 'Models and efforts for Build, the coding agent a workspace hands its document to, and for a post-it\'s quick task. The Build dialog starts on the default provider\'s `default` and lists these models and efforts to pick from.',
+  about: 'Models and efforts for Build, the coding agent a workspace hands its document to, and for a sticky\'s quick task. The Build dialog starts on the default provider\'s `default` and lists these models and efforts to pick from.',
   providers: DEFAULT_BUILD.providers,
 }, { openai: { sol: 'gpt-6-sol' }, anthropic: { sonnet: 'sonnet' } });
 const BART_0927 = (() => {

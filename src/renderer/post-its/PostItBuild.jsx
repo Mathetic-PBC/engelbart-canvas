@@ -8,7 +8,7 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
 import { attachRows } from '../model/rail.js';
-import { pickedTarget } from '../model/build-target.js';
+import { DEFAULT_TARGET } from '../model/build-target.js';
 import { usePlaced } from '../ui/usePlaced.js';
 import { KIND } from '../ui/Icons.jsx';
 import GithubPane from '../workspace/GithubPane.jsx';
@@ -124,7 +124,7 @@ export default function PostItBuild({ projectId, quick, anchor, library, inRail,
   const [choice, setChoice] = React.useState(null);
   const [efforts, setEfforts] = React.useState(() => (read() || {}).efforts || {});
   const [pre, setPre] = React.useState(null);
-  const [target, setTarget] = React.useState(null); // the repository the Build panel last picked for this project
+  const target = DEFAULT_TARGET; // a post-it's Build always works in the default repo: no picker (2026-09-29)
   const [picked, setPicked] = React.useState([]); // library rows for Context
   const [ctxOpen, setCtxOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
@@ -135,11 +135,7 @@ export default function PostItBuild({ projectId, quick, anchor, library, inRail,
   React.useEffect(() => {
     let live = true;
     api.buildModels('quick').then((value) => { if (live) { setModels(value); setChoice(startingChoice(value)); } }).catch((e) => { if (live) setError(errorMessage(e)); });
-    api.buildTargets(projectId).then((list) => {
-      const where = pickedTarget(projectId, list);
-      if (live) setTarget(where);
-      return api.buildPreflight(projectId, where);
-    }).then((value) => { if (live) setPre(value); }).catch((e) => { if (live) setError(errorMessage(e)); });
+    api.buildPreflight(projectId, DEFAULT_TARGET).then((value) => { if (live) setPre(value); }).catch((e) => { if (live) setError(errorMessage(e)); });
     return () => { live = false; };
   }, [projectId]);
 

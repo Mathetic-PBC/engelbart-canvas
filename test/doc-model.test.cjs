@@ -31,22 +31,15 @@ test('bullets are their own kind of line, nested by two spaces', async () => {
   assert.deepEqual(parseLine(listLine(3, 'round trip')), { type: 'list', depth: 3, text: 'round trip' });
 });
 
-test('@Task starts a task, in either case, only at the head of a line', async () => {
-  const { parseLine } = await load();
-  assert.deepEqual(parseLine('@Task write the paper'), { type: 'todo', depth: 0, done: false, text: 'write the paper' });
-  assert.deepEqual(parseLine('@task write the paper'), { type: 'todo', depth: 0, done: false, text: 'write the paper' });
-  assert.deepEqual(parseLine('@TASK '), { type: 'todo', depth: 0, done: false, text: '' }, 'the space is the trigger, as "- " used to be');
-  assert.deepEqual(parseLine('  @Task nested'), { type: 'todo', depth: 1, done: false, text: 'nested' });
-  assert.deepEqual(parseLine('@Task'), { type: 'p', text: '@Task' }, 'no space yet: still being typed');
-  assert.deepEqual(parseLine('@taskforce meets'), { type: 'p', text: '@taskforce meets' });
-  assert.deepEqual(parseLine('ask @Task about it'), { type: 'p', text: 'ask @Task about it' });
+test('@Task is plain text since it went (2026-09-29): a checkbox is typed as - [ ]', async () => {
+  const { parseLine, canonicalLine } = await load();
+  assert.deepEqual(parseLine('@Task write the paper'), { type: 'p', text: '@Task write the paper' });
+  assert.deepEqual(parseLine('  @task nested'), { type: 'p', text: '  @task nested' });
+  assert.equal(canonicalLine('@Task x'), '@Task x');
 });
 
-test('canonicalLine stores either task trigger as the checkbox line it makes', async () => {
+test('canonicalLine stores a typed checkbox as the checkbox line it makes', async () => {
   const { canonicalLine } = await load();
-  assert.equal(canonicalLine('@Task x'), '- [ ] x');
-  assert.equal(canonicalLine('  @task x'), '  - [ ] x');
-  assert.equal(canonicalLine('@Task '), '- [ ] ');
   assert.equal(canonicalLine('- [] x'), '- [ ] x');
   assert.equal(canonicalLine('- [x] done'), '- [x] done');
   assert.equal(canonicalLine('* star'), '- star', 'one bullet marker is stored');
@@ -58,7 +51,7 @@ test('a marker typed into a row that already draws one re-types the row', async 
   const { parseLine, retypedRow } = await load();
   const bullet = parseLine('- ');
   assert.deepEqual(retypedRow(bullet, '- [ ] real work'), { line: '- [ ] real work', ate: 6 });
-  assert.deepEqual(retypedRow(bullet, '@Task real work'), { line: '- [ ] real work', ate: 6 });
+  assert.equal(retypedRow(bullet, '@Task real work'), null, '@Task is no marker (2026-09-29)');
   assert.deepEqual(retypedRow(bullet, '- nested?'), { line: '- nested?', ate: 2 }, 'no literal "- " inside a bullet');
   assert.deepEqual(retypedRow(bullet, '- []'), { line: '- [ ] ', ate: 4 }, 'the checkbox alone starts the task');
   assert.deepEqual(retypedRow(bullet, '- []one'), { line: '- []one', ate: 2 }, 'half a checkbox: the bullet marker is absorbed, the rest is text');
@@ -314,21 +307,21 @@ test('code blocks inside an @bart answer: the lines stay answer lines and say wh
   assert.equal(turnText(doc, thread.turns[0]).answer, 'Like this:\n```json\n{\n  "a": 1\n\n}\n```', 'a follow-up sends the block back as markdown');
 });
 
-test('a workspace mention is one token that keeps its id and shows the workspace icon in place of the @, then the name (2026-09-25)', async () => {
+test('a workspace mention is one token that keeps its id and shows the @, the workspace icon, then the name (2026-09-29)', async () => {
   const { INLINE, WS_MENTION_RE, wsMention, tokShown, inlineHtml, parseLine, rawOffset } = await load();
   const id = '0a1b2c3d-0000-4000-8000-000000000000';
   const token = wsMention('Pulling [in] workspaces', id);
   assert.equal(token, `@[Pulling in workspaces](ws:${id})`, 'brackets would end the name early');
   assert.deepEqual(`see ${token} and @[Plan].`.split(INLINE).filter(Boolean), ['see ', token, ' and ', '@[Plan]', '.']);
   assert.deepEqual(token.match(WS_MENTION_RE).slice(1), ['Pulling in workspaces', id]);
-  assert.deepEqual(tokShown(token), { shown: 'Pulling in workspaces', pre: 2 }, 'the icon is not text, so offsets count the name alone');
+  assert.deepEqual(tokShown(token), { shown: '@Pulling in workspaces', pre: 1 }, 'the icon is not text, so offsets count the @ and the name');
   const html = inlineHtml(token);
   assert.match(html, new RegExp(`data-mention="Pulling in workspaces" data-ws="${id}"`));
-  assert.match(html, /"><svg [^>]*>.*<\/svg>Pulling in workspaces<\/span>$/, 'the icon, then the name: no @');
+  assert.match(html, /">@<svg [^>]*>.*<\/svg>Pulling in workspaces<\/span>$/, 'the @, the icon right after it, then the name');
   assert.doesNotMatch(inlineHtml('@[Plan]'), /<svg/, 'a note mention has no icon');
   const p = parseLine(`- ${token} next`);
-  assert.equal(rawOffset(p, 'Pulling in workspaces next'.length), `${token} next`.length, 'a click after the mention maps past the id');
-  assert.equal(rawOffset(p, 1), 3, 'a click after the first letter of the name lands after it in the source');
+  assert.equal(rawOffset(p, '@Pulling in workspaces next'.length), `${token} next`.length, 'a click after the mention maps past the id');
+  assert.equal(rawOffset(p, 2), 3, 'a click after the first letter of the name lands after it in the source');
 });
 
 test('a Build\'s line holds its id alone; it is its own kind of line, and it ends an @bart card (2026-09-25)', async () => {

@@ -565,6 +565,9 @@ function realShell() {
   const root = temp();
   const bin = path.join(root, 'bin');
   fs.mkdirSync(bin);
+  // After /etc/zprofile: its path_helper puts the system's folders first (/opt/homebrew/bin among them), and a Claude
+  // Code installed there was found instead of the one here (2026-09-29). As a person's own .zprofile would, this sets it.
+  fs.writeFileSync(path.join(root, '.zprofile'), `export PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}\n`);
   return { root, bin, runner: createRunner({ environment: { HOME: root, ZDOTDIR: root, SHELL: '/bin/zsh', PATH: `${bin}:/usr/bin:/bin` } }) };
 }
 

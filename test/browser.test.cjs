@@ -405,23 +405,29 @@ test('views: find in the page, and the keys a page cannot keep (⌘T, ⌘W; ⇧�
   assert.deepEqual(sent.at(-1), ['browser:shortcut', { name: 'find-next', tab: 'a' }]);
 });
 
-test('GitHub webpages open in the default browser from direct loads, links, redirects and popups', () => {
+test('GitHub pages open on the Stage; only its sign-in pages go to the default browser', () => {
   const f = fakeElectron();
   const external = [];
   f.electron.shell = { openExternal: async url => { external.push(url); } };
   const views = createBrowserViews({ electron: f.electron, getWindow: () => f.win, send() {} });
   views.open('github', 'https://github.com/Mathetic-PBC/engelbart-canvas');
-  assert.equal(external.length, 1);
-  assert.equal(f.made.length, 0);
+  assert.equal(external.length, 0);
+  assert.equal(f.made.length, 1);
+  views.open('login', 'https://github.com/login?return_to=%2Fsettings');
+  assert.deepEqual(external, ['https://github.com/login?return_to=%2Fsettings']);
+  assert.equal(f.made.length, 1);
   views.open('web', 'https://example.com');
-  const contents = f.made[0].webContents;
+  const contents = f.made[1].webContents;
   for (const event of ['will-navigate', 'will-redirect']) {
     let stopped = false;
     contents.emit(event, { preventDefault() { stopped = true; } }, 'https://github.com/login');
     assert.equal(stopped, true);
+    stopped = false;
+    contents.emit(event, { preventDefault() { stopped = true; } }, 'https://github.com/Mathetic-PBC/engelbart-canvas/pulls');
+    assert.equal(stopped, false);
   }
-  assert.deepEqual(contents.windowOpen({ url: 'https://github.com/login', disposition: 'new-window' }), { action: 'deny' });
+  assert.deepEqual(contents.windowOpen({ url: 'https://github.com/apps/engelbart-mathetic/installations/new', disposition: 'new-window' }), { action: 'deny' });
   assert.equal(external.length, 4);
-  views.open('lookalike', 'https://github.com.evil.example');
+  views.open('lookalike', 'https://github.com.evil.example/login');
   assert.equal(external.length, 4);
 });

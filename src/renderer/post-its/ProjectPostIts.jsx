@@ -18,15 +18,15 @@ function blockingRects() {
 // A project's post-its: native cards above the window (main/post-its/views.cjs). This keeps them to the workspace screen,
 // moves a card aside while one of the app's menus or dialogs is open over it, reports a card being dragged (`onDrag`
 // { active, over, thrown }) to the sidebar's trash can, and hands on what main tells the workspace: a note to open
-// (`onOpenNote`), how many cards are in the trash (`onTrashCount`), and that main showed hidden cards again because one
+// (`onOpenNote`), a link clicked on a card (`onOpenLink`, for the Stage), how many cards are in the trash (`onTrashCount`), and that main showed hidden cards again because one
 // was made or restored (`onShown`). `hidden` is the sidebar's show/hide toggle; it only changes what is drawn.
-export default function ProjectPostIts({ projectId, active, hidden, onError, onDrag, onOpenNote, onTrashCount, onShown }) {
+export default function ProjectPostIts({ projectId, active, hidden, onError, onDrag, onOpenNote, onOpenLink, onTrashCount, onShown }) {
   // Cards a covering panel is over, as pictures of themselves (main swaps the native card for its picture): drawn here,
   // under the panels (z-index 54; covering panels are 55 and up), where the cards are.
   const [standIns, setStandIns] = React.useState([]);
   React.useEffect(() => api.onPostItsStandIns((state) => setStandIns(state && state.projectId === projectId ? state.cards : [])), [projectId]);
   const props = React.useRef({});
-  props.current = { onError, onDrag, onOpenNote, onTrashCount, onShown };
+  props.current = { onError, onDrag, onOpenNote, onOpenLink, onTrashCount, onShown };
   // Before the cards are activated below, so a hidden set never flashes up.
   React.useEffect(() => { api.postItsHide(!!hidden).catch((e) => props.current.onError(e)); }, [hidden]);
   React.useEffect(() => api.onPostItsHidden((now) => { if (!now && props.current.onShown) props.current.onShown(); }), []);
@@ -44,6 +44,7 @@ export default function ProjectPostIts({ projectId, active, hidden, onError, onD
       api.onPostItsDrag((state) => { if (props.current.onDrag) props.current.onDrag(state); }),
       api.onPostItsError(fail),
       api.onPostItsOpenNote((note) => { if (note.projectId === projectId && props.current.onOpenNote) props.current.onOpenNote(note); }),
+      api.onPostItsOpenLink((link) => { if (link.projectId === projectId && props.current.onOpenLink) props.current.onOpenLink(link.url); }),
       api.onPostItsTrash((state) => { if (state.projectId === projectId && props.current.onTrashCount) props.current.onTrashCount(state.count); }),
     ];
     // Menus and dialogs come and go with the DOM.

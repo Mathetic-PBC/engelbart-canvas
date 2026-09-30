@@ -80,8 +80,16 @@ async function freezeContext(ctx, projectId, { task, workspaceId = null, attach 
   return { text: parts.join('\n\n'), archive: history ? history.file : null };
 }
 
-/** A reply of the person's, as the next message of the session. */
-const replyMessage = (text) => `<reply>\n${String(text || '').trim()}\n</reply>`;
+/**
+ * A reply of the person's, as the next message of the session. `images`: what they pasted into it ([{ n, path }]), each
+ * `[Attachment n]` in the text (2026-09-29).
+ */
+function replyMessage(text, images = []) {
+  const reply = `<reply>\n${String(text || '').trim()}\n</reply>`;
+  if (!images.length) return reply;
+  const listed = images.map((image) => `[Attachment ${image.n}]: ${image.path}`).join('\n');
+  return `${reply}\n\n<attachments note="Images the person pasted into the reply, named where the reply says [Attachment n]. Open each file to see it.">\n${listed}\n</attachments>`;
+}
 
 /** A session that will not resume: everything again, then what was said, then the new message. */
 function freshMessage(context, messages, next) {

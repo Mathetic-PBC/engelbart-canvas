@@ -126,7 +126,7 @@ function WorkspaceHeader({ topics, topic, all, onOpenDoc, onSelectTopic, onRenam
   const untitled = !topic || isUntitled(topic.name);
   const menuRow = { display: 'flex', alignItems: 'center', gap: 12, padding: '8px 10px', borderRadius: 6, cursor: 'pointer', transition: 'background 120ms' };
   return (
-    <div ref={boxRef} data-workspace-header="1" onMouseEnter={open} onMouseLeave={close} style={{ flex: 'none', position: 'relative', zIndex: 6, marginBottom: 18 }}>
+    <div ref={boxRef} data-workspace-header="1" onMouseEnter={open} onMouseLeave={close} style={{ flex: 'none', position: 'relative', zIndex: 6, marginBottom: 16 }}>
       <div style={{ padding: '12px 12px 10px', background: '#f2f2f2', borderRadius: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div style={{ font: '500 12.5px/1.3 var(--font-sans)', color: '#8f8f8f' }}>Workspace</div>
         <div
@@ -793,9 +793,31 @@ function PlaceName({ place, projectId, size }) {
 const barButton = (enabled) => ({ flex: 'none', width: BAR_SIZE, aspectRatio: '1', boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, border: 0, borderRadius: 10, background: 'transparent', cursor: enabled ? 'pointer' : 'default' });
 const barPicture = { display: 'block', objectFit: 'contain', pointerEvents: 'none', userSelect: 'none' };
 
-/** The two pictures at the bottom left, the trash and the sticky note beside it (2026-09-23): they size with the sidebar
- *  (52–96px) and name themselves on hover. At the note's lower right (2026-09-25) the word Hide or Show takes every
- *  post-it out of sight or brings them back; it never makes or deletes one. */
+/** Beside the sticky (2026-09-29): a switch that says whether the stickies are shown, on a grey pill. It takes every
+ *  sticky out of sight or brings them back; it never makes or deletes one. */
+function StickiesToggle({ hidden, onToggle }) {
+  const on = !hidden;
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      className="stickies-toggle"
+      data-toggle-post-its={hidden ? 'hidden' : 'shown'}
+      onClick={onToggle}
+      title={on ? 'Hide the stickies' : 'Show the stickies'}
+      style={{ flex: '0 1 auto', minWidth: 0, marginLeft: 2, display: 'flex', alignItems: 'center', gap: 6, padding: '3px 10px 3px 4px', border: 0, borderRadius: 999, background: '#f2f2f2', cursor: 'pointer', font: '400 12px/1.3 var(--font-sans)', color: '#171717', whiteSpace: 'nowrap' }}
+    >
+      <span className="stickies-track" style={{ flex: 'none', position: 'relative', width: 24, height: 14, borderRadius: 999, background: on ? '#171717' : '#c9c9c9' }}>
+        <span data-knob="1" style={{ position: 'absolute', top: 2, left: 2, width: 10, height: 10, borderRadius: '50%', background: '#fff', transform: on ? 'translateX(10px)' : 'none' }} />
+      </span>
+      <span className="stickies-word" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{on ? 'Stickies shown' : 'Stickies hidden'}</span>
+    </button>
+  );
+}
+
+/** The two pictures at the bottom left, the trash and the sticky beside it (2026-09-23): they size with the sidebar
+ *  (52–96px) and name themselves on hover; the stickies' show/hide switch follows them. */
 function BottomBar({ trashRef, full, dragging, over, onTrashDragOver, onTrashDragEnter, onTrashDragLeave, onTrashDrop, postItTrash, onPostIt, postItsHidden, onTogglePostIts }) {
   const [tip, setTip] = React.useState(null);
   const [opened, setOpened] = React.useState(null); // the trash panel's anchor (the can's rect) while it is open
@@ -837,23 +859,12 @@ function BottomBar({ trashRef, full, dragging, over, onTrashDragOver, onTrashDra
           {opened && postItTrash && <TrashPanel anchor={opened} trash={postItTrash} onClose={closeTrash} />}
         </div>
         <div style={{ position: 'relative', display: 'flex' }}>
-          <button type="button" className="bar-press" data-add-post-it="1" aria-label="Note" disabled={!onPostIt} onClick={onPostIt || undefined} onMouseEnter={() => setTip('note')} onMouseLeave={off} style={barButton(!!onPostIt)}>
+          <button type="button" className="bar-press" data-add-post-it="1" aria-label="New sticky" disabled={!onPostIt} onClick={onPostIt || undefined} onMouseEnter={() => setTip('note')} onMouseLeave={off} style={barButton(!!onPostIt)}>
             <img src={notePng} alt="" draggable={false} style={{ ...barPicture, width: '100%', height: '100%', transform: 'translateY(10%)' }} />
           </button>
-          {onTogglePostIts && (
-            <button
-              type="button"
-              className="hov-ink"
-              data-toggle-post-its={postItsHidden ? 'hidden' : 'shown'}
-              aria-pressed={!!postItsHidden}
-              onClick={onTogglePostIts}
-              style={{ position: 'absolute', left: '100%', bottom: 0, padding: '2px 4px', border: 0, borderRadius: 5, background: 'transparent', cursor: 'pointer', font: '400 12.5px/1.3 var(--font-sans)', color: '#8f8f8f', whiteSpace: 'nowrap' }}
-            >
-              {postItsHidden ? 'Show' : 'Hide'}
-            </button>
-          )}
-          {tip === 'note' && <BarTip text="Note" align="flex-start" />}
+          {tip === 'note' && <BarTip text="Sticky" align="flex-start" />}
         </div>
+        {onTogglePostIts && <StickiesToggle hidden={!!postItsHidden} onToggle={onTogglePostIts} />}
       </div>
     </div>
   );
@@ -939,7 +950,7 @@ export default function Rail({
   const peekTop = peek ? Math.max(54, Math.min(peek.rect.top - 12, window.innerHeight - 380)) : 0;
   return (
     <aside aria-label="Sidebar" style={{ flex: 'none', width, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 7, background: '#fafafa' }}>
-      <div onScroll={() => { hold(); setPeek(null); }} style={{ flex: 1, minHeight: 0, boxSizing: 'border-box', padding: '30px 8px 8px', display: 'flex', flexDirection: 'column', overflowY: 'auto', overflowX: 'hidden' }}>
+      <div onScroll={() => { hold(); setPeek(null); }} style={{ flex: 1, minHeight: 0, boxSizing: 'border-box', padding: '16px 8px 8px', display: 'flex', flexDirection: 'column', overflowY: 'auto', overflowX: 'hidden' }}>
         <WorkspaceHeader topics={topics} topic={topic} all={allWorkspaces} onOpenDoc={onOpenDoc} onSelectTopic={onSelectTopic} onRenameTopic={onRenameTopic} onAddTopic={onAddTopic} />
         {topic && (
           <div data-screen-label="Library" data-rail-library="1" style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 2 }}>

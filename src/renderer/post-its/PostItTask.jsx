@@ -5,7 +5,8 @@
 //               only go on in a workspace. A search over every workspace, sub-workspaces too; the model, set to what the
 //               task ran on; the send, which adds it to that workspace (an archived version of it, main/store/archive.cjs
 //               importTask) and goes there; and Discard.
-//   Added to    once it went: keep the post-it, or delete it.
+// Once it went, its Build goes on there at once and the post-it is thrown out, unasked (2026-09-29: it was "keep or
+// delete"; the trash keeps it for a week).
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
@@ -97,7 +98,6 @@ export default function PostItTask({ task, progress, anchor, workspaces, hereId,
   const [workspaceId, setWorkspaceId] = React.useState(() => (workspaces.some((held) => held.id === hereId) ? hereId : workspaces[0] ? workspaces[0].id : null));
   const [modelOpen, setModelOpen] = React.useState(false);
   const [confirm, setConfirm] = React.useState(false);
-  const [asked, setAsked] = React.useState(null); // the workspace's name, once the task went there: keep or delete
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState('');
   const [ref, placed] = usePlaced(anchor, { gap: 8, align: 'end' });
@@ -115,9 +115,9 @@ export default function PostItTask({ task, progress, anchor, workspaces, hereId,
     return () => document.removeEventListener('mousedown', away, true);
   }, [busy, onClose]);
 
-  const working = !asked && WORKING.has(task.status);
-  const done = !asked && !working;
-  const word = asked ? `Added to ${asked}` : working ? 'Building' : ['stopped', 'interrupted'].includes(task.status) ? 'Stopped' : 'Needs you';
+  const working = WORKING.has(task.status);
+  const done = !working;
+  const word = working ? 'Building' : ['stopped', 'interrupted'].includes(task.status) ? 'Stopped' : 'Needs you';
   const activity = (progress && progress.activity) || (task.status === 'setting-up' ? 'Setting up its copy of the code' : task.status === 'queued' ? 'Waiting for a slot' : 'Working');
   const target = workspaces.find((held) => held.id === workspaceId);
   const ready = !!(target && choice && !busy);
@@ -126,10 +126,10 @@ export default function PostItTask({ task, progress, anchor, workspaces, hereId,
     setBusy(true); setError('');
     try {
       const moved = await onPromote(workspaceId, choice);
-      setAsked(target.name);
-      setModelOpen(false);
+      onDelete();
       onGo(moved);
-    } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
+      onClose();
+    } catch (e) { setError(errorMessage(e)); setBusy(false); }
   };
 
   return createPortal(
@@ -142,16 +142,8 @@ export default function PostItTask({ task, progress, anchor, workspaces, hereId,
           </div>
           {working && <div data-post-it-activity="1" style={{ font: '13px/1.5 var(--font-sans)', color: '#4d4d4d', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{activity}</div>}
           {done && <div style={{ font: '13.5px/1.6 var(--font-sans)', color: '#171717', textWrap: 'pretty' }}>{messageFor(task)}</div>}
-          {asked && <div style={{ font: '13.5px/1.6 var(--font-sans)', color: '#171717', textWrap: 'pretty' }}>The task now lives in {asked}. Keep this task, or delete it?</div>}
           {error && <div style={{ font: '12.5px/1.5 var(--font-sans)', color: '#e70022' }}>{error}</div>}
         </div>
-        {asked && (<>
-          <div style={{ height: 1, background: '#eaeaea' }} />
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, padding: 8 }}>
-            <button type="button" className="hov-ink" data-post-it-keep="1" onClick={onClose} style={{ ...quiet, padding: '7px 10px', lineHeight: 1 }}>Keep task</button>
-            <button type="button" className="hov-dim" data-post-it-delete="1" onClick={() => { onDelete(); onClose(); }} style={{ padding: '8px 14px', border: 0, borderRadius: 8, background: '#171717', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#fff' }}>Delete task</button>
-          </div>
-        </>)}
         {working && (<>
           <div style={{ height: 1, background: '#eaeaea' }} />
           <div style={{ display: 'flex', alignItems: 'center', padding: '6px 8px' }}>
