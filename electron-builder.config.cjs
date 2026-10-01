@@ -19,6 +19,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { Arch } = require('electron-builder');
+const { assertAppModules } = require('./scripts/check-app-modules.cjs');
 
 function developerId() {
   if (process.env.ENGELBART_SIGN === 'adhoc') return false;
@@ -81,6 +82,8 @@ module.exports = {
     }
     const git = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, 'Contents', 'Resources', 'git', 'engelbart-bin', 'git');
     if (!fs.existsSync(git)) throw new Error(`No Git for ${Arch[context.arch]} in the app: run \`node scripts/fetch-git.mjs ${Arch[context.arch]}\` first.`);
+    // Every package the main process loads is inside (0.1.2 shipped without 35 of them: scripts/check-app-modules.cjs).
+    assertAppModules(path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`), `The ${Arch[context.arch]} app`);
   },
   mac: {
     target: [

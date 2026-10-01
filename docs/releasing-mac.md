@@ -23,6 +23,11 @@ How a version of Engelbart gets from this repository onto other people's Macs (2
    ENGELBART_DOWNLOAD_URL=https://example.com/engelbart npm run dist:mac
    ```
 
+   From a checkout with its own `node_modules`, installed with `npm ci`: never a symlink to another checkout's, which
+   made electron-builder leave 35 packages out of 0.1.2 (E2B Builds and update checks failed in the installed app). The
+   script refuses a symlinked `node_modules`, and every app it packs is checked for every package its main process
+   needs (`scripts/check-app-modules.cjs`, also `node scripts/check-app-modules.cjs /Applications/Engelbart.app`).
+
    About a minute. It builds the renderer for production (minified, no source maps), minifies the main process file by
    file, fetches Git for both architectures (cached in `vendor/git` after the first time), and makes
    `Engelbart-<version>-arm64` (Apple silicon) and `-x64` (Intel), each as a `.dmg` and a `.zip`, about 155 MB each.
