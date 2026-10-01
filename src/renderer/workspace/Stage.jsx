@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
 import { KindGlyph, SEARCH, FOLDER } from '../ui/Icons.jsx';
 import { kindOf, stripScheme, OPEN_IN_BROWSER } from '../model/address.js';
-import { MAX_TABS, addressKey, afterClose, looksLikePlace, placeTab, stageRows, tabKey, tabPlace, parseTable } from '../model/stage.js';
+import { MAX_TABS, addressKey, afterClose, linkPlan, looksLikePlace, placeTab, stageRows, tabKey, tabPlace, parseTable } from '../model/stage.js';
 import { markdownBlocks, inlineRuns } from '../model/markdown.js';
 import PaperView from '../pdf/PaperView.jsx';
 
@@ -23,6 +23,10 @@ import PaperView from '../pdf/PaperView.jsx';
 // forward; ⌘F finds in whatever is in front. The address field opens anything: a link or a path goes there, words list
 // this workspace, then the library (never notes: they open in the middle), then a web search. Its right end is the
 // thing's place in the library (+ Save / + Workspace / ✓, Add - Mention.dc.html); a web pdf is saved as a copy.
+// A link may name a passage (2026-09-30, @discover's guide: `address#find=words`, model/stage.js splitTarget): its tab
+// keeps it as `pendingFind` until what it shows is ready — a pdf drawn (PaperView `target`), a page loaded, a file drawn
+// here — then finds it once: the find card opens with the words and the match in front is scrolled to. `&to=` (round 2)
+// is kept as `pendingTo` beside it, for a pdf only: PaperView tints the section it ends; a page or a file ignores it.
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
@@ -38,7 +42,7 @@ const ERR_CONNECTION_REFUSED = -102;
 const RETRY_MS = 2000;
 const HOVER_MS = 650; // a tab's card, the first time; then quickly while moving along the strip
 const newId = () => (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : String(Date.now() + Math.random()));
-const blankTab = () => ({ id: newId(), url: 'about:blank', web: null, item: null, file: null, pdf: null });
+const blankTab = () => ({ id: newId(), url: 'about:blank', web: null, item: null, file: null, pdf: null, pendingFind: null, pendingTo: null });
 const isPage = (k) => k.kind === 'web' || k.kind === 'local' || k.kind === 'disk';
 const hasScheme = (input) => /^https?:\/\//i.test(input);
 const quiet = (promise) => promise.catch(() => {});
@@ -161,7 +165,7 @@ function FindCard({ inputRef, text, found, onText, onStep, onClose }) {
         spellCheck={false}
         style={{ flex: 1, width: 'auto', minWidth: 60, padding: 0, border: 0, background: 'transparent', font: '13px/1.4 var(--font-sans)', color: '#171717' }}
       />
-      <span data-find-count="1" style={{ flex: 'none', textAlign: 'right', font: '11px/1 var(--font-mono)', color: none ? '#e70022' : '#8f8f8f' }}>{text && found ? (found.matches ? `${found.active} of ${found.matches}` : 'no match') : ''}</span>
+      <span data-find-count="1" style={{ flex: 'none', textAlign: 'right', font: '11px/1 var(--font-mono)', color: none ? '#e70022' : '#8f8f8f' }}>{text && found ? (found.matches ? `${found.active} of ${found.matches}` : '0 matches') : ''}</span>
       <span style={{ flex: 'none', width: 1, height: 16, margin: '0 4px', background: '#eaeaea' }} />
       <button type="button" className="hov-ink-wash" onClick={() => onStep(-1)} aria-label="Previous match" title="⇧⏎" style={small}>↑</button>
       <button type="button" className="hov-ink-wash" onClick={() => onStep(1)} aria-label="Next match" title="⏎" style={small}>↓</button>
@@ -338,6 +342,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const fileRanges = React.useRef({ ranges: [], active: -1, query: '' });
   const pdfSeq = React.useRef(0);
   const keys = React.useRef(null); // the handlers the key listeners call, current every render
+  const jumped = React.useRef(null); // { tabId, text }: a link's passage just found, which the find card's next run keeps
   const saveCard = React.useRef(null);
   const saveButton = React.useRef(null);
   const addressRef = React.useRef(null);
@@ -428,12 +433,19 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   }, []);
 
   // Where something being opened goes (model/stage.js placeTab); answers the tab's id, or null when it was open already.
-  const claim = (key) => {
+  // `find`: a passage to find there once it is ready, given to the new tab or to the one that comes forward; `to`, where its section ends.
+  const claim = (key, find = '', to = '') => {
     const current = tabsRef.current;
     const front = Math.max(0, current.findIndex((t) => t.id === (frontRef.current || current[0].id)));
     const place = placeTab(current, front, key);
-    if (place.focus != null) { frontRef.current = current[place.focus].id; setActiveId(frontRef.current); return null; }
-    const fresh = { ...blankTab(), claimed: true };
+    if (place.focus != null) {
+      const id = current[place.focus].id;
+      frontRef.current = id;
+      setActiveId(id);
+      if (find) update(id, (t) => ({ ...t, pendingFind: find, pendingTo: to || null }));
+      return null;
+    }
+    const fresh = { ...blankTab(), claimed: true, pendingFind: find || null, pendingTo: (find && to) || null };
     if (place.replace != null) {
       const old = current[place.replace];
       quiet(api.browserClose(old.id));
@@ -528,16 +540,19 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   };
 
   // Opened from elsewhere — the sidebar, an @mention, a link in the document or the terminal, the all-projects screen.
-  const openRow = (row) => {
+  const openRow = (row, find = '', to = '') => {
     if (isGithubSignIn(row.url) && !row.path) { quiet(api.openExternal(row.url)); return; }
-    const id = claim(`i:${row.id}`);
+    const id = claim(`i:${row.id}`, find, to);
     if (id) showRow(id, row);
   };
+  // A link with a passage to a library row opens the row (its ink shows); any link opens its address without the passage.
   const openInput = (input) => {
-    const k0 = kindOf(input);
+    const plan = linkPlan(input, library);
+    if (plan.row) { openRow(plan.row, plan.find, plan.to); return; }
+    const k0 = kindOf(plan.address);
     if (isGithubSignIn(k0.url)) { quiet(api.openExternal(k0.url)); return; }
-    const id = claim(isPage(k0) && !DISK_URL.test(input) ? `l:${addressKey(k0.url)}` : '');
-    if (id) void navigate(id, input);
+    const id = claim(plan.key, plan.find, plan.to);
+    if (id) void navigate(id, plan.address);
   };
   // Files from the computer open as tabs of their own; + Save is what puts them in the library. Past 15, the rest are left.
   const openPaths = (paths) => {
@@ -757,9 +772,13 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   };
   React.useEffect(() => {
     if (!finding) return undefined;
-    runFind(findText, 0);
+    // A passage a link found just now is already found, in front and scrolled to: running the search again would not keep it.
+    const landed = jumped.current && jumped.current.tabId === tab.id && jumped.current.text === findText;
+    jumped.current = null;
+    if (!landed) runFind(findText, 0);
     const id = tab.id, inPdf = !!pdf, inView = !!view;
     return () => {
+      if (jumped.current && jumped.current.tabId === id) return; // the passage that replaces this search is painted already
       if (inPdf) { if (paperRef.current) paperRef.current.stopFind(); }
       else if (inView) { clearRanges(); fileRanges.current = { ranges: [], active: -1, query: '' }; }
       else quiet(api.browserStopFind(id));
@@ -773,11 +792,42 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const openFind = () => { setFinding(true); setFindFocus((n) => n + 1); };
   const closeFind = () => { setFinding(false); setMatches(null); };
 
+  // A link's passage, found once its tab is ready (DG-03). In a pdf PaperView has found it (`result`) by the time it says
+  // so; a page or a drawn file is searched as ⌘F would. Either way the find card opens with the words, and the passage
+  // waits no longer.
+  const clearPending = (id, text) => update(id, (t) => (t.pendingFind === text ? { ...t, pendingFind: null, pendingTo: null } : t));
+  const landed = (id, text, result) => {
+    clearPending(id, text);
+    const h = keys.current;
+    if (!h.finding || h.findText !== text) jumped.current = { tabId: id, text };
+    setFindText(text);
+    setFinding(true);
+    setMatches(result);
+  };
+  const land = (id, text) => {
+    clearPending(id, text);
+    const h = keys.current;
+    if (h.finding && h.findText === text) runFind(text, 0);
+    else { setFindText(text); setFinding(true); }
+  };
+  React.useEffect(() => {
+    const text = tab.pendingFind;
+    if (!text || pdf || !visible) return;
+    if (view) {
+      if (view.kind === 'error') clearPending(tab.id, text);
+      else if (view.kind !== 'loading') land(tab.id, text);
+      return;
+    }
+    // A page that has loaded, at an address: one that turned into a pdf (a download) never commits one, and waits for the viewer.
+    if (page && web && !web.loading && !failed && web.url && web.url !== 'about:blank') land(tab.id, text);
+  }, [tab.id, tab.pendingFind, !!pdf, visible, view && view.kind, page, web && web.loading, web && web.url, !!failed]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ⌘T while the Stage shows and ⌘W from anywhere but the terminal, bringing the Stage forward; ⌘F while the Stage shows and has the keyboard
   // (its fields, a pdf, a page: main forwards those) or nothing else that takes typing does; ⌘G / ⇧⌘G while finding.
   keys.current = {
     tabId: tab.id,
     finding,
+    findText,
     openInput,
     shortcut: (name, from) => {
       if (name === 'new-tab') { if (onShow) onShow(); newTab(); return; }
@@ -978,6 +1028,9 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
               ref={paperRef}
               bytes={pdf.bytes}
               marks={pdf.marks}
+              target={tab.pendingFind || null}
+              targetTo={tab.pendingTo || null}
+              onTarget={(text, result) => landed(tab.id, text, result)}
               onFind={(result) => { if (keys.current && keys.current.finding) setMatches(result); }}
               onMarksChange={(marks) => {
                 const { seq, url, rowId } = pdf;

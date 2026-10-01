@@ -101,10 +101,38 @@ function readQuestion(text, models) {
   return { question: rest, provider, steps: [step(rung)], pinned };
 }
 
+/**
+ * The text after "@brainstorm" (2026-09-30) → what readQuestion gives, on one step: the provider's step in the models
+ * file's `brainstorm` block (Sonnet high, Sol medium), on the provider an @bart question would start on. No ladder, so
+ * nothing to move up to. Flags still pick by hand, as they do on an @bart line.
+ */
+function readBrainstorm(text, models, block = 'brainstorm') {
+  const read = readQuestion(text, models);
+  if (read.pinned) return read;
+  const provider = read.provider, entry = models.providers[provider];
+  const held = models[block] && models[block].providers ? models[block].providers[provider] : null;
+  const rung = held && entry.models[held.model] && entry.efforts.includes(held.effort) ? held : entry.ladder[0];
+  return { question: read.question, provider, steps: [{ provider, key: rung.model, model: entry.models[rung.model].id, name: entry.models[rung.model].name, effort: rung.effort }], pinned: false };
+}
+
+// How far @discover traces: `--deep` or `--standard`, anywhere on the line (they name no model, so readFlags leaves them).
+const MODE_RE = /(^|\s)--(deep|standard)(?=\s|$)/gi;
+const MODES = ['standard', 'deep'];
+
+/**
+ * The text after "@discover" (2026-09-30) → what readBrainstorm gives, on the models file's `discover` block, and `mode`:
+ * 'deep' or 'standard' when the line says so, else null (the exchange's mode carries on: ./ask.cjs turnPlan).
+ */
+function readDiscover(text, models) {
+  let mode = null;
+  const rest = String(text || '').replace(MODE_RE, (all, lead, word) => { mode = word.toLowerCase(); return lead; }).replace(/\s+/g, ' ').trim();
+  return { ...readBrainstorm(rest, models, 'discover'), mode };
+}
+
 /** The text after "@bart" with its flags replaced by the two that name this model and effort. */
 function withChoice(text, models, { model, effort }) {
   const { rest } = readFlags(text, models);
   return [`--${model}`, `--${effort}`, rest].filter(Boolean).join(' ');
 }
 
-module.exports = { EFFORTS, EFFORT_LABELS, effortOf, modelOf, readFlags, ladderOf, readQuestion, withChoice };
+module.exports = { EFFORTS, EFFORT_LABELS, MODES, effortOf, modelOf, readFlags, ladderOf, readQuestion, readBrainstorm, readDiscover, withChoice };

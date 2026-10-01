@@ -13,6 +13,7 @@
 //   <dataRoot>/<slug>/<Workspace>/workspace.md
 //   <dataRoot>/<slug>/<Workspace>/.archive/<t>.md    the document as it was when Clear was pressed (./archive.cjs)
 //   <dataRoot>/<slug>/<Workspace>/<Child>/…          the same, recursively
+//   <dataRoot>/<slug>/.trash/<Workspace>/…           a deleted workspace, restorable for a week (trashWorkspace)
 //   <dataRoot>/<slug>/builds/<id>/                   a Build's record (../build/store.cjs)
 //
 // `directory` is where the project's code lives: terminals and agents start there.
@@ -454,6 +455,62 @@ async function renameWorkspace(ctx, projectId, workspaceId, name) {
   return publicWorkspace(workspaceRecord(next));
 }
 
+// Delete, from the switcher (2026-09-30): the workspace goes into the trash with everything nested in it, into
+// <project>/.trash, a dot folder no listing of workspaces sees. meta.json `trashed` keeps when it went, its name and the
+// workspace it was under, so Restore puts it back there (at the top when that one is gone too). The sidebar's trash lists
+// it and purges it a week after it went in, as it does the post-its.
+const TRASH_DIR = '.trash';
+const TRASH_DAYS = 7;
+const DAY = 24 * 60 * 60 * 1000;
+
+function trashWorkspace(ctx, projectId, workspaceId) {
+  const { project, workspace, parentDir } = findWorkspace(ctx, projectId, workspaceId);
+  const parent = parentDir === project.dir ? null : workspaceRecord(parentDir);
+  const bin = path.join(project.dir, TRASH_DIR);
+  fs.mkdirSync(bin, { recursive: true, mode: DIR_MODE });
+  const into = path.join(bin, uniqueName(bin, workspace.name));
+  fs.renameSync(workspace.dir, into);
+  patchWorkspaceMeta({ dir: into }, { trashed: { at: nowIso(), name: workspace.name, parentId: parent ? parent.id : null } });
+  return { id: workspace.id, name: workspace.name };
+}
+
+function trashedRecords(project) {
+  const bin = path.join(project.dir, TRASH_DIR);
+  return subdirs(bin).map((dir) => {
+    const workspace = workspaceRecord(dir);
+    const trashed = workspace && readJson(path.join(dir, 'meta.json')).trashed;
+    const at = trashed && typeof trashed.at === 'string' ? Date.parse(trashed.at) : NaN;
+    if (!workspace || Number.isNaN(at)) return null;
+    const name = typeof trashed.name === 'string' && trashed.name ? trashed.name : workspace.name;
+    return { workspace, dir, at, name, parentId: typeof trashed.parentId === 'string' && UUID_RE.test(trashed.parentId) ? trashed.parentId : null };
+  }).filter(Boolean);
+}
+
+/** The workspaces in the trash, newest first, each { id, name, deleted, expires, nested }; those in it a week are purged. */
+function trashedWorkspaces(ctx, projectId, now = Date.now()) {
+  const project = findProject(ctx, projectId);
+  const out = [];
+  for (const entry of trashedRecords(project)) {
+    if (entry.at < now - TRASH_DAYS * DAY) { fs.rmSync(entry.dir, { recursive: true, force: true }); continue; }
+    out.push({ id: entry.workspace.id, name: entry.name, deleted: new Date(entry.at).toISOString(), expires: new Date(entry.at + TRASH_DAYS * DAY).toISOString(), nested: countWorkspaces(entry.dir) });
+  }
+  return out.sort((a, b) => b.deleted.localeCompare(a.deleted));
+}
+
+function restoreWorkspace(ctx, projectId, workspaceId) {
+  const project = findProject(ctx, projectId);
+  assertId(workspaceId, 'workspace');
+  const entry = trashedRecords(project).find((candidate) => candidate.workspace.id === workspaceId);
+  if (!entry) throw new Error('That workspace is no longer in the trash');
+  const parent = entry.parentId ? findWorkspaceIn(project.dir, entry.parentId) : null;
+  const parentDir = parent ? parent.workspace.dir : project.dir;
+  const back = path.join(parentDir, workspaceDirName(parentDir, entry.name, entry.workspace.name));
+  fs.renameSync(entry.dir, back);
+  const { trashed, ...meta } = readJson(path.join(back, 'meta.json')); // eslint-disable-line no-unused-vars
+  writeJson(path.join(back, 'meta.json'), meta);
+  return publicWorkspace(workspaceRecord(back));
+}
+
 function patchWorkspaceMeta(workspace, patch) {
   const meta = readJson(path.join(workspace.dir, 'meta.json'));
   writeJson(path.join(workspace.dir, 'meta.json'), { ...meta, ...patch });
@@ -713,7 +770,7 @@ const RECENT_KEEP = 3;
 const RECENT_WINDOW = 30 * 60 * 1000;
 const MAX_RECENT = 100;
 const MAX_AGENTS = 50;
-const AGENT_KINDS = new Set(['bart', 'build']);
+const AGENT_KINDS = new Set(['bart', 'brainstorm', 'discover', 'build']);
 const AGENT_STATUSES = new Set(['running', 'waiting']);
 const liveAgents = new Set(); // ids of the agents running in this process
 const isoOrNull = (value) => (typeof value === 'string' && value.length <= 40 && !Number.isNaN(Date.parse(value)) ? value : null);
@@ -887,7 +944,7 @@ async function loadProject(ctx, projectId) {
   const project = findProject(ctx, projectId);
   const notesDb = await db.openNotesDb(project.dir);
   const notes = (await notesDb.list()).map(publicNote);
-  return { project: publicProject(project), workspaces: workspaceTree(project.dir), notes };
+  return { project: publicProject(project), workspaces: workspaceTree(project.dir), notes, trash: trashedWorkspaces(ctx, projectId) };
 }
 
 module.exports = {
@@ -905,6 +962,9 @@ module.exports = {
   loadProject,
   createWorkspace,
   renameWorkspace,
+  trashWorkspace,
+  trashedWorkspaces,
+  restoreWorkspace,
   setWorkspaceContext,
   addWorkspaceBuild,
   patchWorkspace: (ctx, projectId, workspaceId, patch) => patchWorkspaceMeta(findWorkspace(ctx, projectId, workspaceId).workspace, patch),

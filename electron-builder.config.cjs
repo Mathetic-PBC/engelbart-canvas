@@ -19,6 +19,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { Arch } = require('electron-builder');
+const { RENDERER_BUNDLED, missingInApp } = require('./scripts/check-app-modules.cjs');
 
 function developerId() {
   if (process.env.ENGELBART_SIGN === 'adhoc') return false;
@@ -53,9 +54,9 @@ module.exports = {
     'dist/**/*',
     '!dist/**/*.map',
     'fixtures/**/*', // test mode's seed library
-    // electron-builder adds the production dependencies; these are the renderer's, already bundled into dist/.
-    '!node_modules/{react,react-dom,scheduler,roughjs,hachure-fill,path-data-parser,points-on-curve,points-on-path}{,/**}',
-    '!node_modules/{@xterm,@fontsource}{,/**}',
+    // electron-builder adds the production dependencies (afterPack checks it added them all); these are the renderer's,
+    // already bundled into dist/.
+    `!node_modules/{${RENDERER_BUNDLED.join(',')}}{,/**}`,
     // pdf.js: the main process reads text with the legacy build only (src/main/context/pdf-text.cjs).
     '!node_modules/pdfjs-dist/{build,web,types,image_decoders}{,/**}',
     '!node_modules/pdfjs-dist/legacy/{web,image_decoders}{,/**}',
@@ -81,6 +82,10 @@ module.exports = {
     }
     const git = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, 'Contents', 'Resources', 'git', 'engelbart-bin', 'git');
     if (!fs.existsSync(git)) throw new Error(`No Git for ${Arch[context.arch]} in the app: run \`node scripts/fetch-git.mjs ${Arch[context.arch]}\` first.`);
+    // electron-builder chooses the node_modules from `npm list`, and on one Mac left out everything npm had hoisted
+    // (release 0.1.2: no openapi-fetch for e2b). An app missing a package its main process needs is not made.
+    const missing = missingInApp(path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`));
+    if (missing.length) throw new Error(`The ${Arch[context.arch]} app is missing ${missing.length} packages it needs (scripts/check-app-modules.cjs):\n  ${missing.join('\n  ')}`);
   },
   mac: {
     target: [

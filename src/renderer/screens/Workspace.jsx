@@ -3,7 +3,7 @@ import { api, errorMessage } from '../api.js';
 import Rail from '../workspace/Rail.jsx';
 import DocTabs from '../workspace/DocTabs.jsx';
 import NotePicker from '../workspace/NotePicker.jsx';
-import DocEditor, { BART_ITEM } from '../workspace/DocEditor.jsx';
+import DocEditor, { BART_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM } from '../workspace/DocEditor.jsx';
 import RightPane, { RIGHT_MODES } from '../workspace/RightPane.jsx';
 import { kindOf } from '../ui/Icons.jsx';
 import { hasTag, isNote } from '../model/kind.js';
@@ -277,7 +277,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // the documents from disk, so everything is saved first. Its answer replaces the pending line in whatever that document's
   // text is by then, open or not; Stop removes the line; progress (which model, what it is doing, the answer so far) shows on the pending row.
   // A follow-up also carries `turns`, the earlier turns of its exchange as the document holds them, and Regenerate may carry
-  // `choice`, a model and effort for that run alone.
+  // `choice`, a model and effort for that run alone. `agent` is 'brainstorm' for an @brainstorm line (2026-09-30), whose
+  // answer is a card the editor draws, and 'discover' for an @discover line (a card or a reading guide); everything else
+  // about the run is the same.
   const [asks, setAsks] = React.useState({});
   // What the @bart line's chip offers and what its flags are checked against. The files behind it are read again for every
   // question, so this is read again whenever the window comes back to the front, and once a question has been sent: one
@@ -308,7 +310,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     });
   }), []);
 
-  const askBart = React.useCallback(async ({ askId, text, turns, choice }) => {
+  const askBart = React.useCallback(async ({ askId, text, turns, choice, agent }) => {
     if (!docKey || !docRef || !topic) return;
     const key = docKey, ref = docRef;
     const place = (lines) => {
@@ -319,11 +321,11 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       all.splice(at, 1, ...lines);
       changeDoc(key, ref, all.join('\n'));
     };
-    setAsks((current) => ({ ...current, [askId]: { docKey: key } }));
+    setAsks((current) => ({ ...current, [askId]: { docKey: key, agent: agent || 'bart' } }));
     try {
       await new Promise((resolve) => { setTimeout(resolve, 0); }); // let the pending line reach `pending` before flushing it
       await Promise.all([...pending.current.keys()].map((held) => flush(held)));
-      const asked = api.askBart(project.id, { askId, ref, workspaceId: ref.kind === 'workspace' ? ref.workspaceId : topic.id, text, turns: turns || [], choice: choice || null });
+      const asked = api.askBart(project.id, { askId, ref, workspaceId: ref.kind === 'workspace' ? ref.workspaceId : topic.id, text, turns: turns || [], choice: choice || null, agent: agent || 'bart' });
       loadBartModels(); // main has kept a pick by hand before this is read
       const out = await asked;
       place(out.stopped ? [] : out.lines);
@@ -625,7 +627,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return out;
   }, [topic, here, byId, renaming, activeRowId, tree.notes, mentioned]);
 
-  const mentionable = React.useMemo(() => [BART_ITEM, ...library.filter((row) => row.type !== 'image').map(describe)], [library]);
+  const mentionable = React.useMemo(() => [BART_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, ...library.filter((row) => row.type !== 'image').map(describe)], [library]);
 
   // On the rail: what the search does not offer again, and what makes the Browser's Save read ✓.
   const railIds = React.useMemo(() => new Set(rows.filter((row) => row.type !== 'child' && row.type !== 'archive').map((row) => row.id)), [rows]);
@@ -833,6 +835,36 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     } catch (error) {
       onError(error);
     }
+  };
+
+  // Delete, from the switcher (2026-09-30): the workspace and all nested in it go into the trash, restorable there for a
+  // week. When the one open here is among them, the one above it opens instead (else the one below, else its parent).
+  const deleteTopic = async (id) => {
+    const at = index.get(id);
+    if (!at) return;
+    try {
+      await Promise.all([...pending.current.keys()].map((key) => flush(key)));
+      await api.trashWorkspace(project.id, id);
+      let inside = false;
+      for (let up = here; up && !inside; up = up.parent ? index.get(up.parent.id) : null) inside = up.node.id === id;
+      if (inside) {
+        const level = at.parent ? at.parent.children : tree.workspaces;
+        const i = level.findIndex((candidate) => candidate.id === id);
+        const instead = level[i - 1] || level[i + 1] || at.parent;
+        if (instead) selectTopic(instead.id);
+        else { setTopicId(null); setTabs([WS_TAB]); setActiveTab('ws'); }
+      }
+      await reload();
+    } catch (error) {
+      onError(error);
+    }
+  };
+
+  // Restore, in the trash: the workspace back where it was, and open.
+  const restoreTopic = async (id) => {
+    await api.restoreWorkspace(project.id, id);
+    await reload();
+    selectTopic(id);
   };
 
   /* --------------------------------------------------------------- sidebar */
@@ -1142,6 +1174,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onSelectTopic={selectTopic}
           onRenameTopic={renameTopic}
           onAddTopic={() => addTopic(false)}
+          onDeleteTopic={deleteTopic}
           rows={rows}
           flashId={flashId}
           onRowClick={onRowClick}
@@ -1159,7 +1192,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onOpenHeld={(projectId, workspaceId) => { if (projectId === project.id && workspaceId && index.has(workspaceId)) selectTopic(workspaceId); }}
           onTrashRow={trashRow}
           onRestoreArchive={(row) => restoreVersion(row.file)}
-          trashFull={!!(topic && topic.removed && topic.removed.length) || postItTrash > 0}
+          trashFull={!!(topic && topic.removed && topic.removed.length) || postItTrash > 0 || !!(tree.trash && tree.trash.length)}
+          workspaceTrash={{ rows: tree.trash || [], restore: restoreTopic }}
           postItTrash={active ? { count: postItTrash, load: () => api.postItsTrashed(project.id), restore: (id) => api.postItsRestore(project.id, id) } : null}
           postItDrag={postItDrag}
           trashRef={trashRef}

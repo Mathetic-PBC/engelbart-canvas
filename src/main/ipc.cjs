@@ -255,6 +255,9 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     return created;
   }));
   handle('rename-workspace', withCtx((ctx, pid, wid, name) => projects.renameWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(name, 'name'))));
+  // Delete in the switcher: the workspace, and all nested in it, into the sidebar's trash for a week; Restore there.
+  handle('trash-workspace', withCtx((ctx, pid, wid) => { const out = projects.trashWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); navChanged(); return out; }));
+  handle('restore-workspace', withCtx((ctx, pid, wid) => { const out = projects.restoreWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); navChanged(); return out; }));
   handle('set-workspace-context', (pid, wid, entries) => changeWorkspaceContext(pid, wid, (ctx, projectId, workspaceId) => projects.setWorkspaceContext(ctx, projectId, workspaceId, entries)));
   // The sidebar: search, +, Save and an @mention bring a library item into a workspace; the trash takes it out (and remembers that it did).
   handle('link-to-workspace', (pid, wid, ids) => {
@@ -287,7 +290,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     return { chars, files, missing };
   }));
 
-  // @bart: the answer comes back as draft lines for the document. A run that fails answers too, so
+  // @bart and @brainstorm: the answer comes back as draft lines for the document. A run that fails answers too, so
   // the question line never stays locked behind a pending line; only Stop returns nothing to place.
   handle('ask-bart', withCtx(async (ctx, pid, input) => {
     const value = input && typeof input === 'object' ? input : {};
@@ -301,9 +304,12 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       const turns = (Array.isArray(value.turns) ? value.turns : []).slice(-40).map((turn) => ({ question: str(turn && turn.question, 'earlier question', 8000), answer: str(turn && turn.answer, 'earlier answer', 40000) }));
       const choice = value.choice && typeof value.choice === 'object' ? { model: str(value.choice.model, 'model', 24), effort: str(value.choice.effort, 'effort', 24) } : null;
       if (choice && !/^[a-z][a-z0-9]*$/.test(choice.model + choice.effort)) throw new TypeError('choice is invalid');
-      const question = { askId, ref: docRef(value.ref), workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice };
+      // `agent`: which line asked, @bart, @brainstorm or @discover (2026-09-30), the same run with other instructions.
+      const agent = value.agent == null ? 'bart' : value.agent;
+      if (!['bart', 'brainstorm', 'discover'].includes(agent)) throw new TypeError('agent must be bart, brainstorm or discover');
+      const question = { askId, ref: docRef(value.ref), workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice, agent };
       // The ask is an agent of its workspace: running now, waiting for you once its answer (or failure) has landed.
-      started = track(() => projects.agentStarted(ctx, { id: askId, kind: 'bart', projectId: pid, workspaceId: question.workspaceId, doc: question.ref }));
+      started = track(() => projects.agentStarted(ctx, { id: askId, kind: agent, projectId: pid, workspaceId: question.workspaceId, doc: question.ref }));
       const out = await bart.ask(ctx, str(pid, 'project id', 64), question, { onProgress: (progress) => notify('engelbart:bart-progress', { askId, ...progress }) });
       if (started) track(() => projects.agentFinished(ctx, askId));
       return out;

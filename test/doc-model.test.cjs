@@ -335,3 +335,54 @@ test('a Build\'s line holds its id alone; it is its own kind of line, and it end
   assert.deepEqual(threads(lines).map((t) => [t.from, t.to]), [[0, 1], [3, 3]], 'a Build between two questions keeps them apart');
   assert.equal(parseLines(['```', 'build> 0123456789', '```'])[1].type, 'code', 'inside a code block it is code');
 });
+
+test('@brainstorm is an @bart line asked of another agent: with or without words, coloured as a token, one thread kind (2026-09-30)', async () => {
+  const { parseLine, agentOf, threads, turnText, inlineHtml, INLINE } = await load();
+  assert.deepEqual(parseLine('@brainstorm'), { type: 'bart', text: '', agent: 'brainstorm' });
+  assert.deepEqual(parseLine('@Brainstorm what about retries?'), { type: 'bart', text: 'what about retries?', agent: 'brainstorm' }, 'what the @ menu writes');
+  assert.deepEqual(parseLine('@brainstorm picked "The workspace"; note: soon'), { type: 'bart', text: 'picked "The workspace"; note: soon', agent: 'brainstorm' });
+  assert.deepEqual([agentOf(parseLine('@bart q')), agentOf(parseLine('@brainstorm')), agentOf(parseLine('plain'))], ['bart', 'brainstorm', 'bart']);
+  assert.equal(parseLine('@brainstorming').type, 'p');
+  assert.deepEqual('@Brainstorm here'.split(INLINE).filter(Boolean), ['@Brainstorm', ' here']);
+  assert.match(inlineHtml('@brainstorm here'), /<span style="color:#0070f3;font-weight:500">@brainstorm<\/span> here/);
+  const doc = [
+    '@brainstorm',                            // 0
+    'bart> ```json',                          // 1
+    'bart> {',                                // 2
+    'bart>   "card": "focus"',                // 3
+    'bart> }',                                // 4
+    'bart> ```',                              // 5
+    'bart>',                                  // 6
+    'bart> *Sonnet · high · 3 s*',            // 7
+    '@brainstorm picked "Retries"',           // 8
+    'bart~> k2',                              // 9
+    '',
+  ];
+  const [thread] = threads(doc);
+  assert.deepEqual(thread.turns.map((turn) => [turn.q, turn.from, turn.to, turn.foot, turn.pending]), [[0, 1, 7, 7, null], [8, 9, 9, -1, 'k2']]);
+  assert.deepEqual(turnText(doc, thread.turns[0]), { question: '', answer: '```json\n{\n  "card": "focus"\n}\n```' }, 'an empty line is still a turn; the card is its JSON');
+  assert.deepEqual(threads(['@bart why?', 'bart> because', '@brainstorm', 'bart~> k3']).map((t) => t.turns.length), [2], 'either line continues the other\'s card');
+});
+
+test('@discover is an @bart line asked of a third agent: with or without words, coloured as a token, one thread kind (2026-09-30)', async () => {
+  const { parseLine, agentOf, threads, inlineHtml, INLINE, tokShown } = await load();
+  assert.deepEqual(tokShown('**[A paper](https://x.org)**'), { shown: 'A paper', pre: 2 });
+  assert.deepEqual(parseLine('@discover'), { type: 'bart', text: '', agent: 'discover' });
+  assert.deepEqual(parseLine('@Discover why agents loop --deep'), { type: 'bart', text: 'why agents loop --deep', agent: 'discover' }, 'what the @ menu writes');
+  assert.deepEqual([agentOf(parseLine('@discover x')), agentOf(parseLine('@discovery x'))], ['discover', 'bart']);
+  assert.equal(parseLine('@discovery').type, 'p');
+  assert.match(inlineHtml('@discover here'), /<span style="color:#0070f3;font-weight:500">@discover<\/span> here/);
+  assert.deepEqual('@Discover `@bart` x'.split(INLINE).filter(Boolean), ['@Discover', ' ', '`@bart`', ' x']);
+  assert.equal(inlineHtml('**[A paper](https://arxiv.org/abs/1)** · Ada'), '<strong style="font-weight:600"><a href="https://arxiv.org/abs/1" data-link="1" style="color:#0070f3;text-decoration:underline;text-underline-offset:3px">A paper</a></strong> · Ada', 'a guide\'s title: a link in bold');
+  assert.match(inlineHtml('**@[Plan]** · Ada'), /^<strong style="font-weight:600"><span data-mention="Plan"[^>]*>@Plan<\/span><\/strong> · Ada$/, 'a library item in bold is still a mention');
+  assert.deepEqual(threads(['@discover agents', 'bart> ## Start here', 'bart> *Opus · high · 90 s*', '@discover only after 2022', 'bart~> k4']).map((t) => t.turns.length), [2], 'a follow-up joins the guide\'s card');
+});
+
+test('the blank line a recap\'s Look for button puts before "@discover" keeps it out of the brainstorm thread (round 4)', async () => {
+  const { threads, agentOf, parseLine } = await load();
+  const recap = ['@brainstorm (skipped)', 'bart> Where you are: a', 'bart> Look for: retry loops'];
+  const apart = threads([...recap, '', '@discover retry loops', 'bart~> d1', '']);
+  assert.deepEqual(apart.map((t) => [t.from, t.to]), [[0, 2], [4, 5]]);
+  assert.equal(agentOf(parseLine('@discover retry loops')), 'discover');
+  assert.equal(threads([...recap, '@discover retry loops', 'bart~> d1']).length, 1, 'without it the line would join the thread');
+});

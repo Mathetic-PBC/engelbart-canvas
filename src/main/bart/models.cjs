@@ -15,7 +15,7 @@
 const path = require('node:path');
 const { readJson } = require('../store/home.cjs');
 const { carryDefaults } = require('../store/defaults.cjs');
-const { EFFORTS, effortOf, modelOf, readFlags, readQuestion, withChoice } = require('./question.cjs');
+const { EFFORTS, effortOf, modelOf, readFlags, readQuestion, readBrainstorm, readDiscover, withChoice } = require('./question.cjs');
 const { TOOL_OF } = require('../tools/requirements.cjs');
 
 const MODELS_FILE = 'model-effort-inline-question.json';
@@ -79,7 +79,27 @@ const BART_DEFAULTS = {
   },
 };
 
-const DEFAULT_MODELS = { ...BART_DEFAULTS, build: DEFAULT_BUILD };
+// @brainstorm (2026-09-30): one step per provider, no ladder, on the provider an @bart question would start on. Keys name
+// @bart's models above, so a model taken out of that list is not run here either.
+const DEFAULT_BRAINSTORM = {
+  about: 'The model and effort for @brainstorm, the agent that asks one card at a time to help find what to work on. One step per provider and no ladder: it runs on the provider an @bart question would start on, at that provider\'s step here. The models are the ones listed above for @bart. `@brainstorm --opus …` picks by hand for that line.',
+  providers: {
+    openai: { model: 'sol', effort: 'medium' },
+    anthropic: { model: 'sonnet', effort: 'high' },
+  },
+};
+
+// @discover (2026-09-30): the same kind of block. It reads, looks papers up and follows citations for minutes, and every
+// entry it writes must be checked against what it found, so it starts where @bart's ladder goes for careful work.
+const DEFAULT_DISCOVER = {
+  about: 'The model and effort for @discover, the agent that finds what to read about a problem by following the citations of the papers in the library. One step per provider and no ladder: it runs on the provider an @bart question would start on, at that provider\'s step here. The models are the ones listed above for @bart. `@discover --sonnet …` picks by hand for that line; `--deep` traces further.',
+  providers: {
+    openai: { model: 'sol', effort: 'high' },
+    anthropic: { model: 'opus', effort: 'high' },
+  },
+};
+
+const DEFAULT_MODELS = { ...BART_DEFAULTS, build: DEFAULT_BUILD, brainstorm: DEFAULT_BRAINSTORM, discover: DEFAULT_DISCOVER };
 
 /** `defaults` with some models' ids replaced: { openai: { sol: 'gpt-6-sol' } }. */
 function withIds(defaults, ids) {
@@ -162,6 +182,23 @@ function normalizeBuild(value) {
   return { about: typeof given.about === 'string' ? given.about : DEFAULT_BUILD.about, provider: providers[given.provider] ? given.provider : DEFAULT_BUILD.provider, providers };
 }
 
+/**
+ * @brainstorm's block, or @discover's (`defaults`): per provider one step of that provider's @bart models and efforts, else
+ * the default step, else its ladder's first.
+ */
+function normalizeBrainstorm(value, providers, defaults = DEFAULT_BRAINSTORM) {
+  const given = isObject(value) ? value : {};
+  const out = {};
+  for (const [key, entry] of Object.entries(providers)) {
+    const from = isObject(given.providers) && isObject(given.providers[key]) ? given.providers[key] : null;
+    const wanted = from ? { model: String(from.model || '').toLowerCase(), effort: effortOf(from.effort) } : null;
+    const usable = (step) => !!step && !!entry.models[step.model] && entry.efforts.includes(step.effort);
+    const step = [wanted, defaults.providers[key]].find(usable) || entry.ladder[0];
+    out[key] = { model: step.model, effort: step.effort };
+  }
+  return { about: typeof given.about === 'string' ? given.about : defaults.about, providers: out };
+}
+
 /** Whatever the file holds, made safe to run: unknown providers dropped, bad models, efforts and steps replaced by the defaults. */
 function normalizeModels(value) {
   const given = isObject(value) ? value : {};
@@ -177,7 +214,7 @@ function normalizeModels(value) {
       ladder: ladder.length ? ladder : fallback.ladder.filter((step) => held[step.model]).length ? fallback.ladder.filter((step) => held[step.model]) : [{ model: Object.keys(held)[0], effort: 'medium' }],
     };
   }
-  return { about: typeof given.about === 'string' ? given.about : DEFAULT_MODELS.about, provider: providers[given.provider] ? given.provider : DEFAULT_MODELS.provider, providers, build: normalizeBuild(given.build) };
+  return { about: typeof given.about === 'string' ? given.about : DEFAULT_MODELS.about, provider: providers[given.provider] ? given.provider : DEFAULT_MODELS.provider, providers, build: normalizeBuild(given.build), brainstorm: normalizeBrainstorm(given.brainstorm, providers), discover: normalizeBrainstorm(given.discover, providers, DEFAULT_DISCOVER) };
 }
 
 /**
@@ -268,4 +305,4 @@ function loadModels(homeRoot, { only } = {}) {
   return only ? onlyProviders(models, only) : models;
 }
 
-module.exports = { MODELS_FILE, EFFORTS, DEFAULT_MODELS, DEFAULT_BUILD, PAST_DEFAULT_MODELS, normalizeModels, normalizeBuild, buildChoices, resolveBuildChoice, onlyProviders, preferUsable, startingAt, loadModels, effortOf, modelOf, readFlags, readQuestion, withChoice };
+module.exports = { MODELS_FILE, EFFORTS, DEFAULT_MODELS, DEFAULT_BUILD, DEFAULT_BRAINSTORM, DEFAULT_DISCOVER, PAST_DEFAULT_MODELS, normalizeModels, normalizeBuild, normalizeBrainstorm, buildChoices, resolveBuildChoice, onlyProviders, preferUsable, startingAt, loadModels, effortOf, modelOf, readFlags, readQuestion, readBrainstorm, readDiscover, withChoice };

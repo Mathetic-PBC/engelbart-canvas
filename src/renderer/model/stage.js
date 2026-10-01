@@ -4,6 +4,7 @@
 
 import { kindLabel, isNote } from './kind.js';
 import { looksAddable } from './rail.js';
+import { kindOf } from './address.js';
 
 /** The most tabs the Stage holds; past it, what is opened takes the place of the tab in front (Hudson, 2026-09-23). */
 export const MAX_TABS = 15;
@@ -16,6 +17,59 @@ export function addressKey(value) {
   try { u = new URL(v); } catch { return v; }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return u.href.replace(/#.*$/, '');
   return `${u.host.toLowerCase().replace(/^www\./, '')}${u.pathname.replace(/\/+$/, '')}${u.search}`;
+}
+
+/**
+ * A link's target (2026-09-30, @discover's guide): the address, and the passage to find there, from a `#find=` fragment of
+ * percent-encoded words (`https://arxiv.org/pdf/2312.10893#find=We%20argue%20that`), and where its section ends, from
+ * `&to=` (round 2: the first words of the section after it). → { address, find, to }; `find` and `to` are '' when there
+ * is none, and without `find` the address is the link as it came: any other fragment (#page=3, #section) stays on it.
+ * Each value is decoded after the split, so an `&` in the words is `%26`. A path keeps its percent-encoding off
+ * (`/Users/me/My%20Paper.pdf` is the file with a space), so it matches the library.
+ */
+export function splitTarget(href) {
+  const link = String(href == null ? '' : href).trim();
+  const hash = link.indexOf('#');
+  const fragment = hash >= 0 ? link.slice(hash + 1) : '';
+  const m = fragment.match(/^find=([\s\S]*?)&to=([^&]*)$/) || fragment.match(/^find=([\s\S]*)$/);
+  if (!m) return { address: link, find: '', to: '' };
+  const words = (value) => {
+    let out;
+    try { out = decodeURIComponent(value || ''); } catch { out = value || ''; }
+    return out.replace(/\s+/g, ' ').trim();
+  };
+  let address = link.slice(0, hash);
+  if (/^(?:\/|~\/)/.test(address) && /%[0-9a-f]{2}/i.test(address)) { try { address = decodeURIComponent(address); } catch { /* as written */ } }
+  return { address, find: words(m[1]), to: words(m[2]) };
+}
+
+/** The library row a link's address is: one the Stage shows whose path (or file: address) or url is that address. */
+export function rowForAddress(library, address) {
+  const where = String(address || '').trim();
+  if (!where) return null;
+  let path = null;
+  if (/^file:\/\//i.test(where)) { try { path = decodeURIComponent(new URL(where).pathname); } catch { path = null; } } else if (where.startsWith('/')) path = where;
+  const key = /^https?:\/\//i.test(where) ? addressKey(where) : '';
+  return (library || []).find((row) => onStage(row) && ((path && row.path === path) || (key && row.url && addressKey(row.url) === key))) || null;
+}
+
+const fileAddress = (file) => `file://${String(file).split('/').map(encodeURIComponent).join('/')}`;
+
+/**
+ * Where a link opens (Stage.openInput) → { address, find, to, row, key }. A link with a passage to a library row opens that
+ * row, ink and all; otherwise the address does. `key` is the tab it comes forward in when that is open already (tabKey;
+ * '' always takes a tab of its own, as a path did before passages): a page by its address, a row by its id, and with a
+ * passage a file by its path too.
+ */
+export function linkPlan(href, library) {
+  const { address, find, to } = splitTarget(href);
+  const row = find ? rowForAddress(library, address) : null;
+  if (row) return { address, find, to, row, key: `i:${row.id}` };
+  const k = kindOf(address);
+  const page = k.kind === 'web' || k.kind === 'local' || k.kind === 'disk';
+  let key = page && !/^file:/i.test(address) ? `l:${addressKey(k.url)}` : '';
+  if (!key && find && address.startsWith('/')) key = `l:${addressKey(fileAddress(address))}`;
+  return { address, find, to, row: null, key };
 }
 
 /** What a tab is for "is it open already": the library row it shows, else where it is; a blank tab is nothing. */

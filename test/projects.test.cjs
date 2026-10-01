@@ -96,6 +96,40 @@ test('workspaces nest to any depth; docs, context and renames work at every leve
   await assert.rejects(projects.createWorkspace(ctx, project.id, { name: 'x', parentId: '00000000-0000-4000-8000-000000000000' }), /Unknown workspace/);
 });
 
+test('delete puts a workspace and what is nested in it in the trash; restore puts it back; a week later it is purged (2026-09-30)', async () => {
+  const project = await projects.createProject(ctx, 'Trash Can');
+  const top = await projects.createWorkspace(ctx, project.id, { name: 'Plans' });
+  const child = await projects.createWorkspace(ctx, project.id, { name: 'Draft', parentId: top.id });
+  const grandchild = await projects.createWorkspace(ctx, project.id, { name: 'Notes', parentId: child.id });
+  await projects.writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: child.id }, 'kept\n');
+
+  assert.deepEqual(projects.trashWorkspace(ctx, project.id, child.id), { id: child.id, name: 'Draft' });
+  let tree = await projects.loadProject(ctx, project.id);
+  assert.deepEqual(tree.workspaces.find((workspace) => workspace.id === top.id).children, [], 'gone from the tree');
+  assert.throws(() => projects.findWorkspace(ctx, project.id, grandchild.id), /Unknown workspace/, 'what was nested in it went too');
+  assert.equal((await projects.listProjects(ctx)).find((candidate) => candidate.id === project.id).workspaceCount, 1);
+  assert.equal(tree.trash.length, 1);
+  assert.deepEqual([tree.trash[0].id, tree.trash[0].name, tree.trash[0].nested], [child.id, 'Draft', 1]);
+
+  // A new workspace takes its name meanwhile: the restored one comes back beside it, under its old parent.
+  await projects.createWorkspace(ctx, project.id, { name: 'Draft', parentId: top.id });
+  const back = projects.restoreWorkspace(ctx, project.id, child.id);
+  assert.equal(back.name, 'Draft 2');
+  assert.equal(await projects.readDoc(ctx, project.id, { kind: 'workspace', workspaceId: grandchild.id }), '');
+  assert.equal(await projects.readDoc(ctx, project.id, { kind: 'workspace', workspaceId: child.id }), 'kept\n');
+  assert.equal('trashed' in JSON.parse(fs.readFileSync(path.join(project.dir, 'Plans', 'Draft 2', 'meta.json'), 'utf8')), false);
+  assert.deepEqual(projects.trashedWorkspaces(ctx, project.id), []);
+  assert.throws(() => projects.restoreWorkspace(ctx, project.id, child.id), /no longer in the trash/);
+
+  // Its parent deleted too: it comes back at the top. And a week on, the trash forgets it.
+  projects.trashWorkspace(ctx, project.id, child.id);
+  projects.trashWorkspace(ctx, project.id, top.id);
+  assert.equal(projects.restoreWorkspace(ctx, project.id, child.id).name, 'Draft 2');
+  assert.ok(fs.existsSync(path.join(project.dir, 'Draft 2', 'Notes', 'meta.json')));
+  assert.equal(projects.trashedWorkspaces(ctx, project.id, Date.now() + 8 * 24 * 60 * 60 * 1000).length, 0);
+  assert.equal(fs.readdirSync(path.join(project.dir, '.trash')).length, 0, 'purged from disk');
+});
+
 test('workspace context is a flat list: folders sent by an old client are flattened, bad entries rejected', async () => {
   const project = await projects.createProject(ctx, 'Folders');
   const workspace = await projects.createWorkspace(ctx, project.id, { name: 'W' });
