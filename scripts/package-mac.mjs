@@ -83,6 +83,6 @@ if (!release) {
   await build({ targets: Platform.MAC.createTarget(['dmg', 'zip'], Arch.arm64, Arch.x64), config, publish: 'never' });
   const { writeSite } = await import('./release-site.mjs');
   const site = writeSite({ root: ROOT, version, downloads, developerId: config.extraMetadata.engelbart.developerId });
-  console.log(`\nUpload everything in ${path.relative(ROOT, site)}/ to ${downloads}`);
+  console.log(`\nUpload everything in ${path.relative(ROOT, site)}/ to ${downloads}: npm run upload:mac`);
   console.log(`Install command: curl -fsSL ${downloads}install.sh | bash`);
 }

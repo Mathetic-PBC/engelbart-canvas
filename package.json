@@ -20,6 +20,7 @@
     "postinstall": "npm run rebuild",
     "package": "node scripts/package-mac.mjs",
     "dist:mac": "node scripts/package-mac.mjs --release",
+    "upload:mac": "bash scripts/upload-release.sh",
     "fetch-git": "node scripts/fetch-git.mjs",
     "start:debug": "npm run build && electron . --remote-debugging-port=9222"
   },

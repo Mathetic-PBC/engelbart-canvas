@@ -20,7 +20,7 @@ How a version of Engelbart gets from this repository onto other people's Macs (2
 3. Build both kinds of Mac:
 
    ```sh
-   ENGELBART_DOWNLOAD_URL=https://example.com/engelbart npm run dist:mac
+   ENGELBART_DOWNLOAD_URL=https://mathetic.com/engelbart npm run dist:mac
    ```
 
    From a checkout with its own `node_modules`, installed with `npm ci`: never a symlink to another checkout's, which
@@ -31,7 +31,9 @@ How a version of Engelbart gets from this repository onto other people's Macs (2
    About a minute. It builds the renderer for production (minified, no source maps), minifies the main process file by
    file, fetches Git for both architectures (cached in `vendor/git` after the first time), and makes
    `Engelbart-<version>-arm64` (Apple silicon) and `-x64` (Intel), each as a `.dmg` and a `.zip`, about 155 MB each.
-4. Upload everything in `release/upload/` to that folder, replacing what is there:
+4. Upload it: `npm run upload:mac` (`scripts/upload-release.sh`; `UPLOAD_DRY_RUN=1` first lists what it would send).
+   It uses your `npx wrangler login` and puts everything in `release/upload/` into the R2 bucket `engelbart-releases`
+   under `engelbart/`, which https://mathetic.com/engelbart/ serves:
 
    ```
    Engelbart-0.1.1-arm64.dmg   Engelbart-0.1.1-arm64.zip   Engelbart-0.1.1-arm64.zip.blockmap
@@ -39,12 +41,15 @@ How a version of Engelbart gets from this repository onto other people's Macs (2
    latest-mac.yml              install.sh                  index.html      SHA256SUMS.txt
    ```
 
-   Upload `latest-mac.yml` last: it is what tells installed apps and the install command that a version exists, so the
-   files it names should be there first. Older versions' files can be deleted.
+   Every file goes up in 5 MiB parts, each retried on its own, through a temporary Worker it deploys and deletes: on
+   2026-09-30 this Mac's uploads to Cloudflare broke a few MB in, and a single 168 MB upload never got through. It can
+   be run again after any failure (what is already there is skipped). `latest-mac.yml` goes last, and only once both
+   zips as stored match the sha512 it names: it is what tells installed apps and the install command that a version
+   exists, so until then the previous version stays live. Older versions' files can be deleted.
 5. Send people the page (`index.html`, the folder's address) or the command:
 
    ```sh
-   curl -fsSL https://example.com/engelbart/install.sh | bash
+   curl -fsSL https://mathetic.com/engelbart | bash
    ```
 
 ## What people see
