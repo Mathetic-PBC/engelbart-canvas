@@ -105,6 +105,8 @@ test('the order: parts before screens, context then open, a detour back to conte
 
   // One Continue (no Next, 2026-09-28): live once the part holds something, and Skip while it is empty.
   assert.deepEqual(flow.importButtons(0, 0), { showSkip: true, continueDisabled: true });
+  assert.deepEqual(flow.importButtons(0, 0, { signedIn: true }), { showSkip: true, continueDisabled: false }, 'GitHub connected, nothing ticked');
+  assert.deepEqual(flow.importButtons(1, 0, { signedIn: true }), { showSkip: true, continueDisabled: true }, 'only the GitHub part');
   assert.deepEqual(flow.importButtons(0, 2), { showSkip: false, continueDisabled: false });
   assert.deepEqual(flow.importButtons(2, 1), { showSkip: false, continueDisabled: false });
   assert.deepEqual(flow.createButtons(0, { name: ' ', desc: '' }), { showSkip: false, continueDisabled: true });

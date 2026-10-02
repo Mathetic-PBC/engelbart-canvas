@@ -64,10 +64,12 @@ export const TOOL_WHY = {
 /**
  * The import screen's buttons, from how many rows its current part has (`n`): Skip while that part is empty; Continue
  * always shown and live once it holds something. It opens the next part, and after the last part the next screen
- * (there is no separate Next: Hudson, 2026-09-28).
+ * (there is no separate Next: Hudson, 2026-09-28). The GitHub part's Continue is live too once GitHub is connected
+ * (`signedIn`), with nothing ticked: connecting is the step, a repository is not required (2026-10-02).
  */
-export function importButtons(sub, n) {
-  return { showSkip: n === 0, continueDisabled: n === 0 };
+export function importButtons(sub, n, { signedIn = false } = {}) {
+  const connected = SUBS.import[sub] === 'github' && signedIn;
+  return { showSkip: n === 0, continueDisabled: n === 0 && !connected };
 }
 
 /**

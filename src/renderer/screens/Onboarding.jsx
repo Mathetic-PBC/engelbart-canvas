@@ -360,8 +360,8 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
   } else if (step === 'import') {
     const items = addedHere(cur);
     const n = items.length; // what this onboarding added; a repository the library already held is ticked in the list but not counted
-    const buttons = importButtons(sub, n);
     const signedIn = cur === 'github' && ghStatus && ghStatus.connected;
+    const buttons = importButtons(sub, n, { signedIn });
     body = (
       <div data-screen-label="03 Import context" data-part={cur} style={{ ...column, minHeight: 0, gap: 24, animation: rise }}>
         <Head title="Add to your library">Bring in the papers, websites, and code you've already read to conduct research. You can add more any time.</Head>
