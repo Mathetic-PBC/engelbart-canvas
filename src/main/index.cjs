@@ -277,7 +277,6 @@ function buildMenu() {
         ...(updates && updates.enabled ? [updates.menuItem()] : []),
         { type: 'separator' },
         { label: 'Set Up Tools…', click: () => sendToWindow('engelbart:tools-open', {}) },
-        { label: 'Welcome Tour', click: () => sendToWindow('engelbart:tour-open', {}) },
         { type: 'separator' },
         { role: 'services' },
         { type: 'separator' },
@@ -292,7 +291,7 @@ function buildMenu() {
       label: 'File',
       submenu: [
         { label: 'Reveal Engelbart Folder', click: () => electronShell.showItemInFolder(store ? store.layout.root : app.getPath('home')) },
-        ...(isMac ? [] : [{ label: 'Set Up Tools…', click: () => sendToWindow('engelbart:tools-open', {}) }, { label: 'Welcome Tour', click: () => sendToWindow('engelbart:tour-open', {}) }]),
+        ...(isMac ? [] : [{ label: 'Set Up Tools…', click: () => sendToWindow('engelbart:tools-open', {}) }]),
         { type: 'separator' },
         ...(isMac ? [{ role: 'close', label: 'Close Window', accelerator: 'Cmd+Shift+W' }] : [{ label: 'Quit', accelerator: 'Ctrl+Q', click: requestQuit }]),
       ],

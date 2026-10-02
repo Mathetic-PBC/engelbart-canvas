@@ -178,8 +178,6 @@ const engelbartAPI = Object.freeze({
   toolsSetUpdates: invoke('tools-set-updates'),
   onTools: (callback) => subscribe('engelbart:tools', callback),
   onToolsOpen: (callback) => subscribe('engelbart:tools-open', callback),
-  // Engelbart ▸ Welcome Tour (screens/WelcomeTour.jsx).
-  onTourOpen: (callback) => subscribe('engelbart:tour-open', callback),
   shellHistory: invoke('shell-history'),
   openExternal: invoke('open-external'),
   reveal: invoke('reveal'),

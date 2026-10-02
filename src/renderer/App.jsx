@@ -7,14 +7,13 @@ import SandboxProgress from './ui/SandboxProgress.jsx';
 import Home from './screens/Home.jsx';
 import Onboarding from './screens/Onboarding.jsx';
 import Workspace from './screens/Workspace.jsx';
-import WelcomeTour from './screens/WelcomeTour.jsx';
 import ToolSetup from './ui/ToolSetup.jsx';
 import { launchRows, installedSignedOut, TOOL_ORDER } from './model/tools.js';
 
 // Screens: the app opens straight into the workspace you were last in, and the first run (no projects yet) is
-// onboarding (screens/Onboarding.jsx, 2026-09-28); + Project runs its last two screens. A new install's onboarding ends
-// in the welcome tour (screens/WelcomeTour.jsx, 2026-09-29), and leaving the tour opens the project; Engelbart ▸
-// Welcome Tour shows it again. "Engelbart" in the header (or Escape) shows all projects. A project whose project.json has no code directory yet is held
+// onboarding (screens/Onboarding.jsx, 2026-09-28); + Project runs its last two screens. Onboarding ends in the project
+// it made (the welcome tour that followed it was taken out on 2026-10-01). "Engelbart" in the header (or Escape) shows
+// all projects. A project whose project.json has no code directory yet is held
 // behind a modal until one is chosen (2026-09-18).
 
 const pickFolder = (current) => window.terminalAPI.pickDirectory(current || undefined);
@@ -57,8 +56,7 @@ export default function App() {
   const [library, setLibrary] = React.useState([]);
   const [tree, setTree] = React.useState(null);
   const [entry, setEntry] = React.useState(null); // { workspaceId, tab, views } for the project being opened
-  const [phase, setPhase] = React.useState('boot'); // boot | create | tour | home | workspace
-  const [tour, setTour] = React.useState(null); // { projectId, projectName, prefer }: the project the tour opens when it ends
+  const [phase, setPhase] = React.useState('boot'); // boot | create | home | workspace
   const [run, setRun] = React.useState(0); // a reset starts onboarding over from its first screen
   const [, setTick] = React.useState(0);
   // Git, Claude Code and Codex (src/main/tools): the last snapshot, and the setup dialog when it is open.
@@ -104,7 +102,7 @@ export default function App() {
   // A new install's onboarding asks on a screen of its own (2026-09-28), so the dialog waits until it is over. Its
   // Install all leaves 'after': once the installs end, the dialog asks only what is left (signing in, a failure). Its
   // Skip for now asks nothing more until the next launch.
-  const onboardingNew = phase === 'boot' || phase === 'tour' || (phase === 'create' && !projects.length);
+  const onboardingNew = phase === 'boot' || (phase === 'create' && !projects.length);
   React.useEffect(() => {
     if (!launchAsk || onboardingNew || !tools) return;
     if (launchAsk === 'after') {
@@ -224,40 +222,12 @@ export default function App() {
     }
   }
 
-  // Onboarding made the project (api.startProject): land in its Getting started workspace with the Welcome! note open,
-  // after the welcome tour when this was a new install's onboarding (not + Project).
-  async function onboarded(made, mode) {
+  // Onboarding made the project (api.startProject): land in its Getting started workspace with the Welcome! note open.
+  async function onboarded(made) {
     setError('');
     await loadHome();
-    const prefer = { workspaceId: made.workspaceId, tab: { id: made.noteId, title: made.noteName } };
-    if (mode === 'new') {
-      setTour({ projectId: made.project.id, projectName: made.project.name, prefer });
-      setPhase('tour');
-      return;
-    }
-    await openProject(made.project.id, prefer);
+    await openProject(made.project.id, { workspaceId: made.workspaceId, tab: { id: made.noteId, title: made.noteName } });
   }
-
-  // Leaving the tour (Done, or Escape) opens the project it was shown for, where it was.
-  function endTour() {
-    const ending = tour;
-    setTour(null);
-    if (ending) openProject(ending.projectId, ending.prefer).catch(fail);
-  }
-
-  // Engelbart ▸ Welcome Tour: the tour again, then back to the project that was open (else the last one, else the first).
-  const replayTour = React.useRef(null);
-  replayTour.current = async () => {
-    if (phase !== 'workspace' && phase !== 'home') return;
-    const last = await api.lastOpen().catch(() => null);
-    const project = phase === 'workspace' && tree ? tree.project : (projects.find((one) => last && one.id === last.projectId) || projects[0]);
-    if (!project) return;
-    const prefer = last && last.projectId === project.id && last.workspaceId ? { workspaceId: last.workspaceId } : null;
-    leaveProject();
-    setTour({ projectId: project.id, projectName: project.name, prefer });
-    setPhase('tour');
-  };
-  React.useEffect(() => api.onTourOpen(() => { replayTour.current().catch(fail); }), []);
 
   async function goHome() {
     leaveProject();
@@ -312,12 +282,7 @@ export default function App() {
         />
       )}
       {phase === 'create' && (
-        <Onboarding key={run} mode={onboardMode} tools={tools} onTools={onboardingTools} onDone={(made) => onboarded(made, onboardMode)} onBack={projects.length ? goHome : null} />
-      )}
-      {phase === 'tour' && tour && (
-        <div style={{ position: 'absolute', inset: 0 }}>
-          <WelcomeTour key={tour.projectId} projectName={tour.projectName} onClose={endTour} />
-        </div>
+        <Onboarding key={run} mode={onboardMode} tools={tools} onTools={onboardingTools} onDone={onboarded} onBack={projects.length ? goHome : null} />
       )}
       {phase === 'workspace' && tree && (
         <Workspace

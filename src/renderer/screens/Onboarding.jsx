@@ -14,7 +14,7 @@ import welcomePng from '../../../design/assets/welcome-field.png';
 // Onboarding (2026-09-28): port of Claude Design "Onboarding.dc.html", Hudson's tweaks in design/onboarding/TWEAKS.md.
 // mode 'new' (first launch: welcome → tools → add to library → custom instructions → create → context) or 'existing'
 // (+ Project: create → context). Everything is real: library rows are added as they are picked, the instructions are
-// saved on Continue, and "Open project" makes the project (src/main/store/onboarding.cjs) and opens its Getting started workspace (after the welcome tour, for a new install).
+// saved on Continue, and "Open project" makes the project (src/main/store/onboarding.cjs) and opens its Getting started workspace.
 // The window is white and the content sits on it, centred, with no card or grey boxes; one Continue per screen walks
 // its parts (Hudson, 2026-09-28). The tools screen installs Git, Claude Code and Codex in the background (App.jsx
 // holds the setup dialog back until onboarding is over).
