@@ -108,7 +108,7 @@ test('attaching an existing repository starts it once after saving; only new att
     },
   });
   await Promise.all([f.attach([f.repo.id, f.site.id]), f.attach([f.repo.id, f.site.id])]);
-  assert.deepEqual(starts, [{ id: f.repo.id, options: undefined }], 'a new attachment bypasses the once-per-session background preparation guard');
+  assert.deepEqual(starts, [{ id: f.repo.id, options: { waitForClaude: true } }], 'a new attachment bypasses the once-per-session background preparation guard (not automatic), and waits for Claude Code instead of failing');
   await f.attach([f.site.id, f.repo.id]);
   await f.attach([f.site.id]);
   assert.equal(starts.length, 1, 'reordering and removing context do not launch anything');

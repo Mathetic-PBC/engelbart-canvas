@@ -160,7 +160,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       if (before.has(id)) continue;
       const row = await ctx.libraryDb.get(id);
       if (!githubRepo(row?.url)) continue;
-      try { await sandbox.start(ctx, id); } catch (error) { errors.push(`${row.name}: ${error.message}`); }
+      try { await sandbox.start(ctx, id, { waitForClaude: true }); } catch (error) { errors.push(`${row.name}: ${error.message}`); }
     }
     return errors.length ? { ...workspace, sandbox_error: errors.join('\n') } : workspace;
   };
@@ -418,7 +418,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       const row = await library.addItem(ctx, value, { describe, identifyRepo, inspectPdf, name });
       // Adding a local clone or a non-GitHub item does not start remote work.
       if (sandbox && /^(?:https?:\/\/(?:www\.)?github\.com\/|git@github\.com:)/i.test(value.trim())) {
-        try { await sandbox.start(ctx, row.id); } catch (error) { return { ...row, sandbox_error: error.message }; }
+        try { await sandbox.start(ctx, row.id, { waitForClaude: true }); } catch (error) { return { ...row, sandbox_error: error.message }; }
       }
       return row;
     });

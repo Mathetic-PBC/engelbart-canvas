@@ -373,6 +373,18 @@ test('an explicit start before Claude Code is signed in records nothing and says
   assert.equal((await f.store.latest()).length, 0);
 });
 
+test('saving or linking a repository before Claude Code is signed in waits instead of failing the save', async (t) => {
+  let ready = false;
+  const f = await fixture(t, { claudeReady: async () => { if (!ready) throw new Error('Claude Code is not signed in to a Claude subscription (Engelbart ▸ Set Up Tools… signs in).'); } });
+  assert.equal(await f.manager.start(f.ctx, f.repo.id, { waitForClaude: true }), null);
+  assert.equal(f.starts.length, 0);
+  assert.equal((await f.store.latest()).length, 0);
+  ready = true;
+  const run = await f.manager.start(f.ctx, f.repo.id, { automatic: true });
+  assert.equal(run.status, 'starting', 'the preparation that follows the sign-in starts it');
+  assert.equal(f.starts.length, 1);
+});
+
 test('Claude Code sign-in is asked for only when the subscription is what sets up', async (t) => {
   const cases = [
     [{}, 1], // auto, nothing to fall back to

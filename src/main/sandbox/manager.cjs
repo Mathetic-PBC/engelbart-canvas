@@ -140,7 +140,10 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
     workers.get(run.id).finished = finished;
     return Promise.resolve(run);
   }
-  async function start(ctx, libraryId, { automatic = false } = {}) {
+  // `waitForClaude`: a start that comes from saving a repository or linking it to a workspace (ipc.cjs), not from asking
+  // for the preview: until Claude Code is signed in it waits as automatic preparation does, instead of failing the save
+  // with the sign-in message (onboarding saves repositories before its sign-in, 2026-10-02).
+  async function start(ctx, libraryId, { automatic = false, waitForClaude = false } = {}) {
     contexts.set(ctx.dataRoot, ctx);
     const key = `${ctx.dataRoot}:${libraryId}`;
     return exclusive(key, async () => {
@@ -173,12 +176,12 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
       }
       // Setup by the local Claude subscription (ENGELBART_SANDBOX_SETUP auto or claude-local; worker.cjs) needs it signed in
       // first, unless auto has an API key to fall back to. Automatic preparation waits quietly, and runs once it is (the
-      // renderer prepares again when Claude Code's sign-in changes); an explicit start says why it cannot.
+      // renderer prepares again when Claude Code's sign-in changes), as does a save's; Start says why it cannot.
       const setup = env.ENGELBART_SANDBOX_SETUP || 'auto';
       if (setup === 'claude-local' || (setup === 'auto' && !env.ANTHROPIC_API_KEY)) {
         try { await claudeReady(); }
         catch (error) {
-          if (!automatic) throw error;
+          if (!automatic && !waitForClaude) throw error;
           prepared.delete(key);
           return (await store.latest()).find((item) => item.library_id === libraryId) || null;
         }
