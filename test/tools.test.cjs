@@ -480,7 +480,7 @@ test('manager: an agent installed where the login shell\'s PATH misses it hands 
   const { root } = ensureHome(temp());
   const tools = createTools({ readTools: () => readConfig(root).tools, writeTools: (value) => writeTools(root, value), detect: async () => ({ claude: { ...observed('claude', { file: launcher, onPath: false, source: 'native', ran: true, version: '2.1.300', signedIn: false }), checkedAt: new Date().toISOString() } }), actions: {} });
   await tools.check(['claude']);
-  assert.deepEqual(tools.environment(), { ENGELBART_AGENT_PATH: path.dirname(launcher) });
+  assert.deepEqual(tools.environment(), { ENGELBART_AGENT_PATH: path.dirname(launcher), ENGELBART_CLAUDE_BIN: launcher }, 'and its full path, which the terminal\'s Claude Code item runs (2026-09-30)');
   assert.equal(tools.binaryFor('claude'), launcher);
 });
 

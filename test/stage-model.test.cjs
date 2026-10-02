@@ -122,3 +122,106 @@ test('inlineRuns: bold, italic, code, links and bare addresses; html stays text'
     { text: 'e', href: 'https://e.org' }, { text: ' ' }, { text: 'https://f.org/x', href: 'https://f.org/x' }, { text: '. <b>g</b>' },
   ]);
 });
+
+/* ------------------------------------------------- a link's passage (2026-09-30, @discover's guide: #find=) */
+
+test('splitTarget: #find= is the passage, percent-decoded; any other fragment stays on the address', async () => {
+  const { splitTarget } = await load('stage');
+  assert.deepEqual(splitTarget('https://arxiv.org/pdf/2312.10893#find=We%20argue%20that%20GenAI'), { address: 'https://arxiv.org/pdf/2312.10893', find: 'We argue that GenAI', to: '' });
+  assert.deepEqual(splitTarget('https://arxiv.org/pdf/2312.10893'), { address: 'https://arxiv.org/pdf/2312.10893', find: '', to: '' }, 'no fragment');
+  assert.deepEqual(splitTarget('https://x.org/a.pdf#page=3'), { address: 'https://x.org/a.pdf#page=3', find: '', to: '' }, 'another fragment is the address\'s');
+  assert.deepEqual(splitTarget('https://x.org/guide#section-2'), { address: 'https://x.org/guide#section-2', find: '', to: '' });
+  assert.deepEqual(splitTarget('/Users/h/Downloads/My%20Paper.pdf#find=the%20%20first%0Asentence%20'), { address: '/Users/h/Downloads/My Paper.pdf', find: 'the first sentence', to: '' }, 'a path: decoded, so it is the file; the words: spaces run together');
+  assert.deepEqual(splitTarget('/Users/h/ColBERT.pdf#find=late%20interaction'), { address: '/Users/h/ColBERT.pdf', find: 'late interaction', to: '' });
+  assert.deepEqual(splitTarget('https://x.org/a#find=100%'), { address: 'https://x.org/a', find: '100%', to: '' }, 'a stray % is kept as written');
+  assert.deepEqual(splitTarget('https://x.org/a#find='), { address: 'https://x.org/a', find: '', to: '' });
+  assert.deepEqual(splitTarget(null), { address: '', find: '', to: '' });
+});
+
+test('splitTarget: &to= is where the section ends, each value decoded after the split (@discover round 2)', async () => {
+  const { splitTarget } = await load('stage');
+  assert.deepEqual(splitTarget('https://arxiv.org/pdf/2312.10893#find=We%20argue%20that'), { address: 'https://arxiv.org/pdf/2312.10893', find: 'We argue that', to: '' }, 'find only: as before');
+  assert.deepEqual(splitTarget('https://arxiv.org/pdf/2312.10893#find=We%20argue%20that&to=In%20this%20section%20we'), { address: 'https://arxiv.org/pdf/2312.10893', find: 'We argue that', to: 'In this section we' });
+  assert.deepEqual(splitTarget('/Users/h/My%20Paper.pdf#find=search%20%26%20rank&to=Q%26A%20systems'), { address: '/Users/h/My Paper.pdf', find: 'search & rank', to: 'Q&A systems' }, 'an encoded & stays in the words');
+  assert.deepEqual(splitTarget('https://x.org/a.pdf#page=3&to=x'), { address: 'https://x.org/a.pdf#page=3&to=x', find: '', to: '' }, 'another fragment is still the address\'s');
+  assert.deepEqual(splitTarget('https://x.org/a#find=a%20b&to='), { address: 'https://x.org/a', find: 'a b', to: '' }, 'an empty to is none');
+});
+
+test('linkPlan: a passage to a library paper opens its row; other links open their address in the tab that has it, or a new one', async () => {
+  const { linkPlan, placeTab, tabKey } = await load('stage');
+  assert.deepEqual(linkPlan('/Users/h/ColBERT.pdf#find=late%20interaction', library), { address: '/Users/h/ColBERT.pdf', find: 'late interaction', to: '', row: library[2], key: 'i:p1' }, 'by its path');
+  assert.equal(linkPlan('file:///Users/h/ColBERT.pdf#find=x', library).row, library[2], 'by its file: address');
+  assert.equal(linkPlan('https://anthropic.com/engineering/contextual-retrieval#find=x', library).row, library[3], 'by its url, however spelled');
+  assert.equal(linkPlan('/Users/h/.engelbart/p/Saving.md#find=x', library).row, null, 'never a note: notes open in the middle');
+  assert.equal(linkPlan('/Users/h/ColBERT.pdf', library).row, null, 'no passage: the link opens as it always did');
+  assert.deepEqual(linkPlan('https://arxiv.org/pdf/2312.10893#find=We%20argue', library), { address: 'https://arxiv.org/pdf/2312.10893', find: 'We argue', to: '', row: null, key: 'l:arxiv.org/pdf/2312.10893' });
+  assert.equal(linkPlan('/Users/h/ColBERT.pdf#find=late%20interaction&to=Next%20we', library).to, 'Next we', 'the section\'s end goes with the passage');
+  assert.equal(linkPlan('/Users/h/elsewhere.pdf', library).key, '', 'a path without a passage: a tab of its own, as before');
+  assert.equal(linkPlan('/Users/h/My Paper.pdf#find=x', library).key, tabKey({ url: 'about:blank', pdf: { url: 'file:///Users/h/My%20Paper.pdf' } }), 'with one, the tab that has the file (as main spells it) comes forward');
+
+  // openInput: a new tab for a paper not open, the same tab for a second passage in it.
+  const fresh = linkPlan('https://arxiv.org/pdf/2312.10893#find=We%20argue', library);
+  const blank = { url: 'about:blank' };
+  const page = { url: 'https://example.org' };
+  assert.deepEqual(placeTab([page], 0, fresh.key), { append: true }, 'not open: a new tab');
+  const open = { url: 'about:blank', pdf: { url: 'https://arxiv.org/pdf/2312.10893' } };
+  assert.deepEqual(placeTab([page, open], 0, linkPlan('https://arxiv.org/pdf/2312.10893#find=In%20Section%205', library).key), { focus: 1 }, 'open already: that tab comes forward (and takes the new passage)');
+  assert.deepEqual(placeTab([blank], 0, fresh.key), { replace: 0 }, 'a blank tab in front is used');
+  assert.deepEqual(placeTab([{ item: 'p1', url: 'about:blank' }], 0, linkPlan('/Users/h/ColBERT.pdf#find=x', library).key), { focus: 0 }, 'a library paper open already: its tab');
+});
+
+test('nextFind: a passage counts from page 1; nothing matching scrolls nowhere; searches and steps as before', async () => {
+  const { nextFind } = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/find.js')).href);
+  const inView = () => 4;
+  assert.deepEqual(nextFind({ fresh: true, count: 9, at: -1, fromStart: true, firstInView: inView }), { at: 0, scroll: true }, 'a link\'s passage: the first match in the paper, scrolled to');
+  assert.deepEqual(nextFind({ fresh: false, count: 9, at: 6, fromStart: true, firstInView: inView }), { at: 0, scroll: true }, 'the same words again from a link: from page 1 again');
+  assert.deepEqual(nextFind({ fresh: true, count: 0, at: -1, fromStart: true }), { at: -1, scroll: false }, 'no match: nothing in front, the scroll left alone');
+  assert.deepEqual(nextFind({ fresh: true, count: 9, at: -1, firstInView: inView }), { at: 4, scroll: true }, '⌘F: the first match in view');
+  assert.deepEqual(nextFind({ fresh: true, step: -1, count: 9, at: -1 }), { at: 8, scroll: true });
+  assert.deepEqual(nextFind({ fresh: false, step: 1, count: 9, at: 8 }), { at: 0, scroll: true }, 'wraps');
+  assert.deepEqual(nextFind({ fresh: false, step: 0, count: 3, at: 7 }), { at: 2, scroll: false }, 'a re-layout keeps its place, unscrolled');
+});
+
+test('the target gate: a passage is found once, after drawing; a re-layout does not find it again; given again, it is', async () => {
+  const { createTargetGate } = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/find.js')).href);
+  const gate = createTargetGate();
+  assert.equal(gate.set('We argue that'), null, 'not drawn yet: it waits');
+  gate.drawing();
+  assert.equal(gate.drawn(), 'We argue that', 'every page drawn: found now');
+  gate.drawing();
+  assert.equal(gate.drawn(), null, 'a zoom redraws: not found again');
+  assert.equal(gate.set('In Section 5 we'), 'In Section 5 we', 'a second link to the drawn paper: found at once');
+  assert.equal(gate.set(null), null, 'the Stage clears it once found');
+  assert.equal(gate.set('In Section 5 we'), 'In Section 5 we', 'the same link clicked again: found again');
+  gate.drawing();
+  assert.equal(gate.set('Mid-draw words'), null, 'given while drawing: waits for the end');
+  assert.equal(gate.drawn(), 'Mid-draw words');
+  assert.equal(createTargetGate().drawn(), null, 'no target: nothing to find');
+});
+
+test('sectionSpans: a link\'s section, one stretch a page, from the start words to just before the next section (@discover round 2)', async () => {
+  const { sectionSpans, SECTION_PAGES } = await load('find');
+  const start = { page: 2, from: 100, to: 140 };
+  assert.deepEqual(sectionSpans(start, [{ page: 2, from: 900 }]), [{ page: 2, from: 100, to: 900 }], 'on one page');
+  assert.deepEqual(sectionSpans(start, [{ page: 1, from: 50 }, { page: 2, from: 20 }, { page: 4, from: 300 }]), [{ page: 2, from: 100, to: null }, { page: 3, from: 0, to: null }, { page: 4, from: 0, to: 300 }], 'across three pages, from the first match after the start; the end words left out');
+  assert.equal(sectionSpans(start, []), null, 'to missing: the start words alone');
+  assert.equal(sectionSpans(start, [{ page: 1, from: 10 }, { page: 2, from: 120 }]), null, 'to only before the start (or inside it): missing too');
+  assert.equal(SECTION_PAGES, 6);
+  assert.equal(sectionSpans(start, [{ page: 2 + SECTION_PAGES + 1, from: 0 }]), null, 'more than six pages on: too far');
+  assert.equal(sectionSpans(start, [{ page: 2 + SECTION_PAGES, from: 40 }]).length, SECTION_PAGES + 1, 'six pages on is still a section');
+  assert.equal(sectionSpans(null, [{ page: 2, from: 900 }]), null, 'no start, no section');
+});
+
+test('the section is painted under find\'s colours and goes when find stops; it is never ink', async () => {
+  const { paintSection, clearFind, FIND, FIND_ACTIVE, SECTION } = await load('find');
+  class Fake { constructor(...ranges) { this.ranges = ranges; this.priority = 0; } }
+  const registry = new Map([[FIND, new Fake('a')], [FIND_ACTIVE, new Fake('b')]]);
+  paintSection(registry, ['r1', 'r2'], Fake);
+  assert.deepEqual([registry.get(SECTION).ranges, registry.get(SECTION).priority < 0], [['r1', 'r2'], true]);
+  paintSection(registry, [], Fake);
+  assert.equal(registry.has(SECTION), false, 'nothing to tint: none left over');
+  paintSection(registry, ['r1'], Fake);
+  clearFind(registry);
+  assert.deepEqual([...registry.keys()], [], 'cleared with find');
+  assert.doesNotThrow(() => { clearFind(null); paintSection(null, ['r'], Fake); }, 'no Highlight API: nothing painted, nothing thrown');
+});

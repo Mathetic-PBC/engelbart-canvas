@@ -3,7 +3,7 @@ import { api, errorMessage } from '../api.js';
 import Rail from '../workspace/Rail.jsx';
 import DocTabs from '../workspace/DocTabs.jsx';
 import NotePicker from '../workspace/NotePicker.jsx';
-import DocEditor, { BART_ITEM } from '../workspace/DocEditor.jsx';
+import DocEditor, { BART_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM } from '../workspace/DocEditor.jsx';
 import RightPane, { RIGHT_MODES } from '../workspace/RightPane.jsx';
 import { kindOf } from '../ui/Icons.jsx';
 import { hasTag, isNote } from '../model/kind.js';
@@ -105,7 +105,7 @@ function indexWorkspaces(roots) {
   return map;
 }
 
-export default function Workspace({ tree, library, initialWorkspaceId, initialTab, initialViews, initialStage, style, active, reload, onClose, onHome, onVisit, onOpenElsewhere, onError }) {
+export default function Workspace({ tree, library, initialWorkspaceId, initialTab, initialViews, initialStage, style, active, reload, onClose, onHome, onVisit, onError }) {
   const project = tree.project;
   const index = React.useMemo(() => indexWorkspaces(tree.workspaces), [tree.workspaces]);
   const notesById = React.useMemo(() => new Map(library.filter(isNote).map((row) => [row.id, row])), [library]);
@@ -277,7 +277,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // the documents from disk, so everything is saved first. Its answer replaces the pending line in whatever that document's
   // text is by then, open or not; Stop removes the line; progress (which model, what it is doing, the answer so far) shows on the pending row.
   // A follow-up also carries `turns`, the earlier turns of its exchange as the document holds them, and Regenerate may carry
-  // `choice`, a model and effort for that run alone.
+  // `choice`, a model and effort for that run alone. `agent` is 'brainstorm' for an @brainstorm line (2026-09-30), whose
+  // answer is a card the editor draws, and 'discover' for an @discover line (a card or a reading guide); everything else
+  // about the run is the same.
   const [asks, setAsks] = React.useState({});
   // What the @bart line's chip offers and what its flags are checked against. The files behind it are read again for every
   // question, so this is read again whenever the window comes back to the front, and once a question has been sent: one
@@ -308,7 +310,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     });
   }), []);
 
-  const askBart = React.useCallback(async ({ askId, text, turns, choice }) => {
+  const askBart = React.useCallback(async ({ askId, text, turns, choice, agent }) => {
     if (!docKey || !docRef || !topic) return;
     const key = docKey, ref = docRef;
     const place = (lines) => {
@@ -319,11 +321,11 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       all.splice(at, 1, ...lines);
       changeDoc(key, ref, all.join('\n'));
     };
-    setAsks((current) => ({ ...current, [askId]: { docKey: key } }));
+    setAsks((current) => ({ ...current, [askId]: { docKey: key, agent: agent || 'bart' } }));
     try {
       await new Promise((resolve) => { setTimeout(resolve, 0); }); // let the pending line reach `pending` before flushing it
       await Promise.all([...pending.current.keys()].map((held) => flush(held)));
-      const asked = api.askBart(project.id, { askId, ref, workspaceId: ref.kind === 'workspace' ? ref.workspaceId : topic.id, text, turns: turns || [], choice: choice || null });
+      const asked = api.askBart(project.id, { askId, ref, workspaceId: ref.kind === 'workspace' ? ref.workspaceId : topic.id, text, turns: turns || [], choice: choice || null, agent: agent || 'bart' });
       loadBartModels(); // main has kept a pick by hand before this is read
       const out = await asked;
       place(out.stopped ? [] : out.lines);
@@ -625,7 +627,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return out;
   }, [topic, here, byId, renaming, activeRowId, tree.notes, mentioned]);
 
-  const mentionable = React.useMemo(() => [BART_ITEM, ...library.filter((row) => row.type !== 'image').map(describe)], [library]);
+  const mentionable = React.useMemo(() => [BART_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, ...library.filter((row) => row.type !== 'image').map(describe)], [library]);
 
   // On the rail: what the search does not offer again, and what makes the Browser's Save read ✓.
   const railIds = React.useMemo(() => new Set(rows.filter((row) => row.type !== 'child' && row.type !== 'archive').map((row) => row.id)), [rows]);
@@ -741,12 +743,17 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     if (!active || !topic) return;
     if (nav.agents.some((agent) => agent.status === 'waiting' && agent.projectId === project.id && agent.workspaceId === topic.id)) api.seenAgents(project.id, topic.id).catch(() => {});
   }, [active, nav, topic && topic.id, project.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The next row and ⌘J go only to this project's workspaces (2026-10-01); state.json keeps the other projects' places, and
+  // their own windows show them. Filtered before nextPlace, which picks one: a pick from another project would empty the row.
+  const navHere = React.useMemo(() => ({
+    recent: nav.recent.filter((entry) => entry.projectId === project.id),
+    agents: nav.agents.filter((agent) => agent.projectId === project.id),
+  }), [nav, project.id]);
   const next = React.useMemo(() => {
-    const place = nextPlace({ here: topic ? { projectId: project.id, workspaceId: topic.id } : null, recent: nav.recent, agents: nav.agents });
-    if (!place || place.projectId !== project.id) return place;
-    const held = index.get(place.workspaceId);
-    return held ? { ...place, name: held.node.name } : null; // this project's names are the tree's, current after a rename
-  }, [nav, topic, project.id, index]);
+    const place = nextPlace({ here: topic ? { projectId: project.id, workspaceId: topic.id } : null, recent: navHere.recent, agents: navHere.agents });
+    const held = place && index.get(place.workspaceId);
+    return held ? { ...place, name: held.node.name } : null; // the names are the tree's, current after a rename
+  }, [navHere, topic, project.id, index]);
   // The @ menu: Bart, Task, Note, the open page, the project's other workspaces (written in last first), then the library
   // (model/rail.js).
   const mentionSpaces = React.useMemo(() => {
@@ -782,17 +789,12 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   }), [project.id]);
   // A click on a workspace's mention goes there (the one workspace in the strip changes; nothing opens beside it).
   const openMentionedWorkspace = (id) => { if (index.has(id)) selectTopic(id); };
-  // All of them, for the next row's hover list; this project's by the tree's names, gone ones left out.
-  const places = React.useMemo(() => placesToGo({ here: topic ? { projectId: project.id, workspaceId: topic.id } : null, recent: nav.recent, agents: nav.agents }).flatMap((place) => {
-    if (place.projectId !== project.id) return [place];
+  // All of them, for the next row's hover list: by the tree's names, gone ones left out.
+  const places = React.useMemo(() => placesToGo({ here: topic ? { projectId: project.id, workspaceId: topic.id } : null, recent: navHere.recent, agents: navHere.agents }).flatMap((place) => {
     const held = index.get(place.workspaceId);
     return held ? [{ ...place, name: held.node.name }] : [];
-  }), [nav, topic, project.id, index]);
-  const goTo = (place) => {
-    if (!place) return;
-    if (place.projectId === project.id) selectTopic(place.workspaceId);
-    else if (onOpenElsewhere) onOpenElsewhere(place.projectId, place.workspaceId);
-  };
+  }), [navHere, topic, project.id, index]);
+  const goTo = (place) => { if (place) selectTopic(place.workspaceId); };
   // ⌘J, wherever the keyboard is: the app's pages see it in the capture phase, before the editor or a terminal can; a
   // Browser page has the main process send it (src/main/browser/views.cjs).
   const goNext = React.useRef(null);
@@ -833,6 +835,36 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     } catch (error) {
       onError(error);
     }
+  };
+
+  // Delete, from the switcher (2026-09-30): the workspace and all nested in it go into the trash, restorable there for a
+  // week. When the one open here is among them, the one above it opens instead (else the one below, else its parent).
+  const deleteTopic = async (id) => {
+    const at = index.get(id);
+    if (!at) return;
+    try {
+      await Promise.all([...pending.current.keys()].map((key) => flush(key)));
+      await api.trashWorkspace(project.id, id);
+      let inside = false;
+      for (let up = here; up && !inside; up = up.parent ? index.get(up.parent.id) : null) inside = up.node.id === id;
+      if (inside) {
+        const level = at.parent ? at.parent.children : tree.workspaces;
+        const i = level.findIndex((candidate) => candidate.id === id);
+        const instead = level[i - 1] || level[i + 1] || at.parent;
+        if (instead) selectTopic(instead.id);
+        else { setTopicId(null); setTabs([WS_TAB]); setActiveTab('ws'); }
+      }
+      await reload();
+    } catch (error) {
+      onError(error);
+    }
+  };
+
+  // Restore, in the trash: the workspace back where it was, and open.
+  const restoreTopic = async (id) => {
+    await api.restoreWorkspace(project.id, id);
+    await reload();
+    selectTopic(id);
   };
 
   /* --------------------------------------------------------------- sidebar */
@@ -1081,10 +1113,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     <div data-screen-label="Workspace" style={style}>
       <header className="title-bar" style={{ display: 'flex', alignItems: 'stretch', minHeight: 54, background: '#fafafa', flex: 'none' }}>
         <div className="title-lead" style={{ flex: 'none', width: rail, boxSizing: 'border-box', borderBottom: '1px solid #eaeaea', display: 'flex', alignItems: 'center', gap: 8, padding: '0 16px', minWidth: 0, overflow: 'hidden' }}>
-          {/* All projects is a dot, not the word Engelbart (2026-09-29), so the trail has the room. */}
-          <button type="button" className="hov-crumb-home" onClick={onHome} title="All projects" aria-label="All projects" data-crumb-home="1" style={{ flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, margin: '0 -4px 0 -7px', padding: 0, border: 0, borderRadius: '50%', background: 'transparent', color: '#171717', cursor: 'pointer', transition: 'background 120ms' }}>
-            <span style={{ display: 'block', width: 6, height: 6, borderRadius: '50%', background: 'currentColor' }} />
-          </button>
+          <button type="button" className="hov-ink" onClick={onHome} title="All projects" aria-label="All projects" data-crumb-home="1" style={{ flex: 'none', padding: 0, border: 0, background: 'none', cursor: 'pointer', font: '500 16px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717', whiteSpace: 'nowrap' }}>Engelbart</button>
           <span style={{ flex: 'none', font: '15px/1 var(--font-sans)', color: '#c9c9c9' }}>/</span>
           <span title={project.directory || project.dir} style={{ flex: '0 4 auto', minWidth: 20, font: '400 14px/1.3 var(--font-sans)', color: '#4d4d4d', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{project.name}</span>
           {headWide && ancestors.map((ancestor, i) => (
@@ -1142,6 +1171,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onSelectTopic={selectTopic}
           onRenameTopic={renameTopic}
           onAddTopic={() => addTopic(false)}
+          onDeleteTopic={deleteTopic}
           rows={rows}
           flashId={flashId}
           onRowClick={onRowClick}
@@ -1159,7 +1189,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onOpenHeld={(projectId, workspaceId) => { if (projectId === project.id && workspaceId && index.has(workspaceId)) selectTopic(workspaceId); }}
           onTrashRow={trashRow}
           onRestoreArchive={(row) => restoreVersion(row.file)}
-          trashFull={!!(topic && topic.removed && topic.removed.length) || postItTrash > 0}
+          trashFull={!!(topic && topic.removed && topic.removed.length) || postItTrash > 0 || !!(tree.trash && tree.trash.length)}
+          workspaceTrash={{ rows: tree.trash || [], restore: restoreTopic }}
           postItTrash={active ? { count: postItTrash, load: () => api.postItsTrashed(project.id), restore: (id) => api.postItsRestore(project.id, id) } : null}
           postItDrag={postItDrag}
           trashRef={trashRef}

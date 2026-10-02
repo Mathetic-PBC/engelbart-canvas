@@ -75,8 +75,9 @@ function WsMark({ size, stroke = 1.3 }) {
 // search"), and moving off closes it unless its search holds text or the keyboard; a click opens it with the caret in
 // the search. The switcher: a search that finds any workspace of the project by name, the sibling workspaces (the current
 // one, bold, opens its own document), and "+ New". A
-// double-click on the name renames it.
-function WorkspaceHeader({ topics, topic, all, onOpenDoc, onSelectTopic, onRenameTopic, onAddTopic }) {
+// double-click on the name renames it. A row's can, on hover (2026-09-30), deletes that workspace: into the trash, with
+// what is nested in it.
+function WorkspaceHeader({ topics, topic, all, onOpenDoc, onSelectTopic, onRenameTopic, onAddTopic, onDeleteTopic }) {
   const [hover, setHover] = React.useState(false); // the switcher is open
   const [editing, setEditing] = React.useState(false);
   const [draft, setDraft] = React.useState('');
@@ -175,6 +176,20 @@ function WorkspaceHeader({ topics, topic, all, onOpenDoc, onSelectTopic, onRenam
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: `${on ? 600 : 400} 14px/1.5 var(--font-sans)`, color: isUntitled(candidate.name) ? '#8f8f8f' : '#171717' }}>{candidate.name}</span>
                   {above.length > 0 && <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '11.5px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{above.join(' / ')}</span>}
                 </span>
+                {onDeleteTopic && (
+                  <button
+                    type="button"
+                    className="rail-minus"
+                    data-delete-workspace={candidate.id}
+                    aria-label={`Delete ${candidate.name}`}
+                    title="Move to the trash"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={(event) => { event.stopPropagation(); onDeleteTopic(candidate.id); }}
+                    style={{ flex: 'none', display: 'flex', margin: '-2px -2px -2px 0', padding: 2, border: 0, background: 'transparent', cursor: 'pointer', color: '#8f8f8f' }}
+                  >
+                    {TRASH_MARK}
+                  </button>
+                )}
               </div>
             );
           })}
@@ -189,6 +204,13 @@ function WorkspaceHeader({ topics, topic, all, onOpenDoc, onSelectTopic, onRenam
     </div>
   );
 }
+
+// A switcher row's Delete (2026-09-30): a small can, drawn in the minus's line.
+const TRASH_MARK = (
+  <svg aria-hidden="true" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" style={{ flex: 'none', display: 'block' }}>
+    <path d="M2.5 4h11 M6.25 4V2.75a.75.75 0 0 1 .75-.75h2a.75.75 0 0 1 .75.75V4 M3.75 4l.7 9.1a1 1 0 0 0 1 .9h5.1a1 1 0 0 0 1-.9l.7-9.1 M6.75 6.75v4.5 M9.25 6.75v4.5" />
+  </svg>
+);
 
 // The minus on a row's right (2026-09-23, Hudson's flaticon "minus" 992683: a ring with a bar, the + row's mirror).
 const CIRCLE_MINUS = (
@@ -303,8 +325,8 @@ function RailRow({ row, flash, faded, onClick, onRenameStart, onRename, onRename
   );
 }
 
-// One of the sidebar's sections (Sidebar.dc.html): a quiet grey label whose › shows only while the pointer is on it and
-// turns down while the section is open; a click folds it. The first section carries "Collapse all" / "Expand all".
+// One of the sidebar's sections (Sidebar.dc.html): a quiet grey label led by a › that darkens while the pointer is on it
+// and turns down while the section is open; a click folds it. The first section carries "Collapse all" / "Expand all".
 function RailSection({ section, open, onToggle, all, children }) {
   const [hover, setHover] = React.useState(false);
   return (
@@ -319,8 +341,8 @@ function RailSection({ section, open, onToggle, all, children }) {
           aria-expanded={open}
           style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6, boxSizing: 'border-box', padding: '10px 10px 4px', border: 0, background: 'transparent', textAlign: 'left', cursor: 'pointer', color: '#8f8f8f', transition: 'color 120ms' }}
         >
+          <span aria-hidden="true" style={{ flex: 'none', width: 10, display: 'inline-flex', justifyContent: 'center', font: '400 12px/1 var(--font-sans)', opacity: hover ? 1 : 0.7, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 140ms, opacity 120ms' }}>›</span>
           <span style={{ font: '500 12.5px/1.3 var(--font-sans)' }}>{section.label}</span>
-          <span aria-hidden="true" style={{ flex: 'none', width: 10, display: 'inline-flex', justifyContent: 'center', font: '400 12px/1 var(--font-sans)', opacity: hover ? 1 : 0, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 140ms, opacity 120ms' }}>›</span>
         </button>
         {all && <button type="button" data-rail-fold-all="1" onClick={all.onClick} style={{ flex: 'none', margin: '10px 10px 4px 0', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', font: '400 11.5px/1.4 var(--font-sans)', color: '#171717' }}>{all.label}</button>}
       </div>
@@ -761,7 +783,7 @@ function NextRow({ next, places = [], projectId, onGo }) {
                 <PlaceMark why={place.why} ground="#fff" />
                 <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
                   <PlaceName place={place} projectId={projectId} size={13.5} />
-                  <span style={{ font: '11.5px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{place.why === 'agent' ? `${place.kind === 'build' ? 'Build finished a turn' : 'Bart answered'} ${when(place.at)}` : `Edited ${when(place.at)}`}</span>
+                  <span style={{ font: '11.5px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{place.why === 'agent' ? `${place.kind === 'build' ? 'Build finished a turn' : place.kind === 'brainstorm' ? 'Brainstorm asked' : place.kind === 'discover' ? 'Discover found reading' : 'Bart answered'} ${when(place.at)}` : `Edited ${when(place.at)}`}</span>
                 </span>
                 {place.next && <span style={{ flex: 'none', font: '11.5px/1 var(--font-sans)', color: '#8f8f8f' }}>⌘J</span>}
               </button>
@@ -818,13 +840,15 @@ function StickiesToggle({ hidden, onToggle }) {
 
 /** The two pictures at the bottom left, the trash and the sticky beside it (2026-09-23): they size with the sidebar
  *  (52–96px) and name themselves on hover; the stickies' show/hide switch follows them. */
-function BottomBar({ trashRef, full, dragging, over, onTrashDragOver, onTrashDragEnter, onTrashDragLeave, onTrashDrop, postItTrash, onPostIt, postItsHidden, onTogglePostIts }) {
+function BottomBar({ trashRef, full, dragging, over, onTrashDragOver, onTrashDragEnter, onTrashDragLeave, onTrashDrop, postItTrash, workspaceTrash, onPostIt, postItsHidden, onTogglePostIts }) {
   const [tip, setTip] = React.useState(null);
   const [opened, setOpened] = React.useState(null); // the trash panel's anchor (the can's rect) while it is open
   const off = () => setTip(null);
   const closeTrash = React.useCallback(() => setOpened(null), []);
+  const openable = !!postItTrash || !!(workspaceTrash && workspaceTrash.rows.length);
+  React.useEffect(() => { if (!openable) setOpened(null); }, [openable]);
   const toggleTrash = (event) => {
-    if (!postItTrash) return;
+    if (!openable) return;
     const r = event.currentTarget.getBoundingClientRect();
     setTip(null);
     setOpened((now) => (now ? null : { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height }));
@@ -839,7 +863,7 @@ function BottomBar({ trashRef, full, dragging, over, onTrashDragOver, onTrashDra
             data-trash-over={over ? '1' : '0'}
             aria-label="Trash"
             role="button"
-            tabIndex={postItTrash ? 0 : -1}
+            tabIndex={openable ? 0 : -1}
             aria-expanded={!!opened}
             onClick={toggleTrash}
             onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleTrash(event); } }}
@@ -851,12 +875,12 @@ function BottomBar({ trashRef, full, dragging, over, onTrashDragOver, onTrashDra
             onDrop={onTrashDrop}
             // Something held over it (a row, or a post-it crumpling into it): the can grows, darkens its ground and shows
             // itself full, so letting go visibly lands (2026-09-22). No ring around it, drawn or focus (2026-09-23).
-            style={{ ...barButton(!!postItTrash), outline: 'none', transition: 'transform 120ms, opacity 120ms, background 120ms', transform: over ? 'scale(1.22)' : 'none', opacity: dragging || over || opened ? 1 : 0.7, background: over ? '#e8e8e8' : opened ? '#f2f2f2' : 'transparent' }}
+            style={{ ...barButton(openable), outline: 'none', transition: 'transform 120ms, opacity 120ms, background 120ms', transform: over ? 'scale(1.22)' : 'none', opacity: dragging || over || opened ? 1 : 0.7, background: over ? '#e8e8e8' : opened ? '#f2f2f2' : 'transparent' }}
           >
             <img src={full || over ? trashFullPng : trashPng} alt="" draggable={false} style={{ ...barPicture, width: '90%', height: '90%' }} />
           </div>
           {tip === 'trash' && !dragging && !opened && <BarTip text="Trash" align="flex-start" />}
-          {opened && postItTrash && <TrashPanel anchor={opened} trash={postItTrash} onClose={closeTrash} />}
+          {opened && openable && <TrashPanel anchor={opened} trash={postItTrash} workspaces={workspaceTrash} onClose={closeTrash} />}
         </div>
         <div style={{ position: 'relative', display: 'flex' }}>
           <button type="button" className="bar-press" data-add-post-it="1" aria-label="New sticky" disabled={!onPostIt} onClick={onPostIt || undefined} onMouseEnter={() => setTip('note')} onMouseLeave={off} style={barButton(!!onPostIt)}>
@@ -871,10 +895,10 @@ function BottomBar({ trashRef, full, dragging, over, onTrashDragOver, onTrashDra
 }
 
 export default function Rail({
-  width, topics, topic, allWorkspaces, onOpenDoc, onSelectTopic, onRenameTopic, onAddTopic,
+  width, topics, topic, allWorkspaces, onOpenDoc, onSelectTopic, onRenameTopic, onAddTopic, onDeleteTopic,
   rows, flashId, onRowClick, onRowRenameStart, onRowRename, onRowRenameEnd,
   library, inRail, onSearchPick, onAddInput, onPickDisk, onNewNote, onNewChild, onPickRepo, onOpenHeld,
-  onTrashRow, onRestoreArchive, trashFull, postItTrash, postItDrag, trashRef,
+  onTrashRow, onRestoreArchive, trashFull, postItTrash, workspaceTrash, postItDrag, trashRef,
   next, places, projectId, onGoNext,
   onPostIt, postItsHidden, onTogglePostIts,
 }) {
@@ -951,7 +975,7 @@ export default function Rail({
   return (
     <aside aria-label="Sidebar" style={{ flex: 'none', width, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 7, background: '#fafafa' }}>
       <div onScroll={() => { hold(); setPeek(null); }} style={{ flex: 1, minHeight: 0, boxSizing: 'border-box', padding: '16px 8px 8px', display: 'flex', flexDirection: 'column', overflowY: 'auto', overflowX: 'hidden' }}>
-        <WorkspaceHeader topics={topics} topic={topic} all={allWorkspaces} onOpenDoc={onOpenDoc} onSelectTopic={onSelectTopic} onRenameTopic={onRenameTopic} onAddTopic={onAddTopic} />
+        <WorkspaceHeader topics={topics} topic={topic} all={allWorkspaces} onOpenDoc={onOpenDoc} onSelectTopic={onSelectTopic} onRenameTopic={onRenameTopic} onAddTopic={onAddTopic} onDeleteTopic={onDeleteTopic} />
         {topic && (
           <div data-screen-label="Library" data-rail-library="1" style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 2 }}>
             <LibrarySearch library={library} inRail={inRail} onPick={onSearchPick} previews={previews} onPreview={preview} onOpenHeld={onOpenHeld} onOpenChange={setSearchOpen} shut={menus.add} />
@@ -998,6 +1022,7 @@ export default function Rail({
         onTrashDragLeave={trashDragLeave}
         onTrashDrop={trashDrop}
         postItTrash={postItTrash}
+        workspaceTrash={workspaceTrash}
         onPostIt={onPostIt}
         postItsHidden={postItsHidden}
         onTogglePostIts={onTogglePostIts}

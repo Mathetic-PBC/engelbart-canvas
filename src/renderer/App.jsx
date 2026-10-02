@@ -299,7 +299,6 @@ export default function App() {
           onClose={goHome}
           onHome={goHome}
           onVisit={onVisit}
-          onOpenElsewhere={(projectId, workspaceId) => openProject(projectId, { workspaceId }).catch(fail)}
           onError={fail}
         />
       )}

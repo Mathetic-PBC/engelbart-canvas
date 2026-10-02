@@ -1,5 +1,5 @@
 import React from 'react';
-import { parseLines, inlineHtml } from '../model/doc.js';
+import { parseLines, inlineHtml, agentOf } from '../model/doc.js';
 
 // What a hidden line is: nothing to read in a preview.
 const hidden = (p) => p.type === 'pending' || p.type === 'img' || p.type === 'fence' || p.code === 'open' || p.code === 'close' || (p.type === 'p' && !p.text.trim());
@@ -30,7 +30,7 @@ export default function DocPreview({ text, maxLines, tail, size = 10.5 }) {
         if (p.code === 'body') return <div key={index} style={{ paddingLeft: '0.7em', borderLeft: '2px solid #eaeaea', font: '0.92em/1.5 var(--font-mono)', color: '#4d4d4d', whiteSpace: 'pre-wrap' }}>{p.text || '\u00a0'}</div>;
         if (p.type === 'code') return <div key={index} style={{ padding: '0 0.6em', background: '#fafafa', font: '0.92em/1.5 var(--font-mono)', whiteSpace: 'pre-wrap' }}>{line || '\u00a0'}</div>;
         if (p.type === 'p' && !p.text.trim()) return <div key={index} style={{ height: '0.6em' }} />;
-        const html = { __html: inlineHtml(p.type === 'bart' ? `@bart ${p.text}` : p.text || '') };
+        const html = { __html: inlineHtml(p.type === 'bart' ? `@${agentOf(p)} ${p.text}` : p.text || '') };
         if (p.type === 'h') return <div key={index} style={{ margin: '0.35em 0 0.15em', fontWeight: 600 }} dangerouslySetInnerHTML={html} />;
         if (p.type === 'todo' || p.type === 'list') {
           const done = p.type === 'todo' && p.done;

@@ -9,9 +9,15 @@
 // pane, and every zoom is that width times the percentage, so a resized pane keeps its zoom and
 // redraws. Pages are centered with no gutter of their own; a floating bar at the bottom shows the
 // page and zoom; a pinch (or ⌃ scroll) zooms around the pointer.
+// `target` (2026-09-30): a passage a link asked for. Once every page is drawn it is found from page 1, scrolled to and
+// painted as find's match in front, and told through onFind and onTarget(text, result); once per target, until the
+// prop is cleared and given again. Nothing matching leaves the scroll where it is. `targetTo` (@discover round 2): the
+// first words of the section after it; the stretch from the passage to just before them, up to six pages on, is tinted
+// (SECTION) until find stops. Never ink.
 import React from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import rough from 'roughjs';
+import { nextFind, createTargetGate, sectionSpans, paintSection, clearFind, FIND, FIND_ACTIVE, SECTION } from '../model/find.js';
 
 // pdf.js 6: a document is torn down through its loading task (PDFDocumentProxy has no destroy()).
 const destroyDoc = (doc) => { try { const task = doc && doc.loadingTask; if (task && typeof task.destroy === 'function') task.destroy().catch(() => {}); } catch { /* already gone */ } };
@@ -61,6 +67,7 @@ const LAYER_CSS = `
 [data-pdf] .pdf-text .markedContent{display:contents}
 [data-pdf] .pdf-text .endOfContent{display:none}
 [data-pdf] .pdf-text span[role="img"]{user-select:none;cursor:default}
+::highlight(pdf-section){background-color:rgba(255,196,0,.13)}
 ::highlight(pdf-find){background-color:rgba(255,196,0,.35)}
 ::highlight(pdf-find-active){background-color:rgba(255,140,0,.6)}
 `;
@@ -74,9 +81,10 @@ const BAR_PCT = { flex: 'none', minWidth: 48, height: 26, padding: '0 6px', bord
 // the CSS Custom Highlight API, so the page's DOM is never touched. Space in the query matches any
 // run of space, or none (pdf.js splits lines and words into separate spans), and a word may be
 // broken by a hyphen at the end of a line ("construc-" / "tion"; a line break is \n here).
-const FIND = 'pdf-find', FIND_ACTIVE = 'pdf-find-active';
 const escapeChar = (c) => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const findPattern = (query) => new RegExp(query.trim().split(/\s+/).map((word) => [...word].map(escapeChar).join('(?:-\\n)?')).join('\\s*'), 'gi');
+// A link's target as the gate holds it: the passage, and the start of the section after it when there is one.
+const targetKey = (find, to) => (find ? (to ? `${find}\n${to}` : find) : '');
 const highlights = () => (typeof CSS !== 'undefined' && CSS.highlights && typeof Highlight === 'function' ? CSS.highlights : null);
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
@@ -130,6 +138,10 @@ export default class PaperView extends React.Component {
     this.findQuery = '';
     this.findAt = -1;
     this.findRanges = [];
+    this.findSpots = []; // where each of findRanges is: { page, from, to } in its page's text
+    this.section = null; // { text, to }: a link's section, while find shows its passage
+    this.gate = createTargetGate();
+    this.gate.set(targetKey(props.target, props.targetTo));
   }
 
   // Zoom and layout state, dropped whenever a new document opens (which opens at 100%).
@@ -159,6 +171,10 @@ export default class PaperView extends React.Component {
   }
 
   componentDidUpdate(prev) {
+    if (prev.target !== this.props.target || prev.targetTo !== this.props.targetTo) {
+      const text = this.gate.set(targetKey(this.props.target, this.props.targetTo));
+      if (text) this.applyTarget(text);
+    }
     if (prev.bytes !== this.props.bytes) {
       this.flushSave(prev.onMarksChange);
       this.marks = clone(this.props.marks || {});
@@ -230,6 +246,7 @@ export default class PaperView extends React.Component {
     if (host) host.replaceChildren();
     this.resetGeometry();
     this.pdfW = null;
+    this.gate.drawing();
     const data = toBytes(this.props.bytes);
     if (!data) { this.setState({ note: 'No paper to open.', page: 0, pages: 0 }); return; }
     this.setState({ note: 'Opening the paper…', page: 0, pages: 0, pct: 100 });
@@ -386,6 +403,7 @@ export default class PaperView extends React.Component {
     const host = this.host.current, doc = this.doc;
     if (!host || !doc || host.clientWidth < 40) return;
     this.cancelLayout();
+    this.gate.drawing();
     const gen = this.layoutGen;
     try {
       for (let n = 1; n <= doc.numPages; n += 1) {
@@ -499,6 +517,9 @@ export default class PaperView extends React.Component {
         if ((this.marks[n] || []).some((m) => m.pos && m.note != null)) this.renderMarks(n);
       }
       if (this.findQuery) this.report(this.find(this.findQuery, 0, { scroll: false }));
+      if (this.section) this.paintSection(); // the text layer was drawn again: the section's ranges are new too
+      const text = this.gate.drawn();
+      if (text) this.applyTarget(text);
     } catch (err) {
       if (gen === this.layoutGen) this.setState({ note: 'Could not draw the paper — ' + ((err && err.message) || err) });
     }
@@ -519,39 +540,67 @@ export default class PaperView extends React.Component {
 
   /* ---------------------------------------------------------------- find */
   /** `step` 0: a new query starts at the first match in view or below (the same query keeps its place);
-   *  1 / -1: the next / previous match, wrapping. '' stops. Answers { matches, active } (active from 1). */
-  find(query, step = 0, { scroll = true } = {}) {
+   *  1 / -1: the next / previous match, wrapping. '' stops. `fromStart`: counted from page 1 (a link's passage).
+   *  Answers { matches, active } (active from 1). Where it lands: ../model/find.js nextFind. */
+  find(query, step = 0, { scroll = true, fromStart = false } = {}) {
     const text = String(query || '');
     if (!text.trim()) { this.stopFind(); return { matches: 0, active: 0 }; }
     const fresh = text !== this.findQuery;
+    if (fresh && this.section) { this.section = null; const h = highlights(); if (h) h.delete(SECTION); }
     this.findQuery = text;
-    this.findRanges = this.matchRanges(text);
-    const n = this.findRanges.length;
-    if (!n) this.findAt = -1;
-    else if (fresh || this.findAt < 0) this.findAt = step < 0 ? n - 1 : this.firstInView();
-    else if (step) this.findAt = (this.findAt + step + n) % n;
-    else this.findAt = Math.min(this.findAt, n - 1); // re-laid-out: same place, as near as the count allows
-    this.paintFind(scroll && (fresh || step !== 0));
-    return { matches: n, active: this.findAt + 1 };
+    const pages = this.pageTexts();
+    this.findSpots = this.matchSpots(text, pages);
+    this.findRanges = [];
+    const spots = [];
+    for (const spot of this.findSpots) {
+      const range = this.rangeIn(pages, spot.page, spot.from, spot.to);
+      if (range) { this.findRanges.push(range); spots.push(spot); }
+    }
+    this.findSpots = spots;
+    const plan = nextFind({ fresh, step, count: this.findRanges.length, at: this.findAt, fromStart, firstInView: () => this.firstInView() });
+    this.findAt = plan.at;
+    this.paintFind(scroll && plan.scroll);
+    return { matches: this.findRanges.length, active: this.findAt + 1 };
+  }
+
+  // A link's passage, every page drawn: found from page 1 and scrolled to (`target`), and its section tinted (`targetTo`).
+  applyTarget(key) {
+    const [text, to = ''] = String(key).split('\n');
+    const result = this.find(text, 0, { scroll: true, fromStart: true });
+    this.section = to && result.matches ? { text, to } : null;
+    if (this.section) this.paintSection();
+    this.report(result);
+    if (typeof this.props.onTarget === 'function') this.props.onTarget(text, result);
+  }
+
+  // The section from the passage (the first match from page 1) to just before the first match of `to` after it, one range
+  // a page (../model/find.js sectionSpans). `to` nowhere after it, or too far on: nothing is tinted, the passage shows alone.
+  paintSection() {
+    const h = highlights();
+    if (!h) return;
+    const s = this.section, start = s && this.findQuery === s.text ? this.findSpots[0] : null;
+    const pages = start ? this.pageTexts() : [];
+    const spans = start ? sectionSpans(start, this.matchSpots(s.to, pages)) : null;
+    paintSection(h, spans ? spans.map((span) => this.rangeIn(pages, span.page, span.from, span.to)).filter(Boolean) : [], Highlight);
   }
 
   stopFind() {
     this.findQuery = '';
     this.findAt = -1;
     this.findRanges = [];
-    const h = highlights();
-    if (h) { h.delete(FIND); h.delete(FIND_ACTIVE); }
+    this.findSpots = [];
+    this.section = null;
+    clearFind(highlights());
   }
 
   report(result) { if (typeof this.props.onFind === 'function') this.props.onFind(result); }
 
-  matchRanges(query) {
+  // Each page's text layer as one string (a line break is \n) → [{ page, layer, joined, locate }]; `locate(index, end)`
+  // is the text node and offset at that index (`end`: the end of a stretch, so a node starting there is not it).
+  pageTexts() {
     const host = this.host.current;
     if (!host) return [];
-    const pattern = findPattern(query);
-    const ranges = [];
-    for (const layer of host.querySelectorAll('[data-text-layer]')) {
-      // The page's text as one string (a line break is \n), and where each text node starts in it.
+    return [...host.querySelectorAll('[data-text-layer]')].map((layer) => {
       const nodes = [];
       let joined = '';
       const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
@@ -566,18 +615,34 @@ export default class PaperView extends React.Component {
         }
         return null;
       };
+      return { page: Number(layer.dataset.textLayer), layer, joined, locate };
+    });
+  }
+
+  // Where a query matches, page by page in order → [{ page, from, to }].
+  matchSpots(query, pages = this.pageTexts()) {
+    const pattern = findPattern(query);
+    const spots = [];
+    for (const { page, joined } of pages) {
       pattern.lastIndex = 0;
       for (let m = pattern.exec(joined); m; m = pattern.exec(joined)) {
         if (!m[0]) { pattern.lastIndex += 1; continue; }
-        const a = locate(m.index, false), b = locate(m.index + m[0].length, true);
-        if (!a || !b) continue;
-        const range = document.createRange();
-        range.setStart(a.node, a.offset);
-        range.setEnd(b.node, b.offset);
-        ranges.push(range);
+        spots.push({ page, from: m.index, to: m.index + m[0].length });
       }
     }
-    return ranges;
+    return spots;
+  }
+
+  // A Range over one page's text, from `from` to `to` (null: to the end of the page); null when there is nothing there.
+  rangeIn(pages, page, from, to) {
+    const at = pages.find((p) => p.page === page);
+    if (!at) return null;
+    const a = at.locate(from, false), b = to == null ? null : at.locate(to, true);
+    if (!a || (to != null && !b)) return null;
+    const range = document.createRange();
+    range.setStart(a.node, a.offset);
+    if (b) range.setEnd(b.node, b.offset); else range.setEnd(at.layer, at.layer.childNodes.length);
+    return range.collapsed ? null : range;
   }
 
   firstInView() {

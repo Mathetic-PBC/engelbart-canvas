@@ -77,12 +77,11 @@ textarea::placeholder,input::placeholder{color:#8f8f8f;font-style:italic}
 .hov-x:hover{background:#e3e3e3!important;color:#171717!important}
 ::highlight(stage-find){background-color:rgba(0,112,243,.16);color:inherit}
 ::highlight(stage-find-cur){background-color:rgba(0,112,243,.4);color:inherit}
-/* A rail row's minus (2026-09-23): only while the pointer is on the row; red-free, it darkens on its own hover. */
+/* A rail row's minus (2026-09-23), and a switcher row's Delete (2026-09-30): only while the pointer is on the row;
+   red-free, it darkens on its own hover. */
 .rail-minus{opacity:0;transition:opacity 120ms,color 120ms}
-[data-rail-row]:hover .rail-minus,.rail-minus:focus-visible{opacity:1}
+[data-rail-row]:hover .rail-minus,[data-workspace-item]:hover .rail-minus,.rail-minus:focus-visible{opacity:1}
 .rail-minus:hover{color:#171717!important}
-/* The breadcrumb's first place, All projects, is a dot (2026-09-29); hovered, a grey ring of wash around it. */
-.hov-crumb-home:hover{background:#eaeaea!important}
 /* Stickies shown / hidden (2026-09-29): a switch and its words on a grey pill beside the sticky; in a narrow sidebar the
    words go and the switch stays. */
 .stickies-toggle{transition:background 120ms}

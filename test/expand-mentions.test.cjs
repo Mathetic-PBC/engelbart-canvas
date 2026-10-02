@@ -107,6 +107,20 @@ test('a mention inside code stays text, @bart is not a file, and a mention with 
   assert.equal(result.missing, 1);
 });
 
+test('@brainstorm is a question too, and a card\'s JSON is copied as it stands (2026-09-30)', async () => {
+  const source = sourceOf([note('Plan', 'p')]);
+  const doc = ['@brainstorm about @[Plan]', 'bart> ```json', 'bart> {"card": "focus"}', 'bart> ```', '@brainstorm picked "Plan"'].join('\n');
+  const result = await expand(doc, source);
+  assert.equal(result.text, ['@brainstorm about @[Plan]', '', '<file name="Plan" type="md" tags="note" path="/p/Plan.md">', 'p', '</file>', '', 'bart> ```json', 'bart> {"card": "focus"}', 'bart> ```', '@brainstorm picked "Plan"'].join('\n'));
+  assert.deepEqual('@Brainstorm `@bart` x'.split(INLINE).filter(Boolean), ['@Brainstorm', ' ', '`@bart`', ' x']);
+});
+
+test('@discover is a question too (2026-09-30)', async () => {
+  const doc = '@discover about @[Plan]';
+  const result = await expand(doc, sourceOf([note('Plan', 'p')]));
+  assert.equal(result.text, ['@discover about @[Plan]', '', '<file name="Plan" type="md" tags="note" path="/p/Plan.md">', 'p', '</file>'].join('\n'));
+});
+
 test('a note whose file cannot be read is missing, not empty', async () => {
   const result = await expand('@[Lost]', sourceOf([{ id: 'x', name: 'Lost', type: 'md', tags: ['note'], path: '/p/Lost.md' }]));
   assert.equal(result.text, '@[Lost]\n\n<file name="Lost" type="md" tags="note" path="/p/Lost.md" missing="true" />');

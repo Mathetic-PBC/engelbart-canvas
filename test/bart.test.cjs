@@ -13,7 +13,7 @@ const { DEFAULT_MODELS, PAST_DEFAULT_MODELS, MODELS_FILE, normalizeModels, onlyP
 const { CHOICES_FILE, readChoices, rememberChoice } = require('../src/main/bart/choices.cjs');
 const { climb, levelBlock, createBart, createFakeBart, createThreads, threadKey, cleanTurns, THREAD_IDLE_MS } = require('../src/main/bart/ask.cjs');
 const { PENDING_RE, replyLines, answerText, failureLines, attribution } = require('../src/main/bart/reply.cjs');
-const { buildContext, markPlace, conversationBlock, HERE } = require('../src/main/bart/context.cjs');
+const { buildContext, markPlace, conversationBlock, catalogEntries, HERE } = require('../src/main/bart/context.cjs');
 const { BART_SYSTEM_PROMPT } = require('../src/main/bart/system-prompt.cjs');
 
 const DEFAULTS = normalizeModels(null);
@@ -590,4 +590,641 @@ test('what can be resumed outlives the app, and another workspace open in betwee
   assert.equal(createThreads({ file }).size(), 0);
   // No renderer call can let a session go any more: leaving a workspace is not the end of a conversation.
   assert.ok(!/forget/.test(fs.readFileSync(path.join(__dirname, '../src/preload.cjs'), 'utf8')) && !/forget/.test(fs.readFileSync(path.join(__dirname, '../src/renderer/screens/Workspace.jsx'), 'utf8')));
+});
+
+/* ------------------------------------------------------------- @brainstorm (2026-09-30) */
+
+const card = require('../src/main/bart/card.cjs');
+const { BRAINSTORM_SYSTEM_PROMPT } = require('../src/main/bart/brainstorm-system-prompt.cjs');
+const { readBrainstorm, DEFAULT_BRAINSTORM } = require('../src/main/bart/models.cjs');
+const { loadSystemPrompt, BRAINSTORM_IDLE_MS } = require('../src/main/bart/ask.cjs');
+
+const FOCUS = { say: '', card: 'focus', focus: { title: 'Which one?', options: [{ label: 'Retries', why: 'In notes.md.' }, { label: 'The "slow" path' }] }, ready: false };
+const PICK = { say: 'Good.', card: 'questions', questions: { eyebrow: 'aim', items: [{ id: 'aim', type: 'select_all', title: 'What would you do?', options: ['Change it', 'Measure it', 'Change it'] }] }, ready: false };
+
+test('a card is read from what the model wrote, cleaned, or not at all', () => {
+  const focus = card.readCard(JSON.stringify(FOCUS));
+  assert.deepEqual(focus.focus.options, [{ label: 'Retries', why: 'In notes.md.' }, { label: 'The \'slow\' path' }], 'a label never holds a double quote: answers quote labels');
+  assert.deepEqual(card.readCard(`\`\`\`json\n${JSON.stringify(FOCUS)}\n\`\`\``), focus, 'in a fence');
+  assert.deepEqual(card.readCard(`Here you go: ${JSON.stringify(FOCUS)} Thanks.`), focus, 'with words around it');
+  assert.deepEqual(card.readCard(JSON.stringify(PICK)).questions.items[0].options, [{ label: 'Change it' }, { label: 'Measure it' }], 'options as strings, the same one once');
+  const two = { ...PICK, questions: { items: [{ id: 'a', type: 'free', title: 'First?', placeholder: 'x', options: [{ label: 'no' }] }, { id: 'b', type: 'open', title: 'Second?' }] } };
+  assert.deepEqual(card.readCard(JSON.stringify(two)).questions, { items: [{ id: 'a', type: 'free', title: 'First?', placeholder: 'x' }] }, 'one question per card; free takes no options');
+  assert.deepEqual(card.readCard('{"say": "Interest: retries\\nAim: measure\\nQuestion: why they loop", "card": "none", "ready": true}'), { say: 'Interest: retries\nAim: measure\nQuestion: why they loop', card: 'none', ready: true });
+  assert.equal(card.readCard({ ...FOCUS, ready: true, say: 'Enough.' }).card, 'none', 'ready ends it whatever card it names');
+  for (const broken of ['not json', '{"say": "cut', JSON.stringify({ card: 'focus', focus: { options: [{ label: 'one' }] } }), JSON.stringify({ card: 'questions', questions: { items: [{ type: 'essay', title: 'x' }] } }), JSON.stringify({ card: 'none', ready: true }), '[1, 2]']) {
+    assert.equal(card.readCard(broken), null, broken);
+  }
+});
+
+test('a card is kept as a fenced JSON block of answer lines, a recap as its words, anything else as it came; the editor reads the block back', async () => {
+  const kept = card.cardBody(JSON.stringify(FOCUS));
+  assert.equal(kept.body, `\`\`\`json\n${JSON.stringify(card.readCard(JSON.stringify(FOCUS)), null, 2)}\n\`\`\``);
+  const lines = replyLines(kept.body, { level: { name: 'Sonnet', effort: 'high' }, trail: [], ms: 3000 });
+  assert.deepEqual([lines[0], lines[1], lines[lines.length - 2], lines[lines.length - 1]], ['bart> ```json', 'bart> {', 'bart>', 'bart> *Sonnet · high · 3 s*']);
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
+  const doc = ['@brainstorm', ...lines];
+  const [thread] = model.threads(doc);
+  const answer = model.turnText(doc, thread.turns[0]).answer;
+  assert.equal(answer, answerText(kept.body), 'what the session is kept under is what the document reads back');
+  assert.deepEqual(card.cardOfAnswer(answer), card.readCard(JSON.stringify(FOCUS)));
+  assert.equal(card.cardBody('{"say": "Interest: a\\nAim: b\\nQuestion: c", "card": "none", "ready": true}').body, 'Interest: a\nAim: b\nQuestion: c');
+  assert.equal(card.cardBody('Sorry, I got confused.').body, 'Sorry, I got confused.', 'malformed: plain answer lines, never an empty card');
+  assert.equal(card.cardOfAnswer('Sorry, I got confused.'), null);
+  assert.equal(card.cardOfAnswer('```json\n{"say": "a", "card": "none", "ready": true}\n```'), null, 'a recap asks nothing: it is not drawn as a card');
+  assert.equal(card.cardOfAnswer('```json\n{ "card": "focus", "focus": { "title": "Edited?", "options": [{ "label": "a" }, { "label": "b" }] } }\n```').focus.title, 'Edited?', 'a card edited in the file is the card it now says');
+});
+
+test('on a choice card the field under the options is a note to a pick, or the answer itself in the person\'s own words (2026-09-30)', () => {
+  const options = [{ label: 'Retries' }, { label: 'Timeouts' }];
+  const cards = {
+    mcq: card.readCard({ card: 'questions', questions: { items: [{ id: 'm', type: 'mcq', title: 'Which?', options }] } }),
+    select_all: card.readCard({ card: 'questions', questions: { items: [{ id: 's', type: 'select_all', title: 'Which ones?', options }] } }),
+    focus: card.readCard({ card: 'focus', focus: { title: 'Where?', options } }),
+  };
+  for (const [type, c] of Object.entries(cards)) {
+    assert.equal(card.answerLine(c, { picks: ['Retries'] }), 'picked "Retries"', `${type}: a pick`);
+    assert.equal(card.answerLine(c, { picks: ['Retries'], note: ' and the  backoff ' }), 'picked "Retries"; note: and the backoff', `${type}: a pick and a note`);
+    const own = card.answerLine(c, { note: '  choosing among my research   threads ' });
+    assert.equal(own, 'choosing among my research threads', `${type}: words alone are the answer, as written`);
+    assert.deepEqual(card.readAnswer(own, c), { skipped: false, picks: [], text: 'choosing among my research threads', note: '' }, `${type}: read back as their words`);
+    assert.equal(card.answerLine(c, {}), card.SKIPPED, `${type}: nothing`);
+    assert.equal(card.answerLine(c, { note: '   ' }), card.SKIPPED, `${type}: blank words are nothing`);
+  }
+});
+
+test('an answer is written as picked "label", read back against its card, and counted until the recap', () => {
+  const focus = card.readCard(JSON.stringify(FOCUS)), pick = card.readCard(JSON.stringify(PICK));
+  const free = card.readCard(JSON.stringify({ card: 'questions', questions: { items: [{ id: 'q', type: 'open', title: 'What?' }] } }));
+  assert.equal(card.answerLine(focus, { picks: ['Retries'] }), 'picked "Retries"');
+  assert.equal(card.answerLine(pick, { picks: ['Change it', 'Measure it'], note: '  on the  harness ' }), 'picked "Change it", "Measure it"; note: on the harness');
+  assert.equal(card.answerLine(free, { text: 'why they\nloop' }), 'why they loop');
+  assert.equal(card.answerLine(focus, { picks: ['Not offered'] }), '(skipped)', 'nothing it offered: nothing picked');
+  assert.equal(card.answerLine(free, {}), card.SKIPPED);
+  assert.deepEqual(card.readAnswer('picked "Change it", "Measure it"; note: on the harness', pick), { skipped: false, picks: ['Change it', 'Measure it'], text: '', note: 'on the harness' });
+  assert.deepEqual(card.readAnswer('retries', focus), { skipped: false, picks: ['Retries'], text: '', note: '' }, 'a label typed by hand is that pick');
+  assert.deepEqual(card.readAnswer('something of my own', focus), { skipped: false, picks: [], text: 'something of my own', note: '' });
+  assert.equal(card.readAnswer('(skipped)', focus).skipped, true);
+  const fenced = card.cardBody(JSON.stringify(FOCUS)).body;
+  const turns = [{ question: '', answer: fenced }, { question: 'picked "Retries"', answer: fenced }, { question: '(skipped)', answer: fenced }];
+  assert.equal(card.answersSoFar([], ''), 0, 'the opening answers nothing');
+  assert.equal(card.answersSoFar(turns, '--opus picked "Retries"'), 2, 'Skip is not an answer; flags are not part of one');
+  assert.equal(card.answersSoFar([...turns, { question: 'x', answer: 'Interest: a\nAim: b\nQuestion: c' }, { question: '', answer: fenced }], 'y'), 1, 'counted again from the last recap');
+});
+
+const MAP = {
+  settled: [{ text: 'Why runs retry', from: '"retries come from the lock" (workspace)' }],
+  open: [{ text: 'Whether the backoff loops', from: 'mentioned: Retry notes' }, { text: 'What counts as done', from: '@bart what is done?' }],
+  untouched: [],
+};
+const MAPPED = { say: '', card: 'focus', map: MAP, focus: { title: 'Which of these is least clear to you right now?', options: [{ label: 'Whether the backoff loops' }, { label: 'What counts as done' }] }, ready: false };
+
+test('a map card: kept cleaned, bounded, and dropped alone when it is not a map (2026-09-30)', () => {
+  assert.deepEqual(card.readCard(JSON.stringify(MAPPED)), MAPPED, 'a good map is kept as it came');
+  const long = 'x'.repeat(500);
+  const big = card.readCard({ ...MAPPED, map: { settled: Array.from({ length: 7 }, (_, n) => ({ text: `${n} ${long}`, from: long })), open: ['a line as a string'], untouched: [{ text: '  spaced   out  ' }] } });
+  assert.equal(big.map.settled.length, 4, 'at most four per group');
+  assert.deepEqual([big.map.settled[0].text.length, big.map.settled[0].from.length], [200, 160]);
+  assert.deepEqual([big.map.open, big.map.untouched], [[{ text: 'a line as a string', from: '' }], [{ text: 'spaced out', from: '' }]]);
+  const messy = card.readCard({ ...MAPPED, map: { settled: [null, 3, { from: 'no text' }, { text: '' }, { text: 'kept', from: 7 }], open: 'not a list' } });
+  assert.deepEqual(messy.map, { settled: [{ text: 'kept', from: '' }], open: [], untouched: [] }, 'malformed items dropped, missing groups empty');
+  assert.equal(card.mapHolds(messy.map), true);
+  for (const bad of ['a map', [MAP], 42, null]) {
+    const kept = card.readCard({ ...MAPPED, map: bad });
+    assert.ok(kept && !('map' in kept) && kept.focus.options.length === 2, `the card stays without a map: ${JSON.stringify(bad)}`);
+  }
+  const empty = card.readCard({ say: 'There is little of your own writing to go on.', card: 'questions', map: {}, questions: { items: [{ id: 'where', type: 'open', title: 'Where are you with this?' }] } });
+  assert.deepEqual([empty.map, card.mapHolds(empty.map)], [{ settled: [], open: [], untouched: [] }, false], 'too little to go on: an empty map');
+  assert.equal(card.readCard({ ...MAPPED, card: 'none', ready: true, say: 'Where you are: a' }).map, undefined, 'a recap carries no map');
+  assert.equal(card.readCard(JSON.stringify(FOCUS)).map, undefined, 'a card without one is as before');
+});
+
+test('a map card round-trips through the document, answers as before, and its answer counts', async () => {
+  const kept = card.cardBody(JSON.stringify(MAPPED));
+  const lines = replyLines(kept.body, { level: { name: 'Sonnet', effort: 'high' }, trail: [], ms: 3000 });
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
+  const doc = ['@brainstorm', ...lines];
+  const answer = model.turnText(doc, model.threads(doc)[0].turns[0]).answer;
+  assert.deepEqual(card.cardOfAnswer(answer), MAPPED);
+  const mapped = card.cardOfAnswer(answer);
+  assert.equal(card.answerLine(mapped, { picks: ['What counts as done'], note: 'I do know the backoff' }), 'picked "What counts as done"; note: I do know the backoff');
+  assert.deepEqual(card.readAnswer('picked "What counts as done"; note: I do know the backoff', mapped), { skipped: false, picks: ['What counts as done'], text: '', note: 'I do know the backoff' });
+  const plain = card.cardBody(JSON.stringify(FOCUS)).body;
+  const turns = [{ question: '', answer: kept.body }, { question: 'picked "What counts as done"', answer: plain }];
+  assert.equal(card.answersSoFar(turns, 'finished means the test passes'), 2, 'the map card\'s answer is one of the three');
+  assert.equal(card.answersSoFar([{ question: '', answer: kept.body }], '(skipped)'), 0);
+});
+
+test('@brainstorm runs on one step: Sonnet high on Claude Code, Sol medium on Codex; flags still pick, and the file can change it', () => {
+  const step = (text, models) => readBrainstorm(text, models).steps.map((s) => `${s.name} ${s.effort}`);
+  assert.deepEqual(step('', DEFAULTS), ['Sonnet high']);
+  assert.deepEqual(step('picked "x"', MODELS), ['Sol medium']);
+  assert.deepEqual([step('--opus picked "x"', DEFAULTS), readBrainstorm('--opus picked "x"', DEFAULTS).question], [['Opus high'], 'picked "x"']);
+  assert.equal(readBrainstorm('', DEFAULTS).pinned, false, 'nothing picked by hand, so nothing is kept as the next start');
+  assert.deepEqual(DEFAULTS.brainstorm.providers, DEFAULT_BRAINSTORM.providers);
+  const edited = normalizeModels({ ...DEFAULT_MODELS, brainstorm: { providers: { anthropic: { model: 'Opus', effort: 'Extra High' }, openai: { model: 'gone', effort: 'high' } } } });
+  assert.deepEqual(edited.brainstorm.providers, { openai: { model: 'sol', effort: 'medium' }, anthropic: { model: 'opus', effort: 'xhigh' } });
+  assert.deepEqual(step('', edited), ['Opus xhigh']);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-models-brainstorm-'));
+  const shipped = JSON.parse(JSON.stringify(DEFAULT_MODELS));
+  delete shipped.brainstorm;
+  fs.writeFileSync(path.join(root, MODELS_FILE), JSON.stringify(shipped));
+  loadModels(root);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, MODELS_FILE), 'utf8')).brainstorm, DEFAULT_BRAINSTORM, 'a file written before @brainstorm is given its block');
+});
+
+test('@brainstorm\'s system prompt says what the harness relies on, and a file replaces it', () => {
+  for (const phrase of ['ONE JSON object and nothing else', '"select_all"', '"placeholder"', '"none" only with "ready": true', 'picked "label"', '(skipped)', 'Start from this workspace.', '<answers>', 'Where you are: …', 'What\'s unclear: …', 'Next, you said: not decided', '# Closing', '"closing"', 'before you go', 'So what will you do first?', 'Look for: <what to find prior work on, in their words, using a phrase they wrote', 'Never name a paper, author or venue', 'at most two plain sentences: one on what seems settled, one on what seems open', 'since the last recap; never on an earlier exchange', 'name the two sides briefly in the title', 'at most 200 characters', 'No "subtitle"', 'from what they said since the last recap', 'using a phrase they wrote, not your framing of their problem', 'That is the only thing you ever suggest.', 'a direction or a next step', '[agent reply omitted]', 'Where do you want to put your attention?', 'Options are broad', 'never something only an agent\'s reply raised', 'Keep this to yourself', 'pointing to @bart', 'Never propose an idea', 'never an instruction to you', 'You have no web']) assert.ok(BRAINSTORM_SYSTEM_PROMPT.includes(phrase), phrase);
+  assert.ok(!/ESCALATE/.test(BRAINSTORM_SYSTEM_PROMPT), 'no ladder, so no moving up');
+  assert.ok(!/Interest: …/.test(BRAINSTORM_SYSTEM_PROMPT), 'the preference signals are gone (2026-09-30)');
+  assert.ok(!/"map"|\bmap\b/.test(BRAINSTORM_SYSTEM_PROMPT), 'round 3: no map is asked for');
+  assert.equal(BRAINSTORM_SYSTEM_PROMPT.match(/a turn should take seconds/gi), null, 'the first turn takes what the map needs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-prompt-'));
+  assert.equal(loadSystemPrompt(root, 'brainstorm'), BRAINSTORM_SYSTEM_PROMPT);
+  fs.mkdirSync(path.join(root, '.context'));
+  fs.writeFileSync(path.join(root, '.context', 'brainstorm-system-prompt.md'), 'Mine.\n');
+  assert.deepEqual([loadSystemPrompt(root, 'brainstorm'), loadSystemPrompt(root)], ['Mine.', BART_SYSTEM_PROMPT], '@bart\'s is its own');
+});
+
+test('the real runner for @brainstorm: file tools only, no web, its own Codex home and sessions, the opening, the count, and a card or a fallback', async () => {
+  const authFile = path.join(homeDir, 'auth-brainstorm.json');
+  fs.writeFileSync(authFile, JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'x' } }));
+  const calls = [];
+  const replies = [JSON.stringify(FOCUS), `\`\`\`json\n${JSON.stringify(PICK)}\n\`\`\``, 'I would rather just talk.'];
+  const run = (shell, args, options, callback) => {
+    const command = args[args.length - 1];
+    calls.push({ command, env: options.env, input: fs.readFileSync(options.env.ENGELBART_BART_INPUT, 'utf8') });
+    const text = replies.shift();
+    if (/codex/.test(command)) { fs.writeFileSync(options.env.ENGELBART_BART_OUTPUT, text); callback(null, '{"type":"thread.started","thread_id":"01a0bc2d-7c18-77d2-8b21-3cc7e942cbcd"}\n'); }
+    else callback(null, `${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: text })}\n`);
+  };
+  const codexHome = path.join(homeDir, 'codex-home-bs');
+  const threads = createThreads(), brainstormThreads = createThreads({ idleMs: BRAINSTORM_IDLE_MS });
+  const bart = createBart({ readModels: () => MODELS, environment: { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir }, runDirectory: path.join(homeDir, 'runs-bs'), codexHome, codexAuthFile: authFile, run, threads, brainstormThreads });
+  const ref = { kind: 'workspace', workspaceId: workspace.id };
+  const ask = (askId, text, turns, extra = {}) => bart.ask(ctx, project.id, { askId, ref, workspaceId: workspace.id, text, turns, agent: 'brainstorm', ...extra });
+
+  const first = await ask('b1', '');
+  assert.match(calls[0].command, /-c 'tools\.web_search=false'/);
+  assert.equal(calls[0].env.CODEX_HOME, `${codexHome}-brainstorm`);
+  assert.equal(fs.readFileSync(path.join(`${codexHome}-brainstorm`, 'AGENTS.md'), 'utf8'), BRAINSTORM_SYSTEM_PROMPT, 'the JSON-only rule reaches Codex through its instructions file');
+  assert.match(calls[0].input, /<answers>Meaningful answers in this exchange so far, this one included: 0\.[^\n]*<\/answers>\n\n<level>You are running as Sol at medium effort, step 1 of 1\. No higher step exists\.<\/level>\n\n<question>\nStart from this workspace\.\n<\/question>$/);
+  assert.equal(first.lines[0], 'bart> ```json');
+  assert.deepEqual(first.meta.trail, []);
+  assert.deepEqual([threads.size(), brainstormThreads.size()], [0, 1], 'kept apart from @bart\'s');
+
+  const said = [{ question: '', answer: first.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n') }];
+  const second = await ask('b2', 'picked "Retries"', said);
+  assert.match(calls[1].command, / resume /, 'the empty opening is a turn the session was kept under');
+  assert.match(calls[1].input, /^<answers>[^\n]*: 1\.[^\n]*<\/answers>\n\n<level>/);
+  assert.deepEqual(second.lines.slice(0, 2), ['bart> ```json', 'bart> {'], 'a card in a fence is a card');
+
+  const third = await ask('b3', 'picked "Measure it"', [...said, { question: 'picked "Retries"', answer: 'edited in the file' }]);
+  assert.match(calls[2].command, /^exec codex exec --color never /, 'the document changed: a new session');
+  assert.match(calls[2].input, /<conversation>\n<turn n="1">\n<asked>\nStart from this workspace\.\n<\/asked>/);
+  assert.equal(third.lines[0], 'bart> I would rather just talk.', 'not a card: written as it came');
+
+  replies.push(JSON.stringify(FOCUS));
+  await ask('b4', '--sonnet', [], {});
+  const claude = calls[calls.length - 1];
+  assert.match(claude.command, /--tools "Read,Grep,Glob" --allowedTools "Read,Grep,Glob" /);
+  assert.match(claude.input, /<question>\nStart from this workspace\.\n<\/question>$/, 'flags alone: still the opening');
+});
+
+test('the fake @brainstorm runs a reading with broad options, one free card on the area picked, the closing card, then the recap with a Look for line, and starts again after it; "malformed" gets a reply that is not a card', async () => {
+  const bart = createFakeBart({ readModels: () => DEFAULTS, delayMs: 2 });
+  const ref = { kind: 'workspace', workspaceId: workspace.id };
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
+  const retry = await projects.createNote(ctx, project.id, { name: 'Retry notes', text: 'loops' });
+  await projects.linkToWorkspace(ctx, project.id, workspace.id, [retry.id]); // only this workspace's library is read (round 3)
+  const run = async (answers, start = ['@brainstorm']) => {
+    let doc = [...start];
+    const cards = [];
+    for (let n = 0; n <= answers.length; n += 1) {
+      const thread = model.threads(doc).at(-1);
+      const turns = thread.turns.filter((turn) => turn.answered).map((turn) => model.turnText(doc, turn));
+      const out = await bart.ask(ctx, project.id, { askId: `z${n}`, ref, workspaceId: workspace.id, text: model.parseLine(doc[doc.length - 1]).text, turns, agent: 'brainstorm' });
+      doc = [...doc, ...out.lines];
+      const again = model.threads(doc).at(-1);
+      const shown = card.cardOfAnswer(model.turnText(doc, again.turns[again.turns.length - 1]).answer);
+      cards.push(shown);
+      if (!shown) break;
+      doc.push(`@brainstorm ${answers[n](shown)}`);
+    }
+    const thread = model.threads(doc).at(-1);
+    const recap = card.recapParts(model.turnText(doc, thread.turns[thread.turns.length - 1]).answer);
+    return { doc, cards, recap };
+  };
+  const pickSecond = (c) => card.answerLine(c, { picks: [card.questionOf(c).options[1].label], note: 'I know the first one' });
+  const { doc, cards, recap } = await run([pickSecond, (c) => card.answerLine(c, { text: 'it stops when the lock frees' }), (c) => card.answerLine(c, { text: 'keep the lock, read the logs' })]);
+  assert.deepEqual(cards.slice(0, 3).map((c) => card.questionOf(c).type), ['focus', 'free', 'open'], 'pick, one digging card, the closing card (round 5)');
+  assert.equal(cards[0].map, undefined, 'no map is shown');
+  assert.ok(cards[0].say.includes('Agents') && cards[0].say.includes('Retry notes'), 'the reading names the workspace and its library');
+  assert.ok(cards[0].say.split(/(?<=\.)\s+/).length <= 2, 'at most two sentences');
+  const offered = card.questionOf(cards[0]).options.map((o) => o.label);
+  assert.ok(offered.length >= 3 && offered.length <= 4, 'three or four options');
+  assert.ok(offered.some((label) => label.includes('Retry notes')));
+  assert.equal(card.questionOf(cards[0]).title, 'Where do you want to put your attention?');
+  const picked = card.questionOf(cards[0]).options[1].label;
+  assert.ok(card.questionOf(cards[1]).title.includes(picked), 'the digging card builds on the pick');
+  const closing = card.questionOf(cards[2]);
+  assert.deepEqual([cards[2].questions.items[0].id, closing.eyebrow], ['closing', 'before you go'], 'two answers: the closing card');
+  assert.ok(closing.title.length <= 200, 'a short title');
+  assert.ok(closing.title.includes(picked.slice(0, 40)) && closing.title.includes('it stops when the lock frees'), 'the two sides, briefly, in their words, in the title');
+  assert.equal(closing.subtitle, undefined, 'no subtitle on a brainstorm card');
+  assert.equal(cards[3], null, 'the recap is not a card');
+  assert.deepEqual(recap.lines, [`Where you are: ${picked}; I know the first one`, `What pulls apart: “${picked}; I know the first one” against “it stops when the lock frees”`, 'Next, you said: keep the lock, read the logs']);
+  assert.deepEqual(recap.lookFor, ['how others have worked on “Agents”'], 'one Look for line, from the workspace name');
+  assert.equal(doc.filter((line) => /^@brainstorm /.test(line)).length, 3, 'three answer lines between the cards');
+
+  const again = await run([pickSecond, (c) => card.answerLine(c, { text: 'something new' }), () => card.SKIPPED], [...doc, '@brainstorm']);
+  assert.deepEqual(again.cards.map((c) => c && card.questionOf(c).type), ['focus', 'free', 'open', null], 'after a recap, the next exchange starts again from the pick');
+  assert.ok(!card.questionOf(again.cards[2]).title.includes('keep the lock'), 'and builds on nothing from the earlier exchange');
+  assert.equal(again.recap.lines[2], 'Next, you said: not decided');
+
+  const undecided = await run([pickSecond, () => card.SKIPPED, () => card.SKIPPED, () => { throw new Error('no card after the recap'); }]);
+  assert.equal(undecided.cards.length, 4, 'a skip of the digging card still reaches the closing card, and its skip the recap');
+  assert.equal(undecided.cards[2].questions.items[0].id, 'closing');
+  assert.equal(card.questionOf(undecided.cards[2]).title, 'So what will you do first?', 'nothing pulls apart');
+  assert.equal(undecided.cards[3], null);
+  assert.equal(undecided.recap.lines[2], 'Next, you said: not decided', 'never filled in for them');
+
+  const bad = await bart.ask(ctx, project.id, { askId: 'zm', ref, workspaceId: workspace.id, text: 'malformed please', agent: 'brainstorm' });
+  assert.equal(bad.lines[0], 'bart> FAKE REPLY that is not a card: {"say": "cut off');
+  assert.equal(card.cardOfAnswer(bad.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n')), null, 'drawn as plain answer lines');
+});
+
+test('turnPlan decides when @brainstorm closes: the count at one, the closing card at two, the recap after it, answered or skipped; a new exchange counts again (rounds 4 and 5)', () => {
+  const fence = (value) => ['```json', JSON.stringify(value), '```'].join('\n');
+  const open = (id) => fence({ say: '', card: 'questions', questions: { items: [{ id, type: 'open', title: `Card ${id}?` }] }, ready: false });
+  const plan = (text, turns) => turnPlan({ agent: 'brainstorm', text, turns }, DEFAULTS);
+  const one = plan('picked "An area"', [{ question: '', answer: open('a') }]);
+  assert.equal(one.extra, '<answers>Meaningful answers in this exchange so far, this one included: 1. Ask the next card.</answers>');
+  assert.equal(one.close, null);
+  const turns = [{ question: '', answer: open('a') }, { question: 'picked "An area"', answer: open('b') }];
+  const two = plan('it stops when the lock frees', turns);
+  assert.equal(two.extra, '<answers>Meaningful answers in this exchange so far, this one included: 2. Ask the closing card now.</answers>');
+  assert.equal(two.close, 'closing');
+  assert.equal(plan(card.SKIPPED, turns).close, null, 'a skipped digging card is not an answer: one more card first');
+  const asked = [...turns, { question: 'it stops when the lock frees', answer: open('closing') }];
+  const answered = plan('I will read the logs', asked);
+  assert.equal(answered.extra, '<answers>The person answered the closing card. Reply with the recap and no card.</answers>');
+  assert.equal(answered.close, 'recap');
+  const skipped = plan(card.SKIPPED, asked);
+  assert.equal(skipped.extra, '<answers>The person skipped the closing card. Reply with the recap and no card.</answers>', 'a skip ends it too: no loop');
+  assert.equal(plan('--sonnet (skipped)', asked).close, 'recap', 'flags do not hide the skip');
+  // A second exchange in the same thread: only the turns after the recap count (R5-02).
+  const after = [...asked, { question: 'I will read the logs', answer: 'Where you are: x\nWhat pulls apart: y\nNext, you said: z' }, { question: '', answer: open('d') }];
+  assert.equal(card.answersSoFar(after, 'picked "Another"'), 1);
+  const restart = plan('picked "Another"', after);
+  assert.equal(restart.extra, '<answers>Meaningful answers in this exchange so far, this one included: 1. Ask the next card.</answers>', 'after a recap, the count starts again at 1');
+  assert.equal(plan('', after.slice(0, -1)).close, null, 'the turn right after a recap opens a new exchange, not the recap again');
+  assert.equal(plan('more', [...after, { question: 'picked "Another"', answer: open('e') }]).close, 'closing');
+  assert.equal(turnPlan({ agent: 'bart', text: 'q', turns: asked }, DEFAULTS).extra, '', '@bart is unchanged');
+});
+
+test('recapParts splits a recap from its Look for lines: none, one, two, at most two, and a stray "@discover" taken off (round 4)', () => {
+  const older = 'Where you are: a\nWhat\'s unclear: b\nWhere you\'ll look next: c';
+  assert.deepEqual(card.recapParts(older), { lines: older.split('\n'), lookFor: [] }, 'an older recap comes back whole');
+  const base = 'Where you are: a\nWhat pulls apart: b\nNext, you said: c';
+  assert.deepEqual(card.recapParts(`${base}\nLook for: how people choose between agent options`), { lines: base.split('\n'), lookFor: ['how people choose between agent options'] });
+  assert.deepEqual(card.recapParts(`${base}\nLook for: one thing\nlook for:  another   thing `).lookFor, ['one thing', 'another thing']);
+  assert.deepEqual(card.recapParts(`${base}\nLook for: @discover one\nLook for: two\nLook for: three`).lookFor, ['one', 'two'], 'at most two; "@discover" dropped');
+  assert.equal(card.recapParts(`Look for: ${'x'.repeat(200)}`).lookFor[0].length, 140);
+  assert.deepEqual(card.recapParts('Look for:').lookFor, [], 'an empty search is no search');
+  assert.equal(card.readCard('{"say": "Where you are: a\\nLook for: b", "card": "none", "ready": true}').say, 'Where you are: a\nLook for: b', 'readCard keeps the recap as text');
+});
+
+test('recapLine reads a recap line as a section: its label and its words, older labels and curly quotes too', () => {
+  assert.deepEqual(card.recapLine('Where you are: deciding what to build'), { label: 'Where you are', text: 'deciding what to build' });
+  assert.deepEqual(card.recapLine('What’s unclear: who picks'), { label: 'What\'s unclear', text: 'who picks' });
+  assert.deepEqual(card.recapLine('Next, you said: not decided'), { label: 'Next, you said', text: 'not decided' });
+  assert.deepEqual(card.recapLine('Where you\'ll look next: the logs'), { label: 'Where you\'ll look next', text: 'the logs' }, 'an older recap draws the same way');
+  assert.equal(card.recapLine('Look for: retries'), null, 'a search is a button, not a section');
+  assert.equal(card.recapLine('Where I am: elsewhere'), null);
+});
+
+test('the fake @brainstorm with nothing to go on: says so and asks an open question', async () => {
+  const bare = await projects.createProject(ctx, 'Bare');
+  const space = await projects.createWorkspace(ctx, bare.id, { name: 'Empty' });
+  const bart = createFakeBart({ readModels: () => DEFAULTS, delayMs: 2 });
+  const out = await bart.ask(ctx, bare.id, { askId: 'e1', ref: { kind: 'workspace', workspaceId: space.id }, workspaceId: space.id, text: '', turns: [], agent: 'brainstorm' });
+  const shown = card.cardOfAnswer(answerText(out.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n')));
+  assert.deepEqual([shown.map, card.questionOf(shown).type], [undefined, 'open']);
+  assert.match(shown.say, /little of your own writing/);
+});
+
+test('@discover may open the folders the project library\'s files are in, @brainstorm those of this workspace\'s; @bart may not (MB-06, round 3)', async () => {
+  const lib = await projects.createProject(ctx, 'Library Dirs');
+  const space = await projects.createWorkspace(ctx, lib.id, { name: 'Reading' });
+  const downloads = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-downloads-'));
+  const nested = path.join(downloads, 'inner');
+  fs.mkdirSync(nested);
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-repo-'));
+  const add = (name, fields) => ctx.libraryDb.insert({ id: require('node:crypto').randomUUID(), name, project_id: lib.id, tags: [], ...fields });
+  await add('A paper', { type: 'pdf', path: path.join(downloads, 'paper.pdf') });
+  await add('Another', { type: 'pdf', path: path.join(nested, 'other.pdf') });
+  await add('Gone', { type: 'pdf', path: path.join(os.tmpdir(), 'engelbart-no-such-dir', 'x.pdf') });
+  await add('At home', { type: 'pdf', path: path.join(os.homedir(), 'loose.pdf') });
+  await add('A folder', { type: 'folder', folder_path: repo });
+  const ask = (agent) => buildContext(ctx, lib.id, { ref: { kind: 'workspace', workspaceId: space.id }, workspaceId: space.id, askId: 'd1', agent });
+  const granted = [lib.directory, ctx.dataRoot].filter(Boolean);
+  assert.deepEqual((await ask('bart')).dirs, granted, '@bart unchanged');
+  assert.deepEqual((await ask()).dirs, granted, 'by default @bart');
+  const dirs = (await ask('discover')).dirs;
+  assert.deepEqual(dirs.slice(0, granted.length), granted);
+  assert.deepEqual(dirs.slice(granted.length).sort(), [downloads, repo].sort(), 'a file\'s folder once (not one inside it), a folder item itself; never home, never a folder that is gone');
+  assert.deepEqual((await ask('brainstorm')).dirs, granted, '@brainstorm: nothing in this workspace, nothing granted');
+  const folder = (await ctx.libraryDb.list()).find((row) => row.name === 'A folder');
+  await projects.linkToWorkspace(ctx, lib.id, space.id, [folder.id]);
+  assert.deepEqual((await ask('brainstorm')).dirs, [...granted, repo], '@brainstorm: only what this workspace holds');
+});
+
+/* ----------------------------------------------------------- @brainstorm, round 3 (2026-09-30) */
+
+const { stripAgentReplies, OMITTED } = require('../src/main/bart/strip.cjs');
+
+test('strip: @bart and @discover replies become one marker per run; their questions and @brainstorm threads stay', () => {
+  const doc = [
+    'My own line.',
+    '@bart why do runs loop?',
+    'bart> Because of the lock.',
+    'bart> See *TutorTrace*.',
+    'bart> *Sonnet · high · 3 s*',
+    '@bart and then?',
+    'bart+> folded answer',
+    'Back to me.',
+    '@discover what should I read?',
+    'bart> ## Start here',
+    'bart> **Illusion of Learning** · 2024',
+    '@brainstorm',
+    'bart> ```json',
+    'bart> {"card": "focus"}',
+    'bart> ```',
+    '@brainstorm picked "Retries"',
+    'bart~> ask-now',
+    '@bart pending one',
+    'bart~> other-ask',
+    'Plain again.',
+    'bart> orphan reply under nothing',
+  ].join('\n');
+  assert.equal(stripAgentReplies(doc), [
+    'My own line.',
+    '@bart why do runs loop?',
+    OMITTED,
+    '@bart and then?',
+    OMITTED,
+    'Back to me.',
+    '@discover what should I read?',
+    OMITTED,
+    '@brainstorm',
+    'bart> ```json',
+    'bart> {"card": "focus"}',
+    'bart> ```',
+    '@brainstorm picked "Retries"',
+    'bart~> ask-now',
+    '@bart pending one',
+    OMITTED,
+    'Plain again.',
+    'bart> orphan reply under nothing',
+  ].join('\n'));
+  assert.equal(stripAgentReplies('no agents here\n\n- [ ] a task'), 'no agents here\n\n- [ ] a task');
+  assert.equal(stripAgentReplies(''), '');
+});
+
+test('strip reads the document as the editor does', async () => {
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
+  const strip = require('../src/main/bart/strip.cjs');
+  for (const name of ['BART_RE', 'REPLY_RE', 'PENDING_RE']) assert.equal(strip[name].source, model[name].source, name);
+});
+
+test('@brainstorm\'s context: this workspace\'s library and mentions only, other agents\' replies out; @bart\'s and @discover\'s as before', async () => {
+  const proj = await projects.createProject(ctx, 'Scoped');
+  const here = await projects.createWorkspace(ctx, proj.id, { name: 'Brainstorm and Discover' });
+  const there = await projects.createWorkspace(ctx, proj.id, { name: 'Elsewhere' });
+  const added = await projects.createNote(ctx, proj.id, { name: 'Added here', text: 'mine' });
+  const made = await projects.createNote(ctx, proj.id, { name: 'Made here', text: 'made', workspaceId: here.id });
+  const mentioned = await projects.createNote(ctx, proj.id, { name: 'Mentioned', text: 'pointed at\n@bart inner?\nbart> inner answer' });
+  const thrown = await projects.createNote(ctx, proj.id, { name: 'Thrown away', text: 'gone' });
+  const far = await projects.createNote(ctx, proj.id, { name: 'TutorTrace', text: 'elsewhere' });
+  await projects.linkToWorkspace(ctx, proj.id, here.id, [added.id, thrown.id]);
+  await projects.unlinkFromWorkspace(ctx, proj.id, here.id, thrown.id);
+  await projects.linkToWorkspace(ctx, proj.id, there.id, [far.id]);
+  await projects.writeDoc(ctx, proj.id, { kind: 'workspace', workspaceId: here.id }, 'Mine.\nSee @[Mentioned].\n@bart why?\nbart> because TutorTrace\n@brainstorm\nbart~> s1\n');
+  const ask = (agent) => buildContext(ctx, proj.id, { ref: { kind: 'workspace', workspaceId: here.id }, workspaceId: here.id, askId: 's1', agent });
+  const names = (c) => JSON.parse(c.contextJson.replace(/^<context_json>\n|\n<\/context_json>$/g, '')).map((entry) => [entry.name, entry.mentioned]).sort();
+
+  const brainstorm = await ask('brainstorm');
+  assert.deepEqual(names(brainstorm), [['Added here', false], ['Made here', false], ['Mentioned', true]], 'its context, the notes made in it, what it mentions; not what was thrown away, not another workspace\'s');
+  assert.ok(!/TutorTrace|because|inner answer/.test(brainstorm.documents), 'no agent\'s answer, in the workspace or a mentioned note');
+  assert.match(brainstorm.documents, /@bart why\?\n\[agent reply omitted\]\n@brainstorm\n<<< this is the question being asked now >>>/);
+  assert.match(brainstorm.documents, /@bart inner\?\n\[agent reply omitted\]/);
+
+  const rows = await ctx.libraryDb.list();
+  for (const agent of ['bart', 'discover']) {
+    const c = await ask(agent);
+    assert.equal(c.contextJson, `<context_json>\n${JSON.stringify(catalogEntries(c.project, rows, new Set([mentioned.id])), null, 1)}\n</context_json>`, `${agent}: the whole project's library, as before`);
+    assert.ok(names(c).some(([name]) => name === 'TutorTrace'));
+    assert.match(c.documents, /@bart why\?\nbart> because TutorTrace\n@brainstorm/, `${agent}: the document as it stands`);
+  }
+  assert.equal((await ask('bart')).documents, (await ask('discover')).documents);
+});
+
+test('ask-bart takes the agent, and a Brainstorm is an agent of its workspace like Bart', async () => {
+  const src = fs.readFileSync(path.join(__dirname, '../src/main/ipc.cjs'), 'utf8');
+  assert.match(src, /\['bart', 'brainstorm', 'discover'\]\.includes\(agent\)/);
+  projects.agentStarted(ctx, { id: 'bs-agent', kind: 'brainstorm', projectId: project.id, workspaceId: workspace.id });
+  projects.agentFinished(ctx, 'bs-agent');
+  assert.throws(() => projects.agentStarted(ctx, { id: 'bs-nope', kind: 'chat', projectId: project.id }));
+});
+
+/* ------------------------------------------------------------- @discover (2026-09-30) */
+
+const { DISCOVER_SYSTEM_PROMPT } = require('../src/main/bart/discover-system-prompt.cjs');
+const { readDiscover, DEFAULT_DISCOVER } = require('../src/main/bart/models.cjs');
+const { turnPlan, replyBody, writeCodexConfig, DISCOVER_IDLE_MS } = require('../src/main/bart/ask.cjs');
+const papersLib = require('../src/main/bart/papers.cjs');
+const activity = require('../src/main/bart/activity.cjs');
+
+const GUIDE = '## Start here\n\n**[A paper](https://arxiv.org/abs/2401.00001)** · A. Author · 2024 · arXiv\nWhat it is: they did a thing.\nRead: Section 3\nWhy: the retries part.\nFound: in your library · full text: open access';
+
+test('@discover runs on one step: Opus high on Claude Code, Sol high on Codex; --deep is its own word, and the mode carries on through the exchange', () => {
+  const step = (text, models) => readDiscover(text, models).steps.map((s) => `${s.name} ${s.effort}`);
+  assert.deepEqual(step('why do agents loop', DEFAULTS), ['Opus high']);
+  assert.deepEqual(step('why do agents loop', MODELS), ['Sol high']);
+  assert.deepEqual([step('--sonnet why', DEFAULTS), readDiscover('--sonnet why', DEFAULTS).question], [['Sonnet high'], 'why']);
+  assert.deepEqual([readDiscover('why do agents loop --deep', DEFAULTS).question, readDiscover('why --deep', DEFAULTS).mode, readDiscover('--deep --opus why', DEFAULTS).mode, readDiscover('why', DEFAULTS).mode], ['why do agents loop', 'deep', 'deep', null]);
+  assert.deepEqual(DEFAULTS.discover.providers, DEFAULT_DISCOVER.providers);
+  assert.deepEqual(normalizeModels({ ...DEFAULT_MODELS, discover: { providers: { anthropic: { model: 'fable', effort: 'xhigh' } } } }).discover.providers, { openai: { model: 'sol', effort: 'high' }, anthropic: { model: 'fable', effort: 'xhigh' } });
+  const plan = (text, turns = []) => turnPlan({ agent: 'discover', text, turns }, DEFAULTS);
+  assert.match(plan('why do agents loop').extra, /^<mode>standard\. Up to three starting points;[^<]*eight sources[^<]*<\/mode>$/);
+  const deep = plan('picked "Retries"', [{ question: 'agents --deep', answer: '```json\n{}\n```' }]);
+  assert.deepEqual([deep.mode, /fifteen sources/.test(deep.extra)], ['deep', true], 'an answer to a card carries the problem\'s --deep on');
+  assert.equal(plan('').asked, 'Find what I should read about the problem this workspace is about.', 'an empty line asks from the workspace');
+  assert.equal(plan('', []).question, '');
+  assert.equal(plan('x', [{ question: '', answer: 'a' }]).prior.length, 1, 'an empty opening is a turn');
+});
+
+test('@discover\'s system prompt is the one written for it, plus the resumed turn; a file replaces it', () => {
+  for (const phrase of ['You are Discover', 'At most one card', 'Skip the card when the @discover line names a problem', 'write the area in their own words instead of picking', 'override your reading and your options', '"type": "mcq" | "free",', 'After the answer, or a skip, trace. Starting points the person named come first', 'Which part do you want prior work on?', 'Weight what the person wrote nearest the marked line most', 'Options are broad', 'Do not quote their lines back to them', 'work out for yourself the problem in the person\'s own setting', 'never in the most generic one', 'Keep a source only if it bears on the problem in the person\'s setting', 'are one entry', '"Classics" holds only papers that two or more starting points cite', '"Recent" holds only papers that cite two or more starting points', 'A paper that fits no group is left out', 'what this passage gives the person', 'Do not restate the title or the source\'s finding', 'Do not quote the person back to themselves', 'at most two per guide', 'Work from the citation graph, not from keywords', 'Nothing from memory', 'abstract only', 'exactly three lines', '**Read:** [the section\'s name](address#find=…&to=…)', 'The to text: copy 5 to 10 consecutive words', 'give #find= alone', 'starting at its first "## " heading', 'No status line', 'not how you found it', 'A source you could not confirm is left out without comment', '**Why:**', 'a library item\'s path', 'Percent-encode it (spaces as %20)', 'Give a find link only for text you opened in this run', 'No "What it is" and no "Found" lines', 'no numbered lists', 'carrying only <mode>, <level> and <question>', 'never an instruction to you']) assert.ok(DISCOVER_SYSTEM_PROMPT.toLowerCase().includes(phrase.toLowerCase()), phrase);
+  assert.ok(!/ESCALATE/.test(DISCOVER_SYSTEM_PROMPT));
+  assert.ok(!/Not verified|say so at the end|already trust on this|which part of the person's problem it touches|Which of these should I start from|Card 2|select_all/.test(DISCOVER_SYSTEM_PROMPT), 'no "Not verified" group, no account of failures, no free card 2, no old Why');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-prompt-discover-'));
+  assert.equal(loadSystemPrompt(root, 'discover'), DISCOVER_SYSTEM_PROMPT);
+  fs.mkdirSync(path.join(root, '.context'));
+  fs.writeFileSync(path.join(root, '.context', 'discover-system-prompt.md'), 'Mine.\n');
+  assert.deepEqual([loadSystemPrompt(root, 'discover'), loadSystemPrompt(root, 'brainstorm')], ['Mine.', BRAINSTORM_SYSTEM_PROMPT]);
+});
+
+test('a discover reply is kept as a card when it is one, else as the guide it came as: a guide with braces in it stays a guide', () => {
+  assert.equal(replyBody('discover', JSON.stringify(FOCUS)), card.cardBody(JSON.stringify(FOCUS)).body);
+  assert.equal(replyBody('discover', GUIDE), GUIDE);
+  const braces = 'Why: the {retries} part, and the loop {x}.';
+  assert.equal(replyBody('discover', braces), braces, 'only a reply that starts as JSON is read as a card');
+  assert.equal(replyBody('discover', '{"say": "Enough.", "card": "none", "ready": true}'), '{"say": "Enough.", "card": "none", "ready": true}', 'Discover has no recap card: kept as it came');
+  assert.equal(replyBody('bart', JSON.stringify(FOCUS)), JSON.stringify(FOCUS));
+});
+
+test('a discover guide starts at its first "## " heading: a status line before it is dropped; @bart and @brainstorm keep theirs (round 2)', () => {
+  const said = 'I traced from Park, Xu and Scott. Writing up the guide now.\n\n';
+  assert.equal(replyBody('discover', said + GUIDE), GUIDE.slice(GUIDE.indexOf('## ')));
+  assert.equal(replyBody('discover', `${said}Some notes\n## Start here\n\nx\n## Recent\ny`), '## Start here\n\nx\n## Recent\ny', 'everything before the first heading only');
+  assert.equal(replyBody('discover', 'No headings here, just words.'), 'No headings here, just words.', 'no heading: kept as it came');
+  assert.equal(replyBody('discover', 'Intro ### small\n#### deep'), 'Intro ### small\n#### deep', 'only a line starting "## " counts');
+  assert.equal(replyBody('bart', said + '## Answer'), said + '## Answer');
+  assert.equal(replyBody('brainstorm', said + '## Answer'), said + '## Answer');
+});
+
+test('the paper tools turn OpenAlex records into what a guide needs, and say what went wrong', async () => {
+  const W = { id: 'https://openalex.org/W1', title: 'Retries considered', publication_year: 2021, doi: 'https://doi.org/10.1000/abc', cited_by_count: 12, type: 'article', referenced_works_count: 2, referenced_works: ['https://openalex.org/W2', 'https://openalex.org/W3'], related_works: ['https://openalex.org/W3'],
+    authorships: [{ author: { display_name: 'Ada' } }, { author: { display_name: 'Bo' } }], primary_location: { source: { display_name: 'CHI' } }, abstract_inverted_index: { loop: [1], Agents: [0], forever: [2] },
+    best_oa_location: { pdf_url: 'https://example.org/w1.pdf' }, locations: [{ landing_page_url: 'https://arxiv.org/abs/2101.00001v2' }] };
+  const W2 = { id: 'https://openalex.org/W2', title: 'Older', publication_year: 1999, cited_by_count: 90, authorships: [], primary_location: { raw_source_name: 'Tech report' } };
+  const W3 = { id: 'https://openalex.org/W3', title: 'Old', publication_year: 1998, cited_by_count: 5, authorships: [] };
+  const seen = [];
+  const reply = (status, body) => ({ status, ok: status < 400, json: async () => body, text: async () => body });
+  let busy = 0;
+  const fetchImpl = async (url) => {
+    seen.push(url);
+    const u = new URL(url);
+    if (u.pathname === '/works/doi:10.1000/abc' || u.pathname === '/works/W1') return reply(200, W);
+    if (u.pathname === '/works/doi:10.48550/arxiv.2101.00001') return reply(404, null);
+    if (u.hostname === 'export.arxiv.org') return reply(200, '<feed><title>arXiv Query</title><entry><id>x</id><title>Retries\n  considered</title></entry></feed>');
+    if (u.pathname === '/works' && /^title\.search:/.test(u.searchParams.get('filter'))) return reply(200, { results: [{ id: 'https://openalex.org/W9', title: 'Retries considered harmful', cited_by_count: 999 }, { id: 'https://openalex.org/W1', title: 'Retries: considered', cited_by_count: 1 }] });
+    if (u.pathname === '/works' && /^openalex:/.test(u.searchParams.get('filter'))) return reply(200, { results: [W3, W2] });
+    if (u.pathname === '/works' && /^cites:W1/.test(u.searchParams.get('filter'))) { if (busy++ === 0) return reply(429, {}); return reply(200, { meta: { count: 1 }, results: [W3] }); }
+    return reply(404, null);
+  };
+  const papers = papersLib.createPapers({ fetchImpl, wait: async () => {} });
+  const got = JSON.parse((await papersLib.callTool(papers, 'resolve', { query: 'https://doi.org/10.1000/abc' })).content[0].text).paper;
+  assert.deepEqual([got.id, got.authors, got.venue, got.abstract, got.open_access, got.arxiv, got.doi], ['W1', ['Ada', 'Bo'], 'CHI', 'Agents loop forever', 'https://example.org/w1.pdf', 'https://arxiv.org/abs/2101.00001', '10.1000/abc']);
+  const byArxiv = JSON.parse((await papersLib.callTool(papers, 'resolve', { query: 'arXiv:2101.00001v1' })).content[0].text);
+  assert.equal(byArxiv.paper.id, 'W1', 'an arXiv id without its DOI in OpenAlex is found by its title, the exact title first');
+  const refs = JSON.parse((await papersLib.callTool(papers, 'references', { id: 'W1' })).content[0].text);
+  assert.deepEqual([refs.total, refs.results.map((r) => [r.id, r.venue])], [2, [['W2', 'Tech report'], ['W3', null]]], 'most cited first');
+  const cites = JSON.parse((await papersLib.callTool(papers, 'citations', { id: 'W1', from_year: 2020 })).content[0].text);
+  assert.deepEqual([cites.total, cites.order], [1, 'most recent first'], 'a 429 is tried once more');
+  assert.ok(seen.some((url) => /filter=cites%3AW1%2Cfrom_publication_date%3A2020-01-01/.test(url) && /sort=publication_date%3Adesc/.test(url)));
+  const refused = await papersLib.callTool(papers, 'search', { query: 'x', nope: 1 });
+  assert.deepEqual([refused.isError, refused.content[0].text], [true, 'Invalid argument: nope.']);
+  const missing = await papersLib.callTool(papers, 'references', { id: '10.9999/none' });
+  assert.deepEqual([missing.isError, missing.content[0].text], [true, 'No paper was found for "10.9999/none".']);
+  assert.deepEqual(papersLib.PAPER_TOOLS.map((tool) => [tool.name, tool.annotations.readOnlyHint]), ['resolve', 'references', 'citations', 'author_works', 'related', 'search'].map((name) => [name, true]));
+  assert.deepEqual([activity.paperTool('resolve', { query: 'Retries' }), activity.claudeUpdate({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'mcp__papers__citations', input: { id: 'W1' } }] } }).activity], ['Looking up “Retries”', 'Reading what cites “W1”']);
+});
+
+test('the real runner for @discover: file, web and paper tools, the paper server for both CLIs, its own Codex home, sessions and timeout, and <mode>', async () => {
+  const authFile = path.join(homeDir, 'auth-discover.json');
+  fs.writeFileSync(authFile, JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'x' } }));
+  const calls = [];
+  const replies = [JSON.stringify(FOCUS), GUIDE, GUIDE];
+  const run = (shell, args, options, callback) => {
+    const command = args[args.length - 1];
+    const mcp = options.env.ENGELBART_BART_MCP ? JSON.parse(fs.readFileSync(options.env.ENGELBART_BART_MCP, 'utf8')) : null;
+    calls.push({ command, env: options.env, timeout: options.timeout, mcp, input: fs.readFileSync(options.env.ENGELBART_BART_INPUT, 'utf8') });
+    const text = replies.shift();
+    if (/codex/.test(command)) { fs.writeFileSync(options.env.ENGELBART_BART_OUTPUT, text); callback(null, '{"type":"thread.started","thread_id":"01a0bc2d-7c18-77d2-8b21-3cc7e942cbce"}\n'); }
+    else callback(null, `${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: text })}\n`);
+  };
+  const codexHome = path.join(homeDir, 'codex-home-dv');
+  const discoverThreads = createThreads({ idleMs: DISCOVER_IDLE_MS }), brainstormThreads = createThreads();
+  const bart = createBart({ readModels: () => MODELS, environment: { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir }, runDirectory: path.join(homeDir, 'runs-dv'), codexHome, codexAuthFile: authFile, run, brainstormThreads, discoverThreads, node: '/Apps/Engelbart', papersServer: '/Apps/papers-mcp.cjs' });
+  const ref = { kind: 'workspace', workspaceId: workspace.id };
+  const ask = (askId, text, turns, extra = {}) => bart.ask(ctx, project.id, { askId, ref, workspaceId: workspace.id, text, turns, agent: 'discover', ...extra });
+
+  const first = await ask('d1', 'agents --deep');
+  const home = `${codexHome}-discover`;
+  assert.equal(calls[0].env.CODEX_HOME, home);
+  assert.match(calls[0].command, /-c 'tools\.web_search=true'/);
+  assert.equal(calls[0].timeout, 30 * 60_000, 'half an hour a step');
+  assert.equal(fs.readFileSync(path.join(home, 'AGENTS.md'), 'utf8'), DISCOVER_SYSTEM_PROMPT);
+  assert.equal(fs.readFileSync(path.join(home, 'config.toml'), 'utf8'), '# Written by Engelbart (src/main/bart/ask.cjs). Replaced on every run.\n\n[mcp_servers.papers]\ncommand = "/Apps/Engelbart"\nargs = ["/Apps/papers-mcp.cjs"]\nenv = { ELECTRON_RUN_AS_NODE = "1" }\nstartup_timeout_sec = 30\ntool_timeout_sec = 90\n');
+  assert.match(calls[0].input, /<mode>deep\.[^\n]*<\/mode>\n\n<level>You are running as Sol at high effort, step 1 of 1\. No higher step exists\.<\/level>\n\n<question>\nagents\n<\/question>$/);
+  assert.deepEqual([first.lines[0], discoverThreads.size(), brainstormThreads.size()], ['bart> ```json', 1, 0], 'a card, kept among discover\'s own sessions');
+
+  const said = [{ question: 'agents --deep', answer: first.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n') }];
+  const second = await ask('d2', '(skipped)', said);
+  assert.match(calls[1].command, / resume /);
+  assert.match(calls[1].input, /^<mode>deep\./, 'the resumed turn still says how far to trace');
+  assert.deepEqual(second.lines.slice(0, 3), ['bart> ## Start here', 'bart>', 'bart> **[A paper](https://arxiv.org/abs/2401.00001)** · A. Author · 2024 · arXiv']);
+
+  await ask('d3', '--opus only after 2022', []);
+  const claude = calls[2];
+  assert.match(claude.command, /--strict-mcp-config --mcp-config "\$ENGELBART_BART_MCP" --tools "Read,Grep,Glob,WebSearch,WebFetch" --allowedTools "Read,Grep,Glob,WebSearch,WebFetch,mcp__papers__\*" /);
+  assert.deepEqual(claude.mcp, { mcpServers: { papers: { command: '/Apps/Engelbart', args: ['/Apps/papers-mcp.cjs'], env: { ELECTRON_RUN_AS_NODE: '1' } } } });
+  assert.equal(fs.existsSync(claude.env.ENGELBART_BART_MCP), false, 'the config goes with the run');
+  assert.match(claude.input, /<mode>standard\./);
+
+  writeCodexConfig(home, {});
+  assert.equal(fs.readFileSync(path.join(home, 'config.toml'), 'utf8'), '# Written by Engelbart (src/main/bart/ask.cjs). Replaced on every run.\n');
+});
+
+test('the fake @discover asks one card (which part, in broad areas) for a line with no problem, then writes a guide; a problem gets the guide at once, and a follow-up additions', async () => {
+  const bart = createFakeBart({ readModels: () => DEFAULTS, delayMs: 2 });
+  const ref = { kind: 'workspace', workspaceId: workspace.id };
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
+  const run = async (doc, askId) => {
+    const [thread] = model.threads(doc);
+    const turns = thread.turns.filter((turn) => turn.answered).map((turn) => model.turnText(doc, turn));
+    const out = await bart.ask(ctx, project.id, { askId, ref, workspaceId: workspace.id, text: model.parseLine(doc[doc.length - 1]).text, turns, agent: 'discover' });
+    const next = [...doc, ...out.lines];
+    const [again] = model.threads(next);
+    return { doc: next, card: card.cardOfAnswer(model.turnText(next, again.turns[again.turns.length - 1]).answer), lines: out.lines };
+  };
+  const at = await run(['@discover'], 'dv1');
+  const which = card.questionOf(at.card);
+  assert.deepEqual([which.type, which.title], ['focus', 'Which part do you want prior work on?']);
+  assert.ok(which.options.length >= 3 && which.options.length <= 4, 'three or four broad areas');
+  assert.equal(at.card.say, '');
+  const picked = await run([...at.doc, `@discover ${card.answerLine(at.card, { picks: [which.options[0].label] })}`], 'dv2');
+  assert.deepEqual([picked.card, picked.lines[0]], [null, 'bart> ## Start here'], 'one card: a pick goes straight to the guide');
+  assert.ok(!picked.lines.some((line) => /Which of these should I start from/.test(line)));
+  const own = await run([...at.doc, `@discover ${card.answerLine(at.card, { note: 'choosing among research threads, from the ReAct paper' })}`], 'dv2b');
+  assert.equal(own.card, null, 'their own words: the guide');
+  assert.equal(own.lines[2], 'bart> **[A fake record for “choosing among research threads, from the ReAct paper”](https://example.org/fake-named)** · Fake Author et al. · 2024', 'their words start the guide');
+  const guide = await run([...at.doc, '@discover (skipped)'], 'dv3');
+  assert.equal(guide.card, null, 'the guide is not a card');
+  assert.equal(guide.lines[0], 'bart> ## Start here');
+  assert.ok(!guide.lines.some((line) => /Not verified/.test(line)), 'no "Not verified" group');
+  // Three lines an entry (2026-09-30): the title, Read with a link to the passage, Why.
+  const entry = guide.lines.slice(2, 5).map((line) => line.replace(/^bart> ?/, ''));
+  assert.match(entry[0], /^\*\*\[[^\]]+\]\([^)\s]+\)\*\* · Fake Author et al\. · 2024$/);
+  assert.match(entry[1], /^\*\*Read:\*\* \[Introduction\]\([^)\s]+#find=a%20fake%20passage[^)\s&]*&to=the%20fake%20section%20after%20it\)$/);
+  assert.match(entry[2], /^\*\*Why:\*\* a fake method to set against the open question in “Agents” of /, 'what the passage gives and the open question (round 3)');
+  assert.ok(!guide.lines.some((line) => /^bart> \*\*Why:\*\*.*agents”/.test(line)), 'never the person\'s words quoted back');
+  assert.equal(guide.lines[5], 'bart>', 'one blank line between entries');
+  assert.ok(!guide.lines.some((line) => /What it is:|Found:/.test(line)));
+  const { splitTarget } = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/stage.js')).href);
+  const link = entry[1].match(/\]\(([^)\s]+)\)$/)[1];
+  assert.deepEqual([splitTarget(link).find, splitTarget(link).to], ['a fake passage the fake did not read', 'the fake section after it'], 'the Stage reads the passage and the section\'s end back');
+  const more = await run([...guide.doc, '@discover only after 2022'], 'dv4');
+  assert.equal(more.lines[0], 'bart> ## Recent', 'a follow-up on a guide gets additions');
+  assert.equal((await run(['@discover agents'], 'dv5a')).lines[0], 'bart> ## Start here', 'a line that names a problem, however short, asks no card');
+  const long = await run(['@discover why do coding agents retry the same failing step'], 'dv5');
+  assert.equal(long.lines[0], 'bart> ## Start here');
+  assert.ok(long.lines.some((line) => /\(standard mode\)/.test(line)));
+  const parsed = model.parseLine('@Discover why');
+  assert.deepEqual([parsed.agent, model.agentOf(parsed), model.agentOf(model.parseLine('@bart why'))], ['discover', 'discover', 'bart']);
+  projects.agentStarted(ctx, { id: 'dv-agent', kind: 'discover', projectId: project.id, workspaceId: workspace.id });
+  projects.agentFinished(ctx, 'dv-agent');
 });

@@ -88,12 +88,17 @@ export function attachRows({ query, library, taken = [], inRail = () => false })
 
 export const BART_VERB = { kind: 'verb', verb: 'bart', key: 'verb:bart', name: 'Bart', glyph: 'chat', token: '@Bart ' };
 export const NOTE_VERB = { kind: 'verb', verb: 'note', key: 'verb:note', name: 'Note', glyph: 'note', token: '@Note ' };
+// @brainstorm (2026-09-30): asks, a card at a time, what you want to work on.
+export const BRAINSTORM_VERB = { kind: 'verb', verb: 'brainstorm', key: 'verb:brainstorm', name: 'Brainstorm', glyph: 'chat', token: '@Brainstorm ' };
+// @discover (2026-09-30): what to read about a problem, and where in it to look.
+export const DISCOVER_VERB = { kind: 'verb', verb: 'discover', key: 'verb:discover', name: 'Discover', glyph: 'chat', token: '@Discover ' };
 const MAX_MENTIONS = 10;
 const MAX_WORKSPACES = 6; // typed
 const FIRST_WORKSPACES = 3; // before anything is typed
 
 /**
- * The @ menu (Add - Mention.dc.html `menu`): Bart and Note first (Task went on 2026-09-29), matched from their first letter; then the page
+ * The @ menu (Add - Mention.dc.html `menu`): Bart, Note, Brainstorm and Discover first (Task went on 2026-09-29; Brainstorm
+ * and Discover came on 2026-09-30), matched from their first letter; then the page
  * open in the Browser, which the library may not hold yet (`page` { input, title }, `pageRow` its row or null); then the
  * project's other workspaces (2026-09-25; `workspaces` as model/nav.js flatWorkspaces gives them, the ones written in
  * last first, never `hereId`): three before anything is typed, else up to six whose names hold the words; then up to ten
@@ -101,7 +106,7 @@ const FIRST_WORKSPACES = 3; // before anything is typed
  */
 export function mentionRows({ query, library, page, pageRow, workspaces = [], hereId = null }) {
   const needle = String(query || '').trim().toLowerCase();
-  const verbs = [BART_VERB, NOTE_VERB].filter((verb) => !needle || verb.name.toLowerCase().startsWith(needle));
+  const verbs = [BART_VERB, NOTE_VERB, BRAINSTORM_VERB, DISCOVER_VERB].filter((verb) => !needle || verb.name.toLowerCase().startsWith(needle));
   const pool = library.filter((row) => row.type !== 'image');
   let hits = (needle ? pool.filter((row) => hay(row).includes(needle)) : pool).map((row) => ({ kind: 'item', key: row.id, row, name: row.name }));
   const out = [...verbs];
