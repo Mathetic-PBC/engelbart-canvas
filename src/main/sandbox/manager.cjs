@@ -13,7 +13,11 @@ const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 // with the GitHub sign-in: whether it is private and wants Docker before the sandbox is made, and for a private one a
 // download link for its code, made when the sandbox is ready to use it and handed over with the worker's ack. The
 // sign-in itself never reaches the worker or the sandbox.
-function createSandboxManager({ notify, launch = launchWorker, readEnv = readSandboxEnv, secure, e2bKey = async () => null, githubLogin = () => '', repoAccess = null }) {
+// `claudeReady` throws, saying what to do, while Claude Code is not installed or not signed in to a subscription
+// (local-claude.cjs's prepareLocalClaude). A new run's setup needs it unless an ANTHROPIC_API_KEY stands in, so on a new
+// Mac, where onboarding saves a repository before Claude Code is installed and signed in, the run waits for it as it
+// waits for the E2B key (2026-10-01; it used to start, fail the check and stop on the missing ANTHROPIC_API_KEY).
+function createSandboxManager({ notify, launch = launchWorker, readEnv = readSandboxEnv, secure, e2bKey = async () => null, githubLogin = () => '', repoAccess = null, claudeReady = async () => {} }) {
   const workers = new Map();
   const contexts = new Map();
   const locks = new Map();
@@ -166,6 +170,18 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
           await stopRun(ctx, run.id);
         } else if (workers.has(run.id)) { publish(ctx, run); return run; }
         else run = await reconcile(ctx, run);
+      }
+      // Setup by the local Claude subscription (ENGELBART_SANDBOX_SETUP auto or claude-local; worker.cjs) needs it signed in
+      // first, unless auto has an API key to fall back to. Automatic preparation waits quietly, and runs once it is (the
+      // renderer prepares again when Claude Code's sign-in changes); an explicit start says why it cannot.
+      const setup = env.ENGELBART_SANDBOX_SETUP || 'auto';
+      if (setup === 'claude-local' || (setup === 'auto' && !env.ANTHROPIC_API_KEY)) {
+        try { await claudeReady(); }
+        catch (error) {
+          if (!automatic) throw error;
+          prepared.delete(key);
+          return (await store.latest()).find((item) => item.library_id === libraryId) || null;
+        }
       }
       // Cleanup may have failed on a previous attempt; retain and use that handle.
       const previous = (await store.latest()).find((item) => item.library_id === libraryId);

@@ -10,12 +10,12 @@ const db = require('../src/main/store/db.cjs');
 const { createSandboxManager } = require('../src/main/sandbox/manager.cjs');
 const { runStore } = require('../src/main/sandbox/runs.cjs');
 
-async function fixture(t, { readEnv = () => ({}), e2bKey = async () => 'e2b_signed_in', githubLogin = () => 'octocat', repoAccess = null } = {}) {
+async function fixture(t, { readEnv = () => ({}), e2bKey = async () => 'e2b_signed_in', githubLogin = () => 'octocat', repoAccess = null, claudeReady = async () => {} } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canvas-run-manager-'));
   const ctx = { root, dataRoot: root, libraryDb: await db.openLibraryDb(root) };
   const events = [], starts = [], controls = [], envs = [];
   let probe = { state: 'ready' };
-  const manager = createSandboxManager({ secure: { isEncryptionAvailable: () => true, encryptString: (value) => Buffer.from(value), decryptString: (value) => value.toString() }, notify: (event) => events.push(event), readEnv, e2bKey, githubLogin, repoAccess, launch(request, env, receive) {
+  const manager = createSandboxManager({ secure: { isEncryptionAvailable: () => true, encryptString: (value) => Buffer.from(value), decryptString: (value) => value.toString() }, notify: (event) => events.push(event), readEnv, e2bKey, githubLogin, repoAccess, claudeReady, launch(request, env, receive) {
     envs.push({ command: request.command, env });
     if (!['start', 'restart'].includes(request.command)) {
       controls.push(request);
@@ -350,6 +350,43 @@ test('automatic preparation waits for a key instead of failing every saved repos
   assert.equal(f.starts[0].request.command, 'start');
   await f.manager.start(f.ctx, f.repo.id, { automatic: true });
   assert.equal(f.starts.length, 1, 'still once per session after the key arrived');
+});
+
+test('automatic preparation waits for Claude Code to be signed in instead of failing on a missing ANTHROPIC_API_KEY', async (t) => {
+  let ready = false;
+  const f = await fixture(t, { claudeReady: async () => { if (!ready) throw new Error('Claude Code is not signed in to a Claude subscription (Engelbart ▸ Set Up Tools… signs in).'); } });
+  assert.equal(await f.manager.start(f.ctx, f.repo.id, { automatic: true }), null);
+  assert.equal(f.starts.length, 0);
+  assert.equal((await f.store.latest()).length, 0, 'no failed run is recorded while Claude Code is signed out');
+  ready = true;
+  const run = await f.manager.start(f.ctx, f.repo.id, { automatic: true });
+  assert.equal(run.status, 'starting');
+  assert.equal(f.starts.length, 1);
+  await f.manager.start(f.ctx, f.repo.id, { automatic: true });
+  assert.equal(f.starts.length, 1, 'still once per session after the sign-in');
+});
+
+test('an explicit start before Claude Code is signed in records nothing and says why', async (t) => {
+  const f = await fixture(t, { claudeReady: async () => { throw new Error('Claude Code is not installed yet (Engelbart ▸ Set Up Tools… installs it).'); } });
+  await assert.rejects(f.manager.start(f.ctx, f.repo.id), /^Error: Claude Code is not installed yet/);
+  assert.equal(f.starts.length, 0);
+  assert.equal((await f.store.latest()).length, 0);
+});
+
+test('Claude Code sign-in is asked for only when the subscription is what sets up', async (t) => {
+  const cases = [
+    [{}, 1], // auto, nothing to fall back to
+    [{ ANTHROPIC_API_KEY: 'sk-ant-fallback' }, 0], // auto falls back to the key
+    [{ ENGELBART_SANDBOX_SETUP: 'api', ANTHROPIC_API_KEY: 'sk-ant-api' }, 0],
+    [{ ENGELBART_SANDBOX_SETUP: 'claude-local', ANTHROPIC_API_KEY: 'sk-ant-unused' }, 1], // never falls back
+  ];
+  for (const [env, asks] of cases) {
+    let asked = 0;
+    const f = await fixture(t, { readEnv: () => env, claudeReady: async () => { asked++; } });
+    await f.manager.start(f.ctx, f.repo.id);
+    assert.equal(asked, asks, JSON.stringify(env));
+    assert.equal(f.starts.length, 1);
+  }
 });
 
 test('release stops a live sandbox and forgets its runs so the library row can be deleted', async (t) => {

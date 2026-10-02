@@ -61,18 +61,25 @@ export default function SandboxProgress({ dataRoot, library, inWorkspace, childr
     return () => { live = false; off(); };
   }, [dataRoot]);
   // Saved repositories are prepared once per app session (main skips the ones it already did). Signing in to GitHub
-  // brings the E2B key, so preparation that waited for it runs then.
+  // brings the E2B key, and signing Claude Code in to a subscription is what does the setup, so preparation that waited
+  // for either runs then.
   const [signedIn, setSignedIn] = React.useState(false);
   React.useEffect(() => {
     const take = (status) => setSignedIn(!!(status && status.connected));
     api.githubStatus().then(take).catch(() => {});
     return api.onGithub(take);
   }, []);
+  const [claudeSignedIn, setClaudeSignedIn] = React.useState(false);
+  React.useEffect(() => {
+    const take = (snapshot) => setClaudeSignedIn(snapshot?.tools?.claude?.signedIn === true);
+    api.tools().then(take).catch(() => {});
+    return api.onTools(take);
+  }, []);
   React.useEffect(() => {
     let live = true;
     api.ensureSandboxes().catch((e) => { if (live) setError(errorMessage(e)); });
     return () => { live = false; };
-  }, [dataRoot, library, signedIn]);
+  }, [dataRoot, library, signedIn, claudeSignedIn]);
   const act = async (run, action) => {
     setBusy((current) => ({ ...current, [run.id]: true })); setError('');
     try { await action(); } catch (e) { setError(errorMessage(e)); }

@@ -43,6 +43,7 @@ const { createBrowserAuth, CLIENT_ID: GITHUB_CLIENT_ID } = require('./github/bro
 const { createE2bKey } = require('./github/e2b-key.cjs');
 const { createRepoAccess } = require('./github/repo-access.cjs');
 const { createSandboxManager } = require('./sandbox/manager.cjs');
+const { prepareLocalClaude } = require('./sandbox/local-claude.cjs');
 const { createRepoIdentifier, createRemoteFileLister } = require('./store/page-meta.cjs');
 const { checkWebPdfs, readPdfResponse } = require('./store/web-pdfs.cjs');
 const { createPostItViews } = require('./post-its/views.cjs');
@@ -586,6 +587,8 @@ if (!hasSingleInstanceLock) {
       notify: (event) => sendToWindow('engelbart:sandbox-progress', event),
       e2bKey: () => e2bKey.get(),
       githubLogin: () => github.status().login,
+      // A new run waits until Claude Code is signed in to a subscription, which does its setup (sandbox/manager.cjs).
+      claudeReady: () => prepareLocalClaude(),
       // A private repository reaches its sandbox as a one-archive download link, never as the sign-in (github/repo-access.cjs).
       repoAccess: createRepoAccess({
         token: () => github.token(),
