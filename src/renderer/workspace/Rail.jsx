@@ -516,8 +516,8 @@ function LibrarySearch({ library, inRail, onPick, previews, onPreview, onOpenHel
   );
 }
 
-// "+ Add context" under the sections (Sidebar.dc.html, 2026-09-23; hovering it opens its menu too, as Hudson asked of the
-// + on 2026-09-22): a search over the library first (the sidebar's search again, closer to hand: typing lists what it finds
+// "+ Add context" under the sections (Sidebar.dc.html, 2026-09-23; a click opens its menu and a second click or a click
+// elsewhere closes it, 2026-09-29, where hovering used to open it): a search over the library first (the sidebar's search again, closer to hand: typing lists what it finds
 // in place of the rest), then a new Note or Sub-Workspace made here, then a link, a path or files from disk, or a
 // repository from GitHub, that become new rows, in the library and in this workspace. The home page's library uses the
 // same menu (2026-09-28), without Note and Sub-Workspace: there is no workspace there to make them in.
@@ -542,12 +542,9 @@ export function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickR
   const rowRef = React.useRef(null);
   const menuRef = React.useRef(null);
   const fieldRef = React.useRef(null);
-  const timer = React.useRef(null);
   const wantFocus = React.useRef(false);
-  const settled = React.useRef(false); // just added: the rows grew under a still pointer, which is not a hover
-  const live = React.useRef({ value: '', busy: false, view: 'menu' });
-  live.current = { value: value || q, busy, view };
-  React.useEffect(() => () => clearTimeout(timer.current), []);
+  const live = React.useRef({ busy: false });
+  live.current = { busy };
   React.useEffect(() => { if (onOpenChange) onOpenChange(open); }, [open, onOpenChange]);
   // The field takes the keyboard as soon as the menu shows, so a link can be pasted straight away. Not in the ref: the
   // panel is invisible for the frame in which it measures itself (ui/usePlaced.js), and an invisible field takes no focus.
@@ -561,10 +558,9 @@ export function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickR
     return () => clearTimeout(timer);
   }, [open, anchor]);
 
-  const hide = React.useCallback(() => { clearTimeout(timer.current); setOpen(false); setValue(''); setError(''); setView('menu'); setQ(''); setIdx(0); }, []);
+  const hide = React.useCallback(() => { setOpen(false); setValue(''); setError(''); setView('menu'); setQ(''); setIdx(0); }, []);
   React.useEffect(() => { if (shut && open && !live.current.busy) hide(); }, [shut]); // eslint-disable-line react-hooks/exhaustive-deps
   const show = () => {
-    clearTimeout(timer.current);
     if (open) return;
     if (rowRef.current) setAnchor(rectOf(rowRef.current));
     wantFocus.current = true;
@@ -572,16 +568,7 @@ export function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickR
     setError('');
     setOpen(true);
   };
-  // Moving off closes it after a short grace, unless something has been typed, it is busy, or GitHub is open in it (its
-  // repository picker should stay open while reading it).
-  const leave = () => {
-    clearTimeout(timer.current);
-    timer.current = setTimeout(() => {
-      if (live.current.value.trim() || live.current.busy || live.current.view !== 'menu') return;
-      for (const ref of [fieldRef, searchRef]) if (ref.current && document.activeElement === ref.current) ref.current.blur();
-      hide();
-    }, MENU_CLOSE);
-  };
+  const toggle = () => { if (!open) show(); else if (!busy) hide(); };
   React.useEffect(() => {
     if (!open) return undefined;
     const away = (event) => { if (live.current.busy) return; if (![rowRef, menuRef].some((ref) => ref.current && ref.current.contains(event.target))) hide(); };
@@ -595,7 +582,7 @@ export function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickR
     try {
       const problems = await work();
       if (problems && problems.length) setError(problems.join(' · '));
-      else { settled.current = true; hide(); setTimeout(() => { settled.current = false; }, 600); } // the next real hover opens it again, wherever the rows put the +
+      else hide();
     } catch (failure) {
       setError(errorMessage(failure));
     } finally {
@@ -637,15 +624,13 @@ export function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickR
   const menuRow = { display: 'flex', alignItems: 'center', gap: 12, width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: 0, borderRadius: 6, background: 'transparent', textAlign: 'left', cursor: 'pointer', transition: 'background 120ms' };
   const menuText = { flex: 1, minWidth: 0, font: '14px/1.5 var(--font-sans)', color: '#171717' };
   return (
-    <div data-rail-add="1" style={{ flex: 'none', position: 'relative' }} onMouseEnter={() => { if (!settled.current) show(); }} onMouseLeave={() => { settled.current = false; leave(); }}>
-      {/* Hover opens the menu, so a click on the row changes nothing (2026-09-23): it neither closes the menu nor takes the
-          keyboard from its search. It still opens a closed one (keyboard, or the still pointer just after an add). */}
-      <button ref={rowRef} type="button" className="hov-wash" onMouseDown={(event) => { if (open) event.preventDefault(); }} onClick={show} aria-label="Add context" aria-expanded={open} style={{ display: 'flex', alignItems: 'center', width: '100%', boxSizing: 'border-box', padding: '6px 10px 8px', border: 0, borderRadius: 6, background: open ? '#f2f2f2' : 'transparent', color: open ? '#171717' : '#8f8f8f', textAlign: 'left', cursor: 'pointer', transition: 'background 120ms, color 120ms' }}>
+    <div data-rail-add="1" style={{ flex: 'none', position: 'relative' }}>
+      <button ref={rowRef} type="button" className="hov-wash" onClick={toggle} aria-label="Add context" aria-expanded={open} style={{ display: 'flex', alignItems: 'center', width: '100%', boxSizing: 'border-box', padding: '6px 10px 8px', border: 0, borderRadius: 6, background: open ? '#f2f2f2' : 'transparent', color: open ? '#171717' : '#8f8f8f', textAlign: 'left', cursor: 'pointer', transition: 'background 120ms, color 120ms' }}>
         {CIRCLE_PLUS}
         <span style={{ marginLeft: 9, font: '14px/1.5 var(--font-sans)' }}>Add context</span>
       </button>
       {open && anchor && (
-        <Hanging anchor={anchor} width={anchor.width} gap={4} panelRef={menuRef} data-rail-add-menu="1" onMouseEnter={() => clearTimeout(timer.current)} onMouseLeave={leave} style={{ padding: 10 }}>
+        <Hanging anchor={anchor} width={anchor.width} gap={4} panelRef={menuRef} data-rail-add-menu="1" style={{ padding: 10 }}>
           {view === 'github' ? (
             <>
               <GithubPane library={library} inRail={inRail} busy={busy} onBack={() => { setView('menu'); setError(''); }} onPick={(entry) => make(() => onPickRepo(entry))} />
