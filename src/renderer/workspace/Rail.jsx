@@ -815,8 +815,8 @@ function PlaceName({ place, projectId, size }) {
 const barButton = (enabled) => ({ flex: 'none', width: BAR_SIZE, aspectRatio: '1', boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, border: 0, borderRadius: 10, background: 'transparent', cursor: enabled ? 'pointer' : 'default' });
 const barPicture = { display: 'block', objectFit: 'contain', pointerEvents: 'none', userSelect: 'none' };
 
-/** Beside the sticky (2026-09-29): a switch that says whether the stickies are shown, on a grey pill. It takes every
- *  sticky out of sight or brings them back; it never makes or deletes one. */
+/** Beside the sticky (2026-09-29): a "Show stickies" switch on a grey pill (2026-10-02: the words stay put and the
+ *  switch alone says on or off). It takes every sticky out of sight or brings them back; it never makes or deletes one. */
 function StickiesToggle({ hidden, onToggle }) {
   const on = !hidden;
   return (
@@ -833,7 +833,7 @@ function StickiesToggle({ hidden, onToggle }) {
       <span className="stickies-track" style={{ flex: 'none', position: 'relative', width: 24, height: 14, borderRadius: 999, background: on ? '#171717' : '#c9c9c9' }}>
         <span data-knob="1" style={{ position: 'absolute', top: 2, left: 2, width: 10, height: 10, borderRadius: '50%', background: '#fff', transform: on ? 'translateX(10px)' : 'none' }} />
       </span>
-      <span className="stickies-word" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{on ? 'Stickies shown' : 'Stickies hidden'}</span>
+      <span className="stickies-word" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>Show stickies</span>
     </button>
   );
 }
