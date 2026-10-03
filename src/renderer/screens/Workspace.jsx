@@ -13,6 +13,7 @@ import { adoptSession, dropSession, SHOW_TERMINAL } from '../terminal/sessions.j
 import { mentionRows } from '../model/rail.js';
 import { flatWorkspaces, nextPlace, placesToGo } from '../model/nav.js';
 import { onStage } from '../model/stage.js';
+import { paperState, savePaper } from '../model/guide.js';
 import { buildLine, placeAnswer } from '../model/doc.js';
 import { buildRequestOf } from '../../main/bart/question.cjs';
 import ProjectPostIts from '../post-its/ProjectPostIts.jsx';
@@ -663,6 +664,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   }, [openPage && openPage.input, library]); // eslint-disable-line react-hooks/exhaustive-deps
   const pageKnown = openPage && pageInfo && pageInfo.input === openPage.input && pageInfo.addable ? pageInfo : null;
   const pageState = pageKnown ? (pageKnown.row ? (railIds.has(pageKnown.row.id) ? 'here' : 'lib') : 'none') : null;
+  // The same three states for each paper of an @discover guide (2026-10-02, model/guide.js), read again whenever the
+  // library or the rail changes: a paper saved from the Stage reads ✓ in the guide too.
+  const guidePaperState = React.useCallback((address) => paperState(library, address, inRail).state, [library, inRail]);
 
   /* --------------------------------------------------------------- opening */
 
@@ -974,6 +978,11 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     if (done) done.catch((error) => onError(error));
   };
 
+  // A paper's button in an @discover guide (2026-10-02): + Save adds it as the Stage's Save with Enter does when the tab
+  // has no copy (the address, named with its title, linked here; main keeps its pdf straight away), + Workspace links the
+  // library's row. Two clicks never make two rows: the second finds it here, or main refuses it as already in the library.
+  const saveGuidePaper = ({ address, title }) => savePaper({ address, title, library, inRail }, { addInput, linkIds });
+
   // The Browser's Save: the page as a new row, named in the card, into the library alone or also into this workspace.
   const savePage = async (name, here) => {
     if (!openPage) return;
@@ -1251,6 +1260,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
               onCopyText={(value) => api.copyText(value)}
               onAsk={askBart}
               onStopAsk={(askId) => api.stopBart(askId).catch((error) => onError(error))}
+              paperState={guidePaperState}
+              onSavePaper={saveGuidePaper}
+              onError={onError}
               viewScope={topic ? topic.id : null}
               viewOf={viewOf}
               onView={recordPosition}

@@ -411,13 +411,13 @@ if (!hasSingleInstanceLock) {
     settings = new SettingsStore(app.getPath('userData'), app.getPath('home'));
     const homeDir = process.env.ENGELBART_HOME_DIR || app.getPath('home');
     // Pdfs saved as links before the Stage kept copies: every library that opens is checked, and what is left is
-    // downloaded in the background with the Stage's cookies (a paper behind a sign-in comes too). ENGELBART_WEB_PDFS=off
-    // disables it (scripted runs).
+    // downloaded in the background with the Stage's cookies (a paper behind a sign-in comes too). A page row added while
+    // the app is open is checked straight away (`again`: store.recheck). ENGELBART_WEB_PDFS=off disables it (scripted runs).
     let changedTimer = null;
     const libraryChanged = () => { clearTimeout(changedTimer); changedTimer = setTimeout(() => sendToWindow('engelbart:library-changed', {}), 400); };
     const fetchPdf = async (url) => readPdfResponse(await electronSession.fromPartition(BROWSER_PARTITION).fetch(url, { signal: AbortSignal.timeout(120000) }));
     const afterOpen = process.env.ENGELBART_WEB_PDFS === 'off' ? null
-      : (ctx) => checkWebPdfs(ctx, { fetchPdf, inspectPdf, onChange: libraryChanged, log: (line) => console.warn(`[engelbart] ${line}`) });
+      : (ctx, { again = false } = {}) => checkWebPdfs(ctx, { fetchPdf, inspectPdf, onChange: libraryChanged, log: (line) => console.warn(`[engelbart] ${line}`), again });
     // Test mode only in a developer's copy: run from a checkout, or packaged by `npm run relaunch` (./developer.cjs).
     store = createStore({ homeDir, rootDir: process.env.ENGELBART_ROOT_DIR || null, fixturesDir: FIXTURES, inspectPdf, afterOpen, testMode: hasTestMode({ packaged: app.isPackaged, distDir: DIST, env: process.env }) });
     // Git, Claude Code and Codex (src/main/tools): checked at every launch in the background and recorded in

@@ -22,6 +22,7 @@ const archive = require('./store/archive.cjs');
 const onboarding = require('./store/onboarding.cjs');
 const { buildChoices } = require('./bart/models.cjs');
 const { githubRepo } = require('./sandbox/runs.cjs');
+const { candidate: pdfCandidate } = require('./store/web-pdfs.cjs');
 
 const BUILD_LINE_RE = /^build> ([a-z0-9]{6,32})$/;
 const buildId = (value) => { if (typeof value !== 'string' || !/^[0-9a-f]{10}$/.test(value)) throw new TypeError('build id is invalid'); return value; };
@@ -53,7 +54,8 @@ function projectInput(value) {
 
 // `inspectPdf` (the app passes pdf-kind's) is how a pdf is read for whether it is a paper when a library is re-categorized.
 // `afterOpen(ctx)` runs each time a library is opened and ready, not awaited: background work that must not hold the
-// library back (the app checks for pdfs saved as links: store/web-pdfs.cjs).
+// library back (the app checks for pdfs saved as links: store/web-pdfs.cjs). `recheck(ctx)` runs it again for a library
+// that is open, as `afterOpen(ctx, { again: true })`, when a row it would act on has just been added (2026-10-02).
 // `testMode`: whether this copy has test mode at all (./developer.cjs). Without it config.json's `testMode` is read as
 // off but never rewritten, so a developer's copy sharing the file keeps its setting.
 function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf = null, afterOpen = null, testMode: available = false }) {
@@ -99,6 +101,10 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
     }
   }
 
+  function recheck(ctx) {
+    if (afterOpen) Promise.resolve().then(() => afterOpen(ctx, { again: true })).catch(() => {});
+  }
+
   async function closeAll() {
     contexts.clear();
     await db.closeAll();
@@ -125,7 +131,7 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
     return describe();
   }
 
-  return { layout, context, config: describe, setTestMode, resetTestData, requireTestMode, close: closeAll };
+  return { layout, context, recheck, config: describe, setTestMode, resetTestData, requireTestMode, close: closeAll };
 }
 
 function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, tools = null, builds = null, sandbox = null }) {
@@ -411,12 +417,15 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('library-for-project', withCtx((ctx, pid) => library.libraryForProject(ctx, str(pid, 'project id', 64))));
   // Adding makes a new row or throws "Already in the library as …" (library.addItem). `options.name` names it (the Browser's Save card).
   // A GitHub repository's sandbox starts once the row is saved; a failure to start it leaves the row saved and says why.
+  // A page row that may be a pdf (an arXiv paper, a .pdf address, any other page that might answer with one) is checked
+  // now, in the background, rather than on the next launch: one that is becomes a saved pdf (store/web-pdfs.cjs).
   handle('add-library-item', (input, options) => {
     const value = str(input, 'link or path', 4096);
     const name = optStr(options && typeof options === 'object' ? options.name : null, 'name', 200);
     return queued(async () => {
       const ctx = await store.context();
       const row = await library.addItem(ctx, value, { describe, identifyRepo, inspectPdf, name });
+      if (store.recheck && pdfCandidate(row)) store.recheck(ctx);
       // Adding a local clone or a non-GitHub item does not start remote work.
       if (sandbox && /^(?:https?:\/\/(?:www\.)?github\.com\/|git@github\.com:)/i.test(value.trim())) {
         try { await sandbox.start(ctx, row.id, { waitForClaude: true }); } catch (error) { return { ...row, sandbox_error: error.message }; }

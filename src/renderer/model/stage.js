@@ -53,6 +53,31 @@ export function rowForAddress(library, address) {
   return (library || []).find((row) => onStage(row) && ((path && row.path === path) || (key && row.url && addressKey(row.url) === key))) || null;
 }
 
+// A paper's address as the library spells it (main/store/library.cjs resolveAddition): an arXiv pdf, a version or a
+// .pdf is the paper's abstract page, a DOI is doi.org's. Anything else is as it came.
+const ARXIV_RE = /^(?:arxiv:\s*|https?:\/\/(?:www\.)?arxiv\.org\/(?:abs|pdf)\/)?(\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?\/?$/i;
+const DOI_RE = /^(?:doi:\s*|https?:\/\/(?:dx\.)?doi\.org\/)?(10\.\d{4,9}\/\S+)$/i;
+export function libraryAddress(address) {
+  const where = String(address || '').trim();
+  let m;
+  if ((m = where.match(ARXIV_RE))) return `https://arxiv.org/abs/${m[1]}`;
+  if ((m = where.match(DOI_RE))) return `https://doi.org/${m[1]}`;
+  return where;
+}
+
+/**
+ * The library row a paper's address is (2026-10-02, an @discover guide's title): rowForAddress, and else the row the
+ * library made for it, which spells an arXiv pdf as its abstract page (`arxiv.org/pdf/2205.04561` is the row of
+ * `arxiv.org/abs/2205.04561`).
+ */
+export function paperRow(library, address) {
+  const spelled = libraryAddress(address);
+  return rowForAddress(library, address) || (spelled !== String(address || '').trim() ? rowForAddress(library, spelled) : null);
+}
+
+/** A page's save button, by where the page is: not in the library, in it but not this workspace, here. The Stage's address and an @discover guide's titles (2026-10-02). */
+export const SAVE_LABEL = { none: '+ Save', lib: '+ Workspace', here: '✓' };
+
 const fileAddress = (file) => `file://${String(file).split('/').map(encodeURIComponent).join('/')}`;
 
 /**
@@ -60,10 +85,13 @@ const fileAddress = (file) => `file://${String(file).split('/').map(encodeURICom
  * row, ink and all; otherwise the address does. `key` is the tab it comes forward in when that is open already (tabKey;
  * '' always takes a tab of its own, as a path did before passages): a page by its address, a row by its id, and with a
  * passage a file by its path too.
+ * A passage in an arXiv pdf opens the paper's row once the library keeps its copy (2026-10-02: a paper saved from its
+ * guide reads offline); while the row is still its abstract page, the pdf's address opens, as before.
  */
 export function linkPlan(href, library) {
   const { address, find, to } = splitTarget(href);
-  const row = find ? rowForAddress(library, address) : null;
+  const kept = find ? paperRow(library, address) : null;
+  const row = find ? rowForAddress(library, address) || (kept && kept.type === 'pdf' && kept.path ? kept : null) : null;
   if (row) return { address, find, to, row, key: `i:${row.id}` };
   const k = kindOf(address);
   const page = k.kind === 'web' || k.kind === 'local' || k.kind === 'disk';

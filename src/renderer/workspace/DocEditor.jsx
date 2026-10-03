@@ -18,6 +18,8 @@
 //     never take the caret. The last card of a card's thread is live: Submit or Skip writes the answer as the next
 //     `@brainstorm …` line and asks it, as a follow-up is asked. Earlier cards show what was picked. @discover (2026-09-30)
 //     asks its cards the same way, as `@discover …` lines, and answers with a reading guide drawn as an @bart answer is.
+//     Each paper's title line in a guide ends in a button that keeps the paper (2026-10-02, model/guide.js): + Save, + Workspace
+//     or ✓, from props.paperState; a click hands it to props.onSavePaper. Drawn, never written: the line stays as it came.
 //   * where a document was scrolled to is kept per workspace (props.viewOf / props.onView, 2026-09-22), apart from the
 //     caret: coming back to a document shows what was on screen, not where the last edit was.
 import React from 'react';
@@ -29,6 +31,8 @@ import MentionMenu from './MentionMenu.jsx';
 import Popover from './Popover.jsx';
 import WorkspacePeek from './WorkspacePeek.jsx';
 import { diffRows, diffTotals, nextAttachment } from '../model/build-diff.js';
+import { guideTitle } from '../model/guide.js';
+import { SAVE_LABEL } from '../model/stage.js';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
@@ -113,6 +117,8 @@ export default class DocEditor extends React.Component {
   // earlier messages and their steps, where each card's diff is scrolled to, and the HTML each part of each card was last
   // drawn with (patchBuilds compares these).
   buildText = new Map(); buildImages = new Map(); buildOpen = new Set(); buildSteps = new Set(); buildScroll = new Map(); buildDrawn = new Map();
+  // An @discover guide's papers being saved, by address: the button's state when it was clicked (it stays disabled on it).
+  saving = new Map();
   scrollRef = React.createRef();
   parsedCache = new WeakMap();
   // Where the open document was scrolled to: reported (onView) a moment after scrolling stops and whenever it is left;
@@ -189,7 +195,8 @@ export default class DocEditor extends React.Component {
     // where they stand: the rest of the editor, the caret and a selection in it are not touched.
     const asked = prevProps.asks !== this.props.asks, built = prevProps.builds !== this.props.builds || prevProps.buildProgress !== this.props.buildProgress || prevProps.buildDiffs !== this.props.buildDiffs;
     // Builds first: each patch ends by redrawing the editor's HTML in memory, which is where the cards' parts are remembered.
-    if ((asked || built) && prevProps.text === this.props.text && prevProps.docKey === this.props.docKey && prevProps.models === this.props.models && (!built || this.patchBuilds()) && (!asked || this.patchPending())) return;
+    // A guide's paper buttons (paperState) are not patched: a change there redraws the editor.
+    if ((asked || built) && prevProps.text === this.props.text && prevProps.docKey === this.props.docKey && prevProps.models === this.props.models && prevProps.paperState === this.props.paperState && (!built || this.patchBuilds()) && (!asked || this.patchPending())) return;
     this.syncEditor();
     this.maybeRestoreView();
   }
@@ -486,7 +493,9 @@ export default class DocEditor extends React.Component {
       // And its other lines ("Where you are: …") as sections: the label in bold on a line of its own, the words under it.
       const recap = at && at.agent === 'brainstorm' && !active && !look ? recapLine(p.text) : null;
       const lookAbove = look && !first && !!recapParts(parseLine(this.lines()[i - 1] ?? '').text).lookFor.length;
-      const a = this.answerLook(p.text), content = active ? this.activeHtml(tokensOf(p, line)) : look ? (lookAbove ? '' : this.recapLabelHtml('Look for prior work', first)) + this.lookForHtml(i, look, lookAbove ? 6 : 4) : recap ? this.recapHtml(recap, first) : a.content;
+      // An @discover guide's title line (2026-10-02) ends in its paper's save button.
+      const paper = at && at.agent === 'discover' && !active ? this.guidePaper(i, p.text, at) : null;
+      const a = this.answerLook(p.text), content = active ? this.activeHtml(tokensOf(p, line)) : look ? (lookAbove ? '' : this.recapLabelHtml('Look for prior work', first)) + this.lookForHtml(i, look, lookAbove ? 6 : 4) : recap ? this.recapHtml(recap, first) : a.content + (paper ? this.paperSaveHtml(i, paper) : '');
       return `<div ${raw} style="padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(!at && first, closes)};margin-bottom:${closes ? 14 : 0}px;color:#4d4d4d;font-size:16px;line-height:1.65;cursor:text"><span style="display:block;padding:${first ? 2 : 0}px 0 ${last ? 2 : 0}px 12px;border-left:2px solid #dcdcdc"><span class="t" style="display:block;min-height:${a.minHeight}px;border-radius:4px;${a.look}${active ? 'background:#f2f2f2;box-shadow:0 0 0 4px #f2f2f2;' : ''}">${content || '<br>'}</span></span></div>`;
     }
     if (p.type === 'quote') {
@@ -546,6 +555,32 @@ export default class DocEditor extends React.Component {
     const can = !!this.props.onAsk;
     return `<button type="button" contenteditable="false" class="${can ? 'hov-ink-wash' : ''}" data-act="discoverlook" data-row="${i}" ${can ? '' : 'disabled'} style="user-select:none;display:inline-flex;align-items:baseline;gap:6px;max-width:100%;margin:${above}px 0 2px;padding:4px 10px;border:1px solid #eaeaea;border-radius:6px;background:#fff;font:14px/1.5 var(--font-sans);color:#171717;text-align:left;cursor:${can ? 'pointer' : 'default'}"><span style="flex:none;color:#0070f3;font-weight:500">@discover</span><span>${esc(query)}</span></button>`;
   }
+  // An @discover guide's title line → its paper ({ title, address }, model/guide.js), or null. The line under it, in the
+  // same answer, says whether the entry was read from its abstract alone (no button then).
+  guidePaper(i, text, at) {
+    const below = i + 1 <= at.turn.to ? parseLine(this.lines()[i + 1] ?? '') : null;
+    return guideTitle(text, below && below.type === 'reply' ? below.text : null);
+  }
+  // Its button, after the line's text, drawn as the Stage's Save is: + Save, + Workspace, or ✓ (disabled). While a click is
+  // at work it is disabled on what it said when clicked. No button where the editor is not told where papers are.
+  paperSaveHtml(i, paper) {
+    const known = this.props.paperState ? this.props.paperState(paper.address) : null; if (!SAVE_LABEL[known]) return '';
+    const held = this.saving.get(paper.address), state = held || known, off = !!held || state === 'here' || !this.props.onSavePaper;
+    return `<button type="button" contenteditable="false" class="${off ? '' : 'hov-ink-wash'}" data-act="papersave" data-row="${i}" data-save="${state}" ${off ? 'disabled aria-disabled="true"' : ''} title="${state === 'here' ? 'In this workspace' : state === 'lib' ? 'In the library: add it to this workspace' : 'Save to the library and this workspace'}" style="user-select:none;display:inline-flex;align-items:center;height:22px;margin-left:8px;padding:0 8px;border:1px solid #eaeaea;border-radius:5px;background:#fff;vertical-align:1px;font:500 12px/1 var(--font-sans);color:${state === 'here' || held ? '#8f8f8f' : '#4d4d4d'};white-space:nowrap;cursor:${off ? 'default' : 'pointer'}">${esc(SAVE_LABEL[state])}</button>`;
+  }
+  // The button clicked: the paper goes to props.onSavePaper, the document is not touched. A failure goes to props.onError
+  // and the button says what it said before; a success shows when the library or the workspace changes.
+  savePaper(i) {
+    const ls = this.lines(), p = this.parsedOf(ls)[i], at = this.layout(ls).get(i);
+    if (!p || p.type !== 'reply' || !at || at.agent !== 'discover' || !this.props.onSavePaper || !this.props.paperState) return;
+    const paper = this.guidePaper(i, p.text, at), state = paper && this.props.paperState(paper.address);
+    if (!paper || this.saving.has(paper.address) || (state !== 'none' && state !== 'lib')) return;
+    this.saving.set(paper.address, state); this.redraw();
+    Promise.resolve().then(() => this.props.onSavePaper(paper))
+      .catch((error) => { if (this.props.onError) this.props.onError(error); })
+      .finally(() => { this.saving.delete(paper.address); this.redraw(); });
+  }
+  redraw() { this.lastHtml = null; if (this.mounted) this.forceUpdate(); }
   // A recap's Look for line clicked: after the brainstorm thread, a blank line (so the new line starts a thread of its own,
   // doc.js threads) and "@discover <query>" with its pending line, asked with no earlier turns.
   discoverLook(i) {
@@ -1347,6 +1382,7 @@ export default class DocEditor extends React.Component {
       if (k === 'pickfollow') { this.openPicker(act, 'follow'); return; }
       if (k === 'sendfollow') { this.closePicker(); this.sendFollow(Number(act.dataset.thread)); return; }
       if (k === 'discoverlook') { this.closePicker(); this.discoverLook(i); return; }
+      if (k === 'papersave') { if (!act.disabled) this.savePaper(i); return; }
       if (k === 'regen') { this.closePicker(); const q = Number(act.dataset.turn); this.regenerate(q, act.dataset.plain ? undefined : this.ranWith(this.lines(), q).choice); return; }
       if (k === 'cardopt') { this.pickCard(Number(act.dataset.turn), Number(act.dataset.opt)); return; }
       if (k === 'cardsend') { this.sendCard(Number(act.dataset.turn), false); return; }

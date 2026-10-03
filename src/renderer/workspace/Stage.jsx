@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
 import { KindGlyph, SEARCH, FOLDER } from '../ui/Icons.jsx';
 import { kindOf, stripScheme, OPEN_IN_BROWSER } from '../model/address.js';
-import { MAX_TABS, addressKey, afterClose, linkPlan, looksLikePlace, placeTab, stageRows, tabKey, tabPlace, parseTable } from '../model/stage.js';
+import { MAX_TABS, SAVE_LABEL, addressKey, afterClose, linkPlan, looksLikePlace, placeTab, stageRows, tabKey, tabPlace, parseTable } from '../model/stage.js';
 import { markdownBlocks, inlineRuns } from '../model/markdown.js';
 import PaperView from '../pdf/PaperView.jsx';
 
@@ -52,7 +52,6 @@ const fileUrl = (file) => `file://${String(file).split('/').map(encodeURICompone
 const editable = (el) => !!(el && el.closest && el.closest('input, textarea, [contenteditable="true"], [data-terminal]'));
 const inTerminal = (el) => !!(el && el.closest && el.closest('[data-terminal]'));
 const basename = (value) => String(value || '').split('/').pop();
-const SAVE_LABEL = { none: '+ Save', lib: '+ Workspace', here: '✓' };
 const VIEWS = new Set(['md', 'table', 'text', 'image', 'folder', 'unsupported', 'error', 'loading']); // a file drawn here, not in the view
 
 const ICON_BUTTON = { width: 26, height: 26, padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', font: '14px/1 var(--font-sans)' };
