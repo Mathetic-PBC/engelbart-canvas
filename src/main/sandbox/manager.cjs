@@ -5,7 +5,16 @@ const { readSandboxEnv } = require('./config.cjs');
 const { launchWorker } = require('./transport.cjs');
 const { safePreview, MISSING_KEY } = require('./worker.cjs');
 const { environmentStore, redact, redactEvent } = require('./environment.cjs');
+const { EXPIRE_MS, EXPIRED, expiredRun } = require('../../shared/sandbox-sleep.cjs');
 const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+// A ready preview sleeps after 10 minutes without a ping from the Stage (touch; worker.cjs's IDLE). Pings closer together
+// than TOUCH_EVERY change nothing.
+const IDLE_MS = 10 * 60_000;
+const TOUCH_EVERY = 30_000;
+const ASLEEP = 'Paused after 10 minutes unused';
+const QUIT_ASLEEP = 'Paused when Engelbart quit';
+const EXPIRED_MESSAGE = 'Stopped after 7 days unopened';
+const notFound = (error) => error?.name === 'NotFoundError' || error?.name === 'SandboxNotFoundError' || error?.status === 404;
 
 // `e2bKey`: the E2B API key for whoever is signed in to GitHub (src/main/github/e2b-key.cjs), and the only one a worker
 // gets: an E2B_API_KEY in .env.local, ~/.engelbart/sandbox.env or the environment (readEnv) is dropped. `githubLogin`
@@ -17,12 +26,14 @@ const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 // (local-claude.cjs's prepareLocalClaude). A new run's setup needs it unless an ANTHROPIC_API_KEY stands in, so on a new
 // Mac, where onboarding saves a repository before Claude Code is installed and signed in, the run waits for it as it
 // waits for the E2B key (2026-10-01; it used to start, fail the check and stop on the missing ANTHROPIC_API_KEY).
-function createSandboxManager({ notify, launch = launchWorker, readEnv = readSandboxEnv, secure, e2bKey = async () => null, githubLogin = () => '', repoAccess = null, claudeReady = async () => {} }) {
+// `Sandbox`: E2B's, for touch's one call from this process (every other E2B call is a worker's).
+function createSandboxManager({ notify, launch = launchWorker, readEnv = readSandboxEnv, secure, e2bKey = async () => null, githubLogin = () => '', repoAccess = null, claudeReady = async () => {}, Sandbox = null, now = Date.now }) {
   const workers = new Map();
   const contexts = new Map();
   const locks = new Map();
   const messages = new Map();
   const prepared = new Set();
+  const touched = new Map();
   let closing = false;
   let polling = false;
   let pollDone = Promise.resolve();
@@ -67,12 +78,14 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
   async function end(ctx, run, status, error = null) {
     return update(ctx, run, { status, error, finished_at: new Date().toISOString() }, { message: error || 'Sandbox stopped' });
   }
-  async function reconcile(ctx, run) {
+  // `result`: the probe pollOnce already made, if it did.
+  async function reconcile(ctx, run, result = null) {
     if (workers.has(run.id)) return run;
-    const result = await control(ctx, 'probe', run);
+    if (!result) result = await control(ctx, 'probe', run);
     const { state } = result;
     if (!run.sandbox_id && result.sandbox_id) run = await update(ctx, run, { sandbox_id: result.sandbox_id });
-    if (state === 'ready' && run.status === 'ready') return run;
+    // Asleep is as good as live: the next request to its preview wakes it.
+    if (['ready', 'paused'].includes(state) && run.status === 'ready') return run;
     if (state === 'unreachable') throw new Error('The preview is temporarily unreachable. Retry the check or stop the run before starting another.');
     if (state !== 'gone') await control(ctx, 'kill', run);
     return end(ctx, run, run.status === 'starting' ? 'failed' : 'stopped', run.status === 'starting' ? 'Setup was interrupted. Retry to start a new run.' : null);
@@ -96,6 +109,10 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
       // duplicates so the persisted completion time/read state stays stable.
       if (run.status === 'ready') return;
       await update(ctx, run, { status: 'ready', preview_url: safePreview(event.preview_url), port: event.port }, { message: 'Preview ready', notification: 'preview-ready' });
+    } else if (event.event === 'paused') {
+      // Asleep, not stopped: the run stays ready, and its worker leaves (worker.cjs's asleep).
+      if (run.status !== 'ready') return;
+      publish(ctx, await store.record(run.id, ASLEEP, { data: { lifecycle: 'paused' } }), { message: ASLEEP });
     } else if (event.event === 'failed' || event.event === 'stopped') {
       await end(ctx, run, event.event, event.event === 'failed' ? String(event.error || 'Setup failed').slice(0, 4000) : null);
     } else throw new Error('Unknown sandbox event');
@@ -114,6 +131,7 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
     // goes with it, made now because it lasts minutes.
     const onEvent = async (event) => {
       if (held.detaching) return undefined;
+      if (event.event === 'paused') held.asleep = true; // its exit, next, is not a failure
       await receive(ctx, run.id, redactEvent(event, Object.values(environment.values)));
       if (event.event !== 'sandbox_created' || !access || !access.private || held.detaching) return undefined;
       return { archive_url: await repoAccess.archive(repo), ...(access.branch ? { branch: access.branch } : {}) };
@@ -124,7 +142,7 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
     held.worker = worker;
     workers.set(run.id, held);
     const finish = async (error) => {
-      if (held.detaching) return;
+      if (held.detaching || held.asleep) return;
       const current = await runStore(ctx.libraryDb).get(run.id);
       if (current && ['starting', 'ready'].includes(current.status)) {
         let cleanup = '';
@@ -154,6 +172,11 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
       const store = runStore(ctx.libraryDb);
       // Prepare once per app session. Refreshes must not undo Stop or loop on failures.
       if (automatic && prepared.has(key)) return (await store.latest()).find((item) => item.library_id === libraryId) || null;
+      // A preview the sweep ended (pollOnce) is built again when it is opened, not by a new session's preparation.
+      if (automatic) {
+        const latest = (await store.latest()).find((item) => item.library_id === libraryId);
+        if (expiredRun(latest)) return latest;
+      }
       // The key comes first: without one (signed out of GitHub, mathetic.com unreachable) nothing is recorded.
       // Automatic preparation waits quietly and runs once there is one; an explicit start says why it cannot.
       let env;
@@ -169,6 +192,7 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
         if (run.status === 'ready') {
           const { state } = await control(ctx, 'probe', run);
           if (state === 'ready') { publish(ctx, run, { message: 'Preview ready' }); return run; }
+          if (state === 'paused') { publish(ctx, run, { message: 'Paused; opening the preview wakes it' }); return run; }
           if (state === 'unreachable') throw new Error('The preview is temporarily unreachable. Stop the run or retry the check.');
           await stopRun(ctx, run.id);
         } else if (workers.has(run.id)) { publish(ctx, run); return run; }
@@ -260,6 +284,30 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
     for (const run of runs) publish(ctx, run);
     return runs.map((run) => ({ run, message: messages.get(run.id) || run.build_log?.at(-1)?.message || '' }));
   }
+  // The preview in front of a focused window (the Stage's ping, about once a minute): its sandbox's sleep goes back to
+  // 10 minutes away, by one call from here rather than a worker, and the run is marked opened for the sweep. Pings closer
+  // than 30 seconds apart change nothing. Asleep or gone, E2B says it was not found, and the next poll tells which; a ping
+  // never wakes it.
+  async function touch(ctx, libraryId) {
+    const run = await runStore(ctx.libraryDb).active(libraryId);
+    if (run?.status !== 'ready' || !run.sandbox_id) return;
+    const at = now();
+    if (at - (touched.get(run.id) || 0) < TOUCH_EVERY) return;
+    touched.set(run.id, at);
+    await runStore(ctx.libraryDb).update(run.id, { last_opened_at: new Date(at).toISOString() });
+    let env;
+    try { env = await environmentFor(ctx); } catch { return; } // signed out: it sleeps at its time
+    try { await (Sandbox || require('e2b').Sandbox).setTimeout(run.sandbox_id, IDLE_MS, { apiKey: env.E2B_API_KEY, requestTimeoutMs: 10_000 }); }
+    catch (error) { if (!notFound(error)) throw error; }
+  }
+  // The sweep (pollOnce): a ready preview asleep and not opened for 7 days ends, marked so that opening it builds it again.
+  const unopened = (run) => now() - Date.parse(run.last_opened_at || run.created_at) > EXPIRE_MS;
+  async function expire(ctx, run) {
+    await control(ctx, 'kill', run);
+    const stopped = await runStore(ctx.libraryDb).update(run.id, { status: 'stopped', finished_at: new Date(now()).toISOString() });
+    if (!stopped) return;
+    publish(ctx, await runStore(ctx.libraryDb).record(stopped.id, EXPIRED_MESSAGE, { data: { lifecycle: EXPIRED } }), { message: EXPIRED_MESSAGE });
+  }
   async function pollOnce() {
     if (closing || polling) return;
     polling = true;
@@ -276,11 +324,17 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
             const current = await runStore(ctx.libraryDb).get(run.id);
             if (!['starting', 'ready'].includes(current.status)) return;
             try {
-              if (current.status === 'ready' && workers.has(current.id)) {
+              if (workers.has(current.id)) {
+                // Setup still running, or a ready app its worker watches. Asleep ('paused'), that worker is on its way out.
+                if (current.status !== 'ready') return;
                 const result = await control(ctx, 'probe', current);
                 if (['gone', 'inactive'].includes(result.state)) await stopRun(ctx, current.id);
                 else if (result.state === 'unreachable') publish(ctx, current, { message: 'Preview currently unreachable; checking again shortly' });
-              } else await reconcile(ctx, current);
+              } else {
+                const result = await control(ctx, 'probe', current);
+                if (result.state === 'paused' && current.status === 'ready' && unopened(current)) await expire(ctx, current);
+                else await reconcile(ctx, current, result);
+              }
             } catch (error) { publish(ctx, current, { message: error.message }); }
           });
         }
@@ -297,17 +351,30 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
       await Promise.allSettled([...locks.values()]);
       // A terminal event reaches the UI before its worker finishes exiting/cleanup.
       // Drain those workers too, before the caller closes or replaces the database.
-      for (const held of [...workers.values()]) {
-        await held.worker.stop().catch(() => {});
+      // A ready preview's worker lets go of it instead of stopping it: it goes to sleep below.
+      for (const [id, held] of [...workers.entries()]) {
+        const run = await runStore(held.ctx.libraryDb).get(id);
+        if (run?.status === 'ready' && run.sandbox_id) {
+          held.detaching = true;
+          await held.worker.detach().catch(() => {}); // fails only when it is already leaving
+        } else await held.worker.stop().catch(() => {});
         await held.finished;
       }
       for (const ctx of contexts.values()) {
         for (const run of await runStore(ctx.libraryDb).latest()) {
-          if (['starting', 'ready'].includes(run.status)) await stopRun(ctx, run.id);
+          if (run.status === 'ready' && run.sandbox_id) await sleep(ctx, run);
+          else if (['starting', 'ready'].includes(run.status)) await stopRun(ctx, run.id);
         }
       }
-      contexts.clear(); messages.clear(); prepared.clear();
+      contexts.clear(); messages.clear(); prepared.clear(); touched.clear();
     } finally { closing = false; }
+  }
+  // Quitting puts a ready preview to sleep, to wake when it is next opened. One that cannot be put to sleep now (offline,
+  // signed out) sleeps by itself within 10 minutes of its last ping.
+  async function sleep(ctx, run) {
+    let result;
+    try { result = await control(ctx, 'pause', run); } catch { return; }
+    if (result.paused) publish(ctx, await runStore(ctx.libraryDb).record(run.id, QUIT_ASLEEP, { data: { lifecycle: 'paused' } }), { message: QUIT_ASLEEP });
   }
   const stop = async (ctx, id) => {
     const run = await runStore(ctx.libraryDb).get(id);
@@ -329,7 +396,8 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
     });
   }
   // Signed out of GitHub: each live run is stopped by its own worker, which still holds the key it started with (the
-  // manager has none now). A run without a live worker waits for the next sign-in's Stop, or its one-hour timeout.
+  // manager has none now). A run without a live worker is asleep, or will be at its timeout, and waits there at no
+  // charge for the next sign-in's Stop or sweep.
   async function signedOut() {
     await Promise.allSettled([...workers.entries()].map(([id, held]) => exclusive(`${held.ctx.dataRoot}:${held.libraryId}`, async () => {
       if (workers.get(id) !== held || held.detaching) return;
@@ -341,7 +409,7 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
       await held.finished;
     })));
   }
-  return { start, list, stop, environment, saveEnvironment, restart, release, signedOut, close, poll, dispose: async () => { clearInterval(timer); await close(); } };
+  return { start, list, stop, touch, environment, saveEnvironment, restart, release, signedOut, close, poll, dispose: async () => { clearInterval(timer); await close(); } };
 }
 
 module.exports = { createSandboxManager };

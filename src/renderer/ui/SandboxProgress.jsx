@@ -2,10 +2,27 @@ import React from 'react';
 import { api, errorMessage } from '../api.js';
 import BuildDetails from '../workspace/BuildDetails.jsx';
 import { OPEN_IN_BROWSER } from '../model/address.js';
-import { readNotificationState, writeNotificationState, sandboxProgressState, sandboxProgressReducer } from '../model/sandbox-notifications.js';
+import { readNotificationState, writeNotificationState, sandboxProgressState, sandboxProgressReducer, previewLibraryId } from '../model/sandbox-notifications.js';
 
 const SandboxContext = React.createContext(null);
 export const useSandboxes = () => React.useContext(SandboxContext);
+
+// The Stage's page at `url`, while `showing`: when it is a ready preview and the window has the keyboard, it is in use, so
+// its sandbox's sleep is put back to 10 minutes away now and every minute after (main's sandbox touch, which also keeps
+// pings 30 seconds apart). Another tab in front, the tab closed or the window left stops it. A ping never wakes a sandbox.
+export function usePreviewTouch(url, showing) {
+  const sandboxes = useSandboxes();
+  const libraryId = showing && sandboxes ? previewLibraryId(sandboxes.items, url) : null;
+  const [focused, setFocused] = React.useState(() => api.windowFocused());
+  React.useEffect(() => api.onWindowFocus((on) => setFocused(!!on)), []);
+  React.useEffect(() => {
+    if (!libraryId || !focused) return undefined;
+    const touch = () => { api.touchSandbox(libraryId).catch(() => {}); };
+    touch();
+    const timer = setInterval(touch, 60_000);
+    return () => clearInterval(timer);
+  }, [libraryId, focused]);
+}
 
 // E2B previews of saved GitHub repositories (src/main/sandbox). One listener for the whole app, mounted before the
 // library can submit work. The snapshot restores state after renderer reloads; events carry later changes. A preview or

@@ -379,7 +379,7 @@ test('worker integrates subscription setup with normal ready/log/stop events wit
   const events = [], commands = [];
   let kills = 0, finish;
   const done = new Promise((resolve) => { finish = resolve; });
-  const sandbox = { sandboxId: 'local-sandbox', files: { write: async () => {} }, kill: async () => { kills++; finish(); }, commands: { run: async (command) => { commands.push(command); return { exitCode: 0 }; } } };
+  const sandbox = { sandboxId: 'local-sandbox', files: { write: async () => {} }, kill: async () => { kills++; finish(); }, setTimeout: async () => {}, commands: { run: async (command) => { commands.push(command); return { exitCode: 0 }; } } };
   const runtime = createRuntime({ Sandbox: { create: async () => sandbox }, env: { E2B_API_KEY: 'e2b-test', ENGELBART_SANDBOX_SETUP: 'claude-local' },
     prepareClaude: async () => ({ file: 'claude', env: {} }), detectDocker: async () => false,
     localSetup: async ({ onEvent }) => { onEvent({ phase: 'stage', command: 'npm ci' }); return { preview_url: 'https://preview.example/', port: 3000, done }; },

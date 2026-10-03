@@ -172,7 +172,7 @@ app or trigger API fallback. App supervision, user Stop, and cancellation remain
 during finalization; an application exit still stops/fails the run normally.
 No new database table or Claude credential record is created. The local attempt is
 bounded to 32 Claude turns and 15 minutes. The API setup deadline is 45 minutes;
-the sandbox lifetime remains one hour, including both attempts when falling back.
+the sandbox timeout during setup remains one hour, including both attempts when falling back.
 
 The local launcher samples its owned processes/listeners and HTTP health about once
 a second while running (checks can take longer). Only changes emit `app_status`
@@ -476,13 +476,34 @@ earlier attempts. Late events cannot revive terminal records.
 
 ## Lifecycle
 
-Stop kills the sandbox and updates the run. Normal app quit and data-mode changes
-stop workers before closing their databases. A disconnected worker also attempts
-cleanup. Sandboxes have a one-hour lifetime, and setup has a 45-minute deadline.
-Every 15 seconds, Canvas checks saved active runs: a confirmed lost sandbox ends
-the run; network/authentication failures leave its status intact. Interrupted
-setup without its local worker is cleaned up and marked failed; startup
-preparation rebuilds it automatically. Ready runs can be checked and reused after a renderer reload.
+Stop kills the sandbox and updates the run. A disconnected worker also attempts
+cleanup. Setup has a one-hour sandbox timeout and a 45-minute deadline.
+
+A ready preview sleeps instead of ending (2026-10-02). Sandboxes are created with
+`lifecycle: { onTimeout: 'pause', autoResume: true }`; once the preview is verified
+its timeout drops to 10 minutes. While the preview is the visible Stage tab and the
+window is focused, the renderer pings `sandbox-touch` about once a minute, and the
+manager calls `Sandbox.setTimeout(id, 10 min)` from the main process (at most once
+per 30 seconds per run) and records `last_opened_at`. When the timer runs out, E2B
+pauses the sandbox with its memory and processes (no charge); the worker sees the
+app's stream break, confirms `paused` with `Sandbox.getInfo`, emits `paused` and
+leaves without killing anything. The run stays `ready`, and the next request to the
+preview address wakes the sandbox in about a second (E2B then gives it 5 minutes
+until the next ping). The long-running commands (app, proxy, dockerd) have no
+command time limit (`timeoutMs: 0`), so they survive any number of sleeps. Checks
+never send a request to a paused preview, since that would wake it.
+
+Normal app quit and data-mode changes detach the workers of ready previews and
+pause their sandboxes; runs still being set up are stopped. Explicit Stop, Retry,
+restart with a saved environment, deleting the repository and signing out still
+kill. Every 15 seconds, Canvas checks saved active runs: a confirmed lost sandbox
+ends the run; a paused one is healthy; network/authentication failures leave its
+status intact. A ready run asleep and not opened (`last_opened_at`, else
+`created_at`) for 7 days is killed and marked `stopped` with an `expired` log entry:
+clicking the repository then starts a new run, and startup preparation leaves it
+alone. Interrupted setup without its local worker is cleaned up and marked failed;
+startup preparation rebuilds it automatically. Ready runs can be checked and reused
+after a renderer reload or a relaunch.
 
 Canvas tags sandboxes with `canvasRunId`, deliberately not `runId`: the web
 worker's cleanup job treats the latter as ownership and removes sandboxes whose

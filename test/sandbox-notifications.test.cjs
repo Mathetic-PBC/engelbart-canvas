@@ -20,7 +20,7 @@ function load(file) {
   finally { if (previous === undefined) delete global.window; else global.window = previous; }
   return compiled.exports;
 }
-const { sandboxProgressState, sandboxProgressReducer: reduce, readNotificationState, writeNotificationState, notificationStorageKey, availableBuildNotifications, repositoryClick } = load('model/sandbox-notifications.js');
+const { sandboxProgressState, sandboxProgressReducer: reduce, readNotificationState, writeNotificationState, notificationStorageKey, availableBuildNotifications, repositoryClick, previewLibraryId } = load('model/sandbox-notifications.js');
 const { NotificationBell, BuildNotification } = load('ui/SandboxNotifications.jsx');
 const root = '/fixture/main';
 const at = (second) => `2026-09-23T12:00:${String(second).padStart(2, '0')}.000Z`;
@@ -315,4 +315,30 @@ test('a repository clicked in the sidebar opens its live preview, else its build
   assert.equal(repositoryClick(null), null);
   const workspace = fs.readFileSync(path.join(__dirname, '../src/renderer/screens/Workspace.jsx'), 'utf8');
   assert.match(workspace, /const onRowClick = [\s\S]*?repositoryClick\(sandbox\)[\s\S]*?sandboxes\.open\(sandbox\.run\)[\s\S]*?sandboxes\.openBuild\(row\)[\s\S]*?openItem\(row\)/);
+});
+
+test('a repository ended only because nobody opened it for 7 days is built again on click; asleep it opens as live', () => {
+  const expired = run('stopped', { build_log: [{ time: at(20), message: 'Stopped after 7 days unopened', data: { lifecycle: 'expired' } }] });
+  assert.equal(repositoryClick({ run: expired }), 'start');
+  assert.equal(repositoryClick({ run: run('stopped', { build_log: [{ time: at(20), message: 'Sandbox stopped' }] }) }), 'details', 'Stop still shows the build');
+  const asleep = run('ready', { build_log: [{ time: at(10), message: 'Preview ready' }, { time: at(20), message: 'Paused after 10 minutes unused', data: { lifecycle: 'paused' } }] });
+  assert.equal(repositoryClick({ run: asleep }), 'preview');
+  const workspace = fs.readFileSync(path.join(__dirname, '../src/renderer/screens/Workspace.jsx'), 'utf8');
+  assert.match(workspace, /click === 'start'\) \{ sandboxes\.openBuild\(row\); sandboxes\.act\(sandbox\.run, \(\) => api\.startSandbox\(row\.id\)\)/);
+});
+
+test('the Stage keeps a ready preview awake only while it is in front of a focused window', () => {
+  const items = { repo: { run: run('ready', { preview_url: 'https://43110-sb1.e2b.app/app?x=1' }) },
+    other: { run: run('starting', { id: 'run-2', library_id: 'other', preview_url: 'https://43110-sb2.e2b.app/' }) } };
+  assert.equal(previewLibraryId(items, 'https://43110-sb1.e2b.app/somewhere/else'), 'repo', 'anywhere on its host');
+  assert.equal(previewLibraryId(items, 'https://43110-sb2.e2b.app/'), null, 'not ready');
+  assert.equal(previewLibraryId(items, 'https://example.org/'), null);
+  assert.equal(previewLibraryId(items, 'about:blank'), null);
+  assert.equal(previewLibraryId(items, 'not an address'), null);
+  assert.equal(previewLibraryId(null, 'https://43110-sb1.e2b.app/'), null);
+  const provider = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/SandboxProgress.jsx'), 'utf8');
+  assert.match(provider, /if \(!libraryId \|\| !focused\) return undefined;[\s\S]*?touch\(\);\s*const timer = setInterval\(touch, 60_000\);\s*return \(\) => clearInterval\(timer\);/);
+  assert.match(provider, /api\.onWindowFocus/);
+  const stage = fs.readFileSync(path.join(__dirname, '../src/renderer/workspace/Stage.jsx'), 'utf8');
+  assert.match(stage, /usePreviewTouch\(\(web && web\.url\) \|\| tab\.url, visible && page\)/);
 });

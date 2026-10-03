@@ -62,7 +62,7 @@ function runStore(db) {
       return (await db.query("update sandbox_runs set status = 'stopped', finished_at = now(), updated_at = now() where id = $1 and status = 'failed' returning *", [id]))[0] || null;
     },
     async update(id, fields) {
-      const allowed = ['sandbox_id', 'status', 'preview_url', 'port', 'error', 'finished_at', 'env_revision'];
+      const allowed = ['sandbox_id', 'status', 'preview_url', 'port', 'error', 'finished_at', 'env_revision', 'last_opened_at'];
       const keys = Object.keys(fields);
       if (!keys.length || keys.some((key) => !allowed.includes(key))) throw new Error('Invalid sandbox run update');
       const set = keys.map((key, i) => `${key} = $${i + 2}`).join(', ');

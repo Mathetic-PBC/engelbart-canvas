@@ -176,8 +176,9 @@ async function requestQuit() {
     if (sweeper) await sweeper.stop();
     if (bart) bart.stopAll();
     if (builds) await builds.stopAll(); // each running turn stops, saves a checkpoint and is marked interrupted
-    // Every E2B preview stops, none left running (and paid for) after quitting. One that cannot be stopped (offline,
-    // signed out) does not hold the quit: its sandbox ends at its one-hour timeout.
+    // No E2B preview is left running (and paid for) after quitting: a ready one goes to sleep, to wake when it is next
+    // opened, and one still being set up stops. One that cannot be reached (offline, signed out) does not hold the quit:
+    // a ready one sleeps 10 minutes after its last use, one being set up at its one-hour timeout.
     if (sandbox) await sandbox.dispose().catch((error) => console.warn(`[engelbart] sandbox shutdown: ${error.message}`));
     if (browserViews) await browserViews.flush().catch(() => {});
     if (postItViews) await postItViews.activate(null);
@@ -385,6 +386,11 @@ function createWindow() {
   mainWindow.on('leave-full-screen', sendFullScreen);
   mainWindow.webContents.on('did-finish-load', sendFullScreen);
   mainWindow.on('blur', () => postItViews.cancelGesture());
+  // Whether the window has the keyboard, for the Stage's preview ping (preload.cjs's windowFocused).
+  const sendFocus = () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:focus', mainWindow.isFocused()); };
+  mainWindow.on('focus', sendFocus);
+  mainWindow.on('blur', sendFocus);
+  mainWindow.webContents.on('did-finish-load', sendFocus);
   mainWindow.on('close', (event) => {
     if (shouldHideWindowOnClose(process.platform, quitReady)) {
       event.preventDefault();

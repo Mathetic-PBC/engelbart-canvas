@@ -7,7 +7,9 @@ const { discoverLaunch } = require('./launch-discovery.cjs');
 const { randomUUID } = require('node:crypto');
 const STATE = '/home/user/.engelbart-canvas';
 const ADAPTER = `${STATE}/launch.py`;
-const HOUR = 60 * 60_000;
+// The app and its proxy have no time limit (timeoutMs 0): they live as long as the sandbox, which sleeps and wakes with
+// them still running (worker.cjs). Any limit would end them partway through a later session.
+const FOREVER = 0;
 
 async function runLocalSetup({ sandbox, auth, environment, model, signal: parentSignal, onEvent, checkPreview, onReady = () => {}, runAgent = runLocalClaude, discover = discoverLaunch }) {
   const controller = new AbortController();
@@ -87,7 +89,7 @@ async function runLocalSetup({ sandbox, auth, environment, model, signal: parent
       signal.throwIfAborted();
       onEvent({ phase: 'stage', stage: 'start', status: 'running', command: args.command });
       const handle = await sandbox.commands.run(`python3 -u ${ADAPTER} --local --attempt ${attempt}`, {
-        background: true, timeoutMs: HOUR, onStdout,
+        background: true, timeoutMs: FOREVER, onStdout,
         onStderr: (text) => onEvent({ phase: 'log', stream: 'stderr', text }),
       });
       const done = handle.wait();
@@ -98,7 +100,7 @@ async function runLocalSetup({ sandbox, auth, environment, model, signal: parent
       const host = healthy.host || '127.0.0.1';
       if (!['127.0.0.1', '::1'].includes(host)) throw new Error('Invalid application listening address');
       await sandbox.commands.run(`node /opt/engelbart/proxy.mjs ${quote(`43110:${args.port}:${host}`)}`, {
-        background: true, timeoutMs: HOUR, envs: { ENGELBART_CANVAS_APP_ATTEMPT: attempt },
+        background: true, timeoutMs: FOREVER, envs: { ENGELBART_CANVAS_APP_ATTEMPT: attempt },
       });
       const preview = new URL(args.path || '/', `https://${sandbox.getHost(43110)}`);
       if (preview.hostname !== sandbox.getHost(43110)) throw new Error('Invalid preview host');

@@ -13,11 +13,17 @@ const ADAPTER_DIR = '/home/user/.engelbart-canvas';
 const ADAPTER = `${ADAPTER_DIR}/launch.py`;
 const quote = (value) => `'${String(value).replace(/'/g, "'\\''")}'`;
 const HOUR = 60 * 60_000;
+// A ready preview sleeps once nobody has looked at it for 10 minutes (the Stage's ping puts the time back: manager.cjs's
+// touch). E2B pauses it then, memory and running processes kept, at no charge, and the next request to its address wakes
+// it in about a second. Setup keeps the hour, so a sandbox never sleeps partway through it.
+const IDLE = 10 * 60_000;
+// No time limit, for the commands that live as long as the sandbox: across its sleeps, an hour's limit would end them.
+const FOREVER = 0;
 const PROXY_PORT = 43110;
 const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 // The key comes only from the GitHub sign-in (manager.cjs); without it no E2B call is made.
 const MISSING_KEY = 'Sign in to GitHub in Engelbart to use sandboxes.';
-const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function safePreview(value) {
   const url = new URL(value);
@@ -117,8 +123,12 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
     }
     try {
       const info = await Sandbox.getInfo(request.sandbox_id, { requestTimeoutMs: 10_000 });
+      // Asleep is healthy, and is never checked over HTTP: a request to its address would wake it. Nor is one about to
+      // sleep, which the request could reach just after it had.
+      if (info.state === 'paused') return { state: 'paused' };
       if (info.state !== 'running') return { state: 'inactive' };
       if (!request.preview_url) return { state: 'interrupted' };
+      if (info.endAt - Date.now() < 30_000) return { state: 'ready' };
       return { state: await checkPreview(request.preview_url) ? 'ready' : 'unreachable' };
     } catch (error) {
       if (error.name === 'NotFoundError' || error.name === 'SandboxNotFoundError' || error.status === 404) return { state: 'gone' };
@@ -129,6 +139,39 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
     if (!env.E2B_API_KEY) throw new Error(MISSING_KEY);
     if (request.sandbox_id) await Sandbox.kill(request.sandbox_id, { requestTimeoutMs: 10_000 });
     return { state: 'gone' };
+  }
+  // Quitting Engelbart puts a ready preview to sleep instead of ending it (manager.cjs's close). `paused`: whether it went
+  // to sleep now, not before.
+  async function pause(request) {
+    if (!env.E2B_API_KEY) throw new Error(MISSING_KEY);
+    const paused = request.sandbox_id ? await Sandbox.pause(request.sandbox_id, { requestTimeoutMs: 30_000 }) : false;
+    return { state: 'paused', paused: paused === true };
+  }
+  // From ready on, the sandbox sleeps after IDLE unless the Stage's ping puts the time back. Without this it would sleep
+  // when setup's hour ran out, so no failure here (not even a synchronous one) reaches the verified preview.
+  function sleepWhenIdle() {
+    (async () => sandbox.setTimeout(IDLE, { requestTimeoutMs: 10_000 }))().catch(() => {});
+  }
+  // A ready app's stream breaks when its sandbox goes to sleep, a moment before E2B reports it paused (0.1-1.5 s, measured
+  // 2026-10-02). Asleep, the app is kept for the next request to wake, so the worker leaves without stopping anything:
+  // the manager keeps the run ready. False when the app itself ended (or this cannot be known): the caller stops it.
+  // `ended`: how the app's command ended, null for exit 0. An exit code is the app's own end: one look is enough.
+  async function asleep(ended) {
+    if (!ready || cancelled || detached) return false;
+    const looks = ended && typeof ended.exitCode !== 'number' ? 5 : 1;
+    for (let attempt = 0; attempt < looks; attempt++) {
+      if (attempt) await delay(1000);
+      let info;
+      try { info = await Sandbox.getInfo(sandbox.sandboxId, { requestTimeoutMs: 10_000 }); } catch { return false; }
+      if (cancelled || detached) return false;
+      if (info.state === 'paused') {
+        detached = true;
+        auditController.abort();
+        emit({ event: 'paused' });
+        return true;
+      }
+    }
+    return false;
   }
   async function run(request) {
     let deadline;
@@ -163,6 +206,8 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
       const template = env.E2B_TEMPLATE || 'engelbart-runner';
       sandbox = restarting ? await Sandbox.connect(request.sandbox_id, { requestTimeoutMs: 10_000 }) : await Sandbox.create(docker ? (env.E2B_DOCKER_TEMPLATE || `${template}-docker`) : template, {
         timeoutMs: HOUR, requestTimeoutMs: 60_000,
+        // Its timeout pauses it instead of ending it, and a request to its address wakes it (IDLE).
+        lifecycle: { onTimeout: 'pause', autoResume: true },
         // The web worker sweeps every sandbox carrying `runId` if it is absent
         // from Supabase. Canvas owns its runs locally and must use a separate key.
         // githubLogin: who asked, as the desktop reported it (a hint for tracing, not proof).
@@ -212,7 +257,7 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
       checkCancelled();
       if (docker) {
         emit({ event: 'progress', message: 'Starting repository services' });
-        await sandbox.commands.run('dockerd > /var/log/dockerd.log 2>&1', { background: true, user: 'root', timeoutMs: HOUR });
+        await sandbox.commands.run('dockerd > /var/log/dockerd.log 2>&1', { background: true, user: 'root', timeoutMs: FOREVER });
         await sandbox.commands.run('for i in $(seq 1 30); do docker info >/dev/null 2>&1 && chmod 666 /var/run/docker.sock && exit 0; sleep 1; done; exit 1', { user: 'root', timeoutMs: 40_000 });
       }
       }
@@ -243,6 +288,7 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
             error => localController.abort(error));
           emit({ event: 'progress', message: 'Preview verified', kind: 'status', data: { phase: 'check', status: 'ok', provider: 'claude-local' } });
           emit({ event: 'ready', preview_url: result.preview_url, port: result.port });
+          sleepWhenIdle();
           if (!restarting) auditAfterReady();
         }
         try {
@@ -278,7 +324,10 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
         if (launched) {
           checkCancelled();
           publishPreview(launched);
-          await launched.done; // failures after readiness do not start another setup
+          // Failures after readiness do not start another setup; a sandbox gone to sleep is not a failure at all.
+          const ended = await launched.done.then(() => null, (error) => error);
+          if (await asleep(ended)) return;
+          if (ended) throw ended;
           await stop();
           emit({ event: 'stopped' });
           return;
@@ -320,7 +369,7 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
             if (!['localhost', '127.0.0.1', '0.0.0.0', '::1'].includes(service.host || '127.0.0.1')) throw new Error('Invalid application host');
           }
           const specs = wanted.map((service, i) => quote(`${PROXY_PORT + i}:${service.port}:${service.host || '127.0.0.1'}`)).join(' ');
-          await sandbox.commands.run(`node /opt/engelbart/proxy.mjs ${specs}`, { background: true, timeoutMs: HOUR });
+          await sandbox.commands.run(`node /opt/engelbart/proxy.mjs ${specs}`, { background: true, timeoutMs: FOREVER });
           const local = new URL(event.url || `http://localhost:${event.port}`);
           const previewUrl = safePreview(`https://${sandbox.getHost(PROXY_PORT)}${local.pathname}${local.search}`);
           for (let attempt = 0; attempt < 10; attempt++) {
@@ -330,11 +379,12 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
               clearTimeout(deadline);
               emit({ event: 'progress', message: 'Preview verified', kind: 'status', data: { phase: 'check', status: 'ok' } });
               emit({ event: 'ready', preview_url: previewUrl, port: wanted[0].port });
+              sleepWhenIdle();
               if (!restarting) auditAfterReady();
               resolveReady();
               return;
             }
-            await pause(1000);
+            await delay(1000);
           }
           throw new Error('The application started, but its preview is not reachable');
         } else if (event.phase === 'usable' || event.phase === 'error') {
@@ -356,7 +406,7 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
         }
       };
       const handle = await sandbox.commands.run(`python3 -u ${ADAPTER}${restarting ? ' --restart' : ''}`, {
-        background: true, timeoutMs: HOUR,
+        background: true, timeoutMs: FOREVER,
         envs: {
           ANTHROPIC_API_KEY: restarting ? '' : env.ANTHROPIC_API_KEY, HC_USE_API_KEY: '1', HC_CHAT_PROVIDER: 'claude',
           HC_EXPERIMENTAL: '1', HC_DISPOSABLE_HOST: '1', PIP_NO_CACHE_DIR: '1', HUMAN_COMPACT_HOME: '/home/user/.human-compact',
@@ -371,7 +421,10 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
       });
       exited.catch(() => {});
       await Promise.race([outcome, exited]);
-      await exited; // keep receiving events until the application exits or is stopped
+      // Ready: keep receiving events until the application exits, its sandbox goes to sleep, or it is stopped.
+      const ended = await exited.then(() => null, (error) => error);
+      if (await asleep(ended)) return;
+      if (ended) throw ended;
       await stop();
       emit({ event: 'stopped' });
     } catch (error) {
@@ -388,7 +441,7 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
       emit({ event: wasCancelled && !cleanupError ? 'stopped' : 'failed', error: `${error.message}${cleanupError}` });
     } finally { clearTimeout(deadline); auditController.abort(); }
   }
-  return { run, probe, kill, stop, can_restart, detach: () => { detached = true; auditController.abort(); } };
+  return { run, probe, kill, pause, stop, can_restart, detach: () => { detached = true; auditController.abort(); } };
 }
 
 if (require.main === module) {
@@ -407,9 +460,9 @@ if (require.main === module) {
     if (request) return;
     request = message;
     secrets.push(...Object.values(request.environment?.values || {}));
-    runtime = createRuntime({ Sandbox, emit, waitForAck: () => Promise.race([ack, pause(30_000).then(() => { throw new Error('Canvas did not acknowledge the sandbox'); })]) });
+    runtime = createRuntime({ Sandbox, emit, waitForAck: () => Promise.race([ack, delay(30_000).then(() => { throw new Error('Canvas did not acknowledge the sandbox'); })]) });
     try {
-      if (['probe', 'kill', 'can_restart'].includes(request.command)) emit({ event: 'result', ...await runtime[request.command](request) });
+      if (['probe', 'kill', 'pause', 'can_restart'].includes(request.command)) emit({ event: 'result', ...await runtime[request.command](request) });
       else await runtime.run(request);
     } catch (error) { emit({ event: 'failed', error: error.message }); }
     process.disconnect?.();

@@ -10,12 +10,12 @@ const db = require('../src/main/store/db.cjs');
 const { createSandboxManager } = require('../src/main/sandbox/manager.cjs');
 const { runStore } = require('../src/main/sandbox/runs.cjs');
 
-async function fixture(t, { readEnv = () => ({}), e2bKey = async () => 'e2b_signed_in', githubLogin = () => 'octocat', repoAccess = null, claudeReady = async () => {} } = {}) {
+async function fixture(t, { readEnv = () => ({}), e2bKey = async () => 'e2b_signed_in', githubLogin = () => 'octocat', repoAccess = null, claudeReady = async () => {}, Sandbox = null, now = Date.now } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canvas-run-manager-'));
   const ctx = { root, dataRoot: root, libraryDb: await db.openLibraryDb(root) };
   const events = [], starts = [], controls = [], envs = [];
   let probe = { state: 'ready' };
-  const manager = createSandboxManager({ secure: { isEncryptionAvailable: () => true, encryptString: (value) => Buffer.from(value), decryptString: (value) => value.toString() }, notify: (event) => events.push(event), readEnv, e2bKey, githubLogin, repoAccess, claudeReady, launch(request, env, receive) {
+  const manager = createSandboxManager({ secure: { isEncryptionAvailable: () => true, encryptString: (value) => Buffer.from(value), decryptString: (value) => value.toString() }, notify: (event) => events.push(event), readEnv, e2bKey, githubLogin, repoAccess, claudeReady, Sandbox, now, launch(request, env, receive) {
     envs.push({ command: request.command, env });
     if (!['start', 'restart'].includes(request.command)) {
       controls.push(request);
@@ -461,4 +461,136 @@ test('a public repository gets no link; one GitHub will not show fails with what
   const run = await hidden.manager.start(hidden.ctx, hidden.repo.id);
   assert.deepEqual([run.status, run.error], ['failed', "Engelbart's GitHub App cannot see owner/app."]);
   assert.equal(hidden.starts.length, 0);
+});
+
+// A ready preview sleeps instead of ending (2026-10-02; worker.cjs). The run stays ready throughout, and a request to the
+// preview wakes the sandbox.
+async function readyRun(f, repo = f.repo, sandboxId = 'sb-sleepy') {
+  const run = await f.manager.start(f.ctx, repo.id);
+  const worker = f.starts.at(-1);
+  await worker.receive({ event: 'sandbox_created', sandbox_id: sandboxId });
+  await worker.receive({ event: 'ready', preview_url: 'https://preview.example/', port: 3000 });
+  return { run, worker };
+}
+const anotherRepo = (f, name = 'owner/other') => f.ctx.libraryDb.insert({ id: randomUUID(), name, type: 'website', url: `https://github.com/${name}`, tags: ['git'] });
+
+test('a sandbox gone to sleep keeps its run ready: its worker leaves without a kill, and checks leave it alone', async (t) => {
+  const f = await fixture(t);
+  const { run, worker } = await readyRun(f);
+  f.setProbe({ state: 'paused' });
+  await f.manager.poll(); // asleep while its worker is still leaving
+  assert.equal((await f.store.get(run.id)).status, 'ready');
+  await worker.receive({ event: 'paused' });
+  worker.finish();
+  await worker.done;
+  await new Promise((resolve) => setImmediate(resolve));
+  const asleep = await f.store.get(run.id);
+  assert.equal(asleep.status, 'ready');
+  assert.equal(asleep.build_log.at(-1).message, 'Paused after 10 minutes unused');
+  assert.equal(f.events.at(-1).message, 'Paused after 10 minutes unused');
+  await f.manager.poll(); // asleep, no worker
+  assert.equal((await f.store.get(run.id)).status, 'ready');
+  assert.ok(!f.controls.some((request) => request.command === 'kill'));
+  assert.ok(!f.events.some((event) => /unreachable|failed/i.test(event.message)));
+  assert.equal((await f.manager.start(f.ctx, f.repo.id)).id, run.id, 'opening it again reuses it');
+  assert.equal(f.starts.length, 1);
+});
+
+test('touch puts a ready sandbox\'s sleep 10 minutes away, marks it opened, and is throttled to once per 30 seconds', async (t) => {
+  let clock = Date.parse('2026-10-02T12:00:00Z');
+  const calls = [];
+  let answer = null;
+  const Sandbox = { async setTimeout(id, ms, options) { calls.push({ id, ms, key: options.apiKey }); if (answer) throw answer; } };
+  const f = await fixture(t, { Sandbox, now: () => clock });
+  await f.manager.touch(f.ctx, f.repo.id);
+  assert.equal(calls.length, 0, 'no run');
+  const { run } = await readyRun(f);
+  await f.manager.touch(f.ctx, f.repo.id);
+  assert.deepEqual(calls, [{ id: 'sb-sleepy', ms: 600_000, key: 'e2b_signed_in' }]);
+  assert.equal((await f.store.get(run.id)).last_opened_at, '2026-10-02T12:00:00.000Z');
+  clock += 20_000;
+  await f.manager.touch(f.ctx, f.repo.id);
+  assert.equal(calls.length, 1, 'throttled');
+  assert.equal((await f.store.get(run.id)).last_opened_at, '2026-10-02T12:00:00.000Z');
+  clock += 15_000;
+  await f.manager.touch(f.ctx, f.repo.id);
+  assert.equal(calls.length, 2);
+  assert.equal((await f.store.get(run.id)).last_opened_at, '2026-10-02T12:00:35.000Z');
+  // Asleep or gone, E2B says not found: the ping says nothing, and the next poll tells which.
+  answer = Object.assign(new Error('Sandbox sb-sleepy not found'), { name: 'SandboxNotFoundError' });
+  clock += 60_000;
+  await f.manager.touch(f.ctx, f.repo.id);
+  assert.equal(calls.length, 3);
+  assert.equal((await f.store.get(run.id)).status, 'ready');
+  assert.ok(!f.controls.some((request) => request.command === 'kill'));
+  assert.equal(f.starts.length, 1, 'no worker for a ping');
+});
+
+test('quitting puts ready previews to sleep instead of killing them, and still stops one being set up', async (t) => {
+  const f = await fixture(t);
+  const { run: ready } = await readyRun(f);
+  const other = await anotherRepo(f);
+  const starting = await f.manager.start(f.ctx, other.id);
+  await f.starts[1].receive({ event: 'sandbox_created', sandbox_id: 'sb-starting' });
+  f.setProbe({ state: 'paused', paused: true });
+  await f.manager.close();
+  assert.deepEqual(f.controls.filter((request) => ['pause', 'kill'].includes(request.command)).map((request) => [request.command, request.sandbox_id]),
+    [['pause', 'sb-sleepy']]);
+  const asleep = await f.store.get(ready.id);
+  assert.equal(asleep.status, 'ready');
+  assert.equal(asleep.build_log.at(-1).message, 'Paused when Engelbart quit');
+  assert.equal((await f.store.get(starting.id)).status, 'stopped', 'its own worker stopped it');
+});
+
+test('the sweep ends a sandbox asleep and unopened for 7 days; newer, awake and recently opened ones stay', async (t) => {
+  const f = await fixture(t);
+  const ago = (days) => new Date(Date.now() - days * 24 * 60 * 60_000).toISOString();
+  const { run: stale } = await readyRun(f);
+  const fresh = await anotherRepo(f, 'owner/fresh');
+  const { run: recent } = await readyRun(f, fresh, 'sb-fresh');
+  const old = await anotherRepo(f, 'owner/old');
+  const { run: neverOpened } = await readyRun(f, old, 'sb-old');
+  for (const held of f.starts) { await held.receive({ event: 'paused' }); held.finish(); }
+  await Promise.all(f.starts.map((held) => held.done));
+  await new Promise((resolve) => setImmediate(resolve));
+  await f.ctx.libraryDb.query('update sandbox_runs set last_opened_at = $2 where id = $1', [stale.id, ago(8)]);
+  await f.ctx.libraryDb.query('update sandbox_runs set last_opened_at = $2, created_at = $3 where id = $1', [recent.id, ago(6), ago(30)]);
+  await f.ctx.libraryDb.query('update sandbox_runs set created_at = $2 where id = $1', [neverOpened.id, ago(8)]);
+  f.setProbe({ state: 'paused' });
+  await f.manager.poll();
+  const ended = await f.store.get(stale.id);
+  assert.equal(ended.status, 'stopped');
+  assert.equal(ended.error, null);
+  assert.equal(ended.build_log.at(-1).message, 'Stopped after 7 days unopened');
+  assert.equal(ended.build_log.at(-1).data.lifecycle, 'expired');
+  assert.equal((await f.store.get(neverOpened.id)).status, 'stopped', 'never opened: counted from its creation');
+  assert.equal((await f.store.get(recent.id)).status, 'ready');
+  assert.deepEqual(f.controls.filter((request) => request.command === 'kill').map((request) => request.sandbox_id).sort(), ['sb-old', 'sb-sleepy']);
+  // Awake, an old one is in use: it stays.
+  const awake = await anotherRepo(f, 'owner/awake');
+  const { run: awakeRun } = await readyRun(f, awake, 'sb-awake');
+  await f.ctx.libraryDb.query('update sandbox_runs set created_at = $2 where id = $1', [awakeRun.id, ago(9)]);
+  f.setProbe({ state: 'ready' });
+  await f.manager.poll();
+  assert.equal((await f.store.get(awakeRun.id)).status, 'ready');
+});
+
+test('a preview ended by the sweep is not rebuilt by a new session\'s preparation, only when it is opened', async (t) => {
+  const f = await fixture(t);
+  const { run, worker } = await readyRun(f);
+  await worker.receive({ event: 'paused' });
+  worker.finish();
+  await worker.done;
+  await new Promise((resolve) => setImmediate(resolve));
+  await f.ctx.libraryDb.query("update sandbox_runs set last_opened_at = now() - interval '8 days' where id = $1", [run.id]);
+  f.setProbe({ state: 'paused' });
+  await f.manager.poll();
+  assert.equal((await f.store.get(run.id)).status, 'stopped');
+  await f.manager.close(); // a new session
+  assert.equal((await f.manager.start(f.ctx, f.repo.id, { automatic: true })).id, run.id);
+  assert.equal(f.starts.length, 1);
+  const rebuilt = await f.manager.start(f.ctx, f.repo.id);
+  assert.notEqual(rebuilt.id, run.id);
+  assert.equal(rebuilt.status, 'starting');
+  assert.equal(f.starts.length, 2);
 });

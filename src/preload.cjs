@@ -17,6 +17,10 @@ function markWindow() {
 }
 if (document.documentElement) markWindow(); else document.addEventListener('DOMContentLoaded', markWindow, { once: true });
 ipcRenderer.on('window:fullscreen', (_event, on) => { if (document.documentElement) document.documentElement.toggleAttribute('data-fullscreen', !!on); });
+// Whether Engelbart's window has the keyboard, as main says (window:focus). Not the document's own focus: a page on the
+// Stage taking the keyboard blurs this document, not the window.
+let windowFocused = false;
+ipcRenderer.on('window:focus', (_event, on) => { windowFocused = !!on; });
 
 // Wider resize edges: App.jsx's strips report press / move / release; main reads the cursor itself.
 contextBridge.exposeInMainWorld('engelbartWindow', Object.freeze({
@@ -159,6 +163,10 @@ const engelbartAPI = Object.freeze({
   sandboxEnvironment: invoke('sandbox-environment'),
   saveSandboxEnvironment: invoke('sandbox-save-environment'),
   restartSandbox: invoke('sandbox-restart'),
+  // A preview in front of a focused window is in use: its sandbox sleeps 10 minutes after the last of these (library id).
+  touchSandbox: invoke('sandbox-touch'),
+  windowFocused: () => windowFocused,
+  onWindowFocus: (callback) => subscribe('window:focus', callback),
   onSandboxProgress: (callback) => subscribe('engelbart:sandbox-progress', callback),
   previewLibraryItem: invoke('preview-library-item'),
   // A file dropped on the window: where it is on disk (the renderer's File no longer says).

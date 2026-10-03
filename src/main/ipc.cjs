@@ -453,6 +453,12 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       return sandbox.start(ctx, str(id, 'library id', 64));
     }));
     handle('sandbox-stop', withCtx((ctx, id) => sandbox.stop(ctx, str(id, 'run id', 64))));
+    // The Stage's ping while a preview is in front of a focused window: its sandbox sleeps 10 minutes after the last one.
+    handle('sandbox-touch', withCtx((ctx, id) => {
+      const libraryId = str(id, 'library id', 64);
+      if (changingMode) return null;
+      return sandbox.touch(ctx, libraryId).then(() => null);
+    }));
     handle('sandbox-environment', withCtx((ctx, id) => sandbox.environment(ctx, str(id, 'library id', 64))));
     handle('sandbox-save-environment', withCtx((ctx, id, changes, revision) => {
       if (changingMode) throw new Error('Wait for the data mode change to finish');
@@ -466,6 +472,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     // Turned off (ENGELBART_SANDBOXES=off): nothing to show, and nothing starts.
     handle('sandbox-runs', () => []);
     handle('sandbox-ensure', () => []);
+    handle('sandbox-touch', () => null);
     for (const channel of ['sandbox-start', 'sandbox-stop', 'sandbox-environment', 'sandbox-save-environment', 'sandbox-restart']) {
       handle(channel, () => { throw new Error('Sandboxes are turned off in this copy of Engelbart'); });
     }

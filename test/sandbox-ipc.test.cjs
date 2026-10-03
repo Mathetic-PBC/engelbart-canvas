@@ -238,6 +238,23 @@ test('with sandboxes turned off the renderer sees none and nothing starts', asyn
   assert.deepEqual(await handlers.get('engelbart:sandbox-runs')(), []);
   assert.deepEqual(await handlers.get('engelbart:sandbox-ensure')(), []);
   assert.throws(() => handlers.get('engelbart:sandbox-start')('id'), /turned off/);
+  assert.equal(await handlers.get('engelbart:sandbox-touch')('id'), null, 'the Stage\'s ping is a no-op');
   const row = await handlers.get('engelbart:add-library-item')('https://github.com/owner/app');
   assert.equal(row.sandbox_error, undefined);
+});
+
+test('the Stage\'s preview ping names a library row, checked like a start, and answers nothing', async (t) => {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'canvas-sandbox-touch-'));
+  const store = createStore({ homeDir, testMode: true });
+  await store.setTestMode(false);
+  t.after(() => store.close());
+  const handlers = new Map(), touched = [];
+  registerEngelbartIpc({ store, ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, trustedHandler: (fn) => fn,
+    sandbox: { async touch(ctx, id) { touched.push({ id, root: ctx.dataRoot }); return { secret: 'not for the renderer' }; }, async close() {} } });
+  const touch = handlers.get('engelbart:sandbox-touch');
+  assert.equal(await touch('library-id'), null);
+  assert.deepEqual(touched, [{ id: 'library-id', root: (await store.context()).dataRoot }]);
+  await assert.rejects(touch({ id: 'x' }), /library id must be a string/);
+  await assert.rejects(touch('x'.repeat(65)), /library id must be a string/);
+  assert.equal(touched.length, 1);
 });

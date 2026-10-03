@@ -10,7 +10,7 @@ test('worker waits for persisted sandbox ID, streams split JSON events, verifies
   let ack = false, kills = 0, finish;
   const exited = new Promise((resolve) => { finish = resolve; });
   const sandbox = {
-    sandboxId: 'sb-test', getHost: () => 'preview.example', kill: async () => { kills++; finish(); },
+    sandboxId: 'sb-test', getHost: () => 'preview.example', kill: async () => { kills++; finish(); }, setTimeout: async () => {},
     files: { write: async () => {} },
     commands: { async run(command, options) {
       assert.ok(ack, 'sandbox must be persisted before any commands');
@@ -115,9 +115,10 @@ test('real worker transport delivers configuration failure without network or se
 
 test('every E2B call needs the signed-in key, including the restart check', async () => {
   const refuse = () => assert.fail('no E2B call without a key');
-  const runtime = createRuntime({ Sandbox: { connect: refuse, getInfo: refuse, kill: refuse, list: refuse }, env: {}, emit() {} });
+  const runtime = createRuntime({ Sandbox: { connect: refuse, getInfo: refuse, kill: refuse, list: refuse, pause: refuse }, env: {}, emit() {} });
   await assert.rejects(runtime.probe({ sandbox_id: 'sb' }), /^Error: Sign in to GitHub in Engelbart to use sandboxes\.$/);
   await assert.rejects(runtime.kill({ sandbox_id: 'sb' }), /Sign in to GitHub/);
+  await assert.rejects(runtime.pause({ sandbox_id: 'sb' }), /Sign in to GitHub/);
   await assert.rejects(runtime.can_restart({ sandbox_id: 'sb', port: 3000 }), /Sign in to GitHub/);
 });
 
@@ -146,7 +147,7 @@ test('a private repository comes from the link the ack carries: in one command\'
   let templates = [], finish;
   const exited = new Promise((resolve) => { finish = resolve; });
   const sandbox = {
-    sandboxId: 'sb-private', getHost: () => 'preview.example', kill: async () => { finish(); },
+    sandboxId: 'sb-private', getHost: () => 'preview.example', kill: async () => { finish(); }, setTimeout: async () => {},
     files: { write: async () => {} },
     commands: { async run(command, options) {
       runs.push({ command, envs: options.envs || {} });
@@ -194,4 +195,95 @@ test('a download link that is not GitHub\'s codeload is refused before anything 
   assert.deepEqual([events.at(-1).event, events.at(-1).error], ['failed', 'Invalid repository download link']);
   assert.equal(killed, true);
   assert.ok(!runs.some((command) => /curl|git clone/.test(command)));
+});
+
+// A ready preview sleeps instead of ending (2026-10-02): E2B pauses its sandbox once nobody has looked at it for 10
+// minutes, and a request to its address wakes it. These fakes follow what a live sandbox did (worker.cjs's asleep).
+function sleepyFixture({ local = false, info = ['paused'], appEnd } = {}) {
+  const events = [], timeouts = [], looks = [];
+  let kills = 0, created, endApp, readyFinish;
+  const ended = new Promise((resolve, reject) => { endApp = appEnd === 'exit' ? () => resolve({ exitCode: 0 }) : () => reject(Object.assign(new Error('[unavailable] the connection to sandbox ended before the stream completed'), { name: 'TimeoutError' })); });
+  ended.catch(() => {});
+  const readyNow = new Promise((resolve) => { readyFinish = resolve; });
+  const sandbox = {
+    sandboxId: 'sb-sleepy', getHost: () => 'preview.example', kill: async () => { kills++; },
+    setTimeout: async (ms) => { timeouts.push(ms); }, files: { write: async () => {} },
+    commands: { async run(command, options) {
+      if (command.includes('/launch.py') && !command.includes('--stop') && !command.includes('--check')) {
+        options.onStdout('{"phase":"ready","port":3000,"url":"http://localhost:3000/"}\n');
+        return { wait: () => ended };
+      }
+      return { exitCode: 0 };
+    } },
+  };
+  const runtime = createRuntime({
+    Sandbox: {
+      create: async (_template, options) => { created = options; return sandbox; },
+      getInfo: async (id) => { looks.push(id); return { state: info[Math.min(looks.length - 1, info.length - 1)] }; },
+    },
+    env: { E2B_API_KEY: 'test', ANTHROPIC_API_KEY: 'test', ENGELBART_SANDBOX_SETUP: local ? 'claude-local' : 'api' },
+    detectDocker: async () => false, checkPreview: async () => true,
+    prepareClaude: async () => ({ file: 'claude', env: {} }),
+    localSetup: async ({ onReady }) => { const launched = { preview_url: 'https://preview.example/', port: 3000, done: ended }; onReady(launched); return launched; },
+    emit(event) { events.push(event); if (event.event === 'ready') readyFinish(); },
+  });
+  return { runtime, events, timeouts, looks, kills: () => kills, created: () => created, readyNow, endApp };
+}
+
+test('a new sandbox pauses at its timeout and wakes on a request; ready puts it on a 10-minute timer, once', async () => {
+  for (const local of [false, true]) {
+    const f = sleepyFixture({ local });
+    const running = f.runtime.run({ run_id: 'run-sleepy', github_url: 'https://github.com/owner/app' });
+    await f.readyNow;
+    assert.deepEqual(f.created().lifecycle, { onTimeout: 'pause', autoResume: true });
+    assert.equal(f.created().timeoutMs, 60 * 60_000, 'setup keeps the hour, so it never sleeps partway through');
+    assert.deepEqual(f.timeouts, [600_000], local ? 'local Claude setup' : 'API setup');
+    f.endApp();
+    await running;
+    assert.deepEqual(f.timeouts, [600_000]);
+  }
+});
+
+test('the app stream ending while the sandbox sleeps says paused and kills nothing; ending awake still stops it', async () => {
+  for (const local of [false, true]) {
+    // E2B reports the pause a moment after the stream breaks: it is looked at again.
+    const f = sleepyFixture({ local, info: ['running', 'paused'] });
+    const running = f.runtime.run({ run_id: 'run-sleepy', github_url: 'https://github.com/owner/app' });
+    await f.readyNow;
+    f.endApp();
+    await running;
+    assert.deepEqual(f.events.filter((event) => event.event !== 'progress').map((event) => event.event), ['sandbox_created', 'ready', 'paused']);
+    assert.deepEqual(f.looks, ['sb-sleepy', 'sb-sleepy']);
+    assert.equal(f.kills(), 0);
+    await f.runtime.stop(); // the worker's disconnect, as it leaves
+    assert.equal(f.kills(), 0, 'leaving does not kill a sleeping sandbox');
+  }
+  const awake = sleepyFixture({ info: ['running'], appEnd: 'exit' });
+  const running = awake.runtime.run({ run_id: 'run-awake', github_url: 'https://github.com/owner/app' });
+  await awake.readyNow;
+  awake.endApp();
+  await running;
+  assert.equal(awake.events.at(-1).event, 'stopped');
+  assert.equal(awake.looks.length, 1, 'an exit code is the app\'s own end: one look');
+  assert.equal(awake.kills(), 1);
+});
+
+test('probe reports a sleeping sandbox as paused without a request to its preview, which would wake it', async () => {
+  let checks = 0;
+  const probe = (info) => createRuntime({ Sandbox: { getInfo: async () => info }, env: { E2B_API_KEY: 'test' }, emit() {},
+    checkPreview: async () => { checks++; return true; } }).probe({ sandbox_id: 'sb', preview_url: 'https://preview.example/' });
+  assert.deepEqual(await probe({ state: 'paused' }), { state: 'paused' });
+  assert.equal(checks, 0);
+  assert.deepEqual(await probe({ state: 'running', endAt: new Date(Date.now() + 10_000) }), { state: 'ready' });
+  assert.equal(checks, 0, 'nor one about to sleep');
+  assert.deepEqual(await probe({ state: 'running', endAt: new Date(Date.now() + 5 * 60_000) }), { state: 'ready' });
+  assert.equal(checks, 1);
+});
+
+test('pause puts a sandbox to sleep, and says whether it was awake', async () => {
+  const asked = [];
+  const runtime = createRuntime({ Sandbox: { pause: async (id) => { asked.push(id); return asked.length === 1; } }, env: { E2B_API_KEY: 'test' }, emit() {} });
+  assert.deepEqual(await runtime.pause({ sandbox_id: 'sb' }), { state: 'paused', paused: true });
+  assert.deepEqual(await runtime.pause({ sandbox_id: 'sb' }), { state: 'paused', paused: false });
+  assert.deepEqual(asked, ['sb', 'sb']);
 });

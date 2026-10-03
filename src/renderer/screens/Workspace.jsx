@@ -736,10 +736,12 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const onRowClick = (row) => {
     if (row.type === 'child') { selectTopic(row.id); return; }
     if (row.type === 'archive') { openTab(`${ARCHIVE_TAB}${row.file}`, row.name); return; }
-    // A GitHub repository opens its live preview in the Stage; one still building (or failed, or stopped) shows its build.
+    // A GitHub repository opens its live preview in the Stage; one still building (or failed, or stopped) shows its build,
+    // and one ended after a week unopened is built again, its progress in the same build details.
     const sandbox = sandboxes && hasTag(row, 'git') ? sandboxes.items[row.id] : null;
     const click = repositoryClick(sandbox);
     if (click === 'preview') { sandboxes.open(sandbox.run); return; }
+    if (click === 'start') { sandboxes.openBuild(row); sandboxes.act(sandbox.run, () => api.startSandbox(row.id)); return; }
     if (click === 'details') { sandboxes.openBuild(row); return; }
     openItem(row);
   };

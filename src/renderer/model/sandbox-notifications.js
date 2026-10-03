@@ -1,3 +1,5 @@
+import { expiredRun } from '../../shared/sandbox-sleep.cjs';
+
 const LIMIT = 40;
 export const notificationStorageKey = (root) => `engelbart:preview-notifications:${root}`;
 
@@ -36,11 +38,24 @@ export function sandboxProgressState(dataRoot, { notifications = [], dismissed =
 
 // Progress can arrive before the initial snapshot. Never let an older snapshot
 // restore a stopped preview, replace a newer build, or create another alert.
-// A saved repository clicked in the workspace's sidebar (2026-09-29): its live preview when there is one, else its build
-// details (progress, why it failed, Run). Without a sandbox (signed out, sandboxes off) it opens as it always has.
+// A saved repository clicked in the workspace's sidebar (2026-09-29): its live preview when there is one (asleep too: opening
+// it wakes it), else its build details (progress, why it failed, Run). One ended only because nobody opened it for 7 days
+// is built again ('start'). Without a sandbox (signed out, sandboxes off) it opens as it always has.
 export function repositoryClick(item) {
   if (!item?.run) return null;
+  if (expiredRun(item.run)) return 'start';
   return item.run.status === 'ready' && item.run.preview_url ? 'preview' : 'details';
+}
+
+// The repository whose ready preview an address is on (same origin: each sandbox has its own host), or null.
+export function previewLibraryId(items, url) {
+  let origin;
+  try { origin = new URL(url).origin; } catch { return null; }
+  for (const { run } of Object.values(items || {})) {
+    if (run?.status !== 'ready' || !run.preview_url) continue;
+    try { if (new URL(run.preview_url).origin === origin) return run.library_id; } catch { /* not an address */ }
+  }
+  return null;
 }
 
 export function sandboxProgressReducer(state, action) {

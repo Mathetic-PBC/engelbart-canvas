@@ -3,6 +3,7 @@ import { EDGE as WINDOW_EDGE } from '../ui/WindowEdges.jsx';
 import { isGithubSignIn } from '../../shared/github.cjs';
 import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
+import { usePreviewTouch } from '../ui/SandboxProgress.jsx';
 import { KindGlyph, SEARCH, FOLDER } from '../ui/Icons.jsx';
 import { kindOf, stripScheme, OPEN_IN_BROWSER } from '../model/address.js';
 import { MAX_TABS, SAVE_LABEL, addressKey, afterClose, linkPlan, looksLikePlace, placeTab, stageRows, tabKey, tabPlace, parseTable } from '../model/stage.js';
@@ -364,6 +365,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const web = tab.web;
   const failed = page && web && web.error ? web.error : null;
   const showing = visible && page && !failed && !occluded;
+  usePreviewTouch((web && web.url) || tab.url, visible && page); // a repository's live preview in use stays awake
   // Where the tab is, as the address field shows it: a file by its path (a docx too, though a page made from it is shown).
   const shownUrl = pdf ? (pdf.input || pdf.url) : tab.file && tab.file.path ? tab.file.path : tab.url;
   const shownDraft = stripScheme(shownUrl);
