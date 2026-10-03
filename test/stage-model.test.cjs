@@ -59,6 +59,7 @@ test('placeTab with newTab (a ⌘-click): a tab of its own though one shows it; 
   assert.deepEqual(placeTab(full, 4, key, { newTab: true }), { replace: 4 }, 'at 15 the tab in front is replaced, as a plain click on a new link does');
   assert.deepEqual(placeTab(full, 4, key), { focus: 2 }, 'a plain click still brings the open one forward');
   assert.deepEqual(placeTab([rope], 0, key, {}), { focus: 0 }, 'without newTab, as before');
+  assert.deepEqual(placeTab([rope], 0, key, { newTab: false }), { focus: 0 }, 'newTab: false is the same as none');
 });
 
 test('afterClose: the tab to the right comes forward, else the one to the left; none left is -1', async () => {

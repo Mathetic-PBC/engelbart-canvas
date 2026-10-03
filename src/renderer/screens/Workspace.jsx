@@ -723,8 +723,12 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     stageRef.current.openInput(href, options);
   }, []);
   // What the window itself would open in a new window or tab (a ⌘-click on a link the editor does not handle): main sends
-  // it here while this listens, not to the default browser (src/main/index.cjs, 2026-10-02).
-  React.useEffect(() => api.onStageOpenLink((link) => openLink(link.url, { newTab: !!link.newTab })), [openLink]);
+  // it here while this listens, not to the default browser (src/main/index.cjs, 2026-10-02). Not while the project's folder
+  // is being asked for: the Stage under that is out of reach.
+  React.useEffect(() => {
+    if (!active) return undefined;
+    return api.onStageOpenLink((link) => { if (link && link.url) openLink(link.url, { newTab: !!link.newTab }); });
+  }, [active, openLink]);
   // Opened from the all-projects screen: shown once the Stage is there.
   React.useEffect(() => { if (initialStage && stageRef.current) openItem(initialStage); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
