@@ -19,7 +19,8 @@ const Caret = ({ up }) => (
   <span style={{ flex: 'none', width: 10, height: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', font: '12px/1 var(--font-sans)', color: '#8f8f8f' }}><span style={{ position: 'relative', top: up ? 3 : -3 }}>{up ? '⌃' : '⌄'}</span></span>
 );
 
-function Row({ label, on, title, onPick }) {
+// Also the rows of @discover's level menu (./DiscoverLevels.jsx).
+export function Row({ label, on, title, onPick }) {
   const [over, setOver] = React.useState(false);
   return (
     <div role="option" aria-selected={on} title={title || undefined} onMouseEnter={() => setOver(true)} onMouseLeave={() => setOver(false)} onMouseDown={(e) => { e.preventDefault(); onPick(); }} style={{ display: 'flex', alignItems: 'center', gap: 10, height: 32, padding: '0 8px 0 10px', borderRadius: 6, cursor: 'pointer', background: over ? '#f2f2f2' : 'transparent', font: `${on ? 500 : 400} 13px/1 var(--font-sans)`, color: '#171717' }}>

@@ -810,8 +810,11 @@ test('the editor marks no flag on an @brainstorm line, and still marks them on @
   assert.deepEqual(marked('@brainstorm --opus hi'), []);
   assert.deepEqual(marked('@Brainstorm --opus --max hello'), []);
   assert.deepEqual(marked('@bart --opus hi'), ['--opus']);
-  assert.deepEqual(marked('@discover --sonnet why --deep'), ['--sonnet']);
-  assert.match(compiled.exports.DISCOVER_ITEM.summary, /Add --quick for a fast look, or --deep to go further\.$/);
+  assert.deepEqual(marked('@discover --sonnet why --deep'), ['--sonnet', '--deep'], 'its level is a flag too (L-06)');
+  assert.deepEqual(marked('@discover why --high --deep'), ['--high', '--deep'], 'and a flag readDiscover obeys behind it');
+  assert.deepEqual(marked('@Discover --quick how people read'), ['--quick']);
+  assert.deepEqual(marked('@discover how --deeper people read'), [], 'a word that is not a level stays plain');
+  assert.match(compiled.exports.DISCOVER_ITEM.summary, /Pick Quick, Standard or Deep on the line's chip\.$/);
 });
 
 test('@brainstorm\'s system prompt says what the harness relies on, and a file replaces it', () => {

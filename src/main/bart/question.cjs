@@ -113,6 +113,14 @@ function readMode(text) {
   return { mode, rest };
 }
 
+/** `mode`'s level of @discover on `provider` → { model, effort }: the models file's `discover` block, else that provider's first step. */
+function levelOf(models, provider, mode) {
+  const entry = models.providers[provider];
+  const levels = models.discover && models.discover.providers ? models.discover.providers[provider] : null;
+  const held = levels ? levels[mode] : null;
+  return held && entry.models[held.model] && entry.efforts.includes(held.effort) ? held : entry.ladder[0];
+}
+
 /**
  * The text after "@discover" (2026-09-30; three levels 2026-10-02) → what readQuestion gives, on one step, and `mode`: the
  * one the line names, else the last one an earlier turn of the exchange named (`earlier`, its turns { question }: an
@@ -126,11 +134,30 @@ function readDiscover(text, models, earlier = []) {
   const mode = named || carried || 'standard';
   const read = readQuestion(rest, models);
   if (read.pinned) return { ...read, mode };
-  const provider = read.provider, entry = models.providers[provider];
-  const levels = models.discover && models.discover.providers ? models.discover.providers[provider] : null;
-  const held = levels ? levels[mode] : null;
-  const rung = held && entry.models[held.model] && entry.efforts.includes(held.effort) ? held : entry.ladder[0];
+  const provider = read.provider, entry = models.providers[provider], rung = levelOf(models, provider, mode);
   return { question: read.question, provider, steps: [{ provider, key: rung.model, model: entry.models[rung.model].id, name: entry.models[rung.model].name, effort: rung.effort }], pinned: false, mode };
+}
+
+/**
+ * The text after "@discover" set to run at `mode` (2026-10-03, the line's level chip): every mode flag and every model or
+ * effort flag taken off, then `--quick` or `--deep` after the question. `plain` is the mode the line runs at with no flag
+ * ('standard', or the level an earlier turn of its exchange carries): picking it writes nothing, so a plain line stays plain.
+ */
+function withMode(text, mode, models, plain = 'standard') {
+  const { rest } = readMode(text);
+  const question = models ? readFlags(rest, models).rest : rest;
+  return [question, MODES.includes(mode) && mode !== plain ? `--${mode}` : ''].filter(Boolean).join(' ');
+}
+
+/**
+ * Where the flags of an @discover line are, [start, end) each, for the editor to mark: its mode flags, and the model and
+ * effort flags readDiscover obeys (read with the mode flags blanked out, so offsets stay those of `text`).
+ */
+function discoverSpans(text, models) {
+  const source = String(text || ''), spans = [];
+  const blank = source.replace(MODE_RE, (all, lead, word, at) => { spans.push([at + lead.length, at + all.length]); return lead + ' '.repeat(all.length - lead.length); });
+  if (models) spans.push(...readFlags(blank, models).spans);
+  return spans.sort((a, b) => a[0] - b[0]);
 }
 
 // A full Build of what follows (2026-10-02): `--build` anywhere on an @bart line, in any case.
@@ -162,4 +189,4 @@ function withChoice(text, models, { model, effort }) {
   return [`--${model}`, `--${effort}`, rest].filter(Boolean).join(' ');
 }
 
-module.exports = { EFFORTS, EFFORT_LABELS, MODES, effortOf, modelOf, readFlags, ladderOf, readQuestion, readMode, readDiscover, readBuildFlag, buildRequestOf, withChoice };
+module.exports = { EFFORTS, EFFORT_LABELS, MODES, effortOf, modelOf, readFlags, ladderOf, readQuestion, readMode, levelOf, readDiscover, withMode, discoverSpans, readBuildFlag, buildRequestOf, withChoice };

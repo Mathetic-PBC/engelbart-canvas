@@ -330,7 +330,11 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // What the @bart line's selector offers and what its flags are checked against: the models file,
   // cut down to the providers config.json lists. Names and keys only; the file's prose stays here.
   // A provider's `start` is where a question without flags starts: the last model and effort picked by hand (bart/choices.cjs).
-  handle('bart-models', () => { const { provider, providers } = readModels('bart'); return { provider, providers }; });
+  // `discover`: @discover's { quick, standard, deep } per provider, which its line's level chip lists (2026-10-03).
+  handle('bart-models', () => {
+    const { provider, providers, discover } = readModels('bart'), levels = (discover && discover.providers) || {};
+    return { provider, providers, discover: { providers: Object.fromEntries(Object.keys(providers).filter((key) => levels[key]).map((key) => [key, levels[key]])) } };
+  });
   // The model and effort just picked in a Build panel ('build') or a post-it's Build ('quick'), kept as where the next one
   // starts. @bart's are kept by the question that uses them (bart/ask.cjs onPicked).
   handle('remember-model-choice', (place, choice) => {

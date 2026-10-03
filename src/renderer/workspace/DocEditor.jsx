@@ -29,9 +29,10 @@
 import React from 'react';
 import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, threads, turnText, wsMention, mentionAt, agentOf, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE } from '../model/doc.js';
 import { fieldRows, isVerbRow } from '../model/rail.js';
-import { readFlags, readQuestion, withChoice, modelOf, effortOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
+import { readFlags, readQuestion, readDiscover, withChoice, withMode, discoverSpans, modelOf, effortOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
 import { SKIPPED, MAP_GROUPS, cardOfAnswer, questionOf, isChoice, answerLine, withWrap, readAnswer, recapParts, recapLine } from '../../main/bart/card.cjs';
 import BartPicker from './BartPicker.jsx';
+import DiscoverLevels, { LEVEL_LABELS } from './DiscoverLevels.jsx';
 import MentionMenu from './MentionMenu.jsx';
 import Popover from './Popover.jsx';
 import WorkspacePeek from './WorkspacePeek.jsx';
@@ -42,13 +43,16 @@ import { SAVE_LABEL, guideSections, splitTarget } from '../model/stage.js';
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 export const BART_ITEM = { id: 'bart', type: 'chat', name: 'bart', title: 'Bart', summary: 'Ask a question about this document, the project\'s code or the web. Add --opus or --high to pick the model or the effort by hand.', facts: 'reads, never edits' };
-export const DISCOVER_ITEM = { id: 'discover', type: 'chat', name: 'discover', title: 'Discover', summary: 'Find what to read about a problem, and where in it to look: it traces the citations of the papers in your library and the pages of the people you follow. Add --quick for a fast look, or --deep to go further.', facts: 'finds, never concludes' };
+export const DISCOVER_ITEM = { id: 'discover', type: 'chat', name: 'discover', title: 'Discover', summary: 'Find what to read about a problem, and where in it to look: it traces the citations of the papers in your library and the pages of the people you follow. Pick Quick, Standard or Deep on the line\'s chip.', facts: 'finds, never concludes' };
 export const BRAINSTORM_ITEM = { id: 'brainstorm', type: 'chat', name: 'brainstorm', title: 'Brainstorm', summary: 'Find what you want to work on: it asks one question at a time, with options drawn from this workspace and the library, then recaps what you said.', facts: 'asks, never proposes' };
 
 const UNDER_BART = ['pending', 'reply'];
-// The agents that run on one model of their own (no chip, no selector on Regenerate), may be asked with nothing after
-// them and answer with cards: every one but @bart. What their follow-up field says, and whether it may be sent empty.
+// The agents that run on one model of their own (no model chip, no selector on Regenerate), may be asked with nothing after
+// them and answer with cards: every one but @bart. An @discover line's chip picks its level instead (2026-10-03). What
+// their follow-up field says, and whether it may be sent empty.
 const oneModel = (agent) => agent !== 'bart';
+// How a question line starts, as it was written: "@Bart" (the @ menu's) or "@bart" (typed), "@Discover" or "@discover".
+const leadOf = (line, agent) => (String(line).match(new RegExp(`^@${agent}`, 'i')) || [`@${agent}`])[0];
 const FOLLOW = {
   brainstorm: { placeholder: 'Go on…', label: 'Brainstorm again', empty: true },
   discover: { placeholder: 'More like one of these, only after 2022, essays…', label: 'Ask Discover for more', empty: false },
@@ -408,11 +412,12 @@ export default class DocEditor extends React.Component {
   }
   // An @bart line in pieces: its recognised flags (src/main/bart/question.cjs reads them, as the run will) each a token of
   // their own, the rest split as any line is. Shown verbatim, so offsets in the line are what they were. An @brainstorm
-  // line has none: its model is fixed and a flag picks nothing (main/bart/models.cjs readBrainstorm).
+  // line has none: its model is fixed and a flag picks nothing (main/bart/models.cjs readBrainstorm). An @discover line's
+  // --quick, --standard and --deep are flags too (2026-10-03), with the model and effort flags readDiscover obeys.
   bartTokens(line, p) {
-    const models = this.props.models, base = line.length - p.text.length, tokens = [], flags = new Set();
+    const models = this.props.models, base = line.length - p.text.length, tokens = [], flags = new Set(), agent = agentOf(p);
     let at = 0;
-    for (const [from, to] of models && agentOf(p) !== 'brainstorm' ? readFlags(p.text, models).spans : []) {
+    for (const [from, to] of agent === 'discover' ? discoverSpans(p.text, models) : models && agent !== 'brainstorm' ? readFlags(p.text, models).spans : []) {
       tokens.push(...line.slice(at, base + from).split(INLINE).filter(Boolean)); flags.add(tokens.length); tokens.push(line.slice(base + from, base + to)); at = base + to;
     }
     tokens.push(...line.slice(at).split(INLINE).filter(Boolean));
@@ -471,15 +476,19 @@ export default class DocEditor extends React.Component {
     if (p.type === 'bart') {
       const { tokens, flags } = this.bartTokens(line, p), models = this.props.models;
       const content = active && !locked ? this.activeHtml(tokens, flags) : tokens.map((tok, k) => (flags.has(k) ? `<span style="${FLAG_LOOK}">${esc(tok)}</span>` : inlineHtml(tok))).join('');
-      // @brainstorm and @discover run on one model (no chip, BS-08) and may be asked with nothing after them.
-      const plain = oneModel(agentOf(p));
+      // @brainstorm and @discover run on one model (BS-08) and may be asked with nothing after them.
+      const agent = agentOf(p), plain = oneModel(agent);
       const read = models && !plain ? readQuestion(p.text, models) : null, ready = plain || !!(read ? read.question : p.text).trim();
+      // The question opens its card, or follows an answer inside one. Once it is answered its chip goes: the foot says who answered.
+      const top = !at || at.top, closes = !at || at.closes;
       const send = `<button contenteditable="false" data-act="ask" data-row="${i}" aria-label="Send" ${ready ? '' : 'disabled'} style="user-select:none;flex:none;width:26px;height:26px;padding:0;border:0;border-radius:50%;display:flex;align-items:center;justify-content:center;background:${ready ? '#0070f3' : '#eaeaea'};color:${ready ? '#fff' : '#8f8f8f'};cursor:${ready ? 'pointer' : 'default'};transition:background 160ms"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="square"><path d="M8 13.5V3.2M3.6 7.4 8 3l4.4 4.4"/></svg></button>`;
       // The chip: what the question starts on, and (hovered) where that is changed. The arrow sits inside it, one unit.
       const open = !!(this.state.picker && this.state.picker.kind === 'line' && this.state.picker.i === i);
-      const chip = read ? `<span contenteditable="false" data-chip="${i}" style="user-select:none;flex:none;display:inline-flex;align-items:center;gap:8px;margin:-2px -6px 0 0;padding:2px 2px 2px 12px;border:1px solid #eaeaea;border-radius:999px;background:#fff"><span data-act="pick" data-row="${i}" role="button" aria-haspopup="dialog" aria-expanded="${open}" style="display:inline-flex;align-items:center;gap:7px;height:26px;font:13px/1 var(--font-sans);color:#4d4d4d;cursor:default;white-space:nowrap">${esc(read.steps[0].name)} ${esc(EFFORT_LABELS[read.steps[0].effort] || read.steps[0].effort)}<span style="display:inline-flex;align-items:center;justify-content:center;width:10px;height:12px;font:12px/1 var(--font-sans);color:#8f8f8f"><span style="position:relative;top:${open ? '3px' : '-3px'}">${open ? '⌃' : '⌄'}</span></span></span>${send}</span>` : `<span contenteditable="false" style="flex:none;margin-top:3px">${send}</span>`;
-      // The question opens its card, or follows an answer inside one. Once it is answered its chip goes: the foot says who answered.
-      const top = !at || at.top, closes = !at || at.closes;
+      // An unanswered @discover line's chip (2026-10-03) names its level instead, the one it would run at now (carried from
+      // an earlier turn of its exchange when the line names none), or the model and effort a flag pins it to; its menu is
+      // DiscoverLevels. @brainstorm's runs on its one model: no chip.
+      const label = read ? `${read.steps[0].name} ${EFFORT_LABELS[read.steps[0].effort] || read.steps[0].effort}` : models && agent === 'discover' && closes ? this.discoverLabel(i) : null;
+      const chip = label ? `<span contenteditable="false" data-chip="${i}" style="user-select:none;flex:none;display:inline-flex;align-items:center;gap:8px;margin:-2px -6px 0 0;padding:2px 2px 2px 12px;border:1px solid #eaeaea;border-radius:999px;background:#fff"><span data-act="pick" data-row="${i}" role="button" aria-haspopup="dialog" aria-expanded="${open}" style="display:inline-flex;align-items:center;gap:7px;height:26px;font:13px/1 var(--font-sans);color:#4d4d4d;cursor:default;white-space:nowrap">${esc(label)}<span style="display:inline-flex;align-items:center;justify-content:center;width:10px;height:12px;font:12px/1 var(--font-sans);color:#8f8f8f"><span style="position:relative;top:${open ? '3px' : '-3px'}">${open ? '⌃' : '⌄'}</span></span></span>${send}</span>` : `<span contenteditable="false" style="flex:none;margin-top:3px">${send}</span>`;
       return `<div ${raw} ${locked ? 'contenteditable="false" data-readonly="1"' : ''} style="display:flex;align-items:flex-start;gap:10px;padding:${top ? 12 : 10}px 16px ${closes ? '10px' : '4px'};min-height:35px;background:#fafafa;border-radius:${radius(top, closes)};margin-bottom:${closes ? '14px' : '0'};font-size:16px;line-height:1.6;${locked ? 'user-select:text;cursor:default' : ''}"><span class="t" style="flex:1;min-width:0">${content || '<br>'}</span>`
         + (closes ? chip : '')
         + '</div>';
@@ -1604,6 +1613,13 @@ export default class DocEditor extends React.Component {
     const found = this.findTurn(ls, q); if (!found) return [];
     return found.thread.turns.filter((turn) => turn.q < q && turn.answered && !turn.pending).map((turn) => turnText(ls, turn));
   }
+  // An @discover line as it would run if sent now (2026-10-03): the level it names, else the one an earlier turn of its
+  // exchange carries, else Standard; or the model and effort a flag pins it to (readDiscover, as the run reads it).
+  discoverRead(ls, i) { return readDiscover(parseLine(ls[i] || '').text, this.props.models, this.turnsBefore(ls, i)); }
+  discoverLabel(i) {
+    const read = this.discoverRead(this.lines(), i), step = read.steps[0];
+    return read.pinned ? `${step.name} ${EFFORT_LABELS[step.effort] || step.effort}` : LEVEL_LABELS[read.mode];
+  }
   // A follow-up: the question goes under the card's last answer as an @bart line of its own, with the pending line under it.
   // It asks what the card's last turn asked: @bart, @brainstorm after a recap (which may be sent with nothing typed), or
   // @discover after a guide.
@@ -1751,8 +1767,18 @@ export default class DocEditor extends React.Component {
     if (pk.kind === 'regen') { this.setState({ picker: { ...pk, choice } }); return; }
     if (pk.kind === 'follow') { this.followChoice.set(pk.i, choice); this.lastHtml = null; this.forceUpdate(); return; }
     const ls = this.lines(), p = parseLine(ls[pk.i] || ''); if (p.type !== 'bart' || this.lockedAt(ls, pk.i)) { this.closePicker(); return; }
-    const lead = (ls[pk.i].match(/^@bart/i) || ['@bart'])[0]; // "@Bart" (the @ menu's) or "@bart" (typed) stays as it was written
+    const lead = leadOf(ls[pk.i], agentOf(p));
     const text = withChoice(p.text, models, choice), line = `${lead} ${text}${readFlags(text, models).rest ? '' : ' '}`;
+    this.setLines((x) => x.map((l, j) => (j === pk.i ? line : l)), this.state.activeLine === pk.i ? { line: pk.i, offset: line.length } : undefined);
+  };
+  // A level picked under an @discover line's chip (2026-10-03): written into the line as its flag, with any model or effort
+  // flag taken off. The level the line runs at with no flag (its exchange's, else Standard) is written as none.
+  pickLevel = (mode) => {
+    const pk = this.state.picker, models = this.props.models; if (!pk || pk.kind !== 'line' || !models) return;
+    const ls = this.lines(), p = parseLine(ls[pk.i] || ''); if (p.type !== 'bart' || agentOf(p) !== 'discover' || this.lockedAt(ls, pk.i)) { this.closePicker(); return; }
+    const plain = readDiscover('', models, this.turnsBefore(ls, pk.i)).mode, text = withMode(p.text, mode, models, plain);
+    // With no question yet, a space after the flag, so what is typed next is the question ("@discover " alone has its own).
+    const line = `${leadOf(ls[pk.i], 'discover')} ${text}${text && !readDiscover(text, models).question ? ' ' : ''}`;
     this.setLines((x) => x.map((l, j) => (j === pk.i ? line : l)), this.state.activeLine === pk.i ? { line: pk.i, offset: line.length } : undefined);
   };
   sendPicked = () => {
@@ -1845,7 +1871,16 @@ export default class DocEditor extends React.Component {
     let current = null;
     if (pk.kind === 'regen') current = pk.choice ? marked(pk.choice) : this.ranWith(ls, pk.i).current;
     else if (pk.kind === 'follow') { const thread = threads(ls).find((t) => t.from === pk.i), step = thread && this.followStep(ls, thread).step; current = step && { provider: step.provider, model: step.key, effort: step.effort }; }
-    else { const p = parseLine(ls[pk.i] || ''); if (p.type === 'bart') { const step = readQuestion(p.text, models).steps[0]; current = { provider: step.provider, model: step.key, effort: step.effort }; } }
+    else {
+      const p = parseLine(ls[pk.i] || '');
+      // An @discover line's chip opens its levels instead (2026-10-03).
+      if (p.type === 'bart' && agentOf(p) === 'discover') {
+        if (!models.providers[models.provider]) return null;
+        const read = this.discoverRead(ls, pk.i);
+        return <DiscoverLevels models={models} current={{ mode: read.mode, pinned: read.pinned }} anchor={pk} onPick={this.pickLevel} onEnter={this.stayPicker} onLeave={this.leavePicker} />;
+      }
+      if (p.type === 'bart') { const step = readQuestion(p.text, models).steps[0]; current = { provider: step.provider, model: step.key, effort: step.effort }; }
+    }
     if (!current || !models.providers[current.provider]) return null;
     return <BartPicker models={models} current={current} anchor={pk} onPick={this.pickModel} onSend={pk.kind === 'regen' ? this.sendPicked : undefined} onEnter={this.stayPicker} onLeave={this.leavePicker} />;
   }
