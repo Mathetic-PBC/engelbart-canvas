@@ -120,5 +120,10 @@ export function mentionRows({ query, library, page, pageRow, workspaces = [], he
   return [...out, ...spaces, ...hits.slice(0, MAX_MENTIONS)];
 }
 
+/** A row the line keeps as a word (Bart, Note, Brainstorm, Discover) rather than a mention; an editor's own list names the agents by id. */
+export const isVerbRow = (row) => !!row && (row.kind === 'verb' || row.id === 'bart' || row.id === 'brainstorm' || row.id === 'discover');
+/** The @ menu of a follow-up field (2026-10-02): the field already asks its thread's agent, so only what can be mentioned. */
+export const fieldRows = (rows) => rows.filter((row) => row && !isVerbRow(row));
+
 /** A name a mention can carry: `@[…]` ends at the first `]` and stays on one line. */
 export const mentionName = (value) => String(value || '').replace(/[[\]]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200) || 'Untitled page';

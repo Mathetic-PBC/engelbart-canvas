@@ -20,10 +20,13 @@
 //     asks its cards the same way, as `@discover …` lines, and answers with a reading guide drawn as an @bart answer is.
 //     Each paper's title line in a guide ends in a button that keeps the paper (2026-10-02, model/guide.js): + Save, + Workspace
 //     or ✓, from props.paperState; a click hands it to props.onSavePaper. Drawn, never written: the line stays as it came.
+//   * the follow-up field has the @ menu too (2026-10-02): `@` opens it under the field's caret and a pick writes the token
+//     a document line would; Bart, Brainstorm, Discover and Note are left out, since the field already asks its agent.
 //   * where a document was scrolled to is kept per workspace (props.viewOf / props.onView, 2026-09-22), apart from the
 //     caret: coming back to a document shows what was on screen, not where the last edit was.
 import React from 'react';
-import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, threads, turnText, wsMention, agentOf, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE } from '../model/doc.js';
+import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, threads, turnText, wsMention, mentionAt, agentOf, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE } from '../model/doc.js';
+import { fieldRows, isVerbRow } from '../model/rail.js';
 import { readFlags, readQuestion, withChoice, modelOf, effortOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
 import { SKIPPED, MAP_GROUPS, cardOfAnswer, questionOf, isChoice, answerLine, readAnswer, recapParts, recapLine } from '../../main/bart/card.cjs';
 import BartPicker from './BartPicker.jsx';
@@ -105,6 +108,25 @@ const ICON = {
   stepsShut: icon('<path d="m5 8.5 7 7 7-7"></path>', 10, 3, 'square'),
 };
 const radius = (top, closes) => `${top ? '10px 10px' : '0 0'} ${closes ? '10px 10px' : '0 0'}`;
+// Where a follow-up field's caret is on screen (its @ menu hangs there, 2026-10-02). A textarea has no range to measure,
+// so a hidden copy laid over it is: the same width, padding and type, holding the text up to the caret and then a mark
+// with the rest (so a word wraps as it does in the field). The field's bottom-left corner when that cannot be measured.
+const MIRRORED = ['boxSizing', 'width', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth', 'borderTopStyle', 'borderRightStyle', 'borderBottomStyle', 'borderLeftStyle', 'fontFamily', 'fontSize', 'fontStyle', 'fontVariant', 'fontWeight', 'fontStretch', 'lineHeight', 'letterSpacing', 'wordSpacing', 'textIndent', 'textTransform', 'tabSize', 'whiteSpace', 'overflowWrap', 'wordBreak'];
+function fieldCaret(input, pos = input.selectionStart) {
+  const box = input.getBoundingClientRect(), corner = { left: box.left, right: box.left, top: box.top, bottom: box.bottom };
+  let copy = null;
+  try {
+    const css = getComputedStyle(input);
+    copy = document.createElement('div');
+    for (const key of MIRRORED) copy.style[key] = css[key];
+    Object.assign(copy.style, { position: 'fixed', left: `${box.left}px`, top: `${box.top - input.scrollTop}px`, margin: '0', overflow: 'hidden', visibility: 'hidden', pointerEvents: 'none' });
+    copy.textContent = input.value.slice(0, pos);
+    const mark = document.createElement('span'); mark.textContent = input.value.slice(pos) || '\u200b';
+    copy.appendChild(mark); document.body.appendChild(copy);
+    const r = mark.getClientRects()[0];
+    return r ? { left: r.left, right: r.left, top: r.top, bottom: r.bottom } : corner;
+  } catch { return corner; } finally { if (copy) copy.remove(); }
+}
 // A flag the models file recognises is a little bolder than the text around it; a `--word` it does not know stays plain.
 const FLAG_LOOK = 'font-weight:500';
 
@@ -284,7 +306,7 @@ export default class DocEditor extends React.Component {
     // the @ menu follows the caret.
     if (this.state.picker) this.closePicker();
     if (this.state.pop) this.setState({ pop: null });
-    if (this.state.mention) { const anchor = this.caretRect(); if (anchor) this.setState((s) => (s.mention ? { mention: { ...s.mention, anchor } } : null)); }
+    if (this.state.mention) { const anchor = this.mentionAnchor(); if (anchor) this.setState((s) => (s.mention ? { mention: { ...s.mention, anchor } } : null)); }
     clearTimeout(this.viewT); this.viewT = setTimeout(() => { if (this.mounted && this.lastKey === this.key()) this.reportView(this.props, false); }, 300);
   };
   // The person scrolled, clicked or typed: what they do from now on wins over putting the old place back.
@@ -292,6 +314,12 @@ export default class DocEditor extends React.Component {
   caretRect() {
     const sel = getSelection(); if (!sel || !sel.rangeCount) return null;
     const r = sel.getRangeAt(0).getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+  }
+  // Where the @ menu hangs now: the document's caret, or the caret of the follow-up field it was opened in.
+  mentionAnchor() {
+    const m = this.state.mention; if (!m) return null;
+    if (m.field == null) return this.caretRect();
+    const input = this.followField(m.field); return input ? fieldCaret(input) : null;
   }
 
   /* ---------------------------------------------------------------- document access */
@@ -1050,6 +1078,13 @@ export default class DocEditor extends React.Component {
       if (had && had.key === input.dataset.followInput) { input.focus({ preventScroll: true }); try { input.setSelectionRange(had.a, had.b); } catch { /* not a text selection */ } }
     }
   }
+  followField(from) { const ed = this.editorEl(); return ed ? ed.querySelector(`[data-follow-input="${from}"]`) : null; }
+  // After a redraw, an @ menu open in a follow-up field hangs from the new field's caret; it closes when the field is gone
+  // (its thread was asked again, folded or deleted) or did not take the keyboard back.
+  followMenuRedrawn(menu) {
+    const input = this.followField(menu.field);
+    this.setState({ mention: input && document.activeElement === input ? { ...menu, anchor: fieldCaret(input) } : null });
+  }
   // The field is as tall as its wrapped text.
   fitFollow(input) { input.style.height = 'auto'; input.style.height = `${Math.max(24, input.scrollHeight)}px`; }
   fitFollows = () => { const ed = this.editorEl(); if (ed) for (const input of ed.querySelectorAll('[data-follow-input]')) this.fitFollow(input); };
@@ -1107,7 +1142,10 @@ export default class DocEditor extends React.Component {
     let c = had || buildField ? null : this.caret || (hadFocus ? this.caretInfo()?.anchor : null);
     if (!c && hadFocus && !had && !buildField && !ed.querySelector('[data-line]')) { const ls = this.lines(), last = ls.length - 1, p = parseLine(ls[last]); c = { line: last, offset: lineText(p, ls[last]).length }; }
     if (c && !this.caret) this.caret = c;
+    // Read before the fields are replaced: taking a focused field out of the page may blur it, which closes the menu.
+    const menu = this.state.mention && this.state.mention.field != null ? this.state.mention : null;
     this.syncing = true; ed.innerHTML = html; this.lastHtml = html; this.lastKey = key; this.restoreFollow(ed, had && !had.card ? had : null); this.restoreCards(ed, had); this.restoreBuilds(ed, buildField);
+    if (menu) this.followMenuRedrawn(menu);
     if (c && !had && !buildField && (hadFocus || this.wantFocus)) { ed.focus({ preventScroll: true }); this.caret = c; this.applyCaret(); }
     this.wantFocus = false; this.syncing = false;
   }
@@ -1263,10 +1301,10 @@ export default class DocEditor extends React.Component {
     if (unchanged && (strip || cleared)) this.syncEditor();
     if (caret) {
       // No @ menu inside code: an `@` there is code.
-      const p = parseLine(ls[pos] ?? ''), txt = lineText(p, ls[pos]), m = inCode ? null : txt.slice(0, caret.offset).match(/@([^\s@\[\]]{0,30})$/);
+      const p = parseLine(ls[pos] ?? ''), txt = lineText(p, ls[pos]), m = inCode ? null : mentionAt(txt, caret.offset);
       if (m) {
         const anchor = this.caretRect();
-        this.setState({ activeLine: pos, mention: { i: pos, query: m[1], start: caret.offset - m[0].length, caret: caret.offset, anchor }, mentionIdx: 0 });
+        this.setState({ activeLine: pos, mention: { i: pos, query: m.query, start: m.start, caret: caret.offset, anchor }, mentionIdx: 0 });
       } else this.setState((s) => (s.mention || s.activeLine !== pos ? { mention: null, activeLine: pos } : null));
     }
   };
@@ -1540,8 +1578,18 @@ export default class DocEditor extends React.Component {
     this.setState({ activeLine: null, mention: null });
     this.props.onAsk({ askId, text: asked, turns, agent });
   }
+  // While the field's @ menu shows, the arrows move in it, Enter or Tab puts the row in and Escape closes it alone; Enter
+  // sends, and Escape leaves the field, once it is closed.
   followKey(e) {
     if (this.state.picker) this.closePicker();
+    const m = this.state.mention, items = m && m.field === Number(e.target.dataset.followInput) ? this.mentionList() : [];
+    if (items.length) {
+      const n = items.length;
+      if (e.key === 'ArrowDown') { e.preventDefault(); this.setState({ mentionIdx: (this.state.mentionIdx + 1) % n }); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); this.setState({ mentionIdx: (this.state.mentionIdx - 1 + n) % n }); return; }
+      if ((e.key === 'Enter' || e.key === 'Tab') && !e.isComposing) { e.preventDefault(); this.pickMention(items[this.state.mentionIdx] || items[0]); return; }
+      if (e.key === 'Escape') { e.preventDefault(); this.setState({ mention: null }); return; }
+    }
     if (e.key === 'Enter' && e.shiftKey) e.preventDefault(); // one line of the document: no line breaks
     else if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); this.sendFollow(Number(e.target.dataset.followInput)); }
     else if (e.key === 'Escape') e.target.blur();
@@ -1549,6 +1597,14 @@ export default class DocEditor extends React.Component {
   followInput(input) {
     if (/[\r\n]/.test(input.value)) { const a = input.selectionStart, b = input.selectionEnd; input.value = input.value.replace(/[\r\n]/g, ' '); input.setSelectionRange(a, b); }
     this.followText.set(Number(input.dataset.followInput), input.value); this.paintSend(input); this.fitFollow(input);
+    this.followMention(input);
+  }
+  // The @ menu in a follow-up field (2026-10-02): opened, narrowed or closed by what stands before the field's caret, as
+  // on a document line, and hung from that caret. It is the menu's `field` form: the thread's first line, and no line `i`.
+  followMention(input) {
+    const from = Number(input.dataset.followInput), caret = input.selectionStart, found = mentionAt(input.value, caret), open = this.state.mention;
+    if (found) this.setState({ mention: { field: from, query: found.query, start: found.start, caret, anchor: fieldCaret(input, caret) }, mentionIdx: 0 });
+    else if (open && open.field === from) this.setState({ mention: null });
   }
   // An image pasted into a follow-up (2026-10-02) is saved as one pasted into the document is (the parent's onPasteImage)
   // and named in the field as [Attachment n], numbered on from the document's images; sendFollow writes it into the line.
@@ -1663,12 +1719,15 @@ export default class DocEditor extends React.Component {
   /* ---------------------------------------------------------------- operations */
   bartItem() { return (this.props.mentionable || []).find((r) => r && r.id === 'bart') || BART_ITEM; }
   mentionList() {
-    const q = (this.state.mention?.query || '').toLowerCase();
-    if (this.props.mentionItems) return this.props.mentionItems(q); // the workspace's list: Bart, Note, the open page, the library (model/rail.js)
-    return (this.props.mentionable || []).filter((r) => r && ((r.name || '').toLowerCase().includes(q) || (r.title || '').toLowerCase().includes(q)));
+    const m = this.state.mention, q = (m?.query || '').toLowerCase();
+    const rows = this.props.mentionItems ? this.props.mentionItems(q) // the workspace's list: Bart, Note, the open page, the library (model/rail.js)
+      : (this.props.mentionable || []).filter((r) => r && ((r.name || '').toLowerCase().includes(q) || (r.title || '').toLowerCase().includes(q)));
+    return m && m.field != null ? fieldRows(rows) : rows; // a follow-up field already asks its thread's agent: no verbs
   }
   pickMention(r) {
-    const m = this.state.mention; if (!m || !r) return; const ls = this.lines(), p = parseLine(ls[m.i] || '');
+    const m = this.state.mention; if (!m || !r) return;
+    if (m.field != null) { this.pickInField(m, r); return; }
+    const ls = this.lines(), p = parseLine(ls[m.i] || '');
     const cur = lineText(p, ls[m.i]);
     const verb = r.kind === 'verb' ? r.verb : r.id === 'bart' || r.id === 'brainstorm' || r.id === 'discover' ? r.id : null;
     // Bart, Brainstorm, Discover and Note are words the line keeps (Enter asks, or makes the note); anything else is a mention, and
@@ -1677,6 +1736,19 @@ export default class DocEditor extends React.Component {
     this.writeText(m.i, cur.slice(0, m.start) + ins + cur.slice(m.caret), { line: m.i, offset: m.start + ins.length });
     this.wantFocus = true; this.setState({ mention: null, activeLine: m.i });
     if (!verb && r.kind !== 'workspace' && this.props.onMentionPicked) this.props.onMentionPicked(r); // a workspace is not a library row
+  }
+  // A row picked in a follow-up field: the token a document line would get takes the place of `@query`, the keyboard stays
+  // in the field, and followInput keeps what it holds and its send button. Sent, it is a mention on the new line.
+  pickInField(m, r) {
+    const input = this.followField(m.field);
+    this.setState({ mention: null });
+    if (!input || isVerbRow(r)) return;
+    const ins = r.kind === 'workspace' ? `${wsMention(r.name, r.id)} ` : `@[${r.name}] `;
+    const end = Math.min(m.caret, input.value.length), start = Math.min(m.start, end);
+    if (document.activeElement !== input) input.focus({ preventScroll: true });
+    input.setRangeText(ins, start, end, 'end');
+    this.followInput(input);
+    if (r.kind !== 'workspace' && this.props.onMentionPicked) this.props.onMentionPicked(r);
   }
   // Enter on a line holding `@Note name`: the note is made (named, or untitled when nothing follows), and the words
   // become its mention if the line still holds them once it exists.

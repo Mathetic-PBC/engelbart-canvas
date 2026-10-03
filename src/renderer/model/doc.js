@@ -46,6 +46,14 @@ const LINK_RE = /^\[([^\]]+)\]\(([^)]+)\)$/;
 export const WS_MENTION_RE = /^@\[([^\]\n]+)\]\(ws:([\w-]+)\)$/;
 /** The token that mentions a workspace. */
 export const wsMention = (name, id) => `@[${String(name || '').replace(/[[\]\n]/g, '').trim() || 'Workspace'}](ws:${id})`;
+// What the @ menu is looking for: an `@` and up to 30 characters after it, no space, @ or bracket among them, ending at the
+// caret. A document line and a follow-up field (2026-10-02) read it the same way.
+const MENTION_QUERY_RE = /@([^\s@[\]]{0,30})$/;
+/** The @ menu's query in `text` before `caret` → { query, start } (`start` where its @ stands), or null when there is none. */
+export function mentionAt(text, caret) {
+  const m = String(text ?? '').slice(0, caret).match(MENTION_QUERY_RE);
+  return m ? { query: m[1], start: caret - m[0].length } : null;
+}
 // ui/Icons.jsx WS, as markup for the rendered line: 0.8em square, on the text's baseline.
 const WS_ICON = '<svg viewBox="0 0 16 16" width="0.8em" height="0.8em" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true" style="display:inline-block;vertical-align:-0.06em;margin:0 0.2em 0 0.1em"><rect x="1.5" y="1.5" width="4.5" height="4.5" rx="1"/><rect x="8" y="1.5" width="6.5" height="4.5" rx="1"/><rect x="1.5" y="8" width="6.5" height="6.5" rx="1"/><rect x="10" y="8" width="4.5" height="4.5" rx="1"/></svg>';
 // A bare address, typed, pasted or written by @bart, is a link as it stands (closing punctuation is not part of it).

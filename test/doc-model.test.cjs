@@ -333,6 +333,32 @@ test('a workspace mention is one token that keeps its id and shows the @, the wo
   assert.equal(rawOffset(p, 2), 3, 'a click after the first letter of the name lands after it in the source');
 });
 
+test('the @ menu\'s query is the @ and what follows it up to the caret, on a line or in a follow-up field (2026-10-02)', async () => {
+  const { mentionAt } = await load();
+  assert.deepEqual(mentionAt('@', 1), { query: '', start: 0 }, 'a bare @ opens the whole menu');
+  assert.deepEqual(mentionAt('compare with @pla', 17), { query: 'pla', start: 13 });
+  assert.deepEqual(mentionAt('compare with @pla and more', 17), { query: 'pla', start: 13 }, 'only what stands before the caret counts');
+  assert.deepEqual(mentionAt('mail@host', 9), { query: 'host', start: 4 }, 'as on a document line, no space is needed before it');
+  assert.deepEqual(mentionAt('@@pl', 4), { query: 'pl', start: 1 }, 'the last @');
+  assert.deepEqual(mentionAt(`@${'x'.repeat(30)}`, 31), { query: 'x'.repeat(30), start: 0 });
+  for (const [text, caret] of [['', 0], ['plain', 5], ['@pla ', 5], ['@[Plan] ', 8], ['@[Pla', 5], ['@pla', 0], [`@${'x'.repeat(31)}`, 32]]) {
+    assert.equal(mentionAt(text, caret), null, JSON.stringify([text, caret]));
+  }
+  assert.equal(mentionAt(null, 0), null);
+});
+
+test('a follow-up sent with a mention is an @bart line whose mention draws as one, under the same thread (2026-10-02)', async () => {
+  const { parseLine, threads, inlineHtml, INLINE, wsMention } = await load();
+  const ws = wsMention('Other place', '0a1b2c3d-0000-4000-8000-000000000000');
+  const sent = `@bart --opus --high and @[Plan] with ${ws}?`; // sendFollow's line: the agent, the flags, the field's words
+  assert.deepEqual(parseLine(sent), { type: 'bart', text: `--opus --high and @[Plan] with ${ws}?` });
+  const tokens = sent.split(INLINE).filter(Boolean);
+  assert.ok(tokens.includes('@[Plan]') && tokens.includes(ws));
+  assert.match(inlineHtml('@[Plan]'), /^<span data-mention="Plan"/);
+  const doc = ['@bart why?', 'bart> Because.', 'bart> *Sonnet · high · 3 s*', sent, 'bart~> a2', ''];
+  assert.deepEqual(threads(doc).map((thread) => thread.turns.map((turn) => turn.q)), [[0, 3]], 'it joins the card it was asked under');
+});
+
 test('a Build\'s line holds its id alone; it is its own kind of line, and it ends an @bart card (2026-09-25)', async () => {
   const { parseLine, parseLines, threads, buildLine, BUILD_RE } = await load();
   assert.equal(buildLine('0123456789'), 'build> 0123456789');

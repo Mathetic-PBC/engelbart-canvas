@@ -74,6 +74,20 @@ test('@ menu: Bart, Note, Brainstorm and Discover first by their first letters, 
   assert.deepEqual(mentionRows({ query: 'colbert', library, page, pageRow: null }).map((r) => r.key), ['p1'], 'the page is left out when it does not match');
 });
 
+test('@ menu in a follow-up field: the same rows less Bart, Note, Brainstorm and Discover (2026-10-02)', async () => {
+  const { mentionRows, fieldRows, isVerbRow } = await load();
+  const page = { input: 'https://arxiv.org/pdf/2005.11401', title: 'Retrieval-Augmented Generation' };
+  const workspaces = [{ id: 'ws1', name: 'Brainstorm notes', above: [] }];
+  const all = mentionRows({ query: '', library, page, pageRow: null, workspaces });
+  assert.deepEqual(fieldRows(all).map((r) => r.key), all.slice(4).map((r) => r.key), 'the verbs lead the menu; everything after them stays, in order');
+  assert.deepEqual(fieldRows(all).slice(0, 2).map((r) => r.kind), ['fresh', 'workspace'], 'the open page (added when picked) and the workspaces are kept');
+  assert.deepEqual(fieldRows(mentionRows({ query: 'br', library, page: null, pageRow: null, workspaces })).map((r) => r.key), ['ws:ws1', 'n1'], 'a workspace named like a verb is still a mention (and "library" holds "br")');
+  assert.deepEqual(fieldRows(mentionRows({ query: 'no', library, page: null, pageRow: null })).map((r) => r.key), ['n1']);
+  // An editor with no list of its own (DocEditor's `mentionable`) names Bart and the agents by id.
+  assert.deepEqual(fieldRows([{ id: 'bart', name: 'bart' }, { id: 'brainstorm' }, { id: 'discover' }, library[0], null]).map((r) => r.id), ['n1']);
+  assert.equal(isVerbRow(null), false);
+});
+
 test('@Bart, as the menu writes it, is a question like a typed @bart; both render as a token (2026-09-22)', async () => {
   const doc = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
   assert.deepEqual(doc.parseLine('@Bart what is here?'), doc.parseLine('@bart what is here?'));
