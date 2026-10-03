@@ -116,6 +116,12 @@ function createGit({ gitPath = () => 'git', run = execFile, environment = proces
     await exec(repo, ['worktree', 'prune']);
   }
 
+  /** A worktree moved to `to` (which must not exist yet), git's record of it with it: its project came back from the trash under another folder name. */
+  async function moveWorktree(repo, from, to) {
+    fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o700 });
+    await must(repo, ['worktree', 'move', from, to], { timeout: LONG_MS });
+  }
+
   async function deleteBranch(repo, branch) {
     const out = await exec(repo, ['branch', '-D', branch]);
     return out.code === 0;
@@ -322,7 +328,7 @@ function createGit({ gitPath = () => 'git', run = execFile, environment = proces
     return [...files];
   }
 
-  return { exec, top, head, revParse, dirtyPaths, identity, addWorktree, removeWorktree, deleteBranch, branchExists, merging, abortMerge, checkpoint, diff, workingDiff, treeWithout, mergeBase, isAncestor, conflicted, squashOnto, checkoutBranch, fastForward, mergeInto, concludeMerge, init, clone, message, markers };
+  return { exec, top, head, revParse, dirtyPaths, identity, addWorktree, removeWorktree, moveWorktree, deleteBranch, branchExists, merging, abortMerge, checkpoint, diff, workingDiff, treeWithout, mergeBase, isAncestor, conflicted, squashOnto, checkoutBranch, fastForward, mergeInto, concludeMerge, init, clone, message, markers };
 }
 
 module.exports = { createGit, GitError, GITHUB_HELPER, credentialEnv, FALLBACK_NAME, FALLBACK_EMAIL };

@@ -24,6 +24,8 @@
 //              turn is done: at most AUTO_FIXES times for one press (2026-09-29)
 //   discard    stopped, worktree and branch removed
 //   recovery   a record left working when the app closed is `interrupted`; Resume continues its session
+//   trash      its project deleted (2026-10-03, store/projects.cjs trashProject): its turns stopped, `stopped` for Resume
+//              once the project is restored, and nothing starts again by itself; purged a week later, its copy removed
 // Git writes that touch the shared repository's worktrees (add, remove) and Accept run one at a time per repository.
 //
 // Where a Build works (2026-09-29): the repository chosen in the Build panel, else the project's default repo, which
@@ -170,6 +172,9 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
   const reconciled = new Set();
   const keptCopies = new Map(); // id → { ctx, projectId }: accepted Builds whose copy stays while what they run is up
   const sweeps = new Set(); // kept copies an Engelbart that crashed left, being cleaned up
+  // Builds of a project going into the trash (stopProject): nothing of theirs starts by itself (a reply that waited, an
+  // Accept again, a run step, the first turn after setup) until the person acts on one again.
+  const halted = new Set();
   let quitting = false;
 
   const emit = (task) => { try { notify('engelbart:build', store.publicTask(task)); } catch { /* a closed window */ } };
@@ -573,7 +578,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
       if (postIt && !fromLine) track(() => projects.recordEdit(ctx, projectId, workspaceId)); // ⌘J's recent workspaces
     }
     emit(saved);
-    void prepare(ctx, projectId, id);
+    void prepare(ctx, projectId, id).catch(() => {}); // its project deleted meanwhile: the record went with it
     return store.publicTask(saved);
   }
 
@@ -590,6 +595,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     }
     task = store.readTask(project, id);
     if (!task || store.FINAL.has(task.status)) { if (task) await cleanUp(task); return; }
+    if (halted.has(id)) return;
     await runTurn(ctx, projectId, id, { message: store.readContext(project, id) || '', fresh: true });
   }
 
@@ -628,6 +634,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
   /* ---------------------------------------------------------------------- turns */
 
   async function runTurn(ctx, projectId, id, { message, fresh = false }) {
+    if (halted.has(id)) return;
     const project = projectOf(ctx, projectId);
     let task = store.readTask(project, id);
     if (!task || store.FINAL.has(task.status) || live.has(id)) return;
@@ -717,7 +724,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
       live.delete(id);
       settle();
     }
-    if (quitting) return;
+    if (quitting || halted.has(id)) return;
     const after = store.readTask(project, id);
     if (!after || store.FINAL.has(after.status)) return;
     if (after.queued) {
@@ -768,9 +775,10 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
    * worktree, on the Build's model (Claude Code's default Build model for a Codex Build). Its changes are one checkpoint.
    */
   function startRunStep(ctx, projectId, id) {
-    if (!runStep || quitting) return;
+    if (!runStep || quitting || halted.has(id)) return;
     const work = (async () => {
       await runStep.stop(id);
+      if (halted.has(id)) return;
       const project = projectOf(ctx, projectId);
       const task = store.readTask(project, id);
       if (!task || task.status !== 'review' || live.has(id) || !fs.existsSync(task.worktree)) return;
@@ -929,6 +937,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
    */
   async function reply(ctx, projectId, id, text, { interrupt = false, images: pasted = [] } = {}) {
     reconcile(ctx);
+    halted.delete(id);
     const said = String(text || '').trim();
     const task = read(ctx, projectId, id);
     if (!said) return store.publicTask(task);
@@ -959,11 +968,12 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
   /** An interrupted, stopped or failed Build goes on: its setup again when it never finished, else the same session. */
   async function resume(ctx, projectId, id) {
     reconcile(ctx);
+    halted.delete(id);
     const task = read(ctx, projectId, id);
     if (store.FINAL.has(task.status) || live.has(id)) return store.publicTask(task);
     if (!fs.existsSync(task.worktree) || task.turn === 0) {
       save(ctx, projectId, id, { status: 'setting-up', error: null });
-      void prepare(ctx, projectId, id);
+      void prepare(ctx, projectId, id).catch(() => {});
       return store.publicTask(read(ctx, projectId, id));
     }
     const next = save(ctx, projectId, id, (held) => ({ error: null, messages: [...held.messages, say('engelbart', 'Resumed.')] }));
@@ -1021,6 +1031,8 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
    */
   async function accept(ctx, projectId, id, { auto = false, attempt = 0 } = {}) {
     reconcile(ctx);
+    if (!auto && attempt === 0) halted.delete(id);
+    else if (halted.has(id)) throw new Error('Its project is being deleted.');
     const project = projectOf(ctx, projectId);
     const task = read(ctx, projectId, id);
     if (store.FINAL.has(task.status)) return store.publicTask(task);
@@ -1129,6 +1141,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
    */
   async function fix(ctx, projectId, id) {
     reconcile(ctx);
+    halted.delete(id);
     return sendFix(ctx, projectId, id);
   }
   async function sendFix(ctx, projectId, id) {
@@ -1193,6 +1206,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
    */
   async function promote(ctx, projectId, id, workspaceId, picked = null) {
     reconcile(ctx);
+    halted.delete(id);
     const task = read(ctx, projectId, id);
     if (task.kind !== 'quick' || store.FINAL.has(task.status) || live.has(id)) throw new Error('Only a quick task that is not working can become a Build.');
     const { workspace } = projects.findWorkspace(ctx, projectId, workspaceId);
@@ -1211,6 +1225,50 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     }));
     void runTurn(ctx, projectId, id, { message: fromEngelbart('This is now a full Build, not a quick task: larger changes are fine, and you may ask the person a question with NEEDS YOU. Go ahead with what the post-it asked for.') });
     return store.publicTask(next);
+  }
+
+  /* ---------------------------------------------------------------------- trash */
+
+  /**
+   * Its project goes into the trash (store/projects.cjs trashProject): each turn of its Builds stops, its work saved and
+   * the Build `stopped` (Resume goes on once the project is restored); what their run steps started is stopped; an
+   * accepted Build's kept copy goes; a record left marked as working with nothing at work on it is `interrupted`. Nothing
+   * of theirs starts again by itself. Refused while one is being accepted: it would land with its record in the trash.
+   */
+  async function stopProject(ctx, projectId) {
+    reconcile(ctx);
+    const project = projectOf(ctx, projectId);
+    const tasks = store.listTasks(project);
+    if (tasks.some((task) => task.status === 'accepting')) throw new Error('A Build of this project is being accepted; delete the project once that is done.');
+    for (const task of tasks) halted.add(task.id);
+    const running = tasks.map((task) => live.get(task.id)).filter(Boolean);
+    for (const task of tasks) stop(projectId, task.id);
+    await Promise.all(running.map((entry) => entry.done));
+    for (const task of tasks) {
+      await stopRunStep(task.id);
+      if (keptCopies.has(task.id)) await releaseCopy(ctx, projectId, task.id, 'Its project was deleted: what ran on it was stopped, and its copy removed.').catch(() => {});
+    }
+    for (const task of store.listTasks(project)) {
+      if (store.FINAL.has(task.status)) continue;
+      const left = store.WORKING.has(task.status) && !live.has(task.id); // being set up, or cut short for a reply: Resume goes on
+      const ran = !!task.runStep && (task.runStep.runnables || []).some((item) => item.status === 'running');
+      if (left || ran) save(ctx, projectId, task.id, (held) => ({ ...stoppedRunStep(held), ...(left ? { status: 'interrupted', messages: [...held.messages, say('engelbart', 'Its project was deleted while this was working.')] } : {}) }));
+    }
+    track(() => { for (const task of tasks) projects.agentStopped(ctx, task.id); });
+  }
+
+  /** A trashed project purged (store/projects.cjs purgeProject): each Build's worktree and branch removed, one repository at a time; what fails is left. */
+  async function removeWorktrees(tasks) {
+    for (const task of Array.isArray(tasks) ? tasks : []) {
+      if (!task || typeof task.repo !== 'string' || typeof task.worktree !== 'string') continue;
+      halted.delete(task.id);
+      await cleanUp(task).catch(() => {});
+    }
+  }
+
+  /** A Build's copy follows its project back from the trash under another folder name (store/projects.cjs restoreProject). */
+  function moveWorktree(task, to) {
+    return serial(task.repo, () => git.moveWorktree(task.repo, task.worktree, to));
   }
 
   /* ------------------------------------------------------------------- recovery */
@@ -1265,7 +1323,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     await Promise.race([Promise.all([...running.map((entry) => entry.done), ...steps]), new Promise((resolve) => { const timer = setTimeout(resolve, QUIT_WAIT_MS); if (timer.unref) timer.unref(); })]);
   }
 
-  return { targets, setDefault, preflight, initRepository, prepareDefault, cloneRepository, start, reply, stop, resume, review, accept, fix, discard, promote, reconcile, list, get, openIds, stopAll, running: () => [...live.keys()], stepping: (id) => stepping.has(id), showRunnable, stopRunning, stopRunnable, sweeping: () => Promise.all([...sweeps]) };
+  return { targets, setDefault, preflight, initRepository, prepareDefault, cloneRepository, start, reply, stop, resume, review, accept, fix, discard, promote, reconcile, list, get, openIds, stopAll, stopProject, removeWorktrees, moveWorktree, running: () => [...live.keys()], stepping: (id) => stepping.has(id), showRunnable, stopRunning, stopRunnable, sweeping: () => Promise.all([...sweeps]) };
 }
 
 module.exports = { createBuilds, createShell, checkOutput, LIMITS, TURN_MS, CLONES, AUTO_FIXES };

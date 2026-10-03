@@ -247,6 +247,25 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     return onboarding.discardItem(ctx, libraryId, { release: sandbox ? () => sandbox.release(ctx, libraryId) : null });
   }));
   handle('rename-project', withCtx((ctx, id, name) => projects.renameProject(ctx, str(id, 'project id', 64), str(name, 'name'))));
+  // Delete on the all-projects screen (2026-10-03): the project into <dataRoot>/.trash for a week, its @bart asks and its
+  // Builds stopped first (store/projects.cjs trashProject). "Recently deleted" reads the trash, which purges what has been
+  // in it a week (its Builds' worktrees with it); Restore brings a project back, its Builds' worktrees following it.
+  const removeWorktrees = builds ? (tasks) => builds.removeWorktrees(tasks) : null;
+  handle('trash-project', withCtx(async (ctx, id) => {
+    const stopBuilds = async (pid) => {
+      for (const agent of projects.readNav(ctx).agents) if (agent.projectId === pid && agent.kind !== 'build' && agent.status === 'running' && bart) bart.stop(agent.id);
+      if (builds) await builds.stopProject(ctx, pid);
+    };
+    const out = await projects.trashProject(ctx, str(id, 'project id', 64), { stopBuilds });
+    navChanged();
+    return out;
+  }));
+  handle('restore-project', withCtx(async (ctx, id) => {
+    const out = await projects.restoreProject(ctx, str(id, 'project id', 64), { moveWorktree: builds ? (task, to) => builds.moveWorktree(task, to) : null, removeWorktrees });
+    navChanged();
+    return out;
+  }));
+  handle('trashed-projects', withCtx((ctx) => projects.trashedProjects(ctx, Date.now(), { removeWorktrees })));
   handle('load-project', withCtx((ctx, id) => projects.loadProject(ctx, str(id, 'project id', 64))));
 
   handle('set-project-directory', withCtx((ctx, id, directory) => projects.setProjectDirectory(ctx, str(id, 'project id', 64), str(directory, 'directory', 4096))));

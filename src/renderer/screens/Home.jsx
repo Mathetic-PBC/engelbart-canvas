@@ -1,10 +1,11 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import InlineField from '../ui/InlineField.jsx';
 import { api, errorMessage } from '../api.js';
 import { KIND, kindOf, SEARCH } from '../ui/Icons.jsx';
 import DocPreview from '../ui/DocPreview.jsx';
 import { hasTag, isNote, kindKey, kindRank, KIND_ORDER } from '../model/kind.js';
-import { AddToLibrary } from '../workspace/Rail.jsx';
+import { AddToLibrary, TRASH_MARK } from '../workspace/Rail.jsx';
 
 // All projects (Claude Design "Projects.dc.html", 2026-09-21): the library as a rail on the left
 // — one list sorted by kind, a search field, Add context — and the projects beside it as cards that
@@ -12,6 +13,8 @@ import { AddToLibrary } from '../workspace/Rail.jsx';
 // recently edited workspaces as page tiles. A card opens the project; a tile opens that workspace.
 // Hovering a library row or a tile for a beat opens a peek you can move onto and scroll. Add context is the workspace
 // sidebar's (Rail.jsx AddToLibrary, 2026-09-28): a link or a path, files from disk, a repository from GitHub.
+// A card's can (on hover) deletes the project, after asking: into the trash for a week (2026-10-03). Recently deleted,
+// under the cards, lists what is in the trash, with Restore.
 
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
 const MAX_ICONS = 5;
@@ -33,6 +36,39 @@ function relative(iso) {
   if (hours < 24) return `${hours} h ago`;
   const days = Math.round(hours / 24);
   return days === 1 ? 'yesterday' : `${days} days ago`;
+}
+
+/** The day a project in the trash is purged: "Oct 10". */
+const day = (iso) => (iso ? new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '');
+
+const dialogButton = { minHeight: 34, padding: '9px 16px', borderRadius: 8, cursor: 'pointer', font: '500 13px/1 var(--font-sans)' };
+
+/** Delete on a project card asks here first (as a Build's Reject does, BuildReject.jsx). Escape or a click outside cancels. */
+function DeleteProject({ project, onConfirm, onClose }) {
+  const [busy, setBusy] = React.useState(false);
+  React.useEffect(() => {
+    const onKey = (event) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (!busy) onClose(); } };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [busy, onClose]);
+  const confirm = async () => {
+    if (busy) return;
+    setBusy(true);
+    try { await onConfirm(); } finally { onClose(); }
+  };
+  return createPortal(
+    <div data-overlay="1" data-delete-project-dialog="1" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }} style={{ position: 'fixed', inset: 0, zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(0,0,0,.25)' }}>
+      <div role="alertdialog" aria-modal="true" aria-labelledby="delete-project-title" style={{ width: 'min(400px, 100%)', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: 6, padding: 20, background: '#fff', borderRadius: 12, boxShadow: '0 10px 40px rgba(0,0,0,.18)', animation: `rise 160ms ${EASE}` }}>
+        <h3 id="delete-project-title" style={{ margin: 0, font: '600 16px/1.4 var(--font-sans)', color: '#171717', overflowWrap: 'anywhere' }}>Delete {project.name}?</h3>
+        <div style={{ font: '14px/1.6 var(--font-sans)', color: '#4d4d4d' }}>Its workspaces and notes go to the trash for 7 days. Your code folder is not touched.</div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+          <button type="button" className="hov-ink" onClick={onClose} disabled={busy} autoFocus style={{ ...dialogButton, border: '1px solid #e5e5e5', background: '#fff', color: '#4d4d4d' }}>Cancel</button>
+          <button type="button" data-delete-project-confirm="1" onClick={confirm} disabled={busy} className="hov-dim" style={{ ...dialogButton, border: 0, background: '#e70022', color: '#fff', opacity: busy ? 0.6 : 1 }}>{busy ? 'Deleting…' : 'Delete'}</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
 }
 
 /** The kinds a project holds, once each, in the rail's order; then how many items they stand for. */
@@ -85,8 +121,10 @@ export function ItemPeek({ row, more, onOpenWorkspace }) {
   );
 }
 
-export default function Home({ projects, library, onCreateScreen, onOpenWorkspace, onOpenNote, onOpenOnStage, onRename, onLibraryChanged, error }) {
+export default function Home({ projects, trashed = [], library, onCreateScreen, onOpenWorkspace, onOpenNote, onOpenOnStage, onRename, onDelete, onRestore, onLibraryChanged, error }) {
   const [renaming, setRenaming] = React.useState(null);
+  const [deleting, setDeleting] = React.useState(null); // the project whose Delete is asking
+  const [restoring, setRestoring] = React.useState(null);
   const [query, setQuery] = React.useState('');
   const [addError, setAddError] = React.useState(''); // what a drop could not add
   const [addBusy, setAddBusy] = React.useState(false);
@@ -273,7 +311,22 @@ export default function Home({ projects, library, onCreateScreen, onOpenWorkspac
                         {project.workspaceCount} workspace{project.workspaceCount === 1 ? '' : 's'}{project.lastEdited ? ` · edited ${relative(project.lastEdited)}` : ''}
                       </span>
                     </div>
-                    <HeldIcons rows={held} />
+                    <span style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <HeldIcons rows={held} />
+                      {onDelete && (
+                        <button
+                          type="button"
+                          className="rail-minus"
+                          data-delete-project={project.id}
+                          aria-label={`Delete ${project.name}`}
+                          title="Move to the trash"
+                          onClick={(event) => { event.stopPropagation(); setPeek(null); setDeleting(project); }}
+                          style={{ flex: 'none', display: 'flex', margin: -2, padding: 2, border: 0, background: 'transparent', cursor: 'pointer', color: '#8f8f8f' }}
+                        >
+                          {TRASH_MARK}
+                        </button>
+                      )}
+                    </span>
                   </div>
                   {recent.length > 0 && (
                     <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12 }}>
@@ -310,8 +363,38 @@ export default function Home({ projects, library, onCreateScreen, onOpenWorkspac
               + Project
             </div>
           </div>
+          {trashed.length > 0 && (
+            <div data-recently-deleted="1" style={{ marginTop: 30 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                <span style={{ font: '500 14px/1.3 var(--font-sans)', color: '#171717' }}>Recently deleted</span>
+                <span style={{ font: '12px/1 var(--font-sans)', color: '#8f8f8f' }}>{trashed.length}</span>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 12 }}>
+                {trashed.map((project) => (
+                  <div key={project.id} data-trashed-project={project.id} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 16, minWidth: 336, maxWidth: '100%', boxSizing: 'border-box', padding: '10px 10px 10px 16px', border: '1px solid #eaeaea', borderRadius: 10, background: '#fafafa' }}>
+                    <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '500 14px/1.4 var(--font-sans)', color: '#4d4d4d' }}>{project.name}</span>
+                      <span style={{ font: '12px/1.4 var(--font-sans)', color: '#8f8f8f', whiteSpace: 'nowrap' }}>deleted {relative(project.deleted)} · gone {day(project.expires)}</span>
+                    </span>
+                    <button
+                      type="button"
+                      className="hov-bd2"
+                      data-restore-project={project.id}
+                      disabled={restoring === project.id}
+                      onClick={async () => { if (restoring) return; setRestoring(project.id); try { await onRestore(project.id); } finally { setRestoring(null); } }}
+                      style={{ flex: 'none', padding: '7px 12px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fff', cursor: restoring === project.id ? 'default' : 'pointer', font: '500 12.5px/1 var(--font-sans)', color: '#171717', opacity: restoring === project.id ? 0.6 : 1 }}
+                    >
+                      {restoring === project.id ? 'Restoring…' : 'Restore'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
+
+      {deleting && <DeleteProject project={deleting} onConfirm={() => onDelete(deleting.id)} onClose={() => setDeleting(null)} />}
 
       {peek && (
         // The wrapper reaches back over the gap to the row, so crossing the gap still counts as hovering.

@@ -81,6 +81,10 @@ const engelbartAPI = Object.freeze({
   startProject: invoke('start-project'),
   discardLibraryItem: invoke('discard-library-item'),
   renameProject: invoke('rename-project'),
+  // Delete on the all-projects screen: into the trash for a week; Recently deleted lists it (and purges older ones), Restore brings it back.
+  trashProject: invoke('trash-project'),
+  restoreProject: invoke('restore-project'),
+  trashedProjects: invoke('trashed-projects'),
   loadProject: invoke('load-project'),
   setProjectDirectory: invoke('set-project-directory'),
   createWorkspace: invoke('create-workspace'),

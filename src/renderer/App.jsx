@@ -53,6 +53,7 @@ export default function App() {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState('');
   const [projects, setProjects] = React.useState([]);
+  const [trashed, setTrashed] = React.useState([]); // projects in the trash (Home's Recently deleted), newest first
   const [library, setLibrary] = React.useState([]);
   const [tree, setTree] = React.useState(null);
   const [entry, setEntry] = React.useState(null); // { workspaceId, tab, views } for the project being opened
@@ -68,12 +69,23 @@ export default function App() {
 
   const fail = (candidate) => setError(errorMessage(candidate));
 
+  // The trash is read first: reading it purges the projects in it a week, and their library rows with them.
+  const trashedNow = React.useRef([]);
   const loadHome = React.useCallback(async () => {
+    const gone = await api.trashedProjects().catch(() => []);
     const [list, rows] = await Promise.all([api.listProjects(), api.library()]);
+    trashedNow.current = gone;
+    setTrashed(gone);
     setProjects(list);
     setLibrary(rows);
     return list;
   }, []);
+
+  // The notes and images of a project in the trash are in the trash with it: no screen lists them until it is restored.
+  const shownLibrary = React.useMemo(() => {
+    const gone = new Set(trashed.map((project) => project.id));
+    return gone.size ? library.filter((row) => !gone.has(row.project_id)) : library;
+  }, [library, trashed]);
 
   // Rows the main process changed on its own (a pdf saved as a link became a saved pdf): the library is read again.
   React.useEffect(() => api.onLibraryChanged(() => { api.library().then(setLibrary).catch(() => {}); }), []);
@@ -152,7 +164,8 @@ export default function App() {
   // Startup (and after the data root changes): the last project you were in, or the create screen.
   const start = React.useCallback(async () => {
     const list = await loadHome();
-    if (!list.length) { setPhase('create'); return; }
+    // Every project deleted: all projects, where Recently deleted can bring one back, not a new install's onboarding.
+    if (!list.length) { setPhase(trashedNow.current.length ? 'home' : 'create'); return; }
     const last = await api.lastOpen().catch(() => null);
     const id = last && list.some((project) => project.id === last.projectId) ? last.projectId : list[0].id;
     await openProject(id, last && last.projectId === id ? last : null);
@@ -239,6 +252,29 @@ export default function App() {
     }
   }
 
+  // Delete on a project card (Home asks first): into the trash for a week. Restore brings it back. The project open
+  // here is left first, so nothing of it writes while it moves.
+  async function deleteProject(id) {
+    setError('');
+    try {
+      if (tree && tree.project.id === id) { leaveProject(); setPhase('home'); }
+      await api.trashProject(id);
+    } catch (candidate) {
+      fail(candidate);
+    }
+    try { await loadHome(); } catch (candidate) { fail(candidate); }
+  }
+
+  async function restoreProject(id) {
+    setError('');
+    try {
+      await api.restoreProject(id);
+    } catch (candidate) {
+      fail(candidate);
+    }
+    try { await loadHome(); } catch (candidate) { fail(candidate); }
+  }
+
   const onVisit = React.useCallback((workspaceId) => {
     if (tree) api.setLastOpen({ projectId: tree.project.id, workspaceId }).catch(() => {});
   }, [tree]);
@@ -255,7 +291,8 @@ export default function App() {
   }
 
   if (!config || phase === 'boot') return <div style={{ position: 'absolute', inset: 0, background: '#fff' }} />;
-  const onboardMode = projects.length ? 'existing' : 'new';
+  const returning = projects.length > 0 || trashed.length > 0; // someone whose projects are all in the trash is not new
+  const onboardMode = returning ? 'existing' : 'new';
 
   return (
     <SandboxProgress key={config.dataRoot} dataRoot={config.dataRoot} library={library} inWorkspace={phase === 'workspace' && !!tree}>
@@ -263,7 +300,8 @@ export default function App() {
       {phase === 'home' && (
         <Home
           projects={projects}
-          library={library}
+          trashed={trashed}
+          library={shownLibrary}
           error={error}
           onCreateScreen={() => setPhase('create')}
           onOpenWorkspace={(id, workspaceId, stage) => openProject(id, workspaceId || stage ? { workspaceId, stage } : null).catch(fail)}
@@ -279,16 +317,18 @@ export default function App() {
           onOpenNote={(row) => openProject(row.project_id, { tab: { id: row.id, title: row.name } }).catch(fail)}
           onLibraryChanged={() => loadHome().catch(fail)}
           onRename={async (id, name) => { try { await api.renameProject(id, name); await loadHome(); } catch (candidate) { fail(candidate); } }}
+          onDelete={deleteProject}
+          onRestore={restoreProject}
         />
       )}
       {phase === 'create' && (
-        <Onboarding key={run} mode={onboardMode} tools={tools} onTools={onboardingTools} onDone={onboarded} onBack={projects.length ? goHome : null} />
+        <Onboarding key={run} mode={onboardMode} tools={tools} onTools={onboardingTools} onDone={onboarded} onBack={returning ? goHome : null} />
       )}
       {phase === 'workspace' && tree && (
         <Workspace
           key={tree.project.id}
           tree={tree}
-          library={library}
+          library={shownLibrary}
           initialWorkspaceId={entry ? entry.workspaceId : null}
           initialTab={entry ? entry.tab : null}
           initialStage={entry ? entry.stage : null}

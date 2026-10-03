@@ -489,6 +489,70 @@ test('Discard, a failed turn, recovery after the app closed, and Resume in the s
   await assert.rejects(second.reply(ctx, project.id, id, 'hello'), /closed/);
 });
 
+test('a project deleted while its Build works: the turn stops and nothing starts by itself; restored under another folder name its worktree follows and Resume goes on; purged, its worktree and branch go (2026-10-03)', async () => {
+  const { code, project, workspace } = await scene();
+  const files = (dir) => Object.fromEntries(fs.readdirSync(dir, { recursive: true }).filter((name) => !name.split(path.sep).includes('.git')).sort().map((name) => [name, fs.statSync(path.join(dir, name)).isFile() ? fs.readFileSync(path.join(dir, name), 'utf8') : '/']));
+  const before = files(code);
+  let begun;
+  const working = new Promise((resolve) => { begun = resolve; });
+  const agent = scripted([
+    ({ task, signal }) => { write(path.join(task.worktree, 'half.txt'), 'half\n'); begun(); return new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(Object.assign(new Error('Stopped.'), { kind: 'stopped', session: 'session-1' })))); },
+    ({ message }) => { assert.match(message, /cut off/); return 'Went on.'; },
+    ({ message }) => { assert.match(message, /<reply>\nAnd the tests\.\n<\/reply>/); return 'Tests too.'; },
+  ]);
+  const { builds } = manager(agent);
+  const { id } = await builds.start(ctx, project.id, { workspaceId: workspace.id });
+  await working;
+  await builds.reply(ctx, project.id, id, 'And the tests.'); // waits for the turn
+  const stopBuilds = (pid) => builds.stopProject(ctx, pid);
+  await projects.trashProject(ctx, project.id, { stopBuilds });
+  assert.deepEqual(builds.running(), [], 'its turn was stopped');
+  const inTrash = { dir: path.join(ctx.dataRoot, '.trash', project.slug) };
+  let task = store.readTask(inTrash, id);
+  assert.deepEqual([task.status, task.sessionId, task.queued, task.checkpoints.length], ['stopped', 'session-1', 'And the tests.', 1], 'stopped, its work saved, the reply still waiting');
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(agent.calls.length, 1, 'the waiting reply did not start a turn in a deleted project');
+  assert.ok(fs.existsSync(path.join(task.worktree, 'half.txt')), 'its copy stays while the project is in the trash');
+  const oldCopy = task.worktree;
+
+  // A new project takes the folder name meanwhile: the restored one gets the next, and its Build's worktree follows it.
+  assert.equal((await projects.createProject(ctx, project.name)).slug, project.slug);
+  const back = await projects.restoreProject(ctx, project.id, { moveWorktree: builds.moveWorktree, removeWorktrees: builds.removeWorktrees });
+  assert.equal(back.slug, `${project.slug} 2`);
+  task = store.readTask(projects.findProject(ctx, project.id), id);
+  assert.equal(task.worktree, path.join(ctx.dataRoot, 'worktrees', back.slug, id));
+  assert.equal(task.cwd, task.worktree);
+  assert.ok(!fs.existsSync(oldCopy));
+  assert.equal(fs.readFileSync(path.join(task.worktree, 'half.txt'), 'utf8'), 'half\n');
+  assert.equal(sh(task.worktree, 'rev-parse', '--abbrev-ref', 'HEAD'), task.branch, 'git knows the copy where it is now');
+  assert.ok(sh(code, 'worktree', 'list', '--porcelain').includes(`${back.slug}/${id}`));
+
+  // Resume goes on in the same session, where the copy is now, and the reply that waited follows.
+  await builds.resume(ctx, project.id, id);
+  task = await turned(project, id, 3);
+  assert.equal(task.status, 'review');
+  assert.deepEqual(agent.calls.slice(1).map((call) => [call.session, call.cwd]), [['session-1', task.worktree], ['session-1', task.worktree]]);
+
+  // Deleted again, and purged a week later: its worktree and branch go; the code folder's files are as they were.
+  await projects.trashProject(ctx, project.id, { stopBuilds });
+  await projects.trashedProjects(ctx, Date.now() + 8 * 24 * 60 * 60 * 1000, { removeWorktrees: builds.removeWorktrees });
+  assert.ok(!fs.existsSync(task.worktree));
+  assert.equal(await git.branchExists(code, task.branch), false);
+  assert.ok(!sh(code, 'worktree', 'list', '--porcelain').includes(id));
+  assert.deepEqual(files(code), before);
+  await assert.rejects(projects.restoreProject(ctx, project.id), /no longer in the trash/);
+});
+
+test('a project whose Build is being accepted cannot be deleted until that is done (2026-10-03)', async () => {
+  const { project, workspace } = await scene();
+  const { builds } = manager(scripted(['Done.']));
+  const { id } = await builds.start(ctx, project.id, { workspaceId: workspace.id });
+  const task = await settled(project, id);
+  store.writeTask(projects.findProject(ctx, project.id), { ...task, status: 'accepting' });
+  await assert.rejects(projects.trashProject(ctx, project.id, { stopBuilds: (pid) => builds.stopProject(ctx, pid) }), /being accepted/);
+  assert.equal(projects.findProject(ctx, project.id).dir, project.dir, 'nothing moved');
+});
+
 test('a folder that cannot take a Build says why; one without history is given one when the Build starts, unasked (2026-09-29)', async () => {
   const code = path.join(homeDir, 'no-history');
   write(path.join(code, 'index.js'), 'x\n');

@@ -391,11 +391,12 @@ async function openLibraryDb(testRoot) {
       const result = await db.query(sql, params);
       return result.rows.map(plain);
     },
-    async rewritePathPrefix(oldPrefix, newPrefix) {
+    // `projectId`: only the rows made in that project (a project back from the trash, store/projects.cjs restoreProject).
+    async rewritePathPrefix(oldPrefix, newPrefix, { projectId = null } = {}) {
       const result = await db.query(
         `update library set path = $2 || substr(path, char_length($1) + 1)
-         where path is not null and left(path, char_length($1)) = $1`,
-        [requireText(oldPrefix, 'oldPrefix'), requireText(newPrefix, 'newPrefix')],
+         where path is not null and left(path, char_length($1)) = $1 and ($3::text is null or project_id::text = $3)`,
+        [requireText(oldPrefix, 'oldPrefix'), requireText(newPrefix, 'newPrefix'), requireText(projectId, 'projectId', { optional: true, max: 64 })],
       );
       return result.affectedRows || 0;
     },

@@ -130,6 +130,159 @@ test('delete puts a workspace and what is nested in it in the trash; restore put
   assert.equal(fs.readdirSync(path.join(project.dir, '.trash')).length, 0, 'purged from disk');
 });
 
+/* ------------------------------------------------------------ project trash */
+
+const buildStore = require('../src/main/build/store.cjs');
+const WEEK = 7 * 24 * 60 * 60 * 1000;
+const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000', 'hex');
+const metaAt = (dir) => JSON.parse(fs.readFileSync(path.join(dir, 'project.json'), 'utf8'));
+const stateFile = () => JSON.parse(fs.readFileSync(path.join(layout.testRoot, 'state.json'), 'utf8'));
+/** Every file under a folder with its bytes: what "untouched" is checked against. */
+const snapshot = (dir) => Object.fromEntries(fs.readdirSync(dir, { recursive: true }).sort().map((name) => [name, fs.statSync(path.join(dir, name)).isFile() ? fs.readFileSync(path.join(dir, name), 'utf8') : '/']));
+
+/** A project with a code folder, a workspace with a document, a note, a pasted image and a view in state.json. */
+async function trashable(name) {
+  const code = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-trash-code-'));
+  fs.writeFileSync(path.join(code, 'main.py'), 'print(1)\n');
+  const project = await projects.createProject(ctx, { name, directory: code });
+  const workspace = await projects.createWorkspace(ctx, project.id, { name: 'Plans' });
+  await projects.writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id }, 'the plan\n');
+  const note = await projects.createNote(ctx, project.id, { name: 'Ideas', workspaceId: workspace.id, text: 'an idea\n' });
+  const image = await projects.saveImage(ctx, project.id, { bytes: PNG, mime: 'image/png', name: 'Sketch' });
+  projects.writeView(ctx, project.id, workspace.id, { active: note.id, tabs: [{ id: note.id, title: 'Ideas' }], positions: {} });
+  return { code, project, workspace, note, image, before: snapshot(code) };
+}
+
+/** A Build record in a project folder, as build/store.cjs keeps it (status, worktree, cwd). */
+function record(project, id, { status = 'review', worktree = path.join(layout.testRoot, 'worktrees', project.slug, id), inside = '' } = {}) {
+  return buildStore.writeTask({ dir: project.dir }, { id, kind: 'build', projectId: project.id, status, title: 'T', repo: '/nowhere', worktree, cwd: path.join(worktree, inside), branch: `engelbart/${id}`, messages: [], created: new Date().toISOString() });
+}
+
+test('delete: a project goes into <dataRoot>/.trash with its notes and images; Restore brings it back as it was; the code folder is never touched (2026-10-03)', async () => {
+  const { code, project, workspace, note, image, before } = await trashable('Old Thesis');
+  const stopped = [];
+  assert.deepEqual(await projects.trashProject(ctx, project.id, { stopBuilds: async (id) => { stopped.push(id); } }), { id: project.id, name: 'Old Thesis' });
+  assert.deepEqual(stopped, [project.id], 'its Builds were stopped first');
+  const into = path.join(layout.testRoot, '.trash', project.slug);
+  assert.ok(!fs.existsSync(project.dir) && fs.existsSync(path.join(into, 'Plans', 'workspace.md')));
+  assert.ok(!(await projects.listProjects(ctx)).some((candidate) => candidate.id === project.id), 'gone from the list');
+  assert.throws(() => projects.findProject(ctx, project.id), /Unknown project/);
+  assert.equal((await ctx.libraryDb.get(note.id)).path, path.join(into, 'Ideas.md'), 'the note row points into the trash');
+  assert.equal((await ctx.libraryDb.get(image.id)).path, path.join(into, 'assets', path.basename(image.path)), 'and the image row');
+  const { trashed } = metaAt(into);
+  assert.deepEqual([trashed.slug, trashed.name, Number.isNaN(Date.parse(trashed.at))], [project.slug, project.slug, false]);
+  const listed = await projects.trashedProjects(ctx);
+  const mine = listed.find((entry) => entry.id === project.id);
+  assert.deepEqual([mine.name, mine.workspaceCount, Date.parse(mine.expires) - Date.parse(mine.deleted)], ['Old Thesis', 1, WEEK]);
+  assert.deepEqual(snapshot(code), before, 'the code folder is untouched');
+
+  const back = await projects.restoreProject(ctx, project.id);
+  assert.deepEqual([back.id, back.slug, back.dir, back.directory, back.workspaceCount], [project.id, project.slug, project.dir, code, 1]);
+  assert.ok((await projects.listProjects(ctx)).some((candidate) => candidate.id === project.id));
+  assert.equal(await projects.readDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id }), 'the plan\n');
+  assert.equal(await projects.readDoc(ctx, project.id, { kind: 'note', id: note.id }), 'an idea\n');
+  assert.deepEqual((await projects.loadProject(ctx, project.id)).notes.map((row) => row.id), [note.id], 'its notes database opens again');
+  assert.equal((await ctx.libraryDb.get(note.id)).path, path.join(project.dir, 'Ideas.md'));
+  assert.equal((await ctx.libraryDb.get(image.id)).path, image.path);
+  assert.equal((await projects.readImage(ctx, image.id)).bytes.length, PNG.length);
+  assert.equal('trashed' in metaAt(project.dir), false);
+  assert.ok(!(await projects.trashedProjects(ctx)).some((entry) => entry.id === project.id));
+  assert.ok(projects.readViews(ctx, project.id)[workspace.id], 'its views were kept');
+  assert.deepEqual(snapshot(code), before);
+  await assert.rejects(projects.restoreProject(ctx, project.id), /no longer in the trash/);
+  await assert.rejects(projects.restoreProject(ctx, '99999999-9999-4999-8999-999999999999'), /no longer in the trash/);
+});
+
+test('restore when the folder name is taken: the next free one, its open Builds\' worktrees follow it, a copy that cannot move is discarded (2026-10-03)', async () => {
+  const { code, project, note, before } = await trashable('Taken');
+  for (const id of ['aaaaaaaaa1', 'aaaaaaaaa2', 'aaaaaaaaa3', 'aaaaaaaaa4']) fs.mkdirSync(path.join(layout.testRoot, 'worktrees', project.slug, id), { recursive: true });
+  record(project, 'aaaaaaaaa1', { inside: 'app' });
+  record(project, 'aaaaaaaaa2', { status: 'accepted' });
+  record(project, 'aaaaaaaaa3', { status: 'stopped' });
+  record(project, 'aaaaaaaaa4', { worktree: path.join(layout.testRoot, 'worktrees', project.slug, 'gone-away') }); // nothing there to move
+  await projects.trashProject(ctx, project.id);
+  const other = await projects.createProject(ctx, 'Taken');
+  assert.equal(other.slug, project.slug, 'a new project took the folder name meanwhile');
+
+  const moves = [];
+  const removed = [];
+  const moveWorktree = async (task, to) => {
+    if (task.id === 'aaaaaaaaa3') throw new Error('locked');
+    moves.push([task.id, to]);
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.renameSync(task.worktree, to);
+  };
+  const back = await projects.restoreProject(ctx, project.id, { moveWorktree, removeWorktrees: async (tasks) => { removed.push(...tasks.map((task) => task.id)); } });
+  assert.equal(back.slug, `${project.slug} 2`);
+  assert.equal(back.name, 'Taken');
+  const at = (id) => path.join(layout.testRoot, 'worktrees', back.slug, id);
+  assert.deepEqual(moves, [['aaaaaaaaa1', at('aaaaaaaaa1')]], 'only open Builds move');
+  const tasks = Object.fromEntries(buildStore.listTasks({ dir: back.dir }).map((task) => [task.id, task]));
+  assert.deepEqual([tasks.aaaaaaaaa1.worktree, tasks.aaaaaaaaa1.cwd, tasks.aaaaaaaaa1.status], [at('aaaaaaaaa1'), path.join(at('aaaaaaaaa1'), 'app'), 'review']);
+  assert.equal(tasks.aaaaaaaaa2.worktree, path.join(layout.testRoot, 'worktrees', project.slug, 'aaaaaaaaa2'), 'an accepted one stays as it was');
+  assert.deepEqual([tasks.aaaaaaaaa3.status, removed], ['discarded', ['aaaaaaaaa3']]);
+  assert.match(tasks.aaaaaaaaa3.messages.at(-1).text, /could not be moved .*locked.*discarded/);
+  assert.equal(tasks.aaaaaaaaa4.worktree, at('aaaaaaaaa4'), 'a copy that is gone is made again where it now belongs (Resume)');
+  assert.equal((await ctx.libraryDb.get(note.id)).path, path.join(back.dir, 'Ideas.md'));
+  assert.equal(projects.findProject(ctx, other.id).dir, project.dir, 'the other project keeps its folder');
+  assert.deepEqual(snapshot(code), before);
+});
+
+test('the trash purges a project a week after it went in: its folder, its library rows, its Builds\' worktrees, its views (2026-10-03)', async () => {
+  const { code, project, workspace, note, image, before } = await trashable('Short Lived');
+  record(project, 'bbbbbbbbb1');
+  record(project, 'bbbbbbbbb2', { status: 'discarded' });
+  record(project, 'bbbbbbbbb3', { status: 'accepted' });
+  buildStore.writeTask({ dir: project.dir }, { ...buildStore.readTask({ dir: project.dir }, 'bbbbbbbbb3'), keptCopy: true }); // a crash left its copy
+  projects.recordEdit(ctx, project.id, workspace.id);
+  const kept = await projects.createProject(ctx, 'Not deleted');
+  const keptNote = await projects.createNote(ctx, kept.id, { name: 'Stays' });
+  await projects.trashProject(ctx, project.id);
+
+  const removed = [];
+  const removeWorktrees = async (tasks) => { removed.push(...tasks.map((task) => task.id)); };
+  assert.ok((await projects.trashedProjects(ctx, Date.now() + WEEK - 60_000, { removeWorktrees })).some((entry) => entry.id === project.id), 'not yet a week');
+  assert.deepEqual(removed, []);
+  const later = await projects.trashedProjects(ctx, Date.now() + WEEK + 60_000, { removeWorktrees });
+  assert.ok(!later.some((entry) => entry.id === project.id));
+  assert.ok(!fs.existsSync(path.join(layout.testRoot, '.trash', project.slug)), 'its folder is gone');
+  assert.deepEqual(removed.sort(), ['bbbbbbbbb1', 'bbbbbbbbb3'], 'the worktrees of open Builds, and of an accepted one whose copy was kept');
+  assert.equal(await ctx.libraryDb.get(note.id), null);
+  assert.equal(await ctx.libraryDb.get(image.id), null);
+  assert.equal((await ctx.libraryDb.list()).filter((row) => row.project_id === project.id).length, 0);
+  assert.ok(await ctx.libraryDb.get(keptNote.id), 'another project\'s rows stay');
+  const state = stateFile();
+  assert.equal(project.id in (state.views || {}), false);
+  assert.equal((state.recent || []).some((entry) => entry.projectId === project.id), false);
+  assert.deepEqual(snapshot(code), before, 'the code folder is untouched');
+  await assert.rejects(projects.restoreProject(ctx, project.id), /no longer in the trash/, 'a purged project cannot be restored');
+});
+
+test('a delete or a restore cut short is finished as restored the next time the trash is read; a code folder inside the project refuses (2026-10-03)', async () => {
+  // Restore cut short after the folder moved back: the rows still point into the trash, project.json still has `trashed`.
+  const first = await trashable('Half Back');
+  await projects.trashProject(ctx, first.project.id);
+  fs.renameSync(path.join(layout.testRoot, '.trash', first.project.slug), first.project.dir);
+  assert.match((await ctx.libraryDb.get(first.note.id)).path, /\.trash/);
+  assert.ok(!(await projects.trashedProjects(ctx)).some((entry) => entry.id === first.project.id));
+  assert.equal((await ctx.libraryDb.get(first.note.id)).path, path.join(first.project.dir, 'Ideas.md'));
+  assert.equal('trashed' in metaAt(first.project.dir), false);
+  // Running restore again repairs as well, and changes nothing more.
+  const meta = metaAt(first.project.dir);
+  fs.writeFileSync(path.join(first.project.dir, 'project.json'), JSON.stringify({ ...meta, trashed: { at: new Date().toISOString(), slug: first.project.slug, name: first.project.slug } }));
+  assert.equal((await projects.restoreProject(ctx, first.project.id)).dir, first.project.dir);
+  assert.equal('trashed' in metaAt(first.project.dir), false);
+  assert.equal((await ctx.libraryDb.get(first.note.id)).path, path.join(first.project.dir, 'Ideas.md'));
+
+  // A code folder inside the project's Engelbart folder would go into the trash with it: refused, nothing moves.
+  const odd = await projects.createProject(ctx, 'Code Inside');
+  fs.mkdirSync(path.join(odd.dir, 'src'));
+  await projects.setProjectDirectory(ctx, odd.id, path.join(odd.dir, 'src'));
+  let stopped = false;
+  await assert.rejects(projects.trashProject(ctx, odd.id, { stopBuilds: async () => { stopped = true; } }), /code folder is inside/);
+  assert.ok(!stopped && fs.existsSync(path.join(odd.dir, 'src')));
+});
+
 test('workspace context is a flat list: folders sent by an old client are flattened, bad entries rejected', async () => {
   const project = await projects.createProject(ctx, 'Folders');
   const workspace = await projects.createWorkspace(ctx, project.id, { name: 'W' });
@@ -366,4 +519,34 @@ test('resolve-page-file: an html file by full path, or relative to the project, 
   fs.symlinkSync('/etc/hosts', path.join(project.dir, 'escape.html'));
   assert.equal(await projects.resolvePageFile(ctx, project.id, 'escape.html'), null);
   assert.equal((await projects.readProjectTextFile(ctx, project.id, 'notes.txt')).text, 'text');
+});
+
+test('ipc: trash-project stops the project\'s running @bart asks and its Builds first; trashed-projects and restore-project; the preload names all three (2026-10-03)', async (t) => {
+  const { createStore, registerEngelbartIpc } = require('../src/main/ipc.cjs');
+  const store = createStore({ homeDir: fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-trash-ipc-')), testMode: true });
+  await store.setTestMode(false);
+  t.after(() => store.close());
+  const handlers = new Map();
+  const asks = [];
+  const stopped = [];
+  const builds = { stopProject: async (_, pid) => { stopped.push(pid); }, removeWorktrees: async () => {}, moveWorktree: async () => {} };
+  registerEngelbartIpc({ store, ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, trustedHandler: (fn) => fn, notify: () => {}, bart: { stop: (id) => { asks.push(id); return true; } }, builds });
+  const h = (name) => handlers.get(`engelbart:${name}`);
+  const own = await store.context();
+  const project = await h('create-project')({ name: 'Gone Soon' });
+  const other = await h('create-project')({ name: 'Staying' });
+  const ws = await h('create-workspace')(project.id, { name: 'W' });
+  const ws2 = await h('create-workspace')(other.id, { name: 'W' });
+  projects.agentStarted(own, { id: 'ask-here', kind: 'bart', projectId: project.id, workspaceId: ws.id });
+  projects.agentStarted(own, { id: 'ask-there', kind: 'discover', projectId: other.id, workspaceId: ws2.id });
+
+  assert.deepEqual(await h('trash-project')(project.id), { id: project.id, name: 'Gone Soon' });
+  assert.deepEqual([asks, stopped], [['ask-here'], [project.id]]);
+  assert.deepEqual((await h('trashed-projects')()).map((entry) => entry.name), ['Gone Soon']);
+  assert.deepEqual((await h('list-projects')()).map((entry) => entry.name), ['Staying']);
+  assert.equal((await h('restore-project')(project.id)).name, 'Gone Soon');
+  assert.deepEqual(await h('trashed-projects')(), []);
+  await assert.rejects(h('restore-project')(project.id), /no longer in the trash/);
+  const preload = fs.readFileSync(path.join(__dirname, '../src/preload.cjs'), 'utf8');
+  for (const [name, channel] of [['trashProject', 'trash-project'], ['restoreProject', 'restore-project'], ['trashedProjects', 'trashed-projects']]) assert.ok(preload.includes(`${name}: invoke('${channel}')`), name);
 });

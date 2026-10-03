@@ -205,8 +205,8 @@ function WorkspaceHeader({ topics, topic, all, onOpenDoc, onSelectTopic, onRenam
   );
 }
 
-// A switcher row's Delete (2026-09-30): a small can, drawn in the minus's line.
-const TRASH_MARK = (
+// A switcher row's Delete (2026-09-30): a small can, drawn in the minus's line. A project card's Delete too (Home.jsx).
+export const TRASH_MARK = (
   <svg aria-hidden="true" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" style={{ flex: 'none', display: 'block' }}>
     <path d="M2.5 4h11 M6.25 4V2.75a.75.75 0 0 1 .75-.75h2a.75.75 0 0 1 .75.75V4 M3.75 4l.7 9.1a1 1 0 0 0 1 .9h5.1a1 1 0 0 0 1-.9l.7-9.1 M6.75 6.75v4.5 M9.25 6.75v4.5" />
   </svg>
