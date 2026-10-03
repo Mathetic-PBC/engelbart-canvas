@@ -17,6 +17,7 @@
 import React from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import rough from 'roughjs';
+import { mergeLineRects, placeHighlight, sideOf, boxSeed } from './marks.js';
 import { nextFind, createTargetGate, sectionSpans, paintSection, clearFind, FIND, FIND_ACTIVE, SECTION } from '../model/find.js';
 
 // pdf.js 6: a document is torn down through its loading task (PDFDocumentProxy has no destroy()).
@@ -670,7 +671,9 @@ export default class PaperView extends React.Component {
   }
 
   /* ---------------------------------------------------------------- selection → marks */
-  // Client rects are divided by this.css so geometry is in the layout's own pixels mid-pinch too.
+  // Client rects are divided by this.css so geometry is in the layout's own pixels mid-pinch too. A fully selected span
+  // gives its own box and its text's (they differ in height), and spans can overlap, so the rects are merged into one
+  // box per stretch of a line (./marks.js) before anything is drawn or stored.
   pdfMouseUp(e) {
     const wrap = e.target.closest && e.target.closest('[data-pdf] [data-page]');
     if (!wrap) return;
@@ -679,13 +682,12 @@ export default class PaperView extends React.Component {
     if (sel && !sel.isCollapsed && sel.rangeCount) {
       const range = sel.getRangeAt(0);
       if (!tl || !tl.contains(range.startContainer) || !tl.contains(range.endContainer)) { this.clearPending(); return; }
-      const box = tl.getBoundingClientRect(), seen = new Set();
-      const rects = [...range.getClientRects()].filter((r) => r.width > 1 && r.height > 1)
-        .map((r) => ({ x: (r.left - box.left) / css, y: (r.top - box.top) / css, w: r.width / css, h: r.height / css }))
-        .filter((r) => { const k = [r.x, r.y, r.w, r.h].map((v) => v.toFixed(1)).join(','); if (seen.has(k)) return false; seen.add(k); return true; });
+      const box = tl.getBoundingClientRect();
+      const rects = mergeLineRects([...range.getClientRects()].filter((r) => r.width > 1 && r.height > 1)
+        .map((r) => ({ x: (r.left - box.left) / css, y: (r.top - box.top) / css, w: r.width / css, h: r.height / css })));
       if (!rects.length) return;
-      const page = Number(tl.dataset.textLayer), cx = rects.reduce((a, r) => a + r.x + r.w / 2, 0) / rects.length;
-      this.pendingSel = { page, rects, side: cx / (box.width / css) < .45 ? 'left' : 'right', y: Math.min(...rects.map((r) => r.y)), text: sel.toString(), u: this.geom(page).pageW };
+      const page = Number(tl.dataset.textLayer);
+      this.pendingSel = { page, rects, side: sideOf(rects, box.width / css), y: Math.min(...rects.map((r) => r.y)), text: sel.toString(), u: this.geom(page).pageW };
       this.showPending(); sel.removeAllRanges();
       return;
     }
@@ -724,7 +726,8 @@ export default class PaperView extends React.Component {
     return false;
   }
 
-  // The pending selection, drawn into the page's highlight layer until a note is typed or it is dismissed.
+  // The pending selection (merged boxes, see pdfMouseUp), drawn into the page's highlight layer until a note is typed or
+  // it is dismissed. Over an existing highlight it is drawn on top of it.
   showPending() {
     const p = this.pendingSel; if (!p) return; this.hidePending();
     const hl = this.find1(`[data-hl="${p.page}"]`); if (!hl) return;
@@ -739,16 +742,20 @@ export default class PaperView extends React.Component {
   hidePending() { const host = this.host.current; if (host) host.querySelectorAll('[data-pending]').forEach((n) => n.remove()); }
   clearPending() { this.pendingSel = null; this.hidePending(); }
 
-  // p carries pixel geometry from the current layout; the stored mark is in page units.
+  // p carries pixel geometry from the current layout; the stored mark is in page units. A selection highlight is placed
+  // among the page's marks (./marks.js placeHighlight): inside one already there it adds nothing, and overlapping ones
+  // without notes become one. Answers the mark that holds it, whose note a caller may focus.
   addMark(p, note, pos) {
     const { G, pageW } = this.geom(p.page), u = pageW || 1;
-    const m = {
+    let m = {
       id: markId(),
       rects: p.rects.map((r) => ({ x: r.x / u, y: r.y / u, w: r.w / u, h: r.h / u })),
       side: p.side, y: p.y / u, note, text: p.text,
       pos: pos ? { x: (pos.x - G) / u, y: pos.y / u } : null,
     };
-    (this.marks[p.page] = this.marks[p.page] || []).push(m);
+    const list = this.marks[p.page] || [];
+    if (m.rects.length) { const placed = placeHighlight(list, m); this.marks[p.page] = placed.list; m = placed.mark; }
+    else this.marks[p.page] = [...list, m];
     this.renderMarks(p.page);
     this.scheduleSave();
     return m;
@@ -759,6 +766,9 @@ export default class PaperView extends React.Component {
     for (const wrap of host.querySelectorAll('[data-page]')) this.renderMarks(Number(wrap.dataset.page));
   }
 
+  // Highlights are drawn once a page: every mark's rects merged (./marks.js mergeLineRects), one zigzag a box, seeded by
+  // where the box is so it keeps its shape between renders and zooms. Marks overlapping each other, or saved with
+  // doubled rects, draw no darker. Notes and arrows go by each mark's own rects.
   renderMarks(page) {
     const hl = this.find1(`[data-hl="${page}"]`), notes = this.find1(`[data-notes="${page}"]`), ar = this.find1(`[data-arrows="${page}"]`);
     if (!hl || !notes) return;
@@ -766,15 +776,17 @@ export default class PaperView extends React.Component {
     const PM = Math.round(pageW * 0.085);
     hl.innerHTML = ''; notes.innerHTML = ''; if (ar) ar.innerHTML = '';
     const rc = rough ? rough.svg(hl) : null, ra = rough && ar ? rough.svg(ar) : null;
+    const list = (this.marks || {})[page] || [];
+    for (const b of mergeLineRects(list.flatMap((m) => m.rects || []))) {
+      const r = { x: b.x * u, y: b.y * u, w: b.w * u, h: b.h * u };
+      if (rc) hl.appendChild(rc.rectangle(r.x, r.y + r.h * 0.15, r.w, r.h * 0.7, { fill: 'rgba(0,112,243,.14)', fillStyle: 'zigzag', fillWeight: 1.2, hachureGap: 2.6, hachureAngle: -4, stroke: 'none', roughness: 0.9, seed: boxSeed(page, b) }));
+      else { const d = document.createElementNS(SVG, 'rect'); d.setAttribute('x', r.x); d.setAttribute('y', r.y); d.setAttribute('width', r.w); d.setAttribute('height', r.h); d.setAttribute('fill', 'rgba(0,112,243,.12)'); hl.appendChild(d); }
+    }
     let k = 0;
-    for (const m of (this.marks || {})[page] || []) {
+    for (const m of list) {
       k++;
       const rects = m.rects.map((r) => ({ x: r.x * u, y: r.y * u, w: r.w * u, h: r.h * u }));
       const my = m.y * u, pos = m.pos ? { x: m.pos.x * u + G, y: m.pos.y * u } : null;
-      rects.forEach((r, ri) => {
-        if (rc) hl.appendChild(rc.rectangle(r.x, r.y + r.h * 0.15, r.w, r.h * 0.7, { fill: 'rgba(0,112,243,.14)', fillStyle: 'zigzag', fillWeight: 1.2, hachureGap: 2.6, hachureAngle: -4, stroke: 'none', roughness: 0.9, seed: ri + 7 }));
-        else { const d = document.createElementNS(SVG, 'rect'); d.setAttribute('x', r.x); d.setAttribute('y', r.y); d.setAttribute('width', r.w); d.setAttribute('height', r.h); d.setAttribute('fill', 'rgba(0,112,243,.12)'); hl.appendChild(d); }
-      });
       if (m.note == null) continue;
       const ta = document.createElement('textarea');
       ta.dataset.mark = m.id; ta.value = m.note; ta.rows = 1; ta.spellcheck = false;
