@@ -93,8 +93,9 @@ export function landTab(tab, find) {
 }
 
 /**
- * Whether a link's passage, found in its tab, opens the find card with its words: yes, as ever, except in a pdf an
- * @discover guide's sections came with (2026-10-03), where the Sections menu shows what was found instead.
+ * Whether a link's passage, found in a pdf, opens the find card with its words: yes, as ever, except in one an
+ * @discover guide's sections came with (2026-10-03), where the Sections menu shows what was found instead. (A page or a
+ * drawn file never opens it: Stage land, 2026-10-03.)
  */
 export const landingFinds = (tab) => !(tab && tab.pdf && tab.sections && tab.sections.length);
 

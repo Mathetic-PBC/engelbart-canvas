@@ -4,6 +4,7 @@
 // with a Sections menu where the find card sits, not the find card. PaperView (src/renderer/pdf/PaperView.jsx) keeps the
 // section apart from find; the Stage (src/renderer/workspace/Stage.jsx) keeps the guide's sections on the tab. There is
 // no document here: PaperView's pages are text stand-ins, and the Stage is run by a few lines that do what React's hooks do.
+// A passage in a page or a drawn file (2026-10-03) is found with no find card at all: the last block.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -166,8 +167,9 @@ test('a passage link in an @discover answer goes with that answer\'s sections fo
 
 // React's hooks, done in a few lines: state that persists between renders, effects run after a render when what they
 // depend on changed (the last cleanup first), and a render again whenever state changed. Nothing is drawn: what Stage
-// returns is read as the tree of elements it is.
-function hookRunner() {
+// returns is read as the tree of elements it is, and `commit` (given the tree before the effects run, as React attaches
+// refs) may hand an element a stand-in node.
+function hookRunner(commit = () => {}) {
   const React = require('react');
   let slots = [], at = 0, dirty = false, effects = [];
   const changed = (a, b) => !a || !b || a.length !== b.length || a.some((v, i) => !Object.is(v, b[i]));
@@ -203,6 +205,7 @@ function hookRunner() {
     for (let n = 0; n < 50; n += 1) {
       at = 0; effects = []; dirty = false;
       tree = component.render(props, ref);
+      commit(tree);
       for (const go of effects) go();
       if (!dirty) return tree;
     }
@@ -211,11 +214,11 @@ function hookRunner() {
   return { fake, run, dirty: () => dirty };
 }
 
-// Every element of a kind in what Stage returned, by its component's name.
+// Every element of a kind in what Stage returned, by its component's name, or a host element by a function of its props.
 function findAll(node, name, out = []) {
   if (!node || typeof node !== 'object') return out;
   if (Array.isArray(node)) { for (const child of node) findAll(child, name, out); return out; }
-  if (node.type && typeof node.type !== 'string' && node.type.name === name) out.push(node);
+  if (typeof name === 'function' ? typeof node.type === 'string' && node.props && name(node.props) : node.type && typeof node.type !== 'string' && node.type.name === name) out.push(node);
   if (node.props) findAll(node.props.children, name, out);
   return out;
 }
@@ -227,15 +230,23 @@ const SECTIONS = [
 ];
 const link = (find, to = '') => `${PAPER}#find=${encodeURIComponent(find)}${to ? `&to=${encodeURIComponent(to)}` : ''}`;
 
-/** The Stage with a pdf from disk to open, and a stand-in for the viewer's ref that says what it was asked. */
-function stage() {
-  const hooks = hookRunner();
-  const keydown = [];
+const PDF = (place) => ({ kind: 'pdf', url: `file://${place}`, path: place, name: 'Scim.pdf', bytes: new Uint8Array([37, 80, 68, 70]) });
+
+/**
+ * The Stage with a file from disk to open (a pdf unless `file` says otherwise), and a stand-in for the viewer's ref that
+ * says what it was asked. `nodes`: stand-in DOM nodes for the elements with those attributes (`data-stage-view`, …).
+ * What else it asks of main is in `calls`; what it listens to main for, in `on`.
+ */
+function stage({ file = PDF, nodes = {} } = {}) {
+  const hooks = hookRunner((tree) => {
+    for (const [attribute, node] of Object.entries(nodes)) for (const el of findAll(tree, (p) => p[attribute] != null)) if (el.props.ref) el.props.ref.current = node;
+  });
+  const keydown = [], calls = [], on = {};
   const api = new Proxy({
-    stageFile: async (projectId, place) => ({ kind: 'pdf', url: `file://${place}`, path: place, name: 'Scim.pdf', bytes: new Uint8Array([37, 80, 68, 70]) }),
+    stageFile: async (projectId, place) => file(place),
     readPageAnnotations: async () => ({}),
     windowFocused: () => true,
-  }, { get: (own, name) => (name in own ? own[name] : String(name).startsWith('on') ? () => () => {} : async () => null) });
+  }, { get: (own, name) => (name in own ? own[name] : String(name).startsWith('on') ? (fn) => { on[name] = fn; return () => {}; } : async (...args) => { calls.push([name, ...args]); return null; }) });
   globalThis.window = {
     engelbartAPI: api, innerWidth: 1200, innerHeight: 800, crypto: { randomUUID: () => `id-${Math.random().toString(36).slice(2)}` },
     addEventListener: (type, fn) => { if (type === 'keydown') keydown.push(fn); }, removeEventListener: (type, fn) => { const i = keydown.indexOf(fn); if (type === 'keydown' && i >= 0) keydown.splice(i, 1); },
@@ -255,6 +266,8 @@ function stage() {
   };
   const s = {
     asked,
+    calls,
+    on,
     get tree() { return tree; },
     open: (href, options) => { ref.current.openInput(href, options); tree = hooks.run(Stage, props, ref); },
     settle: async () => { for (let n = 0; n < 5; n += 1) await new Promise((resolve) => setImmediate(resolve)); tree = hooks.run(Stage, props, ref); },
@@ -333,5 +346,143 @@ test.describe('the Stage', () => {
     card.props.onClose();
     s.rerender();
     assert.deepEqual(s.asked, [['stopFind'], ['clearSection']], 'closing find takes the section, as it did');
+  });
+});
+
+/* ---------------------------------------------------------------------------------- Stage: a page, a drawn file */
+
+// A link's passage in a page or a file drawn here (2026-10-03): found, highlighted and scrolled to as ⌘F would, but with
+// no find card. Chromium keeps a page's highlight until stopFindInPage, and a file's is painted until clearRanges: only
+// the card's closing does either.
+
+const ESSAY = 'https://andymatuschak.org/hmwl/';
+const WORDS = 'it’s much harder to write an essay';
+const NOTES = '/Users/h/notes.md';
+const passage = (where, find) => `${where}#find=${encodeURIComponent(find)}`;
+const finds = (s) => s.calls.filter(([name]) => name === 'browserFind' || name === 'browserStopFind');
+
+/** A Stage with a page's view to show, and the page loaded once `loaded(s)` says so. */
+function pageStage() {
+  globalThis.ResizeObserver = class { observe() {} disconnect() {} };
+  globalThis.MutationObserver = class { observe() {} disconnect() {} };
+  const slot = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600 }), parentElement: null };
+  return stage({ nodes: { 'data-browser-slot': slot } });
+}
+const loaded = (s, id, url = ESSAY) => { s.on.onBrowserState({ id, url, title: 'How might we learn?', loading: false, canGoBack: false, canGoForward: false, error: null }); s.rerender(); };
+const opened = (s) => { const call = s.calls.find(([name]) => name === 'browserOpen'); return call && call[1]; };
+
+/** A Stage with a markdown file to draw: two text nodes, in a pane 600px tall, the passage below it. */
+function fileStage() {
+  const registry = new Map();
+  const texts = [{ page: 2, data: 'Readers skim. We set three goals for the reader.' }, { page: 2, data: 'Again: three goals.' }];
+  const view = { texts, scrollTop: 0, clientHeight: 600, getBoundingClientRect: () => ({ top: 0, bottom: 600 }) };
+  const s = stage({ file: (place) => ({ kind: 'md', path: place, name: 'notes.md', text: texts.map((t) => t.data).join('\n'), truncated: false }), nodes: { 'data-stage-view': view } });
+  globalThis.CSS = { highlights: registry };
+  globalThis.Highlight = FakeHighlight;
+  globalThis.NodeFilter = { SHOW_TEXT: 4 };
+  Object.assign(globalThis.document, {
+    createRange: () => new FakeRange(),
+    createTreeWalker: (root) => { let i = -1; return { nextNode: () => root.texts[++i] || null }; },
+  });
+  return { s, registry, view };
+}
+const painted = (registry, name) => (registry.has(name) ? registry.get(name).ranges.map((r) => `${r.text}@${r.start.offset}`) : []);
+
+test.describe('the Stage: a passage in a page or a drawn file', () => {
+  test.afterEach(() => {
+    for (const name of ['window', 'requestAnimationFrame', 'ResizeObserver', 'MutationObserver', 'CSS', 'Highlight', 'NodeFilter']) delete globalThis[name];
+    globalThis.document = { baseURI: 'file:///app/index.html' };
+  });
+
+  test('landing on a loaded page: browserFind with the words, no find card; nothing stops it until the card closes', async () => {
+    const s = pageStage();
+    s.open(passage(ESSAY, WORDS));
+    await s.settle();
+    const id = opened(s);
+    assert.ok(id, 'the page is opened');
+    assert.deepEqual(finds(s), [], 'nothing is found before the page has loaded');
+    loaded(s, id);
+    assert.deepEqual(finds(s), [['browserFind', id, WORDS, { backward: false }]], 'found as ⌘F would, from the first match');
+    assert.equal(s.one('FindCard'), null, 'finding stays false');
+
+    s.on.onBrowserFound({ id, matches: 2, active: 1 }); // Chromium counts the matches
+    s.rerender();
+    assert.equal(s.one('FindCard'), null, 'the count shows nowhere');
+    s.key('t'); // another tab in front, then the page again
+    s.open(ESSAY);
+    await s.settle();
+    assert.equal(opened(s), id, 'the same tab, never reloaded');
+    assert.deepEqual(finds(s), [['browserFind', id, WORDS, { backward: false }]], 'no stopFind: the highlight stays');
+
+    s.key('f');
+    const card = s.one('FindCard');
+    assert.ok(card, '⌘F opens the find card as before');
+    assert.equal(card.props.text, '', 'empty: the link\'s words were never typed');
+    card.props.onText('notes');
+    s.rerender();
+    assert.deepEqual(finds(s).slice(1), [['browserFind', id, ''], ['browserStopFind', id], ['browserFind', id, 'notes', { backward: false }]], 'a new search replaces the link\'s');
+    s.one('FindCard').props.onClose();
+    s.rerender();
+    assert.deepEqual(finds(s).slice(-1), [['browserStopFind', id]], 'closing the card clears it');
+    s.key('f');
+    assert.equal(s.one('FindCard').props.text, 'notes', '⌘F again: the last query typed');
+  });
+
+  test('landing while the card is open with other words: the card takes the link\'s words, as before', async () => {
+    const s = pageStage();
+    s.open(ESSAY);
+    await s.settle();
+    const id = opened(s);
+    loaded(s, id);
+    s.key('f');
+    s.one('FindCard').props.onText('other');
+    s.rerender();
+    s.calls.length = 0;
+    s.open(passage(ESSAY, WORDS)); // the page is open: it comes forward with the passage
+    await s.settle();
+    assert.equal(s.one('FindCard').props.text, WORDS, 'the open card\'s query is the passage');
+    assert.deepEqual(finds(s), [['browserStopFind', id], ['browserFind', id, WORDS, { backward: false }]], 'the old search stops and the passage is found');
+    s.calls.length = 0;
+    s.open(passage(ESSAY, WORDS)); // the same words again
+    await s.settle();
+    assert.deepEqual(finds(s), [['browserFind', id, WORDS, { backward: false }]], 'the same words: found again, the card as it was');
+    assert.equal(s.one('FindCard').props.text, WORDS);
+  });
+
+  test('landing on a drawn file: its ranges painted and scrolled to, no find card; ⌘F and closing it work as before', async () => {
+    const { s, registry, view } = fileStage();
+    s.open(passage(NOTES, 'three goals'));
+    await s.settle();
+    assert.equal(s.one('FindCard'), null, 'finding stays false');
+    assert.deepEqual(painted(registry, 'stage-find-cur'), [`three goals@${'Readers skim. We set '.length}`], 'the first match in front');
+    assert.deepEqual(painted(registry, 'stage-find'), [`three goals@${'Again: '.length}`], 'the other painted too');
+    assert.ok(view.scrollTop > 0, 'scrolled to');
+    s.rerender();
+    assert.equal(registry.has('stage-find-cur'), true, 'nothing clears it');
+
+    s.key('f');
+    assert.equal(s.one('FindCard').props.text, '', '⌘F opens the card empty');
+    s.one('FindCard').props.onText('reader');
+    s.rerender();
+    assert.deepEqual([painted(registry, 'stage-find-cur'), painted(registry, 'stage-find')], [['Reader@0'], [`reader@${'Readers skim. We set three goals for the '.length}`]], 'a new search replaces the link\'s');
+    s.one('FindCard').props.onClose();
+    s.rerender();
+    assert.deepEqual([registry.has('stage-find'), registry.has('stage-find-cur')], [false, false], 'closing the card clears it');
+  });
+
+  test('a pdf is as before: no browserFind, a guide\'s passage in the Sections menu, any other in the find card', async () => {
+    const s = stage();
+    s.open(link(SECTIONS[1].find), { sections: SECTIONS });
+    await s.settle();
+    s.paper();
+    s.paper().props.onTarget(SECTIONS[1].find, { matches: 1, active: 1 });
+    s.rerender();
+    assert.deepEqual([s.one('FindCard'), s.one('SectionsMenu').props.active], [null, 1]);
+    s.open(link(SECTIONS[0].find)); // no guide: the find card, with the words
+    await s.settle();
+    s.paper().props.onTarget(SECTIONS[0].find, { matches: 1, active: 1 });
+    s.rerender();
+    assert.equal(s.one('FindCard').props.text, SECTIONS[0].find);
+    assert.deepEqual(finds(s), [], 'a pdf is found by its viewer');
   });
 });

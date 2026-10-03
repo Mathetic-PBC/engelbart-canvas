@@ -26,7 +26,8 @@ import PaperView from '../pdf/PaperView.jsx';
 // thing's place in the library (+ Save / + Workspace / ✓, Add - Mention.dc.html); a web pdf is saved as a copy.
 // A link may name a passage (2026-09-30, @discover's guide: `address#find=words`, model/stage.js splitTarget): its tab
 // keeps it as `pendingFind` until what it shows is ready — a pdf drawn (PaperView `target`), a page loaded, a file drawn
-// here — then finds it once: the find card opens with the words and the match in front is scrolled to. `&to=` (round 2)
+// here — then finds it once: the match in front is scrolled to, and in a pdf the find card opens with the words (a page
+// or a file shows the highlight alone, 2026-10-03, unless the card is open already: it takes the words). `&to=` (round 2)
 // is kept as `pendingTo` beside it, for a pdf only: PaperView tints the section it ends; a page or a file ignores it.
 // A link in an @discover guide (2026-10-03) brings the guide's other sections for the same paper (DocEditor, model/stage.js
 // guideSections), kept on the tab as `sections` with the clicked one `activeSection`. In a pdf it opens no find card: the
@@ -847,9 +848,9 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const closeFind = () => { setFinding(false); setMatches(null); };
 
   // A link's passage, found once its tab is ready (DG-03). In a pdf PaperView has shown it as a section (`result`) by the
-  // time it says so; a page or a drawn file is searched as ⌘F would. The find card opens with the words, and the passage
-  // waits no longer. In a pdf with an @discover guide's sections (2026-10-03) the find card stays as it was: the Sections
-  // menu says which one is shown.
+  // time it says so: the find card opens with the words, and the passage waits no longer. In a pdf with an @discover
+  // guide's sections (2026-10-03) the find card stays as it was: the Sections menu says which one is shown. A page or a
+  // drawn file is searched as ⌘F would, with no card (land, below).
   const clearPending = (id, text) => update(id, (t) => (t.pendingFind === text ? { ...t, pendingFind: null, pendingTo: null } : t));
   const landed = (id, text, result) => {
     const t = tabsRef.current.find((x) => x.id === id);
@@ -874,11 +875,14 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     update(tab.id, noSections);
     if (paperRef.current) paperRef.current.clearSection();
   };
+  // A page or a drawn file: the passage is found and scrolled to without the card (2026-10-03). Chromium keeps a page's
+  // highlight until stopFindInPage and a file's stays painted until clearRanges, and only the card's closing does either.
+  // With the card open already its query becomes the passage, as before; ⌘F later opens it with the last one typed.
   const land = (id, text) => {
     clearPending(id, text);
     const h = keys.current;
-    if (h.finding && h.findText === text) runFind(text, 0);
-    else { setFindText(text); setFinding(true); }
+    if (!h.finding || h.findText === text) runFind(text, 0);
+    else setFindText(text);
   };
   React.useEffect(() => {
     const text = tab.pendingFind;
