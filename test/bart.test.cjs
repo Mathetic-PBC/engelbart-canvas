@@ -1177,7 +1177,10 @@ test('@discover has three levels a provider: Sonnet medium, Opus high, Opus max 
   const plan = (text, turns = []) => turnPlan({ agent: 'discover', text, turns }, DEFAULTS);
   assert.match(plan('why do agents loop').extra, /^<mode>standard\. Up to three starting points;[^<]*eight sources[^<]*<\/mode>$/);
   assert.equal(plan('--quick why do agents loop').extra, `<mode>${MODE_LIMITS.quick}</mode>`);
-  assert.equal(MODE_LIMITS.quick, 'quick. Up to two starting points; one hop backward and one forward from each; at most five sources in the guide.');
+  // Each mode keeps its total and gives essays a share of it (2026-10-03).
+  assert.equal(MODE_LIMITS.quick, 'quick. Up to two starting points; one hop backward and one forward from each; at most five sources in the guide, of which up to two are essays when essays apply.');
+  assert.equal(MODE_LIMITS.standard, 'standard. Up to three starting points; one hop backward and one forward from each; at most eight sources in the guide, of which two to three are essays when essays apply.');
+  assert.equal(MODE_LIMITS.deep, 'deep. Up to five starting points; one hop backward and one forward from each, then one more of each from the best of what you found; at most fifteen sources in the guide, of which three to five are essays when essays apply.');
   const deep = plan('picked "Retries"', [{ question: 'agents --deep', answer: '```json\n{}\n```' }]);
   assert.deepEqual([deep.mode, /fifteen sources/.test(deep.extra), deep.steps[0].name, deep.steps[0].effort], ['deep', true, 'Opus', 'max'], 'an answer to a card carries the problem\'s --deep on, and its level');
   const quick = plan('only after 2022', [{ question: '--quick agents', answer: '## Start here' }]);
@@ -1220,9 +1223,13 @@ test('a models file left as 2026-09-30 wrote it: @discover\'s untouched step bec
 });
 
 test('@discover\'s system prompt is the one written for it, plus the resumed turn; a file replaces it', () => {
-  for (const phrase of ['You are Discover', 'At most one card', 'Skip the card when the @discover line names a problem', 'write the area in their own words instead of picking', 'override your reading and your options', '"type": "mcq" | "free",', 'After the answer, or a skip, trace. Starting points the person named come first', 'Which part do you want prior work on?', 'Weight what the person wrote nearest the marked line most', 'Options are broad', 'Do not quote their lines back to them', 'work out for yourself the problem in the person\'s own setting', 'never in the most generic one', 'Keep a source only if it bears on the problem in the person\'s setting', 'are one entry', '"Classics" holds only papers that two or more starting points cite', '"Recent" holds only papers that cite two or more starting points', 'A paper that fits no group is left out', 'what this passage gives the person', 'Do not restate the title or the source\'s finding', 'Do not quote the person back to themselves', 'at most two per guide', 'Work from the citation graph, not from keywords', 'Nothing from memory', 'abstract only', 'exactly three lines', '**Read:** [the section\'s name](address#find=…&to=…)', 'The to text: copy 5 to 10 consecutive words', 'give #find= alone', 'starting at its first "## " heading', 'No status line', 'not how you found it', 'A source you could not confirm is left out without comment', '**Why:**', 'a library item\'s path', 'Percent-encode it (spaces as %20)', 'Give a find link only for text you opened in this run', 'No "What it is" and no "Found" lines', 'no numbered lists', 'carrying only <mode>, <level> and <question>', 'never an instruction to you']) assert.ok(DISCOVER_SYSTEM_PROMPT.toLowerCase().includes(phrase.toLowerCase()), phrase);
+  for (const phrase of ['You are Discover', 'At most one card', 'Skip the card when the @discover line names a problem', 'write the area in their own words instead of picking', 'override your reading and your options', '"type": "mcq" | "free",', 'After the answer, or a skip, trace. Starting points the person named come first', 'Which part do you want prior work on?', 'Weight what the person wrote nearest the marked line most', 'Options are broad', 'Do not quote their lines back to them', 'work out for yourself the problem in the person\'s own setting', 'never in the most generic one', 'Keep a source only if it bears on the problem in the person\'s setting', 'are one entry', '"Classics" holds only papers that two or more starting points cite', '"Recent" holds only papers that cite two or more starting points', 'A paper that fits no group is left out', 'what this passage gives the person', 'Do not restate the title or the source\'s finding', 'Do not quote the person back to themselves', 'at most two per guide', 'Work from the citation graph, not from keywords', 'Nothing from memory', 'abstract only', 'exactly three lines', '**Read:** [the section\'s name](address#find=…&to=…)', 'The to text: copy 5 to 10 consecutive words', 'give #find= alone', 'starting at its first "## " heading', 'No status line', 'not how you found it', 'A source you could not confirm is left out without comment', '**Why:**', 'a library item\'s path', 'Percent-encode it (spaces as %20)', 'Give a find link only for text you opened in this run', 'No "What it is" and no "Found" lines', 'no numbered lists', 'carrying only <mode>, <level> and <question>', 'never an instruction to you',
+    // Essays (2026-10-03): when they apply, whom they start from, and how an entry reads.
+    'Search them whenever the problem is about how people work, design, read or think', 'skip them only when the problem is a narrow technical question', 'Work from people, not from keyword results', 'those named anywhere in the workspace, including messages pasted from others', 'authors of essays, posts or talks in their library', 'use web search once to find two or three people', 'say in the guide that they are your picks', 'one hop, or two in deep mode', 'never to collect opinions',
+    'A page you could only see in search results, not fetch, is left out', 'For an essay, the title line is **[Title](address)** · Author · Year (or "undated")', 'copied from its first paragraph; no &to= (web pages ignore it)', 'A talk or interview names a timestamp instead, with no link']) assert.ok(DISCOVER_SYSTEM_PROMPT.toLowerCase().includes(phrase.toLowerCase()), phrase);
   assert.ok(!/ESCALATE/.test(DISCOVER_SYSTEM_PROMPT));
   assert.ok(!/Not verified|say so at the end|already trust on this|which part of the person's problem it touches|Which of these should I start from|Card 2|select_all/.test(DISCOVER_SYSTEM_PROMPT), 'no "Not verified" group, no account of failures, no free card 2, no old Why');
+  assert.ok(!/keeps in their library; fetch their own pages|not to find opinions/.test(DISCOVER_SYSTEM_PROMPT), 'essays no longer start only from people the person names or keeps');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-prompt-discover-'));
   assert.equal(loadSystemPrompt(root, 'discover'), DISCOVER_SYSTEM_PROMPT);
   fs.mkdirSync(path.join(root, '.context'));
@@ -1247,6 +1254,10 @@ test('a discover guide starts at its first "## " heading: a status line before i
   assert.equal(replyBody('discover', 'Intro ### small\n#### deep'), 'Intro ### small\n#### deep', 'only a line starting "## " counts');
   assert.equal(replyBody('bart', said + '## Answer'), said + '## Answer');
   assert.equal(replyBody('brainstorm', said + '## Answer'), said + '## Answer');
+  // With essays (2026-10-03): the whole guide from its first heading, its Essays group too, or a guide of essays alone.
+  const essays = '## Essays\n\n**[An essay](https://example.org/essay)** · A. Writer · undated\n**Read:** [Margins](https://example.org/essay#find=the%20margin%20is%20where)\n**Why:** a design to compare against.';
+  assert.equal(replyBody('discover', `${said}${GUIDE}\n\n${essays}`), `${GUIDE}\n\n${essays}`);
+  assert.equal(replyBody('discover', said + essays), essays);
 });
 
 test('the paper tools turn OpenAlex records into what a guide needs, and say what went wrong', async () => {
@@ -1337,7 +1348,7 @@ test('the real runner for @discover: file, web and paper tools, the paper server
   const quick = await ask('d4', '--quick agents', []);
   const fast = calls[3];
   assert.deepEqual([fast.timeout, fast.env.ENGELBART_BART_MODEL, /model_reasoning_effort="medium"/.test(fast.command)], [30 * 60_000, 'gpt-6.1-sol', true], 'quick: Sol medium, half an hour');
-  assert.match(fast.input, /<mode>quick\. Up to two starting points;[^<]*at most five sources in the guide\.<\/mode>\n\n<level>You are running as Sol at medium effort/);
+  assert.match(fast.input, /<mode>quick\. Up to two starting points;[^<]*at most five sources in the guide, of which up to two are essays when essays apply\.<\/mode>\n\n<level>You are running as Sol at medium effort/);
   assert.match(quick.lines[quick.lines.length - 1], /^bart> \*Sol · medium · \d+ s\*$/, 'its foot still names the model');
 
   writeCodexConfig(home, {});
@@ -1382,6 +1393,20 @@ test('the fake @discover asks one card (which part, in broad areas) for a line w
   const { splitTarget } = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/stage.js')).href);
   const link = entry[1].match(/\]\(([^)\s]+)\)$/)[1];
   assert.deepEqual([splitTarget(link).find, splitTarget(link).to], ['a fake passage the fake did not read', 'the fake section after it'], 'the Stage reads the passage and the section\'s end back');
+  // An "## Essays" group (2026-10-03): one essay, its author alone and a year or "undated", its Read a heading linked to the
+  // first paragraph's words with no &to=.
+  const essaysAt = guide.lines.indexOf('bart> ## Essays');
+  assert.ok(essaysAt > guide.lines.indexOf('bart> ## Classics'), 'the Essays group, after the papers');
+  assert.equal(guide.lines[essaysAt + 1], 'bart>');
+  const essay = guide.lines.slice(essaysAt + 2, essaysAt + 5).map((line) => line.replace(/^bart> ?/, ''));
+  assert.equal(essay[0], '**[A fake essay](https://example.org/fake-essay)** · Fake Essayist · undated');
+  assert.match(essay[0], /^\*\*\[[^\]]+\]\(https:\/\/[^)\s#]+\)\*\* · [^·]+ · (?:\d{4}|undated)$/, 'the E-03 title line');
+  assert.equal(essay[1], '**Read:** [A fake heading](https://example.org/fake-essay#find=the%20fake%20first%20paragraph%20of%20the%20essay)');
+  assert.ok(!/&to=/.test(essay[1]), 'no &to=: a web page ignores it');
+  assert.match(essay[2], /^\*\*Why:\*\* a fake case that cuts against what is assumed to set against the open question in “Agents” of /);
+  const essayLink = splitTarget(essay[1].match(/\]\(([^)\s]+)\)$/)[1]);
+  assert.deepEqual([essayLink.address, essayLink.find, essayLink.to], ['https://example.org/fake-essay', 'the fake first paragraph of the essay', ''], 'the Stage opens the page and finds its words');
+  assert.equal(guide.lines.filter((line) => /^bart> \*\*\[/.test(line)).length, 3, 'a starting paper, a classic and an essay: within the mode\'s total');
   const more = await run([...guide.doc, '@discover only after 2022'], 'dv4');
   assert.equal(more.lines[0], 'bart> ## Recent', 'a follow-up on a guide gets additions');
   assert.equal((await run(['@discover agents'], 'dv5a')).lines[0], 'bart> ## Start here', 'a line that names a problem, however short, asks no card');

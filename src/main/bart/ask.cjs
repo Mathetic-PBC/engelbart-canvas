@@ -80,11 +80,12 @@ const AGENTS = ['bart', 'brainstorm', 'discover'];
 const PROMPTS = { bart: ['bart-system-prompt.md', BART_SYSTEM_PROMPT], brainstorm: ['brainstorm-system-prompt.md', BRAINSTORM_SYSTEM_PROMPT], discover: ['discover-system-prompt.md', DISCOVER_SYSTEM_PROMPT] };
 // What an @discover line with nothing after it asks.
 const DISCOVER_OPENING = 'Find what I should read about the problem this workspace is about.';
-// How far each mode traces (the prompt's <mode>).
+// How far each mode traces (the prompt's <mode>), and how many of its sources are essays when essays apply (2026-10-03):
+// a share of the same total, so papers no longer use it all.
 const MODE_LIMITS = {
-  quick: 'quick. Up to two starting points; one hop backward and one forward from each; at most five sources in the guide.',
-  standard: 'standard. Up to three starting points; one hop backward and one forward from each; at most eight sources in the guide.',
-  deep: 'deep. Up to five starting points; one hop backward and one forward from each, then one more of each from the best of what you found; at most fifteen sources in the guide.',
+  quick: 'quick. Up to two starting points; one hop backward and one forward from each; at most five sources in the guide, of which up to two are essays when essays apply.',
+  standard: 'standard. Up to three starting points; one hop backward and one forward from each; at most eight sources in the guide, of which two to three are essays when essays apply.',
+  deep: 'deep. Up to five starting points; one hop backward and one forward from each, then one more of each from the best of what you found; at most fifteen sources in the guide, of which three to five are essays when essays apply.',
 };
 
 class BartError extends Error {
@@ -507,8 +508,9 @@ function fakeCard(context, plan, models) {
  * part, in broad areas; 2026-09-30, one card, no longer a second of starting points); its answer, its skip or a line
  * that names a problem gets a guide in three-line entries, whose first entry is what the person wrote in their own words
  * on the card, if they did, then the first library item, by its path when it has one, with a section to find in it
- * (`#find=…&to=…`, round 2). Each Why says what the passage gives and the open question it bears on (round 3). A
- * follow-up on a guide gets additions. Nothing is looked up: every entry says it is fake.
+ * (`#find=…&to=…`, round 2), and an "## Essays" group of one essay, its Read a link to its first paragraph's words with
+ * no `&to=` (2026-10-03). Each Why says what the passage gives and the open question it bears on (round 3). A follow-up
+ * on a guide gets additions. Nothing is looked up: every entry says it is fake.
  */
 function fakeDiscover(context, plan) {
   const guided = plan.prior.length > 0 && /^## /.test(plan.prior[plan.prior.length - 1].answer);
@@ -517,10 +519,17 @@ function fakeDiscover(context, plan) {
   const cards = plan.prior.length - from, skipped = plan.question.trim() === SKIPPED;
   // Title, Read and Why; Read names a section by a link to its first words, or says the fake only had the abstract.
   // Why: what the passage gives (a method, a measurement, a design…) and the open question it bears on; never the person's words.
+  const why = (gives) => `**Why:** a fake ${gives} to set against the open question in “${context.workspaceName}” of how to tell the work is going well.`;
   const entry = (title, address, section, words, to, gives = 'method') => [
     `**[${title}](${address})** · Fake Author et al. · 2024`,
     `**Read:** ${section ? `[${section}](${address}#find=${encodeURIComponent(words)}${to ? `&to=${encodeURIComponent(to)}` : ''})` : 'abstract only'}`,
-    `**Why:** a fake ${gives} to set against the open question in “${context.workspaceName}” of how to tell the work is going well.`,
+    why(gives),
+  ];
+  // An essay: one author, a year or "undated"; Read is a heading with the words of its first paragraph, no &to= (a web page ignores it).
+  const essay = (title, address, heading, words, gives) => [
+    `**[${title}](${address})** · Fake Essayist · undated`,
+    `**Read:** [${heading}](${address}#find=${encodeURIComponent(words)})`,
+    why(gives),
   ];
   if (guided) return ['## Recent', '', ...entry('A fake later paper', 'https://example.org/fake-recent', null, '', '', 'measurement')].join('\n');
   const problem = cards > 0 ? plan.prior[from].question : plan.question; // the problem as first asked, not an answer to a card
@@ -539,7 +548,9 @@ function fakeDiscover(context, plan) {
     ...(own ? [...entry(`A fake record for “${own.slice(0, 80)}”`, 'https://example.org/fake-named', null, '', '', 'design to compare against'), ''] : []),
     ...(first ? entry(first.name, where(first), 'Introduction', 'a fake passage the fake did not read', 'the fake section after it') : entry('A fake starting paper', 'https://example.org/fake-start.pdf', 'Introduction', 'a fake passage', 'the fake section after it')), '',
     '## Classics', '',
-    ...entry(`A fake classic (${plan.mode} mode)`, 'https://example.org/fake-classic', null, '', '', 'term for what is being handled'),
+    ...entry(`A fake classic (${plan.mode} mode)`, 'https://example.org/fake-classic', null, '', '', 'term for what is being handled'), '',
+    '## Essays', '',
+    ...essay('A fake essay', 'https://example.org/fake-essay', 'A fake heading', 'the fake first paragraph of the essay', 'case that cuts against what is assumed'),
   ].join('\n');
 }
 
