@@ -370,7 +370,7 @@ test('@brainstorm is an @bart line asked of another agent: with or without words
   const [thread] = threads(doc);
   assert.deepEqual(thread.turns.map((turn) => [turn.q, turn.from, turn.to, turn.foot, turn.pending]), [[0, 1, 7, 7, null], [8, 9, 9, -1, 'k2']]);
   assert.deepEqual(turnText(doc, thread.turns[0]), { question: '', answer: '```json\n{\n  "card": "focus"\n}\n```' }, 'an empty line is still a turn; the card is its JSON');
-  assert.deepEqual(threads(['@bart why?', 'bart> because', '@brainstorm', 'bart~> k3']).map((t) => t.turns.length), [2], 'either line continues the other\'s card');
+  assert.deepEqual(threads(['@bart why?', 'bart> because', '@brainstorm', 'bart~> k3']).map((t) => [t.from, t.to, t.turns.length]), [[0, 1, 1], [2, 3, 1]], 'another agent\'s line starts a card of its own (2026-10-02)');
 });
 
 test('@discover is an @bart line asked of a third agent: with or without words, coloured as a token, one thread kind (2026-09-30)', async () => {
@@ -393,7 +393,27 @@ test('the blank line a recap\'s Look for button puts before "@discover" keeps it
   const apart = threads([...recap, '', '@discover retry loops', 'bart~> d1', '']);
   assert.deepEqual(apart.map((t) => [t.from, t.to]), [[0, 2], [4, 5]]);
   assert.equal(agentOf(parseLine('@discover retry loops')), 'discover');
-  assert.equal(threads([...recap, '@discover retry loops', 'bart~> d1']).length, 1, 'without it the line would join the thread');
+  assert.deepEqual(threads([...recap, '@discover retry loops', 'bart~> d1']).map((t) => [t.from, t.to]), [[0, 2], [3, 4]], 'without it the line is still a thread of its own: it asks another agent (2026-10-02)');
+});
+
+test('different agents never join one thread: a line for another agent starts its own card and reply field (2026-10-02)', async () => {
+  const { threads, agentOf, parseLine } = await load();
+  const card = ['bart> ```json', 'bart> {', 'bart>   "card": "focus"', 'bart> }', 'bart> ```', 'bart>', 'bart> *Sonnet · high · 3 s*'];
+  const mixed = threads(['@brainstorm', ...card, '@discover retry loops', 'bart~> d1', '']);
+  assert.deepEqual(mixed.map((t) => [t.from, t.to, t.turns.length]), [[0, 7, 1], [8, 9, 1]], 'a brainstorm answer followed directly by @discover gives two threads');
+  const [brainstorm, discover] = mixed, end = brainstorm.turns[brainstorm.turns.length - 1];
+  assert.deepEqual([end.q, end.answered, end.pending, end.folded], [0, true, null, false], 'the brainstorm card is its thread\'s last turn, so it stays live with its controls');
+  assert.deepEqual([agentOf(parseLine('@brainstorm')), agentOf(parseLine('@discover retry loops'))], ['brainstorm', 'discover']);
+  assert.equal(discover.turns[0].pending, 'd1');
+
+  for (const agent of ['bart', 'brainstorm', 'discover']) {
+    const doc = [`@${agent} first`, 'bart> one', 'bart> *Opus · high · 4 s*', `@${agent} again`, 'bart> two', 'bart> *Opus · high · 3 s*', `@${agent} once more`, `bart~> ${agent}3`];
+    assert.deepEqual(threads(doc).map((t) => [t.from, t.to, t.turns.map((turn) => turn.q)]), [[0, 7, [0, 3, 6]]], `@${agent} still joins follow-ups from the same agent`);
+  }
+
+  const underBart = threads(['@bart why?', 'bart> because', 'bart> *Opus · high · 4 s*', '@discover agents that loop', 'bart~> d2']);
+  assert.deepEqual(underBart.map((t) => [t.from, t.to, t.turns.length]), [[0, 2, 1], [3, 4, 1]], '@discover directly under a @bart answer gives two threads');
+  assert.deepEqual(threads(['@bart a', 'bart> b', '@bart c', 'bart> d', '@discover e', 'bart~> f', '@bart g']).map((t) => t.turns.map((turn) => turn.q)), [[0, 2], [4], [6]], 'a thread ends at the first line from another agent, and the first agent\'s line after it starts again');
 });
 
 // Copy and cut (2026-10-02): what a selection copies is the document's markdown, so links keep their addresses.

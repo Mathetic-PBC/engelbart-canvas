@@ -248,9 +248,11 @@ export function replyRawOffset(p, fOff) {
 /**
  * The @bart exchanges of a document, by line index. A thread is a run of lines with nothing between them: a question,
  * what stands under it (a pending line, or the answer), then any question asked right after that answer — a follow-up,
- * which reads as one card. → [{ from, to, turns }], each turn { q, from, to, answered, pending, foot, folded } where
- * `from..to` are the lines under the question (to === q when there are none), `pending` is the id of a run still
- * working, `foot` the closing line that says which model answered (-1 without one).
+ * which reads as one card. A follow-up asks the agent the thread's first question asked; a line for another agent
+ * starts a thread of its own, with its own card and reply field (2026-10-02). → [{ from, to, turns }], each turn
+ * { q, from, to, answered, pending, foot, folded } where `from..to` are the lines under the question (to === q when there
+ * are none), `pending` is the id of a run still working, `foot` the closing line that says which model answered (-1
+ * without one).
  */
 export function threads(lines, ps = parseLines(lines)) {
   const out = [];
@@ -269,7 +271,7 @@ export function threads(lines, ps = parseLines(lines)) {
       turn.answered = turn.to > turn.q;
       if (turn.answered && !turn.pending) { const last = ps[turn.to]; if (last.type === 'reply' && ATTRIBUTION_RE.test(last.text)) turn.foot = turn.to; }
       thread.turns.push(turn); thread.to = turn.to;
-      if (!turn.answered || i + 1 >= lines.length || ps[i + 1].type !== 'bart') break;
+      if (!turn.answered || i + 1 >= lines.length || ps[i + 1].type !== 'bart' || agentOf(ps[i + 1]) !== agentOf(ps[thread.from])) break;
       i += 1;
     }
     out.push(thread);
