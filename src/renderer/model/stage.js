@@ -142,10 +142,10 @@ export function tabPlace(value) {
   return host || v;
 }
 
-/** A library row the Stage can show: anything but a note (notes open in the middle), a pasted image, or a folder that is only a folder. */
+/** A library row the Stage can show: anything but a note (notes open in the middle) or a pasted image. */
 export function onStage(row) {
   if (!row || isNote(row) || row.type === 'workspace' || row.type === 'child') return false;
-  if (row.type === 'folder') return !!row.url; // a repository's folder shows its address
+  if (row.type === 'folder') return !!(row.url || row.folder_path); // a repository's folder shows its address, a plain one itself
   return !!(row.url || row.path);
 }
 

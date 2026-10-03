@@ -497,7 +497,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
       .catch((error) => update(id, (t) => ({ ...t, file: { kind: 'error', path: input, name: basename(input), message: errorMessage(error) } })));
   };
 
-  // A library row in a tab of its own: its file when it has one (read here), else its address.
+  // A library row in a tab of its own: its file when it has one (read here), else its address, else its folder.
   const showRow = (id, row) => {
     if (isGithubSignIn(row.url) && !row.path) { quiet(api.openExternal(row.url)); return; }
     update(id, (t) => ({ ...t, item: row.id, row }));
@@ -512,6 +512,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     }
     if (row.url && (row.type !== 'html' || !row.path)) { update(id, (t) => ({ ...t, url: row.url, file: null, pdf: null })); load(id, row.url); return; }
     if (row.path) readPath(id, row.path, row.id);
+    else if (row.folder_path) readPath(id, row.folder_path, row.id);
   };
 
   // Typed (or picked) into the tab in front: a path is read, anything else is where the page goes.

@@ -13,7 +13,7 @@
     "new-mac": "sh scripts/new-mac.sh",
     "mac-states": "node scripts/mac-states/run.cjs",
     "migrate": "node scripts/migrate-structure.cjs",
-    "test": "node --test test/*.test.cjs",
+    "test": "node scripts/test.mjs",
     "test:pty": "ELECTRON_RUN_AS_NODE=1 electron --test test/*.integration.cjs",
     "sandbox:cache:build": "node scripts/build-sandbox-cache.cjs",
     "sandbox:cache:bench": "node scripts/benchmark-sandbox-cache.cjs",

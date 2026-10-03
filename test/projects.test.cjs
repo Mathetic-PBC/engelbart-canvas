@@ -321,6 +321,22 @@ test('read-text-file: project-relative, ~/ and absolute paths inside the home di
   assert.equal(big.truncated, true);
 });
 
+test('stage-file: a missing path is "Nothing is at that path", one macOS refuses says so (2026-10-02)', async (t) => {
+  const { BLOCKED } = require('../src/main/stage/files.cjs');
+  const project = await projects.createProject(ctx, 'Stage Paths');
+  const kept = path.join(project.dir, 'kept.md');
+  fs.writeFileSync(kept, '# kept');
+  await assert.rejects(projects.readStageFile(ctx, project.id, path.join(project.dir, 'missing.md')), { message: 'Nothing is at that path' });
+  const real = fs.realpathSync;
+  t.mock.method(fs, 'realpathSync', function (target, ...rest) {
+    if (target === kept) throw Object.assign(new Error(`EPERM: operation not permitted, lstat '${target}'`), { code: 'EPERM' });
+    return real.call(fs, target, ...rest);
+  });
+  await assert.rejects(projects.readStageFile(ctx, project.id, kept), { message: BLOCKED });
+  t.mock.restoreAll();
+  assert.equal((await projects.readStageFile(ctx, project.id, kept)).text, '# kept');
+});
+
 test('resolve-page-file: an html file by full path, or relative to the project, the engelbart folder or the code directory', async () => {
   const code = path.join(homeDir, 'code-pages');
   fs.mkdirSync(path.join(code, 'docs'), { recursive: true });

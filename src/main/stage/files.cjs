@@ -27,6 +27,23 @@ const run = (file, args) => new Promise((resolve, reject) => {
 
 const bytesOf = (buffer) => new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
 
+// A file macOS keeps from Engelbart (2026-10-02): its privacy settings (Downloads, Desktop, Documents, another disk) answer
+// a stat or a read with EPERM, and a mode that shuts Engelbart out answers EACCES. Said as that, not as a missing file.
+const BLOCKED = 'macOS blocked Engelbart from reading this file. Allow access in System Settings → Privacy & Security → Files and Folders.';
+
+/** A failed stat or read of a person's file as they should hear it: nothing there, or blocked; anything else as it came. */
+function readFailure(error) {
+  const code = error && error.code;
+  if (code === 'ENOENT') return new Error('Nothing is at that path');
+  if (code === 'EPERM' || code === 'EACCES') return new Error(BLOCKED);
+  return error;
+}
+
+/** `read()`'s answer, or readFailure's reason for having none. */
+function reading(read) {
+  try { return read(); } catch (error) { throw readFailure(error); }
+}
+
 /** One name per version of a file: its real path, when it last changed, how big it is. */
 function cacheKey(file, stat) {
   return createHash('sha256').update(`${file}\n${stat.mtimeMs}\n${stat.size}`).digest('hex').slice(0, 32);
@@ -35,7 +52,7 @@ function cacheKey(file, stat) {
 /** Text if its first 8 KB hold no NUL byte (the test git uses for binary), else null. */
 function readText(file, stat) {
   if (stat.size > MAX_TEXT_BYTES) return null;
-  const buffer = fs.readFileSync(file);
+  const buffer = reading(() => fs.readFileSync(file));
   if (buffer.subarray(0, 8192).includes(0)) return null;
   const all = buffer.toString('utf8');
   return { text: all.slice(0, MAX_TEXT_CHARS), truncated: all.length > MAX_TEXT_CHARS };
@@ -58,25 +75,24 @@ async function converted(cacheDir, file, stat, ext, make) {
  * `runTool(file, args)` runs sips/textutil (tests pass their own).
  */
 async function readStageFile(file, { cacheDir, runTool = run } = {}) {
-  let stat;
-  try { stat = fs.statSync(file); } catch { throw new Error('Nothing is at that path'); }
+  const stat = reading(() => fs.statSync(file));
   const base = path.basename(file);
   const ext = path.extname(file).toLowerCase();
   if (stat.isDirectory()) return { kind: 'folder', path: file, name: base };
   if (!stat.isFile()) throw new Error('That is not a file');
   if (ext === '.pdf') {
     if (stat.size > MAX_PDF_BYTES) throw new Error('The pdf is larger than 200 MB');
-    return { kind: 'pdf', path: file, name: path.basename(file, path.extname(file)), url: pathToFileURL(file).href, bytes: bytesOf(fs.readFileSync(file)) };
+    return { kind: 'pdf', path: file, name: path.basename(file, path.extname(file)), url: pathToFileURL(file).href, bytes: bytesOf(reading(() => fs.readFileSync(file))) };
   }
   if (ext === '.html' || ext === '.htm') return { kind: 'page', path: file, name: base, url: pathToFileURL(file).href };
   if (IMAGE_TYPES[ext]) {
     if (stat.size > MAX_IMAGE_BYTES) throw new Error('The picture is larger than 50 MB');
-    return { kind: 'image', path: file, name: base, mime: IMAGE_TYPES[ext], bytes: bytesOf(fs.readFileSync(file)) };
+    return { kind: 'image', path: file, name: base, mime: IMAGE_TYPES[ext], bytes: bytesOf(reading(() => fs.readFileSync(file))) };
   }
   if (HEIC.has(ext)) {
     if (stat.size > MAX_IMAGE_BYTES) throw new Error('The picture is larger than 50 MB');
     const jpeg = await converted(cacheDir, file, stat, '.jpg', (out) => runTool('/usr/bin/sips', ['-s', 'format', 'jpeg', file, '--out', out]));
-    return { kind: 'image', path: file, name: base, mime: 'image/jpeg', bytes: bytesOf(fs.readFileSync(jpeg)) };
+    return { kind: 'image', path: file, name: base, mime: 'image/jpeg', bytes: bytesOf(reading(() => fs.readFileSync(jpeg))) };
   }
   if (DOCUMENTS.has(ext)) {
     const html = await converted(cacheDir, file, stat, '.html', (out) => runTool('/usr/bin/textutil', ['-convert', 'html', '-output', out, file]));
@@ -89,4 +105,4 @@ async function readStageFile(file, { cacheDir, runTool = run } = {}) {
   return { kind: 'text', path: file, name: base, ext: ext.slice(1), ...text };
 }
 
-module.exports = { readStageFile, cacheKey };
+module.exports = { readStageFile, cacheKey, readFailure, reading, BLOCKED };

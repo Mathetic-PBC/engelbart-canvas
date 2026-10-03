@@ -72,8 +72,8 @@ function catalogEntries(project, rows, seen, scope) {
 }
 
 // The agents that may open the library's own files (2026-09-30, MB-06): the folders those files are in join the
-// --add-dir list, read-only like the rest. @bart's list stays the code directory and the data folder.
-const LIBRARY_READERS = new Set(['brainstorm', 'discover']);
+// --add-dir list, read-only like the rest. @bart too since 2026-10-02 (a paper in ~/Downloads was out of its reach).
+const LIBRARY_READERS = new Set(['bart', 'brainstorm', 'discover']);
 const MAX_LIBRARY_DIRS = 24;
 const within = (dir, root) => { const inside = path.relative(root, dir); return inside === '' || (!inside.startsWith('..') && !path.isAbsolute(inside)); };
 

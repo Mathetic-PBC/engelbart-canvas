@@ -9,7 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { fileURLToPath } = require('node:url');
-const { readStageFile } = require('../src/main/stage/files.cjs');
+const { readStageFile, readFailure, BLOCKED } = require('../src/main/stage/files.cjs');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-stage-'));
 const cacheDir = path.join(dir, '.cache', 'stage');
@@ -45,6 +45,41 @@ test('long text is cut at 500 000 characters and says so; a missing path throws'
   assert.equal(long.text.length, 500000);
   assert.equal(long.truncated, true);
   await assert.rejects(() => readStageFile(path.join(dir, 'nothing.md'), { cacheDir }), /Nothing is at that path/);
+});
+
+// A refusal as fs gives it, and fs's `method` refusing `file` alone until the test ends (macOS's privacy settings cannot be set from a test).
+const refused = (code, syscall, file) => Object.assign(new Error(`${code}: operation not permitted, ${syscall} '${file}'`), { code, syscall, path: file });
+const refuse = (t, method, file, code) => {
+  const real = fs[method];
+  t.mock.method(fs, method, function (target, ...rest) { if (target === file) throw refused(code, method, file); return real.call(fs, target, ...rest); });
+};
+
+test('readFailure: a missing file is "Nothing is at that path", EPERM and EACCES are macOS blocking it, anything else is as it came (2026-10-02)', () => {
+  assert.equal(readFailure(refused('ENOENT', 'stat', '/x')).message, 'Nothing is at that path');
+  assert.equal(readFailure(refused('EPERM', 'open', '/x')).message, BLOCKED);
+  assert.equal(readFailure(refused('EACCES', 'open', '/x')).message, BLOCKED);
+  assert.match(BLOCKED, /^macOS blocked Engelbart from reading this file\. Allow access in System Settings → Privacy & Security → Files and Folders\.$/);
+  const other = refused('ENOTDIR', 'stat', '/x');
+  assert.equal(readFailure(other), other);
+});
+
+test('a stat or a read macOS refuses says so and where to allow it; a missing path is still "Nothing is at that path" (2026-10-02)', async (t) => {
+  const md = at('kept.md', '# kept'), pdf = at('kept.pdf', '%PDF-1.4 kept'), png = at('kept.png', PNG), folder = path.join(dir, 'kept');
+  fs.mkdirSync(folder);
+  for (const [method, file, code] of [['statSync', md, 'EPERM'], ['statSync', folder, 'EPERM'], ['readFileSync', md, 'EPERM'], ['readFileSync', pdf, 'EPERM'], ['readFileSync', png, 'EPERM'], ['readFileSync', md, 'EACCES']]) {
+    refuse(t, method, file, code);
+    await assert.rejects(() => readStageFile(file, { cacheDir }), { message: BLOCKED }, `${method} ${path.basename(file)} ${code}`);
+    t.mock.restoreAll();
+  }
+  refuse(t, 'statSync', md, 'ENOENT');
+  await assert.rejects(() => readStageFile(md, { cacheDir }), { message: 'Nothing is at that path' });
+  t.mock.restoreAll();
+  assert.equal((await readStageFile(md, { cacheDir })).text, '# kept', 'read again once allowed');
+  if (process.getuid && process.getuid() !== 0) { // a real refusal: a file whose mode shuts its reader out (EACCES)
+    const shut = at('shut.md', 'x');
+    fs.chmodSync(shut, 0o000);
+    try { await assert.rejects(() => readStageFile(shut, { cacheDir }), { message: BLOCKED }); } finally { fs.chmodSync(shut, 0o600); }
+  }
 });
 
 test('conversions run once per version of the file and land in the cache', async () => {

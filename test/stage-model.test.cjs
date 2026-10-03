@@ -89,12 +89,21 @@ test('stageRows: never notes; here first, then the library; a web search for wor
   const { stageRows } = await load('stage');
   const inRail = (id) => ['n1', 'p1'].includes(id);
   const empty = stageRows({ query: '', library, inRail });
-  assert.deepEqual(empty.map((r) => r.key), ['p1', 'm1', 'w1', 'c1', 'g1', 'disk']);
+  assert.deepEqual(empty.map((r) => r.key), ['p1', 'm1', 'w1', 'c1', 'f1', 'g1', 'disk']);
   assert.equal(empty[0].here, true);
   const words = stageRows({ query: 'saving', library, inRail });
   assert.deepEqual(words.map((r) => r.kind), ['search', 'disk']);
   const hit = stageRows({ query: 'colb', library, inRail });
   assert.deepEqual(hit.map((r) => r.key), ['p1', 'search:colb', 'disk']);
+});
+
+test('onStage: files, addresses and folders open on the Stage, a plain folder too; notes and workspaces do not (2026-10-02)', async () => {
+  const { onStage } = await load('stage');
+  const by = (id) => library.find((r) => r.id === id);
+  for (const id of ['m1', 'p1', 'w1', 'c1', 'f1', 'g1']) assert.equal(onStage(by(id)), true, id);
+  assert.equal(onStage(by('n1')), false, 'a note opens in the middle');
+  assert.equal(onStage(row('x1', 'nowhere', 'folder')), false, 'a folder with no folder and no address');
+  assert.equal(onStage(row('ws', 'Reading', 'workspace')), false);
 });
 
 test('stageRows: a typed place is one row — the library row for it when the library has one', async () => {

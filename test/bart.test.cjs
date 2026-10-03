@@ -967,7 +967,7 @@ test('the fake @brainstorm with nothing to go on: says so and asks an open quest
   assert.match(shown.say, /little of your own writing/);
 });
 
-test('@discover may open the folders the project library\'s files are in, @brainstorm those of this workspace\'s; @bart may not (MB-06, round 3)', async () => {
+test('@bart and @discover may open the folders the project library\'s files are in, @brainstorm those of this workspace\'s (MB-06, round 3)', async () => {
   const lib = await projects.createProject(ctx, 'Library Dirs');
   const space = await projects.createWorkspace(ctx, lib.id, { name: 'Reading' });
   const downloads = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-downloads-'));
@@ -982,11 +982,11 @@ test('@discover may open the folders the project library\'s files are in, @brain
   await add('A folder', { type: 'folder', folder_path: repo });
   const ask = (agent) => buildContext(ctx, lib.id, { ref: { kind: 'workspace', workspaceId: space.id }, workspaceId: space.id, askId: 'd1', agent });
   const granted = [lib.directory, ctx.dataRoot].filter(Boolean);
-  assert.deepEqual((await ask('bart')).dirs, granted, '@bart unchanged');
-  assert.deepEqual((await ask()).dirs, granted, 'by default @bart');
   const dirs = (await ask('discover')).dirs;
   assert.deepEqual(dirs.slice(0, granted.length), granted);
   assert.deepEqual(dirs.slice(granted.length).sort(), [downloads, repo].sort(), 'a file\'s folder once (not one inside it), a folder item itself; never home, never a folder that is gone');
+  assert.deepEqual((await ask('bart')).dirs, dirs, '@bart: the same as @discover');
+  assert.deepEqual((await ask()).dirs, dirs, 'by default @bart');
   assert.deepEqual((await ask('brainstorm')).dirs, granted, '@brainstorm: nothing in this workspace, nothing granted');
   const folder = (await ctx.libraryDb.list()).find((row) => row.name === 'A folder');
   await projects.linkToWorkspace(ctx, lib.id, space.id, [folder.id]);

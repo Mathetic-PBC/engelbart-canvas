@@ -896,7 +896,7 @@ function resolveTypedPath(ctx, project, input) {
   else if (target === '~') candidates = [ctx.homeDir];
   else if (path.isAbsolute(target)) candidates = [target];
   else candidates = [project.dir, ctx.dataRoot, ctx.root, project.directory].filter(Boolean).map((base) => path.join(base, target));
-  const resolved = fs.realpathSync(candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0]);
+  const resolved = stageFiles.reading(() => fs.realpathSync(candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0])); // nothing there, or macOS keeps it
   const homeReal = fs.realpathSync(ctx.homeDir);
   if (resolved !== homeReal && !resolved.startsWith(homeReal + path.sep)) throw new Error('Only files inside your home directory can be opened');
   return resolved;

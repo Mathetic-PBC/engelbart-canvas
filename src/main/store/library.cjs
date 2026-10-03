@@ -12,6 +12,7 @@ const { fileURLToPath, pathToFileURL } = require('node:url');
 const { DIR_MODE } = require('./home.cjs');
 const projects = require('./projects.cjs');
 const { LIBRARY_TAGS } = require('./db.cjs');
+const { reading } = require('../stage/files.cjs');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_PDF_BYTES = 200 * 1024 * 1024;
@@ -55,9 +56,9 @@ async function readLibraryFile(ctx, id) {
   const file = path.resolve(row.path);
   if (path.extname(file).toLowerCase() !== '.pdf') throw new Error('Only downloaded pdf files open for now');
   if (!file.startsWith(ctx.homeDir + path.sep)) throw new Error('The file is outside your home directory');
-  const stat = fs.statSync(file);
+  const stat = reading(() => fs.statSync(file));
   if (!stat.isFile() || stat.size > MAX_PDF_BYTES) throw new Error('The file is not a readable pdf');
-  const buffer = fs.readFileSync(file);
+  const buffer = reading(() => fs.readFileSync(file));
   return { id: row.id, name: row.name, bytes: new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength) };
 }
 

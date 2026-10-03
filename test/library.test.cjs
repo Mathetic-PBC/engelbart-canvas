@@ -47,6 +47,23 @@ test('readLibraryFile returns pdf bytes and refuses other files', async () => {
   await assert.rejects(() => library.readLibraryFile(ctx, '../etc'), TypeError);
 });
 
+test('readLibraryFile: a pdf macOS refuses to stat or read says so and where to allow it (2026-10-02)', async (t) => {
+  const { BLOCKED } = require('../src/main/stage/files.cjs');
+  const paper = (await library.listLibrary(ctx)).find((row) => row.type === 'pdf');
+  for (const [method, code] of [['statSync', 'EPERM'], ['readFileSync', 'EPERM'], ['readFileSync', 'EACCES']]) {
+    const real = fs[method];
+    t.mock.method(fs, method, function (target, ...rest) {
+      if (target === paper.path) throw Object.assign(new Error(`${code}: operation not permitted, ${method} '${target}'`), { code });
+      return real.call(fs, target, ...rest);
+    });
+    await assert.rejects(() => library.readLibraryFile(ctx, paper.id), { message: BLOCKED }, `${method} ${code}`);
+    t.mock.restoreAll();
+  }
+  assert.equal(Buffer.from((await library.readLibraryFile(ctx, paper.id)).bytes).toString('utf8'), '%PDF-1.4 test', 'read again once allowed');
+  const gone = await ctx.libraryDb.insert({ id: randomUUID(), name: 'Gone', type: 'pdf', tags: [], path: path.join(homeDir, 'gone.pdf') });
+  await assert.rejects(() => library.readLibraryFile(ctx, gone.id), { message: 'Nothing is at that path' });
+});
+
 test('annotations round-trip per library id', async () => {
   const id = randomUUID();
   assert.equal(await library.readAnnotations(ctx, id), null);
