@@ -17,8 +17,12 @@ const MAX_REPLY_CHARS = 12000;
 
 const seconds = (ms) => `${Math.max(1, Math.round(ms / 1000))} s`;
 
-/** "Sol · high · 41 s · moved up from Sol medium": which model said this, kept with the answer. */
-function attribution({ level, trail, ms }) {
+/**
+ * "Sol · high · 41 s · moved up from Sol medium": which model said this, kept with the answer. "8 s" alone without `model`
+ * (@brainstorm, 2026-10-02: its model is fixed and not shown).
+ */
+function attribution({ level, trail, ms }, { model = true } = {}) {
+  if (!model) return `*${seconds(ms)}*`;
   const parts = [level.name, level.effort, seconds(ms)];
   if (trail.length) parts.push(`moved up from ${trail.map((step) => `${step.name} ${step.effort}`).join(', then ')}`);
   return `*${parts.join(' · ')}*`;
@@ -55,10 +59,10 @@ function bodyLines(text) {
   return out.length ? out : ['No answer came back.'];
 }
 
-/** The answer as lines for the document. */
-function replyLines(text, meta) {
+/** The answer as lines for the document. `options` go to its foot (attribution). */
+function replyLines(text, meta, options) {
   const lines = bodyLines(text);
-  if (meta) lines.push('', attribution(meta));
+  if (meta) lines.push('', attribution(meta, options));
   return lines.map((line) => `${REPLY_PREFIX}${line}`.trimEnd());
 }
 

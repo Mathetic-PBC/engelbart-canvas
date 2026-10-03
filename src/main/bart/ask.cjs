@@ -30,17 +30,17 @@
 // person which of the two happened.
 //
 // @brainstorm (2026-09-30): the same run with another agent. Its own system prompt (./brainstorm-system-prompt.cjs),
-// one step (./question.cjs readBrainstorm), file tools only, its own Codex home, and sessions of its own kept for two
-// idle hours. It replies with one JSON card (./card.cjs), which is written as a fenced block the editor draws; a reply
+// one fixed step (./models.cjs readBrainstorm; 2026-10-02: no flags, and its foot gives the time alone), file tools only,
+// its own Codex home, and sessions of its own kept for two idle hours. It replies with one JSON card (./card.cjs), which is written as a fenced block the editor draws; a reply
 // that does not parse is written as it came and reads as an @bart answer. An empty line asks it to start from the
 // workspace, and each turn is told how many answers it has had, so it knows when to recap.
 //
 // @discover (2026-09-30): the same again, for what to read about a problem. Its own prompt (./discover-system-prompt.cjs),
-// one step (./question.cjs readDiscover, the models file's `discover` block), @bart's file and web tools and the paper
-// tools (./papers.cjs, served by ./papers-mcp.cjs: to Claude Code by --mcp-config, to Codex by its own home's
-// config.toml), its own sessions kept for two idle hours, and half an hour a step. It may ask a card or two first, which
-// are written as @brainstorm's are; its guide is markdown, written as an @bart answer is. Each turn carries <mode>:
-// standard, or deep when a line of the exchange said --deep.
+// one step (./question.cjs readDiscover: the level of the models file's `discover` block for its mode), @bart's file and
+// web tools and the paper tools (./papers.cjs, served by ./papers-mcp.cjs: to Claude Code by --mcp-config, to Codex by its
+// own home's config.toml), its own sessions kept for two idle hours, and half an hour a step (three quarters, deep). It may
+// ask a card or two first, which are written as @brainstorm's are; its guide is markdown, written as an @bart answer is.
+// Each turn carries <mode>: quick or deep when a line of the exchange said --quick or --deep, else standard.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -63,6 +63,8 @@ const { TOOL_OF } = require('../tools/requirements.cjs');
 
 const STEP_TIMEOUT_MS = 15 * 60_000;
 const DISCOVER_TIMEOUT_MS = 30 * 60_000;
+// Opus max or Astra ultra, two hops from up to five starting points, may need longer (2026-10-02).
+const DEEP_DISCOVER_TIMEOUT_MS = 45 * 60_000;
 const THREAD_IDLE_MS = 30 * 60_000;
 const BRAINSTORM_IDLE_MS = 2 * 60 * 60_000;
 const DISCOVER_IDLE_MS = 2 * 60 * 60_000;
@@ -80,6 +82,7 @@ const PROMPTS = { bart: ['bart-system-prompt.md', BART_SYSTEM_PROMPT], brainstor
 const DISCOVER_OPENING = 'Find what I should read about the problem this workspace is about.';
 // How far each mode traces (the prompt's <mode>).
 const MODE_LIMITS = {
+  quick: 'quick. Up to two starting points; one hop backward and one forward from each; at most five sources in the guide.',
   standard: 'standard. Up to three starting points; one hop backward and one forward from each; at most eight sources in the guide.',
   deep: 'deep. Up to five starting points; one hop backward and one forward from each, then one more of each from the best of what you found; at most fifteen sources in the guide.',
 };
@@ -187,17 +190,15 @@ function firstMessage({ context, prior, question, resumed, extra = '' }) {
  */
 function turnPlan({ agent, text, turns, choice }, models) {
   const brainstorm = agent === 'brainstorm', discover = agent === 'discover';
-  const read = brainstorm ? readBrainstorm(text, models) : discover ? readDiscover(text, models) : readQuestion(choice ? withChoice(text, models, choice) : text, models);
   const prior = cleanTurns(turns, { keepEmpty: brainstorm || discover });
+  // @discover's mode, and the level it runs on, is the one the line names, else the one an earlier turn named (readDiscover).
+  const read = brainstorm ? readBrainstorm(text, models) : discover ? readDiscover(text, models, prior) : readQuestion(choice ? withChoice(text, models, choice) : text, models);
   if (discover) {
-    // The mode a line names holds from there on: an answer to a card, or a follow-up, carries on as deep as the problem was asked.
-    const mode = read.mode || [...prior].reverse().map((turn) => readDiscover(turn.question, models).mode).find(Boolean) || 'standard';
-    const opening = (question) => question || DISCOVER_OPENING;
     return {
-      agent, brainstorm, ...read, mode, prior,
-      asked: opening(read.question),
+      agent, brainstorm, ...read, prior,
+      asked: read.question || DISCOVER_OPENING,
       shown: prior.map((turn) => ({ ...turn, question: turn.question || DISCOVER_OPENING })),
-      extra: `<mode>${MODE_LIMITS[mode]}</mode>`,
+      extra: `<mode>${MODE_LIMITS[read.mode]}</mode>`,
     };
   }
   if (!brainstorm) return { agent: 'bart', brainstorm, ...read, prior, asked: read.question, shown: prior, extra: '' };
@@ -287,6 +288,12 @@ function replyBody(agent, text) {
 /** A pick handed on to be kept; keeping it never stands in a question's way. */
 function remember(onPicked, step) {
   try { onPicked({ provider: step.provider, model: step.key, effort: step.effort }); } catch { /* a convenience only */ }
+}
+
+/** What a step beginning shows while the turn runs: @brainstorm's model is fixed and never named (2026-10-02, B-05). */
+function stepShown(agent, onProgress) {
+  if (agent !== 'brainstorm' || !onProgress) return onProgress;
+  return ({ name, effort, ...rest }) => onProgress(rest);
 }
 
 // `tools` (../tools/manager.cjs, optional): a question waits for an install or update of its CLI to end and
@@ -387,7 +394,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
   async function ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart' }, { onProgress } = {}) {
     const models = readModels();
     const bart = agent === 'bart';
-    const { question, provider, steps, pinned, prior, asked, shown, extra } = turnPlan({ agent, text, turns, choice: bart ? choice : null }, models);
+    const { question, provider, steps, pinned, prior, asked, shown, extra, mode } = turnPlan({ agent, text, turns, choice: bart ? choice : null }, models);
     if (!question && bart) throw new BartError('failed', 'There is no question on the line.');
     if (pinned && bart) remember(onPicked, steps[0]);
     const store = { bart: threads, brainstorm: brainstormThreads, discover: discoverThreads }[agent];
@@ -406,10 +413,10 @@ function createBart({ readModels, environment = process.env, runDirectory = path
         const only = {
           bart: {},
           brainstorm: { allowed: BRAINSTORM_TOOLS, home: brainstormCodexHome, web: false },
-          discover: { home: discoverCodexHome, mcp: true, timeout: DISCOVER_TIMEOUT_MS },
+          discover: { home: discoverCodexHome, mcp: true, timeout: mode === 'deep' ? DEEP_DISCOVER_TIMEOUT_MS : DISCOVER_TIMEOUT_MS },
         }[agent];
         cli = (provider === 'anthropic' ? claudeTurns : codexTurns)({ system: loadSystemPrompt(ctx.dataRoot, agent), cwd, dirs: context.dirs, stem, signal: controller.signal, short: pathLabeller(context.dirs), onUpdate: feed.take, resume: session, ...only });
-        return await climb({ steps, pinned, first: firstMessage({ context, prior: shown, question: sent, resumed: !!session, extra }), session, turn: (input) => { feed.reset(); return cli.turn(input); }, onProgress });
+        return await climb({ steps, pinned, first: firstMessage({ context, prior: shown, question: sent, resumed: !!session, extra }), session, turn: (input) => { feed.reset(); return cli.turn(input); }, onProgress: stepShown(agent, onProgress) });
       } finally { if (cli) cli.done(); }
     };
     const cliName = TOOL_OF[provider];
@@ -433,7 +440,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
       const body = replyBody(agent, out.text);
       // Kept under what the document will say once this answer is in it: the next follow-up is found by that.
       if (out.session) store.keep(threadKey(projectId, ref, [...prior, { question: String(text).trim(), answer: answerText(body) }]), { provider, session: out.session, projectId, workspaceId });
-      return { lines: replyLines(body, meta), meta };
+      return { lines: replyLines(body, meta, { model: agent !== 'brainstorm' }), meta };
     } finally {
       feed.end();
       running.delete(askId);
@@ -562,7 +569,7 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
       };
       try {
         const out = await climb({
-          steps, pinned, onProgress,
+          steps, pinned, onProgress: stepShown(agent, onProgress),
           first: message, session: held ? held.session : null,
           // What it was sent is what it reports: a resumed session gets the question alone, a new one gets everything.
           turn: async ({ message: sent }) => ({ session: 'fake', text: await act(brainstorm ? fakeCard(context, { ...plan, text }, models) : discover ? fakeDiscover(context, plan) : /hard/.test(question) && /step 1 of/.test(sent) ? 'ESCALATE: the question says it is hard' : `FAKE ANSWER to "${question}".\n\n## Seen\n- **${context.documents.length}** characters of documents\n- \`${steps.length}\` steps${prior.length ? `\n- ${/<conversation>/.test(sent) ? `a new session, given ${prior.length} earlier ${prior.length === 1 ? 'turn' : 'turns'}` : /<engelbart>/.test(sent) ? 'a new session, given no earlier turns' : 'the same session, given the question alone'}` : ''}${/code/.test(question) ? `\n\nThe same as JSON:\n\n\`\`\`json\n{\n  "fake": true,\n  "steps": ${steps.length},\n  "note": "# not a heading"\n}\n\`\`\`` : ''}`) }),
@@ -570,7 +577,7 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
         const meta = { provider, level: out.level, trail: out.trail, ms: out.ms, pinned };
         const body = replyBody(agent, out.text);
         store.keep(threadKey(projectId, ref, [...prior, { question: String(text).trim(), answer: answerText(body) }]), { provider, session: out.session, projectId, workspaceId });
-        return { lines: replyLines(body, meta), meta };
+        return { lines: replyLines(body, meta, { model: agent !== 'brainstorm' }), meta };
       } finally { feed.end(); waits.delete(askId); }
     },
     stop(askId) { const cancel = waits.get(askId); if (cancel) cancel(); return !!cancel; },
@@ -578,4 +585,4 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
   };
 }
 
-module.exports = { createBart, createFakeBart, createThreads, threadKey, cleanTurns, turnPlan, climb, levelBlock, loadSystemPrompt, replyBody, writeCodexConfig, BartError, ESCALATE_RE, THREAD_IDLE_MS, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS, AGENTS };
+module.exports = { createBart, createFakeBart, createThreads, threadKey, cleanTurns, turnPlan, climb, levelBlock, loadSystemPrompt, replyBody, writeCodexConfig, BartError, ESCALATE_RE, THREAD_IDLE_MS, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS, DISCOVER_TIMEOUT_MS, DEEP_DISCOVER_TIMEOUT_MS, MODE_LIMITS, AGENTS };

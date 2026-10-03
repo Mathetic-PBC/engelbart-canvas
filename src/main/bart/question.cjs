@@ -101,32 +101,36 @@ function readQuestion(text, models) {
   return { question: rest, provider, steps: [step(rung)], pinned };
 }
 
-/**
- * The text after "@brainstorm" (2026-09-30) → what readQuestion gives, on one step: the provider's step in the models
- * file's `brainstorm` block (Sonnet high, Sol medium), on the provider an @bart question would start on. No ladder, so
- * nothing to move up to. Flags still pick by hand, as they do on an @bart line.
- */
-function readBrainstorm(text, models, block = 'brainstorm') {
-  const read = readQuestion(text, models);
-  if (read.pinned) return read;
-  const provider = read.provider, entry = models.providers[provider];
-  const held = models[block] && models[block].providers ? models[block].providers[provider] : null;
-  const rung = held && entry.models[held.model] && entry.efforts.includes(held.effort) ? held : entry.ladder[0];
-  return { question: read.question, provider, steps: [{ provider, key: rung.model, model: entry.models[rung.model].id, name: entry.models[rung.model].name, effort: rung.effort }], pinned: false };
-}
+// How far @discover traces: `--quick`, `--standard` or `--deep`, anywhere on the line (they name no model, so readFlags
+// leaves them). Each is a level of the models file's `discover` block (./models.cjs DEFAULT_DISCOVER).
+const MODE_RE = /(^|\s)--(quick|standard|deep)(?=\s|$)/gi;
+const MODES = ['quick', 'standard', 'deep'];
 
-// How far @discover traces: `--deep` or `--standard`, anywhere on the line (they name no model, so readFlags leaves them).
-const MODE_RE = /(^|\s)--(deep|standard)(?=\s|$)/gi;
-const MODES = ['standard', 'deep'];
-
-/**
- * The text after "@discover" (2026-09-30) → what readBrainstorm gives, on the models file's `discover` block, and `mode`:
- * 'deep' or 'standard' when the line says so, else null (the exchange's mode carries on: ./ask.cjs turnPlan).
- */
-function readDiscover(text, models) {
+/** The mode an @discover line names, the last when it names two, else null; and the line without it. → { mode, rest } */
+function readMode(text) {
   let mode = null;
   const rest = String(text || '').replace(MODE_RE, (all, lead, word) => { mode = word.toLowerCase(); return lead; }).replace(/\s+/g, ' ').trim();
-  return { ...readBrainstorm(rest, models, 'discover'), mode };
+  return { mode, rest };
+}
+
+/**
+ * The text after "@discover" (2026-09-30; three levels 2026-10-02) → what readQuestion gives, on one step, and `mode`: the
+ * one the line names, else the last one an earlier turn of the exchange named (`earlier`, its turns { question }: an
+ * answer to a card, or a follow-up, carries on as deep as the problem was asked), else 'standard'. The step is that mode's
+ * level in the models file's `discover` block, on the provider an @bart question would start on, else that provider's first
+ * step. No ladder, so nothing to move up to. A model or effort flag still picks by hand, for that line only.
+ */
+function readDiscover(text, models, earlier = []) {
+  const { mode: named, rest } = readMode(text);
+  const carried = [...(Array.isArray(earlier) ? earlier : [])].reverse().map((turn) => readMode(turn && turn.question).mode).find(Boolean);
+  const mode = named || carried || 'standard';
+  const read = readQuestion(rest, models);
+  if (read.pinned) return { ...read, mode };
+  const provider = read.provider, entry = models.providers[provider];
+  const levels = models.discover && models.discover.providers ? models.discover.providers[provider] : null;
+  const held = levels ? levels[mode] : null;
+  const rung = held && entry.models[held.model] && entry.efforts.includes(held.effort) ? held : entry.ladder[0];
+  return { question: read.question, provider, steps: [{ provider, key: rung.model, model: entry.models[rung.model].id, name: entry.models[rung.model].name, effort: rung.effort }], pinned: false, mode };
 }
 
 // A full Build of what follows (2026-10-02): `--build` anywhere on an @bart line, in any case.
@@ -158,4 +162,4 @@ function withChoice(text, models, { model, effort }) {
   return [`--${model}`, `--${effort}`, rest].filter(Boolean).join(' ');
 }
 
-module.exports = { EFFORTS, EFFORT_LABELS, MODES, effortOf, modelOf, readFlags, ladderOf, readQuestion, readBrainstorm, readDiscover, readBuildFlag, buildRequestOf, withChoice };
+module.exports = { EFFORTS, EFFORT_LABELS, MODES, effortOf, modelOf, readFlags, ladderOf, readQuestion, readMode, readDiscover, readBuildFlag, buildRequestOf, withChoice };

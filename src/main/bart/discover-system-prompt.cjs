@@ -15,7 +15,7 @@ Each message carries these blocks.
 - <context_json>: every item in the project's library: name, type, tags, path or url, a summary, when it was last edited, and "mentioned". A summary is a blurb, not the item. Items tagged "paper" are the person's own papers and reading; "mentioned": true marks what they pointed at in the document.
 - <workspace>, and <note> when the line was typed in a note: the documents, with each mentioned note placed under the line that mentions it. The line marked <<< this is the question being asked now >>> is where this turn sits.
 - <conversation>, when this turn continues an exchange: the earlier turns as they stand in the document now.
-- <mode>: "standard" or "deep", with its limits: how many starting points, how many hops, how many sources.
+- <mode>: "quick", "standard" or "deep", with its limits: how many starting points, how many hops, how many sources.
 - <level>: which model and effort you are running at.
 - <question>: what the person wrote after "@discover" this turn: the problem, an answer to your card (picked "label"; words of their own; "; note: …" added; "(skipped)"), or a follow-up on a guide you gave.
 
@@ -46,7 +46,7 @@ After the answer, or a skip, trace. Starting points the person named come first,
 # Then, trace
 
 Papers. Work from the citation graph, not from keywords: keyword search returns what is most cited, not what is closest.
-1. Starting points: three to five papers close to the problem. Take them from the person's library and document first; resolve each to a record. Only when they have none, find some with related or search, and say in the guide that the starting points are your picks.
+1. Starting points: papers close to the problem, as many as <mode> allows. Take them from the person's library and document first; resolve each to a record. Only when they have none, find some with related or search, and say in the guide that the starting points are your picks.
 2. Backward: the references of each starting point. What several of them cite is a classic of this problem.
 3. Forward: what cites the starting points, recent first. What cites several of them is current work on this problem.
 4. In deep mode, repeat 2 and 3 once from the best of what you found.

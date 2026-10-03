@@ -37,7 +37,7 @@ import { SAVE_LABEL } from '../model/stage.js';
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 export const BART_ITEM = { id: 'bart', type: 'chat', name: 'bart', title: 'Bart', summary: 'Ask a question about this document, the project\'s code or the web. Add --opus or --high to pick the model or the effort by hand.', facts: 'reads, never edits' };
-export const DISCOVER_ITEM = { id: 'discover', type: 'chat', name: 'discover', title: 'Discover', summary: 'Find what to read about a problem, and where in it to look: it traces the citations of the papers in your library and the pages of the people you follow. Add --deep to go further.', facts: 'finds, never concludes' };
+export const DISCOVER_ITEM = { id: 'discover', type: 'chat', name: 'discover', title: 'Discover', summary: 'Find what to read about a problem, and where in it to look: it traces the citations of the papers in your library and the pages of the people you follow. Add --quick for a fast look, or --deep to go further.', facts: 'finds, never concludes' };
 export const BRAINSTORM_ITEM = { id: 'brainstorm', type: 'chat', name: 'brainstorm', title: 'Brainstorm', summary: 'Find what you want to work on: it asks one question at a time, with options drawn from this workspace and the library, then recaps what you said.', facts: 'asks, never proposes' };
 
 const UNDER_BART = ['pending', 'reply'];
@@ -377,11 +377,12 @@ export default class DocEditor extends React.Component {
     }).join('');
   }
   // An @bart line in pieces: its recognised flags (src/main/bart/question.cjs reads them, as the run will) each a token of
-  // their own, the rest split as any line is. Shown verbatim, so offsets in the line are what they were.
+  // their own, the rest split as any line is. Shown verbatim, so offsets in the line are what they were. An @brainstorm
+  // line has none: its model is fixed and a flag picks nothing (main/bart/models.cjs readBrainstorm).
   bartTokens(line, p) {
     const models = this.props.models, base = line.length - p.text.length, tokens = [], flags = new Set();
     let at = 0;
-    for (const [from, to] of models ? readFlags(p.text, models).spans : []) {
+    for (const [from, to] of models && agentOf(p) !== 'brainstorm' ? readFlags(p.text, models).spans : []) {
       tokens.push(...line.slice(at, base + from).split(INLINE).filter(Boolean)); flags.add(tokens.length); tokens.push(line.slice(base + from, base + to)); at = base + to;
     }
     tokens.push(...line.slice(at).split(INLINE).filter(Boolean));

@@ -15,7 +15,7 @@
 const path = require('node:path');
 const { readJson } = require('../store/home.cjs');
 const { carryDefaults } = require('../store/defaults.cjs');
-const { EFFORTS, effortOf, modelOf, readFlags, readQuestion, readBrainstorm, readDiscover, withChoice } = require('./question.cjs');
+const { EFFORTS, MODES, effortOf, modelOf, readFlags, readQuestion, readDiscover, withChoice } = require('./question.cjs');
 const { TOOL_OF } = require('../tools/requirements.cjs');
 
 const MODELS_FILE = 'model-effort-inline-question.json';
@@ -79,27 +79,26 @@ const BART_DEFAULTS = {
   },
 };
 
-// @brainstorm (2026-09-30): one step per provider, no ladder, on the provider an @bart question would start on. Keys name
-// @bart's models above, so a model taken out of that list is not run here either.
-const DEFAULT_BRAINSTORM = {
-  about: 'The model and effort for @brainstorm, the agent that asks one card at a time to help find what to work on. One step per provider and no ladder: it runs on the provider an @bart question would start on, at that provider\'s step here. The models are the ones listed above for @bart. `@brainstorm --opus …` picks by hand for that line.',
-  providers: {
-    openai: { model: 'sol', effort: 'medium' },
-    anthropic: { model: 'sonnet', effort: 'high' },
-  },
+// @brainstorm (2026-09-30; fixed 2026-10-02): one step per provider, no ladder, on the provider an @bart question would
+// start on. Not in the models file and not picked by flags. Keys name @bart's models above; a model taken out of that list
+// (or an effort it no longer offers) gives way to that provider's first step (readBrainstorm).
+const BRAINSTORM_STEPS = {
+  openai: { model: 'sol', effort: 'medium' },
+  anthropic: { model: 'sonnet', effort: 'high' },
 };
 
-// @discover (2026-09-30): the same kind of block. It reads, looks papers up and follows citations for minutes, and every
-// entry it writes must be checked against what it found, so it starts where @bart's ladder goes for careful work.
+// @discover (2026-09-30; three levels 2026-10-02): per provider a step for each of question.cjs MODES. It reads, looks
+// papers up and follows citations for minutes, and every entry it writes must be checked against what it found, so a plain
+// @discover starts where @bart's ladder goes for careful work; --quick takes a fast look, --deep goes as far as either goes.
 const DEFAULT_DISCOVER = {
-  about: 'The model and effort for @discover, the agent that finds what to read about a problem by following the citations of the papers in the library. One step per provider and no ladder: it runs on the provider an @bart question would start on, at that provider\'s step here. The models are the ones listed above for @bart. `@discover --sonnet …` picks by hand for that line; `--deep` traces further.',
+  about: 'The models and efforts for @discover, the agent that finds what to read about a problem by following the citations of the papers in the library. Three levels per provider and no ladder: `quick` (`@discover --quick …`, a fast look: at most five sources), `standard` (a plain `@discover …`: at most eight) and `deep` (`@discover --deep …`, a second hop: at most fifteen). It runs on the provider an @bart question would start on, at that provider\'s level here, and an answer or a follow-up stays on the level its exchange was asked at. The models are the ones listed above for @bart. `@discover --sonnet …` or `--high` picks by hand for that line.',
   providers: {
-    openai: { model: 'sol', effort: 'high' },
-    anthropic: { model: 'opus', effort: 'high' },
+    openai: { quick: { model: 'sol', effort: 'medium' }, standard: { model: 'astra', effort: 'high' }, deep: { model: 'astra', effort: 'ultra' } },
+    anthropic: { quick: { model: 'sonnet', effort: 'medium' }, standard: { model: 'opus', effort: 'high' }, deep: { model: 'opus', effort: 'max' } },
   },
 };
 
-const DEFAULT_MODELS = { ...BART_DEFAULTS, build: DEFAULT_BUILD, brainstorm: DEFAULT_BRAINSTORM, discover: DEFAULT_DISCOVER };
+const DEFAULT_MODELS = { ...BART_DEFAULTS, build: DEFAULT_BUILD, discover: DEFAULT_DISCOVER };
 
 /** `defaults` with some models' ids replaced: { openai: { sol: 'gpt-6-sol' } }. */
 function withIds(defaults, ids) {
@@ -131,6 +130,16 @@ const BART_0927 = (() => {
 // Keep the shipped 5.6 defaults as migration bases, so untouched model IDs move to 6.
 const PREVIOUS_BART_DEFAULTS = withIds(BART_0927, { openai: { luna: 'gpt-5.6-luna', sol: 'gpt-5.6-sol' } });
 
+// @brainstorm's and @discover's blocks as 2026-09-30 wrote them: one step per provider each.
+const BRAINSTORM_0930 = {
+  about: 'The model and effort for @brainstorm, the agent that asks one card at a time to help find what to work on. One step per provider and no ladder: it runs on the provider an @bart question would start on, at that provider\'s step here. The models are the ones listed above for @bart. `@brainstorm --opus …` picks by hand for that line.',
+  providers: { openai: { model: 'sol', effort: 'medium' }, anthropic: { model: 'sonnet', effort: 'high' } },
+};
+const DISCOVER_0930 = {
+  about: 'The model and effort for @discover, the agent that finds what to read about a problem by following the citations of the papers in the library. One step per provider and no ladder: it runs on the provider an @bart question would start on, at that provider\'s step here. The models are the ones listed above for @bart. `@discover --sonnet …` picks by hand for that line; `--deep` traces further.',
+  providers: { openai: { model: 'sol', effort: 'high' }, anthropic: { model: 'opus', effort: 'high' } },
+};
+
 // Every earlier DEFAULT_MODELS, oldest first. A file written before defaults were carried forward is
 // compared with these to tell the values its owner left alone from the ones they chose.
 const PAST_DEFAULT_MODELS = [
@@ -149,6 +158,10 @@ const PAST_DEFAULT_MODELS = [
   { ...PREVIOUS_BART_DEFAULTS, build: BUILD_0925 },
   // 2026-09-27 to 2026-09-29: both on GPT-6, @bart on Codex first.
   { ...BART_0927, build: BUILD_0925 },
+  // 2026-09-29 to 2026-09-30: GPT-6.1 Sol, Sonnet 5.5, Claude Code first, Build on a provider of its own.
+  { ...BART_DEFAULTS, build: DEFAULT_BUILD },
+  // 2026-09-30 to 2026-10-02: @brainstorm and @discover, one step each, both in the file.
+  { ...BART_DEFAULTS, build: DEFAULT_BUILD, brainstorm: BRAINSTORM_0930, discover: DISCOVER_0930 },
 ];
 
 const isObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -183,20 +196,63 @@ function normalizeBuild(value) {
 }
 
 /**
- * @brainstorm's block, or @discover's (`defaults`): per provider one step of that provider's @bart models and efforts, else
- * the default step, else its ladder's first.
+ * An @discover provider's levels as the file holds them, { quick, standard, deep }. The one-step shape 2026-09-30 wrote
+ * ({ model, effort }) is that provider's `standard` level, the half of it the person left alone taken from that day's
+ * default (carryDefaults drops a value equal to its base); quick and deep come from the levels beside it, else the defaults.
  */
-function normalizeBrainstorm(value, providers, defaults = DEFAULT_BRAINSTORM) {
+function discoverLevels(from, key) {
+  if (!isObject(from)) return {};
+  if (from.model === undefined && from.effort === undefined) return from;
+  const old = DISCOVER_0930.providers[key] || {};
+  const { model = old.model, effort = old.effort, ...levels } = from;
+  return { ...DEFAULT_DISCOVER.providers[key], ...levels, standard: { model, effort } };
+}
+
+/**
+ * @discover's block: per provider a step for each mode, each one of that provider's @bart models and efforts, else that
+ * level's default, else the provider's ladder's first.
+ */
+function normalizeDiscover(value, providers) {
   const given = isObject(value) ? value : {};
   const out = {};
   for (const [key, entry] of Object.entries(providers)) {
-    const from = isObject(given.providers) && isObject(given.providers[key]) ? given.providers[key] : null;
-    const wanted = from ? { model: String(from.model || '').toLowerCase(), effort: effortOf(from.effort) } : null;
+    const levels = discoverLevels(isObject(given.providers) ? given.providers[key] : null, key);
     const usable = (step) => !!step && !!entry.models[step.model] && entry.efforts.includes(step.effort);
-    const step = [wanted, defaults.providers[key]].find(usable) || entry.ladder[0];
-    out[key] = { model: step.model, effort: step.effort };
+    out[key] = {};
+    for (const mode of MODES) {
+      const from = levels[mode];
+      const wanted = isObject(from) ? { model: String(from.model || '').toLowerCase(), effort: effortOf(from.effort) } : null;
+      const step = [wanted, (DEFAULT_DISCOVER.providers[key] || {})[mode]].find(usable) || entry.ladder[0];
+      out[key][mode] = { model: step.model, effort: step.effort };
+    }
   }
-  return { about: typeof given.about === 'string' ? given.about : defaults.about, providers: out };
+  return { about: typeof given.about === 'string' ? given.about : DEFAULT_DISCOVER.about, providers: out };
+}
+
+/**
+ * The file as the app reads it, for carryDefaults to write: an @discover provider still in the one-step shape, or holding
+ * the step left of it beside levels the new defaults brought, as its three levels (discoverLevels). Nothing else changes.
+ */
+function fileShape(value) {
+  const discover = isObject(value) ? value.discover : null;
+  if (!isObject(discover) || !isObject(discover.providers)) return value;
+  const providers = { ...discover.providers };
+  for (const key of Object.keys(DEFAULT_DISCOVER.providers)) {
+    const from = providers[key];
+    if (isObject(from) && (from.model !== undefined || from.effort !== undefined)) providers[key] = discoverLevels(from, key);
+  }
+  return { ...value, discover: { ...discover, providers } };
+}
+
+/**
+ * The text after "@brainstorm" (2026-09-30; fixed 2026-10-02) → what readQuestion gives, on one step: BRAINSTORM_STEPS's,
+ * on the provider an @bart question would start on, else that provider's first step. No ladder, so nothing to move up to.
+ * A flag picks nothing here: it is taken off the question and the step stays (B-02).
+ */
+function readBrainstorm(text, models) {
+  const provider = models.provider, entry = models.providers[provider], held = BRAINSTORM_STEPS[provider];
+  const rung = held && entry.models[held.model] && entry.efforts.includes(held.effort) ? held : entry.ladder[0];
+  return { question: readFlags(text, models).rest, provider, steps: [{ provider, key: rung.model, model: entry.models[rung.model].id, name: entry.models[rung.model].name, effort: rung.effort }], pinned: false };
 }
 
 /** Whatever the file holds, made safe to run: unknown providers dropped, bad models, efforts and steps replaced by the defaults. */
@@ -214,7 +270,7 @@ function normalizeModels(value) {
       ladder: ladder.length ? ladder : fallback.ladder.filter((step) => held[step.model]).length ? fallback.ladder.filter((step) => held[step.model]) : [{ model: Object.keys(held)[0], effort: 'medium' }],
     };
   }
-  return { about: typeof given.about === 'string' ? given.about : DEFAULT_MODELS.about, provider: providers[given.provider] ? given.provider : DEFAULT_MODELS.provider, providers, build: normalizeBuild(given.build), brainstorm: normalizeBrainstorm(given.brainstorm, providers), discover: normalizeBrainstorm(given.discover, providers, DEFAULT_DISCOVER) };
+  return { about: typeof given.about === 'string' ? given.about : DEFAULT_MODELS.about, provider: providers[given.provider] ? given.provider : DEFAULT_MODELS.provider, providers, build: normalizeBuild(given.build), discover: normalizeDiscover(given.discover, providers) };
 }
 
 /**
@@ -297,7 +353,7 @@ function loadModels(homeRoot, { only } = {}) {
   const file = path.join(homeRoot, MODELS_FILE);
   let held;
   try {
-    held = carryDefaults({ file, defaults: DEFAULT_MODELS, past: PAST_DEFAULT_MODELS, backupDir: path.join(homeRoot, '.backups') }).value;
+    held = carryDefaults({ file, defaults: DEFAULT_MODELS, past: PAST_DEFAULT_MODELS, normalize: fileShape, backupDir: path.join(homeRoot, '.backups') }).value;
   } catch {
     held = readJson(file); // read-only home: what is there (or the defaults) still applies
   }
@@ -305,4 +361,4 @@ function loadModels(homeRoot, { only } = {}) {
   return only ? onlyProviders(models, only) : models;
 }
 
-module.exports = { MODELS_FILE, EFFORTS, DEFAULT_MODELS, DEFAULT_BUILD, DEFAULT_BRAINSTORM, DEFAULT_DISCOVER, PAST_DEFAULT_MODELS, normalizeModels, normalizeBuild, normalizeBrainstorm, buildChoices, resolveBuildChoice, onlyProviders, preferUsable, startingAt, loadModels, effortOf, modelOf, readFlags, readQuestion, readBrainstorm, readDiscover, withChoice };
+module.exports = { MODELS_FILE, EFFORTS, MODES, DEFAULT_MODELS, DEFAULT_BUILD, BRAINSTORM_STEPS, DEFAULT_DISCOVER, PAST_DEFAULT_MODELS, normalizeModels, normalizeBuild, normalizeDiscover, buildChoices, resolveBuildChoice, onlyProviders, preferUsable, startingAt, loadModels, effortOf, modelOf, readFlags, readQuestion, readBrainstorm, readDiscover, withChoice };

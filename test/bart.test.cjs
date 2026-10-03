@@ -208,7 +208,7 @@ test('untouched 5.6 models move to the latest in a model file without a saved de
 test('a file left as 2026-09-27 wrote it moves to GPT-6.1 Sol, Sonnet 5.5, Claude Code first and Build on Opus; a choice of its own stays', () => {
   for (const withBase of [true, false]) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-models-0929-'));
-    const shipped = JSON.parse(JSON.stringify(PAST_DEFAULT_MODELS.at(-1)));
+    const shipped = JSON.parse(JSON.stringify(PAST_DEFAULT_MODELS[3]));
     const mine = JSON.parse(JSON.stringify(shipped));
     mine.providers.openai.ladder = [{ model: 'luna', effort: 'high' }];
     fs.writeFileSync(path.join(root, MODELS_FILE), JSON.stringify(mine));
@@ -248,6 +248,8 @@ test('climb: a long reply that merely starts with the word is an answer, and a m
 test('an answer becomes kept lines that say which model gave it; quotes are flattened, code blocks kept as written', async () => {
   const meta = { level: { name: 'Sol', effort: 'high' }, trail: [{ name: 'Sol', effort: 'medium' }], ms: 41_400 };
   assert.equal(attribution(meta), '*Sol · high · 41 s · moved up from Sol medium*');
+  assert.equal(attribution(meta, { model: false }), '*41 s*', '@brainstorm\'s foot: the time alone (2026-10-02)');
+  assert.deepEqual(replyLines('One.', meta, { model: false }), ['bart> One.', 'bart>', 'bart> *41 s*']);
   const written = replyLines('One.\n\n\n\n## Two  \n> quoted\n- item\r\n', meta);
   assert.deepEqual(written, ['bart> One.', 'bart>', 'bart> ## Two', 'bart> quoted', 'bart> - item', 'bart>', 'bart> *Sol · high · 41 s · moved up from Sol medium*']);
   // 2026-09-22: a fenced block is kept line for line, indent, blank lines and all; one left open is closed.
@@ -649,7 +651,7 @@ test('what can be resumed outlives the app, and another workspace open in betwee
 
 const card = require('../src/main/bart/card.cjs');
 const { BRAINSTORM_SYSTEM_PROMPT } = require('../src/main/bart/brainstorm-system-prompt.cjs');
-const { readBrainstorm, DEFAULT_BRAINSTORM } = require('../src/main/bart/models.cjs');
+const { readBrainstorm, BRAINSTORM_STEPS } = require('../src/main/bart/models.cjs');
 const { loadSystemPrompt, BRAINSTORM_IDLE_MS } = require('../src/main/bart/ask.cjs');
 
 const FOCUS = { say: '', card: 'focus', focus: { title: 'Which one?', options: [{ label: 'Retries', why: 'In notes.md.' }, { label: 'The "slow" path' }] }, ready: false };
@@ -768,22 +770,48 @@ test('a map card round-trips through the document, answers as before, and its an
   assert.equal(card.answersSoFar([{ question: '', answer: kept.body }], '(skipped)'), 0);
 });
 
-test('@brainstorm runs on one step: Sonnet high on Claude Code, Sol medium on Codex; flags still pick, and the file can change it', () => {
+test('@brainstorm runs on its fixed step: Sonnet high on Claude Code, Sol medium on Codex; a flag picks nothing and is not part of the question, and the models file has no say (2026-10-02)', () => {
   const step = (text, models) => readBrainstorm(text, models).steps.map((s) => `${s.name} ${s.effort}`);
+  assert.deepEqual(BRAINSTORM_STEPS, { openai: { model: 'sol', effort: 'medium' }, anthropic: { model: 'sonnet', effort: 'high' } });
   assert.deepEqual(step('', DEFAULTS), ['Sonnet high']);
   assert.deepEqual(step('picked "x"', MODELS), ['Sol medium']);
-  assert.deepEqual([step('--opus picked "x"', DEFAULTS), readBrainstorm('--opus picked "x"', DEFAULTS).question], [['Opus high'], 'picked "x"']);
+  for (const [models, at] of [[DEFAULTS, 'Sonnet high'], [MODELS, 'Sol medium']]) {
+    const read = readBrainstorm('--opus --max hello', models);
+    assert.deepEqual([step('--opus --max hello', models), read.question, read.pinned], [[at], 'hello', false], `--opus --max on ${at}`);
+  }
+  assert.deepEqual([readBrainstorm('--fable picked "x" --high', MODELS).provider, readBrainstorm('--fable picked "x" --high', MODELS).question], ['openai', 'picked "x"'], 'a model of the other provider moves nothing either');
   assert.equal(readBrainstorm('', DEFAULTS).pinned, false, 'nothing picked by hand, so nothing is kept as the next start');
-  assert.deepEqual(DEFAULTS.brainstorm.providers, DEFAULT_BRAINSTORM.providers);
-  const edited = normalizeModels({ ...DEFAULT_MODELS, brainstorm: { providers: { anthropic: { model: 'Opus', effort: 'Extra High' }, openai: { model: 'gone', effort: 'high' } } } });
-  assert.deepEqual(edited.brainstorm.providers, { openai: { model: 'sol', effort: 'medium' }, anthropic: { model: 'opus', effort: 'xhigh' } });
-  assert.deepEqual(step('', edited), ['Opus xhigh']);
+  assert.deepEqual(step('', startingAt(DEFAULTS, 'bart', { provider: 'openai', model: 'astra', effort: 'xhigh' })), ['Sol medium'], 'on the provider an @bart question would start on, at its own step');
+  // A brainstorm block left in a file is not read; a provider without the step's model starts on its ladder's first step.
+  const edited = normalizeModels({ ...DEFAULT_MODELS, brainstorm: { providers: { anthropic: { model: 'opus', effort: 'xhigh' }, openai: { model: 'astra', effort: 'high' } } } });
+  assert.equal(edited.brainstorm, undefined);
+  assert.deepEqual([step('', edited), step('', { ...edited, provider: 'openai' })], [['Sonnet high'], ['Sol medium']]);
+  const anthropic = DEFAULT_MODELS.providers.anthropic;
+  const noSonnet = normalizeModels({ ...DEFAULT_MODELS, providers: { ...DEFAULT_MODELS.providers, anthropic: { ...anthropic, models: { opus: anthropic.models.opus, fable: anthropic.models.fable }, ladder: [{ model: 'opus', effort: 'medium' }] } } });
+  assert.deepEqual(step('', noSonnet), ['Opus medium']);
+  assert.ok(!('brainstorm' in DEFAULT_MODELS), 'the models file no longer offers it');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-models-brainstorm-'));
-  const shipped = JSON.parse(JSON.stringify(DEFAULT_MODELS));
-  delete shipped.brainstorm;
-  fs.writeFileSync(path.join(root, MODELS_FILE), JSON.stringify(shipped));
   loadModels(root);
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, MODELS_FILE), 'utf8')).brainstorm, DEFAULT_BRAINSTORM, 'a file written before @brainstorm is given its block');
+  assert.ok(!('brainstorm' in JSON.parse(fs.readFileSync(path.join(root, MODELS_FILE), 'utf8'))), 'a new file is written without one');
+});
+
+test('the editor marks no flag on an @brainstorm line, and still marks them on @bart and @discover lines (B-03)', async () => {
+  const Module = require('node:module');
+  const { buildSync } = require('esbuild');
+  const filename = path.join(__dirname, '__DocEditor-flags-unit.cjs');
+  const bundled = buildSync({ entryPoints: [path.join(__dirname, '../src/renderer/workspace/DocEditor.jsx')], bundle: true, platform: 'node', format: 'cjs', jsx: 'automatic', write: false, external: ['react', 'react-dom'], loader: { '.css': 'empty' } });
+  const compiled = new Module(filename, module);
+  compiled.paths = module.paths;
+  compiled._compile(bundled.outputFiles[0].text, filename);
+  const editor = new compiled.exports.default({ models: DEFAULTS });
+  editor.props = { models: DEFAULTS };
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
+  const marked = (line) => { const { tokens, flags } = editor.bartTokens(line, model.parseLine(line)); return [...flags].map((k) => tokens[k]); };
+  assert.deepEqual(marked('@brainstorm --opus hi'), []);
+  assert.deepEqual(marked('@Brainstorm --opus --max hello'), []);
+  assert.deepEqual(marked('@bart --opus hi'), ['--opus']);
+  assert.deepEqual(marked('@discover --sonnet why --deep'), ['--sonnet']);
+  assert.match(compiled.exports.DISCOVER_ITEM.summary, /Add --quick for a fast look, or --deep to go further\.$/);
 });
 
 test('@brainstorm\'s system prompt says what the harness relies on, and a file replaces it', () => {
@@ -823,6 +851,7 @@ test('the real runner for @brainstorm: file tools only, no web, its own Codex ho
   assert.equal(fs.readFileSync(path.join(`${codexHome}-brainstorm`, 'AGENTS.md'), 'utf8'), BRAINSTORM_SYSTEM_PROMPT, 'the JSON-only rule reaches Codex through its instructions file');
   assert.match(calls[0].input, /<answers>Meaningful answers in this exchange so far, this one included: 0\.[^\n]*<\/answers>\n\n<level>You are running as Sol at medium effort, step 1 of 1\. No higher step exists\.<\/level>\n\n<question>\nStart from this workspace\.\n<\/question>$/);
   assert.equal(first.lines[0], 'bart> ```json');
+  assert.match(first.lines[first.lines.length - 1], /^bart> \*\d+ s\*$/, 'the foot gives the time alone');
   assert.deepEqual(first.meta.trail, []);
   assert.deepEqual([threads.size(), brainstormThreads.size()], [0, 1], 'kept apart from @bart\'s');
 
@@ -838,10 +867,23 @@ test('the real runner for @brainstorm: file tools only, no web, its own Codex ho
   assert.equal(third.lines[0], 'bart> I would rather just talk.', 'not a card: written as it came');
 
   replies.push(JSON.stringify(FOCUS));
-  await ask('b4', '--sonnet', [], {});
+  const progress = [];
+  await bart.ask(ctx, project.id, { askId: 'b4', ref, workspaceId: workspace.id, text: '--sonnet --max', turns: [], agent: 'brainstorm' }, { onProgress: (p) => progress.push(p) });
+  const flagged = calls[calls.length - 1];
+  assert.match(flagged.command, /^exec codex exec /, '--sonnet picks nothing (B-02): still Codex, the provider a question starts on');
+  assert.deepEqual([flagged.env.ENGELBART_BART_MODEL, /model_reasoning_effort="medium"/.test(flagged.command)], ['gpt-6.1-sol', true], 'on Sol medium');
+  assert.match(flagged.input, /<question>\nStart from this workspace\.\n<\/question>$/, 'flags alone: still the opening');
+  const begun = progress.find((p) => p.step);
+  assert.deepEqual([begun.step, 'name' in begun, 'effort' in begun], [1, false, false], 'a running @brainstorm never names its model (B-05)');
+
+  replies.push(JSON.stringify(FOCUS));
+  const onClaude = createBart({ readModels: () => DEFAULTS, environment: { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir }, runDirectory: path.join(homeDir, 'runs-bs'), codexHome, codexAuthFile: authFile, run, threads, brainstormThreads });
+  await onClaude.ask(ctx, project.id, { askId: 'b5', ref, workspaceId: workspace.id, text: '--opus --max hello', turns: [], agent: 'brainstorm' });
   const claude = calls[calls.length - 1];
   assert.match(claude.command, /--tools "Read,Grep,Glob" --allowedTools "Read,Grep,Glob" /);
-  assert.match(claude.input, /<question>\nStart from this workspace\.\n<\/question>$/, 'flags alone: still the opening');
+  assert.match(claude.command, / --effort high /);
+  assert.equal(claude.env.ENGELBART_BART_MODEL, 'claude-sonnet-5-5', '--opus --max hello runs on Sonnet high');
+  assert.match(claude.input, /<level>You are running as Sonnet at high effort, step 1 of 1\. No higher step exists\.<\/level>\n\n<question>\nhello\n<\/question>$/);
 });
 
 test('the fake @brainstorm runs a reading with broad options, one free card on the area picked, the closing card, then the recap with a Look for line, and starts again after it; "malformed" gets a reply that is not a card', async () => {
@@ -902,6 +944,8 @@ test('the fake @brainstorm runs a reading with broad options, one free card on t
   assert.equal(undecided.cards[3], null);
   assert.equal(undecided.recap.lines[2], 'Next, you said: not decided', 'never filled in for them');
 
+  const feet = doc.filter((line) => /^bart> \*[^*]+\*$/.test(line));
+  assert.ok(feet.length >= 4 && feet.every((line) => /^bart> \*\d+ s\*$/.test(line)), 'every card\'s foot gives the time alone');
   const bad = await bart.ask(ctx, project.id, { askId: 'zm', ref, workspaceId: workspace.id, text: 'malformed please', agent: 'brainstorm' });
   assert.equal(bad.lines[0], 'bart> FAKE REPLY that is not a card: {"say": "cut off');
   assert.equal(card.cardOfAnswer(bad.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n')), null, 'drawn as plain answer lines');
@@ -1095,27 +1139,84 @@ test('ask-bart takes the agent, and a Brainstorm is an agent of its workspace li
 
 const { DISCOVER_SYSTEM_PROMPT } = require('../src/main/bart/discover-system-prompt.cjs');
 const { readDiscover, DEFAULT_DISCOVER } = require('../src/main/bart/models.cjs');
-const { turnPlan, replyBody, writeCodexConfig, DISCOVER_IDLE_MS } = require('../src/main/bart/ask.cjs');
+const { turnPlan, replyBody, writeCodexConfig, DISCOVER_IDLE_MS, MODE_LIMITS } = require('../src/main/bart/ask.cjs');
 const papersLib = require('../src/main/bart/papers.cjs');
 const activity = require('../src/main/bart/activity.cjs');
 
 const GUIDE = '## Start here\n\n**[A paper](https://arxiv.org/abs/2401.00001)** · A. Author · 2024 · arXiv\nWhat it is: they did a thing.\nRead: Section 3\nWhy: the retries part.\nFound: in your library · full text: open access';
 
-test('@discover runs on one step: Opus high on Claude Code, Sol high on Codex; --deep is its own word, and the mode carries on through the exchange', () => {
-  const step = (text, models) => readDiscover(text, models).steps.map((s) => `${s.name} ${s.effort}`);
-  assert.deepEqual(step('why do agents loop', DEFAULTS), ['Opus high']);
-  assert.deepEqual(step('why do agents loop', MODELS), ['Sol high']);
-  assert.deepEqual([step('--sonnet why', DEFAULTS), readDiscover('--sonnet why', DEFAULTS).question], [['Sonnet high'], 'why']);
-  assert.deepEqual([readDiscover('why do agents loop --deep', DEFAULTS).question, readDiscover('why --deep', DEFAULTS).mode, readDiscover('--deep --opus why', DEFAULTS).mode, readDiscover('why', DEFAULTS).mode], ['why do agents loop', 'deep', 'deep', null]);
+test('@discover has three levels a provider: Sonnet medium, Opus high, Opus max on Claude Code; Sol medium, Astra high, Astra ultra on Codex; --quick and --deep are words of their own, and a flag still picks for its line (2026-10-02)', () => {
+  const step = (text, models, earlier) => readDiscover(text, models, earlier).steps.map((s) => `${s.name} ${s.effort}`);
+  for (const [models, levels] of [[DEFAULTS, ['Sonnet medium', 'Opus high', 'Opus max']], [MODELS, ['Sol medium', 'Astra high', 'Astra ultra']]]) {
+    assert.deepEqual([step('--quick why do agents loop', models), step('why do agents loop', models), step('why do agents loop --deep', models)], levels.map((level) => [level]), levels.join(', '));
+    assert.deepEqual(step('--standard why', models), [levels[1]]);
+  }
+  assert.deepEqual(readDiscover('why do agents loop --deep', DEFAULTS).steps[0].model, 'opus', 'the id the CLI gets');
+  assert.deepEqual([readDiscover('why do agents loop --deep', DEFAULTS).question, readDiscover('--quick why', DEFAULTS).question, readDiscover('why --deep', DEFAULTS).mode, readDiscover('--quick why', DEFAULTS).mode, readDiscover('why', DEFAULTS).mode], ['why do agents loop', 'why', 'deep', 'quick', 'standard']);
+  assert.equal(readDiscover('why', DEFAULTS).pinned, false);
+  // A model or effort flag picks by hand for its line, whatever the level; the mode stays.
+  const flagged = readDiscover('--sonnet why --deep', DEFAULTS);
+  assert.deepEqual([flagged.steps.map((s) => `${s.name} ${s.effort}`), flagged.question, flagged.mode, flagged.pinned], [['Sonnet high'], 'why', 'deep', true]);
+  assert.deepEqual(step('--quick --fable why', DEFAULTS), ['Fable xhigh']);
+  // The mode an earlier turn named carries on; the line's own wins; the latest earlier one counts.
+  assert.deepEqual([step('picked "Retries"', DEFAULTS, [{ question: 'agents --deep' }]), step('more', MODELS, [{ question: '--quick agents' }, { question: 'x' }])], [['Opus max'], ['Sol medium']]);
+  assert.deepEqual(step('--quick more', DEFAULTS, [{ question: 'agents --deep' }]), ['Sonnet medium']);
+  assert.equal(readDiscover('more', DEFAULTS, [{ question: 'a --deep' }, { question: 'b --quick' }]).mode, 'quick');
   assert.deepEqual(DEFAULTS.discover.providers, DEFAULT_DISCOVER.providers);
-  assert.deepEqual(normalizeModels({ ...DEFAULT_MODELS, discover: { providers: { anthropic: { model: 'fable', effort: 'xhigh' } } } }).discover.providers, { openai: { model: 'sol', effort: 'high' }, anthropic: { model: 'fable', effort: 'xhigh' } });
+  assert.ok(/`quick`/.test(DEFAULT_DISCOVER.about) && /--deep/.test(DEFAULT_DISCOVER.about) && /--quick/.test(DEFAULT_DISCOVER.about), 'its about names the levels and the flags');
+  // Each level is checked as a step is: an unusable one falls back to its default, then to the ladder's first.
+  const edited = normalizeModels({ ...DEFAULT_MODELS, discover: { providers: { anthropic: { quick: { model: 'Fable', effort: 'Extra High' }, standard: { model: 'gone', effort: 'high' }, deep: { model: 'opus', effort: 'ultra' } } } } });
+  assert.deepEqual(edited.discover.providers, { ...DEFAULT_DISCOVER.providers, anthropic: { quick: { model: 'fable', effort: 'xhigh' }, standard: { model: 'opus', effort: 'high' }, deep: { model: 'opus', effort: 'max' } } });
+  const noOpus = normalizeModels({ ...DEFAULT_MODELS, providers: { ...DEFAULT_MODELS.providers, anthropic: { ...DEFAULT_MODELS.providers.anthropic, models: { sonnet: DEFAULT_MODELS.providers.anthropic.models.sonnet } } } });
+  assert.deepEqual(noOpus.discover.providers.anthropic, { quick: { model: 'sonnet', effort: 'medium' }, standard: { model: 'sonnet', effort: 'high' }, deep: { model: 'sonnet', effort: 'high' } }, 'Opus gone: its levels on the ladder\'s first step');
+  // The one-step shape of 2026-09-30 is that provider's standard level, quick and deep from the defaults.
+  const old = normalizeModels({ ...DEFAULT_MODELS, discover: { providers: { anthropic: { model: 'fable', effort: 'xhigh' }, openai: { effort: 'xhigh' } } } });
+  assert.deepEqual(old.discover.providers.anthropic, { ...DEFAULT_DISCOVER.providers.anthropic, standard: { model: 'fable', effort: 'xhigh' } });
+  assert.deepEqual(old.discover.providers.openai, { ...DEFAULT_DISCOVER.providers.openai, standard: { model: 'sol', effort: 'xhigh' } }, 'half a step: the other half as that day\'s default had it');
+  assert.deepEqual([step('why', old), step('--quick why', old), step('--deep why', old)], [['Fable xhigh'], ['Sonnet medium'], ['Opus max']]);
   const plan = (text, turns = []) => turnPlan({ agent: 'discover', text, turns }, DEFAULTS);
   assert.match(plan('why do agents loop').extra, /^<mode>standard\. Up to three starting points;[^<]*eight sources[^<]*<\/mode>$/);
+  assert.equal(plan('--quick why do agents loop').extra, `<mode>${MODE_LIMITS.quick}</mode>`);
+  assert.equal(MODE_LIMITS.quick, 'quick. Up to two starting points; one hop backward and one forward from each; at most five sources in the guide.');
   const deep = plan('picked "Retries"', [{ question: 'agents --deep', answer: '```json\n{}\n```' }]);
-  assert.deepEqual([deep.mode, /fifteen sources/.test(deep.extra)], ['deep', true], 'an answer to a card carries the problem\'s --deep on');
+  assert.deepEqual([deep.mode, /fifteen sources/.test(deep.extra), deep.steps[0].name, deep.steps[0].effort], ['deep', true, 'Opus', 'max'], 'an answer to a card carries the problem\'s --deep on, and its level');
+  const quick = plan('only after 2022', [{ question: '--quick agents', answer: '## Start here' }]);
+  assert.deepEqual([quick.mode, /five sources/.test(quick.extra), quick.steps[0].name, quick.steps[0].effort], ['quick', true, 'Sonnet', 'medium'], 'a follow-up on a quick guide stays quick');
   assert.equal(plan('').asked, 'Find what I should read about the problem this workspace is about.', 'an empty line asks from the workspace');
   assert.equal(plan('', []).question, '');
   assert.equal(plan('x', [{ question: '', answer: 'a' }]).prior.length, 1, 'an empty opening is a turn');
+});
+
+test('a models file left as 2026-09-30 wrote it: @discover\'s untouched step becomes the three levels, @brainstorm\'s block goes; a step of the person\'s own is the standard level, and a brainstorm block of their own stays unread', () => {
+  for (const withBase of [true, false]) {
+    const shipped = JSON.parse(JSON.stringify(PAST_DEFAULT_MODELS.at(-1)));
+    assert.deepEqual([shipped.discover.providers.anthropic, !!shipped.brainstorm], [{ model: 'opus', effort: 'high' }, true], 'the 09-30 shape');
+    const write = (value) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-models-1002-'));
+      fs.writeFileSync(path.join(root, MODELS_FILE), JSON.stringify(value));
+      if (withBase) { fs.mkdirSync(path.join(root, '.defaults')); fs.writeFileSync(path.join(root, '.defaults', MODELS_FILE), JSON.stringify(shipped)); }
+      return root;
+    };
+    const untouched = write(shipped);
+    const models = loadModels(untouched);
+    const file = JSON.parse(fs.readFileSync(path.join(untouched, MODELS_FILE), 'utf8'));
+    const how = withBase ? 'with a base' : 'without one';
+    assert.deepEqual(file.discover, DEFAULT_DISCOVER, `the new levels and their about reach the file, ${how}`);
+    assert.equal(file.brainstorm, undefined, `the brainstorm block goes, ${how}`);
+    assert.deepEqual(models.discover.providers, DEFAULT_DISCOVER.providers);
+    assert.deepEqual(loadModels(untouched), models, 'and stays so');
+
+    const mine = JSON.parse(JSON.stringify(shipped));
+    mine.discover.providers.anthropic = { model: 'fable', effort: 'xhigh' };
+    mine.discover.providers.openai.effort = 'xhigh';
+    mine.brainstorm.providers.anthropic = { model: 'opus', effort: 'max' };
+    const edited = write(mine);
+    const theirs = loadModels(edited);
+    const kept = JSON.parse(fs.readFileSync(path.join(edited, MODELS_FILE), 'utf8'));
+    assert.deepEqual(kept.discover.providers, { anthropic: { ...DEFAULT_DISCOVER.providers.anthropic, standard: { model: 'fable', effort: 'xhigh' } }, openai: { ...DEFAULT_DISCOVER.providers.openai, standard: { model: 'sol', effort: 'xhigh' } } }, `the file holds three levels, their step the standard one, ${how}`);
+    assert.deepEqual(kept.brainstorm.providers.anthropic, { model: 'opus', effort: 'max' }, 'what they wrote is not taken out of the file');
+    assert.deepEqual([readDiscover('why', theirs).steps[0].name, readDiscover('why', theirs).steps[0].effort, readBrainstorm('', theirs).steps[0].name, readBrainstorm('', theirs).steps[0].effort], ['Fable', 'xhigh', 'Sonnet', 'high'], 'but it is not read');
+  }
 });
 
 test('@discover\'s system prompt is the one written for it, plus the resumed turn; a file replaces it', () => {
@@ -1209,16 +1310,18 @@ test('the real runner for @discover: file, web and paper tools, the paper server
   const home = `${codexHome}-discover`;
   assert.equal(calls[0].env.CODEX_HOME, home);
   assert.match(calls[0].command, /-c 'tools\.web_search=true'/);
-  assert.equal(calls[0].timeout, 30 * 60_000, 'half an hour a step');
+  assert.equal(calls[0].timeout, 45 * 60_000, 'three quarters of an hour a deep step');
+  assert.deepEqual([calls[0].env.ENGELBART_BART_MODEL, /model_reasoning_effort="ultra"/.test(calls[0].command)], ['gpt-6-astra', true], 'deep: Astra ultra');
   assert.equal(fs.readFileSync(path.join(home, 'AGENTS.md'), 'utf8'), DISCOVER_SYSTEM_PROMPT);
   assert.equal(fs.readFileSync(path.join(home, 'config.toml'), 'utf8'), '# Written by Engelbart (src/main/bart/ask.cjs). Replaced on every run.\n\n[mcp_servers.papers]\ncommand = "/Apps/Engelbart"\nargs = ["/Apps/papers-mcp.cjs"]\nenv = { ELECTRON_RUN_AS_NODE = "1" }\nstartup_timeout_sec = 30\ntool_timeout_sec = 90\n');
-  assert.match(calls[0].input, /<mode>deep\.[^\n]*<\/mode>\n\n<level>You are running as Sol at high effort, step 1 of 1\. No higher step exists\.<\/level>\n\n<question>\nagents\n<\/question>$/);
+  assert.match(calls[0].input, /<mode>deep\.[^\n]*<\/mode>\n\n<level>You are running as Astra at ultra effort, step 1 of 1\. No higher step exists\.<\/level>\n\n<question>\nagents\n<\/question>$/);
   assert.deepEqual([first.lines[0], discoverThreads.size(), brainstormThreads.size()], ['bart> ```json', 1, 0], 'a card, kept among discover\'s own sessions');
 
   const said = [{ question: 'agents --deep', answer: first.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n') }];
   const second = await ask('d2', '(skipped)', said);
   assert.match(calls[1].command, / resume /);
   assert.match(calls[1].input, /^<mode>deep\./, 'the resumed turn still says how far to trace');
+  assert.deepEqual([calls[1].timeout, calls[1].env.ENGELBART_BART_MODEL], [45 * 60_000, 'gpt-6-astra'], 'and stays on the deep level');
   assert.deepEqual(second.lines.slice(0, 3), ['bart> ## Start here', 'bart>', 'bart> **[A paper](https://arxiv.org/abs/2401.00001)** · A. Author · 2024 · arXiv']);
 
   await ask('d3', '--opus only after 2022', []);
@@ -1227,6 +1330,15 @@ test('the real runner for @discover: file, web and paper tools, the paper server
   assert.deepEqual(claude.mcp, { mcpServers: { papers: { command: '/Apps/Engelbart', args: ['/Apps/papers-mcp.cjs'], env: { ELECTRON_RUN_AS_NODE: '1' } } } });
   assert.equal(fs.existsSync(claude.env.ENGELBART_BART_MCP), false, 'the config goes with the run');
   assert.match(claude.input, /<mode>standard\./);
+  assert.equal(claude.timeout, 30 * 60_000, 'half an hour a standard step');
+  assert.equal(claude.env.ENGELBART_BART_MODEL, 'opus', 'a model flag picks for its line');
+
+  replies.push(GUIDE);
+  const quick = await ask('d4', '--quick agents', []);
+  const fast = calls[3];
+  assert.deepEqual([fast.timeout, fast.env.ENGELBART_BART_MODEL, /model_reasoning_effort="medium"/.test(fast.command)], [30 * 60_000, 'gpt-6.1-sol', true], 'quick: Sol medium, half an hour');
+  assert.match(fast.input, /<mode>quick\. Up to two starting points;[^<]*at most five sources in the guide\.<\/mode>\n\n<level>You are running as Sol at medium effort/);
+  assert.match(quick.lines[quick.lines.length - 1], /^bart> \*Sol · medium · \d+ s\*$/, 'its foot still names the model');
 
   writeCodexConfig(home, {});
   assert.equal(fs.readFileSync(path.join(home, 'config.toml'), 'utf8'), '# Written by Engelbart (src/main/bart/ask.cjs). Replaced on every run.\n');
