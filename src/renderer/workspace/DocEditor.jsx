@@ -23,7 +23,7 @@
 //   * where a document was scrolled to is kept per workspace (props.viewOf / props.onView, 2026-09-22), apart from the
 //     caret: coming back to a document shows what was on screen, not where the last edit was.
 import React from 'react';
-import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, threads, turnText, wsMention, agentOf, flattenPaste, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE } from '../model/doc.js';
+import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, threads, turnText, wsMention, agentOf, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE } from '../model/doc.js';
 import { readFlags, readQuestion, withChoice, modelOf, effortOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
 import { SKIPPED, MAP_GROUPS, cardOfAnswer, questionOf, isChoice, answerLine, readAnswer, recapParts, recapLine } from '../../main/bart/card.cjs';
 import BartPicker from './BartPicker.jsx';
@@ -140,6 +140,9 @@ export default class DocEditor extends React.Component {
       input: (e) => { if (!inEd(e)) return; if (inBuild(e)) this.buildInput(e.target); else if (inCard(e)) this.cardInput(e.target); else if (inFollow(e)) this.followInput(e.target); else this.editorInput(); },
       beforeinput: (e) => { if (!inEd(e) || inFollow(e)) return; const sel = getSelection(); this.bulkDelete = /^delete/.test(e.inputType || '') && !!sel && !sel.isCollapsed; },
       paste: (e) => { if (!inEd(e)) return; if (inBuild(e)) this.buildPaste(e); else if (!inFollow(e)) this.editorPaste(e); },
+      // A copy or a cut of the document is its markdown (editorCopy); in a field of its own it is the browser's, as a paste is.
+      copy: (e) => { if (inEd(e) && !inFollow(e)) this.editorCopy(e, false); },
+      cut: (e) => { if (inEd(e) && !inFollow(e)) this.editorCopy(e, true); },
       // A press on one of the editor's buttons must not move the keyboard: leaving a line redraws the editor, and a button
       // redrawn between the press and the release never gets its click (found with Delete, while an answer was being edited).
       // A link or a mention is pressed to open it (2026-09-29): the press must not put the caret there, or the line would
@@ -1112,22 +1115,43 @@ export default class DocEditor extends React.Component {
   }
   caretInfo() {
     const sel = getSelection(); if (!sel || !sel.rangeCount) return null; const ed = this.editorEl(); if (!ed || !ed.contains(sel.anchorNode)) return null;
-    const info = (n, o) => {
-      if (!n) return null; const el = n.nodeType === 1 ? n : n.parentElement; const d = el && el.closest('[data-line]'); if (!d || !ed.contains(d)) return null;
-      const t = d.querySelector('.t'); let off = 0;
-      if (t && t.contains(n)) { const r = document.createRange(); r.selectNodeContents(t); r.setEnd(n, o); off = r.toString().replace(/\u200b/g, '').length; } else off = t ? t.textContent.length : 0;
-      const isActive = Number(d.dataset.line) === this.state.activeLine;
-      let raw = null;
-      if (t && (isActive || t.querySelector('[data-src]'))) raw = this.displayToRaw(t, off);
-      if (raw == null) {
-        // Code shows its own characters; a fence shown as its language puts the caret at the end of the fence.
-        const line = d.dataset.raw || '', kind = d.dataset.kind, p = parseLine(line);
-        raw = isActive || kind === 'code' ? off : kind === 'fence' ? lineText(p, line).length : p.type === 'img' ? 0 : p.type === 'reply' ? replyRawOffset(p, off) : rawOffset(p, off, line);
-      }
-      return { line: Number(d.dataset.line), offset: raw };
-    };
-    const anchor = info(sel.anchorNode, sel.anchorOffset), focus = info(sel.focusNode, sel.focusOffset) || anchor;
+    const anchor = this.caretAt(sel.anchorNode, sel.anchorOffset), focus = this.caretAt(sel.focusNode, sel.focusOffset) || anchor;
     return anchor ? { anchor, focus } : null;
+  }
+  // A point of the page (a node and an offset in it) → { line, offset } in the line's source, or null outside the lines.
+  caretAt(n, o) {
+    const ed = this.editorEl();
+    if (!n || !ed) return null; const el = n.nodeType === 1 ? n : n.parentElement; const d = el && el.closest('[data-line]'); if (!d || !ed.contains(d)) return null;
+    const t = d.querySelector('.t'); let off = 0;
+    if (t && t.contains(n)) { const r = document.createRange(); r.selectNodeContents(t); r.setEnd(n, o); off = r.toString().replace(/\u200b/g, '').length; } else off = t ? t.textContent.length : 0;
+    const isActive = Number(d.dataset.line) === this.state.activeLine;
+    let raw = null;
+    if (t && (isActive || t.querySelector('[data-src]'))) raw = this.displayToRaw(t, off);
+    if (raw == null) {
+      // Code shows its own characters; a fence shown as its language puts the caret at the end of the fence.
+      const line = d.dataset.raw || '', kind = d.dataset.kind, p = parseLine(line);
+      raw = isActive || kind === 'code' ? off : kind === 'fence' ? lineText(p, line).length : p.type === 'img' ? 0 : p.type === 'reply' ? replyRawOffset(p, off) : rawOffset(p, off, line);
+    }
+    return { line: Number(d.dataset.line), offset: raw };
+  }
+  // The two ends of the selection in document order, as caretAt reads them. An end that is not in a line's text stands
+  // at the start of the next line (the start) or the end of the line before (the end): select all puts both ends on the
+  // editor itself, and a drag can end on an answer's foot or start in a row's margin.
+  selEnds() {
+    const sel = getSelection(), ed = this.editorEl(); if (!sel || !sel.rangeCount || !ed) return null;
+    const range = sel.getRangeAt(0); if (!ed.contains(range.startContainer) || !ed.contains(range.endContainer)) return null;
+    const ls = this.lines(), ps = this.parsedOf(ls), rows = [...ed.querySelectorAll('[data-line]')];
+    const lineEnd = (d) => { const i = Number(d.dataset.line); return { line: i, offset: lineText(ps[i] || parseLine(''), ls[i] ?? '').length }; };
+    const end = (node, offset, last) => {
+      const probe = document.createRange(); probe.setStart(node, offset);
+      const el = node.nodeType === 1 ? node : node.parentElement, d = el && el.closest('[data-line]'), t = d && ed.contains(d) && d.querySelector('.t');
+      if (t && !t.contains(node)) return probe.comparePoint(t, 0) >= 0 ? { line: Number(d.dataset.line), offset: 0 } : lineEnd(d);
+      const at = this.caretAt(node, offset); if (at) return at;
+      if (!last) { const next = rows.find((row) => probe.comparePoint(row, 0) >= 0); return next ? { line: Number(next.dataset.line), offset: 0 } : null; }
+      const before = rows.findLast((row) => probe.comparePoint(row, row.childNodes.length) <= 0); return before ? lineEnd(before) : null;
+    };
+    const a = end(range.startContainer, range.startOffset, false), b = end(range.endContainer, range.endOffset, true);
+    return a && b ? { start: a, end: b } : null;
   }
 
   /* ---------------------------------------------------------------- events */
@@ -1342,8 +1366,13 @@ export default class DocEditor extends React.Component {
     const pasted = [...(((e.clipboardData || {}).files) || [])].filter((file) => /^image\/(png|jpeg|gif|webp)$/.test(file.type));
     if (pasted.length && this.props.onPasteImage) { e.preventDefault(); void this.pasteImages(pasted, { line: c.anchor.line, offset: Math.min(c.anchor.offset, c.focus.offset) }); return; }
     e.preventDefault();
-    const text = ((e.clipboardData || window.clipboardData).getData('text/plain') || '').replace(/\r/g, ''); if (!text) return;
+    const data = e.clipboardData || window.clipboardData;
+    let text = (data.getData('text/plain') || '').replace(/\r/g, ''); if (!text) return;
     const ls = this.lines(), i = c.anchor.line, line = ls[i] ?? '', p = this.parsedOf(ls)[i] || parseLine(line), cur = lineText(p, line);
+    // Copied from a web page (2026-10-02), the plain text has each link's title only: the page's HTML gives the addresses
+    // back. A copy from this editor already holds its links as markdown, and code takes what was copied as it is.
+    const html = text.includes('](') || isCode(p) || isFence(p) ? '' : data.getData('text/html');
+    if (html) text = withLinks(text, [...new DOMParser().parseFromString(html, 'text/html').querySelectorAll('a[href]')].map((a) => ({ text: a.textContent, href: a.getAttribute('href') })));
     const same = c.anchor.line === c.focus.line, a = same ? Math.min(c.anchor.offset, c.focus.offset) : c.anchor.offset, b = same ? Math.max(c.anchor.offset, c.focus.offset) : a;
     const parts = text.split('\n');
     if (parts.length === 1) { this.writeText(i, cur.slice(0, a) + text + cur.slice(b), { line: i, offset: a + text.length }); return; }
@@ -1356,6 +1385,21 @@ export default class DocEditor extends React.Component {
     this.setLines((x) => { const out = [...x]; out[i] = sameLine(p, first); out.splice(i + 1, 0, ...parts.slice(1, -1).map(inAnswer), inAnswer(last)); return out; }, { line: i + parts.length - 1, offset: parts[parts.length - 1].length });
     this.setState({ activeLine: i + parts.length - 1, mention: null });
   };
+  // ⌘C and ⌘X (2026-10-02): the document's markdown, not the page drawn from it, so a link keeps its address in the
+  // terminal, in Claude Code and pasted back here; apps that read HTML (Docs, Slack) get links to click. A selection that
+  // gives no markdown (inside a Build's card, a run at work, an answer's foot) or lies in one @brainstorm card is the
+  // browser's to copy. Cut then deletes the selection as Backspace does, through the input path (bulkDelete is what
+  // beforeinput sets for Backspace), so the document, the caret and undo are Backspace's.
+  editorCopy(e, cut) {
+    const sel = getSelection(); if (!sel || sel.isCollapsed || !e.clipboardData) return;
+    const ends = this.selEnds(); if (!ends) return;
+    const ls = this.lines(); if (ends.start.line === ends.end.line && this.cardsOf(ls).lines.has(ends.start.line)) return;
+    const text = selectionMarkdown(ls, ends.start, ends.end); if (!text) return;
+    e.preventDefault();
+    e.clipboardData.setData('text/plain', text);
+    e.clipboardData.setData('text/html', selectionHtml(text));
+    if (cut && !this.props.readOnly) { this.bulkDelete = true; document.execCommand('delete'); this.bulkDelete = false; }
+  }
   editorClick = (e) => {
     // The editor's own empty space below the last line. A drag from one line to another also ends here (2026-10-02: Chromium
     // clicks what holds both ends), and putting the caret at the end lost its highlight.

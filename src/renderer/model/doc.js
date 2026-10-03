@@ -305,3 +305,142 @@ export function inlineHtml(text) {
     return esc(p);
   }).join('');
 }
+
+/* ---------------------------------------------------------------- copy and cut (2026-10-02) */
+
+// Where a line's shown text starts in lineText(): after a heading's `# ` or a quote's `> `, and in an answer after a
+// heading or bullet mark of its own. A rendered line maps its first shown character there (rawOffset, replyRawOffset).
+function shownFrom(p, line) {
+  if (p.type === 'h') return p.level + 1;
+  if (p.type === 'quote') return line.length - p.text.length;
+  if (p.type === 'reply' && !p.code) { const q = parseLine(p.text); return q.type === 'h' || isMarked(q.type) ? p.text.length - q.text.length : 0; }
+  return 0;
+}
+
+// One token cut to [lo, hi) of its source. A click in shown text maps by shown characters (rawOffset: 0 is the token's
+// start, the d-th character pre + d), so the end of a link's title lands before its `](url)` and a selection read raw
+// would copy `[tit`. A cut is read in shown characters instead, and what is left keeps its markup: a link is still a link,
+// bold still bold, a mention or an attachment whole. `inside`: the whole selection lies within this token (a word picked
+// out of a title), and copies as just that text. Past the shown text is the markup itself, selected as typed on the
+// caret's line (a link's address), and copies as typed.
+function cutToken(tok, lo, hi, inside) {
+  if (lo <= 0 && hi >= tok.length) return tok;
+  if (tok.startsWith('**') && tok.endsWith('**') && tok.length > 4) {
+    const inner = tok.slice(2, -2), x = Math.max(0, Math.min(inner.length, lo - 2)), y = Math.max(0, Math.min(inner.length, hi - 2));
+    if (x >= y) return '';
+    if (lo <= 0 && y === inner.length) return tok;
+    const part = sliceInline(inner, x, y, inside);
+    return inside || !part ? part : `**${part}**`;
+  }
+  const { shown, pre } = tokShown(tok); if (!pre) return tok.slice(lo, hi);
+  const n = shown.length;
+  if (lo >= pre + n) return lo === pre + n && hi >= tok.length ? '' : tok.slice(lo, hi);
+  const x = Math.max(0, lo - pre), y = Math.max(0, Math.min(n, hi - pre));
+  if (x >= y) return '';
+  if (y === n && (lo <= 0 || (!inside && x === 0))) return tok;
+  const part = shown.slice(x, y), link = tok.match(LINK_RE);
+  if (inside) return part;
+  if (link) return `[${part}](${link[2]})`;
+  if (tok.startsWith('`')) return `\`${part}\``;
+  if (tok.startsWith('*')) return `*${part}*`;
+  return tok;
+}
+
+// Source a..b of a line's text as markdown that stands on its own (cutToken for each token the range touches).
+function sliceInline(text, a, b, alone) {
+  let out = '', s = 0;
+  for (const tok of String(text).split(INLINE)) {
+    if (!tok) continue;
+    const e = s + tok.length;
+    if (a < e && b > s) out += cutToken(tok, Math.max(0, a - s), Math.min(tok.length, b - s), alone && a >= s && b <= e);
+    s = e;
+  }
+  return out;
+}
+
+/**
+ * What a selection copies: the document's markdown from `start` to `end` ({ line, offset }, in either order; offsets
+ * into lineText() as the editor's caretInfo gives them), so a link keeps its address wherever it is pasted. Within one
+ * line, the text selected. Across lines, the first and last lines cut where the selection is and the lines between whole
+ * with their marks (`- `, `# `, `- [ ] `), so a list stays a list; a line selected from its start keeps its mark too. An
+ * answer comes without its `bart> ` and without its closing line, as the answer's Copy gives it (turnText). A line a run
+ * is working on and a Build's line hold an id, not text, and are left out.
+ */
+export function selectionMarkdown(lines, start, end) {
+  if (!start || !end) return '';
+  if (end.line < start.line || (end.line === start.line && end.offset < start.offset)) [start, end] = [end, start];
+  const ps = parseLines(lines), feet = new Set();
+  for (const thread of threads(lines, ps)) for (const turn of thread.turns) if (turn.foot >= 0) feet.add(turn.foot);
+  const out = [];
+  for (let i = Math.max(0, start.line); i <= Math.min(end.line, lines.length - 1); i++) {
+    const p = ps[i], line = String(lines[i]);
+    if (p.type === 'pending' || p.type === 'build' || feet.has(i)) continue;
+    const text = lineText(p, line), code = isCode(p) || isFence(p), at = (o) => Math.max(0, Math.min(text.length, Number(o) || 0));
+    let a = i === start.line ? at(start.offset) : 0;
+    const b = i === end.line ? (end.offset === Infinity ? text.length : at(end.offset)) : text.length;
+    if (start.line === end.line) return code ? text.slice(a, b) : sliceInline(text, a, b, true);
+    const lead = code ? 0 : shownFrom(p, line);
+    // The selection reaches the last line without taking any of its text: the line break is all it holds of it.
+    if (i === end.line && b <= lead && b < text.length) { out.push(''); continue; }
+    if (a <= lead) a = 0;
+    const part = code ? text.slice(a, b) : sliceInline(text, a, b, false);
+    out.push(a === 0 && isMarked(p.type) ? line.slice(0, line.length - p.text.length) + part : part);
+  }
+  return out.join('\n');
+}
+
+const SAFE_HREF = /^(https?:|mailto:)/i;
+// Inline markdown as plain HTML for other apps: no styles, no chips. A mention is its name; an attachment is left out
+// (its image lives in this project only); a link to anything but the web or mail is its title.
+function plainHtml(text) {
+  return String(text).split(INLINE).map((tok) => {
+    if (!tok || ATTACH_RE.test(tok)) return '';
+    if (tok.startsWith('**') && tok.endsWith('**') && tok.length > 4) return `<strong>${plainHtml(tok.slice(2, -2))}</strong>`;
+    if (tok.startsWith('`') && tok.endsWith('`') && tok.length > 2) return `<code>${esc(tok.slice(1, -1))}</code>`;
+    if (tok.startsWith('*') && tok.endsWith('*') && tok.length > 2) return `<em>${esc(tok.slice(1, -1))}</em>`;
+    const ws = tok.match(WS_MENTION_RE); if (ws) return esc(ws[1]);
+    if (tok.startsWith('@[')) return esc(tok.slice(2, -1));
+    const m = tok.match(LINK_RE); if (m) return SAFE_HREF.test(m[2]) ? `<a href="${esc(m[2])}">${esc(m[1])}</a>` : esc(m[1]);
+    if (URL_RE.test(tok)) return `<a href="${esc(tok)}">${esc(tok)}</a>`;
+    return esc(tok);
+  }).join('');
+}
+
+/**
+ * The HTML a copy carries beside its markdown, for apps that paste HTML (Google Docs, Slack, mail): links to click, bold
+ * and italic, one line per line (`<br>`). A heading is bold, a bullet a •, a checkbox ☐ or ☑; code is kept as typed and
+ * its fences go; an image from the web is a link to it, an attached one is left out.
+ */
+export function selectionHtml(markdown) {
+  const ls = String(markdown ?? '').split('\n'), ps = parseLines(ls), pad = (depth) => '&nbsp;&nbsp;&nbsp;&nbsp;'.repeat(depth);
+  return ls.map((line, i) => {
+    const p = ps[i];
+    if (p.type === 'fence') return null;
+    if (p.type === 'code') return `<code>${esc(line).replace(/^ +/, (s) => '&nbsp;'.repeat(s.length))}</code>`;
+    if (p.type === 'h') return `<strong>${plainHtml(p.text)}</strong>`;
+    if (p.type === 'todo') return `${pad(p.depth)}${p.done ? '☑' : '☐'} ${plainHtml(p.text)}`;
+    if (p.type === 'list') return `${pad(p.depth)}• ${plainHtml(p.text)}`;
+    if (p.type === 'img') return /^https?:/.test(p.src) ? `<a href="${esc(p.src)}">${esc(p.text || p.src)}</a>` : null;
+    return plainHtml(line);
+  }).filter((html) => html != null).join('<br>');
+}
+
+/**
+ * Text pasted from a web page: its plain text names each link by its title alone, so each link of the page's HTML
+ * ([{ text, href }], in order) is written back where its title next stands, as `[title](url)`. A title not found as
+ * words of its own, an address that is not http(s), a title holding brackets and a link that is its own address are
+ * left as the plain text has them.
+ */
+export function withLinks(plain, anchors) {
+  const text = String(plain ?? ''), word = /[\p{L}\p{N}]/u;
+  let out = '', at = 0;
+  for (const anchor of anchors || []) {
+    const title = String(anchor.text || '').replace(/\s+/g, ' ').trim(), url = String(anchor.href || '').trim();
+    if (!title || /[[\]]/.test(title) || !/^https?:\/\/\S+$/i.test(url) || title.replace(/\/$/, '') === url.replace(/\/$/, '')) continue;
+    let k = text.indexOf(title, at);
+    while (k >= 0 && ((word.test(title[0]) && word.test(text[k - 1] || '')) || (word.test(title[title.length - 1]) && word.test(text[k + title.length] || '')))) k = text.indexOf(title, k + 1);
+    if (k < 0) continue;
+    out += `${text.slice(at, k)}[${title}](${url.replace(/\(/g, '%28').replace(/\)/g, '%29')})`; at = k + title.length;
+  }
+  return out + text.slice(at);
+}

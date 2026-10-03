@@ -396,6 +396,88 @@ test('the blank line a recap\'s Look for button puts before "@discover" keeps it
   assert.equal(threads([...recap, '@discover retry loops', 'bart~> d1']).length, 1, 'without it the line would join the thread');
 });
 
+// Copy and cut (2026-10-02): what a selection copies is the document's markdown, so links keep their addresses.
+const COPY_DOC = [
+  '# Reading list',
+  'See [the ROPE paper](https://github.com/mqo00/rope) and https://example.com/docs for setup.',
+  '- first **bold** item',
+  '- second item with [a link](https://openalex.org)',
+  '- [ ] a task for @[Welcome!]',
+  '@bart what is ROPE?',
+  'bart> ## Short answer',
+  'bart> - It is [ROPE](https://github.com/mqo00/rope), a tutor.',
+  'bart> ',
+  'bart> *Sol · medium · 1 s*',
+  'A paragraph with an important word.',
+];
+
+test('a selection inside one line copies the text selected, links whole', async () => {
+  const { selectionMarkdown, parseLine, rawOffset, tokShown, lineText, INLINE } = await load();
+  // Where a click at the end of a rendered line lands in its source (the editor's caretInfo goes through rawOffset).
+  const shownEnd = (line) => { const p = parseLine(line), text = lineText(p, line); return rawOffset(p, text.split(INLINE).filter(Boolean).reduce((n, tok) => n + tokShown(tok).shown.length, 0), p.type === 'list' ? undefined : line); };
+  const at = (line, offset) => ({ line, offset });
+  assert.equal(selectionMarkdown(COPY_DOC, at(1, 0), at(1, shownEnd(COPY_DOC[1]))), COPY_DOC[1], 'a bare address and a titled link both survive');
+  assert.equal(shownEnd(COPY_DOC[3]), 24, 'the end of a rendered link lands before its `](url)`');
+  assert.equal(selectionMarkdown(COPY_DOC, at(3, 0), at(3, 24)), 'second item with [a link](https://openalex.org)', 'and still copies the whole link; one line is its text, no mark');
+  assert.equal(selectionMarkdown(COPY_DOC, at(10, 20), at(10, 29)), 'important', 'inside one word, that word');
+  assert.equal(selectionMarkdown(COPY_DOC, at(1, 9), at(1, 13)), 'ROPE', 'a word picked out of a link\'s title is that word');
+  assert.equal(selectionMarkdown(COPY_DOC, at(1, 21), at(1, 50)), 'https://github.com/mqo00/rope', 'the address of a link, selected in its source on the caret\'s line');
+  assert.equal(selectionMarkdown(COPY_DOC, at(1, 13), at(1, 9)), 'ROPE', 'focus before anchor reads the same');
+  assert.equal(selectionMarkdown(COPY_DOC, at(10, 4), at(10, 4)), '', 'nothing selected, nothing copied');
+  assert.equal(selectionMarkdown(['ask @[Plan](ws:abc123) and @[Note] now'], at(0, 0), at(0, 8)), 'ask @[Plan](ws:abc123)', 'a mention cut by the selection is copied whole');
+  assert.equal(selectionMarkdown(['ask @[Plan](ws:abc123) and @[Note] now'], at(0, 10), at(0, 38)), ' and @[Note] now', 'starting right after a mention takes none of it');
+  assert.equal(selectionMarkdown(['```js', 'const a = [x](y);', '```'], at(1, 6), at(1, 14)), 'a = [x](', 'code is copied as typed');
+});
+
+test('a selection across lines keeps its marks and links; answers lose their prefixes and their closing line', async () => {
+  const { selectionMarkdown } = await load();
+  const at = (line, offset) => ({ line, offset });
+  assert.equal(selectionMarkdown(COPY_DOC, at(0, 2), at(10, 35)), [
+    '# Reading list', COPY_DOC[1], '- first **bold** item', '- second item with [a link](https://openalex.org)', '- [ ] a task for @[Welcome!]',
+    '@bart what is ROPE?', '## Short answer', '- It is [ROPE](https://github.com/mqo00/rope), a tutor.', '', 'A paragraph with an important word.',
+  ].join('\n'), 'from the start of a rendered heading: its `# ` comes too');
+  assert.equal(selectionMarkdown(COPY_DOC, at(1, 9), at(3, 6)), '[ROPE paper](https://github.com/mqo00/rope) and https://example.com/docs for setup.\n- first **bold** item\n- second',
+    'a link cut at the start is still a link; the last line keeps its mark');
+  assert.equal(selectionMarkdown(COPY_DOC, at(2, 10), at(3, 6)), '**ld** item\n- second', 'bold cut at the start is still bold');
+  assert.equal(selectionMarkdown(COPY_DOC, at(2, 0), at(3, 24)), '- first **bold** item\n- second item with [a link](https://openalex.org)', 'ending on a link\'s title takes the whole link');
+  assert.equal(selectionMarkdown(COPY_DOC, at(3, 24), at(4, 6)), '\n- [ ] a task', 'starting right after a link at the end of a line takes none of it');
+  assert.equal(selectionMarkdown(COPY_DOC, at(2, 0), at(3, 0)), '- first **bold** item\n', 'ending at the start of a line takes its line break only');
+  assert.equal(selectionMarkdown(COPY_DOC, at(6, 0), at(9, 0)), '## Short answer\n- It is [ROPE](https://github.com/mqo00/rope), a tutor.\n', 'an answer\'s own heading and bullet marks stay');
+  const doc = ['@bart q', 'bart+> one [x](https://x.y)', 'bart+> *Opus · 2 s*', 'build> 0123456789', '@bart again', 'bart~> k1', 'end'];
+  assert.equal(selectionMarkdown(doc, at(0, 0), at(6, 3)), '@bart q\none [x](https://x.y)\n@bart again\nend', 'a folded answer loses `bart+> `; a Build\'s line and a run at work hold ids and are left out');
+  assert.equal(selectionMarkdown(doc, at(6, 3), at(0, 0)), '@bart q\none [x](https://x.y)\n@bart again\nend');
+  assert.equal(selectionMarkdown(['```js', 'const a = [x](y);', '```', 'after'], at(0, 0), at(3, 5)), '```js\nconst a = [x](y);\n```\nafter', 'code comes as typed, fences too');
+  assert.equal(selectionMarkdown(['see @[Plan](ws:abc123) now', 'and @[Note]'], at(0, 4), at(1, 11)), '@[Plan](ws:abc123) now\nand @[Note]', 'mentions stay mentions, so they paste back as mentions');
+});
+
+test('the HTML a copy carries: links to click, bold and italic, names for mentions, no attachments', async () => {
+  const { selectionHtml } = await load();
+  assert.equal(selectionHtml('See [a](https://a.b) and https://c.d/e, **bold [L](https://l.m)** *it* `c<d>` @[Plan] @[Space](ws:w1) ![Attachment 1](img:abc)'),
+    'See <a href="https://a.b">a</a> and <a href="https://c.d/e">https://c.d/e</a>, <strong>bold <a href="https://l.m">L</a></strong> <em>it</em> <code>c&lt;d&gt;</code> Plan Space ');
+  assert.equal(selectionHtml('# Head\n- one\n  - [x] two\n- [ ] three\n\n```\n  code <b>\n```\n![pic](https://x.y/p.png)\n![Attachment 2](img:def)\n> quoted'),
+    '<strong>Head</strong><br>• one<br>&nbsp;&nbsp;&nbsp;&nbsp;☑ two<br>☐ three<br><br><code>&nbsp;&nbsp;code &lt;b&gt;</code><br><a href="https://x.y/p.png">pic</a><br>&gt; quoted', 'one line per line; fences and attached images go');
+  assert.equal(selectionHtml('[click](javascript:alert) [x](ws:abc) [m](mailto:a@b.c)'), 'click x <a href="mailto:a@b.c">m</a>', 'only web and mail addresses become links');
+  assert.equal(selectionHtml('[q](https://a.b/?q="x"&y=1)'), '<a href="https://a.b/?q=&quot;x&quot;&amp;y=1">q</a>');
+  assert.doesNotMatch(selectionHtml('[a](https://a.b) @[Plan] `x`'), /style=/, 'no inline styles or chips');
+});
+
+test('text pasted from a web page gets its links back from the page\'s HTML', async () => {
+  const { withLinks } = await load();
+  const a = (text, href) => ({ text, href });
+  assert.equal(withLinks('Read the OpenAlex docs and the ROPE repo.', [a('OpenAlex docs', 'https://docs.openalex.org/'), a('ROPE repo', 'https://github.com/mqo00/rope')]),
+    'Read the [OpenAlex docs](https://docs.openalex.org/) and the [ROPE repo](https://github.com/mqo00/rope).');
+  assert.equal(withLinks('here and here', [a('here', 'https://a.b'), a('here', 'https://c.d')]), '[here](https://a.b) and [here](https://c.d)', 'in order: each title where it next stands');
+  assert.equal(withLinks('a cat sat', [a('at', 'https://a.b')]), 'a cat sat', 'a title is found as words of its own, not inside one');
+  assert.equal(withLinks('see Python (programming language).', [a('Python (programming language)', 'https://en.wikipedia.org/wiki/Python_(programming_language)')]),
+    'see [Python (programming language)](https://en.wikipedia.org/wiki/Python_%28programming_language%29).', 'parentheses in the address are encoded, so the link still reads as one');
+  assert.equal(withLinks('OpenAlex\ndocs', [a('OpenAlex\n  docs', 'https://x.y')]), 'OpenAlex\ndocs', 'a title the plain text breaks differently is left alone');
+  assert.equal(withLinks('the OpenAlex docs', [a('OpenAlex\n  docs', 'https://x.y')]), 'the [OpenAlex docs](https://x.y)', 'the HTML\'s spacing is read as the page shows it');
+  const plain = 'https://x.y/ and [1] and mail and wiki and gone';
+  assert.equal(withLinks(plain, [a('https://x.y/', 'https://x.y'), a('[1]', 'https://x.y/#1'), a('mail', 'mailto:a@b.c'), a('wiki', '/wiki/X'), a('', 'https://img.y'), a('missing', 'https://m.y')]), plain,
+    'a link that is its own address, a title with brackets, an address that is not the web, an image link and a title not in the text are left as they are');
+  assert.equal(withLinks('plain', []), 'plain');
+});
+
 test('flattenPaste: several pasted lines become one question line, one space at each break (2026-10-02)', async () => {
   const { flattenPaste, parseLine, agentOf } = await load();
   assert.equal(flattenPaste('one\ntwo\nthree'), 'one two three');
