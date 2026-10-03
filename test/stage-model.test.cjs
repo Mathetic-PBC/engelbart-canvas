@@ -225,3 +225,42 @@ test('the section is painted under find\'s colours and goes when find stops; it 
   assert.deepEqual([...registry.keys()], [], 'cleared with find');
   assert.doesNotThrow(() => { clearFind(null); paintSection(null, ['r'], Fake); }, 'no Highlight API: nothing painted, nothing thrown');
 });
+
+test('wheelZooms: a pinch (ctrlKey), ⌃ scroll and ⌘ scroll zoom the paper; plain, ⇧ and ⌥ scroll do not', async () => {
+  const { wheelZooms } = await load('paper-zoom');
+  assert.equal(wheelZooms({ ctrlKey: true, deltaY: -3 }), true, 'a trackpad pinch arrives with ctrlKey');
+  assert.equal(wheelZooms({ metaKey: true, deltaY: -100 }), true, '⌘ scroll');
+  assert.equal(wheelZooms({ ctrlKey: true, metaKey: true, deltaY: 4 }), true);
+  assert.equal(wheelZooms({ deltaY: 40 }), false, 'plain scroll scrolls');
+  assert.equal(wheelZooms({ shiftKey: true, deltaY: 40 }), false);
+  assert.equal(wheelZooms({ altKey: true, deltaY: 40 }), false);
+  assert.equal(wheelZooms(null), false);
+});
+
+test('wheelZoom: one mouse-wheel notch is a modest step around ×1.65, a pinch moves a little, both stay within the ends', async () => {
+  const { wheelZoom } = await load('paper-zoom');
+  const near = (a, b) => Math.abs(a - b) < 1e-9;
+  assert.ok(near(wheelZoom(1, { deltaY: -100, deltaMode: 0 }, 0.15, 2), Math.exp(0.5)), 'a ⌘ notch up: ×1.65, not ×2.7');
+  assert.ok(near(wheelZoom(1, { deltaY: 100, deltaMode: 0 }, 0.15, 2), Math.exp(-0.5)), 'a notch down: ÷1.65');
+  assert.ok(near(wheelZoom(1, { deltaY: -3, deltaMode: 1 }, 0.15, 2), Math.exp(0.48)), 'three lines (deltaMode 1) count as 48px');
+  assert.ok(near(wheelZoom(1, { deltaY: -4, deltaMode: 0 }, 0.15, 2), Math.exp(0.04)), 'a pinch event: a few percent');
+  assert.equal(wheelZoom(1.9, { deltaY: -100, deltaMode: 0 }, 0.15, 2), 2, 'not past the largest zoom');
+  assert.equal(wheelZoom(0.2, { deltaY: 100, deltaMode: 0 }, 0.15, 2), 0.15, 'nor the smallest');
+  assert.equal(wheelZoom(1.3, { deltaY: 0, deltaMode: 0 }, 0.15, 2), 1.3, 'sideways only: no change');
+});
+
+test('createPageCache: each page\'s text is asked for once a document, shared while pending, asked again after a failure', async () => {
+  const { createPageCache } = await load('paper-zoom');
+  const asked = [];
+  let fail = true;
+  const cache = createPageCache(async (n) => { asked.push(n); if (n === 3 && fail) throw new Error('worker gone'); return { items: [n] }; });
+  const [a, b] = [cache.get(1), cache.get(1)];
+  assert.equal(a, b, 'two layouts asking at once share one request');
+  assert.deepEqual(await a, { items: [1] });
+  assert.equal(await cache.get(1), await a, 'a later zoom reuses it');
+  await assert.rejects(cache.get(3), /worker gone/);
+  fail = false;
+  assert.deepEqual(await cache.get(3), { items: [3] }, 'a failed page is asked for again');
+  assert.deepEqual(asked, [1, 3, 3]);
+  assert.notEqual(createPageCache(async () => ({})).get(1), a, 'a new document starts empty');
+});

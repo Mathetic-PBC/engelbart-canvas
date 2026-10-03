@@ -8,7 +8,7 @@
 // (Hudson, 2026-09-23: "I want fit width for 100%"): at 100% the first page is exactly as wide as the
 // pane, and every zoom is that width times the percentage, so a resized pane keeps its zoom and
 // redraws. Pages are centered with no gutter of their own; a floating bar at the bottom shows the
-// page and zoom; a pinch (or ⌃ scroll) zooms around the pointer.
+// page and zoom; a pinch (or ⌘ / ⌃ scroll) zooms around the pointer.
 // `target` (2026-09-30): a passage a link asked for. Once every page is drawn it is found from page 1, scrolled to and
 // painted as find's match in front, and told through onFind and onTarget(text, result); once per target, until the
 // prop is cleared and given again. Nothing matching leaves the scroll where it is. `targetTo` (@discover round 2): the
@@ -19,6 +19,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 import rough from 'roughjs';
 import { mergeLineRects, placeHighlight, sideOf, boxSeed } from './marks.js';
 import { nextFind, createTargetGate, sectionSpans, paintSection, clearFind, FIND, FIND_ACTIVE, SECTION } from '../model/find.js';
+import { wheelZooms, wheelZoom, createPageCache } from '../model/paper-zoom.js';
 
 // pdf.js 6: a document is torn down through its loading task (PDFDocumentProxy has no destroy()).
 const destroyDoc = (doc) => { try { const task = doc && doc.loadingTask; if (task && typeof task.destroy === 'function') task.destroy().catch(() => {}); } catch { /* already gone */ } };
@@ -68,6 +69,7 @@ const LAYER_CSS = `
 [data-pdf] .pdf-text .markedContent{display:contents}
 [data-pdf] .pdf-text .endOfContent{display:none}
 [data-pdf] .pdf-text span[role="img"]{user-select:none;cursor:default}
+[data-pdf][data-pinching] .pdf-text{display:none}
 ::highlight(pdf-section){background-color:rgba(255,196,0,.13)}
 ::highlight(pdf-find){background-color:rgba(255,196,0,.35)}
 ::highlight(pdf-find-active){background-color:rgba(255,140,0,.6)}
@@ -157,6 +159,8 @@ export default class PaperView extends React.Component {
     this.sheets = []; // [n] { wrap, canvas, hl, tl, ar, notes }
     this.tops = []; // [n − 1] top of sheet n inside the inner wrapper (unzoomed)
     this.inner = null;
+    const pages = this.pages;
+    this.texts = createPageCache((n) => pages[n].getTextContent()); // each page's text, asked for once a document
   }
 
   componentDidMount() {
@@ -246,6 +250,7 @@ export default class PaperView extends React.Component {
     const host = this.host.current;
     if (host) host.replaceChildren();
     this.resetGeometry();
+    this.setPinching(false);
     this.pdfW = null;
     this.gate.drawing();
     const data = toBytes(this.props.bytes);
@@ -281,6 +286,14 @@ export default class PaperView extends React.Component {
   setCss(v) {
     this.css = v;
     if (this.inner) this.inner.style.zoom = Math.abs(v - 1) < 1e-4 ? '' : String(v);
+  }
+
+  // While a pinch is under way the text layers are hidden: CSS zoom would otherwise restyle and lay out every one of
+  // their spans on each wheel event, which is most of a pinch's cost. They show again when layout() replaces them.
+  setPinching(on) {
+    const host = this.host.current;
+    if (!host || on === (host.dataset.pinching === '1')) return;
+    if (on) host.dataset.pinching = '1'; else delete host.dataset.pinching;
   }
 
   hostPoint(where) {
@@ -321,19 +334,18 @@ export default class PaperView extends React.Component {
   // The percentage goes back to 100%: the page as wide as the pane.
   togglePct() { if (this.pct() !== 100) this.zoomTo(100); }
 
-  // Trackpad pinch (and ⌃ scroll) arrive as wheel events with ctrlKey. The drawn sheets are scaled
-  // with CSS zoom at once (scroll geometry stays real), and laid out again once the pinch settles.
+  // Trackpad pinch (and ⌃ scroll) arrive as wheel events with ctrlKey, ⌘ scroll with metaKey. The drawn sheets are
+  // scaled with CSS zoom at once (scroll geometry stays real), and laid out again once the pinch settles.
   pinch(e) {
-    if (!e.ctrlKey) return;
+    if (!wheelZooms(e)) return;
     e.preventDefault();
     if (!this.doc || !this.inner) return;
-    // A mouse wheel notch is ~100px (or 3 lines); limit one event to about ×1.65 so ⌃ + wheel stays usable.
-    const dy = clamp(e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY, -50, 50);
     const from = this.live != null ? this.live : this.zoom;
-    const to = clamp(from * Math.exp(-dy * 0.01), ZOOM_MIN, ZOOM_MAX);
+    const to = wheelZoom(from, e, ZOOM_MIN, ZOOM_MAX);
     if (to !== from) {
       const a = this.anchorAt(e.clientX, e.clientY);
       this.live = to;
+      this.setPinching(true);
       this.setCss(to / this.renderedZoom);
       this.restoreAnchor(a);
       this.syncBar();
@@ -402,7 +414,7 @@ export default class PaperView extends React.Component {
      point to keep fixed; undefined keeps the top of the view, null starts at the top. */
   async layout(anchor) {
     const host = this.host.current, doc = this.doc;
-    if (!host || !doc || host.clientWidth < 40) return;
+    if (!host || !doc || host.clientWidth < 40) { this.setPinching(this.live != null); return; }
     this.cancelLayout();
     this.gate.drawing();
     const gen = this.layoutGen;
@@ -463,6 +475,7 @@ export default class PaperView extends React.Component {
     }
 
     host.replaceChildren(inner);
+    this.setPinching(this.live != null); // the new text layers show unless a pinch is still under way
     const oldGeo = this.geo;
     this.inner = inner; this.geo = geo; this.sheets = sheets; this.tops = tops;
     this.renderedZoom = z; this.css = 1;
@@ -507,7 +520,7 @@ export default class PaperView extends React.Component {
         s.canvas = c;
         this.place(n);
         try {
-          const textLayer = new pdfjsLib.TextLayer({ textContentSource: await page.getTextContent(), container: s.tl, viewport: vp });
+          const textLayer = new pdfjsLib.TextLayer({ textContentSource: await this.texts.get(n), container: s.tl, viewport: vp });
           if (gen !== this.layoutGen) return;
           this.textLayer = textLayer;
           await textLayer.render();
@@ -849,7 +862,7 @@ export default class PaperView extends React.Component {
             ? <span style={{ position: 'absolute', left: 0, right: 0, top: 14, textAlign: 'center', font: '12px/1.5 var(--font-sans)', color: '#8f8f8f', pointerEvents: 'none' }}>{note}</span>
             : null}
           {!note && pages > 0 ? (
-            <div style={BAR} title="pinch or ⌃ scroll to zoom" onMouseDown={(e) => e.preventDefault()}>
+            <div style={BAR} title="pinch, or ⌘ or ⌃ scroll, to zoom" onMouseDown={(e) => e.preventDefault()}>
               <span style={{ color: '#171717', minWidth: `${String(pages).length}ch`, textAlign: 'right' }}>{page}</span>
               <span style={{ margin: '0 4px', color: '#8f8f8f' }}>of {pages}</span>
               <span style={{ flex: 'none', width: 1, height: 16, margin: '0 6px', background: '#eaeaea' }} />
