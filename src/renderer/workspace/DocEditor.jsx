@@ -100,7 +100,7 @@ export default class DocEditor extends React.Component {
   state = { activeLine: null, mention: null, mentionIdx: 0, pop: null, picker: null };
   edRef = React.createRef();
   history = []; future = []; caret = null; lastHtml = ''; lastKey = null; selRaw = null; openKey = ''; copied = null; copiedT = null;
-  syncing = false; wantFocus = false; composing = false; mounted = false; timers = new Set(); held = false;
+  syncing = false; wantFocus = false; composing = false; mounted = false; timers = new Set(); held = false; downOnRoot = false; downOnPage = false;
   openLogs = new Set(); // asks whose list of steps is open
   pickerT = null;
   // A follow-up being typed and the model picked for it, by the first line of its card. Neither is in the document, and
@@ -138,8 +138,12 @@ export default class DocEditor extends React.Component {
       // redrawn between the press and the release never gets its click (found with Delete, while an answer was being edited).
       // A link or a mention is pressed to open it (2026-09-29): the press must not put the caret there, or the line would
       // redraw as its source and the click land on plain text (links in answers did nothing).
+      // Where the press landed is kept for the click that follows it: a drag across lines ends in a click on what holds
+      // both ends (the editor, or the page around it when released past it), and only a press there is a click there.
       mousedown: (e) => {
+        this.downOnPage = e.target === this.scrollRef.current;
         if (!inEd(e)) return;
+        this.downOnRoot = e.target === this.editorEl();
         if (e.target.closest('button[data-act], .bart-chip, a[data-link], [data-mention]')) { e.preventDefault(); return; }
         if (e.button === 0 && !inFollow(e)) this.held = true;
       },
@@ -1314,7 +1318,9 @@ export default class DocEditor extends React.Component {
     this.setState({ activeLine: i + parts.length - 1, mention: null });
   };
   editorClick = (e) => {
-    if (e.target === this.editorEl()) { this.focusEnd(); return; } // the editor's own empty space below the last line
+    // The editor's own empty space below the last line. A drag from one line to another also ends here (2026-10-02: Chromium
+    // clicks what holds both ends), and putting the caret at the end lost its highlight.
+    if (e.target === this.editorEl()) { if (this.downOnRoot && getSelection().isCollapsed) this.focusEnd(); return; }
     const act = e.target.closest('[data-act]');
     if (act) {
       e.preventDefault(); const i = Number(act.dataset.row), k = act.dataset.act;
@@ -1393,7 +1399,8 @@ export default class DocEditor extends React.Component {
     if (!onto && e.target.closest('[data-act="pick"],[data-act="pickfollow"],[data-act="regen"]')) this.leavePicker();
   };
   openLink(href) { if (this.props.onOpenLink) this.props.onOpenLink(href); else window.open(href, '_blank', 'noreferrer'); }
-  docClick = (e) => { if (e.target !== e.currentTarget) return; this.docClickInternal(); };
+  // The page past the editor: the same rule as the editor's own empty space, for a drag released below or beside the text.
+  docClick = (e) => { if (e.target !== e.currentTarget || !this.downOnPage || !getSelection().isCollapsed) return; this.docClickInternal(); };
   docClickInternal() {
     const ed = this.editorEl(); if (!ed) return;
     const ls = this.lines(), last = ls.length - 1, p = parseLine(ls[last]);
