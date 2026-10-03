@@ -395,3 +395,24 @@ test('the blank line a recap\'s Look for button puts before "@discover" keeps it
   assert.equal(agentOf(parseLine('@discover retry loops')), 'discover');
   assert.equal(threads([...recap, '@discover retry loops', 'bart~> d1']).length, 1, 'without it the line would join the thread');
 });
+
+test('flattenPaste: several pasted lines become one question line, one space at each break (2026-10-02)', async () => {
+  const { flattenPaste, parseLine, agentOf } = await load();
+  assert.equal(flattenPaste('one\ntwo\nthree'), 'one two three');
+  assert.equal(flattenPaste('one\n\ntwo\n\n\n\nthree'), 'one two three', 'blank lines make one space, not many');
+  assert.equal(flattenPaste('one\r\ntwo\r\n\r\nthree'), 'one two three', 'Windows line breaks');
+  assert.equal(flattenPaste('one\rtwo'), 'one two', 'a lone carriage return is a break too');
+  assert.equal(flattenPaste('  \n one\ntwo  \n\n'), 'one two', 'the ends are trimmed');
+  assert.equal(flattenPaste('one  \n   two'), 'one two', 'spaces around a break go with it');
+  assert.equal(flattenPaste('def f():\n\treturn 1\n\t\tdone'), 'def f(): return 1 done', 'tabs that indent a line go with the break');
+  assert.equal(flattenPaste('\tone\ttwo\t\n'), 'one\ttwo', 'a tab inside a line is kept, as a one-line paste keeps it');
+  assert.equal(flattenPaste('a  b\nc'), 'a  b c', 'spacing inside a line is kept');
+  assert.equal(flattenPaste('\n\n \t\n'), '');
+  assert.equal(flattenPaste(''), '');
+  for (const line of ['@bart ', '@brainstorm ', '@discover ', '@bart --build ']) {
+    const p = parseLine(line + flattenPaste('first\n\nsecond\nthird'));
+    assert.equal(p.type, 'bart', `${line.trim()} is a question line`);
+    assert.equal(p.text, (line.slice(line.indexOf(' ') + 1) + 'first second third'), 'the whole paste is the question');
+    assert.equal(agentOf(p), line.slice(1, line.indexOf(' ')));
+  }
+});

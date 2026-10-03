@@ -55,6 +55,12 @@ const URL_RE = /^https?:\/\/\S+$/;
 export const agentOf = (p) => (p && (p.agent === 'brainstorm' || p.agent === 'discover') ? p.agent : 'bart');
 /** The token that starts a question line, as INLINE splits it out. */
 export const AGENT_TOKEN = /^@(bart|brainstorm|discover)$/i;
+/**
+ * Text pasted into a question line, as one line (2026-10-02): a question is one line of the document, and a paste split
+ * over several put all but its first line under the question, where it was never asked. Each line break, with the
+ * whitespace and blank lines around it, becomes one space; the ends are trimmed. Spacing inside a line is kept.
+ */
+export const flattenPaste = (text) => String(text ?? '').replace(/\s*[\r\n]\s*/g, ' ').trim();
 
 const depthOf = (indent) => Math.min(8, Math.floor(indent.length / 2));
 

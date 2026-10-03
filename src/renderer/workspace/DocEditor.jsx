@@ -21,7 +21,7 @@
 //   * where a document was scrolled to is kept per workspace (props.viewOf / props.onView, 2026-09-22), apart from the
 //     caret: coming back to a document shows what was on screen, not where the last edit was.
 import React from 'react';
-import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, threads, turnText, wsMention, agentOf, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, FENCE_RE } from '../model/doc.js';
+import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, threads, turnText, wsMention, agentOf, flattenPaste, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE } from '../model/doc.js';
 import { readFlags, readQuestion, withChoice, modelOf, effortOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
 import { SKIPPED, MAP_GROUPS, cardOfAnswer, questionOf, isChoice, answerLine, readAnswer, recapParts, recapLine } from '../../main/bart/card.cjs';
 import BartPicker from './BartPicker.jsx';
@@ -1312,6 +1312,10 @@ export default class DocEditor extends React.Component {
     const same = c.anchor.line === c.focus.line, a = same ? Math.min(c.anchor.offset, c.focus.offset) : c.anchor.offset, b = same ? Math.max(c.anchor.offset, c.focus.offset) : a;
     const parts = text.split('\n');
     if (parts.length === 1) { this.writeText(i, cur.slice(0, a) + text + cur.slice(b), { line: i, offset: a + text.length }); return; }
+    // A question is one line (2026-10-02): several lines pasted into an @bart, @brainstorm or @discover line that can still
+    // be asked join into it, and so does a paste that starts one on an empty line. Anywhere else the lines stay lines.
+    const asks = p.type === 'bart' ? !this.lockedAt(ls, i) : p.type === 'p' && !line && BART_RE.test(parts[0].trimStart());
+    if (asks) { const flat = flattenPaste(text); this.writeText(i, cur.slice(0, a) + flat + cur.slice(b), { line: i, offset: a + flat.length }); return; }
     const first = cur.slice(0, a) + parts[0], last = parts[parts.length - 1] + cur.slice(b);
     const inAnswer = (text) => (p.type === 'reply' ? sameLine(p, text) : text);
     this.setLines((x) => { const out = [...x]; out[i] = sameLine(p, first); out.splice(i + 1, 0, ...parts.slice(1, -1).map(inAnswer), inAnswer(last)); return out; }, { line: i + parts.length - 1, offset: parts[parts.length - 1].length });
