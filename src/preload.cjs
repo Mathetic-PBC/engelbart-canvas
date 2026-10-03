@@ -219,6 +219,13 @@ const engelbartAPI = Object.freeze({
   onPostItsTrash: (callback) => subscribe('post-its:trash', callback),
   onPostItsOpenNote: (callback) => subscribe('post-its:open-note', callback),
   onPostItsOpenLink: (callback) => subscribe('post-its:open-link', callback),
+  // What the window would open in a new window or tab (a ⌘-click on a link): { url, newTab }, for the Stage. Listening
+  // tells main a Stage is there to take it; until then, and after, main sends it to the default browser (src/main/index.cjs).
+  onStageOpenLink: (callback) => {
+    const off = subscribe('stage:open-link', callback);
+    ipcRenderer.send('stage:links', true);
+    return () => { off(); ipcRenderer.send('stage:links', false); };
+  },
   // Where the sidebar's trash can is (window pixels), so a post-it dropped on it is thrown away; null when there is none.
   postItsTrashRect: (rect) => ipcRenderer.invoke('post-its:trash-rect', rect),
   onPostItsDrag: (callback) => subscribe('post-its:drag', callback),

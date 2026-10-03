@@ -46,6 +46,21 @@ test('placeTab: what is open comes forward; a blank tab in front is used; at 15 
   assert.deepEqual(placeTab([{ url: 'about:blank', claimed: true }], 0, 'l:b.org'), { append: true });
 });
 
+test('placeTab with newTab (a ⌘-click): a tab of its own though one shows it; still the blank tab in front; still 15 at most', async () => {
+  const { placeTab, linkPlan, MAX_TABS } = await load('stage');
+  const key = linkPlan('https://github.com/mqo00/rope', library).key;
+  const rope = { url: 'https://github.com/mqo00/rope' };
+  assert.deepEqual(placeTab([rope], 0, key), { focus: 0 }, 'a plain click: the tab that has it comes forward');
+  assert.deepEqual(placeTab([rope], 0, key, { newTab: true }), { append: true }, 'a ⌘-click: a second tab');
+  assert.deepEqual(placeTab([{ item: 'p1' }], 0, 'i:p1', { newTab: true }), { append: true }, 'a library row too');
+  assert.deepEqual(placeTab([rope, { url: 'about:blank' }], 1, key, { newTab: true }), { replace: 1 }, 'the blank tab in front takes it');
+  assert.deepEqual(placeTab([{ url: 'about:blank', claimed: true }], 0, key, { newTab: true }), { append: true }, 'not one something is on its way into');
+  const full = Array.from({ length: MAX_TABS }, (_, i) => (i === 2 ? rope : { url: `https://s${i}.org` }));
+  assert.deepEqual(placeTab(full, 4, key, { newTab: true }), { replace: 4 }, 'at 15 the tab in front is replaced, as a plain click on a new link does');
+  assert.deepEqual(placeTab(full, 4, key), { focus: 2 }, 'a plain click still brings the open one forward');
+  assert.deepEqual(placeTab([rope], 0, key, {}), { focus: 0 }, 'without newTab, as before');
+});
+
 test('afterClose: the tab to the right comes forward, else the one to the left; none left is -1', async () => {
   const { afterClose } = await load('stage');
   assert.equal(afterClose(3, 1, 1), 1);

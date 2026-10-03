@@ -56,6 +56,8 @@ const NOTE_VERB_RE = /(^|\s)@Note(?:\s+(.*))?$/;
 // A short fingerprint of a line (FNV-1a), so a remembered scroll position finds its line again without keeping its text.
 const hashLine = (line) => { let h = 0x811c9dc5; const s = String(line ?? ''); for (let k = 0; k < s.length; k++) { h ^= s.charCodeAt(k); h = Math.imul(h, 0x01000193); } return (h >>> 0).toString(36); };
 const newAskId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+// A link ⌘-clicked (Ctrl-clicked off macOS, where Ctrl-click is the context menu) opens in a new Stage tab (2026-10-02).
+const newTabClick = (e) => e.metaKey || (e.ctrlKey && !/^(darwin|mac)/i.test(document.documentElement.dataset.platform || navigator.platform || ''));
 
 const RISE_CSS = '@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}@keyframes thinking{0%,100%{opacity:.25}50%{opacity:1}}';
 // The answer card's controls. They are drawn as strings inside the editor, so what hover does lives here: an icon washes
@@ -1460,7 +1462,7 @@ export default class DocEditor extends React.Component {
       return;
     }
     const a = e.target.closest('a[data-link]');
-    if (a) { e.preventDefault(); this.openLink(a.getAttribute('href')); return; }
+    if (a) { e.preventDefault(); this.openLink(a.getAttribute('href'), newTabClick(e) ? { newTab: true } : undefined); return; }
     const m = e.target.closest('[data-mention]');
     if (m && m.dataset.ws) { e.preventDefault(); this.hidePop(); if (this.props.onOpenWorkspace) this.props.onOpenWorkspace(m.dataset.ws); return; } // goes there: one workspace at a time
     if (m) {
@@ -1482,7 +1484,7 @@ export default class DocEditor extends React.Component {
     const onto = e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-bart-picker]');
     if (!onto && e.target.closest('[data-act="pick"],[data-act="pickfollow"],[data-act="regen"]')) this.leavePicker();
   };
-  openLink(href) { if (this.props.onOpenLink) this.props.onOpenLink(href); else window.open(href, '_blank', 'noreferrer'); }
+  openLink(href, options) { if (this.props.onOpenLink) this.props.onOpenLink(href, options); else window.open(href, '_blank', 'noreferrer'); }
   // The page past the editor: the same rule as the editor's own empty space, for a drag released below or beside the text.
   docClick = (e) => { if (e.target !== e.currentTarget || !this.downOnPage || !getSelection().isCollapsed) return; this.docClickInternal(); };
   docClickInternal() {

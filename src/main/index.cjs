@@ -53,6 +53,7 @@ const { createRunStep, createFakeRunAgent } = require('./build/run-step.cjs');
 const { createProcesses: createRunProcesses } = require('./build/run-processes.cjs');
 const { createRunner: createBuildRunner, createFakeRunner: createFakeBuildRunner } = require('./build/runner.cjs');
 const { EDGES: WINDOW_EDGES, resizedBounds } = require('./window-edges.cjs');
+const { windowOpenRoute } = require('./window-open.cjs');
 const { hasTestMode } = require('./developer.cjs');
 const { createUpdates } = require('./updates.cjs');
 
@@ -90,6 +91,7 @@ let postItViews = null;
 let updates = null;
 let quitPending = false;
 let quitReady = false;
+let stageListeners = 0; // Stages in the window taking links it would open in a new window (preload's onStageOpenLink)
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'engelbart', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: false, stream: true } },
@@ -234,6 +236,15 @@ function registerTerminalIpc() {
       // A send-only gesture is deliberately ignored when malformed.
     }
   });
+  // A Stage starts (true) or stops (false) taking the window's new-window links; createWindow's open handler asks.
+  ipcMain.on('stage:links', (event, on) => {
+    try {
+      assertTrustedRenderer(event, APP_URL);
+      stageListeners = Math.max(0, stageListeners + (on ? 1 : -1));
+    } catch {
+      // Only the app's own page says whether it has a Stage.
+    }
+  });
   ipcMain.on('terminal:acknowledge', (event, id, sequence) => {
     try {
       assertTrustedRenderer(event, APP_URL);
@@ -353,20 +364,20 @@ function createWindow() {
       webSecurity: true,
     },
   });
+  // What the page would open in a new window or tab (a ⌘-click on a link): a new Stage tab while a Stage listens, else the
+  // default browser; GitHub's sign-in pages always the default browser; untrusted schemes remain closed (window-open.cjs).
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    try {
-      void electronShell.openExternal(parseExternalUrl(url).href).catch(() => {});
-    } catch {
-      // Untrusted schemes remain closed.
-    }
+    const route = windowOpenRoute(url, { stage: stageListeners > 0 });
+    const sent = !!route && route.to === 'stage' && sendToWindow('stage:open-link', { url: route.url, newTab: true });
+    if (route && !sent) void electronShell.openExternal(route.url).catch(() => {});
     return { action: 'deny' };
   });
   mainWindow.webContents.on('will-navigate', (event, url) => {
     if (url !== mainWindow.webContents.getURL()) event.preventDefault();
   });
   // The renderer's browser tabs live in its memory: when the page goes, their views go with it.
-  mainWindow.webContents.on('did-start-loading', () => { rendererLifecycle.detach(); browserViews.closeAll(); void postItViews.activate(null).catch(console.error); });
-  mainWindow.webContents.on('render-process-gone', () => { rendererLifecycle.detach(); void postItViews.activate(null).catch(console.error); });
+  mainWindow.webContents.on('did-start-loading', () => { stageListeners = 0; rendererLifecycle.detach(); browserViews.closeAll(); void postItViews.activate(null).catch(console.error); });
+  mainWindow.webContents.on('render-process-gone', () => { stageListeners = 0; rendererLifecycle.detach(); void postItViews.activate(null).catch(console.error); });
   mainWindow.on('resize', () => postItViews.layout());
   // The header clears the traffic lights only while they are there (preload marks <html data-fullscreen>).
   const sendFullScreen = () => { if (mainWindow) mainWindow.webContents.send('window:fullscreen', mainWindow.isFullScreen()); };
@@ -381,6 +392,7 @@ function createWindow() {
     }
   });
   mainWindow.on('closed', () => {
+    stageListeners = 0;
     rendererLifecycle.detach();
     browserViews.closeAll();
     void postItViews.activate(null).catch(console.error);

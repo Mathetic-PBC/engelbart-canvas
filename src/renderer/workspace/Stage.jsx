@@ -433,10 +433,11 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
 
   // Where something being opened goes (model/stage.js placeTab); answers the tab's id, or null when it was open already.
   // `find`: a passage to find there once it is ready, given to the new tab or to the one that comes forward; `to`, where its section ends.
-  const claim = (key, find = '', to = '') => {
+  // `newTab` (a ⌘-click on a link): a tab of its own, even when one shows it already.
+  const claim = (key, find = '', to = '', { newTab = false } = {}) => {
     const current = tabsRef.current;
     const front = Math.max(0, current.findIndex((t) => t.id === (frontRef.current || current[0].id)));
-    const place = placeTab(current, front, key);
+    const place = placeTab(current, front, key, { newTab });
     if (place.focus != null) {
       const id = current[place.focus].id;
       frontRef.current = id;
@@ -539,18 +540,19 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   };
 
   // Opened from elsewhere — the sidebar, an @mention, a link in the document or the terminal, the all-projects screen.
-  const openRow = (row, find = '', to = '') => {
+  const openRow = (row, find = '', to = '', options = {}) => {
     if (isGithubSignIn(row.url) && !row.path) { quiet(api.openExternal(row.url)); return; }
-    const id = claim(`i:${row.id}`, find, to);
+    const id = claim(`i:${row.id}`, find, to, options);
     if (id) showRow(id, row);
   };
   // A link with a passage to a library row opens the row (its ink shows); any link opens its address without the passage.
-  const openInput = (input) => {
+  // `{ newTab: true }`: a ⌘-click, in a tab of its own.
+  const openInput = (input, options = {}) => {
     const plan = linkPlan(input, library);
-    if (plan.row) { openRow(plan.row, plan.find, plan.to); return; }
+    if (plan.row) { openRow(plan.row, plan.find, plan.to, options); return; }
     const k0 = kindOf(plan.address);
     if (isGithubSignIn(k0.url)) { quiet(api.openExternal(k0.url)); return; }
-    const id = claim(plan.key, plan.find, plan.to);
+    const id = claim(plan.key, plan.find, plan.to, options);
     if (id) void navigate(id, plan.address);
   };
   // Files from the computer open as tabs of their own; + Save is what puts them in the library. Past 15, the rest are left.

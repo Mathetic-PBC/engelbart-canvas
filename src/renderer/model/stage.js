@@ -111,11 +111,12 @@ export function tabKey(tab) {
 
 /**
  * Where something being opened goes (the design's openInStage): the tab that already shows it comes forward; a blank tab
- * in front is used; at MAX_TABS the tab in front is replaced; otherwise a new tab at the end.
+ * in front is used; at MAX_TABS the tab in front is replaced; otherwise a new tab at the end. `newTab` (a ⌘-click on a
+ * link): a tab of its own even when one already shows it, still the blank tab in front, still at most MAX_TABS.
  * Answers { focus: index } | { replace: index } | { append: true }.
  */
-export function placeTab(tabs, activeIndex, key) {
-  const at = key ? tabs.findIndex((tab) => tabKey(tab) === key) : -1;
+export function placeTab(tabs, activeIndex, key, { newTab = false } = {}) {
+  const at = key && !newTab ? tabs.findIndex((tab) => tabKey(tab) === key) : -1;
   if (at >= 0) return { focus: at };
   const front = tabs[activeIndex];
   if (front && tabKey(front) === '' && !front.pdf && !front.file && !front.claimed) return { replace: activeIndex }; // `claimed`: something is on its way into it
