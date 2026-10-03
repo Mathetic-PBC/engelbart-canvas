@@ -519,6 +519,10 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     const postIt = kind === 'quick' || typeof input.text === 'string' ? String(input.text || '').trim() : null;
     if (postIt === '') throw new Error('The sticky is empty.');
     const wanted = postIt === null ? input.target : { kind: 'default' }; // a post-it's Build: always the default repo
+    // A request typed after --build on an @bart line (2026-10-02): a post-it's Build in every way but three. It is not put
+    // in as an archived version of the workspace, the workspace is not one of ⌘J's recent ones for it, and it is given
+    // as <request> without the workspace's history (./context.cjs).
+    const fromLine = kind === 'build' && postIt !== null && !!input.fromLine;
     let pre = await preflight(ctx, projectId, wanted);
     // A library repository that is not on this Mac (a sandbox's, from GitHub) is cloned into repos/<name> first, before
     // anything else: its row keeps the clone (cloneRepository), and the Build works there.
@@ -548,7 +552,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     const inside = path.relative(pre.top, pre.directory);
     const attach = [...new Set((Array.isArray(input.attach) ? input.attach : []).filter((value) => typeof value === 'string' && UUID_RE.test(value)))].slice(0, MAX_ATTACH);
     const task = {
-      id, kind, projectId, workspaceId, postItId: postIt && typeof input.postItId === 'string' ? input.postItId : null, postIt, version: null, title,
+      id, kind, projectId, workspaceId, postItId: postIt && typeof input.postItId === 'string' ? input.postItId : null, postIt, ...(fromLine ? { fromLine } : {}), version: null, title,
       ...choice, sessionId: null,
       target: pre.target, source: pre.directory,
       repo: pre.top, worktree, cwd: inside && !inside.startsWith('..') ? path.join(worktree, inside) : worktree,
@@ -557,16 +561,16 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
       messages: [say('engelbart', `Started on ${choice.modelName} ${choice.effort} in ${pre.target.name}, from ${at.branch} at ${at.sha.slice(0, 7)}${pre.dirty ? `; ${pre.dirty} uncommitted ${pre.dirty === 1 ? 'file' : 'files'} left out` : ''}.`)],
       attach, archive: null, checks: null, conflict: null, accepted: null, created: now().toISOString(), finished: null,
     };
-    const frozen = await freezeContext(ctx, projectId, { task, workspaceId, attach, postIt });
+    const frozen = await freezeContext(ctx, projectId, { task, workspaceId, attach, postIt, fromLine });
     task.archive = frozen.archive;
     // A post-it added to a workspace is put in as an archived version of it, after the one it is given as history.
-    if (workspaceId && postIt) task.version = await archive.importTask(ctx, projectId, workspaceId, { text: postIt, buildId: id, now });
+    if (workspaceId && postIt && !fromLine) task.version = await archive.importTask(ctx, projectId, workspaceId, { text: postIt, buildId: id, now });
     store.writeContext(project, id, frozen.text);
     const saved = store.writeTask(project, task, now());
     if (workspaceId) {
       projects.addWorkspaceBuild(ctx, projectId, workspaceId, id);
       if (attach.length) await projects.linkToWorkspace(ctx, projectId, workspaceId, attach); // what was attached shows on the sidebar
-      if (postIt) track(() => projects.recordEdit(ctx, projectId, workspaceId)); // ⌘J's recent workspaces
+      if (postIt && !fromLine) track(() => projects.recordEdit(ctx, projectId, workspaceId)); // ⌘J's recent workspaces
     }
     emit(saved);
     void prepare(ctx, projectId, id);

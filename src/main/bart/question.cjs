@@ -129,10 +129,33 @@ function readDiscover(text, models) {
   return { ...readBrainstorm(rest, models, 'discover'), mode };
 }
 
+// A full Build of what follows (2026-10-02): `--build` anywhere on an @bart line, in any case.
+const BUILD_RE = /(^|\s)--build(?=\s|$)/gi;
+
+/**
+ * The text after "@bart" → { build, rest }: whether it says --build, and what is left without --build and without the
+ * model and effort flags (readFlags; only when `models` is given, as the editor's are not always loaded yet).
+ */
+function readBuildFlag(text, models = null) {
+  let build = false;
+  const without = String(text || '').replace(BUILD_RE, (all, lead) => { build = true; return lead; }).replace(/\s+/g, ' ').trim();
+  return { build, rest: models ? readFlags(without, models).rest : without };
+}
+
+/**
+ * What an ask is when it is a Build (Workspace.jsx askBart): { request } (empty when nothing follows the flag), or null
+ * for an ask. Only an @bart line builds; on @brainstorm and @discover lines --build is words for that agent.
+ */
+function buildRequestOf({ agent = 'bart', text }, models = null) {
+  if ((agent || 'bart') !== 'bart') return null;
+  const { build, rest } = readBuildFlag(text, models);
+  return build ? { request: rest } : null;
+}
+
 /** The text after "@bart" with its flags replaced by the two that name this model and effort. */
 function withChoice(text, models, { model, effort }) {
   const { rest } = readFlags(text, models);
   return [`--${model}`, `--${effort}`, rest].filter(Boolean).join(' ');
 }
 
-module.exports = { EFFORTS, EFFORT_LABELS, MODES, effortOf, modelOf, readFlags, ladderOf, readQuestion, readBrainstorm, readDiscover, withChoice };
+module.exports = { EFFORTS, EFFORT_LABELS, MODES, effortOf, modelOf, readFlags, ladderOf, readQuestion, readBrainstorm, readDiscover, readBuildFlag, buildRequestOf, withChoice };

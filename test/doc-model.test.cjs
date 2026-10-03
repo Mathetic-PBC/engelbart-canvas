@@ -7,6 +7,15 @@ const { pathToFileURL } = require('node:url');
 
 const load = () => import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
 
+test('an ask\'s pending line gives way to its answer or its Build\'s line, where it stood; nowhere when it is gone (2026-10-02)', async () => {
+  const { placeAnswer, buildLine } = await load();
+  const doc = 'Plan.\n@bart --build add a hello comment\nbart~> ab12\nAfter.';
+  assert.equal(placeAnswer(doc, 'ab12', [buildLine('0123456789')]), 'Plan.\n@bart --build add a hello comment\nbuild> 0123456789\nAfter.');
+  assert.equal(placeAnswer('@bart --build\nbart~> ab12', 'ab12', ['bart> **No Build.** Write what to build after --build.']), '@bart --build\nbart> **No Build.** Write what to build after --build.');
+  assert.equal(placeAnswer(doc, 'ab12', []), 'Plan.\n@bart --build add a hello comment\nAfter.', 'a stopped ask leaves nothing');
+  assert.equal(placeAnswer('Plan.', 'ab12', ['x']), null);
+});
+
 test('a task line is a checkbox; a bare dash is a bullet (2026-09-20)', async () => {
   const { parseLine } = await load();
   assert.deepEqual(parseLine('  - [x] a'), { type: 'todo', depth: 1, done: true, text: 'a' });

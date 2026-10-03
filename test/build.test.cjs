@@ -815,6 +815,32 @@ test('a post-it added to a workspace: a Build of it whose task is the post-it, p
   await assert.rejects(builds.start(ctx, project.id, { kind: 'build', workspaceId: workspace.id, text: '  ' }), /empty/);
 });
 
+test('`@bart --build <request>`: a Build of only the request, with the notes it mentions, no workspace, no history, nothing archived (2026-10-02)', async () => {
+  const { project, workspace } = await scene({ doc: 'Old plan.' });
+  const ref = { kind: 'workspace', workspaceId: workspace.id };
+  await archive.clearWorkspace(ctx, project.id, workspace.id, { keep: () => false });
+  await projects.writeDoc(ctx, project.id, ref, 'The plan in front now.\n@bart --build implement @[Spec]');
+  await projects.createNote(ctx, project.id, { name: 'Spec', text: 'Greet in French.' });
+  const archivesBefore = projects.findWorkspace(ctx, project.id, workspace.id).workspace.archives.length;
+  const recentBefore = JSON.stringify(projects.readNav(ctx).recent);
+  const agent = scripted(['Done.']);
+  const { builds } = manager(agent);
+  const task = await builds.start(ctx, project.id, { kind: 'build', workspaceId: workspace.id, text: 'implement @[Spec]', fromLine: true });
+  assert.deepEqual([task.kind, task.workspaceId, task.title], ['build', workspace.id, 'implement @[Spec]']);
+  assert.equal(task.target.kind, 'default', 'the default repo, as a post-it\'s Build');
+  assert.equal(task.version, null, 'not put in as an archived version');
+  await settled(project, task.id);
+  const context = agent.calls[0].message;
+  assert.match(context, /<request>\nimplement @\[Spec\]\n\n<file name="Spec"[^>]*>\nGreet in French\.\n<\/file>\n<\/request>/, 'the request, with the note it mentions in full under it');
+  assert.match(context, /built from: a request typed on a line of the workspace "Feature"/);
+  assert.match(context, /Do what the request below asks\. The person typed it on a line of a workspace as a full Build/);
+  for (const absent of [/<workspace /, /<history /, /<post-it>/, /The plan in front now/, /Old plan/]) assert.doesNotMatch(context, absent);
+  const held = projects.findWorkspace(ctx, project.id, workspace.id).workspace;
+  assert.equal(held.archives.length, archivesBefore, 'no new archived version');
+  assert.ok(held.builds.includes(task.id));
+  assert.equal(JSON.stringify(projects.readNav(ctx).recent), recentBefore, 'no edit recorded');
+});
+
 /* --------------------------------------------------------------------- the runner */
 
 test('while Engelbart\'s own Git stands in, a Build\'s agent, setup and checks find it first on PATH (2026-09-28)', async () => {

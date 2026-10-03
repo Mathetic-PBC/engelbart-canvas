@@ -67,6 +67,19 @@ test('flags are found where they stand, so the editor can mark them, and a choic
   assert.deepEqual([read.question, read.pinned, read.provider, read.steps.map((s) => `${s.name} ${s.effort}`)], ['why', true, 'anthropic', ['Opus xhigh']]);
 });
 
+test('--build on an @bart line: found anywhere, in any case, and the rest is the request without it or the model and effort flags (2026-10-02)', () => {
+  const { readBuildFlag, buildRequestOf } = require('../src/main/bart/question.cjs');
+  assert.deepEqual(readBuildFlag('--build add a hello comment to README', MODELS), { build: true, rest: 'add a hello comment to README' });
+  assert.deepEqual(readBuildFlag('add a hello --Build comment', MODELS), { build: true, rest: 'add a hello comment' }, 'in the middle');
+  assert.deepEqual(readBuildFlag('what does --builder do', MODELS), { build: false, rest: 'what does --builder do' }, 'absent: --builder is not it');
+  assert.deepEqual(readBuildFlag('--opus --high --build implement @[Some Note]', MODELS), { build: true, rest: 'implement @[Some Note]' }, 'mixed with --opus --high');
+  assert.deepEqual(readBuildFlag('--build', MODELS), { build: true, rest: '' });
+  assert.deepEqual(buildRequestOf({ agent: 'bart', text: '--build add tests' }, MODELS), { request: 'add tests' });
+  assert.deepEqual(buildRequestOf({ text: '--build add tests' }, MODELS), { request: 'add tests' }, 'an ask with no agent is @bart');
+  assert.equal(buildRequestOf({ agent: 'bart', text: 'why is it slow?' }, MODELS), null, 'without the flag it is an ask');
+  for (const agent of ['discover', 'brainstorm']) assert.equal(buildRequestOf({ agent, text: '--build a parser' }, MODELS), null, `@${agent}: --build is words for the agent`);
+});
+
 test('only the providers config.json lists are offered: the rest have no models, no flags and cannot be the default', () => {
   const claude = onlyProviders(MODELS, ['anthropic']);
   assert.deepEqual([Object.keys(claude.providers), claude.provider], [['anthropic'], 'anthropic']);

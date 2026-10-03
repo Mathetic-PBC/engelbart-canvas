@@ -13,7 +13,8 @@ import { adoptSession, dropSession, SHOW_TERMINAL } from '../terminal/sessions.j
 import { mentionRows } from '../model/rail.js';
 import { flatWorkspaces, nextPlace, placesToGo } from '../model/nav.js';
 import { onStage } from '../model/stage.js';
-import { buildLine } from '../model/doc.js';
+import { buildLine, placeAnswer } from '../model/doc.js';
+import { buildRequestOf } from '../../main/bart/question.cjs';
 import ProjectPostIts from '../post-its/ProjectPostIts.jsx';
 import BuildPanel from '../workspace/BuildPanel.jsx';
 import BuildReject from '../workspace/BuildReject.jsx';
@@ -316,16 +317,33 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     const place = (lines) => {
       const held = docsRef.current[key];
       if (typeof held !== 'string') return;
-      const all = held.split('\n'), at = all.indexOf(`bart~> ${askId}`);
-      if (at < 0) return; // the pending line was undone away: there is nowhere to put the answer
-      all.splice(at, 1, ...lines);
-      changeDoc(key, ref, all.join('\n'));
+      const next = placeAnswer(held, askId, lines);
+      if (next !== null) changeDoc(key, ref, next);
     };
+    const workspaceId = ref.kind === 'workspace' ? ref.workspaceId : topic.id;
     setAsks((current) => ({ ...current, [askId]: { docKey: key, agent: agent || 'bart' } }));
+    // `@bart --build <request>` (2026-10-02): not a question. A full Build of only what follows the flag starts, and its
+    // card takes the pending line's place, under the request.
+    const build = buildRequestOf({ agent, text }, bartModels || await api.bartModels().catch(() => null));
+    if (build) {
+      try {
+        if (!build.request) { place(['bart> **No Build.** Write what to build after --build.']); return; }
+        await new Promise((resolve) => { setTimeout(resolve, 0); }); // as below: the pending line is saved with the rest
+        await Promise.all([...pending.current.keys()].map((held) => flush(held)));
+        const task = await api.buildStart(project.id, { workspaceId, text: build.request, fromLine: true });
+        setBuilds((current) => ({ ...current, [task.id]: task }));
+        place([buildLine(task.id)]);
+      } catch (error) {
+        place([`bart> **No Build.** ${errorMessage(error)}`]);
+      } finally {
+        setAsks((current) => { const next = { ...current }; delete next[askId]; return next; });
+      }
+      return;
+    }
     try {
       await new Promise((resolve) => { setTimeout(resolve, 0); }); // let the pending line reach `pending` before flushing it
       await Promise.all([...pending.current.keys()].map((held) => flush(held)));
-      const asked = api.askBart(project.id, { askId, ref, workspaceId: ref.kind === 'workspace' ? ref.workspaceId : topic.id, text, turns: turns || [], choice: choice || null, agent: agent || 'bart' });
+      const asked = api.askBart(project.id, { askId, ref, workspaceId, text, turns: turns || [], choice: choice || null, agent: agent || 'bart' });
       loadBartModels(); // main has kept a pick by hand before this is read
       const out = await asked;
       place(out.stopped ? [] : out.lines);
@@ -334,7 +352,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     } finally {
       setAsks((current) => { const next = { ...current }; delete next[askId]; return next; });
     }
-  }, [docKey, docRef, topic, project.id, flush, changeDoc, loadBartModels]);
+  }, [docKey, docRef, topic, project.id, flush, changeDoc, loadBartModels, bartModels]);
 
   /* ----------------------------------------------------------------- Build */
 

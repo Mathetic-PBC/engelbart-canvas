@@ -23,6 +23,7 @@ The first message carries these blocks.
 - <task>: what to do.
 - <workspace>: the person's document for this task, with every note it mentions placed in <file> tags under the line that mentions it. Lines that start with "bart>" are answers an earlier assistant gave in the document.
 - <post-it>: for a quick task, the post-it's text instead of a workspace.
+- <request>: for a Build started from a line, what the person typed, with the notes it mentions in <file> tags. It replaces the workspace.
 - <attached>: library items the person attached when starting the Build.
 - <history>: an earlier version of this workspace that the person cleared. It is background, telling you what was planned, built or abandoned before. Do not implement anything that appears only in <history>.
 - <context_json>: the project's library: name, type, tags, path or url, a summary, and whether the document mentions it. Open an item's path when the task depends on it. You can read the Engelbart folders listed; you cannot write to them.

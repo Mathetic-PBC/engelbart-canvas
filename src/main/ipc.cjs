@@ -363,6 +363,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
         workspaceId: optStr(value.workspaceId, 'workspace id', 64),
         postItId: optStr(value.postItId, 'post-it id', 64),
         text: optStr(value.text, 'text', 200000),
+        fromLine: !!value.fromLine, // `@bart --build <request>` (Workspace.jsx askBart)
         provider: optStr(value.provider, 'provider', 24),
         model: optStr(value.model, 'model', 24),
         effort: optStr(value.effort, 'effort', 24),

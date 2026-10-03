@@ -22,6 +22,16 @@ export const PENDING_RE = /^bart~> ?([\w-]*)$/;
 // what it is doing, what it said, the reply field, Review / Accept / Discard. Nothing the agent says is in the document.
 export const BUILD_RE = /^build> ([0-9a-f]{10})$/;
 export const buildLine = (id) => `build> ${id}`;
+/**
+ * `text` with ask `askId`'s pending line replaced by `lines`: its answer, or the line of the Build it started (`@bart
+ * --build`, 2026-10-02). null when the pending line is gone (undone away): there is nowhere to put them.
+ */
+export function placeAnswer(text, askId, lines) {
+  const all = String(text).split('\n'), at = all.indexOf(`bart~> ${askId}`);
+  if (at < 0) return null;
+  all.splice(at, 1, ...lines);
+  return all.join('\n');
+}
 export const DRAFT_RE = /^bart\?> ?(.*)$/;
 export const REPLY_RE = /^bart(\+?)> ?(.*)$/;
 // The closing line of an answer: which model said it and how long it took. It is drawn as the card's foot.
