@@ -136,6 +136,18 @@ async function expandRows(rows, source, seen = new Set()) {
   return { lines, ...tally };
 }
 
+/**
+ * One line of text with each pasted image (`![label](img:<id>)`) as the path of its file, read as expandMentions reads
+ * it (an image inside `code` stays text); an image `source` does not know stays as it was. Nothing else is touched: an
+ * agent's question (2026-10-02), which a resumed session is sent alone, without the document that would carry the path.
+ */
+function imagePaths(text, source) {
+  return String(text ?? '').split(INLINE).map((token) => {
+    const image = token && token.match(IMAGE_TOKEN), file = image ? source.image(image[2]) : null;
+    return file ? `![${image[1]}](${file})` : token;
+  }).join('');
+}
+
 /** Where the mentions of a project's documents lead (the `source` expandMentions takes), from the library's rows. */
 function projectSource(ctx, projectId, rows) {
   // Two projects can each hold a file of the same name: this project's is the one meant.
@@ -183,4 +195,4 @@ async function expandDoc(ctx, projectId, ref, { seen = new Set() } = {}) {
   return { title, body: lines.join('\n').trimEnd(), text, chars: text.length, files, missing };
 }
 
-module.exports = { INLINE, expandMentions, expandRows, expandDoc, projectSource };
+module.exports = { INLINE, expandMentions, expandRows, expandDoc, projectSource, imagePaths };

@@ -56,6 +56,12 @@ const NOTE_VERB_RE = /(^|\s)@Note(?:\s+(.*))?$/;
 // A short fingerprint of a line (FNV-1a), so a remembered scroll position finds its line again without keeping its text.
 const hashLine = (line) => { let h = 0x811c9dc5; const s = String(line ?? ''); for (let k = 0; k < s.length; k++) { h ^= s.charCodeAt(k); h = Math.imul(h, 0x01000193); } return (h >>> 0).toString(36); };
 const newAskId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+// A follow-up's text with each [Attachment n] whose image was saved ([{ n, id }]) written as an image pasted on a line is:
+// ![Attachment n](img:<id>). A token typed by hand, or one whose image did not save, stays as it was typed.
+const withAttachments = (text, images) => {
+  const ids = new Map(images.filter((image) => image.id).map((image) => [image.n, image.id]));
+  return text.replace(/(?<!!)\[Attachment (\d+)\](?!\()/g, (token, n) => (ids.has(Number(n)) ? `![Attachment ${n}](img:${ids.get(Number(n))})` : token));
+};
 // A link ⌘-clicked (Ctrl-clicked off macOS, where Ctrl-click is the context menu) opens in a new Stage tab (2026-10-02).
 const newTabClick = (e) => e.metaKey || (e.ctrlKey && !/^(darwin|mac)/i.test(document.documentElement.dataset.platform || navigator.platform || ''));
 
@@ -109,9 +115,10 @@ export default class DocEditor extends React.Component {
   syncing = false; wantFocus = false; composing = false; mounted = false; timers = new Set(); held = false; downOnRoot = false; downOnPage = false;
   openLogs = new Set(); // asks whose list of steps is open
   pickerT = null;
-  // A follow-up being typed and the model picked for it, by the first line of its card. Neither is in the document, and
-  // neither is in the editor's HTML: the field keeps its text across redraws because it is put back after each one.
-  followText = new Map(); followChoice = new Map();
+  // A follow-up being typed, the model picked for it and the images pasted into it ([{ n, id }]), by the first line of its
+  // card. None is in the document, and none is in the editor's HTML: the field keeps its text across redraws because it
+  // is put back after each one.
+  followText = new Map(); followChoice = new Map(); followImages = new Map();
   // What is being answered on a live @brainstorm card, by its question's line: { picks, text, note }. Picks are drawn
   // into the card's HTML; the typed text is not, and is put back after each redraw (restoreCards).
   cardState = new Map(); cardCache = new WeakMap();
@@ -137,11 +144,12 @@ export default class DocEditor extends React.Component {
     const inFollow = (e) => !!(e.target && e.target.matches && e.target.matches('[data-follow-input], [data-build-input], [data-card-input]'));
     const inBuild = (e) => !!(e.target && e.target.matches && e.target.matches('[data-build-input]'));
     const inCard = (e) => !!(e.target && e.target.matches && e.target.matches('[data-card-input]'));
+    const inAsk = (e) => !!(e.target && e.target.matches && e.target.matches('[data-follow-input]')); // a follow-up's field alone
     this.docListeners = {
       keydown: (e) => { if (!inEd(e)) return; this.held = false; if (inBuild(e)) this.buildKey(e); else if (inCard(e)) this.cardKey(e); else if (inFollow(e)) this.followKey(e); else this.editorKey(e); },
       input: (e) => { if (!inEd(e)) return; if (inBuild(e)) this.buildInput(e.target); else if (inCard(e)) this.cardInput(e.target); else if (inFollow(e)) this.followInput(e.target); else this.editorInput(); },
       beforeinput: (e) => { if (!inEd(e) || inFollow(e)) return; const sel = getSelection(); this.bulkDelete = /^delete/.test(e.inputType || '') && !!sel && !sel.isCollapsed; },
-      paste: (e) => { if (!inEd(e)) return; if (inBuild(e)) this.buildPaste(e); else if (!inFollow(e)) this.editorPaste(e); },
+      paste: (e) => { if (!inEd(e)) return; if (inBuild(e)) this.buildPaste(e); else if (inAsk(e)) this.followPaste(e); else if (!inFollow(e)) this.editorPaste(e); },
       // A copy or a cut of the document is its markdown (editorCopy); in a field of its own it is the browser's, as a paste is.
       copy: (e) => { if (inEd(e) && !inFollow(e)) this.editorCopy(e, false); },
       cut: (e) => { if (inEd(e) && !inFollow(e)) this.editorCopy(e, true); },
@@ -1517,13 +1525,15 @@ export default class DocEditor extends React.Component {
   // It asks what the card's last turn asked: @bart, @brainstorm after a recap (which may be sent with nothing typed), or
   // @discover after a guide.
   sendFollow(from) {
-    const ls = this.lines(), thread = threads(ls).find((t) => t.from === from), text = (this.followText.get(from) || '').trim();
+    const ls = this.lines(), thread = threads(ls).find((t) => t.from === from), typed = (this.followText.get(from) || '').trim();
     if (!thread || !this.props.onAsk) return;
-    const end = thread.turns[thread.turns.length - 1], agent = agentOf(parseLine(ls[end.q])); if (!end.answered || end.pending || (!text && !(FOLLOW[agent] && FOLLOW[agent].empty))) return;
+    const end = thread.turns[thread.turns.length - 1], agent = agentOf(parseLine(ls[end.q])); if (!end.answered || end.pending || (!typed && !(FOLLOW[agent] && FOLLOW[agent].empty))) return;
+    // A pasted image goes into the line as its [Attachment n] token stood; one whose token was deleted is not sent.
+    const text = withAttachments(typed, this.followImages.get(from) || []);
     const { flags } = this.followStep(ls, thread), asked = [flags, text].filter(Boolean).join(' ');
     const askId = newAskId(), add = [`@${agent} ${asked}`.trimEnd(), `bart~> ${askId}`]; if (thread.to + 1 >= ls.length) add.push('');
     const turns = thread.turns.filter((turn) => turn.answered && !turn.pending).map((turn) => turnText(ls, turn));
-    this.followText.delete(from);
+    this.followText.delete(from); this.followImages.delete(from);
     const ed = this.editorEl(); if (ed && ed.contains(document.activeElement)) document.activeElement.blur();
     this.setLines((x) => { const out = [...x]; out.splice(thread.to + 1, 0, ...add); return out; });
     this.setState({ activeLine: null, mention: null });
@@ -1538,6 +1548,37 @@ export default class DocEditor extends React.Component {
   followInput(input) {
     if (/[\r\n]/.test(input.value)) { const a = input.selectionStart, b = input.selectionEnd; input.value = input.value.replace(/[\r\n]/g, ' '); input.setSelectionRange(a, b); }
     this.followText.set(Number(input.dataset.followInput), input.value); this.paintSend(input); this.fitFollow(input);
+  }
+  // An image pasted into a follow-up (2026-10-02) is saved as one pasted into the document is (the parent's onPasteImage)
+  // and named in the field as [Attachment n], numbered on from the document's images; sendFollow writes it into the line.
+  // A text paste is the field's own, as before.
+  followPaste(e) {
+    const from = Number(e.target.dataset.followInput);
+    const pasted = [...(((e.clipboardData || {}).files) || [])].filter((file) => /^image\/(png|jpeg|gif|webp)$/.test(file.type));
+    if (!pasted.length || !this.props.onPasteImage) return; // text pastes as text
+    e.preventDefault();
+    void (async () => {
+      for (const file of pasted) {
+        const draft = this.followImages.get(from) || [], inDoc = (String(this.props.text ?? '').match(/\]\(img:/g) || []).length;
+        const n = Math.max(inDoc + draft.length, ...draft.map((image) => image.n)) + 1;
+        this.followImages.set(from, [...draft, { n, id: null }]); // holds the number while it saves
+        let saved = null;
+        try { saved = await this.props.onPasteImage(file, `Attachment ${n}`); } catch { saved = null; }
+        const held = (this.followImages.get(from) || []).filter((image) => image.n !== n);
+        if (!saved || !saved.id || !this.mounted) { this.followImages.set(from, held); continue; }
+        this.followImages.set(from, [...held, { n, id: saved.id }]);
+        // The field as it is now: a redraw while the image saved replaced the one pasted into.
+        const field = this.editorEl() && this.editorEl().querySelector(`[data-follow-input="${from}"]`), token = `[Attachment ${n}]`;
+        if (field) {
+          const a = field.selectionStart ?? field.value.length, b = field.selectionEnd ?? a, before = field.value.slice(0, a);
+          field.setRangeText(`${before && !/\s$/.test(before) ? ' ' : ''}${token} `, a, b, 'end');
+          this.followInput(field);
+        } else {
+          const text = this.followText.get(from) || '';
+          this.followText.set(from, `${text}${text && !/\s$/.test(text) ? ' ' : ''}${token} `);
+        }
+      }
+    })();
   }
   // What answered turn `q`, read from its closing line ("Sol · medium · 31 s"); the question's own first step when there is
   // none. → { current } for the selector to mark, and { choice } to regenerate with the same model and effort.

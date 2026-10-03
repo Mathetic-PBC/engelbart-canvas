@@ -572,6 +572,46 @@ test('a follow-up resumes the session inside the window and is given everything 
   assert.deepEqual([again.meta.provider, again.meta.level.name, again.meta.level.effort, again.meta.pinned], ['anthropic', 'Opus', 'max', true]);
 });
 
+test('an image pasted into a question is sent as its file\'s path, to a resumed session and a new one alike (2026-10-02)', async () => {
+  const authFile = path.join(homeDir, 'auth-image.json');
+  fs.writeFileSync(authFile, JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'x' } }));
+  const calls = [];
+  const run = (shell, args, options, callback) => {
+    calls.push({ command: args[args.length - 1], input: fs.readFileSync(options.env.ENGELBART_BART_INPUT, 'utf8') });
+    fs.writeFileSync(options.env.ENGELBART_BART_OUTPUT, `answer ${calls.length}`);
+    callback(null, '{"type":"thread.started","thread_id":"01a0bc2d-7c18-77d2-8b21-3cc7e942cbcd"}\n');
+  };
+  const threads = createThreads();
+  const bart = createBart({ readModels: () => MODELS, environment: { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir }, runDirectory: path.join(homeDir, 'runs-image'), codexHome: path.join(homeDir, 'codex-home-image'), codexAuthFile: authFile, run, threads });
+  const space = await projects.createWorkspace(ctx, project.id, { name: 'Pictures' });
+  const ref = { kind: 'workspace', workspaceId: space.id };
+  const image = await projects.saveImage(ctx, project.id, { bytes: new Uint8Array([137, 80, 78, 71]), mime: 'image/png', name: 'Attachment 1' });
+  const file = (await ctx.libraryDb.get(image.id)).path;
+  assert.ok(path.isAbsolute(file) && fs.existsSync(file));
+  const shot = `![Attachment 1](img:${image.id})`, gone = '![Attachment 2](img:0b6c1a9e-0000-4000-8000-000000000000)';
+  await projects.writeDoc(ctx, project.id, ref, `@bart why?\nbart> answer 1\n@bart what is ${shot} showing?\nbart~> p2\n`);
+  const ask = (askId, text, turns) => bart.ask(ctx, project.id, { askId, ref, workspaceId: space.id, text, turns });
+  const question = (input) => input.match(/<question>\n([\s\S]*)\n<\/question>$/)[1];
+
+  await ask('p1', 'why?');
+  const first = [{ question: 'why?', answer: 'answer 1' }];
+  await ask('p2', `what is ${shot} showing?`, first);
+  assert.match(calls[1].command, / resume /, 'a follow-up inside the window resumes');
+  assert.equal(question(calls[1].input), `what is ![Attachment 1](${file}) showing?`, 'the resumed session, sent the question alone, gets the path');
+  assert.ok(!calls[1].input.includes('img:'));
+
+  // Kept under the line as the document holds it, img:<id> and all: the next follow-up the editor sends resumes again.
+  const second = [...first, { question: `what is ${shot} showing?`, answer: 'answer 2' }];
+  await ask('p3', `and ${gone}?`, second);
+  assert.match(calls[2].command, / resume /);
+  assert.equal(question(calls[2].input), `and ${gone}?`, 'an image that is gone stays as written');
+
+  threads.forget(); // idle past the window: a new session
+  await ask('p4', `again ${shot}`, [...second, { question: `and ${gone}?`, answer: 'answer 3' }]);
+  assert.match(calls[3].command, /^exec codex exec --color never /);
+  assert.equal(question(calls[3].input), `again ![Attachment 1](${file})`, 'a new session\'s question gets the path too');
+});
+
 test('the fake agent follows up the same way, so a scripted run can show which path was taken', async () => {
   const threads = createThreads();
   const bart = createFakeBart({ readModels: () => MODELS, delayMs: 5, threads });

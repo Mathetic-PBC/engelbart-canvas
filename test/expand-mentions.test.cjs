@@ -9,7 +9,7 @@ const { pathToFileURL } = require('node:url');
 const db = require('../src/main/store/db.cjs');
 const { ensureHome } = require('../src/main/store/home.cjs');
 const projects = require('../src/main/store/projects.cjs');
-const { INLINE, expandMentions, expandDoc } = require('../src/main/context/expand-mentions.cjs');
+const { INLINE, expandMentions, expandDoc, imagePaths } = require('../src/main/context/expand-mentions.cjs');
 
 /** A library held in memory: notes carry their text, everything else is a row. */
 function sourceOf(rows, images = {}) {
@@ -155,6 +155,13 @@ test('a pasted image becomes the path of its file, inline or on a line of its ow
   const source = sourceOf([], { 'a1b2-c3': '/home/p/assets/a1b2-c3.png' });
   const result = await expand('![Attachment 1](img:a1b2-c3)\n- [ ] fix ![Attachment 1](img:a1b2-c3) and ![Attachment 2](img:nope)', source);
   assert.equal(result.text, '![Attachment 1](/home/p/assets/a1b2-c3.png)\n- [ ] fix ![Attachment 1](/home/p/assets/a1b2-c3.png) and ![Attachment 2](img:nope)');
+});
+
+test('imagePaths: a question\'s pasted images become the paths of their files, and nothing else changes (2026-10-02)', () => {
+  const source = sourceOf([note('Plan', 'never read')], { 'a1b2-c3': '/home/p/assets/a1b2-c3.png' });
+  assert.equal(imagePaths('--opus what is ![Attachment 2](img:a1b2-c3) showing?', source), '--opus what is ![Attachment 2](/home/p/assets/a1b2-c3.png) showing?');
+  assert.equal(imagePaths('![Attachment 3](img:nope) gone, `![Attachment 2](img:a1b2-c3)` in code, @[Plan] mentioned', source), '![Attachment 3](img:nope) gone, `![Attachment 2](img:a1b2-c3)` in code, @[Plan] mentioned', 'an image that is gone stays as written; code and mentions are untouched');
+  assert.equal(imagePaths('[Attachment 2] typed', source), '[Attachment 2] typed');
 });
 
 test('the inline tokens are the editor\'s own', async () => {

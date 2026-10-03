@@ -56,6 +56,7 @@ const { DISCOVER_SYSTEM_PROMPT } = require('./discover-system-prompt.cjs');
 const { readQuestion, readBrainstorm, readDiscover, withChoice } = require('./models.cjs');
 const { OPENING, SKIPPED, cardBody, cardOfAnswer, readCard, readAnswer, answersSoFar } = require('./card.cjs');
 const { buildContext, conversationBlock } = require('./context.cjs');
+const { projectSource, imagePaths } = require('../context/expand-mentions.cjs');
 const { replyLines, answerText } = require('./reply.cjs');
 const { pathLabeller, claudeUpdate, codexUpdate, eventReader, createFeed } = require('./activity.cjs');
 const { TOOL_OF } = require('../tools/requirements.cjs');
@@ -155,6 +156,17 @@ function createThreads({ idleMs = THREAD_IDLE_MS, setTimer = setTimeout, clearTi
     forget(match = () => true) { for (const [key, entry] of [...held]) if (match(entry)) drop(key); save(); },
     size: () => held.size,
   };
+}
+
+/**
+ * The question as it is sent (2026-10-02): an image pasted into it (`![Attachment n](img:<id>)`, from the document or a
+ * follow-up's field) as the path of its file, which the agent's file tools can open; one whose image is gone as written.
+ * A new session's documents carry the path too, a resumed one is sent the question alone. What the session is kept
+ * under is the line as the document holds it, img:<id> and all.
+ */
+async function withImagePaths(ctx, projectId, question) {
+  if (!/\]\(img:/.test(question)) return question;
+  return imagePaths(question, projectSource(ctx, projectId, await ctx.libraryDb.list()));
 }
 
 /**
@@ -381,6 +393,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
     const store = { bart: threads, brainstorm: brainstormThreads, discover: discoverThreads }[agent];
     const held = prior.length ? store.take(threadKey(projectId, ref, prior), provider) : null;
     const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent });
+    const sent = await withImagePaths(ctx, projectId, asked);
     const cwd = path.join(runDirectory, projectId);
     fs.mkdirSync(cwd, { recursive: true, mode: 0o700 });
     const stem = path.join(cwd, `ask-${randomUUID()}`);
@@ -396,7 +409,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
           discover: { home: discoverCodexHome, mcp: true, timeout: DISCOVER_TIMEOUT_MS },
         }[agent];
         cli = (provider === 'anthropic' ? claudeTurns : codexTurns)({ system: loadSystemPrompt(ctx.dataRoot, agent), cwd, dirs: context.dirs, stem, signal: controller.signal, short: pathLabeller(context.dirs), onUpdate: feed.take, resume: session, ...only });
-        return await climb({ steps, pinned, first: firstMessage({ context, prior: shown, question: asked, resumed: !!session, extra }), session, turn: (input) => { feed.reset(); return cli.turn(input); }, onProgress });
+        return await climb({ steps, pinned, first: firstMessage({ context, prior: shown, question: sent, resumed: !!session, extra }), session, turn: (input) => { feed.reset(); return cli.turn(input); }, onProgress });
       } finally { if (cli) cli.done(); }
     };
     const cliName = TOOL_OF[provider];
@@ -535,7 +548,7 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
       const store = { bart: threads, brainstorm: brainstormThreads, discover: discoverThreads }[agent];
       const held = prior.length ? store.take(threadKey(projectId, ref, prior), provider) : null;
       const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent });
-      const message = firstMessage({ context, prior: plan.shown, question: plan.asked, resumed: !!held, extra: plan.extra });
+      const message = firstMessage({ context, prior: plan.shown, question: await withImagePaths(ctx, projectId, plan.asked), resumed: !!held, extra: plan.extra });
       const pause = (ms) => new Promise((resolve, reject) => { const timer = setTimeout(resolve, ms); waits.set(askId, () => { clearTimeout(timer); reject(new BartError('stopped', 'Stopped.')); }); });
       const feed = createFeed({ onProgress, intervalMs: 0 });
       // The same kinds of update a real run sends, spread over the delay: two things done, then the answer in pieces.
