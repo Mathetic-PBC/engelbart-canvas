@@ -5,9 +5,11 @@
 // ./question.cjs): a card it draws is one main would have written, and an answer it writes is one main reads.
 //
 // The agent replies with one JSON object (./brainstorm-system-prompt.cjs):
-//   { say, card: 'questions' | 'focus' | 'none', map?, questions | focus, ready }
+//   { say, card: 'questions' | 'focus' | 'none', map?, questions | focus, lookFor?, ready }
 // `map` (2026-09-30, the first card of an exchange): where the person seems to be, read from what they wrote, as three
 // groups of { text, from }: settled, open, untouched. All three empty says there was too little to go on.
+// `lookFor` (round 6): one search for prior work on the point the card asks about, in the person's words; the editor
+// draws it as an @discover button under a live @brainstorm card.
 // A card is kept as the lines of a fenced ```json block (./reply.cjs puts `bart> ` in front of each); the recap
 // (card 'none') as its text. A reply that is not a card is kept as it came, and reads as an @bart answer does.
 // The person's answer is the next line of the document:
@@ -16,12 +18,17 @@
 //   @brainstorm the words they typed           free and open, or a sentence typed by hand
 //   @brainstorm picked "a"; note: …            with something added
 //   @brainstorm (skipped)                      Skip
+//   @brainstorm (wrap up)                      Wrap up (round 6), with nothing given
+//   @brainstorm picked "a"; (wrap up)          Wrap up, with the answer given
 
 const TYPES = ['mcq', 'select_all', 'free', 'open'];
 const MAX_OPTIONS = 6;
 const MAP_GROUPS = ['settled', 'open', 'untouched'];
 const MAX_MAP_ITEMS = 4;
 const SKIPPED = '(skipped)';
+// What Wrap up adds to an answer (round 6): the person is done for now and the next reply is the recap.
+const WRAP = '(wrap up)';
+const LOOK_FOR_CHARS = 140;
 // What an @brainstorm line with nothing after it asks (BS-01).
 const OPENING = 'Start from this workspace.';
 
@@ -79,6 +86,12 @@ function cleanMap(map) {
 /** Whether a map says anything (all three groups empty: there was too little to go on). */
 const mapHolds = (map) => !!map && MAP_GROUPS.some((group) => map[group].length > 0);
 
+/** A card's search (round 6) as it may be kept: one line of at most 140 characters, '' when empty or an address. */
+function cleanLookFor(value) {
+  const query = clip(value, LOOK_FOR_CHARS);
+  return /^(?:[a-z][a-z0-9+.-]*:\/\/|www\.)/i.test(query) ? '' : query;
+}
+
 /**
  * A reply (the model's text, or a value already parsed) as a card fit to draw, or null when it is not one. `ready`
  * ends the exchange whatever card it names: the recap is `say`, and a recap without words is not one.
@@ -91,11 +104,12 @@ function readCard(text) {
   if (kind === 'none' || value.ready === true) return say ? { say, card: 'none', ready: true } : null;
   const map = cleanMap(value.map);
   const mapped = map ? { map } : {};
+  const lookFor = cleanLookFor(value.lookFor), look = lookFor ? { lookFor } : {};
   if (kind === 'focus') {
     const focus = isObject(value.focus) ? value.focus : {};
     const options = cleanOptions(focus.options);
     if (options.length < 2) return null;
-    return { say, card: 'focus', ...mapped, focus: { title: clip(focus.title, 300) || 'What should we focus on?', options }, ready: false };
+    return { say, card: 'focus', ...mapped, focus: { title: clip(focus.title, 300) || 'What should we focus on?', options }, ...look, ready: false };
   }
   if (kind === 'questions') {
     const questions = isObject(value.questions) ? value.questions : {};
@@ -114,7 +128,7 @@ function readCard(text) {
       if (placeholder) out.placeholder = placeholder;
     }
     const eyebrow = clip(questions.eyebrow, 60);
-    return { say, card: 'questions', ...mapped, questions: { ...(eyebrow ? { eyebrow } : {}), items: [out] }, ready: false };
+    return { say, card: 'questions', ...mapped, questions: { ...(eyebrow ? { eyebrow } : {}), items: [out] }, ...look, ready: false };
   }
   return null;
 }
@@ -165,38 +179,56 @@ function answerLine(card, given = {}) {
   return note ? `${said}; note: ${note}` : said;
 }
 
-/** The words after "@brainstorm" (flags already taken off) read back against the card they answer → { skipped, picks, text, note }. */
-function readAnswer(text, card) {
+/**
+ * Whether an answer wraps up (round 6) → { wrap, rest }: it is "(wrap up)" alone, or ends in "; (wrap up)" after the
+ * answer given; `rest` is the answer without it ('' for Wrap up alone).
+ */
+function readWrap(text) {
   const said = String(text == null ? '' : text).trim();
-  if (!said || said === SKIPPED) return { skipped: true, picks: [], text: '', note: '' };
+  if (said === WRAP) return { wrap: true, rest: '' };
+  const m = said.match(/^([\s\S]*?)\s*;\s*\(wrap up\)$/);
+  return m ? { wrap: true, rest: m[1].trim() } : { wrap: false, rest: said };
+}
+
+/** An answer line (answerLine's) as Wrap up writes it: the answer, then "; (wrap up)", or "(wrap up)" alone when nothing was given. */
+const withWrap = (said) => (!said || said === SKIPPED ? WRAP : `${said}; ${WRAP}`);
+
+/**
+ * The words after "@brainstorm" (flags already taken off) read back against the card they answer → { skipped, picks,
+ * text, note }, and `wrap: true` when they wrapped up (the answer before it read as any other; Wrap up alone is skipped).
+ */
+function readAnswer(text, card) {
+  const { wrap, rest: said } = readWrap(text), out = (answer) => (wrap ? { ...answer, wrap: true } : answer);
+  if (!said || said === SKIPPED) return out({ skipped: true, picks: [], text: '', note: '' });
   const m = said.match(/^picked\s+((?:"[^"]*"\s*,\s*)*"[^"]*")\s*(?:;\s*note:\s*([\s\S]*))?$/i);
-  if (m) return { skipped: false, picks: [...m[1].matchAll(/"([^"]*)"/g)].map((pick) => pick[1]), text: '', note: (m[2] || '').trim() };
+  if (m) return out({ skipped: false, picks: [...m[1].matchAll(/"([^"]*)"/g)].map((pick) => pick[1]), text: '', note: (m[2] || '').trim() });
   // Typed by hand: a sentence stands as what was said; one that is an option's label word for word is that pick.
   const asked = questionOf(card);
   const same = asked && isChoice(asked.type) ? asked.options.find((option) => option.label.toLowerCase() === said.toLowerCase()) : null;
-  return same ? { skipped: false, picks: [same.label], text: '', note: '' } : { skipped: false, picks: [], text: said, note: '' };
+  return out(same ? { skipped: false, picks: [same.label], text: '', note: '' } : { skipped: false, picks: [], text: said, note: '' });
 }
 
 const bare = (question) => String(question == null ? '' : question).replace(/^(?:--\S+\s*)+|(?:\s*--\S+)+$/g, '').trim();
 
 /**
  * How many meaningful answers the person has given since the exchange last ended (a recap, or a reply that was not a
- * card), `question` (the one being asked now) included: an answer to a card that is not Skip. `turns`: the earlier
- * turns { question, answer }, oldest first; turn n + 1's question answers turn n's card.
+ * card), `question` (the one being asked now) included: an answer to a card that is not Skip or Wrap up alone (an
+ * answer given with Wrap up counts). `turns`: the earlier turns { question, answer }, oldest first; turn n + 1's
+ * question answers turn n's card.
  */
 function answersSoFar(turns, question) {
   const said = [...turns.map((turn) => turn.question), question];
   let count = 0;
   for (let n = turns.length - 1; n >= 0; n -= 1) {
     if (!cardOfAnswer(turns[n].answer)) break;
-    const answer = bare(said[n + 1]);
+    const answer = readWrap(bare(said[n + 1])).rest;
     if (answer && answer !== SKIPPED) count += 1;
   }
   return count;
 }
 
 const LOOK_FOR_RE = /^\s*look for:\s*(?:@discover\b\s*)?(.*)$/i;
-const MAX_LOOK_FOR = 2, LOOK_FOR_CHARS = 140;
+const MAX_LOOK_FOR = 2;
 
 /**
  * A recap (the text of a brainstorm reply that is not a card) → { lines, lookFor } (2026-09-30, round 4): its lines
@@ -226,4 +258,4 @@ function recapLine(line) {
   return { label, text: m[2].trim() };
 }
 
-module.exports = { recapParts, recapLine, RECAP_LABELS, TYPES, SKIPPED, OPENING, MAP_GROUPS, parseJson, cleanMap, mapHolds, readCard, cardBody, cardOfAnswer, questionOf, isChoice, answerLine, readAnswer, answersSoFar };
+module.exports = { recapParts, recapLine, RECAP_LABELS, TYPES, SKIPPED, WRAP, OPENING, MAP_GROUPS, LOOK_FOR_CHARS, parseJson, cleanMap, mapHolds, readCard, cardBody, cardOfAnswer, questionOf, isChoice, answerLine, readWrap, withWrap, readAnswer, answersSoFar };

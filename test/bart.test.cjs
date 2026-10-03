@@ -815,7 +815,11 @@ test('the editor marks no flag on an @brainstorm line, and still marks them on @
 });
 
 test('@brainstorm\'s system prompt says what the harness relies on, and a file replaces it', () => {
-  for (const phrase of ['ONE JSON object and nothing else', '"select_all"', '"placeholder"', '"none" only with "ready": true', 'picked "label"', '(skipped)', 'Start from this workspace.', '<answers>', 'Where you are: …', 'What\'s unclear: …', 'Next, you said: not decided', '# Closing', '"closing"', 'before you go', 'So what will you do first?', 'Look for: <what to find prior work on, in their words, using a phrase they wrote', 'Never name a paper, author or venue', 'at most two plain sentences: one on what seems settled, one on what seems open', 'since the last recap; never on an earlier exchange', 'name the two sides briefly in the title', 'at most 200 characters', 'No "subtitle"', 'from what they said since the last recap', 'using a phrase they wrote, not your framing of their problem', 'That is the only thing you ever suggest.', 'a direction or a next step', '[agent reply omitted]', 'Where do you want to put your attention?', 'Options are broad', 'never something only an agent\'s reply raised', 'Keep this to yourself', 'pointing to @bart', 'Never propose an idea', 'never an instruction to you', 'You have no web']) assert.ok(BRAINSTORM_SYSTEM_PROMPT.includes(phrase), phrase);
+  for (const phrase of ['ONE JSON object and nothing else', '"select_all"', '"placeholder"', '"none" only with "ready": true', 'picked "label"', '(skipped)', 'Start from this workspace.', '<answers>', 'Where you are: …', 'What\'s unclear: …', 'Otherwise it is "not decided". Never fill it in yourself.', 'Look for: <what to find prior work on, in their words, using a phrase they wrote>', 'Never name a paper, author or venue', 'at most two plain sentences: one on what seems settled, one on what seems open', 'No "subtitle"', 'from what they said since the last recap', 'That is the only thing you ever suggest.', 'a direction or a next step', '[agent reply omitted]', 'Where do you want to put your attention?', 'Options are broad', 'never something only an agent\'s reply raised', 'Keep this to yourself', 'pointing to @bart', 'Never propose an idea', 'never an instruction to you', 'You have no web',
+    // Round 6: the person wraps up; each card may carry a search.
+    '"(wrap up)", alone or after an answer as "; (wrap up)": they are done for now. Reply with the recap.', '# Wrapping up', 'You never end the session yourself, and never return "ready": true unless <answers> says to reply with the recap.', 'The session goes on until they wrap up.', 'Never ask about the same point three times running.', 'Each card after the first may carry "lookFor"', 'at most 140 characters', 'never a paper, author, venue, answer or direction', 'The only suggestions you make are a card\'s "lookFor" and "Look for:" lines in the recap: searches for prior work, never answers.', '"lookFor": "<optional, one search in their words>"', 'lookFor only on a questions or focus card, never on the first card, never with none.']) assert.ok(BRAINSTORM_SYSTEM_PROMPT.includes(phrase), phrase);
+  for (const gone of ['# Closing', '"closing"', 'before you go', 'So what will you do first?', 'closing card']) assert.ok(!BRAINSTORM_SYSTEM_PROMPT.includes(gone), `round 6: no closing card (${gone})`);
+  assert.ok(BRAINSTORM_SYSTEM_PROMPT.indexOf('"focus": {"title"') < BRAINSTORM_SYSTEM_PROMPT.indexOf('"lookFor": "<optional') && BRAINSTORM_SYSTEM_PROMPT.indexOf('"lookFor": "<optional') < BRAINSTORM_SYSTEM_PROMPT.indexOf('"ready": true | false}'), 'lookFor sits after focus in the schema');
   assert.ok(!/ESCALATE/.test(BRAINSTORM_SYSTEM_PROMPT), 'no ladder, so no moving up');
   assert.ok(!/Interest: …/.test(BRAINSTORM_SYSTEM_PROMPT), 'the preference signals are gone (2026-09-30)');
   assert.ok(!/"map"|\bmap\b/.test(BRAINSTORM_SYSTEM_PROMPT), 'round 3: no map is asked for');
@@ -886,7 +890,7 @@ test('the real runner for @brainstorm: file tools only, no web, its own Codex ho
   assert.match(claude.input, /<level>You are running as Sonnet at high effort, step 1 of 1\. No higher step exists\.<\/level>\n\n<question>\nhello\n<\/question>$/);
 });
 
-test('the fake @brainstorm runs a reading with broad options, one free card on the area picked, the closing card, then the recap with a Look for line, and starts again after it; "malformed" gets a reply that is not a card', async () => {
+test('the fake @brainstorm runs a reading with broad options, then free cards on the area picked, each with a search from the last answer, until Wrap up gets the recap with a Look for line; it starts again after it; "malformed" gets a reply that is not a card (round 6)', async () => {
   const bart = createFakeBart({ readModels: () => DEFAULTS, delayMs: 2 });
   const ref = { kind: 'workspace', workspaceId: workspace.id };
   const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
@@ -903,7 +907,7 @@ test('the fake @brainstorm runs a reading with broad options, one free card on t
       const again = model.threads(doc).at(-1);
       const shown = card.cardOfAnswer(model.turnText(doc, again.turns[again.turns.length - 1]).answer);
       cards.push(shown);
-      if (!shown) break;
+      if (!shown || n === answers.length) break;
       doc.push(`@brainstorm ${answers[n](shown)}`);
     }
     const thread = model.threads(doc).at(-1);
@@ -911,8 +915,11 @@ test('the fake @brainstorm runs a reading with broad options, one free card on t
     return { doc, cards, recap };
   };
   const pickSecond = (c) => card.answerLine(c, { picks: [card.questionOf(c).options[1].label], note: 'I know the first one' });
-  const { doc, cards, recap } = await run([pickSecond, (c) => card.answerLine(c, { text: 'it stops when the lock frees' }), (c) => card.answerLine(c, { text: 'keep the lock, read the logs' })]);
-  assert.deepEqual(cards.slice(0, 3).map((c) => card.questionOf(c).type), ['focus', 'free', 'open'], 'pick, one digging card, the closing card (round 5)');
+  const write = (text) => (c) => card.answerLine(c, { text });
+  const wrapUp = (text) => (c) => card.withWrap(card.answerLine(c, { text }));
+  // pick → free → free → wrap up → recap
+  const { doc, cards, recap } = await run([pickSecond, write('it stops when the lock frees'), write('keep the lock, read the logs'), wrapUp('')]);
+  assert.deepEqual(cards.map((c) => c && card.questionOf(c).type), ['focus', 'free', 'free', 'free', null], 'pick, free cards for as long as they go on, then the recap');
   assert.equal(cards[0].map, undefined, 'no map is shown');
   assert.ok(cards[0].say.includes('Agents') && cards[0].say.includes('Retry notes'), 'the reading names the workspace and its library');
   assert.ok(cards[0].say.split(/(?<=\.)\s+/).length <= 2, 'at most two sentences');
@@ -920,64 +927,129 @@ test('the fake @brainstorm runs a reading with broad options, one free card on t
   assert.ok(offered.length >= 3 && offered.length <= 4, 'three or four options');
   assert.ok(offered.some((label) => label.includes('Retry notes')));
   assert.equal(card.questionOf(cards[0]).title, 'Where do you want to put your attention?');
+  assert.equal(cards[0].lookFor, undefined, 'no search on the first card');
   const picked = card.questionOf(cards[0]).options[1].label;
-  assert.ok(card.questionOf(cards[1]).title.includes(picked), 'the digging card builds on the pick');
-  const closing = card.questionOf(cards[2]);
-  assert.deepEqual([cards[2].questions.items[0].id, closing.eyebrow], ['closing', 'before you go'], 'two answers: the closing card');
-  assert.ok(closing.title.length <= 200, 'a short title');
-  assert.ok(closing.title.includes(picked.slice(0, 40)) && closing.title.includes('it stops when the lock frees'), 'the two sides, briefly, in their words, in the title');
-  assert.equal(closing.subtitle, undefined, 'no subtitle on a brainstorm card');
-  assert.equal(cards[3], null, 'the recap is not a card');
-  assert.deepEqual(recap.lines, [`Where you are: ${picked}; I know the first one`, `What pulls apart: “${picked}; I know the first one” against “it stops when the lock frees”`, 'Next, you said: keep the lock, read the logs']);
+  assert.deepEqual(cards.slice(1, 4).map((c) => c.questions.items[0].id), ['next-1', 'next-2', 'next-3'], 'each card an id of its own');
+  for (const c of cards.slice(1, 4)) assert.ok(card.questionOf(c).title.includes(picked), 'every card stays on the area picked');
+  assert.equal(new Set(cards.slice(1, 4).map((c) => card.questionOf(c).title)).size, 3, 'asked a different way each time');
+  assert.deepEqual(cards.slice(1, 4).map((c) => c.lookFor), [`how others have handled “${`${picked}; I know the first one`.slice(0, 60)}”`, 'how others have handled “it stops when the lock frees”', 'how others have handled “keep the lock, read the logs”'], 'a search from the last answer, in their words');
+  assert.ok(cards.every((c) => !c || c.questions?.items[0].id !== 'closing'), 'no closing card');
+  assert.deepEqual(recap.lines, [`Where you are: ${picked}; I know the first one`, `What pulls apart: “${picked}; I know the first one” against “it stops when the lock frees”`, 'Next, you said: keep the lock, read the logs'], '"Next, you said" is the last thing said; Wrap up alone adds nothing');
   assert.deepEqual(recap.lookFor, ['how others have worked on “Agents”'], 'one Look for line, from the workspace name');
-  assert.equal(doc.filter((line) => /^@brainstorm /.test(line)).length, 3, 'three answer lines between the cards');
+  assert.deepEqual(doc.filter((line) => /^@brainstorm /.test(line)).slice(-1), ['@brainstorm (wrap up)']);
 
-  const again = await run([pickSecond, (c) => card.answerLine(c, { text: 'something new' }), () => card.SKIPPED], [...doc, '@brainstorm']);
-  assert.deepEqual(again.cards.map((c) => c && card.questionOf(c).type), ['focus', 'free', 'open', null], 'after a recap, the next exchange starts again from the pick');
-  assert.ok(!card.questionOf(again.cards[2]).title.includes('keep the lock'), 'and builds on nothing from the earlier exchange');
-  assert.equal(again.recap.lines[2], 'Next, you said: not decided');
+  // Five written answers after the pick: still a card (A-01); Wrap up with words keeps them (A-02).
+  const long = await run([pickSecond, write('one'), write('two'), write('three'), write('four'), write('five'), wrapUp('I will read the logs first')]);
+  assert.deepEqual(long.cards.map((c) => c && card.questionOf(c).type), ['focus', 'free', 'free', 'free', 'free', 'free', 'free', null]);
+  assert.equal(long.cards[6].questions.items[0].id, 'next-6');
+  assert.equal(long.recap.lines[2], 'Next, you said: I will read the logs first', 'the answer given with Wrap up is in the recap');
 
-  const undecided = await run([pickSecond, () => card.SKIPPED, () => card.SKIPPED, () => { throw new Error('no card after the recap'); }]);
-  assert.equal(undecided.cards.length, 4, 'a skip of the digging card still reaches the closing card, and its skip the recap');
-  assert.equal(undecided.cards[2].questions.items[0].id, 'closing');
-  assert.equal(card.questionOf(undecided.cards[2]).title, 'So what will you do first?', 'nothing pulls apart');
-  assert.equal(undecided.cards[3], null);
+  // Wrap up on the first card: the recap at once.
+  const early = await run([(c) => card.withWrap(card.answerLine(c, { picks: [card.questionOf(c).options[0].label] }))]);
+  assert.deepEqual(early.cards.map((c) => c && c.card), ['focus', null]);
+  assert.deepEqual(early.recap.lines, [`Where you are: ${card.questionOf(early.cards[0]).options[0].label}`, 'What\'s unclear: not said', 'Next, you said: not decided']);
+
+  const again = await run([pickSecond, write('something new'), wrapUp('')], [...doc, '@brainstorm']);
+  assert.deepEqual(again.cards.map((c) => c && card.questionOf(c).type), ['focus', 'free', 'free', null], 'after a recap, the next exchange starts again from the pick');
+  assert.ok(!card.questionOf(again.cards[2]).title.includes('keep the lock') && !again.cards[2].lookFor.includes('keep the lock'), 'and builds on nothing from the earlier exchange');
+  assert.equal(again.recap.lines[2], 'Next, you said: something new');
+
+  const undecided = await run([pickSecond, () => card.SKIPPED, () => card.SKIPPED, wrapUp('')]);
+  assert.deepEqual(undecided.cards.map((c) => c && c.card), ['focus', 'questions', 'questions', 'questions', null], 'skips go on to another card');
+  assert.equal(undecided.cards[3].lookFor, `how others have handled “${`${picked}; I know the first one`.slice(0, 60)}”`, 'after skips, the search is from the last thing said');
   assert.equal(undecided.recap.lines[2], 'Next, you said: not decided', 'never filled in for them');
 
+  // An older document's closing card, answered: the recap, as before (A-06).
+  const closing = card.cardBody(JSON.stringify({ say: '', card: 'questions', questions: { eyebrow: 'before you go', items: [{ id: 'closing', type: 'open', title: 'So what will you do first?' }] }, ready: false })).body;
+  const older = await bart.ask(ctx, project.id, { askId: 'zold', ref, workspaceId: workspace.id, text: 'read the logs', turns: [{ question: '', answer: card.cardBody(JSON.stringify(FOCUS)).body }, { question: 'picked "Retries"', answer: closing }], agent: 'brainstorm' });
+  assert.deepEqual(card.recapParts(answerText(older.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n'))).lines, ['Where you are: Retries', 'What pulls apart: “Retries” against “read the logs”', 'Next, you said: read the logs']);
+
   const feet = doc.filter((line) => /^bart> \*[^*]+\*$/.test(line));
-  assert.ok(feet.length >= 4 && feet.every((line) => /^bart> \*\d+ s\*$/.test(line)), 'every card\'s foot gives the time alone');
+  assert.ok(feet.length >= 5 && feet.every((line) => /^bart> \*\d+ s\*$/.test(line)), 'every card\'s foot gives the time alone');
   const bad = await bart.ask(ctx, project.id, { askId: 'zm', ref, workspaceId: workspace.id, text: 'malformed please', agent: 'brainstorm' });
   assert.equal(bad.lines[0], 'bart> FAKE REPLY that is not a card: {"say": "cut off');
   assert.equal(card.cardOfAnswer(bad.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n')), null, 'drawn as plain answer lines');
 });
 
-test('turnPlan decides when @brainstorm closes: the count at one, the closing card at two, the recap after it, answered or skipped; a new exchange counts again (rounds 4 and 5)', () => {
+test('turnPlan never closes @brainstorm on a count: the next card at one, two, three and five answers; Wrap up, alone or after an answer, gets the recap, as does an older closing card; a new exchange counts again (round 6)', () => {
   const fence = (value) => ['```json', JSON.stringify(value), '```'].join('\n');
   const open = (id) => fence({ say: '', card: 'questions', questions: { items: [{ id, type: 'open', title: `Card ${id}?` }] }, ready: false });
   const plan = (text, turns) => turnPlan({ agent: 'brainstorm', text, turns }, DEFAULTS);
-  const one = plan('picked "An area"', [{ question: '', answer: open('a') }]);
-  assert.equal(one.extra, '<answers>Meaningful answers in this exchange so far, this one included: 1. Ask the next card.</answers>');
-  assert.equal(one.close, null);
-  const turns = [{ question: '', answer: open('a') }, { question: 'picked "An area"', answer: open('b') }];
-  const two = plan('it stops when the lock frees', turns);
-  assert.equal(two.extra, '<answers>Meaningful answers in this exchange so far, this one included: 2. Ask the closing card now.</answers>');
-  assert.equal(two.close, 'closing');
-  assert.equal(plan(card.SKIPPED, turns).close, null, 'a skipped digging card is not an answer: one more card first');
-  const asked = [...turns, { question: 'it stops when the lock frees', answer: open('closing') }];
+  const next = (n) => `<answers>Meaningful answers in this exchange so far, this one included: ${n}. Ask the next card.</answers>`;
+  const turns = [{ question: '', answer: open('a') }];
+  const said = ['picked "An area"', 'it stops when the lock frees', 'the backoff', 'the logs', 'the lock'];
+  said.forEach((text, n) => {
+    const at = plan(text, turns);
+    if ([1, 2, 3, 5].includes(n + 1)) assert.deepEqual([at.extra, at.close], [next(n + 1), null], `${n + 1} answers: the next card`);
+    turns.push({ question: text, answer: open(`next-${n + 1}`) });
+  });
+  assert.equal(plan(card.SKIPPED, turns).close, null, 'a skip asks another card');
+  const wrapped = '<answers>The person wrapped up. Reply with the recap and no card.</answers>';
+  for (const text of ['(wrap up)', 'I will read the logs; (wrap up)', 'picked "An area"; note: soon; (wrap up)', '--sonnet (wrap up)', '  (wrap up) ']) {
+    const at = plan(text, turns);
+    assert.deepEqual([at.extra, at.close], [wrapped, 'recap'], text);
+  }
+  assert.equal(plan('(wrap up)', turns.slice(0, 1)).close, 'recap', 'Wrap up on the first card');
+  assert.equal(plan('I will (wrap up) later', turns).close, null, 'words that only mention it are an answer');
+  assert.equal(plan('I will read the logs; (wrap up)', turns).asked, 'I will read the logs; (wrap up)', 'the agent is sent the answer and the wrap up as written');
+  // An older document's closing card (rounds 4 and 5): its answer, or its skip, still gets the recap.
+  const asked = [...turns.slice(0, 2), { question: 'it stops when the lock frees', answer: open('closing') }];
   const answered = plan('I will read the logs', asked);
-  assert.equal(answered.extra, '<answers>The person answered the closing card. Reply with the recap and no card.</answers>');
-  assert.equal(answered.close, 'recap');
-  const skipped = plan(card.SKIPPED, asked);
-  assert.equal(skipped.extra, '<answers>The person skipped the closing card. Reply with the recap and no card.</answers>', 'a skip ends it too: no loop');
+  assert.deepEqual([answered.extra, answered.close], ['<answers>The person answered the closing card. Reply with the recap and no card.</answers>', 'recap']);
+  assert.equal(plan(card.SKIPPED, asked).extra, '<answers>The person skipped the closing card. Reply with the recap and no card.</answers>');
   assert.equal(plan('--sonnet (skipped)', asked).close, 'recap', 'flags do not hide the skip');
-  // A second exchange in the same thread: only the turns after the recap count (R5-02).
+  // A second exchange in the same thread: only the turns after the recap count.
   const after = [...asked, { question: 'I will read the logs', answer: 'Where you are: x\nWhat pulls apart: y\nNext, you said: z' }, { question: '', answer: open('d') }];
   assert.equal(card.answersSoFar(after, 'picked "Another"'), 1);
-  const restart = plan('picked "Another"', after);
-  assert.equal(restart.extra, '<answers>Meaningful answers in this exchange so far, this one included: 1. Ask the next card.</answers>', 'after a recap, the count starts again at 1');
+  assert.equal(plan('picked "Another"', after).extra, next(1), 'after a recap, the count starts again at 1');
   assert.equal(plan('', after.slice(0, -1)).close, null, 'the turn right after a recap opens a new exchange, not the recap again');
-  assert.equal(plan('more', [...after, { question: 'picked "Another"', answer: open('e') }]).close, 'closing');
+  assert.equal(plan('more', [...after, { question: 'picked "Another"', answer: open('e') }]).close, null, 'two answers no longer close it');
   assert.equal(turnPlan({ agent: 'bart', text: 'q', turns: asked }, DEFAULTS).extra, '', '@bart is unchanged');
+  assert.equal(turnPlan({ agent: 'discover', text: '(wrap up)', turns: [] }, DEFAULTS).close, undefined, '@discover has no wrap up');
+});
+
+test('Wrap up is "(wrap up)", alone or after an answer: read off what the answer was, counted only for what was said, and written after answerLine (round 6)', () => {
+  assert.equal(card.WRAP, '(wrap up)');
+  assert.deepEqual(card.readWrap('(wrap up)'), { wrap: true, rest: '' });
+  assert.deepEqual(card.readWrap(' it loops ; (wrap up) '), { wrap: true, rest: 'it loops' });
+  assert.deepEqual(card.readWrap('picked "a"; note: b; (wrap up)'), { wrap: true, rest: 'picked "a"; note: b' });
+  for (const text of ['it loops', '(wrap up) now', 'I will (wrap up)', '', null]) assert.equal(card.readWrap(text).wrap, false, String(text));
+  const focus = card.readCard(JSON.stringify(FOCUS)), free = card.readCard({ card: 'questions', questions: { items: [{ id: 'q', type: 'free', title: 'What?' }] } });
+  assert.deepEqual(card.readAnswer('(wrap up)', free), { skipped: true, picks: [], text: '', note: '', wrap: true }, 'Wrap up alone: nothing said');
+  assert.deepEqual(card.readAnswer('it loops; (wrap up)', free), { skipped: false, picks: [], text: 'it loops', note: '', wrap: true });
+  assert.deepEqual(card.readAnswer('picked "Retries"; note: soon; (wrap up)', focus), { skipped: false, picks: ['Retries'], text: '', note: 'soon', wrap: true });
+  assert.deepEqual(card.readAnswer('it loops', free), { skipped: false, picks: [], text: 'it loops', note: '' }, 'an answer without it is as before');
+  // answerLine, then Wrap up: what the editor writes.
+  const wrap = (c, given) => card.withWrap(card.answerLine(c, given));
+  assert.equal(wrap(free, { text: '  it   loops ' }), 'it loops; (wrap up)');
+  assert.equal(wrap(free, {}), '(wrap up)', 'nothing typed: Wrap up alone');
+  assert.equal(wrap(focus, { picks: ['Retries'], note: 'soon' }), 'picked "Retries"; note: soon; (wrap up)');
+  assert.equal(wrap(focus, { note: 'my own words' }), 'my own words; (wrap up)');
+  assert.equal(wrap(focus, { picks: ['Not offered'] }), '(wrap up)');
+  const fenced = card.cardBody(JSON.stringify(FOCUS)).body;
+  const turns = [{ question: '', answer: fenced }, { question: 'picked "Retries"', answer: fenced }];
+  assert.equal(card.answersSoFar(turns, '(wrap up)'), 1, 'Wrap up alone is not an answer');
+  assert.equal(card.answersSoFar(turns, '--opus (wrap up)'), 1);
+  assert.equal(card.answersSoFar(turns, 'it loops; (wrap up)'), 2, 'what was said with it counts');
+  assert.equal(card.answersSoFar([...turns, { question: '(wrap up)', answer: fenced }], 'x'), 2, 'an earlier Wrap up counts for nothing either');
+});
+
+test('a card may carry a search, lookFor (round 6): on questions and focus cards, one line of at most 140 characters, never an address, kept through the document', async () => {
+  const look = 'how others have handled “it stops when the lock frees”';
+  const focus = card.readCard({ ...FOCUS, lookFor: look });
+  assert.equal(focus.lookFor, look);
+  const free = card.readCard({ say: '', card: 'questions', questions: { items: [{ id: 'next-1', type: 'free', title: 'What?' }] }, lookFor: `  ${'x'.repeat(100)}\n  ${'y'.repeat(100)}  ` });
+  assert.equal(free.lookFor, `${'x'.repeat(100)} ${'y'.repeat(39)}`, 'one line, clipped at 140');
+  for (const bad of ['', '   ', 'https://example.org/a-paper', 'HTTP://x.org', 'www.example.org', 42, null, ['a']]) {
+    assert.ok(!('lookFor' in card.readCard({ ...FOCUS, lookFor: bad })), `dropped: ${JSON.stringify(bad)}`);
+  }
+  assert.equal(card.readCard({ card: 'none', ready: true, say: 'Where you are: a', lookFor: look }).lookFor, undefined, 'a recap carries none: its searches are its Look for lines');
+  const kept = card.cardBody(JSON.stringify(free));
+  assert.deepEqual(card.cardOfAnswer(kept.body), free, 'cardBody round-trips it');
+  const lines = replyLines(card.cardBody(JSON.stringify({ ...FOCUS, lookFor: look })).body, { level: { name: 'Sonnet', effort: 'high' }, trail: [], ms: 3000 });
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
+  const doc = ['@brainstorm', ...lines];
+  assert.equal(card.cardOfAnswer(model.turnText(doc, model.threads(doc)[0].turns[0]).answer).lookFor, look, 'and the document reads it back');
 });
 
 test('recapParts splits a recap from its Look for lines: none, one, two, at most two, and a stray "@discover" taken off (round 4)', () => {

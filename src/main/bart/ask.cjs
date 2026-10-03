@@ -33,7 +33,7 @@
 // one fixed step (./models.cjs readBrainstorm; 2026-10-02: no flags, and its foot gives the time alone), file tools only,
 // its own Codex home, and sessions of its own kept for two idle hours. It replies with one JSON card (./card.cjs), which is written as a fenced block the editor draws; a reply
 // that does not parse is written as it came and reads as an @bart answer. An empty line asks it to start from the
-// workspace, and each turn is told how many answers it has had, so it knows when to recap.
+// workspace, and each turn is told how many answers it has had, and whether the person wrapped up, so it knows when to recap.
 //
 // @discover (2026-09-30): the same again, for what to read about a problem. Its own prompt (./discover-system-prompt.cjs),
 // one step (./question.cjs readDiscover: the level of the models file's `discover` block for its mode), @bart's file and
@@ -54,7 +54,7 @@ const { BART_SYSTEM_PROMPT } = require('./system-prompt.cjs');
 const { BRAINSTORM_SYSTEM_PROMPT } = require('./brainstorm-system-prompt.cjs');
 const { DISCOVER_SYSTEM_PROMPT } = require('./discover-system-prompt.cjs');
 const { readQuestion, readBrainstorm, readDiscover, withChoice } = require('./models.cjs');
-const { OPENING, SKIPPED, cardBody, cardOfAnswer, readCard, readAnswer, answersSoFar } = require('./card.cjs');
+const { OPENING, SKIPPED, cardBody, cardOfAnswer, readCard, readAnswer, readWrap, answersSoFar } = require('./card.cjs');
 const { buildContext, conversationBlock } = require('./context.cjs');
 const { projectSource, imagePaths } = require('../context/expand-mentions.cjs');
 const { replyLines, answerText } = require('./reply.cjs');
@@ -203,17 +203,18 @@ function turnPlan({ agent, text, turns, choice }, models) {
     };
   }
   if (!brainstorm) return { agent: 'bart', brainstorm, ...read, prior, asked: read.question, shown: prior, extra: '' };
-  // When to close is decided here, never by the model counting (2026-09-30, round 4): at two meaningful answers (round 5:
-  // the opening pick and one written answer) it is asked for the closing card, and the answer to that card, or a skip of
-  // it, gets the recap, so the exchange cannot loop. The count starts again after a recap (card.cjs answersSoFar).
+  // When to close is decided here, never by the model (2026-09-30, round 4). Round 6: the person ends the session, never
+  // a count. Wrap up ("(wrap up)", or an answer and "; (wrap up)") gets the recap; so does an answer to, or a skip of, a
+  // closing card left in an older document (rounds 4 and 5 asked one at two answers). Anything else asks the next card.
+  // The count starts again after a recap (card.cjs answersSoFar).
   const count = answersSoFar(prior, String(text).trim());
   const last = prior.length ? cardOfAnswer(prior[prior.length - 1].answer) : null;
   const closing = !!last && last.card === 'questions' && last.questions.items[0].id === 'closing';
-  const close = closing ? 'recap' : count >= 2 ? 'closing' : null;
-  const said = `Meaningful answers in this exchange so far, this one included: ${count}.`;
-  const extra = close === 'recap'
-    ? `<answers>The person ${readAnswer(read.question, last).skipped ? 'skipped' : 'answered'} the closing card. Reply with the recap and no card.</answers>`
-    : close === 'closing' ? `<answers>${said} Ask the closing card now.</answers>` : `<answers>${said} Ask the next card.</answers>`;
+  const wrapped = readWrap(read.question).wrap;
+  const close = wrapped || closing ? 'recap' : null;
+  const extra = wrapped ? '<answers>The person wrapped up. Reply with the recap and no card.</answers>'
+    : closing ? `<answers>The person ${readAnswer(read.question, last).skipped ? 'skipped' : 'answered'} the closing card. Reply with the recap and no card.</answers>`
+      : `<answers>Meaningful answers in this exchange so far, this one included: ${count}. Ask the next card.</answers>`;
   return {
     agent, brainstorm, ...read, prior, close,
     asked: read.question || OPENING,
@@ -461,9 +462,10 @@ function createBart({ readModels, environment = process.env, runDirectory = path
 /**
  * The fake @brainstorm's reply (BS-13, MB-12, round 3), as a model would write it: a first card whose `say` is a reading
  * in two sentences and whose options are broad areas, from the workspace and what its library holds (with nothing in the
- * library, it says there is little to go on and asks an open question), then one free card on the area picked, then
- * (as turnPlan decides, at two answers; round 5) the closing card, the two sides briefly in its title when there are two, and
- * after it the recap in its three lines and one Look for line. It counts the cards since the last recap, so a further
+ * library, it says there is little to go on and asks an open question), then (round 6) free cards on the area picked for
+ * as long as the person goes on, each with an id of its own (`next-<n>`) and a search built from their last answer, and
+ * when they wrap up (as turnPlan decides) the recap in its three lines and one Look for line. An answer to, or a skip of,
+ * an older document's closing card gets the recap too. It counts the cards since the last recap, so a further
  * @brainstorm starts again. A line containing "malformed" gets a reply that is not a card.
  */
 function fakeCard(context, plan, models) {
@@ -477,6 +479,16 @@ function fakeCard(context, plan, models) {
     const answer = readAnswer(readQuestion(next, models).question, card);
     return answer.skipped ? '' : [answer.picks.join(', '), answer.text, answer.note].filter(Boolean).join('; ');
   };
+  // The last answer that said something, from the n-th card back to the `least`-th.
+  const lastSaid = (n, least = 0) => { for (let k = n; k >= least; k -= 1) { const words = said(k); if (words) return words; } return ''; };
+  if (plan.close === 'recap') {
+    const quote = (n) => (asked > n ? said(n) : '').slice(0, 80);
+    const pulls = asked >= 2 && quote(0) && quote(1);
+    const middle = pulls ? `What pulls apart: “${quote(0)}” against “${quote(1)}”` : `What's unclear: ${(asked > 1 && said(1)) || 'not said'}`;
+    const look = `Look for: ${`how others have worked on “${context.workspaceName}”`.slice(0, 140)}`;
+    // "Next, you said": their last written answer after the pick, as the person said it; never filled in.
+    return JSON.stringify({ say: `Where you are: ${(asked > 0 && said(0)) || 'not said'}\n${middle}\nNext, you said: ${(asked > 1 && lastSaid(asked - 1, 1)) || 'not decided'}\n${look}`, card: 'none', ready: true });
+  }
   if (asked === 0) {
     const names = context.entries.map((entry) => entry.name).slice(0, 2);
     if (!names.length) {
@@ -486,21 +498,19 @@ function fakeCard(context, plan, models) {
     const options = [`What “${context.workspaceName}” is trying to do`, ...names.map((name) => `How ${name} fits in`), 'How you would know it worked'];
     return JSON.stringify({ say, card: 'focus', focus: { title: 'Where do you want to put your attention?', options: options.map((label) => ({ label })) }, ready: false });
   }
-  if (asked === 1) {
-    const point = said(0);
-    return JSON.stringify({ say: point ? `You picked “${point.slice(0, 80)}”.` : '', card: 'questions', questions: { eyebrow: 'in your words', items: [{ id: 'explain', type: 'free', title: point ? `Within “${point.slice(0, 80)}”, what is least clear to you? Put it in your own words.` : 'What is least clear to you right now?', placeholder: 'In a few words…' }] }, ready: false });
-  }
-  const quote = (n) => (said(n) || '').slice(0, 80);
-  const pulls = () => asked >= 2 && quote(0) && quote(1);
-  if (plan.close === 'recap') {
-    const middle = pulls() ? `What pulls apart: “${quote(0)}” against “${quote(1)}”` : `What's unclear: ${said(1) || 'not said'}`;
-    const look = `Look for: ${`how others have worked on “${context.workspaceName}”`.slice(0, 140)}`;
-    return JSON.stringify({ say: `Where you are: ${said(0) || 'not said'}\n${middle}\nNext, you said: ${said(asked - 1) || 'not decided'}\n${look}`, card: 'none', ready: true });
-  }
-  // Past the digging card (a skip of it included), the closing card: turnPlan asks for it at two answers.
-  const brief = (n) => (said(n) || '').slice(0, 50);
-  const title = pulls() ? `“${brief(0)}” or “${brief(1)}”: which do you want to keep, or how do they fit?` : 'So what will you do first?';
-  return JSON.stringify({ say: '', card: 'questions', questions: { eyebrow: 'before you go', items: [{ id: 'closing', type: 'open', title, placeholder: 'In a sentence or two…' }] }, ready: false });
+  // From the second card on: a free card on the area picked, asking a different way each time, and a search in the words
+  // of their last answer (none while they have said nothing).
+  const area = said(0).slice(0, 80), latest = lastSaid(asked - 1), heard = said(asked - 1).slice(0, 80);
+  const ways = [
+    (within) => `${within}what is least clear to you? Put it in your own words.`,
+    (within) => `${within}what would you expect to happen if you tried it now?`,
+    (within) => `${within}what would change your mind about where you are?`,
+    (within) => `${within}which open point is holding up the others?`,
+  ];
+  const title = ways[(asked - 1) % ways.length](area ? `Within “${area}”, ` : '');
+  const say = asked === 1 ? (area ? `You picked “${area}”.` : '') : heard ? `You said “${heard}”.` : '';
+  const lookFor = latest ? `how others have handled “${latest.slice(0, 60)}”` : '';
+  return JSON.stringify({ say, card: 'questions', questions: { eyebrow: 'in your words', items: [{ id: `next-${asked}`, type: 'free', title: title.charAt(0).toUpperCase() + title.slice(1), placeholder: 'In a few words…' }] }, ...(lookFor ? { lookFor } : {}), ready: false });
 }
 
 /**
