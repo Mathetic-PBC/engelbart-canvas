@@ -20,8 +20,9 @@
 //     also has Wrap up, which asks for the recap, and an @discover button that starts a search thread of its own under
 //     the brainstorm thread, leaving the card live (round 6). @discover (2026-09-30)
 //     asks its cards the same way, as `@discover …` lines, and answers with a reading guide drawn as an @bart answer is.
-//     Each paper's title line in a guide ends in a button that keeps the paper (2026-10-02, model/guide.js): + Save, + Workspace
-//     or ✓, from props.paperState; a click hands it to props.onSavePaper. Drawn, never written: the line stays as it came.
+//     Each paper's title line in a guide has a bookmark in its right margin that keeps the paper (2026-10-02, model/guide.js;
+//     a quiet icon since 2026-10-03): outline, outline with +, or filled, from props.paperState; a click hands it to
+//     props.onSavePaper. Drawn, never written: the line stays as it came.
 //   * the follow-up field has the @ menu too (2026-10-02): `@` opens it under the field's caret and a pick writes the token
 //     a document line would; Bart, Brainstorm, Discover and Note are left out, since the field already asks its agent.
 //   * where a document was scrolled to is kept per workspace (props.viewOf / props.onView, 2026-09-22), apart from the
@@ -38,7 +39,7 @@ import Popover from './Popover.jsx';
 import WorkspacePeek from './WorkspacePeek.jsx';
 import { diffRows, diffTotals, nextAttachment } from '../model/build-diff.js';
 import { guideTitle } from '../model/guide.js';
-import { SAVE_LABEL, guideSections, splitTarget } from '../model/stage.js';
+import { guideSections, splitTarget } from '../model/stage.js';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
@@ -84,6 +85,12 @@ const CARD_CSS = '.bart-ic{display:inline-flex;align-items:center;justify-conten
   + '.bart-chip{transition:border-color 120ms}.bart-chip:hover{border-color:#c9c9c9!important}.bart-send{transition:background 120ms}.bart-send:hover{opacity:.86}'
   + '.bart-text{padding:4px 2px;border:0;background:transparent;color:#8f8f8f;font:500 12px/1.4 var(--font-sans);cursor:pointer}.bart-text:hover{color:#171717}'
   + '[data-follow-input]::placeholder{color:#8f8f8f;font-style:italic;font-size:14.5px}'
+  // An @discover guide's bookmark (2026-10-03): faint until its title line is hovered, washed when it is; a saved one is ink
+  // and still; one at work is what it was when clicked, at half strength.
+  + '.paper-mark{position:absolute;top:1px;right:-4px;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:6px;background:none;color:#c9c9c9;cursor:pointer;transition:color 120ms,background 120ms}'
+  + '[data-paper-line]:hover .paper-mark:not(:disabled){color:#4d4d4d}.paper-mark:not(:disabled):hover{background:#f2f2f2}'
+  + '.paper-mark:disabled{cursor:default}.paper-mark[data-save="here"]{color:#4d4d4d}.paper-mark[data-busy]{opacity:.5}'
+  + '.paper-mark:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(0,112,243,.18)}'
   // @brainstorm's card: options as rows with a round (one) or square (several) mark; the pick in blue.
   + '.bs-opt{display:flex;align-items:flex-start;gap:10px;width:100%;box-sizing:border-box;margin:0;padding:9px 12px;border:1px solid #eaeaea;border-radius:8px;background:#fff;text-align:left;cursor:pointer;font:15px/1.45 var(--font-sans);color:#171717;transition:border-color 120ms}'
   + '.bs-opt+.bs-opt{margin-top:6px}.bs-opt:hover{border-color:#c9c9c9}.bs-opt[aria-checked="true"]{border-color:#0070f3}'
@@ -112,6 +119,13 @@ const ICON = {
   // The steps toggle: a plain angle with square ends (Hudson's reference, 2026-09-21), pointing up while the list is open.
   stepsOpen: icon('<path d="m5 15.5 7-7 7 7"></path>', 10, 3, 'square'),
   stepsShut: icon('<path d="m5 8.5 7 7 7-7"></path>', 10, 3, 'square'),
+};
+// An @discover guide's bookmark by where its paper is (2026-10-03): its drawing and the words its title and label carry.
+const BOOKMARK = '<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"></path>';
+const PAPER_MARK = {
+  none: { icon: icon(BOOKMARK), words: 'Save to library and this workspace' },
+  lib: { icon: icon(`${BOOKMARK}<path d="M12 7v6"></path><path d="M9 10h6"></path>`), words: 'Add to this workspace (already in the library)' },
+  here: { icon: icon(BOOKMARK.replace('<path ', '<path fill="currentColor" ')), words: 'Saved in this workspace' },
 };
 const radius = (top, closes) => `${top ? '10px 10px' : '0 0'} ${closes ? '10px 10px' : '0 0'}`;
 // Where a follow-up field's caret is on screen (its @ menu hangs there, 2026-10-02). A textarea has no range to measure,
@@ -547,10 +561,11 @@ export default class DocEditor extends React.Component {
       // And its other lines ("Where you are: …") as sections: the label in bold on a line of its own, the words under it.
       const recap = at && at.agent === 'brainstorm' && !active && !look ? recapLine(p.text) : null;
       const lookAbove = look && !first && !!recapParts(parseLine(this.lines()[i - 1] ?? '').text).lookFor.length;
-      // An @discover guide's title line (2026-10-02) ends in its paper's save button.
-      const paper = at && at.agent === 'discover' && !active ? this.guidePaper(i, p.text, at) : null;
-      const a = this.answerLook(p.text), content = active ? this.activeHtml(tokensOf(p, line)) : look ? (lookAbove ? '' : this.recapLabelHtml('Look for prior work', first)) + this.lookForHtml(i, look, lookAbove ? 6 : 4) : recap ? this.recapHtml(recap, first) : a.content + (paper ? this.paperSaveHtml(i, paper) : '');
-      return `<div ${raw} style="padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(!at && first, closes)};margin-bottom:${closes ? 14 : 0}px;color:#4d4d4d;font-size:16px;line-height:1.65;cursor:text"><span style="display:block;padding:${first ? 2 : 0}px 0 ${last ? 2 : 0}px 12px;border-left:2px solid #dcdcdc"><span class="t" style="display:block;min-height:${a.minHeight}px;border-radius:4px;${a.look}${active ? 'background:#f2f2f2;box-shadow:0 0 0 4px #f2f2f2;' : ''}">${content || '<br>'}</span></span></div>`;
+      // An @discover guide's title line (2026-10-02) has its paper's bookmark in a margin of its own on the right, level with
+      // the title's first line (2026-10-03): the title wraps before it, and every entry's sits in the same place.
+      const paper = at && at.agent === 'discover' && !active ? this.guidePaper(i, p.text, at) : null, mark = paper ? this.paperSaveHtml(i, paper) : '';
+      const a = this.answerLook(p.text), content = active ? this.activeHtml(tokensOf(p, line)) : look ? (lookAbove ? '' : this.recapLabelHtml('Look for prior work', first)) + this.lookForHtml(i, look, lookAbove ? 6 : 4) : recap ? this.recapHtml(recap, first) : a.content + mark;
+      return `<div ${raw}${mark ? ' data-paper-line="1"' : ''} style="padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(!at && first, closes)};margin-bottom:${closes ? 14 : 0}px;color:#4d4d4d;font-size:16px;line-height:1.65;cursor:text"><span style="display:block;padding:${first ? 2 : 0}px 0 ${last ? 2 : 0}px 12px;border-left:2px solid #dcdcdc"><span class="t" style="display:block;min-height:${a.minHeight}px;border-radius:4px;${a.look}${mark ? 'position:relative;padding-right:28px;' : ''}${active ? 'background:#f2f2f2;box-shadow:0 0 0 4px #f2f2f2;' : ''}">${content || '<br>'}</span></span></div>`;
     }
     if (p.type === 'quote') {
       // The prototype's replies: read-only, as they were.
@@ -616,12 +631,13 @@ export default class DocEditor extends React.Component {
     const below = i + 1 <= at.turn.to ? parseLine(this.lines()[i + 1] ?? '') : null;
     return guideTitle(text, below && below.type === 'reply' ? below.text : null);
   }
-  // Its button, after the line's text, drawn as the Stage's Save is: + Save, + Workspace, or ✓ (disabled). While a click is
-  // at work it is disabled on what it said when clicked. No button where the editor is not told where papers are.
+  // Its bookmark (2026-10-03), at the top right of the line's text (CARD_CSS .paper-mark): an outline (none), an outline
+  // with + (lib), or filled and disabled (here); the words are its title and label only, so a copy holds none of them.
+  // While a click is at work it is disabled on what it was when clicked. None where the editor is not told where papers are.
   paperSaveHtml(i, paper) {
-    const known = this.props.paperState ? this.props.paperState(paper.address) : null; if (!SAVE_LABEL[known]) return '';
-    const held = this.saving.get(paper.address), state = held || known, off = !!held || state === 'here' || !this.props.onSavePaper;
-    return `<button type="button" contenteditable="false" class="${off ? '' : 'hov-ink-wash'}" data-act="papersave" data-row="${i}" data-save="${state}" ${off ? 'disabled aria-disabled="true"' : ''} title="${state === 'here' ? 'In this workspace' : state === 'lib' ? 'In the library: add it to this workspace' : 'Save to the library and this workspace'}" style="user-select:none;display:inline-flex;align-items:center;height:22px;margin-left:8px;padding:0 8px;border:1px solid #eaeaea;border-radius:5px;background:#fff;vertical-align:1px;font:500 12px/1 var(--font-sans);color:${state === 'here' || held ? '#8f8f8f' : '#4d4d4d'};white-space:nowrap;cursor:${off ? 'default' : 'pointer'}">${esc(SAVE_LABEL[state])}</button>`;
+    const known = this.props.paperState ? this.props.paperState(paper.address) : null; if (!PAPER_MARK[known]) return '';
+    const held = this.saving.get(paper.address), state = held || known, off = !!held || state === 'here' || !this.props.onSavePaper, { icon: drawn, words } = PAPER_MARK[state];
+    return `<button type="button" contenteditable="false" class="paper-mark" data-act="papersave" data-row="${i}" data-save="${state}"${held ? ' data-busy="1"' : ''} ${off ? 'disabled aria-disabled="true"' : ''} title="${words}" aria-label="${words}" style="user-select:none">${drawn}</button>`;
   }
   // The button clicked: the paper goes to props.onSavePaper, the document is not touched. A failure goes to props.onError
   // and the button says what it said before; a success shows when the library or the workspace changes.

@@ -1,8 +1,8 @@
 'use strict';
 
-// An @discover guide's papers kept from the guide (2026-10-02): each title line of a guide ends in + Save, + Workspace or
-// ✓ (src/renderer/model/guide.js, DocEditor.jsx paperSaveHtml); a click adds the paper to the library and this workspace
-// as the Stage's Save does, and never touches workspace.md.
+// An @discover guide's papers kept from the guide (2026-10-02): each title line of a guide has a bookmark in its right
+// margin (2026-10-03; outline, outline with +, or filled: src/renderer/model/guide.js, DocEditor.jsx paperSaveHtml); a click
+// adds the paper to the library and this workspace as the Stage's Save does, and never touches workspace.md.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -62,15 +62,23 @@ const GUIDE = [
 ].join('\n');
 const TITLE_ROWS = [4, 8]; // the two @discover titles with a Read link
 
-/** The editor's drawing of a document: each save button as { row, save, label, disabled }. */
+const WORDS = { none: 'Save to library and this workspace', lib: 'Add to this workspace (already in the library)', here: 'Saved in this workspace' };
+/** Each bookmark in a drawing as { row, save, label, title, text, busy, disabled, html }: its state from data-save, its words from aria-label. */
+function marks(html) {
+  return [...html.matchAll(/<button([^>]*data-act="papersave"[^>]*)>([\s\S]*?)<\/button>/g)].map(([whole, tag, inner]) => ({
+    row: Number(/data-row="(\d+)"/.exec(tag)[1]), save: /data-save="(\w+)"/.exec(tag)[1],
+    label: (/aria-label="([^"]*)"/.exec(tag) || [])[1], title: (/ title="([^"]*)"/.exec(tag) || [])[1],
+    text: inner.replace(/<[^>]*>/g, ''), busy: /data-busy=/.test(tag), disabled: / disabled\b/.test(tag), html: whole,
+  }));
+}
+/** The editor's drawing of a document and its bookmarks. */
 function draw(props) {
   const editor = new DocEditor({ text: GUIDE, onAsk() {}, onChange() { throw new Error('the document changed'); }, ...props });
   const html = editor.editorHtml();
-  const buttons = [...html.matchAll(/<button[^>]*data-act="papersave"[^>]*>([^<]*)<\/button>/g)].map(([tag, label]) => ({
-    row: Number(/data-row="(\d+)"/.exec(tag)[1]), save: /data-save="(\w+)"/.exec(tag)[1], label, disabled: / disabled\b/.test(tag),
-  }));
-  return { editor, html, buttons };
+  return { editor, html, buttons: marks(html) };
 }
+/** Row `i`'s line as drawn: from its data-line to the next line's. */
+const rowHtml = (html, i) => html.slice(html.indexOf(`data-line="${i}"`), html.indexOf(`data-line="${i + 1}"`));
 
 test('guideTitle: a bold link at the start of a line is a paper, without its #fragment; abstract-only entries and other lines are not', async () => {
   const { guideTitle } = await model('guide');
@@ -107,26 +115,38 @@ test('paperState: none, lib, here; an arXiv pdf is the row the library made for 
   assert.equal(linkPlan(SCIM, kept).row, null, 'without a passage a link opens its address, as before');
 });
 
-test('the editor draws a button on each @discover title with a Read link; none on Read lines, abstract-only entries, @bart or @brainstorm', () => {
+test('the editor draws a bookmark on each @discover title with a Read link; none on Read lines, abstract-only entries, @bart or @brainstorm', () => {
   const { buttons, html } = draw({ paperState: () => 'none', onSavePaper: async () => {} });
   assert.deepEqual(buttons.map((b) => b.row), TITLE_ROWS);
-  assert.ok(buttons.every((b) => b.label === '+ Save' && !b.disabled));
-  assert.match(html, /data-act="papersave"[^>]*contenteditable="false"|contenteditable="false"[^>]*data-act="papersave"/, 'the caret never goes into it');
-  // The title is still a link to the paper, the button after it.
+  for (const row of TITLE_ROWS) assert.equal(marks(rowHtml(html, row)).length, 1, `one bookmark on row ${row}`);
+  assert.ok(buttons.every((b) => b.save === 'none' && b.label === WORDS.none && b.title === WORDS.none && !b.disabled));
+  assert.ok(buttons.every((b) => b.text === ''), 'an icon, no words: a copy of the guide holds none');
+  assert.ok(buttons.every((b) => /<svg [^>]*stroke="currentColor" stroke-width="1.5"/.test(b.html)), 'a 1.5 stroke in the line\'s colour');
+  assert.ok(buttons.every((b) => /contenteditable="false"/.test(b.html) && /style="user-select:none"/.test(b.html)), 'the caret never goes into it');
+  // The title is still a link to the paper; the bookmark sits in a margin kept on the right of title lines only.
   assert.match(html, /Scim: Intelligent Skimming Support for Scientific Papers<\/a><\/strong> · Fok et al\. · 2022<button/);
-  assert.equal(draw({}).buttons.length, 0, 'no button where the editor is not told where papers are (a post-it)');
+  for (const row of TITLE_ROWS) assert.match(rowHtml(html, row), /data-paper-line="1"[\s\S]*class="t" style="[^"]*position:relative;padding-right:28px;/);
+  for (const row of [5, 6, 13, 19, 24]) assert.doesNotMatch(rowHtml(html, row), /padding-right:28px|data-paper-line/, `row ${row} keeps its width`);
+  assert.equal(draw({}).buttons.length, 0, 'no bookmark where the editor is not told where papers are (a post-it)');
 });
 
-test('the three states: + Save, + Workspace, ✓ (disabled); the state follows paperState, read on every drawing', () => {
+test('the three states: an outline, an outline with +, filled (disabled); the state follows paperState, read on every drawing', () => {
   const states = { [SCIM]: 'lib', [CITESEE]: 'here' };
   const { buttons } = draw({ paperState: (address) => states[address] || 'none', onSavePaper: async () => {} });
-  assert.deepEqual(buttons.map(({ save, label, disabled }) => [save, label, disabled]), [['lib', '+ Workspace', false], ['here', '✓', true]]);
-  // A paper saved from the Stage: the workspace changes, the next drawing reads ✓.
+  assert.deepEqual(buttons.map(({ save, label, title, disabled }) => [save, label, title, disabled]), [['lib', WORDS.lib, WORDS.lib, false], ['here', WORDS.here, WORDS.here, true]]);
+  assert.ok(buttons.every((b) => b.text === ''));
+  const [none] = draw({ paperState: () => 'none', onSavePaper: async () => {} }).buttons;
+  assert.equal((none.html.match(/<path /g) || []).length, 1, 'none: the bookmark alone');
+  assert.doesNotMatch(none.html, /fill="currentColor"/, 'none: an outline');
+  assert.equal((buttons[0].html.match(/<path /g) || []).length, 3, 'lib: a + inside');
+  assert.doesNotMatch(buttons[0].html, /fill="currentColor"/, 'lib: an outline');
+  assert.match(buttons[1].html, /<path fill="currentColor"/, 'here: filled');
+  // A paper saved from the Stage: the workspace changes, the next drawing is filled.
   states[SCIM] = 'here';
-  assert.deepEqual(draw({ paperState: (address) => states[address] || 'none', onSavePaper: async () => {} }).buttons.map((b) => b.label), ['✓', '✓']);
+  assert.deepEqual(draw({ paperState: (address) => states[address] || 'none', onSavePaper: async () => {} }).buttons.map((b) => [b.save, b.label, b.disabled]), [['here', WORDS.here, true], ['here', WORDS.here, true]]);
 });
 
-test('a click hands the paper (title, address without its fragment) to onSavePaper and never changes the document; while it works the button is disabled', async () => {
+test('a click hands the paper (title, address without its fragment) to onSavePaper and never changes the document; while it works the bookmark is disabled', async () => {
   const saved = [];
   let finish;
   const { editor } = draw({ paperState: () => 'none', onSavePaper: (paper) => { saved.push(paper); return new Promise((resolve) => { finish = resolve; }); } });
@@ -134,32 +154,31 @@ test('a click hands the paper (title, address without its fragment) to onSavePap
   press(8);
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(saved, [{ title: 'CiteSee: Augmenting Citations in Scientific Papers', address: CITESEE }]);
-  const busy = editor.editorHtml().match(/<button[^>]*data-row="8"[^>]*>[^<]*<\/button>/)[0];
-  assert.match(busy, /disabled/);
-  assert.match(busy, />\+ Save</);
+  const busy = marks(editor.editorHtml()).find((b) => b.row === 8);
+  assert.deepEqual([busy.save, busy.label, busy.busy, busy.disabled, busy.text], ['none', WORDS.none, true, true, ''], 'what it was when clicked, at half strength, disabled');
   press(8);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(saved.length, 1, 'a second click while the first works does nothing');
   finish();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.doesNotMatch(editor.editorHtml().match(/<button[^>]*data-row="8"[^>]*>/)[0], /disabled/);
-  // ✓ does nothing, and neither does a line that is not a title.
+  const after = marks(editor.editorHtml()).find((b) => b.row === 8);
+  assert.deepEqual([after.busy, after.disabled], [false, false]);
+  // A filled bookmark does nothing, and neither does a line that is not a title.
   const done = draw({ paperState: () => 'here', onSavePaper: (paper) => { saved.push(paper); } });
   done.editor.savePaper(4); done.editor.savePaper(5);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(saved.length, 1);
 });
 
-test('a failed click goes to onError and the button says what it said before', async () => {
+test('a failed click goes to onError and the bookmark is what it was before', async () => {
   const errors = [];
   const { editor } = draw({ paperState: () => 'lib', onSavePaper: async () => { throw new Error('offline'); }, onError: (error) => errors.push(error.message) });
   editor.savePaper(4);
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(errors, ['offline']);
-  const button = editor.editorHtml().match(/<button[^>]*data-row="4"[^>]*>([^<]*)<\/button>/);
-  assert.equal(button[1], '+ Workspace');
-  assert.doesNotMatch(button[0], /disabled/);
+  const button = marks(editor.editorHtml()).find((b) => b.row === 4);
+  assert.deepEqual([button.save, button.label, button.busy, button.disabled], ['lib', WORDS.lib, false, false]);
 });
 
 // The Workspace's side, against the real library and workspace (ipc.cjs): + Save is addInput (add, then link), + Workspace
