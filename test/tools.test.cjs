@@ -14,6 +14,7 @@ const { classifyFailure, roomFor, createActions, markRollback, rollback } = requ
 const { createLock } = require('../src/main/tools/lock.cjs');
 const { createTools } = require('../src/main/tools/manager.cjs');
 const { createFakeTools } = require('../src/main/tools/fake.cjs');
+const { createSignOutProcess, SIGN_OUT_COMMANDS } = require('../src/main/tools/sign-in.cjs');
 const { ensureHome, readConfig, writeTools } = require('../src/main/store/home.cjs');
 
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-tools-'));
@@ -308,9 +309,10 @@ function managerFor(spec, options = {}) {
   const tools = createTools({
     readTools: () => readConfig(root).tools,
     writeTools: (value) => writeTools(root, value),
-    detect: fake.detect,
+    detect: options.detect ? options.detect(fake) : fake.detect,
     actions: options.actions ? { ...fake.actions, ...options.actions(fake) } : fake.actions,
     signInProcess: fake.signInProcess,
+    signOutProcess: options.signOutProcess ? options.signOutProcess(fake) : fake.signOutProcess,
     onChange: (snapshot) => seen.push(snapshot),
     ...(options.now ? { now: options.now } : {}),
     ...(options.installAtLaunch ? { installAtLaunch: options.installAtLaunch } : {}),
@@ -430,6 +432,61 @@ test('manager: sign-in waits for the CLI, shows its page, and checks again', asy
   await tools.signIn('claude');
   assert.ok(seen.some((snapshot) => snapshot.tools.claude.busy && snapshot.tools.claude.busy.action === 'sign-in'));
   assert.deepEqual([readConfig(root).tools.claude.signedIn, readConfig(root).tools.claude.status], [true, 'ready']);
+});
+
+test('manager: sign-out runs the CLI\'s logout, then checks that tool again (2026-10-03, Connections)', async () => {
+  const calls = [];
+  const { tools, root, seen } = managerFor({ claude: '2.1.300', codex: '0.155.1' }, {
+    detect: (fake) => async (only) => { calls.push(['check', ...only]); return fake.detect(only); },
+    signOutProcess: (fake) => async (name, file) => { calls.push(['logout', name, file]); return fake.signOutProcess(name, file); },
+  });
+  await tools.start();
+  assert.equal(readConfig(root).tools.claude.status, 'ready');
+  calls.length = 0;
+  seen.length = 0;
+  assert.deepEqual(await tools.signOut('claude'), { ok: true, error: null });
+  assert.deepEqual(calls, [['logout', 'claude', '/Users/fake/.local/bin/claude'], ['check', 'claude']], 'the logout first, then a check of that tool only');
+  assert.equal(seen[0].tools.claude.busy.action, 'sign-out', 'the rows say it is signing out while the CLI runs');
+  assert.deepEqual([readConfig(root).tools.claude.signedIn, readConfig(root).tools.claude.status], [false, 'signed-out']);
+  assert.equal(readConfig(root).tools.codex.status, 'ready', 'Codex is left signed in');
+  assert.equal(tools.snapshot().tools.claude.busy, null);
+});
+
+test('manager: a sign-out the CLI refuses says why; none starts while signing in, for Git, or for an agent not installed', async () => {
+  const refused = managerFor({ codex: '0.155.1' }, { signOutProcess: () => async () => ({ code: 1, output: 'Error: could not remove auth.json' }) });
+  await refused.tools.start();
+  assert.deepEqual(await refused.tools.signOut('codex'), { ok: false, error: 'Could not sign out of Codex: Error: could not remove auth.json' });
+  assert.equal(readConfig(refused.root).tools.codex.status, 'ready', 'still signed in, as the check found');
+  const silent = managerFor({ claude: '2.1.300' }, { signOutProcess: () => async () => ({ code: 0, output: '' }) });
+  await silent.tools.start();
+  assert.deepEqual(await silent.tools.signOut('claude'), { ok: false, error: 'Claude Code still says it is signed in.' });
+
+  const calls = [];
+  const { tools } = managerFor({ git: '2.50.1', claude: '2.1.300 signed-out', codex: 'missing' }, { signOutProcess: () => async (name) => { calls.push(name); return { code: 0, output: '' }; } });
+  await tools.start();
+  assert.deepEqual(await tools.signOut('git'), { ok: false, error: null });
+  assert.deepEqual(await tools.signOut('codex'), { ok: false, error: null }, 'not installed: nothing to run');
+  const signing = tools.signIn('claude');
+  assert.deepEqual(await tools.signOut('claude'), { ok: false, error: null }, 'not in the middle of a sign-in');
+  await signing;
+  assert.deepEqual(calls, []);
+});
+
+test('the logout command is each CLI\'s own, run in the login shell by the program\'s full path', async () => {
+  assert.deepEqual(SIGN_OUT_COMMANDS, { claude: 'exec "$ENGELBART_TOOL" auth logout 2>&1', codex: 'exec "$ENGELBART_TOOL" logout 2>&1' });
+  const runs = [];
+  let answer = { code: 0, stdout: 'Successfully logged out from your Anthropic account.\n', marked: true, timedOut: false };
+  const runner = { shellPath: '/bin/zsh', shell: async (command, options) => { runs.push([command, options.env]); return answer; } };
+  const signOut = createSignOutProcess({ runner });
+  assert.deepEqual(await signOut('claude', '/Users/someone/.local/bin/claude'), { code: 0, output: '' });
+  assert.deepEqual(runs, [['exec "$ENGELBART_TOOL" auth logout 2>&1', { ENGELBART_TOOL: '/Users/someone/.local/bin/claude' }]]);
+  answer = { code: 1, stdout: '\u001b[31mError:\u001b[0m not logged in\nTry codex login\n', marked: true, timedOut: false };
+  assert.deepEqual(await signOut('codex', '/opt/homebrew/bin/codex'), { code: 1, output: 'Try codex login' }, 'the last line, without colour codes');
+  assert.equal(runs[1][0], 'exec "$ENGELBART_TOOL" logout 2>&1');
+  answer = { code: 0, stdout: '', marked: false, timedOut: false };
+  assert.match((await signOut('codex', '/opt/homebrew/bin/codex')).output, /never runs Engelbart's commands/);
+  answer = { code: null, stdout: '', marked: false, timedOut: true };
+  assert.deepEqual(await signOut('codex', '/opt/homebrew/bin/codex'), { code: null, output: 'it did not finish within 30 seconds' });
 });
 
 test('manager: runs and updates of the same program never overlap', async () => {

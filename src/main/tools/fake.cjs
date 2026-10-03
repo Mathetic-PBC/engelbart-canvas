@@ -5,7 +5,7 @@
 //   {"git":"missing","claude":"2.1.300","codex":"0.150.0 signed-out"}
 // "missing", "broken", or a version optionally followed by " signed-out"; for git also "bundled" (the Git that
 // came with Engelbart, standing in: ./bundled-git.cjs). Installing takes `delayMs`
-// and gives the tool its minimum version; updating does the same; signing in takes `delayMs` too.
+// and gives the tool its minimum version; updating does the same; signing in takes `delayMs` too; signing out is quick.
 // `failInstall` names tools whose install fails with a network error.
 
 const { REQUIREMENTS, TOOL_NAMES } = require('./requirements.cjs');
@@ -76,7 +76,13 @@ function createFakeTools(spec, { delayMs = 2500, sleep = (ms) => new Promise((re
     return { done, kill: () => { clearTimeout(timer); clearTimeout(complete); finish({ code: 130, output: 'Cancelled.' }); } };
   }
 
-  return { detect, actions, signInProcess, state };
+  async function signOutProcess(name) {
+    await sleep(Math.min(400, delayMs));
+    state[name] = { ...state[name], signedIn: false };
+    return { code: 0, output: '' };
+  }
+
+  return { detect, actions, signInProcess, signOutProcess, state };
 }
 
 module.exports = { createFakeTools, parseSpec };

@@ -63,6 +63,8 @@ test('rows say what a tool is doing in a few words, with one button', async () =
   assert.equal(rowOf({ ...tools.git, busy: { action: 'install', phase: 'Waiting for Apple’s installer' } }).state, 'Waiting for Apple’s installer');
   const signing = rowOf({ ...tools.codex, busy: { action: 'sign-in', url: 'https://auth.openai.com/x' } });
   assert.deepEqual([signing.action, signing.page], ['cancel', 'https://auth.openai.com/x']);
+  const leaving = rowOf({ ...tools.codex, status: 'ready', busy: { action: 'sign-out' } });
+  assert.deepEqual([leaving.state, leaving.tone, leaving.action], ['Signing out…', 'busy', null], 'Connections\' Sign out (2026-10-03)');
   assert.equal(rowOf({ ...tools.git, status: 'outdated', version: '2.20.0', source: 'apple' }).action, null, 'Apple’s Git is updated by macOS');
   assert.deepEqual([rowOf({ ...tools.claude, status: 'ready', version: '3.0.1', untested: true }).state, rowOf({ ...tools.claude, status: 'ready' }).tone], ['3.0.1 · untested', 'ok']);
   assert.equal(rowOf({ ...tools.git, skip: true }).state, 'Skipped');

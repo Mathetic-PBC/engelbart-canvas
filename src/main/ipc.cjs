@@ -526,7 +526,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('write-page-annotations', withCtx((ctx, input, value) => library.writePageAnnotations(ctx, str(input, 'address', 8192), value)));
 
   // Git, Claude Code and Codex (src/main/tools/manager.cjs): the setup dialog's snapshot and its buttons. Installs,
-  // updates and sign-ins answer at once and report through `engelbart:tools` as they go.
+  // updates and sign-ins answer at once and report through `engelbart:tools` as they go. Sign-out (Connections) answers
+  // once the CLI has logged out and been checked again: { ok, error }.
   if (tools) {
     const toolName = (value) => { if (!TOOL_NAMES.includes(value)) throw new TypeError('Unknown tool'); return value; };
     const toolNames = (value) => (Array.isArray(value) ? value : [value]).slice(0, 3).map(toolName);
@@ -536,6 +537,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     handle('tools-update', (name) => { void tools.update(toolName(name)).catch(() => {}); return tools.snapshot(); });
     handle('tools-sign-in', (name) => { void tools.signIn(toolName(name)).catch(() => {}); return tools.snapshot(); });
     handle('tools-cancel-sign-in', (name) => tools.cancelSignIn(toolName(name)));
+    handle('tools-sign-out', (name) => tools.signOut(toolName(name)));
     handle('tools-skip', (names) => tools.skip(toolNames(names)));
     handle('tools-ask-again', (name) => tools.askAgain(toolName(name)));
     handle('tools-set-updates', (value) => tools.setUpdates(value === 'ask' ? 'ask' : 'auto'));

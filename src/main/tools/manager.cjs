@@ -16,6 +16,7 @@
 //              installer that says it finished is not believed until the program answers.
 //   update     the same, and a launcher left broken by the update is pointed back at the version that
 //              worked (./install.cjs rollback), when the install keeps one.
+//   sign-out   the CLI's own logout (2026-10-03, Connections), then a check of that tool, so its record says signed out.
 //   use        what a run of a program (an @bart turn, a summary) holds while it runs.
 //   environment  what everything Engelbart starts is given: the folder of Engelbart's own Git while it
 //              stands in for a missing one (./bundled-git.cjs), which ../terminal/launch.cjs puts first on PATH,
@@ -39,12 +40,12 @@ const WORKS = new Set(['ready', 'signed-out']);
 
 const pick = (found) => Object.fromEntries(OBSERVED.filter((key) => Object.hasOwn(found, key)).map((key) => [key, found[key]]));
 
-function createTools({ readTools, writeTools, detect, actions, signInProcess = null, rollbackOptions = {}, installAtLaunch = [], now = () => new Date(), setTimer = setTimeout, clearTimer = clearTimeout, onChange = () => {}, platform = process.platform }) {
+function createTools({ readTools, writeTools, detect, actions, signInProcess = null, signOutProcess = null, rollbackOptions = {}, installAtLaunch = [], now = () => new Date(), setTimer = setTimeout, clearTimer = clearTimeout, onChange = () => {}, platform = process.platform }) {
   // What the checks saw (starting from what the last launch wrote), and what is happening now.
   const disk = () => normalizeTools(readTools());
   const seen = {};
   { const last = disk(); for (const name of TOOL_NAMES) seen[name] = { ...last[name] }; }
-  const busy = {}; // name → { action: 'check' | 'install' | 'update' | 'sign-in', phase?, url? }
+  const busy = {}; // name → { action: 'check' | 'install' | 'update' | 'sign-in' | 'sign-out', phase?, url? }
   const locks = Object.fromEntries(TOOL_NAMES.map((name) => [name, createLock()]));
   const installer = createLock();
   const signIns = new Map();
@@ -230,6 +231,23 @@ function createTools({ readTools, writeTools, detect, actions, signInProcess = n
     return !!run;
   }
 
+  /**
+   * The CLI's own logout, then a check of that tool: the record (and every row) says Not signed in once the CLI does.
+   * → { ok, error }. Not while it signs in or anything else runs for it.
+   */
+  async function signOut(name) {
+    if (!AGENTS.includes(name) || !signOutProcess || !records[name].path) return { ok: false, error: null };
+    if (busy[name] || signIns.has(name)) return { ok: false, error: null };
+    busy[name] = { action: 'sign-out' };
+    emit();
+    let exit = null;
+    try { exit = await signOutProcess(name, records[name].path); } catch (error) { exit = { code: null, output: error.message }; } finally { busy[name] = null; }
+    await check([name]);
+    if (records[name].signedIn !== true) return { ok: true, error: null };
+    const label = REQUIREMENTS[name].name;
+    return { ok: false, error: (exit && exit.output ? `Could not sign out of ${label}: ${exit.output}` : `${label} still says it is signed in.`).slice(0, 300) };
+  }
+
   /** The person's Skip (remembered per tool) and Ask again. */
   function skip(names) {
     const chosen = {};
@@ -308,7 +326,7 @@ function createTools({ readTools, writeTools, detect, actions, signInProcess = n
     ];
   }
 
-  return { start, check, update, install, signIn, cancelSignIn, skip, askAgain, setUpdates, ensure, use, usableAgents, binaryFor, environment, providers, snapshot, canAutoUpdate };
+  return { start, check, update, install, signIn, cancelSignIn, signOut, skip, askAgain, setUpdates, ensure, use, usableAgents, binaryFor, environment, providers, snapshot, canAutoUpdate };
 }
 
 module.exports = { createTools, STALE_MS, RETRY_UPDATE_MS };

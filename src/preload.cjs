@@ -187,6 +187,7 @@ const engelbartAPI = Object.freeze({
   toolsUpdate: invoke('tools-update'),
   toolsSignIn: invoke('tools-sign-in'),
   toolsCancelSignIn: invoke('tools-cancel-sign-in'),
+  toolsSignOut: invoke('tools-sign-out'),
   toolsSkip: invoke('tools-skip'),
   toolsAskAgain: invoke('tools-ask-again'),
   toolsSetUpdates: invoke('tools-set-updates'),

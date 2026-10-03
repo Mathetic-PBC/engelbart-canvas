@@ -58,6 +58,7 @@ export function rowOf(tool) {
   if (busy && busy.action === 'install') return { ...row, state: busy.phase || 'Installing…', tone: 'busy' };
   if (busy && busy.action === 'update') return { ...row, state: 'Updating…', tone: 'busy' };
   if (busy && busy.action === 'sign-in') return { ...row, state: 'Finish signing in in your browser', tone: 'busy', action: 'cancel', page: busy.url || null };
+  if (busy && busy.action === 'sign-out') return { ...row, state: 'Signing out…', tone: 'busy' }; // Connections' Sign out
   const version = tool.version || '';
   switch (tool.status) {
     case 'ready': // `bundled`: the Git that came with Engelbart, standing in for a Mac without one

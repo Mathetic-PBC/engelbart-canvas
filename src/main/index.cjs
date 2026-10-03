@@ -32,7 +32,7 @@ const { findBundledGit } = require('./tools/bundled-git.cjs');
 const { createActions } = require('./tools/install.cjs');
 const { createTools } = require('./tools/manager.cjs');
 const { createFakeTools } = require('./tools/fake.cjs');
-const { createSignInProcess } = require('./tools/sign-in.cjs');
+const { createSignInProcess, createSignOutProcess } = require('./tools/sign-in.cjs');
 const { SettingsStore } = require('./terminal/settings.cjs');
 const { RendererLifecycle, shouldHideWindowOnClose } = require('./terminal/window-lifecycle.cjs');
 const { assertTrustedRenderer, parseExternalUrl } = require('./ipc-validation.cjs');
@@ -456,6 +456,7 @@ if (!hasSingleInstanceLock) {
       detect: toolsFake ? toolsFake.detect : (only) => detectTools({ runner: toolRunner, only, bundledGit, preferBundledGit: process.env.ENGELBART_GIT === 'bundled' }),
       actions: toolsFake ? toolsFake.actions : createActions({ runner: toolRunner }),
       signInProcess: toolsFake ? toolsFake.signInProcess : createSignInProcess({ pty: require('node-pty'), shell: toolRunner.shellPath }),
+      signOutProcess: toolsFake ? toolsFake.signOutProcess : createSignOutProcess({ runner: toolRunner }),
       installAtLaunch: ['claude'],
       onChange: (snapshot) => sendToWindow('engelbart:tools', snapshot),
     });
