@@ -172,6 +172,53 @@ test('splitTarget: &to= is where the section ends, each value decoded after the 
   assert.deepEqual(splitTarget('https://x.org/a#find=a%20b&to='), { address: 'https://x.org/a', find: 'a b', to: '' }, 'an empty to is none');
 });
 
+// An @discover guide (main/bart/discover-system-prompt.cjs "The guide"): each entry a title, then a Read line of one or two sections.
+const PAPER = 'https://arxiv.org/pdf/2312.10893';
+const OTHER = 'https://dl.acm.org/doi/pdf/10.1145/3544548.3581225';
+const GUIDE = [
+  '## Prior work on reading support',
+  `**[CiteSee](${PAPER})** · Chang et al. · 2023`,
+  `**Read:** [3.2 Design Goals](${PAPER}#find=We%20set%20three%20goals&to=The%20system%20has) and [5 Evaluation](${PAPER}#find=We%20ran%20a%20study)`,
+  '**Why:** it decides what to show first.',
+  `**[Scim](${OTHER})** · Fok et al. · 2023`,
+  `**Read:** [4 Faceted highlights](${OTHER}#find=Scim%20colours&to=Our%20study)`,
+  `Then back to [3.2 Design Goals, again](${PAPER}#find=We%20set%20three%20goals&to=The%20system%20has), and \`[not a link](${PAPER}#find=in%20code)\`.`,
+];
+
+test('guideSections: an @discover reply\'s links to one paper, in order, each once; other papers and title links left out (2026-10-03)', async () => {
+  const { guideSections } = await load('stage');
+  assert.deepEqual(guideSections(GUIDE, PAPER), [
+    { label: '3.2 Design Goals', find: 'We set three goals', to: 'The system has' },
+    { label: '5 Evaluation', find: 'We ran a study', to: '' },
+  ], 'two sections of the same paper; the title link (no passage), the repeat and the code span are not sections');
+  assert.deepEqual(guideSections(GUIDE, OTHER), [{ label: '4 Faceted highlights', find: 'Scim colours', to: 'Our study' }], 'another paper: its own');
+  assert.deepEqual(guideSections(['**Why:** nothing to read here.', `**[CiteSee](${PAPER})**`], PAPER), [], 'a reply with none');
+  assert.deepEqual(guideSections([], PAPER), []);
+  assert.deepEqual(guideSections(GUIDE, ''), [], 'no address, no sections');
+  assert.deepEqual(guideSections([`**Read:** [Intro](/Users/h/My%20Paper.pdf#find=In%20this%20paper)`], '/Users/h/My Paper.pdf'), [{ label: 'Intro', find: 'In this paper', to: '' }], 'a path, as splitTarget spells it');
+});
+
+test('a guide\'s sections on the tab: given with the passage, the clicked one in front; a second link replaces them; landing in a pdf opens no find card', async () => {
+  const { withPassage, landTab, landingFinds, sectionAt } = await load('stage');
+  const sections = [{ label: '3.2 Design Goals', find: 'We set three goals', to: 'The system has' }, { label: '5 Evaluation', find: 'We ran a study', to: '' }];
+  const tab = withPassage({ id: 't1', pendingFind: null, pendingTo: null }, 'We ran a study', '', sections);
+  assert.deepEqual([tab.pendingFind, tab.pendingTo, tab.sections, tab.activeSection], ['We ran a study', null, sections, 1]);
+  assert.equal(sectionAt(sections, 'We set three goals', 'The system has'), 0);
+  assert.equal(sectionAt(sections, 'We set three goals', ''), -1, 'the same start, another end: not that section');
+  const drawn = { ...tab, pdf: { seq: 1 } };
+  const landed = landTab(drawn, 'We ran a study');
+  assert.deepEqual([landed.pendingFind, landed.pendingTo, landed.activeSection], [null, null, 1], 'found: it waits no longer, its section in front');
+  assert.equal(landingFinds(landed), false, 'a pdf with a guide\'s sections: no find card');
+  assert.equal(landTab(drawn, 'Another passage'), drawn, 'a passage the tab no longer waits for changes nothing');
+  const again = withPassage(landed, 'Scim colours', 'Our study', [{ label: '4 Faceted highlights', find: 'Scim colours', to: 'Our study' }]);
+  assert.deepEqual([again.sections.map((s) => s.label), again.activeSection], [['4 Faceted highlights'], 0], 'a second link to the open paper: its sections replace the tab\'s');
+  const plain = withPassage(landed, 'late interaction', '', undefined);
+  assert.deepEqual([plain.sections, plain.activeSection], [[], -1], 'a passage from outside a guide: no sections');
+  assert.equal(landingFinds(landTab({ ...plain, pdf: { seq: 1 } }, 'late interaction')), true, '…and the find card opens as before');
+  assert.equal(landingFinds({ ...tab, pdf: null }), true, 'a page or a drawn file: the find card, sections or not');
+  assert.equal(withPassage(landed, '', '', sections), landed, 'no passage (a title link): the tab as it was');
+});
+
 test('linkPlan: a passage to a library paper opens its row; other links open their address in the tab that has it, or a new one', async () => {
   const { linkPlan, placeTab, tabKey } = await load('stage');
   assert.deepEqual(linkPlan('/Users/h/ColBERT.pdf#find=late%20interaction', library), { address: '/Users/h/ColBERT.pdf', find: 'late interaction', to: '', row: library[2], key: 'i:p1' }, 'by its path');
@@ -237,7 +284,7 @@ test('sectionSpans: a link\'s section, one stretch a page, from the start words 
   assert.equal(sectionSpans(null, [{ page: 2, from: 900 }]), null, 'no start, no section');
 });
 
-test('the section is painted under find\'s colours and goes when find stops; it is never ink', async () => {
+test('the section is painted under find\'s colours and stays when find stops (2026-10-03); it is never ink', async () => {
   const { paintSection, clearFind, FIND, FIND_ACTIVE, SECTION } = await load('find');
   class Fake { constructor(...ranges) { this.ranges = ranges; this.priority = 0; } }
   const registry = new Map([[FIND, new Fake('a')], [FIND_ACTIVE, new Fake('b')]]);
@@ -247,7 +294,7 @@ test('the section is painted under find\'s colours and goes when find stops; it 
   assert.equal(registry.has(SECTION), false, 'nothing to tint: none left over');
   paintSection(registry, ['r1'], Fake);
   clearFind(registry);
-  assert.deepEqual([...registry.keys()], [], 'cleared with find');
+  assert.deepEqual([...registry.keys()], [SECTION], 'find\'s matches go; the section is not find\'s');
   assert.doesNotThrow(() => { clearFind(null); paintSection(null, ['r'], Fake); }, 'no Highlight API: nothing painted, nothing thrown');
 });
 

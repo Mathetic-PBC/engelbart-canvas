@@ -33,7 +33,8 @@ export function createTargetGate() {
 }
 
 // A link's section (2026-09-30, @discover round 2: `#find=<start words>&to=<end words>`): from the start words to just
-// before the first sentence of the next section, tinted under find's colours. Its parts that do not need a page.
+// before the first sentence of the next section, tinted under find's colours. Its parts that do not need a page. Since
+// 2026-10-03 the section is find's no longer: it stays while find searches and stops, until another is shown or it is cleared.
 export const FIND = 'pdf-find', FIND_ACTIVE = 'pdf-find-active', SECTION = 'pdf-section';
 export const SECTION_PAGES = 6;
 
@@ -63,7 +64,7 @@ export function paintSection(registry, ranges, Make) {
   registry.set(SECTION, tint);
 }
 
-/** Find stopped: its matches, its match in front and a link's section all go. Nothing of it was ever ink. */
+/** Find stopped: its matches and its match in front go; a link's section stays (2026-10-03). Nothing of it was ever ink. */
 export function clearFind(registry) {
-  if (registry) for (const name of [FIND, FIND_ACTIVE, SECTION]) registry.delete(name);
+  if (registry) for (const name of [FIND, FIND_ACTIVE]) registry.delete(name);
 }

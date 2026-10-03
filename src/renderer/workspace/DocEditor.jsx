@@ -35,7 +35,7 @@ import Popover from './Popover.jsx';
 import WorkspacePeek from './WorkspacePeek.jsx';
 import { diffRows, diffTotals, nextAttachment } from '../model/build-diff.js';
 import { guideTitle } from '../model/guide.js';
-import { SAVE_LABEL } from '../model/stage.js';
+import { SAVE_LABEL, guideSections, splitTarget } from '../model/stage.js';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
@@ -1509,7 +1509,13 @@ export default class DocEditor extends React.Component {
       return;
     }
     const a = e.target.closest('a[data-link]');
-    if (a) { e.preventDefault(); this.openLink(a.getAttribute('href'), newTabClick(e) ? { newTab: true } : undefined); return; }
+    if (a) {
+      e.preventDefault();
+      const href = a.getAttribute('href'), row = a.closest('[data-line]'), sections = row ? this.linkSections(Number(row.dataset.line), href) : null;
+      const options = { ...(newTabClick(e) ? { newTab: true } : {}), ...(sections ? { sections } : {}) };
+      this.openLink(href, Object.keys(options).length ? options : undefined);
+      return;
+    }
     const m = e.target.closest('[data-mention]');
     if (m && m.dataset.ws) { e.preventDefault(); this.hidePop(); if (this.props.onOpenWorkspace) this.props.onOpenWorkspace(m.dataset.ws); return; } // goes there: one workspace at a time
     if (m) {
@@ -1532,6 +1538,18 @@ export default class DocEditor extends React.Component {
     if (!onto && e.target.closest('[data-act="pick"],[data-act="pickfollow"],[data-act="regen"]')) this.leavePicker();
   };
   openLink(href, options) { if (this.props.onOpenLink) this.props.onOpenLink(href, options); else window.open(href, '_blank', 'noreferrer'); }
+  // A passage link in an @discover answer (2026-10-03) goes with the answer's other sections for the same paper, the
+  // Stage's Sections menu (model/stage.js guideSections). Anywhere else, none: null.
+  linkSections(i, href) {
+    const target = splitTarget(href);
+    if (!target.find) return null;
+    const ls = this.lines(), at = this.layout(ls).get(i);
+    if (!at || at.agent !== 'discover' || at.role !== 'answer') return null;
+    const reply = [];
+    for (let j = at.turn.from; j <= at.turn.to; j++) { const p = parseLine(ls[j] ?? ''); if (p.type === 'reply') reply.push(p.text); }
+    const sections = guideSections(reply, target.address);
+    return sections.length ? sections : null;
+  }
   // The page past the editor: the same rule as the editor's own empty space, for a drag released below or beside the text.
   docClick = (e) => { if (e.target !== e.currentTarget || !this.downOnPage || !getSelection().isCollapsed) return; this.docClickInternal(); };
   docClickInternal() {

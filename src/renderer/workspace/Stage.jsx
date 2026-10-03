@@ -6,7 +6,7 @@ import { api, errorMessage } from '../api.js';
 import { usePreviewTouch } from '../ui/SandboxProgress.jsx';
 import { KindGlyph, SEARCH, FOLDER } from '../ui/Icons.jsx';
 import { kindOf, stripScheme, OPEN_IN_BROWSER } from '../model/address.js';
-import { MAX_TABS, SAVE_LABEL, addressKey, afterClose, linkPlan, looksLikePlace, placeTab, stageRows, tabKey, tabPlace, parseTable } from '../model/stage.js';
+import { MAX_TABS, SAVE_LABEL, addressKey, afterClose, landTab, landingFinds, linkPlan, looksLikePlace, placeTab, stageRows, tabKey, tabPlace, parseTable, withPassage } from '../model/stage.js';
 import { markdownBlocks, inlineRuns } from '../model/markdown.js';
 import PaperView from '../pdf/PaperView.jsx';
 
@@ -28,6 +28,9 @@ import PaperView from '../pdf/PaperView.jsx';
 // keeps it as `pendingFind` until what it shows is ready — a pdf drawn (PaperView `target`), a page loaded, a file drawn
 // here — then finds it once: the find card opens with the words and the match in front is scrolled to. `&to=` (round 2)
 // is kept as `pendingTo` beside it, for a pdf only: PaperView tints the section it ends; a page or a file ignores it.
+// A link in an @discover guide (2026-10-03) brings the guide's other sections for the same paper (DocEditor, model/stage.js
+// guideSections), kept on the tab as `sections` with the clicked one `activeSection`. In a pdf it opens no find card: the
+// section is scrolled to and tinted, and a Sections menu where the find card sits shows another, or clears it (×).
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
@@ -43,7 +46,8 @@ const ERR_CONNECTION_REFUSED = -102;
 const RETRY_MS = 2000;
 const HOVER_MS = 650; // a tab's card, the first time; then quickly while moving along the strip
 const newId = () => (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : String(Date.now() + Math.random()));
-const blankTab = () => ({ id: newId(), url: 'about:blank', web: null, item: null, file: null, pdf: null, pendingFind: null, pendingTo: null });
+const blankTab = () => ({ id: newId(), url: 'about:blank', web: null, item: null, file: null, pdf: null, pendingFind: null, pendingTo: null, sections: null, activeSection: -1 });
+const noSections = (t) => (t.sections && t.sections.length ? { ...t, sections: null, activeSection: -1 } : t);
 const isPage = (k) => k.kind === 'web' || k.kind === 'local' || k.kind === 'disk';
 const hasScheme = (input) => /^https?:\/\//i.test(input);
 const quiet = (promise) => promise.catch(() => {});
@@ -170,6 +174,44 @@ function FindCard({ inputRef, text, found, onText, onStep, onClose }) {
       <button type="button" className="hov-ink-wash" onClick={() => onStep(-1)} aria-label="Previous match" title="⇧⏎" style={small}>↑</button>
       <button type="button" className="hov-ink-wash" onClick={() => onStep(1)} aria-label="Next match" title="⏎" style={small}>↓</button>
       <button type="button" className="hov-ink-wash" onClick={onClose} aria-label="Close find" title="esc" style={{ ...small, color: '#8f8f8f' }}>×</button>
+    </div>
+  );
+}
+
+// The sections an @discover guide suggested for the paper in front (2026-10-03), where the find card sits, and under it
+// while it is open: the one shown, a list of them all to show another, and × to clear the tint and the menu.
+function SectionsMenu({ sections, active, below, onPick, onClose }) {
+  const [open, setOpen] = React.useState(false);
+  const boxRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const away = (event) => { if (boxRef.current && !boxRef.current.contains(event.target)) setOpen(false); };
+    document.addEventListener('mousedown', away, true);
+    return () => document.removeEventListener('mousedown', away, true);
+  }, [open]);
+  const current = sections[active];
+  const small = { flex: 'none', width: 24, height: 24, padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', font: '13px/1 var(--font-sans)', color: '#8f8f8f' };
+  return (
+    <div ref={boxRef} data-overlay="1" data-sections-menu="1" onKeyDown={(event) => { if (event.key === 'Escape' && open) { event.preventDefault(); event.stopPropagation(); setOpen(false); } }} style={{ position: 'absolute', top: below ? 52 : 10, right: 14, zIndex: 30, width: 'max-content', maxWidth: 'min(360px, calc(100% - 28px))' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 2, height: 34, boxSizing: 'border-box', padding: '0 4px', background: '#fff', border: '1px solid #c9c9c9', borderRadius: 8, animation: `rise 160ms ${EASE}` }}>
+        <button type="button" className="hov-wash" data-sections-button="1" aria-haspopup="listbox" aria-expanded={open} title="The sections the guide suggested" onClick={() => setOpen((o) => !o)} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, height: 26, padding: '0 6px 0 8px', border: 0, borderRadius: 6, background: open ? '#f2f2f2' : 'transparent', cursor: 'pointer', textAlign: 'left' }}>
+          <span style={{ flex: 'none', font: '500 9px/1 var(--font-sans)', letterSpacing: '1.6px', textTransform: 'uppercase', color: '#8f8f8f' }}>Sections</span>
+          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '13px/1.4 var(--font-sans)', color: '#171717' }}>{current ? current.label : ''}</span>
+          <span aria-hidden="true" style={{ flex: 'none', font: '10px/1 var(--font-sans)', color: '#8f8f8f' }}>▾</span>
+        </button>
+        <span style={{ flex: 'none', width: 1, height: 16, margin: '0 2px', background: '#eaeaea' }} />
+        <button type="button" className="hov-ink-wash" data-sections-close="1" onClick={onClose} aria-label="Clear the section" title="Clear the section" style={small}>×</button>
+      </div>
+      {open && (
+        <div role="listbox" aria-label="Sections" style={{ marginTop: 6, maxHeight: 320, overflowY: 'auto', boxSizing: 'border-box', padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, boxShadow: '0 12px 32px rgba(0,0,0,.06)', animation: `rise 160ms ${EASE}` }}>
+          {sections.map((section, i) => (
+            <div key={`${i}:${section.find}`} role="option" aria-selected={i === active} data-section-row={i} className="hov-wash" onClick={() => { setOpen(false); onPick(i); }} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '7px 10px', borderRadius: 6, cursor: 'pointer' }}>
+              <span style={{ flex: 'none', width: 14, textAlign: 'center', font: '12px/1.4 var(--font-sans)', color: '#171717' }}>{i === active ? '✓' : ''}</span>
+              <span style={{ flex: 1, minWidth: 0, font: '13px/1.4 var(--font-sans)', color: '#171717', overflowWrap: 'anywhere' }}>{section.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -435,8 +477,9 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
 
   // Where something being opened goes (model/stage.js placeTab); answers the tab's id, or null when it was open already.
   // `find`: a passage to find there once it is ready, given to the new tab or to the one that comes forward; `to`, where its section ends.
-  // `newTab` (a ⌘-click on a link): a tab of its own, even when one shows it already.
-  const claim = (key, find = '', to = '', { newTab = false } = {}) => {
+  // `newTab` (a ⌘-click on a link): a tab of its own, even when one shows it already. `sections`: an @discover guide's for
+  // the paper, which come with the passage and replace the tab's (model/stage.js withPassage).
+  const claim = (key, find = '', to = '', { newTab = false, sections = null } = {}) => {
     const current = tabsRef.current;
     const front = Math.max(0, current.findIndex((t) => t.id === (frontRef.current || current[0].id)));
     const place = placeTab(current, front, key, { newTab });
@@ -444,10 +487,10 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
       const id = current[place.focus].id;
       frontRef.current = id;
       setActiveId(id);
-      if (find) update(id, (t) => ({ ...t, pendingFind: find, pendingTo: to || null }));
+      if (find) update(id, (t) => withPassage(t, find, to, sections));
       return null;
     }
-    const fresh = { ...blankTab(), claimed: true, pendingFind: find || null, pendingTo: (find && to) || null };
+    const fresh = withPassage({ ...blankTab(), claimed: true }, find, to, sections);
     if (place.replace != null) {
       const old = current[place.replace];
       quiet(api.browserClose(old.id));
@@ -597,7 +640,8 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
       const seq = t.pdf && t.pdf.loading && t.pdf.url === got.url ? t.pdf.seq : fresh;
       const rowId = t.row && t.row.url && addressKey(t.row.url) === addressKey(got.url) ? t.row.id : null; // a library row that is this pdf's address
       const next = { url: got.url, input: got.url, name: t.row && rowId ? t.row.name : got.name, under: got.under || 'about:blank', seq, loading: !!got.loading, bytes: got.bytes || null, error: got.error || '', marks: undefined, rowId };
-      return { ...t, url: next.under, pdf: next, pdfForward: null, file: null };
+      const was = t.pdf || t.pdfForward, same = !!t.pendingFind || (was && addressKey(was.url) === addressKey(got.url)); // a guide's sections are its paper's
+      return { ...(same ? t : noSections(t)), url: next.under, pdf: next, pdfForward: null, file: null };
     }));
     if (!got.bytes) return;
     api.readPageAnnotations(got.url).catch(() => null).then((marks) => setTabs((current) => current.map((t) => (
@@ -734,6 +778,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     if (r.kind === 'disk') { void chooseFiles(); return; }
     leaveAddress();
     if (r.kind === 'item') { openRow(r.row); return; }
+    update(tab.id, noSections); // somewhere else: not the paper the guide's sections are in
     void navigate(tab.id, r.input); // a place goes there; words are a web search (model/address.js kindOf)
   };
   // Enter takes the row picked with the arrows; with nothing typed and nothing picked it goes to the address again (a reload).
@@ -783,7 +828,12 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     const id = tab.id, inPdf = !!pdf, inView = !!view;
     return () => {
       if (jumped.current && jumped.current.tabId === id) return; // the passage that replaces this search is painted already
-      if (inPdf) { if (paperRef.current) paperRef.current.stopFind(); }
+      if (inPdf) {
+        if (!paperRef.current) return;
+        paperRef.current.stopFind();
+        // A link's section went with its search, as ever, but for a guide's: that stays until the Sections menu changes it.
+        if (landingFinds(tabsRef.current.find((t) => t.id === id))) paperRef.current.clearSection();
+      }
       else if (inView) { clearRanges(); fileRanges.current = { ranges: [], active: -1, query: '' }; }
       else quiet(api.browserStopFind(id));
     };
@@ -796,17 +846,33 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const openFind = () => { setFinding(true); setFindFocus((n) => n + 1); };
   const closeFind = () => { setFinding(false); setMatches(null); };
 
-  // A link's passage, found once its tab is ready (DG-03). In a pdf PaperView has found it (`result`) by the time it says
-  // so; a page or a drawn file is searched as ⌘F would. Either way the find card opens with the words, and the passage
-  // waits no longer.
+  // A link's passage, found once its tab is ready (DG-03). In a pdf PaperView has shown it as a section (`result`) by the
+  // time it says so; a page or a drawn file is searched as ⌘F would. The find card opens with the words, and the passage
+  // waits no longer. In a pdf with an @discover guide's sections (2026-10-03) the find card stays as it was: the Sections
+  // menu says which one is shown.
   const clearPending = (id, text) => update(id, (t) => (t.pendingFind === text ? { ...t, pendingFind: null, pendingTo: null } : t));
   const landed = (id, text, result) => {
-    clearPending(id, text);
+    const t = tabsRef.current.find((x) => x.id === id);
+    update(id, (x) => landTab(x, text));
+    if (t && !landingFinds(t)) return;
+    const found = paperRef.current ? paperRef.current.find(text, 0, { fromStart: true }) : result; // find's match in front, as before
     const h = keys.current;
     if (!h.finding || h.findText !== text) jumped.current = { tabId: id, text };
     setFindText(text);
     setFinding(true);
-    setMatches(result);
+    setMatches(found);
+  };
+  // The Sections menu: another section shown, or none (× takes the menu too).
+  const sectionsOn = !!(pdf && tab.sections && tab.sections.length);
+  const pickSection = (i) => {
+    const section = tab.sections && tab.sections[i];
+    if (!section) return;
+    update(tab.id, (t) => ({ ...t, activeSection: i }));
+    if (paperRef.current) paperRef.current.showSection(section.find, section.to);
+  };
+  const closeSections = () => {
+    update(tab.id, noSections);
+    if (paperRef.current) paperRef.current.clearSection();
   };
   const land = (id, text) => {
     clearPending(id, text);
@@ -1022,6 +1088,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
 
       <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column', background: '#fafafa' }}>
         {finding && <FindCard inputRef={findRef} text={findText} found={matches} onText={setFindText} onStep={(step) => runFind(findText, step)} onClose={closeFind} />}
+        {sectionsOn && pdfReady && <SectionsMenu key={tab.id} sections={tab.sections} active={tab.activeSection} below={finding} onPick={pickSection} onClose={closeSections} />}
         {/* a page sits under a band while the find card is open: a native view would cover it */}
         {finding && page && <div style={{ flex: 'none', height: 54 }} />}
 
@@ -1034,6 +1101,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
               marks={pdf.marks}
               target={tab.pendingFind || null}
               targetTo={tab.pendingTo || null}
+              initialSection={sectionsOn ? tab.sections[tab.activeSection] || null : null}
               onTarget={(text, result) => landed(tab.id, text, result)}
               onFind={(result) => { if (keys.current && keys.current.finding) setMatches(result); }}
               onMarksChange={(marks) => {

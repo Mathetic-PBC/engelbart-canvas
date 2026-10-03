@@ -43,6 +43,61 @@ export function splitTarget(href) {
   return { address, find: words(m[1]), to: words(m[2]) };
 }
 
+// A link in an answer line as the editor draws one (model/doc.js INLINE): `[text](href)`, inside bold or not; code is not a link.
+const GUIDE_LINK_RE = /\[([^\]\n]+)\]\(([^)\s]+)\)/g;
+
+/**
+ * The sections an @discover guide suggests for one paper (2026-10-03): every link with a passage (#find=) to `address` in
+ * the reply `replyLines` (its lines' text, after `bart> `), in the order they come, each passage once →
+ * [{ label, find, to }], `label` the link's text ("3.2 Design Goals"). The paper's title link has no passage: not a section.
+ */
+export function guideSections(replyLines, address) {
+  const where = String(address || '').trim();
+  const out = [], seen = new Set();
+  if (!where) return out;
+  for (const line of replyLines || []) {
+    const text = String(line == null ? '' : line).replace(/`[^`\n]+`/g, '');
+    for (const m of text.matchAll(GUIDE_LINK_RE)) {
+      const target = splitTarget(m[2]);
+      if (!target.find || target.address !== where) continue;
+      const key = `${target.find}\n${target.to}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ label: m[1].replace(/\s+/g, ' ').trim(), find: target.find, to: target.to });
+    }
+  }
+  return out;
+}
+
+/** Which of a tab's sections a passage is the start of (-1: none). */
+export function sectionAt(sections, find, to) {
+  return (sections || []).findIndex((s) => s.find === find && (s.to || '') === (to || ''));
+}
+
+/**
+ * A tab a link's passage goes to (Stage claim): it waits there as `pendingFind` / `pendingTo` until what the tab shows is
+ * ready. The sections an @discover guide gave with it (guideSections, 2026-10-03) replace the tab's, the clicked one in
+ * front (`activeSection`); a passage from anywhere else leaves the tab none. No passage: the tab as it was.
+ */
+export function withPassage(tab, find, to, sections) {
+  if (!find) return tab;
+  const list = Array.isArray(sections) ? sections : [];
+  return { ...tab, pendingFind: find, pendingTo: to || null, sections: list, activeSection: sectionAt(list, find, to) };
+}
+
+/** A tab whose passage was found (Stage landed): it waits no longer, and the section it starts is the one in front. */
+export function landTab(tab, find) {
+  if (!tab || tab.pendingFind !== find) return tab;
+  const sections = tab.sections || [];
+  return { ...tab, pendingFind: null, pendingTo: null, activeSection: sections.length ? sectionAt(sections, find, tab.pendingTo) : -1 };
+}
+
+/**
+ * Whether a link's passage, found in its tab, opens the find card with its words: yes, as ever, except in a pdf an
+ * @discover guide's sections came with (2026-10-03), where the Sections menu shows what was found instead.
+ */
+export const landingFinds = (tab) => !(tab && tab.pdf && tab.sections && tab.sections.length);
+
 /** The library row a link's address is: one the Stage shows whose path (or file: address) or url is that address. */
 export function rowForAddress(library, address) {
   const where = String(address || '').trim();

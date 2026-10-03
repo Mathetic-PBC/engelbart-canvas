@@ -10,15 +10,17 @@
 // redraws. Pages are centered with no gutter of their own; a floating bar at the bottom shows the
 // page and zoom; a pinch (or ⌘ / ⌃ scroll) zooms around the pointer.
 // `target` (2026-09-30): a passage a link asked for. Once every page is drawn it is found from page 1, scrolled to and
-// painted as find's match in front, and told through onFind and onTarget(text, result); once per target, until the
-// prop is cleared and given again. Nothing matching leaves the scroll where it is. `targetTo` (@discover round 2): the
-// first words of the section after it; the stretch from the passage to just before them, up to six pages on, is tinted
-// (SECTION) until find stops. Never ink.
+// shown as a section (showSection), and told through onTarget(text, result); once per target, until the prop is cleared
+// and given again. Nothing matching leaves the scroll where it is. `targetTo` (@discover round 2): the first words of the
+// section after it; the stretch from the passage to just before them, up to six pages on, is tinted (SECTION), else the
+// passage alone is. The section is find's no longer (2026-10-03, the Stage's Sections menu): it stays while find
+// searches and stops, until another is shown or clearSection(). `initialSection` { find, to }: the section to show the
+// same way when the viewer opens with no target (a tab with a guide's sections come to the front again). Never ink.
 import React from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import rough from 'roughjs';
 import { mergeLineRects, placeHighlight, sideOf, boxSeed } from './marks.js';
-import { nextFind, createTargetGate, sectionSpans, paintSection, clearFind, FIND, FIND_ACTIVE, SECTION } from '../model/find.js';
+import { nextFind, createTargetGate, sectionSpans, paintSection, clearFind, FIND, FIND_ACTIVE } from '../model/find.js';
 import { wheelZooms, wheelZoom, createPageCache } from '../model/paper-zoom.js';
 
 // pdf.js 6: a document is torn down through its loading task (PDFDocumentProxy has no destroy()).
@@ -142,9 +144,10 @@ export default class PaperView extends React.Component {
     this.findAt = -1;
     this.findRanges = [];
     this.findSpots = []; // where each of findRanges is: { page, from, to } in its page's text
-    this.section = null; // { text, to }: a link's section, while find shows its passage
+    this.section = null; // { text, to, spot }: a link's section, its start words found at `spot` ({ page, from, to })
     this.gate = createTargetGate();
-    this.gate.set(targetKey(props.target, props.targetTo));
+    const first = props.target ? { find: props.target, to: props.targetTo } : props.initialSection || {};
+    this.gate.set(targetKey(first.find, first.to));
   }
 
   // Zoom and layout state, dropped whenever a new document opens (which opens at 100%).
@@ -213,6 +216,7 @@ export default class PaperView extends React.Component {
     this.gen += 1;
     this.cancelLayout();
     this.stopFind();
+    this.clearSection();
     if (this.doc) { const d = this.doc; this.doc = null; destroyDoc(d); }
   }
 
@@ -531,7 +535,7 @@ export default class PaperView extends React.Component {
         if ((this.marks[n] || []).some((m) => m.pos && m.note != null)) this.renderMarks(n);
       }
       if (this.findQuery) this.report(this.find(this.findQuery, 0, { scroll: false }));
-      if (this.section) this.paintSection(); // the text layer was drawn again: the section's ranges are new too
+      if (this.section) { this.section.spot = this.sectionStart(this.section.text).spot; this.paintSection(); } // the text layer was drawn again: found again
       const text = this.gate.drawn();
       if (text) this.applyTarget(text);
     } catch (err) {
@@ -560,7 +564,6 @@ export default class PaperView extends React.Component {
     const text = String(query || '');
     if (!text.trim()) { this.stopFind(); return { matches: 0, active: 0 }; }
     const fresh = text !== this.findQuery;
-    if (fresh && this.section) { this.section = null; const h = highlights(); if (h) h.delete(SECTION); }
     this.findQuery = text;
     const pages = this.pageTexts();
     this.findSpots = this.matchSpots(text, pages);
@@ -577,25 +580,54 @@ export default class PaperView extends React.Component {
     return { matches: this.findRanges.length, active: this.findAt + 1 };
   }
 
-  // A link's passage, every page drawn: found from page 1 and scrolled to (`target`), and its section tinted (`targetTo`).
+  // A link's passage, every page drawn: shown as a section from page 1 (`target`, `targetTo`). Told through onTarget alone:
+  // find has not been asked anything.
   applyTarget(key) {
     const [text, to = ''] = String(key).split('\n');
-    const result = this.find(text, 0, { scroll: true, fromStart: true });
-    this.section = to && result.matches ? { text, to } : null;
-    if (this.section) this.paintSection();
-    this.report(result);
+    const result = this.showSection(text, to);
     if (typeof this.props.onTarget === 'function') this.props.onTarget(text, result);
   }
 
-  // The section from the passage (the first match from page 1) to just before the first match of `to` after it, one range
-  // a page (../model/find.js sectionSpans). `to` nowhere after it, or too far on: nothing is tinted, the passage shows alone.
+  // Where a section starts: its words' first match from page 1, as find counts them (one with a range) → { spot, range,
+  // matches }; `spot` null when they are nowhere.
+  sectionStart(text, pages = this.pageTexts()) {
+    let first = null, matches = 0;
+    for (const spot of this.matchSpots(text, pages)) {
+      const range = this.rangeIn(pages, spot.page, spot.from, spot.to);
+      if (!range) continue;
+      matches += 1;
+      if (!first) first = { spot, range };
+    }
+    return { spot: first ? first.spot : null, range: first ? first.range : null, matches };
+  }
+
+  /** A section (2026-10-03, apart from find): its start words `find` found from page 1 and scrolled to, and tinted to just
+   *  before `to` (paintSection). Answers { matches, active } as find would; nothing matching clears it and leaves the scroll. */
+  showSection(find, to = '') {
+    const text = String(find || '');
+    if (!text.trim()) { this.clearSection(); return { matches: 0, active: 0 }; }
+    const { spot, range, matches } = this.sectionStart(text);
+    if (!spot) { this.clearSection(); return { matches: 0, active: 0 }; }
+    this.section = { text, to: String(to || ''), spot };
+    this.paintSection();
+    this.scrollToRange(range);
+    return { matches, active: 1 };
+  }
+
+  clearSection() {
+    this.section = null;
+    paintSection(highlights(), [], null);
+  }
+
+  // The section from its start words to just before the first match of `to` after them, one range a page
+  // (../model/find.js sectionSpans). No `to`, `to` nowhere after them, or too far on: the start words alone are tinted.
   paintSection() {
     const h = highlights();
     if (!h) return;
-    const s = this.section, start = s && this.findQuery === s.text ? this.findSpots[0] : null;
+    const s = this.section, start = s && s.spot;
     const pages = start ? this.pageTexts() : [];
-    const spans = start ? sectionSpans(start, this.matchSpots(s.to, pages)) : null;
-    paintSection(h, spans ? spans.map((span) => this.rangeIn(pages, span.page, span.from, span.to)).filter(Boolean) : [], Highlight);
+    const spans = start ? (s.to && sectionSpans(start, this.matchSpots(s.to, pages))) || [start] : [];
+    paintSection(h, spans.map((span) => this.rangeIn(pages, span.page, span.from, span.to)).filter(Boolean), Highlight);
   }
 
   stopFind() {
@@ -603,7 +635,6 @@ export default class PaperView extends React.Component {
     this.findAt = -1;
     this.findRanges = [];
     this.findSpots = [];
-    this.section = null;
     clearFind(highlights());
   }
 
@@ -676,9 +707,14 @@ export default class PaperView extends React.Component {
       on.priority = 1;
       h.set(FIND_ACTIVE, on);
     }
+    if (scroll) this.scrollToRange(active);
+  }
+
+  // A range out of view is brought a third of the way down (and across) the pane.
+  scrollToRange(range) {
     const host = this.host.current;
-    if (!scroll || !active || !host) return;
-    const box = host.getBoundingClientRect(), r = active.getBoundingClientRect();
+    if (!range || !host) return;
+    const box = host.getBoundingClientRect(), r = range.getBoundingClientRect();
     if (r.top < box.top + 24 || r.bottom > box.bottom - 24) host.scrollTop += r.top - box.top - host.clientHeight / 3;
     if (r.left < box.left || r.right > box.left + host.clientWidth) host.scrollLeft += r.left - box.left - host.clientWidth / 3;
   }
