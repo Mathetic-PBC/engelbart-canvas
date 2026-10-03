@@ -413,7 +413,8 @@ export default class DocEditor extends React.Component {
   // An @bart line in pieces: its recognised flags (src/main/bart/question.cjs reads them, as the run will) each a token of
   // their own, the rest split as any line is. Shown verbatim, so offsets in the line are what they were. An @brainstorm
   // line has none: its model is fixed and a flag picks nothing (main/bart/models.cjs readBrainstorm). An @discover line's
-  // --quick, --standard and --deep are flags too (2026-10-03), with the model and effort flags readDiscover obeys.
+  // --quick, --standard and --deep are flags too (2026-10-03), and --claude and --codex, with the model and effort flags
+  // readDiscover obeys.
   bartTokens(line, p) {
     const models = this.props.models, base = line.length - p.text.length, tokens = [], flags = new Set(), agent = agentOf(p);
     let at = 0;
@@ -485,8 +486,8 @@ export default class DocEditor extends React.Component {
       // The chip: what the question starts on, and (hovered) where that is changed. The arrow sits inside it, one unit.
       const open = !!(this.state.picker && this.state.picker.kind === 'line' && this.state.picker.i === i);
       // An unanswered @discover line's chip (2026-10-03) names its level instead, the one it would run at now (carried from
-      // an earlier turn of its exchange when the line names none), or the model and effort a flag pins it to; its menu is
-      // DiscoverLevels. @brainstorm's runs on its one model: no chip.
+      // an earlier turn of its exchange when the line names none), with its provider when that is not the default ("Codex ·
+      // Deep"), or the model and effort a flag pins it to; its menu is DiscoverLevels. @brainstorm's runs on its one model: no chip.
       const label = read ? `${read.steps[0].name} ${EFFORT_LABELS[read.steps[0].effort] || read.steps[0].effort}` : models && agent === 'discover' && closes ? this.discoverLabel(i) : null;
       const chip = label ? `<span contenteditable="false" data-chip="${i}" style="user-select:none;flex:none;display:inline-flex;align-items:center;gap:8px;margin:-2px -6px 0 0;padding:2px 2px 2px 12px;border:1px solid #eaeaea;border-radius:999px;background:#fff"><span data-act="pick" data-row="${i}" role="button" aria-haspopup="dialog" aria-expanded="${open}" style="display:inline-flex;align-items:center;gap:7px;height:26px;font:13px/1 var(--font-sans);color:#4d4d4d;cursor:default;white-space:nowrap">${esc(label)}<span style="display:inline-flex;align-items:center;justify-content:center;width:10px;height:12px;font:12px/1 var(--font-sans);color:#8f8f8f"><span style="position:relative;top:${open ? '3px' : '-3px'}">${open ? '⌃' : '⌄'}</span></span></span>${send}</span>` : `<span contenteditable="false" style="flex:none;margin-top:3px">${send}</span>`;
       return `<div ${raw} ${locked ? 'contenteditable="false" data-readonly="1"' : ''} style="display:flex;align-items:flex-start;gap:10px;padding:${top ? 12 : 10}px 16px ${closes ? '10px' : '4px'};min-height:35px;background:#fafafa;border-radius:${radius(top, closes)};margin-bottom:${closes ? '14px' : '0'};font-size:16px;line-height:1.6;${locked ? 'user-select:text;cursor:default' : ''}"><span class="t" style="flex:1;min-width:0">${content || '<br>'}</span>`
@@ -1613,12 +1614,14 @@ export default class DocEditor extends React.Component {
     const found = this.findTurn(ls, q); if (!found) return [];
     return found.thread.turns.filter((turn) => turn.q < q && turn.answered && !turn.pending).map((turn) => turnText(ls, turn));
   }
-  // An @discover line as it would run if sent now (2026-10-03): the level it names, else the one an earlier turn of its
-  // exchange carries, else Standard; or the model and effort a flag pins it to (readDiscover, as the run reads it).
+  // An @discover line as it would run if sent now (2026-10-03): the level and provider it names, else the ones an earlier
+  // turn of its exchange carries, else Standard on the default provider; or the model and effort a flag pins it to
+  // (readDiscover, as the run reads it). On a provider other than the default, the chip names it: "Codex · Deep".
   discoverRead(ls, i) { return readDiscover(parseLine(ls[i] || '').text, this.props.models, this.turnsBefore(ls, i)); }
   discoverLabel(i) {
-    const read = this.discoverRead(this.lines(), i), step = read.steps[0];
-    return read.pinned ? `${step.name} ${EFFORT_LABELS[step.effort] || step.effort}` : LEVEL_LABELS[read.mode];
+    const models = this.props.models, read = this.discoverRead(this.lines(), i), step = read.steps[0];
+    if (read.pinned) return `${step.name} ${EFFORT_LABELS[step.effort] || step.effort}`;
+    return read.provider === models.provider ? LEVEL_LABELS[read.mode] : `${models.providers[read.provider].name} · ${LEVEL_LABELS[read.mode]}`;
   }
   // A follow-up: the question goes under the card's last answer as an @bart line of its own, with the pending line under it.
   // It asks what the card's last turn asked: @bart, @brainstorm after a recap (which may be sent with nothing typed), or
@@ -1771,12 +1774,13 @@ export default class DocEditor extends React.Component {
     const text = withChoice(p.text, models, choice), line = `${lead} ${text}${readFlags(text, models).rest ? '' : ' '}`;
     this.setLines((x) => x.map((l, j) => (j === pk.i ? line : l)), this.state.activeLine === pk.i ? { line: pk.i, offset: line.length } : undefined);
   };
-  // A level picked under an @discover line's chip (2026-10-03): written into the line as its flag, with any model or effort
-  // flag taken off. The level the line runs at with no flag (its exchange's, else Standard) is written as none.
-  pickLevel = (mode) => {
+  // A level picked under an @discover line's chip (2026-10-03), on a provider: written into the line as its flags, with any
+  // model or effort flag taken off. The level and provider the line runs on with no flag (its exchange's, else Standard on
+  // the default provider) are written as none.
+  pickLevel = ({ mode, provider }) => {
     const pk = this.state.picker, models = this.props.models; if (!pk || pk.kind !== 'line' || !models) return;
     const ls = this.lines(), p = parseLine(ls[pk.i] || ''); if (p.type !== 'bart' || agentOf(p) !== 'discover' || this.lockedAt(ls, pk.i)) { this.closePicker(); return; }
-    const plain = readDiscover('', models, this.turnsBefore(ls, pk.i)).mode, text = withMode(p.text, mode, models, plain);
+    const plain = readDiscover('', models, this.turnsBefore(ls, pk.i)), text = withMode(p.text, mode, models, { mode: plain.mode, provider: plain.provider }, provider || plain.provider);
     // With no question yet, a space after the flag, so what is typed next is the question ("@discover " alone has its own).
     const line = `${leadOf(ls[pk.i], 'discover')} ${text}${text && !readDiscover(text, models).question ? ' ' : ''}`;
     this.setLines((x) => x.map((l, j) => (j === pk.i ? line : l)), this.state.activeLine === pk.i ? { line: pk.i, offset: line.length } : undefined);
@@ -1877,7 +1881,7 @@ export default class DocEditor extends React.Component {
       if (p.type === 'bart' && agentOf(p) === 'discover') {
         if (!models.providers[models.provider]) return null;
         const read = this.discoverRead(ls, pk.i);
-        return <DiscoverLevels models={models} current={{ mode: read.mode, pinned: read.pinned }} anchor={pk} onPick={this.pickLevel} onEnter={this.stayPicker} onLeave={this.leavePicker} />;
+        return <DiscoverLevels models={models} current={{ mode: read.mode, provider: read.provider, pinned: read.pinned }} anchor={pk} onPick={this.pickLevel} onEnter={this.stayPicker} onLeave={this.leavePicker} />;
       }
       if (p.type === 'bart') { const step = readQuestion(p.text, models).steps[0]; current = { provider: step.provider, model: step.key, effort: step.effort }; }
     }

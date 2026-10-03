@@ -36,7 +36,8 @@
 // workspace, and each turn is told how many answers it has had, and whether the person wrapped up, so it knows when to recap.
 //
 // @discover (2026-09-30): the same again, for what to read about a problem. Its own prompt (./discover-system-prompt.cjs),
-// one step (./question.cjs readDiscover: the level of the models file's `discover` block for its mode), @bart's file and
+// one step (./question.cjs readDiscover: the level of the models file's `discover` block for its mode, on the provider the
+// line or its exchange names with --claude or --codex, else @bart's; a follow-up stays on it and resumes), @bart's file and
 // web tools and the paper tools (./papers.cjs, served by ./papers-mcp.cjs: to Claude Code by --mcp-config, to Codex by its
 // own home's config.toml), its own sessions kept for two idle hours, and half an hour a step (three quarters, deep). It may
 // ask a card or two first, which are written as @brainstorm's are; its guide is markdown, written as an @bart answer is.

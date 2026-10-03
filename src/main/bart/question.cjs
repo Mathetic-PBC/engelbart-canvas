@@ -113,6 +113,20 @@ function readMode(text) {
   return { mode, rest };
 }
 
+// Which provider @discover runs on (2026-10-03, the level menu's provider field): `--claude`, or `--codex` (`--chatgpt` too),
+// anywhere on the line. Like the mode flags they name no model, so readFlags leaves them.
+const PROVIDER_RE = /(^|\s)--(claude|codex|chatgpt)(?=\s|$)/gi;
+const PROVIDER_WORDS = { claude: 'anthropic', codex: 'openai', chatgpt: 'openai' };
+// The flag withMode writes for each.
+const PROVIDER_FLAGS = { anthropic: '--claude', openai: '--codex' };
+
+/** The provider an @discover line names, the last when it names two, else null; and the line without it. → { provider, rest } */
+function readProvider(text) {
+  let provider = null;
+  const rest = String(text || '').replace(PROVIDER_RE, (all, lead, word) => { provider = PROVIDER_WORDS[word.toLowerCase()]; return lead; }).replace(/\s+/g, ' ').trim();
+  return { provider, rest };
+}
+
 /** `mode`'s level of @discover on `provider` → { model, effort }: the models file's `discover` block, else that provider's first step. */
 function levelOf(models, provider, mode) {
   const entry = models.providers[provider];
@@ -124,38 +138,50 @@ function levelOf(models, provider, mode) {
 /**
  * The text after "@discover" (2026-09-30; three levels 2026-10-02) → what readQuestion gives, on one step, and `mode`: the
  * one the line names, else the last one an earlier turn of the exchange named (`earlier`, its turns { question }: an
- * answer to a card, or a follow-up, carries on as deep as the problem was asked), else 'standard'. The step is that mode's
- * level in the models file's `discover` block, on the provider an @bart question would start on, else that provider's first
- * step. No ladder, so nothing to move up to. A model or effort flag still picks by hand, for that line only.
+ * answer to a card, or a follow-up, carries on as deep as the problem was asked), else 'standard'. The provider is found
+ * the same way (2026-10-03: `--claude`, `--codex`), else the one an @bart question would start on; one the list does not
+ * offer is passed over. The step is that mode's level in the models file's `discover` block on that provider, else that
+ * provider's first step. No ladder, so nothing to move up to. A model or effort flag still picks by hand, for that line
+ * only: a model flag on its own provider, an effort alone on the line's.
  */
 function readDiscover(text, models, earlier = []) {
-  const { mode: named, rest } = readMode(text);
-  const carried = [...(Array.isArray(earlier) ? earlier : [])].reverse().map((turn) => readMode(turn && turn.question).mode).find(Boolean);
+  const offered = (provider) => (provider && models.providers[provider] ? provider : null);
+  const { mode: named, rest: unmoded } = readMode(text);
+  const { provider: asked, rest } = readProvider(unmoded);
+  const before = [...(Array.isArray(earlier) ? earlier : [])].reverse().map((turn) => (turn && turn.question) || '');
+  const carried = before.map((question) => readMode(question).mode).find(Boolean);
   const mode = named || carried || 'standard';
-  const read = readQuestion(rest, models);
+  const provider = offered(asked) || before.map((question) => offered(readProvider(question).provider)).find(Boolean) || models.provider;
+  const read = readQuestion(rest, { ...models, provider });
   if (read.pinned) return { ...read, mode };
-  const provider = read.provider, entry = models.providers[provider], rung = levelOf(models, provider, mode);
+  const entry = models.providers[provider], rung = levelOf(models, provider, mode);
   return { question: read.question, provider, steps: [{ provider, key: rung.model, model: entry.models[rung.model].id, name: entry.models[rung.model].name, effort: rung.effort }], pinned: false, mode };
 }
 
 /**
- * The text after "@discover" set to run at `mode` (2026-10-03, the line's level chip): every mode flag and every model or
- * effort flag taken off, then `--quick` or `--deep` after the question. `plain` is the mode the line runs at with no flag
- * ('standard', or the level an earlier turn of its exchange carries): picking it writes nothing, so a plain line stays plain.
+ * The text after "@discover" set to run at `mode` on `provider` (2026-10-03, the line's level chip): every mode and provider
+ * flag and every model or effort flag taken off, then `--claude` or `--codex` and `--quick`, `--standard` or `--deep` after
+ * the question. `plain` is how the line runs with no flag, { mode, provider } (a mode alone is taken as the mode): 'standard'
+ * or the level an earlier turn of its exchange carries, and the provider it carries or the default. Picking either writes
+ * nothing, so a plain line stays plain. A provider the list does not offer, or none, writes no provider flag.
  */
-function withMode(text, mode, models, plain = 'standard') {
-  const { rest } = readMode(text);
+function withMode(text, mode, models, plain = 'standard', provider = null) {
+  const held = typeof plain === 'string' ? { mode: plain } : plain || {};
+  const plainMode = held.mode || 'standard', plainProvider = held.provider || (models ? models.provider : null);
+  const { rest } = readProvider(readMode(text).rest);
   const question = models ? readFlags(rest, models).rest : rest;
-  return [question, MODES.includes(mode) && mode !== plain ? `--${mode}` : ''].filter(Boolean).join(' ');
+  const named = provider && provider !== plainProvider && (!models || models.providers[provider]) ? PROVIDER_FLAGS[provider] : '';
+  return [question, named, MODES.includes(mode) && mode !== plainMode ? `--${mode}` : ''].filter(Boolean).join(' ');
 }
 
 /**
- * Where the flags of an @discover line are, [start, end) each, for the editor to mark: its mode flags, and the model and
- * effort flags readDiscover obeys (read with the mode flags blanked out, so offsets stay those of `text`).
+ * Where the flags of an @discover line are, [start, end) each, for the editor to mark: its mode and provider flags, and the
+ * model and effort flags readDiscover obeys (read with the others blanked out, so offsets stay those of `text`).
  */
 function discoverSpans(text, models) {
-  const source = String(text || ''), spans = [];
-  const blank = source.replace(MODE_RE, (all, lead, word, at) => { spans.push([at + lead.length, at + all.length]); return lead + ' '.repeat(all.length - lead.length); });
+  const spans = [];
+  const blankOut = (source, re) => source.replace(re, (all, lead, word, at) => { spans.push([at + lead.length, at + all.length]); return lead + ' '.repeat(all.length - lead.length); });
+  const blank = blankOut(blankOut(String(text || ''), MODE_RE), PROVIDER_RE);
   if (models) spans.push(...readFlags(blank, models).spans);
   return spans.sort((a, b) => a[0] - b[0]);
 }
@@ -189,4 +215,4 @@ function withChoice(text, models, { model, effort }) {
   return [`--${model}`, `--${effort}`, rest].filter(Boolean).join(' ');
 }
 
-module.exports = { EFFORTS, EFFORT_LABELS, MODES, effortOf, modelOf, readFlags, ladderOf, readQuestion, readMode, levelOf, readDiscover, withMode, discoverSpans, readBuildFlag, buildRequestOf, withChoice };
+module.exports = { EFFORTS, EFFORT_LABELS, MODES, effortOf, modelOf, readFlags, ladderOf, readQuestion, readMode, readProvider, levelOf, readDiscover, withMode, discoverSpans, readBuildFlag, buildRequestOf, withChoice };

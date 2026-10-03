@@ -1430,6 +1430,46 @@ test('the real runner for @discover: file, web and paper tools, the paper server
   assert.equal(fs.readFileSync(path.join(home, 'config.toml'), 'utf8'), '# Written by Engelbart (src/main/bart/ask.cjs). Replaced on every run.\n');
 });
 
+test('a --codex @discover line runs Codex at its level when Claude Code is the default; a follow-up stays on Codex and resumes its session; --claude starts Claude Code afresh (P-07)', async () => {
+  const authFile = path.join(homeDir, 'auth-discover-provider.json');
+  fs.writeFileSync(authFile, JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'x' } }));
+  const calls = [];
+  const run = (shell, args, options, callback) => {
+    const command = args[args.length - 1];
+    calls.push({ command, env: options.env, timeout: options.timeout });
+    if (/codex/.test(command)) { fs.writeFileSync(options.env.ENGELBART_BART_OUTPUT, GUIDE); callback(null, '{"type":"thread.started","thread_id":"01a0bc2d-7c18-77d2-8b21-3cc7e942cbcf"}\n'); }
+    else callback(null, `${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: GUIDE })}\n`);
+  };
+  const discoverThreads = createThreads({ idleMs: DISCOVER_IDLE_MS });
+  const bart = createBart({ readModels: () => DEFAULTS, environment: { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir }, runDirectory: path.join(homeDir, 'runs-dv-provider'), codexHome: path.join(homeDir, 'codex-home-dv-provider'), codexAuthFile: authFile, run, discoverThreads, node: '/Apps/Engelbart', papersServer: '/Apps/papers-mcp.cjs' });
+  const ref = { kind: 'workspace', workspaceId: workspace.id };
+  const ask = (askId, text, turns = []) => bart.ask(ctx, project.id, { askId, ref, workspaceId: workspace.id, text, turns, agent: 'discover' });
+  const answerOf = (out) => out.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n');
+
+  assert.equal(DEFAULTS.provider, 'anthropic');
+  const first = await ask('dp1', 'agents --codex --deep');
+  assert.match(calls[0].command, /^exec \S*codex exec --color never /, 'Codex, a new session');
+  assert.deepEqual([calls[0].env.ENGELBART_BART_MODEL, /model_reasoning_effort="ultra"/.test(calls[0].command), calls[0].timeout], ['gpt-6-astra', true, 45 * 60_000], 'at deep: Astra ultra');
+  assert.equal(first.meta.provider, 'openai');
+  assert.match(first.lines[first.lines.length - 1], /^bart> \*Astra · ultra · \d+ s\*$/, 'the foot names it (A-02)');
+
+  // The follow-up line says no provider: the exchange's carries, and so does its session.
+  const said = [{ question: 'agents --codex --deep', answer: answerOf(first) }];
+  const second = await ask('dp2', 'only after 2022', said);
+  assert.match(calls[1].command, /codex exec resume "\$ENGELBART_BART_SESSION"/, 'the Codex session resumed');
+  assert.deepEqual([calls[1].env.ENGELBART_BART_SESSION, calls[1].env.ENGELBART_BART_MODEL, /model_reasoning_effort="ultra"/.test(calls[1].command)], ['01a0bc2d-7c18-77d2-8b21-3cc7e942cbcf', 'gpt-6-astra', true]);
+  assert.equal(second.meta.provider, 'openai');
+
+  // A third turn, after the follow-up: still Codex, still resumed.
+  await ask('dp3', 'and essays', [...said, { question: 'only after 2022', answer: answerOf(second) }]);
+  assert.match(calls[2].command, /codex exec resume /);
+
+  // Claude Code named in the same exchange: its own CLI, a new session given the document's turns, at the carried level.
+  const claude = await ask('dp4', 'more --claude', said);
+  assert.match(calls[3].command, /claude -p .*--session-id "\$ENGELBART_BART_SESSION"/);
+  assert.deepEqual([calls[3].env.ENGELBART_BART_MODEL, / --effort max /.test(calls[3].command), claude.meta.provider], ['opus', true, 'anthropic'], 'deep on Claude Code: Opus max');
+});
+
 test('the fake @discover asks one card (which part, in broad areas) for a line with no problem, then writes a guide; a problem gets the guide at once, and a follow-up additions', async () => {
   const bart = createFakeBart({ readModels: () => DEFAULTS, delayMs: 2 });
   const ref = { kind: 'workspace', workspaceId: workspace.id };

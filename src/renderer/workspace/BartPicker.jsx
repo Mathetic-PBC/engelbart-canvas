@@ -30,6 +30,26 @@ export function Row({ label, on, title, onPick }) {
   );
 }
 
+// The provider field above the models (Claude Code or Codex), opened to a list when more than one is offered. Also the top
+// of @discover's level menu (./DiscoverLevels.jsx). `provider` is the one viewed; `onView` changes it.
+export function ProviderField({ models, provider, onView }) {
+  const ids = Object.keys(models.providers);
+  const [listing, setListing] = React.useState(false);
+  return (
+    <div style={{ position: 'relative', marginBottom: 4 }}>
+      <div role="button" aria-haspopup="listbox" aria-expanded={listing} onMouseDown={(e) => { e.preventDefault(); if (ids.length > 1) setListing((open) => !open); }} style={{ display: 'flex', alignItems: 'center', gap: 8, height: 32, padding: '0 10px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', cursor: ids.length > 1 ? 'pointer' : 'default', font: '500 13px/1 var(--font-sans)', color: '#171717' }}>
+        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{models.providers[provider].name}</span>
+        {ids.length > 1 && <Caret up={listing} />}
+      </div>
+      {listing && (
+        <div role="listbox" style={{ position: 'absolute', left: 0, right: 0, top: 36, zIndex: 1, padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 8 }}>
+          {ids.map((id) => <Row key={id} label={models.providers[id].name} on={id === provider} onPick={() => { onView(id); setListing(false); }} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const HEAD = { padding: '6px 10px 6px', font: '500 9px/1 var(--font-sans)', letterSpacing: '1.6px', textTransform: 'uppercase', color: '#8f8f8f' };
 
 const REGENERATE = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /></svg>;
@@ -39,7 +59,6 @@ const REGENERATE = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" s
 export default function BartPicker({ models, current, anchor, onPick, onSend, onEnter, onLeave, hover = true, cover = false }) {
   const ids = Object.keys(models.providers);
   const [viewed, setViewed] = React.useState(current.provider);
-  const [listing, setListing] = React.useState(false);
   React.useEffect(() => { setViewed(current.provider); }, [current.provider]);
   const provider = models.providers[viewed] ? viewed : ids[0], entry = models.providers[provider], here = provider === current.provider;
   // A model alone keeps the effort in force when this provider offers it; an effort alone keeps the model, or starts this provider's ladder.
@@ -51,17 +70,7 @@ export default function BartPicker({ models, current, anchor, onPick, onSend, on
   return (
     <div ref={ref} data-bart-picker="1" data-overlay="1" data-hover={hover ? '1' : undefined} data-cover={cover ? '1' : undefined} role="dialog" aria-label="Model and effort" onMouseEnter={onEnter} onMouseLeave={onLeave} onMouseDown={(e) => e.preventDefault()} style={{ ...placed, zIndex: 60, width: WIDTH, boxSizing: 'border-box', display: 'flex', padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 12, animation: `rise 160ms ${EASE}` }}>
       <div style={{ flex: '1 1 0', minWidth: 0, padding: 4 }}>
-        <div style={{ position: 'relative', marginBottom: 4 }}>
-          <div role="button" aria-haspopup="listbox" aria-expanded={listing} onMouseDown={(e) => { e.preventDefault(); if (ids.length > 1) setListing((open) => !open); }} style={{ display: 'flex', alignItems: 'center', gap: 8, height: 32, padding: '0 10px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', cursor: ids.length > 1 ? 'pointer' : 'default', font: '500 13px/1 var(--font-sans)', color: '#171717' }}>
-            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.name}</span>
-            {ids.length > 1 && <Caret up={listing} />}
-          </div>
-          {listing && (
-            <div role="listbox" style={{ position: 'absolute', left: 0, right: 0, top: 36, zIndex: 1, padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 8 }}>
-              {ids.map((id) => <Row key={id} label={models.providers[id].name} on={id === provider} onPick={() => { setViewed(id); setListing(false); }} />)}
-            </div>
-          )}
-        </div>
+        <ProviderField models={models} provider={provider} onView={setViewed} />
         <div role="listbox" aria-label="Model">
           {Object.entries(entry.models).map(([key, model]) => <Row key={key} label={model.name} title={model.use} on={here && key === current.model} onPick={() => pickModel(key)} />)}
         </div>
