@@ -134,9 +134,52 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
   return { layout, context, recheck, config: describe, setTestMode, resetTestData, requireTestMode, close: closeAll };
 }
 
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, tools = null, builds = null, sandbox = null }) {
+// Several windows (2026-10-03, src/main/windows.cjs): `windowHandler(fn)` is a trusted handler that calls fn(win, ...args)
+// with the calling window, `reply(win, channel, payload)` answers that window alone, and `announce(channel, payload,
+// { except })` tells every window but the one that saved. Without them (one window, the tests) win is null, a reply goes
+// out on `notify`, and nothing is announced.
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {} }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
+  const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
+  const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
+  const answer = (win, channel, payload) => (reply && win ? reply(win, channel, payload) : notify && notify(channel, payload));
+  // What a handler saved is told to the other windows: a project's tree (`engelbart:project-changed`, which they read
+  // again; on the projects screen, the list of projects), or the library (`engelbart:library-changed`).
+  // The handler is called as it was: one that refuses at once (a data mode change under way) still throws at once.
+  const saving = (channel, handler, { project = null, library: rows = false } = {}) => handleFor(channel, (win, ...args) => {
+    const told = (out) => {
+      const projectId = project ? project(args, out) : null;
+      if (typeof projectId === 'string') announce('engelbart:project-changed', { projectId }, { except: win });
+      if (rows) announce('engelbart:library-changed', {}, { except: win });
+      return out;
+    };
+    const out = handler(...args);
+    return out && typeof out.then === 'function' ? out.then(told) : told(out);
+  });
+  const first = ([pid]) => pid;
   const withCtx = (fn) => async (...args) => fn(await store.context(), ...args);
+  // A document's saves (2026-10-03), whichever window makes them, one at a time: each that changes its text counts up its
+  // revision, is told to every other window as `doc:changed { projectId, key, text, revision }` (key: as the renderer keys
+  // documents, `ws:<id>` or `note:<id>`), and answers the window that saved with the revision, so a window can tell an
+  // announcement from before its own save from one after it. Clear and Restore rewrite a workspace's document the same way.
+  const revisions = new Map(); // `${projectId} ${key}` → revision
+  const docTurns = new Map(); // `${projectId} ${key}` → the save in progress
+  const docKeyOf = (ref) => (ref.kind === 'workspace' ? `ws:${ref.workspaceId}` : `note:${ref.id}`);
+  const inTurn = (projectId, key, work) => {
+    const id = `${projectId} ${key}`;
+    const run = (docTurns.get(id) || Promise.resolve()).catch(() => {}).then(work);
+    docTurns.set(id, run);
+    const done = () => { if (docTurns.get(id) === run) docTurns.delete(id); };
+    run.then(done, done);
+    return run;
+  };
+  const revised = (win, projectId, key, text) => {
+    const id = `${projectId} ${key}`;
+    const revision = (revisions.get(id) || 0) + 1;
+    revisions.set(id, revision);
+    announce('doc:changed', { projectId, key, text, revision }, { except: win });
+    return revision;
+  };
   // E2B previews (src/main/sandbox): library additions and workspace links that can start one run one at a time, and a
   // change of data mode waits for them, then stops every sandbox, before the old library closes.
   let changingMode = false;
@@ -182,12 +225,19 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
 
   handle('config', () => store.config());
   // Refused before anything closes or asks in a copy without test mode.
-  handle('set-test-mode', async (value) => { store.requireTestMode(); return changing(() => store.setTestMode(value)); });
-  handle('reset-test-data', async (options) => {
+  // The data root is the app's: every other window starts over on the new one (`engelbart:data-root-changed`).
+  handleFor('set-test-mode', async (win, value) => {
+    store.requireTestMode();
+    const config = await changing(() => store.setTestMode(value));
+    announce('engelbart:data-root-changed', { config, fresh: false }, { except: win });
+    return config;
+  });
+  handleFor('reset-test-data', async (win, options) => {
     store.requireTestMode();
     const fresh = !!(options && typeof options === 'object' && options.fresh === true);
     if (!(await confirmReset({ fresh }))) return { reset: false, ...store.config() };
     const config = await changing(() => store.resetTestData({ fresh }));
+    announce('engelbart:data-root-changed', { config, fresh }, { except: win });
     return { reset: true, ...config };
   });
 
@@ -219,8 +269,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('record-edit', withCtx((ctx, pid, wid) => { projects.recordEdit(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); navChanged(); return true; }));
   handle('seen-agents', withCtx((ctx, pid, wid) => { const seen = projects.seenAgents(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); if (seen) navChanged(); return seen; }));
   handle('list-projects', withCtx((ctx) => projects.listProjects(ctx)));
-  handle('create-project', withCtx((ctx, input) => projects.createProject(ctx, projectInput(input))));
-  handle('create-project-with-welcome', withCtx((ctx, input) => projects.createProjectWithWelcome(ctx, projectInput(input))));
+  saving('create-project', withCtx((ctx, input) => projects.createProject(ctx, projectInput(input))), { project: (_args, out) => out && out.id });
+  saving('create-project-with-welcome', withCtx((ctx, input) => projects.createProjectWithWelcome(ctx, projectInput(input))), { project: (_args, out) => out && out.project && out.project.id });
   // Onboarding (./store/onboarding.cjs): custom instructions, the folder "Create a folder for me" would make, the project
   // the last two screens describe, and a repository unticked again before the project exists.
   handle('instructions', withCtx((ctx) => onboarding.readInstructions(ctx)));
@@ -229,7 +279,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('check-folder', withCtx((ctx, value) => onboarding.existingFolder(ctx, str(value, 'directory', 4096))));
   // The launch check's first answer (a minute at most): until then Git's record may still be last launch's.
   const toolsChecked = async () => { for (let n = 0; n < 60 && tools && !tools.snapshot().checked; n += 1) await new Promise((resolve) => { setTimeout(resolve, 1000); }); };
-  handle('start-project', withCtx((ctx, input) => {
+  saving('start-project', withCtx((ctx, input) => {
     const value = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
     const folder = value.folder === 'existing' ? 'existing' : 'new';
     const context = (Array.isArray(value.context) ? value.context : []).slice(0, 500).map((id) => str(id, 'library id', 64));
@@ -239,73 +289,85 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       if (folder === 'new' && builds) void toolsChecked().then(() => builds.prepareDefault(ctx, made.project.id)).catch(() => {});
       return made;
     });
-  }));
+  }), { project: (_args, out) => out && out.project && out.project.id, library: true });
   // A repository's sandbox is stopped (and its runs forgotten) before its row can go.
-  handle('discard-library-item', (id) => queued(async () => {
+  saving('discard-library-item', (id) => queued(async () => {
     const ctx = await store.context();
     const libraryId = str(id, 'library id', 64);
     return onboarding.discardItem(ctx, libraryId, { release: sandbox ? () => sandbox.release(ctx, libraryId) : null });
-  }));
-  handle('rename-project', withCtx((ctx, id, name) => projects.renameProject(ctx, str(id, 'project id', 64), str(name, 'name'))));
+  }), { library: true });
+  saving('rename-project', withCtx((ctx, id, name) => projects.renameProject(ctx, str(id, 'project id', 64), str(name, 'name'))), { project: first });
   // Delete on the all-projects screen (2026-10-03): the project into <dataRoot>/.trash for a week, its @bart asks and its
   // Builds stopped first (store/projects.cjs trashProject). "Recently deleted" reads the trash, which purges what has been
   // in it a week (its Builds' worktrees with it); Restore brings a project back, its Builds' worktrees following it.
+  // The other windows are told: one showing the project leaves it, the projects screen reads the list again.
   const removeWorktrees = builds ? (tasks) => builds.removeWorktrees(tasks) : null;
-  handle('trash-project', withCtx(async (ctx, id) => {
+  handleFor('trash-project', async (win, id) => {
+    const ctx = await store.context();
+    const projectId = str(id, 'project id', 64);
     const stopBuilds = async (pid) => {
       for (const agent of projects.readNav(ctx).agents) if (agent.projectId === pid && agent.kind !== 'build' && agent.status === 'running' && bart) bart.stop(agent.id);
       if (builds) await builds.stopProject(ctx, pid);
     };
-    const out = await projects.trashProject(ctx, str(id, 'project id', 64), { stopBuilds });
+    const out = await projects.trashProject(ctx, projectId, { stopBuilds });
     navChanged();
+    announce('engelbart:project-changed', { projectId, trashed: true }, { except: win });
     return out;
-  }));
-  handle('restore-project', withCtx(async (ctx, id) => {
+  });
+  saving('restore-project', withCtx(async (ctx, id) => {
     const out = await projects.restoreProject(ctx, str(id, 'project id', 64), { moveWorktree: builds ? (task, to) => builds.moveWorktree(task, to) : null, removeWorktrees });
     navChanged();
     return out;
-  }));
+  }), { project: first });
   handle('trashed-projects', withCtx((ctx) => projects.trashedProjects(ctx, Date.now(), { removeWorktrees })));
   handle('load-project', withCtx((ctx, id) => projects.loadProject(ctx, str(id, 'project id', 64))));
 
-  handle('set-project-directory', withCtx((ctx, id, directory) => projects.setProjectDirectory(ctx, str(id, 'project id', 64), str(directory, 'directory', 4096))));
+  saving('set-project-directory', withCtx((ctx, id, directory) => projects.setProjectDirectory(ctx, str(id, 'project id', 64), str(directory, 'directory', 4096))), { project: first });
 
   // Making a workspace counts as writing in it (⌘J's recent ones), typed in or not (2026-09-23).
-  handle('create-workspace', withCtx(async (ctx, pid, input) => {
+  saving('create-workspace', withCtx(async (ctx, pid, input) => {
     const value = input && typeof input === 'object' ? input : {};
     const projectId = str(pid, 'project id', 64);
     const created = await projects.createWorkspace(ctx, projectId, { name: optStr(value.name, 'name'), parentId: optStr(value.parentId, 'parent id', 64) });
     projects.recordEdit(ctx, projectId, created.id);
     navChanged();
     return created;
-  }));
-  handle('rename-workspace', withCtx((ctx, pid, wid, name) => projects.renameWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(name, 'name'))));
+  }), { project: first });
+  saving('rename-workspace', withCtx((ctx, pid, wid, name) => projects.renameWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(name, 'name'))), { project: first });
   // Delete in the switcher: the workspace, and all nested in it, into the sidebar's trash for a week; Restore there.
-  handle('trash-workspace', withCtx((ctx, pid, wid) => { const out = projects.trashWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); navChanged(); return out; }));
-  handle('restore-workspace', withCtx((ctx, pid, wid) => { const out = projects.restoreWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); navChanged(); return out; }));
-  handle('set-workspace-context', (pid, wid, entries) => changeWorkspaceContext(pid, wid, (ctx, projectId, workspaceId) => projects.setWorkspaceContext(ctx, projectId, workspaceId, entries)));
+  saving('trash-workspace', withCtx((ctx, pid, wid) => { const out = projects.trashWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); navChanged(); return out; }), { project: first });
+  saving('restore-workspace', withCtx((ctx, pid, wid) => { const out = projects.restoreWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); navChanged(); return out; }), { project: first });
+  saving('set-workspace-context', (pid, wid, entries) => changeWorkspaceContext(pid, wid, (ctx, projectId, workspaceId) => projects.setWorkspaceContext(ctx, projectId, workspaceId, entries)), { project: first });
   // The sidebar: search, +, Save and an @mention bring a library item into a workspace; the trash takes it out (and remembers that it did).
-  handle('link-to-workspace', (pid, wid, ids) => {
+  saving('link-to-workspace', (pid, wid, ids) => {
     const adding = (Array.isArray(ids) ? ids : [ids]).slice(0, 200).map((id) => str(id, 'library id', 64));
     return changeWorkspaceContext(pid, wid, (ctx, projectId, workspaceId) => projects.linkToWorkspace(ctx, projectId, workspaceId, adding));
-  });
-  handle('unlink-from-workspace', (pid, wid, id) => {
+  }, { project: first });
+  saving('unlink-from-workspace', (pid, wid, id) => {
     const entry = str(id, 'library id', 64);
     return changeWorkspaceContext(pid, wid, (ctx, projectId, workspaceId) => projects.unlinkFromWorkspace(ctx, projectId, workspaceId, entry));
-  });
+  }, { project: first });
 
-  handle('create-note', withCtx((ctx, pid, input) => {
+  saving('create-note', withCtx((ctx, pid, input) => {
     const value = input && typeof input === 'object' ? input : {};
     return projects.createNote(ctx, str(pid, 'project id', 64), { name: optStr(value.name, 'name'), workspaceId: optStr(value.workspaceId, 'workspace id', 64) });
-  }));
-  handle('save-image', withCtx((ctx, pid, input) => {
+  }), { project: first, library: true });
+  saving('save-image', withCtx((ctx, pid, input) => {
     const value = input && typeof input === 'object' ? input : {};
     return projects.saveImage(ctx, str(pid, 'project id', 64), { bytes: value.bytes, mime: str(value.mime, 'mime', 64), name: optStr(value.name, 'name') });
-  }));
+  }), { library: true });
   handle('read-image', withCtx((ctx, id) => projects.readImage(ctx, str(id, 'image id', 64))));
-  handle('rename-note', withCtx((ctx, pid, id, name) => projects.renameNote(ctx, str(pid, 'project id', 64), str(id, 'note id', 64), str(name, 'name'))));
+  saving('rename-note', withCtx((ctx, pid, id, name) => projects.renameNote(ctx, str(pid, 'project id', 64), str(id, 'note id', 64), str(name, 'name'))), { project: first, library: true });
   handle('read-doc', withCtx((ctx, pid, ref) => projects.readDoc(ctx, str(pid, 'project id', 64), docRef(ref))));
-  handle('write-doc', withCtx((ctx, pid, ref, text) => projects.writeDoc(ctx, str(pid, 'project id', 64), docRef(ref), text)));
+  handleFor('write-doc', async (win, pid, ref, text) => {
+    const projectId = str(pid, 'project id', 64), at = docRef(ref), key = docKeyOf(at);
+    return inTurn(projectId, key, async () => {
+      const out = await projects.writeDoc(await store.context(), projectId, at, text);
+      // A save that changes nothing is announced to no one; it answers with the revision the document is at.
+      const revision = out.lastEdited ? revised(win, projectId, key, text) : revisions.get(`${projectId} ${key}`) || 0;
+      return { ...out, revision };
+    });
+  });
   // The sidebar's Copy: the document with every @mentioned file placed where it is mentioned. The
   // clipboard is written here because the renderer is refused every permission, and its own
   // clipboard wants a user gesture that reading the files can outlive.
@@ -317,7 +379,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
 
   // @bart and @brainstorm: the answer comes back as draft lines for the document. A run that fails answers too, so
   // the question line never stays locked behind a pending line; only Stop returns nothing to place.
-  handle('ask-bart', withCtx(async (ctx, pid, input) => {
+  handleFor('ask-bart', async (win, pid, input) => {
+    const ctx = await store.context();
     const value = input && typeof input === 'object' ? input : {};
     const askId = str(value.askId, 'ask id', 64);
     if (!/^[\w-]+$/.test(askId)) throw new TypeError('ask id is invalid');
@@ -335,7 +398,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       const question = { askId, ref: docRef(value.ref), workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice, agent };
       // The ask is an agent of its workspace: running now, waiting for you once its answer (or failure) has landed.
       started = track(() => projects.agentStarted(ctx, { id: askId, kind: agent, projectId: pid, workspaceId: question.workspaceId, doc: question.ref }));
-      const out = await bart.ask(ctx, str(pid, 'project id', 64), question, { onProgress: (progress) => notify('engelbart:bart-progress', { askId, ...progress }) });
+      // Progress goes to the window that asked, which holds the pending line; the answer it places is saved (write-doc).
+      const out = await bart.ask(ctx, str(pid, 'project id', 64), question, { onProgress: (progress) => answer(win, 'engelbart:bart-progress', { askId, ...progress }) });
       if (started) track(() => projects.agentFinished(ctx, askId));
       return out;
     } catch (error) {
@@ -344,7 +408,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       if (stopped) return { stopped: true };
       return { failed: true, lines: failureLines(error && error.message) };
     }
-  }));
+  });
   handle('stop-bart', (askId) => bart.stop(str(askId, 'ask id', 64)));
   // What the @bart line's selector offers and what its flags are checked against: the models file,
   // cut down to the providers config.json lists. Names and keys only; the file's prose stays here.
@@ -385,7 +449,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     handle('build-preflight', withCtx((ctx, pid, target) => b().preflight(ctx, pidOf(pid), targetOf(target))));
     handle('build-init', withCtx((ctx, pid, target) => b().initRepository(ctx, pidOf(pid), targetOf(target))));
     handle('build-clone', withCtx((ctx, pid, target) => b().cloneRepository(ctx, pidOf(pid), targetOf(target))));
-    handle('build-start', withCtx((ctx, pid, input) => {
+    saving('build-start', withCtx((ctx, pid, input) => {
       const value = input && typeof input === 'object' ? input : {};
       return b().start(ctx, pidOf(pid), {
         kind: value.kind === 'quick' ? 'quick' : 'build',
@@ -399,7 +463,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
         attach: (Array.isArray(value.attach) ? value.attach : []).slice(0, 50).map((id) => str(id, 'library id', 64)),
         target: targetOf(value.target),
       });
-    }));
+    }), { project: first }); // a post-it's task comes into a workspace as an archived version; what is attached is linked
     handle('build-list', withCtx((ctx, pid) => b().list(ctx, pidOf(pid))));
     handle('build-get', withCtx((ctx, pid, id) => b().get(ctx, pidOf(pid), buildId(id))));
     handle('build-reply', withCtx((ctx, pid, id, text, options) => b().reply(ctx, pidOf(pid), buildId(id), str(text, 'reply', 100000), { interrupt: !!(options && options.interrupt), images: options && Array.isArray(options.images) ? options.images.slice(0, 50).map((image) => ({ n: image && image.n, id: image && image.id })) : [] })));
@@ -411,14 +475,15 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     handle('build-discard', withCtx((ctx, pid, id) => b().discard(ctx, pidOf(pid), buildId(id))));
     // Its run step (build/run-step.cjs): a runnable it got running shown again (a UI's Stage tab, a terminal program's
     // session), and Stop for one still working.
-    handle('build-run-show', withCtx((ctx, pid, id, name) => b().showRunnable(ctx, pidOf(pid), buildId(id), str(name, 'runnable name', 64))));
+    // What it opens (a Stage tab, a terminal session) opens in the window that asked (src/main/index.cjs, windows.asking()).
+    handleFor('build-run-show', async (_win, pid, id, name) => b().showRunnable(await store.context(), pidOf(pid), buildId(id), str(name, 'runnable name', 64)));
     handle('build-run-stop', withCtx((ctx, pid, id) => b().stopRunning(ctx, pidOf(pid), buildId(id))));
     handle('build-run-stop-runnable', withCtx((ctx, pid, id, name) => b().stopRunnable(ctx, pidOf(pid), buildId(id), name === null ? null : str(name, 'runnable name', 64))));
-    handle('build-promote', withCtx((ctx, pid, id, wid, choice) => {
+    saving('build-promote', withCtx((ctx, pid, id, wid, choice) => {
       const value = choice && typeof choice === 'object' ? choice : null;
       const picked = value ? { provider: optStr(value.provider, 'provider', 24), model: optStr(value.model, 'model', 24), effort: optStr(value.effort, 'effort', 24) } : null;
       return b().promote(ctx, pidOf(pid), buildId(id), str(wid, 'workspace id', 64), picked);
-    }));
+    }), { project: first });
   }
   // Clear (B21): the document archived and started blank, keeping the lines of Builds still open; what it mentioned stays
   // on the sidebar. Restore (B22) brings an archived version back, the current one archived first.
@@ -426,8 +491,21 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     const open = builds ? builds.openIds(ctx, pid) : new Set();
     return (line) => { const m = BUILD_LINE_RE.exec(line.trim()); return !!m && open.has(m[1]); };
   };
-  handle('clear-workspace', withCtx((ctx, pid, wid) => archive.clearWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), { keep: keepOpenBuilds(ctx, pid) })));
-  handle('restore-archive', withCtx((ctx, pid, wid, file) => archive.restoreArchive(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(file, 'archive', 64), { keep: keepOpenBuilds(ctx, pid) })));
+  // Both rewrite the workspace's document, in its turn with the document's saves: announced as a save is, and the window
+  // that asked gets the revision with the text.
+  const rewrite = (win, pid, wid, change) => {
+    const projectId = str(pid, 'project id', 64), workspaceId = str(wid, 'workspace id', 64), key = `ws:${workspaceId}`;
+    return inTurn(projectId, key, async () => {
+      const ctx = await store.context();
+      const before = await projects.readDoc(ctx, projectId, { kind: 'workspace', workspaceId });
+      const out = await change(ctx, projectId, workspaceId);
+      const revision = out.text !== before ? revised(win, projectId, key, out.text) : revisions.get(`${projectId} ${key}`) || 0;
+      announce('engelbart:project-changed', { projectId }, { except: win }); // its archived versions and links
+      return { ...out, revision };
+    });
+  };
+  handleFor('clear-workspace', (win, pid, wid) => rewrite(win, pid, wid, (ctx, projectId, workspaceId) => archive.clearWorkspace(ctx, projectId, workspaceId, { keep: keepOpenBuilds(ctx, projectId) })));
+  handleFor('restore-archive', (win, pid, wid, file) => rewrite(win, pid, wid, (ctx, projectId, workspaceId) => archive.restoreArchive(ctx, projectId, workspaceId, str(file, 'archive', 64), { keep: keepOpenBuilds(ctx, projectId) })));
   handle('read-archive', withCtx((ctx, pid, wid, file) => { const got = archive.readArchive(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(file, 'archive', 64)); return { path: got.path, text: got.text }; }));
 
   handle('resolve-page-file', withCtx((ctx, pid, input) => projects.resolvePageFile(ctx, str(pid, 'project id', 64), str(input, 'path', 4096))));
@@ -442,7 +520,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // A GitHub repository's sandbox starts once the row is saved; a failure to start it leaves the row saved and says why.
   // A page row that may be a pdf (an arXiv paper, a .pdf address, any other page that might answer with one) is checked
   // now, in the background, rather than on the next launch: one that is becomes a saved pdf (store/web-pdfs.cjs).
-  handle('add-library-item', (input, options) => {
+  saving('add-library-item', (input, options) => {
     const value = str(input, 'link or path', 4096);
     const name = optStr(options && typeof options === 'object' ? options.name : null, 'name', 200);
     return queued(async () => {
@@ -455,7 +533,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       }
       return row;
     });
-  });
+  }, { library: true });
   // E2B previews of saved GitHub repositories (src/main/sandbox; docs/sandbox-runs.md). Each renderer call names a library
   // row or a run; sandbox ids, keys and paths never come from the renderer.
   if (sandbox) {
@@ -501,15 +579,15 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     }
   }
   // A pdf read from the web, saved as a copy with its address (library.addPdfCopy; the Stage's Save sends its bytes).
-  handle('add-library-pdf', withCtx((ctx, input, bytes, options) => {
+  saving('add-library-pdf', withCtx((ctx, input, bytes, options) => {
     if (!(bytes instanceof Uint8Array)) throw new TypeError('pdf bytes are missing');
     return library.addPdfCopy(ctx, str(input, 'address', 8192), bytes, { inspectPdf, name: optStr(options && typeof options === 'object' ? options.name : null, 'name', 200) });
-  }));
+  }), { library: true });
   handle('lookup-library-item', withCtx((ctx, input) => library.lookupItem(ctx, str(input, 'link or path', 4096))));
   // "Choose from disk…": the native picker, files and folders, several at once.
   handle('pick-library-paths', (kind) => pickPaths(kind === 'pdf' ? 'pdf' : 'any'));
   handle('preview-library-item', withCtx((ctx, id) => library.previewItem(ctx, str(id, 'library id', 64), { listRemoteFiles })));
-  handle('rename-library-item', withCtx(async (ctx, id, name) => {
+  saving('rename-library-item', withCtx(async (ctx, id, name) => {
     const row = await ctx.libraryDb.get(str(id, 'library id', 64));
     if (!row) throw new Error('Unknown library item');
     if (row.tags.includes('note') && row.project_id) {
@@ -517,7 +595,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       return ctx.libraryDb.get(note.id);
     }
     return ctx.libraryDb.rename(row.id, str(name, 'name'));
-  }));
+  }), { project: (_args, out) => out && out.project_id, library: true });
   handle('read-library-file', withCtx((ctx, id) => library.readLibraryFile(ctx, str(id, 'library id', 64))));
   handle('read-annotations', withCtx((ctx, id) => library.readAnnotations(ctx, str(id, 'library id', 64))));
   handle('write-annotations', withCtx((ctx, id, value) => library.writeAnnotations(ctx, str(id, 'library id', 64), value)));

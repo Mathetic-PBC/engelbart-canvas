@@ -40,9 +40,23 @@ function noteName(text) {
   return null;
 }
 
-// Native siblings of the browser, each with only its own card's IPC capability.
+/**
+ * Every window's cards (2026-10-03): each window has its own views of a project's post-its, read from the one notes
+ * database. What one window saves of a card (its text, where it is, its size, its place in the stack), and a card made,
+ * thrown away or taken back out of the trash, reaches every other window showing that project, so none goes on showing,
+ * or later saving, a card as it was.
+ */
+function createPostItPeers() {
+  const members = new Set();
+  return {
+    join(member) { members.add(member); return () => members.delete(member); },
+    tell(from, projectId, change) { for (const member of members) if (member !== from) member.hear(projectId, change); },
+  };
+}
+
+// Native siblings of the browser, each with only its own card's IPC capability. One set per window (2026-10-03).
 // `buildFor(projectId, postItId)` (2026-09-25): the card's latest quick task (main/build), so a card opened later shows its state.
-function createPostItViews({ electron, getWindow, getContext, send, buildFor = async () => null, now = () => Date.now() }) {
+function createPostItViews({ electron, getWindow, getContext, send, buildFor = async () => null, now = () => Date.now(), peers = null }) {
   const { WebContentsView, clipboard } = electron;
   const entries = new Map();
   let projectId = null, database = null, gesture = null, trash = null, blocking = [];
@@ -61,12 +75,46 @@ function createPostItViews({ electron, getWindow, getContext, send, buildFor = a
   const alive = (entry) => !entry.crashed && !entry.view.webContents.isDestroyed();
   const cssRect = (bounds, scale = zoom()) => ({ x: bounds.x / scale, y: bounds.y / scale, width: bounds.width / scale, height: bounds.height / scale });
 
+  // The other windows hear what this one saved (createPostItPeers); what they say is applied here, never saved again.
+  const self = { hear: (id, change) => { void exclusive(async () => hear(id, change)).catch(report); } };
+  const leave = peers ? peers.join(self) : () => {};
+  const tell = (id, change) => { if (peers) peers.tell(self, id, change); };
+
   function save(entry) {
     const row = { ...entry.row };
+    const id = projectId;
     const saving = entry.pending.catch(() => {}).then(() => entry.db.update(row.id, row));
     entry.pending = saving;
-    saving.then(() => { entry.error = null; }, (error) => { entry.error = error; report(error); });
+    saving.then((saved) => { entry.error = null; if (saved) tell(id, { kind: 'row', row }); }, (error) => { entry.error = error; report(error); });
     return saving;
+  }
+
+  function hear(id, change) {
+    if (id !== projectId || !database) return;
+    if (change.kind === 'added') {
+      if (entries.has(change.row.id)) return;
+      attach({ ...change.row });
+      raise();
+      announceTrash();
+    } else if (change.kind === 'removed') {
+      const entry = entries.get(change.id);
+      if (entry) {
+        const focused = alive(entry) && entry.view.webContents.isFocused();
+        detach(entry);
+        if (focused) windowNow()?.webContents.focus();
+      }
+      announceTrash();
+    } else if (change.kind === 'row') {
+      const entry = entries.get(change.row.id);
+      if (!entry) return;
+      const text = entry.row.text !== change.row.text;
+      for (const key of ['text', 'nx', 'ny', 'width', 'height', 'z']) entry.row[key] = change.row[key];
+      if (gesture?.entry !== entry) entry.view.setBounds(cardBounds(entry.row, viewport(), zoom()));
+      if (text && entry.ready && alive(entry)) entry.view.webContents.send('post-it:text', entry.row.text);
+      stale(entry);
+      raise();
+      refresh();
+    }
   }
 
   async function flush() {
@@ -244,6 +292,7 @@ function createPostItViews({ electron, getWindow, getContext, send, buildFor = a
       const row = await database.create({ id: randomUUID(), text: '', nx: .22 + offset * .045, ny: .16 + offset * .045, width: SIDE, height: SIDE, z: now() });
       attach(row, true);
       raise();
+      tell(id, { kind: 'added', row: { ...row } });
       return row.id;
     });
   }
@@ -379,6 +428,7 @@ function createPostItViews({ electron, getWindow, getContext, send, buildFor = a
     detach(entry);
     if (focused) windowNow()?.webContents.focus();
     announceTrash();
+    tell(projectId, { kind: 'removed', id: entry.row.id });
     return true;
   }
 
@@ -404,6 +454,7 @@ function createPostItViews({ electron, getWindow, getContext, send, buildFor = a
       attach(row);
       raise();
       announceTrash();
+      tell(id, { kind: 'added', row: { ...row } });
       return true;
     });
   }
@@ -491,33 +542,64 @@ function createPostItViews({ electron, getWindow, getContext, send, buildFor = a
     void save(entry).catch(() => {});
   }
 
-  function register({ ipcMain, trustedHandler }) {
-    ipcMain.handle('post-its:activate', trustedHandler(activate));
-    ipcMain.handle('post-its:create', trustedHandler(create));
-    ipcMain.handle('post-its:block', trustedHandler(setBlocking));
-    ipcMain.handle('post-its:hide', trustedHandler(setHidden));
-    ipcMain.handle('post-its:layout', trustedHandler(layout));
-    ipcMain.handle('post-its:trash-rect', trustedHandler((rect) => { trash = trashRect(rect); return true; }));
-    ipcMain.handle('post-its:trashed', trustedHandler(trashed));
-    ipcMain.handle('post-its:restore', trustedHandler(restore));
-    ipcMain.handle('post-it:ready', (event) => ready(forEvent(event)));
-    ipcMain.handle('post-it:edit', (event, text) => edit(forEvent(event), text));
-    ipcMain.handle('post-it:grow', (event, height) => grow(forEvent(event), height));
-    ipcMain.handle('post-it:to-note', (event) => toNote(forEvent(event)));
-    ipcMain.handle('post-its:throw-out', trustedHandler(throwOut));
-    ipcMain.handle('post-it:build', (event, rect) => askBuild(forEvent(event), rect));
-    ipcMain.handle('post-it:build-open', (event, id, rect) => openBuild(forEvent(event), id, rect));
-    ipcMain.handle('post-it:copy', (event, text) => {
-      forEvent(event);
-      if (typeof text !== 'string' || text.length > 400000) throw new TypeError('Invalid text');
-      clipboard.writeText(text);
-    });
-    // A link on a sticky opens on the Stage, as every website does (2026-09-29): the window is told, not the default browser.
-    ipcMain.handle('post-it:open-link', (event, url) => { forEvent(event); send('post-its:open-link', { projectId, url: parseExternalUrl(url).href }); return true; });
-    ipcMain.on('post-it:gesture', (event, input) => { try { move(forEvent(event), input); } catch (error) { report(error); } });
+  // What registerPostItIpc calls: the window's own requests, and a card's (`card(event)`: the sending card, checked).
+  const requests = {
+    activate, create, setBlocking, setHidden, layout, trashed, restore, throwOut,
+    trashRect: (rect) => { trash = trashRect(rect); return true; },
+  };
+  function card(event) {
+    const entry = forEvent(event);
+    return {
+      ready: () => ready(entry),
+      edit: (text) => edit(entry, text),
+      grow: (height) => grow(entry, height),
+      toNote: () => toNote(entry),
+      build: (rect) => askBuild(entry, rect),
+      buildOpen: (id, rect) => openBuild(entry, id, rect),
+      copy: (text) => {
+        if (typeof text !== 'string' || text.length > 400000) throw new TypeError('Invalid text');
+        clipboard.writeText(text);
+      },
+      // A link on a sticky opens on the Stage, as every website does (2026-09-29): the window is told, not the default browser.
+      openLink: (url) => { send('post-its:open-link', { projectId, url: parseExternalUrl(url).href }); return true; },
+      gesture: (input) => move(entry, input),
+    };
   }
+  const holds = (contents) => [...entries.values()].some((entry) => entry.view.webContents === contents);
 
-  return { activate, create, register, raise, layout, setBlocking, setHidden, flush, cancelGesture, buildState };
+  /** The window closed: its cards are already gone (activate(null)); the other windows stop telling it about theirs. */
+  function dispose() { leave(); }
+
+  return { activate, create, raise, layout, setBlocking, setHidden, flush, cancelGesture, buildState, requests, card, holds, report, dispose };
 }
 
-module.exports = { createPostItViews, CARD_URL, noteName, TRASH_DAYS };
+// Every handler is registered once (2026-10-03). The window's own requests go to its post-its (`viewsFor(event)` for the
+// app's page); a card's go to whichever window's post-its hold the sending card, which checks it is one of its own.
+function registerPostItIpc({ ipcMain, trustedHandler, viewsFor }) {
+  const own = (event) => { const views = viewsFor(event); if (!views) throw new Error('IPC rejected: unknown window'); return views.requests; };
+  const card = (event) => { const views = viewsFor(event); if (!views) throw new Error('IPC rejected: unknown sticky'); return views.card(event); };
+  const windowHandle = (channel, name) => ipcMain.handle(channel, (event, ...args) => trustedHandler((...rest) => own(event)[name](...rest))(event, ...args));
+  windowHandle('post-its:activate', 'activate');
+  windowHandle('post-its:create', 'create');
+  windowHandle('post-its:block', 'setBlocking');
+  windowHandle('post-its:hide', 'setHidden');
+  windowHandle('post-its:layout', 'layout');
+  windowHandle('post-its:trash-rect', 'trashRect');
+  windowHandle('post-its:trashed', 'trashed');
+  windowHandle('post-its:restore', 'restore');
+  windowHandle('post-its:throw-out', 'throwOut');
+  ipcMain.handle('post-it:ready', (event) => card(event).ready());
+  ipcMain.handle('post-it:edit', (event, text) => card(event).edit(text));
+  ipcMain.handle('post-it:grow', (event, height) => card(event).grow(height));
+  ipcMain.handle('post-it:to-note', (event) => card(event).toNote());
+  ipcMain.handle('post-it:build', (event, rect) => card(event).build(rect));
+  ipcMain.handle('post-it:build-open', (event, id, rect) => card(event).buildOpen(id, rect));
+  ipcMain.handle('post-it:copy', (event, text) => card(event).copy(text));
+  ipcMain.handle('post-it:open-link', (event, url) => card(event).openLink(url));
+  ipcMain.on('post-it:gesture', (event, input) => {
+    let views = null;
+    try { views = viewsFor(event); views.card(event).gesture(input); } catch (error) { if (views) views.report(error); }
+  });
+}
+
+module.exports = { createPostItViews, createPostItPeers, registerPostItIpc, CARD_URL, noteName, TRASH_DAYS };

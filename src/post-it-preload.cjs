@@ -10,6 +10,8 @@ const subscribe = (channel, callback) => {
 // Main awaits this barrier before closing a view: the last renderer edit may
 // still be crossing IPC when a native Quit or project switch is requested.
 const flush = () => (latestText == null ? Promise.resolve() : ipcRenderer.invoke('post-it:edit', latestText));
+// The same card edited in another window (2026-10-03): its text is the latest, so a flush here never puts the old back.
+ipcRenderer.on('post-it:text', (_event, text) => { if (typeof text === 'string') latestText = text; });
 // No project id or card id accepted: main binds every call to the sending card.
 contextBridge.exposeInMainWorld('postItAPI', Object.freeze({
   ready: () => ipcRenderer.invoke('post-it:ready').then((card) => { latestText = card.text; return card; }),
@@ -24,6 +26,7 @@ contextBridge.exposeInMainWorld('postItAPI', Object.freeze({
   build: (rect) => flush().then(() => ipcRenderer.invoke('post-it:build', rect)),
   openBuild: (id, rect) => ipcRenderer.invoke('post-it:build-open', id, rect),
   onBuildState: (fn) => subscribe('post-it:build-state', fn),
+  onText: (fn) => subscribe('post-it:text', fn),
   copy: (text) => ipcRenderer.invoke('post-it:copy', text),
   openLink: (url) => ipcRenderer.invoke('post-it:open-link', url),
   onTrash: (fn) => subscribe('post-it:trash', fn),

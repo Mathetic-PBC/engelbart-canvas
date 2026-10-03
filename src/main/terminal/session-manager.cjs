@@ -79,6 +79,9 @@ class SessionManager extends EventEmitter {
     this.forceCloseTimeoutMs = Number.isInteger(options.forceCloseTimeoutMs) ? options.forceCloseTimeoutMs : 500;
     this.sessions = new Map();
     this.rendererAttached = true;
+    // Several windows (2026-10-03): whether the window a session's output goes to has its terminal attached. Without it,
+    // one renderer is attached or not for every session (attachRenderer / detachRenderer).
+    this.attached = typeof options.attached === 'function' ? options.attached : null;
   }
 
   create(request) {
@@ -166,9 +169,11 @@ class SessionManager extends EventEmitter {
     return true;
   }
 
-  attachRenderer() {
-    this.rendererAttached = true;
+  // `scope(id)`: only the sessions it names have their flow control reset (one window's, 2026-10-03); without it, all.
+  attachRenderer(scope = null) {
+    if (!scope) this.rendererAttached = true;
     for (const record of this.sessions.values()) {
+      if (scope && !scope(record.id)) continue;
       record.acknowledged = record.sequence;
       record.outstanding.clear();
       record.unackedBytes = 0;
@@ -176,9 +181,10 @@ class SessionManager extends EventEmitter {
     }
   }
 
-  detachRenderer() {
-    this.rendererAttached = false;
+  detachRenderer(scope = null) {
+    if (!scope) this.rendererAttached = false;
     for (const record of this.sessions.values()) {
+      if (scope && !scope(record.id)) continue;
       record.acknowledged = record.sequence;
       record.outstanding.clear();
       record.unackedBytes = 0;
@@ -254,13 +260,14 @@ class SessionManager extends EventEmitter {
       const removed = record.history.shift();
       record.historyBytes -= Buffer.byteLength(removed.data);
     }
-    if (this.rendererAttached) {
+    const attached = this.attached ? this.attached(record.id) : this.rendererAttached;
+    if (attached) {
       const outputBytes = Buffer.byteLength(data);
       record.outstanding.set(sequence, outputBytes);
       record.unackedBytes += outputBytes;
     }
     this.emit('data', { id: record.id, sequence, data });
-    if (this.rendererAttached && record.unackedBytes > this.maxUnackedBytes && !record.paused) {
+    if (attached && record.unackedBytes > this.maxUnackedBytes && !record.paused) {
       record.process.pause();
       record.paused = true;
     }

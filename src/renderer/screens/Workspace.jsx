@@ -15,6 +15,7 @@ import { flatWorkspaces, nextPlace, placesToGo } from '../model/nav.js';
 import { onStage } from '../model/stage.js';
 import { paperState, savePaper } from '../model/guide.js';
 import { buildLine, placeAnswer } from '../model/doc.js';
+import { createDocSync } from '../model/doc-sync.js';
 import { buildRequestOf } from '../../main/bart/question.cjs';
 import ProjectPostIts from '../post-its/ProjectPostIts.jsx';
 import BuildPanel from '../workspace/BuildPanel.jsx';
@@ -238,13 +239,60 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return () => { cancelled = true; };
   }, [docKey, docRef, docs, project.id, onError]);
 
+  // The same document open in another window (2026-10-03, model/doc-sync.js): main announces each save that changed it.
+  // With no edits of this window's own waiting to be saved, the new text is taken. With some, nothing is lost silently:
+  // their save waits until the person picks, in a notice over the document, Keep mine (written over theirs) or Take
+  // theirs (these edits are dropped).
+  const conflictsRef = React.useRef({}); // doc key → { text, revision }: saved elsewhere over edits here
+  const [conflicts, setConflicts] = React.useState({});
+  const putConflict = React.useCallback((key, change) => {
+    const next = { ...conflictsRef.current };
+    if (change) next[key] = change; else delete next[key];
+    conflictsRef.current = next;
+    setConflicts(next);
+  }, []);
+  const docSync = React.useRef(null);
+  if (!docSync.current) {
+    docSync.current = createDocSync({
+      hasEdits: (key) => pending.current.has(key),
+      take: (key, text) => setDocs((current) => (current[key] === undefined || current[key] === text ? current : { ...current, [key]: text })),
+      conflict: (key, change) => putConflict(key, change),
+    });
+  }
+  React.useEffect(() => api.onDocChanged((change) => {
+    if (change && change.projectId === project.id && typeof change.key === 'string') docSync.current.announced(change.key, change);
+  }), [project.id]);
+
   const flush = React.useCallback((key) => {
     const entry = pending.current.get(key);
     if (!entry) return undefined;
     clearTimeout(entry.timer);
+    if (conflictsRef.current[key]) return undefined; // until Keep mine or Take theirs
     pending.current.delete(key);
-    return api.writeDoc(project.id, entry.ref, entry.text).catch((error) => onError(error));
+    docSync.current.saving(key);
+    let revision;
+    return api.writeDoc(project.id, entry.ref, entry.text)
+      .then((out) => { revision = out && out.revision; })
+      .catch((error) => onError(error))
+      .finally(() => { docSync.current.saved(key, revision); });
   }, [project.id, onError]);
+
+  const keepMine = React.useCallback((key) => {
+    const held = conflictsRef.current[key];
+    if (!held) return;
+    docSync.current.seen(key, held.revision);
+    putConflict(key, null);
+    flush(key);
+  }, [flush, putConflict]);
+  const takeTheirs = React.useCallback((key) => {
+    const held = conflictsRef.current[key];
+    if (!held) return;
+    const entry = pending.current.get(key);
+    if (entry) { clearTimeout(entry.timer); pending.current.delete(key); }
+    putConflict(key, null);
+    docSync.current.seen(key, held.revision);
+    setDocs((current) => ({ ...current, [key]: held.text }));
+  }, [putConflict]);
 
   // A document's text changes: from the editor (the open one), or from an @bart answer (any of them).
   const changeDoc = React.useCallback((key, ref, text) => {
@@ -272,6 +320,14 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   React.useEffect(() => () => {
     for (const key of [...pending.current.keys()]) flush(key);
   }, [flush]);
+  // Leaving the project with a notice unanswered: the edits made here are what was on screen last, so they are saved.
+  const flushRef = React.useRef(flush);
+  flushRef.current = flush;
+  React.useEffect(() => () => {
+    const held = Object.keys(conflictsRef.current);
+    conflictsRef.current = {};
+    for (const key of held) flushRef.current(key);
+  }, []);
 
   /* ----------------------------------------------------------------- @bart */
 
@@ -453,10 +509,12 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     const body = String(held || '').replace(/\n+$/, '');
     changeDoc(key, ref, `${body ? `${body}\n\n` : ''}${buildLine(task.id)}\n`);
     setBuildDialog(null);
-    if (clear) {
+    if (clear && conflictsRef.current[key]) onError(new Error('Not cleared: this document was changed in another window. Keep yours or take theirs, then Clear.'));
+    else if (clear) {
       try {
         await flush(key);
         const out = await api.clearWorkspace(project.id, topic.id);
+        docSync.current.seen(key, out.revision);
         setDocs((current) => ({ ...current, [key]: out.text }));
         await reload();
       } catch (error) {
@@ -532,9 +590,11 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const clearDoc = React.useCallback(async () => {
     if (!topic || docKey !== `ws:${topic.id}`) return;
     const key = docKey;
+    if (conflictsRef.current[key]) { onError(new Error('This document was changed in another window: keep yours or take theirs first.')); return; }
     try {
       await flush(key);
       const out = await api.clearWorkspace(project.id, topic.id);
+      docSync.current.seen(key, out.revision);
       setDocs((current) => ({ ...current, [key]: out.text }));
       await reload();
     } catch (error) {
@@ -546,9 +606,11 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const restoreVersion = React.useCallback(async (file) => {
     if (!topic) return;
     const key = `ws:${topic.id}`;
+    if (conflictsRef.current[key]) { onError(new Error('This document was changed in another window: keep yours or take theirs first.')); return; }
     try {
       await flush(key);
       const out = await api.restoreArchive(project.id, topic.id, file);
+      docSync.current.seen(key, out.revision);
       setDocs((current) => ({ ...current, [key]: out.text }));
       showWs();
       await reload();
@@ -1242,6 +1304,13 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
         <Separator onDown={railDown} onMove={railMove} onUp={pointerUp} onReset={() => setRailWidth(300)} />
 
         <main ref={mainRef} style={{ flex: '1 1 0', minWidth: DOC_MIN, minHeight: 0, display: full ? 'none' : 'flex', flexDirection: 'column', position: 'relative' }}>
+          {docKey && conflicts[docKey] && (
+            <div role="alert" data-doc-conflict="1" data-overlay="1" style={{ position: 'absolute', top: 10, right: 16, zIndex: 30, display: 'flex', alignItems: 'center', gap: 4, maxWidth: 'calc(100% - 32px)', padding: '5px 6px 5px 12px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', boxShadow: '0 4px 14px #0000000f', font: '12.5px/1.4 var(--font-sans)', color: '#4d4d4d' }}>
+              <span style={{ marginRight: 6 }}>Saved in another window while you were editing.</span>
+              <button type="button" className="hov-ink" data-conflict-keep="1" onClick={() => keepMine(docKey)} title="Save your version over theirs" style={{ ...FOOT_BUTTON, font: '500 12.5px/1.4 var(--font-sans)', color: '#171717' }}>Keep mine</button>
+              <button type="button" className="hov-ink" data-conflict-take="1" onClick={() => takeTheirs(docKey)} title="Show their version and drop your unsaved edits here" style={{ ...FOOT_BUTTON, font: '12.5px/1.4 var(--font-sans)' }}>Take theirs</button>
+            </div>
+          )}
           {docKey && text !== undefined ? (
             <DocEditor
               ref={editorRef}

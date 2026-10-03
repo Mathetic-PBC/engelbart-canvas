@@ -15,6 +15,9 @@ import { launchRows, installedSignedOut, TOOL_ORDER } from './model/tools.js';
 // it made (the welcome tour that followed it was taken out on 2026-10-01). "Engelbart" in the header (or Escape) shows
 // all projects. A project whose project.json has no code directory yet is held
 // behind a modal until one is chosen (2026-09-18).
+// Several windows (2026-10-03, src/main/windows.cjs): each opens where main says (its place before a reload or a
+// relaunch, the workspace it was opened from, or the projects screen) and tells main where it goes. What another window
+// saves arrives as an announcement: the project's tree or the projects are read again, the library too.
 
 const pickFolder = (current) => window.terminalAPI.pickDirectory(current || undefined);
 
@@ -161,12 +164,18 @@ export default function App() {
     setError('');
   }, []);
 
-  // Startup (and after the data root changes): the last project you were in, or the create screen.
+  // Startup (and after the data root changes): the last project you were in, or the create screen. A window's first start
+  // goes where main says this window belongs, when it says (the projects screen, or a workspace).
+  const firstStart = React.useRef(true);
   const start = React.useCallback(async () => {
     const list = await loadHome();
+    const first = firstStart.current;
+    firstStart.current = false;
     // Every project deleted: all projects, where Recently deleted can bring one back, not a new install's onboarding.
     if (!list.length) { setPhase(trashedNow.current.length ? 'home' : 'create'); return; }
-    const last = await api.lastOpen().catch(() => null);
+    const target = first ? await api.windowTarget().catch(() => null) : null;
+    if (target && target.home) { setPhase('home'); return; }
+    const last = target && target.projectId ? target : await api.lastOpen().catch(() => null);
     const id = last && list.some((project) => project.id === last.projectId) ? last.projectId : list[0].id;
     await openProject(id, last && last.projectId === id ? last : null);
   }, [loadHome, openProject]);
@@ -194,6 +203,47 @@ export default function App() {
     setTree(null);
     setEntry(null);
   }
+
+  // Where this window is, for main to reopen it there (a workspace reports itself through onVisit; onboarding, which ends
+  // in a project, is not a place) and for its title, which names it in the Window menu.
+  const projectName = tree ? tree.project.name : '';
+  React.useEffect(() => {
+    if (phase === 'home') api.reportPlace({ projectId: null, workspaceId: null });
+    document.title = phase === 'workspace' && projectName ? `${projectName} — Engelbart` : 'Engelbart';
+  }, [phase, projectName]);
+
+  // Another window saved something here: this project's tree (a workspace or note made, renamed, linked; a document
+  // cleared) is read again, or, on the projects screen, the projects. A project another window deleted is left for the
+  // projects screen. Another window switched the data root (test mode): this one starts over on it, as the window that
+  // switched it does.
+  const latest = React.useRef({});
+  latest.current = { phase, tree, reload, loadHome, start };
+  React.useEffect(() => {
+    let timer = null;
+    const offProject = api.onProjectChanged(({ projectId, trashed: gone } = {}) => {
+      const now = latest.current;
+      if (gone && now.phase === 'workspace' && now.tree && now.tree.project.id === projectId) {
+        setTree(null);
+        setEntry(null);
+        setPhase('home');
+      }
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const held = latest.current;
+        if (held.phase === 'home') held.loadHome().catch(() => {});
+        else if (held.phase === 'workspace' && held.tree && held.tree.project.id === projectId) held.reload();
+      }, 150);
+    });
+    const offRoot = api.onDataRootChanged(({ config: next, fresh } = {}) => {
+      if (!next) return;
+      setConfig(next);
+      setTree(null);
+      setEntry(null);
+      if (fresh) setRun((n) => n + 1);
+      latest.current.start().catch((candidate) => setError(errorMessage(candidate)));
+    });
+    return () => { clearTimeout(timer); offProject(); offRoot(); };
+  }, []);
 
   async function toggleTest() {
     if (!config || busy) return;
@@ -276,7 +326,9 @@ export default function App() {
   }
 
   const onVisit = React.useCallback((workspaceId) => {
-    if (tree) api.setLastOpen({ projectId: tree.project.id, workspaceId }).catch(() => {});
+    if (!tree) return;
+    api.setLastOpen({ projectId: tree.project.id, workspaceId }).catch(() => {});
+    api.reportPlace({ projectId: tree.project.id, workspaceId });
   }, [tree]);
 
   async function chooseDirectory(directory) {

@@ -73,6 +73,24 @@ export function sandboxProgressReducer(state, action) {
     }
     return { ...state, dismissed, notifications: state.notifications.filter((row) => !ids.has(row.id)) };
   }
+  // Another window saved its notifications (the shared localStorage's `storage` event, 2026-10-03): what it cleared is
+  // cleared here and what it read is read here, so a notification put away in one window neither stays in another nor
+  // comes back from it. Nothing is added: each window makes its own from the same progress events.
+  if (action.type === 'sync') {
+    const saved = action.saved || {};
+    const dismissed = { ...state.dismissed };
+    let changed = false;
+    for (const [key, at] of Object.entries(saved.dismissed || {})) {
+      if (!(Date.parse(dismissed[key]) >= Date.parse(at))) { dismissed[key] = at; changed = true; }
+    }
+    const read = new Set((saved.notifications || []).filter((row) => row.read).map((row) => row.id));
+    const notifications = [];
+    for (const row of state.notifications) {
+      if (Date.parse(dismissed[dismissalKey(row)]) >= Date.parse(row.at)) { changed = true; continue; }
+      if (!row.read && read.has(row.id)) { notifications.push({ ...row, read: true }); changed = true; } else notifications.push(row);
+    }
+    return changed ? { ...state, dismissed, notifications } : state;
+  }
   if (action.type === 'read') {
     const ids = new Set(action.ids);
     if (!state.notifications.some((row) => !row.read && ids.has(row.id))) return state;

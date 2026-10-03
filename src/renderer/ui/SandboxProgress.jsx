@@ -2,7 +2,7 @@ import React from 'react';
 import { api, errorMessage } from '../api.js';
 import BuildDetails from '../workspace/BuildDetails.jsx';
 import { OPEN_IN_BROWSER } from '../model/address.js';
-import { readNotificationState, writeNotificationState, sandboxProgressState, sandboxProgressReducer, previewLibraryId } from '../model/sandbox-notifications.js';
+import { readNotificationState, writeNotificationState, sandboxProgressState, sandboxProgressReducer, previewLibraryId, notificationStorageKey } from '../model/sandbox-notifications.js';
 
 const SandboxContext = React.createContext(null);
 export const useSandboxes = () => React.useContext(SandboxContext);
@@ -64,6 +64,17 @@ export default function SandboxProgress({ dataRoot, library, inWorkspace, childr
     if (state.dataRoot !== dataRoot) return;
     try { writeNotificationState(window.localStorage, dataRoot, { notifications, dismissed }); } catch { /* Storage may be unavailable. */ }
   }, [dataRoot, state.dataRoot, notifications, dismissed]);
+  // Every window keeps its own bell from the same events; what another window clears or reads, this one does too.
+  React.useEffect(() => {
+    const onStorage = (event) => {
+      if (event.key !== notificationStorageKey(dataRoot)) return;
+      let saved;
+      try { saved = readNotificationState(window.localStorage, dataRoot); } catch { return; }
+      dispatch({ type: 'sync', saved });
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [dataRoot]);
   React.useEffect(() => {
     let live = true;
     let saved;

@@ -58,8 +58,18 @@ const engelbartAPI = Object.freeze({
   recordEdit: invoke('record-edit'),
   seenAgents: invoke('seen-agents'),
   onNav: (callback) => subscribe('engelbart:nav', callback),
-  // the library changed behind the screen's back (a pdf saved as a link became a saved pdf: store/web-pdfs.cjs)
+  // the library changed behind the screen's back (a pdf saved as a link became a saved pdf: store/web-pdfs.cjs; another
+  // window added, renamed or removed a row)
   onLibraryChanged: (callback) => subscribe('engelbart:library-changed', callback),
+  // Several windows (2026-10-03, src/main/windows.cjs). Where this window opens ({ projectId, workspaceId }, { home: true },
+  // or null: where the app was last), and where it has gone (projectId null on the projects screen).
+  windowTarget: () => ipcRenderer.invoke('window:target'),
+  reportPlace: (place) => ipcRenderer.send('window:navigated', place && typeof place === 'object' ? { projectId: place.projectId || null, workspaceId: place.workspaceId || null } : null),
+  // What another window saved: a document ({ projectId, key, text, revision }, key `ws:<id>` or `note:<id>`), a project's
+  // tree ({ projectId }), or the data root it switched to ({ config, fresh }).
+  onDocChanged: (callback) => subscribe('doc:changed', callback),
+  onProjectChanged: (callback) => subscribe('engelbart:project-changed', callback),
+  onDataRootChanged: (callback) => subscribe('engelbart:data-root-changed', callback),
   // GitHub: the device-flow sign-in (status { configured, connected, login, pending: { userCode, verificationUri }, error, installUrl }) and the App's repositories.
   githubStatus: invoke('github-status'),
   githubConnect: invoke('github-connect'),

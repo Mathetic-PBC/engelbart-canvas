@@ -42,6 +42,8 @@ function Card() {
     api.ready().then((ready) => { setCard(ready); setBuild(ready.build || null); }).catch((e) => setError(e.message));
     const offs = [
       api.onBuildState((state) => setBuild(state || null)),
+      // Saved from another window showing this project (main/post-its/views.cjs createPostItPeers).
+      api.onText((text) => setCard((current) => (current && typeof text === 'string' && current.text !== text ? { ...current, text } : current))),
       api.onTrash(setOverTrash),
       api.onCrumple((value) => setCrumple(value && value.scale < 1 ? value : null)),
       api.onCancel(() => { held.current = null; setOverTrash(false); setCrumple(null); document.body.classList.remove('moving'); }),

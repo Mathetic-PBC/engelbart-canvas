@@ -847,6 +847,43 @@ function writeLastOpen(ctx, value) {
   return next;
 }
 
+// The windows open when the app last kept them (2026-10-03), every one reopened at the next launch:
+// `windows: [{ projectId, workspaceId, bounds: { x, y, width, height } }]`, the window focused last at the end; a projectId
+// of null is a window on the projects screen. Written by main (index.cjs) as windows move, resize and go somewhere, and
+// at quit. Without it (a state.json from before) the app opens one window where `projectId` / `workspaceId` say.
+const MAX_WINDOWS = 24;
+
+function cleanBounds(value) {
+  const input = plainObject(value); if (!input) return null;
+  const out = {};
+  for (const key of ['x', 'y', 'width', 'height']) {
+    const n = Number(input[key]);
+    if (!Number.isFinite(n) || Math.abs(n) > 100000) return null;
+    out[key] = Math.round(n);
+  }
+  return out.width >= 100 && out.height >= 100 ? out : null;
+}
+
+function cleanWindows(value) {
+  const out = [];
+  for (const entry of Array.isArray(value) ? value : []) {
+    const input = plainObject(entry); if (!input) continue;
+    const projectId = idOrNull(input.projectId);
+    out.push({ projectId, workspaceId: projectId ? idOrNull(input.workspaceId) : null, bounds: cleanBounds(input.bounds) });
+  }
+  return out.slice(-MAX_WINDOWS);
+}
+
+function readWindows(ctx) {
+  return cleanWindows(readState(ctx).windows);
+}
+
+function writeWindows(ctx, list) {
+  const windows = cleanWindows(list);
+  writeState(ctx, { windows });
+  return windows;
+}
+
 /** { top, line?, offset?, hash? } — the scroll offset in pixels, and the first line on screen, how far its top sat above the pane's edge, a hash of its text. */
 function cleanPosition(value) {
   const input = plainObject(value); if (!input || !Number.isFinite(input.top)) return null;
@@ -1149,6 +1186,8 @@ module.exports = {
   resolvePageFile,
   readLastOpen,
   writeLastOpen,
+  readWindows,
+  writeWindows,
   readViews,
   writeView,
   readNav,

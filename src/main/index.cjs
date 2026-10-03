@@ -34,7 +34,7 @@ const { createTools } = require('./tools/manager.cjs');
 const { createFakeTools } = require('./tools/fake.cjs');
 const { createSignInProcess, createSignOutProcess } = require('./tools/sign-in.cjs');
 const { SettingsStore } = require('./terminal/settings.cjs');
-const { RendererLifecycle, shouldHideWindowOnClose } = require('./terminal/window-lifecycle.cjs');
+const { shouldHideWindowOnClose } = require('./terminal/window-lifecycle.cjs');
 const { assertTrustedRenderer, parseExternalUrl } = require('./ipc-validation.cjs');
 const { createStore, registerEngelbartIpc } = require('./ipc.cjs');
 const { PARTITION: BROWSER_PARTITION, createBrowserViews, registerBrowserIpc } = require('./browser/views.cjs');
@@ -46,7 +46,7 @@ const { createSandboxManager } = require('./sandbox/manager.cjs');
 const { prepareLocalClaude } = require('./sandbox/local-claude.cjs');
 const { createRepoIdentifier, createRemoteFileLister } = require('./store/page-meta.cjs');
 const { checkWebPdfs, readPdfResponse } = require('./store/web-pdfs.cjs');
-const { createPostItViews } = require('./post-its/views.cjs');
+const { createPostItViews, createPostItPeers, registerPostItIpc } = require('./post-its/views.cjs');
 const { createGit } = require('./build/git.cjs');
 const { createBuilds } = require('./build/manager.cjs');
 const { createRunStep, createFakeRunAgent } = require('./build/run-step.cjs');
@@ -56,6 +56,8 @@ const { EDGES: WINDOW_EDGES, resizedBounds } = require('./window-edges.cjs');
 const { windowOpenRoute } = require('./window-open.cjs');
 const { hasTestMode } = require('./developer.cjs');
 const { createUpdates } = require('./updates.cjs');
+const projects = require('./store/projects.cjs');
+const { createWindows, placement } = require('./windows.cjs');
 
 const DIST = path.join(__dirname, '../../dist');
 const FIXTURES = path.join(__dirname, '../../fixtures');
@@ -76,9 +78,8 @@ const MIME = {
   '.wasm': 'application/wasm',
 };
 
-let mainWindow = null;
+let windows = null; // every window's context (./windows.cjs): its Stage tabs, post-its, terminal attachment, place
 let manager = null;
-let rendererLifecycle = null;
 let settings = null;
 let store = null;
 let sweeper = null;
@@ -86,12 +87,9 @@ let bart = null;
 let builds = null;
 let sandbox = null;
 let tools = null;
-let browserViews = null;
-let postItViews = null;
 let updates = null;
 let quitPending = false;
 let quitReady = false;
-let stageListeners = 0; // Stages in the window taking links it would open in a new window (preload's onStageOpenLink)
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'engelbart', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: false, stream: true } },
@@ -104,15 +102,31 @@ function trustedHandler(handler) {
   };
 }
 
+// The same check, then the context of the window that called: handler(ctx, ...args) (./windows.cjs).
+function windowHandler(handler) {
+  return windows.handler(handler);
+}
+
+// To every window, each once its terminal has attached (RendererLifecycle), as the one window's events always waited.
 function sendToRenderer(channel, payload) {
-  return rendererLifecycle ? rendererLifecycle.send(mainWindow, channel, payload) : false;
+  return windows ? windows.broadcast(channel, payload, { gated: true }) : false;
 }
 
 // sendToRenderer waits for the terminal to attach (RendererLifecycle), which never happens on the create and
-// all-projects screens; the setup dialog can open on any screen, so its events go to the window directly.
+// all-projects screens; the setup dialog can open on any screen, so its events go to the windows directly.
 function sendToWindow(channel, payload) {
-  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return false;
-  try { mainWindow.webContents.send(channel, payload); return true; } catch { return false; }
+  return windows ? windows.broadcast(channel, payload) : false;
+}
+
+/** The focused window, else the one focused last: where a dialog, the menu's commands and the updater go. */
+function focusedWindow() {
+  return windows ? windows.focused() : null;
+}
+
+/** A dialog's window: the one whose request opened it, else the focused one. */
+function dialogWindow() {
+  const ctx = (windows && windows.asking()) || focusedWindow();
+  return ctx && !ctx.win.isDestroyed() ? ctx.win : null;
 }
 
 function registerProtocol() {
@@ -141,7 +155,9 @@ function registerProtocol() {
 async function closeSession(id) {
   const current = manager.get(id);
   if (!current) return false;
-  return manager.close(id);
+  const closed = await manager.close(id);
+  if (closed) windows.forget(id);
+  return closed;
 }
 
 async function requestQuit() {
@@ -159,7 +175,7 @@ async function requestQuit() {
       detail: 'Terminal sessions live in this app process and cannot be recovered after quitting. Documents are already saved.',
       noLink: true,
     };
-    const dialogParent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+    const dialogParent = dialogWindow();
     if (dialogParent && !dialogParent.isVisible()) {
       dialogParent.show();
       dialogParent.focus();
@@ -172,6 +188,7 @@ async function requestQuit() {
       return;
     }
   }
+  saveWindows(true); // every window, as it is now, before any closes
   try {
     if (sweeper) await sweeper.stop();
     if (bart) bart.stopAll();
@@ -180,8 +197,10 @@ async function requestQuit() {
     // opened, and one still being set up stops. One that cannot be reached (offline, signed out) does not hold the quit:
     // a ready one sleeps 10 minutes after its last use, one being set up at its one-hour timeout.
     if (sandbox) await sandbox.dispose().catch((error) => console.warn(`[engelbart] sandbox shutdown: ${error.message}`));
-    if (browserViews) await browserViews.flush().catch(() => {});
-    if (postItViews) await postItViews.activate(null);
+    for (const ctx of windows ? windows.all() : []) {
+      await ctx.browserViews.flush().catch(() => {});
+      await ctx.postItViews.activate(null);
+    }
     if (manager) await manager.shutdown();
     if (store) await store.close();
   } catch (error) {
@@ -193,9 +212,24 @@ async function requestQuit() {
   app.quit();
 }
 
+// What a Build's run step opens (build/manager.cjs showRunnable, asked from a card in a window): a UI's Stage tab in that
+// window; a terminal program's session there too, its output following it (a window that showed it before lets it go).
+function routeRun(payload) {
+  if (!payload || (payload.kind !== 'ui' && payload.kind !== 'terminal')) { sendToRenderer('engelbart:build-run', payload); return; }
+  const target = windows.asking() || windows.showing(payload.projectId) || focusedWindow();
+  if (!target) return;
+  if (payload.kind === 'terminal' && payload.session) {
+    const left = windows.own(payload.session.id, target);
+    if (left) windows.deliver(left, 'engelbart:build-run', { kind: 'closed', sessionId: payload.session.id });
+  }
+  windows.deliver(target, 'engelbart:build-run', payload);
+}
+
 function registerTerminalIpc() {
-  ipcMain.handle('terminal:bootstrap', trustedHandler(async () => {
-    const sessions = rendererLifecycle.bootstrap(() => manager.list());
+  // A window's terminal pane attaches: every session is listed, and those no open window holds (their window closed)
+  // come to this one (./windows.cjs). A session's output goes to the window that holds it alone.
+  ipcMain.handle('terminal:bootstrap', windowHandler(async (ctx) => {
+    const sessions = windows.bootstrap(ctx);
     return {
       home: app.getPath('home'),
       shell: resolveShell(process.env),
@@ -206,12 +240,17 @@ function registerTerminalIpc() {
     };
   }));
   ipcMain.handle('terminal:providers', trustedHandler(() => tools.providers(resolveShell(process.env))));
-  ipcMain.handle('terminal:create', trustedHandler((request) => manager.create({
-    provider: request && request.provider,
-    cwd: request && request.cwd,
-    cols: request && request.cols,
-    rows: request && request.rows,
-  })));
+  // A session belongs to the window it was opened from.
+  ipcMain.handle('terminal:create', windowHandler((ctx, request) => {
+    const session = manager.create({
+      provider: request && request.provider,
+      cwd: request && request.cwd,
+      cols: request && request.cols,
+      rows: request && request.rows,
+    });
+    windows.own(session.id, ctx);
+    return session;
+  }));
   ipcMain.handle('terminal:write', trustedHandler((id, data) => {
     manager.write(id, data);
     return true;
@@ -221,40 +260,46 @@ function registerTerminalIpc() {
     return true;
   }));
   ipcMain.handle('terminal:close', trustedHandler((id) => closeSession(id)));
-  // The renderer's resize strips: a press names the edge, every move after it re-reads the cursor (2026-09-23).
-  let edgeResize = null; // { edge, start: bounds, from: cursor point }
+  // The renderer's resize strips: a press names the edge, every move after it re-reads the cursor (2026-09-23). Each
+  // window moves itself.
   ipcMain.on('window:edge-resize', (event, phase, edge) => {
     try {
       assertTrustedRenderer(event, APP_URL);
-      if (!mainWindow || mainWindow.isFullScreen()) return;
+      const ctx = windows.of(event.sender);
+      const win = BrowserWindow.fromWebContents(event.sender);
+      if (!ctx || !win || win.isFullScreen()) return;
       const cursor = require('electron').screen.getCursorScreenPoint();
-      if (phase === 'start' && WINDOW_EDGES.has(edge)) edgeResize = { edge, start: mainWindow.getBounds(), from: cursor };
-      else if (phase === 'move' && edgeResize) {
-        const [width, height] = mainWindow.getMinimumSize();
-        mainWindow.setBounds(resizedBounds(edgeResize.start, edgeResize.edge, cursor.x - edgeResize.from.x, cursor.y - edgeResize.from.y, { width, height }));
-      } else if (phase === 'end') edgeResize = null;
+      if (phase === 'start' && WINDOW_EDGES.has(edge)) ctx.edgeResize = { edge, start: win.getBounds(), from: cursor };
+      else if (phase === 'move' && ctx.edgeResize) {
+        const [width, height] = win.getMinimumSize();
+        win.setBounds(resizedBounds(ctx.edgeResize.start, ctx.edgeResize.edge, cursor.x - ctx.edgeResize.from.x, cursor.y - ctx.edgeResize.from.y, { width, height }));
+      } else if (phase === 'end') ctx.edgeResize = null;
     } catch {
       // A send-only gesture is deliberately ignored when malformed.
     }
   });
-  // A Stage starts (true) or stops (false) taking the window's new-window links; createWindow's open handler asks.
+  // A Stage starts (true) or stops (false) taking its window's new-window links; the window's open handler asks.
   ipcMain.on('stage:links', (event, on) => {
     try {
       assertTrustedRenderer(event, APP_URL);
-      stageListeners = Math.max(0, stageListeners + (on ? 1 : -1));
+      const ctx = windows.of(event.sender);
+      if (ctx) ctx.stageListeners = Math.max(0, ctx.stageListeners + (on ? 1 : -1));
     } catch {
       // Only the app's own page says whether it has a Stage.
     }
   });
+  // Only the window a session's output goes to acknowledges it (another may list the session, never receive it).
   ipcMain.on('terminal:acknowledge', (event, id, sequence) => {
     try {
       assertTrustedRenderer(event, APP_URL);
+      const ctx = windows.of(event.sender);
+      if (!ctx || windows.ownerOf(id) !== ctx) return;
       manager.acknowledge(id, sequence);
     } catch {
       // A send-only acknowledgement is deliberately ignored when malformed.
     }
   });
-  ipcMain.handle('terminal:pick-directory', trustedHandler(async (current) => {
+  ipcMain.handle('terminal:pick-directory', windowHandler(async (ctx, current) => {
     // Start in the home directory, never in Engelbart's own data folder (where the last terminal may have been).
     let defaultPath = app.getPath('home');
     if (typeof current === 'string' && current.length <= 4096) {
@@ -264,7 +309,7 @@ function registerTerminalIpc() {
         // Fall back to the persisted valid directory.
       }
     }
-    const result = await dialog.showOpenDialog(mainWindow, {
+    const result = await dialog.showOpenDialog(ctx.win, {
       title: 'Choose working directory',
       defaultPath,
       properties: ['openDirectory', 'createDirectory'],
@@ -279,8 +324,26 @@ function registerTerminalIpc() {
   }));
 }
 
+// What a window shows (2026-10-03): it says where it has gone (`window:navigated`, kept for the next launch), and asks
+// where to open (`window:target`: its place, the projects screen, or null for the place the app was last in).
+function registerWindowIpc() {
+  ipcMain.on('window:navigated', (event, place) => {
+    try {
+      assertTrustedRenderer(event, APP_URL);
+      const ctx = windows.of(event.sender);
+      if (ctx) windows.navigated(ctx, place);
+    } catch {
+      // Only the app's own page says where it is.
+    }
+  });
+  ipcMain.handle('window:target', windowHandler((ctx) => windows.target(ctx)));
+}
+
+// The menu's commands act on the focused window (focusedWindow).
 function buildMenu() {
   const isMac = process.platform === 'darwin';
+  const setUpTools = () => { const ctx = focusedWindow(); if (ctx) windows.send(ctx, 'engelbart:tools-open', {}); };
+  const find = (name) => () => { const ctx = focusedWindow(); if (ctx) ctx.browserViews.shortcut(name); };
   const template = [
     ...(isMac ? [{
       label: app.name,
@@ -288,7 +351,7 @@ function buildMenu() {
         { role: 'about' },
         ...(updates && updates.enabled ? [updates.menuItem()] : []),
         { type: 'separator' },
-        { label: 'Set Up Tools…', click: () => sendToWindow('engelbart:tools-open', {}) },
+        { label: 'Set Up Tools…', click: setUpTools },
         { type: 'separator' },
         { role: 'services' },
         { type: 'separator' },
@@ -302,8 +365,11 @@ function buildMenu() {
     {
       label: 'File',
       submenu: [
+        // On the workspace the focused window shows, else on the projects screen.
+        { label: 'New Window', accelerator: 'CmdOrCtrl+Shift+N', click: () => newWindow(focusedWindow()) },
+        { type: 'separator' },
         { label: 'Reveal Engelbart Folder', click: () => electronShell.showItemInFolder(store ? store.layout.root : app.getPath('home')) },
-        ...(isMac ? [] : [{ label: 'Set Up Tools…', click: () => sendToWindow('engelbart:tools-open', {}) }]),
+        ...(isMac ? [] : [{ label: 'Set Up Tools…', click: setUpTools }]),
         { type: 'separator' },
         ...(isMac ? [{ role: 'close', label: 'Close Window', accelerator: 'Cmd+Shift+W' }] : [{ label: 'Quit', accelerator: 'Ctrl+Q', click: requestQuit }]),
       ],
@@ -319,9 +385,9 @@ function buildMenu() {
         {
           label: 'Find',
           submenu: [
-            { label: 'Find…', accelerator: 'CmdOrCtrl+F', click: () => { if (browserViews) browserViews.shortcut('find'); } },
-            { label: 'Find Next', accelerator: 'CmdOrCtrl+G', click: () => { if (browserViews) browserViews.shortcut('find-next'); } },
-            { label: 'Find Previous', accelerator: 'Shift+CmdOrCtrl+G', click: () => { if (browserViews) browserViews.shortcut('find-previous'); } },
+            { label: 'Find…', accelerator: 'CmdOrCtrl+F', click: find('find') },
+            { label: 'Find Next', accelerator: 'CmdOrCtrl+G', click: find('find-next') },
+            { label: 'Find Previous', accelerator: 'Shift+CmdOrCtrl+G', click: find('find-previous') },
           ],
         },
       ],
@@ -338,18 +404,58 @@ function buildMenu() {
     ...(isMac ? [{ role: 'windowMenu' }] : []),
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  // The Dock icon's menu: a new window on the projects screen.
+  if (isMac && app.dock) app.dock.setMenu(Menu.buildFromTemplate([{ label: 'New Window', click: () => newWindow(null) }]));
 }
 
-function createWindow() {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.show();
-    mainWindow.focus();
-    return;
+// The windows' places, sizes and positions go into state.json (store/projects.cjs writeWindows) a moment after any
+// changes, and once more when quitting, before any window closes.
+let windowsTimer = null;
+function saveWindows(now = false) {
+  clearTimeout(windowsTimer);
+  windowsTimer = null;
+  if (!now && (quitPending || quitReady)) return;
+  if (!windows || !store || windows.count() === 0) return; // the last window closing (not on macOS) leaves them as they were
+  if (now) writeWindows();
+  else windowsTimer = setTimeout(writeWindows, 800);
+}
+function writeWindows() {
+  windowsTimer = null;
+  try {
+    projects.writeWindows({ dataRoot: store.config().dataRoot }, windows.places());
+  } catch (error) {
+    console.warn(`[engelbart] windows not saved: ${error.message}`);
   }
-  mainWindow = new BrowserWindow({
+}
+
+/** A new window on the workspace `from` shows, else on the projects screen. */
+function newWindow(from) {
+  const place = from && from.place && from.place.projectId ? from.place : { projectId: null };
+  return openWindow({ place, from });
+}
+
+/** The focused window, shown (the Dock icon, a second launch); a window when there is none. */
+function showWindow() {
+  if (!windows) return; // before the app is ready, its first windows are still to come
+  const ctx = focusedWindow();
+  if (!ctx || ctx.win.isDestroyed()) { openWindow(); return; }
+  if (ctx.win.isMinimized()) ctx.win.restore();
+  ctx.win.show();
+  ctx.win.focus();
+}
+
+/**
+ * A window (2026-10-03: there may be several). `place` is where it opens ({ projectId, workspaceId }, projectId null for
+ * the projects screen; none: where the app was last); `bounds` a saved window's; `from` the window it is opened from.
+ */
+function openWindow({ place = null, bounds = null, from = null } = {}) {
+  // The last window closed on macOS is only hidden, for the Dock icon to bring back; once another opens, it goes.
+  for (const held of windows.all()) if (held.closedHidden && !held.win.isDestroyed()) held.win.destroy();
+  const workAreas = require('electron').screen.getAllDisplays().map((display) => display.workArea);
+  const fromBounds = from && !from.win.isDestroyed() ? from.win.getBounds() : null;
+  const win = new BrowserWindow({
     show: process.env.ENGELBART_HEADLESS !== '1', // isolated automated checks; never take desktop focus
-    width: 1440,
-    height: 900,
+    ...placement({ bounds, from: fromBounds, workAreas, min: { width: 900, height: 560 }, size: { width: 1440, height: 900 } }),
     minWidth: 900,
     minHeight: 560,
     backgroundColor: '#ffffff',
@@ -365,53 +471,55 @@ function createWindow() {
       webSecurity: true,
     },
   });
-  // What the page would open in a new window or tab (a ⌘-click on a link): a new Stage tab while a Stage listens, else the
-  // default browser; GitHub's sign-in pages always the default browser; untrusted schemes remain closed (window-open.cjs).
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    const route = windowOpenRoute(url, { stage: stageListeners > 0 });
-    const sent = !!route && route.to === 'stage' && sendToWindow('stage:open-link', { url: route.url, newTab: true });
+  const ctx = windows.add(win, place);
+  // What the page would open in a new window or tab (a ⌘-click on a link): a new Stage tab while one of this window's
+  // Stages listens, else the default browser; GitHub's sign-in pages always the default browser; untrusted schemes remain
+  // closed (window-open.cjs).
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    const route = windowOpenRoute(url, { stage: ctx.stageListeners > 0 });
+    const sent = !!route && route.to === 'stage' && windows.send(ctx, 'stage:open-link', { url: route.url, newTab: true });
     if (route && !sent) void electronShell.openExternal(route.url).catch(() => {});
     return { action: 'deny' };
   });
-  mainWindow.webContents.on('will-navigate', (event, url) => {
-    if (url !== mainWindow.webContents.getURL()) event.preventDefault();
+  win.webContents.on('will-navigate', (event, url) => {
+    if (url !== win.webContents.getURL()) event.preventDefault();
   });
-  // The renderer's browser tabs live in its memory: when the page goes, their views go with it.
-  mainWindow.webContents.on('did-start-loading', () => { stageListeners = 0; rendererLifecycle.detach(); browserViews.closeAll(); void postItViews.activate(null).catch(console.error); });
-  mainWindow.webContents.on('render-process-gone', () => { stageListeners = 0; rendererLifecycle.detach(); void postItViews.activate(null).catch(console.error); });
-  mainWindow.on('resize', () => postItViews.layout());
+  // The renderer's browser tabs live in its memory: when the page goes, their views go with it. Only this window's.
+  win.webContents.on('did-start-loading', () => windows.reset(ctx));
+  win.webContents.on('render-process-gone', () => windows.crashed(ctx));
+  win.on('resize', () => { ctx.postItViews.layout(); saveWindows(); });
+  win.on('move', () => saveWindows());
   // The header clears the traffic lights only while they are there (preload marks <html data-fullscreen>).
-  const sendFullScreen = () => { if (mainWindow) mainWindow.webContents.send('window:fullscreen', mainWindow.isFullScreen()); };
-  mainWindow.on('enter-full-screen', sendFullScreen);
-  mainWindow.on('leave-full-screen', sendFullScreen);
-  mainWindow.webContents.on('did-finish-load', sendFullScreen);
-  mainWindow.on('blur', () => postItViews.cancelGesture());
+  const sendFullScreen = () => windows.send(ctx, 'window:fullscreen', win.isFullScreen());
+  win.on('enter-full-screen', sendFullScreen);
+  win.on('leave-full-screen', sendFullScreen);
+  win.webContents.on('did-finish-load', sendFullScreen);
+  win.on('blur', () => ctx.postItViews.cancelGesture());
   // Whether the window has the keyboard, for the Stage's preview ping (preload.cjs's windowFocused).
-  const sendFocus = () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:focus', mainWindow.isFocused()); };
-  mainWindow.on('focus', sendFocus);
-  mainWindow.on('blur', sendFocus);
-  mainWindow.webContents.on('did-finish-load', sendFocus);
-  mainWindow.on('close', (event) => {
-    if (shouldHideWindowOnClose(process.platform, quitReady)) {
+  const sendFocus = () => windows.send(ctx, 'window:focus', !win.isDestroyed() && win.isFocused());
+  win.on('focus', () => { windows.touch(ctx); sendFocus(); });
+  win.on('blur', sendFocus);
+  win.webContents.on('did-finish-load', sendFocus);
+  // On macOS the last window hides rather than closes (its terminal stays attached, its tabs stay open) until Quit; any
+  // other window closes.
+  win.on('close', (event) => {
+    if (shouldHideWindowOnClose(process.platform, quitReady) && windows.count() === 1) {
       event.preventDefault();
-      mainWindow.hide();
+      ctx.closedHidden = true;
+      win.hide();
     }
   });
-  mainWindow.on('closed', () => {
-    stageListeners = 0;
-    rendererLifecycle.detach();
-    browserViews.closeAll();
-    void postItViews.activate(null).catch(console.error);
-    mainWindow = null;
-  });
-  mainWindow.loadURL(APP_URL);
+  win.on('show', () => { ctx.closedHidden = false; });
+  win.on('closed', () => windows.remove(ctx));
+  win.loadURL(APP_URL);
+  return ctx;
 }
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
   app.quit();
 } else {
-  app.on('second-instance', createWindow);
+  app.on('second-instance', showWindow);
   app.on('before-quit', (event) => {
     if (quitReady) return;
     event.preventDefault();
@@ -420,12 +528,11 @@ if (!hasSingleInstanceLock) {
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') requestQuit();
   });
-  app.on('activate', createWindow);
+  app.on('activate', showWindow);
   app.whenReady().then(() => {
     registerProtocol();
-    manager = new SessionManager({ environment: environmentForSessions(process.env, app.getPath('userData')), extraEnvironment: () => (tools ? tools.environment() : {}) });
-    rendererLifecycle = new RendererLifecycle(manager);
-    rendererLifecycle.detach();
+    // Flow control follows each session's window: on while that window's terminal is attached (./windows.cjs).
+    manager = new SessionManager({ environment: environmentForSessions(process.env, app.getPath('userData')), extraEnvironment: () => (tools ? tools.environment() : {}), attached: (id) => (windows ? windows.attached(id) : false) });
     settings = new SettingsStore(app.getPath('userData'), app.getPath('home'));
     const homeDir = process.env.ENGELBART_HOME_DIR || app.getPath('home');
     // Pdfs saved as links before the Stage kept copies: every library that opens is checked, and what is left is
@@ -504,8 +611,13 @@ if (!hasSingleInstanceLock) {
         ? createFakeBuildRunner({ delayMs: Number(process.env.ENGELBART_BUILD_FAKE_MS) || 900 }) // _MS: how long a fake turn takes
         : createBuildRunner({ runDirectory: path.join(app.getPath('userData'), 'build-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-build'), tools }),
       readModels: () => readModels('build'),
-      // A quick task's changes also reach the post-it it came from (post-its/views.cjs).
-      notify: (channel, payload) => { sendToRenderer(channel, payload); if (channel === 'engelbart:build' && payload && payload.postItId && postItViews) postItViews.buildState(payload); },
+      // Every window hears a Build's changes, and a quick task's reach the post-it it came from in every window showing
+      // its project (post-its/views.cjs); what its run step opens goes to the window that asked (routeRun).
+      notify: (channel, payload) => {
+        if (channel === 'engelbart:build-run') { routeRun(payload); return; }
+        sendToRenderer(channel, payload);
+        if (channel === 'engelbart:build' && payload && payload.postItId) for (const ctx of windows.all()) ctx.postItViews.buildState(payload);
+      },
       tools,
       gitReady,
       // Cloning a private library repository with the GitHub sign-in (github is made further down, long before a clone).
@@ -523,6 +635,7 @@ if (!hasSingleInstanceLock) {
         // terminal echoes it and then the shell's line editor draws it again.
         openTerminal: ({ cwd, command }) => {
           const session = manager.create({ provider: 'shell', cwd, cols: 100, rows: 30 });
+          windows.own(session.id, windows.asking() || focusedWindow()); // the window whose card opened it (routeRun)
           let quiet = null;
           const type = () => { clearTimeout(quiet); clearTimeout(cap); manager.off('data', drawn); try { manager.write(session.id, `${command}\r`); } catch { /* closed already */ } };
           const drawn = (payload) => { if (payload.id !== session.id) return; clearTimeout(quiet); quiet = setTimeout(type, 150); };
@@ -530,35 +643,58 @@ if (!hasSingleInstanceLock) {
           manager.on('data', drawn);
           return session;
         },
-        closeTerminal: async (id) => { await manager.close(id); sendToRenderer('engelbart:build-run', { kind: 'closed', sessionId: id }); },
+        closeTerminal: async (id) => { await manager.close(id); windows.forget(id); sendToRenderer('engelbart:build-run', { kind: 'closed', sessionId: id }); },
         terminalSnapshot: (id) => manager.get(id),
       }),
     });
     // Records a closed app left working are interrupted (Resume goes on), before anything lists them.
     store.context().then((ctx) => builds.reconcile(ctx)).catch(() => {});
-    manager.on('data', (payload) => sendToRenderer('terminal:data', payload));
+    // A terminal's output goes to the window that holds its session; that it ended, to every window.
+    manager.on('data', (payload) => windows.terminalData(payload));
     manager.on('exit', (payload) => sendToRenderer('terminal:exit', payload));
-    registerTerminalIpc();
-    postItViews = createPostItViews({
-      electron: { WebContentsView, clipboard, shell: electronShell },
-      getWindow: () => mainWindow,
-      getContext: () => store.context(),
-      send: sendToRenderer,
-      buildFor: async (projectId, postItId) => {
-        const list = builds.list(await store.context(), projectId).filter((task) => task.postItId === postItId);
-        return list[list.length - 1] || null;
+    // Each window's own Stage tabs and post-its (./windows.cjs), sending to that window alone. The post-its of windows on
+    // the same project hear each other's saves (createPostItPeers).
+    const postItPeers = createPostItPeers();
+    windows = createWindows({
+      appUrl: APP_URL,
+      manager,
+      onChange: () => saveWindows(),
+      makeViews: (ctx) => {
+        const send = (channel, payload) => windows.deliver(ctx, channel, payload);
+        const postItViews = createPostItViews({
+          electron: { WebContentsView, clipboard, shell: electronShell },
+          getWindow: () => ctx.win,
+          getContext: () => store.context(),
+          send,
+          buildFor: async (projectId, postItId) => {
+            const list = builds.list(await store.context(), projectId).filter((task) => task.postItId === postItId);
+            return list[list.length - 1] || null;
+          },
+          peers: postItPeers,
+        });
+        const browserViews = createBrowserViews({
+          electron: { WebContentsView, session: electronSession, Menu, clipboard, dialog, shell: electronShell },
+          getWindow: () => ctx.win,
+          send,
+          appName: app.getName(),
+          fileRoot: () => homeDir,
+          onLayerChange: () => postItViews.raise(),
+        });
+        return { browserViews, postItViews };
       },
     });
-    postItViews.register({ ipcMain, trustedHandler });
-    browserViews = createBrowserViews({
-      electron: { WebContentsView, session: electronSession, Menu, clipboard, dialog, shell: electronShell },
-      getWindow: () => mainWindow,
-      send: sendToRenderer,
-      appName: app.getName(),
-      fileRoot: () => homeDir,
-      onLayerChange: () => postItViews.raise(),
+    registerTerminalIpc();
+    registerWindowIpc();
+    // Registered once each; every call acts on the calling window's views (a card's, on the window whose card it is).
+    registerPostItIpc({
+      ipcMain,
+      trustedHandler,
+      viewsFor: (event) => {
+        const ctx = windows.of(event.sender);
+        return ctx ? ctx.postItViews : windows.cardsHolding(event.sender);
+      },
     });
-    registerBrowserIpc({ ipcMain, trustedHandler, views: browserViews });
+    registerBrowserIpc({ ipcMain, trustedHandler, viewsFor: (event) => { const ctx = windows.of(event.sender); return ctx ? ctx.browserViews : null; } });
     // GitHub (src/main/github): default-browser sign-in with an automatic loopback return, and the token
     // that lets the library read private repositories. ENGELBART_GITHUB_* name a fake GitHub, for scripted runs only.
     const githubWeb = process.env.ENGELBART_GITHUB_WEB || null;
@@ -584,7 +720,8 @@ if (!hasSingleInstanceLock) {
       browserAuth: () => (process.env.ENGELBART_GITHUB_CLIENT_ID || (store.config().github || {}).clientId) === GITHUB_CLIENT_ID ? githubBrowserAuth : null,
       onConnected: () => {
         void e2bKey.get().catch(() => {}); // early, so the first sandbox need not wait; it asks again if this failed
-        if (mainWindow && !mainWindow.isDestroyed()) { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); }
+        const ctx = focusedWindow();
+        if (ctx && !ctx.win.isDestroyed()) { if (ctx.win.isMinimized()) ctx.win.restore(); ctx.win.show(); ctx.win.focus(); }
       },
       // Signing out (or a sign-in that expired) drops the E2B key, and stops the sandboxes started with it. Signed out
       // there are none, so a repeat is a no-op; a developer's own key (devE2bKey) is not tied to the sign-in at all.
@@ -626,8 +763,12 @@ if (!hasSingleInstanceLock) {
       listRemoteFiles: createRemoteFileLister({ auth: github.authHeaders }),
       ipcMain,
       trustedHandler,
+      // Several windows: which one called, an answer to it alone, and what it saved told to every other.
+      windowHandler,
+      reply: (ctx, channel, payload) => windows.deliver(ctx, channel, payload),
+      announce: (channel, payload, options) => windows.broadcast(channel, payload, options),
       store,
-      beforeContextChange: () => postItViews.activate(null),
+      beforeContextChange: () => Promise.all(windows.all().map((ctx) => ctx.postItViews.activate(null))),
       openExternal: async (value) => {
         await electronShell.openExternal(parseExternalUrl(value).href);
         return true;
@@ -651,7 +792,8 @@ if (!hasSingleInstanceLock) {
         const options = kind === 'pdf'
           ? { properties: ['openFile', 'multiSelections'], filters: [{ name: 'Papers', extensions: ['pdf'] }] }
           : { properties: ['openFile', 'openDirectory', 'multiSelections'] };
-        const result = mainWindow && !mainWindow.isDestroyed() ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
+        const parent = dialogWindow();
+        const result = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options);
         return result.canceled ? [] : result.filePaths;
       },
       confirmReset: async ({ fresh = false } = {}) => {
@@ -668,18 +810,22 @@ if (!hasSingleInstanceLock) {
             : 'Projects, notes, the test library and paper annotations are removed. The library is seeded again on the next start.',
           noLink: true,
         };
-        const result = mainWindow && !mainWindow.isDestroyed()
-          ? await dialog.showMessageBox(mainWindow, options)
-          : await dialog.showMessageBox(options);
+        const parent = dialogWindow();
+        const result = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options);
         return result.response === 0;
       },
     });
     // New versions (updates.cjs): only in a packaged app built with a download folder. ENGELBART_UPDATES=off stops it.
-    updates = createUpdates({ app, dialog, getWindow: () => mainWindow, requestQuit, onChange: () => buildMenu() });
+    updates = createUpdates({ app, dialog, getWindow: () => { const ctx = focusedWindow(); return ctx ? ctx.win : null; }, requestQuit, onChange: () => buildMenu() });
     updates.start();
     buildMenu();
     electronSession.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
-    createWindow();
+    // Every window open when the app last quit comes back, where it was; without that list (state.json from before),
+    // one window where the app was last.
+    let saved = [];
+    try { saved = projects.readWindows({ dataRoot: store.config().dataRoot }); } catch { saved = []; }
+    if (saved.length) for (const entry of saved) openWindow({ place: entry, bounds: entry.bounds });
+    else openWindow();
   }).catch((error) => {
     dialog.showErrorBox('Engelbart failed to start', error.message);
     app.exit(1);

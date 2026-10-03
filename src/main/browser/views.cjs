@@ -154,9 +154,52 @@ function boundsFrom(rect, zoom) {
   return out;
 }
 
+// The browsing session is the app's, one for every window (2026-10-03): its handlers are set once, by the first window's
+// views, and each finds the window whose tab (or popup) the page is. A permission answered in one window is answered in
+// all of them, for this run, as it is for the session.
+const sessions = new WeakMap(); // browsing session -> { members: Set of a window's views, decided: Map }
+
+function decide(shared, member, contents, permission, details) {
+  if (ALLOWED_PERMISSIONS.has(permission)) return Promise.resolve(true);
+  const what = ASKED_PERMISSIONS[permission];
+  const origin = originOf((details && details.requestingUrl) || (contents && contents.getURL()));
+  if (!what || !origin || !member) return Promise.resolve(false);
+  const key = `${origin} ${permission}`; // -> the person's answer, for this run
+  if (!shared.decided.has(key)) shared.decided.set(key, member.ask(`Allow ${origin} to use ${what}?`, '', 'Allow'));
+  return shared.decided.get(key);
+}
+
+function joinSession(browsing, member, appName) {
+  let shared = sessions.get(browsing);
+  if (!shared) {
+    shared = { members: new Set(), decided: new Map() };
+    sessions.set(browsing, shared);
+    const ownerOf = (contents) => { for (const each of shared.members) if (each.owns(contents)) return each; return null; };
+    browsing.setUserAgent(cleanUserAgent(browsing.getUserAgent(), appName));
+    browsing.setPermissionRequestHandler((contents, permission, callback, details) => {
+      void decide(shared, ownerOf(contents) || [...shared.members].pop() || null, contents, permission, details).then(callback, () => callback(false));
+    });
+    // Sign-ins are cookies, and Chromium writes them lazily: a relaunch is a kill, not a quit.
+    let timer = null;
+    browsing.cookies.on('changed', () => {
+      if (timer) return;
+      timer = setTimeout(() => { timer = null; browsing.cookies.flushStore().catch(() => {}); }, COOKIE_FLUSH_MS);
+      if (typeof timer.unref === 'function') timer.unref();
+    });
+    // A tab's page that is a pdf becomes a download, which receivePdf hands to the renderer's viewer.
+    browsing.webRequest.onHeadersReceived({ urls: ['http://*/*', 'https://*/*'], types: ['mainFrame'] }, (details, callback) => {
+      const owner = details.resourceType === 'mainFrame' && details.webContents ? ownerOf(details.webContents) : null;
+      const headers = owner && owner.tabOf(details.webContents) ? pdfAsDownload(details.responseHeaders) : null;
+      callback(headers ? { responseHeaders: headers } : {});
+    });
+    browsing.on('will-download', (_event, item, contents) => { const owner = ownerOf(contents); if (owner) owner.receivePdf(item, contents); });
+  }
+  shared.members.add(member);
+  return shared;
+}
+
 function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLayerChange = () => {}, pdfDir = path.join(os.tmpdir(), 'engelbart-pdf') }) {
   const { WebContentsView, session, Menu, clipboard, dialog, shell } = electron;
-  const decided = new Map(); // `${origin} ${permission}` -> the person's answer, for this run
   const entries = new Map(); // tab id -> { view, error, requested, pending, seq, found }
   const popups = new Set(); // child windows opened by pages
   const logins = new Map(); // request id -> answer(credentials | null)
@@ -178,25 +221,18 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     }
   }
 
+  // This window's part in the shared session (joinSession): whose pages are whose, and where a question about one is asked.
+  let shared = null;
+  const member = {
+    owns: (contents) => !!tabOf(contents) || [...popups].some((popup) => !popup.isDestroyed() && popup.webContents === contents),
+    tabOf: (contents) => tabOf(contents),
+    receivePdf: (item, contents) => receivePdf(item, contents),
+    ask: (message, detail, yes) => ask(message, detail, yes),
+  };
   function configureSession() {
     if (configured) return;
     configured = true;
-    const browsing = session.fromPartition(PARTITION);
-    browsing.setUserAgent(cleanUserAgent(browsing.getUserAgent(), appName));
-    browsing.setPermissionRequestHandler((contents, permission, callback, details) => { void decide(contents, permission, details).then(callback, () => callback(false)); });
-    // Sign-ins are cookies, and Chromium writes them lazily: a relaunch is a kill, not a quit.
-    let timer = null;
-    browsing.cookies.on('changed', () => {
-      if (timer) return;
-      timer = setTimeout(() => { timer = null; browsing.cookies.flushStore().catch(() => {}); }, COOKIE_FLUSH_MS);
-      if (typeof timer.unref === 'function') timer.unref();
-    });
-    // A tab's page that is a pdf becomes a download, which receivePdf hands to the renderer's viewer.
-    browsing.webRequest.onHeadersReceived({ urls: ['http://*/*', 'https://*/*'], types: ['mainFrame'] }, (details, callback) => {
-      const headers = details.resourceType === 'mainFrame' && details.webContents && tabOf(details.webContents) ? pdfAsDownload(details.responseHeaders) : null;
-      callback(headers ? { responseHeaders: headers } : {});
-    });
-    browsing.on('will-download', (_event, item, contents) => { receivePdf(item, contents); });
+    shared = joinSession(session.fromPartition(PARTITION), member, appName);
   }
 
   function tabOf(contents) {
@@ -243,16 +279,6 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     const options = { type: 'question', buttons: [yes, 'Don\u2019t Allow'], defaultId: 1, cancelId: 1, message, detail, noLink: true };
     const result = win && !win.isDestroyed() ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
     return result.response === 0;
-  }
-
-  async function decide(contents, permission, details) {
-    if (ALLOWED_PERMISSIONS.has(permission)) return true;
-    const what = ASKED_PERMISSIONS[permission];
-    const origin = originOf((details && details.requestingUrl) || (contents && contents.getURL()));
-    if (!what || !origin) return false;
-    const key = `${origin} ${permission}`;
-    if (!decided.has(key)) decided.set(key, ask(`Allow ${origin} to use ${what}?`, '', 'Allow'));
-    return decided.get(key);
   }
 
   let handing = false; // one question at a time, however often a page tries
@@ -595,22 +621,36 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
 
   /** Sign-ins are cookies; Chromium writes them lazily, so quitting asks for them now. */
   async function flush() {
-    if (configured) await session.fromPartition(PARTITION).cookies.flushStore();
+    const browsing = session.fromPartition(PARTITION);
+    if (configured || sessions.has(browsing)) await browsing.cookies.flushStore(); // whichever window's tabs set it up
   }
 
-  return { open, show, hide, command, find, stopFind, shortcut, close, closeAll, answerLogin, flush, has: (id) => entries.has(id) };
+  /** The window closed: its pages are gone, and the shared session no longer asks it about any. */
+  function dispose() {
+    closeAll();
+    if (shared) shared.members.delete(member);
+  }
+
+  return { open, show, hide, command, find, stopFind, shortcut, close, closeAll, answerLogin, flush, dispose, has: (id) => entries.has(id) };
 }
 
-function registerBrowserIpc({ ipcMain, trustedHandler, views }) {
-  ipcMain.handle('browser:open', trustedHandler((id, url) => views.open(id, url)));
-  ipcMain.handle('browser:show', trustedHandler((id, rect) => views.show(id, rect)));
-  ipcMain.handle('browser:hide', trustedHandler((options) => views.hide(options)));
-  ipcMain.handle('browser:command', trustedHandler((id, name) => views.command(id, name)));
-  ipcMain.handle('browser:find', trustedHandler((id, text, options) => views.find(id, text, options)));
-  ipcMain.handle('browser:stop-find', trustedHandler((id) => views.stopFind(id)));
-  ipcMain.handle('browser:close', trustedHandler((id) => views.close(id)));
-  ipcMain.handle('browser:login-reply', trustedHandler((requestId, credentials) => views.answerLogin(requestId, credentials)));
-  ipcMain.handle('browser:close-all', trustedHandler(() => { views.closeAll(); return true; }));
+// Each handler is registered once and acts on the views of the window that called (`viewsFor(event)`, 2026-10-03).
+function registerBrowserIpc({ ipcMain, trustedHandler, viewsFor = null, views = null }) {
+  const lookup = viewsFor || (() => views);
+  const handle = (channel, call) => ipcMain.handle(channel, (event, ...args) => trustedHandler((...rest) => {
+    const mine = lookup(event);
+    if (!mine) throw new Error('No window for the browser');
+    return call(mine, ...rest);
+  })(event, ...args));
+  handle('browser:open', (mine, id, url) => mine.open(id, url));
+  handle('browser:show', (mine, id, rect) => mine.show(id, rect));
+  handle('browser:hide', (mine, options) => mine.hide(options));
+  handle('browser:command', (mine, id, name) => mine.command(id, name));
+  handle('browser:find', (mine, id, text, options) => mine.find(id, text, options));
+  handle('browser:stop-find', (mine, id) => mine.stopFind(id));
+  handle('browser:close', (mine, id) => mine.close(id));
+  handle('browser:login-reply', (mine, requestId, credentials) => mine.answerLogin(requestId, credentials));
+  handle('browser:close-all', (mine) => { mine.closeAll(); return true; });
 }
 
 module.exports = { PARTITION, parseBrowserUrl, parseFileUrl, externalScheme, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews, registerBrowserIpc };
