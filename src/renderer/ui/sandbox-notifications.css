@@ -21,6 +21,10 @@ a.notification-repo:hover{text-decoration:underline;text-underline-offset:3px}
 .notification-description{align-self:flex-start;border:0;border-radius:2px;padding:0;background:transparent;color:#777;text-align:left;font:11.5px/1.5 var(--font-sans);cursor:pointer}
 .notification-description:hover:not(:disabled){color:#171717;text-decoration:underline;text-underline-offset:3px}
 .notification-description:disabled{opacity:.5;cursor:default}
+.notification-status-line{display:flex;align-items:center;gap:6px;min-width:0}
+.notification-sandbox{display:inline-flex;align-items:center;gap:5px;color:#777;font-size:11px;line-height:1.5}
+.notification-sandbox::before{content:"";width:6px;height:6px;border-radius:50%;background:#c9c9c9}
+.notification-sandbox[data-sandbox="running"]::before{background:#1a7f37}
 .notification-detail{color:#777;font-size:11px;overflow-wrap:anywhere;max-height:64px;overflow:auto}
 .notification-error{margin:8px 10px;color:#b91c1c;overflow-wrap:anywhere}
 .notification-run-actions{display:flex;align-items:center;gap:6px;flex:none}

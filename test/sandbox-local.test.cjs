@@ -481,6 +481,20 @@ test('Railpack hints finish before Claude starts and do not replace the install 
   assert.equal(agentStarted, true);
 });
 
+test('a desktop app (Electron, Tauri…) stops before Claude starts: desktop apps are not supported yet (2026-10-04)', async () => {
+  for (const [desktop, name] of [[['electron'], 'an Electron'], [['tauri'], 'a Tauri']]) {
+    const events = [];
+    let agentStarted = false;
+    await assert.rejects(runLocalSetup({ sandbox: { files: { write: async () => {} }, commands: { run: async () => ({ exitCode: 0, stdout: '{}' }) } },
+      auth: {}, environment: { values: {}, removed: [] }, onEvent: (event) => events.push(event), checkPreview: async () => true,
+      discover: async () => ({ components: [{ cwd: '.', hints: { web: ['vite'], desktop } }] }),
+      runAgent: async () => { agentStarted = true; },
+    }), new RegExp(`^Error: Desktop apps are not supported yet: this repository is ${name} app`));
+    assert.equal(agentStarted, false, 'no Claude, no install decisions');
+    assert.ok(events.some((event) => event.status === 'unsupported' && /not supported yet/.test(event.message)), 'said in the build log');
+  }
+});
+
 // How a person uses the repository (2026-10-03): Claude declares it first; a terminal is ready without any web preview.
 test('declare_kind and terminal_ready validate their arguments: three kinds, a reason, a directory in the repository, a one-line hint', () => {
   for (const kind of ['interface', 'terminal', 'both']) assert.doesNotThrow(() => validateTool('declare_kind', { kind, reason: 'Has a vite dev server' }));

@@ -336,3 +336,21 @@ test('createPageCache: each page\'s text is asked for once a document, shared wh
   assert.deepEqual(asked, [1, 3, 3]);
   assert.notEqual(createPageCache(async () => ({})).get(1), a, 'a new document starts empty');
 });
+
+test('a sandbox preview waits for its first page: Waking… from the click, then Couldn\'t load (2026-10-04)', async () => {
+  const { previewWait, previewName, WAKE_MS } = await load('stage');
+  const since = 1_000_000;
+  const at = (ms, web = { loading: true }, preview = true) => previewWait({ preview, web, since, now: since + ms });
+  assert.equal(at(0), 'waking', 'at once, before the page has answered');
+  assert.equal(at(10, { loading: false, error: { code: -3 } }), 'waking', 'a failed first load is waited out at once, not shown');
+  assert.equal(at(WAKE_MS - 1, { loading: false, error: { code: -105 } }), 'waking');
+  assert.equal(at(WAKE_MS), 'failed', 'a minute without a page');
+  assert.equal(at(WAKE_MS, { loading: true }), 'failed', 'even while a load is still on its way');
+  assert.equal(at(WAKE_MS, { drawn: true, error: { code: -105 } }), null, 'a page that arrived once is a page: its failures are the usual card');
+  assert.equal(at(5_000, { loading: true }, false), null, 'any other website loads as it always has');
+  assert.equal(previewWait({ preview: true, web: null, since: 0, now: since }), 'waking', 'the click itself, before its wait is recorded');
+  assert.equal(at(5_000, null), 'waking', 'before the page has said anything');
+  assert.equal(previewName({ name: 'manifund/manifund' }), 'manifund');
+  assert.equal(previewName({ name: 'engelbart-web' }), 'engelbart-web');
+  assert.equal(previewName(null), '');
+});

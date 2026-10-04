@@ -49,16 +49,6 @@ export function RepoRuntimeStatus({ repo, run, working, onOpen, arrow = false })
 }
 
 const DETAILS_TABS = ['build', 'logs', 'environment'];
-const KIND_LABELS = { interface: 'Web interface', terminal: 'Terminal', both: 'Web interface and terminal' };
-
-// How a person uses the repository, as Claude declared it before setting it up, and why.
-export function RepoKind({ run }) {
-  if (!KIND_LABELS[run?.kind]) return null;
-  return <p className="repo-kind" data-kind={run.kind}><span className="repo-kind-label">Used through: {KIND_LABELS[run.kind]}</span>
-    {run.kind_reason && <span className="repo-kind-reason"> — {run.kind_reason}</span>}
-    {run.terminal?.hint && <span className="repo-kind-hint"> Try <code>{run.terminal.hint}</code> in {run.terminal.cwd === '.' ? 'the repository' : run.terminal.cwd}.</span>}</p>;
-}
-
 // The existing inspector, shared by repository controls and build notifications.
 // Navigation and start/stop still come from the caller's current run and actions.
 export default function BuildDetails({ repo, item, busy = {}, act, open, openTerminal, error, visible, onClose, returnFocus, id, onVisitRepository }) {
@@ -134,7 +124,6 @@ export default function BuildDetails({ repo, item, busy = {}, act, open, openTer
     </div>
     {error && <p role="alert" className="repo-error">{error}</p>}
     <div className="repo-details-scroll repo-details-build-pane" id={`${detailsId}-build`} role="tabpanel" aria-labelledby={`${detailsId}-build-tab`} hidden={tab !== 'build'}>
-      <RepoKind run={run} />
       {visible && <RunTimeline key={run?.id || 'pending'} run={run} repoName={repo.name} visible={tab === 'build'} onOpenPreview={status.kind === 'live' ? openPreview : undefined} />}
       {run?.error && <p role="alert" className="repo-error">{run.error}</p>}
       {!log.length && <p className="repo-notice">{item?.message || (run ? 'Earlier build details are unavailable. New build activity will appear here.' : 'Build progress will appear here when setup starts.')}</p>}

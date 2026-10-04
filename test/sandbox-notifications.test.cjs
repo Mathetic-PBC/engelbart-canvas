@@ -347,6 +347,7 @@ test('the Stage keeps a ready preview awake only while it is in front of a focus
 test('a failed build shows a short reason, never its whole error', () => {
   const cases = [
     ['Claude finished without a verified web preview. Retry from build details.', 'No web preview found'],
+    ['Desktop apps are not supported yet: this repository is an Electron app, and a sandbox can show only web previews and terminals.', 'Desktop apps not supported yet'],
     ['Setup stopped', 'Setup stopped'],
     ['Setup was interrupted. Retry to start a new run.', 'Setup stopped'],
     ['Claude Code is not signed in to a Claude subscription (Engelbart ▸ Set Up Tools… signs in).', 'Claude Code not signed in'],
@@ -391,7 +392,7 @@ test('a terminal opens its terminal, an interface its preview, both both; a term
     assert.equal(!!live, kind !== 'terminal', `${kind}: Open live`);
     assert.equal(!!shell, kind !== 'interface', `${kind}: Open terminal`);
     if (live) { assert.equal(live.props.children, 'Open live ↗'); live.props.onClick(); }
-    if (shell) { assert.equal(shell.props.children, 'Open terminal'); shell.props.onClick(); }
+    if (shell) { assert.equal(shell.props.children, 'Open terminal ↗'); shell.props.onClick(); }
     assert.deepEqual(calls, [...(live ? [['live', kind]] : []), ...(shell ? [['terminal', kind]] : [])]);
     assert.doesNotMatch(renderToStaticMarkup(tree), /No web preview/);
   }
@@ -417,4 +418,37 @@ test('a repository clicked in the sidebar opens what its kind is used through; r
   assert.match(workspace, /window\.addEventListener\(OPEN_SANDBOX_TERMINAL, onOpen\)/);
   const pane = fs.readFileSync(path.join(__dirname, '../src/renderer/terminal/TerminalPane.jsx'), 'utf8');
   assert.match(pane, /useSandboxTouch\(visible && current && inSandbox\(current\) && running \? current\.snapshot\.libraryId \|\| null : null\)/, 'its tab in front of a focused window keeps the sandbox awake');
+});
+
+test('the bell says whether a finished build\'s sandbox is asleep or running (2026-10-04)', () => {
+  const { sandboxProgressReducer, sandboxProgressState, sandboxStatus } = load('model/sandbox-notifications.js');
+  const root = '/tmp/bell-status';
+  const ready = { id: 'r1', library_id: 'l1', status: 'ready', preview_url: 'https://43110-x.e2b.app/', created_at: '2026-10-04T10:00:00Z', updated_at: '2026-10-04T10:01:00Z', build_log: [] };
+  let state = sandboxProgressReducer(sandboxProgressState(root), { type: 'progress', event: { dataRoot: root, run: ready, message: 'Preview ready', sandbox: 'running' } });
+  assert.equal(state.items.l1.sandbox, 'running');
+  state = sandboxProgressReducer(state, { type: 'progress', event: { dataRoot: root, run: ready, message: 'Paused after 10 minutes unused', sandbox: 'asleep' } });
+  assert.equal(state.items.l1.sandbox, 'asleep');
+  state = sandboxProgressReducer(state, { type: 'progress', event: { dataRoot: root, run: ready, message: 'x' } });
+  assert.equal(state.items.l1.sandbox, 'asleep', 'an event that does not say keeps what was known of the same run');
+  state = sandboxProgressReducer(state, { type: 'progress', event: { dataRoot: root, run: { ...ready, id: 'r2', created_at: '2026-10-04T11:00:00Z', updated_at: '2026-10-04T11:00:00Z', status: 'starting' }, message: 'x' } });
+  assert.equal(state.items.l1.sandbox, null, 'a new run starts unknown');
+
+  assert.equal(sandboxStatus(ready, 'asleep'), 'Asleep');
+  assert.equal(sandboxStatus(ready, 'running'), 'Running');
+  assert.equal(sandboxStatus(ready, null), '');
+  assert.equal(sandboxStatus({ ...ready, status: 'failed' }, 'asleep'), '', 'only a finished build has a sandbox to speak of');
+
+  const row = (sandbox) => renderToStaticMarkup(BuildNotification({ notification: { id: 'n' }, run: ready, sandbox, repo: { id: 'l1', name: 'mqo00/rope', url: 'https://github.com/mqo00/rope' }, onRepository() {}, onBuild() {}, onOpen() {}, onClear() {} }));
+  assert.match(row('asleep'), /Build finished<\/button><span class="notification-sandbox" data-sandbox="asleep"[^>]*>Asleep<\/span>/);
+  assert.match(row('running'), /data-sandbox="running"[^>]*>Running</);
+  assert.doesNotMatch(row(null), /notification-sandbox/);
+});
+
+test('an open workspace wakes its built repositories\' sandboxes when it opens and when its window comes back (2026-10-04)', () => {
+  const progress = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/SandboxProgress.jsx'), 'utf8');
+  assert.match(progress, /export function useSandboxWake\(libraryIds\)/);
+  assert.match(progress, /if \(!key \|\| !focused\) return;\n\s*api\.wakeSandboxes\(key\.split\('\\n'\)\)/, 'only while its window has focus, again each time it gets it back');
+  const workspace = fs.readFileSync(path.join(__dirname, '../src/renderer/screens/Workspace.jsx'), 'utf8');
+  assert.match(workspace, /useSandboxWake\(active && sandboxes \? rows\.filter\(\(row\) => hasTag\(row, 'git'\) && sandboxes\.items\[row\.id\]\?\.run\?\.status === 'ready'\)/, 'the rail\'s finished builds');
+  assert.match(fs.readFileSync(path.join(__dirname, '../src/preload.cjs'), 'utf8'), /wakeSandboxes: invoke\('sandbox-wake'\)/);
 });

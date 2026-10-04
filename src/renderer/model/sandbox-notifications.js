@@ -53,6 +53,7 @@ export function failureReason(run) {
   if (/^Setup stopped|Setup was interrupted/i.test(error)) return 'Setup stopped';
   if (/Claude Code is not installed|Update Claude Code/i.test(error)) return 'Claude Code not installed';
   if (/not signed in to a Claude subscription/i.test(error)) return 'Claude Code not signed in';
+  if (/^Desktop apps are not supported yet/i.test(error)) return 'Desktop apps not supported yet';
   if (/web preview|preview is not reachable|public preview/i.test(error)) return 'No web preview found';
   return 'Setup failed';
 }
@@ -139,5 +140,11 @@ export function sandboxProgressReducer(state, action) {
       notifications = [row, ...notifications.filter((entry) => entry.libraryId !== run.library_id)].slice(0, LIMIT);
     }
   }
-  return { ...state, items: { ...state.items, [run.library_id]: { run, message } }, notifications };
+  // `sandbox`: main's last sight of its sandbox, 'asleep' or 'running' (2026-10-04); null while main has not looked yet.
+  const sandbox = action.event.sandbox !== undefined ? action.event.sandbox : previous?.run.id === run.id ? previous.sandbox ?? null : null;
+  return { ...state, items: { ...state.items, [run.library_id]: { run, message, sandbox } }, notifications };
 }
+
+// A ready run's sandbox for the bell (2026-10-04): 'Asleep' (opening it wakes it, which can take a few seconds) or
+// 'Running'; '' while unknown, and for a run that is not ready.
+export const sandboxStatus = (run, sandbox) => (run?.status !== 'ready' ? '' : sandbox === 'asleep' ? 'Asleep' : sandbox === 'running' ? 'Running' : '');

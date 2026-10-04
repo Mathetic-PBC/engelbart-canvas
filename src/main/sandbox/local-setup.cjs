@@ -10,6 +10,18 @@ const ADAPTER = `${STATE}/launch.py`;
 // The app and its proxy have no time limit (timeoutMs 0): they live as long as the sandbox, which sleeps and wakes with
 // them still running (worker.cjs). Any limit would end them partway through a later session.
 const FOREVER = 0;
+// A desktop app (an Electron, Tauri, NW.js or Neutralino one: discovery's `desktop` hint) has no web page of its own to
+// preview: its window's page needs the app around it, and showed blank in the Stage (engelbart-canvas, 2026-10-04). Until
+// a sandbox can show a desktop, setup stops before Claude starts, saying so.
+const DESKTOP_NAMES = { electron: 'Electron', '@tauri-apps/cli': 'Tauri', '@tauri-apps/api': 'Tauri', tauri: 'Tauri', nw: 'NW.js', '@neutralinojs/lib': 'Neutralino' };
+const DESKTOP_UNSUPPORTED = 'Desktop apps are not supported yet';
+function desktopApp(discovery) {
+  for (const component of discovery?.components || []) {
+    const hint = component?.hints?.desktop;
+    if (Array.isArray(hint) && hint.length) return DESKTOP_NAMES[hint[0]] || 'desktop';
+  }
+  return null;
+}
 
 // Claude first says how a person uses the repository (declare_kind): through a web interface, from a terminal, or both.
 // It is ready once that kind has what it needs: a verified preview (start_app), a terminal (terminal_ready), or both.
@@ -170,6 +182,12 @@ async function runLocalSetup({ sandbox, auth, environment, model, signal: parent
     const [preflight, discovery] = await Promise.all([
       install.prepare(), discover({ sandbox, signal, secrets, onEvent }),
     ]);
+    const desktop = desktopApp(discovery);
+    if (desktop) {
+      const message = `${DESKTOP_UNSUPPORTED}: this repository is ${desktop === 'Electron' ? 'an' : 'a'} ${desktop} app, and a sandbox can show only web previews and terminals.`;
+      onEvent({ phase: 'kind', status: 'unsupported', message });
+      throw new Error(message);
+    }
     preflight.install = install.status();
     const agentStarted = Date.now();
     let summaryUnavailable = false;
@@ -224,4 +242,4 @@ Use run_command for prerequisite fixes and build commands only when installation
   }
 }
 
-module.exports = { runLocalSetup };
+module.exports = { runLocalSetup, DESKTOP_UNSUPPORTED };

@@ -248,6 +248,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     fs.mkdirSync(pdfDir, { recursive: true, mode: 0o700 });
     const file = path.join(pdfDir, `${nextId('pdf')}.pdf`);
     item.setSavePath(file);
+    if (entries.has(id)) entries.get(id).download = url; // its page's cancelled load is this download, not a failure
     const shown = { id, url, name: pdfName(item.getFilename(), url), under: contents.getURL() || 'about:blank' };
     send('browser:pdf', { ...shown, loading: true });
     item.on('updated', () => { if (item.getReceivedBytes() > MAX_PDF_BYTES) item.cancel(); });
@@ -310,6 +311,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       canGoBack: contents.navigationHistory.canGoBack(),
       canGoForward: contents.navigationHistory.canGoForward(),
       error: entry.error,
+      drawn: entry.drawn, // a page has arrived in this tab at least once (the Stage's "Waking…" waits for the first)
     });
   }
 
@@ -439,7 +441,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     view.setVisible(false);
     win.contentView.addChildView(view);
     onLayerChange();
-    const entry = { view, error: null, requested: '', pending: '', seq: 0, found: '' };
+    const entry = { view, error: null, requested: '', pending: '', seq: 0, found: '', drawn: false, download: '' };
     entries.set(id, entry);
 
     const contents = view.webContents;
@@ -449,13 +451,22 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     // window.close() from the page (the last step of many sign-ins) closes the tab.
     contents.on('destroyed', () => { if (entries.get(id) === entry) { detach(id); send('browser:closed', { id }); } });
     contents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
-      if (!isMainFrame || code === ERR_ABORTED) return;
+      if (!isMainFrame) return;
+      if (code === ERR_ABORTED) return; // a cancelled load: did-stop-loading judges it, below
       entry.error = { code, description: String(description || ''), url: String(url || entry.requested) };
       entry.pending = '';
       emit(id);
     });
-    contents.on('did-navigate', () => { entry.error = null; entry.pending = ''; entry.found = ''; emit(id); });
-    contents.on('did-stop-loading', () => { entry.pending = ''; }); // a stopped load is headed nowhere
+    contents.on('did-navigate', () => { entry.error = null; entry.pending = ''; entry.found = ''; entry.drawn = true; emit(id); });
+    contents.on('did-stop-loading', () => {
+      // The tab's first load stopped with no page and nothing else on the way (2026-10-04): cancelled (a 204, a sandbox
+      // waking), it would leave the tab blank for good, with Chromium saying nothing. A pdf turned into a download is the
+      // viewer's; a load another took the place of is still loading; once a page is there, a cancel is no failure.
+      if (entry.requested && !entry.drawn && !entry.error && !entry.download && !contents.isLoading()) {
+        entry.error = { code: ERR_ABORTED, description: 'The page did not load', url: entry.requested };
+      }
+      entry.pending = ''; // a stopped load is headed nowhere
+    });
     for (const name of ['did-navigate-in-page', 'did-start-loading', 'did-stop-loading', 'page-title-updated']) contents.on(name, () => emit(id));
     contents.on('context-menu', (_event, params) => contextMenu(contents, params, id));
     contents.on('found-in-page', (_event, result) => send('browser:found', { id, matches: result.matches, active: result.activeMatchOrdinal }));
@@ -516,6 +527,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
   // A retry keeps the failure on screen until a page actually arrives (did-navigate clears it).
   function load(entry, href, keepError) {
     if (!keepError) entry.error = null;
+    entry.download = '';
     entry.requested = href;
     entry.pending = href;
     // A failed load is reported by did-fail-load; the promise says the same thing twice.

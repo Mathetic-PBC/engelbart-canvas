@@ -254,6 +254,58 @@ test('views: one page shows at a time, pages stay locked down, windows become ta
   assert.equal(views.show('a', { x: 0, y: 0, width: 1, height: 1 }), false);
 });
 
+test('views: a first load that is cancelled is a failure; one replaced, one after a page, or a pdf is not (2026-10-04)', () => {
+  const fake = fakeElectron();
+  const sent = [];
+  const views = createBrowserViews({ electron: fake.electron, getWindow: () => fake.win, send: (channel, payload) => sent.push([channel, payload]), appName: 'Engelbart' });
+  const state = () => sent.filter(([channel]) => channel === 'browser:state').at(-1)[1];
+  const abort = (contents, url) => contents.emit('did-fail-load', {}, -3, 'ERR_ABORTED', url, true);
+
+  // A sandbox waking: the tab's first load is cancelled and nothing follows. It says so instead of staying blank.
+  views.open('a', 'https://43110-sleepy.e2b.app/');
+  const a = fake.made[0].webContents;
+  a.url = '';
+  abort(a, 'https://43110-sleepy.e2b.app/');
+  a.emit('did-stop-loading');
+  assert.deepEqual(state().error, { code: -3, description: 'The page did not load', url: 'https://43110-sleepy.e2b.app/' });
+  assert.equal(state().drawn, false);
+  // Retried, it arrives: drawn from then on.
+  views.command('a', 'reload');
+  a.emit('did-navigate');
+  assert.equal(state().error, null);
+  assert.equal(state().drawn, true);
+  // Once a page is there, a cancelled load (Stop, a link the page itself replaced) is no failure.
+  abort(a, 'https://43110-sleepy.e2b.app/next');
+  a.emit('did-stop-loading');
+  assert.equal(state().error, null);
+
+  // Chromium may say nothing but stop (a 204 answer): the same.
+  views.open('d', 'https://43110-quiet.e2b.app/');
+  const d = fake.made[1].webContents;
+  d.url = '';
+  d.emit('did-stop-loading');
+  assert.equal(state().id, 'd');
+  assert.equal(state().error.description, 'The page did not load');
+
+  // A first load replaced by another: the newer one is still loading when the cancelled one stops.
+  views.open('b', 'https://example.com/one');
+  const b = fake.made[2].webContents;
+  b.isLoading = () => true;
+  abort(b, 'https://example.com/one');
+  b.emit('did-stop-loading');
+  assert.equal(sent.filter(([channel, payload]) => channel === 'browser:state' && payload.id === 'b' && payload.error).length, 0);
+
+  // A first load that turned into a pdf: the cancel is the download the viewer gets.
+  views.open('c', 'https://arxiv.org/pdf/2310.05292');
+  const c = fake.made[3].webContents;
+  const item = Object.assign(new EventEmitter(), { getURL: () => 'https://arxiv.org/pdf/2310.05292', getMimeType: () => 'application/pdf', getFilename: () => 'x.pdf', getReceivedBytes: () => 1, setSavePath() {}, cancel() {} });
+  fake.browsing['will-download']({}, item, c);
+  abort(c, 'https://arxiv.org/pdf/2310.05292');
+  c.emit('did-stop-loading');
+  assert.equal(sent.filter(([channel, payload]) => channel === 'browser:state' && payload.id === 'c' && payload.error).length, 0);
+  views.closeAll();
+});
+
 test('views: a page on disk opens from inside the home directory only, and only a page on disk may link to another', () => {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-pages-')));
   fs.writeFileSync(path.join(home, 'report.html'), '<h1>report</h1>');

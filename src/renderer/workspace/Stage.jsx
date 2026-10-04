@@ -3,10 +3,11 @@ import { EDGE as WINDOW_EDGE } from '../ui/WindowEdges.jsx';
 import { isGithubSignIn } from '../../shared/github.cjs';
 import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
-import { usePreviewTouch } from '../ui/SandboxProgress.jsx';
+import { usePreviewTouch, useSandboxes } from '../ui/SandboxProgress.jsx';
+import { previewLibraryId } from '../model/sandbox-notifications.js';
 import { KindGlyph, SEARCH, FOLDER } from '../ui/Icons.jsx';
 import { kindOf, stripScheme, OPEN_IN_BROWSER } from '../model/address.js';
-import { MAX_TABS, SAVE_LABEL, addressKey, afterClose, landTab, landingFinds, linkPlan, looksLikePlace, placeTab, stageRows, tabKey, tabPlace, parseTable, withPassage } from '../model/stage.js';
+import { MAX_TABS, SAVE_LABEL, WAKE_RETRY_MS, addressKey, afterClose, landTab, landingFinds, linkPlan, looksLikePlace, placeTab, previewName, previewWait, stageRows, tabKey, tabPlace, parseTable, withPassage } from '../model/stage.js';
 import { markdownBlocks, inlineRuns } from '../model/markdown.js';
 import PaperView from '../pdf/PaperView.jsx';
 
@@ -310,13 +311,20 @@ function ImageView({ file }) {
 }
 
 // What cannot be drawn here (a folder, a format the Stage does not read, a path with nothing at it): its name and where it is.
-function Plain({ title, detail, error }) {
+// `prose`: the detail is a sentence, not a path or an error code. `children`: what can be done about it (buttons).
+function Plain({ title, detail, error, prose, children }) {
   return (
     <div style={{ minHeight: '100%', boxSizing: 'border-box', padding: 24, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, textAlign: 'center' }}>
       <span style={{ font: '500 14px/1.4 var(--font-sans)', color: '#171717', overflowWrap: 'anywhere' }}>{title}</span>
-      {detail && <span style={{ font: '12px/1.6 var(--font-mono)', color: error ? '#e70022' : '#8f8f8f', overflowWrap: 'anywhere' }}>{detail}</span>}
+      {detail && <span style={{ maxWidth: prose ? 320 : undefined, font: prose ? '12.5px/1.5 var(--font-sans)' : '12px/1.6 var(--font-mono)', color: error ? '#e70022' : '#8f8f8f', overflowWrap: 'anywhere' }}>{detail}</span>}
+      {children && <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>{children}</div>}
     </div>
   );
+}
+
+// A button under a Plain message: Retry, Build details.
+function PlainAction({ onClick, primary, children }) {
+  return <button type="button" className="hov-bd2" onClick={onClick} style={{ height: 30, padding: '0 12px', border: `1px solid ${primary ? '#171717' : '#eaeaea'}`, borderRadius: 8, background: primary ? '#171717' : '#fff', cursor: 'pointer', font: '500 12.5px/1 var(--font-sans)', color: primary ? '#fff' : '#171717', transition: 'border-color 120ms' }}>{children}</button>;
 }
 
 /* ------------------------------------------------------------------------------ find in a file drawn here */
@@ -407,7 +415,16 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const blank = !pdf && !view && !page && k.kind === 'blank';
   const web = tab.web;
   const failed = page && web && web.error ? web.error : null;
-  const showing = visible && page && !failed && !occluded;
+  // A sandbox's preview waits for its first page (2026-10-04): asleep, it can take seconds to wake and its first load can
+  // fail meanwhile. "Waking…" shows in its place, a failed load is retried, and after a minute Couldn't load says so.
+  const sandboxes = useSandboxes();
+  const previewId = page && sandboxes ? previewLibraryId(sandboxes.items, (failed && failed.url) || (web && web.url) || tab.url) : null;
+  const previewRow = previewId && sandboxes.library ? sandboxes.library.find((row) => row.id === previewId) || null : null;
+  const [waits, setWaits] = React.useState({}); // tab id → when its preview's first page began to be waited for
+  const [now, setNow] = React.useState(() => Date.now());
+  const waitSince = waits[tab.id] || 0;
+  const wait = previewWait({ preview: !!previewId, web, since: waitSince, now: Math.max(now, waitSince) });
+  const showing = visible && page && !failed && !occluded && !wait;
   usePreviewTouch((web && web.url) || tab.url, visible && page); // a repository's live preview in use stays awake
   // Where the tab is, as the address field shows it: a file by its path (a docx too, though a page made from it is shown).
   const shownUrl = pdf ? (pdf.input || pdf.url) : tab.file && tab.file.path ? tab.file.path : tab.url;
@@ -710,7 +727,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   React.useLayoutEffect(() => {
     let cancelled = false;
     if (!showing) {
-      quiet(api.browserHide({ snapshot: visible && page && !failed && occluded }).then((picture) => { if (!cancelled) setSnapshot(picture || null); }));
+      quiet(api.browserHide({ snapshot: visible && page && !failed && !wait && occluded }).then((picture) => { if (!cancelled) setSnapshot(picture || null); }));
       return () => { cancelled = true; };
     }
     const slot = slotRef.current;
@@ -735,6 +752,32 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     const timer = setTimeout(() => quiet(api.browserCommand(tab.id, 'reload')), RETRY_MS);
     return () => clearTimeout(timer);
   }, [visible, k.kind, failed, tab.id]);
+
+  // A preview's first page: the wait starts when its tab is in front, a clock runs while it lasts ("Waking…" from the
+  // click, Couldn't load after a minute), and a failed load is tried again every few seconds, never over one still on its way.
+  const drawn = !!(web && web.drawn);
+  React.useEffect(() => {
+    if (previewId && !drawn && !waitSince) setWaits((current) => ({ ...current, [tab.id]: Date.now() }));
+  }, [previewId, drawn, waitSince, tab.id]);
+  const ticking = !!previewId && !drawn && !!waitSince && wait !== 'failed' && visible;
+  React.useEffect(() => {
+    if (!ticking) return undefined;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(timer);
+  }, [ticking]);
+  React.useEffect(() => {
+    if (!visible || wait !== 'waking' || !failed || (web && web.loading)) return undefined;
+    const timer = setTimeout(() => quiet(api.browserCommand(tab.id, 'reload')), WAKE_RETRY_MS);
+    return () => clearTimeout(timer);
+  }, [visible, wait, failed, web && web.loading, tab.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Retry from Couldn't load: the wait starts over and the page is asked for again.
+  const retryPreview = () => {
+    setWaits((current) => ({ ...current, [tab.id]: Date.now() }));
+    setNow(Date.now());
+    const target = (failed && failed.url) || (web && web.url) || tab.url;
+    if (target && !/^about:/i.test(target)) load(tab.id, target);
+  };
 
   // Back and forward are the page's own history; from a pdf, the page that led to it, and forward from there is the pdf again.
   const canBack = pdf ? pdf.under !== 'about:blank' || !!(web && web.url) : page ? !!(web && web.canGoBack) : !!(web && web.url);
@@ -1138,8 +1181,23 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
         {page && (
           <div style={{ flex: 1, minHeight: 0, display: 'flex', justifyContent: 'center', background: '#f2f2f2', overflow: 'hidden' }}>
             <div ref={slotRef} data-browser-slot="1" style={{ ...slotStyle, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
-              {failed ? (
-                <div style={{ position: 'absolute', inset: 0, background: '#fafafa' }}><Plain title={stripScheme(failed.url || tab.url)} detail={failed.description || `error ${failed.code}`} /></div>
+              {wait ? (
+                <div data-stage-wait={wait} style={{ position: 'absolute', inset: 0, background: '#fafafa' }}>
+                  {wait === 'waking' ? (
+                    <Plain title={previewName(previewRow) ? `Waking ${previewName(previewRow)}'s sandbox…` : 'Waking the sandbox…'} detail="It was asleep — this can take a few seconds." prose />
+                  ) : (
+                    <Plain title={previewName(previewRow) ? `Couldn't load ${previewName(previewRow)}'s preview` : "Couldn't load the preview"} detail="The sandbox didn't answer. It may still be starting, or its app has stopped." prose>
+                      <PlainAction primary onClick={retryPreview}>Retry</PlainAction>
+                      {previewRow && sandboxes.openBuild && <PlainAction onClick={(event) => sandboxes.openBuild(previewRow, event.currentTarget)}>Build details</PlainAction>}
+                    </Plain>
+                  )}
+                </div>
+              ) : failed ? (
+                <div style={{ position: 'absolute', inset: 0, background: '#fafafa' }}>
+                  <Plain title={stripScheme(failed.url || tab.url)} detail={failed.description || `error ${failed.code}`}>
+                    <PlainAction onClick={() => quiet(api.browserCommand(tab.id, 'reload'))}>Retry</PlainAction>
+                  </Plain>
+                </div>
               ) : snapshot && !showing ? (
                 <img src={snapshot} alt="" draggable={false} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'left top', userSelect: 'none' }} />
               ) : null}

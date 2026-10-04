@@ -174,6 +174,16 @@ test('startup automatically rebuilds saved stopped and failed runs', async (t) =
   assert.equal(f.starts.length, 2);
 });
 
+test('startup does not rebuild a desktop app\'s failed build, which would only fail again; Run still does (2026-10-04)', async (t) => {
+  const f = await fixture(t);
+  const previous = await f.store.create(f.repo.id);
+  await f.store.update(previous.id, { status: 'failed', error: 'Desktop apps are not supported yet: this repository is an Electron app, and a sandbox can show only web previews and terminals.' });
+  assert.equal((await f.manager.start(f.ctx, f.repo.id, { automatic: true })).id, previous.id);
+  assert.equal(f.starts.length, 0);
+  assert.equal((await f.manager.start(f.ctx, f.repo.id)).status, 'starting');
+  assert.equal(f.starts.length, 1);
+});
+
 test('startup reuses a live saved preview without switching panes', async (t) => {
   const f = await fixture(t);
   const saved = await f.store.create(f.repo.id);
@@ -494,6 +504,40 @@ test('a sandbox gone to sleep keeps its run ready: its worker leaves without a k
   assert.equal(f.starts.length, 1);
 });
 
+test('the bell hears whether a ready sandbox is asleep or running: from its probes, its going to sleep and a ping (2026-10-04)', async (t) => {
+  let answer = null;
+  const Sandbox = { async setTimeout() { if (answer) throw answer; } };
+  const f = await fixture(t, { Sandbox });
+  const { run, worker } = await readyRun(f);
+  assert.equal(f.events.at(-1).sandbox, 'running', 'ready is running');
+  const told = () => f.events.filter((event) => event.run.id === run.id).length;
+  // A probe that finds it as it was says nothing new.
+  let before = told();
+  await f.manager.poll();
+  assert.equal(told(), before);
+  // Asleep: its worker's paused event, then its probes.
+  f.setProbe({ state: 'paused' });
+  await worker.receive({ event: 'paused' });
+  worker.finish();
+  await worker.done;
+  assert.equal(f.events.at(-1).sandbox, 'asleep');
+  before = told();
+  await f.manager.poll();
+  assert.equal(told(), before, 'still asleep: nothing new');
+  // Woken by a request to its preview: the next probe says so.
+  f.setProbe({ state: 'ready' });
+  await f.manager.poll();
+  assert.equal(f.events.at(-1).sandbox, 'running');
+  assert.equal((await f.manager.list(f.ctx)).find((row) => row.run.id === run.id).sandbox, 'running');
+  // A ping E2B answers is a sandbox running; one it does not know (asleep or gone) says nothing.
+  f.setProbe({ state: 'paused' });
+  await f.manager.poll();
+  assert.equal(f.events.at(-1).sandbox, 'asleep');
+  answer = Object.assign(new Error('not found'), { name: 'SandboxNotFoundError' });
+  await f.manager.touch(f.ctx, f.repo.id);
+  assert.equal(f.events.at(-1).sandbox, 'asleep');
+});
+
 test('touch puts a ready sandbox\'s sleep 10 minutes away, marks it opened, and is throttled to once per 30 seconds', async (t) => {
   let clock = Date.parse('2026-10-02T12:00:00Z');
   const calls = [];
@@ -522,6 +566,45 @@ test('touch puts a ready sandbox\'s sleep 10 minutes away, marks it opened, and 
   assert.equal((await f.store.get(run.id)).status, 'ready');
   assert.ok(!f.controls.some((request) => request.command === 'kill'));
   assert.equal(f.starts.length, 1, 'no worker for a ping');
+});
+
+test('a workspace wakes its repositories\' sandboxes ahead of a click for 30 minutes, once a minute at most (2026-10-04)', async (t) => {
+  let clock = Date.parse('2026-10-04T12:00:00Z');
+  const calls = [], pings = [];
+  let answer = null;
+  const Sandbox = { async connect(id, options) { calls.push({ id, timeoutMs: options.timeoutMs, key: options.apiKey }); if (answer) throw answer; },
+    async setTimeout(id, ms) { pings.push(ms); } };
+  const f = await fixture(t, { Sandbox, now: () => clock });
+  await f.manager.wake(f.ctx, f.repo.id);
+  assert.equal(calls.length, 0, 'no run');
+  const { run, worker } = await readyRun(f);
+  f.setProbe({ state: 'paused' });
+  await worker.receive({ event: 'paused' });
+  worker.finish();
+  await worker.done;
+  assert.equal(f.events.at(-1).sandbox, 'asleep');
+  await f.manager.wake(f.ctx, f.repo.id);
+  assert.deepEqual(calls, [{ id: 'sb-sleepy', timeoutMs: 1_800_000, key: 'e2b_signed_in' }]);
+  assert.equal(f.events.at(-1).sandbox, 'running', 'the bell hears it woke');
+  assert.equal((await f.store.get(run.id)).last_opened_at ?? null, null, 'waking is not opening: the 7-day sweep still counts');
+  // Opened 5 minutes on: its ping keeps the 25 minutes left, not 10; after the half hour, pings are 10 minutes again.
+  clock += 5 * 60_000;
+  await f.manager.touch(f.ctx, f.repo.id);
+  assert.deepEqual(pings, [25 * 60_000]);
+  clock += 30_000;
+  await f.manager.wake(f.ctx, f.repo.id);
+  assert.equal(calls.length, 2, 'running: its sleep put 30 minutes off again');
+  clock += 30_000;
+  await f.manager.wake(f.ctx, f.repo.id);
+  assert.equal(calls.length, 2, 'once a minute at most');
+  clock += 31 * 60_000;
+  await f.manager.touch(f.ctx, f.repo.id);
+  assert.equal(pings.at(-1), 10 * 60_000);
+  answer = Object.assign(new Error('not found'), { name: 'SandboxNotFoundError' });
+  await f.manager.wake(f.ctx, f.repo.id);
+  assert.equal(calls.length, 3);
+  assert.equal((await f.store.get(run.id)).status, 'ready', 'gone is for the next poll to say');
+  assert.equal(f.starts.length, 1, 'no worker for a wake');
 });
 
 test('quitting puts ready previews to sleep instead of killing them, and still stops one being set up', async (t) => {

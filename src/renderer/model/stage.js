@@ -180,6 +180,24 @@ export function placeTab(tabs, activeIndex, key, { newTab = false } = {}) {
   return { append: true };
 }
 
+/** How long a preview's first page is waited for, retried every WAKE_RETRY_MS while it fails. */
+export const WAKE_MS = 60_000;
+export const WAKE_RETRY_MS = 3_000;
+
+/**
+ * What a preview's tab shows before its first page (2026-10-04: a sandbox asleep can take seconds, and its first load can
+ * fail while it wakes). `web` the tab's page state (main's browser:state, `drawn` once a page arrived), `since` when this
+ * wait began (0: it begins now), `now`. → 'waking' from the click on (the message; a failed load is retried meanwhile),
+ * 'failed' after WAKE_MS (Couldn't load, Retry), or null: the page as it is (a page drawn once, a tab that is no preview).
+ */
+export function previewWait({ preview, web, since, now }) {
+  if (!preview || (web && web.drawn)) return null;
+  return since && now - since >= WAKE_MS ? 'failed' : 'waking';
+}
+
+/** A sandbox preview's repository in a few words: "manifund" for manifund/manifund; '' when it is not known. */
+export const previewName = (row) => String((row && row.name) || '').split('/').filter(Boolean).pop() || '';
+
 /** Where a tab is closed from, which tab is in front afterwards (the one to its right, else to its left). */
 export function afterClose(count, activeIndex, closedIndex) {
   const left = count - 1;

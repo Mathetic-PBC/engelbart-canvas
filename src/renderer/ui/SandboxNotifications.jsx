@@ -1,23 +1,28 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { useSandboxes } from './SandboxProgress.jsx';
-import { availableBuildNotifications, canOpenPreview, canOpenTerminal, failureReason, runKind } from '../model/sandbox-notifications.js';
+import { availableBuildNotifications, canOpenPreview, canOpenTerminal, failureReason, runKind, sandboxStatus } from '../model/sandbox-notifications.js';
 import './sandbox-notifications.css';
 
-// A failed build says so and, at most, why in a few words (failureReason): its whole error is in its build details.
-export function BuildNotification({ notification, run, repo, busy, onRepository, onBuild, onOpen, onTerminal, onClear }) {
+// A failed build says so and, at most, why in a few words (failureReason): its whole error is in its build details. A
+// finished one says whether its sandbox is asleep or running (sandboxStatus), so a wait to wake it is no surprise.
+export function BuildNotification({ notification, run, sandbox = null, repo, busy, onRepository, onBuild, onOpen, onTerminal, onClear }) {
   const name = repo?.name || 'Repository';
   const building = run.status === 'starting', failed = run.status === 'failed';
   const canOpen = canOpenPreview(run), canTerminal = canOpenTerminal(run) && !!onTerminal;
   const reason = failureReason(run);
+  const status = sandboxStatus(run, sandbox);
   const visit = event => { event.preventDefault(); onRepository(repo); };
   return <div className="notification-row" data-build-status={run.status}>
     <div className="notification-entry">
       <div className="notification-copy">
         {repo?.url ? <a className="notification-repo" href={repo.url} aria-label={`Open ${name} on GitHub in Stage`} onClick={visit}
           onAuxClick={event => { if (event.button === 1) visit(event); }}>{name}</a> : <span className="notification-repo">{name}</span>}
-        {!building && <button type="button" className="notification-description" aria-label={`${failed ? 'Build failed' : 'Build finished'} — view build details for ${name}`} aria-haspopup="dialog" disabled={!repo || !onBuild}
-          onClick={() => onBuild(repo)}>{failed ? 'Build failed' : 'Build finished'}</button>}
+        {!building && <span className="notification-status-line">
+          <button type="button" className="notification-description" aria-label={`${failed ? 'Build failed' : 'Build finished'} — view build details for ${name}`} aria-haspopup="dialog" disabled={!repo || !onBuild}
+            onClick={() => onBuild(repo)}>{failed ? 'Build failed' : 'Build finished'}</button>
+          {status && <span className="notification-sandbox" data-sandbox={sandbox} title={sandbox === 'asleep' ? 'Opening it wakes it, which can take a few seconds' : 'Its sandbox is awake'}>{status}</span>}
+        </span>}
         {failed && reason && <span className="notification-detail">{reason}</span>}
         {run.status === 'ready' && runKind(run) !== 'terminal' && !canOpen && <span className="notification-detail">No web preview</span>}
       </div>
@@ -25,7 +30,7 @@ export function BuildNotification({ notification, run, repo, busy, onRepository,
         {building && <button type="button" className="notification-build" aria-label={`View build details for ${name}`} aria-haspopup="dialog" disabled={!repo || !onBuild}
           onClick={() => onBuild(repo)}>Building…</button>}
         {canOpen && <button type="button" className="notification-open" aria-label={`Open live preview for ${name}`} disabled={busy} onClick={() => onOpen(run)}>Open live ↗</button>}
-        {canTerminal && <button type="button" className="notification-open notification-terminal" aria-label={`Open terminal for ${name}`} disabled={busy} onClick={() => onTerminal(run)}>Open terminal</button>}
+        {canTerminal && <button type="button" className="notification-open notification-terminal" aria-label={`Open terminal for ${name}`} disabled={busy} onClick={() => onTerminal(run)}>Open terminal ↗</button>}
       </div>}
     </div>
     <button type="button" className="notification-dismiss" aria-label={`Clear notification for ${name}`} title="Clear notification" onClick={() => onClear([notification.id])}>×</button>
@@ -100,7 +105,7 @@ export function NotificationBell({ notifications, items, library, markRead, clea
           const run = items[notification.libraryId]?.run;
           const repo = library.find(row => row.id === notification.libraryId);
           const use = action => { markRead([notification.id]); close(); action(); };
-          return <BuildNotification key={notification.id} notification={notification} run={run} repo={repo} busy={!!busy[run.id]} onClear={clear}
+          return <BuildNotification key={notification.id} notification={notification} run={run} sandbox={items[notification.libraryId]?.sandbox ?? null} repo={repo} busy={!!busy[run.id]} onClear={clear}
             onRepository={row => use(() => openRepository(row))} onBuild={row => use(() => openBuild(row, trigger.current))}
             onOpen={value => use(() => openPreview(value))} onTerminal={openTerminal ? value => use(() => openTerminal(value)) : undefined} />;
         })}
