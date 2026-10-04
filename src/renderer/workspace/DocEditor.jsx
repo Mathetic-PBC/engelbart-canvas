@@ -25,12 +25,15 @@
 //     props.onSavePaper. Drawn, never written: the line stays as it came.
 //   * the follow-up field has the @ menu too (2026-10-02): `@` opens it under the field's caret and a pick writes the token
 //     a document line would; Bart, Brainstorm, Discover and Note are left out, since the field already asks its agent.
+//   * Edit (2026-10-03): an answered question's foot has Edit, which makes the question an ordinary agent line again, as it
+//     stands, with its answer dimmed under it. Enter asks it again in place of that answer, as Regenerate does, and the turns
+//     after it in its thread go; one undo brings all of it back. Escape, or the caret or a click going elsewhere, puts it back.
 //   * where a document was scrolled to is kept per workspace (props.viewOf / props.onView, 2026-09-22), apart from the
 //     caret: coming back to a document shows what was on screen, not where the last edit was.
 import React from 'react';
 import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, threads, turnText, wsMention, mentionAt, agentOf, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE } from '../model/doc.js';
 import { fieldRows, isVerbRow } from '../model/rail.js';
-import { readFlags, readQuestion, readDiscover, withChoice, withMode, discoverSpans, modelOf, effortOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
+import { readFlags, readQuestion, readDiscover, withChoice, withMode, discoverSpans, modelOf, effortOf, buildRequestOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
 import { SKIPPED, MAP_GROUPS, cardOfAnswer, questionOf, isChoice, answerLine, withWrap, readAnswer, recapParts, recapLine } from '../../main/bart/card.cjs';
 import BartPicker from './BartPicker.jsx';
 import DiscoverLevels, { LEVEL_LABELS } from './DiscoverLevels.jsx';
@@ -98,6 +101,8 @@ const CARD_CSS = '.bart-ic{display:inline-flex;align-items:center;justify-conten
   + '.bs-opt:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(0,112,243,.18)}'
   + '.bs-mark{flex:none;box-sizing:border-box;width:14px;height:14px;margin-top:3px;border:1.5px solid #c9c9c9;border-radius:50%;background:#fff}.bs-mark[data-square]{border-radius:4px}'
   + '[aria-checked="true"]>.bs-mark{border-color:#0070f3;background:#0070f3;box-shadow:inset 0 0 0 2.5px #fff}'
+  // The answer under a question being edited (2026-10-03): its contents faded, its card's grey as it was.
+  + '[data-dim]>*{opacity:.45}'
   + '.bs-why{display:block;margin-top:2px;font-size:13px;line-height:1.45;color:#8f8f8f}'
   + '.bs-field{display:block;width:100%;box-sizing:border-box;margin:0;padding:8px 10px;border:1px solid #eaeaea;border-radius:8px;background:#fff;outline:none;resize:none;font:15px/1.5 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text}'
   + '.bs-field:focus{border-color:#c9c9c9}.bs-field::placeholder{color:#8f8f8f}'
@@ -111,6 +116,7 @@ const icon = (paths, size = 16, width = 1.5, caps = 'round') => `<svg width="${s
 const ICON = {
   copy: icon('<rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>'),
   regenerate: icon('<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path>'),
+  edit: icon('<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"></path><path d="m15 5 4 4"></path>'),
   collapse: icon('<path d="m7 20 5-5 5 5"></path><path d="m7 4 5 5 5-5"></path>'),
   expand: icon('<path d="m7 15 5 5 5-5"></path><path d="m7 9 5-5 5 5"></path>'),
   trash: icon('<path d="M3 6h18"></path><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"></path><path d="M19 6v13a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path>'),
@@ -170,6 +176,11 @@ export default class DocEditor extends React.Component {
   buildText = new Map(); buildImages = new Map(); buildOpen = new Set(); buildSteps = new Set(); buildScroll = new Map(); buildDrawn = new Map();
   // An @discover guide's papers being saved, by address: the button's state when it was clicked (it stays disabled on it).
   saving = new Map();
+  // The question being edited in place (2026-10-03): { q, original, under, mark } — its line, what it held, the lines of
+  // its answer (how it is found again when lines above it change) and how long undo was when it began. And, after edit
+  // mode ended by putting the question back, the document as this editor reads it until the parent hands it back
+  // ({ text, from }: while props.text is still `from`), so what the click that ended it does acts on the question as it was.
+  editing = null; textNow = null;
   scrollRef = React.createRef();
   parsedCache = new WeakMap();
   // Where the open document was scrolled to: reported (onView) a moment after scrolling stops and whenever it is left;
@@ -218,7 +229,8 @@ export default class DocEditor extends React.Component {
       dragover: (e) => { if (inEd(e)) e.preventDefault(); },
       drop: (e) => { if (inEd(e)) e.preventDefault(); },
       // Switching to another app blurs the page too; that is not leaving the line, and redrawing it would drop a selection.
-      focusout: (e) => { if (inEd(e) && document.hasFocus() && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-mention-menu]'))) this.setState({ activeLine: null, mention: null }); },
+      // Leaving it otherwise puts back a question being edited (2026-10-03).
+      focusout: (e) => { if (inEd(e) && document.hasFocus() && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-mention-menu]'))) { this.cancelEdit(); this.setState({ activeLine: null, mention: null }); } },
       compositionstart: () => { this.composing = true; },
       compositionend: (e) => { this.composing = false; if (inEd(e) && !inFollow(e)) this.editorInput(); },
     };
@@ -241,11 +253,13 @@ export default class DocEditor extends React.Component {
 
   componentDidUpdate(prevProps) {
     if (prevProps.docKey !== this.props.docKey) {
+      this.dropEdit(prevProps);
       this.wantView = true; this.settle = null;
       this.history = []; this.future = []; this.caret = null; this.lastHtml = ''; this.lastKey = null; this.selRaw = null; this.openKey = '';
       const s = this.state;
       if (s.activeLine != null || s.mention || s.pop || s.picker) { this.setState({ activeLine: null, mention: null, pop: null, picker: null }); return; }
     }
+    if (this.editing && prevProps.text !== this.props.text) this.trackEdit();
     // Progress of a run arrives many times a second. It changes pending rows and Build cards only, and those are replaced
     // where they stand: the rest of the editor, the caret and a selection in it are not touched.
     const asked = prevProps.asks !== this.props.asks, built = prevProps.builds !== this.props.builds || prevProps.buildProgress !== this.props.buildProgress || prevProps.buildDiffs !== this.props.buildDiffs;
@@ -258,6 +272,7 @@ export default class DocEditor extends React.Component {
 
   componentWillUnmount() {
     if (this.lastKey === this.key()) this.reportView(this.props, true);
+    this.dropEdit(this.props);
     this.mounted = false; clearTimeout(this.pickerT); clearTimeout(this.viewT);
     if (this.resizeObs) this.resizeObs.disconnect();
     window.removeEventListener('resize', this.fitFollows);
@@ -344,14 +359,21 @@ export default class DocEditor extends React.Component {
 
   /* ---------------------------------------------------------------- document access */
   key() { return this.props.docKey; }
-  lines() { return String(this.props.text ?? '').split('\n'); }
+  docText() {
+    const now = this.textNow, text = String(this.props.text ?? '');
+    if (now && now.from === text) return now.text;
+    this.textNow = null; return text;
+  }
+  lines() { return this.docText().split('\n'); }
   // Each line read in place (a line inside a code block is code). Kept per array, so a loop over one array reads it once.
   parsedOf(ls) { let ps = this.parsedCache.get(ls); if (!ps) { ps = parseLines(ls); this.parsedCache.set(ls, ps); } return ps; }
   editorEl() { return this.edRef.current; }
   // Lines the person cannot type in: an @bart line once something stands under it, a run at work, the closing line of an
   // answer (it is the card's foot), an answer folded away, the lines of an @brainstorm card, and the prototype's `> `
-  // replies. The text of an answer can be edited (2026-09-21): it is a drawn-prefix line, as a bullet is.
+  // replies. The text of an answer can be edited (2026-09-21): it is a drawn-prefix line, as a bullet is. So is a question
+  // in edit mode (2026-10-03), until Enter, Escape or the caret leaving it ends that.
   lockedAt(ls, i) {
+    if (this.editing && this.editing.q === i) return false;
     const ps = this.parsedOf(ls), p = ps[i] || parseLine('');
     if (p.type === 'build') return true;
     if (p.type === 'reply') return p.folded || this.cardsOf(ls).lines.has(i) || (ATTRIBUTION_RE.test(p.text) && (ps[i + 1] || parseLine('')).type !== 'reply');
@@ -384,11 +406,14 @@ export default class DocEditor extends React.Component {
   }
   timer(fn, ms) { const id = setTimeout(() => { this.timers.delete(id); if (this.mounted) fn(); }, ms); this.timers.add(id); return id; }
 
-  setDoc(text, caret) {
-    const prev = String(this.props.text ?? '');
+  // `undo` (2026-10-03): an edited question asked again is one step back to before it was edited, whatever was typed
+  // into it meanwhile: { text, caret, mark }, the steps from `mark` on given way to that one.
+  setDoc(text, caret, undo = null) {
+    const prev = this.docText();
     if (prev !== text) {
-      this.history.push({ text: prev, caret: this.caretInfo()?.anchor || null });
-      if (this.history.length > 200) this.history.shift();
+      if (undo) this.history.length = Math.min(this.history.length, undo.mark);
+      this.history.push(undo ? { text: undo.text, caret: undo.caret } : { text: prev, caret: this.caretInfo()?.anchor || null });
+      if (this.history.length > 200) { this.history.shift(); if (this.editing) this.editing.mark = Math.max(0, this.editing.mark - 1); }
       this.future = [];
       this.props.onChange(text);
     }
@@ -399,14 +424,16 @@ export default class DocEditor extends React.Component {
     this.setLines((ls) => { const ps = this.parsedOf(ls); return ls.map((l, j) => (j !== i ? l : sameLine(ps[j], text))); }, caret);
   }
   undo = () => {
+    // A question in edit mode with nothing typed into it (any more): ⌘Z takes it out of edit mode.
+    if (this.editing && this.history.length <= this.editing.mark) { this.cancelEdit(true); return; }
     const h = this.history.pop(); if (!h) return;
-    this.future.push({ text: String(this.props.text ?? '') });
+    this.future.push({ text: this.docText() });
     this.props.onChange(h.text);
     if (h.caret) this.caret = { line: h.caret.line, offset: h.caret.offset };
   };
   redo = () => {
     const f = this.future.pop(); if (!f) return;
-    this.history.push({ text: String(this.props.text ?? ''), caret: null });
+    this.history.push({ text: this.docText(), caret: null });
     this.props.onChange(f.text);
   };
 
@@ -495,17 +522,18 @@ export default class DocEditor extends React.Component {
       const agent = agentOf(p), plain = oneModel(agent);
       const read = models && !plain ? readQuestion(p.text, models) : null, ready = plain || !!(read ? read.question : p.text).trim();
       // The question opens its card, or follows an answer inside one. Once it is answered its chip goes: the foot says who answered.
-      const top = !at || at.top, closes = !at || at.closes;
+      // Being edited (2026-10-03), it has its chip and send again, as an unasked line has.
+      const top = !at || at.top, closes = !at || at.closes, editing = !!this.editing && this.editing.q === i, chipped = closes || editing;
       const send = `<button contenteditable="false" data-act="ask" data-row="${i}" aria-label="Send" ${ready ? '' : 'disabled'} style="user-select:none;flex:none;width:26px;height:26px;padding:0;border:0;border-radius:50%;display:flex;align-items:center;justify-content:center;background:${ready ? '#0070f3' : '#eaeaea'};color:${ready ? '#fff' : '#8f8f8f'};cursor:${ready ? 'pointer' : 'default'};transition:background 160ms"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="square"><path d="M8 13.5V3.2M3.6 7.4 8 3l4.4 4.4"/></svg></button>`;
       // The chip: what the question starts on, and (hovered) where that is changed. The arrow sits inside it, one unit.
       const open = !!(this.state.picker && this.state.picker.kind === 'line' && this.state.picker.i === i);
       // An unanswered @discover line's chip (2026-10-03) names its level instead, the one it would run at now (carried from
       // an earlier turn of its exchange when the line names none), with its provider when that is not the default ("Codex ·
       // Deep"), or the model and effort a flag pins it to; its menu is DiscoverLevels. @brainstorm's runs on its one model: no chip.
-      const label = read ? `${read.steps[0].name} ${EFFORT_LABELS[read.steps[0].effort] || read.steps[0].effort}` : models && agent === 'discover' && closes ? this.discoverLabel(i) : null;
+      const label = read ? `${read.steps[0].name} ${EFFORT_LABELS[read.steps[0].effort] || read.steps[0].effort}` : models && agent === 'discover' && chipped ? this.discoverLabel(i) : null;
       const chip = label ? `<span contenteditable="false" data-chip="${i}" style="user-select:none;flex:none;display:inline-flex;align-items:center;gap:8px;margin:-2px -6px 0 0;padding:2px 2px 2px 12px;border:1px solid #eaeaea;border-radius:999px;background:#fff"><span data-act="pick" data-row="${i}" role="button" aria-haspopup="dialog" aria-expanded="${open}" style="display:inline-flex;align-items:center;gap:7px;height:26px;font:13px/1 var(--font-sans);color:#4d4d4d;cursor:default;white-space:nowrap">${esc(label)}<span style="display:inline-flex;align-items:center;justify-content:center;width:10px;height:12px;font:12px/1 var(--font-sans);color:#8f8f8f"><span style="position:relative;top:${open ? '3px' : '-3px'}">${open ? '⌃' : '⌄'}</span></span></span>${send}</span>` : `<span contenteditable="false" style="flex:none;margin-top:3px">${send}</span>`;
-      return `<div ${raw} ${locked ? 'contenteditable="false" data-readonly="1"' : ''} style="display:flex;align-items:flex-start;gap:10px;padding:${top ? 12 : 10}px 16px ${closes ? '10px' : '4px'};min-height:35px;background:#fafafa;border-radius:${radius(top, closes)};margin-bottom:${closes ? '14px' : '0'};font-size:16px;line-height:1.6;${locked ? 'user-select:text;cursor:default' : ''}"><span class="t" style="flex:1;min-width:0">${content || '<br>'}</span>`
-        + (closes ? chip : '')
+      return `<div ${raw} ${locked ? 'contenteditable="false" data-readonly="1"' : ''}${editing ? ' data-editing="1"' : ''} style="display:flex;align-items:flex-start;gap:10px;padding:${top ? 12 : 10}px 16px ${closes ? '10px' : '4px'};min-height:35px;background:#fafafa;border-radius:${radius(top, closes)};margin-bottom:${closes ? '14px' : '0'};font-size:16px;line-height:1.6;${locked ? 'user-select:text;cursor:default' : ''}"><span class="t" style="flex:1;min-width:0">${content || '<br>'}</span>`
+        + (chipped ? chip : '')
         + '</div>';
     }
     if (p.type === 'pending') {
@@ -546,7 +574,7 @@ export default class DocEditor extends React.Component {
         + '</div></div>';
     }
     if (p.type === 'reply') {
-      if (at && at.role === 'foot') return this.footHtml({ raw, q: at.turn.q, text: p.text.slice(1, -1), folded: at.turn.folded, closes: at.closes, plain: oneModel(at.agent) });
+      if (at && at.role === 'foot') return this.footHtml({ raw, q: at.turn.q, text: p.text.slice(1, -1), folded: at.turn.folded, closes: at.closes, plain: oneModel(at.agent), edit: at.editable });
       // Folded away, or the empty line the runner leaves before the closing line: in the document, not on the page.
       if (p.folded || (at && (at.gap || at.underCard))) return `<div ${raw} contenteditable="false" data-readonly="1" style="display:none"></div>`;
       if (at && at.card) return this.cardHtml(raw, at.card);
@@ -943,26 +971,32 @@ export default class DocEditor extends React.Component {
   // Where every line of an @bart card stands in it: which turn it belongs to, whether it opens or closes the card, and
   // what is drawn after it that is not a line (a foot for an answer that has no closing line; the follow-up field).
   // `agent` is the turn's; an @brainstorm answer that is a card is drawn on its first line (`card`) and the rest of its
-  // lines are `underCard`. A live card is answered on the card itself, so its thread has no follow-up field.
+  // lines are `underCard`. A live card is answered on the card itself, so its thread has no follow-up field. `editable`:
+  // whether the turn's question can be edited in place (canEdit).
   layout(ls) {
     const at = new Map(), ps = this.parsedOf(ls), cards = this.cardsOf(ls);
     for (const thread of threads(ls, ps)) {
       const end = thread.turns[thread.turns.length - 1], endCard = cards.byQ.get(end.q);
       const follow = end.answered && !end.pending && !end.folded && !!this.props.onAsk && !(endCard && endCard.live);
       for (const turn of thread.turns) {
-        const agent = agentOf(ps[turn.q]), card = cards.byQ.get(turn.q);
-        at.set(turn.q, { thread, turn, agent, role: 'question', top: turn.q === thread.from, closes: !turn.answered });
+        const agent = agentOf(ps[turn.q]), card = cards.byQ.get(turn.q), editable = this.canEdit(ps[turn.q], turn, card);
+        at.set(turn.q, { thread, turn, agent, role: 'question', top: turn.q === thread.from, closes: !turn.answered, editable });
         const footless = turn.answered && !turn.pending && turn.foot < 0, tail = turn === end;
         const gap = turn.foot > turn.from && parseLine(ls[turn.foot - 1]).text === '' ? turn.foot - 1 : -1;
         const lastBody = (turn.foot >= 0 ? turn.foot : turn.to + 1) - (gap >= 0 ? 2 : 1);
         for (let i = turn.from; i <= turn.to; i++) {
           const role = i === turn.foot ? 'foot' : parseLine(ls[i]).type === 'pending' ? 'pending' : 'answer', ends = i === turn.to;
           const drawn = card && i <= card.last ? { card: i === turn.from ? card : null, underCard: i !== turn.from } : {};
-          at.set(i, { thread, turn, agent, role, gap: i === gap, first: i === turn.from, lastBody: i === lastBody, closes: ends && tail && !follow && !footless, footAfter: ends && footless, followAfter: ends && tail && follow, tail, ...drawn });
+          at.set(i, { thread, turn, agent, role, gap: i === gap, first: i === turn.from, lastBody: i === lastBody, closes: ends && tail && !follow && !footless, footAfter: ends && footless, followAfter: ends && tail && follow, tail, editable, ...drawn });
         }
       }
     }
     return at;
+  }
+  // Whether a turn's question can be edited in place (2026-10-03): answered and not at work, in an editor that can ask and
+  // be written in; not a Build (`@bart --build`), and not a turn whose answer is a card (cardsOf).
+  canEdit(p, turn, card) {
+    return !!this.props.onAsk && !this.props.readOnly && turn.answered && !turn.pending && !card && !buildRequestOf({ agent: agentOf(p), text: p.text });
   }
   /* ---------------------------------------------------------------- @brainstorm cards (2026-09-30) */
   // One card on the answer's grey: what it says, then a white box with the question, its options (a round mark for one,
@@ -1071,13 +1105,15 @@ export default class DocEditor extends React.Component {
   // Icons, each with its name under it on hover; Regenerate has none, because hovering it opens the selector instead.
   // `raw` is set when the answer's closing line is this foot; an answer without one (a run that failed) gets the same foot.
   // `plain`: an @brainstorm or @discover turn, whose Regenerate asks again on its one model, with no selector (BS-08).
-  footHtml({ raw, q, text, folded, closes, plain = false }) {
+  // `edit` (2026-10-03): Edit beside Regenerate, which makes the question editable in place (startEdit).
+  footHtml({ raw, q, text, folded, closes, plain = false, edit = false }) {
     const wrap = (inner, extra = '') => `<span style="flex:none;position:relative;display:inline-flex;${extra}">${inner}</span>`;
     const tip = (label, side) => `<span class="bart-tip" style="${side}:0">${label}</span>`;
     const copied = this.copied === `bart${q}`;
     return `<div ${raw || ''} contenteditable="false" data-readonly="1" data-foot="${q}" style="user-select:none;cursor:default;display:flex;align-items:center;gap:4px;padding:8px 12px 10px;background:#fafafa;border-radius:${radius(false, closes)};margin-bottom:${closes ? '14px' : '0'}">`
       + wrap(`<button class="bart-ic" data-act="copybart" data-turn="${q}" aria-label="Copy" ${copied ? 'style="color:#8f8f8f"' : ''}>${ICON.copy}</button>${tip(copied ? 'Copied' : 'Copy', 'left')}`)
-      + wrap(plain ? `<button class="bart-ic" data-act="regen" data-plain="1" data-turn="${q}" aria-label="Regenerate">${ICON.regenerate}</button>${tip('Regenerate', 'left')}` : `<button class="bart-ic" data-act="regen" data-turn="${q}" aria-label="Regenerate" aria-haspopup="dialog">${ICON.regenerate}</button>`, 'margin-right:auto;')
+      + wrap(plain ? `<button class="bart-ic" data-act="regen" data-plain="1" data-turn="${q}" aria-label="Regenerate">${ICON.regenerate}</button>${tip('Regenerate', 'left')}` : `<button class="bart-ic" data-act="regen" data-turn="${q}" aria-label="Regenerate" aria-haspopup="dialog">${ICON.regenerate}</button>`, edit ? '' : 'margin-right:auto;')
+      + (edit ? wrap(`<button class="bart-ic" data-act="editturn" data-turn="${q}" aria-label="Edit">${ICON.edit}</button>${tip('Edit', 'left')}`, 'margin-right:auto;') : '')
       + `<span class="t" style="flex:0 1 auto;min-width:0;margin-right:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12px/1.6 var(--font-sans);color:#8f8f8f">${esc(text || '')}</span>`
       + wrap(`<button class="bart-ic" data-act="fold" data-turn="${q}" aria-label="${folded ? 'Expand' : 'Collapse'}" aria-expanded="${!folded}">${folded ? ICON.expand : ICON.collapse}</button>${tip(folded ? 'Expand' : 'Collapse', 'right')}`)
       + wrap(`<button class="bart-ic" data-danger="1" data-act="dropturn" data-turn="${q}" aria-label="Delete">${ICON.trash}</button>${tip('Delete', 'right')}`)
@@ -1143,11 +1179,13 @@ export default class DocEditor extends React.Component {
     const ready = input.dataset.empty === '1' || !!input.value.trim(); send.style.background = ready ? '#0070f3' : '#f2f2f2'; send.style.color = ready ? '#fff' : '#8f8f8f';
   }
   editorHtml() {
-    const ls = this.lines(), ps = this.parsedOf(ls), active = this.state.activeLine, at = this.layout(ls); let out = '', group = [];
+    const ls = this.lines(), ps = this.parsedOf(ls), active = this.state.activeLine, at = this.layout(ls), editing = this.editing; let out = '', group = [];
     ls.forEach((line, i) => {
       const p = ps[i], where = at.get(i);
-      out += this.lineHtml(i, line, p, active === i, p.type === 'todo' && !group.length, where, this.lockedAt(ls, i));
-      if (where && where.footAfter) out += this.footHtml({ q: where.turn.q, text: '', folded: where.turn.folded, closes: where.tail && !where.followAfter, plain: oneModel(where.agent) });
+      // Under a question being edited (2026-10-03), its answer and the answer's foot are dimmed.
+      const dim = !!editing && !!where && where.turn.q === editing.q && i !== editing.q, dimmed = (html) => (dim ? html.replace('<div ', '<div data-dim="1" ') : html);
+      out += dimmed(this.lineHtml(i, line, p, active === i, p.type === 'todo' && !group.length, where, this.lockedAt(ls, i)));
+      if (where && where.footAfter) out += dimmed(this.footHtml({ q: where.turn.q, text: '', folded: where.turn.folded, closes: where.tail && !where.followAfter, plain: oneModel(where.agent), edit: where.editable }));
       if (where && where.followAfter) out += this.followHtml(ls, where.thread);
       if (p.type === 'todo') group.push({ i, p });
       const next = ls[i + 1];
@@ -1266,7 +1304,9 @@ export default class DocEditor extends React.Component {
     const a = lineOf(r.startContainer), b = lineOf(r.endContainer); return a == null || b == null ? null : [Math.min(a, b), Math.max(a, b)];
   }
   onSel() {
-    if (this.syncing) return; const c = this.caretInfo(); if (!c) return;
+    if (this.syncing) return;
+    if (this.editing && !this.held) this.leftEdit();
+    const c = this.caretInfo(); if (!c) return;
     const ls = this.lines(); if (this.lockedAt(ls, c.anchor.line)) return;
     // A selection across lines (⌘A, shift-click) is left to the browser; the next input rebuilds whatever lines survive it.
     if (c.anchor.line !== c.focus.line || this.multiLine()) { this.selRaw = { line: c.anchor.line, a: c.anchor.offset, b: c.anchor.offset, multi: true, lines: this.selLines() }; return; }
@@ -1371,6 +1411,13 @@ export default class DocEditor extends React.Component {
       if (e.key === 'Escape') { e.preventDefault(); this.setState({ mention: null }); return; }
     }
     if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); if (e.shiftKey) this.redo(); else this.undo(); return; }
+    // The question being edited (2026-10-03): Enter asks it again and Shift+Enter adds no line, Escape puts it back, and it
+    // is never joined to the line above or below it.
+    if (this.editing && same && i === this.editing.q) {
+      if (e.key === 'Enter') { if (e.isComposing) return; e.preventDefault(); if (!e.shiftKey && !mod) this.commitEdit(); return; }
+      if (e.key === 'Escape') { e.preventDefault(); this.cancelEdit(true); return; }
+      if ((e.key === 'Backspace' && collapsed && a === 0) || (e.key === 'Delete' && collapsed && a === cur.length)) { e.preventDefault(); return; }
+    }
     if (mod && same && e.key.toLowerCase() === 'b') { e.preventDefault(); this.wrap(i, cur, a, b, '**'); return; }
     if (mod && same && e.key.toLowerCase() === 'i') { e.preventDefault(); this.wrap(i, cur, a, b, '*'); return; }
     if (mod && same && e.key.toLowerCase() === 'k') { e.preventDefault(); this.link(i, cur, a, b); return; }
@@ -1477,7 +1524,7 @@ export default class DocEditor extends React.Component {
     if (parts.length === 1) { this.writeText(i, cur.slice(0, a) + text + cur.slice(b), { line: i, offset: a + text.length }); return; }
     // A question is one line (2026-10-02): several lines pasted into an @bart, @brainstorm or @discover line that can still
     // be asked join into it, and so does a paste that starts one on an empty line. Anywhere else the lines stay lines.
-    const asks = p.type === 'bart' ? !this.lockedAt(ls, i) : p.type === 'p' && !line && BART_RE.test(parts[0].trimStart());
+    const asks = (!!this.editing && this.editing.q === i) || (p.type === 'bart' ? !this.lockedAt(ls, i) : p.type === 'p' && !line && BART_RE.test(parts[0].trimStart()));
     if (asks) { const flat = flattenPaste(text); this.writeText(i, cur.slice(0, a) + flat + cur.slice(b), { line: i, offset: a + flat.length }); return; }
     const first = cur.slice(0, a) + parts[0], last = parts[parts.length - 1] + cur.slice(b);
     const inAnswer = (text) => (p.type === 'reply' ? sameLine(p, text) : text);
@@ -1502,8 +1549,11 @@ export default class DocEditor extends React.Component {
   editorClick = (e) => {
     // The editor's own empty space below the last line. A drag from one line to another also ends here (2026-10-02: Chromium
     // clicks what holds both ends), and putting the caret at the end lost its highlight.
-    if (e.target === this.editorEl()) { if (this.downOnRoot && getSelection().isCollapsed) this.focusEnd(); return; }
+    if (e.target === this.editorEl()) { if (this.downOnRoot && getSelection().isCollapsed) { this.cancelEdit(); this.focusEnd(); } return; }
     const act = e.target.closest('[data-act]');
+    // A click anywhere but on the question being edited puts it back first (2026-10-03); what was clicked then does what it
+    // does, on the document as it was. Its own Edit button leaves it being edited.
+    if (this.editing && !this.inEdit(e.target) && !(act && act.dataset.act === 'editturn' && Number(act.dataset.turn) === this.editing.q)) this.cancelEdit();
     if (act) {
       e.preventDefault(); const i = Number(act.dataset.row), k = act.dataset.act;
       if (k === 'copyall') {
@@ -1528,6 +1578,7 @@ export default class DocEditor extends React.Component {
       if (k === 'cardlook') { this.closePicker(); this.cardLook(Number(act.dataset.turn)); return; }
       if (k === 'papersave') { if (!act.disabled) this.savePaper(i); return; }
       if (k === 'regen') { this.closePicker(); const q = Number(act.dataset.turn); this.regenerate(q, act.dataset.plain ? undefined : this.ranWith(this.lines(), q).choice); return; }
+      if (k === 'editturn') { this.closePicker(); this.startEdit(Number(act.dataset.turn)); return; }
       if (k === 'cardopt') { this.pickCard(Number(act.dataset.turn), Number(act.dataset.opt)); return; }
       if (k === 'cardsend') { this.sendCard(Number(act.dataset.turn)); return; }
       if (k === 'cardskip') { this.sendCard(Number(act.dataset.turn), 'skip'); return; }
@@ -1617,6 +1668,7 @@ export default class DocEditor extends React.Component {
   // props.text (that line replaced by draft lines), whichever document is open by then.
   // An @brainstorm or @discover line may be asked with nothing after it: it starts from the workspace.
   askInline(i) {
+    if (this.editing && this.editing.q === i) { this.commitEdit(); return; } // an edited question is asked again, not under its answer
     const ls = this.lines(), p = parseLine(ls[i] || ''), agent = agentOf(p);
     if (p.type !== 'bart' || (!p.text.trim() && !oneModel(agent)) || !this.props.onAsk || this.lockedAt(ls, i)) return;
     const askId = newAskId(), add = [`bart~> ${askId}`]; if (i + 1 >= ls.length) add.push('');
@@ -1728,16 +1780,101 @@ export default class DocEditor extends React.Component {
     return { current: { provider: step.provider, model: step.key, effort: step.effort }, choice: undefined };
   }
   // Regenerate: the answer gives way to a pending line and the question is asked again, as a follow-up to the turns above
-  // it. `choice` is a model and effort for this run; the line keeps the words it was asked with.
-  regenerate(q, choice) {
-    const ls = this.lines(), found = this.findTurn(ls, q); if (!found || found.turn.pending || !this.props.onAsk) return;
+  // it. `choice` is a model and effort for this run; the line keeps the words it was asked with. `edited` (2026-10-03): a
+  // question edited in place is asked from { lines } (its new words, the turns after it gone), and undo goes to { undo }.
+  regenerate(q, choice, edited = null) {
+    const ls = edited ? edited.lines : this.lines(), found = this.findTurn(ls, q); if (!found || found.turn.pending || !this.props.onAsk) return;
     const { turn } = found, p = parseLine(ls[q]), agent = agentOf(p); if (!p.text.trim() && !oneModel(agent)) return;
     const askId = newAskId(), gone = turn.to - turn.q, turns = this.turnsBefore(ls, q);
     this.cardState.delete(q);
-    this.setLines((x) => { const out = [...x]; out.splice(turn.from, gone, `bart~> ${askId}`); return out; });
+    const asked = (x) => { const out = [...x]; out.splice(turn.from, gone, `bart~> ${askId}`); return out; };
+    if (edited) this.setDoc(asked(ls).join('\n'), undefined, edited.undo); else this.setLines(asked);
     this.setState({ activeLine: null, mention: null });
     this.props.onAsk({ askId, text: p.text.trim(), turns, agent, choice: choice && this.props.models && modelOf(choice.model, this.props.models) ? choice : undefined });
   }
+  // Edit (2026-10-03): the question of an answered turn becomes an ordinary agent line again (lockedAt), as it stands with
+  // its @agent and flags, the caret at its end and its answer dimmed under it. One question at a time: another's goes back.
+  startEdit(q) {
+    if (this.editing && this.editing.q !== q) this.cancelEdit();
+    const ls = this.lines();
+    if (!this.editing) {
+      const at = this.layout(ls).get(q); if (!at || at.role !== 'question' || !at.editable) return;
+      const ed = this.editorEl(), field = document.activeElement;
+      if (ed && field && field !== ed && ed.contains(field)) field.blur(); // a field of the editor's had the keyboard
+      this.editing = { q, original: ls[q], under: ls.slice(at.turn.from, at.turn.to + 1), mark: this.history.length };
+    }
+    this.caret = { line: q, offset: (ls[q] ?? '').length }; this.wantFocus = true; this.lastHtml = null;
+    this.setState({ activeLine: q, mention: null });
+  }
+  // Out of edit mode with the question as it was: Escape, ⌘Z with nothing typed, or the caret, the keyboard or a click going
+  // elsewhere. What was typed into it leaves the document and undo. `blur`: the caret has nowhere left to be.
+  cancelEdit(blur = false) {
+    const was = this.editing; if (!was) return;
+    this.editing = null;
+    this.history.length = Math.min(this.history.length, was.mark);
+    const ls = this.lines();
+    if (ls[was.q] != null && ls[was.q] !== was.original) {
+      const from = String(this.props.text ?? ''), text = ls.map((l, j) => (j === was.q ? was.original : l)).join('\n');
+      this.props.onChange(text); this.textNow = { text, from };
+    }
+    const s = this.state;
+    if (s.picker && s.picker.kind === 'line' && s.picker.i === was.q) this.closePicker();
+    if (s.mention && s.mention.field == null) this.setState({ mention: null });
+    if (blur) { const ed = this.editorEl(); if (ed) ed.blur(); }
+    this.redraw();
+  }
+  // Enter on the question being edited. Unchanged, edit mode ends and nothing is asked. Changed, the turns after it in its
+  // thread leave the document (a run among them is stopped) and it is asked again as Regenerate asks it, with the choice
+  // Regenerate would make (ranWith), unless its model or effort flags were changed while it was edited (its chip): then
+  // the line says. One undo brings back the question, its answer and those turns. A line that no longer asks the same
+  // agent, or asks for a Build, or (@bart) asks nothing, is not asked: Enter waits.
+  commitEdit() {
+    const was = this.editing; if (!was) return;
+    const ls = this.lines(), q = was.q, line = ls[q] ?? '';
+    if (line === was.original) { this.cancelEdit(true); return; }
+    const p = parseLine(line), agent = agentOf(p), found = this.findTurn(ls, q);
+    if (p.type !== 'bart' || agent !== agentOf(parseLine(was.original)) || buildRequestOf({ agent, text: p.text }) || (!p.text.trim() && !oneModel(agent))) return;
+    if (!found || found.turn.pending || !this.props.onAsk) return;
+    const later = found.thread.turns.filter((turn) => turn.q > q);
+    const lines = later.length ? [...ls.slice(0, later[0].q), ...ls.slice(found.thread.to + 1)] : ls;
+    const models = this.props.models, flags = (l) => { const text = parseLine(l).text; return models ? readFlags(text, models).spans.map(([a, b]) => text.slice(a, b)).join(' ') : ''; };
+    const choice = oneModel(agent) || flags(line) !== flags(was.original) ? undefined : this.ranWith(ls, q).choice;
+    for (const turn of later) if (turn.pending && this.props.onStopAsk) this.props.onStopAsk(turn.pending);
+    this.editing = null;
+    const ed = this.editorEl(); if (ed) ed.blur();
+    this.regenerate(q, choice, { lines, undo: { text: ls.map((l, j) => (j === q ? was.original : l)).join('\n'), caret: null, mark: was.mark } });
+  }
+  // The document changed under a question being edited (an answer landed above it, an undo): it is found again by its
+  // answer, which nothing changes while it is edited, under the nearest question line; the caret goes with it. Not found,
+  // edit mode ends with the document as it is.
+  trackEdit() {
+    const was = this.editing, ls = this.lines(), ps = this.parsedOf(ls), n = was.under.length;
+    const holds = (j) => j + n < ls.length && was.under.every((l, k) => ls[j + 1 + k] === l);
+    if (holds(was.q)) return;
+    let q = -1;
+    for (let j = 0; j < ls.length; j++) if (ps[j].type === 'bart' && holds(j) && (q < 0 || Math.abs(j - was.q) < Math.abs(q - was.q))) q = j;
+    if (q < 0) { this.editing = null; return; }
+    this.editing = { ...was, q };
+    if (this.state.activeLine !== was.q) return;
+    const c = this.caretInfo();
+    this.caret = { line: q, offset: c && c.anchor.line === was.q ? c.anchor.offset : ls[q].length };
+    this.setState({ activeLine: q });
+  }
+  // A question left being edited when its document is replaced or the editor goes: it goes back as it was, in that document.
+  dropEdit(props) {
+    const was = this.editing; if (!was) return;
+    this.editing = null; this.textNow = null;
+    const ls = String(props.text ?? '').split('\n');
+    if (ls[was.q] != null && ls[was.q] !== was.original && props.onChange) props.onChange(ls.map((l, j) => (j === was.q ? was.original : l)).join('\n'));
+  }
+  // The selection, once the mouse is up, is no longer inside the question being edited (an arrow, a click on another line,
+  // select all): it goes back.
+  leftEdit() {
+    const sel = getSelection(), ed = this.editorEl(); if (!sel || !sel.rangeCount || !ed) return;
+    const row = ed.querySelector(`[data-line="${this.editing.q}"]`), r = sel.getRangeAt(0);
+    if (!row || !row.contains(r.startContainer) || !row.contains(r.endContainer)) this.cancelEdit();
+  }
+  inEdit(el) { const row = el && el.closest && el.closest('[data-line]'); return !!row && !!this.editing && Number(row.dataset.line) === this.editing.q; }
   // Collapse / Expand: the fold is in the file, on every line of the answer, so it survives whatever else changes.
   toggleFold(q) {
     const ls = this.lines(), found = this.findTurn(ls, q); if (!found || !found.turn.answered) return;
