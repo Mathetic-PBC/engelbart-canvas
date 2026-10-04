@@ -13,7 +13,7 @@ import { adoptSession, dropSession, SHOW_TERMINAL } from '../terminal/sessions.j
 import { mentionRows } from '../model/rail.js';
 import { flatWorkspaces, nextPlace, placesToGo } from '../model/nav.js';
 import { onStage } from '../model/stage.js';
-import { paperState, savePaper } from '../model/guide.js';
+import { paperState, savePaper, repoState, tryRepo } from '../model/guide.js';
 import { buildLine, placeAnswer } from '../model/doc.js';
 import { createDocSync } from '../model/doc-sync.js';
 import { buildRequestOf } from '../../main/bart/question.cjs';
@@ -743,6 +743,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // The same three states for each paper of an @discover guide (2026-10-02, model/guide.js), read again whenever the
   // library or the rail changes: a paper saved from the Stage reads ✓ in the guide too.
   const guidePaperState = React.useCallback((address) => paperState(library, address, inRail).state, [library, inRail]);
+  // And for the repository a guide's Try line links (2026-10-04): its mark reads "Added" once the repository is here.
+  const guideRepoState = React.useCallback((address) => repoState(library, address, inRail).state, [library, inRail]);
 
   /* --------------------------------------------------------------- opening */
 
@@ -1070,6 +1072,10 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // has no copy (the address, named with its title, linked here; main keeps its pdf straight away), + Workspace links the
   // library's row. Two clicks never make two rows: the second finds it here, or main refuses it as already in the library.
   const saveGuidePaper = ({ address, title }) => savePaper({ address, title, library, inRail }, { addInput, linkIds });
+  // A guide's Try link (2026-10-04), after its page opened in the Stage: the repository comes into this workspace, which
+  // starts its sandbox in main. A new one is added by its address and named by the library (owner/repo); one the library
+  // has is linked, never added twice. A sandbox that could not start is said by addInput and linkIds.
+  const tryGuideRepo = ({ address }) => tryRepo({ address, library, inRail }, { addInput, linkIds });
 
   // The Browser's Save: the page as a new row, named in the card, into the library alone or also into this workspace.
   const savePage = async (name, here) => {
@@ -1357,6 +1363,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
               onStopAsk={(askId) => api.stopBart(askId).catch((error) => onError(error))}
               paperState={guidePaperState}
               onSavePaper={saveGuidePaper}
+              repoState={guideRepoState}
+              onTryRepo={tryGuideRepo}
               onError={onError}
               viewScope={topic ? topic.id : null}
               viewOf={viewOf}

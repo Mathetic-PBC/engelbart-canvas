@@ -22,7 +22,9 @@
 //     asks its cards the same way, as `@discover …` lines, and answers with a reading guide drawn as an @bart answer is.
 //     Each paper's title line in a guide has a bookmark in its right margin that keeps the paper (2026-10-02, model/guide.js;
 //     a quiet icon since 2026-10-03): outline, outline with +, or filled, from props.paperState; a click hands it to
-//     props.onSavePaper. Drawn, never written: the line stays as it came.
+//     props.onSavePaper. Drawn, never written: the line stays as it came. An entry's **Try:** line (2026-10-04) links the
+//     paper's own repository: a small grey "Run" mark ("Added" once it is here, props.repoState) stands before the link, and
+//     a click on the link opens the page as any link does and also hands the repository to props.onTryRepo.
 //   * the follow-up field has the @ menu too (2026-10-02): `@` opens it under the field's caret and a pick writes the token
 //     a document line would; Bart, Brainstorm, Discover and Note are left out, since the field already asks its agent.
 //   * Edit (2026-10-03): an answered question's foot has Edit, which makes the question an ordinary agent line again, as it
@@ -41,7 +43,7 @@ import MentionMenu from './MentionMenu.jsx';
 import Popover from './Popover.jsx';
 import WorkspacePeek from './WorkspacePeek.jsx';
 import { diffRows, diffTotals, nextAttachment } from '../model/build-diff.js';
-import { guideTitle } from '../model/guide.js';
+import { guideTitle, guideRepo, repoOf } from '../model/guide.js';
 import { guideSections, splitTarget } from '../model/stage.js';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -133,6 +135,13 @@ const PAPER_MARK = {
   lib: { icon: icon(`${BOOKMARK}<path d="M12 7v6"></path><path d="M9 10h6"></path>`), words: 'Add to this workspace (already in the library)' },
   here: { icon: icon(BOOKMARK.replace('<path ', '<path fill="currentColor" ')), words: 'Saved in this workspace' },
 };
+// A Try line's mark by where its repository is (2026-10-04): the words it shows and its title.
+const RUN_WORDS = 'Opens the repository and adds it to this workspace, which starts building it';
+const REPO_MARK = {
+  none: { label: 'Run', words: RUN_WORDS },
+  lib: { label: 'Run', words: RUN_WORDS },
+  here: { label: 'Added', words: 'In this workspace: open it from the sidebar' },
+};
 const radius = (top, closes) => `${top ? '10px 10px' : '0 0'} ${closes ? '10px 10px' : '0 0'}`;
 // Where a follow-up field's caret is on screen (its @ menu hangs there, 2026-10-02). A textarea has no range to measure,
 // so a hidden copy laid over it is: the same width, padding and type, holding the text up to the caret and then a mark
@@ -176,6 +185,8 @@ export default class DocEditor extends React.Component {
   buildText = new Map(); buildImages = new Map(); buildOpen = new Set(); buildSteps = new Set(); buildScroll = new Map(); buildDrawn = new Map();
   // An @discover guide's papers being saved, by address: the button's state when it was clicked (it stays disabled on it).
   saving = new Map();
+  // Its repositories being brought here from a Try line, by address in lower case: the mark's state when it was clicked.
+  trying = new Map();
   // The question being edited in place (2026-10-03): { q, original, under, mark } — its line, what it held, the lines of
   // its answer (how it is found again when lines above it change) and how long undo was when it began. And, after edit
   // mode ended by putting the question back, the document as this editor reads it until the parent hands it back
@@ -264,8 +275,8 @@ export default class DocEditor extends React.Component {
     // where they stand: the rest of the editor, the caret and a selection in it are not touched.
     const asked = prevProps.asks !== this.props.asks, built = prevProps.builds !== this.props.builds || prevProps.buildProgress !== this.props.buildProgress || prevProps.buildDiffs !== this.props.buildDiffs;
     // Builds first: each patch ends by redrawing the editor's HTML in memory, which is where the cards' parts are remembered.
-    // A guide's paper buttons (paperState) are not patched: a change there redraws the editor.
-    if ((asked || built) && prevProps.text === this.props.text && prevProps.docKey === this.props.docKey && prevProps.models === this.props.models && prevProps.paperState === this.props.paperState && (!built || this.patchBuilds()) && (!asked || this.patchPending())) return;
+    // A guide's paper buttons (paperState) and Try marks (repoState) are not patched: a change there redraws the editor.
+    if ((asked || built) && prevProps.text === this.props.text && prevProps.docKey === this.props.docKey && prevProps.models === this.props.models && prevProps.paperState === this.props.paperState && prevProps.repoState === this.props.repoState && (!built || this.patchBuilds()) && (!asked || this.patchPending())) return;
     this.syncEditor();
     this.maybeRestoreView();
   }
@@ -592,7 +603,9 @@ export default class DocEditor extends React.Component {
       // An @discover guide's title line (2026-10-02) has its paper's bookmark in a margin of its own on the right, level with
       // the title's first line (2026-10-03): the title wraps before it, and every entry's sits in the same place.
       const paper = at && at.agent === 'discover' && !active ? this.guidePaper(i, p.text, at) : null, mark = paper ? this.paperSaveHtml(i, paper) : '';
-      const a = this.answerLook(p.text), content = active ? this.activeHtml(tokensOf(p, line)) : look ? (lookAbove ? '' : this.recapLabelHtml('Look for prior work', first)) + this.lookForHtml(i, look, lookAbove ? 6 : 4) : recap ? this.recapHtml(recap, first) : a.content + mark;
+      // Its Try line (2026-10-04) has the repository's mark just before the link.
+      const repo = at && at.agent === 'discover' && !active && !paper ? guideRepo(p.text) : null, run = repo ? this.repoMarkHtml(repo) : '';
+      const a = this.answerLook(p.text), content = active ? this.activeHtml(tokensOf(p, line)) : look ? (lookAbove ? '' : this.recapLabelHtml('Look for prior work', first)) + this.lookForHtml(i, look, lookAbove ? 6 : 4) : recap ? this.recapHtml(recap, first) : (run ? a.content.replace('<a ', `${run}<a `) : a.content) + mark;
       return `<div ${raw}${mark ? ' data-paper-line="1"' : ''} style="padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(!at && first, closes)};margin-bottom:${closes ? 14 : 0}px;color:#4d4d4d;font-size:16px;line-height:1.65;cursor:text"><span style="display:block;padding:${first ? 2 : 0}px 0 ${last ? 2 : 0}px 12px;border-left:2px solid #dcdcdc"><span class="t" style="display:block;min-height:${a.minHeight}px;border-radius:4px;${a.look}${mark ? 'position:relative;padding-right:28px;' : ''}${active ? 'background:#f2f2f2;box-shadow:0 0 0 4px #f2f2f2;' : ''}">${content || '<br>'}</span></span></div>`;
     }
     if (p.type === 'quote') {
@@ -678,6 +691,29 @@ export default class DocEditor extends React.Component {
     Promise.resolve().then(() => this.props.onSavePaper(paper))
       .catch((error) => { if (this.props.onError) this.props.onError(error); })
       .finally(() => { this.saving.delete(paper.address); this.redraw(); });
+  }
+  // A Try line's mark (2026-10-04): grey words before the link, "Run" (the repository is not here yet) or "Added" (it is).
+  // Not a button: the link is what is clicked. Words drawn, never written, which a copy holds none of and caretAt does not
+  // count. At half strength while a click is at work. None where the editor is not told where repositories are.
+  repoMarkHtml(repo) {
+    const known = this.props.repoState && this.props.onTryRepo ? this.props.repoState(repo.address) : null; if (!REPO_MARK[known]) return '';
+    const held = this.trying.get(repo.address.toLowerCase()), state = held || known, { label, words } = REPO_MARK[state];
+    return `<span contenteditable="false" data-repo-mark="${state}"${held ? ' data-busy="1"' : ''} title="${words}" style="user-select:none;-webkit-user-select:none;margin-right:6px;font-size:12px;color:#8f8f8f${held ? ';opacity:.5' : ''}">${label}</span>`;
+  }
+  // A link clicked on a Try line of an @discover answer (2026-10-04), once the page has opened: when it is the line's own
+  // repository and that is not here yet, it goes to props.onTryRepo, one click at a time for each repository. A failure
+  // goes to props.onError and the mark says what it said before; a success shows when the library or the workspace
+  // changes. The document is not touched.
+  tryRepo(i, href) {
+    const ls = this.lines(), p = this.parsedOf(ls)[i], at = this.layout(ls).get(i);
+    if (!p || p.type !== 'reply' || !at || at.agent !== 'discover' || at.role !== 'answer' || !this.props.onTryRepo || !this.props.repoState) return;
+    const repo = guideRepo(p.text), clicked = repoOf(href), key = repo && repo.address.toLowerCase();
+    if (!repo || !clicked || clicked.address.toLowerCase() !== key || this.trying.has(key)) return;
+    const state = this.props.repoState(repo.address); if (state !== 'none' && state !== 'lib') return;
+    this.trying.set(key, state); this.redraw();
+    Promise.resolve().then(() => this.props.onTryRepo(repo))
+      .catch((error) => { if (this.props.onError) this.props.onError(error); })
+      .finally(() => { this.trying.delete(key); this.redraw(); });
   }
   redraw() { this.lastHtml = null; if (this.mounted) this.forceUpdate(); }
   // A recap's Look for line clicked: its first search.
@@ -1260,7 +1296,11 @@ export default class DocEditor extends React.Component {
     const ed = this.editorEl();
     if (!n || !ed) return null; const el = n.nodeType === 1 ? n : n.parentElement; const d = el && el.closest('[data-line]'); if (!d || !ed.contains(d)) return null;
     const t = d.querySelector('.t'); let off = 0;
-    if (t && t.contains(n)) { const r = document.createRange(); r.selectNodeContents(t); r.setEnd(n, o); off = r.toString().replace(/\u200b/g, '').length; } else off = t ? t.textContent.length : 0;
+    if (t && t.contains(n)) {
+      const r = document.createRange(); r.selectNodeContents(t); r.setEnd(n, o); off = r.toString().replace(/\u200b/g, '').length;
+      // A Try line's mark is drawn, not in the line: its words before the point are not counted.
+      for (const mark of t.querySelectorAll('[data-repo-mark]')) if (!mark.contains(n) && r.intersectsNode(mark)) off -= mark.textContent.length;
+    } else off = t ? t.textContent.length : 0;
     const isActive = Number(d.dataset.line) === this.state.activeLine;
     let raw = null;
     if (t && (isActive || t.querySelector('[data-src]'))) raw = this.displayToRaw(t, off);
@@ -1617,6 +1657,7 @@ export default class DocEditor extends React.Component {
       const href = a.getAttribute('href'), row = a.closest('[data-line]'), sections = row ? this.linkSections(Number(row.dataset.line), href) : null;
       const options = { ...(newTabClick(e) ? { newTab: true } : {}), ...(sections ? { sections } : {}) };
       this.openLink(href, Object.keys(options).length ? options : undefined);
+      if (row) this.tryRepo(Number(row.dataset.line), href);
       return;
     }
     const m = e.target.closest('[data-mention]');

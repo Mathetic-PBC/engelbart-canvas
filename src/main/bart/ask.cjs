@@ -82,11 +82,12 @@ const PROMPTS = { bart: ['bart-system-prompt.md', BART_SYSTEM_PROMPT], brainstor
 // What an @discover line with nothing after it asks.
 const DISCOVER_OPENING = 'Find what I should read about the problem this workspace is about.';
 // How far each mode traces (the prompt's <mode>), and how many of its sources are essays when essays apply (2026-10-03):
-// a share of the same total, so papers no longer use it all.
+// a share of the same total, so papers no longer use it all. And how many more papers may be opened only to look for a
+// repository to run (2026-10-04, the prompt's "Code"): none in quick mode.
 const MODE_LIMITS = {
-  quick: 'quick. Up to two starting points; one hop backward and one forward from each; at most five sources in the guide, of which up to two are essays when essays apply.',
-  standard: 'standard. Up to three starting points; one hop backward and one forward from each; at most eight sources in the guide, of which two to three are essays when essays apply.',
-  deep: 'deep. Up to five starting points; one hop backward and one forward from each, then one more of each from the best of what you found; at most fifteen sources in the guide, of which three to five are essays when essays apply.',
+  quick: 'quick. Up to two starting points; one hop backward and one forward from each; at most five sources in the guide, of which up to two are essays when essays apply. No extra papers opened to look for code.',
+  standard: 'standard. Up to three starting points; one hop backward and one forward from each; at most eight sources in the guide, of which two to three are essays when essays apply. Up to two extra papers opened to look for code.',
+  deep: 'deep. Up to five starting points; one hop backward and one forward from each, then one more of each from the best of what you found; at most fifteen sources in the guide, of which three to five are essays when essays apply. Up to four extra papers opened to look for code.',
 };
 
 class BartError extends Error {
@@ -520,8 +521,9 @@ function fakeCard(context, plan, models) {
  * that names a problem gets a guide in three-line entries, whose first entry is what the person wrote in their own words
  * on the card, if they did, then the first library item, by its path when it has one, with a section to find in it
  * (`#find=…&to=…`, round 2), and an "## Essays" group of one essay, its Read a link to its first paragraph's words with
- * no `&to=` (2026-10-03). Each Why says what the passage gives and the open question it bears on (round 3). A follow-up
- * on a guide gets additions. Nothing is looked up: every entry says it is fake.
+ * no `&to=` (2026-10-03). Each Why says what the passage gives and the open question it bears on (round 3). The classic
+ * was read in full and carries a Try line, its authors' repository (2026-10-04). A follow-up on a guide gets additions.
+ * Nothing is looked up: every entry says it is fake.
  */
 function fakeDiscover(context, plan) {
   const guided = plan.prior.length > 0 && /^## /.test(plan.prior[plan.prior.length - 1].answer);
@@ -559,7 +561,8 @@ function fakeDiscover(context, plan) {
     ...(own ? [...entry(`A fake record for “${own.slice(0, 80)}”`, 'https://example.org/fake-named', null, '', '', 'design to compare against'), ''] : []),
     ...(first ? entry(first.name, where(first), 'Introduction', 'a fake passage the fake did not read', 'the fake section after it') : entry('A fake starting paper', 'https://example.org/fake-start.pdf', 'Introduction', 'a fake passage', 'the fake section after it')), '',
     '## Classics', '',
-    ...entry(`A fake classic (${plan.mode} mode)`, 'https://example.org/fake-classic', null, '', '', 'term for what is being handled'), '',
+    ...entry(`A fake classic (${plan.mode} mode)`, 'https://example.org/fake-classic', 'Implementation', 'a fake passage on how it was built', 'the fake evaluation after it', 'term for what is being handled'),
+    '**Try:** [fake-lab/fake-classic](https://github.com/fake-lab/fake-classic)', '',
     '## Essays', '',
     ...essay('A fake essay', 'https://example.org/fake-essay', 'A fake heading', 'the fake first paragraph of the essay', 'case that cuts against what is assumed'),
   ].join('\n');

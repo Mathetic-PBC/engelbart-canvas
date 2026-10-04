@@ -182,27 +182,27 @@ test('a failed click goes to onError and the bookmark is what it was before', as
 });
 
 // The Workspace's side, against the real library and workspace (ipc.cjs): + Save is addInput (add, then link), + Workspace
-// is linkIds, as Workspace.jsx wires them.
-async function workspaceHarness(t) {
+// is linkIds, as Workspace.jsx wires them. `sandbox` stands in for main's (src/main/sandbox), none by default.
+async function workspaceHarness(t, { doc = GUIDE, sandbox = null } = {}) {
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-guide-save-'));
   const store = createStore({ homeDir, testMode: true });
   await store.setTestMode(false);
   t.after(() => store.close());
   const handlers = new Map();
-  registerEngelbartIpc({ store, ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, trustedHandler: (fn) => fn, notify: () => {}, describe: async () => ({ title: 'The page names itself', description: '' }), identifyRepo: async () => null });
+  registerEngelbartIpc({ store, ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, trustedHandler: (fn) => fn, notify: () => {}, describe: async () => ({ title: 'The page names itself', description: '' }), identifyRepo: async () => null, sandbox });
   const h = (name) => handlers.get(`engelbart:${name}`);
   const ctx = await store.context();
   const project = await h('create-project')({ name: 'Reading' });
   const workspace = await h('create-workspace')(project.id, { name: 'Tools' });
   const ref = { kind: 'workspace', workspaceId: workspace.id };
-  await h('write-doc')(project.id, ref, GUIDE);
+  await h('write-doc')(project.id, ref, doc);
   const file = path.join(projects.findWorkspace(ctx, project.id, workspace.id).workspace.dir, 'workspace.md');
   const context = () => projects.findWorkspace(ctx, project.id, workspace.id).workspace.context;
   const linkIds = async (ids) => { await h('link-to-workspace')(project.id, workspace.id, ids); };
   const addInput = async (input, name) => { const row = await h('add-library-item')(input, name ? { name } : undefined); await linkIds([row.id]); return row; };
   const { savePaper } = await model('guide');
   const click = async ({ title, address }) => savePaper({ title, address, library: await h('library')(), inRail: (id) => context().includes(id) }, { addInput, linkIds });
-  return { ctx, h, file, context, click, addInput };
+  return { ctx, h, file, context, click, addInput, linkIds };
 }
 
 test('+ Save makes exactly one library row named with the title and links it here; clicking again never makes a second; workspace.md is untouched', async (t) => {
@@ -235,4 +235,237 @@ test('+ Workspace only links the library\'s row: no new row', async (t) => {
   assert.deepEqual(rows.map((row) => [row.id, row.name]), [[held.id, 'Scim (saved earlier)']], 'the same row, its name kept');
   assert.deepEqual(context(), [held.id]);
   assert.ok(fs.readFileSync(file).equals(before));
+});
+
+/* ------------------------------------------------------------- Try lines (2026-10-04) */
+// A guide entry's fourth line, **Try:** [owner/repo](https://github.com/owner/repo): the paper's own repository. Its link
+// opens the page in the Stage and brings the repository into this workspace, which starts its sandbox; a grey "Run" mark
+// ("Added" once it is here) is drawn before the link and never written.
+
+const REPO = 'https://github.com/example-lab/scim';
+const TRY = `**Try:** [example-lab/scim](${REPO})`;
+// A guide whose first entry has a Try line, the same line in a @bart and an @brainstorm answer, and the address in a note's line.
+const TRY_GUIDE = [
+  '# Reading',
+  '',
+  '@discover tools that help people read papers',
+  'bart> ## Start here',
+  `bart> **[Scim: Intelligent Skimming Support for Scientific Papers](${SCIM})** · Fok et al. · 2022`,
+  `bart> **Read:** [3.2 Design Goals](${SCIM}#find=We%20introduce%20seven%20design%20goals&to=a%20tool%20that%20supports)`,
+  'bart> **Why:** seven design goals to compare the reader against.',
+  `bart> ${TRY}`,
+  'bart> ',
+  `bart> **[CiteSee: Augmenting Citations in Scientific Papers](${CITESEE})** · Chang et al. · 2023`,
+  `bart> **Read:** [4.5 Paper Cards](${CITESEE}#find=Making%20sense%20of%20inline%20citations)`,
+  'bart> **Why:** how a citation card carries context.',
+  'bart> *Opus high · 2m 10s*',
+  '',
+  '@bart what should I read first?',
+  `bart> ${TRY}`,
+  'bart> *Sonnet high · 12s*',
+  '',
+  '@brainstorm',
+  `bart> ${TRY}`,
+  'bart> *brainstorm · 8s*',
+  '',
+  `The code is at ${REPO} and [here](${REPO}).`,
+].join('\n');
+const TRY_LINES = TRY_GUIDE.split('\n');
+const TRY_ROW = TRY_LINES.indexOf(`bart> ${TRY}`);
+const BART_TRY_ROW = TRY_LINES.indexOf(`bart> ${TRY}`, TRY_ROW + 1);
+const BRAINSTORM_TRY_ROW = TRY_LINES.indexOf(`bart> ${TRY}`, BART_TRY_ROW + 1);
+const PLAIN_ROW = TRY_LINES.length - 1;
+const RUN_TITLE = 'Opens the repository and adds it to this workspace, which starts building it';
+const ADDED_TITLE = 'In this workspace: open it from the sidebar';
+const SCIM_REPO = { name: 'example-lab/scim', address: REPO };
+
+/** Each Try mark in a drawing as { state, text, title, busy, html }. */
+function repoMarks(html) {
+  return [...html.matchAll(/<span([^>]*data-repo-mark="(\w+)"[^>]*)>([^<]*)<\/span>/g)].map(([whole, tag, state, text]) => ({
+    state, text, title: (/ title="([^"]*)"/.exec(tag) || [])[1], busy: /data-busy=/.test(tag), html: whole,
+  }));
+}
+function drawTry(props) {
+  const editor = new DocEditor({ text: TRY_GUIDE, onAsk() {}, onChange() { throw new Error('the document changed'); }, ...props });
+  return { editor, html: editor.editorHtml() };
+}
+/** A click on a link (`href`) drawn on row `row`, as the editor's click handler sees it. */
+const clickLink = (editor, row, href, extra = {}) => editor.editorClick({
+  target: { closest: (sel) => (sel === 'a[data-link]' ? { getAttribute: (name) => (name === 'href' ? href : null), closest: () => ({ dataset: { line: String(row) } }) } : null) },
+  preventDefault() {}, ...extra,
+});
+const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+test('guideRepo: a Try line\'s GitHub link → owner/repo and its address as the library spells it; any other line is null', async () => {
+  const { guideRepo, repoOf } = await model('guide');
+  assert.deepEqual(guideRepo(TRY), SCIM_REPO);
+  assert.deepEqual(guideRepo('**Try:** [example-lab/scim](https://github.com/example-lab/scim.git)'), SCIM_REPO, 'a .git address');
+  assert.deepEqual(guideRepo('**Try:** [example-lab/scim](https://github.com/example-lab/scim/tree/main)'), SCIM_REPO, 'a path');
+  assert.deepEqual(guideRepo('**Try:** [the code](https://www.github.com/example-lab/scim?tab=readme#usage)'), SCIM_REPO, 'a query and a fragment; the link text is not read');
+  assert.equal(guideRepo('**Try:** [example-lab/scim](https://gitlab.com/example-lab/scim)'), null, 'not GitHub');
+  assert.equal(guideRepo('**Try:** [scim](https://example.org/github.com/example-lab/scim)'), null);
+  assert.equal(guideRepo('**Try:** [example-lab](https://github.com/example-lab)'), null, 'an owner alone');
+  assert.equal(guideRepo(`**Try:** ${REPO}`), null, 'a Try line with no link');
+  assert.equal(guideRepo('**Try:** the demo on the project page'), null);
+  assert.equal(guideRepo(`**[Scim](${REPO})** · Fok et al. · 2022`), null, 'a title line');
+  assert.equal(guideRepo(`**Read:** [README](${REPO})`), null, 'a Read line');
+  assert.equal(guideRepo('**Why:** a design to compare against.'), null);
+  assert.equal(guideRepo(`See ${TRY}`), null, 'only at the start of a line');
+  assert.equal(guideRepo(null), null);
+  assert.deepEqual(repoOf('https://github.com/Example-Lab/Scim.git'), { name: 'Example-Lab/Scim', address: 'https://github.com/Example-Lab/Scim' }, 'its own case kept');
+});
+
+test('repoState: none, lib, here, finding the library\'s row by owner/repo without regard to case', async () => {
+  const { repoState } = await model('guide');
+  const library = [
+    { id: 'p', name: 'Scim', type: 'website', tags: ['paper'], url: SCIM },
+    { id: 'r', name: 'Example-Lab/Scim', type: 'website', tags: ['git'], url: 'https://github.com/Example-Lab/Scim' },
+    { id: 'c', name: 'reader', type: 'folder', tags: ['git'], url: 'https://github.com/example-lab/reader', folder_path: '/Users/h/reader' },
+    { id: 'f', name: 'A pdf', type: 'pdf', tags: ['paper'], path: '/Users/h/a.pdf', url: null },
+  ];
+  const inRail = (id) => id === 'c';
+  assert.deepEqual(repoState(library, REPO, inRail), { state: 'lib', row: library[1] }, 'another case of owner/repo is the same row');
+  assert.equal(repoState(library, 'https://github.com/EXAMPLE-LAB/scim.git', inRail).state, 'lib');
+  assert.deepEqual(repoState(library, 'https://github.com/example-lab/reader', inRail), { state: 'here', row: library[2] }, 'a clone, by its address');
+  assert.equal(repoState(library, 'https://github.com/example-lab/sci', inRail).state, 'none', 'a name that starts the same is another');
+  assert.equal(repoState(library, 'https://github.com/example-lab/other', inRail).state, 'none');
+  assert.deepEqual(repoState(library, 'not a repository', inRail), { state: 'none', row: null });
+});
+
+test('tryRepo: none adds the address with no name, lib links the row it has, here does nothing', async () => {
+  const { tryRepo } = await model('guide');
+  const calls = [];
+  const deps = { addInput: async (...args) => { calls.push(['add', ...args]); }, linkIds: async (ids) => { calls.push(['link', ids]); } };
+  const row = { id: 'r', name: 'Example-Lab/Scim', type: 'website', tags: ['git'], url: 'https://github.com/Example-Lab/Scim' };
+  assert.equal(await tryRepo({ address: REPO, library: [], inRail: () => false }, deps), 'added');
+  assert.deepEqual(calls, [['add', REPO]], 'one addInput, by the address alone: the library names it owner/repo');
+  calls.length = 0;
+  assert.equal(await tryRepo({ address: REPO, library: [row], inRail: () => false }, deps), 'linked');
+  assert.deepEqual(calls, [['link', ['r']]], 'linkIds alone, with the row another case of the name found: no second row');
+  calls.length = 0;
+  assert.equal(await tryRepo({ address: REPO, library: [row], inRail: (id) => id === 'r' }, deps), 'here');
+  assert.deepEqual(calls, [], 'here: nothing');
+  await assert.rejects(() => tryRepo({ address: SCIM, library: [], inRail: () => false }, deps), /not a GitHub repository/);
+  assert.deepEqual(calls, []);
+});
+
+test('a Try click against the real library: one row named owner/repo, linked here, its sandbox started; a second click adds nothing; workspace.md is untouched', async (t) => {
+  const started = [];
+  const { ctx, file, context, h, addInput, linkIds } = await workspaceHarness(t, { doc: TRY_GUIDE, sandbox: { async start(_ctx, id) { started.push(id); }, async close() {} } });
+  const before = fs.readFileSync(file);
+  const { tryRepo } = await model('guide');
+  const click = async (address) => tryRepo({ address, library: await h('library')(), inRail: (id) => context().includes(id) }, { addInput, linkIds });
+  assert.equal(await click(REPO), 'added');
+  const rows = await ctx.libraryDb.list();
+  assert.deepEqual(rows.map((row) => [row.name, row.url, row.tags]), [['example-lab/scim', REPO, ['git']]], 'named by the library as owner/repo');
+  assert.deepEqual(context(), [rows[0].id], 'in this workspace');
+  assert.ok(started.length > 0 && started.every((id) => id === rows[0].id), 'its sandbox started');
+  assert.equal(await click(REPO), 'here', 'a second click adds nothing');
+  assert.equal(await click('https://github.com/Example-Lab/Scim'), 'here', 'nor does another case of the name');
+  assert.equal((await ctx.libraryDb.list()).length, 1);
+  // Two at once, before the library is read again: main refuses the second, and there is still one row.
+  const other = 'https://github.com/example-lab/reader';
+  await Promise.allSettled([click(other), click(other)]);
+  assert.equal((await ctx.libraryDb.list()).filter((row) => row.url === other).length, 1);
+  assert.equal(context().length, 2);
+  assert.ok(fs.readFileSync(file).equals(before), 'workspace.md is byte-identical');
+});
+
+test('a Try click on a repository the library has and this workspace does not: the row is linked, no second row, and its sandbox starts', async (t) => {
+  const started = [];
+  const { ctx, file, context, h, addInput, linkIds } = await workspaceHarness(t, { doc: TRY_GUIDE, sandbox: { async start(_ctx, id) { started.push(id); }, async close() {} } });
+  const before = fs.readFileSync(file);
+  const held = await h('add-library-item')('https://github.com/Example-Lab/Scim');
+  assert.deepEqual(context(), []);
+  started.length = 0;
+  const { tryRepo } = await model('guide');
+  assert.equal(await tryRepo({ address: REPO, library: await h('library')(), inRail: (id) => context().includes(id) }, { addInput, linkIds }), 'linked');
+  assert.deepEqual((await ctx.libraryDb.list()).map((row) => [row.id, row.name]), [[held.id, 'Example-Lab/Scim']], 'the same row, its name kept');
+  assert.deepEqual(context(), [held.id]);
+  assert.deepEqual(started, [held.id], 'newly in this workspace: its sandbox starts or is reused');
+  assert.ok(fs.readFileSync(file).equals(before));
+});
+
+test('the editor draws a grey "Run" mark just before the Try link of an @discover answer; none on the same line in @bart or @brainstorm answers, nor elsewhere', () => {
+  const { html } = drawTry({ repoState: () => 'none', onTryRepo: async () => {} });
+  const shown = repoMarks(html);
+  assert.equal(shown.length, 1, 'one mark in the document');
+  assert.equal(repoMarks(rowHtml(html, TRY_ROW)).length, 1, 'on the @discover answer\'s Try line');
+  for (const row of [BART_TRY_ROW, BRAINSTORM_TRY_ROW, PLAIN_ROW]) assert.equal(repoMarks(rowHtml(html, row)).length, 0, `none on row ${row}`);
+  const [mark] = shown;
+  assert.deepEqual([mark.state, mark.text, mark.title, mark.busy], ['none', 'Run', RUN_TITLE, false]);
+  assert.match(mark.html, /contenteditable="false"/);
+  assert.match(mark.html, /user-select:none/, 'a copy holds none of it');
+  assert.match(mark.html, /font-size:12px;color:#8f8f8f/, 'small grey text');
+  assert.doesNotMatch(mark.html, /<button|role="button"|data-act=/, 'not a button');
+  assert.ok(rowHtml(html, TRY_ROW).includes(`Try:</strong> ${mark.html}<a href="${REPO}" data-link="1"`), 'just before the link, which is drawn as any link is');
+  // In the library and not here, still Run; here, Added.
+  assert.deepEqual(repoMarks(drawTry({ repoState: () => 'lib', onTryRepo: async () => {} }).html).map((m) => [m.state, m.text, m.title]), [['lib', 'Run', RUN_TITLE]]);
+  assert.deepEqual(repoMarks(drawTry({ repoState: () => 'here', onTryRepo: async () => {} }).html).map((m) => [m.state, m.text, m.title]), [['here', 'Added', ADDED_TITLE]]);
+  assert.deepEqual(repoMarks(drawTry({}).html), [], 'none where the editor is not told where repositories are (a post-it)');
+  // The rest of the guide is drawn as before: the bookmark on each title, a Read link to its passage, no mark on them.
+  const papers = drawTry({ paperState: () => 'none', onSavePaper: async () => {}, repoState: () => 'none', onTryRepo: async () => {} }).html;
+  assert.deepEqual(marks(papers).map((b) => b.row), [TRY_LINES.findIndex((line) => line.includes('**[Scim')), TRY_LINES.findIndex((line) => line.includes('**[CiteSee'))]);
+  assert.equal(marks(rowHtml(papers, TRY_ROW)).length, 0, 'a Try line has no bookmark');
+});
+
+test('a click on the Try link opens the page first, then hands the repository to onTryRepo; while that works a click only opens; once here, a click only opens', async () => {
+  const calls = [];
+  let finish, state = 'none';
+  const { editor } = drawTry({ repoState: () => state, onOpenLink: (href, options) => calls.push(['open', href, options]), onTryRepo: (repo) => { calls.push(['try', repo]); return new Promise((resolve) => { finish = resolve; }); } });
+  clickLink(editor, TRY_ROW, REPO);
+  await tick();
+  assert.deepEqual(calls, [['open', REPO, undefined], ['try', SCIM_REPO]], 'the page in the Stage, then the repository');
+  assert.deepEqual(repoMarks(editor.editorHtml()).map((m) => [m.state, m.text, m.busy]), [['none', 'Run', true]], 'at half strength while it works');
+  clickLink(editor, TRY_ROW, REPO);
+  await tick();
+  assert.deepEqual(calls.slice(2), [['open', REPO, undefined]], 'a second click while the first works opens the page only');
+  finish();
+  await tick();
+  assert.equal(repoMarks(editor.editorHtml())[0].busy, false);
+  state = 'here';
+  assert.deepEqual(repoMarks(editor.editorHtml()).map((m) => m.text), ['Added']);
+  clickLink(editor, TRY_ROW, REPO);
+  await tick();
+  assert.deepEqual(calls.slice(3), [['open', REPO, undefined]], 'here: the page alone');
+});
+
+test('⌘-click on the Try link opens a new tab and adds the same way; other links only open; a failure goes to onError', async () => {
+  const opened = [], tried = [], errors = [];
+  const { editor } = drawTry({ repoState: () => 'lib', onOpenLink: (href, options) => opened.push([href, options]), onTryRepo: async (repo) => { tried.push(repo); throw new Error('offline'); }, onError: (error) => errors.push(error.message) });
+  clickLink(editor, TRY_ROW, REPO, { metaKey: true });
+  await tick(); await tick();
+  assert.deepEqual([opened, tried, errors], [[[REPO, { newTab: true }]], [SCIM_REPO], ['offline']]);
+  assert.deepEqual(repoMarks(editor.editorHtml()).map((m) => [m.state, m.text, m.busy]), [['lib', 'Run', false]], 'the mark says what it said before');
+  // Links that are not this line's repository only open: the @bart and @brainstorm answers', a note's line, a title, another address.
+  for (const [row, href] of [[BART_TRY_ROW, REPO], [BRAINSTORM_TRY_ROW, REPO], [PLAIN_ROW, REPO], [TRY_ROW - 3, SCIM], [TRY_ROW, 'https://github.com/someone/else']]) clickLink(editor, row, href);
+  await tick();
+  assert.equal(opened.length, 6, 'every link still opens');
+  assert.equal(tried.length, 1, 'and none of them adds');
+  assert.deepEqual(opened[4], [SCIM, undefined], 'a title opens as before, with no sections');
+});
+
+test('a Try click through the editor, against the real library: added and linked once, the mark reads Added, workspace.md is byte-identical', async (t) => {
+  const { ctx, file, context, h, addInput, linkIds } = await workspaceHarness(t, { doc: TRY_GUIDE });
+  const before = fs.readFileSync(file);
+  const { tryRepo, repoState } = await model('guide');
+  const inRail = (id) => context().includes(id);
+  let library = await h('library')(), work = null;
+  const opened = [];
+  const { editor } = drawTry({
+    onOpenLink: (href) => opened.push(href),
+    repoState: (address) => repoState(library, address, inRail).state,
+    onTryRepo: ({ address }) => (work = (async () => { await tryRepo({ address, library, inRail }, { addInput, linkIds }); library = await h('library')(); })()),
+  });
+  clickLink(editor, TRY_ROW, REPO);
+  clickLink(editor, TRY_ROW, REPO);
+  await tick();
+  await work;
+  await tick();
+  assert.deepEqual(opened, [REPO, REPO]);
+  const rows = await ctx.libraryDb.list();
+  assert.deepEqual(rows.map((row) => row.name), ['example-lab/scim'], 'one row');
+  assert.deepEqual(context(), [rows[0].id]);
+  assert.deepEqual(repoMarks(editor.editorHtml()).map((m) => m.text), ['Added']);
+  assert.ok(fs.readFileSync(file).equals(before), 'workspace.md is byte-identical');
 });

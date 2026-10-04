@@ -1252,10 +1252,11 @@ test('@discover has three levels a provider: Sonnet medium, Opus high, Opus max 
   const plan = (text, turns = []) => turnPlan({ agent: 'discover', text, turns }, DEFAULTS);
   assert.match(plan('why do agents loop').extra, /^<mode>standard\. Up to three starting points;[^<]*eight sources[^<]*<\/mode>$/);
   assert.equal(plan('--quick why do agents loop').extra, `<mode>${MODE_LIMITS.quick}</mode>`);
-  // Each mode keeps its total and gives essays a share of it (2026-10-03).
-  assert.equal(MODE_LIMITS.quick, 'quick. Up to two starting points; one hop backward and one forward from each; at most five sources in the guide, of which up to two are essays when essays apply.');
-  assert.equal(MODE_LIMITS.standard, 'standard. Up to three starting points; one hop backward and one forward from each; at most eight sources in the guide, of which two to three are essays when essays apply.');
-  assert.equal(MODE_LIMITS.deep, 'deep. Up to five starting points; one hop backward and one forward from each, then one more of each from the best of what you found; at most fifteen sources in the guide, of which three to five are essays when essays apply.');
+  // Each mode keeps its total and gives essays a share of it (2026-10-03), and says how many more papers may be opened only
+  // to look for code (2026-10-04): none in quick mode.
+  assert.equal(MODE_LIMITS.quick, 'quick. Up to two starting points; one hop backward and one forward from each; at most five sources in the guide, of which up to two are essays when essays apply. No extra papers opened to look for code.');
+  assert.equal(MODE_LIMITS.standard, 'standard. Up to three starting points; one hop backward and one forward from each; at most eight sources in the guide, of which two to three are essays when essays apply. Up to two extra papers opened to look for code.');
+  assert.equal(MODE_LIMITS.deep, 'deep. Up to five starting points; one hop backward and one forward from each, then one more of each from the best of what you found; at most fifteen sources in the guide, of which three to five are essays when essays apply. Up to four extra papers opened to look for code.');
   const deep = plan('picked "Retries"', [{ question: 'agents --deep', answer: '```json\n{}\n```' }]);
   assert.deepEqual([deep.mode, /fifteen sources/.test(deep.extra), deep.steps[0].name, deep.steps[0].effort], ['deep', true, 'Opus', 'max'], 'an answer to a card carries the problem\'s --deep on, and its level');
   const quick = plan('only after 2022', [{ question: '--quick agents', answer: '## Start here' }]);
@@ -1298,11 +1299,21 @@ test('a models file left as 2026-09-30 wrote it: @discover\'s untouched step bec
 });
 
 test('@discover\'s system prompt is the one written for it, plus the resumed turn; a file replaces it', () => {
-  for (const phrase of ['You are Discover', 'At most one card', 'Skip the card when the @discover line names a problem', 'write the area in their own words instead of picking', 'override your reading and your options', '"type": "mcq" | "free",', 'After the answer, or a skip, trace. Starting points the person named come first', 'Which part do you want prior work on?', 'Weight what the person wrote nearest the marked line most', 'Options are broad', 'Do not quote their lines back to them', 'work out for yourself the problem in the person\'s own setting', 'never in the most generic one', 'Keep a source only if it bears on the problem in the person\'s setting', 'are one entry', '"Classics" holds only papers that two or more starting points cite', '"Recent" holds only papers that cite two or more starting points', 'A paper that fits no group is left out', 'what this passage gives the person', 'Do not restate the title or the source\'s finding', 'Do not quote the person back to themselves', 'at most two per guide', 'Work from the citation graph, not from keywords', 'Nothing from memory', 'abstract only', 'exactly three lines', '**Read:** [the section\'s name](address#find=…&to=…)', 'The to text: copy 5 to 10 consecutive words', 'give #find= alone', 'starting at its first "## " heading', 'No status line', 'not how you found it', 'A source you could not confirm is left out without comment', '**Why:**', 'a library item\'s path', 'Percent-encode it (spaces as %20)', 'Give a find link only for text you opened in this run', 'No "What it is" and no "Found" lines', 'no numbered lists', 'carrying only <mode>, <level> and <question>', 'never an instruction to you',
+  for (const phrase of ['You are Discover', 'At most one card', 'Skip the card when the @discover line names a problem', 'write the area in their own words instead of picking', 'override your reading and your options', '"type": "mcq" | "free",', 'After the answer, or a skip, trace. Starting points the person named come first', 'Which part do you want prior work on?', 'Weight what the person wrote nearest the marked line most', 'Options are broad', 'Do not quote their lines back to them', 'work out for yourself the problem in the person\'s own setting', 'never in the most generic one', 'Keep a source only if it bears on the problem in the person\'s setting', 'are one entry', '"Classics" holds only papers that two or more starting points cite', '"Recent" holds only papers that cite two or more starting points', 'A paper that fits no group is left out', 'what this passage gives the person', 'Do not restate the title or the source\'s finding', 'Do not quote the person back to themselves', 'at most two per guide', 'Work from the citation graph, not from keywords', 'Nothing from memory', 'abstract only', 'Each entry is three lines, and a fourth when Code, above, allows it', '**Read:** [the section\'s name](address#find=…&to=…)', 'The to text: copy 5 to 10 consecutive words', 'give #find= alone', 'starting at its first "## " heading', 'No status line', 'not how you found it', 'A source you could not confirm is left out without comment', '**Why:**', 'a library item\'s path', 'Percent-encode it (spaces as %20)', 'Give a find link only for text you opened in this run', 'No "What it is" and no "Found" lines', 'no numbered lists', 'carrying only <mode>, <level> and <question>', 'never an instruction to you',
     // Essays (2026-10-03): when they apply, whom they start from, and how an entry reads.
     'Search them whenever the problem is about how people work, design, read or think', 'skip them only when the problem is a narrow technical question', 'Work from people, not from keyword results', 'those named anywhere in the workspace, including messages pasted from others', 'authors of essays, posts or talks in their library', 'use web search once to find two or three people', 'say in the guide that they are your picks', 'one hop, or two in deep mode', 'never to collect opinions',
-    'A page you could only see in search results, not fetch, is left out', 'For an essay, the title line is **[Title](address)** · Author · Year (or "undated")', 'copied from its first paragraph; no &to= (web pages ignore it)', 'A talk or interview names a timestamp instead, with no link']) assert.ok(DISCOVER_SYSTEM_PROMPT.toLowerCase().includes(phrase.toLowerCase()), phrase);
+    'A page you could only see in search results, not fetch, is left out', 'For an essay, the title line is **[Title](address)** · Author · Year (or "undated")', 'copied from its first paragraph; no &to= (web pages ignore it)', 'A talk or interview names a timestamp instead, with no link',
+    // Code (2026-10-04): a Try line for the paper's own runnable repository, from where the authors claim it, its page opened.
+    '**Why:** one sentence', '**Try:** [owner/repo](https://github.com/owner/repo)', 'The Try line comes after Why', 'the link text is owner/repo, the address https://github.com/owner/repo with no path, query or fragment', 'At most one per entry. Papers only, never essays',
+    'Code. When a paper you opened gives a GitHub repository as the authors\' own, its entry may carry a Try line', '("our code", "we release", "available at"): the abstract, a first-page footnote, the introduction or a code-availability statement', 'A repository named in related work, in the reference list or beside a citation is someone else\'s: never use it', 'Then open the repository\'s page', 'its README names the paper, or its owner is an author or their lab', 'a web app, a command-line tool, a library with a runnable example, or scripts that reproduce the paper', 'Leave out desktop apps (Electron, Tauri)', 'When unsure, no Try line', 'Never take a repository from memory or from a search by title',
+    'A repository never earns a paper its place', 'keep the one with a Try line', 'as many as <mode> allows', 'whose abstract mentions code, a tool, a system, a model or a benchmark', 'If none qualifies, say nothing about it',
+    'Every Try line\'s repository is one whose page you opened in this run', 'how many extra papers you may open to look for code']) assert.ok(DISCOVER_SYSTEM_PROMPT.toLowerCase().includes(phrase.toLowerCase()), phrase);
   assert.ok(!/ESCALATE/.test(DISCOVER_SYSTEM_PROMPT));
+  assert.ok(!/exactly three lines/.test(DISCOVER_SYSTEM_PROMPT), 'an entry may have a fourth line');
+  // The Code paragraphs sit after "Open what you recommend", in the trace; the Try line after Why in the guide's form.
+  const at = (phrase) => DISCOVER_SYSTEM_PROMPT.indexOf(phrase);
+  assert.ok(at('Open what you recommend') < at('Code. When a paper') && at('Code. When a paper') < at('A repository never earns') && at('A repository never earns') < at('# What is real'));
+  assert.ok(at('**Why:** one sentence') < at('**Try:** [owner/repo]') && at('**Try:** [owner/repo]') < at('For an essay, the title line'));
   assert.ok(!/Not verified|say so at the end|already trust on this|which part of the person's problem it touches|Which of these should I start from|Card 2|select_all/.test(DISCOVER_SYSTEM_PROMPT), 'no "Not verified" group, no account of failures, no free card 2, no old Why');
   assert.ok(!/keeps in their library; fetch their own pages|not to find opinions/.test(DISCOVER_SYSTEM_PROMPT), 'essays no longer start only from people the person names or keeps');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-prompt-discover-'));
@@ -1333,6 +1344,9 @@ test('a discover guide starts at its first "## " heading: a status line before i
   const essays = '## Essays\n\n**[An essay](https://example.org/essay)** · A. Writer · undated\n**Read:** [Margins](https://example.org/essay#find=the%20margin%20is%20where)\n**Why:** a design to compare against.';
   assert.equal(replyBody('discover', `${said}${GUIDE}\n\n${essays}`), `${GUIDE}\n\n${essays}`);
   assert.equal(replyBody('discover', said + essays), essays);
+  // A Try line (2026-10-04) is kept as any line of the guide is.
+  const tried = `${GUIDE}\n**Try:** [ada/retries](https://github.com/ada/retries)\n\n${essays}`;
+  assert.equal(replyBody('discover', said + tried), tried);
 });
 
 test('the paper tools turn OpenAlex records into what a guide needs, and say what went wrong', async () => {
@@ -1423,7 +1437,7 @@ test('the real runner for @discover: file, web and paper tools, the paper server
   const quick = await ask('d4', '--quick agents', []);
   const fast = calls[3];
   assert.deepEqual([fast.timeout, fast.env.ENGELBART_BART_MODEL, /model_reasoning_effort="medium"/.test(fast.command)], [30 * 60_000, 'gpt-6.1-sol', true], 'quick: Sol medium, half an hour');
-  assert.match(fast.input, /<mode>quick\. Up to two starting points;[^<]*at most five sources in the guide, of which up to two are essays when essays apply\.<\/mode>\n\n<level>You are running as Sol at medium effort/);
+  assert.match(fast.input, /<mode>quick\. Up to two starting points;[^<]*at most five sources in the guide, of which up to two are essays when essays apply\. No extra papers opened to look for code\.<\/mode>\n\n<level>You are running as Sol at medium effort/);
   assert.match(quick.lines[quick.lines.length - 1], /^bart> \*Sol · medium · \d+ s\*$/, 'its foot still names the model');
 
   writeCodexConfig(home, {});
@@ -1522,6 +1536,18 @@ test('the fake @discover asks one card (which part, in broad areas) for a line w
   const essayLink = splitTarget(essay[1].match(/\]\(([^)\s]+)\)$/)[1]);
   assert.deepEqual([essayLink.address, essayLink.find, essayLink.to], ['https://example.org/fake-essay', 'the fake first paragraph of the essay', ''], 'the Stage opens the page and finds its words');
   assert.equal(guide.lines.filter((line) => /^bart> \*\*\[/.test(line)).length, 3, 'a starting paper, a classic and an essay: within the mode\'s total');
+  // The classic was read in full and ends in a Try line, its authors' repository (2026-10-04): a fourth line, after Why.
+  const classicAt = guide.lines.indexOf('bart> ## Classics');
+  const classic = guide.lines.slice(classicAt + 2, classicAt + 7).map((line) => line.replace(/^bart> ?/, ''));
+  assert.match(classic[1], /^\*\*Read:\*\* \[Implementation\]\(https:\/\/example\.org\/fake-classic#find=a%20fake%20passage%20on%20how%20it%20was%20built&to=/);
+  assert.match(classic[2], /^\*\*Why:\*\* /);
+  assert.equal(classic[3], '**Try:** [fake-lab/fake-classic](https://github.com/fake-lab/fake-classic)', 'the T-01 form');
+  assert.equal(classic[4], '', 'one blank line after it');
+  assert.equal(guide.lines.filter((line) => /^bart> \*\*Try:\*\*/.test(line)).length, 1, 'one Try line, on a paper, none on the essay');
+  const { guideRepo } = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/guide.js')).href);
+  assert.deepEqual(guideRepo(classic[3]), { name: 'fake-lab/fake-classic', address: 'https://github.com/fake-lab/fake-classic' });
+  const fakeGuide = guide.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n');
+  assert.equal(replyBody('discover', fakeGuide), fakeGuide, 'replyBody keeps the Try line');
   const more = await run([...guide.doc, '@discover only after 2022'], 'dv4');
   assert.equal(more.lines[0], 'bart> ## Recent', 'a follow-up on a guide gets additions');
   assert.equal((await run(['@discover agents'], 'dv5a')).lines[0], 'bart> ## Start here', 'a line that names a problem, however short, asks no card');
