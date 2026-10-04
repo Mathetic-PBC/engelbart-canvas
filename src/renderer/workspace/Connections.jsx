@@ -84,12 +84,15 @@ export function ToolConnection({ id, tool, busy, error, onAction }) {
   // Ready, or ready while a check runs (one runs before every @bart turn): the menu stays, dimmed until it ends.
   const ready = tool?.status === 'ready' && (!tool.busy || checking);
   const working = !!busy || (!!tool?.busy && !signingIn);
-  const description = !row ? 'Checking…' : busy === 'sign-out' ? 'Signing out…' : ready && tool.signedIn === true ? `Signed in · ${row.state}` : row.state;
+  // Signed in reads like GitHub's row, with the account the CLI is signed in as; the version is the row's tooltip.
+  const connected = ready && tool.signedIn === true;
+  const description = !row ? 'Checking…' : busy === 'sign-out' ? 'Signing out…' : connected ? `Connected${row.account ? ` · ${row.account}` : ''}` : row.state;
+  const version = ready && tool.version ? `${name} ${row.state}` : undefined;
   const spinning = busy === 'sign-out' || (row && row.tone === 'busy' && !checking);
   const problem = error || (row && row.detail && row.detailTone === 'error' ? row.detail : '');
   const quiet = disabled => ({ ...button, opacity: disabled ? 0.5 : 1, cursor: disabled ? 'default' : 'pointer' });
   return <div data-connection={id}>
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+    <div title={version} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
       <span className="glyph-fit" style={{ flex: 'none', display: 'flex', width: 18, height: 18, color: '#4d4d4d' }}><Icon /></span>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={text(13, '#171717', 500)}>{name}</div>

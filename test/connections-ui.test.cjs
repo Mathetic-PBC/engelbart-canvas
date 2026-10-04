@@ -187,12 +187,14 @@ const renderTool = (id, tool, extra = {}) => {
   return renderToStaticMarkup(React.createElement(ToolConnection, { id, tool, onAction: () => {}, ...extra }));
 };
 
-test('Claude Code and Codex: signed in, a version, and Sign out behind the options menu', async () => {
+test('Claude Code and Codex: Connected · the account, the version in the tooltip, and Sign out behind the options menu', async () => {
   const { tools } = await machine({ claude: '2.1.300', codex: '0.155.1' });
   const actions = [];
   const html = renderTool('claude', tools.snapshot().tools.claude, { onAction: name => actions.push(name) });
   assert.match(html, /Claude Code/);
-  assert.match(html, /Signed in · 2\.1\.300/);
+  assert.match(html, /role="status"[^>]*><span[^>]*>Connected · researcher@example\.com<\/span>/, 'like GitHub\'s row, without the @');
+  assert.doesNotMatch(html, /Signed in|role="status"[^>]*>[^<]*<span[^>]*>[^<]*2\.1\.300/, 'no version on the status line');
+  assert.match(html, /title="Claude Code 2\.1\.300"/, 'the version is the row\'s tooltip');
   assert.doesNotMatch(html, /Sign out|role="alert"/, 'the menu is closed');
   const menu = elements.find(element => element.props.provider === 'claude');
   assert.equal(menu.props.label, 'Claude Code');
@@ -201,9 +203,25 @@ test('Claude Code and Codex: signed in, a version, and Sign out behind the optio
   assert.equal(action('sign-in'), undefined);
   menu.props.onAction('sign-out');
   assert.deepEqual(actions, ['sign-out']);
-  assert.match(renderTool('codex', tools.snapshot().tools.codex), /Codex[\s\S]*Signed in · 0\.155\.1/);
+  const codex = renderTool('codex', tools.snapshot().tools.codex);
+  assert.match(codex, /Codex[\s\S]*Connected · researcher@example\.com/);
+  assert.match(codex, /title="Codex 0\.155\.1"/);
   assert.match(renderTool('claude', tools.snapshot().tools.claude, { busy: 'sign-out' }), /Signing out…/);
   assert.equal(elements.find(element => element.props['data-claude-actions']).props.disabled, true, 'no second action while one runs');
+});
+
+test('signed in as nobody the CLI names: plain Connected, the version still in the tooltip', async () => {
+  const { tools } = await machine({ claude: '2.1.300', codex: '0.155.1' });
+  const claude = renderTool('claude', { ...tools.snapshot().tools.claude, account: null });
+  assert.match(claude, /role="status"[^>]*><span[^>]*>Connected<\/span>/);
+  assert.doesNotMatch(claude, /Connected ·|Signed in/);
+  assert.match(claude, /title="Claude Code 2\.1\.300"/);
+  assert.match(renderTool('codex', { ...tools.snapshot().tools.codex, account: null }), /role="status"[^>]*><span[^>]*>Connected<\/span>/);
+  const checking = renderTool('claude', { ...tools.snapshot().tools.claude, busy: { action: 'check' } });
+  assert.match(checking, /Connected · researcher@example\.com/, 'a check before an @bart turn leaves the line as it is');
+  const signedOut = renderTool('claude', { ...tools.snapshot().tools.claude, status: 'signed-out', signedIn: false, account: null });
+  assert.match(signedOut, /Not signed in/);
+  assert.doesNotMatch(signedOut, /Connected|title="/, 'no account, and no tooltip, once signed out');
 });
 
 test('signed out: Sign in; a Codex API-key sign-in counts as signed out and says why in red', async () => {

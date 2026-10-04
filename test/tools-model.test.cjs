@@ -70,6 +70,15 @@ test('rows say what a tool is doing in a few words, with one button', async () =
   assert.equal(rowOf({ ...tools.git, skip: true }).state, 'Skipped');
 });
 
+test('a row names the account Claude Code or Codex is signed in as, and nobody otherwise (2026-10-03)', async () => {
+  const { rowOf } = await load();
+  const ready = rowOf(snapshot({ claude: { status: 'ready', signedIn: true, account: 'someone@example.com' } }).tools.claude);
+  assert.deepEqual([ready.account, ready.state], ['someone@example.com', REQUIREMENTS.claude.minimum], 'the state is still the version, for the setup dialog');
+  assert.equal(rowOf(snapshot({ codex: { status: 'ready', signedIn: true } }).tools.codex).account, null, 'none found');
+  assert.equal(rowOf(snapshot({ codex: { status: 'signed-out', signedIn: false, account: 'someone@example.com' } }).tools.codex).account, null);
+  assert.equal(rowOf(snapshot({}).tools.git).account, null);
+});
+
 test('Skip warns that Engelbart will be restricted, and only when it will be', async () => {
   const { skipWarnings } = await load();
   const both = snapshot({ git: { status: 'missing' }, claude: { status: 'missing' }, codex: { status: 'missing' } });

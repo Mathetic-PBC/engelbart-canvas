@@ -50,11 +50,12 @@ export function needsAction(tool) {
  * One row: `state` (what it says), `tone` (ok | muted | busy | warn | error), `action` (the one button:
  * install | update | sign-in | retry | cancel, or null), `detail` (a line under it), `detailTone` (error, in red, or
  * warn: the record's `note`, such as an older copy first on PATH), `page` (an address to open again while signing in),
- * `skipped`.
+ * `skipped`, `account` (who Claude Code or Codex is signed in as, or null: Connections' "Connected · <account>").
  */
 export function rowOf(tool) {
   const busy = tool.busy || null;
-  const row = { id: tool.id, name: tool.name, state: '', tone: 'muted', action: null, detail: null, detailTone: 'error', page: null, skipped: !!tool.skip };
+  const account = tool.signedIn === true && typeof tool.account === 'string' && tool.account ? tool.account : null;
+  const row = { id: tool.id, name: tool.name, state: '', tone: 'muted', action: null, detail: null, detailTone: 'error', page: null, skipped: !!tool.skip, account };
   if (busy && busy.action === 'install') return { ...row, state: busy.phase || 'Installing…', tone: 'busy' };
   if (busy && busy.action === 'update') return { ...row, state: 'Updating…', tone: 'busy' };
   if (busy && busy.action === 'sign-in') return { ...row, state: 'Finish signing in in your browser', tone: 'busy', action: 'cancel', page: busy.url || null };

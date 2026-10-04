@@ -6,10 +6,12 @@
 // "missing", "broken", or a version optionally followed by " signed-out"; for git also "bundled" (the Git that
 // came with Engelbart, standing in: ./bundled-git.cjs). Installing takes `delayMs`
 // and gives the tool its minimum version; updating does the same; signing in takes `delayMs` too; signing out is quick.
-// `failInstall` names tools whose install fails with a network error.
+// `failInstall` names tools whose install fails with a network error. A signed-in agent is signed in as FAKE_ACCOUNT.
 
 const { REQUIREMENTS, TOOL_NAMES } = require('./requirements.cjs');
 const { observed } = require('./detect.cjs');
+
+const FAKE_ACCOUNT = 'researcher@example.com';
 
 function parseSpec(value) {
   let input = {};
@@ -38,7 +40,7 @@ function createFakeTools(spec, { delayMs = 2500, sleep = (ms) => new Promise((re
         ? observed(name, {})
         : tool.broken
           ? observed(name, { file: fakePath(name), onPath: true, source: 'other', ran: false, error: `${REQUIREMENTS[name].name} did not start: exit status 1` })
-          : observed(name, { file: fakePath(name), onPath: !tool.bundled, source: name === 'git' ? (tool.bundled ? 'bundled' : 'apple') : 'native', ran: true, version: tool.version, signedIn: name === 'git' ? null : tool.signedIn });
+          : observed(name, { file: fakePath(name), onPath: !tool.bundled, source: name === 'git' ? (tool.bundled ? 'bundled' : 'apple') : 'native', ran: true, version: tool.version, signedIn: name === 'git' ? null : tool.signedIn, account: FAKE_ACCOUNT });
       out[name] = { ...found, checkedAt: now().toISOString() };
     }
     return out;
@@ -85,4 +87,4 @@ function createFakeTools(spec, { delayMs = 2500, sleep = (ms) => new Promise((re
   return { detect, actions, signInProcess, signOutProcess, state };
 }
 
-module.exports = { createFakeTools, parseSpec };
+module.exports = { createFakeTools, parseSpec, FAKE_ACCOUNT };

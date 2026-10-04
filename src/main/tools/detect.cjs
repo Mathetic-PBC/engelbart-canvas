@@ -155,26 +155,59 @@ async function readVersion(runner, name, file, { direct = false } = {}) {
 
 // Sign-in belongs to the CLIs: each is asked for its own status. Engelbart runs Codex on a ChatGPT sign-in
 // only (an API key is never used), so an API-key sign-in counts as signed out for it.
+// Who is signed in (2026-10-03, Connections' "Connected · <account>"): Claude Code's status JSON has it (`email`);
+// Codex's status line does not, so it is the `email` claim of the ID token in Codex's own auth.json (codexAccount).
+// Only that address is kept; no token is ever logged or returned. Not found → account null, never an error.
+const accountOf = (value) => (typeof value === 'string' && /^\S{1,254}$/.test(value.trim()) ? value.trim() : null);
+
+/** The account in Codex's sign-in file ($CODEX_HOME, else ~/.codex): its ID token's `email` claim, decoded unverified. */
+function codexAccount({ env = process.env, home = os.homedir() } = {}) {
+  try {
+    const auth = JSON.parse(fs.readFileSync(path.join(env.CODEX_HOME || path.join(home, '.codex'), 'auth.json'), 'utf8'));
+    const token = auth && auth.tokens && auth.tokens.id_token;
+    if (typeof token !== 'string') return null;
+    const payload = token.split('.')[1];
+    if (!payload) return null;
+    const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    return accountOf(claims && claims.email);
+  } catch {
+    return null;
+  }
+}
+
 const AUTH = {
   claude: {
     command: 'exec "$ENGELBART_TOOL" auth status --json 2>&1',
-    read: (text) => { const match = /"loggedIn"\s*:\s*(true|false)/.exec(text); return match ? { signedIn: match[1] === 'true' } : { signedIn: null }; },
+    read: (text) => {
+      // The JSON object, past any warning printed in front of it; else the one field, as before.
+      const raw = String(text || '');
+      let status = null;
+      try { status = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)); } catch { status = null; }
+      if (status && typeof status.loggedIn === 'boolean') return { signedIn: status.loggedIn, account: status.loggedIn ? accountOf(status.email) : null };
+      const match = /"loggedIn"\s*:\s*(true|false)/.exec(raw);
+      return { signedIn: match ? match[1] === 'true' : null, account: null };
+    },
   },
   codex: {
     command: 'exec "$ENGELBART_TOOL" login status 2>&1',
     read: (text) => {
-      if (/not logged in/i.test(text)) return { signedIn: false };
-      if (/logged in using chatgpt/i.test(text)) return { signedIn: true };
-      if (/logged in/i.test(text)) return { signedIn: false, error: 'Codex is signed in with an API key; Engelbart uses a ChatGPT sign-in (run `codex login`).' };
-      return { signedIn: null };
+      if (/not logged in/i.test(text)) return { signedIn: false, account: null };
+      if (/logged in using chatgpt/i.test(text)) return { signedIn: true, account: null };
+      if (/logged in/i.test(text)) return { signedIn: false, account: null, error: 'Codex is signed in with an API key; Engelbart uses a ChatGPT sign-in (run `codex login`).' };
+      return { signedIn: null, account: null };
     },
+    account: codexAccount,
   },
 };
 
-async function readSignIn(runner, name, file) {
+/** → { signedIn, account, error? }. `where`: { env, home } for a sign-in file the CLI does not print from (Codex's). */
+async function readSignIn(runner, name, file, where = {}) {
   const out = await runner.shell(AUTH[name].command, { env: { ENGELBART_TOOL: file }, timeout: AUTH_TIMEOUT_MS });
-  if (out.marked === false) return { signedIn: null };
-  return AUTH[name].read(out.stdout);
+  if (out.marked === false) return { signedIn: null, account: null };
+  const read = AUTH[name].read(out.stdout);
+  if (read.signedIn !== true) return { ...read, account: null };
+  if (!read.account && AUTH[name].account) return { ...read, account: AUTH[name].account(where) };
+  return read;
 }
 
 /** Whether the person turned the CLI's own updater off: then Engelbart asks before updating it too (design D11). */
@@ -191,11 +224,15 @@ function updaterOff(name, { env, home }) {
 }
 
 /** The observed half of a tool's record (./record.cjs), from what was found. */
-function observed(name, { file = null, onPath = null, source = null, version = null, ran = false, error = null, signedIn = null, updater = false, note = null }) {
+function observed(name, { file = null, onPath = null, source = null, version = null, ran = false, error = null, signedIn = null, account = null, updater = false, note = null }) {
   // `installed`: a program is there. Whether it can be used is `status` (a broken one is installed and failed).
   // `onPath`: running it by its name runs this copy; else Engelbart runs it by its full path. `note`: what the row adds.
+  // `account`: who is signed in (an email address), only while signed in.
   const out = { installed: !!file, version, status: 'missing', path: file, onPath, source, untested: false, error, updaterOff: updater, note };
-  if (name !== 'git') out.signedIn = file && ran ? signedIn : null;
+  if (name !== 'git') {
+    out.signedIn = file && ran ? signedIn : null;
+    out.account = out.signedIn === true ? accountOf(account) : null;
+  }
   if (!file) return out;
   if (!ran) return { ...out, status: 'failed' };
   const verdict = judge(name, version);
@@ -268,7 +305,8 @@ function copiesOf(name, candidates, { home, systemBins }) {
 
 async function detectAgent(runner, name, candidates, { env, home, systemBins }) {
   const label = REQUIREMENTS[name].name;
-  const updater = updaterOff(name, { env: { ...process.env, ...env }, home });
+  const shellEnv = { ...process.env, ...env };
+  const updater = updaterOff(name, { env: shellEnv, home });
   // The first copy recent enough, else the first that is this program at all (its row offers Update, or Try again).
   let first = null;
   let chosen = null;
@@ -300,8 +338,8 @@ async function detectAgent(runner, name, candidates, { env, home, systemBins }) 
   // A wrapper script in front of the program says nothing about where the program came from: the next one on PATH does.
   const after = candidates.slice(candidates.indexOf(file) + 1);
   const origin = (isScript(file) && after.find((candidate) => !isScript(candidate))) || file;
-  const auth = read.ran ? await readSignIn(runner, name, file) : { signedIn: null };
-  return observed(name, { file, onPath, source: sourceOf(name, origin), ...read, signedIn: auth.signedIn, error: read.error || auth.error || null, updater, note });
+  const auth = read.ran ? await readSignIn(runner, name, file, { env: shellEnv, home }) : { signedIn: null, account: null };
+  return observed(name, { file, onPath, source: sourceOf(name, origin), ...read, signedIn: auth.signedIn, account: auth.account, error: read.error || auth.error || null, updater, note });
 }
 
 /**
@@ -322,4 +360,4 @@ async function detectTools({ runner, only = ['git', 'claude', 'codex'], home = o
   return { ...Object.fromEntries(await Promise.all(jobs)), aliases, lookupError };
 }
 
-module.exports = { detectTools, lookupCommand, parseLookup, knownPlaces, sourceOf, observed, readVersion, removal, shellSilent, AUTH, APPLE_GIT_STUB };
+module.exports = { detectTools, lookupCommand, parseLookup, knownPlaces, sourceOf, observed, readVersion, readSignIn, codexAccount, removal, shellSilent, AUTH, APPLE_GIT_STUB };

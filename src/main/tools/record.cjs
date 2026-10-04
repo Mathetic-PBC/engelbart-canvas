@@ -22,7 +22,7 @@ function blankTool(name) {
     version: null,
     requires: requiresText(name),
     status: 'unknown',
-    ...(AGENTS.includes(name) ? { signedIn: null } : {}),
+    ...(AGENTS.includes(name) ? { signedIn: null, account: null } : {}),
     path: null,
     onPath: null,
     source: null,
@@ -48,6 +48,8 @@ function normalizeTool(name, value) {
   if (isVersion(input.version)) out.version = input.version;
   if (STATUSES.includes(input.status)) out.status = input.status;
   if (AGENTS.includes(name) && (input.signedIn === true || input.signedIn === false)) out.signedIn = input.signedIn;
+  // Who is signed in (an email address, ../tools/detect.cjs), only while signed in.
+  if (AGENTS.includes(name) && out.signedIn === true && typeof input.account === 'string' && /^\S{1,254}$/.test(input.account)) out.account = input.account;
   if (typeof input.path === 'string' && input.path.length <= 4096 && path.isAbsolute(input.path) && !input.path.includes('\0')) out.path = input.path;
   if (typeof input.onPath === 'boolean') out.onPath = input.onPath;
   if (SOURCES.includes(input.source)) out.source = input.source;

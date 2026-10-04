@@ -35,7 +35,7 @@ const { markRollback, rollback } = require('./install.cjs');
 const STALE_MS = 10 * 60_000;
 const RETRY_UPDATE_MS = 24 * 60 * 60_000;
 const SIGN_IN_MS = 10 * 60_000;
-const OBSERVED = ['installed', 'version', 'status', 'signedIn', 'path', 'onPath', 'source', 'untested', 'updaterOff', 'checkedAt', 'error', 'note'];
+const OBSERVED = ['installed', 'version', 'status', 'signedIn', 'account', 'path', 'onPath', 'source', 'untested', 'updaterOff', 'checkedAt', 'error', 'note'];
 const WORKS = new Set(['ready', 'signed-out']);
 
 const pick = (found) => Object.fromEntries(OBSERVED.filter((key) => Object.hasOwn(found, key)).map((key) => [key, found[key]]));
