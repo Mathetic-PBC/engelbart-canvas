@@ -1,6 +1,7 @@
 'use strict';
 
-const { githubRepo, runStore } = require('./runs.cjs');
+const { githubRepo, runStore, KINDS } = require('./runs.cjs');
+const { repoPath, HINT_LIMIT } = require('./local-tools.cjs');
 const { readSandboxEnv } = require('./config.cjs');
 const { launchWorker } = require('./transport.cjs');
 const { safePreview, MISSING_KEY } = require('./worker.cjs');
@@ -12,6 +13,7 @@ const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 const IDLE_MS = 10 * 60_000;
 const TOUCH_EVERY = 30_000;
 const ASLEEP = 'Paused after 10 minutes unused';
+const TERMINAL_READY = 'Terminal ready';
 const QUIT_ASLEEP = 'Paused when Engelbart quit';
 const EXPIRED_MESSAGE = 'Stopped after 7 days unopened';
 const notFound = (error) => error?.name === 'NotFoundError' || error?.name === 'SandboxNotFoundError' || error?.status === 404;
@@ -23,11 +25,14 @@ const notFound = (error) => error?.name === 'NotFoundError' || error?.name === '
 // download link for its code, made when the sandbox is ready to use it and handed over with the worker's ack. The
 // sign-in itself never reaches the worker or the sandbox.
 // `claudeReady` throws, saying what to do, while Claude Code is not installed or not signed in to a subscription
-// (local-claude.cjs's prepareLocalClaude). A new run's setup needs it unless an ANTHROPIC_API_KEY stands in, so on a new
-// Mac, where onboarding saves a repository before Claude Code is installed and signed in, the run waits for it as it
-// waits for the E2B key (2026-10-01; it used to start, fail the check and stop on the missing ANTHROPIC_API_KEY).
-// `Sandbox`: E2B's, for touch's one call from this process (every other E2B call is a worker's).
-function createSandboxManager({ notify, launch = launchWorker, readEnv = readSandboxEnv, secure, e2bKey = async () => null, githubLogin = () => '', repoAccess = null, claudeReady = async () => {}, Sandbox = null, now = Date.now }) {
+// (local-claude.cjs's prepareLocalClaude). Every new run's setup is Claude Code's (there is no API-key fallback since
+// 2026-10-03), so on a new Mac, where onboarding saves a repository before Claude Code is installed and signed in, the
+// run waits for it as it waits for the E2B key.
+// `Sandbox`: E2B's, for touch's one call from this process (every other E2B call is a worker's, or a sandbox
+// terminal's: pty.cjs).
+// `terminals` (terminals.cjs): the shells open in ready sandboxes, { open(spec) → session, close(libraryId),
+// closeAll() }. A run's go when its sandbox is stopped, replaced or released.
+function createSandboxManager({ notify, launch = launchWorker, readEnv = readSandboxEnv, secure, e2bKey = async () => null, githubLogin = () => '', repoAccess = null, claudeReady = async () => {}, Sandbox = null, terminals = null, now = Date.now }) {
   const workers = new Map();
   const contexts = new Map();
   const locks = new Map();
@@ -54,6 +59,14 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
     if (!key) throw new Error(MISSING_KEY);
     return { ...env, E2B_API_KEY: key };
   }
+  // A run whose sandbox is being stopped, replaced or forgotten: its terminals close with it (the sandbox itself is
+  // the caller's). Never fails the caller.
+  async function closeTerminals(libraryId) {
+    try { await terminals?.close(libraryId); } catch { /* the session is gone already */ }
+  }
+  // A terminal has no app to watch and no preview to check: its sandbox is healthy unless it is gone.
+  const terminalOnly = (run) => run.status === 'ready' && run.kind === 'terminal';
+  const keeps = (run, state) => ['ready', 'paused'].includes(state) || (terminalOnly(run) && state !== 'gone');
   function publish(ctx, run, extra = {}) {
     if (!run) return;
     if (extra.message) messages.set(run.id, extra.message);
@@ -61,7 +74,7 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
   }
   async function control(ctx, command, run) {
     let result;
-    const worker = launch({ command, run_id: run.id, sandbox_id: run.sandbox_id, preview_url: run.preview_url, port: run.port }, await environmentFor(ctx), async (event) => {
+    const worker = launch({ command, run_id: run.id, sandbox_id: run.sandbox_id, preview_url: run.preview_url, port: run.port, ...(run.kind ? { kind: run.kind } : {}) }, await environmentFor(ctx), async (event) => {
       if (event.event === 'failed') throw new Error(event.error || 'Sandbox check failed');
       if (event.event === 'result') result = event;
     });
@@ -69,13 +82,16 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
     if (!result) throw new Error('Sandbox worker returned no result');
     return result;
   }
+  // `extra`: what is published with it; its `message` is also recorded, with `data` when there is some.
   async function update(ctx, run, fields, extra) {
+    const { data, ...rest } = extra || {};
     let next = await runStore(ctx.libraryDb).update(run.id, fields);
-    if (next && extra?.message) next = await runStore(ctx.libraryDb).record(next.id, extra.message);
-    if (next) publish(ctx, next, extra);
+    if (next && rest.message) next = await runStore(ctx.libraryDb).record(next.id, rest.message, data ? { data } : {});
+    if (next) publish(ctx, next, rest);
     return next || run;
   }
   async function end(ctx, run, status, error = null) {
+    await closeTerminals(run.library_id);
     return update(ctx, run, { status, error, finished_at: new Date().toISOString() }, { message: error || 'Sandbox stopped' });
   }
   // `result`: the probe pollOnce already made, if it did.
@@ -84,8 +100,8 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
     if (!result) result = await control(ctx, 'probe', run);
     const { state } = result;
     if (!run.sandbox_id && result.sandbox_id) run = await update(ctx, run, { sandbox_id: result.sandbox_id });
-    // Asleep is as good as live: the next request to its preview wakes it.
-    if (['ready', 'paused'].includes(state) && run.status === 'ready') return run;
+    // Asleep is as good as live: the next request to its preview (or its terminal) wakes it.
+    if (run.status === 'ready' && keeps(run, state)) return run;
     if (state === 'unreachable') throw new Error('The preview is temporarily unreachable. Retry the check or stop the run before starting another.');
     if (state !== 'gone') await control(ctx, 'kill', run);
     return end(ctx, run, run.status === 'starting' ? 'failed' : 'stopped', run.status === 'starting' ? 'Setup was interrupted. Retry to start a new run.' : null);
@@ -99,16 +115,27 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
       const details = {};
       if (['status', 'command', 'stdout', 'stderr', 'error'].includes(event.kind)) details.kind = event.kind;
       if (event.data && typeof event.data === 'object' && !Array.isArray(event.data)) details.data = event.data;
+      // Claude said how the repository is used (local-setup.cjs): kept on the run, for its build details, as it is said.
+      if (details.data?.phase === 'kind' && KINDS.includes(details.data.kind) && run.status === 'starting') {
+        await store.update(run.id, { kind: details.data.kind, kind_reason: String(details.data.reason || '').slice(0, 500) || null });
+      }
       publish(ctx, await store.record(run.id, message, details), { message });
     } else if (event.event === 'sandbox_created') {
       if (typeof event.sandbox_id !== 'string' || !/^[\w-]{1,200}$/.test(event.sandbox_id)) throw new Error('Invalid sandbox identifier');
       await update(ctx, run, { sandbox_id: event.sandbox_id }, { message: 'Sandbox created' });
     } else if (event.event === 'ready') {
-      if (!run.sandbox_id || !Number.isInteger(event.port) || event.port < 1 || event.port > 65535) throw new Error('Invalid ready event');
+      // { kind, preview_url?, port?, terminal?: { cwd, hint } }. A restart's says nothing of its kind: the run keeps its own.
+      const kind = event.kind === undefined ? run.kind || 'interface' : event.kind;
+      if (!run.sandbox_id || !KINDS.includes(kind)) throw new Error('Invalid ready event');
+      const preview = kind !== 'terminal';
+      if (preview && (!Number.isInteger(event.port) || event.port < 1 || event.port > 65535)) throw new Error('Invalid ready event');
+      const terminal = kind === 'interface' ? null : event.terminal === undefined && event.kind === undefined ? run.terminal : readyTerminal(event.terminal);
+      if (kind !== 'interface' && !terminal) throw new Error('Invalid ready event');
       // Completion is an inbox notification, never a navigation request. Ignore
       // duplicates so the persisted completion time/read state stays stable.
       if (run.status === 'ready') return;
-      await update(ctx, run, { status: 'ready', preview_url: safePreview(event.preview_url), port: event.port }, { message: 'Preview ready', notification: 'preview-ready' });
+      await update(ctx, run, { status: 'ready', kind, terminal, preview_url: preview ? safePreview(event.preview_url) : null, port: preview ? event.port : null },
+        preview ? { message: 'Preview ready', notification: 'preview-ready' } : { message: TERMINAL_READY, data: { phase: 'ready', kind }, notification: 'preview-ready' });
     } else if (event.event === 'paused') {
       // Asleep, not stopped: the run stays ready, and its worker leaves (worker.cjs's asleep).
       if (run.status !== 'ready') return;
@@ -144,6 +171,8 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
     const finish = async (error) => {
       if (held.detaching || held.asleep) return;
       const current = await runStore(ctx.libraryDb).get(run.id);
+      // A ready terminal's worker leaves once it is ready (worker.cjs): its sandbox stays, asleep when unused.
+      if (current && terminalOnly(current) && !error) return;
       if (current && ['starting', 'ready'].includes(current.status)) {
         let cleanup = '';
         if (current.sandbox_id && !restart) {
@@ -191,28 +220,26 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
         // A local worker proves setup is active. Ready runs still need a live preview check.
         if (run.status === 'ready') {
           const { state } = await control(ctx, 'probe', run);
-          if (state === 'ready') { publish(ctx, run, { message: 'Preview ready' }); return run; }
-          if (state === 'paused') { publish(ctx, run, { message: 'Paused; opening the preview wakes it' }); return run; }
+          if (state === 'paused') { publish(ctx, run, { message: `Paused; opening the ${run.kind === 'terminal' ? 'terminal' : 'preview'} wakes it` }); return run; }
+          if (keeps(run, state)) { publish(ctx, run, { message: terminalOnly(run) ? TERMINAL_READY : 'Preview ready' }); return run; }
           if (state === 'unreachable') throw new Error('The preview is temporarily unreachable. Stop the run or retry the check.');
           await stopRun(ctx, run.id);
         } else if (workers.has(run.id)) { publish(ctx, run); return run; }
         else run = await reconcile(ctx, run);
       }
-      // Setup by the local Claude subscription (ENGELBART_SANDBOX_SETUP auto or claude-local; worker.cjs) needs it signed in
-      // first, unless auto has an API key to fall back to. Automatic preparation waits quietly, and runs once it is (the
-      // renderer prepares again when Claude Code's sign-in changes), as does a save's; Start says why it cannot.
-      const setup = env.ENGELBART_SANDBOX_SETUP || 'auto';
-      if (setup === 'claude-local' || (setup === 'auto' && !env.ANTHROPIC_API_KEY)) {
-        try { await claudeReady(); }
-        catch (error) {
-          if (!automatic && !waitForClaude) throw error;
-          prepared.delete(key);
-          return (await store.latest()).find((item) => item.library_id === libraryId) || null;
-        }
+      // Setup is the local Claude subscription's (worker.cjs), so it is signed in first. Automatic preparation waits
+      // quietly, and runs once it is (the renderer prepares again when Claude Code's sign-in changes), as does a save's;
+      // Start says why it cannot.
+      try { await claudeReady(); }
+      catch (error) {
+        if (!automatic && !waitForClaude) throw error;
+        prepared.delete(key);
+        return (await store.latest()).find((item) => item.library_id === libraryId) || null;
       }
       // Cleanup may have failed on a previous attempt; retain and use that handle.
       const previous = (await store.latest()).find((item) => item.library_id === libraryId);
       const environment = await environmentStore(ctx.libraryDb, secure).read(libraryId);
+      await closeTerminals(libraryId);
       if (previous?.sandbox_id && ['failed', 'stopped'].includes(previous.status)) await control(ctx, 'kill', previous);
       run = await store.create(libraryId);
       if (!run) return store.active(libraryId);
@@ -244,6 +271,12 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
       const store = runStore(ctx.libraryDb);
       let run = (await store.latest()).find((row) => row.library_id === libraryId);
       if (!run?.sandbox_id || !['ready', 'failed'].includes(run.status)) throw new Error('Wait for a ready preview before restarting the application. Saved values will be used by the next build.');
+      // A terminal has no app to restart: its shell is. The open one closes, and the next one opened has the saved values.
+      if (terminalOnly(run)) {
+        await closeTerminals(libraryId);
+        const message = 'Saved environment applies to the next terminal opened';
+        return update(ctx, run, { env_revision: values.revision }, { message });
+      }
       // The key, then confirmation that the same machine can relaunch, before interrupting anything.
       const env = await environmentFor(ctx);
       await control(ctx, 'can_restart', run);
@@ -262,6 +295,7 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
   async function stopRun(ctx, id) {
     const run = await runStore(ctx.libraryDb).get(id);
     if (!run) throw new Error('Unknown sandbox run');
+    await closeTerminals(run.library_id);
     const held = workers.get(id);
     if (held) {
       await held.worker.stop().catch(() => {});
@@ -303,6 +337,7 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
   // The sweep (pollOnce): a ready preview asleep and not opened for 7 days ends, marked so that opening it builds it again.
   const unopened = (run) => now() - Date.parse(run.last_opened_at || run.created_at) > EXPIRE_MS;
   async function expire(ctx, run) {
+    await closeTerminals(run.library_id);
     await control(ctx, 'kill', run);
     const stopped = await runStore(ctx.libraryDb).update(run.id, { status: 'stopped', finished_at: new Date(now()).toISOString() });
     if (!stopped) return;
@@ -328,7 +363,7 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
                 // Setup still running, or a ready app its worker watches. Asleep ('paused'), that worker is on its way out.
                 if (current.status !== 'ready') return;
                 const result = await control(ctx, 'probe', current);
-                if (['gone', 'inactive'].includes(result.state)) await stopRun(ctx, current.id);
+                if (result.state === 'gone' || (result.state === 'inactive' && !terminalOnly(current))) await stopRun(ctx, current.id);
                 else if (result.state === 'unreachable') publish(ctx, current, { message: 'Preview currently unreachable; checking again shortly' });
               } else {
                 const result = await control(ctx, 'probe', current);
@@ -349,6 +384,8 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
     try {
       await pollDone;
       await Promise.allSettled([...locks.values()]);
+      // Shells first, while their sandboxes are still awake: ending one later would wake a sandbox put to sleep below.
+      try { await terminals?.closeAll(); } catch { /* sessions are going with the app */ }
       // A terminal event reaches the UI before its worker finishes exiting/cleanup.
       // Drain those workers too, before the caller closes or replaces the database.
       // A ready preview's worker lets go of it instead of stopping it: it goes to sleep below.
@@ -409,7 +446,38 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
       await held.finished;
     })));
   }
-  return { start, list, stop, touch, environment, saveEnvironment, restart, release, signedOut, close, poll, dispose: async () => { clearInterval(timer); await close(); } };
+  // A shell in a ready run's sandbox (`sandboxTerminal`, ipc.cjs): the one already open for it, woken if it slept, else
+  // a new one in the directory Claude chose, with the repository's saved environment values (never on a command line).
+  // Opening it counts as opening the run, for the 7-day sweep. → the session's snapshot (terminals.cjs)
+  async function terminal(ctx, libraryId) {
+    if (!terminals) throw new Error('Sandbox terminals are unavailable');
+    contexts.set(ctx.dataRoot, ctx);
+    return exclusive(`${ctx.dataRoot}:${libraryId}`, async () => {
+      if (closing) throw new Error('Sandbox workers are shutting down');
+      const repo = githubRepo((await ctx.libraryDb.get(libraryId))?.url);
+      if (!repo) throw new Error('Choose a saved GitHub repository.');
+      const run = await runStore(ctx.libraryDb).active(libraryId);
+      if (run?.status !== 'ready' || !run.sandbox_id || !['terminal', 'both'].includes(run.kind) || !run.terminal) throw new Error('This repository has no sandbox terminal yet.');
+      await environmentFor(ctx); // signed out: say so now, not when the shell connects
+      const environment = await envStore(ctx).read(libraryId);
+      await runStore(ctx.libraryDb).update(run.id, { last_opened_at: new Date(now()).toISOString() });
+      return terminals.open({
+        libraryId, sandboxId: run.sandbox_id, title: `${repo.owner}/${repo.name} (sandbox)`,
+        cwd: repoPath(run.terminal.cwd || '.'), envs: environment.values, hint: run.terminal.hint || '',
+        apiKey: async () => (await environmentFor(ctx)).E2B_API_KEY,
+      });
+    });
+  }
+  return { start, list, stop, touch, terminal, environment, saveEnvironment, restart, release, signedOut, close, poll, dispose: async () => { clearInterval(timer); await close(); } };
+}
+
+// A ready event's terminal ({ cwd, hint }, local-tools.cjs's terminal_ready), checked again here: a path inside the
+// repository and one line of plain text. Null when it is not one.
+function readyTerminal(value) {
+  if (!value || typeof value !== 'object' || typeof value.cwd !== 'string' || typeof value.hint !== 'string') return null;
+  if (value.hint.length > HINT_LIMIT || /[\u0000-\u001f\u007f-\u009f]/.test(value.hint)) return null;
+  try { repoPath(value.cwd); } catch { return null; }
+  return { cwd: value.cwd, hint: value.hint };
 }
 
 module.exports = { createSandboxManager };

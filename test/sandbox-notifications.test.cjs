@@ -20,7 +20,7 @@ function load(file) {
   finally { if (previous === undefined) delete global.window; else global.window = previous; }
   return compiled.exports;
 }
-const { sandboxProgressState, sandboxProgressReducer: reduce, readNotificationState, writeNotificationState, notificationStorageKey, availableBuildNotifications, repositoryClick, previewLibraryId } = load('model/sandbox-notifications.js');
+const { sandboxProgressState, sandboxProgressReducer: reduce, readNotificationState, writeNotificationState, notificationStorageKey, availableBuildNotifications, repositoryClick, previewLibraryId, failureReason } = load('model/sandbox-notifications.js');
 const { NotificationBell, BuildNotification } = load('ui/SandboxNotifications.jsx');
 const root = '/fixture/main';
 const at = (second) => `2026-09-23T12:00:${String(second).padStart(2, '0')}.000Z`;
@@ -341,4 +341,80 @@ test('the Stage keeps a ready preview awake only while it is in front of a focus
   assert.match(provider, /api\.onWindowFocus/);
   const stage = fs.readFileSync(path.join(__dirname, '../src/renderer/workspace/Stage.jsx'), 'utf8');
   assert.match(stage, /usePreviewTouch\(\(web && web\.url\) \|\| tab\.url, visible && page\)/);
+});
+
+// The bell says a build failed and, at most, why in a few words (2026-10-03); the whole error is in its build details.
+test('a failed build shows a short reason, never its whole error', () => {
+  const cases = [
+    ['Claude finished without a verified web preview. Retry from build details.', 'No web preview found'],
+    ['Setup stopped', 'Setup stopped'],
+    ['Setup was interrupted. Retry to start a new run.', 'Setup stopped'],
+    ['Claude Code is not signed in to a Claude subscription (Engelbart ▸ Set Up Tools… signs in).', 'Claude Code not signed in'],
+    ['Claude Code is not installed yet (Engelbart ▸ Set Up Tools… installs it).', 'Claude Code not installed'],
+    ['Claude Code did not finish: error_max_turns. Retry from build details.', 'Setup failed'],
+    ['Repository not found', 'Setup failed'],
+    [null, 'Setup failed'],
+  ];
+  for (const [error, reason] of cases) {
+    assert.equal(failureReason(run('failed', { error })), reason, String(error));
+    assert.ok(reason.length <= 60);
+  }
+  assert.equal(failureReason(run('ready')), '');
+  const repo = { id: 'repo', name: 'owner/app', url: 'https://github.com/owner/app' };
+  const error = 'Claude finished without a verified web preview. See the setup log for missing requirements. No ANTHROPIC_API_KEY is configured for fallback. Check Claude sign-in/usage or add a fallback key in ~/.engelbart/sandbox.env. Retry from build details.';
+  const html = renderToStaticMarkup(React.createElement(BuildNotification, { notification: { id: 'notice' }, run: run('failed', { error }), repo, onBuild() {} }));
+  assert.match(html, />Build failed<\/button>/);
+  assert.match(html, /<span class="notification-detail">No web preview found<\/span>/);
+  assert.doesNotMatch(html, /ANTHROPIC|fallback|setup log/);
+  const source = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/SandboxNotifications.jsx'), 'utf8');
+  assert.doesNotMatch(source, /\{run\.error\}/, 'the bell row never prints the error itself');
+  const details = fs.readFileSync(path.join(__dirname, '../src/renderer/workspace/BuildDetails.jsx'), 'utf8');
+  assert.match(details, /\{run\?\.error && <p role="alert" className="repo-error">\{run\.error\}<\/p>\}/, 'build details keep the whole error');
+});
+
+test('a terminal opens its terminal, an interface its preview, both both; a terminal has no "No web preview" line', () => {
+  const repo = { id: 'repo', name: 'owner/app', url: 'https://github.com/owner/app' };
+  const terminal = { cwd: '.', hint: 'python main.py --help' };
+  const runs = {
+    interface: run('ready', { kind: 'interface' }),
+    terminal: run('ready', { kind: 'terminal', preview_url: null, terminal, build_log: [{ time: at(10), message: 'Terminal ready', data: { phase: 'ready', kind: 'terminal' } }] }),
+    both: run('ready', { kind: 'both', terminal }),
+  };
+  const descendants = element => !React.isValidElement(element) ? [] : [element, ...React.Children.toArray(element.props.children).flatMap(descendants)];
+  for (const [kind, value] of Object.entries(runs)) {
+    const calls = [];
+    const tree = BuildNotification({ notification: { id: 'notice' }, run: value, repo, onRepository() {}, onBuild() {}, onClear() {},
+      onOpen: (item) => calls.push(['live', item.kind]), onTerminal: (item) => calls.push(['terminal', item.kind]) });
+    const elements = descendants(tree);
+    const live = elements.find((element) => element.props.className === 'notification-open');
+    const shell = elements.find((element) => element.props.className === 'notification-open notification-terminal');
+    assert.equal(!!live, kind !== 'terminal', `${kind}: Open live`);
+    assert.equal(!!shell, kind !== 'interface', `${kind}: Open terminal`);
+    if (live) { assert.equal(live.props.children, 'Open live ↗'); live.props.onClick(); }
+    if (shell) { assert.equal(shell.props.children, 'Open terminal'); shell.props.onClick(); }
+    assert.deepEqual(calls, [...(live ? [['live', kind]] : []), ...(shell ? [['terminal', kind]] : [])]);
+    assert.doesNotMatch(renderToStaticMarkup(tree), /No web preview/);
+  }
+  // A ready run's notification is dated by its ready entry, for a terminal too.
+  const state = reduce(sandboxProgressState(root), progress(runs.terminal));
+  assert.equal(state.notifications[0].at, at(10));
+});
+
+test('a repository clicked in the sidebar opens what its kind is used through; runs from before kinds open as previews', () => {
+  const terminal = { cwd: '.', hint: 'make help' };
+  assert.equal(repositoryClick({ run: run('ready', { kind: 'interface' }) }), 'preview');
+  assert.equal(repositoryClick({ run: run('ready') }), 'preview', 'no kind: a preview, as every run was');
+  assert.equal(repositoryClick({ run: run('ready', { kind: 'terminal', preview_url: null, terminal }) }), 'terminal');
+  assert.equal(repositoryClick({ run: run('ready', { kind: 'both', terminal }) }), 'both');
+  assert.equal(repositoryClick({ run: run('ready', { kind: 'terminal', preview_url: null, terminal: null }) }), 'details', 'no terminal yet');
+  assert.equal(repositoryClick({ run: run('ready', { kind: 'both', terminal: null }) }), 'preview');
+  assert.equal(repositoryClick({ run: run('starting', { kind: 'terminal', terminal }) }), 'details');
+  const expired = run('stopped', { kind: 'terminal', build_log: [{ time: at(20), message: 'Stopped after 7 days unopened', data: { lifecycle: 'expired' } }] });
+  assert.equal(repositoryClick({ run: expired }), 'start', 'one ended after a week unopened is built again, whatever its kind');
+  const workspace = fs.readFileSync(path.join(__dirname, '../src/renderer/screens/Workspace.jsx'), 'utf8');
+  assert.match(workspace, /click === 'terminal'\) \{ sandboxes\.openTerminal\(sandbox\.run\); return; \}/);
+  assert.match(workspace, /click === 'both'\) \{ sandboxes\.openTerminal\(sandbox\.run, \{ show: false \}\); sandboxes\.open\(sandbox\.run\); return; \}/);
+  assert.match(workspace, /window\.addEventListener\(OPEN_SANDBOX_TERMINAL, onOpen\)/);
+  const pane = fs.readFileSync(path.join(__dirname, '../src/renderer/terminal/TerminalPane.jsx'), 'utf8');
+  assert.match(pane, /useSandboxTouch\(visible && current && inSandbox\(current\) && running \? current\.snapshot\.libraryId \|\| null : null\)/, 'its tab in front of a focused window keeps the sandbox awake');
 });

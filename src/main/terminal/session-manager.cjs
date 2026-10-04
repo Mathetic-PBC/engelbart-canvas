@@ -68,6 +68,8 @@ class SessionManager extends EventEmitter {
     // Read at each start: what changes while the app runs (Engelbart's own Git once the tool check chose it).
     this.extraEnvironment = options.extraEnvironment || (() => ({}));
     this.pty = options.pty || pty;
+    // Shells in E2B sandboxes (../sandbox/pty.cjs): `createSandbox`, which only main calls (../sandbox/terminals.cjs).
+    this.sandboxPty = options.sandboxPty || null;
     this.maxSessions = options.maxSessions || DEFAULT_MAX_SESSIONS;
     this.maxReplayBytes = options.maxReplayBytes || DEFAULT_MAX_REPLAY_BYTES;
     this.maxReplayEntries = options.maxReplayEntries || DEFAULT_MAX_REPLAY_ENTRIES;
@@ -89,7 +91,6 @@ class SessionManager extends EventEmitter {
       throw new Error(`At most ${this.maxSessions} sessions may be open`);
     }
     const launch = createLaunchSpec(request, { ...this.environment, ...this.extraEnvironment() });
-    const id = randomUUID();
     const processHandle = this.pty.spawn(launch.file, launch.args, {
       name: 'xterm-256color',
       cols: launch.cols,
@@ -97,15 +98,66 @@ class SessionManager extends EventEmitter {
       cwd: launch.cwd,
       env: launch.env,
     });
-    const record = {
-      id,
+    return this.#register(processHandle, {
       provider: launch.provider,
       title: launch.provider === 'shell' ? path.basename(launch.file) : PROVIDERS[launch.provider].name,
       cwd: launch.cwd,
       shell: launch.file,
-      pid: processHandle.pid,
       cols: launch.cols,
       rows: launch.rows,
+    });
+  }
+
+  // A shell in a repository's E2B sandbox (provider 'sandbox'), asked for by main alone, never by a renderer's create:
+  // { sandboxId, libraryId, title, cwd (in the sandbox), envs (its saved values), hint, apiKey, cols?, rows? }. The hint,
+  // an example command, is shown as a comment above the first prompt and never run.
+  createSandbox(request) {
+    if (!this.sandboxPty) throw new Error('Sandbox terminals are unavailable');
+    if (this.sessions.size >= this.maxSessions) {
+      throw new Error(`At most ${this.maxSessions} sessions may be open`);
+    }
+    const { sandboxId, libraryId, title, cwd, envs = {}, hint = '', apiKey, cols = 100, rows = 30 } = request || {};
+    if (typeof sandboxId !== 'string' || !/^[\w-]{1,200}$/.test(sandboxId)) throw new TypeError('Invalid sandbox');
+    if (typeof libraryId !== 'string' || !libraryId || libraryId.length > 64) throw new TypeError('Invalid library id');
+    if (typeof cwd !== 'string' || !cwd.startsWith('/') || cwd.includes('\0') || cwd.length > 4096) throw new TypeError('Invalid sandbox directory');
+    if (typeof apiKey !== 'function') throw new TypeError('A sandbox terminal needs the E2B key');
+    if (!envs || typeof envs !== 'object' || Object.values(envs).some((value) => typeof value !== 'string')) throw new TypeError('Invalid sandbox environment');
+    validateDimensions(cols, rows);
+    const line = String(hint).replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').trim().slice(0, 200);
+    const processHandle = this.sandboxPty.spawn(sandboxId, [], {
+      name: 'xterm-256color',
+      cols,
+      rows,
+      cwd,
+      env: { ...envs, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
+      apiKey,
+      banner: line ? `\x1b[2m# Try: ${line}\x1b[0m\r\n` : '',
+    });
+    return this.#register(processHandle, {
+      provider: 'sandbox',
+      title: String(title || 'Sandbox').replace(/[\u0000-\u001f\u007f-\u009f]/g, '').slice(0, 200),
+      cwd,
+      shell: 'bash',
+      cols,
+      rows,
+      libraryId,
+    });
+  }
+
+  // A sandbox shell gone quiet because its sandbox slept connects again (../sandbox/pty.cjs); any other, nothing.
+  wake(id) {
+    validateSessionId(id);
+    const record = this.sessions.get(id);
+    if (record && record.status === 'running' && typeof record.process.wake === 'function') return record.process.wake();
+    return Promise.resolve();
+  }
+
+  #register(processHandle, meta) {
+    const id = randomUUID();
+    const record = {
+      id,
+      ...meta,
+      pid: processHandle.pid,
       status: 'running',
       createdAt: new Date().toISOString(),
       history: [],
@@ -298,6 +350,7 @@ class SessionManager extends EventEmitter {
     return {
       id: record.id,
       provider: record.provider,
+      ...(record.libraryId ? { libraryId: record.libraryId } : {}),
       title: record.title,
       cwd: record.cwd,
       shell: record.shell,

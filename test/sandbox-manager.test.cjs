@@ -10,12 +10,12 @@ const db = require('../src/main/store/db.cjs');
 const { createSandboxManager } = require('../src/main/sandbox/manager.cjs');
 const { runStore } = require('../src/main/sandbox/runs.cjs');
 
-async function fixture(t, { readEnv = () => ({}), e2bKey = async () => 'e2b_signed_in', githubLogin = () => 'octocat', repoAccess = null, claudeReady = async () => {}, Sandbox = null, now = Date.now } = {}) {
+async function fixture(t, { readEnv = () => ({}), e2bKey = async () => 'e2b_signed_in', githubLogin = () => 'octocat', repoAccess = null, claudeReady = async () => {}, Sandbox = null, terminals = null, now = Date.now } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canvas-run-manager-'));
   const ctx = { root, dataRoot: root, libraryDb: await db.openLibraryDb(root) };
   const events = [], starts = [], controls = [], envs = [];
   let probe = { state: 'ready' };
-  const manager = createSandboxManager({ secure: { isEncryptionAvailable: () => true, encryptString: (value) => Buffer.from(value), decryptString: (value) => value.toString() }, notify: (event) => events.push(event), readEnv, e2bKey, githubLogin, repoAccess, claudeReady, Sandbox, now, launch(request, env, receive) {
+  const manager = createSandboxManager({ secure: { isEncryptionAvailable: () => true, encryptString: (value) => Buffer.from(value), decryptString: (value) => value.toString() }, notify: (event) => events.push(event), readEnv, e2bKey, githubLogin, repoAccess, claudeReady, Sandbox, terminals, now, launch(request, env, receive) {
     envs.push({ command: request.command, env });
     if (!['start', 'restart'].includes(request.command)) {
       controls.push(request);
@@ -385,20 +385,18 @@ test('saving or linking a repository before Claude Code is signed in waits inste
   assert.equal(f.starts.length, 1);
 });
 
-test('Claude Code sign-in is asked for only when the subscription is what sets up', async (t) => {
-  const cases = [
-    [{}, 1], // auto, nothing to fall back to
-    [{ ANTHROPIC_API_KEY: 'sk-ant-fallback' }, 0], // auto falls back to the key
-    [{ ENGELBART_SANDBOX_SETUP: 'api', ANTHROPIC_API_KEY: 'sk-ant-api' }, 0],
-    [{ ENGELBART_SANDBOX_SETUP: 'claude-local', ANTHROPIC_API_KEY: 'sk-ant-unused' }, 1], // never falls back
-  ];
-  for (const [env, asks] of cases) {
+test('Claude Code sign-in is always asked for: no Anthropic key or provider setting stands in for it (2026-10-03)', async (t) => {
+  for (const env of [{}, { ANTHROPIC_API_KEY: 'sk-ant-fallback' }, { ENGELBART_SANDBOX_SETUP: 'api', ANTHROPIC_API_KEY: 'sk-ant-api' }]) {
     let asked = 0;
     const f = await fixture(t, { readEnv: () => env, claudeReady: async () => { asked++; } });
     await f.manager.start(f.ctx, f.repo.id);
-    assert.equal(asked, asks, JSON.stringify(env));
+    assert.equal(asked, 1, JSON.stringify(env));
     assert.equal(f.starts.length, 1);
+    assert.equal(f.envs[0].env.ANTHROPIC_API_KEY, env.ANTHROPIC_API_KEY, 'whatever readEnv gives passes through untouched; the worker never reads it');
   }
+  const signedOut = await fixture(t, { readEnv: () => ({ ANTHROPIC_API_KEY: 'sk-ant-fallback' }), claudeReady: async () => { throw new Error('Claude Code is not signed in to a Claude subscription (Engelbart ▸ Set Up Tools… signs in).'); } });
+  await assert.rejects(signedOut.manager.start(signedOut.ctx, signedOut.repo.id), /not signed in/);
+  assert.equal(signedOut.starts.length, 0);
 });
 
 test('release stops a live sandbox and forgets its runs so the library row can be deleted', async (t) => {
@@ -593,4 +591,143 @@ test('a preview ended by the sweep is not rebuilt by a new session\'s preparatio
   assert.notEqual(rebuilt.id, run.id);
   assert.equal(rebuilt.status, 'starting');
   assert.equal(f.starts.length, 2);
+});
+
+// How a person uses the repository (2026-10-03). A terminal is ready with no preview, keeps its sandbox when its worker
+// leaves, sleeps like a preview, and only a gone sandbox ends it. Its shell is the terminal pane's (terminals.cjs).
+const TERMINAL = { cwd: 'cli', hint: 'python main.py --help' };
+function fakeTerminals() {
+  const opened = [], closed = [];
+  return { opened, closed, open: (spec) => { opened.push(spec); return { id: `session-${opened.length}`, provider: 'sandbox', libraryId: spec.libraryId, title: spec.title }; },
+    close: async (libraryId) => { closed.push(libraryId); }, closeAll: async () => { closed.push('*'); } };
+}
+async function terminalRun(f, { kind = 'terminal', repo = f.repo } = {}) {
+  const run = await f.manager.start(f.ctx, repo.id);
+  const worker = f.starts.at(-1);
+  await worker.receive({ event: 'sandbox_created', sandbox_id: 'sb-terminal' });
+  await worker.receive({ event: 'progress', message: `Used from a terminal: A Python CLI`, kind: 'status', data: { phase: 'kind', kind, reason: 'A Python CLI' } });
+  await worker.receive({ event: 'ready', kind, terminal: TERMINAL, ...(kind === 'both' ? { preview_url: 'https://preview.example/', port: 5173 } : {}) });
+  return { run, worker };
+}
+
+test('the declared kind is kept as it is said; a terminal is ready without a preview, and a ready event must carry what its kind needs', async (t) => {
+  const f = await fixture(t);
+  const run = await f.manager.start(f.ctx, f.repo.id);
+  const worker = f.starts[0];
+  await worker.receive({ event: 'sandbox_created', sandbox_id: 'sb-terminal' });
+  await worker.receive({ event: 'progress', message: 'kind', kind: 'status', data: { phase: 'kind', kind: 'terminal', reason: 'A Python CLI with no server' } });
+  let current = await f.store.get(run.id);
+  assert.deepEqual([current.status, current.kind, current.kind_reason], ['starting', 'terminal', 'A Python CLI with no server']);
+  await worker.receive({ event: 'progress', message: 'kind', kind: 'status', data: { phase: 'kind', kind: 'desktop', reason: 'x' } });
+  assert.equal((await f.store.get(run.id)).kind, 'terminal', 'an unknown kind is not kept');
+  for (const bad of [{ kind: 'terminal' }, { kind: 'terminal', terminal: { cwd: '../../etc', hint: 'ls' } }, { kind: 'terminal', terminal: { cwd: '.', hint: 'ls\u001b[2J' } },
+    { kind: 'both', terminal: TERMINAL }, { kind: 'interface' }, { kind: 'desktop', terminal: TERMINAL }]) {
+    await assert.rejects(f.manager.start(f.ctx, f.repo.id).then(() => worker.receive({ event: 'ready', ...bad })), /Invalid ready event/, JSON.stringify(bad));
+  }
+  assert.equal((await f.store.get(run.id)).status, 'starting');
+  await worker.receive({ event: 'ready', kind: 'terminal', terminal: TERMINAL });
+  current = await f.store.get(run.id);
+  assert.deepEqual([current.status, current.kind, current.terminal, current.preview_url, current.port], ['ready', 'terminal', TERMINAL, null, null]);
+  assert.equal(current.build_log.at(-1).message, 'Terminal ready');
+  assert.deepEqual(current.build_log.at(-1).data, { phase: 'ready', kind: 'terminal' });
+  assert.equal(f.events.at(-1).notification, 'preview-ready', 'it notifies as a preview does');
+});
+
+test('a ready terminal\'s worker leaving is not a failure: its sandbox stays, and only a gone sandbox ends the run', async (t) => {
+  const f = await fixture(t);
+  const { run, worker } = await terminalRun(f);
+  worker.finish(); // the worker leaves after its audit, without detach or paused (worker.cjs)
+  await worker.done;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal((await f.store.get(run.id)).status, 'ready');
+  assert.ok(!f.controls.some((request) => request.command === 'kill'));
+  for (const state of ['ready', 'paused', 'inactive']) {
+    f.setProbe({ state });
+    await f.manager.poll();
+    assert.equal((await f.store.get(run.id)).status, 'ready', state);
+  }
+  const probes = f.controls.filter((request) => request.command === 'probe');
+  assert.ok(probes.length >= 3);
+  assert.ok(probes.every((request) => request.kind === 'terminal' && !request.preview_url), 'probed as a terminal: no preview to check');
+  assert.ok(!f.controls.some((request) => request.command === 'kill'));
+  assert.equal((await f.manager.start(f.ctx, f.repo.id)).id, run.id, 'starting it again reuses it');
+  assert.equal(f.starts.length, 1);
+  f.setProbe({ state: 'gone' });
+  await f.manager.poll();
+  assert.equal((await f.store.get(run.id)).status, 'stopped');
+});
+
+test('touch keeps a ready terminal\'s sandbox awake, as a preview\'s', async (t) => {
+  const calls = [];
+  const f = await fixture(t, { Sandbox: { async setTimeout(id, ms) { calls.push([id, ms]); } } });
+  const { run } = await terminalRun(f);
+  await f.manager.touch(f.ctx, f.repo.id);
+  assert.deepEqual(calls, [['sb-terminal', 600_000]]);
+  assert.ok((await f.store.get(run.id)).last_opened_at);
+});
+
+test('the terminal opens in the run\'s sandbox with its saved values, the directory Claude chose, and the hint; stop, retry and release close it', async (t) => {
+  const terminals = fakeTerminals();
+  const f = await fixture(t, { terminals });
+  await assert.rejects(f.manager.terminal(f.ctx, f.repo.id), /no sandbox terminal yet/);
+  await f.manager.saveEnvironment(f.ctx, f.repo.id, [{ name: 'API_TOKEN', value: 'saved-secret' }], null);
+  const { run } = await terminalRun(f);
+  const session = await f.manager.terminal(f.ctx, f.repo.id);
+  assert.equal(session.provider, 'sandbox');
+  const [spec] = terminals.opened;
+  assert.deepEqual({ ...spec, apiKey: typeof spec.apiKey }, { libraryId: f.repo.id, sandboxId: 'sb-terminal', title: 'owner/app (sandbox)', cwd: '/home/user/repository/cli',
+    envs: { API_TOKEN: 'saved-secret' }, hint: 'python main.py --help', apiKey: 'function' });
+  assert.equal(await spec.apiKey(), 'e2b_signed_in', 'the key the main process holds, asked for when the shell connects');
+  assert.ok((await f.store.get(run.id)).last_opened_at, 'opening it counts as opening the run');
+  const closes = () => terminals.closed.filter((id) => id === f.repo.id).length; // closing is idempotent (terminals.cjs)
+  await f.manager.stop(f.ctx, run.id);
+  assert.ok(closes() >= 1, 'Stop');
+  await assert.rejects(f.manager.terminal(f.ctx, f.repo.id), /no sandbox terminal yet/);
+  let before = closes();
+  await f.manager.start(f.ctx, f.repo.id); // Retry: a new run, the old sandbox killed, its terminals closed
+  assert.ok(closes() > before, 'Retry');
+  before = closes();
+  await f.manager.release(f.ctx, f.repo.id);
+  assert.ok(closes() > before, 'release');
+  const preview = await fixture(t, { terminals: fakeTerminals() });
+  await readyRun(preview);
+  await assert.rejects(preview.manager.terminal(preview.ctx, preview.repo.id), /no sandbox terminal yet/, 'an interface has none');
+});
+
+test('both opens its preview and its terminal; restarting a terminal\'s environment restarts its shell, not a worker', async (t) => {
+  const terminals = fakeTerminals();
+  const f = await fixture(t, { terminals });
+  const { run } = await terminalRun(f, { kind: 'both' });
+  const current = await f.store.get(run.id);
+  assert.deepEqual([current.kind, current.preview_url, current.port, current.terminal], ['both', 'https://preview.example/', 5173, TERMINAL]);
+  await f.manager.terminal(f.ctx, f.repo.id);
+  assert.equal(terminals.opened.length, 1);
+  const other = await anotherRepo(f);
+  const g = { ...f, repo: other };
+  const { run: shell } = await terminalRun(g, { repo: other });
+  const saved = await f.manager.saveEnvironment(f.ctx, other.id, [{ name: 'NEXT', value: 'v' }], null);
+  const starts = f.starts.length;
+  terminals.closed.length = 0;
+  const restarted = await f.manager.restart(f.ctx, other.id);
+  assert.equal(restarted.id, shell.id);
+  assert.equal(restarted.status, 'ready');
+  assert.equal(restarted.env_revision, saved.revision);
+  assert.equal(f.starts.length, starts, 'no worker: there is no app to restart');
+  assert.ok(!f.controls.some((request) => request.command === 'can_restart'));
+  assert.deepEqual(terminals.closed, [other.id], 'the next shell opened has the saved values');
+});
+
+test('quitting closes sandbox shells before it puts their sandboxes to sleep', async (t) => {
+  const terminals = fakeTerminals();
+  const order = [];
+  terminals.closeAll = async () => { order.push('terminals'); };
+  const f = await fixture(t, { terminals });
+  await terminalRun(f);
+  f.starts[0].finish();
+  await new Promise((resolve) => setImmediate(resolve));
+  f.setProbe({ state: 'paused', paused: true });
+  const close = f.manager.close();
+  await close;
+  order.push(...f.controls.filter((request) => request.command === 'pause').map(() => 'pause'));
+  assert.deepEqual(order, ['terminals', 'pause']);
 });

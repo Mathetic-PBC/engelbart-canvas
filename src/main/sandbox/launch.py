@@ -1,6 +1,8 @@
 """Canvas adapter installed into an existing E2B sandbox, not its template.
 
-Reuses hc's saved launch plan, but never replays installation on an env restart.
+Starts and supervises the app Claude Code set up (its saved local launch plan),
+and restarts it with saved environment values. A sandbox set up by the older hc
+pipeline is restarted from hc's saved plan, but never set up or installed again.
 The repository is disposable code; the payload and recipe stay outside it.
 """
 import importlib.util
@@ -302,20 +304,10 @@ def stop_owned_app(attempt_id=None):
         raise RestartBlocked('Could not confirm the owned application stopped. No replacement was started.')
 
 
-def launcher_roots(processes, local_tools=False):
-    roots = {pid for pid, (_, _, command) in processes.items() if
-             WRAPPER in command or '/opt/engelbart/proxy.mjs' in command or
-             (str(STATE / 'launch.py') in command and not any(flag in command for flag in ('--stop', '--check', '--app-status')))}
-    if local_tools:
-        # E2B request cancellation can disconnect without killing the command.
-        # Include only our marked tool processes, not unrelated VM services.
-        for pid in processes:
-            try:
-                if b'ENGELBART_CANVAS_LOCAL_TOOL=1' in Path(f'/proc/{pid}/environ').read_bytes().split(b'\0'):
-                    roots.add(pid)
-            except OSError:
-                pass  # Exited processes or inaccessible system-owned services.
-    return roots
+def launcher_roots(processes):
+    return {pid for pid, (_, _, command) in processes.items() if
+            WRAPPER in command or '/opt/engelbart/proxy.mjs' in command or
+            (str(STATE / 'launch.py') in command and not any(flag in command for flag in ('--stop', '--check', '--app-status')))}
 
 
 def retire_launch_records(processes):
@@ -351,12 +343,12 @@ def retire_launch_records(processes):
         write_private(file, record)  # Preserve the plan, attempts, and logs.
 
 
-def stop_launch(local_tools=False):
+def stop_launch():
     # Stop the wrapper and its descendants, including services that do not own
     # the entry port. Docker/local databases outside that tree are preserved.
     stop_owned_app()
     processes = process_snapshot()
-    victims = launcher_roots(processes, local_tools)
+    victims = launcher_roots(processes)
     while True:
         children = {pid for pid, (parent, _, _) in processes.items() if parent in victims}
         if children <= victims:
@@ -374,7 +366,7 @@ def stop_launch(local_tools=False):
         for _ in range(20):
             current = process_snapshot()
             live = {pid for pid in victims if pid in current and current[pid][1] == processes[pid][1]}
-            if not live and not launcher_roots(current, local_tools):
+            if not live and not launcher_roots(current):
                 retire_launch_records(current)
                 return
             time.sleep(0.05)
@@ -523,11 +515,7 @@ def main():
         return
     if '--stop' in sys.argv:
         STEP = 'stopping the previous application'
-        stop_launch(local_tools='--reset-local' in sys.argv)
-        if '--reset-local' in sys.argv:
-            # Only after a confirmed stop: a leftover local recipe would cause
-            # the API fallback to relaunch that app instead of running setup.
-            (STATE / 'recipe.json').unlink(missing_ok=True)
+        stop_launch()
         return
     recipe = read_json(STATE / 'recipe.json', None)
     if recipe and recipe.get('kind') == 'claude-local':
@@ -561,10 +549,8 @@ def main():
         original_emit(**event)
     wrapper.emit = emit
     if '--restart' not in sys.argv:
-        STEP = 'setting up the repository'
-        sys.argv = [WRAPPER, str(ROOT)]
-        wrapper.main()
-        return
+        # Setup is Claude Code's (worker.cjs, local-setup.cjs); this only starts or restarts a saved plan.
+        raise RestartBlocked('This sandbox has no saved launch plan to start.')
     STEP = 'reading the saved launch plan'
     recipe = recipe_for(wrapper, PR, port)
     wrapper.REPO = str(ROOT)

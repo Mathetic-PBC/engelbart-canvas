@@ -239,6 +239,7 @@ test('with sandboxes turned off the renderer sees none and nothing starts', asyn
   assert.deepEqual(await handlers.get('engelbart:sandbox-ensure')(), []);
   assert.throws(() => handlers.get('engelbart:sandbox-start')('id'), /turned off/);
   assert.equal(await handlers.get('engelbart:sandbox-touch')('id'), null, 'the Stage\'s ping is a no-op');
+  assert.throws(() => handlers.get('engelbart:sandbox-terminal')('id'), /turned off/);
   const row = await handlers.get('engelbart:add-library-item')('https://github.com/owner/app');
   assert.equal(row.sandbox_error, undefined);
 });
@@ -257,4 +258,21 @@ test('the Stage\'s preview ping names a library row, checked like a start, and a
   await assert.rejects(touch({ id: 'x' }), /library id must be a string/);
   await assert.rejects(touch('x'.repeat(65)), /library id must be a string/);
   assert.equal(touched.length, 1);
+});
+
+test('a sandbox terminal names a library row, answered with the session from the window that asked; a mode change refuses it', async (t) => {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'canvas-sandbox-terminal-'));
+  const store = createStore({ homeDir, testMode: true });
+  await store.setTestMode(false);
+  t.after(() => store.close());
+  const handlers = new Map(), asked = [];
+  registerEngelbartIpc({ store, ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, trustedHandler: (fn) => fn,
+    windowHandler: (fn) => (...args) => fn('window-1', ...args),
+    sandbox: { async terminal(ctx, id) { asked.push({ id, root: ctx.dataRoot }); return { id: 'session-1', provider: 'sandbox', libraryId: id }; }, async close() {} } });
+  const open = handlers.get('engelbart:sandbox-terminal');
+  assert.deepEqual(await open('library-id'), { id: 'session-1', provider: 'sandbox', libraryId: 'library-id' });
+  assert.deepEqual(asked, [{ id: 'library-id', root: (await store.context()).dataRoot }]);
+  await assert.rejects(open({ id: 'x' }), /library id must be a string/);
+  await assert.rejects(open('x'.repeat(65)), /library id must be a string/);
+  assert.equal(asked.length, 1, 'sandbox ids, paths and keys never come from the renderer');
 });

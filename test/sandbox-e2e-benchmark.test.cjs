@@ -65,7 +65,7 @@ test('independent public check requires successful HTML, not merely a responding
   assert.equal((await verifyPublic('https://fixture.example', async () => new Response('<html>Error</html>', { status: 500 }))).ok, false);
 });
 
-test('end-to-end harness cleans up only its new test sandbox on failure and disables API fallback', async () => {
+test('end-to-end harness cleans up only its new test sandbox on failure and passes no provider setting', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-e2e-unit-'));
   let killed = 0, createOptions;
   try {
@@ -78,7 +78,8 @@ test('end-to-end harness cleans up only its new test sandbox on failure and disa
           kill: async () => { killed++; } };
       } },
       runtimeFactory: ({ Sandbox, emit, env }) => {
-        assert.equal(env.ENGELBART_SANDBOX_SETUP, 'claude-local');
+        assert.equal(env.ENGELBART_SANDBOX_SETUP, undefined);
+        assert.equal(env.E2B_TEMPLATE, 'engelbart-runner');
         let owned;
         return { run: async () => { owned = await Sandbox.create(env.E2B_TEMPLATE, {}); emit({ event: 'failed', error: 'Test clone failure' }); },
           stop: async () => { if (owned) { await owned.kill(); owned = null; } } };

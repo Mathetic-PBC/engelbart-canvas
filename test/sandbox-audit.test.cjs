@@ -29,8 +29,8 @@ test('background audit streams split structured reports without raw npm output o
   await assert.rejects(runNpmAudit({ signal: controller.signal, sandbox: {}, onEvent() {} }), /abort/i);
 });
 
-for (const provider of ['claude-local', 'api']) for (const failure of [false, true]) {
-  test(`${provider}: deferred audit ${failure ? 'failure' : 'findings'} cannot delay or fail a verified preview`, async () => {
+for (const failure of [false, true]) {
+  test(`deferred audit ${failure ? 'failure' : 'findings'} cannot delay or fail a verified preview`, async () => {
     const events = [], done = deferred(), auditStarted = deferred(), releaseAudit = deferred();
     let auditCalls = 0, auditSignal, kills = 0;
     const sandbox = {
@@ -46,7 +46,7 @@ for (const provider of ['claude-local', 'api']) for (const failure of [false, tr
       } },
     };
     const runtime = createRuntime({ Sandbox: { create: async () => sandbox },
-      env: { E2B_API_KEY: 'fixture-api-key', ANTHROPIC_API_KEY: 'fixture-anthropic-key', ENGELBART_SANDBOX_SETUP: provider },
+      env: { E2B_API_KEY: 'fixture-api-key' },
       detectDocker: async () => false, checkPreview: async () => true, prepareClaude: async () => ({}),
       localSetup: async () => {
         assert.equal(auditCalls, 0);

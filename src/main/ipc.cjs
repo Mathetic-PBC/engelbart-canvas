@@ -560,6 +560,12 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       if (changingMode) return null;
       return sandbox.touch(ctx, libraryId).then(() => null);
     }));
+    // A shell in a ready repository's sandbox, in the terminal pane of the window that asked: that run's, opened again
+    // (and woken) if it is already open (sandbox/terminals.cjs). → the session's snapshot
+    handleFor('sandbox-terminal', async (_win, id) => {
+      if (changingMode) throw new Error('Wait for the data mode change to finish');
+      return sandbox.terminal(await store.context(), str(id, 'library id', 64));
+    });
     handle('sandbox-environment', withCtx((ctx, id) => sandbox.environment(ctx, str(id, 'library id', 64))));
     handle('sandbox-save-environment', withCtx((ctx, id, changes, revision) => {
       if (changingMode) throw new Error('Wait for the data mode change to finish');
@@ -574,7 +580,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     handle('sandbox-runs', () => []);
     handle('sandbox-ensure', () => []);
     handle('sandbox-touch', () => null);
-    for (const channel of ['sandbox-start', 'sandbox-stop', 'sandbox-environment', 'sandbox-save-environment', 'sandbox-restart']) {
+    for (const channel of ['sandbox-start', 'sandbox-stop', 'sandbox-terminal', 'sandbox-environment', 'sandbox-save-environment', 'sandbox-restart']) {
       handle(channel, () => { throw new Error('Sandboxes are turned off in this copy of Engelbart'); });
     }
   }

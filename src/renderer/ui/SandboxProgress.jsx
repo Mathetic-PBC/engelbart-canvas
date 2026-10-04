@@ -2,7 +2,7 @@ import React from 'react';
 import { api, errorMessage } from '../api.js';
 import BuildDetails from '../workspace/BuildDetails.jsx';
 import { OPEN_IN_BROWSER } from '../model/address.js';
-import { readNotificationState, writeNotificationState, sandboxProgressState, sandboxProgressReducer, previewLibraryId, notificationStorageKey } from '../model/sandbox-notifications.js';
+import { readNotificationState, writeNotificationState, sandboxProgressState, sandboxProgressReducer, previewLibraryId, notificationStorageKey, canOpenTerminal, OPEN_SANDBOX_TERMINAL } from '../model/sandbox-notifications.js';
 
 const SandboxContext = React.createContext(null);
 export const useSandboxes = () => React.useContext(SandboxContext);
@@ -12,7 +12,13 @@ export const useSandboxes = () => React.useContext(SandboxContext);
 // pings 30 seconds apart). Another tab in front, the tab closed or the window left stops it. A ping never wakes a sandbox.
 export function usePreviewTouch(url, showing) {
   const sandboxes = useSandboxes();
-  const libraryId = showing && sandboxes ? previewLibraryId(sandboxes.items, url) : null;
+  useSandboxTouch(showing && sandboxes ? previewLibraryId(sandboxes.items, url) : null);
+}
+
+// A repository's sandbox in use (`libraryId`, null when none is): while the window has the keyboard, its sleep is put
+// back to 10 minutes away now and every minute after. A preview's Stage tab (usePreviewTouch) and a sandbox terminal's
+// tab in front (TerminalPane.jsx) use it.
+export function useSandboxTouch(libraryId) {
   const [focused, setFocused] = React.useState(() => api.windowFocused());
   React.useEffect(() => api.onWindowFocus((on) => setFocused(!!on)), []);
   React.useEffect(() => {
@@ -50,6 +56,22 @@ export default function SandboxProgress({ dataRoot, library, inWorkspace, childr
     openUrl(run.preview_url);
   }, [notifications, openUrl]);
   const openRepository = React.useCallback(row => { if (row?.url) openUrl(row.url); }, [openUrl]);
+  const act = async (run, action) => {
+    setBusy((current) => ({ ...current, [run.id]: true })); setError('');
+    try { await action(); } catch (e) { setError(errorMessage(e)); }
+    finally { setBusy((current) => ({ ...current, [run.id]: false })); }
+  };
+  // A repository used from a terminal: its shell in the sandbox, as a tab of the workspace's terminal pane (Workspace.jsx
+  // adopts it; `show`: and brings the pane forward). Only a workspace has a terminal pane.
+  const openTerminal = React.useCallback((run, { show = true } = {}) => {
+    if (!canOpenTerminal(run)) return;
+    if (!workspace.current) { setError('Open a workspace to use the sandbox terminal.'); return; }
+    dispatch({ type: 'read', ids: notifications.filter((row) => row.runId === run.id).map((row) => row.id) });
+    void act(run, async () => {
+      const session = await api.sandboxTerminal(run.library_id);
+      window.dispatchEvent(new CustomEvent(OPEN_SANDBOX_TERMINAL, { detail: { session, show } }));
+    });
+  }, [notifications]); // eslint-disable-line react-hooks/exhaustive-deps
   const openBuild = React.useCallback((row, trigger) => {
     buildTrigger.current = trigger || document.activeElement;
     setBuildRepoId(row.id);
@@ -108,15 +130,10 @@ export default function SandboxProgress({ dataRoot, library, inWorkspace, childr
     api.ensureSandboxes().catch((e) => { if (live) setError(errorMessage(e)); });
     return () => { live = false; };
   }, [dataRoot, library, signedIn, claudeSignedIn]);
-  const act = async (run, action) => {
-    setBusy((current) => ({ ...current, [run.id]: true })); setError('');
-    try { await action(); } catch (e) { setError(errorMessage(e)); }
-    finally { setBusy((current) => ({ ...current, [run.id]: false })); }
-  };
   const buildRepo = library.find((row) => row.id === buildRepoId);
-  return <SandboxContext.Provider value={{ items, library, notifications, markNotificationsRead, clearNotifications, error, busy, act, open, openRepository, openBuild }}>
+  return <SandboxContext.Provider value={{ items, library, notifications, markNotificationsRead, clearNotifications, error, busy, act, open, openTerminal, openRepository, openBuild }}>
     {children}
-    {buildRepo && <BuildDetails key={buildRepo.id} repo={buildRepo} item={items[buildRepo.id]} busy={busy} act={act} open={open} error={error}
+    {buildRepo && <BuildDetails key={buildRepo.id} repo={buildRepo} item={items[buildRepo.id]} busy={busy} act={act} open={open} openTerminal={openTerminal} error={error}
       visible onClose={closeBuild} onVisitRepository={openRepository} />}
   </SandboxContext.Provider>;
 }

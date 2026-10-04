@@ -11,6 +11,9 @@ const { subscriptionEnvironment, subscriptionStatus, prepareLocalClaude, claudeA
 const { ROOT, repoPath, validateTool, createSandboxTools, openToolBridge } = require('../src/main/sandbox/local-tools.cjs');
 const { runLocalSetup } = require('../src/main/sandbox/local-setup.cjs');
 const { createRuntime } = require('../src/main/sandbox/worker.cjs');
+// A setup agent's call through its bridge, as Claude's MCP adapter makes it (local-mcp.cjs).
+const toolCall = (bridge) => async (name, args) => (await fetch(bridge.url, { method: 'POST', headers: { authorization: `Bearer ${bridge.token}` }, body: JSON.stringify({ name, args }) })).json();
+const declare = (bridge, kind = 'interface') => toolCall(bridge)('declare_kind', { kind, reason: 'Fixture repository' });
 
 test('subscription environment excludes every API, OAuth, parent-session and Electron credential', () => {
   const source = { HOME: '/users/test', SHELL: '/bin/zsh', PATH: '/bin', CLAUDE_CONFIG_DIR: '/users/test/.claude', ANTHROPIC_API_KEY: 'secret', ANTHROPIC_AUTH_TOKEN: 'secret', CLAUDE_CODE_OAUTH_TOKEN: 'secret', CLAUDECODE: '1', E2B_API_KEY: 'secret', ELECTRON_RUN_AS_NODE: '1', NODE_OPTIONS: '--inspect' };
@@ -95,7 +98,7 @@ test('sandbox tools execute only remotely, bound output, redact secrets and seri
     files: { read: async (file, options) => { assert.equal(file, `${ROOT}/package.json`); assert.equal(options.format, 'stream'); return new Response('test-secret').body; }, write: async () => {} },
     commands: { run: async (command, options) => {
       assert.equal(active++, 0); commands.push(command);
-      assert.equal(options.envs.ENGELBART_CANVAS_LOCAL_TOOL, '1');
+      assert.equal(options.envs.npm_config_audit, 'false');
       assert.equal(options.envs.APP_KEY, 'test-secret');
       options.onStdout('test-secret\n'); await new Promise((resolve) => setTimeout(resolve, 5));
       active--; return { exitCode: 0 };
@@ -182,7 +185,7 @@ test('real stdio MCP adapter advertises sandbox-only tools and forwards a reques
   const client = new Client({ name: 'canvas-test', version: '1.0.0' });
   try {
     await client.connect(new StdioClientTransport({ command: process.execPath, args: [path.resolve(__dirname, '../src/main/sandbox/local-mcp.cjs'), config], env: { ELECTRON_RUN_AS_NODE: '1' } }));
-    assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name), ['run_command', 'read_file', 'write_file', 'start_app', 'app_status', 'stop_app', 'list_files', 'dependency_install']);
+    assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name), ['declare_kind', 'terminal_ready', 'run_command', 'read_file', 'write_file', 'start_app', 'app_status', 'stop_app', 'list_files', 'dependency_install']);
     const result = await client.callTool({ name: 'read_file', arguments: { path: 'package.json' } });
     assert.equal(JSON.parse(result.content[0].text).content, 'fixture');
   } finally { await client.close(); await bridge.close(); fs.unlinkSync(config); fs.rmdirSync(directory); }
@@ -192,7 +195,18 @@ test('local setup prompt overlaps managed installation with inspection and requi
   let prompt;
   await assert.rejects(runLocalSetup({ sandbox: { files: { write: async () => {} }, commands: { run: async () => ({ exitCode: 0, stdout: '{}' }) } }, auth: {}, environment: { values: {}, removed: [] },
     onEvent() {}, checkPreview: async () => true, runAgent: async (input) => { prompt = input.prompt; },
-  }), /without a verified web preview/);
+  }), /without saying how the repository is used/);
+  // The kind comes first, from the discovery and at most one README/manifest read, before any install decision.
+  assert.match(prompt, /FIRST, before any install decision, call declare_kind/);
+  assert.ok(prompt.indexOf('declare_kind') < prompt.indexOf('dependency_install'), 'the kind is asked for before installation');
+  assert.match(prompt, /plus at most one README or manifest read/);
+  assert.match(prompt, /interface when a web UI exists \(vite\/next\/express\/etc\., an index\.html, a dev server script\)/);
+  assert.match(prompt, /terminal for a CLI, a library, scripts, notebooks-as-scripts, or a package bin\/main with no server/);
+  assert.match(prompt, /both for a web UI plus a meaningful CLI/);
+  assert.match(prompt, /For terminal there is no web preview and no start_app/);
+  assert.match(prompt, /call terminal_ready with the directory to start in and one example command to try/);
+  assert.match(prompt, /The hint is shown to the person and never run/);
+  assert.match(prompt, /For both, do everything below for the web app \(start_app\) AND call terminal_ready/);
   assert.match(prompt, /Work IN PARALLEL with installation/);
   assert.match(prompt, /read_file and list_files.*while the job runs/);
   assert.match(prompt, /Do not wait for installation before doing this preparation/);
@@ -266,11 +280,12 @@ test('local setup requires actual start_app, saves restart plan, checks preview,
     return { exitCode: 0 };
   } } };
   const args = { sandbox, auth: { file: 'claude', env: {} }, environment: { values: { APP_KEY: 'app-value' }, removed: [] }, signal: new AbortController().signal, onEvent: (event) => events.push(event), checkPreview: async (url) => { assert.equal(url, 'https://preview.example/'); return true; } };
-  await assert.rejects(runLocalSetup({ ...args, runAgent: async () => {} }), /without a verified/);
+  await assert.rejects(runLocalSetup({ ...args, runAgent: async ({ bridge }) => { await declare(bridge); } }), /without a verified/);
   assert.ok(events.some(event => event.phase === 'agent' && event.status === 'failed'));
   events.length = 0;
   const result = await runLocalSetup({ ...args, runAgent: async ({ bridge, onMessage }) => {
     onMessage('Reading launch prerequisites while dependencies install.');
+    await declare(bridge);
     const skipped = await fetch(bridge.url, { method: 'POST', headers: { authorization: `Bearer ${bridge.token}` }, body: JSON.stringify({ name: 'dependency_install', args: { action: 'skip', reason: 'Fixture app has no dependencies.' } }) });
     assert.equal((await skipped.json()).isError, undefined);
     const response = await fetch(bridge.url, { method: 'POST', headers: { authorization: `Bearer ${bridge.token}` }, body: JSON.stringify({ name: 'start_app', args: { command: 'npm start', port: 3000 } }) });
@@ -310,6 +325,7 @@ test('failed start returns pre-cleanup diagnostics and confirmed stopped state, 
   await assert.rejects(runLocalSetup({ sandbox, auth: {}, environment: { values: { APP_KEY: 'fixture-secret' }, removed: [] }, onEvent: (event) => events.push(event),
     checkPreview: () => assert.fail('Failed local readiness must not check public preview'), runAgent: async ({ bridge }) => {
       const call = async (name, args) => (await fetch(bridge.url, { method: 'POST', headers: { authorization: `Bearer ${bridge.token}` }, body: JSON.stringify({ name, args }) })).json();
+      await declare(bridge);
       await call('dependency_install', { action: 'skip', reason: 'Fixture dependencies exist' });
       const result = await call('start_app', { command: 'npm run dev', port: 5173 });
       assert.equal(result.isError, true);
@@ -341,6 +357,7 @@ test('start does not proceed when the previous launch cannot be confirmed stoppe
   await assert.rejects(runLocalSetup({ sandbox, auth: {}, environment: { values: {}, removed: [] }, onEvent() {}, checkPreview: async () => true,
     runAgent: async ({ bridge }) => {
       const call = async (name, args) => (await fetch(bridge.url, { method: 'POST', headers: { authorization: `Bearer ${bridge.token}` }, body: JSON.stringify({ name, args }) })).json();
+      await declare(bridge);
       await call('dependency_install', { action: 'skip', reason: 'Fixture needs no install' });
       const result = await call('start_app', { command: 'npm start', port: 3000 });
       assert.equal(result.isError, true);
@@ -366,9 +383,9 @@ test('tool replies include observed changes and app_status refreshes state witho
   assert.throws(() => validateTool('stop_app', { pid: 123 }));
 });
 
-test('explicit claude-local checks subscription before provisioning and never falls back to API mode', async () => {
+test('the subscription is checked before provisioning and an API key never stands in for it', async () => {
   const events = [];
-  const runtime = createRuntime({ Sandbox: { create: () => assert.fail('must not create sandbox') }, env: { E2B_API_KEY: 'e2b-test', ANTHROPIC_API_KEY: 'should-not-be-used', ENGELBART_SANDBOX_SETUP: 'claude-local' },
+  const runtime = createRuntime({ Sandbox: { create: () => assert.fail('must not create sandbox') }, env: { E2B_API_KEY: 'e2b-test', ANTHROPIC_API_KEY: 'should-not-be-used' },
     prepareClaude: async () => { throw new Error('Subscription signed out'); }, emit: (event) => events.push(event) });
   await runtime.run({ run_id: 'local-test', github_url: 'https://github.com/owner/repo' });
   assert.equal(events.at(-1).event, 'failed');
@@ -380,7 +397,7 @@ test('worker integrates subscription setup with normal ready/log/stop events wit
   let kills = 0, finish;
   const done = new Promise((resolve) => { finish = resolve; });
   const sandbox = { sandboxId: 'local-sandbox', files: { write: async () => {} }, kill: async () => { kills++; finish(); }, setTimeout: async () => {}, commands: { run: async (command) => { commands.push(command); return { exitCode: 0 }; } } };
-  const runtime = createRuntime({ Sandbox: { create: async () => sandbox }, env: { E2B_API_KEY: 'e2b-test', ENGELBART_SANDBOX_SETUP: 'claude-local' },
+  const runtime = createRuntime({ Sandbox: { create: async () => sandbox }, env: { E2B_API_KEY: 'e2b-test' },
     prepareClaude: async () => ({ file: 'claude', env: {} }), detectDocker: async () => false,
     localSetup: async ({ onEvent }) => { onEvent({ phase: 'stage', command: 'npm ci' }); return { preview_url: 'https://preview.example/', port: 3000, done }; },
     emit: (event) => { events.push(event); if (event.event === 'ready') finish(); } });
@@ -434,6 +451,7 @@ test('readiness is published before the final Claude message; late summary failu
     onReady: value => { assert.equal(value.preview_url, 'https://preview.example/'); assert.equal(published, false); published = true; },
     runAgent: async ({ bridge }) => {
       const call = async (name, args) => (await fetch(bridge.url, { method: 'POST', headers: { authorization: `Bearer ${bridge.token}` }, body: JSON.stringify({ name, args }) })).json();
+      await declare(bridge);
       await call('dependency_install', { action: 'skip', reason: 'Fixture' });
       assert.equal((await call('start_app', { command: 'npm start', port: 3000 })).isError, undefined);
       assert.equal(published, true, 'ready must not wait for runAgent to return');
@@ -454,11 +472,133 @@ test('Railpack hints finish before Claude starts and do not replace the install 
     discover: async () => new Promise(resolve => { resolveDiscovery = resolve; }),
     runAgent: async ({ prompt }) => { agentStarted = true; assert.match(prompt, /railpack-evidence-fixture/); },
   });
-  const rejected = assert.rejects(result, /without a verified/);
+  const rejected = assert.rejects(result, /without saying how the repository is used/);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(inspecting, true);
   assert.equal(agentStarted, false);
   resolveDiscovery({ components: [{ cwd: '.', railpack: { start_hint: 'railpack-evidence-fixture' } }] });
   await rejected;
   assert.equal(agentStarted, true);
+});
+
+// How a person uses the repository (2026-10-03): Claude declares it first; a terminal is ready without any web preview.
+test('declare_kind and terminal_ready validate their arguments: three kinds, a reason, a directory in the repository, a one-line hint', () => {
+  for (const kind of ['interface', 'terminal', 'both']) assert.doesNotThrow(() => validateTool('declare_kind', { kind, reason: 'Has a vite dev server' }));
+  assert.doesNotThrow(() => validateTool('terminal_ready', { cwd: '.', hint: 'python main.py --help' }));
+  assert.doesNotThrow(() => validateTool('terminal_ready', { cwd: 'tools/cli', hint: 'x'.repeat(200) }));
+  for (const [name, args] of [
+    ['declare_kind', { kind: 'desktop', reason: 'An Electron app' }], ['declare_kind', { kind: 'terminal' }],
+    ['declare_kind', { kind: 'terminal', reason: '   ' }], ['declare_kind', { kind: 'terminal', reason: 'x'.repeat(501) }],
+    ['declare_kind', { kind: 'terminal', reason: 'A CLI', extra: true }],
+    ['terminal_ready', { cwd: '.' }], ['terminal_ready', { hint: 'make' }], ['terminal_ready', { cwd: '../elsewhere', hint: 'ls' }],
+    ['terminal_ready', { cwd: '.', hint: 'x'.repeat(201) }], ['terminal_ready', { cwd: '.', hint: 'ls\nrm -rf /' }],
+    ['terminal_ready', { cwd: '.', hint: 'ls \u001b]0;title\u0007' }], ['terminal_ready', { cwd: '.', hint: '  ' }],
+  ]) assert.throws(() => validateTool(name, args), `${name} ${JSON.stringify(args)}`);
+});
+
+test('until the kind is declared only reading is allowed; a terminal has no start_app and an interface no terminal_ready', async () => {
+  let kind = null;
+  const runs = [];
+  const tools = createSandboxTools({ onEvent() {}, sandbox: { files: { read: async () => new Response('readme').body, write: async () => {} },
+    commands: { run: async (command) => { runs.push(command); return { exitCode: 0 }; } } },
+  appStatus: async () => ({ running: false }), startApp: async () => ({ ready: true }),
+  install: { status: () => ({ status: 'succeeded' }), control: async (args) => ({ status: args.action === 'status' ? 'succeeded' : 'started' }), list: async () => ({ entries: [] }), assertIdle() {}, assertReady() {} },
+  kinds: { declared: () => kind, declare: (value) => { kind = value.kind; return { kind }; }, terminal: (value) => ({ ready: true, terminal: value }) } });
+  for (const [name, args] of [['write_file', { path: 'a', content: 'x' }], ['run_command', { command: 'ls' }], ['start_app', { command: 'npm start', port: 3000 }],
+    ['terminal_ready', { cwd: '.', hint: 'ls' }], ['dependency_install', { action: 'start', command: 'npm ci' }], ['dependency_install', { action: 'skip', reason: 'none' }]]) {
+    await assert.rejects(tools(name, args), /Call declare_kind first/, name);
+  }
+  assert.equal((await tools('read_file', { path: 'README.md' })).content, 'readme');
+  await tools('list_files', {});
+  await tools('app_status', {});
+  await tools('dependency_install', { action: 'status' });
+  assert.deepEqual(runs, [], 'nothing ran in the sandbox before the kind');
+  await tools('declare_kind', { kind: 'terminal', reason: 'A Python CLI' });
+  await assert.rejects(tools('start_app', { command: 'npm start', port: 3000 }), /declared terminal.*terminal_ready/);
+  assert.deepEqual((await tools('terminal_ready', { cwd: 'src/..', hint: 'python main.py --help' })).terminal, { cwd: '.', hint: 'python main.py --help' });
+  assert.deepEqual(runs, [`test -d '${ROOT}'`]);
+  await tools('declare_kind', { kind: 'interface', reason: 'It has a web UI after all' });
+  await assert.rejects(tools('terminal_ready', { cwd: '.', hint: 'ls' }), /declared interface.*start_app/);
+  assert.equal((await tools('start_app', { command: 'npm start', port: 3000 })).ready, true);
+  const plain = createSandboxTools({ sandbox: {}, onEvent() {} });
+  await assert.rejects(plain('declare_kind', { kind: 'terminal', reason: 'x' }), /Unknown sandbox tool/, 'only a setup that asks for the kind offers it');
+});
+
+function terminalSandbox({ missing = [] } = {}) {
+  const commands = [], files = new Map();
+  let running = false;
+  return { commands, files, sandbox: { getHost: () => 'preview.example', files: { write: async (file, value) => files.set(file, value) }, commands: { run: async (command, options) => {
+    commands.push(command);
+    if (command.startsWith('test -d ')) {
+      if (missing.some((dir) => command.includes(dir))) throw Object.assign(new Error('exit status 1'), { exitCode: 1 });
+      return { exitCode: 0 };
+    }
+    if (command.includes('--local')) {
+      running = true;
+      options.onStdout('{"phase":"ready","port":3000,"host":"127.0.0.1"}\n');
+      return { wait: () => new Promise(() => {}) };
+    }
+    if (command.includes('--app-status')) return { exitCode: 0, stdout: JSON.stringify({ status: running ? 'healthy' : 'idle', running, processes: [], listeners: [] }) };
+    return { exitCode: 0, stdout: '{}' };
+  } } } };
+}
+
+test('a terminal is ready once installed: terminal_ready, no start_app, no preview check, the kind and the hint in the build log', async () => {
+  const f = terminalSandbox({ missing: ['nowhere'] });
+  const events = [], published = [];
+  const result = await runLocalSetup({ sandbox: f.sandbox, auth: {}, environment: { values: {}, removed: [] }, discover: async () => ({ components: [] }),
+    onEvent: (event) => events.push(event), onReady: (value) => published.push(value),
+    checkPreview: () => assert.fail('a terminal has no preview to check'),
+    runAgent: async ({ bridge }) => {
+      const call = toolCall(bridge);
+      assert.equal((await call('declare_kind', { kind: 'terminal', reason: 'A Python CLI with no server' })).isError, undefined);
+      assert.match((await call('terminal_ready', { cwd: '.', hint: 'python main.py --help' })).content[0].text, /Dependency installation has not succeeded/);
+      await call('dependency_install', { action: 'skip', reason: 'Fixture has no dependencies' });
+      assert.match((await call('terminal_ready', { cwd: 'nowhere', hint: 'ls' })).content[0].text, /not a directory/);
+      const ready = JSON.parse((await call('terminal_ready', { cwd: '.', hint: 'python main.py --help' })).content[0].text);
+      assert.equal(ready.ready, true);
+      assert.equal(published.length, 1, 'ready before Claude\'s final message');
+      assert.match((await call('run_command', { command: 'ls' })).content[0].text, /already verified/, 'setup is closed once ready');
+    } });
+  assert.deepEqual(result, { kind: 'terminal', reason: 'A Python CLI with no server', terminal: { cwd: '.', hint: 'python main.py --help' } });
+  assert.deepEqual(published, [result]);
+  assert.ok(!f.commands.some((command) => /--local|proxy\.mjs/.test(command)), 'nothing was launched');
+  assert.equal(f.files.has('/home/user/.engelbart-canvas/recipe.json'), false, 'no launch plan to replay');
+  assert.ok(events.some((event) => event.phase === 'kind' && event.kind === 'terminal' && /from a terminal: A Python CLI/.test(event.message)));
+  assert.ok(events.some((event) => event.phase === 'terminal' && event.status === 'ready' && event.hint === 'python main.py --help'));
+  assert.equal(events.filter((event) => event.phase === 'agent').at(-1).message, 'Setup agent finished · terminal ready');
+});
+
+test('both is ready only with the verified preview and the terminal, in either order', async () => {
+  for (const order of [['start_app', 'terminal_ready'], ['terminal_ready', 'start_app']]) {
+    const f = terminalSandbox();
+    const published = [];
+    let checks = 0;
+    const result = await runLocalSetup({ sandbox: f.sandbox, auth: {}, environment: { values: {}, removed: [] }, discover: async () => ({ components: [] }),
+      onEvent() {}, onReady: (value) => published.push(value), checkPreview: async () => { checks++; return true; },
+      runAgent: async ({ bridge }) => {
+        const call = toolCall(bridge);
+        await call('declare_kind', { kind: 'both', reason: 'A web UI and a CLI' });
+        await call('dependency_install', { action: 'skip', reason: 'Fixture' });
+        const args = { start_app: { command: 'npm start', port: 3000 }, terminal_ready: { cwd: '.', hint: 'npx tool --help' } };
+        const first = JSON.parse((await call(order[0], args[order[0]])).content[0].text);
+        assert.equal(first.ready, false, `${order[0]} alone is not ready`);
+        assert.match(first.next, order[0] === 'start_app' ? /terminal_ready/ : /start_app/);
+        assert.equal(published.length, 0);
+        assert.equal(JSON.parse((await call(order[1], args[order[1]])).content[0].text).ready, true);
+      } });
+    assert.equal(result.kind, 'both');
+    assert.equal(result.preview_url, 'https://preview.example/');
+    assert.deepEqual(result.terminal, { cwd: '.', hint: 'npx tool --help' });
+    assert.equal(typeof result.done?.then, 'function', 'the app is still watched');
+    assert.equal(published.length, 1);
+    assert.equal(checks, 1);
+  }
+  const f = terminalSandbox();
+  await assert.rejects(runLocalSetup({ sandbox: f.sandbox, auth: {}, environment: { values: {}, removed: [] }, discover: async () => ({ components: [] }),
+    onEvent() {}, checkPreview: async () => true, runAgent: async ({ bridge }) => {
+      await toolCall(bridge)('declare_kind', { kind: 'both', reason: 'A web UI and a CLI' });
+      await toolCall(bridge)('dependency_install', { action: 'skip', reason: 'Fixture' });
+      await toolCall(bridge)('start_app', { command: 'npm start', port: 3000 });
+    } }), /^Error: Claude finished without making the terminal ready\.$/);
 });

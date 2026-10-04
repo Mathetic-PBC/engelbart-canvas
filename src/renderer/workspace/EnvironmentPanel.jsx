@@ -33,7 +33,7 @@ export default function EnvironmentPanel({ repo, run, embedded = false }) {
       setNotice('Saved.');
       if (restart) {
         await api.restartSandbox(repo.id);
-        setNotice('Restarting app…');
+        setNotice(run?.kind === 'terminal' ? 'Saved. The next terminal opened has the new values.' : 'Restarting app…');
       } else setNotice('Saved. Restart the app to apply.');
     } catch (e) { setError(errorMessage(e)); }
     finally { setBusy(false); }
@@ -71,7 +71,7 @@ export default function EnvironmentPanel({ repo, run, embedded = false }) {
       </div>
       <div className="environment-actions">
         <button type="button" className="environment-button" onClick={() => save(false)} disabled={!Object.keys(changes).length}>Save</button>
-        <button type="button" className="environment-button" onClick={() => save(true)} disabled={!canRestart}>{busy ? 'Saving…' : 'Save & restart app'}</button>
+        <button type="button" className="environment-button" onClick={() => save(true)} disabled={!canRestart}>{busy ? 'Saving…' : run?.kind === 'terminal' ? 'Save & restart terminal' : 'Save & restart app'}</button>
       </div>
     </fieldset>
     {!saved && !error && <p role="status" className="environment-message">Loading variables…</p>}

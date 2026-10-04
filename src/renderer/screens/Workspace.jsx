@@ -24,7 +24,7 @@ import BuildReview from '../workspace/BuildReview.jsx';
 import PostItBuild from '../post-its/PostItBuild.jsx';
 import PostItTask from '../post-its/PostItTask.jsx';
 import { useSandboxes } from '../ui/SandboxProgress.jsx';
-import { repositoryClick } from '../model/sandbox-notifications.js';
+import { repositoryClick, OPEN_SANDBOX_TERMINAL } from '../model/sandbox-notifications.js';
 
 // The workspace screen (design 2026-09-17): a header in three columns — Engelbart / project /
 // parent workspaces over the sidebar, the document tabs over the document, the Stage · Terminal
@@ -157,6 +157,20 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       }).catch(() => {});
     }
   }), [project.id]);
+  // A shell in a repository's sandbox (SandboxProgress.jsx's openTerminal): a tab of this project's terminal pane, the
+  // one already there when it was open, shown in front unless the preview is (`show`).
+  React.useEffect(() => {
+    const onOpen = (event) => {
+      const { session, show } = event.detail || {};
+      if (!session || !session.id) return;
+      adoptSession(session, project.id).then(() => {
+        if (show) setRightMode('terminal');
+        window.dispatchEvent(new CustomEvent(SHOW_TERMINAL, { detail: { id: session.id } })); // its tab, in front in the pane
+      }).catch(() => {});
+    };
+    window.addEventListener(OPEN_SANDBOX_TERMINAL, onOpen);
+    return () => window.removeEventListener(OPEN_SANDBOX_TERMINAL, onOpen);
+  }, [project.id]);
   const [flashId, setFlashId] = React.useState(null); // a row that just arrived in the sidebar
   const flashTimer = React.useRef(null);
   React.useEffect(() => () => clearTimeout(flashTimer.current), []);
@@ -798,11 +812,14 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const onRowClick = (row) => {
     if (row.type === 'child') { selectTopic(row.id); return; }
     if (row.type === 'archive') { openTab(`${ARCHIVE_TAB}${row.file}`, row.name); return; }
-    // A GitHub repository opens its live preview in the Stage; one still building (or failed, or stopped) shows its build,
-    // and one ended after a week unopened is built again, its progress in the same build details.
+    // A GitHub repository opens its live preview in the Stage, its sandbox's shell in the terminal pane, or both (the
+    // preview in front, the terminal a tab behind it); one still building (or failed, or stopped) shows its build, and
+    // one ended after a week unopened is built again, its progress in the same build details.
     const sandbox = sandboxes && hasTag(row, 'git') ? sandboxes.items[row.id] : null;
     const click = repositoryClick(sandbox);
     if (click === 'preview') { sandboxes.open(sandbox.run); return; }
+    if (click === 'terminal') { sandboxes.openTerminal(sandbox.run); return; }
+    if (click === 'both') { sandboxes.openTerminal(sandbox.run, { show: false }); sandboxes.open(sandbox.run); return; }
     if (click === 'start') { sandboxes.openBuild(row); sandboxes.act(sandbox.run, () => api.startSandbox(row.id)); return; }
     if (click === 'details') { sandboxes.openBuild(row); return; }
     openItem(row);

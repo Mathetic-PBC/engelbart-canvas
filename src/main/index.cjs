@@ -43,6 +43,8 @@ const { createBrowserAuth, CLIENT_ID: GITHUB_CLIENT_ID } = require('./github/bro
 const { createE2bKey } = require('./github/e2b-key.cjs');
 const { createRepoAccess } = require('./github/repo-access.cjs');
 const { createSandboxManager } = require('./sandbox/manager.cjs');
+const { createSandboxPty } = require('./sandbox/pty.cjs');
+const { createSandboxTerminals } = require('./sandbox/terminals.cjs');
 const { prepareLocalClaude } = require('./sandbox/local-claude.cjs');
 const { createRepoIdentifier, createRemoteFileLister } = require('./store/page-meta.cjs');
 const { checkWebPdfs, readPdfResponse } = require('./store/web-pdfs.cjs');
@@ -532,7 +534,8 @@ if (!hasSingleInstanceLock) {
   app.whenReady().then(() => {
     registerProtocol();
     // Flow control follows each session's window: on while that window's terminal is attached (./windows.cjs).
-    manager = new SessionManager({ environment: environmentForSessions(process.env, app.getPath('userData')), extraEnvironment: () => (tools ? tools.environment() : {}), attached: (id) => (windows ? windows.attached(id) : false) });
+    // Its sandbox sessions are shells in repositories' E2B sandboxes (sandbox/pty.cjs, opened by sandbox/terminals.cjs).
+    manager = new SessionManager({ environment: environmentForSessions(process.env, app.getPath('userData')), extraEnvironment: () => (tools ? tools.environment() : {}), attached: (id) => (windows ? windows.attached(id) : false), sandboxPty: createSandboxPty() });
     settings = new SettingsStore(app.getPath('userData'), app.getPath('home'));
     const homeDir = process.env.ENGELBART_HOME_DIR || app.getPath('home');
     // Pdfs saved as links before the Stage kept copies: every library that opens is checked, and what is left is
@@ -749,6 +752,18 @@ if (!hasSingleInstanceLock) {
       githubLogin: () => github.status().login,
       // A new run waits until Claude Code is signed in to a subscription, which does its setup (sandbox/manager.cjs).
       claudeReady: () => prepareLocalClaude(),
+      // A repository used from a terminal: its shell, in the terminal pane of the window that opened it. Main ending one
+      // (Stop, Retry, release) takes its tab away, as a Build's run step does with its terminal programs.
+      terminals: createSandboxTerminals({
+        sessions: () => manager,
+        own: (id) => {
+          const target = windows.asking() || focusedWindow();
+          if (!target) return;
+          const left = windows.own(id, target);
+          if (left) windows.deliver(left, 'engelbart:build-run', { kind: 'closed', sessionId: id });
+        },
+        closed: (id) => { windows.forget(id); sendToRenderer('engelbart:build-run', { kind: 'closed', sessionId: id }); },
+      }),
       // A private repository reaches its sandbox as a one-archive download link, never as the sign-in (github/repo-access.cjs).
       repoAccess: createRepoAccess({
         token: () => github.token(),

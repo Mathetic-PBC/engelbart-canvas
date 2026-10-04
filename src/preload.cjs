@@ -179,6 +179,9 @@ const engelbartAPI = Object.freeze({
   restartSandbox: invoke('sandbox-restart'),
   // A preview in front of a focused window is in use: its sandbox sleeps 10 minutes after the last of these (library id).
   touchSandbox: invoke('sandbox-touch'),
+  // A shell in a ready repository's sandbox (library id): its session's snapshot, the one already open if there is one.
+  // The pane adopts it (terminal/sessions.js adoptSession).
+  sandboxTerminal: invoke('sandbox-terminal'),
   windowFocused: () => windowFocused,
   onWindowFocus: (callback) => subscribe('window:focus', callback),
   onSandboxProgress: (callback) => subscribe('engelbart:sandbox-progress', callback),

@@ -15,6 +15,9 @@ IGNORE = {'.git', 'node_modules', '.venv', 'venv', 'vendor', '.next', 'dist', 'b
 MANIFESTS = {'package.json', 'requirements.txt', 'pyproject.toml', 'Pipfile', 'go.mod', 'Cargo.toml', 'Gemfile', 'composer.json'}
 LOCKS = {'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb', 'uv.lock', 'poetry.lock'}
 MAX_BYTES = 11900
+# What tells a web UI from a desktop app or a terminal program (launch-discovery.cjs's, for Claude's declare_kind).
+UI_PACKAGES = ('vite', 'next', 'react-scripts', 'nuxt', 'astro', '@sveltejs/kit', '@angular/cli', 'webpack-dev-server', 'parcel', 'gatsby', '@remix-run/dev', 'express', 'fastify', 'koa', 'http-server', 'serve')
+APP_PACKAGES = ('electron', '@tauri-apps/cli', '@tauri-apps/api', 'nw', '@neutralinojs/lib')
 
 
 def read_json(file):
@@ -90,10 +93,34 @@ def components():
         for key in ('workspaces', 'engines', 'packageManager'):
             if key in package:
                 item[key] = package[key] if len(json.dumps(package[key])) < 500 else '[truncated; inspect package.json]'
+        hints = package_hints(package, set(files) | set(children))
+        if hints:
+            item['hints'] = hints
         item['evidence'] = [str(relative / n) for n in sorted(files)
-                            if n.lower().startswith('readme') or n.startswith(('vite.config.', 'next.config.')) or n in ('Procfile', 'railpack.json', 'server.py', 'app.py', 'main.py')][:8]
+                            if n.lower().startswith('readme') or n.startswith(('vite.config.', 'next.config.')) or n in ('Procfile', 'railpack.json', 'server.py', 'app.py', 'main.py', 'manage.py', 'index.html')][:8]
         found.append(item)
     return found, truncated
+
+
+def package_hints(package, files):
+    dependencies = {}
+    for key in ('dependencies', 'devDependencies'):
+        if isinstance(package.get(key), dict):
+            dependencies.update(package[key])
+    hints = {}
+    web = [name for name in UI_PACKAGES if name in dependencies]
+    app = [name for name in APP_PACKAGES if name in dependencies]
+    if web:
+        hints['web'] = web[:4]
+    if app or 'src-tauri' in files:
+        hints['desktop'] = app[:3] or ['tauri']
+    if isinstance(package.get('bin'), str):
+        hints['bin'] = [text(package.get('name'), 80) or 'bin']
+    elif isinstance(package.get('bin'), dict):
+        hints['bin'] = [text(name, 80) for name in list(package['bin'])[:4]]
+    if isinstance(package.get('main'), str):
+        hints['main'] = text(package['main'], 200)
+    return hints
 
 
 def analyze(component):

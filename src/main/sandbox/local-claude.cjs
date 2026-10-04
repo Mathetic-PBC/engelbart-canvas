@@ -129,8 +129,8 @@ async function runLocalClaude({ auth, bridge, prompt, model, effort = null, maxT
     signal?.throwIfAborted();
     if (failure) throw new Error(failure);
     if (code !== 0 || !result || result.is_error || result.subtype !== 'success') {
-      const reason = String(result?.result || result?.subtype || 'Claude Code exited without a result').slice(0, 800);
-      throw new Error(`Local Claude setup did not finish: ${reason}. Check your subscription sign-in and usage limits in the Canvas terminal.`);
+      const reason = String(result?.result || result?.subtype || 'Claude Code exited without a result').slice(0, 200);
+      throw new Error(`Claude Code did not finish: ${reason}.`);
     }
     return typeof result.result === 'string' ? result.result : '';
   } finally {

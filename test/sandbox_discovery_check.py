@@ -49,6 +49,23 @@ class DiscoveryTests(unittest.TestCase):
             self.assertLessEqual(len(json.dumps(data).encode()), 12000)
             self.assertTrue(data['scan_truncated'])
 
+    def test_hints_tell_a_web_ui_from_a_terminal_program(self):
+        with tempfile.TemporaryDirectory() as directory:
+            discovery.ROOT = Path(directory)
+            discovery.STATE = Path(directory)
+            def package(cwd, content):
+                root = Path(directory) / cwd
+                root.mkdir(parents=True, exist_ok=True)
+                (root / 'package.json').write_text(json.dumps(content))
+            package('cli', {'name': 'tool', 'bin': {'tool': 'bin/tool.js'}, 'main': 'index.js'})
+            package('web', {'devDependencies': {'vite': '5'}, 'dependencies': {'express': '4'}})
+            package('plain', {'scripts': {'test': 'node test.js'}})
+            discovery.analyze = lambda component: {'status': 'planned'}
+            hints = {c['cwd']: c.get('hints') for c in discovery.discover()['components']}
+            self.assertEqual(hints['cli'], {'bin': ['tool'], 'main': 'index.js'})
+            self.assertEqual(hints['web'], {'web': ['vite', 'express']})
+            self.assertIsNone(hints['plain'])
+
 
 if __name__ == '__main__':
     unittest.main()

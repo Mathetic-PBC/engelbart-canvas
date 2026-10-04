@@ -99,6 +99,11 @@ alter table sandbox_runs add column if not exists env_revision uuid;
 alter table sandbox_runs add column if not exists env_report jsonb;
 -- When its preview was last in front of a focused window (manager.cjs's touch): one asleep and unopened for 7 days ends.
 alter table sandbox_runs add column if not exists last_opened_at timestamptz;
+-- How a person uses the repository, as Claude declared it (worker.cjs): 'interface', 'terminal' or 'both'; null for runs
+-- from before 2026-10-03, which were all previews. Its reason, and for a terminal { cwd, hint } (an example command).
+alter table sandbox_runs add column if not exists kind text;
+alter table sandbox_runs add column if not exists kind_reason text;
+alter table sandbox_runs add column if not exists terminal jsonb;
 create table if not exists sandbox_environments (
   library_id uuid primary key references library (id) on delete cascade,
   revision uuid not null,

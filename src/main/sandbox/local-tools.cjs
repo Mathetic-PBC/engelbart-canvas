@@ -8,7 +8,12 @@ const ROOT = '/home/user/repository';
 const quote = (value) => `'${String(value).replace(/'/g, "'\\''")}'`;
 const schema = (properties, required) => ({ type: 'object', properties, required, additionalProperties: false });
 const text = { type: 'string' };
+const KINDS = ['interface', 'terminal', 'both'];
+const HINT_LIMIT = 200;
+const REASON_LIMIT = 500;
 const TOOL_DEFINITIONS = [
+  { name: 'declare_kind', description: 'Call FIRST, before any install decision: how a person uses this repository. interface: a web UI exists (vite/next/express/etc., index.html, a dev server script). terminal: a CLI, library, scripts, notebooks-as-scripts, or a package bin/main with no server. both: a web UI and a meaningful CLI. Decide from the launch discovery JSON plus at most one README/manifest read. Tools that change anything are refused until it is declared; declaring again replaces it until the repository is ready.', inputSchema: schema({ kind: { type: 'string', enum: KINDS }, reason: { type: 'string', maxLength: REASON_LIMIT } }, ['kind', 'reason']) },
+  { name: 'terminal_ready', description: 'For terminal or both, once dependency installation has succeeded or was skipped: the repository is ready to use from a shell. cwd: the directory, relative to the repository, a person should start in. hint: one example command to try there, e.g. "python main.py --help" (one line, at most 200 characters). The hint is shown to the person and never run. Starts nothing.', inputSchema: schema({ cwd: text, hint: { type: 'string', maxLength: HINT_LIMIT } }, ['cwd', 'hint']) },
   { name: 'run_command', description: 'Run a foreground command ONLY in the assigned E2B Linux sandbox. Blocked while dependency installation is active: use read_file/list_files for concurrent inspection. Use dependency_install for installs and start_app for the web server; never background either here.', inputSchema: schema({ command: text, cwd: text, timeout_seconds: { type: 'integer', minimum: 1, maximum: 180 } }, ['command']) },
   { name: 'read_file', description: 'Read a UTF-8 file from the repository in E2B. Paths are relative to the repository root.', inputSchema: schema({ path: text }, ['path']) },
   { name: 'write_file', description: 'Write a UTF-8 file in the repository in E2B. No access to files on the Mac.', inputSchema: schema({ path: text, content: text }, ['path', 'content']) },
@@ -34,7 +39,7 @@ function validateTool(name, args) {
   if (required.some((key) => !Object.hasOwn(args, key)) || Object.keys(args).some((key) => !Object.hasOwn(properties, key))) throw new Error('Invalid tool arguments');
   for (const [key, value] of Object.entries(args)) {
     const type = properties[key];
-    if (type.type === 'string' && (typeof value !== 'string' || value.includes('\0') || value.length > (key === 'content' ? 64_000 : 8000))) throw new Error(`Invalid ${key}`);
+    if (type.type === 'string' && (typeof value !== 'string' || value.includes('\0') || value.length > (type.maxLength || (key === 'content' ? 64_000 : 8000)))) throw new Error(`Invalid ${key}`);
     if (type.type === 'integer' && (!Number.isInteger(value) || value < type.minimum || value > type.maximum)) throw new Error(`Invalid ${key}`);
     if (type.type === 'boolean' && typeof value !== 'boolean') throw new Error(`Invalid ${key}`);
     if (type.enum && !type.enum.includes(value)) throw new Error(`Invalid ${key}`);
@@ -59,10 +64,16 @@ function validateTool(name, args) {
     if (args.port === 43110) throw new Error('Port 43110 is reserved for the preview proxy');
     if (args.path !== undefined && (!args.path.startsWith('/') || args.path.startsWith('//') || /[\r\n\\]/.test(args.path))) throw new Error('Invalid preview path');
   }
+  if (name === 'declare_kind' && !args.reason.trim()) throw new Error('Give a reason for the kind');
+  // The hint is printed into a terminal: one line of plain text, never an escape sequence.
+  if (name === 'terminal_ready' && (!args.hint.trim() || /[\u0000-\u001f\u007f-\u009f]/.test(args.hint))) throw new Error('Invalid hint: one line of plain text');
   return args;
 }
 
-function createSandboxTools({ sandbox, startApp, appStatus, stopApp, appState, install, onEvent, signal, secrets = [], environment = {} }) {
+// `kinds` (local-setup.cjs): how a person uses the repository, declared by Claude before anything changes.
+// { declared() → 'interface' | 'terminal' | 'both' | null, declare({ kind, reason }), terminal({ cwd, hint }) }. Without
+// it no kind is asked for (callers that only set up a web app).
+function createSandboxTools({ sandbox, startApp, appStatus, stopApp, appState, install, onEvent, signal, secrets = [], environment = {}, kinds = null }) {
   const emit = (event) => { if (!signal?.aborted) onEvent(redact(event, secrets)); };
   let chain = Promise.resolve();
   let closed = false;
@@ -71,18 +82,34 @@ function createSandboxTools({ sandbox, startApp, appStatus, stopApp, appState, i
     if (closed) throw new Error('Sandbox tools are closed');
     signal?.throwIfAborted();
     const args = validateTool(name, raw);
-    if (verified && !['app_status', 'list_files', 'read_file'].includes(name) &&
-        !(name === 'dependency_install' && args.action === 'status')) {
-      throw new Error('Preview is already verified and published. Setup mutations are closed; finish with a short summary.');
+    const reading = ['app_status', 'list_files', 'read_file'].includes(name) || (name === 'dependency_install' && args.action === 'status');
+    if (verified && !reading) {
+      throw new Error('The repository is already verified and ready. Setup mutations are closed; finish with a short summary.');
     }
+    if (kinds) {
+      const kind = kinds.declared();
+      if (!kind && !reading && name !== 'declare_kind') throw new Error('Call declare_kind first: say whether this repository is used through a web interface, from a terminal, or both.');
+      if (name === 'start_app' && kind === 'terminal') throw new Error('This repository was declared terminal, so there is no web preview: install dependencies, then call terminal_ready (or declare_kind again if it has a web UI).');
+      if (name === 'terminal_ready' && kind === 'interface') throw new Error('This repository was declared interface: start it with start_app (or declare_kind again if it is also used from a terminal).');
+    } else if (['declare_kind', 'terminal_ready'].includes(name)) throw new Error('Unknown sandbox tool');
     // Record activity, not file contents, tool arguments, or private CLI diagnostics.
     const activity = {
       read_file: `Reading ${args.path}`, list_files: `Listing ${args.path || '.'}`,
       write_file: `Updating ${args.path}`, run_command: 'Running a setup command',
       start_app: 'Requesting application launch', app_status: 'Checking application processes and listeners',
       stop_app: 'Stopping the owned application', dependency_install: `Dependency install · ${args.action}`,
+      declare_kind: `Declaring how the repository is used: ${args.kind}`, terminal_ready: 'Marking the terminal ready',
     }[name];
     emit({ phase: 'agent', status: 'working', tool: name, message: activity });
+    if (name === 'declare_kind') return kinds.declare({ kind: args.kind, reason: args.reason.trim() });
+    if (name === 'terminal_ready') {
+      install?.assertReady();
+      const cwd = repoPath(args.cwd);
+      try { await sandbox.commands.run(`test -d ${quote(cwd)}`, { timeoutMs: 10_000 }); }
+      catch (error) { if (!Number.isInteger(error.exitCode)) throw error; throw new Error(`${args.cwd} is not a directory in the repository`); }
+      signal?.throwIfAborted();
+      return kinds.terminal({ cwd: path.relative(ROOT, cwd) || '.', hint: args.hint.trim() });
+    }
     if (name === 'app_status') return appStatus(args);
     if (name === 'stop_app') return stopApp();
     if (name === 'dependency_install') return install.control(args);
@@ -139,9 +166,7 @@ function createSandboxTools({ sandbox, startApp, appStatus, stopApp, appState, i
     try {
       const result = await sandbox.commands.run(`cd ${quote(repoPath(args.cwd))} && ${args.command}`, {
         timeoutMs: (args.timeout_seconds || 120) * 1000,
-        // Aborting the SDK stream does not prove the remote process stopped.
-        // Mark tool processes so the fallback handoff can stop their trees too.
-        envs: { ...environment, npm_config_audit: 'false', ENGELBART_CANVAS_LOCAL_TOOL: '1' }, signal,
+        envs: { ...environment, npm_config_audit: 'false' }, signal,
         onStdout: receive('stdout'), onStderr: receive('stderr'),
       });
       signal?.throwIfAborted();
@@ -179,9 +204,9 @@ function createSandboxTools({ sandbox, startApp, appStatus, stopApp, appState, i
     chain = result.catch(() => {});
     return result;
   };
-  // A provider handoff must not race an unfinished local tool or queued write.
+  // Setup ending must not race an unfinished local tool or queued write.
   call.close = async () => { closed = true; await chain; };
-  // Fence queued as well as future mutations before the live URL is published.
+  // Fence queued as well as future mutations before the ready repository is published.
   call.freeze = () => { verified = true; };
   return call;
 }
@@ -219,4 +244,4 @@ async function openToolBridge(callTool, { secrets = [], signal } = {}) {
     close: () => new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); }) };
 }
 
-module.exports = { ROOT, quote, TOOL_DEFINITIONS, repoPath, validateTool, createSandboxTools, openToolBridge };
+module.exports = { ROOT, quote, KINDS, HINT_LIMIT, TOOL_DEFINITIONS, repoPath, validateTool, createSandboxTools, openToolBridge };

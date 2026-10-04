@@ -26,9 +26,13 @@ and the existing Run / Retry controls in its footer.
 The header bell shows one notification per repository, updated through
 **Building…**, **Build finished**, or **Build failed**. The repo name opens GitHub
 in Stage; clicking **Building…**, **Build finished**, or **Build failed** opens the inspector, never stopping or retrying
-directly. A completed preview offers a separate **Open live ↗**; a failed build
-shows its error, with **Retry build** available inside the inspector. A completed
-run with no web preview says so and has no live-preview action.
+directly. A completed preview offers a separate **Open live ↗**; a repository used
+from a terminal offers **Open terminal**, and one used both ways offers both. A failed
+build says **Build failed** and at most one short reason (*No web preview found*,
+*Setup stopped*, *Claude Code not signed in*, *Claude Code not installed* or *Setup
+failed*; `failureReason` in `model/sandbox-notifications.js`); its whole error is in
+the inspector, with **Retry build**. A completed interface run with no web preview
+says so and has no live-preview action; a terminal run never says it.
 Completion never changes panes automatically. The bell sits top-right on every
 screen (workspace, all projects and onboarding; `ui/WindowControls.jsx`, beside test
 mode's controls in a developer's copy). Outside a workspace, **Open live ↗** and a
@@ -61,21 +65,21 @@ environment: it is then used instead of the sign-in, for development. The script
 `scripts/` (template builds, benchmarks, smoke tests) are separate and still read
 `E2B_API_KEY` from `~/.engelbart/sandbox.env`.
 
-Setup uses the signed-in local Claude subscription first, with `ANTHROPIC_API_KEY`
-in `~/.engelbart/sandbox.env` as an optional fallback. This file stays on the main/worker
-side; its values are never returned through renderer IPC. `.env.example` lists
+Setup always uses the signed-in local Claude Code subscription; there is no Anthropic
+API key fallback (removed 2026-10-03), and `ANTHROPIC_API_KEY`, `ENGELBART_SANDBOX_SETUP`
+and `HC_*` settings are no longer read. `~/.engelbart/sandbox.env` stays on the
+main/worker side; its values are never returned through renderer IPC. `.env.example` lists
 the supported settings. A gitignored `.env.local` in this checkout is also read.
 `ENGELBART_SANDBOX_ENV_FILE` can point at an existing private environment file.
 For these settings, process environment values take precedence over file settings.
 `ENGELBART_SANDBOXES=off` turns sandboxes off entirely, for scripted runs.
 
 The default template is `engelbart-runner`, built by the web project's
-`sandbox/build-template.mjs`. It must contain `/opt/engelbart/hc_run.py`, the hc
-package and its tools, and `/opt/engelbart/proxy.mjs`. This integration uses that
-existing pipeline; it does not build a new template or require the web server,
-Supabase, or the web worker. Repositories with Compose/Supabase configuration use
-`E2B_DOCKER_TEMPLATE` (default: `<E2B_TEMPLATE>-docker`). The default `auto` mode
-tries the desktop Claude CLI subscription before the API pipeline.
+`sandbox/build-template.mjs`. It must contain `/opt/engelbart/proxy.mjs`; its hc
+package is used only to restart sandboxes that hc set up before 2026-10-03. This
+integration does not build a new template or require the web server, Supabase, or
+the web worker. Repositories with Compose/Supabase configuration use
+`E2B_DOCKER_TEMPLATE` (default: `<E2B_TEMPLATE>-docker`).
 For repositories with a root `yarn.lock`, the adapter installs Yarn Classic in
 the disposable sandbox if it is missing from the template.
 
@@ -83,47 +87,26 @@ An optional [warmed-cache template](sandbox-cache.md) inherits that runner and
 seeds npm/pip caches. It leaves repository installs, setup agents, and Docker
 templates unchanged.
 
-### Local Claude subscription — default, with API fallback
+### Setup by the local Claude subscription
 
-No environment setting is needed to enable subscription-first setup. Quit Canvas
-and start the updated checkout with:
-
-```sh
-npm start
-```
-
-Optional settings in the private `~/.engelbart/sandbox.env` file:
+Every new run is set up by the local Claude Code subscription. Optional setting in the
+private `~/.engelbart/sandbox.env` file:
 
 ```dotenv
-ENGELBART_SANDBOX_SETUP=auto
 ENGELBART_SANDBOX_CLAUDE_MODEL=sonnet
 ```
 
-`auto` is the default when unset. It checks the local CLI and subscription sign-in
-before provisioning E2B. If Claude is missing, outdated or signed out, Canvas uses
-the configured Anthropic API key instead. If the local setup attempt fails (including
-usage limits or the setup deadline), it makes one API fallback attempt in the same
-sandbox. Before handing off, it closes the local tool bridge, drains pending tools,
-confirms the previous app and marked tool processes stopped, discards its local launch recipe and restores
-the app environment snapshot. Cloned files and installed dependencies are retained;
-the API pipeline may perform additional setup. Failed cleanup blocks the handoff.
+The worker checks the local CLI and subscription sign-in before provisioning E2B, and
+the manager waits for that sign-in before it records a run (automatic preparation waits
+quietly; an explicit Run says what to do). If Claude Code is missing, outdated or signed
+out, or its setup fails (including usage limits or the 15-minute deadline), the run
+ends **failed** with a short message ending in "Retry from build details." and its
+sandbox is killed. Nothing else is tried: hc never sets up a repository, and no API key
+is used. Stop/cancel is never a failure. Environment-only restarts replay the saved plan
+and invoke no setup provider.
 
-The Build log records the provider and the fallback reason. API fallback incurs
-normal API usage; it does not use subscription billing. With no API key configured,
-local setup still works, but a local failure is reported without fallback. Stop/cancel
-never triggers fallback, nor does an app failure after the preview became ready.
-Environment-only restarts use the saved plan and invoke neither setup provider.
-
-Explicit overrides remain available: `claude-local` requires the local subscription
-and disables API fallback; `api` skips local Claude and requires `ANTHROPIC_API_KEY`.
-Remove an older override or set it to `auto` to use the new default behavior.
-
-The signed-in E2B key is needed in all modes. An old packaged release will not include these changes.
-A ready sandbox is reused; use **Stop sandbox**, then **Retry build**, to test the
-new setup provider on that repository.
-An environment-only restart reuses the saved launch plan rather than running
-either setup provider again. Existing automatic-preparation rules still apply on
-app startup, so stopped/failed library repositories may build with the selected mode.
+A ready sandbox is reused; use **Stop sandbox**, then **Retry build**, to set a
+repository up again.
 
 Prerequisites: the normal installed Claude Code binary, version 2.1.248 or newer,
 signed in with the user's own Claude subscription through its normal terminal
@@ -132,16 +115,15 @@ status --json`, and starts a separate task-specific process. It does not control
 the user's existing terminal conversation. Raw account details are not published.
 The CLI process receives a minimal user environment without API keys, OAuth token
 overrides, alternate inference-provider flags, or inherited agent-session state.
-In strict `claude-local` mode a signed-out/non-subscription session fails before
-provisioning E2B. In default `auto` mode the worker may select the separate API path;
-it never adds an API key to the local Claude process. Subscription limits and the
+A signed-out/non-subscription session fails before provisioning E2B. No API key is
+ever added to the local Claude process. Subscription limits and the
 user's Claude billing settings still apply; E2B compute is separate.
 
 The local CLI runs in restricted mode with built-in tools disabled, hooks disabled,
 and only the per-run MCP configuration. A private stdio adapter calls a random,
-authenticated loopback endpoint in the worker. Eight tools can read/write/list repository
-files, control a managed dependency install, run foreground commands, or start a web
-app **inside that one E2B VM**.
+authenticated loopback endpoint in the worker. Ten tools can declare how the repository
+is used, read/write/list repository files, control a managed dependency install, run
+foreground commands, start a web app, or mark a terminal ready **inside that one E2B VM**.
 `app_status` reports current owned processes, listening addresses/ports, local HTTP
 health and a bounded log tail; an optional `port` checks a particular conflict or
 backend listener. `stop_app` stops only the managed app and confirms its descendants
@@ -158,7 +140,7 @@ Claude credentials are never read by Canvas or copied to E2B. The E2B API key st
 in the worker, outside the local Claude process. Closing setup removes the temporary
 bridge capability files. Stop aborts Claude and kills the owned E2B sandbox.
 
-The existing hc AI pipeline is bypassed in this mode. The local Claude task performs
+The hc AI pipeline is not used for setup. The local Claude task performs
 inspection, install/build decisions, and repairs using the sandbox tools. The worker
 saves a `kind: "claude-local"` recipe with command/cwd/port/path in the VM, starts the
 app under `launch.py`, and verifies the public proxy URL independently. The normal
@@ -168,11 +150,10 @@ local HTTP and public-preview checks pass, without waiting for Claude's final me
 The tool bridge then rejects further setup mutations (including queued calls);
 read-only inspection remains available. Claude has up to 30 seconds to finish its
 summary, outside readiness timing. A summary error/timeout does not stop the verified
-app or trigger API fallback. App supervision, user Stop, and cancellation remain active
+app. App supervision, user Stop, and cancellation remain active
 during finalization; an application exit still stops/fails the run normally.
 No new database table or Claude credential record is created. The local attempt is
-bounded to 32 Claude turns and 15 minutes. The API setup deadline is 45 minutes;
-the sandbox timeout during setup remains one hour, including both attempts when falling back.
+bounded to 32 Claude turns and 15 minutes; the sandbox timeout during setup is one hour.
 
 The local launcher samples its owned processes/listeners and HTTP health about once
 a second while running (checks can take longer). Only changes emit `app_status`
@@ -188,8 +169,54 @@ the original error appears in build events. Common duplicate-server and broad-ki
 commands are rejected by `run_command`; this is a guardrail, not a shell security
 boundary. The prompt directs diagnostics through `app_status`, not another server.
 This observes multi-process launches but does not assert all backend routes or API
-credentials work merely because the frontend responds. Existing API-mode/hc setup
-is unchanged; saved local-Claude recipes also use this supervisor on env restart.
+credentials work merely because the frontend responds. Saved local-Claude recipes also
+use this supervisor on env restart; sandboxes hc set up before 2026-10-03 restart from
+hc's saved plan, without any model call.
+
+### Interface, terminal, or both
+
+Before any install decision Claude calls `declare_kind` with `interface` (a web UI:
+vite/next/express/etc., an `index.html`, a dev-server script), `terminal` (a CLI, a
+library, scripts, notebooks-as-scripts, or a package `bin`/`main` with no server) or
+`both` (a web UI and a meaningful CLI), and a reason. It decides from the launch
+discovery (whose components now carry `web`, `desktop`, `bin` and `main` hints) plus at
+most one README/manifest read. Until then only reading tools work. The kind and reason
+are logged (`phase: 'kind'`) and kept on the run (`sandbox_runs.kind`, `kind_reason`),
+and the inspector shows them.
+
+Dependencies install through `dependency_install` as for any repository. An interface is
+ready after `start_app` verifies its preview, as before. A terminal has no `start_app`
+and no preview check: once installation succeeded or was skipped, Claude calls
+`terminal_ready { cwd, hint }` (a directory in the repository and one example command,
+at most 200 characters, one line). Both needs the verified preview and `terminal_ready`.
+The worker's `ready` event is `{ kind, preview_url?, port?, terminal?: { cwd, hint } }`;
+`sandbox_runs.terminal` keeps `{ cwd, hint }`, and a ready terminal run has no
+`preview_url`. A terminal-only run records **Terminal ready** instead of **Preview ready**.
+
+A terminal's sandbox follows the preview lifecycle: one hour during setup, then 10
+minutes after its last use (`setTimeout(IDLE)`), paused on timeout and resumed on use.
+Its worker has no app to watch: it lets the background npm audit finish, then exits
+without stopping anything, and the manager keeps the run ready. Checks never request a
+preview for it: running or paused it is healthy, and only a sandbox E2B no longer has
+ends the run. **Save & restart terminal** saves the environment and closes its open
+shell, so the next one opened has the new values.
+
+**Open terminal** (the bell, the inspector, or clicking the repository in the sidebar)
+opens a shell in the sandbox as a tab of the workspace's **Terminal** pane, titled
+"owner/repo (sandbox)", in `/home/user/repository/<cwd>`, with the repository's saved
+environment values as the shell's environment (never typed). The hint is printed once
+as a `# Try: …` comment above the first prompt and never run. Opening it again shows
+the same shell. Clicking a `both` repository opens the preview in front and the
+terminal as a tab behind it. `src/main/sandbox/pty.cjs` adapts E2B's `sandbox.pty`
+to the part of node-pty the terminal's `SessionManager` uses (provider `sandbox`,
+`createSandbox`), with the E2B key from the main process; `sandbox/terminals.cjs`
+keeps one shell per repository. While its tab is in front of a focused window the
+sandbox is kept awake (`touch`), as a preview's Stage tab does. Asleep, the pty's
+shell lives on but its stream does not (measured 2026-10-03), so the tab says
+*sandbox asleep* rather than exited; the next keystroke or opening it again shows
+"Waking…", resumes the sandbox and reattaches the same shell (`pty.connect`); a shell
+that ended meanwhile is replaced. Closing the tab ends the shell, not the sandbox; Stop,
+Retry and releasing the repository end the sandbox and its shell, and take the tab away.
 
 Before starting Claude, the worker runs a bounded read-only preflight and automatically
 starts a managed install for an unambiguous root Node project with one recognized
@@ -292,7 +319,7 @@ must succeed; stop/replacement cleans up the entire owned process tree. Claude c
 continue read-only inspection while both installs run.
 
 npm's inline audit is disabled through process-scoped `npm_config_audit=false` in
-managed installs and setup commands (including API fallback). No global npm config,
+managed installs and setup commands. No global npm config,
 dependency versions, install scripts, or devDependency selection is changed. After a
 new build's preview is verified, a separate read-only `npm audit --json --audit=true`
 checks installed npm lockfile roots and reports severity counts and affected-package
@@ -324,9 +351,8 @@ arbitrary shell commands and writes require the active install to finish or be s
 app launch additionally requires success or an explicit skip. Failed/stopped jobs are
 never silently treated as successful. Cleanup tags and stops only the owned job's process
 tree, checks process identities to avoid PID reuse, and fences delayed starts. Setup exit
-stops an unfinished install before any API handoff. No new database schema or renderer
-UI is introduced; the API pipeline is otherwise unchanged, and environment-only
-restarts still reuse installed dependencies and the saved launch recipe.
+stops an unfinished install. Environment-only restarts still reuse installed
+dependencies and the saved launch recipe.
 
 Scope: one foreground launch command (which may supervise required child services),
 not full hc parity for multi-service orchestration, execution of Railpack recipes, or automatic environment-variable
@@ -522,36 +548,28 @@ both supported launch paths, and the setup agent's API key does not reach the
 test application. It uses sandbox time and cleans up after itself.
 
 `node scripts/smoke-sandbox.cjs https://github.com/owner/repository` runs a real
-E2B/agent setup using an isolated temporary database. It verifies the saved
+E2B/local Claude setup using an isolated temporary database. It verifies the saved
 preview, stops the test sandbox afterward, and prints the test database path.
-It uses sandbox time and the selected provider's subscription/API usage; its
-deadline is eight minutes. Set `ENGELBART_SANDBOX_SETUP=api` to test only the API path.
-
-The API path was verified against `render-examples/express-hello-world`: clone, setup, live public
-preview, persisted `ready` row, and cleanup all completed. Repository setup still
-depends on hc's capabilities: the MDN React example reached the smoke deadline
-during repair, and the Heroku Node example served HTTP but hc did not recognize
-its startup message. Those are setup-pipeline limitations, not proof that every
-GitHub repository can produce a preview.
-
-The local subscription proof can be repeated in strict mode, without API fallback:
+It uses sandbox time and the local Claude subscription's usage; its deadline is
+eight minutes.
 
 ```sh
-ENGELBART_SANDBOX_SETUP=claude-local ANTHROPIC_API_KEY= node scripts/smoke-sandbox.cjs https://github.com/render-examples/express-hello-world
+node scripts/smoke-sandbox.cjs https://github.com/render-examples/express-hello-world
 node scripts/smoke-sandbox-environment.cjs --local
 ```
 
 The first test uses subscription model calls and E2B compute, with an isolated local
 database and automatic sandbox cleanup. The second uses a disposable saved local
 launch recipe and E2B compute only, verifying environment restarts without any model
-or Anthropic API key. Do not run these as routine unit tests.
+call. Do not run these as routine unit tests.
 
 Verified locally: the Express example reached a persisted `ready` row through the
-local Claude/MCP path with `ANTHROPIC_API_KEY` explicitly empty, then cleanup stopped
-the test sandbox. The local-recipe environment smoke also verified two launches
-in the same VM with add/update/remove/empty values and no model call. Unit tests
-additionally cover atomic JSON framing for concurrent app logs and readiness,
-the real stdio MCP transport, subscription gating, tool restrictions, request
-validation, redaction and cancellation. Provider tests cover subscription-first
-selection, missing/failed local Claude, explicit overrides, no-key behavior,
-same-VM API handoff, cleanup failures, and preventing fallback after Stop or readiness.
+local Claude/MCP path, then cleanup stopped the test sandbox. The local-recipe
+environment smoke also verified two launches in the same VM with add/update/remove/
+empty values and no model call. Unit tests additionally cover atomic JSON framing for
+concurrent app logs and readiness, the real stdio MCP transport, subscription gating,
+tool restrictions (including `declare_kind` first and `terminal_ready`), request
+validation, redaction and cancellation. Provider tests cover the subscription as the
+only setup provider: missing/failed local Claude ends the run without hc, and Stop or
+a ready preview never becomes another setup. `test/sandbox-pty.test.cjs` covers the
+sandbox terminal against a fake E2B pty: spawn, input, resize, exit, sleep and wake.

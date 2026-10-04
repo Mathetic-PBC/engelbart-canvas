@@ -18,7 +18,7 @@ function launchWorker(request, env, onEvent) {
   let stderr = '';
   let chain = Promise.resolve();
   let failed = null;
-  child.stderr.on('data', (chunk) => { stderr = (stderr + redactOutput(chunk, [env.E2B_API_KEY, env.ANTHROPIC_API_KEY, ...Object.values(request.environment?.values || {})])).slice(-4000); });
+  child.stderr.on('data', (chunk) => { stderr = (stderr + redactOutput(chunk, [env.E2B_API_KEY, ...Object.values(request.environment?.values || {})])).slice(-4000); });
   const lines = readline.createInterface({ input: child.stdout });
   lines.on('line', (line) => {
     chain = chain.then(async () => {

@@ -1,5 +1,12 @@
 # E2B integration — Bart flow specification
 
+> **Changed since (2026-10-03):** setup is the local Claude Code subscription's alone. The Anthropic API-key fallback,
+> `ENGELBART_SANDBOX_SETUP` (`auto`/`api`/`claude-local`), `ANTHROPIC_API_KEY`/`HC_*` settings and `launch.py
+> --reset-local` described below are gone; hc is used only to restart sandboxes it set up earlier. Claude now declares
+> each repository's kind (`interface`, `terminal` or `both`), and a terminal repository is ready without a web preview,
+> with a shell in its sandbox. These documents are kept as written; [../sandbox-runs.md](../sandbox-runs.md) describes
+> current behavior.
+
 The primary specification is the real Bart question-and-answer document in **Engelbart → E2B integration**, mirrored in [WORKSPACE.md](WORKSPACE.md). It uses numbered Behavior / Event / Decision steps and Before/After JSON, as requested. Current flow means Hudson's baseline; New flow means David's E2B source branch. Explicitly adopted robustness additions are distinguished from observed source behavior.
 
 - [WORKSPACE.md](WORKSPACE.md): primary Build document, including actual `@bart --astra --ultra` questions and unmodified backend replies with model attribution. Later explicit corrections override earlier statements.

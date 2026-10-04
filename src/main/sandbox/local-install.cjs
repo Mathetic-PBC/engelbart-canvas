@@ -147,7 +147,7 @@ function createDependencyInstall({ sandbox, environment = {}, secrets = [], sign
       };
       job.handle = await sandbox.commands.run(`python3 -u ${HELPER} run ${job.id}`, {
         background: true, timeoutMs: timeout_seconds * 1000, requestTimeoutMs: 20_000,
-        envs: { ...environment, npm_config_audit: 'false', ENGELBART_CANVAS_LOCAL_TOOL: '1', ENGELBART_CANVAS_INSTALL_JOB: job.id },
+        envs: { ...environment, npm_config_audit: 'false', ENGELBART_CANVAS_INSTALL_JOB: job.id },
         onStdout: receive('stdout'), onStderr: receive('stderr'),
       });
       job.status = 'running';

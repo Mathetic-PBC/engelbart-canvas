@@ -36,15 +36,38 @@ export function sandboxProgressState(dataRoot, { notifications = [], dismissed =
   return { dataRoot, items: {}, notifications, dismissed };
 }
 
+// A shell in a repository's sandbox to show in the workspace's terminal pane: { session (main's snapshot), show (bring the
+// pane forward) } (SandboxProgress.jsx's openTerminal → Workspace.jsx).
+export const OPEN_SANDBOX_TERMINAL = 'engelbart:open-sandbox-terminal';
+
+// How a person uses a ready run's repository, as Claude declared it: 'interface', 'terminal' or 'both'. Runs from before
+// 2026-10-03 have none, and were all previews.
+export const runKind = (run) => (['interface', 'terminal', 'both'].includes(run?.kind) ? run.kind : 'interface');
+export const canOpenPreview = (run) => run?.status === 'ready' && runKind(run) !== 'terminal' && !!run.preview_url;
+export const canOpenTerminal = (run) => run?.status === 'ready' && runKind(run) !== 'interface' && !!run.terminal;
+
+// Why a build failed, in a few words for the bell (≤ 60 characters); the whole error stays in its build details.
+export function failureReason(run) {
+  if (run?.status !== 'failed') return '';
+  const error = String(run.error || '');
+  if (/^Setup stopped|Setup was interrupted/i.test(error)) return 'Setup stopped';
+  if (/Claude Code is not installed|Update Claude Code/i.test(error)) return 'Claude Code not installed';
+  if (/not signed in to a Claude subscription/i.test(error)) return 'Claude Code not signed in';
+  if (/web preview|preview is not reachable|public preview/i.test(error)) return 'No web preview found';
+  return 'Setup failed';
+}
+
 // Progress can arrive before the initial snapshot. Never let an older snapshot
 // restore a stopped preview, replace a newer build, or create another alert.
 // A saved repository clicked in the workspace's sidebar (2026-09-29): its live preview when there is one (asleep too: opening
-// it wakes it), else its build details (progress, why it failed, Run). One ended only because nobody opened it for 7 days
-// is built again ('start'). Without a sandbox (signed out, sandboxes off) it opens as it always has.
+// it wakes it), its terminal when it is used from one, both for both (2026-10-03); else its build details (progress, why it
+// failed, Run). One ended only because nobody opened it for 7 days is built again ('start'). Without a sandbox (signed
+// out, sandboxes off) it opens as it always has.
 export function repositoryClick(item) {
   if (!item?.run) return null;
   if (expiredRun(item.run)) return 'start';
-  return item.run.status === 'ready' && item.run.preview_url ? 'preview' : 'details';
+  const preview = canOpenPreview(item.run), terminal = canOpenTerminal(item.run);
+  return preview && terminal ? 'both' : preview ? 'preview' : terminal ? 'terminal' : 'details';
 }
 
 // The repository whose ready preview an address is on (same origin: each sandbox has its own host), or null.
@@ -106,7 +129,7 @@ export function sandboxProgressReducer(state, action) {
     const existing = notifications.find((row) => row.runId === run.id);
     const samePhase = existing && notificationStatus(existing) === run.status;
     const changedPhase = previous?.run.id === run.id && previous.run.status !== run.status;
-    const boundary = run.status === 'ready' ? run.build_log?.findLast(entry => entry.message === 'Preview ready')?.time
+    const boundary = run.status === 'ready' ? run.build_log?.findLast(entry => entry.message === 'Preview ready' || entry.data?.phase === 'ready')?.time
       : run.status === 'starting' ? run.build_log?.findLast(entry => entry.data?.lifecycle === 'restart')?.time
       : run.finished_at;
     // Preserve read/dismissed state as progress arrives and old log lines age out.

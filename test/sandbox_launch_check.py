@@ -144,43 +144,29 @@ print('Local Claude restart validates the saved plan and bypasses hc/model calls
 
 with tempfile.TemporaryDirectory() as temp:
     launch.STATE = Path(temp)
-    recipe = launch.STATE / 'recipe.json'
-    environment = launch.STATE / 'environment.json'
-    launch.write_private(recipe, {'kind': 'claude-local'})
-    launch.write_private(environment, {'values': {'APP_SECRET': 'fixture'}, 'removed': []})
-    with patch.object(sys, 'argv', ['launch.py', '--stop', '--reset-local']), \
-         patch.object(launch, 'load_wrapper', side_effect=AssertionError('cleanup must not run the API setup')):
-        with patch.object(launch, 'stop_launch', side_effect=RuntimeError('still running')):
-            try:
-                launch.main()
-            except RuntimeError:
-                pass
-            else:
-                raise AssertionError('Failed stop must prevent handoff')
-            assert recipe.exists()
-        with patch.object(launch, 'stop_launch') as stop:
+    wrapper = SimpleNamespace(emit=lambda **event: None, main=lambda: (_ for _ in ()).throw(AssertionError('setup is never hc\'s')))
+    with patch.object(sys, 'argv', ['launch.py']), \
+         patch.object(launch, 'load_wrapper', return_value=wrapper), \
+         patch.object(launch, 'install_environment'), \
+         patch.dict(sys.modules, {'human_compact': SimpleNamespace(), 'human_compact.trajectory': SimpleNamespace(project_environment=None, project_run=None, project_supabase=None)}):
+        try:
             launch.main()
-            stop.assert_called_once_with(local_tools=True)
-            assert not recipe.exists()
-            assert environment.exists(), 'Only discard the old launch recipe'
-            launch.main()  # No local recipe is also valid after an early failure.
-print('API fallback discards the local launch plan only after a confirmed stop.')
+        except launch.RestartBlocked as error:
+            assert 'no saved launch plan' in str(error)
+        else:
+            raise AssertionError('Without a saved plan launch.py must refuse rather than set up with hc')
+print('Without a saved plan launch.py refuses: setup is Claude Code\'s, never hc\'s.')
 
 processes = {501: (1, '101', 'npm install'), 502: (501, '102', 'installer-child'), 599: (1, '199', 'unrelated-service')}
-def process_environment(file):
-    return b'ENGELBART_CANVAS_LOCAL_TOOL=1\0' if str(file) == '/proc/501/environ' else b'PATH=/bin\0'
-def kill_tool(pid, sig):
-    assert pid != 599, 'Only our local tools and their descendants may be stopped'
-    processes.pop(pid, None)
+def kill_any(pid, sig):
+    raise AssertionError('Stopping the app must not touch processes outside its launcher tree')
 with patch.object(launch, 'process_snapshot', side_effect=lambda: dict(processes)), \
-     patch.object(launch.Path, 'read_bytes', new=process_environment), \
-     patch.object(launch.os, 'kill', side_effect=kill_tool), \
-     patch.object(launch, 'retire_launch_records'):
+     patch.object(launch.os, 'kill', side_effect=kill_any), \
+     patch.object(launch, 'retire_launch_records'), \
+     patch.object(launch, 'stop_owned_app'):
     launch.stop_launch()
-    assert len(processes) == 3, 'Normal env restart must preserve other tool processes'
-    launch.stop_launch(local_tools=True)
-    assert list(processes) == [599]
-print('API handoff stops marked tool process trees left behind by cancelled SDK streams.')
+    assert len(processes) == 3, 'Setup tools and services outside the launcher are left alone'
+print('Stopping the launcher leaves setup tools and unrelated services alone.')
 
 with tempfile.TemporaryDirectory() as temp:
     launch.ROOT = Path(temp) / 'repository'

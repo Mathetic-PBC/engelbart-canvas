@@ -4,6 +4,9 @@ const { randomUUID } = require('node:crypto');
 const { environmentReport, environmentReportOf } = require('../../shared/environment.cjs');
 const { milestoneKey, isAgentActivity, AGENT_LOG_LIMIT } = require('../../shared/build-history.cjs');
 
+// How a person uses a repository (local-tools.cjs's declare_kind).
+const KINDS = ['interface', 'terminal', 'both'];
+
 const githubRepo = (value) => {
   if (typeof value !== 'string') return null;
   const match = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/?$/i.exec(value);
@@ -62,13 +65,15 @@ function runStore(db) {
       return (await db.query("update sandbox_runs set status = 'stopped', finished_at = now(), updated_at = now() where id = $1 and status = 'failed' returning *", [id]))[0] || null;
     },
     async update(id, fields) {
-      const allowed = ['sandbox_id', 'status', 'preview_url', 'port', 'error', 'finished_at', 'env_revision', 'last_opened_at'];
+      const allowed = ['sandbox_id', 'status', 'preview_url', 'port', 'error', 'finished_at', 'env_revision', 'last_opened_at', 'kind', 'kind_reason', 'terminal'];
       const keys = Object.keys(fields);
       if (!keys.length || keys.some((key) => !allowed.includes(key))) throw new Error('Invalid sandbox run update');
-      const set = keys.map((key, i) => `${key} = $${i + 2}`).join(', ');
-      return (await db.query(`update sandbox_runs set ${set}, updated_at = now() where id = $1 and status in ('starting', 'ready') returning *`, [id, ...keys.map((key) => fields[key])]))[0] || null;
+      if ('kind' in fields && fields.kind !== null && !KINDS.includes(fields.kind)) throw new Error('Invalid sandbox run kind');
+      const set = keys.map((key, i) => `${key} = $${i + 2}${key === 'terminal' ? '::jsonb' : ''}`).join(', ');
+      const value = (key) => (key === 'terminal' && fields[key] !== null ? JSON.stringify(fields[key]) : fields[key]);
+      return (await db.query(`update sandbox_runs set ${set}, updated_at = now() where id = $1 and status in ('starting', 'ready') returning *`, [id, ...keys.map(value)]))[0] || null;
     },
   };
 }
 
-module.exports = { githubRepo, runStore };
+module.exports = { githubRepo, runStore, KINDS };

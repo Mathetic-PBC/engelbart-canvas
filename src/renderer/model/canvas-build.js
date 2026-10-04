@@ -102,5 +102,13 @@ export function canvasBuildSteps(run, repoName) {
       }
     }
   }
+  // Used from a terminal (2026-10-03): installed, then ready in a shell; there is no app to start or preview to check.
+  if (run?.kind === 'terminal') {
+    for (const step of steps) {
+      if (step.id === 'start') step.title = 'Install';
+      if (step.id === 'health' && !step.events.length) step.summary = 'No web preview to check';
+      if (step.id === 'live' && step.state === 'done') step.summary = 'Terminal ready';
+    }
+  }
   return localBuildSteps(steps, events, run);
 }

@@ -57,12 +57,12 @@ async function main() {
     console.log('Verified saved preview:', JSON.stringify(saved[0]));
     console.log('Verified template and public page:', JSON.stringify({ template_id: report.template_id, configured: report.configured_template, public_check: report.public_check, request_to_ready_ms: report.request_to_ready_ms }));
   } catch (error) {
-    report.status = 'failed'; report.error = redactOutput(error.message, [env.E2B_API_KEY, env.ANTHROPIC_API_KEY].filter(Boolean));
+    report.status = 'failed'; report.error = redactOutput(error.message, [env.E2B_API_KEY].filter(Boolean));
     throw error;
   } finally {
     clearTimeout(timeout);
     try { await manager.dispose(); report.cleaned_up = true; }
-    catch (error) { report.cleanup_error = redactOutput(error.message, [env.E2B_API_KEY, env.ANTHROPIC_API_KEY].filter(Boolean)); throw error; }
+    catch (error) { report.cleanup_error = redactOutput(error.message, [env.E2B_API_KEY].filter(Boolean)); throw error; }
     finally { await ctx.libraryDb.close(); report.finished_at = new Date().toISOString(); report.test_database = root; save(); }
     console.log('Sandbox cleanup complete. Test database:', root);
   }

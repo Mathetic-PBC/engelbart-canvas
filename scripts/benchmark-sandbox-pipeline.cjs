@@ -59,7 +59,7 @@ async function main() {
         : 'Exact earliest committed local-Claude snapshot. Already has deterministic/overlapped installation; therefore not a fully unoptimized baseline.',
       'Optimized: frozen working implementation, including Railpack-assisted compact launch discovery before Claude and immediate publication after verified launch; previously enabled install/cache optimizations retained.',
       'Fresh sequential E2B instances; alternate baseline/optimized order by round; rotate repository order. 8 CPU / 8192 MiB required.',
-      'Same pinned repository revision asserted after normal clone. Same local Claude subscription/CLI and configured model. No API fallback.',
+      'Same pinned repository revision asserted after normal clone. Same local Claude subscription/CLI and configured model, the only setup provider.',
       'Clock covers worker request to ready plus independent public HTTP 200 HTML and required local service checks. Preview-only timing also recorded. Artifacts, final agent-summary drain and cleanup excluded. No UI/IPC/browser-paint timing.',
       'Cocoa requires /api/health on owned port 3001; Hypocompass requires its owned Flask listener and login page on 8090, as in the pinned source. These checks do not verify credential-dependent backend features or frontend-to-backend routing.',
       'Existing user previews, configuration, repository worktree and published templates are never modified.',

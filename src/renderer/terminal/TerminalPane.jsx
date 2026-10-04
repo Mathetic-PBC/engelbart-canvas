@@ -8,6 +8,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { api } from '../api.js';
 import { FluidTab, TabCard, TabClose, TabTitle, useTabCard } from '../ui/FluidTab.jsx';
+import { useSandboxTouch } from '../ui/SandboxProgress.jsx';
 import {
   bootstrap,
   clearSession,
@@ -35,7 +36,9 @@ const AGENTS = [
   { id: 'claude', label: 'Claude Code' },
   { id: 'codex', label: 'Codex' },
 ];
-const LABEL = Object.fromEntries(AGENTS.map((agent) => [agent.id, agent.label]));
+const LABEL = { ...Object.fromEntries(AGENTS.map((agent) => [agent.id, agent.label])), sandbox: 'Sandbox' };
+// A shell in a repository's E2B sandbox (src/main/sandbox/terminals.cjs): named for its repository, in a directory there.
+const inSandbox = (record) => record.snapshot.provider === 'sandbox';
 const MONO = 'var(--font-mono)';
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
 // Control characters by code, never as literals: editors and tools strip the raw bytes.
@@ -100,7 +103,9 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
   const agentLabel = LABEL[now.agent] || LABEL.shell;
   const boxIsInput = running && now.integrated && !takeover; // the box owns typing; the transcript is locked
   const showBox = running && !takeover;
-  const conversation = running && now.agent !== 'shell'; // Claude Code or Codex: the program is the whole tab
+  const conversation = running && now.agent !== 'shell'; // Claude Code, Codex or a sandbox's shell: the program is the whole tab
+  // A sandbox's shell in front of a focused window is in use: its sandbox stays awake (it sleeps 10 minutes after).
+  useSandboxTouch(visible && current && inSandbox(current) && running ? current.snapshot.libraryId || null : null);
 
   // A session main opened for this project (a Build's terminal program) is the one shown.
   useEffect(() => {
@@ -381,7 +386,7 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
             const alive = record.snapshot.status === 'running';
             const next = sessions[i + 1];
             const sep = !on && next && next.snapshot.id !== currentId;
-            const title = `${basename(cwdOf(record))}${alive ? '' : ` · exited${Number.isInteger(record.snapshot.exitCode) ? ` ${record.snapshot.exitCode}` : ''}`}`;
+            const title = `${inSandbox(record) ? record.snapshot.title : basename(cwdOf(record))}${alive ? '' : ` · exited${Number.isInteger(record.snapshot.exitCode) ? ` ${record.snapshot.exitCode}` : ''}`}`;
             const last = sessions.length === 1;
             return (
               <FluidTab key={id} on={on} sep={sep} data-term-tab={id} onMouseDown={(event) => { if (event.button === 0) { card.hide(); activate(id); } }} onMouseEnter={(event) => { if (!on) card.enter(event, id); }} onMouseLeave={card.leave}>
@@ -438,7 +443,7 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
       <div style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 10, padding: conversation ? '10px 14px' : '10px 14px 12px', borderTop: '1px solid #eaeaea', background: '#fafafa' }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 6px' }}>
           <span data-agent-chip="1" style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fff', font: `500 11.5px/1.4 ${MONO}`, color: '#171717', whiteSpace: 'nowrap' }}><span style={{ color: '#8f8f8f' }}>›_</span>{agentLabel}</span>
-          <button type="button" className="hov-bd2" onClick={() => void changeCwd()} disabled={!currentId} title="Change working directory…" data-cwd-chip="1" style={{ flex: '0 1 auto', minWidth: 0, display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fff', font: `11.5px/1.4 ${MONO}`, color: '#4d4d4d', whiteSpace: 'nowrap', overflow: 'hidden', cursor: currentId ? 'pointer' : 'default', textAlign: 'left', transition: 'border-color 120ms' }}><span style={{ color: '#8f8f8f' }}>▭</span><span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentCwd || '~'}</span></button>
+          <button type="button" className="hov-bd2" onClick={() => void changeCwd()} disabled={!currentId || (current && inSandbox(current))} title={current && inSandbox(current) ? 'In the repository\'s sandbox' : 'Change working directory…'} data-cwd-chip="1" style={{ flex: '0 1 auto', minWidth: 0, display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fff', font: `11.5px/1.4 ${MONO}`, color: '#4d4d4d', whiteSpace: 'nowrap', overflow: 'hidden', cursor: currentId ? 'pointer' : 'default', textAlign: 'left', transition: 'border-color 120ms' }}><span style={{ color: '#8f8f8f' }}>▭</span><span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentCwd || '~'}</span></button>
         </div>
         {currentId && (showBox ? (
           <input

@@ -1,7 +1,8 @@
 'use strict';
 
-// Canvas's adapter to the hc pipeline already installed in engelbart-web's E2B
-// runner template. No Supabase, web queue, trace capture, or renderer access.
+// A repository's E2B sandbox, set up by the local Claude Code subscription (local-setup.cjs). A restart with saved
+// environment values replays the saved launch plan through launch.py, which also still restarts sandboxes set up by the
+// hc pipeline in engelbart-web's runner template. No Supabase, web queue, trace capture, or renderer access.
 const { githubRepo } = require('./runs.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -71,7 +72,7 @@ async function wantsDocker(repo) {
 }
 
 function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = async () => {}, detectDocker = wantsDocker, checkPreview = previewResponds, prepareClaude = prepareLocalClaude, localSetup = runLocalSetup, audit = runNpmAudit }) {
-  const secrets = [env.E2B_API_KEY, env.ANTHROPIC_API_KEY].filter(Boolean);
+  const secrets = [env.E2B_API_KEY].filter(Boolean);
   const emit = (event) => send(redactEvent(event, secrets));
   let sandbox = null;
   let cancelled = false;
@@ -80,16 +81,15 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
   let detached = false;
   const localController = new AbortController();
   const auditController = new AbortController();
-  let auditStarted = false;
+  let audited = null; // the background audit, once started; it never fails
   function auditAfterReady() {
-    if (auditStarted || cancelled || detached) return;
-    auditStarted = true;
+    if (audited || cancelled || detached) return;
     const onEvent = (data) => {
       if (!auditController.signal.aborted && !cancelled && !detached) emit({ event: 'progress', kind: 'status', message: data.message, data });
     };
     // No await: registry latency/findings cannot delay the preview or fail setup.
-    Promise.resolve().then(() => audit({ sandbox, signal: auditController.signal, onEvent })).catch(() => {
-      onEvent({ phase: 'audit', status: 'unavailable', message: 'Background npm audit unavailable; preview remains ready. No dependencies changed.' });
+    audited = Promise.resolve().then(() => audit({ sandbox, signal: auditController.signal, onEvent })).catch(() => {
+      onEvent({ phase: 'audit', status: 'unavailable', message: 'Background npm audit unavailable; the sandbox remains ready. No dependencies changed.' });
     });
   }
   async function stop() {
@@ -127,7 +127,8 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
       // sleep, which the request could reach just after it had.
       if (info.state === 'paused') return { state: 'paused' };
       if (info.state !== 'running') return { state: 'inactive' };
-      if (!request.preview_url) return { state: 'interrupted' };
+      // A terminal has no preview to check: running is ready.
+      if (!request.preview_url) return { state: request.kind === 'terminal' ? 'ready' : 'interrupted' };
       if (info.endAt - Date.now() < 30_000) return { state: 'ready' };
       return { state: await checkPreview(request.preview_url) ? 'ready' : 'unreachable' };
     } catch (error) {
@@ -180,24 +181,13 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
     try {
       const repo = githubRepo(request.github_url);
       if (!repo) throw new Error('A GitHub repository URL is required');
-      const provider = env.ENGELBART_SANDBOX_SETUP || 'auto';
-      if (!['auto', 'api', 'claude-local'].includes(provider)) throw new Error('ENGELBART_SANDBOX_SETUP must be auto, api or claude-local');
       if (!env.E2B_API_KEY) throw new Error(MISSING_KEY);
-      if (!restarting && provider === 'api' && !env.ANTHROPIC_API_KEY) throw new Error('Set ANTHROPIC_API_KEY, or select ENGELBART_SANDBOX_SETUP=auto in ~/.engelbart/sandbox.env');
-      function fallbackToApi(error) {
-        checkCancelled(); // Stop must never turn into another setup attempt.
-        if (ready) throw error; // A published preview is never another setup attempt.
-        if (provider !== 'auto') throw error;
-        const reason = redactOutput(String(error.message || 'Local Claude unavailable'), secrets).slice(-800);
-        if (!env.ANTHROPIC_API_KEY) throw new Error(`${reason} No ANTHROPIC_API_KEY is configured for fallback. Check Claude sign-in/usage or add a fallback key in ~/.engelbart/sandbox.env.`);
-        emit({ event: 'progress', kind: 'status', message: `Local Claude setup unavailable or unsuccessful: ${reason} Falling back to Anthropic API-key setup (API usage is billed separately).`,
-          data: { phase: 'setup', status: 'fallback', provider: 'api', previous_provider: 'claude-local' } });
-      }
+      // Setup is the local Claude Code subscription's, and nothing else's: missing, signed out or failing, the run fails
+      // with what to do (prepareLocalClaude's message). A restart replays the saved plan and needs no Claude.
       let auth;
-      if (!restarting && provider !== 'api') {
+      if (!restarting) {
         emit({ event: 'progress', message: 'Checking local Claude subscription sign-in' });
-        try { auth = await prepareClaude(env); }
-        catch (error) { fallbackToApi(error); }
+        auth = await prepareClaude(env);
         checkCancelled();
       }
       emit({ event: 'progress', message: restarting ? 'Connecting to existing sandbox' : 'Creating sandbox' });
@@ -249,8 +239,8 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
       }
       emit({ event: 'progress', message: 'Repository cloned', kind: 'status', data: { lifecycle: 'cloned' } });
       checkCancelled();
-      // The existing runner includes npm/pnpm/bun but not Yarn. hc deliberately
-      // refuses npm fallback for yarn.lock repositories, so supply the missing tool.
+      // The existing runner includes npm/pnpm/bun but not Yarn: a yarn.lock
+      // repository gets it, rather than an npm install that ignores its lockfile.
       await sandbox.commands.run(`if [ -f ${quote(`${workdir}/yarn.lock`)} ]; then command -v yarn >/dev/null 2>&1 || npm install --global yarn@1.22.22; fi`, {
         user: 'root', timeoutMs: 120_000, envs: { npm_config_audit: 'false' }, onStdout: progress, onStderr: progress,
       });
@@ -273,10 +263,12 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
         await sandbox.commands.run(`chmod 600 ${ADAPTER_DIR}/environment.json`, { timeoutMs: 10_000 });
       }
       await writeEnvironment();
-      if (auth) {
-        deadline = setTimeout(() => localController.abort(new Error('Local Claude setup exceeded 15 minutes')), 15 * 60_000);
+      if (!restarting) {
+        deadline = setTimeout(() => localController.abort(new Error('Claude Code setup took more than 15 minutes')), 15 * 60_000);
         let launched, published;
-        function publishPreview(result) {
+        // Ready: a verified preview, a terminal, or both (local-setup.cjs). The sandbox goes on the preview's sleep: 10
+        // minutes after the last use, then paused until a request (or a terminal) wakes it.
+        function publishReady(result) {
           checkCancelled();
           if (ready) return;
           published = result;
@@ -284,17 +276,19 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
           clearTimeout(deadline);
           // Continue supervising the app even while Claude writes its final
           // response. An app exit cancels that response, not vice versa.
-          result.done.then(() => localController.abort(new Error('Application exited')),
+          result.done?.then(() => localController.abort(new Error('Application exited')),
             error => localController.abort(error));
-          emit({ event: 'progress', message: 'Preview verified', kind: 'status', data: { phase: 'check', status: 'ok', provider: 'claude-local' } });
-          emit({ event: 'ready', preview_url: result.preview_url, port: result.port });
+          const kind = result.kind || 'interface';
+          if (result.preview_url) emit({ event: 'progress', message: 'Preview verified', kind: 'status', data: { phase: 'check', status: 'ok', provider: 'claude-local' } });
+          if (result.terminal) emit({ event: 'progress', message: 'Terminal verified', kind: 'status', data: { phase: 'terminal', status: 'ok', cwd: result.terminal.cwd } });
+          emit({ event: 'ready', kind, ...(result.preview_url ? { preview_url: result.preview_url, port: result.port } : {}), ...(result.terminal ? { terminal: result.terminal } : {}) });
           sleepWhenIdle();
-          if (!restarting) auditAfterReady();
+          auditAfterReady();
         }
         try {
           launched = await localSetup({ sandbox, auth, environment,
             model: env.ENGELBART_SANDBOX_CLAUDE_MODEL || 'claude-sonnet-5-5', signal: localController.signal, checkPreview,
-            onReady: publishPreview,
+            onReady: publishReady,
             onEvent(event) {
               if (localController.signal.aborted) return;
               const kind = event.phase === 'stage' ? 'command' : event.phase === 'log' ? (event.stream === 'stderr' ? 'stderr' : 'stdout') : 'status';
@@ -306,41 +300,40 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
           });
         } catch (error) {
           clearTimeout(deadline);
-          if (published) {
-            // Final-summary errors/timeout cannot tear down a verified app or
-            // start API fallback. Its own done promise remains authoritative.
-            launched = published;
-          } else {
+          // Final-summary errors/timeout cannot tear down a ready sandbox. Its app's own done promise remains authoritative.
+          if (!published) {
             localController.abort();
-            fallbackToApi(error);
-            // The local task has closed its bridge and drained its tools. Keep the
-            // same sandbox/files, but confirm its app stopped and discard the local
-            // recipe so launch.py enters the API pipeline, not the old app command.
-            await sandbox.commands.run(`python3 ${ADAPTER} --stop --reset-local`, { timeoutMs: 20_000 });
             checkCancelled();
-            await writeEnvironment(); // a local launch may have consumed this file
+            throw new Error(`${redactOutput(String(error.message || 'Claude Code setup failed.'), secrets).slice(-600)} Retry from build details.`);
           }
+          launched = published;
         } finally { clearTimeout(deadline); }
-        if (launched) {
+        checkCancelled();
+        publishReady(launched);
+        if (!launched.done) {
+          // A terminal: no app to watch. The sandbox stays on the same sleep-when-idle lifecycle; this worker lets its
+          // audit finish, then leaves without stopping anything (manager.cjs keeps a ready terminal run).
+          await audited;
           checkCancelled();
-          publishPreview(launched);
-          // Failures after readiness do not start another setup; a sandbox gone to sleep is not a failure at all.
-          const ended = await launched.done.then(() => null, (error) => error);
-          if (await asleep(ended)) return;
-          if (ended) throw ended;
-          await stop();
-          emit({ event: 'stopped' });
+          detached = true;
           return;
         }
+        // Failures after readiness do not start another setup; a sandbox gone to sleep is not a failure at all.
+        const ended = await launched.done.then(() => null, (error) => error);
+        if (await asleep(ended)) return;
+        if (ended) throw ended;
+        await stop();
+        emit({ event: 'stopped' });
+        return;
       }
+      // A restart: the saved launch plan again, with the saved environment, in the same sandbox and files.
       checkCancelled();
-      if (!restarting) emit({ event: 'progress', kind: 'status', message: 'Using Anthropic API-key setup (API usage is billed separately)', data: { phase: 'setup', status: 'starting', provider: 'api' } });
-      emit({ event: 'progress', message: restarting ? 'Restarting application with saved environment' : 'Analyzing and setting up repository' });
+      emit({ event: 'progress', message: 'Restarting application with saved environment' });
       let resolveReady, rejectReady;
       const outcome = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
       // A rejection can arrive in an output callback before commands.run returns.
       outcome.catch(() => {});
-      deadline = setTimeout(() => rejectReady(new Error('Repository setup exceeded 45 minutes')), 45 * 60_000);
+      deadline = setTimeout(() => rejectReady(new Error('The restart took more than 45 minutes')), 45 * 60_000);
       let buffer = '';
       let events = Promise.resolve();
       async function handleEvent(event) {
@@ -380,7 +373,6 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
               emit({ event: 'progress', message: 'Preview verified', kind: 'status', data: { phase: 'check', status: 'ok' } });
               emit({ event: 'ready', preview_url: previewUrl, port: wanted[0].port });
               sleepWhenIdle();
-              if (!restarting) auditAfterReady();
               resolveReady();
               return;
             }
@@ -405,19 +397,18 @@ function createRuntime({ Sandbox, emit: send, env = process.env, waitForAck = as
           }).catch(rejectReady);
         }
       };
-      const handle = await sandbox.commands.run(`python3 -u ${ADAPTER}${restarting ? ' --restart' : ''}`, {
+      // No model call and no key: launch.py replays a saved plan only (a Claude Code one, or an older hc one).
+      const handle = await sandbox.commands.run(`python3 -u ${ADAPTER} --restart`, {
         background: true, timeoutMs: FOREVER,
         envs: {
-          ANTHROPIC_API_KEY: restarting ? '' : env.ANTHROPIC_API_KEY, HC_USE_API_KEY: '1', HC_CHAT_PROVIDER: 'claude',
           HC_EXPERIMENTAL: '1', HC_DISPOSABLE_HOST: '1', PIP_NO_CACHE_DIR: '1', HUMAN_COMPACT_HOME: '/home/user/.human-compact',
           npm_config_audit: 'false',
           ENGELBART_CANVAS_PORT: String(request.port || 0),
-          ...Object.fromEntries(Object.entries(env).filter(([key]) => /^HC_.*_(MODEL|BUDGET_USD)$/.test(key))),
         }, onStdout, onStderr: progress,
       });
       const exited = handle.wait().then(async () => {
         await events;
-        if (!ready) throw new Error('Repository setup exited before a preview was ready');
+        if (!ready) throw new Error('The application exited before its preview was ready');
       });
       exited.catch(() => {});
       await Promise.race([outcome, exited]);
@@ -448,7 +439,7 @@ if (require.main === module) {
   const { Sandbox } = require('e2b');
   let runtime, request, acknowledge;
   const ack = new Promise((resolve) => { acknowledge = resolve; }); // resolves to the ack itself: a private repository's download link rides on it
-  const secrets = [process.env.E2B_API_KEY, process.env.ANTHROPIC_API_KEY].filter(Boolean);
+  const secrets = [process.env.E2B_API_KEY].filter(Boolean);
   const emit = (event) => {
     const line = JSON.stringify({ run_id: request.run_id, ...redactEvent(event, secrets) });
     process.stdout.write(line + '\n');

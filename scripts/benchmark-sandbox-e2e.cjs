@@ -1,7 +1,7 @@
 'use strict';
 
 // Real production worker + local Claude pipeline, without the user's DB/UI.
-// Fresh diagnostic sandboxes only; no app/config/template changes or API fallback.
+// Fresh diagnostic sandboxes only; no app/config/template changes. Setup is the local Claude subscription's, as in the app.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -65,7 +65,7 @@ async function trial({ template, round, directory, environment, onCreated, signa
   agentRunner = runLocalClaude, collectArtifacts = artifacts, verifyServices = async () => ({ ok: true, checks: [] }) }) {
   const record = { id: randomUUID(), template, round, repository: repository.name, pinned_commit: repository.commit,
     started_at: new Date().toISOString(), provider: 'claude-local', model_requested: environment.ENGELBART_SANDBOX_CLAUDE_MODEL || 'claude-sonnet-5-5' };
-  const secrets = [environment.E2B_API_KEY, environment.ANTHROPIC_API_KEY].filter(Boolean);
+  const secrets = [environment.E2B_API_KEY].filter(Boolean);
   const save = () => fs.writeFileSync(path.join(directory, 'measurement.json'), JSON.stringify(redact(record, secrets), null, 2));
   const start = performance.now(), now = () => Math.round(performance.now() - start);
   const events = [];
@@ -120,7 +120,7 @@ async function trial({ template, round, directory, environment, onCreated, signa
       agentFinished();
     }
   };
-  runtime = runtimeFactory({ Sandbox: sdk, env: { ...environment, E2B_TEMPLATE: template, ENGELBART_SANDBOX_SETUP: 'claude-local' },
+  runtime = runtimeFactory({ Sandbox: sdk, env: { ...environment, E2B_TEMPLATE: template },
     localSetup: (options) => setupRunner({ ...options, runAgent: agent }),
     waitForAck: async () => { save(); },
     emit(event) {
@@ -190,7 +190,7 @@ async function main() {
   process.on('SIGINT', stop); process.on('SIGTERM', stop);
   const report = { started_at: new Date().toISOString(), repository: repo, rounds,
     source_hashes: Object.fromEntries(sourceFiles.map((file) => [file, hash(fs.readFileSync(path.join(__dirname, '../src/main/sandbox', file), 'utf8'))])),
-    methodology: ['Real unchanged worker/local Claude prompts and tools; API fallback disabled for consistent subscription provider.',
+    methodology: ['Real unchanged worker/local Claude prompts and tools; the local Claude subscription is the only setup provider.',
       'Fresh sequential sandboxes. Order: runner/cached, cached/runner, runner/cached. Same pinned HEAD asserted after clone.',
       'Timed from worker request to ready plus independent public HTTP 200 HTML check. Agent tools/startup included; artifacts/cleanup excluded.',
       'Not a renderer/UI benchmark: library insertion, Electron IPC, local DB writes, browser painting excluded. Handle acknowledgement saved to diagnostic JSON.',

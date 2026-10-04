@@ -14,9 +14,9 @@ const { runStore } = require('../src/main/sandbox/runs.cjs');
 const db = require('../src/main/store/db.cjs');
 
 async function main() {
+  // --local: a Claude Code launch plan; otherwise the older hc ones a restart still replays. Neither needs a model or key.
   const localOnly = process.argv.includes('--local');
   const env = readSandboxEnv(path.join(os.homedir(), '.engelbart'));
-  if (localOnly) { env.ENGELBART_SANDBOX_SETUP = 'claude-local'; env.ANTHROPIC_API_KEY = ''; }
   Object.assign(process.env, env);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canvas-env-smoke-'));
   const ctx = { root, dataRoot: root, libraryDb: await db.openLibraryDb(root) };

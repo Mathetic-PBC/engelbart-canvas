@@ -19,7 +19,7 @@ import {
 } from './helpers.cjs';
 import { OPEN_IN_BROWSER } from '../model/address.js';
 
-const PROVIDER_NAMES = { shell: 'Shell', claude: 'Claude Code', codex: 'Codex' };
+const PROVIDER_NAMES = { shell: 'Shell', claude: 'Claude Code', codex: 'Codex', sandbox: 'Sandbox' };
 const DEFAULT_FONT_SIZE = 12.5;
 
 const THEME = {
@@ -358,11 +358,19 @@ export function sessionsFor(projectId) {
 }
 
 // A session main opened itself (a Build's run step: a terminal program it checked, running in the Build's worktree,
-// src/main/build/run-step.cjs): the project's from now on; SHOW_TERMINAL ({ id }) asks the terminal pane to show it.
+// src/main/build/run-step.cjs; or a shell in a repository's sandbox, src/main/sandbox/terminals.cjs): the project's from
+// now on, even one this window already had (opened again from another project, or listed at bootstrap with none);
+// SHOW_TERMINAL ({ id }) asks the terminal pane to show it.
 export const SHOW_TERMINAL = 'engelbart:show-terminal';
 export async function adoptSession(snapshot, projectId) {
   await bootstrap();
-  return addSession(snapshot, projectId);
+  const known = snapshot && state.sessions.get(snapshot.id);
+  if (known && projectId && known.projectId !== projectId) {
+    known.projectId = projectId;
+    state.projectOf.set(snapshot.id, projectId);
+    notify();
+  }
+  return known || addSession(snapshot, projectId);
 }
 /** A session main closed itself (the Build was accepted or discarded): its tab goes. */
 export function dropSession(id) {
