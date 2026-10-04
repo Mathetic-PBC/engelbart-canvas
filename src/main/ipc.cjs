@@ -560,14 +560,6 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       if (changingMode) return null;
       return sandbox.touch(ctx, libraryId).then(() => null);
     }));
-    // A workspace's repositories, woken ahead of a click when it opens or its window comes back (manager.cjs's wake).
-    // Never fails the caller: one that cannot be woken now wakes when it is opened.
-    handle('sandbox-wake', withCtx(async (ctx, ids) => {
-      if (changingMode || !Array.isArray(ids)) return null;
-      const valid = ids.filter((id) => typeof id === 'string' && id && id.length <= 64).slice(0, 100);
-      await Promise.all(valid.map((id) => sandbox.wake(ctx, id).catch(() => {})));
-      return null;
-    }));
     // A shell in a ready repository's sandbox, in the terminal pane of the window that asked: that run's, opened again
     // (and woken) if it is already open (sandbox/terminals.cjs). → the session's snapshot
     handleFor('sandbox-terminal', async (_win, id) => {
@@ -588,7 +580,6 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     handle('sandbox-runs', () => []);
     handle('sandbox-ensure', () => []);
     handle('sandbox-touch', () => null);
-    handle('sandbox-wake', () => null);
     for (const channel of ['sandbox-start', 'sandbox-stop', 'sandbox-terminal', 'sandbox-environment', 'sandbox-save-environment', 'sandbox-restart']) {
       handle(channel, () => { throw new Error('Sandboxes are turned off in this copy of Engelbart'); });
     }

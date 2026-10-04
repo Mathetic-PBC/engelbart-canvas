@@ -15,6 +15,7 @@ const {
   session: electronSession,
   shell: electronShell,
   WebContentsView,
+  webContents,
 } = require('electron');
 const { SessionManager } = require('./terminal/session-manager.cjs');
 const { environmentForSessions } = require('./shell-rc.cjs');
@@ -45,6 +46,7 @@ const { createRepoAccess } = require('./github/repo-access.cjs');
 const { createSandboxManager } = require('./sandbox/manager.cjs');
 const { createSandboxPty } = require('./sandbox/pty.cjs');
 const { createSandboxTerminals } = require('./sandbox/terminals.cjs');
+const { watchActivity } = require('./sandbox/activity.cjs');
 const { prepareLocalClaude } = require('./sandbox/local-claude.cjs');
 const { createRepoIdentifier, createRemoteFileLister } = require('./store/page-meta.cjs');
 const { checkWebPdfs, readPdfResponse } = require('./store/web-pdfs.cjs');
@@ -771,6 +773,9 @@ if (!hasSingleInstanceLock) {
         ...(githubWeb ? { api: process.env.ENGELBART_GITHUB_API || githubWeb } : {}),
       }),
     });
+    // While someone uses the app, anywhere in it, every ready repository's sandbox stays awake; ten minutes without, they
+    // sleep (sandbox/activity.cjs, the manager's wakeAll).
+    if (sandbox) watchActivity({ app, webContents, onActive: () => { store.context().then((ctx) => sandbox?.wakeAll(ctx)).catch(() => {}); } });
     registerEngelbartIpc({
       github,
       openGithubPage,

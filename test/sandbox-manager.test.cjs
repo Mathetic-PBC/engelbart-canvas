@@ -568,43 +568,53 @@ test('touch puts a ready sandbox\'s sleep 10 minutes away, marks it opened, and 
   assert.equal(f.starts.length, 1, 'no worker for a ping');
 });
 
-test('a workspace wakes its repositories\' sandboxes ahead of a click for 30 minutes, once a minute at most (2026-10-04)', async (t) => {
+test('someone using the app keeps every ready sandbox awake for 10 minutes more, each once a minute at most (2026-10-04)', async (t) => {
   let clock = Date.parse('2026-10-04T12:00:00Z');
-  const calls = [], pings = [];
+  const calls = [];
   let answer = null;
-  const Sandbox = { async connect(id, options) { calls.push({ id, timeoutMs: options.timeoutMs, key: options.apiKey }); if (answer) throw answer; },
-    async setTimeout(id, ms) { pings.push(ms); } };
+  const Sandbox = { async connect(id, options) { calls.push({ id, timeoutMs: options.timeoutMs, key: options.apiKey }); if (answer) throw answer; }, async setTimeout() {} };
   const f = await fixture(t, { Sandbox, now: () => clock });
-  await f.manager.wake(f.ctx, f.repo.id);
-  assert.equal(calls.length, 0, 'no run');
+  await f.manager.wakeAll(f.ctx);
+  assert.equal(calls.length, 0, 'no runs');
   const { run, worker } = await readyRun(f);
+  const other = await anotherRepo(f);
+  await f.manager.start(f.ctx, other.id); // still building: not woken
   f.setProbe({ state: 'paused' });
   await worker.receive({ event: 'paused' });
   worker.finish();
   await worker.done;
-  assert.equal(f.events.at(-1).sandbox, 'asleep');
-  await f.manager.wake(f.ctx, f.repo.id);
-  assert.deepEqual(calls, [{ id: 'sb-sleepy', timeoutMs: 1_800_000, key: 'e2b_signed_in' }]);
-  assert.equal(f.events.at(-1).sandbox, 'running', 'the bell hears it woke');
+  assert.equal(f.events.filter((event) => event.run.id === run.id).at(-1).sandbox, 'asleep');
+  await f.manager.wakeAll(f.ctx);
+  assert.deepEqual(calls, [{ id: 'sb-sleepy', timeoutMs: 600_000, key: 'e2b_signed_in' }]);
+  assert.equal(f.events.filter((event) => event.run.id === run.id).at(-1).sandbox, 'running', 'the bell hears it woke');
   assert.equal((await f.store.get(run.id)).last_opened_at ?? null, null, 'waking is not opening: the 7-day sweep still counts');
-  // Opened 5 minutes on: its ping keeps the 25 minutes left, not 10; after the half hour, pings are 10 minutes again.
-  clock += 5 * 60_000;
-  await f.manager.touch(f.ctx, f.repo.id);
-  assert.deepEqual(pings, [25 * 60_000]);
   clock += 30_000;
-  await f.manager.wake(f.ctx, f.repo.id);
-  assert.equal(calls.length, 2, 'running: its sleep put 30 minutes off again');
-  clock += 30_000;
-  await f.manager.wake(f.ctx, f.repo.id);
-  assert.equal(calls.length, 2, 'once a minute at most');
-  clock += 31 * 60_000;
-  await f.manager.touch(f.ctx, f.repo.id);
-  assert.equal(pings.at(-1), 10 * 60_000);
+  await f.manager.wakeAll(f.ctx);
+  assert.equal(calls.length, 1, 'once a minute at most');
+  clock += 31_000;
   answer = Object.assign(new Error('not found'), { name: 'SandboxNotFoundError' });
-  await f.manager.wake(f.ctx, f.repo.id);
-  assert.equal(calls.length, 3);
+  await f.manager.wakeAll(f.ctx);
+  assert.equal(calls.length, 2, 'running or not, its sleep is put 10 minutes off again');
   assert.equal((await f.store.get(run.id)).status, 'ready', 'gone is for the next poll to say');
-  assert.equal(f.starts.length, 1, 'no worker for a wake');
+  assert.equal(f.starts.length, 2, 'no worker for a wake');
+});
+
+test('activity: any input in any web contents, later ones too, at most once a minute', () => {
+  const { watchActivity } = require('../src/main/sandbox/activity.cjs');
+  const { EventEmitter } = require('node:events');
+  let clock = 0, active = 0;
+  const first = new EventEmitter(), app = new EventEmitter();
+  watchActivity({ app, webContents: { getAllWebContents: () => [first] }, onActive: () => { active += 1; }, now: () => clock });
+  first.emit('input-event', {}, { type: 'mouseMove' });
+  assert.equal(active, 1);
+  clock += 59_000;
+  first.emit('input-event', {}, { type: 'keyDown' });
+  assert.equal(active, 1);
+  const stage = new EventEmitter();
+  app.emit('web-contents-created', {}, stage);
+  clock += 2_000;
+  stage.emit('input-event', {}, { type: 'mouseWheel' });
+  assert.equal(active, 2, 'a Stage page made later counts');
 });
 
 test('quitting puts ready previews to sleep instead of killing them, and still stops one being set up', async (t) => {

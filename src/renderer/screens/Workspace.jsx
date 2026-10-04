@@ -23,7 +23,7 @@ import BuildReject from '../workspace/BuildReject.jsx';
 import BuildReview from '../workspace/BuildReview.jsx';
 import PostItBuild from '../post-its/PostItBuild.jsx';
 import PostItTask from '../post-its/PostItTask.jsx';
-import { useSandboxes, useSandboxWake } from '../ui/SandboxProgress.jsx';
+import { useSandboxes } from '../ui/SandboxProgress.jsx';
 import { repositoryClick, OPEN_SANDBOX_TERMINAL } from '../model/sandbox-notifications.js';
 
 // The workspace screen (design 2026-09-17): a header in three columns — Engelbart / project /
@@ -809,7 +809,6 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   React.useEffect(() => { if (initialStage && stageRef.current) openItem(initialStage); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sandboxes = useSandboxes();
-  useSandboxWake(active && sandboxes ? rows.filter((row) => hasTag(row, 'git') && sandboxes.items[row.id]?.run?.status === 'ready').map((row) => row.id) : []);
   const onRowClick = (row) => {
     if (row.type === 'child') { selectTopic(row.id); return; }
     if (row.type === 'archive') { openTab(`${ARCHIVE_TAB}${row.file}`, row.name); return; }

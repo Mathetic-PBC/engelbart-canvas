@@ -30,20 +30,6 @@ export function useSandboxTouch(libraryId) {
   }, [libraryId, focused]);
 }
 
-// A workspace's repositories with a finished build (`libraryIds`, on its rail), woken ahead of a click (2026-10-04): when
-// it opens, when one joins it, and each time its window comes back into focus, so that a preview opens at once instead of
-// waiting for E2B to resume its sandbox. Each then sleeps 30 minutes on unless it is used (main's wake, once a minute at
-// most).
-export function useSandboxWake(libraryIds) {
-  const [focused, setFocused] = React.useState(() => api.windowFocused());
-  React.useEffect(() => api.onWindowFocus((on) => setFocused(!!on)), []);
-  const key = [...new Set(libraryIds)].sort().join('\n');
-  React.useEffect(() => {
-    if (!key || !focused) return;
-    api.wakeSandboxes(key.split('\n')).catch(() => {});
-  }, [key, focused]);
-}
-
 // E2B previews of saved GitHub repositories (src/main/sandbox). One listener for the whole app, mounted before the
 // library can submit work. The snapshot restores state after renderer reloads; events carry later changes. A preview or
 // a repository opens in the workspace's Stage; on the other screens, in the default browser.

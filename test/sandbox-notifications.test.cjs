@@ -443,12 +443,3 @@ test('the bell says whether a finished build\'s sandbox is asleep or running (20
   assert.match(row('running'), /data-sandbox="running"[^>]*>Running</);
   assert.doesNotMatch(row(null), /notification-sandbox/);
 });
-
-test('an open workspace wakes its built repositories\' sandboxes when it opens and when its window comes back (2026-10-04)', () => {
-  const progress = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/SandboxProgress.jsx'), 'utf8');
-  assert.match(progress, /export function useSandboxWake\(libraryIds\)/);
-  assert.match(progress, /if \(!key \|\| !focused\) return;\n\s*api\.wakeSandboxes\(key\.split\('\\n'\)\)/, 'only while its window has focus, again each time it gets it back');
-  const workspace = fs.readFileSync(path.join(__dirname, '../src/renderer/screens/Workspace.jsx'), 'utf8');
-  assert.match(workspace, /useSandboxWake\(active && sandboxes \? rows\.filter\(\(row\) => hasTag\(row, 'git'\) && sandboxes\.items\[row\.id\]\?\.run\?\.status === 'ready'\)/, 'the rail\'s finished builds');
-  assert.match(fs.readFileSync(path.join(__dirname, '../src/preload.cjs'), 'utf8'), /wakeSandboxes: invoke\('sandbox-wake'\)/);
-});
