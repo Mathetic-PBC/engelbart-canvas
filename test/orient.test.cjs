@@ -97,9 +97,9 @@ test('turnPlan sends <stage>: know, thin, interest by the cards asked since the 
   // A reply that was not a card ends the count, as for @brainstorm.
   assert.equal(plan('x', [know, thin, { question: 'y', answer: 'I would rather just talk.' }]).stage, 'know');
   // The others are as they were.
-  assert.equal(turnPlan({ agent: 'brainstorm', text: 'x', turns: [know] }, DEFAULTS).extra, '<answers>Meaningful answers in this exchange so far, this one included: 1. Ask the next card.</answers>');
+  assert.equal(turnPlan({ agent: 'brainstorm', text: 'x', turns: [know] }, DEFAULTS).extra, '<stage>puzzle</stage>', '@brainstorm has stages of its own (round 7)');
   assert.equal(turnPlan({ agent: 'bart', text: 'q', turns: [] }, DEFAULTS).extra, '');
-  assert.equal(turnPlan({ agent: 'brainstorm', text: '', turns: [] }, DEFAULTS).stage, undefined);
+  assert.equal(turnPlan({ agent: 'brainstorm', text: '', turns: [] }, DEFAULTS).stage, 'area');
 });
 
 test('@orient runs on @brainstorm\'s fixed step: a flag picks nothing and is not part of the question (O-02, A-05)', async () => {

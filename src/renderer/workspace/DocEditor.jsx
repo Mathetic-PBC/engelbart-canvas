@@ -52,7 +52,7 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 export const BART_ITEM = { id: 'bart', type: 'chat', name: 'bart', title: 'Bart', summary: 'Ask a question about this document, the project\'s code or the web. Add --opus or --high to pick the model or the effort by hand.', facts: 'reads, never edits' };
 export const DISCOVER_ITEM = { id: 'discover', type: 'chat', name: 'discover', title: 'Discover', summary: 'Find what to read about a problem, and where in it to look: it traces the citations of the papers in your library and the pages of the people you follow. Pick Quick, Standard or Deep on the line\'s chip.', facts: 'finds, never concludes' };
-export const BRAINSTORM_ITEM = { id: 'brainstorm', type: 'chat', name: 'brainstorm', title: 'Brainstorm', summary: 'Find what you want to work on: it asks one question at a time, with options drawn from this workspace and the library, then recaps what you said.', facts: 'asks, never proposes' };
+export const BRAINSTORM_ITEM = { id: 'brainstorm', type: 'chat', name: 'brainstorm', title: 'Brainstorm', summary: 'Work out what puzzles you and land on a research question in your own words.', facts: 'asks, never proposes' };
 export const ORIENT_ITEM = { id: 'orient', type: 'chat', name: 'orient', title: 'Orient', summary: 'Write what you know about a topic or paper, then what interests you about it.', facts: 'asks, never explains' };
 
 const UNDER_BART = ['pending', 'reply'];
@@ -1054,8 +1054,9 @@ export default class DocEditor extends React.Component {
   // drawn still, with what was picked marked; a card that is not the thread's last and has no answer under it (a turn
   // deleted after it) is drawn still too. A map card (the first of an exchange, 2026-09-30) draws where the person seems
   // to be above the box, live or answered: three short lists, each line with what it rests on in grey. A live @brainstorm
-  // card (round 6) adds Wrap up before Submit, and under its box an @discover button with the card's search. A live
-  // @orient card (2026-10-04) has Wrap up and no @discover button.
+  // card (round 6) adds Wrap up before Submit, and under its box an @discover button with the card's search; on its
+  // versions card (round 7) the field under the options reads "Or rewrite it yourself…". A live @orient card (2026-10-04)
+  // has Wrap up and no @discover button.
   cardHtml(raw, entry) {
     const { card, turn, live, answer } = entry, q = turn.q, asked = questionOf(card), state = this.cardState.get(q) || {};
     const choice = isChoice(asked.type), many = asked.type === 'select_all';
@@ -1074,7 +1075,9 @@ export default class DocEditor extends React.Component {
         const on = picks.includes(option.label);
         return `<button type="button" class="bs-opt" ${live ? `data-act="cardopt" data-turn="${q}" data-opt="${n}"` : 'disabled'} role="${many ? 'checkbox' : 'radio'}" aria-checked="${on}"><span class="bs-mark"${many ? ' data-square="1"' : ''}></span><span style="flex:1;min-width:0">${esc(option.label)}${option.why ? `<span class="bs-why">${esc(option.why)}</span>` : ''}</span></button>`;
       }).join('') + '</div>';
-      if (live) body += `<input data-card-input="${q}" data-card-field="note" placeholder="${card.map ? 'Anything I got wrong about where you are? (optional)' : 'Or say it in your own words…'}" aria-label="${card.map ? 'Add a note' : 'Or say it in your own words'}" spellcheck="false" autocomplete="off" class="bs-field" style="margin-top:10px">`;
+      // On @brainstorm's versions card (round 7) the words typed in place of a pick are their question, rewritten.
+      const own = entry.agent === 'brainstorm' && asked.id === 'versions' ? 'Or rewrite it yourself' : 'Or say it in your own words';
+      if (live) body += `<input data-card-input="${q}" data-card-field="note" placeholder="${card.map ? 'Anything I got wrong about where you are? (optional)' : `${own}…`}" aria-label="${card.map ? 'Add a note' : own}" spellcheck="false" autocomplete="off" class="bs-field" style="margin-top:10px">`;
       else if (answer && answer.note) body += `<div style="margin-top:10px;font-size:14px;color:#4d4d4d"><span style="color:#8f8f8f">You added:</span> ${esc(answer.note)}</div>`;
     } else if (live) {
       const field = asked.type === 'open'

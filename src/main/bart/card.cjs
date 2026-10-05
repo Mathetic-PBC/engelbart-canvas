@@ -248,8 +248,8 @@ function recapParts(text) {
 }
 
 // The labels a recap's lines start with: round 4's, and the ones older recaps used, which still draw the same way; then
-// @orient's (2026-10-04).
-const RECAP_LABELS = ['Where you are', 'What pulls apart', 'What\'s unclear', 'Next, you said', 'Where you\'ll look next', 'What you know', 'Where it thins out', 'What draws you'];
+// @orient's (2026-10-04), and @brainstorm's of round 7.
+const RECAP_LABELS = ['Where you are', 'What pulls apart', 'What\'s unclear', 'Next, you said', 'Where you\'ll look next', 'What you know', 'Where it thins out', 'What draws you', 'Your question', 'What puzzles you'];
 const RECAP_LINE_RE = new RegExp(`^\\s*(${RECAP_LABELS.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\s*[:：]\\s*(.*)$`, 'i');
 
 /** One line of a recap → { label, text } when it starts with a recap label (as written in the file), else null. */

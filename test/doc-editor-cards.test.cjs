@@ -23,7 +23,7 @@ function load(file) {
   return compiled.exports;
 }
 
-const DocEditor = load('DocEditor.jsx').default;
+const editorModule = load('DocEditor.jsx'), DocEditor = editorModule.default;
 const LOOK = 'how others have handled “it stops when the lock frees”';
 const FREE = { say: 'You said “it stops when the lock frees”.', card: 'questions', questions: { items: [{ id: 'next-2', type: 'free', title: 'Within “Retries”, what would change your mind?' }] }, lookFor: LOOK, ready: false };
 const FOCUS = { say: '', card: 'focus', focus: { title: 'Which part do you want prior work on?', options: [{ label: 'Retries' }, { label: 'Timeouts' }] }, ready: false };
@@ -130,4 +130,21 @@ test('@discover\'s cards have no Wrap up and no @discover button, and Wrap up as
   recap.editor.editorClick({ target: { closest: () => ({ dataset: { act: 'discoverlook', row: '2' } }) }, preventDefault() {} });
   assert.deepEqual([recap.asks[0].text, recap.asks[0].agent], ['retry loops', 'discover']);
   assert.deepEqual(model.threads(recap.lines()).map((t) => model.agentOf(model.parseLine(recap.lines()[t.from]))), ['brainstorm', 'discover']);
+});
+
+test('on a live @brainstorm versions card the field under the options reads "Or rewrite it yourself…", and the rest is as on any card; elsewhere it reads as before (round 7)', () => {
+  const VERSIONS = { say: '', card: 'questions', questions: { items: [{ id: 'versions', type: 'mcq', title: 'Which one is your question?', options: [{ label: 'Why do retries loop?', why: 'as you wrote it' }, { label: 'Why specifically do retries loop?', why: 'narrower' }] }] }, lookFor: LOOK, ready: false };
+  const m = mounted(['@brainstorm', ...answer(VERSIONS), '']);
+  const shown = m.html(0);
+  assert.match(shown, /data-card-field="note" placeholder="Or rewrite it yourself…" aria-label="Or rewrite it yourself"/);
+  assert.ok(!shown.includes('Or say it in your own words'));
+  for (const act of ['cardskip', 'cardwrap', 'cardsend', 'cardlook']) assert.ok(shown.includes(`data-act="${act}"`), `it keeps ${act}`);
+  // A rewrite typed with nothing picked is sent as their words.
+  m.editor.cardState.set(0, { note: '  Why do retries   loop at all? ' });
+  m.click('cardsend', 0);
+  assert.equal(m.asks[0].text, 'Why do retries loop at all?');
+  for (const lines of [['@brainstorm', ...answer(FOCUS), ''], ['@discover', ...answer(VERSIONS), '']]) {
+    assert.match(mounted(lines).html(0), /placeholder="Or say it in your own words…"/, `${lines[0]}: as before`);
+  }
+  assert.equal(editorModule.BRAINSTORM_ITEM.summary, 'Work out what puzzles you and land on a research question in your own words.');
 });
