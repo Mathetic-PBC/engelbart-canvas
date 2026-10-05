@@ -528,3 +528,28 @@ test('a GitHub page sent to /login by an ended sign-in drops that sign-in and lo
   assert.equal(external.length, 4);
   assert.equal(f.browsing.removed.length, 2);
 });
+
+test('savePage: the page a tab shows, saved complete into a folder; not a tab that is missing, loading or failed (MATH-17)', async () => {
+  const f = fakeElectron();
+  const views = createBrowserViews({ electron: f.electron, getWindow: () => f.win, send() {} });
+  views.open('t', 'https://blog.example.org/post');
+  const contents = f.made[0].webContents;
+  const saved = [];
+  contents.savePage = async (file, type) => { saved.push([file, type]); };
+  contents.getTitle = () => 'A Post';
+  assert.deepEqual(await views.savePage('t', '/data/assets/pages/x'), { file: '/data/assets/pages/x/index.html', url: 'https://blog.example.org/post', title: 'A Post' });
+  assert.deepEqual(saved, [['/data/assets/pages/x/index.html', 'HTMLComplete']]);
+
+  await assert.rejects(() => views.savePage('gone', '/d'), /not open/);
+  await assert.rejects(() => views.savePage(42, '/d'), TypeError);
+  contents.isLoading = () => true;
+  await assert.rejects(() => views.savePage('t', '/d'), /still loading/);
+  contents.isLoading = () => false;
+  contents.emit('did-fail-load', {}, -105, 'ERR_NAME_NOT_RESOLVED', 'https://blog.example.org/post', true);
+  await assert.rejects(() => views.savePage('t', '/d'), /did not load/);
+  assert.equal(saved.length, 1);
+  // Chromium's own failure is the caller's to report
+  contents.emit('did-navigate');
+  contents.savePage = async () => { throw new Error('Failed to save the page'); };
+  await assert.rejects(() => views.savePage('t', '/d'), /Failed to save/);
+});

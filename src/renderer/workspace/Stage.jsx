@@ -449,7 +449,9 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const pageTitle = tab.row ? tab.row.name : pdf ? pdf.name : view || (tab.file && tab.file.kind === 'doc') ? (tab.file.name || basename(pageInput)) : page ? ((web && web.title) || stripScheme(pageInput || '')) : '';
   const savable = !!pageInput && !/^about:/i.test(pageInput) && kindOf(pdf ? pdf.url : tab.url).kind !== 'local';
   const pdfBytes = pdf && !pdf.rowId && WEB_URL.test(pdf.url) ? pdf.bytes : null;
-  React.useEffect(() => { if (onPage) onPage(savable ? { input: pageInput, title: pageTitle || stripScheme(pageInput), bytes: pdfBytes || null } : null); }, [savable, pageInput, pageTitle, pdfBytes, onPage]);
+  // a page from the web in this tab's view, which Save can keep whole (MATH-17): the tab names it to main
+  const webPage = page && WEB_URL.test(pageInput || '');
+  React.useEffect(() => { if (onPage) onPage(savable ? { input: pageInput, title: pageTitle || stripScheme(pageInput), bytes: pdfBytes || null, tabId: tab.id, webPage } : null); }, [savable, pageInput, pageTitle, pdfBytes, tab.id, webPage, onPage]);
   React.useEffect(() => { if (onFront) onFront(tab.item || null); }, [tab.item, onFront]);
   React.useEffect(() => { setSaving(false); }, [tab.id, pageInput]);
   // The card closes on a press anywhere else.

@@ -3,8 +3,9 @@
 // The root library: seeds for test mode, file bytes for papers, PDF annotations, adding by address,
 // and the two questions the all-projects screen asks (what a project holds, where an item is held).
 // Nothing here copies user files; the seeds are the app's own fixtures (spec §2 #7, #15). The copies
-// are of what came without a file: a pdf read from the web and saved (addPdfCopy), and a picture or a
-// pdf dragged in from a browser (addFileCopy). They live in <data root>/assets/pdfs and assets/images.
+// are of what came without a file: a pdf read from the web and saved (addPdfCopy), a page from the web
+// saved from the Stage (addPageCopy), and a picture or a pdf dragged in from a browser (addFileCopy).
+// They live in <data root>/assets/pdfs, assets/pages and assets/images.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -14,6 +15,7 @@ const { DIR_MODE } = require('./home.cjs');
 const projects = require('./projects.cjs');
 const { LIBRARY_TAGS } = require('./db.cjs');
 const { reading } = require('../stage/files.cjs');
+const { readHtmlMeta } = require('./page-meta.cjs');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_PDF_BYTES = 200 * 1024 * 1024;
@@ -297,6 +299,7 @@ function findProjectClone(ctx, url) {
 }
 
 const folderThere = (folder) => { try { return !!folder && fs.statSync(folder).isDirectory(); } catch { return false; } };
+const fileThere = (file) => { try { return fs.statSync(file).isFile(); } catch { return false; } };
 
 /* ------------------------------------------------------------------- adding */
 
@@ -312,6 +315,9 @@ const FILE_TYPES = new Map([['.md', 'md'], ['.markdown', 'md'], ['.pdf', 'pdf'],
   ['.png', 'image'], ['.jpg', 'image'], ['.jpeg', 'image'], ['.gif', 'image'], ['.webp', 'image'], ['.heic', 'image'], ['.svg', 'image']]);
 const TEXT_TYPES = new Set(['csv', 'tsv', 'json', 'jsonl']); // what the peek can show the first lines of
 const tagged = (row, tag) => Array.isArray(row.tags) && row.tags.includes(tag);
+// a page the library knows only by its address, no repository and no paper: it names and describes itself (addItem)
+// and is the one kind of address the Stage saves as a copy (addPageCopy)
+const plainPage = (found) => found.type === 'website' && !found.tags.length;
 
 // The category rules, one set for a thing being added and for a row that is already there
 // (recategorize). Bump the number when a rule changes: every installed library then goes through
@@ -477,7 +483,7 @@ async function addItem(ctx, input, { describe, identifyRepo, inspectPdf, name: g
     }
     if (who) about = { title: '', description: who.description };
   }
-  const page = found.type === 'website' && !found.tags.length; // a plain page: it names and describes itself
+  const page = plainPage(found);
   if (describe && page) {
     try { about = await describe(found); } catch { about = null; }
   }
@@ -544,6 +550,49 @@ async function addPdfCopy(ctx, input, bytes, { inspectPdf, name: given = null } 
     try { row = await ctx.libraryDb.setCategory(id, { type: 'pdf', tags: [...new Set([...found.tags, ...(await inspectPdf(file))])] }, CATEGORY_RULES); } catch { /* not readable now: recategorize tries again */ }
   }
   return row;
+}
+
+/**
+ * A page from the web saved as itself (MATH-17, 2026-10-05), so it opens with no network and as it was when it was read,
+ * signed in or not. `save(dir)` writes what the Stage's tab shows into dir (views.savePage: index.html and its files
+ * folder) and answers { url, title }. The folder is <data root>/assets/pages/<id>/; the row is an `html` whose `path` is
+ * its index.html and whose `url` is where it came from, which answers for it (sameAs). Only a plain page is kept this way:
+ * a repository or a paper is added as addItem adds it. Something the library already holds by that address throws
+ * EXISTS before anything is written; a save that fails, a tab that has moved to another page, or a row that cannot be
+ * written leaves no folder. Named `name`, else the page's title, else its address. Ink drawn before saving comes along.
+ */
+async function addPageCopy(ctx, input, save, { name: given = null } = {}) {
+  if (typeof input !== 'string' || !/^https?:\/\//i.test(input.trim())) throw new TypeError('Only a page from the web is saved as a copy');
+  const found = resolveAddition(input, { homeDir: ctx.homeDir });
+  if (!plainPage(found)) throw new TypeError('Only a plain web page is saved as a copy');
+  const same = sameAs(await ctx.libraryDb.list(), found);
+  if (same) throw alreadyThere(same);
+  const id = randomUUID();
+  const pages = path.join(ctx.dataRoot, 'assets', 'pages');
+  fs.mkdirSync(pages, { recursive: true, mode: DIR_MODE });
+  // by its real path, as the resolver gives a file: the copy open in the Stage is found as this row
+  const dir = path.join(fs.realpathSync(pages), id);
+  const file = path.join(dir, 'index.html');
+  fs.mkdirSync(dir, { mode: DIR_MODE });
+  let row;
+  try {
+    const saved = await save(dir);
+    if (!saved || pageKey(saved.url) !== pageKey(found.url)) throw new Error('The page changed before it was saved. Save it again.');
+    if (!fileThere(file)) throw new Error('The page was not saved');
+    const clean = (value) => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, 200) : '');
+    row = await ctx.libraryDb.insert({ id, name: clean(given) || clean(saved.title) || found.name, type: 'html', tags: [], path: file, url: found.url, folder_path: null, project_id: null, github_id: null, categorized: CATEGORY_RULES });
+  } catch (error) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
+  // ink made on it while it was only an address becomes the row's, as addPdfCopy does
+  const before = pageAnnotationFile(ctx, inkAddress(found));
+  const own = annotationFile(ctx, id);
+  if (fs.existsSync(before) && !fs.existsSync(own)) { fs.mkdirSync(path.dirname(own), { recursive: true, mode: DIR_MODE }); fs.copyFileSync(before, own); }
+  // the description the page gives of itself, as addItem asks a page for one: read from the copy, not the network
+  const { description } = readHtmlMeta(readBody(file));
+  const summary = description.replace(/\s+/g, ' ').trim().slice(0, 1200);
+  return summary ? ctx.libraryDb.setSummary(id, summary, new Date()) : row;
 }
 
 /* ---------------------------------------------------- dragged in (MATH-19) */
@@ -810,4 +859,4 @@ async function previewItem(ctx, id, { listRemoteFiles } = {}) {
   return out;
 }
 
-module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, writePageAnnotations, projectsForLibraryItem, libraryForProject, bodiesForProject, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem };
+module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, writePageAnnotations, projectsForLibraryItem, libraryForProject, bodiesForProject, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, addPageCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem };

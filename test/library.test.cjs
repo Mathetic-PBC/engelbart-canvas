@@ -119,3 +119,138 @@ test('a web pdf saved as a copy (2026-09-23): the file under assets/pdfs, the ad
   const arxiv = await library.addPdfCopy(ctx, 'https://arxiv.org/pdf/1706.03762v7', bytes, { name: 'Attention' });
   assert.deepEqual([arxiv.name, arxiv.url, arxiv.tags], ['Attention', 'https://arxiv.org/abs/1706.03762', ['paper']]);
 });
+
+/* ------------------------------------------------------- a web page saved from the Stage (MATH-17) */
+
+const pagesDir = () => path.join(layout.testRoot, 'assets', 'pages');
+const pageFolders = () => { try { return fs.readdirSync(pagesDir()).sort(); } catch { return []; } };
+const PAGE_HTML = '<html><head><title>A Post</title><meta name="description" content="What the post is about."></head><body><img src="index_files/a.png"></body></html>';
+
+/** A stand-in for the tab's webContents.savePage: index.html and its files folder, then what the tab shows. */
+function fakeSave(url, { title = 'A Post', html = PAGE_HTML } = {}) {
+  const calls = [];
+  const save = async (dir) => {
+    calls.push(dir);
+    fs.writeFileSync(path.join(dir, 'index.html'), html);
+    fs.mkdirSync(path.join(dir, 'index_files'));
+    fs.writeFileSync(path.join(dir, 'index_files', 'a.png'), 'png');
+    return { file: path.join(dir, 'index.html'), url, title };
+  };
+  return { save, calls };
+}
+
+test('a web page saved as a copy: one html row with its file and its address, found by either, never twice', async () => {
+  const url = 'https://blog.example.org/posts/kept?id=2';
+  const { save, calls } = fakeSave(url);
+  const row = await library.addPageCopy(ctx, url, save, { name: '  My   post ' });
+  const dir = path.join(fs.realpathSync(pagesDir()), row.id);
+  assert.deepEqual(calls, [dir]);
+  assert.deepEqual([row.type, row.tags, row.name, row.url, row.project_id, row.categorized], ['html', [], 'My post', url, null, library.CATEGORY_RULES]);
+  assert.equal(row.path, path.join(dir, 'index.html'));
+  assert.equal(fs.readFileSync(row.path, 'utf8'), PAGE_HTML);
+  assert.ok(fs.statSync(path.join(dir, 'index_files')).isDirectory(), 'its files folder');
+  assert.equal(row.summary, 'What the post is about.', 'described by the copy, as addItem asks a page');
+  // the address answers for it (the Save button's ✓), and so does the copy open in the Stage
+  assert.equal((await library.lookupItem(ctx, 'http://www.blog.example.org/posts/kept/?id=2#top')).row.id, row.id);
+  assert.equal((await library.lookupItem(ctx, row.path)).row.id, row.id);
+  // a second save of the same page is refused before anything is written
+  const before = pageFolders();
+  const again = fakeSave(url);
+  await assert.rejects(() => library.addPageCopy(ctx, url, again.save), (error) => error.code === 'EXISTS' && error.row.id === row.id);
+  assert.equal(again.calls.length, 0);
+  assert.deepEqual(pageFolders(), before);
+  // recategorizing leaves it as it is
+  await library.recategorize(ctx);
+  const kept = await ctx.libraryDb.get(row.id);
+  assert.deepEqual([kept.type, kept.tags], ['html', []]);
+});
+
+test('a page copy: named after the page\'s title, else its address', async () => {
+  const titled = await library.addPageCopy(ctx, 'https://news.example.org/a', fakeSave('https://news.example.org/a', { title: '  The   Headline ' }).save);
+  assert.equal(titled.name, 'The Headline');
+  const long = await library.addPageCopy(ctx, 'https://news.example.org/b', fakeSave('https://news.example.org/b', { title: 'x'.repeat(300) }).save, { name: '   ' });
+  assert.equal(long.name, 'x'.repeat(200));
+  const untitled = await library.addPageCopy(ctx, 'https://news.example.org/c/', fakeSave('https://news.example.org/c/', { title: '', html: '<p>no head</p>' }).save);
+  assert.equal(untitled.name, 'news.example.org/c');
+  assert.equal(untitled.summary, null);
+});
+
+test('a page copy that cannot be saved or written leaves no folder and no row', async (t) => {
+  const count = async () => (await ctx.libraryDb.list()).length;
+  const rows = await count();
+  const folders = pageFolders();
+  await assert.rejects(() => library.addPageCopy(ctx, 'https://fail.example.org/a', async (dir) => { fs.writeFileSync(path.join(dir, 'index.html'), 'half'); throw new Error('The page is still loading'); }), /still loading/);
+  // the tab went on to another page meanwhile: what it saved is not this address's
+  await assert.rejects(() => library.addPageCopy(ctx, 'https://fail.example.org/b', fakeSave('https://fail.example.org/elsewhere').save), /changed before it was saved/);
+  await assert.rejects(() => library.addPageCopy(ctx, 'https://fail.example.org/c', async (dir) => ({ file: path.join(dir, 'index.html'), url: 'https://fail.example.org/c', title: '' })), /not saved/);
+  t.mock.method(ctx.libraryDb, 'insert', async () => { throw new Error('the database is closed'); });
+  await assert.rejects(() => library.addPageCopy(ctx, 'https://fail.example.org/d', fakeSave('https://fail.example.org/d').save), /database is closed/);
+  t.mock.restoreAll();
+  assert.deepEqual(pageFolders(), folders);
+  assert.equal(await count(), rows);
+});
+
+test('a page copy takes the ink drawn on the page while it was only an address', async () => {
+  const ink = (note) => ({ 1: [{ id: note, rects: [], side: null, y: 0, note, text: '', pos: { x: 0, y: 0 } }] });
+  const url = 'https://essays.example.org/inked';
+  await library.writePageAnnotations(ctx, `${url}#part-2`, ink('before'));
+  const row = await library.addPageCopy(ctx, url, fakeSave(url).save);
+  assert.ok(fs.existsSync(path.join(layout.testRoot, 'annotations', `${row.id}.json`)), 'the row has ink of its own');
+  assert.deepEqual(await library.readAnnotations(ctx, row.id), ink('before'));
+  await library.writePageAnnotations(ctx, url, ink('after'));
+  assert.deepEqual(await library.readAnnotations(ctx, row.id), ink('after'));
+});
+
+test('repositories and papers never reach addPageCopy: the Stage adds them by address, as before', async () => {
+  const { savesPageCopy } = await import(require('node:url').pathToFileURL(path.join(__dirname, '../src/renderer/model/stage.js')).href);
+  const page = { input: '', tabId: 'tab-1', webPage: true, bytes: null };
+  const found = async (input) => (await library.lookupItem(ctx, input)).found;
+  assert.equal(savesPageCopy({ ...page, input: 'https://blog.example.org/new' }, await found('https://blog.example.org/new')), true);
+  for (const input of ['https://github.com/karpathy/micrograd', 'https://gitlab.com/group/tool.git', 'https://arxiv.org/abs/2310.05292', 'https://doi.org/10.1145/3544548.3580919']) {
+    assert.equal(savesPageCopy({ ...page, input }, await found(input)), false, input);
+    const { save, calls } = fakeSave(input);
+    await assert.rejects(() => library.addPageCopy(ctx, input, save), /plain web page/, input);
+    assert.equal(calls.length, 0, input);
+  }
+  // nor does anything that is not a web page in a tab: a pdf's bytes, a file, a page with no tab, no answer yet
+  assert.equal(savesPageCopy({ ...page, bytes: new Uint8Array(1) }, await found('https://blog.example.org/new')), false);
+  assert.equal(savesPageCopy({ ...page, webPage: false }, await found('https://blog.example.org/new')), false);
+  assert.equal(savesPageCopy({ ...page, tabId: null }, await found('https://blog.example.org/new')), false);
+  assert.equal(savesPageCopy(page, null), false);
+  await assert.rejects(() => library.addPageCopy(ctx, path.join(homeDir, 'page.html'), fakeSave('').save), /from the web/);
+});
+
+test('ipc: add-library-page saves the calling window\'s tab into the library\'s folder and tells the other windows', async (t) => {
+  const { createStore, registerEngelbartIpc } = require('../src/main/ipc.cjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-page-ipc-'));
+  const store = createStore({ homeDir: home, testMode: true });
+  await store.setTestMode(false);
+  t.after(() => store.close());
+  const handlers = new Map();
+  const announced = [];
+  const asked = [];
+  const caller = { id: 7 };
+  const savePageFor = async (win, tabId, dir) => {
+    asked.push([win, tabId, dir]);
+    fs.writeFileSync(path.join(dir, 'index.html'), PAGE_HTML);
+    return { file: path.join(dir, 'index.html'), url: 'https://blog.example.org/ipc', title: 'From the tab' };
+  };
+  const ipcMain = { handle: (name, fn) => handlers.set(name, fn) };
+  registerEngelbartIpc({ store, ipcMain, trustedHandler: (fn) => fn, windowHandler: (fn) => (...args) => fn(caller, ...args), describe: async () => null, identifyRepo: async () => null, savePageFor, announce: (channel, _payload, options) => announced.push([channel, options && options.except]) });
+  const addPage = handlers.get('engelbart:add-library-page');
+  const row = await addPage('tab-3', 'https://blog.example.org/ipc', { name: 'Named' });
+  assert.deepEqual([row.type, row.name, row.url], ['html', 'Named', 'https://blog.example.org/ipc']);
+  assert.equal(asked.length, 1);
+  assert.deepEqual(asked[0].slice(0, 2), [caller, 'tab-3']);
+  assert.equal(path.dirname(row.path), asked[0][2]);
+  assert.ok(row.path.startsWith(fs.realpathSync(home)), 'under the data root');
+  assert.deepEqual(announced, [['engelbart:library-changed', caller]]);
+  await assert.rejects(async () => addPage(42, 'https://blog.example.org/x'), /tab id must be a string/);
+  await assert.rejects(async () => addPage('tab-3', null), /address must be a string/);
+  await assert.rejects(async () => addPage('tab-3', 'https://blog.example.org/ipc'), (error) => error.code === 'EXISTS');
+  assert.equal(asked.length, 1, 'nothing was saved for a refusal');
+  // a copy without the browser's views cannot save a page
+  const bare = new Map();
+  registerEngelbartIpc({ store, ipcMain: { handle: (name, fn) => bare.set(name, fn) }, trustedHandler: (fn) => fn, describe: async () => null, identifyRepo: async () => null });
+  await assert.rejects(async () => bare.get('engelbart:add-library-page')('tab-3', 'https://blog.example.org/y'), /cannot be saved here/);
+});

@@ -42,6 +42,7 @@ const INTERNAL_SCHEMES = new Set(['http:', 'https:', 'file:', 'about:', 'blob:',
 const MAX_PDF_BYTES = 200 * 1024 * 1024; // the library's limit
 const PDF_TYPE = /^\s*application\/(?:x-)?pdf\b/i;
 const FIND_MAX = 1000;
+const SAVE_TIMEOUT_MS = 2 * 60 * 1000;
 
 /** http(s) only. 0.0.0.0 is what dev servers print, not an address to visit. */
 function parseBrowserUrl(value) {
@@ -630,6 +631,31 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     return true;
   }
 
+  /**
+   * The page a tab shows, written into `dir` as Chromium saves a complete page: index.html and its index_files folder
+   * (the library's copy of a page, MATH-17). The page as it is now, signed in or not; a page still loading or that failed
+   * to load is not saved. → { file, url, title }
+   */
+  async function savePage(id, dir) {
+    assertId(id);
+    const entry = entries.get(id);
+    if (!entry) throw new Error('That tab is not open');
+    const contents = entry.view.webContents;
+    if (contents.isLoading()) throw new Error('The page is still loading');
+    if (entry.error) throw new Error('The page did not load');
+    const file = path.join(dir, 'index.html');
+    let timer;
+    try {
+      await Promise.race([
+        contents.savePage(file, 'HTMLComplete'),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('The page took too long to save')), SAVE_TIMEOUT_MS); }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+    return { file, url: contents.getURL(), title: contents.getTitle() };
+  }
+
   function detach(id) {
     const entry = entries.get(id);
     if (!entry) return null;
@@ -670,7 +696,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     if (shared) shared.members.delete(member);
   }
 
-  return { open, show, hide, command, find, stopFind, shortcut, close, closeAll, answerLogin, flush, dispose, has: (id) => entries.has(id) };
+  return { open, show, hide, command, find, stopFind, shortcut, savePage, close, closeAll, answerLogin, flush, dispose, has: (id) => entries.has(id) };
 }
 
 // Each handler is registered once and acts on the views of the window that called (`viewsFor(event)`, 2026-10-03).

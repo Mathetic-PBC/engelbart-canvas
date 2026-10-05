@@ -13,7 +13,7 @@ import { adoptSession, dropSession, SHOW_TERMINAL } from '../terminal/sessions.j
 import { mentionRows } from '../model/rail.js';
 import { useBodies } from '../workspace/useBodies.js';
 import { flatWorkspaces, nextPlace, placesToGo } from '../model/nav.js';
-import { onStage } from '../model/stage.js';
+import { onStage, savesPageCopy } from '../model/stage.js';
 import { paperState, savePaper, repoState, tryRepo } from '../model/guide.js';
 import { buildLine, placeAnswer } from '../model/doc.js';
 import { addDropped } from '../model/drop.js';
@@ -184,8 +184,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const [postItsHidden, setPostItsHidden] = React.useState(() => { try { return window.localStorage.getItem(POST_ITS_HIDDEN) === '1'; } catch { return false; } });
   React.useEffect(() => { try { window.localStorage.setItem(POST_ITS_HIDDEN, postItsHidden ? '1' : '0'); } catch { /* not remembered */ } }, [postItsHidden]);
   const showPostIts = React.useCallback(() => setPostItsHidden(false), []);
-  const [openPage, setOpenPage] = React.useState(null); // the page in front in the Browser: { input, title } | null
-  const [pageInfo, setPageInfo] = React.useState(null); // what the library holds for it: { input, row, addable }
+  const [openPage, setOpenPage] = React.useState(null); // the page in front in the Browser: { input, title, bytes, tabId, webPage } | null
+  const [pageInfo, setPageInfo] = React.useState(null); // what the library holds for it: { input, row, addable, found }
   const [renaming, setRenaming] = React.useState(null);
   const [images, setImages] = React.useState({}); // library image id → object URL
   const [titleDraft, setTitleDraft] = React.useState('');
@@ -736,8 +736,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     let live = true;
     const input = openPage.input;
     api.lookupLibraryItem(input)
-      .then((answer) => { if (live) setPageInfo({ input, row: answer.row || null, addable: !answer.error }); })
-      .catch(() => { if (live) setPageInfo({ input, row: null, addable: false }); });
+      .then((answer) => { if (live) setPageInfo({ input, row: answer.row || null, addable: !answer.error, found: answer.found || null }); })
+      .catch(() => { if (live) setPageInfo({ input, row: null, addable: false, found: null }); });
     return () => { live = false; };
   }, [openPage && openPage.input, library]); // eslint-disable-line react-hooks/exhaustive-deps
   const pageKnown = openPage && pageInfo && pageInfo.input === openPage.input && pageInfo.addable ? pageInfo : null;
@@ -1100,8 +1100,14 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // The Browser's Save: the page as a new row, named in the card, into the library alone or also into this workspace.
   const savePage = async (name, here) => {
     if (!openPage) return;
-    // a pdf read from the web is kept as a copy (<data root>/assets/pdfs), its address beside it; anything else is linked
-    const row = openPage.bytes ? await api.addLibraryPdf(openPage.input, openPage.bytes, { name }) : await api.addLibraryItem(openPage.input, { name });
+    // A pdf read from the web is kept as a copy (<data root>/assets/pdfs), and so is a plain web page, as its tab shows it
+    // (assets/pages, MATH-17), each with its address beside it; anything else is linked. A page that cannot be kept says
+    // why and adds nothing: it is not linked instead.
+    let row;
+    if (openPage.bytes) row = await api.addLibraryPdf(openPage.input, openPage.bytes, { name });
+    else if (savesPageCopy(openPage, pageKnown && pageKnown.found)) {
+      try { row = await api.addLibraryPage(openPage.tabId, openPage.input, { name }); } catch (error) { onError(error); return; }
+    } else row = await api.addLibraryItem(openPage.input, { name });
     if (here) await linkIds([row.id]);
     else await reload();
     if (row.sandbox_error) onError(new Error(row.sandbox_error));

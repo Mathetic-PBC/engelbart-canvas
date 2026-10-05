@@ -139,22 +139,25 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
 // { except })` tells every window but the one that saved. Without them (one window, the tests) win is null, a reply goes
 // out on `notify`, and nothing is announced. `fetchUrl` is how a dropped link is read (add-library-url; the app passes
 // the Stage's session, so a picture or a pdf behind a sign-in comes too).
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch }) {
+// `savePageFor(win, tabId, dir)` writes the page a window's Stage tab shows into dir (add-library-page; the app passes
+// that window's browser views' savePage).
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
   const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
   const answer = (win, channel, payload) => (reply && win ? reply(win, channel, payload) : notify && notify(channel, payload));
   // What a handler saved is told to the other windows: a project's tree (`engelbart:project-changed`, which they read
   // again; on the projects screen, the list of projects), or the library (`engelbart:library-changed`).
-  // The handler is called as it was: one that refuses at once (a data mode change under way) still throws at once.
-  const saving = (channel, handler, { project = null, library: rows = false } = {}) => handleFor(channel, (win, ...args) => {
+  // The handler is called as it was: one that refuses at once (a data mode change under way) still throws at once. With
+  // `window`, it is called with the calling window first, as handleFor's are.
+  const saving = (channel, handler, { project = null, library: rows = false, window: withWindow = false } = {}) => handleFor(channel, (win, ...args) => {
     const told = (out) => {
       const projectId = project ? project(args, out) : null;
       if (typeof projectId === 'string') announce('engelbart:project-changed', { projectId }, { except: win });
       if (rows) announce('engelbart:library-changed', {}, { except: win });
       return out;
     };
-    const out = handler(...args);
+    const out = withWindow ? handler(win, ...args) : handler(...args);
     return out && typeof out.then === 'function' ? out.then(told) : told(out);
   });
   const first = ([pid]) => pid;
@@ -619,6 +622,15 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     pdfAdded();
     return row;
   }), { library: true });
+  // A page from the web, saved as a copy with its address (library.addPageCopy, MATH-17): what the calling window's Stage
+  // tab `tabId` shows is written into the folder the library picks. The renderer names a tab, never a path.
+  saving('add-library-page', async (win, tabId, input, options) => {
+    if (!savePageFor) throw new Error('Pages cannot be saved here');
+    const tab = str(tabId, 'tab id', 128);
+    const address = str(input, 'address', 8192);
+    const name = optStr(options && typeof options === 'object' ? options.name : null, 'name', 200);
+    return library.addPageCopy(await store.context(), address, (dir) => savePageFor(win, tab, dir), { name });
+  }, { library: true, window: true });
   handle('lookup-library-item', withCtx((ctx, input) => library.lookupItem(ctx, str(input, 'link or path', 4096))));
   // "Choose from disk…": the native picker, files and folders, several at once.
   handle('pick-library-paths', (kind) => pickPaths(kind === 'pdf' ? 'pdf' : 'any'));

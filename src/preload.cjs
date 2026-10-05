@@ -167,6 +167,8 @@ const engelbartAPI = Object.freeze({
   libraryBodies: invoke('library-bodies'),
   addLibraryItem: invoke('add-library-item'),
   addLibraryPdf: invoke('add-library-pdf'),
+  // The Stage's Save of a web page (MATH-17): the tab's page kept as a copy with its address. (tabId, address, { name })
+  addLibraryPage: invoke('add-library-page'),
   // Dragged in (MATH-19): bytes without a path ({ mime, name, url }), and a link, kept as a copy when it is a picture or a pdf.
   addLibraryFile: invoke('add-library-file'),
   addLibraryUrl: invoke('add-library-url'),

@@ -128,6 +128,13 @@ export function paperRow(library, address) {
 /** A page's save button, by where the page is: not in the library, in it but not this workspace, here. The Stage's address and an @discover guide's titles (2026-10-02). */
 export const SAVE_LABEL = { none: '+ Save', lib: '+ Workspace', here: '✓' };
 
+/**
+ * Whether Save keeps the page in front as a copy (MATH-17): a page from the web in a tab's view (`page`, what the Stage
+ * hands up: its `tabId` and `webPage`) whose address the library takes for a plain page (`found`, lookupItem's: a
+ * website with no tags). A repository (`git`) and a paper (`paper`) are added by their address, as before.
+ */
+export const savesPageCopy = (page, found) => !!(page && page.webPage && page.tabId && !page.bytes && found && found.type === 'website' && Array.isArray(found.tags) && !found.tags.length);
+
 const fileAddress = (file) => `file://${String(file).split('/').map(encodeURIComponent).join('/')}`;
 
 /**

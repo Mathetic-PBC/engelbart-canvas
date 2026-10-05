@@ -811,6 +811,11 @@ if (!hasSingleInstanceLock) {
       pdfAdded,
       // A link dropped onto the library or a workspace is read with the Stage's cookies, as a saved-as-link pdf is (fetchPdf).
       fetchUrl: (url, init) => electronSession.fromPartition(BROWSER_PARTITION).fetch(url, init),
+      // The Stage's Save of a web page (add-library-page): the calling window's tab, as it shows now, into the library's folder.
+      savePageFor: (ctx, tabId, dir) => {
+        if (!ctx || !ctx.browserViews) throw new Error('No window for the browser');
+        return ctx.browserViews.savePage(tabId, dir);
+      },
       notify: sendToRenderer,
       // "Choose from disk…" in the sidebar's + menu: files and folders together, several at once (macOS allows both in one panel).
       // Onboarding's Papers step asks for pdfs only (`kind` 'pdf').
