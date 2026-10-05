@@ -5,8 +5,9 @@
 #
 # It downloads the newest version for this Mac from __DOWNLOADS__ (latest-mac.yml there names it
 # and gives its checksum), checks it, and puts Engelbart.app in /Applications (in ~/Applications when
-# /Applications cannot be written to), replacing the copy that is there. Projects, notes and settings
-# live outside the app (~/.engelbart, ~/Library/Application Support/Engelbart) and are not touched.
+# /Applications cannot be written to), replacing the copy that is there. When the copy there is already that version it
+# stops without downloading or changing anything (ENGELBART_FORCE=1 installs it again anyway). Projects, notes and
+# settings live outside the app (~/.engelbart, ~/Library/Application Support/Engelbart) and are not touched.
 #
 # A file downloaded with curl is not marked as downloaded from the internet, so macOS opens this app
 # without the warning a browser download of an app that is not notarized gets.
@@ -68,13 +69,6 @@ zip="Engelbart-${version}-${arch}.zip"
 sha512=$(printf '%s\n' "$feed" | awk -v want="$zip" '$1 == "-" && $2 == "url:" { url = $3 } $1 == "sha512:" && url == want { print $2; exit }' | tr -d "\"'\r")
 [ -n "$version" ] && [ -n "$sha512" ] || fail "${DOWNLOADS}latest-mac.yml does not list ${zip}."
 
-say "Downloading Engelbart ${version} for ${kind} Macs…"
-curl -fL --retry 2 --connect-timeout 20 --progress-bar -o "$work/$zip" "${DOWNLOADS}${zip}" || fail "the download did not finish; run the command again."
-[ "$(openssl dgst -sha512 -binary "$work/$zip" | openssl base64 -A)" = "$sha512" ] || fail "the download does not match its checksum; run the command again."
-ditto -x -k "$work/$zip" "$work/new" || fail "the download could not be unpacked."
-[ -d "$work/new/$APP" ] || fail "the download holds no $APP."
-codesign --verify --deep --strict "$work/new/$APP" 2>/dev/null || fail "the app in the download is not intact (its signature does not verify)."
-
 # Where it goes: where the app being updated is, unless that is a disk image or a read-only copy macOS made of it;
 # else where Engelbart already is; else /Applications, or ~/Applications for an account that cannot write there.
 writable_home() { case "$1" in /Volumes/*|*/AppTranslocation/*) return 1;; esac; [ -w "$1" ]; }
@@ -86,6 +80,23 @@ elif [ -d "$HOME/Applications/$APP" ]; then dest="$HOME/Applications"
 elif [ -w /Applications ]; then dest=/Applications
 else dest="$HOME/Applications"; mkdir -p "$dest"
 fi
+
+# Already the newest: nothing to do (and Engelbart need not quit). The app's own updater (ENGELBART_WAIT_PID) runs this
+# only when there is a newer version, so it is never skipped; ENGELBART_FORCE=1 installs again anyway.
+if [ -z "$WAIT_PID" ] && [ "${ENGELBART_FORCE:-}" != 1 ] && [ -f "$dest/$APP/Contents/Info.plist" ]; then
+  current=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$dest/$APP/Contents/Info.plist" 2>/dev/null || true)
+  if [ "$current" = "$version" ]; then
+    say "Engelbart ${version} is already installed in ${dest} and up to date."
+    exit 0
+  fi
+fi
+
+say "Downloading Engelbart ${version} for ${kind} Macs…"
+curl -fL --retry 2 --connect-timeout 20 --progress-bar -o "$work/$zip" "${DOWNLOADS}${zip}" || fail "the download did not finish; run the command again."
+[ "$(openssl dgst -sha512 -binary "$work/$zip" | openssl base64 -A)" = "$sha512" ] || fail "the download does not match its checksum; run the command again."
+ditto -x -k "$work/$zip" "$work/new" || fail "the download could not be unpacked."
+[ -d "$work/new/$APP" ] || fail "the download holds no $APP."
+codesign --verify --deep --strict "$work/new/$APP" 2>/dev/null || fail "the app in the download is not intact (its signature does not verify)."
 
 if [ -n "$WAIT_PID" ]; then
   ready=1

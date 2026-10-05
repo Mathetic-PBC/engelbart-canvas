@@ -59,6 +59,8 @@ against the checksum in `latest-mac.yml`, puts Engelbart in `/Applications` (`~/
 write there) and opens it. A file curl downloaded is not marked as coming from the internet, so macOS opens the app
 without the Gatekeeper warning. Running the command again updates Engelbart in place. It needs macOS 13 or later
 (Electron 44's minimum).
+When the newest version is already installed, the command says so and exits without downloading or changing anything
+(`ENGELBART_FORCE=1` reinstalls it anyway).
 
 **The .dmg**, while builds are not notarized (see Signing): the first open shows **"Engelbart" Not Opened** (Apple could
 not verify it is free of malware) with Done and Move to Trash. Done, then System Settings › Privacy & Security, scroll
