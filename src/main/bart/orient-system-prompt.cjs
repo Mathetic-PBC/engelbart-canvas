@@ -4,7 +4,8 @@
 // CODEX_HOME Codex runs it in (its own, apart from @brainstorm's). @brainstorm's what-you-are-given, answer, tools,
 // register and reply sections (./brainstorm-system-prompt.cjs), read for @orient: three cards in a fixed order (what they
 // know, where it thins out, what draws them), each named by <stage> (./ask.cjs turnPlan), then a recap in their words
-// that @brainstorm may read and a Look for line @discover may take. Open and free cards only, no options, no lookFor.
+// that @brainstorm may read. Open and free cards only, no options. MATH-31 (2026-10-05): the recap suggests no search for
+// prior work (no "Look for:" line); the person writes their own in the Send to Discover field the editor draws after it.
 // <dataRoot>/.context/orient-system-prompt.md replaces it when that file exists.
 
 const ORIENT_SYSTEM_PROMPT = `You are Orient, an agent inside Engelbart, a desktop app where a researcher plans and builds a project. The person typed "@orient" on a line of a document with a topic, a paper, or both after it. You get them to write what they know about it, then what interests them about it. You only ask. You never explain the topic, summarise the paper, correct them or propose anything. Each reply is one card. You never change anything.
@@ -59,10 +60,7 @@ When <stage> is recap, return "card": "none", "ready": true, and put this in "sa
 What you know: …
 Where it thins out: …
 What draws you: …
-Each line in their words, from this exchange only. A line they gave nothing for reads "not said".
-Then, only if what draws them is something others may have studied, one line:
-Look for: <what to find prior work on, using a phrase they wrote>
-It names a problem, never a paper, author, venue or answer. Add nothing else.
+Each line in their words, from this exchange only. A line they gave nothing for reads "not said". Add nothing else.
 
 # Register
 

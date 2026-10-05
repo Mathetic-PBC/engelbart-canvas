@@ -413,13 +413,14 @@ test('@discover is an @bart line asked of a third agent: with or without words, 
   assert.deepEqual(threads(['@discover agents', 'bart> ## Start here', 'bart> *Opus · high · 90 s*', '@discover only after 2022', 'bart~> k4']).map((t) => t.turns.length), [2], 'a follow-up joins the guide\'s card');
 });
 
-test('the blank line a recap\'s Look for button puts before "@discover" keeps it out of the brainstorm thread (round 4)', async () => {
+test('the blank line Send to Discover puts before "@discover" keeps it out of the brainstorm or orient thread, an older recap\'s Look for line or not (round 4, MATH-31)', async () => {
   const { threads, agentOf, parseLine } = await load();
-  const recap = ['@brainstorm (skipped)', 'bart> Where you are: a', 'bart> Look for: retry loops'];
-  const apart = threads([...recap, '', '@discover retry loops', 'bart~> d1', '']);
-  assert.deepEqual(apart.map((t) => [t.from, t.to]), [[0, 2], [4, 5]]);
-  assert.equal(agentOf(parseLine('@discover retry loops')), 'discover');
-  assert.deepEqual(threads([...recap, '@discover retry loops', 'bart~> d1']).map((t) => [t.from, t.to]), [[0, 2], [3, 4]], 'without it the line is still a thread of its own: it asks another agent (2026-10-02)');
+  for (const recap of [['@brainstorm (skipped)', 'bart> Your question: a', 'bart> What puzzles you: b'], ['@orient (wrap up)', 'bart> What you know: a', 'bart> Where it thins out: b'], ['@brainstorm (skipped)', 'bart> Where you are: a', 'bart> Look for: retry loops']]) {
+    const apart = threads([...recap, '', '@discover how tutors notice struggle', 'bart~> d1', '']);
+    assert.deepEqual(apart.map((t) => [t.from, t.to]), [[0, 2], [4, 5]], recap[0]);
+    assert.deepEqual(threads([...recap, '@discover how tutors notice struggle', 'bart~> d1']).map((t) => [t.from, t.to]), [[0, 2], [3, 4]], 'without it the line is still a thread of its own: it asks another agent (2026-10-02)');
+  }
+  assert.equal(agentOf(parseLine('@discover how tutors notice struggle')), 'discover');
 });
 
 test('different agents never join one thread: a line for another agent starts its own card and reply field (2026-10-02)', async () => {

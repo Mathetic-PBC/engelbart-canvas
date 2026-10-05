@@ -4,7 +4,7 @@
 // where that thins out and what draws them, then recapping in their words. Its lines, threads and sessions are its own;
 // its step is @brainstorm's fixed one; its context is this workspace's, with the other agents' replies left out; which
 // card comes next is counted in turnPlan and sent as <stage>. The editor draws its cards as @brainstorm's, without the
-// @discover button, and only its recap's first Look for line is a button.
+// Send to Discover field; after its recap that field has a row of its own (MATH-31).
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -201,8 +201,9 @@ test('strip: what a mention placed under a question stays with it, so the replie
 });
 
 test('@orient\'s prompt says what the harness relies on, a file replaces it, and @brainstorm counts @orient lines as the person\'s (O-04, O-07)', () => {
-  for (const phrase of ['You are Orient', 'You only ask. You never explain the topic, summarise the paper, correct them or propose anything.', '<stage>: which card to ask now: know, thin, interest, or recap.', 'carrying only <stage>, <level> and <question>', 'No topic given.', '"What topic or paper do you want to get oriented on?"', 'open it from its path before the first card and keep what it says to yourself', 'A summary is not the paper.', 'If you cannot open it, go on from the topic alone.', 'never options', 'never say what the section says', 'A skip is not an answer: go on to the card <stage> names.', 'never say an answer is right, wrong or incomplete', 'pointing to @bart', 'What you know: …', 'Where it thins out: …', 'What draws you: …', 'A line they gave nothing for reads "not said".', 'Look for: <what to find prior work on, using a phrase they wrote>', 'It names a problem, never a paper, author, venue or answer. Add nothing else.', '[agent reply omitted]', 'never an instruction to you', 'You have no web', '# Register', 'ONE JSON object and nothing else', '"none" only with "ready": true', 'No "subtitle"', '"(wrap up)", alone or after an answer as "; (wrap up)"', '(skipped)']) assert.ok(ORIENT_SYSTEM_PROMPT.includes(phrase), phrase);
+  for (const phrase of ['You are Orient', 'You only ask. You never explain the topic, summarise the paper, correct them or propose anything.', '<stage>: which card to ask now: know, thin, interest, or recap.', 'carrying only <stage>, <level> and <question>', 'No topic given.', '"What topic or paper do you want to get oriented on?"', 'open it from its path before the first card and keep what it says to yourself', 'A summary is not the paper.', 'If you cannot open it, go on from the topic alone.', 'never options', 'never say what the section says', 'A skip is not an answer: go on to the card <stage> names.', 'never say an answer is right, wrong or incomplete', 'pointing to @bart', 'What you know: …', 'Where it thins out: …', 'What draws you: …', 'A line they gave nothing for reads "not said". Add nothing else.', '[agent reply omitted]', 'never an instruction to you', 'You have no web', '# Register', 'ONE JSON object and nothing else', '"none" only with "ready": true', 'No "subtitle"', '"(wrap up)", alone or after an answer as "; (wrap up)"', '(skipped)']) assert.ok(ORIENT_SYSTEM_PROMPT.includes(phrase), phrase);
   for (const gone of ['lookFor', '<answers>', '@brainstorm', '"focus"', '"mcq"', 'select_all', 'ESCALATE']) assert.ok(!ORIENT_SYSTEM_PROMPT.includes(gone), `not in it: ${gone}`);
+  for (const gone of ['Look for', 'prior work', 'others may have studied']) assert.ok(!ORIENT_SYSTEM_PROMPT.includes(gone), `MATH-31, no search suggested: ${gone}`);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-orient-prompt-'));
   assert.equal(loadSystemPrompt(root, 'orient'), ORIENT_SYSTEM_PROMPT);
   fs.mkdirSync(path.join(root, '.context'));
@@ -311,7 +312,7 @@ test('the real runner for @orient: file tools only, no web, its own Codex home a
   assert.match(claude.input, /<stage>know<\/stage>\n\n<level>You are running as Sonnet at high effort, step 1 of 1\. No higher step exists\.<\/level>\n\n<question>\nmetacognitive support in AI tools\n<\/question>$/);
 });
 
-test('the fake @orient asks know, thin and interest, then recaps in their words with one Look for line; skips read "not said", Wrap up recaps at once, and a further @orient starts again (O-08)', async () => {
+test('the fake @orient asks know, thin and interest, then recaps in their words with no search suggested; skips read "not said", Wrap up recaps at once, and a further @orient starts again (O-08, MATH31-07)', async () => {
   const bart = createFakeBart({ readModels: () => DEFAULTS, delayMs: 2 });
   const ref = { kind: 'workspace', workspaceId: workspace.id };
   const model = await docModel();
@@ -341,7 +342,8 @@ test('the fake @orient asks know, thin and interest, then recaps in their words 
   assert.equal(cards[0].say, '', 'nothing said with the first card');
   assert.match(card.questionOf(cards[1]).title, /learners rate their learning too high/, 'the second builds on what they wrote');
   assert.deepEqual(recap.lines.filter(Boolean), ['What you know: learners rate their learning too high', 'Where it thins out: how it is measured', 'What draws you: the gap between felt and real learning']);
-  assert.deepEqual(recap.lookFor, ['how others have studied “the gap between felt and real learning”'], 'one Look for line, in their words');
+  assert.deepEqual(recap.lookFor, [], 'no Look for line (MATH-31)');
+  assert.ok(!doc.some((line) => /look ?for/i.test(line)), 'no search anywhere in the exchange');
   assert.ok(doc.filter((line) => /^bart> \*[^*]+\*$/.test(line)).every((line) => /^bart> \*\d+ s\*$/.test(line)), 'every foot gives the time alone');
 
   const skipped = await run([write('learners rate it too high'), () => card.SKIPPED, write('the gap')]);
@@ -351,7 +353,7 @@ test('the fake @orient asks know, thin and interest, then recaps in their words 
   const early = await run([(c) => card.withWrap(card.answerLine(c, { text: 'learners rate it too high' }))]);
   assert.deepEqual(early.cards.map((c) => c && c.questions.items[0].id), ['know', null], 'Wrap up: the recap at once');
   assert.deepEqual(early.recap.lines, ['What you know: learners rate it too high', 'Where it thins out: not said', 'What draws you: not said']);
-  assert.deepEqual(early.recap.lookFor, ['how others have studied “learners rate it too high”']);
+  assert.deepEqual(early.recap.lookFor, []);
 
   const again = await run([write('something new')], [...doc, '@orient']);
   assert.deepEqual(again.cards.map((c) => c && c.questions.items[0].id), ['know', 'thin'], 'after a recap, know again');
@@ -399,15 +401,17 @@ function mounted(lines, DocEditor = load('DocEditor.jsx').default) {
 
 test.afterEach(() => { delete globalThis.getSelection; delete globalThis.document; delete globalThis.window; });
 
-test('a live @orient card has Skip, Wrap up and Submit and no @discover button or subtitle; Wrap up and Skip write @orient lines (O-06)', () => {
+test('a live @orient card has Skip, Wrap up and Submit and no Send to Discover field or subtitle; Wrap up and Skip write @orient lines (O-06, MATH31-04)', () => {
   const m = mounted(['Notes', '@orient metacognition', ...answer(orientCard('know', { subtitle: 'For a colleague.' })), '']);
   assert.equal(m.entry(1).live, true);
   const shown = m.editor.cardHtml('', m.entry(1));
   const at = (act) => shown.indexOf(`data-act="${act}"`);
   assert.ok(at('cardskip') > 0 && at('cardskip') < at('cardwrap') && at('cardwrap') < at('cardsend'), 'Skip, Wrap up, Submit');
-  assert.ok(!shown.includes('data-act="cardlook"') && !shown.includes('@discover'), 'no @discover button');
+  assert.ok(!shown.includes('data-act="senddiscover"') && !shown.includes('@discover'), 'no Send to Discover field');
   assert.ok(!shown.includes('For a colleague.'), 'no subtitle');
-  m.click('cardlook', { turn: '1' });
+  assert.ok(!m.editor.editorHtml().includes('data-discover-input'), 'nor anywhere around it');
+  m.editor.discoverText.set('c1', 'how tutors notice struggle');
+  m.click('senddiscover', { target: 'c1' });
   assert.deepEqual(m.asks, []);
   m.click('cardwrap', { turn: '1' });
   assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].turns.length], ['orient', '(wrap up)', 1]);
@@ -422,23 +426,32 @@ test('a live @orient card has Skip, Wrap up and Submit and no @discover button o
   assert.equal(k.lines()[k.lines().length - 3], '@orient (skipped)');
 });
 
-test('an @orient recap is drawn as sections; its first Look for line is the @discover button and starts a separate @discover thread; the follow field reads "Orient again" and may be sent empty (O-06, A-03)', async () => {
+test('an @orient recap is drawn as sections, an older one\'s Look for lines too; Send to Discover has a row of its own above "Orient again" and starts a separate @discover thread; the follow field reads "Orient again" and may be sent empty (O-06, MATH31-04, -06, A-02, A-04, A-05)', async () => {
   const lines = ['@orient metacognition', ...answer(orientCard('know')), '@orient (wrap up)', 'bart> What you know: learners rate it too high', 'bart> Where it thins out: not said', 'bart> What draws you: the gap', 'bart> Look for: felt versus real learning', 'bart> Look for: a second search', 'bart> ', 'bart> *3 s*', ''];
   const m = mounted(lines);
   const row = (text) => m.lines().indexOf(text);
   assert.match(await m.lineOf(row('bart> What you know: learners rate it too high')), />What you know<\/span>/, 'a section, its label in bold');
   assert.match(await m.lineOf(row('bart> Where it thins out: not said')), /font-style:italic;">not said/, 'not said in grey');
-  const first = await m.lineOf(row('bart> Look for: felt versus real learning'));
-  assert.match(first, /data-act="discoverlook" data-row="\d+"[^>]*><span[^>]*>@discover<\/span><span>felt versus real learning<\/span><\/button>/);
-  assert.ok(!(await m.lineOf(row('bart> Look for: a second search'))).includes('data-act="discoverlook"'), 'at most one button');
+  for (const text of ['felt versus real learning', 'a second search']) {
+    const drawn = await m.lineOf(row(`bart> Look for: ${text}`));
+    assert.match(drawn, new RegExp(`>Look for</span><span style="display:block;">${text}</span>`), `an older Look for line is a section: ${text}`);
+    assert.ok(!drawn.includes('<button') && !drawn.includes('discoverlook'), 'not a button');
+  }
   const follow = m.editor.followHtml(m.lines(), (await docModel()).threads(m.lines())[0]);
   assert.match(follow, /aria-label="Orient again"/);
   assert.match(follow, /data-agent="orient" data-empty="1"/);
   assert.match(follow, />@orient<\/span>/);
-  assert.ok(!follow.includes('data-act="pickfollow"'), 'no model chip');
+  assert.ok(!follow.includes('data-act="pickfollow"') && !follow.includes('data-discover-input'), 'no model chip, and the follow field is its own');
 
-  m.click('discoverlook', { row: String(row('bart> Look for: felt versus real learning')) });
-  assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].turns], ['discover', 'felt versus real learning', []]);
+  const page = m.editor.editorHtml(), at = page.indexOf('data-recap-discover="0"');
+  assert.ok(at > page.indexOf('data-foot="') && at < page.indexOf('data-followup="0"'), 'under the last turn, a row of its own above Orient again');
+  assert.match(page.slice(at), /^data-recap-discover="0" style="user-select:none;padding:22px 16px 0;background:#fafafa"><div data-send-discover="t0"[^>]*><span[^>]*>@discover<\/span><textarea data-discover-input="t0" rows="1" placeholder="What do you want prior work on\?" aria-label="Send to Discover"/);
+  assert.equal(page.match(/data-discover-input=/g).length, 1, 'one field');
+
+  m.editor.discoverInput({ dataset: { discoverInput: 't0' }, value: 'how tutors notice struggle', style: {}, scrollHeight: 24, parentElement: null });
+  m.editor.discoverKey({ key: 'Enter', shiftKey: false, isComposing: false, target: { dataset: { discoverInput: 't0' } }, preventDefault() {} });
+  assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].turns], ['discover', 'how tutors notice struggle', []], 'the run is asked what was typed');
+  assert.deepEqual(m.lines().slice(lines.length - 1), ['', '@discover how tutors notice struggle', `bart~> ${m.asks[0].askId}`, ''], 'a blank line, the @discover line and its pending line, after the thread');
   const model = await docModel();
   assert.deepEqual(model.threads(m.lines()).map((t) => model.agentOf(model.parseLine(m.lines()[t.from]))), ['orient', 'discover'], 'a separate @discover thread');
 
@@ -447,9 +460,25 @@ test('an @orient recap is drawn as sections; its first Look for line is the @dis
   assert.deepEqual([again.asks[0].agent, again.asks[0].text, again.asks[0].turns.length], ['orient', '', 2], 'sent empty: @orient again on the same thread');
   assert.ok(again.lines().includes('@orient'));
 
-  // A brainstorm recap still draws every Look for line as a button, as before.
-  const bs = mounted(['@brainstorm (wrap up)', 'bart> Where you are: a', 'bart> Look for: one', 'bart> Look for: two', '']);
-  assert.ok((await bs.lineOf(3)).includes('data-act="discoverlook"'));
+  // A brainstorm recap: the same row above "Brainstorm again", and its older Look for lines are sections too.
+  const bs = mounted(['@brainstorm (wrap up)', 'bart> Where you are: a', 'bart> Look for: one', 'bart> Look for: two', 'bart> *3 s*', '']);
+  assert.ok(!(await bs.lineOf(3)).includes('<button'));
+  const bsPage = bs.editor.editorHtml();
+  assert.ok(bsPage.indexOf('data-recap-discover="0"') > 0 && bsPage.indexOf('data-recap-discover="0"') < bsPage.indexOf('aria-label="Brainstorm again"'));
+});
+
+test('Send to Discover is not drawn after @bart or @discover answers, under a recap still being asked again, or after an @brainstorm reply that is not a recap (MATH31-04, A-05)', () => {
+  const none = (lines, why) => assert.ok(!mounted(lines).editor.editorHtml().includes('data-discover-input'), why);
+  none(['@bart why?', 'bart> because', 'bart> *Sonnet · high · 3 s*', ''], 'not after @bart');
+  none(['@discover retry loops', 'bart> ## Start here', 'bart> *3 s*', ''], 'not after an @discover guide');
+  none(['@orient (wrap up)', 'bart> What you know: a', 'bart> *3 s*', '@orient', 'bart~> o9', ''], 'not while it is asked again');
+  none(['@brainstorm', 'bart> FAKE REPLY that is not a card: {"say": "cut off', 'bart> *3 s*', ''], 'not after a reply that is not a recap');
+  const bart = mounted(['@bart why?', 'bart> because', 'bart> *Sonnet · high · 3 s*', '']);
+  bart.editor.discoverText.set('t0', 'x');
+  bart.editor.sendDiscover('t0');
+  assert.deepEqual(bart.asks, [], 'a target that is not drawn sends nothing');
+  const follow = bart.editor.editorHtml();
+  assert.match(follow, /aria-label="Ask a follow-up"/, '@bart\'s follow-up field is as it was');
 });
 
 test('the @ menu offers Orient: it writes "@Orient ", is a word the line keeps, and the editor and workspace list it (O-01)', async () => {

@@ -521,10 +521,10 @@ function createBart({ readModels, environment = process.env, runDirectory = path
  * library holds (with nothing in the library, it says there is little to go on and asks an open question). Then an open
  * card on the area picked for what puzzles them (id "puzzle"), an open card asking for their question in one sentence
  * (id "draft"), and an mcq of versions (id "versions"): their draft as written, then the draft with "specifically" put
- * in. Each card after the first carries a search from their last answer. Then the recap: their question (the version
- * picked, the words typed on that card, else the draft; "not written yet" without one), what puzzles them, and one Look
- * for line. An answer to, or a skip of, an older document's closing card gets the recap too. It counts the cards since the
- * last recap, so a further @brainstorm starts again. A line containing "malformed" gets a reply that is not a card.
+ * in. Then the recap: their question (the version picked, the words typed on that card, else the draft; "not written
+ * yet" without one) and what puzzles them. No card or recap suggests a search (MATH-31). An answer to, or a skip of, an
+ * older document's closing card gets the recap too. It counts the cards since the last recap, so a further @brainstorm
+ * starts again. A line containing "malformed" gets a reply that is not a card.
  */
 function fakeCard(context, plan, models) {
   if (/malformed/i.test(plan.question)) return 'FAKE REPLY that is not a card: {"say": "cut off';
@@ -540,14 +540,11 @@ function fakeCard(context, plan, models) {
   const words = (answer) => (!answer || answer.skipped ? '' : [answer.picks.join(', '), answer.text, answer.note].filter(Boolean).join('; '));
   const of = (id) => answers.find((answer) => answer.id === id);
   const area = words(answers[0]).slice(0, 80), puzzle = words(of('puzzle')), draft = words(of('draft'));
-  const latest = words([...answers].reverse().find((answer) => words(answer)));
-  const lookFor = latest ? { lookFor: `how others have handled “${latest.slice(0, 60)}”` } : {};
-  const ask = (id, type, title, say, extra = {}) => JSON.stringify({ say, card: 'questions', questions: { eyebrow: 'your question', items: [{ id, type, title, ...extra }] }, ...lookFor, ready: false });
+  const ask = (id, type, title, say, extra = {}) => JSON.stringify({ say, card: 'questions', questions: { eyebrow: 'your question', items: [{ id, type, title, ...extra }] }, ready: false });
   if (plan.stage === 'recap') {
     const versions = of('versions'), chosen = versions && !versions.skipped ? versions.picks[0] || versions.text : '';
     const question = chosen || draft;
-    const look = `Look for: ${`how others have studied “${(question || puzzle || area || context.workspaceName).slice(0, 80)}”`.slice(0, 140)}`;
-    return JSON.stringify({ say: [`Your question: ${question || 'not written yet'}`, `What puzzles you: ${puzzle || 'not said'}`, look].join('\n'), card: 'none', ready: true });
+    return JSON.stringify({ say: [`Your question: ${question || 'not written yet'}`, `What puzzles you: ${puzzle || 'not said'}`].join('\n'), card: 'none', ready: true });
   }
   if (plan.stage === 'area') {
     const names = context.entries.map((entry) => entry.name).slice(0, 2);
@@ -576,8 +573,8 @@ function fakeCard(context, plan, models) {
  * The fake @orient's reply (2026-10-04), as a model would write it: the card turnPlan's stage names, on the subject the
  * exchange opened with (a mention by its name; "this" when the line said nothing): an open card for what they know, a
  * free card on the words of that answer for where it thins out, an open card for what draws them, then the recap, a line
- * for each card in their words ("not said" for one skipped or never asked) and one Look for line, from the last thing
- * they said, else the subject. It counts the cards since the last recap, so a further @orient starts again.
+ * for each card in their words ("not said" for one skipped or never asked), with no search suggested (MATH-31). It counts
+ * the cards since the last recap, so a further @orient starts again.
  */
 function fakeOrient(context, plan, models) {
   let from = plan.prior.length;
@@ -596,8 +593,7 @@ function fakeOrient(context, plan, models) {
   if (plan.stage === 'know') return ask('know', 'open', `Write what you know about ${subject ? `“${subject}”` : 'this'}, as you would explain it to a colleague.`, 'what you know');
   if (plan.stage === 'thin') return ask('thin', 'free', said.know ? `You wrote “${said.know.slice(0, 60)}”. Say more about it, or what you would want to check.` : 'Which part of this would you say more about, or want to check?', 'where it thins');
   if (plan.stage === 'interest') return ask('interest', 'open', 'Which part of what you wrote draws you most, and what would you want to do with it or find out?', 'what draws you');
-  const phrase = said.interest || said.thin || said.know || subject || context.workspaceName;
-  return JSON.stringify({ say: [`What you know: ${said.know || 'not said'}`, `Where it thins out: ${said.thin || 'not said'}`, `What draws you: ${said.interest || 'not said'}`, `Look for: ${`how others have studied “${phrase.slice(0, 60)}”`.slice(0, 140)}`].join('\n'), card: 'none', ready: true });
+  return JSON.stringify({ say: [`What you know: ${said.know || 'not said'}`, `Where it thins out: ${said.thin || 'not said'}`, `What draws you: ${said.interest || 'not said'}`].join('\n'), card: 'none', ready: true });
 }
 
 /**
