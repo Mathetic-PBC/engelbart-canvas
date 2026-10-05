@@ -138,7 +138,7 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
 // with the calling window, `reply(win, channel, payload)` answers that window alone, and `announce(channel, payload,
 // { except })` tells every window but the one that saved. Without them (one window, the tests) win is null, a reply goes
 // out on `notify`, and nothing is announced.
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {} }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {} }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
   const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
@@ -527,6 +527,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     return queued(async () => {
       const ctx = await store.context();
       const row = await library.addItem(ctx, value, { describe, identifyRepo, inspectPdf, name });
+      if (row.type === 'pdf') pdfAdded(); // its text is read for search now (context/sweeper.cjs)
       if (store.recheck && pdfCandidate(row)) store.recheck(ctx);
       // Adding a local clone or a non-GitHub item does not start remote work.
       if (sandbox && /^(?:https?:\/\/(?:www\.)?github\.com\/|git@github\.com:)/i.test(value.trim())) {
@@ -586,9 +587,11 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     }
   }
   // A pdf read from the web, saved as a copy with its address (library.addPdfCopy; the Stage's Save sends its bytes).
-  saving('add-library-pdf', withCtx((ctx, input, bytes, options) => {
+  saving('add-library-pdf', withCtx(async (ctx, input, bytes, options) => {
     if (!(bytes instanceof Uint8Array)) throw new TypeError('pdf bytes are missing');
-    return library.addPdfCopy(ctx, str(input, 'address', 8192), bytes, { inspectPdf, name: optStr(options && typeof options === 'object' ? options.name : null, 'name', 200) });
+    const row = await library.addPdfCopy(ctx, str(input, 'address', 8192), bytes, { inspectPdf, name: optStr(options && typeof options === 'object' ? options.name : null, 'name', 200) });
+    pdfAdded();
+    return row;
   }), { library: true });
   handle('lookup-library-item', withCtx((ctx, input) => library.lookupItem(ctx, str(input, 'link or path', 4096))));
   // "Choose from disk…": the native picker, files and folders, several at once.

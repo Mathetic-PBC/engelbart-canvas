@@ -6,7 +6,8 @@
 //
 //   <testRoot>/library.pglite    table `library`  — every mentionable thing, all projects; `sandbox_runs` and
 //                                `sandbox_environments` — a GitHub repository's E2B previews (src/main/sandbox);
-//                                `repo_runnables` — what runs in a repository, and how (src/main/build/runnables.cjs)
+//                                `repo_runnables` — what runs in a repository, and how (src/main/build/runnables.cjs);
+//                                `library_text` — a pdf's extracted text, for search (src/main/context/sweeper.cjs)
 //   <project>/notes.pglite       table `notes`    — the notes created in that project
 
 const fs = require('node:fs');
@@ -131,6 +132,15 @@ create table if not exists repo_runnables (
   check (type <> 'ui' or run_command is null or position('{port}' in run_command) > 0)
 );
 create unique index if not exists repo_runnables_one on repo_runnables (library_id, folder, name);
+-- A pdf's text, as the sweep's text pass read it (2026-10-05, MATH-29), for search. A table of its own, not a column:
+-- "select * from library" is what the renderer is sent. file_mtime: the file's modification time (ms) when it was read;
+-- the text is read again only when that changes. '' is a pdf that was read and held no text (a scan).
+create table if not exists library_text (
+  library_id uuid primary key references library (id) on delete cascade,
+  text text not null,
+  file_mtime double precision not null,
+  extracted_at timestamptz not null default now()
+);
 create unique index if not exists sandbox_runs_one_active on sandbox_runs (library_id)
   where status in ('starting', 'ready');
 `;
@@ -390,6 +400,23 @@ async function openLibraryDb(testRoot) {
     async papersWithFiles() {
       const result = await db.query("select * from library where type = 'pdf' and path is not null order by created");
       return result.rows.map(plain);
+    },
+    // What the text pass has read: library id → the modification time of the file its text was taken from.
+    async textStamps() {
+      const result = await db.query('select library_id, file_mtime from library_text');
+      return new Map(result.rows.map((row) => [row.library_id, row.file_mtime]));
+    },
+    // A pdf's text as read from its file at `mtime` ('' when it held none), in place of what was kept before.
+    // Postgres text cannot hold NUL, which a pdf's text can.
+    async setText(id, text, mtime) {
+      if (typeof text !== 'string') throw new TypeError('text must be a string');
+      if (!Number.isFinite(mtime)) throw new TypeError('mtime must be a number');
+      await db.query(
+        `insert into library_text (library_id, text, file_mtime) values ($1, $2, $3)
+         on conflict (library_id) do update set text = excluded.text, file_mtime = excluded.file_mtime, extracted_at = now()`,
+        [requireText(id, 'id', { max: 64 }), text.replace(/\u0000/g, ''), mtime],
+      );
+      return true;
     },
     // Escape hatch for tests and repairs.
     async query(sql, params = []) {

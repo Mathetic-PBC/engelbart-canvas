@@ -545,9 +545,12 @@ if (!hasSingleInstanceLock) {
     // the app is open is checked straight away (`again`: store.recheck). ENGELBART_WEB_PDFS=off disables it (scripted runs).
     let changedTimer = null;
     const libraryChanged = () => { clearTimeout(changedTimer); changedTimer = setTimeout(() => sendToWindow('engelbart:library-changed', {}), 400); };
+    // A pdf just came into the library (added from disk, saved from the web, or a page row that became one): its text
+    // is read for search within seconds (the sweeper's text pass), not at the next beat.
+    const pdfAdded = () => { if (sweeper) sweeper.sweepSoon(); };
     const fetchPdf = async (url) => readPdfResponse(await electronSession.fromPartition(BROWSER_PARTITION).fetch(url, { signal: AbortSignal.timeout(120000) }));
     const afterOpen = process.env.ENGELBART_WEB_PDFS === 'off' ? null
-      : (ctx, { again = false } = {}) => checkWebPdfs(ctx, { fetchPdf, inspectPdf, onChange: libraryChanged, log: (line) => console.warn(`[engelbart] ${line}`), again });
+      : (ctx, { again = false } = {}) => checkWebPdfs(ctx, { fetchPdf, inspectPdf, onChange: () => { libraryChanged(); pdfAdded(); }, log: (line) => console.warn(`[engelbart] ${line}`), again });
     // Test mode only in a developer's copy: run from a checkout, or packaged by `npm run relaunch` (./developer.cjs).
     store = createStore({ homeDir, rootDir: process.env.ENGELBART_ROOT_DIR || null, fixturesDir: FIXTURES, inspectPdf, afterOpen, testMode: hasTestMode({ packaged: app.isPackaged, distDir: DIST, env: process.env }) });
     // Git, Claude Code and Codex (src/main/tools): checked at every launch in the background and recorded in
@@ -574,14 +577,16 @@ if (!hasSingleInstanceLock) {
     });
     if (process.env.ENGELBART_TOOLS !== 'off') void tools.start().catch((error) => console.warn(`[engelbart] tool check: ${error.message}`));
     // Catalog summaries (src/main/context): swept once a minute while the app is open, at launch,
-    // and when the computer wakes. ENGELBART_SUMMARIES=off disables it; the _FAKE / _QUIET_MS /
-    // _INTERVAL_MS variables exist for scripted runs only.
+    // and when the computer wakes. ENGELBART_SUMMARIES=off turns the summaries off; the sweep still runs its text pass
+    // (every pdf's text kept for search, library_text). The _FAKE / _QUIET_MS / _INTERVAL_MS variables exist for
+    // scripted runs only.
     const millis = (name) => { const value = Number(process.env[name]); return Number.isFinite(value) && value > 0 ? value : undefined; };
     sweeper = createSweeper({
       getContext: () => store.context(),
       summarize: process.env.ENGELBART_SUMMARY_FAKE === '1'
         ? createFakeSummarizer()
         : createCliSummarizer({ readSettings: () => store.config().summarizer, runDirectory: path.join(app.getPath('userData'), 'context-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home'), tools }),
+      summaries: process.env.ENGELBART_SUMMARIES !== 'off',
       quietMs: millis('ENGELBART_SUMMARY_QUIET_MS'),
       intervalMs: millis('ENGELBART_SUMMARY_INTERVAL_MS'),
     });
@@ -602,10 +607,8 @@ if (!hasSingleInstanceLock) {
     bart = process.env.ENGELBART_BART_FAKE === '1'
       ? createFakeBart({ readModels: bartModels, onPicked: bartPicked, threads: bartThreads(), brainstormThreads: brainstormThreads(), orientThreads: orientThreads(), discoverThreads: discoverThreads() })
       : createBart({ readModels: bartModels, onPicked: bartPicked, runDirectory: path.join(app.getPath('userData'), 'bart-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-bart'), brainstormCodexHome: path.join(app.getPath('userData'), 'codex-home-brainstorm'), orientCodexHome: path.join(app.getPath('userData'), 'codex-home-orient'), discoverCodexHome: path.join(app.getPath('userData'), 'codex-home-discover'), threads: bartThreads(), brainstormThreads: brainstormThreads(), orientThreads: orientThreads(), discoverThreads: discoverThreads(), tools });
-    if (process.env.ENGELBART_SUMMARIES !== 'off') {
-      sweeper.start();
-      powerMonitor.on('resume', () => sweeper.sweepSoon());
-    }
+    sweeper.start();
+    powerMonitor.on('resume', () => sweeper.sweepSoon());
     // Build (src/main/build): a workspace handed to Claude Code or Codex in a git worktree of its own, writing only there.
     // Git is the one the tool check found; a scripted run with the check off (ENGELBART_TOOLS=off) uses PATH's.
     // ENGELBART_BUILD_FAKE=1 runs the fake agent (git and records stay real), for scripted runs only.
@@ -805,6 +808,7 @@ if (!hasSingleInstanceLock) {
       readModels,
       rememberModelChoice,
       tools,
+      pdfAdded,
       notify: sendToRenderer,
       // "Choose from disk…" in the sidebar's + menu: files and folders together, several at once (macOS allows both in one panel).
       // Onboarding's Papers step asks for pdfs only (`kind` 'pdf').

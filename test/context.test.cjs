@@ -8,6 +8,7 @@ const path = require('node:path');
 const db = require('../src/main/store/db.cjs');
 const { ensureHome } = require('../src/main/store/home.cjs');
 const projects = require('../src/main/store/projects.cjs');
+const library = require('../src/main/store/library.cjs');
 const { createSweeper } = require('../src/main/context/sweeper.cjs');
 const { buildRequest, fitSummary, loadSystemPrompt, createCliSummarizer, SummaryError } = require('../src/main/context/summarizer.cjs');
 const { findAbstract, extractAbstract } = require('../src/main/context/pdf-text.cjs');
@@ -367,4 +368,109 @@ test('re-categorizing an installed library is not an edit: the sweep that follow
   assert.deepEqual([after.calls.length, swept.dispatched, swept.extracted, swept.abstracts, swept.cleared], [0, 0, 0, [], []]);
   assert.deepEqual(await fields(), before);
   await ctx.libraryDb.remove(paper.id);
+});
+
+/* ------------------------------------------------------------------ PDF text, kept for search (library_text) */
+
+const keptText = async (id) => (await ctx.libraryDb.query('select text, file_mtime, extracted_at from library_text where library_id = $1', [id]))[0] || null;
+async function pdfRow(id, name, lines, modified = new Date()) {
+  const file = path.join(layout.root, `${name}.pdf`);
+  fs.writeFileSync(file, Array.isArray(lines) ? makePdf(lines) : lines);
+  fs.utimesSync(file, modified, modified);
+  return ctx.libraryDb.insert({ id, name, type: 'pdf', path: file });
+}
+
+test('the text pass: a PDF\'s text is kept on the first sweep, with no quiet period and no model; not read again until its file changes; the library rows are as they were', async () => {
+  const paper = await pdfRow('aaaaaaaa-0000-4000-8000-000000000001', 'Fresh', ['Fresh findings on search.', 'A second line.']);
+  const first = recorder();
+  const report = await sweeperWith(first.summarize).sweep();
+  assert.equal(report.texts, 1);
+  assert.equal(first.calls.length, 0, 'no model call, and no waiting for the file to settle');
+  const kept = await keptText(paper.id);
+  assert.equal(kept.text, 'Fresh findings on search.\nA second line.');
+  assert.equal(kept.file_mtime, fs.statSync(paper.path).mtimeMs);
+  assert.equal((await sweeperWith(recorder().summarize).sweep()).texts, 0, 'unchanged: not read again');
+  assert.equal((await keptText(paper.id)).extracted_at, kept.extracted_at);
+
+  const listed = (await library.listLibrary(ctx)).find((entry) => entry.id === paper.id);
+  for (const field of ['text', 'file_mtime', 'extracted_at', 'library_id']) assert.equal(field in listed, false, `the renderer's rows carry no ${field}`);
+  assert.deepEqual(Object.keys(await ctx.libraryDb.get(paper.id)), Object.keys(listed));
+
+  // The file changes: its text is read again, whatever the clock says about quiet.
+  fs.writeFileSync(paper.path, makePdf(['Rewritten since.']));
+  const changed = new Date(Date.now() - 2 * MINUTE);
+  fs.utimesSync(paper.path, changed, changed);
+  assert.equal((await sweeperWith(recorder().summarize).sweep()).texts, 1);
+  const again = await keptText(paper.id);
+  assert.deepEqual([again.text, again.file_mtime], ['Rewritten since.', fs.statSync(paper.path).mtimeMs]);
+  assert.equal((await sweeperWith(recorder().summarize).sweep()).texts, 0);
+  await ctx.libraryDb.remove(paper.id);
+});
+
+test('the text pass: a PDF with no text (a scan) or that cannot be read is kept as \'\' and not tried again; a file that is gone is skipped', async () => {
+  const scan = await pdfRow('aaaaaaaa-0000-4000-8000-000000000002', 'Scan', []);
+  const broken = await pdfRow('aaaaaaaa-0000-4000-8000-000000000003', 'Broken', 'not a pdf at all');
+  const gone = await ctx.libraryDb.insert({ id: 'aaaaaaaa-0000-4000-8000-000000000004', name: 'Gone', type: 'pdf', path: path.join(layout.root, 'gone.pdf') });
+  assert.equal((await sweeperWith(recorder().summarize).sweep()).texts, 2);
+  assert.deepEqual([(await keptText(scan.id)).text, (await keptText(broken.id)).text, await keptText(gone.id)], ['', '', null]);
+  assert.equal((await sweeperWith(recorder().summarize).sweep()).texts, 0, 'not retried while the files are unchanged');
+  for (const row of [scan, broken, gone]) await ctx.libraryDb.remove(row.id);
+});
+
+test('the text pass: at most perSweep PDFs are read in one sweep; the rest wait for the next', async () => {
+  const rows = [];
+  for (let i = 0; i < 3; i += 1) rows.push(await pdfRow(`aaaaaaaa-0000-4000-8000-00000000001${i}`, `Batch ${i}`, [`Batch paper ${i}.`]));
+  const sweeper = sweeperWith(recorder().summarize, { perSweep: 2 });
+  assert.equal((await sweeper.sweep()).texts, 2);
+  assert.equal((await ctx.libraryDb.textStamps()).size, 2);
+  assert.equal((await sweeper.sweep()).texts, 1);
+  assert.equal((await sweeper.sweep()).texts, 0);
+  assert.deepEqual(await Promise.all(rows.map(async (row) => (await keptText(row.id)).text)), ['Batch paper 0.', 'Batch paper 1.', 'Batch paper 2.']);
+  for (const row of rows) await ctx.libraryDb.remove(row.id);
+});
+
+test('the text pass with summaries off: text is still kept, and nothing is summarized', async () => {
+  const waiting = await note('Would be summarized', long('waiting'), 60);
+  const body = Array.from({ length: 24 }, (_, i) => `Line ${i + 1} of a report with no abstract section, long enough to be worth a summary.`);
+  const paper = await pdfRow('aaaaaaaa-0000-4000-8000-000000000020', 'Settled report', body, new Date(Date.now() - 45 * MINUTE));
+  const { calls, summarize } = recorder();
+  const report = await sweeperWith(summarize, { summaries: false }).sweep();
+  assert.equal(report.texts, 1);
+  assert.ok((await keptText(paper.id)).text.includes('Line 24 of a report'));
+  assert.deepEqual([calls.length, report.dispatched, report.extracted, report.catalogs], [0, 0, 0, []]);
+  assert.deepEqual([(await row(waiting.id)).summary, (await row(paper.id)).summary], [null, null]);
+  await ctx.libraryDb.setSummary(waiting.id, 'done', new Date());
+  await ctx.libraryDb.remove(paper.id);
+});
+
+test('a PDF added while a sweep waits on a summary is read within seconds: sweepSoon runs the text pass by itself', async () => {
+  const slow = await note('Slow to summarize', long('slow'), 60);
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let began;
+  const begun = new Promise((resolve) => { began = resolve; });
+  const sweeper = sweeperWith(async () => { began(); await gate; return { summary: 'Slow.', meta: {} }; });
+  const sweeping = sweeper.sweep();
+  await begun;
+  const added = await pdfRow('aaaaaaaa-0000-4000-8000-000000000030', 'Added meanwhile', ['Added while a summary was being written.']);
+  sweeper.sweepSoon(0);
+  for (let i = 0; i < 100 && !(await keptText(added.id)); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal((await keptText(added.id)).text, 'Added while a summary was being written.');
+  release();
+  await sweeping;
+  await sweeper.stop();
+  assert.equal((await row(slow.id)).summary, 'Slow.');
+  await ctx.libraryDb.remove(added.id);
+});
+
+test('library_text: setText checks its id and replaces what was kept; deleting the library row deletes its text', async () => {
+  const paper = await ctx.libraryDb.insert({ id: 'aaaaaaaa-0000-4000-8000-000000000040', name: 'Doomed', type: 'pdf', path: path.join(layout.root, 'doomed.pdf') });
+  await assert.rejects(ctx.libraryDb.setText('', 'x', 1), /id is required/);
+  await assert.rejects(ctx.libraryDb.setText(paper.id, 'x', Number.NaN), /mtime/);
+  await ctx.libraryDb.setText(paper.id, 'first', 1);
+  await ctx.libraryDb.setText(paper.id, 'sec\u0000ond', 2.5);
+  assert.deepEqual(await ctx.libraryDb.textStamps(), new Map([[paper.id, 2.5]]));
+  assert.equal((await keptText(paper.id)).text, 'second');
+  assert.equal(await ctx.libraryDb.remove(paper.id), true);
+  assert.deepEqual(await ctx.libraryDb.query('select * from library_text where library_id = $1', [paper.id]), []);
 });

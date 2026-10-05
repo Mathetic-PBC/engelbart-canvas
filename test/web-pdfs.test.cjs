@@ -151,3 +151,24 @@ test('adding an arXiv paper or a .pdf address checks it at once: the row becomes
   assert.equal((await library.libraryDb.get(blog.id)).type, 'website');
   assert.ok(!fetched.some((url) => url.includes('github.com')));
 });
+
+// MATH-29 (2026-10-05): a pdf that comes in through either add asks the sweeper to read its text now (ipc.cjs's
+// pdfAdded; index.cjs points it at sweeper.sweepSoon, and at a page row that became a pdf through checkWebPdfs' onChange).
+test('adding a pdf from disk or saving one from the web calls pdfAdded; adding anything else does not', async (t) => {
+  const { createStore, registerEngelbartIpc } = require('../src/main/ipc.cjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-webpdf-told-'));
+  const store = createStore({ homeDir: home, testMode: true });
+  await store.setTestMode(false);
+  t.after(() => store.close());
+  const handlers = new Map();
+  let told = 0;
+  registerEngelbartIpc({ store, ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, trustedHandler: (fn) => fn, describe: async () => null, identifyRepo: async () => null, pdfAdded: () => { told += 1; } });
+  const file = path.join(home, 'From disk.pdf');
+  fs.writeFileSync(file, PDF);
+  assert.equal((await handlers.get('engelbart:add-library-item')(file)).type, 'pdf');
+  assert.equal(told, 1);
+  await handlers.get('engelbart:add-library-item')('https://blog.example.org/post', { name: 'Post' });
+  assert.equal(told, 1, 'a page is not a pdf');
+  assert.equal((await handlers.get('engelbart:add-library-pdf')('https://papers.example.org/saved.pdf', PDF, { name: 'Saved' })).type, 'pdf');
+  assert.equal(told, 2);
+});
