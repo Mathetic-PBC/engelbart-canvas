@@ -16,6 +16,7 @@ import { flatWorkspaces, nextPlace, placesToGo } from '../model/nav.js';
 import { onStage } from '../model/stage.js';
 import { paperState, savePaper, repoState, tryRepo } from '../model/guide.js';
 import { buildLine, placeAnswer } from '../model/doc.js';
+import { addDropped } from '../model/drop.js';
 import { createDocSync } from '../model/doc-sync.js';
 import { buildRequestOf } from '../../main/bart/question.cjs';
 import ProjectPostIts from '../post-its/ProjectPostIts.jsx';
@@ -1018,6 +1019,20 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return problems;
   };
 
+  // Dropped on the sidebar's library rows or into the document (MATH-19): files from Finder, a picture or a link from a
+  // browser (model/drop.js), each its own row, in order, then all linked here; what could not be added is said.
+  const addDroppedHere = async (items) => {
+    const { rows: made, problems } = await addDropped(items, { api, errorMessage });
+    try {
+      if (topic) await linkIds(made.map((row) => row.id));
+      else if (made.length) await reload();
+    } catch (error) {
+      problems.push(errorMessage(error));
+    }
+    for (const row of made) if (row.sandbox_error) problems.push(`${row.name}: ${row.sandbox_error}`);
+    if (problems.length) onError(new Error(problems.join(' · ')));
+  };
+
   // A note made from the sidebar's + or the @ menu's Note: named after what was typed, else untitled; made here. Every new
   // note opens as a tab (2026-09-23): in front with the caret in its title from the +, behind the document from the @
   // menu, whose line is still being typed.
@@ -1313,6 +1328,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onNewChild={makeChild}
           onPickRepo={pickRepo}
           onOpenHeld={(projectId, workspaceId) => { if (projectId === project.id && workspaceId && index.has(workspaceId)) selectTopic(workspaceId); }}
+          onDropItems={addDroppedHere}
           onTrashRow={trashRow}
           onRestoreArchive={(row) => restoreVersion(row.file)}
           trashFull={!!(topic && topic.removed && topic.removed.length) || postItTrash > 0 || !!(tree.trash && tree.trash.length)}
@@ -1357,6 +1373,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
               onOpenLink={openLink}
               images={images}
               onPasteImage={pasteImage}
+              pathForFile={api.pathForFile}
+              onDropItems={addDroppedHere}
               asks={asks}
               models={bartModels}
               builds={builds}

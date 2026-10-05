@@ -8,6 +8,7 @@ import { ago, findWorkspaces } from '../model/nav.js';
 import GithubPane from './GithubPane.jsx';
 import { usePlaced } from '../ui/usePlaced.js';
 import { useBodies } from './useBodies.js';
+import { carriesDrop, readDrop } from '../model/drop.js';
 import { ItemPeek } from '../screens/Home.jsx';
 import trashPng from '../../../design/assets/trash.png';
 import trashFullPng from '../../../design/assets/trash-full.png';
@@ -22,7 +23,8 @@ import notePng from '../../../design/assets/yellow-sticky-note.png';
 // Sub-Workspaces, Archived (model/rail.js railSections; always shown, closed until opened, the first carries Expand
 // all) — where a hover peeks, a
 // double-click renames and a drag onto the trash takes one out of this workspace; and "+ Add context", whose menu makes a
-// Note or a Sub-Workspace here or adds something new to the library and to this workspace. At the bottom, the workspace
+// Note or a Sub-Workspace here or adds something new to the library and to this workspace; files, a picture or a link
+// dropped on these rows (MATH-19, 2026-10-05) are added and linked the same way. At the bottom, the workspace
 // to go to next (an agent waiting there, else the one written in before; ⌘J), then two pictures that size with the
 // sidebar: the trash (it takes post-its too and keeps them a week; a click lists them to restore; it shows paper once
 // something is in it) and a sticky note that makes a post-it. Copy left for the document's lower left (2026-09-23).
@@ -885,7 +887,7 @@ function BottomBar({ trashRef, full, dragging, over, onTrashDragOver, onTrashDra
 export default function Rail({
   width, topics, topic, allWorkspaces, onOpenDoc, onSelectTopic, onRenameTopic, onAddTopic, onDeleteTopic,
   rows, flashId, onRowClick, onRowRenameStart, onRowRename, onRowRenameEnd,
-  library, inRail, onSearchPick, onAddInput, onPickDisk, onNewNote, onNewChild, onPickRepo, onOpenHeld,
+  library, inRail, onSearchPick, onAddInput, onPickDisk, onNewNote, onNewChild, onPickRepo, onOpenHeld, onDropItems,
   onTrashRow, onRestoreArchive, trashFull, postItTrash, workspaceTrash, postItDrag, trashRef,
   next, places, projectId, onGoNext,
   onPostIt, postItsHidden, onTogglePostIts,
@@ -894,6 +896,7 @@ export default function Rail({
   const [previews, setPreviews] = React.useState({}); // `${id}:${last_edited}` → previewLibraryItem's answer
   const [dragging, setDragging] = React.useState(null);
   const [overTrash, setOverTrash] = React.useState(false);
+  const [dropping, setDropping] = React.useState(false); // files or a link held over the library rows
   const [menus, setMenus] = React.useState({ search: false, add: false });
   const [opened, setOpened] = useOpen(); // section key → unfolded
   const timer = React.useRef(null);
@@ -958,6 +961,19 @@ export default function Rail({
     if (row) onTrashRow(row);
   };
 
+  /* ------------------------------------------------------------------ drop */
+  // Files from Finder, a picture or a link from a browser, dropped on the library rows (MATH-19): each a row of the
+  // library, linked here (Workspace.jsx addDroppedHere). A row's own drag to the trash is not one of these.
+  const libraryDragOver = (event) => { if (!onDropItems || !carriesDrop(event)) return; event.preventDefault(); setDropping(true); };
+  const libraryDragLeave = (event) => { if (!event.currentTarget.contains(event.relatedTarget)) setDropping(false); };
+  const libraryDrop = (event) => {
+    if (!onDropItems || !carriesDrop(event)) return;
+    event.preventDefault();
+    setDropping(false);
+    const items = readDrop(event.dataTransfer, api.pathForFile); // now: the drop's data is gone once the event is over
+    if (items.length) void onDropItems(items);
+  };
+
   const peekLeft = peek ? Math.max(peek.rect.right, peek.edge) : 0;
   const peekTop = peek ? Math.max(54, Math.min(peek.rect.top - 12, window.innerHeight - 380)) : 0;
   return (
@@ -965,7 +981,7 @@ export default function Rail({
       <div onScroll={() => { hold(); setPeek(null); }} style={{ flex: 1, minHeight: 0, boxSizing: 'border-box', padding: '16px 8px 8px', display: 'flex', flexDirection: 'column', overflowY: 'auto', overflowX: 'hidden' }}>
         <WorkspaceHeader topics={topics} topic={topic} all={allWorkspaces} onOpenDoc={onOpenDoc} onSelectTopic={onSelectTopic} onRenameTopic={onRenameTopic} onAddTopic={onAddTopic} onDeleteTopic={onDeleteTopic} />
         {topic && (
-          <div data-screen-label="Library" data-rail-library="1" style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <div data-screen-label="Library" data-rail-library="1" data-dropping={dropping ? '1' : undefined} onDragOver={libraryDragOver} onDragLeave={libraryDragLeave} onDrop={libraryDrop} style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 2, borderRadius: 8, boxShadow: dropping ? 'inset 0 0 0 2px #c9c9c9' : 'none', transition: 'box-shadow 120ms' }}>
             <LibrarySearch projectId={projectId} library={library} inRail={inRail} onPick={onSearchPick} previews={previews} onPreview={preview} onOpenHeld={onOpenHeld} onOpenChange={setSearchOpen} shut={menus.add} />
             {sections.map((section, i) => (
               <RailSection

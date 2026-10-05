@@ -2,8 +2,9 @@
 
 // The root library: seeds for test mode, file bytes for papers, PDF annotations, adding by address,
 // and the two questions the all-projects screen asks (what a project holds, where an item is held).
-// Nothing here copies user files; the seeds are the app's own fixtures (spec §2 #7, #15). The one
-// copy is a pdf read from the web and saved (addPdfCopy): it lives in <data root>/assets/pdfs.
+// Nothing here copies user files; the seeds are the app's own fixtures (spec §2 #7, #15). The copies
+// are of what came without a file: a pdf read from the web and saved (addPdfCopy), and a picture or a
+// pdf dragged in from a browser (addFileCopy). They live in <data root>/assets/pdfs and assets/images.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -545,6 +546,172 @@ async function addPdfCopy(ctx, input, bytes, { inspectPdf, name: given = null } 
   return row;
 }
 
+/* ---------------------------------------------------- dragged in (MATH-19) */
+
+// What is dragged onto the library or a workspace from Finder, Chrome or Safari (2026-10-05). A file with a path is
+// linked where it is (addItem). Bytes with no path (a picture or a pdf a browser hands over, a file Finder gives no
+// path for) are kept as a copy, as addPdfCopy keeps a pdf from the web: a pdf in <data root>/assets/pdfs, a picture in
+// <data root>/assets/images. A link is read here first (addFromUrl): a picture or a pdf is kept as a copy, anything
+// else becomes the row + Add would make of it. Every such row is the library's, not a project's (`project_id` null),
+// unlike a picture pasted into a document (projects.saveImage).
+const IMAGE_MIMES = Object.freeze({ 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' });
+const PDF_MIMES = new Set(['application/pdf', 'application/x-pdf']);
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const DOWNLOAD_TIMEOUT_MS = 60_000;
+// what a server that picks a format by Accept is asked for: the pictures kept here before any other (no avif, no heic)
+const DOWNLOAD_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp,application/pdf;q=0.9,*/*;q=0.8';
+
+const mimeOf = (value) => String(value || '').toLowerCase().split(';')[0].trim();
+
+/** Which picture the bytes are by their first bytes (png, jpeg, gif or webp), whatever they were said to be; null for anything else. */
+function imageMimeOf(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength < 3) return null;
+  const head = Buffer.from(bytes.buffer, bytes.byteOffset, Math.min(12, bytes.byteLength));
+  const text = head.toString('latin1');
+  if (text.startsWith('\x89PNG\r\n\x1a\n')) return 'image/png';
+  if (head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return 'image/jpeg';
+  if (/^GIF8[79]a/.test(text)) return 'image/gif';
+  if (text.startsWith('RIFF') && text.slice(8, 12) === 'WEBP') return 'image/webp';
+  return null;
+}
+
+/** Where a row's kept picture lives, written whole or not at all: <data root>/assets/images/<id>.<ext>. */
+function writeImageCopy(ctx, id, bytes, extension) {
+  if (typeof id !== 'string' || !UUID_RE.test(id)) throw new TypeError('library id is invalid');
+  const dir = path.join(ctx.dataRoot, 'assets', 'images');
+  fs.mkdirSync(dir, { recursive: true, mode: DIR_MODE });
+  const file = path.join(dir, `${id}.${extension}`);
+  const temporary = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, bytes, { mode: 0o600 });
+  fs.renameSync(temporary, file);
+  return file;
+}
+
+/** An address a copy came from, as the library spells it. A file inside a GitHub repository (…/raw/…) is that file, not the repository. */
+function copiedFrom(ctx, input) {
+  if (typeof input !== 'string' || !/^https?:\/\//i.test(input.trim())) throw new TypeError('Only an address from the web is kept with a copy');
+  const found = resolveAddition(input, { homeDir: ctx.homeDir });
+  return tagged(found, 'git') ? { type: 'website', tags: [], name: found.name, url: new URL(input.trim()).href } : found;
+}
+
+/** The last part of an address's path, decoded: "Retrieval%20Study.pdf" → "Retrieval Study.pdf"; '' when it has none. */
+function lastSegment(url) {
+  try { return decodeURIComponent(new URL(url).pathname.split('/').pop() || ''); } catch { return ''; }
+}
+
+/**
+ * A dropped picture or pdf saved as a copy, a new row of the library's own. `mime` says which: png, jpeg, gif or webp (a
+ * picture, at most 20 MB, its format read from its bytes) or pdf (as addPdfCopy takes one, at most 200 MB, read for
+ * whether it is a paper by `inspectPdf`). `url`, when given, is where it came from: kept on the row, and something the
+ * library already holds by that address throws EXISTS, as addItem does. Named `name`, else after the address's last
+ * part, else "Image" (a pdf with neither: the name its address would get). A row that cannot be written leaves no file.
+ */
+async function addFileCopy(ctx, { bytes, mime, name: given = null, url = null } = {}, { inspectPdf } = {}) {
+  if (!(bytes instanceof Uint8Array) || !bytes.byteLength) throw new TypeError('The file is empty');
+  const said = mimeOf(mime);
+  const pdf = PDF_MIMES.has(said);
+  if (!pdf && !IMAGE_MIMES[said]) throw new TypeError('Only png, jpeg, gif and webp images and pdfs can be added this way');
+  let image = null;
+  if (pdf) {
+    if (bytes.byteLength > MAX_PDF_BYTES) throw new Error('The pdf is larger than 200 MB');
+    if (!isPdfBytes(bytes)) throw new TypeError('That is not a pdf');
+  } else {
+    if (bytes.byteLength > MAX_IMAGE_BYTES) throw new Error('The image is larger than 20 MB');
+    image = imageMimeOf(bytes);
+    if (!image) throw new TypeError('That is not a png, jpeg, gif or webp image');
+  }
+  // A pdf takes the address as the library spells it, with what it says (an arXiv pdf is the paper its abstract names);
+  // a picture keeps the address it was given.
+  const from = url == null ? null : copiedFrom(ctx, url);
+  const found = from && !pdf ? { type: 'image', tags: [], url: new URL(url.trim()).href } : from;
+  if (found) {
+    const same = sameAs(await ctx.libraryDb.list(), found);
+    if (same) throw alreadyThere(same);
+  }
+  const id = randomUUID();
+  const file = pdf ? writePdfCopy(ctx, id, bytes) : writeImageCopy(ctx, id, bytes, IMAGE_MIMES[image]);
+  const bare = (value) => (pdf ? value.replace(/\.pdf$/i, '') : value).replace(/\s+/g, ' ').trim().slice(0, 200);
+  const named = (typeof given === 'string' ? bare(given) : '') || (found ? bare(lastSegment(found.url)) : '') || (pdf ? (found && found.name) || 'Untitled pdf' : 'Image');
+  const tags = found ? found.tags : [];
+  let row;
+  try {
+    row = await ctx.libraryDb.insert({ id, name: named, type: pdf ? 'pdf' : 'image', tags, path: file, url: found ? found.url : null, folder_path: null, project_id: null, github_id: null, categorized: pdf ? null : CATEGORY_RULES });
+  } catch (error) {
+    fs.rmSync(file, { force: true });
+    throw error;
+  }
+  if (pdf && found) {
+    // ink made on it while it was only an address becomes the row's, as addPdfCopy does
+    const before = pageAnnotationFile(ctx, inkAddress(found));
+    const own = annotationFile(ctx, id);
+    if (fs.existsSync(before) && !fs.existsSync(own)) { fs.mkdirSync(path.dirname(own), { recursive: true, mode: DIR_MODE }); fs.copyFileSync(before, own); }
+  }
+  if (pdf && inspectPdf) {
+    try { row = await ctx.libraryDb.setCategory(id, { type: 'pdf', tags: [...new Set([...tags, ...(await inspectPdf(file))])] }, CATEGORY_RULES); } catch { /* not readable now: recategorize tries again */ }
+  }
+  return row;
+}
+
+/** A body read whole, or a refusal past `max` bytes. */
+async function readCapped(response, max, tooLarge) {
+  if (!response.body) return new Uint8Array(0);
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) { await reader.cancel().catch(() => {}); throw Object.assign(new Error(tooLarge), { code: 'TOO_LARGE' }); }
+    chunks.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength));
+  }
+  const all = Buffer.concat(chunks, total);
+  return new Uint8Array(all.buffer, all.byteOffset, all.byteLength);
+}
+
+/**
+ * What a link answers, when it is a picture or a pdf: { bytes, mime }. Null for anything else, and for an address that
+ * cannot be read now (an error, no answer within `timeoutMs`): that is for addItem to make a row of. Only a picture or a
+ * pdf larger than the library keeps throws. An answer that does not say what it is (application/octet-stream, or no type)
+ * is told by its first bytes.
+ */
+async function download(url, { fetch: get, timeoutMs }) {
+  let response;
+  try {
+    response = await get(url, { redirect: 'follow', headers: { accept: DOWNLOAD_ACCEPT }, signal: AbortSignal.timeout(timeoutMs) });
+  } catch { return null; }
+  const drop = () => { if (response.body) response.body.cancel().catch(() => {}); return null; };
+  if (!response.ok || !/^https?:/i.test(response.url || url)) return drop();
+  const type = mimeOf(response.headers.get('content-type'));
+  const image = !!IMAGE_MIMES[type], pdf = PDF_MIMES.has(type), unsure = !type || /^(?:application|binary)\/octet-stream$/.test(type);
+  if (!image && !pdf && !unsure) return drop();
+  const max = image ? MAX_IMAGE_BYTES : MAX_PDF_BYTES;
+  const tooLarge = image ? 'The image is larger than 20 MB' : 'The file is larger than 200 MB';
+  if (Number(response.headers.get('content-length')) > max) { drop(); throw new Error(tooLarge); }
+  let bytes;
+  try { bytes = await readCapped(response, max, tooLarge); } catch (error) { if (error.code === 'TOO_LARGE') throw new Error(tooLarge); return null; }
+  if (image || pdf) return { bytes, mime: type };
+  if (isPdfBytes(bytes)) return { bytes, mime: 'application/pdf' };
+  const sniffed = imageMimeOf(bytes);
+  return sniffed ? { bytes, mime: sniffed } : null;
+}
+
+/**
+ * A link dropped onto the library or a workspace: read here (http(s) only, within `timeoutMs`, at most 20 MB for a
+ * picture and 200 MB for a pdf, told by its content type). A picture or a pdf is kept as a copy with the link
+ * (addFileCopy); anything else, an ordinary page among them, is added as + Add adds it (addItem, with `describe`,
+ * `identifyRepo` and `inspectPdf`). `fetch` is the app's: the Stage's session, so a page behind a sign-in answers too.
+ */
+async function addFromUrl(ctx, input, { fetch: get = globalThis.fetch, timeoutMs = DOWNLOAD_TIMEOUT_MS, describe, identifyRepo, inspectPdf } = {}) {
+  if (typeof input !== 'string' || input.length > 8192) throw new TypeError('Drop a link from the web');
+  let address;
+  try { address = new URL(input.trim()); } catch { throw new TypeError('That link is not a valid address'); }
+  if (address.protocol !== 'http:' && address.protocol !== 'https:') throw new TypeError('Only http(s) links can be added');
+  const got = await download(address.href, { fetch: get, timeoutMs });
+  if (!got) return addItem(ctx, address.href, { describe, identifyRepo, inspectPdf });
+  return addFileCopy(ctx, { bytes: got.bytes, mime: got.mime, url: address.href }, { inspectPdf });
+}
+
 /* ------------------------------------------------------------ re-categorizing */
 
 const within = (promise, ms) => new Promise((resolve, reject) => {
@@ -643,4 +810,4 @@ async function previewItem(ctx, id, { listRemoteFiles } = {}) {
   return out;
 }
 
-module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, writePageAnnotations, projectsForLibraryItem, libraryForProject, bodiesForProject, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem };
+module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, writePageAnnotations, projectsForLibraryItem, libraryForProject, bodiesForProject, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem };

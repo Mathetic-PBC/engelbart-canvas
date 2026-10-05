@@ -7,7 +7,9 @@
 //     answer. The card is Claude Design's "Answer Card" (2026-09-21, design/goal-canvas/ANSWER-CARD.md): an answer is kept
 //     as it arrives and its text can be edited; its foot holds Copy, Regenerate, which model said it, Collapse and Delete
 //     as icons; a field at the bottom of the card asks a follow-up, which joins the same card.
-//   * image paste/drop is not supported (spec §2 #19); `![alt](http…)` lines still render.
+//   * a picture pasted, or dropped into the document's text (MATH-19, 2026-10-05: where it was let go), is saved by the
+//     parent and shown on a line of its own (pasteImages); anything else dropped in (a pdf, a link, a picture of another
+//     format) goes to props.onDropItems, which makes it a library row of the workspace. `![alt](http…)` lines still render.
 //   * clicking into a rendered (non-active) line maps the display offset through rawOffset(), so the caret
 //     lands on the clicked character even inside bold/mention markup.
 //   * fenced code blocks (2026-09-22): the lines between two fences are code, read with parseLines() (a `# x` in a block
@@ -47,6 +49,7 @@ import WorkspacePeek from './WorkspacePeek.jsx';
 import { diffRows, diffTotals, nextAttachment } from '../model/build-diff.js';
 import { guideTitle, guideRepo, repoOf } from '../model/guide.js';
 import { guideSections, splitTarget } from '../model/stage.js';
+import { carriesDrop, isPastable, readDrop } from '../model/drop.js';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
@@ -244,8 +247,9 @@ export default class DocEditor extends React.Component {
       mouseover: (e) => { if (inEd(e)) this.editorOver(e); },
       mouseout: (e) => { if (inEd(e)) this.editorOut(e); },
       selectionchange: () => this.onSel(),
+      // Nothing dropped in the editor is the browser's to place. A drop into one of its fields stays refused (2026-10-05).
       dragover: (e) => { if (inEd(e)) e.preventDefault(); },
-      drop: (e) => { if (inEd(e)) e.preventDefault(); },
+      drop: (e) => { if (!inEd(e)) return; e.preventDefault(); if (!inFollow(e)) this.editorDrop(e); },
       // Switching to another app blurs the page too; that is not leaving the line, and redrawing it would drop a selection.
       // Leaving it otherwise puts back a question being edited (2026-10-03).
       focusout: (e) => { if (inEd(e) && document.hasFocus() && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-mention-menu]'))) { this.cancelEdit(); this.setState({ activeLine: null, mention: null }); } },
@@ -1567,6 +1571,30 @@ export default class DocEditor extends React.Component {
       }
       this.wantFocus = true;
     }
+  }
+  // A drop on the document (MATH-19), read inside its event: the pictures pasteImages takes go in where they were let go,
+  // and everything else (and every picture, in a document that is read only) to props.onDropItems.
+  editorDrop(e) {
+    if (!carriesDrop(e)) return;
+    const files = [...((e.dataTransfer && e.dataTransfer.files) || [])];
+    const items = readDrop(e.dataTransfer, this.props.pathForFile);
+    const pictures = !this.props.readOnly && this.props.onPasteImage ? items.filter(isPastable) : [];
+    const rest = items.filter((item) => !pictures.includes(item));
+    // A path's File is the one the drop carried: readDrop gives one item for each of its files, in their order.
+    const fileOf = (item) => (item.kind === 'bytes' ? item.file : files[items.indexOf(item)]);
+    if (pictures.length) void this.pasteImages(pictures.map(fileOf).filter(Boolean), this.dropPoint(e));
+    if (rest.length && this.props.onDropItems) Promise.resolve(this.props.onDropItems(rest)).catch((error) => { if (this.props.onError) this.props.onError(error); });
+  }
+  // Where a drop was let go, as a place in the source: the point under the pointer, else the caret, else the document's end.
+  dropPoint(e) {
+    let at = null;
+    try {
+      const point = typeof document.caretPositionFromPoint === 'function' ? document.caretPositionFromPoint(e.clientX, e.clientY) : null;
+      if (point && point.offsetNode) at = this.caretAt(point.offsetNode, point.offset);
+    } catch { at = null; }
+    if (!at) { const c = this.caretInfo(); if (c) at = { line: c.anchor.line, offset: Math.min(c.anchor.offset, c.focus.offset) }; }
+    if (!at) { const ls = this.lines(), last = Math.max(0, ls.length - 1), line = ls[last] ?? ''; at = { line: last, offset: lineText(parseLine(line), line).length }; }
+    return at;
   }
   editorPaste = (e) => {
     const c = this.caretInfo(); if (!c) return;

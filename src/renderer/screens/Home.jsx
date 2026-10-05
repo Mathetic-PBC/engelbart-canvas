@@ -6,6 +6,7 @@ import { KIND, kindOf, SEARCH } from '../ui/Icons.jsx';
 import DocPreview from '../ui/DocPreview.jsx';
 import { hasTag, isNote, kindKey, kindRank, KIND_ORDER } from '../model/kind.js';
 import { AddToLibrary, TRASH_MARK } from '../workspace/Rail.jsx';
+import { addDropped, carriesDrop, readDrop } from '../model/drop.js';
 
 // All projects (Claude Design "Projects.dc.html", 2026-09-21): the library as a rail on the left
 // — one list sorted by kind, a search field, Add context — and the projects beside it as cards that
@@ -138,7 +139,8 @@ export default function Home({ projects, trashed = [], library, onCreateScreen, 
   const list = React.useRef(null);
 
   const rows = React.useMemo(() => {
-    return library.filter((row) => row.type !== 'image').sort((a, b) => kindRank(a) - kindRank(b) || String(b.last_edited || '').localeCompare(String(a.last_edited || '')));
+    // A picture pasted into a document is that project's attachment, not shown here; one added to the library is (MATH-19).
+    return library.filter((row) => !(row.type === 'image' && row.project_id)).sort((a, b) => kindRank(a) - kindRank(b) || String(b.last_edited || '').localeCompare(String(a.last_edited || '')));
   }, [library]);
   const shown = React.useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -200,11 +202,18 @@ export default function Home({ projects, trashed = [], library, onCreateScreen, 
   };
   const inLibraryOnly = React.useCallback(() => false, []);
 
-  async function dropAll(paths) {
+  // A drop (MATH-19): files from Finder, a picture or a link from a browser (model/drop.js), each its own row, in order.
+  async function dropAll(items) {
     if (addBusy) return;
     setAddBusy(true);
     setAddError('');
-    const problems = await addEach(paths);
+    const { rows: added, problems } = await addDropped(items, { api, errorMessage });
+    const last = added[added.length - 1];
+    if (last) {
+      setQuery('');
+      setJustAdded(last.id);
+      await onLibraryChanged();
+    }
     setAddBusy(false);
     setAddError(problems.join(' · '));
   }
@@ -217,13 +226,12 @@ export default function Home({ projects, trashed = [], library, onCreateScreen, 
     return () => clearTimeout(done);
   }, [justAdded, rows]);
 
-  const carriesFiles = (event) => [...(event.dataTransfer ? event.dataTransfer.types : [])].includes('Files');
   const onDrop = (event) => {
-    if (!carriesFiles(event)) return;
+    if (!carriesDrop(event)) return;
     event.preventDefault();
     setDropping(false);
-    const paths = [...event.dataTransfer.files].map((file) => api.pathForFile(file)).filter(Boolean);
-    if (paths.length) void dropAll(paths);
+    const items = readDrop(event.dataTransfer, api.pathForFile); // now: the drop's data is gone once the event is over
+    if (items.length) void dropAll(items);
   };
 
   async function openRow(row) {
@@ -253,7 +261,7 @@ export default function Home({ projects, trashed = [], library, onCreateScreen, 
       <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
         <div
           data-library-rail="1"
-          onDragOver={(event) => { if (carriesFiles(event)) { event.preventDefault(); setDropping(true); } }}
+          onDragOver={(event) => { if (carriesDrop(event)) { event.preventDefault(); setDropping(true); } }}
           onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setDropping(false); }}
           onDrop={onDrop}
           style={{ flex: 'none', width: 340, minHeight: 0, display: 'flex', flexDirection: 'column', background: '#fafafa', borderRight: '1px solid #eaeaea', boxShadow: dropping ? 'inset 0 0 0 2px #c9c9c9' : 'none', transition: 'box-shadow 120ms' }}

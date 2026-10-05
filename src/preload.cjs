@@ -165,6 +165,9 @@ const engelbartAPI = Object.freeze({
   libraryBodies: invoke('library-bodies'),
   addLibraryItem: invoke('add-library-item'),
   addLibraryPdf: invoke('add-library-pdf'),
+  // Dragged in (MATH-19): bytes without a path ({ mime, name, url }), and a link, kept as a copy when it is a picture or a pdf.
+  addLibraryFile: invoke('add-library-file'),
+  addLibraryUrl: invoke('add-library-url'),
   lookupLibraryItem: invoke('lookup-library-item'),
   pickLibraryPaths: invoke('pick-library-paths'),
   linkToWorkspace: invoke('link-to-workspace'),

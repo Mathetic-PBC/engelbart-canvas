@@ -809,6 +809,8 @@ if (!hasSingleInstanceLock) {
       rememberModelChoice,
       tools,
       pdfAdded,
+      // A link dropped onto the library or a workspace is read with the Stage's cookies, as a saved-as-link pdf is (fetchPdf).
+      fetchUrl: (url, init) => electronSession.fromPartition(BROWSER_PARTITION).fetch(url, init),
       notify: sendToRenderer,
       // "Choose from disk…" in the sidebar's + menu: files and folders together, several at once (macOS allows both in one panel).
       // Onboarding's Papers step asks for pdfs only (`kind` 'pdf').

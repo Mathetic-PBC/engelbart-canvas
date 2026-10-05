@@ -137,8 +137,9 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
 // Several windows (2026-10-03, src/main/windows.cjs): `windowHandler(fn)` is a trusted handler that calls fn(win, ...args)
 // with the calling window, `reply(win, channel, payload)` answers that window alone, and `announce(channel, payload,
 // { except })` tells every window but the one that saved. Without them (one window, the tests) win is null, a reply goes
-// out on `notify`, and nothing is announced.
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {} }) {
+// out on `notify`, and nothing is announced. `fetchUrl` is how a dropped link is read (add-library-url; the app passes
+// the Stage's session, so a picture or a pdf behind a sign-in comes too).
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
   const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
@@ -523,19 +524,39 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // A GitHub repository's sandbox starts once the row is saved; a failure to start it leaves the row saved and says why.
   // A page row that may be a pdf (an arXiv paper, a .pdf address, any other page that might answer with one) is checked
   // now, in the background, rather than on the next launch: one that is becomes a saved pdf (store/web-pdfs.cjs).
+  const added = async (ctx, row, value) => {
+    if (row.type === 'pdf') pdfAdded(); // its text is read for search now (context/sweeper.cjs)
+    if (store.recheck && pdfCandidate(row)) store.recheck(ctx);
+    // Adding a local clone or a non-GitHub item does not start remote work.
+    if (sandbox && Array.isArray(row.tags) && row.tags.includes('git') && /^(?:https?:\/\/(?:www\.)?github\.com\/|git@github\.com:)/i.test(value.trim())) {
+      try { await sandbox.start(ctx, row.id, { waitForClaude: true }); } catch (error) { return { ...row, sandbox_error: error.message }; }
+    }
+    return row;
+  };
   saving('add-library-item', (input, options) => {
     const value = str(input, 'link or path', 4096);
     const name = optStr(options && typeof options === 'object' ? options.name : null, 'name', 200);
     return queued(async () => {
       const ctx = await store.context();
-      const row = await library.addItem(ctx, value, { describe, identifyRepo, inspectPdf, name });
-      if (row.type === 'pdf') pdfAdded(); // its text is read for search now (context/sweeper.cjs)
-      if (store.recheck && pdfCandidate(row)) store.recheck(ctx);
-      // Adding a local clone or a non-GitHub item does not start remote work.
-      if (sandbox && /^(?:https?:\/\/(?:www\.)?github\.com\/|git@github\.com:)/i.test(value.trim())) {
-        try { await sandbox.start(ctx, row.id, { waitForClaude: true }); } catch (error) { return { ...row, sandbox_error: error.message }; }
-      }
-      return row;
+      return added(ctx, await library.addItem(ctx, value, { describe, identifyRepo, inspectPdf, name }), value);
+    });
+  }, { library: true });
+  // Dragged onto the library or a workspace (MATH-19, 2026-10-05). `add-library-file`: bytes that came without a path (a
+  // picture or a pdf from a browser), kept as a copy (library.addFileCopy; `url`, where it came from, when a browser said).
+  // `add-library-url`: a link, read here: a picture or a pdf is kept as a copy, anything else is added as add-library-item
+  // adds it (library.addFromUrl), a GitHub repository's sandbox starting with it.
+  saving('add-library-file', withCtx(async (ctx, bytes, options) => {
+    if (!(bytes instanceof Uint8Array)) throw new TypeError('file bytes are missing');
+    const value = options && typeof options === 'object' ? options : {};
+    const row = await library.addFileCopy(ctx, { bytes, mime: str(value.mime, 'mime', 128), name: optStr(value.name, 'name', MAX_NAME), url: optStr(value.url, 'address', 8192) }, { inspectPdf });
+    if (row.type === 'pdf') pdfAdded();
+    return row;
+  }), { library: true });
+  saving('add-library-url', (input) => {
+    const value = str(input, 'link', 8192);
+    return queued(async () => {
+      const ctx = await store.context();
+      return added(ctx, await library.addFromUrl(ctx, value, { fetch: fetchUrl, describe, identifyRepo, inspectPdf }), value);
     });
   }, { library: true });
   // E2B previews of saved GitHub repositories (src/main/sandbox; docs/sandbox-runs.md). Each renderer call names a library

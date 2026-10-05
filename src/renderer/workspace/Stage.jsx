@@ -571,7 +571,8 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
       }).catch((error) => update(id, (t) => (t.pdf && t.pdf.seq === seq ? { ...t, pdf: { ...t.pdf, loading: false, error: errorMessage(error) } } : t)));
       return;
     }
-    if (row.url && (row.type !== 'html' || !row.path)) { update(id, (t) => ({ ...t, url: row.url, file: null, pdf: null })); load(id, row.url); return; }
+    // (a picture kept with the address it was dragged from shows its copy, as a saved pdf does: MATH-19)
+    if (row.url && !(row.path && (row.type === 'html' || row.type === 'image'))) { update(id, (t) => ({ ...t, url: row.url, file: null, pdf: null })); load(id, row.url); return; }
     if (row.path) readPath(id, row.path, row.id);
     else if (row.folder_path) readPath(id, row.folder_path, row.id);
   };
