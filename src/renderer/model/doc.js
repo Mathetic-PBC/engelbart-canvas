@@ -4,9 +4,10 @@
 
 // A checkbox line: `- [ ] text` (2026-09-20), typed as `- []` or `- [ ]`. `@Task` is gone (2026-09-29): stickies
 // took its place, and a checkbox is a checklist, nothing more. A bare `- text` is a bullet: lists are their own kind of
-// line, nested two spaces at a time.
+// line, nested two spaces at a time. `1. text` and `1) text` (2026-10-05) are the same kind of row, numbered: the number
+// is kept as typed and Enter writes the next one.
 export const TODO_RE = /^( *)- \[([ xX]?)\](?: (.*))?$/;
-export const LIST_RE = /^( *)[-*] (.*)$/;
+export const LIST_RE = /^( *)(?:[-*]|(\d{1,9})([.)])) (.*)$/;
 export const HEAD_RE = /^(#{1,3}) (.*)$/;
 export const IMG_RE = /^!\[([^\]]*)\]\((img:[\w-]+|https?:[^)\s]+|data:image[^)\s]+)\)$/;
 // `@Bart` is what the @ menu writes (2026-09-22); `@bart` is what is typed. `@brainstorm` (2026-09-30) is the same kind of
@@ -83,7 +84,7 @@ export const parseLine = (l) => {
   if ((m = l.match(QUOTE_RE))) return { type: 'quote', text: m[1] };
   if ((m = l.match(IMG_RE))) return { type: 'img', text: m[1], src: m[2] };
   if ((m = l.match(TODO_RE))) return { type: 'todo', depth: depthOf(m[1]), done: !!m[2] && m[2] !== ' ', text: m[3] || '' };
-  if ((m = l.match(LIST_RE))) return { type: 'list', depth: depthOf(m[1]), text: m[2] };
+  if ((m = l.match(LIST_RE))) return m[2] ? { type: 'list', depth: depthOf(m[1]), text: m[4], num: Number(m[2]), delim: m[3] } : { type: 'list', depth: depthOf(m[1]), text: m[4] };
   if ((m = l.match(HEAD_RE))) return { type: 'h', level: m[1].length, text: m[2] };
   return { type: 'p', text: l };
 };
@@ -171,7 +172,10 @@ export function highlight(text, lang) {
 export const isAnswer = (type) => type === 'quote' || type === 'reply' || type === 'pending';
 
 export const todoLine = (depth, done, text) => `${'  '.repeat(depth)}- [${done ? 'x' : ' '}] ${text}`;
-export const listLine = (depth, text) => `${'  '.repeat(depth)}- ${text}`;
+/** A bullet, or with `num` (and `delim`, '.' or ')') a numbered row. */
+export const listLine = (depth, text, num, delim = '.') => `${'  '.repeat(depth)}${num != null ? `${num}${delim}` : '-'} ${text}`;
+/** What a list row draws in front of its text: `•`, or its number as typed (`1.`, `2)`). */
+export const listMark = (p) => (p.num != null ? `${p.num}${p.delim || '.'}` : '\u2022');
 // No trimming: a space typed at the end of an answer line has to survive the round trip, or no second word can follow.
 export const replyLine = (text, folded) => `bart${folded ? '+' : ''}> ${text}`;
 
@@ -182,8 +186,8 @@ export const isDrawn = (type) => isMarked(type) || type === 'reply';
 /** The text the caret moves through on a line: a drawn line's own text, any other line's whole source. */
 export const lineText = (p, line) => (isDrawn(p.type) ? p.text : line);
 /** That line again with different text, keeping its kind. */
-export const sameLine = (p, text) => (p.type === 'todo' ? todoLine(p.depth, p.done, text) : p.type === 'list' ? listLine(p.depth, text) : p.type === 'reply' ? replyLine(text, p.folded) : text);
-/** How a line the person just typed is stored: `- []` and `* x` become the line they make. */
+export const sameLine = (p, text) => (p.type === 'todo' ? todoLine(p.depth, p.done, text) : p.type === 'list' ? listLine(p.depth, text, p.num, p.delim) : p.type === 'reply' ? replyLine(text, p.folded) : text);
+/** How a line the person just typed is stored: `- []` and `* x` become the line they make (`1) x` stays as typed). */
 export const canonicalLine = (l) => { const p = parseLine(l); return isMarked(p.type) ? sameLine(p, p.text) : l; };
 
 /**
@@ -196,6 +200,8 @@ export function retypedRow(p, txt) {
   if (task) return { line: todoLine(p.depth, (task[1] || ' ') !== ' ', txt.slice(task[0].length)), ate: task[0].length };
   const bullet = txt.match(/^[-*] /);
   if (bullet) return { line: listLine(p.depth, txt.slice(bullet[0].length)), ate: bullet[0].length };
+  const numbered = txt.match(/^(\d{1,9})([.)]) /);
+  if (numbered) return { line: listLine(p.depth, txt.slice(numbered[0].length), Number(numbered[1]), numbered[2]), ate: numbered[0].length };
   return null;
 }
 
@@ -245,13 +251,14 @@ export function rawOffset(p, fOff, line) {
 
 /**
  * A display offset in a rendered answer line → the offset in its text. An answer line holds markdown of its own: a
- * heading shows without its `## `, a bullet shows a `•` (one character of the display) where its `- ` stands.
+ * heading shows without its `## `, a bullet shows a `•` (one character of the display) where its `- ` stands, a
+ * numbered row its number (`1.`).
  */
 export function replyRawOffset(p, fOff) {
   const q = parseLine(p.text);
   if (q.type !== 'h' && !isMarked(q.type)) return rawOffset({ type: 'p', text: p.text }, fOff, p.text);
   const lead = p.text.length - q.text.length;
-  return lead + rawOffset({ type: 'p', text: q.text }, Math.max(0, fOff - (q.type === 'h' ? 0 : 1)), q.text);
+  return lead + rawOffset({ type: 'p', text: q.text }, Math.max(0, fOff - (q.type === 'h' ? 0 : q.type === 'list' ? listMark(q).length : 1)), q.text);
 }
 
 /**
@@ -430,7 +437,7 @@ export function selectionHtml(markdown) {
     if (p.type === 'code') return `<code>${esc(line).replace(/^ +/, (s) => '&nbsp;'.repeat(s.length))}</code>`;
     if (p.type === 'h') return `<strong>${plainHtml(p.text)}</strong>`;
     if (p.type === 'todo') return `${pad(p.depth)}${p.done ? '☑' : '☐'} ${plainHtml(p.text)}`;
-    if (p.type === 'list') return `${pad(p.depth)}• ${plainHtml(p.text)}`;
+    if (p.type === 'list') return `${pad(p.depth)}${listMark(p)} ${plainHtml(p.text)}`;
     if (p.type === 'img') return /^https?:/.test(p.src) ? `<a href="${esc(p.src)}">${esc(p.text || p.src)}</a>` : null;
     return plainHtml(line);
   }).filter((html) => html != null).join('<br>');

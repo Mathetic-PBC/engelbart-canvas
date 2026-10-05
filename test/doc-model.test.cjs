@@ -40,6 +40,25 @@ test('bullets are their own kind of line, nested by two spaces', async () => {
   assert.deepEqual(parseLine(listLine(3, 'round trip')), { type: 'list', depth: 3, text: 'round trip' });
 });
 
+test('numbered rows, 1. and 1), are lists that keep their number and mark (MATH-13, 2026-10-05)', async () => {
+  const { parseLine, listLine, listMark, sameLine, canonicalLine, retypedRow, selectionHtml, replyRawOffset } = await load();
+  assert.deepEqual(parseLine('1. one'), { type: 'list', depth: 0, text: 'one', num: 1, delim: '.' });
+  assert.deepEqual(parseLine('  12) twelve'), { type: 'list', depth: 1, text: 'twelve', num: 12, delim: ')' });
+  assert.deepEqual(parseLine('3. '), { type: 'list', depth: 0, text: '', num: 3, delim: '.' }, 'typed "3. " starts the row');
+  assert.deepEqual(parseLine('1.no space'), { type: 'p', text: '1.no space' });
+  assert.deepEqual(parseLine('1.5 litres'), { type: 'p', text: '1.5 litres' });
+  assert.equal(listLine(1, 'x', 4, ')'), '  4) x');
+  assert.equal(listMark(parseLine('7) x')), '7)');
+  assert.equal(listMark(parseLine('- x')), '\u2022');
+  const p = parseLine('2) b');
+  assert.equal(sameLine(p, 'changed'), '2) changed', 'its number and mark survive an edit');
+  assert.equal(sameLine({ ...p, num: p.num + 1 }, ''), '3) ', 'Enter writes the next number');
+  assert.equal(canonicalLine('1) x'), '1) x');
+  assert.deepEqual(retypedRow(parseLine('- '), '1. first'), { line: '1. first', ate: 3 }, 'a number typed into an empty bullet numbers it');
+  assert.equal(selectionHtml('1. a\n2) b'), '1. a<br>2) b');
+  assert.equal(replyRawOffset({ type: 'reply', text: '10. abc' }, 4), 5, 'an answer shows "10." where its "10. " stands');
+});
+
 test('@Task is plain text since it went (2026-09-29): a checkbox is typed as - [ ]', async () => {
   const { parseLine, canonicalLine } = await load();
   assert.deepEqual(parseLine('@Task write the paper'), { type: 'p', text: '@Task write the paper' });

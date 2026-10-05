@@ -1,5 +1,5 @@
 import React from 'react';
-import { parseLines, inlineHtml, agentOf } from '../model/doc.js';
+import { parseLines, inlineHtml, agentOf, listMark } from '../model/doc.js';
 
 // What a hidden line is: nothing to read in a preview.
 const hidden = (p) => p.type === 'pending' || p.type === 'img' || p.type === 'fence' || p.code === 'open' || p.code === 'close' || (p.type === 'p' && !p.text.trim());
@@ -15,7 +15,7 @@ function tailStart(lines, parsed, n) {
   return 0;
 }
 
-/** A document the way the workspace shows it, read-only: bold, italic, code, links and mentions; tasks and bullets as dashes. */
+/** A document the way the workspace shows it, read-only: bold, italic, code, links and mentions; tasks and bullets as dashes, numbered rows by their numbers. */
 export default function DocPreview({ text, maxLines, tail, size = 10.5 }) {
   const lines = String(text || '').replace(/^\s*\n/, '').split('\n');
   const parsed = parseLines(lines);
@@ -36,7 +36,7 @@ export default function DocPreview({ text, maxLines, tail, size = 10.5 }) {
           const done = p.type === 'todo' && p.done;
           return (
             <div key={index} style={{ display: 'flex', gap: '0.45em', paddingLeft: `${0.6 + p.depth * 0.9}em`, color: done ? '#8f8f8f' : undefined }}>
-              <span style={{ flex: 'none' }}>{done ? '✓' : '–'}</span>
+              <span style={{ flex: 'none' }}>{done ? '✓' : p.type === 'list' && p.num != null ? listMark(p) : '–'}</span>
               <span style={{ minWidth: 0, textDecoration: done ? 'line-through' : undefined }} dangerouslySetInnerHTML={html} />
             </div>
           );
