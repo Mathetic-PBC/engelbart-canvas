@@ -27,14 +27,21 @@ const file = (name, type, where = null) => { const made = new File(['bytes'], na
 const IN_LINE = { nodeType: 3, line: 1 }; // the text node under the pointer: in line 1
 const OFF_LINES = { nodeType: 1 }; // somewhere in the editor that is not a line's text (a card's margin)
 
-function mounted(lines, { readOnly = false, under = IN_LINE, caret = null } = {}) {
+const rect = (left, top, right, bottom) => ({ left, top, right, bottom, width: right - left, height: bottom - top });
+
+function mounted(lines, { readOnly = false, under = IN_LINE, caret = null, box = null } = {}) {
   const pasted = [], dropped = [];
   const props = { docKey: 'k', text: lines.join('\n'), readOnly, onChange: (next) => { props.text = next; }, onPasteImage: async () => null, onDropItems: async (items) => { dropped.push(items); }, pathForFile: (f) => paths.get(f) || null };
   const editor = new DocEditor(props);
   const root = { closest: (sel) => (sel === '[data-editor]' ? root : null), matches: () => false, focus() {}, blur() {}, contains: () => false, querySelector: () => null };
   editor.props = props;
   editor.edRef = { current: root };
-  editor.scrollRef = { current: { closest: () => null } };
+  if (box) { // the text column (box.editor) and its last line (box.last), as the window lays them out
+    root.getBoundingClientRect = () => box.editor;
+    root.querySelectorAll = () => [{ getBoundingClientRect: () => box.last }];
+  }
+  const page = { closest: () => null, contains: (node) => node === page || !!(node && node.inPage) };
+  editor.scrollRef = { current: page };
   editor.setState = (patch) => Object.assign(editor.state, typeof patch === 'function' ? patch(editor.state) : patch);
   editor.syncEditor = () => {};
   editor.maybeRestoreView = () => {};
@@ -45,10 +52,15 @@ function mounted(lines, { readOnly = false, under = IN_LINE, caret = null } = {}
   editor.pasteImages = async (files, at) => { pasted.push({ files, at }); };
   editor.caretAt = (node, offset) => (node && node.line != null ? { line: node.line, offset } : null);
   editor.caretInfo = () => (caret ? { anchor: caret, focus: caret } : null);
-  // A drop at (x, y) of `files` and `data`, on the document's text or, `field`, on one of its inputs.
-  const drop = ({ files = [], data = {}, field = false, x = 10, y = 4 } = {}) => {
-    const target = { closest: (sel) => (sel === '[data-editor]' ? root : null), matches: () => field };
+  // A drop at (x, y) of `files` and `data`, on the document's text or, `field`, on one of its inputs; `margin`, on the
+  // page around the text, `title`, on a field of the page's own (its header).
+  const drop = ({ files = [], data = {}, field = false, margin = false, title = false, x = 10, y = 4 } = {}) => {
+    const target = margin || title
+      ? { nodeType: 1, inPage: true, closest: (sel) => (title && sel.includes('input') ? target : null), matches: () => false }
+      : { closest: (sel) => (sel === '[data-editor]' ? root : null), matches: () => field };
     const event = { target, clientX: x, clientY: y, dataTransfer: { files, types: [...(files.length ? ['Files'] : []), ...Object.keys(data)], getData: (type) => data[type] || '' }, prevented: false, preventDefault() { this.prevented = true; } };
+    const over = { ...event, preventDefault() { event.dragoverPrevented = true; } };
+    editor.docListeners.dragover(over); // what decides whether macOS takes the drop or sends it flying back
     editor.docListeners.drop(event);
     return event;
   };
@@ -104,4 +116,30 @@ test('a picture the document does not take, a read-only document and a drop into
   const text = field.drop({ data: { 'text/plain': 'words' } });
   assert.equal(text.prevented, true, 'plain text is still not dropped into the document');
   assert.deepEqual([field.pasted.length, field.dropped.length], [0, 0]);
+});
+
+test('the page around the text takes a drop too: beside a line it goes into that line, below the text at the end', () => {
+  const box = { editor: rect(200, 100, 700, 400), last: rect(200, 100, 700, 160) };
+  const seen = [];
+  const m = mounted(['a', 'bc'], { box, caret: { line: 0, offset: 0 } });
+  globalThis.document.caretPositionFromPoint = (x, y) => { seen.push([x, y]); return { offsetNode: IN_LINE, offset: 1 }; };
+  const beside = m.drop({ files: [file('a.jpg', 'image/jpeg', '/Users/h/Desktop/a.jpg')], margin: true, x: 40, y: 130 });
+  assert.equal(beside.dragoverPrevented, true, 'taken, not sent flying back');
+  assert.equal(beside.prevented, true);
+  assert.deepEqual(seen, [[202, 130]], 'the nearest point on that line');
+  assert.deepEqual(m.pasted[0].at, { line: 1, offset: 1 });
+
+  const below = m.drop({ files: [file('b.jpg', 'image/jpeg', '/Users/h/Desktop/b.jpg')], margin: true, x: 400, y: 600 });
+  assert.equal(below.dragoverPrevented, true);
+  assert.deepEqual(m.pasted[1].at, { line: 1, offset: 2 }, "the document's end, not the caret");
+  assert.equal(seen.length, 1);
+
+  const pdf = m.drop({ files: [file('p.pdf', 'application/pdf', '/Users/h/p.pdf')], margin: true, x: 400, y: 600 });
+  assert.equal(pdf.dragoverPrevented, true);
+  assert.deepEqual(m.dropped.at(-1), [{ kind: 'path', path: '/Users/h/p.pdf' }]);
+
+  const header = m.drop({ files: [file('c.jpg', 'image/jpeg')], title: true });
+  assert.equal(header.dragoverPrevented, undefined, "a field of the page's own is left alone");
+  assert.equal(header.prevented, false);
+  assert.equal(m.pasted.length, 2);
 });

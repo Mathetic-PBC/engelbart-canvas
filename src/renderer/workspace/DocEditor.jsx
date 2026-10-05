@@ -225,6 +225,7 @@ export default class DocEditor extends React.Component {
     const inBuild = (e) => !!(e.target && e.target.matches && e.target.matches('[data-build-input]'));
     const inCard = (e) => !!(e.target && e.target.matches && e.target.matches('[data-card-input]'));
     const inDiscover = (e) => !!(e.target && e.target.matches && e.target.matches('[data-discover-input]'));
+    const onPage = (e) => { const page = this.scrollRef.current; return !!(page && e.target && e.target.nodeType === 1 && page.contains(e.target) && !e.target.closest('input, textarea, select, [contenteditable="true"]')); };
     const inAsk = (e) => !!(e.target && e.target.matches && e.target.matches('[data-follow-input]')); // a follow-up's field alone
     this.docListeners = {
       keydown: (e) => { if (!inEd(e)) return; this.held = false; if (inBuild(e)) this.buildKey(e); else if (inCard(e)) this.cardKey(e); else if (inDiscover(e)) this.discoverKey(e); else if (inFollow(e)) this.followKey(e); else this.editorKey(e); },
@@ -255,8 +256,10 @@ export default class DocEditor extends React.Component {
       mouseout: (e) => { if (inEd(e)) this.editorOut(e); },
       selectionchange: () => this.onSel(),
       // Nothing dropped in the editor is the browser's to place. A drop into one of its fields stays refused (2026-10-05).
-      dragover: (e) => { if (inEd(e)) e.preventDefault(); },
-      drop: (e) => { if (!inEd(e)) return; e.preventDefault(); if (!inFollow(e)) this.editorDrop(e); },
+      // The page around the text takes a drop too (2026-10-05: let go in the margin or below the last line, a picture
+      // from Finder flew back): it goes in at the nearest place in the text (dropPoint). The page's own fields are theirs.
+      dragover: (e) => { if (inEd(e) || onPage(e)) e.preventDefault(); },
+      drop: (e) => { if (!inEd(e) && !onPage(e)) return; e.preventDefault(); if (!inFollow(e)) this.editorDrop(e); },
       // Switching to another app blurs the page too; that is not leaving the line, and redrawing it would drop a selection.
       // Leaving it otherwise puts back a question being edited (2026-10-03).
       focusout: (e) => { if (inEd(e) && document.hasFocus() && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-mention-menu]'))) { this.cancelEdit(); this.setState({ activeLine: null, mention: null }); } },
@@ -1619,13 +1622,19 @@ export default class DocEditor extends React.Component {
     if (rest.length && this.props.onDropItems) Promise.resolve(this.props.onDropItems(rest)).catch((error) => { if (this.props.onError) this.props.onError(error); });
   }
   // Where a drop was let go, as a place in the source: the point under the pointer, else the caret, else the document's end.
+  // Let go beside the text, it is the nearest point on that line; below the text, the document's end.
   dropPoint(e) {
-    let at = null;
+    let at = null, below = false;
     try {
-      const point = typeof document.caretPositionFromPoint === 'function' ? document.caretPositionFromPoint(e.clientX, e.clientY) : null;
+      const ed = this.editorEl(), box = ed && ed.getBoundingClientRect ? ed.getBoundingClientRect() : null;
+      const lines = ed && ed.querySelectorAll ? ed.querySelectorAll('[data-line]') : [], lastLine = lines.length ? lines[lines.length - 1].getBoundingClientRect() : null;
+      below = !!(lastLine ? e.clientY >= lastLine.bottom : box && e.clientY >= box.bottom);
+      const x = box && box.width > 4 ? Math.min(Math.max(e.clientX, box.left + 2), box.right - 2) : e.clientX;
+      const y = box && box.height > 4 ? Math.max(e.clientY, box.top + 2) : e.clientY;
+      const point = !below && typeof document.caretPositionFromPoint === 'function' ? document.caretPositionFromPoint(x, y) : null;
       if (point && point.offsetNode) at = this.caretAt(point.offsetNode, point.offset);
     } catch { at = null; }
-    if (!at) { const c = this.caretInfo(); if (c) at = { line: c.anchor.line, offset: Math.min(c.anchor.offset, c.focus.offset) }; }
+    if (!at && !below) { const c = this.caretInfo(); if (c) at = { line: c.anchor.line, offset: Math.min(c.anchor.offset, c.focus.offset) }; }
     if (!at) { const ls = this.lines(), last = Math.max(0, ls.length - 1), line = ls[last] ?? ''; at = { line: last, offset: lineText(parseLine(line), line).length }; }
     return at;
   }
