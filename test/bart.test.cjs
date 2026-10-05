@@ -1202,11 +1202,13 @@ test('@brainstorm\'s context: this workspace\'s library and mentions only, other
   assert.equal((await ask('bart')).documents, (await ask('discover')).documents);
 });
 
-test('ask-bart takes the agent, and a Brainstorm is an agent of its workspace like Bart', async () => {
+test('ask-bart takes the agent, and a Brainstorm or an Orient is an agent of its workspace like Bart', async () => {
   const src = fs.readFileSync(path.join(__dirname, '../src/main/ipc.cjs'), 'utf8');
-  assert.match(src, /\['bart', 'brainstorm', 'discover'\]\.includes\(agent\)/);
+  assert.match(src, /\['bart', 'brainstorm', 'orient', 'discover'\]\.includes\(agent\)/);
   projects.agentStarted(ctx, { id: 'bs-agent', kind: 'brainstorm', projectId: project.id, workspaceId: workspace.id });
   projects.agentFinished(ctx, 'bs-agent');
+  projects.agentStarted(ctx, { id: 'or-agent', kind: 'orient', projectId: project.id, workspaceId: workspace.id });
+  projects.agentFinished(ctx, 'or-agent');
   assert.throws(() => projects.agentStarted(ctx, { id: 'bs-nope', kind: 'chat', projectId: project.id }));
 });
 

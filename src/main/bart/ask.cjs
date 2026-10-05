@@ -42,6 +42,11 @@
 // own home's config.toml), its own sessions kept for two idle hours, and half an hour a step (three quarters, deep). It may
 // ask a card or two first, which are written as @brainstorm's are; its guide is markdown, written as an @bart answer is.
 // Each turn carries <mode>: quick or deep when a line of the exchange said --quick or --deep, else standard.
+//
+// @orient (2026-10-04): @brainstorm's run for another purpose, getting the person to write what they know about a topic
+// or a paper, where that thins out and what draws them. Its own prompt (./orient-system-prompt.cjs), @brainstorm's fixed
+// step, file tools and scoped context, its own Codex home and sessions (two idle hours). Its cards are @brainstorm's
+// kind; which one comes next is told it as <stage>, counted here from the cards asked since the last recap.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -54,8 +59,9 @@ const { NOT_THE_SUBSCRIPTION, prepareCodexHome, lastResultLine } = require('../c
 const { BART_SYSTEM_PROMPT } = require('./system-prompt.cjs');
 const { BRAINSTORM_SYSTEM_PROMPT } = require('./brainstorm-system-prompt.cjs');
 const { DISCOVER_SYSTEM_PROMPT } = require('./discover-system-prompt.cjs');
+const { ORIENT_SYSTEM_PROMPT } = require('./orient-system-prompt.cjs');
 const { readQuestion, readBrainstorm, readDiscover, withChoice } = require('./models.cjs');
-const { OPENING, SKIPPED, cardBody, cardOfAnswer, readCard, readAnswer, readWrap, answersSoFar } = require('./card.cjs');
+const { OPENING, SKIPPED, cardBody, cardOfAnswer, questionOf, readCard, readAnswer, readWrap, answersSoFar } = require('./card.cjs');
 const { buildContext, conversationBlock } = require('./context.cjs');
 const { projectSource, imagePaths } = require('../context/expand-mentions.cjs');
 const { replyLines, answerText } = require('./reply.cjs');
@@ -69,6 +75,7 @@ const DEEP_DISCOVER_TIMEOUT_MS = 45 * 60_000;
 const THREAD_IDLE_MS = 30 * 60_000;
 const BRAINSTORM_IDLE_MS = 2 * 60 * 60_000;
 const DISCOVER_IDLE_MS = 2 * 60 * 60_000;
+const ORIENT_IDLE_MS = 2 * 60 * 60_000;
 const MAX_TURNS = 40;
 const ESCALATE_RE = /^ESCALATE:\s*(.{0,400})$/s;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -77,8 +84,13 @@ const BRAINSTORM_TOOLS = 'Read,Grep,Glob';
 // @discover's paper tools, as Claude Code names an MCP server's tools; the server, run by Engelbart's own executable as Node.
 const PAPER_TOOLS = 'mcp__papers__*';
 const PAPERS_SERVER = path.join(__dirname, 'papers-mcp.cjs');
-const AGENTS = ['bart', 'brainstorm', 'discover'];
-const PROMPTS = { bart: ['bart-system-prompt.md', BART_SYSTEM_PROMPT], brainstorm: ['brainstorm-system-prompt.md', BRAINSTORM_SYSTEM_PROMPT], discover: ['discover-system-prompt.md', DISCOVER_SYSTEM_PROMPT] };
+const AGENTS = ['bart', 'brainstorm', 'orient', 'discover'];
+const PROMPTS = { bart: ['bart-system-prompt.md', BART_SYSTEM_PROMPT], brainstorm: ['brainstorm-system-prompt.md', BRAINSTORM_SYSTEM_PROMPT], orient: ['orient-system-prompt.md', ORIENT_SYSTEM_PROMPT], discover: ['discover-system-prompt.md', DISCOVER_SYSTEM_PROMPT] };
+// The agents on one fixed step whose model is never named, while they run or in their foot (2026-10-02, B-05).
+const QUIET = new Set(['brainstorm', 'orient']);
+// What an @orient line with nothing after it asks, and its cards in the order they are asked (the prompt's <stage>).
+const ORIENT_OPENING = 'No topic given.';
+const ORIENT_STAGES = ['know', 'thin', 'interest'];
 // What an @discover line with nothing after it asks.
 const DISCOVER_OPENING = 'Find what I should read about the problem this workspace is about.';
 // How far each mode traces (the prompt's <mode>), and how many of its sources are essays when essays apply (2026-10-03):
@@ -118,7 +130,7 @@ function levelBlock(steps, at, pinned) {
 
 /**
  * The earlier turns of an exchange as the renderer read them from the document, made safe: strings, bounded, no empty
- * questions. `keepEmpty`: @brainstorm's, whose first line may say nothing and still be a turn.
+ * questions. `keepEmpty`: @brainstorm's, @orient's and @discover's, whose first line may say nothing and still be a turn.
  */
 function cleanTurns(turns, { keepEmpty = false } = {}) {
   return (Array.isArray(turns) ? turns : []).filter((turn) => turn && typeof turn.question === 'string' && (keepEmpty || turn.question.trim()))
@@ -186,16 +198,43 @@ function firstMessage({ context, prior, question, resumed, extra = '' }) {
 }
 
 /**
- * One turn of any agent, read from the line (`text`, what follows "@bart", "@brainstorm" or "@discover") before anything
- * runs → { agent, brainstorm, question, provider, steps, pinned, prior, asked, shown, extra, mode }. `prior` is what the
- * session is kept under; `shown` and `asked` are what the agent is sent: an empty line is the opening, each brainstorm
- * turn is told how many answers it has had, and each discover turn how far to trace.
+ * @orient's cards since the last recap (or a reply that was not a card), oldest turns first in `turns`. Every card counts,
+ * whatever its answer, so a skip moves on; the card that only asks for a subject (id "subject") is not one of the three.
+ */
+function orientCards(turns) {
+  let count = 0;
+  for (let n = turns.length - 1; n >= 0; n -= 1) {
+    const card = cardOfAnswer(turns[n].answer);
+    if (!card) break;
+    if (!(card.card === 'questions' && card.questions.items[0].id === 'subject')) count += 1;
+  }
+  return count;
+}
+
+/**
+ * One turn of any agent, read from the line (`text`, what follows "@bart", "@brainstorm", "@orient" or "@discover")
+ * before anything runs → { agent, brainstorm, question, provider, steps, pinned, prior, asked, shown, extra, mode, stage }.
+ * `prior` is what the session is kept under; `shown` and `asked` are what the agent is sent: an empty line is the opening,
+ * each brainstorm turn is told how many answers it has had, each orient turn which card to ask, and each discover turn
+ * how far to trace.
  */
 function turnPlan({ agent, text, turns, choice }, models) {
-  const brainstorm = agent === 'brainstorm', discover = agent === 'discover';
-  const prior = cleanTurns(turns, { keepEmpty: brainstorm || discover });
+  const brainstorm = agent === 'brainstorm', discover = agent === 'discover', orient = agent === 'orient';
+  const prior = cleanTurns(turns, { keepEmpty: brainstorm || orient || discover });
   // @discover's mode, and the level it runs on, is the one the line names, else the one an earlier turn named (readDiscover).
-  const read = brainstorm ? readBrainstorm(text, models) : discover ? readDiscover(text, models, prior) : readQuestion(choice ? withChoice(text, models, choice) : text, models);
+  // @orient runs on @brainstorm's fixed step, and a flag picks nothing there either.
+  const read = brainstorm || orient ? readBrainstorm(text, models) : discover ? readDiscover(text, models, prior) : readQuestion(choice ? withChoice(text, models, choice) : text, models);
+  if (orient) {
+    // Which card comes next is decided here, never by the model: know, thin and interest in turn, then the recap; Wrap up
+    // gets the recap at once. After a recap the count starts again.
+    const stage = readWrap(read.question).wrap ? 'recap' : ORIENT_STAGES[orientCards(prior)] || 'recap';
+    return {
+      agent, brainstorm, ...read, prior, stage, close: stage === 'recap' ? 'recap' : null,
+      asked: read.question || ORIENT_OPENING,
+      shown: prior.map((turn) => ({ ...turn, question: turn.question || ORIENT_OPENING })),
+      extra: `<stage>${stage}</stage>`,
+    };
+  }
   if (discover) {
     return {
       agent, brainstorm, ...read, prior,
@@ -274,11 +313,11 @@ function writeCodexConfig(home, servers) {
 }
 
 /**
- * The reply as the document keeps it, by agent: @brainstorm's card or recap (./card.cjs cardBody); @discover's card when
- * it asked one, else its guide as it came; @bart's answer as it came.
+ * The reply as the document keeps it, by agent: @brainstorm's and @orient's card or recap (./card.cjs cardBody);
+ * @discover's card when it asked one, else its guide as it came; @bart's answer as it came.
  */
 function replyBody(agent, text) {
-  if (agent === 'brainstorm') return cardBody(text).body;
+  if (agent === 'brainstorm' || agent === 'orient') return cardBody(text).body;
   if (agent === 'discover') {
     const card = /^\s*(\{|```)/.test(String(text)) ? readCard(text) : null;
     if (card && card.card !== 'none') return cardBody(text).body;
@@ -294,9 +333,9 @@ function remember(onPicked, step) {
   try { onPicked({ provider: step.provider, model: step.key, effort: step.effort }); } catch { /* a convenience only */ }
 }
 
-/** What a step beginning shows while the turn runs: @brainstorm's model is fixed and never named (2026-10-02, B-05). */
+/** What a step beginning shows while the turn runs: @brainstorm's and @orient's model is fixed and never named (2026-10-02, B-05). */
 function stepShown(agent, onProgress) {
-  if (agent !== 'brainstorm' || !onProgress) return onProgress;
+  if (!QUIET.has(agent) || !onProgress) return onProgress;
   return ({ name, effort, ...rest }) => onProgress(rest);
 }
 
@@ -306,9 +345,9 @@ function stepShown(agent, onProgress) {
 // effort picked by hand (flags, or Regenerate's choice), so the next question starts there (./choices.cjs).
 // `brainstormThreads` and `brainstormCodexHome`: @brainstorm's sessions, apart from @bart's (two idle hours; its own
 // AGENTS.md, which a Codex home holds one of). `discoverThreads` and `discoverCodexHome` the same for @discover, whose home
-// also holds the config.toml that gives Codex the paper tools. `papersServer`: the MCP server's script, run by `node`
-// (Engelbart's own executable, as Node).
-function createBart({ readModels, environment = process.env, runDirectory = path.join(os.tmpdir(), 'engelbart-bart-runs'), codexHome = path.join(os.tmpdir(), 'engelbart-codex-home-bart'), brainstormCodexHome = `${codexHome}-brainstorm`, discoverCodexHome = `${codexHome}-discover`, codexAuthFile, run = execFile, threads = createThreads(), brainstormThreads = createThreads({ idleMs: BRAINSTORM_IDLE_MS }), discoverThreads = createThreads({ idleMs: DISCOVER_IDLE_MS }), tools = null, onPicked = () => {}, node = process.execPath, papersServer = PAPERS_SERVER } = {}) {
+// also holds the config.toml that gives Codex the paper tools. `orientThreads` and `orientCodexHome` the same for @orient.
+// `papersServer`: the MCP server's script, run by `node` (Engelbart's own executable, as Node).
+function createBart({ readModels, environment = process.env, runDirectory = path.join(os.tmpdir(), 'engelbart-bart-runs'), codexHome = path.join(os.tmpdir(), 'engelbart-codex-home-bart'), brainstormCodexHome = `${codexHome}-brainstorm`, orientCodexHome = `${codexHome}-orient`, discoverCodexHome = `${codexHome}-discover`, codexAuthFile, run = execFile, threads = createThreads(), brainstormThreads = createThreads({ idleMs: BRAINSTORM_IDLE_MS }), orientThreads = createThreads({ idleMs: ORIENT_IDLE_MS }), discoverThreads = createThreads({ idleMs: DISCOVER_IDLE_MS }), tools = null, onPicked = () => {}, node = process.execPath, papersServer = PAPERS_SERVER } = {}) {
   const shell = resolveShell(environment);
   // The CLI by name, or by the full path the tool check found it at when PATH misses it (then through the environment, never quoted).
   const program = (name) => (tools && tools.binaryFor(name) ? `"$ENGELBART_${name.toUpperCase()}_BIN"` : name);
@@ -393,7 +432,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
    * → { lines, meta }: the answer as lines for the document, and what produced it. `text` is what the
    * line says after "@bart"; `choice` ({ model, effort }, from Regenerate's selector) overrules its flags
    * for this run without rewriting the line; `turns` are the earlier turns of the exchange, when there are any.
-   * `agent`: 'bart', 'brainstorm' or 'discover'; the last two may be asked with nothing on the line and reply with cards.
+   * `agent`: 'bart', 'brainstorm', 'orient' or 'discover'; all but @bart may be asked with nothing on the line and reply with cards.
    */
   async function ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart' }, { onProgress } = {}) {
     const models = readModels();
@@ -401,7 +440,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
     const { question, provider, steps, pinned, prior, asked, shown, extra, mode } = turnPlan({ agent, text, turns, choice: bart ? choice : null }, models);
     if (!question && bart) throw new BartError('failed', 'There is no question on the line.');
     if (pinned && bart) remember(onPicked, steps[0]);
-    const store = { bart: threads, brainstorm: brainstormThreads, discover: discoverThreads }[agent];
+    const store = { bart: threads, brainstorm: brainstormThreads, orient: orientThreads, discover: discoverThreads }[agent];
     const held = prior.length ? store.take(threadKey(projectId, ref, prior), provider) : null;
     const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent });
     const sent = await withImagePaths(ctx, projectId, asked);
@@ -417,6 +456,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
         const only = {
           bart: {},
           brainstorm: { allowed: BRAINSTORM_TOOLS, home: brainstormCodexHome, web: false },
+          orient: { allowed: BRAINSTORM_TOOLS, home: orientCodexHome, web: false },
           discover: { home: discoverCodexHome, mcp: true, timeout: mode === 'deep' ? DEEP_DISCOVER_TIMEOUT_MS : DISCOVER_TIMEOUT_MS },
         }[agent];
         cli = (provider === 'anthropic' ? claudeTurns : codexTurns)({ system: loadSystemPrompt(ctx.dataRoot, agent), cwd, dirs: context.dirs, stem, signal: controller.signal, short: pathLabeller(context.dirs), onUpdate: feed.take, resume: session, ...only });
@@ -444,7 +484,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
       const body = replyBody(agent, out.text);
       // Kept under what the document will say once this answer is in it: the next follow-up is found by that.
       if (out.session) store.keep(threadKey(projectId, ref, [...prior, { question: String(text).trim(), answer: answerText(body) }]), { provider, session: out.session, projectId, workspaceId });
-      return { lines: replyLines(body, meta, { model: agent !== 'brainstorm' }), meta };
+      return { lines: replyLines(body, meta, { model: !QUIET.has(agent) }), meta };
     } finally {
       feed.end();
       running.delete(askId);
@@ -516,6 +556,34 @@ function fakeCard(context, plan, models) {
 }
 
 /**
+ * The fake @orient's reply (2026-10-04), as a model would write it: the card turnPlan's stage names, on the subject the
+ * exchange opened with (a mention by its name; "this" when the line said nothing): an open card for what they know, a
+ * free card on the words of that answer for where it thins out, an open card for what draws them, then the recap, a line
+ * for each card in their words ("not said" for one skipped or never asked) and one Look for line, from the last thing
+ * they said, else the subject. It counts the cards since the last recap, so a further @orient starts again.
+ */
+function fakeOrient(context, plan, models) {
+  let from = plan.prior.length;
+  while (from > 0 && cardOfAnswer(plan.prior[from - 1].answer)) from -= 1;
+  const opening = from < plan.prior.length ? plan.prior[from].question : plan.question;
+  const subject = String(opening || '').replace(/@\[([^\]\n]+)\](?:\(ws:[\w-]+\))?/g, '$1').replace(/\s+/g, ' ').trim().slice(0, 80);
+  // What they wrote on each card since the last recap, by the card's id (its stage).
+  const said = {};
+  for (let n = from; n < plan.prior.length; n += 1) {
+    const card = cardOfAnswer(plan.prior[n].answer);
+    const next = n + 1 < plan.prior.length ? plan.prior[n + 1].question : String(plan.text).trim();
+    const answer = readAnswer(readQuestion(next, models).question, card);
+    if (!answer.skipped) said[questionOf(card).id] = [answer.text, answer.note].filter(Boolean).join('; ');
+  }
+  const ask = (id, type, title, eyebrow) => JSON.stringify({ say: '', card: 'questions', questions: { eyebrow, items: [{ id, type, title, placeholder: 'In your own words…' }] }, ready: false });
+  if (plan.stage === 'know') return ask('know', 'open', `Write what you know about ${subject ? `“${subject}”` : 'this'}, as you would explain it to a colleague.`, 'what you know');
+  if (plan.stage === 'thin') return ask('thin', 'free', said.know ? `You wrote “${said.know.slice(0, 60)}”. Say more about it, or what you would want to check.` : 'Which part of this would you say more about, or want to check?', 'where it thins');
+  if (plan.stage === 'interest') return ask('interest', 'open', 'Which part of what you wrote draws you most, and what would you want to do with it or find out?', 'what draws you');
+  const phrase = said.interest || said.thin || said.know || subject || context.workspaceName;
+  return JSON.stringify({ say: [`What you know: ${said.know || 'not said'}`, `Where it thins out: ${said.thin || 'not said'}`, `What draws you: ${said.interest || 'not said'}`, `Look for: ${`how others have studied “${phrase.slice(0, 60)}”`.slice(0, 140)}`].join('\n'), card: 'none', ready: true });
+}
+
+/**
  * The fake @discover's reply, as a model would write it. An @discover line with no problem gets one card first (which
  * part, in broad areas; 2026-09-30, one card, no longer a second of starting points); its answer, its skip or a line
  * that names a problem gets a guide in three-line entries, whose first entry is what the person wrote in their own words
@@ -568,16 +636,16 @@ function fakeDiscover(context, plan) {
   ].join('\n');
 }
 
-/** Scripted runs only (ENGELBART_BART_FAKE=1): no model. A question containing "hard" moves up one step; one containing "code" is answered with a JSON code block too. @brainstorm runs fakeCard, @discover fakeDiscover. */
-function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(), brainstormThreads = createThreads({ idleMs: BRAINSTORM_IDLE_MS }), discoverThreads = createThreads({ idleMs: DISCOVER_IDLE_MS }), onPicked = () => {} }) {
+/** Scripted runs only (ENGELBART_BART_FAKE=1): no model. A question containing "hard" moves up one step; one containing "code" is answered with a JSON code block too. @brainstorm runs fakeCard, @orient fakeOrient, @discover fakeDiscover. */
+function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(), brainstormThreads = createThreads({ idleMs: BRAINSTORM_IDLE_MS }), orientThreads = createThreads({ idleMs: ORIENT_IDLE_MS }), discoverThreads = createThreads({ idleMs: DISCOVER_IDLE_MS }), onPicked = () => {} }) {
   const waits = new Map();
   return {
     async ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart' }, { onProgress } = {}) {
       const models = readModels();
       const plan = turnPlan({ agent, text, turns, choice: agent === 'bart' ? choice : null }, models);
-      const { brainstorm, question, provider, steps, pinned, prior } = plan, discover = agent === 'discover';
+      const { brainstorm, question, provider, steps, pinned, prior } = plan, discover = agent === 'discover', orient = agent === 'orient';
       if (pinned && question && agent === 'bart') remember(onPicked, steps[0]);
-      const store = { bart: threads, brainstorm: brainstormThreads, discover: discoverThreads }[agent];
+      const store = { bart: threads, brainstorm: brainstormThreads, orient: orientThreads, discover: discoverThreads }[agent];
       const held = prior.length ? store.take(threadKey(projectId, ref, prior), provider) : null;
       const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent });
       const message = firstMessage({ context, prior: plan.shown, question: await withImagePaths(ctx, projectId, plan.asked), resumed: !!held, extra: plan.extra });
@@ -586,7 +654,7 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
       // The same kinds of update a real run sends, spread over the delay: two things done, then the answer in pieces.
       const act = async (text) => {
         feed.reset();
-        for (const activity of discover ? ['Reading notes.md', 'Looking up “fake”', 'Reading what cites “fake”'] : ['Reading notes.md', brainstorm ? 'Searching for “fake”' : 'Searching the web for “fake”']) { feed.take({ activity, log: true }); await pause(delayMs / 4); }
+        for (const activity of discover ? ['Reading notes.md', 'Looking up “fake”', 'Reading what cites “fake”'] : ['Reading notes.md', QUIET.has(agent) ? 'Searching for “fake”' : 'Searching the web for “fake”']) { feed.take({ activity, log: true }); await pause(delayMs / 4); }
         feed.take({ textStart: true });
         const pieces = text.match(/[\s\S]{1,24}/g) || [];
         for (const delta of pieces) { feed.take({ delta }); await pause(delayMs / 2 / pieces.length); }
@@ -597,12 +665,12 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
           steps, pinned, onProgress: stepShown(agent, onProgress),
           first: message, session: held ? held.session : null,
           // What it was sent is what it reports: a resumed session gets the question alone, a new one gets everything.
-          turn: async ({ message: sent }) => ({ session: 'fake', text: await act(brainstorm ? fakeCard(context, { ...plan, text }, models) : discover ? fakeDiscover(context, plan) : /hard/.test(question) && /step 1 of/.test(sent) ? 'ESCALATE: the question says it is hard' : `FAKE ANSWER to "${question}".\n\n## Seen\n- **${context.documents.length}** characters of documents\n- \`${steps.length}\` steps${prior.length ? `\n- ${/<conversation>/.test(sent) ? `a new session, given ${prior.length} earlier ${prior.length === 1 ? 'turn' : 'turns'}` : /<engelbart>/.test(sent) ? 'a new session, given no earlier turns' : 'the same session, given the question alone'}` : ''}${/code/.test(question) ? `\n\nThe same as JSON:\n\n\`\`\`json\n{\n  "fake": true,\n  "steps": ${steps.length},\n  "note": "# not a heading"\n}\n\`\`\`` : ''}`) }),
+          turn: async ({ message: sent }) => ({ session: 'fake', text: await act(brainstorm ? fakeCard(context, { ...plan, text }, models) : orient ? fakeOrient(context, { ...plan, text }, models) : discover ? fakeDiscover(context, plan) : /hard/.test(question) && /step 1 of/.test(sent) ? 'ESCALATE: the question says it is hard' : `FAKE ANSWER to "${question}".\n\n## Seen\n- **${context.documents.length}** characters of documents\n- \`${steps.length}\` steps${prior.length ? `\n- ${/<conversation>/.test(sent) ? `a new session, given ${prior.length} earlier ${prior.length === 1 ? 'turn' : 'turns'}` : /<engelbart>/.test(sent) ? 'a new session, given no earlier turns' : 'the same session, given the question alone'}` : ''}${/code/.test(question) ? `\n\nThe same as JSON:\n\n\`\`\`json\n{\n  "fake": true,\n  "steps": ${steps.length},\n  "note": "# not a heading"\n}\n\`\`\`` : ''}`) }),
         });
         const meta = { provider, level: out.level, trail: out.trail, ms: out.ms, pinned };
         const body = replyBody(agent, out.text);
         store.keep(threadKey(projectId, ref, [...prior, { question: String(text).trim(), answer: answerText(body) }]), { provider, session: out.session, projectId, workspaceId });
-        return { lines: replyLines(body, meta, { model: agent !== 'brainstorm' }), meta };
+        return { lines: replyLines(body, meta, { model: !QUIET.has(agent) }), meta };
       } finally { feed.end(); waits.delete(askId); }
     },
     stop(askId) { const cancel = waits.get(askId); if (cancel) cancel(); return !!cancel; },
@@ -610,4 +678,4 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
   };
 }
 
-module.exports = { createBart, createFakeBart, createThreads, threadKey, cleanTurns, turnPlan, climb, levelBlock, loadSystemPrompt, replyBody, writeCodexConfig, BartError, ESCALATE_RE, THREAD_IDLE_MS, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS, DISCOVER_TIMEOUT_MS, DEEP_DISCOVER_TIMEOUT_MS, MODE_LIMITS, AGENTS };
+module.exports = { createBart, createFakeBart, createThreads, threadKey, cleanTurns, turnPlan, climb, levelBlock, loadSystemPrompt, replyBody, writeCodexConfig, BartError, ESCALATE_RE, THREAD_IDLE_MS, BRAINSTORM_IDLE_MS, ORIENT_IDLE_MS, DISCOVER_IDLE_MS, DISCOVER_TIMEOUT_MS, DEEP_DISCOVER_TIMEOUT_MS, MODE_LIMITS, AGENTS, ORIENT_OPENING, ORIENT_STAGES };

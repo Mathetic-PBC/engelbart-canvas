@@ -22,7 +22,7 @@ const { environmentForSessions } = require('./shell-rc.cjs');
 const { createSweeper } = require('./context/sweeper.cjs');
 const { inspectPdf } = require('./context/pdf-kind.cjs');
 const { createCliSummarizer, createFakeSummarizer } = require('./context/summarizer.cjs');
-const { createBart, createFakeBart, createThreads, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS } = require('./bart/ask.cjs');
+const { createBart, createFakeBart, createThreads, BRAINSTORM_IDLE_MS, ORIENT_IDLE_MS, DISCOVER_IDLE_MS } = require('./bart/ask.cjs');
 const { loadModels, preferUsable, startingAt } = require('./bart/models.cjs');
 const { readChoices, rememberChoice } = require('./bart/choices.cjs');
 const { resolveShell } = require('./terminal/launch.cjs');
@@ -593,14 +593,15 @@ if (!hasSingleInstanceLock) {
     const rememberModelChoice = (place, choice) => rememberChoice(store.layout.root, place, choice);
     const bartModels = () => readModels('bart');
     const bartPicked = (choice) => rememberModelChoice('bart', choice);
-    // @brainstorm and @discover (2026-09-30) run through the same object, each with sessions of its own kept for two idle
-    // hours and its own Codex home.
+    // @brainstorm and @discover (2026-09-30), and @orient (2026-10-04), run through the same object, each with sessions of
+    // its own kept for two idle hours and its own Codex home.
     const bartThreads = () => createThreads({ file: path.join(app.getPath('userData'), 'bart-threads.json') });
     const brainstormThreads = () => createThreads({ idleMs: BRAINSTORM_IDLE_MS, file: path.join(app.getPath('userData'), 'brainstorm-threads.json') });
+    const orientThreads = () => createThreads({ idleMs: ORIENT_IDLE_MS, file: path.join(app.getPath('userData'), 'orient-threads.json') });
     const discoverThreads = () => createThreads({ idleMs: DISCOVER_IDLE_MS, file: path.join(app.getPath('userData'), 'discover-threads.json') });
     bart = process.env.ENGELBART_BART_FAKE === '1'
-      ? createFakeBart({ readModels: bartModels, onPicked: bartPicked, threads: bartThreads(), brainstormThreads: brainstormThreads(), discoverThreads: discoverThreads() })
-      : createBart({ readModels: bartModels, onPicked: bartPicked, runDirectory: path.join(app.getPath('userData'), 'bart-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-bart'), brainstormCodexHome: path.join(app.getPath('userData'), 'codex-home-brainstorm'), discoverCodexHome: path.join(app.getPath('userData'), 'codex-home-discover'), threads: bartThreads(), brainstormThreads: brainstormThreads(), discoverThreads: discoverThreads(), tools });
+      ? createFakeBart({ readModels: bartModels, onPicked: bartPicked, threads: bartThreads(), brainstormThreads: brainstormThreads(), orientThreads: orientThreads(), discoverThreads: discoverThreads() })
+      : createBart({ readModels: bartModels, onPicked: bartPicked, runDirectory: path.join(app.getPath('userData'), 'bart-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-bart'), brainstormCodexHome: path.join(app.getPath('userData'), 'codex-home-brainstorm'), orientCodexHome: path.join(app.getPath('userData'), 'codex-home-orient'), discoverCodexHome: path.join(app.getPath('userData'), 'codex-home-discover'), threads: bartThreads(), brainstormThreads: brainstormThreads(), orientThreads: orientThreads(), discoverThreads: discoverThreads(), tools });
     if (process.env.ENGELBART_SUMMARIES !== 'off') {
       sweeper.start();
       powerMonitor.on('resume', () => sweeper.sweepSoon());

@@ -377,7 +377,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     return { chars, files, missing };
   }));
 
-  // @bart and @brainstorm: the answer comes back as draft lines for the document. A run that fails answers too, so
+  // @bart, @brainstorm, @orient and @discover: the answer comes back as draft lines for the document. A run that fails answers too, so
   // the question line never stays locked behind a pending line; only Stop returns nothing to place.
   handleFor('ask-bart', async (win, pid, input) => {
     const ctx = await store.context();
@@ -392,9 +392,10 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       const turns = (Array.isArray(value.turns) ? value.turns : []).slice(-40).map((turn) => ({ question: str(turn && turn.question, 'earlier question', 8000), answer: str(turn && turn.answer, 'earlier answer', 40000) }));
       const choice = value.choice && typeof value.choice === 'object' ? { model: str(value.choice.model, 'model', 24), effort: str(value.choice.effort, 'effort', 24) } : null;
       if (choice && !/^[a-z][a-z0-9]*$/.test(choice.model + choice.effort)) throw new TypeError('choice is invalid');
-      // `agent`: which line asked, @bart, @brainstorm or @discover (2026-09-30), the same run with other instructions.
+      // `agent`: which line asked, @bart, @brainstorm or @discover (2026-09-30), or @orient (2026-10-04): the same run with
+      // other instructions.
       const agent = value.agent == null ? 'bart' : value.agent;
-      if (!['bart', 'brainstorm', 'discover'].includes(agent)) throw new TypeError('agent must be bart, brainstorm or discover');
+      if (!['bart', 'brainstorm', 'orient', 'discover'].includes(agent)) throw new TypeError('agent must be bart, brainstorm, orient or discover');
       const question = { askId, ref: docRef(value.ref), workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice, agent };
       // The ask is an agent of its workspace: running now, waiting for you once its answer (or failure) has landed.
       started = track(() => projects.agentStarted(ctx, { id: askId, kind: agent, projectId: pid, workspaceId: question.workspaceId, doc: question.ref }));

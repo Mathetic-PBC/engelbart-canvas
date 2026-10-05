@@ -27,7 +27,7 @@ function buildLines(text, project) {
 
 // The editor's inline tokens (src/renderer/model/doc.js), so a mention inside `code` stays text
 // here as it does on screen. test/expand-mentions.test.cjs holds the two together.
-const INLINE = /(!\[[^\]\n]*\]\(img:[\w-]+\)|@(?:[Bb]art|[Bb]rainstorm|[Dd]iscover)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`])/g;
+const INLINE = /(!\[[^\]\n]*\]\(img:[\w-]+\)|@(?:[Bb]art|[Bb]rainstorm|[Oo]rient|[Dd]iscover)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`])/g;
 const IMAGE_TOKEN = /^!\[([^\]\n]*)\]\(img:([\w-]+)\)$/;
 const WS_TOKEN = /^@\[([^\]\n]+)\]\(ws:([\w-]+)\)$/; // another workspace of the project (doc.js WS_MENTION_RE)
 const BART_NAME = /^bart/i; // the editor shows @[bart…] as the question agent, never as a file

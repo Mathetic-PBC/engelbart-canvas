@@ -40,13 +40,17 @@ function conversationBlock(turns) {
 
 const block = (tag, name, text) => `<${tag} name="${String(name).replace(/[<>"\n\r]/g, ' ').slice(0, 200)}">\n${text}\n</${tag}>`;
 
+// The agents that read where the person is from this workspace alone (2026-09-30, round 3; @orient 2026-10-04): its own
+// library and none of the other agents' answers.
+const SCOPED = new Set(['brainstorm', 'orient']);
+
 /**
- * The library's entries an agent may be shown. @brainstorm's (2026-09-30, round 3): this workspace's alone, what its
+ * The library's entries an agent may be shown. @brainstorm's and @orient's (SCOPED): this workspace's alone, what its
  * sidebar holds (its context and the notes made in it, less what was thrown away) and whatever the document mentions.
  * Everyone else's: the whole project's. `scope` { agent, workspace, own } — `own` the ids of the notes made in it.
  */
 function catalogFor(project, rows, seen, { agent = 'bart', workspace = null, own = [] } = {}) {
-  if (agent !== 'brainstorm' || !workspace) return buildCatalog(project, projects.flattenWorkspaces(project.dir), rows, null).entries;
+  if (!SCOPED.has(agent) || !workspace) return buildCatalog(project, projects.flattenWorkspaces(project.dir), rows, null).entries;
   const removed = new Set(workspace.removed || []);
   const held = new Set([...workspace.context, ...own].filter((id) => !removed.has(id)));
   for (const id of seen) held.add(id);
@@ -56,7 +60,7 @@ function catalogFor(project, rows, seen, { agent = 'bart', workspace = null, own
 
 /**
  * The library as the agent is shown it (Context.json): every item but pictures, `mentioned` when `seen` holds it. The
- * whole project's, or for @brainstorm this workspace's alone (catalogFor).
+ * whole project's, or for @brainstorm and @orient this workspace's alone (catalogFor).
  */
 function catalogEntries(project, rows, seen, scope) {
   return catalogFor(project, rows, seen, scope).filter((entry) => entry.type !== 'image').map((entry) => ({
@@ -72,8 +76,9 @@ function catalogEntries(project, rows, seen, scope) {
 }
 
 // The agents that may open the library's own files (2026-09-30, MB-06): the folders those files are in join the
-// --add-dir list, read-only like the rest. @bart too since 2026-10-02 (a paper in ~/Downloads was out of its reach).
-const LIBRARY_READERS = new Set(['bart', 'brainstorm', 'discover']);
+// --add-dir list, read-only like the rest. @bart too since 2026-10-02 (a paper in ~/Downloads was out of its reach), and
+// @orient (2026-10-04), which opens the paper a line mentions.
+const LIBRARY_READERS = new Set(['bart', 'brainstorm', 'orient', 'discover']);
 const MAX_LIBRARY_DIRS = 24;
 const within = (dir, root) => { const inside = path.relative(root, dir); return inside === '' || (!inside.startsWith('..') && !path.isAbsolute(inside)); };
 
@@ -107,9 +112,10 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
   const rows = await ctx.libraryDb.list();
   const seen = new Set();
   const documents = [];
-  // @brainstorm reads where the person is from what they wrote: other agents' answers are taken out (./strip.cjs).
-  const brainstorm = agent === 'brainstorm';
-  const shown = (body) => markPlace(brainstorm ? stripAgentReplies(body) : body, askId);
+  // @brainstorm and @orient read where the person is from what they wrote: other agents' answers are taken out, their
+  // own threads stay (./strip.cjs).
+  const scoped = SCOPED.has(agent);
+  const shown = (body) => markPlace(scoped ? stripAgentReplies(body, agent) : body, askId);
   let from = `the workspace "${workspace.name}"`;
   if (ref.kind === 'note') {
     // The note is its own block: the workspace must not also carry it as a mention.
@@ -122,7 +128,7 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
     const space = await expandDoc(ctx, projectId, ref, { seen });
     documents.push(block('workspace', space.title, shown(space.body)));
   }
-  const own = brainstorm ? (await (await db.openNotesDb(project.dir)).list()).filter((note) => note.topic_id === workspace.id).map((note) => note.id) : [];
+  const own = scoped ? (await (await db.openNotesDb(project.dir)).list()).filter((note) => note.topic_id === workspace.id).map((note) => note.id) : [];
   const scope = { agent, workspace, own };
   const entries = catalogEntries(project, rows, seen, scope);
   const head = [

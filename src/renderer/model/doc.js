@@ -12,7 +12,8 @@ export const IMG_RE = /^!\[([^\]]*)\]\((img:[\w-]+|https?:[^)\s]+|data:image[^)\
 // `@Bart` is what the @ menu writes (2026-09-22); `@bart` is what is typed. `@brainstorm` (2026-09-30) is the same kind of
 // line, asked of another agent: its answers are cards (src/main/bart/card.cjs) and it may be asked with nothing after it.
 // `@discover` (2026-09-30) too: a card or two to refine the problem, then a reading guide, which is an answer like @bart's.
-export const BART_RE = /^@(bart|brainstorm|discover)(?:\s(.*))?$/i;
+// `@orient` (2026-10-04) as well: @brainstorm's kind of cards, asking what you know about a topic or a paper.
+export const BART_RE = /^@(bart|brainstorm|orient|discover)(?:\s(.*))?$/i;
 // An answer under an @bart line, one prefix per line (src/main/bart/reply.cjs writes them): pending while the run with
 // that id works, then a reply. A reply is kept as it arrives (2026-09-21: no Save; Delete is the way out) and its text
 // can be edited; `bart+> ` is the same line folded away by Collapse, so a fold is in the file and survives everything
@@ -38,7 +39,7 @@ export const REPLY_RE = /^bart(\+?)> ?(.*)$/;
 export const ATTRIBUTION_RE = /^\*[^*]+\*$/;
 export const QUOTE_RE = /^> ?(.*)$/;
 export const ATTACH_RE = /^!\[([^\]\n]*)\]\(img:([\w-]+)\)$/;
-export const INLINE = /(!\[[^\]\n]*\]\(img:[\w-]+\)|@(?:[Bb]art|[Bb]rainstorm|[Dd]iscover)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`])/g;
+export const INLINE = /(!\[[^\]\n]*\]\(img:[\w-]+\)|@(?:[Bb]art|[Bb]rainstorm|[Oo]rient|[Dd]iscover)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`])/g;
 const LINK_RE = /^\[([^\]]+)\]\(([^)]+)\)$/;
 // Another workspace of the project, mentioned (2026-09-25): `@[Name](ws:<id>)`. The id finds it after a rename (workspaces
 // are born "Untitled Workspace n" and named later); the line shows the @, the workspace icon right after it, then the name
@@ -59,10 +60,10 @@ const WS_ICON = '<svg viewBox="0 0 16 16" width="0.8em" height="0.8em" fill="non
 // A bare address, typed, pasted or written by @bart, is a link as it stands (closing punctuation is not part of it).
 const URL_RE = /^https?:\/\/\S+$/;
 
-/** Which agent a question line asks: 'bart', 'brainstorm' or 'discover'. */
-export const agentOf = (p) => (p && (p.agent === 'brainstorm' || p.agent === 'discover') ? p.agent : 'bart');
+/** Which agent a question line asks: 'bart', 'brainstorm', 'orient' or 'discover'. */
+export const agentOf = (p) => (p && (p.agent === 'brainstorm' || p.agent === 'orient' || p.agent === 'discover') ? p.agent : 'bart');
 /** The token that starts a question line, as INLINE splits it out. */
-export const AGENT_TOKEN = /^@(bart|brainstorm|discover)$/i;
+export const AGENT_TOKEN = /^@(bart|brainstorm|orient|discover)$/i;
 /**
  * Text pasted into a question line, as one line (2026-10-02): a question is one line of the document, and a paste split
  * over several put all but its first line under the question, where it was never asked. Each line break, with the
@@ -294,7 +295,7 @@ export function turnText(lines, turn) {
   return { question: parseLine(lines[turn.q]).text.trim(), answer: body.join('\n').trim() };
 }
 
-/** Rendered HTML for inline markup (bold, code, italic, @bart, @brainstorm and @discover, @[mention], [link](url), bare urls). */
+/** Rendered HTML for inline markup (bold, code, italic, @bart, @brainstorm, @orient and @discover, @[mention], [link](url), bare urls). */
 export function inlineHtml(text) {
   return text.split(INLINE).map((p) => {
     if (!p) return '';
