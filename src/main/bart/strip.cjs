@@ -3,20 +3,21 @@
 // What @brainstorm is not shown (2026-09-30, round 3): the answers other agents wrote in the document. An @bart or
 // @discover question is the person's words and stays; the reply lines under it (answer, folded answer, pending) are the
 // agent's understanding, not theirs, and each run of them becomes one "[agent reply omitted]". @brainstorm's own threads
-// stay whole: its cards and the person's answers to them are the exchange. @orient (2026-10-04) is read the same way, so
-// the asking agent is named: only its own threads stay, and @orient's cards are as much another agent's as @bart's
-// answers are to @brainstorm (the person's `@orient …` answer lines stay, as questions do). The grammar is the editor's
-// (src/renderer/model/doc.js BART_RE, REPLY_RE, PENDING_RE), restated here because main cannot import that module;
-// test/bart.test.cjs checks the two agree.
+// stay whole: its cards and the person's answers to them are the exchange. The asking agent is named: only its own
+// threads stay. An `@orient` line (2026-10-04; since 2026-10-05 an older name for @brainstorm) is @brainstorm's, its
+// cards and recap with it. The grammar is the editor's (src/renderer/model/doc.js BART_RE, REPLY_RE, PENDING_RE),
+// restated here because main cannot import that module; test/bart.test.cjs checks the two agree.
 //
 // The text is read after its mentions are placed (../context/expand-mentions.cjs): a mention on a question line puts a
-// blank line, the <file> and a blank line between the question and its replies (2026-10-04, `@orient @[Paper]`). That
+// blank line, the <file> and a blank line between the question and its replies (2026-10-04, `@brainstorm @[Paper]`). That
 // stays with the line it is under, so the replies after it are still that question's; under a reply left out, it goes too.
 
 const BART_RE = /^@(bart|brainstorm|orient|discover)(?:\s(.*))?$/i;
 const REPLY_RE = /^bart(\+?)> ?(.*)$/;
 const PENDING_RE = /^bart~> ?([\w-]*)$/;
 const OMITTED = '[agent reply omitted]';
+// An agent a line names by another word: `@orient` is @brainstorm's.
+const SAME_AS = { orient: 'brainstorm' };
 const FILE_RE = /^<file\s/;
 const CLOSED_RE = /\/>$/;
 const FILE_END = '</file>';
@@ -52,7 +53,7 @@ function stripAgentReplies(text, agent = 'brainstorm') {
     }
     if (line === FILE_END && outer.length) { owner = outer.pop(); omitting = false; out.push(line); continue; }
     const asked = line.match(BART_RE);
-    if (asked) { owner = asked[1].toLowerCase(); omitting = false; out.push(line); continue; }
+    if (asked) { const named = asked[1].toLowerCase(); owner = SAME_AS[named] || named; omitting = false; out.push(line); continue; }
     if (REPLY_RE.test(line) || PENDING_RE.test(line)) {
       if (owner && owner !== agent) {
         if (!omitting) out.push(OMITTED);

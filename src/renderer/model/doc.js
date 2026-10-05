@@ -13,7 +13,8 @@ export const IMG_RE = /^!\[([^\]]*)\]\((img:[\w-]+|https?:[^)\s]+|data:image[^)\
 // `@Bart` is what the @ menu writes (2026-09-22); `@bart` is what is typed. `@brainstorm` (2026-09-30) is the same kind of
 // line, asked of another agent: its answers are cards (src/main/bart/card.cjs) and it may be asked with nothing after it.
 // `@discover` (2026-09-30) too: a card or two to refine the problem, then a reading guide, which is an answer like @bart's.
-// `@orient` (2026-10-04) as well: @brainstorm's kind of cards, asking what you know about a topic or a paper.
+// `@orient` (2026-10-04) was an agent of its own; since 2026-10-05 it is an older name for @brainstorm: the line is
+// still read and drawn as written, and asked as @brainstorm (agentOf).
 export const BART_RE = /^@(bart|brainstorm|orient|discover)(?:\s(.*))?$/i;
 // An answer under an @bart line, one prefix per line (src/main/bart/reply.cjs writes them): pending while the run with
 // that id works, then a reply. A reply is kept as it arrives (2026-09-21: no Save; Delete is the way out) and its text
@@ -67,8 +68,8 @@ const WS_ICON = '<svg viewBox="0 0 16 16" width="0.8em" height="0.8em" fill="non
 // A bare address, typed, pasted or written by @bart, is a link as it stands (closing punctuation is not part of it).
 const URL_RE = /^https?:\/\/\S+$/;
 
-/** Which agent a question line asks: 'bart', 'brainstorm', 'orient' or 'discover'. */
-export const agentOf = (p) => (p && (p.agent === 'brainstorm' || p.agent === 'orient' || p.agent === 'discover') ? p.agent : 'bart');
+/** Which agent a question line asks: 'bart', 'brainstorm' or 'discover'. An `@orient` line asks @brainstorm (2026-10-05). */
+export const agentOf = (p) => (p && p.agent === 'orient' ? 'brainstorm' : p && (p.agent === 'brainstorm' || p.agent === 'discover') ? p.agent : 'bart');
 /** The token that starts a question line, as INLINE splits it out. */
 export const AGENT_TOKEN = /^@(bart|brainstorm|orient|discover)$/i;
 /**
@@ -269,10 +270,17 @@ export function replyRawOffset(p, fOff) {
 }
 
 /**
+ * Whether question line `p` may follow an answer in the thread question line `first` opened: it asks the same agent
+ * (2026-10-02). An `@orient` line (2026-10-05) starts a thread of its own, as it did when it was an agent of its own,
+ * unless that thread is an @orient one; the @brainstorm lines answering an @orient thread's cards go on with it.
+ */
+const followsIn = (p, first) => agentOf(p) === agentOf(first) && (p.agent !== 'orient' || first.agent === 'orient');
+
+/**
  * The @bart exchanges of a document, by line index. A thread is a run of lines with nothing between them: a question,
  * what stands under it (a pending line, or the answer), then any question asked right after that answer — a follow-up,
  * which reads as one card. A follow-up asks the agent the thread's first question asked; a line for another agent
- * starts a thread of its own, with its own card and reply field (2026-10-02). → [{ from, to, turns }], each turn
+ * starts a thread of its own, with its own card and reply field (2026-10-02; followsIn). → [{ from, to, turns }], each turn
  * { q, from, to, answered, pending, foot, folded } where `from..to` are the lines under the question (to === q when there
  * are none), `pending` is the id of a run still working, `foot` the closing line that says which model answered (-1
  * without one).
@@ -294,7 +302,7 @@ export function threads(lines, ps = parseLines(lines)) {
       turn.answered = turn.to > turn.q;
       if (turn.answered && !turn.pending) { const last = ps[turn.to]; if (last.type === 'reply' && ATTRIBUTION_RE.test(last.text)) turn.foot = turn.to; }
       thread.turns.push(turn); thread.to = turn.to;
-      if (!turn.answered || i + 1 >= lines.length || ps[i + 1].type !== 'bart' || agentOf(ps[i + 1]) !== agentOf(ps[thread.from])) break;
+      if (!turn.answered || i + 1 >= lines.length || ps[i + 1].type !== 'bart' || !followsIn(ps[i + 1], ps[thread.from])) break;
       i += 1;
     }
     out.push(thread);
@@ -320,8 +328,8 @@ function libHtml(name, id, libName) {
 }
 
 /**
- * Rendered HTML for inline markup (bold, code, italic, @bart, @brainstorm, @orient and @discover, @[mention], [link](url),
- * bare urls). `opts.libName(id)`: a library mention's name now, or null when it is gone (libHtml).
+ * Rendered HTML for inline markup (bold, code, italic, @bart, @brainstorm and @discover, an older line's @orient,
+ * @[mention], [link](url), bare urls). `opts.libName(id)`: a library mention's name now, or null when it is gone (libHtml).
  */
 export function inlineHtml(text, opts) {
   return text.split(INLINE).map((p) => {

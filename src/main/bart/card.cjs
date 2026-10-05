@@ -1,6 +1,6 @@
 'use strict';
 
-// @brainstorm's cards (2026-09-30), which @orient asks too (2026-10-04): what the agent replies with, how a card is kept in the document, and how the
+// @brainstorm's cards (2026-09-30): what the agent replies with, how a card is kept in the document, and how the
 // person's answer is written back. Nothing here touches the disk, so the editor bundles this same file (as it does
 // ./question.cjs): a card it draws is one main would have written, and an answer it writes is one main reads.
 //
@@ -21,7 +21,7 @@
 //   @brainstorm (skipped)                      Skip
 //   @brainstorm (wrap up)                      Wrap up (round 6), with nothing given
 //   @brainstorm picked "a"; (wrap up)          Wrap up, with the answer given
-// (@orient's are the same, after "@orient".)
+// (An older document's `@orient …` lines are the same, after "@orient": since 2026-10-05 they are @brainstorm's.)
 
 const TYPES = ['mcq', 'select_all', 'free', 'open'];
 const MAX_OPTIONS = 6;
@@ -293,9 +293,9 @@ function recapParts(text) {
 }
 
 // The labels a recap's lines start with: round 4's, and the ones older recaps used, which still draw the same way; then
-// @orient's (2026-10-04), and @brainstorm's of round 7. "Look for" (MATH-31): a search an older recap suggested, drawn as
-// a section like the rest now that it is no longer a button.
-const RECAP_LABELS = ['Where you are', 'What pulls apart', 'What\'s unclear', 'Next, you said', 'Where you\'ll look next', 'What you know', 'Where it thins out', 'What draws you', 'Your question', 'What puzzles you', 'Look for'];
+// @orient's (2026-10-04), and @brainstorm's of round 7; then the paper path's first line (2026-10-05, @orient folded in).
+// "Look for" (MATH-31): a search an older recap suggested, drawn as a section like the rest now that it is no longer a button.
+const RECAP_LABELS = ['Where you are', 'What pulls apart', 'What\'s unclear', 'Next, you said', 'Where you\'ll look next', 'What you know', 'Where it thins out', 'What draws you', 'Your question', 'What puzzles you', 'What you took from it', 'Look for'];
 const RECAP_LINE_RE = new RegExp(`^\\s*(${RECAP_LABELS.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\s*[:：]\\s*(.*)$`, 'i');
 
 /** One line of a recap → { label, text } when it starts with a recap label (as written in the file), else null. */

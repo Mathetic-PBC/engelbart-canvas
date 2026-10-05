@@ -465,6 +465,26 @@ test('@brainstorm is an @bart line asked of another agent: with or without words
   assert.deepEqual(threads(['@bart why?', 'bart> because', '@brainstorm', 'bart~> k3']).map((t) => [t.from, t.to, t.turns.length]), [[0, 1, 1], [2, 3, 1]], 'another agent\'s line starts a card of its own (2026-10-02)');
 });
 
+test('an @orient line (M-02): still read, drawn and kept as written, asked as @brainstorm, and a thread of its own under another card; @brainstorm answers continue an @orient thread', async () => {
+  const { parseLine, agentOf, threads, turnText, inlineHtml, INLINE, AGENT_TOKEN } = await load();
+  assert.deepEqual(parseLine('@orient metacognitive support in AI tools'), { type: 'bart', text: 'metacognitive support in AI tools', agent: 'orient' }, 'the line is not rewritten');
+  assert.deepEqual(parseLine('@Orient @[TutorTrace]'), { type: 'bart', text: '@[TutorTrace]', agent: 'orient' });
+  assert.deepEqual([agentOf(parseLine('@orient x')), agentOf(parseLine('@Orient')), agentOf(parseLine('@brainstorm x'))], ['brainstorm', 'brainstorm', 'brainstorm'], 'it runs as @brainstorm');
+  assert.equal(parseLine('@orientation x').type, 'p', 'a longer word is not the agent');
+  assert.deepEqual('@Orient hi'.split(INLINE).filter(Boolean), ['@Orient', ' hi']);
+  assert.ok(AGENT_TOKEN.test('@orient') && AGENT_TOKEN.test('@Orient'));
+  assert.match(inlineHtml('@orient go'), /^<span style="color:#0070f3;font-weight:500">@orient<\/span> go$/);
+  const card = ['bart> ```json', 'bart> {"say": "", "card": "questions", "questions": {"items": [{"id": "know", "type": "open", "title": "K?"}]}, "ready": false}', 'bart> ```', 'bart>', 'bart> *3 s*'];
+  // Under a brainstorm card, an @orient line starts a thread of its own, as it did when it was an agent of its own.
+  const doc = ['@brainstorm', ...card, '@orient metacognition', ...card, '@brainstorm people overrate what they learn', 'bart~> a1'];
+  const found = threads(doc);
+  assert.deepEqual(found.map((t) => [t.from, t.turns.length, agentOf(parseLine(doc[t.from]))]), [[0, 1, 'brainstorm'], [6, 2, 'brainstorm']], 'the @brainstorm answer under its card goes on with the @orient thread');
+  assert.deepEqual(turnText(doc, found[1].turns[0]).question, 'metacognition');
+  const own = ['@orient metacognition', ...card, '@orient people overrate it', ...card, '@brainstorm (wrap up)', 'bart~> a3'];
+  assert.deepEqual(threads(own).map((t) => t.turns.length), [3], 'an @orient thread takes @orient and @brainstorm lines alike');
+  assert.deepEqual(threads(['@bart why?', 'bart> because', '@orient x', 'bart~> a4']).map((t) => t.from), [0, 2], 'under an @bart answer too');
+});
+
 test('@discover is an @bart line asked of a third agent: with or without words, coloured as a token, one thread kind (2026-09-30)', async () => {
   const { parseLine, agentOf, threads, inlineHtml, INLINE, tokShown } = await load();
   assert.deepEqual(tokShown('**[A paper](https://x.org)**'), { shown: 'A paper', pre: 2 });

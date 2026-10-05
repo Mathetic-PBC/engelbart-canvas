@@ -33,8 +33,10 @@
 // one fixed step (./models.cjs readBrainstorm; 2026-10-02: no flags, and its foot gives the time alone), file tools only,
 // its own Codex home, and sessions of its own kept for two idle hours. It replies with one JSON card (./card.cjs), which is written as a fenced block the editor draws; a reply
 // that does not parse is written as it came and reads as an @bart answer. An empty line asks it to start from the
-// workspace. Round 7: each turn is told which card to ask as <stage> (area, puzzle, draft, versions, recap), counted here
-// from the cards asked since the last recap, so a session ends with a research question the person wrote.
+// workspace. Round 7: each turn is told which card to ask as <stage>, so a session ends with a research question the
+// person wrote. 2026-10-05: @orient folded in (an `@orient` line runs as @brainstorm; its sessions file is left unread).
+// The exchange's path (<path>: paper, topic or open) is read here from its opening line against the library the turn is
+// shown, and the next stage from the id of the last card asked (turnPlan).
 //
 // @discover (2026-09-30): the same again, for what to read about a problem. Its own prompt (./discover-system-prompt.cjs),
 // one step (./question.cjs readDiscover: the level of the models file's `discover` block for its mode, on the provider the
@@ -44,11 +46,6 @@
 // ask a card or two first, which are written as @brainstorm's are; its guide is markdown, written as an @bart answer is.
 // Each turn carries <mode>: quick or deep when a line of the exchange said --quick or --deep, else standard.
 //
-// @orient (2026-10-04): @brainstorm's run for another purpose, getting the person to write what they know about a topic
-// or a paper, where that thins out and what draws them. Its own prompt (./orient-system-prompt.cjs), @brainstorm's fixed
-// step, file tools and scoped context, its own Codex home and sessions (two idle hours). Its cards are @brainstorm's
-// kind; which one comes next is told it as <stage>, counted here from the cards asked since the last recap.
-
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -60,7 +57,6 @@ const { NOT_THE_SUBSCRIPTION, prepareCodexHome, lastResultLine } = require('../c
 const { BART_SYSTEM_PROMPT } = require('./system-prompt.cjs');
 const { BRAINSTORM_SYSTEM_PROMPT } = require('./brainstorm-system-prompt.cjs');
 const { DISCOVER_SYSTEM_PROMPT } = require('./discover-system-prompt.cjs');
-const { ORIENT_SYSTEM_PROMPT } = require('./orient-system-prompt.cjs');
 const { readQuestion, readBrainstorm, readDiscover, withChoice } = require('./models.cjs');
 const { OPENING, SKIPPED, cardBody, cardOfAnswer, questionOf, readCard, readAnswer, readWrap } = require('./card.cjs');
 const { buildContext, conversationBlock } = require('./context.cjs');
@@ -76,7 +72,6 @@ const DEEP_DISCOVER_TIMEOUT_MS = 45 * 60_000;
 const THREAD_IDLE_MS = 30 * 60_000;
 const BRAINSTORM_IDLE_MS = 2 * 60 * 60_000;
 const DISCOVER_IDLE_MS = 2 * 60 * 60_000;
-const ORIENT_IDLE_MS = 2 * 60 * 60_000;
 const MAX_TURNS = 40;
 const ESCALATE_RE = /^ESCALATE:\s*(.{0,400})$/s;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -85,16 +80,19 @@ const BRAINSTORM_TOOLS = 'Read,Grep,Glob';
 // @discover's paper tools, as Claude Code names an MCP server's tools; the server, run by Engelbart's own executable as Node.
 const PAPER_TOOLS = 'mcp__papers__*';
 const PAPERS_SERVER = path.join(__dirname, 'papers-mcp.cjs');
-const AGENTS = ['bart', 'brainstorm', 'orient', 'discover'];
-const PROMPTS = { bart: ['bart-system-prompt.md', BART_SYSTEM_PROMPT], brainstorm: ['brainstorm-system-prompt.md', BRAINSTORM_SYSTEM_PROMPT], orient: ['orient-system-prompt.md', ORIENT_SYSTEM_PROMPT], discover: ['discover-system-prompt.md', DISCOVER_SYSTEM_PROMPT] };
+const AGENTS = ['bart', 'brainstorm', 'discover'];
+const PROMPTS = { bart: ['bart-system-prompt.md', BART_SYSTEM_PROMPT], brainstorm: ['brainstorm-system-prompt.md', BRAINSTORM_SYSTEM_PROMPT], discover: ['discover-system-prompt.md', DISCOVER_SYSTEM_PROMPT] };
 // The agents on one fixed step whose model is never named, while they run or in their foot (2026-10-02, B-05).
-const QUIET = new Set(['brainstorm', 'orient']);
-// What an @orient line with nothing after it asks, and its cards in the order they are asked (the prompt's <stage>).
-const ORIENT_OPENING = 'No topic given.';
-const ORIENT_STAGES = ['know', 'thin', 'interest'];
-// @brainstorm's cards in the order they are asked (round 7, the prompt's <stage>): the area, what puzzles them, their
-// question as they write it, and versions of it made from their words.
-const BRAINSTORM_STAGES = ['area', 'puzzle', 'draft', 'versions'];
+const QUIET = new Set(['brainstorm']);
+// @brainstorm's paths (2026-10-05, @orient folded in) and the cards each asks, in order (the prompt's <path> and <stage>):
+// a library paper mentioned on the opening line, what they took from it; words without one, what they know; nothing, an
+// area first. Then where it thins out, their question as they write it, and versions of it made from their words.
+const BRAINSTORM_PATHS = { paper: ['took', 'thin', 'draft', 'versions'], topic: ['know', 'thin', 'draft', 'versions'], open: ['area', 'know', 'thin', 'draft', 'versions'] };
+// What comes after a card, by its id, whatever the path: its own stages, and the ids older documents hold (round 7's
+// puzzle, @orient's subject and interest, rounds 4 and 5's closing). After draft, versions only when it was answered.
+const AFTER = { area: 'know', subject: 'know', know: 'thin', took: 'thin', thin: 'draft', puzzle: 'draft', interest: 'draft', draft: 'versions', versions: 'recap', closing: 'recap' };
+// The most cards an exchange asks before its recap, skips included.
+const MAX_BRAINSTORM_CARDS = 5;
 // What an @discover line with nothing after it asks.
 const DISCOVER_OPENING = 'Find what I should read about the problem this workspace is about.';
 // How far each mode traces (the prompt's <mode>), and how many of its sources are essays when essays apply (2026-10-03):
@@ -134,7 +132,7 @@ function levelBlock(steps, at, pinned) {
 
 /**
  * The earlier turns of an exchange as the renderer read them from the document, made safe: strings, bounded, no empty
- * questions. `keepEmpty`: @brainstorm's, @orient's and @discover's, whose first line may say nothing and still be a turn.
+ * questions. `keepEmpty`: @brainstorm's and @discover's, whose first line may say nothing and still be a turn.
  */
 function cleanTurns(turns, { keepEmpty = false } = {}) {
   return (Array.isArray(turns) ? turns : []).filter((turn) => turn && typeof turn.question === 'string' && (keepEmpty || turn.question.trim()))
@@ -193,7 +191,7 @@ async function withImagePaths(ctx, projectId, question) {
 
 /**
  * What a question is given: everything, for a new session; the question alone, for a session that already holds the
- * rest. `extra` goes in front of the level either way (@brainstorm's and @orient's stage, @discover's mode).
+ * rest. `extra` goes in front of the level either way (@brainstorm's path and stage, @discover's mode).
  */
 function firstMessage({ context, prior, question, resumed, extra = '' }) {
   const asked = `<question>\n${question}\n</question>`;
@@ -201,50 +199,47 @@ function firstMessage({ context, prior, question, resumed, extra = '' }) {
   return (level) => [context.head, context.contextJson, context.documents, conversationBlock(prior), extra, level, asked].filter(Boolean).join('\n\n');
 }
 
+/** Where the cards at the end of `turns` begin: after the last recap, or the last reply that was not a card. */
+function cardsFrom(turns) {
+  let from = turns.length;
+  while (from > 0 && cardOfAnswer(turns[from - 1].answer)) from -= 1;
+  return from;
+}
+
 /**
- * @orient's cards since the last recap (or a reply that was not a card), oldest turns first in `turns`. Every card counts,
- * whatever its answer, so a skip moves on; the card that only asks for a subject (id "subject") is not one of the three.
+ * The library paper an @brainstorm opening mentions (2026-10-05): a mention that is not a workspace's (`@[Name]`, as
+ * fakeDiscover reads one) naming, as a mention finds it (in any case), an item of `entries` (the library the turn is
+ * shown, ./context.cjs) that is a pdf or tagged "paper". null when it mentions none: a note is not a paper.
  */
-function orientCards(turns) {
-  let count = 0;
-  for (let n = turns.length - 1; n >= 0; n -= 1) {
-    const card = cardOfAnswer(turns[n].answer);
-    if (!card) break;
-    if (!(card.card === 'questions' && card.questions.items[0].id === 'subject')) count += 1;
+function mentionedPaper(opening, entries = []) {
+  for (const m of String(opening || '').matchAll(/@\[([^\]\n]+)\](?!\(ws:)/g)) {
+    const name = m[1].toLowerCase();
+    const found = entries.find((entry) => String(entry.name).toLowerCase() === name && (entry.type === 'pdf' || (Array.isArray(entry.tags) && entry.tags.includes('paper'))));
+    if (found) return found;
   }
-  return count;
+  return null;
 }
 
-/** @brainstorm's cards since the last recap (or a reply that was not a card), as orientCards counts: a skip moves on. */
-function brainstormCards(turns) {
-  let count = 0;
-  while (count < turns.length && cardOfAnswer(turns[turns.length - 1 - count].answer)) count += 1;
-  return count;
+/** The stage a card says it is, by its id (a focus card is the area's): null for an id no path knows. */
+function stageOf(card) {
+  if (card.card === 'focus') return 'area';
+  const { id } = questionOf(card);
+  return Object.hasOwn(AFTER, id) ? id : null;
 }
 
 /**
- * One turn of any agent, read from the line (`text`, what follows "@bart", "@brainstorm", "@orient" or "@discover")
- * before anything runs → { agent, brainstorm, question, provider, steps, pinned, prior, asked, shown, extra, mode, stage }.
- * `prior` is what the session is kept under; `shown` and `asked` are what the agent is sent: an empty line is the opening,
- * each brainstorm and orient turn is told which card to ask, and each discover turn how far to trace.
+ * One turn of any agent, read from the line (`text`, what follows "@bart", "@brainstorm" or "@discover"; an `@orient`
+ * line is asked as @brainstorm) before anything runs → { agent, brainstorm, question, provider, steps, pinned, prior,
+ * asked, shown, extra, mode, path, paper, stage }. `prior` is what the session is kept under; `shown` and `asked` are what
+ * the agent is sent: an empty line is the opening, each brainstorm turn is told its path and which card to ask, and each
+ * discover turn how far to trace. `entries`: the library the turn is shown (./context.cjs buildContext), which
+ * @brainstorm's path is read against.
  */
-function turnPlan({ agent, text, turns, choice }, models) {
-  const brainstorm = agent === 'brainstorm', discover = agent === 'discover', orient = agent === 'orient';
-  const prior = cleanTurns(turns, { keepEmpty: brainstorm || orient || discover });
+function turnPlan({ agent, text, turns, choice, entries = [] }, models) {
+  const brainstorm = agent === 'brainstorm', discover = agent === 'discover';
+  const prior = cleanTurns(turns, { keepEmpty: brainstorm || discover });
   // @discover's mode, and the level it runs on, is the one the line names, else the one an earlier turn named (readDiscover).
-  // @orient runs on @brainstorm's fixed step, and a flag picks nothing there either.
-  const read = brainstorm || orient ? readBrainstorm(text, models) : discover ? readDiscover(text, models, prior) : readQuestion(choice ? withChoice(text, models, choice) : text, models);
-  if (orient) {
-    // Which card comes next is decided here, never by the model: know, thin and interest in turn, then the recap; Wrap up
-    // gets the recap at once. After a recap the count starts again.
-    const stage = readWrap(read.question).wrap ? 'recap' : ORIENT_STAGES[orientCards(prior)] || 'recap';
-    return {
-      agent, brainstorm, ...read, prior, stage, close: stage === 'recap' ? 'recap' : null,
-      asked: read.question || ORIENT_OPENING,
-      shown: prior.map((turn) => ({ ...turn, question: turn.question || ORIENT_OPENING })),
-      extra: `<stage>${stage}</stage>`,
-    };
-  }
+  const read = brainstorm ? readBrainstorm(text, models) : discover ? readDiscover(text, models, prior) : readQuestion(choice ? withChoice(text, models, choice) : text, models);
   if (discover) {
     return {
       agent, brainstorm, ...read, prior,
@@ -254,27 +249,27 @@ function turnPlan({ agent, text, turns, choice }, models) {
     };
   }
   if (!brainstorm) return { agent: 'bart', brainstorm, ...read, prior, asked: read.question, shown: prior, extra: '' };
-  // Which card comes next is decided here, never by the model (round 7): area, puzzle, draft and versions in turn, then
-  // the recap; versions only when the draft card was answered, so a skipped draft goes to the recap. Wrap up gets the recap
-  // at once, as does an answer to, or a skip of, a closing card left in an older document (rounds 4 and 5). After a recap
-  // the count starts again.
-  const last = prior.length ? cardOfAnswer(prior[prior.length - 1].answer) : null;
-  const closing = !!last && last.card === 'questions' && last.questions.items[0].id === 'closing';
-  const cards = brainstormCards(prior);
-  const drafted = () => {
-    const at = prior.findIndex((turn, n) => n >= prior.length - cards && questionOf(cardOfAnswer(turn.answer)).id === 'draft');
-    if (at < 0) return false;
-    const said = at + 1 < prior.length ? readBrainstorm(prior[at + 1].question, models).question : read.question;
-    return !readAnswer(said, cardOfAnswer(prior[at].answer)).skipped;
-  };
-  const stage = readWrap(read.question).wrap || closing ? 'recap'
-    : cards < 3 ? BRAINSTORM_STAGES[cards]
-      : cards === 3 && drafted() ? 'versions' : 'recap';
+  // Which card comes next is decided here, never by the model (round 7; 2026-10-05). The path is read from the exchange's
+  // opening, its first line since the last recap (after a recap the next line opens again), against the library this turn
+  // is shown. Each card since then leads to the next by its id (AFTER), whatever the path, so a first card the agent gave
+  // way to thin goes on from thin, and an older document's card goes on from what it asked. A card whose id no path knows
+  // goes on from the stage it was asked as. A draft leads to versions only when it was answered, else to the recap. Wrap
+  // up, or five cards asked (skips count), gets the recap.
+  const from = cardsFrom(prior), cards = prior.slice(from);
+  const opening = from < prior.length ? readBrainstorm(prior[from].question, models).question : read.question;
+  const paper = mentionedPaper(opening, entries), path = !opening.trim() ? 'open' : paper ? 'paper' : 'topic';
+  const said = (n) => (n + 1 < cards.length ? readBrainstorm(cards[n + 1].question, models).question : read.question);
+  let stage = BRAINSTORM_PATHS[path][0];
+  cards.forEach((turn, n) => {
+    const card = cardOfAnswer(turn.answer), was = stageOf(card) || stage;
+    stage = was === 'draft' ? (readAnswer(said(n), card).skipped ? 'recap' : 'versions') : AFTER[was] || 'recap';
+  });
+  if (readWrap(read.question).wrap || cards.length >= MAX_BRAINSTORM_CARDS) stage = 'recap';
   return {
-    agent, brainstorm, ...read, prior, stage, close: stage === 'recap' ? 'recap' : null,
+    agent, brainstorm, ...read, prior, path, paper, stage, close: stage === 'recap' ? 'recap' : null,
     asked: read.question || OPENING,
     shown: prior.map((turn) => ({ ...turn, question: turn.question || OPENING })),
-    extra: `<stage>${stage}</stage>`,
+    extra: `<path>${path}</path>\n<stage>${stage}</stage>`,
   };
 }
 
@@ -327,11 +322,11 @@ function writeCodexConfig(home, servers) {
 }
 
 /**
- * The reply as the document keeps it, by agent: @brainstorm's and @orient's card or recap (./card.cjs cardBody);
+ * The reply as the document keeps it, by agent: @brainstorm's card or recap (./card.cjs cardBody);
  * @discover's card when it asked one, else its guide as it came; @bart's answer as it came.
  */
 function replyBody(agent, text) {
-  if (agent === 'brainstorm' || agent === 'orient') return cardBody(text).body;
+  if (agent === 'brainstorm') return cardBody(text).body;
   if (agent === 'discover') {
     const card = /^\s*(\{|```)/.test(String(text)) ? readCard(text) : null;
     if (card && card.card !== 'none') return cardBody(text).body;
@@ -347,7 +342,7 @@ function remember(onPicked, step) {
   try { onPicked({ provider: step.provider, model: step.key, effort: step.effort }); } catch { /* a convenience only */ }
 }
 
-/** What a step beginning shows while the turn runs: @brainstorm's and @orient's model is fixed and never named (2026-10-02, B-05). */
+/** What a step beginning shows while the turn runs: @brainstorm's model is fixed and never named (2026-10-02, B-05). */
 function stepShown(agent, onProgress) {
   if (!QUIET.has(agent) || !onProgress) return onProgress;
   return ({ name, effort, ...rest }) => onProgress(rest);
@@ -359,9 +354,9 @@ function stepShown(agent, onProgress) {
 // effort picked by hand (flags, or Regenerate's choice), so the next question starts there (./choices.cjs).
 // `brainstormThreads` and `brainstormCodexHome`: @brainstorm's sessions, apart from @bart's (two idle hours; its own
 // AGENTS.md, which a Codex home holds one of). `discoverThreads` and `discoverCodexHome` the same for @discover, whose home
-// also holds the config.toml that gives Codex the paper tools. `orientThreads` and `orientCodexHome` the same for @orient.
+// also holds the config.toml that gives Codex the paper tools.
 // `papersServer`: the MCP server's script, run by `node` (Engelbart's own executable, as Node).
-function createBart({ readModels, environment = process.env, runDirectory = path.join(os.tmpdir(), 'engelbart-bart-runs'), codexHome = path.join(os.tmpdir(), 'engelbart-codex-home-bart'), brainstormCodexHome = `${codexHome}-brainstorm`, orientCodexHome = `${codexHome}-orient`, discoverCodexHome = `${codexHome}-discover`, codexAuthFile, run = execFile, threads = createThreads(), brainstormThreads = createThreads({ idleMs: BRAINSTORM_IDLE_MS }), orientThreads = createThreads({ idleMs: ORIENT_IDLE_MS }), discoverThreads = createThreads({ idleMs: DISCOVER_IDLE_MS }), tools = null, onPicked = () => {}, node = process.execPath, papersServer = PAPERS_SERVER } = {}) {
+function createBart({ readModels, environment = process.env, runDirectory = path.join(os.tmpdir(), 'engelbart-bart-runs'), codexHome = path.join(os.tmpdir(), 'engelbart-codex-home-bart'), brainstormCodexHome = `${codexHome}-brainstorm`, discoverCodexHome = `${codexHome}-discover`, codexAuthFile, run = execFile, threads = createThreads(), brainstormThreads = createThreads({ idleMs: BRAINSTORM_IDLE_MS }), discoverThreads = createThreads({ idleMs: DISCOVER_IDLE_MS }), tools = null, onPicked = () => {}, node = process.execPath, papersServer = PAPERS_SERVER } = {}) {
   const shell = resolveShell(environment);
   // The CLI by name, or by the full path the tool check found it at when PATH misses it (then through the environment, never quoted).
   const program = (name) => (tools && tools.binaryFor(name) ? `"$ENGELBART_${name.toUpperCase()}_BIN"` : name);
@@ -446,17 +441,18 @@ function createBart({ readModels, environment = process.env, runDirectory = path
    * → { lines, meta }: the answer as lines for the document, and what produced it. `text` is what the
    * line says after "@bart"; `choice` ({ model, effort }, from Regenerate's selector) overrules its flags
    * for this run without rewriting the line; `turns` are the earlier turns of the exchange, when there are any.
-   * `agent`: 'bart', 'brainstorm', 'orient' or 'discover'; all but @bart may be asked with nothing on the line and reply with cards.
+   * `agent`: 'bart', 'brainstorm' or 'discover'; all but @bart may be asked with nothing on the line and reply with cards.
    */
   async function ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart' }, { onProgress } = {}) {
     const models = readModels();
     const bart = agent === 'bart';
-    const { question, provider, steps, pinned, prior, asked, shown, extra, mode } = turnPlan({ agent, text, turns, choice: bart ? choice : null }, models);
+    // The context first: @brainstorm's path is read against the library it shows (turnPlan).
+    const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent });
+    const { question, provider, steps, pinned, prior, asked, shown, extra, mode } = turnPlan({ agent, text, turns, choice: bart ? choice : null, entries: context.entries }, models);
     if (!question && bart) throw new BartError('failed', 'There is no question on the line.');
     if (pinned && bart) remember(onPicked, steps[0]);
-    const store = { bart: threads, brainstorm: brainstormThreads, orient: orientThreads, discover: discoverThreads }[agent];
+    const store = { bart: threads, brainstorm: brainstormThreads, discover: discoverThreads }[agent];
     const held = prior.length ? store.take(threadKey(projectId, ref, prior), provider) : null;
-    const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent });
     const sent = await withImagePaths(ctx, projectId, asked);
     const cwd = path.join(runDirectory, projectId);
     fs.mkdirSync(cwd, { recursive: true, mode: 0o700 });
@@ -470,7 +466,6 @@ function createBart({ readModels, environment = process.env, runDirectory = path
         const only = {
           bart: {},
           brainstorm: { allowed: BRAINSTORM_TOOLS, home: brainstormCodexHome, web: false },
-          orient: { allowed: BRAINSTORM_TOOLS, home: orientCodexHome, web: false },
           discover: { home: discoverCodexHome, mcp: true, timeout: mode === 'deep' ? DEEP_DISCOVER_TIMEOUT_MS : DISCOVER_TIMEOUT_MS },
         }[agent];
         cli = (provider === 'anthropic' ? claudeTurns : codexTurns)({ system: loadSystemPrompt(ctx.dataRoot, agent), cwd, dirs: context.dirs, stem, signal: controller.signal, short: pathLabeller(context.dirs), onUpdate: feed.take, resume: session, ...only });
@@ -516,50 +511,83 @@ function createBart({ readModels, environment = process.env, runDirectory = path
 }
 
 /**
- * The fake @brainstorm's reply (BS-13, MB-12, round 3), as a model would write it: the card turnPlan's stage names (round
- * 7). The area card's `say` is a reading in two sentences and its options are broad areas, from the workspace and what its
- * library holds (with nothing in the library, it says there is little to go on and asks an open question). Then an open
- * card on the area picked for what puzzles them (id "puzzle"), an open card asking for their question in one sentence
- * (id "draft"), and an mcq of versions (id "versions"): their draft as written, then the draft with "specifically" put
- * in. Then the recap: their question (the version picked, the words typed on that card, else the draft; "not written
- * yet" without one) and what puzzles them. No card or recap suggests a search (MATH-31). An answer to, or a skip of, an
- * older document's closing card gets the recap too. It counts the cards since the last recap, so a further @brainstorm
- * starts again. A line containing "malformed" gets a reply that is not a card.
+ * A sentence of the person's own in the documents that holds `subject` (in any case), for the fake @brainstorm's first
+ * card to give way on (2026-10-05): from a line of theirs, not an agent's line, the marked line or a mentioned file; one
+ * ending in ".", "!" or "?". '' when there is none, or the subject is too short to look for.
+ */
+function ownSentence(documents, subject) {
+  const needle = String(subject || '').trim().toLowerCase();
+  if (needle.length < 4) return '';
+  let depth = 0;
+  for (const line of String(documents || '').split('\n')) {
+    if (/^<file\s/.test(line)) { if (!/\/>$/.test(line)) depth += 1; continue; }
+    if (line === '</file>') { depth = Math.max(0, depth - 1); continue; }
+    if (depth || /^(?:@(?:bart|brainstorm|orient|discover)\b|bart[+?~]?>|<|\[agent reply omitted\]|#)/i.test(line)) continue;
+    const found = (line.match(/[^.!?]+[.!?]/g) || []).find((sentence) => sentence.toLowerCase().includes(needle));
+    if (found) return found.trim();
+  }
+  return '';
+}
+
+/**
+ * The fake @brainstorm's reply (BS-13, MB-12, round 3; 2026-10-05, @orient folded in), as a model would write it: the card
+ * turnPlan's stage names, on the exchange's path. The area card (open path) has a reading in two sentences and broad
+ * areas from the workspace and what its library holds; with nothing in the library it says there is little to go on and
+ * asks the same question as an open card. Then open cards, each with its stage as its id: what they know about the
+ * subject (the opening's words, a mention as its name; the area picked; else "this") or, on the paper path, what they
+ * took from the paper; where that thins out, on their words (with a paper, naming a section, never what it says); their
+ * question in one sentence; and an mcq of versions: their draft as written, then the draft with "specifically" put in.
+ * The first card gives way to thin when a line of their own in the workspace holds a sentence with the subject in it,
+ * which "say" quotes. Then the recap: what they know (on the paper path, took from it), where it thins out, and their
+ * question (the version picked, the words typed on that card, else the draft; "not written yet" without one). No card or
+ * recap suggests a search (MATH-31). A line containing "malformed" gets a reply that is not a card.
  */
 function fakeCard(context, plan, models) {
   if (/malformed/i.test(plan.question)) return 'FAKE REPLY that is not a card: {"say": "cut off';
-  let from = plan.prior.length;
-  while (from > 0 && cardOfAnswer(plan.prior[from - 1].answer)) from -= 1;
-  // What they said on each card since the last recap, in order, and by the card's id (the area card has none).
+  const from = cardsFrom(plan.prior);
+  // What they said on each card since the last recap, in order, by the stage its id names (a focus card is the area's).
   const answers = [];
   for (let n = from; n < plan.prior.length; n += 1) {
     const card = cardOfAnswer(plan.prior[n].answer);
     const next = n + 1 < plan.prior.length ? plan.prior[n + 1].question : String(plan.text).trim();
-    answers.push({ id: questionOf(card).id, ...readAnswer(readQuestion(next, models).question, card) });
+    answers.push({ id: card.card === 'focus' ? 'area' : questionOf(card).id, say: card.say, ...readAnswer(readQuestion(next, models).question, card) });
   }
   const words = (answer) => (!answer || answer.skipped ? '' : [answer.picks.join(', '), answer.text, answer.note].filter(Boolean).join('; '));
-  const of = (id) => answers.find((answer) => answer.id === id);
-  const area = words(answers[0]).slice(0, 80), puzzle = words(of('puzzle')), draft = words(of('draft'));
+  const of = (...ids) => answers.find((answer) => ids.includes(answer.id));
+  // The sentence of theirs a thin card asked first quoted, which stands for what they know.
+  const quoted = ((of('thin') || {}).say || '').match(/^You wrote: "(.+)"$/);
+  const knew = words(of('know', 'took')) || (quoted ? quoted[1] : ''), thin = words(of('thin', 'puzzle', 'interest')), draft = words(of('draft'));
   const ask = (id, type, title, say, extra = {}) => JSON.stringify({ say, card: 'questions', questions: { eyebrow: 'your question', items: [{ id, type, title, ...extra }] }, ready: false });
   if (plan.stage === 'recap') {
     const versions = of('versions'), chosen = versions && !versions.skipped ? versions.picks[0] || versions.text : '';
     const question = chosen || draft;
-    return JSON.stringify({ say: [`Your question: ${question || 'not written yet'}`, `What puzzles you: ${puzzle || 'not said'}`].join('\n'), card: 'none', ready: true });
+    return JSON.stringify({ say: [`${plan.path === 'paper' ? 'What you took from it' : 'What you know'}: ${knew || 'not said'}`, `Where it thins out: ${thin || 'not said'}`, `Your question: ${question || 'not written yet'}`].join('\n'), card: 'none', ready: true });
   }
   if (plan.stage === 'area') {
     const names = context.entries.map((entry) => entry.name).slice(0, 2);
-    if (!names.length) {
-      return JSON.stringify({ say: `There is little of your own writing in “${context.workspaceName}” to go on yet.`, card: 'questions', questions: { eyebrow: 'where you are', items: [{ id: 'where', type: 'open', title: 'Where are you with this, in your own words?', placeholder: 'What you know, what you don’t…' }] }, ready: false });
-    }
+    if (!names.length) return ask('area', 'open', 'Where do you want to find a question?', `There is little of your own writing in “${context.workspaceName}” to go on yet.`, { placeholder: 'In your own words…' });
     const say = `You seem to have settled what “${context.workspaceName}” is for. What still looks open is how ${names.join(' and ')} ${names.length > 1 ? 'fit' : 'fits'} into it.`;
     const options = [`What “${context.workspaceName}” is trying to do`, ...names.map((name) => `How ${name} fits in`), 'How you would know it worked'];
     return JSON.stringify({ say, card: 'focus', focus: { title: 'Where do you want to find a question?', options: options.map((label) => ({ label })) }, ready: false });
   }
-  if (plan.stage === 'puzzle') {
-    return ask('puzzle', 'open', `${area ? `Within “${area}”, what` : 'What'} don’t you know yet that you want to, or what doesn’t add up for you?`, area ? `You picked “${area}”.` : '', { placeholder: 'In your own words…' });
+  // The subject: the opening's words, each mention as its name, beside the paper's (the paper's name when there are
+  // none); on the open path, the area picked.
+  const opening = from < plan.prior.length ? readQuestion(plan.prior[from].question, models).question : plan.question;
+  const paper = plan.paper ? plan.paper.name : '';
+  const beside = opening.replace(/@\[([^\]\n]+)\](?:\(ws:[\w-]+\))?/g, (token, name) => (paper && name.toLowerCase() === paper.toLowerCase() ? ' ' : name)).replace(/\s+/g, ' ').trim();
+  const subject = (plan.path === 'open' ? words(of('area')) : beside || paper).slice(0, 80);
+  if (plan.stage === 'know' || plan.stage === 'took') {
+    const own = ownSentence(context.documents, plan.path === 'paper' ? beside : subject);
+    if (own) return ask('thin', 'open', 'What would you need to find out to be sure of it?', `You wrote: "${own}"`, { placeholder: 'In your own words…' });
+    if (plan.stage === 'took') return ask('took', 'open', `What did you take from “${paper || subject}”?`, '', { placeholder: 'In your own words…' });
+    return ask('know', 'open', `Write what you know about ${subject ? `“${subject}”` : 'this'}, as you would explain it to a colleague.`, '', { placeholder: 'In your own words…' });
+  }
+  if (plan.stage === 'thin') {
+    const part = knew.slice(0, 60), section = plan.path === 'paper' ? ' That sits with the paper’s Method section.' : '';
+    return ask('thin', 'open', part ? `You wrote “${part}”.${section} What would you need to find out to be sure of it?` : 'Which part of this are you least sure of, and what would you need to find out to be sure of it?', '', { placeholder: 'In your own words…' });
   }
   if (plan.stage === 'draft') {
-    return ask('draft', 'open', 'Write it as one question, in one sentence.', puzzle ? `You said “${puzzle.slice(0, 60)}”.` : '', { placeholder: 'Your question…' });
+    return ask('draft', 'open', 'Write what you want to find out as one question, in one sentence.', thin ? `You said “${thin.slice(0, 60)}”.` : '', { placeholder: 'Your question…' });
   }
   // versions: their draft word for word, then one version of it with "specifically" put in after its first word; when the
   // draft already says it there is no version to make, and the card asks them to read it again.
@@ -567,33 +595,6 @@ function fakeCard(context, plan, models) {
   const parts = draft.match(/^(\S+)\s+([\s\S]+)$/);
   const narrower = parts ? `${parts[1]} specifically ${parts[2]}` : draft.replace(/\??$/, ' specifically?');
   return ask('versions', 'mcq', 'Which one is your question?', '', { options: [{ label: draft, why: 'as you wrote it' }, { label: narrower, why: 'narrower' }] });
-}
-
-/**
- * The fake @orient's reply (2026-10-04), as a model would write it: the card turnPlan's stage names, on the subject the
- * exchange opened with (a mention by its name; "this" when the line said nothing): an open card for what they know, a
- * free card on the words of that answer for where it thins out, an open card for what draws them, then the recap, a line
- * for each card in their words ("not said" for one skipped or never asked), with no search suggested (MATH-31). It counts
- * the cards since the last recap, so a further @orient starts again.
- */
-function fakeOrient(context, plan, models) {
-  let from = plan.prior.length;
-  while (from > 0 && cardOfAnswer(plan.prior[from - 1].answer)) from -= 1;
-  const opening = from < plan.prior.length ? plan.prior[from].question : plan.question;
-  const subject = String(opening || '').replace(/@\[([^\]\n]+)\](?:\(ws:[\w-]+\))?/g, '$1').replace(/\s+/g, ' ').trim().slice(0, 80);
-  // What they wrote on each card since the last recap, by the card's id (its stage).
-  const said = {};
-  for (let n = from; n < plan.prior.length; n += 1) {
-    const card = cardOfAnswer(plan.prior[n].answer);
-    const next = n + 1 < plan.prior.length ? plan.prior[n + 1].question : String(plan.text).trim();
-    const answer = readAnswer(readQuestion(next, models).question, card);
-    if (!answer.skipped) said[questionOf(card).id] = [answer.text, answer.note].filter(Boolean).join('; ');
-  }
-  const ask = (id, type, title, eyebrow) => JSON.stringify({ say: '', card: 'questions', questions: { eyebrow, items: [{ id, type, title, placeholder: 'In your own words…' }] }, ready: false });
-  if (plan.stage === 'know') return ask('know', 'open', `Write what you know about ${subject ? `“${subject}”` : 'this'}, as you would explain it to a colleague.`, 'what you know');
-  if (plan.stage === 'thin') return ask('thin', 'free', said.know ? `You wrote “${said.know.slice(0, 60)}”. Say more about it, or what you would want to check.` : 'Which part of this would you say more about, or want to check?', 'where it thins');
-  if (plan.stage === 'interest') return ask('interest', 'open', 'Which part of what you wrote draws you most, and what would you want to do with it or find out?', 'what draws you');
-  return JSON.stringify({ say: [`What you know: ${said.know || 'not said'}`, `Where it thins out: ${said.thin || 'not said'}`, `What draws you: ${said.interest || 'not said'}`].join('\n'), card: 'none', ready: true });
 }
 
 /**
@@ -671,25 +672,27 @@ function fakeDiscover(context, plan) {
   ].join('\n');
 }
 
-/** Scripted runs only (ENGELBART_BART_FAKE=1): no model. A question containing "hard" moves up one step; one containing "code" is answered with a JSON code block too. @brainstorm runs fakeCard, @orient fakeOrient, @discover fakeDiscover. */
-function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(), brainstormThreads = createThreads({ idleMs: BRAINSTORM_IDLE_MS }), orientThreads = createThreads({ idleMs: ORIENT_IDLE_MS }), discoverThreads = createThreads({ idleMs: DISCOVER_IDLE_MS }), onPicked = () => {} }) {
+/** Scripted runs only (ENGELBART_BART_FAKE=1): no model. A question containing "hard" moves up one step; one containing "code" is answered with a JSON code block too. @brainstorm runs fakeCard, @discover fakeDiscover. */
+function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(), brainstormThreads = createThreads({ idleMs: BRAINSTORM_IDLE_MS }), discoverThreads = createThreads({ idleMs: DISCOVER_IDLE_MS }), onPicked = () => {} }) {
   const waits = new Map();
   return {
     async ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart' }, { onProgress } = {}) {
       const models = readModels();
-      const plan = turnPlan({ agent, text, turns, choice: agent === 'bart' ? choice : null }, models);
-      const { brainstorm, question, provider, steps, pinned, prior } = plan, discover = agent === 'discover', orient = agent === 'orient';
-      if (pinned && question && agent === 'bart') remember(onPicked, steps[0]);
-      const store = { bart: threads, brainstorm: brainstormThreads, orient: orientThreads, discover: discoverThreads }[agent];
-      const held = prior.length ? store.take(threadKey(projectId, ref, prior), provider) : null;
       const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent });
+      const plan = turnPlan({ agent, text, turns, choice: agent === 'bart' ? choice : null, entries: context.entries }, models);
+      const { brainstorm, question, provider, steps, pinned, prior } = plan, discover = agent === 'discover';
+      if (pinned && question && agent === 'bart') remember(onPicked, steps[0]);
+      const store = { bart: threads, brainstorm: brainstormThreads, discover: discoverThreads }[agent];
+      const held = prior.length ? store.take(threadKey(projectId, ref, prior), provider) : null;
       const message = firstMessage({ context, prior: plan.shown, question: await withImagePaths(ctx, projectId, plan.asked), resumed: !!held, extra: plan.extra });
       const pause = (ms) => new Promise((resolve, reject) => { const timer = setTimeout(resolve, ms); waits.set(askId, () => { clearTimeout(timer); reject(new BartError('stopped', 'Stopped.')); }); });
       const feed = createFeed({ onProgress, intervalMs: 0 });
-      // The same kinds of update a real run sends, spread over the delay: two things done, then the answer in pieces.
+      // The same kinds of update a real run sends, spread over the delay: two things done, then the answer in pieces. An
+      // @brainstorm exchange on a paper opens it first, on its first turn.
+      const opens = brainstorm && plan.paper && cardsFrom(prior) === prior.length ? [`Reading ${path.basename(plan.paper.path || plan.paper.name)}`] : [];
       const act = async (text) => {
         feed.reset();
-        for (const activity of discover ? ['Reading notes.md', 'Looking up “fake”', 'Reading what cites “fake”'] : ['Reading notes.md', QUIET.has(agent) ? 'Searching for “fake”' : 'Searching the web for “fake”']) { feed.take({ activity, log: true }); await pause(delayMs / 4); }
+        for (const activity of discover ? ['Reading notes.md', 'Looking up “fake”', 'Reading what cites “fake”'] : [...opens, 'Reading notes.md', QUIET.has(agent) ? 'Searching for “fake”' : 'Searching the web for “fake”']) { feed.take({ activity, log: true }); await pause(delayMs / 4); }
         feed.take({ textStart: true });
         const pieces = text.match(/[\s\S]{1,24}/g) || [];
         for (const delta of pieces) { feed.take({ delta }); await pause(delayMs / 2 / pieces.length); }
@@ -700,7 +703,7 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
           steps, pinned, onProgress: stepShown(agent, onProgress),
           first: message, session: held ? held.session : null,
           // What it was sent is what it reports: a resumed session gets the question alone, a new one gets everything.
-          turn: async ({ message: sent }) => ({ session: 'fake', text: await act(brainstorm ? fakeCard(context, { ...plan, text }, models) : orient ? fakeOrient(context, { ...plan, text }, models) : discover ? fakeDiscover(context, plan) : /hard/.test(question) && /step 1 of/.test(sent) ? 'ESCALATE: the question says it is hard' : `FAKE ANSWER to "${question}".\n\n## Seen\n- **${context.documents.length}** characters of documents\n- \`${steps.length}\` steps${prior.length ? `\n- ${/<conversation>/.test(sent) ? `a new session, given ${prior.length} earlier ${prior.length === 1 ? 'turn' : 'turns'}` : /<engelbart>/.test(sent) ? 'a new session, given no earlier turns' : 'the same session, given the question alone'}` : ''}${/code/.test(question) ? `\n\nThe same as JSON:\n\n\`\`\`json\n{\n  "fake": true,\n  "steps": ${steps.length},\n  "note": "# not a heading"\n}\n\`\`\`` : ''}`) }),
+          turn: async ({ message: sent }) => ({ session: 'fake', text: await act(brainstorm ? fakeCard(context, { ...plan, text }, models) : discover ? fakeDiscover(context, plan) : /hard/.test(question) && /step 1 of/.test(sent) ? 'ESCALATE: the question says it is hard' : `FAKE ANSWER to "${question}".\n\n## Seen\n- **${context.documents.length}** characters of documents\n- \`${steps.length}\` steps${prior.length ? `\n- ${/<conversation>/.test(sent) ? `a new session, given ${prior.length} earlier ${prior.length === 1 ? 'turn' : 'turns'}` : /<engelbart>/.test(sent) ? 'a new session, given no earlier turns' : 'the same session, given the question alone'}` : ''}${/code/.test(question) ? `\n\nThe same as JSON:\n\n\`\`\`json\n{\n  "fake": true,\n  "steps": ${steps.length},\n  "note": "# not a heading"\n}\n\`\`\`` : ''}`) }),
         });
         const meta = { provider, level: out.level, trail: out.trail, ms: out.ms, pinned };
         const body = replyBody(agent, out.text);
@@ -713,4 +716,4 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
   };
 }
 
-module.exports = { createBart, createFakeBart, createThreads, threadKey, cleanTurns, turnPlan, climb, levelBlock, loadSystemPrompt, replyBody, writeCodexConfig, BartError, ESCALATE_RE, THREAD_IDLE_MS, BRAINSTORM_IDLE_MS, ORIENT_IDLE_MS, DISCOVER_IDLE_MS, DISCOVER_TIMEOUT_MS, DEEP_DISCOVER_TIMEOUT_MS, MODE_LIMITS, AGENTS, ORIENT_OPENING, ORIENT_STAGES, BRAINSTORM_STAGES };
+module.exports = { createBart, createFakeBart, createThreads, threadKey, cleanTurns, turnPlan, climb, levelBlock, loadSystemPrompt, replyBody, writeCodexConfig, BartError, ESCALATE_RE, THREAD_IDLE_MS, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS, DISCOVER_TIMEOUT_MS, DEEP_DISCOVER_TIMEOUT_MS, MODE_LIMITS, AGENTS, BRAINSTORM_PATHS, MAX_BRAINSTORM_CARDS };

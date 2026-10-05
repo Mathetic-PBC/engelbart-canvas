@@ -3,7 +3,8 @@
 // A live @brainstorm card's own controls (src/renderer/workspace/DocEditor.jsx, round 6): Wrap up between Skip and Submit,
 // which writes the answer given (if any) and "; (wrap up)", and under the card's box the Send to Discover field (MATH-31),
 // which starts an @discover thread of its own on what the person typed, under the brainstorm thread, and leaves the card
-// live. @discover's own cards have neither. There is no document here: the editor and its elements are stand-ins.
+// live. @discover's own cards have neither. An older document's `@orient` line (2026-10-05) is asked, drawn and
+// answered as @brainstorm's. There is no document here: the editor and its elements are stand-ins.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -37,7 +38,7 @@ function mounted(lines) {
   const asks = [];
   const props = { docKey: 'k', text: lines.join('\n'), onChange: (next) => { props.text = next; }, onAsk: (ask) => asks.push(ask) };
   const editor = new DocEditor(props);
-  const root = { closest: (sel) => (sel === '[data-editor]' ? root : null), matches: () => false, focus() {}, contains: () => false, querySelector: () => null };
+  const root = { closest: (sel) => (sel === '[data-editor]' ? root : null), matches: () => false, focus() {}, blur() {}, contains: () => false, querySelector: () => null };
   editor.props = props;
   editor.edRef = { current: root };
   editor.scrollRef = { current: { closest: () => null } };
@@ -214,5 +215,95 @@ test('on a live @brainstorm versions card the field under the options reads "Or 
   for (const lines of [['@brainstorm', ...answer(FOCUS), ''], ['@discover', ...answer(VERSIONS), '']]) {
     assert.match(mounted(lines).html(0), /placeholder="Or say it in your own words…"/, `${lines[0]}: as before`);
   }
-  assert.equal(editorModule.BRAINSTORM_ITEM.summary, 'Work out what puzzles you and land on a research question in your own words.');
+  assert.equal(editorModule.BRAINSTORM_ITEM.summary, 'Write what you know about a topic or paper, then land on a research question in your own words.', 'M-08');
+});
+
+/* ------------------------------------------------------------- @orient folded into @brainstorm (2026-10-05) */
+
+const lineOf = async (m, i) => {
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href), ls = m.editor.lines();
+  return m.editor.lineHtml(i, ls[i], model.parseLine(ls[i]), false, false, m.editor.layout(ls).get(i), m.editor.lockedAt(ls, i));
+};
+const KNOW = { say: '', card: 'questions', questions: { eyebrow: 'what you know', items: [{ id: 'know', type: 'open', title: 'Write what you know about “metacognition”.', subtitle: 'For a colleague.' }] }, ready: false };
+
+test('an @orient line is asked as @brainstorm and stays as written; its live card is a brainstorm card, with Skip, Wrap up, Submit and Send to Discover, and its answers are @brainstorm lines that go on with its thread (M-02, M-08, A-06)', async () => {
+  const asked = mounted(['Notes', '@orient metacognition', '']);
+  asked.editor.askInline(1);
+  assert.deepEqual([asked.asks[0].agent, asked.asks[0].text, asked.asks[0].turns], ['brainstorm', 'metacognition', []]);
+  assert.deepEqual(asked.lines().slice(0, 3), ['Notes', '@orient metacognition', `bart~> ${asked.asks[0].askId}`], 'the line is not rewritten');
+
+  const m = mounted(['Notes', '@orient metacognition', ...answer(KNOW), '']);
+  assert.deepEqual([m.entry(1).live, m.entry(1).agent], [true, 'brainstorm']);
+  const shown = m.html(1);
+  const at = (act) => shown.indexOf(`data-act="${act}"`);
+  assert.ok(at('cardskip') > 0 && at('cardskip') < at('cardwrap') && at('cardwrap') < at('cardsend') && at('cardsend') < at('opendiscover'), 'Skip, Wrap up, Submit, then Send to Discover');
+  assert.ok(!shown.includes('For a colleague.'), 'no subtitle');
+  m.click('cardwrap', 1);
+  assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].turns.length], ['brainstorm', '(wrap up)', 1]);
+  assert.equal(m.lines()[m.lines().length - 3], '@brainstorm (wrap up)');
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
+  assert.deepEqual(model.threads(m.lines()).map((t) => t.turns.length), [2], 'the answer goes on with the @orient thread');
+
+  const s = mounted(['@orient', ...answer(KNOW), '']);
+  s.editor.cardState.set(0, { text: 'people overrate what they learn' });
+  s.click('cardsend', 0);
+  assert.deepEqual([s.asks[0].agent, s.asks[0].text, s.lines()[s.lines().length - 3]], ['brainstorm', 'people overrate what they learn', '@brainstorm people overrate what they learn']);
+
+  // A running one shows what it is doing, never the JSON of the card arriving.
+  const p = mounted(['@orient', 'bart~> run1', '']);
+  p.props.asks = { run1: { agent: 'brainstorm', activity: 'Reading tutortrace.pdf', lines: ['{"say": "", "card"'] } };
+  const pending = await lineOf(p, 1);
+  assert.ok(pending.includes('Reading tutortrace.pdf') && !pending.includes('&quot;card&quot;') && !pending.includes('"card"'));
+});
+
+test('a recap is drawn as sections, the paper path\'s "What you took from it" and an older @orient recap\'s labels too; under it "Brainstorm again", which may be sent empty, then Send to Discover on a row of its own (M-07, M-08, A-05, A-06)', async () => {
+  for (const [first, label] of [['@brainstorm @[TutorTrace]', 'What you took from it'], ['@orient metacognition', 'What you know']]) {
+    const lines = [first, ...answer(KNOW), '@brainstorm (wrap up)', `bart> ${label}: learners query before trying`, 'bart> Where it thins out: not said', 'bart> What draws you: the gap', 'bart> Your question: not written yet', 'bart> ', 'bart> *3 s*', ''];
+    const m = mounted(lines);
+    const row = (text) => m.lines().indexOf(text);
+    assert.match(await lineOf(m, row(`bart> ${label}: learners query before trying`)), new RegExp(`>${label}</span>`), `${label}: a section, its label in bold`);
+    assert.match(await lineOf(m, row('bart> Where it thins out: not said')), /font-style:italic;">not said/, 'not said in grey');
+    assert.match(await lineOf(m, row('bart> What draws you: the gap')), />What draws you<\/span>/, 'an older recap\'s label still draws');
+    const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
+    const follow = m.editor.followHtml(m.lines(), model.threads(m.lines())[0]);
+    assert.match(follow, /data-agent="brainstorm" data-empty="1" rows="1" placeholder="Reply…" aria-label="Brainstorm again"/, 'Brainstorm again, as it is today');
+    assert.match(follow, />@brainstorm<\/span>/);
+    const page = m.editor.editorHtml();
+    assert.ok(page.indexOf('data-recap-discover="0"') > page.indexOf('data-followup="0"'), 'Send to Discover, a row of its own under it');
+    assert.ok(!page.includes('Orient again'));
+    m.editor.sendFollow(0);
+    assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].turns.length], ['brainstorm', '', 2], 'sent empty: @brainstorm again on the same thread');
+    assert.equal(m.lines()[lines.length - 1], '@brainstorm');
+  }
+});
+
+test('Send to Discover is not drawn after @bart or @discover answers, under a recap still being asked again, or after an @brainstorm reply that is not a recap (MATH31-04, A-05)', () => {
+  const none = (lines, why) => { const page = mounted(lines).editor.editorHtml(); assert.ok(!page.includes('data-discover-input') && !page.includes('opendiscover'), why); };
+  none(['@bart why?', 'bart> because', 'bart> *Sonnet · high · 3 s*', ''], 'not after @bart');
+  none(['@discover retry loops', 'bart> ## Start here', 'bart> *3 s*', ''], 'not after an @discover guide');
+  none(['@orient (wrap up)', 'bart> What you know: a', 'bart> *3 s*', '@brainstorm', 'bart~> o9', ''], 'not while it is asked again');
+  none(['@brainstorm', 'bart> FAKE REPLY that is not a card: {"say": "cut off', 'bart> *3 s*', ''], 'not after a reply that is not a recap');
+  const bart = mounted(['@bart why?', 'bart> because', 'bart> *Sonnet · high · 3 s*', '']);
+  bart.editor.discoverText.set('t0', 'x');
+  bart.editor.sendDiscover('t0');
+  assert.deepEqual(bart.asks, [], 'a target that is not drawn sends nothing');
+  assert.match(bart.editor.editorHtml(), /aria-label="Ask a follow-up"/, '@bart\'s follow-up field is as it was');
+});
+
+test('the @ menu no longer offers Orient: the editor, the rail model and the workspace list Bart, Brainstorm and Discover; the rail names no Orient (M-01)', async () => {
+  assert.equal(editorModule.ORIENT_ITEM, undefined);
+  const rail = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/rail.js')).href);
+  assert.equal(rail.ORIENT_VERB, undefined);
+  assert.deepEqual(rail.mentionRows({ query: 'or', library: [], page: null, pageRow: null }).map((r) => r.key), [], 'nothing starts with "or"');
+  assert.equal(rail.isVerbRow({ id: 'orient' }), false);
+  const fs = require('node:fs');
+  const workspaceSrc = fs.readFileSync(path.join(__dirname, '../src/renderer/screens/Workspace.jsx'), 'utf8');
+  assert.match(workspaceSrc, /\[BART_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, /);
+  assert.ok(!/ORIENT_ITEM/.test(workspaceSrc));
+  assert.ok(!/Orient asked/.test(fs.readFileSync(path.join(__dirname, '../src/renderer/workspace/Rail.jsx'), 'utf8')));
+  // A row picked from an editor's own list by id: no @Orient is written.
+  const m = mounted(['@or']);
+  m.editor.state.mention = { i: 0, start: 0, caret: 3, query: 'or' };
+  m.editor.pickMention({ id: 'brainstorm', name: 'brainstorm' });
+  assert.equal(m.lines()[0], '@Brainstorm ');
 });

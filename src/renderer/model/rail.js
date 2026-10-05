@@ -111,10 +111,9 @@ export function attachRows({ query, library, taken = [], inRail = () => false, b
 
 export const BART_VERB = { kind: 'verb', verb: 'bart', key: 'verb:bart', name: 'Bart', glyph: 'chat', token: '@Bart ' };
 export const NOTE_VERB = { kind: 'verb', verb: 'note', key: 'verb:note', name: 'Note', glyph: 'note', token: '@Note ' };
-// @brainstorm (2026-09-30): asks, a card at a time, what you want to work on.
+// @brainstorm (2026-09-30): asks, a card at a time, what you know about a topic or paper and where it thins out, until you
+// write a research question (2026-10-05, @orient folded in).
 export const BRAINSTORM_VERB = { kind: 'verb', verb: 'brainstorm', key: 'verb:brainstorm', name: 'Brainstorm', glyph: 'chat', token: '@Brainstorm ' };
-// @orient (2026-10-04): asks what you know about a topic or a paper, then what interests you about it.
-export const ORIENT_VERB = { kind: 'verb', verb: 'orient', key: 'verb:orient', name: 'Orient', glyph: 'chat', token: '@Orient ' };
 // @discover (2026-09-30): what to read about a problem, and where in it to look.
 export const DISCOVER_VERB = { kind: 'verb', verb: 'discover', key: 'verb:discover', name: 'Discover', glyph: 'chat', token: '@Discover ' };
 const MAX_MENTIONS = 10;
@@ -122,9 +121,9 @@ const MAX_WORKSPACES = 6; // typed
 const FIRST_WORKSPACES = 3; // before anything is typed
 
 /**
- * The @ menu (Add - Mention.dc.html `menu`): Bart, Note, Brainstorm, Orient and Discover first (Task went on 2026-09-29;
- * Brainstorm and Discover came on 2026-09-30, Orient on 2026-10-04), matched from their first letter; then the page
- * open in the Browser, which the library may not hold yet (`page` { input, title }, `pageRow` its row or null); then the
+ * The @ menu (Add - Mention.dc.html `menu`): Bart, Note, Brainstorm and Discover first (Task went on 2026-09-29;
+ * Brainstorm and Discover came on 2026-09-30; Orient, of 2026-10-04, went into Brainstorm on 2026-10-05), matched from
+ * their first letter; then the page open in the Browser, which the library may not hold yet (`page` { input, title }, `pageRow` its row or null); then the
  * project's other workspaces (2026-09-25; `workspaces` as model/nav.js flatWorkspaces gives them, the ones written in
  * last first, never `hereId`): three before anything is typed, else up to six whose names hold the words, then (with
  * `bodies`) whose documents hold what is typed; then up to ten things from the library, those found only by what they
@@ -132,7 +131,7 @@ const FIRST_WORKSPACES = 3; // before anything is typed
  */
 export function mentionRows({ query, library, page, pageRow, workspaces = [], hereId = null, bodies = null }) {
   const needle = String(query || '').trim().toLowerCase();
-  const verbs = [BART_VERB, NOTE_VERB, BRAINSTORM_VERB, ORIENT_VERB, DISCOVER_VERB].filter((verb) => !needle || verb.name.toLowerCase().startsWith(needle));
+  const verbs = [BART_VERB, NOTE_VERB, BRAINSTORM_VERB, DISCOVER_VERB].filter((verb) => !needle || verb.name.toLowerCase().startsWith(needle));
   const pool = library.filter((row) => row.type !== 'image');
   let hits = (needle ? hayThenBody(pool, (row) => hay(row).includes(needle), (row) => bodyOf(bodies, 'items', row.id).includes(needle)) : pool).map((row) => ({ kind: 'item', key: row.id, row, name: row.name }));
   const out = [...verbs];
@@ -148,8 +147,8 @@ export function mentionRows({ query, library, page, pageRow, workspaces = [], he
   return [...out, ...spaces, ...hits.slice(0, MAX_MENTIONS)];
 }
 
-/** A row the line keeps as a word (Bart, Note, Brainstorm, Orient, Discover) rather than a mention; an editor's own list names the agents by id. */
-export const isVerbRow = (row) => !!row && (row.kind === 'verb' || row.id === 'bart' || row.id === 'brainstorm' || row.id === 'orient' || row.id === 'discover');
+/** A row the line keeps as a word (Bart, Note, Brainstorm, Discover) rather than a mention; an editor's own list names the agents by id. */
+export const isVerbRow = (row) => !!row && (row.kind === 'verb' || row.id === 'bart' || row.id === 'brainstorm' || row.id === 'discover');
 /** The @ menu of a follow-up field (2026-10-02): the field already asks its thread's agent, so only what can be mentioned. */
 export const fieldRows = (rows) => rows.filter((row) => row && !isVerbRow(row));
 

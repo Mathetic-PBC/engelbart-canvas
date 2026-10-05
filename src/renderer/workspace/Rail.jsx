@@ -773,7 +773,7 @@ function NextRow({ next, places = [], projectId, onGo }) {
                 <PlaceMark why={place.why} ground="#fff" />
                 <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
                   <PlaceName place={place} projectId={projectId} size={13.5} />
-                  <span style={{ font: '11.5px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{place.why === 'agent' ? `${place.kind === 'build' ? 'Build finished a turn' : place.kind === 'brainstorm' ? 'Brainstorm asked' : place.kind === 'orient' ? 'Orient asked' : place.kind === 'discover' ? 'Discover found reading' : 'Bart answered'} ${when(place.at)}` : `Edited ${when(place.at)}`}</span>
+                  <span style={{ font: '11.5px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{place.why === 'agent' ? `${place.kind === 'build' ? 'Build finished a turn' : place.kind === 'brainstorm' ? 'Brainstorm asked' : place.kind === 'discover' ? 'Discover found reading' : 'Bart answered'} ${when(place.at)}` : `Edited ${when(place.at)}`}</span>
                 </span>
                 {place.next && <span style={{ flex: 'none', font: '11.5px/1 var(--font-sans)', color: '#8f8f8f' }}>⌘J</span>}
               </button>

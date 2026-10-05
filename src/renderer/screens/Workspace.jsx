@@ -3,7 +3,7 @@ import { api, errorMessage } from '../api.js';
 import Rail from '../workspace/Rail.jsx';
 import DocTabs from '../workspace/DocTabs.jsx';
 import NotePicker from '../workspace/NotePicker.jsx';
-import DocEditor, { BART_ITEM, BRAINSTORM_ITEM, ORIENT_ITEM, DISCOVER_ITEM } from '../workspace/DocEditor.jsx';
+import DocEditor, { BART_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM } from '../workspace/DocEditor.jsx';
 import RightPane, { RIGHT_MODES } from '../workspace/RightPane.jsx';
 import { kindOf } from '../ui/Icons.jsx';
 import { hasTag, isNote } from '../model/kind.js';
@@ -351,9 +351,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // the documents from disk, so everything is saved first. Its answer replaces the pending line in whatever that document's
   // text is by then, open or not; Stop removes the line; progress (which model, what it is doing, the answer so far) shows on the pending row.
   // A follow-up also carries `turns`, the earlier turns of its exchange as the document holds them, and Regenerate may carry
-  // `choice`, a model and effort for that run alone. `agent` is 'brainstorm' for an @brainstorm line (2026-09-30) and
-  // 'orient' for an @orient line (2026-10-04), whose answers are cards the editor draws, and 'discover' for an @discover
-  // line (a card or a reading guide); everything else about the run is the same.
+  // `choice`, a model and effort for that run alone. `agent` is 'brainstorm' for an @brainstorm line (2026-09-30), and for
+  // an older document's @orient line (2026-10-05), whose answers are cards the editor draws, and 'discover' for an
+  // @discover line (a card or a reading guide); everything else about the run is the same.
   const [asks, setAsks] = React.useState({});
   // What the @bart line's chip offers and what its flags are checked against. The files behind it are read again for every
   // question, so this is read again whenever the window comes back to the front, and once a question has been sent: one
@@ -724,7 +724,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return out;
   }, [topic, here, byId, renaming, activeRowId, tree.notes, mentioned]);
 
-  const mentionable = React.useMemo(() => [BART_ITEM, BRAINSTORM_ITEM, ORIENT_ITEM, DISCOVER_ITEM, ...library.filter((row) => row.type !== 'image').map(describe)], [library]);
+  const mentionable = React.useMemo(() => [BART_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, ...library.filter((row) => row.type !== 'image').map(describe)], [library]);
 
   // On the rail: what the search does not offer again, and what makes the Browser's Save read ✓.
   const railIds = React.useMemo(() => new Set(rows.filter((row) => row.type !== 'child' && row.type !== 'archive').map((row) => row.id)), [rows]);

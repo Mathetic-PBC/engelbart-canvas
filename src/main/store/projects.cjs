@@ -1021,7 +1021,7 @@ const RECENT_KEEP = 3;
 const RECENT_WINDOW = 30 * 60 * 1000;
 const MAX_RECENT = 100;
 const MAX_AGENTS = 50;
-const AGENT_KINDS = new Set(['bart', 'brainstorm', 'orient', 'discover', 'build']);
+const AGENT_KINDS = new Set(['bart', 'brainstorm', 'discover', 'build']);
 const AGENT_STATUSES = new Set(['running', 'waiting']);
 const liveAgents = new Set(); // ids of the agents running in this process
 const isoOrNull = (value) => (typeof value === 'string' && value.length <= 40 && !Number.isNaN(Date.parse(value)) ? value : null);

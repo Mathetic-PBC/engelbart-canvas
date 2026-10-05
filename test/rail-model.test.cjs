@@ -52,41 +52,40 @@ test('search: an address or a path is the one row the library has for it, or a n
   assert.deepEqual(searchRows({ query: 'https://github.com/VectifyAI/PageIndex', library, inRail, found: { row: library[2], found: {}, error: null } }).map((r) => [r.key, r.tag]), [['g1', 'link · git']]);
 });
 
-test('@ menu: Bart, Note, Brainstorm, Orient and Discover first by their first letters, the open page next, then ten from the library; no workspaces', async () => {
+test('@ menu: Bart, Note, Brainstorm and Discover first by their first letters, the open page next, then ten from the library; no workspaces', async () => {
   const { mentionRows } = await load();
   const many = [...library, ...Array.from({ length: 12 }, (_, i) => row(`x${i}`, `Extra ${i}`, 'website', [], { url: `https://example.org/${i}` }))];
   const all = mentionRows({ query: '', library: many, page: null, pageRow: null });
-  assert.deepEqual(all.slice(0, 5).map((r) => r.name), ['Bart', 'Note', 'Brainstorm', 'Orient', 'Discover']);
-  assert.equal(all.length, 5 + 10, 'ten from the library');
+  assert.deepEqual(all.slice(0, 4).map((r) => r.name), ['Bart', 'Note', 'Brainstorm', 'Discover']);
+  assert.equal(all.length, 4 + 10, 'ten from the library');
   assert.equal(all.some((r) => r.key === 'i1'), false, 'pictures are not mentioned by hand');
   assert.deepEqual(mentionRows({ query: 'b', library, page: null, pageRow: null }).map((r) => r.name).slice(0, 2), ['Bart', 'Brainstorm']);
   assert.deepEqual(mentionRows({ query: 'br', library, page: null, pageRow: null }).map((r) => r.key)[0], 'verb:brainstorm', '@brainstorm by its first letters (2026-09-30)');
   assert.deepEqual(mentionRows({ query: 'dis', library, page: null, pageRow: null }).map((r) => r.key)[0], 'verb:discover', '@discover by its first letters (2026-09-30)');
-  const orient = mentionRows({ query: 'or', library, page: null, pageRow: null })[0];
-  assert.deepEqual([orient.key, orient.name, orient.token], ['verb:orient', 'Orient', '@Orient '], '@orient by its first letters (2026-10-04)');
+  assert.ok(!mentionRows({ query: 'or', library, page: null, pageRow: null }).some((r) => r.kind === 'verb'), 'no Orient: it went into Brainstorm (2026-10-05)');
   assert.deepEqual(mentionRows({ query: 'no', library, page: null, pageRow: null }).map((r) => r.key), ['verb:note', 'n1'], 'a verb by its first letters; a library row by its words, which include "md · note"');
   assert.deepEqual(mentionRows({ query: 'as', library, page: null, pageRow: null }).map((r) => r.key), [], 'Note is not matched from its middle; there is no Task (2026-09-29)');
   assert.deepEqual(mentionRows({ query: 'import', library, page: null, pageRow: null }).map((r) => r.key), ['n1']);
 
   const page = { input: 'https://arxiv.org/pdf/2005.11401', title: 'Retrieval-Augmented Generation [RAG]' };
   const fresh = mentionRows({ query: '', library, page, pageRow: null });
-  assert.deepEqual([fresh[5].kind, fresh[5].name, fresh[5].input, fresh[5].open], ['fresh', 'Retrieval-Augmented Generation RAG', page.input, true], 'the open page leads the library, named so a mention can hold it');
+  assert.deepEqual([fresh[4].kind, fresh[4].name, fresh[4].input, fresh[4].open], ['fresh', 'Retrieval-Augmented Generation RAG', page.input, true], 'the open page leads the library, named so a mention can hold it');
   const held = mentionRows({ query: 'contextual', library, page: { input: 'https://www.anthropic.com/engineering/contextual-retrieval', title: 'Contextual Retrieval' }, pageRow: library[3] });
   assert.deepEqual(held.map((r) => [r.key, !!r.open]), [['w1', true]], 'a page the library holds is that row, once');
   assert.deepEqual(mentionRows({ query: 'colbert', library, page, pageRow: null }).map((r) => r.key), ['p1'], 'the page is left out when it does not match');
 });
 
-test('@ menu in a follow-up field: the same rows less Bart, Note, Brainstorm, Orient and Discover (2026-10-02)', async () => {
+test('@ menu in a follow-up field: the same rows less Bart, Note, Brainstorm and Discover (2026-10-02)', async () => {
   const { mentionRows, fieldRows, isVerbRow } = await load();
   const page = { input: 'https://arxiv.org/pdf/2005.11401', title: 'Retrieval-Augmented Generation' };
   const workspaces = [{ id: 'ws1', name: 'Brainstorm notes', above: [] }];
   const all = mentionRows({ query: '', library, page, pageRow: null, workspaces });
-  assert.deepEqual(fieldRows(all).map((r) => r.key), all.slice(5).map((r) => r.key), 'the verbs lead the menu; everything after them stays, in order');
+  assert.deepEqual(fieldRows(all).map((r) => r.key), all.slice(4).map((r) => r.key), 'the verbs lead the menu; everything after them stays, in order');
   assert.deepEqual(fieldRows(all).slice(0, 2).map((r) => r.kind), ['fresh', 'workspace'], 'the open page (added when picked) and the workspaces are kept');
   assert.deepEqual(fieldRows(mentionRows({ query: 'br', library, page: null, pageRow: null, workspaces })).map((r) => r.key), ['ws:ws1', 'n1'], 'a workspace named like a verb is still a mention (and "library" holds "br")');
   assert.deepEqual(fieldRows(mentionRows({ query: 'no', library, page: null, pageRow: null })).map((r) => r.key), ['n1']);
   // An editor with no list of its own (DocEditor's `mentionable`) names Bart and the agents by id.
-  assert.deepEqual(fieldRows([{ id: 'bart', name: 'bart' }, { id: 'brainstorm' }, { id: 'orient' }, { id: 'discover' }, library[0], null]).map((r) => r.id), ['n1']);
+  assert.deepEqual(fieldRows([{ id: 'bart', name: 'bart' }, { id: 'brainstorm' }, { id: 'discover' }, library[0], null]).map((r) => r.id), ['n1']);
   assert.equal(isVerbRow(null), false);
 });
 
@@ -121,7 +120,7 @@ test('the @ menu offers the project\'s other workspaces after the page and befor
   ];
   const empty = mentionRows({ query: '', library, page: null, pageRow: null, workspaces, hereId: 'a' });
   assert.deepEqual(empty.filter((r) => r.kind === 'workspace').map((r) => r.id), ['b', 'c', 'd'], 'three, in the order given, never the one you are in');
-  assert.equal(empty.findIndex((r) => r.kind === 'workspace'), 5, 'right after Bart, Note, Brainstorm, Orient and Discover');
+  assert.equal(empty.findIndex((r) => r.kind === 'workspace'), 4, 'right after Bart, Note, Brainstorm and Discover');
   const typed = mentionRows({ query: 'ag', library, page: null, pageRow: null, workspaces, hereId: 'c' });
   assert.deepEqual(typed.filter((r) => r.kind === 'workspace').map((r) => [r.id, r.above]), [['a', []], ['b', ['Agents']]], 'names that start with the words first, each with what is above it');
   assert.deepEqual(typed[0], { kind: 'workspace', key: 'ws:a', id: 'a', name: 'Agents', above: [] });
