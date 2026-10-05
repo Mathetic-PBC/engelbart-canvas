@@ -150,3 +150,82 @@ test('"Add from library" in the Build panel: the ones written in last before any
   assert.equal(attachRows({ query: '', library: many }).length, 8);
   assert.equal(attachRows({ query: 'match', library: many }).length, 30);
 });
+
+/* -------------------------------------------------------- what things say (MATH-29) */
+
+const said = (items = {}, workspaces = {}) => ({ items, workspaces });
+
+test('a row\'s summary is searched like its name, with or without bodies (MATH-29)', async () => {
+  const { searchRows, mentionRows, attachRows } = await load();
+  const summed = [...library, row('s1', 'Lewis et al.', 'website', ['paper'], { url: 'https://arxiv.org/abs/2005.11401', summary: 'Retrieval-Augmented GENERATION for knowledge-intensive tasks.' })];
+  assert.deepEqual(searchRows({ query: 'augmented generation', library: summed, inRail: () => false }).map((r) => r.key), ['s1']);
+  assert.deepEqual(mentionRows({ query: 'Augmented', library: summed, page: null, pageRow: null }).map((r) => r.key), ['s1']);
+  assert.deepEqual(attachRows({ query: 'knowledge lewis', library: summed }).map((r) => r.key), ['s1']);
+});
+
+test('the sidebar\'s search: a row found only by what it says comes after the rows its name finds; case does not matter; without bodies, as before (MATH-29)', async () => {
+  const { searchRows, bodyMaps } = await load();
+  const inRail = (id) => id === 'p1';
+  const bodies = bodyMaps(said({ p1: 'Late Interaction over BERT, for passage RETRIEVAL.', n1: 'Notes on retrieval at scale.', c1: 'id,title' }));
+  assert.ok(bodies.items instanceof Map && bodies.workspaces instanceof Map);
+  assert.equal(bodies.items.get('p1'), 'late interaction over bert, for passage retrieval.', 'lowercased once, when the answer comes');
+  const found = searchRows({ query: 'retrieval', library, inRail, bodies });
+  assert.deepEqual(found.map((r) => r.key), ['w1', 'n1', 'p1'], 'the name match first, then the text matches in the library\'s order');
+  assert.deepEqual(found.map((r) => r.tag), ['link', 'md · note', 'here'], 'a row found by its text looks like any other');
+  assert.deepEqual(found.map((r) => Object.keys(r).sort()), found.map(() => ['key', 'kind', 'name', 'row', 'tag']), 'no snippet');
+  assert.deepEqual(searchRows({ query: 'PASSAGE Retrieval', library, inRail, bodies }).map((r) => r.key), ['p1'], 'the whole phrase, in any case');
+  assert.deepEqual(searchRows({ query: 'passage retrieval', library, inRail }).map((r) => r.key), [], 'no bodies: only names, places, kinds and summaries');
+  for (const query of ['retrieval', 'colbert', 'import', '', 'xyz']) {
+    const before = searchRows({ query, library, inRail }).map((r) => r.key);
+    assert.deepEqual(searchRows({ query, library, inRail, bodies: null }).map((r) => r.key), before, query);
+    assert.deepEqual(searchRows({ query, library, inRail, bodies: bodyMaps({}) }).map((r) => r.key), before, query);
+  }
+  assert.deepEqual(searchRows({ query: '', library, inRail, bodies }).map((r) => r.key), ['g1', 'w1', 'c1', 'f1'], 'empty: the same four');
+  // An address or a path goes to the main process as before; what things say plays no part.
+  const address = 'https://example.org/new-page';
+  const withAddress = bodyMaps(said({ n1: `see ${address}` }));
+  assert.deepEqual(searchRows({ query: address, library, inRail, bodies: withAddress, found: undefined }), []);
+  assert.deepEqual(searchRows({ query: '/Users/h/ColBERT.pdf', library, inRail, bodies: withAddress, found: { row: library[1], found: {}, error: null } }).map((r) => r.key), ['p1']);
+});
+
+test('the @ menu: library rows and workspaces found only by what they say come after the ones their names find, within the same caps (MATH-29)', async () => {
+  const { mentionRows, bodyMaps } = await load();
+  const workspaces = [
+    { id: 'a', name: 'Late interaction', above: [] },
+    { id: 'b', name: 'Reading', above: [] },
+    { id: 'c', name: 'Writing', above: ['Reading'] },
+    { id: 'd', name: 'Here', above: [] },
+  ];
+  const bodies = bodyMaps(said({ p1: 'ColBERT: efficient passage search via LATE INTERACTION.' }, { c: 'We compared late interaction with dense retrieval.', b: 'nothing about it', d: 'late interaction, written here' }));
+  const menu = mentionRows({ query: 'late interaction', library, page: null, pageRow: null, workspaces, hereId: 'd', bodies });
+  assert.deepEqual(menu.map((r) => r.key), ['ws:a', 'ws:c', 'p1'], 'the workspace by its name, then the one by its document (never the one you are in), then the paper by its text');
+  assert.deepEqual(menu[1], { kind: 'workspace', key: 'ws:c', id: 'c', name: 'Writing', above: ['Reading'] }, 'a workspace found by its document looks like any other');
+  assert.deepEqual(mentionRows({ query: 'Late Interaction', library, page: null, pageRow: null, workspaces, hereId: 'd' }).map((r) => r.key), ['ws:a'], 'no bodies: names only');
+  assert.deepEqual(mentionRows({ query: 'LATE INTERACTION', library, page: null, pageRow: null, workspaces, hereId: 'd', bodies }).map((r) => r.key), ['ws:a', 'ws:c', 'p1'], 'case does not matter');
+  assert.deepEqual(mentionRows({ query: 'retrieval', library, page: null, pageRow: null, workspaces, bodies }).map((r) => r.key), ['ws:c', 'w1'], 'a workspace by its document; the page by its name');
+
+  // Ten library rows at most, and six workspaces at most: what is found by name fills them first.
+  const named = Array.from({ length: 10 }, (_, i) => row(`m${i}`, `Interaction ${i}`, 'website', [], { url: `https://example.org/${i}` }));
+  const capped = mentionRows({ query: 'interaction', library: [row('t1', 'Talk', 'website', [], { url: 'https://example.org/t' }), ...named], page: null, pageRow: null, bodies: bodyMaps(said({ t1: 'an interaction' })) });
+  assert.deepEqual(capped.map((r) => r.key), named.map((r) => r.id), 'the row found by its text is past the ten');
+  assert.deepEqual(mentionRows({ query: 'interaction', library: [row('t1', 'Talk', 'website'), ...named.slice(0, 9)], page: null, pageRow: null, bodies: bodyMaps(said({ t1: 'an interaction' })) }).map((r) => r.key).slice(-1), ['t1'], 'with room, it is last');
+  const many = Array.from({ length: 6 }, (_, i) => ({ id: `n${i}`, name: `Interaction ${i}`, above: [] }));
+  const spaces = (list) => mentionRows({ query: 'interaction', library: [], page: null, pageRow: null, workspaces: list, bodies: bodyMaps(said({}, { z: 'interaction' })) }).filter((r) => r.kind === 'workspace').map((r) => r.id);
+  assert.deepEqual(spaces([{ id: 'z', name: 'Zed', above: [] }, ...many]), many.map((w) => w.id), 'six by name; the one by its document is past the cap');
+  assert.deepEqual(spaces([{ id: 'z', name: 'Zed', above: [] }, ...many.slice(0, 2)]), ['n0', 'n1', 'z']);
+});
+
+test('"Add from library": every word in the name, place, kind or summary first; then every word there or in what the row says, newest first (MATH-29)', async () => {
+  const { attachRows, bodyMaps } = await load();
+  const dated = library.map((r, i) => ({ ...r, last_edited: `2026-09-${String(10 + i).padStart(2, '0')}T00:00:00Z` }));
+  const bodies = bodyMaps(said({ n1: 'How RETRIEVAL works here.', p1: 'Late interaction retrieval.', i1: 'retrieval' }));
+  assert.deepEqual(attachRows({ query: 'retrieval', library: dated, bodies }).map((r) => r.key), ['w1', 'p1', 'n1'], 'the name match, then the text matches newest first; never a picture');
+  assert.deepEqual(attachRows({ query: 'colbert late', library: dated, bodies }).map((r) => r.key), ['p1'], 'one word in the name, the other in the text');
+  assert.deepEqual(attachRows({ query: 'Late Interaction', library: dated, bodies }).map((r) => r.key), ['p1'], 'case does not matter');
+  assert.deepEqual(attachRows({ query: 'retrieval', library: dated, bodies, taken: ['p1'] }).map((r) => r.key), ['w1', 'n1'], 'what is attached already stays out');
+  assert.deepEqual(attachRows({ query: 'colbert late', library: dated }).map((r) => r.key), [], 'no bodies: as before');
+  for (const query of ['', 'c', 'retrieval contextual']) {
+    assert.deepEqual(attachRows({ query, library: dated, bodies: null }).map((r) => r.key), attachRows({ query, library: dated }).map((r) => r.key), query);
+  }
+  assert.deepEqual(attachRows({ query: '', library: dated, bodies }).map((r) => r.key), attachRows({ query: '', library: dated }).map((r) => r.key), 'empty: the newest, as before');
+});

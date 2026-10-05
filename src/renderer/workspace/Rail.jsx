@@ -7,6 +7,7 @@ import { looksAddable, railSections, RAIL_SECTIONS, searchRows } from '../model/
 import { ago, findWorkspaces } from '../model/nav.js';
 import GithubPane from './GithubPane.jsx';
 import { usePlaced } from '../ui/usePlaced.js';
+import { useBodies } from './useBodies.js';
 import { ItemPeek } from '../screens/Home.jsx';
 import trashPng from '../../../design/assets/trash.png';
 import trashFullPng from '../../../design/assets/trash-full.png';
@@ -398,7 +399,7 @@ function FreshPeek({ found }) {
 }
 
 /** The search field: what the library already holds comes into this workspace from here (Canvas.dc.html `results`). */
-function LibrarySearch({ library, inRail, onPick, previews, onPreview, onOpenHeld, onOpenChange, shut }) {
+function LibrarySearch({ projectId, library, inRail, onPick, previews, onPreview, onOpenHeld, onOpenChange, shut }) {
   const [q, setQ] = React.useState('');
   const [open, setOpen] = React.useState(false);
   const [idx, setIdx] = React.useState(0);
@@ -424,7 +425,8 @@ function LibrarySearch({ library, inRail, onPick, previews, onPreview, onOpenHel
     return () => { live = false; clearTimeout(timer); };
   }, [open, addable, typed]);
   const answer = addable && found && found.query === typed ? found.result : undefined;
-  const rows = open ? searchRows({ query: q, library, inRail, found: answer }) : [];
+  const bodies = useBodies(projectId, open); // what things say, matched too (MATH-29)
+  const rows = open ? searchRows({ query: q, library, inRail, found: answer, bodies }) : [];
   const at = rows.length ? Math.min(idx, rows.length - 1) : -1;
   const lit = at >= 0 ? rows[at] : null;
   const problem = note || (answer && answer.error) || '';
@@ -528,7 +530,7 @@ const CIRCLE_PLUS = (
   </svg>
 );
 
-export function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickRepo, onSearchPick, library, inRail, onOpenChange, shut }) {
+export function AddToLibrary({ projectId = null, onAdd, onPickDisk, onNewNote, onNewChild, onPickRepo, onSearchPick, library, inRail, onOpenChange, shut }) {
   const [open, setOpen] = React.useState(false);
   const [q, setQ] = React.useState(''); // the search at the top of the menu
   const [idx, setIdx] = React.useState(0);
@@ -609,7 +611,8 @@ export function AddToLibrary({ onAdd, onPickDisk, onNewNote, onNewChild, onPickR
     return () => { alive = false; clearTimeout(wait); };
   }, [open, typedAddable, typed]);
   const answer = typedAddable && found && found.query === typed ? found.result : undefined;
-  const results = typed ? searchRows({ query: typed, library, inRail, found: answer }) : [];
+  const bodies = useBodies(projectId, open); // what things say, matched too (MATH-29); the home page's library has no project
+  const results = typed ? searchRows({ query: typed, library, inRail, found: answer, bodies }) : [];
   const at = results.length ? Math.min(idx, results.length - 1) : -1;
   const pickResult = (result) => { if (result && !busy) void run(async () => { await onSearchPick(result, typed); return []; }); };
   const onSearchKey = (event) => {
@@ -963,7 +966,7 @@ export default function Rail({
         <WorkspaceHeader topics={topics} topic={topic} all={allWorkspaces} onOpenDoc={onOpenDoc} onSelectTopic={onSelectTopic} onRenameTopic={onRenameTopic} onAddTopic={onAddTopic} onDeleteTopic={onDeleteTopic} />
         {topic && (
           <div data-screen-label="Library" data-rail-library="1" style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <LibrarySearch library={library} inRail={inRail} onPick={onSearchPick} previews={previews} onPreview={preview} onOpenHeld={onOpenHeld} onOpenChange={setSearchOpen} shut={menus.add} />
+            <LibrarySearch projectId={projectId} library={library} inRail={inRail} onPick={onSearchPick} previews={previews} onPreview={preview} onOpenHeld={onOpenHeld} onOpenChange={setSearchOpen} shut={menus.add} />
             {sections.map((section, i) => (
               <RailSection
                 key={section.key}
@@ -992,7 +995,7 @@ export default function Rail({
                 ))}
               </RailSection>
             ))}
-            <AddToLibrary onAdd={onAddInput} onPickDisk={onPickDisk} onNewNote={onNewNote} onNewChild={onNewChild} onPickRepo={onPickRepo} onSearchPick={onSearchPick} library={library} inRail={inRail} onOpenChange={setAddOpen} shut={menus.search} />
+            <AddToLibrary projectId={projectId} onAdd={onAddInput} onPickDisk={onPickDisk} onNewNote={onNewNote} onNewChild={onNewChild} onPickRepo={onPickRepo} onSearchPick={onSearchPick} library={library} inRail={inRail} onOpenChange={setAddOpen} shut={menus.search} />
           </div>
         )}
       </div>

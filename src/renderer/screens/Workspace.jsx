@@ -11,6 +11,7 @@ import { isUntitled, nextUntitled } from '../model/names.js';
 import { OPEN_IN_BROWSER } from '../model/address.js';
 import { adoptSession, dropSession, SHOW_TERMINAL } from '../terminal/sessions.js';
 import { mentionRows } from '../model/rail.js';
+import { useBodies } from '../workspace/useBodies.js';
 import { flatWorkspaces, nextPlace, placesToGo } from '../model/nav.js';
 import { onStage } from '../model/stage.js';
 import { paperState, savePaper, repoState, tryRepo } from '../model/guide.js';
@@ -874,9 +875,13 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     const rank = (workspace) => (order.has(workspace.id) ? order.get(workspace.id) : Infinity);
     return allWorkspaces.map((workspace, i) => ({ workspace, i })).sort((a, b) => rank(a.workspace) - rank(b.workspace) || a.i - b.i).map(({ workspace }) => workspace);
   }, [allWorkspaces, nav.recent, project.id]);
+  // What the project's things say, asked for while the menu is open (MATH-29): a pdf, a note or a workspace is found by a
+  // phrase inside it too.
+  const [mentionOpen, setMentionOpen] = React.useState(false);
+  const mentionBodies = useBodies(project.id, mentionOpen);
   const mentionItems = React.useCallback(
-    (query) => mentionRows({ query, library, page: pageKnown ? openPage : null, pageRow: pageKnown ? pageKnown.row : null, workspaces: mentionSpaces, hereId: topic ? topic.id : null }),
-    [library, openPage, pageKnown, mentionSpaces, topic],
+    (query) => mentionRows({ query, library, page: pageKnown ? openPage : null, pageRow: pageKnown ? pageKnown.row : null, workspaces: mentionSpaces, hereId: topic ? topic.id : null, bodies: mentionBodies }),
+    [library, openPage, pageKnown, mentionSpaces, topic, mentionBodies],
   );
   // A mentioned workspace's peek (workspace/WorkspacePeek.jsx): the tree, state.json's agents and recent edits, and its
   // document as open here (unsaved words included) or as saved.
@@ -1343,6 +1348,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
               onChange={onDocChange}
               mentionable={mentionable}
               mentionItems={mentionItems}
+              onMentionOpen={setMentionOpen}
               onMentionPicked={mentionPicked}
               workspacePeek={workspacePeek}
               onOpenWorkspace={openMentionedWorkspace}

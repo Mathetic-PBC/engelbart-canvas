@@ -18,6 +18,7 @@ import { attachRows } from '../model/rail.js';
 import { DEFAULT_TARGET, pickedTarget, rememberTarget, sameTarget, targetKey, targetTag } from '../model/build-target.js';
 import { KindGlyph as Glyph } from '../ui/Icons.jsx';
 import { usePlaced } from '../ui/usePlaced.js';
+import { useBodies } from './useBodies.js';
 import { useSandboxes } from '../ui/SandboxProgress.jsx';
 
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
@@ -132,6 +133,7 @@ export default function BuildPanel({ projectId, workspaceId, title, anchor, libr
   const libraryRef = React.useRef(null);
   const targetRef = React.useRef(null);
   const sandboxes = useSandboxes();
+  const bodies = useBodies(projectId, !!(lookup && lookup.kind === 'library')); // what things say, while "Add from library" is up (MATH-29)
   const [ref, placed] = usePlaced(anchor || fallbackAnchor(), { gap: 8 });
 
   React.useEffect(() => {
@@ -233,7 +235,7 @@ export default function BuildPanel({ projectId, workspaceId, title, anchor, libr
   const alarming = !!(error || problem);
   const heading = 'Build';
   const named = title;
-  const libraryRows = (query) => attachRows({ query, library, taken: attached.map((row) => row.id), inRail });
+  const libraryRows = (query) => attachRows({ query, library, taken: attached.map((row) => row.id), inRail, bodies });
   const current = target && targets ? targets.find((item) => sameTarget(item, target)) || null : null;
   const glyphOf = (item) => (item && item.kind === 'library' && library.find((row) => row.id === item.id)) || GIT_FOLDER;
   const tagOf = (item) => targetTag(item, !!(item.kind === 'library' && sandboxes && sandboxes.items && sandboxes.items[item.id]));

@@ -418,6 +418,16 @@ async function openLibraryDb(testRoot) {
       );
       return true;
     },
+    // The kept text of the pdfs among `ids`, each cut at `max` characters: library id → text. One that held none is left out.
+    async textsFor(ids, max) {
+      if (!Array.isArray(ids)) throw new TypeError('ids must be an array');
+      if (!ids.length) return new Map();
+      const result = await db.query(
+        "select library_id, left(text, $2) as text from library_text where library_id = any($1::uuid[]) and text <> ''",
+        [ids.map((id) => requireText(id, 'id', { max: 64 })), requireCount(max)],
+      );
+      return new Map(result.rows.map((row) => [row.library_id, row.text]));
+    },
     // Escape hatch for tests and repairs.
     async query(sql, params = []) {
       const result = await db.query(sql, params);

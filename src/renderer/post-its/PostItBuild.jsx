@@ -10,6 +10,7 @@ import { api, errorMessage } from '../api.js';
 import { attachRows } from '../model/rail.js';
 import { DEFAULT_TARGET } from '../model/build-target.js';
 import { usePlaced } from '../ui/usePlaced.js';
+import { useBodies } from '../workspace/useBodies.js';
 import { KIND } from '../ui/Icons.jsx';
 import GithubPane from '../workspace/GithubPane.jsx';
 import ModelGrid, { EASE, choiceLabel, useBeside } from './ModelGrid.jsx';
@@ -50,7 +51,7 @@ const menuRow = { display: 'flex', alignItems: 'center', gap: 12, width: '100%',
  * Context (the design's popout): a search over the library whose rows are picked and unpicked (a ✓, no circles), then
  * a link or path, files from disk, or a repository from GitHub, added to the library and picked at once.
  */
-function ContextPopout({ style, library, inRail, picked, onToggle, onAdded, onClose }) {
+function ContextPopout({ style, projectId, library, inRail, picked, onToggle, onAdded, onClose }) {
   const [q, setQ] = React.useState('');
   const [view, setView] = React.useState('menu'); // 'menu' | 'github'
   const [value, setValue] = React.useState('');
@@ -62,7 +63,8 @@ function ContextPopout({ style, library, inRail, picked, onToggle, onAdded, onCl
     const timer = setTimeout(() => { if (fieldRef.current && view === 'menu') fieldRef.current.focus({ preventScroll: true }); }, 0);
     return () => clearTimeout(timer);
   }, [style.visibility, view]);
-  const rows = attachRows({ query: q, library, inRail });
+  const bodies = useBodies(projectId, true); // what things say, matched too (MATH-29); asked each time the popout opens
+  const rows = attachRows({ query: q, library, inRail, bodies });
   // Picked rows stay listed while nothing is typed, even when they are not among the recent ones.
   const shown = q.trim() ? rows : [...picked.filter((row) => !rows.some((held) => held.row.id === row.id)).map((row) => ({ key: row.id, row, name: row.name })), ...rows];
   const run = async (work) => {
@@ -194,6 +196,7 @@ export default function PostItBuild({ projectId, quick, anchor, library, inRail,
       {ctxOpen && (
         <ContextPopout
           style={ctxStyle}
+          projectId={projectId}
           library={library}
           inRail={inRail}
           picked={picked}

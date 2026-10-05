@@ -517,6 +517,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // Both directions of "who holds what", derived from the workspaces on disk (no join table).
   handle('projects-for-library-item', withCtx((ctx, id) => library.projectsForLibraryItem(ctx, str(id, 'library id', 64))));
   handle('library-for-project', withCtx((ctx, pid) => library.libraryForProject(ctx, str(pid, 'project id', 64))));
+  // What the project's pdfs, notes and workspaces say, for the search and the @ menu to match (MATH-29); asked when one opens.
+  handle('library-bodies', withCtx((ctx, pid) => library.bodiesForProject(ctx, str(pid, 'project id', 64))));
   // Adding makes a new row or throws "Already in the library as …" (library.addItem). `options.name` names it (the Browser's Save card).
   // A GitHub repository's sandbox starts once the row is saved; a failure to start it leaves the row saved and says why.
   // A page row that may be a pdf (an arXiv paper, a .pdf address, any other page that might answer with one) is checked

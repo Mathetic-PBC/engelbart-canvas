@@ -162,6 +162,7 @@ const engelbartAPI = Object.freeze({
   library: invoke('library'),
   projectsForLibraryItem: invoke('projects-for-library-item'),
   libraryForProject: invoke('library-for-project'),
+  libraryBodies: invoke('library-bodies'),
   addLibraryItem: invoke('add-library-item'),
   addLibraryPdf: invoke('add-library-pdf'),
   lookupLibraryItem: invoke('lookup-library-item'),

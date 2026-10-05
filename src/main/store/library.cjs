@@ -162,6 +162,57 @@ async function libraryForProject(ctx, projectId) {
     .map((row) => ({ ...row, origin: row.project_id === project.id, workspaces: refs.get(row.id) || [] }));
 }
 
+/* -------------------------------------------------------- what search reads inside */
+
+// The sidebar's search, the @ menu and "Add from library" also match what things say (MATH-29, 2026-10-05). The text
+// comes here, on its own, when one of them opens: never on the library rows, which go to the renderer on every change.
+const MAX_BODY_CHARS = 500_000;
+const MAX_BODY_BYTES = MAX_BODY_CHARS * 4; // as many UTF-8 bytes as it can take to make that many characters
+
+/** The start of a text file, at most MAX_BODY_CHARS; '' when it is not there or not a file. */
+function readBody(file) {
+  let fd = null;
+  try {
+    fd = fs.openSync(file, 'r');
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) return '';
+    const buffer = Buffer.alloc(Math.min(stat.size, MAX_BODY_BYTES));
+    const read = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    return buffer.subarray(0, read).toString('utf8').slice(0, MAX_BODY_CHARS);
+  } catch {
+    return '';
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
+  }
+}
+
+/**
+ * What the project's things say, for search: `items`, library id → a pdf's kept text (library_text, as the sweep read it)
+ * or an md's file (a note, or one added from disk); `workspaces`, workspace id → its workspace.md. The rows are the ones
+ * libraryForProject gives; nothing is listed for an empty text or a file that is gone. Each is cut at MAX_BODY_CHARS.
+ */
+async function bodiesForProject(ctx, projectId) {
+  const project = projects.findProject(ctx, projectId);
+  const rows = await libraryForProject(ctx, projectId);
+  const items = Object.fromEntries(await ctx.libraryDb.textsFor(rows.filter((row) => row.type === 'pdf').map((row) => row.id), MAX_BODY_CHARS));
+  // A file the library links to is read where it is, as the peek reads it: inside the home directory (or the data root).
+  const roots = [ctx.homeDir, ctx.dataRoot].map((dir) => { try { return fs.realpathSync(dir); } catch { return null; } }).filter(Boolean);
+  for (const row of rows) {
+    if (row.type !== 'md' || !row.path) continue;
+    let real;
+    try { real = fs.realpathSync(row.path); } catch { continue; }
+    if (!roots.some((dir) => inside(real, dir))) continue;
+    const text = readBody(real);
+    if (text) items[row.id] = text;
+  }
+  const workspaces = {};
+  for (const workspace of projects.flattenWorkspaces(project.dir)) {
+    const text = readBody(path.join(project.dir, workspace.path, 'workspace.md'));
+    if (text) workspaces[workspace.id] = text;
+  }
+  return { items, workspaces };
+}
+
 /* ------------------------------------------------------------- repositories */
 
 // A repository is one row whether it arrived by its address or as a clone on disk. What it *is* is
@@ -592,4 +643,4 @@ async function previewItem(ctx, id, { listRemoteFiles } = {}) {
   return out;
 }
 
-module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, writePageAnnotations, projectsForLibraryItem, libraryForProject, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem };
+module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, writePageAnnotations, projectsForLibraryItem, libraryForProject, bodiesForProject, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem };

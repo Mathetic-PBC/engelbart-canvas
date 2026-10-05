@@ -269,7 +269,9 @@ export default class DocEditor extends React.Component {
     return null;
   }
 
-  componentDidUpdate(prevProps) {
+  componentDidUpdate(prevProps, prevState) {
+    // The @ menu opening and closing (a line's or a follow-up field's): the workspace asks for what things say then (MATH-29).
+    if (prevState && !prevState.mention !== !this.state.mention && this.props.onMentionOpen) this.props.onMentionOpen(!!this.state.mention);
     if (prevProps.docKey !== this.props.docKey) {
       this.dropEdit(prevProps);
       this.wantView = true; this.settle = null;
@@ -289,6 +291,7 @@ export default class DocEditor extends React.Component {
   }
 
   componentWillUnmount() {
+    if (this.state.mention && this.props.onMentionOpen) this.props.onMentionOpen(false);
     if (this.lastKey === this.key()) this.reportView(this.props, true);
     this.dropEdit(this.props);
     this.mounted = false; clearTimeout(this.pickerT); clearTimeout(this.viewT);
