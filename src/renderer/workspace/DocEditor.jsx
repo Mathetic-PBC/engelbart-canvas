@@ -72,7 +72,7 @@ const fixedStep = (agent) => agent === 'brainstorm' || agent === 'orient';
 // How a question line starts, as it was written: "@Bart" (the @ menu's) or "@bart" (typed), "@Discover" or "@discover".
 const leadOf = (line, agent) => (String(line).match(new RegExp(`^@${agent}`, 'i')) || [`@${agent}`])[0];
 const FOLLOW = {
-  brainstorm: { placeholder: '', label: 'Brainstorm again', empty: true },
+  brainstorm: { placeholder: 'Reply…', label: 'Brainstorm again', empty: true },
   orient: { placeholder: 'A new topic or paper…', label: 'Orient again', empty: true },
   discover: { placeholder: 'More like one of these, only after 2022, essays…', label: 'Ask Discover for more', empty: false },
 };
@@ -137,6 +137,7 @@ const ICON = {
   trash: icon('<path d="M3 6h18"></path><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"></path><path d="M19 6v13a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path>'),
   chevron: `<span style="display:inline-flex;color:#8f8f8f">${icon('<path d="m6 9 6 6 6-6"></path>', 12, 2)}</span>`,
   send: icon('<path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path>', 13, 2.2),
+  discoverOut: icon('<path d="M7 17 17 7"></path><path d="M8 7h9v9"></path>', 12, 2),
   // The steps toggle: a plain angle with square ends (Hudson's reference, 2026-09-21), pointing up while the list is open.
   stepsOpen: icon('<path d="m5 15.5 7-7 7 7"></path>', 10, 3, 'square'),
   stepsShut: icon('<path d="m5 8.5 7 7 7-7"></path>', 10, 3, 'square'),
@@ -192,6 +193,8 @@ export default class DocEditor extends React.Component {
   // What is being typed into a Send to Discover field (MATH-31), by the field's target (sendDiscoverHtml): put back after
   // each redraw as a follow-up's is (restoreDiscover).
   discoverText = new Map();
+  // The Send to Discover fields opened from their button (2026-10-05), by target: the rest show only the button.
+  discoverOpen = new Set();
   // What is being answered on a live @brainstorm card, by its question's line: { picks, text, note }. Picks are drawn
   // into the card's HTML; the typed text is not, and is put back after each redraw (restoreCards).
   cardState = new Map(); cardCache = new WeakMap();
@@ -687,7 +690,12 @@ export default class DocEditor extends React.Component {
   // (discoverText): `c<q>` under the live card on line q, `t<from>` after the recap of the thread that starts on line from;
   // either line is where it sends from (discoverRow). What is typed is not in this string (restoreDiscover puts it back),
   // so typing never redraws the editor. The send is grey until something is typed (paintSend).
+  // Until it is opened (2026-10-05: two fields stacked looked alike), it is a small "Send to Discover" button; one with
+  // words typed into it stays open.
   sendDiscoverHtml(target) {
+    if (!this.discoverOpen.has(target) && !(this.discoverText.get(target) || '').trim()) {
+      return `<button type="button" class="bart-text" data-act="opendiscover" data-target="${target}" style="user-select:none;display:inline-flex;align-items:center;gap:6px;padding-left:0;font-size:13px">${ICON.discoverOut}Send to Discover</button>`;
+    }
     return `<div data-send-discover="${target}" style="display:flex;align-items:flex-start;gap:10px">`
       + '<span style="flex:none;color:#0070f3;font-weight:500;font-size:16px;line-height:24px">@discover</span>'
       + `<textarea data-discover-input="${target}" rows="1" placeholder="What do you want prior work on?" aria-label="Send to Discover" spellcheck="false" autocomplete="off" style="flex:1;min-width:0;display:block;height:24px;margin:0;padding:0;border:0;background:none;outline:none;resize:none;overflow:hidden;font:16px/1.5 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text"></textarea>`
@@ -767,6 +775,7 @@ export default class DocEditor extends React.Component {
     const typed = (this.discoverText.get(target) || '').trim(); if (!typed || !this.props.onAsk) return;
     const i = this.discoverRow(this.lines(), target); if (i == null) return;
     this.discoverText.delete(target);
+    this.discoverOpen.delete(target);
     this.discoverLook(i, typed);
   }
   // After the thread line `i` is in, a blank line (so the new line starts a thread of its own, doc.js threads) and
@@ -1216,12 +1225,14 @@ export default class DocEditor extends React.Component {
   // What is typed is not in this string (restoreFollow puts it back), so typing never redraws the editor.
   // After an @brainstorm or @orient recap the field asks that agent again, on its one model: no chip, and it may be sent empty. After
   // an @discover guide it asks @discover for more, which needs words.
-  followHtml(ls, thread) {
+  // `closes: false`: a row follows it inside the card (Send to Discover after a recap), so it leaves the card's end to that.
+  followHtml(ls, thread, { closes = true } = {}) {
     const { step } = this.followStep(ls, thread), from = thread.from;
     const agent = agentOf(parseLine(ls[thread.turns[thread.turns.length - 1].q]));
     if (FOLLOW[agent]) {
       const { placeholder, label, empty } = FOLLOW[agent];
-      return `<div contenteditable="false" data-followup="${from}" style="user-select:none;display:flex;align-items:flex-start;gap:10px;padding:22px 16px 18px;margin-bottom:14px;background:#fafafa;border-radius:0 0 10px 10px">`
+      const end = closes ? 'padding:22px 16px 18px;margin-bottom:14px;background:#fafafa;border-radius:0 0 10px 10px' : 'padding:22px 16px 14px;background:#fafafa';
+      return `<div contenteditable="false" data-followup="${from}" style="user-select:none;display:flex;align-items:flex-start;gap:10px;${end}">`
         + `<span style="flex:none;color:#0070f3;font-weight:500;font-size:16px;line-height:24px">@${agent}</span>`
         + `<textarea data-follow-input="${from}" data-agent="${agent}"${empty ? ' data-empty="1"' : ''} rows="1" placeholder="${esc(placeholder)}" aria-label="${esc(label)}" spellcheck="false" autocomplete="off" style="flex:1;min-width:0;display:block;height:24px;margin:0;padding:0;border:0;background:none;outline:none;resize:none;overflow:hidden;font:16px/1.5 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text"></textarea>`
         + `<button class="bart-send" data-act="sendfollow" data-thread="${from}" aria-label="Send" style="flex:none;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:50%;background:${empty ? '#0070f3' : '#f2f2f2'};color:${empty ? '#fff' : '#8f8f8f'};cursor:pointer">${ICON.send}</button>`
@@ -1280,9 +1291,11 @@ export default class DocEditor extends React.Component {
       const dim = !!editing && !!where && where.turn.q === editing.q && i !== editing.q, dimmed = (html) => (dim ? html.replace('<div ', '<div data-dim="1" ') : html);
       out += dimmed(this.lineHtml(i, line, p, active === i, p.type === 'todo' && !group.length, where, this.lockedAt(ls, i)));
       if (where && where.footAfter) out += dimmed(this.footHtml({ q: where.turn.q, text: '', folded: where.turn.folded, closes: where.tail && !where.followAfter, plain: oneModel(where.agent), edit: where.editable }));
-      // After an @brainstorm or @orient recap, Send to Discover on a row of its own above the follow-up field (MATH-31).
-      if (where && where.followAfter && this.endsInRecap(ls, where.thread)) out += `<div contenteditable="false" data-recap-discover="${where.thread.from}" style="user-select:none;padding:22px 16px 0;background:#fafafa">${this.sendDiscoverHtml(`t${where.thread.from}`)}</div>`;
-      if (where && where.followAfter) out += this.followHtml(ls, where.thread);
+      // After an @brainstorm or @orient recap, Send to Discover on a row of its own under the follow-up field, closing the
+      // card (MATH-31; under it, not above, since 2026-10-05: the agent's own field comes first).
+      const recap = !!where && where.followAfter && this.endsInRecap(ls, where.thread);
+      if (where && where.followAfter) out += this.followHtml(ls, where.thread, { closes: !recap });
+      if (recap) out += `<div contenteditable="false" data-recap-discover="${where.thread.from}" style="user-select:none;padding:0 16px 14px;margin-bottom:14px;background:#fafafa;border-radius:0 0 10px 10px">${this.sendDiscoverHtml(`t${where.thread.from}`)}</div>`;
       if (p.type === 'todo') group.push({ i, p });
       const next = ls[i + 1];
       if (p.type === 'todo' && (next == null || ps[i + 1].type !== 'todo')) { out += this.groupHtml(group); group = []; }
@@ -1706,6 +1719,7 @@ export default class DocEditor extends React.Component {
       if (k === 'pickfollow') { this.openPicker(act, 'follow'); return; }
       if (k === 'sendfollow') { this.closePicker(); this.sendFollow(Number(act.dataset.thread)); return; }
       if (k === 'senddiscover') { this.closePicker(); this.sendDiscover(act.dataset.target); return; }
+      if (k === 'opendiscover') { this.closePicker(); this.openDiscover(act.dataset.target); return; }
       if (k === 'papersave') { if (!act.disabled) this.savePaper(i); return; }
       if (k === 'regen') { this.closePicker(); const q = Number(act.dataset.turn); this.regenerate(q, act.dataset.plain ? undefined : this.ranWith(this.lines(), q).choice); return; }
       if (k === 'editturn') { this.closePicker(); this.startEdit(Number(act.dataset.turn)); return; }
@@ -1862,8 +1876,15 @@ export default class DocEditor extends React.Component {
     if (this.state.picker) this.closePicker();
     if (e.key === 'Enter' && e.shiftKey) e.preventDefault();
     else if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); this.sendDiscover(e.target.dataset.discoverInput); }
-    else if (e.key === 'Escape') e.target.blur();
+    else if (e.key === 'Escape') { const target = e.target.dataset.discoverInput; e.target.blur(); if (!(this.discoverText.get(target) || '').trim()) this.closeDiscover(target); }
   }
+  // The button opens its field, the caret in it; Escape in an empty field shuts it again (2026-10-05).
+  openDiscover(target) {
+    this.discoverOpen.add(target); this.syncEditor();
+    const ed = this.editorEl(), input = ed && ed.querySelector ? ed.querySelector(`[data-discover-input="${target}"]`) : null;
+    if (input) input.focus({ preventScroll: true });
+  }
+  closeDiscover(target) { if (this.discoverOpen.delete(target)) this.syncEditor(); }
   discoverInput(input) {
     if (/[\r\n]/.test(input.value)) { const a = input.selectionStart, b = input.selectionEnd; input.value = input.value.replace(/[\r\n]/g, ' '); input.setSelectionRange(a, b); }
     this.discoverText.set(input.dataset.discoverInput, input.value); this.paintSend(input); this.fitFollow(input);

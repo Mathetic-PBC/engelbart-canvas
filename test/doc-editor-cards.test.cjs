@@ -68,16 +68,23 @@ function field(target, value = '') {
 test.afterEach(() => { delete globalThis.getSelection; delete globalThis.document; delete globalThis.window; });
 
 test('a live @brainstorm card has Skip, Wrap up and Submit, in that order, and under its box the Send to Discover field, with no search suggested (MATH31-03, -04)', () => {
-  const { html, entry } = mounted(['Notes', '@brainstorm', ...answer(FREE), '']);
+  const { html, entry, editor } = mounted(['Notes', '@brainstorm', ...answer(FREE), '']);
   assert.equal(entry(1).live, true);
   assert.equal(entry(1).card.lookFor, undefined, 'an older card\'s search is not kept');
   const shown = html(1);
   const at = (act) => shown.indexOf(`data-act="${act}"`);
   assert.ok(at('cardskip') > 0 && at('cardskip') < at('cardwrap') && at('cardwrap') < at('cardsend'), 'Wrap up between Skip and Submit');
   assert.match(shown, /<button type="button" class="bart-text" data-act="cardwrap" data-turn="1"[^>]*>Wrap up<\/button>/, 'styled as Skip is');
-  assert.ok(shown.indexOf('data-send-discover="c1"') > at('cardsend') && /Submit<\/button><\/div><\/div><div style="padding:16px 0 10px"><div data-send-discover="c1"/.test(shown), 'the field is under the box, where the @discover button was');
-  assert.match(shown, /<span style="flex:none;color:#0070f3;font-weight:500;font-size:16px;line-height:24px">@discover<\/span><textarea data-discover-input="c1" rows="1" placeholder="What do you want prior work on\?" aria-label="Send to Discover"/, 'the blue label, then the field');
-  assert.match(shown, /<button class="bart-send" data-act="senddiscover" data-target="c1" aria-label="Send" style="[^"]*border-radius:50%;background:#f2f2f2;color:#8f8f8f;/, 'a round Send, grey until something is typed');
+  // Under the box, a small Send to Discover button (2026-10-05); clicked, it is the field.
+  assert.ok(at('opendiscover') > at('cardsend') && /Submit<\/button><\/div><\/div><div style="padding:16px 0 10px"><button type="button" class="bart-text" data-act="opendiscover" data-target="c1"[^>]*><svg[^>]*>.*?<\/svg>Send to Discover<\/button>/.test(shown), 'the button is under the box');
+  assert.ok(!shown.includes('data-discover-input'), 'no field until it is opened');
+  editor.editorClick({ target: { closest: () => ({ dataset: { act: 'opendiscover', target: 'c1' } }) }, preventDefault() {} });
+  const open = html(1);
+  assert.ok(/Submit<\/button><\/div><\/div><div style="padding:16px 0 10px"><div data-send-discover="c1"/.test(open), 'opened: the field, where the button was');
+  assert.match(open, /<span style="flex:none;color:#0070f3;font-weight:500;font-size:16px;line-height:24px">@discover<\/span><textarea data-discover-input="c1" rows="1" placeholder="What do you want prior work on\?" aria-label="Send to Discover"/, 'the blue label, then the field');
+  assert.match(open, /<button class="bart-send" data-act="senddiscover" data-target="c1" aria-label="Send" style="[^"]*border-radius:50%;background:#f2f2f2;color:#8f8f8f;/, 'a round Send, grey until something is typed');
+  editor.discoverKey({ key: 'Escape', target: { dataset: { discoverInput: 'c1' }, blur() {} } });
+  assert.ok(html(1).includes('data-act="opendiscover"'), 'Escape in the empty field shuts it again');
   assert.ok(!shown.includes(LOOK) && !shown.includes('cardlook') && !shown.includes('discoverlook'), 'no suggested search, no old button');
 });
 
@@ -95,7 +102,7 @@ test('Send to Discover starts an @discover thread of its own on what was typed, 
   const live = m.entry(1);
   assert.deepEqual([live.live, live.thread.to], [true, before.length - 1], 'the brainstorm card is still its thread\'s last turn');
   const shown = m.html(1);
-  for (const act of ['cardskip', 'cardwrap', 'cardsend', 'senddiscover']) assert.ok(shown.includes(`data-act="${act}"`), `it keeps ${act}`);
+  for (const act of ['cardskip', 'cardwrap', 'cardsend', 'opendiscover']) assert.ok(shown.includes(`data-act="${act}"`), `it keeps ${act}, the field shut again`);
 
   // Its answer, with Wrap up: written under the brainstorm thread, so above the @discover one.
   m.editor.cardState.set(1, { text: '  I will read  the logs ' });
@@ -124,7 +131,7 @@ test('Wrap up with nothing given writes "(wrap up)" alone, and works on a choice
   assert.deepEqual([entry.live, entry.answer], [false, { skipped: false, picks: [], text: 'I will read the logs', note: '', wrap: true }]);
   const shown = done.html(0);
   assert.ok(shown.includes('I will read the logs') && shown.includes('Wrapped up'), 'the answer, then Wrapped up');
-  for (const act of ['cardskip', 'cardwrap', 'cardsend', 'senddiscover']) assert.ok(!shown.includes(`data-act="${act}"`), `no ${act} on an answered card`);
+  for (const act of ['cardskip', 'cardwrap', 'cardsend', 'senddiscover', 'opendiscover']) assert.ok(!shown.includes(`data-act="${act}"`), `no ${act} on an answered card`);
   const alone = mounted(['@brainstorm', ...answer(FREE), '@brainstorm (wrap up)', 'bart> Where you are: x', '']).html(0);
   assert.ok(alone.includes('Wrapped up') && !alone.includes('Skipped'), 'Wrap up alone says Wrapped up, not Skipped');
 });
@@ -170,7 +177,7 @@ test('@discover\'s cards have no Wrap up and no Send to Discover field, and Wrap
   assert.equal(m.entry(0).live, true);
   const shown = m.html(0);
   assert.ok(shown.includes('data-act="cardskip"') && shown.includes('data-act="cardsend"'));
-  assert.ok(!shown.includes('data-act="cardwrap"') && !shown.includes('data-act="senddiscover"') && !shown.includes('data-discover-input') && !shown.includes('Wrap up'));
+  assert.ok(!shown.includes('data-act="cardwrap"') && !shown.includes('data-act="senddiscover"') && !shown.includes('data-act="opendiscover"') && !shown.includes('data-discover-input') && !shown.includes('Wrap up'));
   m.click('cardwrap', 0);
   m.typeDiscover('c0', TYPED);
   m.sendDiscover('c0');
@@ -185,7 +192,7 @@ test('@discover\'s cards have no Wrap up and no Send to Discover field, and Wrap
   assert.match(drawn, />Look for<\/span><span style="display:block;">retry loops<\/span>/, 'drawn as a section');
   assert.ok(!drawn.includes('<button'), 'no button');
   const page = recap.editor.editorHtml();
-  assert.ok(page.indexOf('data-recap-discover="0"') > page.indexOf('data-foot="0"') && page.indexOf('data-recap-discover="0"') < page.indexOf('data-followup="0"'), 'a row of its own, under the last turn, above Brainstorm again');
+  assert.ok(page.indexOf('data-recap-discover="0"') > page.indexOf('data-followup="0"') && page.indexOf('data-followup="0"') > page.indexOf('data-foot="0"'), 'a row of its own, under Brainstorm again');
   recap.typeDiscover('t0', TYPED);
   recap.sendDiscover('t0');
   assert.deepEqual([recap.asks[0].text, recap.asks[0].agent, recap.asks[0].turns], [TYPED, 'discover', []]);
@@ -199,7 +206,7 @@ test('on a live @brainstorm versions card the field under the options reads "Or 
   const shown = m.html(0);
   assert.match(shown, /data-card-field="note" placeholder="Or rewrite it yourself…" aria-label="Or rewrite it yourself"/);
   assert.ok(!shown.includes('Or say it in your own words'));
-  for (const act of ['cardskip', 'cardwrap', 'cardsend', 'senddiscover']) assert.ok(shown.includes(`data-act="${act}"`), `it keeps ${act}`);
+  for (const act of ['cardskip', 'cardwrap', 'cardsend', 'opendiscover']) assert.ok(shown.includes(`data-act="${act}"`), `it keeps ${act}`);
   // A rewrite typed with nothing picked is sent as their words.
   m.editor.cardState.set(0, { note: '  Why do retries   loop at all? ' });
   m.click('cardsend', 0);

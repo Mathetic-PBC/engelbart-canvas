@@ -407,9 +407,9 @@ test('a live @orient card has Skip, Wrap up and Submit and no Send to Discover f
   const shown = m.editor.cardHtml('', m.entry(1));
   const at = (act) => shown.indexOf(`data-act="${act}"`);
   assert.ok(at('cardskip') > 0 && at('cardskip') < at('cardwrap') && at('cardwrap') < at('cardsend'), 'Skip, Wrap up, Submit');
-  assert.ok(!shown.includes('data-act="senddiscover"') && !shown.includes('@discover'), 'no Send to Discover field');
+  assert.ok(!shown.includes('data-act="senddiscover"') && !shown.includes('data-act="opendiscover"') && !shown.includes('@discover') && !shown.includes('Send to Discover'), 'no Send to Discover button or field');
   assert.ok(!shown.includes('For a colleague.'), 'no subtitle');
-  assert.ok(!m.editor.editorHtml().includes('data-discover-input'), 'nor anywhere around it');
+  assert.ok(!m.editor.editorHtml().includes('data-discover-input') && !m.editor.editorHtml().includes('opendiscover'), 'nor anywhere around it');
   m.editor.discoverText.set('c1', 'how tutors notice struggle');
   m.click('senddiscover', { target: 'c1' });
   assert.deepEqual(m.asks, []);
@@ -426,7 +426,7 @@ test('a live @orient card has Skip, Wrap up and Submit and no Send to Discover f
   assert.equal(k.lines()[k.lines().length - 3], '@orient (skipped)');
 });
 
-test('an @orient recap is drawn as sections, an older one\'s Look for lines too; Send to Discover has a row of its own above "Orient again" and starts a separate @discover thread; the follow field reads "Orient again" and may be sent empty (O-06, MATH31-04, -06, A-02, A-04, A-05)', async () => {
+test('an @orient recap is drawn as sections, an older one\'s Look for lines too; Send to Discover has a row of its own under "Orient again" and starts a separate @discover thread; the follow field reads "Orient again" and may be sent empty (O-06, MATH31-04, -06, A-02, A-04, A-05)', async () => {
   const lines = ['@orient metacognition', ...answer(orientCard('know')), '@orient (wrap up)', 'bart> What you know: learners rate it too high', 'bart> Where it thins out: not said', 'bart> What draws you: the gap', 'bart> Look for: felt versus real learning', 'bart> Look for: a second search', 'bart> ', 'bart> *3 s*', ''];
   const m = mounted(lines);
   const row = (text) => m.lines().indexOf(text);
@@ -445,9 +445,14 @@ test('an @orient recap is drawn as sections, an older one\'s Look for lines too;
   assert.ok(!follow.includes('data-act="pickfollow"') && !follow.includes('data-discover-input'), 'no model chip, and the follow field is its own');
 
   const page = m.editor.editorHtml(), at = page.indexOf('data-recap-discover="0"');
-  assert.ok(at > page.indexOf('data-foot="') && at < page.indexOf('data-followup="0"'), 'under the last turn, a row of its own above Orient again');
-  assert.match(page.slice(at), /^data-recap-discover="0" style="user-select:none;padding:22px 16px 0;background:#fafafa"><div data-send-discover="t0"[^>]*><span[^>]*>@discover<\/span><textarea data-discover-input="t0" rows="1" placeholder="What do you want prior work on\?" aria-label="Send to Discover"/);
-  assert.equal(page.match(/data-discover-input=/g).length, 1, 'one field');
+  assert.ok(page.indexOf('data-followup="0"') > page.indexOf('data-foot="') && at > page.indexOf('data-followup="0"'), 'a row of its own under Orient again');
+  assert.match(page.slice(page.indexOf('data-followup="0"')), /^data-followup="0" style="[^"]*padding:22px 16px 14px;background:#fafafa">/, 'Orient again leaves the card\'s end to the row under it');
+  assert.match(page.slice(at), /^data-recap-discover="0" style="user-select:none;padding:0 16px 14px;margin-bottom:14px;background:#fafafa;border-radius:0 0 10px 10px"><button type="button" class="bart-text" data-act="opendiscover" data-target="t0"[^>]*>.*?Send to Discover<\/button><\/div>/, 'a button, closing the card');
+  assert.ok(!page.includes('data-discover-input'), 'no field until it is opened');
+  m.click('opendiscover', { target: 't0' });
+  const opened = m.editor.editorHtml();
+  assert.match(opened.slice(opened.indexOf('data-recap-discover="0"')), /^data-recap-discover="0"[^>]*><div data-send-discover="t0"[^>]*><span[^>]*>@discover<\/span><textarea data-discover-input="t0" rows="1" placeholder="What do you want prior work on\?" aria-label="Send to Discover"/);
+  assert.equal(opened.match(/data-discover-input=/g).length, 1, 'one field');
 
   m.editor.discoverInput({ dataset: { discoverInput: 't0' }, value: 'how tutors notice struggle', style: {}, scrollHeight: 24, parentElement: null });
   m.editor.discoverKey({ key: 'Enter', shiftKey: false, isComposing: false, target: { dataset: { discoverInput: 't0' } }, preventDefault() {} });
@@ -461,19 +466,19 @@ test('an @orient recap is drawn as sections, an older one\'s Look for lines too;
   assert.deepEqual([again.asks[0].agent, again.asks[0].text, again.asks[0].turns.length], ['orient', '', 2], 'sent empty: @orient again on the same thread');
   assert.ok(again.lines().includes('@orient'));
 
-  // A brainstorm recap: the same row above "Brainstorm again", and its older Look for lines are sections too.
+  // A brainstorm recap: the same row under "Brainstorm again", and its older Look for lines are sections too.
   const bs = mounted(['@brainstorm (wrap up)', 'bart> Where you are: a', 'bart> Look for: one', 'bart> Look for: two', 'bart> *3 s*', '']);
   assert.ok(!(await bs.lineOf(3)).includes('<button'));
   const bsPage = bs.editor.editorHtml();
-  assert.ok(bsPage.indexOf('data-recap-discover="0"') > 0 && bsPage.indexOf('data-recap-discover="0"') < bsPage.indexOf('aria-label="Brainstorm again"'));
+  assert.ok(bsPage.indexOf('aria-label="Brainstorm again"') > 0 && bsPage.indexOf('data-recap-discover="0"') > bsPage.indexOf('aria-label="Brainstorm again"'));
   const bsFollow = bs.editor.followHtml(bs.lines(), (await docModel()).threads(bs.lines())[0]);
-  assert.match(bsFollow, /data-agent="brainstorm" data-empty="1" rows="1" placeholder="" aria-label="Brainstorm again"/, 'no hint, and it may be sent empty');
+  assert.match(bsFollow, /data-agent="brainstorm" data-empty="1" rows="1" placeholder="Reply…" aria-label="Brainstorm again"/, 'a short hint, and it may be sent empty');
   bs.editor.sendFollow(0);
   assert.deepEqual([bs.asks[0].agent, bs.asks[0].text], ['brainstorm', ''], 'sent empty: another round of @brainstorm');
 });
 
 test('Send to Discover is not drawn after @bart or @discover answers, under a recap still being asked again, or after an @brainstorm reply that is not a recap (MATH31-04, A-05)', () => {
-  const none = (lines, why) => assert.ok(!mounted(lines).editor.editorHtml().includes('data-discover-input'), why);
+  const none = (lines, why) => { const page = mounted(lines).editor.editorHtml(); assert.ok(!page.includes('data-discover-input') && !page.includes('opendiscover'), why); };
   none(['@bart why?', 'bart> because', 'bart> *Sonnet · high · 3 s*', ''], 'not after @bart');
   none(['@discover retry loops', 'bart> ## Start here', 'bart> *3 s*', ''], 'not after an @discover guide');
   none(['@orient (wrap up)', 'bart> What you know: a', 'bart> *3 s*', '@orient', 'bart~> o9', ''], 'not while it is asked again');
