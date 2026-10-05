@@ -690,6 +690,49 @@ test('a card is kept as a fenced JSON block of answer lines, a recap as its word
   assert.equal(card.cardOfAnswer('```json\n{ "card": "focus", "focus": { "title": "Edited?", "options": [{ "label": "a" }, { "label": "b" }] } }\n```').focus.title, 'Edited?', 'a card edited in the file is the card it now says');
 });
 
+test('a reply holding more than one object is the last of them that is a card (2026-10-04)', () => {
+  const ONE = { say: 'You wrote about retries.', card: 'focus', focus: { title: 'Where should we start?', options: [{ label: 'Retries' }] }, ready: false };
+  const FOUR = { ...ONE, focus: { title: 'Where should we start?', options: ['Retries', 'Timeouts', 'The logs', 'The tests'].map((label) => ({ label })) } };
+  const four = card.readCard(JSON.stringify(FOUR));
+  const fenced = (value) => `\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``;
+  // What the model wrote: a focus card with one option, a sentence, then the card again with four.
+  const corrected = `${JSON.stringify(ONE)}\n\nWait — I need to give three or four options. Corrected reply:\n\n${JSON.stringify(FOUR)}`;
+  assert.deepEqual(card.readCard(corrected), four, 'the four-option card');
+  assert.deepEqual(card.cardBody(corrected), { body: fenced(four), card: four }, 'kept as fenced JSON, not as the text it came as');
+  assert.deepEqual(card.readCard(`${fenced(ONE)}\n\nWait — I need to give three or four options. Corrected reply:\n\n${fenced(FOUR)}`), four, 'each in a fence of its own');
+  assert.deepEqual(card.readCard(`${JSON.stringify(FOUR)}\nOr, as a note: {"card": "focus", "focus": {"options": []}}`), four, 'a valid card first, a rejected one second');
+  assert.deepEqual(card.readCard(`${JSON.stringify(FOUR)} and {"done": true}`), four, 'a valid card first, an object that is no card second');
+  assert.deepEqual(card.parseJson(`${JSON.stringify(FOUR)} and {"done": true}`), { done: true }, 'parseJson alone takes the last object that parses');
+  assert.deepEqual(card.readCard(`${JSON.stringify(FOCUS)}\nBetter:\n${JSON.stringify(PICK)}`), card.readCard(JSON.stringify(PICK)), 'two cards: the last');
+  assert.deepEqual(card.readCard(`Note { oops ${JSON.stringify(FOUR)}`), four, 'a brace that never closes is passed over');
+
+  // Braces and quotes inside a string are the string's.
+  const quoted = { ...FOUR, say: 'use {x} and "y"' };
+  assert.deepEqual(card.jsonBlocks(JSON.stringify(quoted)), [JSON.stringify(quoted)], 'one object');
+  const lone = JSON.stringify({ ...ONE, say: 'a lone } after "z {"' });
+  assert.deepEqual(card.jsonBlocks(`${lone} Corrected: ${JSON.stringify(quoted)}`), [lone, JSON.stringify(quoted)], 'an escaped quote does not end the string');
+  assert.equal(card.readCard(`${lone} Corrected: ${JSON.stringify(quoted)}`).say, 'use {x} and "y"');
+  assert.deepEqual(card.jsonBlocks('a {"x": {"y": "}"}} b { c {"z": 2}'), ['{"x": {"y": "}"}}', '{"z": 2}'], 'an object inside another is part of it; a brace that never closes is passed over');
+
+  // One object reads as it did.
+  assert.deepEqual(card.parseJson(JSON.stringify(FOUR)), FOUR, 'bare');
+  assert.deepEqual(card.parseJson(fenced(FOUR)), FOUR, 'in a fence');
+  assert.deepEqual(card.parseJson(`Here you go: ${JSON.stringify(FOUR)} Thanks.`), FOUR, 'with words around it');
+  assert.deepEqual(card.readCard(`Here you go: ${JSON.stringify(FOUR)} Thanks.`), four);
+  assert.equal(card.parseJson('the {retries} part, and the loop {x}.'), null, 'braces that hold no JSON');
+
+  // No card in it: null, and kept as it came.
+  const none = `${JSON.stringify(ONE)}\nCorrected: ${JSON.stringify({ card: 'focus', focus: { options: [{ label: 'Only' }] } })}`;
+  assert.equal(card.readCard(none), null);
+  assert.deepEqual(card.cardBody(none), { body: none, card: null });
+  assert.equal(card.readCard(JSON.stringify(ONE)), null, 'one option alone is still no card');
+
+  // The recap is as it was.
+  const recap = '{"say": "Where you are: a\\nYour question: b", "card": "none", "ready": true}';
+  assert.deepEqual(card.readCard(recap), { say: 'Where you are: a\nYour question: b', card: 'none', ready: true });
+  assert.equal(card.cardBody(recap).body, 'Where you are: a\nYour question: b');
+});
+
 test('on a choice card the field under the options is a note to a pick, or the answer itself in the person\'s own words (2026-09-30)', () => {
   const options = [{ label: 'Retries' }, { label: 'Timeouts' }];
   const cards = {
@@ -1385,6 +1428,10 @@ test('a discover reply is kept as a card when it is one, else as the guide it ca
   const braces = 'Why: the {retries} part, and the loop {x}.';
   assert.equal(replyBody('discover', braces), braces, 'only a reply that starts as JSON is read as a card');
   assert.equal(replyBody('discover', '{"say": "Enough.", "card": "none", "ready": true}'), '{"say": "Enough.", "card": "none", "ready": true}', 'Discover has no recap card: kept as it came');
+  const rejected = JSON.stringify({ card: 'focus', focus: { options: [{ label: 'One' }] } });
+  assert.equal(replyBody('discover', `${rejected}\nCorrected: ${JSON.stringify(FOCUS)}`), card.cardBody(JSON.stringify(FOCUS)).body, 'a card corrected after a rejected one is the card');
+  const quotes = `## Start here\n\nWhy: it asks ${JSON.stringify(FOCUS)} of its readers.`;
+  assert.equal(replyBody('discover', quotes), quotes, 'a guide that holds a card in its words stays a guide');
   assert.equal(replyBody('bart', JSON.stringify(FOCUS)), JSON.stringify(FOCUS));
 });
 

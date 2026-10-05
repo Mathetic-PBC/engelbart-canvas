@@ -11,7 +11,8 @@
 // `lookFor` (round 6): one search for prior work on the point the card asks about, in the person's words; the editor
 // draws it as an @discover button under a live @brainstorm card.
 // A card is kept as the lines of a fenced ```json block (./reply.cjs puts `bart> ` in front of each); the recap
-// (card 'none') as its text. A reply that is not a card is kept as it came, and reads as an @bart answer does.
+// (card 'none') as its text. A reply that is not a card is kept as it came, and reads as an @bart answer does. One that
+// holds more than one object, a correction between them, is the last of them that is a card (2026-10-04, readCard).
 // The person's answer is the next line of the document:
 //   @brainstorm picked "label"                 one choice (mcq, focus)
 //   @brainstorm picked "a", "b"                several (select_all)
@@ -39,14 +40,50 @@ const clip = (value, max) => (typeof value === 'string' ? value.replace(/\s+/g, 
 /** Text that may keep its lines (the recap is three). */
 const clipText = (value, max) => (typeof value === 'string' ? value.replace(/\r/g, '').replace(/[ \t]+/g, ' ').replace(/ ?\n ?/g, '\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, max) : '');
 
-/** The model's text as JSON: bare, in a code fence, or with words around it. null when there is none. */
+/**
+ * Each balanced top-level {...} in the text, in order (2026-10-04): a reply may hold a card, a correction in words, then
+ * the card again. A brace inside a double-quoted string does not count, nor does an escaped quote end the string; an
+ * object inside another is part of it. A "{" that never closes is passed over and the text after it read on.
+ */
+function jsonBlocks(text) {
+  const s = String(text == null ? '' : text), out = [];
+  let from = s.indexOf('{');
+  while (from >= 0) {
+    let depth = 0, quoted = false, to = -1;
+    for (let n = from; n < s.length && to < 0; n += 1) {
+      const c = s[n];
+      if (quoted) {
+        if (c === '\\') n += 1;
+        else if (c === '"') quoted = false;
+      } else if (c === '"') quoted = true;
+      else if (c === '{') depth += 1;
+      else if (c === '}' && (depth -= 1) === 0) to = n;
+    }
+    if (to < 0) { from = s.indexOf('{', from + 1); continue; }
+    out.push(s.slice(from, to + 1));
+    from = s.indexOf('{', to + 1);
+  }
+  return out;
+}
+
+const tryJson = (text) => { try { return JSON.parse(text); } catch { return undefined; } };
+
+/**
+ * The model's text as JSON: bare, in a code fence, or with words around it; else, when it holds more than one object,
+ * the last of them that parses. null when there is none.
+ */
 function parseJson(text) {
   const raw = String(text == null ? '' : text).trim();
   const fenced = raw.match(/^```(?:json)?[ \t]*\n([\s\S]*?)\n```$/i);
   const body = fenced ? fenced[1] : raw;
   try { return JSON.parse(body); } catch { /* words around it, perhaps */ }
   const from = body.indexOf('{'), to = body.lastIndexOf('}');
-  if (from >= 0 && to > from) { try { return JSON.parse(body.slice(from, to + 1)); } catch { /* not JSON */ } }
+  if (from >= 0 && to > from) { try { return JSON.parse(body.slice(from, to + 1)); } catch { /* not JSON, or more than one object */ } }
+  const blocks = jsonBlocks(body);
+  for (let n = blocks.length - 1; n >= 0; n -= 1) {
+    const value = tryJson(blocks[n]);
+    if (isObject(value)) return value;
+  }
   return null;
 }
 
@@ -95,10 +132,24 @@ function cleanLookFor(value) {
 
 /**
  * A reply (the model's text, or a value already parsed) as a card fit to draw, or null when it is not one. `ready`
- * ends the exchange whatever card it names: the recap is `say`, and a recap without words is not one.
+ * ends the exchange whatever card it names: the recap is `say`, and a recap without words is not one. Text that holds
+ * more than one object (2026-10-04: a one-option focus card, "Wait — … Corrected reply:", then the card again) is the
+ * last of them fit to draw, whichever came before or after it.
  */
 function readCard(text) {
-  const value = typeof text === 'string' ? parseJson(text) : text;
+  if (typeof text !== 'string') return cleanCard(text);
+  const card = cleanCard(parseJson(text));
+  if (card) return card;
+  const blocks = jsonBlocks(text);
+  for (let n = blocks.length - 1; n >= 0; n -= 1) {
+    const found = cleanCard(tryJson(blocks[n]));
+    if (found) return found;
+  }
+  return null;
+}
+
+/** One parsed value as a card fit to draw, or null (readCard). */
+function cleanCard(value) {
   if (!isObject(value)) return null;
   const say = clipText(value.say, 1500);
   const kind = String(value.card || '').toLowerCase();
@@ -260,4 +311,4 @@ function recapLine(line) {
   return { label, text: m[2].trim() };
 }
 
-module.exports = { recapParts, recapLine, RECAP_LABELS, TYPES, SKIPPED, WRAP, OPENING, MAP_GROUPS, LOOK_FOR_CHARS, parseJson, cleanMap, mapHolds, readCard, cardBody, cardOfAnswer, questionOf, isChoice, answerLine, readWrap, withWrap, readAnswer, answersSoFar };
+module.exports = { recapParts, recapLine, RECAP_LABELS, TYPES, SKIPPED, WRAP, OPENING, MAP_GROUPS, LOOK_FOR_CHARS, jsonBlocks, parseJson, cleanMap, mapHolds, readCard, cardBody, cardOfAnswer, questionOf, isChoice, answerLine, readWrap, withWrap, readAnswer, answersSoFar };
