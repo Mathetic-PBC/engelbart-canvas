@@ -439,6 +439,7 @@ test('an @orient recap is drawn as sections, an older one\'s Look for lines too;
   }
   const follow = m.editor.followHtml(m.lines(), (await docModel()).threads(m.lines())[0]);
   assert.match(follow, /aria-label="Orient again"/);
+  assert.match(follow, /placeholder="A new topic or paper…"/, 'its hint names a new subject; it does not say "Go on"');
   assert.match(follow, /data-agent="orient" data-empty="1"/);
   assert.match(follow, />@orient<\/span>/);
   assert.ok(!follow.includes('data-act="pickfollow"') && !follow.includes('data-discover-input'), 'no model chip, and the follow field is its own');
@@ -465,6 +466,10 @@ test('an @orient recap is drawn as sections, an older one\'s Look for lines too;
   assert.ok(!(await bs.lineOf(3)).includes('<button'));
   const bsPage = bs.editor.editorHtml();
   assert.ok(bsPage.indexOf('data-recap-discover="0"') > 0 && bsPage.indexOf('data-recap-discover="0"') < bsPage.indexOf('aria-label="Brainstorm again"'));
+  const bsFollow = bs.editor.followHtml(bs.lines(), (await docModel()).threads(bs.lines())[0]);
+  assert.match(bsFollow, /data-agent="brainstorm" data-empty="1" rows="1" placeholder="" aria-label="Brainstorm again"/, 'no hint, and it may be sent empty');
+  bs.editor.sendFollow(0);
+  assert.deepEqual([bs.asks[0].agent, bs.asks[0].text], ['brainstorm', ''], 'sent empty: another round of @brainstorm');
 });
 
 test('Send to Discover is not drawn after @bart or @discover answers, under a recap still being asked again, or after an @brainstorm reply that is not a recap (MATH31-04, A-05)', () => {

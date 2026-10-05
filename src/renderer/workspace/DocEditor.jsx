@@ -72,8 +72,8 @@ const fixedStep = (agent) => agent === 'brainstorm' || agent === 'orient';
 // How a question line starts, as it was written: "@Bart" (the @ menu's) or "@bart" (typed), "@Discover" or "@discover".
 const leadOf = (line, agent) => (String(line).match(new RegExp(`^@${agent}`, 'i')) || [`@${agent}`])[0];
 const FOLLOW = {
-  brainstorm: { placeholder: 'Go on…', label: 'Brainstorm again', empty: true },
-  orient: { placeholder: 'Go on, or a new topic or paper…', label: 'Orient again', empty: true },
+  brainstorm: { placeholder: '', label: 'Brainstorm again', empty: true },
+  orient: { placeholder: 'A new topic or paper…', label: 'Orient again', empty: true },
   discover: { placeholder: 'More like one of these, only after 2022, essays…', label: 'Ask Discover for more', empty: false },
 };
 // A Build's state as its card names it (main/build/store.cjs STATUSES).
