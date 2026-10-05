@@ -10,10 +10,11 @@ export const RIGHT_MODES = [
   { id: 'terminal', label: 'Terminal' },
 ];
 
-const RightPane = React.forwardRef(function RightPane({ mode, projectDir, projectId, full, onFull, onShowStage, onPage, onFront, save, library, inRail, onError, style }, stageRef) {
+// `onOpenItem`, `mentionItems` and `onMentionOpen` (MATH-21) are for a pdf's margin notes, which mention library items.
+const RightPane = React.forwardRef(function RightPane({ mode, projectDir, projectId, full, onFull, onShowStage, onPage, onFront, save, library, inRail, onError, onOpenItem, mentionItems, onMentionOpen, style }, stageRef) {
   return (
     <section aria-label="Right pane" style={style}>
-      <Stage ref={stageRef} projectId={projectId} visible={mode === 'stage'} full={full} onFull={onFull} onShow={onShowStage} onPage={onPage} onFront={onFront} save={save} library={library} inRail={inRail} onError={onError} />
+      <Stage ref={stageRef} projectId={projectId} visible={mode === 'stage'} full={full} onFull={onFull} onShow={onShowStage} onPage={onPage} onFront={onFront} save={save} library={library} inRail={inRail} onError={onError} onOpenItem={onOpenItem} mentionItems={mentionItems} onMentionOpen={onMentionOpen} />
       <TerminalPane cwd={projectDir} projectId={projectId} visible={mode === 'terminal'} />
     </section>
   );

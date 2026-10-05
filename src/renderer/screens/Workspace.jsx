@@ -1451,6 +1451,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onFront={setStageFront}
           library={library}
           inRail={inRail}
+          onOpenItem={openItem}
+          mentionItems={mentionItems}
+          onMentionOpen={setMentionOpen}
           save={topic && pageState ? { state: pageState, onSave: savePage, onLink: () => linkIds([pageKnown.row.id]) } : null}
           style={{ flex: 'none', width: paneWidth, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }}
         />

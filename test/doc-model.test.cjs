@@ -352,6 +352,53 @@ test('a workspace mention is one token that keeps its id and shows the @, the wo
   assert.equal(rawOffset(p, 2), 3, 'a click after the first letter of the name lands after it in the source');
 });
 
+test('a library mention is one token that keeps its id; workspace and plain mentions split as before (MATH-21)', async () => {
+  const { INLINE, LIB_MENTION_RE, libMention, tokShown, rawOffset, parseLine } = await load();
+  assert.deepEqual('see @[A](lib:x-1) now'.split(INLINE).filter(Boolean), ['see ', '@[A](lib:x-1)', ' now']);
+  assert.deepEqual('@[A](lib:x-1)@[B](ws:y-2) @[C] [l](u)'.split(INLINE).filter(Boolean), ['@[A](lib:x-1)', '@[B](ws:y-2)', ' ', '@[C]', ' ', '[l](u)']);
+  assert.deepEqual('@[A](lib:not an id)'.split(INLINE).filter(Boolean), ['@[A]', '(lib:not an id)'], 'only an id makes it one');
+  assert.deepEqual('@[A](lib:x-1)'.match(LIB_MENTION_RE).slice(1), ['A', 'x-1']);
+  assert.equal(libMention('Pulling [in]\nworkspaces', 'x-1'), '@[Pulling inworkspaces](lib:x-1)', 'brackets and line breaks would end it early');
+  assert.equal(libMention('  [ ] ', 'x-1'), '@[Untitled](lib:x-1)');
+  assert.equal(libMention(null, 'x-1'), '@[Untitled](lib:x-1)');
+  assert.deepEqual(tokShown('@[A paper](lib:x-1)'), { shown: '@A paper', pre: 1 });
+  const token = '@[A paper](lib:x-1)';
+  assert.equal(rawOffset(parseLine(`${token} next`), '@A paper next'.length), `${token} next`.length, 'a click after it maps past the id');
+});
+
+test('inlineHtml draws a library mention as a mention holding its id; libName gives its name now, or null when it is gone (MATH-21)', async () => {
+  const { inlineHtml } = await load();
+  const STYLE = 'color:#0070f3;font-weight:500;cursor:pointer;border-bottom:1px dotted #c9c9c9';
+  assert.equal(inlineHtml('see @[A <b>](lib:x-1)'), `see <span data-mention="A &lt;b&gt;" data-lib="x-1" style="${STYLE}">@A &lt;b&gt;</span>`);
+  assert.equal(inlineHtml('@[A](lib:x-1)', { libName: (id) => (id === 'x-1' ? 'Renamed' : null) }), `<span data-mention="Renamed" data-lib="x-1" style="${STYLE}">@Renamed</span>`);
+  const gone = inlineHtml('@[A](lib:x-1)', { libName: () => null });
+  assert.doesNotMatch(gone, /data-lib|data-mention|cursor:pointer/);
+  assert.match(gone, /^<span [^>]*color:#8f8f8f[^>]*>@A<\/span>$/, 'the saved name, grey');
+  assert.match(inlineHtml('@[A](lib:x-1)', { libName: () => undefined }), /data-lib="x-1"[^>]*>@A</, 'nothing known: the saved name');
+  assert.match(inlineHtml('**@[A](lib:x-1)**', { libName: () => 'B' }), /<strong[^>]*><span data-mention="B" data-lib="x-1"/, 'inside bold too');
+  // Without opts, what was drawn before is drawn the same.
+  for (const text of ['a **b** c', '*i* `c`', '@bart go', '@[hypocompass] and @[Plan](ws:w-1)', '[t](https://a.b) https://x.y/z', '![Attachment 1](img:abc)', '<b>&"']) {
+    assert.equal(inlineHtml(text), inlineHtml(text, {}), text);
+    assert.equal(inlineHtml(text), inlineHtml(text, { libName: () => null }), text);
+  }
+  assert.match(inlineHtml('@[hypocompass]'), /^<span data-mention="hypocompass" style="[^"]*">@hypocompass<\/span>$/);
+});
+
+test('a margin note shown as text: its library mentions drawn, everything else as typed; a click maps back into it (MATH-21)', async () => {
+  const { noteHtml, noteParts, noteOffset } = await load();
+  assert.equal(noteHtml('a *b* `c` https://x.y @bart @[P] <i>'), 'a *b* `c` https://x.y @bart @[P] &lt;i&gt;', 'a note without library mentions reads as typed');
+  assert.match(noteHtml('see @[A](lib:x-1) too', { libName: () => 'B' }), /^see <span data-mention="B" data-lib="x-1"[^>]*>@B<\/span> too$/);
+  assert.match(noteHtml('see @[A](lib:x-1)', { libName: () => null }), /^see <span [^>]*color:#8f8f8f[^>]*>@A<\/span>$/);
+  const note = 'ab @[A](lib:x) cd';
+  assert.deepEqual(noteParts(note), ['ab ', '@[A](lib:x)', ' cd']);
+  assert.deepEqual(noteParts('@[A](lib:x)@[B](lib:y)'), ['@[A](lib:x)', '@[B](lib:y)'], 'no empty pieces between mentions');
+  assert.equal(noteOffset(note, 0, 1), 1);
+  assert.equal(noteOffset(note, 1, 0), 'ab @[A](lib:x)'.length, 'a click on a mention puts the caret after it');
+  assert.equal(noteOffset(note, 2, 2), 'ab @[A](lib:x) c'.length);
+  assert.equal(noteOffset(note, 2, Infinity), note.length);
+  assert.equal(noteOffset(note, 9, 0), note.length, 'past the last piece: the end');
+});
+
 test('the @ menu\'s query is the @ and what follows it up to the caret, on a line or in a follow-up field (2026-10-02)', async () => {
   const { mentionAt } = await load();
   assert.deepEqual(mentionAt('@', 1), { query: '', start: 0 }, 'a bare @ opens the whole menu');

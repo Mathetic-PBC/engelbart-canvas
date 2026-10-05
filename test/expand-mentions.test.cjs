@@ -166,7 +166,11 @@ test('imagePaths: a question\'s pasted images become the paths of their files, a
 
 test('the inline tokens are the editor\'s own', async () => {
   const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
-  assert.equal(INLINE.source, model.INLINE.source);
+  // But one: a library mention by id, `@[Name](lib:<id>)` (MATH-21), is written only into a PDF margin note, which main
+  // does not read. Pasted into a document it splits here as the mention by name it starts with.
+  const LIB = String.raw`@\[[^\]\n]+\]\(lib:[\w-]+\)|`;
+  assert.ok(model.INLINE.source.includes(LIB));
+  assert.equal(INLINE.source, model.INLINE.source.replace(LIB, ''));
   assert.equal(INLINE.flags, model.INLINE.flags);
 });
 

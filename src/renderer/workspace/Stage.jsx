@@ -34,6 +34,8 @@ import PaperView from '../pdf/PaperView.jsx';
 // A link in an @discover guide (2026-10-03) brings the guide's other sections for the same paper (DocEditor, model/stage.js
 // guideSections), kept on the tab as `sections` with the clicked one `activeSection`. In a pdf it opens no find card: the
 // section is scrolled to and tinted, and a Sections menu where the find card sits shows another, or clears it (×).
+// A pdf's margin notes mention library items (MATH-21): `@` in a note opens the workspace's @ menu (`mentionItems`, its
+// library rows only), and a mention clicked in a note opens its row as the sidebar does (`onOpenItem`).
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
@@ -373,7 +375,7 @@ const clearRanges = () => { const h = highlights(); if (h) { h.delete(FIND); h.d
 
 /* --------------------------------------------------------------------------------------------------- Stage */
 
-const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull, onShow, onPage, onFront, save, library, inRail, onError }, ref) {
+const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull, onShow, onPage, onFront, save, library, inRail, onError, onOpenItem, mentionItems, onMentionOpen }, ref) {
   const [tabs, setTabs] = React.useState(() => [blankTab()]);
   const [activeId, setActiveId] = React.useState(() => null);
   const [draft, setDraft] = React.useState('');
@@ -1232,6 +1234,10 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
               initialSection={sectionsOn ? tab.sections[tab.activeSection] || null : null}
               onTarget={(text, result) => landed(tab.id, text, result)}
               onFind={(result) => { if (keys.current && keys.current.finding) setMatches(result); }}
+              library={library}
+              mentionItems={mentionItems}
+              onMentionOpen={onMentionOpen}
+              onOpenMention={(id) => { const row = (library || []).find((r) => r.id === id); if (row && onOpenItem) onOpenItem(row); }}
               onMarksChange={(marks) => {
                 const { seq, url, rowId } = pdf;
                 update(tab.id, (t) => (t.pdf && t.pdf.seq === seq ? { ...t, pdf: { ...t.pdf, marks } } : t));

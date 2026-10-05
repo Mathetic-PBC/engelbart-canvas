@@ -40,7 +40,7 @@ export const REPLY_RE = /^bart(\+?)> ?(.*)$/;
 export const ATTRIBUTION_RE = /^\*[^*]+\*$/;
 export const QUOTE_RE = /^> ?(.*)$/;
 export const ATTACH_RE = /^!\[([^\]\n]*)\]\(img:([\w-]+)\)$/;
-export const INLINE = /(!\[[^\]\n]*\]\(img:[\w-]+\)|@(?:[Bb]art|[Bb]rainstorm|[Oo]rient|[Dd]iscover)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`])/g;
+export const INLINE = /(!\[[^\]\n]*\]\(img:[\w-]+\)|@(?:[Bb]art|[Bb]rainstorm|[Oo]rient|[Dd]iscover)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]\(lib:[\w-]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`])/g;
 const LINK_RE = /^\[([^\]]+)\]\(([^)]+)\)$/;
 // Another workspace of the project, mentioned (2026-09-25): `@[Name](ws:<id>)`. The id finds it after a rename (workspaces
 // are born "Untitled Workspace n" and named later); the line shows the @, the workspace icon right after it, then the name
@@ -48,6 +48,12 @@ const LINK_RE = /^\[([^\]]+)\]\(([^)]+)\)$/;
 export const WS_MENTION_RE = /^@\[([^\]\n]+)\]\(ws:([\w-]+)\)$/;
 /** The token that mentions a workspace. */
 export const wsMention = (name, id) => `@[${String(name || '').replace(/[[\]\n]/g, '').trim() || 'Workspace'}](ws:${id})`;
+// A library item mentioned by id (MATH-21, 2026-10-05): `@[Name](lib:<id>)`, which a PDF margin note's @ menu writes. The
+// name is the item's as it was picked; the id finds the item after a rename, or tells that it has left the library.
+// Before the plain mention in INLINE too, for the same reason.
+export const LIB_MENTION_RE = /^@\[([^\]\n]+)\]\(lib:([\w-]+)\)$/;
+/** The token that mentions a library item. */
+export const libMention = (name, id) => `@[${String(name || '').replace(/[[\]\n]/g, '').trim() || 'Untitled'}](lib:${id})`;
 // What the @ menu is looking for: an `@` and up to 30 characters after it, no space, @ or bracket among them, ending at the
 // caret. A document line and a follow-up field (2026-10-02) read it the same way.
 const MENTION_QUERY_RE = /@([^\s@[\]]{0,30})$/;
@@ -213,6 +219,7 @@ export function tokShown(tok) {
   if (tok.startsWith('`') && tok.endsWith('`') && tok.length > 2) return { shown: tok.slice(1, -1), pre: 1 };
   if (tok.startsWith('*') && tok.endsWith('*') && tok.length > 2) return { shown: tok.slice(1, -1), pre: 1 };
   const ws = tok.match(WS_MENTION_RE); if (ws) return { shown: '@' + ws[1], pre: 1 }; // the icon after the @ is not text
+  const lib = tok.match(LIB_MENTION_RE); if (lib) return { shown: '@' + lib[1], pre: 1 };
   if (tok.startsWith('@[')) { const nm = tok.slice(2, -1); return { shown: '@' + (nm.startsWith('bart') ? 'bart' : nm), pre: 1 }; }
   const m = tok.match(LINK_RE); if (m) return { shown: m[1], pre: 1 };
   return { shown: tok, pre: 0 };
@@ -302,26 +309,60 @@ export function turnText(lines, turn) {
   return { question: parseLine(lines[turn.q]).text.trim(), answer: body.join('\n').trim() };
 }
 
-/** Rendered HTML for inline markup (bold, code, italic, @bart, @brainstorm, @orient and @discover, @[mention], [link](url), bare urls). */
-export function inlineHtml(text) {
+// A library mention's chip: blue and clickable as a mention is, `data-lib` holding the id. `libName(id)` (optional) is the
+// item's name now, shown in place of the one saved; null when the library no longer holds it, which leaves the saved name
+// in grey with nothing to click.
+function libHtml(name, id, libName) {
+  const now = typeof libName === 'function' ? libName(id) : undefined;
+  if (now === null) return `<span title="No longer in the library" style="color:#8f8f8f">@${esc(name)}</span>`;
+  const shown = typeof now === 'string' && now ? now : name;
+  return `<span data-mention="${esc(shown)}" data-lib="${esc(id)}" style="color:#0070f3;font-weight:500;cursor:pointer;border-bottom:1px dotted #c9c9c9">@${esc(shown)}</span>`;
+}
+
+/**
+ * Rendered HTML for inline markup (bold, code, italic, @bart, @brainstorm, @orient and @discover, @[mention], [link](url),
+ * bare urls). `opts.libName(id)`: a library mention's name now, or null when it is gone (libHtml).
+ */
+export function inlineHtml(text, opts) {
   return text.split(INLINE).map((p) => {
     if (!p) return '';
     // A pasted image inside a todo or a chat line reads as [Attachment n]; on a line of its own it renders as the image.
     const attachment = p.match(ATTACH_RE);
     if (attachment) return `<span data-attachment="${esc(attachment[2])}" style="padding:1px 6px;border-radius:4px;background:#f2f2f2;border:1px solid #eaeaea;font:.86em/1.6 var(--font-mono);color:#4d4d4d;white-space:nowrap">[${esc(attachment[1] || 'Attachment')}]</span>`;
     // Bold may hold a link or a mention: `**[Title](url)**`, `**@[Name]**` (an @discover guide's titles, 2026-09-30).
-    if (p.startsWith('**') && p.endsWith('**') && p.length > 4) return `<strong style="font-weight:600">${inlineHtml(p.slice(2, -2))}</strong>`;
+    if (p.startsWith('**') && p.endsWith('**') && p.length > 4) return `<strong style="font-weight:600">${inlineHtml(p.slice(2, -2), opts)}</strong>`;
     if (p.startsWith('`') && p.endsWith('`') && p.length > 2) return `<code style="padding:1px 4px;border-radius:4px;background:#f2f2f2;font:.92em/1.6 var(--font-mono)">${esc(p.slice(1, -1))}</code>`;
     if (p.startsWith('*') && p.endsWith('*') && p.length > 2) return `<em>${esc(p.slice(1, -1))}</em>`;
     if (AGENT_TOKEN.test(p)) return `<span style="color:#0070f3;font-weight:500">${esc(p)}</span>`;
     const ws = p.match(WS_MENTION_RE);
     if (ws) return `<span data-mention="${esc(ws[1])}" data-ws="${esc(ws[2])}" style="color:#0070f3;font-weight:500;cursor:pointer;border-bottom:1px dotted #c9c9c9;white-space:nowrap">@${WS_ICON}${esc(ws[1])}</span>`;
+    const lib = p.match(LIB_MENTION_RE);
+    if (lib) return libHtml(lib[1], lib[2], opts && opts.libName);
     if (p.startsWith('@[')) { const name = p.slice(2, -1), shown = name.startsWith('bart') ? 'bart' : name; return `<span data-mention="${esc(name)}" style="color:#0070f3;font-weight:500;cursor:pointer;border-bottom:1px dotted #c9c9c9">@${esc(shown)}</span>`; }
     const m = p.match(LINK_RE);
     if (m) return `<a href="${esc(m[2])}" data-link="1" style="color:#0070f3;text-decoration:underline;text-underline-offset:3px">${esc(m[1])}</a>`;
     if (URL_RE.test(p)) return `<a href="${esc(p)}" data-link="1" style="color:#0070f3;text-decoration:underline;text-underline-offset:3px">${esc(p)}</a>`;
     return esc(p);
   }).join('');
+}
+
+// A PDF margin note (MATH-21) is text as typed: only its library mentions are drawn, so a `*`, a backtick or an address in
+// it shows as it did before notes could mention anything. Its pieces, text and mentions in turn, are the shown note's
+// child nodes one for one (noteHtml), which is how a click in it finds its place in the text (noteOffset).
+const LIB_SPLIT = /(@\[[^\]\n]+\]\(lib:[\w-]+\))/;
+export const noteParts = (text) => String(text ?? '').split(LIB_SPLIT).filter(Boolean);
+/** A margin note as shown while it is not being edited: its text escaped, each library mention a chip (libHtml). */
+export function noteHtml(text, opts) {
+  return noteParts(text).map((p) => { const lib = p.match(LIB_MENTION_RE); return lib ? libHtml(lib[1], lib[2], opts && opts.libName) : esc(p); }).join('');
+}
+/** Where in a note's text a click lands: `offset` characters into its `part`-th piece; a mention's piece is passed whole. */
+export function noteOffset(text, part, offset) {
+  const parts = noteParts(text);
+  let at = 0;
+  for (let i = 0; i < Math.min(part, parts.length); i++) at += parts[i].length;
+  if (part >= parts.length) return at;
+  const p = parts[part];
+  return at + (LIB_MENTION_RE.test(p) ? p.length : Math.max(0, Math.min(p.length, Number(offset) || 0)));
 }
 
 /* ---------------------------------------------------------------- copy and cut (2026-10-02) */
@@ -417,6 +458,7 @@ function plainHtml(text) {
     if (tok.startsWith('`') && tok.endsWith('`') && tok.length > 2) return `<code>${esc(tok.slice(1, -1))}</code>`;
     if (tok.startsWith('*') && tok.endsWith('*') && tok.length > 2) return `<em>${esc(tok.slice(1, -1))}</em>`;
     const ws = tok.match(WS_MENTION_RE); if (ws) return esc(ws[1]);
+    const lib = tok.match(LIB_MENTION_RE); if (lib) return esc(lib[1]);
     if (tok.startsWith('@[')) return esc(tok.slice(2, -1));
     const m = tok.match(LINK_RE); if (m) return SAFE_HREF.test(m[2]) ? `<a href="${esc(m[2])}">${esc(m[1])}</a>` : esc(m[1]);
     if (URL_RE.test(tok)) return `<a href="${esc(tok)}">${esc(tok)}</a>`;

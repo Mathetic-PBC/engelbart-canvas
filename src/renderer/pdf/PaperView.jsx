@@ -16,12 +16,21 @@
 // passage alone is. The section is find's no longer (2026-10-03, the Stage's Sections menu): it stays while find
 // searches and stops, until another is shown or clearSection(). `initialSection` { find, to }: the section to show the
 // same way when the viewer opens with no target (a tab with a guide's sections come to the front again). Never ink.
+// A margin note mentions library items (MATH-21, 2026-10-05): `@` in it opens the @ menu (`mentionItems`, the workspace's
+// list, of which only library rows are kept), and a pick writes `@[Name](lib:<id>)` into the note (model/doc.js libMention).
+// A note no one is typing in is shown as text (`data-note-view`), its mentions links: a click on one is
+// `onOpenMention(id)`, a click anywhere else in it gives the note its field back, the caret where it was clicked. Its
+// names are the library's now (`library`), so a renamed item shows its new name; one gone from the library is grey. With
+// no `onOpenMention` a note is its field alone, as before: the token reads as typed.
 import React from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import rough from 'roughjs';
 import { mergeLineRects, placeHighlight, boxSeed, selectionParts, scalePart, partMarks } from './marks.js';
 import { nextFind, createTargetGate, sectionSpans, paintSection, clearFind, FIND, FIND_ACTIVE } from '../model/find.js';
 import { wheelZooms, wheelZoom, createPageCache } from '../model/paper-zoom.js';
+import { mentionAt, libMention, noteHtml, noteParts, noteOffset, LIB_MENTION_RE } from '../model/doc.js';
+import { fieldCaret } from '../workspace/caret.js';
+import MentionMenu from '../workspace/MentionMenu.jsx';
 
 // pdf.js 6: a document is torn down through its loading task (PDFDocumentProxy has no destroy()).
 const destroyDoc = (doc) => { try { const task = doc && doc.loadingTask; if (task && typeof task.destroy === 'function') task.destroy().catch(() => {}); } catch { /* already gone */ } };
@@ -115,6 +124,8 @@ function rangeText(range) {
   return out;
 }
 const SVG = 'http://www.w3.org/2000/svg';
+// A note's handwriting, the same in its field and shown as text (so the side arrows meet either where they did).
+const NOTE_LOOK = "pointer-events:auto;padding:0 6px;font:500 17px/1.25 'Caveat',cursive;color:#171717";
 
 function toBytes(src) {
   // pdf.js transfers the buffer to its worker (detaching it), so hand it a private copy.
@@ -127,7 +138,7 @@ function toBytes(src) {
 export default class PaperView extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { note: 'Opening the paper…', page: 0, pages: 0, pct: 100 };
+    this.state = { note: 'Opening the paper…', page: 0, pages: 0, pct: 100, mention: null, mentionIdx: 0 };
     this.host = React.createRef();
     this.marks = clone(props.marks || {}); // { [page]: Mark[] }, geometry in page units
     this.doc = null;
@@ -147,6 +158,9 @@ export default class PaperView extends React.Component {
     this.pinchTimer = null;
     this.pinchAt = null;
     this.scrollRaf = 0;
+    this.editing = null; // the id of the note being typed in: drawn as its field, the rest as text (see renderMarks)
+    this.redrawing = 0; // > 0 while notes are taken out to be drawn again: a field losing the keyboard then is not left
+    this.libDrawn = ''; // the mentioned items' names the notes were drawn with (libKey)
     this.onDown = (e) => {
       if (!(e.target.closest && e.target.closest('[data-pdf] [data-page]'))) return;
       this.pdfDown = { x: e.clientX, y: e.clientY };
@@ -166,6 +180,7 @@ export default class PaperView extends React.Component {
     this.onKeyCapture = (e) => { if (this.pendingSelKey(e)) e.stopPropagation(); };
     this.onWheel = (e) => this.pinch(e);
     this.onScroll = () => {
+      if (this.state.mention) this.closeMention();
       if (this.scrollRaf) return;
       this.scrollRaf = requestAnimationFrame(() => { this.scrollRaf = 0; this.syncBar(); });
     };
@@ -212,7 +227,8 @@ export default class PaperView extends React.Component {
     this.load();
   }
 
-  componentDidUpdate(prev) {
+  componentDidUpdate(prev, prevState) {
+    if (prevState && !prevState.mention !== !this.state.mention && this.props.onMentionOpen) this.props.onMentionOpen(!!this.state.mention);
     if (prev.target !== this.props.target || prev.targetTo !== this.props.targetTo) {
       const text = this.gate.set(targetKey(this.props.target, this.props.targetTo));
       if (text) this.applyTarget(text);
@@ -231,6 +247,8 @@ export default class PaperView extends React.Component {
       this.marks = clone(this.props.marks || {});
       this.renderAllMarks();
     }
+    // A mentioned item renamed, or gone from the library: its mentions are drawn again with its name now.
+    if (prev.library !== this.props.library && this.libKey() !== this.libDrawn) this.renderAllMarks();
   }
 
   componentWillUnmount() {
@@ -251,6 +269,7 @@ export default class PaperView extends React.Component {
     clearTimeout(this.resizeTimer);
     clearTimeout(this.pinchTimer);
     if (this.scrollRaf) cancelAnimationFrame(this.scrollRaf);
+    if (this.state.mention && this.props.onMentionOpen) this.props.onMentionOpen(false);
     this.flushSave(this.props.onMarksChange);
     this.gen += 1;
     this.cancelLayout();
@@ -291,7 +310,9 @@ export default class PaperView extends React.Component {
     clearTimeout(this.pinchTimer); this.pinchTimer = null;
     if (this.doc) { const d = this.doc; this.doc = null; destroyDoc(d); }
     const host = this.host.current;
-    if (host) host.replaceChildren();
+    this.closeMention();
+    this.redrawing += 1;
+    try { if (host) host.replaceChildren(); } finally { this.redrawing -= 1; }
     this.resetGeometry();
     this.setPinching(false);
     this.pdfW = null;
@@ -386,6 +407,7 @@ export default class PaperView extends React.Component {
     const from = this.live != null ? this.live : this.zoom;
     const to = wheelZoom(from, e, ZOOM_MIN, ZOOM_MAX);
     if (to !== from) {
+      this.closeMention();
       const a = this.anchorAt(e.clientX, e.clientY);
       this.live = to;
       this.setPinching(true);
@@ -477,6 +499,7 @@ export default class PaperView extends React.Component {
     if (gen !== this.layoutGen || !this.host.current) return;
 
     const W = host.clientWidth, N = doc.numPages;
+    this.closeMention(); // a zoom or a resize moves the note it hangs from
     const pt = anchor === undefined ? this.hostPoint('top') : anchor, at = pt ? this.anchorAt(pt.x, pt.y) : null;
     const focused = document.activeElement && host.contains(document.activeElement) && document.activeElement.dataset.mark
       ? { id: document.activeElement.dataset.mark, a: document.activeElement.selectionStart, b: document.activeElement.selectionEnd } : null;
@@ -517,7 +540,8 @@ export default class PaperView extends React.Component {
       inner.appendChild(wrap);
     }
 
-    host.replaceChildren(inner);
+    this.redrawing += 1; // the note being typed in keeps being so (this.editing), and has the keyboard back below
+    try { host.replaceChildren(inner); } finally { this.redrawing -= 1; }
     this.setPinching(this.live != null); // the new text layers show unless a pinch is still under way
     const oldGeo = this.geo;
     this.inner = inner; this.geo = geo; this.sheets = sheets; this.tops = tops;
@@ -807,7 +831,7 @@ export default class PaperView extends React.Component {
   pdfMouseUp(e) {
     const wrap = e.target.closest && e.target.closest('[data-pdf] [data-page]');
     if (!wrap) return;
-    if (e.target.closest('textarea')) return;
+    if (e.target.closest('textarea, [data-note-view]')) return;
     const sel = getSelection(), css = this.css || 1;
     if (sel && !sel.isCollapsed && sel.rangeCount) {
       const range = sel.getRangeAt(0);
@@ -890,6 +914,7 @@ export default class PaperView extends React.Component {
     if (pos) {
       const { G, pageW } = this.geom(p.page), u = pageW || 1;
       const m = { id: markId(), rects: [], side: p.side, y: p.y / u, note, text: p.text, pos: { x: (pos.x - G) / u, y: pos.y / u } };
+      this.editing = m.id; // a new note opens as its field, for the caller to focus
       this.marks[p.page] = [...(this.marks[p.page] || []), m];
       this.renderMarks(p.page);
       this.scheduleSave();
@@ -899,7 +924,7 @@ export default class PaperView extends React.Component {
     for (const { page, mark } of partMarks(p.parts, note, markId, (n) => this.geom(n).pageW)) {
       const placed = placeHighlight(this.marks[page] || [], mark);
       this.marks[page] = placed.list;
-      if (!first) first = placed.mark;
+      if (!first) { first = placed.mark; if (note != null) this.editing = first.id; }
       this.renderMarks(page);
     }
     this.scheduleSave();
@@ -908,18 +933,23 @@ export default class PaperView extends React.Component {
 
   renderAllMarks() {
     const host = this.host.current; if (!host) return;
+    this.libDrawn = this.libKey();
     for (const wrap of host.querySelectorAll('[data-page]')) this.renderMarks(Number(wrap.dataset.page));
   }
 
   // Highlights are drawn once a page: every mark's rects merged (./marks.js mergeLineRects), one zigzag a box, seeded by
   // where the box is so it keeps its shape between renders and zooms. Marks overlapping each other, or saved with
-  // doubled rects, draw no darker. Notes and arrows go by each mark's own rects.
+  // doubled rects, draw no darker. Notes and arrows go by each mark's own rects. A note being typed in when its page is
+  // drawn again (a mark added beside it, a free note fitted once the text is drawn, a rename) has the keyboard back after.
   renderMarks(page) {
     const hl = this.find1(`[data-hl="${page}"]`), notes = this.find1(`[data-notes="${page}"]`), ar = this.find1(`[data-arrows="${page}"]`);
     if (!hl || !notes) return;
     const { G, pageW } = this.geom(page), u = pageW, sheetW = pageW + 2 * G;
     const PM = Math.round(pageW * 0.085);
-    hl.innerHTML = ''; notes.innerHTML = ''; if (ar) ar.innerHTML = '';
+    const active = document.activeElement;
+    const had = active && active.tagName === 'TEXTAREA' && notes.contains(active) ? { id: active.dataset.mark, a: active.selectionStart, b: active.selectionEnd } : null;
+    this.redrawing += 1;
+    try { hl.innerHTML = ''; notes.innerHTML = ''; if (ar) ar.innerHTML = ''; } finally { this.redrawing -= 1; }
     const rc = rough ? rough.svg(hl) : null, ra = rough && ar ? rough.svg(ar) : null;
     const list = (this.marks || {})[page] || [];
     for (const b of mergeLineRects(list.flatMap((m) => m.rects || []))) {
@@ -933,8 +963,6 @@ export default class PaperView extends React.Component {
       const rects = m.rects.map((r) => ({ x: r.x * u, y: r.y * u, w: r.w * u, h: r.h * u }));
       const my = m.y * u, pos = m.pos ? { x: m.pos.x * u + G, y: m.pos.y * u } : null;
       if (m.note == null) continue;
-      const ta = document.createElement('textarea');
-      ta.dataset.mark = m.id; ta.value = m.note; ta.rows = 1; ta.spellcheck = false;
       let left, top, width;
       if (pos) { left = pos.x; top = pos.y - 11; width = Math.min(this.freeWidth(page, pos.x, pos.y, 22), G + pageW * .6); }
       else {
@@ -944,20 +972,16 @@ export default class PaperView extends React.Component {
         left = m.side === 'left' ? 8 : Math.max(0, Math.min(G + pageW - PM + 8, sheetW - width - 16));
         top = Math.max(0, my - 6);
       }
-      ta.style.cssText = `position:absolute;left:${left}px;top:${top}px;width:${width}px;pointer-events:auto;padding:0 6px;border:0;background:transparent;resize:none;overflow:hidden;font:500 17px/1.25 'Caveat',cursive;color:#171717;outline:none`;
-      const fit = () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; };
-      ta.oninput = () => { m.note = ta.value; fit(); this.scheduleSave(); };
-      ta.onblur = () => {
-        if (!ta.value.trim()) {
-          const list = this.marks[page];
-          if (m.rects.length) m.note = null; else list.splice(list.indexOf(m), 1);
-          this.renderMarks(page);
-          this.scheduleSave();
-        }
-      };
-      ta.onkeydown = (ev) => { ev.stopPropagation(); if (ev.key === 'Escape') ta.blur(); };
-      ta.onmousedown = (ev) => ev.stopPropagation();
-      notes.appendChild(ta); fit();
+      const box = `position:absolute;left:${left}px;top:${top}px;width:${width}px;${NOTE_LOOK}`;
+      if (this.editing === m.id || !String(m.note).trim() || !this.showsNotes()) {
+        const ta = this.noteField(m, page);
+        ta.style.cssText = `${box};border:0;background:transparent;resize:none;overflow:hidden;outline:none`;
+        notes.appendChild(ta); this.fitNote(ta);
+      } else {
+        const view = this.noteView(m, page);
+        view.style.cssText = `${box};white-space:pre-wrap;overflow-wrap:break-word;cursor:text`;
+        notes.appendChild(view);
+      }
       if (ra && rects.length && !pos) {
         const r = rects[0], ax = m.side === 'left' ? G + r.x - 3 : G + r.x + r.w + 3, ay = r.y + r.h / 2;
         const nx = m.side === 'left' ? left + width - 4 : left + 2, ny = top + 11;
@@ -971,6 +995,158 @@ export default class PaperView extends React.Component {
     }
     // Clearing the highlight layer took the pending selection with it.
     this.showPending(page);
+    if (had) {
+      const ta = notes.querySelector(`textarea[data-mark="${had.id}"]`);
+      if (ta) { ta.focus({ preventScroll: true }); try { ta.setSelectionRange(had.a, had.b); } catch { /* not a text field */ } }
+    }
+    const open = this.state.mention;
+    if (open && open.page === page) {
+      const ta = notes.querySelector(`textarea[data-mark="${open.markId}"]`);
+      if (ta && document.activeElement === ta) this.setState({ mention: { ...open, anchor: fieldCaret(ta) } }); else this.closeMention();
+    }
+  }
+
+  /* ---------------------------------------------------------------- notes (MATH-21: mentions) */
+  // Notes are shown as text, their mentions links, once there is somewhere for a link to go.
+  showsNotes() { return typeof this.props.onOpenMention === 'function'; }
+  fitNote(ta) { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; }
+
+  // A mentioned item's name now: null when the library no longer holds it; undefined (the name it was mentioned by)
+  // when there is no library to ask, or none yet.
+  libName(id) {
+    const lib = this.props.library;
+    if (!Array.isArray(lib) || !lib.length) return undefined;
+    const row = lib.find((r) => r && r.id === id);
+    return row ? row.name || '' : null;
+  }
+  // The names now of every item the notes mention, as one string: the notes are drawn again when it changes.
+  libKey() {
+    const ids = new Set();
+    for (const list of Object.values(this.marks || {})) {
+      for (const m of list || []) if (m && m.note) for (const part of noteParts(m.note)) { const t = part.match(LIB_MENTION_RE); if (t) ids.add(t[2]); }
+    }
+    return [...ids].sort().map((id) => `${id}\t${this.libName(id)}`).join('\n');
+  }
+
+  // A note being typed in: its text, saved as it changes, and the @ menu opened by what stands before the caret.
+  noteField(m, page) {
+    const ta = document.createElement('textarea');
+    ta.dataset.mark = m.id; ta.value = m.note; ta.rows = 1; ta.spellcheck = false;
+    ta.oninput = () => { m.note = ta.value; this.fitNote(ta); this.scheduleSave(); this.noteMention(ta, m, page); };
+    ta.onfocus = () => { this.editing = m.id; };
+    ta.onblur = () => this.leaveNote(ta, m, page);
+    ta.onkeydown = (ev) => this.noteKey(ev, ta, m);
+    // The caret moved along the line: the menu follows what stands before it now (↑ and ↓ are the menu's).
+    ta.onkeyup = (ev) => { if (/^(ArrowLeft|ArrowRight|Home|End)$/.test(ev.key) && this.state.mention && this.state.mention.markId === m.id) this.noteMention(ta, m, page); };
+    ta.onmousedown = (ev) => ev.stopPropagation();
+    return ta;
+  }
+  // A note no one is typing in, as text: a mention opens its item; a click anywhere else is a click into its field.
+  noteView(m, page) {
+    const view = document.createElement('div');
+    view.dataset.noteView = m.id;
+    view.innerHTML = noteHtml(m.note, { libName: (id) => this.libName(id) });
+    view.onmousedown = (ev) => {
+      ev.stopPropagation(); // not a click on the page: no new note, the pending selection stays (as in a field)
+      if (ev.button !== 0) return;
+      ev.preventDefault();
+      if (ev.target.closest && ev.target.closest('[data-lib]')) return; // its click opens it
+      this.editNote(m, page, this.noteCaret(view, m, ev));
+    };
+    view.onclick = (ev) => {
+      const link = ev.target.closest && ev.target.closest('[data-lib]');
+      if (!link) return;
+      ev.preventDefault(); ev.stopPropagation();
+      if (this.props.onOpenMention) this.props.onOpenMention(link.dataset.lib);
+    };
+    return view;
+  }
+  // Where in the note's text a click on its shown text lands (model/doc.js noteOffset); null when it cannot be told.
+  noteCaret(view, m, ev) {
+    const r = typeof document.caretRangeFromPoint === 'function' ? document.caretRangeFromPoint(ev.clientX, ev.clientY) : null;
+    if (!r || !view.contains(r.startContainer)) return null;
+    let node = r.startContainer;
+    if (node === view) return r.startOffset ? noteOffset(m.note, r.startOffset - 1, Infinity) : 0; // between two pieces
+    while (node.parentNode !== view) node = node.parentNode;
+    return noteOffset(m.note, [...view.childNodes].indexOf(node), node === r.startContainer && node.nodeType === Node.TEXT_NODE ? r.startOffset : Infinity);
+  }
+  // The note's field in place of its text, with the keyboard and the caret at `at` (the end when null). The note typed
+  // in until now is left first, as a click away from it leaves it: an empty one goes, a written one shows as text.
+  editNote(m, page, at) {
+    const host = this.host.current, active = document.activeElement;
+    if (host && active && active.tagName === 'TEXTAREA' && active.dataset.mark && host.contains(active)) active.blur();
+    this.editing = m.id;
+    this.renderMarks(page);
+    const ta = this.find1(`textarea[data-mark="${m.id}"]`);
+    if (!ta) return;
+    ta.focus({ preventScroll: true });
+    const pos = at == null ? ta.value.length : Math.max(0, Math.min(at, ta.value.length));
+    ta.setSelectionRange(pos, pos);
+  }
+  // The keyboard left a note's field. Empty, the note goes (a highlight keeps its mark); written, it shows as text a frame
+  // later, so a click that moved the keyboard to another field on the page is not undone by drawing the page again. A
+  // field taken out to be drawn again was not left; the app going to the background leaves it as it is.
+  leaveNote(ta, m, page) {
+    if (this.redrawing || !ta.isConnected) return;
+    if (this.state.mention && this.state.mention.markId === m.id) this.closeMention();
+    if (!ta.value.trim()) {
+      if (this.editing === m.id) this.editing = null;
+      const list = this.marks[page] || [], at = list.indexOf(m);
+      if (m.rects.length) m.note = null; else if (at >= 0) list.splice(at, 1);
+      this.renderMarks(page);
+      this.scheduleSave();
+      return;
+    }
+    if (document.activeElement === ta) return;
+    if (this.editing === m.id) this.editing = null;
+    if (this.showsNotes()) requestAnimationFrame(() => { if (this.editing !== m.id) this.renderMarks(page); });
+  }
+
+  // The @ menu in a note (as in a follow-up field, DocEditor followMention): open while an `@word` stands before the caret.
+  noteMention(ta, m, page) {
+    const found = typeof this.props.mentionItems === 'function' ? mentionAt(ta.value, ta.selectionStart) : null;
+    if (found) this.setState({ mention: { markId: m.id, page, query: found.query, start: found.start, anchor: fieldCaret(ta) }, mentionIdx: 0 });
+    else this.closeMention();
+  }
+  closeMention() { if (this.state.mention) this.setState({ mention: null }); }
+  // The menu's rows: library items only. A note mentions; it does not ask (Bart and the other verbs), make a note, name a
+  // workspace or a page the library does not hold.
+  mentionList() {
+    const open = this.state.mention;
+    if (!open || typeof this.props.mentionItems !== 'function') return [];
+    return (this.props.mentionItems(open.query.toLowerCase()) || []).filter((r) => r && r.kind === 'item' && r.row && r.row.id);
+  }
+  // Keys in a note's field: the menu's first while it is open (↑ ↓ move, Enter or Tab picks, Escape closes it alone),
+  // then Escape leaves the note. None reaches the page or the Stage.
+  noteKey(ev, ta, m) {
+    ev.stopPropagation();
+    const items = this.state.mention && this.state.mention.markId === m.id ? this.mentionList() : [];
+    if (items.length) {
+      const n = items.length;
+      if (ev.key === 'ArrowDown') { ev.preventDefault(); this.setState({ mentionIdx: (this.state.mentionIdx + 1) % n }); return; }
+      if (ev.key === 'ArrowUp') { ev.preventDefault(); this.setState({ mentionIdx: (this.state.mentionIdx - 1 + n) % n }); return; }
+      if ((ev.key === 'Enter' || ev.key === 'Tab') && !ev.isComposing) { ev.preventDefault(); this.pickMention(items[this.state.mentionIdx] || items[0]); return; }
+      if (ev.key === 'Escape') { ev.preventDefault(); this.closeMention(); return; }
+    }
+    if (ev.key === 'Escape') ta.blur();
+  }
+  // A row picked: its token takes the place of `@query`, then a space (one there already is stepped over), and the note
+  // keeps the keyboard. The item is only mentioned: nothing is added to the workspace.
+  pickMention(r) {
+    const open = this.state.mention;
+    this.closeMention();
+    if (!open || !r || !r.row || !r.row.id) return;
+    const ta = this.find1(`textarea[data-mark="${open.markId}"]`), m = ((this.marks || {})[open.page] || []).find((x) => x.id === open.markId);
+    if (!ta || !m) return;
+    if (document.activeElement !== ta) ta.focus({ preventScroll: true });
+    const end = ta.selectionStart, found = mentionAt(ta.value, end), start = found ? found.start : open.start;
+    if (start > end) return;
+    ta.setRangeText(libMention(r.name, r.row.id), start, end, 'end');
+    if (ta.value.charAt(ta.selectionEnd) === ' ') ta.setSelectionRange(ta.selectionEnd + 1, ta.selectionEnd + 1);
+    else ta.setRangeText(' ', ta.selectionEnd, ta.selectionEnd, 'end');
+    m.note = ta.value;
+    this.fitNote(ta);
+    this.scheduleSave();
   }
 
   /* ---------------------------------------------------------------- render */
@@ -993,6 +1169,9 @@ export default class PaperView extends React.Component {
           {note
             ? <span style={{ position: 'absolute', left: 0, right: 0, top: 14, textAlign: 'center', font: '12px/1.5 var(--font-sans)', color: '#8f8f8f', pointerEvents: 'none' }}>{note}</span>
             : null}
+          {this.state.mention && this.state.mention.anchor ? (
+            <MentionMenu items={this.mentionList()} index={this.state.mentionIdx} anchor={this.state.mention.anchor} onPick={(r) => this.pickMention(r)} onHover={(i) => this.setState({ mentionIdx: i })} />
+          ) : null}
           {!note && pages > 0 ? (
             <div style={BAR} title="pinch, or ⌘ or ⌃ scroll, to zoom" onMouseDown={(e) => e.preventDefault()}>
               <span style={{ color: '#171717', minWidth: `${String(pages).length}ch`, textAlign: 'right' }}>{page}</span>
