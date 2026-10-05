@@ -29,7 +29,7 @@ const { loadSystemPrompt } = require('./summarizer.cjs');
 const { extractAbstract, extractText } = require('./pdf-text.cjs');
 
 const MINUTE = 60_000;
-const DEFAULTS = { quietMs: 30 * MINUTE, minChars: 1000, intervalMs: MINUTE, firstDelayMs: 5_000, perSweep: 5 };
+const DEFAULTS = { quietMs: 30 * MINUTE, minChars: 1000, intervalMs: MINUTE, firstDelayMs: 5_000, perSweep: 5, textsPerSweep: Infinity };
 
 function createSweeper(options) {
   const { getContext, summarize, summaries = true, now = () => Date.now(), log = () => {} } = options;
@@ -113,13 +113,14 @@ function createSweeper(options) {
     await dispatch(ctx, row, text, report, async () => { try { return fs.statSync(row.path).mtimeMs === modified; } catch { return false; } });
   }
 
-  // A PDF's text, read when its file is new or has changed since it was last read; at most perSweep in one pass.
+  // A PDF's text, read when its file is new or has changed since it was last read; at most textsPerSweep in one pass,
+  // by default every one waiting (pdf.js only, no model, so perSweep, which bounds summaries, does not apply).
   async function considerText(ctx, row, stamps, report) {
     if (stopping || !/\.pdf$/i.test(row.path)) return;
     let modified;
     try { modified = fs.statSync(row.path).mtimeMs; } catch { return; } // the file is gone
     if (stamps.get(row.id) === modified) return; // read since it last changed
-    if (report.texts >= config.perSweep) return;
+    if (report.texts >= config.textsPerSweep) return;
     report.texts += 1;
     let text = '';
     try { text = await extractText(row.path); } catch { text = ''; }

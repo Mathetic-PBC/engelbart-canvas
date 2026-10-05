@@ -417,15 +417,41 @@ test('the text pass: a PDF with no text (a scan) or that cannot be read is kept 
   for (const row of [scan, broken, gone]) await ctx.libraryDb.remove(row.id);
 });
 
-test('the text pass: at most perSweep PDFs are read in one sweep; the rest wait for the next', async () => {
+test('the text pass: at most textsPerSweep PDFs are read in one sweep; the rest wait for the next', async () => {
   const rows = [];
   for (let i = 0; i < 3; i += 1) rows.push(await pdfRow(`aaaaaaaa-0000-4000-8000-00000000001${i}`, `Batch ${i}`, [`Batch paper ${i}.`]));
-  const sweeper = sweeperWith(recorder().summarize, { perSweep: 2 });
+  const sweeper = sweeperWith(recorder().summarize, { textsPerSweep: 2 });
   assert.equal((await sweeper.sweep()).texts, 2);
   assert.equal((await ctx.libraryDb.textStamps()).size, 2);
   assert.equal((await sweeper.sweep()).texts, 1);
   assert.equal((await sweeper.sweep()).texts, 0);
   assert.deepEqual(await Promise.all(rows.map(async (row) => (await keptText(row.id)).text)), ['Batch paper 0.', 'Batch paper 1.', 'Batch paper 2.']);
+  for (const row of rows) await ctx.libraryDb.remove(row.id);
+});
+
+test('the text pass by default: every PDF never read is read by the first sweep; the next reads none', async () => {
+  const rows = [];
+  for (let i = 0; i < 7; i += 1) rows.push(await pdfRow(`aaaaaaaa-0000-4000-8000-00000000005${i}`, `Unread ${i}`, [`Unread paper ${i}.`]));
+  const sweeper = sweeperWith(recorder().summarize);
+  assert.equal((await sweeper.sweep()).texts, 7);
+  assert.equal((await ctx.libraryDb.textStamps()).size, 7);
+  assert.equal((await sweeper.sweep()).texts, 0);
+  for (const row of rows) await ctx.libraryDb.remove(row.id);
+});
+
+test('the text pass is not held to perSweep: with perSweep 1 every PDF is read, but only one paper is summarized', async () => {
+  const settled = new Date(Date.now() - 45 * MINUTE);
+  const rows = [];
+  for (let i = 0; i < 3; i += 1) {
+    const body = Array.from({ length: 24 }, (_, n) => `Line ${n + 1} of report ${i}, with no abstract section, long enough to be worth a summary.`);
+    rows.push(await pdfRow(`aaaaaaaa-0000-4000-8000-00000000006${i}`, `Report ${i}`, body, settled));
+  }
+  const { calls, summarize } = recorder();
+  const report = await sweeperWith(summarize, { perSweep: 1 }).sweep();
+  assert.equal(report.texts, 3);
+  assert.equal((await ctx.libraryDb.textStamps()).size, 3);
+  assert.deepEqual([calls.length, report.summarized.length, report.extracted, report.pending.length], [1, 1, 1, 2]);
+  assert.ok(rows.some((row) => row.name === report.summarized[0].name), 'the one summary is one of these papers');
   for (const row of rows) await ctx.libraryDb.remove(row.id);
 });
 
