@@ -1,5 +1,5 @@
 'use strict';
-const { isGithubSignIn } = require('../../shared/github.cjs');
+const { isGithubSignIn, endedGithubSession, GITHUB_SESSION_COOKIES } = require('../../shared/github.cjs');
 
 // The Browser pane's pages (decision 48). Each browser tab is a WebContentsView: a native view
 // with its own top-level webContents, laid over a placeholder the renderer measures. A page is
@@ -235,6 +235,13 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     shared = joinSession(session.fromPartition(PARTITION), member, appName);
   }
 
+  /** GitHub's sign-in cookies in the Stage's session, gone (endedGithubSession): the next GitHub page is asked for signed out. */
+  async function dropGithubSession() {
+    configureSession();
+    const cookies = session.fromPartition(PARTITION).cookies;
+    await Promise.all(GITHUB_SESSION_COOKIES.map((name) => cookies.remove('https://github.com', name).catch(() => {})));
+  }
+
   function tabOf(contents) {
     for (const [id, entry] of entries) if (entry.view.webContents === contents) return id;
     return null;
@@ -352,7 +359,26 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       void handOver(url);
     };
     contents.on('will-navigate', guard);
-    contents.on('will-redirect', guard);
+    // A GitHub page sent to GitHub's /login by a redirect (2026-10-05): the Stage still holds a sign-in GitHub has ended,
+    // and with it GitHub shows nothing, not even a public repository. The ended session is dropped and the page asked for
+    // again, once, signed out; sent to /login again, it goes to the default browser as any sign-in does.
+    let started = ''; // where the page's current navigation set out for
+    let retried = '';
+    contents.on('did-start-navigation', (details) => { if (details && details.isMainFrame && !details.isSameDocument) started = String(details.url || ''); });
+    contents.on('did-navigate', () => { retried = ''; });
+    contents.on('will-redirect', (event, url) => {
+      const from = started;
+      if (!event.isMainFrame || retried === from || !endedGithubSession(from, url)) { guard(event, url); return; }
+      event.preventDefault();
+      retried = from;
+      const entry = tab ? entries.get(tab) : null;
+      if (entry) entry.retrying = true; // the cancelled load is no failure: the page is asked for again
+      void dropGithubSession().then(() => {
+        if (contents.isDestroyed()) return;
+        if (entry && entries.get(tab) === entry) load(entry, from);
+        else contents.loadURL(from).catch(() => {});
+      });
+    });
     contents.on('certificate-error', (event, url, _error, _certificate, callback) => {
       let trusted = false;
       try { trusted = isLoopback(new URL(url).hostname); } catch { trusted = false; }
@@ -441,7 +467,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     view.setVisible(false);
     win.contentView.addChildView(view);
     onLayerChange();
-    const entry = { view, error: null, requested: '', pending: '', seq: 0, found: '', drawn: false, download: '' };
+    const entry = { view, error: null, requested: '', pending: '', seq: 0, found: '', drawn: false, download: '', retrying: false };
     entries.set(id, entry);
 
     const contents = view.webContents;
@@ -462,7 +488,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       // The tab's first load stopped with no page and nothing else on the way (2026-10-04): cancelled (a 204, a sandbox
       // waking), it would leave the tab blank for good, with Chromium saying nothing. A pdf turned into a download is the
       // viewer's; a load another took the place of is still loading; once a page is there, a cancel is no failure.
-      if (entry.requested && !entry.drawn && !entry.error && !entry.download && !contents.isLoading()) {
+      if (entry.requested && !entry.drawn && !entry.error && !entry.download && !entry.retrying && !contents.isLoading()) {
         entry.error = { code: ERR_ABORTED, description: 'The page did not load', url: entry.requested };
       }
       entry.pending = ''; // a stopped load is headed nowhere
@@ -528,6 +554,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
   function load(entry, href, keepError) {
     if (!keepError) entry.error = null;
     entry.download = '';
+    entry.retrying = false;
     entry.requested = href;
     entry.pending = href;
     // A failed load is reported by did-fail-load; the promise says the same thing twice.

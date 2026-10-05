@@ -19,4 +19,15 @@ function isGithubSignIn(value) {
     return SIGN_IN.some((path) => path.test(url.pathname));
   } catch { return false; }
 }
-module.exports = { isGithubSignIn };
+// The cookies that say who is signed in to GitHub. When GitHub has ended that sign-in, it sends every page to /login.
+const GITHUB_SESSION_COOKIES = ['user_session', '__Host-user_session_same_site'];
+
+/** A GitHub page (not a sign-in page) redirected to GitHub's /login: GitHub no longer takes the sign-in the browser holds. */
+function endedGithubSession(from, to) {
+  try {
+    const page = new URL(from), login = new URL(to);
+    if (page.protocol !== 'https:' || !HOSTS.includes(page.hostname) || isGithubSignIn(from)) return false;
+    return isGithubSignIn(to) && login.hostname === 'github.com' && login.pathname.replace(/\/+$/, '') === '/login';
+  } catch { return false; }
+}
+module.exports = { isGithubSignIn, endedGithubSession, GITHUB_SESSION_COOKIES };

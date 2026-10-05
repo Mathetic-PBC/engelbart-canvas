@@ -105,7 +105,7 @@ function fakeElectron() {
     setBounds(bounds) { this.bounds = bounds; }
   }
   const browsing = {
-    flushed: 0, cookies: { on() {}, flushStore: async () => { browsing.flushed += 1; } }, ua: 'X Electron/44.4.1 Y', setUserAgent(value) { this.ua = value; }, getUserAgent() { return this.ua; }, setPermissionRequestHandler(handler) { this.permission = handler; },
+    flushed: 0, removed: [], cookies: { on() {}, flushStore: async () => { browsing.flushed += 1; }, remove: async (url, name) => { browsing.removed.push([url, name]); } }, ua: 'X Electron/44.4.1 Y', setUserAgent(value) { this.ua = value; }, getUserAgent() { return this.ua; }, setPermissionRequestHandler(handler) { this.permission = handler; },
     webRequest: { onHeadersReceived(filter, handler) { browsing.headersFilter = filter; browsing.headers = handler; } },
     on(name, handler) { browsing[name] = handler; },
   };
@@ -482,4 +482,49 @@ test('GitHub pages open on the Stage; only its sign-in pages go to the default b
   assert.equal(external.length, 4);
   views.open('lookalike', 'https://github.com.evil.example/login');
   assert.equal(external.length, 4);
+});
+
+test('a GitHub page sent to /login by an ended sign-in drops that sign-in and loads again, once, on the Stage', async () => {
+  const f = fakeElectron();
+  const external = [];
+  f.electron.shell = { openExternal: async url => { external.push(url); } };
+  const sent = [];
+  const views = createBrowserViews({ electron: f.electron, getWindow: () => f.win, send: (channel, payload) => sent.push([channel, payload]) });
+  const repo = 'https://github.com/mqo00/rope';
+  const login = 'https://github.com/login?return_to=https%3A%2F%2Fgithub.com%2Fmqo00%2Frope';
+  views.open('t', repo);
+  const contents = f.made[0].webContents;
+  const redirect = (url) => { const event = { isMainFrame: true, stopped: false, preventDefault() { this.stopped = true; } }; contents.emit('will-redirect', event, url); return event.stopped; };
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+  contents.emit('did-start-navigation', { url: repo, isMainFrame: true, isSameDocument: false });
+  assert.equal(redirect(login), true);
+  contents.emit('did-fail-load', {}, -3, 'ERR_ABORTED', repo, true);
+  contents.emit('did-stop-loading'); // the cancelled load, before the page is asked for again: no "did not load"
+  assert.equal(sent.filter(([channel]) => channel === 'browser:state').at(-1)[1].error, null);
+  await settle();
+  assert.deepEqual(f.browsing.removed, [['https://github.com', 'user_session'], ['https://github.com', '__Host-user_session_same_site']]);
+  assert.deepEqual(contents.loaded, [repo, repo]);
+  assert.equal(external.length, 0);
+
+  // Sent to /login again: a sign-in after all, for the default browser.
+  contents.emit('did-start-navigation', { url: repo, isMainFrame: true, isSameDocument: false });
+  assert.equal(redirect(login), true);
+  await settle();
+  assert.deepEqual(external, [login]);
+  assert.deepEqual(contents.loaded, [repo, repo]);
+  assert.equal(f.browsing.removed.length, 2);
+
+  // Neither a sign-in page asked for, nor a page elsewhere sent to GitHub's sign-in, nor a frame's redirect is retried.
+  for (const from of ['https://github.com/login', 'https://example.com/']) {
+    contents.emit('did-start-navigation', { url: from, isMainFrame: true, isSameDocument: false });
+    assert.equal(redirect(login), true);
+  }
+  contents.emit('did-start-navigation', { url: 'https://github.com/other/repo', isMainFrame: true, isSameDocument: false });
+  const frame = { isMainFrame: false, stopped: false, preventDefault() { this.stopped = true; } };
+  contents.emit('will-redirect', frame, login);
+  assert.equal(frame.stopped, true);
+  await settle();
+  assert.equal(external.length, 4);
+  assert.equal(f.browsing.removed.length, 2);
 });
