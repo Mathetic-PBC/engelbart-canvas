@@ -198,6 +198,28 @@ test('guideSections: an @discover reply\'s links to one paper, in order, each on
   assert.deepEqual(guideSections([`**Read:** [Intro](/Users/h/My%20Paper.pdf#find=In%20this%20paper)`], '/Users/h/My Paper.pdf'), [{ label: 'Intro', find: 'In this paper', to: '' }], 'a path, as splitTarget spells it');
 });
 
+test('guideSections: a named paper\'s entry ("## This paper", 2026-10-04) gives all four of its sections, one Read line each, in the guide\'s order', async () => {
+  const { guideSections } = await load('stage');
+  const lib = '/Users/h/My Paper.pdf', at = '/Users/h/My%20Paper.pdf';
+  const named = [
+    '## This paper', '',
+    `**[My Paper](${at})** · Ng et al. · 2024`,
+    `**Read:** [5 Findings](${at}#find=Across%20four%20deployments&to=We%20discuss)`, '**Why:** a measurement.',
+    `**Read:** [3.2 Pipeline](${at}#find=Each%20event%20is%20segmented&to=3.3%20Metrics%20are)`, '**Why:** a method.',
+    `**Read:** [6 Limitations](${at}#find=Our%20courses%20were%20introductory&to=We%20presented)`, '**Why:** a case that cuts against it.',
+    `**Read:** [4 Taxonomy](${at}#find=We%20derive%20three%20layers)`, '**Why:** a term for it.',
+    '', '## Classics', '',
+    `**[Older](${PAPER})** · Chang et al. · 2019`, `**Read:** [2 Method](${PAPER}#find=We%20built)`, '**Why:** a design.',
+  ];
+  assert.deepEqual(guideSections(named, lib), [
+    { label: '5 Findings', find: 'Across four deployments', to: 'We discuss' },
+    { label: '3.2 Pipeline', find: 'Each event is segmented', to: '3.3 Metrics are' },
+    { label: '6 Limitations', find: 'Our courses were introductory', to: 'We presented' },
+    { label: '4 Taxonomy', find: 'We derive three layers', to: '' },
+  ], 'all four, best first as written, the last without an end');
+  assert.deepEqual(guideSections(named, PAPER).map((s) => s.label), ['2 Method'], 'a traced paper keeps its own');
+});
+
 test('a guide\'s sections on the tab: given with the passage, the clicked one in front; a second link replaces them; landing in a pdf opens no find card', async () => {
   const { withPassage, landTab, landingFinds, sectionAt } = await load('stage');
   const sections = [{ label: '3.2 Design Goals', find: 'We set three goals', to: 'The system has' }, { label: '5 Evaluation', find: 'We ran a study', to: '' }];

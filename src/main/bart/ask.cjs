@@ -591,6 +591,9 @@ function fakeOrient(context, plan, models) {
  * (`#find=…&to=…`, round 2), and an "## Essays" group of one essay, its Read a link to its first paragraph's words with
  * no `&to=` (2026-10-03). Each Why says what the passage gives and the open question it bears on (round 3). The classic
  * was read in full and carries a Try line, its authors' repository (2026-10-04). A follow-up on a guide gets additions.
+ * A question holding a mention (`@[Name]`, with or without words beside it; 2026-10-04) names a paper: no card, and a
+ * guide that opens with "## This paper", the library item by its path, two sections best first, each its own Read and
+ * Why, then a classic it cites, a paper that cites it and an essay; a follow-up that names one gets the same.
  * Nothing is looked up: every entry says it is fake.
  */
 function fakeDiscover(context, plan) {
@@ -612,6 +615,29 @@ function fakeDiscover(context, plan) {
     `**Read:** [${heading}](${address}#find=${encodeURIComponent(words)})`,
     why(gives),
   ];
+  // An item's place: a path is written percent-encoded, so a space ends no link.
+  const where = (item) => (item.path ? item.path.split('/').map(encodeURIComponent).join('/') : item.url);
+  const classic = (label) => [
+    ...entry(`A fake classic${label} (${plan.mode} mode)`, 'https://example.org/fake-classic', 'Implementation', 'a fake passage on how it was built', 'the fake evaluation after it', 'term for what is being handled'),
+    '**Try:** [fake-lab/fake-classic](https://github.com/fake-lab/fake-classic)',
+  ];
+  const essays = ['## Essays', '', ...essay('A fake essay', 'https://example.org/fake-essay', 'A fake heading', 'the fake first paragraph of the essay', 'case that cuts against what is assumed')];
+  // A paper named by a mention (a workspace's, `(ws:…)`, is not one): its own sections first, best first, not in its order.
+  const mention = String(plan.question).match(/@\[([^\]\n]+)\](?!\(ws:)/);
+  if (mention) {
+    const item = context.entries.find((row) => row.name === mention[1] && (row.path || row.url));
+    const address = item ? where(item) : 'https://example.org/fake-named-paper.pdf';
+    const pair = (section, words, to, gives) => [`**Read:** [${section}](${address}#find=${encodeURIComponent(words)}&to=${encodeURIComponent(to)})`, why(gives)];
+    return [
+      '## This paper', '',
+      `**[${mention[1]}](${address})** · Fake Author et al. · 2024`,
+      ...pair('5 Findings', 'a fake passage on what was found', 'the fake discussion after it', 'measurement'),
+      ...pair('3 Method', 'a fake passage on how it was done', 'the fake findings after it', 'method'), '',
+      '## Classics', '', ...classic(' it cites'), '',
+      '## Recent', '', ...entry('A fake paper that cites it', 'https://example.org/fake-recent', 'Study', 'a fake passage on its study', 'the fake results after it', 'design to compare against'), '',
+      ...essays,
+    ].join('\n');
+  }
   if (guided) return ['## Recent', '', ...entry('A fake later paper', 'https://example.org/fake-recent', null, '', '', 'measurement')].join('\n');
   const problem = cards > 0 ? plan.prior[from].question : plan.question; // the problem as first asked, not an answer to a card
   if (!String(problem || '').trim() && cards === 0) {
@@ -621,18 +647,14 @@ function fakeDiscover(context, plan) {
   const asked = cards >= 1 ? cardOfAnswer(plan.prior[from].answer) : null;
   const said = asked && !skipped ? readAnswer(plan.question, asked) : null;
   const own = said && !said.picks.length ? said.text : '';
-  // A paper of the library first, else anything it has a place for; a path is written percent-encoded, so a space ends no link.
+  // A paper of the library first, else anything it has a place for.
   const first = context.entries.find((item) => item.type === 'pdf' && (item.path || item.url)) || context.entries.find((item) => item.path || item.url);
-  const where = (item) => (item.path ? item.path.split('/').map(encodeURIComponent).join('/') : item.url);
   return [
     '## Start here', '',
     ...(own ? [...entry(`A fake record for “${own.slice(0, 80)}”`, 'https://example.org/fake-named', null, '', '', 'design to compare against'), ''] : []),
     ...(first ? entry(first.name, where(first), 'Introduction', 'a fake passage the fake did not read', 'the fake section after it') : entry('A fake starting paper', 'https://example.org/fake-start.pdf', 'Introduction', 'a fake passage', 'the fake section after it')), '',
-    '## Classics', '',
-    ...entry(`A fake classic (${plan.mode} mode)`, 'https://example.org/fake-classic', 'Implementation', 'a fake passage on how it was built', 'the fake evaluation after it', 'term for what is being handled'),
-    '**Try:** [fake-lab/fake-classic](https://github.com/fake-lab/fake-classic)', '',
-    '## Essays', '',
-    ...essay('A fake essay', 'https://example.org/fake-essay', 'A fake heading', 'the fake first paragraph of the essay', 'case that cuts against what is assumed'),
+    '## Classics', '', ...classic(''), '',
+    ...essays,
   ].join('\n');
 }
 

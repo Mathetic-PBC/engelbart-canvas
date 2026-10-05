@@ -1561,3 +1561,77 @@ test('the fake @discover asks one card (which part, in broad areas) for a line w
   projects.agentStarted(ctx, { id: 'dv-agent', kind: 'discover', projectId: project.id, workspaceId: workspace.id });
   projects.agentFinished(ctx, 'dv-agent');
 });
+
+test('@discover on a named paper (2026-10-04): no card, the paper opened whole first, "## This paper" before the trace from it, its sections in pairs of Read and Why', () => {
+  for (const phrase of ['Skip it too when <question> names a paper: a library item mentioned on the line', 'a title, a DOI or an arXiv id', 'Words beside it say which part of the paper the person cares about', 'With no words, the problem is the one nearest the marked line, read in their setting',
+    '# A named paper', 'When <question> names a paper, open all of it before anything else: the library file from its path, else an open-access copy', 'up to four, best first, not in the paper\'s order', 'Never the abstract, and the introduction only when nothing else serves', 'This paper is the only starting point', 'backward through what it cites in the sections you chose, forward through what cites it', 'A library paper the paper tools do not know is still the guide\'s first entry, from the file you opened',
+    '"This paper" holds only the paper <question> names', 'When there is a "This paper" group, there is no "Start here"', '"Classics" holds papers the named paper cites in the sections you chose', '"Recent" holds papers that cite it and bear on the same part', 'The named paper counts as one of the sources <mode> allows',
+    'The "This paper" entry is the title line, then, for each section you chose, best first, a pair of lines', '**Why:** as for any entry.', 'One Read link per pair. A Try line may follow the last pair', 'If only the abstract could be reached, the entry is the title line, "**Read:** abstract only" and one Why, and the trace goes on',
+    'A follow-up that names a paper gets that paper\'s guide']) assert.ok(DISCOVER_SYSTEM_PROMPT.includes(phrase), phrase);
+  const at = (phrase) => DISCOVER_SYSTEM_PROMPT.indexOf(phrase);
+  assert.ok(at('# First, refine') < at('Skip it too when <question> names a paper') && at('Skip it too when') < at('Otherwise ask one card'), 'P-01 in "First, refine"');
+  assert.ok(at('# Then, trace') < at('# A named paper') && at('If none qualifies, say nothing about it') < at('# A named paper') && at('# A named paper') < at('# What is real'), 'P-02: its own section, after the trace');
+  assert.ok(at('"## This paper", "## Start here", "## Classics"') > at('# The guide'), 'P-03: "This paper" is the first group');
+  assert.ok(at('"Classics" holds only papers that two or more starting points cite') < at('When there is a "This paper" group'), 'the rules for a problem stay, those for a paper follow them');
+  assert.ok(at('The Try line comes after Why') < at('The "This paper" entry') && at('The "This paper" entry') < at('For an essay, the title line'));
+});
+
+test('replyBody keeps a guide that starts at "## This paper", and drops what was written before it', () => {
+  const named = '## This paper\n\n**[Retries](/Users/h/Retries.pdf)** · A. Author · 2024\n**Read:** [5 Findings](/Users/h/Retries.pdf#find=We%20found&to=In%20this%20section)\n**Why:** a measurement.\n**Read:** [3 Method](/Users/h/Retries.pdf#find=We%20built)\n**Why:** a method.\n**Try:** [ada/retries](https://github.com/ada/retries)\n\n## Classics\n\nx';
+  assert.equal(replyBody('discover', named), named);
+  assert.equal(replyBody('discover', `Opened the paper; tracing now.\n\n${named}`), named, 'a status line before it goes');
+});
+
+test('the fake @discover on a mentioned library paper: no card, "## This paper" with two sections, each its own Read and Why into the library copy, then Classics, Recent and Essays; words beside it or a follow-up the same (P-05)', async () => {
+  const bart = createFakeBart({ readModels: () => DEFAULTS, delayMs: 2 });
+  const lib = await projects.createProject(ctx, 'Named Paper');
+  const space = await projects.createWorkspace(ctx, lib.id, { name: 'Reading' });
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-named-')), 'Retries Considered.pdf');
+  await ctx.libraryDb.insert({ id: require('node:crypto').randomUUID(), name: 'Retries Considered', project_id: lib.id, tags: ['paper'], type: 'pdf', path: file });
+  const ref = { kind: 'workspace', workspaceId: space.id };
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
+  const { guideSections, splitTarget } = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/stage.js')).href);
+  const { guideTitle } = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/guide.js')).href);
+  const run = async (doc, askId) => {
+    const [thread] = model.threads(doc);
+    const turns = thread.turns.filter((turn) => turn.answered).map((turn) => model.turnText(doc, turn));
+    const out = await bart.ask(ctx, lib.id, { askId, ref, workspaceId: space.id, text: model.parseLine(doc[doc.length - 1]).text, turns, agent: 'discover' });
+    const next = [...doc, ...out.lines];
+    const [again] = model.threads(next);
+    return { doc: next, card: card.cardOfAnswer(model.turnText(next, again.turns[again.turns.length - 1]).answer), lines: out.lines, text: out.lines.map((line) => line.replace(/^bart> ?/, '')) };
+  };
+  const named = await run(['@discover @[Retries Considered]'], 'np1');
+  assert.equal(named.card, null, 'A-01: no card');
+  assert.equal(named.text[0], '## This paper', 'the guide opens with the paper');
+  assert.ok(!named.text.includes('## Start here'), 'P-04: no "Start here" beside it');
+  const address = file.split('/').map(encodeURIComponent).join('/');
+  assert.equal(named.text[2], `**[Retries Considered](${address})** · Fake Author et al. · 2024`, 'the library item, by its path');
+  const reads = named.text.slice(3, 7);
+  assert.deepEqual(reads.map((line) => line.slice(0, 9)), ['**Read:**', '**Why:** ', '**Read:**', '**Why:** '], 'a Read and a Why for each section, no blank line between');
+  assert.ok(reads.filter((line) => line.startsWith('**Read:**')).every((line) => (line.match(/\]\(/g) || []).length === 1), 'one Read link per pair');
+  assert.equal(named.text[7], '', 'the entry ends after its last pair');
+  // A-02: each link opens the library copy at its section, and the Sections menu lists both, best first as the guide gave them.
+  const sections = guideSections(named.text, file);
+  assert.deepEqual(sections.map((s) => s.label), ['5 Findings', '3 Method'], 'best first, not in the paper\'s order');
+  assert.ok(sections.every((s) => s.find && s.to), 'each with where it starts and ends');
+  assert.equal(splitTarget(reads[0].match(/\]\(([^)\s]+)\)$/)[1]).address, file, 'into the library copy');
+  assert.deepEqual(guideTitle(named.text[2], named.text[3]), { title: 'Retries Considered', address: file }, 'its title line still reads as a paper');
+  // A-03: the trace from it follows, within the mode's limit.
+  const groups = named.text.filter((line) => line.startsWith('## '));
+  assert.deepEqual(groups, ['## This paper', '## Classics', '## Recent', '## Essays']);
+  assert.ok(named.text.some((line) => /^\*\*\[A fake classic it cites \(standard mode\)\]/.test(line)));
+  assert.ok(named.text.filter((line) => /^\*\*\[/.test(line)).length <= 8, 'within standard\'s eight sources, the paper among them');
+  assert.equal(named.text.filter((line) => line.startsWith('**Try:**')).length, 1);
+  const body = named.text.slice(0, -2).join('\n');
+  assert.equal(replyBody('discover', body), body, 'replyBody keeps it whole');
+  // With words beside it, the same guide; a workspace's mention names no paper.
+  const worded = await run(['@discover @[Retries Considered] how they measured recovery'], 'np2');
+  assert.deepEqual([worded.card, worded.text[0]], [null, '## This paper']);
+  assert.equal((await run([`@discover what @[Reading](ws:${space.id}) is about`], 'np3')).text[0], '## Start here', 'A-04: no paper named, as before');
+  assert.equal((await run(['@discover why do retries loop'], 'np4')).text[0], '## Start here', 'A-04: a problem, as before');
+  // A follow-up that names a paper gets its guide; one that does not gets additions.
+  const first = await run(['@discover why do retries loop'], 'np5');
+  const follow = await run([...first.doc, '@discover @[Retries Considered]'], 'np6');
+  assert.equal(follow.text[0], '## This paper');
+  assert.equal((await run([...follow.doc, '@discover only after 2022'], 'np7')).text[0], '## Recent');
+});
