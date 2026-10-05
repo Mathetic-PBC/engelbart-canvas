@@ -150,6 +150,7 @@ async function trashable(name) {
   const note = await projects.createNote(ctx, project.id, { name: 'Ideas', workspaceId: workspace.id, text: 'an idea\n' });
   const image = await projects.saveImage(ctx, project.id, { bytes: PNG, mime: 'image/png', name: 'Sketch' });
   projects.writeView(ctx, project.id, workspace.id, { active: note.id, tabs: [{ id: note.id, title: 'Ideas' }], positions: {} });
+  projects.writeStage(ctx, project.id, { active: 0, tabs: [{ address: 'https://example.org/', title: 'Example' }] });
   return { code, project, workspace, note, image, before: snapshot(code) };
 }
 
@@ -188,6 +189,7 @@ test('delete: a project goes into <dataRoot>/.trash with its notes and images; R
   assert.equal('trashed' in metaAt(project.dir), false);
   assert.ok(!(await projects.trashedProjects(ctx)).some((entry) => entry.id === project.id));
   assert.ok(projects.readViews(ctx, project.id)[workspace.id], 'its views were kept');
+  assert.equal(projects.readStage(ctx, project.id).tabs.length, 1, 'and its Stage tabs');
   assert.deepEqual(snapshot(code), before);
   await assert.rejects(projects.restoreProject(ctx, project.id), /no longer in the trash/);
   await assert.rejects(projects.restoreProject(ctx, '99999999-9999-4999-8999-999999999999'), /no longer in the trash/);
@@ -253,6 +255,8 @@ test('the trash purges a project a week after it went in: its folder, its librar
   assert.ok(await ctx.libraryDb.get(keptNote.id), 'another project\'s rows stay');
   const state = stateFile();
   assert.equal(project.id in (state.views || {}), false);
+  assert.equal(project.id in (state.stages || {}), false, 'its Stage tabs are forgotten');
+  assert.deepEqual(projects.readStage(ctx, project.id), { active: 0, tabs: [] });
   assert.equal((state.recent || []).some((entry) => entry.projectId === project.id), false);
   assert.deepEqual(snapshot(code), before, 'the code folder is untouched');
   await assert.rejects(projects.restoreProject(ctx, project.id), /no longer in the trash/, 'a purged project cannot be restored');
@@ -383,6 +387,90 @@ test('views: each workspace keeps its tabs, the document in front and its scroll
   const withWs = projects.writeView(ctx, project.id, ws, { active: ws2, tabs: [{ id: note, title: 'n', kind: 'note?' }, { id: ws2, title: 'Child', kind: 'workspace' }], positions: {} });
   assert.deepEqual(withWs.tabs, [{ id: note, title: 'n' }, { id: ws2, title: 'Child', kind: 'workspace' }]);
   assert.equal(withWs.active, ws2);
+});
+
+test('cleanStage: a library row or a place, once each, at most 15, a title of 200 characters; active follows what was kept (MATH-10)', () => {
+  const row = '55555555-5555-4555-8555-555555555555', other = '66666666-6666-4666-8666-666666666666';
+  assert.equal(projects.cleanStage(null), null);
+  assert.equal(projects.cleanStage([]), null);
+  assert.deepEqual(projects.cleanStage({}), { active: 0, tabs: [] });
+  const clean = projects.cleanStage({
+    active: 6,
+    tabs: [
+      { item: row, title: 'ColBERT' },
+      { item: 'not-an-id', title: 'x' }, // no row id, no address
+      { address: 'about:blank', title: 'blank' },
+      { address: 'ABOUT:srcdoc' },
+      { address: 'x'.repeat(10) }, // neither a URL nor an absolute path
+      { address: `https://example.org/${'a'.repeat(2048)}` }, // too long
+      { address: 'http://www.example.org/a/', title: 'Example' },
+      { address: 'https://example.org/a#top', title: 'the same page' },
+      { item: row, title: 'twice' },
+      { address: '/Users/h/notes.md', title: 'notes.md' },
+      { address: 'file:///Users/h/notes.md', title: 'the same file' },
+      { address: 'javascript:alert(1)' },
+      { address: 42 },
+      null,
+      'https://example.org',
+      { address: '  https://other.org/p  ', title: 'T'.repeat(300), extra: true, bytes: [1, 2] },
+      { item: other, address: 'https://ignored.org' },
+    ],
+  });
+  assert.deepEqual(clean.tabs, [
+    { item: row, title: 'ColBERT' },
+    { address: 'http://www.example.org/a/', title: 'Example' },
+    { address: '/Users/h/notes.md', title: 'notes.md' },
+    { address: 'https://other.org/p', title: 'T'.repeat(200) },
+    { item: other, title: '' },
+  ]);
+  assert.equal(clean.active, 1, 'the page in front is where it was kept');
+  assert.equal(projects.cleanStage({ active: 7, tabs: clean.tabs.concat([]) }).active, 4, 'past the end: the last');
+  assert.equal(projects.cleanStage({ active: 1, tabs: [{ address: 'https://a.org' }, { address: 'https://a.org/' }] }).active, 0, 'a duplicate in front: the one it repeats');
+  assert.equal(projects.cleanStage({ active: -3, tabs: [{ address: 'https://a.org' }] }).active, 0);
+  assert.equal(projects.cleanStage({ active: '2', tabs: [{ address: 'https://a.org' }] }).active, 0);
+  assert.deepEqual(projects.cleanStage({ active: 2, tabs: [] }), { active: 0, tabs: [] });
+
+  const many = Array.from({ length: 20 }, (_, i) => ({ address: `https://s${i}.org`, title: `s${i}` }));
+  const capped = projects.cleanStage({ active: 18, tabs: many });
+  assert.equal(capped.tabs.length, 15);
+  assert.deepEqual(capped.tabs.map((tab) => tab.title), many.slice(0, 15).map((tab) => tab.title));
+  assert.equal(capped.active, 14, 'a tab in front past 15 is clamped to the last kept');
+});
+
+test('Stage tabs: kept per project in state.json beside the views, windows and recent workspaces, which writing them keeps (MATH-10)', async () => {
+  const project = await projects.createProject(ctx, 'Stage kept');
+  const other = await projects.createProject(ctx, 'Stage elsewhere');
+  const ws = await projects.createWorkspace(ctx, project.id, { name: 'Plans' });
+  projects.writeLastOpen(ctx, { projectId: project.id, workspaceId: ws.id });
+  const view = projects.writeView(ctx, project.id, ws.id, { active: 'ws', tabs: [], positions: {} });
+  const windows = projects.writeWindows(ctx, [{ projectId: project.id, workspaceId: ws.id, bounds: { x: 0, y: 0, width: 800, height: 600 } }]);
+  const heldRecent = stateFile().recent; // put back at the end: the next test counts the recent workspaces
+  projects.recordEdit(ctx, project.id, ws.id);
+  const recent = stateFile().recent;
+
+  assert.deepEqual(projects.readStage(ctx, project.id), { active: 0, tabs: [] }, 'nothing kept yet');
+  const saved = projects.writeStage(ctx, project.id, { active: 1, tabs: [{ address: 'https://example.org', title: 'Example' }, { address: '/Users/h/a.pdf', title: 'a' }] });
+  assert.deepEqual(saved, { active: 1, tabs: [{ address: 'https://example.org', title: 'Example' }, { address: '/Users/h/a.pdf', title: 'a' }] });
+  projects.writeStage(ctx, other.id, { active: 0, tabs: [{ address: 'https://other.org', title: 'Other' }] });
+  assert.deepEqual(projects.readStage(ctx, project.id), saved, 'each project its own');
+  assert.equal(projects.readStage(ctx, other.id).tabs[0].title, 'Other');
+
+  const state = stateFile();
+  assert.deepEqual(state.views[project.id][ws.id], view, 'the views are kept');
+  assert.deepEqual(state.windows, windows, 'and the windows');
+  assert.deepEqual(state.recent, recent, 'and the recent workspaces');
+  assert.deepEqual([state.projectId, state.workspaceId], [project.id, ws.id], 'and where the app reopens');
+  projects.writeView(ctx, project.id, ws.id, { active: 'ws', tabs: [], positions: {} });
+  assert.deepEqual(projects.readStage(ctx, project.id), saved, 'writing a view keeps the Stage');
+
+  projects.writeStage(ctx, project.id, { active: 0, tabs: [] });
+  assert.deepEqual(projects.readStage(ctx, project.id), { active: 0, tabs: [] }, 'every tab closed is kept too');
+  assert.deepEqual(projects.readStage(ctx, 'nope'), { active: 0, tabs: [] });
+  assert.throws(() => projects.writeStage(ctx, 'nope', { tabs: [] }), /project id/);
+  assert.throws(() => projects.writeStage(ctx, project.id, null), /invalid/);
+  // What another version wrote by hand is read through cleanStage.
+  fs.writeFileSync(path.join(layout.testRoot, 'state.json'), JSON.stringify({ ...stateFile(), recent: heldRecent, stages: { [project.id]: { active: 9, tabs: [{ address: 'about:blank' }, { address: 'https://a.org' }] } } }));
+  assert.deepEqual(projects.readStage(ctx, project.id), { active: 0, tabs: [{ address: 'https://a.org', title: '' }] });
 });
 
 test('where to next: state.json keeps the last three workspaces written in and the agents, beside the views; stale rows are not read (2026-09-22)', async () => {

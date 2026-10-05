@@ -31,6 +31,7 @@ const { sanitizeName, slugify, uniqueName, readJson, writeJson, DIR_MODE } = req
 const db = require('./db.cjs');
 const { migrateProjectDir } = require('./migrate.cjs');
 const buildStore = require('../build/store.cjs');
+const { addressKey } = require('../../shared/address-key.cjs');
 
 // A workspace's meta.json `status` is no longer shown or changed (2026-09-25: the todo / in progress / done marks were
 // deleted). It stays on disk only as the mark that a folder is a workspace and not an older layout's goal (migrate.cjs).
@@ -811,7 +812,7 @@ async function writeDoc(ctx, projectId, ref, text) {
 
 /* ------------------------------------------------------------- last opened */
 
-// Where the app reopens: <dataRoot>/state.json { projectId, workspaceId, views, recent, agents }. Missing or stale ids
+// Where the app reopens: <dataRoot>/state.json { projectId, workspaceId, views, stages, recent, agents }. Missing or stale ids
 // fall back to the first project / workspace. (Files written before the layout change carry
 // `topicId`, which is the same id.)
 // `views[projectId][workspaceId]` is what a workspace had open when it was left (2026-09-22): the document in front
@@ -937,12 +938,66 @@ function writeView(ctx, projectId, workspaceId, view) {
   return clean;
 }
 
-/** A project purged from the trash: its views, and its entries among the recent workspaces and the agents, go. */
+// `stages[projectId]` is what the project's Stage had open (MATH-10, 2026-10-05): its tabs, each a library row
+// `{ item, title }` or a place `{ address, title }` (a URL or an absolute path), and `active`, the index of the one in
+// front. One list for the project, shared by its workspaces, as the Stage is. Written by the renderer as tabs change
+// (Stage.jsx), so ⌘R and quitting give the same tabs back; no page's contents, ink or history are kept.
+const MAX_STAGE_TABS = 15; // MAX_TABS in renderer/model/stage.js
+const MAX_ADDRESS = 2048;
+
+/** A place a Stage tab can go back to: http, https or file, or an absolute path; never about:. */
+function cleanAddress(value) {
+  if (typeof value !== 'string') return null;
+  const address = value.trim();
+  if (!address || address.length > MAX_ADDRESS || /^about:/i.test(address)) return null;
+  return /^(https?|file):/i.test(address) || address.startsWith('/') ? address : null;
+}
+
+/** { active, tabs }: entries that are neither a row nor a place go, and the second of two that are one (by row, else by addressKey). */
+function cleanStage(value) {
+  const input = plainObject(value); if (!input) return null;
+  const tabs = [], seen = new Map(); // key → where it is kept
+  const at = new Map(); // the index it came at → the index it is kept at
+  (Array.isArray(input.tabs) ? input.tabs : []).forEach((tab, i) => {
+    const entry = plainObject(tab); if (!entry) return;
+    const item = idOrNull(entry.item), address = item ? null : cleanAddress(entry.address);
+    if (!item && !address) return;
+    const key = item ? `i:${item}` : `l:${addressKey(address.startsWith('/') ? `file://${address}` : address)}`;
+    if (seen.has(key)) { at.set(i, seen.get(key)); return; }
+    if (tabs.length >= MAX_STAGE_TABS) return;
+    seen.set(key, tabs.length);
+    at.set(i, tabs.length);
+    const title = typeof entry.title === 'string' ? entry.title.slice(0, 200) : '';
+    tabs.push(item ? { item, title } : { address, title });
+  });
+  const wanted = Number.isInteger(input.active) ? input.active : 0;
+  const active = at.has(wanted) ? at.get(wanted) : Math.max(0, Math.min(wanted, tabs.length - 1));
+  return { active, tabs };
+}
+
+/** What the project's Stage had open → { active, tabs } (none: no tabs). */
+function readStage(ctx, projectId) {
+  const id = idOrNull(projectId);
+  const held = id ? (plainObject(readState(ctx).stages) || {})[id] : null;
+  return cleanStage(held) || { active: 0, tabs: [] };
+}
+
+function writeStage(ctx, projectId, value) {
+  const pid = idOrNull(projectId); if (!pid) throw new TypeError('a Stage needs a project id');
+  const clean = cleanStage(value); if (!clean) throw new TypeError('stage is invalid');
+  const stages = plainObject(readState(ctx).stages) || {};
+  writeState(ctx, { stages: { ...stages, [pid]: clean } });
+  return clean;
+}
+
+/** A project purged from the trash: its views and its Stage, and its entries among the recent workspaces and the agents, go. */
 function forgetProject(ctx, projectId) {
   const state = readState(ctx);
   const patch = {};
   const views = plainObject(state.views) || {};
   if (projectId in views) { const { [projectId]: gone, ...kept } = views; patch.views = kept; } // eslint-disable-line no-unused-vars
+  const stages = plainObject(state.stages) || {};
+  if (projectId in stages) { const { [projectId]: gone, ...kept } = stages; patch.stages = kept; } // eslint-disable-line no-unused-vars
   for (const key of ['recent', 'agents']) {
     const list = Array.isArray(state[key]) ? state[key] : [];
     if (list.some((entry) => plainObject(entry) && entry.projectId === projectId)) patch[key] = list.filter((entry) => !(plainObject(entry) && entry.projectId === projectId));
@@ -1190,6 +1245,9 @@ module.exports = {
   writeWindows,
   readViews,
   writeView,
+  cleanStage,
+  readStage,
+  writeStage,
   readNav,
   recordEdit,
   agentStarted,

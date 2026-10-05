@@ -5,19 +5,13 @@
 import { kindLabel, isNote } from './kind.js';
 import { looksAddable } from './rail.js';
 import { kindOf } from './address.js';
+import { addressKey } from '../../shared/address-key.cjs';
 
 /** The most tabs the Stage holds; past it, what is opened takes the place of the tab in front (Hudson, 2026-09-23). */
 export const MAX_TABS = 15;
 
-/** How one address is spelled for "is it open already": http or https, www. or not, a trailing slash, a #fragment. */
-export function addressKey(value) {
-  const v = String(value || '').trim();
-  if (!v || v === 'about:blank') return '';
-  let u;
-  try { u = new URL(v); } catch { return v; }
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') return u.href.replace(/#.*$/, '');
-  return `${u.host.toLowerCase().replace(/^www\./, '')}${u.pathname.replace(/\/+$/, '')}${u.search}`;
-}
+/** How one address is spelled for "is it open already": http or https, www. or not, a trailing slash, a #fragment (shared with main). */
+export { addressKey };
 
 /**
  * A link's target (2026-09-30, @discover's guide): the address, and the passage to find there, from a `#find=` fragment of
@@ -156,9 +150,22 @@ export function linkPlan(href, library) {
   return { address, find, to, row: null, key };
 }
 
-/** What a tab is for "is it open already": the library row it shows, else where it is; a blank tab is nothing. */
+/** A kept tab's key (stageSnapshot's `{ item }` or `{ address }`): a path is spelled as a file: address, as a file's tab is. */
+function keptKey(entry) {
+  if (!entry) return '';
+  if (entry.item) return `i:${entry.item}`;
+  const where = String(entry.address || '');
+  const key = addressKey(where.startsWith('/') ? `file://${where}` : where);
+  return key ? `l:${key}` : '';
+}
+
+/**
+ * What a tab is for "is it open already": the library row it shows, else where it is; a blank tab is nothing. A tab given
+ * back after ⌘R or a relaunch and not shown yet (`restore`, MATH-10) is what it will show.
+ */
 export function tabKey(tab) {
   if (!tab) return '';
+  if (tab.restore) return keptKey(tab.restore);
   if (tab.item) return `i:${tab.item}`;
   const where = tab.file && tab.file.path ? `file://${tab.file.path}` : tab.pdf ? tab.pdf.url : tab.url;
   const key = addressKey(where);
@@ -178,6 +185,89 @@ export function placeTab(tabs, activeIndex, key, { newTab = false } = {}) {
   if (front && tabKey(front) === '' && !front.pdf && !front.file && !front.claimed) return { replace: activeIndex }; // `claimed`: something is on its way into it
   if (tabs.length >= MAX_TABS) return { replace: activeIndex };
   return { append: true };
+}
+
+/* ------------------------------------------------------------------ kept across ⌘R and quitting (MATH-10) */
+
+// A place a tab can be opened at again: a page, a local server, a file. Main keeps http, https and file addresses and
+// absolute paths (main/store/projects.cjs cleanStage), never about:; a sandbox: address names nothing to open.
+const REOPENS = new Set(['web', 'local', 'disk', 'file']);
+const reopens = (address) => !!address && address.length <= 2048 && !/^about:/i.test(address)
+  && (/^(https?|file):/i.test(address) || address.startsWith('/')) && REOPENS.has(kindOf(address).kind);
+
+/** What one tab is kept as: `{ item, title }` for a library row, `{ address, title }` for a place; null when it is not kept. */
+function keptTab(tab) {
+  if (!tab || tab.from) return null; // a popup is its page's: a sign-in, a window it opened
+  if (tab.restore) return tab.restore.item ? { item: tab.restore.item, title: tab.restore.title || '' } : { address: tab.restore.address, title: tab.restore.title || '' };
+  if (tab.item) return { item: tab.item, title: (tab.row && tab.row.name) || '' };
+  if (tab.file && (tab.file.kind === 'loading' || tab.file.kind === 'error')) return null;
+  const address = String((tab.pdf ? tab.pdf.input || tab.pdf.url : tab.file && tab.file.path ? tab.file.path : tab.url) || '').trim();
+  if (!reopens(address)) return null;
+  const title = tab.pdf ? tab.pdf.name : tab.file && tab.file.name ? tab.file.name : (tab.web && tab.web.title) || '';
+  return { address, title: String(title || '').slice(0, 200) };
+}
+
+/**
+ * The Stage's tabs as main keeps them (MATH-10): `{ active, tabs }`, each tab a library row `{ item, title }` or a place
+ * `{ address, title }` — a pdf by its input (its address on the web, its path on disk), a file by its path, a page where
+ * it is now (`tab.url` follows the page). Blank tabs, popups and files still loading or that failed are not kept; nor is
+ * anything a tab holds (bytes, ink, sections, a passage, the page's history). A tab given back and not shown yet is kept
+ * as it was given. `active` is the tab in front among those kept (0 when it is not kept).
+ */
+export function stageSnapshot(tabs, activeId) {
+  const list = tabs || [];
+  const front = list.find((t) => t.id === activeId) || list[0];
+  const out = [];
+  let active = 0;
+  for (const tab of list) {
+    const kept = keptTab(tab);
+    if (!kept) continue;
+    if (tab === front) active = out.length;
+    out.push(kept);
+  }
+  return { active, tabs: out };
+}
+
+/** A tab nothing has been opened in: what the Stage starts with, and what ⌘T makes. */
+const untouched = (tab) => !!tab && tabKey(tab) === '' && !tab.pdf && !tab.file && !tab.claimed && !tab.opened && !tab.pendingFind;
+
+/**
+ * The kept tabs given back (Stage, MATH-10) to the tabs open now. `saved` is main's `{ active, tabs }`; `make(entry)` a tab
+ * for a kept entry that is not shown yet. A library row no longer in `library` is gone. What was opened before the kept
+ * tabs came back (a pdf from the all-projects screen, a link) is kept, once: where it was kept, else after the kept ones;
+ * a lone untouched tab gives way. At most MAX_TABS: kept tabs past it are left, never one opened.
+ * → { tabs, front }: `front` the tab to put in front, a kept one, or null to leave the one in front as it is (anything was
+ * opened meanwhile, or nothing came back: then `tabs` is `open` itself).
+ */
+export function restoreTabs(open, saved, library, make) {
+  const now = open || [];
+  const entries = saved && Array.isArray(saved.tabs) ? saved.tabs : [];
+  const lone = now.length === 1 && untouched(now[0]);
+  const kept = lone ? [] : now;
+  const rows = new Set((library || []).filter(onStage).map((row) => row.id));
+  const used = new Set(), keys = new Set();
+  const out = [], made = []; // made: [index in saved.tabs, tab] for the tabs made here
+  entries.forEach((entry, i) => {
+    if (!entry || (entry.item && !rows.has(entry.item))) return;
+    const key = keptKey(entry);
+    if (!key || keys.has(key)) return;
+    keys.add(key);
+    const same = kept.find((t) => !used.has(t.id) && tabKey(t) === key);
+    if (same) { used.add(same.id); out.push(same); return; }
+    const tab = make(entry);
+    out.push(tab);
+    made.push([i, tab]);
+  });
+  for (const t of kept) if (!used.has(t.id)) out.push(t);
+  while (out.length > MAX_TABS) {
+    const last = made.pop(); if (!last) break;
+    out.splice(out.indexOf(last[1]), 1);
+  }
+  if (!made.length) return { tabs: now, front: null }; // nothing new: the tabs as they are
+  if (kept.length) return { tabs: out, front: null };
+  const want = saved && Number.isInteger(saved.active) ? saved.active : 0;
+  const pick = made.find(([i]) => i >= want) || made[made.length - 1];
+  return { tabs: out, front: pick[1].id };
 }
 
 /** How long a preview's first page is waited for, retried every WAKE_RETRY_MS while it fails. */

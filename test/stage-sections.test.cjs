@@ -4,7 +4,8 @@
 // with a Sections menu where the find card sits, not the find card. PaperView (src/renderer/pdf/PaperView.jsx) keeps the
 // section apart from find; the Stage (src/renderer/workspace/Stage.jsx) keeps the guide's sections on the tab. There is
 // no document here: PaperView's pages are text stand-ins, and the Stage is run by a few lines that do what React's hooks do.
-// A passage in a page or a drawn file (2026-10-03) is found with no find card at all: the last block.
+// A passage in a page or a drawn file (2026-10-03) is found with no find card at all: the block after. The last block: the
+// tabs kept across ⌘R and quitting (MATH-10), which the same stand-ins can open.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -237,25 +238,27 @@ const PDF = (place) => ({ kind: 'pdf', url: `file://${place}`, path: place, name
  * says what it was asked. `nodes`: stand-in DOM nodes for the elements with those attributes (`data-stage-view`, …).
  * What else it asks of main is in `calls`; what it listens to main for, in `on`.
  */
-function stage({ file = PDF, nodes = {} } = {}) {
+function stage({ file = PDF, nodes = {}, api: own = {}, library = [] } = {}) {
   const hooks = hookRunner((tree) => {
     for (const [attribute, node] of Object.entries(nodes)) for (const el of findAll(tree, (p) => p[attribute] != null)) if (el.props.ref) el.props.ref.current = node;
   });
-  const keydown = [], calls = [], on = {};
+  const keydown = [], calls = [], on = {}, listeners = {};
   const api = new Proxy({
     stageFile: async (projectId, place) => file(place),
     readPageAnnotations: async () => ({}),
     windowFocused: () => true,
+    ...own,
   }, { get: (own, name) => (name in own ? own[name] : String(name).startsWith('on') ? (fn) => { on[name] = fn; return () => {}; } : async (...args) => { calls.push([name, ...args]); return null; }) });
   globalThis.window = {
     engelbartAPI: api, innerWidth: 1200, innerHeight: 800, crypto: { randomUUID: () => `id-${Math.random().toString(36).slice(2)}` },
-    addEventListener: (type, fn) => { if (type === 'keydown') keydown.push(fn); }, removeEventListener: (type, fn) => { const i = keydown.indexOf(fn); if (type === 'keydown' && i >= 0) keydown.splice(i, 1); },
+    addEventListener: (type, fn) => { if (type === 'keydown') keydown.push(fn); else (listeners[type] = listeners[type] || []).push(fn); },
+    removeEventListener: (type, fn) => { const list = type === 'keydown' ? keydown : listeners[type] || []; const i = list.indexOf(fn); if (i >= 0) list.splice(i, 1); },
   };
   globalThis.document = { baseURI: 'file:///app/index.html', activeElement: null, body: {}, addEventListener() {}, removeEventListener() {}, querySelectorAll: () => [] };
   globalThis.requestAnimationFrame = () => 0;
   const Stage = load('workspace/Stage.jsx', { react: hooks.fake }).default;
   const ref = { current: null };
-  const props = { projectId: 'p1', visible: true, library: [], inRail: () => false };
+  const props = { projectId: 'p1', visible: true, library, inRail: () => false };
   let tree = hooks.run(Stage, props, ref);
   const asked = [];
   const paper = {
@@ -272,6 +275,7 @@ function stage({ file = PDF, nodes = {} } = {}) {
     open: (href, options) => { ref.current.openInput(href, options); tree = hooks.run(Stage, props, ref); },
     settle: async () => { for (let n = 0; n < 5; n += 1) await new Promise((resolve) => setImmediate(resolve)); tree = hooks.run(Stage, props, ref); },
     rerender: () => { tree = hooks.run(Stage, props, ref); },
+    fire: (type) => { for (const fn of [...(listeners[type] || [])]) fn({ type }); },
     paper: () => { const [view] = findAll(tree, 'PaperView'); if (view) view.props.ref.current = paper; return view; },
     one: (name) => findAll(tree, name)[0] || null,
     key: (key) => { for (const fn of [...keydown]) fn({ key, metaKey: true, altKey: false, ctrlKey: false, shiftKey: false, defaultPrevented: false, target: null, preventDefault() {}, stopPropagation() {} }); tree = hooks.run(Stage, props, ref); },
@@ -484,5 +488,82 @@ test.describe('the Stage: a passage in a page or a drawn file', () => {
     s.rerender();
     assert.equal(s.one('FindCard').props.text, SECTIONS[0].find);
     assert.deepEqual(finds(s), [], 'a pdf is found by its viewer');
+  });
+});
+
+// MATH-10: the tabs kept across ⌘R and quitting (main's state.json `stages`), given back when the Stage opens.
+const ROW = { id: '55555555-5555-4555-8555-555555555555', name: 'ColBERT', type: 'pdf', path: '/Users/h/ColBERT.pdf', tags: [] };
+const KEPT = { active: 1, tabs: [{ item: ROW.id, title: 'ColBERT' }, { address: 'https://example.org/second', title: 'Second page' }, { address: NOTES, title: 'notes.md' }] };
+const textOf = (node) => (node == null || typeof node === 'boolean' ? '' : typeof node !== 'object' ? String(node) : Array.isArray(node) ? node.map(textOf).join('') : node.props ? textOf(node.props.children) : '');
+const tabEls = (s) => findAll(s.tree, (p) => p['data-stage-tab'] != null);
+const labels = (s) => tabEls(s).map((el) => textOf(el).replace(/×$/, ''));
+const named = (s, name) => s.calls.filter(([n]) => n === name);
+/** A Stage that can show pages (pageStage), with main's answer for the kept tabs and a library. */
+function keptStage(options) {
+  globalThis.ResizeObserver = class { observe() {} disconnect() {} };
+  globalThis.MutationObserver = class { observe() {} disconnect() {} };
+  const slot = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600 }), parentElement: null };
+  return stage({ nodes: { 'data-browser-slot': slot }, ...options });
+}
+const choose = (s, i) => { findAll(tabEls(s)[i], (p) => typeof p.onMouseDown === 'function')[0].props.onMouseDown({ button: 0 }); s.rerender(); };
+
+test.describe('the Stage\'s tabs kept across ⌘R and quitting (MATH-10)', () => {
+  test.afterEach(() => { delete globalThis.window; delete globalThis.requestAnimationFrame; globalThis.document = { baseURI: 'file:///app/index.html' }; });
+
+  test('they come back in order with their titles; only the one in front opens; nothing is written before they are back', async () => {
+    let give;
+    const s = keptStage({ api: { stage: () => new Promise((resolve) => { give = resolve; }) }, library: [ROW], file: (place) => ({ kind: 'md', path: place, name: 'notes.md', text: '# notes', truncated: false }) });
+    s.fire('pagehide');
+    await s.settle();
+    assert.deepEqual(named(s, 'setStage'), [], 'the blank tab the Stage starts with is never written over them');
+    give(KEPT);
+    await s.settle();
+    assert.deepEqual(labels(s), ['ColBERT', 'Second page', 'notes.md'], 'in order, each by the title it was kept with');
+    assert.deepEqual(named(s, 'browserOpen').map((call) => call[2]), ['https://example.org/second'], 'the page in front opens');
+    assert.deepEqual([named(s, 'readLibraryFile'), named(s, 'stageFile')], [[], []], 'nothing else does');
+
+    choose(s, 0);
+    await s.settle();
+    assert.deepEqual(named(s, 'readLibraryFile').map((call) => call[1]), [ROW.id], 'a row opens the first time it comes forward');
+    choose(s, 2);
+    await s.settle();
+    assert.equal(s.one('MarkdownView').props.text, '# notes', 'a file too');
+    choose(s, 0);
+    await s.settle();
+    assert.equal(named(s, 'readLibraryFile').length, 1, 'and only the first time');
+
+    s.fire('pagehide');
+    const written = named(s, 'setStage');
+    assert.equal(written.length, 1, 'written once, when the page went away');
+    assert.deepEqual(written[0].slice(1), ['p1', { active: 0, tabs: [{ item: ROW.id, title: 'ColBERT' }, { address: 'https://example.org/second', title: '' }, { address: NOTES, title: 'notes.md' }] }]);
+  });
+
+  test('what was opened before they came back stays in front, once; a row gone from the library is not given back', async () => {
+    let give;
+    const s = keptStage({ api: { stage: () => new Promise((resolve) => { give = resolve; }) }, library: [] });
+    s.open('https://www.example.org/second/');
+    await s.settle();
+    give(KEPT);
+    await s.settle();
+    assert.equal(tabEls(s).length, 2, 'the deleted row is gone, and the page is not there twice');
+    assert.deepEqual(labels(s), ['www.example.org/second/', 'notes.md'], 'the page where it was opened, then the file kept');
+    assert.deepEqual(named(s, 'browserOpen').map((call) => call[2]), ['https://www.example.org/second/'], 'the page opened, and nothing kept');
+    s.fire('pagehide');
+    assert.deepEqual(named(s, 'setStage')[0][2].active, 0, 'the page opened is in front');
+  });
+
+  test('a read that fails starts with nothing kept; every tab closed is kept as none', async () => {
+    const s = keptStage({ api: { stage: async () => { throw new Error('unreadable'); } } });
+    await s.settle();
+    assert.deepEqual(labels(s), ['New tab']);
+    s.open('https://example.org/a');
+    await s.settle();
+    s.fire('pagehide');
+    assert.deepEqual(named(s, 'setStage').map((call) => call[2]), [{ active: 0, tabs: [{ address: 'https://example.org/a', title: '' }] }]);
+    findAll(s.tree, (p) => p['aria-label'] === 'Close tab')[0].props.onClick({ stopPropagation() {} });
+    s.rerender();
+    assert.deepEqual(labels(s), ['New tab']);
+    s.fire('pagehide');
+    assert.deepEqual(named(s, 'setStage').map((call) => call[2]).pop(), { active: 0, tabs: [] }, 'one blank tab the next time');
   });
 });

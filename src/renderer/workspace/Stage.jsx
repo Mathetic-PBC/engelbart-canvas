@@ -7,7 +7,7 @@ import { usePreviewTouch, useSandboxes } from '../ui/SandboxProgress.jsx';
 import { previewLibraryId } from '../model/sandbox-notifications.js';
 import { KindGlyph, SEARCH, FOLDER } from '../ui/Icons.jsx';
 import { kindOf, stripScheme, OPEN_IN_BROWSER } from '../model/address.js';
-import { MAX_TABS, SAVE_LABEL, WAKE_RETRY_MS, addressKey, afterClose, landTab, landingFinds, linkPlan, looksLikePlace, placeTab, previewName, previewWait, stageRows, tabKey, tabPlace, parseTable, withPassage } from '../model/stage.js';
+import { MAX_TABS, SAVE_LABEL, WAKE_RETRY_MS, addressKey, afterClose, landTab, landingFinds, linkPlan, looksLikePlace, onStage, placeTab, previewName, previewWait, restoreTabs, stageRows, stageSnapshot, tabKey, tabPlace, parseTable, withPassage } from '../model/stage.js';
 import { markdownBlocks, inlineRuns } from '../model/markdown.js';
 import PaperView from '../pdf/PaperView.jsx';
 
@@ -21,8 +21,9 @@ import PaperView from '../pdf/PaperView.jsx';
 //  · a docx (macOS textutil) is a page made from it; markdown is drawn as text, a csv or tsv as a table, a picture
 //    (heic through sips) as itself, other text as it is (main: stage-file).
 // Tabs: at most 15; what is opened comes forward if it is open already, takes a blank tab in front, else gets its own
-// (at 15 it takes the place of the tab in front). ⌘T and ⌘W work from anywhere but the terminal and bring the Stage
-// forward; ⌘F finds in whatever is in front. The address field opens anything: a link or a path goes there, words list
+// (at 15 it takes the place of the tab in front). They are kept per project across ⌘R and quitting (MATH-10, main's
+// state.json `stages`): each comes back with its title, unshown, and opens the first time it comes forward. ⌘T and ⌘W
+// work from anywhere but the terminal and bring the Stage forward; ⌘F finds in whatever is in front. The address field opens anything: a link or a path goes there, words list
 // this workspace, then the library (never notes: they open in the middle), then a web search. Its right end is the
 // thing's place in the library (+ Save / + Workspace / ✓, Add - Mention.dc.html); a web pdf is saved as a copy.
 // A link may name a passage (2026-09-30, @discover's guide: `address#find=words`, model/stage.js splitTarget): its tab
@@ -46,6 +47,7 @@ const DEVICES = [
 ];
 const ERR_CONNECTION_REFUSED = -102;
 const RETRY_MS = 2000;
+const STAGE_SAVE_MS = 150; // the tabs are kept this long after they last changed (and at once when the page goes away)
 const HOVER_MS = 650; // a tab's card, the first time; then quickly while moving along the strip
 const newId = () => (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : String(Date.now() + Math.random()));
 const blankTab = () => ({ id: newId(), url: 'about:blank', web: null, item: null, file: null, pdf: null, pendingFind: null, pendingTo: null, sections: null, activeSection: -1 });
@@ -63,10 +65,17 @@ const VIEWS = new Set(['md', 'table', 'text', 'image', 'folder', 'unsupported', 
 
 const ICON_BUTTON = { width: 26, height: 26, padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', font: '14px/1 var(--font-sans)' };
 
-// A file, for its glyph: what the library would call it.
+// A file, for its glyph: what the library would call it. A tab given back and not shown yet (`restore`): what it will
+// show, its library row found by `rowOf`.
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|heic|heif|svg)$/i;
-function glyphItem(tab) {
+function glyphItem(tab, rowOf) {
   if (!tab) return { type: 'website' };
+  if (tab.restore) {
+    const { item, address } = tab.restore;
+    if (item) return (rowOf && rowOf(item)) || { type: 'website' };
+    if (/\.pdf$/i.test(address)) return { type: 'pdf' };
+    return glyphItem(address.startsWith('/') ? { url: 'about:blank', file: { path: address } } : { url: address });
+  }
   if (tab.row) return tab.row;
   if (tab.pdf) return { type: 'pdf' };
   const where = tab.file && tab.file.path ? tab.file.path : '';
@@ -412,7 +421,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const view = !pdf && tab.file && VIEWS.has(tab.file.kind) ? tab.file : null; // a file drawn here
   const k = kindOf(tab.url); // under a pdf: the page that led to it
   const page = !pdf && !view && (isPage(k) || !!tab.opened);
-  const blank = !pdf && !view && !page && k.kind === 'blank';
+  const blank = !pdf && !view && !page && k.kind === 'blank' && !tab.restore; // (a tab given back shows nothing while it opens)
   const web = tab.web;
   const failed = page && web && web.error ? web.error : null;
   // A sandbox's preview waits for its first page (2026-10-04): asleep, it can take seconds to wake and its first load can
@@ -427,7 +436,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const showing = visible && page && !failed && !occluded && !wait;
   usePreviewTouch((web && web.url) || tab.url, visible && page); // a repository's live preview in use stays awake
   // Where the tab is, as the address field shows it: a file by its path (a docx too, though a page made from it is shown).
-  const shownUrl = pdf ? (pdf.input || pdf.url) : tab.file && tab.file.path ? tab.file.path : tab.url;
+  const shownUrl = pdf ? (pdf.input || pdf.url) : tab.file && tab.file.path ? tab.file.path : tab.restore && tab.restore.address ? tab.restore.address : tab.url;
   const shownDraft = stripScheme(shownUrl);
 
   const update = React.useCallback((id, fn) => setTabs((current) => current.map((t) => (t.id === id ? fn(t) : t))), []);
@@ -650,6 +659,71 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const select = (t) => { setActiveId(t.id); setMenu(null); setTyping(false); setHover(null); };
 
   React.useImperativeHandle(ref, () => ({ openRow, openInput, openPaths, newTab, closeTab: () => closeTab(tab.id) }));
+
+  /* ------------------------------------------------------------------- kept across ⌘R and quitting (MATH-10) */
+  // Main keeps the project's tabs (model/stage.js stageSnapshot) a moment after they change, and at once when the page
+  // goes away (⌘R, quitting: no cleanup runs then) or the project closes. Nothing is kept before the kept ones have come
+  // back, so the blank tab the Stage starts with never takes their place. They come back (restoreTabs) unshown, each a
+  // blank tab with `restore` ({ item } or { address }, and its title), behind anything opened meanwhile.
+  const libraryRef = React.useRef(library);
+  libraryRef.current = library;
+  const restored = React.useRef(false);
+  const stageSent = React.useRef(''); // the last tabs given to main, as JSON
+  const stageQueued = React.useRef(null);
+  const stageTimer = React.useRef(0);
+  const flushStage = React.useCallback(() => {
+    clearTimeout(stageTimer.current);
+    stageTimer.current = 0;
+    const value = stageQueued.current;
+    stageQueued.current = null;
+    if (value) quiet(api.setStage(projectId, value));
+  }, [projectId]);
+  React.useEffect(() => {
+    let live = true;
+    api.stage(projectId).catch(() => null).then((saved) => { // a read that fails gives nothing back
+      if (!live) return;
+      restored.current = true;
+      // Merged into the tabs as they are when React applies it (a file may have landed since the last render), one tab
+      // made per kept entry however often that is; the tab in front is the kept one, or stays the one it was.
+      const made = new Map();
+      const make = (entry) => { if (!made.has(entry)) made.set(entry, { ...blankTab(), restore: { ...entry } }); return made.get(entry); };
+      let front = null;
+      setTabs((current) => {
+        const plan = restoreTabs(current, saved, libraryRef.current, make);
+        const was = current.find((t) => t.id === frontRef.current) || current[0];
+        front = plan.front || (was ? was.id : null);
+        return plan.tabs;
+      });
+      setActiveId((active) => front || active);
+    });
+    window.addEventListener('pagehide', flushStage);
+    return () => { live = false; window.removeEventListener('pagehide', flushStage); flushStage(); };
+  }, [projectId, flushStage]);
+  React.useEffect(() => {
+    if (!restored.current) return;
+    const value = stageSnapshot(tabs, activeId);
+    const text = JSON.stringify(value);
+    if (text === stageSent.current) return;
+    stageSent.current = text;
+    stageQueued.current = value;
+    clearTimeout(stageTimer.current);
+    stageTimer.current = setTimeout(flushStage, STAGE_SAVE_MS);
+  }, [tabs, activeId, flushStage]);
+  // A tab given back opens when it comes forward: a library row as the sidebar opens it (one gone from the library closes),
+  // a place as if typed. A place keeps `restore` until it is there, so it is kept and titled meanwhile.
+  React.useEffect(() => {
+    const entry = tab.restore;
+    if (!entry || entry.opening) return;
+    const id = tab.id;
+    if (entry.item) {
+      const row = (libraryRef.current || []).find((r) => r.id === entry.item);
+      update(id, (t) => ({ ...t, restore: null }));
+      if (row && onStage(row)) showRow(id, row); else dropTab(id);
+      return;
+    }
+    update(id, (t) => ({ ...t, restore: { ...entry, opening: true } }));
+    navigate(id, entry.address).catch(() => {}).then(() => update(id, (t) => (t.restore ? { ...t, restore: null } : t)));
+  }, [tab.id, tab.restore]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // A tab's pdf from a page: loading, then its bytes (and the ink kept for its address) or why not. A new one is a new viewer.
   const receivePdf = React.useCallback((got) => {
@@ -1001,14 +1075,18 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   };
   React.useEffect(() => () => { clearTimeout(hoverTimer.current); clearTimeout(warmTimer.current); }, []);
 
+  // A tab given back and not shown yet goes by the title it was kept with, and the place it will open.
+  const rowOf = (id) => (library || []).find((row) => row.id === id) || null;
   const titleOf = (t) => {
+    if (t.restore) { const row = t.restore.item ? rowOf(t.restore.item) : null; return t.restore.title || (row ? row.name : stripScheme(t.restore.address || '')) || 'New tab'; }
     if (t.row) return t.row.name;
     if (t.pdf) return t.pdf.name;
     if (t.file && t.file.name) return t.file.name;
     if (t.url === 'about:blank') return 'New tab';
     return (isPage(kindOf(t.url)) && t.web && t.web.title) || stripScheme(t.url);
   };
-  const placeOf = (t) => (t.url === 'about:blank' && !t.pdf && !t.file ? 'new tab' : tabPlace(t.pdf ? (t.pdf.input || t.pdf.url) : t.file && t.file.path ? t.file.path : (t.web && t.web.url) || t.url));
+  const keptPlace = (entry) => { const row = entry.item ? rowOf(entry.item) : null; return row ? row.url || row.path || row.folder_path : entry.address || ''; };
+  const placeOf = (t) => (t.restore ? tabPlace(keptPlace(t.restore)) : t.url === 'about:blank' && !t.pdf && !t.file ? 'new tab' : tabPlace(t.pdf ? (t.pdf.input || t.pdf.url) : t.file && t.file.path ? t.file.path : (t.web && t.web.url) || t.url));
 
   const dev = DEVICES.find((d) => d.id === device);
   const width = device === 'custom' ? (Number(customW) || 390) : (dev ? dev.w : 0);
@@ -1025,9 +1103,9 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
           {tabs.map((t, i) => {
             const on = t.id === tab.id;
             const sep = !on && tabs[i + 1] && tabs[i + 1].id !== tab.id;
-            const isBlank = t.url === 'about:blank' && !t.pdf && !t.file;
+            const isBlank = t.url === 'about:blank' && !t.pdf && !t.file && !t.restore;
             const title = titleOf(t);
-            const glyph = <KindGlyph item={glyphItem(t)} box={16} color={on ? '#4d4d4d' : '#8f8f8f'} />;
+            const glyph = <KindGlyph item={glyphItem(t, rowOf)} box={16} color={on ? '#4d4d4d' : '#8f8f8f'} />;
             const titleSpan = <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', WebkitMaskImage: 'linear-gradient(90deg,#000 calc(100% - 22px),transparent)', maskImage: 'linear-gradient(90deg,#000 calc(100% - 22px),transparent)', font: '400 12.5px/1.3 var(--font-sans)', color: isBlank ? '#8f8f8f' : on ? '#171717' : '#4d4d4d' }}>{title}</span>;
             const close = <button type="button" className="hov-x" onClick={(event) => { event.stopPropagation(); closeTab(t.id); }} onMouseDown={(event) => event.stopPropagation()} aria-label="Close tab" title="⌘W" style={{ flex: 'none', width: 20, height: 20, padding: 0, border: 0, borderRadius: '50%', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '14px/1 var(--font-sans)', color: '#8f8f8f', transition: 'background 120ms' }}>×</button>;
             return (
@@ -1065,7 +1143,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
         <button type="button" className="hov-wash" onClick={forward} aria-label="Forward" style={{ ...ICON_BUTTON, color: canForward ? '#171717' : '#c9c9c9' }}>→</button>
         <button type="button" className="hov-wash" onClick={reload} aria-label={loading ? 'Stop' : 'Reload'} style={{ ...ICON_BUTTON, color: '#4d4d4d' }}>{loading ? '×' : '↻'}</button>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, height: 30, boxSizing: 'border-box', padding: saveState && !typing ? '0 3px 0 10px' : '0 10px', border: `1px solid ${typing ? '#c9c9c9' : 'transparent'}`, borderRadius: 8, background: '#fafafa', transition: 'border-color 120ms' }}>
-          <KindGlyph item={glyphItem(tab)} box={14} color="#8f8f8f" />
+          <KindGlyph item={glyphItem(tab, rowOf)} box={14} color="#8f8f8f" />
           <input
             ref={addressRef}
             value={draft}

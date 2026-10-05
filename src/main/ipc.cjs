@@ -246,6 +246,9 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('set-last-open', withCtx((ctx, value) => projects.writeLastOpen(ctx, value)));
   handle('views', withCtx((ctx, projectId) => projects.readViews(ctx, projectId)));
   handle('set-view', withCtx((ctx, projectId, workspaceId, view) => projects.writeView(ctx, projectId, workspaceId, view)));
+  // A project's Stage tabs (MATH-10): read once when its Stage opens, written as they change.
+  handle('stage', withCtx((ctx, projectId) => projects.readStage(ctx, projectId)));
+  handle('set-stage', withCtx((ctx, projectId, value) => projects.writeStage(ctx, projectId, value)));
   // Where to go next (the sidebar's next row, ⌘J): the workspaces written in last and the agents running or waiting.
   // Every change is announced on `engelbart:nav`; the renderer reads `nav` again.
   const navChanged = () => notify('engelbart:nav', {});

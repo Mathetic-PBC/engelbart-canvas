@@ -54,6 +54,8 @@ const engelbartAPI = Object.freeze({
   setLastOpen: invoke('set-last-open'),
   views: invoke('views'),
   setView: invoke('set-view'),
+  stage: invoke('stage'),
+  setStage: invoke('set-stage'),
   nav: invoke('nav'),
   recordEdit: invoke('record-edit'),
   seenAgents: invoke('seen-agents'),

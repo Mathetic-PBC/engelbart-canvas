@@ -376,3 +376,109 @@ test('a sandbox preview waits for its first page: Waking… from the click, then
   assert.equal(previewName({ name: 'engelbart-web' }), 'engelbart-web');
   assert.equal(previewName(null), '');
 });
+
+// MATH-10: the tabs kept across ⌘R and quitting, and given back.
+const blank = (id) => ({ id, url: 'about:blank', web: null, item: null, file: null, pdf: null });
+
+test('stageSnapshot: a library row, a page where it went, a pdf from the web, a file on disk; nothing a tab holds', async () => {
+  const { stageSnapshot } = await load('stage');
+  const tabs = [
+    { ...blank('t1'), item: 'p1', row: library[2], pdf: { url: 'file:///Users/h/ColBERT.pdf', input: '/Users/h/ColBERT.pdf', name: 'ColBERT', bytes: new Uint8Array(3), marks: { a: 1 }, rowId: 'p1' }, sections: [{ label: 's', find: 'x' }], pendingFind: 'x' },
+    // a page clicked through to its second page: tab.url follows it (onBrowserState)
+    { ...blank('t2'), url: 'https://example.org/second', web: { id: 't2', url: 'https://example.org/second', title: 'Second page', canGoBack: true } },
+    { ...blank('t3'), url: 'https://arxiv.org/abs/2312.10893', pdf: { url: 'https://arxiv.org/pdf/2312.10893', input: 'https://arxiv.org/pdf/2312.10893', name: 'Some paper', under: 'https://arxiv.org/abs/2312.10893', bytes: new Uint8Array(3), marks: {} } },
+    { ...blank('t4'), file: { kind: 'md', path: '/Users/h/notes.md', name: 'notes.md', text: '# hi' } },
+    { ...blank('t5'), url: 'about:blank', file: null, pdf: { url: 'file:///Users/h/a.pdf', input: '/Users/h/a.pdf', name: 'a', bytes: new Uint8Array(1) } },
+    { ...blank('t6'), url: 'file:///Users/h/site/index.html', web: { title: 'Site' } },
+    { ...blank('t7'), url: 'http://localhost:5173/', web: null },
+  ];
+  const snap = stageSnapshot(tabs, 't2');
+  assert.deepEqual(snap, {
+    active: 1,
+    tabs: [
+      { item: 'p1', title: 'ColBERT' },
+      { address: 'https://example.org/second', title: 'Second page' },
+      { address: 'https://arxiv.org/pdf/2312.10893', title: 'Some paper' },
+      { address: '/Users/h/notes.md', title: 'notes.md' },
+      { address: '/Users/h/a.pdf', title: 'a' },
+      { address: 'file:///Users/h/site/index.html', title: 'Site' },
+      { address: 'http://localhost:5173/', title: '' },
+    ],
+  });
+  assert.doesNotMatch(JSON.stringify(snap), /bytes|marks|sections|pendingFind|canGoBack/);
+  assert.equal(stageSnapshot(tabs, null).active, 0, 'no tab named in front: the first');
+});
+
+test('stageSnapshot: blank tabs, popups, files loading or failed and sandbox names are left; active counts what is kept', async () => {
+  const { stageSnapshot } = await load('stage');
+  const tabs = [
+    blank('b1'),
+    { ...blank('pop'), url: 'https://accounts.example.org/login', opened: true, from: 'w1' },
+    { ...blank('w1'), url: 'https://example.org', web: { title: 'Example' } },
+    { ...blank('l1'), file: { kind: 'loading', path: '/Users/h/big.csv', name: 'big.csv' } },
+    { ...blank('e1'), file: { kind: 'error', path: '/Users/h/gone.md', name: 'gone.md', message: 'ENOENT' } },
+    { ...blank('s1'), url: 'sandbox://manifund' },
+    { ...blank('w2'), url: 'https://two.org', web: null },
+  ];
+  assert.deepEqual(stageSnapshot(tabs, 'w2'), { active: 1, tabs: [{ address: 'https://example.org', title: 'Example' }, { address: 'https://two.org', title: '' }] });
+  assert.equal(stageSnapshot(tabs, 'pop').active, 0, 'the tab in front left out: 0');
+  assert.equal(stageSnapshot(tabs, 'e1').active, 0);
+  assert.deepEqual(stageSnapshot([blank('b1')], 'b1'), { active: 0, tabs: [] });
+  // A tab given back and not opened yet is kept as it came, title and all.
+  const later = [{ ...blank('r1'), restore: { item: 'p1', title: 'ColBERT' } }, { ...blank('r2'), restore: { address: '/Users/h/a.pdf', title: 'a', opening: true } }];
+  assert.deepEqual(stageSnapshot(later, 'r2'), { active: 1, tabs: [{ item: 'p1', title: 'ColBERT' }, { address: '/Users/h/a.pdf', title: 'a' }] });
+});
+
+test('restoreTabs: kept tabs come back unopened in order; a row gone from the library is left; what was opened meanwhile stays in front, once', async () => {
+  const { restoreTabs, tabKey, MAX_TABS } = await load('stage');
+  let n = 0;
+  const make = (entry) => ({ ...blank(`r${(n += 1)}`), restore: { ...entry } });
+  const saved = { active: 2, tabs: [{ item: 'p1', title: 'ColBERT' }, { item: 'gone', title: 'Deleted' }, { address: 'https://example.org/second', title: 'Second page' }, { address: '/Users/h/notes.md', title: 'notes.md' }] };
+
+  // A Stage with its lone blank tab: it gives way, and the page that was in front comes forward.
+  const lone = [blank('b1')];
+  let plan = restoreTabs(lone, saved, library, make);
+  assert.deepEqual(plan.tabs.map((t) => t.restore), [{ item: 'p1', title: 'ColBERT' }, { address: 'https://example.org/second', title: 'Second page' }, { address: '/Users/h/notes.md', title: 'notes.md' }]);
+  assert.equal(plan.front, plan.tabs[1].id);
+  assert.deepEqual(plan.tabs.map(tabKey), ['i:p1', 'l:example.org/second', 'l:file:///Users/h/notes.md'], 'a tab given back is what it will show');
+
+  // The row in front is gone: the next kept tab comes forward.
+  plan = restoreTabs(lone, { active: 1, tabs: saved.tabs }, library, make);
+  assert.equal(plan.tabs.find((t) => t.id === plan.front).restore.address, 'https://example.org/second');
+  plan = restoreTabs(lone, { active: 9, tabs: saved.tabs }, library, make);
+  assert.equal(plan.tabs.find((t) => t.id === plan.front).restore.address, '/Users/h/notes.md', 'past the end: the last');
+
+  // Nothing kept, a failed read: the lone tab stays as it was.
+  assert.deepEqual(restoreTabs(lone, { active: 0, tabs: [] }, library, make), { tabs: lone, front: null });
+  assert.deepEqual(restoreTabs(lone, null, library, make), { tabs: lone, front: null });
+
+  // A pdf opened from the all-projects screen before they came back: it stays in front, not twice, where it was kept.
+  const opened = { ...blank('o1'), claimed: true, item: 'p1', row: library[2] };
+  plan = restoreTabs([opened], saved, library, make);
+  assert.equal(plan.front, null, 'the tab in front stays in front');
+  assert.deepEqual(plan.tabs.map(tabKey), ['i:p1', 'l:example.org/second', 'l:file:///Users/h/notes.md']);
+  assert.equal(plan.tabs[0], opened, 'the opened tab, not a second one');
+  // Something not kept before goes after the kept ones.
+  const link = { ...blank('o2'), claimed: true, url: 'https://new.org/' };
+  plan = restoreTabs([link], saved, library, make);
+  assert.deepEqual(plan.tabs.map(tabKey), ['i:p1', 'l:example.org/second', 'l:file:///Users/h/notes.md', 'l:new.org']);
+  assert.equal(plan.tabs[3], link);
+  // The page under another spelling is the same page.
+  plan = restoreTabs([{ ...blank('o3'), claimed: true, url: 'http://www.example.org/second/' }], saved, library, make);
+  assert.equal(plan.tabs.length, 3);
+
+  // At most MAX_TABS: kept ones past it are left, never one opened.
+  const many = { active: 0, tabs: Array.from({ length: MAX_TABS }, (_, i) => ({ address: `https://s${i}.org`, title: `s${i}` })) };
+  plan = restoreTabs([link], many, library, make);
+  assert.equal(plan.tabs.length, MAX_TABS);
+  assert.equal(plan.tabs[MAX_TABS - 1], link);
+  assert.equal(plan.tabs[MAX_TABS - 2].restore.title, `s${MAX_TABS - 2}`);
+});
+
+test('placeTab: a tab given back and not opened yet comes forward rather than a second one; it is not a blank tab to take', async () => {
+  const { placeTab } = await load('stage');
+  const tabs = [{ ...blank('r1'), restore: { item: 'p1', title: 'ColBERT' } }, { ...blank('r2'), restore: { address: 'https://example.org/a', title: 'A' } }];
+  assert.deepEqual(placeTab(tabs, 0, 'i:p1'), { focus: 0 });
+  assert.deepEqual(placeTab(tabs, 0, 'l:example.org/a'), { focus: 1 });
+  assert.deepEqual(placeTab(tabs, 0, 'l:other.org'), { append: true });
+});
