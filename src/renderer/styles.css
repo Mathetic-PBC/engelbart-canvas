@@ -29,7 +29,6 @@ textarea::placeholder,input::placeholder{color:#8f8f8f;font-style:italic}
 .pdf-text{position:absolute;overflow:hidden;line-height:1;text-align:initial;text-size-adjust:none;forced-color-adjust:none}
 .pdf-text span,.pdf-text br{color:transparent;position:absolute;white-space:pre;cursor:text;transform-origin:0% 0%}
 .pdf-text ::selection{background:rgba(0,112,243,.3)}
-.pdf-text .endOfContent{display:none}
 [data-pdf] [data-page]{user-select:none}
 [data-pdf] .pdf-text{user-select:text}
 [data-pdf] textarea::selection{background:rgba(0,112,243,.2)}

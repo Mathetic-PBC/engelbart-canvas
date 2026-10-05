@@ -1,7 +1,8 @@
 'use strict';
 
 // Paper highlights' pure parts (src/renderer/pdf/marks.js, 2026-10-02): one box per stretch of a line, and where a new
-// highlight goes among a page's marks.
+// highlight goes among a page's marks. A selection across pages (MATH-14, 2026-10-05): one part a page, one mark a part,
+// the parts' marks sharing a group id that placing them among a page's marks keeps.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -180,4 +181,128 @@ test('placeHighlight: no overlap (another line, or beside it on the same line) i
   assert.deepEqual(placeHighlight([a], mark('b', [r(0.1, L(1), 0.3, 0.015)])).list.map((m) => m.id), ['a', 'b']);
   assert.deepEqual(placeHighlight([a], mark('c', [r(0.405, L(0), 0.2, 0.015)])).list.map((m) => m.id), ['a', 'c']);
   assert.deepEqual(placeHighlight([], mark('d', [r(0.1, L(0), 0.3, 0.015)])).list.map((m) => m.id), ['d']);
+});
+
+/* ------------------------------------------------------------------ a selection across pages (MATH-14) */
+
+test('selectionParts: a page with no usable rects has no part; the rest are merged boxes in page order, with side and top', async () => {
+  const { selectionParts } = await load();
+  const parts = selectionParts([
+    { page: 4, rects: [r(95, 106, 330, 16.5), r(95, 107.5, 330, 14.4), r(95, 126, 120, 16.5)], width: 985, text: 'This hypothesis-driven\nbugs', u: 985 },
+    { page: 3, rects: [r(700, 1240, 125, 18)], width: 985, text: 'us hypotheses [84].', u: 985 },
+    { page: 5, rects: [r(0, 0, 0, 10), r(5, 5, 0.5, 0)], width: 985, text: '', u: 985 },
+  ]);
+  assert.deepEqual(parts.map((p) => p.page), [3, 4]);
+  assert.deepEqual(parts[0], { page: 3, rects: [r(700, 1240, 125, 18)], side: 'right', y: 1240, text: 'us hypotheses [84].', u: 985 });
+  assert.deepEqual(parts[1].rects, [r(95, 106, 330, 16.5), r(95, 126, 120, 16.5)]); // the doubled span box is one
+  assert.equal(parts[1].side, 'left');
+  assert.equal(parts[1].y, 106);
+  assert.deepEqual(selectionParts([]), []);
+  assert.deepEqual(selectionParts(undefined), []);
+});
+
+test('scalePart: a pending part drawn at another size', async () => {
+  const { scalePart } = await load();
+  const part = { page: 3, rects: [r(100, 200, 50, 10)], side: 'left', y: 200, text: 't', u: 1000 };
+  assert.deepEqual(scalePart(part, 1000, 1500), { page: 3, rects: [r(150, 300, 75, 15)], side: 'left', y: 300, text: 't', u: 1500 });
+  assert.deepEqual(part.rects, [r(100, 200, 50, 10)]); // the part given is left as it was
+  assert.deepEqual(scalePart(part, undefined, 800), { ...part, u: 800 }); // nothing to scale from: as it is
+});
+
+const counter = () => { let n = 0; return (prefix = 'm') => `${prefix}${++n}`; };
+
+test('partMarks: one part is one mark with the note and no group', async () => {
+  const { partMarks } = await load();
+  const out = partMarks([{ page: 2, rects: [r(100, 200, 300, 15)], side: 'left', y: 200, text: 'one page', u: 1000 }], 'n', counter(), () => 1000);
+  assert.deepEqual(out, [{ page: 2, mark: { id: 'm1', rects: [r(0.1, 0.2, 0.3, 0.015)], side: 'left', y: 0.2, note: 'n', text: 'one page', pos: null } }]);
+  assert.equal('group' in out[0].mark, false);
+});
+
+test('partMarks: parts across pages share one group id; the note is on the first only; each in its own page units', async () => {
+  const { partMarks } = await load();
+  const parts = [
+    { page: 3, rects: [r(700, 1240, 125, 18)], side: 'right', y: 1240, text: 'us hypotheses [84].', u: 1000 },
+    { page: 4, rects: [r(95, 106, 330, 16)], side: 'left', y: 106, text: 'This hypothesis', u: 1000 },
+    { page: 5, rects: [], side: 'left', y: 0, text: '', u: 1000 }, // nothing drawn on it: no mark
+  ];
+  const widths = { 3: 1000, 4: 500 };
+  const out = partMarks(parts, 'k', counter(), (page) => widths[page]);
+  assert.deepEqual(out.map((o) => o.page), [3, 4]);
+  const [a, b] = out.map((o) => o.mark);
+  assert.equal(a.group, 'g1');
+  assert.equal(b.group, 'g1');
+  assert.deepEqual([a.id, b.id], ['m2', 'm3']);
+  assert.deepEqual([a.note, b.note], ['k', null]);
+  assert.deepEqual([a.text, b.text], ['us hypotheses [84].', 'This hypothesis']);
+  assert.deepEqual(round(a.rects, 4), [r(0.7, 1.24, 0.125, 0.018)]);
+  assert.deepEqual(round(b.rects, 4), [r(0.19, 0.212, 0.66, 0.032)]); // page 4 is drawn 500 wide
+  assert.equal(b.y, 106 / 500);
+  // Enter (no note): none on any part
+  assert.deepEqual(partMarks(parts, null, counter(), () => 1000).map((o) => o.mark.note), [null, null]);
+  assert.deepEqual(partMarks([], 'k', counter(), () => 1000), []);
+});
+
+test('placeHighlight: a part of a selection across pages merging with plain highlights keeps its group', async () => {
+  const { placeHighlight } = await load();
+  const a = mark('a', [r(0.1, L(0), 0.2, 0.015)], { text: 'the quick brown' });
+  const part = mark('p', [r(0.25, L(0), 0.2, 0.015)], { text: 'brown fox', group: 'g1' });
+  const out = placeHighlight([a], part);
+  assert.equal(out.list.length, 1);
+  assert.equal(out.mark.id, 'a');
+  assert.equal(out.mark.group, 'g1');
+  assert.equal(out.mark.text, 'the quick brown fox');
+  assert.equal('group' in a, false); // the list given is left as it was
+
+  // A plain selection over a grouped highlight: the merged mark keeps that group, even when the earliest had none.
+  const plain = mark('e', [r(0.1, L(1), 0.1, 0.015)]);
+  const grouped = mark('q', [r(0.3, L(1), 0.1, 0.015)], { group: 'g2' });
+  const over = mark('o', [r(0.15, L(1), 0.2, 0.015)]);
+  const merged = placeHighlight([plain, grouped], over);
+  assert.deepEqual(merged.list.map((m) => m.id), ['e']);
+  assert.equal(merged.mark.group, 'g2');
+
+  // No group anywhere: none is added (marks saved before groups stay as they were).
+  const none = placeHighlight([mark('x', [r(0.1, L(2), 0.2, 0.015)])], mark('y', [r(0.2, L(2), 0.2, 0.015)]));
+  assert.equal(none.list.length, 1);
+  assert.equal('group' in none.mark, false);
+});
+
+test('placeHighlight: a part inside a highlight gives it its group (and its note when it has none)', async () => {
+  const { placeHighlight } = await load();
+  const host = mark('h', [r(0.1, L(0), 0.4, 0.015)]);
+  const part = mark('p', [r(0.2, L(0), 0.1, 0.015)], { group: 'g1' });
+  const out = placeHighlight([host], part);
+  assert.equal(out.list.length, 1);
+  assert.equal(out.mark.id, 'h');
+  assert.equal(out.mark.group, 'g1');
+  assert.equal(out.mark.note, null);
+  assert.equal('group' in host, false);
+
+  const noted = placeHighlight([host], { ...part, note: 'w' });
+  assert.equal(noted.mark.id, 'h');
+  assert.deepEqual([noted.mark.group, noted.mark.note], ['g1', 'w']);
+
+  // Already in that group, or a plain selection inside a grouped highlight: nothing changes.
+  const same = { ...host, group: 'g1' };
+  assert.equal(placeHighlight([same], part).mark, same);
+  assert.equal(placeHighlight([same], mark('s', [r(0.2, L(0), 0.1, 0.015)])).mark, same);
+});
+
+test('placeHighlight: marks of two different groups stay apart, each keeping its group', async () => {
+  const { placeHighlight } = await load();
+  const host = mark('h', [r(0.1, L(0), 0.4, 0.015)], { group: 'g1' });
+  const inside = mark('p', [r(0.2, L(0), 0.1, 0.015)], { group: 'g2' });
+  const kept = placeHighlight([host], inside);
+  assert.deepEqual(kept.list.map((m) => [m.id, m.group]), [['h', 'g1'], ['p', 'g2']]);
+  assert.equal(kept.list[0], host);
+  assert.equal(kept.mark, inside);
+
+  const left = mark('l', [r(0.1, L(1), 0.2, 0.015)], { group: 'g1' });
+  const overlapping = mark('o', [r(0.25, L(1), 0.2, 0.015)], { group: 'g2' });
+  assert.deepEqual(placeHighlight([left], overlapping).list.map((m) => [m.id, m.group]), [['l', 'g1'], ['o', 'g2']]);
+
+  // Two highlights of different groups, overlapped by a plain selection: not made one.
+  const right = mark('r', [r(0.5, L(1), 0.2, 0.015)], { group: 'g3' });
+  const across = mark('x', [r(0.25, L(1), 0.3, 0.015)]);
+  assert.deepEqual(placeHighlight([left, right], across).list.map((m) => m.id), ['l', 'r', 'x']);
 });

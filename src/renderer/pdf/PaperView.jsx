@@ -19,7 +19,7 @@
 import React from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import rough from 'roughjs';
-import { mergeLineRects, placeHighlight, sideOf, boxSeed } from './marks.js';
+import { mergeLineRects, placeHighlight, boxSeed, selectionParts, scalePart, partMarks } from './marks.js';
 import { nextFind, createTargetGate, sectionSpans, paintSection, clearFind, FIND, FIND_ACTIVE } from '../model/find.js';
 import { wheelZooms, wheelZoom, createPageCache } from '../model/paper-zoom.js';
 
@@ -64,12 +64,17 @@ const PINCH_SETTLE_MS = 180;
 // pdf.js 6 positions text-layer spans through CSS custom properties (--font-height,
 // --scale-x, --rotate, --total-scale-factor); these rules mirror pdf_viewer.css for the
 // design's .pdf-text container so selection rectangles line up with the printed text.
+// .endOfContent (MATH-14, 2026-10-05) is pdf.js's TextLayerBuilder's: an empty, unselectable box at the end of each
+// layer that covers it while a selection is made there (.selecting, see trackSelecting). Without it a drag ending past a
+// line or in a margin lands on the layer itself, whose spans are all absolutely placed, and Chromium takes the end of the
+// layer: the rest of the page was selected.
 const LAYER_CSS = `
 [data-pdf] .pdf-text{color-scheme:only light;overflow:clip;opacity:1;letter-spacing:normal;word-spacing:normal;caret-color:CanvasText;z-index:0;--min-font-size:1;--text-scale-factor:calc(var(--total-scale-factor) * var(--min-font-size));--min-font-size-inv:calc(1 / var(--min-font-size))}
 [data-pdf] .pdf-text :is(span,br){color:transparent;position:absolute;white-space:pre;cursor:text;transform-origin:0% 0%;user-select:text}
 [data-pdf] .pdf-text > :not(.markedContent),[data-pdf] .pdf-text .markedContent span:not(.markedContent){z-index:1;--font-height:0;font-size:calc(var(--text-scale-factor) * var(--font-height));--scale-x:1;--rotate:0deg;transform:rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv))}
 [data-pdf] .pdf-text .markedContent{display:contents}
-[data-pdf] .pdf-text .endOfContent{display:none}
+[data-pdf] .pdf-text .endOfContent{display:block;position:absolute;inset:100% 0 0;z-index:0;cursor:default;user-select:none}
+[data-pdf] .pdf-text.selecting .endOfContent{top:0}
 [data-pdf] .pdf-text span[role="img"]{user-select:none;cursor:default}
 [data-pdf][data-pinching] .pdf-text{display:none}
 ::highlight(pdf-section){background-color:rgba(255,196,0,.13)}
@@ -93,8 +98,22 @@ const targetKey = (find, to) => (find ? (to ? `${find}\n${to}` : find) : '');
 const highlights = () => (typeof CSS !== 'undefined' && CSS.highlights && typeof Highlight === 'function' ? CSS.highlights : null);
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
-const markId = () => 'm' + Date.now() + Math.random().toString(36).slice(2, 6);
+const markId = (prefix = 'm') => prefix + Date.now() + Math.random().toString(36).slice(2, 6); // 'g…': a selection across pages' group
 const isEditable = (t) => !!(t && t.closest && t.closest('input,textarea,[contenteditable="true"]'));
+// A range's text as a selection gives it: its text nodes in order, a line break (<br>) as \n. Range.toString() leaves
+// out line breaks, which would run one line's last word into the next one's first.
+function rangeText(range) {
+  const root = range.commonAncestorContainer;
+  if (root.nodeType === Node.TEXT_NODE) return root.data.slice(range.startOffset, range.endOffset);
+  let out = '';
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (!range.intersectsNode(node)) continue;
+    if (node.nodeType === Node.TEXT_NODE) out += node.data.slice(node === range.startContainer ? range.startOffset : 0, node === range.endContainer ? range.endOffset : node.data.length);
+    else if (node.nodeName === 'BR') out += '\n';
+  }
+  return out;
+}
 const SVG = 'http://www.w3.org/2000/svg';
 
 function toBytes(src) {
@@ -132,8 +151,18 @@ export default class PaperView extends React.Component {
       if (!(e.target.closest && e.target.closest('[data-pdf] [data-page]'))) return;
       this.pdfDown = { x: e.clientX, y: e.clientY };
       if (!e.target.closest('textarea')) this.clearPending();
+      const tl = e.target.closest('[data-text-layer]');
+      if (tl) tl.classList.add('selecting');
     };
     this.onUp = (e) => this.pdfMouseUp(e);
+    // A selection being made (see LAYER_CSS .endOfContent): the layers it touches stay .selecting until the pointer is
+    // up, the window loses focus, or a key is let go with the pointer up (pdf.js TextLayerBuilder's listeners).
+    this.pointerIsDown = false;
+    this.onPointerDown = () => { this.pointerIsDown = true; };
+    this.onPointerUp = () => { this.pointerIsDown = false; this.endSelecting(); };
+    this.onBlur = () => { this.pointerIsDown = false; this.endSelecting(); };
+    this.onKeyUp = () => { if (!this.pointerIsDown) this.endSelecting(); };
+    this.onSelectionChange = () => this.trackSelecting();
     this.onKeyCapture = (e) => { if (this.pendingSelKey(e)) e.stopPropagation(); };
     this.onWheel = (e) => this.pinch(e);
     this.onScroll = () => {
@@ -173,6 +202,11 @@ export default class PaperView extends React.Component {
     host.addEventListener('wheel', this.onWheel, { passive: false });
     host.addEventListener('scroll', this.onScroll, { passive: true });
     window.addEventListener('keydown', this.onKeyCapture, true);
+    document.addEventListener('pointerdown', this.onPointerDown);
+    document.addEventListener('pointerup', this.onPointerUp);
+    document.addEventListener('keyup', this.onKeyUp);
+    document.addEventListener('selectionchange', this.onSelectionChange);
+    window.addEventListener('blur', this.onBlur);
     this.ro = new ResizeObserver(() => this.onResize());
     this.ro.observe(host);
     this.load();
@@ -208,6 +242,11 @@ export default class PaperView extends React.Component {
       host.removeEventListener('scroll', this.onScroll);
     }
     window.removeEventListener('keydown', this.onKeyCapture, true);
+    document.removeEventListener('pointerdown', this.onPointerDown);
+    document.removeEventListener('pointerup', this.onPointerUp);
+    document.removeEventListener('keyup', this.onKeyUp);
+    document.removeEventListener('selectionchange', this.onSelectionChange);
+    window.removeEventListener('blur', this.onBlur);
     if (this.ro) this.ro.disconnect();
     clearTimeout(this.resizeTimer);
     clearTimeout(this.pinchTimer);
@@ -488,12 +527,11 @@ export default class PaperView extends React.Component {
     this.pdfW = W; this.pdfG = geo[1].G; this.pageW = geo[1].pageW;
     if (at) this.restoreAnchor(at); else if (anchor === null) { host.scrollTop = 0; host.scrollLeft = 0; }
 
-    // A pending selection is kept in pixels of the layout it was made in; carry it over.
+    // A pending selection is kept in pixels of the layout it was made in, a part a page; carry it over.
     const p = this.pendingSel;
-    if (p && geo[p.page]) {
-      const was = p.u || (oldGeo[p.page] && oldGeo[p.page].pageW) || geo[p.page].pageW, k = geo[p.page].pageW / was;
-      p.rects = p.rects.map((r) => ({ x: r.x * k, y: r.y * k, w: r.w * k, h: r.h * k }));
-      p.y *= k; p.u = geo[p.page].pageW;
+    if (p) {
+      p.parts = p.parts.map((part) => (geo[part.page]
+        ? scalePart(part, part.u || (oldGeo[part.page] && oldGeo[part.page].pageW), geo[part.page].pageW) : part));
     }
     this.renderAllMarks();
     if (focused) {
@@ -529,6 +567,9 @@ export default class PaperView extends React.Component {
           this.textLayer = textLayer;
           await textLayer.render();
           this.textLayer = null;
+          const end = document.createElement('div');
+          end.className = 'endOfContent';
+          s.tl.append(end);
         } catch (err) { /* a page without a text layer is still readable */ }
         if (gen !== this.layoutGen) return;
         // Free notes size themselves around the printed text, which only now exists.
@@ -720,23 +761,68 @@ export default class PaperView extends React.Component {
   }
 
   /* ---------------------------------------------------------------- selection → marks */
+  // The text layers a selection touches are .selecting (LAYER_CSS .endOfContent): `layers` (default: every one in this
+  // viewer) stop being so, their .endOfContent back at their end. Electron 44's Chromium is 152; pdf.js moves the box next
+  // to the selection's anchor only before Chromium 148, so that part of TextLayerBuilder is left out.
+  endSelecting(layers) {
+    const host = this.host.current;
+    for (const tl of layers || (host ? host.querySelectorAll('[data-text-layer]') : [])) {
+      tl.classList.remove('selecting');
+      const end = tl.querySelector(':scope > .endOfContent');
+      if (end && end !== tl.lastChild) tl.append(end);
+    }
+  }
+  trackSelecting() {
+    const host = this.host.current, sel = document.getSelection();
+    if (!host) return;
+    const ranges = [];
+    for (let i = 0; sel && i < sel.rangeCount; i += 1) ranges.push(sel.getRangeAt(i));
+    for (const tl of host.querySelectorAll('[data-text-layer]')) {
+      if (ranges.some((range) => range.intersectsNode(tl))) tl.classList.add('selecting');
+      else if (tl.classList.contains('selecting')) this.endSelecting([tl]);
+    }
+  }
+
+  // A range cut into one a page: for each text layer in this viewer it touches, the range from the layer's start where it
+  // began on an earlier page, to the layer's end where it goes on to a later one. → [{ page, layer, range }] in page order.
+  pageRanges(range) {
+    const host = this.host.current;
+    if (!host) return [];
+    const out = [];
+    for (const tl of host.querySelectorAll('[data-text-layer]')) {
+      if (!range.intersectsNode(tl)) continue;
+      const part = range.cloneRange();
+      if (!tl.contains(range.startContainer)) part.setStart(tl, 0);
+      if (!tl.contains(range.endContainer)) part.setEnd(tl, tl.childNodes.length);
+      if (!part.collapsed) out.push({ page: Number(tl.dataset.textLayer), layer: tl, range: part });
+    }
+    return out;
+  }
+
   // Client rects are divided by this.css so geometry is in the layout's own pixels mid-pinch too. A fully selected span
   // gives its own box and its text's (they differ in height), and spans can overlap, so the rects are merged into one
-  // box per stretch of a line (./marks.js) before anything is drawn or stored.
+  // box per stretch of a line (./marks.js) before anything is drawn or stored. A selection across pages (MATH-14) is one
+  // part a page (pageRanges, ./marks.js selectionParts), each measured against its own page's text layer; a page that
+  // gives no rects has no part.
   pdfMouseUp(e) {
     const wrap = e.target.closest && e.target.closest('[data-pdf] [data-page]');
     if (!wrap) return;
     if (e.target.closest('textarea')) return;
-    const sel = getSelection(), tl = wrap.querySelector('[data-text-layer]'), css = this.css || 1;
+    const sel = getSelection(), css = this.css || 1;
     if (sel && !sel.isCollapsed && sel.rangeCount) {
       const range = sel.getRangeAt(0);
-      if (!tl || !tl.contains(range.startContainer) || !tl.contains(range.endContainer)) { this.clearPending(); return; }
-      const box = tl.getBoundingClientRect();
-      const rects = mergeLineRects([...range.getClientRects()].filter((r) => r.width > 1 && r.height > 1)
-        .map((r) => ({ x: (r.left - box.left) / css, y: (r.top - box.top) / css, w: r.width / css, h: r.height / css })));
-      if (!rects.length) return;
-      const page = Number(tl.dataset.textLayer);
-      this.pendingSel = { page, rects, side: sideOf(rects, box.width / css), y: Math.min(...rects.map((r) => r.y)), text: sel.toString(), u: this.geom(page).pageW };
+      const cut = this.pageRanges(range);
+      if (!cut.length) { this.clearPending(); return; }
+      this.endSelecting(); // the pointer is up: no .endOfContent covers a layer while it is measured
+      const text = sel.toString();
+      const parts = selectionParts(cut.map(({ page, layer, range: part }) => {
+        const box = layer.getBoundingClientRect();
+        const rects = [...part.getClientRects()].filter((r) => r.width > 1 && r.height > 1)
+          .map((r) => ({ x: (r.left - box.left) / css, y: (r.top - box.top) / css, w: r.width / css, h: r.height / css }));
+        return { page, rects, width: box.width / css, text: cut.length > 1 ? rangeText(part) : text, u: this.geom(page).pageW };
+      }));
+      if (!parts.length) return;
+      this.pendingSel = { parts, text };
       this.showPending(); sel.removeAllRanges();
       return;
     }
@@ -769,45 +855,55 @@ export default class PaperView extends React.Component {
     if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
       e.preventDefault();
       const m = this.addMark(p, e.key); this.clearPending();
-      requestAnimationFrame(() => { const ta = this.find1(`textarea[data-mark="${m.id}"]`); if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } });
+      requestAnimationFrame(() => { const ta = m && this.find1(`textarea[data-mark="${m.id}"]`); if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } });
       return true;
     }
     return false;
   }
 
-  // The pending selection (merged boxes, see pdfMouseUp), drawn into the page's highlight layer until a note is typed or
-  // it is dismissed. Over an existing highlight it is drawn on top of it.
-  showPending() {
-    const p = this.pendingSel; if (!p) return; this.hidePending();
-    const hl = this.find1(`[data-hl="${p.page}"]`); if (!hl) return;
-    const g = document.createElementNS(SVG, 'g'); g.dataset.pending = '1';
-    for (const r of p.rects) {
-      const el = document.createElementNS(SVG, 'rect');
-      el.setAttribute('x', r.x); el.setAttribute('y', r.y); el.setAttribute('width', r.w); el.setAttribute('height', r.h); el.setAttribute('fill', 'rgba(0,112,243,.22)');
-      g.appendChild(el);
+  // The pending selection (merged boxes, see pdfMouseUp), each part drawn into its page's highlight layer until a note is
+  // typed or it is dismissed. Over an existing highlight it is drawn on top of it. `page`: that page's part only.
+  showPending(page) {
+    const p = this.pendingSel; if (!p) return;
+    if (page == null) this.hidePending();
+    for (const part of p.parts) {
+      if (page != null && part.page !== page) continue;
+      const hl = this.find1(`[data-hl="${part.page}"]`); if (!hl) continue;
+      const g = document.createElementNS(SVG, 'g'); g.dataset.pending = '1';
+      for (const r of part.rects) {
+        const el = document.createElementNS(SVG, 'rect');
+        el.setAttribute('x', r.x); el.setAttribute('y', r.y); el.setAttribute('width', r.w); el.setAttribute('height', r.h); el.setAttribute('fill', 'rgba(0,112,243,.22)');
+        g.appendChild(el);
+      }
+      hl.appendChild(g);
     }
-    hl.appendChild(g);
   }
   hidePending() { const host = this.host.current; if (host) host.querySelectorAll('[data-pending]').forEach((n) => n.remove()); }
   clearPending() { this.pendingSel = null; this.hidePending(); }
 
-  // p carries pixel geometry from the current layout; the stored mark is in page units. A selection highlight is placed
-  // among the page's marks (./marks.js placeHighlight): inside one already there it adds nothing, and overlapping ones
-  // without notes become one. Answers the mark that holds it, whose note a caller may focus.
+  // p carries pixel geometry from the current layout; the stored marks are in page units. A free note (`pos`) is p.page's
+  // alone. A selection (`p.parts`) is one mark a part, on its own page (./marks.js partMarks): the parts of a selection
+  // across pages share a `group` id, and only the first has the note. Each is placed among its page's marks (./marks.js
+  // placeHighlight): inside one already there it adds nothing, and overlapping ones without notes become one. Answers
+  // the mark that holds the first part (or the free note), whose note a caller may focus.
   addMark(p, note, pos) {
-    const { G, pageW } = this.geom(p.page), u = pageW || 1;
-    let m = {
-      id: markId(),
-      rects: p.rects.map((r) => ({ x: r.x / u, y: r.y / u, w: r.w / u, h: r.h / u })),
-      side: p.side, y: p.y / u, note, text: p.text,
-      pos: pos ? { x: (pos.x - G) / u, y: pos.y / u } : null,
-    };
-    const list = this.marks[p.page] || [];
-    if (m.rects.length) { const placed = placeHighlight(list, m); this.marks[p.page] = placed.list; m = placed.mark; }
-    else this.marks[p.page] = [...list, m];
-    this.renderMarks(p.page);
+    if (pos) {
+      const { G, pageW } = this.geom(p.page), u = pageW || 1;
+      const m = { id: markId(), rects: [], side: p.side, y: p.y / u, note, text: p.text, pos: { x: (pos.x - G) / u, y: pos.y / u } };
+      this.marks[p.page] = [...(this.marks[p.page] || []), m];
+      this.renderMarks(p.page);
+      this.scheduleSave();
+      return m;
+    }
+    let first = null;
+    for (const { page, mark } of partMarks(p.parts, note, markId, (n) => this.geom(n).pageW)) {
+      const placed = placeHighlight(this.marks[page] || [], mark);
+      this.marks[page] = placed.list;
+      if (!first) first = placed.mark;
+      this.renderMarks(page);
+    }
     this.scheduleSave();
-    return m;
+    return first;
   }
 
   renderAllMarks() {
@@ -874,7 +970,7 @@ export default class PaperView extends React.Component {
       }
     }
     // Clearing the highlight layer took the pending selection with it.
-    if (this.pendingSel && this.pendingSel.page === page) this.showPending();
+    this.showPending(page);
   }
 
   /* ---------------------------------------------------------------- render */

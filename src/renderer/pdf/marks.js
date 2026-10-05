@@ -82,29 +82,37 @@ function joinText(a, b) {
 
 const isHighlight = (m) => !!(m && !m.pos && Array.isArray(m.rects) && m.rects.length);
 const hasNote = (m) => m.note != null;
+// Marks may become one when at most one `group` is among them (a selection across pages, MATH-14): one id cannot hold two.
+const joins = (a, b) => !a.group || !b.group || a.group === b.group;
 
 /**
  * Where a new selection highlight `mark` (page units, with its id) goes among a page's marks `list`, compared by
  * merged boxes (same line and any horizontal overlap); free notes are never touched. → { list, mark }: the page's
  * marks after, and the mark that holds the selection now.
- * - Inside one existing highlight: nothing is added. A note being started goes on it when it has none.
+ * - Inside one existing highlight: nothing is added. A note being started goes on it when it has none, and so does the
+ *   mark's `group` (part of a selection across pages) when it has none.
  * - Overlapping highlights, none with a note and none being started: one mark replaces them, keeping the earliest's
  *   id and place: the boxes of them all, the smallest y, the side of the merged boxes, the new text when it covers
- *   the others, else their texts in reading order.
- * - Otherwise (no overlap, or a note anywhere): the mark is added beside them. Drawing merges the boxes anyway.
+ *   the others, else their texts in reading order, and the one group among them, if any.
+ * - Otherwise (no overlap, a note anywhere, or two different groups): the mark is added beside them. Drawing merges the
+ *   boxes anyway.
+ * Marks saved without a group are placed as they always were.
  */
 export function placeHighlight(list, mark) {
   const marks = list || [];
   const boxes = mergeLineRects(mark.rects);
   if (!boxes.length) return { list: [...marks, mark], mark };
   const hits = marks.filter((m) => isHighlight(m) && mergeLineRects(m.rects).some((b) => boxes.some((a) => boxesOverlap(a, b))));
-  const host = hits.find((m) => boxesInside(boxes, mergeLineRects(m.rects)));
+  const host = hits.find((m) => boxesInside(boxes, mergeLineRects(m.rects)) && joins(m, mark));
   if (host) {
-    if (mark.note == null || hasNote(host)) return { list: marks, mark: host };
-    const next = { ...host, note: mark.note };
+    const note = mark.note != null && !hasNote(host) ? mark.note : host.note;
+    const group = host.group || mark.group;
+    if (note === host.note && group === host.group) return { list: marks, mark: host };
+    const next = { ...host, note, ...(group ? { group } : {}) };
     return { list: marks.map((m) => (m === host ? next : m)), mark: next };
   }
-  if (!hits.length || hasNote(mark) || hits.some(hasNote)) return { list: [...marks, mark], mark };
+  const groups = new Set([...hits, mark].map((m) => m.group).filter(Boolean));
+  if (!hits.length || hasNote(mark) || hits.some(hasNote) || groups.size > 1) return { list: [...marks, mark], mark };
   const merged = mergeLineRects([...hits.flatMap((m) => m.rects), ...mark.rects]);
   const covers = hits.every((m) => boxesInside(mergeLineRects(m.rects), boxes));
   const reading = [...hits, mark].map((m) => ({ m, b: mergeLineRects(m.rects)[0] }))
@@ -116,8 +124,52 @@ export function placeHighlight(list, mark) {
     side: sideOf(merged),
     y: Math.min(mark.y, ...hits.map((m) => m.y)),
     text: covers ? mark.text : squash(reading.reduce((t, m) => joinText(t, squash(m.text)), '')),
+    ...(groups.size ? { group: [...groups][0] } : {}),
   };
   const out = [];
   for (const m of marks) if (m === earliest) out.push(next); else if (!hits.includes(m)) out.push(m);
   return { list: out, mark: next };
+}
+
+/* ------------------------------------------------------------------ a selection across pages (MATH-14, 2026-10-05) */
+// PaperView cuts a selection into one range a page (each text layer it touches) and measures each; these are the parts
+// that need no DOM.
+
+/**
+ * A selection's pieces, one a page ({ page, rects, width, text, u }: rects in layout px relative to that page's text
+ * layer, `width` the layer's width in the same px, `u` the page's drawn width) → its parts in page order: the rects
+ * merged into one box per stretch of a line, the side a note goes on, the top. A piece with no usable rects is dropped.
+ */
+export function selectionParts(pieces) {
+  const out = [];
+  for (const { page, rects, width, text, u } of pieces || []) {
+    const boxes = mergeLineRects(rects);
+    if (boxes.length) out.push({ page, rects: boxes, side: sideOf(boxes, width), y: Math.min(...boxes.map(top)), text, u });
+  }
+  return out.sort((a, b) => a.page - b.page);
+}
+
+/** A part drawn at another size: its geometry (px of a page `from` wide) scaled to a page `to` wide, which becomes its `u`. */
+export function scalePart(part, from, to) {
+  const k = to / (from || to);
+  return { ...part, rects: part.rects.map((r) => ({ x: r.x * k, y: r.y * k, w: r.w * k, h: r.h * k })), y: part.y * k, u: to };
+}
+
+/**
+ * The marks a selection's parts make, one a part, in page units (each part's px over `widthOf(page)`, its page's drawn
+ * width now). Ids come from `newId(prefix)`; when there is more than one part they share one `group` id (`newId('g')`)
+ * and only the first has the note, the others none (null). → [{ page, mark }] in the parts' order.
+ */
+export function partMarks(parts, note, newId, widthOf) {
+  const list = (parts || []).filter((p) => p && Array.isArray(p.rects) && p.rects.length);
+  const group = list.length > 1 ? newId('g') : null;
+  return list.map((p, i) => {
+    const u = widthOf(p.page) || 1;
+    const mark = {
+      id: newId('m'),
+      rects: p.rects.map((r) => ({ x: r.x / u, y: r.y / u, w: r.w / u, h: r.h / u })),
+      side: p.side, y: p.y / u, note: i === 0 ? note : null, text: p.text, pos: null,
+    };
+    return { page: p.page, mark: group ? { ...mark, group } : mark };
+  });
 }
