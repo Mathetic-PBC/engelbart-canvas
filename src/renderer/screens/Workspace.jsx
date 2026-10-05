@@ -1353,7 +1353,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
         <Separator onDown={railDown} onMove={railMove} onUp={pointerUp} onReset={() => setRailWidth(300)} />
 
-        <main ref={mainRef} style={{ flex: '1 1 0', minWidth: DOC_MIN, minHeight: 0, display: full ? 'none' : 'flex', flexDirection: 'column', position: 'relative' }}>
+        <main ref={mainRef} data-doc-column="1" style={{ flex: '1 1 0', minWidth: DOC_MIN, minHeight: 0, display: full ? 'none' : 'flex', flexDirection: 'column', position: 'relative' }}>
           {docKey && conflicts[docKey] && (
             <div role="alert" data-doc-conflict="1" data-overlay="1" style={{ position: 'absolute', top: 10, right: 16, zIndex: 30, display: 'flex', alignItems: 'center', gap: 4, maxWidth: 'calc(100% - 32px)', padding: '5px 6px 5px 12px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', boxShadow: '0 4px 14px #0000000f', font: '12.5px/1.4 var(--font-sans)', color: '#4d4d4d' }}>
               <span style={{ marginRight: 6 }}>Saved in another window while you were editing.</span>

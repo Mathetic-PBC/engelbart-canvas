@@ -8,6 +8,7 @@ import Home from './screens/Home.jsx';
 import Onboarding from './screens/Onboarding.jsx';
 import Workspace from './screens/Workspace.jsx';
 import ToolSetup from './ui/ToolSetup.jsx';
+import UpdateBanner from './ui/UpdateBanner.jsx';
 import { launchRows, installedSignedOut, TOOL_ORDER } from './model/tools.js';
 
 // Screens: the app opens straight into the workspace you were last in, and the first run (no projects yet) is
@@ -403,6 +404,8 @@ export default function App() {
           <button type="button" onClick={() => setError('')} style={{ padding: '0 2px', border: 0, background: 'transparent', cursor: 'pointer', color: '#c9c9c9', font: '14px/1 var(--font-sans)' }}>×</button>
         </div>
       )}
+      {/* a new version downloading, or ready to restart into (src/main/updates.cjs), on every screen */}
+      <UpdateBanner />
       {setup && tools && <ToolSetup snapshot={tools} ids={setup.ids} mode={setup.mode} onClose={() => setSetup(null)} />}
       <WindowEdges />
       <WindowControls>

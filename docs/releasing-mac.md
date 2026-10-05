@@ -88,8 +88,11 @@ Updates…**. A new version is offered once per launch:
 
 - **Signed ad hoc** (today): macOS installs an update only when it is signed like the app it replaces, which an ad hoc
   signature never is, so **Update** runs the install command in the background. The app stays open while the new version
-  downloads and is checked, then quits, is replaced where it is, and opens again. If anything fails first, the app says
-  why and stays as it was. The command's output: `~/Library/Logs/Engelbart/update.log`.
+  downloads (a banner in each window shows how far it is) and is checked, then asks: **Restart to Update** quits, the
+  app is replaced where it is and opens again; **Later** leaves the command waiting for as long as the app stays open,
+  and it is installed at the next quit. If the command was stopped meanwhile, Restart to Update downloads it again and
+  then restarts. If anything fails before it is ready, the app says why and stays as it was. The command's output:
+  `~/Library/Logs/Engelbart/update.log`.
 - **Developer ID** (once signed): electron-updater downloads it in the background and installs it when the app quits;
   **Restart Now** does it at once.
 

@@ -14,9 +14,10 @@
 #
 # The release script (scripts/release-site.mjs) writes the download folder into this file. Set by
 # Engelbart when it updates itself (src/main/updates.cjs): ENGELBART_WAIT_PID (the running app, which
-# this waits for once the new version is ready), ENGELBART_APP_PATH (where that app is), ENGELBART_READY_FILE
-# (created at that moment, so the app knows to quit). ENGELBART_INSTALL_DIR puts it in that folder instead;
-# ENGELBART_NO_OPEN=1 leaves it closed afterwards.
+# this waits for once the new version is ready, for as long as it stays open: Later in the app means the next quit,
+# however many hours away), ENGELBART_APP_PATH (where that app is), ENGELBART_READY_FILE (created at that moment, so
+# the app can ask to restart). ENGELBART_INSTALL_DIR puts it in that folder instead; ENGELBART_NO_OPEN=1 leaves it
+# closed afterwards.
 
 set -euo pipefail
 
@@ -43,11 +44,12 @@ fail() {
   exit 1
 }
 
-# Returns once no Engelbart is running (or the one being updated has quit); non-zero after $1 seconds.
+# Returns once no Engelbart is running (or the one being updated has quit); non-zero after $1 seconds. Without $1 it
+# waits as long as that takes.
 wait_for_exit() {
-  local limit=$1 waited=0
+  local limit=${1:-} waited=0
   while { [ -n "$WAIT_PID" ] && kill -0 "$WAIT_PID" 2>/dev/null; } || { [ -z "$WAIT_PID" ] && pgrep -xq -u "$(id -u)" Engelbart; }; do
-    [ "$waited" -ge "$limit" ] && return 1
+    [ -n "$limit" ] && [ "$waited" -ge "$limit" ] && return 1
     sleep 1
     waited=$((waited + 1))
   done
@@ -101,8 +103,8 @@ codesign --verify --deep --strict "$work/new/$APP" 2>/dev/null || fail "the app 
 if [ -n "$WAIT_PID" ]; then
   ready=1
   if [ -n "${ENGELBART_READY_FILE:-}" ]; then : > "$ENGELBART_READY_FILE"; fi
-  say "Ready; waiting for Engelbart to quit."
-  wait_for_exit 1800 || fail "Engelbart did not quit within 30 minutes; the update was left for next time."
+  say "Ready; Engelbart ${version} is installed when Engelbart quits."
+  wait_for_exit
 elif pgrep -xq -u "$(id -u)" Engelbart; then
   say "Engelbart is open. Quit it (Engelbart ▸ Quit Engelbart, or ⌘Q) and the install will go on."
   wait_for_exit 600 || fail "Engelbart was still open after 10 minutes. Quit it and run the command again."

@@ -214,6 +214,12 @@ const engelbartAPI = Object.freeze({
   toolsSetUpdates: invoke('tools-set-updates'),
   onTools: (callback) => subscribe('engelbart:tools', callback),
   onToolsOpen: (callback) => subscribe('engelbart:tools-open', callback),
+  // New versions (src/main/updates.cjs): { enabled, state, available, version, percent, dismissed }, then each change on
+  // onUpdate; Restart to Update and Later from the banner (ui/UpdateBanner.jsx).
+  updateState: invoke('update-state'),
+  updateRestart: invoke('update-restart'),
+  updateLater: invoke('update-later'),
+  onUpdate: (callback) => subscribe('engelbart:update', callback),
   shellHistory: invoke('shell-history'),
   openExternal: invoke('open-external'),
   reveal: invoke('reveal'),

@@ -164,10 +164,17 @@ async function closeSession(id) {
   return closed;
 }
 
-async function requestQuit() {
+/** Terminal sessions still running: quitting ends them. */
+function runningSessionCount() {
+  return manager ? manager.list().filter((entry) => entry.status === 'running').length : 0;
+}
+
+// `update`: Restart to Update (updates.cjs), whose dialog has said already that terminal sessions end; it quits without
+// asking again.
+async function requestQuit({ update = false } = {}) {
   if (quitPending || quitReady) return;
   quitPending = true;
-  const runningCount = manager ? manager.list().filter((entry) => entry.status === 'running').length : 0;
+  const runningCount = update ? 0 : runningSessionCount();
   if (runningCount > 0) {
     const options = {
       type: 'warning',
@@ -363,7 +370,7 @@ function buildMenu() {
         { role: 'hideOthers' },
         { role: 'unhide' },
         { type: 'separator' },
-        { label: `Quit ${app.name}`, accelerator: 'Cmd+Q', click: requestQuit },
+        { label: `Quit ${app.name}`, accelerator: 'Cmd+Q', click: () => requestQuit() },
       ],
     }] : []),
     {
@@ -375,7 +382,7 @@ function buildMenu() {
         { label: 'Reveal Engelbart Folder', click: () => electronShell.showItemInFolder(store ? store.layout.root : app.getPath('home')) },
         ...(isMac ? [] : [{ label: 'Set Up Tools…', click: setUpTools }]),
         { type: 'separator' },
-        ...(isMac ? [{ role: 'close', label: 'Close Window', accelerator: 'Cmd+Shift+W' }] : [{ label: 'Quit', accelerator: 'Ctrl+Q', click: requestQuit }]),
+        ...(isMac ? [{ role: 'close', label: 'Close Window', accelerator: 'Cmd+Shift+W' }] : [{ label: 'Quit', accelerator: 'Ctrl+Q', click: () => requestQuit() }]),
       ],
     },
     {
@@ -780,6 +787,8 @@ if (!hasSingleInstanceLock) {
     // sleep (sandbox/activity.cjs, the manager's wakeAll).
     if (sandbox) watchActivity({ app, webContents, onActive: () => { store.context().then((ctx) => sandbox?.wakeAll(ctx)).catch(() => {}); } });
     registerEngelbartIpc({
+      // Made below, after this: the window's update banner asks for it when it is used.
+      getUpdates: () => updates,
       github,
       openGithubPage,
       identifyRepo: createRepoIdentifier({ auth: github.authHeaders }),
@@ -847,7 +856,15 @@ if (!hasSingleInstanceLock) {
       },
     });
     // New versions (updates.cjs): only in a packaged app built with a download folder. ENGELBART_UPDATES=off stops it.
-    updates = createUpdates({ app, dialog, getWindow: () => { const ctx = focusedWindow(); return ctx ? ctx.win : null; }, requestQuit, onChange: () => buildMenu() });
+    // The menu's item and every window's banner (ui/UpdateBanner.jsx, on every screen) follow its state.
+    updates = createUpdates({
+      app,
+      dialog,
+      getWindow: () => { const ctx = focusedWindow(); return ctx ? ctx.win : null; },
+      requestQuit,
+      runningSessions: runningSessionCount,
+      onChange: (snapshot) => { buildMenu(); sendToWindow('engelbart:update', snapshot); },
+    });
     updates.start();
     buildMenu();
     electronSession.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));

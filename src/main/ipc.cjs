@@ -141,7 +141,8 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
 // the Stage's session, so a picture or a pdf behind a sign-in comes too).
 // `savePageFor(win, tabId, dir)` writes the page a window's Stage tab shows into dir (add-library-page; the app passes
 // that window's browser views' savePage).
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null }) {
+// `getUpdates()`: the updater (updates.cjs), made after this is registered; null until then, and in the tests.
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, getUpdates = () => null }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
   const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
@@ -668,6 +669,12 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     handle('tools-ask-again', (name) => tools.askAgain(toolName(name)));
     handle('tools-set-updates', (value) => tools.setUpdates(value === 'ask' ? 'ask' : 'auto'));
   }
+
+  // New versions (src/main/updates.cjs): what a window's banner shows, and its two buttons. Changes arrive on
+  // `engelbart:update` as whole snapshots. A checkout, or a build without a download folder, has none.
+  handle('update-state', () => { const updates = getUpdates(); return updates ? updates.snapshot() : { enabled: false }; });
+  handle('update-restart', () => { const updates = getUpdates(); return updates ? updates.restart() : false; });
+  handle('update-later', () => { const updates = getUpdates(); return updates ? updates.later() : { enabled: false }; });
 
   handle('shell-history', () => readShellHistory({ homeDir: require('node:os').homedir() }));
   handle('open-external', (url) => openExternal(url));
