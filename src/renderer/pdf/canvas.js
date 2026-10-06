@@ -1,8 +1,12 @@
 // The page as a canvas (MATH-27 phase 1, 2026-10-06): the parts of PaperView's desk, boxes, zoom presets and highlight
 // answers that need no DOM. Geometry is in a layout's own px (the sheets' CSS px before any CSS zoom) unless it says page
-// units: fractions of a page's drawn width, which is how marks are kept so they survive a zoom.
+// units: fractions of a page's drawn width, which is how marks are kept so they survive a zoom; or desk px.
 //
-// A page lies on a desk at least DESK px wide on each side, at every zoom; a box moved past the desk's edge makes it wider
+// A true canvas (MATH-27 follow-up, 2026-10-06): everything drawn on the desk scales with the page. Boxes, their arrows and
+// the lines between them are laid out in desk px, the px of 100% (the page as wide as the pane), and each page's layer of
+// them is scaled by its zoom `k`: a layout px is k desk px. So every constant below is its size at 100%, and at any other
+// zoom it is that times k, the page's own factor; a pinch, which scales what is drawn, leaves boxes where the next drawing
+// puts them. A page lies on a desk at least DESK desk px wide on each side; a box moved past the desk's edge makes it wider
 // (deskNeed). A note is a box; each answer Bart gave from it is a box under it. A box that was moved keeps its place
 // (`pos`, page units); the others are placed beside their highlight and then spaced (spaceBoxes), which is never saved.
 // Follow-ups (2026-10-06): the boxes hanging under a moved one widen the desk too (deskNeed, hangLeft); a deleted answer
@@ -12,19 +16,22 @@
 /** Side space that centers a page of width pageW in a pane of width W (0 once the page is wider). */
 export const sideSpace = (W, pageW) => Math.max(0, Math.floor((W - pageW) / 2));
 
-export const DESK = 400; // px of desk beside a page, each side, at every zoom
-export const BOX_GAP = 12; // px kept between two boxes by the spacing pass
-export const DESK_EDGE = 24; // px a moved box keeps from the desk's edge (the desk grows to keep it)
+export const DESK = 400; // desk px of desk beside a page, each side
+export const BOX_GAP = 12; // desk px kept between two boxes by the spacing pass
+export const DESK_EDGE = 24; // desk px a moved box keeps from the desk's edge (the desk grows to keep it)
 export const NOTE_W = 240; // a note's box, on the desk
 export const ASK_W = 320; // an answer's box
 export const COLLAPSED_W = 96; // an answer folded to "Bart ›"
-export const SIDE_GAP = 28; // a box beside its page: px from the page's edge
+export const SIDE_GAP = 28; // a box beside its page: desk px from the page's edge
 export const POS_DY = 11; // `pos` is where a box's first line sits: 11px under its top, as free notes were always kept
 
-/** The desk on each side of a page `pageW` wide in a pane `W` wide → { G, R }: G is also where the page starts. */
-export function deskOf(W, pageW, need = {}) {
-  const side = sideSpace(W, pageW);
-  return { G: Math.max(side, DESK, Math.ceil(need.left || 0)), R: Math.max(side, DESK, Math.ceil(need.right || 0)) };
+/**
+ * The desk on each side of a page `pageW` wide in a pane `W` wide, at zoom `k` → { G, R } layout px: G is also where the
+ * page starts. DESK and `need` ({ left, right }, deskNeed's) are desk px, so k times as wide in a layout.
+ */
+export function deskOf(W, pageW, need = {}, k = 1) {
+  const side = sideSpace(W, pageW), desk = Math.ceil(DESK * k);
+  return { G: Math.max(side, desk, Math.ceil((need.left || 0) * k)), R: Math.max(side, desk, Math.ceil((need.right || 0) * k)) };
 }
 
 /**
@@ -35,7 +42,7 @@ export const hangLeft = (pLeft, pWidth, width, mid) => (pLeft + pWidth / 2 < mid
 
 /**
  * How wide the desk must be on each side so every box that was moved, and every box hanging under one, keeps DESK_EDGE
- * from its edge, at the page widths `pageWOf(page)` → { left, right } px (0 when nothing reaches past the page). A
+ * from its edge, at the page widths `pageWOf(page)` in desk px → { left, right } desk px (0 when nothing reaches past the page). A
  * mark's boxes go as PaperView draws them: its note, its answers (deleted ones are not drawn; one folded away is
  * narrower), then `running(markId)` answers being written; a box not moved hangs from the last moved one before it
  * (hangLeft). Boxes beside the page, before any moved one, always fit the DESK.
@@ -64,7 +71,10 @@ export function deskNeed(marks, pageWOf, running = () => 0) {
   return { left, right };
 }
 
-/** A box kept in page units → its top-left in a sheet whose page starts at G and is P wide; and back. */
+/** A page's layout geometry ({ G, R, pageW } layout px, `k` its zoom) in desk px, where its boxes are laid out. */
+export const deskGeom = (g) => { const k = (g && g.k) || 1; return { G: (g.G || 0) / k, R: (g.R || 0) / k, pageW: (g.pageW || 0) / k, k }; };
+
+/** A box kept in page units → its top-left in a sheet whose page starts at G and is P wide (desk px); and back. */
 export const placeOf = (pos, G, P) => ({ left: G + pos.x * P, top: pos.y * P - POS_DY });
 export const posOf = (left, top, G, P) => ({ x: (left - G) / P, y: (top + POS_DY) / P });
 
@@ -106,16 +116,17 @@ export function spaceBoxes(units, fixed = [], gap = BOX_GAP) {
 
 /**
  * Where a page and its boxes reach at zoom z, from the page's top-left → { left, top, right, bottom }. The page is
- * pageW1 × pageH1 at zoom 1. A box's left and top are `x.a·P + x.b` and `y.a·P + y.b` with P the page's width at z (a
- * moved box keeps its page units, a box beside the page its px from the edge); its width and height are px at any zoom.
+ * pageW1 × pageH1 at zoom 1. A box's left and top are `x.a·P + x.b·z` and `y.a·P + y.b·z` with P the page's width at z (a
+ * moved box keeps its page units, a box beside the page its desk px from the edge); its width and height are desk px,
+ * z times as many at z.
  */
 export function extentAt({ pageW1, pageH1, boxes = [] }, z) {
   const P = pageW1 * z;
   let left = 0, top = 0, right = P, bottom = pageH1 * z;
   for (const b of boxes) {
-    const x = b.x.a * P + b.x.b, y = b.y.a * P + b.y.b;
+    const x = b.x.a * P + b.x.b * z, y = b.y.a * P + b.y.b * z;
     left = Math.min(left, x); top = Math.min(top, y);
-    right = Math.max(right, x + b.w); bottom = Math.max(bottom, y + b.h);
+    right = Math.max(right, x + b.w * z); bottom = Math.max(bottom, y + b.h * z);
   }
   return { left, top, right, bottom };
 }

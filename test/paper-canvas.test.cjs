@@ -31,13 +31,16 @@ function loadView() {
 
 /* ------------------------------------------------------------------------------------------------ the desk */
 
-test('deskOf: at least DESK px each side at every zoom, more when the pane centers a narrow page, more when a moved box needs it', async () => {
-  const { deskOf, DESK } = await load();
+test('deskOf: DESK desk px each side, scaled with the page, more when the pane centers a narrow page, more when a moved box needs it', async () => {
+  const { deskOf, deskGeom, DESK } = await load();
   assert.equal(DESK, 400);
   assert.deepEqual(deskOf(800, 800), { G: 400, R: 400 }, '100%: the page as wide as the pane, a desk beside it all the same');
-  assert.deepEqual(deskOf(800, 1600), { G: 400, R: 400 }, '200%');
-  assert.deepEqual(deskOf(2000, 120), { G: 940, R: 940 }, '15% in a wide pane: centered');
+  assert.deepEqual(deskOf(800, 1600, {}, 2), { G: 800, R: 800 }, '200%: the desk twice as wide, as the page is (true canvas, 2026-10-06)');
+  assert.deepEqual(deskOf(800, 400, {}, 0.5), { G: 200, R: 200 }, '50%');
+  assert.deepEqual(deskOf(2000, 120, {}, 0.15), { G: 940, R: 940 }, '15% in a wide pane: centered');
   assert.deepEqual(deskOf(800, 800, { left: 520.2, right: 0 }), { G: 521, R: 400 }, 'one side widened alone');
+  assert.deepEqual(deskOf(800, 1600, { left: 520.2, right: 0 }, 2), { G: 1041, R: 800 }, 'by desk px, k times as many in the layout');
+  assert.deepEqual(deskGeom({ G: 1041, R: 800, pageW: 1600, k: 2 }), { G: 520.5, R: 400, pageW: 800, k: 2 }, 'a page\'s layout in desk px');
 });
 
 test('deskNeed: how far past its page each moved note or answer reaches, plus the desk\'s edge; boxes not moved need nothing', async () => {
@@ -165,6 +168,26 @@ test('fitZoom: Fit page fits the page; Fit page + notes zooms out until every bo
   assert.ok(extentAt({ ...page, boxes }, z * 1.01).right - extentAt({ ...page, boxes }, z * 1.01).left > page.availW || extentAt({ ...page, boxes }, z * 1.01).bottom - extentAt({ ...page, boxes }, z * 1.01).top > page.availH, 'and no less zoomed out than it must');
   assert.equal(fitZoom({ ...page, boxes: [{ x: { a: 0, b: -5000 }, y: { a: 0, b: 0 }, w: 10, h: 10 }] }), 0.15, 'what never fits stops at the least zoom');
   assert.equal(fitZoom({ ...page, availW: 5000, availH: 5000 }), 2, 'and at the most');
+  // The boxes scale with the page (true canvas, 2026-10-06): their extent at 2 is twice theirs at 1.
+  const one = extentAt({ ...page, boxes }, 1), two = extentAt({ ...page, boxes }, 2);
+  for (const key of ['left', 'top', 'right', 'bottom']) assert.ok(Math.abs(two[key] - 2 * one[key]) < 1e-9, key);
+});
+
+test('fieldCaret: a field in a scaled box (a PDF note at another zoom) has its caret scaled from its corner', async () => {
+  const { fieldCaret } = await import(pathToFileURL(path.join(__dirname, '../src/renderer/workspace/caret.js')).href);
+  // The copy is laid out at the field's own size: its caret 30px right of the field's left and 10px under its top.
+  const field = { value: 'see @Tu', selectionStart: 7, scrollTop: 0, getBoundingClientRect: () => ({ left: 100, top: 50, bottom: 92 }) };
+  const made = [];
+  globalThis.getComputedStyle = () => ({});
+  globalThis.document = {
+    body: { appendChild() {} },
+    createElement: () => { const el = { style: {}, textContent: '', appendChild() {}, remove() {}, getClientRects: () => [{ left: 130, top: 60, bottom: 81 }] }; made.push(el); return el; },
+  };
+  try {
+    assert.deepEqual(fieldCaret(field), { left: 130, right: 130, top: 60, bottom: 81 }, 'unscaled, as before');
+    assert.deepEqual(fieldCaret(field, 7, 2), { left: 160, right: 160, top: 70, bottom: 112 }, 'at 200%');
+    assert.deepEqual(fieldCaret(field, 7, 0.5), { left: 115, right: 115, top: 55, bottom: 65.5 }, 'at 50%');
+  } finally { delete globalThis.getComputedStyle; delete globalThis.document; }
 });
 
 test('Fit page + notes fits the page in view and the boxes beside it alone: a note pages away does not zoom it out', async () => {

@@ -24,8 +24,8 @@
 // names are the library's now (`library`), so a renamed item shows its new name; one gone from the library is grey. With
 // no `onOpenMention` a note is its field alone, as before: the token reads as typed.
 // The page as a canvas (MATH-27 phase 1, 2026-10-06; the pure parts are ./canvas.js). Every page lies on a desk at least
-// DESK px wide each side, at every zoom, that a box moved past its edge widens. Every note is a box with a light border
-// and a grip: a highlight's note opens on the desk beside it (its `side`), a click on the page or the desk makes a free
+// DESK desk px wide each side (scaled with the page since the true canvas, below), that a box moved past its edge widens.
+// Every note is a box with a light border and a grip: a highlight's note opens on the desk beside it (its `side`), a click on the page or the desk makes a free
 // note there, and dragging the grip moves either (`pos`, page units, saved on drop); a click in its text edits it. Each
 // answer Bart gave from a highlight's note (`asks`) is a box under the note, joined by a short line, moved the same way.
 // Boxes that were not moved are spaced on every draw (canvas.js spaceBoxes), never saved. A note on a highlight that
@@ -41,6 +41,13 @@
 // Second pass (2026-10-06): a box being written is filled in place as Bart works (fillRun), its Stop and "▸ steps" the
 // same buttons throughout, so a click on one is not lost to the next tick; an answer that is here already is not added
 // again (addAsk: main tells every window how an ask ended, the one that asked too).
+// A true canvas (MATH-27 follow-up, 2026-10-06): what is drawn on the desk scales with the page. Boxes, the arrows and the
+// lines joining them are laid out in desk px (./canvas.js: the px of 100%) on each sheet's notes and arrows layers, and
+// those layers are scaled by the page's zoom (`k`, geo[n].k: the layout's zoom), so at 200% a note is 480px wide, its
+// type twice as big and its gap from the page twice as wide, and a box keeps its place against the page's text at every
+// zoom, moved or not. The desk is DESK desk px a side, k times as wide in a layout. A pinch scales what is drawn, and
+// the drawing that follows puts every box where the pinch left it; a free note keeps the width it was measured at until
+// the page's text is there to measure it again (freeW). The zoom bar, the chips, the fades and the @ menu stay screen-sized.
 import React from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import rough from 'roughjs';
@@ -48,7 +55,7 @@ import { mergeLineRects, placeHighlight, boxSeed, selectionParts, scalePart, par
 import { nextFind, createTargetGate, sectionSpans, paintSection, clearFind, FIND, FIND_ACTIVE } from '../model/find.js';
 import { wheelZooms, wheelZoom, createPageCache } from '../model/paper-zoom.js';
 import { mentionAt, libMention, noteHtml, noteParts, noteOffset, inlineHtml, esc, LIB_MENTION_RE } from '../model/doc.js';
-import { sideSpace, deskOf, deskNeed, hangLeft, placeOf, posOf, spaceBoxes, extentAt, fitZoom, offscreen, offscreenSide, chipLabel, revealScroll, noteQuestion, turnsOf, shownAsks, keptMarks, modelLabel, runningLabel, DESK_EDGE, BOX_GAP, NOTE_W, ASK_W, COLLAPSED_W, SIDE_GAP, POS_DY } from './canvas.js';
+import { sideSpace, deskOf, deskGeom, deskNeed, hangLeft, placeOf, posOf, spaceBoxes, extentAt, fitZoom, offscreen, offscreenSide, chipLabel, revealScroll, noteQuestion, turnsOf, shownAsks, keptMarks, modelLabel, runningLabel, DESK, DESK_EDGE, BOX_GAP, NOTE_W, ASK_W, COLLAPSED_W, SIDE_GAP, POS_DY } from './canvas.js';
 import { fieldCaret } from '../workspace/caret.js';
 import MentionMenu from '../workspace/MentionMenu.jsx';
 
@@ -250,7 +257,8 @@ export default class PaperView extends React.Component {
     this.editing = null; // the id of the note being typed in: drawn as its field, the rest as text (see renderMarks)
     this.redrawing = 0; // > 0 while notes are taken out to be drawn again: a field losing the keyboard then is not left
     this.libDrawn = ''; // the mentioned items' names the notes were drawn with (libKey)
-    this.drawn = {}; // { [page]: { boxes, units, chains } }: the boxes as last drawn, for spacing, links and fitting
+    this.drawn = {}; // { [page]: { boxes, units, chains } }: the boxes as last drawn (desk px), for spacing, links and fitting
+    this.freeW = new Map(); // a free note's width (desk px) as last measured against its page's text (noteBox)
     this.drag = null; // a box being moved by its grip
     this.pan = null; // a Space-drag or middle-drag under way
     this.space = false; // Space held over the paper: a drag pans
@@ -432,7 +440,11 @@ export default class PaperView extends React.Component {
   find1(selector) { const host = this.host.current; return host ? host.querySelector(selector) : null; }
 
   // A page's drawn geometry (falls back to page 1's before the first layout).
-  geom(page) { return this.geo[page] || { G: this.pdfG || 0, R: this.pdfG || 0, pageW: this.pageW || 1 }; }
+  geom(page) { return this.geo[page] || { G: this.pdfG || 0, R: this.pdfG || 0, pageW: this.pageW || 1, k: this.renderedZoom || 1 }; }
+  // The same in desk px, where its boxes are laid out (./canvas.js deskGeom).
+  desk(page) { return deskGeom(this.geom(page)); }
+  // Screen px per desk px on page n: its zoom, and a pinch's CSS zoom on top.
+  boxScale(page) { return (this.geom(page).k || 1) * (this.css || 1); }
 
   /* ---------------------------------------------------------------- persistence */
   scheduleSave() {
@@ -467,6 +479,7 @@ export default class PaperView extends React.Component {
     this.setPinching(false);
     this.pdfW = null;
     this.undos = []; // another paper
+    this.freeW.clear();
     this.gate.drawing();
     const data = toBytes(this.props.bytes);
     if (!data) { this.setState({ note: 'No paper to open.', page: 0, pages: 0 }); return; }
@@ -558,12 +571,12 @@ export default class PaperView extends React.Component {
     if (y != null) host.scrollTop += r.top + (bt + y) * css - (h.top + host.clientTop + host.clientHeight / 2);
   }
 
-  // The boxes of page n as ./canvas.js extentAt reads them: a moved one by its page units, one beside the page by its px
-  // from the page's edge, any other by where it is now in page units; sizes as drawn.
+  // The boxes of page n as ./canvas.js extentAt reads them: a moved one by its page units, one beside the page by its desk
+  // px from the page's edge, any other by where it is now in page units; sizes as drawn, in desk px.
   boxShapes(n) {
-    const model = this.drawn[n], g = this.geo[n];
-    if (!model || !g) return [];
-    const P = g.pageW || 1;
+    const model = this.drawn[n];
+    if (!model || !this.geo[n]) return [];
+    const g = this.desk(n), P = g.pageW || 1;
     return model.boxes.filter((b) => b.el && b.el.isConnected).map((b) => {
       const w = b.width, h = b.height, pos = b.how === 'pos' && b.pos, from = b.how === 'hang' && b.from && b.from.how === 'pos' && b.from.pos;
       if (pos) return { x: { a: pos.x, b: 0 }, y: { a: pos.y, b: -POS_DY }, w, h };
@@ -646,17 +659,17 @@ export default class PaperView extends React.Component {
     for (let n = 1; n < this.geo.length; n += 1) {
       const g = this.geo[n], s = this.sheets[n];
       if (!g || !s) continue;
-      Object.assign(g, deskOf(W, g.pageW, need));
+      Object.assign(g, deskOf(W, g.pageW, need, g.k));
       this.place(n);
     }
     if (this.geo[1]) this.pdfG = this.geo[1].G;
     this.renderAllMarks();
   }
 
-  // How wide the desk must be each side (./canvas.js deskNeed), at the pages' widths now; `extra` ({ left, right } px)
-  // for a box being dragged past it.
+  // How wide the desk must be each side (./canvas.js deskNeed), at the pages' widths now, in desk px; `extra`
+  // ({ left, right } desk px) for a box being dragged past it.
   deskNeedNow(extra = null) {
-    const need = deskNeed(this.marks, (n) => (this.geo[n] ? this.geo[n].pageW : 0), (id) => this.runsOf(id));
+    const need = deskNeed(this.marks, (n) => (this.geo[n] ? this.geo[n].pageW / (this.geo[n].k || 1) : 0), (id) => this.runsOf(id));
     return extra ? { left: Math.max(need.left, extra.left || 0), right: Math.max(need.right, extra.right || 0) } : need;
   }
 
@@ -670,14 +683,14 @@ export default class PaperView extends React.Component {
     for (let n = 1; n < this.geo.length; n += 1) {
       const g = this.geo[n], s = this.sheets[n];
       if (!g || !s) continue;
-      const next = deskOf(this.pdfW, g.pageW, need), dG = next.G - g.G;
+      const next = deskOf(this.pdfW, g.pageW, need, g.k), dG = next.G - g.G;
       if (!dG && next.R === g.R) continue;
       changed = true;
       g.G = next.G; g.R = next.R;
       this.place(n);
       const model = this.drawn[n];
       if (model && dG) {
-        for (const b of model.boxes) { b.left += dG; b.el.style.left = `${b.left}px`; }
+        for (const b of model.boxes) { b.left += dG / (g.k || 1); b.el.style.left = `${b.left}px`; }
         this.drawLinks(n);
       }
     }
@@ -700,7 +713,12 @@ export default class PaperView extends React.Component {
     s.hl.setAttribute('width', pageW); s.hl.setAttribute('height', pageH); s.hl.setAttribute('viewBox', `0 0 ${pageW} ${pageH}`);
     s.hl.style.cssText = `position:absolute;left:${G}px;top:0;width:${pageW}px;height:${pageH}px;pointer-events:none;overflow:visible`;
     s.tl.style.left = `${G}px`; s.tl.style.top = '0'; s.tl.style.width = `${pageW}px`; s.tl.style.height = `${pageH}px`;
-    s.ar.setAttribute('width', sheetW); s.ar.setAttribute('height', pageH); s.ar.setAttribute('viewBox', `0 0 ${sheetW} ${pageH}`);
+    // The boxes and their arrows in desk px, scaled to the page's zoom: as wide as the sheet once scaled, no wider (a
+    // layer scaled past the sheet would widen the scroll).
+    const k = g.k || 1, dw = sheetW / k, dh = pageH / k, scaled = Math.abs(k - 1) < 1e-6 ? '' : `scale(${k})`;
+    s.ar.setAttribute('width', dw); s.ar.setAttribute('height', dh); s.ar.setAttribute('viewBox', `0 0 ${dw} ${dh}`);
+    s.ar.style.transform = scaled;
+    if (s.notes) { s.notes.style.width = `${dw}px`; s.notes.style.height = `${dh}px`; s.notes.style.transform = scaled; }
   }
 
   /* paper — drawn page by page. Each page is one white sheet on a desk (MATH-27): the desk G on its left and R on its
@@ -744,11 +762,11 @@ export default class PaperView extends React.Component {
     inner.style.cssText = 'position:relative;width:max-content;min-width:100%;margin:0 auto;display:flex;flex-direction:column;align-items:flex-start';
     const widths = [];
     for (let n = 1; n <= N; n += 1) widths[n] = Math.max(1, Math.round(this.v0[n].width * unit * z));
-    const need = deskNeed(this.marks, (n) => widths[n] || 0, (id) => this.runsOf(id));
+    const need = deskNeed(this.marks, (n) => (widths[n] || 0) / z, (id) => this.runsOf(id));
     let top = 0;
     for (let n = 1; n <= N; n += 1) {
       const v0 = this.v0[n], pageW = widths[n], scale = pageW / v0.width;
-      geo[n] = { ...deskOf(W, pageW, need), pageW, pageH: v0.height * scale, scale };
+      geo[n] = { ...deskOf(W, pageW, need, z), pageW, pageH: v0.height * scale, scale, k: z };
       tops.push(top);
       top += geo[n].pageH + (n > 1 ? 1 : 0);
       const wrap = document.createElement('div');
@@ -766,12 +784,13 @@ export default class PaperView extends React.Component {
       tl.style.setProperty('--total-scale-factor', String(scale));
       tl.style.setProperty('--scale-round-x', '1px');
       tl.style.setProperty('--scale-round-y', '1px');
-      // Boxes and their arrows above every page's drawing and text (a box pushed past its page's foot stays in sight).
+      // Boxes and their arrows above every page's drawing and text (a box pushed past its page's foot stays in sight), in
+      // desk px, scaled from their top-left corner to the page's zoom (place).
       const notes = document.createElement('div');
-      notes.dataset.notes = n; notes.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:2';
+      notes.dataset.notes = n; notes.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;z-index:2;transform-origin:0 0';
       const ar = document.createElementNS(SVG, 'svg');
       ar.dataset.arrows = n;
-      ar.style.cssText = 'position:absolute;inset:0;pointer-events:none;overflow:visible;z-index:1';
+      ar.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;overflow:visible;z-index:1;transform-origin:0 0';
       wrap.append(bg);
       if (old) wrap.append(old);
       wrap.append(hl, tl, ar, notes);
@@ -1101,18 +1120,23 @@ export default class PaperView extends React.Component {
     }
   }
 
-  // Width available for a free-placed note at (x, y): stops before the next printed text on
-  // that line, so notes wrap instead of running over the page.
+  // Width available for a free-placed note at (x, y), desk px: stops before the next printed text on
+  // that line, so notes wrap instead of running over the page, else 8px short of the desk's edge beside it.
   freeWidth(page, x, y, h) {
-    const { G, R, pageW } = this.geom(page), tl = this.find1(`[data-text-layer="${page}"]`);
+    const { G, pageW, k = 1 } = this.geom(page), tl = this.find1(`[data-text-layer="${page}"]`);
     if (!tl) return 160;
-    let right = G + pageW + R - 8;
+    let right = (G + pageW) / k + DESK - 8;
     for (const s of tl.querySelectorAll('span')) {
-      const l = s.offsetLeft + G, t = s.offsetTop, b = t + s.offsetHeight;
+      const l = (s.offsetLeft + G) / k, t = s.offsetTop / k, b = t + s.offsetHeight / k;
       if (b < y || t > y + h) continue;
       if (l > x && l < right) right = l - 6;
     }
     return Math.max(70, right - x);
+  }
+  // Whether page n's text is drawn and can be measured (not hidden by a pinch).
+  textDrawn(page) {
+    const host = this.host.current, tl = this.find1(`[data-text-layer="${page}"]`);
+    return !!(tl && tl.querySelector('span') && !(host && host.dataset && host.dataset.pinching));
   }
 
   // Nothing has the keyboard (2026-10-06): it is on the page itself, or on something of the paper's that is no field,
@@ -1232,10 +1256,11 @@ export default class PaperView extends React.Component {
   // one for each answer being written (`pendingAsks`). Each box is where it was moved to (`pos`), else under the box
   // before it, else (the first of its chain) on the desk beside its highlight, on its `side`. The boxes not moved are then
   // spaced (arrange), and the arrow from the highlight and the lines between boxes drawn where they ended up (drawLinks).
+  // Highlights are drawn in the page's px; boxes, the arrows and joins in desk px (its notes and arrows layers are scaled).
   renderMarks(page) {
     const hl = this.find1(`[data-hl="${page}"]`), notes = this.find1(`[data-notes="${page}"]`), ar = this.find1(`[data-arrows="${page}"]`);
     if (!hl || !notes) return;
-    const { G, pageW } = this.geom(page), u = pageW;
+    const u = this.geom(page).pageW, { G, pageW: P } = this.desk(page);
     const active = document.activeElement;
     const had = active && active.tagName === 'TEXTAREA' && notes.contains(active) ? { id: active.dataset.mark, a: active.selectionStart, b: active.selectionEnd } : null;
     this.redrawing += 1;
@@ -1252,7 +1277,7 @@ export default class PaperView extends React.Component {
       const asks = shownAsks(m), runs = running.filter((p) => p.markId === m.id);
       if (m.note == null && !asks.length && !runs.length) return;
       const side = m.side === 'left' ? 'left' : 'right';
-      const chain = { m, k: k + 1, rects: (m.rects || []).map((r) => ({ x: G + r.x * u, y: r.y * u, w: r.w * u, h: r.h * u })), boxes: [] };
+      const chain = { m, k: k + 1, rects: (m.rects || []).map((r) => ({ x: G + r.x * P, y: r.y * P, w: r.w * P, h: r.h * P })), boxes: [] };
       const parts = [];
       if (m.note != null) parts.push({ kind: 'note', pos: m.pos || null });
       for (const a of asks) parts.push({ kind: 'ask', ask: a, pos: a.pos || null });
@@ -1264,9 +1289,9 @@ export default class PaperView extends React.Component {
         const ta = el.querySelector('textarea');
         if (ta) this.fitNote(ta);
         const b = { el, kind: part.kind, m, ask: part.ask || null, page, fixed: !!part.pos, pos: part.pos, how: 'pos', left: 0, top: 0, width: 0, height: 0 };
-        if (part.pos) { Object.assign(b, placeOf(part.pos, G, u || 1)); unit = null; }
+        if (part.pos) { Object.assign(b, placeOf(part.pos, G, P || 1)); unit = null; }
         else {
-          if (!unit) { unit = { id: `${m.id}:${chain.boxes.length}`, want: Math.max(0, m.y * u - 6), side: prev ? null : side, parent: prev, boxes: [] }; units.push(unit); }
+          if (!unit) { unit = { id: `${m.id}:${chain.boxes.length}`, want: Math.max(0, m.y * P - 6), side: prev ? null : side, parent: prev, boxes: [] }; units.push(unit); }
           b.how = unit.parent ? 'hang' : side;
           unit.boxes.push(b);
         }
@@ -1285,20 +1310,20 @@ export default class PaperView extends React.Component {
     const open = this.state.mention;
     if (open && open.page === page) {
       const ta = notes.querySelector(`textarea[data-mark="${open.markId}"]`);
-      if (ta && document.activeElement === ta) this.setState({ mention: { ...open, anchor: fieldCaret(ta) } }); else this.closeMention();
+      if (ta && document.activeElement === ta) this.setState({ mention: { ...open, anchor: fieldCaret(ta, undefined, this.boxScale(page)) } }); else this.closeMention();
     }
     this.syncOffscreenSoon();
   }
 
   /* ---------------------------------------------------------------- boxes (MATH-27) */
-  // The spacing pass (./canvas.js spaceBoxes), on every draw and while a box is dragged: every box measured; a unit
+  // The spacing pass (./canvas.js spaceBoxes), in desk px, on every draw and while a box is dragged: every box measured; a unit
   // beside its page goes against the page's edge (a left one's right edge to it), one under a moved box hangs from that
   // box's edge nearest the page's middle; each then goes as high as it wants with BOX_GAP from any box it shares x with.
   arrange(page) {
     const model = this.drawn[page];
     if (!model) return;
-    const { G, pageW } = this.geom(page), mid = G + pageW / 2;
-    for (const b of model.boxes) { b.width = b.el.offsetWidth; b.height = b.el.offsetHeight; }
+    const { G, pageW } = this.desk(page), mid = G + pageW / 2;
+    for (const b of model.boxes) { b.width = b.el.offsetWidth; b.height = b.el.offsetHeight; } // a layout size: unscaled
     const fixed = model.boxes.filter((b) => b.fixed);
     for (const b of fixed) { b.el.style.left = `${b.left}px`; b.el.style.top = `${b.top}px`; }
     const shaped = model.units.filter((unit) => unit.boxes.length).map((unit) => {
@@ -1361,13 +1386,17 @@ export default class PaperView extends React.Component {
   }
 
   // A note's box: the grip, then its field (being typed in, empty, or with nowhere for a mention to go) or its text. A
-  // free note keeps to the room before the printed text beside it, as it always did; a highlight's is NOTE_W wide.
+  // free note keeps to the room before the printed text beside it, as it always did; a highlight's is NOTE_W wide. Until
+  // its page's text is drawn (a zoom has just laid the pages out) a free note keeps the width it was last measured at.
   noteBox(m, page) {
-    const { G, pageW } = this.geom(page), u = pageW || 1;
+    const { G, pageW } = this.desk(page), u = pageW || 1;
     let width = NOTE_W;
     if (m.pos && !(m.rects || []).length) {
-      const at = placeOf(m.pos, G, u);
-      width = Math.max(120, Math.min(this.freeWidth(page, at.left, at.top + POS_DY, 22), G + pageW * 0.6));
+      if (this.textDrawn(page) || !this.freeW.has(m.id)) {
+        const at = placeOf(m.pos, G, u);
+        width = Math.max(120, Math.min(this.freeWidth(page, at.left, at.top + POS_DY, 22), DESK + u * 0.6));
+        if (this.textDrawn(page)) this.freeW.set(m.id, width);
+      } else width = this.freeW.get(m.id);
     }
     const box = document.createElement('div');
     box.dataset.box = 'note'; box.dataset.boxMark = m.id;
@@ -1568,7 +1597,7 @@ export default class PaperView extends React.Component {
     ev.preventDefault(); ev.stopPropagation();
     const model = this.drawn[page], b = model && model.boxes.find((x) => x.el === el);
     if (!b || this.drag) return;
-    const r = el.getBoundingClientRect(), css = this.css || 1;
+    const r = el.getBoundingClientRect(), css = this.boxScale(page);
     this.closeMention();
     this.drag = { b, page, grabX: (ev.clientX - r.left) / css, grabY: (ev.clientY - r.top) / css, x0: ev.clientX, y0: ev.clientY, at: { x: ev.clientX, y: ev.clientY }, moved: false, raf: 0 };
     window.addEventListener('mousemove', this.onDragMove);
@@ -1593,21 +1622,22 @@ export default class PaperView extends React.Component {
       this.detach(this.drawn[d.page], d.b);
       this.dragTick();
     }
-    const css = this.css || 1, b = d.b;
+    const css = this.boxScale(d.page), k = g.k || 1, b = d.b; // desk px
     let wr = s.wrap.getBoundingClientRect();
     b.left = (d.at.x - wr.left) / css - d.grabX;
-    b.top = Math.max(-(this.tops[d.page - 1] || 0), (d.at.y - wr.top) / css - d.grabY);
+    b.top = Math.max(-(this.tops[d.page - 1] || 0) / k, (d.at.y - wr.top) / css - d.grabY);
     this.arrange(d.page);
     const extra = this.reach(d.page); // the box, and the answers that hang under it
-    if ((extra.left > g.G || extra.right > g.R) && this.reframe(extra)) {
+    if ((extra.left * k > g.G || extra.right * k > g.R) && this.reframe(extra)) {
       wr = s.wrap.getBoundingClientRect(); b.left = (d.at.x - wr.left) / css - d.grabX;
       this.arrange(d.page);
     }
   }
-  // How far past page n its moved boxes and those hanging under them reach as drawn, DESK_EDGE added → { left, right } px.
+  // How far past page n its moved boxes and those hanging under them reach as drawn, DESK_EDGE added → { left, right } desk px.
   reach(n) {
-    const model = this.drawn[n], g = this.geo[n], out = { left: 0, right: 0 };
-    if (!model || !g) return out;
+    const model = this.drawn[n], out = { left: 0, right: 0 };
+    if (!model || !this.geo[n]) return out;
+    const g = this.desk(n);
     for (const x of model.boxes) {
       if (x.how !== 'pos' && x.how !== 'hang') continue;
       out.left = Math.max(out.left, DESK_EDGE - (x.left - g.G));
@@ -1639,7 +1669,7 @@ export default class PaperView extends React.Component {
     const host = this.host.current;
     if (host) delete host.dataset.dragging;
     if (!d.moved || cancel) return;
-    const g = this.geom(d.page), pos = posOf(d.b.left, d.b.top, g.G, g.pageW || 1);
+    const g = this.desk(d.page), pos = posOf(d.b.left, d.b.top, g.G, g.pageW || 1);
     if (d.b.kind === 'note') d.b.m.pos = pos; else if (d.b.ask) d.b.ask.pos = pos;
     this.reframe();
     this.renderMarks(d.page);
@@ -1782,7 +1812,7 @@ export default class PaperView extends React.Component {
   // The @ menu in a note (as in a follow-up field, DocEditor followMention): open while an `@word` stands before the caret.
   noteMention(ta, m, page) {
     const found = typeof this.props.mentionItems === 'function' ? mentionAt(ta.value, ta.selectionStart) : null;
-    if (found) this.setState({ mention: { markId: m.id, page, query: found.query, start: found.start, anchor: fieldCaret(ta) }, mentionIdx: 0 });
+    if (found) this.setState({ mention: { markId: m.id, page, query: found.query, start: found.start, anchor: fieldCaret(ta, undefined, this.boxScale(page)) }, mentionIdx: 0 });
     else this.closeMention();
   }
   closeMention() { if (this.state.mention) this.setState({ mention: null }); }
