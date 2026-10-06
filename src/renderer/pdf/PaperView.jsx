@@ -270,6 +270,8 @@ export default class PaperView extends React.Component {
     clearTimeout(this.pinchTimer);
     if (this.scrollRaf) cancelAnimationFrame(this.scrollRaf);
     if (this.state.mention && this.props.onMentionOpen) this.props.onMentionOpen(false);
+    // Where the paper was read to (MATH-16): its tab, brought back to the front, opens there again (props.view).
+    if (host && this.inner && this.props.onView) this.props.onView({ zoom: this.zoom, at: host.scrollHeight ? host.scrollTop / host.scrollHeight : 0, left: host.scrollLeft });
     this.flushSave(this.props.onMarksChange);
     this.gen += 1;
     this.cancelLayout();
@@ -325,7 +327,11 @@ export default class PaperView extends React.Component {
       if (gen !== this.gen) { destroyDoc(doc); return; }
       this.doc = doc;
       this.setState({ note: '' });
+      const view = this.props.target || this.props.initialSection ? null : this.props.view;
+      if (view && view.zoom > 0) this.zoom = view.zoom;
       await this.layout(null);
+      const h = this.host.current;
+      if (view && h && gen === this.gen) { h.scrollTop = view.at * h.scrollHeight; h.scrollLeft = view.left || 0; }
     } catch (err) {
       if (gen !== this.gen) return;
       this.setState({ note: 'Could not open the paper — ' + ((err && err.message) || err) });

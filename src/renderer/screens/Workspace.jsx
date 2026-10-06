@@ -825,13 +825,14 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   }, []);
 
   // Anything that is not a note opens on the Stage: a pdf, a page, a repository's address, a file of any kind.
-  const openItem = React.useCallback((row) => {
+  // `{ newTab: true }` (⌘-click in the library, MATH-16): a tab of its own even when one already shows it.
+  const openItem = React.useCallback((row, options = {}) => {
     if (!row || row.id === 'chat') return;
     if (row.type === 'workspace') { showWs(); return; }
     if (isNote(row)) { openTab(row.id, row.name); return; }
     if (!onStage(row) || !stageRef.current) return;
     showRight('stage');
-    stageRef.current.openRow(row);
+    stageRef.current.openRow(row, '', '', { newTab: !!options.newTab });
   }, [openTab, showWs, showRight]);
   // A link in a document goes to the Stage too, never to the default browser; `{ newTab: true }` (⌘-click), in a tab of its own.
   const openLink = React.useCallback((href, options) => {
@@ -850,7 +851,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   React.useEffect(() => { if (initialStage && stageRef.current) openItem(initialStage); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sandboxes = useSandboxes();
-  const onRowClick = (row) => {
+  const onRowClick = (row, event) => {
     if (row.type === 'child') { selectTopic(row.id); return; }
     if (row.type === 'archive') { openTab(`${ARCHIVE_TAB}${row.file}`, row.name); return; }
     // A GitHub repository opens its live preview in the Stage, its sandbox's shell in the terminal pane, or both (the
@@ -863,7 +864,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     if (click === 'both') { sandboxes.openTerminal(sandbox.run, { show: false }); sandboxes.open(sandbox.run); return; }
     if (click === 'start') { sandboxes.openBuild(row); sandboxes.act(sandbox.run, () => api.startSandbox(row.id)); return; }
     if (click === 'details') { sandboxes.openBuild(row); return; }
-    openItem(row);
+    openItem(row, { newTab: !!event && (event.metaKey || event.ctrlKey) });
   };
 
   /* ------------------------------------------------------- the pane beside */

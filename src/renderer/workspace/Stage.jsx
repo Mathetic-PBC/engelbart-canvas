@@ -507,10 +507,10 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   // `find`: a passage to find there once it is ready, given to the new tab or to the one that comes forward; `to`, where its section ends.
   // `newTab` (a ⌘-click on a link): a tab of its own, even when one shows it already. `sections`: an @discover guide's for
   // the paper, which come with the passage and replace the tab's (model/stage.js withPassage).
-  const claim = (key, find = '', to = '', { newTab = false, sections = null } = {}) => {
+  const claim = (key, find = '', to = '', { newTab = false, sections = null, also = '' } = {}) => {
     const current = tabsRef.current;
     const front = Math.max(0, current.findIndex((t) => t.id === (frontRef.current || current[0].id)));
-    const place = placeTab(current, front, key, { newTab });
+    const place = placeTab(current, front, key, { newTab, also });
     if (place.focus != null) {
       const id = current[place.focus].id;
       frontRef.current = id;
@@ -617,7 +617,9 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   // Opened from elsewhere — the sidebar, an @mention, a link in the document or the terminal, the all-projects screen.
   const openRow = (row, find = '', to = '', options = {}) => {
     if (isGithubSignIn(row.url) && !row.path) { quiet(api.openExternal(row.url)); return; }
-    const id = claim(`i:${row.id}`, find, to, options);
+    // Open already (MATH-16): its tab comes to the front as it was left, where it was read to; ⌘-click opens another.
+    const where = row.path ? fileUrl(row.path) : row.url || '', also = where && addressKey(where) ? `l:${addressKey(where)}` : '';
+    const id = claim(`i:${row.id}`, find, to, { ...options, also });
     if (id) showRow(id, row);
   };
   // A link with a passage to a library row opens the row (its ink shows); any link opens its address without the passage.
@@ -1232,6 +1234,8 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
               target={tab.pendingFind || null}
               targetTo={tab.pendingTo || null}
               initialSection={sectionsOn ? tab.sections[tab.activeSection] || null : null}
+              view={pdf.view || null}
+              onView={(view) => { const { seq } = pdf; update(tab.id, (t) => (t.pdf && t.pdf.seq === seq ? { ...t, pdf: { ...t.pdf, view } } : t)); }}
               onTarget={(text, result) => landed(tab.id, text, result)}
               onFind={(result) => { if (keys.current && keys.current.finding) setMatches(result); }}
               library={library}
