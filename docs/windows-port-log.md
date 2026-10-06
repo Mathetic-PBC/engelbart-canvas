@@ -5,6 +5,12 @@ Newest status first; the sections below are kept current.
 
 ## Where things stand
 
+- 2026-10-06, run 10 (86755ab): macOS passed (1020, 1019 pass, 1 skip); Windows 1 failure, new and intermittent
+  (it passed in runs 8 and 9): build.test.cjs's restored project kept its Build's worktree at the old folder. On
+  Windows `git worktree move` renames a folder, which fails while any program has a file in it open (a virus scan of
+  what the Build just wrote, a process just stopped). `build/git.cjs` moveWorktree now tries again for up to 5 s on
+  Windows (once on the Mac, as before).
+
 - 2026-10-06, run 9 (bc06f3c, with f2d0ac0): macOS passed (1020 tests, 1019 pass, the 1 bundled-Git skip); Windows
   1 failure, the one seen in run 7 and not in run 8: run-step's "Engelbart's processes" test gives a desktop app 0.4 s
   to prove it stays up, and expects `echo bye` to have exited within it; Git Bash's login shell sometimes takes longer
@@ -175,6 +181,7 @@ modes). Expectations written with the platform's separator (`path.join`, `path.s
 | 99c752e | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37423625799 | ✗ 1 test | ✗ 2 tests + build-git file timeout | ✗ | Windows stop fixed; "logout" from `exit` in a login shell; Mac fix not in this run |
 | 98c688e | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37425057114 | ✓ | ✓ installer, smoke | ✗ (allowed) | first green run for both |
 | bc06f3c | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37426600854 | ✓ | ✗ 1 test | ✗ (allowed) | f2d0ac0 brought in; Git Bash's login shell slower than run-step's 0.4 s app window |
+| 86755ab | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37427843412 | ✓ | ✗ 1 test | ✗ (allowed) | worktree move refused on Windows (a file open in it), intermittent |
 
 ## Needs a decision
 

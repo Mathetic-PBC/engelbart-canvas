@@ -119,7 +119,14 @@ function createGit({ gitPath = () => 'git', run = execFile, environment = proces
   /** A worktree moved to `to` (which must not exist yet), git's record of it with it: its project came back from the trash under another folder name. */
   async function moveWorktree(repo, from, to) {
     fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o700 });
-    await must(repo, ['worktree', 'move', from, to], { timeout: LONG_MS });
+    // Windows (2026-10-06): a folder is not renamed while any program has a file in it open (a virus scan of what was
+    // just written, a process just stopped), so there the move is tried again for a few seconds.
+    for (let tries = process.platform === 'win32' ? 10 : 1; ; tries -= 1) {
+      try { await must(repo, ['worktree', 'move', from, to], { timeout: LONG_MS }); return; } catch (error) {
+        if (tries <= 1 || error.code === 'missing') throw error;
+        await new Promise((resolve) => { setTimeout(resolve, 500); });
+      }
+    }
   }
 
   async function deleteBranch(repo, branch) {
