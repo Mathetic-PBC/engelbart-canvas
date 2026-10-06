@@ -34,8 +34,9 @@ export function guideTitle(text, next = null) {
   if (!m) return null;
   if (next != null && ABSTRACT_ONLY_RE.test(String(next).trim())) return null;
   let address = m[2].replace(/#.*$/, '');
-  if (address.startsWith('/') && /%[0-9a-f]{2}/i.test(address)) { try { address = decodeURIComponent(address); } catch { /* as written */ } }
-  if (!/^(?:https?:\/\/\S|\/|file:\/\/)/i.test(address)) return null;
+  // A path on disk (on Windows, C:\…, its colon and backslashes encoded too) is the file's path once decoded.
+  if (/^(?:\/|[a-z](?::|%3A))/i.test(address) && /%[0-9a-f]{2}/i.test(address)) { try { address = decodeURIComponent(address); } catch { /* as written */ } }
+  if (!/^(?:https?:\/\/\S|\/|[a-z]:\\|file:\/\/)/i.test(address)) return null;
   const title = m[1].replace(/\s+/g, ' ').trim().slice(0, MAX_NAME).trim();
   return title ? { title, address } : null;
 }

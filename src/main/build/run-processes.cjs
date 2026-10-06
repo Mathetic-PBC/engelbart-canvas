@@ -10,8 +10,8 @@
 // A UI's port is a free one on this Mac, found at each start.
 //
 // Windows (2026-10-05, docs/windows-port.md) has no process groups: a process and everything it started (its tree) are
-// stopped with `taskkill /T /F`, each descendant named (/T alone left npm's server running on CI), and what only needs ps
-// or lsof (a leftover after a crash, an app's window to the front) is skipped.
+// stopped with `taskkill /T /F`, each descendant named (found through Git Bash's ps too: /T alone left npm's server
+// running on CI), and what only needs ps or lsof (a leftover after a crash, an app's window to the front) is skipped.
 
 const fs = require('node:fs');
 const net = require('node:net');
@@ -70,13 +70,31 @@ function processParents({ run = execFile } = {}) {
 }
 
 /**
- * On Windows: `pid` and every process it started, stopped. Its descendants are listed first and each named to taskkill,
- * as /T alone left some running (npm's server, started through Git Bash). → when taskkill has finished
+ * On Windows: Git Bash's own processes, from its ps (it knows their parents when Windows doesn't: its exec starts a new
+ * Windows process and the one that started it exits). `shell`: Git Bash's bin\bash.exe. → [[pid, parent pid, Windows pid]]
  */
-async function killTree(pid, { run = execFile } = {}) {
-  const pairs = await processParents({ run });
+function gitBashProcesses(shell, { run = execFile } = {}) {
+  const ps = path.win32.join(path.win32.dirname(shell), '..', 'usr', 'bin', 'ps.exe');
+  return new Promise((resolve) => run(ps, ['-e'], { timeout: 10_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
+    resolve(error ? [] : String(stdout || '').split(/\r?\n/).map((line) => /^\s*[A-Z]?\s*(\d+)\s+(\d+)\s+\d+\s+(\d+)\s/.exec(line)).filter(Boolean).map((m) => m.slice(1, 4).map(Number)));
+  }));
+}
+
+/**
+ * On Windows: `pid` and every process it started, stopped. Its descendants are listed first, through Windows' parents and
+ * Git Bash's (`shell`), and each named to taskkill: /T alone, which follows Windows' parents only, left npm's server
+ * running when Git Bash had started npm. → when taskkill has finished
+ */
+async function killTree(pid, { run = execFile, shell = null } = {}) {
+  const [pairs, bash] = await Promise.all([processParents({ run }), shell ? gitBashProcesses(shell, { run }) : []]);
   const tree = [pid];
-  for (let i = 0; i < tree.length; i += 1) for (const [child, parent] of pairs) if (parent === tree[i] && child !== parent && !tree.includes(child)) tree.push(child);
+  const own = [];
+  for (let size = -1; size !== tree.length + own.length;) {
+    size = tree.length + own.length;
+    for (let i = 0; i < tree.length; i += 1) for (const [child, parent] of pairs) if (parent === tree[i] && child !== parent && !tree.includes(child)) tree.push(child);
+    for (const [id, , winpid] of bash) if (tree.includes(winpid) && !own.includes(id)) own.push(id);
+    for (let i = 0; i < own.length; i += 1) for (const [id, parent, winpid] of bash) if (parent === own[i] && !own.includes(id)) { own.push(id); if (!tree.includes(winpid)) tree.push(winpid); }
+  }
   const args = ['/T', '/F', ...tree.flatMap((each) => ['/PID', String(each)])];
   await new Promise((resolve) => run('taskkill', args, { timeout: 10_000, windowsHide: true }, () => resolve()));
 }
@@ -145,7 +163,7 @@ function createProcesses({ environment = process.env, extraEnvironment = () => (
     owned.delete(key);
     if (!record.running) return false;
     if (platform === 'win32') { // its tree at once: once it has exited, its pid may be another process's
-      if (record.pid) await killTree(record.pid, { run });
+      if (record.pid) await killTree(record.pid, { run, shell });
       await Promise.race([record.exited, pause(STOP_WAIT_MS)]);
       return true;
     }

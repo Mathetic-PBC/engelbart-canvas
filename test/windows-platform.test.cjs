@@ -129,7 +129,25 @@ test('processes on Windows: stopped with their tree (each descendant named) by t
   assert.equal(await stopLeftover(4242, temp(), { run, platform: 'win32' }), false);
   assert.equal(ran.length, 0, 'neither ps nor lsof ran');
 
+  // Git Bash started npm: its exec left npm's bash a Windows process whose parent has gone (9256). Git Bash's ps knows it.
+  ran.length = 0;
+  const windowsParents = '7048 7700\r\n4392 7048\r\n3532 9256\r\n2136 3532\r\n5572 2136\r\n7532 5572\r\n7180 7532\r\n9999 1\r\n';
+  const gitBashPs = [
+    '      PID    PPID    PGID     WINPID   TTY         UID    STIME COMMAND',
+    '      100       1     100       4392  ?         197108 05:20:01 /usr/bin/bash',
+    '      101     100     100       3532  ?         197108 05:20:02 /usr/bin/bash',
+    'I     102     101     100       2136  ?         197108 05:20:02 /usr/bin/bash',
+    '      200       1     200       9999  ?         197108 05:20:02 /usr/bin/bash',
+  ].join('\r\n');
+  const both = (file, args, options, done) => { ran.push([file, ...args]); setImmediate(() => done(null, file === 'powershell.exe' ? windowsParents : file.endsWith('ps.exe') ? gitBashPs : '')); return {}; };
+  await killTree(7048, { run: both, shell: 'C:\\Program Files\\Git\\bin\\bash.exe' });
+  assert.ok(ran.some(([file, ...args]) => file === 'C:\\Program Files\\Git\\usr\\bin\\ps.exe' && args.join(' ') === '-e'), JSON.stringify(ran));
+  const killed = ran.find(([file]) => file === 'taskkill').slice(1);
+  assert.deepEqual(killed.slice(0, 2), ['/T', '/F']);
+  assert.deepEqual(killed.filter((arg, i) => killed[i - 1] === '/PID').map(Number).sort((x, y) => x - y), [2136, 3532, 4392, 5572, 7048, 7180, 7532], 'npm\'s chain and its server; not 9999');
+
   // No listing (PowerShell failed): the pid alone, with /T.
+  ran.length = 0;
   const failing = (file, args, options, done) => { ran.push([file, ...args]); setImmediate(() => done(file === 'powershell.exe' ? new Error('no') : null, '')); return {}; };
   await killTree(4242, { run: failing });
   assert.deepEqual(ran.slice(1), [['taskkill', '/T', '/F', '/PID', '4242']]);

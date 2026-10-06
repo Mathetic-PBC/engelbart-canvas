@@ -5,6 +5,15 @@ Newest status first; the sections below are kept current.
 
 ## Where things stand
 
+- 2026-10-05, step 7 continued: run 4 (dd1ac32): macOS 1 failure (the same page test, 4th time: its message now shows
+  python3's server printed nothing in 8 s), Windows 4 failures + 3 file timeouts. Windows: the process listing showed
+  why npm's server survives: Git Bash's exec starts a new Windows process and the one that started it exits, so npm's
+  bash has a parent that is gone and neither /T nor a walk of Windows' parents reaches it. The stop now also walks
+  Git Bash's own process table (`usr\bin\ps.exe -e`: pid, parent, Windows pid). And `guideTitle` reads a Windows
+  path (`C:\…`, encoded) as a paper's address, as `splitTarget` does. Mac, a new approach: http.server looks its
+  address's name up (`socket.getfqdn`) before it listens, which the import-only warm-up never did; CI now times that
+  lookup and the test's own command once before the tests (it warms them, and the log says which was slow).
+
 - 2026-10-05, step 7 continued: run 3 (ac2fc2f) left macOS 1 failure (run-step's page test: nothing answered within
   8 s, CI only; its message now prints what the task and the server saw) and Windows 22 failed plus 2 files timed out.
   Causes and fixes, pushed as run 4: CRLF in the tests' repositories (the app's git drops GIT_* variables, so
@@ -56,7 +65,8 @@ Newest status first; the sections below are kept current.
   `npm install -g @openai/codex`, never runs xcode-select or brew on Windows, and rolls Claude Code back by copy.
   `manager.cjs` joins ENGELBART_AGENT_PATH with `path.delimiter`.
 - Step 5, processes (`build/run-processes.cjs`): `taskkill /T /F /PID` on Windows, every descendant named (listed
-  first with PowerShell's `Get-CimInstance Win32_Process`: /T alone left npm's server running on CI); `groupPids` and `stopLeftover`
+  first with PowerShell's `Get-CimInstance Win32_Process` and Git Bash's `ps -e`, whose parents survive its exec:
+  /T alone left npm's server running on CI); `groupPids` and `stopLeftover`
   (ps, lsof) skipped there. `build/manager.cjs` copies node_modules with `fs.promises.cp` on Windows.
 - Step 6, paths: `store/projects.cjs` Stage addresses use `path.isAbsolute`. `context/summarizer.cjs` links Codex's
   auth.json with a hard link on Windows (a file, so no junction; a symlink needs Developer Mode), else a copy.
@@ -112,6 +122,7 @@ modes). Expectations written with the platform's separator (`path.join`, `path.s
 | 6f65820 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37413145769 | ✗ 2 tests | ✗ 84 tests | ✗ 7 tests | baseline code; Mac failures are CI-only (shallow clone, python3 warm-up) |
 | 324fcbe | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37414993723 | ✗ 1 test | ✗ 64 tests | ✗ | steps 2–6, 8; run-step's page test still slow on the Mac (login shell's python3) |
 | ac2fc2f | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37416228818 | ✗ 1 test | ✗ 22 tests + 2 file timeouts | ✗ | step 7; the warm-up showed both python3s are /usr/local/bin's, so the Mac failure is something else; Windows: CRLF, npm's server outliving taskkill /T, fixtures |
+| dd1ac32 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37418091552 | ✗ 1 test | ✗ 4 tests + 3 file timeouts | ✗ | CRLF and fixtures fixed; npm's server still outlives stop (its bash's Windows parent is gone); guideTitle and C:\ |
 
 ## Needs a decision
 
