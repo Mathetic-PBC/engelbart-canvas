@@ -7,16 +7,22 @@ import { findWorkspaces } from './nav.js';
 /**
  * The sidebar's sections, in order (Claude Design "Sidebar.dc.html", 2026-09-23): Notes, Websites, GitHub, Files and
  * Sub-Workspaces. Files is everything else (papers, folders, pages on disk, data, images: "files should be de facto other").
+ * `add` is what the + in a section's header does (MATH-44, 2026-10-06): 'note' and 'workspace' make one here at once,
+ * 'disk' opens the system picker, 'github' the repository picker and 'link' a field for an address or a path. Archived
+ * has none: a version is made by Clear.
  */
 export const RAIL_SECTIONS = [
-  { key: 'Notes', label: 'Notes' },
-  { key: 'Websites', label: 'Websites' },
-  { key: 'GitHub', label: 'GitHub' },
-  { key: 'Files', label: 'Files' },
-  { key: 'Workspaces', label: 'Sub-Workspaces' },
+  { key: 'Notes', label: 'Notes', add: 'note' },
+  { key: 'Websites', label: 'Websites', add: 'link' },
+  { key: 'GitHub', label: 'GitHub', add: 'github' },
+  { key: 'Files', label: 'Files', add: 'disk' },
+  { key: 'Workspaces', label: 'Sub-Workspaces', add: 'workspace' },
   // This workspace's earlier versions, one per Clear (2026-09-25).
   { key: 'Archived', label: 'Archived' },
 ];
+
+/** The section +'s that open a panel under the header; the others add at once and show one only to say what failed. */
+export const ADD_PANELS = new Set(['link', 'github']);
 
 /** Which section a rail row sorts into: a repository by its tag whether it is an address or a clone. */
 export function sectionOf(row) {

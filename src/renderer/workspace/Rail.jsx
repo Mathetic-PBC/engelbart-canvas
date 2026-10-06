@@ -3,9 +3,10 @@ import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
 import { KIND, kindOf, KindGlyph as Glyph } from '../ui/Icons.jsx';
 import { isUntitled } from '../model/names.js';
-import { looksAddable, railSections, RAIL_SECTIONS, searchRows } from '../model/rail.js';
+import { ADD_PANELS, looksAddable, railSections, RAIL_SECTIONS, searchRows } from '../model/rail.js';
 import { ago, findWorkspaces } from '../model/nav.js';
 import GithubPane from './GithubPane.jsx';
+import { useAddRun } from './useAddRun.js';
 import { usePlaced } from '../ui/usePlaced.js';
 import { useBodies } from './useBodies.js';
 import { carriesDrop, readDrop } from '../model/drop.js';
@@ -21,7 +22,7 @@ import notePng from '../../../design/assets/yellow-sticky-note.png';
 // siblings, "+ New"; a double-click renames); the library search, which finds anything the library
 // holds and brings it in; this workspace's rows under quiet section labels — Notes, Websites, GitHub, Files,
 // Sub-Workspaces, Archived (model/rail.js railSections; always shown, closed until opened, the first carries Expand
-// all) — where a hover peeks, a
+// all; each but Archived has a + that adds its own kind, MATH-44) — where a hover peeks, a
 // double-click renames and a drag onto the trash takes one out of this workspace; and "+ Add context", whose menu makes a
 // Note or a Sub-Workspace here or adds something new to the library and to this workspace; files, a picture or a link
 // dropped on these rows (MATH-19, 2026-10-05) are added and linked the same way. At the bottom, the workspace
@@ -328,9 +329,19 @@ function RailRow({ row, flash, faded, onClick, onRenameStart, onRename, onRename
   );
 }
 
+// A section header's + (MATH-44): a plain cross, in the minus's line weight.
+const SECTION_PLUS = (
+  <svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" style={{ flex: 'none', display: 'block' }}>
+    <path d="M6 1.5v9 M1.5 6h9" />
+  </svg>
+);
+
 // One of the sidebar's sections (Sidebar.dc.html): a quiet grey label led by a › that darkens while the pointer is on it
 // and turns down while the section is open; a click folds it. The first section carries "Collapse all" / "Expand all".
-function RailSection({ section, open, onToggle, all, children }) {
+// A section with `onAdd` has a + at the header's right (MATH-44, 2026-10-06), before "Expand all": grey, dark under the
+// pointer or while its panel is open (`panelOpen`); a click adds that kind of thing (Rail's addTo), given the header's rect
+// to hang a panel from, and never folds the section.
+function RailSection({ section, open, onToggle, all, onAdd, panelOpen = false, children }) {
   const [hover, setHover] = React.useState(false);
   return (
     <div data-rail-section={section.key} style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -345,9 +356,22 @@ function RailSection({ section, open, onToggle, all, children }) {
           style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6, boxSizing: 'border-box', padding: '10px 10px 4px', border: 0, background: 'transparent', textAlign: 'left', cursor: 'pointer', color: '#8f8f8f', transition: 'color 120ms' }}
         >
           <span aria-hidden="true" style={{ flex: 'none', width: 10, display: 'inline-flex', justifyContent: 'center', font: '400 12px/1 var(--font-sans)', opacity: hover ? 1 : 0.7, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 140ms, opacity 120ms' }}>›</span>
-          <span style={{ font: '500 12.5px/1.3 var(--font-sans)' }}>{section.label}</span>
+          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '500 12.5px/1.3 var(--font-sans)' }}>{section.label}</span>
         </button>
-        {all && <button type="button" data-rail-fold-all="1" onClick={all.onClick} style={{ flex: 'none', margin: '10px 10px 4px 0', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', font: '400 11.5px/1.4 var(--font-sans)', color: '#171717' }}>{all.label}</button>}
+        {onAdd && (
+          <button
+            type="button"
+            className="hov-ink"
+            data-rail-section-add={section.key}
+            aria-label={`Add to ${section.label}`}
+            aria-expanded={panelOpen || undefined}
+            onClick={(event) => { event.stopPropagation(); onAdd(rectOf(event.currentTarget.parentElement)); }}
+            style={{ flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, margin: all ? '10px 8px 4px 0' : '10px 10px 4px 0', padding: 0, border: 0, borderRadius: 4, background: 'transparent', cursor: 'pointer', color: panelOpen ? '#171717' : '#8f8f8f', transition: 'color 120ms' }}
+          >
+            {SECTION_PLUS}
+          </button>
+        )}
+        {all && <button type="button" data-rail-fold-all="1" onClick={all.onClick} style={{ flex: 'none', margin: '10px 10px 4px 0', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', font: '400 11.5px/1.4 var(--font-sans)', color: '#171717', whiteSpace: 'nowrap' }}>{all.label}</button>}
       </div>
       {open && (section.rows.length
         ? <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>{children}</div>
@@ -532,6 +556,55 @@ const CIRCLE_PLUS = (
   </svg>
 );
 
+// The pieces "+ Add context" shares with the Websites and GitHub +'s (MATH-44): what went wrong, the field for a link or
+// a path, its "Add to library", and the GitHub view.
+
+function AddError({ children, style }) {
+  return <div data-add-error="1" style={{ padding: '6px 2px 0', font: '12px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere', ...style }}>{children}</div>;
+}
+
+/** "Upload URL or path": Enter adds what is typed (`onEnter`), Escape closes (`onEscape`); red while it went wrong. */
+function LinkField({ inputRef, value, busy, error, onChange, onEnter, onEscape }) {
+  const border = error ? '#e70022' : value ? '#c9c9c9' : '#eaeaea';
+  return (
+    <div className="rail-field" style={{ display: 'flex', alignItems: 'center', boxSizing: 'border-box', padding: '0 10px', marginBottom: 4, background: '#fafafa', border: `1px solid ${border}`, borderRadius: 6, transition: 'border-color 120ms' }}>
+      <input
+        ref={inputRef}
+        value={value}
+        readOnly={busy}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') { event.preventDefault(); onEnter(); }
+          else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onEscape(); }
+        }}
+        placeholder="Upload URL or path"
+        aria-label="Link or path"
+        spellCheck={false}
+        style={{ flex: 1, minWidth: 0, padding: '6px 0', border: 0, background: 'transparent', font: '14px/1.5 var(--font-sans)', color: '#171717', opacity: busy ? 0.5 : 1 }}
+      />
+    </div>
+  );
+}
+
+/** The field's "Add to library", at the right; `disabled` (nothing typed yet) shows faint. */
+function LinkAddButton({ busy, disabled = false, onClick }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '8px 0 0' }}>
+      <button type="button" className="hov-dim" disabled={busy || disabled} onClick={onClick} style={{ padding: '7px 12px', border: 0, borderRadius: 6, background: '#171717', cursor: 'pointer', font: '500 12.5px/1 var(--font-sans)', color: '#fff', ...(disabled ? { opacity: 0.35, cursor: 'default' } : {}) }}>Add to library</button>
+    </div>
+  );
+}
+
+/** Signing in to GitHub, then its repositories (GithubPane), with what went wrong adding the one picked. */
+function GithubView({ library, inRail, busy, error, onBack, onPick }) {
+  return (
+    <>
+      <GithubPane library={library} inRail={inRail} busy={busy} onBack={onBack} onPick={onPick} />
+      {error && <AddError>{error}</AddError>}
+    </>
+  );
+}
+
 export function AddToLibrary({ projectId = null, onAdd, onPickDisk, onNewNote, onNewChild, onPickRepo, onSearchPick, library, inRail, onOpenChange, shut }) {
   const [open, setOpen] = React.useState(false);
   const [q, setQ] = React.useState(''); // the search at the top of the menu
@@ -540,8 +613,7 @@ export function AddToLibrary({ projectId = null, onAdd, onPickDisk, onNewNote, o
   const searchRef = React.useRef(null);
   const [view, setView] = React.useState('menu'); // 'menu' | 'github' (GithubPane: signing in, then the repositories)
   const [value, setValue] = React.useState('');
-  const [error, setError] = React.useState('');
-  const [busy, setBusy] = React.useState(false);
+  const { busy, error, setError, run } = useAddRun(() => hide()); // done: the menu closes
   const [anchor, setAnchor] = React.useState(null);
   const rowRef = React.useRef(null);
   const menuRef = React.useRef(null);
@@ -562,7 +634,7 @@ export function AddToLibrary({ projectId = null, onAdd, onPickDisk, onNewNote, o
     return () => clearTimeout(timer);
   }, [open, anchor]);
 
-  const hide = React.useCallback(() => { setOpen(false); setValue(''); setError(''); setView('menu'); setQ(''); setIdx(0); }, []);
+  const hide = React.useCallback(() => { setOpen(false); setValue(''); setError(''); setView('menu'); setQ(''); setIdx(0); }, [setError]);
   React.useEffect(() => { if (shut && open && !live.current.busy) hide(); }, [shut]); // eslint-disable-line react-hooks/exhaustive-deps
   const show = () => {
     if (open) return;
@@ -580,19 +652,6 @@ export function AddToLibrary({ projectId = null, onAdd, onPickDisk, onNewNote, o
     return () => document.removeEventListener('mousedown', away, true);
   }, [open, hide]);
 
-  const run = async (work) => {
-    setBusy(true);
-    setError('');
-    try {
-      const problems = await work();
-      if (problems && problems.length) setError(problems.join(' · '));
-      else hide();
-    } catch (failure) {
-      setError(errorMessage(failure));
-    } finally {
-      setBusy(false);
-    }
-  };
   const commit = () => { const input = value.trim(); if (input && !busy) void run(async () => { await onAdd(input); return []; }); };
   const make = (work) => { if (!busy) void run(async () => { await work(); return []; }); };
   const fromGithub = () => { setError(''); setView('github'); };
@@ -625,7 +684,6 @@ export function AddToLibrary({ projectId = null, onAdd, onPickDisk, onNewNote, o
     else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (q) { setQ(''); setIdx(0); } else hide(); }
   };
   const searchProblem = (answer && answer.error) || '';
-  const border = error ? '#e70022' : value ? '#c9c9c9' : '#eaeaea';
   const menuRow = { display: 'flex', alignItems: 'center', gap: 12, width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: 0, borderRadius: 6, background: 'transparent', textAlign: 'left', cursor: 'pointer', transition: 'background 120ms' };
   const menuText = { flex: 1, minWidth: 0, font: '14px/1.5 var(--font-sans)', color: '#171717' };
   return (
@@ -637,10 +695,7 @@ export function AddToLibrary({ projectId = null, onAdd, onPickDisk, onNewNote, o
       {open && anchor && (
         <Hanging anchor={anchor} width={anchor.width} gap={4} panelRef={menuRef} data-rail-add-menu="1" style={{ padding: 10 }}>
           {view === 'github' ? (
-            <>
-              <GithubPane library={library} inRail={inRail} busy={busy} onBack={() => { setView('menu'); setError(''); }} onPick={(entry) => make(() => onPickRepo(entry))} />
-              {error && <div data-add-error="1" style={{ padding: '6px 2px 0', font: '12px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere' }}>{error}</div>}
-            </>
+            <GithubView library={library} inRail={inRail} busy={busy} error={error} onBack={() => { setView('menu'); setError(''); }} onPick={(entry) => make(() => onPickRepo(entry))} />
           ) : (<>
           <div className="rail-field" data-add-search="1" style={{ display: 'flex', alignItems: 'center', gap: 8, boxSizing: 'border-box', padding: '0 10px', marginBottom: 6, border: `1px solid ${q ? '#c9c9c9' : '#eaeaea'}`, borderRadius: 6, background: '#fff', transition: 'border-color 120ms' }}>
             <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#171717" strokeWidth="2.6" strokeLinecap="round" style={{ flex: 'none' }}><circle cx="10" cy="10" r="6.5" /><line x1="15" y1="15" x2="21" y2="21" /></svg>
@@ -667,7 +722,7 @@ export function AddToLibrary({ projectId = null, onAdd, onPickDisk, onNewNote, o
                   : <span style={{ flex: 'none', font: '500 10px/1 var(--font-sans)', letterSpacing: '1.2px', textTransform: 'uppercase', color: '#8f8f8f' }}>{result.tag}</span>}
               </button>
             ))}
-            {(searchProblem || error) && <div data-add-error="1" style={{ padding: '6px 2px 0', font: '12px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere' }}>{searchProblem || error}</div>}
+            {(searchProblem || error) && <AddError>{searchProblem || error}</AddError>}
           </>) : (<>
           {onNewNote && (
             <button type="button" className="hov-wash" data-new="note" disabled={busy} onClick={() => make(onNewNote)} style={menuRow}>
@@ -682,23 +737,8 @@ export function AddToLibrary({ projectId = null, onAdd, onPickDisk, onNewNote, o
             </button>
           )}
           {(onNewNote || onNewChild) && <div style={{ height: 1, margin: '6px 0 8px', background: '#eaeaea' }} />}
-          <div className="rail-field" style={{ display: 'flex', alignItems: 'center', boxSizing: 'border-box', padding: '0 10px', marginBottom: 4, background: '#fafafa', border: `1px solid ${border}`, borderRadius: 6, transition: 'border-color 120ms' }}>
-            <input
-              ref={fieldRef}
-              value={value}
-              readOnly={busy}
-              onChange={(event) => { setValue(event.target.value); setError(''); }}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') { event.preventDefault(); commit(); }
-                else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); hide(); }
-              }}
-              placeholder="Upload URL or path"
-              aria-label="Link or path"
-              spellCheck={false}
-              style={{ flex: 1, minWidth: 0, padding: '6px 0', border: 0, background: 'transparent', font: '14px/1.5 var(--font-sans)', color: '#171717', opacity: busy ? 0.5 : 1 }}
-            />
-          </div>
-          {error && <div data-add-error="1" style={{ padding: '6px 2px 0', font: '12px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere' }}>{error}</div>}
+          <LinkField inputRef={fieldRef} value={value} busy={busy} error={error} onChange={(next) => { setValue(next); setError(''); }} onEnter={commit} onEscape={hide} />
+          {error && <AddError>{error}</AddError>}
           <button type="button" className="hov-wash" disabled={busy} onClick={() => run(onPickDisk)} style={menuRow}>
             <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" style={{ flex: 'none', display: 'block', fill: 'none', stroke: '#171717', strokeWidth: 1.3, strokeLinejoin: 'round' }}><path d="M1.5 4a1 1 0 0 1 1-1h3.5l1.5 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" /></svg>
             <span style={menuText}>Choose from disk…</span>
@@ -707,16 +747,75 @@ export function AddToLibrary({ projectId = null, onAdd, onPickDisk, onNewNote, o
             <span className="glyph-fit" style={{ flex: 'none', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#171717' }}><span style={{ display: 'flex', width: 13, height: 13 }}>{KIND.git.glyph}</span></span>
             <span style={menuText}>Add from GitHub…</span>
           </button>
-          {addable && (
-            <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '8px 0 0' }}>
-              <button type="button" className="hov-dim" disabled={busy} onClick={commit} style={{ padding: '7px 12px', border: 0, borderRadius: 6, background: '#171717', cursor: 'pointer', font: '500 12.5px/1 var(--font-sans)', color: '#fff' }}>Add to library</button>
-            </div>
-          )}
+          {addable && <LinkAddButton busy={busy} onClick={commit} />}
           </>)}
           </>)}
         </Hanging>
       )}
     </div>
+  );
+}
+
+// What a section's + hangs under its header (MATH-44, 2026-10-06): for Websites the field for a link or a path and
+// "Add to library", for GitHub the repository picker, for the others (which add at once) only what went wrong. `at`
+// { key, kind, anchor }; `adding` is the Rail's useAddRun, which closes it once something is added. Escape, a press
+// elsewhere or the search or "+ Add context" opening (`shut`) close it, never while it is adding. The + it hangs from
+// toggles it.
+function SectionPanel({ at, adding, library, inRail, onAddInput, onPickRepo, onClose, shut }) {
+  const { key, kind, anchor } = at;
+  const { busy, error, setError, run } = adding;
+  const [value, setValue] = React.useState('');
+  const panelRef = React.useRef(null);
+  const fieldRef = React.useRef(null);
+  const live = React.useRef(busy);
+  live.current = busy;
+  const close = React.useCallback(() => { if (!live.current) onClose(); }, [onClose]);
+  const was = React.useRef(shut);
+  React.useEffect(() => { if (shut && !was.current) close(); was.current = shut; }, [shut, close]);
+  React.useEffect(() => {
+    const away = (event) => {
+      if (panelRef.current && panelRef.current.contains(event.target)) return;
+      if (event.target.closest && event.target.closest(`[data-rail-section-add="${key}"]`)) return; // its + toggles it
+      close();
+    };
+    // The panel is on top, so Escape is its first, wherever the keyboard is; taken here, so neither an editor nor the
+    // workspace's own Escape (which leaves the workspace) sees it.
+    const escape = (event) => { if (event.key !== 'Escape') return; event.preventDefault(); event.stopPropagation(); close(); };
+    document.addEventListener('mousedown', away, true);
+    document.addEventListener('keydown', escape, true);
+    return () => { document.removeEventListener('mousedown', away, true); document.removeEventListener('keydown', escape, true); };
+  }, [key, close]);
+  // Placed again when what it holds changes its size (GitHub's sign-in state and repositories arrive after it opens),
+  // so near the bottom of the window it moves above the header rather than running off.
+  const [, replace] = React.useReducer((n) => n + 1, 0);
+  React.useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel || typeof ResizeObserver === 'undefined') return undefined;
+    const watch = new ResizeObserver(() => replace());
+    watch.observe(panel);
+    return () => watch.disconnect();
+  }, []);
+  // The field takes the keyboard once the panel shows (it is invisible for the frame it measures itself in).
+  React.useEffect(() => {
+    if (kind !== 'link') return undefined;
+    const timer = setTimeout(() => { if (fieldRef.current) fieldRef.current.focus({ preventScroll: true }); }, 0);
+    return () => clearTimeout(timer);
+  }, [kind]);
+
+  const commit = () => { const input = value.trim(); if (input && !busy) void run(async () => { await onAddInput(input); return []; }); };
+  const pick = (entry) => { if (!busy) void run(async () => { await onPickRepo(entry); return []; }); };
+  return (
+    <Hanging anchor={anchor} width={anchor.width} gap={4} panelRef={panelRef} data-rail-section-panel={key} style={{ padding: 10 }}>
+      {kind === 'github' && <GithubView library={library} inRail={inRail} busy={busy} error={error} onBack={close} onPick={pick} />}
+      {kind === 'link' && (
+        <>
+          <LinkField inputRef={fieldRef} value={value} busy={busy} error={error} onChange={(next) => { setValue(next); setError(''); }} onEnter={commit} onEscape={close} />
+          {error && <AddError>{error}</AddError>}
+          <LinkAddButton busy={busy} disabled={!value.trim()} onClick={commit} />
+        </>
+      )}
+      {!ADD_PANELS.has(kind) && <AddError style={{ padding: '0 2px' }}>{error}</AddError>}
+    </Hanging>
   );
 }
 
@@ -898,7 +997,9 @@ export default function Rail({
   const [dragging, setDragging] = React.useState(null);
   const [overTrash, setOverTrash] = React.useState(false);
   const [dropping, setDropping] = React.useState(false); // files or a link held over the library rows
-  const [menus, setMenus] = React.useState({ search: false, add: false });
+  // What is open over the sidebar, one at a time: the search's list, the "+ Add context" menu, and a section +'s panel
+  // (`section` { key, kind, anchor }, MATH-44; set too while a + that adds at once is at work).
+  const [menus, setMenus] = React.useState({ search: false, add: false, section: null });
   const [opened, setOpened] = useOpen(); // section key → unfolded
   const timer = React.useRef(null);
   const itemRows = rows;
@@ -939,9 +1040,31 @@ export default function Rail({
     api.previewLibraryItem(row.id).then((more) => setPreviews((now) => ({ ...now, [key]: more }))).catch(() => setPreviews((now) => ({ ...now, [key]: {} })));
   }, []);
   React.useEffect(() => { if (peek && peek.row.type !== 'image') preview(peek.row); }, [peek, preview]);
-  const busyMenus = menus.search || menus.add;
+  const busyMenus = menus.search || menus.add || !!menus.section;
   const setSearchOpen = React.useCallback((value) => setMenus((current) => (current.search === value ? current : { ...current, search: value })), []);
   const setAddOpen = React.useCallback((value) => setMenus((current) => (current.add === value ? current : { ...current, add: value })), []);
+
+  /* ------------------------------------------------------- a section's + */
+  // (MATH-44, 2026-10-06) Notes and Sub-Workspaces make one at once, Files opens the system picker; Websites and GitHub
+  // open a panel under the header (SectionPanel). The section opens on the click, so what arrives is seen (the flash
+  // effect above would open it too). One + at work at a time; what went wrong hangs under the header.
+  const closeSection = React.useCallback(() => setMenus((current) => (current.section ? { ...current, section: null } : current)), []);
+  const adding = useAddRun(closeSection);
+  const addWork = { note: onNewNote, workspace: onNewChild, disk: onPickDisk, link: onAddInput, github: onPickRepo };
+  const addTo = (section, anchor) => {
+    if (adding.busy) return;
+    const { key, add: kind } = section;
+    setOpened((now) => (now[key] ? now : { ...now, [key]: true }));
+    adding.setError('');
+    if (ADD_PANELS.has(kind)) {
+      setMenus((current) => (current.section && current.section.key === key ? { ...current, section: null } : { ...current, section: { key, kind, anchor } }));
+      return;
+    }
+    setMenus((current) => ({ ...current, section: { key, kind, anchor } }));
+    const work = addWork[kind];
+    void adding.run(kind === 'disk' ? work : async () => { await work(); return []; }); // the picker returns what it could not add
+  };
+  const sectionPanel = menus.section && (ADD_PANELS.has(menus.section.kind) || adding.error) ? menus.section : null;
 
   /* ----------------------------------------------------------------- trash */
   const dragStart = (row, event) => {
@@ -983,7 +1106,7 @@ export default function Rail({
         <WorkspaceHeader topics={topics} topic={topic} all={allWorkspaces} onOpenDoc={onOpenDoc} onSelectTopic={onSelectTopic} onRenameTopic={onRenameTopic} onAddTopic={onAddTopic} onDeleteTopic={onDeleteTopic} />
         {topic && (
           <div data-screen-label="Library" data-rail-library="1" data-dropping={dropping ? '1' : undefined} onDragOver={libraryDragOver} onDragLeave={libraryDragLeave} onDrop={libraryDrop} style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 2, borderRadius: 8, boxShadow: dropping ? 'inset 0 0 0 2px #c9c9c9' : 'none', transition: 'box-shadow 120ms' }}>
-            <LibrarySearch projectId={projectId} library={library} inRail={inRail} onPick={onSearchPick} previews={previews} onPreview={preview} onOpenHeld={onOpenHeld} onOpenChange={setSearchOpen} shut={menus.add} />
+            <LibrarySearch projectId={projectId} library={library} inRail={inRail} onPick={onSearchPick} previews={previews} onPreview={preview} onOpenHeld={onOpenHeld} onOpenChange={setSearchOpen} shut={menus.add || !!menus.section} />
             {sections.map((section, i) => (
               <RailSection
                 key={section.key}
@@ -991,6 +1114,8 @@ export default function Rail({
                 open={!!opened[section.key]}
                 onToggle={() => setOpened((now) => ({ ...now, [section.key]: !now[section.key] }))}
                 all={i === 0 ? foldAll : null}
+                onAdd={section.add && addWork[section.add] ? (anchor) => addTo(section, anchor) : null}
+                panelOpen={!!sectionPanel && sectionPanel.key === section.key && ADD_PANELS.has(sectionPanel.kind)}
               >
                 {section.rows.map((row) => (
                   <RailRow
@@ -1012,8 +1137,11 @@ export default function Rail({
                 ))}
               </RailSection>
             ))}
-            <AddToLibrary projectId={projectId} onAdd={onAddInput} onPickDisk={onPickDisk} onNewNote={onNewNote} onNewChild={onNewChild} onPickRepo={onPickRepo} onSearchPick={onSearchPick} library={library} inRail={inRail} onOpenChange={setAddOpen} shut={menus.search} />
+            <AddToLibrary projectId={projectId} onAdd={onAddInput} onPickDisk={onPickDisk} onNewNote={onNewNote} onNewChild={onNewChild} onPickRepo={onPickRepo} onSearchPick={onSearchPick} library={library} inRail={inRail} onOpenChange={setAddOpen} shut={menus.search || !!menus.section} />
           </div>
+        )}
+        {topic && sectionPanel && (
+          <SectionPanel key={`${sectionPanel.key}:${sectionPanel.kind}`} at={sectionPanel} adding={adding} library={library} inRail={inRail} onAddInput={onAddInput} onPickRepo={onPickRepo} onClose={closeSection} shut={menus.search || menus.add} />
         )}
       </div>
       <NextRow next={next} places={places} projectId={projectId} onGo={onGoNext} />
