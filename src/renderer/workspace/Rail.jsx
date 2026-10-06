@@ -336,16 +336,23 @@ const SECTION_PLUS = (
   </svg>
 );
 
+// "Expand all" / "Collapse all" as chevrons: apart to open every section, together to fold them.
+const FOLD_ALL = {
+  expand: <path d="M3.5 4.5 6 2l2.5 2.5 M3.5 7.5 6 10l2.5-2.5" />,
+  collapse: <path d="M3.5 2 6 4.5 8.5 2 M3.5 10 6 7.5 8.5 10" />,
+};
+
 // One of the sidebar's sections (Sidebar.dc.html): a quiet grey label led by a › that darkens while the pointer is on it
-// and turns down while the section is open; a click folds it. The first section carries "Collapse all" / "Expand all".
-// A section with `onAdd` has a + at the header's right (MATH-44, 2026-10-06), before "Expand all": grey, dark under the
-// pointer or while its panel is open (`panelOpen`); a click adds that kind of thing (Rail's addTo), given the header's rect
-// to hang a panel from, and never folds the section.
+// and turns down while the section is open; a click folds it, an Option-click folds or opens them all (as Finder does).
+// The first section carries the fold-all chevrons, shown while the pointer is over the library (styles.css .rail-fold-all).
+// A section with `onAdd` has a + at the header's right (MATH-44, 2026-10-06), before the chevrons, shown while the pointer
+// is on the header, it has the keyboard or its panel is open (`panelOpen`; .rail-add); a click adds that kind of thing
+// (Rail's addTo), given the header's rect to hang a panel from, and never folds the section.
 function RailSection({ section, open, onToggle, all, onAdd, panelOpen = false, children }) {
   const [hover, setHover] = React.useState(false);
   return (
     <div data-rail-section={section.key} style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+      <div className="rail-section-head" style={{ display: 'flex', alignItems: 'flex-end' }}>
         <button
           type="button"
           className="hov-ink"
@@ -361,7 +368,7 @@ function RailSection({ section, open, onToggle, all, onAdd, panelOpen = false, c
         {onAdd && (
           <button
             type="button"
-            className="hov-ink"
+            className="hov-ink rail-add"
             data-rail-section-add={section.key}
             aria-label={`Add to ${section.label}`}
             aria-expanded={panelOpen || undefined}
@@ -371,7 +378,11 @@ function RailSection({ section, open, onToggle, all, onAdd, panelOpen = false, c
             {SECTION_PLUS}
           </button>
         )}
-        {all && <button type="button" data-rail-fold-all="1" onClick={all.onClick} style={{ flex: 'none', margin: '10px 10px 4px 0', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', font: '400 11.5px/1.4 var(--font-sans)', color: '#171717', whiteSpace: 'nowrap' }}>{all.label}</button>}
+        {all && (
+          <button type="button" className="hov-ink rail-fold-all" data-rail-fold-all="1" onClick={all.onClick} aria-label={all.label} title={all.label} style={{ flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, margin: '10px 10px 4px 0', padding: 0, border: 0, borderRadius: 4, background: 'transparent', cursor: 'pointer', color: '#8f8f8f' }}>
+            <svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>{all.expand ? FOLD_ALL.expand : FOLD_ALL.collapse}</svg>
+          </button>
+        )}
       </div>
       {open && (section.rows.length
         ? <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>{children}</div>
@@ -1011,7 +1022,8 @@ export default function Rail({
   const itemRows = rows;
   const sections = railSections(rows);
   const anyShut = sections.some((section) => !opened[section.key]);
-  const foldAll = { label: anyShut ? 'Expand all' : 'Collapse all', onClick: () => setOpened(anyShut ? Object.fromEntries(RAIL_SECTIONS.map((section) => [section.key, true])) : {}) };
+  const everyOpen = () => Object.fromEntries(RAIL_SECTIONS.map((section) => [section.key, true]));
+  const foldAll = { label: anyShut ? 'Expand all' : 'Collapse all', expand: anyShut, onClick: () => setOpened(anyShut ? everyOpen() : {}) };
   // A row that just arrived (added from the search or Add context) opens its section, once, so it is seen arriving.
   const shown = React.useRef(null);
   React.useEffect(() => {
@@ -1118,7 +1130,7 @@ export default function Rail({
                 key={section.key}
                 section={section}
                 open={!!opened[section.key]}
-                onToggle={() => setOpened((now) => ({ ...now, [section.key]: !now[section.key] }))}
+                onToggle={(event) => setOpened((now) => (event && event.altKey ? (now[section.key] ? {} : everyOpen()) : { ...now, [section.key]: !now[section.key] }))}
                 all={i === 0 ? foldAll : null}
                 onAdd={section.add && addWork[section.add] ? (anchor) => addTo(section, anchor) : null}
                 panelOpen={!!sectionPanel && sectionPanel.key === section.key && ADD_PANELS.has(sectionPanel.kind)}
