@@ -25,7 +25,7 @@
 import React from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import rough from 'roughjs';
-import { mergeLineRects, placeHighlight, boxSeed, selectionParts, scalePart, partMarks } from './marks.js';
+import { mergeLineRects, placeHighlight, boxSeed, selectionParts, scalePart, partMarks, stackNotes } from './marks.js';
 import { nextFind, createTargetGate, sectionSpans, paintSection, clearFind, FIND, FIND_ACTIVE } from '../model/find.js';
 import { wheelZooms, wheelZoom, createPageCache } from '../model/paper-zoom.js';
 import { mentionAt, libMention, noteHtml, noteParts, noteOffset, LIB_MENTION_RE } from '../model/doc.js';
@@ -124,8 +124,12 @@ function rangeText(range) {
   return out;
 }
 const SVG = 'http://www.w3.org/2000/svg';
-// A note's handwriting, the same in its field and shown as text (so the side arrows meet either where they did).
-const NOTE_LOOK = "pointer-events:auto;padding:0 6px;font:500 17px/1.25 'Caveat',cursive;color:#171717";
+// A note's handwriting, the same in its field and shown as text. Still Caveat (MATH-15, 2026-10-06), set larger: its
+// x-height is small (0.36 em), so at 17px it read smaller than the paper's own text; 20px brings it near the body's,
+// a little tracking keeps its letters apart, and the ink is a touch softer than black. Line height 1.2 (notes are short).
+const NOTE_LOOK = "pointer-events:auto;padding:0 6px;font:500 20px/1.2 'Caveat',cursive;letter-spacing:.2px;color:#1f2633;-webkit-font-smoothing:antialiased;transition:opacity 120ms,background 120ms";
+const NOTE_LINE = 24; // px: one line of a note (20px × 1.2)
+const NOTE_GAP = 8; // px between two notes stacked in a margin
 
 function toBytes(src) {
   // pdf.js transfers the buffer to its worker (detaching it), so hand it a private copy.
@@ -856,7 +860,14 @@ export default class PaperView extends React.Component {
       this.showPending(); sel.removeAllRanges();
       return;
     }
-    if (this.pdfDown && Math.hypot(e.clientX - this.pdfDown.x, e.clientY - this.pdfDown.y) < 4 && !e.target.closest('.pdf-text span')) {
+    const still = this.pdfDown && Math.hypot(e.clientX - this.pdfDown.x, e.clientY - this.pdfDown.y) < 4;
+    // A click on a highlight (MATH-15) shows which note is its; a click anywhere else puts that away.
+    if (still) {
+      const box = wrap.getBoundingClientRect(), hit = this.markAt(Number(wrap.dataset.page), (e.clientX - box.left) / css, (e.clientY - box.top) / css);
+      if (hit) { this.focusMark(hit.id); return; }
+      if (this.focusId) { this.focusMark(null); return; } // the click put the focus away; the next one writes a note
+    }
+    if (still && !e.target.closest('.pdf-text span')) {
       const box = wrap.getBoundingClientRect(), x = (e.clientX - box.left) / css, y = (e.clientY - box.top) / css, page = Number(wrap.dataset.page);
       const m = this.addMark({ page, rects: [], side: null, y, text: '' }, '', { x, y });
       requestAnimationFrame(() => { const ta = this.find1(`textarea[data-mark="${m.id}"]`); if (ta) ta.focus(); });
@@ -956,21 +967,18 @@ export default class PaperView extends React.Component {
     const had = active && active.tagName === 'TEXTAREA' && notes.contains(active) ? { id: active.dataset.mark, a: active.selectionStart, b: active.selectionEnd } : null;
     this.redrawing += 1;
     try { hl.innerHTML = ''; notes.innerHTML = ''; if (ar) ar.innerHTML = ''; } finally { this.redrawing -= 1; }
-    const rc = rough ? rough.svg(hl) : null, ra = rough && ar ? rough.svg(ar) : null;
+    const rc = rough ? rough.svg(hl) : null;
     const list = (this.marks || {})[page] || [];
     for (const b of mergeLineRects(list.flatMap((m) => m.rects || []))) {
       const r = { x: b.x * u, y: b.y * u, w: b.w * u, h: b.h * u };
       if (rc) hl.appendChild(rc.rectangle(r.x, r.y + r.h * 0.15, r.w, r.h * 0.7, { fill: 'rgba(0,112,243,.14)', fillStyle: 'zigzag', fillWeight: 1.2, hachureGap: 2.6, hachureAngle: -4, stroke: 'none', roughness: 0.9, seed: boxSeed(page, b) }));
       else { const d = document.createElementNS(SVG, 'rect'); d.setAttribute('x', r.x); d.setAttribute('y', r.y); d.setAttribute('width', r.w); d.setAttribute('height', r.h); d.setAttribute('fill', 'rgba(0,112,243,.12)'); hl.appendChild(d); }
     }
-    let k = 0;
     for (const m of list) {
-      k++;
-      const rects = m.rects.map((r) => ({ x: r.x * u, y: r.y * u, w: r.w * u, h: r.h * u }));
       const my = m.y * u, pos = m.pos ? { x: m.pos.x * u + G, y: m.pos.y * u } : null;
       if (m.note == null) continue;
       let left, top, width;
-      if (pos) { left = pos.x; top = pos.y - 11; width = Math.min(this.freeWidth(page, pos.x, pos.y, 22), G + pageW * .6); }
+      if (pos) { left = pos.x; top = pos.y - NOTE_LINE / 2; width = Math.min(this.freeWidth(page, pos.x, pos.y, NOTE_LINE), G + pageW * .6); }
       else {
         // Side notes sit in the side space plus the page's own margin; with little or no side
         // space they keep a usable width and stay on the sheet (the box is width + 12px of padding).
@@ -979,28 +987,27 @@ export default class PaperView extends React.Component {
         top = Math.max(0, my - 6);
       }
       const box = `position:absolute;left:${left}px;top:${top}px;width:${width}px;${NOTE_LOOK}`;
+      let el;
       if (this.editing === m.id || !String(m.note).trim() || !this.showsNotes()) {
-        const ta = this.noteField(m, page);
-        ta.style.cssText = `${box};border:0;background:transparent;resize:none;overflow:hidden;outline:none`;
-        notes.appendChild(ta); this.fitNote(ta);
+        el = this.noteField(m, page);
+        el.style.cssText = `${box};border:0;background:transparent;resize:none;overflow:hidden;outline:none;border-radius:4px`;
+        notes.appendChild(el); this.fitNote(el);
       } else {
-        const view = this.noteView(m, page);
-        view.style.cssText = `${box};white-space:pre-wrap;overflow-wrap:break-word;cursor:text`;
-        notes.appendChild(view);
+        el = this.noteView(m, page);
+        el.style.cssText = `${box};white-space:pre-wrap;overflow-wrap:break-word;cursor:text;border-radius:4px`;
+        notes.appendChild(el);
       }
-      if (ra && rects.length && !pos) {
-        const r = rects[0], ax = m.side === 'left' ? G + r.x - 3 : G + r.x + r.w + 3, ay = r.y + r.h / 2;
-        const nx = m.side === 'left' ? left + width - 4 : left + 2, ny = top + 11;
-        const mx = (ax + nx) / 2, my2 = (ay + ny) / 2 + (m.side === 'left' ? -6 : 6);
-        const opts = { stroke: 'rgba(0,112,243,.35)', strokeWidth: 1.1, roughness: 1.4, bowing: 1.2, seed: page * 13 + k };
-        ar.appendChild(ra.curve([[ax, ay], [mx, my2], [nx, ny]], opts));
-        const dx = nx - mx, dy = ny - my2, len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len, hx = nx - ux * 7, hy = ny - uy * 7;
-        ar.appendChild(ra.line(nx, ny, hx - uy * 3.5, hy + ux * 3.5, opts));
-        ar.appendChild(ra.line(nx, ny, hx + uy * 3.5, hy - ux * 3.5, opts));
-      }
+      // No arrow from the highlight any more (MATH-15): a note stands level with its highlight, and pointing at either
+      // marks both (paintFocus). Side notes are stacked so none covers another (stackNotes).
+      el.dataset.noteFor = m.id;
+      el.onmouseenter = () => this.paintFocus(m.id);
+      el.onmouseleave = () => this.paintFocus(this.focusId);
+      if (!pos) { el.dataset.side = m.side === 'left' ? 'left' : 'right'; el.dataset.ideal = String(top); }
     }
-    // Clearing the highlight layer took the pending selection with it.
+    this.stackPage(page);
+    // Clearing the highlight layer took the pending selection with it, and the mark in focus with it.
     this.showPending(page);
+    if (this.focusId) this.paintFocus(this.focusId);
     if (had) {
       const ta = notes.querySelector(`textarea[data-mark="${had.id}"]`);
       if (ta) { ta.focus({ preventScroll: true }); try { ta.setSelectionRange(had.a, had.b); } catch { /* not a text field */ } }
@@ -1011,6 +1018,58 @@ export default class PaperView extends React.Component {
       if (ta && document.activeElement === ta) this.setState({ mention: { ...open, anchor: fieldCaret(ta) } }); else this.closeMention();
     }
   }
+
+  /* ---------------------------------------------------------------- notes in the margins (MATH-15) */
+  // The side notes of a page put where none covers another (./marks.js stackNotes): each level with its highlight when
+  // it can be, below the note above it when not, in the other margin when that keeps it nearer. Run after the page's
+  // notes are drawn and as a note being typed in grows.
+  stackPage(page) {
+    const notes = this.find1(`[data-notes="${page}"]`); if (!notes) return;
+    const { G, pageW, pageH } = this.geom(page), sheetW = pageW + 2 * G, PM = Math.round(pageW * 0.085);
+    const els = [...notes.querySelectorAll('[data-note-for][data-side]')];
+    const at = stackNotes(els.map((el) => ({ id: el.dataset.noteFor, ideal: Number(el.dataset.ideal) || 0, h: el.offsetHeight || NOTE_LINE, side: el.dataset.side })), { pageH: pageH || Infinity, gap: NOTE_GAP });
+    for (const el of els) {
+      const p = at.get(el.dataset.noteFor); if (!p) continue;
+      const width = parseFloat(el.style.width) || Math.max(80, G + PM - 16);
+      el.style.top = `${p.top}px`;
+      el.style.left = `${p.side === 'left' ? 8 : Math.max(0, Math.min(G + pageW - PM + 8, sheetW - width - 16))}px`;
+    }
+  }
+  // The mark `id` and its note shown together (MATH-15): its highlight drawn darker over the page and its note on a
+  // faint wash, every other note faded. A press on a highlight keeps it (this.focusId); pointing at a note shows its own
+  // while the pointer is there. null shows none.
+  paintFocus(id) {
+    const host = this.host.current; if (!host) return;
+    for (const ar of host.querySelectorAll('[data-arrows]')) ar.replaceChildren();
+    for (const el of host.querySelectorAll('[data-note-for]')) {
+      const on = !!id && el.dataset.noteFor === id;
+      el.style.opacity = id && !on ? '0.45' : '';
+      el.style.background = on ? 'rgba(0,112,243,.07)' : 'transparent';
+      el.style.boxShadow = on ? 'inset 2px 0 0 rgba(0,112,243,.45)' : '';
+    }
+    if (!id) return;
+    for (const [page, list] of Object.entries(this.marks || {})) {
+      const m = (list || []).find((x) => x && x.id === id); if (!m || !m.rects || !m.rects.length) continue;
+      const ar = this.find1(`[data-arrows="${page}"]`); if (!ar) continue;
+      const { G, pageW: u } = this.geom(Number(page));
+      for (const b of mergeLineRects(m.rects)) {
+        const d = document.createElementNS(SVG, 'rect');
+        d.setAttribute('x', G + b.x * u - 1); d.setAttribute('y', b.y * u + b.h * u * 0.1); d.setAttribute('width', b.w * u + 2); d.setAttribute('height', b.h * u * 0.8);
+        d.setAttribute('rx', 2); d.setAttribute('fill', 'rgba(0,112,243,.16)'); d.setAttribute('stroke', 'rgba(0,112,243,.55)'); d.setAttribute('stroke-width', 1);
+        ar.appendChild(d);
+      }
+    }
+  }
+  // The mark under a point of a page, given in the sheet's own pixels: the last drawn wins (it is on top).
+  markAt(page, x, y) {
+    const { G, pageW: u } = this.geom(page), list = (this.marks || {})[page] || [];
+    for (let i = list.length - 1; i >= 0; i -= 1) {
+      const m = list[i];
+      if (m && m.rects && m.rects.some((r) => x >= G + r.x * u - 2 && x <= G + (r.x + r.w) * u + 2 && y >= r.y * u - 2 && y <= (r.y + r.h) * u + 2)) return m;
+    }
+    return null;
+  }
+  focusMark(id) { this.focusId = id || null; this.paintFocus(this.focusId); }
 
   /* ---------------------------------------------------------------- notes (MATH-21: mentions) */
   // Notes are shown as text, their mentions links, once there is somewhere for a link to go.
@@ -1038,8 +1097,8 @@ export default class PaperView extends React.Component {
   noteField(m, page) {
     const ta = document.createElement('textarea');
     ta.dataset.mark = m.id; ta.value = m.note; ta.rows = 1; ta.spellcheck = false;
-    ta.oninput = () => { m.note = ta.value; this.fitNote(ta); this.scheduleSave(); this.noteMention(ta, m, page); };
-    ta.onfocus = () => { this.editing = m.id; };
+    ta.oninput = () => { m.note = ta.value; this.fitNote(ta); this.stackPage(page); this.scheduleSave(); this.noteMention(ta, m, page); };
+    ta.onfocus = () => { this.editing = m.id; if (m.rects && m.rects.length) this.focusMark(m.id); };
     ta.onblur = () => this.leaveNote(ta, m, page);
     ta.onkeydown = (ev) => this.noteKey(ev, ta, m);
     // The caret moved along the line: the menu follows what stands before it now (↑ and ↓ are the menu's).
