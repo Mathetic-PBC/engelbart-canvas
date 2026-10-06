@@ -52,9 +52,12 @@ test('docRef takes a mark on a library pdf or on an address, its page a page num
   assert.throws(() => docRef({ kind: 'page', id: 'p' }), /Unknown doc kind/);
 });
 
-test('highlightInput: the passage, the note and the paper\'s name, bounded; missing ones are empty', () => {
-  assert.deepEqual(highlightInput({ quote: 'κ = 0.79', note: '@bart why?', paper: 'TutorTrace' }), { quote: 'κ = 0.79', note: '@bart why?', paper: 'TutorTrace' });
-  assert.deepEqual(highlightInput(null), { quote: '', note: '', paper: null });
+test('highlightInput: the passage, the note, the paper\'s name and the page\'s text, bounded; missing ones are empty', () => {
+  assert.deepEqual(highlightInput({ quote: 'κ = 0.79', note: '@bart why?', paper: 'TutorTrace', pageText: 'Results. κ = 0.79 overall.' }), { quote: 'κ = 0.79', note: '@bart why?', paper: 'TutorTrace', pageText: 'Results. κ = 0.79 overall.' });
+  assert.deepEqual(highlightInput(null), { quote: '', note: '', paper: null, pageText: '' });
+  assert.throws(() => highlightInput({ pageText: 5 }), TypeError);
+  const page = highlightInput({ pageText: 'p'.repeat(9000) }).pageText;
+  assert.ok(page.length <= 8000 && /characters cut/.test(page), 'the page text is bounded too, cut in the middle');
   assert.throws(() => highlightInput({ quote: 7 }), TypeError);
   assert.throws(() => highlightInput({ note: 3 }), TypeError);
 });
@@ -151,6 +154,11 @@ test('buildContext from a highlight on an address: a file:// address is given as
   assert.match(web.head, /asked from: a highlight on page 2 of "Scim", opened from the workspace "TutorTrace notes"/);
   assert.match(web.documents, /<highlight paper="Scim" path="https:\/\/arxiv\.org\/pdf\/2401\.00001v2" page="2">/);
   assert.equal(highlightBlock({ name: 'A "quoted"\nname', where: '/p/a.pdf' }, 3, { quote: ' x ', note: '' }), '<highlight paper="A  quoted  name" path="/p/a.pdf" page="3">\n<quote>\nx\n</quote>\n<note>\n\n</note>\n</highlight>');
+  // The page around the passage (2026-10-06): inside <highlight>, after the note; none when there is no text.
+  const { BART_SYSTEM_PROMPT } = require('../src/main/bart/system-prompt.cjs');
+  assert.match(BART_SYSTEM_PROMPT, /in <page_text> the text of that page around the passage/, 'Bart is told the page comes with it');
+  assert.match(BART_SYSTEM_PROMPT, /do not open the PDF just to see that page/);
+  assert.equal(highlightBlock({ name: 'P', where: '/p/a.pdf' }, 3, { quote: 'x', note: 'n', pageText: '\nResults. x and y.\n' }), '<highlight paper="P" path="/p/a.pdf" page="3">\n<quote>\nx\n</quote>\n<note>\nn\n</note>\n<page_text>\nResults. x and y.\n</page_text>\n</highlight>');
 });
 
 test('a follow-up on the same mark sends its answers as the turns, as the Stage keeps them, and resumes the same session', async () => {

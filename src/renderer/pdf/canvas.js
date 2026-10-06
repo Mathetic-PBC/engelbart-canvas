@@ -12,6 +12,9 @@
 // Follow-ups (2026-10-06): the boxes hanging under a moved one widen the desk too (deskNeed, hangLeft); a deleted answer
 // stays one of its exchange's turns while that session can be resumed (exchangeOf), so ⌘Z can bring it back and the
 // next question goes on in the same session.
+// One card a highlight (2026-10-06): a highlight's note and its answers are one card, like a comment thread, ASK_W wide
+// throughout, with one grip and one place (the mark's `pos`); an answer moved on its own before (an ask's `pos`) is
+// shown in its card, its `pos` no longer read. Nothing joins boxes any more, and nothing hangs under a moved one.
 
 /** Side space that centers a page of width pageW in a pane of width W (0 once the page is wider). */
 export const sideSpace = (W, pageW) => Math.max(0, Math.floor((W - pageW) / 2));
@@ -20,8 +23,7 @@ export const DESK = 400; // desk px of desk beside a page, each side
 export const BOX_GAP = 12; // desk px kept between two boxes by the spacing pass
 export const DESK_EDGE = 24; // desk px a moved box keeps from the desk's edge (the desk grows to keep it)
 export const NOTE_W = 240; // a note's box, on the desk
-export const ASK_W = 320; // an answer's box
-export const COLLAPSED_W = 96; // an answer folded to "Bart ›"
+export const ASK_W = 320; // a highlight's card: its note and its answers
 export const SIDE_GAP = 28; // a box beside its page: desk px from the page's edge
 export const POS_DY = 11; // `pos` is where a box's first line sits: 11px under its top, as free notes were always kept
 
@@ -35,37 +37,22 @@ export function deskOf(W, pageW, need = {}, k = 1) {
 }
 
 /**
- * Where a box that hangs under a moved one starts (PaperView arrange): from the edge of that box nearest the page's
- * middle `mid`, so it reaches toward the page and not past the desk. `pLeft`, `pWidth`: the box it hangs from.
- */
-export const hangLeft = (pLeft, pWidth, width, mid) => (pLeft + pWidth / 2 < mid ? pLeft + pWidth - width : pLeft);
-
-/**
- * How wide the desk must be on each side so every box that was moved, and every box hanging under one, keeps DESK_EDGE
- * from its edge, at the page widths `pageWOf(page)` in desk px → { left, right } desk px (0 when nothing reaches past the page). A
- * mark's boxes go as PaperView draws them: its note, its answers (deleted ones are not drawn; one folded away is
- * narrower), then `running(markId)` answers being written; a box not moved hangs from the last moved one before it
- * (hangLeft). Boxes beside the page, before any moved one, always fit the DESK.
+ * How wide the desk must be on each side so every card that was moved keeps DESK_EDGE from its edge, at the page widths
+ * `pageWOf(page)` in desk px → { left, right } desk px (0 when nothing reaches past the page). A mark is a card while it
+ * has a note, an answer shown (deleted ones are not) or `running(markId)` answers being written: ASK_W wide on a
+ * highlight, NOTE_W for a free note. Cards beside the page always fit the DESK.
  */
 export function deskNeed(marks, pageWOf, running = () => 0) {
   let left = 0, right = 0;
   for (const [page, list] of Object.entries(marks || {})) {
     const P = pageWOf(Number(page));
     if (!P) continue;
-    const reach = (x, w) => { left = Math.max(left, DESK_EDGE - x); right = Math.max(right, x + w + DESK_EDGE - P); };
     for (const m of list || []) {
-      if (!m) continue;
-      const chain = m.note != null ? [{ pos: m.pos, w: NOTE_W }] : [];
-      for (const a of shownAsks(m)) chain.push({ pos: a.pos, w: a.collapsed ? COLLAPSED_W : ASK_W });
-      for (let i = Number(running(m.id)) || 0; i > 0; i -= 1) chain.push({ pos: null, w: ASK_W });
-      let from = null; // the moved box the next ones hang from
-      for (const { pos, w } of chain) {
-        if (pos) {
-          const x = Number(pos.x) * P;
-          from = Number.isFinite(x) ? { x, w } : null;
-          if (from) reach(x, w);
-        } else if (from) reach(hangLeft(from.x, from.w, w, P / 2), w);
-      }
+      if (!m || !m.pos || (m.note == null && !shownAsks(m).length && !(Number(running(m.id)) > 0))) continue;
+      const x = Number(m.pos.x) * P, w = (m.rects || []).length ? ASK_W : NOTE_W;
+      if (!Number.isFinite(x)) continue;
+      left = Math.max(left, DESK_EDGE - x);
+      right = Math.max(right, x + w + DESK_EDGE - P);
     }
   }
   return { left, right };
@@ -254,6 +241,19 @@ export function continueLines({ quote, question, answer, foot, paper = {}, page 
   for (const line of String(answer || '').split('\n')) lines.push(`bart> ${line}`.trimEnd());
   if (foot) lines.push('bart>', `bart> *${foot}*`);
   return lines;
+}
+
+/**
+ * Whether an answer's question is what its note asks now (one card, 2026-10-06): the note's question after @bart, or the
+ * note itself, the same words give or take spacing. Its grey header is shown only when not: an earlier question of the
+ * thread. A question that is empty has nothing to show either.
+ */
+export function askedByNote(question, note) {
+  const squash = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+  const q = squash(question);
+  if (!q) return true;
+  const asks = noteQuestion(note);
+  return q === squash(asks != null ? asks : note);
 }
 
 /** What the box's header names the model by: "Sol · high". */

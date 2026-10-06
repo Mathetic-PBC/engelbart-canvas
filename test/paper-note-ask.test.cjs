@@ -59,10 +59,13 @@ function viewer(typed, { free = false, asks, props = {} } = {}) {
   let saves = 0, flushed = 0;
   view.scheduleSave = () => { saves += 1; };
   view.flushSave = () => { flushed += 1; };
+  // The page's text as pdf.js gives it: a question carries it, around the passage (2026-10-06).
+  view.texts = { get: async () => ({ items: [{ str: 'Results.', hasEOL: true }, { str: 'Cohen\'s κ was 0.79 overall, which is good.' }] }) };
   globalThis.document = { activeElement: ta };
   globalThis.requestAnimationFrame = () => 0;
   return { view, m, ta, asked, drawn, saves: () => saves, flushed: () => flushed };
 }
+const settle = () => new Promise((resolve) => setImmediate(resolve)); // the page's text is read before the question goes
 const key = (k, more = {}) => ({ key: k, shiftKey: false, isComposing: false, prevented: false, stopped: false, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; }, ...more });
 
 test.afterEach(() => { delete globalThis.document; delete globalThis.requestAnimationFrame; });
@@ -91,27 +94,37 @@ test('Bart picked writes @Bart and a space, and the note is saved', () => {
   assert.equal(saves(), 1);
 });
 
-test('Enter in a highlight\'s note that starts with @bart asks: the passage, the note, the question, no turns yet; the note shows as text', () => {
+test('Enter in a highlight\'s note that starts with @bart asks: the passage, the note, the question, the page around it, no turns yet; the note shows as text', async () => {
   const { view, m, ta, asked, flushed } = viewer('@bart why is κ = 0.79 good?');
   view.editing = 'm1';
   const enter = key('Enter');
   view.noteKey(enter, ta, m, 2);
   assert.ok(enter.prevented && enter.stopped);
-  assert.deepEqual(asked, [{ markId: 'm1', page: 2, quote: 'Cohen\'s κ was 0.79 overall', note: '@bart why is κ = 0.79 good?', question: 'why is κ = 0.79 good?', turns: [] }]);
+  await settle();
+  assert.deepEqual(asked, [{ markId: 'm1', page: 2, quote: 'Cohen\'s κ was 0.79 overall', note: '@bart why is κ = 0.79 good?', question: 'why is κ = 0.79 good?', turns: [], pageText: 'Results.\nCohen\'s κ was 0.79 overall, which is good.' }]);
   assert.equal(flushed(), 1, 'what the note says is saved first');
   assert.equal(ta.blurred, 1);
   assert.equal(view.editing, null);
   assert.equal(m.note, '@bart why is κ = 0.79 good?', 'the note keeps what was typed');
 });
 
-test('a second @bart on the same mark sends its answers as the turns; the page is found when the caller does not say', () => {
+test('a second @bart on the same mark sends its answers as the turns; the page is found when the caller does not say', async () => {
   const asks = [{ id: 'a1', question: 'why?', answer: 'Because.', meta: {}, at: 'x', pos: null, collapsed: false }];
   const { view, m, ta, asked } = viewer('@Bart and then?', { asks });
   view.noteKey(key('Enter'), ta, m);
+  await settle();
   assert.deepEqual(asked.map((a) => [a.question, a.page, a.turns]), [['and then?', 2, [{ question: 'why?', answer: 'Because.' }]]]);
 });
 
-test('Shift+Enter is a new line; a note without @bart, a free note, an empty question or a key still being composed do not ask', () => {
+test('a page whose text pdf.js cannot give still asks, with no page text', async () => {
+  const { view, m, ta, asked } = viewer('@bart why?');
+  view.texts = { get: () => Promise.reject(new Error('gone')) };
+  view.noteKey(key('Enter'), ta, m, 2);
+  await settle();
+  assert.deepEqual(asked.map((a) => [a.question, a.pageText]), [['why?', '']]);
+});
+
+test('Shift+Enter is a new line; a note without @bart, a free note, an empty question or a key still being composed do not ask', async () => {
   const cases = [
     ['@bart why', key('Enter', { shiftKey: true }), {}],
     ['why @bart', key('Enter'), {}],
@@ -122,6 +135,7 @@ test('Shift+Enter is a new line; a note without @bart, a free note, an empty que
     const { view, m, ta, asked } = viewer(typed, options);
     view.noteKey(ev, ta, m, 2);
     assert.equal(ev.prevented, false, `${typed}: a line break, as before`);
+    await settle();
     assert.deepEqual(asked, []);
   }
   const empty = viewer('@bart   ');
@@ -151,13 +165,14 @@ const actClick = (what) => {
   return { target: { closest: (sel) => (sel === '[data-act]' ? act : null) }, preventDefault() {} };
 };
 
-test('@bart on a part of a selection across pages sends the whole passage, page by page; so does Continue in workspace', () => {
+test('@bart on a part of a selection across pages sends the whole passage, page by page; so does Continue in workspace', async () => {
   const continued = [];
   const { view, m, ta, asked } = viewer('@bart what does this claim?', { props: { onContinueAsk: (x) => continued.push(x) } });
   m.group = 'g1';
   view.marks[3] = [{ id: 'm2', group: 'g1', rects: [{ x: 0.1, y: 0.05, w: 0.4, h: 0.015 }], side: 'right', y: 0.05, note: null, text: 'across 480 students' }];
   view.marks[1] = [{ id: 'm0', group: 'g2', rects: [{ x: 0.1, y: 0.05, w: 0.4, h: 0.015 }], y: 0.05, note: null, text: 'another selection' }];
   view.noteKey(key('Enter'), ta, m, 2);
+  await settle();
   assert.equal(asked[0].quote, 'Cohen\'s κ was 0.79 overall\nacross 480 students');
   const a = { id: 'a1', question: 'what does this claim?', answer: 'That.', meta: { foot: 'Sonnet · high · 3 s' } };
   m.asks = [a];
@@ -212,7 +227,7 @@ test('Space over the paper pans only while nothing has the keyboard: a note\'s f
   }
 });
 
-test('Delete hides an answer and ⌘Z brings it back; meanwhile the next question still sends it, so the session goes on', () => {
+test('Delete hides an answer and ⌘Z brings it back; meanwhile the next question still sends it, so the session goes on', async () => {
   const now = new Date().toISOString();
   const asks = [
     { id: 'a1', question: 'why?', answer: 'Because.', meta: {}, at: now, pos: null, collapsed: false },
@@ -226,6 +241,7 @@ test('Delete hides an answer and ⌘Z brings it back; meanwhile the next questio
   assert.deepEqual(drawn, [2, 2]);
   assert.equal(saves(), 2);
   view.noteKey(key('Enter'), ta, m, 2);
+  await settle();
   assert.deepEqual(asked[0].turns, [{ question: 'why?', answer: 'Because.' }, { question: 'and?', answer: 'Then.' }], 'the turns the session heard: it is found again');
   const z = (target, more = {}) => keyEv(target, { key: 'z', metaKey: true, ...more });
   // Not the paper's: the last press was elsewhere, or a field has the keyboard, or it is ⌘⇧Z.

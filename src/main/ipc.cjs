@@ -70,10 +70,14 @@ function clipped(value, what, max) {
   return clipMiddle(value, max);
 }
 
-/** What a question asked from a highlight carries besides its ref: the passage (its start and end past 20,000 characters), the note as it stands, the paper's name. */
+/**
+ * What a question asked from a highlight carries besides its ref: the passage (its start and end past 20,000 characters),
+ * the note as it stands, the paper's name, and the page's text around the passage (pdf/marks.js pageWindow, about 4,000
+ * characters; cut in the middle past 8,000).
+ */
 function highlightInput(value) {
   const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-  return { quote: clipped(input.quote == null ? '' : input.quote, 'quote', 20000), note: str(input.note == null ? '' : input.note, 'note', 20000), paper: optStr(input.paper, 'paper name') };
+  return { quote: clipped(input.quote == null ? '' : input.quote, 'quote', 20000), note: str(input.note == null ? '' : input.note, 'note', 20000), paper: optStr(input.paper, 'paper name'), pageText: clipped(input.pageText == null ? '' : input.pageText, 'page text', 8000) };
 }
 
 /** The earlier turns of an exchange, the last 40, each cut in the middle past what a turn may hold. */

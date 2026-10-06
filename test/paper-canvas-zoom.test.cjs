@@ -4,7 +4,8 @@
 // the lines joining them are laid out in desk px and each page's layer of them is scaled by its zoom, so a box keeps its
 // place, size and gap against the page at 50%, 100% and 200%, moved or not, and a pinch that settles leaves every box
 // where the pinch put it. PaperView lays out a twelve-point stand-in of a page here: a small fake DOM (no pdf.js, no
-// rough.js), whose boxes measure as wide as their style says and a fixed height a kind.
+// rough.js), whose boxes measure as wide as their style says and a fixed height a kind. Since 2026-10-06 a highlight's
+// note and its answers are one card (no lines join anything): a card is as tall as what it holds.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -31,7 +32,8 @@ const { default: PaperView } = loadView();
 
 /* ------------------------------------------------------------------------------------------------ a fake DOM */
 
-const HEIGHT = { note: 44, ask: 120, run: 90 }; // a box's height in its own (desk) px, at any zoom
+// A card's height in its own (desk) px, at any zoom: its note, and 120 an answer and 90 an answer being written in it.
+const cardHeight = (el) => 44 + el.children.filter((c) => c.dataset.ask != null).length * 120 + el.children.filter((c) => c.dataset.askRun != null).length * 90;
 const camel = (name) => name.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
 function styleOf() {
   const style = { setProperty(k, v) { style[k] = v; } };
@@ -60,7 +62,7 @@ class El {
   get firstElementChild() { return this.children[0] || null; }
   get lastElementChild() { return this.children[this.children.length - 1] || null; }
   get offsetWidth() { return parseFloat(this.style.width) || 0; }
-  get offsetHeight() { return HEIGHT[this.dataset.box] || 0; }
+  get offsetHeight() { return this.dataset.box === 'card' ? cardHeight(this) : 0; }
   set innerHTML(v) { for (const c of this.children) c.parentNode = null; this.children = []; this.html = String(v); }
   get innerHTML() { return this.html; }
   appendChild(c) { if (c.parentNode) c.remove(); c.parentNode = this; this.children.push(c); return c; }
@@ -85,9 +87,10 @@ const W = 612, H = 700;
 const pdfPage = { getViewport: ({ scale }) => ({ width: 612 * scale, height: 792 * scale }), render: () => ({ promise: Promise.resolve(), cancel() {} }), getTextContent: () => Promise.resolve({ items: [] }) };
 const MARKS = {
   1: [
-    // A highlight's note beside the page, not moved, and an answer under it.
+    // A highlight's note beside the page, not moved, and an answer in its card.
     { id: 'm1', rects: [{ x: 0.1, y: 0.2, w: 0.5, h: 0.015 }], side: 'right', y: 0.2, note: 'beside', text: 'a', asks: [{ id: 'a1', question: 'why?', answer: 'Because.', pos: null }] },
-    // One on the left, moved past the desk's right edge, with an answer hanging under it and one moved past the left.
+    // One on the left, moved past the desk's right edge, with two answers in its card: one moved past the left on its own
+    // before cards, which is in the card all the same.
     { id: 'm2', rects: [{ x: 0.2, y: 0.5, w: 0.4, h: 0.015 }], side: 'left', y: 0.5, note: 'moved', text: 'b', pos: { x: 1.3, y: 0.45 }, asks: [{ id: 'a2', question: 'and?', answer: 'Then.', pos: null }, { id: 'a3', question: 'so?', answer: 'So.', pos: { x: -0.9, y: 0.8 } }] },
     // A free note on the page.
     { id: 'm3', rects: [], side: null, y: 0.9, note: 'free', text: '', pos: { x: 0.2, y: 0.9 } },
@@ -111,40 +114,37 @@ test.afterEach(() => { for (const name of ['document', 'requestAnimationFrame', 
 
 const scaleOf = (el) => { const m = String(el.style.transform || '').match(/^scale\(([\d.e+-]+)\)$/); return m ? Number(m[1]) : 1; };
 
-// Every box on page 1 and every line joining two, as the screen shows them against the page's top-left (layout px times
-// a pinch's CSS zoom): { [id]: { left, top, width, height } } and the joins' ends.
+// Every card on page 1 as the screen shows it against the page's top-left (layout px times a pinch's CSS zoom):
+// { [markId]: { left, top, width, height } }.
 function onScreen(view) {
   const s = view.sheets[1], g = view.geo[1], css = Number(view.inner.style.zoom) || 1, k = scaleOf(s.notes);
-  assert.equal(scaleOf(s.ar), k, 'the arrows scale as the boxes do');
   const G = parseFloat(s.bg.style.left);
   assert.equal(G, g.G, 'the page starts where the desk ends');
   const boxes = {};
   for (const el of s.notes.querySelectorAll('[data-box]')) {
-    const id = el.dataset.ask || el.dataset.boxMark;
-    boxes[id] = { left: (parseFloat(el.style.left) * k - G) * css, top: parseFloat(el.style.top) * k * css, width: el.offsetWidth * k * css, height: el.offsetHeight * k * css };
+    boxes[el.dataset.boxMark] = { left: (parseFloat(el.style.left) * k - G) * css, top: parseFloat(el.style.top) * k * css, width: el.offsetWidth * k * css, height: el.offsetHeight * k * css };
   }
-  const joins = s.ar.children.map((line) => ['x1', 'y1', 'x2', 'y2'].map((a) => (a[0] === 'x' ? Number(line.attrs[a]) * k - G : Number(line.attrs[a]) * k) * css));
-  return { boxes, joins, k, css, g, sheetW: g.G + g.pageW + g.R };
+  return { boxes, k, css, g, sheetW: g.G + g.pageW + g.R };
 }
 const near = (a, b, tol, what) => assert.ok(Math.abs(a - b) <= tol, `${what}: ${a} ≈ ${b}`);
 function sameScaled(at, base, f, tol, what) {
   assert.deepEqual(Object.keys(at.boxes).sort(), Object.keys(base.boxes).sort(), `${what}: the same boxes`);
   for (const [id, r] of Object.entries(base.boxes)) for (const key of ['left', 'top', 'width', 'height']) near(at.boxes[id][key], r[key] * f, tol, `${what} ${id}.${key}`);
-  assert.equal(at.joins.length, base.joins.length);
-  base.joins.forEach((line, i) => line.forEach((v, j) => near(at.joins[i][j], v * f, tol, `${what} join ${i}`)));
 }
 
-test('at 50% and 200% every box\'s left, top, width and height against the page, and every join, are its 100% values times the zoom', async () => {
+test('at 50% and 200% every card\'s left, top, width and height against the page are its 100% values times the zoom', async () => {
   const { view } = viewer();
   view.zoom = 1;
   await view.layout(null);
   const base = onScreen(view);
   assert.equal(base.k, 1);
-  assert.deepEqual(Object.keys(base.boxes).sort(), ['a1', 'a2', 'a3', 'm1', 'm2', 'm3']);
-  assert.equal(base.boxes.m1.width, 240, 'today\'s sizes at 100%: NOTE_W');
-  assert.equal(base.boxes.a1.width, 320, 'ASK_W');
+  assert.deepEqual(Object.keys(base.boxes).sort(), ['m1', 'm2', 'm3'], 'one card a mark: its note and its answers');
+  assert.equal(base.boxes.m1.width, 320, 'today\'s sizes at 100%: ASK_W, the note and its answer alike');
+  assert.equal(base.boxes.m1.height, 44 + 120);
+  assert.equal(base.boxes.m2.height, 44 + 2 * 120, 'the answer moved on its own before is in the card');
   assert.equal(base.boxes.m1.left, 612 + 28, 'SIDE_GAP from the page\'s edge');
-  assert.ok(base.joins.length >= 2);
+  near(base.boxes.m2.left, 1.3 * 612, 1e-9, 'the card where the mark was moved');
+  assert.equal(view.sheets[1].wrap.querySelectorAll('line').length, 0, 'nothing joins anything');
   for (const f of [0.5, 2]) {
     view.zoomTo(f * 100);
     await view.layout(undefined);
@@ -219,4 +219,33 @@ test('a box dropped at 200% is where it was dropped at 100% and 50%: `pos` keeps
   await view.layout(undefined);
   const at50 = onScreen(view).boxes.m1;
   for (const key of ['left', 'top', 'width', 'height']) near(at50[key], at200[key] / 4, 1e-6, key);
+});
+
+test('one card a highlight: its note, then each answer and each answer being written under a thin divider; an answer\'s question shows only when the note does not ask it now', async () => {
+  const { ASK_W } = await loadCanvas();
+  const { view } = viewer({
+    1: [{ id: 'm1', rects: [{ x: 0.1, y: 0.2, w: 0.5, h: 0.015 }], side: 'right', y: 0.2, note: '@bart and then?', text: 'a', asks: [
+      { id: 'a1', question: 'why?', answer: 'Because.', meta: { name: 'Sonnet', effort: 'high' }, pos: { x: -2, y: 0.9 } },
+      { id: 'a2', question: 'and then?', answer: 'Then.', pos: null },
+    ] }],
+  });
+  view.props.pendingAsks = [{ askId: 'h1', markId: 'm1', page: 1, question: 'and then?' }];
+  view.zoom = 1;
+  await view.layout(null);
+  const cards = view.sheets[1].notes.querySelectorAll('[data-box]');
+  assert.equal(cards.length, 1, 'one card');
+  const [card] = cards;
+  assert.equal(card.style.width, `${ASK_W}px`, 'one width throughout');
+  const [note, a1, a2, run] = card.children;
+  assert.ok(note.dataset.cardNote, 'the note at the top');
+  assert.deepEqual([a1.dataset.ask, a2.dataset.ask, run.dataset.askRun], ['a1', 'a2', 'h1'], 'the answers in order, then the one being written');
+  for (const sec of [a1, a2, run]) assert.equal(sec.style.borderTop, '1px solid #ececec', 'a thin divider over each');
+  assert.equal(note.style.borderTop, undefined);
+  assert.match(a1.innerHTML, />why\?</, 'an earlier question of the thread is shown');
+  assert.match(a1.innerHTML, /Sonnet · high/);
+  assert.doesNotMatch(a2.innerHTML, />and then\?</, 'the note asks it now: not shown again');
+  assert.equal(run.querySelector('[data-run-question]').style.display, 'none', 'nor over the answer being written');
+  // The card is where its mark would be beside the page: a1's own place from before cards is not read.
+  assert.equal(view.drawn[1].boxes.length, 1);
+  assert.equal(view.drawn[1].boxes[0].left, view.desk(1).G + view.desk(1).pageW + 28);
 });

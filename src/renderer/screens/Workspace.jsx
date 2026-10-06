@@ -431,8 +431,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   }), []);
 
   // @bart from a note on a pdf's highlight (MATH-27): asked of this workspace with the mark as its place ({ kind: 'mark',
-  // id, rowId | url, page }), the passage and the note with it, and written into no document. The entry here holds which
-  // mark and pdf it is for ({ markId, page, rowId | url }) and what it is doing, which the Stage shows on the pdf; the
+  // id, rowId | url, page }), the passage, the note and the page's text around the passage with it, and written into no
+  // document. The entry here holds which mark and pdf it is for ({ markId, page, rowId | url }) and what it is doing,
+  // which the Stage shows on the pdf; the
   // finished answer is returned to the Stage as the mark keeps it (pdf/canvas.js askEntry; main's own, which it has put on
   // the mark already). Stopped, it leaves nothing; a failure stays here, with its error, until it is closed.
   const [paperAsks, setPaperAsks] = React.useState({});
@@ -443,14 +444,14 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return next;
   }), []);
   const failPaperAsk = React.useCallback((askId, message) => setPaperAsks((current) => (current[askId] ? { ...current, [askId]: { ...current[askId], error: message || 'The run failed.', activity: '', lines: [] } } : current)), []);
-  const askHighlight = React.useCallback(async ({ markId, page, quote, note, question, turns, rowId, url, paper }) => {
+  const askHighlight = React.useCallback(async ({ markId, page, quote, note, question, turns, rowId, url, paper, pageText }) => {
     const text = String(question || '').trim();
     if (!topic || !markId || !text || (!rowId && !url)) return null;
     const askId = `h${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
     setPaperAsks((current) => ({ ...current, [askId]: { askId, markId, page, rowId: rowId || null, url: rowId ? null : url, question: text, agent: 'bart' } }));
     try {
       const ref = rowId ? { kind: 'mark', id: markId, rowId, page } : { kind: 'mark', id: markId, url, page };
-      const asked = api.askBart(project.id, { askId, ref, workspaceId: topic.id, text, turns: turns || [], highlight: { quote: quote || '', note: note || '', paper: paper || null } });
+      const asked = api.askBart(project.id, { askId, ref, workspaceId: topic.id, text, turns: turns || [], highlight: { quote: quote || '', note: note || '', paper: paper || null, pageText: pageText || '' } });
       loadBartModels(); // main has kept a pick by hand before this is read
       const out = await asked;
       if (out && out.stopped) { dropPaperAsk(askId); return null; }

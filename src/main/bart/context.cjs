@@ -6,7 +6,8 @@
 // flag per item, and where things are on disk so the agent's own file tools can open the rest.
 // A follow-up carries all of that again, read again, and the earlier turns of its exchange as well.
 // A question asked from a note on a pdf highlight (MATH-27) carries the passage as <highlight>, and the workspace the
-// Stage was opened from as background (paperOf, highlightBlock).
+// Stage was opened from as background (paperOf, highlightBlock). Since 2026-10-06 it carries the text of the highlighted
+// page around the passage too (<page_text>, pdf.js's, about 4,000 characters), so Bart need not open the pdf for it.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -119,9 +120,10 @@ function paperOf(project, rows, ref, given = {}) {
   return { id: row ? row.id : null, name: named, where, dir: local ? path.dirname(local) : null };
 }
 
-/** <highlight paper="…" path="…" page="N"><quote>…</quote><note>…</note></highlight> */
-function highlightBlock(paper, page, { quote = '', note = '' } = {}) {
-  return `<highlight paper="${attrOf(paper.name, 200)}" path="${attrOf(paper.where, 4096)}" page="${Number(page) || 1}">\n<quote>\n${String(quote).trim()}\n</quote>\n<note>\n${String(note).trim()}\n</note>\n</highlight>`;
+/** <highlight paper="…" path="…" page="N"><quote>…</quote><note>…</note><page_text>…</page_text></highlight>; no <page_text> when there is none. */
+function highlightBlock(paper, page, { quote = '', note = '', pageText = '' } = {}) {
+  const around = String(pageText || '').trim();
+  return `<highlight paper="${attrOf(paper.name, 200)}" path="${attrOf(paper.where, 4096)}" page="${Number(page) || 1}">\n<quote>\n${String(quote).trim()}\n</quote>\n<note>\n${String(note).trim()}\n</note>\n${around ? `<page_text>\n${around}\n</page_text>\n` : ''}</highlight>`;
 }
 
 /**

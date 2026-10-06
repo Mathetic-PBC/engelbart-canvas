@@ -48,14 +48,21 @@
 // zoom, moved or not. The desk is DESK desk px a side, k times as wide in a layout. A pinch scales what is drawn, and
 // the drawing that follows puts every box where the pinch left it; a free note keeps the width it was measured at until
 // the page's text is there to measure it again (freeW). The zoom bar, the chips, the fades and the @ menu stay screen-sized.
+// One card a highlight (MATH-27 follow-up, 2026-10-06): a highlight's note and Bart's answers to it are one card, like a
+// comment thread, ASK_W wide throughout: the note at the top, then each answer and each answer being written, split by a
+// thin divider (cardBox). Nothing joins them now. The card moves by its one grip (the mark's `pos`); an answer moved on
+// its own before is shown in its card, its `pos` no longer read. An answer's grey question shows only when it is not what
+// the note asks now (canvas.js askedByNote). A question carries the page's text around the passage (pageTextAround), a
+// selection snaps out to whole words (snapWords), and a card leaves its highlight's margin only as a last resort
+// (marks.js NOTE_SLACK).
 import React from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import rough from 'roughjs';
-import { mergeLineRects, placeHighlight, boxSeed, selectionParts, scalePart, partMarks, passageOf, stackNotes } from './marks.js';
+import { mergeLineRects, placeHighlight, boxSeed, selectionParts, scalePart, partMarks, passageOf, stackNotes, wordBounds, pdfText, pageWindow } from './marks.js';
 import { nextFind, createTargetGate, sectionSpans, paintSection, clearFind, FIND, FIND_ACTIVE } from '../model/find.js';
 import { wheelZooms, wheelZoom, createPageCache } from '../model/paper-zoom.js';
 import { mentionAt, libMention, noteHtml, noteParts, noteOffset, inlineHtml, esc, LIB_MENTION_RE } from '../model/doc.js';
-import { sideSpace, deskOf, deskGeom, deskNeed, hangLeft, placeOf, posOf, spaceBoxes, extentAt, fitZoom, offscreen, offscreenSide, chipLabel, revealScroll, noteQuestion, turnsOf, shownAsks, keptMarks, modelLabel, runningLabel, DESK, DESK_EDGE, BOX_GAP, NOTE_W, ASK_W, COLLAPSED_W, SIDE_GAP, POS_DY } from './canvas.js';
+import { sideSpace, deskOf, deskGeom, deskNeed, placeOf, posOf, spaceBoxes, extentAt, fitZoom, offscreen, offscreenSide, chipLabel, revealScroll, noteQuestion, askedByNote, turnsOf, shownAsks, keptMarks, modelLabel, runningLabel, DESK, DESK_EDGE, BOX_GAP, ASK_W, SIDE_GAP, POS_DY } from './canvas.js';
 import { fieldCaret } from '../workspace/caret.js';
 import MentionMenu from '../workspace/MentionMenu.jsx';
 
@@ -155,6 +162,7 @@ const BOX_BG = 'rgba(255,255,255,.97)', BOX_SHADOW = '0 1px 2px rgba(0,0,0,.03)'
 const FOCUS_WASH = 'rgb(242,247,254)'; // the box of the note in focus (MATH-15): the white of a box with a little blue
 const BOX_LOOK = `position:absolute;box-sizing:border-box;border:1px solid #e3e3e3;border-radius:8px;background:${BOX_BG};pointer-events:auto;box-shadow:${BOX_SHADOW}`;
 const GRIP_HTML = '<div data-grip="1" title="Drag to move" style="height:12px;display:flex;align-items:center;justify-content:center"><span style="width:22px;height:3px;border-radius:2px;background:#d9d9d9"></span></div>';
+const DIVIDER = 'border-top:1px solid #ececec'; // between the note and an answer in a card, and between two answers
 const SPINNER = 'flex:none;width:10px;height:10px;box-sizing:border-box;border:1.5px solid #c9d9f2;border-top-color:#0070f3;border-radius:50%;animation:pdf-spin .8s linear infinite';
 
 // Find (the Browser pane's ⌘F, 2026-09-22): matches are Ranges over the text layer, painted with
@@ -261,8 +269,8 @@ export default class PaperView extends React.Component {
     this.editing = null; // the id of the note being typed in: drawn as its field, the rest as text (see renderMarks)
     this.redrawing = 0; // > 0 while notes are taken out to be drawn again: a field losing the keyboard then is not left
     this.libDrawn = ''; // the mentioned items' names the notes were drawn with (libKey)
-    this.drawn = {}; // { [page]: { boxes, units, chains } }: the boxes as last drawn (desk px), for spacing, links and fitting
-    this.freeW = new Map(); // a free note's width (desk px) as last measured against its page's text (noteBox)
+    this.drawn = {}; // { [page]: { boxes, units } }: the cards as last drawn (desk px), for spacing and fitting
+    this.freeW = new Map(); // a free note's width (desk px) as last measured against its page's text (cardBox)
     this.drag = null; // a box being moved by its grip
     this.pan = null; // a Space-drag or middle-drag under way
     this.space = false; // Space held over the paper: a drag pans
@@ -349,7 +357,7 @@ export default class PaperView extends React.Component {
     this.pages = []; // [n] PDFPageProxy
     this.v0 = []; // [n] viewport at scale 1 (pdf points)
     this.geo = []; // [n] { G, pageW, pageH, scale } in CSS px
-    this.sheets = []; // [n] { wrap, canvas, hl, tl, ar, notes }
+    this.sheets = []; // [n] { wrap, canvas, hl, tl, notes }
     this.tops = []; // [n − 1] top of sheet n inside the inner wrapper (unzoomed)
     this.inner = null;
     const pages = this.pages;
@@ -581,17 +589,15 @@ export default class PaperView extends React.Component {
     if (y != null) host.scrollTop += r.top + (bt + y) * css - (h.top + host.clientTop + host.clientHeight / 2);
   }
 
-  // The boxes of page n as ./canvas.js extentAt reads them: a moved one by its page units, one beside the page by its desk
+  // The cards of page n as ./canvas.js extentAt reads them: a moved one by its page units, one beside the page by its desk
   // px from the page's edge, any other by where it is now in page units; sizes as drawn, in desk px.
   boxShapes(n) {
     const model = this.drawn[n];
     if (!model || !this.geo[n]) return [];
     const g = this.desk(n), P = g.pageW || 1;
     return model.boxes.filter((b) => b.el && b.el.isConnected).map((b) => {
-      const w = b.width, h = b.height, pos = b.how === 'pos' && b.pos, from = b.how === 'hang' && b.from && b.from.how === 'pos' && b.from.pos;
+      const w = b.width, h = b.height, pos = b.how === 'pos' && b.pos;
       if (pos) return { x: { a: pos.x, b: 0 }, y: { a: pos.y, b: -POS_DY }, w, h };
-      // Under a moved box: its px from that box, which keeps its page units.
-      if (from) return { x: { a: from.x, b: b.left - b.from.left }, y: { a: from.y, b: b.top - b.from.top - POS_DY }, w, h };
       if (b.how === 'right') return { x: { a: 1, b: b.left - g.G - P }, y: { a: b.top / P, b: 0 }, w, h };
       if (b.how === 'left') return { x: { a: 0, b: b.left - g.G }, y: { a: b.top / P, b: 0 }, w, h };
       return { x: { a: (b.left - g.G) / P, b: 0 }, y: { a: b.top / P, b: 0 }, w, h };
@@ -699,10 +705,7 @@ export default class PaperView extends React.Component {
       g.G = next.G; g.R = next.R;
       this.place(n);
       const model = this.drawn[n];
-      if (model && dG) {
-        for (const b of model.boxes) { b.left += dG / (g.k || 1); b.el.style.left = `${b.left}px`; }
-        this.drawLinks(n);
-      }
+      if (model && dG) for (const b of model.boxes) { b.left += dG / (g.k || 1); b.el.style.left = `${b.left}px`; }
     }
     if (!changed) return false;
     this.pdfG = this.geo[1].G;
@@ -723,11 +726,9 @@ export default class PaperView extends React.Component {
     s.hl.setAttribute('width', pageW); s.hl.setAttribute('height', pageH); s.hl.setAttribute('viewBox', `0 0 ${pageW} ${pageH}`);
     s.hl.style.cssText = `position:absolute;left:${G}px;top:0;width:${pageW}px;height:${pageH}px;pointer-events:none;overflow:visible`;
     s.tl.style.left = `${G}px`; s.tl.style.top = '0'; s.tl.style.width = `${pageW}px`; s.tl.style.height = `${pageH}px`;
-    // The boxes and their arrows in desk px, scaled to the page's zoom: as wide as the sheet once scaled, no wider (a
-    // layer scaled past the sheet would widen the scroll).
+    // The cards in desk px, scaled to the page's zoom: as wide as the sheet once scaled, no wider (a layer scaled past the
+    // sheet would widen the scroll).
     const k = g.k || 1, dw = sheetW / k, dh = pageH / k, scaled = Math.abs(k - 1) < 1e-6 ? '' : `scale(${k})`;
-    s.ar.setAttribute('width', dw); s.ar.setAttribute('height', dh); s.ar.setAttribute('viewBox', `0 0 ${dw} ${dh}`);
-    s.ar.style.transform = scaled;
     if (s.notes) { s.notes.style.width = `${dw}px`; s.notes.style.height = `${dh}px`; s.notes.style.transform = scaled; }
   }
 
@@ -794,17 +795,14 @@ export default class PaperView extends React.Component {
       tl.style.setProperty('--total-scale-factor', String(scale));
       tl.style.setProperty('--scale-round-x', '1px');
       tl.style.setProperty('--scale-round-y', '1px');
-      // Boxes and their arrows above every page's drawing and text (a box pushed past its page's foot stays in sight), in
-      // desk px, scaled from their top-left corner to the page's zoom (place).
+      // Cards above every page's drawing and text (a card pushed past its page's foot stays in sight), in desk px, scaled
+      // from their top-left corner to the page's zoom (place).
       const notes = document.createElement('div');
       notes.dataset.notes = n; notes.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;z-index:2;transform-origin:0 0';
-      const ar = document.createElementNS(SVG, 'svg');
-      ar.dataset.arrows = n;
-      ar.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;overflow:visible;z-index:1;transform-origin:0 0';
       wrap.append(bg);
       if (old) wrap.append(old);
-      wrap.append(hl, tl, ar, notes);
-      sheets[n] = { wrap, bg, canvas: old || null, hl, tl, ar, notes };
+      wrap.append(hl, tl, notes);
+      sheets[n] = { wrap, bg, canvas: old || null, hl, tl, notes };
       inner.appendChild(wrap);
     }
 
@@ -983,23 +981,27 @@ export default class PaperView extends React.Component {
   pageTexts() {
     const host = this.host.current;
     if (!host) return [];
-    return [...host.querySelectorAll('[data-text-layer]')].map((layer) => {
-      const nodes = [];
-      let joined = '';
-      const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
-      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-        if (node.nodeType === Node.TEXT_NODE) { nodes.push({ node, start: joined.length }); joined += node.data; }
-        else if (node.nodeName === 'BR') joined += '\n';
+    return [...host.querySelectorAll('[data-text-layer]')].map((layer) => this.layerText(layer));
+  }
+  // One text layer's text (pageTexts); `indexOf(node, offset)` is where a point in one of its text nodes is in `joined`
+  // (null in none of them).
+  layerText(layer) {
+    const nodes = [];
+    let joined = '';
+    const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (node.nodeType === Node.TEXT_NODE) { nodes.push({ node, start: joined.length }); joined += node.data; }
+      else if (node.nodeName === 'BR') joined += '\n';
+    }
+    const locate = (index, end) => {
+      for (let i = nodes.length - 1; i >= 0; i -= 1) {
+        const { node, start } = nodes[i];
+        if (end ? start < index : start <= index) return { node, offset: Math.min(index - start, node.data.length) };
       }
-      const locate = (index, end) => {
-        for (let i = nodes.length - 1; i >= 0; i -= 1) {
-          const { node, start } = nodes[i];
-          if (end ? start < index : start <= index) return { node, offset: Math.min(index - start, node.data.length) };
-        }
-        return null;
-      };
-      return { page: Number(layer.dataset.textLayer), layer, joined, locate };
-    });
+      return null;
+    };
+    const indexOf = (node, offset) => { const at = nodes.find((x) => x.node === node); return at ? at.start + offset : null; };
+    return { page: Number(layer.dataset.textLayer), layer, joined, locate, indexOf };
   }
 
   // Where a query matches, page by page in order → [{ page, from, to }].
@@ -1107,7 +1109,9 @@ export default class PaperView extends React.Component {
     if (e.target.closest('textarea, [data-note-view], [data-box]')) return;
     const sel = getSelection(), css = this.css || 1;
     if (sel && !sel.isCollapsed && sel.rangeCount) {
-      const range = sel.getRangeAt(0);
+      // Whole words at both ends (2026-10-06): the selection is snapped out before anything is measured or kept.
+      const range = this.snapWords(sel.getRangeAt(0));
+      sel.removeAllRanges(); sel.addRange(range);
       const cut = this.pageRanges(range);
       if (!cut.length) { this.clearPending(); return; }
       this.endSelecting(); // the pointer is up: no .endOfContent covers a layer while it is measured
@@ -1135,6 +1139,21 @@ export default class PaperView extends React.Component {
       const m = this.addMark({ page, rects: [], side: null, y, text: '' }, '', { x, y });
       requestAnimationFrame(() => { const ta = this.find1(`textarea[data-mark="${m.id}"]`); if (ta) ta.focus(); });
     }
+  }
+
+  // A selection's range widened to whole words at both ends (./marks.js wordBounds), each end in its own page's text layer.
+  // An end that is not in a text node (past a line, in a margin) stays where it is.
+  snapWords(range) {
+    const out = range.cloneRange();
+    const textAt = (node) => {
+      const layer = node && node.nodeType === Node.TEXT_NODE && node.parentElement && node.parentElement.closest('[data-text-layer]');
+      return layer ? this.layerText(layer) : null;
+    };
+    const a = textAt(range.startContainer), ai = a && a.indexOf(range.startContainer, range.startOffset);
+    if (ai != null) { const to = a.locate(wordBounds(a.joined, ai, ai).from, false); if (to) out.setStart(to.node, to.offset); }
+    const b = textAt(range.endContainer), bi = b && b.indexOf(range.endContainer, range.endOffset);
+    if (bi != null) { const to = b.locate(wordBounds(b.joined, bi, bi).to, true); if (to) out.setEnd(to.node, to.offset); }
+    return out;
   }
 
   // Width available for a free-placed note at (x, y), desk px: stops before the next printed text on
@@ -1269,19 +1288,18 @@ export default class PaperView extends React.Component {
   // where the box is so it keeps its shape between renders and zooms. Marks overlapping each other, or saved with
   // doubled rects, draw no darker. A note being typed in when its page is drawn again (a mark added beside it, a free note
   // fitted once the text is drawn, a rename) has the keyboard back after.
-  // Boxes (MATH-27): a mark with a note or an answer is a chain, its note's box, a box for each answer (`asks`), then
-  // one for each answer being written (`pendingAsks`). Each box is where it was moved to (`pos`), else under the box
-  // before it, else (the first of its chain) on the desk beside its highlight, on its `side`. The boxes not moved are then
-  // spaced (arrange), and the arrow from the highlight and the lines between boxes drawn where they ended up (drawLinks).
-  // Highlights are drawn in the page's px; boxes, the arrows and joins in desk px (its notes and arrows layers are scaled).
+  // Cards (MATH-27; one a mark since 2026-10-06): a mark with a note, an answer (`asks`) or an answer being written
+  // (`pendingAsks`) is one card holding them all, in that order (cardBox). A card is where it was moved to (the mark's
+  // `pos`), else on the desk beside its highlight, on its `side`; the cards not moved are then spaced (arrange).
+  // Highlights are drawn in the page's px; cards in desk px (the page's notes layer is scaled).
   renderMarks(page) {
-    const hl = this.find1(`[data-hl="${page}"]`), notes = this.find1(`[data-notes="${page}"]`), ar = this.find1(`[data-arrows="${page}"]`);
+    const hl = this.find1(`[data-hl="${page}"]`), notes = this.find1(`[data-notes="${page}"]`);
     if (!hl || !notes) return;
     const u = this.geom(page).pageW, { G, pageW: P } = this.desk(page);
     const active = document.activeElement;
     const had = active && active.tagName === 'TEXTAREA' && notes.contains(active) ? { id: active.dataset.mark, a: active.selectionStart, b: active.selectionEnd } : null;
     this.redrawing += 1;
-    try { hl.innerHTML = ''; notes.innerHTML = ''; if (ar) ar.innerHTML = ''; } finally { this.redrawing -= 1; }
+    try { hl.innerHTML = ''; notes.innerHTML = ''; } finally { this.redrawing -= 1; }
     const rc = rough ? rough.svg(hl) : null;
     const list = (this.marks || {})[page] || [];
     for (const b of mergeLineRects(list.flatMap((m) => m.rects || []))) {
@@ -1289,34 +1307,21 @@ export default class PaperView extends React.Component {
       if (rc) hl.appendChild(rc.rectangle(r.x, r.y + r.h * 0.15, r.w, r.h * 0.7, { fill: 'rgba(0,112,243,.14)', fillStyle: 'zigzag', fillWeight: 1.2, hachureGap: 2.6, hachureAngle: -4, stroke: 'none', roughness: 0.9, seed: boxSeed(page, b) }));
       else { const d = document.createElementNS(SVG, 'rect'); d.setAttribute('x', r.x); d.setAttribute('y', r.y); d.setAttribute('width', r.w); d.setAttribute('height', r.h); d.setAttribute('fill', 'rgba(0,112,243,.12)'); hl.appendChild(d); }
     }
-    const boxes = [], units = [], chains = [], running = this.pendingOn(page);
-    list.forEach((m, k) => {
+    const boxes = [], units = [], running = this.pendingOn(page);
+    for (const m of list) {
       const asks = shownAsks(m), runs = running.filter((p) => p.markId === m.id);
-      if (m.note == null && !asks.length && !runs.length) return;
+      if (m.note == null && !asks.length && !runs.length) continue;
       const side = m.side === 'left' ? 'left' : 'right';
-      const chain = { m, k: k + 1, rects: (m.rects || []).map((r) => ({ x: G + r.x * P, y: r.y * P, w: r.w * P, h: r.h * P })), boxes: [] };
-      const parts = [];
-      if (m.note != null) parts.push({ kind: 'note', pos: m.pos || null });
-      for (const a of asks) parts.push({ kind: 'ask', ask: a, pos: a.pos || null });
-      for (const p of runs) parts.push({ kind: 'run', run: p, pos: null });
-      let unit = null, prev = null;
-      for (const part of parts) {
-        const el = part.kind === 'note' ? this.noteBox(m, page) : part.kind === 'ask' ? this.askBox(m, part.ask, page) : this.runBox(part.run, page);
-        notes.appendChild(el);
-        const ta = el.querySelector('textarea');
-        if (ta) this.fitNote(ta);
-        const b = { el, kind: part.kind, m, ask: part.ask || null, page, fixed: !!part.pos, pos: part.pos, how: 'pos', left: 0, top: 0, width: 0, height: 0 };
-        if (part.pos) { Object.assign(b, placeOf(part.pos, G, P || 1)); unit = null; }
-        else {
-          if (!unit) { unit = { id: `${m.id}:${chain.boxes.length}`, want: Math.max(0, m.y * P - 6), side: prev ? null : side, parent: prev, boxes: [] }; units.push(unit); }
-          b.how = unit.parent ? 'hang' : side;
-          unit.boxes.push(b);
-        }
-        boxes.push(b); chain.boxes.push(b); prev = b;
-      }
-      chains.push(chain);
-    });
-    this.drawn[page] = { boxes, units, chains };
+      const el = this.cardBox(m, asks, runs, page);
+      notes.appendChild(el);
+      const ta = el.querySelector('textarea');
+      if (ta) this.fitNote(ta);
+      const b = { el, m, page, fixed: !!m.pos, pos: m.pos || null, how: 'pos', left: 0, top: 0, width: 0, height: 0 };
+      if (m.pos) Object.assign(b, placeOf(m.pos, G, P || 1));
+      else { b.how = side; units.push({ id: m.id, want: Math.max(0, m.y * P - 6), side, boxes: [b] }); }
+      boxes.push(b);
+    }
+    this.drawn[page] = { boxes, units };
     this.arrange(page);
     // Clearing the highlight layer took the pending selection with it, and the mark in focus with it (MATH-15).
     this.showPending(page);
@@ -1333,69 +1338,40 @@ export default class PaperView extends React.Component {
     this.syncOffscreenSoon();
   }
 
-  /* ---------------------------------------------------------------- boxes (MATH-27) */
-  // The spacing pass (./canvas.js spaceBoxes), in desk px, on every draw and while a box is dragged: every box measured; a unit
-  // beside its page goes against the page's edge (a left one's right edge to it), one under a moved box hangs from that
-  // box's edge nearest the page's middle; each then goes as high as it wants with BOX_GAP from any box it shares x with.
+  /* ---------------------------------------------------------------- cards (MATH-27) */
+  // The spacing pass (./canvas.js spaceBoxes), in desk px, on every draw and while a card is dragged: every card measured;
+  // one beside its page goes against the page's edge (a left one's right edge to it), then as high as it wants with
+  // BOX_GAP from any card it shares x with. A card that was moved stays where it was put.
   arrange(page) {
     const model = this.drawn[page];
     if (!model) return;
-    const { G, pageW } = this.desk(page), mid = G + pageW / 2;
+    const { G, pageW } = this.desk(page);
     for (const b of model.boxes) { b.width = b.el.offsetWidth; b.height = b.el.offsetHeight; } // a layout size: unscaled
     const fixed = model.boxes.filter((b) => b.fixed);
     for (const b of fixed) { b.el.style.left = `${b.left}px`; b.el.style.top = `${b.top}px`; }
-    // Which margin each chain beside the page goes in (MATH-15, ./marks.js stackNotes): its highlight's, unless that one
-    // is crowded where it wants to be and the other would keep it nearer. Never saved: `side` stays as it was made.
-    const beside = model.units.filter((unit) => !unit.parent && unit.boxes.length);
+    // Which margin each card beside the page goes in (MATH-15, ./marks.js stackNotes): its highlight's, unless that one
+    // is full where it wants to be and the other would keep it nearer. Never saved: `side` stays as it was made.
+    const beside = model.units.filter((unit) => unit.boxes.length);
     const sides = new Map([...stackNotes(beside.map((unit) => ({ id: unit.id, ideal: unit.want, h: unit.boxes.reduce((h, b, i) => h + b.height + (i ? BOX_GAP : 0), 0), side: unit.side })), { gap: BOX_GAP })].map(([id, at]) => [id, at.side]));
-    const shaped = model.units.filter((unit) => unit.boxes.length).map((unit) => {
-      const p = unit.parent;
-      if (p) {
-        for (const b of unit.boxes) { b.left = hangLeft(p.left, p.width, b.width, mid); b.from = p; }
-        return { unit, want: p.top + p.height + BOX_GAP };
-      }
+    for (const unit of beside) {
       const side = sides.get(unit.id) || unit.side;
       for (const b of unit.boxes) b.left = side === 'left' ? G - SIDE_GAP - b.width : G + pageW + SIDE_GAP;
-      return { unit, want: unit.want };
-    });
-    const tops = spaceBoxes(shaped.map(({ unit, want }) => ({ id: unit.id, want, boxes: unit.boxes.map((b) => ({ left: b.left, width: b.width, height: b.height })) })), fixed);
-    for (const { unit } of shaped) {
+    }
+    const tops = spaceBoxes(beside.map((unit) => ({ id: unit.id, want: unit.want, boxes: unit.boxes.map((b) => ({ left: b.left, width: b.width, height: b.height })) })), fixed);
+    for (const unit of beside) {
       let t = tops.get(unit.id);
       for (const b of unit.boxes) { b.top = t; b.el.style.left = `${b.left}px`; b.el.style.top = `${t}px`; t += b.height + BOX_GAP; }
     }
-    this.drawLinks(page);
   }
 
-  // A short line between each box of a chain and the next. No arrow from the highlight to the first box (MATH-15, merged
-  // 2026-10-06): a note stands level with its highlight, and pointing at either marks both (paintFocus).
-  drawLinks(page) {
-    const ar = this.find1(`[data-arrows="${page}"]`), model = this.drawn[page];
-    if (!ar || !model) return;
-    ar.innerHTML = '';
-    for (const chain of model.chains) {
-      if (!chain.boxes.length) continue;
-      for (let i = 1; i < chain.boxes.length; i += 1) this.drawJoin(ar, chain.boxes[i - 1], chain.boxes[i]);
-    }
-  }
-  drawJoin(ar, a, b) {
-    const lo = Math.max(a.left, b.left), hi = Math.min(a.left + a.width, b.left + b.width);
-    let x1, y1, x2, y2;
-    if (hi - lo >= 16 && b.top >= a.top + a.height) { x1 = x2 = (lo + hi) / 2; y1 = a.top + a.height; y2 = b.top; }
-    else if (hi - lo >= 16 && a.top >= b.top + b.height) { x1 = x2 = (lo + hi) / 2; y1 = a.top; y2 = b.top + b.height; }
-    else if (b.left >= a.left + a.width) { x1 = a.left + a.width; y1 = a.top + Math.min(18, a.height / 2); x2 = b.left; y2 = b.top + Math.min(18, b.height / 2); }
-    else { x1 = a.left; y1 = a.top + Math.min(18, a.height / 2); x2 = b.left + b.width; y2 = b.top + Math.min(18, b.height / 2); }
-    const line = document.createElementNS(SVG, 'line');
-    line.setAttribute('x1', x1); line.setAttribute('y1', y1); line.setAttribute('x2', x2); line.setAttribute('y2', y2);
-    line.setAttribute('stroke', '#cfcfcf'); line.setAttribute('stroke-width', '1.2'); line.setAttribute('stroke-linecap', 'round');
-    ar.appendChild(line);
-  }
-
-  // A note's box: the grip, then its field (being typed in, empty, or with nowhere for a mention to go) or its text. A
-  // free note keeps to the room before the printed text beside it, as it always did; a highlight's is NOTE_W wide. Until
-  // its page's text is drawn (a zoom has just laid the pages out) a free note keeps the width it was last measured at.
-  noteBox(m, page) {
+  // A mark's card (2026-10-06): the grip, then its note (being typed in, empty, or with nowhere for a mention to go: its
+  // field; else its text), then each answer (askSection) and each answer being written (runBox), every one after the first
+  // under a thin divider. A highlight's card is ASK_W wide throughout. A free note keeps to the room before the printed
+  // text beside it, as it always did; until its page's text is drawn (a zoom has just laid the pages out) it keeps the
+  // width it was last measured at. Pointing at a card marks it and its highlight (MATH-15), while the pointer is there.
+  cardBox(m, asks, runs, page) {
     const { G, pageW } = this.desk(page), u = pageW || 1;
-    let width = NOTE_W;
+    let width = ASK_W;
     if (m.pos && !(m.rects || []).length) {
       if (this.textDrawn(page) || !this.freeW.has(m.id)) {
         const at = placeOf(m.pos, G, u);
@@ -1404,49 +1380,57 @@ export default class PaperView extends React.Component {
       } else width = this.freeW.get(m.id);
     }
     const box = document.createElement('div');
-    box.dataset.box = 'note'; box.dataset.boxMark = m.id; box.dataset.noteFor = m.id;
-    box.style.cssText = `${BOX_LOOK};left:0;top:0;width:${width}px;padding-bottom:4px;transition:opacity 120ms,background 120ms`;
-    // Pointing at a note marks it and its highlight (MATH-15), while the pointer is there.
+    box.dataset.box = 'card'; box.dataset.boxMark = m.id; box.dataset.noteFor = m.id;
+    box.style.cssText = `${BOX_LOOK};left:0;top:0;width:${width}px;display:flex;flex-direction:column;transition:opacity 120ms,background 120ms`;
     box.onmouseenter = () => this.paintFocus(m.id);
     box.onmouseleave = () => this.paintFocus(this.focusId);
     box.innerHTML = GRIP_HTML;
     box.onmousedown = (ev) => ev.stopPropagation(); // not a click on the page: no new note, the pending selection stays
     this.grip(box, page);
-    if (this.editing === m.id || !String(m.note).trim() || !this.showsNotes()) {
-      const ta = this.noteField(m, page);
-      ta.style.cssText = `${NOTE_LOOK};display:block;width:100%;box-sizing:border-box;margin:0;border:0;background:transparent;resize:none;overflow:hidden;outline:none`;
-      box.appendChild(ta);
-    } else {
-      const view = this.noteView(m, page);
-      view.style.cssText = `${NOTE_LOOK};white-space:pre-wrap;overflow-wrap:break-word;cursor:text`;
-      box.appendChild(view);
-    }
+    let n = 0;
+    if (m.note != null) { box.appendChild(this.noteSection(m, page)); n += 1; }
+    for (const a of asks) box.appendChild(this.askSection(m, a, page, n++ > 0));
+    for (const p of runs) box.appendChild(this.runBox(p, page, n++ > 0));
     return box;
   }
 
-  // An answer's box: the grip, the question in grey and the model, the answer (scrolling inside past 40% of the pane's
-  // height), then Continue in workspace, Copy, Delete (⌘Z brings it back) and Collapse. Collapsed it is one line, "Bart ›".
-  askBox(m, a, page) {
-    const box = document.createElement('div');
-    box.dataset.box = 'ask'; box.dataset.boxMark = m.id; box.dataset.ask = String(a.id || '');
-    box.onmousedown = (ev) => ev.stopPropagation();
-    box.onclick = (ev) => this.askClick(ev, m, a, page);
-    if (a.collapsed) {
-      box.style.cssText = `${BOX_LOOK};left:0;top:0;width:${COLLAPSED_W}px;padding:0 4px 4px`;
-      box.innerHTML = `${GRIP_HTML}<button type="button" data-act="expand" title="${esc(a.question || '')}" style="display:block;width:100%;text-align:left;font-weight:500;color:#171717">Bart ›</button>`;
+  // A card's note: its field or its text, with a little room under it.
+  noteSection(m, page) {
+    const sec = makeEl('div', 'flex:none;padding-bottom:4px', { cardNote: '1' });
+    if (this.editing === m.id || !String(m.note).trim() || !this.showsNotes()) {
+      const ta = this.noteField(m, page);
+      ta.style.cssText = `${NOTE_LOOK};display:block;width:100%;box-sizing:border-box;margin:0;border:0;background:transparent;resize:none;overflow:hidden;outline:none`;
+      sec.appendChild(ta);
     } else {
-      const model = modelLabel(a.meta), lib = { libName: (id) => this.libName(id) };
-      box.style.cssText = `${BOX_LOOK};left:0;top:0;width:${ASK_W}px;max-height:${this.boxMaxHeight()}px;display:flex;flex-direction:column;font:13px/1.55 var(--font-sans);color:#171717`;
-      box.innerHTML = GRIP_HTML
-        + `<div style="flex:none;display:flex;align-items:baseline;gap:8px;padding:0 12px 6px"><span title="${esc(a.question || '')}" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8f8f8f">${esc(a.question || '')}</span>${model ? `<span style="flex:none;font-size:11.5px;color:#b5b5b5">${esc(model)}</span>` : ''}</div>`
-        + `<div data-ask-body="1" style="flex:1 1 auto;min-height:0;overflow:auto;padding:0 12px 2px;overflow-wrap:anywhere">${answerHtml(a.answer, lib)}</div>`
-        + '<div style="flex:none;display:flex;flex-wrap:wrap;gap:2px;padding:4px 6px 2px;border-top:1px solid #f2f2f2">'
-        + (this.props.onContinueAsk ? '<button type="button" data-act="continue">Continue in workspace</button>' : '')
-        + (this.props.onCopyText ? '<button type="button" data-act="copy">Copy</button>' : '')
-        + '<button type="button" data-act="delete">Delete</button><button type="button" data-act="collapse">Collapse</button></div>';
+      const view = this.noteView(m, page);
+      view.style.cssText = `${NOTE_LOOK};white-space:pre-wrap;overflow-wrap:break-word;cursor:text`;
+      sec.appendChild(view);
     }
-    this.grip(box, page);
-    return box;
+    return sec;
+  }
+
+  // An answer in its card: the question in grey when it is not what the note asks now (an earlier one of the thread,
+  // canvas.js askedByNote) and the model, the answer (scrolling inside past 40% of the pane's height), then Continue in
+  // workspace, Copy, Delete (⌘Z brings it back) and Collapse. Collapsed it is one line, "Bart ›". `divided`: under a divider.
+  askSection(m, a, page, divided) {
+    const sec = document.createElement('div');
+    sec.dataset.ask = String(a.id || '');
+    sec.onclick = (ev) => this.askClick(ev, m, a, page);
+    const line = divided ? `${DIVIDER};` : '';
+    if (a.collapsed) {
+      sec.style.cssText = `${line}flex:none;padding:2px 6px`;
+      sec.innerHTML = `<button type="button" data-act="expand" title="${esc(a.question || '')}" style="font-weight:500;color:#171717">Bart ›</button>`;
+      return sec;
+    }
+    const model = modelLabel(a.meta), lib = { libName: (id) => this.libName(id) }, asked = askedByNote(a.question, m.note) ? '' : String(a.question || '');
+    sec.style.cssText = `${line}flex:none;display:flex;flex-direction:column;padding-top:${divided ? 8 : 0}px;font:13px/1.55 var(--font-sans);color:#171717`;
+    sec.innerHTML = (asked || model ? `<div style="flex:none;display:flex;align-items:baseline;gap:8px;padding:0 12px 6px"><span title="${esc(asked)}" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8f8f8f">${esc(asked)}</span>${model ? `<span style="flex:none;font-size:11.5px;color:#b5b5b5">${esc(model)}</span>` : ''}</div>` : '')
+      + `<div data-ask-body="1" style="flex:none;max-height:${this.boxMaxHeight()}px;overflow:auto;padding:0 12px 2px;overflow-wrap:anywhere">${answerHtml(a.answer, lib)}</div>`
+      + '<div style="flex:none;display:flex;flex-wrap:wrap;gap:2px;padding:2px 6px 4px">'
+      + (this.props.onContinueAsk ? '<button type="button" data-act="continue">Continue in workspace</button>' : '')
+      + (this.props.onCopyText ? '<button type="button" data-act="copy">Copy</button>' : '')
+      + '<button type="button" data-act="delete">Delete</button><button type="button" data-act="collapse">Collapse</button></div>';
+    return sec;
   }
   boxMaxHeight() { const host = this.host.current; return Math.max(140, Math.round((host && host.clientHeight ? host.clientHeight : 600) * 0.4)); }
 
@@ -1475,16 +1459,16 @@ export default class PaperView extends React.Component {
     else if (what === 'collapse') a.collapsed = true;
     else if (what === 'expand') a.collapsed = false;
     else return;
-    this.reframe(); // a box under a moved one that went, or changed width, may have held the desk wide
+    this.reframe(); // a moved card that went may have held the desk wide
     this.renderMarks(page);
     this.scheduleSave();
   }
 
-  // An answer being written (`pendingAsks`): no grip, since nothing of it is kept until it lands. Its header says what
+  // An answer being written (`pendingAsks`), in its mark's card (under a divider when `divided`). Its header says what
   // Bart is doing, with a spinner, and Stop; ▸ shows its steps; the answer comes in once it is writing. A failure says
   // why, with × to close it. Made once; each change of what Bart is doing fills it in place (fillRun).
-  runBox(p, page) {
-    const box = makeEl('div', `${BOX_LOOK};left:0;top:0;width:${ASK_W}px;max-height:${this.boxMaxHeight()}px;display:flex;flex-direction:column;padding-top:8px;font:13px/1.55 var(--font-sans);color:#171717`, { box: 'run', askRun: p.askId });
+  runBox(p, page, divided = false) {
+    const box = makeEl('div', `${divided ? `${DIVIDER};` : ''}flex:none;display:flex;flex-direction:column;padding-top:${divided ? 8 : 0}px;font:13px/1.55 var(--font-sans);color:#171717`, { askRun: p.askId });
     box.onmousedown = (ev) => ev.stopPropagation();
     box.onclick = (ev) => this.runClick(ev, p.askId, page);
     const steps = makeEl('div', 'display:none;flex:none;padding:0 6px 4px', { runSteps: '1' });
@@ -1495,7 +1479,7 @@ export default class PaperView extends React.Component {
       makeEl('div', 'display:none;flex:none;padding:0 12px 8px;color:#c4372d;overflow-wrap:anywhere', { runError: '1' }),
       steps,
       makeEl('div', 'display:none;flex:none;padding:0 12px 6px;font-size:12px;line-height:1.7;color:#8f8f8f', { runLog: '1' }),
-      makeEl('div', 'display:none;flex:1 1 auto;min-height:0;overflow:auto;padding:0 12px 8px;color:#8f8f8f;overflow-wrap:anywhere', { runBody: '1' }),
+      makeEl('div', `display:none;flex:none;max-height:${this.boxMaxHeight()}px;overflow:auto;padding:0 12px 8px;color:#8f8f8f;overflow-wrap:anywhere`, { runBody: '1' }),
     );
     this.fillRun(box, p);
     return box;
@@ -1518,9 +1502,12 @@ export default class PaperView extends React.Component {
     }
     const label = head.querySelector('[data-run-label]');
     if (label) setText(label, runningLabel(p));
-    const question = part('question');
-    setText(question, p.question || '');
-    if (question.title !== (p.question || '')) question.title = p.question || '';
+    // Its question in grey only when it is not what the note asks now (canvas.js askedByNote).
+    const question = part('question'), m = ((this.marks || {})[p.page] || []).find((x) => x && x.id === p.markId);
+    const asked = askedByNote(p.question, m ? m.note : p.question) ? '' : String(p.question || '');
+    showEl(question, !!asked);
+    setText(question, asked);
+    if (question.title !== asked) question.title = asked;
     const error = part('error');
     showEl(error, failed);
     if (failed) setText(error, p.error || 'The run failed.');
@@ -1593,9 +1580,8 @@ export default class PaperView extends React.Component {
     return true;
   }
 
-  // Moving a box by its grip. A press that does not move is no drag. Moved, the box leaves the spacing (the boxes that
-  // hung under it hang from it now), follows the pointer, widens the desk when it goes past its edge, and on release keeps
-  // its place in page units.
+  // Moving a card by its grip. A press that does not move is no drag. Moved, the card leaves the spacing, follows the
+  // pointer, widens the desk when it goes past its edge, and on release keeps its place in page units (the mark's `pos`).
   grip(box, page) {
     const grip = box.querySelector('[data-grip]');
     if (grip) grip.onmousedown = (ev) => this.startDrag(ev, box, page);
@@ -1611,14 +1597,10 @@ export default class PaperView extends React.Component {
     window.addEventListener('mousemove', this.onDragMove);
     window.addEventListener('mouseup', this.onDragUp);
   }
-  // The box out of the unit it was spaced in: it stays where it is put, and the boxes after it in that unit hang from it.
+  // The card out of the spacing: it stays where it is put.
   detach(model, b) {
     b.fixed = true; b.how = 'pos';
-    const unit = model && model.units.find((x) => x.boxes.includes(b));
-    if (!unit) return;
-    const at = unit.boxes.indexOf(b), after = unit.boxes.slice(at + 1);
-    unit.boxes = unit.boxes.slice(0, at);
-    if (after.length) { for (const x of after) x.how = 'hang'; model.units.push({ id: `${unit.id}~${at}`, want: 0, side: null, parent: b, boxes: after }); }
+    if (model) for (const unit of model.units) unit.boxes = unit.boxes.filter((x) => x !== b);
   }
   dragTo() {
     const d = this.drag, host = this.host.current, s = d && this.sheets[d.page], g = d && this.geo[d.page];
@@ -1635,19 +1617,19 @@ export default class PaperView extends React.Component {
     b.left = (d.at.x - wr.left) / css - d.grabX;
     b.top = Math.max(-(this.tops[d.page - 1] || 0) / k, (d.at.y - wr.top) / css - d.grabY);
     this.arrange(d.page);
-    const extra = this.reach(d.page); // the box, and the answers that hang under it
+    const extra = this.reach(d.page);
     if ((extra.left * k > g.G || extra.right * k > g.R) && this.reframe(extra)) {
       wr = s.wrap.getBoundingClientRect(); b.left = (d.at.x - wr.left) / css - d.grabX;
       this.arrange(d.page);
     }
   }
-  // How far past page n its moved boxes and those hanging under them reach as drawn, DESK_EDGE added → { left, right } desk px.
+  // How far past page n its moved cards reach as drawn, DESK_EDGE added → { left, right } desk px.
   reach(n) {
     const model = this.drawn[n], out = { left: 0, right: 0 };
     if (!model || !this.geo[n]) return out;
     const g = this.desk(n);
     for (const x of model.boxes) {
-      if (x.how !== 'pos' && x.how !== 'hang') continue;
+      if (x.how !== 'pos') continue;
       out.left = Math.max(out.left, DESK_EDGE - (x.left - g.G));
       out.right = Math.max(out.right, x.left + x.width + DESK_EDGE - g.G - g.pageW);
     }
@@ -1678,7 +1660,7 @@ export default class PaperView extends React.Component {
     if (host) delete host.dataset.dragging;
     if (!d.moved || cancel) return;
     const g = this.desk(d.page), pos = posOf(d.b.left, d.b.top, g.G, g.pageW || 1);
-    if (d.b.kind === 'note') d.b.m.pos = pos; else if (d.b.ask) d.b.ask.pos = pos;
+    d.b.m.pos = pos;
     this.reframe();
     this.renderMarks(d.page);
     this.scheduleSave();
@@ -1723,9 +1705,9 @@ export default class PaperView extends React.Component {
 
   /* ---------------------------------------------------------------- the mark in focus (MATH-15) */
   // The mark `id` and its note shown together (MATH-15, merged into the canvas 2026-10-06): its highlight drawn darker
-  // over the page and its note's box on a faint wash with a blue edge, every other mark's boxes faded. A press on a
-  // highlight keeps it (this.focusId); pointing at a note shows its own while the pointer is there. null shows none.
-  // The darker highlight goes on the page's highlight layer (page px), so the canvas's lines between boxes stay.
+  // over the page and its card on a faint wash with a blue edge, every other mark's card faded. A press on a highlight
+  // keeps it (this.focusId); pointing at a card shows its own while the pointer is there. null shows none. The darker
+  // highlight goes on the page's highlight layer (page px).
   paintFocus(id) {
     const host = this.host.current; if (!host) return;
     for (const el of host.querySelectorAll('[data-focus]')) el.remove();
@@ -1899,16 +1881,32 @@ export default class PaperView extends React.Component {
     if (ev.key === 'Escape') ta.blur();
   }
   // Bart asked from a highlight's note: the passage (all of it, when the highlight is part of a selection across pages),
-  // the note as it stands and the question go up (the Stage adds which pdf), with the mark's earlier answers as the turns,
-  // deleted ones too while their session lasts (./canvas.js exchangeOf), so a follow-up within half an hour resumes the
-  // same session. The note keeps what was typed and shows as text; the answer's box comes under it.
+  // the note as it stands, the question and the highlighted page's text around the passage (pageTextAround) go up (the
+  // Stage adds which pdf), with the mark's earlier answers as the turns, deleted ones too while their session lasts
+  // (./canvas.js exchangeOf), so a follow-up within half an hour resumes the same session. The note keeps what was typed
+  // and shows as text; the answer comes under it in its card.
   askFrom(ta, m, page, question) {
     m.note = ta.value;
     this.flushSave(this.props.onMarksChange);
     this.closeMention();
-    this.props.onAsk({ markId: m.id, page, quote: passageOf(this.marks, m), note: m.note, question, turns: turnsOf(m) });
+    const ask = { markId: m.id, page, quote: passageOf(this.marks, m), note: m.note, question, turns: turnsOf(m) };
     if (this.editing === m.id) this.editing = null;
     ta.blur();
+    const g = this.geo[page], at = g && g.pageH ? (Number(m.y) * g.pageW) / g.pageH : null;
+    return this.pageTextAround(page, m.text, at).then((pageText) => { if (typeof this.props.onAsk === 'function') this.props.onAsk({ ...ask, pageText }); });
+  }
+  // The text of page n as pdf.js gives it, cut to about 4,000 characters centered on `passage` (./marks.js pageWindow;
+  // `at` the share of the page's height it is at, should it not be found). '' when the text cannot be had within 2 s.
+  async pageTextAround(n, passage, at = null) {
+    let timer = 0;
+    try {
+      const late = new Promise((_, fail) => { timer = setTimeout(() => fail(new Error('slow')), 2000); });
+      return pageWindow(pdfText(await Promise.race([this.texts.get(n), late])), passage, { at });
+    } catch {
+      return '';
+    } finally {
+      clearTimeout(timer);
+    }
   }
   // A row picked: its token takes the place of `@query`, then a space (one there already is stepped over), and the note
   // keeps the keyboard. The item is only mentioned: nothing is added to the workspace. Bart's row writes `@Bart `.

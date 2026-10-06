@@ -2,6 +2,9 @@
 // a page's marks. A selection's client rects come in doubled (a fully selected pdf.js span gives its own box and its
 // text's, which differ under --scale-x) and overlapping (neighbouring spans), so PaperView draws merged boxes only.
 // Rects are { x, y, w, h } in any one unit (layout px or page units); every threshold is relative to a line's height.
+// Later (MATH-27 follow-up, 2026-10-06): a selection snaps out to whole words (wordBounds), a note leaves its highlight's
+// margin only when that margin is full where it wants to be (stackNotes NOTE_SLACK), and a question from a highlight
+// carries the page's text around the passage (pdfText, pageWindow).
 
 const LINE = 0.5; // same line: vertical overlap of at least half the smaller height
 const GAP = 0.6; // within a line, a gap under 0.6 × the line's height is joined; a wider one (a column gutter) is not
@@ -192,15 +195,19 @@ export function passageOf(marks, mark) {
   return parts.sort((a, b) => a.page - b.page || a.y - b.y || a.i - b.i).map((p) => p.text.trim()).filter(Boolean).join('\n');
 }
 
+// How far a note may be pushed down its own margin before the other one is tried: the other margin is a last resort
+// (2026-10-06; it was 12, and a note crossed the page for a neighbour's few lines).
+export const NOTE_SLACK = 200;
+
 /**
  * Where the margin notes of one page go (MATH-15, 2026-10-06), so none covers another. `items`: [{ id, ideal, h, side }],
  * `ideal` the top the note would have beside its highlight, `h` its height, `side` the margin its highlight is nearer.
  * In the order of their highlights, each note takes the top nearest its ideal in its own margin, below the notes
- * already there; when that pushes it down more than `slack` and the other margin would hold it nearer its highlight, it
- * goes there instead (Gwern's sidenotes, two margins). Notes that run past the page's foot are pushed back up, the
- * last first, never above the page's head. → Map id → { top, side }.
+ * already there; only when that pushes it down more than `slack` (its margin is full where it wants to be) and the other
+ * margin would hold it nearer its highlight does it go there instead (Gwern's sidenotes, two margins). Notes that run
+ * past the page's foot are pushed back up, the last first, never above the page's head. → Map id → { top, side }.
  */
-export function stackNotes(items, { pageH = Infinity, gap = 8, slack = 12 } = {}) {
+export function stackNotes(items, { pageH = Infinity, gap = 8, slack = NOTE_SLACK } = {}) {
   const out = new Map(), placed = { left: [], right: [] }, bottom = { left: -Infinity, right: -Infinity };
   const order = [...items].sort((a, b) => a.ideal - b.ideal);
   for (const it of order) {
@@ -222,4 +229,65 @@ export function stackNotes(items, { pageH = Infinity, gap = 8, slack = 12 } = {}
     }
   }
   return out;
+}
+
+/* ------------------------------------------------------------- whole words, and the page around a passage (2026-10-06) */
+
+const WORD = /[\p{L}\p{M}\p{N}_'’-]/u;
+const DIGIT = /\d/;
+
+/**
+ * A stretch `from`–`to` of `text` widened to whole words at both ends: a start inside a word goes back to its first
+ * letter, an end inside one on to its last. Ends already between words stay. Letters, digits, apostrophes and hyphens
+ * make a word, and so does a point or comma between two digits (0.79, 13,633); a hyphen at a line's end does not join it
+ * to the next line's.
+ */
+export function wordBounds(text, from, to) {
+  const s = String(text || '');
+  const word = (i) => i >= 0 && i < s.length && (WORD.test(s[i]) || ((s[i] === '.' || s[i] === ',') && DIGIT.test(s[i - 1] || '') && DIGIT.test(s[i + 1] || '')));
+  let a = from, b = to;
+  while (a > 0 && word(a - 1) && word(a)) a -= 1;
+  while (b < s.length && word(b - 1) && word(b)) b += 1;
+  return { from: a, to: b };
+}
+
+/** A page's text as pdf.js gives it (getTextContent's items): each item's text, a line break where one ends a line. */
+export function pdfText(content) {
+  return ((content && content.items) || []).map((it) => (it && typeof it.str === 'string' ? it.str + (it.hasEOL ? '\n' : '') : '')).join('');
+}
+
+const PAGE_TEXT = 4000; // about how much of a page a question from a highlight carries
+const escapeChar = (c) => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// Words as find matches them (PaperView findPattern): any run of space or none between them, a word broken at a line's end.
+const wordsPattern = (words, flags) => new RegExp(words.map((w) => [...w].map(escapeChar).join('(?:-\\n)?')).join('\\s*'), flags);
+
+/** Where `passage` is in `page` → [from, to], by its first and last eight words; null when it is not found. */
+export function findPassage(page, passage) {
+  const words = squash(passage).split(' ').filter(Boolean);
+  if (!words.length) return null;
+  const head = wordsPattern(words.slice(0, 8), 'i').exec(page);
+  if (!head) return null;
+  const tail = wordsPattern(words.slice(-8), 'gi');
+  tail.lastIndex = head.index;
+  const end = tail.exec(page);
+  return [head.index, end ? end.index + end[0].length : head.index + head[0].length];
+}
+
+const tidy = (t) => t.split('\n').map((line) => line.replace(/[ \t]+/g, ' ').trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+
+/**
+ * The text of a page around a highlighted passage, as a question from it carries it: the whole page when it is no longer
+ * than `max`, else `max` characters centered on the passage (findPassage), cut at spaces and marked "…" where cut. A
+ * passage not found is centered at `at`, the share of the page's height its highlight is at (else the middle).
+ */
+export function pageWindow(text, passage, { max = PAGE_TEXT, at = null } = {}) {
+  const page = String(text || '');
+  if (page.length <= max) return tidy(page);
+  const found = findPassage(page, passage);
+  const mid = found ? (found[0] + found[1]) / 2 : Math.max(0, Math.min(1, Number.isFinite(at) ? at : 0.5)) * page.length;
+  let b = Math.min(page.length, Math.max(0, Math.round(mid - max / 2)) + max);
+  let a = Math.max(0, b - max);
+  if (a > 0) { const sp = page.slice(a, a + 40).search(/\s/); if (sp >= 0) a += sp + 1; }
+  if (b < page.length) { const from = Math.max(a, b - 40), sp = page.slice(from, b).search(/\s\S*$/); if (sp >= 0) b = from + sp; }
+  return `${a > 0 ? '… ' : ''}${tidy(page.slice(a, b))}${b < page.length ? ' …' : ''}`;
 }

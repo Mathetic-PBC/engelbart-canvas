@@ -43,45 +43,46 @@ test('deskOf: DESK desk px each side, scaled with the page, more when the pane c
   assert.deepEqual(deskGeom({ G: 1041, R: 800, pageW: 1600, k: 2 }), { G: 520.5, R: 400, pageW: 800, k: 2 }, 'a page\'s layout in desk px');
 });
 
-test('deskNeed: how far past its page each moved note or answer reaches, plus the desk\'s edge; boxes not moved need nothing', async () => {
-  const { deskNeed, DESK_EDGE, NOTE_W, ASK_W, COLLAPSED_W } = await load();
+test('deskNeed: how far past its page each moved card reaches, plus the desk\'s edge; cards not moved need nothing', async () => {
+  const { deskNeed, DESK_EDGE, NOTE_W, ASK_W } = await load();
   const P = 500;
   assert.deepEqual(deskNeed({ 1: [{ id: 'a', note: 'beside', pos: null, rects: [{}] }] }, () => P), { left: 0, right: 0 });
   const marks = {
-    1: [{ id: 'a', note: 'far left', pos: { x: -1.2, y: 0.1 } }],
-    2: [{ id: 'b', note: null, pos: { x: 5, y: 0 }, asks: [{ id: 'q', pos: { x: 1.5, y: 0.2 } }, { id: 'r', pos: { x: 1.9, y: 0.4 }, collapsed: true }] }],
+    1: [{ id: 'a', note: 'far left', rects: [{}], pos: { x: -1.2, y: 0.1 } }],
+    2: [{ id: 'b', note: null, rects: [{}], pos: { x: 1.5, y: 0 }, asks: [{ id: 'q' }] }],
   };
   const need = deskNeed(marks, () => P);
   assert.equal(need.left, DESK_EDGE + 1.2 * P);
-  assert.equal(need.right, Math.max(1.5 * P + ASK_W, 1.9 * P + COLLAPSED_W) + DESK_EDGE - P, 'a mark without a note has no note box to place');
-  assert.equal(deskNeed({ 3: [{ note: 'x', pos: { x: 0.9, y: 0 } }] }, () => P).right, 0.9 * P + NOTE_W + DESK_EDGE - P);
+  assert.equal(need.right, 1.5 * P + ASK_W + DESK_EDGE - P, 'a mark without a note is a card of its answers');
+  assert.equal(deskNeed({ 3: [{ note: 'x', pos: { x: 0.9, y: 0 } }] }, () => P).right, 0.9 * P + NOTE_W + DESK_EDGE - P, 'a free note');
   assert.deepEqual(deskNeed({ 9: [{ note: 'x', pos: { x: -3, y: 0 } }] }, () => 0), { left: 0, right: 0 }, 'a page not laid out counts for nothing');
 });
 
-test('deskNeed: answers hanging under a moved note count too, from its edge nearest the page\'s middle (follow-up, 2026-10-06)', async () => {
-  const { deskNeed, hangLeft, DESK, DESK_EDGE, NOTE_W, ASK_W, COLLAPSED_W } = await load();
+test('deskNeed: one card a highlight (2026-10-06): a card ASK_W wide at the mark\'s place; an answer\'s own `pos` is not read', async () => {
+  const { deskNeed, DESK, DESK_EDGE } = await load();
   const P = 500;
   const answer = (id, more = {}) => ({ id, question: 'q', answer: 'a', pos: null, collapsed: false, ...more });
-  // A note dragged near the desk's left edge: its answers (wider than it) hang from its right edge and reach further left.
-  const left = { 1: [{ id: 'm', note: '@bart q', rects: [{}], pos: { x: -0.7, y: 0.1 }, asks: [answer('a1'), answer('a2', { collapsed: true })] }] };
-  const x = -0.7 * P;
-  assert.equal(hangLeft(x, NOTE_W, ASK_W, P / 2), x + NOTE_W - ASK_W);
-  assert.equal(deskNeed(left, () => P).left, DESK_EDGE - (x + NOTE_W - ASK_W), 'the widest answer under it, not the note');
+  const x = -0.9 * P;
+  const left = { 1: [{ id: 'm', note: '@bart q', rects: [{}], pos: { x: -0.9, y: 0.1 }, asks: [answer('a1'), answer('a2', { pos: { x: -3, y: 0.5 } })] }] };
+  assert.deepEqual(deskNeed(left, () => P), { left: DESK_EDGE - x, right: 0 }, 'the card where the mark was moved; a2 moved on its own before is in it');
   assert.ok(deskNeed(left, () => P).left > DESK, 'past the 400px desk: it widens');
-  assert.equal(deskNeed({ 1: [{ ...left[1][0], asks: [answer('a2', { collapsed: true })] }] }, () => P).left, DESK_EDGE - x, 'one folded away is narrower than the note');
-  // On the right of the middle they hang from its left edge.
-  const right = { 1: [{ id: 'm', note: 'n', rects: [{}], pos: { x: 1.2, y: 0.1 }, asks: [answer('a1')] }] };
-  assert.equal(deskNeed(right, () => P).right, 1.2 * P + ASK_W + DESK_EDGE - P);
-  // A moved answer is what the ones after it hang from.
-  const chain = { 1: [{ id: 'm', note: 'n', rects: [{}], pos: { x: -0.7, y: 0.1 }, asks: [answer('a1', { pos: { x: 0.2, y: 0.5 } }), answer('a2')] }] };
-  assert.equal(deskNeed(chain, () => P).left, DESK_EDGE - x, 'a2 hangs from a1, on the page');
-  // A deleted answer is not drawn: it holds nothing open. An answer being written is drawn like one.
-  const gone = { 1: [{ ...left[1][0], asks: [answer('a1', { deleted: true })] }] };
-  assert.equal(deskNeed(gone, () => P).left, DESK_EDGE - x);
-  assert.equal(deskNeed(gone, () => P, (id) => (id === 'm' ? 1 : 0)).left, DESK_EDGE - (x + NOTE_W - ASK_W), 'running(markId)');
-  // Boxes beside the page, before any moved one, fit the desk as it is.
-  const beside = { 1: [{ id: 'm', note: 'n', rects: [{}], side: 'left', pos: null, asks: [answer('a1')] }] };
+  // A mark with nothing left to show is no card: a deleted answer and no note.
+  const gone = { 1: [{ id: 'm', note: null, rects: [{}], pos: { x: -0.9, y: 0.1 }, asks: [answer('a1', { deleted: true })] }] };
+  assert.deepEqual(deskNeed(gone, () => P), { left: 0, right: 0 });
+  assert.equal(deskNeed(gone, () => P, (id) => (id === 'm' ? 1 : 0)).left, DESK_EDGE - x, 'an answer being written makes it one again');
+  // Cards beside the page fit the desk as it is.
+  const beside = { 1: [{ id: 'm', note: 'n', rects: [{}], side: 'left', pos: null, asks: [answer('a1', { pos: { x: -2, y: 0 } })] }] };
   assert.deepEqual(deskNeed(beside, () => P, () => 2), { left: 0, right: 0 });
+});
+
+test('askedByNote: an answer\'s question is shown only when it is not what its note asks now', async () => {
+  const { askedByNote } = await load();
+  assert.equal(askedByNote('why is κ good?', '@bart why is κ good?'), true, 'the note\'s own question');
+  assert.equal(askedByNote('why  is κ\ngood?', '@Bart   why is κ good? '), true, 'give or take spacing');
+  assert.equal(askedByNote('why?', '@bart and then?'), false, 'an earlier question of the thread');
+  assert.equal(askedByNote('a plain note', 'a plain note'), true, 'a note that does not start with @bart is compared whole');
+  assert.equal(askedByNote('why?', null), false, 'the note is gone: the question is shown');
+  assert.equal(askedByNote('', 'anything'), true, 'nothing to show');
 });
 
 test('placeOf and posOf: a box\'s place in page units, at any zoom, and back', async () => {
