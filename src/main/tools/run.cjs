@@ -19,7 +19,7 @@ function createRunner({ environment = process.env, execFileImpl = execFile } = {
   /** → { code, signal, stdout, stderr, timedOut, missing } */
   function exec(file, args, { env = {}, timeout = 20_000, cwd, input } = {}) {
     return new Promise((resolve) => {
-      const child = execFileImpl(file, args, { env: { ...base, ...env }, timeout, cwd, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
+      const child = execFileImpl(file, args, { env: { ...base, ...env }, timeout, cwd, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
         const code = error ? (typeof error.code === 'number' ? error.code : null) : 0;
         resolve({
           code,

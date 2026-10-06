@@ -291,7 +291,7 @@ function createTools({ readTools, writeTools, detect, actions, signInProcess = n
 
   /**
    * What every program Engelbart starts gets besides its own environment: ENGELBART_GIT_BIN while Engelbart's own Git
-   * stands in, and ENGELBART_AGENT_PATH (folders, joined by ":") while an agent is installed where PATH does not reach.
+   * stands in, and ENGELBART_AGENT_PATH (folders, joined by path.delimiter: ":", on Windows ";") while an agent is installed where PATH does not reach.
    * ENGELBART_CLAUDE_BIN / ENGELBART_CODEX_BIN: the full path of one whose name runs another copy, or nothing
    * (2026-09-30): the terminal's Claude Code and Codex items run it by that (../terminal/launch.cjs).
    */
@@ -302,7 +302,7 @@ function createTools({ readTools, writeTools, detect, actions, signInProcess = n
     const there = (file) => { try { return fs.existsSync(file); } catch { return false; } };
     if (git.source === 'bundled' && git.status === 'ready' && git.path && there(git.path)) out.ENGELBART_GIT_BIN = path.dirname(git.path);
     const folders = [...new Set(AGENTS.filter((name) => binaryFor(name) && there(records[name].path)).map((name) => path.dirname(records[name].path)))];
-    if (folders.length) out.ENGELBART_AGENT_PATH = folders.join(':');
+    if (folders.length) out.ENGELBART_AGENT_PATH = folders.join(path.delimiter);
     for (const name of AGENTS) if (binaryFor(name) && there(records[name].path)) out[`ENGELBART_${name.toUpperCase()}_BIN`] = records[name].path;
     return out;
   }

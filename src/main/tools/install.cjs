@@ -14,6 +14,10 @@
 //   Updates      `claude update` / `codex update`: each CLI knows whether it came from its installer,
 //                npm or Homebrew. Git is Apple's or Homebrew's to update.
 //
+// Windows (2026-10-05, docs/windows-port.md): Claude Code with its PowerShell installer (`irm https://claude.ai/install.ps1
+// | iex`), Codex with `npm install -g @openai/codex`; Git is Git for Windows, installed by the person (nothing of Apple's or
+// Homebrew's is run). A rollback copies the program back, as there are no symlinks to point.
+//
 // Every action answers { ok, error, kind } and never throws. `kind` names what went wrong (network,
 // proxy, permission, disk, package-manager, cancelled, other) so the row can say it in one line.
 
@@ -33,6 +37,8 @@ const GIT_POLL_MS = 5000;
 // Free space needed before starting: an agent is ~250-350 MB a version; Apple's tools want several GB while installing.
 const NEEDS_BYTES = Object.freeze({ git: 5 * 1024 ** 3, claude: 1024 ** 3, codex: 1024 ** 3 });
 const APPLE_INSTALLER = 'Install Command Line Developer Tools';
+const CLAUDE_WINDOWS_INSTALLER = 'https://claude.ai/install.ps1';
+const GIT_FOR_WINDOWS = 'https://git-scm.com/download/win';
 
 const lastLines = (text, count = 3) => String(text || '').replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-count);
 
@@ -68,7 +74,7 @@ function roomFor(name, where) {
 }
 
 // `installers`: where each agent's installer is fetched from (INSTALLERS; scripts/mac-states gives local pretend ones).
-function createActions({ runner, home = os.homedir(), tmpDir = os.tmpdir(), installers = INSTALLERS, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), now = Date.now, gitWaitMs = GIT_WAIT_MS, gitPollMs = GIT_POLL_MS } = {}) {
+function createActions({ runner, home = os.homedir(), tmpDir = os.tmpdir(), installers = INSTALLERS, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), now = Date.now, gitWaitMs = GIT_WAIT_MS, gitPollMs = GIT_POLL_MS, platform = process.platform, environment = process.env } = {}) {
   async function gitArrived() {
     const selected = await runner.exec('/usr/bin/xcode-select', ['-p'], { timeout: 5000 });
     const developer = selected.code === 0 ? String(selected.stdout).trim().split(/\r?\n/)[0] : '';
@@ -82,6 +88,7 @@ function createActions({ runner, home = os.homedir(), tmpDir = os.tmpdir(), inst
 
   /** Apple's dialog, then waiting for it. `onPhase(text)` reports what it is waiting for. */
   async function installGit({ onPhase = () => {} } = {}) {
+    if (platform === 'win32') return { ok: false, kind: 'other', error: `Install Git for Windows from ${GIT_FOR_WINDOWS}, then check again.` };
     const full = roomFor('git', '/Library');
     if (full) return full;
     const asked = await runner.exec('/usr/bin/xcode-select', ['--install'], { timeout: 30_000 });
@@ -104,9 +111,24 @@ function createActions({ runner, home = os.homedir(), tmpDir = os.tmpdir(), inst
     return { ok: false, kind: 'other', error: 'Apple’s installer had not finished after an hour.' };
   }
 
+  /** Windows: Claude Code's PowerShell installer, Codex from npm. */
+  async function installAgentOnWindows(name) {
+    const root = Object.keys(environment).find((key) => key.toUpperCase() === 'SYSTEMROOT');
+    const powershell = path.win32.join(root ? environment[root] : 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const out = name === 'claude'
+      ? await runner.exec(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `irm ${CLAUDE_WINDOWS_INSTALLER} | iex`], { timeout: INSTALL_TIMEOUT_MS })
+      : await runner.shell('npm install -g @openai/codex < /dev/null 2>&1', { timeout: INSTALL_TIMEOUT_MS });
+    if (out.timedOut) return { ok: false, kind: 'other', error: `The installer had not finished after ${INSTALL_TIMEOUT_MS / 60_000} minutes.` };
+    if (out.missing) return { ok: false, kind: 'other', error: 'Windows PowerShell could not be started.' };
+    if (out.marked === false) return { ok: false, kind: 'other', error: shellSilent(runner) };
+    if (out.code !== 0) return { ok: false, ...classifyFailure(`${out.stdout}\n${out.stderr}`, out.code) };
+    return { ok: true };
+  }
+
   async function installAgent(name) {
     const full = roomFor(name, home);
     if (full) return full;
+    if (platform === 'win32') return installAgentOnWindows(name);
     const installer = installers[name];
     const script = path.join(tmpDir, `engelbart-${name}-install-${process.pid}-${now()}.sh`);
     try {
@@ -136,6 +158,7 @@ function createActions({ runner, home = os.homedir(), tmpDir = os.tmpdir(), inst
 
   async function updateGit(source) {
     if (source === 'bundled') return { ok: false, kind: 'other', error: 'This Git came with Engelbart and is updated with it.' };
+    if (platform === 'win32') return { ok: false, kind: 'other', error: `Git for Windows updates itself (in a terminal: git update-git-for-windows), or from ${GIT_FOR_WINDOWS}.` };
     if (source !== 'homebrew') return { ok: false, kind: 'other', error: 'Apple’s Git is updated by macOS: System Settings › General › Software Update.' };
     const out = await runner.shell('brew upgrade git < /dev/null 2>&1', { timeout: INSTALL_TIMEOUT_MS });
     if (out.code !== 0) return { ok: false, ...classifyFailure(`${out.stdout}\n${out.stderr}`, out.code) };
@@ -148,16 +171,24 @@ function createActions({ runner, home = os.homedir(), tmpDir = os.tmpdir(), inst
 // Putting a working version back (design D12). Both vendors' installers keep earlier versions on disk
 // and reach the current one through a symlink: Claude Code's launcher ~/.local/bin/claude points into
 // ~/.local/share/claude/versions/, Codex's ~/.codex/packages/standalone/current into releases/.
-function rollbackPoint(name, { home = os.homedir(), env = process.env } = {}) {
+function rollbackPoint(name, { home = os.homedir(), env = process.env, platform = process.platform } = {}) {
+  if (platform === 'win32') return name === 'claude' ? path.join(home, '.local', 'bin', 'claude.exe') : null; // npm's Codex: npm's to undo
   if (name === 'claude') return path.join(home, '.local', 'bin', 'claude');
   if (name === 'codex') return path.join(env.CODEX_HOME || path.join(home, '.codex'), 'packages', 'standalone', 'current');
   return null;
 }
 
-/** What the rollback point points at now (to restore later), or null when this install has none. */
-function markRollback(name, options) {
+/**
+ * What the rollback point points at now (to restore later), or null when this install has none. On Windows, where
+ * Claude Code's installer copies the program instead of linking it, a copy of the program is kept beside it.
+ */
+function markRollback(name, options = {}) {
   const link = rollbackPoint(name, options);
   if (!link) return null;
+  if ((options.platform || process.platform) === 'win32') {
+    const backup = `${link}.engelbart-rollback`;
+    try { fs.copyFileSync(link, backup); return { file: link, backup }; } catch { return null; }
+  }
   try {
     const target = fs.readlinkSync(link);
     const resolved = path.resolve(path.dirname(link), target);
@@ -170,6 +201,9 @@ function markRollback(name, options) {
 /** Points the link back where `mark` found it, in one rename. → true when it did. */
 function rollback(mark) {
   if (!mark) return false;
+  if (mark.backup) {
+    try { fs.copyFileSync(mark.backup, mark.file); fs.unlinkSync(mark.backup); return true; } catch { return false; }
+  }
   const temporary = `${mark.link}.engelbart-${process.pid}`;
   try {
     try { fs.unlinkSync(temporary); } catch { /* none */ }
