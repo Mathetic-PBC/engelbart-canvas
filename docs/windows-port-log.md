@@ -5,6 +5,11 @@ Newest status first; the sections below are kept current.
 
 ## Where things stand
 
+- 2026-10-06, run 9 (bc06f3c, with f2d0ac0): macOS passed (1020 tests, 1019 pass, the 1 bundled-Git skip); Windows
+  1 failure, the one seen in run 7 and not in run 8: run-step's "Engelbart's processes" test gives a desktop app 0.4 s
+  to prove it stays up, and expects `echo bye` to have exited within it; Git Bash's login shell sometimes takes longer
+  than 0.4 s to start. That window is now 5 s on Windows (0.4 s on the Mac, as before), the check unchanged.
+
 - 2026-10-05, run 8 (98c688e) passed on macos-latest and windows-latest (Linux, allowed to fail, still fails): npm ci,
   npm test (macOS 1017 tests, 1016 pass, 1 skipped: the bundled-Git test, which skips wherever vendor/git is not
   fetched, as before this branch; Windows 1020, 983 pass, 37 skipped, 0 failed), the Windows installer built
@@ -149,6 +154,9 @@ before.
 | run-step.test.cjs | a process group left behind is stopped only while its leader… | POSIX only: lsof and process groups; Windows skips the sweep |
 | run-step.test.cjs | a kept copy goes when Engelbart quits, and one a crash left behind is swept… | same (the crash half); Windows' stop is tested in windows-platform.test.cjs |
 
+Timing: run-step.test.cjs "Engelbart's processes" gives an app 5 s on Windows, 0.4 s on the Mac (Git Bash's login
+shell starts more slowly than zsh); what it checks is unchanged.
+
 Assertions that only hold on POSIX and are guarded with `process.platform !== 'win32'` inside a test (the rest of the
 test runs): file modes 0600/0700 in github.test.cjs, defaults.test.cjs, sandbox-local.test.cjs (Windows has no such
 modes). Expectations written with the platform's separator (`path.join`, `path.sep`) or a real file outside home
@@ -166,6 +174,7 @@ modes). Expectations written with the platform's separator (`path.join`, `path.s
 | 7886431 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37421579146 | ✗ 1 test | ✗ 3 tests + 5 file timeouts | ✗ | Mac lookup still 35 s after /etc/hosts and DNS; Windows: Git Bash's exec orphans npm (ps table) |
 | 99c752e | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37423625799 | ✗ 1 test | ✗ 2 tests + build-git file timeout | ✗ | Windows stop fixed; "logout" from `exit` in a login shell; Mac fix not in this run |
 | 98c688e | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37425057114 | ✓ | ✓ installer, smoke | ✗ (allowed) | first green run for both |
+| bc06f3c | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37426600854 | ✓ | ✗ 1 test | ✗ (allowed) | f2d0ac0 brought in; Git Bash's login shell slower than run-step's 0.4 s app window |
 
 ## Needs a decision
 

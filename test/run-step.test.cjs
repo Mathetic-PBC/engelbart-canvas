@@ -178,7 +178,10 @@ test('run_command runs to its end in the worktree and refuses launches, the back
 
 test('Engelbart\'s processes: a UI answers on its port, an app is alive after its wait, a terminal program exits 0; stopping stops the whole group', async () => {
   const root = repository('processes');
-  const processes = processesOf({ environment, appAliveMs: 400, uiReadyMs: 8000 });
+  // How long an app must stay up, and a quick program is seen to exit within: Git Bash's login shell can take longer
+  // than 0.4 s to start on Windows (CI, 2026-10-05), so there it is 5 s.
+  const aliveMs = process.platform === 'win32' ? 5000 : 400;
+  const processes = processesOf({ environment, appAliveMs: aliveMs, uiReadyMs: 8000 });
   const port = await freePort();
   await processes.start('web', `PORT=${port} node server.cjs`, root);
   const web = await processes.check('web', 'ui', { port });
@@ -199,7 +202,7 @@ test('Engelbart\'s processes: a UI answers on its port, an app is alive after it
   await processes.stop('app');
   await processes.start('quick', 'echo bye', root);
   const quick = await processes.check('quick', 'app');
-  assert.match(quick.failed_check, /exited within 0.4 seconds \(exit code 0\)/);
+  assert.match(quick.failed_check, new RegExp(`exited within ${aliveMs / 1000} seconds \\(exit code 0\\)`));
 
   assert.deepEqual((await processes.runToExit('cli', 'node cli.cjs --help', root)).code, 0);
   assert.notEqual((await processes.runToExit('cli', 'node missing.cjs', root)).code, 0);
