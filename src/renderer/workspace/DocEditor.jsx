@@ -99,6 +99,17 @@ const withAttachments = (text, images) => {
   const ids = new Map(images.filter((image) => image.id).map((image) => [image.n, image.id]));
   return text.replace(/(?<!!)\[Attachment (\d+)\](?!\()/g, (token, n) => (ids.has(Number(n)) ? `![Attachment ${n}](img:${ids.get(Number(n))})` : token));
 };
+// The mention token of `text` that ends at `at` (`before`) or starts there → [start, end], or null: the line's own
+// tokens (doc.js INLINE), so a mention inside bold or a link's text is not one here.
+const mentionBeside = (text, at, before) => {
+  let acc = 0;
+  for (const tok of text.split(INLINE)) {
+    const end = acc + tok.length;
+    if (tok.startsWith('@[') && (before ? end === at : acc === at)) return [acc, end];
+    acc = end;
+  }
+  return null;
+};
 // A link ⌘-clicked (Ctrl-clicked off macOS, where Ctrl-click is the context menu) opens in a new Stage tab (2026-10-02).
 const newTabClick = (e) => e.metaKey || (e.ctrlKey && !/^(darwin|mac)/i.test(document.documentElement.dataset.platform || navigator.platform || ''));
 
@@ -497,8 +508,13 @@ export default class DocEditor extends React.Component {
   revealRange() { const c = this.caret; if (c) return c.sel ? c.sel : [c.offset, c.offset]; const s = this.selRaw; return s ? [s.a, s.b] : [-1, -1]; }
   // Which tokens show their source on the active line: inline markers the caret touches. A heading's `# ` is plain text there, so it
   // shows (in the heading's font) for as long as the caret is on the line and goes away when the caret leaves (2026-09-18: hiding it
-  // left an empty span the browser typed into, and those characters were lost).
-  openIdx(tokens, a, b) { const out = []; let acc = 0; tokens.forEach((tok, k) => { const end = acc + tok.length, pre = tokShown(tok).pre; if (pre && a <= end && b >= acc) out.push(k); acc = end; }); return out; }
+  // left an empty span the browser typed into, and those characters were lost). A mention opens only with the caret strictly
+  // inside it (MATH-56): at its start or end it stays drawn, so one just picked from the @ menu shows finished at once.
+  openIdx(tokens, a, b) {
+    const out = []; let acc = 0;
+    tokens.forEach((tok, k) => { const end = acc + tok.length, pre = tokShown(tok).pre, touched = tok.startsWith('@[') ? a < end && b > acc : a <= end && b >= acc; if (pre && touched) out.push(k); acc = end; });
+    return out;
+  }
   // `marker`: the style of tokens[0] when it is a line's own `## ` or `- ` (an answer's line being edited: faint, so the
   // line keeps its look and only the mark shows).
   activeHtml(tokens, flags, marker = null) {
@@ -524,18 +540,26 @@ export default class DocEditor extends React.Component {
     tokens.push(...line.slice(at).split(INLINE).filter(Boolean));
     return { tokens, flags };
   }
+  // A closed token holding more than it shows was typed into at its edge (the caret right before or after a mention,
+  // MATH-56): what was typed is the line's own text beside it.
   segs(t) {
-    return [...t.childNodes].filter((n) => n.nodeName !== 'BR').map((n) => {
+    return [...t.childNodes].filter((n) => n.nodeName !== 'BR').flatMap((n) => {
       const el = n.nodeType === 1 && n.dataset && n.dataset.src != null ? n : null;
       const txt = n.textContent.replace(/\u200b/g, '');
       const open = !el || el.dataset.open === '1';
-      return { dl: txt.length, src: open ? txt : el.dataset.src, open, rl: open ? txt.length : el.dataset.src.length };
+      if (open) return [{ dl: txt.length, src: txt, open, rl: txt.length }];
+      const src = el.dataset.src, shut = (dl) => ({ dl, src, open: false, rl: src.length }), typed = (x) => ({ dl: x.length, src: x, open: true, rl: x.length });
+      const { shown } = tokShown(src, this.mentionOpts);
+      if (txt.length > shown.length && txt.startsWith(shown)) return [shut(shown.length), typed(txt.slice(shown.length))];
+      if (txt.length > shown.length && txt.endsWith(shown)) return [typed(txt.slice(0, txt.length - shown.length)), shut(shown.length)];
+      return [shut(txt.length)];
     });
   }
   displayToRaw(t, disp) {
     const segs = this.segs(t); if (!segs.length) return null; let accD = 0, accR = 0;
     for (const s of segs) {
-      if (disp <= accD + s.dl) { const d = disp - accD; if (s.open) return accR + d; const { pre } = tokShown(s.src); return accR + (d === 0 ? 0 : Math.min(s.rl, pre + d)); }
+      // The end of a drawn mention is the end of its source (MATH-56): a caret after it stays after it, not before its `]`.
+      if (disp <= accD + s.dl) { const d = disp - accD; if (s.open) return accR + d; const { pre } = tokShown(s.src); return accR + (d === 0 ? 0 : d === s.dl && s.src.startsWith('@[') ? s.rl : Math.min(s.rl, pre + d)); }
       accD += s.dl; accR += s.rl;
     }
     return accR;
@@ -1395,7 +1419,16 @@ export default class DocEditor extends React.Component {
   applyCaret() { const c = this.caret; this.caret = null; if (!c) return; if (c.sel) { if (c.back) this.setSelection(c.line, c.sel[1], c.sel[0]); else this.setSelection(c.line, c.sel[0], c.sel[1]); } else this.setSelection(c.line, c.offset, c.offset); }
   posIn(t, offset) {
     const walker = document.createTreeWalker(t, NodeFilter.SHOW_TEXT); let node, rest = offset;
-    while ((node = walker.nextNode())) { if (rest <= node.length) return { node, offset: rest }; rest -= node.length; }
+    const shut = (n) => !!(n.parentElement && n.parentElement.closest('[data-open="0"]'));
+    while ((node = walker.nextNode())) {
+      if (rest <= node.length) {
+        // Right after a closed token (a mention, MATH-56) the caret goes to the start of the text after it, when there is
+        // some: what is typed there is that text's, not the mention's.
+        if (rest && rest === node.length && shut(node)) { const next = walker.nextNode(); if (next && !shut(next)) return { node: next, offset: 0 }; }
+        return { node, offset: rest };
+      }
+      rest -= node.length;
+    }
     if (t.firstChild && t.firstChild.nodeName === 'BR') return { node: t, offset: 0 };
     const last = t.lastChild; return last && last.nodeType === 3 ? { node: last, offset: last.length } : { node: t, offset: t.childNodes.length };
   }
@@ -1605,6 +1638,12 @@ export default class DocEditor extends React.Component {
       const head = cur.slice(0, a), tail = cur.slice(b), l1 = sameLine(p, head), l2 = p.type === 'todo' ? todoLine(p.depth, false, tail) : p.num != null ? sameLine({ ...p, num: p.num + 1 }, tail) : sameLine(p, tail);
       this.setLines((x) => { const out = [...x]; out[i] = l1; out.splice(i + 1, 0, l2); return out; }, { line: i + 1, offset: 0 });
       this.setState({ activeLine: i + 1, mention: null }); return;
+    }
+    // Backspace right after a mention, or Delete right before one, takes the whole token, its (ws:…) or (lib:…) with it
+    // (MATH-57): one key, one mention, and one ⌘Z brings it back. ⌥ and ⌘ delete as the browser does.
+    if ((e.key === 'Backspace' || e.key === 'Delete') && collapsed && !mod && !e.altKey && !isCode(p) && !isFence(p)) {
+      const span = mentionBeside(cur, a, e.key === 'Backspace');
+      if (span) { e.preventDefault(); this.writeText(i, cur.slice(0, span[0]) + cur.slice(span[1]), { line: i, offset: span[0] }); this.setState({ mention: null, activeLine: i }); return; }
     }
     if (e.key === 'Backspace' && collapsed && a === 0) {
       if (isMarked(p.type)) {

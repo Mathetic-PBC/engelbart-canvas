@@ -297,6 +297,33 @@ test('workspace context is a flat list: folders sent by an old client are flatte
   await assert.rejects(projects.setWorkspaceContext(ctx, project.id, workspace.id, [42]), /id or a folder/);
 });
 
+test('an item the @ menu linked is unlinked with its last mention, quietly; one linked from the sidebar is not (MATH-57)', async () => {
+  const project = await projects.createProject(ctx, 'Picked');
+  const workspace = await projects.createWorkspace(ctx, project.id, { name: 'W' });
+  const [paper, side, both] = ['21111111-1111-4111-8111-111111111111', '31111111-1111-4111-8111-111111111111', '41111111-1111-4111-8111-111111111111'];
+  await projects.linkToWorkspace(ctx, project.id, workspace.id, [side]); // the sidebar's search
+  let now = await projects.linkToWorkspace(ctx, project.id, workspace.id, [paper, side], { picked: true }); // then both picked from the @ menu
+  assert.deepEqual([now.context, now.picked], [[side, paper], [paper]], 'only what was not linked already counts as picked');
+
+  // The last mention of each goes: the picked one leaves context and is not remembered as thrown away; the other stays.
+  now = await projects.unlinkFromWorkspace(ctx, project.id, workspace.id, paper, { unmentioned: true });
+  assert.deepEqual([now.context, now.picked, now.removed], [[side], [], []]);
+  now = await projects.unlinkFromWorkspace(ctx, project.id, workspace.id, side, { unmentioned: true });
+  assert.deepEqual([now.context, now.removed], [[side], []], 'a sidebar-added item stays');
+
+  // ⌘Z brings the mention back: linked again, as picked.
+  now = await projects.linkToWorkspace(ctx, project.id, workspace.id, [paper], { picked: true });
+  assert.deepEqual([now.context, now.picked], [[side, paper], [paper]]);
+  // Added from the sidebar after it was picked: it stays from then on. The trash still takes it, and remembers it.
+  await projects.linkToWorkspace(ctx, project.id, workspace.id, [both], { picked: true });
+  now = await projects.linkToWorkspace(ctx, project.id, workspace.id, [both]);
+  assert.deepEqual(now.picked, [paper]);
+  now = await projects.unlinkFromWorkspace(ctx, project.id, workspace.id, both, { unmentioned: true });
+  assert.ok(now.context.includes(both));
+  now = await projects.unlinkFromWorkspace(ctx, project.id, workspace.id, paper);
+  assert.deepEqual([now.context, now.picked, now.removed], [[side, both], [], [paper]]);
+});
+
 test('pasted images: bytes land in <project>/assets, the library gets an image row, and only images are accepted', async () => {
   const project = await projects.createProject(ctx, 'Images');
   const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');

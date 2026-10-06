@@ -11,7 +11,7 @@ import { hasTag, isNote } from '../model/kind.js';
 import { isUntitled, nextUntitled } from '../model/names.js';
 import { OPEN_IN_BROWSER } from '../model/address.js';
 import { adoptSession, dropSession, SHOW_TERMINAL } from '../terminal/sessions.js';
-import { letGoNotes, mentionRows } from '../model/rail.js';
+import { letGoNotes, mentionRows, mentionedIds, pickedChanges } from '../model/rail.js';
 import { useBodies } from '../workspace/useBodies.js';
 import { flatWorkspaces, nextPlace, placesToGo } from '../model/nav.js';
 import { onStage, savesPageCopy } from '../model/stage.js';
@@ -371,6 +371,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // written in; another workspace's document beside it is that workspace.
   const onDocChange = React.useCallback((key, ref, text) => {
     if (ref && ref.kind === 'archive') return; // an archived version is only read
+    if (ref && ref.kind === 'workspace' && unmentionRef.current) unmentionRef.current(ref.workspaceId, docsRef.current[key], text);
     if (key && ref) changeDoc(key, ref, text);
     const typed = mainRef.current && mainRef.current.contains(document.activeElement);
     const now = Date.now(), last = lastEdit.current;
@@ -419,6 +420,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   }, [loadBartModels]);
   const docsRef = React.useRef(docs);
   docsRef.current = docs;
+  const unmentionRef = React.useRef(null); // set beside mentionPicked
 
   // Progress is of three kinds: a step of the ladder begins ({ step, name, effort, movedUp }: whatever the last step showed
   // is dropped), what the agent is doing ({ activity }, kept in `log` when it is a thing done rather than a state), and the
@@ -1167,18 +1169,19 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   // A GitHub repository that comes in starts its sandbox (src/main/sandbox); one that could not start is still added and
   // linked, and says why.
-  const linkIds = async (ids) => {
+  // `opts.picked`: the @ menu linked them (MATH-57), so they leave with their last mention.
+  const linkIds = async (ids, opts) => {
     if (!topic || !ids.length) return;
-    const linked = await api.linkToWorkspace(project.id, topic.id, ids);
+    const linked = await api.linkToWorkspace(project.id, topic.id, ids, opts);
     await reload();
     flash(ids[ids.length - 1]);
     if (linked && linked.sandbox_error) onError(new Error(linked.sandbox_error));
   };
 
-  const addInput = async (input, name) => {
+  const addInput = async (input, name, opts) => {
     if (!topic) throw new Error('Open a workspace first');
     const row = await api.addLibraryItem(input, name ? { name } : undefined);
-    await linkIds([row.id]);
+    await linkIds([row.id], opts);
     if (row.sandbox_error) onError(new Error(row.sandbox_error));
     return row;
   };
@@ -1258,10 +1261,27 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   };
 
   // An item picked from the @ menu comes into this workspace; the open page is added to the library first, under the name the mention carries.
+  // Linked so, it is unlinked again when the document's last mention of it goes, and linked once more when ⌘Z brings that
+  // back (MATH-57); an item already linked, from the sidebar or elsewhere, is not (main: projects.cjs linkToWorkspace).
   const mentionPicked = (item) => {
     if (!topic) return;
-    const done = item.kind === 'fresh' ? addInput(item.input, item.name) : item.row ? linkIds([item.row.id]) : null;
+    const done = item.kind === 'fresh' ? addInput(item.input, item.name, { picked: true }) : item.row ? linkIds([item.row.id], { picked: true }) : null;
     if (done) done.catch((error) => onError(error));
+  };
+  // This workspace's document edited (onDocChange): the mentions before and after it decide (model/rail.js pickedChanges).
+  // `dropped` holds what was unlinked here for that, workspace id and item id, for the undo that brings it back.
+  const dropped = React.useRef(new Set());
+  unmentionRef.current = (workspaceId, before, after) => {
+    if (!topic || workspaceId !== topic.id || typeof before !== 'string') return; // not yet read: nothing was removed
+    if (!before.includes('@[') && !after.includes('@[')) return;
+    const mine = new Set([...dropped.current].filter((key) => key.startsWith(`${topic.id} `)).map((key) => key.slice(topic.id.length + 1)));
+    const { unlink, relink } = pickedChanges({ before: mentionedIds(before, library), after: mentionedIds(after, library), picked: topic.picked || [], dropped: mine });
+    for (const id of unlink) {
+      dropped.current.add(`${topic.id} ${id}`);
+      api.unlinkFromWorkspace(project.id, topic.id, id, { unmentioned: true }).then(() => reload()).catch((error) => onError(error));
+    }
+    for (const id of relink) dropped.current.delete(`${topic.id} ${id}`);
+    if (relink.length) linkIds(relink, { picked: true }).catch((error) => onError(error));
   };
 
   // Continue in workspace on a highlight's answer (MATH-27): the passage, the @bart question and the answer at the end of

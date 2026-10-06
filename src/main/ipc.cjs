@@ -416,13 +416,14 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   saving('restore-workspace', withCtx((ctx, pid, wid) => { const out = projects.restoreWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); navChanged(); return out; }), { project: first });
   saving('set-workspace-context', (pid, wid, entries) => changeWorkspaceContext(pid, wid, (ctx, projectId, workspaceId) => projects.setWorkspaceContext(ctx, projectId, workspaceId, entries)), { project: first });
   // The sidebar: search, +, Save and an @mention bring a library item into a workspace; the trash takes it out (and remembers that it did).
-  saving('link-to-workspace', (pid, wid, ids) => {
-    const adding = (Array.isArray(ids) ? ids : [ids]).slice(0, 200).map((id) => str(id, 'library id', 64));
-    return changeWorkspaceContext(pid, wid, (ctx, projectId, workspaceId) => projects.linkToWorkspace(ctx, projectId, workspaceId, adding));
+  // `picked`: the @ menu linked it; `unmentioned`: its last mention left the document (MATH-57).
+  saving('link-to-workspace', (pid, wid, ids, opts) => {
+    const adding = (Array.isArray(ids) ? ids : [ids]).slice(0, 200).map((id) => str(id, 'library id', 64)), picked = !!(opts && opts.picked === true);
+    return changeWorkspaceContext(pid, wid, (ctx, projectId, workspaceId) => projects.linkToWorkspace(ctx, projectId, workspaceId, adding, { picked }));
   }, { project: first });
-  saving('unlink-from-workspace', (pid, wid, id) => {
-    const entry = str(id, 'library id', 64);
-    return changeWorkspaceContext(pid, wid, (ctx, projectId, workspaceId) => projects.unlinkFromWorkspace(ctx, projectId, workspaceId, entry));
+  saving('unlink-from-workspace', (pid, wid, id, opts) => {
+    const entry = str(id, 'library id', 64), unmentioned = !!(opts && opts.unmentioned === true);
+    return changeWorkspaceContext(pid, wid, (ctx, projectId, workspaceId) => projects.unlinkFromWorkspace(ctx, projectId, workspaceId, entry, { unmentioned }));
   }, { project: first });
 
   saving('create-note', withCtx((ctx, pid, input) => {

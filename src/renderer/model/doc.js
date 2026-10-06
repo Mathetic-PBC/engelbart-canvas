@@ -264,7 +264,9 @@ export function rawOffset(p, fOff, line, opts) {
   for (const tok of text.split(INLINE)) {
     if (!tok) continue;
     const { shown, pre } = tokShown(tok, opts);
-    if (fOff <= accF + shown.length) { const d = fOff - accF; return base + accR + (pre ? (d === 0 ? 0 : Math.min(tok.length, pre + d)) : d); }
+    // The end of what a mention shows is the end of its source (MATH-56): a click after it lands after it, not before its
+    // `]`. Bold and the rest keep their end inside the closing mark, so what is typed there continues them.
+    if (fOff <= accF + shown.length) { const d = fOff - accF; return base + accR + (pre ? (d === 0 ? 0 : d === shown.length && tok.startsWith('@[') ? tok.length : Math.min(tok.length, pre + d)) : d); }
     accF += shown.length; accR += tok.length;
   }
   return base + text.length;

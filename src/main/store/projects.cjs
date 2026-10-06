@@ -497,12 +497,14 @@ function workspaceRecord(dir) {
   // Kept by every save through the app; a workspace last saved before the count existed is measured.
   const chars = Number.isInteger(meta.chars) && meta.chars >= 0 ? meta.chars : docChars(dir);
   const removed = Array.isArray(meta.removed) ? meta.removed.filter((id) => typeof id === 'string' && UUID_RE.test(id)) : [];
+  // What the @ menu linked (MATH-57): it leaves with its last mention in the document.
+  const picked = Array.isArray(meta.picked) ? meta.picked.filter((id) => typeof id === 'string' && UUID_RE.test(id)) : [];
   // The Builds started from this workspace (2026-09-25), and its archived versions, oldest first (./archive.cjs).
   const builds = Array.isArray(meta.builds) ? meta.builds.filter((id) => typeof id === 'string' && BUILD_ID_RE.test(id)) : [];
   const archives = (Array.isArray(meta.archives) ? meta.archives : [])
     .filter((entry) => entry && typeof entry.file === 'string' && ARCHIVE_RE.test(entry.file))
     .map((entry) => ({ file: entry.file, clearedAt: typeof entry.clearedAt === 'string' ? entry.clearedAt : null, title: typeof entry.title === 'string' ? entry.title.slice(0, 200) : '' }));
-  return { id: meta.id, name: path.basename(dir), context, removed, chars, builds, archives, dir, created: meta.created || null };
+  return { id: meta.id, name: path.basename(dir), context, removed, picked, chars, builds, archives, dir, created: meta.created || null };
 }
 
 function docChars(dir) {
@@ -531,7 +533,7 @@ function findWorkspace(ctx, projectId, workspaceId) {
 }
 
 function publicWorkspace(workspace) {
-  return { id: workspace.id, name: workspace.name, context: workspace.context, removed: workspace.removed, chars: workspace.chars, builds: workspace.builds || [], archives: workspace.archives || [], created: workspace.created };
+  return { id: workspace.id, name: workspace.name, context: workspace.context, removed: workspace.removed, picked: workspace.picked || [], chars: workspace.chars, builds: workspace.builds || [], archives: workspace.archives || [], created: workspace.created };
 }
 
 /** Every workspace of a project, flat, with its path from the project directory ("Agents/Inline chat agent"). */
@@ -685,19 +687,26 @@ function addWorkspaceBuild(ctx, projectId, workspaceId, buildId) {
 // it off `removed`. Both run here, one read and one write of meta.json, so quick adds never race.
 const MAX_REMOVED = 1000;
 
-async function linkToWorkspace(ctx, projectId, workspaceId, ids) {
+async function linkToWorkspace(ctx, projectId, workspaceId, ids, { picked = false } = {}) {
   const { workspace } = findWorkspace(ctx, projectId, workspaceId);
   const adding = (Array.isArray(ids) ? ids : [ids]).map((id) => assertId(id, 'library'));
   const context = [...workspace.context];
+  // `picked` (MATH-57): linked by picking it from the @ menu, which is remembered for an item not linked already. Linked
+  // any other way, it stays when its mentions go.
+  const chosen = picked ? [...workspace.picked, ...adding.filter((id) => !context.includes(id) && !workspace.picked.includes(id))] : workspace.picked.filter((id) => !adding.includes(id));
   for (const id of adding) if (!context.includes(id)) context.push(id);
-  return patchWorkspaceMeta(workspace, { context: flatContext(context), removed: workspace.removed.filter((id) => !adding.includes(id)) });
+  return patchWorkspaceMeta(workspace, { context: flatContext(context), removed: workspace.removed.filter((id) => !adding.includes(id)), picked: chosen });
 }
 
-async function unlinkFromWorkspace(ctx, projectId, workspaceId, id) {
+// `unmentioned` (MATH-57): the document's last mention of an item the @ menu linked went, and the item goes with it. Only
+// such an item, and it is not remembered as thrown away: mentioned again, it is on the rail as any mention is.
+async function unlinkFromWorkspace(ctx, projectId, workspaceId, id, { unmentioned = false } = {}) {
   const { workspace } = findWorkspace(ctx, projectId, workspaceId);
   const gone = assertId(id, 'library');
+  const context = workspace.context.filter((held) => held !== gone), picked = workspace.picked.filter((held) => held !== gone);
+  if (unmentioned) return workspace.picked.includes(gone) ? patchWorkspaceMeta(workspace, { context, picked }) : publicWorkspace(workspace);
   const removed = [...workspace.removed.filter((held) => held !== gone), gone].slice(-MAX_REMOVED);
-  return patchWorkspaceMeta(workspace, { context: workspace.context.filter((held) => held !== gone), removed });
+  return patchWorkspaceMeta(workspace, { context, removed, picked });
 }
 
 /* --------------------------------------------------------------------- notes */
