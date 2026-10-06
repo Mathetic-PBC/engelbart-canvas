@@ -2,9 +2,9 @@
 
 // npm run build && npx electron scripts/smoke-settings.cjs
 // Runs the real app, hidden, against disposable data and the fake @bart, and drives Settings (src/renderer/ui/Settings.jsx,
-// 2026-10-06, MATH-53) with real (synthetic) input: the gear, its menu, Intelligence levels (a level's model and effort
+// 2026-10-06, MATH-53) with real (synthetic) input: the gear, the window's Model page (a level's model and effort
 // saved to the models file as they change, each provider its own group), Escape closing the dialog and not the
-// workspace, and in test mode the menu's Reset everything… (confirmed by ENGELBART_CONFIRM_ALL).
+// workspace, and in test mode the Test data page's Reset everything… (confirmed by ENGELBART_CONFIRM_ALL).
 // ENGELBART_SETTINGS_SHOTS=<dir> saves pictures.
 const { app, BrowserWindow } = require('electron');
 const assert = require('node:assert/strict');
@@ -61,7 +61,6 @@ async function shot(wc, name) {
 // The centre of the button whose text starts with `words`.
 const pressText = async (wc, words) => click(wc, await until(() => js(wc, `(()=>{const el=[...document.querySelectorAll('button')].find((b)=>b.textContent.trim().startsWith(${JSON.stringify(words)}));if(!el)return null;const r=el.getBoundingClientRect();return{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`), words));
 const GEAR = '[data-settings] button[aria-label="Settings"]';
-const MENU = '[data-settings-menu]';
 const DIALOG = '[data-levels-dialog]';
 // A select's value set as a person's pick would set it (a native popup cannot be driven by synthetic input).
 const choose = (wc, selector, value) => js(wc, `(()=>{const el=document.querySelector(${JSON.stringify(selector)});const set=Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set;set.call(el,${JSON.stringify(value)});el.dispatchEvent(new Event('change',{bubbles:true}));return el.value})()`);
@@ -85,13 +84,10 @@ app.whenReady().then(async () => {
     await until(async () => (await rows(wc)).join('\n').trim() === '', 'an empty document');
     await typeKeys(wc, 'Notes');
 
-    /* ------------------------------------------------ the gear, its menu and Intelligence levels */
+    /* ------------------------------------------------ the gear opens the window at Model */
     await press(wc, GEAR);
-    await until(() => has(wc, MENU), 'the menu');
-    assert.deepEqual(await js(wc, `[...document.querySelectorAll('${MENU} [role=menuitem]')].map((b)=>b.textContent)`), ['Intelligence levels…'], 'test mode is off: one item');
-    await shot(wc, '1-menu');
-    await press(wc, '[data-settings-item="levels"]');
-    await until(() => has(wc, `${DIALOG} [data-level="anthropic:quick"]`), 'the levels');
+    await until(() => has(wc, `${DIALOG} [data-level="anthropic:quick"]`), 'the window, at Model');
+    assert.deepEqual(await js(wc, `[...document.querySelectorAll('${DIALOG} [data-settings-page]')].map((b)=>b.textContent)`), ['Model'], 'test mode is off: one page');
     await shot(wc, '2-levels');
     await choose(wc, '[data-level="anthropic:quick"] [data-level-field="model"]', 'opus');
     await until(() => (file(MODELS_FILE) || {}).discover && file(MODELS_FILE).discover.providers.anthropic.quick.model === 'opus', 'Quick on Opus saved');
@@ -111,13 +107,15 @@ app.whenReady().then(async () => {
     await until(() => js(wc, '!!document.querySelector("[data-window-controls]") && /Test · on/.test(document.querySelector("[data-window-controls]").textContent)'), 'test mode on');
     await pause(400);
     await press(wc, GEAR);
-    await until(() => has(wc, '[data-settings-item="reset"]'), 'the test data items');
-    await shot(wc, '4-menu-test');
+    await until(() => has(wc, '[data-settings-page="test-data"]'), 'the Test data page');
+    await press(wc, '[data-settings-page="test-data"]');
+    await until(() => has(wc, '[data-settings-item="reset"]'), 'the test data actions');
+    await shot(wc, '4-test-data');
     const testRoot = path.join(root, '.engelbart', 'test');
     fs.writeFileSync(path.join(testRoot, 'marker'), 'x');
     await press(wc, '[data-settings-item="reset"]');
     await until(() => !fs.existsSync(path.join(testRoot, 'marker')), 'Reset everything… ran');
-    await until(async () => !(await has(wc, MENU)), 'and closed the menu');
+    await until(async () => !(await has(wc, DIALOG)), 'and closed the window');
     console.log('settings smoke: ok');
     app.exit(0);
   } catch (error) {

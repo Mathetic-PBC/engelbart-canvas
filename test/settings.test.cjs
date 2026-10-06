@@ -394,19 +394,21 @@ test('the rows: each agent\'s default per provider, the default providers as a r
   assert.deepEqual([lastPick(shown(root), 'quick').label, lastPick(shown(root), 'build')], ['Astra Ultra', null]);
 });
 
-test('the gear opens a menu with Intelligence levels, and the test data items only in test mode', () => {
-  const { MENU } = load('ui/Settings.jsx');
-  const ids = (props) => MENU.filter((item) => !item.shown || item.shown(props)).map((item) => item.id);
-  assert.deepEqual(ids({ test: null }), ['levels']);
-  assert.deepEqual(ids({ test: { testMode: false } }), ['levels']);
-  assert.deepEqual(ids({ test: { testMode: true } }), ['levels', 'reveal', 'start-new', 'reset']);
-  assert.equal(MENU[0].label, 'Intelligence levels…');
+test('the gear opens the settings window at Model, with Test data only in test mode', () => {
+  const { PAGES } = load('ui/Settings.jsx');
+  const ids = (props) => PAGES.filter((page) => !page.shown || page.shown(props)).map((page) => page.id);
+  assert.deepEqual(ids({ test: null }), ['model']);
+  assert.deepEqual(ids({ test: { testMode: false } }), ['model']);
+  assert.deepEqual(ids({ test: { testMode: true } }), ['model', 'test-data']);
+  assert.equal(PAGES[0].title, 'Model');
   const source = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/Settings.jsx'), 'utf8');
   assert.ok(!source.includes('⚙'), 'a drawn gear, not the character');
   assert.match(source, /className="settings-gear"/);
+  assert.match(source, /aria-haspopup="dialog" onClick=\{\(\) => setOpen\(true\)\}/, 'no menu: a press opens the window');
+  assert.ok(!source.includes('role="menu"'));
 });
 
-test('Intelligence levels: Quick, Standard and Deep of the provider @discover runs on, each a model and an effort', () => {
+test('Model: Quick, Standard and Deep of the provider @discover runs on, each a model and an effort', () => {
   const { IntelligenceLevels, LEVELS } = load('ui/Settings.jsx');
   assert.deepEqual(LEVELS.map((level) => level.id), ['quick', 'standard', 'deep']);
   const root = home();
