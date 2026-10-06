@@ -1,11 +1,10 @@
 // Settings (2026-10-06, MATH-53): the gear in the top-right controls on every screen (./WindowControls.jsx), after the
-// notification bell. A press opens a small menu (it closes on a press outside it and on Escape) whose items are a list
-// (MENU), so more can be added: for now "Intelligence levels…", and in test mode the Test data actions that were test
-// mode's own gear until today (./TestToggle.jsx keeps the pill).
-// "Intelligence levels…" opens the settings window (laid out as Linear's preferences are: pages on the left, groups of rows
-// on the right) at Intelligence: what Quick, Standard and Deep run on for each provider, the levels a plain @discover line
-// (Standard) and its --quick / --deep take (models file → `discover`, src/main/bart/settings.cjs). Each pick is saved as
-// it is made: the next run starts there, in any window, with no restart.
+// notification bell. A press opens the settings window, laid out as Linear's settings are: pages on the left (PAGES, so
+// more can be added), and on the right the open page's groups, each a card of rows with a label, a line on what it is
+// for, and its control. For now: Model, what Quick, Standard and Deep run on for each provider, the levels a plain
+// @discover line (Standard) and its --quick / --deep take (models file → `discover`, src/main/bart/settings.cjs; each pick
+// is saved as it is made, and the next run starts there, in any window, with no restart); and in test mode Test data,
+// the actions that were test mode's own gear (./TestToggle.jsx keeps the pill).
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
@@ -30,7 +29,7 @@ export const LEVELS = Object.freeze([
   { id: 'deep', name: 'Deep', hint: 'Used by @discover --deep' },
 ]);
 
-const SELECT = { height: 28, boxSizing: 'border-box', padding: '0 24px 0 9px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fff', appearance: 'none', WebkitAppearance: 'none', cursor: 'pointer', ...text(12.5), outline: 'none' };
+const SELECT = { height: 30, boxSizing: 'border-box', padding: '0 26px 0 10px', border: '1px solid #e4e4e4', borderRadius: 7, background: '#fff', boxShadow: '0 1px 1px #0000000a', appearance: 'none', WebkitAppearance: 'none', cursor: 'pointer', ...text(13), outline: 'none' };
 
 /** A compact select with the app's chevron. `options`: [{ value, label }]; `width` lines a column of them up. */
 function Choice({ label, value, options, onChange, disabled, field, width }) {
@@ -44,13 +43,38 @@ function Choice({ label, value, options, onChange, disabled, field, width }) {
   );
 }
 
-// A group on a settings page: its heading, then a card of rows split by hairlines (as Linear's preferences are drawn).
-const GROUP_HEAD = { margin: '18px 0 8px', ...text(13, '#171717', 500) };
-const CARD = { border: '1px solid #eaeaea', borderRadius: 8, background: '#fafafa', overflow: 'hidden' };
-const ROW = { display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px' };
+// A group on a settings page: its heading, then a card of rows split by inset hairlines. The card stands out past the
+// page's left edge by its own padding, so a row's words line up under the title and the heading (as Linear's do).
+const PAD = 16;
+const GROUP_HEAD = { display: 'flex', alignItems: 'baseline', gap: 8, margin: '28px 0 10px', ...text(14, '#171717', 500) };
+const CARD = { margin: `0 -${PAD}px`, border: '1px solid #ebebeb', borderRadius: 10, background: '#fff', boxShadow: '0 1px 2px #00000008' };
+const ROW = { display: 'flex', alignItems: 'center', gap: 10, minHeight: 60, boxSizing: 'border-box', padding: `12px ${PAD}px` };
+const HAIRLINE = { height: 1, margin: `0 ${PAD}px`, background: '#efefef' };
+
+function Group({ title, note, children, ...rest }) {
+  const rows = React.Children.toArray(children);
+  return (
+    <section aria-label={title} {...rest}>
+      <div style={GROUP_HEAD}>{title}{note}</div>
+      <div style={CARD}>{rows.map((row, index) => <React.Fragment key={row.key}>{index > 0 && <div aria-hidden="true" style={HAIRLINE} />}{row}</React.Fragment>)}</div>
+    </section>
+  );
+}
+
+function Row({ label, hint, children, ...rest }) {
+  return (
+    <div style={ROW} {...rest}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={text(13.5, '#171717', 500)}>{label}</div>
+        <div style={{ marginTop: 1, ...text(12.5, '#8f8f8f') }}>{hint}</div>
+      </div>
+      {children}
+    </div>
+  );
+}
 
 /**
- * Intelligence: per provider offered, a group of the three levels, each a model and an effort. A provider whose CLI cannot
+ * Model: per provider offered, a group of the three levels, each a model and an effort. A provider whose CLI cannot
  * run says so under its heading; its levels can still be set. `initial`: what api.settingsModels() gave, when it is already
  * known (the tests' static render).
  */
@@ -72,33 +96,23 @@ export function IntelligenceLevels({ initial = null }) {
   const save = (provider, level, step) => api.saveSettingsModels(patchOf('discover', provider, step, level)).then((value) => { setSettings(value); setError(''); }, (e) => setError(errorMessage(e)));
   return (
     <div data-intelligence-levels="1">
-      {settings.fileError && <div role="alert" data-models-file-error="1" style={{ marginTop: 12, padding: '8px 10px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fafafa', ...text(12.5, 'var(--red-600)') }}>{settings.fileError}</div>}
+      {settings.fileError && <div role="alert" data-models-file-error="1" style={{ marginTop: 16, padding: '8px 10px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fafafa', ...text(12.5, 'var(--red-600)') }}>{settings.fileError}</div>}
       {providers.map((provider) => {
         const entry = settings.models.providers[provider], note = settings.cli[provider];
         const models = Object.keys(entry.models).map((key) => ({ value: key, label: entry.models[key].name }));
         const efforts = entry.efforts.map((effort) => ({ value: effort, label: EFFORT_LABELS[effort] || effort }));
         return (
-          <section key={provider} data-levels-provider={provider} aria-label={entry.name}>
-            <div style={GROUP_HEAD}>
-              {entry.name}
-              {note && <span data-cli-note={provider} style={{ marginLeft: 8, ...text(12, '#8f8f8f') }}>{note}</span>}
-            </div>
-            <div style={CARD}>
-              {LEVELS.map((level, index) => {
-                const step = defaultStep(settings.models, 'discover', provider, level.id);
-                return (
-                  <div key={level.id} data-level={`${provider}:${level.id}`} style={{ ...ROW, borderTop: index ? '1px solid #eaeaea' : 0 }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={text(13, '#171717', 500)}>{level.name}</div>
-                      <div style={text(12, '#8f8f8f')}>{level.hint}</div>
-                    </div>
-                    <Choice label={`${entry.name} ${level.name} model`} field="model" width={92} value={step.model} options={models} onChange={(model) => save(provider, level.id, { model, effort: step.effort })} />
-                    <Choice label={`${entry.name} ${level.name} effort`} field="effort" width={104} value={step.effort} options={efforts} onChange={(effort) => save(provider, level.id, { model: step.model, effort })} />
-                  </div>
-                );
-              })}
-            </div>
-          </section>
+          <Group key={provider} title={entry.name} data-levels-provider={provider} note={note && <span data-cli-note={provider} style={text(12.5, '#8f8f8f')}>{note}</span>}>
+            {LEVELS.map((level) => {
+              const step = defaultStep(settings.models, 'discover', provider, level.id);
+              return (
+                <Row key={level.id} label={level.name} hint={level.hint} data-level={`${provider}:${level.id}`}>
+                  <Choice label={`${entry.name} ${level.name} model`} field="model" width={96} value={step.model} options={models} onChange={(model) => save(provider, level.id, { model, effort: step.effort })} />
+                  <Choice label={`${entry.name} ${level.name} effort`} field="effort" width={110} value={step.effort} options={efforts} onChange={(effort) => save(provider, level.id, { model: step.model, effort })} />
+                </Row>
+              );
+            })}
+          </Group>
         );
       })}
       {error && <div role="alert" style={{ marginTop: 10, ...text(12.5, 'var(--red-600)') }}>{error}</div>}
@@ -106,104 +120,92 @@ export function IntelligenceLevels({ initial = null }) {
   );
 }
 
-// The settings window's pages, in its left column. One for now; more are added here.
+const BUTTON = { height: 30, boxSizing: 'border-box', padding: '0 12px', border: '1px solid #e4e4e4', borderRadius: 7, background: '#fff', boxShadow: '0 1px 1px #0000000a', cursor: 'pointer', flex: 'none', ...text(13, '#171717', 500) };
+
+/** Test data (test mode only): the test library's folder, and starting it over. `close` shuts the window first where the app starts again. */
+function TestData({ test, close }) {
+  const act = (run, shut) => () => { if (shut) close(); run(); };
+  return (
+    <Group title="Test library" data-test-data="1">
+      <Row key="reveal" label="Reveal in Finder" hint="Open ~/.engelbart/test, where test mode keeps everything">
+        <button type="button" className="hov-bd2" data-settings-item="reveal" onClick={act(test.onReveal)} style={BUTTON}>Reveal</button>
+      </Row>
+      <Row key="start-new" label="Start as a new user" hint="An empty library and onboarding from its first screen">
+        <button type="button" className="hov-bd2" data-settings-item="start-new" onClick={act(test.onStartNew, true)} style={BUTTON}>Start over…</button>
+      </Row>
+      <Row key="reset" label="Reset everything" hint="Delete the test library and seed it again">
+        <button type="button" className="hov-bd2" data-settings-item="reset" onClick={act(test.onReset, true)} style={{ ...BUTTON, color: '#e70022' }}>Reset…</button>
+      </Row>
+    </Group>
+  );
+}
+
+// Lucide's "box" (a model, as model hubs draw one) and "flask-conical", at the nav's size.
+const icon = (paths) => (
+  <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" style={{ flex: 'none', display: 'block' }}>{paths}</svg>
+);
+const MODEL_ICON = icon(<><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" /><path d="m3.3 7 8.7 5 8.7-5" /><path d="M12 22V12" /></>);
+const FLASK_ICON = icon(<><path d="M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-5.069-10.127A2 2 0 0 1 14 9.527V2" /><path d="M8.5 2h7" /><path d="M7 16h10" /></>);
+
+// The settings window's pages, in order, under their headings in the left column. `shown` (optional) decides from the
+// window's props whether a page is there.
 export const PAGES = Object.freeze([
-  { id: 'intelligence', title: 'Intelligence', lead: 'What each level runs on, for each provider. Changes are saved as you make them.', Body: IntelligenceLevels },
+  { id: 'model', section: 'Settings', title: 'Model', icon: MODEL_ICON, Body: () => <IntelligenceLevels /> },
+  { id: 'test-data', section: 'Developer', title: 'Test data', icon: FLASK_ICON, shown: ({ test }) => !!(test && test.testMode), Body: TestData },
 ]);
 
-const NAV_ICON = (
-  <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flex: 'none', display: 'block' }}>
-    <path d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9z" /><path d="M19 15l.8 1.9 1.9.8-1.9.8L19 20.5l-.8-1.9-1.9-.8 1.9-.8z" />
-  </svg>
-);
+const NAV_ITEM = { display: 'flex', alignItems: 'center', gap: 9, width: '100%', height: 30, boxSizing: 'border-box', padding: '0 9px', border: 0, borderRadius: 6, cursor: 'pointer', textAlign: 'left' };
 
 /** The settings window: pages listed on the left, the open one on the right; Escape, × or a press outside closes it. */
-function SettingsDialog({ page: first = 'intelligence', onClose }) {
-  const [page, setPage] = React.useState(first);
+function SettingsDialog({ test, onClose }) {
+  const pages = PAGES.filter((page) => !page.shown || page.shown({ test }));
+  const [page, setPage] = React.useState(pages[0].id);
   React.useEffect(() => {
     // Taken before the workspace's own Escape (which leaves the workspace) can see it, as BuildReject does.
     const onKey = (event) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose(); } };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, [onClose]);
-  const open = PAGES.find((candidate) => candidate.id === page) || PAGES[0];
+  const open = pages.find((candidate) => candidate.id === page) || pages[0];
   const Body = open.Body;
   return createPortal(
     <div data-overlay="1" data-levels-dialog="1" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }} style={{ position: 'fixed', inset: 0, zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(23,23,23,.18)' }}>
-      <div role="dialog" aria-modal="true" aria-label="Settings" style={{ display: 'flex', width: 'min(680px, calc(100vw - 32px))', height: 'min(460px, calc(100vh - 80px))', background: '#fff', border: '1px solid #c9c9c9', borderRadius: 12, boxShadow: '0 12px 40px #0000001f', overflow: 'hidden', animation: `rise 160ms ${EASE}` }}>
-        <nav aria-label="Settings pages" style={{ flex: 'none', width: 176, boxSizing: 'border-box', padding: '14px 8px', borderRight: '1px solid #eaeaea', background: '#fafafa' }}>
-          <div style={{ padding: '0 8px 8px', ...text(12, '#8f8f8f', 500) }}>Settings</div>
-          {PAGES.map((candidate) => {
+      <div role="dialog" aria-modal="true" aria-label="Settings" style={{ position: 'relative', display: 'flex', width: 'min(780px, calc(100vw - 32px))', height: 'min(540px, calc(100vh - 80px))', background: '#fcfcfc', border: '1px solid #d4d4d4', borderRadius: 12, boxShadow: '0 16px 48px #00000024', overflow: 'hidden', animation: `rise 160ms ${EASE}` }}>
+        <nav aria-label="Settings pages" style={{ flex: 'none', width: 200, boxSizing: 'border-box', padding: '16px 10px', borderRight: '1px solid #ebebeb', background: '#f5f5f5' }}>
+          {pages.map((candidate, index) => {
             const on = candidate.id === open.id;
             return (
-              <button key={candidate.id} type="button" data-settings-page={candidate.id} aria-current={on ? 'page' : undefined} onClick={() => setPage(candidate.id)} className={on ? undefined : 'hov-wash2'}
-                style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', boxSizing: 'border-box', padding: '6px 8px', border: 0, borderRadius: 6, background: on ? '#eaeaea' : 'transparent', cursor: 'pointer', textAlign: 'left', ...text(13, '#171717', on ? 500 : 400) }}>
-                {NAV_ICON}{candidate.title}
-              </button>
+              <React.Fragment key={candidate.id}>
+                {(index === 0 || pages[index - 1].section !== candidate.section) && <div style={{ padding: '0 9px', margin: index ? '16px 0 4px' : '0 0 4px', ...text(12.5, '#8f8f8f', 500) }}>{candidate.section}</div>}
+                <button type="button" data-settings-page={candidate.id} aria-current={on ? 'page' : undefined} onClick={() => setPage(candidate.id)} className={on ? undefined : 'hov-wash2'}
+                  style={{ ...NAV_ITEM, background: on ? '#e8e8e8' : 'transparent', ...text(13.5, '#171717', on ? 500 : 400) }}>
+                  <span style={{ color: on ? '#171717' : '#6f6f6f' }}>{candidate.icon}</span>{candidate.title}
+                </button>
+              </React.Fragment>
             );
           })}
         </nav>
-        <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '18px 24px 24px', boxSizing: 'border-box' }}>
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={text(17, '#171717', 500)}>{open.title}</div>
-              <div style={{ marginTop: 2, ...text(12.5, '#8f8f8f') }}>{open.lead}</div>
-            </div>
-            <button type="button" className="hov-ink" aria-label="Close" onClick={onClose} style={{ flex: 'none', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', ...text(18, '#8f8f8f'), lineHeight: 1 }}>×</button>
-          </div>
-          <Body />
+        <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '30px 40px 36px', boxSizing: 'border-box' }}>
+          <div style={{ ...text(22, '#171717', 500), letterSpacing: '-0.01em' }}>{open.title}</div>
+          <Body test={test} close={onClose} />
         </div>
+        <button type="button" className="hov-ink" aria-label="Close" onClick={onClose} style={{ position: 'absolute', top: 14, right: 16, width: 26, height: 26, padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', ...text(18, '#8f8f8f'), lineHeight: 1 }}>×</button>
       </div>
     </div>,
     document.body,
   );
 }
 
-const ITEM = { display: 'block', width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: 0, borderRadius: 6, background: 'transparent', textAlign: 'left', cursor: 'pointer', ...text(13) };
-
-// The menu's items, in order. `shown` (optional) decides from the menu's props whether an item is there; `danger` reds it.
-export const MENU = Object.freeze([
-  { id: 'levels', label: 'Intelligence levels…', act: ({ openLevels }) => openLevels() },
-  { id: 'reveal', label: 'Reveal test data in Finder', shown: ({ test }) => !!(test && test.testMode), act: ({ test }) => test.onReveal() },
-  { id: 'start-new', label: 'Start as a new user…', shown: ({ test }) => !!(test && test.testMode), act: ({ test }) => test.onStartNew() },
-  { id: 'reset', label: 'Reset everything…', danger: true, shown: ({ test }) => !!(test && test.testMode), act: ({ test }) => test.onReset() },
-]);
-
-/** `test` (a developer's copy only, else null): { testMode, onReveal, onStartNew, onReset }, for the test data items. */
+/** `test` (a developer's copy only, else null): { testMode, onReveal, onStartNew, onReset }, for the Test data page. */
 export default function Settings({ test = null }) {
   const [open, setOpen] = React.useState(false);
-  const [levels, setLevels] = React.useState(false);
-  const ref = React.useRef(null);
-  const closeLevels = React.useCallback(() => setLevels(false), []);
-  React.useEffect(() => {
-    if (!open) return undefined;
-    const away = (event) => { if (!ref.current || !ref.current.contains(event.target)) setOpen(false); };
-    // On the document, as Connections' is: it hears the key before the window does, where the workspace's Escape (leave
-    // the full screen, close the workspace) waits and passes over a key already used.
-    const key = (event) => { if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); event.stopPropagation(); setOpen(false); } };
-    window.addEventListener('mousedown', away, true);
-    document.addEventListener('keydown', key);
-    return () => { window.removeEventListener('mousedown', away, true); document.removeEventListener('keydown', key); };
-  }, [open]);
-  const items = MENU.filter((item) => !item.shown || item.shown({ test }));
-  const props = { test, openLevels: () => setLevels(true) };
+  const close = React.useCallback(() => setOpen(false), []);
   return (
-    <div ref={ref} data-settings="1" style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-      <button type="button" className="settings-gear" title="Settings" aria-label="Settings" aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen((value) => !value)}>
+    <div data-settings="1" style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+      <button type="button" className="settings-gear" title="Settings" aria-label="Settings" aria-expanded={open} aria-haspopup="dialog" onClick={() => setOpen(true)}>
         {GEAR}
       </button>
-      {open && (
-        <div data-overlay="1" data-settings-menu="1" role="menu" aria-label="Settings"
-          style={{ position: 'absolute', right: 0, top: 'calc(100% + 6px)', minWidth: 210, boxSizing: 'border-box', padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, animation: `rise 160ms ${EASE}` }}>
-          {items.map((item, index) => (
-            <React.Fragment key={item.id}>
-              {index === 1 && <div role="separator" style={{ margin: '4px 6px', borderTop: '1px solid #eaeaea' }} />}
-              <button type="button" role="menuitem" className="hov-wash" data-settings-item={item.id} onClick={() => { setOpen(false); item.act(props); }} style={{ ...ITEM, color: item.danger ? '#e70022' : '#171717' }}>{item.label}</button>
-            </React.Fragment>
-          ))}
-        </div>
-      )}
-      {levels && <SettingsDialog onClose={closeLevels} />}
+      {open && <SettingsDialog test={test} onClose={close} />}
     </div>
   );
 }
