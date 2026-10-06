@@ -148,6 +148,18 @@ test('⌘-click on a note\'s mention still opens it as a tab; other mentions ope
   assert.deepEqual(p.calls.item, ['n1', 'p1'], 'the note as a tab, the pdf on the Stage');
 });
 
+test('an @mention of a note trashed from its last workspace still opens it, though the @ menu no longer offers it (MATH-58)', async () => {
+  const { pathToFileURL } = require('node:url');
+  const { letGoNotes, mentionRows } = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/rail.js')).href);
+  const gone = letGoNotes({ workspaces: [{ id: 'w1', context: [], removed: ['n1'], children: [] }], notes: [{ id: 'n1', workspaceId: 'w1' }] });
+  const findable = LIBRARY.filter((row) => !gone.has(row.id));
+  // As Workspace.jsx gives them: the whole library to resolve mentions by, the library less what was let go to the menu.
+  const p = inPane({ mentionItems: (q) => mentionRows({ query: q, library: findable, page: null, pageRow: null }) });
+  assert.deepEqual(p.editor.props.mentionItems('plan').map((r) => r.key), [], 'not offered');
+  p.clickOn(p.mention('Plan'));
+  assert.deepEqual(p.calls.beside, [['note', 'n1', 'Plan']], 'the mention already written opens it');
+});
+
 test('a workspace\'s mention clicked opens its document beside; ⌘-click goes to the workspace, as a click did before', () => {
   const p = inPane();
   const e = p.clickOn(p.mention('Elsewhere', { ws: 'w2' }));

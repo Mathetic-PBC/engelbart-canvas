@@ -252,3 +252,53 @@ test('search: a bare address is still found as text in the library first, then t
   const fresh = { found: { name: 'anthropic.com', type: 'website', tags: [], url: 'https://anthropic.com/' } };
   assert.deepEqual(searchRows({ query: 'anthropic.com', library: pages, inRail, found: fresh }).map((r) => [r.kind, r.key]), [['item', 'w1'], ['fresh', 'fresh:anthropic.com']]);
 });
+
+/* -------------------------------------------------------- ranked before the cut (MATH-59) */
+
+test('@List puts a note named List first even with ten older rows whose summaries say "list" (MATH-59)', async () => {
+  const { mentionRows, searchRows, bodyMaps } = await load();
+  const older = Array.from({ length: 10 }, (_, i) => row(`o${i}`, `Older ${i}`, 'md', ['note'], { summary: `This bug report lists issue ${i}; a TODO list.` }));
+  const named = [
+    ...older,
+    row('a1', 'Shopping', 'website', [], { url: 'https://example.org/lists/shopping' }),
+    row('b1', 'Reading list', 'md', ['note']),
+    row('l1', 'List', 'md', ['note']),
+  ];
+  const menu = mentionRows({ query: 'List', library: named, page: null, pageRow: null }).filter((r) => r.kind === 'item');
+  assert.equal(menu.length, 10, 'still ten');
+  assert.deepEqual(menu.slice(0, 3).map((r) => r.key), ['l1', 'b1', 'a1'], 'a name that starts with it, a name that holds it, then its place, then summaries');
+  assert.deepEqual(menu.slice(3).map((r) => r.key), older.slice(0, 7).map((r) => r.id), 'summaries after, in library order, cut after sorting');
+  const bodies = bodyMaps({ items: { o9: 'list' }, workspaces: {} });
+  const only = [row('x1', 'Said list', 'website', [], { url: 'https://example.org/x' }), row('x2', 'Quiet', 'website', [], { url: 'https://example.org/y' })];
+  assert.deepEqual(mentionRows({ query: 'list', library: [...only, ...older], page: null, pageRow: null, bodies }).filter((r) => r.kind === 'item').map((r) => r.key)[0], 'x1', 'what only its text holds stays last');
+  assert.deepEqual(searchRows({ query: 'list', library: named, inRail: () => false }).map((r) => r.key).slice(0, 3), ['l1', 'b1', 'a1'], 'the sidebar\'s search ranks the same way, uncut');
+  assert.equal(searchRows({ query: 'list', library: named, inRail: () => false }).length, 13);
+});
+
+/* -------------------------------------------------------- notes let go of (MATH-58) */
+
+test('a note trashed from its only workspace is not in the @ menu nor the search; a paper in no workspace is (MATH-58)', async () => {
+  const { letGoNotes, mentionRows, searchRows } = await load();
+  const lib = [
+    row('n1', 'Old plan', 'md', ['note']),
+    row('n2', 'Old ideas', 'md', ['note']),
+    row('n3', 'Old card note', 'md', ['note']),
+    row('p9', 'Old paper', 'pdf', ['paper'], { path: '/Users/h/old.pdf' }),
+  ];
+  // n1 made in a and trashed there; n2 trashed from a but still in b's context; n3 a post-it's +Note, in no workspace ever;
+  // p9 trashed from a, a paper.
+  const notes = [{ id: 'n1', workspaceId: 'a' }, { id: 'n2', workspaceId: 'a' }, { id: 'n3', workspaceId: null }];
+  const workspaces = [
+    { id: 'a', context: [], removed: ['n1', 'n2', 'p9'], children: [{ id: 'b', context: ['n2'], removed: [], children: [] }] },
+  ];
+  const gone = letGoNotes({ workspaces, notes });
+  assert.deepEqual([...gone], ['n1'], 'only the note no workspace holds any more');
+  const findable = lib.filter((r) => !gone.has(r.id));
+  assert.deepEqual(mentionRows({ query: 'old', library: findable, page: null, pageRow: null }).map((r) => r.key), ['n2', 'n3', 'p9']);
+  assert.deepEqual(searchRows({ query: 'old', library: findable, inRail: () => false }).map((r) => r.key), ['n2', 'n3', 'p9']);
+  assert.ok(lib.some((r) => r.id === 'n1'), 'the library keeps it');
+  // Brought back into a workspace, it is found again; made in a workspace that did not throw it away, it was never gone.
+  assert.equal(letGoNotes({ workspaces: [{ ...workspaces[0], context: ['n1'], removed: ['n2', 'p9'] }], notes }).has('n1'), false);
+  assert.equal(letGoNotes({ workspaces: [workspaces[0], { id: 'c', context: [], removed: [], children: [] }], notes: [{ id: 'n1', workspaceId: 'c' }] }).has('n1'), false);
+  assert.equal(letGoNotes({ workspaces: [], notes }).size, 0, 'nothing trashed, nothing let go');
+});

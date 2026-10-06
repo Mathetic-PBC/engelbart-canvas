@@ -61,24 +61,35 @@ const hay = (row) => [row.name, row.url || '', row.path || '', row.folder_path |
 
 // What things say (MATH-29, 2026-10-05): `bodies` { items, workspaces }, Maps of library id and workspace id → text already
 // lowercased, as the main process reads it when a search or the @ menu opens (library.bodiesForProject). Optional: without
-// it, only what `hay` holds is matched. A row found only by what it says comes after every row found by `hay`, and looks
-// the same.
+// it, only what `hay` holds is matched. A row found only by what it says comes after every row found by `hay` (matchRank),
+// and looks the same.
 const bodyOf = (bodies, kind, id) => (bodies && bodies[kind] && bodies[kind].get(id)) || '';
 const lowered = (texts) => new Map(Object.entries(texts || {}).map(([id, text]) => [id, String(text).toLowerCase()]));
 /** `bodies` from the main process's answer ({ items, workspaces }, objects of id → text), lowercased once. */
 export const bodyMaps = (reply) => ({ items: lowered(reply && reply.items), workspaces: lowered(reply && reply.workspaces) });
-/** The rows `hay` matches (`byHay`), in their order, then the ones only their text does (`byBody`). */
-function hayThenBody(rows, byHay, byBody) {
-  const first = rows.filter(byHay);
-  const held = new Set(first);
-  return [...first, ...rows.filter((row) => !held.has(row) && byBody(row))];
+// How well a row matches what is typed (MATH-59, 2026-10-06), best first: 0 its name starts with it, 1 its name holds it,
+// 2 where it is or its kind does, 3 the rest of `hay` (its summary), 4 only what it says (`bodies`); null, not at all.
+function matchRank(row, needle, bodies) {
+  const name = String(row.name || '').toLowerCase();
+  if (name.startsWith(needle)) return 0;
+  if (name.includes(needle)) return 1;
+  if ([row.url || '', row.path || '', row.folder_path || '', kindLabel(row)].join(' ').toLowerCase().includes(needle)) return 2;
+  if (hay(row).includes(needle)) return 3;
+  return bodyOf(bodies, 'items', row.id).includes(needle) ? 4 : null;
+}
+/** The rows that match `needle`, best first (matchRank), each rank in the rows' own order. */
+function ranked(rows, needle, bodies) {
+  return rows.map((row, i) => ({ row, i, rank: matchRank(row, needle, bodies) }))
+    .filter((hit) => hit.rank != null)
+    .sort((a, b) => a.rank - b.rank || a.i - b.i)
+    .map((hit) => hit.row);
 }
 
 /**
  * The search field under the workspace's name (Canvas.dc.html `results`): it finds anything the library holds and brings
  * it into this workspace. Empty, it offers four things from the library that are not here yet; typed, every match in the
- * library (no cap; with `bodies`, what holds the words only in what it says comes last), what is here already included
- * (`here`: picking one opens it). An address or a path is the one row the library has for it (`here` when it is on the
+ * library (no cap; ranked as the @ menu is, by matchRank: names that start with the words first, what holds them only in
+ * what it says last), what is here already included (`here`: picking one opens it). An address or a path is the one row the library has for it (`here` when it is on the
  * rail already) or a new one — that needs `found`, the main process's answer (library.lookupItem): undefined while it is
  * on its way; what things say plays no part there. Making a note or a nested workspace is the +'s job (2026-09-22).
  * Rows: { kind: 'item' | 'fresh', key, name, tag, row?, found? }; a tag that starts with "new" draws a +.
@@ -96,11 +107,33 @@ export function searchRows({ query, library, inRail, found, bodies = null }) {
   if (looksAddable(typed) && !bare) { const one = answered(); return one ? [one] : []; }
   const needle = typed.toLowerCase();
   const hits = needle
-    ? hayThenBody(library, (row) => hay(row).includes(needle), (row) => bodyOf(bodies, 'items', row.id).includes(needle))
+    ? ranked(library, needle, bodies)
     : library.filter((row) => !inRail(row.id) && !row.tags.includes('note') && row.type !== 'image').slice(0, 4);
   const rows = hits.map(item);
   const one = bare ? answered() : null;
   return one && !rows.some((row) => row.key === one.key) ? [...rows, one] : rows;
+}
+
+/**
+ * The notes let go of (MATH-58, 2026-10-06): trashed from a workspace (meta.json `removed`) and held by none of the
+ * project's workspaces any more, neither in its context nor made in it (`notes`, the tree's, `workspaceId`) unless that
+ * one threw it away too. The @ menu and the sidebar's search leave them out; the library keeps them, nothing is deleted,
+ * and a mention already written still opens one. Only notes: a paper, a link or a file in no workspace is still found,
+ * and so is a note never put in one (a post-it's +Note). `workspaces` is the tree's, nested. → Set of library ids.
+ */
+export function letGoNotes({ workspaces = [], notes = [] }) {
+  const all = [];
+  const walk = (list) => { for (const workspace of list || []) { all.push(workspace); walk(workspace.children); } };
+  walk(workspaces);
+  const trashed = new Set(), held = new Set();
+  const madeIn = new Map((notes || []).map((note) => [note.id, note.workspaceId]));
+  for (const workspace of all) {
+    const removed = new Set(workspace.removed || []);
+    for (const id of removed) trashed.add(id);
+    for (const id of workspace.context || []) if (!removed.has(id)) held.add(id);
+    for (const [id, at] of madeIn) if (at === workspace.id && !removed.has(id)) held.add(id);
+  }
+  return new Set([...trashed].filter((id) => madeIn.has(id) && !held.has(id)));
 }
 
 const ATTACH_RECENT = 8; // what "Add from library" lists before anything is typed
@@ -145,14 +178,15 @@ const FIRST_WORKSPACES = 3; // before anything is typed
  * their first letter; then the page open in the Browser, which the library may not hold yet (`page` { input, title }, `pageRow` its row or null); then the
  * project's other workspaces (2026-09-25; `workspaces` as model/nav.js flatWorkspaces gives them, the ones written in
  * last first, never `hereId`): three before anything is typed, else up to six whose names hold the words, then (with
- * `bodies`) whose documents hold what is typed; then up to ten things from the library, those found only by what they
- * say last.
+ * `bodies`) whose documents hold what is typed; then up to ten things from the library, ranked before they are cut
+ * (MATH-59, matchRank): names that start with what is typed, names that hold it, where they are or their kind, their
+ * summary, and last (with `bodies`) only what they say.
  */
 export function mentionRows({ query, library, page, pageRow, workspaces = [], hereId = null, bodies = null }) {
   const needle = String(query || '').trim().toLowerCase();
   const verbs = [BART_VERB, NOTE_VERB, BRAINSTORM_VERB, DISCOVER_VERB].filter((verb) => !needle || verb.name.toLowerCase().startsWith(needle));
   const pool = library.filter((row) => row.type !== 'image');
-  let hits = (needle ? hayThenBody(pool, (row) => hay(row).includes(needle), (row) => bodyOf(bodies, 'items', row.id).includes(needle)) : pool).map((row) => ({ kind: 'item', key: row.id, row, name: row.name }));
+  let hits = (needle ? ranked(pool, needle, bodies) : pool).map((row) => ({ kind: 'item', key: row.id, row, name: row.name }));
   const out = [...verbs];
   if (page && page.title && (!needle || `${page.title} ${page.input}`.toLowerCase().includes(needle))) {
     if (pageRow) { out.push({ kind: 'item', key: pageRow.id, row: pageRow, name: pageRow.name, open: true }); hits = hits.filter((hit) => hit.key !== pageRow.id); }

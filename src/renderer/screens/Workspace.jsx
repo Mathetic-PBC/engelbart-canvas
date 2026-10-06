@@ -11,7 +11,7 @@ import { hasTag, isNote } from '../model/kind.js';
 import { isUntitled, nextUntitled } from '../model/names.js';
 import { OPEN_IN_BROWSER } from '../model/address.js';
 import { adoptSession, dropSession, SHOW_TERMINAL } from '../terminal/sessions.js';
-import { mentionRows } from '../model/rail.js';
+import { letGoNotes, mentionRows } from '../model/rail.js';
 import { useBodies } from '../workspace/useBodies.js';
 import { flatWorkspaces, nextPlace, placesToGo } from '../model/nav.js';
 import { onStage, savesPageCopy } from '../model/stage.js';
@@ -831,6 +831,13 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return out;
   }, [topic, here, byId, renaming, activeRowId, tree.notes, mentioned]);
 
+  // What the @ menu and the sidebar's search offer (MATH-58): the library less the notes trashed from their last
+  // workspace. `mentionable`, which an @mention already written is opened by, keeps the whole library.
+  const findable = React.useMemo(() => {
+    const gone = letGoNotes({ workspaces: tree.workspaces, notes: tree.notes });
+    return gone.size ? library.filter((row) => !gone.has(row.id)) : library;
+  }, [library, tree.workspaces, tree.notes]);
+
   const mentionable = React.useMemo(() => [BART_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, ...library.filter((row) => row.type !== 'image').map(describe)], [library]);
 
   // On the rail: what the search does not offer again, and what makes the Browser's Save read ✓.
@@ -1049,8 +1056,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const [mentionOpen, setMentionOpen] = React.useState(false);
   const mentionBodies = useBodies(project.id, mentionOpen);
   const mentionItems = React.useCallback(
-    (query) => mentionRows({ query, library, page: pageKnown ? openPage : null, pageRow: pageKnown ? pageKnown.row : null, workspaces: mentionSpaces, hereId: topic ? topic.id : null, bodies: mentionBodies }),
-    [library, openPage, pageKnown, mentionSpaces, topic, mentionBodies],
+    (query) => mentionRows({ query, library: findable, page: pageKnown ? openPage : null, pageRow: pageKnown ? pageKnown.row : null, workspaces: mentionSpaces, hereId: topic ? topic.id : null, bodies: mentionBodies }),
+    [findable, openPage, pageKnown, mentionSpaces, topic, mentionBodies],
   );
   // A mentioned workspace's peek (workspace/WorkspacePeek.jsx): the tree, state.json's agents and recent edits, and its
   // document as open here (unsaved words included) or as saved.
@@ -1595,7 +1602,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onRowRenameStart={(row) => setRenaming(row.id)}
           onRowRename={renameRow}
           onRowRenameEnd={() => setRenaming(null)}
-          library={library}
+          library={findable}
           inRail={inRail}
           onSearchPick={searchPick}
           onAddInput={(input) => addInput(input)}
