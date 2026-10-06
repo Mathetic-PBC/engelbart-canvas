@@ -7,7 +7,7 @@
 // ../store/defaults.cjs): what they edited stays, what they left alone follows the new defaults.
 //
 // A question starts on the first step of the default provider's ladder, or where the last question picked by hand did
-// (2026-09-29, startingAt and ./choices.cjs). Settings › Intelligence (2026-10-06, ./settings.cjs) writes the defaults
+// (2026-09-29, startingAt in ./in-force.cjs, and ./choices.cjs). Settings › Intelligence (2026-10-06, ./settings.cjs) writes the defaults
 // into this same file and drops the last pick of each place whose default it set: the last action wins. The agent may ask to move
 // up a step (src/main/bart/ask.cjs), which resumes the same session: what it has read stays read.
 // `@bart --opus --high …` picks by hand and turns that off. Flags are matched loosely: case,
@@ -17,7 +17,7 @@ const path = require('node:path');
 const { readJson } = require('../store/home.cjs');
 const { carryDefaults } = require('../store/defaults.cjs');
 const { EFFORTS, MODES, above, effortOf, modelOf, readFlags, readQuestion, readDiscover, withChoice } = require('./question.cjs');
-const { TOOL_OF } = require('../tools/requirements.cjs');
+const { onlyProviders, preferUsable, startingAt } = require('./in-force.cjs');
 
 const MODELS_FILE = 'model-effort-inline-question.json';
 const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
@@ -300,12 +300,15 @@ function normalizeModels(value) {
 }
 
 /**
- * @bart's ladder on one provider with `first` as its first step (Settings, 2026-10-06): the steps above it stay as they
- * are, and those at or below it go, so the ladder still only goes up (`above`, as a last pick's ladder is cut: ./question.cjs).
+ * @bart's ladder on `provider` with `first` as its first step (Settings, 2026-10-06): then every step of the built-in
+ * ladder above it (`above`, as a last pick's ladder is cut: ./question.cjs) that `entry`, the provider in force, still
+ * lists. Made from the built-in ladder each time, not the saved one, so a pick never loses steps for good: picking Fable
+ * and then Sonnet gives Sonnet, Opus, Fable again, not Sonnet alone.
  */
-function withFirstStep(entry, first) {
+function withFirstStep(provider, entry, first) {
   const step = { model: first.model, effort: first.effort };
-  return [step, ...entry.ladder.slice(1).filter((rung) => above(entry, rung, step))];
+  const builtIn = DEFAULT_MODELS.providers[provider] ? DEFAULT_MODELS.providers[provider].ladder : [];
+  return [step, ...builtIn.filter((rung) => entry.models[rung.model] && entry.efforts.includes(rung.effort) && above(entry, rung, step)).map((rung) => ({ ...rung }))];
 }
 
 /**
@@ -333,50 +336,6 @@ function resolveBuildChoice(models, { provider, model, effort } = {}) {
   const key = entry.models[model] ? model : entry.ladder[0].model;
   const level = entry.efforts.includes(effort) ? effort : entry.ladder[0].effort;
   return { provider: at, model: key, modelId: entry.models[key].id, modelName: entry.models[key].name, effort: level };
-}
-
-/** Only the providers config.json lists (`providers`); when it lists none of them, all stay, so a question can always run. */
-function onlyProviders(models, only) {
-  const kept = Object.keys(models.providers).filter((key) => Array.isArray(only) && only.includes(key));
-  if (!kept.length) return models;
-  const build = models.build && !kept.includes(models.build.provider) ? { ...models.build, provider: kept[0] } : models.build;
-  return { ...models, provider: kept.includes(models.provider) ? models.provider : kept[0], providers: Object.fromEntries(kept.map((key) => [key, models.providers[key]])), ...(build ? { build } : {}) };
-}
-
-/**
- * The saved default provider, or another one when the saved one cannot run (2026-09-23; design D4), for @bart and for
- * Build alike. `usable`: the CLIs the last tool check found installed, recent enough and not signed out
- * (['claude', 'codex'] or fewer), or null before the first check. Nothing is written: the saved
- * choice comes back as soon as its CLI does. A model picked by flag is never moved.
- */
-function preferUsable(models, usable) {
-  if (!Array.isArray(usable)) return models;
-  const can = (provider) => usable.includes(TOOL_OF[provider]);
-  const moved = (provider) => (can(provider) ? provider : Object.keys(models.providers).find(can) || provider);
-  const provider = moved(models.provider);
-  const build = models.build && moved(models.build.provider) !== models.build.provider ? { ...models.build, provider: moved(models.build.provider) } : models.build;
-  if (provider === models.provider && build === models.build) return models;
-  return { ...models, provider, ...(build ? { build } : {}) };
-}
-
-/**
- * The list starting where the person last picked (2026-09-29; `held` { provider, model, effort } from ./choices.cjs) for
- * `place`: 'bart' → that provider becomes the default and its `start` the step a question without flags starts on (the
- * ladder goes on above it, ./question.cjs); 'build' or 'quick' → Build's provider and that provider's `default`. A pick the
- * list no longer offers is ignored. Applied before preferUsable, so a pick whose CLI cannot run gives way as the saved
- * default does.
- */
-function startingAt(models, place, held) {
-  if (!isObject(held) || typeof held.provider !== 'string' || typeof held.model !== 'string' || typeof held.effort !== 'string') return models;
-  if (place === 'bart') {
-    const entry = models.providers[held.provider];
-    if (!entry || !entry.models[held.model] || !entry.efforts.includes(held.effort)) return models;
-    return { ...models, provider: held.provider, providers: { ...models.providers, [held.provider]: { ...entry, start: { model: held.model, effort: held.effort } } } };
-  }
-  const build = models.build;
-  const entry = build && models.providers[held.provider] ? build.providers[held.provider] : null;
-  if (!entry || !entry.models[held.model] || !entry.efforts.includes(held.effort)) return models;
-  return { ...models, build: { ...build, provider: held.provider, providers: { ...build.providers, [held.provider]: { ...entry, default: { model: held.model, effort: held.effort } } } } };
 }
 
 /**

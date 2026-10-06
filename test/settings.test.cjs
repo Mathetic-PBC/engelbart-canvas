@@ -45,17 +45,62 @@ test('forgetChoice drops one place\'s pick and keeps the others, written whole; 
   assert.deepEqual(readChoices(root), {});
 });
 
-test('@bart\'s default is its ladder\'s first step: the steps above it stay, those at or below it go so the ladder still only goes up (S-03)', () => {
+test('@bart\'s default is its ladder\'s first step, then every step of the built-in ladder above it, so the ladder still only goes up (S-03)', () => {
   const claude = DEFAULTS.providers.anthropic, codex = DEFAULTS.providers.openai;
-  const ladder = (entry, step) => withFirstStep(entry, step).map((rung) => `${rung.model} ${rung.effort}`);
-  assert.deepEqual(ladder(claude, { model: 'sonnet', effort: 'medium' }), ['sonnet medium', 'opus high', 'fable xhigh'], 'below step 2: only the first changes');
-  assert.deepEqual(ladder(claude, { model: 'sonnet', effort: 'max' }), ['sonnet max', 'opus high', 'fable xhigh'], 'a later model is above whatever the effort');
-  assert.deepEqual(ladder(claude, { model: 'opus', effort: 'high' }), ['opus high', 'fable xhigh'], 'at step 2: step 2 goes');
-  assert.deepEqual(ladder(claude, { model: 'opus', effort: 'max' }), ['opus max', 'fable xhigh'], 'above step 2, below step 3');
-  assert.deepEqual(ladder(claude, { model: 'fable', effort: 'medium' }), ['fable medium', 'fable xhigh']);
-  assert.deepEqual(ladder(claude, { model: 'fable', effort: 'max' }), ['fable max'], 'above them all: a ladder of one');
-  assert.deepEqual(ladder(codex, { model: 'luna', effort: 'ultra' }), ['luna ultra', 'sol high', 'astra xhigh']);
-  assert.deepEqual(ladder(codex, { model: 'sol', effort: 'high' }), ['sol high', 'astra xhigh']);
+  const ladder = (provider, entry, step) => withFirstStep(provider, entry, step).map((rung) => `${rung.model} ${rung.effort}`);
+  assert.deepEqual(ladder('anthropic', claude, { model: 'sonnet', effort: 'medium' }), ['sonnet medium', 'sonnet high', 'opus high', 'fable xhigh'], 'below the first: every built-in step stays');
+  assert.deepEqual(ladder('anthropic', claude, { model: 'sonnet', effort: 'high' }), ['sonnet high', 'opus high', 'fable xhigh'], 'the built-in first step: the built-in ladder');
+  assert.deepEqual(ladder('anthropic', claude, { model: 'sonnet', effort: 'max' }), ['sonnet max', 'opus high', 'fable xhigh'], 'a later model is above whatever the effort');
+  assert.deepEqual(ladder('anthropic', claude, { model: 'opus', effort: 'high' }), ['opus high', 'fable xhigh'], 'at step 2: step 2 goes');
+  assert.deepEqual(ladder('anthropic', claude, { model: 'opus', effort: 'max' }), ['opus max', 'fable xhigh'], 'above step 2, below step 3');
+  assert.deepEqual(ladder('anthropic', claude, { model: 'fable', effort: 'medium' }), ['fable medium', 'fable xhigh']);
+  assert.deepEqual(ladder('anthropic', claude, { model: 'fable', effort: 'max' }), ['fable max'], 'above them all: a ladder of one');
+  assert.deepEqual(ladder('openai', codex, { model: 'luna', effort: 'ultra' }), ['luna ultra', 'sol medium', 'sol high', 'astra xhigh']);
+  assert.deepEqual(ladder('openai', codex, { model: 'sol', effort: 'high' }), ['sol high', 'astra xhigh']);
+  // From the built-in ladder, not the saved one: steps a ladder of one lost come back.
+  assert.deepEqual(ladder('anthropic', { ...claude, ladder: [{ model: 'fable', effort: 'xhigh' }] }, { model: 'sonnet', effort: 'xhigh' }), ['sonnet xhigh', 'opus high', 'fable xhigh']);
+  assert.deepEqual(ladder('anthropic', { ...claude, ladder: [{ model: 'opus', effort: 'max' }, { model: 'fable', effort: 'max' }] }, { model: 'opus', effort: 'max' }), ['opus max', 'fable xhigh'], 'a saved step that is not built in goes');
+  // Only what the file still lists: a model or an effort taken out of it is not climbed to.
+  const { fable, ...noFable } = claude.models;
+  assert.deepEqual(ladder('anthropic', { ...claude, models: noFable }, { model: 'sonnet', effort: 'high' }), ['sonnet high', 'opus high']);
+  assert.deepEqual(ladder('openai', { ...codex, efforts: ['medium', 'high'] }, { model: 'luna', effort: 'high' }), ['luna high', 'sol medium', 'sol high']);
+});
+
+// A press on a model in a cell's ModelGrid, as the panel makes it: the effort the grid gives that model (effortFor, from
+// the cell's ladder), saved at once.
+function pressModel(root, provider, key) {
+  const { cellModels, patchOf } = load('model/intelligence.js');
+  const { effortFor } = load('post-its/ModelGrid.jsx');
+  const cell = cellModels(settingsModels(root).models, 'bart', provider);
+  return saveSettingsModels(root, patchOf('bart', provider, { model: key, effort: effortFor(cell, key) }));
+}
+const ladderOn = (root, provider) => readFile(root).providers[provider].ladder.map((rung) => `${rung.model} ${rung.effort}`);
+
+test('picking Fable and then Sonnet in @bart\'s Claude Code cell keeps the ladder whole: Sonnet, then Opus and Fable above it', () => {
+  const root = home();
+  loadModels(root);
+  assert.deepEqual(ladderOn(root, 'anthropic'), ['sonnet high', 'opus high', 'fable xhigh']);
+  pressModel(root, 'anthropic', 'fable');
+  assert.deepEqual(ladderOn(root, 'anthropic'), ['fable xhigh'], 'Fable Extra high is the top: nothing above it');
+  pressModel(root, 'anthropic', 'sonnet');
+  assert.deepEqual(ladderOn(root, 'anthropic'), ['sonnet xhigh', 'opus high', 'fable xhigh'], 'not Sonnet alone: Opus and Fable come back');
+  assert.deepEqual(steps(modelsInForce(root)), ['Sonnet xhigh', 'Opus high', 'Fable xhigh'], 'and a run climbs them');
+  saveSettingsModels(root, { bart: { anthropic: { model: 'sonnet', effort: 'high' } } });
+  assert.deepEqual(readFile(root).providers.anthropic.ladder, DEFAULT_MODELS.providers.anthropic.ladder, 'back to the built-in first step: the built-in ladder');
+});
+
+test('picking Astra and then Sol in @bart\'s Codex cell keeps the ladder whole too', () => {
+  const root = home();
+  loadModels(root);
+  pressModel(root, 'openai', 'astra');
+  assert.deepEqual(ladderOn(root, 'openai'), ['astra xhigh']);
+  pressModel(root, 'openai', 'sol');
+  assert.deepEqual(ladderOn(root, 'openai'), ['sol xhigh', 'astra xhigh'], 'Astra stays above Sol');
+  pressModel(root, 'openai', 'luna');
+  assert.deepEqual(ladderOn(root, 'openai'), ['luna xhigh', 'sol medium', 'sol high', 'astra xhigh'], 'every built-in step above Luna');
+  saveSettingsModels(root, { bart: { openai: { model: 'sol', effort: 'medium' } } });
+  assert.deepEqual(readFile(root).providers.openai.ladder, DEFAULT_MODELS.providers.openai.ladder);
+  assert.deepEqual(ladderOn(root, 'anthropic'), ['sonnet high', 'opus high', 'fable xhigh'], 'Claude Code\'s untouched');
 });
 
 test('settingsModels: the file normalized with every provider, the last picks, the usable CLIs, the providers offered, and why a CLI cannot run', () => {
@@ -163,7 +208,7 @@ test('saveSettingsModels on a file without a brainstorm block, with an old one-s
   const now = readFile(root);
   assert.deepEqual(now.brainstorm, { providers: { anthropic: { model: 'opus', effort: 'high' } } });
   assert.deepEqual(now.discover.providers.openai, { quick: { model: 'luna', effort: 'medium' }, standard: { model: 'sol', effort: 'xhigh' }, deep: DEFAULT_MODELS.discover.providers.openai.deep });
-  assert.deepEqual(now.providers.openai.ladder, [{ model: 'luna', effort: 'high' }, ...DEFAULT_MODELS.providers.openai.ladder.slice(1)], 'the first step of the ladder in force replaced');
+  assert.deepEqual(now.providers.openai.ladder, [{ model: 'luna', effort: 'high' }, ...DEFAULT_MODELS.providers.openai.ladder], 'the new first step, then the built-in steps above it');
   const models = loadModels(root);
   assert.deepEqual([models.brainstorm.providers, readDiscover('--quick why', { ...models, provider: 'openai' }).steps[0].name], [{ openai: DEFAULT_BRAINSTORM.providers.openai, anthropic: { model: 'opus', effort: 'high' } }, 'Luna']);
 });
@@ -171,6 +216,7 @@ test('saveSettingsModels on a file without a brainstorm block, with an old one-s
 test('a models file that does not parse is refused, never written over: the person may be halfway through an edit', () => {
   const root = home();
   loadModels(root);
+  assert.equal(settingsModels(root).fileError, null);
   fs.writeFileSync(path.join(root, MODELS_FILE), '{ "provider": "openai", ');
   rememberChoice(root, 'bart', { provider: 'anthropic', model: 'opus', effort: 'high' });
   assert.throws(() => saveSettingsModels(root, { provider: 'openai' }), /model-effort-inline-question\.json is not valid JSON/);
@@ -178,15 +224,33 @@ test('a models file that does not parse is refused, never written over: the pers
   assert.ok(readChoices(root).bart, 'and no pick is forgotten');
 });
 
+test('the panel is told when the models file cannot be read, since runs and the panel are then on the built-in defaults', () => {
+  const root = home();
+  assert.equal(settingsModels(root).fileError, null, 'a new home: the file is written, and read');
+  fs.writeFileSync(path.join(root, MODELS_FILE), '{ "provider": "openai", ');
+  const broken = settingsModels(root);
+  assert.match(broken.fileError, /^model-effort-inline-question\.json is not valid JSON, so every agent runs on the built-in defaults/);
+  assert.deepEqual(broken.models, normalizeModels(null), 'what is shown: the built-in defaults');
+  fs.writeFileSync(path.join(root, MODELS_FILE), '[]');
+  assert.match(settingsModels(root).fileError, /is not valid JSON/, 'JSON, but not an object');
+  fs.rmSync(path.join(root, MODELS_FILE));
+  fs.mkdirSync(path.join(root, MODELS_FILE));
+  assert.match(settingsModels(root).fileError, /^model-effort-inline-question\.json cannot be read \(EISDIR\), so every agent runs on the built-in defaults/);
+});
+
 test('the last action wins: a Settings save forgets the pick by hand it overrules, a pick by hand after it is used, and "Use default" goes back (S-05, A2, A3)', () => {
   const root = home();
   const run = (place) => modelsInForce(root, place);
   const build = (place) => { const choices = buildChoices(run(place)); const step = choices.providers[choices.provider].ladder[0]; return `${choices.provider} ${step.model} ${step.effort}`; };
 
-  // Hand pick, then a Settings save: the next run is on the save.
+  // Hand pick, then a Settings save of the other provider's default: the pick stays, and the next run is on it.
   rememberChoice(root, 'bart', { provider: 'openai', model: 'astra', effort: 'xhigh' });
   assert.deepEqual(steps(run('bart')), ['Astra xhigh']);
   saveSettingsModels(root, { bart: { anthropic: { model: 'opus', effort: 'high' } } });
+  assert.deepEqual(readChoices(root).bart, { provider: 'openai', model: 'astra', effort: 'xhigh' }, 'Claude Code\'s default does not overrule a pick on Codex');
+  assert.deepEqual(steps(run('bart')), ['Astra xhigh']);
+  // A save of the default on the pick's provider overrules it, even one that changes nothing: the next run is on the save.
+  saveSettingsModels(root, { bart: { openai: DEFAULT_MODELS.providers.openai.ladder[0] } });
   assert.equal(readChoices(root).bart, undefined);
   assert.deepEqual(steps(run('bart')), ['Opus high', 'Fable xhigh']);
   // A save, then a hand pick: the next run is on the pick.
@@ -196,10 +260,12 @@ test('the last action wins: a Settings save forgets the pick by hand it overrule
   saveSettingsModels(root, { provider: 'openai' });
   assert.deepEqual([readChoices(root).bart, steps(run('bart'))], [undefined, ['Sol medium', 'Sol high', 'Astra xhigh']]);
 
-  // Build: a save of its default or provider forgets Build's pick and the quick task's.
+  // Build: a save of its provider, or of its default on the provider a pick is on, forgets Build's pick and the quick task's.
   rememberChoice(root, 'build', { provider: 'anthropic', model: 'fable', effort: 'max' });
   rememberChoice(root, 'quick', { provider: 'anthropic', model: 'sonnet', effort: 'medium' });
   assert.deepEqual([build('build'), build('quick')], ['anthropic fable max', 'anthropic sonnet medium']);
+  saveSettingsModels(root, { build: { openai: DEFAULT_MODELS.build.providers.openai.default } });
+  assert.deepEqual(Object.keys(readChoices(root)), ['build', 'quick'], 'Codex\'s default leaves picks on Claude Code alone');
   saveSettingsModels(root, { build: { anthropic: { model: 'opus', effort: 'xhigh' } } });
   assert.deepEqual([readChoices(root).build, readChoices(root).quick, build('build'), build('quick')], [undefined, undefined, 'anthropic opus xhigh', 'anthropic opus xhigh']);
   rememberChoice(root, 'quick', { provider: 'openai', model: 'luna', effort: 'medium' });
@@ -296,6 +362,8 @@ function load(file) {
 }
 
 const shown = (root, options = {}) => settingsModels(root, options);
+// The tool check with `usable` the CLIs that can run; the others not installed.
+const toolsFor = (usable) => ({ usableAgents: () => usable, snapshot: () => ({ tools: Object.fromEntries(['claude', 'codex'].map((name) => [name, usable.includes(name) ? { installed: true, status: 'ready' } : { installed: false, status: 'missing' }])) }) });
 
 test('the rows: each agent\'s default per provider, the default providers as a run sees them, and what a pick saves', () => {
   const { AGENT_ROWS, defaultStep, defaultProvider, shownProviders, cellModels, patchOf, stepLabel, lastPick } = load('model/intelligence.js');
@@ -351,6 +419,74 @@ test('the panel draws every agent on every provider offered, greys a provider wh
   assert.deepEqual([ids({ test: null }), ids({ test: { testMode: false } }), ids({ test: { testMode: true } })], [['intelligence'], ['intelligence'], ['intelligence', 'test']]);
   const testHtml = renderToStaticMarkup(React.createElement(TestData, { test: {}, close: () => {} }));
   for (const item of ['Reveal in Finder', 'Start as a new user…', 'Reset everything…']) assert.ok(testHtml.includes(item), item);
+});
+
+test('the panel shows the provider runs use: a saved one whose CLI cannot run gives way, as in a run (preferUsable)', () => {
+  const { defaultProvider, savedProvider, lastPick } = load('model/intelligence.js');
+  const { Intelligence } = load('ui/Settings.jsx');
+  const root = home();
+  const codexOnly = settingsModels(root, { tools: toolsFor(['codex']) });
+  assert.deepEqual([savedProvider(codexOnly, 'bart'), savedProvider(codexOnly, 'build')], ['anthropic', 'anthropic'], 'Claude Code is saved for both');
+  assert.deepEqual([defaultProvider(codexOnly, 'bart'), defaultProvider(codexOnly, 'build')], ['openai', 'openai'], 'but Codex runs');
+  const run = (place) => modelsInForce(root, place, { usable: ['codex'] });
+  assert.deepEqual([run('bart').provider, run('build').build.provider], ['openai', 'openai'], 'as a run has it');
+  assert.equal(defaultProvider(settingsModels(root), 'bart'), 'anthropic', 'before the first check nothing moves');
+  const html = renderToStaticMarkup(React.createElement(Intelligence, { initial: codexOnly }));
+  const bartChoice = html.slice(html.indexOf('data-settings-provider="bart"'), html.indexOf('data-settings-provider="build"'));
+  assert.match(bartChoice, /aria-checked="true" data-provider="openai"/);
+  assert.match(bartChoice, /aria-checked="false" data-provider="anthropic"/);
+  assert.match(html, /data-saved-provider="bart"[^>]*>Saved: Claude Code \(not installed\)</);
+  assert.match(html, /data-saved-provider="build"[^>]*>Saved: Claude Code \(not installed\)</);
+  assert.ok(!renderToStaticMarkup(React.createElement(Intelligence, { initial: settingsModels(root, { tools: toolsFor(['claude', 'codex']) }) })).includes('data-saved-provider'), 'nothing to say while the saved one runs');
+  // A pick by hand on a provider whose CLI cannot run is passed over by a run, so the panel does not claim it is used.
+  rememberChoice(root, 'bart', { provider: 'anthropic', model: 'opus', effort: 'max' });
+  assert.equal(lastPick(settingsModels(root, { tools: toolsFor(['codex']) }), 'bart'), null);
+  assert.deepEqual(steps(run('bart')), ['Sol medium', 'Sol high', 'Astra xhigh']);
+});
+
+test('@brainstorm and @discover show "Using your last pick" too when @bart\'s pick moves them to the other provider', () => {
+  const { followedPick, lastPick } = load('model/intelligence.js');
+  const { Intelligence } = load('ui/Settings.jsx');
+  const root = home();
+  const both = () => settingsModels(root, { tools: toolsFor(['claude', 'codex']) });
+  const run = () => modelsInForce(root, 'bart', { usable: ['claude', 'codex'] });
+  assert.equal(followedPick(both()), null, 'no pick');
+
+  // A pick on Codex while Claude Code is the default: a run of either is on Codex, at Codex's default for it.
+  rememberChoice(root, 'bart', { provider: 'openai', model: 'astra', effort: 'xhigh' });
+  assert.deepEqual(followedPick(both()), { provider: 'openai', label: 'Codex' });
+  const brainstorm = readBrainstorm('', run()).steps[0], discover = readDiscover('what to read', run()).steps[0];
+  assert.deepEqual([brainstorm.provider, brainstorm.name, brainstorm.effort, discover.provider, discover.name, discover.effort], ['openai', 'Sol', 'medium', 'openai', 'Astra', 'high'], 'as a run has it');
+  const html = renderToStaticMarkup(React.createElement(Intelligence, { initial: both() }));
+  assert.match(html, /data-last-pick="bart"[^>]*>.*Using your last pick: <span[^>]*>Astra Extra high<\/span>/);
+  assert.match(html, /data-last-pick="brainstorm"[^>]*><span[^>]*>Using your last pick: <span[^>]*>Codex<\/span><\/span><span[^>]*>·<\/span><button[^>]*data-use-default="bart"[^>]*>Use default<\/button>/);
+  assert.match(html, /data-last-pick="discover"[^>]*><span[^>]*>Using your last pick: <span[^>]*>Codex<\/span>.*?data-use-default="bart"/);
+  assert.ok(html.indexOf('data-settings-row="brainstorm"') < html.indexOf('data-last-pick="brainstorm"') && html.indexOf('data-last-pick="brainstorm"') < html.indexOf('data-settings-row="discover"'), 'under its own row');
+
+  // Use default forgets @bart's pick, and both lines go with it.
+  createModelSettings({ homeRoot: () => root }).forget('bart');
+  assert.equal(followedPick(both()), null);
+
+  // A pick on the default provider moves only @bart.
+  rememberChoice(root, 'bart', { provider: 'anthropic', model: 'opus', effort: 'max' });
+  assert.ok(lastPick(both(), 'bart'));
+  assert.equal(followedPick(both()), null);
+  assert.ok(!renderToStaticMarkup(React.createElement(Intelligence, { initial: both() })).includes('data-last-pick="brainstorm"'));
+
+  // A pick on Codex while Codex cannot run is passed over: nothing moves, so nothing is said.
+  rememberChoice(root, 'bart', { provider: 'openai', model: 'astra', effort: 'xhigh' });
+  const claudeOnly = settingsModels(root, { tools: toolsFor(['claude']) });
+  assert.deepEqual([followedPick(claudeOnly), lastPick(claudeOnly, 'bart')], [null, null]);
+  assert.equal(modelsInForce(root, 'bart', { usable: ['claude'] }).provider, 'anthropic');
+});
+
+test('the panel warns when the models file cannot be read, before anything else', () => {
+  const { Intelligence } = load('ui/Settings.jsx');
+  const root = home();
+  assert.ok(!renderToStaticMarkup(React.createElement(Intelligence, { initial: settingsModels(root) })).includes('data-models-file-error'));
+  fs.writeFileSync(path.join(root, MODELS_FILE), '{ "provider": ');
+  const html = renderToStaticMarkup(React.createElement(Intelligence, { initial: settingsModels(root) }));
+  assert.match(html, /^<div data-settings-intelligence="1"><div role="alert" data-models-file-error="1"[^>]*>model-effort-inline-question\.json is not valid JSON, so every agent runs on the built-in defaults shown here, and a pick here is not saved\. Fix the file or delete it\.<\/div>/);
 });
 
 test('one gear: the test pill has none of its own, and Settings sits after the notification bell (S-12)', () => {

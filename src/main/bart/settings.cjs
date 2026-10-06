@@ -4,12 +4,13 @@
 // on each provider, and the default provider of @bart (which @brainstorm and @discover follow) and of Build. No file of its
 // own: the defaults are the models file's (./models.cjs), so a save writes what an edit by hand would, and the next run
 // reads it with no restart. Each agent's default is
-//   @bart        providers.<p>.ladder[0], the steps above it kept (withFirstStep)
+//   @bart        providers.<p>.ladder[0], then the built-in ladder's steps above it (withFirstStep)
 //   @brainstorm  brainstorm.providers.<p>
 //   @discover    discover.providers.<p>.standard (quick and deep under the panel's Advanced)
 //   Build        build.providers.<p>.default, which a post-it's quick task starts on too
-// The last action wins: setting @bart's default or its provider forgets @bart's last pick by hand, setting Build's forgets
-// Build's and the quick task's (./choices.cjs). A pick by hand after that is kept as before, and wins until the next save.
+// The last action wins: setting @bart's default provider forgets @bart's last pick by hand, and setting its default on a
+// provider forgets that pick when it is on that provider; Build's do the same to Build's pick and the quick task's
+// (./choices.cjs). A pick by hand after that is kept as before, and wins until the next save.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -48,17 +49,6 @@ function cliNotes(providers, tools) {
   return out;
 }
 
-/**
- * What the panel shows → { models, choices, usable, offered, cli }: the models file normalized, every provider, before a
- * last pick or a CLI that cannot run moves anything; the last picks by hand (./choices.cjs); the CLIs that can run (null
- * before the first check); the providers config.json offers (all when it names none of them, as onlyProviders); and why
- * each provider's CLI cannot run, if it cannot.
- */
-function settingsModels(homeRoot, { only, tools = null } = {}) {
-  const models = loadModels(homeRoot);
-  return { models, choices: readChoices(homeRoot), usable: tools ? tools.usableAgents() : null, offered: Object.keys(onlyProviders(models, only).providers), cli: cliNotes(models.providers, tools) };
-}
-
 /** The models file as it is on disk; a file that is not a JSON object is refused, never written over: the person may be halfway through an edit. */
 function readFile(file) {
   let text;
@@ -67,6 +57,32 @@ function readFile(file) {
   try { value = JSON.parse(text); } catch { /* refused below */ }
   if (!isObject(value)) throw new Error(`${MODELS_FILE} is not valid JSON. Fix it or delete it, then save again.`);
   return value;
+}
+
+/**
+ * Why the models file cannot be read, or null when it can (or is not there). While it cannot, every run is on the
+ * built-in defaults (loadModels) and a save is refused, so the panel says so instead of showing those defaults as if
+ * they were the file's.
+ */
+function fileError(homeRoot) {
+  try {
+    readFile(path.join(homeRoot, MODELS_FILE));
+    return null;
+  } catch (error) {
+    const why = /is not valid JSON/.test(error.message) ? 'is not valid JSON' : `cannot be read (${error.code || error.message})`;
+    return `${MODELS_FILE} ${why}, so every agent runs on the built-in defaults shown here, and a pick here is not saved. Fix the file or delete it.`;
+  }
+}
+
+/**
+ * What the panel shows → { models, choices, usable, offered, cli, fileError }: the models file normalized, every provider,
+ * before a last pick or a CLI that cannot run moves anything; the last picks by hand (./choices.cjs); the CLIs that can
+ * run (null before the first check); the providers config.json offers (all when it names none of them, as onlyProviders);
+ * why each provider's CLI cannot run, if it cannot; and why the models file cannot be read, if it cannot (null when it can).
+ */
+function settingsModels(homeRoot, { only, tools = null } = {}) {
+  const models = loadModels(homeRoot);
+  return { models, choices: readChoices(homeRoot), usable: tools ? tools.usableAgents() : null, offered: Object.keys(onlyProviders(models, only).providers), cli: cliNotes(models.providers, tools), fileError: fileError(homeRoot) };
 }
 
 function providerOf(models, value, what) {
@@ -100,7 +116,7 @@ function changesOf(current, patch) {
   if (patch.buildProvider !== undefined) change(['build', 'provider'], providerOf(current, patch.buildProvider, 'buildProvider'), current.build.provider);
   for (const [provider, value] of eachProvider(current, patch.bart, '@bart')) {
     const entry = current.providers[provider];
-    change(['providers', provider, 'ladder'], withFirstStep(entry, stepOf(entry, value, `@bart on ${provider}`)), entry.ladder);
+    change(['providers', provider, 'ladder'], withFirstStep(provider, entry, stepOf(entry, value, `@bart on ${provider}`)), entry.ladder);
   }
   for (const [provider, value] of eachProvider(current, patch.brainstorm, '@brainstorm')) {
     change(['brainstorm', 'providers', provider], stepOf(current.providers[provider], value, `@brainstorm on ${provider}`), current.brainstorm.providers[provider]);
@@ -133,8 +149,10 @@ function setAt(object, keys, value) {
  * A save from the panel → what settingsModels gives after it. Every pick is checked first (one that is not one of its
  * provider's models and efforts refuses the whole save); then only the values that change are written into the file as it
  * is on disk, so its `about`s, its other values and keys Engelbart does not know stay as they are. Written whole, over a
- * temporary. Then the last action wins: @bart's last pick is forgotten when the save names @bart's default or provider, Build's
- * and the quick task's when it names Build's.
+ * temporary. Then the last action wins over the picks it overrules: @bart's last pick is forgotten when the save names
+ * @bart's provider, or @bart's default on the provider that pick is on; Build's and the quick task's the same way, by
+ * Build's provider and Build's defaults. A pick on the other provider stays: saving Codex's default leaves a pick on
+ * Claude Code alone.
  */
 function saveSettingsModels(homeRoot, patch, options = {}) {
   if (!isObject(patch)) throw new TypeError('settings must be an object');
@@ -149,8 +167,10 @@ function saveSettingsModels(homeRoot, patch, options = {}) {
     for (const [keys, value] of changes) setAt(next, keys, value);
     writeJsonFile(file, next);
   }
-  if (patch.provider !== undefined || patch.bart !== undefined) forgetChoice(homeRoot, 'bart');
-  if (patch.buildProvider !== undefined || patch.build !== undefined) { forgetChoice(homeRoot, 'build'); forgetChoice(homeRoot, 'quick'); }
+  const choices = readChoices(homeRoot);
+  const overruled = (place, provider, defaults) => provider !== undefined || (!!choices[place] && isObject(defaults) && Object.hasOwn(defaults, choices[place].provider));
+  if (overruled('bart', patch.provider, patch.bart)) forgetChoice(homeRoot, 'bart');
+  for (const place of ['build', 'quick']) if (overruled(place, patch.buildProvider, patch.build)) forgetChoice(homeRoot, place);
   return settingsModels(homeRoot, options);
 }
 
@@ -171,4 +191,4 @@ function createModelSettings({ homeRoot, only = () => undefined, tools = null })
   };
 }
 
-module.exports = { PATCH_KEYS, modelsInForce, cliNotes, settingsModels, saveSettingsModels, createModelSettings };
+module.exports = { PATCH_KEYS, modelsInForce, cliNotes, fileError, settingsModels, saveSettingsModels, createModelSettings };
