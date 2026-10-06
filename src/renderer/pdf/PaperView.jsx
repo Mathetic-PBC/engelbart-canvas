@@ -37,7 +37,7 @@
 // dragged too; @bart from a part of a selection across pages sends the whole passage (./marks.js passageOf), and so does
 // Continue in workspace; a deleted answer comes back with ⌘Z (undoKey) and stays a turn of its exchange, so the next
 // question goes on in the same session (canvas.js exchangeOf); Space, ⌘Z and a pending selection's keys are the paper's
-// only while nothing has the keyboard (keyFree); Fit page + notes fits every box on the paper (canvas.js paperShape).
+// only while nothing has the keyboard (keyFree).
 import React from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import rough from 'roughjs';
@@ -45,7 +45,7 @@ import { mergeLineRects, placeHighlight, boxSeed, selectionParts, scalePart, par
 import { nextFind, createTargetGate, sectionSpans, paintSection, clearFind, FIND, FIND_ACTIVE } from '../model/find.js';
 import { wheelZooms, wheelZoom, createPageCache } from '../model/paper-zoom.js';
 import { mentionAt, libMention, noteHtml, noteParts, noteOffset, inlineHtml, esc, LIB_MENTION_RE } from '../model/doc.js';
-import { sideSpace, deskOf, deskNeed, hangLeft, placeOf, posOf, spaceBoxes, extentAt, fitZoom, paperShape, offscreen, offscreenSide, chipLabel, revealScroll, noteQuestion, turnsOf, shownAsks, keptMarks, modelLabel, runningLabel, DESK_EDGE, BOX_GAP, NOTE_W, ASK_W, COLLAPSED_W, SIDE_GAP, POS_DY } from './canvas.js';
+import { sideSpace, deskOf, deskNeed, hangLeft, placeOf, posOf, spaceBoxes, extentAt, fitZoom, offscreen, offscreenSide, chipLabel, revealScroll, noteQuestion, turnsOf, shownAsks, keptMarks, modelLabel, runningLabel, DESK_EDGE, BOX_GAP, NOTE_W, ASK_W, COLLAPSED_W, SIDE_GAP, POS_DY } from './canvas.js';
 import { fieldCaret } from '../workspace/caret.js';
 import MentionMenu from '../workspace/MentionMenu.jsx';
 
@@ -546,25 +546,21 @@ export default class PaperView extends React.Component {
     });
   }
 
-  /** "Fit page": the page in view whole in the pane; `withNotes`, "Fit page + notes": zoomed out until every box on the
-   *  paper is too, whichever page it is on (./canvas.js paperShape), and the view centered on them all. */
+  /** "Fit page": the page in view whole in the pane; `withNotes`, "Fit page + notes": zoomed out until its boxes are too.
+   *  Only that page's boxes: other pages' would zoom a long paper with notes far apart down to ZOOM_MIN. */
   fitPage(withNotes = false) {
     const host = this.host.current;
     if (!host || !this.doc || !this.inner) return;
-    const n = this.currentPage() || 1;
-    if (!this.v0[n]) return;
-    const W = host.clientWidth, H = host.clientHeight, unit = this.unit(W), list = [];
-    for (let k = 1; k < this.v0.length; k += 1) {
-      const v0 = this.v0[k] || this.v0[n];
-      list.push({ pageW1: v0.width * unit, pageH1: v0.height * unit, boxes: withNotes ? this.boxShapes(k) : [] });
-    }
-    const pages = paperShape(list, n);
-    const z = fitZoom({ pages, availW: Math.max(40, W - 48), availH: Math.max(40, H - 48 - 50), zMin: ZOOM_MIN, zMax: ZOOM_MAX });
+    const n = this.currentPage() || 1, v0 = this.v0[n];
+    if (!v0) return;
+    const W = host.clientWidth, H = host.clientHeight, unit = this.unit(W);
+    const shape = { pageW1: v0.width * unit, pageH1: v0.height * unit, boxes: withNotes ? this.boxShapes(n) : [] };
+    const z = fitZoom({ ...shape, availW: Math.max(40, W - 48), availH: Math.max(40, H - 48 - 50), zMin: ZOOM_MIN, zMax: ZOOM_MAX });
     clearTimeout(this.pinchTimer); this.pinchTimer = null; this.live = null;
     this.zoom = z;
     this.layout(undefined, () => {
-      const e = extentAt({ pages }, z), at = pages[n - 1].at;
-      this.centerOn(n, (e.left + e.right) / 2 - (at.x.a * z + at.x.b), (e.top + e.bottom) / 2 - (at.y.a * z + at.y.b));
+      const e = extentAt({ ...shape, pageW1: this.geo[n].pageW / z }, z);
+      this.centerOn(n, (e.left + e.right) / 2, (e.top + e.bottom) / 2);
     });
   }
 
@@ -1836,7 +1832,7 @@ export default class PaperView extends React.Component {
               <button type="button" className="hov-wash" aria-label="Zoom in" style={BAR_STEP} onClick={() => this.zoomStepBy(1)}>+</button>
               <span style={{ flex: 'none', width: 1, height: 16, margin: '0 4px', background: '#eaeaea' }} />
               <button type="button" className="hov-wash" title="The page in view, whole" style={BAR_FIT} onClick={() => this.fitPage(false)}>Fit page</button>
-              <button type="button" className="hov-wash" title="The page in view and every note and answer on the paper" style={BAR_FIT} onClick={() => this.fitPage(true)}>Fit page + notes</button>
+              <button type="button" className="hov-wash" title="The page in view and every note and answer beside it" style={BAR_FIT} onClick={() => this.fitPage(true)}>Fit page + notes</button>
             </div>
           ) : null}
         </div>

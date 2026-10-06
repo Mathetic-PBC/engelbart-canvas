@@ -5,9 +5,9 @@
 // A page lies on a desk at least DESK px wide on each side, at every zoom; a box moved past the desk's edge makes it wider
 // (deskNeed). A note is a box; each answer Bart gave from it is a box under it. A box that was moved keeps its place
 // (`pos`, page units); the others are placed beside their highlight and then spaced (spaceBoxes), which is never saved.
-// Follow-ups (2026-10-06): the boxes hanging under a moved one widen the desk too (deskNeed, hangLeft); Fit page + notes
-// reads every page's boxes (paperShape); a deleted answer stays one of its exchange's turns while that session can be
-// resumed (exchangeOf), so ⌘Z can bring it back and the next question goes on in the same session.
+// Follow-ups (2026-10-06): the boxes hanging under a moved one widen the desk too (deskNeed, hangLeft); a deleted answer
+// stays one of its exchange's turns while that session can be resumed (exchangeOf), so ⌘Z can bring it back and the
+// next question goes on in the same session.
 
 /** Side space that centers a page of width pageW in a pane of width W (0 once the page is wider). */
 export const sideSpace = (W, pageW) => Math.max(0, Math.floor((W - pageW) / 2));
@@ -108,47 +108,25 @@ export function spaceBoxes(units, fixed = [], gap = BOX_GAP) {
  * Where a page and its boxes reach at zoom z, from the page's top-left → { left, top, right, bottom }. The page is
  * pageW1 × pageH1 at zoom 1. A box's left and top are `x.a·P + x.b` and `y.a·P + y.b` with P the page's width at z (a
  * moved box keeps its page units, a box beside the page its px from the edge); its width and height are px at any zoom.
- * With `pages` (paperShape), several pages each at its own place (`at`: its top-left is at.x.a·z + at.x.b, at.y.a·z +
- * at.y.b), of which only those `whole` count with their page; the others count with their boxes alone.
  */
-export function extentAt(shape, z) {
-  const pages = shape.pages || [{ ...shape, whole: true }];
-  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
-  const take = (l, t, r, b) => { left = Math.min(left, l); top = Math.min(top, t); right = Math.max(right, r); bottom = Math.max(bottom, b); };
-  for (const p of pages) {
-    const P = p.pageW1 * z, at = p.at || { x: { a: 0, b: 0 }, y: { a: 0, b: 0 } };
-    const x0 = at.x.a * z + at.x.b, y0 = at.y.a * z + at.y.b;
-    if (p.whole) take(x0, y0, x0 + P, y0 + p.pageH1 * z);
-    for (const b of p.boxes || []) {
-      const x = x0 + b.x.a * P + b.x.b, y = y0 + b.y.a * P + b.y.b;
-      take(x, y, x + b.w, y + b.h);
-    }
+export function extentAt({ pageW1, pageH1, boxes = [] }, z) {
+  const P = pageW1 * z;
+  let left = 0, top = 0, right = P, bottom = pageH1 * z;
+  for (const b of boxes) {
+    const x = b.x.a * P + b.x.b, y = b.y.a * P + b.y.b;
+    left = Math.min(left, x); top = Math.min(top, y);
+    right = Math.max(right, x + b.w); bottom = Math.max(bottom, y + b.h);
   }
-  return left === Infinity ? { left: 0, top: 0, right: 0, bottom: 0 } : { left, top, right, bottom };
-}
-
-/**
- * The paper as Fit page + notes reads it (extentAt's `pages`): `list`, every page in order ({ pageW1, pageH1, boxes } at
- * zoom 1, boxes as extentAt reads them), stacked as PaperView lays them out, each 1px under the one before (a gap that
- * does not zoom) and all centered on one axis, x = 0. Page `current` (1-based, the one in view) counts whole; the
- * others with their boxes alone. → the pages, each with its `at` and `whole`.
- */
-export function paperShape(list, current) {
-  let above = 0;
-  return (list || []).map((p, i) => {
-    const at = { x: { a: -p.pageW1 / 2, b: 0 }, y: { a: above, b: i } };
-    above += p.pageH1;
-    return { ...p, at, whole: i + 1 === current };
-  });
+  return { left, top, right, bottom };
 }
 
 /**
  * "Fit page" (no boxes) and "Fit page + notes": the largest zoom from `zMax` down to `zMin` at which the page and its
- * boxes (or the `pages` and their boxes) fit `availW` × `availH` (extentAt); `zMin` when nothing does.
+ * boxes fit `availW` × `availH` (extentAt); `zMin` when nothing does. Only the page in view and its own boxes count: a
+ * fit that took in every page's boxes zoomed a long paper down to the least zoom (undone 2026-10-06).
  */
-export function fitZoom({ pageW1, pageH1, boxes = [], pages, availW, availH, zMin, zMax }) {
-  const shape = pages ? { pages } : { pageW1, pageH1, boxes };
-  const fits = (z) => { const e = extentAt(shape, z); return e.right - e.left <= availW && e.bottom - e.top <= availH; };
+export function fitZoom({ pageW1, pageH1, boxes = [], availW, availH, zMin, zMax }) {
+  const fits = (z) => { const e = extentAt({ pageW1, pageH1, boxes }, z); return e.right - e.left <= availW && e.bottom - e.top <= availH; };
   if (fits(zMax)) return zMax;
   if (!fits(zMin)) return zMin;
   let lo = zMin, hi = zMax;

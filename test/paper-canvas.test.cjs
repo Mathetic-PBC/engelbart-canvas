@@ -3,14 +3,31 @@
 // The page as a canvas (src/renderer/pdf/canvas.js, MATH-27 phase 1, 2026-10-06): the desk beside every page, the spacing
 // pass that keeps boxes 12px apart and flowing around the ones that were moved, Fit page + notes, which boxes are out of
 // view, and the answers a highlight keeps. Follow-ups (2026-10-06): answers hanging under a moved note widen the desk,
-// Fit page + notes reads every page, a deleted answer stays a turn while its session lasts.
+// a deleted answer stays a turn while its session lasts. Fit page + notes reads the page in view alone (a fit of every
+// page's boxes was tried and undone, 2026-10-06: it zoomed a long paper with notes far apart down to 15%).
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const Module = require('node:module');
 const { pathToFileURL } = require('node:url');
+const { buildSync } = require('esbuild');
 
 const load = () => import(pathToFileURL(path.join(__dirname, '../src/renderer/pdf/canvas.js')).href);
+
+// PaperView itself, bundled as paper-note-ask.test.cjs does (pdf.js and rough.js are not loaded).
+function loadView() {
+  globalThis.document = { baseURI: 'file:///app/index.html' };
+  const filename = path.join(__dirname, '__PaperView-canvas-unit.cjs');
+  const bundled = buildSync({ entryPoints: [path.join(__dirname, '../src/renderer/pdf/PaperView.jsx')], bundle: true, platform: 'node', format: 'cjs', jsx: 'automatic', write: false, external: ['react', 'react-dom', 'pdfjs-dist', 'roughjs'], loader: { '.css': 'empty' } });
+  const compiled = new Module(filename, module);
+  compiled.paths = module.paths;
+  const stubs = { 'pdfjs-dist': { GlobalWorkerOptions: {} }, roughjs: { __esModule: true, default: null } };
+  compiled.require = (id) => (id in stubs ? stubs[id] : Module.prototype.require.call(compiled, id));
+  compiled._compile(bundled.outputFiles[0].text, filename);
+  delete globalThis.document;
+  return compiled.exports;
+}
 
 /* ------------------------------------------------------------------------------------------------ the desk */
 
@@ -150,29 +167,36 @@ test('fitZoom: Fit page fits the page; Fit page + notes zooms out until every bo
   assert.equal(fitZoom({ ...page, availW: 5000, availH: 5000 }), 2, 'and at the most');
 });
 
-test('Fit page + notes reads every page: paperShape stacks them as laid out, and the fit holds a box three pages on', async () => {
-  const { paperShape, extentAt, fitZoom } = await load();
-  const box = { x: { a: 1, b: 28 }, y: { a: 0.1, b: 0 }, w: 320, h: 120 };
-  const list = [{ pageW1: 800, pageH1: 1000, boxes: [] }, { pageW1: 800, pageH1: 1000, boxes: [] }, { pageW1: 600, pageH1: 900, boxes: [] }, { pageW1: 800, pageH1: 1000, boxes: [box] }];
-  const pages = paperShape(list, 1);
-  assert.deepEqual(pages.map((p) => p.at), [
-    { x: { a: -400, b: 0 }, y: { a: 0, b: 0 } },
-    { x: { a: -400, b: 0 }, y: { a: 1000, b: 1 } },
-    { x: { a: -300, b: 0 }, y: { a: 2000, b: 2 } },
-    { x: { a: -400, b: 0 }, y: { a: 2900, b: 3 } },
-  ], 'each 1px under the one before, centered on x = 0');
-  assert.deepEqual(pages.map((p) => p.whole), [true, false, false, false], 'the page in view counts whole');
-  const z = 0.5;
-  assert.deepEqual(extentAt({ pages }, z), { left: -200, top: 0, right: 200 + 28 + 320, bottom: 2900 * z + 3 + 0.1 * 400 + 120 }, 'page 1, and page 4\'s box');
-  assert.deepEqual(extentAt({ pages: paperShape(list.map((p) => ({ ...p, boxes: [] })), 2) }, z), { left: -200, top: 500 + 1, right: 200, bottom: 1000 + 1 }, 'no boxes: the page in view alone');
-  const view = { availW: 900, availH: 700, zMin: 0.15, zMax: 2 };
-  const pageOnly = fitZoom({ pages: paperShape(list.map((p) => ({ ...p, boxes: [] })), 1), ...view });
-  assert.ok(Math.abs(pageOnly - 0.7) < 1e-6, 'Fit page: as fitZoom always did for one page');
-  const all = fitZoom({ pages, ...view });
-  const e = extentAt({ pages }, all);
-  assert.ok(all < pageOnly && e.bottom - e.top <= view.availH + 1e-6 && e.right - e.left <= view.availW + 1e-6, 'zoomed out until the box on page 4 fits too');
-  // A single page as before: no `pages`, from its own top-left.
-  assert.deepEqual(extentAt({ pageW1: 800, pageH1: 1000, boxes: [box] }, 1), { left: 0, top: 0, right: 1148, bottom: 1000 });
+test('Fit page + notes fits the page in view and the boxes beside it alone: a note pages away does not zoom it out', async () => {
+  const { fitZoom, extentAt } = await load();
+  const { default: PaperView, ZOOM_MIN, ZOOM_MAX } = loadView();
+  const beside = { x: { a: 1, b: 28 }, y: { a: 0.1, b: 0 }, w: 320, h: 120 };
+  const far = { x: { a: -0.4, b: 0 }, y: { a: 0.9, b: 0 }, w: 320, h: 120 };
+  // A twelve-page paper, page 1 in view with a note beside it, and a note on every other page.
+  const W = 800, H = 700, v = { width: 612, height: 792 };
+  const view = new PaperView({});
+  const read = [];
+  let centered = null;
+  Object.assign(view, {
+    host: { current: { clientWidth: W, clientHeight: H } }, doc: {}, inner: {},
+    v0: [null, ...Array.from({ length: 12 }, () => v)],
+    currentPage: () => 1,
+    boxShapes: (n) => { read.push(n); return n === 1 ? [beside] : [far]; },
+    layout(_, done) { this.geo = { 1: { pageW: v.width * this.unit(W) * this.zoom } }; done(); },
+    centerOn: (n, x, y) => { centered = { n, x, y }; },
+  });
+  const page = { pageW1: W, pageH1: v.height * (W / v.width), availW: W - 48, availH: H - 48 - 50, zMin: ZOOM_MIN, zMax: ZOOM_MAX };
+  view.fitPage(true);
+  assert.deepEqual(read, [1], 'only the page in view\'s boxes are read');
+  assert.equal(view.zoom, fitZoom({ ...page, boxes: [beside] }), 'the page and the note beside it');
+  assert.ok(view.zoom > 0.4, 'nowhere near the least zoom');
+  const e = extentAt({ ...page, boxes: [beside] }, view.zoom);
+  assert.equal(centered.n, 1);
+  assert.ok(Math.abs(centered.x - (e.left + e.right) / 2) < 1e-6 && Math.abs(centered.y - (e.top + e.bottom) / 2) < 1e-6, 'centered on them');
+  read.length = 0;
+  view.fitPage(false);
+  assert.deepEqual(read, [], 'Fit page reads no boxes');
+  assert.equal(view.zoom, fitZoom(page));
 });
 
 test('offscreen: boxes beyond each edge of the view by their centers; revealScroll brings them in', async () => {
