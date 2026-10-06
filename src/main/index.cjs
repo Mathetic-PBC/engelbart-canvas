@@ -39,6 +39,7 @@ const { shouldHideWindowOnClose } = require('./terminal/window-lifecycle.cjs');
 const { assertTrustedRenderer, parseExternalUrl } = require('./ipc-validation.cjs');
 const { createStore, registerEngelbartIpc } = require('./ipc.cjs');
 const { PARTITION: BROWSER_PARTITION, createBrowserViews, registerBrowserIpc } = require('./browser/views.cjs');
+const { createCookieImport, keychainRunner } = require('./browser/import-cookies.cjs');
 const { createGithub } = require('./github/connection.cjs');
 const { createBrowserAuth, CLIENT_ID: GITHUB_CLIENT_ID } = require('./github/browser-auth.cjs');
 const { createE2bKey } = require('./github/e2b-key.cjs');
@@ -713,7 +714,15 @@ if (!hasSingleInstanceLock) {
         return ctx ? ctx.postItViews : windows.cardsHolding(event.sender);
       },
     });
-    registerBrowserIpc({ ipcMain, trustedHandler, viewsFor: (event) => { const ctx = windows.of(event.sender); return ctx ? ctx.browserViews : null; } });
+    // Importing sign-ins from the person's browsers into the Stage (MATH-18): macOS only, and into the one shared
+    // persist:browser session every window's tabs read. Cookie values stay here — the handlers return domains and counts.
+    const cookieImport = process.platform === 'darwin' ? createCookieImport({
+      supportDir: path.join(app.getPath('home'), 'Library', 'Application Support'),
+      userDataDir: app.getPath('userData'),
+      getSession: () => electronSession.fromPartition(BROWSER_PARTITION),
+      keychain: keychainRunner,
+    }) : null;
+    registerBrowserIpc({ ipcMain, trustedHandler, viewsFor: (event) => { const ctx = windows.of(event.sender); return ctx ? ctx.browserViews : null; }, cookieImport });
     // GitHub (src/main/github): default-browser sign-in with an automatic loopback return, and the token
     // that lets the library read private repositories. ENGELBART_GITHUB_* name a fake GitHub, for scripted runs only.
     const githubWeb = process.env.ENGELBART_GITHUB_WEB || null;

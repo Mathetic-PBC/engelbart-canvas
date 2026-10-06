@@ -44,6 +44,13 @@ module.exports = {
   artifactName: 'Engelbart-${version}-${arch}.${ext}',
   // Read by the app (src/main/updates.cjs): where new versions are, and whether it can install them itself.
   extraMetadata: { engelbart: { downloads, developerId: signed } },
+  // Encrypt the Stage's cookies on disk (MATH-18 / CK-11, 2026-10-06). The Stage keeps imported sign-ins in its
+  // persist:browser store (Partitions/browser/Cookies); without this fuse Chromium writes those values in the clear.
+  // electron-builder 26.15.3 supports `electronFuses` (app-builder-lib flips them with @electron/fuses right before
+  // signing, so the ad-hoc/Developer ID signature is re-applied after). WARNING: this is one-way. Once shipped, it must
+  // never be turned off — Electron encrypts on write, and disabling the fuse again leaves the existing cookie store
+  // unreadable, signing every imported user out.
+  electronFuses: { enableCookieEncryption: true, resetAdHocDarwinSignature: !signed },
   files: [
     'package.json',
     ...(source

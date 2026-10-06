@@ -700,7 +700,10 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
 }
 
 // Each handler is registered once and acts on the views of the window that called (`viewsFor(event)`, 2026-10-03).
-function registerBrowserIpc({ ipcMain, trustedHandler, viewsFor = null, views = null }) {
+// `cookieImport` (MATH-18, 2026-10-06) is the one importer for the whole app — the Stage's session is shared across
+// windows — so its three handlers are not per-window. They carry domains and counts only, never cookie values (CK-07,
+// CK-13): import-domains gives a domain and a count, import gives { imported, skipped, sessionOnly, checks }.
+function registerBrowserIpc({ ipcMain, trustedHandler, viewsFor = null, views = null, cookieImport = null }) {
   const lookup = viewsFor || (() => views);
   const handle = (channel, call) => ipcMain.handle(channel, (event, ...args) => trustedHandler((...rest) => {
     const mine = lookup(event);
@@ -716,6 +719,17 @@ function registerBrowserIpc({ ipcMain, trustedHandler, viewsFor = null, views = 
   handle('browser:close', (mine, id) => mine.close(id));
   handle('browser:login-reply', (mine, requestId, credentials) => mine.answerLogin(requestId, credentials));
   handle('browser:close-all', (mine) => { mine.closeAll(); return true; });
+
+  if (cookieImport) {
+    const text = (value, what) => { if (typeof value !== 'string' || !value || value.length > 256) throw new TypeError(`${what} must be a short string`); return value; };
+    ipcMain.handle('browser:import-sources', trustedHandler(() => cookieImport.sources()));
+    ipcMain.handle('browser:import-domains', trustedHandler((browser, profile) => cookieImport.domains(text(browser, 'A browser'), text(profile, 'A profile'))));
+    ipcMain.handle('browser:import', trustedHandler((request) => {
+      if (!request || typeof request !== 'object') throw new TypeError('An import needs a browser, a profile and domains');
+      const domains = Array.isArray(request.domains) ? request.domains.slice(0, 500).map((d) => text(d, 'A domain')) : [];
+      return cookieImport.import({ browser: text(request.browser, 'A browser'), profile: text(request.profile, 'A profile'), domains });
+    }));
+  }
 }
 
 module.exports = { PARTITION, parseBrowserUrl, parseFileUrl, externalScheme, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews, registerBrowserIpc };

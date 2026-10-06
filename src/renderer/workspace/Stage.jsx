@@ -11,6 +11,9 @@ import { MAX_TABS, SAVE_LABEL, WAKE_RETRY_MS, addressKey, afterClose, landTab, l
 import { markdownBlocks, inlineRuns } from '../model/markdown.js';
 import PaperView from '../pdf/PaperView.jsx';
 import { withAsk } from '../pdf/canvas.js';
+import ImportSignins from './ImportSignins.jsx';
+
+const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || '');
 
 // The Stage (Claude Design "Add - Mention Stage.dc.html", 2026-09-23): the Browser and the Paper pane made one. A tab
 // shows whatever it was given — a library row, a link, a file on disk — in the way its format asks:
@@ -387,6 +390,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const [draft, setDraft] = React.useState('');
   const [menu, setMenu] = React.useState(null); // { x, y }
   const [device, setDevice] = React.useState('fit');
+  const [importing, setImporting] = React.useState(false); // the "Import sign-ins…" picker is open (MATH-18)
   const [customW, setCustomW] = React.useState('390');
   const [occluded, setOccluded] = React.useState(false);
   const [snapshot, setSnapshot] = React.useState(null);
@@ -1224,6 +1228,11 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
                   {page && <div className="hov-wash" onClick={() => { quiet(api.browserCommand(tab.id, 'devtools')); setMenu(null); }} style={{ padding: '7px 10px 7px 34px', borderRadius: 6, cursor: 'pointer', font: '13px/1.4 var(--font-sans)', color: '#171717' }}>Developer tools</div>}
                 </div>
               )}
+              {IS_MAC && (
+                <div style={{ borderTop: '1px solid #eaeaea', marginTop: 4, paddingTop: 4 }}>
+                  <div className="hov-wash" data-stage-import="1" onClick={() => { setMenu(null); setImporting(true); }} style={{ padding: '7px 10px 7px 34px', borderRadius: 6, cursor: 'pointer', font: '13px/1.4 var(--font-sans)', color: '#171717' }}>Import sign-ins…</div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1338,6 +1347,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
         />,
         document.body,
       )}
+      {importing && <ImportSignins onClose={() => setImporting(false)} onOpenSite={(url) => openInput(url)} />}
     </div>
   );
 });

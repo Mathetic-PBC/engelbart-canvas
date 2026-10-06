@@ -250,6 +250,12 @@ const engelbartAPI = Object.freeze({
   onBrowserShortcut: (callback) => subscribe('browser:shortcut', callback),
   // A tab's pdf: { id, url, name, under, loading | bytes | error } (src/main/browser/views.cjs).
   onBrowserPdf: (callback) => subscribe('browser:pdf', callback),
+  // Import sign-ins from the person's browsers into the Stage (MATH-18, src/main/browser/import-cookies.cjs). Domains and
+  // counts only cross here; cookie values never do. import-sources -> installed browsers and profiles; import-domains ->
+  // [{ domain, count }] for a profile; import -> { imported, skipped, sessionOnly, checks }.
+  browserImportSources: () => ipcRenderer.invoke('browser:import-sources'),
+  browserImportDomains: (browser, profile) => ipcRenderer.invoke('browser:import-domains', browser, profile),
+  browserImport: (request) => ipcRenderer.invoke('browser:import', request),
   readPageAnnotations: invoke('read-page-annotations'),
   writePageAnnotations: invoke('write-page-annotations'),
   postItsActivate: (projectId) => ipcRenderer.invoke('post-its:activate', projectId),
