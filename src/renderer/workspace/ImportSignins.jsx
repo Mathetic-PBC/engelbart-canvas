@@ -32,6 +32,14 @@ export default function ImportSignins({ onClose, onOpenSite, opensLater = false 
   const [result, setResult] = React.useState(null); // { imported, skipped, sessionOnly, checks }
   const [later, setLater] = React.useState({}); // domain → true: kept to open on the Stage when the project opens (opensLater)
 
+  // Escape is the picker's wherever the keyboard is (a browser row it unmounts leaves focus on the page), taken here so
+  // the workspace's own Escape, which leaves the workspace, never sees it; as BuildReject does.
+  React.useEffect(() => {
+    const onKey = (event) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose(); } };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [onClose]);
+
   React.useEffect(() => {
     api.browserImportSources().then((list) => { setSources(list); if (!list.length) setError('No supported browsers were found on this Mac.'); }).catch((failure) => setError(errorMessage(failure)));
   }, []);
@@ -166,7 +174,7 @@ export default function ImportSignins({ onClose, onOpenSite, opensLater = false 
   );
 
   return createPortal(
-    <div data-overlay="1" data-import-signins="1" role="dialog" aria-modal="true" aria-label="Import sign-ins" onKeyDown={(event) => { if (event.key === 'Escape') onClose(); }} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }} style={{ position: 'fixed', inset: 0, zIndex: 140, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(23,23,23,.18)' }}>
+    <div data-overlay="1" data-import-signins="1" role="dialog" aria-modal="true" aria-label="Import sign-ins" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }} style={{ position: 'fixed', inset: 0, zIndex: 140, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(23,23,23,.18)' }}>
       <div style={panel} onMouseDown={(event) => event.stopPropagation()}>
         {body}
         {footer}
