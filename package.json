@@ -18,7 +18,7 @@
     "sandbox:cache:build": "node scripts/build-sandbox-cache.cjs",
     "sandbox:cache:bench": "node scripts/benchmark-sandbox-cache.cjs",
     "rebuild": "electron-rebuild -f -w node-pty",
-    "postinstall": "npm run rebuild",
+    "postinstall": "node scripts/postinstall.mjs",
     "package": "node scripts/package-mac.mjs",
     "dist:mac": "node scripts/package-mac.mjs --release",
     "upload:mac": "bash scripts/upload-release.sh",

@@ -57,9 +57,14 @@ function checkAppModules(asarPath) {
   return { checked: seen.size, missing };
 }
 
-/** The same for an app folder (Engelbart.app). Throws when anything is missing, naming each and why it is needed. */
+/**
+ * The same for an app folder (Engelbart.app, or Windows' win-unpacked, which keeps app.asar in resources/). Throws when
+ * anything is missing, naming each and why it is needed.
+ */
 function assertAppModules(appPath, label = path.basename(appPath)) {
-  const asarPath = path.join(appPath, 'Contents', 'Resources', 'app.asar');
+  const mac = path.join(appPath, 'Contents', 'Resources', 'app.asar');
+  const windows = path.join(appPath, 'resources', 'app.asar');
+  const asarPath = !fs.existsSync(mac) && fs.existsSync(windows) ? windows : mac;
   if (!fs.existsSync(asarPath)) throw new Error(`${label}: no app.asar at ${asarPath}`);
   const { checked, missing } = checkAppModules(asarPath);
   if (missing.length) {
