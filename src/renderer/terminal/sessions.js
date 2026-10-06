@@ -18,6 +18,7 @@ import {
   splitUtf8Chunks,
 } from './helpers.cjs';
 import { OPEN_IN_BROWSER } from '../model/address.js';
+import { pdfText } from '../model/paste.js';
 
 const PROVIDER_NAMES = { shell: 'Shell', claude: 'Claude Code', codex: 'Codex', sandbox: 'Sandbox' };
 const DEFAULT_FONT_SIZE = 12.5;
@@ -188,6 +189,16 @@ function makeTerminalRecord(snapshot, projectId) {
     event.preventDefault();
     event.stopPropagation();
     terminal.clearSelection();
+  }, true);
+  // Text copied from a PDF goes to Claude Code, Codex or the shell without the page's layout (MATH-24): its line breaks
+  // and split words come out (model/paste.js). Caught before xterm's own paste handler, which pastes anything else.
+  view.addEventListener('paste', (event) => {
+    const raw = event.clipboardData ? (event.clipboardData.getData('text/plain') || '').replace(/\r/g, '') : '';
+    const text = pdfText(raw);
+    if (!raw || text === raw) return;
+    event.preventDefault();
+    event.stopPropagation();
+    terminal.paste(text);
   }, true);
   view.addEventListener('focusin', () => {
     if (!record.inputLocked) return;

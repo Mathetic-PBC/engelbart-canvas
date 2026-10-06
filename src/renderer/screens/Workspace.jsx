@@ -887,13 +887,14 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   }, []);
 
   // Anything that is not a note opens on the Stage: a pdf, a page, a repository's address, a file of any kind.
-  const openItem = React.useCallback((row) => {
+  // `{ newTab: true }` (⌘-click in the library, MATH-16): a tab of its own even when one already shows it.
+  const openItem = React.useCallback((row, options = {}) => {
     if (!row || row.id === 'chat') return;
     if (row.type === 'workspace') { showWs(); return; }
     if (isNote(row)) { openTab(row.id, row.name); return; }
     if (!onStage(row) || !stageRef.current) return;
     showRight('stage');
-    stageRef.current.openRow(row);
+    stageRef.current.openRow(row, '', '', { newTab: !!options.newTab });
   }, [openTab, showWs, showRight]);
   // A link in a document goes to the Stage too, never to the default browser; `{ newTab: true }` (⌘-click), in a tab of its own.
   const openLink = React.useCallback((href, options) => {
@@ -917,7 +918,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sandboxes = useSandboxes();
-  const onRowClick = (row) => {
+  const onRowClick = (row, event) => {
     if (row.type === 'child') { selectTopic(row.id); return; }
     if (row.type === 'archive') { openTab(`${ARCHIVE_TAB}${row.file}`, row.name); return; }
     // A GitHub repository opens its live preview in the Stage, its sandbox's shell in the terminal pane, or both (the
@@ -930,7 +931,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     if (click === 'both') { sandboxes.openTerminal(sandbox.run, { show: false }); sandboxes.open(sandbox.run); return; }
     if (click === 'start') { sandboxes.openBuild(row); sandboxes.act(sandbox.run, () => api.startSandbox(row.id)); return; }
     if (click === 'details') { sandboxes.openBuild(row); return; }
-    openItem(row);
+    openItem(row, { newTab: !!event && (event.metaKey || event.ctrlKey) });
   };
 
   /* ------------------------------------------------------- the pane beside */
@@ -1323,6 +1324,20 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   /* --------------------------------------------------------------- keyboard */
 
+  // ⌘1–9 switch the tabs of whichever side was clicked last (MATH-12, 2026-10-06): the documents in the middle, or the Stage.
+  // A press anywhere else (the library, the header) leaves it as it was.
+  const lastSide = React.useRef('doc');
+  React.useEffect(() => {
+    const onDown = (event) => {
+      const at = event.target && event.target.closest ? event.target : null; if (!at) return;
+      if (at.closest('[data-stage]')) lastSide.current = 'stage';
+      else if (at.closest('[data-terminal]')) lastSide.current = 'terminal';
+      else if (at.closest('[data-doc-pane], [data-doc-strip]')) lastSide.current = 'doc';
+    };
+    window.addEventListener('pointerdown', onDown, true);
+    return () => window.removeEventListener('pointerdown', onDown, true);
+  }, []);
+
   React.useEffect(() => {
     if (!active) return undefined;
     const onKey = (event) => {
@@ -1330,6 +1345,12 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       const inTerminal = target && target.closest && target.closest('[data-terminal]');
       const mod = event.metaKey || event.ctrlKey;
       if (mod && !inTerminal && /^[1-9]$/.test(event.key)) {
+        if (lastSide.current === 'terminal' && rightMode === 'terminal') return; // the Terminal's own tabs (TerminalPane)
+        if (lastSide.current === 'stage' && rightMode === 'stage' && stageRef.current) {
+          event.preventDefault();
+          stageRef.current.tabAt(Number(event.key) - 1);
+          return;
+        }
         const tab = tabs[Number(event.key) - 1];
         if (tab) {
           event.preventDefault();
@@ -1362,7 +1383,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [active, tabs, renaming, docFull, notePlus, onClose]);
+  }, [active, tabs, rightMode, renaming, docFull, notePlus, onClose]);
 
   /* --------------------------------------------------------------- resizing */
 
@@ -1520,7 +1541,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
         {/* The document's tabs, drawn as the Stage's (2026-09-25): no rule under them; the tab in front runs into the page. */}
         <div data-doc-strip="1" style={{ flex: '1 1 0', minWidth: 0, boxSizing: 'border-box', display: full ? 'none' : 'flex', alignItems: 'flex-end', padding: `0 ${docFull ? controlsRoom + 8 : 8}px 0 10px`, overflow: 'hidden' }}>
           <div style={{ flex: '0 1 auto', minWidth: 0, display: 'flex', alignItems: 'flex-end', height: '100%' }}>
-            <DocTabs tabs={tabs} activeTab={activeTab} onSelect={setActiveTab} onClose={closeTab} onMove={moveTab} />
+            <DocTabs tabs={tabs} activeTab={activeTab} onSelect={setActiveTab} onClose={closeTab} onMove={moveTab} wsName={topic ? topic.name : ''} />
           </div>
           {notePlus && topic && (
             <NotePicker

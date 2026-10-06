@@ -323,3 +323,23 @@ test('passageOf: a highlight\'s own text; a part of a selection across pages, ev
   assert.equal(passageOf({}, { id: 'x', group: 'g9', text: 'alone' }), 'alone', 'a group not among the marks: its own text');
   assert.equal(passageOf(marks, null), '');
 });
+
+test('stackNotes: margin notes never cover each other; a crowded margin sends a note to the other (MATH-15)', async () => {
+  const { stackNotes } = await import(require('node:url').pathToFileURL(require('node:path').join(__dirname, '../src/renderer/pdf/marks.js')).href);
+  const assert = require('node:assert/strict');
+  // Two highlights on neighbouring lines, both nearer the right margin.
+  let at = stackNotes([{ id: 'a', ideal: 100, h: 48, side: 'right' }, { id: 'b', ideal: 110, h: 24, side: 'right' }], { gap: 8 });
+  assert.deepEqual(at.get('a'), { top: 100, side: 'right' });
+  assert.deepEqual(at.get('b'), { top: 110, side: 'left' }, 'the left margin keeps it level with its highlight');
+  // A little crowding is taken in the same margin.
+  at = stackNotes([{ id: 'a', ideal: 100, h: 24, side: 'right' }, { id: 'b', ideal: 125, h: 24, side: 'right' }], { gap: 8 });
+  assert.deepEqual(at.get('b'), { top: 132, side: 'right' });
+  // Both margins full: stacked, none overlapping.
+  at = stackNotes([0, 1, 2, 3].map((i) => ({ id: `n${i}`, ideal: 100, h: 30, side: 'right' })), { gap: 8 });
+  const bySide = { left: [], right: [] };
+  for (const [, p] of at) bySide[p.side].push(p.top);
+  for (const tops of Object.values(bySide)) { tops.sort((x, y) => x - y); for (let i = 1; i < tops.length; i++) assert.ok(tops[i] - tops[i - 1] >= 38); }
+  // Past the page's foot: pushed back up.
+  at = stackNotes([{ id: 'a', ideal: 980, h: 40, side: 'left' }], { pageH: 1000 });
+  assert.equal(at.get('a').top, 960);
+});

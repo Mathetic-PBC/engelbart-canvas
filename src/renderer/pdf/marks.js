@@ -191,3 +191,35 @@ export function passageOf(marks, mark) {
   if (!parts.length) return String(mark.text || '');
   return parts.sort((a, b) => a.page - b.page || a.y - b.y || a.i - b.i).map((p) => p.text.trim()).filter(Boolean).join('\n');
 }
+
+/**
+ * Where the margin notes of one page go (MATH-15, 2026-10-06), so none covers another. `items`: [{ id, ideal, h, side }],
+ * `ideal` the top the note would have beside its highlight, `h` its height, `side` the margin its highlight is nearer.
+ * In the order of their highlights, each note takes the top nearest its ideal in its own margin, below the notes
+ * already there; when that pushes it down more than `slack` and the other margin would hold it nearer its highlight, it
+ * goes there instead (Gwern's sidenotes, two margins). Notes that run past the page's foot are pushed back up, the
+ * last first, never above the page's head. → Map id → { top, side }.
+ */
+export function stackNotes(items, { pageH = Infinity, gap = 8, slack = 12 } = {}) {
+  const out = new Map(), placed = { left: [], right: [] }, bottom = { left: -Infinity, right: -Infinity };
+  const order = [...items].sort((a, b) => a.ideal - b.ideal);
+  for (const it of order) {
+    const own = it.side === 'left' ? 'left' : 'right', other = own === 'left' ? 'right' : 'left';
+    const at = (side) => Math.max(it.ideal, bottom[side] + gap);
+    const side = at(own) - it.ideal > slack && at(other) < at(own) ? other : own;
+    const top = at(side);
+    bottom[side] = top + it.h;
+    placed[side].push({ id: it.id, top, h: it.h });
+    out.set(it.id, { top, side });
+  }
+  for (const side of ['left', 'right']) {
+    let limit = pageH;
+    for (const n of [...placed[side]].reverse()) {
+      if (n.top + n.h <= limit) break;
+      n.top = Math.max(0, limit - n.h);
+      limit = n.top - gap;
+      out.set(n.id, { top: n.top, side });
+    }
+  }
+  return out;
+}

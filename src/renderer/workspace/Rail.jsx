@@ -259,7 +259,7 @@ function RailRow({ row, flash, faded, onClick, onRenameStart, onRename, onRename
       draggable={draggable}
       onDragStart={draggable ? (event) => onDragStart(row, event) : undefined}
       onDragEnd={draggable ? onDragEnd : undefined}
-      onClick={() => { if (!row.editing) onClick(row); }}
+      onClick={(event) => { if (!row.editing) onClick(row, event); }}
       onDoubleClick={(event) => { if (row.type === 'workspace' || row.type === 'archive') return; event.stopPropagation(); onRenameStart(row); }}
       onMouseEnter={onEnter ? (event) => onEnter(row, event.currentTarget) : undefined}
       onMouseLeave={onLeave}

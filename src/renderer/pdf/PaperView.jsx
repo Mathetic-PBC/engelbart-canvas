@@ -51,7 +51,7 @@
 import React from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import rough from 'roughjs';
-import { mergeLineRects, placeHighlight, boxSeed, selectionParts, scalePart, partMarks, passageOf } from './marks.js';
+import { mergeLineRects, placeHighlight, boxSeed, selectionParts, scalePart, partMarks, passageOf, stackNotes } from './marks.js';
 import { nextFind, createTargetGate, sectionSpans, paintSection, clearFind, FIND, FIND_ACTIVE } from '../model/find.js';
 import { wheelZooms, wheelZoom, createPageCache } from '../model/paper-zoom.js';
 import { mentionAt, libMention, noteHtml, noteParts, noteOffset, inlineHtml, esc, LIB_MENTION_RE } from '../model/doc.js';
@@ -151,7 +151,9 @@ const chipStyle = (side) => ({ ...CHIP, ...(side === 'left' ? { left: 12, top: '
 const SIDES = ['left', 'right', 'up', 'down'];
 const NO_OFF = { left: 0, right: 0, up: 0, down: 0 };
 // A box (MATH-27): a light border, a grip at its top that moves it.
-const BOX_LOOK = 'position:absolute;box-sizing:border-box;border:1px solid #e3e3e3;border-radius:8px;background:rgba(255,255,255,.97);pointer-events:auto;box-shadow:0 1px 2px rgba(0,0,0,.03)';
+const BOX_BG = 'rgba(255,255,255,.97)', BOX_SHADOW = '0 1px 2px rgba(0,0,0,.03)';
+const FOCUS_WASH = 'rgb(242,247,254)'; // the box of the note in focus (MATH-15): the white of a box with a little blue
+const BOX_LOOK = `position:absolute;box-sizing:border-box;border:1px solid #e3e3e3;border-radius:8px;background:${BOX_BG};pointer-events:auto;box-shadow:${BOX_SHADOW}`;
 const GRIP_HTML = '<div data-grip="1" title="Drag to move" style="height:12px;display:flex;align-items:center;justify-content:center"><span style="width:22px;height:3px;border-radius:2px;background:#d9d9d9"></span></div>';
 const SPINNER = 'flex:none;width:10px;height:10px;box-sizing:border-box;border:1.5px solid #c9d9f2;border-top-color:#0070f3;border-radius:50%;animation:pdf-spin .8s linear infinite';
 
@@ -184,8 +186,10 @@ function rangeText(range) {
   return out;
 }
 const SVG = 'http://www.w3.org/2000/svg';
-// A note's handwriting, the same in its field and shown as text (so the side arrows meet either where they did).
-const NOTE_LOOK = "pointer-events:auto;padding:0 6px;font:500 17px/1.25 'Caveat',cursive;color:#171717";
+// A note's handwriting, the same in its field and shown as text. Still Caveat (MATH-15, 2026-10-06), set larger: its
+// x-height is small (0.36 em), so at 17px it read smaller than the paper's own text; 20px brings it near the body's,
+// a little tracking keeps its letters apart, and the ink is a touch softer than black. Line height 1.2 (notes are short).
+const NOTE_LOOK = "pointer-events:auto;padding:0 6px;font:500 20px/1.2 'Caveat',cursive;letter-spacing:.2px;color:#1f2633;-webkit-font-smoothing:antialiased;transition:opacity 120ms,background 120ms";
 
 // An answer as its box draws it (MATH-27): a paragraph a line, with what Bart was told a box may hold (bold, italic,
 // code, links), and a list's or a heading's mark taken off should one come anyway. answerParas: each paragraph's inside.
@@ -428,6 +432,8 @@ export default class PaperView extends React.Component {
     clearTimeout(this.pinchTimer);
     if (this.scrollRaf) cancelAnimationFrame(this.scrollRaf);
     if (this.state.mention && this.props.onMentionOpen) this.props.onMentionOpen(false);
+    // Where the paper was read to (MATH-16): its tab, brought back to the front, opens there again (props.view).
+    if (host && this.inner && this.props.onView) this.props.onView({ zoom: this.zoom, at: host.scrollHeight ? host.scrollTop / host.scrollHeight : 0, left: host.scrollLeft });
     this.flushSave(this.props.onMarksChange);
     this.gen += 1;
     this.cancelLayout();
@@ -489,7 +495,11 @@ export default class PaperView extends React.Component {
       if (gen !== this.gen) { destroyDoc(doc); return; }
       this.doc = doc;
       this.setState({ note: '' });
+      const view = this.props.target || this.props.initialSection ? null : this.props.view;
+      if (view && view.zoom > 0) this.zoom = view.zoom;
       await this.layout(null);
+      const h = this.host.current;
+      if (view && h && gen === this.gen) { h.scrollTop = view.at * h.scrollHeight; h.scrollLeft = view.left || 0; }
     } catch (err) {
       if (gen !== this.gen) return;
       this.setState({ note: 'Could not open the paper — ' + ((err && err.message) || err) });
@@ -1113,7 +1123,14 @@ export default class PaperView extends React.Component {
       this.showPending(); sel.removeAllRanges();
       return;
     }
-    if (this.pdfDown && Math.hypot(e.clientX - this.pdfDown.x, e.clientY - this.pdfDown.y) < 4 && !e.target.closest('.pdf-text span')) {
+    const still = this.pdfDown && Math.hypot(e.clientX - this.pdfDown.x, e.clientY - this.pdfDown.y) < 4;
+    // A click on a highlight (MATH-15) shows which note is its; a click anywhere else puts that away.
+    if (still) {
+      const box = wrap.getBoundingClientRect(), hit = this.markAt(Number(wrap.dataset.page), (e.clientX - box.left) / css, (e.clientY - box.top) / css);
+      if (hit) { this.focusMark(hit.id); return; }
+      if (this.focusId) { this.focusMark(null); return; } // the click put the focus away; the next one writes a note
+    }
+    if (still && !e.target.closest('.pdf-text span')) {
       const box = wrap.getBoundingClientRect(), x = (e.clientX - box.left) / css, y = (e.clientY - box.top) / css, page = Number(wrap.dataset.page);
       const m = this.addMark({ page, rects: [], side: null, y, text: '' }, '', { x, y });
       requestAnimationFrame(() => { const ta = this.find1(`textarea[data-mark="${m.id}"]`); if (ta) ta.focus(); });
@@ -1301,8 +1318,9 @@ export default class PaperView extends React.Component {
     });
     this.drawn[page] = { boxes, units, chains };
     this.arrange(page);
-    // Clearing the highlight layer took the pending selection with it.
+    // Clearing the highlight layer took the pending selection with it, and the mark in focus with it (MATH-15).
     this.showPending(page);
+    if (this.focusId) this.paintFocus(this.focusId);
     if (had) {
       const ta = notes.querySelector(`textarea[data-mark="${had.id}"]`);
       if (ta) { ta.focus({ preventScroll: true }); try { ta.setSelectionRange(had.a, had.b); } catch { /* not a text field */ } }
@@ -1326,13 +1344,18 @@ export default class PaperView extends React.Component {
     for (const b of model.boxes) { b.width = b.el.offsetWidth; b.height = b.el.offsetHeight; } // a layout size: unscaled
     const fixed = model.boxes.filter((b) => b.fixed);
     for (const b of fixed) { b.el.style.left = `${b.left}px`; b.el.style.top = `${b.top}px`; }
+    // Which margin each chain beside the page goes in (MATH-15, ./marks.js stackNotes): its highlight's, unless that one
+    // is crowded where it wants to be and the other would keep it nearer. Never saved: `side` stays as it was made.
+    const beside = model.units.filter((unit) => !unit.parent && unit.boxes.length);
+    const sides = new Map([...stackNotes(beside.map((unit) => ({ id: unit.id, ideal: unit.want, h: unit.boxes.reduce((h, b, i) => h + b.height + (i ? BOX_GAP : 0), 0), side: unit.side })), { gap: BOX_GAP })].map(([id, at]) => [id, at.side]));
     const shaped = model.units.filter((unit) => unit.boxes.length).map((unit) => {
       const p = unit.parent;
       if (p) {
         for (const b of unit.boxes) { b.left = hangLeft(p.left, p.width, b.width, mid); b.from = p; }
         return { unit, want: p.top + p.height + BOX_GAP };
       }
-      for (const b of unit.boxes) b.left = unit.side === 'left' ? G - SIDE_GAP - b.width : G + pageW + SIDE_GAP;
+      const side = sides.get(unit.id) || unit.side;
+      for (const b of unit.boxes) b.left = side === 'left' ? G - SIDE_GAP - b.width : G + pageW + SIDE_GAP;
       return { unit, want: unit.want };
     });
     const tops = spaceBoxes(shaped.map(({ unit, want }) => ({ id: unit.id, want, boxes: unit.boxes.map((b) => ({ left: b.left, width: b.width, height: b.height })) })), fixed);
@@ -1343,34 +1366,16 @@ export default class PaperView extends React.Component {
     this.drawLinks(page);
   }
 
-  // The arrow from each highlight to the first box of its chain, wherever that box is, and a short line between each box
-  // and the next.
+  // A short line between each box of a chain and the next. No arrow from the highlight to the first box (MATH-15, merged
+  // 2026-10-06): a note stands level with its highlight, and pointing at either marks both (paintFocus).
   drawLinks(page) {
     const ar = this.find1(`[data-arrows="${page}"]`), model = this.drawn[page];
     if (!ar || !model) return;
     ar.innerHTML = '';
-    const ra = rough ? rough.svg(ar) : null;
     for (const chain of model.chains) {
       if (!chain.boxes.length) continue;
-      if (ra && chain.rects.length) this.drawArrow(ra, ar, chain, chain.boxes[0], page);
       for (let i = 1; i < chain.boxes.length; i += 1) this.drawJoin(ar, chain.boxes[i - 1], chain.boxes[i]);
     }
-  }
-  drawArrow(ra, ar, chain, box, page) {
-    const rects = chain.rects, first = rects[0], last = rects[rects.length - 1];
-    const hlL = Math.min(...rects.map((r) => r.x)), hlR = Math.max(...rects.map((r) => r.x + r.w));
-    const bl = box.left, br = box.left + box.width, bt = box.top, bb = box.top + box.height, ny0 = bt + Math.min(18, box.height / 2);
-    let ax, ay, nx, ny, sway;
-    if (bl >= hlR) { ax = first.x + first.w + 3; ay = first.y + first.h / 2; nx = bl - 2; ny = ny0; sway = [0, 6]; }
-    else if (br <= hlL) { ax = first.x - 3; ay = first.y + first.h / 2; nx = br + 2; ny = ny0; sway = [0, -6]; }
-    else if (bt >= last.y + last.h) { ax = last.x + last.w / 2; ay = last.y + last.h + 3; nx = clamp(ax, bl + 12, br - 12); ny = bt - 2; sway = [6, 0]; }
-    else { ax = first.x + first.w / 2; ay = first.y - 3; nx = clamp(ax, bl + 12, br - 12); ny = bb + 2; sway = [-6, 0]; }
-    const mx = (ax + nx) / 2 + sway[0], my = (ay + ny) / 2 + sway[1];
-    const opts = { stroke: 'rgba(0,112,243,.35)', strokeWidth: 1.1, roughness: 1.4, bowing: 1.2, seed: page * 13 + chain.k };
-    ar.appendChild(ra.curve([[ax, ay], [mx, my], [nx, ny]], opts));
-    const dx = nx - mx, dy = ny - my, len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len, hx = nx - ux * 7, hy = ny - uy * 7;
-    ar.appendChild(ra.line(nx, ny, hx - uy * 3.5, hy + ux * 3.5, opts));
-    ar.appendChild(ra.line(nx, ny, hx + uy * 3.5, hy - ux * 3.5, opts));
   }
   drawJoin(ar, a, b) {
     const lo = Math.max(a.left, b.left), hi = Math.min(a.left + a.width, b.left + b.width);
@@ -1399,8 +1404,11 @@ export default class PaperView extends React.Component {
       } else width = this.freeW.get(m.id);
     }
     const box = document.createElement('div');
-    box.dataset.box = 'note'; box.dataset.boxMark = m.id;
-    box.style.cssText = `${BOX_LOOK};left:0;top:0;width:${width}px;padding-bottom:4px`;
+    box.dataset.box = 'note'; box.dataset.boxMark = m.id; box.dataset.noteFor = m.id;
+    box.style.cssText = `${BOX_LOOK};left:0;top:0;width:${width}px;padding-bottom:4px;transition:opacity 120ms,background 120ms`;
+    // Pointing at a note marks it and its highlight (MATH-15), while the pointer is there.
+    box.onmouseenter = () => this.paintFocus(m.id);
+    box.onmouseleave = () => this.paintFocus(this.focusId);
     box.innerHTML = GRIP_HTML;
     box.onmousedown = (ev) => ev.stopPropagation(); // not a click on the page: no new note, the pending selection stays
     this.grip(box, page);
@@ -1713,6 +1721,45 @@ export default class PaperView extends React.Component {
     else { host.scrollLeft += dx; host.scrollTop += dy; }
   }
 
+  /* ---------------------------------------------------------------- the mark in focus (MATH-15) */
+  // The mark `id` and its note shown together (MATH-15, merged into the canvas 2026-10-06): its highlight drawn darker
+  // over the page and its note's box on a faint wash with a blue edge, every other mark's boxes faded. A press on a
+  // highlight keeps it (this.focusId); pointing at a note shows its own while the pointer is there. null shows none.
+  // The darker highlight goes on the page's highlight layer (page px), so the canvas's lines between boxes stay.
+  paintFocus(id) {
+    const host = this.host.current; if (!host) return;
+    for (const el of host.querySelectorAll('[data-focus]')) el.remove();
+    for (const el of host.querySelectorAll('[data-box-mark]')) {
+      const mine = !!id && el.dataset.boxMark === id, on = mine && el.dataset.noteFor === id;
+      el.style.opacity = id && !mine ? '0.45' : '';
+      el.style.background = on ? FOCUS_WASH : BOX_BG;
+      el.style.boxShadow = on ? `inset 2px 0 0 rgba(0,112,243,.45), ${BOX_SHADOW}` : BOX_SHADOW;
+    }
+    if (!id) return;
+    for (const [page, list] of Object.entries(this.marks || {})) {
+      const m = (list || []).find((x) => x && x.id === id); if (!m || !m.rects || !m.rects.length) continue;
+      const hl = this.find1(`[data-hl="${page}"]`); if (!hl) continue;
+      const u = this.geom(Number(page)).pageW;
+      for (const b of mergeLineRects(m.rects)) {
+        const d = document.createElementNS(SVG, 'rect');
+        d.dataset.focus = '1';
+        d.setAttribute('x', b.x * u - 1); d.setAttribute('y', b.y * u + b.h * u * 0.1); d.setAttribute('width', b.w * u + 2); d.setAttribute('height', b.h * u * 0.8);
+        d.setAttribute('rx', 2); d.setAttribute('fill', 'rgba(0,112,243,.16)'); d.setAttribute('stroke', 'rgba(0,112,243,.55)'); d.setAttribute('stroke-width', 1);
+        hl.appendChild(d);
+      }
+    }
+  }
+  // The mark under a point of a page, given in the sheet's own pixels: the last drawn wins (it is on top).
+  markAt(page, x, y) {
+    const { G, pageW: u } = this.geom(page), list = (this.marks || {})[page] || [];
+    for (let i = list.length - 1; i >= 0; i -= 1) {
+      const m = list[i];
+      if (m && m.rects && m.rects.some((r) => x >= G + r.x * u - 2 && x <= G + (r.x + r.w) * u + 2 && y >= r.y * u - 2 && y <= (r.y + r.h) * u + 2)) return m;
+    }
+    return null;
+  }
+  focusMark(id) { this.focusId = id || null; this.paintFocus(this.focusId); }
+
   /* ---------------------------------------------------------------- notes (MATH-21: mentions) */
   // Notes are shown as text, their mentions links, once there is somewhere for a link to go.
   showsNotes() { return typeof this.props.onOpenMention === 'function'; }
@@ -1739,8 +1786,8 @@ export default class PaperView extends React.Component {
   noteField(m, page) {
     const ta = document.createElement('textarea');
     ta.dataset.mark = m.id; ta.value = m.note; ta.rows = 1; ta.spellcheck = false;
-    ta.oninput = () => { m.note = ta.value; this.fitNote(ta); this.scheduleSave(); this.noteMention(ta, m, page); };
-    ta.onfocus = () => { this.editing = m.id; };
+    ta.oninput = () => { m.note = ta.value; this.fitNote(ta); this.arrange(page); this.scheduleSave(); this.noteMention(ta, m, page); };
+    ta.onfocus = () => { this.editing = m.id; if (m.rects && m.rects.length) this.focusMark(m.id); };
     ta.onblur = () => this.leaveNote(ta, m, page);
     ta.onkeydown = (ev) => this.noteKey(ev, ta, m, page);
     // The caret moved along the line: the menu follows what stands before it now (↑ and ↓ are the menu's).
