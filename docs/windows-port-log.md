@@ -5,6 +5,18 @@ Newest status first; the sections below are kept current.
 
 ## Where things stand
 
+- 2026-10-05, run 7 (99c752e): Windows' stop now works (the dev-server test and run-step's two "stops it" pass);
+  new: `exit $?` in a login shell prints "logout" into the command's output (run_command's test) and slowed a quick
+  command, so the fork now comes from an exit trap (`trap : EXIT`, which disables bash's exec of the last command and
+  keeps its status). build-git's file timed out in runs 4-7: most likely Git Credential Manager (Git for Windows'
+  system credential helper) waiting for a sign-in in its clone test; CI clears that helper on Windows, and the test's
+  `git credential fill` has a 30 s cap so a hang shows as the failure it is. Mac: the probe found the cause (below);
+  CI gives the tests Apple's python3, and the probe workflow is removed.
+  Probe (https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37423716675): on the macOS 26 runner Homebrew's
+  python3 waits 35 s for any name lookup (even libc's gethostbyaddr from it, and getaddrinfo of the host name);
+  Apple's /usr/bin/python3 (0.08 s) and dscacheutil answer at once; restarting mDNSResponder, a new host name, no
+  multicast, and blocking mDNS changed nothing. macOS holds a non-Apple program's lookups.
+
 - 2026-10-05, run 6 (7886431): the same failures (Mac 1, Windows 3 + 5 file timeouts), with the data asked for.
   Mac: getfqdn(127.0.0.1) took 35.0 s before and after both resolver fixes (/etc/hosts names, public DNS), so the
   time goes elsewhere; a temporary macOS-only workflow (`.github/workflows/probe-mac-lookup.yml`) now times each
@@ -141,8 +153,13 @@ modes). Expectations written with the platform's separator (`path.join`, `path.s
 | dd1ac32 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37418091552 | ✗ 1 test | ✗ 4 tests + 3 file timeouts | ✗ | CRLF and fixtures fixed; npm's server still outlives stop (its bash's Windows parent is gone); guideTitle and C:\ |
 | 51ee430 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37419892150 | ✗ 1 test | ✗ 3 tests + 3 file timeouts | ✗ | Mac: getfqdn(127.0.0.1) 35 s on the runner; Windows: npm's server still outlives stop |
 | 7886431 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37421579146 | ✗ 1 test | ✗ 3 tests + 5 file timeouts | ✗ | Mac lookup still 35 s after /etc/hosts and DNS; Windows: Git Bash's exec orphans npm (ps table) |
+| 99c752e | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37423625799 | ✗ 1 test | ✗ 2 tests + build-git file timeout | ✗ | Windows stop fixed; "logout" from `exit` in a login shell; Mac fix not in this run |
 
 ## Needs a decision
+
+- The macOS runner's Homebrew python3 is held 35 s on every name lookup; CI puts Apple's python3 first for the tests
+  (`/etc/paths`). A person's Mac with Homebrew's python3 could see the same when a Build serves a page with
+  `python3 -m http.server` (it is answered after the run step's 90 s wait, so it still passes there, slowly).
 
 - Git for Windows checks files out with CRLF by default (`core.autocrlf true`). The app's Builds and repositories
   follow whatever the person's Git says; CI turns it off only for the tests. Whether Engelbart should pass

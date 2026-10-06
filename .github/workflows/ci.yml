@@ -42,28 +42,21 @@ jobs:
         run: |
           python3 -c "import http.server" && python3 --version
           if [ "$RUNNER_OS" = macOS ]; then zsh -ilc 'command -v python3; python3 -c "import http.server"; python3 --version'; fi
-      # http.server looks its address's name up (socket.getfqdn) before it listens. On the macOS runner that lookup
-      # (127.0.0.1's name) took 35 s (run 5), so http.server answered after 35 s and the
-      # page test, which gives it 8, failed. The runner's resolver is fixed until the lookup is quick: 127.0.0.1's names
-      # in /etc/hosts, then public DNS servers. Each is tried only while the lookup is still slow; the log says which.
-      - name: Quick reverse lookups (macOS runner)
+      # http.server looks its address's name up (socket.getfqdn) before it listens. On the macOS runner Homebrew's
+      # python3 (first on the login shell's PATH) waits 35 s for any name lookup, while Apple's /usr/bin/python3 and
+      # dscacheutil answer at once (runs 5-6 and the probe of 2026-10-05: /etc/hosts and DNS servers made no
+      # difference; macOS holds a non-Apple program's lookups, as for Local Network access no one can grant on a
+      # runner). The page test gives its server 8 s, so the tests get Apple's python3: a folder holding only it, first
+      # in /etc/paths, which the login shell's path_helper puts first.
+      - name: Apple's python3 for the tests (macOS runner)
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          slow() { python3 -c "import socket, sys, time; t = time.time(); socket.getfqdn('127.0.0.1'); s = time.time() - t; print('getfqdn(127.0.0.1): %.2f s' % s); sys.exit(0 if s > 2 else 1)"; }
-          flush() { sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder || true; sleep 1; }
-          hostname; scutil --dns | grep -m4 nameserver || true
-          if slow; then
-            echo "Adding 127.0.0.1's names to /etc/hosts"
-            printf '127.0.0.1 localhost %s\n::1 localhost\n' "$(hostname)" | sudo tee -a /etc/hosts
-            flush
-          fi
-          if slow; then
-            echo "Public DNS servers for every network service"
-            networksetup -listallnetworkservices | tail -n +2 | sed 's/^\*//' | while read -r service; do sudo networksetup -setdnsservers "$service" 1.1.1.1 8.8.8.8 || true; done
-            flush
-          fi
-          slow && echo "Still slow: the page test will fail" || true
+          mkdir -p "$RUNNER_TEMP/apple-python3"
+          ln -sf /usr/bin/python3 "$RUNNER_TEMP/apple-python3/python3"
+          { echo "$RUNNER_TEMP/apple-python3"; cat /etc/paths; } > "$RUNNER_TEMP/paths" && sudo cp "$RUNNER_TEMP/paths" /etc/paths
+          echo "$RUNNER_TEMP/apple-python3" >> "$GITHUB_PATH"
+          zsh -ilc 'command -v python3; python3 --version; python3 -c "import socket, time; t = time.time(); socket.getfqdn(\"127.0.0.1\"); print(\"getfqdn(127.0.0.1): %.2f s\" % (time.time() - t))"'
       - name: Time the page test's server (macOS)
         if: runner.os == 'macOS'
         shell: bash
@@ -76,9 +69,15 @@ jobs:
       # Git for Windows turns LF into CRLF on checkout (core.autocrlf in its system config). The app's git drops GIT_*
       # variables (src/main/build/git.cjs), so GIT_CONFIG_NOSYSTEM from scripts/test.mjs doesn't reach it; the tests'
       # repositories compare files byte for byte, as a Mac's git leaves them.
-      - name: Keep LF in the tests' repositories (Windows)
+      # Its system config also names Git Credential Manager as a credential helper, which waits for someone to sign in
+      # (test/build-git.test.cjs asks for a credential the way a person's own helper answers it, as on a Mac).
+      - name: Keep LF in the tests' repositories, and no sign-in prompt (Windows)
         if: runner.os == 'Windows'
-        run: git config --system core.autocrlf false
+        shell: bash
+        run: |
+          git config --system core.autocrlf false
+          git config --system --get-all credential.helper || true
+          git config --system --unset-all credential.helper || true
       - name: npm test
         shell: bash
         # A test that hangs fails after five minutes instead of holding the job to its limit.

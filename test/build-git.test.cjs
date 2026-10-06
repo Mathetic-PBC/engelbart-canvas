@@ -168,7 +168,7 @@ test('a clone with the GitHub sign-in: its helper answers https://github.com alo
   fs.chmodSync(theirs, 0o755);
   fs.writeFileSync(path.join(home, '.gitconfig'), `[credential]\n\thelper = ${theirs.split(path.sep).join('/')}\n`); // a config's \ is an escape
   const fill = (host, extra) => {
-    try { return execFileSync('git', ['credential', 'fill'], { input: `protocol=https\nhost=${host}\n\n`, env: { ...environment, GIT_TERMINAL_PROMPT: '0', ...extra }, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }); } catch { return null; }
+    try { return execFileSync('git', ['credential', 'fill'], { input: `protocol=https\nhost=${host}\n\n`, env: { ...environment, GIT_TERMINAL_PROMPT: '0', ...extra }, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30_000 }); } catch { return null; }
   };
   const signedIn = { ...credentialEnv(), ENGELBART_GITHUB_TOKEN: 'ghu_test_token' };
   assert.match(fill('github.com', signedIn), /username=x-access-token\npassword=ghu_test_token\n/);
