@@ -80,9 +80,10 @@ jobs:
           git config --system --unset-all credential.helper || true
       - name: npm test
         shell: bash
-        # A test that hangs fails after five minutes instead of holding the job to its limit.
+        # A test that hangs fails after 15 minutes instead of holding the job to its limit. The limit holds for a whole
+        # test file too: build.test.cjs takes 175 s on a Windows runner, and twice that on a slow one (run 11).
         run: |
-          if [ "$RUNNER_OS" = Linux ]; then xvfb-run -a npm test -- --test-timeout=300000; else npm test -- --test-timeout=300000; fi
+          if [ "$RUNNER_OS" = Linux ]; then xvfb-run -a npm test -- --test-timeout=900000; else npm test -- --test-timeout=900000; fi
       - run: npm run build
 
       - name: Package the Mac app

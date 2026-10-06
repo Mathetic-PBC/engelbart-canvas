@@ -5,6 +5,11 @@ Newest status first; the sections below are kept current.
 
 ## Where things stand
 
+- 2026-10-06, run 11 (fe85167): macOS passed; Windows 0 failures but 2 files cancelled at the 300 s per-file limit CI
+  sets (build.test.cjs, sandbox-manager.test.cjs). Nothing hung: every test in them took about twice as long as in
+  run 10 (build.test.cjs's 32 finished tests 293 s, against 175 s for all 37 in run 10), a slow runner. The CI limit
+  is now 15 minutes, still well inside the job's 60.
+
 - 2026-10-06, run 10 (86755ab): macOS passed (1020, 1019 pass, 1 skip); Windows 1 failure, new and intermittent
   (it passed in runs 8 and 9): build.test.cjs's restored project kept its Build's worktree at the old folder. On
   Windows `git worktree move` renames a folder, which fails while any program has a file in it open (a virus scan of
@@ -93,7 +98,7 @@ Newest status first; the sections below are kept current.
 
 - `.github/workflows/ci.yml`: matrix macos-latest / windows-latest / ubuntu-latest (Linux `continue-on-error`), Node 22.
   Full history (a test reads old commits), python3 warmed up before the tests (a test gives `python3 -m http.server`
-  8 s to answer; a runner's first python3 takes longer), `--test-timeout=300000` so a hung test fails instead of
+  8 s to answer; a runner's first python3 takes longer), `--test-timeout=900000` so a hung test fails instead of
   holding the job. Windows: `electron-builder --win nsis --x64`, the installer kept as an artifact, then the smoke test.
   Mac: `npm run package` (ad hoc signing).
 - Step 2, install and packaging: `postinstall` is `scripts/postinstall.mjs` (the same `npm run rebuild` on the Mac;
@@ -182,6 +187,7 @@ modes). Expectations written with the platform's separator (`path.join`, `path.s
 | 98c688e | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37425057114 | ✓ | ✓ installer, smoke | ✗ (allowed) | first green run for both |
 | bc06f3c | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37426600854 | ✓ | ✗ 1 test | ✗ (allowed) | f2d0ac0 brought in; Git Bash's login shell slower than run-step's 0.4 s app window |
 | 86755ab | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37427843412 | ✓ | ✗ 1 test | ✗ (allowed) | worktree move refused on Windows (a file open in it), intermittent |
+| fe85167 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37429145718 | ✓ | ✗ 2 files over 300 s | ✗ (allowed) | a slow runner: every test twice as long |
 
 ## Needs a decision
 
