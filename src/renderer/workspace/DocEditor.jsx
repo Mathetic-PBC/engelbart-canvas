@@ -2302,6 +2302,7 @@ export default class DocEditor extends React.Component {
   mentionOpts = {
     libName: (id) => { if (!this.libraryKnown()) return undefined; const row = this.findRes('', id); return row ? row.name || '' : null; },
     named: (name) => (this.libraryKnown() ? !!this.findRes(name) : undefined),
+    trashed: (name, id) => { const row = id ? this.findRes('', id) : this.findRes(name); return !!(row && row.trashed); }, // MATH-58 follow-up
   };
   showPop(res, e) { const r = e.currentTarget.getBoundingClientRect(); this.setState({ pop: { res, anchor: { left: r.left, right: r.right, top: r.top, bottom: r.bottom } } }); }
   hidePop = () => { if (this.state.pop) this.setState({ pop: null }); };

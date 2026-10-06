@@ -834,13 +834,12 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   }, [topic, here, byId, renaming, activeRowId, tree.notes, mentioned]);
 
   // What the @ menu and the sidebar's search offer (MATH-58): the library less the notes trashed from their last
-  // workspace. `mentionable`, which an @mention already written is opened by, keeps the whole library.
-  const findable = React.useMemo(() => {
-    const gone = letGoNotes({ workspaces: tree.workspaces, notes: tree.notes });
-    return gone.size ? library.filter((row) => !gone.has(row.id)) : library;
-  }, [library, tree.workspaces, tree.notes]);
+  // workspace. `mentionable`, which an @mention already written is opened by, keeps the whole library, those notes marked
+  // `trashed` so their mentions show grey (still opened by a click).
+  const letGo = React.useMemo(() => letGoNotes({ workspaces: tree.workspaces, notes: tree.notes }), [tree.workspaces, tree.notes]);
+  const findable = React.useMemo(() => (letGo.size ? library.filter((row) => !letGo.has(row.id)) : library), [library, letGo]);
 
-  const mentionable = React.useMemo(() => [BART_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, ...library.filter((row) => row.type !== 'image').map(describe)], [library]);
+  const mentionable = React.useMemo(() => [BART_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, ...library.filter((row) => row.type !== 'image').map((row) => (letGo.has(row.id) ? { ...describe(row), trashed: true } : describe(row)))], [library, letGo]);
 
   // On the rail: what the search does not offer again, and what makes the Browser's Save read ✓.
   const railIds = React.useMemo(() => new Set(rows.filter((row) => row.type !== 'child' && row.type !== 'archive').map((row) => row.id)), [rows]);

@@ -336,30 +336,36 @@ export function turnText(lines, turn) {
 // is what the pointer resting on it says.
 const goneHtml = (shown, why) => `<span title="${esc(why)}" style="color:#8f8f8f">@${esc(shown)}</span>`;
 const MENTION_LOOK = 'color:#0070f3;font-weight:500;cursor:pointer;border-bottom:1px dotted #c9c9c9';
+// A note trashed from its last workspace (MATH-58 follow-up, 2026-10-06): still there and still opened by a click, but grey,
+// so the line shows it is in the trash.
+const TRASHED_LOOK = 'color:#8f8f8f;font-weight:500;cursor:pointer;border-bottom:1px dotted #d9d9d9';
+const trashedOf = (trashed, name, id) => typeof trashed === 'function' && trashed(name, id) === true;
 // The name a library mention shows: its item's name now when `libName(id)` gives one, else the name it was written with.
 const libShown = (name, id, libName) => { const now = typeof libName === 'function' ? libName(id) : undefined; return typeof now === 'string' && now ? now : name; };
 // A library mention's chip: blue and clickable as a mention is, `data-lib` holding the id. `libName(id)` (optional) is the
 // item's name now, shown in place of the one saved; null when the library no longer holds it, which leaves the saved name
 // in grey with nothing to click.
-function libHtml(name, id, libName) {
+function libHtml(name, id, libName, trashed) {
   if (typeof libName === 'function' && libName(id) === null) return goneHtml(name, 'No longer in the library');
-  const shown = libShown(name, id, libName);
-  return `<span data-mention="${esc(shown)}" data-lib="${esc(id)}" style="${MENTION_LOOK}">@${esc(shown)}</span>`;
+  const shown = libShown(name, id, libName), bin = trashedOf(trashed, shown, id);
+  return `<span data-mention="${esc(shown)}" data-lib="${esc(id)}"${bin ? ' title="In trash"' : ''} style="${bin ? TRASHED_LOOK : MENTION_LOOK}">@${esc(shown)}</span>`;
 }
 // A mention by name, `@[Name]`. A chat's (chatMention) shows its word: Bart's is blue, a chat that is gone grey. Anything
-// else is a note or a library item: `named(name)` (optional) is false when nothing goes by that name, which leaves it grey.
-function nameHtml(name, named) {
+// else is a note or a library item: `named(name)` (optional) is false when nothing goes by that name, which leaves it grey;
+// `trashed(name)` true for a note in the trash, grey but still clickable.
+function nameHtml(name, named, trashed) {
   const chat = chatMention(name);
   if (chat && !chat.live) return goneHtml(chat.shown, 'This chat is gone');
   if (!chat && typeof named === 'function' && named(name) === false) return goneHtml(name, 'Not in the library');
-  return `<span data-mention="${esc(name)}" style="${MENTION_LOOK}">@${esc(chat ? chat.shown : name)}</span>`;
+  const bin = !chat && trashedOf(trashed, name, null);
+  return `<span data-mention="${esc(name)}"${bin ? ' title="In trash"' : ''} style="${bin ? TRASHED_LOOK : MENTION_LOOK}">@${esc(chat ? chat.shown : name)}</span>`;
 }
 
 /**
  * Rendered HTML for inline markup (bold, code, italic, @bart, @brainstorm and @discover, an older line's @orient,
  * @[mention], [link](url), bare urls). `opts.libName(id)`: a library mention's name now, or null when it is gone (libHtml).
- * `opts.named(name)`: false when a mention by name names nothing (nameHtml). Either may be left out, or answer undefined
- * when it cannot tell: the mention is then drawn as written.
+ * `opts.named(name)`: false when a mention by name names nothing (nameHtml). `opts.trashed(name, id)`: true for a note in
+ * the trash. Any may be left out, or answer undefined when it cannot tell: the mention is then drawn as written.
  */
 export function inlineHtml(text, opts) {
   return text.split(INLINE).map((p) => {
@@ -375,8 +381,8 @@ export function inlineHtml(text, opts) {
     const ws = p.match(WS_MENTION_RE);
     if (ws) return `<span data-mention="${esc(ws[1])}" data-ws="${esc(ws[2])}" style="color:#0070f3;font-weight:500;cursor:pointer;border-bottom:1px dotted #c9c9c9;white-space:nowrap">@${WS_ICON}${esc(ws[1])}</span>`;
     const lib = p.match(LIB_MENTION_RE);
-    if (lib) return libHtml(lib[1], lib[2], opts && opts.libName);
-    if (p.startsWith('@[')) return nameHtml(p.slice(2, -1), opts && opts.named);
+    if (lib) return libHtml(lib[1], lib[2], opts && opts.libName, opts && opts.trashed);
+    if (p.startsWith('@[')) return nameHtml(p.slice(2, -1), opts && opts.named, opts && opts.trashed);
     const m = p.match(LINK_RE);
     if (m) return `<a href="${esc(m[2])}" data-link="1" style="color:#0070f3;text-decoration:underline;text-underline-offset:3px">${esc(m[1])}</a>`;
     if (URL_RE.test(p)) return `<a href="${esc(p)}" data-link="1" style="color:#0070f3;text-decoration:underline;text-underline-offset:3px">${esc(p)}</a>`;

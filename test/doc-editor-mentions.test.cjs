@@ -128,3 +128,17 @@ test('a mention by name that names nothing is grey with no card; with no library
   assert.deepEqual(mentions(postIt.editorHtml()).map((x) => x.grey), [false, false]);
   assert.equal(hover(postIt, { mention: 'Nothing by that name' }), null, 'and no made-up card');
 });
+
+test('a note in the trash is mentioned in grey, "In trash" on hover, and still opens its card (MATH-58 follow-up)', () => {
+  const trashed = { id: 't1', name: 'Zebra test', title: 'Zebra test', type: 'md', tags: ['note'], trashed: true };
+  const editor = editorWith('See @[Zebra test] and @[Zebra test](lib:t1) and @[Twin](lib:a1).', { mentionable: [...LIBRARY, trashed] });
+  const [byName, byId, live] = mentions(editor.editorHtml());
+  for (const m of [byName, byId]) {
+    assert.equal(m.title, 'In trash', m.attrs);
+    assert.match(m.attrs, /color:#8f8f8f/);
+    assert.equal(m.mention, 'Zebra test', 'still a mention: a click opens it');
+  }
+  assert.equal(hover(editor, { mention: byName.mention }).id, 't1');
+  assert.equal(live.title, undefined, 'a note still in a workspace is blue as before');
+  assert.doesNotMatch(live.attrs, /#8f8f8f/);
+});
