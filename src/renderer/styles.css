@@ -60,11 +60,10 @@ textarea::placeholder,input::placeholder{color:#8f8f8f;font-style:italic}
 .hov-wash2:hover{background:#eaeaea!important}
 .hov-ink-wash2:hover{color:#171717!important;background:#eaeaea!important}
 .rail-search:focus-within{box-shadow:0 0 0 3px #e2e2e2}
-/* A section's + shows while the pointer is on its header (or it has the keyboard, or its panel is open); the fold-all
-   chevrons while the pointer is anywhere over the library. At rest the sidebar is only the section names (2026-10-06). */
-.rail-add,.rail-fold-all{opacity:0;transition:opacity 120ms,color 120ms}
+/* A section's + shows while the pointer is on its header (or it has the keyboard, or its panel is open). At rest the
+   sidebar is only the section names (2026-10-06). */
+.rail-add{opacity:0;transition:opacity 120ms,color 120ms}
 .rail-section-head:hover .rail-add,.rail-add:focus-visible,.rail-add[aria-expanded="true"]{opacity:1}
-[data-rail-library]:hover .rail-fold-all,.rail-fold-all:focus-visible{opacity:1}
 .rail-field input::placeholder{font-style:normal;color:#8f8f8f}
 .bar-press{transition:transform 120ms}
 .bar-press:active{transform:scale(1.12)}
