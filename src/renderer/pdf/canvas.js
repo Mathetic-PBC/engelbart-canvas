@@ -178,6 +178,53 @@ export function revealScroll(boxes, view, side, pad = 24) {
   return { dx, dy: all.bottom + pad - view.bottom };
 }
 
+/* ------------------------------------------------------------------------------- blank space and arrows (2026-10-06) */
+// A drag on blank space pans (MATH-27 follow-up, 2026-10-06), one on or near text selects. Blank is the desk beside a page,
+// and the page where no text span is within LINE desk px: margins, the gaps round a figure, the empty end of a page. The
+// small gaps between lines and words are near text. A card's arrow to its highlight is drawn only when the card is not
+// beside it: moved, in the other margin, or pushed down more than ARROW_LINES lines.
+
+export const LINE = 14; // desk px: about a line of a paper's body text at 100%
+export const ARROW_LINES = 2; // a card this many lines (LINE) below its highlight's top is not beside it any more
+export const PRESS_MOVE = 4; // px: a press that moves less is a click, not a drag
+
+/** The distance from (x, y) to a rect { left, top, right, bottom } (0 inside it). */
+export const rectDistance = (r, x, y) => Math.hypot(Math.max(r.left - x, 0, x - r.right), Math.max(r.top - y, 0, y - r.bottom));
+
+/**
+ * Whether a point is blank: off the page `page` ({ left, top, right, bottom }, the same px as everything else), or on it
+ * further than `reach` from every rect in `spans` (the text layer's spans). → boolean.
+ */
+export function blankAt(page, spans, x, y, reach) {
+  if (!page || x < page.left || x > page.right || y < page.top || y > page.bottom) return true;
+  for (const r of spans || []) if (r && r.right > r.left && r.bottom > r.top && rectDistance(r, x, y) <= reach) return false;
+  return true;
+}
+
+/**
+ * Whether a highlight's card is beside it, so needs no arrow (desk px): not moved (`moved`), in the margin of its highlight
+ * (`side`, where it was made; `drawnSide`, the margin the spacing put it in) and its top no more than ARROW_LINES lines
+ * (`line`, LINE) below the highlight's top.
+ */
+export const besideHighlight = ({ moved, side, drawnSide, cardTop, markTop, line = LINE }) =>
+  !moved && (side === 'left' ? 'left' : 'right') === drawnSide && cardTop - markTop <= ARROW_LINES * line;
+
+/**
+ * An arrow from a highlight (its bounds `hl` { left, top, right, bottom }, `first` the middle of its first line's height) to
+ * its card (`card` { left, top, width, height }), desk px → { from, to } points: from the highlight's edge nearest the
+ * card to the card's near edge, level with its first line (POS_DY down); a card above or below the highlight is reached
+ * at its bottom or top edge.
+ */
+export function arrowEnds(hl, card, first = (hl.top + hl.bottom) / 2) {
+  const right = card.left + card.width, bottom = card.top + card.height;
+  const level = Math.min(bottom - 4, card.top + POS_DY);
+  if (card.left >= hl.right) return { from: { x: hl.right + 3, y: first }, to: { x: card.left + 2, y: level } };
+  if (right <= hl.left) return { from: { x: hl.left - 3, y: first }, to: { x: right - 4, y: level } };
+  const x = Math.max(card.left + 8, Math.min(right - 8, (hl.left + hl.right) / 2));
+  if (card.top >= hl.bottom) return { from: { x: (hl.left + hl.right) / 2, y: hl.bottom + 2 }, to: { x, y: card.top - 2 } };
+  return { from: { x: (hl.left + hl.right) / 2, y: hl.top - 2 }, to: { x, y: bottom + 2 } };
+}
+
 /* ------------------------------------------------------------------------------------------- answers on a highlight */
 
 // What a mark keeps of an answer, and putting one on it: shared with main, which lands an answer itself (2026-10-06).
@@ -201,8 +248,14 @@ export function exchangeOf(m, now = Date.now()) {
   return now - last < THREAD_IDLE_MS ? asks : asks.filter((a) => !a.deleted);
 }
 
-/** A page's marks as they are saved at `now`: a deleted answer whose session is gone is dropped (exchangeOf). */
-export const keptMarks = (list, now = Date.now()) => (list || []).map((m) => {
+/** A free note with nothing in it (2026-10-06): it goes when it loses the keyboard, and is never saved. */
+export const emptyFree = (m) => !!m && !(m.rects || []).length && !String(m.note == null ? '' : m.note).trim() && !shownAsks(m).length;
+
+/**
+ * A page's marks as they are saved at `now`: a deleted answer whose session is gone is dropped (exchangeOf), and so is a
+ * free note still empty (emptyFree).
+ */
+export const keptMarks = (list, now = Date.now()) => (list || []).filter((m) => !emptyFree(m)).map((m) => {
   if (!m || !Array.isArray(m.asks) || !m.asks.some((a) => a && a.deleted)) return m;
   const asks = exchangeOf(m, now);
   return asks.length === m.asks.length ? m : { ...m, asks };

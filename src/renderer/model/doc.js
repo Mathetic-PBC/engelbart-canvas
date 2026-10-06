@@ -357,15 +357,45 @@ export function inlineHtml(text, opts) {
 // A PDF margin note (MATH-21) is text as typed: only its library mentions are drawn, so a `*`, a backtick or an address in
 // it shows as it did before notes could mention anything. Its pieces, text and mentions in turn, are the shown note's
 // child nodes one for one (noteHtml), which is how a click in it finds its place in the text (noteOffset).
+// @bart at the start of a note that can ask (MATH-27 follow-up, 2026-10-06) is drawn as the document draws it: blue, 500, in
+// the document's font. With `opts.agents` it is a piece of its own (any space before it another), so the pieces still
+// match the shown note's child nodes. The only agent a note asks is Bart (PaperView mentionList).
 const LIB_SPLIT = /(@\[[^\]\n]+\]\(lib:[\w-]+\))/;
-export const noteParts = (text) => String(text ?? '').split(LIB_SPLIT).filter(Boolean);
-/** A margin note as shown while it is not being edited: its text escaped, each library mention a chip (libHtml). */
+export const NOTE_AGENT_RE = /^(\s*)(@bart)(?=\s|$)/i;
+export const noteParts = (text, opts) => {
+  const s = String(text ?? ''), lead = opts && opts.agents ? s.match(NOTE_AGENT_RE) : null;
+  if (!lead) return s.split(LIB_SPLIT).filter(Boolean);
+  return [lead[1], lead[2], ...s.slice(lead[0].length).split(LIB_SPLIT)].filter(Boolean);
+};
+/**
+ * An agent's name in a note, as the document's label (inlineHtml's AGENT_TOKEN): blue, weight 500, the document's font. The
+ * note is in Caveat, and its field's caret goes by Caveat's widths, so the name keeps the width it has in Caveat (its own
+ * text, transparent) and the label is drawn over it (aria-hidden, not selectable): the field and its backdrop wrap alike.
+ */
+export const agentLabelHtml = (token) => `<span data-agent="${esc(token.slice(1).toLowerCase())}" style="position:relative;color:transparent">${esc(token)}<span aria-hidden="true" style="position:absolute;left:0;top:50%;transform:translateY(-50%);color:#0070f3;font:500 .75em/1 var(--font-sans);letter-spacing:normal;white-space:nowrap;user-select:none;pointer-events:none">${esc(token)}</span></span>`;
+/**
+ * A margin note as shown while it is not being edited: its text escaped, each library mention a chip (libHtml), and with
+ * `opts.agents` its leading @bart a label (agentLabelHtml).
+ */
 export function noteHtml(text, opts) {
-  return noteParts(text).map((p) => { const lib = p.match(LIB_MENTION_RE); return lib ? libHtml(lib[1], lib[2], opts && opts.libName) : esc(p); }).join('');
+  const lead = opts && opts.agents ? String(text ?? '').match(NOTE_AGENT_RE) : null, at = lead ? (lead[1] ? 1 : 0) : -1;
+  return noteParts(text, opts).map((p, i) => {
+    if (i === at) return agentLabelHtml(p);
+    const lib = p.match(LIB_MENTION_RE);
+    return lib ? libHtml(lib[1], lib[2], opts && opts.libName) : esc(p);
+  }).join('');
+}
+/**
+ * A note's field's backdrop (2026-10-06): the field's text exactly as typed, library mentions included, in the note's own
+ * ink, with its leading @bart a label. The field's own text is transparent over it.
+ */
+export function noteInkHtml(text) {
+  const s = String(text ?? ''), lead = s.match(NOTE_AGENT_RE);
+  return lead ? esc(lead[1]) + agentLabelHtml(lead[2]) + esc(s.slice(lead[0].length)) : esc(s);
 }
 /** Where in a note's text a click lands: `offset` characters into its `part`-th piece; a mention's piece is passed whole. */
-export function noteOffset(text, part, offset) {
-  const parts = noteParts(text);
+export function noteOffset(text, part, offset, opts) {
+  const parts = noteParts(text, opts);
   let at = 0;
   for (let i = 0; i < Math.min(part, parts.length); i++) at += parts[i].length;
   if (part >= parts.length) return at;
