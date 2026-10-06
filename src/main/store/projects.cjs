@@ -950,7 +950,7 @@ function cleanAddress(value) {
   if (typeof value !== 'string') return null;
   const address = value.trim();
   if (!address || address.length > MAX_ADDRESS || /^about:/i.test(address)) return null;
-  return /^(https?|file):/i.test(address) || address.startsWith('/') ? address : null;
+  return /^(https?|file):/i.test(address) || path.isAbsolute(address) ? address : null;
 }
 
 /** { active, tabs }: entries that are neither a row nor a place go, and the second of two that are one (by row, else by addressKey). */
@@ -962,7 +962,7 @@ function cleanStage(value) {
     const entry = plainObject(tab); if (!entry) return;
     const item = idOrNull(entry.item), address = item ? null : cleanAddress(entry.address);
     if (!item && !address) return;
-    const key = item ? `i:${item}` : `l:${addressKey(address.startsWith('/') ? `file://${address}` : address)}`;
+    const key = item ? `i:${item}` : `l:${addressKey(path.isAbsolute(address) ? `file://${address}` : address)}`;
     if (seen.has(key)) { at.set(i, seen.get(key)); return; }
     if (tabs.length >= MAX_STAGE_TABS) return;
     seen.set(key, tabs.length);
