@@ -142,7 +142,7 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
 // `savePageFor(win, tabId, dir)` writes the page a window's Stage tab shows into dir (add-library-page; the app passes
 // that window's browser views' savePage).
 // `getUpdates()`: the updater (updates.cjs), made after this is registered; null until then, and in the tests.
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, getUpdates = () => null }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, getUpdates = () => null }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
   const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
@@ -434,6 +434,14 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     const value = choice && typeof choice === 'object' ? choice : {};
     return rememberModelChoice(place, { provider: str(value.provider, 'provider', 24), model: str(value.model, 'model', 24), effort: str(value.effort, 'effort', 24) });
   });
+  // Settings › Intelligence (2026-10-06, MATH-53; bart/settings.cjs): the models file as it is, every provider, with the last
+  // picks by hand and which CLIs can run; a save of the defaults it changes, which forgets the picks it overrules; and
+  // "Use default", which forgets one. Every window reads its @bart line's models again after either (models-changed).
+  if (modelSettings) {
+    handle('settings-models', () => modelSettings.read());
+    handle('save-settings-models', (patch) => { const out = modelSettings.save(patch); announce('engelbart:models-changed', {}); return out; });
+    handle('clear-model-choice', (place) => { const out = modelSettings.forget(str(place, 'place', 24)); announce('engelbart:models-changed', {}); return out; });
+  }
   // Copy all under an answer: a question and its answer, as they read in the document.
   handle('copy-text', (text) => { writeClipboard(str(text, 'text', 400000)); return true; });
 

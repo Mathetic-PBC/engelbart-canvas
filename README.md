@@ -71,6 +71,7 @@ The Browser's address ends in the page's place in the library: **+ Save** (a car
 - Or hover the chip beside the send arrow: it names the model and effort the question starts on, and a pick there writes those same flags into the line. Flags the list recognises are slightly bolder.
 - Which providers are offered at all: `providers` in `~/.engelbart/config.json` (`["openai", "anthropic"]`).
 - The list, the ladders and the default provider: `~/.engelbart/model-effort-inline-question.json`, read again for every question.
+- **Settings** (`⚙`, top right) › **Intelligence** sets each agent's default per provider (@bart's first ladder step, @brainstorm's step, @discover's standard level with quick and deep under Advanced, Build's and a post-it's default) and the default provider of @bart and of Build, by writing that same file. Setting a default forgets the last pick by hand it overrules, so whichever you did last wins; a row whose last pick differs from its default says so, with **Use default**.
 - The instructions it runs under: `src/main/bart/system-prompt.cjs`, or your own in `<data root>/.context/bart-system-prompt.md`.
 
 ## Build
@@ -133,7 +134,7 @@ Both use the real data root, `~/.engelbart`. The packaged app under `release/` o
 
 With no project in the current root the app opens on **Create a new project** (name + `./slug` path). Creating a project makes `<root>/<slug>/`, a first goal *First steps*, a first topic *Getting started* and a *Welcome!* note, and opens the workspace with that note. From then on the app opens straight into the topic you were last in (`<root>/state.json`); `Engelbart` in the header, or Escape, shows all projects — a card grid that ends with a dashed **+ Project** card. There is no kanban screen: the goal crumb in the header lists the project's goals and adds new ones.
 
-The pill top-right exists on every screen of a developer's copy. **Test · on** roots the app at `~/.engelbart/test/` and seeds that library once (the HypoCompass paper, its repository, the arXiv page, a small dataset); the `⚙` beside the pill can reveal the folder or **Reset everything** (native confirmation, then `~/.engelbart/test/` is deleted and recreated). **Test · off** roots the same app at `~/.engelbart/` with its own library database and no seeds. A new install starts with it off.
+The pill top-right exists on every screen of a developer's copy. **Test · on** roots the app at `~/.engelbart/test/` and seeds that library once (the HypoCompass paper, its repository, the arXiv page, a small dataset); the Settings `⚙` beside it has, in test mode, a **Test data** section that can reveal the folder, **Start as a new user…** or **Reset everything…** (native confirmation, then `~/.engelbart/test/` is deleted and recreated). **Test · off** roots the same app at `~/.engelbart/` with its own library database and no seeds. A new install starts with it off.
 
 Test mode is only in a developer's copy (`src/main/developer.cjs`): Engelbart run from a checkout (`npm start`, `npm run relaunch -- --dev`), or packaged by `npm run relaunch`, which builds with `ENGELBART_DEVELOPER=1`. Any other package, which is what ships, has no pill and no `⚙`, uses `~/.engelbart` whatever `config.json` says (without rewriting it, so a developer's copy on the same Mac keeps its setting), refuses the switch and the reset, and never makes `~/.engelbart/test/`. A release has to be built with `npm run build` right before packaging, without `ENGELBART_DEVELOPER`: the build writes `dist/build.json`, which is what the package reads. `ENGELBART_TEST_MODE=off` takes test mode away from a developer's copy too, to see the app as it ships (`npm run new-mac` sets it).
 
@@ -142,7 +143,7 @@ Test mode is only in a developer's copy (`src/main/developer.cjs`): Engelbart ru
 ```
 ~/.engelbart/                         (test mode: ~/.engelbart/test/, same shape, plus seed/)
   config.json  state.json             test toggle, providers, summarizer, github, tools; { projectId, workspaceId } to reopen
-  model-effort-inline-question.json   @bart's models, efforts and ladders; Build's models, provider and default
+  model-effort-inline-question.json   @bart's models, efforts and ladders; @brainstorm's and @discover's steps; Build's models, provider and default
   model-choices.json                  the model and effort last picked by hand for @bart, Build and a post-it's Build
   .defaults/<file>                    the defaults each of those two was last given (how new defaults reach them)
   library.pglite/                     table `library`: every md, pdf, folder, website, data file, image; `type` is the format, `tags` what was inferred: paper, git, note (+ summary, summary_edited, char_count)

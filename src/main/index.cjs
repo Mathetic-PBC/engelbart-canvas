@@ -23,8 +23,8 @@ const { createSweeper } = require('./context/sweeper.cjs');
 const { inspectPdf } = require('./context/pdf-kind.cjs');
 const { createCliSummarizer, createFakeSummarizer } = require('./context/summarizer.cjs');
 const { createBart, createFakeBart, createThreads, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS } = require('./bart/ask.cjs');
-const { loadModels, preferUsable, startingAt } = require('./bart/models.cjs');
-const { readChoices, rememberChoice } = require('./bart/choices.cjs');
+const { rememberChoice } = require('./bart/choices.cjs');
+const { modelsInForce, createModelSettings } = require('./bart/settings.cjs');
 const { resolveShell } = require('./terminal/launch.cjs');
 const home = require('./store/home.cjs');
 const { createRunner } = require('./tools/run.cjs');
@@ -601,10 +601,12 @@ if (!hasSingleInstanceLock) {
     });
     // @bart (src/main/bart): hidden Claude Code or Codex runs on the person's subscription, reading only. It starts on
     // what was last picked by hand for that place (`place`: 'bart', 'build' or 'quick'; bart/choices.cjs), else on the
-    // saved default provider, or on the other one while that one's CLI cannot run (preferUsable).
+    // saved default provider, or on the other one while that one's CLI cannot run (preferUsable). Settings › Intelligence
+    // (bart/settings.cjs) writes the defaults into the same file and forgets the picks it overrules.
     // ENGELBART_BART_FAKE=1 answers without a model, for scripted runs only.
-    const readModels = (place = 'bart') => preferUsable(startingAt(loadModels(store.layout.root, { only: store.config().providers }), place, readChoices(store.layout.root)[place]), tools.usableAgents());
+    const readModels = (place = 'bart') => modelsInForce(store.layout.root, place, { only: store.config().providers, usable: tools.usableAgents() });
     const rememberModelChoice = (place, choice) => rememberChoice(store.layout.root, place, choice);
+    const modelSettings = createModelSettings({ homeRoot: () => store.layout.root, only: () => store.config().providers, tools });
     const bartModels = () => readModels('bart');
     const bartPicked = (choice) => rememberModelChoice('bart', choice);
     // @brainstorm and @discover (2026-09-30) run through the same object, each with sessions of its own kept for two idle
@@ -817,6 +819,7 @@ if (!hasSingleInstanceLock) {
       sandbox,
       readModels,
       rememberModelChoice,
+      modelSettings,
       tools,
       pdfAdded,
       // A link dropped onto the library or a workspace is read with the Stage's cookies, as a saved-as-link pdf is (fetchPdf).
