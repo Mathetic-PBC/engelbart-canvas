@@ -19,3 +19,9 @@ test('the Import sign-ins picker takes Escape before the workspace, wherever the
   assert.match(picker, /return \(\) => window\.removeEventListener\('keydown', onKey, true\);/);
   assert.doesNotMatch(picker, /onKeyDown=\{\(event\) => \{ if \(event\.key === 'Escape'\) onClose\(\); \}\}/, 'no Escape left to bubble on to the workspace');
 });
+
+test('a section\'s + panel lets Escape through to a terminal or an editor while it is adding', () => {
+  const rail = read('workspace/Rail.jsx');
+  assert.match(rail, /const own = \(panelRef\.current && panelRef\.current\.contains\(event\.target\)\) \|\| event\.target === document\.body \|\| event\.target === document\.documentElement;/);
+  assert.match(rail, /if \(live\.current && !own\) return;\s*event\.preventDefault\(\); event\.stopPropagation\(\); close\(\);/);
+});
