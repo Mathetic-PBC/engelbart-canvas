@@ -543,7 +543,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     if (row.type === 'pdf') pdfAdded(); // its text is read for search now (context/sweeper.cjs)
     if (store.recheck && pdfCandidate(row)) store.recheck(ctx);
     // Adding a local clone or a non-GitHub item does not start remote work.
-    if (sandbox && Array.isArray(row.tags) && row.tags.includes('git') && /^(?:https?:\/\/(?:www\.)?github\.com\/|git@github\.com:)/i.test(value.trim())) {
+    if (sandbox && Array.isArray(row.tags) && row.tags.includes('git') && /^(?:(?:https?:\/\/)?(?:www\.)?github\.com\/|git@github\.com:)/i.test(value.trim())) {
       try { await sandbox.start(ctx, row.id, { waitForClaude: true }); } catch (error) { return { ...row, sandbox_error: error.message }; }
     }
     return row;
