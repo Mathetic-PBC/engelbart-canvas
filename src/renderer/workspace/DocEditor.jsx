@@ -39,9 +39,10 @@
 //     after it in its thread go; one undo brings all of it back. Escape, or the caret or a click going elsewhere, puts it back.
 //   * where a document was scrolled to is kept per workspace (props.viewOf / props.onView, 2026-09-22), apart from the
 //     caret: coming back to a document shows what was on screen, not where the last edit was.
-//   * a note's mention clicked opens the note beside this document (MATH-23, props.onOpenBeside; Andy Matuschak's working
-//     notes), and that mention stays marked (props.besideLink) while it is open there; ⌘-click opens it as a tab. An Escape
-//     the editor uses (its @ menu, the model selector or a mention's card, a field of its own) is marked as used
+//   * a note's or a workspace's mention clicked opens its document beside this one (MATH-23, props.onOpenBeside; Andy
+//     Matuschak's working notes), and that mention stays marked (props.besideLink, props.besideWorkspace) while it is open
+//     there; ⌘-click opens a note as a tab and goes to a workspace, as a click did before. An Escape the editor uses (the
+//     caret leaving a line, its @ menu, the model selector or a mention's card, a field of its own) is marked as used
 //     (preventDefault), so the window's Escape leaves it alone (Workspace.jsx).
 import React from 'react';
 import { createPortal } from 'react-dom';
@@ -316,15 +317,22 @@ export default class DocEditor extends React.Component {
   focusEnd() { this.docClickInternal(); }
   /** True while a line is being edited or the mention menu is open (the parent's Esc handler checks this). */
   isActive() { return this.state.activeLine != null || !!this.state.mention; }
+  /** The window's Escape with the key elsewhere (MATH-23): the @ menu, the model selector or a mention's card, if one is
+   * open, shuts. → whether one was */
+  shutMenus() {
+    const s = this.state; if (!s.mention && !s.picker && !s.pop) return false;
+    this.closePicker(); this.hidePop(); if (s.mention) this.setState({ mention: null }); return true;
+  }
 
   /* ---------------------------------------------------------------- the pane beside (MATH-23) */
-  // The mentions whose note is open in the pane beside this document are marked, as the link clicked stays marked on Andy
-  // Matuschak's notes: on the page only, after each redraw, never in the HTML the editor compares (lastHtml).
+  // The mentions whose document is open in the pane beside this one are marked, as the link clicked stays marked on Andy
+  // Matuschak's notes: a note's by the mention's text, a workspace's by its id. On the page only, after each redraw, never
+  // in the HTML the editor compares (lastHtml).
   markBeside() {
     const ed = this.editorEl(); if (!ed || !ed.querySelectorAll) return;
-    const want = this.props.besideLink ? String(this.props.besideLink).toLowerCase() : null;
+    const want = this.props.besideLink ? String(this.props.besideLink).toLowerCase() : null, ws = this.props.besideWorkspace || null;
     for (const m of ed.querySelectorAll('[data-mention]')) {
-      const on = !!want && !m.dataset.ws && String(m.dataset.mention).toLowerCase() === want;
+      const on = m.dataset.ws ? !!ws && m.dataset.ws === ws : !!want && String(m.dataset.mention).toLowerCase() === want;
       if (on !== m.hasAttribute('data-beside')) m.toggleAttribute('data-beside', on);
     }
   }
@@ -1603,9 +1611,9 @@ export default class DocEditor extends React.Component {
       this.setLines((x) => { const out = [...x]; out[i] = sameLine(p, cur + nt); out.splice(i + 1, 1); return out; }, { line: i, offset: cur.length });
       return;
     }
-    // Not marked as used: leaving the line is what Escape does anywhere, and the window's Escape still leaves the document's
-    // full screen while the caret is in it (MATH-23).
-    if (e.key === 'Escape') { const ed = this.editorEl(); if (ed) ed.blur(); }
+    // Escape takes the caret out of the line, and that is all it does: marked as used, so the window's Escape leaves the
+    // document's full screen only on the next one (MATH-23).
+    if (e.key === 'Escape') { e.preventDefault(); const ed = this.editorEl(); if (ed) ed.blur(); }
   };
   // Pasted images are saved by the parent (library + <project>/assets) and referenced as ![Attachment n](img:<id>):
   // inline in a todo or chat line, where it reads [Attachment n]; on its own line anywhere else, where it renders.
@@ -1775,12 +1783,18 @@ export default class DocEditor extends React.Component {
       return;
     }
     const m = e.target.closest('[data-mention]');
-    if (m && m.dataset.ws) { e.preventDefault(); this.hidePop(); if (this.props.onOpenWorkspace) this.props.onOpenWorkspace(m.dataset.ws); return; } // goes there: one workspace at a time
+    // A workspace's document opens in the pane beside this one (MATH-23); ⌘-click goes there, as a click did before.
+    if (m && m.dataset.ws) {
+      e.preventDefault(); this.hidePop();
+      if (this.props.onOpenBeside && !newTabClick(e)) this.props.onOpenBeside({ kind: 'workspace', id: m.dataset.ws, name: m.dataset.mention }, m.dataset.mention);
+      else if (this.props.onOpenWorkspace) this.props.onOpenWorkspace(m.dataset.ws);
+      return;
+    }
     if (m) {
       e.preventDefault(); this.hidePop(); const nm = m.dataset.mention; if (nm.startsWith('bart')) return;
       const res = this.findRes(nm); if (res.id === '?') return;
       // A note opens in the pane beside this document (MATH-23); ⌘-click opens it as a tab, as before.
-      if (isNote(res) && this.props.onOpenBeside && !newTabClick(e)) { this.props.onOpenBeside(res, nm); return; }
+      if (isNote(res) && this.props.onOpenBeside && !newTabClick(e)) { this.props.onOpenBeside({ kind: 'note', id: res.id, name: res.name }, nm); return; }
       if (this.props.onOpenItem) this.props.onOpenItem(res);
     }
   };

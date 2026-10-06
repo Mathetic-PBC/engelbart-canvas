@@ -4,7 +4,7 @@ import Rail from '../workspace/Rail.jsx';
 import DocTabs from '../workspace/DocTabs.jsx';
 import NotePicker from '../workspace/NotePicker.jsx';
 import { BART_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM } from '../workspace/DocEditor.jsx';
-import DocPane, { STRIP } from '../workspace/DocPane.jsx';
+import DocPane from '../workspace/DocPane.jsx';
 import RightPane, { RIGHT_MODES } from '../workspace/RightPane.jsx';
 import { kindOf, Expand, Collapse } from '../ui/Icons.jsx';
 import { hasTag, isNote } from '../model/kind.js';
@@ -47,9 +47,9 @@ import { repositoryClick, OPEN_SANDBOX_TERMINAL } from '../model/sandbox-notific
 // Dragging the sidebar's edge resizes only the document; the right pane keeps its width until its own edge is dragged.
 // Post-its (2026-09-22) float over all of it (post-its/ProjectPostIts.jsx).
 // The middle column (MATH-23) can take the whole window: the document's full screen hides the sidebar and the right pane,
-// the reverse of the Stage's. A note's mention clicked in a document opens the note in a pane to its right, Andy
-// Matuschak's working notes style (model/panes.js, workspace/DocPane.jsx): fixed-width panes in a strip that scrolls
-// sideways, each one the next covers kept as a strip with its title. Switching tab or workspace closes them.
+// the reverse of the Stage's. A note's or a workspace's mention clicked in a document opens its document in a pane to the
+// right, Andy Matuschak's working notes style (model/panes.js, workspace/DocPane.jsx): two panes at most, side by side,
+// each half the column; a mention clicked in the right one replaces it. Switching tab or workspace closes it.
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const IMAGE_REF_RE = /\]\(img:([\w-]+)\)/g;
@@ -89,17 +89,18 @@ const WS_TAB = { id: 'ws', title: 'Workspace' };
 const ARCHIVE_TAB = 'archive:'; // an archived version's tab (2026-09-27: it opens in the middle, read-only, not on the Stage)
 const FOOT_BUTTON = { padding: '3px 6px', border: 0, borderRadius: 5, background: '#fff', cursor: 'pointer', font: '400 15px/1.4 var(--font-sans)', color: '#8f8f8f', transition: 'color 120ms' };
 const VIEW_SAVE_DELAY = 400;
-const PANE_WIDTH = 600, PANE_MIN = 240; // a pane of the strip, px (MATH-23)
+const PANE_MIN = 240; // px: a column too narrow for two of these side by side scrolls sideways instead (MATH-23)
 const NO_PANES = [];
-const noView = () => null; // a note beside the document keeps no scroll position: it opens at its top
+const noView = () => null; // a document beside the one in front keeps no scroll position: it opens at its top
 const POST_ITS_HIDDEN = 'engelbart.postIts.hidden';
 
 /**
  * The document a tab stands for in this workspace (`topic`): its key in `docs` and what main reads it by (`ref`), with
  * the workspace whose document it is or the archived version's file. A note beside the document is its note's tab.
  */
+const workspaceDoc = (id) => ({ key: `ws:${id}`, ref: { kind: 'workspace', workspaceId: id }, workspaceId: id, archive: null });
 function docOf(tabId, topic) {
-  if (tabId === 'ws') return topic ? { key: `ws:${topic.id}`, ref: { kind: 'workspace', workspaceId: topic.id }, workspaceId: topic.id, archive: null } : { key: null, ref: null, workspaceId: null, archive: null };
+  if (tabId === 'ws') return topic ? workspaceDoc(topic.id) : { key: null, ref: null, workspaceId: null, archive: null };
   if (tabId.startsWith(ARCHIVE_TAB)) {
     if (!topic) return { key: null, ref: null, workspaceId: null, archive: null };
     const file = tabId.slice(ARCHIVE_TAB.length);
@@ -227,14 +228,14 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const rightBox = React.useRef(null);
 
   const topic = topics.find((candidate) => candidate.id === topicId) || null;
-  // The notes open beside the document (model/panes.js): closed whenever the workspace or the tab in front changes.
+  // The document open beside the one in front (model/panes.js): closed whenever the workspace or the tab in front changes.
   const [beside, setBeside] = React.useState(NO_PANES);
   const besideFor = `${topicId || ''}\n${activeTab}`;
   const [besideHeldFor, setBesideHeldFor] = React.useState(besideFor);
   if (besideHeldFor !== besideFor) { setBesideHeldFor(besideFor); setBeside(NO_PANES); }
   // Every pane's document. Pane 0 is the one in front: this workspace's (the Workspace tab), an archived version of it
-  // (read-only), or a note's. Each pane after it is a note's, as that note's tab would be.
-  const paneDocs = React.useMemo(() => [docOf(activeTab, topic), ...beside.map((pane) => docOf(pane.id, topic))], [activeTab, topic && topic.id, beside]); // eslint-disable-line react-hooks/exhaustive-deps
+  // (read-only), or a note's. Pane 1, beside it, is a note's, as that note's tab would be, or another workspace's.
+  const paneDocs = React.useMemo(() => [docOf(activeTab, topic), ...beside.map((pane) => (pane.kind === 'workspace' ? workspaceDoc(pane.id) : docOf(pane.id, topic)))], [activeTab, topic && topic.id, beside]); // eslint-disable-line react-hooks/exhaustive-deps
   const { key: docKey, ref: docRef, workspaceId: docWorkspaceId, archive: docArchive } = paneDocs[0];
 
   // Remember where we are, so the app reopens here.
@@ -356,13 +357,14 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // at most every half minute. Only what is typed counts, not an answer landing or the editor tidying its ends.
   const mainRef = React.useRef(null);
   const lastEdit = React.useRef({ id: null, at: 0 });
-  // A pane's editor changed its document (`key`, `ref`): a note typed in beside the document is still this workspace written in.
+  // A pane's editor changed its document (`key`, `ref`): a note typed in beside the document is still this workspace
+  // written in; another workspace's document beside it is that workspace.
   const onDocChange = React.useCallback((key, ref, text) => {
     if (ref && ref.kind === 'archive') return; // an archived version is only read
     if (key && ref) changeDoc(key, ref, text);
     const typed = mainRef.current && mainRef.current.contains(document.activeElement);
     const now = Date.now(), last = lastEdit.current;
-    const wrote = topic && topic.id;
+    const wrote = ref && ref.kind === 'workspace' ? ref.workspaceId : topic && topic.id;
     if (!typed || !wrote || (last.id === wrote && now - last.at < 30000)) return;
     lastEdit.current = { id: wrote, at: now };
     api.recordEdit(project.id, wrote).catch(() => {});
@@ -864,16 +866,24 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     openItem(row);
   };
 
-  /* ---------------------------------------------------------- notes beside */
+  /* ------------------------------------------------------- the pane beside */
 
-  // A note's mention clicked in pane `from` (0: the document) opens the note in the pane after it (model/panes.js), and
-  // the strip scrolls to that pane once it is drawn. ⌘-click still opens a tab (openItem).
-  const paneEls = React.useRef([]); // each pane's element, by its place in the strip
+  // A note's or a workspace's mention clicked in either pane opens its document in the pane beside the one in front
+  // (model/panes.js), in place of what was there. One already in front is not opened again: the strip shows the pane in
+  // front, as it does the pane beside once it is drawn (they move only when the column is too narrow for both). ⌘-click
+  // still opens a note's tab and goes to a workspace (DocEditor).
+  const besideFront = activeTab === 'ws' ? (topic ? { kind: 'workspace', id: topic.id } : null) : activeTab.startsWith(ARCHIVE_TAB) ? null : { kind: 'note', id: activeTab };
   const reveal = React.useRef(null); // the pane to scroll to after the next draw
-  const revealPane = (i) => { const el = paneEls.current[i]; if (el && el.scrollIntoView) el.scrollIntoView({ inline: 'end', block: 'nearest', behavior: 'smooth' }); };
-  const openNoteBeside = (from, row, link) => {
-    const next = openBeside(beside, from, { id: row.id, title: row.name }, link);
-    const at = beside[from] && beside[from].id === row.id ? from + 1 : next.length; // the pane it is in now
+  const revealPane = (i) => {
+    const main = mainRef.current;
+    if (main && main.scrollTo && main.scrollWidth > main.clientWidth) main.scrollTo({ left: i ? main.scrollWidth : 0, behavior: 'smooth' });
+  };
+  const openDocBeside = (item, link) => {
+    if (!item || !item.id) return;
+    const workspace = item.kind === 'workspace' ? index.get(item.id) : null;
+    if (item.kind === 'workspace' && !workspace) return; // a workspace that is gone
+    const { panes: next, at } = openBeside(beside, besideFront, { kind: item.kind, id: item.id, title: workspace ? workspace.node.name : item.name }, link);
+    if (at == null) return;
     if (next === beside) { revealPane(at); return; }
     reveal.current = at;
     setBeside(next);
@@ -884,17 +894,27 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     reveal.current = null;
     revealPane(at);
   }, [beside]);
-  // Its ×: that pane and every one after it close; what was typed in them is saved now.
-  const closeBeside = (index) => {
-    for (const pane of beside.slice(index - 1)) flush(`note:${pane.id}`);
-    setBeside((current) => closePane(current, index));
+  // Its ×: the pane beside closes; what was typed in it is saved now.
+  const closeBeside = (at) => {
+    for (const doc of paneDocs.slice(at)) if (doc.key) flush(doc.key);
+    setBeside((current) => closePane(current, at));
   };
   // A note renamed from its title, in front or beside: its tab, if it has one, and its pane take the new name.
   const renameNoteDoc = async (id, name) => {
     try {
       const renamed = await api.renameNote(project.id, id, name);
       setTabs((current) => current.map((tab) => (tab.id === id ? { ...tab, title: renamed.name } : tab)));
-      setBeside((current) => current.map((pane) => (pane.id === id ? { ...pane, title: renamed.name } : pane)));
+      setBeside((current) => current.map((pane) => (pane.kind !== 'workspace' && pane.id === id ? { ...pane, title: renamed.name } : pane)));
+      await reload();
+    } catch (error) {
+      onError(error);
+    }
+  };
+  // Another workspace's document beside, renamed from its title: its pane takes the name the tree has after it.
+  const renameWorkspaceBeside = async (id, name) => {
+    try {
+      await api.renameWorkspace(project.id, id, name);
+      setBeside((current) => current.map((pane) => (pane.kind === 'workspace' && pane.id === id ? { ...pane, title: name } : pane)));
       await reload();
     } catch (error) {
       onError(error);
@@ -977,7 +997,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       return open !== undefined ? Promise.resolve(open) : api.readDoc(project.id, { kind: 'workspace', workspaceId: id });
     },
   }), [project.id]);
-  // A click on a workspace's mention goes there (the one workspace in the strip changes; nothing opens beside it).
+  // A ⌘-click on a workspace's mention goes there (the one workspace in the strip changes); a click opens its document
+  // beside this one (openDocBeside).
   const openMentionedWorkspace = (id) => { if (index.has(id)) selectTopic(id); };
   // All of them, for the next row's hover list: by the tree's names, gone ones left out.
   const places = React.useMemo(() => placesToGo({ here: topic ? { projectId: project.id, workspaceId: topic.id } : null, recent: navHere.recent, agents: navHere.agents }).flatMap((place) => {
@@ -1234,9 +1255,18 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       }
       if (event.key !== 'Escape') return;
       if (renaming) { setRenaming(null); return; }
-      // The document's full screen (MATH-23): Escape leaves it, the caret in the document or not, unless what had the key
-      // used it (the editor's @ menu, a card's field: DocEditor marks those as used). From there it never closes the workspace.
-      if (docFull) { if (!event.defaultPrevented) setDocFull(false); return; }
+      // The document's full screen (MATH-23): Escape leaves it only when nothing else used it. What had the key goes first:
+      // the caret leaves its line, the @ menu or a card's field shuts (DocEditor marks those as used), a dialog closes
+      // (they stop the key). Then a menu open with the key elsewhere shuts, then a focused field is left; the next Escape
+      // leaves the full screen. From there it never closes the workspace.
+      if (docFull) {
+        if (event.defaultPrevented) return;
+        if (notePlus) { setNotePlus(null); return; }
+        if (editorRefs.current.some((ref) => ref && ref.current && ref.current.shutMenus && ref.current.shutMenus())) return;
+        if (target && target.closest && target.closest('input, textarea, select, [contenteditable="true"]')) { if (target.blur) target.blur(); return; }
+        setDocFull(false);
+        return;
+      }
       if (event.defaultPrevented) return;
       // The editor of the pane the key was pressed in (the document's, when it was pressed outside them all).
       const pane = target && target.closest ? target.closest('[data-doc-pane]') : null;
@@ -1248,7 +1278,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [active, tabs, renaming, docFull, onClose]);
+  }, [active, tabs, renaming, docFull, notePlus, onClose]);
 
   /* --------------------------------------------------------------- resizing */
 
@@ -1314,40 +1344,11 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return () => { if (observer) observer.disconnect(); window.removeEventListener('resize', measure); };
   }, [docFull]);
 
-  // The strip of panes (MATH-23). With notes beside the document every pane is PANE_WIDTH wide, narrower when the column
-  // is, so that the strips of the panes the last one covers still show beside it. A pane the next one has slid over shows
-  // only its strip (`folded`: measured as the strip scrolls or changes size). With the document alone it fills the column.
-  const [folded, setFolded] = React.useState(0); // how many panes, from the left, are covered down to their strips
+  // The middle column's panes (MATH-23): with a document beside the one in front, the two share the column side by side,
+  // half each, neither covering the other, so the mention marked in the left one stays in sight. A column too narrow for
+  // two PANE_MIN panes scrolls sideways instead. With the document alone it fills the column.
   const paneCount = paneDocs.length;
-  const measureFolds = React.useCallback(() => {
-    const els = paneEls.current;
-    let count = 0;
-    for (let i = 0; i + 1 < paneCount; i += 1) {
-      const a = els[i], b = els[i + 1];
-      if (!a || !b || b.getBoundingClientRect().left - a.getBoundingClientRect().left > STRIP + 2) break;
-      count = i + 1;
-    }
-    setFolded(count);
-  }, [paneCount]);
-  React.useLayoutEffect(() => { measureFolds(); }, [measureFolds, beside]);
-  React.useEffect(() => {
-    const main = mainRef.current;
-    if (paneCount < 2 || !main || typeof ResizeObserver !== 'function') return undefined;
-    const observer = new ResizeObserver(() => measureFolds());
-    observer.observe(main);
-    return () => observer.disconnect();
-  }, [paneCount, measureFolds]);
-  // A strip clicked: the strip scrolls back until its pane shows whole, just right of the strips before it.
-  const unfold = (i) => {
-    const main = mainRef.current;
-    if (!main) return;
-    let left = 0;
-    for (let k = 0; k < i; k += 1) left += paneEls.current[k] ? paneEls.current[k].offsetWidth : 0;
-    main.scrollTo({ left: Math.max(0, left - i * STRIP), behavior: 'smooth' });
-  };
-  const paneStyle = (i) => (paneCount > 1
-    ? { position: 'sticky', left: i * STRIP, zIndex: i + 1, flex: 'none', width: `max(${PANE_MIN}px, min(${PANE_WIDTH}px, calc(100% - ${(paneCount - 1) * STRIP}px)))`, borderLeft: i ? '1px solid #eaeaea' : 0 }
-    : { flex: '1 1 0' });
+  const paneStyle = (i) => (paneCount > 1 ? { flex: '1 1 0', minWidth: PANE_MIN, borderLeft: i ? '1px solid #eaeaea' : 0 } : { flex: '1 1 0' });
 
   // What every pane's editor is given; each pane adds its own document, its @bart and its notes beside.
   const editorProps = {
@@ -1509,42 +1510,42 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
         {!docFull && <Separator onDown={railDown} onMove={railMove} onUp={pointerUp} onReset={() => setRailWidth(300)} />}
 
-        {/* The document, and the notes opened beside it (MATH-23): a strip that scrolls sideways, each pane scrolling down on its own. */}
-        <main ref={mainRef} data-doc-column="1" onScroll={paneCount > 1 ? measureFolds : undefined} style={{ flex: '1 1 0', minWidth: DOC_MIN, minHeight: 0, display: full ? 'none' : 'flex', overflowX: 'auto', overflowY: 'hidden', position: 'relative', isolation: 'isolate' }}>
+        {/* The document, and the one opened beside it (MATH-23): side by side, each pane scrolling down on its own. */}
+        <main ref={mainRef} data-doc-column="1" style={{ flex: '1 1 0', minWidth: DOC_MIN, minHeight: 0, display: full ? 'none' : 'flex', overflowX: 'auto', overflowY: 'hidden', position: 'relative', isolation: 'isolate' }}>
           {paneDocs.map((doc, i) => {
-            const note = i ? beside[i - 1] : null;
-            const title = note ? ((notesById.get(note.id) || {}).name || note.title) : docTitle;
+            const pane = i ? beside[i - 1] : null, next = beside[i] || null;
+            const ws = pane && pane.kind === 'workspace' ? index.get(pane.id) : null;
+            const title = !pane ? docTitle : ws ? ws.node.name : pane.kind === 'workspace' ? pane.title : ((notesById.get(pane.id) || {}).name || pane.title);
             return (
               <DocPane
                 key={i}
                 index={i}
-                paneRef={(element) => { paneEls.current[i] = element; }}
+                kind={pane ? pane.kind : null}
                 editorRef={editorRefAt(i)}
                 docKey={doc.key}
                 text={doc.key ? docs[doc.key] : undefined}
                 readOnly={!!doc.archive}
                 title={title}
-                onRename={note ? (name) => renameNoteDoc(note.id, name) : renameDoc}
-                titleFocus={note ? null : wantTitleFocus}
+                onRename={!pane ? renameDoc : pane.kind === 'workspace' ? (name) => renameWorkspaceBeside(pane.id, name) : (name) => renameNoteDoc(pane.id, name)}
+                titleFocus={pane ? null : wantTitleFocus}
                 conflict={!!(doc.key && conflicts[doc.key])}
                 onKeepMine={() => keepMine(doc.key)}
                 onTakeTheirs={() => takeTheirs(doc.key)}
-                onClose={note ? () => closeBeside(i) : null}
-                folded={i < folded}
-                onUnfold={paneCount > 1 ? () => unfold(i) : null}
-                empty={note ? null : noWorkspace}
+                onClose={pane ? () => closeBeside(i) : null}
+                empty={pane ? null : noWorkspace}
                 style={paneStyle(i)}
                 editor={{
                   ...editorProps,
                   onChange: (value) => onDocChange(doc.key, doc.ref, value),
                   onAsk: (ask) => askBart(doc.key, doc.ref, ask),
-                  onOpenBeside: (row, link) => openNoteBeside(i, row, link),
-                  besideLink: beside[i] ? beside[i].link : null,
-                  // Where the document was scrolled to is kept for the document in front; a note beside opens at its top.
-                  viewScope: note ? null : (topic ? topic.id : null),
-                  viewOf: note ? noView : viewOf,
-                  onView: note ? null : recordPosition,
-                  footer: note ? null : footer,
+                  onOpenBeside: openDocBeside,
+                  besideLink: next && next.kind !== 'workspace' ? next.link : null,
+                  besideWorkspace: next && next.kind === 'workspace' ? next.id : null,
+                  // Where the document was scrolled to is kept for the document in front; one beside opens at its top.
+                  viewScope: pane ? null : (topic ? topic.id : null),
+                  viewOf: pane ? noView : viewOf,
+                  onView: pane ? null : recordPosition,
+                  footer: pane ? null : footer,
                 }}
               />
             );

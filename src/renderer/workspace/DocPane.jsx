@@ -3,18 +3,15 @@ import DocEditor from './DocEditor.jsx';
 import { isUntitled } from '../model/names.js';
 
 // One document of the middle column (MATH-23): its title, the notice when another window saved over edits here, and its
-// editor. Pane 0 is the document in front (the tab), with the footer's Copy, Build and Clear; each pane after it is a note
-// opened beside it from a mention (model/panes.js), Andy Matuschak's working notes style, with a × in its header instead.
-// In a strip of several, a pane the next one has slid over shows only a 40px strip with its title (`folded`); a click on
-// the strip brings the pane back into view.
-
-export const STRIP = 40; // px of a pane left showing once the next one covers it
+// editor. Pane 0 is the document in front (the tab), with the footer's Copy, Build and Clear; pane 1 is a note or a
+// workspace's document opened beside it from a mention (model/panes.js), Andy Matuschak's working notes style, with a ×
+// in its header instead. The two sit side by side, each half the column (Workspace.jsx): neither covers the other.
 
 const FOOT_BUTTON = { padding: '3px 6px', border: 0, borderRadius: 5, background: '#fff', cursor: 'pointer', font: '400 15px/1.4 var(--font-sans)', color: '#8f8f8f', transition: 'color 120ms' };
 
 export default function DocPane({
-  index, paneRef, editorRef, docKey, text, readOnly = false, title, onRename, titleFocus,
-  conflict, onKeepMine, onTakeTheirs, onClose, folded = false, onUnfold, empty, editor, style,
+  index, kind = 'note', editorRef, docKey, text, readOnly = false, title, onRename, titleFocus,
+  conflict, onKeepMine, onTakeTheirs, onClose, empty, editor, style,
 }) {
   // The title is a field of its own: a draft while it is typed, named on Enter or when the caret leaves it. An untitled
   // name is its hint, not its value.
@@ -36,7 +33,9 @@ export default function DocPane({
         onChange={(event) => setDraft(event.target.value.replace(/[/\\]/g, '-'))} // a title is a file name: slashes become hyphens as you type
         onBlur={commit}
         onKeyDown={(event) => {
-          if (event.key === 'Escape') { event.target.blur(); return; }
+          // Escape leaves the title, and that is all it does: marked as used, so the window's Escape (leaving the full
+          // screen) leaves it alone.
+          if (event.key === 'Escape') { event.preventDefault(); event.target.blur(); return; }
           if (event.key !== 'Enter') return;
           // Enter names the document and drops the caret into it.
           event.preventDefault();
@@ -49,12 +48,12 @@ export default function DocPane({
         spellCheck={false}
         style={{ display: 'block', flex: '1 1 auto', minWidth: 0, width: '100%', padding: 0, border: 0, background: 'transparent', font: '500 22px/1.35 var(--font-sans)', letterSpacing: '-0.3px', color: '#171717' }}
       />
-      {onClose && <button type="button" className="hov-x" data-pane-close={index} onClick={onClose} aria-label="Close this note and the ones after it" title="Close" style={{ flex: 'none', width: 26, height: 26, marginTop: 2, padding: 0, border: 0, borderRadius: '50%', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '18px/1 var(--font-sans)', color: '#8f8f8f', transition: 'background 120ms' }}>×</button>}
+      {onClose && <button type="button" className="hov-x" data-pane-close={index} onClick={onClose} aria-label="Close the pane beside" title="Close" style={{ flex: 'none', width: 26, height: 26, marginTop: 2, padding: 0, border: 0, borderRadius: '50%', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '18px/1 var(--font-sans)', color: '#8f8f8f', transition: 'background 120ms' }}>×</button>}
     </div>
   );
 
   return (
-    <section ref={paneRef} data-doc-pane={index} aria-label={index === 0 ? 'Document' : `Note: ${title || 'Untitled'}`} style={{ position: 'relative', minWidth: 0, minHeight: 0, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', background: '#fff', ...style }}>
+    <section data-doc-pane={index} aria-label={index === 0 ? 'Document' : `${kind === 'workspace' ? 'Workspace' : 'Note'}: ${title || 'Untitled'}`} style={{ position: 'relative', minWidth: 0, minHeight: 0, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', background: '#fff', ...style }}>
       {conflict && (
         <div role="alert" data-doc-conflict="1" data-overlay="1" style={{ position: 'absolute', top: 10, right: 16, zIndex: 30, display: 'flex', alignItems: 'center', gap: 4, maxWidth: 'calc(100% - 32px)', padding: '5px 6px 5px 12px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', boxShadow: '0 4px 14px #0000000f', font: '12.5px/1.4 var(--font-sans)', color: '#4d4d4d' }}>
           <span style={{ marginRight: 6 }}>Saved in another window while you were editing.</span>
@@ -69,18 +68,6 @@ export default function DocPane({
           {empty || <span style={{ font: '13px/1.6 var(--font-sans)', color: '#8f8f8f' }}>Opening…</span>}
         </div>
       )}
-      {/* Covered by the pane after it: a strip with its title written down it. Only in a strip of several panes. */}
-      {onUnfold && <button
-        type="button"
-        data-pane-strip={index}
-        tabIndex={folded ? 0 : -1}
-        aria-hidden={folded ? undefined : 'true'}
-        onClick={onUnfold}
-        title={title || 'Untitled'}
-        style={{ position: 'absolute', zIndex: 35, top: 0, bottom: 0, left: 0, width: STRIP, boxSizing: 'border-box', margin: 0, padding: '16px 0', border: 0, borderRight: '1px solid #eaeaea', background: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', opacity: folded ? 1 : 0, pointerEvents: folded ? 'auto' : 'none', transition: 'opacity 120ms' }}
-      >
-        <span style={{ writingMode: 'vertical-rl', maxHeight: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '500 13px/1 var(--font-sans)', color: isUntitled(title) ? '#8f8f8f' : '#4d4d4d' }}>{title || 'Untitled'}</span>
-      </button>}
     </section>
   );
 }

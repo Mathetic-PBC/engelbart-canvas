@@ -1,32 +1,31 @@
-// The notes open to the right of the document (MATH-23), in the manner of Andy Matuschak's working notes: a note mention
-// clicked in a pane opens its note in the pane after it, and every pane that stood further right goes. Pure: Workspace.jsx
-// keeps the list and draws it.
+// The pane beside the document (MATH-23), in the manner of Andy Matuschak's working notes: a note's or a workspace's
+// mention clicked opens its document in a pane to the right of the document in front. Pure: Workspace.jsx keeps the list
+// and draws it.
 //
-// Panes are counted as they stand in the strip: pane 0 is the document in front (the tab), which this list never holds;
-// pane i, for i ≥ 1, is the list's [i - 1]. A pane is { id, title, link }: the note's library id and name, and `link`, the
-// mention's text clicked to open it, which stays marked in the pane before it.
+// Two panes at most (2026-10-05): pane 0 is the document in front (the tab), which this list never holds, and pane 1 is
+// the list's one entry. A mention clicked in either pane puts its document in pane 1, in place of what was there; one
+// already in front is not opened a second time (two editors on one document undid each other's typing with ⌘Z).
+// A pane is { kind, id, title, link }: 'note' and the note's library id, or 'workspace' and the workspace's id; its name;
+// and `link`, the mention's text clicked to open it, which stays marked in the document in front.
 
-/** The most note panes beside the document; opening one more lets the oldest go. */
-export const MAX_PANES = 4;
+/** What a document is, for telling two apart: { kind: 'note' | 'workspace', id }. */
+const kindOf = (item) => (item && item.kind === 'workspace' ? 'workspace' : 'note');
+export const sameDoc = (a, b) => !!a && !!b && !!a.id && a.id === b.id && kindOf(a) === kindOf(b);
 
 /**
- * `note` ({ id, title }) opened from a mention (`link`) clicked in pane `fromIndex` (0: the document). Every pane after
- * `fromIndex` goes and the note comes after it, unless the note is already the pane right after it: then only that pane's
- * `link` changes, and the panes after it stay. Past MAX_PANES the oldest note pane goes.
- * → a new list, or `panes` itself when nothing changed
+ * `item` ({ kind, id, title }) opened from a mention (`link`) clicked in either pane. `front` is what the document in front
+ * shows ({ kind, id }; null for neither, an archived version).
+ * → { panes, at }: the list after it (`panes` itself when nothing changed) and the pane that shows the item: 0 when it is
+ * the document in front (the pane beside stays as it was), 1 when it is beside, null when there is nothing to open.
  */
-export function openBeside(panes, fromIndex, note, link) {
+export function openBeside(panes, front, item, link) {
   const list = Array.isArray(panes) ? panes : [];
-  if (!note || !note.id) return list;
-  const from = Math.max(0, Math.min(Number(fromIndex) || 0, list.length));
-  const after = list[from];
+  if (!item || !item.id) return { panes: list, at: null };
+  if (sameDoc(front, item)) return { panes: list, at: 0 };
   const shown = link == null ? '' : String(link);
-  if (after && after.id === note.id) {
-    if (after.link === shown) return list;
-    return list.map((pane, i) => (i === from ? { ...pane, link: shown } : pane));
-  }
-  const next = [...list.slice(0, from), { id: note.id, title: note.title == null ? '' : String(note.title), link: shown }];
-  return next.length > MAX_PANES ? next.slice(next.length - MAX_PANES) : next;
+  const now = list[0];
+  if (sameDoc(now, item)) return { panes: now.link === shown ? list : [{ ...now, link: shown }], at: 1 };
+  return { panes: [{ kind: kindOf(item), id: item.id, title: item.title == null ? '' : String(item.title), link: shown }], at: 1 };
 }
 
 /**

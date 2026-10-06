@@ -2,11 +2,13 @@
 
 // npm run build && npx electron scripts/smoke-panes.cjs
 // Runs the real app, hidden, against disposable project/user data and the fake @bart, and drives the middle column's
-// full screen and the notes opened beside the document (MATH-23: src/renderer/screens/Workspace.jsx, workspace/DocPane.jsx,
-// model/panes.js) with real (synthetic) input: a note's mention opens its note to the right and stays marked, another
-// replaces it, a mention in that pane opens a third and the strip scrolls to it, the document folds to a strip and comes
-// back on a click, × closes, ⌘-click still opens a tab, @bart in a pane is answered there, the same note in two panes
-// is one document, a tab switch closes the panes, and Escape leaves the full screen without closing the workspace.
+// full screen and the pane opened beside the document (MATH-23: src/renderer/screens/Workspace.jsx, workspace/DocPane.jsx,
+// model/panes.js) with real (synthetic) input: a note's mention opens its note to the right and stays marked and in sight,
+// the two panes side by side at half the column each; another replaces it; a mention in the right pane replaces that pane
+// (two panes at most); a note already on the left is not opened again, and ⌘Z in one pane leaves the other's typing; a
+// workspace's mention opens its document beside; × closes, ⌘-click still opens a tab, @bart in a pane is answered there,
+// a tab switch closes the pane; and Escape leaves the full screen only once the line, the @ menu, the title field or the
+// + menu has had its own.
 // ENGELBART_PANES_SHOTS=<dir> saves pictures of the window at the moments worth seeing.
 const { app, BrowserWindow } = require('electron');
 const assert = require('node:assert/strict');
@@ -75,31 +77,40 @@ app.whenReady().then(async () => {
     const api = (call) => js(wc, `window.engelbartAPI.${call}`);
     const notes = {};
     for (const name of ['Alpha', 'Beta', 'Gamma', 'Delta']) notes[name] = await api(`createNote(${JSON.stringify(pid)}, {name:${JSON.stringify(name)}, workspaceId:${JSON.stringify(wid)}})`);
+    const second = await api(`createWorkspace(${JSON.stringify(pid)}, {name:'Second'})`);
     const write = (ref, text) => api(`writeDoc(${JSON.stringify(pid)}, ${JSON.stringify(ref)}, ${JSON.stringify(text)})`);
     const read = (ref) => api(`readDoc(${JSON.stringify(pid)}, ${JSON.stringify(ref)})`);
     const noteRef = (name) => ({ kind: 'note', id: notes[name].id });
     const filler = Array.from({ length: 40 }, (_, i) => `Line ${i + 1} of the plan, long enough to scroll.`).join('\n');
-    await write({ kind: 'workspace', workspaceId: wid }, `Plan\nSee @[Alpha] and @[Beta].\n${filler}\n`);
+    await write({ kind: 'workspace', workspaceId: wid }, `Plan\nSee @[Alpha] and @[Beta], or @[Second](ws:${second.id}).\n${filler}\n`);
+    await write({ kind: 'workspace', workspaceId: second.id }, 'Second body\nOn to @[Gamma].\n');
     await write(noteRef('Alpha'), 'Alpha body\nGo on to @[Gamma].\n');
     await write(noteRef('Beta'), 'Beta body\n');
     await write(noteRef('Gamma'), 'Gamma body\nThen @[Delta], or back to @[Alpha].\n');
     await write(noteRef('Delta'), 'Delta body\n');
+    // Back in the welcome workspace (making Second may have moved the window there), its document in front.
     wc.reload();
+    await until(() => js(wc, '!!document.querySelector("[data-doc-tab]")').catch(() => false), 'the workspace screen');
+    await js(wc, `(()=>{const row=[...document.querySelectorAll('aside[aria-label="Sidebar"] *')].find((el)=>el.children.length===0&&el.textContent.trim()===${JSON.stringify(WS)});if(row)row.click()})()`);
     await until(() => js(wc, `!!document.querySelector(${JSON.stringify(`${PANE(0)} [data-editor] [data-mention="Alpha"]`)})`).catch(() => false), 'the workspace document');
     await pause(400);
+    const half = (s) => Math.abs(s.panes[0].width - s.width / 2) <= 2 && Math.abs(s.panes[1].width - s.width / 2) <= 2;
+    const sideBySide = (s) => s.panes.length === 2 && s.panes[0].left === 0 && s.panes[1].left === s.panes[0].width && s.scrollWidth === s.width && s.left === 0;
+    // The marked mention in the left pane is on screen: inside its pane and the column, not under the pane beside.
+    const markedInSight = () => js(wc, `(()=>{const m=document.querySelector('${PANE(0)} [data-mention][data-beside]');if(!m)return false;const r=m.getBoundingClientRect(),main=document.querySelector('main').getBoundingClientRect(),right=document.querySelector('${PANE(1)}').getBoundingClientRect();const at=document.elementFromPoint(r.left+2,r.top+r.height/2);return r.width>0&&r.left>=main.left&&r.right<=right.left&&r.right<=main.right&&!!at&&!!at.closest('${PANE(0)}')})()`);
 
-    /* ------------------------------------------------ A-10: the document alone is as it was */
+    /* ------------------------------------------------ the document alone is as it was */
     const alone = await settledStrip(wc);
     assert.equal(alone.panes.length, 1);
     assert.equal(alone.panes[0].width, alone.width, 'the document fills the column');
     assert.equal(alone.scrollWidth, alone.width, 'nothing to scroll sideways');
-    assert.equal(await js(wc, `!!document.querySelector('[data-pane-strip], [data-pane-close]')`), false, 'no strip, no ×');
+    assert.equal(await js(wc, `!!document.querySelector('[data-pane-close]')`), false, 'no ×');
     await shot(wc, '0-alone');
     console.log(`PASS the document alone fills the middle column (${alone.width}px), nothing beside it`);
 
-    /* ------------------------------------------------ A-02: a note's mention opens it beside, marked; the document stays */
+    /* ------------------------------------------------ (2) a note's mention opens it beside: two halves, the mention marked and in sight */
     const pageTop = () => js(wc, `document.querySelector('${PANE(0)} [data-editor]').parentElement.parentElement.scrollTop`);
-    await js(wc, `document.querySelector('${PANE(0)} [data-editor]').parentElement.parentElement.scrollTop = 60`);
+    await js(wc, `document.querySelector('${PANE(0)} [data-editor]').parentElement.parentElement.scrollTop = 20`);
     await pause(400); // past the editor's report of where it was scrolled to
     const scrolled = await pageTop();
     await press(wc, `${PANE(0)} [data-editor] [data-mention="Alpha"]`);
@@ -107,84 +118,102 @@ app.whenReady().then(async () => {
     assert.deepEqual(now.panes.map((p) => p.title), [WS, 'Alpha'], 'the note beside the document');
     assert.deepEqual(now.panes[0].marked, ['Alpha'], 'the mention stays marked');
     assert.deepEqual(now.panes[1].rows.slice(0, 1), ['Alpha body']);
-    assert.ok(now.panes[1].width <= 600, `a pane is at most 600px (${now.panes[1].width})`);
+    assert.ok(sideBySide(now), `side by side, nothing covered, nothing scrolled (${JSON.stringify(now.panes.map((p) => [p.left, p.width]))}, column ${now.width}px)`);
+    assert.ok(half(now), 'each half the column');
+    assert.ok(now.panes.every((p) => !p.folded), 'no folded strip');
+    assert.equal(await markedInSight(), true, 'the marked mention is in sight');
     assert.ok(scrolled > 0, 'the document was scrolled down a little');
     assert.equal(await pageTop(), scrolled, 'and is still where it was');
     await shot(wc, '1-beside');
-    console.log(`PASS a note's mention opens it to the right (${now.panes.map((p) => `${p.width}px`).join(' + ')}, strip at ${now.left}px), its mention marked`);
+    console.log(`PASS a note's mention opens it to the right, side by side (${now.panes.map((p) => `${p.width}px`).join(' + ')} of ${now.width}px), its mention marked and in sight`);
 
-    /* ------------------------------------------------ A-03: another mention in the document replaces it */
-    await press(wc, `[data-pane-strip="0"]`).catch(() => {}); // folded in a narrow column: bring the document back first
-    await settledStrip(wc);
+    /* ------------------------------------------------ another mention in the document replaces it */
     await press(wc, `${PANE(0)} [data-editor] [data-mention="Beta"]`);
     now = await settledStrip(wc);
     assert.deepEqual(now.panes.map((p) => p.title), [WS, 'Beta']);
     assert.deepEqual(now.panes[0].marked, ['Beta'], 'the new mention is the marked one');
     console.log('PASS another mention in the document replaces the pane beside it');
 
-    /* ------------------------------------------------ A-04: a mention in the pane opens a third; the document folds */
-    await press(wc, `[data-pane-strip="0"]`).catch(() => {});
-    await settledStrip(wc);
+    /* ------------------------------------------------ (1) a mention in the right pane replaces that pane: two panes at most */
     await press(wc, `${PANE(0)} [data-editor] [data-mention="Alpha"]`);
     await settledStrip(wc);
     await press(wc, `${PANE(1)} [data-editor] [data-mention="Gamma"]`);
     now = await settledStrip(wc);
-    assert.deepEqual(now.panes.map((p) => p.title), [WS, 'Alpha', 'Gamma']);
-    assert.deepEqual(now.panes[1].marked, ['Gamma']);
-    assert.ok(now.left > 0, 'the strip scrolled');
-    assert.equal(now.left, now.scrollWidth - now.width, 'to its end, where the new pane is');
-    assert.equal(now.panes[0].folded, true, 'the document is a strip');
-    assert.equal(now.panes[2].left + now.panes[2].width, now.width, 'the new pane shows whole');
-    await shot(wc, '2-three');
-    console.log('PASS a mention in the pane opens a third and the strip scrolls to it; the document is a strip');
-    const titled = await js(wc, `document.querySelector('[data-pane-strip="0"]').textContent`);
-    assert.equal(titled, WS, 'the strip has the document\'s title');
-    await press(wc, '[data-pane-strip="0"]');
+    assert.deepEqual(now.panes.map((p) => p.title), [WS, 'Gamma'], 'Gamma took Alpha\'s place; no third pane');
+    assert.ok(sideBySide(now) && half(now), 'still two halves, nothing scrolled');
+    await press(wc, `${PANE(1)} [data-editor] [data-mention="Delta"]`);
     now = await settledStrip(wc);
-    assert.equal(now.left, 0, 'the strip scrolled back');
-    assert.equal(now.panes[0].folded, false);
-    await shot(wc, '3-back');
-    console.log(`PASS a click on the document's strip ("${titled}") scrolls back to it`);
+    assert.deepEqual(now.panes.map((p) => p.title), [WS, 'Delta']);
+    assert.equal(await js(wc, `document.querySelectorAll('main [data-doc-pane]').length`), 2);
+    await shot(wc, '2-replaced');
+    console.log('PASS a mention in the right pane replaces it: never more than the document and one pane');
 
-    /* ------------------------------------------------ A-05: × closes that pane and those after it */
-    await js(wc, `document.querySelector('[data-pane-close="1"]').scrollIntoView({ inline: 'nearest', block: 'nearest' })`); // its pane's right edge, past the column's
-    await settledStrip(wc);
+    /* ------------------------------------------------ × closes the pane beside */
     await press(wc, '[data-pane-close="1"]');
     now = await settledStrip(wc);
-    assert.deepEqual(now.panes.map((p) => p.title), [WS], '× on the second pane closes it and the third');
+    assert.deepEqual(now.panes.map((p) => p.title), [WS], '× closed it');
     assert.deepEqual(now.panes[0].marked, [], 'nothing is marked any more');
-    console.log('PASS × closes its pane and every pane after it');
+    console.log('PASS × closes the pane beside');
 
-    /* ------------------------------------------------ A-06: ⌘-click opens a tab, as before */
+    /* ------------------------------------------------ ⌘-click opens a tab, as before */
     await press(wc, `${PANE(0)} [data-editor] [data-mention="Alpha"]`, ['meta']);
     now = await settledStrip(wc);
     assert.deepEqual(now.panes.map((p) => p.title), ['Alpha'], 'the note in front, as its tab');
     console.log('PASS ⌘-click on a note\'s mention opens its tab');
 
-    /* ------------------------------------------------ A-08: the same note in two panes is one document */
+    /* ------------------------------------------------ (4) the note open on the left is not opened again; ⌘Z stays in its pane */
     await press(wc, `${PANE(0)} [data-editor] [data-mention="Gamma"]`);
     await settledStrip(wc);
     await press(wc, `${PANE(1)} [data-editor] [data-mention="Alpha"]`);
     now = await settledStrip(wc);
-    assert.deepEqual(now.panes.map((p) => p.title), ['Alpha', 'Gamma', 'Alpha']);
-    await press(wc, `${PANE(2)} [data-editor] [data-line="0"] .t`);
+    assert.deepEqual(now.panes.map((p) => p.title), ['Alpha', 'Gamma'], 'Alpha, already on the left, did not open beside');
+    assert.equal(now.left, 0, 'the left pane is the one in sight');
+    console.log('PASS a mention of the note already on the left leaves the panes as they are and shows the left one');
+    await press(wc, `${PANE(0)} [data-editor] [data-line="0"] .t`);
     await key(wc, 'End');
-    await typeKeys(wc, ' typed beside');
+    await typeKeys(wc, ' left');
+    await press(wc, `${PANE(1)} [data-editor] [data-line="0"] .t`);
+    await key(wc, 'End');
+    await typeKeys(wc, ' right');
     now = await settledStrip(wc);
-    assert.equal(now.panes[2].rows[0], 'Alpha body typed beside');
-    assert.equal(now.panes[0].rows[0], 'Alpha body typed beside', 'the tab shows it too');
-    await until(async () => String(await read(noteRef('Alpha'))).startsWith('Alpha body typed beside'), 'saved');
-    await shot(wc, '4-same-note');
-    console.log('PASS typing in a note beside shows in its tab too, and is saved');
+    assert.deepEqual([now.panes[0].rows[0], now.panes[1].rows[0]], ['Alpha body left', 'Gamma body right']);
+    for (let i = 0; i < 12; i++) await key(wc, 'z', { modifiers: ['meta'] });
+    now = await settledStrip(wc);
+    assert.equal(now.panes[1].rows[0], 'Gamma body', '⌘Z in the right pane undid its own typing');
+    assert.equal(now.panes[0].rows[0], 'Alpha body left', 'and none of the left pane\'s');
+    await until(async () => String(await read(noteRef('Alpha'))).startsWith('Alpha body left'), 'the left pane\'s typing saved');
+    await until(async () => String(await read(noteRef('Gamma'))).startsWith('Gamma body\n'), 'the right pane\'s undo saved');
+    await shot(wc, '3-two-notes');
+    console.log('PASS ⌘Z in one pane undoes that pane\'s typing only');
 
-    /* ------------------------------------------------ A-09: another tab closes the panes */
+    /* ------------------------------------------------ another tab closes the pane */
     await press(wc, '[data-doc-tab="ws"]');
     now = await settledStrip(wc);
-    assert.equal(now.panes.length, 1, 'the panes closed with the tab change');
+    assert.equal(now.panes.length, 1, 'the pane closed with the tab change');
     assert.ok(now.panes[0].rows[0] === 'Plan', 'the workspace document is in front');
-    console.log('PASS switching tab closes the panes beside');
+    console.log('PASS switching tab closes the pane beside');
 
-    /* ------------------------------------------------ A-07: @bart in a pane is answered in that note */
+    /* ------------------------------------------------ (5) a workspace's mention opens its document beside */
+    await press(wc, `${PANE(0)} [data-editor] [data-mention="Second"]`);
+    now = await settledStrip(wc);
+    assert.deepEqual(now.panes.map((p) => p.title), [WS, 'Second'], 'Second\'s document beside; this workspace stays in front');
+    assert.deepEqual(now.panes[1].rows.slice(0, 1), ['Second body']);
+    assert.deepEqual(now.panes[0].marked, ['Second'], 'its mention marked');
+    assert.ok(sideBySide(now) && half(now));
+    assert.equal(await markedInSight(), true);
+    assert.equal(await js(wc, `document.querySelector('${PANE(1)}').getAttribute('aria-label')`), 'Workspace: Second');
+    await press(wc, `${PANE(1)} [data-editor] [data-line="0"] .t`);
+    await key(wc, 'End');
+    await typeKeys(wc, ' typed beside');
+    await until(async () => String(await read({ kind: 'workspace', workspaceId: second.id })).startsWith('Second body typed beside'), 'typing beside saved in Second\'s document');
+    assert.ok(!/typed beside/.test(String(await read({ kind: 'workspace', workspaceId: wid }))), 'none in this one');
+    await press(wc, `${PANE(1)} [data-editor] [data-mention="Gamma"]`);
+    now = await settledStrip(wc);
+    assert.deepEqual(now.panes.map((p) => p.title), [WS, 'Gamma'], 'a note\'s mention in it replaces it in turn');
+    await shot(wc, '4-workspace-beside');
+    console.log('PASS a workspace\'s mention opens its document in the right pane, typed in and saved there');
+
+    /* ------------------------------------------------ @bart in a pane is answered in that note */
     await press(wc, `${PANE(0)} [data-editor] [data-mention="Beta"]`);
     await settledStrip(wc);
     await press(wc, `${PANE(1)} [data-editor] [data-line="0"] .t`);
@@ -197,41 +226,64 @@ app.whenReady().then(async () => {
     await shot(wc, '5-bart-beside');
     console.log('PASS @bart asked in a note beside is answered in that note, never in the document');
 
-    /* ------------------------------------------------ A-01: full screen, and Escape */
+    /* ------------------------------------------------ (3) full screen, and Escape only once nothing else used it */
     const layout = () => js(wc, `({full:document.querySelector('[data-doc-full]').dataset.docFull,rail:getComputedStyle(document.querySelector('aside[aria-label="Sidebar"]')).display,right:getComputedStyle(document.querySelector('section[aria-label="Right pane"]')).display,main:Math.round(document.querySelector('main').getBoundingClientRect().width),window:innerWidth,workspace:!!document.querySelector('main [data-doc-pane]')})`);
+    const focused = () => js(wc, `(()=>{const a=document.activeElement;return !a||a===document.body?'nothing':a.matches('[data-editor]')?'line':a.matches('[data-doc-title]')?'title':a.matches('[data-note-search]')?'+ menu':a.tagName})()`);
+    const escape = async (label, { full, has }) => {
+      await key(wc, 'Escape');
+      await pause(120);
+      const seen = await layout();
+      assert.equal(seen.full, full ? '1' : '0', `${label}: ${full ? 'still' : 'no longer'} full screen`);
+      assert.equal(seen.workspace, true, `${label}: the workspace is still open`);
+      if (has) assert.equal(await focused(), has, `${label}: then ${has} has the key`);
+    };
     await press(wc, '[data-doc-full]');
     let seen = await layout();
     assert.deepEqual([seen.full, seen.rail, seen.right], ['1', 'none', 'none'], 'no sidebar, no Stage');
     assert.equal(seen.main, seen.window, 'the middle column has the whole window');
     now = await settledStrip(wc);
-    assert.ok(now.panes.every((p) => !p.folded), 'with room, the document and the note sit side by side');
+    assert.ok(sideBySide(now) && half(now), `the document and the note side by side, half the window each (${now.panes.map((p) => `${p.width}px`).join(' + ')})`);
     await shot(wc, '6-full');
     console.log(`PASS the full screen hides the sidebar and the Stage (the column is ${seen.main}px; panes ${now.panes.map((p) => `${p.width}px`).join(' + ')})`);
+    // The caret in a line, the @ menu open: the menu, then the line, then the full screen.
     await press(wc, `${PANE(0)} [data-editor] [data-line="0"] .t`);
     await key(wc, 'End');
     await typeKeys(wc, '@');
     await until(() => js(wc, `!!document.querySelector('[data-mention-menu]')`), 'the @ menu');
-    await key(wc, 'Escape');
-    seen = await layout();
-    assert.equal(seen.full, '1', 'Escape closed the @ menu only');
-    assert.equal(await js(wc, `!!document.querySelector('[data-mention-menu]')`), false);
+    await escape('the @ menu open', { full: true, has: 'line' });
+    assert.equal(await js(wc, `!!document.querySelector('[data-mention-menu]')`), false, 'the @ menu shut');
     await key(wc, 'Backspace');
-    await key(wc, 'Escape');
-    seen = await layout();
-    assert.deepEqual([seen.full, seen.rail, seen.right, seen.workspace], ['0', 'flex', 'flex', true], 'Escape while typing left the full screen, and only that');
-    console.log('PASS Escape while typing leaves the full screen (after the @ menu took the first one)');
+    await escape('the caret in a line', { full: true, has: 'nothing' });
+    await escape('nothing left to use it', { full: false });
+    console.log('PASS Escape shuts the @ menu, then takes the caret out of its line, and only the third leaves the full screen');
+    // A field focused: the title.
+    await press(wc, '[data-doc-full]');
+    await press(wc, `${PANE(1)} [data-doc-title]`);
+    assert.equal(await focused(), 'title');
+    await escape('the title focused', { full: true, has: 'nothing' });
+    await escape('then', { full: false });
+    console.log('PASS Escape in a title field leaves the field first, the full screen on the next one');
+    // A menu open: the + menu beside the tabs, its search field focused.
+    await press(wc, '[data-doc-full]');
+    await press(wc, '[data-note-plus]');
+    await until(() => js(wc, `!!document.querySelector('[data-note-picker]')`), 'the + menu');
+    await until(async () => (await focused()) === '+ menu', 'its search field focused');
+    await escape('the + menu open', { full: true });
+    assert.equal(await js(wc, `!!document.querySelector('[data-note-picker]')`), false, 'the + menu shut');
+    await js(wc, 'document.activeElement && document.activeElement.blur()');
+    await escape('then', { full: false });
+    console.log('PASS Escape with the + menu open shuts it; the full screen goes on the next one');
+    // Nothing focused at all: straight out, and never the workspace.
     await press(wc, '[data-doc-full]');
     await js(wc, 'document.activeElement && document.activeElement.blur()');
-    await key(wc, 'Escape');
-    seen = await layout();
-    assert.deepEqual([seen.full, seen.workspace], ['0', true], 'Escape outside the editor leaves the full screen and never the workspace');
+    await escape('nothing focused', { full: false });
     await press(wc, '[data-doc-full]');
     // Its button stays clear of the controls in the window's top-right corner (Connections, the bell, test mode).
     const clear = await js(wc, `(()=>{const b=document.querySelector('[data-doc-full]').getBoundingClientRect(),c=document.querySelector('[data-window-controls]').getBoundingClientRect();return b.right<=c.left||b.bottom<=c.top||b.top>=c.bottom})()`);
     assert.equal(clear, true, 'the full-screen button is not under the window\'s controls');
     await press(wc, '[data-doc-full]');
     assert.equal((await layout()).full, '0', 'the button leaves it too');
-    console.log('PASS Escape outside the editor, and the button, leave the full screen; the workspace stays open');
+    console.log('PASS Escape with nothing focused, and the button, leave the full screen; the workspace stays open');
     console.log('SMOKE OK');
   } catch (error) {
     console.error(error);

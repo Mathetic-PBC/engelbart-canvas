@@ -104,9 +104,9 @@ test('a click below a document that ends on a card still adds a line under it', 
   assert.deepEqual(m.editor.caret, { line: 3, offset: 0 });
 });
 
-// MATH-23: a note's mention clicked opens the note in the pane beside the document, ⌘-click still opens it as a tab, and
-// anything else is opened as before. An Escape the editor used is marked as used, so the window's Escape (leaving the
-// document's full screen) leaves it alone.
+// MATH-23: a note's or a workspace's mention clicked opens its document in the pane beside, ⌘-click still opens a note as
+// a tab and goes to a workspace, and anything else is opened as before. An Escape the editor used (the caret leaving a
+// line included, 2026-10-05) is marked as used, so the window's Escape (leaving the document's full screen) leaves it alone.
 
 const LIBRARY = [
   { id: 'n1', name: 'Plan', type: 'md', tags: ['note'] },
@@ -118,7 +118,7 @@ function inPane(props = {}) {
   const calls = { beside: [], item: [], ws: [] };
   const m = mounted(TEXT, {
     mentionable: LIBRARY,
-    onOpenBeside: (row, link) => calls.beside.push([row.id, link]),
+    onOpenBeside: (row, link) => calls.beside.push([row.kind, row.id, link]),
     onOpenItem: (row) => calls.item.push(row.id),
     onOpenWorkspace: (id) => calls.ws.push(id),
     ...props,
@@ -134,7 +134,7 @@ function inPane(props = {}) {
 test('a note\'s mention clicked opens the note beside the document, with the mention\'s text as its link', () => {
   const p = inPane();
   const e = p.clickOn(p.mention('Plan'));
-  assert.deepEqual(p.calls.beside, [['n1', 'Plan']]);
+  assert.deepEqual(p.calls.beside, [['note', 'n1', 'Plan']]);
   assert.deepEqual(p.calls.item, [], 'not as a tab');
   assert.equal(e.prevented, true);
 });
@@ -143,17 +143,28 @@ test('⌘-click on a note\'s mention still opens it as a tab; other mentions ope
   const p = inPane();
   p.clickOn(p.mention('Plan'), { metaKey: true });
   p.clickOn(p.mention('Paper'));
-  p.clickOn(p.mention('Elsewhere', { ws: 'w2' }));
   p.clickOn(p.mention('Nothing by that name'));
   assert.deepEqual(p.calls.beside, []);
   assert.deepEqual(p.calls.item, ['n1', 'p1'], 'the note as a tab, the pdf on the Stage');
-  assert.deepEqual(p.calls.ws, ['w2'], 'a workspace mention still goes there');
 });
 
-test('an editor with nowhere beside it (a post-it) opens a note\'s mention as before', () => {
+test('a workspace\'s mention clicked opens its document beside; ⌘-click goes to the workspace, as a click did before', () => {
+  const p = inPane();
+  const e = p.clickOn(p.mention('Elsewhere', { ws: 'w2' }));
+  assert.deepEqual(p.calls.beside, [['workspace', 'w2', 'Elsewhere']]);
+  assert.deepEqual(p.calls.ws, [], 'not gone to');
+  assert.equal(e.prevented, true);
+  p.clickOn(p.mention('Elsewhere', { ws: 'w2' }), { metaKey: true });
+  assert.deepEqual(p.calls.ws, ['w2']);
+  assert.equal(p.calls.beside.length, 1);
+});
+
+test('an editor with nowhere beside it (a post-it) opens a note\'s mention and goes to a workspace\'s as before', () => {
   const p = inPane({ onOpenBeside: undefined });
   p.clickOn(p.mention('Plan'));
+  p.clickOn(p.mention('Elsewhere', { ws: 'w2' }));
   assert.deepEqual(p.calls.item, ['n1']);
+  assert.deepEqual(p.calls.ws, ['w2']);
 });
 
 test('the mention whose note is open beside is marked, whatever its case; another, or a workspace\'s, is not', () => {
@@ -169,6 +180,18 @@ test('the mention whose note is open beside is marked, whatever its case; anothe
   editor.props = { ...editor.props, besideLink: null };
   editor.markBeside();
   assert.deepEqual(els.map((el) => el.attrs.has('data-beside')), [false, false, false, false], 'the pane beside closed: no mark is left');
+});
+
+test('the mention of the workspace open beside is marked by its id, not by its name', () => {
+  const { editor } = mounted(TEXT, { besideWorkspace: 'w1' });
+  const mark = (mention, ws) => {
+    const attrs = new Set();
+    return { dataset: ws ? { mention, ws } : { mention }, hasAttribute: (name) => attrs.has(name), toggleAttribute: (name, on) => { if (on) attrs.add(name); else attrs.delete(name); return on; }, attrs };
+  };
+  const els = [mark('Plan', 'w1'), mark('Plan'), mark('Plan', 'w2'), mark('Renamed since', 'w1')];
+  editor.edRef = { current: { querySelectorAll: () => els } };
+  editor.markBeside();
+  assert.deepEqual(els.map((el) => el.attrs.has('data-beside')), [true, false, false, true]);
 });
 
 test('Escape in a field of the editor\'s own, or with a mention\'s card or the model selector open, is marked as used', () => {
@@ -192,9 +215,22 @@ test('Escape in a field of the editor\'s own, or with a mention\'s card or the m
   }
 });
 
-test('Escape on a line of the document is not marked: the window\'s Escape still leaves the full screen', () => {
-  const { editor, line } = mounted();
+test('Escape on a line of the document takes the caret out of it and is marked as used: the full screen stays for the next one', () => {
+  const { editor, root, line } = mounted();
+  editor.caretInfo = () => ({ anchor: { line: 1, offset: 3 }, focus: { line: 1, offset: 3 } });
+  root.blur = () => { root.blurred = true; };
   const e = { key: 'Escape', target: line, preventDefault() { e.prevented = true; } };
   editor.docListeners.keydown(e);
-  assert.equal(e.prevented, undefined);
+  assert.equal(e.prevented, true);
+  assert.equal(root.blurred, true, 'the caret left the line');
+});
+
+test('the window\'s Escape with the key elsewhere shuts the editor\'s open menu first, and only then has nothing to shut', () => {
+  for (const open of [{ mention: { line: 0 } }, { pop: { res: LIBRARY[0], anchor: {} } }, { picker: { kind: 'line', i: 0 } }]) {
+    const { editor } = mounted();
+    Object.assign(editor.state, open);
+    assert.equal(editor.shutMenus(), true, Object.keys(open)[0]);
+    assert.deepEqual([editor.state.mention, editor.state.pop, editor.state.picker], [null, null, null]);
+    assert.equal(editor.shutMenus(), false, 'nothing left open');
+  }
 });
