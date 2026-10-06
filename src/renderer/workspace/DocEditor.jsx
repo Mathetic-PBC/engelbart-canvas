@@ -496,9 +496,12 @@ export default class DocEditor extends React.Component {
   // shows (in the heading's font) for as long as the caret is on the line and goes away when the caret leaves (2026-09-18: hiding it
   // left an empty span the browser typed into, and those characters were lost).
   openIdx(tokens, a, b) { const out = []; let acc = 0; tokens.forEach((tok, k) => { const end = acc + tok.length, pre = tokShown(tok).pre; if (pre && a <= end && b >= acc) out.push(k); acc = end; }); return out; }
-  activeHtml(tokens, flags) {
+  // `marker`: the style of tokens[0] when it is a line's own `## ` or `- ` (an answer's line being edited: faint, so the
+  // line keeps its look and only the mark shows).
+  activeHtml(tokens, flags, marker = null) {
     const [a, b] = this.revealRange(), open = this.openIdx(tokens, a, b); this.openKey = open.join(',');
     return tokens.map((tok, k) => {
+      if (marker && k === 0) return `<span data-src="${esc(tok)}" data-open="1" style="${marker}">${esc(tok)}</span>`;
       if (flags && flags.has(k)) return `<span data-src="${esc(tok)}" data-open="1" style="${FLAG_LOOK}">${esc(tok)}</span>`;
       const isOpen = !tokShown(tok).pre || open.includes(k);
       return `<span data-src="${esc(tok)}" data-open="${isOpen ? 1 : 0}">${isOpen && !AGENT_TOKEN.test(tok) ? esc(tok) : inlineHtml(tok)}</span>`;
@@ -634,7 +637,7 @@ export default class DocEditor extends React.Component {
       if (p.folded || (at && (at.gap || at.underCard))) return `<div ${raw} contenteditable="false" data-readonly="1" style="display:none"></div>`;
       if (at && at.card) return this.cardHtml(raw, at.card);
       // One line of an answer, in the grey card with one continuous rule down its left. The caret's line shows its source
-      // on the design's focus tint; the rule and the card stay where they are.
+      // on a light focus tint; the rule and the card stay where they are.
       // (An answer with no question above it, left by an edit outside the app, is a card of its own.)
       const near = at ? null : this.lines(), first = at ? at.first : parseLine(near[i - 1] ?? '').type !== 'reply', closes = at ? at.closes : parseLine(near[i + 1] ?? '').type !== 'reply', last = at ? at.lastBody : closes;
       if (p.code) return this.answerCodeHtml(i, raw, p, active, first, closes, last, !at);
@@ -646,8 +649,13 @@ export default class DocEditor extends React.Component {
       const paper = at && at.agent === 'discover' && !active ? this.guidePaper(i, p.text, at) : null, mark = paper ? this.paperSaveHtml(i, paper) : '';
       // Its Try line (2026-10-04) has the repository's mark just before the link.
       const repo = at && at.agent === 'discover' && !active && !paper ? guideRepo(p.text) : null, run = repo ? this.repoMarkHtml(repo) : '';
-      const a = this.answerLook(p.text), content = active ? this.activeHtml(tokensOf(p, line)) : recap ? this.recapHtml(recap, first) : (run ? a.content.replace('<a ', `${run}<a `) : a.content) + mark;
-      return `<div ${raw}${mark ? ' data-paper-line="1"' : ''} style="padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(!at && first, closes)};margin-bottom:${closes ? 14 : 0}px;color:#4d4d4d;font-size:16px;line-height:1.65;cursor:text"><span style="display:block;padding:${first ? 2 : 0}px 0 ${last ? 2 : 0}px 12px;border-left:2px solid #dcdcdc"><span class="t" style="display:block;min-height:${a.minHeight}px;border-radius:4px;${a.look}${mark ? 'position:relative;padding-right:28px;' : ''}${active ? 'background:#f2f2f2;box-shadow:0 0 0 4px #f2f2f2;' : ''}">${content || '<br>'}</span></span></div>`;
+      // The caret's line keeps its heading's size or its bullet's indent: its `## ` or `- ` shows faint where the heading
+      // starts or the bullet stood, the same characters as before, so the caret and offsets are as they were.
+      const q = active ? parseLine(p.text) : null, cut = q && (q.type === 'h' || isMarked(q.type)) ? p.text.length - q.text.length : 0;
+      const tokens = cut ? [p.text.slice(0, cut), ...p.text.slice(cut).split(INLINE).filter(Boolean)] : null;
+      const hang = cut && q.type !== 'h' ? `padding-left:${q.depth * 18}px;` : '';
+      const a = this.answerLook(p.text), content = active ? (tokens ? this.activeHtml(tokens, null, `color:#b5b5b5;${q.type === 'h' ? '' : 'margin-right:4px;'}`) : this.activeHtml(tokensOf(p, line))) : recap ? this.recapHtml(recap, first) : (run ? a.content.replace('<a ', `${run}<a `) : a.content) + mark;
+      return `<div ${raw}${mark ? ' data-paper-line="1"' : ''} style="padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(!at && first, closes)};margin-bottom:${closes ? 14 : 0}px;color:#4d4d4d;font-size:16px;line-height:1.65;cursor:text"><span style="display:block;padding:${first ? 2 : 0}px 0 ${last ? 2 : 0}px 12px;border-left:2px solid #dcdcdc"><span class="t" style="display:block;min-height:${a.minHeight}px;border-radius:4px;${a.look}${hang}${mark ? 'position:relative;padding-right:28px;' : ''}${active ? 'background:#f5f5f5;box-shadow:0 0 0 4px #f5f5f5;' : ''}">${content || '<br>'}</span></span></div>`;
     }
     if (p.type === 'quote') {
       // The prototype's replies: read-only, as they were.
