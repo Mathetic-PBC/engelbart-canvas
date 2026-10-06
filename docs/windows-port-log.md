@@ -7,7 +7,8 @@ Newest status first; the sections below are kept current.
 
 - 2026-10-06, the open decisions settled (see "Needs a decision"): Engelbart's own git keeps LF on Windows
   (`core.autocrlf=false`, with a test that the Mac's arguments are unchanged), and the old multi-window smoke test is
-  `scripts/smoke-new-window.cjs`. CI run for this commit: below.
+  `scripts/smoke-new-window.cjs`. Run 15 on de68414 passed on macos-latest (1021 tests, 1020 pass, the bundled-Git skip;
+  `npm run package`) and windows-latest (1024 tests, 987 pass, 37 skipped, 0 failed; installer; smoke test).
 
 - 2026-10-06, **done on 4e2d95b**: run 14 (https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37438849695)
   passed on macos-latest (npm ci; npm test 1020 tests, 1019 pass, 1 skipped, the bundled-Git test's own; build;
@@ -233,6 +234,7 @@ modes). Expectations written with the platform's separator (`path.join`, `path.s
 | 55fbf8b | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37431216041 | ✓ | ✓ installer, smoke | ✗ (allowed) | green on both (before the pid-reuse guard) |
 | e2e764d | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37433090130 | ✓ | ✗ runner lost after 49 min | ✗ (allowed) | log-only commit; led to the pid-reuse guard |
 | 4e2d95b | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37438849695 | ✓ | ✓ installer, smoke | ✗ (allowed) | **green on both with the pid-reuse guard: the done commit** |
+| de68414 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37445676731 | ✓ | ✓ installer, smoke | ✗ (allowed) | decisions applied (LF on Windows, smoke-new-window.cjs): the branch's latest green |
 
 ## Needs a decision
 
