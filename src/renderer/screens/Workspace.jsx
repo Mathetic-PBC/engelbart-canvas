@@ -161,7 +161,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const [docs, setDocs] = React.useState({});
   const [rightMode, setRightMode] = React.useState('stage');
   const stageRef = React.useRef(null);
-  const [stageFull, setStageFull] = React.useState(false); // the Stage takes the document's place
+  const [stageFull, setStageFull] = React.useState(false); // the right pane (the Stage or the terminal) takes the document's place
   // The document takes the whole window (MATH-23): no sidebar, no right pane. Never with the Stage's full screen: turning
   // either on turns the other off.
   const [docFull, setDocFull] = React.useState(false);
@@ -1308,8 +1308,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     const box = rightBox.current || event.currentTarget.parentElement.getBoundingClientRect();
     setRightWidth(clamp(Math.round(box.right - event.clientX - 1), RIGHT_MIN, rightRoom));
   };
-  // The Stage's full screen: it takes the document's place (its header column too); the sidebar stays. Only while it is in front.
-  const full = stageFull && rightMode === 'stage';
+  // The right pane's full screen: the Stage or the terminal, whichever is in front, takes the document's place (its header
+  // column too); the sidebar stays. Switching between them keeps it.
+  const full = stageFull;
   const paneWidth = full ? Math.max(RIGHT_MIN, viewWidth - rail - 1) : right;
 
   // Where the trash can is, for the post-its (main/post-its/views.cjs throws away a card let go over it): sent whenever it

@@ -15,7 +15,7 @@ const RightPane = React.forwardRef(function RightPane({ mode, projectDir, projec
   return (
     <section aria-label="Right pane" style={style}>
       <Stage ref={stageRef} projectId={projectId} visible={mode === 'stage'} full={full} onFull={onFull} onShow={onShowStage} onPage={onPage} onFront={onFront} save={save} library={library} inRail={inRail} onError={onError} onOpenItem={onOpenItem} mentionItems={mentionItems} onMentionOpen={onMentionOpen} />
-      <TerminalPane cwd={projectDir} projectId={projectId} visible={mode === 'terminal'} />
+      <TerminalPane cwd={projectDir} projectId={projectId} visible={mode === 'terminal'} full={full} onFull={onFull} />
     </section>
   );
 });
