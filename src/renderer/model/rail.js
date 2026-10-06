@@ -41,13 +41,20 @@ export function railSections(rows) {
   return RAIL_SECTIONS.map((section) => ({ ...section, rows: by.get(section.key) }));
 }
 
+// A web address without its scheme (github.com, example.org/page), as the main process reads one (store/library.cjs).
+const BARE_HOST = /^(?:www\.)?(?:[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?\.)+[a-z]{2,24}(?::\d{1,5})?(?:[/?#]\S*)?$/i;
+const FILE_NAME = /^[^./]+\.(?:md|markdown|txt|pdf|html?|png|jpe?g|gif|webp|svg|docx?|pptx?|xlsx?|csv|json|ya?ml|py|js|ts|ipynb|tex|bib|zip)$/i;
+
 /** Something the library could add, by its spelling alone: a web address, an arXiv or DOI id, a git remote, a path from / or ~/. The main process decides for real. */
 export function looksAddable(value) {
   const v = String(value || '').trim().replace(/^["'](.*)["']$/, '$1').trim();
   if (!v || /\s/.test(v)) return false;
   return /^https?:\/\/\S+\.\S*/i.test(v) || /^(arxiv:\s*)?\d{4}\.\d{4,5}(v\d+)?$/i.test(v) || /^(doi:\s*)?10\.\d{4,9}\/\S+$/i.test(v)
-    || /^(?:ssh|git):\/\//i.test(v) || /^[\w.-]+@[\w.-]+:\S+/.test(v) || /^(~\/|\/|file:\/\/)\S/.test(v);
+    || /^(?:ssh|git):\/\//i.test(v) || /^[\w.-]+@[\w.-]+:\S+/.test(v) || /^(~\/|\/|file:\/\/)\S/.test(v)
+    || bareAddress(v);
 }
+
+const bareAddress = (v) => BARE_HOST.test(v) && !FILE_NAME.test(v);
 
 /** What a row is searched by: its name, where it is, the words shown beside it, and its summary. */
 const hay = (row) => [row.name, row.url || '', row.path || '', row.folder_path || '', kindLabel(row), row.summary || ''].join(' ').toLowerCase();
@@ -78,16 +85,22 @@ function hayThenBody(rows, byHay, byBody) {
  */
 export function searchRows({ query, library, inRail, found, bodies = null }) {
   const typed = String(query || '').trim();
-  if (looksAddable(typed)) {
-    if (!found || found.error) return [];
-    if (found.row) return [{ kind: 'item', key: found.row.id, row: found.row, name: found.row.name, tag: inRail(found.row.id) ? 'here' : kindLabel(found.row) }];
-    return found.found ? [{ kind: 'fresh', key: `fresh:${typed}`, found: found.found, name: found.found.name, tag: `new ${kindLabel(found.found)}` }] : [];
-  }
+  const item = (row) => ({ kind: 'item', key: row.id, row, name: row.name, tag: inRail(row.id) ? 'here' : kindLabel(row) });
+  const answered = () => {
+    if (!found || found.error) return null;
+    if (found.row) return item(found.row);
+    return found.found ? { kind: 'fresh', key: `fresh:${typed}`, found: found.found, name: found.found.name, tag: `new ${kindLabel(found.found)}` } : null;
+  };
+  // A bare address (anthropic.com) is still searched for as text first, then is the row the main process found for it.
+  const bare = bareAddress(typed);
+  if (looksAddable(typed) && !bare) { const one = answered(); return one ? [one] : []; }
   const needle = typed.toLowerCase();
   const hits = needle
     ? hayThenBody(library, (row) => hay(row).includes(needle), (row) => bodyOf(bodies, 'items', row.id).includes(needle))
     : library.filter((row) => !inRail(row.id) && !row.tags.includes('note') && row.type !== 'image').slice(0, 4);
-  return hits.map((row) => ({ kind: 'item', key: row.id, row, name: row.name, tag: inRail(row.id) ? 'here' : kindLabel(row) }));
+  const rows = hits.map(item);
+  const one = bare ? answered() : null;
+  return one && !rows.some((row) => row.key === one.key) ? [...rows, one] : rows;
 }
 
 const ATTACH_RECENT = 8; // what "Add from library" lists before anything is typed

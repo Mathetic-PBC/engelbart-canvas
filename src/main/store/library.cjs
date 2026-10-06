@@ -227,6 +227,10 @@ async function bodiesForProject(ctx, projectId) {
 // known. "Saved locally" means `folder_path` is set and the folder is still there; deleting the
 // folder removes nothing from the library.
 
+// A web address typed without its scheme: a host of dotted labels ending in a letters-only top-level domain, then
+// optionally a port and a path. A name that ends like a file (one dot, an extension the library opens) is not one.
+const BARE_HOST_RE = /^(?:www\.)?(?:[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?\.)+[a-z]{2,24}(?::\d{1,5})?(?:[/?#]\S*)?$/i;
+const FILE_NAME_RE = /^[^./]+\.(?:md|markdown|txt|pdf|html?|png|jpe?g|gif|webp|svg|docx?|pptx?|xlsx?|csv|json|ya?ml|py|js|ts|ipynb|tex|bib|zip)$/i;
 const GITHUB_RE = /^(?:https?:\/\/(?:www\.)?github\.com\/|git@github\.com:)([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:[/?#].*)?$/i;
 const MAX_GIT_CONFIG_BYTES = 1024 * 1024;
 
@@ -342,6 +346,8 @@ function resolveAddition(input, { homeDir }) {
   if (typeof input !== 'string' || input.length > 4096 || input.includes('\0')) throw new TypeError('Paste a link or a path');
   let value = input.trim().replace(/^["'](.*)["']$/, '$1').trim();
   if (!value) throw new TypeError('Paste a link or a path');
+  // A bare address (github.com, example.org/page): an https link, unless it reads as a file's name (notes.md, paper.pdf).
+  if (BARE_HOST_RE.test(value) && !FILE_NAME_RE.test(value)) value = `https://${value}`;
   let match;
   const address = (name, url) => ({ type: 'website', tags: addressTags(url), name, url });
   if ((match = value.match(ARXIV_RE))) return address(`arXiv ${match[1]}`, `https://arxiv.org/abs/${match[1]}`);

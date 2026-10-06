@@ -237,3 +237,18 @@ test('"Add from library": every word in the name, place, kind or summary first; 
   }
   assert.deepEqual(attachRows({ query: '', library: dated, bodies }).map((r) => r.key), attachRows({ query: '', library: dated }).map((r) => r.key), 'empty: the newest, as before');
 });
+
+test('looksAddable: a web address typed without https:// is one, a file\'s bare name is not (2026-10-06)', async () => {
+  const { looksAddable } = await load();
+  for (const yes of ['github.com', 'github.com/anthropics/claude-code', 'www.example.org/a?b=1', 'example.co.uk']) assert.equal(looksAddable(yes), true, yes);
+  for (const no of ['notes.md', 'paper.pdf', 'localhost', 'hello']) assert.equal(looksAddable(no), false, no);
+});
+
+test('search: a bare address is still found as text in the library first, then the row the main process found for it (2026-10-06)', async () => {
+  const { searchRows } = await load();
+  const inRail = () => false;
+  const pages = [row('w1', 'Contextual Retrieval', 'website', [], { url: 'https://www.anthropic.com/news/contextual-retrieval' })];
+  assert.deepEqual(searchRows({ query: 'anthropic.com', library: pages, inRail }).map((r) => r.key), ['w1']);
+  const fresh = { found: { name: 'anthropic.com', type: 'website', tags: [], url: 'https://anthropic.com/' } };
+  assert.deepEqual(searchRows({ query: 'anthropic.com', library: pages, inRail, found: fresh }).map((r) => [r.kind, r.key]), [['item', 'w1'], ['fresh', 'fresh:anthropic.com']]);
+});
