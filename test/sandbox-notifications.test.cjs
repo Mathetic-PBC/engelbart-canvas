@@ -314,7 +314,7 @@ test('a repository clicked in the sidebar opens its live preview, else its build
   assert.equal(repositoryClick(undefined), null);
   assert.equal(repositoryClick(null), null);
   const workspace = fs.readFileSync(path.join(__dirname, '../src/renderer/screens/Workspace.jsx'), 'utf8');
-  assert.match(workspace, /const onRowClick = [\s\S]*?repositoryClick\(sandbox\)[\s\S]*?sandboxes\.open\(sandbox\.run\)[\s\S]*?sandboxes\.openBuild\(row\)[\s\S]*?openItem\(row\)/);
+  assert.match(workspace, /const onRowClick = [\s\S]*?repositoryClick\(sandbox\)[\s\S]*?sandboxes\.open\(sandbox\.run\)[\s\S]*?sandboxes\.openBuild\(row\)[\s\S]*?openItem\(row[,)]/);
 });
 
 test('a repository ended only because nobody opened it for 7 days is built again on click; asleep it opens as live', () => {
