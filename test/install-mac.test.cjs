@@ -111,9 +111,11 @@ async function installing(t) {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  await until(() => fs.existsSync(ready) || install.exitCode !== null, 30_000, 'the ready file');
+  // The script makes the ready file just before it says so: wait for both, or a busy machine reads the output too soon.
+  const said = new RegExp(`Ready; Engelbart ${VERSION.replace(/\./g, '\\.')} is installed when Engelbart quits\\.`);
+  await until(() => (fs.existsSync(ready) && said.test(run.output)) || install.exitCode !== null, 30_000, 'the ready file and its line');
   assert.ok(fs.existsSync(ready), run.output);
-  assert.match(run.output, new RegExp(`Ready; Engelbart ${VERSION.replace(/\./g, '\\.')} is installed when Engelbart quits\\.`));
+  assert.match(run.output, said);
   return run;
 }
 
