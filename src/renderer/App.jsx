@@ -408,18 +408,15 @@ export default function App() {
       <UpdateBanner />
       {setup && tools && <ToolSetup snapshot={tools} ids={setup.ids} mode={setup.mode} onClose={() => setSetup(null)} />}
       <WindowEdges />
-      <WindowControls>
-        {/* only in a developer's copy (src/main/developer.cjs): the app people download has no test mode */}
-        {config.testModeAvailable && (
-          <TestToggle
-            testMode={config.testMode}
-            busy={busy}
-            onToggle={toggleTest}
-            onReset={() => resetTest(false)}
-            onStartNew={() => resetTest(true)}
-            onReveal={() => api.reveal(config.testRoot).catch(fail)}
-          />
-        )}
+      {/* test mode, its pill and Settings' Test data section, only in a developer's copy (src/main/developer.cjs): the app
+          people download has no test mode */}
+      <WindowControls test={config.testModeAvailable ? {
+        testMode: config.testMode,
+        onReset: () => resetTest(false),
+        onStartNew: () => resetTest(true),
+        onReveal: () => api.reveal(config.testRoot).catch(fail),
+      } : null}>
+        {config.testModeAvailable && <TestToggle testMode={config.testMode} busy={busy} onToggle={toggleTest} />}
       </WindowControls>
     </div>
     </SandboxProgress>

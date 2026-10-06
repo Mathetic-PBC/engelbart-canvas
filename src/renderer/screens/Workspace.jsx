@@ -395,8 +395,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // was written in (`key`, `ref`): one in a note beside the document is answered in that note (MATH-23).
   const [asks, setAsks] = React.useState({});
   // What the @bart line's chip offers and what its flags are checked against. The files behind it are read again for every
-  // question, so this is read again whenever the window comes back to the front, and once a question has been sent: one
-  // asked with a model picked by hand makes that where the next one starts (main: bart/choices.cjs).
+  // question, so this is read again whenever the window comes back to the front, once a question has been sent (one
+  // asked with a model picked by hand makes that where the next one starts; main: bart/choices.cjs), and after Settings
+  // saves a default or clears a pick (ui/Settings.jsx, in any window).
   const [bartModels, setBartModels] = React.useState(null);
   const liveRef = React.useRef(true);
   const loadBartModels = React.useCallback(() => api.bartModels().then((models) => { if (liveRef.current) setBartModels(models); }).catch(() => {}), []);
@@ -404,7 +405,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     liveRef.current = true;
     loadBartModels();
     window.addEventListener('focus', loadBartModels);
-    return () => { liveRef.current = false; window.removeEventListener('focus', loadBartModels); };
+    const off = api.onModelsChanged ? api.onModelsChanged(loadBartModels) : () => {};
+    return () => { liveRef.current = false; window.removeEventListener('focus', loadBartModels); off(); };
   }, [loadBartModels]);
   const docsRef = React.useRef(docs);
   docsRef.current = docs;

@@ -114,6 +114,13 @@ const engelbartAPI = Object.freeze({
   askBart: invoke('ask-bart'),
   stopBart: invoke('stop-bart'),
   bartModels: invoke('bart-models'),
+  // Settings › Intelligence (src/main/bart/settings.cjs): { models, choices, usable, offered, cli }; a save of the defaults
+  // ({ provider, buildProvider, bart, brainstorm, discover, build }) and "Use default" ('bart' | 'build' | 'quick') answer
+  // the same, and every window hears onModelsChanged after either.
+  settingsModels: invoke('settings-models'),
+  saveSettingsModels: invoke('save-settings-models'),
+  clearModelChoice: invoke('clear-model-choice'),
+  onModelsChanged: (callback) => subscribe('engelbart:models-changed', callback),
   copyText: invoke('copy-text'),
   onBartProgress: (callback) => subscribe('engelbart:bart-progress', callback),
   // Build (src/main/build): a workspace's coding agent in a worktree of its own. Every change of one arrives on onBuild as

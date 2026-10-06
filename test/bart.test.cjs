@@ -654,7 +654,7 @@ test('what can be resumed outlives the app, and another workspace open in betwee
 
 const card = require('../src/main/bart/card.cjs');
 const { BRAINSTORM_SYSTEM_PROMPT } = require('../src/main/bart/brainstorm-system-prompt.cjs');
-const { readBrainstorm, BRAINSTORM_STEPS } = require('../src/main/bart/models.cjs');
+const { readBrainstorm, DEFAULT_BRAINSTORM } = require('../src/main/bart/models.cjs');
 const { loadSystemPrompt, BRAINSTORM_IDLE_MS, BRAINSTORM_PATHS, MAX_BRAINSTORM_CARDS, AGENTS } = require('../src/main/bart/ask.cjs');
 
 const FOCUS = { say: '', card: 'focus', focus: { title: 'Which one?', options: [{ label: 'Retries', why: 'In notes.md.' }, { label: 'The "slow" path' }] }, ready: false };
@@ -816,9 +816,10 @@ test('a map card round-trips through the document, answers as before, and its an
   assert.equal(card.answersSoFar([{ question: '', answer: kept.body }], '(skipped)'), 0);
 });
 
-test('@brainstorm runs on its fixed step: Sonnet high on Claude Code, Sol medium on Codex; a flag picks nothing and is not part of the question, and the models file has no say (2026-10-02)', () => {
+test('@brainstorm runs on the models file\'s step: Sonnet high on Claude Code, Sol medium on Codex unless edited; a flag picks nothing and is not part of the question (2026-10-02; in the file again 2026-10-06)', () => {
   const step = (text, models) => readBrainstorm(text, models).steps.map((s) => `${s.name} ${s.effort}`);
-  assert.deepEqual(BRAINSTORM_STEPS, { openai: { model: 'sol', effort: 'medium' }, anthropic: { model: 'sonnet', effort: 'high' } });
+  assert.deepEqual(DEFAULT_BRAINSTORM.providers, { anthropic: { model: 'sonnet', effort: 'high' }, openai: { model: 'sol', effort: 'medium' } });
+  assert.deepEqual(DEFAULT_MODELS.brainstorm, DEFAULT_BRAINSTORM, 'the models file offers it');
   assert.deepEqual(step('', DEFAULTS), ['Sonnet high']);
   assert.deepEqual(step('picked "x"', MODELS), ['Sol medium']);
   for (const [models, at] of [[DEFAULTS, 'Sonnet high'], [MODELS, 'Sol medium']]) {
@@ -828,17 +829,33 @@ test('@brainstorm runs on its fixed step: Sonnet high on Claude Code, Sol medium
   assert.deepEqual([readBrainstorm('--fable picked "x" --high', MODELS).provider, readBrainstorm('--fable picked "x" --high', MODELS).question], ['openai', 'picked "x"'], 'a model of the other provider moves nothing either');
   assert.equal(readBrainstorm('', DEFAULTS).pinned, false, 'nothing picked by hand, so nothing is kept as the next start');
   assert.deepEqual(step('', startingAt(DEFAULTS, 'bart', { provider: 'openai', model: 'astra', effort: 'xhigh' })), ['Sol medium'], 'on the provider an @bart question would start on, at its own step');
-  // A brainstorm block left in a file is not read; a provider without the step's model starts on its ladder's first step.
+  // The file's step is read; a provider without the step's model starts on the default, then on its ladder's first step.
   const edited = normalizeModels({ ...DEFAULT_MODELS, brainstorm: { providers: { anthropic: { model: 'opus', effort: 'xhigh' }, openai: { model: 'astra', effort: 'high' } } } });
-  assert.equal(edited.brainstorm, undefined);
-  assert.deepEqual([step('', edited), step('', { ...edited, provider: 'openai' })], [['Sonnet high'], ['Sol medium']]);
+  assert.deepEqual(edited.brainstorm.providers, { anthropic: { model: 'opus', effort: 'xhigh' }, openai: { model: 'astra', effort: 'high' } });
+  assert.deepEqual([step('', edited), step('', { ...edited, provider: 'openai' })], [['Opus xhigh'], ['Astra high']]);
+  assert.deepEqual(step('--sonnet hello', edited), ['Opus xhigh'], 'a flag still picks nothing');
   const anthropic = DEFAULT_MODELS.providers.anthropic;
   const noSonnet = normalizeModels({ ...DEFAULT_MODELS, providers: { ...DEFAULT_MODELS.providers, anthropic: { ...anthropic, models: { opus: anthropic.models.opus, fable: anthropic.models.fable }, ladder: [{ model: 'opus', effort: 'medium' }] } } });
   assert.deepEqual(step('', noSonnet), ['Opus medium']);
-  assert.ok(!('brainstorm' in DEFAULT_MODELS), 'the models file no longer offers it');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-models-brainstorm-'));
   loadModels(root);
-  assert.ok(!('brainstorm' in JSON.parse(fs.readFileSync(path.join(root, MODELS_FILE), 'utf8'))), 'a new file is written without one');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, MODELS_FILE), 'utf8')).brainstorm, DEFAULT_BRAINSTORM, 'a new file is written with one');
+});
+
+test('normalizeBrainstorm: each step one of its provider\'s @bart models and efforts, else the default, else the ladder\'s first; loose words are read as flags are', () => {
+  const { normalizeBrainstorm } = require('../src/main/bart/models.cjs');
+  const steps = (value, providers = DEFAULTS.providers) => normalizeBrainstorm(value, providers).providers;
+  assert.deepEqual(steps(null), DEFAULT_BRAINSTORM.providers);
+  assert.deepEqual(steps({ providers: 'nope' }), DEFAULT_BRAINSTORM.providers);
+  assert.deepEqual(steps({ providers: { anthropic: { model: 'Opus', effort: 'Extra High' }, openai: { model: 'luna', effort: 'ultra' } } }), { anthropic: { model: 'opus', effort: 'xhigh' }, openai: { model: 'luna', effort: 'ultra' } });
+  assert.deepEqual(steps({ providers: { anthropic: { model: 'gone', effort: 'high' }, openai: { model: 'sol', effort: 'max' } } }), DEFAULT_BRAINSTORM.providers, 'a model not listed, or an effort the provider does not offer: the default');
+  assert.deepEqual(steps({ providers: { anthropic: { model: 'opus' }, openai: ['sol', 'high'] } }), DEFAULT_BRAINSTORM.providers, 'half a step, or not an object: the default');
+  assert.deepEqual(steps({ providers: { mistral: { model: 'x', effort: 'high' } } }), DEFAULT_BRAINSTORM.providers, 'an unknown provider is dropped');
+  const anthropic = DEFAULT_MODELS.providers.anthropic;
+  const opusOnly = normalizeModels({ ...DEFAULT_MODELS, providers: { ...DEFAULT_MODELS.providers, anthropic: { ...anthropic, models: { opus: anthropic.models.opus }, ladder: [{ model: 'opus', effort: 'medium' }] } } });
+  assert.deepEqual(steps({ providers: { anthropic: { model: 'fable', effort: 'high' } } }, opusOnly.providers).anthropic, { model: 'opus', effort: 'medium' }, 'neither listed: the ladder\'s first step');
+  assert.equal(normalizeBrainstorm({ about: 'Mine.' }, DEFAULTS.providers).about, 'Mine.');
+  assert.equal(normalizeBrainstorm({}, DEFAULTS.providers).about, DEFAULT_BRAINSTORM.about);
 });
 
 test('the editor marks no flag on an @brainstorm line, and still marks them on @bart and @discover lines (B-03)', async () => {
@@ -1589,9 +1606,9 @@ test('@discover has three levels a provider: Sonnet medium, Opus high, Opus max 
   assert.equal(plan('x', [{ question: '', answer: 'a' }]).prior.length, 1, 'an empty opening is a turn');
 });
 
-test('a models file left as 2026-09-30 wrote it: @discover\'s untouched step becomes the three levels, @brainstorm\'s block goes; a step of the person\'s own is the standard level, and a brainstorm block of their own stays unread', () => {
+test('a models file left as 2026-09-30 wrote it: @discover\'s untouched step becomes the three levels, @brainstorm\'s untouched block the new one; a step of the person\'s own is the standard level, and a brainstorm step of their own stays and is read (2026-10-06)', () => {
   for (const withBase of [true, false]) {
-    const shipped = JSON.parse(JSON.stringify(PAST_DEFAULT_MODELS.at(-1)));
+    const shipped = JSON.parse(JSON.stringify(PAST_DEFAULT_MODELS.at(-2)));
     assert.deepEqual([shipped.discover.providers.anthropic, !!shipped.brainstorm], [{ model: 'opus', effort: 'high' }, true], 'the 09-30 shape');
     const write = (value) => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-models-1002-'));
@@ -1604,7 +1621,7 @@ test('a models file left as 2026-09-30 wrote it: @discover\'s untouched step bec
     const file = JSON.parse(fs.readFileSync(path.join(untouched, MODELS_FILE), 'utf8'));
     const how = withBase ? 'with a base' : 'without one';
     assert.deepEqual(file.discover, DEFAULT_DISCOVER, `the new levels and their about reach the file, ${how}`);
-    assert.equal(file.brainstorm, undefined, `the brainstorm block goes, ${how}`);
+    assert.deepEqual(file.brainstorm, DEFAULT_BRAINSTORM, `the brainstorm block is the new one, ${how}`);
     assert.deepEqual(models.discover.providers, DEFAULT_DISCOVER.providers);
     assert.deepEqual(loadModels(untouched), models, 'and stays so');
 
@@ -1617,7 +1634,45 @@ test('a models file left as 2026-09-30 wrote it: @discover\'s untouched step bec
     const kept = JSON.parse(fs.readFileSync(path.join(edited, MODELS_FILE), 'utf8'));
     assert.deepEqual(kept.discover.providers, { anthropic: { ...DEFAULT_DISCOVER.providers.anthropic, standard: { model: 'fable', effort: 'xhigh' } }, openai: { ...DEFAULT_DISCOVER.providers.openai, standard: { model: 'sol', effort: 'xhigh' } } }, `the file holds three levels, their step the standard one, ${how}`);
     assert.deepEqual(kept.brainstorm.providers.anthropic, { model: 'opus', effort: 'max' }, 'what they wrote is not taken out of the file');
-    assert.deepEqual([readDiscover('why', theirs).steps[0].name, readDiscover('why', theirs).steps[0].effort, readBrainstorm('', theirs).steps[0].name, readBrainstorm('', theirs).steps[0].effort], ['Fable', 'xhigh', 'Sonnet', 'high'], 'but it is not read');
+    assert.deepEqual([readDiscover('why', theirs).steps[0].name, readDiscover('why', theirs).steps[0].effort, readBrainstorm('', theirs).steps[0].name, readBrainstorm('', theirs).steps[0].effort], ['Fable', 'xhigh', 'Opus', 'max'], 'and it is read');
+  }
+});
+
+test('a models file left as 2026-10-02 wrote it (no brainstorm block) gets the new one; values the person edited stay, a brainstorm block of their own too (2026-10-06)', () => {
+  for (const withBase of [true, false]) {
+    const shipped = JSON.parse(JSON.stringify(PAST_DEFAULT_MODELS.at(-1)));
+    assert.deepEqual([!!shipped.brainstorm, !!shipped.discover.providers.anthropic.deep], [false, true], 'the 10-02 shape');
+    const write = (value) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-models-1006-'));
+      fs.writeFileSync(path.join(root, MODELS_FILE), JSON.stringify(value));
+      if (withBase) { fs.mkdirSync(path.join(root, '.defaults')); fs.writeFileSync(path.join(root, '.defaults', MODELS_FILE), JSON.stringify(shipped)); }
+      return root;
+    };
+    const how = withBase ? 'with a base' : 'without one';
+    const untouched = write(shipped);
+    const models = loadModels(untouched);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(untouched, MODELS_FILE), 'utf8')), DEFAULT_MODELS, `the file is today's defaults, ${how}`);
+    assert.deepEqual(models.brainstorm.providers, DEFAULT_BRAINSTORM.providers);
+
+    const mine = JSON.parse(JSON.stringify(shipped));
+    mine.providers.anthropic.ladder = [{ model: 'opus', effort: 'high' }, { model: 'fable', effort: 'xhigh' }];
+    mine.discover.providers.openai.deep = { model: 'astra', effort: 'xhigh' };
+    mine.build.providers.anthropic.default = { model: 'fable', effort: 'max' };
+    mine.myOwnKey = { kept: true };
+    const edited = write(mine);
+    const theirs = loadModels(edited);
+    const kept = JSON.parse(fs.readFileSync(path.join(edited, MODELS_FILE), 'utf8'));
+    assert.deepEqual(kept.brainstorm, DEFAULT_BRAINSTORM, `the block is added, ${how}`);
+    assert.deepEqual([kept.providers.anthropic.ladder, kept.discover.providers.openai.deep, kept.build.providers.anthropic.default, kept.myOwnKey], [mine.providers.anthropic.ladder, { model: 'astra', effort: 'xhigh' }, { model: 'fable', effort: 'max' }, { kept: true }], `what they edited stays, ${how}`);
+    assert.deepEqual(readQuestion('why?', theirs).steps.map((s) => `${s.name} ${s.effort}`), ['Opus high', 'Fable xhigh']);
+
+    // A brainstorm block a person kept from 2026-09-30 (the 10-02 merge left it, unread) stays, and is read now.
+    const theirsBlock = JSON.parse(JSON.stringify(shipped));
+    theirsBlock.brainstorm = { about: 'Mine.', providers: { anthropic: { model: 'fable', effort: 'high' }, openai: { model: 'sol', effort: 'medium' } } };
+    const old = write(theirsBlock);
+    const read = loadModels(old);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(old, MODELS_FILE), 'utf8')).brainstorm, theirsBlock.brainstorm, `their block is not replaced, ${how}`);
+    assert.deepEqual([readBrainstorm('', read).steps[0].name, readBrainstorm('', read).steps[0].effort], ['Fable', 'high']);
   }
 });
 

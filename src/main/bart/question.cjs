@@ -63,6 +63,12 @@ function readFlags(text, models) {
   return { chosen, effort, spans, rest: words.map((held) => held.word).join(' ') };
 }
 
+/** Whether `rung` is above `than` on a provider's list: a later model, or the same one at a higher effort. */
+function above(entry, rung, than) {
+  const order = Object.keys(entry.models);
+  return order.indexOf(rung.model) > order.indexOf(than.model) || (rung.model === than.model && EFFORTS.indexOf(rung.effort) > EFFORTS.indexOf(than.effort));
+}
+
 /**
  * The steps a question without flags climbs: the ladder, or, when the person last picked by hand (`start`, 2026-09-29:
  * ./models.cjs startingAt), that pick and then the ladder's steps above it — a later model, or the same one at a higher effort.
@@ -70,9 +76,7 @@ function readFlags(text, models) {
 function ladderOf(entry) {
   const start = entry.start;
   if (!start || !entry.models[start.model] || !entry.efforts.includes(start.effort)) return entry.ladder;
-  const order = Object.keys(entry.models);
-  const above = (rung) => order.indexOf(rung.model) > order.indexOf(start.model) || (rung.model === start.model && EFFORTS.indexOf(rung.effort) > EFFORTS.indexOf(start.effort));
-  return [start, ...entry.ladder.filter(above)];
+  return [start, ...entry.ladder.filter((rung) => above(entry, rung, start))];
 }
 
 /**
@@ -215,4 +219,4 @@ function withChoice(text, models, { model, effort }) {
   return [`--${model}`, `--${effort}`, rest].filter(Boolean).join(' ');
 }
 
-module.exports = { EFFORTS, EFFORT_LABELS, MODES, effortOf, modelOf, readFlags, ladderOf, readQuestion, readMode, readProvider, levelOf, readDiscover, withMode, discoverSpans, readBuildFlag, buildRequestOf, withChoice };
+module.exports = { EFFORTS, EFFORT_LABELS, MODES, effortOf, modelOf, readFlags, above, ladderOf, readQuestion, readMode, readProvider, levelOf, readDiscover, withMode, discoverSpans, readBuildFlag, buildRequestOf, withChoice };
