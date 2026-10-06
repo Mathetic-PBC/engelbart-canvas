@@ -24,11 +24,9 @@ a.notification-repo:hover{text-decoration:underline;text-underline-offset:3px}
 .notification-status-line{display:flex;align-items:center;gap:6px;min-width:0}
 .notification-sandbox{display:inline-flex;align-items:center;gap:5px;color:#777;font-size:11px;line-height:1.5}
 .notification-sandbox::before{content:"";width:6px;height:6px;border-radius:50%;background:#c9c9c9}
-/* Running: a live dot, as Vercel draws one: a clear green, a soft ring around it and a slow pulse going out from it. */
+/* Running: a plain green dot (2026-10-06: no ring, no pulse). */
 .notification-sandbox[data-sandbox="running"]{color:#4d4d4d}
-.notification-sandbox[data-sandbox="running"]::before{width:7px;height:7px;background:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,.18);animation:notification-live 2s ease-out infinite}
-@keyframes notification-live{0%{box-shadow:0 0 0 0 rgba(34,197,94,.45),0 0 0 3px rgba(34,197,94,.18)}70%{box-shadow:0 0 0 6px rgba(34,197,94,0),0 0 0 3px rgba(34,197,94,.18)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0),0 0 0 3px rgba(34,197,94,.18)}}
-@media (prefers-reduced-motion:reduce){.notification-sandbox[data-sandbox="running"]::before{animation:none}}
+.notification-sandbox[data-sandbox="running"]::before{background:#22c55e}
 .notification-detail{color:#777;font-size:11px;overflow-wrap:anywhere;max-height:64px;overflow:auto}
 .notification-error{margin:8px 10px;color:#b91c1c;overflow-wrap:anywhere}
 .notification-run-actions{display:flex;align-items:center;gap:6px;flex:none}
