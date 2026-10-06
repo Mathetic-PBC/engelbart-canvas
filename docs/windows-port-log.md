@@ -5,6 +5,15 @@ Newest status first; the sections below are kept current.
 
 ## Where things stand
 
+- 2026-10-06, **done**: run 12 (55fbf8b, https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37431216041)
+  passed on macos-latest and windows-latest. macOS: npm ci, npm test (1020 tests, 1019 pass, 1 skipped: the
+  bundled-Git test, skipped wherever vendor/git is not fetched, as on hudsons-feedback), npm run build, npm run
+  package (Engelbart.app, ad hoc signed). Windows: npm ci, npm test (1023 tests, 986 pass, 37 skipped, 0 failed),
+  npm run build, the installer (release\Engelbart-0.1.9-x64.exe, kept as the run's artifact), smoke-windows on
+  release/win-unpacked/Engelbart.exe: the window loaded, a PowerShell 7 terminal echoed a line, the login shell's
+  script found Git 2.55.0 at C:\Program Files\Git\mingw64\bin\git.exe, the app quit cleanly. Linux still fails
+  (continue-on-error). Every test on hudsons-feedback (f2d0ac0) is on this branch; none was removed.
+
 - 2026-10-06, run 11 (fe85167): macOS passed; Windows 0 failures but 2 files cancelled at the 300 s per-file limit CI
   sets (build.test.cjs, sandbox-manager.test.cjs). Nothing hung: every test in them took about twice as long as in
   run 10 (build.test.cjs's 32 finished tests 293 s, against 175 s for all 37 in run 10), a slow runner. The CI limit
@@ -89,10 +98,11 @@ Newest status first; the sections below are kept current.
 
 ## Done-criteria checklist
 
-- [ ] CI passes on windows-latest and macos-latest for the same commit
-- [ ] `npm ci` and `npm test` exit 0 on both
-- [ ] Windows installer builds and `scripts/smoke-windows.cjs` passes on the packaged app
-- [ ] `npm run package` still builds on the Mac; no Mac test deleted, weakened or newly skipped
+- [x] CI passes on windows-latest and macos-latest for the same commit (55fbf8b, run 12)
+- [x] `npm ci` and `npm test` exit 0 on both
+- [x] Windows installer builds and `scripts/smoke-windows.cjs` passes on the packaged app
+- [x] `npm run package` still builds on the Mac; no Mac test deleted, weakened or newly skipped (test names compared
+  with hudsons-feedback f2d0ac0: none missing; the Mac's one skip is the bundled-Git test's own, as before)
 
 ## What changed
 
@@ -168,6 +178,18 @@ before.
 Timing: run-step.test.cjs "Engelbart's processes" gives an app 5 s on Windows, 0.4 s on the Mac (Git Bash's login
 shell starts more slowly than zsh); what it checks is unchanged.
 
+Skips already in the code before this branch (unchanged here), which their own conditions also apply on Windows:
+
+| Test file | Tests | Condition and reason |
+|---|---|---|
+| install-mac.test.cjs | install-mac.sh, run by the app: … (2 tests) | `process.platform !== 'darwin' && 'macOS only'`: the Mac's update installer script |
+| mac-states.test.cjs | pretend Mac … (8 scenarios) | `process.platform !== 'darwin' && 'macOS only'`: Mac accounts, Homebrew, ~/.zshrc |
+| shell-rc.test.cjs | through the launcher, zsh runs the user rc files…; the shell that replaces an agent…; a ZDOTDIR…; Engelbart's own Git comes first on PATH…; an agent whose folder the person's PATH misses… (5 tests) | `!fs.existsSync('/bin/zsh')`: they run the real zsh, which Windows has not |
+| stage-files.test.cjs | macOS: a real docx through textutil, a real heic through sips | `process.platform !== 'darwin'`: macOS's textutil and sips (HEIC/Word previews are out of scope on Windows) |
+| bundled-git.test.cjs | the real one: Build's git commands run on it… | `!real`: Engelbart's own Git not fetched (skipped on CI's Mac too) |
+
+Run 12's 37 Windows skips are the 20 in the first table and these 17.
+
 Assertions that only hold on POSIX and are guarded with `process.platform !== 'win32'` inside a test (the rest of the
 test runs): file modes 0600/0700 in github.test.cjs, defaults.test.cjs, sandbox-local.test.cjs (Windows has no such
 modes). Expectations written with the platform's separator (`path.join`, `path.sep`) or a real file outside home
@@ -188,6 +210,7 @@ modes). Expectations written with the platform's separator (`path.join`, `path.s
 | bc06f3c | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37426600854 | ✓ | ✗ 1 test | ✗ (allowed) | f2d0ac0 brought in; Git Bash's login shell slower than run-step's 0.4 s app window |
 | 86755ab | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37427843412 | ✓ | ✗ 1 test | ✗ (allowed) | worktree move refused on Windows (a file open in it), intermittent |
 | fe85167 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37429145718 | ✓ | ✗ 2 files over 300 s | ✗ (allowed) | a slow runner: every test twice as long |
+| 55fbf8b | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37431216041 | ✓ | ✓ installer, smoke | ✗ (allowed) | **green on both: the done commit** |
 
 ## Needs a decision
 
