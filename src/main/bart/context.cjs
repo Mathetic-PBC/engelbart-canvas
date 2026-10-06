@@ -8,6 +8,9 @@
 // A question asked from a note on a pdf highlight (MATH-27) carries the passage as <highlight>, and the workspace the
 // Stage was opened from as background (paperOf, highlightBlock). Since 2026-10-06 it carries the text of the highlighted
 // page around the passage too (<page_text>, pdf.js's, about 4,000 characters), so Bart need not open the pdf for it.
+// An @bart question also carries the person's pdf highlights (MATH-27, 2026-10-06, ./highlights.cjs): <stage>, the paper
+// in front in the Stage with the page in view, and <highlights>, the pdfs the documents mention, each with its notes and
+// Bart's answers there. A paper both open and mentioned is in <stage> alone.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -20,6 +23,8 @@ const { PENDING_RE } = require('./reply.cjs');
 const { stripAgentReplies } = require('./strip.cjs');
 const db = require('../store/db.cjs');
 const { instructionsBlock } = require('../store/onboarding.cjs');
+const library = require('../store/library.cjs');
+const { attrOf, stageBlock, mentionedBlock } = require('./highlights.cjs');
 
 const HERE = '<<< this is the question being asked now >>>';
 
@@ -108,7 +113,6 @@ function libraryDirs(project, rows, granted, { home = os.homedir(), seen = new S
 // A question asked from a note on a pdf highlight (MATH-27, 2026-10-06): the passage is a block of its own, the workspace it
 // was opened from comes along as background. The paper is the library's row (`ref.rowId`), else the address its ink is
 // kept by (`ref.url`): a file:// address is given as its path, which the agent's file tools open.
-const attrOf = (value, max) => String(value == null ? '' : value).replace(/[<>"\n\r]/g, ' ').slice(0, max);
 
 /** The paper a highlight is on → { id, name, where, dir }: `where` its absolute path or its address, `dir` a folder to grant. */
 function paperOf(project, rows, ref, given = {}) {
@@ -126,12 +130,44 @@ function highlightBlock(paper, page, { quote = '', note = '', pageText = '' } = 
   return `<highlight paper="${attrOf(paper.name, 200)}" path="${attrOf(paper.where, 4096)}" page="${Number(page) || 1}">\n<quote>\n${String(quote).trim()}\n</quote>\n<note>\n${String(note).trim()}\n</note>\n${around ? `<page_text>\n${around}\n</page_text>\n` : ''}</highlight>`;
 }
 
+// The ink a paper has, and the file it is read from (the annotations attribute: Bart reads it again for a follow-up). A
+// library row's own, else the ink kept by the pdf's address (store/library.cjs). Ink that cannot be read is none.
+async function inkOf(ctx, where) {
+  try {
+    const ink = where.rowId ? await library.readAnnotations(ctx, where.rowId) : await library.readPageAnnotations(ctx, where.url);
+    return { ink, annotations: await library.annotationsFileOf(ctx, where) };
+  } catch {
+    return { ink: null, annotations: '' };
+  }
+}
+
+/** The pdf in front in the Stage (`stage` { rowId, url, page }) → paperOf's, with its ink and ink file. */
+async function stagePaper(ctx, project, rows, stage) {
+  const ref = { rowId: stage.rowId || null, url: stage.url || null };
+  if (!ref.rowId && !ref.url) return null;
+  const paper = paperOf(project, rows, ref);
+  return { ...paper, ...(await inkOf(ctx, paper.id ? { rowId: paper.id } : ref.url ? { url: ref.url } : { rowId: ref.rowId })) };
+}
+
+// A library row that may be a pdf: one, or an address saved before the Stage kept a copy (store/web-pdfs.cjs).
+const mayBePdf = (row) => row.type === 'pdf' || (row.type === 'website' && ((row.tags || []).includes('paper') || /\.pdf(?:$|[?#])/i.test(row.url || '')));
+
+/** The mentioned library rows that are pdfs → [{ name, where, annotations, ink }]; mentionedBlock leaves out those without highlights. */
+async function mentionedPapers(ctx, project, rows) {
+  const out = [];
+  for (const row of rows.filter(mayBePdf)) {
+    const paper = paperOf(project, rows, { rowId: row.id });
+    out.push({ ...paper, ...(await inkOf(ctx, { rowId: row.id })) });
+  }
+  return out;
+}
+
 /**
  * → { project, dirs, head, contextJson, documents, entries, workspaceName }. `head` and the documents are text; the
  * caller adds the level and the question (./ask.cjs), which differ per step. `entries` (the library as Context.json
  * holds it) and `workspaceName` are for the fake agents, which name what a real one would read.
  */
-async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = 'bart', highlight = null }) {
+async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = 'bart', highlight = null, stage = null }) {
   const found = projects.findWorkspace(ctx, projectId, workspaceId);
   const { project, workspace } = found;
   const rows = await ctx.libraryDb.list();
@@ -142,11 +178,11 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
   const scoped = SCOPED.has(agent);
   const shown = (body) => markPlace(scoped ? stripAgentReplies(body, agent) : body, askId);
   let from = `the workspace "${workspace.name}"`;
-  let paper = null;
+  let paper = null, pointed = null;
   if (ref.kind === 'mark') {
     const space = await expandDoc(ctx, projectId, { kind: 'workspace', workspaceId }, { seen });
     paper = paperOf(project, rows, ref, highlight || {});
-    if (paper.id) seen.add(paper.id); // the paper is what the person points at
+    if (paper.id && !seen.has(paper.id)) { seen.add(paper.id); pointed = paper.id; } // the paper is what the person points at
     documents.push(block('workspace', space.title, shown(space.body)), highlightBlock(paper, ref.page, highlight || {}));
     from = `a highlight on page ${Number(ref.page) || 1} of "${attrOf(paper.name, 200)}", opened from the workspace "${workspace.name}"`;
   } else if (ref.kind === 'note') {
@@ -159,6 +195,14 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
   } else {
     const space = await expandDoc(ctx, projectId, ref, { seen });
     documents.push(block('workspace', space.title, shown(space.body)));
+  }
+  // @bart sees the person's pdf highlights: the paper in front in the Stage, then the ones the documents mention.
+  const front = agent === 'bart' && stage && stage.kind === 'pdf' ? await stagePaper(ctx, project, rows, stage) : null;
+  if (front) documents.push(stageBlock(front, stage.page, front.ink));
+  if (agent === 'bart') {
+    const mentioned = await mentionedPapers(ctx, project, rows.filter((row) => seen.has(row.id) && row.id !== pointed && !(front && front.id === row.id)));
+    const marked = mentionedBlock(mentioned);
+    if (marked) documents.push(marked);
   }
   const own = scoped ? (await (await db.openNotesDb(project.dir)).list()).filter((note) => note.topic_id === workspace.id).map((note) => note.id) : [];
   const scope = { agent, workspace, own };
@@ -175,9 +219,11 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
   ].filter(Boolean).join('\n');
   const granted = [project.directory, ctx.dataRoot].filter(Boolean);
   const dirs = LIBRARY_READERS.has(agent) ? [...granted, ...libraryDirs(project, rows, granted, { seen, scope })] : granted;
-  // A pdf opened from disk that the library does not hold: its folder too, by the same rules as the library's.
-  const folder = paper && paper.dir ? path.resolve(paper.dir) : null;
-  if (folder && folder !== path.parse(folder).root && folder !== path.resolve(os.homedir()) && !dirs.some((root) => within(folder, root))) {
+  // A pdf opened from disk that the library does not hold (the highlight's, the Stage's): its folder too, by the same rules
+  // as the library's.
+  for (const held of [paper, front && !front.id ? front : null]) {
+    const folder = held && held.dir ? path.resolve(held.dir) : null;
+    if (!folder || folder === path.parse(folder).root || folder === path.resolve(os.homedir()) || dirs.some((root) => within(folder, root))) continue;
     try { if (fs.statSync(folder).isDirectory()) dirs.push(folder); } catch { /* gone: nothing to grant */ }
   }
   return { project, dirs, head, contextJson: `<context_json>\n${JSON.stringify(entries, null, 1)}\n</context_json>`, documents: documents.join('\n\n'), entries, workspaceName: workspace.name };

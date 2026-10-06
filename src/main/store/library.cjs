@@ -125,6 +125,21 @@ async function readPageAnnotations(ctx, input) {
   return place.id ? readAnnotations(ctx, place.id) : readJson(place.file);
 }
 
+/**
+ * The absolute path of the file a pdf's ink is read from (`where`: { rowId } or { url }, as readAnnotations and
+ * readPageAnnotations find it): where it would be written when there is none yet. For @bart (MATH-27), to read again.
+ */
+async function annotationsFileOf(ctx, where) {
+  const place = where && where.rowId ? { id: where.rowId } : await inkPlace(ctx, where && where.url);
+  if (!place.id) return place.file;
+  const own = annotationFile(ctx, place.id);
+  if (fs.existsSync(own)) return own;
+  const row = await ctx.libraryDb.get(place.id);
+  const addresses = row ? [inkAddress(row), row.path && row.url ? String(row.url).replace(/#.*$/, '') : ''].filter(Boolean) : [];
+  for (const address of addresses) if (fs.existsSync(pageAnnotationFile(ctx, address))) return pageAnnotationFile(ctx, address);
+  return own;
+}
+
 async function writePageAnnotations(ctx, input, value) {
   return inkInTurn(async () => {
     const place = await inkPlace(ctx, input);
@@ -893,4 +908,4 @@ async function previewItem(ctx, id, { listRemoteFiles } = {}) {
   return out;
 }
 
-module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, writePageAnnotations, addMarkAnswer, projectsForLibraryItem, libraryForProject, bodiesForProject, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, addPageCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem };
+module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, annotationsFileOf, writePageAnnotations, addMarkAnswer, projectsForLibraryItem, libraryForProject, bodiesForProject, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, addPageCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem };

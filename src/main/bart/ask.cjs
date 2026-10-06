@@ -450,13 +450,14 @@ function createBart({ readModels, environment = process.env, runDirectory = path
    * for this run without rewriting the line; `turns` are the earlier turns of the exchange, when there are any.
    * `agent`: 'bart', 'brainstorm' or 'discover'; all but @bart may be asked with nothing on the line and reply with cards.
    * `highlight` ({ quote, note, paper }): a question asked from a note on a pdf highlight (`ref.kind` 'mark', MATH-27),
-   * whose exchange is kept by the mark's id like any other (threadKey).
+   * whose exchange is kept by the mark's id like any other (threadKey). `stage` ({ rowId, url, page, kind }): what is in
+   * front in the Stage, for @bart's <stage> (./context.cjs).
    */
-  async function ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null }, { onProgress } = {}) {
+  async function ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null, stage = null }, { onProgress } = {}) {
     const models = readModels();
     const bart = agent === 'bart';
     // The context first: @brainstorm's path is read against the library it shows (turnPlan).
-    const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent, highlight });
+    const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent, highlight, stage });
     const { question, provider, steps, pinned, prior, asked, shown, extra, mode } = turnPlan({ agent, text, turns, choice: bart ? choice : null, entries: context.entries }, models);
     if (!question && bart) throw new BartError('failed', 'There is no question on the line.');
     if (pinned && bart) remember(onPicked, steps[0]);
@@ -685,9 +686,9 @@ function fakeDiscover(context, plan) {
 function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(), brainstormThreads = createThreads({ idleMs: BRAINSTORM_IDLE_MS }), discoverThreads = createThreads({ idleMs: DISCOVER_IDLE_MS }), onPicked = () => {} }) {
   const waits = new Map();
   return {
-    async ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null }, { onProgress } = {}) {
+    async ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null, stage = null }, { onProgress } = {}) {
       const models = readModels();
-      const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent, highlight });
+      const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent, highlight, stage });
       const plan = turnPlan({ agent, text, turns, choice: agent === 'bart' ? choice : null, entries: context.entries }, models);
       const { brainstorm, question, provider, steps, pinned, prior } = plan, discover = agent === 'discover';
       if (pinned && question && agent === 'bart') remember(onPicked, steps[0]);

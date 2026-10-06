@@ -322,6 +322,171 @@ test('context from a note: the workspace and the note are separate blocks, and t
   assert.equal(context.documents, `<workspace name="Agents">\nTop. @[Asked here]\n</workspace>\n\n<note name="Asked here">\nbody\n@bart what?\n${HERE}\n</note>`);
 });
 
+/* ------------------------------------------------------------- the person's pdf highlights (MATH-27, 2026-10-06) */
+
+const { marksOf, stageBlock, mentionedBlock, STAGE_BUDGET, MENTIONED_BUDGET } = require('../src/main/bart/highlights.cjs');
+const box = [{ x: 0.1, y: 0.2, w: 0.3, h: 0.015 }];
+const hl = (id, text, extra = {}) => ({ id, rects: box, y: 0.2, text, note: null, pos: null, ...extra });
+const asked = (question, answer) => ({ id: `a-${question}`, question, answer, meta: {}, at: 'now', pos: null, collapsed: false });
+
+test('marksOf: one highlight a mark, in page order; a selection across pages is one, labelled with its first page; nothing empty', () => {
+  const ink = {
+    4: [hl('m4b', 'second part', { group: 'g1', y: 0.05, asks: [asked('what?', 'that.')] }), hl('m4', 'later on four', { y: 0.6 })],
+    3: [hl('m3', 'first part', { group: 'g1', y: 0.9, note: 'a note on it' }), { id: 'free', rects: [], y: 0.1, note: 'a free note', text: '' }, hl('bare', '   ')],
+    x: [hl('junk', 'not a page')],
+    0: [hl('zero', 'no page 0')],
+    5: 'not a list',
+  };
+  assert.deepEqual(marksOf(ink), [
+    { page: 3, quote: '', note: 'a free note', asks: [] },
+    { page: 3, quote: 'first part\nsecond part', note: 'a note on it', asks: [{ question: 'what?', answer: 'that.' }] },
+    { page: 4, quote: 'later on four', note: '', asks: [] },
+  ]);
+  assert.deepEqual([marksOf(null), marksOf([]), marksOf('x')], [[], [], []]);
+});
+
+test('stageBlock: the page in view first, then the nearest; noted before bare; within its budget, <more> when any was left out; shown in page order', () => {
+  const paper = { name: 'Paper "A"', where: '/p/a.pdf', annotations: '/d/annotations/x.json' };
+  assert.equal(stageBlock(paper, 7, {}), '<stage paper="Paper  A " path="/p/a.pdf" page="7" highlights="0"/>');
+  assert.equal(stageBlock(paper, 7, null), '<stage paper="Paper  A " path="/p/a.pdf" page="7" highlights="0"/>');
+  const small = stageBlock(paper, 2, { 2: [hl('a', 'alpha', { note: 'mine', asks: [asked('why?', 'because')] })] });
+  assert.equal(small, '<stage paper="Paper  A " path="/p/a.pdf" page="2" annotations="/d/annotations/x.json">\n<highlight page="2">\n<quote>\nalpha\n</quote>\n<note>\nmine\n</note>\n<ask>\n<question>\nwhy?\n</question>\n<answer>\nbecause\n</answer>\n</ask>\n</highlight>\n</stage>');
+  // Quotes past 600 and answers past 1,500 are cut in the middle.
+  const long = stageBlock(paper, 1, { 1: [hl('l', 'q'.repeat(5000), { asks: [asked('a?', 'w'.repeat(9000))] })] });
+  assert.ok(/<quote>\nq+\n\[… 4,4\d\d characters cut …\]\nq+\n<\/quote>/.test(long) && /characters cut[^]*characters cut/.test(long));
+  assert.ok(long.match(/<quote>\n([^]*?)\n<\/quote>/)[1].length <= 600 && long.match(/<answer>\n([^]*?)\n<\/answer>/)[1].length <= 1500);
+  // Twenty bare highlights of ~560 characters on pages 1–20 and one noted on page 20: on page 10, the noted one and the
+  // nearest pages are kept, the far ones left out.
+  const ink = {};
+  for (let p = 1; p <= 20; p += 1) ink[p] = [hl(`b${p}`, `p${p} `.padEnd(560, 'x'))];
+  ink[20].push(hl('n20', 'noted far away', { note: 'keep me', y: 0.5 }));
+  const out = stageBlock(paper, 10, ink);
+  assert.ok(out.length <= STAGE_BUDGET, `${out.length}`);
+  const pages = [...out.matchAll(/<highlight page="(\d+)">/g)].map((m) => Number(m[1]));
+  assert.deepEqual(pages, [...pages].sort((a, b) => a - b), 'in page order');
+  assert.ok(out.includes('keep me'), 'a noted highlight is kept over bare ones');
+  assert.ok(out.includes('p10 ') && out.includes('p9 ') && out.includes('p11 '), 'the page in view and its neighbours');
+  assert.ok(!out.includes('p1 x') && !out.includes('p19 '), 'the far ones are left out');
+  const kept = pages.length;
+  assert.match(out, new RegExp(`<more n="${21 - kept}"/>\\n</stage>$`));
+  assert.ok(!small.includes('<more'), 'nothing left out: no <more>');
+});
+
+test('mentionedBlock: papers without highlights left out, a shared budget, every paper some, noted before bare, <more> per paper', () => {
+  const many = (tag, n) => { const ink = {}; for (let p = 1; p <= n; p += 1) ink[p] = [hl(`${tag}${p}`, `${tag}${p} `.padEnd(560, 'x'))]; return ink; };
+  assert.equal(mentionedBlock([]), '');
+  assert.equal(mentionedBlock([{ name: 'Empty', where: '/e.pdf', annotations: '/a/e.json', ink: { 1: [] } }, { name: 'None', where: '/n.pdf', annotations: '', ink: null }]), '');
+  const a = { name: 'A', where: '/a.pdf', annotations: '/ink/a.json', ink: many('A', 30) };
+  const b = { name: 'B', where: '/b.pdf', annotations: '/ink/b.json', ink: { ...many('B', 30), 30: [hl('Bn', 'noted at the end', { asks: [asked('q?', 'an answer')] })] } };
+  const out = mentionedBlock([a, { name: 'Empty', where: '/e.pdf', annotations: '', ink: {} }, b]);
+  assert.ok(out.length <= MENTIONED_BUDGET, `${out.length}`);
+  assert.ok(out.startsWith('<highlights from="mentioned">\n<paper name="A" path="/a.pdf" annotations="/ink/a.json">\n<highlight page="1">') && out.endsWith('</paper>\n</highlights>'));
+  assert.ok(!out.includes('Empty'));
+  assert.ok(out.includes('an answer'), 'the asked one is kept though it is on the last page');
+  const count = (tag) => (out.match(new RegExp(`<quote>\\n${tag}\\d+ `, 'g')) || []).length;
+  assert.ok(count('A') >= 9 && count('B') >= 9 && Math.abs(count('A') - count('B')) <= 1, `${count('A')} and ${count('B')}: shared`);
+  assert.ok(out.includes(`<more n="${30 - count('A')}"/>\n</paper>\n<paper name="B"`), 'A says how many were left out');
+  const fits = mentionedBlock([{ name: 'S', where: '/s.pdf', annotations: '/ink/s.json', ink: { 2: [hl('s', 'short')] } }]);
+  assert.equal(fits, '<highlights from="mentioned">\n<paper name="S" path="/s.pdf" annotations="/ink/s.json">\n<highlight page="2">\n<quote>\nshort\n</quote>\n</highlight>\n</paper>\n</highlights>');
+});
+
+test('stageInput: a pdf in front by library row or address, its page a page number; anything else in front is none', () => {
+  const { stageInput } = require('../src/main/ipc.cjs');
+  const ROW = '3f0a6c1e-6b1d-4a57-9a51-1c2b3d4e5f60';
+  assert.deepEqual(stageInput({ rowId: ROW, url: null, page: 3, kind: 'pdf' }), { rowId: ROW, url: null, page: 3, kind: 'pdf' });
+  assert.deepEqual(stageInput({ url: 'https://x.y/a.pdf', page: 1, kind: 'pdf', extra: 1 }), { rowId: null, url: 'https://x.y/a.pdf', page: 1, kind: 'pdf' });
+  for (const none of [null, undefined, { kind: 'page', url: 'x'.repeat(9000) }, { kind: 'file' }, { kind: 'pdf', page: 1 }]) assert.equal(stageInput(none), null);
+  for (const bad of ['x', [], { kind: 'pdf', rowId: 'nope', page: 1 }, { kind: 'pdf', rowId: 7, page: 1 }, { kind: 'pdf', url: 'x'.repeat(4097), page: 1 }, { kind: 'pdf', url: 'u', page: 0 }, { kind: 'pdf', url: 'u', page: 1.5 }, { kind: 'pdf', url: 'u', page: '2' }, { kind: 7 }]) {
+    assert.throws(() => stageInput(bad), TypeError, JSON.stringify(bad));
+  }
+});
+
+test('ask-bart hands @bart the Stage, and no other agent; a Stage it cannot read fails the question', async () => {
+  const { registerEngelbartIpc } = require('../src/main/ipc.cjs');
+  const handlers = new Map(), seenQuestions = [];
+  const bart = { async ask(c, pid, question) { seenQuestions.push(question); return { lines: ['bart> ok'], meta: {} }; }, stop: () => true };
+  registerEngelbartIpc({ store: { context: async () => ctx }, ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, trustedHandler: (fn) => fn, notify: () => {}, bart, windowHandler: (fn) => (...args) => fn({ id: 'w' }, ...args), reply: () => {}, announce: () => {} });
+  const call = (input) => handlers.get('engelbart:ask-bart')(project.id, { workspaceId: workspace.id, ref: { kind: 'workspace', workspaceId: workspace.id }, text: 'why?', turns: [], ...input });
+  const stage = { rowId: null, url: 'https://x.y/a.pdf', page: 4, kind: 'pdf' };
+  await call({ askId: 'st1', stage });
+  await call({ askId: 'st2', stage, agent: 'brainstorm' });
+  await call({ askId: 'st3', stage: { kind: 'page', url: 'https://x.y/', page: 1 } });
+  await call({ askId: 'st4' });
+  assert.deepEqual(seenQuestions.map((q) => q.stage || null), [stage, null, null, null]);
+  const out = await call({ askId: 'st5', stage: { kind: 'pdf', url: 'u', page: -1 } });
+  assert.ok(out.failed && seenQuestions.length === 4, 'refused before it is asked');
+});
+
+test('buildContext with the Stage: <stage> for the pdf in front, <highlights> for the mentioned ones, a paper once; none of it without a pdf in front, for a mark too, or for the other agents', async () => {
+  const library = require('../src/main/store/library.cjs');
+  const { randomUUID } = require('node:crypto');
+  const downloads = path.join(homeDir, 'Downloads');
+  fs.mkdirSync(downloads, { recursive: true });
+  const rowOf = async (name, extra = {}) => {
+    const id = randomUUID(), file = path.join(downloads, `${name}.pdf`);
+    fs.writeFileSync(file, '%PDF-1.4\n');
+    await ctx.libraryDb.insert({ id, name, project_id: project.id, tags: ['paper'], type: 'pdf', path: file, ...extra });
+    return { id, file };
+  };
+  const open = await rowOf('Open Paper'), cited = await rowOf('Cited Paper'), plain = await rowOf('Plain Paper');
+  await library.writeAnnotations(ctx, open.id, { 2: [hl('o2', 'on page two', { note: 'my note', asks: [asked('what does it mean?', 'it means this')] })], 5: [hl('o5', 'on page five')] });
+  await library.writeAnnotations(ctx, cited.id, { 1: [hl('c1', 'cited passage')] });
+  const wsRef = { kind: 'workspace', workspaceId: workspace.id };
+  await projects.writeDoc(ctx, project.id, wsRef, 'See @[Cited Paper], @[Open Paper] and @[Plain Paper].\n@bart what did I note on this page?\nbart~> s1\n');
+  const ask = (input) => buildContext(ctx, project.id, { ref: wsRef, workspaceId: workspace.id, askId: 's1', ...input });
+  const space = (await ask({ agent: 'discover' })).documents; // the workspace alone
+  assert.ok(/^<workspace name="Agents">[^]*<\/workspace>$/.test(space));
+  const withStage = await ask({ stage: { rowId: open.id, url: null, page: 2, kind: 'pdf' } });
+  assert.equal(withStage.documents.slice(0, space.length + 2), `${space}\n\n`, 'the rest is as it was');
+  const stageText = withStage.documents.slice(space.length + 2);
+  assert.ok(stageText.startsWith(`<stage paper="Open Paper" path="${open.file}" page="2" annotations="${path.join(ctx.dataRoot, 'annotations', `${open.id}.json`)}">\n<highlight page="2">\n<quote>\non page two\n</quote>\n<note>\nmy note\n</note>\n<ask>\n<question>\nwhat does it mean?\n</question>\n<answer>\nit means this\n</answer>\n</ask>\n</highlight>\n<highlight page="5">`), stageText.slice(0, 400));
+  assert.ok(stageText.includes(`</stage>\n\n<highlights from="mentioned">\n<paper name="Cited Paper" path="${cited.file}" annotations="${path.join(ctx.dataRoot, 'annotations', `${cited.id}.json`)}">\n<highlight page="1">\n<quote>\ncited passage\n</quote>\n</highlight>\n</paper>\n</highlights>`));
+  assert.ok(stageText.includes('<stage paper="Open Paper"') && !stageText.includes('<paper name="Open Paper"'), 'open and mentioned: in <stage> alone');
+  assert.ok(!stageText.includes('Plain Paper"'), 'a mentioned pdf without highlights is left out');
+  // Nothing in front that is a pdf, or nothing at all: <highlights> alone.
+  for (const stage of [null, { kind: 'page', url: 'https://example.org/', page: 1 }]) {
+    const c = await ask({ stage });
+    assert.ok(!c.documents.includes('<stage') && c.documents.includes('<paper name="Open Paper"') && c.documents.includes('<paper name="Cited Paper"'));
+  }
+  // An open pdf with no highlights: one line.
+  const bare = await ask({ stage: { rowId: plain.id, url: null, page: 3, kind: 'pdf' } });
+  assert.ok(bare.documents.includes(`<stage paper="Plain Paper" path="${plain.file}" page="3" highlights="0"/>`));
+  // A pdf in front the library does not hold: by its address (readPageAnnotations), its folder granted.
+  const loose = path.join(fs.mkdtempSync(path.join(homeDir, 'loose-')), 'Loose.pdf'); // a folder the library's rows are not in
+  fs.writeFileSync(loose, '%PDF-1.4\n');
+  const looseUrl = pathToFileURL(loose).href;
+  await library.writePageAnnotations(ctx, looseUrl, { 9: [hl('l9', 'a loose passage')] });
+  const byUrl = await ask({ stage: { rowId: null, url: looseUrl, page: 9, kind: 'pdf' } });
+  assert.match(byUrl.documents, new RegExp(`<stage paper="Loose\\.pdf" path="${loose.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}" page="9" annotations="[^"]+pages[^"]+\\.json">\\n<highlight page="9">\\n<quote>\\na loose passage`));
+  assert.ok(byUrl.dirs.includes(path.dirname(loose)), 'its folder can be read');
+  // Mentioned nothing: no <highlights>.
+  await projects.writeDoc(ctx, project.id, wsRef, '@bart what did I note on this page?\nbart~> s1\n');
+  const alone = await ask({ stage: { rowId: open.id, url: null, page: 5, kind: 'pdf' } });
+  assert.ok(alone.documents.includes('<stage paper="Open Paper"') && !alone.documents.includes('<highlights'));
+  // @brainstorm and @discover: as they were.
+  await projects.writeDoc(ctx, project.id, wsRef, 'See @[Cited Paper].\n@brainstorm\nbart~> s1\n');
+  for (const agent of ['brainstorm', 'discover']) {
+    const before = await ask({ agent });
+    const after = await ask({ agent, stage: { rowId: open.id, url: null, page: 2, kind: 'pdf' } });
+    assert.equal(after.documents, before.documents, agent);
+    assert.ok(!after.documents.includes('<stage') && !after.documents.includes('<highlights'), agent);
+  }
+  // From a highlight: <highlight> as it was, <stage> beside it; the paper it is on is not "mentioned" for being asked from.
+  const mark = { kind: 'mark', id: 'o2', rowId: open.id, page: 2 };
+  const fromMark = await buildContext(ctx, project.id, { ref: mark, workspaceId: workspace.id, askId: 's2', highlight: { quote: 'on page two', note: '@bart why?' }, stage: { rowId: open.id, url: null, page: 2, kind: 'pdf' } });
+  assert.match(fromMark.documents, /<\/workspace>\n\n<highlight paper="Open Paper" [^]*<\/highlight>\n\n<stage paper="Open Paper"[^]*<\/stage>\n\n<highlights from="mentioned">\n<paper name="Cited Paper"[^]*<\/highlights>$/);
+  const markOnly = await buildContext(ctx, project.id, { ref: mark, workspaceId: workspace.id, askId: 's2', highlight: { quote: 'on page two', note: '' } });
+  assert.ok(!markOnly.documents.includes('<paper name="Open Paper"'), 'not in <highlights> for being asked from');
+  for (const row of [open, cited, plain]) await ctx.libraryDb.remove(row.id); // the tests below grant no ~/Downloads
+  await projects.writeDoc(ctx, project.id, wsRef, '');
+});
+
+test('the system prompt tells @bart what <stage> and <highlights> are, after <highlight>', () => {
+  const at = (s) => BART_SYSTEM_PROMPT.indexOf(s);
+  assert.ok(at('- <highlight>, when') < at('- <stage>, when a PDF is open in the Stage') && at('- <stage>, when') < at('- <highlights>, when the documents mention PDFs') && at('- <highlights>') < at('- <conversation>'));
+  assert.match(BART_SYSTEM_PROMPT, /read it again for a follow-up, or when <more> says some were left out/);
+});
+
 test('the fake agent (scripted runs) answers through the same loop, moves up on "hard", and stops', async () => {
   const bart = createFakeBart({ readModels: () => MODELS, delayMs: 5 });
   const ref = { kind: 'workspace', workspaceId: workspace.id };

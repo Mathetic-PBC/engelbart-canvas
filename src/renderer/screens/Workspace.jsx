@@ -169,6 +169,13 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // either on turns the other off.
   const [docFull, setDocFull] = React.useState(false);
   const toggleStageFull = () => { if (!stageFull) setDocFull(false); setStageFull(!stageFull); };
+  // What is in front in the Stage when @bart is asked (MATH-27): only while the Stage shows; main reads a pdf's ink from it.
+  const stageShown = React.useRef(false);
+  stageShown.current = rightMode === 'stage' && !docFull;
+  const stageNow = React.useCallback(() => {
+    if (!stageShown.current || !stageRef.current || typeof stageRef.current.front !== 'function') return null;
+    try { return stageRef.current.front(); } catch { return null; }
+  }, []);
   const toggleDocFull = () => { if (!docFull) setStageFull(false); setDocFull(!docFull); };
   // What opens on the right (the Stage or the terminal) brings the right pane back from the document's full screen.
   const showRight = React.useCallback((mode) => { setRightMode(mode); setDocFull(false); }, []);
@@ -451,7 +458,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     setPaperAsks((current) => ({ ...current, [askId]: { askId, markId, page, rowId: rowId || null, url: rowId ? null : url, question: text, agent: 'bart' } }));
     try {
       const ref = rowId ? { kind: 'mark', id: markId, rowId, page } : { kind: 'mark', id: markId, url, page };
-      const asked = api.askBart(project.id, { askId, ref, workspaceId: topic.id, text, turns: turns || [], highlight: { quote: quote || '', note: note || '', paper: paper || null, pageText: pageText || '' } });
+      const asked = api.askBart(project.id, { askId, ref, workspaceId: topic.id, text, turns: turns || [], highlight: { quote: quote || '', note: note || '', paper: paper || null, pageText: pageText || '' }, stage: stageNow() });
       loadBartModels(); // main has kept a pick by hand before this is read
       const out = await asked;
       if (out && out.stopped) { dropPaperAsk(askId); return null; }
@@ -462,7 +469,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       failPaperAsk(askId, errorMessage(error));
       return null;
     }
-  }, [topic, project.id, loadBartModels, dropPaperAsk, failPaperAsk]);
+  }, [topic, project.id, loadBartModels, dropPaperAsk, failPaperAsk, stageNow]);
   // After ⌘R, or back in the project, the questions this window asked from highlights that are still running show their
   // boxes again as main keeps them (running-paper-asks), and their progress goes on into them. How each ended main tells
   // every window (paper-ask-done, second pass 2026-10-06): its box goes, its answer already on the mark (the Stage shows
@@ -516,7 +523,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     try {
       await new Promise((resolve) => { setTimeout(resolve, 0); }); // let the pending line reach `pending` before flushing it
       await Promise.all([...pending.current.keys()].map((held) => flush(held)));
-      const asked = api.askBart(project.id, { askId, ref, workspaceId, text, turns: turns || [], choice: choice || null, agent: agent || 'bart' });
+      const asked = api.askBart(project.id, { askId, ref, workspaceId, text, turns: turns || [], choice: choice || null, agent: agent || 'bart', stage: stageNow() });
       loadBartModels(); // main has kept a pick by hand before this is read
       const out = await asked;
       place(out.stopped ? [] : out.lines);
@@ -525,7 +532,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     } finally {
       setAsks((current) => { const next = { ...current }; delete next[askId]; return next; });
     }
-  }, [topic, project.id, flush, changeDoc, loadBartModels, bartModels]);
+  }, [topic, project.id, flush, changeDoc, loadBartModels, bartModels, stageNow]);
 
   /* ----------------------------------------------------------------- Build */
 

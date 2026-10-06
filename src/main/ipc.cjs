@@ -80,6 +80,25 @@ function highlightInput(value) {
   return { quote: clipped(input.quote == null ? '' : input.quote, 'quote', 20000), note: str(input.note == null ? '' : input.note, 'note', 20000), paper: optStr(input.paper, 'paper name'), pageText: clipped(input.pageText == null ? '' : input.pageText, 'page text', 8000) };
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * What is in front in the Stage when @bart is asked (MATH-27, 2026-10-06): { rowId, url, page, kind }, the library row
+ * the tab shows (else its address) and the page in view. Only a pdf is read (bart/context.cjs <stage>): anything else,
+ * and no Stage, is null.
+ */
+function stageInput(value) {
+  if (value == null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) throw new TypeError('stage must be an object');
+  const kind = str(value.kind == null ? '' : value.kind, 'stage kind', 24);
+  if (kind !== 'pdf') return null;
+  const rowId = value.rowId == null ? null : str(value.rowId, 'library id', 64);
+  if (rowId && !UUID_RE.test(rowId)) throw new TypeError('library id is invalid');
+  const url = value.url == null ? null : str(value.url, 'address', 4096);
+  if (!Number.isInteger(value.page) || value.page < 1 || value.page > 100000) throw new TypeError('page must be a page number');
+  return rowId || url ? { rowId, url, page: value.page, kind } : null;
+}
+
 /** The earlier turns of an exchange, the last 40, each cut in the middle past what a turn may hold. */
 function turnsInput(value) {
   return (Array.isArray(value) ? value : []).slice(-40).map((turn) => ({ question: clipped(turn && turn.question, 'earlier question', 8000), answer: clipped(turn && turn.answer, 'earlier answer', 40000) }));
@@ -464,7 +483,9 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       // A highlight's note asks @bart alone (MATH-27), with the passage it is on.
       if (ref.kind === 'mark' && agent !== 'bart') throw new TypeError('a highlight asks @bart');
       const projectId = str(pid, 'project id', 64);
-      const question = { askId, ref, workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice, agent, ...(ref.kind === 'mark' ? { highlight: highlightInput(value.highlight) } : {}) };
+      // `stage`: the pdf in front in the Stage, which @bart alone is shown (MATH-27); the others' context stays as it was.
+      const stage = agent === 'bart' ? stageInput(value.stage) : null;
+      const question = { askId, ref, workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice, agent, ...(ref.kind === 'mark' ? { highlight: highlightInput(value.highlight) } : {}), ...(stage ? { stage } : {}) };
       if (ref.kind === 'mark') {
         mark = { markId: ref.id, page: ref.page, rowId: ref.rowId || null, url: ref.rowId ? null : ref.url };
         paperAsks.set(askId, { win, projectId, askId, ...mark, question: question.text.trim(), progress: {} });
@@ -769,4 +790,4 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   });
 }
 
-module.exports = { createStore, registerEngelbartIpc, docRef, docKeyOf, highlightInput, turnsInput };
+module.exports = { createStore, registerEngelbartIpc, docRef, docKeyOf, highlightInput, stageInput, turnsInput };

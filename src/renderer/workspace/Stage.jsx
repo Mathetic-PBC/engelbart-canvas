@@ -680,7 +680,18 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
 
   // ⌘1–9 (MATH-12, 2026-10-06): the Stage's n-th tab, when the Stage is what was last clicked (Workspace decides).
   const tabAt = (index) => { const t = tabs[index]; if (!t) return false; select(t); return true; };
-  React.useImperativeHandle(ref, () => ({ openRow, openInput, openPaths, newTab, closeTab: () => closeTab(tab.id), tabAt }));
+  // What is in front (MATH-27, 2026-10-06), for @bart's <stage>: { rowId, url, page, kind }, a pdf's page the one in view.
+  const front = () => {
+    const t = tabsRef.current.find((x) => x.id === frontRef.current) || tabsRef.current[0];
+    if (!t) return null;
+    const p = t.pdf;
+    if (!p || p.error || (!p.rowId && !p.url)) return { rowId: null, url: null, page: 1, kind: t.file ? 'file' : 'page' };
+    if (!p.rowId && String(p.url).length > 4096) return null; // past what main takes
+    const viewer = paperRef.current;
+    const page = viewer && typeof viewer.currentPage === 'function' ? viewer.currentPage() : 0;
+    return { rowId: p.rowId || null, url: p.rowId ? null : p.url, page: page > 0 ? page : 1, kind: 'pdf' };
+  };
+  React.useImperativeHandle(ref, () => ({ openRow, openInput, openPaths, newTab, closeTab: () => closeTab(tab.id), tabAt, front }));
 
   /* ------------------------------------------------------------------- @bart on a highlight (MATH-27) */
   // A finished answer onto its mark: the viewer in front adds it when it shows that pdf, and every tab holding the pdf
