@@ -11,6 +11,9 @@
 // An @bart question also carries the person's pdf highlights (MATH-27, 2026-10-06, ./highlights.cjs): <stage>, the paper
 // in front in the Stage with the page in view, and <highlights>, the pdfs the documents mention, each with its notes and
 // Bart's answers there. A paper both open and mentioned is in <stage> alone.
+// A web page is read the same way (MATH-54, 2026-10-06): in front in the Stage it is <stage source="web">, its title and
+// address and its highlights; a saved page the documents mention is in <highlights>; a question asked from a highlight
+// on one has <highlight source="web">.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -24,7 +27,7 @@ const { stripAgentReplies } = require('./strip.cjs');
 const db = require('../store/db.cjs');
 const { instructionsBlock } = require('../store/onboarding.cjs');
 const library = require('../store/library.cjs');
-const { attrOf, stageBlock, mentionedBlock } = require('./highlights.cjs');
+const { attrOf, stageBlock, webStageBlock, mentionedBlock } = require('./highlights.cjs');
 
 const HERE = '<<< this is the question being asked now >>>';
 
@@ -124,10 +127,34 @@ function paperOf(project, rows, ref, given = {}) {
   return { id: row ? row.id : null, name: named, where, dir: local ? path.dirname(local) : null };
 }
 
-/** <highlight paper="…" path="…" page="N"><quote>…</quote><note>…</note><page_text>…</page_text></highlight>; no <page_text> when there is none. */
+/**
+ * <highlight paper="…" path="…" page="N"><quote>…</quote><note>…</note><page_text>…</page_text></highlight>; no <page_text>
+ * when there is none. On a web page (`paper.source` 'web', MATH-54): <highlight source="web" title="…" address="…" path="…">,
+ * no page.
+ */
 function highlightBlock(paper, page, { quote = '', note = '', pageText = '' } = {}) {
   const around = String(pageText || '').trim();
-  return `<highlight paper="${attrOf(paper.name, 200)}" path="${attrOf(paper.where, 4096)}" page="${Number(page) || 1}">\n<quote>\n${String(quote).trim()}\n</quote>\n<note>\n${String(note).trim()}\n</note>\n${around ? `<page_text>\n${around}\n</page_text>\n` : ''}</highlight>`;
+  const on = paper.source === 'web'
+    ? `source="web" title="${attrOf(paper.name, 200)}" address="${attrOf(paper.address, 4096)}"${paper.path ? ` path="${attrOf(paper.path, 4096)}"` : ''}`
+    : `paper="${attrOf(paper.name, 200)}" path="${attrOf(paper.where, 4096)}" page="${Number(page) || 1}"`;
+  return `<highlight ${on}>\n<quote>\n${String(quote).trim()}\n</quote>\n<note>\n${String(note).trim()}\n</note>\n${around ? `<page_text>\n${around}\n</page_text>\n` : ''}</highlight>`;
+}
+
+/**
+ * The web page a highlight or the Stage is on (MATH-54; `ref`: { rowId } or { url }) → { source: 'web', id, name,
+ * address, path, dir }: the library's row when it holds the page (by the address however spelled, or a saved copy by its
+ * file), named as the library names it, else `title`, else its address. `address` is where it is on the web, `path` a
+ * copy on disk (a saved page's index.html, a local html file), `dir` the folder of a copy the library does not hold.
+ */
+async function webPageOf(ctx, project, rows, ref, title = '') {
+  let row = ref.rowId ? rows.find((r) => r.id === ref.rowId) || null : null;
+  if (!row && ref.url) { try { row = (await library.lookupItem(ctx, ref.url)).row; } catch { row = null; } }
+  const url = row ? row.url || '' : String(ref.url || '');
+  let file = row && row.path ? path.resolve(project.dir, row.path) : '';
+  if (!file && /^file:/i.test(url)) { try { file = fileURLToPath(url); } catch { file = ''; } }
+  const address = /^file:/i.test(url) ? '' : url;
+  const named = (row && row.name) || String(title || '').trim() || address || (file ? path.basename(file) : 'a web page');
+  return { source: 'web', id: row ? row.id : null, name: named, address, path: file, dir: file && !row ? path.dirname(file) : null };
 }
 
 // The ink a paper has, and the file it is read from (the annotations attribute: Bart reads it again for a follow-up). A
@@ -149,15 +176,27 @@ async function stagePaper(ctx, project, rows, stage) {
   return { ...paper, ...(await inkOf(ctx, paper.id ? { rowId: paper.id } : ref.url ? { url: ref.url } : { rowId: ref.rowId })) };
 }
 
+/** The web page in front in the Stage (`stage` { url, title }, MATH-54) → webPageOf's, with its ink and ink file ('' for a preview's). */
+async function stageWebPage(ctx, project, rows, stage) {
+  const page = await webPageOf(ctx, project, rows, { url: stage.url }, stage.title);
+  if (!page.address && !page.path) page.address = stage.url;
+  return { ...page, ...(await inkOf(ctx, page.id ? { rowId: page.id } : { url: stage.url })) };
+}
+
 // A library row that may be a pdf: one, or an address saved before the Stage kept a copy (store/web-pdfs.cjs).
 const mayBePdf = (row) => row.type === 'pdf' || (row.type === 'website' && ((row.tags || []).includes('paper') || /\.pdf(?:$|[?#])/i.test(row.url || '')));
+// A library row that is a web page (MATH-54): a page saved as itself (html), or one kept by its address; not a repository.
+const isWebPage = (row) => !mayBePdf(row) && !(row.tags || []).includes('git') && (row.type === 'html' || row.type === 'website');
 
-/** The mentioned library rows that are pdfs → [{ name, where, annotations, ink }]; mentionedBlock leaves out those without highlights. */
+/**
+ * The mentioned library rows that are pdfs → [{ name, where, annotations, ink }], and those that are web pages →
+ * [{ source: 'web', name, address, path, annotations, ink }]; mentionedBlock leaves out those without highlights.
+ */
 async function mentionedPapers(ctx, project, rows) {
   const out = [];
-  for (const row of rows.filter(mayBePdf)) {
-    const paper = paperOf(project, rows, { rowId: row.id });
-    out.push({ ...paper, ...(await inkOf(ctx, { rowId: row.id })) });
+  for (const row of rows.filter((r) => mayBePdf(r) || isWebPage(r))) {
+    const item = mayBePdf(row) ? paperOf(project, rows, { rowId: row.id }) : await webPageOf(ctx, project, rows, { rowId: row.id });
+    out.push({ ...item, ...(await inkOf(ctx, { rowId: row.id })) });
   }
   return out;
 }
@@ -181,10 +220,12 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
   let paper = null, pointed = null;
   if (ref.kind === 'mark') {
     const space = await expandDoc(ctx, projectId, { kind: 'workspace', workspaceId }, { seen });
-    paper = paperOf(project, rows, ref, highlight || {});
+    const web = ref.source === 'web'; // a highlight on a web page (MATH-54): no page
+    paper = web ? await webPageOf(ctx, project, rows, ref, (highlight && highlight.paper) || '') : paperOf(project, rows, ref, highlight || {});
     if (paper.id && !seen.has(paper.id)) { seen.add(paper.id); pointed = paper.id; } // the paper is what the person points at
     documents.push(block('workspace', space.title, shown(space.body)), highlightBlock(paper, ref.page, highlight || {}));
-    from = `a highlight on page ${Number(ref.page) || 1} of "${attrOf(paper.name, 200)}", opened from the workspace "${workspace.name}"`;
+    from = web ? `a highlight on the web page "${attrOf(paper.name, 200)}", opened from the workspace "${workspace.name}"`
+      : `a highlight on page ${Number(ref.page) || 1} of "${attrOf(paper.name, 200)}", opened from the workspace "${workspace.name}"`;
   } else if (ref.kind === 'note') {
     // The note is its own block: the workspace must not also carry it as a mention.
     seen.add(ref.id);
@@ -196,9 +237,10 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
     const space = await expandDoc(ctx, projectId, ref, { seen });
     documents.push(block('workspace', space.title, shown(space.body)));
   }
-  // @bart sees the person's pdf highlights: the paper in front in the Stage, then the ones the documents mention.
-  const front = agent === 'bart' && stage && stage.kind === 'pdf' ? await stagePaper(ctx, project, rows, stage) : null;
-  if (front) documents.push(stageBlock(front, stage.page, front.ink));
+  // @bart sees the person's highlights: the pdf or web page in front in the Stage, then the ones the documents mention.
+  const inFront = agent === 'bart' && stage ? { pdf: stagePaper, web: stageWebPage }[stage.kind] : null;
+  const front = inFront ? await inFront(ctx, project, rows, stage) : null;
+  if (front) documents.push(front.source === 'web' ? webStageBlock(front, front.ink) : stageBlock(front, stage.page, front.ink));
   if (agent === 'bart') {
     const mentioned = await mentionedPapers(ctx, project, rows.filter((row) => seen.has(row.id) && row.id !== pointed && !(front && front.id === row.id)));
     const marked = mentionedBlock(mentioned);
@@ -229,4 +271,4 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
   return { project, dirs, head, contextJson: `<context_json>\n${JSON.stringify(entries, null, 1)}\n</context_json>`, documents: documents.join('\n\n'), entries, workspaceName: workspace.name };
 }
 
-module.exports = { HERE, markPlace, buildContext, conversationBlock, catalogEntries, libraryDirs, block, highlightBlock, paperOf };
+module.exports = { HERE, markPlace, buildContext, conversationBlock, catalogEntries, libraryDirs, block, highlightBlock, paperOf, webPageOf };

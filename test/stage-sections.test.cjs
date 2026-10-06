@@ -275,6 +275,7 @@ function stage({ file = PDF, nodes = {}, api: own = {}, library = [], props: mor
     open: (href, options) => { ref.current.openInput(href, options); tree = hooks.run(Stage, props, ref); },
     settle: async () => { for (let n = 0; n < 5; n += 1) await new Promise((resolve) => setImmediate(resolve)); tree = hooks.run(Stage, props, ref); },
     rerender: () => { tree = hooks.run(Stage, props, ref); },
+    front: () => ref.current.front(),
     fire: (type) => { for (const fn of [...(listeners[type] || [])]) fn({ type }); },
     paper: () => { const [view] = findAll(tree, 'PaperView'); if (view) view.props.ref.current = paper; return view; },
     one: (name) => findAll(tree, name)[0] || null,
@@ -599,6 +600,39 @@ test.describe('the Stage: a passage in a page or a drawn file', () => {
     s.rerender();
     assert.equal(s.one('FindCard').props.text, SECTIONS[0].find);
     assert.deepEqual(finds(s), [], 'a pdf is found by its viewer');
+  });
+});
+
+// MATH-54 (2026-10-06): what is in front for @bart's <stage>: a web page by where it is now and its title; a pdf and a
+// drawn file as before.
+test.describe('the Stage: what is in front for @bart', () => {
+  test.afterEach(() => {
+    for (const name of ['window', 'requestAnimationFrame', 'ResizeObserver', 'MutationObserver', 'CSS', 'Highlight', 'NodeFilter']) delete globalThis[name];
+    globalThis.document = { baseURI: 'file:///app/index.html' };
+  });
+
+  test('a web page is { kind: "web", url, title }, the page as it is now', async () => {
+    const s = pageStage();
+    s.open(ESSAY);
+    await s.settle();
+    const id = opened(s);
+    assert.deepEqual(s.front(), { kind: 'web', url: ESSAY, title: '' }, 'not loaded yet: where it is going');
+    loaded(s, id);
+    assert.deepEqual(s.front(), { kind: 'web', url: ESSAY, title: 'How might we learn?' });
+    loaded(s, id, 'https://andymatuschak.org/hmwl/#notes');
+    assert.equal(s.front().url, 'https://andymatuschak.org/hmwl/#notes', 'where the tab went (main files it without the fragment)');
+  });
+
+  test('a pdf and a drawn file are as before', async () => {
+    const s = stage();
+    s.open(PAPER);
+    await s.settle();
+    s.paper();
+    assert.deepEqual(s.front(), { rowId: null, url: `file://${PAPER}`, page: 1, kind: 'pdf' });
+    const { s: file } = fileStage();
+    file.open(NOTES);
+    await file.settle();
+    assert.deepEqual(file.front(), { rowId: null, url: null, page: 1, kind: 'file' });
   });
 });
 

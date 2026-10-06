@@ -17,6 +17,7 @@ const { LIBRARY_TAGS } = require('./db.cjs');
 const { reading } = require('../stage/files.cjs');
 const { readHtmlMeta } = require('./page-meta.cjs');
 const { withAsk } = require('../../shared/mark-answers.cjs');
+const { addressKey, isPreviewAddress } = require('../../shared/address-key.cjs');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_PDF_BYTES = 200 * 1024 * 1024;
@@ -79,8 +80,7 @@ async function readAnnotations(ctx, id) {
   if (own) return own;
   const row = await ctx.libraryDb.get(id);
   if (!row) return null;
-  const addresses = [inkAddress(row), row.path && row.url ? String(row.url).replace(/#.*$/, '') : ''].filter(Boolean);
-  for (const address of addresses) {
+  for (const address of inkAddresses(row)) {
     const ink = readJson(pageAnnotationFile(ctx, address));
     if (ink) return ink;
   }
@@ -100,66 +100,106 @@ async function writeAnnotations(ctx, id, value) {
   return inkInTurn(() => writeJson(annotationFile(ctx, id), value));
 }
 
-// Ink on a pdf read in the Browser pane (2026-09-22). With the library's row when the library holds
-// the pdf (a file, or an address it knows: the Paper pane shows the same ink), else kept by the
-// address the library would give it, so a row added later finds it (readAnnotations).
+// Ink on a pdf read in the Browser pane (2026-09-22), and on a web page (MATH-54). With the library's row when the
+// library holds it (a file, or an address it knows: the Paper pane shows the same ink), else kept by the address the
+// library would give it, so a row added later finds it (readAnnotations).
+// Since MATH-54 (2026-10-06) an address is filed as addressKey spells it: no #fragment, http or https, www. or not, no
+// trailing slash, no utm_* and other tracking parameters. Ink filed before then under the address itself (only its
+// #fragment dropped) is still read, and written to the new spelling the next time; no file is renamed. A local server
+// or a sandbox preview (isPreviewAddress) is never filed: its address changes from run to run.
 
-/** What ink is kept by: a file's real path, or the address as the library spells it (arXiv's abstract page for its pdf). */
-function inkAddress(row) {
-  if (row.path) { try { return pathToFileURL(fs.realpathSync(row.path)).href; } catch { return pathToFileURL(path.resolve(row.path)).href; } }
-  return row.url ? String(row.url).replace(/#.*$/, '') : '';
+/** The address as ink was filed by before MATH-54: as the library spells it, without its #fragment. */
+const rawAddress = (url) => String(url || '').replace(/#.*$/, '');
+
+/**
+ * What ink is kept by, in the order it is looked for (the first is what it is written under): a file's real path; an address as the library spells it (arXiv's
+ * abstract page for its pdf) and filed (addressKey), then as it was filed before. A row with both (a copy saved from the
+ * web) answers for its address too. A preview's address is none of them.
+ */
+function inkAddresses(row) {
+  const out = [];
+  if (row.path) { try { out.push(pathToFileURL(fs.realpathSync(row.path)).href); } catch { out.push(pathToFileURL(path.resolve(row.path)).href); } }
+  if (row.url && !isPreviewAddress(row.url)) out.push(addressKey(row.url), rawAddress(row.url));
+  return [...new Set(out.filter(Boolean))];
 }
 
 function pageAnnotationFile(ctx, address) {
   return path.join(ctx.dataRoot, 'annotations', 'pages', `${createHash('sha256').update(address).digest('hex')}.json`);
 }
 
+/**
+ * Where the ink of `input` (an address or a path) is: { id }, the library's row; else { file, older }, the file it is
+ * written to and the ones it may have been filed in before, first first; { file: null, older: [] } for a preview.
+ */
 async function inkPlace(ctx, input) {
+  if (isPreviewAddress(input)) return { file: null, older: [] };
   const found = resolveAddition(input, { homeDir: ctx.homeDir });
   const row = sameAs(await ctx.libraryDb.list(), found);
-  return row ? { id: row.id } : { file: pageAnnotationFile(ctx, inkAddress(found)) };
+  if (row) return { id: row.id };
+  const [file, ...older] = inkAddresses(found).map((address) => pageAnnotationFile(ctx, address));
+  return { file: file || null, older };
 }
+
+/** The ink kept at a place that is no row: its own file, else the first older one there is. */
+const readPlace = (place) => [place.file, ...place.older].filter(Boolean).map(readJson).find(Boolean) || null;
 
 async function readPageAnnotations(ctx, input) {
   const place = await inkPlace(ctx, input);
-  return place.id ? readAnnotations(ctx, place.id) : readJson(place.file);
+  return place.id ? readAnnotations(ctx, place.id) : readPlace(place);
+}
+
+/** The file ink drawn on `found` before the library held it is in (by its address, either spelling), or null. */
+function inkBefore(ctx, found) {
+  return inkAddresses(found).map((address) => pageAnnotationFile(ctx, address)).find((file) => fs.existsSync(file)) || null;
+}
+
+/** Ink made on `found` while it was only an address becomes row `id`'s, when that has none of its own. */
+function carryInk(ctx, found, id) {
+  const before = inkBefore(ctx, found);
+  const own = annotationFile(ctx, id);
+  if (before && !fs.existsSync(own)) { fs.mkdirSync(path.dirname(own), { recursive: true, mode: DIR_MODE }); fs.copyFileSync(before, own); }
 }
 
 /**
- * The absolute path of the file a pdf's ink is read from (`where`: { rowId } or { url }, as readAnnotations and
- * readPageAnnotations find it): where it would be written when there is none yet. For @bart (MATH-27), to read again.
+ * The absolute path of the file a pdf's or a web page's ink is read from (`where`: { rowId } or { url }, as
+ * readAnnotations and readPageAnnotations find it): where it would be written when there is none yet; '' for a preview,
+ * which keeps none. For @bart (MATH-27), to read again.
  */
 async function annotationsFileOf(ctx, where) {
   const place = where && where.rowId ? { id: where.rowId } : await inkPlace(ctx, where && where.url);
-  if (!place.id) return place.file;
+  if (!place.id) return [place.file, ...place.older].filter(Boolean).find((file) => fs.existsSync(file)) || place.file || '';
   const own = annotationFile(ctx, place.id);
   if (fs.existsSync(own)) return own;
   const row = await ctx.libraryDb.get(place.id);
-  const addresses = row ? [inkAddress(row), row.path && row.url ? String(row.url).replace(/#.*$/, '') : ''].filter(Boolean) : [];
-  for (const address of addresses) if (fs.existsSync(pageAnnotationFile(ctx, address))) return pageAnnotationFile(ctx, address);
+  for (const address of row ? inkAddresses(row) : []) if (fs.existsSync(pageAnnotationFile(ctx, address))) return pageAnnotationFile(ctx, address);
   return own;
 }
 
+/** → whether it was written: a preview's ink is not (inkPlace). */
 async function writePageAnnotations(ctx, input, value) {
   return inkInTurn(async () => {
     const place = await inkPlace(ctx, input);
-    return writeJson(place.id ? annotationFile(ctx, place.id) : place.file, value);
+    const file = place.id ? annotationFile(ctx, place.id) : place.file;
+    return file ? writeJson(file, value) : false;
   });
 }
 
 /**
- * A finished answer from a highlight's note onto its mark, in the ink kept for its pdf (`where`: { rowId } or { url }, as
- * the Stage keeps it), as the Stage puts it there (shared/mark-answers.cjs withAsk): once, and only while the mark is
- * there. → whether the ink was written.
+ * A finished answer from a highlight's note onto its mark, in the ink kept for its pdf or web page (`where`: { rowId } or
+ * { url }, as the Stage keeps it), as the Stage puts it there (shared/mark-answers.cjs withAsk): once, and only while the
+ * mark is there. `page` is the pdf page the mark is on; null for a web page's mark (MATH-54), which is in its "web" list.
+ * → whether the ink was written.
  */
 async function addMarkAnswer(ctx, where, page, markId, entry) {
   return inkInTurn(async () => {
     const place = where && where.rowId ? { id: where.rowId } : await inkPlace(ctx, where && where.url);
-    const held = place.id ? await readAnnotations(ctx, place.id) : readJson(place.file);
+    const file = place.id ? annotationFile(ctx, place.id) : place.file;
+    if (!file) return false;
+    const held = place.id ? await readAnnotations(ctx, place.id) : readPlace(place);
     const marks = held && typeof held === 'object' && !Array.isArray(held) ? held : {};
     const next = withAsk(marks, page, markId, entry);
     if (next === marks) return false;
-    return writeJson(place.id ? annotationFile(ctx, place.id) : place.file, next);
+    return writeJson(file, next);
   });
 }
 
@@ -449,20 +489,10 @@ function sameAs(rows, found, who = null) {
     if (repo) return repo;
   }
   // A repository with an id was matched by it above; an address equal to another row's is then a different repository.
-  const page = !found.path && !found.folder_path && !found.github_id && found.url ? pageKey(found.url) : null;
+  // One page however it is spelled (shared/address-key.cjs: http or https, www., a trailing slash, a #fragment, utm_*…).
+  const page = !found.path && !found.folder_path && !found.github_id && found.url ? addressKey(found.url) : null;
   // (a row with a file answers for its address too: a pdf saved from the web keeps where it came from, 2026-09-23)
-  return rows.find((row) => (found.path && row.path === found.path) || (found.folder_path && row.folder_path === found.folder_path) || (page && row.url && pageKey(row.url) === page)) || null;
-}
-
-/**
- * What two spellings of one page share: `http` or `https`, with or without `www.`, a trailing slash, a #fragment. The
- * query stays — `?id=2` can be another page. Anything that is not a web address is itself.
- */
-function pageKey(url) {
-  let u;
-  try { u = new URL(url); } catch { return String(url || ''); }
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') return u.href;
-  return `${u.host.toLowerCase().replace(/^www\./, '')}${u.pathname.replace(/\/+$/, '')}${u.search}`;
+  return rows.find((row) => (found.path && row.path === found.path) || (found.folder_path && row.folder_path === found.folder_path) || (page && row.url && addressKey(row.url) === page)) || null;
 }
 
 /**
@@ -592,9 +622,7 @@ async function addPdfCopy(ctx, input, bytes, { inspectPdf, name: given = null } 
     throw error;
   }
   // ink made on it while it was only an address becomes the row's
-  const before = pageAnnotationFile(ctx, inkAddress(found));
-  const own = annotationFile(ctx, id);
-  if (fs.existsSync(before) && !fs.existsSync(own)) { fs.mkdirSync(path.dirname(own), { recursive: true, mode: DIR_MODE }); fs.copyFileSync(before, own); }
+  carryInk(ctx, found, id);
   if (inspectPdf) {
     try { row = await ctx.libraryDb.setCategory(id, { type: 'pdf', tags: [...new Set([...found.tags, ...(await inspectPdf(file))])] }, CATEGORY_RULES); } catch { /* not readable now: recategorize tries again */ }
   }
@@ -626,7 +654,7 @@ async function addPageCopy(ctx, input, save, { name: given = null } = {}) {
   let row;
   try {
     const saved = await save(dir);
-    if (!saved || pageKey(saved.url) !== pageKey(found.url)) throw new Error('The page changed before it was saved. Save it again.');
+    if (!saved || addressKey(saved.url) !== addressKey(found.url)) throw new Error('The page changed before it was saved. Save it again.');
     if (!fileThere(file)) throw new Error('The page was not saved');
     const clean = (value) => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, 200) : '');
     row = await ctx.libraryDb.insert({ id, name: clean(given) || clean(saved.title) || found.name, type: 'html', tags: [], path: file, url: found.url, folder_path: null, project_id: null, github_id: null, categorized: CATEGORY_RULES });
@@ -635,9 +663,7 @@ async function addPageCopy(ctx, input, save, { name: given = null } = {}) {
     throw error;
   }
   // ink made on it while it was only an address becomes the row's, as addPdfCopy does
-  const before = pageAnnotationFile(ctx, inkAddress(found));
-  const own = annotationFile(ctx, id);
-  if (fs.existsSync(before) && !fs.existsSync(own)) { fs.mkdirSync(path.dirname(own), { recursive: true, mode: DIR_MODE }); fs.copyFileSync(before, own); }
+  carryInk(ctx, found, id);
   // the description the page gives of itself, as addItem asks a page for one: read from the copy, not the network
   const { description } = readHtmlMeta(readBody(file));
   const summary = description.replace(/\s+/g, ' ').trim().slice(0, 1200);
@@ -740,9 +766,7 @@ async function addFileCopy(ctx, { bytes, mime, name: given = null, url = null } 
   }
   if (pdf && found) {
     // ink made on it while it was only an address becomes the row's, as addPdfCopy does
-    const before = pageAnnotationFile(ctx, inkAddress(found));
-    const own = annotationFile(ctx, id);
-    if (fs.existsSync(before) && !fs.existsSync(own)) { fs.mkdirSync(path.dirname(own), { recursive: true, mode: DIR_MODE }); fs.copyFileSync(before, own); }
+    carryInk(ctx, found, id);
   }
   if (pdf && inspectPdf) {
     try { row = await ctx.libraryDb.setCategory(id, { type: 'pdf', tags: [...new Set([...tags, ...(await inspectPdf(file))])] }, CATEGORY_RULES); } catch { /* not readable now: recategorize tries again */ }

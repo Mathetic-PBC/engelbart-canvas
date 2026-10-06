@@ -6,6 +6,10 @@
 
 const ATTRIBUTION = /^\*([^*]+)\*$/;
 
+// Where a web page's highlights are kept in its ink (MATH-54, 2026-10-06): one list beside the pdf pages' numbered ones,
+// { "web": [mark] }, a mark { id, quote: { exact, prefix, suffix }, note, asks, … } with no page (src/main/bart/highlights.cjs).
+const WEB = 'web';
+
 /**
  * An answer's lines as main sends them (`bart> …`, then a blank line and its foot, "*Sol · high · 12 s*") → { answer,
  * foot }: the answer as the document would hold it and as a follow-up sends it back (main: bart/reply.cjs answerText),
@@ -34,12 +38,16 @@ function askEntry({ id, question, lines, meta, at }) {
   };
 }
 
-/** The marks with `entry` added to the answers of mark `markId` on `page` (once). Unchanged when the mark is gone or has it. */
+/**
+ * The marks with `entry` added to the answers of mark `markId` on `page` (once), or in the web page's list when `page` is
+ * null (WEB). Unchanged when the mark is gone or has it.
+ */
 function withAsk(marks, page, markId, entry) {
+  if (page == null) page = WEB;
   const list = (marks || {})[page];
   const m = Array.isArray(list) ? list.find((x) => x && x.id === markId) : null;
   if (!m || (m.asks || []).some((a) => a && a.id === entry.id)) return marks || {};
   return { ...marks, [page]: list.map((x) => (x === m ? { ...m, asks: [...(m.asks || []), entry] } : x)) };
 }
 
-module.exports = { answerOf, askEntry, withAsk };
+module.exports = { WEB, answerOf, askEntry, withAsk };

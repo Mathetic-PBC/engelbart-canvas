@@ -44,7 +44,9 @@ function optStr(value, what, max = MAX_NAME) {
 
 // A document an agent is asked from: a note, a workspace, or (MATH-27, 2026-10-06) a highlight on a pdf in the Stage,
 // `{ kind: 'mark', id, rowId | url, page }`: the mark's id, the library row the pdf is (else the address its ink is kept
-// by), and its page. A mark is no document: reading, writing or copying one is refused further on (projects.resolveDoc).
+// by), and its page. A highlight on a web page (MATH-54) has no page: `{ kind: 'mark', id, rowId | url, source: 'web' }`,
+// its mark in the ink's "web" list. A mark is no document: reading, writing or copying one is refused further on
+// (projects.resolveDoc).
 function docRef(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('doc ref must be an object');
   if (value.kind === 'note') return { kind: 'note', id: str(value.id, 'note id', 64) };
@@ -52,10 +54,13 @@ function docRef(value) {
   if (value.kind === 'mark') {
     const id = str(value.id, 'mark id', 64);
     if (!/^[\w-]+$/.test(id)) throw new TypeError('mark id is invalid');
-    if (!Number.isInteger(value.page) || value.page < 1 || value.page > 100000) throw new TypeError('page must be a page number');
+    const web = value.source === 'web';
+    if (value.source != null && !web) throw new TypeError('a highlight is on a pdf or on a web page (source "web")');
+    if (web ? value.page != null : !Number.isInteger(value.page) || value.page < 1 || value.page > 100000) throw new TypeError(web ? 'a highlight on a web page has no page' : 'page must be a page number');
     const rowId = value.rowId == null ? null : str(value.rowId, 'library id', 64), url = value.url == null ? null : str(value.url, 'address', 8192);
-    if (!rowId === !url) throw new TypeError('a highlight is on a library pdf (rowId) or on an address (url): one of the two');
-    return rowId ? { kind: 'mark', id, rowId, page: value.page } : { kind: 'mark', id, url, page: value.page };
+    if (!rowId === !url) throw new TypeError('a highlight is on a library item (rowId) or on an address (url): one of the two');
+    const on = web ? { source: 'web' } : { page: value.page };
+    return rowId ? { kind: 'mark', id, rowId, ...on } : { kind: 'mark', id, url, ...on };
   }
   throw new TypeError('Unknown doc kind');
 }
@@ -73,24 +78,32 @@ function clipped(value, what, max) {
 /**
  * What a question asked from a highlight carries besides its ref: the passage (its start and end past 20,000 characters),
  * the note as it stands, the paper's name, and the page's text around the passage (pdf/marks.js pageWindow, about 4,000
- * characters; cut in the middle past 8,000).
+ * characters; cut in the middle past 8,000). A web page's highlight (MATH-54) is the same, its `paper` the page's title;
+ * its quote may come as the mark keeps it, { exact, prefix, suffix }, of which the passage is `exact`.
  */
 function highlightInput(value) {
   const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-  return { quote: clipped(input.quote == null ? '' : input.quote, 'quote', 20000), note: str(input.note == null ? '' : input.note, 'note', 20000), paper: optStr(input.paper, 'paper name'), pageText: clipped(input.pageText == null ? '' : input.pageText, 'page text', 8000) };
+  const quote = input.quote && typeof input.quote === 'object' && !Array.isArray(input.quote) ? input.quote.exact : input.quote;
+  return { quote: clipped(quote == null ? '' : quote, 'quote', 20000), note: str(input.note == null ? '' : input.note, 'note', 20000), paper: optStr(input.paper, 'paper name'), pageText: clipped(input.pageText == null ? '' : input.pageText, 'page text', 8000) };
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * What is in front in the Stage when @bart is asked (MATH-27, 2026-10-06): { rowId, url, page, kind }, the library row
- * the tab shows (else its address) and the page in view. Only a pdf is read (bart/context.cjs <stage>): anything else,
- * and no Stage, is null.
+ * the tab shows (else its address) and the page in view. A web page (MATH-54) is { kind: 'web', url, title }: where the
+ * tab is and what the page calls itself. Only those two are read (bart/context.cjs <stage>): anything else, and no
+ * Stage, is null.
  */
 function stageInput(value) {
   if (value == null) return null;
   if (typeof value !== 'object' || Array.isArray(value)) throw new TypeError('stage must be an object');
   const kind = str(value.kind == null ? '' : value.kind, 'stage kind', 24);
+  if (kind === 'web') {
+    const url = str(value.url, 'address', 4096).trim();
+    const title = clipped(value.title == null ? '' : value.title, 'page title', 300).replace(/\s+/g, ' ').trim();
+    return url ? { kind, url, title } : null;
+  }
   if (kind !== 'pdf') return null;
   const rowId = value.rowId == null ? null : str(value.rowId, 'library id', 64);
   if (rowId && !UUID_RE.test(rowId)) throw new TypeError('library id is invalid');
@@ -448,7 +461,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // Its answer is put on the mark here (library.addMarkAnswer), as the Stage would, since a reloaded window has no one
   // waiting for it; how it ended is told to every window (`paper-ask-done`): each Stage holding the pdf shows the
   // answer, and the window that asked drops its box or says "No answer" (second pass, 2026-10-06).
-  const paperAsks = new Map(); // askId → { win, projectId, askId, markId, page, rowId, url, question, progress }
+  const paperAsks = new Map(); // askId → { win, projectId, askId, markId, page, rowId, url, source?, question, progress }
   const paperDone = (payload) => {
     paperAsks.delete(payload.askId);
     if (windowHandler) announce('engelbart:paper-ask-done', payload); else if (notify) notify('engelbart:paper-ask-done', payload);
@@ -487,7 +500,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       const stage = agent === 'bart' ? stageInput(value.stage) : null;
       const question = { askId, ref, workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice, agent, ...(ref.kind === 'mark' ? { highlight: highlightInput(value.highlight) } : {}), ...(stage ? { stage } : {}) };
       if (ref.kind === 'mark') {
-        mark = { markId: ref.id, page: ref.page, rowId: ref.rowId || null, url: ref.rowId ? null : ref.url };
+        // a web page's mark has no page (MATH-54): its answer goes in the ink's "web" list
+        mark = { markId: ref.id, page: ref.source === 'web' ? null : ref.page, rowId: ref.rowId || null, url: ref.rowId ? null : ref.url, ...(ref.source === 'web' ? { source: 'web' } : {}) };
         paperAsks.set(askId, { win, projectId, askId, ...mark, question: question.text.trim(), progress: {} });
       }
       // The ask is an agent of its workspace: running now, waiting for you once its answer (or failure) has landed.
@@ -513,7 +527,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handleFor('running-paper-asks', (win, pid) => {
     const projectId = str(pid, 'project id', 64);
     return [...paperAsks.values()].filter((held) => held.projectId === projectId && (!win || held.win === win))
-      .map(({ askId, markId, page, rowId, url, question, progress }) => ({ ...progress, askId, markId, page, rowId, url, question, agent: 'bart' }));
+      .map(({ askId, markId, page, rowId, url, source, question, progress }) => ({ ...progress, askId, markId, page, rowId, url, ...(source ? { source } : {}), question, agent: 'bart' }));
   });
   handle('stop-bart', (askId) => bart.stop(str(askId, 'ask id', 64)));
   // What the @bart line's selector offers and what its flags are checked against: the models file,

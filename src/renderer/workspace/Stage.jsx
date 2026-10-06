@@ -681,10 +681,16 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   // ⌘1–9 (MATH-12, 2026-10-06): the Stage's n-th tab, when the Stage is what was last clicked (Workspace decides).
   const tabAt = (index) => { const t = tabs[index]; if (!t) return false; select(t); return true; };
   // What is in front (MATH-27, 2026-10-06), for @bart's <stage>: { rowId, url, page, kind }, a pdf's page the one in view.
+  // A web page (MATH-54) is { kind: 'web', url, title }: where the tab is now and what the page calls itself (main finds
+  // the library's row and the ink by the address; a sandbox preview's is not kept).
   const front = () => {
     const t = tabsRef.current.find((x) => x.id === frontRef.current) || tabsRef.current[0];
     if (!t) return null;
     const p = t.pdf;
+    if (!p && !t.file && (isPage(kindOf(t.url)) || t.opened)) { // a file (one drawn here, a docx made a page) is no web page
+      const url = (t.web && t.web.url) || t.url;
+      if (url && url !== 'about:blank') return url.length > 4096 ? null : { kind: 'web', url, title: (t.web && t.web.title) || (t.row && t.row.name) || '' };
+    }
     if (!p || p.error || (!p.rowId && !p.url)) return { rowId: null, url: null, page: 1, kind: t.file ? 'file' : 'page' };
     if (!p.rowId && String(p.url).length > 4096) return null; // past what main takes
     const viewer = paperRef.current;
@@ -720,7 +726,8 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   React.useEffect(() => {
     if (!api.onPaperAskDone) return undefined;
     return api.onPaperAskDone((done) => {
-      if (done && done.entry && done.markId && (done.rowId || done.url)) landRef.current(done.rowId ? { rowId: done.rowId } : { url: done.url }, done.page, done.markId, done.entry);
+      // a web page's mark (MATH-54, `page` null) is no pdf's: main has put its answer in the page's ink
+      if (done && done.entry && done.markId && done.page != null && (done.rowId || done.url)) landRef.current(done.rowId ? { rowId: done.rowId } : { url: done.url }, done.page, done.markId, done.entry);
     });
   }, []);
   const askFromPaper = async (p, ask) => {
