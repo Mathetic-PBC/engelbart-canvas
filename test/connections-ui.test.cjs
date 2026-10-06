@@ -28,7 +28,7 @@ const bridge = {};
 global.window = { engelbartAPI: bridge };
 try { compiled._compile(built.outputFiles[0].text, filename); }
 finally { if (previousWindow === undefined) delete global.window; else global.window = previousWindow; }
-const { default: Connections, GithubConnection, githubAction, ToolConnection, toolAction, watchTools, TOOL_CONNECTIONS } = compiled.exports;
+const { ConnectionsPage, GithubConnection, githubAction, ToolConnection, toolAction, watchTools, TOOL_CONNECTIONS } = compiled.exports;
 const signedOut = { configured: true, connected: false, pending: null, error: '', installUrl: '' };
 const render = (status, extra = {}) => {
   elements.length = 0;
@@ -151,24 +151,32 @@ test('the connected options are Repository access and Disconnect, and no Refresh
   assert.deepEqual(elements.find(element => element.props.provider === 'github').props.items.map(item => item.action), ['disconnect']);
 });
 
-test('Connections is an icon in the top-right controls, left of the notification bell, and not in the sidebar', () => {
-  elements.length = 0;
-  const html = renderToStaticMarkup(React.createElement(Connections));
-  const trigger = elements.find(element => element.type === 'button');
-  assert.equal(trigger.props['aria-label'], 'Connections');
-  assert.equal(trigger.props.title, 'Connections');
-  assert.equal(trigger.props['aria-haspopup'], 'dialog');
-  assert.equal(trigger.props['aria-expanded'], false);
-  assert.equal(trigger.props.style.width, 32, 'the bell\'s size');
-  assert.equal(trigger.props.style.height, 32);
-  assert.doesNotMatch(html, />Connections</, 'an icon, no label beside it');
-  assert.doesNotMatch(html, /data-connections-panel/, 'closed until clicked');
+test('Connections is a page of the Settings window, not an icon in the top-right controls nor in the sidebar (MATH-64)', () => {
   const controls = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/WindowControls.jsx'), 'utf8');
-  assert.match(controls, /<Connections \/>\s*<SandboxNotifications \/>/);
+  assert.doesNotMatch(controls, /<Connections|import Connections/);
+  assert.match(controls, /<SandboxNotifications \/>\s*<Settings test=\{test\} \/>/);
+  const css = fs.readFileSync(path.join(__dirname, '../src/renderer/styles.css'), 'utf8');
+  assert.doesNotMatch(css, /connections-trigger/);
   const rail = fs.readFileSync(path.join(__dirname, '../src/renderer/workspace/Rail.jsx'), 'utf8');
   assert.doesNotMatch(rail, /Connections/);
   const source = fs.readFileSync(path.join(__dirname, '../src/renderer/workspace/Connections.jsx'), 'utf8');
-  assert.match(source, /usePlaced\(anchor, \{ gap: 6, align: 'end'/, 'the panel hangs from the icon\'s right edge, inside the window');
+  assert.doesNotMatch(source, /createPortal|usePlaced|export default/, 'no popover left: no portal, no placing, no trigger');
+});
+
+test('the page holds three rows in a group of Settings\' own: GitHub, then Claude Code and Codex, with no popover header or ×', () => {
+  Object.assign(bridge, { githubStatus: async () => signedOut, onGithub: () => () => {}, tools: async () => ({}), onTools: () => () => {} });
+  try {
+    elements.length = 0;
+    const html = renderToStaticMarkup(React.createElement(ConnectionsPage));
+    assert.deepEqual([...html.matchAll(/data-connection="([^"]+)"/g)].map(match => match[1]), ['github', 'claude', 'codex']);
+    assert.match(html, /^<section aria-label="Accounts" data-connections-page="1">/);
+    assert.match(html, /Checking connection…/);
+    assert.equal((html.match(/Checking…/g) || []).length, 2, 'Claude Code and Codex before the first snapshot');
+    assert.doesNotMatch(html, /Close connections|role="dialog"|data-connections-panel|×/);
+    assert.equal((html.match(/aria-hidden="true" style="height:1px/g) || []).length, 2, 'hairlines between the three rows, as Model\'s groups have');
+  } finally {
+    for (const key of Object.keys(bridge)) delete bridge[key];
+  }
 });
 
 // Claude Code and Codex (2026-10-03): rows drawn from the snapshots the tools manager sends, over a pretend machine
@@ -309,7 +317,7 @@ test('each Claude Code / Codex action calls what the setup dialog calls; pages o
   }
 });
 
-test('the panel reads the snapshot when it opens, follows every change, and lets go when it closes', async () => {
+test('the page reads the snapshot when it opens, follows every change, and lets go when it closes', async () => {
   const listeners = new Set();
   let answer;
   const first = { checked: true, tools: { claude: { id: 'claude' } } };
@@ -343,9 +351,9 @@ test('the panel reads the snapshot when it opens, follows every change, and lets
   }
 });
 
-test('the panel shows Claude Code and Codex under GitHub', () => {
+test('the page shows Claude Code and Codex under GitHub, and watches the tools while it is open', () => {
   assert.deepEqual([...TOOL_CONNECTIONS], ['claude', 'codex']);
   const source = fs.readFileSync(path.join(__dirname, '../src/renderer/workspace/Connections.jsx'), 'utf8');
-  assert.match(source, /<GithubConnection [^\n]*\/>\n\s*\{TOOL_CONNECTIONS\.map\(name => [^\n]*\n\s*<ToolConnection id=\{name\} tool=\{tools\?\.tools\?\.\[name\]\}/);
-  assert.match(source, /React\.useEffect\(\(\) => watchTools\(setTools\), \[\]\)/, 'watched while the panel is open');
+  assert.match(source, /<GithubConnection [^\n]*\/>\n\s*\{TOOL_CONNECTIONS\.map\(name => <ToolConnection key=\{name\} id=\{name\} tool=\{tools\?\.tools\?\.\[name\]\}/);
+  assert.match(source, /React\.useEffect\(\(\) => watchTools\(setTools\), \[\]\)/, 'watched while the page is open');
 });

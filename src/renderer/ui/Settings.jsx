@@ -3,16 +3,18 @@
 // more can be added), and on the right the open page's groups, each a card of rows with a label, a line on what it is
 // for, and its control. For now: Model, what Quick, Standard and Deep run on for each provider, the levels a plain
 // @discover line (Standard) and its --quick / --deep take (models file → `discover`, src/main/bart/settings.cjs; each pick
-// is saved as it is made, and the next run starts there, in any window, with no restart); and in test mode Test data,
+// is saved as it is made, and the next run starts there, in any window, with no restart); Connections, the app's accounts
+// (../workspace/Connections.jsx; MATH-64, it was its own icon beside the bell until then); and in test mode Test data,
 // the actions that were test mode's own gear (./TestToggle.jsx keeps the pill).
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
 import { EFFORT_LABELS } from '../../main/bart/question.cjs';
 import { shownProviders, defaultProvider, defaultStep, patchOf } from '../model/intelligence.js';
+import { ConnectionsPage } from '../workspace/Connections.jsx';
+import { Group, Row, BUTTON, text } from './SettingsRows.jsx';
 
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
-const text = (size, color = '#171717', weight = 400) => ({ font: `${weight} ${size}px/1.4 var(--font-sans)`, color });
 
 // The gear: Lucide's "settings", drawn as the bell beside it is (17px, a 2px stroke), in a button like the bell's (styles.css .settings-gear).
 const GEAR = (
@@ -40,36 +42,6 @@ function Choice({ label, value, options, onChange, disabled, field, width }) {
       </select>
       <svg aria-hidden="true" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="#8f8f8f" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" style={{ position: 'absolute', right: 8, top: '50%', marginTop: -5, pointerEvents: 'none' }}><path d="M2.5 4 5 6.5 7.5 4" /></svg>
     </span>
-  );
-}
-
-// A group on a settings page: its heading, then a card of rows split by inset hairlines. The card stands out past the
-// page's left edge by its own padding, so a row's words line up under the title and the heading (as Linear's do).
-const PAD = 16;
-const GROUP_HEAD = { display: 'flex', alignItems: 'baseline', gap: 8, margin: '28px 0 10px', ...text(14, '#171717', 500) };
-const CARD = { margin: `0 -${PAD}px`, border: '1px solid #ebebeb', borderRadius: 10, background: '#fff', boxShadow: '0 1px 2px #00000008' };
-const ROW = { display: 'flex', alignItems: 'center', gap: 10, minHeight: 60, boxSizing: 'border-box', padding: `12px ${PAD}px` };
-const HAIRLINE = { height: 1, margin: `0 ${PAD}px`, background: '#efefef' };
-
-function Group({ title, note, children, ...rest }) {
-  const rows = React.Children.toArray(children);
-  return (
-    <section aria-label={title} {...rest}>
-      <div style={GROUP_HEAD}>{title}{note}</div>
-      <div style={CARD}>{rows.map((row, index) => <React.Fragment key={row.key}>{index > 0 && <div aria-hidden="true" style={HAIRLINE} />}{row}</React.Fragment>)}</div>
-    </section>
-  );
-}
-
-function Row({ label, hint, children, ...rest }) {
-  return (
-    <div style={ROW} {...rest}>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={text(13.5, '#171717', 500)}>{label}</div>
-        <div style={{ marginTop: 1, ...text(12.5, '#8f8f8f') }}>{hint}</div>
-      </div>
-      {children}
-    </div>
   );
 }
 
@@ -120,8 +92,6 @@ export function IntelligenceLevels({ initial = null }) {
   );
 }
 
-const BUTTON = { height: 30, boxSizing: 'border-box', padding: '0 12px', border: '1px solid #e4e4e4', borderRadius: 7, background: '#fff', boxShadow: '0 1px 1px #0000000a', cursor: 'pointer', flex: 'none', ...text(13, '#171717', 500) };
-
 /** Test data (test mode only): the test library's folder, and starting it over. `close` shuts the window first where the app starts again. */
 function TestData({ test, close }) {
   const act = (run, shut) => () => { if (shut) close(); run(); };
@@ -140,19 +110,25 @@ function TestData({ test, close }) {
   );
 }
 
-// Lucide's "box" (a model, as model hubs draw one) and "flask-conical", at the nav's size.
+// Lucide's "box" (a model, as model hubs draw one) and "flask-conical", at the nav's size; the plug Connections' own icon
+// was (its 16-unit path at this grid's scale).
 const icon = (paths) => (
   <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" style={{ flex: 'none', display: 'block' }}>{paths}</svg>
 );
 const MODEL_ICON = icon(<><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" /><path d="m3.3 7 8.7 5 8.7-5" /><path d="M12 22V12" /></>);
+const PLUG_ICON = icon(<path d="M8.25 2.25v4.5M15.75 2.25v4.5M6 6.75h12v3a6 6 0 0 1-12 0zM12 15.75v3a3 3 0 0 1-3 3H6" />);
 const FLASK_ICON = icon(<><path d="M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-5.069-10.127A2 2 0 0 1 14 9.527V2" /><path d="M8.5 2h7" /><path d="M7 16h10" /></>);
 
 // The settings window's pages, in order, under their headings in the left column. `shown` (optional) decides from the
 // window's props whether a page is there.
 export const PAGES = Object.freeze([
   { id: 'model', section: 'Settings', title: 'Model', icon: MODEL_ICON, Body: () => <IntelligenceLevels /> },
+  { id: 'connections', section: 'Settings', title: 'Connections', icon: PLUG_ICON, Body: ConnectionsPage },
   { id: 'test-data', section: 'Developer', title: 'Test data', icon: FLASK_ICON, shown: ({ test }) => !!(test && test.testMode), Body: TestData },
 ]);
+
+/** Escape pressed in an open menu on a page (Connections' "…": Sign out, Disconnect) is that menu's: it closes the menu, and the next one the window. */
+export const menuHasEscape = (target) => !!(target && target.closest && target.closest('[role="menu"]'));
 
 const NAV_ITEM = { display: 'flex', alignItems: 'center', gap: 9, width: '100%', height: 30, boxSizing: 'border-box', padding: '0 9px', border: 0, borderRadius: 6, cursor: 'pointer', textAlign: 'left' };
 
@@ -162,7 +138,7 @@ function SettingsDialog({ test, onClose }) {
   const [page, setPage] = React.useState(pages[0].id);
   React.useEffect(() => {
     // Taken before the workspace's own Escape (which leaves the workspace) can see it, as BuildReject does.
-    const onKey = (event) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose(); } };
+    const onKey = (event) => { if (event.key === 'Escape' && !menuHasEscape(event.target)) { event.preventDefault(); event.stopPropagation(); onClose(); } };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, [onClose]);

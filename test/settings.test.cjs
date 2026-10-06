@@ -394,18 +394,37 @@ test('the rows: each agent\'s default per provider, the default providers as a r
   assert.deepEqual([lastPick(shown(root), 'quick').label, lastPick(shown(root), 'build')], ['Astra Ultra', null]);
 });
 
-test('the gear opens the settings window at Model, with Test data only in test mode', () => {
+test('the gear opens the settings window at Model, then Connections, with Test data only in test mode', () => {
   const { PAGES } = load('ui/Settings.jsx');
   const ids = (props) => PAGES.filter((page) => !page.shown || page.shown(props)).map((page) => page.id);
-  assert.deepEqual(ids({ test: null }), ['model']);
-  assert.deepEqual(ids({ test: { testMode: false } }), ['model']);
-  assert.deepEqual(ids({ test: { testMode: true } }), ['model', 'test-data']);
+  assert.deepEqual(ids({ test: null }), ['model', 'connections']);
+  assert.deepEqual(ids({ test: { testMode: false } }), ['model', 'connections']);
+  assert.deepEqual(ids({ test: { testMode: true } }), ['model', 'connections', 'test-data']);
   assert.equal(PAGES[0].title, 'Model');
+  assert.deepEqual([PAGES[1].section, PAGES[1].title, PAGES[1].Body.name], ['Settings', 'Connections', 'ConnectionsPage']);
   const source = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/Settings.jsx'), 'utf8');
   assert.ok(!source.includes('⚙'), 'a drawn gear, not the character');
   assert.match(source, /className="settings-gear"/);
   assert.match(source, /aria-haspopup="dialog" onClick=\{\(\) => setOpen\(true\)\}/, 'no menu: a press opens the window');
-  assert.ok(!source.includes('role="menu"'));
+  assert.doesNotMatch(source, /<[^>]*\srole="menu"/, 'the gear has no menu of its own');
+});
+
+test('Escape with a page\'s "…" menu open closes the menu, not Settings; the next Escape closes Settings (MATH-64)', () => {
+  const { menuHasEscape } = load('ui/Settings.jsx');
+  // The key's target as the DOM gives it: closest() finds the nearest ancestor, itself included, that the selector matches.
+  const menu = { role: 'menu' };
+  const inMenu = { closest: (selector) => (selector === '[role="menu"]' ? menu : null) };
+  const onPage = { closest: () => null };
+  assert.equal(menuHasEscape(inMenu), true, 'Sign out / Disconnect has the key: the menu closes, Settings stays');
+  assert.equal(menuHasEscape(onPage), false, 'the menu closed and focus back on its "…": Settings closes');
+  assert.equal(menuHasEscape(null), false);
+  assert.equal(menuHasEscape({}), false, 'the window itself has no closest()');
+  const source = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/Settings.jsx'), 'utf8');
+  assert.match(source, /if \(event\.key === 'Escape' && !menuHasEscape\(event\.target\)\) \{ event\.preventDefault\(\); event\.stopPropagation\(\); onClose\(\); \}/);
+  // The menu takes the key itself, and marks it used, so the workspace's own Escape leaves it alone.
+  const actions = fs.readFileSync(path.join(__dirname, '../src/renderer/workspace/ConnectionActions.jsx'), 'utf8');
+  assert.match(actions, /if \(event\.key === 'Escape' && open\) \{ event\.preventDefault\(\); event\.stopPropagation\(\); close\(true\); \}/);
+  assert.match(actions, /role="menu"/);
 });
 
 test('Model: Quick, Standard and Deep of the provider @discover runs on, each a model and an effort', () => {

@@ -3,8 +3,10 @@
 // npm run build && npx electron scripts/smoke-settings.cjs
 // Runs the real app, hidden, against disposable data and the fake @bart, and drives Settings (src/renderer/ui/Settings.jsx,
 // 2026-10-06, MATH-53) with real (synthetic) input: the gear, the window's Model page (a level's model and effort
-// saved to the models file as they change, each provider its own group), Escape closing the dialog and not the
-// workspace, and in test mode the Test data page's Reset everything… (confirmed by ENGELBART_CONFIRM_ALL).
+// saved to the models file as they change, each provider its own group), its Connections page (MATH-64: GitHub, Claude
+// Code and Codex, on a pretend machine; Escape in a "…" menu closes the menu, the next one the window), Escape closing
+// the dialog and not the workspace, and in test mode the Test data page's Reset everything… (confirmed by
+// ENGELBART_CONFIRM_ALL).
 // ENGELBART_SETTINGS_SHOTS=<dir> saves pictures.
 const { app, BrowserWindow } = require('electron');
 const assert = require('node:assert/strict');
@@ -15,7 +17,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-settings-smoke-'))
 app.setPath('userData', path.join(root, 'electron'));
 process.env.ENGELBART_HOME_DIR = root;
 process.env.ENGELBART_SUMMARIES = 'off';
-process.env.ENGELBART_TOOLS = 'off';
+process.env.ENGELBART_TOOLS_FAKE = JSON.stringify({ claude: '2.1.300', codex: '0.155.1' }); // signed in: each has its "…"
 process.env.ENGELBART_WEB_PDFS = 'off';
 process.env.ENGELBART_BART_FAKE = '1';
 process.env.ENGELBART_BUILD_FAKE = '1';
@@ -87,7 +89,7 @@ app.whenReady().then(async () => {
     /* ------------------------------------------------ the gear opens the window at Model */
     await press(wc, GEAR);
     await until(() => has(wc, `${DIALOG} [data-level="anthropic:quick"]`), 'the window, at Model');
-    assert.deepEqual(await js(wc, `[...document.querySelectorAll('${DIALOG} [data-settings-page]')].map((b)=>b.textContent)`), ['Model'], 'test mode is off: one page');
+    assert.deepEqual(await js(wc, `[...document.querySelectorAll('${DIALOG} [data-settings-page]')].map((b)=>b.textContent)`), ['Model', 'Connections'], 'test mode is off: Model, then Connections');
     await shot(wc, '2-levels');
     await choose(wc, '[data-level="anthropic:quick"] [data-level-field="model"]', 'opus');
     await until(() => (file(MODELS_FILE) || {}).discover && file(MODELS_FILE).discover.providers.anthropic.quick.model === 'opus', 'Quick on Opus saved');
@@ -98,8 +100,22 @@ app.whenReady().then(async () => {
     await choose(wc, '[data-level="openai:standard"] [data-level-field="model"]', 'sol');
     await until(() => file(MODELS_FILE).discover.providers.openai.standard.model === 'sol', 'Codex Standard on Sol saved');
     await shot(wc, '3-codex');
+
+    /* ------------------------------------------------ Connections: its rows, and Escape in a "…" menu */
+    await press(wc, '[data-settings-page="connections"]');
+    await until(() => has(wc, `${DIALOG} [data-connections-page] [data-connection="claude"] [data-claude-actions]`), 'the Connections page, Claude Code signed in');
+    assert.deepEqual(await js(wc, `[...document.querySelectorAll('${DIALOG} [data-connection]')].map((row)=>row.dataset.connection)`), ['github', 'claude', 'codex']);
+    assert.equal(await has(wc, '[data-window-controls] [data-connections]'), false, 'no Connections icon beside the bell');
+    await shot(wc, '3b-connections');
+    await press(wc, '[data-claude-actions]');
+    await until(() => js(wc, '!!document.activeElement && !!document.activeElement.closest("[data-claude-actions-menu]")'), 'the "…" menu open, Sign out focused');
+    await shot(wc, '3c-connections-menu');
     await key(wc, 'Escape');
-    await until(async () => !(await has(wc, DIALOG)), 'Escape closes the dialog');
+    await until(async () => !(await has(wc, '[data-claude-actions-menu]')), 'Escape closes the menu');
+    assert.ok(await has(wc, DIALOG), 'and not Settings');
+    assert.equal(await js(wc, 'document.activeElement && document.activeElement.hasAttribute("data-claude-actions")'), true, 'focus back on its "…"');
+    await key(wc, 'Escape');
+    await until(async () => !(await has(wc, DIALOG)), 'the next Escape closes the dialog');
     assert.ok(await has(wc, ED), 'and not the workspace');
 
     /* ------------------------------------------------ test mode: the Test data section, and Reset everything… from it */
