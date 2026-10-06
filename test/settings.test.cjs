@@ -394,36 +394,44 @@ test('the rows: each agent\'s default per provider, the default providers as a r
   assert.deepEqual([lastPick(shown(root), 'quick').label, lastPick(shown(root), 'build')], ['Astra Ultra', null]);
 });
 
-test('the panel draws every agent on every provider offered, greys a provider whose CLI cannot run, and shows a last pick with Use default (S-10, S-11, S-07)', () => {
-  const { Intelligence, TestData, SECTIONS } = load('ui/Settings.jsx');
-  const root = home();
-  rememberChoice(root, 'bart', { provider: 'anthropic', model: 'opus', effort: 'xhigh' });
-  rememberChoice(root, 'quick', { provider: 'anthropic', model: 'fable', effort: 'max' });
-  const tools = { usableAgents: () => ['claude'], snapshot: () => ({ tools: { claude: { installed: true, status: 'ready' }, codex: { installed: false, status: 'missing' } } }) };
-  const html = renderToStaticMarkup(React.createElement(Intelligence, { initial: settingsModels(root, { tools }) }));
-  for (const agent of ['bart', 'brainstorm', 'discover', 'build']) {
-    for (const provider of ['anthropic', 'openai']) assert.ok(html.includes(`data-settings-cell="${agent}:${provider}:standard"`), `${agent} on ${provider}`);
-  }
-  assert.ok(html.includes('data-cli-note="openai"') && html.includes('not installed'), 'Codex: not installed');
-  assert.ok(!html.includes('data-cli-note="anthropic"'));
-  assert.match(html, /data-last-pick="bart"[^>]*>.*Using your last pick: <span[^>]*>Opus Extra high<\/span>.*data-use-default="bart"/);
-  assert.match(html, /data-last-pick="quick"[^>]*>.*Post-its use your last pick: <span[^>]*>Fable Max<\/span>/);
-  assert.ok(!html.includes('data-last-pick="build"'));
-  assert.ok(html.includes('data-settings-advanced="1"') && !html.includes('discover:anthropic:deep'), '@discover\'s quick and deep wait under Advanced');
-  assert.ok(html.includes('data-settings-provider="bart"') && html.includes('data-settings-provider="build"'));
-  const one = renderToStaticMarkup(React.createElement(Intelligence, { initial: settingsModels(root, { only: ['openai'] }) }));
-  assert.ok(!one.includes(':anthropic:') && one.includes('data-settings-cell="bart:openai:standard"'), 'only the providers config.json offers');
-
-  // Test data: in test mode only, with test mode's three actions.
-  const ids = (props) => SECTIONS.filter((section) => !section.shown || section.shown(props)).map((section) => section.id);
-  assert.deepEqual([ids({ test: null }), ids({ test: { testMode: false } }), ids({ test: { testMode: true } })], [['intelligence'], ['intelligence'], ['intelligence', 'test']]);
-  const testHtml = renderToStaticMarkup(React.createElement(TestData, { test: {}, close: () => {} }));
-  for (const item of ['Reveal in Finder', 'Start as a new user…', 'Reset everything…']) assert.ok(testHtml.includes(item), item);
+test('the gear opens a menu with Intelligence levels, and the test data items only in test mode', () => {
+  const { MENU } = load('ui/Settings.jsx');
+  const ids = (props) => MENU.filter((item) => !item.shown || item.shown(props)).map((item) => item.id);
+  assert.deepEqual(ids({ test: null }), ['levels']);
+  assert.deepEqual(ids({ test: { testMode: false } }), ['levels']);
+  assert.deepEqual(ids({ test: { testMode: true } }), ['levels', 'reveal', 'start-new', 'reset']);
+  assert.equal(MENU[0].label, 'Intelligence levels…');
+  const source = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/Settings.jsx'), 'utf8');
+  assert.ok(!source.includes('⚙'), 'a drawn gear, not the character');
+  assert.match(source, /className="settings-gear"/);
 });
 
-test('the panel shows the provider runs use: a saved one whose CLI cannot run gives way, as in a run (preferUsable)', () => {
+test('Intelligence levels: Quick, Standard and Deep of the provider @discover runs on, each a model and an effort', () => {
+  const { IntelligenceLevels, LEVELS } = load('ui/Settings.jsx');
+  assert.deepEqual(LEVELS.map((level) => level.id), ['quick', 'standard', 'deep']);
+  const root = home();
+  const html = renderToStaticMarkup(React.createElement(IntelligenceLevels, { initial: settingsModels(root, { tools: toolsFor(['claude']) }) }));
+  assert.match(html, /role="tab" aria-selected="true" data-provider="anthropic"/);
+  assert.match(html, /role="tab" aria-selected="false" data-provider="openai"/);
+  for (const level of ['quick', 'standard', 'deep']) assert.ok(html.includes(`data-level="anthropic:${level}"`), level);
+  const row = (level) => html.slice(html.indexOf(`data-level="anthropic:${level}"`), html.indexOf('</div>', html.indexOf(`data-level="anthropic:${level}"`)));
+  assert.match(row('quick'), /<option value="sonnet" selected="">Sonnet<\/option>/);
+  assert.match(row('quick'), /<option value="medium" selected="">Medium<\/option>/);
+  assert.match(row('deep'), /<option value="opus" selected="">Opus<\/option>/);
+  assert.match(row('deep'), /<option value="max" selected="">Max<\/option>/);
+  assert.ok(!html.includes('data-cli-note'), 'Claude Code can run');
+  const codex = renderToStaticMarkup(React.createElement(IntelligenceLevels, { initial: settingsModels(root, { tools: toolsFor(['codex']) }) }));
+  assert.match(codex, /role="tab" aria-selected="true" data-provider="openai"/, 'starts on the provider runs use');
+  assert.match(codex, /data-level="openai:standard"[\s\S]*?<option value="astra" selected="">Astra<\/option>/);
+  saveSettingsModels(root, { provider: 'openai' });
+  const saved = renderToStaticMarkup(React.createElement(IntelligenceLevels, { initial: settingsModels(root, { tools: toolsFor(['claude', 'codex']) }) }));
+  assert.match(saved, /aria-selected="true" data-provider="openai"/, 'the saved provider');
+  const one = renderToStaticMarkup(React.createElement(IntelligenceLevels, { initial: settingsModels(root, { only: ['openai'] }) }));
+  assert.ok(!one.includes('role="tablist"') && one.includes('data-level="openai:quick"'), 'one provider offered: no switch');
+});
+
+test('the provider runs use: a saved one whose CLI cannot run gives way, as in a run (preferUsable)', () => {
   const { defaultProvider, savedProvider, lastPick } = load('model/intelligence.js');
-  const { Intelligence } = load('ui/Settings.jsx');
   const root = home();
   const codexOnly = settingsModels(root, { tools: toolsFor(['codex']) });
   assert.deepEqual([savedProvider(codexOnly, 'bart'), savedProvider(codexOnly, 'build')], ['anthropic', 'anthropic'], 'Claude Code is saved for both');
@@ -431,22 +439,14 @@ test('the panel shows the provider runs use: a saved one whose CLI cannot run gi
   const run = (place) => modelsInForce(root, place, { usable: ['codex'] });
   assert.deepEqual([run('bart').provider, run('build').build.provider], ['openai', 'openai'], 'as a run has it');
   assert.equal(defaultProvider(settingsModels(root), 'bart'), 'anthropic', 'before the first check nothing moves');
-  const html = renderToStaticMarkup(React.createElement(Intelligence, { initial: codexOnly }));
-  const bartChoice = html.slice(html.indexOf('data-settings-provider="bart"'), html.indexOf('data-settings-provider="build"'));
-  assert.match(bartChoice, /aria-checked="true" data-provider="openai"/);
-  assert.match(bartChoice, /aria-checked="false" data-provider="anthropic"/);
-  assert.match(html, /data-saved-provider="bart"[^>]*>Saved: Claude Code \(not installed\)</);
-  assert.match(html, /data-saved-provider="build"[^>]*>Saved: Claude Code \(not installed\)</);
-  assert.ok(!renderToStaticMarkup(React.createElement(Intelligence, { initial: settingsModels(root, { tools: toolsFor(['claude', 'codex']) }) })).includes('data-saved-provider'), 'nothing to say while the saved one runs');
   // A pick by hand on a provider whose CLI cannot run is passed over by a run, so the panel does not claim it is used.
   rememberChoice(root, 'bart', { provider: 'anthropic', model: 'opus', effort: 'max' });
   assert.equal(lastPick(settingsModels(root, { tools: toolsFor(['codex']) }), 'bart'), null);
   assert.deepEqual(steps(run('bart')), ['Sol medium', 'Sol high', 'Astra xhigh']);
 });
 
-test('@brainstorm and @discover show "Using your last pick" too when @bart\'s pick moves them to the other provider', () => {
+test('@bart\'s pick on the other provider moves @brainstorm and @discover there (followedPick)', () => {
   const { followedPick, lastPick } = load('model/intelligence.js');
-  const { Intelligence } = load('ui/Settings.jsx');
   const root = home();
   const both = () => settingsModels(root, { tools: toolsFor(['claude', 'codex']) });
   const run = () => modelsInForce(root, 'bart', { usable: ['claude', 'codex'] });
@@ -457,11 +457,6 @@ test('@brainstorm and @discover show "Using your last pick" too when @bart\'s pi
   assert.deepEqual(followedPick(both()), { provider: 'openai', label: 'Codex' });
   const brainstorm = readBrainstorm('', run()).steps[0], discover = readDiscover('what to read', run()).steps[0];
   assert.deepEqual([brainstorm.provider, brainstorm.name, brainstorm.effort, discover.provider, discover.name, discover.effort], ['openai', 'Sol', 'medium', 'openai', 'Astra', 'high'], 'as a run has it');
-  const html = renderToStaticMarkup(React.createElement(Intelligence, { initial: both() }));
-  assert.match(html, /data-last-pick="bart"[^>]*>.*Using your last pick: <span[^>]*>Astra Extra high<\/span>/);
-  assert.match(html, /data-last-pick="brainstorm"[^>]*><span[^>]*>Using your last pick: <span[^>]*>Codex<\/span><\/span><span[^>]*>·<\/span><button[^>]*data-use-default="bart"[^>]*>Use default<\/button>/);
-  assert.match(html, /data-last-pick="discover"[^>]*><span[^>]*>Using your last pick: <span[^>]*>Codex<\/span>.*?data-use-default="bart"/);
-  assert.ok(html.indexOf('data-settings-row="brainstorm"') < html.indexOf('data-last-pick="brainstorm"') && html.indexOf('data-last-pick="brainstorm"') < html.indexOf('data-settings-row="discover"'), 'under its own row');
 
   // Use default forgets @bart's pick, and both lines go with it.
   createModelSettings({ homeRoot: () => root }).forget('bart');
@@ -471,7 +466,6 @@ test('@brainstorm and @discover show "Using your last pick" too when @bart\'s pi
   rememberChoice(root, 'bart', { provider: 'anthropic', model: 'opus', effort: 'max' });
   assert.ok(lastPick(both(), 'bart'));
   assert.equal(followedPick(both()), null);
-  assert.ok(!renderToStaticMarkup(React.createElement(Intelligence, { initial: both() })).includes('data-last-pick="brainstorm"'));
 
   // A pick on Codex while Codex cannot run is passed over: nothing moves, so nothing is said.
   rememberChoice(root, 'bart', { provider: 'openai', model: 'astra', effort: 'xhigh' });
@@ -480,13 +474,13 @@ test('@brainstorm and @discover show "Using your last pick" too when @bart\'s pi
   assert.equal(modelsInForce(root, 'bart', { usable: ['claude'] }).provider, 'anthropic');
 });
 
-test('the panel warns when the models file cannot be read, before anything else', () => {
-  const { Intelligence } = load('ui/Settings.jsx');
+test('Intelligence levels warn when the models file cannot be read, before anything else', () => {
+  const { IntelligenceLevels } = load('ui/Settings.jsx');
   const root = home();
-  assert.ok(!renderToStaticMarkup(React.createElement(Intelligence, { initial: settingsModels(root) })).includes('data-models-file-error'));
+  assert.ok(!renderToStaticMarkup(React.createElement(IntelligenceLevels, { initial: settingsModels(root) })).includes('data-models-file-error'));
   fs.writeFileSync(path.join(root, MODELS_FILE), '{ "provider": ');
-  const html = renderToStaticMarkup(React.createElement(Intelligence, { initial: settingsModels(root) }));
-  assert.match(html, /^<div data-settings-intelligence="1"><div role="alert" data-models-file-error="1"[^>]*>model-effort-inline-question\.json is not valid JSON, so every agent runs on the built-in defaults shown here, and a pick here is not saved\. Fix the file or delete it\.<\/div>/);
+  const html = renderToStaticMarkup(React.createElement(IntelligenceLevels, { initial: settingsModels(root) }));
+  assert.match(html, /^<div data-intelligence-levels="1"><div role="alert" data-models-file-error="1"[^>]*>model-effort-inline-question\.json is not valid JSON/);
 });
 
 test('one gear: the test pill has none of its own, and Settings sits after the notification bell (S-12)', () => {
