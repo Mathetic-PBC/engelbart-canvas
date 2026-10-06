@@ -62,6 +62,7 @@ const { OPENING, SKIPPED, cardBody, cardOfAnswer, questionOf, readCard, readAnsw
 const { buildContext, conversationBlock } = require('./context.cjs');
 const { projectSource, imagePaths } = require('../context/expand-mentions.cjs');
 const { replyLines, answerText } = require('./reply.cjs');
+const { clipMiddle } = require('./clip.cjs');
 const { pathLabeller, claudeUpdate, codexUpdate, eventReader, createFeed } = require('./activity.cjs');
 const { TOOL_OF } = require('../tools/requirements.cjs');
 
@@ -131,12 +132,18 @@ function levelBlock(steps, at, pinned) {
 }
 
 /**
+ * A turn as it is told and as its session is kept by (threadKey): trimmed, a question past 8,000 characters or an answer
+ * past 20,000 cut in the middle, its start and end kept (./clip.cjs, 2026-10-06; before, an answer kept its start alone).
+ */
+const cleanTurn = (turn) => ({ question: clipMiddle(String(turn.question).trim(), 8000), answer: clipMiddle(String(turn.answer || '').trim(), 20000) });
+
+/**
  * The earlier turns of an exchange as the renderer read them from the document, made safe: strings, bounded, no empty
  * questions. `keepEmpty`: @brainstorm's and @discover's, whose first line may say nothing and still be a turn.
  */
 function cleanTurns(turns, { keepEmpty = false } = {}) {
   return (Array.isArray(turns) ? turns : []).filter((turn) => turn && typeof turn.question === 'string' && (keepEmpty || turn.question.trim()))
-    .slice(-MAX_TURNS).map((turn) => ({ question: turn.question.trim().slice(0, 8000), answer: String(turn.answer || '').trim().slice(0, 20000) }));
+    .slice(-MAX_TURNS).map(cleanTurn);
 }
 
 /** Where an exchange stands: the document it is in and everything said in it so far. Two exchanges that read the same are the same. */
@@ -494,7 +501,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
       // A card is written as its JSON in a fence; a reply that is not one, as it came (the editor draws it as an answer).
       const body = replyBody(agent, out.text);
       // Kept under what the document will say once this answer is in it: the next follow-up is found by that.
-      if (out.session) store.keep(threadKey(projectId, ref, [...prior, { question: String(text).trim(), answer: answerText(body) }]), { provider, session: out.session, projectId, workspaceId });
+      if (out.session) store.keep(threadKey(projectId, ref, [...prior, cleanTurn({ question: text, answer: answerText(body) })]), { provider, session: out.session, projectId, workspaceId });
       return { lines: replyLines(body, meta, { model: !QUIET.has(agent) }), meta };
     } finally {
       feed.end();
@@ -709,7 +716,7 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
         });
         const meta = { provider, level: out.level, trail: out.trail, ms: out.ms, pinned };
         const body = replyBody(agent, out.text);
-        store.keep(threadKey(projectId, ref, [...prior, { question: String(text).trim(), answer: answerText(body) }]), { provider, session: out.session, projectId, workspaceId });
+        store.keep(threadKey(projectId, ref, [...prior, cleanTurn({ question: text, answer: answerText(body) })]), { provider, session: out.session, projectId, workspaceId });
         return { lines: replyLines(body, meta, { model: !QUIET.has(agent) }), meta };
       } finally { feed.end(); waits.delete(askId); }
     },

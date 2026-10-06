@@ -38,6 +38,9 @@
 // Continue in workspace; a deleted answer comes back with ⌘Z (undoKey) and stays a turn of its exchange, so the next
 // question goes on in the same session (canvas.js exchangeOf); Space, ⌘Z and a pending selection's keys are the paper's
 // only while nothing has the keyboard (keyFree).
+// Second pass (2026-10-06): a box being written is filled in place as Bart works (fillRun), its Stop and "▸ steps" the
+// same buttons throughout, so a click on one is not lost to the next tick; an answer that is here already is not added
+// again (addAsk: main tells every window how an ask ended, the one that asked too).
 import React from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import rough from 'roughjs';
@@ -143,7 +146,7 @@ const NO_OFF = { left: 0, right: 0, up: 0, down: 0 };
 // A box (MATH-27): a light border, a grip at its top that moves it.
 const BOX_LOOK = 'position:absolute;box-sizing:border-box;border:1px solid #e3e3e3;border-radius:8px;background:rgba(255,255,255,.97);pointer-events:auto;box-shadow:0 1px 2px rgba(0,0,0,.03)';
 const GRIP_HTML = '<div data-grip="1" title="Drag to move" style="height:12px;display:flex;align-items:center;justify-content:center"><span style="width:22px;height:3px;border-radius:2px;background:#d9d9d9"></span></div>';
-const SPINNER = '<span style="flex:none;width:10px;height:10px;box-sizing:border-box;border:1.5px solid #c9d9f2;border-top-color:#0070f3;border-radius:50%;animation:pdf-spin .8s linear infinite"></span>';
+const SPINNER = 'flex:none;width:10px;height:10px;box-sizing:border-box;border:1.5px solid #c9d9f2;border-top-color:#0070f3;border-radius:50%;animation:pdf-spin .8s linear infinite';
 
 // Find (the Browser pane's ⌘F, 2026-09-22): matches are Ranges over the text layer, painted with
 // the CSS Custom Highlight API, so the page's DOM is never touched. Space in the query matches any
@@ -178,12 +181,38 @@ const SVG = 'http://www.w3.org/2000/svg';
 const NOTE_LOOK = "pointer-events:auto;padding:0 6px;font:500 17px/1.25 'Caveat',cursive;color:#171717";
 
 // An answer as its box draws it (MATH-27): a paragraph a line, with what Bart was told a box may hold (bold, italic,
-// code, links), and a list's or a heading's mark taken off should one come anyway.
-function answerHtml(text, opts) {
+// code, links), and a list's or a heading's mark taken off should one come anyway. answerParas: each paragraph's inside.
+function answerParas(text, opts) {
   return String(text || '').split('\n').map((line) => line.trim()).filter(Boolean).map((line) => {
     const item = line.match(/^[-*] (.*)$/), head = line.match(/^#{1,6} (.*)$/);
-    return `<p>${item ? `• ${inlineHtml(item[1], opts)}` : head ? `<strong>${inlineHtml(head[1], opts)}</strong>` : inlineHtml(line, opts)}</p>`;
-  }).join('');
+    return item ? `• ${inlineHtml(item[1], opts)}` : head ? `<strong>${inlineHtml(head[1], opts)}</strong>` : inlineHtml(line, opts);
+  });
+}
+const answerHtml = (text, opts) => answerParas(text, opts).map((inside) => `<p>${inside}</p>`).join('');
+
+// A box being written is changed in place as Bart works (second pass, 2026-10-06): its Stop and "▸ steps" buttons stay
+// the elements they were, so a click on one never lands between two drawings of the box and is lost. `shownHtml`: what
+// each line of its steps and its answer so far was last given (syncKids); a line that reads the same is left alone, and
+// a selection in it, or a link being clicked, outlasts the next tick.
+const shownHtml = new WeakMap();
+function syncKids(parent, htmls, make) {
+  htmls.forEach((html, i) => {
+    let el = parent.children[i];
+    if (!el) { el = make(); parent.appendChild(el); }
+    if (shownHtml.get(el) !== html) { el.innerHTML = html; shownHtml.set(el, html); }
+  });
+  while (parent.children.length > htmls.length) parent.lastElementChild.remove();
+}
+const setText = (el, text) => { if (el.textContent !== text) el.textContent = text; };
+const showEl = (el, on) => { const display = on ? '' : 'none'; if (el.style.display !== display) el.style.display = display; };
+/** An element made with its look, and `data` (dataset), as runBox builds a box being written. */
+function makeEl(tag, css, data = {}, text = '') {
+  const el = document.createElement(tag);
+  if (css) el.style.cssText = css;
+  Object.assign(el.dataset, data);
+  if (tag === 'button') el.type = 'button';
+  if (text) el.textContent = text;
+  return el;
 }
 
 function toBytes(src) {
@@ -1416,33 +1445,69 @@ export default class PaperView extends React.Component {
 
   // An answer being written (`pendingAsks`): no grip, since nothing of it is kept until it lands. Its header says what
   // Bart is doing, with a spinner, and Stop; ▸ shows its steps; the answer comes in once it is writing. A failure says
-  // why, with × to close it.
+  // why, with × to close it. Made once; each change of what Bart is doing fills it in place (fillRun).
   runBox(p, page) {
-    const box = document.createElement('div');
-    box.dataset.box = 'run'; box.dataset.askRun = p.askId;
-    box.style.cssText = `${BOX_LOOK};left:0;top:0;width:${ASK_W}px;max-height:${this.boxMaxHeight()}px;display:flex;flex-direction:column;padding-top:8px;font:13px/1.55 var(--font-sans);color:#171717`;
+    const box = makeEl('div', `${BOX_LOOK};left:0;top:0;width:${ASK_W}px;max-height:${this.boxMaxHeight()}px;display:flex;flex-direction:column;padding-top:8px;font:13px/1.55 var(--font-sans);color:#171717`, { box: 'run', askRun: p.askId });
     box.onmousedown = (ev) => ev.stopPropagation();
     box.onclick = (ev) => this.runClick(ev, p.askId, page);
+    const steps = makeEl('div', 'display:none;flex:none;padding:0 6px 4px', { runSteps: '1' });
+    steps.appendChild(makeEl('button', '', { act: 'log' }));
+    box.append(
+      makeEl('div', 'flex:none;display:flex;align-items:center;gap:8px;padding:0 6px 4px 12px', { runHead: '1' }),
+      makeEl('div', 'flex:none;padding:0 12px 6px;color:#8f8f8f;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', { runQuestion: '1' }),
+      makeEl('div', 'display:none;flex:none;padding:0 12px 8px;color:#c4372d;overflow-wrap:anywhere', { runError: '1' }),
+      steps,
+      makeEl('div', 'display:none;flex:none;padding:0 12px 6px;font-size:12px;line-height:1.7;color:#8f8f8f', { runLog: '1' }),
+      makeEl('div', 'display:none;flex:1 1 auto;min-height:0;overflow:auto;padding:0 12px 8px;color:#8f8f8f;overflow-wrap:anywhere', { runBody: '1' }),
+    );
     this.fillRun(box, p);
     return box;
   }
   fillRun(box, p) {
-    const before = box.querySelector('[data-run-body]'), atEnd = !before || before.scrollTop + before.clientHeight >= before.scrollHeight - 4;
+    const part = (name) => box.querySelector(`[data-run-${name}]`);
     const failed = p.error != null, log = Array.isArray(p.log) ? p.log : [], open = this.openLogs.has(p.askId);
     const lines = !failed && p.activity === 'Writing' && Array.isArray(p.lines) ? p.lines : [];
-    const head = failed
-      ? '<span style="flex:1;min-width:0;font-weight:500;color:#171717">Bart · No answer</span><button type="button" data-act="dismiss" aria-label="Close">×</button>'
-      : `${SPINNER}<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#4d4d4d">${esc(runningLabel(p))}</span><button type="button" data-act="stop">Stop</button>`;
-    box.innerHTML = `<div style="flex:none;display:flex;align-items:center;gap:8px;padding:0 6px 4px 12px">${head}</div>`
-      + `<div title="${esc(p.question || '')}" style="flex:none;padding:0 12px 6px;color:#8f8f8f;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.question || '')}</div>`
-      + (failed ? `<div style="flex:none;padding:0 12px 8px;color:#c4372d;overflow-wrap:anywhere">${esc(p.error || 'The run failed.')}</div>` : '')
-      + (log.length ? `<div style="flex:none;padding:0 6px 4px"><button type="button" data-act="log" aria-expanded="${open}">${open ? '▾' : '▸'} ${log.length} ${log.length === 1 ? 'step' : 'steps'}</button></div>` : '')
-      + (open && log.length ? `<div style="flex:none;padding:0 12px 6px;font-size:12px;line-height:1.7;color:#8f8f8f">${log.map((entry) => `<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(entry)}</div>`).join('')}</div>` : '')
-      + (lines.length ? `<div data-run-body="1" style="flex:1 1 auto;min-height:0;overflow:auto;padding:0 12px 8px;color:#8f8f8f;overflow-wrap:anywhere">${answerHtml(lines.join('\n'))}</div>` : '');
-    const after = box.querySelector('[data-run-body]');
-    if (after && atEnd) after.scrollTop = after.scrollHeight;
+    // The header is made again only when the run fails (Stop goes, × comes); while it runs only its label changes.
+    const head = part('head'), mode = failed ? 'failed' : 'running';
+    if (head.dataset.mode !== mode) {
+      head.dataset.mode = mode;
+      if (failed) {
+        const close = makeEl('button', '', { act: 'dismiss' }, '×');
+        close.setAttribute('aria-label', 'Close');
+        head.replaceChildren(makeEl('span', 'flex:1;min-width:0;font-weight:500;color:#171717', {}, 'Bart · No answer'), close);
+      } else {
+        head.replaceChildren(makeEl('span', SPINNER), makeEl('span', 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#4d4d4d', { runLabel: '1' }), makeEl('button', '', { act: 'stop' }, 'Stop'));
+      }
+    }
+    const label = head.querySelector('[data-run-label]');
+    if (label) setText(label, runningLabel(p));
+    const question = part('question');
+    setText(question, p.question || '');
+    if (question.title !== (p.question || '')) question.title = p.question || '';
+    const error = part('error');
+    showEl(error, failed);
+    if (failed) setText(error, p.error || 'The run failed.');
+    const steps = part('steps'), toggle = steps.firstElementChild;
+    showEl(steps, log.length > 0);
+    if (log.length) {
+      setText(toggle, `${open ? '▾' : '▸'} ${log.length} ${log.length === 1 ? 'step' : 'steps'}`);
+      if (toggle.getAttribute('aria-expanded') !== String(open)) toggle.setAttribute('aria-expanded', String(open));
+    }
+    const list = part('log');
+    showEl(list, open && log.length > 0);
+    syncKids(list, open ? log.map((entry) => esc(entry)) : [], () => makeEl('div', 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap'));
+    const body = part('body'), atEnd = body.style.display === 'none' || body.scrollTop + body.clientHeight >= body.scrollHeight - 4;
+    showEl(body, lines.length > 0);
+    syncKids(body, answerParas(lines.join('\n')), () => makeEl('p'));
+    if (lines.length && atEnd) body.scrollTop = body.scrollHeight;
   }
   runClick(ev, askId, page) {
+    const link = ev.target.closest && ev.target.closest('a[href]');
+    if (link) { // never the app's window: the Stage opens it, as from an answer's box
+      ev.preventDefault(); ev.stopPropagation();
+      if (this.props.onOpenLink) this.props.onOpenLink(link.getAttribute('href'));
+      return;
+    }
     const act = ev.target.closest && ev.target.closest('[data-act]');
     if (!act) return;
     ev.preventDefault();
@@ -1483,7 +1548,8 @@ export default class PaperView extends React.Component {
   addAsk(page, markId, entry) {
     const m = ((this.marks || {})[page] || []).find((x) => x && x.id === markId);
     if (!m || !entry) return false;
-    if (!(m.asks || []).some((a) => a && a.id === entry.id)) m.asks = [...(m.asks || []), entry];
+    if ((m.asks || []).some((a) => a && a.id === entry.id)) return true; // here already (main tells every window too)
+    m.asks = [...(m.asks || []), entry];
     this.reframe(); // under a moved box it holds the desk wide, as its box being written did
     this.renderMarks(page);
     this.scheduleSave();

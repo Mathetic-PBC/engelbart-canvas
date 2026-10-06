@@ -182,35 +182,8 @@ export function revealScroll(boxes, view, side, pad = 24) {
 
 /* ------------------------------------------------------------------------------------------- answers on a highlight */
 
-const ATTRIBUTION = /^\*([^*]+)\*$/;
-
-/**
- * An answer's lines as main sends them (`bart> …`, then a blank line and its foot, "*Sol · high · 12 s*") → { answer,
- * foot }: the answer as the document would hold it and as a follow-up sends it back (main: bart/reply.cjs answerText),
- * so the follow-up finds the same session (ask.cjs threadKey); the foot without its stars.
- */
-export function answerOf(lines) {
-  const body = (Array.isArray(lines) ? lines : []).map((line) => String(line).replace(/^bart\+?> ?/, ''));
-  let foot = '';
-  const last = body.length ? body[body.length - 1].match(ATTRIBUTION) : null;
-  if (last) { foot = last[1]; body.pop(); }
-  return { answer: body.join('\n').trim(), foot };
-}
-
-/** A finished answer as a mark keeps it: { id, question, answer, meta, at, pos, collapsed }. */
-export function askEntry({ id, question, lines, meta, at }) {
-  const { answer, foot } = answerOf(lines);
-  const level = (meta && meta.level) || {};
-  return {
-    id,
-    question: String(question || '').trim(),
-    answer,
-    meta: { provider: (meta && meta.provider) || null, name: level.name || null, effort: level.effort || null, ms: (meta && meta.ms) || null, foot },
-    at,
-    pos: null,
-    collapsed: false,
-  };
-}
+// What a mark keeps of an answer, and putting one on it: shared with main, which lands an answer itself (2026-10-06).
+export { answerOf, askEntry, withAsk } from '../../shared/mark-answers.cjs';
 
 export const THREAD_IDLE_MS = 30 * 60_000; // main's bart/ask.cjs: how long after its last turn a session can be resumed
 
@@ -240,14 +213,14 @@ export const keptMarks = (list, now = Date.now()) => (list || []).map((m) => {
 /** The earlier turns of a mark's exchange at `now`, as a follow-up sends them (ipc ask-bart `turns`). */
 export const turnsOf = (m, now) => exchangeOf(m, now).filter((a) => typeof a.question === 'string').map((a) => ({ question: a.question, answer: String(a.answer || '') }));
 
-/** The marks with `entry` added to the answers of mark `markId` on `page` (once). Unchanged when the mark is gone. */
-export function withAsk(marks, page, markId, entry) {
-  const list = (marks || {})[page];
-  if (!Array.isArray(list) || !list.some((m) => m && m.id === markId)) return marks || {};
-  return {
-    ...marks,
-    [page]: list.map((m) => (m && m.id === markId && !(m.asks || []).some((a) => a && a.id === entry.id) ? { ...m, asks: [...(m.asks || []), entry] } : m)),
-  };
+/**
+ * The answers being written as the workspace keeps them ({ [askId]: ask }), with those main says this window asked and
+ * are still running (ipc running-paper-asks) brought back, as after ⌘R (second pass, 2026-10-06). One held already, or
+ * that has ended since (`ended`: the ask ids main said were done), is not. The same object when none comes back.
+ */
+export function runningBack(current, list, ended = new Set()) {
+  const back = (Array.isArray(list) ? list : []).filter((ask) => ask && ask.askId && ask.markId && !current[ask.askId] && !ended.has(ask.askId));
+  return back.length ? { ...current, ...Object.fromEntries(back.map((ask) => [ask.askId, ask])) } : current;
 }
 
 /** A note asks Bart when it starts with @bart: → the question (what follows, flags and all), or null. */

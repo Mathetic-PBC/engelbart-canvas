@@ -380,7 +380,7 @@ test.describe('the Stage: @bart on a highlight', () => {
     assert.ok(!s.calls.some(([name]) => name === 'writePageAnnotations'), 'nothing written behind its back');
   });
 
-  test('with no viewer showing the mark, the answer goes into the ink kept for the pdf and the tab that holds it', async () => {
+  test('with no viewer showing the mark, the answer goes into the tab that holds it; the kept ink is main\'s to write', async () => {
     const kept = { 2: [{ id: 'm1', rects: [{ x: 0.1, y: 0.2, w: 0.3, h: 0.01 }], note: '@bart why?' }] };
     const s = stage({ api: { readPageAnnotations: async () => JSON.parse(JSON.stringify(kept)) }, props: { onAsk: async () => ENTRY } });
     s.open(PAPER);
@@ -389,11 +389,67 @@ test.describe('the Stage: @bart on a highlight', () => {
     view.props.ref.current.addAsk = () => false; // the viewer no longer has that mark
     view.props.onAsk(ASK);
     await s.settle();
-    const write = s.calls.find(([name]) => name === 'writePageAnnotations');
-    assert.ok(write, 'written');
-    assert.equal(write[1], `file://${PAPER}`);
-    assert.deepEqual(write[2][2][0].asks, [ENTRY]);
-    assert.deepEqual(s.paper().props.marks[2][0].asks, [ENTRY], 'and the tab\'s ink has it');
+    assert.deepEqual(s.paper().props.marks[2][0].asks, [ENTRY], 'the tab\'s ink has it');
+    assert.ok(!s.calls.some(([name]) => /^write(Page)?Annotations$/.test(name)), 'main has put it in the ink kept for the pdf (library.addMarkAnswer)');
+  });
+
+  // Second pass (2026-10-06): the same pdf in two tabs. Only the tab in front has a viewer; the other must not keep ink
+  // from before, or brought forward and edited it saves that over the answer.
+  const twoTabs = async (props = {}) => {
+    const kept = { 2: [{ id: 'm1', rects: [{ x: 0.1, y: 0.2, w: 0.3, h: 0.01 }], note: '@bart why?' }] };
+    const s = stage({ api: { readPageAnnotations: async () => JSON.parse(JSON.stringify(kept)) }, props });
+    s.open(PAPER);
+    await s.settle();
+    const first = s.paper().key;
+    s.open(PAPER, { newTab: true });
+    await s.settle();
+    assert.notEqual(s.paper().key, first, 'a second tab, in front, with a viewer of its own');
+    const landed = [];
+    s.paper().props.ref.current.addAsk = (...args) => { landed.push(args); return true; };
+    const back = async () => { // a press on the first tab in the strip
+      const [behind] = findAll(s.tree, (p) => p.className === 'hov-tab');
+      behind.props.onMouseDown({ button: 0 });
+      await s.settle();
+      assert.equal(s.paper().key, first, 'the first tab in front again');
+    };
+    return { s, landed, back, first };
+  };
+
+  test('an answer landing through the viewer in front reaches the other tab holding the pdf too', async () => {
+    const { s, landed, back } = await twoTabs({ onAsk: async () => ENTRY });
+    s.paper().props.onAsk(ASK);
+    await s.settle();
+    assert.deepEqual(landed, [[2, 'm1', ENTRY]], 'through the viewer, which saves it');
+    await back();
+    assert.deepEqual(s.paper().props.marks[2][0].asks, [ENTRY], 'the other tab\'s viewer opens with the answer: moving a box there saves it with it');
+  });
+
+  test('what the viewer saves, every tab holding the pdf takes: brought forward, one never saves the ink it read before', async () => {
+    const { s, back } = await twoTabs();
+    const moved = { 2: [{ id: 'm1', rects: [{ x: 0.1, y: 0.2, w: 0.3, h: 0.01 }], note: '@bart why?', pos: { x: 1.1, y: 0.2 }, asks: [ENTRY] }] };
+    s.paper().props.onMarksChange(moved);
+    await s.settle();
+    assert.deepEqual(s.calls.filter(([name]) => name === 'writePageAnnotations').map((call) => call.slice(1)), [[`file://${PAPER}`, moved]]);
+    await back();
+    assert.deepEqual(s.paper().props.marks, moved);
+  });
+
+  test('main telling every window how an ask ended puts its answer on the mark in each tab holding the pdf, as after ⌘R; a failure or another pdf\'s changes nothing', async () => {
+    const { s, landed, back } = await twoTabs();
+    assert.equal(typeof s.on.onPaperAskDone, 'function', 'the Stage listens');
+    const where = { markId: 'm1', page: 2, rowId: null, url: `file://${PAPER}` };
+    s.on.onPaperAskDone({ askId: 'h3', ...where, failed: true, lines: ['bart> **No answer.** The CLI quit.'] });
+    s.on.onPaperAskDone({ askId: 'h4', ...where, url: 'https://elsewhere.org/a.pdf', entry: { ...ENTRY, id: 'h4' } });
+    s.rerender();
+    assert.deepEqual(landed, []);
+    s.on.onPaperAskDone({ askId: 'h1', ...where, entry: ENTRY });
+    s.on.onPaperAskDone({ askId: 'h1', ...where, entry: ENTRY }); // the window that asked hears it with its answer too
+    s.rerender();
+    assert.deepEqual(landed, [[2, 'm1', ENTRY], [2, 'm1', ENTRY]], 'the viewer in front is given it (and keeps it once: PaperView addAsk)');
+    assert.deepEqual(s.paper().props.marks[2][0].asks, [ENTRY], 'once');
+    await back();
+    assert.deepEqual(s.paper().props.marks[2][0].asks, [ENTRY]);
+    assert.ok(!s.calls.some(([name]) => /^write(Page)?Annotations$/.test(name)), 'nothing written: main has');
   });
 
   test('without a workspace to ask from, a note asks nothing; Continue says which paper', async () => {

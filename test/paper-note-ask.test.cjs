@@ -131,15 +131,15 @@ test('Shift+Enter is a new line; a note without @bart, a free note, an empty que
   assert.deepEqual(empty.asked, []);
 });
 
-test('addAsk: a finished answer joins its mark once, is drawn and saved; a mark that is gone takes nothing', () => {
+test('addAsk: a finished answer joins its mark once, is drawn and saved; again it is neither (main tells every window); a mark that is gone takes nothing', () => {
   const { view, m, drawn, saves } = viewer('@bart why?');
   view.syncOffscreen = () => {};
   const entry = { id: 'a1', question: 'why?', answer: 'Because.', meta: { name: 'Sonnet', effort: 'high' }, at: 'now', pos: null, collapsed: false };
   assert.equal(view.addAsk(2, 'm1', entry), true);
-  assert.equal(view.addAsk(2, 'm1', entry), true);
+  assert.equal(view.addAsk(2, 'm1', entry), true, 'here already');
   assert.deepEqual(m.asks, [entry]);
-  assert.deepEqual(drawn, [2, 2]);
-  assert.equal(saves(), 2);
+  assert.deepEqual(drawn, [2]);
+  assert.equal(saves(), 1);
   assert.equal(view.addAsk(2, 'gone', entry), false);
   assert.equal(view.addAsk(5, 'm1', entry), false);
 });
@@ -256,4 +256,99 @@ test('Delete hides an answer and ⌘Z brings it back; meanwhile the next questio
   ev = z(body);
   view.onKeyCapture(ev);
   assert.ok(!ev.prevented);
+});
+
+/* ------------------------------------------------------------------------------------------------ second pass (2026-10-06) */
+
+// A few lines of the DOM a box being written is made of (PaperView runBox): elements with their dataset, style (cssText
+// read into its properties), children, text and attributes, and querySelector / closest by a data attribute. innerHTML
+// is kept as given, and counted: a paragraph that reads the same is not given it again.
+class El {
+  constructor(tag) {
+    this.tagName = String(tag).toUpperCase(); this.dataset = {}; this.children = []; this.parentNode = null; this.attrs = {};
+    this.text = ''; this.html = ''; this.htmlSets = 0; this.title = ''; this.scrollTop = 0; this.clientHeight = 100; this.scrollHeight = 100;
+    const style = {};
+    Object.defineProperty(style, 'cssText', { get: () => '', set: (css) => { for (const decl of String(css).split(';')) { const at = decl.indexOf(':'); if (at > 0) style[decl.slice(0, at).trim().replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = decl.slice(at + 1).trim(); } } });
+    this.style = style;
+  }
+  appendChild(el) { el.parentNode = this; this.children.push(el); return el; }
+  append(...els) { for (const el of els) this.appendChild(el); }
+  replaceChildren(...els) { for (const c of this.children) c.parentNode = null; this.children = []; this.append(...els); }
+  remove() { if (!this.parentNode) return; const list = this.parentNode.children; list.splice(list.indexOf(this), 1); this.parentNode = null; }
+  get firstElementChild() { return this.children[0] || null; }
+  get lastElementChild() { return this.children[this.children.length - 1] || null; }
+  get textContent() { return this.children.length ? this.children.map((c) => c.textContent).join('') : this.text; }
+  set textContent(value) { this.replaceChildren(); this.text = String(value); }
+  get innerHTML() { return this.html; }
+  set innerHTML(value) { this.replaceChildren(); this.html = String(value); this.htmlSets += 1; }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
+  matches(sel) {
+    const m = String(sel).match(/^\[data-([\w-]+)(?:="([^"]*)")?\]$/);
+    if (!m) return false;
+    const k = m[1].replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+    return k in this.dataset && (m[2] == null || this.dataset[k] === m[2]);
+  }
+  querySelector(sel) { for (const c of this.children) { if (c.matches(sel)) return c; const deep = c.querySelector(sel); if (deep) return deep; } return null; }
+  closest(sel) { for (let el = this; el; el = el.parentNode) if (el.matches(sel)) return el; return null; }
+  contains(el) { for (let at = el; at; at = at.parentNode) if (at === this) return true; return false; }
+}
+const click = (target) => ({ target, prevented: false, preventDefault() { this.prevented = true; }, stopPropagation() {} });
+
+test('a box being written is filled in place as Bart works: Stop and "▸ steps" stay the same buttons, so a click between two ticks still lands', () => {
+  const stopped = [];
+  const { view, drawn } = viewer('@bart why?', { props: { onStopAsk: (id) => stopped.push(id), onOpenLink: () => {} } });
+  globalThis.document.createElement = (tag) => new El(tag);
+  view.arrange = () => {};
+  const p = { askId: 'h1', markId: 'm1', page: 2, question: 'why?' };
+  view.props.pendingAsks = [p];
+  const box = view.runBox(p, 2);
+  view.find1 = (sel) => (sel === '[data-ask-run="h1"]' ? box : null);
+  // What Bart is doing changes about every 100 ms, each a new list from the workspace (Workspace.jsx onBartProgress).
+  const tick = (patch) => { const before = view.props.pendingAsks; view.props.pendingAsks = [{ ...before[0], ...patch }]; view.syncPending(before); };
+  const label = () => box.querySelector('[data-run-label]').textContent;
+  const stop = box.querySelector('[data-act="stop"]'), toggle = box.querySelector('[data-act="log"]');
+  assert.equal(label(), 'Bart · Thinking');
+  assert.equal(box.querySelector('[data-run-steps]').style.display, 'none', 'no steps yet');
+
+  // Stop pressed, a tick, Stop let go: the click is on the button that was pressed, still in the box.
+  tick({ step: 1, name: 'Sonnet', effort: 'high', activity: 'Reading', log: ['Read tutortrace.pdf'] });
+  assert.equal(box.querySelector('[data-act="stop"]'), stop, 'the same Stop');
+  assert.ok(box.contains(stop));
+  assert.equal(label(), 'Bart · Reading');
+  assert.equal(toggle.textContent, '▸ 1 step');
+  assert.equal(box.querySelector('[data-run-steps]').style.display, '');
+  box.onclick(click(stop));
+  assert.deepEqual(stopped, ['h1']);
+
+  // "▸ steps" pressed across a tick: the same button, and it opens them.
+  tick({ activity: 'Searching', log: ['Read tutortrace.pdf', 'Searched OpenAlex'] });
+  assert.equal(box.querySelector('[data-act="log"]'), toggle);
+  assert.equal(toggle.textContent, '▸ 2 steps');
+  box.onclick(click(toggle));
+  assert.equal(toggle.textContent, '▾ 2 steps');
+  assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+  const list = box.querySelector('[data-run-log]');
+  assert.deepEqual([list.style.display, list.children.map((row) => row.innerHTML)], ['', ['Read tutortrace.pdf', 'Searched OpenAlex']]);
+
+  // The answer comes in: a paragraph that reads the same is left as it was, a changed one is given its text, a new one added.
+  tick({ activity: 'Writing', lines: ['It is **good**.', 'Cohen'] });
+  const body = box.querySelector('[data-run-body]'), first = body.children[0];
+  assert.equal(body.style.display, '');
+  assert.deepEqual(body.children.map((el) => el.innerHTML), ['It is <strong style="font-weight:600">good</strong>.', 'Cohen']);
+  tick({ lines: ['It is **good**.', 'Cohen\'s κ is 0.79,', 'on 480 students.'] });
+  assert.equal(body.children[0], first);
+  assert.equal(first.htmlSets, 1, 'not given its text again');
+  assert.deepEqual(body.children.map((el) => el.innerHTML), ['It is <strong style="font-weight:600">good</strong>.', 'Cohen\'s κ is 0.79,', 'on 480 students.']);
+  assert.equal(box.querySelector('[data-act="stop"]'), stop, 'Stop all the while');
+  assert.equal(label(), 'Bart · Writing');
+  assert.deepEqual(drawn, [], 'the page was not drawn again for any of it');
+
+  // A failure: × in Stop's place, why, and no answer.
+  tick({ error: 'The CLI quit.' });
+  assert.equal(box.querySelector('[data-act="stop"]'), null);
+  assert.ok(box.querySelector('[data-act="dismiss"]'));
+  assert.match(box.querySelector('[data-run-head]').textContent, /Bart · No answer/);
+  assert.deepEqual([box.querySelector('[data-run-error]').style.display, box.querySelector('[data-run-error]').textContent], ['', 'The CLI quit.']);
+  assert.equal(body.style.display, 'none');
 });

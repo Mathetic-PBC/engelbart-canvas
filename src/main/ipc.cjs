@@ -14,6 +14,8 @@ const projects = require('./store/projects.cjs');
 const library = require('./store/library.cjs');
 const { expandDoc } = require('./context/expand-mentions.cjs');
 const { failureLines } = require('./bart/reply.cjs');
+const { clipMiddle } = require('./bart/clip.cjs');
+const { askEntry } = require('../shared/mark-answers.cjs');
 const { readShellHistory } = require('./shell-history.cjs');
 const { createDescriber, createRepoIdentifier, createRemoteFileLister } = require('./store/page-meta.cjs');
 const { inspectPdf } = require('./context/pdf-kind.cjs');
@@ -61,10 +63,22 @@ function docRef(value) {
 /** How the renderer keys a document (`ws:<id>`, `note:<id>`); a highlight is `mark:<id>`, never a note's key. */
 const docKeyOf = (ref) => (ref.kind === 'workspace' ? `ws:${ref.workspaceId}` : ref.kind === 'mark' ? `mark:${ref.id}` : `note:${ref.id}`);
 
-/** What a question asked from a highlight carries besides its ref: the passage, the note as it stands, the paper's name. */
+// A string past `max` cut in the middle (bart/clip.cjs) rather than refused: a passage highlighted across many pages, an
+// earlier turn longer than a turn may be (MATH-27 second pass, 2026-10-06).
+function clipped(value, what, max) {
+  if (typeof value !== 'string') throw new TypeError(`${what} must be a string`);
+  return clipMiddle(value, max);
+}
+
+/** What a question asked from a highlight carries besides its ref: the passage (its start and end past 20,000 characters), the note as it stands, the paper's name. */
 function highlightInput(value) {
   const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-  return { quote: str(input.quote == null ? '' : input.quote, 'quote', 20000), note: str(input.note == null ? '' : input.note, 'note', 20000), paper: optStr(input.paper, 'paper name') };
+  return { quote: clipped(input.quote == null ? '' : input.quote, 'quote', 20000), note: str(input.note == null ? '' : input.note, 'note', 20000), paper: optStr(input.paper, 'paper name') };
+}
+
+/** The earlier turns of an exchange, the last 40, each cut in the middle past what a turn may hold. */
+function turnsInput(value) {
+  return (Array.isArray(value) ? value : []).slice(-40).map((turn) => ({ question: clipped(turn && turn.question, 'earlier question', 8000), answer: clipped(turn && turn.answer, 'earlier answer', 40000) }));
 }
 
 function projectInput(value) {
@@ -406,6 +420,25 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
 
   // @bart, @brainstorm and @discover: the answer comes back as draft lines for the document. A run that fails answers too, so
   // the question line never stays locked behind a pending line; only Stop returns nothing to place.
+  // A question from a highlight's note (MATH-27) is kept in `paperAsks` while it runs: its mark, the window that asked and
+  // what the agent is doing as of its last progress, so that window shows its box again after ⌘R (running-paper-asks).
+  // Its answer is put on the mark here (library.addMarkAnswer), as the Stage would, since a reloaded window has no one
+  // waiting for it; how it ended is told to every window (`paper-ask-done`): each Stage holding the pdf shows the
+  // answer, and the window that asked drops its box or says "No answer" (second pass, 2026-10-06).
+  const paperAsks = new Map(); // askId → { win, projectId, askId, markId, page, rowId, url, question, progress }
+  const paperDone = (payload) => {
+    paperAsks.delete(payload.askId);
+    if (windowHandler) announce('engelbart:paper-ask-done', payload); else if (notify) notify('engelbart:paper-ask-done', payload);
+  };
+  // What the window's box shows, kept as the window keeps it (Workspace.jsx onBartProgress): a new step starts over.
+  const paperProgress = (askId, { log, ...progress }) => {
+    const held = paperAsks.get(askId);
+    if (!held) return;
+    const next = { ...held.progress, ...progress };
+    if (progress.step) { next.activity = ''; next.lines = []; }
+    if (log && progress.activity) next.log = [...(held.progress.log || []), progress.activity].slice(-60);
+    held.progress = next;
+  };
   handleFor('ask-bart', async (win, pid, input) => {
     const ctx = await store.context();
     const value = input && typeof input === 'object' ? input : {};
@@ -413,10 +446,10 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     if (!/^[\w-]+$/.test(askId)) throw new TypeError('ask id is invalid');
     // Keeping the agent's row is bookkeeping: it never stands between a question and its answer.
     const track = (change) => { try { change(); navChanged(); return true; } catch { return false; } };
-    let started = false;
+    let started = false, mark = null;
     try {
       // `turns`: the earlier turns of the exchange this question continues, read from the document. `choice`: Regenerate's selector.
-      const turns = (Array.isArray(value.turns) ? value.turns : []).slice(-40).map((turn) => ({ question: str(turn && turn.question, 'earlier question', 8000), answer: str(turn && turn.answer, 'earlier answer', 40000) }));
+      const turns = turnsInput(value.turns);
       const choice = value.choice && typeof value.choice === 'object' ? { model: str(value.choice.model, 'model', 24), effort: str(value.choice.effort, 'effort', 24) } : null;
       if (choice && !/^[a-z][a-z0-9]*$/.test(choice.model + choice.effort)) throw new TypeError('choice is invalid');
       // `agent`: which line asked, @bart, @brainstorm or @discover (2026-09-30): the same run with other instructions. An
@@ -426,19 +459,36 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       const ref = docRef(value.ref);
       // A highlight's note asks @bart alone (MATH-27), with the passage it is on.
       if (ref.kind === 'mark' && agent !== 'bart') throw new TypeError('a highlight asks @bart');
+      const projectId = str(pid, 'project id', 64);
       const question = { askId, ref, workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice, agent, ...(ref.kind === 'mark' ? { highlight: highlightInput(value.highlight) } : {}) };
+      if (ref.kind === 'mark') {
+        mark = { markId: ref.id, page: ref.page, rowId: ref.rowId || null, url: ref.rowId ? null : ref.url };
+        paperAsks.set(askId, { win, projectId, askId, ...mark, question: question.text.trim(), progress: {} });
+      }
       // The ask is an agent of its workspace: running now, waiting for you once its answer (or failure) has landed.
       started = track(() => projects.agentStarted(ctx, { id: askId, kind: agent, projectId: pid, workspaceId: question.workspaceId, doc: question.ref }));
       // Progress goes to the window that asked, which holds the pending line; the answer it places is saved (write-doc).
-      const out = await bart.ask(ctx, str(pid, 'project id', 64), question, { onProgress: (progress) => answer(win, 'engelbart:bart-progress', { askId, ...progress }) });
+      const out = await bart.ask(ctx, projectId, question, { onProgress: (progress) => { paperProgress(askId, progress); answer(win, 'engelbart:bart-progress', { askId, ...progress }); } });
       if (started) track(() => projects.agentFinished(ctx, askId));
-      return out;
+      if (!mark) return out;
+      const entry = askEntry({ id: askId, question: question.text, lines: out.lines, meta: out.meta, at: new Date().toISOString() });
+      try { await library.addMarkAnswer(ctx, mark.rowId ? { rowId: mark.rowId } : { url: mark.url }, mark.page, mark.markId, entry); } catch { /* the Stage still has it to show and save */ }
+      paperDone({ askId, ...mark, entry });
+      return { ...out, entry };
     } catch (error) {
       const stopped = !!(error && error.kind === 'stopped');
       if (started) track(() => (stopped ? projects.agentStopped(ctx, askId) : projects.agentFinished(ctx, askId)));
-      if (stopped) return { stopped: true };
-      return { failed: true, lines: failureLines(error && error.message) };
+      const out = stopped ? { stopped: true } : { failed: true, lines: failureLines(error && error.message) };
+      if (mark) paperDone({ askId, ...mark, ...out });
+      return out;
     }
+  });
+  // The questions from highlights a window asked in this project that are still running, each as its box shows it
+  // ({ askId, markId, page, rowId, url, question, agent, …progress }): a window reloaded meanwhile shows them again.
+  handleFor('running-paper-asks', (win, pid) => {
+    const projectId = str(pid, 'project id', 64);
+    return [...paperAsks.values()].filter((held) => held.projectId === projectId && (!win || held.win === win))
+      .map(({ askId, markId, page, rowId, url, question, progress }) => ({ ...progress, askId, markId, page, rowId, url, question, agent: 'bart' }));
   });
   handle('stop-bart', (askId) => bart.stop(str(askId, 'ask id', 64)));
   // What the @bart line's selector offers and what its flags are checked against: the models file,
@@ -715,4 +765,4 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   });
 }
 
-module.exports = { createStore, registerEngelbartIpc, docRef, docKeyOf, highlightInput };
+module.exports = { createStore, registerEngelbartIpc, docRef, docKeyOf, highlightInput, turnsInput };

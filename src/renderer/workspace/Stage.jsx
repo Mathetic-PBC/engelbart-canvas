@@ -43,8 +43,12 @@ const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platfor
 // @bart on a highlight (MATH-27): a note on a pdf's highlight that starts with @bart asks through `onAsk`, given which pdf
 // it is (its library row, else its address) and its name; what the answer is doing comes back as `pendingAsks` (the
 // workspace's, each with its rowId or url), of which the viewer is given its own pdf's. The finished answer (`onAsk`'s
-// result) goes onto its mark: through the viewer when it shows that pdf (it saves it as any edit), else into the tabs
-// that hold the pdf and the kept ink (landAnswer). Stop, close, Copy and Continue in workspace go up as they are.
+// result) goes onto its mark: through the viewer when it shows that pdf (it saves it as any edit), and into every tab
+// that holds the pdf (landAnswer); main has put it in the kept ink already. Stop, close, Copy and Continue in workspace
+// go up as they are.
+// Second pass (2026-10-06): every tab holding a pdf takes its ink whenever the viewer saves it, so one brought forward
+// later never saves what it read before over it; and main tells every window how a question from a highlight ended
+// (onPaperAskDone), so its answer lands here too in a window reloaded since it asked, or another holding the pdf.
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
@@ -675,20 +679,35 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   React.useImperativeHandle(ref, () => ({ openRow, openInput, openPaths, newTab, closeTab: () => closeTab(tab.id) }));
 
   /* ------------------------------------------------------------------- @bart on a highlight (MATH-27) */
-  // A finished answer onto its mark: the viewer in front adds it when it shows that pdf; otherwise every tab holding the
-  // pdf takes it, and so does the ink kept on disk. A mark gone meanwhile takes nothing.
+  // A finished answer onto its mark: the viewer in front adds it when it shows that pdf, and every tab holding the pdf
+  // takes it, so none brought forward later saves its ink without it. Main has put it in the ink kept on disk already
+  // (library.addMarkAnswer). A mark gone meanwhile takes nothing, and an answer already there is not added again: the
+  // window that asked hears it twice (the ask's answer and main's paper-ask-done).
   const landAnswer = (where, page, markId, entry) => {
     const front = tabsRef.current.find((t) => t.id === frontRef.current) || tabsRef.current[0];
     const viewer = paperRef.current;
-    if (front && samePdf(front.pdf, where) && viewer && typeof viewer.addAsk === 'function' && viewer.addAsk(page, markId, entry)) return;
-    setTabs((current) => current.map((t) => (t.pdf && t.pdf.marks && samePdf(t.pdf, where) ? { ...t, pdf: { ...t.pdf, marks: withAsk(t.pdf.marks, page, markId, entry) } } : t)));
-    const read = where.rowId ? api.readAnnotations(where.rowId) : api.readPageAnnotations(where.url);
-    read.catch(() => null).then((held) => {
-      const marks = held || {}, next = withAsk(marks, page, markId, entry);
-      if (next === marks) return null;
-      return where.rowId ? api.writeAnnotations(where.rowId, next) : api.writePageAnnotations(where.url, next);
-    }).catch((error) => { if (onError) onError(error); });
+    if (front && samePdf(front.pdf, where) && viewer && typeof viewer.addAsk === 'function') viewer.addAsk(page, markId, entry);
+    setTabs((current) => {
+      let changed = false;
+      const next = current.map((t) => {
+        if (!t.pdf || !t.pdf.marks || !samePdf(t.pdf, where)) return t;
+        const marks = withAsk(t.pdf.marks, page, markId, entry);
+        if (marks === t.pdf.marks) return t;
+        changed = true;
+        return { ...t, pdf: { ...t.pdf, marks } };
+      });
+      return changed ? next : current;
+    });
   };
+  // How a question from a highlight ended, told to every window by main: its answer lands here too (landAnswer).
+  const landRef = React.useRef(landAnswer);
+  landRef.current = landAnswer;
+  React.useEffect(() => {
+    if (!api.onPaperAskDone) return undefined;
+    return api.onPaperAskDone((done) => {
+      if (done && done.entry && done.markId && (done.rowId || done.url)) landRef.current(done.rowId ? { rowId: done.rowId } : { url: done.url }, done.page, done.markId, done.entry);
+    });
+  }, []);
   const askFromPaper = async (p, ask) => {
     if (!onAsk || !p) return;
     const where = pdfWhere(p);
@@ -1285,8 +1304,12 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
               onCopyText={onCopyText}
               onOpenLink={(href) => openInput(href, { newTab: true })}
               onMarksChange={(marks) => {
-                const { seq, url, rowId } = pdf;
-                update(tab.id, (t) => (t.pdf && t.pdf.seq === seq ? { ...t, pdf: { ...t.pdf, marks } } : t));
+                const { seq, url, rowId } = pdf, where = pdfWhere(pdf);
+                // Every other tab holding this pdf takes the ink as it is now: brought forward, it must not save what it read before.
+                setTabs((current) => current.map((t) => {
+                  const mine = t.id === tab.id ? !!t.pdf && t.pdf.seq === seq : !!t.pdf && t.pdf.marks !== undefined && samePdf(t.pdf, where);
+                  return mine ? { ...t, pdf: { ...t.pdf, marks } } : t;
+                }));
                 (rowId ? api.writeAnnotations(rowId, marks) : api.writePageAnnotations(url, marks)).catch((error) => { if (onError) onError(error); });
               }}
             />

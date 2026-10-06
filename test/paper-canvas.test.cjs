@@ -241,6 +241,23 @@ test('withAsk adds an answer to its mark once, and leaves the marks alone when t
   assert.deepEqual(turnsOf({}), []);
 });
 
+test('after ⌘R the answers this window had being written come back as main keeps them, but not one held already or ended meanwhile (second pass)', async () => {
+  const { runningBack } = await load();
+  const held = { h1: { askId: 'h1', markId: 'm1', page: 2, rowId: 'r', url: null, question: 'why?', activity: 'Writing', lines: ['So far'] } };
+  const list = [
+    { askId: 'h1', markId: 'm1', page: 2, rowId: 'r', url: null, question: 'why?', activity: 'Reading' }, // held: progress goes on into it
+    { askId: 'h2', markId: 'm3', page: 5, rowId: null, url: 'https://x.org/a.pdf', question: 'and?', step: 1, name: 'Sonnet', effort: 'high', activity: 'Reading', lines: [], log: ['Reading'], agent: 'bart' },
+    { askId: 'h3', markId: 'm4', page: 1, rowId: 'r', url: null, question: 'so?' }, // main said it ended before this came back
+    { askId: 'h4' }, null, // no mark: not one of these
+  ];
+  const next = runningBack(held, list, new Set(['h3']));
+  assert.deepEqual(Object.keys(next), ['h1', 'h2']);
+  assert.equal(next.h1, held.h1);
+  assert.equal(next.h2, list[1]);
+  assert.equal(runningBack(held, [list[0]], new Set()), held, 'none back: the same object, no render');
+  assert.equal(runningBack(held, null), held);
+});
+
 test('a deleted answer stays one of the exchange\'s turns while its session can be resumed, then it is gone', async () => {
   const { exchangeOf, shownAsks, turnsOf, keptMarks, THREAD_IDLE_MS } = await load();
   assert.equal(THREAD_IDLE_MS, require('../src/main/bart/ask.cjs').THREAD_IDLE_MS, 'the same window as main\'s');

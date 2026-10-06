@@ -20,7 +20,7 @@ import { buildLine, placeAnswer } from '../model/doc.js';
 import { openBeside, closePane } from '../model/panes.js';
 import { addDropped } from '../model/drop.js';
 import { createDocSync } from '../model/doc-sync.js';
-import { askEntry, answerOf, continueLines } from '../pdf/canvas.js';
+import { askEntry, answerOf, continueLines, runningBack } from '../pdf/canvas.js';
 import { buildRequestOf } from '../../main/bart/question.cjs';
 import ProjectPostIts from '../post-its/ProjectPostIts.jsx';
 import BuildPanel from '../workspace/BuildPanel.jsx';
@@ -59,6 +59,8 @@ const SAVE_DELAY = 400;
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
 
 const basename = (value) => String(value || '').split('/').pop();
+// Why a question from a highlight's note got no answer, as its box says it: the reply's words without "No answer.".
+const paperFailure = (lines) => answerOf(lines).answer.replace(/^\*\*No answer\.\*\*\s*/, '');
 
 function copiedLabel(copied) {
   const parts = ['Copied'];
@@ -431,36 +433,55 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // @bart from a note on a pdf's highlight (MATH-27): asked of this workspace with the mark as its place ({ kind: 'mark',
   // id, rowId | url, page }), the passage and the note with it, and written into no document. The entry here holds which
   // mark and pdf it is for ({ markId, page, rowId | url }) and what it is doing, which the Stage shows on the pdf; the
-  // finished answer is returned to the Stage as the mark keeps it (pdf/canvas.js askEntry). Stopped, it leaves nothing; a
-  // failure stays here, with its error, until it is closed.
+  // finished answer is returned to the Stage as the mark keeps it (pdf/canvas.js askEntry; main's own, which it has put on
+  // the mark already). Stopped, it leaves nothing; a failure stays here, with its error, until it is closed.
   const [paperAsks, setPaperAsks] = React.useState({});
-  const askHighlight = React.useCallback(async ({ markId, page, quote, note, question, turns, rowId, url, paper }) => {
-    const text = String(question || '').trim();
-    if (!topic || !markId || !text || (!rowId && !url)) return null;
-    const askId = `h${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-    setPaperAsks((current) => ({ ...current, [askId]: { askId, markId, page, rowId: rowId || null, url: rowId ? null : url, question: text, agent: 'bart' } }));
-    const drop = () => setPaperAsks((current) => { const next = { ...current }; delete next[askId]; return next; });
-    const fail = (message) => setPaperAsks((current) => (current[askId] ? { ...current, [askId]: { ...current[askId], error: message || 'The run failed.', activity: '', lines: [] } } : current));
-    try {
-      const ref = rowId ? { kind: 'mark', id: markId, rowId, page } : { kind: 'mark', id: markId, url, page };
-      const asked = api.askBart(project.id, { askId, ref, workspaceId: topic.id, text, turns: turns || [], highlight: { quote: quote || '', note: note || '', paper: paper || null } });
-      loadBartModels(); // main has kept a pick by hand before this is read
-      const out = await asked;
-      if (out && out.stopped) { drop(); return null; }
-      if (!out || out.failed || !Array.isArray(out.lines)) { fail(answerOf(out && out.lines).answer.replace(/^\*\*No answer\.\*\*\s*/, '')); return null; }
-      drop();
-      return askEntry({ id: askId, question: text, lines: out.lines, meta: out.meta, at: new Date().toISOString() });
-    } catch (error) {
-      fail(errorMessage(error));
-      return null;
-    }
-  }, [topic, project.id, loadBartModels]);
-  const dismissPaperAsk = React.useCallback((askId) => setPaperAsks((current) => {
+  const dropPaperAsk = React.useCallback((askId) => setPaperAsks((current) => {
     if (!current[askId]) return current;
     const next = { ...current };
     delete next[askId];
     return next;
   }), []);
+  const failPaperAsk = React.useCallback((askId, message) => setPaperAsks((current) => (current[askId] ? { ...current, [askId]: { ...current[askId], error: message || 'The run failed.', activity: '', lines: [] } } : current)), []);
+  const askHighlight = React.useCallback(async ({ markId, page, quote, note, question, turns, rowId, url, paper }) => {
+    const text = String(question || '').trim();
+    if (!topic || !markId || !text || (!rowId && !url)) return null;
+    const askId = `h${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    setPaperAsks((current) => ({ ...current, [askId]: { askId, markId, page, rowId: rowId || null, url: rowId ? null : url, question: text, agent: 'bart' } }));
+    try {
+      const ref = rowId ? { kind: 'mark', id: markId, rowId, page } : { kind: 'mark', id: markId, url, page };
+      const asked = api.askBart(project.id, { askId, ref, workspaceId: topic.id, text, turns: turns || [], highlight: { quote: quote || '', note: note || '', paper: paper || null } });
+      loadBartModels(); // main has kept a pick by hand before this is read
+      const out = await asked;
+      if (out && out.stopped) { dropPaperAsk(askId); return null; }
+      if (!out || out.failed || !Array.isArray(out.lines)) { failPaperAsk(askId, paperFailure(out && out.lines)); return null; }
+      dropPaperAsk(askId);
+      return out.entry || askEntry({ id: askId, question: text, lines: out.lines, meta: out.meta, at: new Date().toISOString() });
+    } catch (error) {
+      failPaperAsk(askId, errorMessage(error));
+      return null;
+    }
+  }, [topic, project.id, loadBartModels, dropPaperAsk, failPaperAsk]);
+  // After ⌘R, or back in the project, the questions this window asked from highlights that are still running show their
+  // boxes again as main keeps them (running-paper-asks), and their progress goes on into them. How each ended main tells
+  // every window (paper-ask-done, second pass 2026-10-06): its box goes, its answer already on the mark (the Stage shows
+  // it), or it says "No answer" and why. Ended ones are remembered, so a list read just before one ended brings back no box.
+  const paperEnded = React.useRef(new Set());
+  React.useEffect(() => {
+    let live = true;
+    const off = api.onPaperAskDone ? api.onPaperAskDone((done) => {
+      if (!done || !done.askId) return;
+      paperEnded.current.add(done.askId);
+      if (done.failed) failPaperAsk(done.askId, paperFailure(done.lines)); else dropPaperAsk(done.askId);
+    }) : () => {};
+    if (api.runningPaperAsks) {
+      api.runningPaperAsks(project.id).then((list) => {
+        if (!live) return;
+        setPaperAsks((current) => runningBack(current, list, paperEnded.current));
+      }).catch(() => {});
+    }
+    return () => { live = false; off(); };
+  }, [project.id, dropPaperAsk, failPaperAsk]);
   const pendingPaperAsks = React.useMemo(() => Object.values(paperAsks), [paperAsks]);
 
   const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent }) => {
@@ -1637,7 +1658,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           pendingAsks={pendingPaperAsks}
           onAsk={topic ? askHighlight : undefined}
           onStopAsk={(askId) => api.stopBart(askId).catch((error) => onError(error))}
-          onDismissAsk={dismissPaperAsk}
+          onDismissAsk={dropPaperAsk}
           onContinueAsk={topic ? continueAsk : undefined}
           onCopyText={(value) => api.copyText(value).catch((error) => onError(error))}
           save={topic && pageState ? { state: pageState, onSave: savePage, onLink: () => linkIds([pageKnown.row.id]) } : null}

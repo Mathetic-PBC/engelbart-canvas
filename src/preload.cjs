@@ -123,6 +123,10 @@ const engelbartAPI = Object.freeze({
   onModelsChanged: (callback) => subscribe('engelbart:models-changed', callback),
   copyText: invoke('copy-text'),
   onBartProgress: (callback) => subscribe('engelbart:bart-progress', callback),
+  // @bart from a highlight's note (MATH-27): the ones this window asked that are still running (for after ⌘R), and how each
+  // ended, told to every window: { askId, markId, page, rowId | url, and entry (the answer, already on its mark) | stopped | failed and lines }.
+  runningPaperAsks: invoke('running-paper-asks'),
+  onPaperAskDone: (callback) => subscribe('engelbart:paper-ask-done', callback),
   // Build (src/main/build): a workspace's coding agent in a worktree of its own. Every change of one arrives on onBuild as
   // its record; onBuildProgress carries what a running turn is doing ({ projectId, id, activity, log, lines }).
   buildModels: invoke('build-models'), // ('quick' for a post-it's Build)

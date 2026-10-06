@@ -16,6 +16,7 @@ const projects = require('./projects.cjs');
 const { LIBRARY_TAGS } = require('./db.cjs');
 const { reading } = require('../stage/files.cjs');
 const { readHtmlMeta } = require('./page-meta.cjs');
+const { withAsk } = require('../../shared/mark-answers.cjs');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_PDF_BYTES = 200 * 1024 * 1024;
@@ -86,8 +87,17 @@ async function readAnnotations(ctx, id) {
   return null;
 }
 
+// Ink is written one change at a time (MATH-27 second pass, 2026-10-06): an answer main puts on a mark itself
+// (addMarkAnswer) reads the ink and writes it back, and a save from the Stage must not land between the two.
+let inkTurn = Promise.resolve();
+function inkInTurn(work) {
+  const run = inkTurn.then(work);
+  inkTurn = run.catch(() => {});
+  return run;
+}
+
 async function writeAnnotations(ctx, id, value) {
-  return writeJson(annotationFile(ctx, id), value);
+  return inkInTurn(() => writeJson(annotationFile(ctx, id), value));
 }
 
 // Ink on a pdf read in the Browser pane (2026-09-22). With the library's row when the library holds
@@ -116,8 +126,26 @@ async function readPageAnnotations(ctx, input) {
 }
 
 async function writePageAnnotations(ctx, input, value) {
-  const place = await inkPlace(ctx, input);
-  return writeJson(place.id ? annotationFile(ctx, place.id) : place.file, value);
+  return inkInTurn(async () => {
+    const place = await inkPlace(ctx, input);
+    return writeJson(place.id ? annotationFile(ctx, place.id) : place.file, value);
+  });
+}
+
+/**
+ * A finished answer from a highlight's note onto its mark, in the ink kept for its pdf (`where`: { rowId } or { url }, as
+ * the Stage keeps it), as the Stage puts it there (shared/mark-answers.cjs withAsk): once, and only while the mark is
+ * there. → whether the ink was written.
+ */
+async function addMarkAnswer(ctx, where, page, markId, entry) {
+  return inkInTurn(async () => {
+    const place = where && where.rowId ? { id: where.rowId } : await inkPlace(ctx, where && where.url);
+    const held = place.id ? await readAnnotations(ctx, place.id) : readJson(place.file);
+    const marks = held && typeof held === 'object' && !Array.isArray(held) ? held : {};
+    const next = withAsk(marks, page, markId, entry);
+    if (next === marks) return false;
+    return writeJson(place.id ? annotationFile(ctx, place.id) : place.file, next);
+  });
 }
 
 function writeJson(file, value) {
@@ -865,4 +893,4 @@ async function previewItem(ctx, id, { listRemoteFiles } = {}) {
   return out;
 }
 
-module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, writePageAnnotations, projectsForLibraryItem, libraryForProject, bodiesForProject, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, addPageCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem };
+module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, writePageAnnotations, addMarkAnswer, projectsForLibraryItem, libraryForProject, bodiesForProject, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, addPageCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem };
