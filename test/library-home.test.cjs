@@ -510,7 +510,7 @@ test('a project\'s code directory is a clone the library already knows about: fo
   fs.rmSync(other, { recursive: true });
   // the clone is deleted: the row stays in the library with its id and address, says its folder is missing, and the peek goes back to asking
   const gone = await library.previewItem(ctx, added.id, { listRemoteFiles: async () => ['README.md'] });
-  assert.deepEqual([gone.files, gone.folder, gone.folderMissing], [['README.md'], null, '~/code/tool']);
+  assert.deepEqual([gone.files, gone.folder, gone.folderMissing], [['README.md'], null, path.join('~', 'code', 'tool')]);
   const kept = await ctx.libraryDb.get(added.id);
   assert.deepEqual([kept.github_id, kept.url, kept.folder_path], ['106', 'https://github.com/acme/tool', other], 'nothing is removed, and the path is kept for the day the folder comes back');
 });

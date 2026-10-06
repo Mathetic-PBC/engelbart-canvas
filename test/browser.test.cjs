@@ -540,7 +540,7 @@ test('savePage: the page a tab shows, saved complete into a folder; not a tab th
   contents.savePage = async (file, type) => { saved.push([file, type]); };
   contents.getTitle = () => 'A Post';
   assert.deepEqual(await views.savePage('t', '/data/assets/pages/x'), { file: path.join('/data/assets/pages/x', 'index.html'), url: 'https://blog.example.org/post', title: 'A Post' });
-  assert.deepEqual(saved, [['/data/assets/pages/x/index.html', 'HTMLComplete']]);
+  assert.deepEqual(saved, [[path.join('/data/assets/pages/x', 'index.html'), 'HTMLComplete']]);
 
   await assert.rejects(() => views.savePage('gone', '/d'), /not open/);
   await assert.rejects(() => views.savePage(42, '/d'), TypeError);

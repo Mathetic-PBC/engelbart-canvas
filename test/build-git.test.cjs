@@ -166,7 +166,7 @@ test('a clone with the GitHub sign-in: its helper answers https://github.com alo
   const theirs = path.join(root, 'their-helper.sh');
   write(theirs, '#!/bin/sh\ntest "$1" = get && printf "username=person\\npassword=their-password\\n"\n');
   fs.chmodSync(theirs, 0o755);
-  fs.writeFileSync(path.join(home, '.gitconfig'), `[credential]\n\thelper = ${theirs}\n`);
+  fs.writeFileSync(path.join(home, '.gitconfig'), `[credential]\n\thelper = ${theirs.split(path.sep).join('/')}\n`); // a config's \ is an escape
   const fill = (host, extra) => {
     try { return execFileSync('git', ['credential', 'fill'], { input: `protocol=https\nhost=${host}\n\n`, env: { ...environment, GIT_TERMINAL_PROMPT: '0', ...extra }, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }); } catch { return null; }
   };

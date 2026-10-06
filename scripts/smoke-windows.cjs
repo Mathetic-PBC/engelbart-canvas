@@ -83,7 +83,9 @@ async function main() {
     const exited = new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));
     for (const stream of [child.stdout, child.stderr]) stream.on('data', (chunk) => { output = (output + chunk).slice(-20_000); });
     console.log(`Starting ${app}`);
-    const port = await until(async () => /DevTools listening on ws:\/\/[^:]+:(\d+)\//.exec(output)?.[1], 'the app to start (DevTools port)');
+    // The port Chromium chose: printed, and written to DevToolsActivePort in the user data (a Windows app's printing can be lost).
+    const activePort = () => { try { return fs.readFileSync(path.join(userData, 'DevToolsActivePort'), 'utf8').split(/\r?\n/); } catch { return null; } };
+    const port = await until(async () => /DevTools listening on ws:\/\/[^:]+:(\d+)\//.exec(output)?.[1] || activePort()?.[0], 'the app to start (DevTools port)');
 
     // 1. The window loads.
     const target = await until(async () => {
@@ -121,7 +123,7 @@ async function main() {
     await page.send('Runtime.evaluate', { expression: 'window.close()' }).catch(() => {});
     page.close();
     if (process.platform === 'darwin') {
-      const browser = await devtools(/DevTools listening on (ws:\/\/\S+)/.exec(output)[1]);
+      const browser = await devtools(/DevTools listening on (ws:\/\/\S+)/.exec(output)?.[1] || `ws://127.0.0.1:${port}${activePort()[1]}`);
       await Promise.race([browser.send('Browser.close').catch(() => {}), exited, pause(5000)]);
       browser.close();
     }

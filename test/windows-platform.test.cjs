@@ -116,24 +116,33 @@ test('a rollback on Windows copies Claude Code back, as there is no symlink to p
   assert.equal(fs.existsSync(`${file}.engelbart-rollback`), false);
 });
 
-test('processes on Windows: stopped with their tree by taskkill, once; no ps or lsof', async () => {
+test('processes on Windows: stopped with their tree (each descendant named) by taskkill, once; no ps or lsof', async () => {
   const ran = [];
-  const run = (file, args, options, done) => { ran.push([file, ...args]); setImmediate(done); return {}; };
+  // 4242 started 5000, which started 5001; 6000 is another's. A pid that is its own parent (the idle process) is skipped.
+  const listing = '4242 100\r\n5000 4242\r\n5001 5000\r\n6000 100\r\n0 0\r\n';
+  const run = (file, args, options, done) => { ran.push([file, ...args]); setImmediate(() => done(null, file === 'powershell.exe' ? listing : '')); return {}; };
   await killTree(4242, { run });
-  assert.deepEqual(ran, [['taskkill', '/T', '/F', '/PID', '4242']]);
+  assert.equal(ran[0][0], 'powershell.exe');
+  assert.deepEqual(ran.slice(1), [['taskkill', '/T', '/F', '/PID', '4242', '/PID', '5000', '/PID', '5001']]);
+  ran.length = 0;
   assert.deepEqual(await groupPids(4242, { run, platform: 'win32' }), []);
   assert.equal(await stopLeftover(4242, temp(), { run, platform: 'win32' }), false);
-  assert.equal(ran.length, 1, 'neither ps nor lsof ran');
+  assert.equal(ran.length, 0, 'neither ps nor lsof ran');
+
+  // No listing (PowerShell failed): the pid alone, with /T.
+  const failing = (file, args, options, done) => { ran.push([file, ...args]); setImmediate(() => done(file === 'powershell.exe' ? new Error('no') : null, '')); return {}; };
+  await killTree(4242, { run: failing });
+  assert.deepEqual(ran.slice(1), [['taskkill', '/T', '/F', '/PID', '4242']]);
 
   // A started process: stop() asks taskkill for its tree, then waits for it to exit.
   ran.length = 0;
   const { EventEmitter } = require('node:events');
   const child = Object.assign(new EventEmitter(), { pid: 777, stdout: null, stderr: null, kill: () => assert.fail('no signal on Windows') });
-  const killer = (file, args, options, done) => { ran.push([file, ...args]); setImmediate(() => { child.emit('exit', 1, null); done(); }); return {}; };
+  const killer = (file, args, options, done) => { ran.push([file, ...args]); setImmediate(() => { if (file === 'taskkill') child.emit('exit', 1, null); done(null, ''); }); return {}; };
   const processes = createProcesses({ environment: { ProgramFiles: 'C:\\Program Files' }, platform: 'win32', run: killer, spawnProcess: (file, args, options) => { assert.equal(options.windowsHide, true); return child; } });
   await processes.start('web', 'npm start', temp());
   assert.equal(await processes.stop('web'), true);
-  assert.deepEqual(ran, [['taskkill', '/T', '/F', '/PID', '777']]);
+  assert.deepEqual(ran.filter(([file]) => file === 'taskkill'), [['taskkill', '/T', '/F', '/PID', '777']]);
 });
 
 test('an app packed for Windows keeps app.asar in resources/: the package check reads it there', async () => {
@@ -165,7 +174,14 @@ if (process.platform === 'win32') {
 
   /** Whether something answers at `url` within two seconds. */
   const answers = async (url) => { try { await fetch(url, { signal: AbortSignal.timeout(2000) }); return true; } catch { return false; } };
-  const tasks = async () => { try { return (await run('tasklist', ['/v'], { windowsHide: true })).stdout; } catch (error) { return error.message; } };
+  /** Every process now: pid, parent pid, name and command line (PowerShell's CIM, as tasklist has no parents). */
+  const tree = async () => {
+    try {
+      const { stdout } = await run('powershell.exe', ['-NoProfile', '-Command', 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $($_.Name) $($_.CommandLine)" }'], { windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
+      return stdout.split(/\r?\n/).filter(Boolean).map((line) => { const [pid, parent, ...rest] = line.split(' '); return { pid: Number(pid), parent: Number(parent), text: rest.join(' ').slice(0, 160) }; });
+    } catch (error) { return [{ pid: 0, parent: 0, text: error.message }]; }
+  };
+  const below = (all, root) => { const out = all.filter((item) => item.pid === root); for (let i = 0; i < out.length; i += 1) out.push(...all.filter((item) => item.parent === out[i].pid && !out.includes(item))); return out; };
 
   test('Windows: a dev server started through Git Bash (as a Build\'s run step starts one) answers, and stop() takes its whole tree down', async () => {
     const root = temp();
@@ -177,9 +193,13 @@ if (process.platform === 'win32') {
       await processes.start('web', command.replace('{port}', port), root);
       const web = await processes.check('web', 'ui', { port });
       assert.equal(web.ok, true, `${command}: ${JSON.stringify(web)}`);
+      const before = below(await tree(), processes.status('web').pid);
       assert.equal(await processes.stop('web'), true);
       await new Promise((resolve) => { setTimeout(resolve, 500); });
-      assert.equal(await answers(`http://localhost:${port}/`), false, `${command}: still answering after stop\n${await tasks()}`);
+      const after = await tree();
+      const left = before.filter((item) => after.some((now) => now.pid === item.pid));
+      const named = (list) => list.map((item) => `${item.pid} (parent ${item.parent}) ${item.text}`).join('\n');
+      assert.equal(await answers(`http://localhost:${port}/`), false, `${command}: still answering after stop.\nIts tree before:\n${named(before)}\nStill there:\n${named(left)}\nNode processes now:\n${named(after.filter((item) => /node|bash|cmd/i.test(item.text)))}`);
     }
   });
 

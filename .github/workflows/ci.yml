@@ -42,6 +42,12 @@ jobs:
         run: |
           python3 -c "import http.server" && python3 --version
           if [ "$RUNNER_OS" = macOS ]; then zsh -ilc 'command -v python3; python3 -c "import http.server"; python3 --version'; fi
+      # Git for Windows turns LF into CRLF on checkout (core.autocrlf in its system config). The app's git drops GIT_*
+      # variables (src/main/build/git.cjs), so GIT_CONFIG_NOSYSTEM from scripts/test.mjs doesn't reach it; the tests'
+      # repositories compare files byte for byte, as a Mac's git leaves them.
+      - name: Keep LF in the tests' repositories (Windows)
+        if: runner.os == 'Windows'
+        run: git config --system core.autocrlf false
       - name: npm test
         shell: bash
         # A test that hangs fails after five minutes instead of holding the job to its limit.

@@ -10,8 +10,8 @@
 // A UI's port is a free one on this Mac, found at each start.
 //
 // Windows (2026-10-05, docs/windows-port.md) has no process groups: a process and everything it started (its tree) are
-// stopped with `taskkill /T /F`, and what only needs ps or lsof (a leftover after a crash, an app's window to the front)
-// is skipped.
+// stopped with `taskkill /T /F`, each descendant named (/T alone left npm's server running on CI), and what only needs ps
+// or lsof (a leftover after a crash, an app's window to the front) is skipped.
 
 const fs = require('node:fs');
 const net = require('node:net');
@@ -61,9 +61,24 @@ function focusApp(pids, { run = execFile } = {}) {
   return new Promise((resolve) => run('/usr/bin/osascript', ['-l', 'JavaScript', '-e', script], { timeout: 5000 }, (error, stdout) => resolve(!error && String(stdout).trim() === 'yes')));
 }
 
-/** On Windows: `pid` and every process it started, stopped. → when taskkill has finished */
-function killTree(pid, { run = execFile } = {}) {
-  return new Promise((resolve) => run('taskkill', ['/T', '/F', '/PID', String(pid)], { timeout: 5000, windowsHide: true }, () => resolve()));
+/** On Windows: every process's pid and its parent's, from PowerShell's CIM (tasklist has no parents). → [[pid, parent]] */
+function processParents({ run = execFile } = {}) {
+  const script = 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId)" }';
+  return new Promise((resolve) => run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], { timeout: 10_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
+    resolve(error ? [] : String(stdout || '').split(/\r?\n/).map((line) => line.trim().split(/\s+/).map(Number)).filter(([pid, parent]) => Number.isInteger(pid) && Number.isInteger(parent)));
+  }));
+}
+
+/**
+ * On Windows: `pid` and every process it started, stopped. Its descendants are listed first and each named to taskkill,
+ * as /T alone left some running (npm's server, started through Git Bash). → when taskkill has finished
+ */
+async function killTree(pid, { run = execFile } = {}) {
+  const pairs = await processParents({ run });
+  const tree = [pid];
+  for (let i = 0; i < tree.length; i += 1) for (const [child, parent] of pairs) if (parent === tree[i] && child !== parent && !tree.includes(child)) tree.push(child);
+  const args = ['/T', '/F', ...tree.flatMap((each) => ['/PID', String(each)])];
+  await new Promise((resolve) => run('taskkill', args, { timeout: 10_000, windowsHide: true }, () => resolve()));
 }
 
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };

@@ -5,6 +5,16 @@ Newest status first; the sections below are kept current.
 
 ## Where things stand
 
+- 2026-10-05, step 7 continued: run 3 (ac2fc2f) left macOS 1 failure (run-step's page test: nothing answered within
+  8 s, CI only; its message now prints what the task and the server saw) and Windows 22 failed plus 2 files timed out.
+  Causes and fixes, pushed as run 4: CRLF in the tests' repositories (the app's git drops GIT_* variables, so
+  GIT_CONFIG_NOSYSTEM never reached it; CI now sets `core.autocrlf false` system-wide on Windows); `npm start` started
+  through Git Bash kept serving after `taskkill /T` (the stop now lists the tree through PowerShell's CIM and names
+  each descendant, which also explains run-step's two "stops it" tests and the file timeouts); a credential-helper
+  path written into a gitconfig with `\` (an escape there); Windows-path fixtures in browser, library-home, bart;
+  Codex's auth.json is hard-linked on Windows, so the context test checks the inode there; local Claude Code found as
+  `claude.exe` with a Windows path; Stage addresses with a drive letter (`C:` or `C%3A`) decoded.
+
 - 2026-10-05, step 7 in progress: run 2 left macOS 1 failure (the login shell's python3 was not the one warmed up;
   fixed) and Windows 64; fixes for most of them pushed as run 3 (see "Tests skipped on Windows" and the step 7 entry).
 
@@ -45,7 +55,8 @@ Newest status first; the sections below are kept current.
   `install.cjs` installs Claude Code with `irm https://claude.ai/install.ps1 | iex`, Codex with
   `npm install -g @openai/codex`, never runs xcode-select or brew on Windows, and rolls Claude Code back by copy.
   `manager.cjs` joins ENGELBART_AGENT_PATH with `path.delimiter`.
-- Step 5, processes (`build/run-processes.cjs`): `taskkill /T /F /PID` on Windows; `groupPids` and `stopLeftover`
+- Step 5, processes (`build/run-processes.cjs`): `taskkill /T /F /PID` on Windows, every descendant named (listed
+  first with PowerShell's `Get-CimInstance Win32_Process`: /T alone left npm's server running on CI); `groupPids` and `stopLeftover`
   (ps, lsof) skipped there. `build/manager.cjs` copies node_modules with `fs.promises.cp` on Windows.
 - Step 6, paths: `store/projects.cjs` Stage addresses use `path.isAbsolute`. `context/summarizer.cjs` links Codex's
   auth.json with a hard link on Windows (a file, so no junction; a symlink needs Developer Mode), else a copy.
@@ -100,8 +111,13 @@ modes). Expectations written with the platform's separator (`path.join`, `path.s
 |---|---|---|---|---|---|
 | 6f65820 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37413145769 | ✗ 2 tests | ✗ 84 tests | ✗ 7 tests | baseline code; Mac failures are CI-only (shallow clone, python3 warm-up) |
 | 324fcbe | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37414993723 | ✗ 1 test | ✗ 64 tests | ✗ | steps 2–6, 8; run-step's page test still slow on the Mac (login shell's python3) |
+| ac2fc2f | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37416228818 | ✗ 1 test | ✗ 22 tests + 2 file timeouts | ✗ | step 7; the warm-up showed both python3s are /usr/local/bin's, so the Mac failure is something else; Windows: CRLF, npm's server outliving taskkill /T, fixtures |
 
 ## Needs a decision
+
+- Git for Windows checks files out with CRLF by default (`core.autocrlf true`). The app's Builds and repositories
+  follow whatever the person's Git says; CI turns it off only for the tests. Whether Engelbart should pass
+  `-c core.autocrlf=false` on Windows (agents write LF) is a product choice, left as it is.
 
 - `scripts/smoke-windows.cjs` already existed on `hudsons-feedback`: the smoke test for several app *windows*
   (File ▸ New Window), not for Windows the OS. The spec names that same file for the Windows smoke test. Worked
@@ -111,7 +127,8 @@ modes). Expectations written with the platform's separator (`path.join`, `path.s
 ## Baseline
 
 `hudsons-feedback` (22d738c) on this Mac: 1008 tests, 1007 pass, 1 skipped (the bundled-Git test, until
-`node scripts/fetch-git.mjs` has run). With this branch's changes: 1008 pass, 0 failed (vendor/git present).
+`node scripts/fetch-git.mjs` has run). With this branch's changes (2026-10-05, run 4's commit): 1017 tests, 1017 pass,
+0 failed, 0 skipped (vendor/git present; the 9 new ones are windows-platform.test.cjs's cross-platform tests).
 
 ## Left for a hand test
 

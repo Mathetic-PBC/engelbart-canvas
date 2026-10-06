@@ -757,14 +757,15 @@ test('a Build that adds a plain page to a desktop app\'s repository: the run ste
     assert.match(input.prompt, /What the Build changed since it started[^\n]*\n\["chi\/index\.html"\]/);
     await assert.rejects(use('declare_runnables', { runnables: [{ name: 'desktop', folder: '.', type: 'app' }] }), /desktop is not a web UI/);
     await use('declare_runnables', { runnables: [{ name: 'page', folder: 'chi', type: 'ui' }] });
-    assert.equal((await use('start_runnable', { name: 'page', run_command: 'python3 -m http.server {port} --bind 127.0.0.1' })).ok, true);
+    const served = await use('start_runnable', { name: 'page', run_command: 'python3 -m http.server {port} --bind 127.0.0.1' });
+    assert.equal(served.ok, true, JSON.stringify(served));
     return 'page runs.';
   });
   const { builds } = manager(build, agent, { kinds: RUN_KINDS });
   const started = await builds.start(ctx, project.id, { workspaceId: workspace.id, target });
   const task = await stepped(builds, project, started.id, 1);
   assert.equal(agent.seen.length, 1, 'the agent ran: nothing stored is a web interface');
-  assert.deepEqual(task.runStep.runnables.map((item) => [item.name, item.type, item.folder, item.status]), [['page', 'ui', 'chi', 'running']]);
+  assert.deepEqual(task.runStep.runnables.map((item) => [item.name, item.type, item.folder, item.status]), [['page', 'ui', 'chi', 'running']], JSON.stringify(task.runStep));
   assert.match(await (await fetch(task.runStep.runnables[0].url)).text(), /CHI submissions, 2017-2026/, 'the page the Build made is what answers');
   await builds.stopAll();
   assert.equal(await answers(task.runStep.runnables[0].url), false);

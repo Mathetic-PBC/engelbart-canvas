@@ -235,7 +235,8 @@ test('providers: switched by the config on every call, both held to the subscrip
   assert.ok(!seen.args[1].includes('body'), 'the note never appears on a command line');
   assert.equal(seen.env.CODEX_HOME, codexHome, 'a private CODEX_HOME: none of your MCP servers, hooks or AGENTS.md');
   assert.equal(fs.readFileSync(path.join(codexHome, 'AGENTS.md'), 'utf8'), SUMMARY_SYSTEM_PROMPT, 'the system prompt is that home\'s AGENTS.md');
-  assert.equal(fs.readlinkSync(path.join(codexHome, 'auth.json')), authFile, 'your sign-in is linked, not copied');
+  if (process.platform === 'win32') assert.equal(fs.statSync(path.join(codexHome, 'auth.json')).ino, fs.statSync(authFile).ino, 'your sign-in is hard-linked, not copied'); // Windows: no symlink without admin rights
+  else assert.equal(fs.readlinkSync(path.join(codexHome, 'auth.json')), authFile, 'your sign-in is linked, not copied');
   assert.deepEqual([seen.env.OPENAI_API_KEY, seen.env.ANTHROPIC_API_KEY, seen.env.CLAUDECODE], [undefined, undefined, undefined], 'no API key, no outer agent session');
   assert.match(seen.input, /<current_summary>\nold/);
 

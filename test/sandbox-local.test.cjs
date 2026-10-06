@@ -24,7 +24,7 @@ test('subscription environment excludes every API, OAuth, parent-session and Ele
 
 test('local Claude missing from the login shell\'s PATH is found where its installer put it (a new account, 2026-09-29)', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-local-claude-'));
-  const launcher = path.join(home, '.local', 'bin', 'claude');
+  const launcher = path.join(home, '.local', 'bin', process.platform === 'win32' ? 'claude.exe' : 'claude'); // where each installer puts it
   fs.mkdirSync(path.dirname(launcher), { recursive: true });
   fs.writeFileSync(launcher, '#!/bin/sh\n', { mode: 0o755 });
   const asked = [];

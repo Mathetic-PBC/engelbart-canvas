@@ -33,7 +33,8 @@ async function prepareLocalClaude(source = process.env, run = execute) {
   // A login shell whose PATH misses it (a new account: Claude Code's installer puts it in ~/.local/bin, which a fresh
   // .zshrc does not add) is not the end: where the installers put it is looked at too, as the tool check does.
   const fish = path.basename(shell) === 'fish';
-  const query = fish ? 'command -s claude' : path.basename(shell) === 'bash' ? 'type -P claude' : 'whence -p claude';
+  // Windows: Git for Windows' bash, whose answer (/c/Users/…) is turned into the path Windows knows.
+  const query = process.platform === 'win32' ? 'cygpath -w "$(type -P claude)"' : fish ? 'command -s claude' : path.basename(shell) === 'bash' ? 'type -P claude' : 'whence -p claude';
   let file;
   try {
     let found = null;
