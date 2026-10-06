@@ -24,6 +24,8 @@ jobs:
       ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # test/sandbox-pipeline-benchmark.test.cjs reads earlier commits
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -32,10 +34,16 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y xvfb libnss3 libgbm1 libasound2t64
       - run: npm ci
+      # A runner's first python3 takes seconds to start, longer than a test's dev server is given to answer
+      # (test/run-step.test.cjs serves a page with `python3 -m http.server`).
+      - name: Warm up python3
+        shell: bash
+        run: python3 -c "import http.server" && python3 --version
       - name: npm test
         shell: bash
+        # A test that hangs fails after five minutes instead of holding the job to its limit.
         run: |
-          if [ "$RUNNER_OS" = Linux ]; then xvfb-run -a npm test; else npm test; fi
+          if [ "$RUNNER_OS" = Linux ]; then xvfb-run -a npm test -- --test-timeout=300000; else npm test -- --test-timeout=300000; fi
       - run: npm run build
 
       - name: Package the Mac app
