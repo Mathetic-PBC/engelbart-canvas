@@ -52,6 +52,7 @@ import { readFlags, readQuestion, readDiscover, withChoice, withMode, discoverSp
 import { SKIPPED, MAP_GROUPS, cardOfAnswer, questionOf, isChoice, answerLine, withWrap, readAnswer, recapLine } from '../../main/bart/card.cjs';
 import BartPicker from './BartPicker.jsx';
 import DiscoverLevels, { LEVEL_LABELS } from './DiscoverLevels.jsx';
+import { pdfText } from '../model/paste.js';
 import MentionMenu from './MentionMenu.jsx';
 import { fieldCaret } from './caret.js';
 import Popover from './Popover.jsx';
@@ -223,7 +224,7 @@ export default class DocEditor extends React.Component {
       keydown: (e) => { if (!inEd(e)) return; this.held = false; if (this.escapeShut(e)) return; if (inBuild(e)) this.buildKey(e); else if (inCard(e)) this.cardKey(e); else if (inDiscover(e)) this.discoverKey(e); else if (inFollow(e)) this.followKey(e); else this.editorKey(e); },
       input: (e) => { if (!inEd(e)) return; if (inBuild(e)) this.buildInput(e.target); else if (inCard(e)) this.cardInput(e.target); else if (inDiscover(e)) this.discoverInput(e.target); else if (inFollow(e)) this.followInput(e.target); else this.editorInput(); },
       beforeinput: (e) => { if (!inEd(e) || inFollow(e)) return; const sel = getSelection(); this.bulkDelete = /^delete/.test(e.inputType || '') && !!sel && !sel.isCollapsed; },
-      paste: (e) => { if (!inEd(e)) return; if (inBuild(e)) this.buildPaste(e); else if (inAsk(e)) this.followPaste(e); else if (!inFollow(e)) this.editorPaste(e); },
+      paste: (e) => { if (!inEd(e)) return; if (inBuild(e)) this.buildPaste(e); else if (inAsk(e)) this.followPaste(e); else if (!inFollow(e)) this.editorPaste(e); if (inFollow(e)) this.fieldPaste(e); },
       // A copy or a cut of the document is its markdown (editorCopy); in a field of its own it is the browser's, as a paste is.
       copy: (e) => { if (inEd(e) && !inFollow(e)) this.editorCopy(e, false); },
       cut: (e) => { if (inEd(e) && !inFollow(e)) this.editorCopy(e, true); },
@@ -1677,6 +1678,8 @@ export default class DocEditor extends React.Component {
     const data = e.clipboardData || window.clipboardData;
     let text = (data.getData('text/plain') || '').replace(/\r/g, ''); if (!text) return;
     const ls = this.lines(), i = c.anchor.line, line = ls[i] ?? '', p = this.parsedOf(ls)[i] || parseLine(line), cur = lineText(p, line);
+    // Copied from a PDF (MATH-24): the page's line breaks, split words and ligatures come out (model/paste.js). Not in code.
+    if (!isCode(p) && !isFence(p)) text = pdfText(text);
     // Copied from a web page (2026-10-02), the plain text has each link's title only: the page's HTML gives the addresses
     // back. A copy from this editor already holds its links as markdown, and code takes what was copied as it is.
     const html = text.includes('](') || isCode(p) || isFence(p) ? '' : data.getData('text/html');
@@ -1927,6 +1930,17 @@ export default class DocEditor extends React.Component {
     const from = Number(input.dataset.followInput), caret = input.selectionStart, found = mentionAt(input.value, caret), open = this.state.mention;
     if (found) this.setState({ mention: { field: from, query: found.query, start: found.start, caret, anchor: fieldCaret(input, caret) }, mentionIdx: 0 });
     else if (open && open.field === from) this.setState({ mention: null });
+  }
+  // Text pasted into a field of the editor's own (a follow-up, a Build's reply, a card's field, Send to Discover) that
+  // was copied from a PDF goes in without the page's layout (MATH-24); the field's input handler then runs as for typing.
+  // An image paste is handled above and has already been taken.
+  fieldPaste(e) {
+    const field = e.target, data = e.clipboardData; if (e.defaultPrevented || !data || typeof field.setRangeText !== 'function') return;
+    const raw = (data.getData('text/plain') || '').replace(/\r/g, ''), text = pdfText(raw);
+    if (!raw || text === raw) return;
+    e.preventDefault();
+    field.setRangeText(text, field.selectionStart ?? field.value.length, field.selectionEnd ?? field.value.length, 'end');
+    field.dispatchEvent(new Event('input', { bubbles: true }));
   }
   // An image pasted into a follow-up (2026-10-02) is saved as one pasted into the document is (the parent's onPasteImage)
   // and named in the field as [Attachment n], numbered on from the document's images; sendFollow writes it into the line.
