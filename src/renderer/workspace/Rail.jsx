@@ -779,8 +779,14 @@ function SectionPanel({ at, adding, library, inRail, onAddInput, onPickRepo, onC
       close();
     };
     // The panel is on top, so Escape is its first, wherever the keyboard is; taken here, so neither an editor nor the
-    // workspace's own Escape (which leaves the workspace) sees it.
-    const escape = (event) => { if (event.key !== 'Escape') return; event.preventDefault(); event.stopPropagation(); close(); };
+    // workspace's own Escape (which leaves the workspace) sees it. While it is adding it cannot close, so the key goes on
+    // to whatever has the keyboard (a terminal, an editor); only on the panel itself or the page is it still taken.
+    const escape = (event) => {
+      if (event.key !== 'Escape') return;
+      const own = (panelRef.current && panelRef.current.contains(event.target)) || event.target === document.body || event.target === document.documentElement;
+      if (live.current && !own) return;
+      event.preventDefault(); event.stopPropagation(); close();
+    };
     document.addEventListener('mousedown', away, true);
     document.addEventListener('keydown', escape, true);
     return () => { document.removeEventListener('mousedown', away, true); document.removeEventListener('keydown', escape, true); };
