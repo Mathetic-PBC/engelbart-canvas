@@ -3,9 +3,10 @@ import { api, errorMessage } from '../api.js';
 import Rail from '../workspace/Rail.jsx';
 import DocTabs from '../workspace/DocTabs.jsx';
 import NotePicker from '../workspace/NotePicker.jsx';
-import DocEditor, { BART_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM } from '../workspace/DocEditor.jsx';
+import { BART_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM } from '../workspace/DocEditor.jsx';
+import DocPane, { STRIP } from '../workspace/DocPane.jsx';
 import RightPane, { RIGHT_MODES } from '../workspace/RightPane.jsx';
-import { kindOf } from '../ui/Icons.jsx';
+import { kindOf, Expand, Collapse } from '../ui/Icons.jsx';
 import { hasTag, isNote } from '../model/kind.js';
 import { isUntitled, nextUntitled } from '../model/names.js';
 import { OPEN_IN_BROWSER } from '../model/address.js';
@@ -16,6 +17,7 @@ import { flatWorkspaces, nextPlace, placesToGo } from '../model/nav.js';
 import { onStage, savesPageCopy } from '../model/stage.js';
 import { paperState, savePaper, repoState, tryRepo } from '../model/guide.js';
 import { buildLine, placeAnswer } from '../model/doc.js';
+import { openBeside, closePane } from '../model/panes.js';
 import { addDropped } from '../model/drop.js';
 import { createDocSync } from '../model/doc-sync.js';
 import { buildRequestOf } from '../../main/bart/question.cjs';
@@ -44,6 +46,10 @@ import { repositoryClick, OPEN_SANDBOX_TERMINAL } from '../model/sandbox-notific
 // (state.json `recent` and `agents`, model/nav.js); typing in a document here records this workspace as written in.
 // Dragging the sidebar's edge resizes only the document; the right pane keeps its width until its own edge is dragged.
 // Post-its (2026-09-22) float over all of it (post-its/ProjectPostIts.jsx).
+// The middle column (MATH-23) can take the whole window: the document's full screen hides the sidebar and the right pane,
+// the reverse of the Stage's. A note's mention clicked in a document opens the note in a pane to its right, Andy
+// Matuschak's working notes style (model/panes.js, workspace/DocPane.jsx): fixed-width panes in a strip that scrolls
+// sideways, each one the next covers kept as a strip with its title. Switching tab or workspace closes them.
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const IMAGE_REF_RE = /\]\(img:([\w-]+)\)/g;
@@ -83,7 +89,24 @@ const WS_TAB = { id: 'ws', title: 'Workspace' };
 const ARCHIVE_TAB = 'archive:'; // an archived version's tab (2026-09-27: it opens in the middle, read-only, not on the Stage)
 const FOOT_BUTTON = { padding: '3px 6px', border: 0, borderRadius: 5, background: '#fff', cursor: 'pointer', font: '400 15px/1.4 var(--font-sans)', color: '#8f8f8f', transition: 'color 120ms' };
 const VIEW_SAVE_DELAY = 400;
+const PANE_WIDTH = 600, PANE_MIN = 240; // a pane of the strip, px (MATH-23)
+const NO_PANES = [];
+const noView = () => null; // a note beside the document keeps no scroll position: it opens at its top
 const POST_ITS_HIDDEN = 'engelbart.postIts.hidden';
+
+/**
+ * The document a tab stands for in this workspace (`topic`): its key in `docs` and what main reads it by (`ref`), with
+ * the workspace whose document it is or the archived version's file. A note beside the document is its note's tab.
+ */
+function docOf(tabId, topic) {
+  if (tabId === 'ws') return topic ? { key: `ws:${topic.id}`, ref: { kind: 'workspace', workspaceId: topic.id }, workspaceId: topic.id, archive: null } : { key: null, ref: null, workspaceId: null, archive: null };
+  if (tabId.startsWith(ARCHIVE_TAB)) {
+    if (!topic) return { key: null, ref: null, workspaceId: null, archive: null };
+    const file = tabId.slice(ARCHIVE_TAB.length);
+    return { key: `archive:${topic.id}:${file}`, ref: { kind: 'archive', workspaceId: topic.id, file }, workspaceId: null, archive: file };
+  }
+  return { key: `note:${tabId}`, ref: { kind: 'note', id: tabId }, workspaceId: null, archive: null };
+}
 
 /**
  * A workspace's remembered tabs, less notes that are gone, with their current names; `extra` is a note being opened
@@ -138,14 +161,21 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const [rightMode, setRightMode] = React.useState('stage');
   const stageRef = React.useRef(null);
   const [stageFull, setStageFull] = React.useState(false); // the Stage takes the document's place
+  // The document takes the whole window (MATH-23): no sidebar, no right pane. Never with the Stage's full screen: turning
+  // either on turns the other off.
+  const [docFull, setDocFull] = React.useState(false);
+  const toggleStageFull = () => { if (!stageFull) setDocFull(false); setStageFull(!stageFull); };
+  const toggleDocFull = () => { if (!docFull) setStageFull(false); setDocFull(!docFull); };
+  // What opens on the right (the Stage or the terminal) brings the right pane back from the document's full screen.
+  const showRight = React.useCallback((mode) => { setRightMode(mode); setDocFull(false); }, []);
   const [stageFront, setStageFront] = React.useState(null); // the library row the Stage shows in front, for the sidebar
-  const showStage = React.useCallback(() => setRightMode('stage'), []);
+  const showStage = React.useCallback(() => showRight('stage'), [showRight]);
   // A link clicked in the terminal opens on the Stage (which adds the tab); the pane turns to show it.
   React.useEffect(() => {
-    const show = () => setRightMode('stage');
+    const show = () => showRight('stage');
     window.addEventListener(OPEN_IN_BROWSER, show);
     return () => window.removeEventListener(OPEN_IN_BROWSER, show);
-  }, []);
+  }, [showRight]);
   // What a Build's run step got running (main/build/run-step.cjs), opened from Review: a web UI in a Stage tab, a terminal
   // program's session (main's) in the terminal. A desktop app's window comes forward by itself (main).
   React.useEffect(() => api.onBuildRun((event) => {
@@ -154,11 +184,11 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     if (event.kind === 'ui' && event.url) window.dispatchEvent(new CustomEvent(OPEN_IN_BROWSER, { detail: { url: event.url } }));
     else if (event.kind === 'terminal' && event.session) {
       adoptSession(event.session, project.id).then(() => {
-        setRightMode('terminal');
+        showRight('terminal');
         window.dispatchEvent(new CustomEvent(SHOW_TERMINAL, { detail: { id: event.session.id } }));
       }).catch(() => {});
     }
-  }), [project.id]);
+  }), [project.id, showRight]);
   // A shell in a repository's sandbox (SandboxProgress.jsx's openTerminal): a tab of this project's terminal pane, the
   // one already there when it was open, shown in front unless the preview is (`show`).
   React.useEffect(() => {
@@ -166,13 +196,13 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       const { session, show } = event.detail || {};
       if (!session || !session.id) return;
       adoptSession(session, project.id).then(() => {
-        if (show) setRightMode('terminal');
+        if (show) showRight('terminal');
         window.dispatchEvent(new CustomEvent(SHOW_TERMINAL, { detail: { id: session.id } })); // its tab, in front in the pane
       }).catch(() => {});
     };
     window.addEventListener(OPEN_SANDBOX_TERMINAL, onOpen);
     return () => window.removeEventListener(OPEN_SANDBOX_TERMINAL, onOpen);
-  }, [project.id]);
+  }, [project.id, showRight]);
   const [flashId, setFlashId] = React.useState(null); // a row that just arrived in the sidebar
   const flashTimer = React.useRef(null);
   React.useEffect(() => () => clearTimeout(flashTimer.current), []);
@@ -188,23 +218,24 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const [pageInfo, setPageInfo] = React.useState(null); // what the library holds for it: { input, row, addable, found }
   const [renaming, setRenaming] = React.useState(null);
   const [images, setImages] = React.useState({}); // library image id → object URL
-  const [titleDraft, setTitleDraft] = React.useState('');
-  const editorRef = React.useRef(null);
+  // Each pane's editor (pane 0: the document in front), for Escape and the title's Enter.
+  const editorRefs = React.useRef([]);
+  const editorRefAt = (i) => editorRefs.current[i] || (editorRefs.current[i] = React.createRef());
   const wantTitleFocus = React.useRef(false); // a topic or note was just created: the caret belongs in its title
   const pending = React.useRef(new Map());
   const railBox = React.useRef(null);
   const rightBox = React.useRef(null);
 
   const topic = topics.find((candidate) => candidate.id === topicId) || null;
-  // The document in front: this workspace's (the Workspace tab), an archived version of it (read-only), or a note's.
-  const docWorkspaceId = activeTab === 'ws' ? (topic ? topic.id : null) : null;
-  const docArchive = activeTab.startsWith(ARCHIVE_TAB) && topic ? activeTab.slice(ARCHIVE_TAB.length) : null;
-  const docKey = docWorkspaceId ? `ws:${docWorkspaceId}` : docArchive ? `archive:${topic.id}:${docArchive}` : activeTab === 'ws' || activeTab.startsWith(ARCHIVE_TAB) ? null : `note:${activeTab}`;
-  const docRef = React.useMemo(() => {
-    if (!docKey) return null;
-    if (docArchive) return { kind: 'archive', workspaceId: topic.id, file: docArchive };
-    return docWorkspaceId ? { kind: 'workspace', workspaceId: docWorkspaceId } : { kind: 'note', id: activeTab };
-  }, [docKey, docWorkspaceId, docArchive, activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The notes open beside the document (model/panes.js): closed whenever the workspace or the tab in front changes.
+  const [beside, setBeside] = React.useState(NO_PANES);
+  const besideFor = `${topicId || ''}\n${activeTab}`;
+  const [besideHeldFor, setBesideHeldFor] = React.useState(besideFor);
+  if (besideHeldFor !== besideFor) { setBesideHeldFor(besideFor); setBeside(NO_PANES); }
+  // Every pane's document. Pane 0 is the one in front: this workspace's (the Workspace tab), an archived version of it
+  // (read-only), or a note's. Each pane after it is a note's, as that note's tab would be.
+  const paneDocs = React.useMemo(() => [docOf(activeTab, topic), ...beside.map((pane) => docOf(pane.id, topic))], [activeTab, topic && topic.id, beside]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { key: docKey, ref: docRef, workspaceId: docWorkspaceId, archive: docArchive } = paneDocs[0];
 
   // Remember where we are, so the app reopens here.
   React.useEffect(() => { if (topic && onVisit) onVisit(topic.id); }, [topic && topic.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -245,15 +276,18 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   /* ------------------------------------------------------------ documents */
 
+  // Every pane's document is read once, when first shown; a read under way is not asked again while another pane is typed in.
+  const reading = React.useRef(new Set()); // doc keys being read
   React.useEffect(() => {
-    if (!docKey || docs[docKey] !== undefined || !docRef) return;
-    let cancelled = false;
-    const read = docRef.kind === 'archive' ? api.readArchive(project.id, docRef.workspaceId, docRef.file).then((got) => got.text) : api.readDoc(project.id, docRef);
-    read.then((text) => {
-      if (!cancelled) setDocs((current) => (current[docKey] === undefined ? { ...current, [docKey]: text } : current));
-    }).catch((error) => onError(error));
-    return () => { cancelled = true; };
-  }, [docKey, docRef, docs, project.id, onError]);
+    for (const { key, ref } of paneDocs) {
+      if (!key || !ref || docs[key] !== undefined || reading.current.has(key)) continue;
+      reading.current.add(key);
+      const read = ref.kind === 'archive' ? api.readArchive(project.id, ref.workspaceId, ref.file).then((got) => got.text) : api.readDoc(project.id, ref);
+      read.then((text) => {
+        setDocs((current) => (current[key] === undefined ? { ...current, [key]: text } : current));
+      }).catch((error) => onError(error)).finally(() => { reading.current.delete(key); });
+    }
+  }, [paneDocs, docs, project.id, onError]);
 
   // The same document open in another window (2026-10-03, model/doc-sync.js): main announces each save that changed it.
   // With no edits of this window's own waiting to be saved, the new text is taken. With some, nothing is lost silently:
@@ -310,7 +344,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     setDocs((current) => ({ ...current, [key]: held.text }));
   }, [putConflict]);
 
-  // A document's text changes: from the editor (the open one), or from an @bart answer (any of them).
+  // A document's text changes: from an editor (any pane's), or from an @bart answer (any document).
   const changeDoc = React.useCallback((key, ref, text) => {
     setDocs((current) => ({ ...current, [key]: text }));
     const previous = pending.current.get(key);
@@ -322,16 +356,17 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // at most every half minute. Only what is typed counts, not an answer landing or the editor tidying its ends.
   const mainRef = React.useRef(null);
   const lastEdit = React.useRef({ id: null, at: 0 });
-  const onDocChange = React.useCallback((text) => {
-    if (docRef && docRef.kind === 'archive') return; // an archived version is only read
-    if (docKey && docRef) changeDoc(docKey, docRef, text);
+  // A pane's editor changed its document (`key`, `ref`): a note typed in beside the document is still this workspace written in.
+  const onDocChange = React.useCallback((key, ref, text) => {
+    if (ref && ref.kind === 'archive') return; // an archived version is only read
+    if (key && ref) changeDoc(key, ref, text);
     const typed = mainRef.current && mainRef.current.contains(document.activeElement);
     const now = Date.now(), last = lastEdit.current;
     const wrote = topic && topic.id;
     if (!typed || !wrote || (last.id === wrote && now - last.at < 30000)) return;
     lastEdit.current = { id: wrote, at: now };
     api.recordEdit(project.id, wrote).catch(() => {});
-  }, [docKey, docRef, changeDoc, topic, project.id]);
+  }, [changeDoc, topic, project.id]);
 
   React.useEffect(() => () => {
     for (const key of [...pending.current.keys()]) flush(key);
@@ -353,7 +388,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // A follow-up also carries `turns`, the earlier turns of its exchange as the document holds them, and Regenerate may carry
   // `choice`, a model and effort for that run alone. `agent` is 'brainstorm' for an @brainstorm line (2026-09-30), and for
   // an older document's @orient line (2026-10-05), whose answers are cards the editor draws, and 'discover' for an
-  // @discover line (a card or a reading guide); everything else about the run is the same.
+  // @discover line (a card or a reading guide); everything else about the run is the same. A question is asked of the pane it
+  // was written in (`key`, `ref`): one in a note beside the document is answered in that note (MATH-23).
   const [asks, setAsks] = React.useState({});
   // What the @bart line's chip offers and what its flags are checked against. The files behind it are read again for every
   // question, so this is read again whenever the window comes back to the front, and once a question has been sent: one
@@ -384,9 +420,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     });
   }), []);
 
-  const askBart = React.useCallback(async ({ askId, text, turns, choice, agent }) => {
-    if (!docKey || !docRef || !topic) return;
-    const key = docKey, ref = docRef;
+  const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent }) => {
+    if (!key || !ref || !topic) return;
     const place = (lines) => {
       const held = docsRef.current[key];
       if (typeof held !== 'string') return;
@@ -425,7 +460,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     } finally {
       setAsks((current) => { const next = { ...current }; delete next[askId]; return next; });
     }
-  }, [docKey, docRef, topic, project.id, flush, changeDoc, loadBartModels, bartModels]);
+  }, [topic, project.id, flush, changeDoc, loadBartModels, bartModels]);
 
   /* ----------------------------------------------------------------- Build */
 
@@ -654,7 +689,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   /* ---------------------------------------------------------------- images */
 
-  const openText = docKey ? docs[docKey] : undefined;
+  const openText = paneDocs.map((pane) => (pane.key ? docs[pane.key] || '' : '')).join('\n'); // every pane's
   React.useEffect(() => {
     const ids = [...String(openText || '').matchAll(IMAGE_REF_RE)].map((match) => match[1]).filter((id) => !(id in images));
     if (!ids.length) return;
@@ -793,15 +828,15 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     if (row.type === 'workspace') { showWs(); return; }
     if (isNote(row)) { openTab(row.id, row.name); return; }
     if (!onStage(row) || !stageRef.current) return;
-    setRightMode('stage');
+    showRight('stage');
     stageRef.current.openRow(row);
-  }, [openTab, showWs]);
+  }, [openTab, showWs, showRight]);
   // A link in a document goes to the Stage too, never to the default browser; `{ newTab: true }` (⌘-click), in a tab of its own.
   const openLink = React.useCallback((href, options) => {
     if (!stageRef.current) return;
-    setRightMode('stage');
+    showRight('stage');
     stageRef.current.openInput(href, options);
-  }, []);
+  }, [showRight]);
   // What the window itself would open in a new window or tab (a ⌘-click on a link the editor does not handle): main sends
   // it here while this listens, not to the default browser (src/main/index.cjs, 2026-10-02). Not while the project's folder
   // is being asked for: the Stage under that is out of reach.
@@ -827,6 +862,43 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     if (click === 'start') { sandboxes.openBuild(row); sandboxes.act(sandbox.run, () => api.startSandbox(row.id)); return; }
     if (click === 'details') { sandboxes.openBuild(row); return; }
     openItem(row);
+  };
+
+  /* ---------------------------------------------------------- notes beside */
+
+  // A note's mention clicked in pane `from` (0: the document) opens the note in the pane after it (model/panes.js), and
+  // the strip scrolls to that pane once it is drawn. ⌘-click still opens a tab (openItem).
+  const paneEls = React.useRef([]); // each pane's element, by its place in the strip
+  const reveal = React.useRef(null); // the pane to scroll to after the next draw
+  const revealPane = (i) => { const el = paneEls.current[i]; if (el && el.scrollIntoView) el.scrollIntoView({ inline: 'end', block: 'nearest', behavior: 'smooth' }); };
+  const openNoteBeside = (from, row, link) => {
+    const next = openBeside(beside, from, { id: row.id, title: row.name }, link);
+    const at = beside[from] && beside[from].id === row.id ? from + 1 : next.length; // the pane it is in now
+    if (next === beside) { revealPane(at); return; }
+    reveal.current = at;
+    setBeside(next);
+  };
+  React.useEffect(() => {
+    if (reveal.current == null) return;
+    const at = reveal.current;
+    reveal.current = null;
+    revealPane(at);
+  }, [beside]);
+  // Its ×: that pane and every one after it close; what was typed in them is saved now.
+  const closeBeside = (index) => {
+    for (const pane of beside.slice(index - 1)) flush(`note:${pane.id}`);
+    setBeside((current) => closePane(current, index));
+  };
+  // A note renamed from its title, in front or beside: its tab, if it has one, and its pane take the new name.
+  const renameNoteDoc = async (id, name) => {
+    try {
+      const renamed = await api.renameNote(project.id, id, name);
+      setTabs((current) => current.map((tab) => (tab.id === id ? { ...tab, title: renamed.name } : tab)));
+      setBeside((current) => current.map((pane) => (pane.id === id ? { ...pane, title: renamed.name } : pane)));
+      await reload();
+    } catch (error) {
+      onError(error);
+    }
   };
 
   /* ---------------------------------------------------------------- topics */
@@ -1132,22 +1204,12 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   const currentTab = tabs.find((tab) => tab.id === activeTab);
   const docTitle = activeTab === 'ws' ? (topic ? topic.name : '') : (currentTab ? currentTab.title : '');
-  const shownTitle = isUntitled(docTitle) ? '' : docTitle; // an untitled name is the field's hint, not its value
-  React.useEffect(() => { setTitleDraft(shownTitle); }, [shownTitle, docKey]);
-
-  const commitTitle = async () => {
-    const next = titleDraft.trim();
-    if (!next || next === docTitle || docArchive) {
-      setTitleDraft(shownTitle);
-      return;
-    }
+  // The title of the document in front named anew (its pane, DocPane, holds the draft): the workspace, or the note.
+  const renameDoc = async (next) => {
+    if (docArchive) return;
+    if (activeTab !== 'ws') { await renameNoteDoc(activeTab, next); return; }
     try {
-      if (activeTab === 'ws') {
-        if (docWorkspaceId) await api.renameWorkspace(project.id, docWorkspaceId, next);
-      } else {
-        const renamed = await api.renameNote(project.id, activeTab, next);
-        setTabs((current) => current.map((tab) => (tab.id === activeTab ? { ...tab, title: renamed.name } : tab)));
-      }
+      if (docWorkspaceId) await api.renameWorkspace(project.id, docWorkspaceId, next);
       await reload();
     } catch (error) {
       onError(error);
@@ -1172,14 +1234,21 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       }
       if (event.key !== 'Escape') return;
       if (renaming) { setRenaming(null); return; }
-      if (editorRef.current && editorRef.current.isActive && editorRef.current.isActive()) return;
+      // The document's full screen (MATH-23): Escape leaves it, the caret in the document or not, unless what had the key
+      // used it (the editor's @ menu, a card's field: DocEditor marks those as used). From there it never closes the workspace.
+      if (docFull) { if (!event.defaultPrevented) setDocFull(false); return; }
+      if (event.defaultPrevented) return;
+      // The editor of the pane the key was pressed in (the document's, when it was pressed outside them all).
+      const pane = target && target.closest ? target.closest('[data-doc-pane]') : null;
+      const editor = (editorRefs.current[pane ? Number(pane.dataset.docPane) : 0] || {}).current;
+      if (editor && editor.isActive && editor.isActive()) return;
       if (inTerminal) return;
       if (target && target.closest && target.closest('input, textarea, [contenteditable="true"]')) return;
       onClose();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [active, tabs, renaming, onClose]);
+  }, [active, tabs, renaming, docFull, onClose]);
 
   /* --------------------------------------------------------------- resizing */
 
@@ -1230,31 +1299,115 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return () => { observer.disconnect(); window.removeEventListener('resize', send); };
   }, [active, rail, viewWidth]);
 
-  const text = docKey ? docs[docKey] : undefined;
   const headWide = rail >= 260;
+  // In the document's full screen its tab strip reaches the window's top-right corner, where the controls on every screen
+  // sit (ui/WindowControls.jsx): the strip stops short of them, so its full-screen button is not under them.
+  const [controlsRoom, setControlsRoom] = React.useState(0);
+  React.useLayoutEffect(() => {
+    const controls = docFull ? document.querySelector('[data-window-controls]') : null;
+    if (!controls) return undefined;
+    const measure = () => { const r = controls.getBoundingClientRect(); setControlsRoom(r.width ? Math.max(0, Math.ceil((window.innerWidth || 0) - r.left)) : 0); };
+    measure();
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
+    if (observer) observer.observe(controls);
+    window.addEventListener('resize', measure);
+    return () => { if (observer) observer.disconnect(); window.removeEventListener('resize', measure); };
+  }, [docFull]);
 
-  const header = (
-    <input
-      ref={(element) => { if (element && wantTitleFocus.current) { wantTitleFocus.current = false; element.focus(); } }}
-      value={titleDraft}
-      readOnly={!!docArchive}
-      onChange={(event) => setTitleDraft(event.target.value.replace(/[/\\]/g, '-'))} // a title is a file name: slashes become hyphens as you type
-      onBlur={commitTitle}
-      onKeyDown={(event) => {
-        if (event.key === 'Escape') { event.target.blur(); return; }
-        if (event.key !== 'Enter') return;
-        // Enter names the document and drops the caret into it.
-        event.preventDefault();
-        event.target.blur();
-        if (editorRef.current && editorRef.current.focusStart) editorRef.current.focusStart();
-      }}
-      placeholder={isUntitled(docTitle) ? docTitle : 'Untitled'}
-      data-doc-title="1"
-      aria-label="Title"
-      spellCheck={false}
-      style={{ display: 'block', width: '100%', padding: 0, border: 0, background: 'transparent', font: '500 22px/1.35 var(--font-sans)', letterSpacing: '-0.3px', color: '#171717' }}
-    />
+  // The strip of panes (MATH-23). With notes beside the document every pane is PANE_WIDTH wide, narrower when the column
+  // is, so that the strips of the panes the last one covers still show beside it. A pane the next one has slid over shows
+  // only its strip (`folded`: measured as the strip scrolls or changes size). With the document alone it fills the column.
+  const [folded, setFolded] = React.useState(0); // how many panes, from the left, are covered down to their strips
+  const paneCount = paneDocs.length;
+  const measureFolds = React.useCallback(() => {
+    const els = paneEls.current;
+    let count = 0;
+    for (let i = 0; i + 1 < paneCount; i += 1) {
+      const a = els[i], b = els[i + 1];
+      if (!a || !b || b.getBoundingClientRect().left - a.getBoundingClientRect().left > STRIP + 2) break;
+      count = i + 1;
+    }
+    setFolded(count);
+  }, [paneCount]);
+  React.useLayoutEffect(() => { measureFolds(); }, [measureFolds, beside]);
+  React.useEffect(() => {
+    const main = mainRef.current;
+    if (paneCount < 2 || !main || typeof ResizeObserver !== 'function') return undefined;
+    const observer = new ResizeObserver(() => measureFolds());
+    observer.observe(main);
+    return () => observer.disconnect();
+  }, [paneCount, measureFolds]);
+  // A strip clicked: the strip scrolls back until its pane shows whole, just right of the strips before it.
+  const unfold = (i) => {
+    const main = mainRef.current;
+    if (!main) return;
+    let left = 0;
+    for (let k = 0; k < i; k += 1) left += paneEls.current[k] ? paneEls.current[k].offsetWidth : 0;
+    main.scrollTo({ left: Math.max(0, left - i * STRIP), behavior: 'smooth' });
+  };
+  const paneStyle = (i) => (paneCount > 1
+    ? { position: 'sticky', left: i * STRIP, zIndex: i + 1, flex: 'none', width: `max(${PANE_MIN}px, min(${PANE_WIDTH}px, calc(100% - ${(paneCount - 1) * STRIP}px)))`, borderLeft: i ? '1px solid #eaeaea' : 0 }
+    : { flex: '1 1 0' });
+
+  // What every pane's editor is given; each pane adds its own document, its @bart and its notes beside.
+  const editorProps = {
+    mentionable,
+    mentionItems,
+    onMentionOpen: setMentionOpen,
+    onMentionPicked: mentionPicked,
+    workspacePeek,
+    onOpenWorkspace: openMentionedWorkspace,
+    onNoteVerb: (name) => makeNote(name, false),
+    onOpenItem: openItem,
+    onOpenLink: openLink,
+    images,
+    onPasteImage: pasteImage,
+    pathForFile: api.pathForFile,
+    onDropItems: addDroppedHere,
+    asks,
+    models: bartModels,
+    builds,
+    buildProgress,
+    buildDiffs,
+    onBuildDiffWanted: wantBuildDiff,
+    onBuildAction,
+    onCopyText: (value) => api.copyText(value),
+    onStopAsk: (askId) => api.stopBart(askId).catch((error) => onError(error)),
+    paperState: guidePaperState,
+    onSavePaper: saveGuidePaper,
+    repoState: guideRepoState,
+    onTryRepo: tryGuideRepo,
+    onError,
+  };
+  const footer = (
+    // Copy, then (on the Workspace tab: a workspace is one Build) Build and Clear (2026-09-25). Build sits beside
+    // Copy until it replaces it.
+    // An archived version has Restore alone.
+    docArchive ? (
+      <button type="button" className="hov-ink" data-restore-doc="1" onClick={() => restoreVersion(docArchive)} title="Make this version the workspace's document again" style={{ ...FOOT_BUTTON, marginLeft: -6 }}>Restore</button>
+    ) : (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+      <button
+        type="button"
+        className="hov-ink"
+        data-copy-doc="1"
+        onClick={copyDoc}
+        title={docWorkspaceId ? 'Copy current workspace' : 'Copy current note'}
+        style={{ ...FOOT_BUTTON, marginLeft: -6, color: copied ? '#171717' : '#8f8f8f' }}
+      >
+        {copied ? copiedLabel(copied) : 'Copy'}
+      </button>
+      {docWorkspaceId && !copied && <button type="button" className="hov-ink" data-build-doc="1" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setBuildDialog((now) => (now ? null : { anchor: { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width } })); }} aria-expanded={!!buildDialog} title="Hand this workspace to a coding agent" style={FOOT_BUTTON}>Build</button>}
+      {docWorkspaceId && !copied && <button type="button" className="hov-ink" data-clear-doc="1" onClick={clearDoc} title="Archive this document and start it blank" style={FOOT_BUTTON}>Clear</button>}
+    </span>
+    )
   );
+  const noWorkspace = topics.length === 0 ? (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
+      <span style={{ font: '13px/1.6 var(--font-sans)', color: '#8f8f8f', textAlign: 'center' }}>This project has no workspace yet. A workspace holds a document, its context, and any workspaces nested inside it.</span>
+      <button type="button" className="hov-bd2" onClick={() => addTopic(false)} style={{ padding: '8px 12px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', cursor: 'pointer', font: '500 12.5px/1 var(--font-sans)', color: '#171717' }}>+ Workspace</button>
+    </div>
+  ) : null;
 
   return (
     <div data-screen-label="Workspace" style={style}>
@@ -1279,7 +1432,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
         </div>
         <div style={{ flex: 'none', width: 1, background: '#eaeaea' }} />
         {/* The document's tabs, drawn as the Stage's (2026-09-25): no rule under them; the tab in front runs into the page. */}
-        <div data-doc-strip="1" style={{ flex: '1 1 0', minWidth: 0, boxSizing: 'border-box', display: full ? 'none' : 'flex', alignItems: 'flex-end', padding: '0 8px 0 10px', overflow: 'hidden' }}>
+        <div data-doc-strip="1" style={{ flex: '1 1 0', minWidth: 0, boxSizing: 'border-box', display: full ? 'none' : 'flex', alignItems: 'flex-end', padding: `0 ${docFull ? controlsRoom + 8 : 8}px 0 10px`, overflow: 'hidden' }}>
           <div style={{ flex: '0 1 auto', minWidth: 0, display: 'flex', alignItems: 'flex-end', height: '100%' }}>
             <DocTabs tabs={tabs} activeTab={activeTab} onSelect={setActiveTab} onClose={closeTab} onMove={moveTab} />
           </div>
@@ -1296,9 +1449,11 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
             />
           )}
           {topic && <button type="button" className="hov-tab-plus" data-note-plus="1" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setNotePlus(notePlus ? null : { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width }); }} aria-label="Open or make a note" aria-expanded={!!notePlus} title="Open a note or make one" style={{ flex: 'none', alignSelf: 'flex-end', width: 28, height: 28, margin: '0 0 3px 6px', padding: 0, border: 0, borderRadius: '50%', background: 'transparent', cursor: 'pointer', font: '18px/1 var(--font-sans)', color: '#4d4d4d', transition: 'background 120ms' }}>+</button>}
+          {/* The document's full screen (MATH-23), at the strip's end as the Stage's is at its own. */}
+          {topic && <button type="button" className="hov-wash2" onClick={toggleDocFull} aria-label={docFull ? 'Exit full screen' : 'Full screen'} title={docFull ? 'Exit full screen (Esc)' : 'Full screen'} data-doc-full={docFull ? '1' : '0'} style={{ flex: 'none', alignSelf: 'flex-end', width: 28, height: 28, margin: '0 0 3px auto', padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 120ms' }}>{docFull ? <Collapse /> : <Expand />}</button>}
         </div>
-        <div style={{ flex: 'none', width: 1, background: '#eaeaea', display: full ? 'none' : undefined }} />
-        <div style={{ flex: 'none', width: paneWidth, minWidth: 0, boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 16, padding: '0 20px', overflow: 'hidden' }}>
+        <div style={{ flex: 'none', width: 1, background: '#eaeaea', display: full || docFull ? 'none' : undefined }} />
+        <div style={{ flex: 'none', width: paneWidth, minWidth: 0, boxSizing: 'border-box', display: docFull ? 'none' : 'flex', alignItems: 'center', gap: 16, padding: '0 20px', overflow: 'hidden' }}>
           {RIGHT_MODES.map((mode) => {
             const on = rightMode === mode.id;
             return (
@@ -1349,94 +1504,54 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onPostIt={active ? () => api.postItsCreate(project.id).catch(onError) : null}
           postItsHidden={postItsHidden}
           onTogglePostIts={active ? () => setPostItsHidden((now) => !now) : null}
+          hidden={docFull}
         />
 
-        <Separator onDown={railDown} onMove={railMove} onUp={pointerUp} onReset={() => setRailWidth(300)} />
+        {!docFull && <Separator onDown={railDown} onMove={railMove} onUp={pointerUp} onReset={() => setRailWidth(300)} />}
 
-        <main ref={mainRef} data-doc-column="1" style={{ flex: '1 1 0', minWidth: DOC_MIN, minHeight: 0, display: full ? 'none' : 'flex', flexDirection: 'column', position: 'relative' }}>
-          {docKey && conflicts[docKey] && (
-            <div role="alert" data-doc-conflict="1" data-overlay="1" style={{ position: 'absolute', top: 10, right: 16, zIndex: 30, display: 'flex', alignItems: 'center', gap: 4, maxWidth: 'calc(100% - 32px)', padding: '5px 6px 5px 12px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', boxShadow: '0 4px 14px #0000000f', font: '12.5px/1.4 var(--font-sans)', color: '#4d4d4d' }}>
-              <span style={{ marginRight: 6 }}>Saved in another window while you were editing.</span>
-              <button type="button" className="hov-ink" data-conflict-keep="1" onClick={() => keepMine(docKey)} title="Save your version over theirs" style={{ ...FOOT_BUTTON, font: '500 12.5px/1.4 var(--font-sans)', color: '#171717' }}>Keep mine</button>
-              <button type="button" className="hov-ink" data-conflict-take="1" onClick={() => takeTheirs(docKey)} title="Show their version and drop your unsaved edits here" style={{ ...FOOT_BUTTON, font: '12.5px/1.4 var(--font-sans)' }}>Take theirs</button>
-            </div>
-          )}
-          {docKey && text !== undefined ? (
-            <DocEditor
-              ref={editorRef}
-              docKey={docKey}
-              text={text}
-              readOnly={!!docArchive}
-              onChange={onDocChange}
-              mentionable={mentionable}
-              mentionItems={mentionItems}
-              onMentionOpen={setMentionOpen}
-              onMentionPicked={mentionPicked}
-              workspacePeek={workspacePeek}
-              onOpenWorkspace={openMentionedWorkspace}
-              onNoteVerb={(name) => makeNote(name, false)}
-              onOpenItem={openItem}
-              onOpenLink={openLink}
-              images={images}
-              onPasteImage={pasteImage}
-              pathForFile={api.pathForFile}
-              onDropItems={addDroppedHere}
-              asks={asks}
-              models={bartModels}
-              builds={builds}
-              buildProgress={buildProgress}
-              buildDiffs={buildDiffs}
-              onBuildDiffWanted={wantBuildDiff}
-              onBuildAction={onBuildAction}
-              onCopyText={(value) => api.copyText(value)}
-              onAsk={askBart}
-              onStopAsk={(askId) => api.stopBart(askId).catch((error) => onError(error))}
-              paperState={guidePaperState}
-              onSavePaper={saveGuidePaper}
-              repoState={guideRepoState}
-              onTryRepo={tryGuideRepo}
-              onError={onError}
-              viewScope={topic ? topic.id : null}
-              viewOf={viewOf}
-              onView={recordPosition}
-              header={header}
-              footer={(
-                // Copy, then (on the Workspace tab: a workspace is one Build) Build and Clear (2026-09-25). Build sits beside
-                // Copy until it replaces it.
-                // An archived version has Restore alone.
-                docArchive ? (
-                  <button type="button" className="hov-ink" data-restore-doc="1" onClick={() => restoreVersion(docArchive)} title="Make this version the workspace's document again" style={{ ...FOOT_BUTTON, marginLeft: -6 }}>Restore</button>
-                ) : (
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                  <button
-                    type="button"
-                    className="hov-ink"
-                    data-copy-doc="1"
-                    onClick={copyDoc}
-                    title={docWorkspaceId ? 'Copy current workspace' : 'Copy current note'}
-                    style={{ ...FOOT_BUTTON, marginLeft: -6, color: copied ? '#171717' : '#8f8f8f' }}
-                  >
-                    {copied ? copiedLabel(copied) : 'Copy'}
-                  </button>
-                  {docWorkspaceId && !copied && <button type="button" className="hov-ink" data-build-doc="1" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setBuildDialog((now) => (now ? null : { anchor: { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width } })); }} aria-expanded={!!buildDialog} title="Hand this workspace to a coding agent" style={FOOT_BUTTON}>Build</button>}
-                  {docWorkspaceId && !copied && <button type="button" className="hov-ink" data-clear-doc="1" onClick={clearDoc} title="Archive this document and start it blank" style={FOOT_BUTTON}>Clear</button>}
-                </span>
-                )
-              )}
-            />
-          ) : (
-            <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40 }}>
-              {topics.length === 0 ? (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
-                  <span style={{ font: '13px/1.6 var(--font-sans)', color: '#8f8f8f', textAlign: 'center' }}>This project has no workspace yet. A workspace holds a document, its context, and any workspaces nested inside it.</span>
-                  <button type="button" className="hov-bd2" onClick={() => addTopic(false)} style={{ padding: '8px 12px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', cursor: 'pointer', font: '500 12.5px/1 var(--font-sans)', color: '#171717' }}>+ Workspace</button>
-                </div>
-              ) : <span style={{ font: '13px/1.6 var(--font-sans)', color: '#8f8f8f' }}>Opening…</span>}
-            </div>
-          )}
+        {/* The document, and the notes opened beside it (MATH-23): a strip that scrolls sideways, each pane scrolling down on its own. */}
+        <main ref={mainRef} data-doc-column="1" onScroll={paneCount > 1 ? measureFolds : undefined} style={{ flex: '1 1 0', minWidth: DOC_MIN, minHeight: 0, display: full ? 'none' : 'flex', overflowX: 'auto', overflowY: 'hidden', position: 'relative', isolation: 'isolate' }}>
+          {paneDocs.map((doc, i) => {
+            const note = i ? beside[i - 1] : null;
+            const title = note ? ((notesById.get(note.id) || {}).name || note.title) : docTitle;
+            return (
+              <DocPane
+                key={i}
+                index={i}
+                paneRef={(element) => { paneEls.current[i] = element; }}
+                editorRef={editorRefAt(i)}
+                docKey={doc.key}
+                text={doc.key ? docs[doc.key] : undefined}
+                readOnly={!!doc.archive}
+                title={title}
+                onRename={note ? (name) => renameNoteDoc(note.id, name) : renameDoc}
+                titleFocus={note ? null : wantTitleFocus}
+                conflict={!!(doc.key && conflicts[doc.key])}
+                onKeepMine={() => keepMine(doc.key)}
+                onTakeTheirs={() => takeTheirs(doc.key)}
+                onClose={note ? () => closeBeside(i) : null}
+                folded={i < folded}
+                onUnfold={paneCount > 1 ? () => unfold(i) : null}
+                empty={note ? null : noWorkspace}
+                style={paneStyle(i)}
+                editor={{
+                  ...editorProps,
+                  onChange: (value) => onDocChange(doc.key, doc.ref, value),
+                  onAsk: (ask) => askBart(doc.key, doc.ref, ask),
+                  onOpenBeside: (row, link) => openNoteBeside(i, row, link),
+                  besideLink: beside[i] ? beside[i].link : null,
+                  // Where the document was scrolled to is kept for the document in front; a note beside opens at its top.
+                  viewScope: note ? null : (topic ? topic.id : null),
+                  viewOf: note ? noView : viewOf,
+                  onView: note ? null : recordPosition,
+                  footer: note ? null : footer,
+                }}
+              />
+            );
+          })}
         </main>
 
-        {!full && <Separator onDown={rightDown} onMove={rightMove} onUp={pointerUp} onReset={() => setRightWidth(null)} />}
+        {!full && !docFull && <Separator onDown={rightDown} onMove={rightMove} onUp={pointerUp} onReset={() => setRightWidth(null)} />}
 
         <RightPane
           ref={stageRef}
@@ -1445,7 +1560,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           projectDir={project.directory || null}
           projectId={project.id}
           full={full}
-          onFull={() => setStageFull((on) => !on)}
+          onFull={toggleStageFull}
           onShowStage={showStage}
           onPage={setOpenPage}
           onFront={setStageFront}
@@ -1455,7 +1570,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           mentionItems={mentionItems}
           onMentionOpen={setMentionOpen}
           save={topic && pageState ? { state: pageState, onSave: savePage, onLink: () => linkIds([pageKnown.row.id]) } : null}
-          style={{ flex: 'none', width: paneWidth, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }}
+          style={{ flex: 'none', width: paneWidth, minWidth: 0, minHeight: 0, display: docFull ? 'none' : 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }}
         />
       </div>
 
@@ -1500,7 +1615,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
         />
       )}
       {rejecting && <BuildReject title={rejecting.title} onConfirm={() => onBuildAction(rejecting.id, 'discard')} onClose={() => setRejecting(null)} />}
-      {review && <BuildReview key={review.id} title={review.title} review={review.review} error={review.error} task={builds[review.id] || null} aside={full ? 0 : paneWidth + 1} onOpen={(name) => { void onBuildAction(review.id, 'runshow', { name }); }} onClose={() => setReview(null)} />}
+      {review && <BuildReview key={review.id} title={review.title} review={review.review} error={review.error} task={builds[review.id] || null} aside={full || docFull ? 0 : paneWidth + 1} onOpen={(name) => { void onBuildAction(review.id, 'runshow', { name }); }} onClose={() => setReview(null)} />}
 
       <ProjectPostIts
         projectId={project.id}

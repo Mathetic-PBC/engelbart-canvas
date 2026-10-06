@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
 import { usePreviewTouch, useSandboxes } from '../ui/SandboxProgress.jsx';
 import { previewLibraryId } from '../model/sandbox-notifications.js';
-import { KindGlyph, SEARCH, FOLDER } from '../ui/Icons.jsx';
+import { KindGlyph, SEARCH, FOLDER, Expand, Collapse } from '../ui/Icons.jsx';
 import { kindOf, stripScheme, OPEN_IN_BROWSER } from '../model/address.js';
 import { MAX_TABS, SAVE_LABEL, WAKE_RETRY_MS, addressKey, afterClose, landTab, landingFinds, linkPlan, looksLikePlace, onStage, placeTab, previewName, previewWait, restoreTabs, stageRows, stageSnapshot, tabKey, tabPlace, parseTable, withPassage } from '../model/stage.js';
 import { markdownBlocks, inlineRuns } from '../model/markdown.js';
@@ -109,9 +109,6 @@ const Grid = () => (
     <path d="M2.5 1.5h2.5a1 1 0 0 1 1 1v2.5a1 1 0 0 1-1 1h-2.5a1 1 0 0 1-1-1v-2.5a1 1 0 0 1 1-1z M9 1.5h4.5a1 1 0 0 1 1 1v2.5a1 1 0 0 1-1 1h-4.5a1 1 0 0 1-1-1v-2.5a1 1 0 0 1 1-1z M2.5 8h4.5a1 1 0 0 1 1 1v4.5a1 1 0 0 1-1 1h-4.5a1 1 0 0 1-1-1v-4.5a1 1 0 0 1 1-1z M11 8h2.5a1 1 0 0 1 1 1v2.5a1 1 0 0 1-1 1h-2.5a1 1 0 0 1-1-1v-2.5a1 1 0 0 1 1-1z" />
   </svg>
 );
-// Full screen: arrows out to take the middle, arrows in to give it back (Hudson's two pictures).
-const Expand = () => <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block', fill: 'none', stroke: '#171717', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round' }}><path d="M9.3 2.5h4.2v4.2M13.5 2.5L9 7M6.7 13.5H2.5V9.3M2.5 13.5L7 9" /></svg>;
-const Collapse = () => <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block', fill: 'none', stroke: '#171717', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round' }}><path d="M13.5 2.5L9.5 6.5M9.5 3.3v3.2h3.2M2.5 13.5l4-4M6.5 12.7V9.5H3.3" /></svg>;
 
 function SaveTip({ text }) {
   return <div role="tooltip" style={{ position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 50, padding: '6px 9px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fff', color: '#4d4d4d', font: '400 11.5px/1.3 var(--font-sans)', whiteSpace: 'nowrap', pointerEvents: 'none', animation: `rise 120ms ${EASE}` }}>{text}</div>;

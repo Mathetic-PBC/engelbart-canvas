@@ -97,6 +97,11 @@ export const TASK = () => (
 );
 
 /** Kind → glyph (React node or Unicode string) and the kind's name, keyed by `kindKey(row)`. */
+// Full screen: arrows out to take the middle, arrows in to give it back (Hudson's two pictures). The Stage's, and the
+// document's (MATH-23).
+export const Expand = () => <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block', fill: 'none', stroke: '#171717', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round' }}><path d="M9.3 2.5h4.2v4.2M13.5 2.5L9 7M6.7 13.5H2.5V9.3M2.5 13.5L7 9" /></svg>;
+export const Collapse = () => <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block', fill: 'none', stroke: '#171717', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round' }}><path d="M13.5 2.5L9.5 6.5M9.5 3.3v3.2h3.2M2.5 13.5l4-4M6.5 12.7V9.5H3.3" /></svg>;
+
 export const KIND = {
   note: { glyph: <NOTE />, label: 'note' },
   md: { glyph: <NOTE />, label: 'md' },

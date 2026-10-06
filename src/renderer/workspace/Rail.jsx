@@ -891,6 +891,7 @@ export default function Rail({
   onTrashRow, onRestoreArchive, trashFull, postItTrash, workspaceTrash, postItDrag, trashRef,
   next, places, projectId, onGoNext,
   onPostIt, postItsHidden, onTogglePostIts,
+  hidden = false, // the document's full screen (MATH-23): out of sight, kept as it is
 }) {
   const [peek, setPeek] = React.useState(null); // { row, rect }
   const [previews, setPreviews] = React.useState({}); // `${id}:${last_edited}` → previewLibraryItem's answer
@@ -977,7 +978,7 @@ export default function Rail({
   const peekLeft = peek ? Math.max(peek.rect.right, peek.edge) : 0;
   const peekTop = peek ? Math.max(54, Math.min(peek.rect.top - 12, window.innerHeight - 380)) : 0;
   return (
-    <aside aria-label="Sidebar" style={{ flex: 'none', width, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 7, background: '#fafafa' }}>
+    <aside aria-label="Sidebar" style={{ flex: 'none', width, minHeight: 0, display: hidden ? 'none' : 'flex', flexDirection: 'column', position: 'relative', zIndex: 7, background: '#fafafa' }}>
       <div onScroll={() => { hold(); setPeek(null); }} style={{ flex: 1, minHeight: 0, boxSizing: 'border-box', padding: '16px 8px 8px', display: 'flex', flexDirection: 'column', overflowY: 'auto', overflowX: 'hidden' }}>
         <WorkspaceHeader topics={topics} topic={topic} all={allWorkspaces} onOpenDoc={onOpenDoc} onSelectTopic={onSelectTopic} onRenameTopic={onRenameTopic} onAddTopic={onAddTopic} onDeleteTopic={onDeleteTopic} />
         {topic && (

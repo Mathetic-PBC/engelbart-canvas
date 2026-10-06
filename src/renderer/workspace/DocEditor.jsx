@@ -39,7 +39,12 @@
 //     after it in its thread go; one undo brings all of it back. Escape, or the caret or a click going elsewhere, puts it back.
 //   * where a document was scrolled to is kept per workspace (props.viewOf / props.onView, 2026-09-22), apart from the
 //     caret: coming back to a document shows what was on screen, not where the last edit was.
+//   * a note's mention clicked opens the note beside this document (MATH-23, props.onOpenBeside; Andy Matuschak's working
+//     notes), and that mention stays marked (props.besideLink) while it is open there; ⌘-click opens it as a tab. An Escape
+//     the editor uses (its @ menu, the model selector or a mention's card, a field of its own) is marked as used
+//     (preventDefault), so the window's Escape leaves it alone (Workspace.jsx).
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, listMark, threads, turnText, wsMention, mentionAt, agentOf, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE } from '../model/doc.js';
 import { fieldRows, isVerbRow } from '../model/rail.js';
 import { readFlags, readQuestion, readDiscover, withChoice, withMode, discoverSpans, modelOf, effortOf, buildRequestOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
@@ -54,6 +59,7 @@ import { diffRows, diffTotals, nextAttachment } from '../model/build-diff.js';
 import { guideTitle, guideRepo, repoOf } from '../model/guide.js';
 import { guideSections, splitTarget } from '../model/stage.js';
 import { carriesDrop, isPastable, readDrop } from '../model/drop.js';
+import { isNote } from '../model/kind.js';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
@@ -122,7 +128,9 @@ const CARD_CSS = '.bart-ic{display:inline-flex;align-items:center;justify-conten
   + '.bs-field:focus{border-color:#c9c9c9}.bs-field::placeholder{color:#8f8f8f}'
   + '.bs-submit{padding:8px 14px;border:0;border-radius:8px;background:#0070f3;color:#fff;font:500 13px/1 var(--font-sans);cursor:pointer;transition:opacity 120ms}.bs-submit:hover{opacity:.86}.bs-submit:disabled{background:#eaeaea;color:#8f8f8f;cursor:default;opacity:1}'
   // Near the bottom of the window a name goes above its icon instead (editorOver sets the mark).
-  + '[data-tip-up]>.bart-tip{top:auto;bottom:100%;margin-top:0;margin-bottom:4px}';
+  + '[data-tip-up]>.bart-tip{top:auto;bottom:100%;margin-top:0;margin-bottom:4px}'
+  // The mention whose note is open in the pane beside (MATH-23, markBeside).
+  + '[data-mention][data-beside]{background:#e8f0fe;border-radius:3px}';
 // Lucide's drawings at the design's weight: 16px, 1.5px stroke, round caps.
 // A map card's three lists (main/bart/card.cjs `map`).
 const MAP_LABELS = { settled: 'Seems settled', open: 'Seems open', untouched: 'Not touched yet' };
@@ -211,7 +219,7 @@ export default class DocEditor extends React.Component {
     const onPage = (e) => { const page = this.scrollRef.current; return !!(page && e.target && e.target.nodeType === 1 && page.contains(e.target) && !e.target.closest('input, textarea, select, [contenteditable="true"]')); };
     const inAsk = (e) => !!(e.target && e.target.matches && e.target.matches('[data-follow-input]')); // a follow-up's field alone
     this.docListeners = {
-      keydown: (e) => { if (!inEd(e)) return; this.held = false; if (inBuild(e)) this.buildKey(e); else if (inCard(e)) this.cardKey(e); else if (inDiscover(e)) this.discoverKey(e); else if (inFollow(e)) this.followKey(e); else this.editorKey(e); },
+      keydown: (e) => { if (!inEd(e)) return; this.held = false; if (this.escapeShut(e)) return; if (inBuild(e)) this.buildKey(e); else if (inCard(e)) this.cardKey(e); else if (inDiscover(e)) this.discoverKey(e); else if (inFollow(e)) this.followKey(e); else this.editorKey(e); },
       input: (e) => { if (!inEd(e)) return; if (inBuild(e)) this.buildInput(e.target); else if (inCard(e)) this.cardInput(e.target); else if (inDiscover(e)) this.discoverInput(e.target); else if (inFollow(e)) this.followInput(e.target); else this.editorInput(); },
       beforeinput: (e) => { if (!inEd(e) || inFollow(e)) return; const sel = getSelection(); this.bulkDelete = /^delete/.test(e.inputType || '') && !!sel && !sel.isCollapsed; },
       paste: (e) => { if (!inEd(e)) return; if (inBuild(e)) this.buildPaste(e); else if (inAsk(e)) this.followPaste(e); else if (!inFollow(e)) this.editorPaste(e); },
@@ -282,9 +290,10 @@ export default class DocEditor extends React.Component {
     const asked = prevProps.asks !== this.props.asks, built = prevProps.builds !== this.props.builds || prevProps.buildProgress !== this.props.buildProgress || prevProps.buildDiffs !== this.props.buildDiffs;
     // Builds first: each patch ends by redrawing the editor's HTML in memory, which is where the cards' parts are remembered.
     // A guide's paper buttons (paperState) and Try marks (repoState) are not patched: a change there redraws the editor.
-    if ((asked || built) && prevProps.text === this.props.text && prevProps.docKey === this.props.docKey && prevProps.models === this.props.models && prevProps.paperState === this.props.paperState && prevProps.repoState === this.props.repoState && (!built || this.patchBuilds()) && (!asked || this.patchPending())) return;
+    if ((asked || built) && prevProps.text === this.props.text && prevProps.docKey === this.props.docKey && prevProps.models === this.props.models && prevProps.paperState === this.props.paperState && prevProps.repoState === this.props.repoState && (!built || this.patchBuilds()) && (!asked || this.patchPending())) { this.markBeside(); return; }
     this.syncEditor();
     this.maybeRestoreView();
+    this.markBeside();
   }
 
   componentWillUnmount() {
@@ -307,6 +316,24 @@ export default class DocEditor extends React.Component {
   focusEnd() { this.docClickInternal(); }
   /** True while a line is being edited or the mention menu is open (the parent's Esc handler checks this). */
   isActive() { return this.state.activeLine != null || !!this.state.mention; }
+
+  /* ---------------------------------------------------------------- the pane beside (MATH-23) */
+  // The mentions whose note is open in the pane beside this document are marked, as the link clicked stays marked on Andy
+  // Matuschak's notes: on the page only, after each redraw, never in the HTML the editor compares (lastHtml).
+  markBeside() {
+    const ed = this.editorEl(); if (!ed || !ed.querySelectorAll) return;
+    const want = this.props.besideLink ? String(this.props.besideLink).toLowerCase() : null;
+    for (const m of ed.querySelectorAll('[data-mention]')) {
+      const on = !!want && !m.dataset.ws && String(m.dataset.mention).toLowerCase() === want;
+      if (on !== m.hasAttribute('data-beside')) m.toggleAttribute('data-beside', on);
+    }
+  }
+  // Escape with the model selector or a mention's card open shuts it, and that is all it does: it is marked as used, so the
+  // window's Escape (leaving the document's full screen, closing the workspace) leaves it alone. → whether it did
+  escapeShut(e) {
+    if (e.key !== 'Escape' || (!this.state.picker && !this.state.pop)) return false;
+    e.preventDefault(); this.closePicker(); this.hidePop(); return true;
+  }
 
   /* ---------------------------------------------------------------- where the document was scrolled to */
   // → { top, line, offset, hash }: the scroll offset, and the first line on screen with how far its top sits above the
@@ -974,7 +1001,7 @@ export default class DocEditor extends React.Component {
   // Enter sends; Shift+Enter is a new line of the reply (unlike a follow-up, a reply is not a line of the document).
   buildKey(e) {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); this.sendBuild(e.target.dataset.buildInput); }
-    else if (e.key === 'Escape') e.target.blur();
+    else if (e.key === 'Escape') { e.preventDefault(); e.target.blur(); }
   }
   // An image pasted into a reply (2026-09-29) is saved as a pasted image of the document is (the parent's onPasteImage)
   // and named in the text as [Attachment n], numbered across the Build; main hands the agent the file for each one.
@@ -1144,7 +1171,7 @@ export default class DocEditor extends React.Component {
   // written with its lines run together).
   cardKey(e) {
     if (e.key === 'Enter' && !e.isComposing && !(e.shiftKey && e.target.tagName === 'TEXTAREA')) { e.preventDefault(); this.sendCard(Number(e.target.dataset.cardInput)); }
-    else if (e.key === 'Escape') e.target.blur();
+    else if (e.key === 'Escape') { e.preventDefault(); e.target.blur(); }
   }
   // A choice clicked: one of a single choice (a second click takes it back), any of a select-all.
   pickCard(q, n) {
@@ -1323,7 +1350,7 @@ export default class DocEditor extends React.Component {
     if (c && !this.caret) this.caret = c;
     // Read before the fields are replaced: taking a focused field out of the page may blur it, which closes the menu.
     const menu = this.state.mention && this.state.mention.field != null ? this.state.mention : null;
-    this.syncing = true; ed.innerHTML = html; this.lastHtml = html; this.lastKey = key; this.restoreFollow(ed, had && !had.card && !had.discover ? had : null); this.restoreCards(ed, had); this.restoreDiscover(ed, had && had.discover ? had : null); this.restoreBuilds(ed, buildField);
+    this.syncing = true; ed.innerHTML = html; this.lastHtml = html; this.lastKey = key; this.markBeside(); this.restoreFollow(ed, had && !had.card && !had.discover ? had : null); this.restoreCards(ed, had); this.restoreDiscover(ed, had && had.discover ? had : null); this.restoreBuilds(ed, buildField);
     if (menu) this.followMenuRedrawn(menu);
     if (c && !had && !buildField && (hadFocus || this.wantFocus)) { ed.focus({ preventScroll: true }); this.caret = c; this.applyCaret(); }
     this.wantFocus = false; this.syncing = false;
@@ -1576,6 +1603,8 @@ export default class DocEditor extends React.Component {
       this.setLines((x) => { const out = [...x]; out[i] = sameLine(p, cur + nt); out.splice(i + 1, 1); return out; }, { line: i, offset: cur.length });
       return;
     }
+    // Not marked as used: leaving the line is what Escape does anywhere, and the window's Escape still leaves the document's
+    // full screen while the caret is in it (MATH-23).
     if (e.key === 'Escape') { const ed = this.editorEl(); if (ed) ed.blur(); }
   };
   // Pasted images are saved by the parent (library + <project>/assets) and referenced as ![Attachment n](img:<id>):
@@ -1749,7 +1778,10 @@ export default class DocEditor extends React.Component {
     if (m && m.dataset.ws) { e.preventDefault(); this.hidePop(); if (this.props.onOpenWorkspace) this.props.onOpenWorkspace(m.dataset.ws); return; } // goes there: one workspace at a time
     if (m) {
       e.preventDefault(); this.hidePop(); const nm = m.dataset.mention; if (nm.startsWith('bart')) return;
-      const res = this.findRes(nm); if (res.id !== '?' && this.props.onOpenItem) this.props.onOpenItem(res);
+      const res = this.findRes(nm); if (res.id === '?') return;
+      // A note opens in the pane beside this document (MATH-23); ⌘-click opens it as a tab, as before.
+      if (isNote(res) && this.props.onOpenBeside && !newTabClick(e)) { this.props.onOpenBeside(res, nm); return; }
+      if (this.props.onOpenItem) this.props.onOpenItem(res);
     }
   };
   editorOver = (e) => {
@@ -1849,7 +1881,7 @@ export default class DocEditor extends React.Component {
     }
     if (e.key === 'Enter' && e.shiftKey) e.preventDefault(); // one line of the document: no line breaks
     else if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); this.sendFollow(Number(e.target.dataset.followInput)); }
-    else if (e.key === 'Escape') e.target.blur();
+    else if (e.key === 'Escape') { e.preventDefault(); e.target.blur(); }
   }
   // Send to Discover's keys (MATH-31): Enter sends, Shift+Enter puts in nothing (what is sent is one line of the document),
   // Escape leaves the field.
@@ -1857,7 +1889,7 @@ export default class DocEditor extends React.Component {
     if (this.state.picker) this.closePicker();
     if (e.key === 'Enter' && e.shiftKey) e.preventDefault();
     else if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); this.sendDiscover(e.target.dataset.discoverInput); }
-    else if (e.key === 'Escape') { const target = e.target.dataset.discoverInput; e.target.blur(); if (!(this.discoverText.get(target) || '').trim()) this.closeDiscover(target); }
+    else if (e.key === 'Escape') { e.preventDefault(); const target = e.target.dataset.discoverInput; e.target.blur(); if (!(this.discoverText.get(target) || '').trim()) this.closeDiscover(target); }
   }
   // The button opens its field, the caret in it; Escape in an empty field shuts it again (2026-10-05).
   openDiscover(target) {
@@ -2168,6 +2200,9 @@ export default class DocEditor extends React.Component {
   hidePop = () => { if (this.state.pop) this.setState({ pop: null }); };
 
   /* ---------------------------------------------------------------- render */
+  // The @ menu, a mention's card and the model selector hang over the whole window, placed by the viewport (usePlaced): in
+  // a strip of panes (MATH-23) the pane after this one would otherwise cover them. A post-it's stay in its card.
+  overPage(node) { return this.props.compact || typeof document === 'undefined' || !document.body ? node : createPortal(node, document.body); }
   pickerView() {
     const pk = this.state.picker, models = this.props.models; if (!pk || !models) return null;
     const ls = this.lines(), marked = (choice) => ({ provider: (modelOf(choice.model, models) || {}).provider, model: choice.model, effort: choice.effort });
@@ -2226,9 +2261,13 @@ export default class DocEditor extends React.Component {
         {answers.length > 0 && (
           <button type="button" className="hov-ink" data-fold-all={anyOpen ? 'collapse' : 'expand'} onClick={() => this.foldAll(anyOpen)} title={anyOpen ? 'Collapse every @bart answer' : 'Expand every @bart answer'} style={{ position: 'absolute', top: 8, right: 22, zIndex: 2, padding: '4px 6px', border: 0, borderRadius: 6, background: '#fff', cursor: 'pointer', font: '400 12.5px/1.3 var(--font-sans)', color: '#8f8f8f', whiteSpace: 'nowrap' }}>{anyOpen ? 'Collapse all' : 'Expand all'}</button>
         )}
-        {s.mention && s.mention.anchor && <MentionMenu items={this.mentionList()} index={s.mentionIdx} anchor={s.mention.anchor} onPick={(r) => this.pickMention(r)} onHover={(i) => this.setState({ mentionIdx: i })} />}
-        {s.pop && (s.pop.res.ws ? <WorkspacePeek id={s.pop.res.ws} name={s.pop.res.name} anchor={s.pop.anchor} peek={this.props.workspacePeek} /> : <Popover item={s.pop.res} anchor={s.pop.anchor} />)}
-        {this.pickerView()}
+        {this.overPage(
+          <>
+            {s.mention && s.mention.anchor && <MentionMenu items={this.mentionList()} index={s.mentionIdx} anchor={s.mention.anchor} onPick={(r) => this.pickMention(r)} onHover={(i) => this.setState({ mentionIdx: i })} />}
+            {s.pop && (s.pop.res.ws ? <WorkspacePeek id={s.pop.res.ws} name={s.pop.res.name} anchor={s.pop.anchor} peek={this.props.workspacePeek} /> : <Popover item={s.pop.res} anchor={s.pop.anchor} />)}
+            {this.pickerView()}
+          </>,
+        )}
       </>
     );
   }

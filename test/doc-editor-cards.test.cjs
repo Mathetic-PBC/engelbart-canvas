@@ -84,7 +84,7 @@ test('a live @brainstorm card has Skip, Wrap up and Submit, in that order, and u
   assert.ok(/Submit<\/button><\/div><\/div><div style="padding:16px 0 10px"><div data-send-discover="c1"/.test(open), 'opened: the field, where the button was');
   assert.match(open, /<span style="flex:none;color:#0070f3;font-weight:500;font-size:16px;line-height:24px">@discover<\/span><textarea data-discover-input="c1" rows="1" placeholder="What do you want prior work on\?" aria-label="Send to Discover"/, 'the blue label, then the field');
   assert.match(open, /<button class="bart-send" data-act="senddiscover" data-target="c1" aria-label="Send" style="[^"]*border-radius:50%;background:#f2f2f2;color:#8f8f8f;/, 'a round Send, grey until something is typed');
-  editor.discoverKey({ key: 'Escape', target: { dataset: { discoverInput: 'c1' }, blur() {} } });
+  editor.discoverKey({ key: 'Escape', target: { dataset: { discoverInput: 'c1' }, blur() {} }, preventDefault() {} });
   assert.ok(html(1).includes('data-act="opendiscover"'), 'Escape in the empty field shuts it again');
   assert.ok(!shown.includes(LOOK) && !shown.includes('cardlook') && !shown.includes('discoverlook'), 'no suggested search, no old button');
 });

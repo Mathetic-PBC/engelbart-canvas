@@ -24,9 +24,9 @@ const DocEditor = load('DocEditor.jsx').default;
 const TEXT = 'First line\nSecond line\nThird line';
 
 /** An editor as mounted, with the editor, a line in it and the page around it as stand-ins, and a selection that is or is not collapsed. */
-function mounted(text = TEXT) {
+function mounted(text = TEXT, props = {}) {
   const changes = [];
-  const editor = new DocEditor({ docKey: 'k', text, onChange: (next) => changes.push(next) });
+  const editor = new DocEditor({ docKey: 'k', text, onChange: (next) => changes.push(next), ...props });
   const root = { closest: (sel) => (sel === '[data-editor]' ? root : null), matches: () => false, focus() {}, contains: () => true };
   const line = { closest: (sel) => (sel === '[data-editor]' ? root : null), matches: () => false };
   const page = { closest: () => null, matches: () => false };
@@ -102,4 +102,99 @@ test('a click below a document that ends on a card still adds a line under it', 
   m.click(m.root);
   assert.deepEqual(m.changes, ['First line\n@bart what is this\nbart> An answer\n']);
   assert.deepEqual(m.editor.caret, { line: 3, offset: 0 });
+});
+
+// MATH-23: a note's mention clicked opens the note in the pane beside the document, ⌘-click still opens it as a tab, and
+// anything else is opened as before. An Escape the editor used is marked as used, so the window's Escape (leaving the
+// document's full screen) leaves it alone.
+
+const LIBRARY = [
+  { id: 'n1', name: 'Plan', type: 'md', tags: ['note'] },
+  { id: 'p1', name: 'Paper', type: 'pdf', tags: ['paper'] },
+];
+
+/** An editor in a pane, with what it hands up recorded, and a mention of `name` in it to click. */
+function inPane(props = {}) {
+  const calls = { beside: [], item: [], ws: [] };
+  const m = mounted(TEXT, {
+    mentionable: LIBRARY,
+    onOpenBeside: (row, link) => calls.beside.push([row.id, link]),
+    onOpenItem: (row) => calls.item.push(row.id),
+    onOpenWorkspace: (id) => calls.ws.push(id),
+    ...props,
+  });
+  const mention = (name, data = {}) => {
+    const el = { dataset: { mention: name, ...data } };
+    return { closest: (sel) => (sel === '[data-mention]' ? el : sel === '[data-editor]' ? m.root : null), matches: () => false };
+  };
+  const clickOn = (target, keys = {}) => { const e = { target, preventDefault() { e.prevented = true; }, ...keys }; m.editor.docListeners.click(e); return e; };
+  return { ...m, calls, mention, clickOn };
+}
+
+test('a note\'s mention clicked opens the note beside the document, with the mention\'s text as its link', () => {
+  const p = inPane();
+  const e = p.clickOn(p.mention('Plan'));
+  assert.deepEqual(p.calls.beside, [['n1', 'Plan']]);
+  assert.deepEqual(p.calls.item, [], 'not as a tab');
+  assert.equal(e.prevented, true);
+});
+
+test('⌘-click on a note\'s mention still opens it as a tab; other mentions open as before', () => {
+  const p = inPane();
+  p.clickOn(p.mention('Plan'), { metaKey: true });
+  p.clickOn(p.mention('Paper'));
+  p.clickOn(p.mention('Elsewhere', { ws: 'w2' }));
+  p.clickOn(p.mention('Nothing by that name'));
+  assert.deepEqual(p.calls.beside, []);
+  assert.deepEqual(p.calls.item, ['n1', 'p1'], 'the note as a tab, the pdf on the Stage');
+  assert.deepEqual(p.calls.ws, ['w2'], 'a workspace mention still goes there');
+});
+
+test('an editor with nowhere beside it (a post-it) opens a note\'s mention as before', () => {
+  const p = inPane({ onOpenBeside: undefined });
+  p.clickOn(p.mention('Plan'));
+  assert.deepEqual(p.calls.item, ['n1']);
+});
+
+test('the mention whose note is open beside is marked, whatever its case; another, or a workspace\'s, is not', () => {
+  const { editor } = mounted(TEXT, { besideLink: 'plan' });
+  const mark = (mention, ws) => {
+    const attrs = new Set();
+    return { dataset: ws ? { mention, ws } : { mention }, hasAttribute: (name) => attrs.has(name), toggleAttribute: (name, on) => { if (on) attrs.add(name); else attrs.delete(name); return on; }, attrs };
+  };
+  const els = [mark('Plan'), mark('Paper'), mark('Plan', 'w1'), mark('PLAN')];
+  editor.edRef = { current: { querySelectorAll: () => els } };
+  editor.markBeside();
+  assert.deepEqual(els.map((el) => el.attrs.has('data-beside')), [true, false, false, true]);
+  editor.props = { ...editor.props, besideLink: null };
+  editor.markBeside();
+  assert.deepEqual(els.map((el) => el.attrs.has('data-beside')), [false, false, false, false], 'the pane beside closed: no mark is left');
+});
+
+test('Escape in a field of the editor\'s own, or with a mention\'s card or the model selector open, is marked as used', () => {
+  const field = (selector) => ({ closest: (sel) => (sel === '[data-editor]' ? field.root : null), matches: (sel) => sel.split(',').map((one) => one.trim()).includes(selector), dataset: { cardInput: '3', discoverInput: 't', buildInput: 'b1' }, blur() { this.blurred = true; } });
+  for (const selector of ['[data-card-input]', '[data-follow-input]', '[data-discover-input]', '[data-build-input]']) {
+    const { editor, root } = mounted();
+    field.root = root;
+    const target = field(selector);
+    const e = { key: 'Escape', target, preventDefault() { e.prevented = true; } };
+    editor.docListeners.keydown(e);
+    assert.equal(e.prevented, true, selector);
+    assert.equal(target.blurred, true, `${selector} is left`);
+  }
+  for (const open of [{ pop: { res: LIBRARY[0], anchor: {} } }, { picker: { kind: 'line', i: 0 } }]) {
+    const { editor, line } = mounted();
+    Object.assign(editor.state, open);
+    const e = { key: 'Escape', target: line, preventDefault() { e.prevented = true; } };
+    editor.docListeners.keydown(e);
+    assert.equal(e.prevented, true, Object.keys(open)[0]);
+    assert.equal(editor.state.pop || editor.state.picker || null, null, 'and it is shut');
+  }
+});
+
+test('Escape on a line of the document is not marked: the window\'s Escape still leaves the full screen', () => {
+  const { editor, line } = mounted();
+  const e = { key: 'Escape', target: line, preventDefault() { e.prevented = true; } };
+  editor.docListeners.keydown(e);
+  assert.equal(e.prevented, undefined);
 });
