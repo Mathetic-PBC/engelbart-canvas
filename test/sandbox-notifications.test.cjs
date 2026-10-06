@@ -222,7 +222,7 @@ test('Open live and dismiss sit together at the right, centered beside the notif
   const source = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/SandboxNotifications.jsx'), 'utf8');
   assert.match(source, /<a className="notification-repo" href=\{repo.url\}/);
   assert.match(source, /className="notification-open"/);
-  assert.match(source, /Open live ↗/);
+  assert.match(source, />Open live</);
   assert.doesNotMatch(source, /Preview no longer available/);
   const css = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/sandbox-notifications.css'), 'utf8');
   assert.match(css, /\.notification-row\{[^}]*align-items:center/);
@@ -391,8 +391,8 @@ test('a terminal opens its terminal, an interface its preview, both both; a term
     const shell = elements.find((element) => element.props.className === 'notification-open notification-terminal');
     assert.equal(!!live, kind !== 'terminal', `${kind}: Open live`);
     assert.equal(!!shell, kind !== 'interface', `${kind}: Open terminal`);
-    if (live) { assert.equal(live.props.children, 'Open live ↗'); live.props.onClick(); }
-    if (shell) { assert.equal(shell.props.children, 'Open terminal ↗'); shell.props.onClick(); }
+    if (live) { assert.equal(live.props.children, 'Open live'); live.props.onClick(); }
+    if (shell) { assert.equal(shell.props.children, 'Open terminal'); shell.props.onClick(); }
     assert.deepEqual(calls, [...(live ? [['live', kind]] : []), ...(shell ? [['terminal', kind]] : [])]);
     assert.doesNotMatch(renderToStaticMarkup(tree), /No web preview/);
   }
