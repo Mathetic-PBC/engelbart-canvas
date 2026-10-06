@@ -9,6 +9,7 @@ const {
   dialog,
   ipcMain,
   Menu,
+  net,
   powerMonitor,
   protocol,
   safeStorage,
@@ -38,7 +39,7 @@ const { SettingsStore } = require('./terminal/settings.cjs');
 const { shouldHideWindowOnClose } = require('./terminal/window-lifecycle.cjs');
 const { assertTrustedRenderer, parseExternalUrl } = require('./ipc-validation.cjs');
 const { createStore, registerEngelbartIpc } = require('./ipc.cjs');
-const { PARTITION: BROWSER_PARTITION, createBrowserViews, registerBrowserIpc } = require('./browser/views.cjs');
+const { stagePartition, createBrowserViews, registerBrowserIpc } = require('./browser/views.cjs');
 const { createCookieImport, keychainRunner } = require('./browser/import-cookies.cjs');
 const { createGithub } = require('./github/connection.cjs');
 const { createBrowserAuth, CLIENT_ID: GITHUB_CLIENT_ID } = require('./github/browser-auth.cjs');
@@ -68,6 +69,8 @@ const DIST = path.join(__dirname, '../../dist');
 const FIXTURES = path.join(__dirname, '../../fixtures');
 const PRELOAD_FILE = path.join(__dirname, '../preload.cjs');
 const APP_URL = 'engelbart://app/index.html';
+// The Stage's cookie store: a checkout keeps its own, apart from the package's encrypted one (browser/views.cjs).
+const BROWSER_PARTITION = stagePartition(app.isPackaged);
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -699,6 +702,7 @@ if (!hasSingleInstanceLock) {
           appName: app.getName(),
           fileRoot: () => homeDir,
           onLayerChange: () => postItViews.raise(),
+          partition: BROWSER_PARTITION,
         });
         return { browserViews, postItViews };
       },
@@ -715,11 +719,13 @@ if (!hasSingleInstanceLock) {
       },
     });
     // Importing sign-ins from the person's browsers into the Stage (MATH-18): macOS only, and into the one shared
-    // persist:browser session every window's tabs read. Cookie values stay here — the handlers return domains and counts.
+    // Stage session every window's tabs read. Cookie values stay here — the handlers return domains and counts. The sign-in
+    // checks go through net.request, which (unlike net.fetch) says where a redirect was going (import-cookies.cjs).
     const cookieImport = process.platform === 'darwin' ? createCookieImport({
       supportDir: path.join(app.getPath('home'), 'Library', 'Application Support'),
       userDataDir: app.getPath('userData'),
       getSession: () => electronSession.fromPartition(BROWSER_PARTITION),
+      request: (options) => net.request(options),
       keychain: keychainRunner,
     }) : null;
     registerBrowserIpc({ ipcMain, trustedHandler, viewsFor: (event) => { const ctx = windows.of(event.sender); return ctx ? ctx.browserViews : null; }, cookieImport });

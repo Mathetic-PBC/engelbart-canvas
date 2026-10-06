@@ -30,6 +30,14 @@ const path = require('node:path');
 const { fileURLToPath } = require('node:url');
 
 const PARTITION = 'persist:browser';
+// A copy run from a checkout (`npm start`, `electron .`) keeps the Stage's cookies apart (2026-10-06). A package turns on
+// Electron's EnableCookieEncryption fuse (electron-builder.config.cjs) and encrypts this store on write; a checkout runs
+// the stock Electron, without the fuse, on the same userData folder, and cannot read what a package encrypted (Electron:
+// "effectively corrupt"), while what it wrote would sit in the clear beside it. So each keeps its own: a developer signs
+// in to the Stage once in each. Only the cookie store is split; settings, threads and the single-instance lock stay shared.
+const DEV_PARTITION = 'persist:browser-dev';
+/** The Stage's partition for this copy: `packaged` is app.isPackaged. */
+const stagePartition = (packaged) => (packaged ? PARTITION : DEV_PARTITION);
 const ERR_ABORTED = -3;
 const SNAPSHOT_TIMEOUT_MS = 250;
 const ALLOWED_PERMISSIONS = new Set(['clipboard-sanitized-write']);
@@ -199,7 +207,7 @@ function joinSession(browsing, member, appName) {
   return shared;
 }
 
-function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLayerChange = () => {}, pdfDir = path.join(os.tmpdir(), 'engelbart-pdf') }) {
+function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLayerChange = () => {}, pdfDir = path.join(os.tmpdir(), 'engelbart-pdf'), partition = PARTITION }) {
   const { WebContentsView, session, Menu, clipboard, dialog, shell } = electron;
   const entries = new Map(); // tab id -> { view, error, requested, pending, seq, found }
   const popups = new Set(); // child windows opened by pages
@@ -233,13 +241,13 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
   function configureSession() {
     if (configured) return;
     configured = true;
-    shared = joinSession(session.fromPartition(PARTITION), member, appName);
+    shared = joinSession(session.fromPartition(partition), member, appName);
   }
 
   /** GitHub's sign-in cookies in the Stage's session, gone (endedGithubSession): the next GitHub page is asked for signed out. */
   async function dropGithubSession() {
     configureSession();
-    const cookies = session.fromPartition(PARTITION).cookies;
+    const cookies = session.fromPartition(partition).cookies;
     await Promise.all(GITHUB_SESSION_COOKIES.map((name) => cookies.remove('https://github.com', name).catch(() => {})));
   }
 
@@ -421,7 +429,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
             parent: parent && !parent.isDestroyed() ? parent : undefined,
             minWidth: 320, minHeight: 320, // the size is the page's to ask for (window.open features)
             autoHideMenuBar: true, backgroundColor: '#ffffff', fullscreenable: false,
-            webPreferences: { ...WEB_PREFERENCES },
+            webPreferences: { ...WEB_PREFERENCES, partition },
           },
         };
       }
@@ -449,7 +457,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
 
   function adopt(options, from) {
     const win = getWindow();
-    const view = new WebContentsView({ webContents: options.webContents, webPreferences: { ...WEB_PREFERENCES } });
+    const view = new WebContentsView({ webContents: options.webContents, webPreferences: { ...WEB_PREFERENCES, partition } });
     const id = nextId('tab');
     attach(id, view, win);
     send('browser:open-tab', { id, url: view.webContents.getURL(), from });
@@ -460,7 +468,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     const win = getWindow();
     if (!win || win.isDestroyed()) throw new Error('No window for the browser');
     configureSession();
-    return attach(id, new WebContentsView({ webPreferences: { ...WEB_PREFERENCES } }), win);
+    return attach(id, new WebContentsView({ webPreferences: { ...WEB_PREFERENCES, partition } }), win);
   }
 
   function attach(id, view, win) {
@@ -686,7 +694,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
 
   /** Sign-ins are cookies; Chromium writes them lazily, so quitting asks for them now. */
   async function flush() {
-    const browsing = session.fromPartition(PARTITION);
+    const browsing = session.fromPartition(partition);
     if (configured || sessions.has(browsing)) await browsing.cookies.flushStore(); // whichever window's tabs set it up
   }
 
@@ -732,4 +740,4 @@ function registerBrowserIpc({ ipcMain, trustedHandler, viewsFor = null, views = 
   }
 }
 
-module.exports = { PARTITION, parseBrowserUrl, parseFileUrl, externalScheme, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews, registerBrowserIpc };
+module.exports = { PARTITION, DEV_PARTITION, stagePartition, parseBrowserUrl, parseFileUrl, externalScheme, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews, registerBrowserIpc };

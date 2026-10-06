@@ -887,8 +887,13 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     if (!active) return undefined;
     return api.onStageOpenLink((link) => { if (link && link.url) openLink(link.url, { newTab: !!link.newTab }); });
   }, [active, openLink]);
-  // Opened from the all-projects screen: shown once the Stage is there.
-  React.useEffect(() => { if (initialStage && stageRef.current) openItem(initialStage); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Opened from the all-projects screen: shown once the Stage is there. `{ links }`: sites Onboarding's sign-in import said
+  // to sign in to again, the first in the tab in front and the rest in tabs of their own.
+  React.useEffect(() => {
+    if (!initialStage || !stageRef.current) return;
+    if (Array.isArray(initialStage.links)) initialStage.links.forEach((url, index) => openLink(url, { newTab: index > 0 }));
+    else openItem(initialStage);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sandboxes = useSandboxes();
   const onRowClick = (row) => {

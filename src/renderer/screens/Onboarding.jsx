@@ -165,6 +165,8 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
   const [sel, setSel] = React.useState({});
   const [error, setError] = React.useState('');
   const [importing, setImporting] = React.useState(false); // the "Import sign-ins…" picker is open (MATH-18, macOS only)
+  // Its "Sign in again" sites (2026-10-06): there is no Stage until the project opens, so they open on it then (App.jsx).
+  const stageLinks = React.useRef([]);
   const [ghStatus] = useGithubStatus();
   const entryRef = React.useRef(null);
 
@@ -304,7 +306,7 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
     go({ step: 'open', sub: 0 });
     try {
       const made = await api.startProject({ name: name.trim(), description: desc.trim(), folder, directory: folder === 'existing' ? folderPath : '', context: ids });
-      await onDone(made);
+      await onDone(made, { stageLinks: [...stageLinks.current] });
     } catch (failure) {
       setPlace({ step: 'context', sub: 0, detour: false });
       setError(errorMessage(failure));
@@ -549,7 +551,7 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
           )}
         </div>
       </div>
-      {importing && <ImportSignins onClose={() => setImporting(false)} onOpenSite={(url) => api.openExternal(url).catch(() => {})} />}
+      {importing && <ImportSignins opensLater onClose={() => setImporting(false)} onOpenSite={(url) => { if (!stageLinks.current.includes(url)) stageLinks.current.push(url); }} />}
     </div>
   );
 }

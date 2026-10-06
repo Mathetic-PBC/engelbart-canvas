@@ -6,6 +6,8 @@ import { api, errorMessage } from '../api.js';
 // tick into the Stage's session, so those sites open already signed in. It shows domains and counts only — cookie values
 // never leave the main process (src/main/browser/import-cookies.cjs). Opened from the Stage's ⋮ menu and, as an opt-in
 // step, from Onboarding. `onOpenSite(url)` opens a site on the Stage (the "Sign in again" button); `onClose` dismisses.
+// `opensLater` (Onboarding, 2026-10-06): there is no Stage yet, so the site is kept for when the project opens, the picker
+// stays, and the row says so.
 
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
 const CHECK_SITES = { 'github.com': 'GitHub', 'google.com': 'Google', 'overleaf.com': 'Overleaf', 'zotero.org': 'Zotero' };
@@ -18,7 +20,7 @@ const rowButton = { display: 'flex', alignItems: 'center', gap: 10, width: '100%
 const primaryStyle = { height: 34, padding: '0 16px', border: '1px solid #171717', borderRadius: 8, background: '#171717', color: '#fff', cursor: 'pointer', font: '500 13px/1 var(--font-sans)' };
 const ghostStyle = { height: 34, padding: '0 12px', border: 0, background: 'transparent', color: '#8f8f8f', cursor: 'pointer', font: '13px/1 var(--font-sans)' };
 
-export default function ImportSignins({ onClose, onOpenSite }) {
+export default function ImportSignins({ onClose, onOpenSite, opensLater = false }) {
   const [step, setStep] = React.useState('browser'); // browser → profile → domains → importing → done
   const [sources, setSources] = React.useState(null);
   const [error, setError] = React.useState('');
@@ -28,6 +30,7 @@ export default function ImportSignins({ onClose, onOpenSite }) {
   const [ticked, setTicked] = React.useState({}); // domain → bool
   const [query, setQuery] = React.useState('');
   const [result, setResult] = React.useState(null); // { imported, skipped, sessionOnly, checks }
+  const [later, setLater] = React.useState({}); // domain → true: kept to open on the Stage when the project opens (opensLater)
 
   React.useEffect(() => {
     api.browserImportSources().then((list) => { setSources(list); if (!list.length) setError('No supported browsers were found on this Mac.'); }).catch((failure) => setError(errorMessage(failure)));
@@ -138,8 +141,13 @@ export default function ImportSignins({ onClose, onOpenSite }) {
             <div key={check.domain} data-import-check={check.domain} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 2px', borderBottom: '1px solid #f2f2f2' }}>
               <span style={{ flex: 1, font: '13.5px/1.4 var(--font-sans)', color: '#171717' }}>{check.site}</span>
               {check.signedIn === true && <span style={{ font: '12.5px/1 var(--font-sans)', color: '#1f9d55' }}>✓ signed in</span>}
-              {check.signedIn !== true && (
-                <button type="button" className="hov-ink" data-import-signin={check.domain} onClick={() => { if (onOpenSite) onOpenSite(SITE_URL[check.domain] || `https://${check.domain}`); onClose(); }} style={{ padding: 0, border: 0, background: 'transparent', cursor: 'pointer', font: '500 12.5px/1 var(--font-sans)', color: '#0070f3' }}>Sign in again</button>
+              {check.signedIn !== true && later[check.domain] && <span data-import-later={check.domain} style={{ font: '12.5px/1 var(--font-sans)', color: '#8f8f8f' }}>opens on the Stage when you finish</span>}
+              {check.signedIn !== true && !later[check.domain] && (
+                <button type="button" className="hov-ink" data-import-signin={check.domain} onClick={() => {
+                  if (onOpenSite) onOpenSite(SITE_URL[check.domain] || `https://${check.domain}`);
+                  if (opensLater) setLater((now) => ({ ...now, [check.domain]: true }));
+                  else onClose();
+                }} style={{ padding: 0, border: 0, background: 'transparent', cursor: 'pointer', font: '500 12.5px/1 var(--font-sans)', color: '#0070f3' }}>Sign in again</button>
               )}
             </div>
           ))}

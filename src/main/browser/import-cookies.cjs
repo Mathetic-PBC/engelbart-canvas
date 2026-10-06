@@ -20,6 +20,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFile } = require('node:child_process');
+const { endedGithubSession, GITHUB_SESSION_COOKIES } = require('../../shared/github.cjs');
 
 // The Chromium-family browsers (CK-01). `dir` is under ~/Library/Application Support; `keychain` is the Keychain generic
 // password whose value derives the decryption key. Chrome, Brave, Edge, Vivaldi, Opera and Chromium are the long-standing
@@ -188,6 +189,7 @@ function allRows(db, sql) {
 /**
  * Every row of a Chromium Cookies database, column names handled across versions (older `secure`/`httponly`, newer
  * `is_secure`/`is_httponly`). Values are not decrypted here — that waits for a key, so listing domains needs no Keychain.
+ * `topFrameSiteKey` is set on a partitioned (CHIPS) cookie: a copy a site keeps while embedded in another site.
  */
 function readChromiumDb(file) {
   const db = openDb(file);
@@ -210,6 +212,7 @@ function readChromiumDb(file) {
         samesite: cols.has('samesite') ? num(row.samesite) : -1,
         persistent: cols.has('is_persistent') ? !!num(row.is_persistent) : true,
         hasExpires: cols.has('has_expires') ? !!num(row.has_expires) : true,
+        topFrameSiteKey: cols.has('top_frame_site_key') ? String(row.top_frame_site_key || '') : '',
       })),
     };
   } finally {
@@ -217,26 +220,43 @@ function readChromiumDb(file) {
   }
 }
 
+// Firefox's cookie schema 14 stores moz_cookies.expiry in milliseconds; before it, seconds (2026-10-06, Mozilla's
+// netwerk/test/unit/test_schema_14_migration.js). The schema is the database's user_version.
+const FIREFOX_EXPIRY_MS_SCHEMA = 14;
+
+/** A SQLite database's user_version (Firefox's cookie schema), or 0 when it cannot be read. */
+function userVersion(db) {
+  try {
+    const row = db.prepare('PRAGMA user_version').get();
+    return row ? Number(row.user_version) || 0 : 0;
+  } catch {
+    return 0;
+  }
+}
+
 /**
- * Every row of a Firefox cookies.sqlite (CK-02). Firefox leaves values in the clear, so there is no key and no decryption;
- * `expiry` is in seconds in current versions (creationTime/lastAccessed are microseconds, but expiry is not), so it is used
- * as-is for the Unix expirationDate.
+ * Every row of a Firefox cookies.sqlite (CK-02). Firefox leaves values in the clear, so there is no key and no decryption.
+ * `expirySeconds` is Unix seconds whatever the schema: milliseconds from schema 14 on are divided down. A non-empty
+ * `originAttributes` marks a container's, a partitioned or a first-party-isolated copy rather than the plain sign-in.
  */
 function readFirefoxDb(file) {
   const db = openDb(file);
   try {
     const cols = tableColumns(db, 'moz_cookies');
+    const schema = userVersion(db);
     const rows = allRows(db, 'SELECT * FROM moz_cookies');
     return {
+      schema,
       rows: rows.map((row) => ({
         host: String(row.host || ''),
         name: String(row.name || ''),
         plainValue: typeof row.value === 'string' ? row.value : '',
         path: String(row.path || '/'),
-        expirySeconds: num(row.expiry),
+        expirySeconds: schema >= FIREFOX_EXPIRY_MS_SCHEMA ? Math.floor(num(row.expiry) / 1000) : num(row.expiry),
         secure: !!num(row.isSecure),
         httpOnly: !!num(row.isHttpOnly),
         samesite: cols.has('sameSite') ? num(row.sameSite) : 0,
+        originAttributes: cols.has('originAttributes') ? String(row.originAttributes || '') : '',
       })),
     };
   } finally {
@@ -260,16 +280,38 @@ function registrableDomain(host) {
   return lastTwo;
 }
 
+// Which rows are left out before anything else (2026-10-06): neither listed in the picker, nor imported, nor counted.
+//  - Expired: the browser has not yet swept them from disk, and the site would refuse them anyway.
+//  - Partitioned or contained: a copy a site keeps while embedded in another site (Chromium's top_frame_site_key, CHIPS)
+//    or in a Firefox container (a non-empty originAttributes). The Stage keeps one unpartitioned store, so writing such a
+//    copy would overwrite the real top-level sign-in of the same name, domain and path.
+const nowSeconds = () => Math.floor(Date.now() / 1000);
+
+/** Whether a Chromium row is the plain, live cookie (see above). `now` is Unix seconds. */
+function chromiumKept(row, now) {
+  if (row.topFrameSiteKey) return false;
+  const expires = chromeTimeToUnixSeconds(row.expiresUtc);
+  return !(row.persistent && row.hasExpires && expires > 0 && expires <= now);
+}
+
+/** Whether a Firefox row is the plain, live cookie (see above). `now` is Unix seconds. */
+function firefoxKept(row, now) {
+  if (row.originAttributes) return false;
+  return !(row.expirySeconds > 0 && row.expirySeconds <= now);
+}
+
 /**
  * Chromium rows -> cookies for cookies.set, decrypting values and dropping those that will not decrypt (counted). When
  * `want` (a Set of registrable domains) is given, only rows for those domains are considered, so the skipped count and the
  * decryption are scoped to what is being imported — a value from a domain the person did not tick is never even decrypted.
+ * Expired and partitioned rows are left out uncounted (chromiumKept); `now` is Unix seconds.
  */
-function normalizeChromium({ version, rows }, key, want = null) {
+function normalizeChromium({ version, rows }, key, { want = null, now = nowSeconds() } = {}) {
   const cookies = [];
   let skipped = 0;
   for (const row of rows) {
     if (want && !want.has(registrableDomain(row.host))) continue;
+    if (!chromiumKept(row, now)) continue;
     const value = decryptChromiumValue(row.encrypted, row.plainValue, key, version);
     if (value == null) { skipped += 1; continue; }
     cookies.push({
@@ -287,9 +329,9 @@ function normalizeChromium({ version, rows }, key, want = null) {
   return { cookies, skipped };
 }
 
-/** Firefox rows -> cookies for cookies.set. Nothing to decrypt, so nothing is skipped for decryption. `want` as above. */
-function normalizeFirefox({ rows }, want = null) {
-  const cookies = rows.filter((row) => !want || want.has(registrableDomain(row.host))).map((row) => ({
+/** Firefox rows -> cookies for cookies.set. Nothing to decrypt, so nothing is skipped for decryption. `want`, `now` as above. */
+function normalizeFirefox({ rows }, { want = null, now = nowSeconds() } = {}) {
+  const cookies = rows.filter((row) => (!want || want.has(registrableDomain(row.host))) && firefoxKept(row, now)).map((row) => ({
     host: row.host,
     name: row.name,
     value: row.plainValue,
@@ -305,34 +347,96 @@ function normalizeFirefox({ rows }, want = null) {
 
 /* ------------------------------------------------------------------------------------------- sign-in checks (CK-14) */
 
-// Each site a person is likely to import, with a page that needs a sign-in: visited with the imported session and NOT
-// following redirects, it answers 200 when the session is live and redirects to a login page when it is not. The verdict
-// is read from the status alone — a 2xx is signed in, a 3xx (or an opaque redirect the browser hides) is signed out —
-// because Electron's net.fetch does not report the final URL reliably, only the status. No cookie is ever read. GitHub's
-// `endedGithubSession` / GITHUB_SESSION_COOKIES (src/shared/github.cjs) describe the same "GitHub sends you to /login"
-// signal this relies on; they stay imported so the Stage and the importer agree on it.
+// Each site a person is likely to import, with a page that needs a sign-in: asked for over the Stage's session without
+// following redirects, it answers 2xx when the session is live and redirects to a login page when it is not.
+//
+// The request is Electron's net.request, not net.fetch (2026-10-06, tried against Electron 44.4.1): net.fetch with
+// redirect:'manual' throws "Redirect was cancelled" instead of returning the 3xx, and with redirects followed its Response
+// has no url, so neither says where the page was sent. net.request's 'redirect' event gives the status and the target. A
+// "Redirect was cancelled" error that comes back anyway is a redirect to somewhere unknown, and counts as signed out.
+//
+// GitHub has the signed-out tests the Stage itself uses (src/shared/github.cjs, src/main/browser/views.cjs): the Stage
+// holds none of GITHUB_SESSION_COOKIES (nothing to be signed in with, so the page is not even asked for), or the page was
+// sent to GitHub's /login (endedGithubSession). A GitHub redirect anywhere else (a device check, say) is not one GitHub
+// means as signed out, so it comes back null: not confirmed either way.
 const SIGN_IN_CHECKS = [
-  { site: 'GitHub', domain: 'github.com', url: 'https://github.com/settings/profile' },
+  { site: 'GitHub', domain: 'github.com', url: 'https://github.com/settings/profile', sessionCookies: GITHUB_SESSION_COOKIES, signedOut: endedGithubSession },
   { site: 'Google', domain: 'google.com', url: 'https://myaccount.google.com/' },
   { site: 'Overleaf', domain: 'overleaf.com', url: 'https://www.overleaf.com/project' },
   { site: 'Zotero', domain: 'zotero.org', url: 'https://www.zotero.org/settings/' },
 ];
 const CHECK_BY_DOMAIN = new Map(SIGN_IN_CHECKS.map((check) => [check.domain, check]));
 const DEFAULT_DOMAINS = SIGN_IN_CHECKS.map((check) => check.domain);
+// A check that has not answered by then is null ("not confirmed"): the picker never waits on "Importing…" for longer.
+const CHECK_TIMEOUT_MS = 10_000;
+const REDIRECT_CANCELLED = /Redirect was cancelled/i;
 
-/** Whether a manual-redirect fetch landed on the page itself (signed in) or was bounced to a login (signed out, a 3xx). */
+/** Whether the check page was sent elsewhere (a 3xx, or an opaque redirect) rather than shown. */
 function wasRedirect(response) {
   if (!response) return false;
   const status = Number(response.status) || 0;
   return response.type === 'opaqueredirect' || status === 0 || (status >= 300 && status < 400);
 }
 
-/** The signed-in verdict for one site: true signed in (a 2xx, no redirect), false signed out, null if it could not run. */
-function checkResult(check, response) {
+/** A site whose sign-in lives in known cookies (GitHub's), and the Stage holds none of them: nothing to be signed in with. */
+const lacksSession = (check, held) => !!(check.sessionCookies && held && !check.sessionCookies.some((name) => held.has(name)));
+
+/**
+ * The signed-in verdict for one site: true signed in (a 2xx), false signed out, null when the check could not run or is
+ * not confirmed. `response` is probe()'s { status, location }; `held` the names of the cookies the Stage holds for the
+ * check page (a Set), or null when unknown.
+ */
+function checkResult(check, response, held = null) {
+  if (lacksSession(check, held)) return false;
   if (!response) return null;
+  if (wasRedirect(response)) {
+    if (check.signedOut && response.location) return check.signedOut(check.url, response.location) ? false : null;
+    return false;
+  }
   const status = Number(response.status) || 0;
-  if (wasRedirect(response)) return false;
   return status >= 200 && status < 300;
+}
+
+/**
+ * Ask for one check page over `session` with Electron's net.request (`request`): redirects not followed, the session's
+ * cookies sent. Resolves { status, location } (`location` when the page redirected), or null when it failed or had not
+ * answered in `timeoutMs`. The body is never read: the request is aborted as soon as the status or the redirect is known.
+ */
+function probe(request, session, url, timeoutMs = CHECK_TIMEOUT_MS) {
+  return new Promise((resolve) => {
+    let req = null;
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { if (req) req.abort(); } catch { /* already over */ }
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    try {
+      req = request({ url, session, useSessionCookies: true, redirect: 'manual', cache: 'no-store' });
+      req.on('redirect', (status, _method, location) => finish({ status: Number(status) || 302, location: String(location || '') }));
+      req.on('response', (response) => {
+        if (response && typeof response.on === 'function') response.on('error', () => {}); // aborted under it: not ours to report
+        finish({ status: response ? Number(response.statusCode) || 0 : 0 });
+      });
+      req.on('error', (error) => finish(REDIRECT_CANCELLED.test(String(error && error.message)) ? { status: 302, location: '' } : null));
+      req.end();
+    } catch {
+      finish(null);
+    }
+  });
+}
+
+/** The names of the cookies the Stage would send to `url` (their values are dropped unread), or null if the store can't say. */
+async function heldNames(store, url) {
+  if (!store || typeof store.get !== 'function') return null;
+  try {
+    return new Set((await store.get({ url })).map((cookie) => cookie.name));
+  } catch {
+    return null;
+  }
 }
 
 /* ------------------------------------------------------------------------------------------------ the record (CK-12) */
@@ -402,12 +506,15 @@ function profilesFor(browser, supportDir) {
  *  - `supportDir`  : ~/Library/Application Support (where the browser folders are).
  *  - `userDataDir` : Electron's userData (browser-imports.json goes here).
  *  - `tmpBase`     : where the private database copy is made.
- *  - `getSession()`: the Stage's persist:browser session (its `cookies` store and `fetch`).
- *  - `keychain(serviceName)`: the Keychain password for a Chromium browser, or a thrown denial (CK-05).
- *  - `now()`       : the time written into the record.
+ *  - `getSession()`: the Stage's session (src/main/browser/views.cjs; its `cookies` store).
+ *  - `request(options)`: Electron's net.request, for the sign-in checks (probe()). Without it every check is null.
+ *  - `keychain(serviceName)`: the Keychain password for a Chromium browser, or a thrown denial or miss (CK-05).
+ *  - `now()`       : the time written into the record, and what an expired cookie is expired by.
+ *  - `checkTimeoutMs`: how long a sign-in check may take (CHECK_TIMEOUT_MS).
  */
-function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), getSession, keychain, now = () => new Date() }) {
+function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), getSession, request = null, keychain, now = () => new Date(), checkTimeoutMs = CHECK_TIMEOUT_MS }) {
   const importsFile = path.join(userDataDir || '.', 'browser-imports.json');
+  const unixNow = () => Math.floor(now().getTime() / 1000);
 
   /** The installed browsers and their profiles, domains and values untouched (CK-03). */
   function sources() {
@@ -429,16 +536,22 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
 
   /** The ticked domains' cookies for a profile, read from a private copy and (Chromium) decrypted. Values stay in main. */
   function readProfile(browser, profile, key, want) {
-    if (browser.family === 'firefox') return normalizeFirefox(withCopy(profile.cookieFile, tmpBase, readFirefoxDb), want);
-    return normalizeChromium(withCopy(profile.cookieFile, tmpBase, readChromiumDb), key, want);
+    const options = { want, now: unixNow() };
+    if (browser.family === 'firefox') return normalizeFirefox(withCopy(profile.cookieFile, tmpBase, readFirefoxDb), options);
+    return normalizeChromium(withCopy(profile.cookieFile, tmpBase, readChromiumDb), key, options);
   }
 
-  /** The domains a profile has cookies for, with counts (CK-07). No Keychain: listing never decrypts. */
+  /** The domains a profile has cookies for, with counts (CK-07). No Keychain: listing never decrypts. Expired and
+   *  partitioned rows are not counted, as they will not be imported (chromiumKept, firefoxKept). */
   function domains(browserId, profileId) {
     const { browser, profile } = resolveProfile(browserId, profileId);
     const counts = new Map();
-    const read = browser.family === 'firefox' ? withCopy(profile.cookieFile, tmpBase, readFirefoxDb) : withCopy(profile.cookieFile, tmpBase, readChromiumDb);
+    const firefox = browser.family === 'firefox';
+    const read = firefox ? withCopy(profile.cookieFile, tmpBase, readFirefoxDb) : withCopy(profile.cookieFile, tmpBase, readChromiumDb);
+    const kept = firefox ? firefoxKept : chromiumKept;
+    const at = unixNow();
     for (const row of read.rows) {
+      if (!kept(row, at)) continue;
       const domain = registrableDomain(row.host);
       if (!domain) continue;
       counts.set(domain, (counts.get(domain) || 0) + 1);
@@ -447,41 +560,38 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
     return { browser: browser.id, profile: profile.id, defaults: DEFAULT_DOMAINS, domains: list };
   }
 
-  /** Run the signed-in check for each imported domain that has one, over the Stage's session. Failures come back null. */
+  /** The signed-in check for each imported domain that has one, all at once over the Stage's session, so together they
+   *  take no longer than one (checkTimeoutMs). A check that fails or times out comes back null. */
   async function runChecks(session, importedDomains) {
-    const checks = [];
-    for (const domain of importedDomains) {
-      const check = CHECK_BY_DOMAIN.get(domain);
-      if (!check) continue;
-      let response = null;
-      try {
-        const res = await session.fetch(check.url, { useSessionCookies: true, cache: 'no-store', redirect: 'manual' });
-        response = { status: res.status || 0, type: res.type };
-      } catch {
-        response = null;
-      }
-      checks.push({ site: check.site, domain: check.domain, url: check.url, signedIn: checkResult(check, response) });
-    }
-    return checks;
+    const checks = importedDomains.map((domain) => CHECK_BY_DOMAIN.get(domain)).filter(Boolean);
+    return Promise.all(checks.map(async (check) => {
+      const held = check.sessionCookies ? await heldNames(session.cookies, check.url) : null;
+      const response = lacksSession(check, held) || !request ? null : await probe(request, session, check.url, checkTimeoutMs);
+      return { site: check.site, domain: check.domain, url: check.url, signedIn: checkResult(check, response, held) };
+    }));
   }
 
   /**
    * Import the ticked domains' cookies into the Stage (CK-08–CK-13). Returns counts only — { imported, skipped, sessionOnly,
-   * checks } — with no cookie value anywhere in it. A Keychain denial (Chromium) throws before anything is written (CK-05).
+   * checks } — with no cookie value anywhere in it. A Keychain denial or miss (Chromium) throws before anything is written
+   * (CK-05). No domains is nothing to import (2026-10-06): no Keychain prompt, no read, no write and no record.
    */
   async function run({ browser: browserId, profile: profileId, domains: wanted }) {
     const { browser, profile } = resolveProfile(browserId, profileId);
-    const want = new Set((Array.isArray(wanted) && wanted.length ? wanted : DEFAULT_DOMAINS).map((d) => String(d).toLowerCase()));
+    const want = new Set((Array.isArray(wanted) ? wanted : []).map((d) => String(d).toLowerCase()));
+    if (!want.size) return { browser: browser.id, profile: profile.name, imported: 0, skipped: 0, sessionOnly: 0, checks: [] };
 
     let key = null;
     if (browser.family === 'chromium') {
       try {
         key = deriveKey(await keychain(browser.keychain));
       } catch (error) {
-        const denied = error && (error.denied || /denied|-128|not be found|cancel/i.test(error.message || ''));
-        throw new Error(denied
-          ? `Engelbart needs Keychain access to read ${browser.name}'s cookies, and the request was denied. Nothing was imported.`
-          : `Engelbart could not read ${browser.name}'s Keychain key. Nothing was imported.`);
+        const failure = keychainFailure(error);
+        throw new Error(failure === 'not-found'
+          ? `Engelbart couldn't find ${browser.name}'s key in the Keychain, so its cookies can't be read. Nothing was imported.`
+          : failure === 'denied'
+            ? `Engelbart needs Keychain access to read ${browser.name}'s cookies, and the request was denied. Nothing was imported.`
+            : `Engelbart could not read ${browser.name}'s Keychain key. Nothing was imported.`);
       }
     }
 
@@ -520,13 +630,35 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
   return { sources, domains, import: run };
 }
 
-/** The default Keychain runner (CK-05): `security find-generic-password -w -s "<name>"`. A denial is a distinct error. */
-function keychainRunner(serviceName) {
+// `security` exits with the low byte of the Keychain's OSStatus (2026-10-06): 44 is errSecItemNotFound (-25300), no key of
+// that name (the browser never stored one here, or its name in CHROMIUM is wrong); 128 errSecUserCanceled (-128) and 51
+// errSecAuthFailed (-25293) are the person saying no at the prompt.
+const KEYCHAIN_NOT_FOUND = 44;
+const KEYCHAIN_DENIED = new Set([128, 51]);
+
+/** Which way a Keychain read failed: 'not-found', 'denied' or 'other' (keychainRunner's flags, else the message). */
+function keychainFailure(error) {
+  if (!error) return 'other';
+  if (error.notFound) return 'not-found';
+  if (error.denied) return 'denied';
+  const message = String(error.message || '');
+  if (/could not be found|no such key/i.test(message)) return 'not-found';
+  if (/denied|-128|cancel/i.test(message)) return 'denied';
+  return 'other';
+}
+
+/**
+ * The default Keychain runner (CK-05): `security find-generic-password -w -s "<name>"`, through `run` (execFile; a fake in
+ * the tests). A missing key rejects with `notFound`, a denial with `denied`, anything else with neither.
+ */
+function keychainRunner(serviceName, run = execFile) {
   return new Promise((resolve, reject) => {
-    execFile('/usr/bin/security', ['find-generic-password', '-w', '-s', serviceName], { timeout: 60000 }, (error, stdout) => {
+    run('/usr/bin/security', ['find-generic-password', '-w', '-s', serviceName], { timeout: 60000 }, (error, stdout) => {
       if (error) {
-        const denied = error.code === 128 || error.code === 44 || error.code === 45 || /denied|user (?:name|interaction)|cancel/i.test(error.message || '');
-        const failure = new Error(denied ? 'Keychain access was denied' : 'The Keychain key could not be read');
+        const notFound = error.code === KEYCHAIN_NOT_FOUND;
+        const denied = !notFound && (KEYCHAIN_DENIED.has(error.code) || /denied|user (?:name|interaction)|cancel/i.test(error.message || ''));
+        const failure = new Error(notFound ? 'The Keychain has no such key' : denied ? 'Keychain access was denied' : 'The Keychain key could not be read');
+        failure.notFound = notFound;
         failure.denied = denied;
         reject(failure);
         return;
@@ -555,6 +687,9 @@ module.exports = {
   normalizeFirefox,
   withCopy,
   checkResult,
+  probe,
+  CHECK_TIMEOUT_MS,
+  FIREFOX_EXPIRY_MS_SCHEMA,
   recordImport,
   createCookieImport,
   keychainRunner,

@@ -286,11 +286,12 @@ export default function App() {
     }
   }
 
-  // Onboarding made the project (api.startProject): land in its Getting started workspace with the Welcome! note open.
-  async function onboarded(made) {
+  // Onboarding made the project (api.startProject): land in its Getting started workspace with the Welcome! note open, and
+  // the sites its sign-in import said to sign in to again on the Stage.
+  async function onboarded(made, { stageLinks = [] } = {}) {
     setError('');
     await loadHome();
-    await openProject(made.project.id, { workspaceId: made.workspaceId, tab: { id: made.noteId, title: made.noteName } });
+    await openProject(made.project.id, { workspaceId: made.workspaceId, tab: { id: made.noteId, title: made.noteName }, stage: stageLinks.length ? { links: stageLinks } : null });
   }
 
   async function goHome() {
