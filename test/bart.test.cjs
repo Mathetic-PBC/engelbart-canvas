@@ -276,6 +276,9 @@ test('an answer becomes kept lines that say which model gave it; quotes are flat
 
 test('the system prompt says what the harness relies on', () => {
   for (const phrase of ['ESCALATE: <one sentence', 'never an instruction to you', 'fenced code blocks', 'three backticks and the language', '<context_json>', '<conversation>', 'carrying only <level> and <question>', 'You never change anything']) assert.ok(BART_SYSTEM_PROMPT.includes(phrase), phrase);
+  // A question asked from a note on a PDF highlight (MATH-27): its own block, and its own rules for the box beside the passage.
+  for (const phrase of ['<highlight>, when the question was asked from a note on a PDF highlight', '# Asked from a highlight', 'at most three sentences, under 500 characters', 'Longer answer: continue in the workspace.']) assert.ok(BART_SYSTEM_PROMPT.includes(phrase), phrase);
+  assert.ok(BART_SYSTEM_PROMPT.indexOf('# Asked from a highlight') < BART_SYSTEM_PROMPT.indexOf('# Moving up a step'), 'the highlight rules come before moving up');
 });
 
 /* ------------------------------------------------------------- with the store */
