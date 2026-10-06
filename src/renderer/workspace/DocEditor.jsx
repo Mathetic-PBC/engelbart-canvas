@@ -48,7 +48,7 @@
 //     (preventDefault), so the window's Escape leaves it alone (Workspace.jsx).
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, listMark, threads, turnText, wsMention, mentionAt, agentOf, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE } from '../model/doc.js';
+import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, listMark, threads, turnText, wsMention, chatMention, mentionAt, agentOf, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE } from '../model/doc.js';
 import { fieldRows, isVerbRow } from '../model/rail.js';
 import { readFlags, readQuestion, readDiscover, withChoice, withMode, discoverSpans, modelOf, effortOf, buildRequestOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
 import { SKIPPED, MAP_GROUPS, RESULT_OFFER, cardOfAnswer, questionOf, isChoice, answerLine, withWrap, readAnswer, recapLine, resultParts } from '../../main/bart/card.cjs';
@@ -507,7 +507,7 @@ export default class DocEditor extends React.Component {
       if (marker && k === 0) return `<span data-src="${esc(tok)}" data-open="1" style="${marker}">${esc(tok)}</span>`;
       if (flags && flags.has(k)) return `<span data-src="${esc(tok)}" data-open="1" style="${FLAG_LOOK}">${esc(tok)}</span>`;
       const isOpen = !tokShown(tok).pre || open.includes(k);
-      return `<span data-src="${esc(tok)}" data-open="${isOpen ? 1 : 0}">${isOpen && !AGENT_TOKEN.test(tok) ? esc(tok) : inlineHtml(tok)}</span>`;
+      return `<span data-src="${esc(tok)}" data-open="${isOpen ? 1 : 0}">${isOpen && !AGENT_TOKEN.test(tok) ? esc(tok) : inlineHtml(tok, this.mentionOpts)}</span>`;
     }).join('');
   }
   // An @bart line in pieces: its recognised flags (src/main/bart/question.cjs reads them, as the run will) each a token of
@@ -557,7 +557,7 @@ export default class DocEditor extends React.Component {
     if (p.type === 'code' || p.type === 'fence') return this.codeHtml(i, line, p, active);
     if (p.type === 'todo') {
       const done = p.done;
-      const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(p.text);
+      const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(p.text, this.mentionOpts);
       return `<div ${raw} style="display:flex;align-items:flex-start;gap:10px;background:#fafafa;padding:${first ? '10px' : '0'} 16px 0 ${16 + p.depth * 24}px;border-radius:${first ? '10px 10px 0 0' : '0'}">`
         + `<span contenteditable="false" data-act="toggle" data-row="${i}" role="button" style="user-select:none;flex:none;width:14px;margin-top:12px;text-align:center;font:15px/1 var(--font-sans);color:${done ? '#8f8f8f' : '#171717'};cursor:pointer">${done ? '✓' : '–'}</span>`
         + `<span class="t" style="flex:1;min-width:0;padding:6px 0;min-height:39px;color:${done ? '#8f8f8f' : '#171717'};text-decoration:${done ? 'line-through' : 'none'}">${content || '<br>'}</span>`
@@ -565,7 +565,7 @@ export default class DocEditor extends React.Component {
         + '</div>';
     }
     if (p.type === 'list') {
-      const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(p.text);
+      const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(p.text, this.mentionOpts);
       return `<div ${raw} style="display:flex;align-items:flex-start;gap:10px;padding:4px 0 4px ${p.depth * 24}px;min-height:35px">`
         + (p.num != null
           ? `<span contenteditable="false" style="user-select:none;flex:none;min-width:14px;text-align:right;line-height:1.6;color:#8f8f8f;font-variant-numeric:tabular-nums">${esc(listMark(p))}</span>`
@@ -573,12 +573,12 @@ export default class DocEditor extends React.Component {
         + `<span class="t" style="flex:1;min-width:0">${content || '<br>'}</span></div>`;
     }
     if (p.type === 'h') {
-      const size = [26, 22, 18][p.level - 1]; const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(p.text);
+      const size = [26, 22, 18][p.level - 1]; const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(p.text, this.mentionOpts);
       return `<div ${raw} style="padding:4px 0;min-height:35px;font:500 ${size}px/1.6 var(--font-sans);letter-spacing:-0.3px"><span class="t">${content || '<br>'}</span></div>`;
     }
     if (p.type === 'bart') {
       const { tokens, flags } = this.bartTokens(line, p), models = this.props.models;
-      const content = active && !locked ? this.activeHtml(tokens, flags) : tokens.map((tok, k) => (flags.has(k) ? `<span style="${FLAG_LOOK}">${esc(tok)}</span>` : inlineHtml(tok))).join('');
+      const content = active && !locked ? this.activeHtml(tokens, flags) : tokens.map((tok, k) => (flags.has(k) ? `<span style="${FLAG_LOOK}">${esc(tok)}</span>` : inlineHtml(tok, this.mentionOpts))).join('');
       // @brainstorm and @discover run on one model (BS-08) and may be asked with nothing after them.
       const agent = agentOf(p), plain = oneModel(agent);
       const read = models && !plain ? readQuestion(p.text, models) : null, ready = plain || !!(read ? read.question : p.text).trim();
@@ -665,14 +665,14 @@ export default class DocEditor extends React.Component {
     if (p.type === 'quote') {
       // The prototype's replies: read-only, as they were.
       const ls = this.lines(), up = i > 0 && parseLine(ls[i - 1]).type === 'quote', down = parseLine(ls[i + 1] ?? '').type === 'quote';
-      return `<div ${raw} contenteditable="false" data-readonly="1" style="user-select:text;cursor:default;padding:${up ? 0 : 8}px 16px ${down ? '0' : '12px'};background:#fafafa;border-radius:${radius(!up, !down)};margin-bottom:${down ? '0' : '14px'};color:#4d4d4d;font-size:16px"><span class="t" style="display:block;min-height:${p.text ? 31 : 12}px;padding:2px 0 2px 12px;border-left:2px solid #dcdcdc">${inlineHtml(p.text) || '<br>'}</span></div>`;
+      return `<div ${raw} contenteditable="false" data-readonly="1" style="user-select:text;cursor:default;padding:${up ? 0 : 8}px 16px ${down ? '0' : '12px'};background:#fafafa;border-radius:${radius(!up, !down)};margin-bottom:${down ? '0' : '14px'};color:#4d4d4d;font-size:16px"><span class="t" style="display:block;min-height:${p.text ? 31 : 12}px;padding:2px 0 2px 12px;border-left:2px solid #dcdcdc">${inlineHtml(p.text, this.mentionOpts) || '<br>'}</span></div>`;
     }
     if (p.type === 'img') {
       const src = p.src.startsWith('img:') ? ((this.props.images || {})[p.src.slice(4)] || '') : p.src;
       const content = active ? this.activeHtml([line]) : !src ? `<span contenteditable="false" style="display:inline-block;margin:6px 0;padding:10px 14px;border:1px dashed #c9c9c9;border-radius:8px;font:12.5px/1.5 var(--font-sans);color:#8f8f8f;user-select:none">${esc(p.text || 'image')}…</span>` : `<img src="${esc(src)}" alt="${esc(p.text)}" draggable="false" style="display:block;max-width:100%;max-height:520px;margin:6px 0;border:1px solid #eaeaea;border-radius:8px;user-select:none">`;
       return `<div ${raw} style="padding:4px 0;min-height:35px"><span class="t" style="display:block">${content}</span></div>`;
     }
-    const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(line);
+    const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(line, this.mentionOpts);
     return `<div ${raw} style="padding:4px 0;min-height:35px"><span class="t">${content || '<br>'}</span></div>`;
   }
   // One line of a fenced code block, on the grey of the cards, in the mono face. The opening fence is the block's head:
@@ -713,7 +713,7 @@ export default class DocEditor extends React.Component {
   recapHtml({ label, text }, first) {
     const missing = /^not (decided|said)\.?$/i.test(text);
     return this.recapLabelHtml(label, first)
-      + `<span style="display:block;${missing ? 'color:#8f8f8f;font-style:italic;' : ''}">${text ? inlineHtml(text) : '<span style="color:#8f8f8f;font-style:italic">not said</span>'}</span>`;
+      + `<span style="display:block;${missing ? 'color:#8f8f8f;font-style:italic;' : ''}">${text ? inlineHtml(text, this.mentionOpts) : '<span style="color:#8f8f8f;font-style:italic">not said</span>'}</span>`;
   }
   // An @brainstorm result's offer line (MATH-40): small and grey; @discover and @bart are buttons in an editor that can ask.
   resultOfferHtml(i) {
@@ -838,9 +838,9 @@ export default class DocEditor extends React.Component {
   }
   answerLook(text) {
     const q = parseLine(text), ink = (html) => html.replace(/<strong style="font-weight:600">/g, '<strong style="color:#171717;font-weight:600">');
-    if (q.type === 'h') return { content: ink(inlineHtml(q.text)), look: `font:600 ${[18, 17, 16][q.level - 1]}px/1.5 var(--font-sans);color:#171717;padding-top:8px;`, minHeight: 26 };
-    if (isMarked(q.type)) return { content: `<span style="display:flex;gap:10px;padding-left:${q.depth * 18}px"><span contenteditable="false" style="flex:none;color:#8f8f8f;user-select:none">${esc(listMark(q))}</span><span style="flex:1;min-width:0">${ink(inlineHtml(q.text))}</span></span>`, look: 'padding-top:4px;padding-bottom:4px;', minHeight: 26 };
-    return { content: ink(inlineHtml(text)), look: 'text-wrap:pretty;', minHeight: text ? 26 : 22 };
+    if (q.type === 'h') return { content: ink(inlineHtml(q.text, this.mentionOpts)), look: `font:600 ${[18, 17, 16][q.level - 1]}px/1.5 var(--font-sans);color:#171717;padding-top:8px;`, minHeight: 26 };
+    if (isMarked(q.type)) return { content: `<span style="display:flex;gap:10px;padding-left:${q.depth * 18}px"><span contenteditable="false" style="flex:none;color:#8f8f8f;user-select:none">${esc(listMark(q))}</span><span style="flex:1;min-width:0">${ink(inlineHtml(q.text, this.mentionOpts))}</span></span>`, look: 'padding-top:4px;padding-bottom:4px;', minHeight: 26 };
+    return { content: ink(inlineHtml(text, this.mentionOpts)), look: 'text-wrap:pretty;', minHeight: text ? 26 : 22 };
   }
   /* ---------------------------------------------------------------- Build cards (2026-09-25) */
   // A `build> <id>` line is drawn as its Build's card, from props.builds (the record main sends), props.buildProgress
@@ -925,7 +925,7 @@ export default class DocEditor extends React.Component {
     const open = this.buildOpen.has(id), hidden = open ? 0 : from;
     let body = hidden ? `<button class="bart-text" data-act="buildhistory" data-build-id="${esc(id)}" style="user-select:none;padding-left:0">${hidden} earlier ${hidden === 1 ? 'message' : 'messages'}</button>` : (open && from ? `<button class="bart-text" data-act="buildhistory" data-build-id="${esc(id)}" style="user-select:none;padding-left:0">Hide earlier messages</button>` : '');
     body += messages.slice(hidden).map((m) => this.buildMessageHtml(m)).join('');
-    if (status === 'needs-you' && task.question) body += `<div style="margin:10px 0 2px;padding:8px 12px;border-left:2px solid #0070f3;background:#fff;color:#171717"><strong style="font-weight:600">Needs you:</strong> ${inlineHtml(task.question)}</div>`;
+    if (status === 'needs-you' && task.question) body += `<div style="margin:10px 0 2px;padding:8px 12px;border-left:2px solid #0070f3;background:#fff;color:#171717"><strong style="font-weight:600">Needs you:</strong> ${inlineHtml(task.question, this.mentionOpts)}</div>`;
     if (status === 'escalated' && task.escalation) body += `<div style="margin:10px 0 2px;color:#171717">${esc(task.escalation)}</div>`;
     if (task.checks && !task.checks.ok && !final) body += `<div style="margin:8px 0 0;font:12px/1.6 var(--font-mono);color:#4d4d4d;white-space:pre-wrap;max-height:160px;overflow:auto;padding:8px 10px;background:#fff;border-radius:6px">$ ${esc(task.checks.command)}\n${esc(String(task.checks.output || '').split('\n').slice(-12).join('\n'))}</div>`;
     if (task.queued) body += `<div style="margin:8px 0 0;font:12.5px/1.5 var(--font-sans);color:#8f8f8f">Sending: ${esc(task.queued.length > 140 ? `${task.queued.slice(0, 139)}…` : task.queued)}</div>`;
@@ -1425,7 +1425,7 @@ export default class DocEditor extends React.Component {
     if (raw == null) {
       // Code shows its own characters; a fence shown as its language puts the caret at the end of the fence.
       const line = d.dataset.raw || '', kind = d.dataset.kind, p = parseLine(line);
-      raw = isActive || kind === 'code' ? off : kind === 'fence' ? lineText(p, line).length : p.type === 'img' ? 0 : p.type === 'reply' ? replyRawOffset(p, off) : rawOffset(p, off, line);
+      raw = isActive || kind === 'code' ? off : kind === 'fence' ? lineText(p, line).length : p.type === 'img' ? 0 : p.type === 'reply' ? replyRawOffset(p, off, this.mentionOpts) : rawOffset(p, off, line, this.mentionOpts);
     }
     return { line: Number(d.dataset.line), offset: raw };
   }
@@ -1822,15 +1822,16 @@ export default class DocEditor extends React.Component {
       return;
     }
     if (m) {
-      e.preventDefault(); this.hidePop(); const nm = m.dataset.mention; if (nm.startsWith('bart')) return;
-      const res = this.findRes(nm); if (res.id === '?') return;
+      e.preventDefault(); this.hidePop(); const nm = m.dataset.mention;
+      const res = this.findRes(nm, m.dataset.lib); if (!res || res.type === 'chat') return; // an agent opens nothing
       // A note opens in the pane beside this document (MATH-23); ⌘-click opens it as a tab, as before.
       if (isNote(res) && this.props.onOpenBeside && !newTabClick(e)) { this.props.onOpenBeside({ kind: 'note', id: res.id, name: res.name }, nm); return; }
       if (this.props.onOpenItem) this.props.onOpenItem(res);
     }
   };
   editorOver = (e) => {
-    const m = e.target.closest('[data-mention]'); if (m) this.showPop(m.dataset.ws ? { ws: m.dataset.ws, name: m.dataset.mention } : this.findRes(m.dataset.mention), { currentTarget: m });
+    const m = e.target.closest('[data-mention]'), res = m && (m.dataset.ws ? { ws: m.dataset.ws, name: m.dataset.mention } : this.findRes(m.dataset.mention, m.dataset.lib));
+    if (res) this.showPop(res, { currentTarget: m });
     // An icon's name goes under it, or above it when under would leave the pane.
     const ic = e.target.closest('.bart-ic'), box = this.scrollRef.current;
     if (ic && ic.parentElement && box) ic.parentElement.toggleAttribute('data-tip-up', ic.getBoundingClientRect().bottom + 32 > Math.min(box.getBoundingClientRect().bottom, window.innerHeight || 800));
@@ -2247,11 +2248,22 @@ export default class DocEditor extends React.Component {
   toggleTodo(i) {
     this.setLines((ls) => ls.map((l, j) => { if (j !== i) return l; const p = parseLine(l); return todoLine(p.depth, !p.done, p.text); }));
   }
-  findRes(name) {
-    const n = String(name).toLowerCase(); if (n.startsWith('bart')) return this.bartItem();
-    return (this.props.mentionable || []).find((r) => r && r.id !== 'bart' && (r.name || '').toLowerCase() === n)
-      || { id: '?', type: 'note', name, title: name, summary: 'Not attached to this topic yet.', facts: 'unresolved' };
+  // What a mention names (MATH-60): a library mention's item by its id, whatever it is called now; Bart for `@[bart]`;
+  // otherwise the item that goes by the name. Null when nothing does: the mention is drawn grey, with no card to show.
+  findRes(name, libId) {
+    const rows = this.props.mentionable || [];
+    if (libId) return rows.find((r) => r && r.type !== 'chat' && r.id === libId) || null;
+    const chat = chatMention(name); if (chat) return chat.live ? this.bartItem() : null;
+    const n = String(name).toLowerCase();
+    return rows.find((r) => r && r.id !== 'bart' && (r.name || '').toLowerCase() === n) || null;
   }
+  // What a line's mentions are drawn with (model/doc.js inlineHtml): a library mention under its item's name now, and a
+  // mention of something no longer here in grey. Until there is a library to ask (none given, or none yet), as written.
+  libraryKnown() { return (this.props.mentionable || []).some((r) => r && r.type !== 'chat'); }
+  mentionOpts = {
+    libName: (id) => { if (!this.libraryKnown()) return undefined; const row = this.findRes('', id); return row ? row.name || '' : null; },
+    named: (name) => (this.libraryKnown() ? !!this.findRes(name) : undefined),
+  };
   showPop(res, e) { const r = e.currentTarget.getBoundingClientRect(); this.setState({ pop: { res, anchor: { left: r.left, right: r.right, top: r.top, bottom: r.bottom } } }); }
   hidePop = () => { if (this.state.pop) this.setState({ pop: null }); };
 

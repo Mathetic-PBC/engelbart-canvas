@@ -55,6 +55,15 @@ export const wsMention = (name, id) => `@[${String(name || '').replace(/[[\]\n]/
 export const LIB_MENTION_RE = /^@\[([^\]\n]+)\]\(lib:([\w-]+)\)$/;
 /** The token that mentions a library item. */
 export const libMention = (name, id) => `@[${String(name || '').replace(/[[\]\n]/g, '').trim() || 'Untitled'}](lib:${id})`;
+// A chat mentioned by name (MATH-60, 2026-10-06): `@[bart]` is Bart itself, always there. `@[bart:<id>]`, and the older
+// `@[chat]` and `@[chat:<id>]`, named one of the inline chats @bart replaced on 2026-09-19: none is left, so they show as
+// gone. Only these exact names are chats: a note named "Bart Follow-up Sessions…" is that note.
+const CHAT_MENTION_RE = /^(bart|chat)(?::[\w-]+)?$/i;
+/** A plain mention's name as a chat → { shown, live } (`shown` the word the line shows), or null when it names no chat. */
+export function chatMention(name) {
+  const m = String(name ?? '').match(CHAT_MENTION_RE);
+  return m ? { shown: m[1].toLowerCase(), live: /^bart$/i.test(name) } : null;
+}
 // What the @ menu is looking for: an `@` and up to 30 characters after it, no space, @ or bracket among them, ending at the
 // caret. A document line and a follow-up field (2026-10-02) read it the same way.
 const MENTION_QUERY_RE = /@([^\s@[\]]{0,30})$/;
@@ -212,16 +221,19 @@ export function retypedRow(p, txt) {
   return null;
 }
 
-/** What an inline token shows when rendered, and how many source characters precede the shown text. */
-export function tokShown(tok) {
+/**
+ * What an inline token shows when rendered, and how many source characters precede the shown text. `opts` as inlineHtml's:
+ * a library mention shows its item's name now, so the offsets of what follows it match what is drawn.
+ */
+export function tokShown(tok, opts) {
   const attachment = tok.match(ATTACH_RE); if (attachment) return { shown: `[${attachment[1] || 'Attachment'}]`, pre: 1 };
   // Bold may hold a link or a mention (an @discover guide's titles, 2026-09-30): what shows is what they show.
-  if (tok.startsWith('**') && tok.endsWith('**') && tok.length > 4) return { shown: tok.slice(2, -2).split(INLINE).filter(Boolean).map((inner) => tokShown(inner).shown).join(''), pre: 2 };
+  if (tok.startsWith('**') && tok.endsWith('**') && tok.length > 4) return { shown: tok.slice(2, -2).split(INLINE).filter(Boolean).map((inner) => tokShown(inner, opts).shown).join(''), pre: 2 };
   if (tok.startsWith('`') && tok.endsWith('`') && tok.length > 2) return { shown: tok.slice(1, -1), pre: 1 };
   if (tok.startsWith('*') && tok.endsWith('*') && tok.length > 2) return { shown: tok.slice(1, -1), pre: 1 };
   const ws = tok.match(WS_MENTION_RE); if (ws) return { shown: '@' + ws[1], pre: 1 }; // the icon after the @ is not text
-  const lib = tok.match(LIB_MENTION_RE); if (lib) return { shown: '@' + lib[1], pre: 1 };
-  if (tok.startsWith('@[')) { const nm = tok.slice(2, -1); return { shown: '@' + (nm.startsWith('bart') ? 'bart' : nm), pre: 1 }; }
+  const lib = tok.match(LIB_MENTION_RE); if (lib) return { shown: '@' + libShown(lib[1], lib[2], opts && opts.libName), pre: 1 };
+  if (tok.startsWith('@[')) { const nm = tok.slice(2, -1), chat = chatMention(nm); return { shown: '@' + (chat ? chat.shown : nm), pre: 1 }; }
   const m = tok.match(LINK_RE); if (m) return { shown: m[1], pre: 1 };
   return { shown: tok, pre: 0 };
 }
@@ -238,9 +250,10 @@ export function tokensOf(p, line) {
 /**
  * Map a display offset of a *rendered* (non-active) line to its raw source offset.
  * `line` is optional: when given, chat/paragraph/image lines map against the whole line and quote prefixes
- * use their real length; without it the design's fixed bases apply (heading level+1, quote 2, else 0).
+ * use their real length; without it the design's fixed bases apply (heading level+1, quote 2, else 0). `opts` as the
+ * line was drawn with (inlineHtml).
  */
-export function rawOffset(p, fOff, line) {
+export function rawOffset(p, fOff, line, opts) {
   let text = p.text;
   let base = p.type === 'h' ? p.level + 1 : p.type === 'quote' ? 2 : 0;
   if (typeof line === 'string') {
@@ -250,7 +263,7 @@ export function rawOffset(p, fOff, line) {
   let accF = 0, accR = 0;
   for (const tok of text.split(INLINE)) {
     if (!tok) continue;
-    const { shown, pre } = tokShown(tok);
+    const { shown, pre } = tokShown(tok, opts);
     if (fOff <= accF + shown.length) { const d = fOff - accF; return base + accR + (pre ? (d === 0 ? 0 : Math.min(tok.length, pre + d)) : d); }
     accF += shown.length; accR += tok.length;
   }
@@ -262,11 +275,11 @@ export function rawOffset(p, fOff, line) {
  * heading shows without its `## `, a bullet shows a `•` (one character of the display) where its `- ` stands, a
  * numbered row its number (`1.`).
  */
-export function replyRawOffset(p, fOff) {
+export function replyRawOffset(p, fOff, opts) {
   const q = parseLine(p.text);
-  if (q.type !== 'h' && !isMarked(q.type)) return rawOffset({ type: 'p', text: p.text }, fOff, p.text);
+  if (q.type !== 'h' && !isMarked(q.type)) return rawOffset({ type: 'p', text: p.text }, fOff, p.text, opts);
   const lead = p.text.length - q.text.length;
-  return lead + rawOffset({ type: 'p', text: q.text }, Math.max(0, fOff - (q.type === 'h' ? 0 : q.type === 'list' ? listMark(q).length : 1)), q.text);
+  return lead + rawOffset({ type: 'p', text: q.text }, Math.max(0, fOff - (q.type === 'h' ? 0 : q.type === 'list' ? listMark(q).length : 1)), q.text, opts);
 }
 
 /**
@@ -317,19 +330,34 @@ export function turnText(lines, turn) {
   return { question: parseLine(lines[turn.q]).text.trim(), answer: body.join('\n').trim() };
 }
 
+// A mention that names nothing any more (MATH-60): the name as written, in grey, with nothing to click and no card; `why`
+// is what the pointer resting on it says.
+const goneHtml = (shown, why) => `<span title="${esc(why)}" style="color:#8f8f8f">@${esc(shown)}</span>`;
+const MENTION_LOOK = 'color:#0070f3;font-weight:500;cursor:pointer;border-bottom:1px dotted #c9c9c9';
+// The name a library mention shows: its item's name now when `libName(id)` gives one, else the name it was written with.
+const libShown = (name, id, libName) => { const now = typeof libName === 'function' ? libName(id) : undefined; return typeof now === 'string' && now ? now : name; };
 // A library mention's chip: blue and clickable as a mention is, `data-lib` holding the id. `libName(id)` (optional) is the
 // item's name now, shown in place of the one saved; null when the library no longer holds it, which leaves the saved name
 // in grey with nothing to click.
 function libHtml(name, id, libName) {
-  const now = typeof libName === 'function' ? libName(id) : undefined;
-  if (now === null) return `<span title="No longer in the library" style="color:#8f8f8f">@${esc(name)}</span>`;
-  const shown = typeof now === 'string' && now ? now : name;
-  return `<span data-mention="${esc(shown)}" data-lib="${esc(id)}" style="color:#0070f3;font-weight:500;cursor:pointer;border-bottom:1px dotted #c9c9c9">@${esc(shown)}</span>`;
+  if (typeof libName === 'function' && libName(id) === null) return goneHtml(name, 'No longer in the library');
+  const shown = libShown(name, id, libName);
+  return `<span data-mention="${esc(shown)}" data-lib="${esc(id)}" style="${MENTION_LOOK}">@${esc(shown)}</span>`;
+}
+// A mention by name, `@[Name]`. A chat's (chatMention) shows its word: Bart's is blue, a chat that is gone grey. Anything
+// else is a note or a library item: `named(name)` (optional) is false when nothing goes by that name, which leaves it grey.
+function nameHtml(name, named) {
+  const chat = chatMention(name);
+  if (chat && !chat.live) return goneHtml(chat.shown, 'This chat is gone');
+  if (!chat && typeof named === 'function' && named(name) === false) return goneHtml(name, 'Not in the library');
+  return `<span data-mention="${esc(name)}" style="${MENTION_LOOK}">@${esc(chat ? chat.shown : name)}</span>`;
 }
 
 /**
  * Rendered HTML for inline markup (bold, code, italic, @bart, @brainstorm and @discover, an older line's @orient,
  * @[mention], [link](url), bare urls). `opts.libName(id)`: a library mention's name now, or null when it is gone (libHtml).
+ * `opts.named(name)`: false when a mention by name names nothing (nameHtml). Either may be left out, or answer undefined
+ * when it cannot tell: the mention is then drawn as written.
  */
 export function inlineHtml(text, opts) {
   return text.split(INLINE).map((p) => {
@@ -346,7 +374,7 @@ export function inlineHtml(text, opts) {
     if (ws) return `<span data-mention="${esc(ws[1])}" data-ws="${esc(ws[2])}" style="color:#0070f3;font-weight:500;cursor:pointer;border-bottom:1px dotted #c9c9c9;white-space:nowrap">@${WS_ICON}${esc(ws[1])}</span>`;
     const lib = p.match(LIB_MENTION_RE);
     if (lib) return libHtml(lib[1], lib[2], opts && opts.libName);
-    if (p.startsWith('@[')) { const name = p.slice(2, -1), shown = name.startsWith('bart') ? 'bart' : name; return `<span data-mention="${esc(name)}" style="color:#0070f3;font-weight:500;cursor:pointer;border-bottom:1px dotted #c9c9c9">@${esc(shown)}</span>`; }
+    if (p.startsWith('@[')) return nameHtml(p.slice(2, -1), opts && opts.named);
     const m = p.match(LINK_RE);
     if (m) return `<a href="${esc(m[2])}" data-link="1" style="color:#0070f3;text-decoration:underline;text-underline-offset:3px">${esc(m[1])}</a>`;
     if (URL_RE.test(p)) return `<a href="${esc(p)}" data-link="1" style="color:#0070f3;text-decoration:underline;text-underline-offset:3px">${esc(p)}</a>`;
