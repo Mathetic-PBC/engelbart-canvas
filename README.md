@@ -71,7 +71,7 @@ The Browser's address ends in the page's place in the library: **+ Save** (a car
 - Or hover the chip beside the send arrow: it names the model and effort the question starts on, and a pick there writes those same flags into the line. Flags the list recognises are slightly bolder.
 - Which providers are offered at all: `providers` in `~/.engelbart/config.json` (`["openai", "anthropic"]`).
 - The list, the ladders and the default provider: `~/.engelbart/model-effort-inline-question.json`, read again for every question.
-- **Settings** (the gear, top right) › **Intelligence levels…** sets what Quick, Standard and Deep run on for each provider (a model and an effort each): the levels a plain `@discover` line (Standard) and its `--quick` / `--deep` take, saved to that same file as you pick, used by the next run with no restart. The other agents' defaults stay in the file (`provider`, the ladders, `brainstorm`, `build`); the panel for them is put away for now.
+- **Settings** (the gear, top right) › **Intelligence levels…** opens the settings window at **Intelligence**: a group per provider, each with Quick, Standard and Deep (a model and an effort each): the levels a plain `@discover` line (Standard) and its `--quick` / `--deep` take, saved to that same file as you pick, used by the next run with no restart. The other agents' defaults stay in the file (`provider`, the ladders, `brainstorm`, `build`); the panel for them is put away for now.
 - The instructions it runs under: `src/main/bart/system-prompt.cjs`, or your own in `<data root>/.context/bart-system-prompt.md`.
 
 ## Build

@@ -3,7 +3,7 @@
 // npm run build && npx electron scripts/smoke-settings.cjs
 // Runs the real app, hidden, against disposable data and the fake @bart, and drives Settings (src/renderer/ui/Settings.jsx,
 // 2026-10-06, MATH-53) with real (synthetic) input: the gear, its menu, Intelligence levels (a level's model and effort
-// saved to the models file as they change, on the provider the switch shows), Escape closing the dialog and not the
+// saved to the models file as they change, each provider its own group), Escape closing the dialog and not the
 // workspace, and in test mode the menu's Reset everything… (confirmed by ENGELBART_CONFIRM_ALL).
 // ENGELBART_SETTINGS_SHOTS=<dir> saves pictures.
 const { app, BrowserWindow } = require('electron');
@@ -98,7 +98,6 @@ app.whenReady().then(async () => {
     await choose(wc, '[data-level="anthropic:deep"] [data-level-field="effort"]', 'xhigh');
     await until(() => file(MODELS_FILE).discover.providers.anthropic.deep.effort === 'xhigh', 'Deep at Extra high saved');
     assert.equal(file(MODELS_FILE).discover.providers.anthropic.quick.model, 'opus', 'the first pick kept');
-    await press(wc, '[data-levels-provider] [data-provider="openai"]');
     await until(() => has(wc, '[data-level="openai:standard"]'), 'Codex\'s levels');
     await choose(wc, '[data-level="openai:standard"] [data-level-field="model"]', 'sol');
     await until(() => file(MODELS_FILE).discover.providers.openai.standard.model === 'sol', 'Codex Standard on Sol saved');
