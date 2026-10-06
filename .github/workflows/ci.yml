@@ -37,21 +37,42 @@ jobs:
       # A runner's first python3 takes seconds to start, longer than a test's dev server is given to answer
       # (test/run-step.test.cjs serves a page with `python3 -m http.server`).
       # The tests run it in the login shell, whose PATH can name another python3 (on the Mac, Xcode's): that one too.
-      # Then the test's own command, timed: http.server looks its address's name up (socket.getfqdn) before it listens,
-      # which importing it never does.
       - name: Warm up python3
         shell: bash
         run: |
           python3 -c "import http.server" && python3 --version
           if [ "$RUNNER_OS" = macOS ]; then zsh -ilc 'command -v python3; python3 -c "import http.server"; python3 --version'; fi
-          python3 -c "import socket, time; t = time.time(); name = socket.getfqdn('127.0.0.1'); print('getfqdn(127.0.0.1):', name, round(time.time() - t, 2), 's')"
-          if [ "$RUNNER_OS" = macOS ]; then
-            start=$SECONDS
-            (cd "$RUNNER_TEMP" && HOME="$RUNNER_TEMP" zsh -ilc 'python3 -m http.server 8765 --bind 127.0.0.1' > /dev/null 2>&1 &)
-            until curl -s -o /dev/null http://127.0.0.1:8765/ || [ $((SECONDS - start)) -gt 90 ]; do sleep 0.2; done
-            echo "python3 -m http.server answered after $((SECONDS - start)) s"
-            pkill -f 'http.server 8765' || true
+      # http.server looks its address's name up (socket.getfqdn) before it listens. On the macOS runner that lookup
+      # (127.0.0.1's name) took 35 s (run 5), so http.server answered after 35 s and the
+      # page test, which gives it 8, failed. The runner's resolver is fixed until the lookup is quick: 127.0.0.1's names
+      # in /etc/hosts, then public DNS servers. Each is tried only while the lookup is still slow; the log says which.
+      - name: Quick reverse lookups (macOS runner)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          slow() { python3 -c "import socket, sys, time; t = time.time(); socket.getfqdn('127.0.0.1'); s = time.time() - t; print('getfqdn(127.0.0.1): %.2f s' % s); sys.exit(0 if s > 2 else 1)"; }
+          flush() { sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder || true; sleep 1; }
+          hostname; scutil --dns | grep -m4 nameserver || true
+          if slow; then
+            echo "Adding 127.0.0.1's names to /etc/hosts"
+            printf '127.0.0.1 localhost %s\n::1 localhost\n' "$(hostname)" | sudo tee -a /etc/hosts
+            flush
           fi
+          if slow; then
+            echo "Public DNS servers for every network service"
+            networksetup -listallnetworkservices | tail -n +2 | sed 's/^\*//' | while read -r service; do sudo networksetup -setdnsservers "$service" 1.1.1.1 8.8.8.8 || true; done
+            flush
+          fi
+          slow && echo "Still slow: the page test will fail" || true
+      - name: Time the page test's server (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          start=$SECONDS
+          (cd "$RUNNER_TEMP" && HOME="$RUNNER_TEMP" zsh -ilc 'python3 -m http.server 8765 --bind 127.0.0.1' > /dev/null 2>&1 &)
+          until curl -s -o /dev/null http://127.0.0.1:8765/ || [ $((SECONDS - start)) -gt 90 ]; do sleep 0.2; done
+          echo "python3 -m http.server answered after $((SECONDS - start)) s"
+          pkill -f 'http.server 8765' || true
       # Git for Windows turns LF into CRLF on checkout (core.autocrlf in its system config). The app's git drops GIT_*
       # variables (src/main/build/git.cjs), so GIT_CONFIG_NOSYSTEM from scripts/test.mjs doesn't reach it; the tests'
       # repositories compare files byte for byte, as a Mac's git leaves them.

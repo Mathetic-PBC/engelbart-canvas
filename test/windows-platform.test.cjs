@@ -199,6 +199,10 @@ if (process.platform === 'win32') {
       return stdout.split(/\r?\n/).filter(Boolean).map((line) => { const [pid, parent, ...rest] = line.split(' '); return { pid: Number(pid), parent: Number(parent), text: rest.join(' ').slice(0, 160) }; });
     } catch (error) { return [{ pid: 0, parent: 0, text: error.message }]; }
   };
+  /** Git Bash's own process table (its ps: pid, parent, group, Windows pid), as the stop reads it. */
+  const bashTable = async () => {
+    try { return (await run(path.win32.join(path.win32.dirname(resolveShell(process.env)), '..', 'usr', 'bin', 'ps.exe'), ['-e'], { windowsHide: true })).stdout; } catch (error) { return `ps failed: ${error.message}`; }
+  };
   const below = (all, root) => { const out = all.filter((item) => item.pid === root); for (let i = 0; i < out.length; i += 1) out.push(...all.filter((item) => item.parent === out[i].pid && !out.includes(item))); return out; };
 
   test('Windows: a dev server started through Git Bash (as a Build\'s run step starts one) answers, and stop() takes its whole tree down', async () => {
@@ -212,12 +216,13 @@ if (process.platform === 'win32') {
       const web = await processes.check('web', 'ui', { port });
       assert.equal(web.ok, true, `${command}: ${JSON.stringify(web)}`);
       const before = below(await tree(), processes.status('web').pid);
+      const table = await bashTable();
       assert.equal(await processes.stop('web'), true);
       await new Promise((resolve) => { setTimeout(resolve, 500); });
       const after = await tree();
       const left = before.filter((item) => after.some((now) => now.pid === item.pid));
       const named = (list) => list.map((item) => `${item.pid} (parent ${item.parent}) ${item.text}`).join('\n');
-      assert.equal(await answers(`http://localhost:${port}/`), false, `${command}: still answering after stop.\nIts tree before:\n${named(before)}\nStill there:\n${named(left)}\nNode processes now:\n${named(after.filter((item) => /node|bash|cmd/i.test(item.text)))}`);
+      assert.equal(await answers(`http://localhost:${port}/`), false, `${command}: still answering after stop.\nIts tree before:\n${named(before)}\nStill there:\n${named(left)}\nNode processes now:\n${named(after.filter((item) => /node|bash|cmd/i.test(item.text)))}\nGit Bash's ps before:\n${table}`);
     }
   });
 

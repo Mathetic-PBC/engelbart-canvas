@@ -5,6 +5,13 @@ Newest status first; the sections below are kept current.
 
 ## Where things stand
 
+- 2026-10-05, run 5 (51ee430): macOS 1 failure, Windows 3 failures + 3 file timeouts (CRLF, fixtures, guideTitle now
+  pass). Mac cause found: on the macOS runner `socket.getfqdn('127.0.0.1')` took 35.03 s, and http.server answered
+  after 35 s, against the test's 8. A runner resolver problem, not the app's: a new CI step adds 127.0.0.1's names to
+  /etc/hosts and, if still slow, sets public DNS servers, timing the lookup after each. Windows: npm's server still
+  outlives the stop; Git Bash's ps walk found none of npm's processes, for a reason not yet seen; the stop test now
+  prints Git Bash's ps table as the stop reads it.
+
 - 2026-10-05, step 7 continued: run 4 (dd1ac32): macOS 1 failure (the same page test, 4th time: its message now shows
   python3's server printed nothing in 8 s), Windows 4 failures + 3 file timeouts. Windows: the process listing showed
   why npm's server survives: Git Bash's exec starts a new Windows process and the one that started it exits, so npm's
@@ -123,6 +130,7 @@ modes). Expectations written with the platform's separator (`path.join`, `path.s
 | 324fcbe | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37414993723 | ✗ 1 test | ✗ 64 tests | ✗ | steps 2–6, 8; run-step's page test still slow on the Mac (login shell's python3) |
 | ac2fc2f | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37416228818 | ✗ 1 test | ✗ 22 tests + 2 file timeouts | ✗ | step 7; the warm-up showed both python3s are /usr/local/bin's, so the Mac failure is something else; Windows: CRLF, npm's server outliving taskkill /T, fixtures |
 | dd1ac32 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37418091552 | ✗ 1 test | ✗ 4 tests + 3 file timeouts | ✗ | CRLF and fixtures fixed; npm's server still outlives stop (its bash's Windows parent is gone); guideTitle and C:\ |
+| 51ee430 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37419892150 | ✗ 1 test | ✗ 3 tests + 3 file timeouts | ✗ | Mac: getfqdn(127.0.0.1) 35 s on the runner; Windows: npm's server still outlives stop |
 
 ## Needs a decision
 
