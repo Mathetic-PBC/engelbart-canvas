@@ -40,7 +40,7 @@ function createRunner({ environment = process.env, runDirectory = path.join(os.t
     return { ...base, ...(tools && tools.environment ? tools.environment() : {}), ...extra }; // Engelbart's own Git, when it stands in (../tools/bundled-git.cjs)
   };
   const execute = (command, cwd, env, { signal, timeoutMs, onEvent }) => new Promise((resolve) => {
-    const child = run(shell, loginShellArgs(shell, command, env), { cwd, env, timeout: timeoutMs, maxBuffer: 256 * 1024 * 1024, signal }, (error, out) => resolve({ stdout: out, failure: error }));
+    const child = run(shell, loginShellArgs(shell, command, env), { cwd, env, timeout: timeoutMs, maxBuffer: 256 * 1024 * 1024, signal, windowsHide: true }, (error, out) => resolve({ stdout: out, failure: error }));
     if (onEvent && child && child.stdout) child.stdout.on('data', eventReader(onEvent));
   });
   const notFound = (failure) => failure && (failure.code === 127 || failure.code === 'ENOENT');

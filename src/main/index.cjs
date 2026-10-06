@@ -25,7 +25,7 @@ const { createCliSummarizer, createFakeSummarizer } = require('./context/summari
 const { createBart, createFakeBart, createThreads, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS } = require('./bart/ask.cjs');
 const { loadModels, preferUsable, startingAt } = require('./bart/models.cjs');
 const { readChoices, rememberChoice } = require('./bart/choices.cjs');
-const { resolveShell } = require('./terminal/launch.cjs');
+const { resolveShell, findGitBash, GIT_BASH_MISSING, GIT_FOR_WINDOWS_URL } = require('./terminal/launch.cjs');
 const home = require('./store/home.cjs');
 const { createRunner } = require('./tools/run.cjs');
 const { detectTools } = require('./tools/detect.cjs');
@@ -876,6 +876,13 @@ if (!hasSingleInstanceLock) {
     try { saved = projects.readWindows({ dataRoot: store.config().dataRoot }); } catch { saved = []; }
     if (saved.length) for (const entry of saved) openWindow({ place: entry, bounds: entry.bounds });
     else openWindow();
+    // Windows without Git for Windows, whose bash runs agents, Builds and sign-ins (terminal/launch.cjs): said once,
+    // with where to get it; everything else works.
+    if (process.platform === 'win32' && process.env.ENGELBART_HEADLESS !== '1' && !findGitBash(process.env)) {
+      const ctx = focusedWindow();
+      const options = { type: 'warning', message: 'Git for Windows is not installed', detail: GIT_BASH_MISSING, buttons: ['Get Git for Windows', 'Later'], defaultId: 0, cancelId: 1 };
+      void (ctx ? dialog.showMessageBox(ctx.win, options) : dialog.showMessageBox(options)).then(({ response }) => { if (response === 0) void electronShell.openExternal(GIT_FOR_WINDOWS_URL); });
+    }
   }).catch((error) => {
     dialog.showErrorBox('Engelbart failed to start', error.message);
     app.exit(1);

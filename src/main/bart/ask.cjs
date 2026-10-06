@@ -369,7 +369,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
   };
   // execFile still collects stdout for the result; the same stream is also read line by line as it arrives.
   const execute = (command, cwd, env, signal, onEvent, timeout = STEP_TIMEOUT_MS) => new Promise((resolve) => {
-    const child = run(shell, loginShellArgs(shell, command, env), { cwd, env, timeout, maxBuffer: 64 * 1024 * 1024, signal }, (error, out) => resolve({ stdout: out, failure: error }));
+    const child = run(shell, loginShellArgs(shell, command, env), { cwd, env, timeout, maxBuffer: 64 * 1024 * 1024, signal, windowsHide: true }, (error, out) => resolve({ stdout: out, failure: error }));
     if (onEvent && child && child.stdout) child.stdout.on('data', eventReader(onEvent));
   });
   // The paper tools' MCP server, as either CLI is told to start it.

@@ -81,7 +81,12 @@ function prepareCodexHome({ codexHome, source, instructions }) {
   const link = path.join(codexHome, 'auth.json');
   let linked = null;
   try { linked = fs.readlinkSync(link); } catch { linked = null; }
-  if (linked !== source) { try { fs.unlinkSync(link); } catch { /* none yet */ } fs.symlinkSync(source, link); }
+  // On Windows a symbolic link needs Developer Mode or an administrator: a hard link (the same file), else a copy.
+  if (process.platform === 'win32') {
+    let same = false;
+    try { const [from, to] = [fs.statSync(source, { bigint: true }), fs.statSync(link, { bigint: true })]; same = from.ino === to.ino && from.dev === to.dev; } catch { /* none yet */ }
+    if (!same) { try { fs.unlinkSync(link); } catch { /* none yet */ } try { fs.linkSync(source, link); } catch { fs.copyFileSync(source, link); } }
+  } else if (linked !== source) { try { fs.unlinkSync(link); } catch { /* none yet */ } fs.symlinkSync(source, link); }
   const file = path.join(codexHome, 'AGENTS.md');
   let current = null;
   try { current = fs.readFileSync(file, 'utf8'); } catch { current = null; }
@@ -126,7 +131,7 @@ function createCliSummarizer({ readSettings, environment = process.env, runDirec
     return { ...base, ...(tools && tools.environment ? tools.environment() : {}), ...extra }; // Engelbart's own Git, when it stands in (../tools/bundled-git.cjs)
   };
   const execute = (command, env, signal) => new Promise((resolve) => {
-    run(shell, loginShellArgs(shell, command, env), { cwd: runDirectory, env, timeout: TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024, signal }, (error, out) => resolve({ stdout: out, failure: error }));
+    run(shell, loginShellArgs(shell, command, env), { cwd: runDirectory, env, timeout: TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024, signal, windowsHide: true }, (error, out) => resolve({ stdout: out, failure: error }));
   });
   const notFound = (failure) => failure && (failure.code === 127 || failure.code === 'ENOENT');
 

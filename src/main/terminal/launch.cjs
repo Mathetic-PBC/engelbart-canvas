@@ -51,17 +51,22 @@ const FISH_GIT_PATH = 'set -gx PATH $ENGELBART_GIT_BIN $PATH; ';
 const POSIX_AGENT_PATH = 'PATH="$PATH:$ENGELBART_AGENT_PATH"; ';
 const FISH_AGENT_PATH = 'set -gx PATH $PATH (string split : -- $ENGELBART_AGENT_PATH); ';
 
+// Windows (2026-10-05, docs/windows-port.md): the same scripts run in Git for Windows' bash, whose PATH is written the
+// POSIX way (/c/Users/…, joined by ":"), so the folders, joined the Windows way (path.delimiter), are converted first.
+const WINDOWS_GIT_PATH = 'PATH="$(cygpath -p "$ENGELBART_GIT_BIN"):$PATH"; ';
+const WINDOWS_AGENT_PATH = 'PATH="$PATH:$(cygpath -p "$ENGELBART_AGENT_PATH")"; ';
+
 const isFish = (shell) => path.basename(shell) === 'fish';
-const gitPathFor = (shell, environment) => (environment && environment.ENGELBART_GIT_BIN ? (isFish(shell) ? FISH_GIT_PATH : POSIX_GIT_PATH) : '');
-const agentPathFor = (shell, environment) => (environment && environment.ENGELBART_AGENT_PATH ? (isFish(shell) ? FISH_AGENT_PATH : POSIX_AGENT_PATH) : '');
+const gitPathFor = (shell, environment, platform) => (environment && environment.ENGELBART_GIT_BIN ? (platform === 'win32' ? WINDOWS_GIT_PATH : isFish(shell) ? FISH_GIT_PATH : POSIX_GIT_PATH) : '');
+const agentPathFor = (shell, environment, platform) => (environment && environment.ENGELBART_AGENT_PATH ? (platform === 'win32' ? WINDOWS_AGENT_PATH : isFish(shell) ? FISH_AGENT_PATH : POSIX_AGENT_PATH) : '');
 
 /**
  * How `command` runs in the person's login shell, the PATH the terminal has (an app opened from Finder has none
  * worth using). `environment`: what the shell will be started with; ENGELBART_GIT_BIN in it goes first on PATH,
- * ENGELBART_AGENT_PATH's folders last.
+ * ENGELBART_AGENT_PATH's folders last. On Windows the shell is Git for Windows' bash (resolveShell).
  */
-function loginShellArgs(shell, command, environment = {}) {
-  const full = `${gitPathFor(shell, environment)}${agentPathFor(shell, environment)}${command}`;
+function loginShellArgs(shell, command, environment = {}, platform = process.platform) {
+  const full = `${gitPathFor(shell, environment, platform)}${agentPathFor(shell, environment, platform)}${command}`;
   return isFish(shell) ? ['--login', '--interactive', '--command', full] : ['-ilc', full];
 }
 
@@ -106,7 +111,48 @@ function isExecutableFile(file) {
   }
 }
 
-function resolveShell(environment = process.env) {
+// Git for Windows (2026-10-05, docs/windows-port.md): its bash.exe runs every POSIX script Engelbart writes (agent runs,
+// Builds, sign-in, the summarizer), so they stay as they are. It is looked for beside the `git` on PATH (…\Git\cmd\git.exe
+// → …\Git\bin\bash.exe), then where its installer puts it for everyone and for one person. Without it, Engelbart says so
+// once as it starts (src/main/index.cjs), with where to get it.
+const GIT_FOR_WINDOWS_URL = 'https://git-scm.com/download/win';
+const GIT_BASH_MISSING = `Engelbart runs its agents, Builds and sign-ins with Git for Windows, which is not installed. Install it from ${GIT_FOR_WINDOWS_URL}, then open Engelbart again.`;
+
+/** A variable of a Windows environment, whose names have any case (Path, PATH); a copy of process.env keeps theirs. */
+function windowsVariable(environment, name) {
+  const key = Object.keys(environment || {}).find((each) => each.toUpperCase() === name.toUpperCase());
+  return key && typeof environment[key] === 'string' ? environment[key] : '';
+}
+
+const isFile = (file) => { try { return fs.statSync(file).isFile(); } catch { return false; } };
+
+/** Where Git for Windows' bash.exe may be, in the order they are tried. */
+function gitBashPlaces(environment = process.env, { exists = isFile } = {}) {
+  const git = windowsVariable(environment, 'PATH').split(';').map((dir) => dir.trim().replace(/^"(.*)"$/, '$1')).filter(Boolean)
+    .map((dir) => path.win32.join(dir, 'git.exe')).find(exists);
+  const programFiles = windowsVariable(environment, 'ProgramFiles');
+  const localAppData = windowsVariable(environment, 'LOCALAPPDATA');
+  return [
+    git && path.win32.join(git, '..', '..', 'bin', 'bash.exe'),
+    programFiles && path.win32.join(programFiles, 'Git', 'bin', 'bash.exe'),
+    localAppData && path.win32.join(localAppData, 'Programs', 'Git', 'bin', 'bash.exe'),
+  ].filter(Boolean);
+}
+
+/** Git for Windows' bash.exe, or null when it is not installed. */
+function findGitBash(environment = process.env, { exists = isFile } = {}) {
+  return gitBashPlaces(environment, { exists }).find(exists) || null;
+}
+
+/**
+ * The shell Engelbart's own scripts run in: the person's ($SHELL), else zsh, else bash. On Windows, Git for Windows'
+ * bash; when it is missing, where its installer would put it, so a command fails as "not found" (and starts working
+ * once it is installed) instead of Engelbart failing to start.
+ */
+function resolveShell(environment = process.env, platform = process.platform) {
+  if (platform === 'win32') {
+    return findGitBash(environment) || path.win32.join(windowsVariable(environment, 'ProgramFiles') || 'C:\\Program Files', 'Git', 'bin', 'bash.exe');
+  }
   const candidate = typeof environment.SHELL === 'string' ? environment.SHELL : '';
   const supported = new Set(['zsh', 'bash', 'fish']);
   if (path.isAbsolute(candidate) && supported.has(path.basename(candidate)) && isExecutableFile(candidate)) {
@@ -148,6 +194,26 @@ function validateCreateRequest(request) {
   return { provider, cwd: path.resolve(cwd), cols, rows };
 }
 
+// A terminal on Windows opens PowerShell: pwsh.exe (PowerShell 7) when it is on PATH, else Windows PowerShell, which
+// every Windows has. Claude Code and Codex run in it, and it stays open when they exit.
+const POWERSHELL_PROVIDER_SCRIPTS = Object.freeze({
+  claude: 'if ($env:ENGELBART_CLAUDE_BIN) { & $env:ENGELBART_CLAUDE_BIN } else { claude }; Write-Host "`r`n[Claude Code exited with status $LASTEXITCODE]"',
+  codex: 'if ($env:ENGELBART_CODEX_BIN) { & $env:ENGELBART_CODEX_BIN } else { codex }; Write-Host "`r`n[Codex exited with status $LASTEXITCODE]"',
+});
+
+/** The terminal's shell on Windows: pwsh.exe on PATH, else Windows PowerShell. */
+function resolvePowerShell(environment = process.env, { exists = isFile } = {}) {
+  const dirs = windowsVariable(environment, 'PATH').split(';').map((dir) => dir.trim().replace(/^"(.*)"$/, '$1')).filter(Boolean);
+  const pwsh = dirs.map((dir) => path.win32.join(dir, 'pwsh.exe')).find(exists);
+  if (pwsh) return pwsh;
+  const system = windowsVariable(environment, 'SystemRoot') || 'C:\\Windows';
+  return path.win32.join(system, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+}
+
+function powerShellArguments(provider) {
+  return provider === 'shell' ? ['-NoLogo'] : ['-NoLogo', '-NoExit', '-Command', POWERSHELL_PROVIDER_SCRIPTS[provider]];
+}
+
 function shellArguments(shell, provider, environment = {}) {
   if (provider === 'shell') {
     return isFish(shell) ? ['--login', '--interactive'] : ['-il']; // zsh's own startup files put Engelbart's Git first and the agents last (../shell-rc.cjs)
@@ -155,8 +221,19 @@ function shellArguments(shell, provider, environment = {}) {
   return loginShellArgs(shell, (isFish(shell) ? FISH_PROVIDER_SCRIPTS : ZSH_PROVIDER_SCRIPTS)[provider], environment);
 }
 
-function createLaunchSpec(request, sourceEnvironment = process.env) {
+function createLaunchSpec(request, sourceEnvironment = process.env, platform = process.platform) {
   const validated = validateCreateRequest(request);
+  if (platform === 'win32') {
+    const environment = sanitizeEnvironment(sourceEnvironment);
+    const shell = resolvePowerShell(environment);
+    // Claude Code's and Codex's folders last on PATH (ENGELBART_AGENT_PATH): PowerShell's PATH is the one it is given.
+    if (environment.ENGELBART_AGENT_PATH) {
+      const key = Object.keys(environment).find((each) => each.toUpperCase() === 'PATH') || 'Path';
+      environment[key] = [environment[key], environment.ENGELBART_AGENT_PATH].filter(Boolean).join(';');
+    }
+    environment.TERMINAL_USER_SHELL = shell;
+    return { file: shell, args: powerShellArguments(validated.provider), cwd: validated.cwd, cols: validated.cols, rows: validated.rows, env: environment, provider: validated.provider };
+  }
   const shell = resolveShell(sourceEnvironment);
   const environment = sanitizeEnvironment(sourceEnvironment);
   environment.SHELL = shell;
@@ -174,8 +251,12 @@ function createLaunchSpec(request, sourceEnvironment = process.env) {
 
 module.exports = {
   PROVIDERS,
+  GIT_BASH_MISSING,
+  GIT_FOR_WINDOWS_URL,
   createLaunchSpec,
+  findGitBash,
   loginShellArgs,
+  resolvePowerShell,
   resolveShell,
   sanitizeEnvironment,
   validateCreateRequest,
