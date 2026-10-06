@@ -157,7 +157,7 @@ test('processes on Windows: stopped with their tree (each descendant named) by t
   const { EventEmitter } = require('node:events');
   const child = Object.assign(new EventEmitter(), { pid: 777, stdout: null, stderr: null, kill: () => assert.fail('no signal on Windows') });
   const killer = (file, args, options, done) => { ran.push([file, ...args]); setImmediate(() => { if (file === 'taskkill') child.emit('exit', 1, null); done(null, ''); }); return {}; };
-  const processes = createProcesses({ environment: { ProgramFiles: 'C:\\Program Files' }, platform: 'win32', run: killer, spawnProcess: (file, args, options) => { assert.equal(options.windowsHide, true); return child; } });
+  const processes = createProcesses({ environment: { ProgramFiles: 'C:\\Program Files' }, platform: 'win32', run: killer, spawnProcess: (file, args, options) => { assert.equal(options.windowsHide, true); assert.equal(args.at(-1), 'npm start\nexit $?', 'a second command: Git Bash forks the first'); return child; } });
   await processes.start('web', 'npm start', temp());
   assert.equal(await processes.stop('web'), true);
   assert.deepEqual(ran.filter(([file]) => file === 'taskkill'), [['taskkill', '/T', '/F', '/PID', '777']]);

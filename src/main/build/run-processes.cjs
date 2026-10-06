@@ -140,7 +140,10 @@ function createProcesses({ environment = process.env, extraEnvironment = () => (
   async function start(key, command, cwd, { env = {}, input = false } = {}) {
     await stop(key);
     const full = envFor(env);
-    const child = spawnProcess(shell, loginShellArgs(shell, command, full), { cwd, env: full, detached: true, windowsHide: true, stdio: [input ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+    // Windows: a second command, so Git Bash forks the first as its child instead of becoming it (its exec leaves the
+    // new process no parent, in Windows' list or its own), and the stop finds it under the shell (killTree).
+    const line = platform === 'win32' ? `${command}\nexit $?` : command;
+    const child = spawnProcess(shell, loginShellArgs(shell, line, full), { cwd, env: full, detached: true, windowsHide: true, stdio: [input ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
     const record = { key, command, cwd, child, pid: child.pid, output: '', running: true, code: null, signal: null, startedAt: Date.now() };
     const take = (chunk) => { record.output = (record.output + chunk.toString()).slice(-OUTPUT_BYTES); };
     if (child.stdout) child.stdout.on('data', take);
