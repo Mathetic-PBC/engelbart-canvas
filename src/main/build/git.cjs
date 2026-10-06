@@ -5,6 +5,9 @@
 // with hooks off (the repository's hooks are the person's rules for their own commits and checkouts), no prompts, no
 // pager, English messages (a few are read, e.g. which files a fast-forward would overwrite). Values reach git as
 // arguments, never through a shell. `gitPath()` is the git the tool check found (../tools); tests pass the one on PATH.
+// Windows (2026-10-06, docs/windows-port-log.md): files are checked out and committed as the repository has them,
+// whatever Git for Windows' own core.autocrlf says (it turns LF into CRLF on checkout by default): agents write LF, the
+// same repositories are worked on from Macs, and a Build's diff would otherwise show every line changed.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -36,7 +39,8 @@ const firstLine = (text) => String(text || '').split('\n').map((line) => line.tr
 const GITHUB_HELPER = '!f() { test "$1" = get || exit 0; protocol=; host=; while IFS== read -r key value; do test -z "$key" && break; case "$key" in protocol) protocol=$value ;; host) host=$value ;; esac; done; test "$protocol" = https && test "$host" = github.com && test -n "$ENGELBART_GITHUB_TOKEN" || exit 0; printf \'username=x-access-token\\npassword=%s\\n\' "$ENGELBART_GITHUB_TOKEN"; }; f';
 const credentialEnv = () => ({ GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'credential.helper', GIT_CONFIG_VALUE_0: '', GIT_CONFIG_KEY_1: 'credential.helper', GIT_CONFIG_VALUE_1: GITHUB_HELPER });
 
-function createGit({ gitPath = () => 'git', run = execFile, environment = process.env } = {}) {
+function createGit({ gitPath = () => 'git', run = execFile, environment = process.env, platform = process.platform } = {}) {
+  const fixed = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.quotepath=off', '-c', 'advice.detachedHead=false', ...(platform === 'win32' ? ['-c', 'core.autocrlf=false'] : [])];
   const env = () => {
     const base = { ...environment };
     for (const key of Object.keys(base)) if (/^GIT_/.test(key)) delete base[key]; // an outer git's GIT_DIR / GIT_INDEX_FILE would redirect everything
@@ -46,7 +50,7 @@ function createGit({ gitPath = () => 'git', run = execFile, environment = proces
   /** → { code, stdout, stderr }; never throws. `extra`: environment for this one command. */
   function exec(cwd, args, { timeout = TIMEOUT_MS, input = null, env: extra = {} } = {}) {
     return new Promise((resolve) => {
-      const child = run(gitPath(), ['-c', 'core.hooksPath=/dev/null', '-c', 'core.quotepath=off', '-c', 'advice.detachedHead=false', ...args], { cwd, env: { ...env(), ...extra }, timeout, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
+      const child = run(gitPath(), [...fixed, ...args], { cwd, env: { ...env(), ...extra }, timeout, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
         resolve({ code: error ? (typeof error.code === 'number' ? error.code : -1) : 0, stdout: String(stdout || ''), stderr: String(stderr || ''), missing: !!(error && error.code === 'ENOENT') });
       });
       if (child && child.stdin) { if (input != null) child.stdin.end(input); else child.stdin.end(); }

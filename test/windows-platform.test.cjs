@@ -169,6 +169,18 @@ test('processes on Windows: stopped with their tree (each descendant named) by t
   assert.deepEqual(ran.filter(([file]) => file === 'taskkill'), [['taskkill', '/F', '/PID', '777']]);
 });
 
+test('Engelbart\'s git on Windows keeps files as the repository has them (core.autocrlf off); on a Mac, as before', async () => {
+  const { createGit } = require('../src/main/build/git.cjs');
+  const seen = [];
+  const run = (file, args, options, done) => { seen.push(args); setImmediate(() => done(null, '', '')); return {}; };
+  await createGit({ run, platform: 'win32' }).exec(temp(), ['status']);
+  await createGit({ run, platform: 'darwin' }).exec(temp(), ['status']);
+  const pair = (args) => args.some((arg, i) => arg === '-c' && args[i + 1] === 'core.autocrlf=false');
+  assert.equal(pair(seen[0]), true, JSON.stringify(seen[0]));
+  assert.equal(seen[0].at(-1), 'status');
+  assert.deepEqual(seen[1], ['-c', 'core.hooksPath=/dev/null', '-c', 'core.quotepath=off', '-c', 'advice.detachedHead=false', 'status'], 'a Mac: the same arguments as before');
+});
+
 test('an app packed for Windows keeps app.asar in resources/: the package check reads it there', async () => {
   const asar = require(require.resolve('@electron/asar', { paths: [path.dirname(require.resolve('app-builder-lib'))] }));
   const dir = temp();

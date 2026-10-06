@@ -5,6 +5,10 @@ Newest status first; the sections below are kept current.
 
 ## Where things stand
 
+- 2026-10-06, the open decisions settled (see "Needs a decision"): Engelbart's own git keeps LF on Windows
+  (`core.autocrlf=false`, with a test that the Mac's arguments are unchanged), and the old multi-window smoke test is
+  `scripts/smoke-new-window.cjs`. CI run for this commit: below.
+
 - 2026-10-06, **done on 4e2d95b**: run 14 (https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37438849695)
   passed on macos-latest (npm ci; npm test 1020 tests, 1019 pass, 1 skipped, the bundled-Git test's own; build;
   `npm run package`) and windows-latest (npm ci; npm test 1023 tests, 986 pass, 37 skipped, 0 failed; build; the
@@ -232,18 +236,18 @@ modes). Expectations written with the platform's separator (`path.join`, `path.s
 
 ## Needs a decision
 
-- The macOS runner's Homebrew python3 is held 35 s on every name lookup; CI puts Apple's python3 first for the tests
-  (`/etc/paths`). A person's Mac with Homebrew's python3 could see the same when a Build serves a page with
-  `python3 -m http.server` (it is answered after the run step's 90 s wait, so it still passes there, slowly).
+Decided 2026-10-06:
 
-- Git for Windows checks files out with CRLF by default (`core.autocrlf true`). The app's Builds and repositories
-  follow whatever the person's Git says; CI turns it off only for the tests. Whether Engelbart should pass
-  `-c core.autocrlf=false` on Windows (agents write LF) is a product choice, left as it is.
-
+- Line endings: Engelbart's own git passes `-c core.autocrlf=false` on Windows (`src/main/build/git.cjs`), so a
+  Build's files are checked out and committed as the repository has them (LF), whatever Git for Windows' default.
+  The Mac's arguments are unchanged. CI still sets it system-wide on Windows for the git commands the tests run
+  themselves.
+- Homebrew python3 on a Mac: left as it is. The 35 s lookup was seen only on GitHub's runner; a page served with it
+  would still show, slowly. Act on it only if someone reports a slow page.
 - `scripts/smoke-windows.cjs` already existed on `hudsons-feedback`: the smoke test for several app *windows*
-  (File ▸ New Window), not for Windows the OS. The spec names that same file for the Windows smoke test. Worked
-  around: the old script moves, unchanged apart from its usage line, to `scripts/smoke-app-windows.cjs`, and the
-  Windows smoke test takes `scripts/smoke-windows.cjs`. Rename either if you prefer.
+  (File ▸ New Window), not for Windows the OS. The Windows smoke test keeps `scripts/smoke-windows.cjs` (the spec and
+  CI name it); the old one is now `scripts/smoke-new-window.cjs` (unchanged apart from its usage line), named for what
+  it tests. Tell Hudson when this merges: `node scripts/smoke-windows.cjs` now runs the Windows smoke test.
 
 ## Baseline
 

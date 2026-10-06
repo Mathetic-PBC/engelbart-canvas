@@ -1,6 +1,6 @@
 'use strict';
 
-// npm run build && node scripts/smoke-app-windows.cjs
+// npm run build && node scripts/smoke-new-window.cjs
 // Several windows (2026-10-03, src/main/windows.cjs): the real app, hidden, against disposable data, run twice. First:
 // File ▸ New Window opens a second window on the same workspace; each keeps its own Stage tab; a document saved in one
 // shows in the other, and edits not yet saved there are kept behind a notice; a post-it made in one shows in the other;

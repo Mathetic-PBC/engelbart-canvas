@@ -66,9 +66,9 @@ jobs:
           until curl -s -o /dev/null http://127.0.0.1:8765/ || [ $((SECONDS - start)) -gt 90 ]; do sleep 0.2; done
           echo "python3 -m http.server answered after $((SECONDS - start)) s"
           pkill -f 'http.server 8765' || true
-      # Git for Windows turns LF into CRLF on checkout (core.autocrlf in its system config). The app's git drops GIT_*
-      # variables (src/main/build/git.cjs), so GIT_CONFIG_NOSYSTEM from scripts/test.mjs doesn't reach it; the tests'
-      # repositories compare files byte for byte, as a Mac's git leaves them.
+      # Git for Windows turns LF into CRLF on checkout (core.autocrlf in its system config). The app's own git turns that
+      # off for itself (src/main/build/git.cjs); this is for the git commands the tests run themselves to make their
+      # repositories, which compare files byte for byte, as a Mac's git leaves them.
       # Its system config also names Git Credential Manager as a credential helper, which waits for someone to sign in
       # (test/build-git.test.cjs asks for a credential the way a person's own helper answers it, as on a Mac).
       - name: Keep LF in the tests' repositories, and no sign-in prompt (Windows)
