@@ -139,12 +139,13 @@ function sourceOf(name, file) {
     if (/\/(Cellar|Homebrew|homebrew)\//.test(real) || real.startsWith('/opt/homebrew/')) return 'homebrew';
     return 'other';
   }
-  if (name === 'claude' && real.includes(`${path.sep}.local${path.sep}share${path.sep}claude${path.sep}versions${path.sep}`)) return 'native';
+  const slashed = real.split(path.sep).join('/'); // a Windows path matched as a Mac one is
+  if (name === 'claude' && slashed.includes('/.local/share/claude/versions/')) return 'native';
   if (name === 'claude' && /[\\/]\.local[\\/]bin[\\/]claude\.exe$/i.test(real)) return 'native'; // Windows: the installer's copy
-  if (name === 'codex' && real.includes(`${path.sep}.codex${path.sep}packages${path.sep}standalone${path.sep}`)) return 'standalone';
-  if (/\/Caskroom\/|\/Cellar\//.test(real)) return 'homebrew';
-  if (real.includes('/node_modules/')) return real.includes(`${path.sep}.bun${path.sep}`) ? 'bun' : 'npm';
-  if (real.includes(`${path.sep}.bun${path.sep}`)) return 'bun';
+  if (name === 'codex' && slashed.includes('/.codex/packages/standalone/')) return 'standalone';
+  if (/\/Caskroom\/|\/Cellar\//.test(slashed)) return 'homebrew';
+  if (slashed.includes('/node_modules/')) return slashed.includes('/.bun/') ? 'bun' : 'npm';
+  if (slashed.includes('/.bun/')) return 'bun';
   return 'other';
 }
 
@@ -315,7 +316,7 @@ function removal(name, file) {
 }
 
 /** Every copy of `name`: those PATH reaches, in its order, then those where installers put them; each file once. */
-function copiesOf(name, candidates, { home, systemBins }) {
+function copiesOf(name, candidates, { home, systemBins, platform = process.platform }) {
   const seen = new Set();
   const copies = [];
   const add = (file, onPath) => {
@@ -325,11 +326,11 @@ function copiesOf(name, candidates, { home, systemBins }) {
     copies.push({ file, onPath });
   };
   for (const file of candidates) add(file, true);
-  for (const file of knownPlaces(name, home, systemBins)) if (isExecutable(file)) add(file, false);
+  for (const file of knownPlaces(name, home, systemBins, { platform })) if (isExecutable(file)) add(file, false);
   return copies;
 }
 
-async function detectAgent(runner, name, candidates, { env, home, systemBins }) {
+async function detectAgent(runner, name, candidates, { env, home, systemBins, platform = process.platform }) {
   const label = REQUIREMENTS[name].name;
   const shellEnv = { ...process.env, ...env };
   const updater = updaterOff(name, { env: shellEnv, home });
@@ -337,7 +338,7 @@ async function detectAgent(runner, name, candidates, { env, home, systemBins }) 
   let first = null;
   let chosen = null;
   let other = null; // the first program of the same name that is not it
-  for (const copy of copiesOf(name, candidates, { home, systemBins })) {
+  for (const copy of copiesOf(name, candidates, { home, systemBins, platform })) {
     const read = await readVersion(runner, name, copy.file);
     if (read.other) { other = other || { ...copy, read }; continue; }
     const entry = { ...copy, read };
@@ -380,7 +381,7 @@ async function detectTools({ runner, only = ['git', 'claude', 'codex'], home = o
   const lookupError = lookup.marked ? null : lookup.timedOut ? `The login shell (${runner.shellPath}) did not answer within ${LOOKUP_TIMEOUT_MS / 1000} seconds.` : shellSilent(runner);
   const checkedAt = now().toISOString();
   const jobs = only.map(async (name) => {
-    const found = name === 'git' ? await detectGit(runner, paths.git, { bundled: bundledGit, preferBundled: preferBundledGit }) : await detectAgent(runner, name, paths[name], { env, home, systemBins });
+    const found = name === 'git' ? await detectGit(runner, paths.git, { bundled: bundledGit, preferBundled: preferBundledGit }) : await detectAgent(runner, name, paths[name], { env, home, systemBins, platform });
     return [name, { ...found, error: found.error || (found.status === 'missing' ? lookupError : null), checkedAt }];
   });
   return { ...Object.fromEntries(await Promise.all(jobs)), aliases, lookupError };

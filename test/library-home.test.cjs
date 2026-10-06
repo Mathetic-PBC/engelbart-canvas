@@ -8,6 +8,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+// A file outside the home directory: /etc/hosts on a Mac; Windows keeps its hosts file in its system folder.
+const OUTSIDE = process.platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'drivers', 'etc', 'hosts') : '/etc/hosts';
 const { randomUUID } = require('node:crypto');
 const db = require('../src/main/store/db.cjs');
 const { ensureHome } = require('../src/main/store/home.cjs');
@@ -190,7 +192,7 @@ test('adding: one resolver for addresses and paths, files linked where they are,
   assert.deepEqual(resolve('https://github.com/mqo00/hypocompass/tree/main/backend'), { type: 'website', tags: ['git'], name: 'mqo00/hypocompass', url: 'https://github.com/mqo00/hypocompass' });
   assert.deepEqual(resolve('"https://www.inkandswitch.com/embark/"'), { type: 'website', tags: [], name: 'inkandswitch.com/embark', url: 'https://www.inkandswitch.com/embark/' });
   assert.throws(() => resolve('notes/today.md'), /starts with/);
-  assert.throws(() => resolve('/etc/hosts'), /home directory/);
+  assert.throws(() => resolve(OUTSIDE), /home directory/);
   assert.throws(() => resolve('~/missing.pdf'), /Nothing is at that path/);
 
   const files = path.join(homeDir, 'files');
@@ -496,7 +498,7 @@ test('a project\'s code directory is a clone the library already knows about: fo
   await projects.createProject(ctx, { name: 'Canvas', directory: code });
   const listRemoteFiles = async () => { throw new Error('the network was asked although the clone is on disk'); };
   const seen = await library.previewItem(ctx, row.id, { listRemoteFiles });
-  assert.deepEqual([seen.files, seen.folder, seen.owner], [['src/', 'package.json'], '~/code/canvas', 'mathetic-pbc']);
+  assert.deepEqual([seen.files, seen.folder, seen.owner], [['src/', 'package.json'], path.join('~', 'code', 'canvas'), 'mathetic-pbc']);
   assert.equal((await ctx.libraryDb.get(row.id)).folder_path, code, 'and the row remembers it');
 
   // added by address when the project is already there: linked at once, and nobody is asked to describe it

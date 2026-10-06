@@ -5,6 +5,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+// A file outside the home directory: /etc/hosts on a Mac; Windows keeps its hosts file in its system folder.
+const OUTSIDE = process.platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'drivers', 'etc', 'hosts') : '/etc/hosts';
 const { EventEmitter } = require('node:events');
 const { pathToFileURL } = require('node:url');
 const { parseBrowserUrl, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews } = require('../src/main/browser/views.cjs');
@@ -309,7 +311,7 @@ test('views: a first load that is cancelled is a failure; one replaced, one afte
 test('views: a page on disk opens from inside the home directory only, and only a page on disk may link to another', () => {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-pages-')));
   fs.writeFileSync(path.join(home, 'report.html'), '<h1>report</h1>');
-  fs.symlinkSync('/etc/hosts', path.join(home, 'escape.html'));
+  fs.symlinkSync(OUTSIDE, path.join(home, 'escape.html'));
   const inside = pathToFileURL(path.join(home, 'report.html')).href;
   const fake = fakeElectron();
   const views = createBrowserViews({ electron: fake.electron, getWindow: () => fake.win, send: () => {}, appName: 'Engelbart', fileRoot: () => home });
@@ -537,7 +539,7 @@ test('savePage: the page a tab shows, saved complete into a folder; not a tab th
   const saved = [];
   contents.savePage = async (file, type) => { saved.push([file, type]); };
   contents.getTitle = () => 'A Post';
-  assert.deepEqual(await views.savePage('t', '/data/assets/pages/x'), { file: '/data/assets/pages/x/index.html', url: 'https://blog.example.org/post', title: 'A Post' });
+  assert.deepEqual(await views.savePage('t', '/data/assets/pages/x'), { file: path.join('/data/assets/pages/x', 'index.html'), url: 'https://blog.example.org/post', title: 'A Post' });
   assert.deepEqual(saved, [['/data/assets/pages/x/index.html', 'HTMLComplete']]);
 
   await assert.rejects(() => views.savePage('gone', '/d'), /not open/);

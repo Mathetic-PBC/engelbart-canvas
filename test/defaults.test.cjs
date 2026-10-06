@@ -65,7 +65,7 @@ test('carryDefaults: a missing file is written with the defaults and its base', 
   assert.deepEqual(readJson(file), { a: 1 });
   assert.deepEqual(readJson(baseFileFor(file)), { a: 1 });
   assert.equal(baseFileFor(file), path.join(dir, '.defaults', 'models.json'));
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600); // Windows has no such modes
 });
 
 test('carryDefaults: a new default reaches an existing file, the person\'s edits stay, and nothing is rewritten when nothing changed', () => {

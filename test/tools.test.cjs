@@ -61,7 +61,8 @@ test('sourceOf tells how a program was installed from where its file really is',
   assert.equal(sourceOf('claude', '/Users/h/.nvm/versions/node/v22/lib/node_modules/@anthropic-ai/claude-code/cli.js'), 'npm');
   assert.equal(sourceOf('git', '/usr/bin/git'), 'apple');
   assert.equal(sourceOf('git', '/opt/homebrew/Cellar/git/2.51.0/bin/git'), 'homebrew');
-  assert.ok(knownPlaces('claude', '/Users/h').includes('/Users/h/.local/bin/claude'));
+  if (process.platform === 'win32') assert.ok(knownPlaces('claude', 'C:\\Users\\h').includes('C:\\Users\\h\\.local\\bin\\claude.exe')); // Windows' own places (test/windows-platform.test.cjs)
+  else assert.ok(knownPlaces('claude', '/Users/h').includes('/Users/h/.local/bin/claude'));
   assert.deepEqual(knownPlaces('git', '/Users/h'), []);
 });
 
@@ -151,7 +152,7 @@ test('detectTools: the person\'s own Git is used when it works; Engelbart\'s onl
   assert.deepEqual([brokenBoth.git.status, brokenBoth.git.path], ['failed', '/opt/homebrew/bin/git'], 'their own is reported when neither runs');
 });
 
-test('detectTools: an agent off the login PATH is found where its installer puts it, run by full path, and asked about sign-in', async () => {
+test('detectTools: an agent off the login PATH is found where its installer puts it, run by full path, and asked about sign-in', { skip: process.platform === 'win32' && 'macOS install locations (~/.local/bin/claude); Windows\' are tested in test/windows-platform.test.cjs' }, async () => {
   const home = temp();
   fs.mkdirSync(path.join(home, '.local', 'bin'), { recursive: true });
   const claude = path.join(home, '.local', 'bin', 'claude');
@@ -299,7 +300,7 @@ test('roomFor refuses to start an install the disk cannot hold', () => {
   }
 });
 
-test('installAgent downloads the vendor\'s installer to a file first: a failed download is not a finished install', async () => {
+test('installAgent downloads the vendor\'s installer to a file first: a failed download is not a finished install', { skip: process.platform === 'win32' && 'macOS installers (curl, then bash); Windows uses PowerShell\'s and npm (test/windows-platform.test.cjs)' }, async () => {
   const runner = fakeRunner({ shell: { 'curl -fsSL': { code: 6, stdout: 'curl: (6) Could not resolve host: claude.ai' } } });
   const actions = createActions({ runner, home: os.homedir(), tmpDir: temp() });
   const out = await actions.installAgent('claude');
@@ -311,7 +312,7 @@ test('installAgent downloads the vendor\'s installer to a file first: a failed d
   assert.equal((await codex.installAgent('codex')).ok, true);
 });
 
-test('installGit: Apple\'s dialog, then waiting until git arrives or the installer is closed', async () => {
+test('installGit: Apple\'s dialog, then waiting until git arrives or the installer is closed', { skip: process.platform === 'win32' && 'macOS only: Apple\'s Command Line Tools installer' }, async () => {
   const developer = path.join(temp(), 'CommandLineTools');
   let clock = 0;
   const sleep = async (ms) => { clock += ms; };
@@ -344,7 +345,7 @@ test('installGit: Apple\'s dialog, then waiting until git arrives or the install
   }
 });
 
-test('rollback points a launcher back at the version that worked, in one rename', () => {
+test('rollback points a launcher back at the version that worked, in one rename', { skip: process.platform === 'win32' && 'macOS installers link the launcher; on Windows the rollback copies (test/windows-platform.test.cjs)' }, () => {
   const home = temp();
   const versions = path.join(home, '.local', 'share', 'claude', 'versions');
   fs.mkdirSync(versions, { recursive: true });
@@ -470,7 +471,7 @@ test('manager: the person\'s Skip and pin written by hand into config.json are n
   assert.deepEqual([readConfig(root).tools.git.skip, readConfig(root).tools.claude.pin], [true, '2.1.278']);
 });
 
-test('manager: an update that leaves the launcher broken is put back to the version that worked', async () => {
+test('manager: an update that leaves the launcher broken is put back to the version that worked', { skip: process.platform === 'win32' && 'macOS installers link the launcher; on Windows the rollback copies (test/windows-platform.test.cjs)' }, async () => {
   const home = temp();
   const versions = path.join(home, '.local', 'share', 'claude', 'versions');
   fs.mkdirSync(versions, { recursive: true });
@@ -704,7 +705,7 @@ function realShell() {
   return { root, bin, runner: createRunner({ environment: { HOME: root, ZDOTDIR: root, SHELL: '/bin/zsh', PATH: `${bin}:/usr/bin:/bin` } }) };
 }
 
-test('real zsh: an alias is reported to the terminal without its definition, and a hidden run is never given one', async () => {
+test('real zsh: an alias is reported to the terminal without its definition, and a hidden run is never given one', { skip: process.platform === 'win32' && 'macOS only: runs the real zsh and its aliases' }, async () => {
   const { root, bin, runner } = realShell();
   fs.writeFileSync(path.join(bin, 'codex'), '#!/bin/sh\ncase "$1" in --version) echo "codex-cli 0.155.1";; login) echo "Logged in using ChatGPT";; esac\n', { mode: 0o700 });
   fs.writeFileSync(path.join(root, '.zshrc'), "alias claude='printf super-secret-definition'\n");

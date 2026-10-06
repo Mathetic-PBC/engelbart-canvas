@@ -56,10 +56,10 @@ test('CLI streams messages, requires connected sandbox tools and a successful re
   let directory, seen, input = '', messages = [];
   const spawnProcess = (file, args, options) => {
     seen = { file, args, options }; directory = options.cwd;
-    assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
+    if (process.platform !== 'win32') assert.equal(fs.statSync(directory).mode & 0o777, 0o700); // Windows has no such modes
     const config = JSON.parse(fs.readFileSync(args[args.indexOf('--mcp-config') + 1]));
     assert.equal(config.mcpServers.canvas.env.ELECTRON_RUN_AS_NODE, '1');
-    assert.equal(fs.statSync(config.mcpServers.canvas.args[1]).mode & 0o777, 0o600);
+    if (process.platform !== 'win32') assert.equal(fs.statSync(config.mcpServers.canvas.args[1]).mode & 0o777, 0o600);
     const child = new EventEmitter();
     child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.stdin = new PassThrough();
     child.stdin.on('data', (chunk) => { input += chunk; });

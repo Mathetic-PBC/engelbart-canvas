@@ -34,7 +34,8 @@ function loadAsar() {
 function checkAppModules(asarPath) {
   const asar = loadAsar();
   const files = new Set(asar.listPackage(asarPath).map((file) => file.split(path.sep).join('/')));
-  const readJson = (file) => JSON.parse(asar.extractFile(asarPath, file.replace(/^\//, '')).toString('utf8'));
+  // asar names files with the platform's separator (\ on Windows); the paths here use /.
+  const readJson = (file) => JSON.parse(asar.extractFile(asarPath, file.replace(/^\//, '').split('/').join(path.sep)).toString('utf8'));
   // The folder `name` resolves to from package folder `dir` ('' is the app), as Node looks: nearest node_modules first.
   const resolve = (dir, name) => {
     for (let at = dir; ; at = at.slice(0, at.lastIndexOf('/node_modules/'))) {

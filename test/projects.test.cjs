@@ -5,6 +5,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+// A file outside the home directory: /etc/hosts on a Mac; Windows keeps its hosts file in its system folder.
+const OUTSIDE = process.platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'drivers', 'etc', 'hosts') : '/etc/hosts';
 const db = require('../src/main/store/db.cjs');
 const { ensureHome } = require('../src/main/store/home.cjs');
 const projects = require('../src/main/store/projects.cjs');
@@ -554,7 +556,7 @@ test('read-text-file: project-relative, ~/ and absolute paths inside the home di
   const dir = await projects.readProjectTextFile(ctx, project.id, project.dir);
   assert.equal(dir.kind, 'directory');
   assert.ok(dir.text.split('\n').includes('notes.txt'));
-  await assert.rejects(projects.readProjectTextFile(ctx, project.id, '/etc/hosts'), /inside your home directory/);
+  await assert.rejects(projects.readProjectTextFile(ctx, project.id, OUTSIDE), /inside your home directory/);
   await assert.rejects(projects.readProjectTextFile(ctx, project.id, 'missing.txt'));
   fs.writeFileSync(path.join(project.dir, 'big.txt'), 'x'.repeat(25000));
   const big = await projects.readProjectTextFile(ctx, project.id, 'big.txt');
@@ -604,7 +606,7 @@ test('resolve-page-file: an html file by full path, or relative to the project, 
   for (const not of ['notes.txt', 'missing.html', 'apple.com', 'example.com/index.html', '/etc/hosts', 'My Workspace']) {
     assert.equal(await projects.resolvePageFile(ctx, project.id, not), null, not);
   }
-  fs.symlinkSync('/etc/hosts', path.join(project.dir, 'escape.html'));
+  fs.symlinkSync(OUTSIDE, path.join(project.dir, 'escape.html'));
   assert.equal(await projects.resolvePageFile(ctx, project.id, 'escape.html'), null);
   assert.equal((await projects.readProjectTextFile(ctx, project.id, 'notes.txt')).text, 'text');
 });

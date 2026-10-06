@@ -38,9 +38,9 @@ test('custom instructions: written, read, trimmed, and removed when emptied', ()
 
 test('a folder made for the project sits in the home directory and never takes one that exists', () => {
   const first = onboarding.freeFolder(ctx, 'Teachable Agents!');
-  assert.deepEqual(first, { path: path.join(homeDir, 'teachable-agents'), shown: '~/teachable-agents' });
+  assert.deepEqual(first, { path: path.join(homeDir, 'teachable-agents'), shown: path.join('~', 'teachable-agents') }); // ~\teachable-agents on Windows
   fs.mkdirSync(first.path);
-  assert.equal(onboarding.freeFolder(ctx, 'Teachable Agents!').shown, '~/teachable-agents-2');
+  assert.equal(onboarding.freeFolder(ctx, 'Teachable Agents!').shown, path.join('~', 'teachable-agents-2'));
   assert.throws(() => onboarding.existingFolder(ctx, 'relative/path'), /starts with/);
   assert.throws(() => onboarding.existingFolder(ctx, '~/not-there'), /Nothing is at/);
   assert.equal(onboarding.existingFolder(ctx, '~/teachable-agents'), first.path);

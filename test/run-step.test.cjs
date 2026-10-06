@@ -151,9 +151,12 @@ test('run_command runs to its end in the worktree and refuses launches, the back
   const processes = processesOf({ environment });
   const handlers = { declare: async () => ({}), start: async () => ({}), status: async () => ({}) };
   const call = createRunTools({ root, runnables: handlers, processes, key: 'test' });
-  const ran = await call('run_command', { command: 'pwd && echo made > made.txt', cwd: '.' });
+  // Windows: Git Bash's pwd is its own (/tmp/…), so node says where it is, read back as Windows has it (no 8.3 names).
+  const [here, real] = process.platform === 'win32' ? ['node -p "process.cwd()"', fs.realpathSync.native] : ['pwd', fs.realpathSync];
+  const ran = await call('run_command', { command: `${here} && echo made > made.txt`, cwd: '.' });
   assert.equal(ran.exit_code, 0);
-  assert.equal(ran.output.trim().split('\n').pop(), fs.realpathSync(root));
+  const printed = ran.output.trim().split('\n').pop();
+  assert.equal(process.platform === 'win32' ? real(printed.trim()) : printed, real(root));
   assert.equal(fs.readFileSync(path.join(root, 'made.txt'), 'utf8'), 'made\n');
   assert.equal((await call('run_command', { command: 'exit 3' })).exit_code, 3);
   const slow = await call('run_command', { command: 'sleep 5', timeout_seconds: 1 });
@@ -456,7 +459,7 @@ test('every stored command passes, but the launch facts name a folder no row cov
   await builds.discard(ctx, project.id, task.id);
 });
 
-test('a desktop app opened from Review: its window is brought forward, found among the processes of its group', async () => {
+test('a desktop app opened from Review: its window is brought forward, found among the processes of its group', { skip: process.platform === 'win32' && 'macOS only: a desktop app\'s window is brought forward with AppKit, found with ps' }, async () => {
   const { project, workspace, target } = await scene();
   const agent = bridgeAgent(async (use) => {
     await use('declare_runnables', { runnables: [{ name: 'desk', folder: '.', type: 'app' }] });
@@ -612,7 +615,7 @@ test('Accept keeps what runs up on the code that landed, its copy detached there
   await assert.rejects(builds.stopRunnable(ctx, project.id, task.id, null), /Nothing of this Build is running/);
 });
 
-test('a kept copy goes when Engelbart quits, and one a crash left behind is swept when it starts: its processes stopped only while they are still its own', async () => {
+test('a kept copy goes when Engelbart quits, and one a crash left behind is swept when it starts: its processes stopped only while they are still its own', { skip: process.platform === 'win32' && 'POSIX only: a crash\'s leftovers are found with lsof and stopped as a process group; Windows skips that sweep (src/main/build/run-processes.cjs)' }, async () => {
   const { project, workspace, target } = await scene();
   const agent = bridgeAgent(async (use) => {
     await use('declare_runnables', { runnables: [{ name: 'web', folder: '.', type: 'ui' }] });
@@ -649,7 +652,7 @@ test('a kept copy goes when Engelbart quits, and one a crash left behind is swep
   await crashed.builds.stopAll();
 });
 
-test('a process group left behind is stopped only while its leader is the one started there: a folder elsewhere is never touched', async () => {
+test('a process group left behind is stopped only while its leader is the one started there: a folder elsewhere is never touched', { skip: process.platform === 'win32' && 'POSIX only: a leftover is found with lsof and stopped as a process group; Windows skips it (src/main/build/run-processes.cjs)' }, async () => {
   const inside = fs.mkdtempSync(path.join(homeDir, 'leftover-'));
   const elsewhere = fs.mkdtempSync(path.join(homeDir, 'elsewhere-'));
   const { spawn } = require('node:child_process');

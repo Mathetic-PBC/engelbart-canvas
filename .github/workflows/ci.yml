@@ -36,9 +36,12 @@ jobs:
       - run: npm ci
       # A runner's first python3 takes seconds to start, longer than a test's dev server is given to answer
       # (test/run-step.test.cjs serves a page with `python3 -m http.server`).
+      # The tests run it in the login shell, whose PATH can name another python3 (on the Mac, Xcode's): that one too.
       - name: Warm up python3
         shell: bash
-        run: python3 -c "import http.server" && python3 --version
+        run: |
+          python3 -c "import http.server" && python3 --version
+          if [ "$RUNNER_OS" = macOS ]; then zsh -ilc 'command -v python3; python3 -c "import http.server"; python3 --version'; fi
       - name: npm test
         shell: bash
         # A test that hangs fails after five minutes instead of holding the job to its limit.

@@ -254,7 +254,8 @@ test('expandDoc: a workspace mentioned from another is read from disk; one that 
   await projects.writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: there.id }, 'what there holds');
   await projects.writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: here.id }, `Me @[Here](ws:${here.id}), then @[Old name](ws:${there.id}).`);
   const result = await expandDoc(ctx, project.id, { kind: 'workspace', workspaceId: here.id });
-  assert.match(result.text, /^# Here\n\nMe @\[Here\]\(ws:[\w-]+\), then @\[Old name\]\(ws:[\w-]+\)\.\n\n<file name="There" type="workspace" path="[^"]+\/There\/workspace\.md">\nwhat there holds\n<\/file>$/);
+  const sep = path.sep === '/' ? '\\/' : '\\\\'; // the path as this platform writes it
+  assert.match(result.text, new RegExp(`^# Here\\n\\nMe @\\[Here\\]\\(ws:[\\w-]+\\), then @\\[Old name\\]\\(ws:[\\w-]+\\)\\.\\n\\n<file name="There" type="workspace" path="[^"]+${sep}There${sep}workspace\\.md">\\nwhat there holds\\n<\\/file>$`));
   assert.deepEqual({ files: result.files, missing: result.missing }, { files: 1, missing: 0 });
 });
 

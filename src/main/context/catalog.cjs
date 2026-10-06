@@ -25,7 +25,7 @@ function entryFor(row, project, referencedBy) {
     name: row.name,
     type: row.type,
     tags: row.tags || [],
-    path: row.path ? (inside ? path.relative(project.dir, row.path) : row.path) : null,
+    path: row.path ? (inside ? path.relative(project.dir, row.path).split(path.sep).join('/') : row.path) : null, // with /, as workspaces' are, on Windows too
     url: row.url || null,
     folderPath: row.folder_path || null,
     githubId: row.github_id || null,

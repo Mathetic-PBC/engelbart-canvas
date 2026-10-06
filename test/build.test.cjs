@@ -907,7 +907,7 @@ test('`@bart --build <request>`: a Build of only the request, with the notes it 
 
 /* --------------------------------------------------------------------- the runner */
 
-test('while Engelbart\'s own Git stands in, a Build\'s agent, setup and checks find it first on PATH (2026-09-28)', async () => {
+test('while Engelbart\'s own Git stands in, a Build\'s agent, setup and checks find it first on PATH (2026-09-28)', { skip: process.platform === 'win32' && 'macOS only: Engelbart\'s own Git ships for the Mac alone' }, async () => {
   const authFile = path.join(homeDir, 'auth-git.json');
   fs.writeFileSync(authFile, JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'x' } }));
   const gitBin = '/Applications/Engelbart.app/Contents/Resources/git/engelbart-bin';

@@ -373,7 +373,7 @@ test('with the tool check: a question holds its CLI\'s lock, and a CLI the login
   assert.equal(calls[0].env.ENGELBART_CODEX_BIN, '/Users/someone/.local/bin/codex');
 });
 
-test('while Engelbart\'s own Git stands in, a question\'s CLI finds it first on PATH (2026-09-28)', async () => {
+test('while Engelbart\'s own Git stands in, a question\'s CLI finds it first on PATH (2026-09-28)', { skip: process.platform === 'win32' && 'macOS only: Engelbart\'s own Git ships for the Mac alone' }, async () => {
   const authFile = path.join(homeDir, 'auth-git.json');
   fs.writeFileSync(authFile, JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'x' } }));
   const calls = [];
