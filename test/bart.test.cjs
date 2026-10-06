@@ -1055,7 +1055,12 @@ test('@brainstorm\'s system prompt says what the harness relies on, and a file r
     '# The subject', '<question> on the first turn names the subject: a topic in their words, a mentioned paper ("mentioned": true in <context_json>), or both, where the topic says which part of the paper they care about.', 'the area card picks the subject', 'After a recap, a new "@brainstorm" line names a subject the same way',
     'When there is a paper, open it from its path before the first card and keep what it says to yourself. A summary is not the paper. If you cannot open it, go on from the topic alone.',
     'what they wrote after "@bart", "@brainstorm", "@orient" or "@discover"',
-    '- One card, one question. Never ask a question in "say" as well.', 'A correction in the note ("; note: …") overrides your reading for the rest of the exchange.', 'Ask only what the person alone can answer.', '"say" is one short reflection on their last answer, or empty when the card says it all.',
+    '- One card, one question. Never ask a question in "say" as well.', 'A correction in the note ("; note: …") overrides your reading for the rest of the exchange.', 'Ask only what the person alone can answer.', '- After every answer, "say" is required: one or two plain sentences that take one specific thing they just wrote, using a phrase of theirs, and say what it opens up or why it leads to the next question. Do not restate their whole answer. No praise ("great point"), no grading, nothing about the topic itself, and no question (the card asks it). After a skip, one short line that lets it go ("Fine, let\'s leave that."). "say" may be empty only on the first card of an exchange that isn\'t area.',
+    // 2026-10-06: a mentor who is listening, not a form.
+    '- If they ask about the session itself (why this question, what comes next, how many are left), answer it plainly in "say" and go on with the card. A question about the topic gets one short line pointing to @bart ("That\'s one for @bart: put it on its own line."). A question is not an answer and does not go into the recap.',
+    '- Each card\'s title builds on their last answer: know names the area they picked or the subject they gave; draft names, in a few of their words, what they said thins out. Keep the question the stage asks; only the lead-in changes.',
+    '# Register\n\nTalk like a PhD student sitting next to them, mentoring:', 'A good mentor here has been told not to give answers.', 'Short, plain, warm without praise. No product-spec language. Plain text inside every string: no markdown.',
+    '{"say": "<what you picked up from their last answer, your reading, or the recap>",',
     '- area (open path only): your reading in "say", at most two plain sentences', 'A "focus" card: "Where do you want to find a question?", with three or four broad areas in the workspace\'s own terms.',
     '- know: an "open" card with id "know": ask them to write what they know about the subject, as they would explain it to a colleague.',
     '- took (paper path): an "open" card with id "took": ask what they took from the paper.',
@@ -1066,6 +1071,7 @@ test('@brainstorm\'s system prompt says what the harness relies on, and a file r
     'Never skip thin, draft or versions', 'A skip is not an answer: ask the card <stage> names. Nothing is graded',
     '# The recap', 'When <stage> is recap, return "card": "none", "ready": true, and put this in "say":\nWhat you know: …\nWhere it thins out: …\nYour question: …\nOn the paper path the first line is "What you took from it: …" instead.',
     'Each line is their words from this exchange, or "not said" ("not written yet" for the question).', '"Your question" is the option they picked on the versions card, or the words they typed there, or their draft when they skipped that card, exactly as written. Never write or improve it yourself.', 'Never say what they did or didn\'t do, and never judge an answer. Add nothing else', '"ready": true only when <stage> is recap']) assert.ok(BRAINSTORM_SYSTEM_PROMPT.includes(phrase), phrase);
+  for (const gone of ['one short reflection', 'or empty when the card says it all', 'talking ideas through at a table', 'That\'s a question for @bart']) assert.ok(!BRAINSTORM_SYSTEM_PROMPT.includes(gone), `2026-10-06: ${gone}`);
   for (const gone of ['# Closing', '"closing"', 'before you go', 'So what will you do first?', 'closing card']) assert.ok(!BRAINSTORM_SYSTEM_PROMPT.includes(gone), `round 6: no closing card (${gone})`);
   for (const gone of ['<answers>', '# Wrapping up', 'Where do you want to put your attention?', 'What pulls apart', 'Next, you said', 'Prefer "free" and "open"', 'puzzle', 'What puzzles you', 'What draws you', 'id "subject"', 'oriented on']) assert.ok(!BRAINSTORM_SYSTEM_PROMPT.includes(gone), `gone (${gone})`);
   for (const gone of ['lookFor', 'Look for', 'prior work', 'suggest a search', 'others may have studied']) assert.ok(!BRAINSTORM_SYSTEM_PROMPT.includes(gone), `MATH-31, no search suggested: ${gone}`);
@@ -1217,8 +1223,12 @@ test('the fake @brainstorm asks each path\'s cards, then recaps what they know, 
   assert.equal(card.questionOf(topic.cards[0]).title, 'Write what you know about “corrigibility”, as you would explain it to a colleague.');
   assert.match(card.questionOf(topic.cards[1]).title, new RegExp(`You wrote “${KNOW}”\\. What would you need to find out to be sure of it\\?`), 'thin quotes what they wrote');
   assert.ok(!/section/.test(card.questionOf(topic.cards[1]).title), 'no paper, no section');
-  assert.equal(card.questionOf(topic.cards[2]).title, 'Write what you want to find out as one question, in one sentence.');
+  assert.equal(card.questionOf(topic.cards[2]).title, `You said it thins out at “${THIN}”. Write what you want to find out as one question, in one sentence.`, 'the draft card names what they said thins out');
   assert.deepEqual(card.questionOf(topic.cards[3]).options, [{ label: DRAFT, why: 'as you wrote it' }, { label: NARROWER, why: 'narrower' }], 'their draft word for word, then a version of it');
+  // Every card after the first picks up a few words of the last answer (2026-10-06); the first has nothing to pick up.
+  const picksUp = (cards, said) => cards.slice(1).filter(Boolean).map((c, n) => [c.say.length > 0, c.say.includes(said[n].split(/\s+/).slice(0, 3).join(' '))]);
+  assert.equal(topic.cards[0].say, '', 'the first card of a topic has no answer to pick up');
+  assert.deepEqual(picksUp(topic.cards, [KNOW, THIN, DRAFT]), [[true, true], [true, true], [true, true]], 'a non-empty say quoting the last answer on every later card');
   assert.deepEqual(topic.recap.lines, [`What you know: ${KNOW}`, `Where it thins out: ${THIN}`, `Your question: ${NARROWER}`]);
   assert.deepEqual(topic.recap.lines.map((line) => card.recapLine(line).label), ['What you know', 'Where it thins out', 'Your question'], 'drawn as three sections (A-05)');
   assert.deepEqual(topic.recap.lookFor, [], 'no Look for line (MATH-31)');
@@ -1242,6 +1252,7 @@ test('the fake @brainstorm asks each path\'s cards, then recaps what they know, 
   assert.ok(open.cards[0].say.split(/(?<=\.)\s+/).length <= 2, 'at most two sentences');
   const picked = card.questionOf(open.cards[0]).options[1].label;
   assert.ok(card.questionOf(open.cards[1]).title.includes(picked), 'what they know about the area picked');
+  assert.deepEqual(picksUp(open.cards, [picked, KNOW, THIN, DRAFT]), [[true, true], [true, true], [true, true], [true, true]], 'the area pick is picked up too');
   assert.deepEqual(open.recap.lines, [`What you know: ${KNOW}`, `Where it thins out: ${THIN}`, `Your question: ${DRAFT}`]);
 
   // Their own writing already says what they know: thin first, quoting their sentence exactly (A-03), and that is what they know.
@@ -1261,6 +1272,7 @@ test('the fake @brainstorm asks each path\'s cards, then recaps what they know, 
   assert.deepEqual(ids(skippedAll.cards), ['know', 'thin', 'draft', null], 'skips move on');
   assert.deepEqual(skippedAll.recap.lines, ['What you know: not said', 'Where it thins out: not said', 'Your question: not written yet']);
   assert.ok(card.questionOf(skippedAll.cards[1]).title.startsWith('Which part of this'), 'with nothing written, thin quotes nothing');
+  assert.deepEqual(skippedAll.cards.slice(1, 3).map((c) => c.say), ['Fine, let\'s leave that.', 'Fine, let\'s leave that.'], 'a skip is let go');
 
   // Wrap up on any card: the recap at once, with what was given.
   const early = await run([wrapUp(KNOW)], ['@brainstorm corrigibility']);

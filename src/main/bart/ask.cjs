@@ -550,7 +550,9 @@ function ownSentence(documents, subject) {
  * The first card gives way to thin when a line of their own in the workspace holds a sentence with the subject in it,
  * which "say" quotes. Then the recap: what they know (on the paper path, took from it), where it thins out, and their
  * question (the version picked, the words typed on that card, else the draft; "not written yet" without one). No card or
- * recap suggests a search (MATH-31). A line containing "malformed" gets a reply that is not a card.
+ * recap suggests a search (MATH-31). A line containing "malformed" gets a reply that is not a card. Every card after the
+ * first has a "say" that picks up a few words of the last answer and says why the next card follows; after a skip it
+ * lets it go (2026-10-06). The draft card names what they said thins out.
  */
 function fakeCard(context, plan, models) {
   if (/malformed/i.test(plan.question)) return 'FAKE REPLY that is not a card: {"say": "cut off';
@@ -565,9 +567,18 @@ function fakeCard(context, plan, models) {
   const words = (answer) => (!answer || answer.skipped ? '' : [answer.picks.join(', '), answer.text, answer.note].filter(Boolean).join('; '));
   const of = (...ids) => answers.find((answer) => ids.includes(answer.id));
   // The sentence of theirs a thin card asked first quoted, which stands for what they know.
-  const quoted = ((of('thin') || {}).say || '').match(/^You wrote: "(.+)"$/);
+  const quoted = ((of('thin') || {}).say || '').match(/You wrote: "(.+)"$/);
   const knew = words(of('know', 'took')) || (quoted ? quoted[1] : ''), thin = words(of('thin', 'puzzle', 'interest')), draft = words(of('draft'));
-  const ask = (id, type, title, say, extra = {}) => JSON.stringify({ say, card: 'questions', questions: { eyebrow: 'your question', items: [{ id, type, title, ...extra }] }, ready: false });
+  // What was picked up from the last answer: a few of its words and why the card that follows comes next.
+  const last = answers[answers.length - 1], few = (text) => text.split(/\s+/).slice(0, 6).join(' ');
+  const LEADS = {
+    know: (said) => `“${said}” is where we start, with what you already know there.`,
+    thin: (said) => `“${said}” is the part to lean on, so the next thing is where it gets shaky.`,
+    draft: (said) => `“${said}” is the edge of what you know, and an edge is where a question starts.`,
+    versions: (said) => `“${said}” is your question as you wrote it; below it are versions that each change one thing.`,
+  };
+  const heard = !last || !LEADS[plan.stage] ? '' : last.skipped ? 'Fine, let\'s leave that.' : LEADS[plan.stage](few(words(last)));
+  const ask = (id, type, title, say, extra = {}) => JSON.stringify({ say: [heard, say].filter(Boolean).join(' '), card: 'questions', questions: { eyebrow: 'your question', items: [{ id, type, title, ...extra }] }, ready: false });
   if (plan.stage === 'recap') {
     const versions = of('versions'), chosen = versions && !versions.skipped ? versions.picks[0] || versions.text : '';
     const question = chosen || draft;
@@ -597,7 +608,8 @@ function fakeCard(context, plan, models) {
     return ask('thin', 'open', part ? `You wrote “${part}”.${section} What would you need to find out to be sure of it?` : 'Which part of this are you least sure of, and what would you need to find out to be sure of it?', '', { placeholder: 'In your own words…' });
   }
   if (plan.stage === 'draft') {
-    return ask('draft', 'open', 'Write what you want to find out as one question, in one sentence.', thin ? `You said “${thin.slice(0, 60)}”.` : '', { placeholder: 'Your question…' });
+    const lead = thin ? `You said it thins out at “${thin.slice(0, 60)}”. ` : '';
+    return ask('draft', 'open', `${lead}Write what you want to find out as one question, in one sentence.`, '', { placeholder: 'Your question…' });
   }
   // versions: their draft word for word, then one version of it with "specifically" put in after its first word; when the
   // draft already says it there is no version to make, and the card asks them to read it again.
