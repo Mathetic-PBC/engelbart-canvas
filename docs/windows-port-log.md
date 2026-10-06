@@ -5,6 +5,17 @@ Newest status first; the sections below are kept current.
 
 ## Where things stand
 
+- 2026-10-05, run 8 (98c688e) passed on macos-latest and windows-latest (Linux, allowed to fail, still fails): npm ci,
+  npm test (macOS 1017 tests, 1016 pass, 1 skipped: the bundled-Git test, which skips wherever vendor/git is not
+  fetched, as before this branch; Windows 1020, 983 pass, 37 skipped, 0 failed), the Windows installer built
+  (Engelbart-0.1.9-x64.exe, kept as the run's artifact), smoke-windows passed on release/win-unpacked/Engelbart.exe
+  (window, PowerShell 7 terminal echo, Git found by the login shell at C:\Program Files\Git\mingw64\bin\git.exe,
+  clean quit), `npm run package` passed on the Mac. The Mac's lookup with Apple's python3: 0.06 s; http.server
+  answered in 1 s. Then, comparing tests with `hudsons-feedback`: it has one commit made after this branch was cut
+  (f2d0ac0, "Keep an answer line's look while the caret is on it", with a new test file). Cherry-picked here (not a
+  merge), so every test on hudsons-feedback is on this branch; the Mac suite passes locally with it (1020/1020).
+  The final CI run is on that commit (see "CI runs").
+
 - 2026-10-05, run 7 (99c752e): Windows' stop now works (the dev-server test and run-step's two "stops it" pass);
   new: `exit $?` in a login shell prints "logout" into the command's output (run_command's test) and slowed a quick
   command, so the fork now comes from an exit trap (`trap : EXIT`, which disables bash's exec of the last command and
@@ -154,6 +165,7 @@ modes). Expectations written with the platform's separator (`path.join`, `path.s
 | 51ee430 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37419892150 | ✗ 1 test | ✗ 3 tests + 3 file timeouts | ✗ | Mac: getfqdn(127.0.0.1) 35 s on the runner; Windows: npm's server still outlives stop |
 | 7886431 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37421579146 | ✗ 1 test | ✗ 3 tests + 5 file timeouts | ✗ | Mac lookup still 35 s after /etc/hosts and DNS; Windows: Git Bash's exec orphans npm (ps table) |
 | 99c752e | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37423625799 | ✗ 1 test | ✗ 2 tests + build-git file timeout | ✗ | Windows stop fixed; "logout" from `exit` in a login shell; Mac fix not in this run |
+| 98c688e | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37425057114 | ✓ | ✓ installer, smoke | ✗ (allowed) | first green run for both |
 
 ## Needs a decision
 
