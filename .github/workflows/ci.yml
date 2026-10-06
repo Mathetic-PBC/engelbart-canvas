@@ -1,0 +1,60 @@
+# CI (2026-10-05, MATH-26): npm ci, npm test and npm run build on macOS, Windows and Linux. Windows also packages the
+# installer (kept as an artifact) and runs scripts/smoke-windows.cjs against the packaged app; the Mac packages the app
+# for the runner's architecture, signed ad hoc. Linux is reported but allowed to fail. docs/windows-port.md.
+name: CI
+
+on:
+  push:
+    branches: [windows-port]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.os == 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    timeout-minutes: 60
+    env:
+      ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
+      ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Linux packages for node-pty and Electron
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb libnss3 libgbm1 libasound2t64
+      - run: npm ci
+      - name: npm test
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then xvfb-run -a npm test; else npm test; fi
+      - run: npm run build
+
+      - name: Package the Mac app
+        if: runner.os == 'macOS'
+        env:
+          ENGELBART_SIGN: adhoc
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run package
+
+      - name: Package the Windows installer
+        if: runner.os == 'Windows'
+        run: npx electron-builder --config electron-builder.config.cjs --win nsis --x64 --publish never
+      - name: Smoke test the packaged Windows app
+        if: runner.os == 'Windows'
+        run: node scripts/smoke-windows.cjs release/win-unpacked/Engelbart.exe
+      - name: Keep the installer
+        if: runner.os == 'Windows' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engelbart-windows-installer
+          path: release/*.exe
+          if-no-files-found: warn
