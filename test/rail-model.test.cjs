@@ -109,6 +109,15 @@ test('sections: Notes, Websites, GitHub, Files, Sub-Workspaces, Archived in that
   assert.deepEqual(railSections([]).map((s) => s.rows.length), [0, 0, 0, 0, 0, 0], 'a workspace with nothing in it still shows every section');
 });
 
+test('every section but Archived has a + of its own: what it adds, and whether it opens a panel (MATH-44)', async () => {
+  const { RAIL_SECTIONS, ADD_PANELS, railSections } = await load();
+  assert.deepEqual(RAIL_SECTIONS.filter((s) => s.key !== 'Archived').filter((s) => !s.add).map((s) => s.key), [], 'Notes, Websites, GitHub, Files and Sub-Workspaces each have one');
+  assert.equal(RAIL_SECTIONS.find((s) => s.key === 'Archived').add, undefined, 'a version is made by Clear, not a +');
+  assert.deepEqual(RAIL_SECTIONS.map((s) => [s.key, s.add || null]), [['Notes', 'note'], ['Websites', 'link'], ['GitHub', 'github'], ['Files', 'disk'], ['Workspaces', 'workspace'], ['Archived', null]]);
+  assert.deepEqual(RAIL_SECTIONS.filter((s) => ADD_PANELS.has(s.add)).map((s) => s.key), ['Websites', 'GitHub'], 'only these ask before adding');
+  assert.deepEqual(railSections([]).map((s) => s.add || null), RAIL_SECTIONS.map((s) => s.add || null), 'the sections the sidebar draws carry it');
+});
+
 test('the @ menu offers the project\'s other workspaces after the page and before the library (2026-09-25)', async () => {
   const { mentionRows } = await load();
   const workspaces = [
