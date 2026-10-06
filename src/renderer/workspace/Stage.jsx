@@ -659,7 +659,9 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const closeTab = (id) => { quiet(api.browserClose(id)); dropTab(id); setHover(null); };
   const select = (t) => { setActiveId(t.id); setMenu(null); setTyping(false); setHover(null); };
 
-  React.useImperativeHandle(ref, () => ({ openRow, openInput, openPaths, newTab, closeTab: () => closeTab(tab.id) }));
+  // ⌘1–9 (MATH-12, 2026-10-06): the Stage's n-th tab, when the Stage is what was last clicked (Workspace decides).
+  const tabAt = (index) => { const t = tabs[index]; if (!t) return false; select(t); return true; };
+  React.useImperativeHandle(ref, () => ({ openRow, openInput, openPaths, newTab, closeTab: () => closeTab(tab.id), tabAt }));
 
   /* ------------------------------------------------------------------- kept across ⌘R and quitting (MATH-10) */
   // Main keeps the project's tabs (model/stage.js stageSnapshot) a moment after they change, and at once when the page
@@ -1025,6 +1027,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     shortcut: (name, from) => {
       if (name === 'new-tab') { if (onShow) onShow(); newTab(); return; }
       if (name === 'close-tab') { if (onShow) onShow(); closeTab(from || tab.id); return; }
+      if (typeof name === 'string' && /^tab-[1-9]$/.test(name)) { const t = tabs[Number(name.slice(4)) - 1]; if (t) select(t); return; } // ⌘1–9 pressed in a page
       if (!visible) return;
       if (name === 'find') { if (from || !editable(document.activeElement) || (rootRef.current && rootRef.current.contains(document.activeElement))) openFind(); }
       else if ((name === 'find-next' || name === 'find-previous') && finding) runFind(findText, name === 'find-next' ? 1 : -1);

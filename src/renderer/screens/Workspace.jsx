@@ -1239,6 +1239,20 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   /* --------------------------------------------------------------- keyboard */
 
+  // ⌘1–9 switch the tabs of whichever side was clicked last (MATH-12, 2026-10-06): the documents in the middle, or the Stage.
+  // A press anywhere else (the library, the header) leaves it as it was.
+  const lastSide = React.useRef('doc');
+  React.useEffect(() => {
+    const onDown = (event) => {
+      const at = event.target && event.target.closest ? event.target : null; if (!at) return;
+      if (at.closest('[data-stage]')) lastSide.current = 'stage';
+      else if (at.closest('[data-terminal]')) lastSide.current = 'terminal';
+      else if (at.closest('[data-doc-pane], [data-doc-strip]')) lastSide.current = 'doc';
+    };
+    window.addEventListener('pointerdown', onDown, true);
+    return () => window.removeEventListener('pointerdown', onDown, true);
+  }, []);
+
   React.useEffect(() => {
     if (!active) return undefined;
     const onKey = (event) => {
@@ -1246,6 +1260,12 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       const inTerminal = target && target.closest && target.closest('[data-terminal]');
       const mod = event.metaKey || event.ctrlKey;
       if (mod && !inTerminal && /^[1-9]$/.test(event.key)) {
+        if (lastSide.current === 'terminal' && rightMode === 'terminal') return; // the Terminal's own tabs (TerminalPane)
+        if (lastSide.current === 'stage' && rightMode === 'stage' && stageRef.current) {
+          event.preventDefault();
+          stageRef.current.tabAt(Number(event.key) - 1);
+          return;
+        }
         const tab = tabs[Number(event.key) - 1];
         if (tab) {
           event.preventDefault();
@@ -1278,7 +1298,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [active, tabs, renaming, docFull, notePlus, onClose]);
+  }, [active, tabs, rightMode, renaming, docFull, notePlus, onClose]);
 
   /* --------------------------------------------------------------- resizing */
 

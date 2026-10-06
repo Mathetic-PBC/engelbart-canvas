@@ -509,6 +509,8 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       else if (key === 'j') send('engelbart:next-workspace', {}); // the workspace's ⌘J, which a page in front would otherwise swallow
       else if (key === 't' && !input.shift) { focusApp(); send('browser:shortcut', { name: 'new-tab', tab: id }); }
       else if (key === 'w' && !input.shift) send('browser:shortcut', { name: 'close-tab', tab: id }); // ⇧⌘W is the window's
+      // ⌘1–9 in a page: the Stage was clicked last (the page has the keyboard), so its tabs switch, as in Chrome.
+      else if (/^[1-9]$/.test(key) && !input.shift) send('browser:shortcut', { name: `tab-${key}`, tab: id });
       else return;
       event.preventDefault();
     });
