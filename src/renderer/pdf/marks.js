@@ -80,8 +80,10 @@ function joinText(a, b) {
   return `${a} ${b}`;
 }
 
-const isHighlight = (m) => !!(m && !m.pos && Array.isArray(m.rects) && m.rects.length);
-const hasNote = (m) => m.note != null;
+// A highlight is a mark with rects; its note may have been moved (`pos`, MATH-27) and it is still one. A free note has none.
+const isHighlight = (m) => !!(m && Array.isArray(m.rects) && m.rects.length);
+// A highlight Bart answered from (its `asks`, MATH-27) is held as one with a note: it is never merged into another.
+const hasNote = (m) => m.note != null || !!(Array.isArray(m.asks) && m.asks.length);
 // Marks may become one when at most one `group` is among them (a selection across pages, MATH-14): one id cannot hold two.
 const joins = (a, b) => !a.group || !b.group || a.group === b.group;
 
@@ -105,7 +107,7 @@ export function placeHighlight(list, mark) {
   const hits = marks.filter((m) => isHighlight(m) && mergeLineRects(m.rects).some((b) => boxes.some((a) => boxesOverlap(a, b))));
   const host = hits.find((m) => boxesInside(boxes, mergeLineRects(m.rects)) && joins(m, mark));
   if (host) {
-    const note = mark.note != null && !hasNote(host) ? mark.note : host.note;
+    const note = mark.note != null && host.note == null ? mark.note : host.note;
     const group = host.group || mark.group;
     if (note === host.note && group === host.group) return { list: marks, mark: host };
     const next = { ...host, note, ...(group ? { group } : {}) };

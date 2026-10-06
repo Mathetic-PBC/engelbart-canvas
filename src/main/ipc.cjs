@@ -40,11 +40,31 @@ function optStr(value, what, max = MAX_NAME) {
   return value == null ? null : str(value, what, max);
 }
 
+// A document an agent is asked from: a note, a workspace, or (MATH-27, 2026-10-06) a highlight on a pdf in the Stage,
+// `{ kind: 'mark', id, rowId | url, page }`: the mark's id, the library row the pdf is (else the address its ink is kept
+// by), and its page. A mark is no document: reading, writing or copying one is refused further on (projects.resolveDoc).
 function docRef(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('doc ref must be an object');
   if (value.kind === 'note') return { kind: 'note', id: str(value.id, 'note id', 64) };
   if (value.kind === 'workspace') return { kind: 'workspace', workspaceId: str(value.workspaceId, 'workspace id', 64) };
+  if (value.kind === 'mark') {
+    const id = str(value.id, 'mark id', 64);
+    if (!/^[\w-]+$/.test(id)) throw new TypeError('mark id is invalid');
+    if (!Number.isInteger(value.page) || value.page < 1 || value.page > 100000) throw new TypeError('page must be a page number');
+    const rowId = value.rowId == null ? null : str(value.rowId, 'library id', 64), url = value.url == null ? null : str(value.url, 'address', 8192);
+    if (!rowId === !url) throw new TypeError('a highlight is on a library pdf (rowId) or on an address (url): one of the two');
+    return rowId ? { kind: 'mark', id, rowId, page: value.page } : { kind: 'mark', id, url, page: value.page };
+  }
   throw new TypeError('Unknown doc kind');
+}
+
+/** How the renderer keys a document (`ws:<id>`, `note:<id>`); a highlight is `mark:<id>`, never a note's key. */
+const docKeyOf = (ref) => (ref.kind === 'workspace' ? `ws:${ref.workspaceId}` : ref.kind === 'mark' ? `mark:${ref.id}` : `note:${ref.id}`);
+
+/** What a question asked from a highlight carries besides its ref: the passage, the note as it stands, the paper's name. */
+function highlightInput(value) {
+  const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  return { quote: str(input.quote == null ? '' : input.quote, 'quote', 20000), note: str(input.note == null ? '' : input.note, 'note', 20000), paper: optStr(input.paper, 'paper name') };
 }
 
 function projectInput(value) {
@@ -169,7 +189,6 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // announcement from before its own save from one after it. Clear and Restore rewrite a workspace's document the same way.
   const revisions = new Map(); // `${projectId} ${key}` → revision
   const docTurns = new Map(); // `${projectId} ${key}` → the save in progress
-  const docKeyOf = (ref) => (ref.kind === 'workspace' ? `ws:${ref.workspaceId}` : `note:${ref.id}`);
   const inTurn = (projectId, key, work) => {
     const id = `${projectId} ${key}`;
     const run = (docTurns.get(id) || Promise.resolve()).catch(() => {}).then(work);
@@ -404,7 +423,10 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       // `@orient` line (2026-10-04) is asked as @brainstorm since 2026-10-05 (src/renderer/model/doc.js agentOf).
       const agent = value.agent == null ? 'bart' : value.agent;
       if (!['bart', 'brainstorm', 'discover'].includes(agent)) throw new TypeError('agent must be bart, brainstorm or discover');
-      const question = { askId, ref: docRef(value.ref), workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice, agent };
+      const ref = docRef(value.ref);
+      // A highlight's note asks @bart alone (MATH-27), with the passage it is on.
+      if (ref.kind === 'mark' && agent !== 'bart') throw new TypeError('a highlight asks @bart');
+      const question = { askId, ref, workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice, agent, ...(ref.kind === 'mark' ? { highlight: highlightInput(value.highlight) } : {}) };
       // The ask is an agent of its workspace: running now, waiting for you once its answer (or failure) has landed.
       started = track(() => projects.agentStarted(ctx, { id: askId, kind: agent, projectId: pid, workspaceId: question.workspaceId, doc: question.ref }));
       // Progress goes to the window that asked, which holds the pending line; the answer it places is saved (write-doc).
@@ -685,4 +707,4 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   });
 }
 
-module.exports = { createStore, registerEngelbartIpc };
+module.exports = { createStore, registerEngelbartIpc, docRef, docKeyOf, highlightInput };

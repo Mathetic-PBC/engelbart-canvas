@@ -10,6 +10,7 @@ import { kindOf, stripScheme, OPEN_IN_BROWSER } from '../model/address.js';
 import { MAX_TABS, SAVE_LABEL, WAKE_RETRY_MS, addressKey, afterClose, landTab, landingFinds, linkPlan, looksLikePlace, onStage, placeTab, previewName, previewWait, restoreTabs, stageRows, stageSnapshot, tabKey, tabPlace, parseTable, withPassage } from '../model/stage.js';
 import { markdownBlocks, inlineRuns } from '../model/markdown.js';
 import PaperView from '../pdf/PaperView.jsx';
+import { withAsk } from '../pdf/canvas.js';
 
 // The Stage (Claude Design "Add - Mention Stage.dc.html", 2026-09-23): the Browser and the Paper pane made one. A tab
 // shows whatever it was given — a library row, a link, a file on disk — in the way its format asks:
@@ -36,6 +37,11 @@ import PaperView from '../pdf/PaperView.jsx';
 // section is scrolled to and tinted, and a Sections menu where the find card sits shows another, or clears it (×).
 // A pdf's margin notes mention library items (MATH-21): `@` in a note opens the workspace's @ menu (`mentionItems`, its
 // library rows only), and a mention clicked in a note opens its row as the sidebar does (`onOpenItem`).
+// @bart on a highlight (MATH-27): a note on a pdf's highlight that starts with @bart asks through `onAsk`, given which pdf
+// it is (its library row, else its address) and its name; what the answer is doing comes back as `pendingAsks` (the
+// workspace's, each with its rowId or url), of which the viewer is given its own pdf's. The finished answer (`onAsk`'s
+// result) goes onto its mark: through the viewer when it shows that pdf (it saves it as any edit), else into the tabs
+// that hold the pdf and the kept ink (landAnswer). Stop, close, Copy and Continue in workspace go up as they are.
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
@@ -372,7 +378,10 @@ const clearRanges = () => { const h = highlights(); if (h) { h.delete(FIND); h.d
 
 /* --------------------------------------------------------------------------------------------------- Stage */
 
-const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull, onShow, onPage, onFront, save, library, inRail, onError, onOpenItem, mentionItems, onMentionOpen }, ref) {
+// The pdf an answer is for, as the workspace keeps it ({ rowId } or { url }), and whether a tab's pdf is it.
+const pdfWhere = (p) => (p.rowId ? { rowId: p.rowId } : { url: p.url });
+const samePdf = (p, where) => !!p && !!where && (where.rowId ? p.rowId === where.rowId : !p.rowId && !!where.url && p.url === where.url);
+const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull, onShow, onPage, onFront, save, library, inRail, onError, onOpenItem, mentionItems, onMentionOpen, pendingAsks, onAsk, onStopAsk, onDismissAsk, onContinueAsk, onCopyText }, ref) {
   const [tabs, setTabs] = React.useState(() => [blankTab()]);
   const [activeId, setActiveId] = React.useState(() => null);
   const [draft, setDraft] = React.useState('');
@@ -661,6 +670,28 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
 
   React.useImperativeHandle(ref, () => ({ openRow, openInput, openPaths, newTab, closeTab: () => closeTab(tab.id) }));
 
+  /* ------------------------------------------------------------------- @bart on a highlight (MATH-27) */
+  // A finished answer onto its mark: the viewer in front adds it when it shows that pdf; otherwise every tab holding the
+  // pdf takes it, and so does the ink kept on disk. A mark gone meanwhile takes nothing.
+  const landAnswer = (where, page, markId, entry) => {
+    const front = tabsRef.current.find((t) => t.id === frontRef.current) || tabsRef.current[0];
+    const viewer = paperRef.current;
+    if (front && samePdf(front.pdf, where) && viewer && typeof viewer.addAsk === 'function' && viewer.addAsk(page, markId, entry)) return;
+    setTabs((current) => current.map((t) => (t.pdf && t.pdf.marks && samePdf(t.pdf, where) ? { ...t, pdf: { ...t.pdf, marks: withAsk(t.pdf.marks, page, markId, entry) } } : t)));
+    const read = where.rowId ? api.readAnnotations(where.rowId) : api.readPageAnnotations(where.url);
+    read.catch(() => null).then((held) => {
+      const marks = held || {}, next = withAsk(marks, page, markId, entry);
+      if (next === marks) return null;
+      return where.rowId ? api.writeAnnotations(where.rowId, next) : api.writePageAnnotations(where.url, next);
+    }).catch((error) => { if (onError) onError(error); });
+  };
+  const askFromPaper = async (p, ask) => {
+    if (!onAsk || !p) return;
+    const where = pdfWhere(p);
+    const entry = await onAsk({ ...ask, ...where, paper: p.name || '' });
+    if (entry) landAnswer(where, ask.page, ask.markId, entry);
+  };
+
   /* ------------------------------------------------------------------- kept across ⌘R and quitting (MATH-10) */
   // Main keeps the project's tabs (model/stage.js stageSnapshot) a moment after they change, and at once when the page
   // goes away (⌘R, quitting: no cleanup runs then) or the project closes. Nothing is kept before the kept ones have come
@@ -918,6 +949,8 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   // One query for the pane; it follows the tab in front. A page is searched by Chromium (main: findInPage), a pdf by its
   // viewer, a file drawn here by its text. A new query starts over; Enter, ↓ and ⌘G step (1), ⇧Enter, ↑ and ⇧⌘G back (-1).
   const pdfReady = !!(pdf && pdf.bytes && pdf.marks !== undefined);
+  // The answers being written for the pdf in front (the same list while nothing of it changed).
+  const paperAsks = React.useMemo(() => (pdf ? (pendingAsks || []).filter((p) => samePdf(pdf, p)) : []), [pendingAsks, pdf && pdf.rowId, pdf && pdf.url]); // eslint-disable-line react-hooks/exhaustive-deps
   const runFind = (text, step) => {
     if (pdf) { setMatches(pdfReady && paperRef.current ? paperRef.current.find(text, step) : null); return; }
     if (view) {
@@ -1235,6 +1268,13 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
               mentionItems={mentionItems}
               onMentionOpen={onMentionOpen}
               onOpenMention={(id) => { const row = (library || []).find((r) => r.id === id); if (row && onOpenItem) onOpenItem(row); }}
+              pendingAsks={paperAsks}
+              onAsk={onAsk ? (ask) => { void askFromPaper(pdf, ask); } : undefined}
+              onStopAsk={onStopAsk}
+              onDismissAsk={onDismissAsk}
+              onContinueAsk={onContinueAsk ? (asked) => onContinueAsk({ ...asked, paper: { name: pdf.name || '', rowId: pdf.rowId || null, url: pdf.url || null } }) : undefined}
+              onCopyText={onCopyText}
+              onOpenLink={(href) => openInput(href, { newTab: true })}
               onMarksChange={(marks) => {
                 const { seq, url, rowId } = pdf;
                 update(tab.id, (t) => (t.pdf && t.pdf.seq === seq ? { ...t, pdf: { ...t.pdf, marks } } : t));

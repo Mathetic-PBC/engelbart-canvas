@@ -1040,10 +1040,16 @@ function cleanRecent(value, now = Date.now()) {
   return out;
 }
 
+// A highlight on a pdf (MATH-27): its mark's id (PaperView's, not a uuid), the library row or the address the pdf is, its page.
+const MARK_ID_RE = /^[\w-]{1,64}$/;
 function cleanDocRef(value) {
   const input = plainObject(value);
   if (input && input.kind === 'workspace' && idOrNull(input.workspaceId)) return { kind: 'workspace', workspaceId: input.workspaceId };
   if (input && input.kind === 'note' && idOrNull(input.id)) return { kind: 'note', id: input.id };
+  if (input && input.kind === 'mark' && typeof input.id === 'string' && MARK_ID_RE.test(input.id) && Number.isInteger(input.page) && input.page > 0) {
+    if (idOrNull(input.rowId)) return { kind: 'mark', id: input.id, rowId: input.rowId, page: input.page };
+    if (typeof input.url === 'string' && input.url && input.url.length <= 8192) return { kind: 'mark', id: input.id, url: input.url, page: input.page };
+  }
   return null;
 }
 
@@ -1250,6 +1256,7 @@ module.exports = {
   writeStage,
   readNav,
   recordEdit,
+  cleanDocRef,
   agentStarted,
   agentFinished,
   agentStopped,

@@ -17,18 +17,30 @@
 // searches and stops, until another is shown or clearSection(). `initialSection` { find, to }: the section to show the
 // same way when the viewer opens with no target (a tab with a guide's sections come to the front again). Never ink.
 // A margin note mentions library items (MATH-21, 2026-10-05): `@` in it opens the @ menu (`mentionItems`, the workspace's
-// list, of which only library rows are kept), and a pick writes `@[Name](lib:<id>)` into the note (model/doc.js libMention).
+// list, of which only library rows are kept, and Bart at the start of a highlight's note: MATH-27), and a pick writes
+// `@[Name](lib:<id>)` into the note (model/doc.js libMention).
 // A note no one is typing in is shown as text (`data-note-view`), its mentions links: a click on one is
 // `onOpenMention(id)`, a click anywhere else in it gives the note its field back, the caret where it was clicked. Its
 // names are the library's now (`library`), so a renamed item shows its new name; one gone from the library is grey. With
 // no `onOpenMention` a note is its field alone, as before: the token reads as typed.
+// The page as a canvas (MATH-27 phase 1, 2026-10-06; the pure parts are ./canvas.js). Every page lies on a desk at least
+// DESK px wide each side, at every zoom, that a box moved past its edge widens. Every note is a box with a light border
+// and a grip: a highlight's note opens on the desk beside it (its `side`), a click on the page or the desk makes a free
+// note there, and dragging the grip moves either (`pos`, page units, saved on drop); a click in its text edits it. Each
+// answer Bart gave from a highlight's note (`asks`) is a box under the note, joined by a short line, moved the same way.
+// Boxes that were not moved are spaced on every draw (canvas.js spaceBoxes), never saved. A note on a highlight that
+// starts with @bart asks on Enter (`onAsk`; Shift+Enter is a new line), and a second one continues the exchange (its
+// `asks` go as the turns). An answer being written (`pendingAsks`, the workspace's) is a box of its own until it lands
+// (`addAsk`, from the Stage). Space-drag or a middle-drag pans; a fade and a chip say where boxes are out of view; the
+// bar has Fit page and Fit page + notes.
 import React from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import rough from 'roughjs';
 import { mergeLineRects, placeHighlight, boxSeed, selectionParts, scalePart, partMarks } from './marks.js';
 import { nextFind, createTargetGate, sectionSpans, paintSection, clearFind, FIND, FIND_ACTIVE } from '../model/find.js';
 import { wheelZooms, wheelZoom, createPageCache } from '../model/paper-zoom.js';
-import { mentionAt, libMention, noteHtml, noteParts, noteOffset, LIB_MENTION_RE } from '../model/doc.js';
+import { mentionAt, libMention, noteHtml, noteParts, noteOffset, inlineHtml, esc, LIB_MENTION_RE } from '../model/doc.js';
+import { sideSpace, deskOf, deskNeed, placeOf, posOf, spaceBoxes, extentAt, fitZoom, offscreen, offscreenSide, chipLabel, revealScroll, noteQuestion, turnsOf, modelLabel, runningLabel, DESK_EDGE, BOX_GAP, NOTE_W, ASK_W, COLLAPSED_W, SIDE_GAP, POS_DY } from './canvas.js';
 import { fieldCaret } from '../workspace/caret.js';
 import MentionMenu from '../workspace/MentionMenu.jsx';
 
@@ -64,8 +76,7 @@ export function pageAt(tops, y) {
   while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (tops[mid] <= y) lo = mid; else hi = mid - 1; }
   return lo + 1;
 }
-/** Side space that centers a page of width pageW in a pane of width W (0 once the page is wider). */
-export const sideSpace = (W, pageW) => Math.max(0, Math.floor((W - pageW) / 2));
+export { sideSpace };
 /** Canvas pixels per CSS px: 2×, capped so one page's canvas stays near 4 million device pixels. */
 export const canvasScale = (cssW, cssH) => Math.min(2, Math.sqrt(4e6 / Math.max(1, cssW * cssH)));
 const PINCH_SETTLE_MS = 180;
@@ -86,6 +97,21 @@ const LAYER_CSS = `
 [data-pdf] .pdf-text.selecting .endOfContent{top:0}
 [data-pdf] .pdf-text span[role="img"]{user-select:none;cursor:default}
 [data-pdf][data-pinching] .pdf-text{display:none}
+[data-pdf]{overflow-x:scroll!important}
+[data-pdf]::-webkit-scrollbar{width:10px;height:10px;background:#f2f2f2}
+[data-pdf]::-webkit-scrollbar-thumb{background:#d0d0d0;border-radius:5px;border:2px solid #f2f2f2}
+[data-pdf]::-webkit-scrollbar-thumb:hover{background:#b5b5b5}
+[data-pdf]::-webkit-scrollbar-corner{background:#f2f2f2}
+[data-pdf][data-space],[data-pdf][data-space] *{cursor:grab!important}
+[data-pdf][data-panning],[data-pdf][data-panning] *{cursor:grabbing!important}
+[data-pdf] [data-grip]{cursor:grab}
+[data-pdf][data-dragging],[data-pdf][data-dragging] *{cursor:grabbing!important;user-select:none!important}
+[data-pdf] [data-box] button{border:0;background:transparent;padding:2px 6px;border-radius:5px;font:12px/1.4 var(--font-sans);color:#4d4d4d;cursor:pointer;white-space:nowrap}
+[data-pdf] [data-box] button:hover{background:#f2f2f2}
+[data-pdf] [data-box] [data-ask-body],[data-pdf] [data-box] [data-run-body]{user-select:text;cursor:text}
+[data-pdf] [data-box] [data-ask-body] p,[data-pdf] [data-box] [data-run-body] p{margin:0 0 6px}
+[data-pdf] [data-box] a{color:#0070f3;text-decoration:underline;text-underline-offset:2px}
+@keyframes pdf-spin{to{transform:rotate(360deg)}}
 ::highlight(pdf-section){background-color:rgba(255,196,0,.13)}
 ::highlight(pdf-find){background-color:rgba(255,196,0,.35)}
 ::highlight(pdf-find-active){background-color:rgba(255,140,0,.6)}
@@ -95,6 +121,24 @@ const LAYER_CSS = `
 const BAR = { position: 'absolute', left: '50%', bottom: 16, transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 2, height: 34, boxSizing: 'border-box', padding: '0 4px 0 12px', background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, font: '400 12.5px/1 var(--font-sans)', fontVariantNumeric: 'tabular-nums', color: '#4d4d4d', whiteSpace: 'nowrap', zIndex: 5 };
 const BAR_STEP = { flex: 'none', width: 26, height: 26, padding: 0, borderRadius: 6, border: 0, background: 'transparent', font: '400 14px/1 var(--font-sans)', color: '#4d4d4d', cursor: 'pointer' };
 const BAR_PCT = { flex: 'none', minWidth: 48, height: 26, padding: '0 6px', borderRadius: 6, border: 0, background: 'transparent', font: '500 12.5px/1 var(--font-sans)', fontVariantNumeric: 'tabular-nums', color: '#171717', cursor: 'pointer' };
+const BAR_FIT = { flex: 'none', height: 26, padding: '0 8px', borderRadius: 6, border: 0, background: 'transparent', font: '400 12.5px/1 var(--font-sans)', color: '#4d4d4d', cursor: 'pointer' };
+// Boxes out of view (MATH-27): a fade on each edge with some beyond it, and a chip that brings them in. The scrollbars
+// are 10px (LAYER_CSS): the fades stop short of them.
+const BAR_SIDE = 10;
+const FADE = 36;
+const fadeStyle = (side) => {
+  const to = { left: 'to right', right: 'to left', up: 'to bottom', down: 'to top' }[side];
+  const at = side === 'left' ? { left: 0, top: 0, bottom: BAR_SIDE, width: FADE } : side === 'right' ? { right: BAR_SIDE, top: 0, bottom: BAR_SIDE, width: FADE } : side === 'up' ? { top: 0, left: 0, right: BAR_SIDE, height: FADE } : { bottom: BAR_SIDE, left: 0, right: BAR_SIDE, height: FADE };
+  return { position: 'absolute', ...at, pointerEvents: 'none', zIndex: 4, background: `linear-gradient(${to}, rgba(250,250,250,.96), rgba(250,250,250,0))` };
+};
+const CHIP = { position: 'absolute', zIndex: 5, height: 26, padding: '0 10px', border: '1px solid #eaeaea', borderRadius: 999, background: '#fff', font: '500 12px/1 var(--font-sans)', color: '#4d4d4d', cursor: 'pointer', whiteSpace: 'nowrap', boxShadow: '0 1px 2px rgba(0,0,0,.04)' };
+const chipStyle = (side) => ({ ...CHIP, ...(side === 'left' ? { left: 12, top: '50%', transform: 'translateY(-50%)' } : side === 'right' ? { right: BAR_SIDE + 12, top: '50%', transform: 'translateY(-50%)' } : side === 'up' ? { top: 10, left: '50%', transform: 'translateX(-50%)' } : { bottom: 62, left: '50%', transform: 'translateX(-50%)' }) });
+const SIDES = ['left', 'right', 'up', 'down'];
+const NO_OFF = { left: 0, right: 0, up: 0, down: 0 };
+// A box (MATH-27): a light border, a grip at its top that moves it.
+const BOX_LOOK = 'position:absolute;box-sizing:border-box;border:1px solid #e3e3e3;border-radius:8px;background:rgba(255,255,255,.97);pointer-events:auto;box-shadow:0 1px 2px rgba(0,0,0,.03)';
+const GRIP_HTML = '<div data-grip="1" title="Drag to move" style="height:12px;display:flex;align-items:center;justify-content:center"><span style="width:22px;height:3px;border-radius:2px;background:#d9d9d9"></span></div>';
+const SPINNER = '<span style="flex:none;width:10px;height:10px;box-sizing:border-box;border:1.5px solid #c9d9f2;border-top-color:#0070f3;border-radius:50%;animation:pdf-spin .8s linear infinite"></span>';
 
 // Find (the Browser pane's ⌘F, 2026-09-22): matches are Ranges over the text layer, painted with
 // the CSS Custom Highlight API, so the page's DOM is never touched. Space in the query matches any
@@ -127,6 +171,15 @@ const SVG = 'http://www.w3.org/2000/svg';
 // A note's handwriting, the same in its field and shown as text (so the side arrows meet either where they did).
 const NOTE_LOOK = "pointer-events:auto;padding:0 6px;font:500 17px/1.25 'Caveat',cursive;color:#171717";
 
+// An answer as its box draws it (MATH-27): a paragraph a line, with what Bart was told a box may hold (bold, italic,
+// code, links), and a list's or a heading's mark taken off should one come anyway.
+function answerHtml(text, opts) {
+  return String(text || '').split('\n').map((line) => line.trim()).filter(Boolean).map((line) => {
+    const item = line.match(/^[-*] (.*)$/), head = line.match(/^#{1,6} (.*)$/);
+    return `<p>${item ? `• ${inlineHtml(item[1], opts)}` : head ? `<strong>${inlineHtml(head[1], opts)}</strong>` : inlineHtml(line, opts)}</p>`;
+  }).join('');
+}
+
 function toBytes(src) {
   // pdf.js transfers the buffer to its worker (detaching it), so hand it a private copy.
   if (!src) return null;
@@ -138,7 +191,7 @@ function toBytes(src) {
 export default class PaperView extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { note: 'Opening the paper…', page: 0, pages: 0, pct: 100, mention: null, mentionIdx: 0 };
+    this.state = { note: 'Opening the paper…', page: 0, pages: 0, pct: 100, mention: null, mentionIdx: 0, off: NO_OFF };
     this.host = React.createRef();
     this.marks = clone(props.marks || {}); // { [page]: Mark[] }, geometry in page units
     this.doc = null;
@@ -161,8 +214,16 @@ export default class PaperView extends React.Component {
     this.editing = null; // the id of the note being typed in: drawn as its field, the rest as text (see renderMarks)
     this.redrawing = 0; // > 0 while notes are taken out to be drawn again: a field losing the keyboard then is not left
     this.libDrawn = ''; // the mentioned items' names the notes were drawn with (libKey)
+    this.drawn = {}; // { [page]: { boxes, units, chains } }: the boxes as last drawn, for spacing, links and fitting
+    this.drag = null; // a box being moved by its grip
+    this.pan = null; // a Space-drag or middle-drag under way
+    this.space = false; // Space held over the paper: a drag pans
+    this.hovered = false;
+    this.openLogs = new Set(); // answers being written whose steps are shown
+    this.offRaf = 0;
     this.onDown = (e) => {
       if (!(e.target.closest && e.target.closest('[data-pdf] [data-page]'))) return;
+      if (e.target.closest('[data-box]')) return;
       this.pdfDown = { x: e.clientX, y: e.clientY };
       if (!e.target.closest('textarea')) this.clearPending();
       const tl = e.target.closest('[data-text-layer]');
@@ -174,16 +235,47 @@ export default class PaperView extends React.Component {
     this.pointerIsDown = false;
     this.onPointerDown = () => { this.pointerIsDown = true; };
     this.onPointerUp = () => { this.pointerIsDown = false; this.endSelecting(); };
-    this.onBlur = () => { this.pointerIsDown = false; this.endSelecting(); };
-    this.onKeyUp = () => { if (!this.pointerIsDown) this.endSelecting(); };
+    this.onBlur = () => { this.pointerIsDown = false; this.endSelecting(); this.holdSpace(false); };
+    this.onKeyUp = (e) => { if (e && e.code === 'Space') this.holdSpace(false); if (!this.pointerIsDown) this.endSelecting(); };
     this.onSelectionChange = () => this.trackSelecting();
-    this.onKeyCapture = (e) => { if (this.pendingSelKey(e)) e.stopPropagation(); };
+    this.onKeyCapture = (e) => { if (this.spaceKey(e) || this.pendingSelKey(e)) e.stopPropagation(); };
     this.onWheel = (e) => this.pinch(e);
     this.onScroll = () => {
       if (this.state.mention) this.closeMention();
       if (this.scrollRaf) return;
-      this.scrollRaf = requestAnimationFrame(() => { this.scrollRaf = 0; this.syncBar(); });
+      this.scrollRaf = requestAnimationFrame(() => { this.scrollRaf = 0; this.syncBar(); this.syncOffscreen(); });
     };
+    // Panning (MATH-27): Space held over the paper, or the middle button, and a drag moves the view both ways. Caught
+    // before anything inside: no selection starts, no note is made, no box is grabbed.
+    this.onEnter = () => { this.hovered = true; };
+    this.onLeave = () => { this.hovered = false; };
+    this.onPanDown = (e) => {
+      if (!(e.button === 1 || (e.button === 0 && this.space))) return;
+      const host = this.host.current;
+      if (!host) return;
+      e.preventDefault(); e.stopPropagation();
+      this.pan = { x: e.clientX, y: e.clientY, left: host.scrollLeft, top: host.scrollTop };
+      host.dataset.panning = '1';
+      window.addEventListener('mousemove', this.onPanMove);
+      window.addEventListener('mouseup', this.onPanUp);
+    };
+    this.onPanMove = (e) => {
+      const host = this.host.current, p = this.pan;
+      if (!host || !p) return;
+      host.scrollLeft = p.left - (e.clientX - p.x);
+      host.scrollTop = p.top - (e.clientY - p.y);
+    };
+    this.onPanUp = () => {
+      window.removeEventListener('mousemove', this.onPanMove);
+      window.removeEventListener('mouseup', this.onPanUp);
+      this.pan = null;
+      const host = this.host.current;
+      if (host) delete host.dataset.panning;
+    };
+    this.onAux = (e) => { if (e.button === 1) e.preventDefault(); }; // no paste or autoscroll on a middle click
+    // A box's grip held: the box follows the pointer, the view scrolls at the pane's edges (dragTick).
+    this.onDragMove = (e) => { const d = this.drag; if (!d) return; d.at = { x: e.clientX, y: e.clientY }; this.dragTo(); };
+    this.onDragUp = () => this.endDrag();
     this.findQuery = '';
     this.findAt = -1;
     this.findRanges = [];
@@ -212,8 +304,12 @@ export default class PaperView extends React.Component {
 
   componentDidMount() {
     const host = this.host.current;
+    host.addEventListener('mousedown', this.onPanDown, true);
     host.addEventListener('mousedown', this.onDown);
     host.addEventListener('mouseup', this.onUp);
+    host.addEventListener('auxclick', this.onAux);
+    host.addEventListener('mouseenter', this.onEnter);
+    host.addEventListener('mouseleave', this.onLeave);
     host.addEventListener('wheel', this.onWheel, { passive: false });
     host.addEventListener('scroll', this.onScroll, { passive: true });
     window.addEventListener('keydown', this.onKeyCapture, true);
@@ -243,10 +339,12 @@ export default class PaperView extends React.Component {
     }
     if (prev.marks !== this.props.marks && !this.dirty) {
       // Annotations arriving after the bytes (loaded separately) adopt as long as nothing
-      // was edited here in the meantime.
+      // was edited here in the meantime. A box moved past the desk's edge widens it again.
       this.marks = clone(this.props.marks || {});
+      this.reframe();
       this.renderAllMarks();
     }
+    if (prev.pendingAsks !== this.props.pendingAsks) this.syncPending(prev.pendingAsks || []);
     // A mentioned item renamed, or gone from the library: its mentions are drawn again with its name now.
     if (prev.library !== this.props.library && this.libKey() !== this.libDrawn) this.renderAllMarks();
   }
@@ -254,11 +352,18 @@ export default class PaperView extends React.Component {
   componentWillUnmount() {
     const host = this.host.current;
     if (host) {
+      host.removeEventListener('mousedown', this.onPanDown, true);
       host.removeEventListener('mousedown', this.onDown);
       host.removeEventListener('mouseup', this.onUp);
+      host.removeEventListener('auxclick', this.onAux);
+      host.removeEventListener('mouseenter', this.onEnter);
+      host.removeEventListener('mouseleave', this.onLeave);
       host.removeEventListener('wheel', this.onWheel);
       host.removeEventListener('scroll', this.onScroll);
     }
+    this.onPanUp();
+    if (this.drag) this.endDrag(true);
+    if (this.offRaf) cancelAnimationFrame(this.offRaf);
     window.removeEventListener('keydown', this.onKeyCapture, true);
     document.removeEventListener('pointerdown', this.onPointerDown);
     document.removeEventListener('pointerup', this.onPointerUp);
@@ -282,7 +387,7 @@ export default class PaperView extends React.Component {
   find1(selector) { const host = this.host.current; return host ? host.querySelector(selector) : null; }
 
   // A page's drawn geometry (falls back to page 1's before the first layout).
-  geom(page) { return this.geo[page] || { G: this.pdfG || 0, pageW: this.pageW || 1 }; }
+  geom(page) { return this.geo[page] || { G: this.pdfG || 0, R: this.pdfG || 0, pageW: this.pageW || 1 }; }
 
   /* ---------------------------------------------------------------- persistence */
   scheduleSave() {
@@ -398,6 +503,47 @@ export default class PaperView extends React.Component {
   // The percentage goes back to 100%: the page as wide as the pane.
   togglePct() { if (this.pct() !== 100) this.zoomTo(100); }
 
+  // The view moved so a point of page n (px from the page's top-left; null keeps that axis) is in its middle.
+  centerOn(n, x, y) {
+    const host = this.host.current, s = this.sheets[n], g = this.geo[n];
+    if (!host || !s || !g) return;
+    const r = s.wrap.getBoundingClientRect(), h = host.getBoundingClientRect(), css = this.css || 1, bt = n > 1 ? 1 : 0;
+    if (x != null) host.scrollLeft += r.left + (g.G + x) * css - (h.left + host.clientLeft + host.clientWidth / 2);
+    if (y != null) host.scrollTop += r.top + (bt + y) * css - (h.top + host.clientTop + host.clientHeight / 2);
+  }
+
+  // The boxes of page n as ./canvas.js extentAt reads them: a moved one by its page units, one beside the page by its px
+  // from the page's edge, any other by where it is now in page units; sizes as drawn.
+  boxShapes(n) {
+    const model = this.drawn[n], g = this.geo[n];
+    if (!model || !g) return [];
+    const P = g.pageW || 1;
+    return model.boxes.filter((b) => b.el && b.el.isConnected).map((b) => {
+      const w = b.width, h = b.height, pos = b.how === 'pos' && b.pos;
+      if (pos) return { x: { a: pos.x, b: 0 }, y: { a: pos.y, b: -POS_DY }, w, h };
+      if (b.how === 'right') return { x: { a: 1, b: b.left - g.G - P }, y: { a: b.top / P, b: 0 }, w, h };
+      if (b.how === 'left') return { x: { a: 0, b: b.left - g.G }, y: { a: b.top / P, b: 0 }, w, h };
+      return { x: { a: (b.left - g.G) / P, b: 0 }, y: { a: b.top / P, b: 0 }, w, h };
+    });
+  }
+
+  /** "Fit page": the page in view whole in the pane; `withNotes`, "Fit page + notes": zoomed out until its boxes are too. */
+  fitPage(withNotes = false) {
+    const host = this.host.current;
+    if (!host || !this.doc || !this.inner) return;
+    const n = this.currentPage() || 1, v0 = this.v0[n];
+    if (!v0) return;
+    const W = host.clientWidth, H = host.clientHeight, unit = this.unit(W);
+    const shape = { pageW1: v0.width * unit, pageH1: v0.height * unit, boxes: withNotes ? this.boxShapes(n) : [] };
+    const z = fitZoom({ ...shape, availW: Math.max(40, W - 48), availH: Math.max(40, H - 48 - 50), zMin: ZOOM_MIN, zMax: ZOOM_MAX });
+    clearTimeout(this.pinchTimer); this.pinchTimer = null; this.live = null;
+    this.zoom = z;
+    this.layout(undefined, () => {
+      const e = extentAt({ ...shape, pageW1: this.geo[n].pageW / z }, z);
+      this.centerOn(n, (e.left + e.right) / 2, (e.top + e.bottom) / 2);
+    });
+  }
+
   // Trackpad pinch (and ⌃ scroll) arrive as wheel events with ctrlKey, ⌘ scroll with metaKey. The drawn sheets are
   // scaled with CSS zoom at once (scroll geometry stays real), and laid out again once the pinch settles.
   pinch(e) {
@@ -447,23 +593,60 @@ export default class PaperView extends React.Component {
   // At a fixed zoom a resize only moves the pages sideways: new side space, same drawings.
   recenter(W) {
     this.pdfW = W;
+    const need = this.deskNeedNow();
     for (let n = 1; n < this.geo.length; n += 1) {
       const g = this.geo[n], s = this.sheets[n];
       if (!g || !s) continue;
-      g.G = sideSpace(W, g.pageW);
+      Object.assign(g, deskOf(W, g.pageW, need));
       this.place(n);
     }
     if (this.geo[1]) this.pdfG = this.geo[1].G;
     this.renderAllMarks();
   }
 
+  // How wide the desk must be each side (./canvas.js deskNeed), at the pages' widths now; `extra` ({ left, right } px)
+  // for a box being dragged past it.
+  deskNeedNow(extra = null) {
+    const need = deskNeed(this.marks, (n) => (this.geo[n] ? this.geo[n].pageW : 0));
+    return extra ? { left: Math.max(need.left, extra.left || 0), right: Math.max(need.right, extra.right || 0) } : need;
+  }
+
+  // The desk made as wide as the boxes need (MATH-27), the drawings kept: each sheet takes its new sides, the boxes
+  // drawn on it move with its page, and the view moves with page 1 so nothing on screen jumps. → whether anything changed.
+  reframe(extra = null) {
+    const host = this.host.current;
+    if (!host || !this.pdfW || this.geo.length < 2) return false;
+    const need = this.deskNeedNow(extra), was = this.geo[1] ? this.geo[1].G : 0;
+    let changed = false;
+    for (let n = 1; n < this.geo.length; n += 1) {
+      const g = this.geo[n], s = this.sheets[n];
+      if (!g || !s) continue;
+      const next = deskOf(this.pdfW, g.pageW, need), dG = next.G - g.G;
+      if (!dG && next.R === g.R) continue;
+      changed = true;
+      g.G = next.G; g.R = next.R;
+      this.place(n);
+      const model = this.drawn[n];
+      if (model && dG) {
+        for (const b of model.boxes) { b.left += dG; b.el.style.left = `${b.left}px`; }
+        this.drawLinks(n);
+      }
+    }
+    if (!changed) return false;
+    this.pdfG = this.geo[1].G;
+    host.scrollLeft += (this.pdfG - was) * (this.css || 1);
+    return true;
+  }
+
   /* ---------------------------------------------------------------- layout */
   // Everything about a sheet that depends on its geometry (side space, page size).
   place(n) {
     const g = this.geo[n], s = this.sheets[n];
-    const { G, pageW, pageH } = g, sheetW = pageW + 2 * G;
+    const { G, R, pageW, pageH } = g, sheetW = G + pageW + R;
     s.wrap.style.width = `${sheetW}px`;
     s.wrap.style.height = `${pageH}px`;
+    // The page, white with a faint edge, on the desk (MATH-27); its drawing goes over it once it is ready.
+    if (s.bg) s.bg.style.cssText = `position:absolute;left:${G}px;top:0;width:${pageW}px;height:${pageH}px;background:#fff;box-shadow:0 0 0 1px #e6e6e6`;
     if (s.canvas) s.canvas.style.cssText = `position:absolute;left:${G}px;top:0;width:${pageW}px;height:${pageH}px;background:#fff`;
     s.hl.setAttribute('width', pageW); s.hl.setAttribute('height', pageH); s.hl.setAttribute('viewBox', `0 0 ${pageW} ${pageH}`);
     s.hl.style.cssText = `position:absolute;left:${G}px;top:0;width:${pageW}px;height:${pageH}px;pointer-events:none;overflow:visible`;
@@ -471,13 +654,14 @@ export default class PaperView extends React.Component {
     s.ar.setAttribute('width', sheetW); s.ar.setAttribute('height', pageH); s.ar.setAttribute('viewBox', `0 0 ${sheetW} ${pageH}`);
   }
 
-  /* paper — drawn page by page. Each page is one white sheet, centered in the pane: the side
-     space G on both sides makes the sheet at least as wide as the pane, so the whole sheet is
-     writable. Sheets stack with a 1px rule between them so page breaks still read. All sheets
+  /* paper — drawn page by page. Each page is one white sheet on a desk (MATH-27): the desk G on its left and R on its
+     right are each at least DESK px, and at least what centers the page in the pane, so the whole sheet is writable and
+     there is room beside every page for its notes. Sheets stack 1px apart so page breaks still read. All sheets
      are laid out at their final size first (so the scroll position can be kept), showing the
      previous drawing stretched, then drawn starting from the page in view. `anchor` is a client
-     point to keep fixed; undefined keeps the top of the view, null starts at the top. */
-  async layout(anchor) {
+     point to keep fixed; undefined keeps the top of the view, null starts at the top with page 1 in the middle. `then`,
+     when given, places the view instead, once the sheets are laid out (Fit page). */
+  async layout(anchor, then = null) {
     const host = this.host.current, doc = this.doc;
     if (!host || !doc || host.clientWidth < 40) { this.setPinching(this.live != null); return; }
     this.cancelLayout();
@@ -509,15 +693,19 @@ export default class PaperView extends React.Component {
     const geo = [], sheets = [], tops = [];
     const inner = document.createElement('div');
     inner.style.cssText = 'position:relative;width:max-content;min-width:100%;margin:0 auto;display:flex;flex-direction:column;align-items:flex-start';
+    const widths = [];
+    for (let n = 1; n <= N; n += 1) widths[n] = Math.max(1, Math.round(this.v0[n].width * unit * z));
+    const need = deskNeed(this.marks, (n) => widths[n] || 0);
     let top = 0;
     for (let n = 1; n <= N; n += 1) {
-      const v0 = this.v0[n], pageW = Math.max(1, Math.round(v0.width * unit * z)), scale = pageW / v0.width;
-      geo[n] = { G: sideSpace(W, pageW), pageW, pageH: v0.height * scale, scale };
+      const v0 = this.v0[n], pageW = widths[n], scale = pageW / v0.width;
+      geo[n] = { ...deskOf(W, pageW, need), pageW, pageH: v0.height * scale, scale };
       tops.push(top);
       top += geo[n].pageH + (n > 1 ? 1 : 0);
       const wrap = document.createElement('div');
       wrap.dataset.page = n;
-      wrap.style.cssText = `position:relative;flex:none;margin:0 auto;background:#fff;${n > 1 ? 'border-top:1px solid #eaeaea;' : ''}box-sizing:content-box`;
+      wrap.style.cssText = `position:relative;flex:none;margin:0 auto;${n > 1 ? 'border-top:1px solid transparent;' : ''}box-sizing:content-box`;
+      const bg = document.createElement('div');
       // The previous drawing of this page, stretched, until the new one is ready.
       const old = this.sheets[n] && this.sheets[n].canvas;
       const hl = document.createElementNS(SVG, 'svg');
@@ -529,14 +717,16 @@ export default class PaperView extends React.Component {
       tl.style.setProperty('--total-scale-factor', String(scale));
       tl.style.setProperty('--scale-round-x', '1px');
       tl.style.setProperty('--scale-round-y', '1px');
+      // Boxes and their arrows above every page's drawing and text (a box pushed past its page's foot stays in sight).
       const notes = document.createElement('div');
-      notes.dataset.notes = n; notes.style.cssText = 'position:absolute;inset:0;pointer-events:none';
+      notes.dataset.notes = n; notes.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:2';
       const ar = document.createElementNS(SVG, 'svg');
       ar.dataset.arrows = n;
-      ar.style.cssText = 'position:absolute;inset:0;pointer-events:none;overflow:visible';
+      ar.style.cssText = 'position:absolute;inset:0;pointer-events:none;overflow:visible;z-index:1';
+      wrap.append(bg);
       if (old) wrap.append(old);
       wrap.append(hl, tl, ar, notes);
-      sheets[n] = { wrap, canvas: old || null, hl, tl, ar, notes };
+      sheets[n] = { wrap, bg, canvas: old || null, hl, tl, ar, notes };
       inner.appendChild(wrap);
     }
 
@@ -544,12 +734,15 @@ export default class PaperView extends React.Component {
     try { host.replaceChildren(inner); } finally { this.redrawing -= 1; }
     this.setPinching(this.live != null); // the new text layers show unless a pinch is still under way
     const oldGeo = this.geo;
-    this.inner = inner; this.geo = geo; this.sheets = sheets; this.tops = tops;
+    this.inner = inner; this.geo = geo; this.sheets = sheets; this.tops = tops; this.drawn = {};
     this.renderedZoom = z; this.css = 1;
     for (let n = 1; n <= N; n += 1) this.place(n);
     if (this.live != null) this.setCss(this.live / z);
     this.pdfW = W; this.pdfG = geo[1].G; this.pageW = geo[1].pageW;
-    if (at) this.restoreAnchor(at); else if (anchor === null) { host.scrollTop = 0; host.scrollLeft = 0; }
+    if (!then) {
+      if (at) this.restoreAnchor(at);
+      else if (anchor === null) { host.scrollTop = 0; host.scrollLeft = 0; this.centerOn(1, geo[1].pageW / 2, null); }
+    }
 
     // A pending selection is kept in pixels of the layout it was made in, a part a page; carry it over.
     const p = this.pendingSel;
@@ -558,11 +751,13 @@ export default class PaperView extends React.Component {
         ? scalePart(part, part.u || (oldGeo[part.page] && oldGeo[part.page].pageW), geo[part.page].pageW) : part));
     }
     this.renderAllMarks();
+    if (then) then();
     if (focused) {
       const ta = this.find1(`textarea[data-mark="${focused.id}"]`);
       if (ta) { ta.focus({ preventScroll: true }); try { ta.setSelectionRange(focused.a, focused.b); } catch { /* not a text field */ } }
     }
     this.syncBar();
+    this.syncOffscreen();
 
     // Draw the page in view first, then the one above it, then onward, then the rest above.
     const cur = this.currentPage() || 1;
@@ -597,7 +792,7 @@ export default class PaperView extends React.Component {
         } catch (err) { /* a page without a text layer is still readable */ }
         if (gen !== this.layoutGen) return;
         // Free notes size themselves around the printed text, which only now exists.
-        if ((this.marks[n] || []).some((m) => m.pos && m.note != null)) this.renderMarks(n);
+        if ((this.marks[n] || []).some((m) => m.pos && m.note != null && !(m.rects || []).length)) this.renderMarks(n);
       }
       if (this.findQuery) this.report(this.find(this.findQuery, 0, { scroll: false }));
       if (this.section) { this.section.spot = this.sectionStart(this.section.text).spot; this.paintSection(); } // the text layer was drawn again: found again
@@ -830,8 +1025,8 @@ export default class PaperView extends React.Component {
   // gives no rects has no part.
   pdfMouseUp(e) {
     const wrap = e.target.closest && e.target.closest('[data-pdf] [data-page]');
-    if (!wrap) return;
-    if (e.target.closest('textarea, [data-note-view]')) return;
+    if (!wrap || this.pan) return;
+    if (e.target.closest('textarea, [data-note-view], [data-box]')) return;
     const sel = getSelection(), css = this.css || 1;
     if (sel && !sel.isCollapsed && sel.rangeCount) {
       const range = sel.getRangeAt(0);
@@ -860,15 +1055,30 @@ export default class PaperView extends React.Component {
   // Width available for a free-placed note at (x, y): stops before the next printed text on
   // that line, so notes wrap instead of running over the page.
   freeWidth(page, x, y, h) {
-    const { G, pageW } = this.geom(page), tl = this.find1(`[data-text-layer="${page}"]`);
+    const { G, R, pageW } = this.geom(page), tl = this.find1(`[data-text-layer="${page}"]`);
     if (!tl) return 160;
-    let right = pageW + 2 * G - 8;
+    let right = G + pageW + R - 8;
     for (const s of tl.querySelectorAll('span')) {
       const l = s.offsetLeft + G, t = s.offsetTop, b = t + s.offsetHeight;
       if (b < y || t > y + h) continue;
       if (l > x && l < right) right = l - 6;
     }
     return Math.max(70, right - x);
+  }
+
+  // Space held with the pointer over the paper, and nothing being typed in: a drag pans (MATH-27). The page does not
+  // scroll a screen down, as Space would make it.
+  spaceKey(e) {
+    if (e.code !== 'Space' || e.metaKey || e.ctrlKey || e.altKey || isEditable(e.target) || !this.hovered) return false;
+    e.preventDefault();
+    this.holdSpace(true);
+    return true;
+  }
+  holdSpace(on) {
+    this.space = !!on;
+    const host = this.host.current;
+    if (!host) return;
+    if (on) host.dataset.space = '1'; else delete host.dataset.space;
   }
 
   pendingSelKey(e) {
@@ -939,60 +1149,56 @@ export default class PaperView extends React.Component {
 
   // Highlights are drawn once a page: every mark's rects merged (./marks.js mergeLineRects), one zigzag a box, seeded by
   // where the box is so it keeps its shape between renders and zooms. Marks overlapping each other, or saved with
-  // doubled rects, draw no darker. Notes and arrows go by each mark's own rects. A note being typed in when its page is
-  // drawn again (a mark added beside it, a free note fitted once the text is drawn, a rename) has the keyboard back after.
+  // doubled rects, draw no darker. A note being typed in when its page is drawn again (a mark added beside it, a free note
+  // fitted once the text is drawn, a rename) has the keyboard back after.
+  // Boxes (MATH-27): a mark with a note or an answer is a chain, its note's box, a box for each answer (`asks`), then
+  // one for each answer being written (`pendingAsks`). Each box is where it was moved to (`pos`), else under the box
+  // before it, else (the first of its chain) on the desk beside its highlight, on its `side`. The boxes not moved are then
+  // spaced (arrange), and the arrow from the highlight and the lines between boxes drawn where they ended up (drawLinks).
   renderMarks(page) {
     const hl = this.find1(`[data-hl="${page}"]`), notes = this.find1(`[data-notes="${page}"]`), ar = this.find1(`[data-arrows="${page}"]`);
     if (!hl || !notes) return;
-    const { G, pageW } = this.geom(page), u = pageW, sheetW = pageW + 2 * G;
-    const PM = Math.round(pageW * 0.085);
+    const { G, pageW } = this.geom(page), u = pageW;
     const active = document.activeElement;
     const had = active && active.tagName === 'TEXTAREA' && notes.contains(active) ? { id: active.dataset.mark, a: active.selectionStart, b: active.selectionEnd } : null;
     this.redrawing += 1;
     try { hl.innerHTML = ''; notes.innerHTML = ''; if (ar) ar.innerHTML = ''; } finally { this.redrawing -= 1; }
-    const rc = rough ? rough.svg(hl) : null, ra = rough && ar ? rough.svg(ar) : null;
+    const rc = rough ? rough.svg(hl) : null;
     const list = (this.marks || {})[page] || [];
     for (const b of mergeLineRects(list.flatMap((m) => m.rects || []))) {
       const r = { x: b.x * u, y: b.y * u, w: b.w * u, h: b.h * u };
       if (rc) hl.appendChild(rc.rectangle(r.x, r.y + r.h * 0.15, r.w, r.h * 0.7, { fill: 'rgba(0,112,243,.14)', fillStyle: 'zigzag', fillWeight: 1.2, hachureGap: 2.6, hachureAngle: -4, stroke: 'none', roughness: 0.9, seed: boxSeed(page, b) }));
       else { const d = document.createElementNS(SVG, 'rect'); d.setAttribute('x', r.x); d.setAttribute('y', r.y); d.setAttribute('width', r.w); d.setAttribute('height', r.h); d.setAttribute('fill', 'rgba(0,112,243,.12)'); hl.appendChild(d); }
     }
-    let k = 0;
-    for (const m of list) {
-      k++;
-      const rects = m.rects.map((r) => ({ x: r.x * u, y: r.y * u, w: r.w * u, h: r.h * u }));
-      const my = m.y * u, pos = m.pos ? { x: m.pos.x * u + G, y: m.pos.y * u } : null;
-      if (m.note == null) continue;
-      let left, top, width;
-      if (pos) { left = pos.x; top = pos.y - 11; width = Math.min(this.freeWidth(page, pos.x, pos.y, 22), G + pageW * .6); }
-      else {
-        // Side notes sit in the side space plus the page's own margin; with little or no side
-        // space they keep a usable width and stay on the sheet (the box is width + 12px of padding).
-        width = Math.max(80, G + PM - 16);
-        left = m.side === 'left' ? 8 : Math.max(0, Math.min(G + pageW - PM + 8, sheetW - width - 16));
-        top = Math.max(0, my - 6);
+    const boxes = [], units = [], chains = [], running = this.pendingOn(page);
+    list.forEach((m, k) => {
+      const asks = Array.isArray(m.asks) ? m.asks.filter(Boolean) : [], runs = running.filter((p) => p.markId === m.id);
+      if (m.note == null && !asks.length && !runs.length) return;
+      const side = m.side === 'left' ? 'left' : 'right';
+      const chain = { m, k: k + 1, rects: (m.rects || []).map((r) => ({ x: G + r.x * u, y: r.y * u, w: r.w * u, h: r.h * u })), boxes: [] };
+      const parts = [];
+      if (m.note != null) parts.push({ kind: 'note', pos: m.pos || null });
+      for (const a of asks) parts.push({ kind: 'ask', ask: a, pos: a.pos || null });
+      for (const p of runs) parts.push({ kind: 'run', run: p, pos: null });
+      let unit = null, prev = null;
+      for (const part of parts) {
+        const el = part.kind === 'note' ? this.noteBox(m, page) : part.kind === 'ask' ? this.askBox(m, part.ask, page) : this.runBox(part.run, page);
+        notes.appendChild(el);
+        const ta = el.querySelector('textarea');
+        if (ta) this.fitNote(ta);
+        const b = { el, kind: part.kind, m, ask: part.ask || null, page, fixed: !!part.pos, pos: part.pos, how: 'pos', left: 0, top: 0, width: 0, height: 0 };
+        if (part.pos) { Object.assign(b, placeOf(part.pos, G, u || 1)); unit = null; }
+        else {
+          if (!unit) { unit = { id: `${m.id}:${chain.boxes.length}`, want: Math.max(0, m.y * u - 6), side: prev ? null : side, parent: prev, boxes: [] }; units.push(unit); }
+          b.how = unit.parent ? 'hang' : side;
+          unit.boxes.push(b);
+        }
+        boxes.push(b); chain.boxes.push(b); prev = b;
       }
-      const box = `position:absolute;left:${left}px;top:${top}px;width:${width}px;${NOTE_LOOK}`;
-      if (this.editing === m.id || !String(m.note).trim() || !this.showsNotes()) {
-        const ta = this.noteField(m, page);
-        ta.style.cssText = `${box};border:0;background:transparent;resize:none;overflow:hidden;outline:none`;
-        notes.appendChild(ta); this.fitNote(ta);
-      } else {
-        const view = this.noteView(m, page);
-        view.style.cssText = `${box};white-space:pre-wrap;overflow-wrap:break-word;cursor:text`;
-        notes.appendChild(view);
-      }
-      if (ra && rects.length && !pos) {
-        const r = rects[0], ax = m.side === 'left' ? G + r.x - 3 : G + r.x + r.w + 3, ay = r.y + r.h / 2;
-        const nx = m.side === 'left' ? left + width - 4 : left + 2, ny = top + 11;
-        const mx = (ax + nx) / 2, my2 = (ay + ny) / 2 + (m.side === 'left' ? -6 : 6);
-        const opts = { stroke: 'rgba(0,112,243,.35)', strokeWidth: 1.1, roughness: 1.4, bowing: 1.2, seed: page * 13 + k };
-        ar.appendChild(ra.curve([[ax, ay], [mx, my2], [nx, ny]], opts));
-        const dx = nx - mx, dy = ny - my2, len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len, hx = nx - ux * 7, hy = ny - uy * 7;
-        ar.appendChild(ra.line(nx, ny, hx - uy * 3.5, hy + ux * 3.5, opts));
-        ar.appendChild(ra.line(nx, ny, hx + uy * 3.5, hy - ux * 3.5, opts));
-      }
-    }
+      chains.push(chain);
+    });
+    this.drawn[page] = { boxes, units, chains };
+    this.arrange(page);
     // Clearing the highlight layer took the pending selection with it.
     this.showPending(page);
     if (had) {
@@ -1004,6 +1210,344 @@ export default class PaperView extends React.Component {
       const ta = notes.querySelector(`textarea[data-mark="${open.markId}"]`);
       if (ta && document.activeElement === ta) this.setState({ mention: { ...open, anchor: fieldCaret(ta) } }); else this.closeMention();
     }
+    this.syncOffscreenSoon();
+  }
+
+  /* ---------------------------------------------------------------- boxes (MATH-27) */
+  // The spacing pass (./canvas.js spaceBoxes), on every draw and while a box is dragged: every box measured; a unit
+  // beside its page goes against the page's edge (a left one's right edge to it), one under a moved box hangs from that
+  // box's edge nearest the page's middle; each then goes as high as it wants with BOX_GAP from any box it shares x with.
+  arrange(page) {
+    const model = this.drawn[page];
+    if (!model) return;
+    const { G, pageW } = this.geom(page), mid = G + pageW / 2;
+    for (const b of model.boxes) { b.width = b.el.offsetWidth; b.height = b.el.offsetHeight; }
+    const fixed = model.boxes.filter((b) => b.fixed);
+    for (const b of fixed) { b.el.style.left = `${b.left}px`; b.el.style.top = `${b.top}px`; }
+    const shaped = model.units.filter((unit) => unit.boxes.length).map((unit) => {
+      const p = unit.parent;
+      if (p) {
+        const fromRight = p.left + p.width / 2 < mid;
+        for (const b of unit.boxes) b.left = fromRight ? p.left + p.width - b.width : p.left;
+        return { unit, want: p.top + p.height + BOX_GAP };
+      }
+      for (const b of unit.boxes) b.left = unit.side === 'left' ? G - SIDE_GAP - b.width : G + pageW + SIDE_GAP;
+      return { unit, want: unit.want };
+    });
+    const tops = spaceBoxes(shaped.map(({ unit, want }) => ({ id: unit.id, want, boxes: unit.boxes.map((b) => ({ left: b.left, width: b.width, height: b.height })) })), fixed);
+    for (const { unit } of shaped) {
+      let t = tops.get(unit.id);
+      for (const b of unit.boxes) { b.top = t; b.el.style.left = `${b.left}px`; b.el.style.top = `${t}px`; t += b.height + BOX_GAP; }
+    }
+    this.drawLinks(page);
+  }
+
+  // The arrow from each highlight to the first box of its chain, wherever that box is, and a short line between each box
+  // and the next.
+  drawLinks(page) {
+    const ar = this.find1(`[data-arrows="${page}"]`), model = this.drawn[page];
+    if (!ar || !model) return;
+    ar.innerHTML = '';
+    const ra = rough ? rough.svg(ar) : null;
+    for (const chain of model.chains) {
+      if (!chain.boxes.length) continue;
+      if (ra && chain.rects.length) this.drawArrow(ra, ar, chain, chain.boxes[0], page);
+      for (let i = 1; i < chain.boxes.length; i += 1) this.drawJoin(ar, chain.boxes[i - 1], chain.boxes[i]);
+    }
+  }
+  drawArrow(ra, ar, chain, box, page) {
+    const rects = chain.rects, first = rects[0], last = rects[rects.length - 1];
+    const hlL = Math.min(...rects.map((r) => r.x)), hlR = Math.max(...rects.map((r) => r.x + r.w));
+    const bl = box.left, br = box.left + box.width, bt = box.top, bb = box.top + box.height, ny0 = bt + Math.min(18, box.height / 2);
+    let ax, ay, nx, ny, sway;
+    if (bl >= hlR) { ax = first.x + first.w + 3; ay = first.y + first.h / 2; nx = bl - 2; ny = ny0; sway = [0, 6]; }
+    else if (br <= hlL) { ax = first.x - 3; ay = first.y + first.h / 2; nx = br + 2; ny = ny0; sway = [0, -6]; }
+    else if (bt >= last.y + last.h) { ax = last.x + last.w / 2; ay = last.y + last.h + 3; nx = clamp(ax, bl + 12, br - 12); ny = bt - 2; sway = [6, 0]; }
+    else { ax = first.x + first.w / 2; ay = first.y - 3; nx = clamp(ax, bl + 12, br - 12); ny = bb + 2; sway = [-6, 0]; }
+    const mx = (ax + nx) / 2 + sway[0], my = (ay + ny) / 2 + sway[1];
+    const opts = { stroke: 'rgba(0,112,243,.35)', strokeWidth: 1.1, roughness: 1.4, bowing: 1.2, seed: page * 13 + chain.k };
+    ar.appendChild(ra.curve([[ax, ay], [mx, my], [nx, ny]], opts));
+    const dx = nx - mx, dy = ny - my, len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len, hx = nx - ux * 7, hy = ny - uy * 7;
+    ar.appendChild(ra.line(nx, ny, hx - uy * 3.5, hy + ux * 3.5, opts));
+    ar.appendChild(ra.line(nx, ny, hx + uy * 3.5, hy - ux * 3.5, opts));
+  }
+  drawJoin(ar, a, b) {
+    const lo = Math.max(a.left, b.left), hi = Math.min(a.left + a.width, b.left + b.width);
+    let x1, y1, x2, y2;
+    if (hi - lo >= 16 && b.top >= a.top + a.height) { x1 = x2 = (lo + hi) / 2; y1 = a.top + a.height; y2 = b.top; }
+    else if (hi - lo >= 16 && a.top >= b.top + b.height) { x1 = x2 = (lo + hi) / 2; y1 = a.top; y2 = b.top + b.height; }
+    else if (b.left >= a.left + a.width) { x1 = a.left + a.width; y1 = a.top + Math.min(18, a.height / 2); x2 = b.left; y2 = b.top + Math.min(18, b.height / 2); }
+    else { x1 = a.left; y1 = a.top + Math.min(18, a.height / 2); x2 = b.left + b.width; y2 = b.top + Math.min(18, b.height / 2); }
+    const line = document.createElementNS(SVG, 'line');
+    line.setAttribute('x1', x1); line.setAttribute('y1', y1); line.setAttribute('x2', x2); line.setAttribute('y2', y2);
+    line.setAttribute('stroke', '#cfcfcf'); line.setAttribute('stroke-width', '1.2'); line.setAttribute('stroke-linecap', 'round');
+    ar.appendChild(line);
+  }
+
+  // A note's box: the grip, then its field (being typed in, empty, or with nowhere for a mention to go) or its text. A
+  // free note keeps to the room before the printed text beside it, as it always did; a highlight's is NOTE_W wide.
+  noteBox(m, page) {
+    const { G, pageW } = this.geom(page), u = pageW || 1;
+    let width = NOTE_W;
+    if (m.pos && !(m.rects || []).length) {
+      const at = placeOf(m.pos, G, u);
+      width = Math.max(120, Math.min(this.freeWidth(page, at.left, at.top + POS_DY, 22), G + pageW * 0.6));
+    }
+    const box = document.createElement('div');
+    box.dataset.box = 'note'; box.dataset.boxMark = m.id;
+    box.style.cssText = `${BOX_LOOK};left:0;top:0;width:${width}px;padding-bottom:4px`;
+    box.innerHTML = GRIP_HTML;
+    box.onmousedown = (ev) => ev.stopPropagation(); // not a click on the page: no new note, the pending selection stays
+    this.grip(box, page);
+    if (this.editing === m.id || !String(m.note).trim() || !this.showsNotes()) {
+      const ta = this.noteField(m, page);
+      ta.style.cssText = `${NOTE_LOOK};display:block;width:100%;box-sizing:border-box;margin:0;border:0;background:transparent;resize:none;overflow:hidden;outline:none`;
+      box.appendChild(ta);
+    } else {
+      const view = this.noteView(m, page);
+      view.style.cssText = `${NOTE_LOOK};white-space:pre-wrap;overflow-wrap:break-word;cursor:text`;
+      box.appendChild(view);
+    }
+    return box;
+  }
+
+  // An answer's box: the grip, the question in grey and the model, the answer (scrolling inside past 40% of the pane's
+  // height), then Continue in workspace, Copy, Delete and Collapse. Collapsed it is one line, "Bart ›".
+  askBox(m, a, page) {
+    const box = document.createElement('div');
+    box.dataset.box = 'ask'; box.dataset.boxMark = m.id; box.dataset.ask = String(a.id || '');
+    box.onmousedown = (ev) => ev.stopPropagation();
+    box.onclick = (ev) => this.askClick(ev, m, a, page);
+    if (a.collapsed) {
+      box.style.cssText = `${BOX_LOOK};left:0;top:0;width:${COLLAPSED_W}px;padding:0 4px 4px`;
+      box.innerHTML = `${GRIP_HTML}<button type="button" data-act="expand" title="${esc(a.question || '')}" style="display:block;width:100%;text-align:left;font-weight:500;color:#171717">Bart ›</button>`;
+    } else {
+      const model = modelLabel(a.meta), lib = { libName: (id) => this.libName(id) };
+      box.style.cssText = `${BOX_LOOK};left:0;top:0;width:${ASK_W}px;max-height:${this.boxMaxHeight()}px;display:flex;flex-direction:column;font:13px/1.55 var(--font-sans);color:#171717`;
+      box.innerHTML = GRIP_HTML
+        + `<div style="flex:none;display:flex;align-items:baseline;gap:8px;padding:0 12px 6px"><span title="${esc(a.question || '')}" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8f8f8f">${esc(a.question || '')}</span>${model ? `<span style="flex:none;font-size:11.5px;color:#b5b5b5">${esc(model)}</span>` : ''}</div>`
+        + `<div data-ask-body="1" style="flex:1 1 auto;min-height:0;overflow:auto;padding:0 12px 2px;overflow-wrap:anywhere">${answerHtml(a.answer, lib)}</div>`
+        + '<div style="flex:none;display:flex;flex-wrap:wrap;gap:2px;padding:4px 6px 2px;border-top:1px solid #f2f2f2">'
+        + (this.props.onContinueAsk ? '<button type="button" data-act="continue">Continue in workspace</button>' : '')
+        + (this.props.onCopyText ? '<button type="button" data-act="copy">Copy</button>' : '')
+        + '<button type="button" data-act="delete">Delete</button><button type="button" data-act="collapse">Collapse</button></div>';
+    }
+    this.grip(box, page);
+    return box;
+  }
+  boxMaxHeight() { const host = this.host.current; return Math.max(140, Math.round((host && host.clientHeight ? host.clientHeight : 600) * 0.4)); }
+
+  askClick(ev, m, a, page) {
+    const link = ev.target.closest && ev.target.closest('a[href]');
+    if (link) { // never the app's window: the Stage opens it
+      ev.preventDefault(); ev.stopPropagation();
+      if (this.props.onOpenLink) this.props.onOpenLink(link.getAttribute('href'));
+      return;
+    }
+    const lib = ev.target.closest && ev.target.closest('[data-lib]');
+    if (lib) { ev.preventDefault(); if (this.props.onOpenMention) this.props.onOpenMention(lib.dataset.lib); return; }
+    const act = ev.target.closest && ev.target.closest('[data-act]');
+    if (!act) return;
+    ev.preventDefault();
+    const what = act.dataset.act;
+    const say = (words, back) => { act.textContent = words; setTimeout(() => { if (act.isConnected) act.textContent = back; }, 1400); };
+    if (what === 'copy') { if (this.props.onCopyText) this.props.onCopyText(a.answer || ''); say('Copied', 'Copy'); return; }
+    if (what === 'continue') {
+      if (this.props.onContinueAsk) this.props.onContinueAsk({ markId: m.id, page, quote: m.text || '', question: a.question || '', answer: a.answer || '', foot: (a.meta && a.meta.foot) || '' });
+      say('Added', 'Continue in workspace');
+      return;
+    }
+    if (what === 'delete') m.asks = (m.asks || []).filter((x) => x !== a);
+    else if (what === 'collapse') a.collapsed = true;
+    else if (what === 'expand') a.collapsed = false;
+    else return;
+    this.renderMarks(page);
+    this.scheduleSave();
+  }
+
+  // An answer being written (`pendingAsks`): no grip, since nothing of it is kept until it lands. Its header says what
+  // Bart is doing, with a spinner, and Stop; ▸ shows its steps; the answer comes in once it is writing. A failure says
+  // why, with × to close it.
+  runBox(p, page) {
+    const box = document.createElement('div');
+    box.dataset.box = 'run'; box.dataset.askRun = p.askId;
+    box.style.cssText = `${BOX_LOOK};left:0;top:0;width:${ASK_W}px;max-height:${this.boxMaxHeight()}px;display:flex;flex-direction:column;padding-top:8px;font:13px/1.55 var(--font-sans);color:#171717`;
+    box.onmousedown = (ev) => ev.stopPropagation();
+    box.onclick = (ev) => this.runClick(ev, p.askId, page);
+    this.fillRun(box, p);
+    return box;
+  }
+  fillRun(box, p) {
+    const before = box.querySelector('[data-run-body]'), atEnd = !before || before.scrollTop + before.clientHeight >= before.scrollHeight - 4;
+    const failed = p.error != null, log = Array.isArray(p.log) ? p.log : [], open = this.openLogs.has(p.askId);
+    const lines = !failed && p.activity === 'Writing' && Array.isArray(p.lines) ? p.lines : [];
+    const head = failed
+      ? '<span style="flex:1;min-width:0;font-weight:500;color:#171717">Bart · No answer</span><button type="button" data-act="dismiss" aria-label="Close">×</button>'
+      : `${SPINNER}<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#4d4d4d">${esc(runningLabel(p))}</span><button type="button" data-act="stop">Stop</button>`;
+    box.innerHTML = `<div style="flex:none;display:flex;align-items:center;gap:8px;padding:0 6px 4px 12px">${head}</div>`
+      + `<div title="${esc(p.question || '')}" style="flex:none;padding:0 12px 6px;color:#8f8f8f;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.question || '')}</div>`
+      + (failed ? `<div style="flex:none;padding:0 12px 8px;color:#c4372d;overflow-wrap:anywhere">${esc(p.error || 'The run failed.')}</div>` : '')
+      + (log.length ? `<div style="flex:none;padding:0 6px 4px"><button type="button" data-act="log" aria-expanded="${open}">${open ? '▾' : '▸'} ${log.length} ${log.length === 1 ? 'step' : 'steps'}</button></div>` : '')
+      + (open && log.length ? `<div style="flex:none;padding:0 12px 6px;font-size:12px;line-height:1.7;color:#8f8f8f">${log.map((entry) => `<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(entry)}</div>`).join('')}</div>` : '')
+      + (lines.length ? `<div data-run-body="1" style="flex:1 1 auto;min-height:0;overflow:auto;padding:0 12px 8px;color:#8f8f8f;overflow-wrap:anywhere">${answerHtml(lines.join('\n'))}</div>` : '');
+    const after = box.querySelector('[data-run-body]');
+    if (after && atEnd) after.scrollTop = after.scrollHeight;
+  }
+  runClick(ev, askId, page) {
+    const act = ev.target.closest && ev.target.closest('[data-act]');
+    if (!act) return;
+    ev.preventDefault();
+    const what = act.dataset.act;
+    if (what === 'stop' && this.props.onStopAsk) this.props.onStopAsk(askId);
+    else if (what === 'dismiss' && this.props.onDismissAsk) this.props.onDismissAsk(askId);
+    else if (what === 'log') {
+      if (this.openLogs.has(askId)) this.openLogs.delete(askId); else this.openLogs.add(askId);
+      const p = (this.props.pendingAsks || []).find((x) => x && x.askId === askId), box = this.find1(`[data-ask-run="${askId}"]`);
+      if (p && box) { this.fillRun(box, p); this.arrange(page); }
+    }
+  }
+
+  // The answers being written for this pdf on a page.
+  pendingOn(page) { return (Array.isArray(this.props.pendingAsks) ? this.props.pendingAsks : []).filter((p) => p && p.page === page && p.askId); }
+
+  // What Bart is doing changed: a box that is already there is filled again and its page spaced; one that came or went
+  // draws its page again.
+  syncPending(before) {
+    const now = Array.isArray(this.props.pendingAsks) ? this.props.pendingAsks : [];
+    const pages = new Set([...before, ...now].filter(Boolean).map((p) => p.page));
+    const ids = (list, page) => list.filter((p) => p && p.page === page).map((p) => `${p.markId}/${p.askId}`).join(',');
+    for (const page of pages) {
+      if (ids(before, page) !== ids(now, page)) { this.renderMarks(page); continue; }
+      let filled = false;
+      for (const p of this.pendingOn(page)) {
+        const box = this.find1(`[data-ask-run="${p.askId}"]`);
+        if (box) { this.fillRun(box, p); filled = true; }
+      }
+      if (filled) this.arrange(page);
+    }
+  }
+
+  /** A finished answer, from the Stage (MATH-27): it joins its mark's answers, drawn and saved. → whether the mark is here. */
+  addAsk(page, markId, entry) {
+    const m = ((this.marks || {})[page] || []).find((x) => x && x.id === markId);
+    if (!m || !entry) return false;
+    if (!(m.asks || []).some((a) => a && a.id === entry.id)) m.asks = [...(m.asks || []), entry];
+    this.renderMarks(page);
+    this.scheduleSave();
+    return true;
+  }
+
+  // Moving a box by its grip. A press that does not move is no drag. Moved, the box leaves the spacing (the boxes that
+  // hung under it hang from it now), follows the pointer, widens the desk when it goes past its edge, and on release keeps
+  // its place in page units.
+  grip(box, page) {
+    const grip = box.querySelector('[data-grip]');
+    if (grip) grip.onmousedown = (ev) => this.startDrag(ev, box, page);
+  }
+  startDrag(ev, el, page) {
+    if (ev.button !== 0) return;
+    ev.preventDefault(); ev.stopPropagation();
+    const model = this.drawn[page], b = model && model.boxes.find((x) => x.el === el);
+    if (!b || this.drag) return;
+    const r = el.getBoundingClientRect(), css = this.css || 1;
+    this.closeMention();
+    this.drag = { b, page, grabX: (ev.clientX - r.left) / css, grabY: (ev.clientY - r.top) / css, x0: ev.clientX, y0: ev.clientY, at: { x: ev.clientX, y: ev.clientY }, moved: false, raf: 0 };
+    window.addEventListener('mousemove', this.onDragMove);
+    window.addEventListener('mouseup', this.onDragUp);
+  }
+  // The box out of the unit it was spaced in: it stays where it is put, and the boxes after it in that unit hang from it.
+  detach(model, b) {
+    b.fixed = true; b.how = 'pos';
+    const unit = model && model.units.find((x) => x.boxes.includes(b));
+    if (!unit) return;
+    const at = unit.boxes.indexOf(b), after = unit.boxes.slice(at + 1);
+    unit.boxes = unit.boxes.slice(0, at);
+    if (after.length) { for (const x of after) x.how = 'hang'; model.units.push({ id: `${unit.id}~${at}`, want: 0, side: null, parent: b, boxes: after }); }
+  }
+  dragTo() {
+    const d = this.drag, host = this.host.current, s = d && this.sheets[d.page], g = d && this.geo[d.page];
+    if (!d || !host || !s || !g) return;
+    if (!d.moved) {
+      if (Math.hypot(d.at.x - d.x0, d.at.y - d.y0) < 3) return;
+      d.moved = true;
+      host.dataset.dragging = '1';
+      this.detach(this.drawn[d.page], d.b);
+      this.dragTick();
+    }
+    const css = this.css || 1, b = d.b;
+    let wr = s.wrap.getBoundingClientRect();
+    b.left = (d.at.x - wr.left) / css - d.grabX;
+    b.top = Math.max(-(this.tops[d.page - 1] || 0), (d.at.y - wr.top) / css - d.grabY);
+    const extra = { left: DESK_EDGE - (b.left - g.G), right: b.left + b.width + DESK_EDGE - g.G - g.pageW };
+    if ((extra.left > g.G || extra.right > g.R) && this.reframe(extra)) { wr = s.wrap.getBoundingClientRect(); b.left = (d.at.x - wr.left) / css - d.grabX; }
+    this.arrange(d.page);
+  }
+  // Held near an edge of the pane, the view scrolls that way and the box goes with it.
+  dragTick() {
+    const d = this.drag, host = this.host.current;
+    if (!d || !host || typeof requestAnimationFrame !== 'function') return;
+    const r = host.getBoundingClientRect(), edge = 28, speed = 14;
+    const dx = d.at.x < r.left + edge ? -speed : d.at.x > r.left + host.clientWidth - edge ? speed : 0;
+    const dy = d.at.y < r.top + edge ? -speed : d.at.y > r.top + host.clientHeight - edge ? speed : 0;
+    if (dx || dy) {
+      const left = host.scrollLeft, top = host.scrollTop;
+      host.scrollLeft += dx; host.scrollTop += dy;
+      if (host.scrollLeft !== left || host.scrollTop !== top) this.dragTo();
+    }
+    d.raf = requestAnimationFrame(() => this.dragTick());
+  }
+  endDrag(cancel = false) {
+    const d = this.drag;
+    window.removeEventListener('mousemove', this.onDragMove);
+    window.removeEventListener('mouseup', this.onDragUp);
+    this.drag = null;
+    if (!d) return;
+    if (d.raf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(d.raf);
+    const host = this.host.current;
+    if (host) delete host.dataset.dragging;
+    if (!d.moved || cancel) return;
+    const g = this.geom(d.page), pos = posOf(d.b.left, d.b.top, g.G, g.pageW || 1);
+    if (d.b.kind === 'note') d.b.m.pos = pos; else if (d.b.ask) d.b.ask.pos = pos;
+    this.reframe();
+    this.renderMarks(d.page);
+    this.scheduleSave();
+  }
+
+  /* ---------------------------------------------------------------- boxes out of view (MATH-27) */
+  viewRect() {
+    const host = this.host.current, r = host.getBoundingClientRect();
+    return { left: r.left + host.clientLeft, top: r.top + host.clientTop, right: r.left + host.clientLeft + host.clientWidth, bottom: r.top + host.clientTop + host.clientHeight };
+  }
+  // The boxes of the pages in view, as client rects: a page further on is not "out of view", it is further on.
+  boxRects(view) {
+    const out = [];
+    for (let n = 1; n < this.sheets.length; n += 1) {
+      const s = this.sheets[n];
+      if (!s) continue;
+      const r = s.wrap.getBoundingClientRect();
+      if (r.bottom < view.top || r.top > view.bottom) continue;
+      for (const el of s.notes.querySelectorAll('[data-box]')) out.push(el.getBoundingClientRect());
+    }
+    return out;
+  }
+  syncOffscreen() {
+    const host = this.host.current;
+    const off = host && this.inner && !this.pan ? offscreen(this.boxRects(this.viewRect()), this.viewRect()) : NO_OFF;
+    const was = this.state.off || NO_OFF;
+    if (SIDES.some((side) => was[side] !== off[side])) this.setState({ off });
+  }
+  syncOffscreenSoon() {
+    if (this.offRaf || typeof requestAnimationFrame !== 'function') return;
+    this.offRaf = requestAnimationFrame(() => { this.offRaf = 0; this.syncOffscreen(); });
+  }
+  // A chip: the boxes off its edge scrolled into view (all of them when they fit, else the nearest).
+  reveal(side) {
+    const host = this.host.current;
+    if (!host) return;
+    const view = this.viewRect();
+    const { dx, dy } = revealScroll(this.boxRects(view).filter((r) => offscreenSide(r, view) === side), view, side);
+    if (typeof host.scrollBy === 'function') host.scrollBy({ left: dx, top: dy, behavior: 'smooth' });
+    else { host.scrollLeft += dx; host.scrollTop += dy; }
   }
 
   /* ---------------------------------------------------------------- notes (MATH-21: mentions) */
@@ -1035,7 +1579,7 @@ export default class PaperView extends React.Component {
     ta.oninput = () => { m.note = ta.value; this.fitNote(ta); this.scheduleSave(); this.noteMention(ta, m, page); };
     ta.onfocus = () => { this.editing = m.id; };
     ta.onblur = () => this.leaveNote(ta, m, page);
-    ta.onkeydown = (ev) => this.noteKey(ev, ta, m);
+    ta.onkeydown = (ev) => this.noteKey(ev, ta, m, page);
     // The caret moved along the line: the menu follows what stands before it now (↑ and ↓ are the menu's).
     ta.onkeyup = (ev) => { if (/^(ArrowLeft|ArrowRight|Home|End)$/.test(ev.key) && this.state.mention && this.state.mention.markId === m.id) this.noteMention(ta, m, page); };
     ta.onmousedown = (ev) => ev.stopPropagation();
@@ -1109,16 +1653,22 @@ export default class PaperView extends React.Component {
     else this.closeMention();
   }
   closeMention() { if (this.state.mention) this.setState({ mention: null }); }
-  // The menu's rows: library items only. A note mentions; it does not ask (Bart and the other verbs), make a note, name a
-  // workspace or a page the library does not hold.
+  // A note that can ask Bart (MATH-27): one on a highlight, with somewhere to send the question. A free note has no passage.
+  asksFrom(m) { return typeof this.props.onAsk === 'function' && !!m && Array.isArray(m.rects) && m.rects.length > 0; }
+  pageOf(m) { for (const [page, list] of Object.entries(this.marks || {})) if ((list || []).includes(m)) return Number(page); return 0; }
+  // The menu's rows: library items, and Bart where it can ask (MATH-27): a highlight's note, at its start. A note does not
+  // ask the other agents, make a note, name a workspace or a page the library does not hold.
   mentionList() {
     const open = this.state.mention;
     if (!open || typeof this.props.mentionItems !== 'function') return [];
-    return (this.props.mentionItems(open.query.toLowerCase()) || []).filter((r) => r && r.kind === 'item' && r.row && r.row.id);
+    const m = ((this.marks || {})[open.page] || []).find((x) => x && x.id === open.markId);
+    const bart = this.asksFrom(m) && !String((m && m.note) || '').slice(0, open.start).trim();
+    return (this.props.mentionItems(open.query.toLowerCase()) || []).filter((r) => r && ((r.kind === 'item' && r.row && r.row.id) || (bart && r.kind === 'verb' && r.verb === 'bart')));
   }
   // Keys in a note's field: the menu's first while it is open (↑ ↓ move, Enter or Tab picks, Escape closes it alone),
-  // then Escape leaves the note. None reaches the page or the Stage.
-  noteKey(ev, ta, m) {
+  // then Enter in a highlight's note that starts with @bart asks (Shift+Enter is a new line), then Escape leaves the note.
+  // None reaches the page or the Stage.
+  noteKey(ev, ta, m, page) {
     ev.stopPropagation();
     const items = this.state.mention && this.state.mention.markId === m.id ? this.mentionList() : [];
     if (items.length) {
@@ -1128,19 +1678,47 @@ export default class PaperView extends React.Component {
       if ((ev.key === 'Enter' || ev.key === 'Tab') && !ev.isComposing) { ev.preventDefault(); this.pickMention(items[this.state.mentionIdx] || items[0]); return; }
       if (ev.key === 'Escape') { ev.preventDefault(); this.closeMention(); return; }
     }
+    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing && this.asksFrom(m)) {
+      const question = noteQuestion(ta.value);
+      if (question != null) {
+        ev.preventDefault();
+        if (question) this.askFrom(ta, m, page || this.pageOf(m), question);
+        return;
+      }
+    }
     if (ev.key === 'Escape') ta.blur();
   }
+  // Bart asked from a highlight's note: the passage, the note as it stands and the question go up (the Stage adds which
+  // pdf), with the mark's earlier answers as the turns, so a follow-up within half an hour resumes the same session. The
+  // note keeps what was typed and shows as text; the answer's box comes under it.
+  askFrom(ta, m, page, question) {
+    m.note = ta.value;
+    this.flushSave(this.props.onMarksChange);
+    this.closeMention();
+    this.props.onAsk({ markId: m.id, page, quote: m.text || '', note: m.note, question, turns: turnsOf(m) });
+    if (this.editing === m.id) this.editing = null;
+    ta.blur();
+  }
   // A row picked: its token takes the place of `@query`, then a space (one there already is stepped over), and the note
-  // keeps the keyboard. The item is only mentioned: nothing is added to the workspace.
+  // keeps the keyboard. The item is only mentioned: nothing is added to the workspace. Bart's row writes `@Bart `.
   pickMention(r) {
     const open = this.state.mention;
     this.closeMention();
-    if (!open || !r || !r.row || !r.row.id) return;
+    const bart = !!r && r.kind === 'verb' && r.verb === 'bart';
+    if (!open || !r || (!bart && (!r.row || !r.row.id))) return;
     const ta = this.find1(`textarea[data-mark="${open.markId}"]`), m = ((this.marks || {})[open.page] || []).find((x) => x.id === open.markId);
     if (!ta || !m) return;
     if (document.activeElement !== ta) ta.focus({ preventScroll: true });
     const end = ta.selectionStart, found = mentionAt(ta.value, end), start = found ? found.start : open.start;
     if (start > end) return;
+    if (bart) {
+      ta.setRangeText('@Bart ', start, end, 'end');
+      if (ta.value.charAt(ta.selectionEnd) === ' ') ta.setRangeText('', ta.selectionEnd, ta.selectionEnd + 1, 'end');
+      m.note = ta.value;
+      this.fitNote(ta);
+      this.scheduleSave();
+      return;
+    }
     ta.setRangeText(libMention(r.name, r.row.id), start, end, 'end');
     if (ta.value.charAt(ta.selectionEnd) === ' ') ta.setSelectionRange(ta.selectionEnd + 1, ta.selectionEnd + 1);
     else ta.setRangeText(' ', ta.selectionEnd, ta.selectionEnd, 'end');
@@ -1152,7 +1730,7 @@ export default class PaperView extends React.Component {
   /* ---------------------------------------------------------------- render */
   render() {
     const { title } = this.props;
-    const { note, page, pages, pct } = this.state;
+    const { note, page, pages, pct } = this.state, off = this.state.off || NO_OFF;
     return (
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: title ? 12 : 0 }}>
         <style>{LAYER_CSS}</style>
@@ -1165,10 +1743,14 @@ export default class PaperView extends React.Component {
           </>
         ) : null}
         <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          <div ref={this.host} data-pdf="1" style={{ flex: 1, minHeight: 0, overflow: 'auto', border: 0, borderTop: title ? '1px solid #eaeaea' : 0, borderRadius: 0, background: '#fff', padding: 0 }} />
+          <div ref={this.host} data-pdf="1" style={{ flex: 1, minHeight: 0, overflow: 'auto', border: 0, borderTop: title ? '1px solid #eaeaea' : 0, borderRadius: 0, background: '#fafafa', padding: 0 }} />
           {note
             ? <span style={{ position: 'absolute', left: 0, right: 0, top: 14, textAlign: 'center', font: '12px/1.5 var(--font-sans)', color: '#8f8f8f', pointerEvents: 'none' }}>{note}</span>
             : null}
+          {!note && SIDES.map((side) => (off[side] ? <div key={`fade-${side}`} data-fade={side} style={fadeStyle(side)} /> : null))}
+          {!note && SIDES.map((side) => (off[side] ? (
+            <button key={`chip-${side}`} type="button" data-chip={side} className="hov-wash" style={chipStyle(side)} onMouseDown={(e) => e.preventDefault()} onClick={() => this.reveal(side)}>{chipLabel(off[side], side)}</button>
+          ) : null))}
           {this.state.mention && this.state.mention.anchor ? (
             <MentionMenu items={this.mentionList()} index={this.state.mentionIdx} anchor={this.state.mention.anchor} onPick={(r) => this.pickMention(r)} onHover={(i) => this.setState({ mentionIdx: i })} />
           ) : null}
@@ -1180,6 +1762,9 @@ export default class PaperView extends React.Component {
               <button type="button" className="hov-wash" aria-label="Zoom out" style={BAR_STEP} onClick={() => this.zoomStepBy(-1)}>−</button>
               <button type="button" className="hov-wash" title="100% = fit width" style={BAR_PCT} onClick={() => this.togglePct()}>{pct}%</button>
               <button type="button" className="hov-wash" aria-label="Zoom in" style={BAR_STEP} onClick={() => this.zoomStepBy(1)}>+</button>
+              <span style={{ flex: 'none', width: 1, height: 16, margin: '0 4px', background: '#eaeaea' }} />
+              <button type="button" className="hov-wash" title="The page in view, whole" style={BAR_FIT} onClick={() => this.fitPage(false)}>Fit page</button>
+              <button type="button" className="hov-wash" title="The page in view and every note and answer beside it" style={BAR_FIT} onClick={() => this.fitPage(true)}>Fit page + notes</button>
             </div>
           ) : null}
         </div>

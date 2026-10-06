@@ -20,6 +20,7 @@ import { buildLine, placeAnswer } from '../model/doc.js';
 import { openBeside, closePane } from '../model/panes.js';
 import { addDropped } from '../model/drop.js';
 import { createDocSync } from '../model/doc-sync.js';
+import { askEntry, answerOf, continueLines } from '../pdf/canvas.js';
 import { buildRequestOf } from '../../main/bart/question.cjs';
 import ProjectPostIts from '../post-its/ProjectPostIts.jsx';
 import BuildPanel from '../workspace/BuildPanel.jsx';
@@ -411,16 +412,54 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // Progress is of three kinds: a step of the ladder begins ({ step, name, effort, movedUp }: whatever the last step showed
   // is dropped), what the agent is doing ({ activity }, kept in `log` when it is a thing done rather than a state), and the
   // answer so far ({ lines }). All of it lives here, never in the document: only the finished answer is written there.
+  // A question asked from a highlight's note on a pdf (MATH-27) is kept the same way in `paperAsks`, for the Stage.
   React.useEffect(() => api.onBartProgress(({ askId, log, ...progress }) => {
-    setAsks((current) => {
+    const apply = (current) => {
       const ask = current[askId];
       if (!ask) return current;
       const next = { ...ask, ...progress };
       if (progress.step) { next.activity = ''; next.lines = []; }
       if (log && progress.activity) next.log = [...(ask.log || []), progress.activity].slice(-60);
       return { ...current, [askId]: next };
-    });
+    };
+    setAsks(apply);
+    setPaperAsks(apply);
   }), []);
+
+  // @bart from a note on a pdf's highlight (MATH-27): asked of this workspace with the mark as its place ({ kind: 'mark',
+  // id, rowId | url, page }), the passage and the note with it, and written into no document. The entry here holds which
+  // mark and pdf it is for ({ markId, page, rowId | url }) and what it is doing, which the Stage shows on the pdf; the
+  // finished answer is returned to the Stage as the mark keeps it (pdf/canvas.js askEntry). Stopped, it leaves nothing; a
+  // failure stays here, with its error, until it is closed.
+  const [paperAsks, setPaperAsks] = React.useState({});
+  const askHighlight = React.useCallback(async ({ markId, page, quote, note, question, turns, rowId, url, paper }) => {
+    const text = String(question || '').trim();
+    if (!topic || !markId || !text || (!rowId && !url)) return null;
+    const askId = `h${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    setPaperAsks((current) => ({ ...current, [askId]: { askId, markId, page, rowId: rowId || null, url: rowId ? null : url, question: text, agent: 'bart' } }));
+    const drop = () => setPaperAsks((current) => { const next = { ...current }; delete next[askId]; return next; });
+    const fail = (message) => setPaperAsks((current) => (current[askId] ? { ...current, [askId]: { ...current[askId], error: message || 'The run failed.', activity: '', lines: [] } } : current));
+    try {
+      const ref = rowId ? { kind: 'mark', id: markId, rowId, page } : { kind: 'mark', id: markId, url, page };
+      const asked = api.askBart(project.id, { askId, ref, workspaceId: topic.id, text, turns: turns || [], highlight: { quote: quote || '', note: note || '', paper: paper || null } });
+      loadBartModels(); // main has kept a pick by hand before this is read
+      const out = await asked;
+      if (out && out.stopped) { drop(); return null; }
+      if (!out || out.failed || !Array.isArray(out.lines)) { fail(answerOf(out && out.lines).answer.replace(/^\*\*No answer\.\*\*\s*/, '')); return null; }
+      drop();
+      return askEntry({ id: askId, question: text, lines: out.lines, meta: out.meta, at: new Date().toISOString() });
+    } catch (error) {
+      fail(errorMessage(error));
+      return null;
+    }
+  }, [topic, project.id, loadBartModels]);
+  const dismissPaperAsk = React.useCallback((askId) => setPaperAsks((current) => {
+    if (!current[askId]) return current;
+    const next = { ...current };
+    delete next[askId];
+    return next;
+  }), []);
+  const pendingPaperAsks = React.useMemo(() => Object.values(paperAsks), [paperAsks]);
 
   const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent }) => {
     if (!key || !ref || !topic) return;
@@ -1181,6 +1220,23 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     if (done) done.catch((error) => onError(error));
   };
 
+  // Continue in workspace on a highlight's answer (MATH-27): the passage, the @bart question and the answer at the end of
+  // this workspace's document as a thread like any other (pdf/canvas.js continueLines), so it goes on here. The paper is
+  // mentioned, and a library paper comes into the workspace as a mention brings it.
+  const continueAsk = async ({ quote, question, answer, foot, paper, page }) => {
+    if (!topic) return;
+    const key = `ws:${topic.id}`, ref = { kind: 'workspace', workspaceId: topic.id };
+    try {
+      const held = docsRef.current[key] !== undefined ? docsRef.current[key] : await api.readDoc(project.id, ref);
+      const body = String(held || '').replace(/\n+$/, '');
+      changeDoc(key, ref, `${body ? `${body}\n\n` : ''}${continueLines({ quote, question, answer, foot, paper, page }).join('\n')}\n`);
+      showWs();
+      if (paper && paper.rowId && !inRail(paper.rowId)) await linkIds([paper.rowId]);
+    } catch (error) {
+      onError(error);
+    }
+  };
+
   // A paper's button in an @discover guide (2026-10-02): + Save adds it as the Stage's Save with Enter does when the tab
   // has no copy (the address, named with its title, linked here; main keeps its pdf straight away), + Workspace links the
   // library's row. Two clicks never make two rows: the second finds it here, or main refuses it as already in the library.
@@ -1571,6 +1627,12 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onOpenItem={openItem}
           mentionItems={mentionItems}
           onMentionOpen={setMentionOpen}
+          pendingAsks={pendingPaperAsks}
+          onAsk={topic ? askHighlight : undefined}
+          onStopAsk={(askId) => api.stopBart(askId).catch((error) => onError(error))}
+          onDismissAsk={dismissPaperAsk}
+          onContinueAsk={topic ? continueAsk : undefined}
+          onCopyText={(value) => api.copyText(value).catch((error) => onError(error))}
           save={topic && pageState ? { state: pageState, onSave: savePage, onLink: () => linkIds([pageKnown.row.id]) } : null}
           style={{ flex: 'none', width: paneWidth, minWidth: 0, minHeight: 0, display: docFull ? 'none' : 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }}
         />

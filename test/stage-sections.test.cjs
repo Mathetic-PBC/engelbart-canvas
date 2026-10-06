@@ -238,7 +238,7 @@ const PDF = (place) => ({ kind: 'pdf', url: `file://${place}`, path: place, name
  * says what it was asked. `nodes`: stand-in DOM nodes for the elements with those attributes (`data-stage-view`, …).
  * What else it asks of main is in `calls`; what it listens to main for, in `on`.
  */
-function stage({ file = PDF, nodes = {}, api: own = {}, library = [] } = {}) {
+function stage({ file = PDF, nodes = {}, api: own = {}, library = [], props: more = {} } = {}) {
   const hooks = hookRunner((tree) => {
     for (const [attribute, node] of Object.entries(nodes)) for (const el of findAll(tree, (p) => p[attribute] != null)) if (el.props.ref) el.props.ref.current = node;
   });
@@ -258,7 +258,7 @@ function stage({ file = PDF, nodes = {}, api: own = {}, library = [] } = {}) {
   globalThis.requestAnimationFrame = () => 0;
   const Stage = load('workspace/Stage.jsx', { react: hooks.fake }).default;
   const ref = { current: null };
-  const props = { projectId: 'p1', visible: true, library, inRail: () => false };
+  const props = { projectId: 'p1', visible: true, library, inRail: () => false, ...more };
   let tree = hooks.run(Stage, props, ref);
   const asked = [];
   const paper = {
@@ -350,6 +350,61 @@ test.describe('the Stage', () => {
     card.props.onClose();
     s.rerender();
     assert.deepEqual(s.asked, [['stopFind'], ['clearSection']], 'closing find takes the section, as it did');
+  });
+});
+
+/* ---------------------------------------------------------------------------------- Stage: @bart on a highlight */
+
+// MATH-27 (2026-10-06): a highlight's note asks through the Stage, which says which pdf it is (a pdf from disk or the web
+// by its address, a library row by its id) and gives the viewer the answers being written for its own pdf alone. The
+// finished answer goes onto its mark through the viewer showing that pdf, else straight into the ink kept for it.
+test.describe('the Stage: @bart on a highlight', () => {
+  test.afterEach(() => { delete globalThis.window; delete globalThis.requestAnimationFrame; globalThis.document = { baseURI: 'file:///app/index.html' }; });
+  const ENTRY = { id: 'h1', question: 'why?', answer: 'Because.', meta: {}, at: 'now', pos: null, collapsed: false };
+  const ASK = { markId: 'm1', page: 2, quote: 'the passage', note: '@bart why?', question: 'why?', turns: [] };
+
+  test('the question goes up with the pdf\'s address and name; the viewer is given its own answers being written; the answer lands through it', async () => {
+    const up = [];
+    const pending = [{ askId: 'h1', markId: 'm1', page: 2, url: `file://${PAPER}`, rowId: null }, { askId: 'h9', markId: 'x', page: 1, url: 'https://elsewhere.org/a.pdf', rowId: null }, { askId: 'h8', markId: 'y', page: 1, rowId: 'row-1', url: null }];
+    const s = stage({ props: { onAsk: async (ask) => { up.push(ask); return ENTRY; }, pendingAsks: pending, onStopAsk: () => {}, onContinueAsk: () => {} } });
+    s.open(PAPER);
+    await s.settle();
+    const view = s.paper();
+    assert.deepEqual(view.props.pendingAsks.map((p) => p.askId), ['h1'], 'its own pdf\'s alone');
+    const landed = [];
+    view.props.ref.current.addAsk = (...args) => { landed.push(args); return true; };
+    view.props.onAsk(ASK);
+    await s.settle();
+    assert.deepEqual(up, [{ ...ASK, url: `file://${PAPER}`, paper: 'Scim.pdf' }]);
+    assert.deepEqual(landed, [[2, 'm1', ENTRY]], 'onto its mark, through the viewer, which saves it');
+    assert.ok(!s.calls.some(([name]) => name === 'writePageAnnotations'), 'nothing written behind its back');
+  });
+
+  test('with no viewer showing the mark, the answer goes into the ink kept for the pdf and the tab that holds it', async () => {
+    const kept = { 2: [{ id: 'm1', rects: [{ x: 0.1, y: 0.2, w: 0.3, h: 0.01 }], note: '@bart why?' }] };
+    const s = stage({ api: { readPageAnnotations: async () => JSON.parse(JSON.stringify(kept)) }, props: { onAsk: async () => ENTRY } });
+    s.open(PAPER);
+    await s.settle();
+    const view = s.paper();
+    view.props.ref.current.addAsk = () => false; // the viewer no longer has that mark
+    view.props.onAsk(ASK);
+    await s.settle();
+    const write = s.calls.find(([name]) => name === 'writePageAnnotations');
+    assert.ok(write, 'written');
+    assert.equal(write[1], `file://${PAPER}`);
+    assert.deepEqual(write[2][2][0].asks, [ENTRY]);
+    assert.deepEqual(s.paper().props.marks[2][0].asks, [ENTRY], 'and the tab\'s ink has it');
+  });
+
+  test('without a workspace to ask from, a note asks nothing; Continue says which paper', async () => {
+    const continued = [];
+    const s = stage({ props: { onContinueAsk: (c) => continued.push(c) } });
+    s.open(PAPER);
+    await s.settle();
+    const view = s.paper();
+    assert.equal(view.props.onAsk, undefined);
+    view.props.onContinueAsk({ markId: 'm1', page: 2, quote: 'q', question: 'why?', answer: 'A', foot: '' });
+    assert.deepEqual(continued[0].paper, { name: 'Scim.pdf', rowId: null, url: `file://${PAPER}` });
   });
 });
 

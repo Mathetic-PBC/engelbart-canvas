@@ -5,10 +5,13 @@
 // mentioned (../context/expand-mentions.cjs), the library as Context.json with a `mentioned`
 // flag per item, and where things are on disk so the agent's own file tools can open the rest.
 // A follow-up carries all of that again, read again, and the earlier turns of its exchange as well.
+// A question asked from a note on a pdf highlight (MATH-27) carries the passage as <highlight>, and the workspace the
+// Stage was opened from as background (paperOf, highlightBlock).
 
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { fileURLToPath } = require('node:url');
 const projects = require('../store/projects.cjs');
 const { buildCatalog } = require('../context/catalog.cjs');
 const { expandDoc } = require('../context/expand-mentions.cjs');
@@ -101,12 +104,32 @@ function libraryDirs(project, rows, granted, { home = os.homedir(), seen = new S
   return out.slice(0, MAX_LIBRARY_DIRS);
 }
 
+// A question asked from a note on a pdf highlight (MATH-27, 2026-10-06): the passage is a block of its own, the workspace it
+// was opened from comes along as background. The paper is the library's row (`ref.rowId`), else the address its ink is
+// kept by (`ref.url`): a file:// address is given as its path, which the agent's file tools open.
+const attrOf = (value, max) => String(value == null ? '' : value).replace(/[<>"\n\r]/g, ' ').slice(0, max);
+
+/** The paper a highlight is on → { id, name, where, dir }: `where` its absolute path or its address, `dir` a folder to grant. */
+function paperOf(project, rows, ref, given = {}) {
+  const row = ref.rowId ? rows.find((r) => r.id === ref.rowId) : rows.find((r) => r.url && r.url === ref.url);
+  let where = row ? (row.path ? path.resolve(project.dir, row.path) : row.url || '') : String(ref.url || '');
+  if (/^file:/i.test(where)) { try { where = fileURLToPath(where); } catch { /* left as it is */ } }
+  const local = where && path.isAbsolute(where) ? where : null;
+  const named = row ? row.name : given.paper || (local ? path.basename(local) : String(where).replace(/[?#].*$/, '').split('/').filter(Boolean).pop() || 'a pdf');
+  return { id: row ? row.id : null, name: named, where, dir: local ? path.dirname(local) : null };
+}
+
+/** <highlight paper="…" path="…" page="N"><quote>…</quote><note>…</note></highlight> */
+function highlightBlock(paper, page, { quote = '', note = '' } = {}) {
+  return `<highlight paper="${attrOf(paper.name, 200)}" path="${attrOf(paper.where, 4096)}" page="${Number(page) || 1}">\n<quote>\n${String(quote).trim()}\n</quote>\n<note>\n${String(note).trim()}\n</note>\n</highlight>`;
+}
+
 /**
  * → { project, dirs, head, contextJson, documents, entries, workspaceName }. `head` and the documents are text; the
  * caller adds the level and the question (./ask.cjs), which differ per step. `entries` (the library as Context.json
  * holds it) and `workspaceName` are for the fake agents, which name what a real one would read.
  */
-async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = 'bart' }) {
+async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = 'bart', highlight = null }) {
   const found = projects.findWorkspace(ctx, projectId, workspaceId);
   const { project, workspace } = found;
   const rows = await ctx.libraryDb.list();
@@ -117,7 +140,14 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
   const scoped = SCOPED.has(agent);
   const shown = (body) => markPlace(scoped ? stripAgentReplies(body, agent) : body, askId);
   let from = `the workspace "${workspace.name}"`;
-  if (ref.kind === 'note') {
+  let paper = null;
+  if (ref.kind === 'mark') {
+    const space = await expandDoc(ctx, projectId, { kind: 'workspace', workspaceId }, { seen });
+    paper = paperOf(project, rows, ref, highlight || {});
+    if (paper.id) seen.add(paper.id); // the paper is what the person points at
+    documents.push(block('workspace', space.title, shown(space.body)), highlightBlock(paper, ref.page, highlight || {}));
+    from = `a highlight on page ${Number(ref.page) || 1} of "${attrOf(paper.name, 200)}", opened from the workspace "${workspace.name}"`;
+  } else if (ref.kind === 'note') {
     // The note is its own block: the workspace must not also carry it as a mention.
     seen.add(ref.id);
     const space = await expandDoc(ctx, projectId, { kind: 'workspace', workspaceId }, { seen });
@@ -143,7 +173,12 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
   ].filter(Boolean).join('\n');
   const granted = [project.directory, ctx.dataRoot].filter(Boolean);
   const dirs = LIBRARY_READERS.has(agent) ? [...granted, ...libraryDirs(project, rows, granted, { seen, scope })] : granted;
+  // A pdf opened from disk that the library does not hold: its folder too, by the same rules as the library's.
+  const folder = paper && paper.dir ? path.resolve(paper.dir) : null;
+  if (folder && folder !== path.parse(folder).root && folder !== path.resolve(os.homedir()) && !dirs.some((root) => within(folder, root))) {
+    try { if (fs.statSync(folder).isDirectory()) dirs.push(folder); } catch { /* gone: nothing to grant */ }
+  }
   return { project, dirs, head, contextJson: `<context_json>\n${JSON.stringify(entries, null, 1)}\n</context_json>`, documents: documents.join('\n\n'), entries, workspaceName: workspace.name };
 }
 
-module.exports = { HERE, markPlace, buildContext, conversationBlock, catalogEntries, libraryDirs, block };
+module.exports = { HERE, markPlace, buildContext, conversationBlock, catalogEntries, libraryDirs, block, highlightBlock, paperOf };
