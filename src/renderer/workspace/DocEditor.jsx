@@ -27,6 +27,8 @@
 //     row of its own above the follow-up field, a field where the person writes what they want prior work on. Enter starts
 //     an @discover thread of its own on those words after the thread, and a live card stays live. It replaced the searches
 //     the agents suggested (a card's lookFor, a recap's Look for line); a Look for line in an older recap reads as text.
+//   * An @brainstorm result (MATH-40): the sentence the person wrote on the last card, then one small grey line whose
+//     @discover and @bart start a thread of that agent's own on the sentence, after the thread (askResult).
 //     Each paper's title line in a guide has a bookmark in its right margin that keeps the paper (2026-10-02, model/guide.js;
 //     a quiet icon since 2026-10-03): outline, outline with +, or filled, from props.paperState; a click hands it to
 //     props.onSavePaper. Drawn, never written: the line stays as it came. An entry's **Try:** line (2026-10-04) links the
@@ -49,7 +51,7 @@ import { createPortal } from 'react-dom';
 import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, listMark, threads, turnText, wsMention, mentionAt, agentOf, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE } from '../model/doc.js';
 import { fieldRows, isVerbRow } from '../model/rail.js';
 import { readFlags, readQuestion, readDiscover, withChoice, withMode, discoverSpans, modelOf, effortOf, buildRequestOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
-import { SKIPPED, MAP_GROUPS, cardOfAnswer, questionOf, isChoice, answerLine, withWrap, readAnswer, recapLine } from '../../main/bart/card.cjs';
+import { SKIPPED, MAP_GROUPS, RESULT_OFFER, cardOfAnswer, questionOf, isChoice, answerLine, withWrap, readAnswer, recapLine, resultParts } from '../../main/bart/card.cjs';
 import BartPicker from './BartPicker.jsx';
 import DiscoverLevels, { LEVEL_LABELS } from './DiscoverLevels.jsx';
 import { pdfText } from '../model/paste.js';
@@ -67,7 +69,7 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 export const BART_ITEM = { id: 'bart', type: 'chat', name: 'bart', title: 'Bart', summary: 'Ask a question about this document, the project\'s code or the web. Add --opus or --high to pick the model or the effort by hand.', facts: 'reads, never edits' };
 export const DISCOVER_ITEM = { id: 'discover', type: 'chat', name: 'discover', title: 'Discover', summary: 'Find what to read about a problem, and where in it to look: it traces the citations of the papers in your library and the pages of the people you follow. Pick Quick, Standard or Deep on the line\'s chip.', facts: 'finds, never concludes' };
-export const BRAINSTORM_ITEM = { id: 'brainstorm', type: 'chat', name: 'brainstorm', title: 'Brainstorm', summary: 'Write what you know about a topic or paper, then land on a research question in your own words.', facts: 'asks, never proposes' };
+export const BRAINSTORM_ITEM = { id: 'brainstorm', type: 'chat', name: 'brainstorm', title: 'Brainstorm', summary: 'Think out loud about a topic, a paper or what is on your mind, then write what you want to dig into next.', facts: 'asks, never proposes' };
 
 const UNDER_BART = ['pending', 'reply'];
 // The agents that run on one model of their own (no model chip, no selector on Regenerate), may be asked with nothing after
@@ -645,6 +647,8 @@ export default class DocEditor extends React.Component {
       // A brainstorm recap's lines ("What you know: …", "Your question: …") as sections: the label in bold on a line
       // of its own, the words under it. An older recap's "Look for:" line too (MATH-31), no longer a button.
       const recap = at && fixedStep(at.agent) && !active ? recapLine(p.text) : null;
+      // A result's last line (MATH-40): small, with @discover and @bart to send their sentence on.
+      const offer = !!at && fixedStep(at.agent) && !active && p.text.trim() === RESULT_OFFER;
       // An @discover guide's title line (2026-10-02) has its paper's bookmark in a margin of its own on the right, level with
       // the title's first line (2026-10-03): the title wraps before it, and every entry's sits in the same place.
       const paper = at && at.agent === 'discover' && !active ? this.guidePaper(i, p.text, at) : null, mark = paper ? this.paperSaveHtml(i, paper) : '';
@@ -655,7 +659,7 @@ export default class DocEditor extends React.Component {
       const q = active ? parseLine(p.text) : null, cut = q && (q.type === 'h' || isMarked(q.type)) ? p.text.length - q.text.length : 0;
       const tokens = cut ? [p.text.slice(0, cut), ...p.text.slice(cut).split(INLINE).filter(Boolean)] : null;
       const hang = cut && q.type !== 'h' ? `padding-left:${q.depth * 18}px;` : '';
-      const a = this.answerLook(p.text), content = active ? (tokens ? this.activeHtml(tokens, null, `color:#b5b5b5;${q.type === 'h' ? '' : 'margin-right:4px;'}`) : this.activeHtml(tokensOf(p, line))) : recap ? this.recapHtml(recap, first) : (run ? a.content.replace('<a ', `${run}<a `) : a.content) + mark;
+      const a = this.answerLook(p.text), content = active ? (tokens ? this.activeHtml(tokens, null, `color:#b5b5b5;${q.type === 'h' ? '' : 'margin-right:4px;'}`) : this.activeHtml(tokensOf(p, line))) : offer ? this.resultOfferHtml(i) : recap ? this.recapHtml(recap, first) : (run ? a.content.replace('<a ', `${run}<a `) : a.content) + mark;
       return `<div ${raw}${mark ? ' data-paper-line="1"' : ''} style="padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(!at && first, closes)};margin-bottom:${closes ? 14 : 0}px;color:#4d4d4d;font-size:16px;line-height:1.65;cursor:text"><span style="display:block;padding:${first ? 2 : 0}px 0 ${last ? 2 : 0}px 12px;border-left:2px solid #dcdcdc"><span class="t" style="display:block;min-height:${a.minHeight}px;border-radius:4px;${a.look}${hang}${mark ? 'position:relative;padding-right:28px;' : ''}${active ? 'background:#f5f5f5;box-shadow:0 0 0 4px #f5f5f5;' : ''}">${content || '<br>'}</span></span></div>`;
     }
     if (p.type === 'quote') {
@@ -710,6 +714,13 @@ export default class DocEditor extends React.Component {
     const missing = /^not (decided|said)\.?$/i.test(text);
     return this.recapLabelHtml(label, first)
       + `<span style="display:block;${missing ? 'color:#8f8f8f;font-style:italic;' : ''}">${text ? inlineHtml(text) : '<span style="color:#8f8f8f;font-style:italic">not said</span>'}</span>`;
+  }
+  // An @brainstorm result's offer line (MATH-40): small and grey; @discover and @bart are buttons in an editor that can ask.
+  resultOfferHtml(i) {
+    const chip = (agent) => (this.props.onAsk
+      ? `<button type="button" class="bart-text" data-act="resultask" data-agent="${agent}" data-row="${i}" style="user-select:none;display:inline;padding:0;font-size:13px;font-weight:500;color:#0070f3">@${agent}</button>`
+      : `@${agent}`);
+    return `<span contenteditable="false" style="display:block;font-size:13px;line-height:1.6;color:#8f8f8f;user-select:none">Find papers on it with ${chip('discover')}, or ask about it with ${chip('bart')}.</span>`;
   }
   // The Send to Discover field (MATH-31): the blue "@discover", a field one line tall that grows as it wraps, and a round
   // send, as the follow-up field's FOLLOW rows have. `target` names the field and keys what is typed into it
@@ -807,15 +818,23 @@ export default class DocEditor extends React.Component {
   // After the thread line `i` is in, a blank line (so the new line starts a thread of its own, doc.js threads) and
   // "@discover <query>" ("@discover" alone with no query) with its pending line, asked with no earlier turns. An answer to
   // a brainstorm card still live above it is written under the brainstorm thread, so above this one (sendCard). Send to
-  // Discover asks it (sendDiscover).
-  discoverLook(i, query = '') {
+  // Discover asks it (sendDiscover); a result's offer line asks it, or `agent` 'bart' (askResult).
+  discoverLook(i, query = '', agent = 'discover') {
     const ls = this.lines(), thread = threads(ls).find((t) => t.from <= i && i <= t.to);
-    if (!thread || !this.props.onAsk) return;
-    const askId = newAskId(), add = ['', query ? `@discover ${query}` : '@discover', `bart~> ${askId}`]; if (thread.to + 1 >= ls.length) add.push('');
+    if (!thread || !this.props.onAsk || (agent === 'bart' && !query)) return;
+    const askId = newAskId(), add = ['', query ? `@${agent} ${query}` : `@${agent}`, `bart~> ${askId}`]; if (thread.to + 1 >= ls.length) add.push('');
     const ed = this.editorEl(); if (ed && ed.contains(document.activeElement)) document.activeElement.blur();
     this.setLines((x) => { const out = [...x]; out.splice(thread.to + 1, 0, ...add); return out; });
     this.setState({ activeLine: null, mention: null });
-    this.props.onAsk({ askId, text: query, turns: [], agent: 'discover' });
+    this.props.onAsk({ askId, text: query, turns: [], agent });
+  }
+  // @discover or @bart on a result's offer line (MATH-40): the sentence above it, read from the turn line `i` is in.
+  askResult(i, agent) {
+    if (agent !== 'discover' && agent !== 'bart') return;
+    const ls = this.lines(), thread = threads(ls).find((t) => t.from <= i && i <= t.to);
+    const turn = thread && thread.turns.find((t) => t.from <= i && i <= t.to);
+    const found = turn ? resultParts(turnText(ls, turn).answer) : null;
+    if (found) this.discoverLook(i, found.sentence, agent);
   }
   answerLook(text) {
     const q = parseLine(text), ink = (html) => html.replace(/<strong style="font-weight:600">/g, '<strong style="color:#171717;font-weight:600">');
@@ -1749,6 +1768,7 @@ export default class DocEditor extends React.Component {
       if (k === 'sendfollow') { this.closePicker(); this.sendFollow(Number(act.dataset.thread)); return; }
       if (k === 'senddiscover') { this.closePicker(); this.sendDiscover(act.dataset.target); return; }
       if (k === 'opendiscover') { this.closePicker(); this.openDiscover(act.dataset.target); return; }
+      if (k === 'resultask') { this.closePicker(); this.askResult(i, act.dataset.agent); return; }
       if (k === 'papersave') { if (!act.disabled) this.savePaper(i); return; }
       if (k === 'regen') { this.closePicker(); const q = Number(act.dataset.turn); this.regenerate(q, act.dataset.plain ? undefined : this.ranWith(this.lines(), q).choice); return; }
       if (k === 'editturn') { this.closePicker(); this.startEdit(Number(act.dataset.turn)); return; }

@@ -4,7 +4,7 @@
 // which writes the answer given (if any) and "; (wrap up)", and under the card's box the Send to Discover field (MATH-31),
 // which starts an @discover thread of its own on what the person typed, under the brainstorm thread, and leaves the card
 // live. @discover's own cards have neither. An older document's `@orient` line (2026-10-05) is asked, drawn and
-// answered as @brainstorm's. There is no document here: the editor and its elements are stand-ins.
+// answered as @brainstorm's. An exchange's result (MATH-40) ends on a small line that sends their sentence on. There is no document here: the editor and its elements are stand-ins.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -215,7 +215,7 @@ test('on a live @brainstorm versions card the field under the options reads "Or 
   for (const lines of [['@brainstorm', ...answer(FOCUS), ''], ['@discover', ...answer(VERSIONS), '']]) {
     assert.match(mounted(lines).html(0), /placeholder="Or say it in your own words…"/, `${lines[0]}: as before`);
   }
-  assert.equal(editorModule.BRAINSTORM_ITEM.summary, 'Write what you know about a topic or paper, then land on a research question in your own words.', 'M-08');
+  assert.equal(editorModule.BRAINSTORM_ITEM.summary, 'Think out loud about a topic, a paper or what is on your mind, then write what you want to dig into next.', 'MATH-40');
 });
 
 /* ------------------------------------------------------------- @orient folded into @brainstorm (2026-10-05) */
@@ -275,6 +275,33 @@ test('a recap is drawn as sections, the paper path\'s "What you took from it" an
     assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].turns.length], ['brainstorm', '', 2], 'sent empty: @brainstorm again on the same thread');
     assert.equal(m.lines()[lines.length - 1], '@brainstorm');
   }
+});
+
+test('an @brainstorm result is their sentence, then one small line whose @discover and @bart start a thread of their own on it; no Send to Discover row and no sections (MATH-40)', async () => {
+  const SENTENCE = 'Look at how often people correct an agent mid-task.';
+  const NEXT = { say: 'You came back to “correct” three times.', card: 'questions', questions: { eyebrow: 'what next', items: [{ id: 'next', type: 'open', title: card.NEXT_TITLE }] }, ready: false };
+  const result = replyLines(card.resultText(SENTENCE), { level: { name: '', effort: '' }, trail: [], ms: 0 }, { model: false });
+  const lines = ['@brainstorm corrigibility', ...answer(NEXT), `@brainstorm ${SENTENCE}`, ...result, ''];
+  const m = mounted(lines), row = (text) => m.lines().indexOf(text), offer = row(`bart> ${card.RESULT_OFFER}`);
+  const drawn = await lineOf(m, offer);
+  assert.match(drawn, /font-size:13px;line-height:1\.6;color:#8f8f8f/, 'small and grey');
+  assert.match(drawn, /data-act="resultask" data-agent="discover"[^>]*>@discover<\/button>, or ask about it with <button[^>]*data-act="resultask" data-agent="bart"[^>]*>@bart<\/button>/);
+  const said = await lineOf(m, row(`bart> ${SENTENCE}`));
+  assert.ok(said.includes(SENTENCE) && !said.includes('<button') && !said.includes('font-weight:600'), 'their sentence as written, not a section');
+  assert.ok(!m.editor.editorHtml().includes('data-recap-discover'), 'no Send to Discover row: the offer line stands in for it');
+  // @discover, then @bart: each a thread of its own after the brainstorm thread, on their sentence, with no earlier turns.
+  const press = (agent) => m.editor.editorClick({ target: { closest: () => ({ dataset: { act: 'resultask', agent, row: String(offer) } }) }, preventDefault() {} });
+  press('discover');
+  assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].turns], ['discover', SENTENCE, []]);
+  press('bart');
+  assert.deepEqual([m.asks[1].agent, m.asks[1].text, m.asks[1].turns], ['bart', SENTENCE, []]);
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
+  assert.deepEqual(model.threads(m.lines()).map((t) => m.lines()[t.from]), ['@brainstorm corrigibility', `@bart ${SENTENCE}`, `@discover ${SENTENCE}`], 'each right after the brainstorm thread, the latest first');
+  press('nope');
+  assert.equal(m.asks.length, 2, 'no other agent');
+  // Left open: nothing to send on, and nothing drawn as an offer.
+  const left = mounted(['@brainstorm corrigibility', ...answer(NEXT), '@brainstorm (skipped)', ...replyLines(card.LEFT_OPEN, { level: { name: '', effort: '' }, trail: [], ms: 0 }, { model: false }), '']);
+  assert.ok(!left.editor.editorHtml().includes('resultask'));
 });
 
 test('Send to Discover is not drawn after @bart or @discover answers, under a recap still being asked again, or after an @brainstorm reply that is not a recap (MATH31-04, A-05)', () => {

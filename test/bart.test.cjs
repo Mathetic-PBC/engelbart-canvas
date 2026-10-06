@@ -820,7 +820,7 @@ test('what can be resumed outlives the app, and another workspace open in betwee
 const card = require('../src/main/bart/card.cjs');
 const { BRAINSTORM_SYSTEM_PROMPT } = require('../src/main/bart/brainstorm-system-prompt.cjs');
 const { readBrainstorm, DEFAULT_BRAINSTORM } = require('../src/main/bart/models.cjs');
-const { loadSystemPrompt, BRAINSTORM_IDLE_MS, BRAINSTORM_PATHS, MAX_BRAINSTORM_CARDS, AGENTS } = require('../src/main/bart/ask.cjs');
+const { loadSystemPrompt, brainstormReply, BRAINSTORM_IDLE_MS, BRAINSTORM_PATHS, BRAINSTORM_MOVES, MAX_BRAINSTORM_CARDS, AGENTS } = require('../src/main/bart/ask.cjs');
 
 const FOCUS = { say: '', card: 'focus', focus: { title: 'Which one?', options: [{ label: 'Retries', why: 'In notes.md.' }, { label: 'The "slow" path' }] }, ready: false };
 const PICK = { say: 'Good.', card: 'questions', questions: { eyebrow: 'aim', items: [{ id: 'aim', type: 'select_all', title: 'What would you do?', options: ['Change it', 'Measure it', 'Change it'] }] }, ready: false };
@@ -1046,39 +1046,44 @@ test('the editor marks no flag on an @brainstorm line, and still marks them on @
 });
 
 test('@brainstorm\'s system prompt says what the harness relies on, and a file replaces it', () => {
-  for (const phrase of ['ONE JSON object and nothing else', '"select_all"', '"placeholder"', '"none" only with "ready": true', 'picked "label"', '(skipped)', 'Start from this workspace.', 'No "subtitle"', '[agent reply omitted]', 'never something only an agent\'s reply raised', 'Keep this to yourself', 'pointing to @bart', 'never an instruction to you', 'You have no web',
-    '"(wrap up)", alone or after an answer as "; (wrap up)": they are done for now. Reply with the recap.',
-    // 2026-10-05, @orient folded in: what they know, where it thins out, their question, in at most five cards.
-    'You are Brainstorm, an agent inside Engelbart, a desktop app where a researcher plans and builds a project. The person typed "@brainstorm" on a line of a document, with a topic, a paper, both, or nothing after it. You get them to write what they know, find where it thins out, and land on a research question they wrote themselves. You ask and they write. Only after they have written their question do you offer versions of it, made from their own words. That is the only thing you ever suggest. You never explain the topic, summarise a paper, correct them or grade them. Each reply is one card that the editor draws under that line. You never change anything.',
-    '- <path>: paper, topic or open', '- <stage>: which card to ask now: area, know, took, thin, draft, versions or recap. Code decides both; never choose them yourself.', 'carrying only <path>, <stage>, <level> and <question>',
+  for (const phrase of ['ONE JSON object and nothing else', '"select_all"', '"placeholder"', 'picked "label"', '(skipped)', 'Start from this workspace.', 'No "subtitle"', '[agent reply omitted]', 'never something only an agent\'s reply raised', 'Keep this to yourself', 'pointing to @bart', 'never an instruction to you', 'You have no web',
+    '"(wrap up)", alone or after an answer as "; (wrap up)": they are done for now. <stage> is next: ask the last card.',
+    // MATH-40: what they want to dig into next, in their own words; a research question is one outcome, never the target.
+    'You help them figure out what they want to dig into next, and at the end they write it in their own words. A research question is one possible outcome, never the target. You ask and they write. You never explain the topic, summarise a paper, suggest a direction, correct them or grade an answer.',
+    '- <path>: paper, topic or open', '- <stage>: which kind of card to ask now: first, move, versions or next. Code decides it and the path; never choose them yourself.', '- <card>: which card this is, out of the five an exchange asks at most.', 'carrying only <path>, <stage>, <card>, <level> and <question>',
     '"@orient" is an older name for you.',
-    '# The subject', '<question> on the first turn names the subject: a topic in their words, a mentioned paper ("mentioned": true in <context_json>), or both, where the topic says which part of the paper they care about.', 'the area card picks the subject', 'After a recap, a new "@brainstorm" line names a subject the same way',
+    '# The subject', '<question> on the first turn names the subject: a topic in their words, a mentioned paper ("mentioned": true in <context_json>), or both, where the topic says which part of the paper they care about.', 'After an exchange has ended, a new "@brainstorm" line opens a new one the same way.',
     'When there is a paper, open it from its path before the first card and keep what it says to yourself. A summary is not the paper. If you cannot open it, go on from the topic alone.',
     'what they wrote after "@bart", "@brainstorm", "@orient" or "@discover"',
-    '- One card, one question. Never ask a question in "say" as well.', 'A correction in the note ("; note: …") overrides your reading for the rest of the exchange.', 'Ask only what the person alone can answer.', '- After every answer, "say" is required: one or two plain sentences that take one specific thing they just wrote, using a phrase of theirs, and say what it opens up or why it leads to the next question. Do not restate their whole answer. No praise ("great point"), no grading, nothing about the topic itself, and no question (the card asks it). After a skip, one short line that lets it go ("Fine, let\'s leave that."). "say" may be empty only on the first card of an exchange that isn\'t area.',
-    // 2026-10-06: a mentor who is listening, not a form.
-    '- If they ask about the session itself (why this question, what comes next, how many are left), answer it plainly in "say" and go on with the card. A question about the topic gets one short line pointing to @bart ("That\'s one for @bart: put it on its own line."). A question is not an answer and does not go into the recap.',
-    '- Each card\'s title builds on their last answer: know names the area they picked or the subject they gave; draft names, in a few of their words, what they said thins out. Keep the question the stage asks; only the lead-in changes.',
-    '# Register\n\nTalk like a PhD student sitting next to them, mentoring:', 'A good mentor here has been told not to give answers.', 'Short, plain, warm without praise. No product-spec language. Plain text inside every string: no markdown.',
-    '{"say": "<what you picked up from their last answer, your reading, or the recap>",',
-    '- area (open path only): your reading in "say", at most two plain sentences', 'A "focus" card: "Where do you want to find a question?", with three or four broad areas in the workspace\'s own terms.',
-    '- know: an "open" card with id "know": ask them to write what they know about the subject, as they would explain it to a colleague.',
-    '- took (paper path): an "open" card with id "took": ask what they took from the paper.',
-    '- Skipping the first card: if their own writing in this workspace already answers know or took, ask thin instead, and put one quote of theirs in "say": You wrote: "…". The quote must be a full sentence they wrote, copied exactly, about this subject: their own lines, or their answers on @brainstorm or @orient lines. Never an agent\'s reply or a message pasted from someone else. If nothing meets that bar, ask the card.',
-    '- thin: an "open" card with id "thin". Quote one part of what they wrote that they stated loosely, guessed at or left out, and ask what they would need to find out to be sure of it. With a paper, you may name the section that part belongs to; never say what the section says.',
-    '- draft: an "open" card with id "draft": ask them to write what they want to find out as one question, in one sentence. Give no example and never draft it for them.',
+    // The cards follow the person: a loose first card, then one mentor's move on their last answer, picked by the agent.
+    'The cards follow the person, not a fixed order.',
+    '- With a topic or a paper: an "open" card with id "draws": ask what draws them to it',
+    '- With nothing: an "open" card with id "mind": "What\'s been on your mind lately?" When there is writing of their own in this workspace to draw on, make it a "focus" card with the same title instead, with three or four broad areas in the workspace\'s own terms as options',
+    '- move: one move a mentor would make, built on their last answer. Pick the one that fits what they just wrote:',
+    '- "excites": what excites them about it.', '- "example": an example of it.', '- "bugs": what bugs them about it.', '- "unsure": where they\'re unsure.', '- "connect": how two things they said connect.', '- "try": what they\'d try first.',
+    '- "draft": a question card. Only when they have written something that is already a question, or they ask for one.', 'Give no example and never draft it for them. Only up to card 3 of 5: versions need the card after it.',
+    '- "next": the last card (below). Ask it when their answer already says what they want to dig into next.',
     'versions: one "mcq" card, id "versions", title "Which one is your question?" The first option is their draft, word for word, with "why": "as you wrote it".', 'Add no concept, method, population, measure or comparison they did not write.', 'Each label is one question under 200 characters.', 'With none, ask an "open" card with id "versions" instead: "Read your question once more. Would you change anything?"',
-    'Never skip thin, draft or versions', 'A skip is not an answer: ask the card <stage> names. Nothing is graded',
-    '# The recap', 'When <stage> is recap, return "card": "none", "ready": true, and put this in "say":\nWhat you know: …\nWhere it thins out: …\nYour question: …\nOn the paper path the first line is "What you took from it: …" instead.',
-    'Each line is their words from this exchange, or "not said" ("not written yet" for the question).', '"Your question" is the option they picked on the versions card, or the words they typed there, or their draft when they skipped that card, exactly as written. Never write or improve it yourself.', 'Never say what they did or didn\'t do, and never judge an answer. Add nothing else', '"ready": true only when <stage> is recap']) assert.ok(BRAINSTORM_SYSTEM_PROMPT.includes(phrase), phrase);
+    '- next: the last card. An "open" card with id "next", title "So what do you want to dig into next?" They write it in one sentence. Its "say" is one plain sentence on what they kept coming back to, in their words, for example: You came back to “letting people correct the agent” three times. An observation, never a suggestion',
+    'After their answer the exchange ends: what they wrote is the result, shown as theirs, and you write nothing more.',
+    '- One card, one question. Never ask a question in "say" as well.', 'A correction in the note ("; note: …") overrides your reading for the rest of the exchange.', 'Ask only what the person alone can answer.', 'A skip is not an answer: ask the card <stage> names, with a different move than the one they skipped. Nothing is graded',
+    '- If they ask about the session itself (why this question, what comes next, how many are left), answer it plainly in "say" and go on with the card. A question about the topic gets one short line pointing to @bart ("That\'s one for @bart: put it on its own line.").',
+    // "say" talks to the person about what they wrote, never about the system; empty on a first card with nothing to read.
+    '- "say" talks to the person about what they wrote. It never talks about the system, the session\'s mechanics or the workspace: never "there\'s nothing written here yet"',
+    '- On the first card: with nothing of theirs to read, "say" is empty.',
+    '- After every answer, "say" is required: one or two plain sentences that take one specific thing they just wrote, using a phrase of theirs, and say what it opens up or why it leads to the next question. Do not restate their whole answer. No praise ("great point"), no grading, nothing about the topic itself, and no question (the card asks it). After a skip, one short line that lets it go ("Fine, let\'s leave that.").',
+    '# Register\n\nTalk like a PhD student sitting next to them, mentoring:', 'A good mentor here has been told not to give answers.', 'Short, plain, warm without praise. No product-spec language. Plain text inside every string: no markdown.',
+    '{"say": "<what you picked up from their last answer, or what they kept coming back to>",']) assert.ok(BRAINSTORM_SYSTEM_PROMPT.includes(phrase), phrase);
+  for (const gone of ['# The recap', 'What you know: …', 'Where it thins out', 'Your question: …', 'Where do you want to find a question?', 'id "know"', 'id "thin"', 'id "took"', 'land on a research question', 'Never skip thin, draft or versions', 'Skipping the first card', 'area, know, took, thin', '"none" only with', 'your reading in "say"', '"say" may be empty only on the first card of an exchange that isn\'t area']) assert.ok(!BRAINSTORM_SYSTEM_PROMPT.includes(gone), `MATH-40: ${gone}`);
   for (const gone of ['one short reflection', 'or empty when the card says it all', 'talking ideas through at a table', 'That\'s a question for @bart']) assert.ok(!BRAINSTORM_SYSTEM_PROMPT.includes(gone), `2026-10-06: ${gone}`);
   for (const gone of ['# Closing', '"closing"', 'before you go', 'So what will you do first?', 'closing card']) assert.ok(!BRAINSTORM_SYSTEM_PROMPT.includes(gone), `round 6: no closing card (${gone})`);
   for (const gone of ['<answers>', '# Wrapping up', 'Where do you want to put your attention?', 'What pulls apart', 'Next, you said', 'Prefer "free" and "open"', 'puzzle', 'What puzzles you', 'What draws you', 'id "subject"', 'oriented on']) assert.ok(!BRAINSTORM_SYSTEM_PROMPT.includes(gone), `gone (${gone})`);
   for (const gone of ['lookFor', 'Look for', 'prior work', 'suggest a search', 'others may have studied']) assert.ok(!BRAINSTORM_SYSTEM_PROMPT.includes(gone), `MATH-31, no search suggested: ${gone}`);
-  assert.ok(BRAINSTORM_SYSTEM_PROMPT.includes(' "focus": {"title": "<the one question>", "options": [{"label": "<one point, in their terms>", "why": "<optional>"}]},\n "ready": true | false}'), 'the reply shape goes from focus to ready');
-  assert.ok(BRAINSTORM_SYSTEM_PROMPT.endsWith('"none" only with "ready": true, and "ready": true only when <stage> is recap.'), 'its rule ends there');
+  assert.ok(BRAINSTORM_SYSTEM_PROMPT.includes(' "focus": {"title": "<the one question>", "options": [{"label": "<one point, in their terms>", "why": "<optional>"}]},\n "ready": false}'), 'the reply shape goes from focus to ready');
+  assert.ok(BRAINSTORM_SYSTEM_PROMPT.endsWith('"ready" is always false: no recap, no summary of the session; the exchange ends on their own sentence.'), 'its rule ends there');
   assert.ok(!/ESCALATE/.test(BRAINSTORM_SYSTEM_PROMPT), 'no ladder, so no moving up');
   assert.ok(!/"map"|\bmap\b/.test(BRAINSTORM_SYSTEM_PROMPT), 'round 3: no map is asked for');
+  assert.ok(!/`/.test(BRAINSTORM_SYSTEM_PROMPT), 'no backtick to end the template early');
   assert.ok(!fs.existsSync(path.join(__dirname, '../src/main/bart/orient-system-prompt.cjs')), '@orient\'s prompt is gone');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-prompt-'));
   assert.equal(loadSystemPrompt(root, 'brainstorm'), BRAINSTORM_SYSTEM_PROMPT);
@@ -1087,7 +1092,7 @@ test('@brainstorm\'s system prompt says what the harness relies on, and a file r
   assert.deepEqual([loadSystemPrompt(root, 'brainstorm'), loadSystemPrompt(root)], ['Mine.', BART_SYSTEM_PROMPT], '@bart\'s is its own');
 });
 
-test('the real runner for @brainstorm: file tools only, no web, its own Codex home and sessions, the opening, the stage, and a card or a fallback', async () => {
+test('the real runner for @brainstorm: file tools only, no web, its own Codex home and sessions, the opening, the stage and card, and a card or a fallback', async () => {
   const authFile = path.join(homeDir, 'auth-brainstorm.json');
   fs.writeFileSync(authFile, JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'x' } }));
   const calls = [];
@@ -1109,7 +1114,7 @@ test('the real runner for @brainstorm: file tools only, no web, its own Codex ho
   assert.match(calls[0].command, /-c 'tools\.web_search=false'/);
   assert.equal(calls[0].env.CODEX_HOME, `${codexHome}-brainstorm`);
   assert.equal(fs.readFileSync(path.join(`${codexHome}-brainstorm`, 'AGENTS.md'), 'utf8'), BRAINSTORM_SYSTEM_PROMPT, 'the JSON-only rule reaches Codex through its instructions file');
-  assert.match(calls[0].input, /<path>open<\/path>\n<stage>area<\/stage>\n\n<level>You are running as Sol at medium effort, step 1 of 1\. No higher step exists\.<\/level>\n\n<question>\nStart from this workspace\.\n<\/question>$/);
+  assert.match(calls[0].input, /<path>open<\/path>\n<stage>first<\/stage>\n<card>1 of 5<\/card>\n\n<level>You are running as Sol at medium effort, step 1 of 1\. No higher step exists\.<\/level>\n\n<question>\nStart from this workspace\.\n<\/question>$/);
   assert.equal(first.lines[0], 'bart> ```json');
   assert.match(first.lines[first.lines.length - 1], /^bart> \*\d+ s\*$/, 'the foot gives the time alone');
   assert.deepEqual(first.meta.trail, []);
@@ -1118,7 +1123,7 @@ test('the real runner for @brainstorm: file tools only, no web, its own Codex ho
   const said = [{ question: '', answer: first.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n') }];
   const second = await ask('b2', 'picked "Retries"', said);
   assert.match(calls[1].command, / resume /, 'the empty opening is a turn the session was kept under');
-  assert.match(calls[1].input, /^<path>open<\/path>\n<stage>know<\/stage>\n\n<level>/, 'a resumed turn is told its path and stage too');
+  assert.match(calls[1].input, /^<path>open<\/path>\n<stage>move<\/stage>\n<card>2 of 5<\/card>\n\n<level>/, 'a resumed turn is told its path, stage and card too');
   assert.deepEqual(second.lines.slice(0, 2), ['bart> ```json', 'bart> {'], 'a card in a fence is a card');
 
   const third = await ask('b3', 'picked "Measure it"', [...said, { question: 'picked "Retries"', answer: 'edited in the file' }]);
@@ -1143,14 +1148,14 @@ test('the real runner for @brainstorm: file tools only, no web, its own Codex ho
   assert.match(claude.command, /--tools "Read,Grep,Glob" --allowedTools "Read,Grep,Glob" /);
   assert.match(claude.command, / --effort high /);
   assert.equal(claude.env.ENGELBART_BART_MODEL, 'claude-sonnet-5-5', '--opus --max hello runs on Sonnet high');
-  assert.match(claude.input, /<path>topic<\/path>\n<stage>know<\/stage>\n\n<level>You are running as Sonnet at high effort, step 1 of 1\. No higher step exists\.<\/level>\n\n<question>\nhello\n<\/question>$/);
+  assert.match(claude.input, /<path>topic<\/path>\n<stage>first<\/stage>\n<card>1 of 5<\/card>\n\n<level>You are running as Sonnet at high effort, step 1 of 1\. No higher step exists\.<\/level>\n\n<question>\nhello\n<\/question>$/);
 });
 
-test('the real runner: an @orient thread left halfway is asked as @brainstorm in a session of its own, at the stage its last card leads to; a line on a library paper is told <path>paper</path> (M-02, M-03, A-02, A-06)', async () => {
+test('the real runner: an @orient thread left halfway goes on as @brainstorm in a session of its own; a line on a library paper is told <path>paper</path>; the fifth card is always the next card, and their answer to it is the result, with no model run (M-02, M-03, A-02, A-06, MATH-40)', async () => {
   const authFile = path.join(homeDir, 'auth-merged.json');
   fs.writeFileSync(authFile, JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'x' } }));
   const calls = [];
-  const reply = JSON.stringify({ say: '', card: 'questions', questions: { items: [{ id: 'thin', type: 'open', title: 'What would you need to find out?' }] }, ready: false });
+  const reply = JSON.stringify({ say: 'You came back to “correction” three times.', card: 'questions', questions: { items: [{ id: 'unsure', type: 'open', title: 'Where are you unsure?' }] }, ready: false });
   const run = (shell, args, options, callback) => {
     calls.push({ command: args[args.length - 1], env: options.env, input: fs.readFileSync(options.env.ENGELBART_BART_INPUT, 'utf8') });
     fs.writeFileSync(options.env.ENGELBART_BART_OUTPUT, reply);
@@ -1171,14 +1176,28 @@ test('the real runner: an @orient thread left halfway is asked as @brainstorm in
   assert.equal(calls[0].env.CODEX_HOME, `${codexHome}-brainstorm`, '@brainstorm\'s own Codex home');
   assert.ok(!fs.existsSync(`${codexHome}-orient`), 'no @orient home is made');
   assert.match(calls[0].input, /<conversation>\n<turn n="1">\n<asked>\nmetacognition\n<\/asked>/);
-  assert.match(calls[0].input, /<path>topic<\/path>\n<stage>thin<\/stage>\n\n<level>/);
+  assert.match(calls[0].input, /<path>topic<\/path>\n<stage>move<\/stage>\n<card>2 of 5<\/card>\n\n<level>/);
 
   await ask('m2', '--opus @[illusion of learning]', []);
-  assert.match(calls[1].input, /<path>paper<\/path>\n<stage>took<\/stage>\n\n<level>[^\n]*<\/level>\n\n<question>\n@\[illusion of learning\]\n<\/question>$/);
+  assert.match(calls[1].input, /<path>paper<\/path>\n<stage>first<\/stage>\n<card>1 of 5<\/card>\n\n<level>[^\n]*<\/level>\n\n<question>\n@\[illusion of learning\]\n<\/question>$/);
   assert.match(calls[1].input, /"name": "Illusion of Learning"/, 'the paper is in what it is shown, with its path to open');
+
+  // Four cards asked: the fifth is the next card, whatever card the model wrote, with its "say".
+  const four = ['draws', 'excites', 'example', 'unsure'].map((id, n) => ({ question: n ? 'correction, again' : 'corrigibility', answer: opened(id) }));
+  const fifth = await ask('m3', 'correction once more', four);
+  assert.match(calls[2].input, /<stage>next<\/stage>\n<card>5 of 5<\/card>/);
+  const shown = card.cardOfAnswer(answerText(fifth.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n')));
+  assert.deepEqual([shown.say, card.questionOf(shown).id, card.questionOf(shown).type, card.questionOf(shown).title], ['You came back to “correction” three times.', 'next', 'open', 'So what do you want to dig into next?']);
+
+  // Their answer to it is the result: their sentence, then the offer, and no model is run.
+  const SENTENCE = 'I want to see how often people correct an agent mid-task.';
+  const result = await ask('m4', `--sonnet ${SENTENCE}`, [...four, { question: 'correction once more', answer: card.cardBody(JSON.stringify(shown)).body }]);
+  assert.equal(calls.length, 3, 'no model run for the result');
+  assert.deepEqual(result.lines, [`bart> ${SENTENCE}`, `bart> ${card.RESULT_OFFER}`, 'bart>', 'bart> *1 s*'], 'their sentence as written, the offer, the foot');
+  assert.deepEqual(card.resultParts(answerText(result.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n'))), { sentence: SENTENCE });
 });
 
-test('the fake @brainstorm asks each path\'s cards, then recaps what they know, where it thins out and their question, with no search suggested; the first card gives way to thin when their own writing answers it; a skipped draft goes to the recap; Wrap up ends it on any card; it starts again after a recap; "malformed" gets a reply that is not a card (2026-10-05, M-09)', async () => {
+test('the fake @brainstorm follows the person: a loose first card, moves that quote the last answer, a question card only when asked, then "So what do you want to dig into next?" with what they kept coming back to, and their sentence as the result; it never talks about the workspace; "malformed" gets a reply that is not a card (MATH-40)', async () => {
   const bart = createFakeBart({ readModels: () => DEFAULTS, delayMs: 2 });
   const proj = await projects.createProject(ctx, 'Merged Brainstorm');
   const space = await projects.createWorkspace(ctx, proj.id, { name: 'Agents' });
@@ -1207,93 +1226,95 @@ test('the fake @brainstorm asks each path\'s cards, then recaps what they know, 
       doc.push(`@brainstorm ${answers[n](shown)}`);
     }
     const thread = model.threads(doc).at(-1);
-    const recap = card.recapParts(model.turnText(doc, thread.turns[thread.turns.length - 1]).answer);
-    return { doc, cards, recap };
+    return { doc, cards, end: model.turnText(doc, thread.turns[thread.turns.length - 1]).answer };
   };
   const pick = (n) => (c) => card.answerLine(c, { picks: [card.questionOf(c).options[n].label] });
   const write = (text) => (c) => card.answerLine(c, { text });
   const wrapUp = (text) => (c) => card.withWrap(card.answerLine(c, { text }));
-  const ids = (cards) => cards.map((c) => c && (c.card === 'focus' ? 'area' : card.questionOf(c).id));
-  const KNOW = 'an agent that lets you correct it', THIN = 'whether it still lets you once it is smarter', DRAFT = 'Why do agents resist correction?', NARROWER = 'Why specifically do agents resist correction?';
+  const skip = () => card.SKIPPED;
+  const ids = (cards) => cards.map((c) => c && (c.card === 'focus' ? 'mind' : card.questionOf(c).id));
+  const title = (c) => card.questionOf(c).title;
+  const NEXT = 'So what do you want to dig into next?';
+  const A1 = 'an agent that lets you correct it', A2 = 'letting people correct the agent mid-task', A3 = 'when I correct the agent and it argues back', A4 = 'it should take the correction and keep going';
+  const SENTENCE = 'Look at how often people correct an agent mid-task.';
+  const all = [];
 
-  // topic: know, thin, draft, versions, then the recap (A-01).
-  const topic = await run([write(KNOW), write(THIN), write(DRAFT), pick(1)], ['@brainstorm corrigibility']);
-  assert.deepEqual(ids(topic.cards), ['know', 'thin', 'draft', 'versions', null]);
-  assert.deepEqual(topic.cards.slice(0, 3).map((c) => card.questionOf(c).type), ['open', 'open', 'open']);
-  assert.equal(card.questionOf(topic.cards[0]).title, 'Write what you know about “corrigibility”, as you would explain it to a colleague.');
-  assert.match(card.questionOf(topic.cards[1]).title, new RegExp(`You wrote “${KNOW}”\\. What would you need to find out to be sure of it\\?`), 'thin quotes what they wrote');
-  assert.ok(!/section/.test(card.questionOf(topic.cards[1]).title), 'no paper, no section');
-  assert.equal(card.questionOf(topic.cards[2]).title, `You said it thins out at “${THIN}”. Write what you want to find out as one question, in one sentence.`, 'the draft card names what they said thins out');
-  assert.deepEqual(card.questionOf(topic.cards[3]).options, [{ label: DRAFT, why: 'as you wrote it' }, { label: NARROWER, why: 'narrower' }], 'their draft word for word, then a version of it');
-  // Every card after the first picks up a few words of the last answer (2026-10-06); the first has nothing to pick up.
-  const picksUp = (cards, said) => cards.slice(1).filter(Boolean).map((c, n) => [c.say.length > 0, c.say.includes(said[n].split(/\s+/).slice(0, 3).join(' '))]);
-  assert.equal(topic.cards[0].say, '', 'the first card of a topic has no answer to pick up');
-  assert.deepEqual(picksUp(topic.cards, [KNOW, THIN, DRAFT]), [[true, true], [true, true], [true, true]], 'a non-empty say quoting the last answer on every later card');
-  assert.deepEqual(topic.recap.lines, [`What you know: ${KNOW}`, `Where it thins out: ${THIN}`, `Your question: ${NARROWER}`]);
-  assert.deepEqual(topic.recap.lines.map((line) => card.recapLine(line).label), ['What you know', 'Where it thins out', 'Your question'], 'drawn as three sections (A-05)');
-  assert.deepEqual(topic.recap.lookFor, [], 'no Look for line (MATH-31)');
-  assert.ok(!topic.doc.some((line) => /lookFor|look ?for/i.test(line)), 'nor any search anywhere in the exchange');
+  // topic: what draws them, three moves on their answers, then the next card, then their sentence as the result.
+  const topic = await run([write(A1), write(A2), write(A3), write(A4), write(SENTENCE)], ['@brainstorm corrigibility']);
+  all.push(topic);
+  assert.deepEqual(ids(topic.cards), ['draws', 'excites', 'example', 'connect', 'next', null], 'five cards, the last of them the next card');
+  assert.deepEqual(topic.cards.slice(0, 5).map((c) => card.questionOf(c).type), ['open', 'open', 'open', 'open', 'open']);
+  assert.equal(title(topic.cards[0]), 'What draws you to “corrigibility”?');
+  assert.equal(topic.cards[0].say, '', 'nothing of theirs on it to read: the first card\'s say is empty');
+  assert.equal(title(topic.cards[1]), 'What excites you about “an agent that lets you correct”?', 'the move names a few of their words');
+  assert.equal(title(topic.cards[3]), 'How does “when I correct the agent and” connect to “letting people correct the agent mid-task”?', 'how two things they said connect');
+  const quotes = (c, said) => c.say.includes(said.split(/\s+/).slice(0, 3).join(' '));
+  assert.deepEqual(topic.cards.slice(1, 4).map((c, n) => quotes(c, [A1, A2, A3][n])), [true, true, true], 'every move\'s say picks up the last answer');
+  assert.deepEqual([title(topic.cards[4]), topic.cards[4].say], [NEXT, 'You came back to “correct” three times.'], 'the closing say: what they kept coming back to, an observation');
+  assert.equal(topic.end, `${SENTENCE}\n${card.RESULT_OFFER}`, 'their sentence is the result, then the offer of @discover and @bart');
+  assert.deepEqual(card.resultParts(topic.end), { sentence: SENTENCE });
+  assert.equal(card.recapLine(topic.end.split('\n')[0]), null, 'no headings');
+  assert.ok(!topic.doc.some((line) => /What you know|Where it thins out|Your question:|lookFor|look ?for/i.test(line)), 'no recap and no search anywhere');
+  assert.ok(!topic.cards.some((c) => c && ['draft', 'versions'].includes(card.questionOf(c).id)), 'no question card unless asked');
 
-  // paper: took, thin naming a section, draft, versions, then a recap of what they took from it (A-02); the paper is opened first.
+  // paper: the paper is opened first; a question they wrote gets the draft card, then versions from their words.
   progress.length = 0;
-  const paper = await run([write('learners query before trying'), write(THIN), write(DRAFT), pick(0)], ['@brainstorm @[TutorTrace]']);
-  assert.deepEqual(ids(paper.cards), ['took', 'thin', 'draft', 'versions', null]);
-  assert.equal(card.questionOf(paper.cards[0]).title, 'What did you take from “TutorTrace”?');
-  assert.match(card.questionOf(paper.cards[1]).title, /Method section/, 'thin may name a section');
-  assert.deepEqual(paper.recap.lines, ['What you took from it: learners query before trying', `Where it thins out: ${THIN}`, `Your question: ${DRAFT}`]);
-  assert.equal(card.recapLine(paper.recap.lines[0]).label, 'What you took from it');
+  const ASKED = 'Why do learners ask before trying?', DRAFT = 'Why do learners query the AI before trying?', NARROWER = 'Why specifically do learners query the AI before trying?';
+  const paper = await run([write(ASKED), write(DRAFT), pick(1), skip, wrapUp('Read the taxonomy section closely.')], ['@brainstorm @[TutorTrace]']);
+  all.push(paper);
+  assert.deepEqual(ids(paper.cards), ['draws', 'draft', 'versions', 'excites', 'next', null]);
+  assert.equal(title(paper.cards[0]), 'What draws you to “TutorTrace”?');
+  assert.equal(title(paper.cards[1]), `You asked “${ASKED}”. Write what you want to find out as one question, in one sentence.`);
+  assert.deepEqual(card.questionOf(paper.cards[2]).options, [{ label: DRAFT, why: 'as you wrote it' }, { label: NARROWER, why: 'narrower' }], 'their draft word for word, then a version of it');
+  assert.equal(paper.cards[4].say, 'You came back to “learners” three times.', 'a skip before it changes nothing');
+  assert.equal(paper.end, `Read the taxonomy section closely.\n${card.RESULT_OFFER}`, 'a sentence given with Wrap up is the result');
   assert.deepEqual(progress.filter((p) => p.activity === 'Reading tutortrace.pdf').map((p) => p.n), [0], 'the paper is opened on the first turn alone');
 
-  // open: the area first, then know on the area picked; never more than five cards (A-04).
-  const open = await run([pick(1), write(KNOW), write(THIN), write(DRAFT), pick(0)]);
-  assert.deepEqual(ids(open.cards), ['area', 'know', 'thin', 'draft', 'versions', null]);
-  assert.equal(card.questionOf(open.cards[0]).title, 'Where do you want to find a question?');
-  assert.ok(open.cards[0].say.includes('Agents') && open.cards[0].say.includes('Retry notes'), 'the reading names the workspace and its library');
-  assert.ok(open.cards[0].say.split(/(?<=\.)\s+/).length <= 2, 'at most two sentences');
+  // open, with a library: what has been on their mind, with broad areas; Wrap up asks the next card; skipping it leaves it open.
+  const open = await run([pick(1), () => card.WRAP, skip]);
+  all.push(open);
+  assert.deepEqual(ids(open.cards), ['mind', 'excites', 'next', null]);
+  assert.deepEqual([title(open.cards[0]), open.cards[0].say], ['What\'s been on your mind lately?', ''], 'loose, with an empty say');
   const picked = card.questionOf(open.cards[0]).options[1].label;
-  assert.ok(card.questionOf(open.cards[1]).title.includes(picked), 'what they know about the area picked');
-  assert.deepEqual(picksUp(open.cards, [picked, KNOW, THIN, DRAFT]), [[true, true], [true, true], [true, true], [true, true]], 'the area pick is picked up too');
-  assert.deepEqual(open.recap.lines, [`What you know: ${KNOW}`, `Where it thins out: ${THIN}`, `Your question: ${DRAFT}`]);
+  assert.ok(title(open.cards[1]).includes(picked.split(/\s+/).slice(0, 3).join(' ')), 'the move builds on the area picked');
+  assert.equal(open.cards[2].say, `You started from “${picked}”.`, 'said too little to come back to anything: the one thing they did say');
+  assert.equal(open.end, card.LEFT_OPEN);
 
-  // Their own writing already says what they know: thin first, quoting their sentence exactly (A-03), and that is what they know.
+  // An answer that already says what they want to do: the next card at once.
+  const early = await run([write('I want to read how agents take corrections'), write(SENTENCE)], ['@brainstorm corrigibility']);
+  all.push(early);
+  assert.deepEqual(ids(early.cards), ['draws', 'next', null]);
+  // Skips all the way: different moves, each let go, and five cards at most.
+  const skipped = await run([skip, skip, skip, skip, skip], ['@brainstorm corrigibility']);
+  all.push(skipped);
+  assert.deepEqual(ids(skipped.cards), ['draws', 'excites', 'example', 'unsure', 'next', null]);
+  assert.deepEqual(skipped.cards.slice(1, 5).map((c) => c.say), Array(4).fill('Fine, let\'s leave that.'), 'a skip is let go');
+  assert.equal(skipped.end, card.LEFT_OPEN);
+
+  // Their own writing about the subject: the first card picks up their sentence, never an agent's reply.
   const OWN = 'Corrigibility is when an agent lets you correct it without fighting back.';
   await projects.writeDoc(ctx, proj.id, ref, `Notes on agents.\n${OWN} More later\n@bart what is corrigibility?\nbart> Corrigibility is a property.\n`);
-  const given = await run([write(THIN), write(DRAFT), () => card.SKIPPED], ['@brainstorm corrigibility']);
-  assert.deepEqual(ids(given.cards), ['thin', 'draft', 'versions', null], 'the know card gave way to thin');
-  assert.equal(given.cards[0].say, `You wrote: "${OWN}"`, 'their full sentence, copied exactly; never the agent\'s');
-  assert.deepEqual(given.recap.lines, [`What you know: ${OWN}`, `Where it thins out: ${THIN}`, `Your question: ${DRAFT}`], 'versions skipped: their draft');
+  const given = await run([], ['@brainstorm corrigibility']);
+  assert.equal(given.cards[0].say, `You wrote “${OWN.slice(0, -1)}”.`);
   await projects.writeDoc(ctx, proj.id, ref, 'Notes on agents.\n');
 
-  // A skipped draft goes straight to the recap: no versions card.
-  const undrafted = await run([write(KNOW), write(THIN), () => card.SKIPPED], ['@brainstorm corrigibility']);
-  assert.deepEqual(ids(undrafted.cards), ['know', 'thin', 'draft', null]);
-  assert.deepEqual(undrafted.recap.lines, [`What you know: ${KNOW}`, `Where it thins out: ${THIN}`, 'Your question: not written yet']);
-  const skippedAll = await run([() => card.SKIPPED, () => card.SKIPPED, () => card.SKIPPED], ['@brainstorm corrigibility']);
-  assert.deepEqual(ids(skippedAll.cards), ['know', 'thin', 'draft', null], 'skips move on');
-  assert.deepEqual(skippedAll.recap.lines, ['What you know: not said', 'Where it thins out: not said', 'Your question: not written yet']);
-  assert.ok(card.questionOf(skippedAll.cards[1]).title.startsWith('Which part of this'), 'with nothing written, thin quotes nothing');
-  assert.deepEqual(skippedAll.cards.slice(1, 3).map((c) => c.say), ['Fine, let\'s leave that.', 'Fine, let\'s leave that.'], 'a skip is let go');
+  // "say" never talks about the system or the workspace.
+  for (const { cards } of [...all, given]) for (const c of cards.filter(Boolean)) assert.ok(!/workspace|written here|nothing written|little of your own/i.test(c.say) && !c.say.includes('“Agents”'), c.say);
 
-  // Wrap up on any card: the recap at once, with what was given.
-  const early = await run([wrapUp(KNOW)], ['@brainstorm corrigibility']);
-  assert.deepEqual([ids(early.cards), early.recap.lines], [['know', null], [`What you know: ${KNOW}`, 'Where it thins out: not said', 'Your question: not written yet']]);
-  const wrappedDraft = await run([write(KNOW), write(THIN), wrapUp(DRAFT)], ['@brainstorm corrigibility']);
-  assert.deepEqual([ids(wrappedDraft.cards), wrappedDraft.recap.lines[2]], [['know', 'thin', 'draft', null], `Your question: ${DRAFT}`], 'a draft given with Wrap up is their question');
-
-  // After a recap, the next exchange starts again and builds on nothing from the earlier one.
+  // After a result, the next exchange starts again and builds on nothing from the earlier one.
   const again = await run([write('something new')], [...topic.doc, '@brainstorm']);
-  assert.deepEqual(ids(again.cards), ['area', 'know']);
-  assert.ok(!card.questionOf(again.cards[1]).title.includes('corrigibility'));
+  assert.deepEqual(ids(again.cards), ['mind', 'excites']);
+  assert.ok(!title(again.cards[1]).includes('corrigibility'));
 
-  // An older document's cards: round 7's closing card answered gets the recap in the new form; an @orient thread goes on.
+  // An older document: round 7's closing card answered, or an @orient thread left at its know card, goes on with a move.
   const closing = card.cardBody(JSON.stringify({ say: '', card: 'questions', questions: { eyebrow: 'before you go', items: [{ id: 'closing', type: 'open', title: 'So what will you do first?' }] }, ready: false })).body;
   const older = await bart.ask(ctx, proj.id, { askId: 'zold', ref, workspaceId: space.id, text: 'read the logs', turns: [{ question: '', answer: card.cardBody(JSON.stringify(FOCUS)).body }, { question: 'picked "Retries"', answer: closing }], agent: 'brainstorm' });
-  assert.deepEqual(card.recapParts(answerText(older.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n'))).lines, ['What you know: not said', 'Where it thins out: not said', 'Your question: not written yet']);
-  const orient = await run([write(THIN), write(DRAFT)], ['@orient metacognition', ...topic.doc.slice(1, topic.doc.indexOf(`@brainstorm ${card.answerLine(topic.cards[0], { text: KNOW })}`)), `@brainstorm ${KNOW}`]);
-  assert.deepEqual(ids(orient.cards), ['thin', 'draft', 'versions'], 'an @orient thread left at its know card goes on as @brainstorm');
+  assert.equal(card.questionOf(card.cardOfAnswer(answerText(older.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n')))).id, 'excites', 'a move');
+  const orient = await run([write('people overrate it')], ['@orient metacognition', ...card.cardBody(JSON.stringify({ say: '', card: 'questions', questions: { items: [{ id: 'know', type: 'open', title: 'Write what you know.' }] }, ready: false })).body.split('\n').map((line) => `bart> ${line}`), 'bart>', 'bart> *3 s*', `@brainstorm ${A1}`]);
+  assert.deepEqual(ids(orient.cards), ['excites', 'example'], 'an @orient thread goes on as @brainstorm');
 
   const feet = topic.doc.filter((line) => /^bart> \*[^*]+\*$/.test(line));
-  assert.ok(feet.length >= 5 && feet.every((line) => /^bart> \*\d+ s\*$/.test(line)), 'every card\'s foot gives the time alone');
+  assert.ok(feet.length === 6 && feet.every((line) => /^bart> \*\d+ s\*$/.test(line)), 'every card\'s foot, and the result\'s, gives the time alone');
   const bad = await bart.ask(ctx, proj.id, { askId: 'zm', ref, workspaceId: space.id, text: 'malformed please', agent: 'brainstorm' });
   assert.equal(bad.lines[0], 'bart> FAKE REPLY that is not a card: {"say": "cut off');
   assert.equal(card.cardOfAnswer(bad.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n')), null, 'drawn as plain answer lines');
@@ -1308,119 +1329,111 @@ const ENTRIES = [
   { name: 'Agents', type: 'md', tags: ['note'] },
 ];
 const brainstormPlan = (text, turns = [], entries = ENTRIES) => turnPlan({ agent: 'brainstorm', text, turns, entries }, DEFAULTS);
+const told = (path, stage, n) => `<path>${path}</path>\n<stage>${stage}</stage>\n<card>${n} of 5</card>`;
 
-test('@brainstorm\'s path is decided on an exchange\'s first turn: a library paper mentioned on the line, words, or nothing; a mentioned note is words; it carries on, and after a recap the next line opens again (M-03)', () => {
+test('@brainstorm\'s path is decided on an exchange\'s first turn: a library paper mentioned on the line, words, or nothing; a mentioned note is words; it carries on, and after a result, a recap or a reply that is not a card the next line opens again (M-03)', () => {
   const plan = brainstormPlan, at = (now) => [now.path, now.stage, now.extra];
-  assert.deepEqual(BRAINSTORM_PATHS, { paper: ['took', 'thin', 'draft', 'versions'], topic: ['know', 'thin', 'draft', 'versions'], open: ['area', 'know', 'thin', 'draft', 'versions'] });
-  assert.deepEqual(at(plan('@[TutorTrace]')), ['paper', 'took', '<path>paper</path>\n<stage>took</stage>'], 'a pdf of the library');
+  assert.deepEqual(BRAINSTORM_PATHS, ['paper', 'topic', 'open']);
+  assert.deepEqual(at(plan('@[TutorTrace]')), ['paper', 'first', told('paper', 'first', 1)], 'a pdf of the library');
   assert.equal(plan('@[TutorTrace]').paper.name, 'TutorTrace');
   assert.equal(plan('@[TutorTrace] the taxonomy').path, 'paper', 'with words beside it');
   assert.equal(plan('@[tutortrace]').path, 'paper', 'named in any case, as a mention finds it');
   assert.equal(plan('@[Illusion of Learning] what it claims').path, 'paper', 'an item tagged "paper"');
   assert.equal(plan('why runs loop, see @[Retry notes] and @[TutorTrace]').path, 'paper', 'any paper the line mentions');
-  assert.deepEqual(at(plan('@[Retry notes]')), ['topic', 'know', '<path>topic</path>\n<stage>know</stage>'], 'a mentioned note is words, not a paper');
+  assert.deepEqual(at(plan('@[Retry notes]')), ['topic', 'first', told('topic', 'first', 1)], 'a mentioned note is words, not a paper');
   assert.equal(plan('@[Agents](ws:w1)').path, 'topic', 'a workspace mention is not a paper');
   assert.equal(plan('@[Not in the library]').path, 'topic', 'a mention that leads nowhere');
   assert.equal(plan('@[TutorTrace]', [], []).path, 'topic', 'read against the library the turn is shown');
-  assert.deepEqual(at(plan('corrigibility')), ['topic', 'know', '<path>topic</path>\n<stage>know</stage>']);
-  assert.deepEqual([...at(plan('')), plan('').asked], ['open', 'area', '<path>open</path>\n<stage>area</stage>', 'Start from this workspace.']);
+  assert.deepEqual(at(plan('corrigibility')), ['topic', 'first', told('topic', 'first', 1)]);
+  assert.deepEqual([...at(plan('')), plan('').asked], ['open', 'first', told('open', 'first', 1), 'Start from this workspace.']);
   assert.deepEqual([plan('--opus --max').path, plan('--sonnet @[TutorTrace]').path], ['open', 'paper'], 'flags are not words');
   // Carried on: a later turn reads the exchange's opening, not what it says itself.
-  const took = { question: '@[TutorTrace]', answer: opened('took') };
-  assert.deepEqual(at(plan('learners query before trying', [took])), ['paper', 'thin', '<path>paper</path>\n<stage>thin</stage>']);
-  const know = { question: '--sonnet corrigibility', answer: opened('know') };
+  const draws = { question: '@[TutorTrace]', answer: opened('draws') };
+  assert.deepEqual(at(plan('learners query before trying', [draws])), ['paper', 'move', told('paper', 'move', 2)]);
+  const know = { question: '--sonnet corrigibility', answer: opened('draws') };
   assert.equal(plan('@[TutorTrace] is all I know', [know]).path, 'topic', 'a paper named in an answer changes nothing');
   assert.equal(plan('it lets you correct it', [{ question: '', answer: card.cardBody(JSON.stringify(FOCUS)).body }]).path, 'open');
-  // After a recap, or a reply that was not a card, the next line opens again.
-  const recapped = [know, { question: 'x', answer: 'What you know: x\nWhere it thins out: not said\nYour question: not written yet' }];
-  assert.deepEqual(at(plan('@[TutorTrace]', recapped)), ['paper', 'took', '<path>paper</path>\n<stage>took</stage>']);
-  assert.deepEqual([plan('', recapped).path, plan('', recapped).stage, plan('', recapped).asked], ['open', 'area', 'Start from this workspace.'], 'Brainstorm again with nothing typed: the area card');
-  assert.deepEqual(at(plan('', [know, { question: 'y', answer: 'I would rather just talk.' }])).slice(0, 2), ['open', 'area']);
-  assert.deepEqual(plan('', recapped).shown.map((turn) => turn.question), ['--sonnet corrigibility', 'x']);
+  // After a result, an older recap, or a reply that was not a card, the next line opens again.
+  for (const end of [card.resultText('x'), card.LEFT_OPEN, 'What you know: x\nWhere it thins out: not said\nYour question: not written yet', 'I would rather just talk.']) {
+    const ended = [know, { question: 'x', answer: end }];
+    assert.deepEqual(at(plan('@[TutorTrace]', ended)), ['paper', 'first', told('paper', 'first', 1)], end);
+    assert.deepEqual([plan('', ended).path, plan('', ended).stage, plan('', ended).asked], ['open', 'first', 'Start from this workspace.'], 'Brainstorm again with nothing typed: the first card');
+  }
+  assert.deepEqual(plan('', [know, { question: 'x', answer: card.resultText('x') }]).shown.map((turn) => turn.question), ['--sonnet corrigibility', 'x']);
   assert.equal(brainstormPlan('').shown.length, 0);
 });
 
-test('@brainstorm\'s next stage is read from the last card\'s id, whatever the path; older documents\' ids lead on too; a focus card is the area\'s, and an id no path knows goes on from the stage it was asked as (M-04)', () => {
-  const after = { area: 'know', subject: 'know', know: 'thin', took: 'thin', thin: 'draft', puzzle: 'draft', interest: 'draft', draft: 'versions', versions: 'recap', closing: 'recap' };
+test('@brainstorm\'s next card is decided in code by kind only: the first, a move (the agent picks which), versions after an answered draft, and the next card; older documents\' ids go on with a move (MATH-40)', () => {
+  assert.deepEqual(BRAINSTORM_MOVES, ['excites', 'example', 'bugs', 'unsure', 'connect', 'try', 'draft', 'next']);
   for (const opening of ['', 'corrigibility', '@[TutorTrace]']) {
-    for (const [id, stage] of Object.entries(after)) {
-      const now = brainstormPlan('an answer', [{ question: opening, answer: opened(id) }]);
-      assert.deepEqual([now.stage, now.close], [stage, stage === 'recap' ? 'recap' : null], `"${opening}": ${id} → ${stage}`);
+    assert.deepEqual([brainstormPlan(opening).stage, brainstormPlan(opening).result], ['first', null], `"${opening}": the first card`);
+    // Every card but a draft and the next card leads to a move: the moves, the first cards, versions, and older ids.
+    for (const id of ['draws', 'mind', 'excites', 'example', 'bugs', 'unsure', 'connect', 'try', 'versions', 'area', 'know', 'took', 'thin', 'puzzle', 'interest', 'subject', 'closing', 'gap']) {
+      for (const text of ['an answer', card.SKIPPED]) assert.equal(brainstormPlan(text, [{ question: opening, answer: opened(id) }]).stage, 'move', `"${opening}": ${id}, ${text}`);
     }
-    assert.equal(brainstormPlan('picked "Retries"', [{ question: opening, answer: card.cardBody(JSON.stringify(FOCUS)).body }]).stage, 'know', `"${opening}": a focus card is the area's`);
+    assert.equal(brainstormPlan('picked "Retries"', [{ question: opening, answer: card.cardBody(JSON.stringify(FOCUS)).body }]).stage, 'move', 'a focus card');
+    // A draft answered: versions; skipped: a move.
+    assert.equal(brainstormPlan('Why do agents resist correction?', [{ question: opening, answer: opened('draft') }]).stage, 'versions');
+    assert.equal(brainstormPlan(card.SKIPPED, [{ question: opening, answer: opened('draft') }]).stage, 'move', 'a skipped draft: no versions');
+    // The next card, asked on any card: its answer is the result.
+    const now = brainstormPlan('Read the logs.', [{ question: opening, answer: opened('next') }]);
+    assert.deepEqual([now.stage, now.close, now.result], ['result', 'result', `Read the logs.\n${card.RESULT_OFFER}`]);
   }
-  // Each path in full.
-  const walk = (opening, stages) => {
-    const turns = [];
-    const seen = [brainstormPlan(opening).stage];
-    for (const stage of stages) {
-      turns.push({ question: turns.length ? 'an answer' : opening, answer: stage === 'area' ? card.cardBody(JSON.stringify(FOCUS)).body : opened(stage) });
-      seen.push(brainstormPlan('an answer', turns).stage);
-    }
-    return seen;
-  };
-  assert.deepEqual(walk('corrigibility', ['know', 'thin', 'draft', 'versions']), ['know', 'thin', 'draft', 'versions', 'recap'], 'topic (A-01)');
-  assert.deepEqual(walk('@[TutorTrace]', ['took', 'thin', 'draft', 'versions']), ['took', 'thin', 'draft', 'versions', 'recap'], 'paper (A-02)');
-  assert.deepEqual(walk('', ['area', 'know', 'thin', 'draft', 'versions']), ['area', 'know', 'thin', 'draft', 'versions', 'recap'], 'open (A-04)');
-  // Older documents: round 7's area, puzzle, draft and versions; @orient's know, thin and interest, and its subject card.
-  assert.deepEqual(walk('', ['area', 'puzzle', 'draft', 'versions']), ['area', 'know', 'draft', 'versions', 'recap'], 'a round 7 thread');
-  assert.deepEqual(walk('metacognition', ['know', 'thin', 'interest']), ['know', 'thin', 'draft', 'draft'], 'an @orient thread');
-  assert.deepEqual(walk('', ['subject', 'know']), ['area', 'know', 'thin'], 'an @orient thread that asked for a subject');
-  // An id no path knows: the stage it was asked as.
-  assert.equal(brainstormPlan('x', [{ question: 'corrigibility', answer: opened('gap') }]).stage, 'thin', 'asked as know');
-  assert.equal(brainstormPlan('x', [{ question: '', answer: opened('where') }]).stage, 'know', 'asked as area');
-  assert.equal(brainstormPlan('x', [{ question: 'corrigibility', answer: opened('know') }, { question: 'y', answer: opened('next-2') }]).stage, 'draft', 'asked as thin');
-  assert.equal(brainstormPlan('Why?', [{ question: 'corrigibility', answer: opened('thin') }, { question: 'y', answer: opened('q') }]).stage, 'versions', 'asked as draft, and answered');
-  assert.equal(brainstormPlan(card.SKIPPED, [{ question: 'corrigibility', answer: opened('thin') }, { question: 'y', answer: opened('q') }]).stage, 'recap', 'asked as draft, and skipped');
-  assert.equal(brainstormPlan('--sonnet Why do agents resist?', [{ question: 'x', answer: opened('know') }]).asked, 'Why do agents resist?', 'flags are not part of the answer');
+  // A whole exchange: first, three moves, the next card, the result.
+  const turns = [];
+  const seen = [brainstormPlan('corrigibility').stage];
+  for (const id of ['draws', 'excites', 'draft', 'versions', 'next']) {
+    turns.push({ question: turns.length ? 'Why do agents resist?' : 'corrigibility', answer: opened(id) });
+    seen.push(brainstormPlan('Why do agents resist?', turns).stage);
+  }
+  assert.deepEqual(seen, ['first', 'move', 'move', 'versions', 'next', 'result']);
+  assert.equal(brainstormPlan('--sonnet Why do agents resist?', [{ question: 'x', answer: opened('draws') }]).asked, 'Why do agents resist?', 'flags are not part of the answer');
 });
 
-test('@brainstorm\'s first card may give way to thin, and only the first: the code goes on from whichever was asked; a person\'s skip moves on (M-05)', () => {
-  // The agent asked thin in place of know or took: draft next, on every path.
-  assert.equal(brainstormPlan('it might stop once it is smarter', [{ question: 'corrigibility', answer: opened('thin') }]).stage, 'draft');
-  assert.equal(brainstormPlan('the taxonomy', [{ question: '@[TutorTrace]', answer: opened('thin') }]).stage, 'draft');
-  assert.equal(brainstormPlan('x', [{ question: '', answer: card.cardBody(JSON.stringify(FOCUS)).body }, { question: 'picked "Retries"', answer: opened('thin') }]).stage, 'draft', 'after the area too');
-  const given = [{ question: 'corrigibility', answer: opened('thin') }, { question: 'x', answer: opened('draft') }];
-  assert.deepEqual([brainstormPlan('Why?', given).stage, brainstormPlan('picked "Why?"', [...given, { question: 'Why?', answer: opened('versions') }]).stage], ['versions', 'recap'], 'then draft, versions and the recap: four cards');
-  // The person skipped a card: the next one comes.
-  for (const [opening, first] of [['corrigibility', 'know'], ['@[TutorTrace]', 'took']]) {
-    assert.equal(brainstormPlan(card.SKIPPED, [{ question: opening, answer: opened(first) }]).stage, 'thin', `${first} skipped`);
-    assert.equal(brainstormPlan('--sonnet (skipped)', [{ question: opening, answer: opened(first) }, { question: card.SKIPPED, answer: opened('thin') }]).stage, 'draft', 'thin skipped');
-  }
-  assert.equal(brainstormPlan(card.SKIPPED, [{ question: '', answer: card.cardBody(JSON.stringify(FOCUS)).body }]).stage, 'know', 'the area skipped');
-});
-
-test('@brainstorm: a skipped draft goes to the recap, an answered one to versions; five cards since the last recap, skips included, get the recap; Wrap up gets it on any card of any path', () => {
-  const draft = [{ question: 'corrigibility', answer: opened('know') }, { question: 'a', answer: opened('thin') }, { question: 'b', answer: opened('draft') }];
-  for (const text of [card.SKIPPED, '--opus (skipped)', '(wrap up)']) assert.deepEqual([brainstormPlan(text, draft).stage, brainstormPlan(text, draft).close], ['recap', 'recap'], `draft: ${text}`);
-  assert.equal(brainstormPlan('Why do agents resist correction?', draft).stage, 'versions');
-  assert.equal(brainstormPlan('Why?', [{ ...draft[0], question: 'corrigibility' }, { ...draft[1], question: card.SKIPPED }, draft[2]]).stage, 'versions', 'an earlier skip does not matter: the draft was answered');
-  // At most five cards.
+test('@brainstorm: five cards at most, the last of them the next card; Wrap up asks the next card on any card, and on the next card ends it; their sentence is the result, or it is left open (MATH-40)', () => {
   assert.equal(MAX_BRAINSTORM_CARDS, 5);
-  const stuck = (n) => Array.from({ length: n }, (_, k) => ({ question: k ? card.SKIPPED : 'corrigibility', answer: opened('know') }));
-  assert.equal(brainstormPlan(card.SKIPPED, stuck(4)).stage, 'thin', 'four cards: the next one');
-  assert.deepEqual([brainstormPlan(card.SKIPPED, stuck(5)).stage, brainstormPlan('words', stuck(5)).stage], ['recap', 'recap'], 'five cards, skipped or not: the recap');
-  const open = [{ question: '', answer: card.cardBody(JSON.stringify(FOCUS)).body }, ...['know', 'thin', 'draft'].map((id) => ({ question: 'x', answer: opened(id) }))];
-  assert.equal(brainstormPlan('Why?', open).stage, 'versions', 'the open path\'s fifth card is versions');
-  assert.equal(brainstormPlan('picked "Why?"', [...open, { question: 'Why?', answer: opened('versions') }]).stage, 'recap');
-  const recapped = [...open, { question: 'Why?', answer: opened('versions') }, { question: 'z', answer: 'What you know: z' }];
-  assert.deepEqual([brainstormPlan('', recapped).stage, brainstormPlan('a new topic', recapped).stage], ['area', 'know'], 'the count starts again after a recap');
-  // Wrap up, alone or after an answer, on any card of any path.
-  for (const [opening, stages] of [['corrigibility', BRAINSTORM_PATHS.topic], ['@[TutorTrace]', BRAINSTORM_PATHS.paper], ['', BRAINSTORM_PATHS.open]]) {
-    for (let n = 0; n <= stages.length; n += 1) {
-      const turns = stages.slice(0, n).map((id, k) => ({ question: k ? 'an answer' : opening, answer: id === 'area' ? card.cardBody(JSON.stringify(FOCUS)).body : opened(id) }));
-      for (const text of ['(wrap up)', 'it loops; (wrap up)', 'picked "Retries"; note: soon; (wrap up)', '--sonnet (wrap up)', '  (wrap up) ']) {
-        const now = brainstormPlan(text, turns);
-        assert.deepEqual([now.stage, now.close], ['recap', 'recap'], `"${opening}", ${n} cards: ${text}`);
-      }
+  const stuck = (n) => Array.from({ length: n }, (_, k) => ({ question: k ? card.SKIPPED : 'corrigibility', answer: opened(k ? 'excites' : 'draws') }));
+  assert.equal(brainstormPlan('words', stuck(3)).stage, 'move', 'three cards: a fourth move');
+  assert.deepEqual([brainstormPlan(card.SKIPPED, stuck(4)).stage, brainstormPlan('words', stuck(4)).stage], ['next', 'next'], 'four cards, skipped or not: the fifth is the next card');
+  assert.equal(brainstormPlan('words', stuck(5)).stage, 'next', 'an older document past five cards with no next card gets it');
+  const drafted = [...stuck(3), { question: 'x', answer: opened('draft') }];
+  assert.equal(brainstormPlan('Why?', drafted).stage, 'next', 'a draft on the fourth card: no room for versions');
+  const asked = [...stuck(4), { question: 'x', answer: opened('next') }];
+  assert.deepEqual([brainstormPlan('Look at the logs.', asked).stage, brainstormPlan('Look at the logs.', asked).result], ['result', `Look at the logs.\n${card.RESULT_OFFER}`]);
+  // Wrap up, alone or after an answer, on any card but the next: the next card.
+  for (const id of ['draws', 'mind', 'excites', 'draft', 'versions', 'know']) {
+    for (const text of ['(wrap up)', 'it loops; (wrap up)', 'picked "Retries"; note: soon; (wrap up)', '--sonnet (wrap up)', '  (wrap up) ']) {
+      assert.deepEqual([brainstormPlan(text, [{ question: 'corrigibility', answer: opened(id) }]).stage, brainstormPlan(text, [{ question: 'corrigibility', answer: opened(id) }]).result], ['next', null], `${id}: ${text}`);
     }
   }
-  assert.equal(brainstormPlan('I will (wrap up) later', [draft[0]]).stage, 'thin', 'words that only mention it are an answer');
-  assert.equal(brainstormPlan('Why?; (wrap up)', draft).asked, 'Why?; (wrap up)', 'the agent is sent the answer and the wrap up as written');
+  // On the next card: what was given with it is the result; Wrap up alone or Skip leaves it open.
+  const next = [{ question: 'corrigibility', answer: opened('next') }];
+  assert.equal(brainstormPlan('Read the logs.; (wrap up)', next).result, `Read the logs.\n${card.RESULT_OFFER}`);
+  assert.equal(brainstormPlan('--sonnet   Read  the logs. ', next).result, `Read the logs.\n${card.RESULT_OFFER}`, 'flags off, spaces run together');
+  for (const text of ['(wrap up)', card.SKIPPED]) assert.equal(brainstormPlan(text, next).result, card.LEFT_OPEN, text);
+  assert.equal(brainstormPlan('I will (wrap up) later', [{ question: 'corrigibility', answer: opened('draws') }]).stage, 'move', 'words that only mention it are an answer');
+  assert.equal(brainstormPlan('Why?; (wrap up)', drafted).asked, 'Why?; (wrap up)', 'the agent is sent the answer and the wrap up as written');
   // The others are as they were.
-  assert.equal(turnPlan({ agent: 'bart', text: 'q', turns: draft, entries: ENTRIES }, DEFAULTS).extra, '', '@bart is unchanged');
+  assert.equal(turnPlan({ agent: 'bart', text: 'q', turns: drafted, entries: ENTRIES }, DEFAULTS).extra, '', '@bart is unchanged');
   assert.equal(turnPlan({ agent: 'discover', text: '(wrap up)', turns: [] }, DEFAULTS).close, undefined, '@discover has no wrap up');
   assert.deepEqual(AGENTS, ['bart', 'brainstorm', 'discover'], 'no @orient');
+});
+
+test('the next card always reads the same: on the next stage, or when the agent asked it, its "say" is kept and the rest is the card; any other reply is as it came; the result reads back from its offer line (MATH-40)', () => {
+  const next = (say) => JSON.stringify({ say, card: 'questions', questions: { eyebrow: 'what next', items: [{ id: 'next', type: 'open', title: 'So what do you want to dig into next?', placeholder: 'One sentence, in your own words…' }] }, ready: false });
+  const unsure = JSON.stringify({ say: 'You came back to “correction” twice.', card: 'questions', questions: { items: [{ id: 'unsure', type: 'free', title: 'Where?' }] }, ready: false });
+  assert.equal(brainstormReply(unsure, 'next'), next('You came back to “correction” twice.'));
+  assert.equal(brainstormReply(JSON.stringify({ say: 'You came back to “logs”.', card: 'questions', questions: { items: [{ id: 'next', type: 'free', title: 'What next, then?' }] }, ready: false }), 'move'), next('You came back to “logs”.'), 'asked by the agent on a move');
+  assert.equal(brainstormReply('Sorry, I got confused.', 'next'), next(''), 'not a card: the card, with nothing said');
+  assert.equal(brainstormReply('{"say": "What you know: a", "card": "none", "ready": true}', 'next'), next(''), 'a recap is not kept as its say');
+  for (const stage of ['first', 'move', 'versions']) assert.equal(brainstormReply(unsure, stage), unsure, stage);
+  assert.equal(card.NEXT_TITLE, 'So what do you want to dig into next?');
+  assert.equal(card.resultText('  Read   the logs. '), `Read the logs.\n${card.RESULT_OFFER}`);
+  assert.equal(card.resultText(''), card.LEFT_OPEN);
+  assert.equal(card.RESULT_OFFER, 'Find papers on it with @discover, or ask about it with @bart.');
+  assert.deepEqual(card.resultParts(card.resultText('Read the logs.')), { sentence: 'Read the logs.' });
+  for (const text of [card.LEFT_OPEN, card.RESULT_OFFER, 'What you know: a\nYour question: b', '']) assert.equal(card.resultParts(text), null, text);
+  assert.equal(card.cardOfAnswer(card.resultText('Read the logs.')), null, 'a result asks nothing');
 });
 
 test('Wrap up is "(wrap up)", alone or after an answer: read off what the answer was, counted only for what was said, and written after answerLine (round 6)', () => {
@@ -1490,14 +1503,14 @@ test('recapLine reads a recap line as a section: its label and its words, older 
   assert.equal(card.recapLine('Where I am: elsewhere'), null);
 });
 
-test('the fake @brainstorm with nothing to go on: says so and asks the area card as an open question', async () => {
+test('the fake @brainstorm with nothing to go on: "What\'s been on your mind lately?" as an open card, with an empty say and nothing about the workspace (MATH-40)', async () => {
   const bare = await projects.createProject(ctx, 'Bare');
   const space = await projects.createWorkspace(ctx, bare.id, { name: 'Empty' });
   const bart = createFakeBart({ readModels: () => DEFAULTS, delayMs: 2 });
   const out = await bart.ask(ctx, bare.id, { askId: 'e1', ref: { kind: 'workspace', workspaceId: space.id }, workspaceId: space.id, text: '', turns: [], agent: 'brainstorm' });
   const shown = card.cardOfAnswer(answerText(out.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n')));
-  assert.deepEqual([shown.map, card.questionOf(shown).type, card.questionOf(shown).id, card.questionOf(shown).title], [undefined, 'open', 'area', 'Where do you want to find a question?'], 'the area card, asked in their own words');
-  assert.match(shown.say, /little of your own writing/);
+  assert.deepEqual([shown.map, card.questionOf(shown).type, card.questionOf(shown).id, card.questionOf(shown).title], [undefined, 'open', 'mind', 'What\'s been on your mind lately?']);
+  assert.equal(shown.say, '', 'nothing to read: no "say", and no line about there being nothing written');
 });
 
 test('@bart and @discover may open the folders the project library\'s files are in, @brainstorm those of this workspace\'s (MB-06, round 3)', async () => {

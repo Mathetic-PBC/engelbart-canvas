@@ -22,6 +22,9 @@
 //   @brainstorm (wrap up)                      Wrap up (round 6), with nothing given
 //   @brainstorm picked "a"; (wrap up)          Wrap up, with the answer given
 // (An older document's `@orient …` lines are the same, after "@orient": since 2026-10-05 they are @brainstorm's.)
+// MATH-40 (2026-10-06): an exchange ends on the person's answer to the "next" card, "So what do you want to dig into
+// next?", in place of a recap. That sentence is the result, written as the reply by code (resultText) as they wrote it,
+// followed by RESULT_OFFER, which the editor draws as one small line with @discover and @bart to send it on.
 
 const TYPES = ['mcq', 'select_all', 'free', 'open'];
 const MAX_OPTIONS = 6;
@@ -33,6 +36,12 @@ const WRAP = '(wrap up)';
 const LOOK_FOR_CHARS = 140;
 // What an @brainstorm line with nothing after it asks (BS-01).
 const OPENING = 'Start from this workspace.';
+// The last card of an exchange (MATH-40), and the line after the sentence they write on it.
+const NEXT_ID = 'next';
+const NEXT_TITLE = 'So what do you want to dig into next?';
+const RESULT_OFFER = 'Find papers on it with @discover, or ask about it with @bart.';
+// The result when they wrote nothing on the last card.
+const LEFT_OPEN = 'You left what comes next open for now.';
 
 const isObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
 /** One line of text: spaces run together, cut to `max`. */
@@ -306,4 +315,18 @@ function recapLine(line) {
   return { label, text: m[2].trim() };
 }
 
-module.exports = { recapParts, recapLine, RECAP_LABELS, TYPES, SKIPPED, WRAP, OPENING, MAP_GROUPS, LOOK_FOR_CHARS, jsonBlocks, parseJson, cleanMap, mapHolds, readCard, cardBody, cardOfAnswer, questionOf, isChoice, answerLine, readWrap, withWrap, readAnswer, answersSoFar };
+/** The result of an exchange (MATH-40) from the sentence they wrote on the next card: it, then the offer; with none, LEFT_OPEN. */
+function resultText(sentence) {
+  const said = String(sentence == null ? '' : sentence).replace(/\s+/g, ' ').trim();
+  return said ? `${said}\n${RESULT_OFFER}` : LEFT_OPEN;
+}
+
+/** A reply (the text of a turn's answer) read as a result → { sentence } when its last line is the offer, else null. */
+function resultParts(text) {
+  const lines = String(text == null ? '' : text).trim().split('\n');
+  if (lines.length < 2 || lines[lines.length - 1].trim() !== RESULT_OFFER) return null;
+  const sentence = lines.slice(0, -1).join(' ').replace(/\s+/g, ' ').trim();
+  return sentence ? { sentence } : null;
+}
+
+module.exports = { resultText, resultParts, NEXT_ID, NEXT_TITLE, RESULT_OFFER, LEFT_OPEN, recapParts, recapLine, RECAP_LABELS, TYPES, SKIPPED, WRAP, OPENING, MAP_GROUPS, LOOK_FOR_CHARS, jsonBlocks, parseJson, cleanMap, mapHolds, readCard, cardBody, cardOfAnswer, questionOf, isChoice, answerLine, readWrap, withWrap, readAnswer, answersSoFar };
