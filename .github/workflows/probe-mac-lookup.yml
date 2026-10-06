@@ -13,6 +13,7 @@ jobs:
       - name: Probe
         shell: bash
         run: |
+          set +e
           t() { local s=$SECONDS; "$@" > /tmp/out 2>&1; echo "[$((SECONDS - s)) s] $* => $(head -c 300 /tmp/out | tr '\n' ' ')"; }
           fq='import socket, time; t = time.time(); r = socket.gethostbyaddr("127.0.0.1"); print(r, round(time.time() - t, 2))'
           sw_vers; python3 --version; hostname; scutil --get HostName || true; scutil --get LocalHostName || true
@@ -20,7 +21,9 @@ jobs:
           t dscacheutil -q host -a ip_address 127.0.0.1
           t dscacheutil -q host -a name localhost
           t dig -x 127.0.0.1 +time=2 +tries=1
-          t host 127.0.0.1
+          t python3 -c 'import socket, time; t = time.time(); print(socket.getaddrinfo("127.0.0.1", None), round(time.time() - t, 2))'
+          t python3 -c 'import socket, time; t = time.time(); print(socket.gethostname(), socket.getaddrinfo(socket.gethostname(), None)[:1], round(time.time() - t, 2))'
+          t python3 -c 'import ctypes, ctypes.util, socket, time; libc = ctypes.CDLL(ctypes.util.find_library("c")); libc.gethostbyaddr.restype = ctypes.c_void_p; a = socket.inet_aton("127.0.0.1"); t = time.time(); r = libc.gethostbyaddr(a, 4, 2); print("libc gethostbyaddr", bool(r), round(time.time() - t, 2))'
           t python3 -c "$fq"
           t python3 -c 'import socket; print(socket.getnameinfo(("127.0.0.1", 0), 0))'
           t python3 -c 'import socket; print(socket.getnameinfo(("127.0.0.1", 0), socket.NI_NAMEREQD))'
