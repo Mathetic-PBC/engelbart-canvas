@@ -62,6 +62,11 @@
 // keptMarks). A highlight's card has its rough.js arrow back, faint and only when it is not beside its highlight; the mark
 // in focus has its own at full strength (drawArrows). @bart at the start of a note that can ask is the document's blue
 // label, in the note shown and, through a backdrop under its transparent text, in its field (model/doc.js noteInkHtml).
+// Removing a mark (MATH-66, 2026-10-06): a card's trash button (in its handle row, shown on hover or while the card is in
+// focus) or Backspace / Delete on the highlight in focus, nothing having the keyboard, takes the mark away, every part of a
+// selection across pages with it, and an answer still being written on it is stopped first (removeMark). No confirmation:
+// a toast says so for about 5 s with Undo, and ⌘Z does the same, the mark coming back where it was with its note, answers
+// and place (undoRemoval).
 import React from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import rough from 'roughjs';
@@ -139,6 +144,10 @@ const LAYER_CSS = `
 [data-pdf][data-neartext] .pdf-text,[data-pdf][data-neartext] .pdf-text .endOfContent{cursor:text!important}
 [data-pdf] [data-box] button{border:0;background:transparent;padding:2px 6px;border-radius:5px;font:12px/1.4 var(--font-sans);color:#4d4d4d;cursor:pointer;white-space:nowrap}
 [data-pdf] [data-box] button:hover{background:#f2f2f2}
+[data-pdf] [data-box] [data-act="remove"]{opacity:0;pointer-events:none;background:rgba(255,255,255,.97);color:#8f8f8f;transition:opacity 120ms,background 120ms}
+[data-pdf] [data-box] [data-act="remove"]:hover{background:#f2f2f2;color:#171717}
+[data-pdf] [data-box]:hover [data-act="remove"],[data-pdf] [data-box]:focus-within [data-act="remove"],[data-pdf] [data-box][data-focused] [data-act="remove"]{opacity:1;pointer-events:auto}
+[data-pdf][data-dragging] [data-box] [data-act="remove"]{opacity:0}
 [data-pdf] [data-box] [data-ask-body],[data-pdf] [data-box] [data-run-body]{user-select:text;cursor:text}
 [data-pdf] [data-box] [data-ask-body] p,[data-pdf] [data-box] [data-run-body] p{margin:0 0 6px}
 [data-pdf] [data-box] a{color:#0070f3;text-decoration:underline;text-underline-offset:2px}
@@ -170,7 +179,14 @@ const NO_OFF = { left: 0, right: 0, up: 0, down: 0 };
 const BOX_BG = 'rgba(255,255,255,.97)', BOX_SHADOW = '0 1px 2px rgba(0,0,0,.03)';
 const FOCUS_WASH = 'rgb(242,247,254)'; // the box of the note in focus (MATH-15): the white of a box with a little blue
 const BOX_LOOK = `position:absolute;box-sizing:border-box;border:1px solid #e3e3e3;border-radius:8px;background:${BOX_BG};pointer-events:auto;box-shadow:${BOX_SHADOW}`;
-const GRIP_HTML = '<div data-grip="1" title="Drag to move" style="height:12px;display:flex;align-items:center;justify-content:center"><span style="width:22px;height:3px;border-radius:2px;background:#d9d9d9"></span></div>';
+const GRIP_CSS = 'height:12px;display:flex;align-items:center;justify-content:center';
+const GRIP_BAR = '<span style="width:22px;height:3px;border-radius:2px;background:#d9d9d9"></span>';
+// The trash button in a card's handle row (MATH-66): small, at the top right, over the card's own white (LAYER_CSS).
+const TRASH_CSS = 'position:absolute;top:1px;right:3px;width:18px;height:18px;padding:0;display:flex;align-items:center;justify-content:center;border-radius:5px';
+const TRASH_SVG = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4h11M6.5 4V2.5h3V4M4 4l.7 9.5h6.6L12 4M6.8 6.5v4.5M9.2 6.5v4.5"/></svg>';
+const REMOVED_MS = 5000; // how long "Highlight removed · Undo" stays
+const TOAST = { position: 'absolute', left: '50%', bottom: 60, transform: 'translateX(-50%)', zIndex: 6, display: 'flex', alignItems: 'center', gap: 4, height: 30, boxSizing: 'border-box', padding: '0 4px 0 12px', background: '#171717', borderRadius: 8, font: '400 12.5px/1 var(--font-sans)', color: '#fff', whiteSpace: 'nowrap', boxShadow: '0 2px 8px rgba(0,0,0,.12)' };
+const TOAST_UNDO = { flex: 'none', height: 22, padding: '0 8px', border: 0, borderRadius: 5, background: 'transparent', font: '500 12.5px/1 var(--font-sans)', color: '#fff', cursor: 'pointer' };
 const DIVIDER = 'border-top:1px solid #ececec'; // between the note and an answer in a card, and between two answers
 // An arrow from a highlight to its card (2026-10-06): the stroke of the arrows MATH-15 took away, at about half of it
 // unless its mark is in focus (styleArrows).
@@ -258,7 +274,7 @@ function toBytes(src) {
 export default class PaperView extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { note: 'Opening the paper…', page: 0, pages: 0, pct: 100, mention: null, mentionIdx: 0, off: NO_OFF };
+    this.state = { note: 'Opening the paper…', page: 0, pages: 0, pct: 100, mention: null, mentionIdx: 0, off: NO_OFF, removed: null };
     this.host = React.createRef();
     this.root = React.createRef(); // the pane: the paper, its bar and its chips
     this.marks = clone(props.marks || {}); // { [page]: Mark[] }, geometry in page units
@@ -290,7 +306,8 @@ export default class PaperView extends React.Component {
     this.hovered = false;
     this.openLogs = new Set(); // answers being written whose steps are shown
     this.offRaf = 0;
-    this.undos = []; // what ⌘Z brings back, the last first: answers deleted, { page, markId, askId } (undoKey)
+    this.undos = []; // what ⌘Z brings back, the last first: answers deleted, { page, markId, askId }, and marks removed, { kind: 'mark', page, mark, index, batch } a part (undoKey)
+    this.removedTimer = null; // the "Highlight removed · Undo" toast going (state.removed)
     this.downHere = false; // the last press was in this pane: ⌘Z is the paper's
     this.onDown = (e) => {
       if (!(e.target.closest && e.target.closest('[data-pdf] [data-page]'))) return;
@@ -313,7 +330,7 @@ export default class PaperView extends React.Component {
     this.onBlur = () => { this.pointerIsDown = false; this.endSelecting(); this.holdSpace(false); };
     this.onKeyUp = (e) => { if (e && e.code === 'Space') this.holdSpace(false); if (!this.pointerIsDown) this.endSelecting(); };
     this.onSelectionChange = () => this.trackSelecting();
-    this.onKeyCapture = (e) => { if (this.spaceKey(e) || this.pendingSelKey(e) || this.undoKey(e)) e.stopPropagation(); };
+    this.onKeyCapture = (e) => { if (this.spaceKey(e) || this.pendingSelKey(e) || this.undoKey(e) || this.markKey(e)) e.stopPropagation(); };
     this.onWheel = (e) => this.pinch(e);
     this.onScroll = () => {
       if (this.state.mention) this.closeMention();
@@ -477,6 +494,7 @@ export default class PaperView extends React.Component {
     document.removeEventListener('keyup', this.onKeyUp);
     document.removeEventListener('selectionchange', this.onSelectionChange);
     window.removeEventListener('blur', this.onBlur);
+    clearTimeout(this.removedTimer);
     if (this.ro) this.ro.disconnect();
     clearTimeout(this.resizeTimer);
     clearTimeout(this.pinchTimer);
@@ -535,6 +553,7 @@ export default class PaperView extends React.Component {
     this.setPinching(false);
     this.pdfW = null;
     this.undos = []; // another paper
+    this.hideRemoved();
     this.freeW.clear();
     this.gate.drawing();
     const data = toBytes(this.props.bytes);
@@ -1314,8 +1333,16 @@ export default class PaperView extends React.Component {
   // meanwhile is passed over). With nothing to bring back the key is the app's.
   undoKey(e) {
     if (!this.undos.length || !this.downHere || !(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || String(e.key).toLowerCase() !== 'z' || !this.keyFree(e.target)) return false;
+    if (!this.undo()) return false;
+    e.preventDefault();
+    return true;
+  }
+  // What ⌘Z brings back: the last thing taken that is still to be had, a removed mark with all its parts at once (undoRemoval).
+  undo() {
     while (this.undos.length) {
-      if (this.restoreAsk(this.undos.pop())) { e.preventDefault(); return true; }
+      const last = this.undos[this.undos.length - 1];
+      if (last.kind === 'mark') { if (this.undoRemoval(last.batch)) return true; continue; }
+      if (this.restoreAsk(this.undos.pop())) return true;
     }
     return false;
   }
@@ -1327,6 +1354,17 @@ export default class PaperView extends React.Component {
     this.reframe();
     this.renderMarks(page);
     this.scheduleSave();
+    return true;
+  }
+
+  // Backspace or Delete with a highlight in focus (MATH-15), after a press in this pane and nothing having the keyboard:
+  // the mark goes (removeMark). Typing in its note keeps the key, since the note's field has the keyboard.
+  markKey(e) {
+    if (!this.focusId || !this.downHere || (e.key !== 'Backspace' && e.key !== 'Delete') || e.metaKey || e.ctrlKey || e.altKey || !this.keyFree(e.target)) return false;
+    const found = this.findMark(this.focusId);
+    if (!found) return false;
+    e.preventDefault();
+    this.removeMark(found.page, found.m);
     return true;
   }
 
@@ -1390,6 +1428,81 @@ export default class PaperView extends React.Component {
     }
     this.scheduleSave();
     return first;
+  }
+
+  /* ---------------------------------------------------------------- removing a mark (MATH-66) */
+  /** The mark `id` and its page, or null. */
+  findMark(id) {
+    for (const [page, list] of Object.entries(this.marks || {})) {
+      const m = (list || []).find((x) => x && x.id === id);
+      if (m) return { page: Number(page), m };
+    }
+    return null;
+  }
+  // Mark m of page n taken away, with every part of its selection across pages (`group`), no question asked: an answer
+  // still being written on any of them is stopped first, as its Stop button would, so none lands on a mark that is gone.
+  // Each part goes onto the undos where it stood ({ kind: 'mark', page, mark, index }, the parts one `batch`), and the
+  // toast says so. The mark object itself is kept there, its note, answers and place with it.
+  removeMark(page, m) {
+    if (!m) return false;
+    const parts = [];
+    if (m.group) {
+      for (const [n, list] of Object.entries(this.marks || {})) for (const x of list || []) if (x && x.group === m.group) parts.push({ page: Number(n), mark: x });
+    } else if (((this.marks || {})[page] || []).includes(m)) parts.push({ page, mark: m });
+    if (!parts.length) return false;
+    const ids = new Set(parts.map((p) => p.mark.id));
+    for (const p of Array.isArray(this.props.pendingAsks) ? this.props.pendingAsks : []) {
+      if (p && p.askId && ids.has(p.markId) && p.error == null && this.props.onStopAsk) this.props.onStopAsk(p.askId);
+    }
+    const batch = markId('r'), pages = new Set();
+    for (const { page: n, mark } of parts) {
+      const list = this.marks[n], index = list.indexOf(mark);
+      list.splice(index, 1);
+      this.undos.push({ kind: 'mark', page: n, mark, index, batch });
+      this.freeW.delete(mark.id);
+      pages.add(n);
+    }
+    if (ids.has(this.editing)) this.editing = null;
+    if (this.state.mention && ids.has(this.state.mention.markId)) this.closeMention();
+    this.focusId = null;
+    this.reframe(); // a moved card that went may have held the desk wide
+    for (const n of pages) this.renderMarks(n);
+    this.paintFocus(null);
+    this.scheduleSave();
+    const first = parts.find((p) => p.mark.note != null) || parts[0];
+    this.showRemoved(batch, (first.mark.rects || []).length ? 'Highlight removed' : 'Note removed');
+    return true;
+  }
+  // A removal undone (⌘Z, or the toast's Undo): every part of `batch` taken off the undos and put back at its index, the
+  // last taken first so the indices hold. → whether one came back (one there again already is passed over).
+  undoRemoval(batch) {
+    const parts = this.undos.filter((u) => u.kind === 'mark' && u.batch === batch);
+    if (!parts.length) return false;
+    this.undos = this.undos.filter((u) => !parts.includes(u));
+    const pages = new Set();
+    for (const { page, mark, index } of parts.reverse()) {
+      const list = this.marks[page] || (this.marks[page] = []);
+      if (list.some((x) => x && x.id === mark.id)) continue;
+      list.splice(Math.max(0, Math.min(index, list.length)), 0, mark);
+      pages.add(page);
+    }
+    if (this.state.removed && this.state.removed.batch === batch) this.hideRemoved();
+    if (!pages.size) return false;
+    this.reframe(); // a card moved past the desk's edge widens it again
+    for (const n of pages) this.renderMarks(n);
+    this.scheduleSave();
+    return true;
+  }
+  // The toast (about REMOVED_MS): "Highlight removed · Undo", or "Note removed · Undo" for a free note.
+  showRemoved(batch, label) {
+    clearTimeout(this.removedTimer);
+    this.setState({ removed: { batch, label } });
+    this.removedTimer = setTimeout(() => { this.removedTimer = null; this.setState({ removed: null }); }, REMOVED_MS);
+  }
+  hideRemoved() {
+    clearTimeout(this.removedTimer);
+    this.removedTimer = null;
+    if (this.state.removed) this.setState({ removed: null });
   }
 
   renderAllMarks() {
@@ -1548,7 +1661,19 @@ export default class PaperView extends React.Component {
     box.style.cssText = `${BOX_LOOK};left:0;top:0;width:${width}px;display:flex;flex-direction:column;transition:opacity 120ms,background 120ms`;
     box.onmouseenter = () => this.paintFocus(m.id);
     box.onmouseleave = () => this.paintFocus(this.focusId);
-    box.innerHTML = GRIP_HTML;
+    const grip = makeEl('div', GRIP_CSS, { grip: '1' });
+    grip.title = 'Drag to move';
+    grip.innerHTML = GRIP_BAR;
+    // The trash button (MATH-66): shown on hover or while the card is in focus (LAYER_CSS). A press on it keeps the
+    // keyboard where it is (a note being typed in is not left first) and is no drag.
+    const free = !(m.rects || []).length, trash = makeEl('button', TRASH_CSS, { act: 'remove' });
+    trash.title = free ? 'Remove note' : 'Remove highlight';
+    trash.setAttribute('aria-label', trash.title);
+    trash.innerHTML = TRASH_SVG;
+    trash.onmousedown = (ev) => { ev.preventDefault(); ev.stopPropagation(); };
+    trash.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); this.removeMark(page, m); };
+    grip.appendChild(trash);
+    box.appendChild(grip);
     box.onmousedown = (ev) => ev.stopPropagation(); // not a click on the page: no new note, the pending selection stays
     this.grip(box, page);
     let n = 0;
@@ -1761,7 +1886,8 @@ export default class PaperView extends React.Component {
     if (grip) grip.onmousedown = (ev) => this.startDrag(ev, box, page);
   }
   startDrag(ev, el, page) {
-    if (ev.button !== 0) return;
+    if (ev.button !== 0 || (ev.target && ev.target.closest && ev.target.closest('[data-act]'))) return; // the trash button
+
     ev.preventDefault(); ev.stopPropagation();
     const model = this.drawn[page], b = model && model.boxes.find((x) => x.el === el);
     if (!b || this.drag) return;
@@ -1892,6 +2018,7 @@ export default class PaperView extends React.Component {
       el.style.opacity = id && !mine ? '0.45' : '';
       el.style.background = on ? FOCUS_WASH : BOX_BG;
       el.style.boxShadow = on ? `inset 2px 0 0 rgba(0,112,243,.45), ${BOX_SHADOW}` : BOX_SHADOW;
+      if (this.focusId && el.dataset.boxMark === this.focusId) el.dataset.focused = '1'; else delete el.dataset.focused; // its trash button shows
     }
     if (!id) return;
     for (const [page, list] of Object.entries(this.marks || {})) {
@@ -2126,7 +2253,7 @@ export default class PaperView extends React.Component {
   /* ---------------------------------------------------------------- render */
   render() {
     const { title } = this.props;
-    const { note, page, pages, pct } = this.state, off = this.state.off || NO_OFF;
+    const { note, page, pages, pct, removed } = this.state, off = this.state.off || NO_OFF;
     return (
       <div ref={this.root} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: title ? 12 : 0 }}>
         <style>{LAYER_CSS}</style>
@@ -2144,9 +2271,16 @@ export default class PaperView extends React.Component {
             ? <span style={{ position: 'absolute', left: 0, right: 0, top: 14, textAlign: 'center', font: '12px/1.5 var(--font-sans)', color: '#8f8f8f', pointerEvents: 'none' }}>{note}</span>
             : null}
           {!note && SIDES.map((side) => (off[side] ? <div key={`fade-${side}`} data-fade={side} style={fadeStyle(side)} /> : null))}
-          {!note && SIDES.map((side) => (off[side] ? (
+          {!note && SIDES.map((side) => (off[side] && !(side === 'down' && removed) ? (
             <button key={`chip-${side}`} type="button" data-chip={side} className="hov-wash" style={chipStyle(side)} onMouseDown={(e) => e.preventDefault()} onClick={() => this.reveal(side)}>{chipLabel(off[side], side)}</button>
           ) : null))}
+          {removed ? (
+            <div data-removed="1" role="status" style={TOAST} onMouseDown={(e) => e.preventDefault()}>
+              <span>{removed.label}</span>
+              <span style={{ color: '#8f8f8f' }}>·</span>
+              <button type="button" data-removed-undo="1" style={TOAST_UNDO} onClick={() => this.undoRemoval(removed.batch)}>Undo</button>
+            </div>
+          ) : null}
           {this.state.mention && this.state.mention.anchor ? (
             <MentionMenu items={this.mentionList()} index={this.state.mentionIdx} anchor={this.state.mention.anchor} onPick={(r) => this.pickMention(r)} onHover={(i) => this.setState({ mentionIdx: i })} />
           ) : null}

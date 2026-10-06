@@ -236,7 +236,8 @@ test('one card a highlight: its note, then each answer and each answer being wri
   assert.equal(cards.length, 1, 'one card');
   const [card] = cards;
   assert.equal(card.style.width, `${ASK_W}px`, 'one width throughout');
-  const [note, a1, a2, run] = card.children;
+  const [grip, note, a1, a2, run] = card.children;
+  assert.ok(grip.dataset.grip && grip.querySelector('[data-act="remove"]'), 'the handle row, with its trash button (MATH-66)');
   assert.ok(note.dataset.cardNote, 'the note at the top');
   assert.deepEqual([a1.dataset.ask, a2.dataset.ask, run.dataset.askRun], ['a1', 'a2', 'h1'], 'the answers in order, then the one being written');
   for (const sec of [a1, a2, run]) assert.equal(sec.style.borderTop, '1px solid #ececec', 'a thin divider over each');
