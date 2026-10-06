@@ -118,12 +118,18 @@ test('a rollback on Windows copies Claude Code back, as there is no symlink to p
 
 test('processes on Windows: stopped with their tree (each descendant named) by taskkill, once; no ps or lsof', async () => {
   const ran = [];
-  // 4242 started 5000, which started 5001; 6000 is another's. A pid that is its own parent (the idle process) is skipped.
-  const listing = '4242 100\r\n5000 4242\r\n5001 5000\r\n6000 100\r\n0 0\r\n';
+  // pid, parent pid, started (ms). 4242 started 5000, which started 5001; 6000 is another's. 4243 names 4242 as its
+  // parent but is older: its parent was another process that had the number before. The idle process (0 0) is skipped.
+  const at = 1_800_000_000_000;
+  const listing = `4242 100 ${at}\r\n5000 4242 ${at + 50}\r\n5001 5000 ${at + 90}\r\n6000 100 ${at - 9}\r\n4243 4242 ${at - 60_000}\r\n7000 4243 ${at + 10}\r\n0 0 0\r\n`;
   const run = (file, args, options, done) => { ran.push([file, ...args]); setImmediate(() => done(null, file === 'powershell.exe' ? listing : '')); return {}; };
-  await killTree(4242, { run });
+  await killTree(4242, { run, startedAt: at + 3 });
   assert.equal(ran[0][0], 'powershell.exe');
-  assert.deepEqual(ran.slice(1), [['taskkill', '/T', '/F', '/PID', '4242', '/PID', '5000', '/PID', '5001']]);
+  assert.deepEqual(ran.slice(1), [['taskkill', '/F', '/PID', '4242', '/PID', '5000', '/PID', '5001']], 'not 4243, older than the 4242 now, nor what it started');
+  // Started before Engelbart started the process (a pid used again since): not its descendant either.
+  ran.length = 0;
+  await killTree(4242, { run, startedAt: at + 60_000 });
+  assert.deepEqual(ran.slice(1), [['taskkill', '/F', '/PID', '4242']]);
   ran.length = 0;
   assert.deepEqual(await groupPids(4242, { run, platform: 'win32' }), []);
   assert.equal(await stopLeftover(4242, temp(), { run, platform: 'win32' }), false);
@@ -131,7 +137,7 @@ test('processes on Windows: stopped with their tree (each descendant named) by t
 
   // Git Bash started npm: its exec left npm's bash a Windows process whose parent has gone (9256). Git Bash's ps knows it.
   ran.length = 0;
-  const windowsParents = '7048 7700\r\n4392 7048\r\n3532 9256\r\n2136 3532\r\n5572 2136\r\n7532 5572\r\n7180 7532\r\n9999 1\r\n';
+  const windowsParents = [[7048, 7700], [4392, 7048], [3532, 9256], [2136, 3532], [5572, 2136], [7532, 5572], [7180, 7532], [9999, 1]].map(([pid, parent], i) => `${pid} ${parent} ${at + i}`).join('\r\n');
   const gitBashPs = [
     '      PID    PPID    PGID     WINPID   TTY         UID    STIME COMMAND',
     '      100       1     100       4392  ?         197108 05:20:01 /usr/bin/bash',
@@ -140,10 +146,10 @@ test('processes on Windows: stopped with their tree (each descendant named) by t
     '      200       1     200       9999  ?         197108 05:20:02 /usr/bin/bash',
   ].join('\r\n');
   const both = (file, args, options, done) => { ran.push([file, ...args]); setImmediate(() => done(null, file === 'powershell.exe' ? windowsParents : file.endsWith('ps.exe') ? gitBashPs : '')); return {}; };
-  await killTree(7048, { run: both, shell: 'C:\\Program Files\\Git\\bin\\bash.exe' });
+  await killTree(7048, { run: both, shell: 'C:\\Program Files\\Git\\bin\\bash.exe', startedAt: at });
   assert.ok(ran.some(([file, ...args]) => file === 'C:\\Program Files\\Git\\usr\\bin\\ps.exe' && args.join(' ') === '-e'), JSON.stringify(ran));
   const killed = ran.find(([file]) => file === 'taskkill').slice(1);
-  assert.deepEqual(killed.slice(0, 2), ['/T', '/F']);
+  assert.equal(killed[0], '/F');
   assert.deepEqual(killed.filter((arg, i) => killed[i - 1] === '/PID').map(Number).sort((x, y) => x - y), [2136, 3532, 4392, 5572, 7048, 7180, 7532], 'npm\'s chain and its server; not 9999');
 
   // No listing (PowerShell failed): the pid alone, with /T.
@@ -160,7 +166,7 @@ test('processes on Windows: stopped with their tree (each descendant named) by t
   const processes = createProcesses({ environment: { ProgramFiles: 'C:\\Program Files' }, platform: 'win32', run: killer, spawnProcess: (file, args, options) => { assert.equal(options.windowsHide, true); assert.equal(args.at(-1), 'trap : EXIT\nnpm start', 'an exit trap: Git Bash forks the command'); return child; } });
   await processes.start('web', 'npm start', temp());
   assert.equal(await processes.stop('web'), true);
-  assert.deepEqual(ran.filter(([file]) => file === 'taskkill'), [['taskkill', '/T', '/F', '/PID', '777']]);
+  assert.deepEqual(ran.filter(([file]) => file === 'taskkill'), [['taskkill', '/F', '/PID', '777']]);
 });
 
 test('an app packed for Windows keeps app.asar in resources/: the package check reads it there', async () => {

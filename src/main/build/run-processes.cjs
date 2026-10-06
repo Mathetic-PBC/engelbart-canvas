@@ -10,7 +10,7 @@
 // A UI's port is a free one on this Mac, found at each start.
 //
 // Windows (2026-10-05, docs/windows-port.md) has no process groups: a process and everything it started (its tree) are
-// stopped with `taskkill /T /F`, each descendant named (found through Git Bash's ps too: /T alone left npm's server
+// stopped with `taskkill /F`, each descendant named (found through Git Bash's ps too: /T alone left npm's server
 // running on CI), and what only needs ps or lsof (a leftover after a crash, an app's window to the front) is skipped.
 
 const fs = require('node:fs');
@@ -61,11 +61,14 @@ function focusApp(pids, { run = execFile } = {}) {
   return new Promise((resolve) => run('/usr/bin/osascript', ['-l', 'JavaScript', '-e', script], { timeout: 5000 }, (error, stdout) => resolve(!error && String(stdout).trim() === 'yes')));
 }
 
-/** On Windows: every process's pid and its parent's, from PowerShell's CIM (tasklist has no parents). → [[pid, parent]] */
+/**
+ * On Windows: every process's pid, its parent's and when it started (ms since 1970, 0 when Windows does not say), from
+ * PowerShell's CIM (tasklist has no parents). → [[pid, parent, started]], or null when it could not be read
+ */
 function processParents({ run = execFile } = {}) {
-  const script = 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId)" }';
+  const script = 'Get-CimInstance Win32_Process | ForEach-Object { $t = if ($_.CreationDate) { ([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() } else { 0 }; "$($_.ProcessId) $($_.ParentProcessId) $t" }';
   return new Promise((resolve) => run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], { timeout: 10_000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
-    resolve(error ? [] : String(stdout || '').split(/\r?\n/).map((line) => line.trim().split(/\s+/).map(Number)).filter(([pid, parent]) => Number.isInteger(pid) && Number.isInteger(parent)));
+    resolve(error ? null : String(stdout || '').split(/\r?\n/).map((line) => line.trim().split(/\s+/).map(Number)).filter((row) => row.length === 3 && row.every(Number.isInteger)));
   }));
 }
 
@@ -83,19 +86,26 @@ function gitBashProcesses(shell, { run = execFile } = {}) {
 /**
  * On Windows: `pid` and every process it started, stopped. Its descendants are listed first, through Windows' parents and
  * Git Bash's (`shell`), and each named to taskkill: /T alone, which follows Windows' parents only, left npm's server
- * running when Git Bash had started npm. → when taskkill has finished
+ * running when Git Bash had started npm. Windows uses a pid again soon after its process ends, and a process keeps the
+ * number of a parent long gone, so a process counts as a descendant only if it started after its parent, and after
+ * `startedAt` (when `pid` was started, ms since 1970): never someone else's program. Without the list, taskkill /T alone.
+ * → when taskkill has finished
  */
-async function killTree(pid, { run = execFile, shell = null } = {}) {
-  const [pairs, bash] = await Promise.all([processParents({ run }), shell ? gitBashProcesses(shell, { run }) : []]);
+async function killTree(pid, { run = execFile, shell = null, startedAt = 0 } = {}) {
+  const [rows, bash] = await Promise.all([processParents({ run }), shell ? gitBashProcesses(shell, { run }) : []]);
+  if (!rows) { await new Promise((resolve) => run('taskkill', ['/T', '/F', '/PID', String(pid)], { timeout: 10_000, windowsHide: true }, () => resolve())); return; }
+  const since = startedAt ? startedAt - 5000 : 0; // the clocks agree; the slack is for rounding
+  const started = new Map(rows.map(([id, , at]) => [id, at]));
+  const after = (id, parent) => started.has(id) && started.get(id) >= since && (!started.get(parent) || started.get(id) >= started.get(parent));
   const tree = [pid];
   const own = [];
   for (let size = -1; size !== tree.length + own.length;) {
     size = tree.length + own.length;
-    for (let i = 0; i < tree.length; i += 1) for (const [child, parent] of pairs) if (parent === tree[i] && child !== parent && !tree.includes(child)) tree.push(child);
+    for (let i = 0; i < tree.length; i += 1) for (const [child, parent] of rows) if (parent === tree[i] && child !== parent && !tree.includes(child) && after(child, parent)) tree.push(child);
     for (const [id, , winpid] of bash) if (tree.includes(winpid) && !own.includes(id)) own.push(id);
-    for (let i = 0; i < own.length; i += 1) for (const [id, parent, winpid] of bash) if (parent === own[i] && !own.includes(id)) { own.push(id); if (!tree.includes(winpid)) tree.push(winpid); }
+    for (let i = 0; i < own.length; i += 1) for (const [id, parent, winpid] of bash) if (parent === own[i] && !own.includes(id)) { own.push(id); if (!tree.includes(winpid) && after(winpid, null)) tree.push(winpid); }
   }
-  const args = ['/T', '/F', ...tree.flatMap((each) => ['/PID', String(each)])];
+  const args = ['/F', ...tree.flatMap((each) => ['/PID', String(each)])];
   await new Promise((resolve) => run('taskkill', args, { timeout: 10_000, windowsHide: true }, () => resolve()));
 }
 
@@ -167,7 +177,7 @@ function createProcesses({ environment = process.env, extraEnvironment = () => (
     owned.delete(key);
     if (!record.running) return false;
     if (platform === 'win32') { // its tree at once: once it has exited, its pid may be another process's
-      if (record.pid) await killTree(record.pid, { run, shell });
+      if (record.pid) await killTree(record.pid, { run, shell, startedAt: record.startedAt });
       await Promise.race([record.exited, pause(STOP_WAIT_MS)]);
       return true;
     }

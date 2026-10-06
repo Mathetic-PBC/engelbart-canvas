@@ -5,6 +5,15 @@ Newest status first; the sections below are kept current.
 
 ## Where things stand
 
+- 2026-10-06, run 13 (e2e764d, a log-only commit): macOS passed; the Windows job never finished `npm test`: after
+  49 minutes GitHub reported "The hosted runner lost communication with the server" (no test log kept). It may be
+  GitHub's, but it showed a real risk in the Windows stop: Windows uses a pid again soon after its process ends, and a
+  process can keep the number of a parent long gone, so the walk from our shell's pid could take in someone else's
+  program (on CI, possibly the runner's; on a person's PC, any program) and kill it. The walk now counts a process as
+  a descendant only if it started after its parent and after Engelbart started the command (CIM's CreationDate), and
+  names exactly those to taskkill, without /T (which follows parent numbers alone); /T only when the list can't be
+  read. 55fbf8b's green run stands, but this fix is a code change, so the done commit is the next green run.
+
 - 2026-10-06, **done**: run 12 (55fbf8b, https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37431216041)
   passed on macos-latest and windows-latest. macOS: npm ci, npm test (1020 tests, 1019 pass, 1 skipped: the
   bundled-Git test, skipped wherever vendor/git is not fetched, as on hudsons-feedback), npm run build, npm run
@@ -98,7 +107,8 @@ Newest status first; the sections below are kept current.
 
 ## Done-criteria checklist
 
-- [x] CI passes on windows-latest and macos-latest for the same commit (55fbf8b, run 12)
+- [x] CI passes on windows-latest and macos-latest for the same commit (55fbf8b, run 12; again needed after the
+  pid-reuse fix of run 13, see "Where things stand")
 - [x] `npm ci` and `npm test` exit 0 on both
 - [x] Windows installer builds and `scripts/smoke-windows.cjs` passes on the packaged app
 - [x] `npm run package` still builds on the Mac; no Mac test deleted, weakened or newly skipped (test names compared
@@ -211,6 +221,7 @@ modes). Expectations written with the platform's separator (`path.join`, `path.s
 | 86755ab | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37427843412 | ✓ | ✗ 1 test | ✗ (allowed) | worktree move refused on Windows (a file open in it), intermittent |
 | fe85167 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37429145718 | ✓ | ✗ 2 files over 300 s | ✗ (allowed) | a slow runner: every test twice as long |
 | 55fbf8b | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37431216041 | ✓ | ✓ installer, smoke | ✗ (allowed) | **green on both: the done commit** |
+| e2e764d | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37433090130 | ✓ | ✗ runner lost after 49 min | ✗ (allowed) | log-only commit; led to the pid-reuse guard |
 
 ## Needs a decision
 
