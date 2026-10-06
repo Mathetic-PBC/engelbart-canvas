@@ -5,6 +5,12 @@ Newest status first; the sections below are kept current.
 
 ## Where things stand
 
+- 2026-10-06, **done on 4e2d95b**: run 14 (https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37438849695)
+  passed on macos-latest (npm ci; npm test 1020 tests, 1019 pass, 1 skipped, the bundled-Git test's own; build;
+  `npm run package`) and windows-latest (npm ci; npm test 1023 tests, 986 pass, 37 skipped, 0 failed; build; the
+  installer; smoke-windows: window loaded, PowerShell 7 terminal echo, Git at C:\Program Files\Git\mingw64\bin\git.exe,
+  clean quit). Linux fails, allowed. This commit has the pid-reuse guard. This log update is pushed with [skip ci].
+
 - 2026-10-06, run 13 (e2e764d, a log-only commit): macOS passed; the Windows job never finished `npm test`: after
   49 minutes GitHub reported "The hosted runner lost communication with the server" (no test log kept). It may be
   GitHub's, but it showed a real risk in the Windows stop: Windows uses a pid again soon after its process ends, and a
@@ -107,8 +113,8 @@ Newest status first; the sections below are kept current.
 
 ## Done-criteria checklist
 
-- [x] CI passes on windows-latest and macos-latest for the same commit (55fbf8b, run 12; again needed after the
-  pid-reuse fix of run 13, see "Where things stand")
+- [x] CI passes on windows-latest and macos-latest for the same commit (4e2d95b, run 14; 55fbf8b, run 12, before
+  the pid-reuse guard)
 - [x] `npm ci` and `npm test` exit 0 on both
 - [x] Windows installer builds and `scripts/smoke-windows.cjs` passes on the packaged app
 - [x] `npm run package` still builds on the Mac; no Mac test deleted, weakened or newly skipped (test names compared
@@ -220,8 +226,9 @@ modes). Expectations written with the platform's separator (`path.join`, `path.s
 | bc06f3c | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37426600854 | ✓ | ✗ 1 test | ✗ (allowed) | f2d0ac0 brought in; Git Bash's login shell slower than run-step's 0.4 s app window |
 | 86755ab | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37427843412 | ✓ | ✗ 1 test | ✗ (allowed) | worktree move refused on Windows (a file open in it), intermittent |
 | fe85167 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37429145718 | ✓ | ✗ 2 files over 300 s | ✗ (allowed) | a slow runner: every test twice as long |
-| 55fbf8b | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37431216041 | ✓ | ✓ installer, smoke | ✗ (allowed) | **green on both: the done commit** |
+| 55fbf8b | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37431216041 | ✓ | ✓ installer, smoke | ✗ (allowed) | green on both (before the pid-reuse guard) |
 | e2e764d | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37433090130 | ✓ | ✗ runner lost after 49 min | ✗ (allowed) | log-only commit; led to the pid-reuse guard |
+| 4e2d95b | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37438849695 | ✓ | ✓ installer, smoke | ✗ (allowed) | **green on both with the pid-reuse guard: the done commit** |
 
 ## Needs a decision
 
