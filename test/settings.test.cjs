@@ -411,23 +411,27 @@ test('Intelligence levels: Quick, Standard and Deep of the provider @discover ru
   assert.deepEqual(LEVELS.map((level) => level.id), ['quick', 'standard', 'deep']);
   const root = home();
   const html = renderToStaticMarkup(React.createElement(IntelligenceLevels, { initial: settingsModels(root, { tools: toolsFor(['claude']) }) }));
-  assert.match(html, /role="tab" aria-selected="true" data-provider="anthropic"/);
-  assert.match(html, /role="tab" aria-selected="false" data-provider="openai"/);
+  // One group per provider offered, the one @discover runs on first; a provider whose CLI cannot run says so.
+  const groups = (markup) => [...markup.matchAll(/data-levels-provider="(\w+)"/g)].map((match) => match[1]);
+  assert.deepEqual(groups(html), ['anthropic', 'openai']);
+  assert.ok(!html.includes('role="tab"'), 'every provider shown at once');
   for (const level of ['quick', 'standard', 'deep']) assert.ok(html.includes(`data-level="anthropic:${level}"`), level);
-  const row = (level) => html.slice(html.indexOf(`data-level="anthropic:${level}"`), html.indexOf('</div>', html.indexOf(`data-level="anthropic:${level}"`)));
-  assert.match(row('quick'), /<option value="sonnet" selected="">Sonnet<\/option>/);
-  assert.match(row('quick'), /<option value="medium" selected="">Medium<\/option>/);
-  assert.match(row('deep'), /<option value="opus" selected="">Opus<\/option>/);
-  assert.match(row('deep'), /<option value="max" selected="">Max<\/option>/);
-  assert.ok(!html.includes('data-cli-note'), 'Claude Code can run');
+  const row = (markup, key) => { const at = markup.indexOf(`data-level="${key}"`); const next = markup.indexOf('data-level="', at + 1); return markup.slice(at, next < 0 ? undefined : next); };
+  assert.match(row(html, 'anthropic:quick'), /Used by @discover --quick/);
+  assert.match(row(html, 'anthropic:quick'), /<option value="sonnet" selected="">Sonnet<\/option>/);
+  assert.match(row(html, 'anthropic:quick'), /<option value="medium" selected="">Medium<\/option>/);
+  assert.match(row(html, 'anthropic:deep'), /<option value="opus" selected="">Opus<\/option>/);
+  assert.match(row(html, 'anthropic:deep'), /<option value="max" selected="">Max<\/option>/);
+  assert.ok(!html.includes('data-cli-note="anthropic"'), 'Claude Code can run');
+  assert.ok(html.includes('data-cli-note="openai"'), 'Codex cannot');
   const codex = renderToStaticMarkup(React.createElement(IntelligenceLevels, { initial: settingsModels(root, { tools: toolsFor(['codex']) }) }));
-  assert.match(codex, /role="tab" aria-selected="true" data-provider="openai"/, 'starts on the provider runs use');
-  assert.match(codex, /data-level="openai:standard"[\s\S]*?<option value="astra" selected="">Astra<\/option>/);
+  assert.deepEqual(groups(codex), ['openai', 'anthropic'], 'the provider runs use, first');
+  assert.match(row(codex, 'openai:standard'), /<option value="astra" selected="">Astra<\/option>/);
   saveSettingsModels(root, { provider: 'openai' });
   const saved = renderToStaticMarkup(React.createElement(IntelligenceLevels, { initial: settingsModels(root, { tools: toolsFor(['claude', 'codex']) }) }));
-  assert.match(saved, /aria-selected="true" data-provider="openai"/, 'the saved provider');
+  assert.deepEqual(groups(saved), ['openai', 'anthropic'], 'the saved provider, first');
   const one = renderToStaticMarkup(React.createElement(IntelligenceLevels, { initial: settingsModels(root, { only: ['openai'] }) }));
-  assert.ok(!one.includes('role="tablist"') && one.includes('data-level="openai:quick"'), 'one provider offered: no switch');
+  assert.deepEqual(groups(one), ['openai'], 'one provider offered: one group');
 });
 
 test('the provider runs use: a saved one whose CLI cannot run gives way, as in a run (preferUsable)', () => {
