@@ -154,7 +154,7 @@ function createShell({ environment = process.env, run = execFile, tools = null }
     // `detached`: a session of its own, without Engelbart's controlling terminal (2026-09-29). Started from a terminal
     // (npm start), Engelbart has one, and an interactive zsh a check starts would read the keyboard of that terminal
     // instead of its own input: the project's tests of such shells failed only when Accept ran them.
-    run(shell, loginShellArgs(shell, command, full), { cwd, env: full, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024, signal, detached: true }, (error, stdout, stderr) => {
+    run(shell, loginShellArgs(shell, command, full), { cwd, env: full, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024, signal, detached: true, windowsHide: true }, (error, stdout, stderr) => {
       resolve({ ok: !error, output: checkOutput(`${stdout || ''}${stderr || ''}`), timedOut: !!(error && error.killed) });
     });
   });
@@ -624,9 +624,13 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     if (fs.existsSync(modules) && !fs.existsSync(theirs)) await (copyTree || cloneTree)(modules, theirs);
   }
 
-  /** A copy-on-write clone (APFS): instant, and the Build's installs never reach the person's copy. */
+  /** A copy-on-write clone (APFS): instant, and the Build's installs never reach the person's copy. On Windows a plain copy. */
   function cloneTree(from, to) {
     return new Promise((resolve, reject) => {
+      if (process.platform === 'win32') {
+        fs.promises.cp(from, to, { recursive: true, verbatimSymlinks: true }).then(resolve, (error) => reject(new Error(`node_modules could not be copied (${error.message.split('\n')[0]})`)));
+        return;
+      }
       execFile('/bin/cp', ['-cR', from, to], { timeout: SHELL_MS }, (error) => (error ? reject(new Error(`node_modules could not be copied (${error.message.split('\n')[0]})`)) : resolve()));
     });
   }

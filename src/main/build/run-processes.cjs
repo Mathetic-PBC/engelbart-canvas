@@ -8,6 +8,10 @@
 //   app       still running 10 seconds after it started
 //   terminal  exits 0
 // A UI's port is a free one on this Mac, found at each start.
+//
+// Windows (2026-10-05, docs/windows-port.md) has no process groups: a process and everything it started (its tree) are
+// stopped with `taskkill /T /F`, and what only needs ps or lsof (a leftover after a crash, an app's window to the front)
+// is skipped.
 
 const fs = require('node:fs');
 const net = require('node:net');
@@ -37,8 +41,9 @@ function freePort() {
   });
 }
 
-/** The processes of a process group now (its leader's pid), from ps. */
-function groupPids(pgid, { run = execFile } = {}) {
+/** The processes of a process group now (its leader's pid), from ps. None on Windows. */
+function groupPids(pgid, { run = execFile, platform = process.platform } = {}) {
+  if (platform === 'win32') return Promise.resolve([]);
   return new Promise((resolve) => run('/bin/ps', ['-A', '-o', 'pid=,pgid='], { timeout: 5000 }, (error, stdout) => {
     if (error) { resolve([]); return; }
     resolve(String(stdout).split('\n').map((line) => line.trim().split(/\s+/).map(Number)).filter(([pid, group]) => group === pgid && Number.isInteger(pid)).map(([pid]) => pid));
@@ -56,6 +61,11 @@ function focusApp(pids, { run = execFile } = {}) {
   return new Promise((resolve) => run('/usr/bin/osascript', ['-l', 'JavaScript', '-e', script], { timeout: 5000 }, (error, stdout) => resolve(!error && String(stdout).trim() === 'yes')));
 }
 
+/** On Windows: `pid` and every process it started, stopped. → when taskkill has finished */
+function killTree(pid, { run = execFile } = {}) {
+  return new Promise((resolve) => run('taskkill', ['/T', '/F', '/PID', String(pid)], { timeout: 5000, windowsHide: true }, () => resolve()));
+}
+
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
 
 /**
@@ -63,7 +73,8 @@ const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (error
  * is still the process that was started, a group leader whose folder is inside `within` (the Build's copy), so a pid used
  * again since is never touched. → whether it was stopped
  */
-async function stopLeftover(pgid, within, { run = execFile, waitMs = STOP_WAIT_MS } = {}) {
+async function stopLeftover(pgid, within, { run = execFile, waitMs = STOP_WAIT_MS, platform = process.platform } = {}) {
+  if (platform === 'win32') return false; // no lsof to tell whether the pid is still that process
   if (!Number.isInteger(pgid) || pgid <= 1 || !alive(pgid)) return false;
   let base;
   try { base = fs.realpathSync(within); } catch { return false; }
@@ -83,7 +94,7 @@ async function stopLeftover(pgid, within, { run = execFile, waitMs = STOP_WAIT_M
  * `environment`: what every process starts from (the app's, less what only the app or an agent session should have).
  * `extraEnvironment()`: added at each start (Engelbart's own Git while it stands in).
  */
-function createProcesses({ environment = process.env, extraEnvironment = () => ({}), spawnProcess = spawn, fetcher = fetch, appAliveMs = APP_ALIVE_MS, uiReadyMs = UI_READY_MS } = {}) {
+function createProcesses({ environment = process.env, extraEnvironment = () => ({}), spawnProcess = spawn, fetcher = fetch, appAliveMs = APP_ALIVE_MS, uiReadyMs = UI_READY_MS, platform = process.platform, run = execFile } = {}) {
   const shell = resolveShell(environment);
   const owned = new Map(); // key → record
 
@@ -96,7 +107,7 @@ function createProcesses({ environment = process.env, extraEnvironment = () => (
   async function start(key, command, cwd, { env = {}, input = false } = {}) {
     await stop(key);
     const full = envFor(env);
-    const child = spawnProcess(shell, loginShellArgs(shell, command, full), { cwd, env: full, detached: true, stdio: [input ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+    const child = spawnProcess(shell, loginShellArgs(shell, command, full), { cwd, env: full, detached: true, windowsHide: true, stdio: [input ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
     const record = { key, command, cwd, child, pid: child.pid, output: '', running: true, code: null, signal: null, startedAt: Date.now() };
     const take = (chunk) => { record.output = (record.output + chunk.toString()).slice(-OUTPUT_BYTES); };
     if (child.stdout) child.stdout.on('data', take);
@@ -118,6 +129,11 @@ function createProcesses({ environment = process.env, extraEnvironment = () => (
     if (!record) return false;
     owned.delete(key);
     if (!record.running) return false;
+    if (platform === 'win32') { // its tree at once: once it has exited, its pid may be another process's
+      if (record.pid) await killTree(record.pid, { run });
+      await Promise.race([record.exited, pause(STOP_WAIT_MS)]);
+      return true;
+    }
     kill(record, 'SIGTERM');
     const gone = await Promise.race([record.exited.then(() => true), pause(STOP_WAIT_MS).then(() => false)]);
     if (!gone) { kill(record, 'SIGKILL'); await Promise.race([record.exited, pause(2000)]); }
@@ -181,4 +197,4 @@ function createProcesses({ environment = process.env, extraEnvironment = () => (
   return { start, stop, stopAll, status, runToExit, check, bringForward, running: (key) => !!(owned.get(key) && owned.get(key).running) };
 }
 
-module.exports = { createProcesses, freePort, focusApp, groupPids, stopLeftover, APP_ALIVE_MS, UI_READY_MS };
+module.exports = { createProcesses, freePort, focusApp, groupPids, killTree, stopLeftover, APP_ALIVE_MS, UI_READY_MS };
