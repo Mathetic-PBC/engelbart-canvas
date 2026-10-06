@@ -138,6 +138,22 @@ test('a follow-up on the same mark sends its answers as the turns, as the Stage 
   assert.notEqual(threadKey(project.id, ref, turnsOf(mark)), threadKey(project.id, { ...ref, id: 'm5' }, turnsOf(mark)));
 });
 
+test('after an answer is deleted from the mark, the next question still resumes the same session (follow-up, 2026-10-06)', async () => {
+  const { askEntry, turnsOf, shownAsks } = await loadCanvas();
+  const bart = createFakeBart({ readModels: () => MODELS, delayMs: 4 });
+  const ref = { kind: 'mark', id: 'm6', rowId: paperId, page: 2 };
+  const highlight = { quote: 'the passage', note: '@bart why?', paper: 'TutorTrace' };
+  const mark = { id: 'm6', rects: [{ x: 0.1, y: 0.2, w: 0.3, h: 0.015 }], note: '@bart why?', asks: [] };
+  const first = await bart.ask(ctx, project.id, { askId: 'd1', ref, workspaceId: workspace.id, text: 'why?', turns: turnsOf(mark), highlight });
+  mark.asks.push(askEntry({ id: 'd1', question: 'why?', lines: first.lines, meta: first.meta, at: new Date().toISOString() }));
+  const second = await bart.ask(ctx, project.id, { askId: 'd2', ref, workspaceId: workspace.id, text: 'and then?', turns: turnsOf(mark), highlight });
+  mark.asks.push(askEntry({ id: 'd2', question: 'and then?', lines: second.lines, meta: second.meta, at: new Date().toISOString() }));
+  mark.asks[0].deleted = true; // Delete on the first answer's box (PaperView askClick)
+  assert.deepEqual(shownAsks(mark).map((a) => a.id), ['d2']);
+  const third = await bart.ask(ctx, project.id, { askId: 'd3', ref, workspaceId: workspace.id, text: 'so?', turns: turnsOf(mark), highlight });
+  assert.match(third.lines.join('\n'), /the same session, given the question alone/);
+});
+
 test('askEntry reads an answer\'s lines back to the text main keeps the session under, and its foot', async () => {
   const { askEntry, answerOf } = await loadCanvas();
   const meta = { provider: 'anthropic', level: { name: 'Sonnet', effort: 'high', model: 'claude-sonnet-5-5' }, trail: [], ms: 4200, pinned: false };

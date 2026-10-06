@@ -2,7 +2,8 @@
 
 // The page as a canvas (src/renderer/pdf/canvas.js, MATH-27 phase 1, 2026-10-06): the desk beside every page, the spacing
 // pass that keeps boxes 12px apart and flowing around the ones that were moved, Fit page + notes, which boxes are out of
-// view, and the answers a highlight keeps.
+// view, and the answers a highlight keeps. Follow-ups (2026-10-06): answers hanging under a moved note widen the desk,
+// Fit page + notes reads every page, a deleted answer stays a turn while its session lasts.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -35,6 +36,32 @@ test('deskNeed: how far past its page each moved note or answer reaches, plus th
   assert.equal(need.right, Math.max(1.5 * P + ASK_W, 1.9 * P + COLLAPSED_W) + DESK_EDGE - P, 'a mark without a note has no note box to place');
   assert.equal(deskNeed({ 3: [{ note: 'x', pos: { x: 0.9, y: 0 } }] }, () => P).right, 0.9 * P + NOTE_W + DESK_EDGE - P);
   assert.deepEqual(deskNeed({ 9: [{ note: 'x', pos: { x: -3, y: 0 } }] }, () => 0), { left: 0, right: 0 }, 'a page not laid out counts for nothing');
+});
+
+test('deskNeed: answers hanging under a moved note count too, from its edge nearest the page\'s middle (follow-up, 2026-10-06)', async () => {
+  const { deskNeed, hangLeft, DESK, DESK_EDGE, NOTE_W, ASK_W, COLLAPSED_W } = await load();
+  const P = 500;
+  const answer = (id, more = {}) => ({ id, question: 'q', answer: 'a', pos: null, collapsed: false, ...more });
+  // A note dragged near the desk's left edge: its answers (wider than it) hang from its right edge and reach further left.
+  const left = { 1: [{ id: 'm', note: '@bart q', rects: [{}], pos: { x: -0.7, y: 0.1 }, asks: [answer('a1'), answer('a2', { collapsed: true })] }] };
+  const x = -0.7 * P;
+  assert.equal(hangLeft(x, NOTE_W, ASK_W, P / 2), x + NOTE_W - ASK_W);
+  assert.equal(deskNeed(left, () => P).left, DESK_EDGE - (x + NOTE_W - ASK_W), 'the widest answer under it, not the note');
+  assert.ok(deskNeed(left, () => P).left > DESK, 'past the 400px desk: it widens');
+  assert.equal(deskNeed({ 1: [{ ...left[1][0], asks: [answer('a2', { collapsed: true })] }] }, () => P).left, DESK_EDGE - x, 'one folded away is narrower than the note');
+  // On the right of the middle they hang from its left edge.
+  const right = { 1: [{ id: 'm', note: 'n', rects: [{}], pos: { x: 1.2, y: 0.1 }, asks: [answer('a1')] }] };
+  assert.equal(deskNeed(right, () => P).right, 1.2 * P + ASK_W + DESK_EDGE - P);
+  // A moved answer is what the ones after it hang from.
+  const chain = { 1: [{ id: 'm', note: 'n', rects: [{}], pos: { x: -0.7, y: 0.1 }, asks: [answer('a1', { pos: { x: 0.2, y: 0.5 } }), answer('a2')] }] };
+  assert.equal(deskNeed(chain, () => P).left, DESK_EDGE - x, 'a2 hangs from a1, on the page');
+  // A deleted answer is not drawn: it holds nothing open. An answer being written is drawn like one.
+  const gone = { 1: [{ ...left[1][0], asks: [answer('a1', { deleted: true })] }] };
+  assert.equal(deskNeed(gone, () => P).left, DESK_EDGE - x);
+  assert.equal(deskNeed(gone, () => P, (id) => (id === 'm' ? 1 : 0)).left, DESK_EDGE - (x + NOTE_W - ASK_W), 'running(markId)');
+  // Boxes beside the page, before any moved one, fit the desk as it is.
+  const beside = { 1: [{ id: 'm', note: 'n', rects: [{}], side: 'left', pos: null, asks: [answer('a1')] }] };
+  assert.deepEqual(deskNeed(beside, () => P, () => 2), { left: 0, right: 0 });
 });
 
 test('placeOf and posOf: a box\'s place in page units, at any zoom, and back', async () => {
@@ -123,6 +150,31 @@ test('fitZoom: Fit page fits the page; Fit page + notes zooms out until every bo
   assert.equal(fitZoom({ ...page, availW: 5000, availH: 5000 }), 2, 'and at the most');
 });
 
+test('Fit page + notes reads every page: paperShape stacks them as laid out, and the fit holds a box three pages on', async () => {
+  const { paperShape, extentAt, fitZoom } = await load();
+  const box = { x: { a: 1, b: 28 }, y: { a: 0.1, b: 0 }, w: 320, h: 120 };
+  const list = [{ pageW1: 800, pageH1: 1000, boxes: [] }, { pageW1: 800, pageH1: 1000, boxes: [] }, { pageW1: 600, pageH1: 900, boxes: [] }, { pageW1: 800, pageH1: 1000, boxes: [box] }];
+  const pages = paperShape(list, 1);
+  assert.deepEqual(pages.map((p) => p.at), [
+    { x: { a: -400, b: 0 }, y: { a: 0, b: 0 } },
+    { x: { a: -400, b: 0 }, y: { a: 1000, b: 1 } },
+    { x: { a: -300, b: 0 }, y: { a: 2000, b: 2 } },
+    { x: { a: -400, b: 0 }, y: { a: 2900, b: 3 } },
+  ], 'each 1px under the one before, centered on x = 0');
+  assert.deepEqual(pages.map((p) => p.whole), [true, false, false, false], 'the page in view counts whole');
+  const z = 0.5;
+  assert.deepEqual(extentAt({ pages }, z), { left: -200, top: 0, right: 200 + 28 + 320, bottom: 2900 * z + 3 + 0.1 * 400 + 120 }, 'page 1, and page 4\'s box');
+  assert.deepEqual(extentAt({ pages: paperShape(list.map((p) => ({ ...p, boxes: [] })), 2) }, z), { left: -200, top: 500 + 1, right: 200, bottom: 1000 + 1 }, 'no boxes: the page in view alone');
+  const view = { availW: 900, availH: 700, zMin: 0.15, zMax: 2 };
+  const pageOnly = fitZoom({ pages: paperShape(list.map((p) => ({ ...p, boxes: [] })), 1), ...view });
+  assert.ok(Math.abs(pageOnly - 0.7) < 1e-6, 'Fit page: as fitZoom always did for one page');
+  const all = fitZoom({ pages, ...view });
+  const e = extentAt({ pages }, all);
+  assert.ok(all < pageOnly && e.bottom - e.top <= view.availH + 1e-6 && e.right - e.left <= view.availW + 1e-6, 'zoomed out until the box on page 4 fits too');
+  // A single page as before: no `pages`, from its own top-left.
+  assert.deepEqual(extentAt({ pageW1: 800, pageH1: 1000, boxes: [box] }, 1), { left: 0, top: 0, right: 1148, bottom: 1000 });
+});
+
 test('offscreen: boxes beyond each edge of the view by their centers; revealScroll brings them in', async () => {
   const { offscreen, offscreenSide, revealScroll, chipLabel } = await load();
   const view = { left: 0, top: 0, right: 800, bottom: 600 };
@@ -163,6 +215,23 @@ test('withAsk adds an answer to its mark once, and leaves the marks alone when t
   assert.equal(withAsk(marks, 7, 'm1', entry), marks);
   assert.deepEqual(turnsOf(next[2][0]), [{ question: 'q', answer: 'A.' }]);
   assert.deepEqual(turnsOf({}), []);
+});
+
+test('a deleted answer stays one of the exchange\'s turns while its session can be resumed, then it is gone', async () => {
+  const { exchangeOf, shownAsks, turnsOf, keptMarks, THREAD_IDLE_MS } = await load();
+  assert.equal(THREAD_IDLE_MS, require('../src/main/bart/ask.cjs').THREAD_IDLE_MS, 'the same window as main\'s');
+  const t0 = Date.parse('2026-10-06T10:00:00.000Z');
+  const at = (min) => new Date(t0 + min * 60_000).toISOString();
+  const m = { id: 'm1', note: '@bart q', asks: [{ id: 'a1', question: 'why?', answer: 'Because.', at: at(0), deleted: true }, { id: 'a2', question: 'and?', answer: 'Then.', at: at(5) }] };
+  assert.deepEqual(shownAsks(m).map((a) => a.id), ['a2'], 'not drawn');
+  assert.deepEqual(turnsOf(m, t0 + 20 * 60_000), [{ question: 'why?', answer: 'Because.' }, { question: 'and?', answer: 'Then.' }], 'sent, in its place: the session heard it');
+  assert.deepEqual(turnsOf(m, t0 + 36 * 60_000), [{ question: 'and?', answer: 'Then.' }], 'half an hour after the newest answer the session is gone, and so is it');
+  assert.deepEqual(exchangeOf({ asks: [{ id: 'a', deleted: true }] }, t0).map((a) => a.id), [], 'an answer with no time is taken as old');
+  const kept = keptMarks([m, { id: 'm2', note: 'n' }, null], t0 + 40 * 60_000);
+  assert.deepEqual(kept[0].asks.map((a) => a.id), ['a2'], 'and not saved after that');
+  assert.equal(kept[1].id, 'm2');
+  assert.deepEqual(m.asks.map((a) => a.id), ['a1', 'a2'], 'the marks given are not changed');
+  assert.equal(keptMarks([m], t0 + 10 * 60_000)[0], m, 'saved as it is while the session lasts');
 });
 
 test('continueLines: the passage and where it is, then the question and the answer as a workspace thread', async () => {

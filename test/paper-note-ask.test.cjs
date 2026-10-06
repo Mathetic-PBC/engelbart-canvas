@@ -143,3 +143,117 @@ test('addAsk: a finished answer joins its mark once, is drawn and saved; a mark 
   assert.equal(view.addAsk(2, 'gone', entry), false);
   assert.equal(view.addAsk(5, 'm1', entry), false);
 });
+
+/* ------------------------------------------------------------------------------------------------ follow-ups (2026-10-06) */
+
+const actClick = (what) => {
+  const act = { dataset: { act: what }, textContent: '', isConnected: true };
+  return { target: { closest: (sel) => (sel === '[data-act]' ? act : null) }, preventDefault() {} };
+};
+
+test('@bart on a part of a selection across pages sends the whole passage, page by page; so does Continue in workspace', () => {
+  const continued = [];
+  const { view, m, ta, asked } = viewer('@bart what does this claim?', { props: { onContinueAsk: (x) => continued.push(x) } });
+  m.group = 'g1';
+  view.marks[3] = [{ id: 'm2', group: 'g1', rects: [{ x: 0.1, y: 0.05, w: 0.4, h: 0.015 }], side: 'right', y: 0.05, note: null, text: 'across 480 students' }];
+  view.marks[1] = [{ id: 'm0', group: 'g2', rects: [{ x: 0.1, y: 0.05, w: 0.4, h: 0.015 }], y: 0.05, note: null, text: 'another selection' }];
+  view.noteKey(key('Enter'), ta, m, 2);
+  assert.equal(asked[0].quote, 'Cohen\'s κ was 0.79 overall\nacross 480 students');
+  const a = { id: 'a1', question: 'what does this claim?', answer: 'That.', meta: { foot: 'Sonnet · high · 3 s' } };
+  m.asks = [a];
+  view.askClick(actClick('continue'), m, a, 2);
+  assert.equal(continued[0].quote, 'Cohen\'s κ was 0.79 overall\nacross 480 students');
+});
+
+/** The paper's host, a note's field and a button on it, a button elsewhere (the Stage's), and the page itself. */
+function keyboard(view, ta) {
+  const body = { nodeName: 'BODY' };
+  const inside = { closest: () => null }; // something of the paper's that is no control
+  const button = { closest: (sel) => (sel.includes('button') ? button : null) };
+  const outside = { closest: (sel) => (sel.includes('button') ? outside : null) };
+  const editor = { closest: (sel) => (sel.includes('contenteditable') ? editor : null) };
+  ta.closest = (sel) => (sel.includes('textarea') ? ta : null);
+  const held = new Set([ta, inside, button]);
+  view.host.current = { dataset: {}, contains: (t) => held.has(t) };
+  view.root.current = { contains: (t) => held.has(t) };
+  globalThis.document.body = body;
+  return { body, inside, button, outside, editor };
+}
+const keyEv = (target, more = {}) => ({ target, key: '', code: '', metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, prevented: false, stopped: false, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; }, ...more });
+
+test('Space over the paper pans only while nothing has the keyboard: a note\'s field, a button or the document keeps it', () => {
+  const { view, ta } = viewer('a note');
+  const { body, inside, button, outside, editor } = keyboard(view, ta);
+  view.hovered = true;
+  for (const [target, why] of [[ta, 'a note\'s field'], [button, 'a button on the paper'], [outside, 'a button elsewhere'], [editor, 'the document']]) {
+    const ev = keyEv(target, { key: ' ', code: 'Space' });
+    view.onKeyCapture(ev);
+    assert.ok(!ev.prevented && !ev.stopped, `${why} gets its Space`);
+    assert.equal(view.space, false);
+  }
+  for (const target of [body, inside]) {
+    const ev = keyEv(target, { key: ' ', code: 'Space' });
+    view.onKeyCapture(ev);
+    assert.ok(ev.prevented && ev.stopped, 'nothing has the keyboard: the paper pans');
+    assert.equal(view.space, true);
+    view.holdSpace(false);
+  }
+  view.hovered = false;
+  const away = keyEv(body, { key: ' ', code: 'Space' });
+  view.onKeyCapture(away);
+  assert.ok(!away.prevented, 'the pointer elsewhere: Space is the app\'s');
+  // A pending selection's keys too: a focused button keeps Space and Enter.
+  view.pendingSel = { parts: [] };
+  view.addMark = () => { throw new Error('no note'); };
+  for (const k of [' ', 'Enter']) {
+    const ev = keyEv(button, { key: k, code: k === ' ' ? 'Space' : 'Enter' });
+    view.onKeyCapture(ev);
+    assert.ok(!ev.prevented && !ev.stopped, `${k === ' ' ? 'Space' : 'Enter'} on a button is the button's`);
+  }
+});
+
+test('Delete hides an answer and ⌘Z brings it back; meanwhile the next question still sends it, so the session goes on', () => {
+  const now = new Date().toISOString();
+  const asks = [
+    { id: 'a1', question: 'why?', answer: 'Because.', meta: {}, at: now, pos: null, collapsed: false },
+    { id: 'a2', question: 'and?', answer: 'Then.', meta: {}, at: now, pos: null, collapsed: false },
+  ];
+  const { view, m, ta, asked, drawn, saves } = viewer('@bart and after that?', { asks });
+  const { body, inside, outside } = keyboard(view, ta);
+  view.askClick(actClick('delete'), m, asks[0], 2);
+  view.askClick(actClick('delete'), m, asks[1], 2);
+  assert.deepEqual(m.asks.map((a) => [a.id, !!a.deleted]), [['a1', true], ['a2', true]], 'kept on the mark, not drawn');
+  assert.deepEqual(drawn, [2, 2]);
+  assert.equal(saves(), 2);
+  view.noteKey(key('Enter'), ta, m, 2);
+  assert.deepEqual(asked[0].turns, [{ question: 'why?', answer: 'Because.' }, { question: 'and?', answer: 'Then.' }], 'the turns the session heard: it is found again');
+  const z = (target, more = {}) => keyEv(target, { key: 'z', metaKey: true, ...more });
+  // Not the paper's: the last press was elsewhere, or a field has the keyboard, or it is ⌘⇧Z.
+  view.onPointerDown({ target: outside });
+  let ev = z(body);
+  view.onKeyCapture(ev);
+  assert.ok(!ev.prevented, 'the last press was not on the paper');
+  view.onPointerDown({ target: inside });
+  for (const e of [z(ta), z(outside), z(body, { shiftKey: true })]) { view.onKeyCapture(e); assert.ok(!e.prevented); }
+  assert.ok(m.asks.every((a) => a.deleted));
+  // The last deleted first.
+  ev = z(body);
+  view.onKeyCapture(ev);
+  assert.ok(ev.prevented && ev.stopped);
+  assert.deepEqual(m.asks.map((a) => [a.id, 'deleted' in a]), [['a1', true], ['a2', false]]);
+  assert.deepEqual(drawn, [2, 2, 2]);
+  assert.equal(saves(), 3);
+  ev = z(inside, { metaKey: false, ctrlKey: true });
+  view.onKeyCapture(ev);
+  assert.ok(ev.prevented, 'Ctrl+Z as well');
+  assert.ok(m.asks.every((a) => !('deleted' in a)));
+  ev = z(body);
+  view.onKeyCapture(ev);
+  assert.ok(!ev.prevented && !ev.stopped, 'nothing left to bring back: the key is the app\'s');
+  // One gone meanwhile is passed over.
+  view.askClick(actClick('delete'), m, asks[0], 2);
+  m.asks = [asks[1]];
+  ev = z(body);
+  view.onKeyCapture(ev);
+  assert.ok(!ev.prevented);
+});

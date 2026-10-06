@@ -175,3 +175,19 @@ export function partMarks(parts, note, newId, widthOf) {
     return { page: p.page, mark: group ? { ...mark, group } : mark };
   });
 }
+
+/**
+ * The passage a mark is part of (MATH-27 follow-up, 2026-10-06): its own text, or for a part of a selection across
+ * pages (`group`), the text of every mark in its group, page by page (top to bottom within one), one line each. `marks`:
+ * { [page]: Mark[] }.
+ */
+export function passageOf(marks, mark) {
+  if (!mark) return '';
+  if (!mark.group) return String(mark.text || '');
+  const parts = [];
+  for (const [page, list] of Object.entries(marks || {})) {
+    (list || []).forEach((m, i) => { if (m && m.group === mark.group) parts.push({ page: Number(page), y: Number(m.y) || 0, i, text: String(m.text || '') }); });
+  }
+  if (!parts.length) return String(mark.text || '');
+  return parts.sort((a, b) => a.page - b.page || a.y - b.y || a.i - b.i).map((p) => p.text.trim()).filter(Boolean).join('\n');
+}

@@ -33,14 +33,19 @@
 // `asks` go as the turns). An answer being written (`pendingAsks`, the workspace's) is a box of its own until it lands
 // (`addAsk`, from the Stage). Space-drag or a middle-drag pans; a fade and a chip say where boxes are out of view; the
 // bar has Fit page and Fit page + notes.
+// Follow-ups (2026-10-06): the boxes hanging under a moved one widen the desk as it does (canvas.js deskNeed), while it is
+// dragged too; @bart from a part of a selection across pages sends the whole passage (./marks.js passageOf), and so does
+// Continue in workspace; a deleted answer comes back with ⌘Z (undoKey) and stays a turn of its exchange, so the next
+// question goes on in the same session (canvas.js exchangeOf); Space, ⌘Z and a pending selection's keys are the paper's
+// only while nothing has the keyboard (keyFree); Fit page + notes fits every box on the paper (canvas.js paperShape).
 import React from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import rough from 'roughjs';
-import { mergeLineRects, placeHighlight, boxSeed, selectionParts, scalePart, partMarks } from './marks.js';
+import { mergeLineRects, placeHighlight, boxSeed, selectionParts, scalePart, partMarks, passageOf } from './marks.js';
 import { nextFind, createTargetGate, sectionSpans, paintSection, clearFind, FIND, FIND_ACTIVE } from '../model/find.js';
 import { wheelZooms, wheelZoom, createPageCache } from '../model/paper-zoom.js';
 import { mentionAt, libMention, noteHtml, noteParts, noteOffset, inlineHtml, esc, LIB_MENTION_RE } from '../model/doc.js';
-import { sideSpace, deskOf, deskNeed, placeOf, posOf, spaceBoxes, extentAt, fitZoom, offscreen, offscreenSide, chipLabel, revealScroll, noteQuestion, turnsOf, modelLabel, runningLabel, DESK_EDGE, BOX_GAP, NOTE_W, ASK_W, COLLAPSED_W, SIDE_GAP, POS_DY } from './canvas.js';
+import { sideSpace, deskOf, deskNeed, hangLeft, placeOf, posOf, spaceBoxes, extentAt, fitZoom, paperShape, offscreen, offscreenSide, chipLabel, revealScroll, noteQuestion, turnsOf, shownAsks, keptMarks, modelLabel, runningLabel, DESK_EDGE, BOX_GAP, NOTE_W, ASK_W, COLLAPSED_W, SIDE_GAP, POS_DY } from './canvas.js';
 import { fieldCaret } from '../workspace/caret.js';
 import MentionMenu from '../workspace/MentionMenu.jsx';
 
@@ -152,7 +157,8 @@ const highlights = () => (typeof CSS !== 'undefined' && CSS.highlights && typeof
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const markId = (prefix = 'm') => prefix + Date.now() + Math.random().toString(36).slice(2, 6); // 'g…': a selection across pages' group
-const isEditable = (t) => !!(t && t.closest && t.closest('input,textarea,[contenteditable="true"]'));
+// What has the keyboard when it is no field, button or link: Space, ⌘Z and a pending selection's keys can be the paper's.
+const CONTROL = 'input,textarea,select,button,a[href],[contenteditable="true"]';
 // A range's text as a selection gives it: its text nodes in order, a line break (<br>) as \n. Range.toString() leaves
 // out line breaks, which would run one line's last word into the next one's first.
 function rangeText(range) {
@@ -193,6 +199,7 @@ export default class PaperView extends React.Component {
     super(props);
     this.state = { note: 'Opening the paper…', page: 0, pages: 0, pct: 100, mention: null, mentionIdx: 0, off: NO_OFF };
     this.host = React.createRef();
+    this.root = React.createRef(); // the pane: the paper, its bar and its chips
     this.marks = clone(props.marks || {}); // { [page]: Mark[] }, geometry in page units
     this.doc = null;
     this.gen = 0; // document generation
@@ -221,6 +228,8 @@ export default class PaperView extends React.Component {
     this.hovered = false;
     this.openLogs = new Set(); // answers being written whose steps are shown
     this.offRaf = 0;
+    this.undos = []; // what ⌘Z brings back, the last first: answers deleted, { page, markId, askId } (undoKey)
+    this.downHere = false; // the last press was in this pane: ⌘Z is the paper's
     this.onDown = (e) => {
       if (!(e.target.closest && e.target.closest('[data-pdf] [data-page]'))) return;
       if (e.target.closest('[data-box]')) return;
@@ -233,12 +242,16 @@ export default class PaperView extends React.Component {
     // A selection being made (see LAYER_CSS .endOfContent): the layers it touches stay .selecting until the pointer is
     // up, the window loses focus, or a key is let go with the pointer up (pdf.js TextLayerBuilder's listeners).
     this.pointerIsDown = false;
-    this.onPointerDown = () => { this.pointerIsDown = true; };
+    this.onPointerDown = (e) => {
+      this.pointerIsDown = true;
+      const root = this.root.current;
+      this.downHere = !!(root && e && e.target && root.contains(e.target));
+    };
     this.onPointerUp = () => { this.pointerIsDown = false; this.endSelecting(); };
     this.onBlur = () => { this.pointerIsDown = false; this.endSelecting(); this.holdSpace(false); };
     this.onKeyUp = (e) => { if (e && e.code === 'Space') this.holdSpace(false); if (!this.pointerIsDown) this.endSelecting(); };
     this.onSelectionChange = () => this.trackSelecting();
-    this.onKeyCapture = (e) => { if (this.spaceKey(e) || this.pendingSelKey(e)) e.stopPropagation(); };
+    this.onKeyCapture = (e) => { if (this.spaceKey(e) || this.pendingSelKey(e) || this.undoKey(e)) e.stopPropagation(); };
     this.onWheel = (e) => this.pinch(e);
     this.onScroll = () => {
       if (this.state.mention) this.closeMention();
@@ -344,7 +357,10 @@ export default class PaperView extends React.Component {
       this.reframe();
       this.renderAllMarks();
     }
-    if (prev.pendingAsks !== this.props.pendingAsks) this.syncPending(prev.pendingAsks || []);
+    if (prev.pendingAsks !== this.props.pendingAsks) {
+      this.reframe(); // an answer being written under a moved box can widen the desk, as a written one does
+      this.syncPending(prev.pendingAsks || []);
+    }
     // A mentioned item renamed, or gone from the library: its mentions are drawn again with its name now.
     if (prev.library !== this.props.library && this.libKey() !== this.libDrawn) this.renderAllMarks();
   }
@@ -403,8 +419,8 @@ export default class PaperView extends React.Component {
   }
   emit(cb) {
     if (typeof cb !== 'function') return;
-    const out = {};
-    for (const [page, list] of Object.entries(this.marks)) if (list && list.length) out[page] = clone(list);
+    const out = {}, now = Date.now();
+    for (const [page, list] of Object.entries(this.marks)) if (list && list.length) out[page] = clone(keptMarks(list, now));
     cb(out);
   }
 
@@ -421,6 +437,7 @@ export default class PaperView extends React.Component {
     this.resetGeometry();
     this.setPinching(false);
     this.pdfW = null;
+    this.undos = []; // another paper
     this.gate.drawing();
     const data = toBytes(this.props.bytes);
     if (!data) { this.setState({ note: 'No paper to open.', page: 0, pages: 0 }); return; }
@@ -519,28 +536,35 @@ export default class PaperView extends React.Component {
     if (!model || !g) return [];
     const P = g.pageW || 1;
     return model.boxes.filter((b) => b.el && b.el.isConnected).map((b) => {
-      const w = b.width, h = b.height, pos = b.how === 'pos' && b.pos;
+      const w = b.width, h = b.height, pos = b.how === 'pos' && b.pos, from = b.how === 'hang' && b.from && b.from.how === 'pos' && b.from.pos;
       if (pos) return { x: { a: pos.x, b: 0 }, y: { a: pos.y, b: -POS_DY }, w, h };
+      // Under a moved box: its px from that box, which keeps its page units.
+      if (from) return { x: { a: from.x, b: b.left - b.from.left }, y: { a: from.y, b: b.top - b.from.top - POS_DY }, w, h };
       if (b.how === 'right') return { x: { a: 1, b: b.left - g.G - P }, y: { a: b.top / P, b: 0 }, w, h };
       if (b.how === 'left') return { x: { a: 0, b: b.left - g.G }, y: { a: b.top / P, b: 0 }, w, h };
       return { x: { a: (b.left - g.G) / P, b: 0 }, y: { a: b.top / P, b: 0 }, w, h };
     });
   }
 
-  /** "Fit page": the page in view whole in the pane; `withNotes`, "Fit page + notes": zoomed out until its boxes are too. */
+  /** "Fit page": the page in view whole in the pane; `withNotes`, "Fit page + notes": zoomed out until every box on the
+   *  paper is too, whichever page it is on (./canvas.js paperShape), and the view centered on them all. */
   fitPage(withNotes = false) {
     const host = this.host.current;
     if (!host || !this.doc || !this.inner) return;
-    const n = this.currentPage() || 1, v0 = this.v0[n];
-    if (!v0) return;
-    const W = host.clientWidth, H = host.clientHeight, unit = this.unit(W);
-    const shape = { pageW1: v0.width * unit, pageH1: v0.height * unit, boxes: withNotes ? this.boxShapes(n) : [] };
-    const z = fitZoom({ ...shape, availW: Math.max(40, W - 48), availH: Math.max(40, H - 48 - 50), zMin: ZOOM_MIN, zMax: ZOOM_MAX });
+    const n = this.currentPage() || 1;
+    if (!this.v0[n]) return;
+    const W = host.clientWidth, H = host.clientHeight, unit = this.unit(W), list = [];
+    for (let k = 1; k < this.v0.length; k += 1) {
+      const v0 = this.v0[k] || this.v0[n];
+      list.push({ pageW1: v0.width * unit, pageH1: v0.height * unit, boxes: withNotes ? this.boxShapes(k) : [] });
+    }
+    const pages = paperShape(list, n);
+    const z = fitZoom({ pages, availW: Math.max(40, W - 48), availH: Math.max(40, H - 48 - 50), zMin: ZOOM_MIN, zMax: ZOOM_MAX });
     clearTimeout(this.pinchTimer); this.pinchTimer = null; this.live = null;
     this.zoom = z;
     this.layout(undefined, () => {
-      const e = extentAt({ ...shape, pageW1: this.geo[n].pageW / z }, z);
-      this.centerOn(n, (e.left + e.right) / 2, (e.top + e.bottom) / 2);
+      const e = extentAt({ pages }, z), at = pages[n - 1].at;
+      this.centerOn(n, (e.left + e.right) / 2 - (at.x.a * z + at.x.b), (e.top + e.bottom) / 2 - (at.y.a * z + at.y.b));
     });
   }
 
@@ -607,7 +631,7 @@ export default class PaperView extends React.Component {
   // How wide the desk must be each side (./canvas.js deskNeed), at the pages' widths now; `extra` ({ left, right } px)
   // for a box being dragged past it.
   deskNeedNow(extra = null) {
-    const need = deskNeed(this.marks, (n) => (this.geo[n] ? this.geo[n].pageW : 0));
+    const need = deskNeed(this.marks, (n) => (this.geo[n] ? this.geo[n].pageW : 0), (id) => this.runsOf(id));
     return extra ? { left: Math.max(need.left, extra.left || 0), right: Math.max(need.right, extra.right || 0) } : need;
   }
 
@@ -695,7 +719,7 @@ export default class PaperView extends React.Component {
     inner.style.cssText = 'position:relative;width:max-content;min-width:100%;margin:0 auto;display:flex;flex-direction:column;align-items:flex-start';
     const widths = [];
     for (let n = 1; n <= N; n += 1) widths[n] = Math.max(1, Math.round(this.v0[n].width * unit * z));
-    const need = deskNeed(this.marks, (n) => widths[n] || 0);
+    const need = deskNeed(this.marks, (n) => widths[n] || 0, (id) => this.runsOf(id));
     let top = 0;
     for (let n = 1; n <= N; n += 1) {
       const v0 = this.v0[n], pageW = widths[n], scale = pageW / v0.width;
@@ -1066,10 +1090,18 @@ export default class PaperView extends React.Component {
     return Math.max(70, right - x);
   }
 
-  // Space held with the pointer over the paper, and nothing being typed in: a drag pans (MATH-27). The page does not
-  // scroll a screen down, as Space would make it.
+  // Nothing has the keyboard (2026-10-06): it is on the page itself, or on something of the paper's that is no field,
+  // button or link. A note's field, a button (the Stage's, the sidebar's, an answer's Copy) or the document keeps its keys.
+  keyFree(t) {
+    if (!t || t === document || t === document.body || t === document.documentElement) return true;
+    const host = this.host.current;
+    return !!(host && host.contains(t) && !(t.closest && t.closest(CONTROL)));
+  }
+
+  // Space held with the pointer over the paper, and nothing has the keyboard (keyFree): a drag pans (MATH-27). The page
+  // does not scroll a screen down, as Space would make it.
   spaceKey(e) {
-    if (e.code !== 'Space' || e.metaKey || e.ctrlKey || e.altKey || isEditable(e.target) || !this.hovered) return false;
+    if (e.code !== 'Space' || e.metaKey || e.ctrlKey || e.altKey || !this.hovered || !this.keyFree(e.target)) return false;
     e.preventDefault();
     this.holdSpace(true);
     return true;
@@ -1081,9 +1113,29 @@ export default class PaperView extends React.Component {
     if (on) host.dataset.space = '1'; else delete host.dataset.space;
   }
 
+  // ⌘Z (or Ctrl+Z) after a press in this pane, nothing having the keyboard: the answer deleted last comes back (one gone
+  // meanwhile is passed over). With nothing to bring back the key is the app's.
+  undoKey(e) {
+    if (!this.undos.length || !this.downHere || !(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || String(e.key).toLowerCase() !== 'z' || !this.keyFree(e.target)) return false;
+    while (this.undos.length) {
+      if (this.restoreAsk(this.undos.pop())) { e.preventDefault(); return true; }
+    }
+    return false;
+  }
+  restoreAsk({ page, markId, askId }) {
+    const m = ((this.marks || {})[page] || []).find((x) => x && x.id === markId);
+    const a = m && (m.asks || []).find((x) => x && x.id === askId && x.deleted);
+    if (!a) return false;
+    delete a.deleted;
+    this.reframe();
+    this.renderMarks(page);
+    this.scheduleSave();
+    return true;
+  }
+
   pendingSelKey(e) {
     const p = this.pendingSel; if (!p) return false;
-    if (isEditable(e.target)) return false;
+    if (!this.keyFree(e.target)) return false;
     if (e.key === 'Escape') { this.clearPending(); return true; }
     if (e.key === 'Enter') { e.preventDefault(); this.addMark(p, null); this.clearPending(); return true; }
     if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -1172,7 +1224,7 @@ export default class PaperView extends React.Component {
     }
     const boxes = [], units = [], chains = [], running = this.pendingOn(page);
     list.forEach((m, k) => {
-      const asks = Array.isArray(m.asks) ? m.asks.filter(Boolean) : [], runs = running.filter((p) => p.markId === m.id);
+      const asks = shownAsks(m), runs = running.filter((p) => p.markId === m.id);
       if (m.note == null && !asks.length && !runs.length) return;
       const side = m.side === 'left' ? 'left' : 'right';
       const chain = { m, k: k + 1, rects: (m.rects || []).map((r) => ({ x: G + r.x * u, y: r.y * u, w: r.w * u, h: r.h * u })), boxes: [] };
@@ -1227,8 +1279,7 @@ export default class PaperView extends React.Component {
     const shaped = model.units.filter((unit) => unit.boxes.length).map((unit) => {
       const p = unit.parent;
       if (p) {
-        const fromRight = p.left + p.width / 2 < mid;
-        for (const b of unit.boxes) b.left = fromRight ? p.left + p.width - b.width : p.left;
+        for (const b of unit.boxes) { b.left = hangLeft(p.left, p.width, b.width, mid); b.from = p; }
         return { unit, want: p.top + p.height + BOX_GAP };
       }
       for (const b of unit.boxes) b.left = unit.side === 'left' ? G - SIDE_GAP - b.width : G + pageW + SIDE_GAP;
@@ -1312,7 +1363,7 @@ export default class PaperView extends React.Component {
   }
 
   // An answer's box: the grip, the question in grey and the model, the answer (scrolling inside past 40% of the pane's
-  // height), then Continue in workspace, Copy, Delete and Collapse. Collapsed it is one line, "Bart ›".
+  // height), then Continue in workspace, Copy, Delete (⌘Z brings it back) and Collapse. Collapsed it is one line, "Bart ›".
   askBox(m, a, page) {
     const box = document.createElement('div');
     box.dataset.box = 'ask'; box.dataset.boxMark = m.id; box.dataset.ask = String(a.id || '');
@@ -1353,14 +1404,16 @@ export default class PaperView extends React.Component {
     const say = (words, back) => { act.textContent = words; setTimeout(() => { if (act.isConnected) act.textContent = back; }, 1400); };
     if (what === 'copy') { if (this.props.onCopyText) this.props.onCopyText(a.answer || ''); say('Copied', 'Copy'); return; }
     if (what === 'continue') {
-      if (this.props.onContinueAsk) this.props.onContinueAsk({ markId: m.id, page, quote: m.text || '', question: a.question || '', answer: a.answer || '', foot: (a.meta && a.meta.foot) || '' });
+      if (this.props.onContinueAsk) this.props.onContinueAsk({ markId: m.id, page, quote: passageOf(this.marks, m), question: a.question || '', answer: a.answer || '', foot: (a.meta && a.meta.foot) || '' });
       say('Added', 'Continue in workspace');
       return;
     }
-    if (what === 'delete') m.asks = (m.asks || []).filter((x) => x !== a);
+    // Deleted, an answer is no longer drawn but stays one of the exchange's turns (./canvas.js exchangeOf), and ⌘Z brings it back.
+    if (what === 'delete') { a.deleted = true; this.undos.push({ page, markId: m.id, askId: a.id }); }
     else if (what === 'collapse') a.collapsed = true;
     else if (what === 'expand') a.collapsed = false;
     else return;
+    this.reframe(); // a box under a moved one that went, or changed width, may have held the desk wide
     this.renderMarks(page);
     this.scheduleSave();
   }
@@ -1407,6 +1460,9 @@ export default class PaperView extends React.Component {
     }
   }
 
+  // How many answers are being written for mark `id`: each is a box under its others (deskNeed).
+  runsOf(id) { return (Array.isArray(this.props.pendingAsks) ? this.props.pendingAsks : []).filter((p) => p && p.askId && p.markId === id).length; }
+
   // The answers being written for this pdf on a page.
   pendingOn(page) { return (Array.isArray(this.props.pendingAsks) ? this.props.pendingAsks : []).filter((p) => p && p.page === page && p.askId); }
 
@@ -1432,6 +1488,7 @@ export default class PaperView extends React.Component {
     const m = ((this.marks || {})[page] || []).find((x) => x && x.id === markId);
     if (!m || !entry) return false;
     if (!(m.asks || []).some((a) => a && a.id === entry.id)) m.asks = [...(m.asks || []), entry];
+    this.reframe(); // under a moved box it holds the desk wide, as its box being written did
     this.renderMarks(page);
     this.scheduleSave();
     return true;
@@ -1478,9 +1535,23 @@ export default class PaperView extends React.Component {
     let wr = s.wrap.getBoundingClientRect();
     b.left = (d.at.x - wr.left) / css - d.grabX;
     b.top = Math.max(-(this.tops[d.page - 1] || 0), (d.at.y - wr.top) / css - d.grabY);
-    const extra = { left: DESK_EDGE - (b.left - g.G), right: b.left + b.width + DESK_EDGE - g.G - g.pageW };
-    if ((extra.left > g.G || extra.right > g.R) && this.reframe(extra)) { wr = s.wrap.getBoundingClientRect(); b.left = (d.at.x - wr.left) / css - d.grabX; }
     this.arrange(d.page);
+    const extra = this.reach(d.page); // the box, and the answers that hang under it
+    if ((extra.left > g.G || extra.right > g.R) && this.reframe(extra)) {
+      wr = s.wrap.getBoundingClientRect(); b.left = (d.at.x - wr.left) / css - d.grabX;
+      this.arrange(d.page);
+    }
+  }
+  // How far past page n its moved boxes and those hanging under them reach as drawn, DESK_EDGE added → { left, right } px.
+  reach(n) {
+    const model = this.drawn[n], g = this.geo[n], out = { left: 0, right: 0 };
+    if (!model || !g) return out;
+    for (const x of model.boxes) {
+      if (x.how !== 'pos' && x.how !== 'hang') continue;
+      out.left = Math.max(out.left, DESK_EDGE - (x.left - g.G));
+      out.right = Math.max(out.right, x.left + x.width + DESK_EDGE - g.G - g.pageW);
+    }
+    return out;
   }
   // Held near an edge of the pane, the view scrolls that way and the box goes with it.
   dragTick() {
@@ -1688,14 +1759,15 @@ export default class PaperView extends React.Component {
     }
     if (ev.key === 'Escape') ta.blur();
   }
-  // Bart asked from a highlight's note: the passage, the note as it stands and the question go up (the Stage adds which
-  // pdf), with the mark's earlier answers as the turns, so a follow-up within half an hour resumes the same session. The
-  // note keeps what was typed and shows as text; the answer's box comes under it.
+  // Bart asked from a highlight's note: the passage (all of it, when the highlight is part of a selection across pages),
+  // the note as it stands and the question go up (the Stage adds which pdf), with the mark's earlier answers as the turns,
+  // deleted ones too while their session lasts (./canvas.js exchangeOf), so a follow-up within half an hour resumes the
+  // same session. The note keeps what was typed and shows as text; the answer's box comes under it.
   askFrom(ta, m, page, question) {
     m.note = ta.value;
     this.flushSave(this.props.onMarksChange);
     this.closeMention();
-    this.props.onAsk({ markId: m.id, page, quote: m.text || '', note: m.note, question, turns: turnsOf(m) });
+    this.props.onAsk({ markId: m.id, page, quote: passageOf(this.marks, m), note: m.note, question, turns: turnsOf(m) });
     if (this.editing === m.id) this.editing = null;
     ta.blur();
   }
@@ -1732,7 +1804,7 @@ export default class PaperView extends React.Component {
     const { title } = this.props;
     const { note, page, pages, pct } = this.state, off = this.state.off || NO_OFF;
     return (
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: title ? 12 : 0 }}>
+      <div ref={this.root} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: title ? 12 : 0 }}>
         <style>{LAYER_CSS}</style>
         {title ? (
           <>
@@ -1764,7 +1836,7 @@ export default class PaperView extends React.Component {
               <button type="button" className="hov-wash" aria-label="Zoom in" style={BAR_STEP} onClick={() => this.zoomStepBy(1)}>+</button>
               <span style={{ flex: 'none', width: 1, height: 16, margin: '0 4px', background: '#eaeaea' }} />
               <button type="button" className="hov-wash" title="The page in view, whole" style={BAR_FIT} onClick={() => this.fitPage(false)}>Fit page</button>
-              <button type="button" className="hov-wash" title="The page in view and every note and answer beside it" style={BAR_FIT} onClick={() => this.fitPage(true)}>Fit page + notes</button>
+              <button type="button" className="hov-wash" title="The page in view and every note and answer on the paper" style={BAR_FIT} onClick={() => this.fitPage(true)}>Fit page + notes</button>
             </div>
           ) : null}
         </div>

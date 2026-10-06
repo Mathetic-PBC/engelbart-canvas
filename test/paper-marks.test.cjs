@@ -306,3 +306,20 @@ test('placeHighlight: marks of two different groups stay apart, each keeping its
   const across = mark('x', [r(0.25, L(1), 0.3, 0.015)]);
   assert.deepEqual(placeHighlight([left, right], across).list.map((m) => m.id), ['l', 'r', 'x']);
 });
+
+test('passageOf: a highlight\'s own text; a part of a selection across pages, every part of its group in page order', async () => {
+  const { passageOf } = await load();
+  const plain = { id: 'p', text: 'Cohen\'s κ was 0.79', y: 0.2 };
+  const a = { id: 'a', group: 'g1', text: 'the model was\ntrained on ', y: 0.9, note: '@bart why?' };
+  const b = { id: 'b', group: 'g1', text: 'a dataset of 480 students', y: 0.05, note: null };
+  const c = { id: 'c', group: 'g1', text: ' and four deployments.', y: 0.04, note: null };
+  const other = { id: 'o', group: 'g2', text: 'elsewhere', y: 0.5 };
+  const marks = { 4: [c, other], 3: [b], 2: [plain, a] };
+  assert.equal(passageOf(marks, plain), 'Cohen\'s κ was 0.79', 'no group: as it was');
+  const whole = 'the model was\ntrained on\na dataset of 480 students\nand four deployments.';
+  assert.equal(passageOf(marks, a), whole, 'pages 2, 3 and 4, one line each, whichever part the note is on');
+  assert.equal(passageOf(marks, c), whole);
+  assert.equal(passageOf(marks, other), 'elsewhere');
+  assert.equal(passageOf({}, { id: 'x', group: 'g9', text: 'alone' }), 'alone', 'a group not among the marks: its own text');
+  assert.equal(passageOf(marks, null), '');
+});
