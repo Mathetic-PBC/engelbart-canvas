@@ -2,7 +2,9 @@
 
 // New versions (src/main/updates.cjs, 2026-09-28): electron-updater, the dialogs and the install command are faked.
 // MATH-43 (2026-10-05): the ad hoc download's percentage, the ready dialog (Restart to Update / Later), and Restart to
-// Update after the install command has stopped.
+// Update after the install command has stopped. Its follow-ups: Restart to Update from the menu or a banner asks about
+// terminal sessions as any quit does (only the ready dialog's has said already), and only Restart to Update leaves the
+// install command the reopen file that has it open the new version, so a plain quit after Later opens nothing.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -16,8 +18,9 @@ const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-updates-'));
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const DOWNLOADS = 'https://example.com/engelbart/';
 
-/** A packaged app whose package.json says `engelbart`, and everything around it. */
-function harness({ engelbart = { downloads: DOWNLOADS, developerId: false }, packaged = true, answers = [], found = null, env = {}, runningSessions } = {}) {
+/** A packaged app whose package.json says `engelbart`, and everything around it. `quit`: what requestQuit says (whether
+ * it goes on to quit), given what it was asked. */
+function harness({ engelbart = { downloads: DOWNLOADS, developerId: false }, packaged = true, answers = [], found = null, env = {}, runningSessions, quit = () => true } = {}) {
   const appPath = temp();
   fs.writeFileSync(path.join(appPath, 'package.json'), JSON.stringify({ name: 'engelbart', version: '0.1.0', ...(engelbart ? { engelbart } : {}) }));
   const logs = temp();
@@ -43,7 +46,7 @@ function harness({ engelbart = { downloads: DOWNLOADS, developerId: false }, pac
     dialog: { showMessageBox: async (_win, options) => { const shown = options || _win; dialogs.push(shown); return { response: answers.length ? answers.shift() : 1 }; } },
     getWindow: () => win,
     platform: 'darwin',
-    requestQuit: async (options) => { quits.push(options); },
+    requestQuit: async (options) => { quits.push(options); return quit(options); },
     onChange: (snapshot) => changes.push(snapshot),
     ...(runningSessions ? { runningSessions } : {}),
     env: { HOME: os.homedir(), ...env },
@@ -85,7 +88,7 @@ async function updating(options = {}) {
   const h = harness({ found: '0.2.0', ...options, answers: [0, ...(options.answers || [])] });
   await h.updates.check();
   await tick();
-  return { ...h, log: path.join(h.logs, 'update.log'), ready: (n = 0) => h.spawned[n].options.env.ENGELBART_READY_FILE };
+  return { ...h, log: path.join(h.logs, 'update.log'), ready: (n = 0) => h.spawned[n].options.env.ENGELBART_READY_FILE, reopen: (n = 0) => h.spawned[n].options.env.ENGELBART_REOPEN_FILE };
 }
 
 test('ad hoc: a new version is offered once per launch; Update runs the install command and shows how far its download is', async () => {
@@ -143,7 +146,7 @@ test('ad hoc: once the new version is ready the app asks, not quits; Restart to 
 });
 
 test('ad hoc: Later on the ready dialog leaves it ready, to be installed at the next quit; the banner\'s Later only hides the banner', async () => {
-  const { updates, dialogs, spawned, repeats, quits, changes, ready } = await updating({ answers: [1] });
+  const { updates, dialogs, spawned, repeats, quits, changes, ready, reopen } = await updating({ answers: [1] });
   fs.writeFileSync(ready(), '');
   repeats[0]();
   await tick();
@@ -158,10 +161,39 @@ test('ad hoc: Later on the ready dialog leaves it ready, to be installed at the 
   assert.deepEqual([updates.snapshot().state, updates.snapshot().dismissed, changes.length], ['ready', true, before + 1]);
   assert.equal(updates.menuItem().label, 'Restart to Update', 'the menu keeps it');
   assert.equal(quits.length, 0);
+  assert.equal(fs.existsSync(reopen()), false, 'Later: no reopen file, so the next quit installs it and opens nothing');
 
   updates.menuItem().click();
-  assert.deepEqual(quits, [{ update: true }], 'the install command still waits: the menu quits into it');
+  assert.deepEqual(quits, [{ update: false }], 'the install command still waits: the menu quits into it, asking about terminal sessions as any quit does');
   assert.equal(spawned.length, 1);
+});
+
+test('ad hoc: Restart to Update writes the reopen file the install command was given before it quits; a quit that does not go ahead removes it, as after Later', async () => {
+  let goesAhead = false;
+  const marked = []; // whether the reopen file was there each time requestQuit was asked
+  const h = await updating({ answers: [1], quit: () => { marked.push(fs.existsSync(h.reopen())); return goesAhead; } });
+  const { updates, spawned, repeats, quits, ready, reopen } = h;
+  assert.equal(path.dirname(reopen()), path.dirname(ready()), 'next to the ready file');
+  assert.equal(path.basename(reopen(), '.reopen'), path.basename(ready(), '.ready'), 'one name for the run');
+  assert.match(path.basename(reopen()), new RegExp(`^engelbart-update-${process.pid}-\\d+-\\d+\\.reopen$`));
+  fs.writeFileSync(ready(), '');
+  repeats[0]();
+  await tick();
+  assert.equal(fs.existsSync(reopen()), false, 'Later: none');
+
+  updates.menuItem().click(); // Cancel on the terminal-session question
+  await tick();
+  assert.deepEqual([quits, marked], [[{ update: false }], [true]]);
+  assert.equal(fs.existsSync(reopen()), false, 'the quit did not go ahead: removed');
+  assert.deepEqual([updates.snapshot().state, updates.menuItem().label], ['ready', 'Restart to Update'], 'still waiting for the next quit');
+
+  goesAhead = true;
+  assert.equal(updates.restart(), true); // a window's banner
+  await tick();
+  assert.deepEqual([quits, marked], [[{ update: false }, { update: false }], [true, true]]);
+  assert.equal(fs.existsSync(reopen()), true, 'quitting: left for the install command, to open the new version');
+  assert.equal(spawned.length, 1);
+  fs.unlinkSync(reopen());
 });
 
 test('ad hoc: the ready dialog says a restart ends the terminal sessions that are running', async () => {
@@ -179,12 +211,12 @@ test('ad hoc: Restart to Update while the install command waits quits into it, a
   repeats[0]();
   await tick();
   assert.equal(updates.restart(), true);
-  assert.deepEqual(quits, [{ update: true }]);
+  assert.deepEqual(quits, [{ update: false }], 'from a banner: the terminal-session question, as any quit');
   assert.equal(spawned.length, 1);
 });
 
 test('ad hoc: an install command stopped after it was ready leaves Restart to Update, which downloads again and then quits by itself', async () => {
-  const { updates, dialogs, spawned, repeats, quits, ready } = await updating({ answers: [1] });
+  const { updates, dialogs, spawned, repeats, quits, ready, reopen } = await updating({ answers: [1] });
   fs.writeFileSync(ready(), '');
   repeats[0]();
   await tick();
@@ -199,15 +231,49 @@ test('ad hoc: an install command stopped after it was ready leaves Restart to Up
   assert.equal(spawned.length, 2, 'the install command runs again');
   assert.deepEqual([updates.snapshot().state, updates.snapshot().version], ['installing', '0.2.0'], 'the banner shows the download again');
   assert.notEqual(ready(1), ready(0));
+  assert.notEqual(reopen(1), reopen(0));
+  assert.deepEqual([fs.existsSync(reopen(0)), fs.existsSync(reopen(1))], [false, true], 'the reopen file is the new run\'s');
   fs.writeFileSync(ready(1), '');
   repeats[1]();
   await tick();
-  assert.deepEqual(quits, [{ update: true }]);
+  assert.deepEqual(quits, [{ update: false }], 'from the menu: the terminal-session question comes now, once it is ready');
   assert.equal(dialogs.length, 2, 'Restart to Update was asked for already: no second dialog');
+  fs.unlinkSync(reopen(1));
+});
+
+test('ad hoc: the ready dialog\'s Restart to Update after the install command has stopped downloads again, then quits without the terminal-session question', async () => {
+  const { spawned, repeats, quits, ready, reopen } = await updating({ answers: [0] });
+  fs.writeFileSync(ready(), '');
+  repeats[0]();
+  spawned[0].child.emit('exit', 1); // stopped while the dialog was open
+  await tick();
+  assert.equal(spawned.length, 2, 'the install command runs again');
+  assert.equal(fs.existsSync(reopen(1)), true);
+  fs.writeFileSync(ready(1), '');
+  repeats[1]();
+  await tick();
+  assert.deepEqual(quits, [{ update: true }], 'the dialog said already');
+  fs.unlinkSync(reopen(1));
+});
+
+test('ad hoc: when the quit after a second run does not go ahead, its reopen file is removed', async () => {
+  const { updates, spawned, repeats, quits, ready, reopen } = await updating({ answers: [1], quit: () => false });
+  fs.writeFileSync(ready(), '');
+  repeats[0]();
+  await tick();
+  spawned[0].child.emit('exit', 1);
+  updates.restart();
+  assert.equal(fs.existsSync(reopen(1)), true);
+  fs.writeFileSync(ready(1), '');
+  repeats[1]();
+  await tick();
+  assert.deepEqual(quits, [{ update: false }]);
+  assert.equal(fs.existsSync(reopen(1)), false);
+  assert.equal(updates.snapshot().state, 'ready', 'it waits for the next quit');
 });
 
 test('ad hoc: Restart to Update whose second run fails before it is ready says why and goes back to idle', async () => {
-  const { updates, dialogs, spawned, repeats, quits, ready } = await updating({ answers: [1] });
+  const { updates, dialogs, spawned, repeats, quits, ready, reopen } = await updating({ answers: [1] });
   fs.writeFileSync(ready(), '');
   repeats[0]();
   await tick();
@@ -218,6 +284,7 @@ test('ad hoc: Restart to Update whose second run fails before it is ready says w
   assert.equal(updates.snapshot().state, 'idle');
   assert.equal(dialogs.at(-1).message, 'Engelbart 0.2.0 could not be installed');
   assert.equal(quits.length, 0);
+  assert.equal(fs.existsSync(reopen(1)), false, 'no reopen file left behind');
   spawned[0].child.emit('error', new Error('late'));
   assert.equal(dialogs.at(-1).message, 'Engelbart 0.2.0 could not be installed', 'the first run says nothing more');
 });

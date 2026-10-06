@@ -90,8 +90,9 @@ Updates…**. A new version is offered once per launch:
   signature never is, so **Update** runs the install command in the background. The app stays open while the new version
   downloads (a banner in each window shows how far it is) and is checked, then asks: **Restart to Update** quits, the
   app is replaced where it is and opens again; **Later** leaves the command waiting for as long as the app stays open,
-  and it is installed at the next quit. If the command was stopped meanwhile, Restart to Update downloads it again and
-  then restarts. If anything fails before it is ready, the app says why and stays as it was. The command's output:
+  and it is installed at the next quit, which opens nothing. Restart to Update from the menu or a banner asks first
+  when terminal sessions are running, as any quit does (Cancel is then as Later). If the command was stopped
+  meanwhile, Restart to Update downloads it again and then restarts. If anything fails before it is ready, the app says why and stays as it was. The command's output:
   `~/Library/Logs/Engelbart/update.log`.
 - **Developer ID** (once signed): electron-updater downloads it in the background and installs it when the app quits;
   **Restart Now** does it at once.

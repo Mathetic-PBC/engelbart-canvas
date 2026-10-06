@@ -16,8 +16,10 @@
 # Engelbart when it updates itself (src/main/updates.cjs): ENGELBART_WAIT_PID (the running app, which
 # this waits for once the new version is ready, for as long as it stays open: Later in the app means the next quit,
 # however many hours away), ENGELBART_APP_PATH (where that app is), ENGELBART_READY_FILE (created at that moment, so
-# the app can ask to restart). ENGELBART_INSTALL_DIR puts it in that folder instead; ENGELBART_NO_OPEN=1 leaves it
-# closed afterwards.
+# the app can ask to restart), ENGELBART_REOPEN_FILE (the app creates it for Restart to Update: the new version is
+# opened only if it is there once installed, and this removes it; a plain quit after Later installs it and opens
+# nothing). Run by hand (no ENGELBART_WAIT_PID), it opens Engelbart afterwards as before. ENGELBART_INSTALL_DIR puts
+# it in that folder instead; ENGELBART_NO_OPEN=1 leaves it closed afterwards either way.
 
 set -euo pipefail
 
@@ -29,7 +31,10 @@ MIN_MACOS=13
 work=""
 ready=""
 installed=""
-cleanup() { if [ -n "$work" ]; then rm -rf "$work"; fi; }
+cleanup() {
+  if [ -n "$work" ]; then rm -rf "$work"; fi
+  if [ -n "$WAIT_PID" ] && [ -n "${ENGELBART_REOPEN_FILE:-}" ]; then rm -f "$ENGELBART_REOPEN_FILE"; fi
+}
 trap cleanup EXIT
 
 say() { printf '%s\n' "$*"; }
@@ -39,7 +44,7 @@ fail() {
   # the app is still open and reports the failure itself.)
   if [ -n "$WAIT_PID" ] && [ -n "$ready" ] && [ -z "$installed" ] && [ -n "${ENGELBART_APP_PATH:-}" ] && [ -d "$ENGELBART_APP_PATH" ]; then
     wait_for_exit 120 || true
-    open "$ENGELBART_APP_PATH" || true
+    if should_open; then open "$ENGELBART_APP_PATH" || true; fi
   fi
   exit 1
 }
@@ -54,6 +59,17 @@ wait_for_exit() {
     waited=$((waited + 1))
   done
   return 0
+}
+
+# Whether to open Engelbart now it is done. Run by the app (ENGELBART_WAIT_PID): only if it quit for Restart to Update,
+# which leaves ENGELBART_REOPEN_FILE (taken here); by hand: always. ENGELBART_NO_OPEN=1: never.
+should_open() {
+  local asked=1
+  if [ -n "$WAIT_PID" ]; then
+    asked=""
+    if [ -n "${ENGELBART_REOPEN_FILE:-}" ] && [ -f "$ENGELBART_REOPEN_FILE" ]; then asked=1; rm -f "$ENGELBART_REOPEN_FILE"; fi
+  fi
+  [ -n "$asked" ] && [ "${ENGELBART_NO_OPEN:-}" != 1 ]
 }
 
 [ "$(uname -s)" = Darwin ] || fail "this installer is for macOS."
@@ -119,4 +135,4 @@ installed=1
 xattr -dr com.apple.quarantine "$dest/$APP" 2>/dev/null || true
 
 say "Engelbart ${version} is installed in ${dest}."
-if [ "${ENGELBART_NO_OPEN:-}" != 1 ]; then open "$dest/$APP"; fi
+if should_open; then open "$dest/$APP"; fi

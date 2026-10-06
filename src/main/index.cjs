@@ -169,10 +169,11 @@ function runningSessionCount() {
   return manager ? manager.list().filter((entry) => entry.status === 'running').length : 0;
 }
 
-// `update`: Restart to Update (updates.cjs), whose dialog has said already that terminal sessions end; it quits without
-// asking again.
+// `update`: Restart to Update from the ready dialog (updates.cjs), which has said already that terminal sessions end; it
+// quits without asking again (from the menu or a banner it asks, as any quit does). True once it goes on to quit; false
+// when it does not: a quit already under way, Cancel, or a shutdown that failed.
 async function requestQuit({ update = false } = {}) {
-  if (quitPending || quitReady) return;
+  if (quitPending || quitReady) return false;
   quitPending = true;
   const runningCount = update ? 0 : runningSessionCount();
   if (runningCount > 0) {
@@ -196,7 +197,7 @@ async function requestQuit({ update = false } = {}) {
       : await dialog.showMessageBox(options);
     if (result.response !== 0) {
       quitPending = false;
-      return;
+      return false;
     }
   }
   saveWindows(true); // every window, as it is now, before any closes
@@ -217,10 +218,11 @@ async function requestQuit({ update = false } = {}) {
   } catch (error) {
     quitPending = false;
     dialog.showErrorBox('Unable to shut down cleanly', error.message);
-    return;
+    return false;
   }
   quitReady = true;
   app.quit();
+  return true;
 }
 
 // What a Build's run step opens (build/manager.cjs showRunnable, asked from a card in a window): a UI's Stage tab in that

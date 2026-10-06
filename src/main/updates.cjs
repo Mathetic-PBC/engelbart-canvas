@@ -12,9 +12,12 @@
 //                 (scripts/install-mac.sh) in the background while the app stays open, its download shown in every
 //                 window (ui/UpdateBanner.jsx) and on the Dock. Once the new version is downloaded and checked the app
 //                 asks to restart (MATH-43): Restart to Update quits, the app is replaced where it is and opens again;
-//                 Later leaves the command waiting for as long as the app stays open, to install it at the next quit.
-//                 Restart to Update after the command has stopped (it was killed) runs it again, and the app quits by
-//                 itself once that one is ready. The command's output: ~/Library/Logs/Engelbart/update.log.
+//                 Later leaves the command waiting for as long as the app stays open, to install it at the next quit,
+//                 which opens nothing (only Restart to Update leaves the command the file that says to open it again).
+//                 Restart to Update from the menu or a banner asks about running terminal sessions, as any quit does;
+//                 the ready dialog has said already. Restart to Update after the command has stopped (it was killed)
+//                 runs it again, and the app quits by itself once that one is ready. The command's output:
+//                 ~/Library/Logs/Engelbart/update.log.
 //
 // Each version is offered once per launch; Later leaves it until the next. Nothing runs in a checkout (`npm start`),
 // in a build made without a download folder, with ENGELBART_UPDATES=off, or off the Mac (a Windows build is not set up). For scripted runs only: a folder on this
@@ -45,6 +48,8 @@ function releaseInfo(appPath) {
 
 /** The .app this process runs from (…/Engelbart.app/Contents/MacOS/Engelbart). */
 const bundleOf = (execPath) => path.resolve(path.dirname(execPath), '..', '..');
+
+const unlink = (file) => { try { fs.unlinkSync(file); } catch { /* gone */ } };
 
 /** The last lines the install command wrote, for a dialog. */
 function lastLines(file, count = 3) {
@@ -83,8 +88,8 @@ function createUpdates({ app, dialog, getWindow, requestQuit, onChange = () => {
   let state = 'idle'; // idle | checking | installing | ready (downloaded, or the install command waits for the quit)
   let available = null; // the newer version, once seen
   let manualCheck = false; // Check for Updates… offers what it finds itself
-  let run = null; // ad hoc: the install command started last, { version, alive }
-  let runs = 0; // how many have started, for each its own ready file
+  let run = null; // ad hoc: the install command started last, { version, alive, reopen, warned }
+  let runs = 0; // how many have started, for each its own ready and reopen files
   let percent = null; // how much of it curl has downloaded (whole, 0–100), once it says
   let dismissed = false; // Later on a window's banner: hidden until the state changes
 
@@ -100,12 +105,16 @@ function createUpdates({ app, dialog, getWindow, requestQuit, onChange = () => {
   const snapshot = () => ({ enabled: !!info, state, available, version: (run && run.version) || available, percent: state === 'installing' ? percent : null, dismissed });
 
   /** Ad hoc: the install command, in the background. When it says the new version is ready the app asks to restart, or,
-   * `quitWhenReady` (Restart to Update ran it again), quits. */
-  function runInstaller(version, { quitWhenReady = false } = {}) {
+   * `quitWhenReady` (Restart to Update ran it again), quits; `warned`: that Restart to Update was the ready dialog's.
+   * The command opens the new version once it is installed only if its reopen file is there then: Restart to Update
+   * writes it, and a quit that does not go ahead removes it. */
+  function runInstaller(version, { quitWhenReady = false, warned = false } = {}) {
     const logs = app.getPath('logs');
     fs.mkdirSync(logs, { recursive: true });
     const log = path.join(logs, 'update.log');
-    const ready = path.join(os.tmpdir(), `engelbart-update-${process.pid}-${Date.now()}-${(runs += 1)}.ready`);
+    const base = path.join(os.tmpdir(), `engelbart-update-${process.pid}-${Date.now()}-${(runs += 1)}`);
+    const ready = `${base}.ready`;
+    const reopen = `${base}.reopen`;
     const out = fs.openSync(log, 'w');
     let child;
     try {
@@ -113,12 +122,12 @@ function createUpdates({ app, dialog, getWindow, requestQuit, onChange = () => {
       child = spawnImpl('/bin/bash', ['-c', 'script=$(mktemp "${TMPDIR:-/tmp}/engelbart-install.XXXXXX") && curl -fsSL --retry 2 --connect-timeout 20 -o "$script" "${ENGELBART_DOWNLOADS}install.sh" && exec /bin/bash "$script"'], {
         detached: true, // it outlives the app, which it replaces
         stdio: ['ignore', out, out],
-        env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: env.HOME || os.homedir(), TMPDIR: env.TMPDIR || os.tmpdir(), LANG: 'en_US.UTF-8', ENGELBART_DOWNLOADS: info.downloads, ENGELBART_WAIT_PID: String(process.pid), ENGELBART_APP_PATH: bundleOf(process.execPath), ENGELBART_READY_FILE: ready, ...(env.ENGELBART_NO_OPEN === '1' ? { ENGELBART_NO_OPEN: '1' } : {}) },
+        env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: env.HOME || os.homedir(), TMPDIR: env.TMPDIR || os.tmpdir(), LANG: 'en_US.UTF-8', ENGELBART_DOWNLOADS: info.downloads, ENGELBART_WAIT_PID: String(process.pid), ENGELBART_APP_PATH: bundleOf(process.execPath), ENGELBART_READY_FILE: ready, ENGELBART_REOPEN_FILE: reopen, ...(env.ENGELBART_NO_OPEN === '1' ? { ENGELBART_NO_OPEN: '1' } : {}) },
       });
     } finally {
       fs.closeSync(out);
     }
-    const current = { version, alive: true };
+    const current = { version, alive: true, reopen, warned };
     run = current;
     percent = null;
     set('installing');
@@ -136,12 +145,13 @@ function createUpdates({ app, dialog, getWindow, requestQuit, onChange = () => {
       try { fs.unlinkSync(ready); } catch { /* gone */ }
       set('ready');
       progress(-1);
-      if (quitWhenReady) void requestQuit({ update: true });
+      if (quitWhenReady) void quitInto(current, current.warned).catch(() => {});
       else void askRestart(version).catch(() => {});
     }, READY_POLL_MS);
     // Whether it still runs, whatever the state: once ready, Restart to Update needs it waiting for the quit.
     child.on('error', (error) => {
       current.alive = false;
+      unlink(reopen); // no command left to read it
       if (run !== current || state !== 'installing') return;
       clearRepeat(poll);
       progress(-1);
@@ -150,6 +160,7 @@ function createUpdates({ app, dialog, getWindow, requestQuit, onChange = () => {
     });
     child.on('exit', (code) => {
       current.alive = false;
+      unlink(reopen); // no command left to read it
       // Ready: it went on to replace the app, or it was stopped, and Restart to Update runs it again.
       if (run !== current || state !== 'installing') return;
       clearRepeat(poll);
@@ -175,17 +186,32 @@ function createUpdates({ app, dialog, getWindow, requestQuit, onChange = () => {
         : 'Engelbart quits and opens again with it. Later, it is installed the next time you quit. Your projects and notes stay as they are.',
       noLink: true,
     });
-    if (response === 0) restart();
+    if (response === 0) restart({ warned: true });
   }
 
-  /** Restart to Update (the ready dialog, the menu, a window's banner). Ad hoc: the install command waiting for the quit
-   * gets it; one that has stopped since runs again, its download shown, and the app quits by itself once it is ready. A
-   * run that fails before then says why and goes back to idle, as any does. */
-  function restart() {
+  /** Ad hoc: quits into the install command `current`, whose reopen file Restart to Update has written. A quit that does
+   * not go ahead (Cancel on the terminal-session question, a quit already under way) takes it away again, and it is as if
+   * Later had been chosen: installed at the next quit, opening nothing. */
+  async function quitInto(current, warned) {
+    let quitting = false;
+    try {
+      quitting = await requestQuit({ update: warned });
+    } finally {
+      if (!quitting) unlink(current.reopen);
+    }
+  }
+
+  /** Restart to Update (the ready dialog, `warned`, which said already that terminal sessions end; the menu; a window's
+   * banner). Ad hoc: the install command waiting for the quit gets it; one that has stopped since runs again, its
+   * download shown, and the app quits by itself once it is ready. A run that fails before then says why and goes back to
+   * idle, as any does. Either way the command is told to open the new version once it is installed. */
+  function restart({ warned = false } = {}) {
     if (!info || state !== 'ready') return false;
-    if (info.developerId) updater.quitAndInstall();
-    else if (run && run.alive) void requestQuit({ update: true });
-    else runInstaller((run && run.version) || available, { quitWhenReady: true });
+    if (info.developerId) { updater.quitAndInstall(); return true; }
+    const waiting = run && run.alive;
+    if (!waiting) runInstaller((run && run.version) || available, { quitWhenReady: true, warned });
+    try { fs.writeFileSync(run.reopen, ''); } catch { /* it installs, and opens nothing */ }
+    if (waiting) void quitInto(run, warned).catch(() => {});
     return true;
   }
 
