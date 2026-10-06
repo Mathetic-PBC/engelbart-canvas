@@ -1,7 +1,7 @@
 import React from 'react';
 import { api, errorMessage } from '../api.js';
 import { KIND } from '../ui/Icons.jsx';
-import { githubRows } from '../model/github.js';
+import { githubRows, typedRepo } from '../model/github.js';
 import { useGithubStatus } from './useGithubStatus.js';
 
 // The + menu stays open while authorization happens in the default browser.
@@ -56,7 +56,10 @@ export default function GithubPane({ library, inRail, onBack, onPick, busy }) {
   }, [connected, load]);
   React.useEffect(() => { if (connected && fieldRef.current) setTimeout(() => fieldRef.current && fieldRef.current.focus({ preventScroll: true }), 0); }, [connected]);
 
-  const rows = connected && list ? githubRows({ repos: list.repos, query: q, library, inRail }) : [];
+  // The App's repositories that match, then any other repository typed or pasted in by its name or address (a public one).
+  const listed = connected && list ? githubRows({ repos: list.repos, query: q, library, inRail }) : [];
+  const typed = connected ? typedRepo({ query: q, rows: listed, library, inRail }) : null;
+  const rows = typed ? [...listed, typed] : listed;
   const at = rows.length ? Math.min(idx, rows.length - 1) : -1;
   const pick = (entry) => { if (entry && !busy) onPick(entry); };
   const onKey = (event) => {
@@ -105,16 +108,17 @@ export default function GithubPane({ library, inRail, onBack, onPick, busy }) {
         <>
           <div className="rail-search rail-field" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 10px', borderRadius: 6, background: '#fafafa', border: '1px solid #eaeaea', transition: 'box-shadow 120ms' }}>
             <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#171717" strokeWidth="2.6" strokeLinecap="round" style={{ flex: 'none' }}><circle cx="10" cy="10" r="6.5" /><line x1="15" y1="15" x2="21" y2="21" /></svg>
-            <input ref={fieldRef} value={q} onChange={(event) => { setQ(event.target.value); setIdx(0); }} onKeyDown={onKey} readOnly={busy} placeholder="Search" aria-label="Search repositories" data-github-search="1" spellCheck={false} style={{ flex: 1, minWidth: 0, padding: '6px 0', border: 0, background: 'transparent', ...text(13), opacity: busy ? 0.5 : 1 }} />
+            <input ref={fieldRef} value={q} onChange={(event) => { setQ(event.target.value); setIdx(0); }} onKeyDown={onKey} readOnly={busy} placeholder="Search or paste a repo" aria-label="Search repositories" data-github-search="1" spellCheck={false} style={{ flex: 1, minWidth: 0, padding: '6px 0', border: 0, background: 'transparent', ...text(13), opacity: busy ? 0.5 : 1 }} />
           </div>
           <div data-github-repos="1" style={{ maxHeight: 'min(340px, calc(100vh - 320px))', overflowY: 'auto', margin: '6px -4px 0' }}>
             {!list && <div style={{ padding: '8px 10px', ...text(13, '#8f8f8f') }}>…</div>}
             {rows.map((entry, i) => (
-              <button key={entry.repo.id} type="button" data-github-repo={entry.repo.fullName} disabled={busy} onMouseDown={(event) => event.preventDefault()} onMouseEnter={() => { if (idx !== i) setIdx(i); }} onClick={() => pick(entry)} title={entry.repo.description || entry.repo.fullName} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: 0, borderRadius: 6, background: i === at ? '#f2f2f2' : 'transparent', textAlign: 'left', cursor: 'pointer' }}>
+              <button key={entry.repo.id || entry.repo.url} type="button" data-github-repo={entry.repo.fullName} disabled={busy} onMouseDown={(event) => event.preventDefault()} onMouseEnter={() => { if (idx !== i) setIdx(i); }} onClick={() => pick(entry)} title={entry.repo.description || entry.repo.fullName} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: 0, borderRadius: 6, background: i === at ? '#f2f2f2' : 'transparent', textAlign: 'left', cursor: 'pointer' }}>
                 <GhGlyph size={13} color="#4d4d4d" />
                 <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...text(13) }}>
                   <span style={{ color: '#8f8f8f' }}>{entry.repo.owner}/</span>{entry.repo.fullName.slice(entry.repo.owner.length + 1)}
                 </span>
+                {entry.typed && !entry.here && <span style={{ flex: 'none', ...text(12, '#8f8f8f') }}>Add</span>}
                 {entry.repo.private && <span aria-label="Private" style={{ flex: 'none', display: 'flex', color: '#8f8f8f' }}>{LOCK}</span>}
                 {entry.here && <span style={{ flex: 'none', font: '500 9px/1 var(--font-sans)', letterSpacing: '1.2px', textTransform: 'uppercase', color: '#8f8f8f' }}>here</span>}
               </button>

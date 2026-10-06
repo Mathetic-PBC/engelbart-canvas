@@ -26,3 +26,17 @@ test('the GitHub list: every word against name and description; a repository the
   assert.equal(heldRow(repo('9', 'Mathetic-PBC/renamed-since'), library).id, 'a', 'the GitHub id wins over a changed name');
   assert.equal(heldRow(repo('1', 'someone/else'), library), null);
 });
+
+test('a repository typed or pasted into the search is a row to add, unless the list has it already (2026-10-06)', async () => {
+  const { typedRepo } = await load();
+  for (const [query, url] of [['anthropics/claude-code', 'https://github.com/anthropics/claude-code'], ['https://github.com/anthropics/claude-code.git', 'https://github.com/anthropics/claude-code'], ['github.com/a/b/tree/main', 'https://github.com/a/b'], ['git@github.com:a/b.git', 'https://github.com/a/b']]) {
+    const entry = typedRepo({ query });
+    assert.equal(entry.repo.url, url, query);
+    assert.equal(entry.typed, true);
+    assert.equal(entry.repo.id, null);
+  }
+  for (const query of ['', 'engelbart', 'a/..', 'one two/three']) assert.equal(typedRepo({ query }), null, query);
+  assert.equal(typedRepo({ query: 'mathetic-pbc/landing', rows: [{ repo: repo('3', 'Mathetic-PBC/landing') }] }), null, 'listed already');
+  const held = typedRepo({ query: 'vectifyai/pageindex', library: [{ id: 'b', url: 'https://github.com/VectifyAI/PageIndex' }], inRail: (id) => id === 'b' });
+  assert.deepEqual([held.row.id, held.here], ['b', true], 'the library\'s row, on the rail');
+});
