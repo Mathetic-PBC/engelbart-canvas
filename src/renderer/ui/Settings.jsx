@@ -6,30 +6,37 @@
 import React from 'react';
 import { api, errorMessage } from '../api.js';
 import ModelGrid, { Caret, EASE } from '../post-its/ModelGrid.jsx';
-import { AGENT_ROWS, ADVANCED_LEVELS, shownProviders, defaultProvider, defaultStep, cellModels, patchOf, stepLabel, lastPick } from '../model/intelligence.js';
+import { AGENT_ROWS, ADVANCED_LEVELS, shownProviders, savedProvider, defaultProvider, defaultStep, cellModels, patchOf, stepLabel, lastPick, followedPick } from '../model/intelligence.js';
 
 const HEAD = { padding: '6px 10px', font: '500 9px/1 var(--font-sans)', letterSpacing: '1.6px', textTransform: 'uppercase', color: '#8f8f8f' };
 const text = (size, color = '#171717', weight = 400) => ({ font: `${weight} ${size}px/1.4 var(--font-sans)`, color });
 const LINK = { padding: 0, border: 0, background: 'transparent', cursor: 'pointer', ...text(12, 'var(--acc)', 500) };
 const LABEL_WIDTH = 104;
 
-/** A choice of one provider among those offered (Claude Code, Codex); one alone is named, not offered. */
-function ProviderChoice({ label, providers, names, value, onPick, field }) {
+/**
+ * A choice of one provider among those offered (Claude Code, Codex); one alone is named, not offered. `value` is the one
+ * runs use, `saved` the one saved: they differ while the saved one's CLI cannot run (`cli`, why), which is said under it.
+ */
+function ProviderChoice({ label, providers, names, value, saved, cli, onPick, field }) {
+  const moved = saved !== value && names[saved] && cli[saved];
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 10px' }}>
-      <span style={{ flex: 1, minWidth: 0, ...text(12.5, '#4d4d4d') }}>{label}</span>
-      <div role="radiogroup" aria-label={label} data-settings-provider={field} style={{ flex: 'none', display: 'flex', padding: 2, border: '1px solid #eaeaea', borderRadius: 8, background: '#fafafa' }}>
-        {providers.map((id) => {
-          const on = id === value;
-          return (
-            <button key={id} type="button" role="radio" aria-checked={on} data-provider={id} disabled={providers.length < 2} onClick={() => { if (!on) onPick(id); }}
-              style={{ padding: '4px 10px', border: 0, borderRadius: 6, background: on ? '#fff' : 'transparent', boxShadow: on ? '0 0 0 1px #eaeaea' : 'none', cursor: on || providers.length < 2 ? 'default' : 'pointer', ...text(12, on ? '#171717' : '#8f8f8f', on ? 500 : 400), transition: 'background 120ms, color 120ms' }}>
-              {names[id]}
-            </button>
-          );
-        })}
+    <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 10px' }}>
+        <span style={{ flex: 1, minWidth: 0, ...text(12.5, '#4d4d4d') }}>{label}</span>
+        <div role="radiogroup" aria-label={label} data-settings-provider={field} style={{ flex: 'none', display: 'flex', padding: 2, border: '1px solid #eaeaea', borderRadius: 8, background: '#fafafa' }}>
+          {providers.map((id) => {
+            const on = id === value, still = id === saved || providers.length < 2;
+            return (
+              <button key={id} type="button" role="radio" aria-checked={on} data-provider={id} disabled={providers.length < 2} onClick={() => { if (!still) onPick(id); }}
+                style={{ padding: '4px 10px', border: 0, borderRadius: 6, background: on ? '#fff' : 'transparent', boxShadow: on ? '0 0 0 1px #eaeaea' : 'none', cursor: still ? 'default' : 'pointer', ...text(12, on ? '#171717' : '#8f8f8f', on ? 500 : 400), transition: 'background 120ms, color 120ms' }}>
+                {names[id]}
+              </button>
+            );
+          })}
+        </div>
       </div>
-    </div>
+      {moved && <div data-saved-provider={field} style={{ padding: '0 10px 4px', textAlign: 'right', ...text(11, '#8f8f8f') }}>Saved: {names[saved]} ({cli[saved]})</div>}
+    </>
   );
 }
 
@@ -69,12 +76,15 @@ function Row({ settings, providers, label, agent, level = 'standard', home, edit
   );
 }
 
-/** "Using your last pick: Opus High · Use default" under a row whose place starts on a pick by hand instead of its default. */
-function LastPick({ settings, place, lead, onForget }) {
-  const pick = lastPick(settings, place);
+/**
+ * "Using your last pick: Opus High · Use default" under a row whose place starts on a pick by hand instead of its default
+ * (`pick`, null when it does not). `row` names the row when it is not the place's own: @brainstorm's and @discover's,
+ * which @bart's pick moves to its provider.
+ */
+function LastPick({ pick, place, row = place, lead, onForget }) {
   if (!pick) return null;
   return (
-    <div data-last-pick={place} style={{ display: 'flex', alignItems: 'baseline', gap: 6, padding: `0 10px 4px ${LABEL_WIDTH + 16}px`, ...text(12, '#8f8f8f') }}>
+    <div data-last-pick={row} style={{ display: 'flex', alignItems: 'baseline', gap: 6, padding: `0 10px 4px ${LABEL_WIDTH + 16}px`, ...text(12, '#8f8f8f') }}>
       <span style={{ minWidth: 0 }}>{lead}: <span style={{ color: '#4d4d4d' }}>{pick.label}</span></span>
       <span aria-hidden="true">·</span>
       <button type="button" data-use-default={place} onClick={() => onForget(place)} style={{ ...LINK, flex: 'none' }}>Use default</button>
@@ -110,9 +120,10 @@ export function Intelligence({ initial = null }) {
   const row = (agent) => ({ settings, providers, agent, editing, onEdit: setEditing, onSave: save, home: agent === 'build' ? buildHome : bartHome });
   return (
     <div data-settings-intelligence="1">
+      {settings.fileError && <div role="alert" data-models-file-error="1" style={{ margin: '0 10px 8px', padding: '6px 8px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fafafa', ...text(12, 'var(--red-600)') }}>{settings.fileError}</div>}
       <div style={{ padding: '0 10px 8px', ...text(12, '#8f8f8f') }}>What each agent starts on when its line picks nothing. A model picked by hand is used next time instead, until you set that default here again.</div>
-      <ProviderChoice field="bart" label="@bart, @brainstorm, @discover on" providers={providers} names={names} value={bartHome} onPick={(id) => save({ provider: id })} />
-      <ProviderChoice field="build" label="Build and post-its on" providers={providers} names={names} value={buildHome} onPick={(id) => save({ buildProvider: id })} />
+      <ProviderChoice field="bart" label="@bart, @brainstorm, @discover on" providers={providers} names={names} value={bartHome} saved={savedProvider(settings, 'bart')} cli={settings.cli} onPick={(id) => save({ provider: id })} />
+      <ProviderChoice field="build" label="Build and post-its on" providers={providers} names={names} value={buildHome} saved={savedProvider(settings, 'build')} cli={settings.cli} onPick={(id) => save({ buildProvider: id })} />
       <div style={{ display: 'grid', gridTemplateColumns: `${LABEL_WIDTH}px repeat(${providers.length}, minmax(0, 1fr))`, columnGap: 6, padding: '10px 10px 2px' }}>
         <span />
         {providers.map((id) => (
@@ -125,8 +136,9 @@ export function Intelligence({ initial = null }) {
       {AGENT_ROWS.map(({ id, name, place, also }) => (
         <React.Fragment key={id}>
           <Row {...row(id)} label={name} />
-          {place && <LastPick settings={settings} place={place} lead="Using your last pick" onForget={forget} />}
-          {also && <LastPick settings={settings} place={also} lead="Post-its use your last pick" onForget={forget} />}
+          {place && <LastPick pick={lastPick(settings, place)} place={place} lead="Using your last pick" onForget={forget} />}
+          {also && <LastPick pick={lastPick(settings, also)} place={also} lead="Post-its use your last pick" onForget={forget} />}
+          {(id === 'brainstorm' || id === 'discover') && <LastPick pick={followedPick(settings)} place="bart" row={id} lead="Using your last pick" onForget={forget} />}
           {id === 'discover' && (
             <>
               <button type="button" data-settings-advanced="1" aria-expanded={advanced} onClick={() => { setAdvanced((value) => !value); if (editing && editing.agent === 'discover' && editing.level !== 'standard') setEditing(null); }}

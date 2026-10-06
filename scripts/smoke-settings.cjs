@@ -3,8 +3,9 @@
 // npm run build && npx electron scripts/smoke-settings.cjs
 // Runs the real app, hidden, against disposable data and the fake @bart, and drives Settings (src/renderer/ui/Settings.jsx,
 // 2026-10-06, MATH-53) with real (synthetic) input: a pick by hand on an @bart line, then the gear, its "Using your last
-// pick" line, a default set in a cell's grid, the next question on it with no restart; a pick by hand after that winning,
-// "Use default", Build's default provider, @discover's Advanced, Escape and a press outside, and in test mode the Test data
+// pick" line, a default set in a cell's grid, Fable then Sonnet keeping the ladder whole, the next question on it with no
+// restart; a pick by hand after that winning, a pick on Codex that @brainstorm and @discover follow and a save of Claude
+// Code's default leaves alone, "Use default", Build's default provider, @discover's Advanced, Escape and a press outside, and in test mode the Test data
 // section's Reset everything… (confirmed by ENGELBART_CONFIRM_ALL). ENGELBART_SETTINGS_SHOTS=<dir> saves pictures.
 const { app, BrowserWindow } = require('electron');
 const assert = require('node:assert/strict');
@@ -118,6 +119,14 @@ app.whenReady().then(async () => {
     await until(async () => !(await has(wc, '[data-last-pick="bart"]')), 'the last pick forgotten');
     assert.equal(file(CHOICES_FILE).bart, undefined);
     assert.match(await textOf(wc, '[data-settings-cell="bart:anthropic:standard"]'), /Sonnet Extra high/);
+    // Fable, then Sonnet: the ladder is the built-in one from Sonnet up again, not Sonnet alone.
+    const MODEL = '[data-settings-grid="bart:anthropic:standard"] [aria-label="Model"] [role="option"]';
+    await press(wc, `${MODEL}:nth-child(3)`);
+    await until(() => file(MODELS_FILE).providers.anthropic.ladder[0].model === 'fable', 'Fable written');
+    assert.deepEqual(file(MODELS_FILE).providers.anthropic.ladder, [{ model: 'fable', effort: 'xhigh' }]);
+    await press(wc, `${MODEL}:nth-child(1)`);
+    await until(() => file(MODELS_FILE).providers.anthropic.ladder[0].model === 'sonnet', 'Sonnet written');
+    assert.deepEqual(file(MODELS_FILE).providers.anthropic.ladder, [{ model: 'sonnet', effort: 'xhigh' }, { model: 'opus', effort: 'high' }, { model: 'fable', effort: 'xhigh' }]);
     await key(wc, 'Escape');
     await until(async () => !(await has(wc, PANEL)), 'Escape closes the panel');
     await pause(200);
@@ -125,6 +134,21 @@ app.whenReady().then(async () => {
     assert.match(await ask(wc, '@bart after the save'), /Sonnet · xhigh/, 'the next question is on the saved default, with no restart');
     assert.match(await ask(wc, '@bart --fable --high picked again'), /Fable · high/);
     assert.match(await ask(wc, '@bart the pick wins again'), /Fable · high/, 'a pick by hand after the save wins');
+    // A pick on Codex: @brainstorm and @discover follow it there, and say so.
+    assert.match(await ask(wc, '@bart --astra --xhigh on Codex'), /Astra · xhigh/);
+    await press(wc, GEAR);
+    await until(() => has(wc, '[data-last-pick="brainstorm"]'), '@brainstorm follows the pick');
+    assert.match(await textOf(wc, '[data-last-pick="bart"]'), /Using your last pick: Astra Extra high/);
+    assert.match(await textOf(wc, '[data-last-pick="brainstorm"]'), /Using your last pick: Codex\s*·\s*Use default/);
+    assert.match(await textOf(wc, '[data-last-pick="discover"]'), /Using your last pick: Codex\s*·\s*Use default/);
+    // Claude Code's @bart default saved: the pick on Codex stays.
+    await press(wc, '[data-settings-cell="bart:anthropic:standard"]');
+    await press(wc, '[data-settings-grid="bart:anthropic:standard"] [aria-label="Effort"] [role="option"]:nth-child(3)');
+    await pause(300);
+    assert.deepEqual(file(CHOICES_FILE).bart, { provider: 'openai', model: 'astra', effort: 'xhigh' });
+    await shot(wc, '3-settings-followed');
+    await key(wc, 'Escape');
+    await until(async () => !(await has(wc, PANEL)), 'Escape closes the panel');
 
     /* ------------------------------------------------ Use default, Build's provider, Advanced, a press outside */
     await press(wc, GEAR);
@@ -139,7 +163,7 @@ app.whenReady().then(async () => {
     await until(() => has(wc, '[data-settings-cell="discover:anthropic:deep"]'), 'Advanced opens quick and deep');
     await press(wc, '[data-settings-cell="discover:openai:deep"]');
     await until(() => has(wc, '[data-settings-grid="discover:openai:deep"]'), 'deep\'s grid');
-    await shot(wc, '3-settings-advanced');
+    await shot(wc, '4-settings-advanced');
     await press(wc, '[data-settings-grid="discover:openai:deep"] [aria-label="Model"] [role="option"]:nth-child(2)'); // Sol
     await until(() => file(MODELS_FILE).discover.providers.openai.deep.model === 'sol', '@discover\'s deep level written');
     await click(wc, await spot(wc, `${ED} [data-line="0"] .t`));
@@ -154,7 +178,7 @@ app.whenReady().then(async () => {
     await pause(400);
     await press(wc, GEAR);
     await until(() => has(wc, '[data-settings-section="test"]'), 'the Test data section');
-    await shot(wc, '4-settings-test');
+    await shot(wc, '5-settings-test');
     const testRoot = path.join(root, '.engelbart', 'test');
     fs.writeFileSync(path.join(testRoot, 'marker'), 'x');
     await press(wc, '[data-settings-section="test"] [role="menuitem"]:nth-child(3)');
