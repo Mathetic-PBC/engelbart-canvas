@@ -50,11 +50,11 @@ const press = (element) => {
   return stopped;
 };
 
-test('every section but Archived has a + in its header, before Expand all, named for its section (MATH-44)', () => {
+test('every section but Archived has a + in its header, before the fold-all chevrons, named for its section (MATH-44)', () => {
   const { html } = render();
   assert.deepEqual(pluses().map((element) => [element.props['data-rail-section-add'], element.props['aria-label']]), [['Notes', 'Add to Notes'], ['Websites', 'Add to Websites'], ['GitHub', 'Add to GitHub'], ['Files', 'Add to Files'], ['Workspaces', 'Add to Sub-Workspaces']]);
   assert.ok(!/data-rail-section-add="Archived"/.test(html));
-  assert.match(html, /data-rail-section="Notes"[\s\S]*?data-rail-section-add="Notes"[\s\S]*?data-rail-fold-all="1"/, 'Notes\'s + comes before Expand all');
+  assert.match(html, /data-rail-section="Notes"[\s\S]*?data-rail-section-add="Notes"[\s\S]*?data-rail-fold-all="1"/, 'Notes\'s + comes before the chevrons');
   assert.match(html, /data-rail-add="1"[^>]*><button[^>]*aria-label="Add context"/, '"+ Add context" keeps its button, first in [data-rail-add]');
 });
 
@@ -71,4 +71,25 @@ test('a section\'s + stops its click; Notes, Sub-Workspaces and Files add at onc
 test('a section whose handler is missing has no + (MATH-44)', () => {
   render({ onPickRepo: undefined, onNewChild: undefined });
   assert.deepEqual(pluses().map((element) => element.props['data-rail-section-add']), ['Notes', 'Websites', 'Files']);
+});
+
+test('at rest the sidebar shows only the section names: a + shows on its header\'s hover, the fold-all chevrons on the library\'s (2026-10-06)', () => {
+  const { html } = render();
+  assert.equal(pluses().length, 5);
+  assert.ok(pluses().every((element) => /\brail-add\b/.test(element.props.className)), 'every + hides until its header is hovered');
+  const fold = elements.find((element) => element.props && element.props['data-rail-fold-all']);
+  assert.match(fold.props.className, /\brail-fold-all\b/);
+  assert.equal(fold.props['aria-label'], 'Expand all', 'every section starts closed, so the chevrons open them all');
+  assert.equal(fold.props.title, 'Expand all');
+  assert.doesNotMatch(html, />Expand all</, 'chevrons, not the words');
+  assert.match(html, /class="rail-section-head"/);
+  const css = require('node:fs').readFileSync(path.join(__dirname, '../src/renderer/styles.css'), 'utf8');
+  assert.match(css, /\.rail-add,\.rail-fold-all\{opacity:0;/);
+  assert.match(css, /\.rail-section-head:hover \.rail-add,\.rail-add:focus-visible,\.rail-add\[aria-expanded="true"\]\{opacity:1\}/, 'shown on hover, with the keyboard, and while its panel is open');
+  assert.match(css, /\[data-rail-library\]:hover \.rail-fold-all,\.rail-fold-all:focus-visible\{opacity:1\}/);
+});
+
+test('an Option-click on a section folds or opens them all, as Finder does (2026-10-06)', () => {
+  const source = require('node:fs').readFileSync(path.join(__dirname, '../src/renderer/workspace/Rail.jsx'), 'utf8');
+  assert.match(source, /onToggle=\{\(event\) => setOpened\(\(now\) => \(event && event\.altKey \? \(now\[section\.key\] \? \{\} : everyOpen\(\)\) : \{ \.\.\.now, \[section\.key\]: !now\[section\.key\] \}\)\)\}/);
 });
