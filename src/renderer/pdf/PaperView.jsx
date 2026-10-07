@@ -315,7 +315,7 @@ export default class PaperView extends React.Component {
       if (!(e.target.closest && e.target.closest('[data-pdf] [data-page]'))) return;
       if (e.target.closest('[data-box]')) return;
       this.pdfDown = { x: e.clientX, y: e.clientY };
-      if (!e.target.closest('textarea')) this.clearPending();
+      if (!e.target.closest('textarea')) this.keepPending();
       const tl = e.target.closest('[data-text-layer]');
       if (tl) tl.classList.add('selecting');
     };
@@ -1321,9 +1321,9 @@ export default class PaperView extends React.Component {
     const a = typeof document !== 'undefined' ? document.activeElement : null;
     if (a && a !== document.body && typeof a.blur === 'function') a.blur();
   }
-  // A click on blank space: the mark in focus and the pending selection put away. Nothing else.
+  // A click on blank space: the mark in focus put away, and the pending selection kept as a highlight (keepPending).
   blankClick() {
-    this.clearPending();
+    this.keepPending();
     if (this.focusId) this.focusMark(null);
   }
   // A double-click on blank space, a page's or the desk beside it: a free note there, with the caret in it.
@@ -1495,6 +1495,13 @@ export default class PaperView extends React.Component {
   }
   hidePending() { const host = this.host.current; if (host) host.querySelectorAll('[data-pending]').forEach((n) => n.remove()); }
   clearPending() { this.pendingSel = null; this.hidePending(); }
+  // A click away from a pending selection keeps it as a highlight with no note (David, 2026-10-07: it used to go). Escape
+  // still puts it away unkept, and Delete takes a kept one away again (markKey).
+  keepPending() {
+    const p = this.pendingSel;
+    if (p && p.parts && p.parts.length) this.addMark(p, null);
+    this.clearPending();
+  }
 
   // p carries pixel geometry from the current layout; the stored marks are in page units. A free note (`pos`) is p.page's
   // alone. A selection (`p.parts`) is one mark a part, on its own page (./marks.js partMarks): the parts of a selection

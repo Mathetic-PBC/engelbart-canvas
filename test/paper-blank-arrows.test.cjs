@@ -209,7 +209,7 @@ test('a drag from blank space pans the view; one from text is left to select', a
   }
 });
 
-test('a click on blank space writes no note: it puts the focus and a pending selection away; a double-click writes one, with the caret in it', async () => {
+test('a click on blank space writes no note: it puts the focus away (a pending selection with no parts keeps nothing); a double-click writes one, with the caret in it', async () => {
   const marks = { 1: [{ id: 'h', rects: [{ x: 50 / 612, y: 100 / 612, w: 100 / 612, h: 12 / 612 }], side: 'left', y: 100 / 612, note: 'n', text: 'x' }] };
   const { view, s, flush } = await viewer(marks);
   view.focusMark('h');
@@ -219,6 +219,14 @@ test('a click on blank space writes no note: it puts the focus and a pending sel
   assert.deepEqual(view.marks[1].map((m) => m.id), ['h'], 'no note');
   assert.equal(view.focusId, null, 'the focus put away');
   assert.equal(view.pendingSel, null, 'and the pending selection');
+  // A pending selection clicked away from is kept as a highlight with no note (2026-10-07).
+  view.pendingSel = { parts: [{ page: 1, rects: [{ x: 300, y: 300, w: 80, h: 12 }], width: 612, text: 'kept words', u: 612 }], text: 'kept words' };
+  view.onPanDown(press(s.tl, 700, 600));
+  view.onPanUp();
+  assert.equal(view.pendingSel, null);
+  const kept = view.marks[1].find((m) => m.text === 'kept words');
+  assert.ok(kept && kept.note == null && kept.rects.length === 1, 'kept, with no note');
+  view.marks[1] = view.marks[1].filter((m) => m !== kept);
   // Old behaviour gone: a click on the page away from a span, through the page's own mouseup, writes nothing either.
   view.pdfDown = at(700, 600);
   view.pdfMouseUp(press(s.tl, 700, 600));
