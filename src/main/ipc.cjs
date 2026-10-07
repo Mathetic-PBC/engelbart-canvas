@@ -551,13 +551,19 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
         mark = { markId: ref.id, page: ref.source === 'web' ? null : ref.page, rowId: ref.rowId || null, url: ref.rowId ? null : ref.url, ...(ref.source === 'web' ? { source: 'web' } : {}) };
         paperAsks.set(askId, { win, projectId, askId, ...mark, question: question.text.trim(), progress: {} });
       }
+      // a box (MATH-70 build 2): the picture it has now is the one this answer is about, whatever it has by the time it lands
+      let crop = null;
+      if (mark && mark.source === 'web') {
+        const held = await library.readWebMark(ctx, mark.rowId ? { rowId: mark.rowId } : { url: mark.url }, mark.markId).catch(() => null);
+        crop = held && held.box && typeof held.crop === 'string' ? held.crop : null;
+      }
       // The ask is an agent of its workspace: running now, waiting for you once its answer (or failure) has landed.
       started = track(() => projects.agentStarted(ctx, { id: askId, kind: agent, projectId: pid, workspaceId: question.workspaceId, doc: question.ref }));
       // Progress goes to the window that asked, which holds the pending line; the answer it places is saved (write-doc).
       const out = await bart.ask(ctx, projectId, question, { onProgress: (progress) => { paperProgress(askId, progress); answer(win, 'engelbart:bart-progress', { askId, ...progress }); } });
       if (started) track(() => projects.agentFinished(ctx, askId));
       if (!mark) return out;
-      const entry = askEntry({ id: askId, question: question.text, lines: out.lines, meta: out.meta, at: new Date().toISOString() });
+      const entry = askEntry({ id: askId, question: question.text, lines: out.lines, meta: out.meta, at: new Date().toISOString(), crop });
       try { await library.addMarkAnswer(ctx, mark.rowId ? { rowId: mark.rowId } : { url: mark.url }, mark.page, mark.markId, entry); } catch { /* the Stage still has it to show and save */ }
       paperDone({ askId, ...mark, entry });
       return { ...out, entry };

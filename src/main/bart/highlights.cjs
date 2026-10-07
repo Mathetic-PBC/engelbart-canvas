@@ -11,6 +11,8 @@
 // page, kept with a picture of it (`crop`, relative to the annotations folder) and the text under it. It is shown as
 // <box crop="/abs/…png"> holding <text>, <note> and <ask>, never read for a quote. `inkRoot` (the annotations folder,
 // ./context.cjs) is what `crop` is found from.
+// MATH-70 build 2 (2026-10-07): a box resized has a new picture, and an answer keeps the one it was asked about (its ask's
+// `crop`). An <ask> whose picture is not the box's current one says which it was: <ask crop="/abs/…png">.
 
 const { clipMiddle } = require('./clip.cjs');
 const path = require('node:path');
@@ -29,11 +31,17 @@ const MORE_ROOM = '<more n="000000"/>\n'.length; // kept free in a paper for the
 const attrOf = (value, max) => String(value == null ? '' : value).replace(/[<>"\n\r]/g, ' ').slice(0, max);
 const text = (value) => (typeof value === 'string' ? value.trim() : '');
 
-/** A box's picture as an absolute path, from its mark's `crop` under `inkRoot`; '' without one or without a root. */
-const cropPath = (m, inkRoot) => (inkRoot && typeof m.crop === 'string' && CROP_RE.test(m.crop) ? path.join(inkRoot, m.crop) : '');
+/** A box's picture as an absolute path, from its mark's (or an ask's) `crop` under `inkRoot`; '' without one or without a root. */
+const cropPath = (m, inkRoot) => (inkRoot && m && typeof m.crop === 'string' && CROP_RE.test(m.crop) ? path.join(inkRoot, m.crop) : '');
 
-/** A box mark as a highlight is listed: { page, box: true, crop, quote: '', text, note, asks }. Kept with nothing said: its picture is. */
-const boxEntry = (m, page, inkRoot) => ({ page, box: true, crop: cropPath(m, inkRoot), quote: '', text: text(m.text), note: text(m.note), asks: asksOf(m) });
+/**
+ * A box mark as a highlight is listed: { page, box: true, crop, quote: '', text, note, asks }. Kept with nothing said: its
+ * picture is. An ask about an earlier picture of it carries that picture's path (`crop`).
+ */
+const boxEntry = (m, page, inkRoot) => ({
+  page, box: true, crop: cropPath(m, inkRoot), quote: '', text: text(m.text), note: text(m.note),
+  asks: asksOf(m, (a) => (typeof a.crop === 'string' && a.crop !== m.crop ? cropPath(a, inkRoot) : '')),
+});
 
 /**
  * A pdf's ink → its highlights in page order, top to bottom: [{ page, quote, note, asks: [{ question, answer }] }]. The
@@ -70,10 +78,10 @@ function marksOf(ink, inkRoot = '') {
     .filter((h) => h.box || h.quote || h.note || h.asks.length);
 }
 
-/** A mark's asks that say something: [{ question, answer }]. */
-function asksOf(m) {
+/** A mark's asks that say something: [{ question, answer }], with `crop` (an earlier picture of a box, `cropOf`) when there is one. */
+function asksOf(m, cropOf = null) {
   return (Array.isArray(m.asks) ? m.asks : []).filter((a) => a && (text(a.question) || text(a.answer)))
-    .map((a) => ({ question: text(a.question), answer: text(a.answer) }));
+    .map((a) => { const crop = cropOf ? cropOf(a) : ''; return { question: text(a.question), answer: text(a.answer), ...(crop ? { crop } : {}) }; });
 }
 
 /**
@@ -100,7 +108,7 @@ function highlightXml(h) {
   if (h.quote) body.push(`<quote>\n${clipMiddle(h.quote, QUOTE_MAX)}\n</quote>`);
   if (h.box && h.text) body.push(`<text>\n${clipMiddle(h.text, BOX_TEXT_MAX)}\n</text>`);
   if (h.note) body.push(`<note>\n${clipMiddle(h.note, NOTE_MAX)}\n</note>`);
-  for (const a of h.asks) body.push(`<ask>\n<question>\n${clipMiddle(a.question, QUESTION_MAX)}\n</question>\n<answer>\n${clipMiddle(a.answer, ANSWER_MAX)}\n</answer>\n</ask>`);
+  for (const a of h.asks) body.push(`<ask${a.crop ? ` crop="${attrOf(a.crop, 4096)}"` : ''}>\n<question>\n${clipMiddle(a.question, QUESTION_MAX)}\n</question>\n<answer>\n${clipMiddle(a.answer, ANSWER_MAX)}\n</answer>\n</ask>`);
   const tag = h.box ? 'box' : 'highlight';
   const attrs = `${h.page ? ` page="${h.page}"` : ''}${h.box && h.crop ? ` crop="${attrOf(h.crop, 4096)}"` : ''}`;
   return body.length ? `<${tag}${attrs}>\n${body.join('\n')}\n</${tag}>\n` : `<${tag}${attrs}/>\n`;
@@ -217,4 +225,4 @@ function mentionedBlock(papers, budget = MENTIONED_BUDGET) {
   return `${open}${body.join('')}${close}`;
 }
 
-module.exports = { attrOf, marksOf, webMarksOf, stageBlock, webStageBlock, liveXml, mentionedBlock, STAGE_BUDGET, MENTIONED_BUDGET, QUOTE_MAX, ANSWER_MAX };
+module.exports = { attrOf, cropPath, marksOf, webMarksOf, stageBlock, webStageBlock, liveXml, mentionedBlock, STAGE_BUDGET, MENTIONED_BUDGET, QUOTE_MAX, ANSWER_MAX };

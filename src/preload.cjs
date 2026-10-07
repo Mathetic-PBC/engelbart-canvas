@@ -269,6 +269,11 @@ const engelbartAPI = Object.freeze({
   onBrowserBoxing: (callback) => subscribe('browser:boxing', callback),
   onBrowserBoxRemoved: (callback) => subscribe('browser:box-removed', callback),
   onBrowserBoxRestored: (callback) => subscribe('browser:box-restored', callback),
+  // A selected box's card (MATH-70 build 2): @bart asked from it ({ tab, markId, url, title, question, note, turns }) and
+  // Stop pressed on it ({ askId }); what the Stage has running from boxes goes back for the card to show.
+  onBrowserBoxAsk: (callback) => subscribe('browser:box-ask', callback),
+  onBrowserBoxStop: (callback) => subscribe('browser:box-stop', callback),
+  browserBoxAsks: (list) => ipcRenderer.invoke('browser:box-asks', list),
   onBrowserState: (callback) => subscribe('browser:state', callback),
   onBrowserClosed: (callback) => subscribe('browser:closed', callback),
   onBrowserLogin: (callback) => subscribe('browser:login', callback),

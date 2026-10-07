@@ -23,8 +23,15 @@ function answerOf(lines) {
   return { answer: body.join('\n').trim(), foot };
 }
 
-/** A finished answer as a mark keeps it: { id, question, answer, meta, at, pos, collapsed }. */
-function askEntry({ id, question, lines, meta, at }) {
+// A box's picture as an answer keeps it (MATH-70 build 2, 2026-10-07): the one the box had when it was asked about,
+// "crops/<…>.png" under the annotations folder (src/main/browser/boxes.cjs CROP_RE), kept when the box is resized later.
+const CROP_RE = /^crops\/[\w-]{1,64}\.png$/;
+
+/**
+ * A finished answer as a mark keeps it: { id, question, answer, meta, at, pos, collapsed }, and `crop` when it was asked
+ * about a box: the box's picture at the moment it was asked.
+ */
+function askEntry({ id, question, lines, meta, at, crop = null }) {
   const { answer, foot } = answerOf(lines);
   const level = (meta && meta.level) || {};
   return {
@@ -35,12 +42,14 @@ function askEntry({ id, question, lines, meta, at }) {
     at,
     pos: null,
     collapsed: false,
+    ...(typeof crop === 'string' && CROP_RE.test(crop) ? { crop } : {}),
   };
 }
 
 /**
  * The marks with `entry` added to the answers of mark `markId` on `page` (once), or in the web page's list when `page` is
- * null (WEB). Unchanged when the mark is gone or has it.
+ * null (WEB). Unchanged when the mark is gone or has it. An entry's `crop` (a box's picture when it was asked) is kept as
+ * it came: the box may have a newer picture by now.
  */
 function withAsk(marks, page, markId, entry) {
   if (page == null) page = WEB;

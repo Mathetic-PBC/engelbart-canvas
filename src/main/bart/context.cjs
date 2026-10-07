@@ -23,6 +23,9 @@
 // MATH-65 build 2 (2026-10-07): a mentioned Zotero item is its <zotero_item> under the line (../context/expand-mentions.cjs),
 // its attachment's folder granted when it is outside the data root; and every @bart and @discover turn's <engelbart>
 // names the mirror of the connected library (`zotero library: …`, ../zotero/mirror.cjs pointerLine) when there is one.
+// MATH-70 build 2 (2026-10-07): a question asked from a box's card is a mark on a web page too, and the mark is read here
+// from the page's ink by its id, whatever the renderer said of it: a box is <box crop="…"><text>…</text></box> in the
+// <highlight> in place of its <quote>, and "asked from" says it is a box.
 // MATH-65, Overleaf part 1 (2026-10-07): `overleaf` (../overleaf/stage.cjs forTurn) is the window's Overleaf tabs. The one
 // in front is <stage source="overleaf"> in place of the web page's, with the open file read live from its editor and the
 // folder of the project's copy (refreshed before the turn when over a minute old); every other is a line of
@@ -40,7 +43,8 @@ const { stripAgentReplies } = require('./strip.cjs');
 const db = require('../store/db.cjs');
 const { instructionsBlock } = require('../store/onboarding.cjs');
 const library = require('../store/library.cjs');
-const { attrOf, stageBlock, webStageBlock, mentionedBlock } = require('./highlights.cjs');
+const { attrOf, cropPath, stageBlock, webStageBlock, mentionedBlock } = require('./highlights.cjs');
+const { isBox } = require('../browser/boxes.cjs');
 const { fileInRow } = require('../store/folder-files.cjs');
 const { saveShot } = require('./shots.cjs');
 const zoteroMirror = require('../zotero/mirror.cjs');
@@ -194,14 +198,18 @@ function paperOf(project, rows, ref, given = {}) {
 /**
  * <highlight paper="…" path="…" page="N"><quote>…</quote><note>…</note><page_text>…</page_text></highlight>; no <page_text>
  * when there is none. On a web page (`paper.source` 'web', MATH-54): <highlight source="web" title="…" address="…" path="…">,
- * no page.
+ * no page. A box (`box` { crop: its picture's absolute path, text: the page's text under it }, MATH-70 build 2) is
+ * <box crop="…"><text>…</text></box> where the quote would be.
  */
-function highlightBlock(paper, page, { quote = '', note = '', pageText = '' } = {}) {
+function highlightBlock(paper, page, { quote = '', note = '', pageText = '', box = null } = {}) {
   const around = String(pageText || '').trim();
   const on = paper.source === 'web'
     ? `source="web" title="${attrOf(paper.name, 200)}" address="${attrOf(paper.address, 4096)}"${paper.path ? ` path="${attrOf(paper.path, 4096)}"` : ''}`
     : `paper="${attrOf(paper.name, 200)}" path="${attrOf(paper.where, 4096)}" page="${Number(page) || 1}"`;
-  return `<highlight ${on}>\n<quote>\n${String(quote).trim()}\n</quote>\n<note>\n${String(note).trim()}\n</note>\n${around ? `<page_text>\n${around}\n</page_text>\n` : ''}</highlight>`;
+  const what = box
+    ? `<box${box.crop ? ` crop="${attrOf(box.crop, 4096)}"` : ''}>\n<text>\n${String(box.text || '').trim()}\n</text>\n</box>`
+    : `<quote>\n${String(quote).trim()}\n</quote>`;
+  return `<highlight ${on}>\n${what}\n<note>\n${String(note).trim()}\n</note>\n${around ? `<page_text>\n${around}\n</page_text>\n` : ''}</highlight>`;
 }
 
 /**
@@ -310,9 +318,14 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
     const web = ref.source === 'web'; // a highlight on a web page (MATH-54): no page
     paper = web ? await webPageOf(ctx, project, rows, ref, (highlight && highlight.paper) || '') : paperOf(project, rows, ref, highlight || {});
     if (paper.id && !seen.has(paper.id)) { seen.add(paper.id); pointed = paper.id; } // the paper is what the person points at
-    documents.push(block('workspace', space.title, shown(space.body)), highlightBlock(paper, ref.page, highlight || {}));
-    from = web ? `a highlight on the web page "${attrOf(paper.name, 200)}", opened from the workspace "${workspace.name}"`
-      : `a highlight on page ${Number(ref.page) || 1} of "${attrOf(paper.name, 200)}", opened from the workspace "${workspace.name}"`;
+    // a web mark is read from the page's ink, not taken from the renderer: a box is shown as one (MATH-70 build 2)
+    const held = web ? await library.readWebMark(ctx, ref.rowId ? { rowId: ref.rowId } : { url: ref.url }, ref.id) : null;
+    const box = held && isBox(held) ? { crop: cropPath(held, path.join(ctx.dataRoot, 'annotations')), text: String(held.text || '') } : null;
+    const asked = { ...(highlight || {}), ...(box ? { box, note: highlight && highlight.note ? highlight.note : String(held.note || '') } : {}) };
+    documents.push(block('workspace', space.title, shown(space.body)), highlightBlock(paper, ref.page, asked));
+    from = box ? `a box on the web page "${attrOf(paper.name, 200)}", opened from the workspace "${workspace.name}"`
+      : web ? `a highlight on the web page "${attrOf(paper.name, 200)}", opened from the workspace "${workspace.name}"`
+        : `a highlight on page ${Number(ref.page) || 1} of "${attrOf(paper.name, 200)}", opened from the workspace "${workspace.name}"`;
   } else if (ref.kind === 'note') {
     // The note is its own block: the workspace must not also carry it as a mention.
     seen.add(ref.id);

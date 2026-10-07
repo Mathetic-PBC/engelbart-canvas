@@ -4,6 +4,8 @@ const { isPreviewAddress } = require('../../shared/address-key.cjs');
 const PAGE = require('./page-preload.cjs');
 const BOX = require('./boxes.cjs');
 const LAYER = require('./box-layer-preload.cjs');
+const CARD = require('./box-card-preload.cjs');
+const { assertTrustedRenderer } = require('../ipc-validation.cjs');
 const OVERLEAF = require('../overleaf/editor.cjs');
 
 // The Browser pane's pages (decision 48). Each browser tab is a WebContentsView: a native view
@@ -52,6 +54,17 @@ const OVERLEAF = require('../overleaf/editor.cjs');
 // they move. A click on a box's edge selects it (the preload's), and Backspace or Delete removes it; the Stage shows
 // "Box removed · Undo" (browser:box-removed), and Undo or ⌘Z in the page puts it back, picture and all.
 //
+// MATH-70 build 2 (2026-10-07): a box is selected by its edge alone, and one just drawn is selected. Its handles resize it
+// (the page's): the page reports the new rectangle as it is dragged, and on release says what it is kept by now
+// (boxResize); main draws the page's boxes without that one, waits for the page to paint, takes the new picture under a
+// new name (boxes.cjs nextCropName; the old one is kept for the answers about it) and updates the mark (`pageMarks.update`,
+// store/library.cjs updateWebMark). A rule inserted while the pointer is over a handle gives it the handle's cursor.
+// The selected box has a card beside it: one small view per window (`card`, like `layer`; box-card-preload.cjs, the
+// renderer's box-card/BoxCard.jsx), shown while a box is selected on the tab in front and in view, to the box's right when
+// there is room, else its left (boxes.cjs cardPlace), following it as the page scrolls; gone on navigating, another tab,
+// hide or close. Its note is saved on the mark; @bart from it goes to the window's renderer (browser:box-ask), which asks
+// as for any highlight, and Stop too (browser:box-stop); the Stage gives back what it has running (setBoxAsks) for the
+// card to show. Keys typed in the card are the card's: Backspace there never removes the box.
 // Overleaf (MATH-65, Overleaf part 1, 2026-10-07; ../overleaf/): the tabs showing an Overleaf editor (overleafTabs), and
 // the open file read live from one (readOverleaf): a script run in the page's main world with executeJavaScript, which
 // reads CodeMirror's state (the preload's isolated world cannot see the page's objects, and the DOM holds only the lines
@@ -100,6 +113,19 @@ const MAX_PAGE_MARKS = 2000;
 const BOX_LAYER_PRELOAD = path.join(__dirname, 'box-layer-preload.cjs');
 const BOX_LAYER_PAGE = 'data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Chtml%3E%3Chead%3E%3Cmeta%20charset%3D%22utf-8%22%3E%3C%2Fhead%3E%3Cbody%3E%3C%2Fbody%3E%3C%2Fhtml%3E';
 const BOX_TIMEOUT_MS = 2000; // how long the page has to say what a box drawn on it is
+const FRAME_TIMEOUT_MS = 150; // how long a resize waits for the page to have painted without the box's lines
+const BOX_CARD_PRELOAD = path.join(__dirname, 'box-card-preload.cjs');
+const BOX_CARD_URL = 'engelbart://app/box-card.html';
+const CARD_W = 336; // the card's width in the app's CSS pixels: BoxCard's ASK_W (320) and its shadow's room
+const CARD_MIN_H = 64; // its height until it says how tall it is
+const CARD_MAX_H = 1600;
+// Whether the card is hidden while the page scrolls and shown again where the box is once it stops (the page says when:
+// page-preload.cjs SCROLL_END_MS). Off: it follows. Measured on GitHub and Wikipedia (2026-10-07, a 240px wheel scroll
+// sampled every few ms), the card's bounds kept within 0.5px of the box as the page reported it; how it looks against
+// the page's own compositor scrolling is not measured, and this is the one switch should it trail on screen.
+const CARD_HIDE_WHILE_SCROLLING = false;
+const CURSOR_VALUES = new Set(['nwse-resize', 'nesw-resize', 'ns-resize', 'ew-resize']);
+const RUN_LINES = 400, RUN_LINE = 4000;
 
 /** http(s) only. 0.0.0.0 is what dev servers print, not an address to visit. */
 function parseBrowserUrl(value) {
@@ -274,6 +300,51 @@ function boxReportInput(value) {
   return { rects, selected, size };
 }
 
+/** Where a page says its selected box is in its viewport: { id, rect: { x, y, w, h }, viewport, scrolling }, or { id: null }. */
+function boxViewInput(value) {
+  const ok = (n) => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= 1e6;
+  if (!value || typeof value !== 'object' || typeof value.id !== 'string' || value.id.length > 64) return { id: null };
+  const r = value.rect, v = value.viewport;
+  if (!r || ![r.x, r.y, r.w, r.h].every(ok) || !(r.w > 0) || !(r.h > 0) || !v || !ok(v.width) || !ok(v.height)) return { id: null };
+  return { id: value.id, rect: { x: r.x, y: r.y, w: r.w, h: r.h }, viewport: { width: v.width, height: v.height }, scrolling: value.scrolling === true };
+}
+
+/** A box resized as its page says it: { id, rect (its viewport's CSS pixels), box, text } (boxReplyInput's), or null. */
+function boxResizeInput(value) {
+  if (!value || typeof value !== 'object' || typeof value.id !== 'string' || !/^[\w-]{1,64}$/.test(value.id)) return null;
+  const r = value.rect;
+  if (!r || ![r.x, r.y, r.w, r.h].every((n) => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= 1e5) || !(r.w > 0) || !(r.h > 0)) return null;
+  const got = boxReplyInput(value);
+  return got ? { id: value.id, rect: { x: r.x, y: r.y, w: r.w, h: r.h }, ...got } : null;
+}
+
+/**
+ * What the Stage has running from boxes' cards, as the card is given it: [{ askId, markId, question, activity, name,
+ * effort, movedUp, lines, log, error }], only the well-formed and within bounds.
+ */
+function boxAsksInput(list) {
+  const text = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
+  const out = [];
+  for (const p of Array.isArray(list) ? list.slice(0, 200) : []) {
+    if (!p || typeof p !== 'object' || typeof p.askId !== 'string' || p.askId.length > 64 || typeof p.markId !== 'string' || p.markId.length > 64) continue;
+    out.push({
+      askId: p.askId, markId: p.markId, question: text(p.question, 8000), activity: text(p.activity, 300), name: text(p.name, 60), effort: text(p.effort, 30), movedUp: p.movedUp === true,
+      lines: Array.isArray(p.lines) ? p.lines.slice(-RUN_LINES).map((l) => text(l, RUN_LINE)) : [],
+      log: Array.isArray(p.log) ? p.log.slice(-60).map((l) => text(l, 300)) : [],
+      error: p.error == null ? null : text(String(p.error), 2000),
+    });
+  }
+  return out;
+}
+
+/** A mark's answers as its card shows them: [{ id, question, answer, meta, at }], the deleted ones left out. */
+function cardAsks(asks) {
+  return (Array.isArray(asks) ? asks : []).filter((a) => a && typeof a === 'object' && !a.deleted).slice(-100).map((a) => ({
+    id: String(a.id || ''), question: String(a.question || ''), answer: String(a.answer || ''), at: a.at || null,
+    meta: a.meta && typeof a.meta === 'object' ? { name: a.meta.name || null, effort: a.meta.effort || null } : null,
+  }));
+}
+
 // The browsing session is the app's, one for every window (2026-10-03): its handlers are set once, by the first window's
 // views, and each finds the window whose tab (or popup) the page is. A permission answered in one window is answered in
 // all of them, for this run, as it is for the session.
@@ -322,7 +393,7 @@ function joinSession(browsing, member, appName) {
 }
 
 function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLayerChange = () => {}, pdfDir = path.join(os.tmpdir(), 'engelbart-pdf'), partition = PARTITION, pageMarks = null, newId = randomUUID }) {
-  const { WebContentsView, session, Menu, clipboard, dialog, shell } = electron;
+  const { WebContentsView, session, Menu, clipboard, dialog, shell, screen = null } = electron;
   const entries = new Map(); // tab id -> { view, error, requested, pending, seq, found }
   const popups = new Set(); // child windows opened by pages
   const logins = new Map(); // request id -> answer(credentials | null)
@@ -606,10 +677,33 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       if (got) drawBoxes(entry, contents, got);
     });
     contents.ipc.on(PAGE.CHANNELS.editing, (event, value) => { if (fromTab(event, id, entry)) entry.editing = value === true; });
+    // build 2: a box resized, where the selected one is in the viewport, a frame painted, the cursor over a handle
+    contents.ipc.handle(PAGE.CHANNELS.boxResize, async (event, value) => {
+      if (!fromTab(event, id, entry)) throw new Error('Not a page in the Stage');
+      const got = boxResizeInput(value);
+      return got ? resizeBox(id, entry, contents, got) : null;
+    });
+    contents.ipc.on(PAGE.CHANNELS.boxView, (event, value) => {
+      if (!fromTab(event, id, entry)) return;
+      entry.boxView = boxViewInput(value);
+      if (entry.view.getVisible() || card.tab === id) placeCard(id);
+    });
+    contents.ipc.on(PAGE.CHANNELS.frame, (event, nonce) => {
+      const waiting = typeof nonce === 'string' ? entry.frameWaits.get(nonce) : null;
+      if (waiting && fromTab(event, id, entry)) waiting();
+    });
+    contents.ipc.on(PAGE.CHANNELS.cursor, (event, value) => { if (fromTab(event, id, entry)) setCursor(entry, contents, CURSOR_VALUES.has(value) ? value : ''); });
     // the page's tints are styled anew with each document (insertCSS lasts until the page goes)
     contents.on('dom-ready', () => { if (!contents.isDestroyed()) contents.insertCSS(MARK_CSS).catch(() => {}); });
     // a new document has none of the boxes' rule, nothing selected and no field with the keyboard yet
-    contents.on('did-navigate', () => { entry.boxes = null; entry.boxCss = ''; entry.boxKey = null; entry.editing = false; if (layer.tab === id) endBox(false); });
+    // (the keys of the rules inserted before are kept and taken out at the next drawing: a page given back from the
+    // back-forward cache still has them; for a new one, removing them does nothing)
+    contents.on('did-navigate', () => {
+      entry.boxes = null; entry.boxCss = null; entry.editing = false; entry.boxView = { id: null }; entry.boxHide = null;
+      setCursor(entry, contents, '');
+      if (layer.tab === id) endBox(false);
+      if (card.tab === id) hideCard();
+    });
     // the same document at another address (a page that changes its own address): its boxes are that address's
     contents.on('did-navigate-in-page', (_event, url, isMainFrame) => {
       if (!isMainFrame || !pageMarks || !fileablePage(url)) return;
@@ -626,7 +720,8 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     entry.boxes = report;
     entry.boxDraw = entry.boxDraw.then(async () => {
       if (contents.isDestroyed() || entry.boxes !== report) return;
-      const css = BOX.boxesCss(report.rects, report.selected, report.size);
+      // a box being pictured after a resize is left out until its picture is taken
+      const css = BOX.boxesCss(entry.boxHide ? report.rects.filter((r) => r.id !== entry.boxHide) : report.rects, report.selected, report.size);
       if (css === entry.boxCss) return;
       const old = entry.boxKey;
       entry.boxCss = css;
@@ -679,17 +774,30 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     const entry = entries.get(id);
     const view = layerView();
     if (layer.tab && layer.tab !== id) endBox(false);
+    hideCardView(); // under the layer it could not be used; it comes back with the layer gone
     win.contentView.addChildView(view); // again: on top
     view.setBounds(entry.view.getBounds());
     view.setVisible(true);
     onLayerChange();
     layer.tab = id;
     layer.mode = mode;
-    const start = { mode };
+    const start = { mode, ...pointerIn(win, entry.view.getBounds()) };
     if (layer.ready) view.webContents.send(LAYER.CHANNELS.start, start); else layer.queued = start;
     view.webContents.focus();
     send('browser:boxing', { id, on: true });
     return true;
+  }
+
+  /** Where the pointer is over a view at `bounds` as the layer comes up: { at: { x, y, screenX, screenY } }, or nothing. */
+  function pointerIn(win, bounds) {
+    if (!screen || typeof screen.getCursorScreenPoint !== 'function' || typeof win.getContentBounds !== 'function') return {};
+    try {
+      const p = screen.getCursorScreenPoint(), content = win.getContentBounds();
+      const x = p.x - content.x - bounds.x, y = p.y - content.y - bounds.y;
+      return x >= 0 && y >= 0 && x <= bounds.width && y <= bounds.height ? { at: { x, y, screenX: p.x, screenY: p.y } } : {};
+    } catch {
+      return {};
+    }
   }
 
   /** The drawing layer gone; with `focusPage`, the page under it has the keyboard again. */
@@ -703,6 +811,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     const entry = entries.get(id);
     if (focusPage && entry && !entry.view.webContents.isDestroyed()) entry.view.webContents.focus();
     send('browser:boxing', { id, on: false });
+    if (entry && entry.view.getVisible()) placeCard(id);
     return true;
   }
 
@@ -753,8 +862,185 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     const mark = { id: markId, box: got.box, crop: crop ? BOX.cropName(markId) : null, text: got.text, note: null, at: new Date().toISOString() };
     let saved = false;
     try { saved = await pageMarks.add(url, mark, { crop }); } catch { saved = false; }
-    if (saved && !contents.isDestroyed()) contents.send(PAGE.CHANNELS.boxAdd, { id: mark.id, box: mark.box });
+    if (saved && !contents.isDestroyed()) contents.send(PAGE.CHANNELS.boxAdd, { id: mark.id, box: mark.box, select: true }); // a box just drawn is selected
     return !!saved;
+  }
+
+  /** Tab `id`'s page painted at least once since now (its preload's two frames), or FRAME_TIMEOUT_MS gone by. */
+  function pageFrame(entry, contents) {
+    const nonce = nextId('frame');
+    return new Promise((resolve) => {
+      const done = () => { clearTimeout(timer); entry.frameWaits.delete(nonce); resolve(); };
+      const timer = setTimeout(done, FRAME_TIMEOUT_MS);
+      if (typeof timer.unref === 'function') timer.unref();
+      entry.frameWaits.set(nonce, done);
+      try { contents.send(PAGE.CHANNELS.frame, nonce); } catch { done(); }
+    });
+  }
+
+  /**
+   * Box `got.id` resized on tab `id`'s page to `got.rect` (its viewport's CSS pixels), kept by `got.box` with `got.text`
+   * under it: its picture is taken without its own lines (drawn without it, the page painted), and the mark updated with
+   * them and the picture under a new name (store/library.cjs updateWebMark). → { box } as it is kept now, or null.
+   */
+  async function resizeBox(id, entry, contents, got) {
+    if (!pageMarks || !pageMarks.update || contents.isDestroyed()) return null;
+    const url = contents.getURL();
+    if (!fileablePage(url)) return null;
+    const zoom = contents.getZoomFactor() || 1;
+    entry.boxHide = got.id;
+    let crop = null;
+    try {
+      if (entry.boxes) await drawBoxes(entry, contents, entry.boxes);
+      await pageFrame(entry, contents);
+      crop = await cropOf(contents, { x: got.rect.x * zoom, y: got.rect.y * zoom, w: got.rect.w * zoom, h: got.rect.h * zoom });
+    } finally {
+      if (entry.boxHide === got.id) entry.boxHide = null;
+      if (entry.boxes && !contents.isDestroyed()) void drawBoxes(entry, contents, entry.boxes);
+    }
+    if (entries.get(id) !== entry || contents.isDestroyed() || contents.getURL() !== url) return null;
+    let mark = null;
+    try { mark = await pageMarks.update(url, got.id, { box: got.box, text: got.text }, { crop }); } catch { mark = null; }
+    if (!mark || !BOX.isBox(mark)) return null;
+    if (card.tab === id && card.markId === got.id) void refreshCard();
+    return { box: mark.box };
+  }
+
+  /** The cursor the pointer has over the page: a handle's (an inserted rule over everything), or the page's own (''). */
+  function setCursor(entry, contents, value) {
+    if (entry.cursor === value) return;
+    entry.cursor = value;
+    entry.cursorDraw = entry.cursorDraw.then(async () => {
+      if (contents.isDestroyed() || entry.cursor !== value) return;
+      const old = entry.cursorKey;
+      entry.cursorKey = value ? await contents.insertCSS(`html,html *,html *::before,html *::after{cursor:${value} !important}`).catch(() => null) : null;
+      if (old) await contents.removeInsertedCSS(old).catch(() => {});
+    });
+  }
+
+  /* --------------------------------------------------------------------------------- the selected box's card */
+
+  // One per window, made the first time a box is selected: { view, ready, tab, markId, height, running, note }.
+  const card = { view: null, ready: false, tab: null, markId: null, height: 0, running: [], note: null, saving: Promise.resolve(), queued: null };
+  /** Messages from the card's own page alone (box-card.html, its main frame). */
+  function fromCard(event) {
+    try { assertTrustedRenderer(event, BOX_CARD_URL); } catch { return false; }
+    return !!card.view && event.sender === card.view.webContents;
+  }
+  function cardView() {
+    if (card.view) return card.view;
+    const view = new WebContentsView({ webPreferences: { preload: BOX_CARD_PRELOAD, sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true } });
+    view.setBackgroundColor('#00000000');
+    view.setVisible(false);
+    const contents = view.webContents;
+    contents.on('did-finish-load', () => { card.ready = true; if (card.queued) { contents.send(CARD.CHANNELS.state, card.queued); card.queued = null; } });
+    contents.on('will-navigate', (event) => event.preventDefault());
+    contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    // Esc in the card gives the keyboard back to the page, the box still selected
+    contents.on('before-input-event', (event, input) => {
+      if (input.type !== 'keyDown' || input.key !== 'Escape') return;
+      const entry = card.tab ? entries.get(card.tab) : null;
+      if (entry && !entry.view.webContents.isDestroyed()) { event.preventDefault(); entry.view.webContents.focus(); }
+    });
+    if (contents.ipc) {
+      contents.ipc.on(CARD.CHANNELS.ready, (event) => { if (fromCard(event)) void refreshCard(); });
+      contents.ipc.on(CARD.CHANNELS.note, (event, text) => { if (fromCard(event) && typeof text === 'string' && text.length <= 20000) saveCardNote(text); });
+      contents.ipc.on(CARD.CHANNELS.ask, (event, question) => { if (fromCard(event) && typeof question === 'string' && question.trim() && question.length <= 8000) void cardAsk(question.trim()); });
+      contents.ipc.on(CARD.CHANNELS.stop, (event, askId) => { if (fromCard(event) && typeof askId === 'string' && askId.length <= 64) send('browser:box-stop', { askId }); });
+      contents.ipc.on(CARD.CHANNELS.remove, (event) => { if (fromCard(event) && card.tab && card.markId) void removeBox(card.tab, card.markId); });
+      contents.ipc.on(CARD.CHANNELS.size, (event, value) => {
+        const height = value && typeof value === 'object' ? Number(value.height) : NaN;
+        if (!fromCard(event) || !Number.isFinite(height)) return;
+        card.height = Math.max(CARD_MIN_H, Math.min(CARD_MAX_H, Math.ceil(height)));
+        if (card.tab) placeCard(card.tab);
+      });
+    }
+    contents.loadURL(BOX_CARD_URL).catch(() => {});
+    card.view = view;
+    return view;
+  }
+  function sendCard(state) {
+    if (!card.view || card.view.webContents.isDestroyed()) return;
+    if (card.ready) card.view.webContents.send(CARD.CHANNELS.state, state); else card.queued = state;
+  }
+  /** The card given its mark as it is kept now ({ id, note, asks }) and what the Stage has running from it. */
+  async function refreshCard() {
+    const { tab, markId } = card;
+    const entry = tab ? entries.get(tab) : null;
+    if (!entry || !markId || !pageMarks) return;
+    let list = [];
+    try { list = await pageMarks.list(entry.view.webContents.getURL()); } catch { list = []; }
+    if (card.tab !== tab || card.markId !== markId) return;
+    const m = (Array.isArray(list) ? list : []).find((x) => x && x.id === markId);
+    sendCard({ mark: m ? { id: m.id, note: typeof m.note === 'string' ? m.note : '', asks: cardAsks(m.asks) } : { id: markId, note: '', asks: [] }, running: card.running.filter((p) => p.markId === markId) });
+  }
+  /** The card's note saved on its mark, one save after another. */
+  function saveCardNote(text) {
+    const entry = card.tab ? entries.get(card.tab) : null, markId = card.markId;
+    if (!entry || !markId || !pageMarks || !pageMarks.update) return;
+    card.note = { markId, text };
+    const url = entry.view.webContents.getURL();
+    card.saving = card.saving.then(() => pageMarks.update(url, markId, { note: text })).catch(() => null);
+  }
+  /** @bart from the card: the window's renderer asks it as it asks from a highlight (Stage.jsx), with the mark's answers so far. */
+  async function cardAsk(question) {
+    const tab = card.tab, markId = card.markId, entry = tab ? entries.get(tab) : null;
+    if (!entry || !markId || !pageMarks) return;
+    const contents = entry.view.webContents, url = contents.getURL();
+    await card.saving;
+    let list = [];
+    try { list = await pageMarks.list(url); } catch { list = []; }
+    const m = (Array.isArray(list) ? list : []).find((x) => x && x.id === markId);
+    if (!m || !BOX.isBox(m) || card.tab !== tab || contents.isDestroyed()) return;
+    const note = card.note && card.note.markId === markId ? card.note.text : String(m.note || '');
+    const turns = cardAsks(m.asks).slice(-40).map((a) => ({ question: a.question, answer: a.answer }));
+    send('browser:box-ask', { tab, markId, url, title: contents.getTitle(), question, note, turns });
+  }
+  /** What the Stage has running from boxes' cards (Stage.jsx): the card shows its own box's, and reads its mark again. */
+  function setBoxAsks(list) {
+    card.running = boxAsksInput(list);
+    if (card.markId) void refreshCard();
+    return true;
+  }
+  /** The card out of sight, the box it is for kept: it comes back where the box is. */
+  function hideCardView() {
+    if (!card.view || !card.view.getVisible()) return;
+    const had = card.view.webContents.isFocused();
+    card.view.setVisible(false);
+    const entry = card.tab ? entries.get(card.tab) : null;
+    if (had && entry && !entry.view.webContents.isDestroyed()) entry.view.webContents.focus();
+  }
+  /** The card gone: no box is selected on a tab in front. */
+  function hideCard() {
+    hideCardView();
+    card.tab = null;
+    card.markId = null;
+    card.note = null;
+  }
+  /**
+   * The card beside the box selected on tab `id`, when that tab is in front and the box in view (BOX.cardPlace), at the
+   * app's zoom; else out of sight.
+   */
+  function placeCard(id) {
+    const entry = entries.get(id), win = getWindow();
+    const sel = entry && entry.boxView && entry.boxView.id ? entry.boxView : null;
+    if (!sel || !entry.view.getVisible() || !pageMarks || !win || win.isDestroyed()) { if (card.tab === id) hideCard(); return; }
+    if (layer.tab === id) { hideCardView(); return; }
+    const view = cardView();
+    if (card.tab !== id || card.markId !== sel.id) { hideCardView(); card.tab = id; card.markId = sel.id; card.note = null; card.height = 0; void refreshCard(); }
+    if (CARD_HIDE_WHILE_SCROLLING && sel.scrolling) { hideCardView(); return; }
+    const zoom = entry.view.webContents.getZoomFactor() || 1, page = entry.view.getBounds();
+    const box = { x: page.x + sel.rect.x * zoom, y: page.y + sel.rect.y * zoom, width: sel.rect.w * zoom, height: sel.rect.h * zoom };
+    const appZoom = (win.webContents && win.webContents.getZoomFactor && win.webContents.getZoomFactor()) || 1;
+    const at = BOX.cardPlace(box, page, { width: CARD_W * appZoom, height: (card.height || CARD_MIN_H) * appZoom });
+    if (!at) { hideCardView(); return; }
+    if (view.webContents.getZoomFactor && view.webContents.getZoomFactor() !== appZoom) view.webContents.setZoomFactor(appZoom);
+    view.setBounds(at);
+    if (!view.getVisible()) {
+      win.contentView.addChildView(view); // on top of the page (a tab made after it went in under it)
+      view.setVisible(true);
+      onLayerChange();
+    }
   }
 
   /** The box selected on tab `id`'s page taken out of its ink, picture and all, and kept for Undo. → whether it was. */
@@ -909,7 +1195,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     view.setVisible(false);
     win.contentView.addChildView(view);
     onLayerChange();
-    const entry = { view, error: null, requested: '', pending: '', seq: 0, found: '', drawn: false, download: '', retrying: false, quoteWait: null, selectionWaits: new Map(), editing: false, boxWait: null, boxes: null, boxCss: '', boxKey: null, boxDraw: Promise.resolve(), removed: null };
+    const entry = { view, error: null, requested: '', pending: '', seq: 0, found: '', drawn: false, download: '', retrying: false, quoteWait: null, selectionWaits: new Map(), editing: false, boxWait: null, boxes: null, boxCss: '', boxKey: null, boxDraw: Promise.resolve(), removed: null, boxView: { id: null }, boxHide: null, frameWaits: new Map(), cursor: '', cursorKey: null, cursorDraw: Promise.resolve() };
     entries.set(id, entry);
 
     const contents = view.webContents;
@@ -1055,7 +1341,9 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     entry.view.setVisible(true);
     if (layer.tab && layer.tab !== id) endBox(false);
     else if (layer.tab === id && layer.view) layer.view.setBounds(bounds);
+    if (card.tab && card.tab !== id) hideCard();
     onLayerChange();
+    if (entry.boxView && entry.boxView.id) placeCard(id);
     return true;
   }
 
@@ -1079,6 +1367,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
    *  can keep it on screen under a menu or a modal that the native view would have covered. */
   async function hide(options) {
     endBox(false);
+    hideCard();
     let picture = null;
     for (const entry of entries.values()) {
       if (!entry.view.getVisible()) continue;
@@ -1132,6 +1421,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     const entry = entries.get(id);
     if (!entry) return null;
     if (layer.tab === id) endBox(false);
+    if (card.tab === id) hideCard();
     entries.delete(id);
     const win = getWindow();
     try {
@@ -1162,6 +1452,14 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       layer.view = null;
       layer.ready = false;
     }
+    if (card.view) {
+      hideCard();
+      const win = getWindow();
+      try { if (win && !win.isDestroyed()) win.contentView.removeChildView(card.view); } catch { /* the window went first */ }
+      if (!card.view.webContents.isDestroyed()) card.view.webContents.close();
+      card.view = null;
+      card.ready = false;
+    }
   }
 
   /** Sign-ins are cookies; Chromium writes them lazily, so quitting asks for them now. */
@@ -1176,7 +1474,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     if (shared) shared.members.delete(member);
   }
 
-  return { open, show, hide, command, find, stopFind, shortcut, savePage, close, closeAll, answerLogin, flush, dispose, has: (id) => entries.has(id), highlightSelection, pageSelection, screenshot, overleafTabs, readOverleaf, startBox, endBox, makeBox, removeBox, undoBox, canBox };
+  return { open, show, hide, command, find, stopFind, shortcut, savePage, close, closeAll, answerLogin, flush, dispose, has: (id) => entries.has(id), highlightSelection, pageSelection, screenshot, overleafTabs, readOverleaf, startBox, endBox, makeBox, removeBox, undoBox, canBox, resizeBox, setBoxAsks };
 }
 
 // Each handler is registered once and acts on the views of the window that called (`viewsFor(event)`, 2026-10-03).
@@ -1201,6 +1499,7 @@ function registerBrowserIpc({ ipcMain, trustedHandler, viewsFor = null, views = 
   handle('browser:close-all', (mine) => { mine.closeAll(); return true; });
   handle('browser:box', (mine, id) => mine.startBox(id, 'button'));
   handle('browser:box-undo', (mine, id) => mine.undoBox(id));
+  handle('browser:box-asks', (mine, list) => mine.setBoxAsks(list));
 
   if (cookieImport) {
     const text = (value, what) => { if (typeof value !== 'string' || !value || value.length > 256) throw new TypeError(`${what} must be a short string`); return value; };
@@ -1214,4 +1513,4 @@ function registerBrowserIpc({ ipcMain, trustedHandler, viewsFor = null, views = 
   }
 }
 
-module.exports = { PAGE_PRELOAD, BOX_LAYER_PRELOAD, MARK_CSS, SELECTION_TIMEOUT_MS, SHOT_MAX_EDGE, fileablePage, quoteInput, selectionInput, marksForPage, boxReplyInput, boxReportInput, PARTITION, DEV_PARTITION, stagePartition, parseBrowserUrl, parseFileUrl, externalScheme, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews, registerBrowserIpc };
+module.exports = { PAGE_PRELOAD, BOX_LAYER_PRELOAD, BOX_CARD_PRELOAD, BOX_CARD_URL, CARD_W, CARD_HIDE_WHILE_SCROLLING, boxViewInput, boxResizeInput, boxAsksInput, cardAsks, MARK_CSS, SELECTION_TIMEOUT_MS, SHOT_MAX_EDGE, fileablePage, quoteInput, selectionInput, marksForPage, boxReplyInput, boxReportInput, PARTITION, DEV_PARTITION, stagePartition, parseBrowserUrl, parseFileUrl, externalScheme, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews, registerBrowserIpc };

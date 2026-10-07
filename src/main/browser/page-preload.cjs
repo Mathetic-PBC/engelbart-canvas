@@ -20,6 +20,16 @@
 // of the page's boxes again on load and reflow (refind) and tells main where they are, for main to draw them with an
 // inserted html::after rule (boxes.cjs): the page's DOM is still never changed. A click on a box's edge selects it
 // (boxAt) and goes no further into the page. It tells main whether a text field has the keyboard, so ⌥ stays the field's.
+// MATH-70 build 2 (2026-10-07): a box is selected by its edge alone, from the page or the drawing layer: a click inside
+// one is the page's (a link in it opens). A box drawn is selected. The selected box's handles resize it: a press on one
+// takes the drag (mousedown, mouseup and click go no further, as the edge's click), the new rectangle goes to main at most
+// once a frame (LIVE_RESIZE) and is kept inside the visible page, and on release its anchor and text are worked out again
+// (boxHere) and main takes a new picture and updates the mark (boxResize). Where the selected box is in the viewport goes
+// to main as it moves or the page scrolls (boxView, once a frame), for the card beside it. The text under a box is only
+// what shows (shows): a word whose centre is in the box and the viewport, whose element is visible (checkVisibility) and
+// is what is at that point (elementFromPoint), and the alt text of a picture by the same rule over its visible part. A
+// cover with pointer-events:none is not seen by elementFromPoint (a known gap). An inserted rule (main's) gives the
+// pointer the handle's cursor; the page's DOM is still never changed.
 //
 // Sandboxed, this can require only 'electron'. The finding is plain functions over text, exported below for the tests
 // when Node loads this file; in a page, `module` is no CommonJS module and the page part runs instead.
@@ -32,6 +42,9 @@ const CHANNELS = Object.freeze({
   // (editing).
   box: 'engelbart-page:box', boxes: 'engelbart-page:boxes', boxSet: 'engelbart-page:box-set', boxAdd: 'engelbart-page:box-add',
   boxRemove: 'engelbart-page:box-remove', boxSelect: 'engelbart-page:box-select', boxHit: 'engelbart-page:box-hit', editing: 'engelbart-page:editing',
+  // build 2: a box resized (invoked: { id, rect, box, text } → { box } or null), the selected box's place in the viewport
+  // (boxView), a frame drawn (frame: main's nonce back once the page has painted twice), the cursor over a handle (cursor).
+  boxResize: 'engelbart-page:box-resize', boxView: 'engelbart-page:box-view', frame: 'engelbart-page:frame', cursor: 'engelbart-page:cursor',
 });
 const HIGHLIGHT = 'engelbart-web-mark'; // the ::highlight() name main's insertCSS styles
 const CONTEXT = 32; // characters of prefix and of suffix a new quote keeps
@@ -45,6 +58,18 @@ const ANCHOR_TEXT = 80; // characters of the anchor element's own text kept to c
 const HOLD = 0.6; // an element holds a box when this share of the box is inside it
 const MEDIA = new Set(['img', 'svg', 'canvas', 'video', 'picture', 'figure', 'table']); // preferred as a box's anchor
 const EDGE = 8; // pixels either side of a box's edge that a click selects it by
+// The selected box's handles (boxes.cjs HANDLES, the same names and places): a press this near one's centre takes it.
+const HANDLES = [['nw', 0, 0], ['n', 0.5, 0], ['ne', 1, 0], ['e', 1, 0.5], ['se', 1, 1], ['s', 0.5, 1], ['sw', 0, 1], ['w', 0, 0.5]];
+const HANDLE_HIT = 6;
+const MIN_BOX = 6; // pixels: a box is never resized smaller (box-layer-preload.cjs MIN)
+const CURSORS = { nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize', n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize' };
+// Whether a box being resized is drawn at its new size as it is dragged (main redraws its rule each frame), or only once
+// it is let go. Live: measured on a GitHub repository page and a Wikipedia article (2026-10-07, Electron 44, 40 pointer
+// moves 16 ms apart), each move's new outline was drawn 3–10 ms after it (median 6 on GitHub, 3 on Wikipedia), inside a
+// frame, and main skips a report a newer one has overtaken; so it does not lag behind the pointer.
+const LIVE_RESIZE = true;
+const SCROLL_END_MS = 150; // the page has stopped scrolling when it has not scrolled for this long
+const VISIBILITY = Object.freeze({ opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true });
 
 /**
  * Text nodes ([{ data }]) → the page's text with each run of whitespace one space, none at its start: { text, segs },
@@ -241,19 +266,73 @@ function refind(box, look) {
 }
 
 /**
- * The box at (x, y) of `rects` ([{ id, x, y, w, h }]): one whose edge is within `band` of the point, or with `inside`, one
- * the point is in; the smallest of several. → its id, or null.
+ * The box whose edge is at (x, y) of `rects` ([{ id, x, y, w, h }]): one whose edge is within `band` of the point, the
+ * smallest of several. A point well inside a box is not on it: that click is the page's. → its id, or null.
  */
-function boxAt(rects, x, y, { inside = false, band = EDGE } = {}) {
+function boxAt(rects, x, y, { band = EDGE } = {}) {
   let best = null;
   for (const r of rects || []) {
     const out = x >= r.x - band && x <= r.x + r.w + band && y >= r.y - band && y <= r.y + r.h + band;
     if (!out) continue;
     const deep = x > r.x + band && x < r.x + r.w - band && y > r.y + band && y < r.y + r.h - band;
-    if (deep && !inside) continue;
+    if (deep) continue;
     if (!best || r.w * r.h < best.w * best.h) best = r;
   }
   return best ? best.id : null;
+}
+
+/** The handle of box `r` ({ x, y, w, h }) whose centre is within `reach` of (x, y): its name ('nw' … 'w'), or null. */
+function handleAt(r, x, y, reach = HANDLE_HIT) {
+  if (!r) return null;
+  let best = null, bestD = Infinity;
+  for (const [name, fx, fy] of HANDLES) {
+    const dx = Math.abs(x - (r.x + fx * r.w)), dy = Math.abs(y - (r.y + fy * r.h));
+    if (dx > reach || dy > reach) continue;
+    if (dx + dy < bestD) { best = name; bestD = dx + dy; }
+  }
+  return best;
+}
+
+/**
+ * Box `start` ({ x, y, w, h }) with handle `handle` dragged by (dx, dy): the edges the handle holds move, never past the
+ * other side less `min`, and the whole box is kept inside `bounds` (the visible page, { x, y, w, h }). → { x, y, w, h }.
+ */
+function resizeRect(start, handle, dx, dy, bounds, min = MIN_BOX) {
+  const name = String(handle || '');
+  const bx = bounds.x, by = bounds.y, br = bounds.x + bounds.w, bb = bounds.y + bounds.h;
+  let l = start.x, t = start.y, r = start.x + start.w, b = start.y + start.h;
+  if (name.includes('w')) l = Math.min(l + dx, r - min);
+  if (name.includes('e')) r = Math.max(r + dx, l + min);
+  if (name.includes('n')) t = Math.min(t + dy, b - min);
+  if (name.includes('s')) b = Math.max(b + dy, t + min);
+  l = Math.max(bx, Math.min(l, br - min)); r = Math.min(br, Math.max(r, l + min));
+  t = Math.max(by, Math.min(t, bb - min)); b = Math.min(bb, Math.max(b, t + min));
+  return { x: l, y: t, w: r - l, h: b - t };
+}
+
+const inRect = (x, y, r) => x >= r.left && x <= r.left + r.width && y >= r.top && y <= r.top + r.height;
+function intersect(a, b) {
+  const left = Math.max(a.left, b.left), top = Math.max(a.top, b.top);
+  const right = Math.min(a.left + a.width, b.left + b.width), bottom = Math.min(a.top + a.height, b.top + b.height);
+  return right > left && bottom > top ? { left, top, width: right - left, height: bottom - top } : null;
+}
+
+/**
+ * Whether something on the page counts as showing under a box: `rect` (a word's, or with `part` a picture's, of which its
+ * part inside the box and the viewport is judged), `box` and `viewport` ({ width, height }) in viewport pixels. Its
+ * centre must be inside the box and the viewport, then `probe.visible()` (its element's checkVisibility) true, then
+ * `probe.hits(x, y)` (what elementFromPoint finds there is its element or inside it). The probes are asked last, and
+ * only when the geometry holds.
+ */
+function shows(rect, box, viewport, probe, { part = false } = {}) {
+  if (!rect || !(rect.width > 0) || !(rect.height > 0) || !box || !viewport) return false;
+  const screen = { left: 0, top: 0, width: viewport.width, height: viewport.height };
+  const r = part ? intersect(rect, box) && intersect(intersect(rect, box), screen) : rect;
+  if (!r) return false;
+  const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+  if (!inRect(cx, cy, box) || !inRect(cx, cy, screen)) return false;
+  if (!probe.visible()) return false;
+  return !!probe.hits(cx, cy);
 }
 
 // ------------------------------------------------------------------------------------------------- in the page
@@ -393,7 +472,10 @@ function runInPage() {
     for (const [id, held] of boxes) {
       findBox(held);
       let r = null;
-      if (held.el) { const e = docRect(held.el); if (e.w > 0 && e.h > 0) r = placeIn(held.box, e); }
+      // a box being resized is where the drag has it, and once let go, there until main has its new anchor
+      if (drag && drag.id === id && drag.rect) r = { x: drag.rect.x + window.scrollX, y: drag.rect.y + window.scrollY, w: drag.rect.w, h: drag.rect.h };
+      else if (held.pending) r = held.pending;
+      else if (held.el) { const e = docRect(held.el); if (e.w > 0 && e.h > 0) r = placeIn(held.box, e); }
       else if (held.how === 'doc') r = held.box.doc;
       if (r) rects.push({ id, x: r.x - at.x, y: r.y - at.y, w: r.w, h: r.h }); else missing.push(id);
     }
@@ -403,6 +485,7 @@ function runInPage() {
     const round = (n) => Math.round(n * 10) / 10;
     const report = { rects: rects.map((r) => ({ id: r.id, x: round(r.x), y: round(r.y), w: round(r.w), h: round(r.h) })), selected: picked, size, missing };
     lastRects = report.rects.map((r) => ({ ...r, x: r.x + at.x, y: r.y + at.y }));
+    sendView();
     const text = JSON.stringify(report);
     if (text === sent) return;
     sent = text;
@@ -412,9 +495,31 @@ function runInPage() {
   function setBoxes(marks) {
     for (const held of boxes.values()) if (held.el && resized) resized.unobserve(held.el);
     boxes.clear();
-    for (const m of marks) if (m && typeof m.id === 'string' && m.box) boxes.set(m.id, { box: m.box, el: null, how: 'none' });
+    for (const m of marks) if (m && typeof m.id === 'string' && m.box) boxes.set(m.id, { box: m.box, el: null, how: 'none', pending: null });
     schedule();
   }
+  const viewportSize = () => { const html = document.documentElement; return { width: html ? html.clientWidth : window.innerWidth, height: html ? html.clientHeight : window.innerHeight }; };
+  /** The selected box in the viewport (CSS pixels), or null: where it is in the document, less how far the page is scrolled. */
+  function pickedView() {
+    const r = picked ? lastRects.find((x) => x.id === picked) : null;
+    return r ? { x: r.x - window.scrollX, y: r.y - window.scrollY, w: r.w, h: r.h } : null;
+  }
+
+  // Where the selected box is in the viewport, for its card (main, views.cjs): when it changes, at most once a frame, and
+  // whether the page is scrolling (main may hide the card meanwhile).
+  let viewSent = '', viewFrame = 0, scrolling = false, scrollEnd = 0;
+  function sendView() {
+    if (viewFrame) { cancelAnimationFrame(viewFrame); viewFrame = 0; }
+    const rect = pickedView();
+    const round = (n) => Math.round(n * 10) / 10;
+    const value = rect ? { id: picked, rect: { x: round(rect.x), y: round(rect.y), w: round(rect.w), h: round(rect.h) }, viewport: viewportSize(), scrolling } : { id: null };
+    const text = JSON.stringify(value);
+    if (text === viewSent) return;
+    viewSent = text;
+    ipcRenderer.send(CHANNELS.boxView, value);
+  }
+  const viewSoon = () => { if (!viewFrame) viewFrame = requestAnimationFrame(() => { viewFrame = 0; sendView(); }); };
+
   /**
    * Where a box drawn at `rect` (the viewport's CSS pixels) is: { box: { x, y, w, h (fractions of its anchor), anchor, doc },
    * text: the page's text under it, at most BOX_TEXT characters }.
@@ -427,30 +532,45 @@ function runInPage() {
     const box = chosen ? { ...fractionsOf(view, chosen.rect), anchor: { selector: selectorOf(chosen.el), ...describe(chosen.el) }, doc } : { x: 0, y: 0, w: 1, h: 1, anchor: null, doc };
     return { box, text: textUnder(view) };
   }
-  /** The words whose middle is inside `view` (viewport pixels), in the page's order, and the alt text of pictures under it. */
+  /**
+   * The words that show under `view` (viewport pixels), in the page's order, and the alt text of the pictures that show
+   * there (shows: centre in the box and the viewport, visible, not covered).
+   */
   function textUnder(view) {
     const parts = [];
     let length = 0;
+    const viewport = viewportSize();
+    const seen = new Map(); // element → whether it is visible (checkVisibility), asked once each
+    const visible = (el) => {
+      if (!seen.has(el)) { let on = true; try { on = typeof el.checkVisibility === 'function' ? el.checkVisibility(VISIBILITY) : true; } catch { on = true; } seen.set(el, on); }
+      return seen.get(el);
+    };
+    const probe = (el) => ({ visible: () => visible(el), hits: (x, y) => { const at = document.elementFromPoint(x, y); return !!at && (at === el || el.contains(at)); } });
     const range = document.createRange();
     for (const node of textNodes()) {
       if (length >= BOX_TEXT) break;
       const parent = node.parentElement;
       if (!parent || !overlap(parent.getBoundingClientRect(), view)) continue;
-      const words = [];
+      const words = [], look = probe(parent);
       for (const match of node.data.matchAll(/\S+/g)) {
         try { range.setStart(node, match.index); range.setEnd(node, match.index + match[0].length); } catch { continue; }
-        const r = range.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-        if (r.width && cx >= view.left && cx <= view.left + view.width && cy >= view.top && cy <= view.top + view.height) words.push(match[0]);
+        if (shows(range.getBoundingClientRect(), view, viewport, look)) words.push(match[0]);
       }
       if (words.length) { parts.push(words.join(' ')); length += words.join(' ').length + 1; }
     }
     for (const img of document.images) {
       const alt = spaced(img.getAttribute('alt')).trim();
-      if (alt && overlap(img.getBoundingClientRect(), view) > 0) parts.push(`[image: ${alt}]`);
+      if (alt && shows(img.getBoundingClientRect(), view, viewport, probe(img), { part: true })) parts.push(`[image: ${alt}]`);
     }
     return parts.join(' ').slice(0, BOX_TEXT);
   }
-  const select = (id) => { picked = id && boxes.has(id) ? id : null; sent = ''; measure(); };
+  const select = (id) => {
+    if (drag && drag.id !== id) endDrag(false);
+    picked = id && boxes.has(id) ? id : null;
+    sent = '';
+    if (!picked) setCursor('');
+    measure();
+  };
 
   ipcRenderer.on(CHANNELS.box, (_event, value) => {
     const { nonce, rect } = value || {};
@@ -459,24 +579,102 @@ function runInPage() {
     ipcRenderer.send(CHANNELS.box, { nonce, box: got ? got.box : null, text: got ? got.text : '' });
   });
   ipcRenderer.on(CHANNELS.boxSet, (_event, marks) => setBoxes(Array.isArray(marks) ? marks : []));
-  ipcRenderer.on(CHANNELS.boxAdd, (_event, mark) => { if (mark && typeof mark.id === 'string' && mark.box) { boxes.set(mark.id, { box: mark.box, el: null, how: 'none' }); schedule(); } });
-  ipcRenderer.on(CHANNELS.boxRemove, (_event, id) => { const held = boxes.get(id); if (held && held.el && resized) resized.unobserve(held.el); boxes.delete(id); schedule(); });
+  // one more box, or one whose anchor main has anew (a resize): a box just drawn (`select`) is the one selected
+  ipcRenderer.on(CHANNELS.boxAdd, (_event, mark) => {
+    if (!mark || typeof mark.id !== 'string' || !mark.box) return;
+    const held = boxes.get(mark.id);
+    if (held && held.el && resized) resized.unobserve(held.el);
+    boxes.set(mark.id, { box: mark.box, el: null, how: 'none', pending: null });
+    if (mark.select) select(mark.id); else schedule();
+  });
+  ipcRenderer.on(CHANNELS.boxRemove, (_event, id) => { const held = boxes.get(id); if (held && held.el && resized) resized.unobserve(held.el); boxes.delete(id); if (drag && drag.id === id) endDrag(false); schedule(); });
   ipcRenderer.on(CHANNELS.boxSelect, (_event, id) => select(id));
+  // a click on the drawing layer: a box's edge selects it, as a click on the page does; inside it, nothing
   ipcRenderer.on(CHANNELS.boxHit, (_event, point) => {
     if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
-    select(boxAt(lastRects, point.x + window.scrollX, point.y + window.scrollY, { inside: true }));
+    select(boxAt(lastRects, point.x + window.scrollX, point.y + window.scrollY));
   });
-  // A click on a box's edge selects it, and goes no further into the page; anywhere else, what was selected is not.
+  // main waits for the page to have painted (twice: the frame the change is in is then on screen) before a picture
+  ipcRenderer.on(CHANNELS.frame, (_event, nonce) => { requestAnimationFrame(() => requestAnimationFrame(() => ipcRenderer.send(CHANNELS.frame, nonce))); });
+
+  // The pointer's cursor over a handle of the selected box: main inserts a rule for it, and takes it out again.
+  let cursor = '';
+  function setCursor(value) { if (value === cursor) return; cursor = value; ipcRenderer.send(CHANNELS.cursor, value); }
+
+  // Resizing (build 2): a press on a handle of the selected box. Its rectangle follows the pointer in the viewport (kept
+  // inside it), drawn by main once a frame (LIVE_RESIZE); let go, the page says what it is kept by now and the text under
+  // it, and main takes its picture and updates the mark. Until main answers it stays where it was let go.
+  let drag = null, dragFrame = 0;
+  function pressHandle(event) {
+    const r = pickedView();
+    const handle = r && handleAt(r, event.clientX, event.clientY);
+    if (!handle) return false;
+    drag = { id: picked, handle, start: r, from: { x: event.clientX, y: event.clientY }, rect: r };
+    setCursor(CURSORS[handle]);
+    return true;
+  }
+  function moveHandle(event) {
+    const { width, height } = viewportSize();
+    drag.rect = resizeRect(drag.start, drag.handle, event.clientX - drag.from.x, event.clientY - drag.from.y, { x: 0, y: 0, w: width, h: height });
+    if (LIVE_RESIZE && !dragFrame) dragFrame = requestAnimationFrame(() => { dragFrame = 0; if (drag) measure(); });
+  }
+  function endDrag(keep = true) {
+    const was = drag;
+    drag = null;
+    if (dragFrame) { cancelAnimationFrame(dragFrame); dragFrame = 0; }
+    if (!was) return;
+    const held = boxes.get(was.id), r = was.rect;
+    const moved = r && (Math.abs(r.x - was.start.x) + Math.abs(r.y - was.start.y) + Math.abs(r.w - was.start.w) + Math.abs(r.h - was.start.h)) >= 1;
+    if (!keep || !held || !moved) { measure(); return; }
+    held.pending = { x: r.x + window.scrollX, y: r.y + window.scrollY, w: r.w, h: r.h };
+    measure();
+    let got = null;
+    try { got = boxHere(r); } catch { got = null; }
+    if (!got) { held.pending = null; measure(); return; }
+    ipcRenderer.invoke(CHANNELS.boxResize, { id: was.id, rect: r, box: got.box, text: got.text }).then((answer) => answer, () => null).then((answer) => {
+      if (boxes.get(was.id) !== held) return;
+      if (answer && answer.box) { held.box = answer.box; if (held.el && resized) resized.unobserve(held.el); held.el = null; held.how = 'none'; }
+      held.pending = null;
+      measure();
+    });
+  }
+
+  // A click on a box's edge selects it, and goes no further into the page; anywhere else, what was selected is not. A
+  // press on the selected box's handle takes the drag the same way.
   let swallow = false;
+  const stop = (event) => { event.preventDefault(); event.stopImmediatePropagation(); };
   window.addEventListener('mousedown', (event) => {
     if (event.button !== 0 || !boxes.size) return;
+    if (picked && pressHandle(event)) { stop(event); swallow = true; return; }
     const id = boxAt(lastRects, event.clientX + window.scrollX, event.clientY + window.scrollY);
-    if (id) { event.preventDefault(); event.stopImmediatePropagation(); swallow = true; select(id); } else if (picked) select(null);
+    if (id) { stop(event); swallow = true; select(id); } else if (picked) select(null);
   }, true);
-  for (const name of ['mouseup', 'click']) window.addEventListener(name, (event) => { if (!swallow) return; event.preventDefault(); event.stopImmediatePropagation(); if (name === 'click') swallow = false; }, true);
-  // the page reflows, scrolls inside a box of its own, or changes size: the boxes are measured again
+  window.addEventListener('mousemove', (event) => {
+    if (drag) { stop(event); moveHandle(event); return; }
+    if (!picked) return;
+    const handle = handleAt(pickedView(), event.clientX, event.clientY);
+    setCursor(handle ? CURSORS[handle] : '');
+  }, true);
+  window.addEventListener('mouseup', (event) => {
+    if (drag && event.button === 0) { stop(event); endDrag(true); if (picked) { const h = handleAt(pickedView(), event.clientX, event.clientY); setCursor(h ? CURSORS[h] : ''); } return; }
+    if (swallow) stop(event);
+  }, true);
+  window.addEventListener('click', (event) => { if (!swallow) return; stop(event); swallow = false; }, true);
+  window.addEventListener('blur', () => { if (drag) endDrag(false); });
+  // the page reflows, scrolls inside a box of its own, or changes size: the boxes are measured again. The page itself
+  // scrolling moves no box in the document (the rule scrolls with it), but moves the selected one in the viewport.
   window.addEventListener('resize', schedule);
-  document.addEventListener('scroll', (event) => { if (boxes.size && event.target !== document) schedule(); }, true);
+  document.addEventListener('scroll', (event) => {
+    if (!boxes.size) return;
+    if (event.target !== document) { schedule(); return; }
+    if (!picked) return;
+    scrolling = true;
+    clearTimeout(scrollEnd);
+    scrollEnd = setTimeout(() => { scrolling = false; viewSoon(); }, SCROLL_END_MS);
+    viewSoon();
+  }, true);
+  // a page given back from the back-forward cache: main has forgotten what it was told, and is told again
+  window.addEventListener('pageshow', (event) => { if (!event.persisted) return; sent = ''; viewSent = ''; cursor = ''; schedule(); });
   const watchRoot = () => { if (!resized) return; if (document.documentElement) resized.observe(document.documentElement); if (document.body) resized.observe(document.body); };
 
   // Whether a text field has the keyboard: ⌥ is then the field's (views.cjs draws no box). A frame's own field is not seen
@@ -509,4 +707,4 @@ function runInPage() {
 }
 
 if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof require === 'function') runInPage();
-else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, HIGHLIGHT, CONTEXT, MAX_EXACT, MAX_AFFIX, PAGE_TEXT, BOX_TEXT, textMap, rangeOf, snapWords, quoteOf, textAround, anchor, alike, chooseAnchor, fractionsOf, placeIn, sameElement, refind, boxAt };
+else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, HIGHLIGHT, CONTEXT, MAX_EXACT, MAX_AFFIX, PAGE_TEXT, BOX_TEXT, EDGE, HANDLES, HANDLE_HIT, MIN_BOX, CURSORS, LIVE_RESIZE, VISIBILITY, textMap, rangeOf, snapWords, quoteOf, textAround, anchor, alike, chooseAnchor, fractionsOf, placeIn, sameElement, refind, boxAt, handleAt, resizeRect, shows };

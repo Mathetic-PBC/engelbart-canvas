@@ -53,6 +53,10 @@ const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platfor
 // Boxes on a page (MATH-70 build 1): the Box button lays main's drawing layer over the page (⌥ held in the page does the
 // same, main: browser/views.cjs); a box removed in the page (Backspace) shows "Box removed · Undo" in the address row,
 // beside the page and never over it, for about REMOVED_MS.
+// A box's card (MATH-70 build 2, main's own view beside the selected box: browser/views.cjs): @bart asked from it comes
+// here (onBrowserBoxAsk) and is asked through `onAsk` as from a highlight, its mark a web page's ({ source: 'web', url });
+// Stop on it stops the run (onStopAsk), or closes a failed one (onDismissAsk). What is running from boxes goes back to
+// main (browserBoxAsks) for the card to show; main has put each finished answer on the mark itself.
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
@@ -766,6 +770,23 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
       if (done && done.entry && done.markId && done.page != null && (done.rowId || done.url)) landRef.current(done.rowId ? { rowId: done.rowId } : { url: done.url }, done.page, done.markId, done.entry);
     });
   }, []);
+  // A box's card (MATH-70 build 2): its asks and Stops, through what the workspace gave; what runs goes back to main.
+  const boxHandlers = React.useRef(null);
+  boxHandlers.current = { onAsk, onStopAsk, onDismissAsk, pendingAsks };
+  React.useEffect(() => {
+    if (!api.onBrowserBoxAsk) return undefined;
+    const offAsk = api.onBrowserBoxAsk(({ markId, url, title, question, note, turns }) => {
+      const h = boxHandlers.current;
+      if (h.onAsk && markId && url && question) void h.onAsk({ markId, source: 'web', url, question, note: note || '', turns: turns || [], quote: '', pageText: '', paper: title || '' });
+    });
+    const offStop = api.onBrowserBoxStop(({ askId }) => {
+      const h = boxHandlers.current, held = (h.pendingAsks || []).find((p) => p && p.askId === askId);
+      if (held && held.error != null) { if (h.onDismissAsk) h.onDismissAsk(askId); } else if (h.onStopAsk && askId) h.onStopAsk(askId);
+    });
+    return () => { offAsk(); offStop(); };
+  }, []);
+  const boxAsks = React.useMemo(() => (pendingAsks || []).filter((p) => p && p.source === 'web' && p.askId && p.markId), [pendingAsks]);
+  React.useEffect(() => { if (api.browserBoxAsks) quiet(api.browserBoxAsks(boxAsks)); }, [boxAsks]);
   const askFromPaper = async (p, ask) => {
     if (!onAsk || !p) return;
     const where = pdfWhere(p);

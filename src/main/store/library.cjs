@@ -17,7 +17,7 @@ const { LIBRARY_TAGS } = require('./db.cjs');
 const { reading } = require('../stage/files.cjs');
 const { readHtmlMeta } = require('./page-meta.cjs');
 const { WEB, withAsk } = require('../../shared/mark-answers.cjs');
-const { CROP_RE } = require('../browser/boxes.cjs');
+const { CROP_RE, cropNumber, cropsOf, nextCropName, isBox } = require('../browser/boxes.cjs');
 const { addressKey, isPreviewAddress } = require('../../shared/address-key.cjs');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -242,6 +242,9 @@ async function webInk(ctx, url) {
 
 // A box's picture (MATH-70, 2026-10-07): <dataRoot>/annotations/crops/<mark id>.png, its mark's `crop` the path relative
 // to the annotations folder ("crops/<id>.png", browser/boxes.cjs cropName). Deleted with its mark, never pruned.
+// MATH-70 build 2 (2026-10-07): a box resized has a new picture, "crops/<id>-<n>.png" (nextCropName), and the old one stays:
+// an answer about the box keeps the picture it was asked about (its ask's `crop`). Every picture of a mark is deleted with
+// it, and comes back with Undo.
 
 /** The absolute path of a box's picture from its mark's `crop`, or null for anything that is not "crops/<id>.png". */
 function cropFile(ctx, crop) {
@@ -257,8 +260,63 @@ function writeCrop(file, png) {
 }
 
 /**
- * Mark `markId` taken out of web page `url`'s "web" list, and its picture deleted. → { mark, index, crop (the picture's
- * bytes, for undo; null without one) }, or null when it is not there or the ink is not kept.
+ * Every picture of mark `mark` there is: those it and its asks name, and any other "crops/<id>-<n>.png" left by a resize
+ * nothing answered about. → their crop names, each once.
+ */
+function picturesOf(ctx, mark) {
+  const names = new Set(cropsOf(mark));
+  let files = [];
+  try { files = fs.readdirSync(path.join(ctx.dataRoot, 'annotations', 'crops')); } catch { files = []; }
+  for (const file of files) if (cropNumber(mark.id, `crops/${file}`) >= 0) names.add(`crops/${file}`);
+  return [...names];
+}
+
+/** Mark `markId` in web page `url`'s "web" list, as kept now, or null. `where` is { url } or { rowId }. */
+async function readWebMark(ctx, where, markId) {
+  let ink = null;
+  try { ink = where && where.rowId ? await readAnnotations(ctx, where.rowId) : await readPageAnnotations(ctx, where && where.url); } catch { ink = null; }
+  const list = ink && typeof ink === 'object' && Array.isArray(ink[WEB]) ? ink[WEB] : [];
+  return list.find((m) => m && m.id === markId) || null;
+}
+
+// What a change to a web mark may set (updateWebMark): its note (a highlight's or a box's), and a box's rectangle and the
+// text under it. Its id, its answers and its picture's name are not the caller's to set.
+const PATCHABLE = ['note', 'box', 'text'];
+
+/**
+ * Mark `markId` of web page `url` with `patch` ({ note, box, text }: what PATCHABLE allows) put on it, and for a box
+ * given a new picture (`crop`, PNG bytes) that picture written under the next name (nextCropName) and made its `crop`;
+ * the one before stays. → the mark as written, or null when it is not there or the ink is not kept.
+ */
+async function updateWebMark(ctx, url, markId, patch = {}, { crop = null } = {}) {
+  return inkInTurn(async () => {
+    const at = await webInk(ctx, url);
+    if (!at) return null;
+    const index = at.list.findIndex((m) => m && m.id === markId);
+    if (index < 0) return null;
+    const was = at.list[index];
+    const next = { ...was };
+    for (const key of PATCHABLE) if (patch && Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key];
+    if ('box' in next && !isBox(next)) return null; // a box stays a box
+    let picture = null;
+    if (crop && crop.length && isBox(was)) {
+      next.crop = nextCropName(was);
+      picture = cropFile(ctx, next.crop);
+      if (picture) writeCrop(picture, crop); else next.crop = was.crop;
+    }
+    try {
+      writeJson(at.file, { ...at.marks, [WEB]: at.list.map((m, i) => (i === index ? next : m)) });
+    } catch (error) {
+      if (picture) fs.rmSync(picture, { force: true });
+      throw error;
+    }
+    return next;
+  });
+}
+
+/**
+ * Mark `markId` taken out of web page `url`'s "web" list, and every picture of it deleted (picturesOf). → { mark, index,
+ * crops ([{ crop, bytes }], for undo; empty without any) }, or null when it is not there or the ink is not kept.
  */
 async function removeWebMark(ctx, url, markId) {
   return inkInTurn(async () => {
@@ -268,24 +326,27 @@ async function removeWebMark(ctx, url, markId) {
     if (index < 0) return null;
     const mark = at.list[index];
     writeJson(at.file, { ...at.marks, [WEB]: at.list.filter((_, i) => i !== index) });
-    const picture = cropFile(ctx, mark.crop);
-    let crop = null;
-    if (picture) {
-      try { crop = fs.readFileSync(picture); } catch { crop = null; }
-      fs.rmSync(picture, { force: true });
+    const crops = [];
+    for (const crop of isBox(mark) ? picturesOf(ctx, mark) : []) {
+      const file = cropFile(ctx, crop);
+      if (!file) continue;
+      try { crops.push({ crop, bytes: fs.readFileSync(file) }); } catch { /* not there: nothing to keep */ }
+      fs.rmSync(file, { force: true });
     }
-    return { mark, index, crop };
+    return { mark, index, crops };
   });
 }
 
-/** What removeWebMark gave back, put back: the mark at its index (the end, if the list is shorter now) and its picture. */
-async function restoreWebMark(ctx, url, { mark, index, crop } = {}) {
+/** What removeWebMark gave back, put back: the mark at its index (the end, if the list is shorter now) and its pictures. */
+async function restoreWebMark(ctx, url, { mark, index, crops = [] } = {}) {
   if (!mark || typeof mark.id !== 'string') return false;
   return inkInTurn(async () => {
     const at = await webInk(ctx, url);
     if (!at || at.list.some((m) => m && m.id === mark.id)) return false;
-    const picture = crop && crop.length ? cropFile(ctx, mark.crop) : null;
-    if (picture) writeCrop(picture, crop);
+    for (const { crop, bytes } of Array.isArray(crops) ? crops : []) {
+      const file = cropNumber(mark.id, crop) >= 0 ? cropFile(ctx, crop) : null; // only the mark's own
+      if (file && bytes && bytes.length) writeCrop(file, bytes);
+    }
     const list = [...at.list];
     list.splice(Math.max(0, Math.min(Number(index) || 0, list.length)), 0, mark);
     return writeJson(at.file, { ...at.marks, [WEB]: list });
@@ -1023,4 +1084,4 @@ async function previewItem(ctx, id, { listRemoteFiles } = {}) {
   return out;
 }
 
-module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, annotationsFileOf, writePageAnnotations, addMarkAnswer, addWebMark, removeWebMark, restoreWebMark, cropFile, projectsForLibraryItem, libraryForProject, bodiesForProject, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, addPageCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem, FILE_TYPES, PEEK_SKIP };
+module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, annotationsFileOf, writePageAnnotations, addMarkAnswer, addWebMark, updateWebMark, readWebMark, removeWebMark, restoreWebMark, cropFile, projectsForLibraryItem, libraryForProject, bodiesForProject, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, addPageCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem, FILE_TYPES, PEEK_SKIP };

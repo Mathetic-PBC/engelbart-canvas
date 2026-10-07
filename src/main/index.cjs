@@ -704,7 +704,7 @@ if (!hasSingleInstanceLock) {
           peers: postItPeers,
         });
         const browserViews = createBrowserViews({
-          electron: { WebContentsView, session: electronSession, Menu, clipboard, dialog, shell: electronShell },
+          electron: { WebContentsView, session: electronSession, Menu, clipboard, dialog, shell: electronShell, screen: require('electron').screen },
           getWindow: () => ctx.win,
           send,
           appName: app.getName(),
@@ -712,12 +712,14 @@ if (!hasSingleInstanceLock) {
           onLayerChange: () => postItViews.raise(),
           partition: BROWSER_PARTITION,
           // A page's web highlights (MATH-54 build 2) and boxes (MATH-70): its ink as the library keeps it, the "web" list
-          // in it; a box's picture goes and comes back with it.
+          // in it; a box's pictures go and come back with it.
           pageMarks: {
             list: async (url) => { const ink = await library.readPageAnnotations(await store.context(), url); return ink && Array.isArray(ink.web) ? ink.web : []; },
             add: async (url, mark, extra) => library.addWebMark(await store.context(), url, mark, extra),
             remove: async (url, markId) => library.removeWebMark(await store.context(), url, markId),
             restore: async (url, removed) => library.restoreWebMark(await store.context(), url, removed),
+            // a box resized, or a note written on its card (MATH-70 build 2): → the mark as written, or null
+            update: async (url, markId, patch, extra) => library.updateWebMark(await store.context(), url, markId, patch, extra),
           },
         });
         return { browserViews, postItViews };

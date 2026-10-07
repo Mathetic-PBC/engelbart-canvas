@@ -459,13 +459,17 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return next;
   }), []);
   const failPaperAsk = React.useCallback((askId, message) => setPaperAsks((current) => (current[askId] ? { ...current, [askId]: { ...current[askId], error: message || 'The run failed.', activity: '', lines: [] } } : current)), []);
-  const askHighlight = React.useCallback(async ({ markId, page, quote, note, question, turns, rowId, url, paper, pageText }) => {
+  // A box on a web page (MATH-70 build 2) asks the same way from its card, `source` 'web': its mark is in the page's "web"
+  // list and has no page; main reads the box itself from the page's ink.
+  const askHighlight = React.useCallback(async ({ markId, page, quote, note, question, turns, rowId, url, paper, pageText, source }) => {
     const text = String(question || '').trim();
     if (!topic || !markId || !text || (!rowId && !url)) return null;
     const askId = `h${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-    setPaperAsks((current) => ({ ...current, [askId]: { askId, markId, page, rowId: rowId || null, url: rowId ? null : url, question: text, agent: 'bart' } }));
+    const web = source === 'web';
+    setPaperAsks((current) => ({ ...current, [askId]: { askId, markId, page: web ? null : page, rowId: rowId || null, url: rowId ? null : url, question: text, agent: 'bart', ...(web ? { source: 'web' } : {}) } }));
     try {
-      const ref = rowId ? { kind: 'mark', id: markId, rowId, page } : { kind: 'mark', id: markId, url, page };
+      const on = web ? { source: 'web' } : { page };
+      const ref = rowId ? { kind: 'mark', id: markId, rowId, ...on } : { kind: 'mark', id: markId, url, ...on };
       const asked = api.askBart(project.id, { askId, ref, workspaceId: topic.id, text, turns: turns || [], highlight: { quote: quote || '', note: note || '', paper: paper || null, pageText: pageText || '' }, stage: stageNow() });
       loadBartModels(); // main has kept a pick by hand before this is read
       const out = await asked;
