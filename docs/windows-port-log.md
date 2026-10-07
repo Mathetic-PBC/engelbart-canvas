@@ -42,6 +42,17 @@ local folder, runs the line against it, smoke tests the installed copy and runs 
 
 ### Status
 
+- 2026-10-07, **done on 5a399d9**: install run 3 (https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37675665317),
+  run conclusion success. macos-latest ✓ (1391 tests, 1389 pass, 2 skipped: the bundled-Git test's own and the new
+  Windows-only PowerShell test; `npm run package`). windows-latest ✓ (1394 tests, 1356 pass, 38 skipped, 0 failed;
+  dist:win; smoke on win-unpacked; `irm http://127.0.0.1:8765/install.ps1 | iex` in Windows PowerShell 5.1 installed
+  0.1.10; smoke-windows on the installed copy; the second run: "already installed … and up to date", no download).
+  Linux failed its apt step at the new 10-minute limit (allowed). `UPLOAD_DRY_RUN=1 npm run upload:win` takes run
+  37675665317 and lists Engelbart-0.1.10-x64.exe, its blockmap, index.html, install.ps1, SHA256SUMS-windows.txt,
+  latest.yml. No test file but the new one changed since 27d034e.
+- 2026-10-07, noticed after the done run: a Windows release is live in the bucket, uploaded 19:46 UTC (the installer
+  from install run 2, f210c51, by its sha512; latest.yml, install.ps1, SHA256SUMS-windows.txt and index.html with the
+  Windows section). Not from this run, which only ever ran upload:win with UPLOAD_DRY_RUN=1 (no Worker deployed).
 - 2026-10-07, install run 2 (f210c51, https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37667770887):
   macOS ✓ (1391 tests, 1389 pass, 2 skipped: the bundled-Git test's own and the new Windows-only PowerShell test);
   Windows ✓ (1394 tests, 1356 pass, 38 skipped, 0 failed; dist:win; `irm | iex` in Windows PowerShell 5.1 installed
@@ -68,6 +79,7 @@ local folder, runs the line against it, smoke tests the installed copy and runs 
 |---|---|---|---|---|
 | fd68788 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37665101651 | ✓ | ✗ second run reinstalled | install, smoke of the installed copy ✓; up-to-date check missed the registry entry |
 | f210c51 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37667770887 | ✓ | ✓ install, smoke, up to date | Linux hung in apt (run reported cancelled) |
+| 5a399d9 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37675665317 | ✓ | ✓ install, smoke, up to date | **run success; the done commit** (Linux failed at the apt limit, allowed) |
 
 ## Catch-up to 0.1.10
 
