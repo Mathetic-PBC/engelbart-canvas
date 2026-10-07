@@ -35,21 +35,25 @@
   }
 
   # Where Engelbart is installed and which version, from its uninstall entry (this account's, then everyone's), else the
-  # usual folder. $null when it is not installed.
+  # usual folder. The installer leaves InstallLocation out of the entry; its uninstaller is in the folder, so the folder
+  # is that (UninstallString: "<folder>\Uninstall Engelbart.exe" /currentuser). $null when it is not installed.
   function Get-Installed {
     $roots = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
     foreach ($root in $roots) {
       foreach ($key in @(Get-ChildItem -Path $root -ErrorAction SilentlyContinue)) {
         $entry = Get-ItemProperty -Path $key.PSPath -ErrorAction SilentlyContinue
-        if ($entry -and "$($entry.DisplayName)" -like 'Engelbart*' -and $entry.InstallLocation) {
-          $dir = "$($entry.InstallLocation)".Trim('"')
-          if (Test-Path -LiteralPath (Join-Path $dir 'Engelbart.exe')) { return [pscustomobject]@{ Version = "$($entry.DisplayVersion)"; Dir = $dir; Everyone = $root -like 'HKLM:*' } }
-        }
+        if (-not $entry -or "$($entry.DisplayName)" -notlike 'Engelbart*') { continue }
+        $dir = "$($entry.InstallLocation)".Trim('"')
+        if (-not $dir -and "$($entry.UninstallString)" -match '^\s*"([^"]+)"|^\s*(\S+)') { $dir = Split-Path -Parent $(if ($Matches[1]) { $Matches[1] } else { $Matches[2] }) }
+        if ($dir -and (Test-Path -LiteralPath (Join-Path $dir 'Engelbart.exe'))) { return [pscustomobject]@{ Version = "$($entry.DisplayVersion)"; Dir = $dir; Everyone = $root -like 'HKLM:*' } }
       }
     }
     $usual = Join-Path $env:LOCALAPPDATA 'Programs\Engelbart'
     $exe = Join-Path $usual 'Engelbart.exe'
-    if (Test-Path -LiteralPath $exe) { return [pscustomobject]@{ Version = "$((Get-Item -LiteralPath $exe).VersionInfo.ProductVersion)"; Dir = $usual; Everyone = $false } }
+    if (Test-Path -LiteralPath $exe) { # its file version has a fourth part, 0.1.10.0
+      $parts = "$((Get-Item -LiteralPath $exe).VersionInfo.ProductVersion)" -split '\.'
+      return [pscustomobject]@{ Version = ($parts[0..([Math]::Min(2, $parts.Count - 1))] -join '.'); Dir = $usual; Everyone = $false }
+    }
     return $null
   }
 

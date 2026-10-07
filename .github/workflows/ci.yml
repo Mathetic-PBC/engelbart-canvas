@@ -127,7 +127,7 @@ jobs:
             if ($code -ne 0 -or $first -notmatch "Engelbart $([regex]::Escape($version)) is installed in ") { throw "the first install did not install Engelbart (exit code $code)" }
             $exe = Join-Path $env:LOCALAPPDATA 'Programs\Engelbart\Engelbart.exe'
             if (-not (Test-Path -LiteralPath $exe)) { throw "Engelbart is not at $exe" }
-            Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall | Get-ItemProperty | Where-Object DisplayName -like 'Engelbart*' | Format-List DisplayName, DisplayVersion, InstallLocation
+            Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall | Get-ItemProperty | Where-Object DisplayName -like 'Engelbart*' | Format-List DisplayName, DisplayVersion, InstallLocation, UninstallString
             node scripts/smoke-windows.cjs $exe
             if ($LASTEXITCODE) { throw 'the installed copy did not pass the smoke test' }
             $again = & { irm http://127.0.0.1:8765/install.ps1 | iex } 6>&1 | Out-String

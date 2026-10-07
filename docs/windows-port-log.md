@@ -42,12 +42,21 @@ local folder, runs the line against it, smoke tests the installed copy and runs 
 
 ### Status
 
-- 2026-10-07: written; Mac tests for it pass locally. Pushing for the first CI run.
+- 2026-10-07, install run 2: install.ps1 finds the install folder from the uninstall entry's UninstallString (the
+  NSIS installer writes no InstallLocation), and compares only three parts of the exe's version (its ProductVersion
+  is 0.1.10.0) in the fallback.
+- 2026-10-07, install run 1 (fd68788): macOS ✓. Windows: npm test 1394 tests, 1356 pass, 38 skipped, 0 failed
+  (the new script tests ran in Windows PowerShell: bad checksum, unreachable folder); `npm run dist:win` made the
+  installer and latest.yml; the first `irm | iex` (Windows PowerShell 5.1) installed 0.1.10 into
+  %LOCALAPPDATA%\Programs\Engelbart; smoke-windows passed on the installed copy. The second run installed again
+  instead of stopping: the uninstall entry has no InstallLocation, so the version came from the exe, 0.1.10.0.
+- 2026-10-07: written; Mac tests for it pass locally. Pushed for the first CI run.
 
 ### CI runs
 
 | Commit | Run | macOS | Windows | Notes |
 |---|---|---|---|---|
+| fd68788 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37665101651 | ✓ | ✗ second run reinstalled | install, smoke of the installed copy ✓; up-to-date check missed the registry entry |
 
 ## Catch-up to 0.1.10
 
