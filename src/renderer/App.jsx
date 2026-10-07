@@ -286,11 +286,12 @@ export default function App() {
     }
   }
 
-  // Onboarding made the project (api.startProject): land in its Getting started workspace with the Welcome! note open.
-  async function onboarded(made) {
+  // Onboarding made the project (api.startProject): land in its Getting started workspace with the Welcome! note open, and
+  // the sites its sign-in import said to sign in to again on the Stage.
+  async function onboarded(made, { stageLinks = [] } = {}) {
     setError('');
     await loadHome();
-    await openProject(made.project.id, { workspaceId: made.workspaceId, tab: { id: made.noteId, title: made.noteName } });
+    await openProject(made.project.id, { workspaceId: made.workspaceId, tab: { id: made.noteId, title: made.noteName }, stage: stageLinks.length ? { links: stageLinks } : null });
   }
 
   async function goHome() {
@@ -408,18 +409,15 @@ export default function App() {
       <UpdateBanner />
       {setup && tools && <ToolSetup snapshot={tools} ids={setup.ids} mode={setup.mode} onClose={() => setSetup(null)} />}
       <WindowEdges />
-      <WindowControls>
-        {/* only in a developer's copy (src/main/developer.cjs): the app people download has no test mode */}
-        {config.testModeAvailable && (
-          <TestToggle
-            testMode={config.testMode}
-            busy={busy}
-            onToggle={toggleTest}
-            onReset={() => resetTest(false)}
-            onStartNew={() => resetTest(true)}
-            onReveal={() => api.reveal(config.testRoot).catch(fail)}
-          />
-        )}
+      {/* test mode, its pill and Settings' Test data section, only in a developer's copy (src/main/developer.cjs): the app
+          people download has no test mode */}
+      <WindowControls test={config.testModeAvailable ? {
+        testMode: config.testMode,
+        onReset: () => resetTest(false),
+        onStartNew: () => resetTest(true),
+        onReveal: () => api.reveal(config.testRoot).catch(fail),
+      } : null}>
+        {config.testModeAvailable && <TestToggle testMode={config.testMode} busy={busy} onToggle={toggleTest} />}
       </WindowControls>
     </div>
     </SandboxProgress>

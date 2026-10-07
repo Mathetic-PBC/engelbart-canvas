@@ -23,10 +23,13 @@
 //     asks its cards the same way, as `@discover …` lines, and answers with a reading guide drawn as an @bart answer is.
 //     @orient (2026-10-04) went into @brainstorm on 2026-10-05: an older document's `@orient …` line stays as written and
 //     is asked, drawn and answered as an @brainstorm line (model/doc.js agentOf).
-//   * Send to Discover (MATH-31, 2026-10-05): under a live @brainstorm card, and after an @brainstorm recap on a
-//     row of its own above the follow-up field, a field where the person writes what they want prior work on. Enter starts
-//     an @discover thread of its own on those words after the thread, and a live card stays live. It replaced the searches
-//     the agents suggested (a card's lookFor, a recap's Look for line); a Look for line in an older recap reads as text.
+//   * Send to Discover (MATH-31, 2026-10-05): after an older @brainstorm recap, on a row of its own above the follow-up
+//     field, a field where the person writes what they want prior work on. Enter starts an @discover thread of its own on
+//     those words after the thread. It replaced the searches the agents suggested (a card's lookFor, a recap's Look for
+//     line); a Look for line in an older recap reads as text. Since the MATH-40 follow-up (2026-10-06) it is not under a
+//     live card: an exchange sends on only from its finished result (the offer line, below).
+//   * An @brainstorm result (MATH-40): the sentence the person wrote on the last card, then one small grey line whose
+//     @discover and @bart start a thread of that agent's own on the sentence, after the thread (askResult).
 //     Each paper's title line in a guide has a bookmark in its right margin that keeps the paper (2026-10-02, model/guide.js;
 //     a quiet icon since 2026-10-03): outline, outline with +, or filled, from props.paperState; a click hands it to
 //     props.onSavePaper. Drawn, never written: the line stays as it came. An entry's **Try:** line (2026-10-04) links the
@@ -46,12 +49,13 @@
 //     (preventDefault), so the window's Escape leaves it alone (Workspace.jsx).
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, listMark, threads, turnText, wsMention, mentionAt, agentOf, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE } from '../model/doc.js';
-import { fieldRows, isVerbRow } from '../model/rail.js';
+import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, listMark, threads, turnText, wsMention, fileMention, zoteroMention, chatMention, mentionAt, folderPath, folderMentionAt, agentOf, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE } from '../model/doc.js';
+import { fieldRows, isVerbRow, isFolderRow, folderRows, firstPick, parentRel } from '../model/rail.js';
 import { readFlags, readQuestion, readDiscover, withChoice, withMode, discoverSpans, modelOf, effortOf, buildRequestOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
-import { SKIPPED, MAP_GROUPS, cardOfAnswer, questionOf, isChoice, answerLine, withWrap, readAnswer, recapLine } from '../../main/bart/card.cjs';
+import { SKIPPED, MAP_GROUPS, RESULT_OFFER, cardOfAnswer, questionOf, isChoice, answerLine, withWrap, readAnswer, recapLine, resultParts } from '../../main/bart/card.cjs';
 import BartPicker from './BartPicker.jsx';
 import DiscoverLevels, { LEVEL_LABELS } from './DiscoverLevels.jsx';
+import { pdfText } from '../model/paste.js';
 import MentionMenu from './MentionMenu.jsx';
 import { fieldCaret } from './caret.js';
 import Popover from './Popover.jsx';
@@ -66,7 +70,7 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 export const BART_ITEM = { id: 'bart', type: 'chat', name: 'bart', title: 'Bart', summary: 'Ask a question about this document, the project\'s code or the web. Add --opus or --high to pick the model or the effort by hand.', facts: 'reads, never edits' };
 export const DISCOVER_ITEM = { id: 'discover', type: 'chat', name: 'discover', title: 'Discover', summary: 'Find what to read about a problem, and where in it to look: it traces the citations of the papers in your library and the pages of the people you follow. Pick Quick, Standard or Deep on the line\'s chip.', facts: 'finds, never concludes' };
-export const BRAINSTORM_ITEM = { id: 'brainstorm', type: 'chat', name: 'brainstorm', title: 'Brainstorm', summary: 'Write what you know about a topic or paper, then land on a research question in your own words.', facts: 'asks, never proposes' };
+export const BRAINSTORM_ITEM = { id: 'brainstorm', type: 'chat', name: 'brainstorm', title: 'Brainstorm', summary: 'Think out loud about a topic, a paper or what is on your mind, then write what you want to dig into next.', facts: 'asks, never proposes' };
 
 const UNDER_BART = ['pending', 'reply'];
 // The agents that run on one model of their own (no model chip, no selector on Regenerate), may be asked with nothing after
@@ -95,6 +99,30 @@ const newAskId = () => `${Date.now().toString(36)}-${Math.random().toString(36).
 const withAttachments = (text, images) => {
   const ids = new Map(images.filter((image) => image.id).map((image) => [image.n, image.id]));
   return text.replace(/(?<!!)\[Attachment (\d+)\](?!\()/g, (token, n) => (ids.has(Number(n)) ? `![Attachment ${n}](img:${ids.get(Number(n))})` : token));
+};
+// The token a picked row of the @ menu writes: a workspace's, a Zotero item's (MATH-65 build 2), a file's or a subfolder's
+// in a library folder (MATH-22), else a mention by name. `pickedRow`: the library row picking it links to the workspace (a
+// file's is its folder's); null for a Zotero item, which links nothing.
+const mentionToken = (r) => (r.kind === 'workspace' ? wsMention(r.name, r.id)
+  : r.kind === 'entry' && r.zotero ? zoteroMention(r.name, r.zotero)
+    : (r.kind === 'entry' || r.kind === 'self') && r.rel ? fileMention(r.kind === 'self' ? r.entryName : r.name, r.row.id, r.rel)
+      : `@[${r.name}]`);
+// The Zotero item's chip a drag of files is over (MATH-65 build 4), or null.
+const zoteroChipFor = (e) => {
+  const types = [...((e && e.dataTransfer && e.dataTransfer.types) || [])];
+  return types.includes('Files') && e.target && e.target.closest ? e.target.closest('[data-zotero]') : null;
+};
+const pickedRow = (r) => (r.kind === 'entry' && r.zotero ? null : (r.kind === 'entry' || r.kind === 'self') && r.row ? { kind: 'item', key: r.row.id, row: r.row, name: r.row.name } : r);
+// The mention token of `text` that ends at `at` (`before`) or starts there → [start, end], or null: the line's own
+// tokens (doc.js INLINE), so a mention inside bold or a link's text is not one here.
+const mentionBeside = (text, at, before) => {
+  let acc = 0;
+  for (const tok of text.split(INLINE)) {
+    const end = acc + tok.length;
+    if (tok.startsWith('@[') && (before ? end === at : acc === at)) return [acc, end];
+    acc = end;
+  }
+  return null;
 };
 // A link ⌘-clicked (Ctrl-clicked off macOS, where Ctrl-click is the context menu) opens in a new Stage tab (2026-10-02).
 const newTabClick = (e) => e.metaKey || (e.ctrlKey && !/^(darwin|mac)/i.test(document.documentElement.dataset.platform || navigator.platform || ''));
@@ -131,7 +159,16 @@ const CARD_CSS = '.bart-ic{display:inline-flex;align-items:center;justify-conten
   // Near the bottom of the window a name goes above its icon instead (editorOver sets the mark).
   + '[data-tip-up]>.bart-tip{top:auto;bottom:100%;margin-top:0;margin-bottom:4px}'
   // The mention whose note is open in the pane beside (MATH-23, markBeside).
-  + '[data-mention][data-beside]{background:#e8f0fe;border-radius:3px}';
+  + '[data-mention][data-beside]{background:#e8f0fe;border-radius:3px}'
+  // A Zotero item's chip while a free copy of its paper is looked for (MATH-65 build 3, markFinding).
+  + '[data-zotero][data-finding]::after{content:" · Finding a free copy…";color:#8f8f8f;font-style:italic}'
+  // Build 4: opened in the browser, its pdf waited for in the Downloads folder (said in a label under the chip, as .bart-tip
+  // is drawn, since beside it went unseen: David, 2026-10-07); and a file dragged over it.
+  + '[data-zotero][data-waiting]{position:relative}'
+  + '[data-zotero][data-waiting]::after{content:"Download the PDF in your browser to open it in the Stage";position:absolute;left:0;top:100%;z-index:5;margin-top:4px;padding:4px 7px;border:1px solid #eaeaea;border-radius:6px;background:#fff;color:#4d4d4d;font:12px/1.2 var(--font-sans);font-style:normal;white-space:nowrap;pointer-events:none}'
+  + '[data-zotero][data-drop]{background:#e8f0fe;border-radius:3px;box-shadow:0 0 0 1px #9bb6e8}';
+// A Zotero chip's hover text while its paper's download is waited for (MATH-65 build 4).
+const WAITING_TIP = "Opened in your browser. Download the PDF and it'll open here.";
 // Lucide's drawings at the design's weight: 16px, 1.5px stroke, round caps.
 // A map card's three lists (main/bart/card.cjs `map`).
 const MAP_LABELS = { settled: 'Seems settled', open: 'Seems open', untouched: 'Not touched yet' };
@@ -167,12 +204,18 @@ const REPO_MARK = {
 const radius = (top, closes) => `${top ? '10px 10px' : '0 0'} ${closes ? '10px 10px' : '0 0'}`;
 // A flag the models file recognises is a little bolder than the text around it; a `--word` it does not know stays plain.
 const FLAG_LOOK = 'font-weight:500';
+// An answer's bullet or number stands in a column of its own (MATH-69), as wide drawn as edited: the `•` or `10.` drawn,
+// the `- ` or `10. ` faint while the caret is on the line, so its text starts at the same place either way. A mark wider
+// than the column (`100.`, a todo's `- [ ] `) widens it, the drawn one by about the space the edited one has after it.
+const MARK_COL = '1.75em';
+const MARK_DRAWN = `flex:none;min-width:${MARK_COL};padding-right:0.25em;box-sizing:border-box`;
+const MARK_EDITED = `display:inline-block;min-width:${MARK_COL};margin-left:-${MARK_COL};box-sizing:border-box;white-space:pre`;
 
 export default class DocEditor extends React.Component {
-  state = { activeLine: null, mention: null, mentionIdx: 0, pop: null, picker: null };
+  state = { activeLine: null, mention: null, mentionIdx: 0, pop: null, picker: null, browse: null };
   edRef = React.createRef();
   history = []; future = []; caret = null; lastHtml = ''; lastKey = null; selRaw = null; openKey = ''; copied = null; copiedT = null;
-  syncing = false; wantFocus = false; composing = false; mounted = false; timers = new Set(); held = false; downOnRoot = false; downOnPage = false;
+  syncing = false; wantFocus = false; wantAnchor = false; composing = false; mounted = false; timers = new Set(); held = false; downOnRoot = false; downOnPage = false;
   openLogs = new Set(); // asks whose list of steps is open
   pickerT = null;
   // A follow-up being typed, the model picked for it and the images pasted into it ([{ n, id }]), by the first line of its
@@ -223,7 +266,7 @@ export default class DocEditor extends React.Component {
       keydown: (e) => { if (!inEd(e)) return; this.held = false; if (this.escapeShut(e)) return; if (inBuild(e)) this.buildKey(e); else if (inCard(e)) this.cardKey(e); else if (inDiscover(e)) this.discoverKey(e); else if (inFollow(e)) this.followKey(e); else this.editorKey(e); },
       input: (e) => { if (!inEd(e)) return; if (inBuild(e)) this.buildInput(e.target); else if (inCard(e)) this.cardInput(e.target); else if (inDiscover(e)) this.discoverInput(e.target); else if (inFollow(e)) this.followInput(e.target); else this.editorInput(); },
       beforeinput: (e) => { if (!inEd(e) || inFollow(e)) return; const sel = getSelection(); this.bulkDelete = /^delete/.test(e.inputType || '') && !!sel && !sel.isCollapsed; },
-      paste: (e) => { if (!inEd(e)) return; if (inBuild(e)) this.buildPaste(e); else if (inAsk(e)) this.followPaste(e); else if (!inFollow(e)) this.editorPaste(e); },
+      paste: (e) => { if (!inEd(e)) return; if (inBuild(e)) this.buildPaste(e); else if (inAsk(e)) this.followPaste(e); else if (!inFollow(e)) this.editorPaste(e); if (inFollow(e)) this.fieldPaste(e); },
       // A copy or a cut of the document is its markdown (editorCopy); in a field of its own it is the browser's, as a paste is.
       copy: (e) => { if (inEd(e) && !inFollow(e)) this.editorCopy(e, false); },
       cut: (e) => { if (inEd(e) && !inFollow(e)) this.editorCopy(e, true); },
@@ -250,8 +293,9 @@ export default class DocEditor extends React.Component {
       // Nothing dropped in the editor is the browser's to place. A drop into one of its fields stays refused (2026-10-05).
       // The page around the text takes a drop too (2026-10-05: let go in the margin or below the last line, a picture
       // from Finder flew back): it goes in at the nearest place in the text (dropPoint). The page's own fields are theirs.
-      dragover: (e) => { if (inEd(e) || onPage(e)) e.preventDefault(); },
-      drop: (e) => { if (!inEd(e) && !onPage(e)) return; e.preventDefault(); if (!inFollow(e)) this.editorDrop(e); },
+      dragover: (e) => { if (inEd(e) || onPage(e)) e.preventDefault(); this.markDropChip(inEd(e) ? zoteroChipFor(e) : null); },
+      dragleave: (e) => { if (this.dropChip && !(e.relatedTarget && this.dropChip.contains(e.relatedTarget))) this.markDropChip(null); },
+      drop: (e) => { this.markDropChip(null); if (!inEd(e) && !onPage(e)) return; e.preventDefault(); if (!inFollow(e)) this.editorDrop(e); },
       // Switching to another app blurs the page too; that is not leaving the line, and redrawing it would drop a selection.
       // Leaving it otherwise puts back a question being edited (2026-10-03).
       focusout: (e) => { if (inEd(e) && document.hasFocus() && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-mention-menu]'))) { this.cancelEdit(); this.setState({ activeLine: null, mention: null }); } },
@@ -278,6 +322,7 @@ export default class DocEditor extends React.Component {
   componentDidUpdate(prevProps, prevState) {
     // The @ menu opening and closing (a line's or a follow-up field's): the workspace asks for what things say then (MATH-29).
     if (prevState && !prevState.mention !== !this.state.mention && this.props.onMentionOpen) this.props.onMentionOpen(!!this.state.mention);
+    if (!this.state.mention && this.state.browse) this.setState({ browse: null }); // a folder opened in the menu closes with it (MATH-22)
     if (prevProps.docKey !== this.props.docKey) {
       this.dropEdit(prevProps);
       this.wantView = true; this.settle = null;
@@ -332,9 +377,32 @@ export default class DocEditor extends React.Component {
     const ed = this.editorEl(); if (!ed || !ed.querySelectorAll) return;
     const want = this.props.besideLink ? String(this.props.besideLink).toLowerCase() : null, ws = this.props.besideWorkspace || null;
     for (const m of ed.querySelectorAll('[data-mention]')) {
-      const on = m.dataset.ws ? !!ws && m.dataset.ws === ws : !!want && String(m.dataset.mention).toLowerCase() === want;
+      const on = m.dataset.ws ? !!ws && m.dataset.ws === ws : m.dataset.file == null && m.dataset.zotero == null && !!want && String(m.dataset.mention).toLowerCase() === want;
       if (on !== m.hasAttribute('data-beside')) m.toggleAttribute('data-beside', on);
     }
+    this.markFinding();
+  }
+  // A Zotero item's chips while main looks for a free copy of its paper (MATH-65 build 3; `zoteroFinding`, a Set of item
+  // keys) say "Finding a free copy…"; while main waits for it in the Downloads folder (build 4, `zoteroWaiting`), a label
+  // under them says to download it, with hover text saying why. On the page only, as markBeside's marks are.
+  markFinding() {
+    const ed = this.editorEl(); if (!ed || !ed.querySelectorAll) return;
+    const finding = this.props.zoteroFinding, waiting = this.props.zoteroWaiting;
+    for (const m of ed.querySelectorAll('[data-zotero]')) {
+      const on = !!finding && finding.has(m.dataset.zotero);
+      const wait = !on && !!waiting && waiting.has(m.dataset.zotero);
+      if (on !== m.hasAttribute('data-finding')) m.toggleAttribute('data-finding', on);
+      if (wait !== m.hasAttribute('data-waiting')) {
+        m.toggleAttribute('data-waiting', wait);
+        if (typeof m.setAttribute === 'function') m.setAttribute('title', wait ? WAITING_TIP : 'Zotero');
+      }
+    }
+  }
+  // A file dragged over a Zotero item's chip marks it (build 4): let go there, it becomes the item's pdf (editorDrop).
+  markDropChip(chip) {
+    if (this.dropChip && this.dropChip !== chip && this.dropChip.removeAttribute) this.dropChip.removeAttribute('data-drop');
+    if (chip && chip !== this.dropChip) chip.setAttribute('data-drop', '');
+    this.dropChip = chip || null;
   }
   // Escape with the model selector or a mention's card open shuts it, and that is all it does: it is marked as used, so the
   // window's Escape (leaving the document's full screen, closing the workspace) leaves it alone. → whether it did
@@ -494,8 +562,13 @@ export default class DocEditor extends React.Component {
   revealRange() { const c = this.caret; if (c) return c.sel ? c.sel : [c.offset, c.offset]; const s = this.selRaw; return s ? [s.a, s.b] : [-1, -1]; }
   // Which tokens show their source on the active line: inline markers the caret touches. A heading's `# ` is plain text there, so it
   // shows (in the heading's font) for as long as the caret is on the line and goes away when the caret leaves (2026-09-18: hiding it
-  // left an empty span the browser typed into, and those characters were lost).
-  openIdx(tokens, a, b) { const out = []; let acc = 0; tokens.forEach((tok, k) => { const end = acc + tok.length, pre = tokShown(tok).pre; if (pre && a <= end && b >= acc) out.push(k); acc = end; }); return out; }
+  // left an empty span the browser typed into, and those characters were lost). A mention opens only with the caret strictly
+  // inside it (MATH-56): at its start or end it stays drawn, so one just picked from the @ menu shows finished at once.
+  openIdx(tokens, a, b) {
+    const out = []; let acc = 0;
+    tokens.forEach((tok, k) => { const end = acc + tok.length, pre = tokShown(tok).pre, touched = tok.startsWith('@[') ? a < end && b > acc : a <= end && b >= acc; if (pre && touched) out.push(k); acc = end; });
+    return out;
+  }
   // `marker`: the style of tokens[0] when it is a line's own `## ` or `- ` (an answer's line being edited: faint, so the
   // line keeps its look and only the mark shows).
   activeHtml(tokens, flags, marker = null) {
@@ -504,7 +577,7 @@ export default class DocEditor extends React.Component {
       if (marker && k === 0) return `<span data-src="${esc(tok)}" data-open="1" style="${marker}">${esc(tok)}</span>`;
       if (flags && flags.has(k)) return `<span data-src="${esc(tok)}" data-open="1" style="${FLAG_LOOK}">${esc(tok)}</span>`;
       const isOpen = !tokShown(tok).pre || open.includes(k);
-      return `<span data-src="${esc(tok)}" data-open="${isOpen ? 1 : 0}">${isOpen && !AGENT_TOKEN.test(tok) ? esc(tok) : inlineHtml(tok)}</span>`;
+      return `<span data-src="${esc(tok)}" data-open="${isOpen ? 1 : 0}">${isOpen && !AGENT_TOKEN.test(tok) ? esc(tok) : inlineHtml(tok, this.mentionOpts)}</span>`;
     }).join('');
   }
   // An @bart line in pieces: its recognised flags (src/main/bart/question.cjs reads them, as the run will) each a token of
@@ -521,18 +594,26 @@ export default class DocEditor extends React.Component {
     tokens.push(...line.slice(at).split(INLINE).filter(Boolean));
     return { tokens, flags };
   }
+  // A closed token holding more than it shows was typed into at its edge (the caret right before or after a mention,
+  // MATH-56): what was typed is the line's own text beside it.
   segs(t) {
-    return [...t.childNodes].filter((n) => n.nodeName !== 'BR').map((n) => {
+    return [...t.childNodes].filter((n) => n.nodeName !== 'BR').flatMap((n) => {
       const el = n.nodeType === 1 && n.dataset && n.dataset.src != null ? n : null;
       const txt = n.textContent.replace(/\u200b/g, '');
       const open = !el || el.dataset.open === '1';
-      return { dl: txt.length, src: open ? txt : el.dataset.src, open, rl: open ? txt.length : el.dataset.src.length };
+      if (open) return [{ dl: txt.length, src: txt, open, rl: txt.length }];
+      const src = el.dataset.src, shut = (dl) => ({ dl, src, open: false, rl: src.length }), typed = (x) => ({ dl: x.length, src: x, open: true, rl: x.length });
+      const { shown } = tokShown(src, this.mentionOpts);
+      if (txt.length > shown.length && txt.startsWith(shown)) return [shut(shown.length), typed(txt.slice(shown.length))];
+      if (txt.length > shown.length && txt.endsWith(shown)) return [typed(txt.slice(0, txt.length - shown.length)), shut(shown.length)];
+      return [shut(txt.length)];
     });
   }
   displayToRaw(t, disp) {
     const segs = this.segs(t); if (!segs.length) return null; let accD = 0, accR = 0;
     for (const s of segs) {
-      if (disp <= accD + s.dl) { const d = disp - accD; if (s.open) return accR + d; const { pre } = tokShown(s.src); return accR + (d === 0 ? 0 : Math.min(s.rl, pre + d)); }
+      // The end of a drawn mention is the end of its source (MATH-56): a caret after it stays after it, not before its `]`.
+      if (disp <= accD + s.dl) { const d = disp - accD; if (s.open) return accR + d; const { pre } = tokShown(s.src); return accR + (d === 0 ? 0 : d === s.dl && s.src.startsWith('@[') ? s.rl : Math.min(s.rl, pre + d)); }
       accD += s.dl; accR += s.rl;
     }
     return accR;
@@ -554,7 +635,7 @@ export default class DocEditor extends React.Component {
     if (p.type === 'code' || p.type === 'fence') return this.codeHtml(i, line, p, active);
     if (p.type === 'todo') {
       const done = p.done;
-      const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(p.text);
+      const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(p.text, this.mentionOpts);
       return `<div ${raw} style="display:flex;align-items:flex-start;gap:10px;background:#fafafa;padding:${first ? '10px' : '0'} 16px 0 ${16 + p.depth * 24}px;border-radius:${first ? '10px 10px 0 0' : '0'}">`
         + `<span contenteditable="false" data-act="toggle" data-row="${i}" role="button" style="user-select:none;flex:none;width:14px;margin-top:12px;text-align:center;font:15px/1 var(--font-sans);color:${done ? '#8f8f8f' : '#171717'};cursor:pointer">${done ? '✓' : '–'}</span>`
         + `<span class="t" style="flex:1;min-width:0;padding:6px 0;min-height:39px;color:${done ? '#8f8f8f' : '#171717'};text-decoration:${done ? 'line-through' : 'none'}">${content || '<br>'}</span>`
@@ -562,7 +643,7 @@ export default class DocEditor extends React.Component {
         + '</div>';
     }
     if (p.type === 'list') {
-      const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(p.text);
+      const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(p.text, this.mentionOpts);
       return `<div ${raw} style="display:flex;align-items:flex-start;gap:10px;padding:4px 0 4px ${p.depth * 24}px;min-height:35px">`
         + (p.num != null
           ? `<span contenteditable="false" style="user-select:none;flex:none;min-width:14px;text-align:right;line-height:1.6;color:#8f8f8f;font-variant-numeric:tabular-nums">${esc(listMark(p))}</span>`
@@ -570,12 +651,12 @@ export default class DocEditor extends React.Component {
         + `<span class="t" style="flex:1;min-width:0">${content || '<br>'}</span></div>`;
     }
     if (p.type === 'h') {
-      const size = [26, 22, 18][p.level - 1]; const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(p.text);
+      const size = [26, 22, 18][p.level - 1]; const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(p.text, this.mentionOpts);
       return `<div ${raw} style="padding:4px 0;min-height:35px;font:500 ${size}px/1.6 var(--font-sans);letter-spacing:-0.3px"><span class="t">${content || '<br>'}</span></div>`;
     }
     if (p.type === 'bart') {
       const { tokens, flags } = this.bartTokens(line, p), models = this.props.models;
-      const content = active && !locked ? this.activeHtml(tokens, flags) : tokens.map((tok, k) => (flags.has(k) ? `<span style="${FLAG_LOOK}">${esc(tok)}</span>` : inlineHtml(tok))).join('');
+      const content = active && !locked ? this.activeHtml(tokens, flags) : tokens.map((tok, k) => (flags.has(k) ? `<span style="${FLAG_LOOK}">${esc(tok)}</span>` : inlineHtml(tok, this.mentionOpts))).join('');
       // @brainstorm and @discover run on one model (BS-08) and may be asked with nothing after them.
       const agent = agentOf(p), plain = oneModel(agent);
       const read = models && !plain ? readQuestion(p.text, models) : null, ready = plain || !!(read ? read.question : p.text).trim();
@@ -644,30 +725,34 @@ export default class DocEditor extends React.Component {
       // A brainstorm recap's lines ("What you know: …", "Your question: …") as sections: the label in bold on a line
       // of its own, the words under it. An older recap's "Look for:" line too (MATH-31), no longer a button.
       const recap = at && fixedStep(at.agent) && !active ? recapLine(p.text) : null;
+      // A result's last line (MATH-40): small, with @discover and @bart to send their sentence on.
+      const offer = !!at && fixedStep(at.agent) && !active && p.text.trim() === RESULT_OFFER;
       // An @discover guide's title line (2026-10-02) has its paper's bookmark in a margin of its own on the right, level with
       // the title's first line (2026-10-03): the title wraps before it, and every entry's sits in the same place.
       const paper = at && at.agent === 'discover' && !active ? this.guidePaper(i, p.text, at) : null, mark = paper ? this.paperSaveHtml(i, paper) : '';
       // Its Try line (2026-10-04) has the repository's mark just before the link.
       const repo = at && at.agent === 'discover' && !active && !paper ? guideRepo(p.text) : null, run = repo ? this.repoMarkHtml(repo) : '';
       // The caret's line keeps its heading's size or its bullet's indent: its `## ` or `- ` shows faint where the heading
-      // starts or the bullet stood, the same characters as before, so the caret and offsets are as they were.
+      // starts or the bullet stood, the same characters as before, so the caret and offsets are as they were. The bullet's
+      // `- ` stands in the mark's column (MATH-69), pulled into the line's hanging indent, so its text stays where it was
+      // drawn and a wrapped line goes on under the text, not under the mark.
       const q = active ? parseLine(p.text) : null, cut = q && (q.type === 'h' || isMarked(q.type)) ? p.text.length - q.text.length : 0;
       const tokens = cut ? [p.text.slice(0, cut), ...p.text.slice(cut).split(INLINE).filter(Boolean)] : null;
-      const hang = cut && q.type !== 'h' ? `padding-left:${q.depth * 18}px;` : '';
-      const a = this.answerLook(p.text), content = active ? (tokens ? this.activeHtml(tokens, null, `color:#b5b5b5;${q.type === 'h' ? '' : 'margin-right:4px;'}`) : this.activeHtml(tokensOf(p, line))) : recap ? this.recapHtml(recap, first) : (run ? a.content.replace('<a ', `${run}<a `) : a.content) + mark;
+      const hang = cut && q.type !== 'h' ? `padding-left:calc(${q.depth * 18}px + ${MARK_COL});` : '';
+      const a = this.answerLook(p.text), content = active ? (tokens ? this.activeHtml(tokens, null, `color:#b5b5b5;${q.type === 'h' ? '' : `${MARK_EDITED};`}`) : this.activeHtml(tokensOf(p, line))) : offer ? this.resultOfferHtml(i) : recap ? this.recapHtml(recap, first) : (run ? a.content.replace('<a ', `${run}<a `) : a.content) + mark;
       return `<div ${raw}${mark ? ' data-paper-line="1"' : ''} style="padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(!at && first, closes)};margin-bottom:${closes ? 14 : 0}px;color:#4d4d4d;font-size:16px;line-height:1.65;cursor:text"><span style="display:block;padding:${first ? 2 : 0}px 0 ${last ? 2 : 0}px 12px;border-left:2px solid #dcdcdc"><span class="t" style="display:block;min-height:${a.minHeight}px;border-radius:4px;${a.look}${hang}${mark ? 'position:relative;padding-right:28px;' : ''}${active ? 'background:#f5f5f5;box-shadow:0 0 0 4px #f5f5f5;' : ''}">${content || '<br>'}</span></span></div>`;
     }
     if (p.type === 'quote') {
       // The prototype's replies: read-only, as they were.
       const ls = this.lines(), up = i > 0 && parseLine(ls[i - 1]).type === 'quote', down = parseLine(ls[i + 1] ?? '').type === 'quote';
-      return `<div ${raw} contenteditable="false" data-readonly="1" style="user-select:text;cursor:default;padding:${up ? 0 : 8}px 16px ${down ? '0' : '12px'};background:#fafafa;border-radius:${radius(!up, !down)};margin-bottom:${down ? '0' : '14px'};color:#4d4d4d;font-size:16px"><span class="t" style="display:block;min-height:${p.text ? 31 : 12}px;padding:2px 0 2px 12px;border-left:2px solid #dcdcdc">${inlineHtml(p.text) || '<br>'}</span></div>`;
+      return `<div ${raw} contenteditable="false" data-readonly="1" style="user-select:text;cursor:default;padding:${up ? 0 : 8}px 16px ${down ? '0' : '12px'};background:#fafafa;border-radius:${radius(!up, !down)};margin-bottom:${down ? '0' : '14px'};color:#4d4d4d;font-size:16px"><span class="t" style="display:block;min-height:${p.text ? 31 : 12}px;padding:2px 0 2px 12px;border-left:2px solid #dcdcdc">${inlineHtml(p.text, this.mentionOpts) || '<br>'}</span></div>`;
     }
     if (p.type === 'img') {
       const src = p.src.startsWith('img:') ? ((this.props.images || {})[p.src.slice(4)] || '') : p.src;
       const content = active ? this.activeHtml([line]) : !src ? `<span contenteditable="false" style="display:inline-block;margin:6px 0;padding:10px 14px;border:1px dashed #c9c9c9;border-radius:8px;font:12.5px/1.5 var(--font-sans);color:#8f8f8f;user-select:none">${esc(p.text || 'image')}…</span>` : `<img src="${esc(src)}" alt="${esc(p.text)}" draggable="false" style="display:block;max-width:100%;max-height:520px;margin:6px 0;border:1px solid #eaeaea;border-radius:8px;user-select:none">`;
       return `<div ${raw} style="padding:4px 0;min-height:35px"><span class="t" style="display:block">${content}</span></div>`;
     }
-    const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(line);
+    const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(line, this.mentionOpts);
     return `<div ${raw} style="padding:4px 0;min-height:35px"><span class="t">${content || '<br>'}</span></div>`;
   }
   // One line of a fenced code block, on the grey of the cards, in the mono face. The opening fence is the block's head:
@@ -708,12 +793,19 @@ export default class DocEditor extends React.Component {
   recapHtml({ label, text }, first) {
     const missing = /^not (decided|said)\.?$/i.test(text);
     return this.recapLabelHtml(label, first)
-      + `<span style="display:block;${missing ? 'color:#8f8f8f;font-style:italic;' : ''}">${text ? inlineHtml(text) : '<span style="color:#8f8f8f;font-style:italic">not said</span>'}</span>`;
+      + `<span style="display:block;${missing ? 'color:#8f8f8f;font-style:italic;' : ''}">${text ? inlineHtml(text, this.mentionOpts) : '<span style="color:#8f8f8f;font-style:italic">not said</span>'}</span>`;
+  }
+  // An @brainstorm result's offer line (MATH-40): small and grey; @discover and @bart are buttons in an editor that can ask.
+  resultOfferHtml(i) {
+    const chip = (agent) => (this.props.onAsk
+      ? `<button type="button" class="bart-text" data-act="resultask" data-agent="${agent}" data-row="${i}" style="user-select:none;display:inline;padding:0;font-size:13px;font-weight:500;color:#0070f3">@${agent}</button>`
+      : `@${agent}`);
+    return `<span contenteditable="false" style="display:block;font-size:13px;line-height:1.6;color:#8f8f8f;user-select:none">Find papers on it with ${chip('discover')}, or ask about it with ${chip('bart')}.</span>`;
   }
   // The Send to Discover field (MATH-31): the blue "@discover", a field one line tall that grows as it wraps, and a round
   // send, as the follow-up field's FOLLOW rows have. `target` names the field and keys what is typed into it
-  // (discoverText): `c<q>` under the live card on line q, `t<from>` after the recap of the thread that starts on line from;
-  // either line is where it sends from (discoverRow). What is typed is not in this string (restoreDiscover puts it back),
+  // (discoverText): `t<from>` after the recap of the thread that starts on line from, the line it sends from (discoverRow;
+  // a live card's `c<q>` is no longer drawn, MATH-40 follow-up). What is typed is not in this string (restoreDiscover puts it back),
   // so typing never redraws the editor. The send is grey until something is typed (paintSend).
   // Until it is opened (2026-10-05: two fields stacked looked alike), it is a small "Send to Discover" button; one with
   // words typed into it stays open.
@@ -786,16 +878,15 @@ export default class DocEditor extends React.Component {
     return !cardOfAnswer(answer) && answer.split('\n').some((line) => recapLine(line));
   }
   // Where a Send to Discover field stands (its target, sendDiscoverHtml) → the line of its thread to send from, or null
-  // when the field is no longer drawn: the card was answered, or the thread no longer ends in a recap.
+  // when the field is no longer drawn: the thread no longer ends in a recap.
   discoverRow(ls, target) {
-    const m = /^([ct])(\d+)$/.exec(String(target)); if (!m) return null;
-    const n = Number(m[2]);
-    if (m[1] === 'c') { const entry = this.cardsOf(ls).byQ.get(n); return entry && entry.live && entry.agent === 'brainstorm' ? n : null; }
+    const m = /^t(\d+)$/.exec(String(target)); if (!m) return null;
+    const n = Number(m[1]);
     const thread = threads(ls).find((t) => t.from === n);
     return thread && this.endsInRecap(ls, thread) ? n : null;
   }
   // Send to Discover sent (MATH-31): what was typed starts an @discover thread of its own (discoverLook), and the field is
-  // emptied. A live card stays live. With nothing typed it does nothing.
+  // emptied. With nothing typed it does nothing.
   sendDiscover(target) {
     const typed = (this.discoverText.get(target) || '').trim(); if (!typed || !this.props.onAsk) return;
     const i = this.discoverRow(this.lines(), target); if (i == null) return;
@@ -806,21 +897,29 @@ export default class DocEditor extends React.Component {
   // After the thread line `i` is in, a blank line (so the new line starts a thread of its own, doc.js threads) and
   // "@discover <query>" ("@discover" alone with no query) with its pending line, asked with no earlier turns. An answer to
   // a brainstorm card still live above it is written under the brainstorm thread, so above this one (sendCard). Send to
-  // Discover asks it (sendDiscover).
-  discoverLook(i, query = '') {
+  // Discover asks it (sendDiscover); a result's offer line asks it, or `agent` 'bart' (askResult).
+  discoverLook(i, query = '', agent = 'discover') {
     const ls = this.lines(), thread = threads(ls).find((t) => t.from <= i && i <= t.to);
-    if (!thread || !this.props.onAsk) return;
-    const askId = newAskId(), add = ['', query ? `@discover ${query}` : '@discover', `bart~> ${askId}`]; if (thread.to + 1 >= ls.length) add.push('');
+    if (!thread || !this.props.onAsk || (agent === 'bart' && !query)) return;
+    const askId = newAskId(), add = ['', query ? `@${agent} ${query}` : `@${agent}`, `bart~> ${askId}`]; if (thread.to + 1 >= ls.length) add.push('');
     const ed = this.editorEl(); if (ed && ed.contains(document.activeElement)) document.activeElement.blur();
     this.setLines((x) => { const out = [...x]; out.splice(thread.to + 1, 0, ...add); return out; });
     this.setState({ activeLine: null, mention: null });
-    this.props.onAsk({ askId, text: query, turns: [], agent: 'discover' });
+    this.props.onAsk({ askId, text: query, turns: [], agent });
+  }
+  // @discover or @bart on a result's offer line (MATH-40): the sentence above it, read from the turn line `i` is in.
+  askResult(i, agent) {
+    if (agent !== 'discover' && agent !== 'bart') return;
+    const ls = this.lines(), thread = threads(ls).find((t) => t.from <= i && i <= t.to);
+    const turn = thread && thread.turns.find((t) => t.from <= i && i <= t.to);
+    const found = turn ? resultParts(turnText(ls, turn).answer) : null;
+    if (found) this.discoverLook(i, found.sentence, agent);
   }
   answerLook(text) {
     const q = parseLine(text), ink = (html) => html.replace(/<strong style="font-weight:600">/g, '<strong style="color:#171717;font-weight:600">');
-    if (q.type === 'h') return { content: ink(inlineHtml(q.text)), look: `font:600 ${[18, 17, 16][q.level - 1]}px/1.5 var(--font-sans);color:#171717;padding-top:8px;`, minHeight: 26 };
-    if (isMarked(q.type)) return { content: `<span style="display:flex;gap:10px;padding-left:${q.depth * 18}px"><span contenteditable="false" style="flex:none;color:#8f8f8f;user-select:none">${esc(listMark(q))}</span><span style="flex:1;min-width:0">${ink(inlineHtml(q.text))}</span></span>`, look: 'padding-top:4px;padding-bottom:4px;', minHeight: 26 };
-    return { content: ink(inlineHtml(text)), look: 'text-wrap:pretty;', minHeight: text ? 26 : 22 };
+    if (q.type === 'h') return { content: ink(inlineHtml(q.text, this.mentionOpts)), look: `font:600 ${[18, 17, 16][q.level - 1]}px/1.5 var(--font-sans);color:#171717;padding-top:8px;`, minHeight: 26 };
+    if (isMarked(q.type)) return { content: `<span style="display:flex;padding-left:${q.depth * 18}px"><span contenteditable="false" style="${MARK_DRAWN};color:#8f8f8f;user-select:none">${esc(listMark(q))}</span><span style="flex:1;min-width:0">${ink(inlineHtml(q.text, this.mentionOpts))}</span></span>`, look: 'padding-top:4px;padding-bottom:4px;', minHeight: 26 };
+    return { content: ink(inlineHtml(text, this.mentionOpts)), look: 'text-wrap:pretty;', minHeight: text ? 26 : 22 };
   }
   /* ---------------------------------------------------------------- Build cards (2026-09-25) */
   // A `build> <id>` line is drawn as its Build's card, from props.builds (the record main sends), props.buildProgress
@@ -905,7 +1004,7 @@ export default class DocEditor extends React.Component {
     const open = this.buildOpen.has(id), hidden = open ? 0 : from;
     let body = hidden ? `<button class="bart-text" data-act="buildhistory" data-build-id="${esc(id)}" style="user-select:none;padding-left:0">${hidden} earlier ${hidden === 1 ? 'message' : 'messages'}</button>` : (open && from ? `<button class="bart-text" data-act="buildhistory" data-build-id="${esc(id)}" style="user-select:none;padding-left:0">Hide earlier messages</button>` : '');
     body += messages.slice(hidden).map((m) => this.buildMessageHtml(m)).join('');
-    if (status === 'needs-you' && task.question) body += `<div style="margin:10px 0 2px;padding:8px 12px;border-left:2px solid #0070f3;background:#fff;color:#171717"><strong style="font-weight:600">Needs you:</strong> ${inlineHtml(task.question)}</div>`;
+    if (status === 'needs-you' && task.question) body += `<div style="margin:10px 0 2px;padding:8px 12px;border-left:2px solid #0070f3;background:#fff;color:#171717"><strong style="font-weight:600">Needs you:</strong> ${inlineHtml(task.question, this.mentionOpts)}</div>`;
     if (status === 'escalated' && task.escalation) body += `<div style="margin:10px 0 2px;color:#171717">${esc(task.escalation)}</div>`;
     if (task.checks && !task.checks.ok && !final) body += `<div style="margin:8px 0 0;font:12px/1.6 var(--font-mono);color:#4d4d4d;white-space:pre-wrap;max-height:160px;overflow:auto;padding:8px 10px;background:#fff;border-radius:6px">$ ${esc(task.checks.command)}\n${esc(String(task.checks.output || '').split('\n').slice(-12).join('\n'))}</div>`;
     if (task.queued) body += `<div style="margin:8px 0 0;font:12.5px/1.5 var(--font-sans);color:#8f8f8f">Sending: ${esc(task.queued.length > 140 ? `${task.queued.slice(0, 139)}…` : task.queued)}</div>`;
@@ -1113,18 +1212,20 @@ export default class DocEditor extends React.Component {
     return !!this.props.onAsk && !this.props.readOnly && turn.answered && !turn.pending && !card && !buildRequestOf({ agent: agentOf(p), text: p.text });
   }
   /* ---------------------------------------------------------------- @brainstorm cards (2026-09-30) */
-  // One card on the answer's grey: what it says, then a white box with the question, its options (a round mark for one,
+  // One card on the answer's grey: a white box with what it says, the question, its options (a round mark for one,
   // a square for several, each option's `why` under its label) or its field, and Skip and Submit. An answered card is
   // drawn still, with what was picked marked; a card that is not the thread's last and has no answer under it (a turn
   // deleted after it) is drawn still too. A map card (the first of an exchange, 2026-09-30) draws where the person seems
   // to be above the box, live or answered: three short lists, each line with what it rests on in grey. A live @brainstorm
-  // card (round 6) adds Wrap up before Submit, and under its box the Send to Discover field (MATH-31); on its versions
-  // card (round 7) the field under the options reads "Or rewrite it yourself…".
+  // card (round 6) adds Wrap up before Submit; on its versions card (round 7) the field under the options reads "Or
+  // rewrite it yourself…". No Send to Discover under it (MATH-40 follow-up): that is the result's offer line. What it
+  // says (`say`) is drawn in the box, in regular weight above the bold question (MATH-40 round 3: a reply to what they
+  // just said, then the question).
   cardHtml(raw, entry) {
     const { card, turn, live, answer } = entry, q = turn.q, asked = questionOf(card), state = this.cardState.get(q) || {};
     const choice = isChoice(asked.type), many = asked.type === 'select_all';
     const picks = live ? state.picks || [] : answer ? answer.picks : [];
-    const say = card.say ? `<div style="margin:0 0 10px;color:#4d4d4d;font-size:16px;line-height:1.6;white-space:pre-wrap">${esc(card.say)}</div>` : '';
+    const say = card.say ? `<div data-card-say="1" style="margin:0 0 10px;color:#171717;font:400 16px/1.6 var(--font-sans);white-space:pre-wrap">${esc(card.say)}</div>` : '';
     const map = card.map ? MAP_GROUPS.filter((group) => card.map[group].length).map((group) => `<div data-card-map="${group}" style="margin:0 0 10px">`
       + `<div style="margin:0 0 2px;font:500 11.5px/1.4 var(--font-sans);letter-spacing:.04em;text-transform:uppercase;color:#8f8f8f">${MAP_LABELS[group]}</div>`
       + card.map[group].map((item) => `<div style="display:flex;gap:8px;font-size:15px;line-height:1.5;color:#171717"><span aria-hidden="true" style="flex:none;color:#c9c9c9">–</span><span style="flex:1;min-width:0">${esc(item.text)}${item.from ? `<span style="display:block;font-size:13px;line-height:1.45;color:#8f8f8f">${esc(item.from)}</span>` : ''}</span></div>`).join('')
@@ -1153,18 +1254,17 @@ export default class DocEditor extends React.Component {
     if (!live && answer && (answer.skipped || answer.wrap)) body += `<div style="margin-top:10px;font-size:14px;color:#8f8f8f">${answer.wrap ? 'Wrapped up' : 'Skipped'}</div>`;
     // A choice card can be answered in the person's own words instead of a pick (2026-09-30): the field alone is enough.
     const ready = choice ? picks.length > 0 || !!String(state.note || '').trim() : !!String(state.text || '').trim();
-    const wraps = live && fixedStep(entry.agent), brainstorm = live && entry.agent === 'brainstorm';
+    const wraps = live && fixedStep(entry.agent);
     const acts = live ? '<div style="display:flex;align-items:center;gap:8px;margin-top:14px">'
       + `<button type="button" class="bart-text" data-act="cardskip" data-turn="${q}" style="user-select:none;padding-left:0">Skip</button><span style="flex:1"></span>`
       + (wraps ? `<button type="button" class="bart-text" data-act="cardwrap" data-turn="${q}" style="user-select:none">Wrap up</button>` : '')
       + `<button type="button" class="bs-submit" data-act="cardsend" data-turn="${q}" ${ready ? '' : 'disabled'}>Submit</button></div>` : '';
-    const discover = brainstorm ? `<div style="padding:16px 0 10px">${this.sendDiscoverHtml(`c${q}`)}</div>` : '';
     return `<div ${raw} data-card="${q}" contenteditable="false" data-readonly="1" style="user-select:${live ? 'none' : 'text'};cursor:default;padding:12px 16px 4px;background:#fafafa;font:15px/1.5 var(--font-sans)">`
-      + say + map
+      + map
       + `<div data-card-box="${live ? 'live' : 'answered'}" style="padding:14px 16px 16px;border:1px solid #eaeaea;border-radius:10px;background:#fff">`
-      + `<div style="font:600 16px/1.45 var(--font-sans);color:#171717">${esc(asked.title)}</div>`
+      + say + `<div style="font:600 16px/1.45 var(--font-sans);color:#171717">${esc(asked.title)}</div>`
       + (sub ? `<div style="margin-top:8px;font-size:13.5px;color:#8f8f8f">${esc(sub)}</div>` : '')
-      + body + acts + '</div>' + discover + '</div>';
+      + body + acts + '</div></div>';
   }
   // After a redraw: what was typed on a live card goes back into its fields, with the keyboard if it had it.
   restoreCards(ed, had) {
@@ -1359,7 +1459,7 @@ export default class DocEditor extends React.Component {
     if (had || buildField) this.caret = null;
     if (html === this.lastHtml && key === this.lastKey) {
       if (this.caret && (hadFocus || this.wantFocus)) { ed.focus({ preventScroll: true }); this.applyCaret(); }
-      this.wantFocus = false; return;
+      this.wantFocus = false; this.menuToCaret(); return;
     }
     let c = had || buildField ? null : this.caret || (hadFocus ? this.caretInfo()?.anchor : null);
     if (!c && hadFocus && !had && !buildField && !ed.querySelector('[data-line]')) { const ls = this.lines(), last = ls.length - 1, p = parseLine(ls[last]); c = { line: last, offset: lineText(p, ls[last]).length }; }
@@ -1369,13 +1469,27 @@ export default class DocEditor extends React.Component {
     this.syncing = true; ed.innerHTML = html; this.lastHtml = html; this.lastKey = key; this.markBeside(); this.restoreFollow(ed, had && !had.card && !had.discover ? had : null); this.restoreCards(ed, had); this.restoreDiscover(ed, had && had.discover ? had : null); this.restoreBuilds(ed, buildField);
     if (menu) this.followMenuRedrawn(menu);
     if (c && !had && !buildField && (hadFocus || this.wantFocus)) { ed.focus({ preventScroll: true }); this.caret = c; this.applyCaret(); }
-    this.wantFocus = false; this.syncing = false;
+    this.wantFocus = false; this.syncing = false; this.menuToCaret();
+  }
+  // The @ menu's line was rewritten under it (a folder's path written in, MATH-22): it hangs from the caret again.
+  menuToCaret() {
+    if (!this.wantAnchor) return; this.wantAnchor = false;
+    const anchor = this.state.mention && this.mentionAnchor(); if (anchor) this.setState((s) => (s.mention ? { mention: { ...s.mention, anchor } } : null));
   }
   // A selection made backwards (shift+←) is put back backwards, so the next shift+arrow moves the end being moved.
   applyCaret() { const c = this.caret; this.caret = null; if (!c) return; if (c.sel) { if (c.back) this.setSelection(c.line, c.sel[1], c.sel[0]); else this.setSelection(c.line, c.sel[0], c.sel[1]); } else this.setSelection(c.line, c.offset, c.offset); }
   posIn(t, offset) {
     const walker = document.createTreeWalker(t, NodeFilter.SHOW_TEXT); let node, rest = offset;
-    while ((node = walker.nextNode())) { if (rest <= node.length) return { node, offset: rest }; rest -= node.length; }
+    const shut = (n) => !!(n.parentElement && n.parentElement.closest('[data-open="0"]'));
+    while ((node = walker.nextNode())) {
+      if (rest <= node.length) {
+        // Right after a closed token (a mention, MATH-56) the caret goes to the start of the text after it, when there is
+        // some: what is typed there is that text's, not the mention's.
+        if (rest && rest === node.length && shut(node)) { const next = walker.nextNode(); if (next && !shut(next)) return { node: next, offset: 0 }; }
+        return { node, offset: rest };
+      }
+      rest -= node.length;
+    }
     if (t.firstChild && t.firstChild.nodeName === 'BR') return { node: t, offset: 0 };
     const last = t.lastChild; return last && last.nodeType === 3 ? { node: last, offset: last.length } : { node: t, offset: t.childNodes.length };
   }
@@ -1405,7 +1519,7 @@ export default class DocEditor extends React.Component {
     if (raw == null) {
       // Code shows its own characters; a fence shown as its language puts the caret at the end of the fence.
       const line = d.dataset.raw || '', kind = d.dataset.kind, p = parseLine(line);
-      raw = isActive || kind === 'code' ? off : kind === 'fence' ? lineText(p, line).length : p.type === 'img' ? 0 : p.type === 'reply' ? replyRawOffset(p, off) : rawOffset(p, off, line);
+      raw = isActive || kind === 'code' ? off : kind === 'fence' ? lineText(p, line).length : p.type === 'img' ? 0 : p.type === 'reply' ? replyRawOffset(p, off, this.mentionOpts) : rawOffset(p, off, line, this.mentionOpts);
     }
     return { line: Number(d.dataset.line), offset: raw };
   }
@@ -1529,18 +1643,25 @@ export default class DocEditor extends React.Component {
     if (unchanged && (strip || cleared)) this.syncEditor();
     if (caret) {
       // No @ menu inside code: an `@` there is code.
-      const p = parseLine(ls[pos] ?? ''), txt = lineText(p, ls[pos]), m = inCode ? null : mentionAt(txt, caret.offset);
-      if (m) {
-        const anchor = this.caretRect();
-        this.setState({ activeLine: pos, mention: { i: pos, query: m.query, start: m.start, caret: caret.offset, anchor }, mentionIdx: 0 });
-      } else this.setState((s) => (s.mention || s.activeLine !== pos ? { mention: null, activeLine: pos } : null));
+      if (inCode) this.setState((s) => (s.mention || s.activeLine !== pos ? { mention: null, activeLine: pos } : null));
+      else this.lineMention(pos, lineText(parseLine(ls[pos] ?? ''), ls[pos]), caret.offset);
     }
   };
+  // The @ menu after typing on line `pos` (its text `txt`, the caret at `offset`): opened, narrowed or closed by what stands
+  // before the caret; in a library folder opened from it, by what follows the path the line keeps (MATH-22).
+  lineMention(pos, txt, offset) {
+    const read = this.readMention(txt, offset, { i: pos }), m = read.found;
+    if (!m) { this.setState((s) => (s.mention || s.browse || s.activeLine !== pos ? { mention: null, browse: null, activeLine: pos } : null)); return; }
+    const mention = { i: pos, query: m.query, start: m.start, caret: offset, anchor: this.caretRect() };
+    this.setState({ activeLine: pos, mention, browse: read.browse, mentionIdx: this.mentionStart(mention, read.browse) });
+    if (read.into != null) this.browseInto(mention, read.browse.row, read.into, read.browse.before); // `sub/` typed: in it
+  }
   editorKey = (e) => {
     if (this.state.picker) this.closePicker();
     const s = this.state, c = this.caretInfo(); if (!c) return; const ls = this.lines();
     const ps = this.parsedOf(ls), i = c.anchor.line, line = ls[i] ?? '', p = ps[i] || parseLine(line), cur = lineText(p, line), mod = e.metaKey || e.ctrlKey;
     const same = c.anchor.line === c.focus.line, a = Math.min(c.anchor.offset, c.focus.offset), b = Math.max(c.anchor.offset, c.focus.offset), collapsed = same && a === b;
+    if (s.mention && e.key === 'Backspace' && collapsed && !mod && this.upFromFolder(s.mention, a)) { e.preventDefault(); return; }
     if (s.mention) {
       const items = this.mentionList(), n = Math.max(1, items.length);
       if (e.key === 'ArrowDown') { e.preventDefault(); this.setState({ mentionIdx: (s.mentionIdx + 1) % n }); return; }
@@ -1585,6 +1706,12 @@ export default class DocEditor extends React.Component {
       const head = cur.slice(0, a), tail = cur.slice(b), l1 = sameLine(p, head), l2 = p.type === 'todo' ? todoLine(p.depth, false, tail) : p.num != null ? sameLine({ ...p, num: p.num + 1 }, tail) : sameLine(p, tail);
       this.setLines((x) => { const out = [...x]; out[i] = l1; out.splice(i + 1, 0, l2); return out; }, { line: i + 1, offset: 0 });
       this.setState({ activeLine: i + 1, mention: null }); return;
+    }
+    // Backspace right after a mention, or Delete right before one, takes the whole token, its (ws:…) or (lib:…) with it
+    // (MATH-57): one key, one mention, and one ⌘Z brings it back. ⌥ and ⌘ delete as the browser does.
+    if ((e.key === 'Backspace' || e.key === 'Delete') && collapsed && !mod && !e.altKey && !isCode(p) && !isFence(p)) {
+      const span = mentionBeside(cur, a, e.key === 'Backspace');
+      if (span) { e.preventDefault(); this.writeText(i, cur.slice(0, span[0]) + cur.slice(span[1]), { line: i, offset: span[0] }); this.setState({ mention: null, activeLine: i }); return; }
     }
     if (e.key === 'Backspace' && collapsed && a === 0) {
       if (isMarked(p.type)) {
@@ -1651,6 +1778,17 @@ export default class DocEditor extends React.Component {
   // and everything else (and every picture, in a document that is read only) to props.onDropItems.
   editorDrop(e) {
     if (!carriesDrop(e)) return;
+    // Let go on a Zotero item's chip (MATH-65 build 4), a file becomes the item's pdf: main copies it in and refuses one
+    // that is not a pdf. The first pdf of what was dropped, else the first file.
+    const chip = zoteroChipFor(e);
+    if (chip && this.props.onDropOnZotero) {
+      const where = [...((e.dataTransfer && e.dataTransfer.files) || [])].map((file) => { try { return this.props.pathForFile ? this.props.pathForFile(file) : null; } catch { return null; } }).filter(Boolean);
+      const file = where.find((p) => /\.pdf$/i.test(p)) || where[0];
+      if (file) {
+        Promise.resolve(this.props.onDropOnZotero({ key: chip.dataset.zotero, name: chip.dataset.mention }, file)).catch((error) => { if (this.props.onError) this.props.onError(error); });
+        return;
+      }
+    }
     const files = [...((e.dataTransfer && e.dataTransfer.files) || [])];
     const items = readDrop(e.dataTransfer, this.props.pathForFile);
     const pictures = !this.props.readOnly && this.props.onPasteImage ? items.filter(isPastable) : [];
@@ -1685,6 +1823,8 @@ export default class DocEditor extends React.Component {
     const data = e.clipboardData || window.clipboardData;
     let text = (data.getData('text/plain') || '').replace(/\r/g, ''); if (!text) return;
     const ls = this.lines(), i = c.anchor.line, line = ls[i] ?? '', p = this.parsedOf(ls)[i] || parseLine(line), cur = lineText(p, line);
+    // Copied from a PDF (MATH-24): the page's line breaks, split words and ligatures come out (model/paste.js). Not in code.
+    if (!isCode(p) && !isFence(p)) text = pdfText(text);
     // Copied from a web page (2026-10-02), the plain text has each link's title only: the page's HTML gives the addresses
     // back. A copy from this editor already holds its links as markdown, and code takes what was copied as it is.
     const html = text.includes('](') || isCode(p) || isFence(p) ? '' : data.getData('text/html');
@@ -1746,6 +1886,7 @@ export default class DocEditor extends React.Component {
       if (k === 'sendfollow') { this.closePicker(); this.sendFollow(Number(act.dataset.thread)); return; }
       if (k === 'senddiscover') { this.closePicker(); this.sendDiscover(act.dataset.target); return; }
       if (k === 'opendiscover') { this.closePicker(); this.openDiscover(act.dataset.target); return; }
+      if (k === 'resultask') { this.closePicker(); this.askResult(i, act.dataset.agent); return; }
       if (k === 'papersave') { if (!act.disabled) this.savePaper(i); return; }
       if (k === 'regen') { this.closePicker(); const q = Number(act.dataset.turn); this.regenerate(q, act.dataset.plain ? undefined : this.ranWith(this.lines(), q).choice); return; }
       if (k === 'editturn') { this.closePicker(); this.startEdit(Number(act.dataset.turn)); return; }
@@ -1791,6 +1932,18 @@ export default class DocEditor extends React.Component {
       return;
     }
     const m = e.target.closest('[data-mention]');
+    // A Zotero item (MATH-65 build 2) opens its pdf in the Stage, or its address when it has none.
+    if (m && m.dataset.zotero) {
+      e.preventDefault(); this.hidePop();
+      if (this.props.onOpenZotero) this.props.onOpenZotero({ key: m.dataset.zotero, name: m.dataset.mention }, newTabClick(e) ? { newTab: true } : undefined);
+      return;
+    }
+    // A file in a library folder (MATH-22) opens in the Stage; one that is gone says so.
+    if (m && m.dataset.file != null && m.dataset.folder) {
+      e.preventDefault(); this.hidePop();
+      if (this.props.onOpenFile) this.props.onOpenFile({ folderId: m.dataset.folder, rel: m.dataset.file, name: m.dataset.mention }, newTabClick(e) ? { newTab: true } : undefined);
+      return;
+    }
     // A workspace's document opens in the pane beside this one (MATH-23); ⌘-click goes there, as a click did before.
     if (m && m.dataset.ws) {
       e.preventDefault(); this.hidePop();
@@ -1799,15 +1952,16 @@ export default class DocEditor extends React.Component {
       return;
     }
     if (m) {
-      e.preventDefault(); this.hidePop(); const nm = m.dataset.mention; if (nm.startsWith('bart')) return;
-      const res = this.findRes(nm); if (res.id === '?') return;
+      e.preventDefault(); this.hidePop(); const nm = m.dataset.mention;
+      const res = this.findRes(nm, m.dataset.lib); if (!res || res.type === 'chat') return; // an agent opens nothing
       // A note opens in the pane beside this document (MATH-23); ⌘-click opens it as a tab, as before.
       if (isNote(res) && this.props.onOpenBeside && !newTabClick(e)) { this.props.onOpenBeside({ kind: 'note', id: res.id, name: res.name }, nm); return; }
       if (this.props.onOpenItem) this.props.onOpenItem(res);
     }
   };
   editorOver = (e) => {
-    const m = e.target.closest('[data-mention]'); if (m) this.showPop(m.dataset.ws ? { ws: m.dataset.ws, name: m.dataset.mention } : this.findRes(m.dataset.mention), { currentTarget: m });
+    const m = e.target.closest('[data-mention]'), res = m && m.dataset.file == null && m.dataset.zotero == null && (m.dataset.ws ? { ws: m.dataset.ws, name: m.dataset.mention } : this.findRes(m.dataset.mention, m.dataset.lib));
+    if (res) this.showPop(res, { currentTarget: m });
     // An icon's name goes under it, or above it when under would leave the pane.
     const ic = e.target.closest('.bart-ic'), box = this.scrollRef.current;
     if (ic && ic.parentElement && box) ic.parentElement.toggleAttribute('data-tip-up', ic.getBoundingClientRect().bottom + 32 > Math.min(box.getBoundingClientRect().bottom, window.innerHeight || 800));
@@ -1894,6 +2048,7 @@ export default class DocEditor extends React.Component {
   followKey(e) {
     if (this.state.picker) this.closePicker();
     const m = this.state.mention, items = m && m.field === Number(e.target.dataset.followInput) ? this.mentionList() : [];
+    if (items.length && e.key === 'Backspace' && e.target.selectionStart === e.target.selectionEnd && !e.metaKey && !e.ctrlKey && this.upFromFolder(m, e.target.selectionStart)) { e.preventDefault(); return; }
     if (items.length) {
       const n = items.length;
       if (e.key === 'ArrowDown') { e.preventDefault(); this.setState({ mentionIdx: (this.state.mentionIdx + 1) % n }); return; }
@@ -1932,9 +2087,23 @@ export default class DocEditor extends React.Component {
   // The @ menu in a follow-up field (2026-10-02): opened, narrowed or closed by what stands before the field's caret, as
   // on a document line, and hung from that caret. It is the menu's `field` form: the thread's first line, and no line `i`.
   followMention(input) {
-    const from = Number(input.dataset.followInput), caret = input.selectionStart, found = mentionAt(input.value, caret), open = this.state.mention;
-    if (found) this.setState({ mention: { field: from, query: found.query, start: found.start, caret, anchor: fieldCaret(input, caret) }, mentionIdx: 0 });
-    else if (open && open.field === from) this.setState({ mention: null });
+    const from = Number(input.dataset.followInput), caret = input.selectionStart, read = this.readMention(input.value, caret, { field: from }), found = read.found, open = this.state.mention;
+    if (found) {
+      const mention = { field: from, query: found.query, start: found.start, caret, anchor: fieldCaret(input, caret) };
+      this.setState({ mention, browse: read.browse, mentionIdx: this.mentionStart(mention, read.browse) });
+      if (read.into != null) this.browseInto(mention, read.browse.row, read.into, read.browse.before);
+    } else if (open && open.field === from) this.setState({ mention: null, browse: null });
+  }
+  // Text pasted into a field of the editor's own (a follow-up, a Build's reply, a card's field, Send to Discover) that
+  // was copied from a PDF goes in without the page's layout (MATH-24); the field's input handler then runs as for typing.
+  // An image paste is handled above and has already been taken.
+  fieldPaste(e) {
+    const field = e.target, data = e.clipboardData; if (e.defaultPrevented || !data || typeof field.setRangeText !== 'function') return;
+    const raw = (data.getData('text/plain') || '').replace(/\r/g, ''), text = pdfText(raw);
+    if (!raw || text === raw) return;
+    e.preventDefault();
+    field.setRangeText(text, field.selectionStart ?? field.value.length, field.selectionEnd ?? field.value.length, 'end');
+    field.dispatchEvent(new Event('input', { bubbles: true }));
   }
   // An image pasted into a follow-up (2026-10-02) is saved as one pasted into the document is (the parent's onPasteImage)
   // and named in the field as [Attachment n], numbered on from the document's images; sendFollow writes it into the line.
@@ -2146,12 +2315,21 @@ export default class DocEditor extends React.Component {
   bartItem() { return (this.props.mentionable || []).find((r) => r && r.id === 'bart') || BART_ITEM; }
   mentionList() {
     const m = this.state.mention, q = (m?.query || '').toLowerCase();
+    const browse = this.browsing();
+    if (browse) return folderRows({ browse, listing: browse.listing, query: q }); // inside a library folder (MATH-22)
     const rows = this.props.mentionItems ? this.props.mentionItems(q) // the workspace's list: Bart, Note, the open page, the library (model/rail.js)
       : (this.props.mentionable || []).filter((r) => r && ((r.name || '').toLowerCase().includes(q) || (r.title || '').toLowerCase().includes(q)));
     return m && m.field != null ? fieldRows(rows) : rows; // a follow-up field already asks its thread's agent: no verbs
   }
   pickMention(r) {
     const m = this.state.mention; if (!m || !r) return;
+    // A library folder opens in the menu, and a subfolder of it; the back row goes up; a row that only says something is
+    // not picked; "Mention this folder" at its top is the folder's own mention (MATH-22).
+    if (this.canBrowse() && isFolderRow(r)) { this.openFolder(r.row, ''); return; }
+    if (r.kind === 'entry' && r.dir) { this.openFolder(r.row, r.rel); return; }
+    if (r.kind === 'back') { this.leaveFolder(); return; }
+    if (r.kind === 'note') return;
+    if (r.kind === 'self' && !r.rel) r = { kind: 'item', key: r.row.id, row: r.row, name: r.row.name };
     if (m.field != null) { this.pickInField(m, r); return; }
     const ls = this.lines(), p = parseLine(ls[m.i] || '');
     const cur = lineText(p, ls[m.i]);
@@ -2159,10 +2337,10 @@ export default class DocEditor extends React.Component {
     // Bart, Brainstorm, Discover and Note are words the line keeps (Enter asks, or makes the note); anything else is a mention, and
     // what it names comes into this workspace (the open page is added to the library first: props.onMentionPicked). A verb
     // is followed by a space, since a question comes next; a mention is not (MATH-11, 2026-10-05): the caret stops right after it.
-    const ins = verb === 'bart' ? '@Bart ' : verb === 'brainstorm' ? '@Brainstorm ' : verb === 'discover' ? '@Discover ' : verb === 'note' ? '@Note ' : r.kind === 'workspace' ? wsMention(r.name, r.id) : `@[${r.name}]`;
+    const ins = verb === 'bart' ? '@Bart ' : verb === 'brainstorm' ? '@Brainstorm ' : verb === 'discover' ? '@Discover ' : verb === 'note' ? '@Note ' : mentionToken(r);
     this.writeText(m.i, cur.slice(0, m.start) + ins + cur.slice(m.caret), { line: m.i, offset: m.start + ins.length });
     this.wantFocus = true; this.setState({ mention: null, activeLine: m.i });
-    if (!verb && r.kind !== 'workspace' && this.props.onMentionPicked) this.props.onMentionPicked(r); // a workspace is not a library row
+    if (!verb && r.kind !== 'workspace' && pickedRow(r) && this.props.onMentionPicked) this.props.onMentionPicked(pickedRow(r)); // a workspace is not a library row
   }
   // A row picked in a follow-up field: the token a document line would get takes the place of `@query`, the keyboard stays
   // in the field, and followInput keeps what it holds and its send button. Sent, it is a mention on the new line.
@@ -2170,13 +2348,87 @@ export default class DocEditor extends React.Component {
     const input = this.followField(m.field);
     this.setState({ mention: null });
     if (!input || isVerbRow(r)) return;
-    const ins = r.kind === 'workspace' ? wsMention(r.name, r.id) : `@[${r.name}]`;
+    const ins = mentionToken(r);
     const end = Math.min(m.caret, input.value.length), start = Math.min(m.start, end);
     if (document.activeElement !== input) input.focus({ preventScroll: true });
     input.setRangeText(ins, start, end, 'end');
     this.followInput(input);
-    if (r.kind !== 'workspace' && this.props.onMentionPicked) this.props.onMentionPicked(r);
+    if (r.kind !== 'workspace' && pickedRow(r) && this.props.onMentionPicked) this.props.onMentionPicked(pickedRow(r));
   }
+  /* ------------------------------------------------- a library folder in the @ menu (MATH-22) */
+  // Where the @ menu stands (a line's `@`, or a follow-up field's): a folder opened from it is left when the menu moves.
+  mentionKey(m) { return m ? (m.field != null ? `f${m.field}:${m.start}` : `${m.i}:${m.start}`) : null; }
+  /** The folder the menu is in → { at, row, rel, listing }, or null at the menu's top. */
+  browsing() { const b = this.state.browse, m = this.state.mention; return b && m && b.at === this.mentionKey(m) ? b : null; }
+  canBrowse() { return typeof this.props.listFolder === 'function'; }
+  // The menu goes into `rel` of the folder `row` (MF-01): the line (or field) keeps its path, `@Folder/sub/`, in place of
+  // what was typed to find it, the caret after the last `/`, so what is typed next narrows the level. The level is asked
+  // of main (listFolder) each time, live. `before`: what was typed after the `@` to find the folder, put back on leaving it.
+  openFolder(row, rel, before) {
+    const m = this.state.mention; if (!m || !row || !this.canBrowse()) return;
+    const was = before ?? (this.browsing() ? this.browsing().before : m.query || '');
+    const path = folderPath(row.name || '', rel);
+    const anchor = this.putMention(m, path);
+    this.browseInto({ ...m, query: '', caret: m.start + path.length, anchor }, row, rel, was);
+  }
+  // The folder's level is shown for `m`, whose line already holds its path.
+  browseInto(m, row, rel, before) {
+    const at = this.mentionKey(m), id = row.id, path = folderPath(row.name || '', rel);
+    this.setState({ mention: m, browse: { at, start: m.start, path, before, row, rel, listing: undefined }, mentionIdx: 0 });
+    Promise.resolve().then(() => this.props.listFolder(id, rel)).catch((error) => ({ error: (error && error.message) || 'This folder could not be read' })).then((listing) => {
+      const b = this.state.browse;
+      if (!this.mounted || !b || b.at !== at || b.row.id !== id || b.rel !== rel) return; // gone elsewhere meanwhile
+      const next = { ...b, listing: listing || { error: 'This folder could not be read' } };
+      this.setState({ browse: next, mentionIdx: firstPick(folderRows({ browse: next, listing: next.listing, query: (this.state.mention || {}).query })) });
+    });
+  }
+  // `text` in place of the menu's `@…` (from its `@` to the caret), the caret after it; in a follow-up field as on a line.
+  // → where the menu hangs now (a line's menu moves to the caret once the line is redrawn: menuToCaret).
+  putMention(m, text) {
+    if (m.field != null) {
+      const input = this.followField(m.field); if (!input) return m.anchor;
+      input.setRangeText(text, m.start, Math.min(m.caret, input.value.length), 'end');
+      this.followText.set(m.field, input.value); this.paintSend(input); this.fitFollow(input);
+      return fieldCaret(input) || m.anchor;
+    }
+    const ls = this.lines(), p = parseLine(ls[m.i] || ''), cur = lineText(p, ls[m.i]);
+    this.writeText(m.i, cur.slice(0, m.start) + text + cur.slice(m.caret), { line: m.i, offset: m.start + text.length });
+    this.wantFocus = true; this.wantAnchor = true;
+    return m.anchor;
+  }
+  // Back up a level, its name taken off the path; from the folder's top, back to the whole menu with what was typed before.
+  leaveFolder() {
+    const b = this.browsing(), m = this.state.mention; if (!b) return;
+    const up = parentRel(b.rel);
+    if (up != null) { this.openFolder(b.row, up, b.before); return; }
+    const text = `@${b.before}`, anchor = this.putMention(m, text);
+    this.setState({ browse: null, mention: { ...m, query: b.before, caret: m.start + text.length, anchor }, mentionIdx: 0 });
+  }
+  // Backspace right after the path's last `/` (nothing typed after it), inside a folder: up a level. → whether it did
+  upFromFolder(m, at) {
+    const b = this.browsing();
+    if (!m || m.query || !b || at !== b.start + b.path.length) return false;
+    this.leaveFolder(); return true;
+  }
+  // What the @ menu reads before `caret` in `text`, on line `where.i` or in field `where.field`: inside a folder opened from
+  // there, the path the line keeps and what follows it (folderMentionAt), else mentionAt. → { found, browse } with the
+  // folder still open (or null), and `into`, the subfolder to enter when its name and a `/` were typed after the path.
+  // Words with a space that no name holds are writing, not a search: the menu closes.
+  readMention(text, caret, where) {
+    const b = this.state.browse;
+    if (b && b.at === this.mentionKey({ ...where, start: b.start })) {
+      const f = folderMentionAt(text, caret, b), entries = (b.listing && b.listing.entries) || [];
+      if (f && f.into != null) {
+        const dir = entries.find((e) => e.dir && e.name === f.into);
+        if (dir) return { found: { query: '', start: b.start }, browse: b, into: dir.rel };
+      } else if (f && !(/\s/.test(f.query) && b.listing !== undefined && !entries.some((e) => e.name.toLowerCase().includes(f.query.trim().toLowerCase())))) {
+        return { found: f, browse: b };
+      }
+    }
+    return { found: mentionAt(text, caret), browse: null };
+  }
+  // The keyboard's row for a menu just read: in a folder its first entry, else the top.
+  mentionStart(m, browse) { return browse ? firstPick(folderRows({ browse, listing: browse.listing, query: (m.query || '').toLowerCase() })) : 0; }
   // Enter on a line holding `@Note name`: the note is made (named, or untitled when nothing follows), and the words
   // become its mention if the line still holds them once it exists.
   async noteVerb(i) {
@@ -2213,11 +2465,25 @@ export default class DocEditor extends React.Component {
   toggleTodo(i) {
     this.setLines((ls) => ls.map((l, j) => { if (j !== i) return l; const p = parseLine(l); return todoLine(p.depth, !p.done, p.text); }));
   }
-  findRes(name) {
-    const n = String(name).toLowerCase(); if (n.startsWith('bart')) return this.bartItem();
-    return (this.props.mentionable || []).find((r) => r && r.id !== 'bart' && (r.name || '').toLowerCase() === n)
-      || { id: '?', type: 'note', name, title: name, summary: 'Not attached to this topic yet.', facts: 'unresolved' };
+  // What a mention names (MATH-60): a library mention's item by its id, whatever it is called now; Bart for `@[bart]`;
+  // otherwise the item that goes by the name. Null when nothing does: the mention is drawn grey, with no card to show.
+  findRes(name, libId) {
+    const rows = this.props.mentionable || [];
+    if (libId) return rows.find((r) => r && r.type !== 'chat' && r.id === libId) || null;
+    const chat = chatMention(name); if (chat) return chat.live ? this.bartItem() : null;
+    const n = String(name).toLowerCase();
+    return rows.find((r) => r && r.id !== 'bart' && (r.name || '').toLowerCase() === n) || null;
   }
+  // What a line's mentions are drawn with (model/doc.js inlineHtml): a library mention under its item's name now, and a
+  // mention of something no longer here in grey. Until there is a library to ask (none given, or none yet), as written.
+  libraryKnown() { return (this.props.mentionable || []).some((r) => r && r.type !== 'chat'); }
+  mentionOpts = {
+    libName: (id) => { if (!this.libraryKnown()) return undefined; const row = this.findRes('', id); return row ? row.name || '' : null; },
+    named: (name) => (this.libraryKnown() ? !!this.findRes(name) : undefined),
+    trashed: (name, id) => { const row = id ? this.findRes('', id) : this.findRes(name); return !!(row && row.trashed); }, // MATH-58 follow-up
+    // A file in a library folder (MATH-22): false when it is no longer there, undefined until that is known.
+    fileState: (folderId, rel) => (typeof this.props.fileState === 'function' ? this.props.fileState(folderId, rel) : undefined),
+  };
   showPop(res, e) { const r = e.currentTarget.getBoundingClientRect(); this.setState({ pop: { res, anchor: { left: r.left, right: r.right, top: r.top, bottom: r.bottom } } }); }
   hidePop = () => { if (this.state.pop) this.setState({ pop: null }); };
 

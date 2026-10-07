@@ -37,6 +37,10 @@ test('placeTab: what is open comes forward; a blank tab in front is used; at 15 
   assert.deepEqual(placeTab(tabs, 0, 'i:p1'), { focus: 2 });
   assert.deepEqual(placeTab(tabs, 1, 'l:b.org'), { replace: 1 });
   assert.deepEqual(placeTab(tabs, 0, 'l:b.org'), { append: true });
+  // MATH-16: a library row open as its page comes forward too; ⌘-click (newTab) opens another
+  const key = tabs[0] && (await load('stage')).tabKey(tabs[0]);
+  assert.deepEqual(placeTab(tabs, 1, 'i:p9', { also: key }), { focus: 0 });
+  assert.deepEqual(placeTab(tabs, 0, 'i:p1', { newTab: true }), { append: true });
   const full = Array.from({ length: MAX_TABS }, (_, i) => ({ url: `https://s${i}.org` }));
   assert.deepEqual(placeTab(full, 4, 'l:new.org'), { replace: 4 });
   assert.equal(MAX_TABS, 15);

@@ -134,4 +134,4 @@ function carryDefaults({ file, defaults, past = [], normalize = (value) => value
   return { value, wrote: changed };
 }
 
-module.exports = { equal, merge3, rebuildBase, carryDefaults, baseFileFor };
+module.exports = { equal, merge3, rebuildBase, carryDefaults, baseFileFor, writeJsonFile };

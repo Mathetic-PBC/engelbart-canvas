@@ -192,3 +192,41 @@ test('notes are shown as text only when a mention has somewhere to go', () => {
   assert.equal(viewer('x').view.showsNotes(), true);
   assert.equal(viewer('x', { onOpenMention: undefined }).view.showsNotes(), false);
 });
+
+test('MATH-22: a library folder opens in a note\'s menu, Backspace goes up, and a file in it is written with its path', async () => {
+  const folder = { id: 'f-1', name: 'Papers', type: 'folder', tags: [], folder_path: '/home/papers' };
+  const levels = {
+    '': { entries: [{ name: 'sub', rel: 'sub', dir: true, type: 'folder' }], total: 1 },
+    sub: { entries: [{ name: 'A [1] #2.pdf', rel: 'sub/A [1] #2.pdf', dir: false, type: 'pdf' }], total: 1 },
+  };
+  const opened = [];
+  const { view, m, ta } = viewer('see @pap', {
+    mentionItems: () => [{ kind: 'item', key: 'f-1', row: folder, name: 'Papers' }],
+    listFolder: async (id, rel) => ({ id, rel, missing: false, ...levels[rel] }),
+    onOpenFile: (file) => opened.push(file),
+  });
+  view.host = { current: {} };
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  view.noteMention(ta, m, 2);
+  view.pickMention(view.mentionList()[0]);
+  assert.equal(ta.value, 'see @', 'what found the folder goes');
+  await settle();
+  assert.deepEqual(view.mentionList().map((r) => `${r.kind}:${r.name}`), ['back:All', 'self:Mention this folder', 'entry:sub']);
+  view.pickMention(view.mentionList()[2]);
+  await settle();
+  assert.equal(view.state.browse.rel, 'sub');
+  const back = key('Backspace');
+  view.noteKey(back, ta, m, 2);
+  assert.equal(back.prevented, true);
+  await settle();
+  assert.equal(view.state.browse.rel, '', 'up a level');
+  view.pickMention(view.mentionList()[2]);
+  await settle();
+  view.pickMention(view.mentionList().find((r) => r.kind === 'entry'));
+  assert.equal(ta.value, 'see @[A 1 #2.pdf](lib:f-1:sub/A%20%5B1%5D%20%232.pdf) ');
+  assert.equal(view.state.mention, null);
+  const chip = { dataset: { mention: 'A 1 #2.pdf', folder: 'f-1', file: 'sub/A [1] #2.pdf' } };
+  const click = { target: { closest: (sel) => (sel === '[data-file]' ? chip : null) }, preventDefault() {}, stopPropagation() {} };
+  assert.equal(view.openFileChip(click), true);
+  assert.deepEqual(opened, [{ folderId: 'f-1', rel: 'sub/A [1] #2.pdf', name: 'A 1 #2.pdf' }]);
+});

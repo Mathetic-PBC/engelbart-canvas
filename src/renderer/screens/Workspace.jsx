@@ -11,15 +11,20 @@ import { hasTag, isNote } from '../model/kind.js';
 import { isUntitled, nextUntitled } from '../model/names.js';
 import { OPEN_IN_BROWSER } from '../model/address.js';
 import { adoptSession, dropSession, SHOW_TERMINAL } from '../terminal/sessions.js';
-import { mentionRows } from '../model/rail.js';
+import { letGoNotes, mentionRows, mentionedIds, pickedChanges, ZOTERO_ROW } from '../model/rail.js';
 import { useBodies } from '../workspace/useBodies.js';
+import { useFolderFiles } from '../workspace/useFolderFiles.js';
+import { useZoteroStatus, useZoteroFinding, useZoteroWaiting } from '../workspace/useZoteroStatus.js';
+import { zoteroChipAction } from '../model/zotero.js';
 import { flatWorkspaces, nextPlace, placesToGo } from '../model/nav.js';
 import { onStage, savesPageCopy } from '../model/stage.js';
 import { paperState, savePaper, repoState, tryRepo } from '../model/guide.js';
 import { buildLine, placeAnswer } from '../model/doc.js';
 import { openBeside, closePane } from '../model/panes.js';
 import { addDropped } from '../model/drop.js';
+import { addOrFind } from '../model/add-or-find.js';
 import { createDocSync } from '../model/doc-sync.js';
+import { askEntry, answerOf, continueLines, runningBack } from '../pdf/canvas.js';
 import { buildRequestOf } from '../../main/bart/question.cjs';
 import ProjectPostIts from '../post-its/ProjectPostIts.jsx';
 import BuildPanel from '../workspace/BuildPanel.jsx';
@@ -53,11 +58,15 @@ import { repositoryClick, OPEN_SANDBOX_TERMINAL } from '../model/sandbox-notific
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const IMAGE_REF_RE = /\]\(img:([\w-]+)\)/g;
-const MENTION_RE = /@\[([^\]\n]+)\](?!\(ws:)/g; // a note or a library row by its name; `@[Name](ws:<id>)` is a workspace
+// A note or a library row by its name; `@[Name](ws:<id>)` is a workspace, `@[Name](lib:<folderId>:<path>)` a file in a
+// library folder (MATH-22), which is no row of its own, and `@[Title](zotero:<key>)` a Zotero item (MATH-65), no row either.
+const MENTION_RE = /@\[([^\]\n]+)\](?!\(ws:|\(lib:[\w-]+:|\(zotero:)/g;
 const SAVE_DELAY = 400;
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
 
 const basename = (value) => String(value || '').split('/').pop();
+// Why a question from a highlight's note got no answer, as its box says it: the reply's words without "No answer.".
+const paperFailure = (lines) => answerOf(lines).answer.replace(/^\*\*No answer\.\*\*\s*/, '');
 
 function copiedLabel(copied) {
   const parts = ['Copied'];
@@ -161,11 +170,18 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const [docs, setDocs] = React.useState({});
   const [rightMode, setRightMode] = React.useState('stage');
   const stageRef = React.useRef(null);
-  const [stageFull, setStageFull] = React.useState(false); // the Stage takes the document's place
+  const [stageFull, setStageFull] = React.useState(false); // the right pane (the Stage or the terminal) takes the document's place
   // The document takes the whole window (MATH-23): no sidebar, no right pane. Never with the Stage's full screen: turning
   // either on turns the other off.
   const [docFull, setDocFull] = React.useState(false);
   const toggleStageFull = () => { if (!stageFull) setDocFull(false); setStageFull(!stageFull); };
+  // What is in front in the Stage when @bart is asked (MATH-27): only while the Stage shows; main reads a pdf's ink from it.
+  const stageShown = React.useRef(false);
+  stageShown.current = rightMode === 'stage' && !docFull;
+  const stageNow = React.useCallback(() => {
+    if (!stageShown.current || !stageRef.current || typeof stageRef.current.front !== 'function') return null;
+    try { return stageRef.current.front(); } catch { return null; }
+  }, []);
   const toggleDocFull = () => { if (!docFull) setStageFull(false); setDocFull(!docFull); };
   // What opens on the right (the Stage or the terminal) brings the right pane back from the document's full screen.
   const showRight = React.useCallback((mode) => { setRightMode(mode); setDocFull(false); }, []);
@@ -361,6 +377,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // written in; another workspace's document beside it is that workspace.
   const onDocChange = React.useCallback((key, ref, text) => {
     if (ref && ref.kind === 'archive') return; // an archived version is only read
+    if (ref && ref.kind === 'workspace' && unmentionRef.current) unmentionRef.current(ref.workspaceId, docsRef.current[key], text);
     if (key && ref) changeDoc(key, ref, text);
     const typed = mainRef.current && mainRef.current.contains(document.activeElement);
     const now = Date.now(), last = lastEdit.current;
@@ -394,8 +411,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // was written in (`key`, `ref`): one in a note beside the document is answered in that note (MATH-23).
   const [asks, setAsks] = React.useState({});
   // What the @bart line's chip offers and what its flags are checked against. The files behind it are read again for every
-  // question, so this is read again whenever the window comes back to the front, and once a question has been sent: one
-  // asked with a model picked by hand makes that where the next one starts (main: bart/choices.cjs).
+  // question, so this is read again whenever the window comes back to the front, once a question has been sent (one
+  // asked with a model picked by hand makes that where the next one starts; main: bart/choices.cjs), and after Settings
+  // saves a default or clears a pick (ui/Settings.jsx, in any window).
   const [bartModels, setBartModels] = React.useState(null);
   const liveRef = React.useRef(true);
   const loadBartModels = React.useCallback(() => api.bartModels().then((models) => { if (liveRef.current) setBartModels(models); }).catch(() => {}), []);
@@ -403,24 +421,88 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     liveRef.current = true;
     loadBartModels();
     window.addEventListener('focus', loadBartModels);
-    return () => { liveRef.current = false; window.removeEventListener('focus', loadBartModels); };
+    const off = api.onModelsChanged ? api.onModelsChanged(loadBartModels) : () => {};
+    return () => { liveRef.current = false; window.removeEventListener('focus', loadBartModels); off(); };
   }, [loadBartModels]);
   const docsRef = React.useRef(docs);
   docsRef.current = docs;
+  const unmentionRef = React.useRef(null); // set beside mentionPicked
 
   // Progress is of three kinds: a step of the ladder begins ({ step, name, effort, movedUp }: whatever the last step showed
   // is dropped), what the agent is doing ({ activity }, kept in `log` when it is a thing done rather than a state), and the
   // answer so far ({ lines }). All of it lives here, never in the document: only the finished answer is written there.
+  // A question asked from a highlight's note on a pdf (MATH-27) is kept the same way in `paperAsks`, for the Stage.
   React.useEffect(() => api.onBartProgress(({ askId, log, ...progress }) => {
-    setAsks((current) => {
+    const apply = (current) => {
       const ask = current[askId];
       if (!ask) return current;
       const next = { ...ask, ...progress };
       if (progress.step) { next.activity = ''; next.lines = []; }
       if (log && progress.activity) next.log = [...(ask.log || []), progress.activity].slice(-60);
       return { ...current, [askId]: next };
-    });
+    };
+    setAsks(apply);
+    setPaperAsks(apply);
   }), []);
+
+  // @bart from a note on a pdf's highlight (MATH-27): asked of this workspace with the mark as its place ({ kind: 'mark',
+  // id, rowId | url, page }), the passage, the note and the page's text around the passage with it, and written into no
+  // document. The entry here holds which mark and pdf it is for ({ markId, page, rowId | url }) and what it is doing,
+  // which the Stage shows on the pdf; the
+  // finished answer is returned to the Stage as the mark keeps it (pdf/canvas.js askEntry; main's own, which it has put on
+  // the mark already). Stopped, it leaves nothing; a failure stays here, with its error, until it is closed.
+  const [paperAsks, setPaperAsks] = React.useState({});
+  const dropPaperAsk = React.useCallback((askId) => setPaperAsks((current) => {
+    if (!current[askId]) return current;
+    const next = { ...current };
+    delete next[askId];
+    return next;
+  }), []);
+  const failPaperAsk = React.useCallback((askId, message) => setPaperAsks((current) => (current[askId] ? { ...current, [askId]: { ...current[askId], error: message || 'The run failed.', activity: '', lines: [] } } : current)), []);
+  // A box on a web page (MATH-70 build 2) asks the same way from its card, `source` 'web': its mark is in the page's "web"
+  // list and has no page; main reads the box itself from the page's ink.
+  const askHighlight = React.useCallback(async ({ markId, page, quote, note, question, turns, rowId, url, paper, pageText, source }) => {
+    const text = String(question || '').trim();
+    if (!topic || !markId || !text || (!rowId && !url)) return null;
+    const askId = `h${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    const web = source === 'web';
+    setPaperAsks((current) => ({ ...current, [askId]: { askId, markId, page: web ? null : page, rowId: rowId || null, url: rowId ? null : url, question: text, agent: 'bart', ...(web ? { source: 'web' } : {}) } }));
+    try {
+      const on = web ? { source: 'web' } : { page };
+      const ref = rowId ? { kind: 'mark', id: markId, rowId, ...on } : { kind: 'mark', id: markId, url, ...on };
+      const asked = api.askBart(project.id, { askId, ref, workspaceId: topic.id, text, turns: turns || [], highlight: { quote: quote || '', note: note || '', paper: paper || null, pageText: pageText || '' }, stage: stageNow() });
+      loadBartModels(); // main has kept a pick by hand before this is read
+      const out = await asked;
+      if (out && out.stopped) { dropPaperAsk(askId); return null; }
+      if (!out || out.failed || !Array.isArray(out.lines)) { failPaperAsk(askId, paperFailure(out && out.lines)); return null; }
+      dropPaperAsk(askId);
+      return out.entry || askEntry({ id: askId, question: text, lines: out.lines, meta: out.meta, at: new Date().toISOString() });
+    } catch (error) {
+      failPaperAsk(askId, errorMessage(error));
+      return null;
+    }
+  }, [topic, project.id, loadBartModels, dropPaperAsk, failPaperAsk, stageNow]);
+  // After ⌘R, or back in the project, the questions this window asked from highlights that are still running show their
+  // boxes again as main keeps them (running-paper-asks), and their progress goes on into them. How each ended main tells
+  // every window (paper-ask-done, second pass 2026-10-06): its box goes, its answer already on the mark (the Stage shows
+  // it), or it says "No answer" and why. Ended ones are remembered, so a list read just before one ended brings back no box.
+  const paperEnded = React.useRef(new Set());
+  React.useEffect(() => {
+    let live = true;
+    const off = api.onPaperAskDone ? api.onPaperAskDone((done) => {
+      if (!done || !done.askId) return;
+      paperEnded.current.add(done.askId);
+      if (done.failed) failPaperAsk(done.askId, paperFailure(done.lines)); else dropPaperAsk(done.askId);
+    }) : () => {};
+    if (api.runningPaperAsks) {
+      api.runningPaperAsks(project.id).then((list) => {
+        if (!live) return;
+        setPaperAsks((current) => runningBack(current, list, paperEnded.current));
+      }).catch(() => {});
+    }
+    return () => { live = false; off(); };
+  }, [project.id, dropPaperAsk, failPaperAsk]);
+  const pendingPaperAsks = React.useMemo(() => Object.values(paperAsks), [paperAsks]);
 
   const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent }) => {
     if (!key || !ref || !topic) return;
@@ -453,7 +535,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     try {
       await new Promise((resolve) => { setTimeout(resolve, 0); }); // let the pending line reach `pending` before flushing it
       await Promise.all([...pending.current.keys()].map((held) => flush(held)));
-      const asked = api.askBart(project.id, { askId, ref, workspaceId, text, turns: turns || [], choice: choice || null, agent: agent || 'bart' });
+      const asked = api.askBart(project.id, { askId, ref, workspaceId, text, turns: turns || [], choice: choice || null, agent: agent || 'bart', stage: stageNow() });
       loadBartModels(); // main has kept a pick by hand before this is read
       const out = await asked;
       place(out.stopped ? [] : out.lines);
@@ -462,7 +544,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     } finally {
       setAsks((current) => { const next = { ...current }; delete next[askId]; return next; });
     }
-  }, [topic, project.id, flush, changeDoc, loadBartModels, bartModels]);
+  }, [topic, project.id, flush, changeDoc, loadBartModels, bartModels, stageNow]);
 
   /* ----------------------------------------------------------------- Build */
 
@@ -761,7 +843,13 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return out;
   }, [topic, here, byId, renaming, activeRowId, tree.notes, mentioned]);
 
-  const mentionable = React.useMemo(() => [BART_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, ...library.filter((row) => row.type !== 'image').map(describe)], [library]);
+  // What the @ menu and the sidebar's search offer (MATH-58): the library less the notes trashed from their last
+  // workspace. `mentionable`, which an @mention already written is opened by, keeps the whole library, those notes marked
+  // `trashed` so their mentions show grey (still opened by a click).
+  const letGo = React.useMemo(() => letGoNotes({ workspaces: tree.workspaces, notes: tree.notes }), [tree.workspaces, tree.notes]);
+  const findable = React.useMemo(() => (letGo.size ? library.filter((row) => !letGo.has(row.id)) : library), [library, letGo]);
+
+  const mentionable = React.useMemo(() => [BART_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, ...library.filter((row) => row.type !== 'image').map((row) => (letGo.has(row.id) ? { ...describe(row), trashed: true } : describe(row)))], [library, letGo]);
 
   // On the rail: what the search does not offer again, and what makes the Browser's Save read ✓.
   const railIds = React.useMemo(() => new Set(rows.filter((row) => row.type !== 'child' && row.type !== 'archive').map((row) => row.id)), [rows]);
@@ -825,20 +913,83 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   }, []);
 
   // Anything that is not a note opens on the Stage: a pdf, a page, a repository's address, a file of any kind.
-  const openItem = React.useCallback((row) => {
+  // `{ newTab: true }` (⌘-click in the library, MATH-16): a tab of its own even when one already shows it.
+  const openItem = React.useCallback((row, options = {}) => {
     if (!row || row.id === 'chat') return;
     if (row.type === 'workspace') { showWs(); return; }
     if (isNote(row)) { openTab(row.id, row.name); return; }
     if (!onStage(row) || !stageRef.current) return;
     showRight('stage');
-    stageRef.current.openRow(row);
+    stageRef.current.openRow(row, '', '', { newTab: !!options.newTab });
   }, [openTab, showWs, showRight]);
+  // A file inside a library folder, mentioned (MATH-22): found on disk now and opened in the Stage (a pdf in the paper
+  // viewer, its ink kept by its address as for any pdf opened from disk); one that is gone says so, and its chips
+  // turn grey.
+  const folderFiles = useFolderFiles();
+  const openFolderFile = React.useCallback(async ({ folderId, rel, name }, options = {}) => {
+    try {
+      const found = await api.folderFile(folderId, rel);
+      if (!found.exists) {
+        folderFiles.recheck(folderId, rel);
+        onError(new Error(`"${name || rel}" is no longer in ${found.folder || 'its folder'} (${rel})`));
+        return;
+      }
+      if (!stageRef.current) return;
+      showRight('stage');
+      stageRef.current.openFile(found.path, { newTab: !!options.newTab });
+    } catch (error) {
+      onError(error);
+    }
+  }, [folderFiles.recheck, showRight, onError]); // eslint-disable-line react-hooks/exhaustive-deps
   // A link in a document goes to the Stage too, never to the default browser; `{ newTab: true }` (⌘-click), in a tab of its own.
   const openLink = React.useCallback((href, options) => {
     if (!stageRef.current) return;
     showRight('stage');
     stageRef.current.openInput(href, options);
   }, [showRight]);
+  // The connected Zotero library (MATH-65 build 2): its row in the @ menu while connected, opened as a library folder is
+  // (main lists its collections and items from the mirror), and a mentioned item's chip opens its pdf in the Stage's
+  // paper viewer (main downloads the file when it is not on this Mac, or finds a free copy, build 3), or, with no pdf to
+  // be had, its DOI's page or URL in the default browser: publishers' bot checks block them in the Stage. While a free
+  // copy is looked for its chips say so (zoteroFinding). Build 4: while main waits for the paper in the Downloads folder
+  // they say so too (zoteroWaiting), and the download, once it is the paper, opens here; a pdf dropped on a chip becomes
+  // the item's pdf and opens (dropOnZotero).
+  const [zotero] = useZoteroStatus();
+  const zoteroFinding = useZoteroFinding();
+  const zoteroWaiting = useZoteroWaiting();
+  const zoteroOn = !!(zotero && zotero.connected);
+  const listFolder = React.useCallback((id, rel) => (id === ZOTERO_ROW.id ? api.zoteroList(rel) : api.listFolder(id, rel)), []);
+  const openZotero = React.useCallback(async ({ key, name }, options = {}) => {
+    try {
+      const action = zoteroChipAction(await api.zoteroOpen(key), name || key);
+      if (action.pdf) {
+        if (!stageRef.current) return;
+        showRight('stage');
+        stageRef.current.openFile(action.pdf, { newTab: !!options.newTab });
+      } else if (action.external) await api.openExternal(action.external);
+      else onError(new Error(action.error));
+    } catch (error) {
+      onError(error);
+    }
+  }, [showRight, onError]); // eslint-disable-line react-hooks/exhaustive-deps
+  const openZoteroPdf = React.useCallback((file) => {
+    if (!stageRef.current || !file) return;
+    showRight('stage');
+    stageRef.current.openFile(file, {});
+  }, [showRight]);
+  const dropOnZotero = React.useCallback(async ({ key, name }, file) => {
+    try {
+      const action = zoteroChipAction(await api.zoteroAttach(key, file), name || key);
+      if (action.pdf) openZoteroPdf(action.pdf);
+      else onError(new Error(action.error));
+    } catch (error) {
+      onError(error);
+    }
+  }, [openZoteroPdf, onError]);
+  React.useEffect(() => {
+    if (!active || typeof api.onZoteroDownloaded !== 'function') return undefined;
+    return api.onZoteroDownloaded((found) => { if (found && typeof found.path === 'string') openZoteroPdf(found.path); });
+  }, [active, openZoteroPdf]);
   // What the window itself would open in a new window or tab (a ⌘-click on a link the editor does not handle): main sends
   // it here while this listens, not to the default browser (src/main/index.cjs, 2026-10-02). Not while the project's folder
   // is being asked for: the Stage under that is out of reach.
@@ -846,11 +997,16 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     if (!active) return undefined;
     return api.onStageOpenLink((link) => { if (link && link.url) openLink(link.url, { newTab: !!link.newTab }); });
   }, [active, openLink]);
-  // Opened from the all-projects screen: shown once the Stage is there.
-  React.useEffect(() => { if (initialStage && stageRef.current) openItem(initialStage); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Opened from the all-projects screen: shown once the Stage is there. `{ links }`: sites Onboarding's sign-in import said
+  // to sign in to again, the first in the tab in front and the rest in tabs of their own.
+  React.useEffect(() => {
+    if (!initialStage || !stageRef.current) return;
+    if (Array.isArray(initialStage.links)) initialStage.links.forEach((url, index) => openLink(url, { newTab: index > 0 }));
+    else openItem(initialStage);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sandboxes = useSandboxes();
-  const onRowClick = (row) => {
+  const onRowClick = (row, event) => {
     if (row.type === 'child') { selectTopic(row.id); return; }
     if (row.type === 'archive') { openTab(`${ARCHIVE_TAB}${row.file}`, row.name); return; }
     // A GitHub repository opens its live preview in the Stage, its sandbox's shell in the terminal pane, or both (the
@@ -863,7 +1019,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     if (click === 'both') { sandboxes.openTerminal(sandbox.run, { show: false }); sandboxes.open(sandbox.run); return; }
     if (click === 'start') { sandboxes.openBuild(row); sandboxes.act(sandbox.run, () => api.startSandbox(row.id)); return; }
     if (click === 'details') { sandboxes.openBuild(row); return; }
-    openItem(row);
+    openItem(row, { newTab: !!event && (event.metaKey || event.ctrlKey) });
   };
 
   /* ------------------------------------------------------- the pane beside */
@@ -973,8 +1129,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const [mentionOpen, setMentionOpen] = React.useState(false);
   const mentionBodies = useBodies(project.id, mentionOpen);
   const mentionItems = React.useCallback(
-    (query) => mentionRows({ query, library, page: pageKnown ? openPage : null, pageRow: pageKnown ? pageKnown.row : null, workspaces: mentionSpaces, hereId: topic ? topic.id : null, bodies: mentionBodies }),
-    [library, openPage, pageKnown, mentionSpaces, topic, mentionBodies],
+    (query) => mentionRows({ query, library: findable, page: pageKnown ? openPage : null, pageRow: pageKnown ? pageKnown.row : null, workspaces: mentionSpaces, hereId: topic ? topic.id : null, bodies: mentionBodies, zotero: zoteroOn }),
+    [findable, openPage, pageKnown, mentionSpaces, topic, mentionBodies, zoteroOn],
   );
   // A mentioned workspace's peek (workspace/WorkspacePeek.jsx): the tree, state.json's agents and recent edits, and its
   // document as open here (unsaved words included) or as saved.
@@ -1080,22 +1236,23 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   /* --------------------------------------------------------------- sidebar */
   // Everything that brings a library item into this workspace links it (context, and off `removed`); adding makes the
-  // row first and is refused when the library already holds the thing (library.addItem). The row that arrives flashes.
+  // row first, or finds the library's own when it already holds the thing (addOrFind, MATH-67). The row that arrives flashes.
 
   // A GitHub repository that comes in starts its sandbox (src/main/sandbox); one that could not start is still added and
   // linked, and says why.
-  const linkIds = async (ids) => {
+  // `opts.picked`: the @ menu linked them (MATH-57), so they leave with their last mention.
+  const linkIds = async (ids, opts) => {
     if (!topic || !ids.length) return;
-    const linked = await api.linkToWorkspace(project.id, topic.id, ids);
+    const linked = await api.linkToWorkspace(project.id, topic.id, ids, opts);
     await reload();
     flash(ids[ids.length - 1]);
     if (linked && linked.sandbox_error) onError(new Error(linked.sandbox_error));
   };
 
-  const addInput = async (input, name) => {
+  const addInput = async (input, name, opts) => {
     if (!topic) throw new Error('Open a workspace first');
-    const row = await api.addLibraryItem(input, name ? { name } : undefined);
-    await linkIds([row.id]);
+    const row = await addOrFind(api, input, name ? { name } : undefined);
+    await linkIds([row.id], opts);
     if (row.sandbox_error) onError(new Error(row.sandbox_error));
     return row;
   };
@@ -1106,7 +1263,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     const problems = [];
     const ids = [];
     for (const file of paths || []) {
-      try { ids.push((await api.addLibraryItem(file)).id); } catch (error) { problems.push(errorMessage(error)); }
+      try { ids.push((await addOrFind(api, file)).id); } catch (error) { problems.push(errorMessage(error)); }
     }
     await linkIds(ids);
     return problems;
@@ -1175,10 +1332,44 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   };
 
   // An item picked from the @ menu comes into this workspace; the open page is added to the library first, under the name the mention carries.
+  // Linked so, it is unlinked again when the document's last mention of it goes, and linked once more when ⌘Z brings that
+  // back (MATH-57); an item already linked, from the sidebar or elsewhere, is not (main: projects.cjs linkToWorkspace).
   const mentionPicked = (item) => {
     if (!topic) return;
-    const done = item.kind === 'fresh' ? addInput(item.input, item.name) : item.row ? linkIds([item.row.id]) : null;
+    const done = item.kind === 'fresh' ? addInput(item.input, item.name, { picked: true }) : item.row ? linkIds([item.row.id], { picked: true }) : null;
     if (done) done.catch((error) => onError(error));
+  };
+  // This workspace's document edited (onDocChange): the mentions before and after it decide (model/rail.js pickedChanges).
+  // `dropped` holds what was unlinked here for that, workspace id and item id, for the undo that brings it back.
+  const dropped = React.useRef(new Set());
+  unmentionRef.current = (workspaceId, before, after) => {
+    if (!topic || workspaceId !== topic.id || typeof before !== 'string') return; // not yet read: nothing was removed
+    if (!before.includes('@[') && !after.includes('@[')) return;
+    const mine = new Set([...dropped.current].filter((key) => key.startsWith(`${topic.id} `)).map((key) => key.slice(topic.id.length + 1)));
+    const { unlink, relink } = pickedChanges({ before: mentionedIds(before, library), after: mentionedIds(after, library), picked: topic.picked || [], dropped: mine });
+    for (const id of unlink) {
+      dropped.current.add(`${topic.id} ${id}`);
+      api.unlinkFromWorkspace(project.id, topic.id, id, { unmentioned: true }).then(() => reload()).catch((error) => onError(error));
+    }
+    for (const id of relink) dropped.current.delete(`${topic.id} ${id}`);
+    if (relink.length) linkIds(relink, { picked: true }).catch((error) => onError(error));
+  };
+
+  // Continue in workspace on a highlight's answer (MATH-27): the passage, the @bart question and the answer at the end of
+  // this workspace's document as a thread like any other (pdf/canvas.js continueLines), so it goes on here. The paper is
+  // mentioned, and a library paper comes into the workspace as a mention brings it.
+  const continueAsk = async ({ quote, question, answer, foot, paper, page }) => {
+    if (!topic) return;
+    const key = `ws:${topic.id}`, ref = { kind: 'workspace', workspaceId: topic.id };
+    try {
+      const held = docsRef.current[key] !== undefined ? docsRef.current[key] : await api.readDoc(project.id, ref);
+      const body = String(held || '').replace(/\n+$/, '');
+      changeDoc(key, ref, `${body ? `${body}\n\n` : ''}${continueLines({ quote, question, answer, foot, paper, page }).join('\n')}\n`);
+      showWs();
+      if (paper && paper.rowId && !inRail(paper.rowId)) await linkIds([paper.rowId]);
+    } catch (error) {
+      onError(error);
+    }
   };
 
   // A paper's button in an @discover guide (2026-10-02): + Save adds it as the Stage's Save with Enter does when the tab
@@ -1239,6 +1430,20 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   /* --------------------------------------------------------------- keyboard */
 
+  // ⌘1–9 switch the tabs of whichever side was clicked last (MATH-12, 2026-10-06): the documents in the middle, or the Stage.
+  // A press anywhere else (the library, the header) leaves it as it was.
+  const lastSide = React.useRef('doc');
+  React.useEffect(() => {
+    const onDown = (event) => {
+      const at = event.target && event.target.closest ? event.target : null; if (!at) return;
+      if (at.closest('[data-stage]')) lastSide.current = 'stage';
+      else if (at.closest('[data-terminal]')) lastSide.current = 'terminal';
+      else if (at.closest('[data-doc-pane], [data-doc-strip]')) lastSide.current = 'doc';
+    };
+    window.addEventListener('pointerdown', onDown, true);
+    return () => window.removeEventListener('pointerdown', onDown, true);
+  }, []);
+
   React.useEffect(() => {
     if (!active) return undefined;
     const onKey = (event) => {
@@ -1246,6 +1451,12 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       const inTerminal = target && target.closest && target.closest('[data-terminal]');
       const mod = event.metaKey || event.ctrlKey;
       if (mod && !inTerminal && /^[1-9]$/.test(event.key)) {
+        if (lastSide.current === 'terminal' && rightMode === 'terminal') return; // the Terminal's own tabs (TerminalPane)
+        if (lastSide.current === 'stage' && rightMode === 'stage' && stageRef.current) {
+          event.preventDefault();
+          stageRef.current.tabAt(Number(event.key) - 1);
+          return;
+        }
         const tab = tabs[Number(event.key) - 1];
         if (tab) {
           event.preventDefault();
@@ -1278,7 +1489,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [active, tabs, renaming, docFull, notePlus, onClose]);
+  }, [active, tabs, rightMode, renaming, docFull, notePlus, onClose]);
 
   /* --------------------------------------------------------------- resizing */
 
@@ -1308,8 +1519,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     const box = rightBox.current || event.currentTarget.parentElement.getBoundingClientRect();
     setRightWidth(clamp(Math.round(box.right - event.clientX - 1), RIGHT_MIN, rightRoom));
   };
-  // The Stage's full screen: it takes the document's place (its header column too); the sidebar stays. Only while it is in front.
-  const full = stageFull && rightMode === 'stage';
+  // The right pane's full screen: the Stage or the terminal, whichever is in front, takes the document's place (its header
+  // column too); the sidebar stays. Switching between them keeps it.
+  const full = stageFull;
   const paneWidth = full ? Math.max(RIGHT_MIN, viewWidth - rail - 1) : right;
 
   // Where the trash can is, for the post-its (main/post-its/views.cjs throws away a card let go over it): sent whenever it
@@ -1356,6 +1568,13 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     mentionItems,
     onMentionOpen: setMentionOpen,
     onMentionPicked: mentionPicked,
+    listFolder,
+    fileState: folderFiles.fileState,
+    onOpenFile: openFolderFile,
+    onOpenZotero: openZotero,
+    onDropOnZotero: dropOnZotero,
+    zoteroFinding,
+    zoteroWaiting,
     workspacePeek,
     onOpenWorkspace: openMentionedWorkspace,
     onNoteVerb: (name) => makeNote(name, false),
@@ -1435,7 +1654,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
         {/* The document's tabs, drawn as the Stage's (2026-09-25): no rule under them; the tab in front runs into the page. */}
         <div data-doc-strip="1" style={{ flex: '1 1 0', minWidth: 0, boxSizing: 'border-box', display: full ? 'none' : 'flex', alignItems: 'flex-end', padding: `0 ${docFull ? controlsRoom + 8 : 8}px 0 10px`, overflow: 'hidden' }}>
           <div style={{ flex: '0 1 auto', minWidth: 0, display: 'flex', alignItems: 'flex-end', height: '100%' }}>
-            <DocTabs tabs={tabs} activeTab={activeTab} onSelect={setActiveTab} onClose={closeTab} onMove={moveTab} />
+            <DocTabs tabs={tabs} activeTab={activeTab} onSelect={setActiveTab} onClose={closeTab} onMove={moveTab} wsName={topic ? topic.name : ''} />
           </div>
           {notePlus && topic && (
             <NotePicker
@@ -1481,7 +1700,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onRowRenameStart={(row) => setRenaming(row.id)}
           onRowRename={renameRow}
           onRowRenameEnd={() => setRenaming(null)}
-          library={library}
+          library={findable}
           inRail={inRail}
           onSearchPick={searchPick}
           onAddInput={(input) => addInput(input)}
@@ -1570,6 +1789,15 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onOpenItem={openItem}
           mentionItems={mentionItems}
           onMentionOpen={setMentionOpen}
+          listFolder={api.listFolder}
+          fileState={folderFiles.fileState}
+          onOpenFile={openFolderFile}
+          pendingAsks={pendingPaperAsks}
+          onAsk={topic ? askHighlight : undefined}
+          onStopAsk={(askId) => api.stopBart(askId).catch((error) => onError(error))}
+          onDismissAsk={dropPaperAsk}
+          onContinueAsk={topic ? continueAsk : undefined}
+          onCopyText={(value) => api.copyText(value).catch((error) => onError(error))}
           save={topic && pageState ? { state: pageState, onSave: savePage, onLink: () => linkIds([pageKnown.row.id]) } : null}
           style={{ flex: 'none', width: paneWidth, minWidth: 0, minHeight: 0, display: docFull ? 'none' : 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }}
         />

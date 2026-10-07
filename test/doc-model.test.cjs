@@ -158,6 +158,7 @@ test('rawOffset adds the heading base and handles mentions', async () => {
   assert.equal(rawOffset(parseLine('## Title'), 2), 5);          // "## Ti|tle"
   assert.equal(rawOffset(parseLine('## Title'), 0), 3);
   assert.equal(rawOffset(parseLine('see @[hypocompass] now'), 6), 7); // "see @h|ypocompass" → "see @[h|ypocompass]"
+  assert.equal(rawOffset(parseLine('see @[hypocompass] now'), 16), 18); // "see @hypocompass|" → after the `]` (MATH-56)
   assert.equal(rawOffset(parseLine('see @[hypocompass] now'), 4), 4); // before the mention
 });
 

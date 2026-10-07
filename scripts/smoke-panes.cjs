@@ -278,7 +278,7 @@ app.whenReady().then(async () => {
     await js(wc, 'document.activeElement && document.activeElement.blur()');
     await escape('nothing focused', { full: false });
     await press(wc, '[data-doc-full]');
-    // Its button stays clear of the controls in the window's top-right corner (Connections, the bell, test mode).
+    // Its button stays clear of the controls in the window's top-right corner (the bell, the gear, test mode).
     const clear = await js(wc, `(()=>{const b=document.querySelector('[data-doc-full]').getBoundingClientRect(),c=document.querySelector('[data-window-controls]').getBoundingClientRect();return b.right<=c.left||b.bottom<=c.top||b.top>=c.bottom})()`);
     assert.equal(clear, true, 'the full-screen button is not under the window\'s controls');
     await press(wc, '[data-doc-full]');

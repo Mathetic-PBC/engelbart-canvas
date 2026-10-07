@@ -561,3 +561,12 @@ test('the trash takes a row off a workspace whatever put it there, and linking i
   assert.deepEqual([seen.context, seen.removed], [[b.id, note.id], [a.id]], 'brought back: in context, no longer removed');
   await assert.rejects(projects.linkToWorkspace(ctx, project.id, workspace.id, ['not-an-id']), /library id is invalid/);
 });
+
+test('resolveAddition: a bare address is an https link, read as its full spelling would be; a file\'s bare name is still refused (2026-10-06)', () => {
+  const home = os.homedir();
+  assert.equal(library.resolveAddition('github.com', { homeDir: home }).url, 'https://github.com/');
+  const repo = library.resolveAddition('github.com/anthropics/claude-code', { homeDir: home });
+  assert.deepEqual([repo.url, repo.tags, repo.name], ['https://github.com/anthropics/claude-code', ['git'], 'anthropics/claude-code']);
+  assert.deepEqual(library.resolveAddition('arxiv.org/abs/2401.00001', { homeDir: home }).tags, ['paper']);
+  assert.throws(() => library.resolveAddition('notes.md', { homeDir: home }), /Paste a link, or a path/);
+});

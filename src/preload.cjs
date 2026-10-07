@@ -80,6 +80,30 @@ const engelbartAPI = Object.freeze({
   githubRepos: invoke('github-repos'),
   githubOpen: invoke('github-open'),
   onGithub: (callback) => subscribe('engelbart:github', callback),
+  // Zotero (MATH-65): the browser sign-in through the broker (status { configured, connected, username, userID, persisted,
+  // pending: { kind, expiresAt }, error }). The API key stays in main.
+  zoteroStatus: invoke('zotero-status'),
+  zoteroConnect: invoke('zotero-connect'),
+  zoteroCancel: invoke('zotero-cancel'),
+  zoteroDisconnect: invoke('zotero-disconnect'),
+  // The library (MATH-65 build 2): the status's `sync` { state, items, syncedAt, error } is the mirror's. zoteroSync()
+  // starts a sync; zoteroList(rel) a level of it for the @ menu (collections by name, then items); zoteroOpen(key) what a
+  // mentioned item opens: { path, source } a pdf for the paper viewer, { url, external } a page for the default browser, or { error }.
+  // Build 5: the status's `sync` also has { groups, problems }; zoteroList('') is My Library and each group; an item's key
+  // here and on the channels below is its ref, `g<groupID>:<key>` for a group's.
+  zoteroSync: invoke('zotero-sync'),
+  zoteroList: invoke('zotero-list'),
+  zoteroOpen: invoke('zotero-open'),
+  onZotero: (callback) => subscribe('engelbart:zotero', callback),
+  // Build 3: { key, finding } as a free copy of an item is looked for (the chip says "Finding a free copy…") and after.
+  onZoteroFinding: (callback) => subscribe('engelbart:zotero-finding', callback),
+  // Build 4: the items whose pdf is waited for in the Downloads folder (a chip opened the paper in the browser): their
+  // keys now, then { key, waiting } on each change; { key, path } once the download was the paper, to open; and
+  // zoteroAttach(key, path) to make a pdf dropped on a chip the item's ({ path, source } or { error }).
+  zoteroWaiting: invoke('zotero-waiting'),
+  onZoteroWaiting: (callback) => subscribe('engelbart:zotero-waiting', callback),
+  onZoteroDownloaded: (callback) => subscribe('engelbart:zotero-downloaded', callback),
+  zoteroAttach: invoke('zotero-attach'),
   // ⌘J pressed while a Browser page has the keyboard (src/main/browser/views.cjs); the app's own pages see the key themselves.
   onNextWorkspace: (callback) => subscribe('engelbart:next-workspace', callback),
   listProjects: invoke('list-projects'),
@@ -114,8 +138,19 @@ const engelbartAPI = Object.freeze({
   askBart: invoke('ask-bart'),
   stopBart: invoke('stop-bart'),
   bartModels: invoke('bart-models'),
+  // Settings › Intelligence (src/main/bart/settings.cjs): { models, choices, usable, offered, cli }; a save of the defaults
+  // ({ provider, buildProvider, bart, brainstorm, discover, build }) and "Use default" ('bart' | 'build' | 'quick') answer
+  // the same, and every window hears onModelsChanged after either.
+  settingsModels: invoke('settings-models'),
+  saveSettingsModels: invoke('save-settings-models'),
+  clearModelChoice: invoke('clear-model-choice'),
+  onModelsChanged: (callback) => subscribe('engelbart:models-changed', callback),
   copyText: invoke('copy-text'),
   onBartProgress: (callback) => subscribe('engelbart:bart-progress', callback),
+  // @bart from a highlight's note (MATH-27): the ones this window asked that are still running (for after ⌘R), and how each
+  // ended, told to every window: { askId, markId, page, rowId | url, and entry (the answer, already on its mark) | stopped | failed and lines }.
+  runningPaperAsks: invoke('running-paper-asks'),
+  onPaperAskDone: (callback) => subscribe('engelbart:paper-ask-done', callback),
   // Build (src/main/build): a workspace's coding agent in a worktree of its own. Every change of one arrives on onBuild as
   // its record; onBuildProgress carries what a running turn is doing ({ projectId, id, activity, log, lines }).
   buildModels: invoke('build-models'), // ('quick' for a post-it's Build)
@@ -194,6 +229,11 @@ const engelbartAPI = Object.freeze({
   onWindowFocus: (callback) => subscribe('window:focus', callback),
   onSandboxProgress: (callback) => subscribe('engelbart:sandbox-progress', callback),
   previewLibraryItem: invoke('preview-library-item'),
+  // A library folder's files (MATH-22): listFolder(id, rel) one level for the @ menu; folderFile(id, rel) a mentioned file,
+  // with its absolute path and whether it is there; folderFiles([{ folderId, rel }]) whether each still is.
+  listFolder: invoke('list-folder'),
+  folderFile: invoke('folder-file'),
+  folderFiles: invoke('folder-files'),
   // A file dropped on the window: where it is on disk (the renderer's File no longer says).
   pathForFile: (file) => { try { return webUtils.getPathForFile(file) || null; } catch { return null; } },
   renameLibraryItem: invoke('rename-library-item'),
@@ -231,6 +271,18 @@ const engelbartAPI = Object.freeze({
   browserClose: (id) => ipcRenderer.invoke('browser:close', id),
   browserCloseAll: () => ipcRenderer.invoke('browser:close-all'),
   browserLoginReply: (requestId, credentials) => ipcRenderer.invoke('browser:login-reply', requestId, credentials),
+  // Boxes on a page (MATH-70): the drawing layer over tab `id`, and the box it last removed put back. Main says when the
+  // layer is up or gone ({ id, on }), when a box was removed ({ id, markId }) and when one came back.
+  browserBox: (id) => ipcRenderer.invoke('browser:box', id),
+  browserBoxUndo: (id) => ipcRenderer.invoke('browser:box-undo', id),
+  onBrowserBoxing: (callback) => subscribe('browser:boxing', callback),
+  onBrowserBoxRemoved: (callback) => subscribe('browser:box-removed', callback),
+  onBrowserBoxRestored: (callback) => subscribe('browser:box-restored', callback),
+  // A selected box's card (MATH-70 build 2): @bart asked from it ({ tab, markId, url, title, question, note, turns }) and
+  // Stop pressed on it ({ askId }); what the Stage has running from boxes goes back for the card to show.
+  onBrowserBoxAsk: (callback) => subscribe('browser:box-ask', callback),
+  onBrowserBoxStop: (callback) => subscribe('browser:box-stop', callback),
+  browserBoxAsks: (list) => ipcRenderer.invoke('browser:box-asks', list),
   onBrowserState: (callback) => subscribe('browser:state', callback),
   onBrowserClosed: (callback) => subscribe('browser:closed', callback),
   onBrowserLogin: (callback) => subscribe('browser:login', callback),
@@ -243,6 +295,12 @@ const engelbartAPI = Object.freeze({
   onBrowserShortcut: (callback) => subscribe('browser:shortcut', callback),
   // A tab's pdf: { id, url, name, under, loading | bytes | error } (src/main/browser/views.cjs).
   onBrowserPdf: (callback) => subscribe('browser:pdf', callback),
+  // Import sign-ins from the person's browsers into the Stage (MATH-18, src/main/browser/import-cookies.cjs). Domains and
+  // counts only cross here; cookie values never do. import-sources -> installed browsers and profiles; import-domains ->
+  // [{ domain, count }] for a profile; import -> { imported, skipped, sessionOnly, checks }.
+  browserImportSources: () => ipcRenderer.invoke('browser:import-sources'),
+  browserImportDomains: (browser, profile) => ipcRenderer.invoke('browser:import-domains', browser, profile),
+  browserImport: (request) => ipcRenderer.invoke('browser:import', request),
   readPageAnnotations: invoke('read-page-annotations'),
   writePageAnnotations: invoke('write-page-annotations'),
   postItsActivate: (projectId) => ipcRenderer.invoke('post-its:activate', projectId),

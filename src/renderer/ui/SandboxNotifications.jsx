@@ -29,8 +29,8 @@ export function BuildNotification({ notification, run, sandbox = null, repo, bus
       {(building || canOpen || canTerminal) && <div className="notification-run-actions">
         {building && <button type="button" className="notification-build" aria-label={`View build details for ${name}`} aria-haspopup="dialog" disabled={!repo || !onBuild}
           onClick={() => onBuild(repo)}>Building…</button>}
-        {canOpen && <button type="button" className="notification-open" aria-label={`Open live preview for ${name}`} disabled={busy} onClick={() => onOpen(run)}>Open live ↗</button>}
-        {canTerminal && <button type="button" className="notification-open notification-terminal" aria-label={`Open terminal for ${name}`} disabled={busy} onClick={() => onTerminal(run)}>Open terminal ↗</button>}
+        {canOpen && <button type="button" className="notification-open" aria-label={`Open live preview for ${name}`} disabled={busy} onClick={() => onOpen(run)}>Open live</button>}
+        {canTerminal && <button type="button" className="notification-open notification-terminal" aria-label={`Open terminal for ${name}`} disabled={busy} onClick={() => onTerminal(run)}>Open terminal</button>}
       </div>}
     </div>
     <button type="button" className="notification-dismiss" aria-label={`Clear notification for ${name}`} title="Clear notification" onClick={() => onClear([notification.id])}>×</button>

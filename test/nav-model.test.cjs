@@ -75,3 +75,12 @@ test('places to go: waiting agents first (longest waiting, once each), then the 
   assert.deepEqual(placesToGo({ here: here('a'), recent: [place('a', '2026-09-22T12:00:00.000Z')] }), [], 'only here: nothing');
   assert.equal(placesToGo({ here: here('a', Q), recent }).length, 3, 'another project\'s a is another place');
 });
+
+test('wsLabel: a workspace tab shows its own name, no longer than "Workspace" (MATH-20)', async () => {
+  const { wsLabel } = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/names.js')).href);
+  assert.equal(wsLabel('Thesis'), 'Thesis');
+  assert.equal(wsLabel('Literature'), 'Literatu\u2026');
+  assert.equal(wsLabel('Exactly 9'), 'Exactly 9');
+  assert.equal(wsLabel('Big new plan'), 'Big new\u2026', 'no space before the ellipsis');
+  assert.equal(wsLabel(''), 'Workspace');
+});

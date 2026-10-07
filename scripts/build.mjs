@@ -6,9 +6,10 @@ const mode = process.env.NODE_ENV === 'production' ? 'production' : 'development
 const release = mode === 'production';
 
 await mkdir('dist', { recursive: true });
-for (const map of ['index.js.map', 'index.css.map', 'post-it.js.map', 'post-it.css.map']) await rm(`dist/${map}`, { force: true }); // a development build's
+for (const map of ['index.js.map', 'index.css.map', 'post-it.js.map', 'post-it.css.map', 'box-card.js.map', 'box-card.css.map']) await rm(`dist/${map}`, { force: true }); // a development build's
 await build({
-  entryPoints: { index: 'src/renderer/index.jsx', 'post-it': 'src/renderer/post-its/Card.jsx' },
+  // the card beside a selected box on a web page (MATH-70 build 2): its own view, engelbart://app/box-card.html
+  entryPoints: { index: 'src/renderer/index.jsx', 'post-it': 'src/renderer/post-its/Card.jsx', 'box-card': 'src/renderer/box-card/BoxCard.jsx' },
   bundle: true,
   outdir: 'dist',
   entryNames: '[name]',
@@ -24,6 +25,7 @@ await build({
 });
 await copyFile('src/renderer/index.html', 'dist/index.html');
 await copyFile('src/renderer/post-its/post-it.html', 'dist/post-it.html');
+await copyFile('src/renderer/box-card/box-card.html', 'dist/box-card.html');
 await copyFile('node_modules/pdfjs-dist/build/pdf.worker.min.mjs', 'dist/pdf.worker.min.mjs');
 // pdf.js optional assets (fonts for PDFs without embedded fonts, CJK cmaps, JBIG2/JPX decoders).
 import { cp } from 'node:fs/promises';

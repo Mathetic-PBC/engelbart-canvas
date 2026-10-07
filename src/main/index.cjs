@@ -9,6 +9,7 @@ const {
   dialog,
   ipcMain,
   Menu,
+  net,
   powerMonitor,
   protocol,
   safeStorage,
@@ -23,10 +24,11 @@ const { createSweeper } = require('./context/sweeper.cjs');
 const { inspectPdf } = require('./context/pdf-kind.cjs');
 const { createCliSummarizer, createFakeSummarizer } = require('./context/summarizer.cjs');
 const { createBart, createFakeBart, createThreads, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS } = require('./bart/ask.cjs');
-const { loadModels, preferUsable, startingAt } = require('./bart/models.cjs');
-const { readChoices, rememberChoice } = require('./bart/choices.cjs');
+const { rememberChoice } = require('./bart/choices.cjs');
+const { modelsInForce, createModelSettings } = require('./bart/settings.cjs');
 const { resolveShell, findGitBash, GIT_BASH_MISSING, GIT_FOR_WINDOWS_URL } = require('./terminal/launch.cjs');
 const home = require('./store/home.cjs');
+const library = require('./store/library.cjs');
 const { createRunner } = require('./tools/run.cjs');
 const { detectTools } = require('./tools/detect.cjs');
 const { findBundledGit } = require('./tools/bundled-git.cjs');
@@ -38,11 +40,18 @@ const { SettingsStore } = require('./terminal/settings.cjs');
 const { shouldHideWindowOnClose } = require('./terminal/window-lifecycle.cjs');
 const { assertTrustedRenderer, parseExternalUrl } = require('./ipc-validation.cjs');
 const { createStore, registerEngelbartIpc } = require('./ipc.cjs');
-const { PARTITION: BROWSER_PARTITION, createBrowserViews, registerBrowserIpc } = require('./browser/views.cjs');
+const { stagePartition, createBrowserViews, registerBrowserIpc } = require('./browser/views.cjs');
+const { createCookieImport, keychainRunner } = require('./browser/import-cookies.cjs');
 const { createGithub } = require('./github/connection.cjs');
 const { createBrowserAuth, CLIENT_ID: GITHUB_CLIENT_ID } = require('./github/browser-auth.cjs');
 const { createE2bKey } = require('./github/e2b-key.cjs');
 const { createRepoAccess } = require('./github/repo-access.cjs');
+const { createZotero } = require('./zotero/connection.cjs');
+const { createBrowserAuth: createZoteroBrowserAuth } = require('./zotero/browser-auth.cjs');
+const { createZoteroSync, scheduleSyncs: scheduleZoteroSyncs } = require('./zotero/sync.cjs');
+const { mirrorDir: zoteroMirrorDir } = require('./zotero/mirror.cjs');
+const { createOverleafCopies } = require('./overleaf/copy.cjs');
+const { createOverleafStage } = require('./overleaf/stage.cjs');
 const { createSandboxManager } = require('./sandbox/manager.cjs');
 const { createSandboxPty } = require('./sandbox/pty.cjs');
 const { createSandboxTerminals } = require('./sandbox/terminals.cjs');
@@ -67,6 +76,8 @@ const DIST = path.join(__dirname, '../../dist');
 const FIXTURES = path.join(__dirname, '../../fixtures');
 const PRELOAD_FILE = path.join(__dirname, '../preload.cjs');
 const APP_URL = 'engelbart://app/index.html';
+// The Stage's cookie store: a checkout keeps its own, apart from the package's encrypted one (browser/views.cjs).
+const BROWSER_PARTITION = stagePartition(app.isPackaged);
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -87,6 +98,7 @@ let manager = null;
 let settings = null;
 let store = null;
 let sweeper = null;
+let zoteroLibrary = null; // the Zotero library's mirror (src/main/zotero/sync.cjs), made with the Zotero sign-in
 let bart = null;
 let builds = null;
 let sandbox = null;
@@ -561,7 +573,7 @@ if (!hasSingleInstanceLock) {
     const afterOpen = process.env.ENGELBART_WEB_PDFS === 'off' ? null
       : (ctx, { again = false } = {}) => checkWebPdfs(ctx, { fetchPdf, inspectPdf, onChange: () => { libraryChanged(); pdfAdded(); }, log: (line) => console.warn(`[engelbart] ${line}`), again });
     // Test mode only in a developer's copy: run from a checkout, or packaged by `npm run relaunch` (./developer.cjs).
-    store = createStore({ homeDir, rootDir: process.env.ENGELBART_ROOT_DIR || null, fixturesDir: FIXTURES, inspectPdf, afterOpen, testMode: hasTestMode({ packaged: app.isPackaged, distDir: DIST, env: process.env }) });
+    store = createStore({ homeDir, rootDir: process.env.ENGELBART_ROOT_DIR || null, fixturesDir: FIXTURES, inspectPdf, afterOpen, testMode: hasTestMode({ packaged: app.isPackaged, distDir: DIST, env: process.env }), zotero: () => zoteroLibrary });
     // Git, Claude Code and Codex (src/main/tools): checked at every launch in the background and recorded in
     // config.json → tools; installed, updated and signed in to from the setup dialog. The Git that comes with
     // Engelbart stands in when the Mac has none of its own (tools/bundled-git.cjs), and on a Mac with neither agent
@@ -601,10 +613,12 @@ if (!hasSingleInstanceLock) {
     });
     // @bart (src/main/bart): hidden Claude Code or Codex runs on the person's subscription, reading only. It starts on
     // what was last picked by hand for that place (`place`: 'bart', 'build' or 'quick'; bart/choices.cjs), else on the
-    // saved default provider, or on the other one while that one's CLI cannot run (preferUsable).
+    // saved default provider, or on the other one while that one's CLI cannot run (preferUsable). Settings › Intelligence
+    // (bart/settings.cjs) writes the defaults into the same file and forgets the picks it overrules.
     // ENGELBART_BART_FAKE=1 answers without a model, for scripted runs only.
-    const readModels = (place = 'bart') => preferUsable(startingAt(loadModels(store.layout.root, { only: store.config().providers }), place, readChoices(store.layout.root)[place]), tools.usableAgents());
+    const readModels = (place = 'bart') => modelsInForce(store.layout.root, place, { only: store.config().providers, usable: tools.usableAgents() });
     const rememberModelChoice = (place, choice) => rememberChoice(store.layout.root, place, choice);
+    const modelSettings = createModelSettings({ homeRoot: () => store.layout.root, only: () => store.config().providers, tools });
     const bartModels = () => readModels('bart');
     const bartPicked = (choice) => rememberModelChoice('bart', choice);
     // @brainstorm and @discover (2026-09-30) run through the same object, each with sessions of its own kept for two idle
@@ -690,12 +704,23 @@ if (!hasSingleInstanceLock) {
           peers: postItPeers,
         });
         const browserViews = createBrowserViews({
-          electron: { WebContentsView, session: electronSession, Menu, clipboard, dialog, shell: electronShell },
+          electron: { WebContentsView, session: electronSession, Menu, clipboard, dialog, shell: electronShell, screen: require('electron').screen },
           getWindow: () => ctx.win,
           send,
           appName: app.getName(),
           fileRoot: () => homeDir,
           onLayerChange: () => postItViews.raise(),
+          partition: BROWSER_PARTITION,
+          // A page's web highlights (MATH-54 build 2) and boxes (MATH-70): its ink as the library keeps it, the "web" list
+          // in it; a box's pictures go and come back with it.
+          pageMarks: {
+            list: async (url) => { const ink = await library.readPageAnnotations(await store.context(), url); return ink && Array.isArray(ink.web) ? ink.web : []; },
+            add: async (url, mark, extra) => library.addWebMark(await store.context(), url, mark, extra),
+            remove: async (url, markId) => library.removeWebMark(await store.context(), url, markId),
+            restore: async (url, removed) => library.restoreWebMark(await store.context(), url, removed),
+            // a box resized, or a note written on its card (MATH-70 build 2): → the mark as written, or null
+            update: async (url, markId, patch, extra) => library.updateWebMark(await store.context(), url, markId, patch, extra),
+          },
         });
         return { browserViews, postItViews };
       },
@@ -711,7 +736,17 @@ if (!hasSingleInstanceLock) {
         return ctx ? ctx.postItViews : windows.cardsHolding(event.sender);
       },
     });
-    registerBrowserIpc({ ipcMain, trustedHandler, viewsFor: (event) => { const ctx = windows.of(event.sender); return ctx ? ctx.browserViews : null; } });
+    // Importing sign-ins from the person's browsers into the Stage (MATH-18): macOS only, and into the one shared
+    // Stage session every window's tabs read. Cookie values stay here — the handlers return domains and counts. The sign-in
+    // checks go through net.request, which (unlike net.fetch) says where a redirect was going (import-cookies.cjs).
+    const cookieImport = process.platform === 'darwin' ? createCookieImport({
+      supportDir: path.join(app.getPath('home'), 'Library', 'Application Support'),
+      userDataDir: app.getPath('userData'),
+      getSession: () => electronSession.fromPartition(BROWSER_PARTITION),
+      request: (options) => net.request(options),
+      keychain: keychainRunner,
+    }) : null;
+    registerBrowserIpc({ ipcMain, trustedHandler, viewsFor: (event) => { const ctx = windows.of(event.sender); return ctx ? ctx.browserViews : null; }, cookieImport });
     // GitHub (src/main/github): default-browser sign-in with an automatic loopback return, and the token
     // that lets the library read private repositories. ENGELBART_GITHUB_* name a fake GitHub, for scripted runs only.
     const githubWeb = process.env.ENGELBART_GITHUB_WEB || null;
@@ -748,6 +783,66 @@ if (!hasSingleInstanceLock) {
       },
       ...(githubWeb ? { web: githubWeb, api: process.env.ENGELBART_GITHUB_API || githubWeb } : {}),
     });
+    // Zotero (src/main/zotero, MATH-65): default-browser sign-in through the broker on engelbart.mathetic.com, the API key
+    // kept encrypted in <dataRoot>/zotero.json beside github.json. ENGELBART_ZOTERO_BROKER and ENGELBART_ZOTERO_API name a
+    // fake broker and a fake api.zotero.org, for scripted runs only.
+    const zoteroBrowserAuth = createZoteroBrowserAuth({ ...(process.env.ENGELBART_ZOTERO_BROKER ? { broker: process.env.ENGELBART_ZOTERO_BROKER } : {}) });
+    const zotero = createZotero({
+      file: () => path.join(store.config().dataRoot, 'zotero.json'),
+      crypt: {
+        available: () => safeStorage.isEncryptionAvailable(),
+        encrypt: (text) => safeStorage.encryptString(text).toString('base64'),
+        decrypt: (text) => safeStorage.decryptString(Buffer.from(text, 'base64')),
+      },
+      browserAuth: () => zoteroBrowserAuth,
+      openAuthorize: (url) => electronShell.openExternal(parseExternalUrl(url).href),
+      onConnected: () => {
+        const ctx = focusedWindow();
+        if (ctx && !ctx.win.isDestroyed()) { if (ctx.win.isMinimized()) ctx.win.restore(); ctx.win.show(); ctx.win.focus(); }
+        void zoteroLibrary.sync().catch(() => {}); // the library, mirrored as soon as it is connected
+      },
+      onChange: () => sendToWindow('engelbart:zotero', zoteroStatus()),
+      ...(process.env.ENGELBART_ZOTERO_API ? { api: process.env.ENGELBART_ZOTERO_API } : {}),
+    });
+    // The connected library, mirrored in <dataRoot>/.zotero/ (src/main/zotero/sync.cjs, MATH-65 build 2) for Bart and the
+    // @ menu: synced after connecting, a little after launch when connected, and from the Zotero row's "Sync now". The key
+    // goes to api.zotero.org only. ENGELBART_ZOTERO_STORAGE names Zotero's storage folder when not ~/Zotero/storage.
+    // Build 3: synced every 10 minutes while the app is open, and when a window comes to the front if the last sync was
+    // over 2 minutes ago (one at a time; an unchanged library is one 304). A free copy of an item with no pdf is looked
+    // for through OpenAlex (zotero/oa.cjs) when it is mentioned or its chip clicked; the chip is told while it runs.
+    // ENGELBART_OPENALEX_API names a fake OpenAlex, for scripted runs only.
+    // Build 4: Semantic Scholar and arXiv after OpenAlex (ENGELBART_SEMANTIC_SCHOLAR_API, ENGELBART_ARXIV_API and
+    // ENGELBART_ARXIV name fakes, for scripted runs only). A paper whose chip opened its page in the browser has its pdf
+    // waited for in the Downloads folder for 10 minutes (zotero/downloads.cjs); one that is the paper is copied in, opened
+    // in the Stage of the window focused last, and the app comes to the front. The waits end when the app quits.
+    // Build 5: the groups the person is in are mirrored too, each in .zotero/groups/<groupID>/, on the same clock; the
+    // channels below carry an item's ref (`g<groupID>:<key>` for a group's item, its key for My Library's).
+    zoteroLibrary = createZoteroSync({
+      root: () => zoteroMirrorDir(store.config().dataRoot),
+      account: () => { const key = zotero.key(); return key ? { userID: zotero.status().userID, key } : null; },
+      onChange: () => sendToWindow('engelbart:zotero', zoteroStatus()),
+      onFinding: (key, finding) => sendToWindow('engelbart:zotero-finding', { key, finding }),
+      ...(process.env.ENGELBART_ZOTERO_API ? { api: process.env.ENGELBART_ZOTERO_API } : {}),
+      ...(process.env.ENGELBART_ZOTERO_STORAGE ? { storageDir: process.env.ENGELBART_ZOTERO_STORAGE } : {}),
+      ...(process.env.ENGELBART_OPENALEX_API ? { openAlex: process.env.ENGELBART_OPENALEX_API } : {}),
+      ...(process.env.ENGELBART_SEMANTIC_SCHOLAR_API ? { semanticScholar: process.env.ENGELBART_SEMANTIC_SCHOLAR_API } : {}),
+      ...(process.env.ENGELBART_ARXIV_API ? { arxivApi: process.env.ENGELBART_ARXIV_API } : {}),
+      ...(process.env.ENGELBART_ARXIV ? { arxiv: process.env.ENGELBART_ARXIV } : {}),
+      downloadsDir: () => app.getPath('downloads'),
+      onWaiting: (key, waiting) => sendToWindow('engelbart:zotero-waiting', { key, waiting }),
+      onDownloaded: (key, copy) => {
+        const ctx = focusedWindow();
+        if (ctx && !ctx.win.isDestroyed()) windows.send(ctx, 'engelbart:zotero-downloaded', { key, path: copy.path });
+        showWindow();
+        if (process.platform === 'darwin') app.focus({ steal: true });
+      },
+    });
+    app.on('will-quit', () => zoteroLibrary.stopWatching());
+    const zoteroStatus = () => { const status = zotero.status(); return { ...status, sync: status.connected ? zoteroLibrary.status() : null }; };
+    const zoteroConnected = () => { try { return !!zotero.key(); } catch { return false; } };
+    setTimeout(() => { if (zoteroConnected()) void zoteroLibrary.autoSync().catch(() => {}); }, 4000);
+    const zoteroSchedule = scheduleZoteroSyncs(zoteroLibrary, { connected: zoteroConnected });
+    app.on('browser-window-focus', () => zoteroSchedule.focus());
     // The E2B API key for whoever is signed in (src/main/github/e2b-key.cjs), in memory only, and the only key the sandbox
     // worker gets (sandbox/manager.cjs). ENGELBART_E2B_KEY_HOST is for scripted runs only.
     const e2bKey = createE2bKey({
@@ -788,11 +883,16 @@ if (!hasSingleInstanceLock) {
     // While someone uses the app, anywhere in it, every ready repository's sandbox stays awake; ten minutes without, they
     // sleep (sandbox/activity.cjs, the manager's wakeAll).
     if (sandbox) watchActivity({ app, webContents, onActive: () => { store.context().then((ctx) => sandbox?.wakeAll(ctx)).catch(() => {}); } });
+    // The Overleaf projects open in the Stage (MATH-65): each one's copy is downloaded with the Stage's own session, the
+    // sign-in the person made there, so no cookie leaves it.
+    const overleafStage = createOverleafStage({ copies: createOverleafCopies({ fetch: (url, init) => electronSession.fromPartition(BROWSER_PARTITION).fetch(url, init) }) });
     registerEngelbartIpc({
       // Made below, after this: the window's update banner asks for it when it is used.
       getUpdates: () => updates,
       github,
       openGithubPage,
+      zotero,
+      zoteroLibrary,
       identifyRepo: createRepoIdentifier({ auth: github.authHeaders }),
       listRemoteFiles: createRemoteFileLister({ auth: github.authHeaders }),
       ipcMain,
@@ -817,6 +917,7 @@ if (!hasSingleInstanceLock) {
       sandbox,
       readModels,
       rememberModelChoice,
+      modelSettings,
       tools,
       pdfAdded,
       // A link dropped onto the library or a workspace is read with the Stage's cookies, as a saved-as-link pdf is (fetchPdf).
@@ -826,6 +927,14 @@ if (!hasSingleInstanceLock) {
         if (!ctx || !ctx.browserViews) throw new Error('No window for the browser');
         return ctx.browserViews.savePage(tabId, dir);
       },
+      // An @bart turn with a web page in front (MATH-54 build 3a): the calling window's tab, for its selection and picture.
+      stagePageFor: (ctx, tabId) => (ctx && ctx.browserViews && ctx.browserViews.has(tabId)
+        ? { selection: () => ctx.browserViews.pageSelection(tabId), screenshot: () => ctx.browserViews.screenshot(tabId) }
+        : null),
+      // An @bart turn (MATH-65): the calling window's Overleaf tabs, the one in front read live, every project's copy refreshed.
+      overleafFor: (ctx, stage) => (ctx && ctx.browserViews
+        ? overleafStage.forTurn({ tabs: ctx.browserViews.overleafTabs(), read: (id) => ctx.browserViews.readOverleaf(id) }, stage)
+        : null),
       notify: sendToRenderer,
       // "Choose from disk…" in the sidebar's + menu: files and folders together, several at once (macOS allows both in one panel).
       // Onboarding's Papers step asks for pdfs only (`kind` 'pdf').

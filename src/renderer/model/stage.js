@@ -186,8 +186,9 @@ export function tabKey(tab) {
  * link): a tab of its own even when one already shows it, still the blank tab in front, still at most MAX_TABS.
  * Answers { focus: index } | { replace: index } | { append: true }.
  */
-export function placeTab(tabs, activeIndex, key, { newTab = false } = {}) {
-  const at = key && !newTab ? tabs.findIndex((tab) => tabKey(tab) === key) : -1;
+export function placeTab(tabs, activeIndex, key, { newTab = false, also = '' } = {}) {
+  // `also`: another key the same thing may be open under (a library row's address, opened as a page before it was saved).
+  const at = key && !newTab ? tabs.findIndex((tab) => tabKey(tab) === key || (!!also && tabKey(tab) === also)) : -1;
   if (at >= 0) return { focus: at };
   const front = tabs[activeIndex];
   if (front && tabKey(front) === '' && !front.pdf && !front.file && !front.claimed) return { replace: activeIndex }; // `claimed`: something is on its way into it

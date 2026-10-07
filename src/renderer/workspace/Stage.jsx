@@ -1,6 +1,7 @@
 import React from 'react';
 import { EDGE as WINDOW_EDGE } from '../ui/WindowEdges.jsx';
 import { isGithubSignIn } from '../../shared/github.cjs';
+import { isPreviewAddress } from '../../shared/address-key.cjs';
 import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
 import { usePreviewTouch, useSandboxes } from '../ui/SandboxProgress.jsx';
@@ -10,6 +11,10 @@ import { kindOf, stripScheme, OPEN_IN_BROWSER } from '../model/address.js';
 import { MAX_TABS, SAVE_LABEL, WAKE_RETRY_MS, addressKey, afterClose, landTab, landingFinds, linkPlan, looksLikePlace, onStage, placeTab, previewName, previewWait, restoreTabs, stageRows, stageSnapshot, tabKey, tabPlace, parseTable, withPassage } from '../model/stage.js';
 import { markdownBlocks, inlineRuns } from '../model/markdown.js';
 import PaperView from '../pdf/PaperView.jsx';
+import { withAsk } from '../pdf/canvas.js';
+import ImportSignins from './ImportSignins.jsx';
+
+const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || '');
 
 // The Stage (Claude Design "Add - Mention Stage.dc.html", 2026-09-23): the Browser and the Paper pane made one. A tab
 // shows whatever it was given — a library row, a link, a file on disk — in the way its format asks:
@@ -36,6 +41,22 @@ import PaperView from '../pdf/PaperView.jsx';
 // section is scrolled to and tinted, and a Sections menu where the find card sits shows another, or clears it (×).
 // A pdf's margin notes mention library items (MATH-21): `@` in a note opens the workspace's @ menu (`mentionItems`, its
 // library rows only), and a mention clicked in a note opens its row as the sidebar does (`onOpenItem`).
+// @bart on a highlight (MATH-27): a note on a pdf's highlight that starts with @bart asks through `onAsk`, given which pdf
+// it is (its library row, else its address) and its name; what the answer is doing comes back as `pendingAsks` (the
+// workspace's, each with its rowId or url), of which the viewer is given its own pdf's. The finished answer (`onAsk`'s
+// result) goes onto its mark: through the viewer when it shows that pdf (it saves it as any edit), and into every tab
+// that holds the pdf (landAnswer); main has put it in the kept ink already. Stop, close, Copy and Continue in workspace
+// go up as they are.
+// Second pass (2026-10-06): every tab holding a pdf takes its ink whenever the viewer saves it, so one brought forward
+// later never saves what it read before over it; and main tells every window how a question from a highlight ended
+// (onPaperAskDone), so its answer lands here too in a window reloaded since it asked, or another holding the pdf.
+// Boxes on a page (MATH-70 build 1): the Box button lays main's drawing layer over the page (⌥ held in the page does the
+// same, main: browser/views.cjs); a box removed in the page (Backspace) shows "Box removed · Undo" in the address row,
+// beside the page and never over it, for about REMOVED_MS.
+// A box's card (MATH-70 build 2, main's own view beside the selected box: browser/views.cjs): @bart asked from it comes
+// here (onBrowserBoxAsk) and is asked through `onAsk` as from a highlight, its mark a web page's ({ source: 'web', url });
+// Stop on it stops the run (onStopAsk), or closes a failed one (onDismissAsk). What is running from boxes goes back to
+// main (browserBoxAsks) for the card to show; main has put each finished answer on the mark itself.
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
@@ -50,6 +71,7 @@ const DEVICES = [
 const ERR_CONNECTION_REFUSED = -102;
 const RETRY_MS = 2000;
 const STAGE_SAVE_MS = 150; // the tabs are kept this long after they last changed (and at once when the page goes away)
+const REMOVED_MS = 5000; // how long "Box removed · Undo" stays (as a pdf's "Highlight removed")
 const HOVER_MS = 650; // a tab's card, the first time; then quickly while moving along the strip
 const newId = () => (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : String(Date.now() + Math.random()));
 const blankTab = () => ({ id: newId(), url: 'about:blank', web: null, item: null, file: null, pdf: null, pendingFind: null, pendingTo: null, sections: null, activeSection: -1 });
@@ -66,6 +88,9 @@ const basename = (value) => String(value || '').split('/').pop();
 const VIEWS = new Set(['md', 'table', 'text', 'image', 'folder', 'unsupported', 'error', 'loading']); // a file drawn here, not in the view
 
 const ICON_BUTTON = { width: 26, height: 26, padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', font: '14px/1 var(--font-sans)' };
+// The pdf's "Highlight removed · Undo" (PaperView TOAST), standing in the address row.
+const BOX_TOAST = { flex: 'none', display: 'flex', alignItems: 'center', gap: 4, height: 26, boxSizing: 'border-box', padding: '0 4px 0 10px', background: '#171717', borderRadius: 8, font: '400 12.5px/1 var(--font-sans)', color: '#fff', whiteSpace: 'nowrap' };
+const BOX_TOAST_UNDO = { flex: 'none', height: 20, padding: '0 8px', border: 0, borderRadius: 5, background: 'transparent', font: '500 12.5px/1 var(--font-sans)', color: '#fff', cursor: 'pointer' };
 
 // A file, for its glyph: what the library would call it. A tab given back and not shown yet (`restore`): what it will
 // show, its library row found by `rowOf`.
@@ -102,6 +127,13 @@ const Shelf = () => (
     <rect x="1.5" y="3" width="3.2" height="11" rx="1" />
     <path fillRule="evenodd" d="M6 5a1 1 0 0 1 1-1h1.4a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1zM6.85 6.4a.5.5 0 0 1 .5-.5h.7a.5.5 0 0 1 0 1h-.7a.5.5 0 0 1-.5-.5zm0 5.2a.5.5 0 0 1 .5-.5h.7a.5.5 0 0 1 0 1h-.7a.5.5 0 0 1-.5-.5z" />
     <rect x="10.8" y="2" width="3.2" height="12" rx="1" />
+  </svg>
+);
+// A dashed square with a pointer in its corner: the Box tool (MATH-70). Lucide's square-dashed-mouse-pointer, the icon of
+// engelbart-web's Annotate control (components/annotate/control.tsx), which David liked (2026-10-07).
+const BoxGlyph = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true" style={{ display: 'block', flex: 'none', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }}>
+    <path d="M12.034 12.681a.498.498 0 0 1 .647-.647l9 3.5a.5.5 0 0 1-.033.943l-3.444 1.068a1 1 0 0 0-.66.66l-1.067 3.443a.5.5 0 0 1-.943.033z M5 3a2 2 0 0 0-2 2 M19 3a2 2 0 0 1 2 2 M5 21a2 2 0 0 1-2-2 M9 3h1 M9 21h2 M14 3h1 M3 9v1 M21 9v2 M3 14v1" />
   </svg>
 );
 const Grid = () => (
@@ -372,12 +404,16 @@ const clearRanges = () => { const h = highlights(); if (h) { h.delete(FIND); h.d
 
 /* --------------------------------------------------------------------------------------------------- Stage */
 
-const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull, onShow, onPage, onFront, save, library, inRail, onError, onOpenItem, mentionItems, onMentionOpen }, ref) {
+// The pdf an answer is for, as the workspace keeps it ({ rowId } or { url }), and whether a tab's pdf is it.
+const pdfWhere = (p) => (p.rowId ? { rowId: p.rowId } : { url: p.url });
+const samePdf = (p, where) => !!p && !!where && (where.rowId ? p.rowId === where.rowId : !p.rowId && !!where.url && p.url === where.url);
+const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull, onShow, onPage, onFront, save, library, inRail, onError, onOpenItem, mentionItems, onMentionOpen, listFolder, fileState, onOpenFile, pendingAsks, onAsk, onStopAsk, onDismissAsk, onContinueAsk, onCopyText }, ref) {
   const [tabs, setTabs] = React.useState(() => [blankTab()]);
   const [activeId, setActiveId] = React.useState(() => null);
   const [draft, setDraft] = React.useState('');
   const [menu, setMenu] = React.useState(null); // { x, y }
   const [device, setDevice] = React.useState('fit');
+  const [importing, setImporting] = React.useState(false); // the "Import sign-ins…" picker is open (MATH-18)
   const [customW, setCustomW] = React.useState('390');
   const [occluded, setOccluded] = React.useState(false);
   const [snapshot, setSnapshot] = React.useState(null);
@@ -450,6 +486,22 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const pdfBytes = pdf && !pdf.rowId && WEB_URL.test(pdf.url) ? pdf.bytes : null;
   // a page from the web in this tab's view, which Save can keep whole (MATH-17): the tab names it to main
   const webPage = page && WEB_URL.test(pageInput || '');
+  // Boxes (MATH-70): a page whose ink is kept can be boxed; which tab has the drawing layer, and the box last removed.
+  const boxable = page && !failed && !wait && !!web && (WEB_URL.test(web.url || '') || DISK_URL.test(web.url || '')) && !isPreviewAddress(web.url || '');
+  const [boxing, setBoxing] = React.useState(null);
+  const [boxRemoved, setBoxRemoved] = React.useState(null); // { id (the tab), markId }
+  const boxTimer = React.useRef(0);
+  React.useEffect(() => {
+    if (!api.onBrowserBoxing) return undefined;
+    const offBoxing = api.onBrowserBoxing(({ id, on }) => setBoxing((current) => (on ? id : current === id ? null : current)));
+    const offRemoved = api.onBrowserBoxRemoved(({ id, markId }) => {
+      clearTimeout(boxTimer.current);
+      setBoxRemoved({ id, markId });
+      boxTimer.current = setTimeout(() => setBoxRemoved(null), REMOVED_MS);
+    });
+    const offRestored = api.onBrowserBoxRestored(({ id }) => setBoxRemoved((current) => (current && current.id === id ? null : current)));
+    return () => { offBoxing(); offRemoved(); offRestored(); clearTimeout(boxTimer.current); };
+  }, []);
   React.useEffect(() => { if (onPage) onPage(savable ? { input: pageInput, title: pageTitle || stripScheme(pageInput), bytes: pdfBytes || null, tabId: tab.id, webPage } : null); }, [savable, pageInput, pageTitle, pdfBytes, tab.id, webPage, onPage]);
   React.useEffect(() => { if (onFront) onFront(tab.item || null); }, [tab.item, onFront]);
   React.useEffect(() => { setSaving(false); }, [tab.id, pageInput]);
@@ -507,10 +559,10 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   // `find`: a passage to find there once it is ready, given to the new tab or to the one that comes forward; `to`, where its section ends.
   // `newTab` (a ⌘-click on a link): a tab of its own, even when one shows it already. `sections`: an @discover guide's for
   // the paper, which come with the passage and replace the tab's (model/stage.js withPassage).
-  const claim = (key, find = '', to = '', { newTab = false, sections = null } = {}) => {
+  const claim = (key, find = '', to = '', { newTab = false, sections = null, also = '' } = {}) => {
     const current = tabsRef.current;
     const front = Math.max(0, current.findIndex((t) => t.id === (frontRef.current || current[0].id)));
-    const place = placeTab(current, front, key, { newTab });
+    const place = placeTab(current, front, key, { newTab, also });
     if (place.focus != null) {
       const id = current[place.focus].id;
       frontRef.current = id;
@@ -617,7 +669,9 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   // Opened from elsewhere — the sidebar, an @mention, a link in the document or the terminal, the all-projects screen.
   const openRow = (row, find = '', to = '', options = {}) => {
     if (isGithubSignIn(row.url) && !row.path) { quiet(api.openExternal(row.url)); return; }
-    const id = claim(`i:${row.id}`, find, to, options);
+    // Open already (MATH-16): its tab comes to the front as it was left, where it was read to; ⌘-click opens another.
+    const where = row.path ? fileUrl(row.path) : row.url || '', also = where && addressKey(where) ? `l:${addressKey(where)}` : '';
+    const id = claim(`i:${row.id}`, find, to, { ...options, also });
     if (id) showRow(id, row);
   };
   // A link with a passage to a library row opens the row (its ink shows); any link opens its address without the passage.
@@ -629,6 +683,11 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     if (isGithubSignIn(k0.url)) { quiet(api.openExternal(k0.url)); return; }
     const id = claim(plan.key, plan.find, plan.to, options);
     if (id) void navigate(id, plan.address);
+  };
+  // A file inside a library folder, mentioned (MATH-22): its tab, as a file from the computer has, unless one is open already.
+  const openFile = (file, options = {}) => {
+    const id = claim(`l:${addressKey(fileUrl(file))}`, '', '', options);
+    if (id) readPath(id, file, null);
   };
   // Files from the computer open as tabs of their own; + Save is what puts them in the library. Past 15, the rest are left.
   const openPaths = (paths) => {
@@ -659,7 +718,82 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const closeTab = (id) => { quiet(api.browserClose(id)); dropTab(id); setHover(null); };
   const select = (t) => { setActiveId(t.id); setMenu(null); setTyping(false); setHover(null); };
 
-  React.useImperativeHandle(ref, () => ({ openRow, openInput, openPaths, newTab, closeTab: () => closeTab(tab.id) }));
+  // ⌘1–9 (MATH-12, 2026-10-06): the Stage's n-th tab, when the Stage is what was last clicked (Workspace decides).
+  const tabAt = (index) => { const t = tabs[index]; if (!t) return false; select(t); return true; };
+  // What is in front (MATH-27, 2026-10-06), for @bart's <stage>: { rowId, url, page, kind }, a pdf's page the one in view.
+  // A web page (MATH-54) is { kind: 'web', url, title, tab }: where the tab is now and what the page calls itself (main finds
+  // the library's row and the ink by the address; a sandbox preview's is not kept), and the tab, whose selection and
+  // picture main asks for (build 3a).
+  const front = () => {
+    const t = tabsRef.current.find((x) => x.id === frontRef.current) || tabsRef.current[0];
+    if (!t) return null;
+    const p = t.pdf;
+    if (!p && !t.file && (isPage(kindOf(t.url)) || t.opened)) { // a file (one drawn here, a docx made a page) is no web page
+      const url = (t.web && t.web.url) || t.url;
+      if (url && url !== 'about:blank') return url.length > 4096 ? null : { kind: 'web', url, title: (t.web && t.web.title) || (t.row && t.row.name) || '', tab: t.id };
+    }
+    if (!p || p.error || (!p.rowId && !p.url)) return { rowId: null, url: null, page: 1, kind: t.file ? 'file' : 'page' };
+    if (!p.rowId && String(p.url).length > 4096) return null; // past what main takes
+    const viewer = paperRef.current;
+    const page = viewer && typeof viewer.currentPage === 'function' ? viewer.currentPage() : 0;
+    return { rowId: p.rowId || null, url: p.rowId ? null : p.url, page: page > 0 ? page : 1, kind: 'pdf' };
+  };
+  React.useImperativeHandle(ref, () => ({ openRow, openInput, openPaths, openFile, newTab, closeTab: () => closeTab(tab.id), tabAt, front }));
+
+  /* ------------------------------------------------------------------- @bart on a highlight (MATH-27) */
+  // A finished answer onto its mark: the viewer in front adds it when it shows that pdf, and every tab holding the pdf
+  // takes it, so none brought forward later saves its ink without it. Main has put it in the ink kept on disk already
+  // (library.addMarkAnswer). A mark gone meanwhile takes nothing, and an answer already there is not added again: the
+  // window that asked hears it twice (the ask's answer and main's paper-ask-done).
+  const landAnswer = (where, page, markId, entry) => {
+    const front = tabsRef.current.find((t) => t.id === frontRef.current) || tabsRef.current[0];
+    const viewer = paperRef.current;
+    if (front && samePdf(front.pdf, where) && viewer && typeof viewer.addAsk === 'function') viewer.addAsk(page, markId, entry);
+    setTabs((current) => {
+      let changed = false;
+      const next = current.map((t) => {
+        if (!t.pdf || !t.pdf.marks || !samePdf(t.pdf, where)) return t;
+        const marks = withAsk(t.pdf.marks, page, markId, entry);
+        if (marks === t.pdf.marks) return t;
+        changed = true;
+        return { ...t, pdf: { ...t.pdf, marks } };
+      });
+      return changed ? next : current;
+    });
+  };
+  // How a question from a highlight ended, told to every window by main: its answer lands here too (landAnswer).
+  const landRef = React.useRef(landAnswer);
+  landRef.current = landAnswer;
+  React.useEffect(() => {
+    if (!api.onPaperAskDone) return undefined;
+    return api.onPaperAskDone((done) => {
+      // a web page's mark (MATH-54, `page` null) is no pdf's: main has put its answer in the page's ink
+      if (done && done.entry && done.markId && done.page != null && (done.rowId || done.url)) landRef.current(done.rowId ? { rowId: done.rowId } : { url: done.url }, done.page, done.markId, done.entry);
+    });
+  }, []);
+  // A box's card (MATH-70 build 2): its asks and Stops, through what the workspace gave; what runs goes back to main.
+  const boxHandlers = React.useRef(null);
+  boxHandlers.current = { onAsk, onStopAsk, onDismissAsk, pendingAsks };
+  React.useEffect(() => {
+    if (!api.onBrowserBoxAsk) return undefined;
+    const offAsk = api.onBrowserBoxAsk(({ markId, url, title, question, note, turns }) => {
+      const h = boxHandlers.current;
+      if (h.onAsk && markId && url && question) void h.onAsk({ markId, source: 'web', url, question, note: note || '', turns: turns || [], quote: '', pageText: '', paper: title || '' });
+    });
+    const offStop = api.onBrowserBoxStop(({ askId }) => {
+      const h = boxHandlers.current, held = (h.pendingAsks || []).find((p) => p && p.askId === askId);
+      if (held && held.error != null) { if (h.onDismissAsk) h.onDismissAsk(askId); } else if (h.onStopAsk && askId) h.onStopAsk(askId);
+    });
+    return () => { offAsk(); offStop(); };
+  }, []);
+  const boxAsks = React.useMemo(() => (pendingAsks || []).filter((p) => p && p.source === 'web' && p.askId && p.markId), [pendingAsks]);
+  React.useEffect(() => { if (api.browserBoxAsks) quiet(api.browserBoxAsks(boxAsks)); }, [boxAsks]);
+  const askFromPaper = async (p, ask) => {
+    if (!onAsk || !p) return;
+    const where = pdfWhere(p);
+    const entry = await onAsk({ ...ask, ...where, paper: p.name || '' });
+    if (entry) landAnswer(where, ask.page, ask.markId, entry);
+  };
 
   /* ------------------------------------------------------------------- kept across ⌘R and quitting (MATH-10) */
   // Main keeps the project's tabs (model/stage.js stageSnapshot) a moment after they change, and at once when the page
@@ -918,6 +1052,8 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   // One query for the pane; it follows the tab in front. A page is searched by Chromium (main: findInPage), a pdf by its
   // viewer, a file drawn here by its text. A new query starts over; Enter, ↓ and ⌘G step (1), ⇧Enter, ↑ and ⇧⌘G back (-1).
   const pdfReady = !!(pdf && pdf.bytes && pdf.marks !== undefined);
+  // The answers being written for the pdf in front (the same list while nothing of it changed).
+  const paperAsks = React.useMemo(() => (pdf ? (pendingAsks || []).filter((p) => samePdf(pdf, p)) : []), [pendingAsks, pdf && pdf.rowId, pdf && pdf.url]); // eslint-disable-line react-hooks/exhaustive-deps
   const runFind = (text, step) => {
     if (pdf) { setMatches(pdfReady && paperRef.current ? paperRef.current.find(text, step) : null); return; }
     if (view) {
@@ -1025,6 +1161,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     shortcut: (name, from) => {
       if (name === 'new-tab') { if (onShow) onShow(); newTab(); return; }
       if (name === 'close-tab') { if (onShow) onShow(); closeTab(from || tab.id); return; }
+      if (typeof name === 'string' && /^tab-[1-9]$/.test(name)) { const t = tabs[Number(name.slice(4)) - 1]; if (t) select(t); return; } // ⌘1–9 pressed in a page
       if (!visible) return;
       if (name === 'find') { if (from || !editable(document.activeElement) || (rootRef.current && rootRef.current.contains(document.activeElement))) openFind(); }
       else if ((name === 'find-next' || name === 'find-previous') && finding) runFind(findText, name === 'find-next' ? 1 : -1);
@@ -1168,6 +1305,16 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
             >{SAVE_LABEL[saveState]}</button>
           )}
         </div>
+        {boxRemoved && boxRemoved.id === tab.id && (
+          <div data-box-removed="1" role="status" style={BOX_TOAST} onMouseDown={(event) => event.preventDefault()}>
+            <span>Box removed</span>
+            <span style={{ color: '#8f8f8f' }}>·</span>
+            <button type="button" data-box-undo="1" style={BOX_TOAST_UNDO} onClick={() => { const id = boxRemoved.id; clearTimeout(boxTimer.current); setBoxRemoved(null); quiet(api.browserBoxUndo(id)); }}>Undo</button>
+          </div>
+        )}
+        {boxable && (
+          <button type="button" className="hov-wash" data-stage-box={boxing === tab.id ? 'on' : 'off'} aria-pressed={boxing === tab.id} onClick={() => quiet(api.browserBox(tab.id))} aria-label="Box part of the page" title="Box part of the page (or hold ⌥ and drag)" style={{ ...ICON_BUTTON, display: 'flex', alignItems: 'center', justifyContent: 'center', background: boxing === tab.id ? '#f2f2f2' : 'transparent', color: boxing === tab.id ? '#0070f3' : '#4d4d4d' }}><BoxGlyph /></button>
+        )}
         {saving && saveState === 'none' && <SaveCard key={pageInput} title={pageTitle || stripScheme(pageInput)} onSave={save.onSave} onClose={() => setSaving(false)} cardRef={saveCard} />}
         <div style={{ position: 'relative' }} ref={menuRef}>
           <button type="button" className="hov-wash" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setMenu(menu ? null : { x: r.right, y: r.bottom }); }} aria-label="More" style={{ ...ICON_BUTTON, background: menu ? '#f2f2f2' : 'transparent', font: '600 16px/1 var(--font-sans)', color: '#4d4d4d' }}>⋮</button>
@@ -1189,6 +1336,11 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
                 <div style={{ borderTop: '1px solid #eaeaea', marginTop: 4, paddingTop: 4 }}>
                   <div className="hov-wash" onClick={() => { quiet(api.openExternal(pdf ? pdf.url : web.url || tab.url)); setMenu(null); }} style={{ padding: '7px 10px 7px 34px', borderRadius: 6, cursor: 'pointer', font: '13px/1.4 var(--font-sans)', color: '#171717' }}>Open in default browser</div>
                   {page && <div className="hov-wash" onClick={() => { quiet(api.browserCommand(tab.id, 'devtools')); setMenu(null); }} style={{ padding: '7px 10px 7px 34px', borderRadius: 6, cursor: 'pointer', font: '13px/1.4 var(--font-sans)', color: '#171717' }}>Developer tools</div>}
+                </div>
+              )}
+              {IS_MAC && (
+                <div style={{ borderTop: '1px solid #eaeaea', marginTop: 4, paddingTop: 4 }}>
+                  <div className="hov-wash" data-stage-import="1" onClick={() => { setMenu(null); setImporting(true); }} style={{ padding: '7px 10px 7px 34px', borderRadius: 6, cursor: 'pointer', font: '13px/1.4 var(--font-sans)', color: '#171717' }}>Import sign-ins…</div>
                 </div>
               )}
             </div>
@@ -1229,15 +1381,31 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
               target={tab.pendingFind || null}
               targetTo={tab.pendingTo || null}
               initialSection={sectionsOn ? tab.sections[tab.activeSection] || null : null}
+              view={pdf.view || null}
+              onView={(view) => { const { seq } = pdf; update(tab.id, (t) => (t.pdf && t.pdf.seq === seq ? { ...t, pdf: { ...t.pdf, view } } : t)); }}
               onTarget={(text, result) => landed(tab.id, text, result)}
               onFind={(result) => { if (keys.current && keys.current.finding) setMatches(result); }}
               library={library}
               mentionItems={mentionItems}
               onMentionOpen={onMentionOpen}
+              listFolder={listFolder}
+              fileState={fileState}
+              onOpenFile={onOpenFile}
               onOpenMention={(id) => { const row = (library || []).find((r) => r.id === id); if (row && onOpenItem) onOpenItem(row); }}
+              pendingAsks={paperAsks}
+              onAsk={onAsk ? (ask) => { void askFromPaper(pdf, ask); } : undefined}
+              onStopAsk={onStopAsk}
+              onDismissAsk={onDismissAsk}
+              onContinueAsk={onContinueAsk ? (asked) => onContinueAsk({ ...asked, paper: { name: pdf.name || '', rowId: pdf.rowId || null, url: pdf.url || null } }) : undefined}
+              onCopyText={onCopyText}
+              onOpenLink={(href) => openInput(href, { newTab: true })}
               onMarksChange={(marks) => {
-                const { seq, url, rowId } = pdf;
-                update(tab.id, (t) => (t.pdf && t.pdf.seq === seq ? { ...t, pdf: { ...t.pdf, marks } } : t));
+                const { seq, url, rowId } = pdf, where = pdfWhere(pdf);
+                // Every other tab holding this pdf takes the ink as it is now: brought forward, it must not save what it read before.
+                setTabs((current) => current.map((t) => {
+                  const mine = t.id === tab.id ? !!t.pdf && t.pdf.seq === seq : !!t.pdf && t.pdf.marks !== undefined && samePdf(t.pdf, where);
+                  return mine ? { ...t, pdf: { ...t.pdf, marks } } : t;
+                }));
                 (rowId ? api.writeAnnotations(rowId, marks) : api.writePageAnnotations(url, marks)).catch((error) => { if (onError) onError(error); });
               }}
             />
@@ -1298,6 +1466,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
         />,
         document.body,
       )}
+      {importing && <ImportSignins onClose={() => setImporting(false)} onOpenSite={(url) => openInput(url)} />}
     </div>
   );
 });

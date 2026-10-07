@@ -13,3 +13,14 @@ export function nextUntitled(kind, names) {
   while (taken.has(`Untitled ${kind} ${n}`)) n += 1;
   return `Untitled ${kind} ${n}`;
 }
+
+/**
+ * A workspace's name where "Workspace" stood (MATH-20, 2026-10-06): no longer than that word, nine characters; a longer
+ * name shows its first eight and an ellipsis. Spaces at the cut are dropped. No name reads "Workspace".
+ */
+export function wsLabel(name, max = 'Workspace'.length) {
+  const s = String(name || '').replace(/\s+/g, ' ').trim();
+  if (!s) return 'Workspace';
+  const chars = [...s];
+  return chars.length <= max ? s : `${chars.slice(0, max - 1).join('').trimEnd()}\u2026`;
+}

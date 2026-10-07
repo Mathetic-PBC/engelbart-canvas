@@ -9,7 +9,10 @@ import { heldRow } from '../model/github.js';
 import { SUBS, forward, pagerOf, importButtons, createButtons, rowWhy, contextRows, toolsWanted, TOOL_WHY, PROFILE_PROMPT } from '../model/onboarding.js';
 import { launchRows, installable, rowOf } from '../model/tools.js';
 import { useGithubStatus } from '../workspace/useGithubStatus.js';
+import ImportSignins from '../workspace/ImportSignins.jsx';
 import welcomePng from '../../../design/assets/welcome-field.png';
+
+const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || '');
 
 // Onboarding (2026-09-28): port of Claude Design "Onboarding.dc.html", Hudson's tweaks in design/onboarding/TWEAKS.md.
 // mode 'new' (first launch: welcome → tools → add to library → custom instructions → create → context) or 'existing'
@@ -161,6 +164,9 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
   const [newPath, setNewPath] = React.useState('~/my-project');
   const [sel, setSel] = React.useState({});
   const [error, setError] = React.useState('');
+  const [importing, setImporting] = React.useState(false); // the "Import sign-ins…" picker is open (MATH-18, macOS only)
+  // Its "Sign in again" sites (2026-10-06): there is no Stage until the project opens, so they open on it then (App.jsx).
+  const stageLinks = React.useRef([]);
   const [ghStatus] = useGithubStatus();
   const entryRef = React.useRef(null);
 
@@ -300,7 +306,7 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
     go({ step: 'open', sub: 0 });
     try {
       const made = await api.startProject({ name: name.trim(), description: desc.trim(), folder, directory: folder === 'existing' ? folderPath : '', context: ids });
-      await onDone(made);
+      await onDone(made, { stageLinks: [...stageLinks.current] });
     } catch (failure) {
       setPlace({ step: 'context', sub: 0, detour: false });
       setError(errorMessage(failure));
@@ -416,6 +422,11 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
             </div>
           )}
         </div>
+        {IS_MAC && (
+          <div style={{ flex: 'none', display: 'flex', justifyContent: 'center', paddingTop: 2 }}>
+            <button type="button" className="hov-ink" data-onboarding-import-signins="1" onClick={() => setImporting(true)} style={{ ...plain, font: '13px/1.4 var(--font-sans)', color: '#8f8f8f' }}>Bring over your sign-ins from another browser…</button>
+          </div>
+        )}
         {errorLine}
         <Footer showSkip={buttons.showSkip} onSkip={advance} continueDisabled={buttons.continueDisabled} onContinue={advance} />
       </div>
@@ -540,6 +551,7 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
           )}
         </div>
       </div>
+      {importing && <ImportSignins opensLater onClose={() => setImporting(false)} onOpenSite={(url) => { if (!stageLinks.current.includes(url)) stageLinks.current.push(url); }} />}
     </div>
   );
 }

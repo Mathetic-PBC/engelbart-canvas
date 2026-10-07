@@ -8,6 +8,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { api } from '../api.js';
 import { FluidTab, TabCard, TabClose, TabTitle, useTabCard } from '../ui/FluidTab.jsx';
+import { Expand, Collapse } from '../ui/Icons.jsx';
 import { useSandboxTouch } from '../ui/SandboxProgress.jsx';
 import {
   bootstrap,
@@ -72,7 +73,8 @@ function errorText(error) {
   return error instanceof Error ? error.message : String(error || 'Unknown error');
 }
 
-export default function TerminalPane({ cwd, projectId, visible = true }) {
+// `full` / `onFull`: the right pane's full screen (Workspace.jsx), its button at the end of the tabs as the Stage's is.
+export default function TerminalPane({ cwd, projectId, visible = true, full = false, onFull = null }) {
   useSyncExternalStore(subscribeVersion, getVersion);
   const state = getState();
   const stageRef = useRef(null);
@@ -424,6 +426,9 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
             </div>
           )}
         </div>
+        {onFull && (
+          <button type="button" className="hov-wash2" onClick={() => { card.hide(); onFull(); }} aria-label={full ? 'Exit full screen' : 'Full screen'} title={full ? 'Exit full screen' : 'Full screen'} data-term-full={full ? '1' : '0'} style={{ flex: 'none', alignSelf: 'center', width: 28, height: 28, margin: '2px 0 0 4px', padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 120ms' }}>{full ? <Collapse /> : <Expand />}</button>
+        )}
       </div>
 
       <div ref={stageRef} onClick={onStageClick} data-term-stage="1" style={{ position: 'relative', flex: 1, minHeight: 0, padding: '10px 14px 0', background: '#fff', cursor: boxIsInput ? 'default' : 'text', overflow: 'hidden' }}>

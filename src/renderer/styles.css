@@ -60,6 +60,14 @@ textarea::placeholder,input::placeholder{color:#8f8f8f;font-style:italic}
 .hov-wash2:hover{background:#eaeaea!important}
 .hov-ink-wash2:hover{color:#171717!important;background:#eaeaea!important}
 .rail-search:focus-within{box-shadow:0 0 0 3px #e2e2e2}
+/* The Settings gear (ui/Settings.jsx): the notification bell's button beside it (ui/sandbox-notifications.css). */
+.settings-gear{display:flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border:0;border-radius:5px;background:transparent;color:#171717;cursor:pointer}
+.settings-gear:hover,.settings-gear[aria-expanded="true"]{background:#ededed}
+.settings-gear:focus-visible{outline:2px solid #777;outline-offset:2px}
+/* A section's + shows while the pointer is on its header (or it has the keyboard, or its panel is open). At rest the
+   sidebar is only the section names (2026-10-06). */
+.rail-add{opacity:0;transition:opacity 120ms,color 120ms}
+.rail-section-head:hover .rail-add,.rail-add:focus-visible,.rail-add[aria-expanded="true"]{opacity:1}
 .rail-field input::placeholder{font-style:normal;color:#8f8f8f}
 .bar-press{transition:transform 120ms}
 .bar-press:active{transform:scale(1.12)}
@@ -75,9 +83,6 @@ textarea::placeholder,input::placeholder{color:#8f8f8f;font-style:italic}
 .connection-spinner{animation:connection-spin .9s linear infinite}
 @keyframes connection-spin{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){.connection-spinner{animation:none}}
-/* Connections' icon, top right beside the bell (workspace/Connections.jsx): washes as the bell does (ui/sandbox-notifications.css) */
-.connections-trigger:hover,.connections-trigger[aria-expanded="true"]{background:#ededed!important}
-.connections-trigger:focus-visible{outline:2px solid #777;outline-offset:2px}
 /* The Stage (Add - Mention Stage.dc.html, 2026-09-23): tabs not in front wash grey, the round + and × darken; find paints blue. */
 .hov-tab:hover{background:#e6e6e6!important}
 .hov-tab-plus:not(:disabled):hover{background:#e6e6e6!important;color:#171717!important}

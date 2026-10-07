@@ -9,7 +9,7 @@ const path = require('node:path');
 const OUTSIDE = process.platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'drivers', 'etc', 'hosts') : '/etc/hosts';
 const { EventEmitter } = require('node:events');
 const { pathToFileURL } = require('node:url');
-const { parseBrowserUrl, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews } = require('../src/main/browser/views.cjs');
+const { parseBrowserUrl, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews, stagePartition, PARTITION, DEV_PARTITION } = require('../src/main/browser/views.cjs');
 
 const address = () => import(pathToFileURL(path.join(__dirname, '../src/renderer/model/address.js')).href);
 
@@ -177,7 +177,8 @@ test('views: one page shows at a time, pages stay locked down, windows become ta
   assert.deepEqual(a.webContents.windowOpen({ url: 'engelbart://app/index.html', disposition: 'new-window' }), { action: 'deny' });
   assert.deepEqual(a.webContents.windowOpen({ url: 'file:///etc/passwd', disposition: 'foreground-tab' }), { action: 'deny' });
 
-  // Signing in: a popup is a real child window with its opener, locked down like a tab and never given the preload.
+  // Signing in: a popup is a real child window with its opener, locked down like a tab. It has the session's page preload
+  // (MATH-54 build 2) as every page does, but it is no tab: main answers it nothing (web-page-marks.test.cjs).
   const popupAnswer = a.webContents.windowOpen({ url: 'about:blank', disposition: 'new-window' });
   assert.equal(popupAnswer.action, 'allow');
   assert.deepEqual(popupAnswer.overrideBrowserWindowOptions.webPreferences, a.options.webPreferences);
@@ -254,6 +255,19 @@ test('views: one page shows at a time, pages stay locked down, windows become ta
   await views.flush();
   assert.equal(fake.browsing.flushed, 1);
   assert.equal(views.show('a', { x: 0, y: 0, width: 1, height: 1 }), false);
+});
+
+test('views: a checkout keeps the Stage\'s cookies in a partition of its own; a package uses persist:browser (2026-10-06)', () => {
+  assert.equal(stagePartition(true), PARTITION);
+  assert.equal(stagePartition(false), DEV_PARTITION);
+  assert.notEqual(PARTITION, DEV_PARTITION);
+  const fake = fakeElectron();
+  const asked = [];
+  fake.electron.session = { fromPartition: (name) => { asked.push(name); return fake.browsing; } };
+  const views = createBrowserViews({ electron: fake.electron, getWindow: () => fake.win, send: () => {}, appName: 'Engelbart', partition: DEV_PARTITION });
+  views.open('a', 'https://www.apple.com');
+  assert.equal(fake.made[0].options.webPreferences.partition, DEV_PARTITION);
+  assert.ok(asked.length && asked.every((name) => name === DEV_PARTITION), 'every session it asks for is the checkout\'s');
 });
 
 test('views: a first load that is cancelled is a failure; one replaced, one after a page, or a pdf is not (2026-10-04)', () => {

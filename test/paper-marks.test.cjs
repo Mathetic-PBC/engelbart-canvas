@@ -306,3 +306,87 @@ test('placeHighlight: marks of two different groups stay apart, each keeping its
   const across = mark('x', [r(0.25, L(1), 0.3, 0.015)]);
   assert.deepEqual(placeHighlight([left, right], across).list.map((m) => m.id), ['l', 'r', 'x']);
 });
+
+test('passageOf: a highlight\'s own text; a part of a selection across pages, every part of its group in page order', async () => {
+  const { passageOf } = await load();
+  const plain = { id: 'p', text: 'Cohen\'s κ was 0.79', y: 0.2 };
+  const a = { id: 'a', group: 'g1', text: 'the model was\ntrained on ', y: 0.9, note: '@bart why?' };
+  const b = { id: 'b', group: 'g1', text: 'a dataset of 480 students', y: 0.05, note: null };
+  const c = { id: 'c', group: 'g1', text: ' and four deployments.', y: 0.04, note: null };
+  const other = { id: 'o', group: 'g2', text: 'elsewhere', y: 0.5 };
+  const marks = { 4: [c, other], 3: [b], 2: [plain, a] };
+  assert.equal(passageOf(marks, plain), 'Cohen\'s κ was 0.79', 'no group: as it was');
+  const whole = 'the model was\ntrained on\na dataset of 480 students\nand four deployments.';
+  assert.equal(passageOf(marks, a), whole, 'pages 2, 3 and 4, one line each, whichever part the note is on');
+  assert.equal(passageOf(marks, c), whole);
+  assert.equal(passageOf(marks, other), 'elsewhere');
+  assert.equal(passageOf({}, { id: 'x', group: 'g9', text: 'alone' }), 'alone', 'a group not among the marks: its own text');
+  assert.equal(passageOf(marks, null), '');
+});
+
+test('stackNotes: margin notes never cover each other; only a margin full where a note wants to be sends it to the other (MATH-15)', async () => {
+  const { stackNotes, NOTE_SLACK } = await load();
+  // Two highlights on neighbouring lines, both nearer the right margin: a little crowding is taken in the same margin.
+  let at = stackNotes([{ id: 'a', ideal: 100, h: 48, side: 'right' }, { id: 'b', ideal: 110, h: 24, side: 'right' }], { gap: 8 });
+  assert.deepEqual(at.get('a'), { top: 100, side: 'right' });
+  assert.deepEqual(at.get('b'), { top: 156, side: 'right' }, 'pushed 46 down its own margin: it stays (2026-10-06)');
+  // A tall card where it wants to be: past NOTE_SLACK down, the left margin keeps it level with its highlight.
+  at = stackNotes([{ id: 'a', ideal: 100, h: NOTE_SLACK + 40, side: 'right' }, { id: 'b', ideal: 110, h: 24, side: 'right' }], { gap: 8 });
+  assert.deepEqual(at.get('b'), { top: 110, side: 'left' }, 'the other margin, as a last resort');
+  // Exactly NOTE_SLACK down is still its own margin.
+  at = stackNotes([{ id: 'a', ideal: 100, h: NOTE_SLACK + 2, side: 'right' }, { id: 'b', ideal: 110, h: 24, side: 'right' }], { gap: 8 });
+  assert.equal(at.get('b').side, 'right');
+  // Both margins full: stacked, none overlapping.
+  at = stackNotes([0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => ({ id: `n${i}`, ideal: 100, h: 60, side: 'right' })), { gap: 8 });
+  const bySide = { left: [], right: [] };
+  for (const [, p] of at) bySide[p.side].push(p.top);
+  assert.ok(bySide.left.length > 0, 'once the right one is full far enough down');
+  for (const tops of Object.values(bySide)) { tops.sort((x, y) => x - y); for (let i = 1; i < tops.length; i++) assert.ok(tops[i] - tops[i - 1] >= 68); }
+  // Past the page's foot: pushed back up.
+  at = stackNotes([{ id: 'a', ideal: 980, h: 40, side: 'left' }], { pageH: 1000 });
+  assert.equal(at.get('a').top, 960);
+});
+
+/* ------------------------------------------------------------- whole words, and the page around a passage (2026-10-06) */
+
+test('wordBounds: a selection snaps out to whole words at both ends; ends between words stay', async () => {
+  const { wordBounds } = await load();
+  const t = 'the example text here';
+  assert.deepEqual(wordBounds(t, 6, 14), { from: 4, to: 16 }, '"ample te" → "example text"');
+  assert.deepEqual(wordBounds(t, 4, 11), { from: 4, to: 11 }, 'whole already');
+  assert.deepEqual(wordBounds(t, 3, 12), { from: 3, to: 12 }, 'starting and ending on spaces');
+  assert.deepEqual(wordBounds('κ = 0.79, n=480', 1, 6), { from: 1, to: 8 }, '"= 0." → "= 0.79": a point between digits is in a number, a comma after one ends it');
+  assert.deepEqual(wordBounds('N = 13,633 events', 6, 6), { from: 4, to: 10 });
+  assert.deepEqual(wordBounds('behavior-aware AI', 10, 12), { from: 0, to: 14 }, 'a hyphenated word whole');
+  assert.deepEqual(wordBounds('construc-\ntion of', 11, 13), { from: 10, to: 14 }, 'not across a line\'s break');
+  assert.deepEqual(wordBounds('it\'s fine', 3, 3), { from: 0, to: 4 });
+  assert.deepEqual(wordBounds('', 0, 0), { from: 0, to: 0 });
+});
+
+test('pdfText: a page\'s items as text, a line break where one ends a line', async () => {
+  const { pdfText } = await load();
+  assert.equal(pdfText({ items: [{ str: 'Results', hasEOL: true }, { type: 'beginMarkedContent' }, { str: 'κ = 0.79' }, { str: ' overall' }] }), 'Results\nκ = 0.79 overall');
+  assert.equal(pdfText(null), '');
+});
+
+test('pageWindow: the whole page when it is short; else about 4,000 characters centered on the passage, cut at spaces', async () => {
+  const { pageWindow, findPassage } = await load();
+  assert.equal(pageWindow('Results.\n\n\n\nκ   was 0.79.  ', 'κ was'), 'Results.\n\nκ was 0.79.', 'tidied');
+  const filler = (w, n) => Array.from({ length: n }, (_, i) => `${w}${i}`).join(' ');
+  const page = `${filler('before', 900)} Cohen's κ was 0.79 overall across the four deployments ${filler('after', 900)}`;
+  const out = pageWindow(page, "Cohen's κ was 0.79\noverall across");
+  assert.ok(out.length <= 4004 && out.length > 3900, `${out.length}`);
+  assert.ok(out.startsWith('… ') && out.endsWith(' …'), 'marked where cut');
+  const at = out.indexOf("Cohen's κ"), mid = at + 30;
+  assert.ok(Math.abs(mid - out.length / 2) < 60, `centered on the passage: ${mid} of ${out.length}`);
+  assert.ok(!/^… \S*[^\s]\S* /.test(out.slice(0, 2)) && /^… before\d+ /.test(out), 'starts on a whole word');
+  // Found across a line's hyphen, or with no space where the page has none.
+  assert.deepEqual(findPassage('a b construc-\ntion of the thing', 'construc- tion of'), [4, 21]);
+  assert.deepEqual(findPassage('x Cohen\'sκ y', 'Cohen\'s κ'), [2, 10]);
+  assert.equal(findPassage('nothing here', 'elsewhere'), null);
+  // Not found: centered where its highlight is on the page.
+  const late = pageWindow(page, 'not on this page', { at: 1 });
+  assert.ok(late.endsWith('after899') && late.startsWith('… '), 'the foot of the page');
+  const early = pageWindow(page, 'not on this page', { at: 0 });
+  assert.ok(early.startsWith('before0 ') && early.endsWith(' …'), 'its head');
+});

@@ -12,8 +12,12 @@ const home = require('./store/home.cjs');
 const db = require('./store/db.cjs');
 const projects = require('./store/projects.cjs');
 const library = require('./store/library.cjs');
+const folderFiles = require('./store/folder-files.cjs');
+const zoteroMirror = require('./zotero/mirror.cjs');
 const { expandDoc } = require('./context/expand-mentions.cjs');
 const { failureLines } = require('./bart/reply.cjs');
+const { clipMiddle } = require('./bart/clip.cjs');
+const { askEntry } = require('../shared/mark-answers.cjs');
 const { readShellHistory } = require('./shell-history.cjs');
 const { createDescriber, createRepoIdentifier, createRemoteFileLister } = require('./store/page-meta.cjs');
 const { inspectPdf } = require('./context/pdf-kind.cjs');
@@ -40,11 +44,81 @@ function optStr(value, what, max = MAX_NAME) {
   return value == null ? null : str(value, what, max);
 }
 
+// A document an agent is asked from: a note, a workspace, or (MATH-27, 2026-10-06) a highlight on a pdf in the Stage,
+// `{ kind: 'mark', id, rowId | url, page }`: the mark's id, the library row the pdf is (else the address its ink is kept
+// by), and its page. A highlight on a web page (MATH-54) has no page: `{ kind: 'mark', id, rowId | url, source: 'web' }`,
+// its mark in the ink's "web" list. A mark is no document: reading, writing or copying one is refused further on
+// (projects.resolveDoc).
 function docRef(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('doc ref must be an object');
   if (value.kind === 'note') return { kind: 'note', id: str(value.id, 'note id', 64) };
   if (value.kind === 'workspace') return { kind: 'workspace', workspaceId: str(value.workspaceId, 'workspace id', 64) };
+  if (value.kind === 'mark') {
+    const id = str(value.id, 'mark id', 64);
+    if (!/^[\w-]+$/.test(id)) throw new TypeError('mark id is invalid');
+    const web = value.source === 'web';
+    if (value.source != null && !web) throw new TypeError('a highlight is on a pdf or on a web page (source "web")');
+    if (web ? value.page != null : !Number.isInteger(value.page) || value.page < 1 || value.page > 100000) throw new TypeError(web ? 'a highlight on a web page has no page' : 'page must be a page number');
+    const rowId = value.rowId == null ? null : str(value.rowId, 'library id', 64), url = value.url == null ? null : str(value.url, 'address', 8192);
+    if (!rowId === !url) throw new TypeError('a highlight is on a library item (rowId) or on an address (url): one of the two');
+    const on = web ? { source: 'web' } : { page: value.page };
+    return rowId ? { kind: 'mark', id, rowId, ...on } : { kind: 'mark', id, url, ...on };
+  }
   throw new TypeError('Unknown doc kind');
+}
+
+/** How the renderer keys a document (`ws:<id>`, `note:<id>`); a highlight is `mark:<id>`, never a note's key. */
+const docKeyOf = (ref) => (ref.kind === 'workspace' ? `ws:${ref.workspaceId}` : ref.kind === 'mark' ? `mark:${ref.id}` : `note:${ref.id}`);
+
+// A string past `max` cut in the middle (bart/clip.cjs) rather than refused: a passage highlighted across many pages, an
+// earlier turn longer than a turn may be (MATH-27 second pass, 2026-10-06).
+function clipped(value, what, max) {
+  if (typeof value !== 'string') throw new TypeError(`${what} must be a string`);
+  return clipMiddle(value, max);
+}
+
+/**
+ * What a question asked from a highlight carries besides its ref: the passage (its start and end past 20,000 characters),
+ * the note as it stands, the paper's name, and the page's text around the passage (pdf/marks.js pageWindow, about 4,000
+ * characters; cut in the middle past 8,000). A web page's highlight (MATH-54) is the same, its `paper` the page's title;
+ * its quote may come as the mark keeps it, { exact, prefix, suffix }, of which the passage is `exact`.
+ */
+function highlightInput(value) {
+  const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const quote = input.quote && typeof input.quote === 'object' && !Array.isArray(input.quote) ? input.quote.exact : input.quote;
+  return { quote: clipped(quote == null ? '' : quote, 'quote', 20000), note: str(input.note == null ? '' : input.note, 'note', 20000), paper: optStr(input.paper, 'paper name'), pageText: clipped(input.pageText == null ? '' : input.pageText, 'page text', 8000) };
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * What is in front in the Stage when @bart is asked (MATH-27, 2026-10-06): { rowId, url, page, kind }, the library row
+ * the tab shows (else its address) and the page in view. A web page (MATH-54) is { kind: 'web', url, title }: where the
+ * tab is and what the page calls itself. Only those two are read (bart/context.cjs <stage>): anything else, and no
+ * Stage, is null. With `tab`, the Stage tab that shows it (MATH-54 build 3a), whose selection and picture are asked for.
+ */
+function stageInput(value) {
+  if (value == null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) throw new TypeError('stage must be an object');
+  const kind = str(value.kind == null ? '' : value.kind, 'stage kind', 24);
+  if (kind === 'web') {
+    const url = str(value.url, 'address', 4096).trim();
+    const title = clipped(value.title == null ? '' : value.title, 'page title', 300).replace(/\s+/g, ' ').trim();
+    const tab = value.tab == null ? null : str(value.tab, 'tab id', 128);
+    if (tab && !/^[\w.-]+$/.test(tab)) throw new TypeError('tab id is invalid');
+    return url ? { kind, url, title, ...(tab ? { tab } : {}) } : null;
+  }
+  if (kind !== 'pdf') return null;
+  const rowId = value.rowId == null ? null : str(value.rowId, 'library id', 64);
+  if (rowId && !UUID_RE.test(rowId)) throw new TypeError('library id is invalid');
+  const url = value.url == null ? null : str(value.url, 'address', 4096);
+  if (!Number.isInteger(value.page) || value.page < 1 || value.page > 100000) throw new TypeError('page must be a page number');
+  return rowId || url ? { rowId, url, page: value.page, kind } : null;
+}
+
+/** The earlier turns of an exchange, the last 40, each cut in the middle past what a turn may hold. */
+function turnsInput(value) {
+  return (Array.isArray(value) ? value : []).slice(-40).map((turn) => ({ question: clipped(turn && turn.question, 'earlier question', 8000), answer: clipped(turn && turn.answer, 'earlier answer', 40000) }));
 }
 
 function projectInput(value) {
@@ -58,7 +132,7 @@ function projectInput(value) {
 // that is open, as `afterOpen(ctx, { again: true })`, when a row it would act on has just been added (2026-10-02).
 // `testMode`: whether this copy has test mode at all (./developer.cjs). Without it config.json's `testMode` is read as
 // off but never rewritten, so a developer's copy sharing the file keeps its setting.
-function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf = null, afterOpen = null, testMode: available = false }) {
+function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf = null, afterOpen = null, testMode: available = false, zotero = null }) {
   const layout = home.ensureHome(homeDir, rootDir, { test: available });
   const contexts = new Map();
 
@@ -82,7 +156,8 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
       home.ensureHome(homeDir, rootDir, { test: available });
       const dataRoot = current === 'test' ? layout.testRoot : layout.root;
       const libraryDb = await db.openLibraryDb(dataRoot);
-      const next = { homeDir, root: layout.root, dataRoot, mode: current, libraryDb };
+      // `zotero()`: main's Zotero library (zotero/sync.cjs), for a mentioned item's file to be downloaded (MATH-65 build 2).
+      const next = { homeDir, root: layout.root, dataRoot, mode: current, libraryDb, ...(zotero ? { zotero } : {}) };
       // Test mode's sample library, except after "Start as a new user" (a new install has an empty library).
       if (current === 'test' && !fs.existsSync(path.join(dataRoot, FRESH_MARK))) await library.seedIfEmpty(next, fixturesDir);
       // A library behind the category rules (converted from the old types, or from before a change of
@@ -140,9 +215,11 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
 // out on `notify`, and nothing is announced. `fetchUrl` is how a dropped link is read (add-library-url; the app passes
 // the Stage's session, so a picture or a pdf behind a sign-in comes too).
 // `savePageFor(win, tabId, dir)` writes the page a window's Stage tab shows into dir (add-library-page; the app passes
-// that window's browser views' savePage).
+// that window's browser views' savePage). `stagePageFor(win, tabId)` reaches a window's Stage tab for an @bart turn
+// (MATH-54 build 3a): { selection(), screenshot() } (the app passes that window's browser views'), or null.
+// `overleafFor(win, stage)`: a window's Overleaf tabs for an @bart turn (MATH-65; overleaf/stage.cjs forTurn), or null.
 // `getUpdates()`: the updater (updates.cjs), made after this is registered; null until then, and in the tests.
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, getUpdates = () => null }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
   const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
@@ -169,7 +246,6 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // announcement from before its own save from one after it. Clear and Restore rewrite a workspace's document the same way.
   const revisions = new Map(); // `${projectId} ${key}` → revision
   const docTurns = new Map(); // `${projectId} ${key}` → the save in progress
-  const docKeyOf = (ref) => (ref.kind === 'workspace' ? `ws:${ref.workspaceId}` : `note:${ref.id}`);
   const inTurn = (projectId, key, work) => {
     const id = `${projectId} ${key}`;
     const run = (docTurns.get(id) || Promise.resolve()).catch(() => {}).then(work);
@@ -274,6 +350,69 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     await openGithubPage(url);
     return true;
   });
+  // Zotero (src/main/zotero/connection.cjs, MATH-65): signing in through the default browser and the broker. Every change
+  // is announced on `engelbart:zotero` with the status, which names the account and never carries the key.
+  // The library (MATH-65 build 2, zotero/sync.cjs): the status carries the mirror's too (`sync`: { state, items, syncedAt,
+  // error }); zotero-sync starts a sync and answers at once, its progress following on `engelbart:zotero`. Disconnecting
+  // deletes the mirror. zotero-list is a level of the library for the @ menu, zotero-open what a mention's chip opens:
+  // { path, source } a pdf for the paper viewer (its own, or a free copy found now, build 3), else { url, external } for
+  // the default browser. While a free copy is looked for, main says so on `engelbart:zotero-finding` ({ key, finding }).
+  // Build 4: a paper opened in the browser is answered `waiting: true`, and its pdf is waited for in the Downloads folder
+  // (zotero/downloads.cjs), said on `engelbart:zotero-waiting` ({ key, waiting }; zotero-waiting lists them now), and,
+  // once downloaded, opened on `engelbart:zotero-downloaded` ({ key, path }). zotero-attach makes a pdf dropped on a chip
+  // the item's pdf: { path, source } to open, or { error } when the file is not a pdf.
+  const zt = () => { if (!zotero) throw new Error('Zotero is not available'); return zotero; };
+  const zoteroStatus = (status) => ({ ...status, sync: zoteroLibrary && status.connected ? zoteroLibrary.status() : null });
+  handle('zotero-status', () => (zotero ? zoteroStatus(zotero.status()) : { configured: false, connected: false, username: '', userID: '', persisted: true, pending: null, error: '', sync: null }));
+  handle('zotero-connect', async () => zoteroStatus(await zt().connect()));
+  handle('zotero-cancel', () => zoteroStatus(zt().cancel()));
+  handle('zotero-disconnect', async () => {
+    const status = await zt().disconnect();
+    if (zoteroLibrary) zoteroLibrary.clear();
+    return zoteroStatus(status);
+  });
+  handle('zotero-sync', () => {
+    if (!zotero || !zotero.status().connected) throw new Error('Zotero is not connected');
+    if (zoteroLibrary) void zoteroLibrary.sync().catch(() => {});
+    return zoteroStatus(zotero.status());
+  });
+  const zoteroRoot = () => (zoteroLibrary && zotero && zotero.status().connected ? zoteroLibrary.root() : null);
+  // Build 5: group libraries. zotero-list's top is My Library and each group (zotero/mirror.cjs listLibraries); an item
+  // is named by its ref, `<key>` for My Library's and `g<groupID>:<key>` for a group's (mirror.cjs parseRef), in
+  // zotero-open and zotero-attach and on the finding, waiting and downloaded channels.
+  handle('zotero-list', (rel) => {
+    const root = zoteroRoot();
+    if (!root) return { error: 'Zotero is not connected' };
+    return zoteroMirror.listLibraries(root, rel == null ? '' : str(rel, 'path', 4096));
+  });
+  const zoteroRef = (value) => {
+    const ref = str(value, 'item key', 64);
+    const parsed = zoteroMirror.parseRef(ref);
+    if (!parsed) throw new TypeError('item key is invalid');
+    return { ref, ...parsed };
+  };
+  handle('zotero-open', async (key) => {
+    const root = zoteroRoot();
+    if (!root) return { error: 'Zotero is not connected' };
+    const { ref, group, key: itemKey } = zoteroRef(key);
+    const lib = typeof zoteroLibrary.library === 'function' ? zoteroLibrary.library(group) : null;
+    if (!lib) return { error: 'Zotero is not connected' };
+    const target = await zoteroMirror.openTarget(lib.root, itemKey, { download: lib.download, ...(lib.openAccess ? { openAccess: lib.openAccess } : {}), ...(lib.storageDir ? { storageDir: lib.storageDir } : {}), library: { group, name: lib.name } });
+    if (target && target.external && typeof zoteroLibrary.awaitDownload === 'function' && zoteroLibrary.awaitDownload(ref)) return { ...target, waiting: true };
+    return target;
+  });
+  handle('zotero-waiting', () => (zoteroRoot() && typeof zoteroLibrary.waitingFor === 'function' ? zoteroLibrary.waitingFor() : []));
+  handle('zotero-attach', (key, file) => {
+    const root = zoteroRoot();
+    if (!root) return { error: 'Zotero is not connected' };
+    const { ref } = zoteroRef(key);
+    const from = str(file, 'file', 4096);
+    if (!path.isAbsolute(from)) throw new TypeError('file must be an absolute path');
+    try {
+      const copy = zoteroLibrary.attach(ref, from);
+      return copy ? { path: copy.path, source: copy.source } : { error: 'The PDF could not be kept.' };
+    } catch (error) { return { error: error && error.message ? error.message : 'The PDF could not be kept.' }; }
+  });
   handle('record-edit', withCtx((ctx, pid, wid) => { projects.recordEdit(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); navChanged(); return true; }));
   handle('seen-agents', withCtx((ctx, pid, wid) => { const seen = projects.seenAgents(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); if (seen) navChanged(); return seen; }));
   handle('list-projects', withCtx((ctx) => projects.listProjects(ctx)));
@@ -347,13 +486,14 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   saving('restore-workspace', withCtx((ctx, pid, wid) => { const out = projects.restoreWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); navChanged(); return out; }), { project: first });
   saving('set-workspace-context', (pid, wid, entries) => changeWorkspaceContext(pid, wid, (ctx, projectId, workspaceId) => projects.setWorkspaceContext(ctx, projectId, workspaceId, entries)), { project: first });
   // The sidebar: search, +, Save and an @mention bring a library item into a workspace; the trash takes it out (and remembers that it did).
-  saving('link-to-workspace', (pid, wid, ids) => {
-    const adding = (Array.isArray(ids) ? ids : [ids]).slice(0, 200).map((id) => str(id, 'library id', 64));
-    return changeWorkspaceContext(pid, wid, (ctx, projectId, workspaceId) => projects.linkToWorkspace(ctx, projectId, workspaceId, adding));
+  // `picked`: the @ menu linked it; `unmentioned`: its last mention left the document (MATH-57).
+  saving('link-to-workspace', (pid, wid, ids, opts) => {
+    const adding = (Array.isArray(ids) ? ids : [ids]).slice(0, 200).map((id) => str(id, 'library id', 64)), picked = !!(opts && opts.picked === true);
+    return changeWorkspaceContext(pid, wid, (ctx, projectId, workspaceId) => projects.linkToWorkspace(ctx, projectId, workspaceId, adding, { picked }));
   }, { project: first });
-  saving('unlink-from-workspace', (pid, wid, id) => {
-    const entry = str(id, 'library id', 64);
-    return changeWorkspaceContext(pid, wid, (ctx, projectId, workspaceId) => projects.unlinkFromWorkspace(ctx, projectId, workspaceId, entry));
+  saving('unlink-from-workspace', (pid, wid, id, opts) => {
+    const entry = str(id, 'library id', 64), unmentioned = !!(opts && opts.unmentioned === true);
+    return changeWorkspaceContext(pid, wid, (ctx, projectId, workspaceId) => projects.unlinkFromWorkspace(ctx, projectId, workspaceId, entry, { unmentioned }));
   }, { project: first });
 
   saving('create-note', withCtx((ctx, pid, input) => {
@@ -387,6 +527,25 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
 
   // @bart, @brainstorm and @discover: the answer comes back as draft lines for the document. A run that fails answers too, so
   // the question line never stays locked behind a pending line; only Stop returns nothing to place.
+  // A question from a highlight's note (MATH-27) is kept in `paperAsks` while it runs: its mark, the window that asked and
+  // what the agent is doing as of its last progress, so that window shows its box again after ⌘R (running-paper-asks).
+  // Its answer is put on the mark here (library.addMarkAnswer), as the Stage would, since a reloaded window has no one
+  // waiting for it; how it ended is told to every window (`paper-ask-done`): each Stage holding the pdf shows the
+  // answer, and the window that asked drops its box or says "No answer" (second pass, 2026-10-06).
+  const paperAsks = new Map(); // askId → { win, projectId, askId, markId, page, rowId, url, source?, question, progress }
+  const paperDone = (payload) => {
+    paperAsks.delete(payload.askId);
+    if (windowHandler) announce('engelbart:paper-ask-done', payload); else if (notify) notify('engelbart:paper-ask-done', payload);
+  };
+  // What the window's box shows, kept as the window keeps it (Workspace.jsx onBartProgress): a new step starts over.
+  const paperProgress = (askId, { log, ...progress }) => {
+    const held = paperAsks.get(askId);
+    if (!held) return;
+    const next = { ...held.progress, ...progress };
+    if (progress.step) { next.activity = ''; next.lines = []; }
+    if (log && progress.activity) next.log = [...(held.progress.log || []), progress.activity].slice(-60);
+    held.progress = next;
+  };
   handleFor('ask-bart', async (win, pid, input) => {
     const ctx = await store.context();
     const value = input && typeof input === 'object' ? input : {};
@@ -394,29 +553,62 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     if (!/^[\w-]+$/.test(askId)) throw new TypeError('ask id is invalid');
     // Keeping the agent's row is bookkeeping: it never stands between a question and its answer.
     const track = (change) => { try { change(); navChanged(); return true; } catch { return false; } };
-    let started = false;
+    let started = false, mark = null;
     try {
       // `turns`: the earlier turns of the exchange this question continues, read from the document. `choice`: Regenerate's selector.
-      const turns = (Array.isArray(value.turns) ? value.turns : []).slice(-40).map((turn) => ({ question: str(turn && turn.question, 'earlier question', 8000), answer: str(turn && turn.answer, 'earlier answer', 40000) }));
+      const turns = turnsInput(value.turns);
       const choice = value.choice && typeof value.choice === 'object' ? { model: str(value.choice.model, 'model', 24), effort: str(value.choice.effort, 'effort', 24) } : null;
       if (choice && !/^[a-z][a-z0-9]*$/.test(choice.model + choice.effort)) throw new TypeError('choice is invalid');
       // `agent`: which line asked, @bart, @brainstorm or @discover (2026-09-30): the same run with other instructions. An
       // `@orient` line (2026-10-04) is asked as @brainstorm since 2026-10-05 (src/renderer/model/doc.js agentOf).
       const agent = value.agent == null ? 'bart' : value.agent;
       if (!['bart', 'brainstorm', 'discover'].includes(agent)) throw new TypeError('agent must be bart, brainstorm or discover');
-      const question = { askId, ref: docRef(value.ref), workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice, agent };
+      const ref = docRef(value.ref);
+      // A highlight's note asks @bart alone (MATH-27), with the passage it is on.
+      if (ref.kind === 'mark' && agent !== 'bart') throw new TypeError('a highlight asks @bart');
+      const projectId = str(pid, 'project id', 64);
+      // `stage`: the pdf or web page in front in the Stage, which @bart alone is shown (MATH-27); the others' context stays as it was.
+      const stage = agent === 'bart' ? stageInput(value.stage) : null;
+      // `live`: a web page's tab in this window, asked for its selection and picture as they are now (MATH-54 build 3a).
+      const live = stage && stage.kind === 'web' && stage.tab && stagePageFor ? stagePageFor(win, stage.tab) : null;
+      // `overleaf`: this window's Overleaf tabs (MATH-65), the one in front read live and every project's copy refreshed.
+      const overleaf = agent === 'bart' && overleafFor ? overleafFor(win, stage) : null;
+      const question = { askId, ref, workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice, agent, ...(ref.kind === 'mark' ? { highlight: highlightInput(value.highlight) } : {}), ...(stage ? { stage } : {}), ...(live ? { live } : {}), ...(overleaf ? { overleaf } : {}) };
+      if (ref.kind === 'mark') {
+        // a web page's mark has no page (MATH-54): its answer goes in the ink's "web" list
+        mark = { markId: ref.id, page: ref.source === 'web' ? null : ref.page, rowId: ref.rowId || null, url: ref.rowId ? null : ref.url, ...(ref.source === 'web' ? { source: 'web' } : {}) };
+        paperAsks.set(askId, { win, projectId, askId, ...mark, question: question.text.trim(), progress: {} });
+      }
+      // a box (MATH-70 build 2): the picture it has now is the one this answer is about, whatever it has by the time it lands
+      let crop = null;
+      if (mark && mark.source === 'web') {
+        const held = await library.readWebMark(ctx, mark.rowId ? { rowId: mark.rowId } : { url: mark.url }, mark.markId).catch(() => null);
+        crop = held && held.box && typeof held.crop === 'string' ? held.crop : null;
+      }
       // The ask is an agent of its workspace: running now, waiting for you once its answer (or failure) has landed.
       started = track(() => projects.agentStarted(ctx, { id: askId, kind: agent, projectId: pid, workspaceId: question.workspaceId, doc: question.ref }));
       // Progress goes to the window that asked, which holds the pending line; the answer it places is saved (write-doc).
-      const out = await bart.ask(ctx, str(pid, 'project id', 64), question, { onProgress: (progress) => answer(win, 'engelbart:bart-progress', { askId, ...progress }) });
+      const out = await bart.ask(ctx, projectId, question, { onProgress: (progress) => { paperProgress(askId, progress); answer(win, 'engelbart:bart-progress', { askId, ...progress }); } });
       if (started) track(() => projects.agentFinished(ctx, askId));
-      return out;
+      if (!mark) return out;
+      const entry = askEntry({ id: askId, question: question.text, lines: out.lines, meta: out.meta, at: new Date().toISOString(), crop });
+      try { await library.addMarkAnswer(ctx, mark.rowId ? { rowId: mark.rowId } : { url: mark.url }, mark.page, mark.markId, entry); } catch { /* the Stage still has it to show and save */ }
+      paperDone({ askId, ...mark, entry });
+      return { ...out, entry };
     } catch (error) {
       const stopped = !!(error && error.kind === 'stopped');
       if (started) track(() => (stopped ? projects.agentStopped(ctx, askId) : projects.agentFinished(ctx, askId)));
-      if (stopped) return { stopped: true };
-      return { failed: true, lines: failureLines(error && error.message) };
+      const out = stopped ? { stopped: true } : { failed: true, lines: failureLines(error && error.message) };
+      if (mark) paperDone({ askId, ...mark, ...out });
+      return out;
     }
+  });
+  // The questions from highlights a window asked in this project that are still running, each as its box shows it
+  // ({ askId, markId, page, rowId, url, question, agent, …progress }): a window reloaded meanwhile shows them again.
+  handleFor('running-paper-asks', (win, pid) => {
+    const projectId = str(pid, 'project id', 64);
+    return [...paperAsks.values()].filter((held) => held.projectId === projectId && (!win || held.win === win))
+      .map(({ askId, markId, page, rowId, url, source, question, progress }) => ({ ...progress, askId, markId, page, rowId, url, ...(source ? { source } : {}), question, agent: 'bart' }));
   });
   handle('stop-bart', (askId) => bart.stop(str(askId, 'ask id', 64)));
   // What the @bart line's selector offers and what its flags are checked against: the models file,
@@ -434,6 +626,14 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     const value = choice && typeof choice === 'object' ? choice : {};
     return rememberModelChoice(place, { provider: str(value.provider, 'provider', 24), model: str(value.model, 'model', 24), effort: str(value.effort, 'effort', 24) });
   });
+  // Settings › Intelligence (2026-10-06, MATH-53; bart/settings.cjs): the models file as it is, every provider, with the last
+  // picks by hand and which CLIs can run; a save of the defaults it changes, which forgets the picks it overrules; and
+  // "Use default", which forgets one. Every window reads its @bart line's models again after either (models-changed).
+  if (modelSettings) {
+    handle('settings-models', () => modelSettings.read());
+    handle('save-settings-models', (patch) => { const out = modelSettings.save(patch); announce('engelbart:models-changed', {}); return out; });
+    handle('clear-model-choice', (place) => { const out = modelSettings.forget(str(place, 'place', 24)); announce('engelbart:models-changed', {}); return out; });
+  }
   // Copy all under an answer: a question and its answer, as they read in the document.
   handle('copy-text', (text) => { writeClipboard(str(text, 'text', 400000)); return true; });
 
@@ -535,7 +735,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     if (row.type === 'pdf') pdfAdded(); // its text is read for search now (context/sweeper.cjs)
     if (store.recheck && pdfCandidate(row)) store.recheck(ctx);
     // Adding a local clone or a non-GitHub item does not start remote work.
-    if (sandbox && Array.isArray(row.tags) && row.tags.includes('git') && /^(?:https?:\/\/(?:www\.)?github\.com\/|git@github\.com:)/i.test(value.trim())) {
+    if (sandbox && Array.isArray(row.tags) && row.tags.includes('git') && /^(?:(?:https?:\/\/)?(?:www\.)?github\.com\/|git@github\.com:)/i.test(value.trim())) {
       try { await sandbox.start(ctx, row.id, { waitForClaude: true }); } catch (error) { return { ...row, sandbox_error: error.message }; }
     }
     return row;
@@ -636,6 +836,11 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // "Choose from disk…": the native picker, files and folders, several at once.
   handle('pick-library-paths', (kind) => pickPaths(kind === 'pdf' ? 'pdf' : 'any'));
   handle('preview-library-item', withCtx((ctx, id) => library.previewItem(ctx, str(id, 'library id', 64), { listRemoteFiles })));
+  // The files inside a library folder (MATH-22): a level of it for the @ menu, a mentioned file found again (to open it),
+  // and whether the mentioned files on screen are still there. Paths are relative to the folder and never leave it.
+  handle('list-folder', withCtx((ctx, id, rel) => folderFiles.listFolder(ctx, str(id, 'library id', 64), rel == null ? '' : str(rel, 'path', 4096))));
+  handle('folder-file', withCtx((ctx, id, rel) => folderFiles.folderFile(ctx, str(id, 'library id', 64), str(rel, 'path', 4096))));
+  handle('folder-files', withCtx((ctx, list) => folderFiles.folderFiles(ctx, list)));
   saving('rename-library-item', withCtx(async (ctx, id, name) => {
     const row = await ctx.libraryDb.get(str(id, 'library id', 64));
     if (!row) throw new Error('Unknown library item');
@@ -685,4 +890,4 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   });
 }
 
-module.exports = { createStore, registerEngelbartIpc };
+module.exports = { createStore, registerEngelbartIpc, docRef, docKeyOf, highlightInput, stageInput, turnsInput };

@@ -24,7 +24,9 @@ a.notification-repo:hover{text-decoration:underline;text-underline-offset:3px}
 .notification-status-line{display:flex;align-items:center;gap:6px;min-width:0}
 .notification-sandbox{display:inline-flex;align-items:center;gap:5px;color:#777;font-size:11px;line-height:1.5}
 .notification-sandbox::before{content:"";width:6px;height:6px;border-radius:50%;background:#c9c9c9}
-.notification-sandbox[data-sandbox="running"]::before{background:#1a7f37}
+/* Running: a plain green dot (2026-10-06: no ring, no pulse). */
+.notification-sandbox[data-sandbox="running"]{color:#4d4d4d}
+.notification-sandbox[data-sandbox="running"]::before{background:#22c55e}
 .notification-detail{color:#777;font-size:11px;overflow-wrap:anywhere;max-height:64px;overflow:auto}
 .notification-error{margin:8px 10px;color:#b91c1c;overflow-wrap:anywhere}
 .notification-run-actions{display:flex;align-items:center;gap:6px;flex:none}

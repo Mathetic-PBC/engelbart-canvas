@@ -238,7 +238,7 @@ const PDF = (place) => ({ kind: 'pdf', url: `file://${place}`, path: place, name
  * says what it was asked. `nodes`: stand-in DOM nodes for the elements with those attributes (`data-stage-view`, …).
  * What else it asks of main is in `calls`; what it listens to main for, in `on`.
  */
-function stage({ file = PDF, nodes = {}, api: own = {}, library = [] } = {}) {
+function stage({ file = PDF, nodes = {}, api: own = {}, library = [], props: more = {} } = {}) {
   const hooks = hookRunner((tree) => {
     for (const [attribute, node] of Object.entries(nodes)) for (const el of findAll(tree, (p) => p[attribute] != null)) if (el.props.ref) el.props.ref.current = node;
   });
@@ -258,7 +258,7 @@ function stage({ file = PDF, nodes = {}, api: own = {}, library = [] } = {}) {
   globalThis.requestAnimationFrame = () => 0;
   const Stage = load('workspace/Stage.jsx', { react: hooks.fake }).default;
   const ref = { current: null };
-  const props = { projectId: 'p1', visible: true, library, inRail: () => false };
+  const props = { projectId: 'p1', visible: true, library, inRail: () => false, ...more };
   let tree = hooks.run(Stage, props, ref);
   const asked = [];
   const paper = {
@@ -275,6 +275,7 @@ function stage({ file = PDF, nodes = {}, api: own = {}, library = [] } = {}) {
     open: (href, options) => { ref.current.openInput(href, options); tree = hooks.run(Stage, props, ref); },
     settle: async () => { for (let n = 0; n < 5; n += 1) await new Promise((resolve) => setImmediate(resolve)); tree = hooks.run(Stage, props, ref); },
     rerender: () => { tree = hooks.run(Stage, props, ref); },
+    front: () => ref.current.front(),
     fire: (type) => { for (const fn of [...(listeners[type] || [])]) fn({ type }); },
     paper: () => { const [view] = findAll(tree, 'PaperView'); if (view) view.props.ref.current = paper; return view; },
     one: (name) => findAll(tree, name)[0] || null,
@@ -350,6 +351,117 @@ test.describe('the Stage', () => {
     card.props.onClose();
     s.rerender();
     assert.deepEqual(s.asked, [['stopFind'], ['clearSection']], 'closing find takes the section, as it did');
+  });
+});
+
+/* ---------------------------------------------------------------------------------- Stage: @bart on a highlight */
+
+// MATH-27 (2026-10-06): a highlight's note asks through the Stage, which says which pdf it is (a pdf from disk or the web
+// by its address, a library row by its id) and gives the viewer the answers being written for its own pdf alone. The
+// finished answer goes onto its mark through the viewer showing that pdf, else straight into the ink kept for it.
+test.describe('the Stage: @bart on a highlight', () => {
+  test.afterEach(() => { delete globalThis.window; delete globalThis.requestAnimationFrame; globalThis.document = { baseURI: 'file:///app/index.html' }; });
+  const ENTRY = { id: 'h1', question: 'why?', answer: 'Because.', meta: {}, at: 'now', pos: null, collapsed: false };
+  const ASK = { markId: 'm1', page: 2, quote: 'the passage', note: '@bart why?', question: 'why?', turns: [] };
+
+  test('the question goes up with the pdf\'s address and name; the viewer is given its own answers being written; the answer lands through it', async () => {
+    const up = [];
+    const pending = [{ askId: 'h1', markId: 'm1', page: 2, url: `file://${PAPER}`, rowId: null }, { askId: 'h9', markId: 'x', page: 1, url: 'https://elsewhere.org/a.pdf', rowId: null }, { askId: 'h8', markId: 'y', page: 1, rowId: 'row-1', url: null }];
+    const s = stage({ props: { onAsk: async (ask) => { up.push(ask); return ENTRY; }, pendingAsks: pending, onStopAsk: () => {}, onContinueAsk: () => {} } });
+    s.open(PAPER);
+    await s.settle();
+    const view = s.paper();
+    assert.deepEqual(view.props.pendingAsks.map((p) => p.askId), ['h1'], 'its own pdf\'s alone');
+    const landed = [];
+    view.props.ref.current.addAsk = (...args) => { landed.push(args); return true; };
+    view.props.onAsk(ASK);
+    await s.settle();
+    assert.deepEqual(up, [{ ...ASK, url: `file://${PAPER}`, paper: 'Scim.pdf' }]);
+    assert.deepEqual(landed, [[2, 'm1', ENTRY]], 'onto its mark, through the viewer, which saves it');
+    assert.ok(!s.calls.some(([name]) => name === 'writePageAnnotations'), 'nothing written behind its back');
+  });
+
+  test('with no viewer showing the mark, the answer goes into the tab that holds it; the kept ink is main\'s to write', async () => {
+    const kept = { 2: [{ id: 'm1', rects: [{ x: 0.1, y: 0.2, w: 0.3, h: 0.01 }], note: '@bart why?' }] };
+    const s = stage({ api: { readPageAnnotations: async () => JSON.parse(JSON.stringify(kept)) }, props: { onAsk: async () => ENTRY } });
+    s.open(PAPER);
+    await s.settle();
+    const view = s.paper();
+    view.props.ref.current.addAsk = () => false; // the viewer no longer has that mark
+    view.props.onAsk(ASK);
+    await s.settle();
+    assert.deepEqual(s.paper().props.marks[2][0].asks, [ENTRY], 'the tab\'s ink has it');
+    assert.ok(!s.calls.some(([name]) => /^write(Page)?Annotations$/.test(name)), 'main has put it in the ink kept for the pdf (library.addMarkAnswer)');
+  });
+
+  // Second pass (2026-10-06): the same pdf in two tabs. Only the tab in front has a viewer; the other must not keep ink
+  // from before, or brought forward and edited it saves that over the answer.
+  const twoTabs = async (props = {}) => {
+    const kept = { 2: [{ id: 'm1', rects: [{ x: 0.1, y: 0.2, w: 0.3, h: 0.01 }], note: '@bart why?' }] };
+    const s = stage({ api: { readPageAnnotations: async () => JSON.parse(JSON.stringify(kept)) }, props });
+    s.open(PAPER);
+    await s.settle();
+    const first = s.paper().key;
+    s.open(PAPER, { newTab: true });
+    await s.settle();
+    assert.notEqual(s.paper().key, first, 'a second tab, in front, with a viewer of its own');
+    const landed = [];
+    s.paper().props.ref.current.addAsk = (...args) => { landed.push(args); return true; };
+    const back = async () => { // a press on the first tab in the strip
+      const [behind] = findAll(s.tree, (p) => p.className === 'hov-tab');
+      behind.props.onMouseDown({ button: 0 });
+      await s.settle();
+      assert.equal(s.paper().key, first, 'the first tab in front again');
+    };
+    return { s, landed, back, first };
+  };
+
+  test('an answer landing through the viewer in front reaches the other tab holding the pdf too', async () => {
+    const { s, landed, back } = await twoTabs({ onAsk: async () => ENTRY });
+    s.paper().props.onAsk(ASK);
+    await s.settle();
+    assert.deepEqual(landed, [[2, 'm1', ENTRY]], 'through the viewer, which saves it');
+    await back();
+    assert.deepEqual(s.paper().props.marks[2][0].asks, [ENTRY], 'the other tab\'s viewer opens with the answer: moving a box there saves it with it');
+  });
+
+  test('what the viewer saves, every tab holding the pdf takes: brought forward, one never saves the ink it read before', async () => {
+    const { s, back } = await twoTabs();
+    const moved = { 2: [{ id: 'm1', rects: [{ x: 0.1, y: 0.2, w: 0.3, h: 0.01 }], note: '@bart why?', pos: { x: 1.1, y: 0.2 }, asks: [ENTRY] }] };
+    s.paper().props.onMarksChange(moved);
+    await s.settle();
+    assert.deepEqual(s.calls.filter(([name]) => name === 'writePageAnnotations').map((call) => call.slice(1)), [[`file://${PAPER}`, moved]]);
+    await back();
+    assert.deepEqual(s.paper().props.marks, moved);
+  });
+
+  test('main telling every window how an ask ended puts its answer on the mark in each tab holding the pdf, as after ⌘R; a failure or another pdf\'s changes nothing', async () => {
+    const { s, landed, back } = await twoTabs();
+    assert.equal(typeof s.on.onPaperAskDone, 'function', 'the Stage listens');
+    const where = { markId: 'm1', page: 2, rowId: null, url: `file://${PAPER}` };
+    s.on.onPaperAskDone({ askId: 'h3', ...where, failed: true, lines: ['bart> **No answer.** The CLI quit.'] });
+    s.on.onPaperAskDone({ askId: 'h4', ...where, url: 'https://elsewhere.org/a.pdf', entry: { ...ENTRY, id: 'h4' } });
+    s.rerender();
+    assert.deepEqual(landed, []);
+    s.on.onPaperAskDone({ askId: 'h1', ...where, entry: ENTRY });
+    s.on.onPaperAskDone({ askId: 'h1', ...where, entry: ENTRY }); // the window that asked hears it with its answer too
+    s.rerender();
+    assert.deepEqual(landed, [[2, 'm1', ENTRY], [2, 'm1', ENTRY]], 'the viewer in front is given it (and keeps it once: PaperView addAsk)');
+    assert.deepEqual(s.paper().props.marks[2][0].asks, [ENTRY], 'once');
+    await back();
+    assert.deepEqual(s.paper().props.marks[2][0].asks, [ENTRY]);
+    assert.ok(!s.calls.some(([name]) => /^write(Page)?Annotations$/.test(name)), 'nothing written: main has');
+  });
+
+  test('without a workspace to ask from, a note asks nothing; Continue says which paper', async () => {
+    const continued = [];
+    const s = stage({ props: { onContinueAsk: (c) => continued.push(c) } });
+    s.open(PAPER);
+    await s.settle();
+    const view = s.paper();
+    assert.equal(view.props.onAsk, undefined);
+    view.props.onContinueAsk({ markId: 'm1', page: 2, quote: 'q', question: 'why?', answer: 'A', foot: '' });
+    assert.deepEqual(continued[0].paper, { name: 'Scim.pdf', rowId: null, url: `file://${PAPER}` });
   });
 });
 
@@ -488,6 +600,39 @@ test.describe('the Stage: a passage in a page or a drawn file', () => {
     s.rerender();
     assert.equal(s.one('FindCard').props.text, SECTIONS[0].find);
     assert.deepEqual(finds(s), [], 'a pdf is found by its viewer');
+  });
+});
+
+// MATH-54 (2026-10-06): what is in front for @bart's <stage>: a web page by where it is now and its title; a pdf and a
+// drawn file as before.
+test.describe('the Stage: what is in front for @bart', () => {
+  test.afterEach(() => {
+    for (const name of ['window', 'requestAnimationFrame', 'ResizeObserver', 'MutationObserver', 'CSS', 'Highlight', 'NodeFilter']) delete globalThis[name];
+    globalThis.document = { baseURI: 'file:///app/index.html' };
+  });
+
+  test('a web page is { kind: "web", url, title, tab }, the page as it is now, and the tab main asks for its selection and picture', async () => {
+    const s = pageStage();
+    s.open(ESSAY);
+    await s.settle();
+    const id = opened(s);
+    assert.deepEqual(s.front(), { kind: 'web', url: ESSAY, title: '', tab: id }, 'not loaded yet: where it is going');
+    loaded(s, id);
+    assert.deepEqual(s.front(), { kind: 'web', url: ESSAY, title: 'How might we learn?', tab: id });
+    loaded(s, id, 'https://andymatuschak.org/hmwl/#notes');
+    assert.equal(s.front().url, 'https://andymatuschak.org/hmwl/#notes', 'where the tab went (main files it without the fragment)');
+  });
+
+  test('a pdf and a drawn file are as before', async () => {
+    const s = stage();
+    s.open(PAPER);
+    await s.settle();
+    s.paper();
+    assert.deepEqual(s.front(), { rowId: null, url: `file://${PAPER}`, page: 1, kind: 'pdf' });
+    const { s: file } = fileStage();
+    file.open(NOTES);
+    await file.settle();
+    assert.deepEqual(file.front(), { rowId: null, url: null, page: 1, kind: 'file' });
   });
 });
 
