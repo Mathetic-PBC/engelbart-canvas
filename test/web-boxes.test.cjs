@@ -564,11 +564,13 @@ test('what shows under a box: centre in the box and the viewport, visible, and n
   assert.deepEqual(PAGE.VISIBILITY, { opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true });
 });
 
-test('the card goes beside the box: to its right with room, else its left, else against the page\'s edge; never outside the page; none for a box out of view', () => {
+test('the card goes beside the box: to its right with room, else its left, else under it, else over it, else against the page\'s edge; never outside the page; none for a box out of view', () => {
   const page = { x: 0, y: 40, width: 800, height: 600 }, size = { width: 336, height: 120 };
   assert.deepEqual(BOX.cardPlace({ x: 100, y: 90, width: 200, height: 100 }, page, size), { x: 308, y: 90, width: 336, height: 120 });
   assert.deepEqual(BOX.cardPlace({ x: 500, y: 90, width: 200, height: 100 }, page, size), { x: 156, y: 90, width: 336, height: 120 });
-  assert.deepEqual(BOX.cardPlace({ x: 100, y: 90, width: 650, height: 100 }, page, size), { x: 464, y: 90, width: 336, height: 120 });
+  assert.deepEqual(BOX.cardPlace({ x: 100, y: 90, width: 650, height: 100 }, page, size), { x: 100, y: 198, width: 336, height: 120 }); // under a wide box
+  assert.deepEqual(BOX.cardPlace({ x: 100, y: 450, width: 650, height: 150 }, page, size), { x: 100, y: 322, width: 336, height: 120 }); // over it, no room under
+  assert.deepEqual(BOX.cardPlace({ x: 100, y: 60, width: 650, height: 560 }, page, size), { x: 464, y: 60, width: 336, height: 120 }); // room nowhere: the edge
   assert.deepEqual(BOX.cardPlace({ x: 100, y: 600, width: 100, height: 300 }, page, size), { x: 208, y: 520, width: 336, height: 120 }); // up into the page
   assert.deepEqual(BOX.cardPlace({ x: 100, y: -50, width: 100, height: 200 }, page, size), { x: 208, y: 40, width: 336, height: 120 });
   assert.equal(BOX.cardPlace({ x: 100, y: 640, width: 100, height: 100 }, page, size), null); // below the page
@@ -724,6 +726,13 @@ test('the card: one view per window beside the selected box on the tab in front,
   assert.equal(card.bounds.width, VIEWS.CARD_W);
   card.webContents.ipc.listeners.get(CARD.CHANNELS.size)(fromCard, { height: 180.2 });
   assert.equal(card.bounds.width, VIEWS.CARD_W);
+  // a box's size is kept: selected again, its card is placed at that size at once (2026-10-07)
+  card.webContents.ipc.listeners.get(CARD.CHANNELS.size)(fromCard, { height: 180.2, width: 200.4 });
+  view({ id: 'b2', rect: { x: 100, y: 50, w: 200, h: 100 }, viewport: { width: 800, height: 600 }, scrolling: false });
+  assert.equal(card.bounds.width, VIEWS.CARD_W, 'another box: not yet measured');
+  view({ id: 'b1', rect: { x: 100, y: 50, w: 200, h: 100 }, viewport: { width: 800, height: 600 }, scrolling: false });
+  assert.deepEqual([card.bounds.width, card.bounds.height], [201, 181], 'b1 again: its own size');
+  card.webContents.ipc.listeners.get(CARD.CHANNELS.size)(fromCard, { height: 180.2 });
   view({ id: 'b1', rect: { x: 500, y: 10, w: 200, h: 100 }, viewport: { width: 800, height: 600 }, scrolling: true });
   assert.deepEqual(card.bounds, { x: 156, y: 50, width: VIEWS.CARD_W, height: 181 });
   assert.equal(card.visible, VIEWS.CARD_HIDE_WHILE_SCROLLING ? false : true);

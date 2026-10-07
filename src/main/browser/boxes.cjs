@@ -97,19 +97,24 @@ const handlesOf = (r) => HANDLES.map(([name, fx, fy]) => ({ name, x: r.x + fx * 
 
 /**
  * Where a selected box's card goes (`box` and `page`, the page view's bounds, both { x, y, width, height } in the window;
- * `size` the card's { width, height }): to the box's right when there is room in the page, else to its left, else against
- * the page's right edge; its top level with the box's, and the whole card inside the page. null when the box is out of
- * view (no part of it in the page).
+ * `size` the card's { width, height }): to the box's right when there is room in the page, else to its left, its top level
+ * with the box's; with room on neither side (a wide box), under the box at its left edge, else over it, and only else
+ * against the page's right edge (2026-10-07: that edge could be far from the box, David). The whole card inside the page.
+ * null when the box is out of view (no part of it in the page).
  */
 function cardPlace(box, page, size, gap = CARD_GAP) {
   if (![box, page, size].every((r) => r && [r.width, r.height].every(Number.isFinite))) return null;
   if (box.x + box.width <= page.x || box.x >= page.x + page.width || box.y + box.height <= page.y || box.y >= page.y + page.height) return null;
   const width = Math.min(size.width, page.width), height = Math.min(size.height, page.height);
   const right = box.x + box.width + gap, left = box.x - gap - width;
-  let x = right + width <= page.x + page.width ? right : left >= page.x ? left : page.x + page.width - width;
-  x = Math.max(page.x, Math.min(x, page.x + page.width - width));
-  const y = Math.max(page.y, Math.min(box.y, page.y + page.height - height));
-  return { x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) };
+  const inX = (x) => Math.max(page.x, Math.min(x, page.x + page.width - width)), inY = (y) => Math.max(page.y, Math.min(y, page.y + page.height - height));
+  const at = (x, y) => ({ x: Math.round(inX(x)), y: Math.round(inY(y)), width: Math.round(width), height: Math.round(height) });
+  if (right + width <= page.x + page.width) return at(right, box.y);
+  if (left >= page.x) return at(left, box.y);
+  const below = box.y + box.height + gap, above = box.y - gap - height;
+  if (below + height <= page.y + page.height) return at(box.x, below);
+  if (above >= page.y) return at(box.x, above);
+  return at(page.x + page.width - width, box.y);
 }
 
 /**

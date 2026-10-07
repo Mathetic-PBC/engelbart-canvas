@@ -930,7 +930,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
   /* --------------------------------------------------------------------------------- the selected box's card */
 
   // One per window, made the first time a box is selected: { view, ready, tab, markId, height, running, note }.
-  const card = { view: null, ready: false, tab: null, markId: null, height: 0, width: 0, running: [], note: null, saving: Promise.resolve(), queued: null };
+  const card = { view: null, ready: false, tab: null, markId: null, height: 0, width: 0, sizes: new Map(), running: [], note: null, saving: Promise.resolve(), queued: null };
   /** Messages from the card's own page alone (box-card.html, its main frame). */
   function fromCard(event) {
     try { assertTrustedRenderer(event, BOX_CARD_URL); } catch { return false; }
@@ -963,6 +963,10 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
         if (!fromCard(event) || !Number.isFinite(height)) return;
         card.height = Math.max(CARD_MIN_H, Math.min(CARD_MAX_H, Math.ceil(height)));
         card.width = Number.isFinite(width) && width > 0 ? Math.min(CARD_W, Math.ceil(width)) : 0;
+        // kept a box (the last 200), so the card is placed at its own size the next time that box is selected, not first
+        // at the widest and then moved (2026-10-07)
+        if (card.markId) { card.sizes.delete(card.markId); card.sizes.set(card.markId, { height: card.height, width: card.width }); }
+        if (card.sizes.size > 200) card.sizes.delete(card.sizes.keys().next().value);
         if (card.tab) placeCard(card.tab);
       });
     }
@@ -1038,7 +1042,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     if (!sel || !entry.view.getVisible() || !pageMarks || !win || win.isDestroyed()) { if (card.tab === id) hideCard(); return; }
     if (layer.tab === id) { hideCardView(); return; }
     const view = cardView();
-    if (card.tab !== id || card.markId !== sel.id) { hideCardView(); card.tab = id; card.markId = sel.id; card.note = null; card.height = 0; card.width = 0; void refreshCard(); }
+    if (card.tab !== id || card.markId !== sel.id) { hideCardView(); card.tab = id; card.markId = sel.id; card.note = null; const kept = card.sizes.get(sel.id); card.height = kept ? kept.height : 0; card.width = kept ? kept.width : 0; void refreshCard(); }
     if (CARD_HIDE_WHILE_SCROLLING && sel.scrolling) { hideCardView(); return; }
     const zoom = entry.view.webContents.getZoomFactor() || 1, page = entry.view.getBounds();
     const box = { x: page.x + sel.rect.x * zoom, y: page.y + sel.rect.y * zoom, width: sel.rect.w * zoom, height: sel.rect.h * zoom };
