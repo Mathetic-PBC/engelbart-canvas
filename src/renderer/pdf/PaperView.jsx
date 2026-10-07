@@ -9,7 +9,7 @@
 // pane, and every zoom is that width times the percentage, so a resized pane keeps its zoom and
 // redraws. Pages are centered with no gutter of their own; a floating bar at the bottom shows the
 // page and zoom; a pinch (or ⌘ / ⌃ scroll) zooms around the pointer.
-// `target` (2026-09-30): a passage a link asked for. Once every page is drawn it is found from page 1, scrolled to and
+// `target` (2026-09-30): a passage a link asked for. Once every page's text is drawn it is found from page 1, scrolled to and
 // shown as a section (showSection), and told through onTarget(text, result); once per target, until the prop is cleared
 // and given again. Nothing matching leaves the scroll where it is. `targetTo` (@discover round 2): the first words of the
 // section after it; the stretch from the passage to just before them, up to six pages on, is tinted (SECTION), else the
@@ -76,6 +76,7 @@ import rough from 'roughjs';
 import { mergeLineRects, placeHighlight, boxSeed, selectionParts, scalePart, partMarks, passageOf, stackNotes, wordBounds, pdfText, pageWindow } from './marks.js';
 import { nextFind, createTargetGate, sectionSpans, paintSection, clearFind, FIND, FIND_ACTIVE } from '../model/find.js';
 import { wheelZooms, wheelZoom, createPageCache } from '../model/paper-zoom.js';
+import { nearOrder, allOrder, tooFar, DRAW_AHEAD } from '../model/paper-draw.js';
 import { mentionAt, libMention, fileMention, fileMentionOf, noteHtml, noteInkHtml, noteParts, noteOffset, inlineHtml, esc, LIB_MENTION_RE } from '../model/doc.js';
 import { isFolderRow, folderRows, firstPick, parentRel } from '../model/rail.js';
 import { sideSpace, deskOf, deskGeom, deskNeed, placeOf, posOf, spaceBoxes, extentAt, fitZoom, offscreen, noteQuestion, askedByNote, turnsOf, shownAsks, keptMarks, runningLabel, blankAt, textColumn, DESK, DESK_EDGE, BOX_GAP, ASK_W, NOTE_W, SIDE_GAP, POS_DY, LINE, PRESS_MOVE } from './canvas.js';
@@ -279,6 +280,10 @@ export default class PaperView extends React.Component {
     this.layoutGen = 0; // page-layout generation
     this.renderTask = null;
     this.textLayer = null;
+    this.drawGen = 0; // the layout whose sheets are in the DOM, once they are (drawSoon draws for it alone)
+    this.pumping = 0; // the layout whose pages drawPages is drawing now
+    this.textsAt = 0; // the layout whose pages all have their text
+    this.drawingPage = 0; // the page renderTask is drawing
     this.pdfG = 150; // page 1's side space (per-page values live in this.geo)
     this.pdfW = null; // pane width of the current layout
     this.pageW = null; // page 1's drawn width
@@ -332,7 +337,7 @@ export default class PaperView extends React.Component {
     this.onScroll = () => {
       if (this.state.mention) this.closeMention();
       if (this.scrollRaf) return;
-      this.scrollRaf = requestAnimationFrame(() => { this.scrollRaf = 0; this.syncBar(); this.syncOffscreen(); });
+      this.scrollRaf = requestAnimationFrame(() => { this.scrollRaf = 0; this.syncBar(); this.syncOffscreen(); this.drawSoon(); });
     };
     // Panning (MATH-27): Space held over the paper, or the middle button, and a drag moves the view both ways. Caught
     // before anything inside: no selection starts, no note is made, no box is grabbed.
@@ -894,48 +899,123 @@ export default class PaperView extends React.Component {
     this.syncBar();
     this.syncOffscreen();
 
-    // Draw the page in view first, then the one above it, then onward, then the rest above.
-    const cur = this.currentPage() || 1;
-    const order = [cur];
-    if (cur > 1) order.push(cur - 1);
-    for (let n = cur + 1; n <= N; n += 1) order.push(n);
-    for (let n = cur - 2; n >= 1; n -= 1) order.push(n);
+    // Drawn from the page in view outward, chosen again before each page (drawPages).
+    this.drawGen = gen;
+    await this.drawPages(gen);
+  }
+
+  // The pages the view shows, by the sheets' tops: { first, last, current }, or null before a layout.
+  viewRange() {
+    const host = this.host.current;
+    if (!host || !this.tops.length) return null;
+    const css = this.css || 1;
+    return { first: pageAt(this.tops, host.scrollTop / css), last: pageAt(this.tops, (host.scrollTop + host.clientHeight) / css), current: this.currentPage() };
+  }
+
+  /* Pages drawn as the view needs them (MATH-71, ../model/paper-draw.js): one at a time, the next chosen again before
+     each, so a scroll while drawing moves what comes next. The pages in view and DRAW_AHEAD each side get a drawing
+     and their text; then every other page gets its text alone (find and a link's passage search every page). A page
+     more than KEEP_DRAWN from the view gives its drawing back, and is drawn again when a scroll brings it near
+     (drawSoon). The first time a layout's pages all have their text, a search and a passage are found again. */
+  async drawPages(gen) {
+    if (this.pumping === gen) return;
+    this.pumping = gen;
     try {
-      for (const n of order) {
+      for (;;) {
         if (gen !== this.layoutGen) return;
-        const page = this.pages[n], g = geo[n], s = sheets[n];
-        const vp = page.getViewport({ scale: g.scale }), vp2 = page.getViewport({ scale: g.scale * canvasScale(g.pageW, g.pageH) });
-        const c = document.createElement('canvas');
-        c.width = Math.max(1, Math.floor(vp2.width)); c.height = Math.max(1, Math.floor(vp2.height));
-        const task = page.render({ canvasContext: c.getContext('2d'), viewport: vp2 });
-        this.renderTask = task;
-        try { await task.promise; } catch (err) { if (gen !== this.layoutGen) return; }
-        this.renderTask = null;
-        if (gen !== this.layoutGen) return;
-        if (s.canvas) s.canvas.replaceWith(c); else s.wrap.prepend(c);
-        s.canvas = c;
-        this.place(n);
-        try {
-          const textLayer = new pdfjsLib.TextLayer({ textContentSource: await this.texts.get(n), container: s.tl, viewport: vp });
-          if (gen !== this.layoutGen) return;
-          this.textLayer = textLayer;
-          await textLayer.render();
-          this.textLayer = null;
-          const end = document.createElement('div');
-          end.className = 'endOfContent';
-          s.tl.append(end);
-        } catch (err) { /* a page without a text layer is still readable */ }
-        if (gen !== this.layoutGen) return;
-        // Free notes size themselves around the printed text, which only now exists.
-        if ((this.marks[n] || []).some((m) => m.pos && m.note != null && !(m.rects || []).length)) this.renderMarks(n);
+        const n = this.nextDraw();
+        if (!n) break;
+        await this.drawPage(n, gen);
       }
+      if (gen !== this.layoutGen || this.textsAt === gen) return;
+      this.textsAt = gen;
       if (this.findQuery) this.report(this.find(this.findQuery, 0, { scroll: false }));
       if (this.section) { this.section.spot = this.sectionStart(this.section.text).spot; this.paintSection(); } // the text layer was drawn again: found again
       const text = this.gate.drawn();
       if (text) this.applyTarget(text);
     } catch (err) {
       if (gen === this.layoutGen) this.setState({ note: 'Could not draw the paper — ' + ((err && err.message) || err) });
+    } finally {
+      if (this.pumping === gen) this.pumping = 0;
     }
+  }
+
+  // After a scroll: the pages now near the view drawn, if the loop is not already at it. A drawing under way of a page
+  // that has gone far from the view is stopped (it is drawn again when it comes back).
+  drawSoon() {
+    if (!this.inner || this.drawGen !== this.layoutGen) return;
+    const r = this.viewRange(), n = this.drawingPage, s = n && this.sheets[n];
+    if (r && s && this.renderTask && tooFar(n, r.first, r.last, DRAW_AHEAD)) {
+      s.stopped = true;
+      try { this.renderTask.cancel(); } catch (e) { /* already done */ }
+    }
+    if (this.pumping !== this.layoutGen) this.drawPages(this.layoutGen);
+  }
+
+  // The next page to draw (nearest the view first), drawings far from the view given back on the way; null when done.
+  nextDraw() {
+    const r = this.viewRange(), N = this.tops.length;
+    if (!r) return null;
+    for (let n = 1; n <= N; n += 1) { const s = this.sheets[n]; if (s && s.canvas && tooFar(n, r.first, r.last)) this.dropDrawing(s); }
+    for (const n of nearOrder(r.first, r.last, r.current, N)) { const s = this.sheets[n]; if (s && ((!s.drawn && !s.failed) || !s.texted)) return n; }
+    for (const n of allOrder(r.first, r.last, r.current, N)) { const s = this.sheets[n]; if (s && !s.texted) return n; }
+    return null;
+  }
+
+  // A sheet's drawing given back: its canvas emptied (the memory goes at once, not when it is collected) and taken
+  // out; the white page shows until it is drawn again.
+  dropDrawing(s) {
+    const c = s.canvas;
+    s.canvas = null; s.drawn = false; s.failed = false;
+    c.width = 0; c.height = 0;
+    c.remove();
+  }
+
+  // Page n drawn as it is laid out now: its canvas if it is near the view, then its text layer if it has none. A drawing
+  // that fails leaves the one before it (stretched, or the white page) and is tried again at the next layout.
+  async drawPage(n, gen) {
+    const page = this.pages[n], g = this.geo[n], s = this.sheets[n], r = this.viewRange();
+    if (!page || !g || !s) return;
+    if (!s.drawn && !s.failed && r && !tooFar(n, r.first, r.last, DRAW_AHEAD)) {
+      const vp2 = page.getViewport({ scale: g.scale * canvasScale(g.pageW, g.pageH) });
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.floor(vp2.width)); c.height = Math.max(1, Math.floor(vp2.height));
+      const task = page.render({ canvasContext: c.getContext('2d'), viewport: vp2 });
+      this.renderTask = task; this.drawingPage = n;
+      let ok = true;
+      try { await task.promise; } catch (err) { ok = false; }
+      if (this.renderTask === task) { this.renderTask = null; this.drawingPage = 0; }
+      if (gen !== this.layoutGen) return;
+      if (!ok) {
+        if (!s.stopped) s.failed = true;
+        s.stopped = false;
+        c.width = 0; c.height = 0;
+        return;
+      }
+      // Over the white page (s.bg) and under the highlights: a canvas put before the white page is hidden by it.
+      if (s.canvas) { const was = s.canvas; was.replaceWith(c); was.width = 0; was.height = 0; } else s.wrap.insertBefore(c, s.hl);
+      s.canvas = c; s.drawn = true;
+      // A canvas Chromium let go of under memory pressure comes back blank: drawn again.
+      if (c.addEventListener) c.addEventListener('contextrestored', () => { if (s.canvas === c) { s.drawn = false; this.drawSoon(); } });
+      this.place(n);
+    }
+    if (s.texted) return;
+    try {
+      const vp = page.getViewport({ scale: g.scale });
+      const textLayer = new pdfjsLib.TextLayer({ textContentSource: await this.texts.get(n), container: s.tl, viewport: vp });
+      if (gen !== this.layoutGen) return;
+      this.textLayer = textLayer;
+      await textLayer.render();
+      if (this.textLayer === textLayer) this.textLayer = null;
+      if (gen !== this.layoutGen) return;
+      const end = document.createElement('div');
+      end.className = 'endOfContent';
+      s.tl.append(end);
+    } catch (err) { /* a page without a text layer is still readable */ }
+    if (gen !== this.layoutGen) return;
+    s.texted = true;
+    // Free notes size themselves around the printed text, which only now exists.
+    if ((this.marks[n] || []).some((m) => m.pos && m.note != null && !(m.rects || []).length)) this.renderMarks(n);
   }
 
   // The page whose sheet holds the vertical middle of the view.
