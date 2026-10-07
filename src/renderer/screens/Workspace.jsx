@@ -13,6 +13,7 @@ import { OPEN_IN_BROWSER } from '../model/address.js';
 import { adoptSession, dropSession, SHOW_TERMINAL } from '../terminal/sessions.js';
 import { letGoNotes, mentionRows, mentionedIds, pickedChanges } from '../model/rail.js';
 import { useBodies } from '../workspace/useBodies.js';
+import { useFolderFiles } from '../workspace/useFolderFiles.js';
 import { flatWorkspaces, nextPlace, placesToGo } from '../model/nav.js';
 import { onStage, savesPageCopy } from '../model/stage.js';
 import { paperState, savePaper, repoState, tryRepo } from '../model/guide.js';
@@ -55,7 +56,9 @@ import { repositoryClick, OPEN_SANDBOX_TERMINAL } from '../model/sandbox-notific
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const IMAGE_REF_RE = /\]\(img:([\w-]+)\)/g;
-const MENTION_RE = /@\[([^\]\n]+)\](?!\(ws:)/g; // a note or a library row by its name; `@[Name](ws:<id>)` is a workspace
+// A note or a library row by its name; `@[Name](ws:<id>)` is a workspace, `@[Name](lib:<folderId>:<path>)` a file in a
+// library folder (MATH-22), which is no row of its own.
+const MENTION_RE = /@\[([^\]\n]+)\](?!\(ws:|\(lib:[\w-]+:)/g;
 const SAVE_DELAY = 400;
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
 
@@ -913,6 +916,25 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     showRight('stage');
     stageRef.current.openRow(row, '', '', { newTab: !!options.newTab });
   }, [openTab, showWs, showRight]);
+  // A file inside a library folder, mentioned (MATH-22): found on disk now and opened in the Stage (a pdf in the paper
+  // viewer, its ink kept by its address as for any pdf opened from disk); one that is gone says so, and its chips
+  // turn grey.
+  const folderFiles = useFolderFiles();
+  const openFolderFile = React.useCallback(async ({ folderId, rel, name }, options = {}) => {
+    try {
+      const found = await api.folderFile(folderId, rel);
+      if (!found.exists) {
+        folderFiles.recheck(folderId, rel);
+        onError(new Error(`"${name || rel}" is no longer in ${found.folder || 'its folder'} (${rel})`));
+        return;
+      }
+      if (!stageRef.current) return;
+      showRight('stage');
+      stageRef.current.openFile(found.path, { newTab: !!options.newTab });
+    } catch (error) {
+      onError(error);
+    }
+  }, [folderFiles.recheck, showRight, onError]); // eslint-disable-line react-hooks/exhaustive-deps
   // A link in a document goes to the Stage too, never to the default browser; `{ newTab: true }` (⌘-click), in a tab of its own.
   const openLink = React.useCallback((href, options) => {
     if (!stageRef.current) return;
@@ -1497,6 +1519,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     mentionItems,
     onMentionOpen: setMentionOpen,
     onMentionPicked: mentionPicked,
+    listFolder: api.listFolder,
+    fileState: folderFiles.fileState,
+    onOpenFile: openFolderFile,
     workspacePeek,
     onOpenWorkspace: openMentionedWorkspace,
     onNoteVerb: (name) => makeNote(name, false),
@@ -1711,6 +1736,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onOpenItem={openItem}
           mentionItems={mentionItems}
           onMentionOpen={setMentionOpen}
+          listFolder={api.listFolder}
+          fileState={folderFiles.fileState}
+          onOpenFile={openFolderFile}
           pendingAsks={pendingPaperAsks}
           onAsk={topic ? askHighlight : undefined}
           onStopAsk={(askId) => api.stopBart(askId).catch((error) => onError(error))}

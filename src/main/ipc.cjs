@@ -12,6 +12,7 @@ const home = require('./store/home.cjs');
 const db = require('./store/db.cjs');
 const projects = require('./store/projects.cjs');
 const library = require('./store/library.cjs');
+const folderFiles = require('./store/folder-files.cjs');
 const { expandDoc } = require('./context/expand-mentions.cjs');
 const { failureLines } = require('./bart/reply.cjs');
 const { clipMiddle } = require('./bart/clip.cjs');
@@ -756,6 +757,11 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // "Choose from disk…": the native picker, files and folders, several at once.
   handle('pick-library-paths', (kind) => pickPaths(kind === 'pdf' ? 'pdf' : 'any'));
   handle('preview-library-item', withCtx((ctx, id) => library.previewItem(ctx, str(id, 'library id', 64), { listRemoteFiles })));
+  // The files inside a library folder (MATH-22): a level of it for the @ menu, a mentioned file found again (to open it),
+  // and whether the mentioned files on screen are still there. Paths are relative to the folder and never leave it.
+  handle('list-folder', withCtx((ctx, id, rel) => folderFiles.listFolder(ctx, str(id, 'library id', 64), rel == null ? '' : str(rel, 'path', 4096))));
+  handle('folder-file', withCtx((ctx, id, rel) => folderFiles.folderFile(ctx, str(id, 'library id', 64), str(rel, 'path', 4096))));
+  handle('folder-files', withCtx((ctx, list) => folderFiles.folderFiles(ctx, list)));
   saving('rename-library-item', withCtx(async (ctx, id, name) => {
     const row = await ctx.libraryDb.get(str(id, 'library id', 64));
     if (!row) throw new Error('Unknown library item');

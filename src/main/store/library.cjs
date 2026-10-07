@@ -903,6 +903,8 @@ async function recategorize(ctx, { inspectPdf = null, inspectTimeoutMs = 15_000 
 const PEEK_CHARS = 6000;
 const PEEK_FILES = 40;
 const inside = (file, dir) => file === dir || file.startsWith(dir + path.sep);
+// What a folder's listing leaves out: the peek's and the @ menu's (store/folder-files.cjs, MATH-22).
+const PEEK_SKIP = new Set(['.git', '.DS_Store']);
 
 /**
  * What hovering a library row shows beyond the row itself: an md's text, a data file's first lines,
@@ -938,7 +940,7 @@ async function previewItem(ctx, id, { listRemoteFiles } = {}) {
     out.folder = tilde(folder);
     try {
       out.files = fs.readdirSync(folder, { withFileTypes: true })
-        .filter((entry) => entry.name !== '.git' && entry.name !== '.DS_Store')
+        .filter((entry) => !PEEK_SKIP.has(entry.name))
         .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))
         .slice(0, PEEK_FILES)
         .map((entry) => entry.name + (entry.isDirectory() ? '/' : ''));
@@ -952,4 +954,4 @@ async function previewItem(ctx, id, { listRemoteFiles } = {}) {
   return out;
 }
 
-module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, annotationsFileOf, writePageAnnotations, addMarkAnswer, addWebMark, projectsForLibraryItem, libraryForProject, bodiesForProject, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, addPageCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem };
+module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, annotationsFileOf, writePageAnnotations, addMarkAnswer, addWebMark, projectsForLibraryItem, libraryForProject, bodiesForProject, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, addPageCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem, FILE_TYPES, PEEK_SKIP };

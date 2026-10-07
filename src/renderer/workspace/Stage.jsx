@@ -388,7 +388,7 @@ const clearRanges = () => { const h = highlights(); if (h) { h.delete(FIND); h.d
 // The pdf an answer is for, as the workspace keeps it ({ rowId } or { url }), and whether a tab's pdf is it.
 const pdfWhere = (p) => (p.rowId ? { rowId: p.rowId } : { url: p.url });
 const samePdf = (p, where) => !!p && !!where && (where.rowId ? p.rowId === where.rowId : !p.rowId && !!where.url && p.url === where.url);
-const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull, onShow, onPage, onFront, save, library, inRail, onError, onOpenItem, mentionItems, onMentionOpen, pendingAsks, onAsk, onStopAsk, onDismissAsk, onContinueAsk, onCopyText }, ref) {
+const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull, onShow, onPage, onFront, save, library, inRail, onError, onOpenItem, mentionItems, onMentionOpen, listFolder, fileState, onOpenFile, pendingAsks, onAsk, onStopAsk, onDismissAsk, onContinueAsk, onCopyText }, ref) {
   const [tabs, setTabs] = React.useState(() => [blankTab()]);
   const [activeId, setActiveId] = React.useState(() => null);
   const [draft, setDraft] = React.useState('');
@@ -649,6 +649,11 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     const id = claim(plan.key, plan.find, plan.to, options);
     if (id) void navigate(id, plan.address);
   };
+  // A file inside a library folder, mentioned (MATH-22): its tab, as a file from the computer has, unless one is open already.
+  const openFile = (file, options = {}) => {
+    const id = claim(`l:${addressKey(fileUrl(file))}`, '', '', options);
+    if (id) readPath(id, file, null);
+  };
   // Files from the computer open as tabs of their own; + Save is what puts them in the library. Past 15, the rest are left.
   const openPaths = (paths) => {
     let room = MAX_TABS - tabsRef.current.filter((t) => tabKey(t) || t.pdf || t.file).length;
@@ -697,7 +702,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     const page = viewer && typeof viewer.currentPage === 'function' ? viewer.currentPage() : 0;
     return { rowId: p.rowId || null, url: p.rowId ? null : p.url, page: page > 0 ? page : 1, kind: 'pdf' };
   };
-  React.useImperativeHandle(ref, () => ({ openRow, openInput, openPaths, newTab, closeTab: () => closeTab(tab.id), tabAt, front }));
+  React.useImperativeHandle(ref, () => ({ openRow, openInput, openPaths, openFile, newTab, closeTab: () => closeTab(tab.id), tabAt, front }));
 
   /* ------------------------------------------------------------------- @bart on a highlight (MATH-27) */
   // A finished answer onto its mark: the viewer in front adds it when it shows that pdf, and every tab holding the pdf
@@ -1320,6 +1325,9 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
               library={library}
               mentionItems={mentionItems}
               onMentionOpen={onMentionOpen}
+              listFolder={listFolder}
+              fileState={fileState}
+              onOpenFile={onOpenFile}
               onOpenMention={(id) => { const row = (library || []).find((r) => r.id === id); if (row && onOpenItem) onOpenItem(row); }}
               pendingAsks={paperAsks}
               onAsk={onAsk ? (ask) => { void askFromPaper(pdf, ask); } : undefined}

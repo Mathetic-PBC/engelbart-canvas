@@ -23,6 +23,9 @@
 // `onOpenMention(id)`, a click anywhere else in it gives the note its field back, the caret where it was clicked. Its
 // names are the library's now (`library`), so a renamed item shows its new name; one gone from the library is grey. With
 // no `onOpenMention` a note is its field alone, as before: the token reads as typed.
+// A library folder in the note's @ menu opens in place (MATH-22, with `listFolder`), as in a document, and a file in it is
+// written `@[Name](lib:<folderId>:<path>)` (model/doc.js fileMention): its chip is clicked to `onOpenFile({ folderId,
+// rel, name })`, and drawn grey when `fileState(folderId, rel)` says it is gone.
 // The page as a canvas (MATH-27 phase 1, 2026-10-06; the pure parts are ./canvas.js). Every page lies on a desk at least
 // DESK desk px wide each side (scaled with the page since the true canvas, below), that a box moved past its edge widens.
 // Every note is a box with a grip (no border, 2026-10-06): a highlight's note opens on the desk beside it (its `side`), a double-click on blank space (a click
@@ -73,7 +76,8 @@ import rough from 'roughjs';
 import { mergeLineRects, placeHighlight, boxSeed, selectionParts, scalePart, partMarks, passageOf, stackNotes, wordBounds, pdfText, pageWindow } from './marks.js';
 import { nextFind, createTargetGate, sectionSpans, paintSection, clearFind, FIND, FIND_ACTIVE } from '../model/find.js';
 import { wheelZooms, wheelZoom, createPageCache } from '../model/paper-zoom.js';
-import { mentionAt, libMention, noteHtml, noteInkHtml, noteParts, noteOffset, inlineHtml, esc, LIB_MENTION_RE } from '../model/doc.js';
+import { mentionAt, libMention, fileMention, fileMentionOf, noteHtml, noteInkHtml, noteParts, noteOffset, inlineHtml, esc, LIB_MENTION_RE } from '../model/doc.js';
+import { isFolderRow, folderRows, firstPick, parentRel } from '../model/rail.js';
 import { sideSpace, deskOf, deskGeom, deskNeed, placeOf, posOf, spaceBoxes, extentAt, fitZoom, offscreen, offscreenSide, chipLabel, revealScroll, noteQuestion, askedByNote, turnsOf, shownAsks, keptMarks, modelLabel, runningLabel, blankAt, DESK, DESK_EDGE, BOX_GAP, ASK_W, SIDE_GAP, POS_DY, LINE, PRESS_MOVE } from './canvas.js';
 import { fieldCaret } from '../workspace/caret.js';
 import MentionMenu from '../workspace/MentionMenu.jsx';
@@ -275,7 +279,7 @@ function toBytes(src) {
 export default class PaperView extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { note: 'Opening the paper…', page: 0, pages: 0, pct: 100, mention: null, mentionIdx: 0, off: NO_OFF, removed: null };
+    this.state = { note: 'Opening the paper…', page: 0, pages: 0, pct: 100, mention: null, mentionIdx: 0, off: NO_OFF, removed: null, browse: null };
     this.host = React.createRef();
     this.root = React.createRef(); // the pane: the paper, its bar and its chips
     this.marks = clone(props.marks || {}); // { [page]: Mark[] }, geometry in page units
@@ -468,7 +472,7 @@ export default class PaperView extends React.Component {
       this.syncPending(prev.pendingAsks || []);
     }
     // A mentioned item renamed, or gone from the library: its mentions are drawn again with its name now.
-    if (prev.library !== this.props.library && this.libKey() !== this.libDrawn) this.renderAllMarks();
+    if ((prev.library !== this.props.library || prev.fileState !== this.props.fileState) && this.libKey() !== this.libDrawn) this.renderAllMarks();
   }
 
   componentWillUnmount() {
@@ -1689,6 +1693,7 @@ export default class PaperView extends React.Component {
       if (this.props.onOpenLink) this.props.onOpenLink(link.getAttribute('href'));
       return;
     }
+    if (this.openFileChip(ev)) return;
     const lib = ev.target.closest && ev.target.closest('[data-lib]');
     if (lib) { ev.preventDefault(); if (this.props.onOpenMention) this.props.onOpenMention(lib.dataset.lib); return; }
     const act = ev.target.closest && ev.target.closest('[data-act]');
@@ -2012,13 +2017,31 @@ export default class PaperView extends React.Component {
     const row = lib.find((r) => r && r.id === id);
     return row ? row.name || '' : null;
   }
+  // A file in a library folder a note mentions (MATH-22): false when it is gone, undefined until that is known.
+  fileState(folderId, rel) { return typeof this.props.fileState === 'function' ? this.props.fileState(folderId, rel) : undefined; }
+  // A file's chip clicked (MATH-22): opened in the Stage, or told it is gone. → whether the click was one
+  openFileChip(ev) {
+    const chip = ev.target.closest && ev.target.closest('[data-file]');
+    if (!chip || !chip.dataset.folder) return false;
+    ev.preventDefault(); ev.stopPropagation();
+    if (this.props.onOpenFile) this.props.onOpenFile({ folderId: chip.dataset.folder, rel: chip.dataset.file, name: chip.dataset.mention });
+    return true;
+  }
   // The names now of every item the notes mention, as one string: the notes are drawn again when it changes.
   libKey() {
-    const ids = new Set();
+    const ids = new Set(), files = new Set();
     for (const list of Object.values(this.marks || {})) {
-      for (const m of list || []) if (m && m.note) for (const part of noteParts(m.note)) { const t = part.match(LIB_MENTION_RE); if (t) ids.add(t[2]); }
+      for (const m of list || []) {
+        if (!m || !m.note) continue;
+        for (const part of noteParts(m.note)) {
+          const t = part.match(LIB_MENTION_RE), f = fileMentionOf(part);
+          if (t) ids.add(t[2]);
+          if (f) { ids.add(f.folderId); files.add(JSON.stringify([f.folderId, f.rel])); }
+        }
+      }
     }
-    return [...ids].sort().map((id) => `${id}\t${this.libName(id)}`).join('\n');
+    const state = (key) => { const [id, rel] = JSON.parse(key); const known = this.fileState(id, rel); return known === undefined ? '?' : known ? (known.dir ? 'd' : 'f') : '-'; };
+    return [...[...ids].sort().map((id) => `${id}\t${this.libName(id)}`), ...[...files].sort().map((key) => `${key}\t${state(key)}`)].join('\n');
   }
 
   // A note being typed in: its text, saved as it changes, and the @ menu opened by what stands before the caret.
@@ -2038,15 +2061,16 @@ export default class PaperView extends React.Component {
   noteView(m, page) {
     const view = document.createElement('div');
     view.dataset.noteView = m.id;
-    view.innerHTML = noteHtml(m.note, { libName: (id) => this.libName(id), agents: this.asksFrom(m) });
+    view.innerHTML = noteHtml(m.note, { libName: (id) => this.libName(id), fileState: (id, rel) => this.fileState(id, rel), agents: this.asksFrom(m) });
     view.onmousedown = (ev) => {
       ev.stopPropagation(); // not a click on the page: no new note, the pending selection stays (as in a field)
       if (ev.button !== 0) return;
       ev.preventDefault();
-      if (ev.target.closest && ev.target.closest('[data-lib]')) return; // its click opens it
+      if (ev.target.closest && ev.target.closest('[data-lib],[data-file]')) return; // its click opens it
       this.editNote(m, page, this.noteCaret(view, m, ev));
     };
     view.onclick = (ev) => {
+      if (this.openFileChip(ev)) return;
       const link = ev.target.closest && ev.target.closest('[data-lib]');
       if (!link) return;
       ev.preventDefault(); ev.stopPropagation();
@@ -2102,7 +2126,40 @@ export default class PaperView extends React.Component {
     if (found) this.setState({ mention: { markId: m.id, page, query: found.query, start: found.start, anchor: fieldCaret(ta, undefined, this.boxScale(page)) }, mentionIdx: 0 });
     else this.closeMention();
   }
-  closeMention() { if (this.state.mention) this.setState({ mention: null }); }
+  closeMention() { if (this.state.mention || this.state.browse) this.setState({ mention: null, browse: null }); }
+
+  /* ------------------------------------------------- a library folder in a note's @ menu (MATH-22) */
+  mentionKey(open) { return open ? `${open.markId}:${open.start}` : null; }
+  /** The folder the menu is in → { at, row, rel, listing }, or null at the menu's top. */
+  browsing() { const b = this.state.browse, open = this.state.mention; return b && open && b.at === this.mentionKey(open) ? b : null; }
+  // The menu goes into `rel` of the folder `row`: what was typed to find it is taken out of the note, and the level is
+  // asked of main (listFolder) each time, live.
+  openFolder(row, rel) {
+    const open = this.state.mention;
+    if (!open || !row || typeof this.props.listFolder !== 'function') return;
+    const ta = this.find1(`textarea[data-mark="${open.markId}"]`), m = ((this.marks || {})[open.page] || []).find((x) => x.id === open.markId);
+    if (ta && m) {
+      const end = ta.selectionStart;
+      if (end > open.start + 1 && ta.value.charAt(open.start) === '@') {
+        ta.setRangeText('', open.start + 1, end, 'end');
+        m.note = ta.value; this.inkNote(ta); this.fitNote(ta); this.scheduleSave();
+      }
+      if (document.activeElement !== ta) ta.focus({ preventScroll: true });
+    }
+    const at = this.mentionKey(open), id = row.id;
+    this.setState({ mention: { ...open, query: '' }, browse: { at, row, rel, listing: undefined }, mentionIdx: 0 });
+    Promise.resolve().then(() => this.props.listFolder(id, rel)).catch((error) => ({ error: (error && error.message) || 'This folder could not be read' })).then((listing) => {
+      const b = this.state.browse;
+      if (!this.host.current || !b || b.at !== at || b.row.id !== id || b.rel !== rel) return;
+      const next = { ...b, listing: listing || { error: 'This folder could not be read' } };
+      this.setState({ browse: next, mentionIdx: firstPick(folderRows({ browse: next, listing: next.listing, query: (this.state.mention || {}).query })) });
+    });
+  }
+  leaveFolder() {
+    const b = this.browsing(); if (!b) return;
+    const up = parentRel(b.rel);
+    if (up == null) this.setState({ browse: null, mentionIdx: 0 }); else this.openFolder(b.row, up);
+  }
   // A note that can ask Bart (MATH-27): one on a highlight, with somewhere to send the question. A free note has no passage.
   asksFrom(m) { return typeof this.props.onAsk === 'function' && !!m && Array.isArray(m.rects) && m.rects.length > 0; }
   pageOf(m) { for (const [page, list] of Object.entries(this.marks || {})) if ((list || []).includes(m)) return Number(page); return 0; }
@@ -2112,6 +2169,8 @@ export default class PaperView extends React.Component {
     const open = this.state.mention;
     if (!open || typeof this.props.mentionItems !== 'function') return [];
     const m = ((this.marks || {})[open.page] || []).find((x) => x && x.id === open.markId);
+    const browse = this.browsing();
+    if (browse) return folderRows({ browse, listing: browse.listing, query: open.query.toLowerCase() });
     const bart = this.asksFrom(m) && !String((m && m.note) || '').slice(0, open.start).trim();
     return (this.props.mentionItems(open.query.toLowerCase()) || []).filter((r) => r && ((r.kind === 'item' && r.row && r.row.id) || (bart && r.kind === 'verb' && r.verb === 'bart')));
   }
@@ -2122,7 +2181,9 @@ export default class PaperView extends React.Component {
     ev.stopPropagation();
     const items = this.state.mention && this.state.mention.markId === m.id ? this.mentionList() : [];
     if (items.length) {
-      const n = items.length;
+      const n = items.length, open = this.state.mention;
+      // Backspace with nothing typed after the `@`, inside a folder: up a level, the `@` kept (MATH-22).
+      if (ev.key === 'Backspace' && !open.query && ta.selectionStart === ta.selectionEnd && ta.selectionStart === open.start + 1 && this.browsing()) { ev.preventDefault(); this.leaveFolder(); return; }
       if (ev.key === 'ArrowDown') { ev.preventDefault(); this.setState({ mentionIdx: (this.state.mentionIdx + 1) % n }); return; }
       if (ev.key === 'ArrowUp') { ev.preventDefault(); this.setState({ mentionIdx: (this.state.mentionIdx - 1 + n) % n }); return; }
       if ((ev.key === 'Enter' || ev.key === 'Tab') && !ev.isComposing) { ev.preventDefault(); this.pickMention(items[this.state.mentionIdx] || items[0]); return; }
@@ -2170,6 +2231,12 @@ export default class PaperView extends React.Component {
   // keeps the keyboard. The item is only mentioned: nothing is added to the workspace. Bart's row writes `@Bart `.
   pickMention(r) {
     const open = this.state.mention;
+    // A library folder, and a subfolder of it, opens in the menu; the back row goes up; a row that only says something is
+    // not picked (MATH-22).
+    if (r && typeof this.props.listFolder === 'function' && isFolderRow(r)) { this.openFolder(r.row, ''); return; }
+    if (r && r.kind === 'entry' && r.dir) { this.openFolder(r.row, r.rel); return; }
+    if (r && r.kind === 'back') { this.leaveFolder(); return; }
+    if (r && r.kind === 'note') return;
     this.closeMention();
     const bart = !!r && r.kind === 'verb' && r.verb === 'bart';
     if (!open || !r || (!bart && (!r.row || !r.row.id))) return;
@@ -2187,7 +2254,8 @@ export default class PaperView extends React.Component {
       this.scheduleSave();
       return;
     }
-    ta.setRangeText(libMention(r.name, r.row.id), start, end, 'end');
+    const file = (r.kind === 'entry' || r.kind === 'self') && r.rel; // a file or a subfolder in a library folder
+    ta.setRangeText(file ? fileMention(r.kind === 'self' ? r.entryName : r.name, r.row.id, r.rel) : libMention(r.kind === 'self' ? r.row.name : r.name, r.row.id), start, end, 'end');
     if (ta.value.charAt(ta.selectionEnd) === ' ') ta.setSelectionRange(ta.selectionEnd + 1, ta.selectionEnd + 1);
     else ta.setRangeText(' ', ta.selectionEnd, ta.selectionEnd, 'end');
     m.note = ta.value;

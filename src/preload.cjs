@@ -205,6 +205,11 @@ const engelbartAPI = Object.freeze({
   onWindowFocus: (callback) => subscribe('window:focus', callback),
   onSandboxProgress: (callback) => subscribe('engelbart:sandbox-progress', callback),
   previewLibraryItem: invoke('preview-library-item'),
+  // A library folder's files (MATH-22): listFolder(id, rel) one level for the @ menu; folderFile(id, rel) a mentioned file,
+  // with its absolute path and whether it is there; folderFiles([{ folderId, rel }]) whether each still is.
+  listFolder: invoke('list-folder'),
+  folderFile: invoke('folder-file'),
+  folderFiles: invoke('folder-files'),
   // A file dropped on the window: where it is on disk (the renderer's File no longer says).
   pathForFile: (file) => { try { return webUtils.getPathForFile(file) || null; } catch { return null; } },
   renameLibraryItem: invoke('rename-library-item'),

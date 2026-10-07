@@ -49,8 +49,8 @@
 //     (preventDefault), so the window's Escape leaves it alone (Workspace.jsx).
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, listMark, threads, turnText, wsMention, chatMention, mentionAt, agentOf, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE } from '../model/doc.js';
-import { fieldRows, isVerbRow } from '../model/rail.js';
+import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, listMark, threads, turnText, wsMention, fileMention, chatMention, mentionAt, agentOf, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE } from '../model/doc.js';
+import { fieldRows, isVerbRow, isFolderRow, folderRows, firstPick, parentRel } from '../model/rail.js';
 import { readFlags, readQuestion, readDiscover, withChoice, withMode, discoverSpans, modelOf, effortOf, buildRequestOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
 import { SKIPPED, MAP_GROUPS, RESULT_OFFER, cardOfAnswer, questionOf, isChoice, answerLine, withWrap, readAnswer, recapLine, resultParts } from '../../main/bart/card.cjs';
 import BartPicker from './BartPicker.jsx';
@@ -100,6 +100,12 @@ const withAttachments = (text, images) => {
   const ids = new Map(images.filter((image) => image.id).map((image) => [image.n, image.id]));
   return text.replace(/(?<!!)\[Attachment (\d+)\](?!\()/g, (token, n) => (ids.has(Number(n)) ? `![Attachment ${n}](img:${ids.get(Number(n))})` : token));
 };
+// The token a picked row of the @ menu writes: a workspace's, a file's or a subfolder's in a library folder (MATH-22), else
+// a mention by name. `pickedRow`: the library row picking it links to the workspace (a file's is its folder's).
+const mentionToken = (r) => (r.kind === 'workspace' ? wsMention(r.name, r.id)
+  : (r.kind === 'entry' || r.kind === 'self') && r.rel ? fileMention(r.kind === 'self' ? r.entryName : r.name, r.row.id, r.rel)
+    : `@[${r.name}]`);
+const pickedRow = (r) => ((r.kind === 'entry' || r.kind === 'self') && r.row ? { kind: 'item', key: r.row.id, row: r.row, name: r.row.name } : r);
 // The mention token of `text` that ends at `at` (`before`) or starts there → [start, end], or null: the line's own
 // tokens (doc.js INLINE), so a mention inside bold or a link's text is not one here.
 const mentionBeside = (text, at, before) => {
@@ -184,7 +190,7 @@ const radius = (top, closes) => `${top ? '10px 10px' : '0 0'} ${closes ? '10px 1
 const FLAG_LOOK = 'font-weight:500';
 
 export default class DocEditor extends React.Component {
-  state = { activeLine: null, mention: null, mentionIdx: 0, pop: null, picker: null };
+  state = { activeLine: null, mention: null, mentionIdx: 0, pop: null, picker: null, browse: null };
   edRef = React.createRef();
   history = []; future = []; caret = null; lastHtml = ''; lastKey = null; selRaw = null; openKey = ''; copied = null; copiedT = null;
   syncing = false; wantFocus = false; composing = false; mounted = false; timers = new Set(); held = false; downOnRoot = false; downOnPage = false;
@@ -293,6 +299,7 @@ export default class DocEditor extends React.Component {
   componentDidUpdate(prevProps, prevState) {
     // The @ menu opening and closing (a line's or a follow-up field's): the workspace asks for what things say then (MATH-29).
     if (prevState && !prevState.mention !== !this.state.mention && this.props.onMentionOpen) this.props.onMentionOpen(!!this.state.mention);
+    if (!this.state.mention && this.state.browse) this.setState({ browse: null }); // a folder opened in the menu closes with it (MATH-22)
     if (prevProps.docKey !== this.props.docKey) {
       this.dropEdit(prevProps);
       this.wantView = true; this.settle = null;
@@ -347,7 +354,7 @@ export default class DocEditor extends React.Component {
     const ed = this.editorEl(); if (!ed || !ed.querySelectorAll) return;
     const want = this.props.besideLink ? String(this.props.besideLink).toLowerCase() : null, ws = this.props.besideWorkspace || null;
     for (const m of ed.querySelectorAll('[data-mention]')) {
-      const on = m.dataset.ws ? !!ws && m.dataset.ws === ws : !!want && String(m.dataset.mention).toLowerCase() === want;
+      const on = m.dataset.ws ? !!ws && m.dataset.ws === ws : m.dataset.file == null && !!want && String(m.dataset.mention).toLowerCase() === want;
       if (on !== m.hasAttribute('data-beside')) m.toggleAttribute('data-beside', on);
     }
   }
@@ -1594,6 +1601,7 @@ export default class DocEditor extends React.Component {
     const s = this.state, c = this.caretInfo(); if (!c) return; const ls = this.lines();
     const ps = this.parsedOf(ls), i = c.anchor.line, line = ls[i] ?? '', p = ps[i] || parseLine(line), cur = lineText(p, line), mod = e.metaKey || e.ctrlKey;
     const same = c.anchor.line === c.focus.line, a = Math.min(c.anchor.offset, c.focus.offset), b = Math.max(c.anchor.offset, c.focus.offset), collapsed = same && a === b;
+    if (s.mention && e.key === 'Backspace' && collapsed && !mod && this.upFromFolder(s.mention, a)) { e.preventDefault(); return; }
     if (s.mention) {
       const items = this.mentionList(), n = Math.max(1, items.length);
       if (e.key === 'ArrowDown') { e.preventDefault(); this.setState({ mentionIdx: (s.mentionIdx + 1) % n }); return; }
@@ -1853,6 +1861,12 @@ export default class DocEditor extends React.Component {
       return;
     }
     const m = e.target.closest('[data-mention]');
+    // A file in a library folder (MATH-22) opens in the Stage; one that is gone says so.
+    if (m && m.dataset.file != null && m.dataset.folder) {
+      e.preventDefault(); this.hidePop();
+      if (this.props.onOpenFile) this.props.onOpenFile({ folderId: m.dataset.folder, rel: m.dataset.file, name: m.dataset.mention }, newTabClick(e) ? { newTab: true } : undefined);
+      return;
+    }
     // A workspace's document opens in the pane beside this one (MATH-23); ⌘-click goes there, as a click did before.
     if (m && m.dataset.ws) {
       e.preventDefault(); this.hidePop();
@@ -1869,7 +1883,7 @@ export default class DocEditor extends React.Component {
     }
   };
   editorOver = (e) => {
-    const m = e.target.closest('[data-mention]'), res = m && (m.dataset.ws ? { ws: m.dataset.ws, name: m.dataset.mention } : this.findRes(m.dataset.mention, m.dataset.lib));
+    const m = e.target.closest('[data-mention]'), res = m && m.dataset.file == null && (m.dataset.ws ? { ws: m.dataset.ws, name: m.dataset.mention } : this.findRes(m.dataset.mention, m.dataset.lib));
     if (res) this.showPop(res, { currentTarget: m });
     // An icon's name goes under it, or above it when under would leave the pane.
     const ic = e.target.closest('.bart-ic'), box = this.scrollRef.current;
@@ -1957,6 +1971,7 @@ export default class DocEditor extends React.Component {
   followKey(e) {
     if (this.state.picker) this.closePicker();
     const m = this.state.mention, items = m && m.field === Number(e.target.dataset.followInput) ? this.mentionList() : [];
+    if (items.length && e.key === 'Backspace' && e.target.selectionStart === e.target.selectionEnd && !e.metaKey && !e.ctrlKey && this.upFromFolder(m, e.target.selectionStart)) { e.preventDefault(); return; }
     if (items.length) {
       const n = items.length;
       if (e.key === 'ArrowDown') { e.preventDefault(); this.setState({ mentionIdx: (this.state.mentionIdx + 1) % n }); return; }
@@ -2220,12 +2235,21 @@ export default class DocEditor extends React.Component {
   bartItem() { return (this.props.mentionable || []).find((r) => r && r.id === 'bart') || BART_ITEM; }
   mentionList() {
     const m = this.state.mention, q = (m?.query || '').toLowerCase();
+    const browse = this.browsing();
+    if (browse) return folderRows({ browse, listing: browse.listing, query: q }); // inside a library folder (MATH-22)
     const rows = this.props.mentionItems ? this.props.mentionItems(q) // the workspace's list: Bart, Note, the open page, the library (model/rail.js)
       : (this.props.mentionable || []).filter((r) => r && ((r.name || '').toLowerCase().includes(q) || (r.title || '').toLowerCase().includes(q)));
     return m && m.field != null ? fieldRows(rows) : rows; // a follow-up field already asks its thread's agent: no verbs
   }
   pickMention(r) {
     const m = this.state.mention; if (!m || !r) return;
+    // A library folder opens in the menu, and a subfolder of it; the back row goes up; a row that only says something is
+    // not picked; "Mention this folder" at its top is the folder's own mention (MATH-22).
+    if (this.canBrowse() && isFolderRow(r)) { this.openFolder(r.row, ''); return; }
+    if (r.kind === 'entry' && r.dir) { this.openFolder(r.row, r.rel); return; }
+    if (r.kind === 'back') { this.leaveFolder(); return; }
+    if (r.kind === 'note') return;
+    if (r.kind === 'self' && !r.rel) r = { kind: 'item', key: r.row.id, row: r.row, name: r.row.name };
     if (m.field != null) { this.pickInField(m, r); return; }
     const ls = this.lines(), p = parseLine(ls[m.i] || '');
     const cur = lineText(p, ls[m.i]);
@@ -2233,10 +2257,10 @@ export default class DocEditor extends React.Component {
     // Bart, Brainstorm, Discover and Note are words the line keeps (Enter asks, or makes the note); anything else is a mention, and
     // what it names comes into this workspace (the open page is added to the library first: props.onMentionPicked). A verb
     // is followed by a space, since a question comes next; a mention is not (MATH-11, 2026-10-05): the caret stops right after it.
-    const ins = verb === 'bart' ? '@Bart ' : verb === 'brainstorm' ? '@Brainstorm ' : verb === 'discover' ? '@Discover ' : verb === 'note' ? '@Note ' : r.kind === 'workspace' ? wsMention(r.name, r.id) : `@[${r.name}]`;
+    const ins = verb === 'bart' ? '@Bart ' : verb === 'brainstorm' ? '@Brainstorm ' : verb === 'discover' ? '@Discover ' : verb === 'note' ? '@Note ' : mentionToken(r);
     this.writeText(m.i, cur.slice(0, m.start) + ins + cur.slice(m.caret), { line: m.i, offset: m.start + ins.length });
     this.wantFocus = true; this.setState({ mention: null, activeLine: m.i });
-    if (!verb && r.kind !== 'workspace' && this.props.onMentionPicked) this.props.onMentionPicked(r); // a workspace is not a library row
+    if (!verb && r.kind !== 'workspace' && this.props.onMentionPicked) this.props.onMentionPicked(pickedRow(r)); // a workspace is not a library row
   }
   // A row picked in a follow-up field: the token a document line would get takes the place of `@query`, the keyboard stays
   // in the field, and followInput keeps what it holds and its send button. Sent, it is a mention on the new line.
@@ -2244,12 +2268,54 @@ export default class DocEditor extends React.Component {
     const input = this.followField(m.field);
     this.setState({ mention: null });
     if (!input || isVerbRow(r)) return;
-    const ins = r.kind === 'workspace' ? wsMention(r.name, r.id) : `@[${r.name}]`;
+    const ins = mentionToken(r);
     const end = Math.min(m.caret, input.value.length), start = Math.min(m.start, end);
     if (document.activeElement !== input) input.focus({ preventScroll: true });
     input.setRangeText(ins, start, end, 'end');
     this.followInput(input);
-    if (r.kind !== 'workspace' && this.props.onMentionPicked) this.props.onMentionPicked(r);
+    if (r.kind !== 'workspace' && this.props.onMentionPicked) this.props.onMentionPicked(pickedRow(r));
+  }
+  /* ------------------------------------------------- a library folder in the @ menu (MATH-22) */
+  // Where the @ menu stands (a line's `@`, or a follow-up field's): a folder opened from it is left when the menu moves.
+  mentionKey(m) { return m ? (m.field != null ? `f${m.field}:${m.start}` : `${m.i}:${m.start}`) : null; }
+  /** The folder the menu is in → { at, row, rel, listing }, or null at the menu's top. */
+  browsing() { const b = this.state.browse, m = this.state.mention; return b && m && b.at === this.mentionKey(m) ? b : null; }
+  canBrowse() { return typeof this.props.listFolder === 'function'; }
+  // The menu goes into `rel` of the folder `row` (MF-01): what was typed to find the folder is taken out, so what is typed
+  // next narrows the level, and the level is asked of main (listFolder) each time, live.
+  openFolder(row, rel) {
+    const m = this.state.mention; if (!m || !row || !this.canBrowse()) return;
+    let caret = m.caret;
+    if (m.caret > m.start + 1) {
+      if (m.field != null) {
+        const input = this.followField(m.field);
+        if (input) { input.setRangeText('', m.start + 1, Math.min(m.caret, input.value.length), 'end'); this.followText.set(m.field, input.value); this.paintSend(input); }
+      } else {
+        const ls = this.lines(), p = parseLine(ls[m.i] || ''), cur = lineText(p, ls[m.i]);
+        this.writeText(m.i, cur.slice(0, m.start + 1) + cur.slice(m.caret), { line: m.i, offset: m.start + 1 });
+        this.wantFocus = true;
+      }
+      caret = m.start + 1;
+    }
+    const at = this.mentionKey(m), id = row.id;
+    this.setState({ mention: { ...m, query: '', caret }, browse: { at, row, rel, listing: undefined }, mentionIdx: 0 });
+    Promise.resolve().then(() => this.props.listFolder(id, rel)).catch((error) => ({ error: (error && error.message) || 'This folder could not be read' })).then((listing) => {
+      const b = this.state.browse;
+      if (!this.mounted || !b || b.at !== at || b.row.id !== id || b.rel !== rel) return; // gone elsewhere meanwhile
+      const next = { ...b, listing: listing || { error: 'This folder could not be read' } };
+      this.setState({ browse: next, mentionIdx: firstPick(folderRows({ browse: next, listing: next.listing, query: (this.state.mention || {}).query })) });
+    });
+  }
+  // Back up a level; from the folder's top, back to the whole menu.
+  leaveFolder() {
+    const b = this.browsing(); if (!b) return;
+    const up = parentRel(b.rel);
+    if (up == null) this.setState({ browse: null, mentionIdx: 0 }); else this.openFolder(b.row, up);
+  }
+  // Backspace with nothing typed after the `@` (the caret at `at`), inside a folder: up a level, the `@` kept. → whether it did
+  upFromFolder(m, at) {
+    if (!m || m.query || at !== m.start + 1 || !this.browsing()) return false;
+    this.leaveFolder(); return true;
   }
   // Enter on a line holding `@Note name`: the note is made (named, or untitled when nothing follows), and the words
   // become its mention if the line still holds them once it exists.
@@ -2303,6 +2369,8 @@ export default class DocEditor extends React.Component {
     libName: (id) => { if (!this.libraryKnown()) return undefined; const row = this.findRes('', id); return row ? row.name || '' : null; },
     named: (name) => (this.libraryKnown() ? !!this.findRes(name) : undefined),
     trashed: (name, id) => { const row = id ? this.findRes('', id) : this.findRes(name); return !!(row && row.trashed); }, // MATH-58 follow-up
+    // A file in a library folder (MATH-22): false when it is no longer there, undefined until that is known.
+    fileState: (folderId, rel) => (typeof this.props.fileState === 'function' ? this.props.fileState(folderId, rel) : undefined),
   };
   showPop(res, e) { const r = e.currentTarget.getBoundingClientRect(); this.setState({ pop: { res, anchor: { left: r.left, right: r.right, top: r.top, bottom: r.bottom } } }); }
   hidePop = () => { if (this.state.pop) this.setState({ pop: null }); };

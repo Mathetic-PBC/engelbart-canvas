@@ -30,6 +30,7 @@ const db = require('../store/db.cjs');
 const { instructionsBlock } = require('../store/onboarding.cjs');
 const library = require('../store/library.cjs');
 const { attrOf, stageBlock, webStageBlock, mentionedBlock } = require('./highlights.cjs');
+const { fileInRow } = require('../store/folder-files.cjs');
 
 const HERE = '<<< this is the question being asked now >>>';
 // @bart's <stage> with nothing in front, and a resumed turn's <highlights> when the documents mention nothing highlighted.
@@ -77,19 +78,42 @@ function catalogFor(project, rows, seen, { agent = 'bart', workspace = null, own
 
 /**
  * The library as the agent is shown it (Context.json): every item but pictures, `mentioned` when `seen` holds it. The
- * whole project's, or for @brainstorm this workspace's alone (catalogFor).
+ * whole project's, or for @brainstorm this workspace's alone (catalogFor). A folder's `path` is the folder itself
+ * (MATH-22, MF-06): it was null, and an agent told to open a mentioned folder had nowhere to look.
  */
 function catalogEntries(project, rows, seen, scope) {
   return catalogFor(project, rows, seen, scope).filter((entry) => entry.type !== 'image').map((entry) => ({
     name: entry.name,
     type: entry.type,
     tags: entry.tags,
-    path: entry.path ? path.resolve(project.dir, entry.path) : null,
+    path: entry.path ? path.resolve(project.dir, entry.path) : entry.folderPath ? path.resolve(entry.folderPath) : null,
     url: entry.url,
     summary: entry.summaryStale ? null : entry.summary,
     lastEdited: entry.lastEdited,
     mentioned: seen.has(entry.id),
   }));
+}
+
+/**
+ * The files inside library folders the documents mention (MATH-22, MF-06), read back from `seen` (expand-mentions.cjs
+ * fileKey) → [{ path, folder, exists }], `path` absolute, `folder` its folder's name. A folder no longer in the library, or
+ * a path that leaves its folder, is left out.
+ */
+function mentionedFiles(rows, seen, homeDir = os.homedir()) {
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const out = [];
+  for (const key of seen) {
+    const m = typeof key === 'string' ? /^file:([\w-]+):(.+)$/s.exec(key) : null;
+    const row = m && byId.get(m[1]);
+    if (!row || !row.folder_path) continue;
+    try { const found = fileInRow(row, m[2], homeDir); out.push({ path: found.path, folder: row.name, exists: found.exists }); } catch { /* outside its folder */ }
+  }
+  return out;
+}
+
+/** <mentioned_files>, the list mentionedFiles gives, as JSON; '' when there are none. */
+function mentionedFilesBlock(files) {
+  return files.length ? `<mentioned_files>\n${JSON.stringify(files, null, 1)}\n</mentioned_files>` : '';
 }
 
 // The agents that may open the library's own files (2026-09-30, MB-06): the folders those files are in join the
@@ -207,9 +231,10 @@ async function mentionedPapers(ctx, project, rows) {
 }
 
 /**
- * → { project, dirs, head, contextJson, documents, now, entries, workspaceName }. `head` and the documents are text; the
- * caller adds the level and the question (./ask.cjs), which differ per step. `now`: @bart's <stage> and <highlights>
- * alone, what a resumed turn is sent ('' for the other agents). `entries` (the library as Context.json
+ * → { project, dirs, head, contextJson, mentionedFiles, files, documents, now, entries, workspaceName }. `head`,
+ * `mentionedFiles` (<mentioned_files>, MATH-22; '' with none) and the documents are text; the caller adds the level and
+ * the question (./ask.cjs), which differ per step. `now`: @bart's <stage> and <highlights> alone, what a resumed turn is
+ * sent ('' for the other agents). `entries` (the library as Context.json
  * holds it) and `workspaceName` are for the fake agents, which name what a real one would read.
  */
 async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = 'bart', highlight = null, stage = null }) {
@@ -278,7 +303,9 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
     if (!folder || folder === path.parse(folder).root || folder === path.resolve(os.homedir()) || dirs.some((root) => within(folder, root))) continue;
     try { if (fs.statSync(folder).isDirectory()) dirs.push(folder); } catch { /* gone: nothing to grant */ }
   }
-  return { project, dirs, head, contextJson: `<context_json>\n${JSON.stringify(entries, null, 1)}\n</context_json>`, documents: documents.join('\n\n'), now, entries, workspaceName: workspace.name };
+  // The files inside library folders the documents point at (MATH-22): their folders are granted above, as library items.
+  const files = mentionedFiles(rows, seen, ctx.homeDir || os.homedir());
+  return { project, dirs, head, contextJson: `<context_json>\n${JSON.stringify(entries, null, 1)}\n</context_json>`, mentionedFiles: mentionedFilesBlock(files), files, documents: documents.join('\n\n'), now, entries, workspaceName: workspace.name };
 }
 
-module.exports = { HERE, NO_STAGE, NO_HIGHLIGHTS, markPlace, buildContext, conversationBlock, catalogEntries, libraryDirs, block, highlightBlock, paperOf, webPageOf };
+module.exports = { HERE, NO_STAGE, NO_HIGHLIGHTS, markPlace, buildContext, conversationBlock, catalogEntries, mentionedFiles, mentionedFilesBlock, libraryDirs, block, highlightBlock, paperOf, webPageOf };

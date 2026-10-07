@@ -209,7 +209,7 @@ async function withImagePaths(ctx, projectId, question) {
 function firstMessage({ context, prior, question, resumed, extra = '' }) {
   const asked = `<question>\n${question}\n</question>`;
   if (resumed) return (level) => [extra, context.now, level, asked].filter(Boolean).join('\n\n');
-  return (level) => [context.head, context.contextJson, context.documents, conversationBlock(prior), extra, level, asked].filter(Boolean).join('\n\n');
+  return (level) => [context.head, context.contextJson, context.mentionedFiles, context.documents, conversationBlock(prior), extra, level, asked].filter(Boolean).join('\n\n');
 }
 
 /** Where the cards at the end of `turns` begin: after the last recap, or the last reply that was not a card. */
@@ -792,4 +792,4 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
   };
 }
 
-module.exports = { createBart, createFakeBart, createThreads, threadKey, cleanTurns, turnPlan, brainstormReply, climb, levelBlock, loadSystemPrompt, replyBody, writeCodexConfig, BartError, ESCALATE_RE, THREAD_IDLE_MS, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS, DISCOVER_TIMEOUT_MS, DEEP_DISCOVER_TIMEOUT_MS, MODE_LIMITS, AGENTS, BRAINSTORM_PATHS, BRAINSTORM_MOVES, MAX_BRAINSTORM_CARDS };
+module.exports = { createBart, createFakeBart, createThreads, threadKey, cleanTurns, turnPlan, firstMessage, brainstormReply, climb, levelBlock, loadSystemPrompt, replyBody, writeCodexConfig, BartError, ESCALATE_RE, THREAD_IDLE_MS, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS, DISCOVER_TIMEOUT_MS, DEEP_DISCOVER_TIMEOUT_MS, MODE_LIMITS, AGENTS, BRAINSTORM_PATHS, BRAINSTORM_MOVES, MAX_BRAINSTORM_CARDS };

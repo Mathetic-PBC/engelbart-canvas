@@ -41,7 +41,7 @@ export const REPLY_RE = /^bart(\+?)> ?(.*)$/;
 export const ATTRIBUTION_RE = /^\*[^*]+\*$/;
 export const QUOTE_RE = /^> ?(.*)$/;
 export const ATTACH_RE = /^!\[([^\]\n]*)\]\(img:([\w-]+)\)$/;
-export const INLINE = /(!\[[^\]\n]*\]\(img:[\w-]+\)|@(?:[Bb]art|[Bb]rainstorm|[Oo]rient|[Dd]iscover)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]\(lib:[\w-]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`])/g;
+export const INLINE = /(!\[[^\]\n]*\]\(img:[\w-]+\)|@(?:[Bb]art|[Bb]rainstorm|[Oo]rient|[Dd]iscover)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]\(lib:[\w-]+(?::[\w.~%\/-]+)?\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`])/g;
 const LINK_RE = /^\[([^\]]+)\]\(([^)]+)\)$/;
 // Another workspace of the project, mentioned (2026-09-25): `@[Name](ws:<id>)`. The id finds it after a rename (workspaces
 // are born "Untitled Workspace n" and named later); the line shows the @, the workspace icon right after it, then the name
@@ -55,6 +55,26 @@ export const wsMention = (name, id) => `@[${String(name || '').replace(/[[\]\n]/
 export const LIB_MENTION_RE = /^@\[([^\]\n]+)\]\(lib:([\w-]+)\)$/;
 /** The token that mentions a library item. */
 export const libMention = (name, id) => `@[${String(name || '').replace(/[[\]\n]/g, '').trim() || 'Untitled'}](lib:${id})`;
+// A file inside a library folder (MATH-22, 2026-10-06): `@[Name](lib:<folderId>:<path>)`, the folder's library id and
+// the file's path relative to it, each segment percent-encoded (encodeRel) so a space, a bracket, a parenthesis, a `#` or
+// a letter outside ASCII never ends the token; `/` stays between segments. The files are not library rows: the folder
+// is, and the file is read from disk when the line is drawn or clicked (store/folder-files.cjs). Part of the same INLINE
+// alternative as the plain library mention.
+export const FILE_MENTION_RE = /^@\[([^\]\n]+)\]\(lib:([\w-]+):([\w.~%/-]+)\)$/;
+/** A path inside a folder, as a file mention carries it: each segment encodeURIComponent'd, and `!'()*` too. */
+export const encodeRel = (rel) => String(rel ?? '').split('/').filter((part) => part && part !== '.').map((part) => encodeURIComponent(part).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)).join('/');
+/** encodeRel's inverse; a segment that does not decode is kept as written. */
+export const decodeRel = (rel) => String(rel ?? '').split('/').filter(Boolean).map((part) => { try { return decodeURIComponent(part); } catch { return part; } }).join('/');
+/** The token that mentions the file at `rel` (as listed, not encoded) inside the library folder `folderId`. */
+export const fileMention = (name, folderId, rel) => `@[${String(name || '').replace(/[[\]\n]/g, '').trim() || String(rel || '').split('/').pop().replace(/[[\]\n]/g, '') || 'Untitled'}](lib:${folderId}:${encodeRel(rel)})`;
+/** A file mention's parts → { name, folderId, rel } (`rel` decoded), or null. */
+export function fileMentionOf(tok) {
+  const m = String(tok ?? '').match(FILE_MENTION_RE);
+  return m ? { name: m[1], folderId: m[2], rel: decodeRel(m[3]) } : null;
+}
+// What kind of file a name is, by its extension, as the library tells (store/library.cjs FILE_TYPES): the chip's glyph.
+const FILE_KINDS = { md: 'md', markdown: 'md', pdf: 'pdf', html: 'html', htm: 'html', csv: 'data', tsv: 'data', json: 'data', jsonl: 'data', ndjson: 'data', parquet: 'data', xlsx: 'data', docx: 'md', png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', heic: 'image', svg: 'image' };
+export const fileKindOf = (name) => { const ext = /\.([^./]+)$/.exec(String(name || '')); return (ext && FILE_KINDS[ext[1].toLowerCase()]) || 'file'; };
 // A chat mentioned by name (MATH-60, 2026-10-06): `@[bart]` is Bart itself, always there. `@[bart:<id>]`, and the older
 // `@[chat]` and `@[chat:<id>]`, named one of the inline chats @bart replaced on 2026-09-19: none is left, so they show as
 // gone. Only these exact names are chats: a note named "Bart Follow-up Sessions…" is that note.
@@ -74,6 +94,17 @@ export function mentionAt(text, caret) {
 }
 // ui/Icons.jsx WS, as markup for the rendered line: 0.8em square, on the text's baseline.
 const WS_ICON = '<svg viewBox="0 0 16 16" width="0.8em" height="0.8em" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true" style="display:inline-block;vertical-align:-0.06em;margin:0 0.2em 0 0.1em"><rect x="1.5" y="1.5" width="4.5" height="4.5" rx="1"/><rect x="8" y="1.5" width="6.5" height="4.5" rx="1"/><rect x="1.5" y="8" width="6.5" height="6.5" rx="1"/><rect x="10" y="8" width="4.5" height="4.5" rx="1"/></svg>';
+// ui/Icons.jsx's kind glyphs as markup, for a file mention's chip (MATH-22): drawn as WS_ICON is, after the @.
+const svgIcon = (body, fill = 'none') => `<svg viewBox="0 0 16 16" width="0.8em" height="0.8em" fill="${fill}" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true" style="display:inline-block;vertical-align:-0.06em;margin:0 0.2em 0 0.1em">${body}</svg>`;
+const FILE_ICONS = {
+  pdf: svgIcon('<path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/>'),
+  md: svgIcon('<path d="M5 1.5h4.5L13 5v7.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2z"/><path d="M9.5 1.5v2A1.5 1.5 0 0 0 11 5h2"/><path d="M5.5 7.75h5M5.5 10h5M5.5 12.25h5"/>'),
+  html: svgIcon('<path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5"/>'),
+  data: svgIcon('<path d="M8 2.5 14 5.5 8 8.5 2 5.5z"/><path d="M2 8.5l6 3 6-3"/><path d="M2 11.5l6 3 6-3"/>'),
+  image: svgIcon('<rect x="1.5" y="2.5" width="13" height="11" rx="1.2"/><circle cx="5.5" cy="6" r="1.25"/><path d="M14.5 10.5 11 7l-4.5 4.5L4.5 9.5 1.5 12.5"/>'),
+  folder: svgIcon('<path d="M1.5 4a1 1 0 0 1 1-1h3.3l1.5 1.8h6.2a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z"/>'),
+};
+FILE_ICONS.file = FILE_ICONS.pdf;
 // A bare address, typed, pasted or written by @bart, is a link as it stands (closing punctuation is not part of it).
 const URL_RE = /^https?:\/\/\S+$/;
 
@@ -232,6 +263,7 @@ export function tokShown(tok, opts) {
   if (tok.startsWith('`') && tok.endsWith('`') && tok.length > 2) return { shown: tok.slice(1, -1), pre: 1 };
   if (tok.startsWith('*') && tok.endsWith('*') && tok.length > 2) return { shown: tok.slice(1, -1), pre: 1 };
   const ws = tok.match(WS_MENTION_RE); if (ws) return { shown: '@' + ws[1], pre: 1 }; // the icon after the @ is not text
+  const file = tok.match(FILE_MENTION_RE); if (file) return { shown: '@' + file[1], pre: 1 }; // nor a file's glyph
   const lib = tok.match(LIB_MENTION_RE); if (lib) return { shown: '@' + libShown(lib[1], lib[2], opts && opts.libName), pre: 1 };
   if (tok.startsWith('@[')) { const nm = tok.slice(2, -1), chat = chatMention(nm); return { shown: '@' + (chat ? chat.shown : nm), pre: 1 }; }
   const m = tok.match(LINK_RE); if (m) return { shown: m[1], pre: 1 };
@@ -350,6 +382,19 @@ function libHtml(name, id, libName, trashed) {
   const shown = libShown(name, id, libName), bin = trashedOf(trashed, shown, id);
   return `<span data-mention="${esc(shown)}" data-lib="${esc(id)}"${bin ? ' title="In trash"' : ''} style="${bin ? TRASHED_LOOK : MENTION_LOOK}">@${esc(shown)}</span>`;
 }
+// A file mention's chip (MATH-22): the @, the file's kind glyph, its name; the pointer resting on it says `folder / path`.
+// `data-folder` and `data-file` (the path, decoded) are what a click opens. `opts.fileState(folderId, rel)` is false when
+// the file is no longer there, which leaves it grey, still clickable to be told so; `opts.libName(folderId)` the folder's
+// name now, null when the library no longer holds the folder (grey, nothing to click). Either may answer undefined.
+function fileHtml(tok, opts) {
+  const f = fileMentionOf(tok);
+  const folder = opts && typeof opts.libName === 'function' ? opts.libName(f.folderId) : undefined;
+  if (folder === null) return goneHtml(f.name, 'Its folder is no longer in the library');
+  const where = `${folder || 'folder'} / ${f.rel}`;
+  const state = opts && typeof opts.fileState === 'function' ? opts.fileState(f.folderId, f.rel) : undefined;
+  const kind = state && state.dir ? 'folder' : fileKindOf(f.rel), gone = state === false;
+  return `<span data-mention="${esc(f.name)}" data-folder="${esc(f.folderId)}" data-file="${esc(f.rel)}"${gone ? ' data-missing="1"' : ''} title="${esc(gone ? `Not found: ${where}` : where)}" style="${gone ? 'color:#8f8f8f;font-weight:500;cursor:pointer;border-bottom:1px dotted #d9d9d9;text-decoration:line-through;text-decoration-color:#c9c9c9' : MENTION_LOOK};white-space:nowrap">@${FILE_ICONS[kind] || FILE_ICONS.file}${esc(f.name)}</span>`;
+}
 // A mention by name, `@[Name]`. A chat's (chatMention) shows its word: Bart's is blue, a chat that is gone grey. Anything
 // else is a note or a library item: `named(name)` (optional) is false when nothing goes by that name, which leaves it grey;
 // `trashed(name)` true for a note in the trash, grey but still clickable.
@@ -382,6 +427,7 @@ export function inlineHtml(text, opts) {
     if (ws) return `<span data-mention="${esc(ws[1])}" data-ws="${esc(ws[2])}" style="color:#0070f3;font-weight:500;cursor:pointer;border-bottom:1px dotted #c9c9c9;white-space:nowrap">@${WS_ICON}${esc(ws[1])}</span>`;
     const lib = p.match(LIB_MENTION_RE);
     if (lib) return libHtml(lib[1], lib[2], opts && opts.libName, opts && opts.trashed);
+    if (FILE_MENTION_RE.test(p)) return fileHtml(p, opts);
     if (p.startsWith('@[')) return nameHtml(p.slice(2, -1), opts && opts.named, opts && opts.trashed);
     const m = p.match(LINK_RE);
     if (m) return `<a href="${esc(m[2])}" data-link="1" style="color:#0070f3;text-decoration:underline;text-underline-offset:3px">${esc(m[1])}</a>`;
@@ -396,7 +442,7 @@ export function inlineHtml(text, opts) {
 // @bart at the start of a note that can ask (MATH-27 follow-up, 2026-10-06) is drawn as the document draws it: blue, 500, in
 // the document's font. With `opts.agents` it is a piece of its own (any space before it another), so the pieces still
 // match the shown note's child nodes. The only agent a note asks is Bart (PaperView mentionList).
-const LIB_SPLIT = /(@\[[^\]\n]+\]\(lib:[\w-]+\))/;
+const LIB_SPLIT = /(@\[[^\]\n]+\]\(lib:[\w-]+(?::[\w.~%/-]+)?\))/;
 export const NOTE_AGENT_RE = /^(\s*)(@bart)(?=\s|$)/i;
 export const noteParts = (text, opts) => {
   const s = String(text ?? ''), lead = opts && opts.agents ? s.match(NOTE_AGENT_RE) : null;
@@ -418,6 +464,7 @@ export function noteHtml(text, opts) {
   return noteParts(text, opts).map((p, i) => {
     if (i === at) return agentLabelHtml(p);
     const lib = p.match(LIB_MENTION_RE);
+    if (FILE_MENTION_RE.test(p)) return fileHtml(p, opts);
     return lib ? libHtml(lib[1], lib[2], opts && opts.libName) : esc(p);
   }).join('');
 }
@@ -436,7 +483,7 @@ export function noteOffset(text, part, offset, opts) {
   for (let i = 0; i < Math.min(part, parts.length); i++) at += parts[i].length;
   if (part >= parts.length) return at;
   const p = parts[part];
-  return at + (LIB_MENTION_RE.test(p) ? p.length : Math.max(0, Math.min(p.length, Number(offset) || 0)));
+  return at + (LIB_MENTION_RE.test(p) || FILE_MENTION_RE.test(p) ? p.length : Math.max(0, Math.min(p.length, Number(offset) || 0)));
 }
 
 /* ---------------------------------------------------------------- copy and cut (2026-10-02) */
@@ -533,6 +580,7 @@ function plainHtml(text) {
     if (tok.startsWith('*') && tok.endsWith('*') && tok.length > 2) return `<em>${esc(tok.slice(1, -1))}</em>`;
     const ws = tok.match(WS_MENTION_RE); if (ws) return esc(ws[1]);
     const lib = tok.match(LIB_MENTION_RE); if (lib) return esc(lib[1]);
+    const file = tok.match(FILE_MENTION_RE); if (file) return esc(file[1]);
     if (tok.startsWith('@[')) return esc(tok.slice(2, -1));
     const m = tok.match(LINK_RE); if (m) return SAFE_HREF.test(m[2]) ? `<a href="${esc(m[2])}">${esc(m[1])}</a>` : esc(m[1]);
     if (URL_RE.test(tok)) return `<a href="${esc(tok)}">${esc(tok)}</a>`;

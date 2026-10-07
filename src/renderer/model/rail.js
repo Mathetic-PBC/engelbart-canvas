@@ -200,6 +200,49 @@ export function mentionRows({ query, library, page, pageRow, workspaces = [], he
   return [...out, ...spaces, ...hits.slice(0, MAX_MENTIONS)];
 }
 
+/* ------------------------------------------------------------ files in a folder (MATH-22) */
+
+/** A library row the @ menu goes into rather than mentions: a folder on this Mac, a repository's clone included. */
+export const isBrowsable = (row) => !!row && row.type === 'folder' && !!row.folder_path;
+/** The @ menu's row for a library folder: picked, it opens (MF-01). */
+export const isFolderRow = (m) => !!m && m.kind === 'item' && isBrowsable(m.row);
+
+/**
+ * The @ menu inside a library folder (MF-01, MF-02). Before anything is typed: a row back up a level, "Mention this
+ * folder" (the folder's own mention at its top, a subfolder's below it), then what the level holds, subfolders first.
+ * Typed: what of it holds the words, the first one ready for Enter. Cut at MAX_MENTIONS, with a row saying how many more.
+ * `browse` { row, rel }: the folder's library row and the path of the level inside it ('' at its top). `listing`: main's
+ * answer for that level (store/folder-files.cjs listFolder), undefined while it is on its way, { error } when it could
+ * not be read. Rows: { kind: 'back' | 'self' | 'entry' | 'note', key, name, … }; a 'note' row says something and is never
+ * picked.
+ */
+export function folderRows({ browse, listing, query }) {
+  const { row, rel = '' } = browse;
+  const parts = rel ? rel.split('/') : [];
+  const needle = String(query || '').trim().toLowerCase();
+  const out = needle ? [] : [{ kind: 'back', key: 'back', name: parts.length ? parts[parts.length - 2] || row.name : 'All', hint: [row.name, ...parts].join(' / ') }];
+  const say = (key, name) => [...out, { kind: 'note', key: `note:${key}`, name }];
+  if (listing === undefined) return say('loading', 'Opening…');
+  if (!listing || listing.error) return say('error', (listing && listing.error) || 'This folder could not be read');
+  if (listing.missing) return say('missing', rel ? 'This folder is no longer there' : 'This folder is not on this Mac any more');
+  if (!needle) {
+    out.push(rel
+      ? { kind: 'self', key: `self:${rel}`, name: 'Mention this folder', row, rel, entryName: parts[parts.length - 1], dir: true }
+      : { kind: 'self', key: 'self', name: 'Mention this folder', row });
+  }
+  const hits = (listing.entries || []).filter((entry) => !needle || entry.name.toLowerCase().includes(needle));
+  for (const entry of hits.slice(0, MAX_MENTIONS)) out.push({ kind: 'entry', key: `entry:${entry.rel}`, name: entry.name, row, rel: entry.rel, dir: !!entry.dir, type: entry.type || null });
+  // More than shown: those cut here, and (nothing typed) those main left out of a very large folder.
+  const more = hits.length - Math.min(hits.length, MAX_MENTIONS) + (needle ? 0 : Math.max(0, (listing.total || 0) - (listing.entries || []).length));
+  if (more > 0) out.push({ kind: 'note', key: 'note:more', name: `${more} more${needle ? '' : ': type to narrow'}` });
+  else if (!hits.length) out.push({ kind: 'note', key: 'note:none', name: needle ? 'Nothing here by that name' : 'Nothing here to mention' });
+  return out;
+}
+/** The row the keyboard starts on in a folder: its first file or subfolder, else "Mention this folder", else the first. */
+export const firstPick = (rows) => { const at = rows.findIndex((m) => m.kind === 'entry'); return at >= 0 ? at : Math.max(0, rows.findIndex((m) => m.kind === 'self')); };
+/** The path of the level above `rel` ('' at the folder's top), or null when `rel` is the top already. */
+export const parentRel = (rel) => (rel ? rel.split('/').slice(0, -1).join('/') : null);
+
 /** A row the line keeps as a word (Bart, Note, Brainstorm, Discover) rather than a mention; an editor's own list names the agents by id. */
 export const isVerbRow = (row) => !!row && (row.kind === 'verb' || row.id === 'bart' || row.id === 'brainstorm' || row.id === 'discover');
 /** The @ menu of a follow-up field (2026-10-02): the field already asks its thread's agent, so only what can be mentioned. */
@@ -208,11 +251,13 @@ export const fieldRows = (rows) => rows.filter((row) => row && !isVerbRow(row));
 /** A name a mention can carry: `@[…]` ends at the first `]` and stays on one line. */
 export const mentionName = (value) => String(value || '').replace(/[[\]]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200) || 'Untitled page';
 
-// Every mention a document holds: `@[Name]`, `@[Name](lib:<id>)`, `@[Name](ws:<id>)`.
-const MENTION_TOKEN_RE = /@\[([^\]\n]+)\](?:\((ws|lib):([\w-]+)\))?/g;
+// Every mention a document holds: `@[Name]`, `@[Name](lib:<id>)`, `@[Name](ws:<id>)`, and a file in a library folder,
+// `@[Name](lib:<folderId>:<path>)` (MATH-22).
+const MENTION_TOKEN_RE = /@\[([^\]\n]+)\](?:\((ws|lib):([\w-]+)(?::[\w.~%/-]+)?\))?/g;
 /**
  * The library rows a document mentions, by id (MATH-57): a library mention its item, a plain one every row of its name
- * (as the rail reads them, Workspace.jsx `mentioned`). A workspace is no row.
+ * (as the rail reads them, Workspace.jsx `mentioned`). A workspace is no row. A file in a folder (MATH-22) is a mention of
+ * its folder, so the folder stays linked while any mention of it or of a file in it is left.
  */
 export function mentionedIds(text, library = []) {
   const ids = new Set(), names = new Set(), body = String(text || '');

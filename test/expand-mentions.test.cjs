@@ -166,12 +166,36 @@ test('imagePaths: a question\'s pasted images become the paths of their files, a
 
 test('the inline tokens are the editor\'s own', async () => {
   const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
-  // But one: a library mention by id, `@[Name](lib:<id>)` (MATH-21), is written only into a PDF margin note, which main
-  // does not read. Pasted into a document it splits here as the mention by name it starts with.
-  const LIB = String.raw`@\[[^\]\n]+\]\(lib:[\w-]+\)|`;
-  assert.ok(model.INLINE.source.includes(LIB));
-  assert.equal(INLINE.source, model.INLINE.source.replace(LIB, ''));
+  // A library mention by id, `@[Name](lib:<id>)` (MATH-21), and a file in a library folder, `@[Name](lib:<id>:<path>)`
+  // (MATH-22, which a document's @ menu writes), are read here too since MATH-22.
+  assert.equal(INLINE.source, model.INLINE.source);
   assert.equal(INLINE.flags, model.INLINE.flags);
+});
+
+test('a library mention is its item by id; a file in a library folder is where it is, its folder mentioned (MATH-22)', async () => {
+  const rows = [{ id: 'r-1', name: 'Renamed Paper', type: 'pdf', tags: ['paper'], path: '/p/paper.pdf' }, { id: 'f-1', name: 'Papers', type: 'folder', tags: [], folder_path: '/home/papers' }];
+  const files = { 'f-1\nsub dir/Smith (2024) #2.pdf': { folder: 'Papers', path: '/home/papers/sub dir/Smith (2024) #2.pdf', exists: true, dir: false, type: 'pdf' } };
+  const source = {
+    ...sourceOf(rows),
+    get: (id) => rows.find((row) => row.id === id) || null,
+    file: (folderId, rel) => files[`${folderId}\n${rel}`] || { folder: 'Papers', path: `/home/papers/${rel}`, exists: false },
+  };
+  const seen = new Set();
+  const result = await expand('See @[Old Name](lib:r-1) and @[Smith (2024) #2.pdf](lib:f-1:sub%20dir/Smith%20%282024%29%20%232.pdf), again @[x](lib:f-1:sub%20dir/Smith%20%282024%29%20%232.pdf).\nGone @[Old.pdf](lib:f-1:Old.pdf)', source, seen);
+  assert.equal(result.text, [
+    'See @[Old Name](lib:r-1) and @[Smith (2024) #2.pdf](lib:f-1:sub%20dir/Smith%20%282024%29%20%232.pdf), again @[x](lib:f-1:sub%20dir/Smith%20%282024%29%20%232.pdf).',
+    '',
+    '<file name="Renamed Paper" type="pdf" tags="paper" path="/p/paper.pdf" />',
+    '',
+    '<file name="Smith (2024) #2.pdf" type="pdf" folder="Papers" path="/home/papers/sub dir/Smith (2024) #2.pdf" />',
+    '',
+    'Gone @[Old.pdf](lib:f-1:Old.pdf)',
+    '',
+    '<file name="Old.pdf" folder="Papers" path="/home/papers/Old.pdf" missing="true" />',
+  ].join('\n'));
+  assert.ok(seen.has('r-1') && seen.has('f-1'), 'the item and the folder are mentioned');
+  assert.ok(seen.has('file:f-1:sub dir/Smith (2024) #2.pdf') && seen.has('file:f-1:Old.pdf'), 'each file once, by its path');
+  assert.deepEqual({ files: result.files, missing: result.missing }, { files: 2, missing: 1 });
 });
 
 /* ------------------------------------------------------------- with the store */

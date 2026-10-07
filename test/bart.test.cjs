@@ -2365,3 +2365,40 @@ test('@brainstorm and @discover: a resumed turn is sent no <stage> or <highlight
     for (const call of calls) assert.ok(!/<stage>none|<stage source=|<stage paper=|<highlights/.test(call.input), agent);
   }
 });
+
+/* --------------------------------------------------- files inside a library folder (MATH-22) */
+
+test('MATH-22: a folder reaches the agents with its path, and every agent is told the files the documents point at', async () => {
+  const { firstMessage } = require('../src/main/bart/ask.cjs');
+  const { BART_SYSTEM_PROMPT } = require('../src/main/bart/system-prompt.cjs');
+  const { DISCOVER_SYSTEM_PROMPT } = require('../src/main/bart/discover-system-prompt.cjs');
+  const proj = await projects.createProject(ctx, 'Folders');
+  const here = await projects.createWorkspace(ctx, proj.id, { name: 'Reading' });
+  const folder = fs.mkdtempSync(path.join(homeDir, 'papers-'));
+  fs.mkdirSync(path.join(folder, 'sub dir'));
+  fs.writeFileSync(path.join(folder, 'sub dir', 'Smith (2024) #1 é.pdf'), '%PDF-1.4');
+  const id = require('node:crypto').randomUUID();
+  await ctx.libraryDb.insert({ id, name: 'Papers', project_id: proj.id, tags: [], type: 'folder', folder_path: folder });
+  await projects.linkToWorkspace(ctx, proj.id, here.id, [id]);
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
+  const token = model.fileMention('Smith (2024) #1 é.pdf', id, 'sub dir/Smith (2024) #1 é.pdf');
+  await projects.writeDoc(ctx, proj.id, { kind: 'workspace', workspaceId: here.id }, `Look at ${token} and ${model.fileMention('Gone.pdf', id, 'Gone.pdf')}\n@bart what does this say?\nbart~> f1\n`);
+  const real = fs.realpathSync(folder);
+  for (const agent of ['bart', 'brainstorm', 'discover']) {
+    const c = await buildContext(ctx, proj.id, { ref: { kind: 'workspace', workspaceId: here.id }, workspaceId: here.id, askId: 'f1', agent });
+    const entry = JSON.parse(c.contextJson.replace(/^<context_json>\n|\n<\/context_json>$/g, '')).find((e) => e.name === 'Papers');
+    assert.deepEqual([entry.path, entry.mentioned], [path.resolve(folder), true], `${agent}: the folder's path, mentioned`);
+    assert.deepEqual(c.files, [
+      { path: path.join(real, 'sub dir', 'Smith (2024) #1 é.pdf'), folder: 'Papers', exists: true },
+      { path: path.join(real, 'Gone.pdf'), folder: 'Papers', exists: false },
+    ], `${agent}: the files pointed at, absolute`);
+    assert.match(c.mentionedFiles, /^<mentioned_files>\n[\s\S]*Smith \(2024\) #1 é\.pdf[\s\S]*\n<\/mentioned_files>$/);
+    assert.ok(c.dirs.some((dir) => real === dir || real.startsWith(dir + path.sep) || path.resolve(folder) === dir), `${agent}: the folder may be read`);
+    assert.match(c.documents, /<file name="Smith \(2024\) #1 é\.pdf" type="pdf" folder="Papers" path="[^"]+Smith \(2024\) #1 é\.pdf" \/>/);
+    const sent = firstMessage({ context: c, prior: [], question: 'what does this say?', resumed: false })('<level/>');
+    assert.ok(sent.indexOf('<mentioned_files>') > sent.indexOf('</context_json>') && sent.indexOf('<mentioned_files>') < sent.indexOf('<workspace'), `${agent}: sent after the library`);
+  }
+  for (const prompt of [BART_SYSTEM_PROMPT, BRAINSTORM_SYSTEM_PROMPT, DISCOVER_SYSTEM_PROMPT]) assert.match(prompt, /<mentioned_files>.*the files the person pointed at; open them/);
+  const none = await buildContext(ctx, project.id, { ref: { kind: 'workspace', workspaceId: workspace.id }, workspaceId: workspace.id, askId: 'x', agent: 'bart' });
+  assert.equal(none.mentionedFiles, '', 'nothing pointed at, no block');
+});

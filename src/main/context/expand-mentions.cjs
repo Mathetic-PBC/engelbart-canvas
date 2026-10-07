@@ -14,6 +14,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const projects = require('../store/projects.cjs');
 const buildStore = require('../build/store.cjs');
+const { fileInRow } = require('../store/folder-files.cjs');
 
 // A Build's line (`build> <id>`, 2026-09-25) is a card drawn from its record: outside the app it reads as what the card says.
 const BUILD_LINE_RE = /^build> ([0-9a-f]{10})$/;
@@ -27,9 +28,16 @@ function buildLines(text, project) {
 
 // The editor's inline tokens (src/renderer/model/doc.js), so a mention inside `code` stays text
 // here as it does on screen. test/expand-mentions.test.cjs holds the two together.
-const INLINE = /(!\[[^\]\n]*\]\(img:[\w-]+\)|@(?:[Bb]art|[Bb]rainstorm|[Oo]rient|[Dd]iscover)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`])/g;
+const INLINE = /(!\[[^\]\n]*\]\(img:[\w-]+\)|@(?:[Bb]art|[Bb]rainstorm|[Oo]rient|[Dd]iscover)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]\(lib:[\w-]+(?::[\w.~%\/-]+)?\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`])/g;
 const IMAGE_TOKEN = /^!\[([^\]\n]*)\]\(img:([\w-]+)\)$/;
 const WS_TOKEN = /^@\[([^\]\n]+)\]\(ws:([\w-]+)\)$/; // another workspace of the project (doc.js WS_MENTION_RE)
+// A library item by id (doc.js LIB_MENTION_RE), and a file inside a library folder by the folder's id and its path in it,
+// percent-encoded a segment at a time (doc.js FILE_MENTION_RE, MATH-22).
+const LIB_TOKEN = /^@\[([^\]\n]+)\]\(lib:([\w-]+)\)$/;
+const FILE_TOKEN = /^@\[([^\]\n]+)\]\(lib:([\w-]+):([\w.~%/-]+)\)$/;
+const decodeRel = (rel) => String(rel).split('/').filter(Boolean).map((part) => { try { return decodeURIComponent(part); } catch { return part; } }).join('/');
+/** The key a mentioned file is kept under in `seen` (bart/context.cjs mentionedFiles reads them back). */
+const fileKey = (folderId, rel) => `file:${folderId}:${rel}`;
 const BART_NAME = /^bart/i; // the editor shows @[bart…] as the question agent, never as a file
 
 const isNote = (row) => Array.isArray(row.tags) && row.tags.includes('note'); // an md from outside the project is not read through the notes table
@@ -56,6 +64,17 @@ async function fileBlock(row, source, seen, tally) {
   tally.files += 1;
   const summary = bare(row.summary);
   return summary ? [`${openTag(row)} contains="summary">`, ...summary.split('\n'), '</file>'] : [`${openTag(row)} />`];
+}
+
+function folderFileBlock(name, folderId, rel, source, tally) {
+  let found = null;
+  try { found = source.file ? source.file(folderId, rel) : null; } catch { found = null; }
+  if (!found || !found.exists) {
+    tally.missing += 1;
+    return [`<file name="${attr(name)}"${found ? ` folder="${attr(found.folder)}" path="${attr(found.path)}"` : ''} missing="true" />`];
+  }
+  tally.files += 1;
+  return [`<file name="${attr(name)}" type="${attr(found.dir ? 'folder' : found.type || 'file')}" folder="${attr(found.folder)}" path="${attr(found.path)}" />`];
 }
 
 async function workspaceBlock(name, id, source, seen, tally) {
@@ -91,9 +110,22 @@ async function expandLines(text, source, seen, tally) {
         blocks.push(await workspaceBlock(ws[1], ws[2], source, seen, tally));
         continue;
       }
+      const file = token.match(FILE_TOKEN);
+      if (file) {
+        // A file in a library folder (MATH-22): where it is, under the line. Its folder counts as mentioned. Its text is
+        // not placed here, whatever it is: the agent opens it (the folder is one it may read).
+        const folderId = file[2], rel = decodeRel(file[3]), key = fileKey(folderId, rel);
+        seen.add(folderId);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        blocks.push(folderFileBlock(file[1], folderId, rel, source, tally));
+        continue;
+      }
       if (!token.startsWith('@[')) continue;
-      const name = token.slice(2, -1);
-      const row = source.find(name);
+      const lib = token.match(LIB_TOKEN);
+      const name = lib ? lib[1] : token.slice(2, -1);
+      // A library mention is its item, by id, whatever it is called now (else, with a source that cannot tell, by name).
+      const row = lib && source.get ? source.get(lib[2]) : source.find(name);
       const key = row ? row.id : `?${name.toLowerCase()}`;
       if (seen.has(key) || (!row && BART_NAME.test(name))) continue;
       seen.add(key);
@@ -114,8 +146,10 @@ async function expandLines(text, source, seen, tally) {
 
 /**
  * `source` is where mentions lead: find(name) → a library row or null, read(row) → a note's text,
- * image(id) → a pasted image's file or null, workspace(id) → { name, path, text } of a workspace of the project or null. `seen` holds what is already included (the document
- * itself, when it is a note). → { lines, files, missing }
+ * image(id) → a pasted image's file or null, workspace(id) → { name, path, text } of a workspace of the project or null.
+ * Optional: get(id) → the library row a `lib:<id>` mention names, file(folderId, rel) → a file in a library folder
+ * (store/folder-files.cjs fileInRow) or null. `seen` holds what is already included (the document itself, when it is a
+ * note); a mentioned file is added to it as fileKey(folderId, rel), and its folder's id with it. → { lines, files, missing }
  */
 async function expandMentions(text, source, seen = new Set()) {
   const tally = { files: 0, missing: 0 };
@@ -159,8 +193,12 @@ function projectSource(ctx, projectId, rows) {
     if (!held || (held.project_id !== projectId && row.project_id === projectId)) byName.set(key, row);
   }
   const images = new Map(rows.filter((row) => row.type === 'image' && row.path).map((row) => [row.id, row.path]));
+  const byId = new Map(rows.map((row) => [row.id, row]));
   return {
     find: (name) => byName.get(name.toLowerCase()) || null,
+    get: (id) => { const row = byId.get(id); return row && row.type !== 'image' ? row : null; },
+    // A file inside a library folder (MATH-22) → store/folder-files.cjs fileInRow's answer, or null without the folder.
+    file: (folderId, rel) => { const row = byId.get(folderId); return row && row.folder_path ? fileInRow(row, rel, ctx.homeDir) : null; },
     // Not readDoc: that reads a file that is gone as an empty document, and here it is a missing one.
     read: async (row) => fs.readFileSync((await projects.resolveDoc(ctx, row.project_id, { kind: 'note', id: row.id })).file, 'utf8'),
     image: (id) => images.get(id) || null,
@@ -195,4 +233,4 @@ async function expandDoc(ctx, projectId, ref, { seen = new Set() } = {}) {
   return { title, body: lines.join('\n').trimEnd(), text, chars: text.length, files, missing };
 }
 
-module.exports = { INLINE, expandMentions, expandRows, expandDoc, projectSource, imagePaths };
+module.exports = { INLINE, fileKey, expandMentions, expandRows, expandDoc, projectSource, imagePaths };
