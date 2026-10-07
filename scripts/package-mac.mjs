@@ -10,8 +10,8 @@
 //                       path and require stays as it is): not protection, but the source is not there to read.
 
 import { execFileSync } from 'node:child_process';
-import { transform } from 'esbuild';
 import { createRequire } from 'node:module';
+import { minifiedSources } from './app-source.mjs';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -21,22 +21,6 @@ const require = createRequire(import.meta.url);
 const release = process.argv.includes('--release');
 const run = (command, args, env = {}) => execFileSync(command, args, { cwd: ROOT, stdio: 'inherit', env: { ...process.env, ...env } });
 const hostArch = process.arch === 'arm64' ? 'arm64' : 'x64';
-
-/** src/main, src/shared and the two preloads, minified one file at a time into release/.app-src/src. → that folder */
-async function minifiedSources() {
-  const out = path.join(ROOT, 'release', '.app-src');
-  fs.rmSync(out, { recursive: true, force: true });
-  const files = ['src/preload.cjs', 'src/post-it-preload.cjs'];
-  for (const dir of ['src/main', 'src/shared']) {
-    for (const entry of fs.readdirSync(path.join(ROOT, dir), { recursive: true })) if (String(entry).endsWith('.cjs')) files.push(path.join(dir, String(entry)));
-  }
-  for (const file of files) {
-    const { code } = await transform(fs.readFileSync(path.join(ROOT, file), 'utf8'), { loader: 'js', minify: true, platform: 'node', target: 'node22', sourcefile: file });
-    fs.mkdirSync(path.dirname(path.join(out, file)), { recursive: true });
-    fs.writeFileSync(path.join(out, file), code);
-  }
-  return path.join(out, 'src');
-}
 
 if (process.platform !== 'darwin') { console.error('The Mac app is packaged on a Mac.'); process.exit(1); }
 // A node_modules that is a symlink to another checkout's: electron-builder then keeps only the packages package.json
@@ -49,7 +33,7 @@ if (!release) { // read by the config as it loads: an everyday build is never se
   process.env.ENGELBART_SIGN = 'adhoc';
   delete process.env.ENGELBART_DOWNLOAD_URL;
 }
-if (release) process.env.ENGELBART_APP_SOURCE = await minifiedSources(); // likewise
+if (release) process.env.ENGELBART_APP_SOURCE = await minifiedSources(ROOT); // likewise
 
 let builder;
 try { builder = require('electron-builder'); } catch { console.error('electron-builder is not installed yet: run `npm install` first.'); process.exit(1); }
@@ -81,8 +65,9 @@ if (!release) {
     if (stale.isFile() && /^Engelbart-.*\.(dmg|zip|blockmap)$|^latest-mac\.yml$/.test(stale.name)) fs.rmSync(path.join(ROOT, 'release', stale.name));
   }
   await build({ targets: Platform.MAC.createTarget(['dmg', 'zip'], Arch.arm64, Arch.x64), config, publish: 'never' });
-  const { writeSite } = await import('./release-site.mjs');
-  const site = writeSite({ root: ROOT, version, downloads, developerId: config.extraMetadata.engelbart.developerId });
+  const { writeSite, liveWindows } = await import('./release-site.mjs');
+  const windows = await liveWindows(downloads); // the download page keeps the live Windows section (scripts/upload-windows.sh)
+  const site = writeSite({ root: ROOT, version, downloads, developerId: config.extraMetadata.engelbart.developerId, windows });
   console.log(`\nUpload everything in ${path.relative(ROOT, site)}/ to ${downloads}: npm run upload:mac`);
   console.log(`Install command: curl -fsSL ${downloads}install.sh | bash`);
 }

@@ -22,6 +22,8 @@
     "package": "node scripts/package-mac.mjs",
     "dist:mac": "node scripts/package-mac.mjs --release",
     "upload:mac": "bash scripts/upload-release.sh",
+    "dist:win": "node scripts/package-windows.mjs",
+    "upload:win": "bash scripts/upload-windows.sh",
     "fetch-git": "node scripts/fetch-git.mjs",
     "start:debug": "npm run build && electron . --remote-debugging-port=9222"
   },

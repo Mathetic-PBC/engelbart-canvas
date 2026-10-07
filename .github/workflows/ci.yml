@@ -93,16 +93,58 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npm run package
 
+      # The installer is made as a release is (scripts/package-windows.mjs: a production build, its update feed
+      # latest.yml), and kept: `npm run upload:win` takes both from the green run of the release commit.
       - name: Package the Windows installer
         if: runner.os == 'Windows'
-        run: npx electron-builder --config electron-builder.config.cjs --win nsis --x64 --publish never
+        env:
+          ENGELBART_DOWNLOAD_URL: https://mathetic.com/engelbart
+        run: npm run dist:win
       - name: Smoke test the packaged Windows app
         if: runner.os == 'Windows'
         run: node scripts/smoke-windows.cjs release/win-unpacked/Engelbart.exe
+      # The one-line install as a person runs it (scripts/install-windows.ps1), against the installer above served from
+      # a folder here: first in Windows PowerShell 5.1, which every Windows has; then the installed copy is smoke
+      # tested; then again in PowerShell 7, which must stop at "already installed".
+      - name: Install with the one-line command (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = node -p "require('./package.json').version"
+          $site = Join-Path $env:RUNNER_TEMP 'engelbart-site'
+          node scripts/release-site.mjs windows release $version https://mathetic.com/engelbart/ - $site
+          if ($LASTEXITCODE) { throw 'release-site.mjs could not write the folder' }
+          Get-ChildItem $site | Format-Table Name, Length
+          $server = Start-Process python -ArgumentList '-m', 'http.server', '8765', '--bind', '127.0.0.1', '--directory', $site -PassThru -WindowStyle Hidden
+          try {
+            for ($i = 0; $i -lt 100; $i++) { try { Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8765/latest.yml | Out-Null; break } catch { Start-Sleep -Milliseconds 200 } }
+            $env:ENGELBART_DOWNLOADS = 'http://127.0.0.1:8765/'
+            $env:ENGELBART_NO_OPEN = '1'
+            $first = powershell.exe -NoProfile -ExecutionPolicy Bypass -Command 'irm http://127.0.0.1:8765/install.ps1 | iex; exit $LASTEXITCODE' | Out-String
+            $code = $LASTEXITCODE
+            Write-Host $first
+            if ($code -ne 0 -or $first -notmatch "Engelbart $([regex]::Escape($version)) is installed in ") { throw "the first install did not install Engelbart (exit code $code)" }
+            $exe = Join-Path $env:LOCALAPPDATA 'Programs\Engelbart\Engelbart.exe'
+            if (-not (Test-Path -LiteralPath $exe)) { throw "Engelbart is not at $exe" }
+            Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall | Get-ItemProperty | Where-Object DisplayName -like 'Engelbart*' | Format-List DisplayName, DisplayVersion, InstallLocation
+            node scripts/smoke-windows.cjs $exe
+            if ($LASTEXITCODE) { throw 'the installed copy did not pass the smoke test' }
+            $again = & { irm http://127.0.0.1:8765/install.ps1 | iex } 6>&1 | Out-String
+            $code = $LASTEXITCODE
+            Write-Host $again
+            if ($code -ne 0 -or $again -notmatch "Engelbart $([regex]::Escape($version)) is already installed in .+ and up to date\.") { throw "the second run did not stop as up to date (exit code $code)" }
+            if ($again -match 'Downloading') { throw 'the second run downloaded the installer again' }
+          } finally {
+            Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+          }
       - name: Keep the installer
         if: runner.os == 'Windows' && always()
         uses: actions/upload-artifact@v4
         with:
           name: engelbart-windows-installer
-          path: release/*.exe
+          path: |
+            release/*.exe
+            release/*.exe.blockmap
+            release/latest.yml
           if-no-files-found: warn

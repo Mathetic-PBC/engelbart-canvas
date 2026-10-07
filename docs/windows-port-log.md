@@ -3,6 +3,52 @@
 The run that follows docs/windows-port.md, on branch `windows-port` (cut from `hudsons-feedback` at 22d738c).
 Newest status first; the sections below are kept current.
 
+## One-command install
+
+Goal (2026-10-07): install Engelbart on Windows with one PowerShell line, `irm https://mathetic.com/engelbart/install.ps1
+| iex`, as the Mac's `curl -fsSL https://mathetic.com/engelbart | bash`. Done when one commit on windows-port passes CI
+on windows-latest and macos-latest, and on windows-latest CI serves the installer, latest.yml and install.ps1 from a
+local folder, runs the line against it, smoke tests the installed copy and runs it again to see "already up to date";
+`UPLOAD_DRY_RUN=1 npm run upload:win` lists the right files.
+
+### What it is
+
+- `scripts/install-windows.ps1` (published as install.ps1, the download folder written in): reads latest.yml, refuses
+  ARM and 32-bit PCs, stops when that version is installed (registry uninstall entry, else
+  %LOCALAPPDATA%\Programs\Engelbart; ENGELBART_FORCE=1 installs anyway), downloads `Engelbart-<v>-x64.exe`, checks its
+  sha512, waits for a running Engelbart to quit, installs with `/S /currentuser` (`/allusers` when it was installed for
+  everyone), checks for Git for Windows (winget `Git.Git` when missing, else the git-scm.com link) and opens Engelbart
+  (not with ENGELBART_NO_OPEN=1). ENGELBART_DOWNLOADS, ENGELBART_INSTALL_DIR as on the Mac. Windows PowerShell 5.1 and
+  PowerShell 7; ASCII; never `exit` (it would close the person's window under `iex`); failures are one line,
+  "Engelbart was not installed: …", with $LASTEXITCODE 1.
+- `npm run dist:win` (`scripts/package-windows.mjs`, Windows only): the release build, as dist:mac makes it (production,
+  minified main process; the minifier moved to `scripts/app-source.mjs`, which package-mac.mjs imports unchanged),
+  then the x64 installer and latest.yml. CI runs it with ENGELBART_DOWNLOAD_URL=https://mathetic.com/engelbart and keeps
+  the .exe, its blockmap and latest.yml as the `engelbart-windows-installer` artifact.
+- `scripts/release-site.mjs`: `writeWindowsSite` writes release/upload-win/ (installer, blockmap, latest.yml,
+  install.ps1, SHA256SUMS-windows.txt, and the live download page with a marked Windows section put in or replaced).
+  The page is shared, so dist:mac now asks the live latest.yml (`liveWindows`) and keeps the Windows section; with no
+  Windows release live, the Mac page and every other file are byte for byte what they were (checked against the old
+  release-site.mjs, and in test/release-windows.test.cjs).
+- `npm run upload:win` (`scripts/upload-windows.sh`, from the Mac): the green CI run of the commit (HEAD by default),
+  `gh run download`, latest.yml's version against package.json, release/upload-win/, then the Mac's uploader
+  (`scripts/upload-release.sh`) with UPLOAD_FEED=latest.yml: the same bucket and prefix, 5 MiB retried parts, the
+  installer checked against latest.yml as stored, latest.yml last. upload-release.sh only gained UPLOAD_FEED and
+  UPLOAD_COMMAND, defaulting to the Mac's; its dry run on a Mac release folder is identical to before (diffed).
+- Tests: test/release-windows.test.cjs (site files, the Mac page unchanged, refusals, liveWindows, the script's
+  shape; on Windows the script itself in Windows PowerShell: a bad checksum and an unreachable folder). CI step
+  "Install with the one-line command (Windows)": the real install in Windows PowerShell 5.1, smoke-windows on
+  %LOCALAPPDATA%\Programs\Engelbart\Engelbart.exe, then the second run in PowerShell 7.
+
+### Status
+
+- 2026-10-07: written; Mac tests for it pass locally. Pushing for the first CI run.
+
+### CI runs
+
+| Commit | Run | macOS | Windows | Notes |
+|---|---|---|---|---|
+
 ## Catch-up to 0.1.10
 
 Goal (2026-10-07): bring `windows-port` up to `hudsons-feedback` f53c66d (Release 0.1.10: 87 commits since 22d738c —
