@@ -29,6 +29,9 @@
 // card's is kept and drawn). The next card's title is a lead-in of the agent's, what they kept coming back to, then
 // NEXT_TITLE (nextTitle); its field asks for one specific thing. An answer to it that only repeats their first answer is
 // asked once more, on the again card (AGAIN_TITLE), written by code, before the result.
+// MATH-40 round 3 (2026-10-06): `say` is back, drawn in the card above its question: a reply of one to three sentences
+// to what they just said. The next card's lead-in is its `say`, its title NEXT_TITLE alone; nextLead still reads a
+// lead-in from the title of an agent that wrote it there.
 
 const TYPES = ['mcq', 'select_all', 'free', 'open'];
 const MAX_OPTIONS = 6;

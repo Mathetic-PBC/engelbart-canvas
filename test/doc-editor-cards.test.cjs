@@ -69,7 +69,7 @@ function field(target, value = '') {
 
 test.afterEach(() => { delete globalThis.getSelection; delete globalThis.document; delete globalThis.window; });
 
-test('a live @brainstorm card has Skip, Wrap up and Submit, in that order, and nothing under its box: no Send to Discover, no search suggested; an older card\'s "say" is drawn above it as before (MATH31-03, MATH-40)', () => {
+test('a live @brainstorm card has Skip, Wrap up and Submit, in that order, and nothing under its box: no Send to Discover, no search suggested; its "say" is drawn in the box, in regular weight above the bold question (MATH31-03, MATH-40, MATH-40 round 3)', () => {
   const { html, entry, editor, asks, typeDiscover, sendDiscover } = mounted(['Notes', '@brainstorm', ...answer(FREE), '']);
   assert.equal(entry(1).live, true);
   assert.equal(entry(1).card.lookFor, undefined, 'an older card\'s search is not kept');
@@ -79,7 +79,9 @@ test('a live @brainstorm card has Skip, Wrap up and Submit, in that order, and n
   assert.match(shown, /<button type="button" class="bart-text" data-act="cardwrap" data-turn="1"[^>]*>Wrap up<\/button>/, 'styled as Skip is');
   assert.ok(shown.endsWith('Submit</button></div></div></div>'), 'the box ends the card');
   assert.ok(!shown.includes('opendiscover') && !shown.includes('data-discover-input') && !shown.includes('Send to Discover'), 'no Send to Discover under a card');
-  assert.ok(shown.indexOf('You said “it stops when the lock frees”.') < shown.indexOf('data-card-box'), 'an older card\'s say, above the box');
+  const said = shown.indexOf('You said “it stops when the lock frees”.');
+  assert.ok(shown.indexOf('data-card-box') < said && said < shown.indexOf('Within “Retries”'), 'its say, in the box, above the question');
+  assert.match(shown, /<div data-card-say="1" style="[^"]*font:400 16px[^"]*">You said “it stops when the lock frees”\.<\/div><div style="font:600 16px/, 'the reply in regular weight, the question in bold');
   // A field it no longer draws sends nothing.
   typeDiscover('c1', TYPED);
   sendDiscover('c1');
@@ -87,11 +89,12 @@ test('a live @brainstorm card has Skip, Wrap up and Submit, in that order, and n
   editor.editorClick({ target: { closest: () => ({ dataset: { act: 'opendiscover', target: 'c1' } }) }, preventDefault() {} });
   assert.ok(!html(1).includes('data-discover-input'), 'nor opens');
   assert.ok(!shown.includes(LOOK) && !shown.includes('cardlook') && !shown.includes('discoverlook'), 'no suggested search, no old button');
-  // A card with nothing said: its question first. The next card: its lead-in in the title, and its field asks for one thing.
-  const NEXT = { say: '', card: 'questions', questions: { eyebrow: 'what next', items: [{ id: 'next', type: 'open', title: card.nextTitle('You kept coming back to “correct”.'), placeholder: card.NEXT_PLACEHOLDER }] }, ready: false };
+  // A card with nothing said: its question first in the box. The next card: its lead-in said, then the question; its field asks for one thing.
+  const bare = mounted(['@brainstorm', ...answer({ ...FREE, say: '' }), '']).html(0);
+  assert.match(bare, /^<div [^>]*data-card="0"[^>]*><div data-card-box="live"[^>]*><div style="font:600 16px/, 'nothing above the box, nor above the question');
+  const NEXT = { say: 'You kept coming back to “correct”.', card: 'questions', questions: { eyebrow: 'what next', items: [{ id: 'next', type: 'open', title: card.NEXT_TITLE, placeholder: card.NEXT_PLACEHOLDER }] }, ready: false };
   const next = mounted(['@brainstorm', ...answer(NEXT), '']).html(0);
-  assert.match(next, /^<div [^>]*data-card="0"[^>]*><div data-card-box="live"/, 'nothing above the box');
-  assert.match(next, />You kept coming back to “correct”\. So what do you want to dig into next\?<\/div>/);
+  assert.match(next, /^<div [^>]*data-card="0"[^>]*><div data-card-box="live"[^>]*><div data-card-say="1"[^>]*>You kept coming back to “correct”\.<\/div><div [^>]*>So what do you want to dig into next\?<\/div>/, 'the lead-in, then the question, in the box');
   assert.match(next, /placeholder="One thing, as specific as you can make it"/);
 });
 

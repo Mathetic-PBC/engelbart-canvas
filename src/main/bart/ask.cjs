@@ -42,6 +42,8 @@
 // with no model run (./card.cjs resultText). Its follow-up (2026-10-06): no card says anything above its question
 // (brainstormReply writes `say` empty), the next card's title leads in with what they kept coming back to, and an answer
 // to it that only repeats their first answer gets the again card, written here with no model run, before the result.
+// MATH-40 round 3 (2026-10-06): a card's `say` is kept again, drawn in the card above its question: the agent's reply to
+// what they just said. The next card's lead-in is its `say` (or, from an agent that put it there, its title's).
 //
 // @discover (2026-09-30): the same again, for what to read about a problem. Its own prompt (./discover-system-prompt.cjs),
 // one step (./question.cjs readDiscover: the level of the models file's `discover` block for its mode, on the provider the
@@ -63,7 +65,7 @@ const { BART_SYSTEM_PROMPT } = require('./system-prompt.cjs');
 const { BRAINSTORM_SYSTEM_PROMPT } = require('./brainstorm-system-prompt.cjs');
 const { DISCOVER_SYSTEM_PROMPT } = require('./discover-system-prompt.cjs');
 const { readQuestion, readBrainstorm, readDiscover, withChoice } = require('./models.cjs');
-const { OPENING, SKIPPED, NEXT_ID, NEXT_PLACEHOLDER, AGAIN_ID, AGAIN_TITLE, cardBody, cardOfAnswer, questionOf, readCard, readAnswer, resultText, nextLead, nextTitle, sameWords } = require('./card.cjs');
+const { OPENING, SKIPPED, NEXT_ID, NEXT_PLACEHOLDER, AGAIN_ID, AGAIN_TITLE, cardBody, cardOfAnswer, questionOf, readCard, readAnswer, resultText, nextLead, sameWords, NEXT_TITLE } = require('./card.cjs');
 const { buildContext, conversationBlock } = require('./context.cjs');
 const { projectSource, imagePaths } = require('../context/expand-mentions.cjs');
 const { replyLines, answerText } = require('./reply.cjs');
@@ -290,21 +292,21 @@ function turnPlan({ agent, text, turns, choice, entries = [] }, models) {
   };
 }
 
-/** The next card (MATH-40), its title led in by `lead` (./card.cjs nextTitle), with nothing said above it. */
-const nextCard = (lead = '') => JSON.stringify({ say: '', card: 'questions', questions: { eyebrow: 'what next', items: [{ id: NEXT_ID, type: 'open', title: nextTitle(lead), placeholder: NEXT_PLACEHOLDER }] }, ready: false });
+/** The next card (MATH-40): `lead`, the agent's lead-in, said above NEXT_TITLE (MATH-40 round 3), which code fixes. */
+const nextCard = (lead = '') => JSON.stringify({ say: lead, card: 'questions', questions: { eyebrow: 'what next', items: [{ id: NEXT_ID, type: 'open', title: NEXT_TITLE, placeholder: NEXT_PLACEHOLDER }] }, ready: false });
 /** The again card (MATH-40 follow-up): asked once, by code, when their answer to the next card only repeats their first. */
 const againCard = () => JSON.stringify({ say: '', card: 'questions', questions: { eyebrow: 'what next', items: [{ id: AGAIN_ID, type: 'open', title: AGAIN_TITLE, placeholder: NEXT_PLACEHOLDER }] }, ready: false });
 
 /**
  * What @brainstorm replied, as the document keeps it (MATH-40): on the next stage, or when the agent asked the next card
- * itself, the next card as it always reads, its title led in by the lead-in of the agent's next card (nextLead; none when
- * it asked another card); any other card as it came, with nothing said above its question (MATH-40 follow-up: an older
- * card's `say` is drawn, a new one's is written empty); a reply that is not a card, or a recap, as it came.
+ * itself, the next card as it always reads, led in by the agent's lead-in: its `say` (MATH-40 round 3), else what its
+ * title says before the question (nextLead); none when it asked another card. Any other card as it came, its `say` the
+ * reply drawn above its question (MATH-40 round 3); a reply that is not a card, or a recap, as it came.
  */
 function brainstormReply(text, stage) {
   const card = readCard(text), asked = card && card.card !== 'none' ? card : null;
-  if (stage === 'next' || (asked && idOf(asked) === NEXT_ID)) return nextCard(asked && idOf(asked) === NEXT_ID ? nextLead(questionOf(asked).title) : '');
-  return asked ? JSON.stringify({ ...asked, say: '' }) : text;
+  if (stage === 'next' || (asked && idOf(asked) === NEXT_ID)) return nextCard(asked && idOf(asked) === NEXT_ID ? asked.say || nextLead(questionOf(asked).title) : '');
+  return asked ? JSON.stringify(asked) : text;
 }
 
 /**
@@ -586,7 +588,7 @@ const FAKE_MOVES = ['excites', 'example', 'connect'];
 const MIND_TITLE = 'What\'s been on your mind lately?';
 
 /**
- * How the fake @brainstorm's next card leads in (MATH-40 follow-up: in its title, no longer its "say"): what they kept
+ * How the fake @brainstorm's next card leads in (MATH-40 round 3: in its "say", above the question): what they kept
  * coming back to, the longest word of five letters or more that is in the most of their answers, when that is more than
  * one; else the first words of what they said first. '' when they said nothing.
  */
@@ -602,16 +604,17 @@ function cameBack(said) {
 
 /**
  * The fake @brainstorm's reply (BS-13, MB-12, round 3; 2026-10-05, @orient folded in; MATH-40), as a model would write
- * it: the card turnPlan's stage names, on the exchange's path, with nothing said above its question (MATH-40 follow-up:
- * "say" is empty on every card; what it picks up is in the title). The first card: on a topic or a paper, an open card
- * asking what draws them to it, led in by a few words of a sentence of their own about it from the workspace when there
- * is one; with nothing on the line, "What's been on your mind lately?", as a focus card of broad areas from the workspace
- * and its library, or with nothing in the library as an open card. A move builds on the last answer: a question they
+ * it: the card turnPlan's stage names, on the exchange's path, its "say" a reply to their last answer and its title the
+ * one question (MATH-40 round 3). The first card: on a topic or a paper, an open card asking why it and why now, its
+ * "say" a few words of a sentence of their own about it from the workspace when there is one, else empty; with nothing
+ * on the line, "What's been on your mind lately?", as a focus card of broad areas from the workspace and its library, or
+ * with nothing in the library as an open card, with nothing said. A move builds on the last answer: a question they
  * wrote (ending in "?") or asked for ("a question"), up to the third card, gets the draft card; words saying what they
  * will do ("I want to") get the next card; else excites, example, then how two of their answers connect (unsure with
- * fewer than two), each title naming a few of their words. Versions: their draft word for word, then the draft with
- * "specifically" put in. The next card's title leads in with what they kept coming back to (cameBack). No card suggests
- * a search (MATH-31) or talks about the workspace. A line containing "malformed" gets a reply that is not a card.
+ * fewer than two), each "say" naming a few of their words and each title asking about "that". Versions: their draft word
+ * for word, then the draft with "specifically" put in. The next card's "say" is what they kept coming back to (cameBack).
+ * No card suggests a search (MATH-31) or talks about the workspace. A line containing "malformed" gets a reply that is
+ * not a card.
  */
 function fakeCard(context, plan, models) {
   if (/malformed/i.test(plan.question)) return 'FAKE REPLY that is not a card: {"say": "cut off';
@@ -627,10 +630,10 @@ function fakeCard(context, plan, models) {
   const said = answers.map(words).filter(Boolean), last = answers[answers.length - 1], now = words(last);
   const few = (text) => text.split(/\s+/).slice(0, 6).join(' '), quote = (text) => (text ? `“${few(text)}”` : 'this');
   const eyebrows = { draws: 'to start', mind: 'to start', draft: 'your question', versions: 'your question', [NEXT_ID]: 'what next' };
-  const ask = (id, type, title, extra = {}) => JSON.stringify({ say: '', card: 'questions', questions: { eyebrow: eyebrows[id] || 'thinking it through', items: [{ id, type, title, ...extra }] }, ready: false });
+  const ask = (id, type, title, extra = {}, say = '') => JSON.stringify({ say, card: 'questions', questions: { eyebrow: eyebrows[id] || 'thinking it through', items: [{ id, type, title, ...extra }] }, ready: false });
   const typed = { placeholder: 'In your own words…' };
   // The next card: the lead-in, then the question code fixes (brainstormReply keeps the lead-in and writes the rest).
-  const next = () => ask(NEXT_ID, 'open', nextTitle(cameBack(said)));
+  const next = () => ask(NEXT_ID, 'open', NEXT_TITLE, {}, cameBack(said));
   if (plan.stage === 'first') {
     if (plan.path === 'open') {
       const names = context.entries.map((entry) => entry.name).slice(0, 2);
@@ -642,8 +645,8 @@ function fakeCard(context, plan, models) {
     const paper = plan.paper ? plan.paper.name : '';
     const beside = plan.question.replace(/@\[([^\]\n]+)\](?:\(ws:[\w-]+\))?/g, (token, name) => (paper && name.toLowerCase() === paper.toLowerCase() ? ' ' : name)).replace(/\s+/g, ' ').trim().slice(0, 80);
     const own = ownSentence(context.documents, beside || paper);
-    const title = paper && beside ? `What draws you to “${beside}” in “${paper}”?` : `What draws you to “${beside || paper}”?`;
-    return ask('draws', 'open', own ? `You wrote ${quote(own.replace(/[.!?]$/, ''))}. ${title}` : title, typed);
+    const title = paper && beside ? `Why “${beside}” in “${paper}”, and why now?` : `Why “${beside || paper}”, and why now?`;
+    return ask('draws', 'open', title, typed, own ? `You wrote ${quote(own.replace(/[.!?]$/, ''))}.` : '');
   }
   if (plan.stage === 'next') return next();
   // versions: their draft word for word, then one version of it with "specifically" put in after its first word; when the
@@ -657,19 +660,19 @@ function fakeCard(context, plan, models) {
   // A move, on the last thing they said (after a skip, the one before it).
   if (/\b(?:i want to|i'd like to|i will|i'll)\b/i.test(now)) return next();
   if (now && answers.length <= 2 && (/\?\s*$/.test(now) || /\ba question\b/i.test(now))) {
-    return ask('draft', 'open', `You asked ${quote(now)}. Write what you want to find out as one question, in one sentence.`, { placeholder: 'Your question…' });
+    return ask('draft', 'open', 'Can you write what you want to find out as one question, in one sentence?', { placeholder: 'Your question…' }, `You asked ${quote(now)}.`);
   }
   const latest = now || said[said.length - 1] || '', moved = answers.filter((answer) => FAKE_MOVES.includes(answer.id) || answer.id === 'unsure').length;
   let move = FAKE_MOVES[moved % FAKE_MOVES.length];
   if (move === 'connect' && said.length < 2) move = 'unsure';
   const [a, b] = [said[said.length - 1], said[said.length - 2]];
   const MOVE = {
-    excites: `What excites you about ${quote(latest)}?`,
-    example: `What's an example of ${quote(latest)}?`,
-    unsure: `Where are you unsure about ${quote(latest)}?`,
-    connect: `How does ${quote(a)} connect to ${quote(b)}?`,
+    excites: 'What excites you about that?',
+    example: 'What\'s an example of that?',
+    unsure: 'Where are you unsure about that?',
+    connect: 'How do those two connect?',
   }[move];
-  return ask(move, 'open', MOVE, typed);
+  return ask(move, 'open', MOVE, typed, move === 'connect' ? `You said ${quote(a)}, and before that ${quote(b)}.` : `You said ${quote(latest)}.`);
 }
 
 /**

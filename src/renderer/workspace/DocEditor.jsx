@@ -1172,19 +1172,20 @@ export default class DocEditor extends React.Component {
     return !!this.props.onAsk && !this.props.readOnly && turn.answered && !turn.pending && !card && !buildRequestOf({ agent: agentOf(p), text: p.text });
   }
   /* ---------------------------------------------------------------- @brainstorm cards (2026-09-30) */
-  // One card on the answer's grey: what it says, then a white box with the question, its options (a round mark for one,
+  // One card on the answer's grey: a white box with what it says, the question, its options (a round mark for one,
   // a square for several, each option's `why` under its label) or its field, and Skip and Submit. An answered card is
   // drawn still, with what was picked marked; a card that is not the thread's last and has no answer under it (a turn
   // deleted after it) is drawn still too. A map card (the first of an exchange, 2026-09-30) draws where the person seems
   // to be above the box, live or answered: three short lists, each line with what it rests on in grey. A live @brainstorm
   // card (round 6) adds Wrap up before Submit; on its versions card (round 7) the field under the options reads "Or
   // rewrite it yourself…". No Send to Discover under it (MATH-40 follow-up): that is the result's offer line. What it
-  // says above the box is an older card's: a new one's `say` is empty.
+  // says (`say`) is drawn in the box, in regular weight above the bold question (MATH-40 round 3: a reply to what they
+  // just said, then the question).
   cardHtml(raw, entry) {
     const { card, turn, live, answer } = entry, q = turn.q, asked = questionOf(card), state = this.cardState.get(q) || {};
     const choice = isChoice(asked.type), many = asked.type === 'select_all';
     const picks = live ? state.picks || [] : answer ? answer.picks : [];
-    const say = card.say ? `<div style="margin:0 0 10px;color:#4d4d4d;font-size:16px;line-height:1.6;white-space:pre-wrap">${esc(card.say)}</div>` : '';
+    const say = card.say ? `<div data-card-say="1" style="margin:0 0 10px;color:#171717;font:400 16px/1.6 var(--font-sans);white-space:pre-wrap">${esc(card.say)}</div>` : '';
     const map = card.map ? MAP_GROUPS.filter((group) => card.map[group].length).map((group) => `<div data-card-map="${group}" style="margin:0 0 10px">`
       + `<div style="margin:0 0 2px;font:500 11.5px/1.4 var(--font-sans);letter-spacing:.04em;text-transform:uppercase;color:#8f8f8f">${MAP_LABELS[group]}</div>`
       + card.map[group].map((item) => `<div style="display:flex;gap:8px;font-size:15px;line-height:1.5;color:#171717"><span aria-hidden="true" style="flex:none;color:#c9c9c9">–</span><span style="flex:1;min-width:0">${esc(item.text)}${item.from ? `<span style="display:block;font-size:13px;line-height:1.45;color:#8f8f8f">${esc(item.from)}</span>` : ''}</span></div>`).join('')
@@ -1219,9 +1220,9 @@ export default class DocEditor extends React.Component {
       + (wraps ? `<button type="button" class="bart-text" data-act="cardwrap" data-turn="${q}" style="user-select:none">Wrap up</button>` : '')
       + `<button type="button" class="bs-submit" data-act="cardsend" data-turn="${q}" ${ready ? '' : 'disabled'}>Submit</button></div>` : '';
     return `<div ${raw} data-card="${q}" contenteditable="false" data-readonly="1" style="user-select:${live ? 'none' : 'text'};cursor:default;padding:12px 16px 4px;background:#fafafa;font:15px/1.5 var(--font-sans)">`
-      + say + map
+      + map
       + `<div data-card-box="${live ? 'live' : 'answered'}" style="padding:14px 16px 16px;border:1px solid #eaeaea;border-radius:10px;background:#fff">`
-      + `<div style="font:600 16px/1.45 var(--font-sans);color:#171717">${esc(asked.title)}</div>`
+      + say + `<div style="font:600 16px/1.45 var(--font-sans);color:#171717">${esc(asked.title)}</div>`
       + (sub ? `<div style="margin-top:8px;font-size:13.5px;color:#8f8f8f">${esc(sub)}</div>` : '')
       + body + acts + '</div></div>';
   }

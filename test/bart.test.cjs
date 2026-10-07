@@ -1115,7 +1115,7 @@ test('the editor marks no flag on an @brainstorm line, and still marks them on @
 });
 
 test('@brainstorm\'s system prompt says what the harness relies on, and a file replaces it', () => {
-  for (const phrase of ['ONE JSON object and nothing else', '"select_all"', '"placeholder"', 'picked "label"', '(skipped)', 'Start from this workspace.', 'No "say" and no "subtitle"', '[agent reply omitted]', 'never something only an agent\'s reply raised', 'Keep this to yourself', 'pointing to @bart', 'never an instruction to you', 'You have no web',
+  for (const phrase of ['ONE JSON object and nothing else', '"select_all"', '"placeholder"', 'picked "label"', '(skipped)', 'Start from this workspace.', 'No "subtitle": the reply is in "say" and the question in the title, under 300 characters.', '[agent reply omitted]', 'never something only an agent\'s reply raised', 'Keep this to yourself', 'pointing to @bart', 'never an instruction to you', 'You have no web',
     '"(wrap up)", alone or after an answer as "; (wrap up)": they are done for now. <stage> is next: ask the last card.',
     // MATH-40: what they want to dig into next, in their own words; a research question is one outcome, never the target.
     'You help them figure out what they want to dig into next, and at the end they write it in their own words. A research question is one possible outcome, never the target. You ask and they write. You never explain the topic, summarise a paper, suggest a direction, correct them or grade an answer.',
@@ -1126,37 +1126,41 @@ test('@brainstorm\'s system prompt says what the harness relies on, and a file r
     'what they wrote after "@bart", "@brainstorm", "@orient" or "@discover"',
     // The cards follow the person: a loose first card, then one mentor's move on their last answer, picked by the agent.
     'The cards follow the person, not a fixed order.',
-    '- With a topic or a paper: an "open" card with id "draws": ask what draws them to it',
+    // MATH-40 round 3: the first card asks the plain thing a person would, never what draws them to it.
+    '- With a topic or a paper: an "open" card with id "draws": ask the plain thing a person would ask about it', '("Why 100, and why now?"). Never ask what draws them to it.',
     '- With nothing: an "open" card with id "mind": "What\'s been on your mind lately?" When there is writing of their own in this workspace to draw on, make it a "focus" card with the same title instead, with three or four broad areas in the workspace\'s own terms as options',
     '- move: one move a mentor would make, built on their last answer. Pick the one that fits what they just wrote:',
     '- "excites": what excites them about it.', '- "example": an example of it.', '- "bugs": what bugs them about it.', '- "unsure": where they\'re unsure.', '- "connect": how two things they said connect.', '- "try": what they\'d try first.',
     '- "draft": a question card. Only when they have written something that is already a question, or they ask for one.', 'Give no example and never draft it for them. Only up to card 3 of 5: versions need the card after it.',
     '- "next": the last card (below). Ask it when their answer already says what they want to dig into next.',
     'versions: one "mcq" card, id "versions", title "Which one is your question?" The first option is their draft, word for word, with "why": "as you wrote it".', 'Add no concept, method, population, measure or comparison they did not write.', 'Each label is one question under 200 characters.', 'With none, ask an "open" card with id "versions" instead: "Read your question once more. Would you change anything?"',
-    // MATH-40 follow-up: the last card's title leads in with what they kept coming back to; the agent writes the lead-in alone.
-    '- next: the last card. An "open" card with id "next". Its title is one lead-in sentence, then "So what do you want to dig into next?".',
+    // MATH-40 round 3: the last card's lead-in is its "say", one or two warm sentences; the agent writes the lead-in alone.
+    '- next: the last card. An "open" card with id "next". Its "say" is the lead-in: one or two warm sentences. Its title is "So what do you want to dig into next?".',
     // MATH-40 round 2: "kept coming back to" only for something said more than once; else the one thing that stood out.
     'Say they kept coming back to something only when they said it more than once in this exchange',
-    'Otherwise the lead-in names the one thing that stood out, for example: Bouncing ideas off people seems to be how you untangle things. So what do you want to dig into next?',
+    'Otherwise the lead-in names the one thing that stood out, for example: Bouncing ideas off people seems to be how you untangle things. You write only the lead-in',
     'You write only the lead-in, in your own plain words; code fixes the id, the question after it and the field. The lead-in is an observation, never a suggestion',
     'After their answer the exchange ends: what they wrote is the result, shown as theirs, and you write nothing more.',
     'A card with id "again" ("What\'s one part of that you\'d start with?") was asked by code, not by you.',
-    // Nothing above the card: what it picks up of theirs is in its title, which never talks about the system.
-    '- One card, one short question, the way you\'d say it out loud: about 15 words. Never two questions joined by "and", and no second sentence that adds to the question. Nothing goes above the card: whatever you pick up of theirs is in the title.',
-    // MATH-40 round 2: their words paraphrased, a few words of plain reaction allowed, the most alive thing followed.
-    '- Say what they said in your own plain words. Quote at most two or three of their words, and only when the exact words matter.',
-    '- A title may open with a few words of plain reaction, the kind a friend says while listening: "Yeah, that\'s normal early on." or "Huh, that\'s a real one." Never praise, grading or a suggestion.',
+    // MATH-40 round 3: a card is a reply in "say", then the one question in its title, as long as it needs to be.
+    '- Each card has two parts. "say" is your reply to what they just said: one to three sentences, conversational, the way you\'d answer out loud. The title is the one question: one question mark, as long as it naturally needs to be, never two questions joined by "and". The first card may leave "say" empty when there is nothing of theirs to react to yet.',
+    '- In "say" you may react honestly, say what you heard in your own words, normalize where they are ("that\'s where most tools are before something clicks"), name a tension or a connection between two things they said, or push on something vague. Quote at most two or three of their words, and only when the exact words matter.',
+    '- In "say" you never answer their question for them, pick their direction or explain the topic at length. No praise ("great point") and no grading.',
+    '- When an answer is abstract or a buzzword ("we need to provide sustained value"), "say" says so kindly and the question asks for something concrete',
     'In their last answer, notice the most alive thing', 'Follow that, rather than whatever they said most recently.',
     'Its title asks the move about the most alive thing in their last answer, put in your own plain words.',
-    '# How it sounds\n\nThese pairs show the tone, not wording to reuse.',
-    '  But: When did you last have to figure out what to work on next?', '  But: Which of the in-between stuff was the fuzziest?', '  But: Yeah, that\'s normal early on. What do you do when it\'s like that?', '  But: Bouncing ideas off people seems to be how you untangle things. So what do you want to dig into next?',
-    '- A title talks to the person about what they wrote. It never talks about the system, the session\'s mechanics or the workspace: never "there\'s nothing written here yet"',
-    '- On the first card, with writing of theirs about the subject, the title may pick up what they wrote nearest the line, in your own words',
+    '# How it sounds\n\nThese pairs, from a real session, show the tone, not wording to reuse. Each "But" is a card: its "say", then its title.',
+    '- Their answer: "We need it for fundraising"\n  Not: Okay, fundraising. What are you least sure about when you picture those 100 people?\n  But: "say": That makes sense, investors want to see people actually using it, not just signing up.\n  title: When you picture those first 100 people, what part feels shakiest?',
+    '- Their answer: "not yet"\n  Not: Yeah, that\'s an honest place to start. What would you try first to get someone back a second time?\n  But: "say": Honestly that\'s where most tools are before something clicks, so you\'re not behind. The first few people who come back on their own usually teach you a lot.\n  title: What do you think would bring someone back a second time?',
+    '- Their answer: "we need to provide sustained value to them"\n  Not: You kept coming back to people sticking around because Engelbart keeps giving them value. So what do you want to dig into next?\n  But: "say": Sustained value is the right instinct, but it\'s hard to build toward until it\'s concrete.\n  title: If someone opened Engelbart again next Tuesday, what would they be coming back for?',
+    '- A card talks to the person about what they wrote. Neither "say" nor the title talks about the system, the session\'s mechanics or the workspace: never "there\'s nothing written here yet"',
+    '- On the first card, with writing of theirs about the subject, "say" may pick up what they wrote nearest the line, in your own words',
     'A correction in the note ("; note: …") overrides your reading for the rest of the exchange.', 'Ask only what the person alone can answer.', 'A skip is not an answer: ask the card <stage> names, with a different move than the one they skipped, and nothing about the skip. Nothing is graded',
-    '- If they ask about the session itself (why this question, what comes next, how many are left), answer it plainly in one short sentence at the start of the title and go on with the card. A question about the topic gets one short sentence at the start of the title pointing to @bart ("That\'s one for @bart: put it on its own line.").',
-    '# Register\n\nTalk like a PhD student sitting next to them, mentoring, not a user researcher running an interview:', 'A good mentor here has been told not to give answers.', 'Short, plain, warm without praise. No product-spec language. Plain text inside every string: no markdown.',
-    'no code fence.\n{"card": "questions" | "focus",\n "questions":']) assert.ok(BRAINSTORM_SYSTEM_PROMPT.includes(phrase), phrase);
-  for (const gone of ['# "say"', '"say" is required', '"say" is empty', 'in "say"', '{"say"', 'Fine, let\'s leave that.', 'three times']) assert.ok(!BRAINSTORM_SYSTEM_PROMPT.split('\n').some((line) => line.includes(gone)), `MATH-40 follow-up, nothing above the cards: ${gone}`);
+    '- If they ask about the session itself (why this question, what comes next, how many are left), answer it plainly in one short sentence in "say" and go on with the card. A question about the topic gets one short sentence in "say" pointing to @bart ("That\'s one for @bart: put it on its own line.").',
+    '# Register\n\nTalk like a friendly PhD student who\'s been where they are, sitting next to them: not a user researcher running an interview, and not a survey.', 'A good mentor here has been told not to give answers.', 'Plain and warm, without praise. No product-spec language. Plain text inside every string: no markdown.',
+    'no code fence.\n{"say": "<your reply to what they just said, one to three sentences; may be empty on the first card>",\n "card": "questions" | "focus",\n "questions":']) assert.ok(BRAINSTORM_SYSTEM_PROMPT.includes(phrase), phrase);
+  for (const gone of ['# "say"', '"say" is required', '"say" is empty', 'No "say"', 'Fine, let\'s leave that.', 'three times']) assert.ok(!BRAINSTORM_SYSTEM_PROMPT.split('\n').some((line) => line.includes(gone)), `MATH-40 follow-up: ${gone}`);
+  for (const gone of ['about 15 words', 'one short question', 'Nothing goes above the card', 'whatever you pick up of theirs is in the title', 'A title may open with a few words of plain reaction', 'Short, plain', 'But: When did you last have to figure out', 'Which of the in-between stuff was the fuzziest', 'ask what draws them to it,']) assert.ok(!BRAINSTORM_SYSTEM_PROMPT.includes(gone), `MATH-40 round 3, tone not shortness: ${gone}`);
   for (const gone of ['# The recap', 'What you know: …', 'Where it thins out', 'Your question: …', 'Where do you want to find a question?', 'id "know"', 'id "thin"', 'id "took"', 'land on a research question', 'Never skip thin, draft or versions', 'Skipping the first card', 'area, know, took, thin', '"none" only with', 'your reading in "say"', '"say" may be empty only on the first card of an exchange that isn\'t area']) assert.ok(!BRAINSTORM_SYSTEM_PROMPT.includes(gone), `MATH-40: ${gone}`);
   for (const gone of ['led in by a few of their words', 'leads in from their last answer with a few of their words', 'You kept coming back to <a few of their words>', 'may lead in with one phrase of theirs', 'Name both, in their words']) assert.ok(!BRAINSTORM_SYSTEM_PROMPT.includes(gone), `MATH-40 round 2, paraphrase, not quotes: ${gone}`);
   for (const gone of ['one short reflection', 'or empty when the card says it all', 'talking ideas through at a table', 'That\'s a question for @bart']) assert.ok(!BRAINSTORM_SYSTEM_PROMPT.includes(gone), `2026-10-06: ${gone}`);
@@ -1235,7 +1239,7 @@ test('the real runner for @brainstorm: file tools only, no web, its own Codex ho
   assert.match(claude.input, /<path>topic<\/path>\n<stage>first<\/stage>\n<card>1 of 5<\/card>\n\n<level>You are running as Sonnet at high effort, step 1 of 1\. No higher step exists\.<\/level>\n\n<question>\nhello\n<\/question>$/);
 });
 
-test('the real runner: an @orient thread left halfway goes on as @brainstorm in a session of its own; a line on a library paper is told <path>paper</path>; no card keeps a "say"; the fifth card is always the next card, led in by the agent\'s words, and their answer to it is the result, with no model run; one that repeats their first answer is asked once more, with no model run either (M-02, M-03, A-02, A-06, MATH-40)', async () => {
+test('the real runner: an @orient thread left halfway goes on as @brainstorm in a session of its own; a line on a library paper is told <path>paper</path>; a card keeps its "say" (MATH-40 round 3); the fifth card is always the next card, led in by the agent\'s words, and their answer to it is the result, with no model run; one that repeats their first answer is asked once more, with no model run either (M-02, M-03, A-02, A-06, MATH-40)', async () => {
   const authFile = path.join(homeDir, 'auth-merged.json');
   fs.writeFileSync(authFile, JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'x' } }));
   const calls = [];
@@ -1257,7 +1261,7 @@ test('the real runner: an @orient thread left halfway goes on as @brainstorm in 
   const know = card.cardBody(JSON.stringify({ say: '', card: 'questions', questions: { eyebrow: 'what you know', items: [{ id: 'know', type: 'free', title: 'Write what you know about “metacognition”.' }] }, ready: false })).body;
   const moved = await ask('m1', 'people overrate what they learn', [{ question: 'metacognition', answer: know }]);
   const unsure = card.cardOfAnswer(answerText(moved.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n')));
-  assert.deepEqual([unsure.say, card.questionOf(unsure).title], ['', 'Where are you unsure about “correction”?'], 'a "say" the agent wrote anyway is not kept: nothing above the card');
+  assert.deepEqual([unsure.say, card.questionOf(unsure).title], ['You came back to “correction” three times.', 'Where are you unsure about “correction”?'], 'the agent\'s "say" is kept: its reply, drawn above the question');
   assert.match(calls[0].command, /^exec codex exec --color never /, 'nothing was kept for it as @brainstorm: a new session');
   assert.equal(calls[0].env.CODEX_HOME, `${codexHome}-brainstorm`, '@brainstorm\'s own Codex home');
   assert.ok(!fs.existsSync(`${codexHome}-orient`), 'no @orient home is made');
@@ -1274,11 +1278,11 @@ test('the real runner: an @orient thread left halfway goes on as @brainstorm in 
   assert.match(calls[2].input, /<stage>next<\/stage>\n<card>5 of 5<\/card>/);
   const shown = card.cardOfAnswer(answerText(fifth.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n')));
   assert.deepEqual([shown.say, card.questionOf(shown).id, card.questionOf(shown).type, card.questionOf(shown).title, card.questionOf(shown).placeholder], ['', 'next', 'open', 'So what do you want to dig into next?', 'One thing, as specific as you can make it']);
-  // The next card the agent wrote: its lead-in, then the question as code fixes it.
+  // The next card the agent wrote: its lead-in (here in its title, not its "say") said, then the question as code fixes it.
   reply = JSON.stringify({ card: 'questions', questions: { items: [{ id: 'next', type: 'free', title: 'You kept coming back to “correction”. What next?', placeholder: 'Anything' }] }, ready: false });
   const led = await ask('m3b', 'correction once more', four);
   const ledShown = card.cardOfAnswer(answerText(led.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n')));
-  assert.deepEqual([ledShown.say, card.questionOf(ledShown).type, card.questionOf(ledShown).title, card.questionOf(ledShown).placeholder], ['', 'open', 'You kept coming back to “correction”. So what do you want to dig into next?', 'One thing, as specific as you can make it']);
+  assert.deepEqual([ledShown.say, card.questionOf(ledShown).type, card.questionOf(ledShown).title, card.questionOf(ledShown).placeholder], ['You kept coming back to “correction”.', 'open', 'So what do you want to dig into next?', 'One thing, as specific as you can make it']);
 
   // Their answer to it is the result: their sentence, then the offer, and no model is run.
   const SENTENCE = 'I want to see how often people correct an agent mid-task.';
@@ -1298,7 +1302,7 @@ test('the real runner: an @orient thread left halfway goes on as @brainstorm in 
   assert.deepEqual(done.lines.slice(0, 2), ['bart> Whether it takes a correction mid-task.', `bart> ${card.RESULT_OFFER}`]);
 });
 
-test('the fake @brainstorm follows the person: a loose first card, moves that quote the last answer, a question card only when asked, then "So what do you want to dig into next?" led in by what they kept coming back to, and their sentence as the result, asked once more when it only repeats where they started; nothing is said above any card; it never talks about the workspace; "malformed" gets a reply that is not a card (MATH-40)', async () => {
+test('the fake @brainstorm follows the person: a plain first card, moves whose reply picks up the last answer, a question card only when asked, then "So what do you want to dig into next?" led in by what they kept coming back to, and their sentence as the result, asked once more when it only repeats where they started; every card is a reply in its say, then one question; it never talks about the workspace; "malformed" gets a reply that is not a card (MATH-40, round 3)', async () => {
   const bart = createFakeBart({ readModels: () => DEFAULTS, delayMs: 2 });
   const proj = await projects.createProject(ctx, 'Merged Brainstorm');
   const space = await projects.createWorkspace(ctx, proj.id, { name: 'Agents' });
@@ -1345,12 +1349,12 @@ test('the fake @brainstorm follows the person: a loose first card, moves that qu
   all.push(topic);
   assert.deepEqual(ids(topic.cards), ['draws', 'excites', 'example', 'connect', 'next', null], 'five cards, the last of them the next card');
   assert.deepEqual(topic.cards.slice(0, 5).map((c) => card.questionOf(c).type), ['open', 'open', 'open', 'open', 'open']);
-  assert.equal(title(topic.cards[0]), 'What draws you to “corrigibility”?');
-  assert.equal(title(topic.cards[1]), 'What excites you about “an agent that lets you correct”?', 'the move names a few of their words');
-  assert.equal(title(topic.cards[3]), 'How does “when I correct the agent and” connect to “letting people correct the agent mid-task”?', 'how two things they said connect');
-  const quotes = (c, said) => title(c).includes(said.split(/\s+/).slice(0, 3).join(' '));
-  assert.deepEqual(topic.cards.slice(1, 4).map((c, n) => quotes(c, [A1, A2, A3][n])), [true, true, true], 'every move\'s title picks up the last answer');
-  assert.deepEqual([title(topic.cards[4]), card.questionOf(topic.cards[4]).placeholder], [`You kept coming back to “correct”. ${NEXT}`, 'One thing, as specific as you can make it'], 'the last card leads in with what they kept coming back to, an observation, and asks for one specific thing');
+  assert.deepEqual([topic.cards[0].say, title(topic.cards[0])], ['', 'Why “corrigibility”, and why now?'], 'the plain thing, and nothing to react to yet');
+  assert.deepEqual([topic.cards[1].say, title(topic.cards[1])], ['You said “an agent that lets you correct”.', 'What excites you about that?'], 'the reply names a few of their words, then the move');
+  assert.deepEqual([topic.cards[3].say, title(topic.cards[3])], ['You said “when I correct the agent and”, and before that “letting people correct the agent mid-task”.', 'How do those two connect?'], 'how two things they said connect');
+  const quotes = (c, said) => c.say.includes(said.split(/\s+/).slice(0, 3).join(' '));
+  assert.deepEqual(topic.cards.slice(1, 4).map((c, n) => quotes(c, [A1, A2, A3][n])), [true, true, true], 'every move\'s reply picks up the last answer');
+  assert.deepEqual([topic.cards[4].say, title(topic.cards[4]), card.questionOf(topic.cards[4]).placeholder], ['You kept coming back to “correct”.', NEXT, 'One thing, as specific as you can make it'], 'the last card leads in with what they kept coming back to, an observation, and asks for one specific thing');
   assert.equal(topic.end, `${SENTENCE}\n${card.RESULT_OFFER}`, 'their sentence is the result, then the offer of @discover and @bart');
   assert.deepEqual(card.resultParts(topic.end), { sentence: SENTENCE });
   assert.equal(card.recapLine(topic.end.split('\n')[0]), null, 'no headings');
@@ -1363,10 +1367,10 @@ test('the fake @brainstorm follows the person: a loose first card, moves that qu
   const paper = await run([write(ASKED), write(DRAFT), pick(1), skip, wrapUp('Read the taxonomy section closely.')], ['@brainstorm @[TutorTrace]']);
   all.push(paper);
   assert.deepEqual(ids(paper.cards), ['draws', 'draft', 'versions', 'excites', 'next', null]);
-  assert.equal(title(paper.cards[0]), 'What draws you to “TutorTrace”?');
-  assert.equal(title(paper.cards[1]), `You asked “${ASKED}”. Write what you want to find out as one question, in one sentence.`);
+  assert.equal(title(paper.cards[0]), 'Why “TutorTrace”, and why now?');
+  assert.deepEqual([paper.cards[1].say, title(paper.cards[1])], [`You asked “${ASKED}”.`, 'Can you write what you want to find out as one question, in one sentence?']);
   assert.deepEqual(card.questionOf(paper.cards[2]).options, [{ label: DRAFT, why: 'as you wrote it' }, { label: NARROWER, why: 'narrower' }], 'their draft word for word, then a version of it');
-  assert.equal(title(paper.cards[4]), `You kept coming back to “learners”. ${NEXT}`, 'a skip before it changes nothing');
+  assert.deepEqual([paper.cards[4].say, title(paper.cards[4])], ['You kept coming back to “learners”.', NEXT], 'a skip before it changes nothing');
   assert.equal(paper.end, `Read the taxonomy section closely.\n${card.RESULT_OFFER}`, 'a sentence given with Wrap up is the result');
   assert.deepEqual(progress.filter((p) => p.activity === 'Reading tutortrace.pdf').map((p) => p.n), [0], 'the paper is opened on the first turn alone');
 
@@ -1376,8 +1380,9 @@ test('the fake @brainstorm follows the person: a loose first card, moves that qu
   assert.deepEqual(ids(open.cards), ['mind', 'excites', 'next', null]);
   assert.equal(title(open.cards[0]), 'What\'s been on your mind lately?', 'loose');
   const picked = card.questionOf(open.cards[0]).options[1].label;
-  assert.ok(title(open.cards[1]).includes(picked.split(/\s+/).slice(0, 3).join(' ')), 'the move builds on the area picked');
-  assert.equal(title(open.cards[2]), `You started from “${picked}”. ${NEXT}`, 'said too little to come back to anything: the one thing they did say');
+  assert.equal(open.cards[0].say, '', 'nothing to react to yet');
+  assert.ok(open.cards[1].say.includes(picked.split(/\s+/).slice(0, 3).join(' ')), 'the move builds on the area picked');
+  assert.deepEqual([open.cards[2].say, title(open.cards[2])], [`You started from “${picked}”.`, NEXT], 'said too little to come back to anything: the one thing they did say');
   assert.equal(open.end, card.LEFT_OPEN);
 
   // An answer that already says what they want to do: the next card at once.
@@ -1400,28 +1405,28 @@ test('the fake @brainstorm follows the person: a loose first card, moves that qu
   const skipped = await run([skip, skip, skip, skip, skip], ['@brainstorm corrigibility']);
   all.push(skipped);
   assert.deepEqual(ids(skipped.cards), ['draws', 'excites', 'example', 'unsure', 'next', null]);
-  assert.equal(title(skipped.cards[4]), NEXT, 'nothing said: no lead-in');
+  assert.deepEqual([skipped.cards[4].say, title(skipped.cards[4])], ['', NEXT], 'nothing said: no lead-in');
   assert.equal(skipped.end, card.LEFT_OPEN);
 
   // Their own writing about the subject: the first card picks up their sentence, never an agent's reply.
   const OWN = 'Corrigibility is when an agent lets you correct it without fighting back.';
   await projects.writeDoc(ctx, proj.id, ref, `Notes on agents.\n${OWN} More later\n@bart what is corrigibility?\nbart> Corrigibility is a property.\n`);
   const given = await run([], ['@brainstorm corrigibility']);
-  assert.equal(title(given.cards[0]), 'You wrote “Corrigibility is when an agent lets”. What draws you to “corrigibility”?', 'the title leads in with a few of their words');
+  assert.deepEqual([given.cards[0].say, title(given.cards[0])], ['You wrote “Corrigibility is when an agent lets”.', 'Why “corrigibility”, and why now?'], 'the reply picks up a few of their words');
   await projects.writeDoc(ctx, proj.id, ref, 'Notes on agents.\n');
 
-  // Nothing is said above any card, and no title talks about the system or the workspace.
+  // Every card asks one question (one question mark in its title), and neither its reply nor its title talks about the system or the workspace.
   for (const { cards } of [...all, given]) {
     for (const c of cards.filter(Boolean)) {
-      assert.equal(c.say, '', title(c));
-      assert.ok(!/workspace|written here|nothing written|little of your own/i.test(title(c)) && !title(c).includes('“Agents”'), title(c));
+      assert.equal((title(c).match(/\?/g) || []).length, 1, title(c));
+      for (const text of [c.say, title(c)]) assert.ok(!/workspace|written here|nothing written|little of your own/i.test(text) && !text.includes('“Agents”'), text);
     }
   }
 
   // After a result, the next exchange starts again and builds on nothing from the earlier one.
   const again = await run([write('something new')], [...topic.doc, '@brainstorm']);
   assert.deepEqual(ids(again.cards), ['mind', 'excites']);
-  assert.ok(!title(again.cards[1]).includes('corrigibility'));
+  assert.ok(!again.cards[1].say.includes('corrigibility') && !title(again.cards[1]).includes('corrigibility'));
 
   // An older document: round 7's closing card answered, or an @orient thread left at its know card, goes on with a move.
   const closing = card.cardBody(JSON.stringify({ say: '', card: 'questions', questions: { eyebrow: 'before you go', items: [{ id: 'closing', type: 'open', title: 'So what will you do first?' }] }, ready: false })).body;
@@ -1555,20 +1560,22 @@ test('@brainstorm: five cards at most, the last of them the next card; Wrap up a
   assert.deepEqual(AGENTS, ['bart', 'brainstorm', 'discover'], 'no @orient');
 });
 
-test('the next card always reads the same: on the next stage, or when the agent asked it, the lead-in of its title is kept and the rest is the card; no card keeps a "say"; any other reply is as it came; the result reads back from its offer line (MATH-40)', () => {
-  const next = (title) => JSON.stringify({ say: '', card: 'questions', questions: { eyebrow: 'what next', items: [{ id: 'next', type: 'open', title, placeholder: 'One thing, as specific as you can make it' }] }, ready: false });
-  const asked = (title, say = '') => JSON.stringify({ say, card: 'questions', questions: { items: [{ id: 'next', type: 'free', title }] }, ready: false });
+test('the next card always reads the same: on the next stage, or when the agent asked it, its lead-in is said above the question (its "say", else what its title says before the question) and the rest is the card; any other card keeps its "say"; any other reply is as it came; the result reads back from its offer line (MATH-40, round 3)', () => {
   const NEXT = 'So what do you want to dig into next?';
+  const next = (say) => JSON.stringify({ say, card: 'questions', questions: { eyebrow: 'what next', items: [{ id: 'next', type: 'open', title: NEXT, placeholder: 'One thing, as specific as you can make it' }] }, ready: false });
+  const asked = (title, say = '') => JSON.stringify({ say, card: 'questions', questions: { items: [{ id: 'next', type: 'free', title }] }, ready: false });
   const unsure = { say: 'You came back to “correction” twice.', card: 'questions', questions: { items: [{ id: 'unsure', type: 'free', title: 'Where are you unsure about “correction”?' }] }, ready: false };
-  assert.equal(brainstormReply(JSON.stringify(unsure), 'next'), next(NEXT), 'another card on the next stage: the next card, with no lead-in and nothing said');
-  assert.equal(brainstormReply(asked(`You kept coming back to “logs”. ${NEXT}`, 'You came back to “logs”.'), 'move'), next(`You kept coming back to “logs”. ${NEXT}`), 'asked by the agent on a move: its lead-in, and no say');
-  assert.equal(brainstormReply(asked('You kept coming back to “logs”. What next, then?'), 'next'), next(`You kept coming back to “logs”. ${NEXT}`), 'the question after the lead-in is code\'s');
-  assert.equal(brainstormReply(asked('You kept coming back to “logs”'), 'next'), next(`You kept coming back to “logs”. ${NEXT}`), 'the lead-in alone, given its stop');
-  for (const title of [NEXT, 'What next, then?', `${'very '.repeat(50)}long. ${NEXT}`]) assert.equal(brainstormReply(asked(title), 'next'), next(NEXT), `no lead-in: ${title.slice(0, 30)}`);
-  assert.equal(brainstormReply('Sorry, I got confused.', 'next'), next(NEXT), 'not a card: the card, with nothing said');
-  assert.equal(brainstormReply('{"say": "What you know: a", "card": "none", "ready": true}', 'next'), next(NEXT), 'a recap is not kept as its say');
-  for (const stage of ['first', 'move', 'versions']) assert.deepEqual(JSON.parse(brainstormReply(JSON.stringify(unsure), stage)), { ...unsure, say: '' }, `${stage}: as it came, with nothing said above it`);
-  assert.equal(JSON.parse(brainstormReply(JSON.stringify({ ...FOCUS, say: 'You wrote about retries.' }), 'first')).say, '', 'a focus card too');
+  assert.equal(brainstormReply(JSON.stringify(unsure), 'next'), next(''), 'another card on the next stage: the next card, with no lead-in');
+  const WARM = 'Sounds like the logs keep pulling you back. That seems worth noticing.';
+  assert.equal(brainstormReply(asked(NEXT, WARM), 'next'), next(WARM), 'its say is the lead-in: one or two warm sentences');
+  assert.equal(brainstormReply(asked(`You kept coming back to “logs”. ${NEXT}`, 'You came back to “logs”.'), 'move'), next('You came back to “logs”.'), 'asked by the agent on a move: its say, over a lead-in in its title');
+  assert.equal(brainstormReply(asked('You kept coming back to “logs”. What next, then?'), 'next'), next('You kept coming back to “logs”.'), 'a lead-in written in its title is said; the question is code\'s');
+  assert.equal(brainstormReply(asked('You kept coming back to “logs”'), 'next'), next('You kept coming back to “logs”.'), 'the lead-in alone, given its stop');
+  for (const title of [NEXT, 'What next, then?', `${'very '.repeat(50)}long. ${NEXT}`]) assert.equal(brainstormReply(asked(title), 'next'), next(''), `no lead-in: ${title.slice(0, 30)}`);
+  assert.equal(brainstormReply('Sorry, I got confused.', 'next'), next(''), 'not a card: the card, with nothing said');
+  assert.equal(brainstormReply('{"say": "What you know: a", "card": "none", "ready": true}', 'next'), next(''), 'a recap is not kept as its say');
+  for (const stage of ['first', 'move', 'versions']) assert.deepEqual(JSON.parse(brainstormReply(JSON.stringify(unsure), stage)), unsure, `${stage}: as it came, its say the reply above its question`);
+  assert.equal(JSON.parse(brainstormReply(JSON.stringify({ ...FOCUS, say: 'You wrote about retries.' }), 'first')).say, 'You wrote about retries.', 'a focus card too');
   for (const text of ['Sorry, I got confused.', '{"say": "What you know: a", "card": "none", "ready": true}']) assert.equal(brainstormReply(text, 'move'), text, 'not a card: as it came');
   assert.equal(card.NEXT_TITLE, NEXT);
   assert.deepEqual([card.nextTitle(''), card.nextTitle('You kept coming back to “logs”.')], [NEXT, `You kept coming back to “logs”. ${NEXT}`]);
