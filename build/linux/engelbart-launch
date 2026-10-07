@@ -1,0 +1,37 @@
+#!/bin/sh
+# Starts Engelbart on Linux (2026-10-07, docs/windows-port-log.md "Linux"): the `engelbart` command, the app menu's
+# entry and the smoke test all start it through this, which sits beside the app's binary (electron-builder.config.cjs,
+# linux.extraFiles).
+#
+# Chromium's sandbox stays on wherever it can run. It needs either user namespaces or chrome-sandbox set up by root
+# (owned by root, setuid). Ubuntu 23.10 and later (24.04 among them) let a program make user namespaces only when an
+# AppArmor profile allows it (kernel.apparmor_restrict_unprivileged_userns=1): the install command offers to add one
+# for Engelbart when it can use sudo, as Chrome's package does (scripts/install-linux.sh). Without either, Chromium
+# cannot start at all, so Engelbart starts without its sandbox, and says so on stderr.
+#
+# ENGELBART_SANDBOX=on or off decides it instead (tests). Arguments are passed on.
+
+here=$(dirname "$(readlink -f "$0")")
+bin="$here/engelbart"
+
+# Why the sandbox cannot run here, or nothing when it can.
+why_not() {
+  case "${ENGELBART_SANDBOX:-}" in on) return ;; off) echo "ENGELBART_SANDBOX=off"; return ;; esac
+  helper="$here/chrome-sandbox"
+  if [ -u "$helper" ] && [ "$(stat -c %u "$helper" 2>/dev/null)" = 0 ]; then return; fi
+  if [ "$(cat /proc/sys/user/max_user_namespaces 2>/dev/null || echo 1)" = 0 ]; then echo "user namespaces are turned off (user.max_user_namespaces=0)"; return; fi
+  if [ "$(cat /proc/sys/kernel/unprivileged_userns_clone 2>/dev/null || echo 1)" = 0 ]; then echo "user namespaces are turned off (kernel.unprivileged_userns_clone=0)"; return; fi
+  if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = 1 ]; then
+    for profile in /etc/apparmor.d/engelbart*; do
+      if [ -f "$profile" ] && grep -qF "$bin" "$profile"; then return; fi
+    done
+    echo "AppArmor lets only programs with a profile make user namespaces, and Engelbart has none"
+  fi
+}
+
+reason=$(why_not)
+if [ -z "$reason" ]; then exec "$bin" "$@"; fi
+hint=""
+case $reason in *AppArmor*) hint=" Run the install command again where you can use sudo to add an AppArmor profile for it, and the sandbox stays on." ;; esac
+echo "Engelbart: starting without Chromium's sandbox: $reason.$hint" >&2
+exec "$bin" --no-sandbox "$@"

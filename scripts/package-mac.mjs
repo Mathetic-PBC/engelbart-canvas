@@ -65,9 +65,10 @@ if (!release) {
     if (stale.isFile() && /^Engelbart-.*\.(dmg|zip|blockmap)$|^latest-mac\.yml$/.test(stale.name)) fs.rmSync(path.join(ROOT, 'release', stale.name));
   }
   await build({ targets: Platform.MAC.createTarget(['dmg', 'zip'], Arch.arm64, Arch.x64), config, publish: 'never' });
-  const { writeSite, liveWindows } = await import('./release-site.mjs');
-  const windows = await liveWindows(downloads); // the download page keeps the live Windows section (scripts/upload-windows.sh)
-  const site = writeSite({ root: ROOT, version, downloads, developerId: config.extraMetadata.engelbart.developerId, windows });
+  const { writeSite, liveWindows, liveLinux } = await import('./release-site.mjs');
+  // The download page keeps the live Windows and Linux sections (scripts/upload-windows.sh, scripts/upload-linux.sh).
+  const [windows, linux] = await Promise.all([liveWindows(downloads), liveLinux(downloads)]);
+  const site = writeSite({ root: ROOT, version, downloads, developerId: config.extraMetadata.engelbart.developerId, windows, linux });
   console.log(`\nUpload everything in ${path.relative(ROOT, site)}/ to ${downloads}: npm run upload:mac`);
   console.log(`Install command: curl -fsSL ${downloads}install.sh | bash`);
 }

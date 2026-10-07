@@ -15,6 +15,7 @@
 #
 # Windows (2026-10-07): scripts/upload-windows.sh runs this with UPLOAD_FEED=latest.yml on release/upload-win/; the
 # feed is then latest.yml and the files it checks the installer. Without UPLOAD_FEED it is the Mac's, as before.
+# Linux: scripts/upload-linux.sh, with UPLOAD_FEED=latest-linux.yml on release/upload-linux/.
 set -uo pipefail
 
 BUCKET=engelbart-releases
@@ -33,7 +34,7 @@ DRY=${UPLOAD_DRY_RUN:-}
 
 size_of() { stat -f %z "$1"; }
 remote_size() { curl -sSI "$PUBLIC/$1?nc=$RANDOM" | awk -F': ' 'tolower($1)=="content-length"{print $2}' | tr -d '\r'; }
-type_of() { case $1 in *.zip) echo application/zip ;; *.dmg) echo application/x-apple-diskimage ;; *.exe) echo application/vnd.microsoft.portable-executable ;; *.ps1) echo text/plain ;; *.yml) echo text/yaml ;; *.sh) echo text/x-shellscript ;; *.html) echo text/html ;; *.txt) echo text/plain ;; *) echo application/octet-stream ;; esac; }
+type_of() { case $1 in *.zip) echo application/zip ;; *.dmg) echo application/x-apple-diskimage ;; *.exe) echo application/vnd.microsoft.portable-executable ;; *.AppImage) echo application/vnd.appimage ;; *.ps1) echo text/plain ;; *.yml) echo text/yaml ;; *.sh) echo text/x-shellscript ;; *.html) echo text/html ;; *.txt) echo text/plain ;; *) echo application/octet-stream ;; esac; }
 
 # What goes up: this version's files (skipped when already there at their size), then the ones every version shares a
 # name for (always sent: SHA256SUMS.txt can change without changing size), the feed last.

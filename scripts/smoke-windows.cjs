@@ -10,6 +10,8 @@
 //      prints what it found: Git, at a Windows path;
 //   4. the app quits cleanly when its window closes, with exit code 0.
 // On a Mac it runs the same against a packaged Engelbart.app's executable (zsh in place of PowerShell and Git Bash).
+// On Linux (scripts/smoke-linux.cjs, under xvfb) against the app's launcher, engelbart-launch (bash; the system's Git),
+// and it also says whether Chromium's sandbox is on: SMOKE_SANDBOX=on or off fails it when it is not that.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -17,7 +19,9 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 
 const ROOT = path.join(__dirname, '..');
-const app = path.resolve(process.argv[2] || path.join(ROOT, 'release', 'win-unpacked', 'Engelbart.exe'));
+const linux = process.platform === 'linux';
+const NAME = linux ? 'smoke-linux' : 'smoke-windows';
+const app = path.resolve(process.argv[2] || (linux ? path.join(ROOT, 'release', 'linux-unpacked', 'engelbart-launch') : path.join(ROOT, 'release', 'win-unpacked', 'Engelbart.exe')));
 const LINE = `engelbart-smoke-${process.pid}`;
 const STEP_MS = 90_000;
 
@@ -63,7 +67,7 @@ async function evaluate(page, expression, ms = STEP_MS) {
 
 async function main() {
   process.exitCode = 1; // until every step has passed: Node ends with it if something is left waiting on nothing
-  if (!fs.existsSync(app)) throw new Error(`No app at ${app}: build it first (electron-builder --win nsis --x64 --publish never).`);
+  if (!fs.existsSync(app)) throw new Error(`No app at ${app}: build it first (${linux ? 'npm run dist:linux' : 'npm run dist:win'}).`);
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-smoke-'));
   const home = path.join(folder, 'home');
   const userData = path.join(folder, 'user-data');
@@ -94,6 +98,13 @@ async function main() {
     }, 'the app window');
     const page = await devtools(target.webSocketDebuggerUrl);
     console.log(`DevTools on port ${port}`);
+    if (linux) { // the launcher execs the app in its own place: its arguments say whether the sandbox is off, and why
+      const args = fs.readFileSync(`/proc/${child.pid}/cmdline`, 'utf8').split('\0');
+      const sandbox = args.includes('--no-sandbox') ? 'off' : 'on';
+      const why = /starting without Chromium's sandbox: ([^\n]*)/.exec(output)?.[1];
+      console.log(`ok: Chromium's sandbox is ${sandbox}${why ? ` (${why})` : ''}`);
+      if (process.env.SMOKE_SANDBOX && process.env.SMOKE_SANDBOX !== sandbox) throw new Error(`Chromium's sandbox is ${sandbox}, not ${process.env.SMOKE_SANDBOX}.`);
+    }
     await until(() => evaluate(page, '!!window.engelbartAPI && !!window.terminalAPI && !!document.querySelector("button")'), 'the window to load');
     console.log('ok: the window loaded');
     if (!fs.readdirSync(userData).length) throw new Error(`The app is not using the throwaway user data (${userData}).`);
@@ -133,7 +144,7 @@ async function main() {
     console.log('ok: the app quit cleanly');
     process.exitCode = 0;
   } catch (error) {
-    console.error(`\nsmoke-windows failed: ${error.message}\n\nThe app printed:\n${output}`);
+    console.error(`\n${NAME} failed: ${error.message}\n\nThe app printed:\n${output}`);
     process.exitCode = 1;
   } finally {
     if (child) child.kill();

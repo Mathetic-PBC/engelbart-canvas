@@ -72,6 +72,13 @@ should_open() {
   [ -n "$asked" ] && [ "${ENGELBART_NO_OPEN:-}" != 1 ]
 }
 
+# >>> linux (2026-10-07, docs/windows-port-log.md "Linux"): on Linux the same command installs the Linux app, with
+# install-linux.sh from the same folder (scripts/install-linux.sh); nothing below runs there. On a Mac this is skipped.
+if [ "$(uname -s)" = Linux ]; then
+  linux_installer=$(curl -fsSL "${DOWNLOADS}install-linux.sh?t=$(date +%s)") || fail "could not reach ${DOWNLOADS} (is this computer online?)."
+  ENGELBART_DOWNLOADS="$DOWNLOADS" exec bash -c "$linux_installer" install-linux.sh
+fi
+# <<< linux
 [ "$(uname -s)" = Darwin ] || fail "this installer is for macOS."
 version_now=$(sw_vers -productVersion)
 [ "${version_now%%.*}" -ge "$MIN_MACOS" ] || fail "Engelbart needs macOS $MIN_MACOS (Ventura) or later; this Mac has $version_now."

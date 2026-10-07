@@ -3,6 +3,72 @@
 The run that follows docs/windows-port.md, on branch `windows-port` (cut from `hudsons-feedback` at 22d738c).
 Newest status first; the sections below are kept current.
 
+## Linux
+
+Goal (2026-10-07): Engelbart installs and runs on Linux x64 with the Mac's command, `curl -fsSL
+https://mathetic.com/engelbart | bash`. Done when one commit on windows-port passes CI on ubuntu-latest, windows-latest
+and macos-latest (Linux no longer allowed to fail); on ubuntu-latest CI also serves the AppImage, latest-linux.yml and
+install.sh from a local folder, installs with `curl … | bash`, smoke tests the installed copy and sees a second run stop
+as up to date; the Windows install step still passes; `UPLOAD_DRY_RUN=1 npm run upload:linux` lists the right files.
+Decisions from the person (2026-10-07): the Windows release live since 19:46 UTC is theirs (upload:win on
+f210c51) and stays; Chromium's sandbox stays on wherever it can, and where Ubuntu's AppArmor blocks it the
+installer offers (with sudo) an AppArmor profile, as Chrome's package does, before falling back to no sandbox.
+
+### What it is
+
+- Tests: the 6 Linux failures of install run 1 (fd68788): 4 ran the real zsh, which the runner lacks (the app then
+  falls back to bash, as it should): CI installs zsh, as a Mac has it. 2 stopped a leftover process group: its folder
+  was read with /usr/sbin/lsof, which Linux lacks; on Linux it is read from /proc/<pid>/cwd
+  (`src/main/build/run-processes.cjs`, the Mac's lsof path unchanged). The apt step: 4-minute tries with apt's own
+  retries and timeouts, 3 times, inside a 15-minute limit. `continue-on-error` for Linux removed.
+- `npm run dist:linux` (`scripts/package-linux.mjs`, Linux x64 only): the release build as dist:mac and dist:win make it,
+  then `Engelbart-<v>-x86_64.AppImage` and latest-linux.yml. node-pty has no Linux prebuild; `npm ci` compiles
+  build/Release/pty.node (N-API), which is staged into prebuilds/linux-x64 (the app leaves node-pty's build folder out);
+  afterPackLinux checks it and the launcher are in the app.
+- `build/linux/engelbart-launch`, beside the binary: everything starts the app through it. The sandbox stays on when
+  chrome-sandbox is set up by root or user namespaces are allowed (for everyone, or for Engelbart by an AppArmor
+  profile); otherwise it starts with `--no-sandbox` and prints why on stderr.
+- `scripts/install-linux.sh` (published as install-linux.sh): x86_64 only; Git required (says `apt`/`dnf`/`pacman`/
+  `zypper install git` by /etc/os-release, and stops); latest-linux.yml; stops when ~/.local/share/engelbart/version is
+  that version (ENGELBART_FORCE=1 overrides); sha512 with coreutils only; the AppImage unpacked with
+  `--appimage-extract` (no FUSE/libfuse2 needed) into ~/.local/share/engelbart/app; `~/.local/bin/engelbart` → the
+  launcher; the AppImage's .desktop entry with Exec= the launcher, and its icons in ~/.local/share/icons. AppArmor:
+  when the sandbox is off only for want of a profile, it offers (on /dev/tty; ENGELBART_APPARMOR=yes/no answers it)
+  to install /etc/apparmor.d/engelbart-<uid> (`userns`, unconfined otherwise, as Chrome's) with sudo. Its last line
+  says "Chromium's sandbox: on|off: why".
+- `scripts/install-mac.sh` gains a block between `# >>> linux` and `# <<< linux`, before its macOS check: on Linux it
+  fetches install-linux.sh from the same folder and execs it. On a Mac it is skipped (test/install-mac.test.cjs runs
+  the script for real, unchanged).
+- Release site: `writeLinuxSite` → release/upload-linux/: the AppImage, latest-linux.yml, install-linux.sh,
+  SHA256SUMS-linux.txt, the live page with a marked Linux section, the live install.sh with the Linux block put in (or
+  replaced), and the live SHA256SUMS.txt with only install.sh's line changed. dist:mac keeps the live Linux section
+  (`liveLinux`) as it keeps the Windows one.
+- `npm run upload:linux` (`scripts/upload-linux.sh`): the run whose ubuntu, windows and macos jobs all passed,
+  `gh run download` of engelbart-linux-appimage, version against package.json, release/upload-linux/, then
+  upload-release.sh with UPLOAD_FEED=latest-linux.yml (latest-linux.yml last). upload-release.sh only gained the
+  AppImage's content type; its Mac dry run is identical (diffed).
+- smoke-linux (`scripts/smoke-linux.cjs`): smoke-windows.cjs's steps on Linux, through the launcher, plus which way
+  the sandbox is (SMOKE_SANDBOX=on|off to require one).
+- Tests: test/release-linux.test.cjs (the site files, the hand-off block, the Mac page with both sections, the
+  launcher; on Linux the install through install.sh with a stand-in AppImage, up to date, ENGELBART_FORCE, and the
+  refusals: no Git, ARM, bad checksum, unreachable folder).
+
+### Tests skipped on Linux
+
+| Test file | Test | Reason |
+|---|---|---|
+
+(Filled from the first green Linux run.)
+
+### Status
+
+- 2026-10-07: written; Mac tests pass locally. Pushing for the first CI run.
+
+### CI runs
+
+| Commit | Run | macOS | Windows | Linux | Notes |
+|---|---|---|---|---|---|
+
 ## One-command install
 
 Goal (2026-10-07): install Engelbart on Windows with one PowerShell line, `irm https://mathetic.com/engelbart/install.ps1

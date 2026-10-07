@@ -45,6 +45,17 @@ function afterPackWindows(context) {
   assertAppModules(context.appOutDir, `The Windows ${Arch[context.arch]} app`);
 }
 
+/** What a Linux app (release/linux-unpacked) must hold: node-pty's module (staged by scripts/package-linux.mjs), the
+ *  launcher that decides on Chromium's sandbox (build/linux/engelbart-launch), and every package it loads. */
+function afterPackLinux(context) {
+  const pty = path.join(context.appOutDir, 'resources', 'app.asar.unpacked', 'node_modules', 'node-pty', 'prebuilds', `linux-${Arch[context.arch]}`, 'pty.node');
+  if (!fs.existsSync(pty)) throw new Error(`The Linux app has no node-pty module at ${pty}: no terminal could start (build it with \`npm run dist:linux\`).`);
+  const launcher = path.join(context.appOutDir, 'engelbart-launch');
+  if (!fs.existsSync(launcher)) throw new Error(`The Linux app has no launcher at ${launcher}.`);
+  fs.chmodSync(launcher, 0o755);
+  assertAppModules(context.appOutDir, `The Linux ${Arch[context.arch]} app`);
+}
+
 module.exports = {
   appId: 'dev.engelbart.desktop', // the id every earlier build had: macOS keeps its permissions and settings under it
   productName: 'Engelbart', // names ~/Library/Application Support/Engelbart, where @bart's threads and settings are
@@ -88,6 +99,7 @@ module.exports = {
   electronLanguages: ['en'], // Chromium's own strings in English only, as Engelbart's are (about 45 MB less)
   afterPack: (context) => {
     if (context.electronPlatformName === 'win32') { afterPackWindows(context); return; }
+    if (context.electronPlatformName === 'linux') { afterPackLinux(context); return; }
     // node-pty's prebuilt spawn-helper comes from npm without its execute bit; without it no terminal starts.
     const unpacked = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, 'Contents', 'Resources', 'app.asar.unpacked', 'node_modules', 'node-pty', 'prebuilds');
     for (const dir of fs.existsSync(unpacked) ? fs.readdirSync(unpacked) : []) {
@@ -132,6 +144,17 @@ module.exports = {
       { target: 'zip', arch: ['x64'] },
     ],
     icon: 'build/icon.ico',
+  },
+  // Linux (2026-10-07, docs/windows-port-log.md "Linux"): an AppImage for x64, which the install command unpacks (so no
+  // FUSE is needed) and starts through engelbart-launch. Like Windows, no Git inside: the system's, and no updates.
+  linux: {
+    files: ['!node_modules/node-pty/prebuilds/{darwin-*,win32-*}{,/**}'],
+    target: [{ target: 'AppImage', arch: ['x64'] }],
+    executableName: 'engelbart',
+    icon: 'build/icon.png',
+    category: 'Development',
+    synopsis: 'Tools for steering coding agents',
+    extraFiles: [{ from: 'build/linux/engelbart-launch', to: 'engelbart-launch' }],
   },
   nsis: {
     oneClick: false, // asks where to install, for this user or everyone

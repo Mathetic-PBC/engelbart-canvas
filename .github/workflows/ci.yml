@@ -1,6 +1,8 @@
 # CI (2026-10-05, MATH-26): npm ci, npm test and npm run build on macOS, Windows and Linux. Windows also packages the
 # installer (kept as an artifact) and runs scripts/smoke-windows.cjs against the packaged app; the Mac packages the app
-# for the runner's architecture, signed ad hoc. Linux is reported but allowed to fail. docs/windows-port.md.
+# for the runner's architecture, signed ad hoc. Linux (2026-10-07, docs/windows-port-log.md "Linux") counts like the
+# other two: it packages the AppImage (kept as an artifact), smoke tests it under xvfb, and installs it with the
+# one-line command. docs/windows-port.md.
 name: CI
 
 on:
@@ -13,7 +15,6 @@ jobs:
   test:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.os == 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -30,12 +31,20 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      # A hung apt mirror held this step to the job's limit (install run 2), and a job that hits its limit cancels the
-      # run instead of failing the allowed Linux job.
-      - name: Linux packages for node-pty and Electron
+      # A hung apt mirror once held this step for the job's whole hour: each try is cut off after 4 minutes, with apt's
+      # own retries and timeouts, and tried again (3 times). zsh: the tests of the login shell and its integration
+      # run the real one, as on a Mac.
+      - name: Linux packages for node-pty, Electron and the tests
         if: runner.os == 'Linux'
-        timeout-minutes: 10
-        run: sudo apt-get update && sudo apt-get install -y xvfb libnss3 libgbm1 libasound2t64
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          apt_opts=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=60)
+          for try in 1 2 3; do
+            sudo timeout 240 apt-get "${apt_opts[@]}" update && sudo timeout 240 apt-get "${apt_opts[@]}" install -y xvfb libnss3 libgbm1 libasound2t64 zsh && exit 0
+            echo "apt-get failed (try $try); trying again"; sleep 15
+          done
+          exit 1
       - run: npm ci
       # A runner's first python3 takes seconds to start, longer than a test's dev server is given to answer
       # (test/run-step.test.cjs serves a page with `python3 -m http.server`).
@@ -141,6 +150,59 @@ jobs:
           } finally {
             Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
           }
+      # The AppImage is made as a release is (scripts/package-linux.mjs: a production build, its update feed
+      # latest-linux.yml), and kept: `npm run upload:linux` takes both from the green run of the release commit.
+      - name: Package the Linux AppImage
+        if: runner.os == 'Linux'
+        env:
+          ENGELBART_DOWNLOAD_URL: https://mathetic.com/engelbart
+        run: npm run dist:linux
+      - name: Smoke test the packaged Linux app
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node scripts/smoke-linux.cjs release/linux-unpacked/engelbart-launch
+      # The one-line install as a person runs it on Linux: the Mac's command (install.sh hands Linux to
+      # install-linux.sh), against the AppImage above served from a folder here. The installed copy is smoke tested, the
+      # command run again must stop at "already installed", and where AppArmor keeps the sandbox off, the profile the
+      # install command offers is added (with the runner's sudo) and the sandbox must then be on.
+      - name: Install with the one-line command (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          site="$RUNNER_TEMP/engelbart-site"
+          node scripts/release-site.mjs linux release "$version" https://mathetic.com/engelbart/ - - - "$site"
+          ls -l "$site"
+          (cd "$site" && exec python3 -m http.server 8766 --bind 127.0.0.1 > "$RUNNER_TEMP/http.log" 2>&1 &)
+          for i in $(seq 1 100); do curl -fs -o /dev/null http://127.0.0.1:8766/latest-linux.yml && break; sleep 0.2; done
+          export ENGELBART_DOWNLOADS=http://127.0.0.1:8766/ ENGELBART_NO_OPEN=1
+          ENGELBART_APPARMOR=no bash -c 'curl -fsSL http://127.0.0.1:8766/install.sh | bash' | tee "$RUNNER_TEMP/first.txt"
+          grep -q "^Engelbart $version is installed in $HOME/.local/share/engelbart" "$RUNNER_TEMP/first.txt"
+          test -x "$HOME/.local/share/engelbart/app/engelbart"
+          test "$(readlink "$HOME/.local/bin/engelbart")" = "$HOME/.local/share/engelbart/app/engelbart-launch"
+          cat "$HOME/.local/share/applications/engelbart.desktop"
+          ls "$HOME"/.local/share/icons/hicolor/*/apps/engelbart.png
+          sandbox=$(sed -n "s/^Chromium's sandbox: \(on\|off\):.*/\1/p" "$RUNNER_TEMP/first.txt")
+          SMOKE_SANDBOX=$sandbox xvfb-run -a node scripts/smoke-linux.cjs "$HOME/.local/bin/engelbart"
+          bash -c 'curl -fsSL http://127.0.0.1:8766/install.sh | bash' | tee "$RUNNER_TEMP/again.txt"
+          grep -q "^Engelbart $version is already installed in $HOME/.local/share/engelbart and up to date\.$" "$RUNNER_TEMP/again.txt"
+          if grep -q Downloading "$RUNNER_TEMP/again.txt"; then echo "the second run downloaded the AppImage again"; exit 1; fi
+          if grep -q "^Chromium's sandbox: off: AppArmor" "$RUNNER_TEMP/first.txt"; then
+            ENGELBART_FORCE=1 ENGELBART_APPARMOR=yes bash -c 'curl -fsSL http://127.0.0.1:8766/install.sh | bash' | tee "$RUNNER_TEMP/third.txt"
+            grep -q "^Chromium's sandbox: on: the AppArmor profile /etc/apparmor.d/engelbart-$(id -u) lets Engelbart make user namespaces\.$" "$RUNNER_TEMP/third.txt"
+            cat "/etc/apparmor.d/engelbart-$(id -u)"
+            SMOKE_SANDBOX=on xvfb-run -a node scripts/smoke-linux.cjs "$HOME/.local/bin/engelbart"
+          fi
+          pkill -f 'http.server 8766' || true
+      - name: Keep the AppImage
+        if: runner.os == 'Linux' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engelbart-linux-appimage
+          path: |
+            release/*.AppImage
+            release/latest-linux.yml
+          if-no-files-found: warn
       - name: Keep the installer
         if: runner.os == 'Windows' && always()
         uses: actions/upload-artifact@v4

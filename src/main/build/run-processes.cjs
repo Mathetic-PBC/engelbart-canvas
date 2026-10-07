@@ -121,10 +121,13 @@ async function stopLeftover(pgid, within, { run = execFile, waitMs = STOP_WAIT_M
   if (!Number.isInteger(pgid) || pgid <= 1 || !alive(pgid)) return false;
   let base;
   try { base = fs.realpathSync(within); } catch { return false; }
-  const cwd = await new Promise((resolve) => run('/usr/sbin/lsof', ['-a', '-p', String(pgid), '-d', 'cwd', '-Fn'], { timeout: 5000 }, (error, stdout) => {
-    const line = error ? null : String(stdout).split('\n').find((entry) => entry.startsWith('n'));
-    resolve(line ? line.slice(1) : null);
-  }));
+  // Linux has its folder at /proc/<pid>/cwd (and lsof, when it is installed at all, in /usr/bin).
+  const cwd = platform === 'linux'
+    ? (() => { try { return fs.readlinkSync(`/proc/${pgid}/cwd`); } catch { return null; } })()
+    : await new Promise((resolve) => run('/usr/sbin/lsof', ['-a', '-p', String(pgid), '-d', 'cwd', '-Fn'], { timeout: 5000 }, (error, stdout) => {
+      const line = error ? null : String(stdout).split('\n').find((entry) => entry.startsWith('n'));
+      resolve(line ? line.slice(1) : null);
+    }));
   if (!cwd || !(cwd === base || cwd.startsWith(`${base}${path.sep}`))) return false;
   if (!(await groupPids(pgid, { run })).includes(pgid)) return false;
   try { process.kill(-pgid, 'SIGTERM'); } catch { return false; }
