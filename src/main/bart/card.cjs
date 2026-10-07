@@ -25,6 +25,10 @@
 // MATH-40 (2026-10-06): an exchange ends on the person's answer to the "next" card, "So what do you want to dig into
 // next?", in place of a recap. That sentence is the result, written as the reply by code (resultText) as they wrote it,
 // followed by RESULT_OFFER, which the editor draws as one small line with @discover and @bart to send it on.
+// MATH-40 follow-up (2026-10-06): a brainstorm card says nothing above its question (`say` is written empty; an older
+// card's is kept and drawn). The next card's title is a lead-in of the agent's, what they kept coming back to, then
+// NEXT_TITLE (nextTitle); its field asks for one specific thing. An answer to it that only repeats their first answer is
+// asked once more, on the again card (AGAIN_TITLE), written by code, before the result.
 
 const TYPES = ['mcq', 'select_all', 'free', 'open'];
 const MAX_OPTIONS = 6;
@@ -40,6 +44,12 @@ const OPENING = 'Start from this workspace.';
 const NEXT_ID = 'next';
 const NEXT_TITLE = 'So what do you want to dig into next?';
 const RESULT_OFFER = 'Find papers on it with @discover, or ask about it with @bart.';
+const NEXT_PLACEHOLDER = 'One thing, as specific as you can make it';
+// Asked once after the next card when their answer only repeats where they started (sameWords).
+const AGAIN_ID = 'again';
+const AGAIN_TITLE = 'What\'s one part of that you\'d start with?';
+// The longest lead-in the next card's title keeps: with NEXT_TITLE after it, the title stays under a card's 300.
+const LEAD_CHARS = 200;
 // The result when they wrote nothing on the last card.
 const LEFT_OPEN = 'You left what comes next open for now.';
 
@@ -315,6 +325,29 @@ function recapLine(line) {
   return { label, text: m[2].trim() };
 }
 
+/**
+ * The lead-in of a next card's title (MATH-40 follow-up): the title the agent wrote, up to where it asks "So what do you
+ * want…" (or another question at its end), ending in a stop. '' when there is none, it asks something itself, or it is
+ * too long.
+ */
+function nextLead(title) {
+  const said = clip(title, 300), at = said.toLowerCase().indexOf('so what do you want');
+  let lead = (at >= 0 ? said.slice(0, at) : said).trim();
+  if (at < 0 && lead.endsWith('?')) { const m = lead.match(/^([\s\S]*[.!…]["”’]?)\s+[^.!?…]*\?$/); lead = m ? m[1] : ''; }
+  if (!lead || lead.includes('?') || lead.length > LEAD_CHARS) return '';
+  return /[.!…]["”’]?$/.test(lead) ? lead : `${lead}.`;
+}
+
+/** The next card's title: the lead-in (nextLead's), then NEXT_TITLE. */
+const nextTitle = (lead) => (lead ? `${lead} ${NEXT_TITLE}` : NEXT_TITLE);
+
+/** Whether two answers are the same words (in any case, punctuation and spacing aside); two empty ones are not. */
+function sameWords(a, b) {
+  const words = (text) => (String(text == null ? '' : text).toLowerCase().match(/[\p{L}\p{N}']+/gu) || []).join(' ');
+  const one = words(a);
+  return !!one && one === words(b);
+}
+
 /** The result of an exchange (MATH-40) from the sentence they wrote on the next card: it, then the offer; with none, LEFT_OPEN. */
 function resultText(sentence) {
   const said = String(sentence == null ? '' : sentence).replace(/\s+/g, ' ').trim();
@@ -329,4 +362,4 @@ function resultParts(text) {
   return sentence ? { sentence } : null;
 }
 
-module.exports = { resultText, resultParts, NEXT_ID, NEXT_TITLE, RESULT_OFFER, LEFT_OPEN, recapParts, recapLine, RECAP_LABELS, TYPES, SKIPPED, WRAP, OPENING, MAP_GROUPS, LOOK_FOR_CHARS, jsonBlocks, parseJson, cleanMap, mapHolds, readCard, cardBody, cardOfAnswer, questionOf, isChoice, answerLine, readWrap, withWrap, readAnswer, answersSoFar };
+module.exports = { resultText, resultParts, nextLead, nextTitle, sameWords, NEXT_ID, NEXT_TITLE, NEXT_PLACEHOLDER, AGAIN_ID, AGAIN_TITLE, RESULT_OFFER, LEFT_OPEN, recapParts, recapLine, RECAP_LABELS, TYPES, SKIPPED, WRAP, OPENING, MAP_GROUPS, LOOK_FOR_CHARS, jsonBlocks, parseJson, cleanMap, mapHolds, readCard, cardBody, cardOfAnswer, questionOf, isChoice, answerLine, readWrap, withWrap, readAnswer, answersSoFar };

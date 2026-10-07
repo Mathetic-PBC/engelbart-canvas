@@ -23,10 +23,11 @@
 //     asks its cards the same way, as `@discover …` lines, and answers with a reading guide drawn as an @bart answer is.
 //     @orient (2026-10-04) went into @brainstorm on 2026-10-05: an older document's `@orient …` line stays as written and
 //     is asked, drawn and answered as an @brainstorm line (model/doc.js agentOf).
-//   * Send to Discover (MATH-31, 2026-10-05): under a live @brainstorm card, and after an @brainstorm recap on a
-//     row of its own above the follow-up field, a field where the person writes what they want prior work on. Enter starts
-//     an @discover thread of its own on those words after the thread, and a live card stays live. It replaced the searches
-//     the agents suggested (a card's lookFor, a recap's Look for line); a Look for line in an older recap reads as text.
+//   * Send to Discover (MATH-31, 2026-10-05): after an older @brainstorm recap, on a row of its own above the follow-up
+//     field, a field where the person writes what they want prior work on. Enter starts an @discover thread of its own on
+//     those words after the thread. It replaced the searches the agents suggested (a card's lookFor, a recap's Look for
+//     line); a Look for line in an older recap reads as text. Since the MATH-40 follow-up (2026-10-06) it is not under a
+//     live card: an exchange sends on only from its finished result (the offer line, below).
 //   * An @brainstorm result (MATH-40): the sentence the person wrote on the last card, then one small grey line whose
 //     @discover and @bart start a thread of that agent's own on the sentence, after the thread (askResult).
 //     Each paper's title line in a guide has a bookmark in its right margin that keeps the paper (2026-10-02, model/guide.js;
@@ -748,8 +749,8 @@ export default class DocEditor extends React.Component {
   }
   // The Send to Discover field (MATH-31): the blue "@discover", a field one line tall that grows as it wraps, and a round
   // send, as the follow-up field's FOLLOW rows have. `target` names the field and keys what is typed into it
-  // (discoverText): `c<q>` under the live card on line q, `t<from>` after the recap of the thread that starts on line from;
-  // either line is where it sends from (discoverRow). What is typed is not in this string (restoreDiscover puts it back),
+  // (discoverText): `t<from>` after the recap of the thread that starts on line from, the line it sends from (discoverRow;
+  // a live card's `c<q>` is no longer drawn, MATH-40 follow-up). What is typed is not in this string (restoreDiscover puts it back),
   // so typing never redraws the editor. The send is grey until something is typed (paintSend).
   // Until it is opened (2026-10-05: two fields stacked looked alike), it is a small "Send to Discover" button; one with
   // words typed into it stays open.
@@ -822,16 +823,15 @@ export default class DocEditor extends React.Component {
     return !cardOfAnswer(answer) && answer.split('\n').some((line) => recapLine(line));
   }
   // Where a Send to Discover field stands (its target, sendDiscoverHtml) → the line of its thread to send from, or null
-  // when the field is no longer drawn: the card was answered, or the thread no longer ends in a recap.
+  // when the field is no longer drawn: the thread no longer ends in a recap.
   discoverRow(ls, target) {
-    const m = /^([ct])(\d+)$/.exec(String(target)); if (!m) return null;
-    const n = Number(m[2]);
-    if (m[1] === 'c') { const entry = this.cardsOf(ls).byQ.get(n); return entry && entry.live && entry.agent === 'brainstorm' ? n : null; }
+    const m = /^t(\d+)$/.exec(String(target)); if (!m) return null;
+    const n = Number(m[1]);
     const thread = threads(ls).find((t) => t.from === n);
     return thread && this.endsInRecap(ls, thread) ? n : null;
   }
   // Send to Discover sent (MATH-31): what was typed starts an @discover thread of its own (discoverLook), and the field is
-  // emptied. A live card stays live. With nothing typed it does nothing.
+  // emptied. With nothing typed it does nothing.
   sendDiscover(target) {
     const typed = (this.discoverText.get(target) || '').trim(); if (!typed || !this.props.onAsk) return;
     const i = this.discoverRow(this.lines(), target); if (i == null) return;
@@ -1162,8 +1162,9 @@ export default class DocEditor extends React.Component {
   // drawn still, with what was picked marked; a card that is not the thread's last and has no answer under it (a turn
   // deleted after it) is drawn still too. A map card (the first of an exchange, 2026-09-30) draws where the person seems
   // to be above the box, live or answered: three short lists, each line with what it rests on in grey. A live @brainstorm
-  // card (round 6) adds Wrap up before Submit, and under its box the Send to Discover field (MATH-31); on its versions
-  // card (round 7) the field under the options reads "Or rewrite it yourself…".
+  // card (round 6) adds Wrap up before Submit; on its versions card (round 7) the field under the options reads "Or
+  // rewrite it yourself…". No Send to Discover under it (MATH-40 follow-up): that is the result's offer line. What it
+  // says above the box is an older card's: a new one's `say` is empty.
   cardHtml(raw, entry) {
     const { card, turn, live, answer } = entry, q = turn.q, asked = questionOf(card), state = this.cardState.get(q) || {};
     const choice = isChoice(asked.type), many = asked.type === 'select_all';
@@ -1197,18 +1198,17 @@ export default class DocEditor extends React.Component {
     if (!live && answer && (answer.skipped || answer.wrap)) body += `<div style="margin-top:10px;font-size:14px;color:#8f8f8f">${answer.wrap ? 'Wrapped up' : 'Skipped'}</div>`;
     // A choice card can be answered in the person's own words instead of a pick (2026-09-30): the field alone is enough.
     const ready = choice ? picks.length > 0 || !!String(state.note || '').trim() : !!String(state.text || '').trim();
-    const wraps = live && fixedStep(entry.agent), brainstorm = live && entry.agent === 'brainstorm';
+    const wraps = live && fixedStep(entry.agent);
     const acts = live ? '<div style="display:flex;align-items:center;gap:8px;margin-top:14px">'
       + `<button type="button" class="bart-text" data-act="cardskip" data-turn="${q}" style="user-select:none;padding-left:0">Skip</button><span style="flex:1"></span>`
       + (wraps ? `<button type="button" class="bart-text" data-act="cardwrap" data-turn="${q}" style="user-select:none">Wrap up</button>` : '')
       + `<button type="button" class="bs-submit" data-act="cardsend" data-turn="${q}" ${ready ? '' : 'disabled'}>Submit</button></div>` : '';
-    const discover = brainstorm ? `<div style="padding:16px 0 10px">${this.sendDiscoverHtml(`c${q}`)}</div>` : '';
     return `<div ${raw} data-card="${q}" contenteditable="false" data-readonly="1" style="user-select:${live ? 'none' : 'text'};cursor:default;padding:12px 16px 4px;background:#fafafa;font:15px/1.5 var(--font-sans)">`
       + say + map
       + `<div data-card-box="${live ? 'live' : 'answered'}" style="padding:14px 16px 16px;border:1px solid #eaeaea;border-radius:10px;background:#fff">`
       + `<div style="font:600 16px/1.45 var(--font-sans);color:#171717">${esc(asked.title)}</div>`
       + (sub ? `<div style="margin-top:8px;font-size:13.5px;color:#8f8f8f">${esc(sub)}</div>` : '')
-      + body + acts + '</div>' + discover + '</div>';
+      + body + acts + '</div></div>';
   }
   // After a redraw: what was typed on a live card goes back into its fields, with the keyboard if it had it.
   restoreCards(ed, had) {

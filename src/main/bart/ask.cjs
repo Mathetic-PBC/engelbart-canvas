@@ -38,7 +38,9 @@
 // The exchange's path (<path>: paper, topic or open) is read here from its opening line against the library the turn is
 // shown, and the next stage from the id of the last card asked (turnPlan). MATH-40 (2026-10-06): the stages are first,
 // move (the agent picks which), versions and next; the person's answer to the next card is the result, written here
-// with no model run (./card.cjs resultText).
+// with no model run (./card.cjs resultText). Its follow-up (2026-10-06): no card says anything above its question
+// (brainstormReply writes `say` empty), the next card's title leads in with what they kept coming back to, and an answer
+// to it that only repeats their first answer gets the again card, written here with no model run, before the result.
 //
 // @discover (2026-09-30): the same again, for what to read about a problem. Its own prompt (./discover-system-prompt.cjs),
 // one step (./question.cjs readDiscover: the level of the models file's `discover` block for its mode, on the provider the
@@ -60,7 +62,7 @@ const { BART_SYSTEM_PROMPT } = require('./system-prompt.cjs');
 const { BRAINSTORM_SYSTEM_PROMPT } = require('./brainstorm-system-prompt.cjs');
 const { DISCOVER_SYSTEM_PROMPT } = require('./discover-system-prompt.cjs');
 const { readQuestion, readBrainstorm, readDiscover, withChoice } = require('./models.cjs');
-const { OPENING, SKIPPED, NEXT_ID, NEXT_TITLE, cardBody, cardOfAnswer, questionOf, readCard, readAnswer, resultText } = require('./card.cjs');
+const { OPENING, SKIPPED, NEXT_ID, NEXT_PLACEHOLDER, AGAIN_ID, AGAIN_TITLE, cardBody, cardOfAnswer, questionOf, readCard, readAnswer, resultText, nextLead, nextTitle, sameWords } = require('./card.cjs');
 const { buildContext, conversationBlock } = require('./context.cjs');
 const { projectSource, imagePaths } = require('../context/expand-mentions.cjs');
 const { replyLines, answerText } = require('./reply.cjs');
@@ -93,7 +95,7 @@ const QUIET = new Set(['brainstorm']);
 const BRAINSTORM_PATHS = ['paper', 'topic', 'open'];
 // The moves a later card may make (MATH-40, the prompt's "move"), as the card's id: the agent picks the one that fits.
 const BRAINSTORM_MOVES = ['excites', 'example', 'bugs', 'unsure', 'connect', 'try', 'draft', NEXT_ID];
-// The most cards an exchange asks, skips included: the last of them is the next card.
+// The most cards an exchange asks, skips included: the last of them is the next card, or the again card after it.
 const MAX_BRAINSTORM_CARDS = 5;
 // What an @discover line with nothing after it asks.
 const DISCOVER_OPENING = 'Find what I should read about the problem this workspace is about.';
@@ -256,43 +258,60 @@ function turnPlan({ agent, text, turns, choice, entries = [] }, models) {
   // Which kind of card comes next is decided here (round 7; MATH-40), and which move a later card makes by the model. The
   // path is read from the exchange's opening, its first line since the exchange last ended (after a result, a recap or a
   // reply that was not a card, the next line opens again), against the library this turn is shown. No card yet: the
-  // first. The next card answered (Wrap up or Skip included): the result, their sentence, written with no model run. Wrap
-  // up, or the fifth card (skips count): the next card, so an exchange asks five at most; an older document's exchange
-  // with five or more cards and no next card gets it as one more. An answered draft: versions. Else a move.
+  // first. The next card answered with only the words of their first answer (not with Wrap up), while the exchange has
+  // asked fewer than five: the again card, once (MATH-40 follow-up). The next card otherwise, or the again card,
+  // answered (Wrap up or Skip included): the result, their sentence (on the again card, theirs there, else the one on
+  // the next card), written with no model run, as the again card is. Wrap up, or the fifth card (skips count): the next
+  // card, so an exchange asks five at most; an older document's exchange with five or more cards and no next card gets
+  // it as one more. An answered draft: versions. Else a move.
   const from = cardsFrom(prior), cards = prior.slice(from);
   const opening = from < prior.length ? readBrainstorm(prior[from].question, models).question : read.question;
   const paper = mentionedPaper(opening, entries), path = !opening.trim() ? 'open' : paper ? 'paper' : 'topic';
+  // What they said on each card of the exchange so far, in order ('' for a skip, or Wrap up alone).
+  const said = cards.map((turn, n) => {
+    const given = readAnswer(n + 1 < cards.length ? readBrainstorm(cards[n + 1].question, models).question : read.question, cardOfAnswer(turn.answer));
+    return given.skipped ? '' : [given.picks.join(', '), given.text, given.note].filter(Boolean).join('; ');
+  });
   const last = cards.length ? cardOfAnswer(cards[cards.length - 1].answer) : null;
-  const answer = last ? readAnswer(read.question, last) : null;
-  const stage = !last ? 'first' : idOf(last) === NEXT_ID ? 'result' : answer.wrap || cards.length >= MAX_BRAINSTORM_CARDS - 1 ? 'next' : idOf(last) === 'draft' && !answer.skipped ? 'versions' : 'move';
-  const result = stage === 'result' ? resultText(answer.skipped ? '' : [answer.picks.join(', '), answer.text, answer.note].filter(Boolean).join('; ')) : null;
+  const answer = last ? readAnswer(read.question, last) : null, lastId = last ? idOf(last) : null;
+  const repeats = lastId === NEXT_ID && !answer.wrap && cards.length < MAX_BRAINSTORM_CARDS && sameWords(said[said.length - 1], said.slice(0, -1).find(Boolean));
+  const stage = !last ? 'first' : repeats ? 'again' : lastId === NEXT_ID || lastId === AGAIN_ID ? 'result' : answer.wrap || cards.length >= MAX_BRAINSTORM_CARDS - 1 ? 'next' : lastId === 'draft' && !answer.skipped ? 'versions' : 'move';
+  const result = stage === 'result' ? resultText(said[said.length - 1] || (lastId === AGAIN_ID ? said[said.length - 2] : '')) : null;
   return {
     agent, brainstorm, ...read, prior, path, paper, stage, result, close: stage === 'result' ? 'result' : null,
+    // What is written in place of a reply, with no model run: the result, or the again card.
+    written: stage === 'again' ? cardBody(againCard()).body : result,
     asked: read.question || OPENING,
     shown: prior.map((turn) => ({ ...turn, question: turn.question || OPENING })),
     extra: `<path>${path}</path>\n<stage>${stage}</stage>\n<card>${cards.length + 1} of ${MAX_BRAINSTORM_CARDS}</card>`,
   };
 }
 
+/** The next card (MATH-40), its title led in by `lead` (./card.cjs nextTitle), with nothing said above it. */
+const nextCard = (lead = '') => JSON.stringify({ say: '', card: 'questions', questions: { eyebrow: 'what next', items: [{ id: NEXT_ID, type: 'open', title: nextTitle(lead), placeholder: NEXT_PLACEHOLDER }] }, ready: false });
+/** The again card (MATH-40 follow-up): asked once, by code, when their answer to the next card only repeats their first. */
+const againCard = () => JSON.stringify({ say: '', card: 'questions', questions: { eyebrow: 'what next', items: [{ id: AGAIN_ID, type: 'open', title: AGAIN_TITLE, placeholder: NEXT_PLACEHOLDER }] }, ready: false });
+
 /**
  * What @brainstorm replied, as the document keeps it (MATH-40): on the next stage, or when the agent asked the next card
- * itself, the next card as it always reads, with the agent's "say" (what they kept coming back to) and nothing else of
- * its card; any other reply as it came.
+ * itself, the next card as it always reads, its title led in by the lead-in of the agent's next card (nextLead; none when
+ * it asked another card); any other card as it came, with nothing said above its question (MATH-40 follow-up: an older
+ * card's `say` is drawn, a new one's is written empty); a reply that is not a card, or a recap, as it came.
  */
 function brainstormReply(text, stage) {
   const card = readCard(text), asked = card && card.card !== 'none' ? card : null;
-  if (stage !== 'next' && !(asked && idOf(asked) === NEXT_ID)) return text;
-  return JSON.stringify({ say: asked ? asked.say : '', card: 'questions', questions: { eyebrow: 'what next', items: [{ id: NEXT_ID, type: 'open', title: NEXT_TITLE, placeholder: 'One sentence, in your own words…' }] }, ready: false });
+  if (stage === 'next' || (asked && idOf(asked) === NEXT_ID)) return nextCard(asked && idOf(asked) === NEXT_ID ? nextLead(questionOf(asked).title) : '');
+  return asked ? JSON.stringify({ ...asked, say: '' }) : text;
 }
 
 /**
- * The result of an exchange (MATH-40), with no model run: their sentence as the reply, with the foot an answer has. The
- * session the exchange ran in is let go (turnPlan's caller has taken it): it never saw their sentence, so the next line
- * starts a new one, given the document.
+ * The result of an exchange (MATH-40), or the again card before it, with no model run: what turnPlan wrote as the reply,
+ * with the foot an answer has. The session the exchange ran in is let go (turnPlan's caller has taken it): it never saw
+ * their sentence, so the next line starts a new one, given the document.
  */
 function resultReply(plan) {
   const meta = { provider: plan.provider, level: { name: '', effort: '', model: '' }, trail: [], ms: 0, pinned: false };
-  return { lines: replyLines(plan.result, meta, { model: false }), meta };
+  return { lines: replyLines(plan.written, meta, { model: false }), meta };
 }
 
 /**
@@ -479,8 +498,8 @@ function createBart({ readModels, environment = process.env, runDirectory = path
     if (pinned && bart) remember(onPicked, steps[0]);
     const store = { bart: threads, brainstorm: brainstormThreads, discover: discoverThreads }[agent];
     const held = prior.length ? store.take(threadKey(projectId, ref, prior), provider) : null;
-    // @brainstorm's last card answered: their sentence is the result, and no model runs (MATH-40).
-    if (plan.result != null) return resultReply(plan);
+    // @brainstorm's last card answered: their sentence is the result, or the again card asks once more; no model runs (MATH-40).
+    if (plan.written != null) return resultReply(plan);
     const sent = await withImagePaths(ctx, projectId, asked);
     const cwd = path.join(runDirectory, projectId);
     fs.mkdirSync(cwd, { recursive: true, mode: 0o700 });
@@ -560,13 +579,12 @@ function ownSentence(documents, subject) {
 
 // The fake @brainstorm's moves, in turn (MATH-40): how two answers connect needs two, else where they're unsure.
 const FAKE_MOVES = ['excites', 'example', 'connect'];
-const TIMES = ['', 'once', 'twice', 'three times', 'four times', 'five times'];
 const MIND_TITLE = 'What\'s been on your mind lately?';
 
 /**
- * What the fake @brainstorm's next card says they kept coming back to (MATH-40): the longest word of five letters or more
- * that is in the most of their answers, and in how many, when that is more than one; else the first words of what they
- * said first. '' when they said nothing.
+ * How the fake @brainstorm's next card leads in (MATH-40 follow-up: in its title, no longer its "say"): what they kept
+ * coming back to, the longest word of five letters or more that is in the most of their answers, when that is more than
+ * one; else the first words of what they said first. '' when they said nothing.
  */
 function cameBack(said) {
   const counts = new Map();
@@ -574,22 +592,22 @@ function cameBack(said) {
     for (const word of new Set(answer.toLowerCase().match(/[a-z][a-z'-]{4,}/g) || [])) counts.set(word, (counts.get(word) || 0) + 1);
   }
   const [word, count] = [...counts].sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)[0] || ['', 0];
-  if (count > 1) return `You came back to “${word}” ${TIMES[Math.min(count, 5)]}.`;
+  if (count > 1) return `You kept coming back to “${word}”.`;
   return said.length ? `You started from “${said[0].split(/\s+/).slice(0, 6).join(' ')}”.` : '';
 }
 
 /**
  * The fake @brainstorm's reply (BS-13, MB-12, round 3; 2026-10-05, @orient folded in; MATH-40), as a model would write
- * it: the card turnPlan's stage names, on the exchange's path. The first card: on a topic or a paper, an open card asking
- * what draws them to it, whose "say" is a sentence of their own about it from the workspace when there is one, else
- * empty; with nothing on the line, "What's been on your mind lately?", as a focus card of broad areas from the workspace
- * and its library, or with nothing in the library as an open card, "say" empty either way. A move builds on the last
- * answer: a question they wrote (ending in "?") or asked for ("a question"), up to the third card, gets the draft card;
- * words saying what they will do ("I want to") get the next card; else excites, example, then how two of their answers
- * connect (unsure with fewer than two), each title naming a few of their words and each "say" picking them up, or after a
- * skip letting it go. Versions: their draft word for word, then the draft with "specifically" put in. The next card's
- * "say" is what they kept coming back to (cameBack). No card suggests a search (MATH-31) or talks about the workspace. A
- * line containing "malformed" gets a reply that is not a card.
+ * it: the card turnPlan's stage names, on the exchange's path, with nothing said above its question (MATH-40 follow-up:
+ * "say" is empty on every card; what it picks up is in the title). The first card: on a topic or a paper, an open card
+ * asking what draws them to it, led in by a few words of a sentence of their own about it from the workspace when there
+ * is one; with nothing on the line, "What's been on your mind lately?", as a focus card of broad areas from the workspace
+ * and its library, or with nothing in the library as an open card. A move builds on the last answer: a question they
+ * wrote (ending in "?") or asked for ("a question"), up to the third card, gets the draft card; words saying what they
+ * will do ("I want to") get the next card; else excites, example, then how two of their answers connect (unsure with
+ * fewer than two), each title naming a few of their words. Versions: their draft word for word, then the draft with
+ * "specifically" put in. The next card's title leads in with what they kept coming back to (cameBack). No card suggests
+ * a search (MATH-31) or talks about the workspace. A line containing "malformed" gets a reply that is not a card.
  */
 function fakeCard(context, plan, models) {
   if (/malformed/i.test(plan.question)) return 'FAKE REPLY that is not a card: {"say": "cut off';
@@ -605,12 +623,14 @@ function fakeCard(context, plan, models) {
   const said = answers.map(words).filter(Boolean), last = answers[answers.length - 1], now = words(last);
   const few = (text) => text.split(/\s+/).slice(0, 6).join(' '), quote = (text) => (text ? `“${few(text)}”` : 'this');
   const eyebrows = { draws: 'to start', mind: 'to start', draft: 'your question', versions: 'your question', [NEXT_ID]: 'what next' };
-  const ask = (id, type, title, say, extra = {}) => JSON.stringify({ say, card: 'questions', questions: { eyebrow: eyebrows[id] || 'thinking it through', items: [{ id, type, title, ...extra }] }, ready: false });
+  const ask = (id, type, title, extra = {}) => JSON.stringify({ say: '', card: 'questions', questions: { eyebrow: eyebrows[id] || 'thinking it through', items: [{ id, type, title, ...extra }] }, ready: false });
   const typed = { placeholder: 'In your own words…' };
+  // The next card: the lead-in, then the question code fixes (brainstormReply keeps the lead-in and writes the rest).
+  const next = () => ask(NEXT_ID, 'open', nextTitle(cameBack(said)));
   if (plan.stage === 'first') {
     if (plan.path === 'open') {
       const names = context.entries.map((entry) => entry.name).slice(0, 2);
-      if (!names.length) return ask('mind', 'open', MIND_TITLE, '', typed);
+      if (!names.length) return ask('mind', 'open', MIND_TITLE, typed);
       const options = [`What “${context.workspaceName}” is trying to do`, ...names.map((name) => `How ${name} fits in`), 'How you would know it worked'];
       return JSON.stringify({ say: '', card: 'focus', focus: { title: MIND_TITLE, options: options.map((label) => ({ label })) }, ready: false });
     }
@@ -619,35 +639,33 @@ function fakeCard(context, plan, models) {
     const beside = plan.question.replace(/@\[([^\]\n]+)\](?:\(ws:[\w-]+\))?/g, (token, name) => (paper && name.toLowerCase() === paper.toLowerCase() ? ' ' : name)).replace(/\s+/g, ' ').trim().slice(0, 80);
     const own = ownSentence(context.documents, beside || paper);
     const title = paper && beside ? `What draws you to “${beside}” in “${paper}”?` : `What draws you to “${beside || paper}”?`;
-    return ask('draws', 'open', title, own ? `You wrote “${own.replace(/[.!?]$/, '')}”.` : '', typed);
+    return ask('draws', 'open', own ? `You wrote ${quote(own.replace(/[.!?]$/, ''))}. ${title}` : title, typed);
   }
-  const letGo = last && last.skipped ? 'Fine, let\'s leave that.' : '';
-  if (plan.stage === 'next') return ask(NEXT_ID, 'open', NEXT_TITLE, cameBack(said) || letGo, { placeholder: 'One sentence, in your own words…' });
+  if (plan.stage === 'next') return next();
   // versions: their draft word for word, then one version of it with "specifically" put in after its first word; when the
   // draft already says it there is no version to make, and the card asks them to read it again.
   if (plan.stage === 'versions') {
-    const say = `${quote(now)} is your question as you wrote it; below it are versions that each change one thing.`;
-    if (/\bspecifically\b/i.test(now)) return ask('versions', 'open', 'Read your question once more. Would you change anything?', say, { placeholder: 'Your question…' });
+    if (/\bspecifically\b/i.test(now)) return ask('versions', 'open', 'Read your question once more. Would you change anything?', { placeholder: 'Your question…' });
     const parts = now.match(/^(\S+)\s+([\s\S]+)$/);
     const narrower = parts ? `${parts[1]} specifically ${parts[2]}` : now.replace(/\??$/, ' specifically?');
-    return ask('versions', 'mcq', 'Which one is your question?', say, { options: [{ label: now, why: 'as you wrote it' }, { label: narrower, why: 'narrower' }] });
+    return ask('versions', 'mcq', 'Which one is your question?', { options: [{ label: now, why: 'as you wrote it' }, { label: narrower, why: 'narrower' }] });
   }
   // A move, on the last thing they said (after a skip, the one before it).
-  if (/\b(?:i want to|i'd like to|i will|i'll)\b/i.test(now)) return ask(NEXT_ID, 'open', NEXT_TITLE, cameBack(said), { placeholder: 'One sentence, in your own words…' });
+  if (/\b(?:i want to|i'd like to|i will|i'll)\b/i.test(now)) return next();
   if (now && answers.length <= 2 && (/\?\s*$/.test(now) || /\ba question\b/i.test(now))) {
-    return ask('draft', 'open', `You asked ${quote(now)}. Write what you want to find out as one question, in one sentence.`, `${quote(now)} is already a question, so let's put it in one sentence.`, { placeholder: 'Your question…' });
+    return ask('draft', 'open', `You asked ${quote(now)}. Write what you want to find out as one question, in one sentence.`, { placeholder: 'Your question…' });
   }
   const latest = now || said[said.length - 1] || '', moved = answers.filter((answer) => FAKE_MOVES.includes(answer.id) || answer.id === 'unsure').length;
   let move = FAKE_MOVES[moved % FAKE_MOVES.length];
   if (move === 'connect' && said.length < 2) move = 'unsure';
   const [a, b] = [said[said.length - 1], said[said.length - 2]];
   const MOVE = {
-    excites: [`What excites you about ${quote(latest)}?`, `${quote(latest)} is the part to stay with.`],
-    example: [`What's an example of ${quote(latest)}?`, `${quote(latest)} gets clearer with one case in front of you.`],
-    unsure: [`Where are you unsure about ${quote(latest)}?`, `${quote(latest)} is where you are now, and the shaky part of it is worth finding.`],
-    connect: [`How does ${quote(a)} connect to ${quote(b)}?`, `You said ${quote(a)}, and before that ${quote(b)}.`],
+    excites: `What excites you about ${quote(latest)}?`,
+    example: `What's an example of ${quote(latest)}?`,
+    unsure: `Where are you unsure about ${quote(latest)}?`,
+    connect: `How does ${quote(a)} connect to ${quote(b)}?`,
   }[move];
-  return ask(move, 'open', MOVE[0], letGo || MOVE[1], typed);
+  return ask(move, 'open', MOVE, typed);
 }
 
 /**
@@ -737,7 +755,7 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
       if (pinned && question && agent === 'bart') remember(onPicked, steps[0]);
       const store = { bart: threads, brainstorm: brainstormThreads, discover: discoverThreads }[agent];
       const held = prior.length ? store.take(threadKey(projectId, ref, prior), provider) : null;
-      if (plan.result != null) return resultReply(plan);
+      if (plan.written != null) return resultReply(plan);
       const message = firstMessage({ context, prior: plan.shown, question: await withImagePaths(ctx, projectId, plan.asked), resumed: !!held, extra: plan.extra });
       const pause = (ms) => new Promise((resolve, reject) => { const timer = setTimeout(resolve, ms); waits.set(askId, () => { clearTimeout(timer); reject(new BartError('stopped', 'Stopped.')); }); });
       const feed = createFeed({ onProgress, intervalMs: 0 });
