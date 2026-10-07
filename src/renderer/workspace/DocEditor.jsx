@@ -2233,9 +2233,7 @@ export default class DocEditor extends React.Component {
     // Bart, Brainstorm, Discover and Note are words the line keeps (Enter asks, or makes the note); anything else is a mention, and
     // what it names comes into this workspace (the open page is added to the library first: props.onMentionPicked). A verb
     // is followed by a space, since a question comes next; a mention is not (MATH-11, 2026-10-05): the caret stops right after it.
-    // Picked in the middle of a line, against a word: one space keeps them apart (nothing is added at the end of a line).
-    const tight = /^[^\s.,;:!?)\]]/.test(cur.slice(m.caret));
-    const ins = verb === 'bart' ? '@Bart ' : verb === 'brainstorm' ? '@Brainstorm ' : verb === 'discover' ? '@Discover ' : verb === 'note' ? '@Note ' : (r.kind === 'workspace' ? wsMention(r.name, r.id) : `@[${r.name}]`) + (tight ? ' ' : '');
+    const ins = verb === 'bart' ? '@Bart ' : verb === 'brainstorm' ? '@Brainstorm ' : verb === 'discover' ? '@Discover ' : verb === 'note' ? '@Note ' : r.kind === 'workspace' ? wsMention(r.name, r.id) : `@[${r.name}]`;
     this.writeText(m.i, cur.slice(0, m.start) + ins + cur.slice(m.caret), { line: m.i, offset: m.start + ins.length });
     this.wantFocus = true; this.setState({ mention: null, activeLine: m.i });
     if (!verb && r.kind !== 'workspace' && this.props.onMentionPicked) this.props.onMentionPicked(r); // a workspace is not a library row
@@ -2246,8 +2244,8 @@ export default class DocEditor extends React.Component {
     const input = this.followField(m.field);
     this.setState({ mention: null });
     if (!input || isVerbRow(r)) return;
+    const ins = r.kind === 'workspace' ? wsMention(r.name, r.id) : `@[${r.name}]`;
     const end = Math.min(m.caret, input.value.length), start = Math.min(m.start, end);
-    const ins = (r.kind === 'workspace' ? wsMention(r.name, r.id) : `@[${r.name}]`) + (/^[^\s.,;:!?)\]]/.test(input.value.slice(end)) ? ' ' : '');
     if (document.activeElement !== input) input.focus({ preventScroll: true });
     input.setRangeText(ins, start, end, 'end');
     this.followInput(input);
