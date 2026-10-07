@@ -249,8 +249,9 @@ test('install-linux.sh: no Git, an ARM computer, a bad checksum and an unreachab
   fs.writeFileSync(feed, fs.readFileSync(feed, 'utf8').replace(/sha512: \S+/g, `sha512: ${crypto.createHash('sha512').update('something else').digest('base64')}`));
   const server = await serve(path.join(dir, 'served'));
   const env = { PATH: process.env.PATH, HOME: home, LANG: 'C.UTF-8', ENGELBART_DOWNLOADS: server.url, ENGELBART_NO_OPEN: '1', ENGELBART_APPARMOR: 'no' };
+  const bash = execFileSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).trim(); // found on any PATH below
   const run = (extra) => new Promise((resolve) => {
-    execFile('bash', [INSTALL_LINUX], { env: { ...env, ...extra }, timeout: 60000 }, (error, stdout, stderr) => resolve({ code: error ? error.code : 0, out: `${stdout}${stderr}` }));
+    execFile(bash, [INSTALL_LINUX], { env: { ...env, ...extra }, timeout: 60000 }, (error, stdout, stderr) => resolve({ code: error ? error.code : 0, out: `${stdout}${stderr}` }));
   });
   try {
     const bad = await run({});
