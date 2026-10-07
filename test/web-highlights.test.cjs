@@ -227,7 +227,7 @@ test('webMarksOf reads the "web" list alone, marksOf the pages alone; webStageBl
 
 test('buildContext: <stage source="web"> for the web page in front, <highlights> for a saved page the document mentions, a preview with none, a pdf as before', async () => {
   const pages = fs.mkdtempSync(path.join(homeDir, 'pages-'));
-  const savedFile = fs.realpathSync(path.join(pages)) + '/index.html';
+  const savedFile = path.join(fs.realpathSync(path.join(pages)), 'index.html');
   fs.writeFileSync(savedFile, '<title>Saved essay</title>');
   const saved = randomUUID();
   await ctx.libraryDb.insert({ id: saved, name: 'Saved essay', project_id: project.id, type: 'html', tags: [], path: savedFile, url: 'https://blog.example.org/saved' });
@@ -243,7 +243,7 @@ test('buildContext: <stage source="web"> for the web page in front, <highlights>
   const front = (await ask({ stage: { kind: 'web', url: 'http://live.example.org/post', title: 'Live post' } })).documents;
   const inkFile = fileFor('live.example.org/post');
   assert.ok(front.includes(`<stage source="web" title="Live post" address="http://live.example.org/post" annotations="${inkFile}">\n<highlight>\n<quote>\na live passage\n</quote>\n</highlight>\n</stage>`), front.slice(-900));
-  assert.ok(front.includes(`<highlights from="mentioned">\n<page source="web" title="Saved essay" address="https://blog.example.org/saved" path="${savedFile}" annotations="${path.join(ctx.dataRoot, 'annotations', `${saved}.json`)}">\n<highlight>\n<quote>\na saved passage\n</quote>\n<note>\nworth citing\n</note>\n<ask>\n<question>\nwho wrote it?\n</question>\n<answer>\nThe editors.\n</answer>\n</ask>\n</highlight>\n</page>\n</highlights>`));
+  assert.ok(front.includes(`<highlights from="mentioned">\n<page source="web" title="Saved essay" address="https://blog.example.org/saved" path="${savedFile}" annotations="${path.join(ctx.dataRoot, 'annotations', `${saved}.json`)}">\n<highlight>\n<quote>\na saved passage\n</quote>\n<note>\nworth citing\n</note>\n<ask>\n<question>\nwho wrote it?\n</question>\n<answer>\nThe editors.\n</answer>\n</ask>\n</highlight>\n</page>\n</highlights>`), front.slice(-1500));
   assert.ok(plain.includes('<page source="web" title="Saved essay"') && plain.includes('<stage>none</stage>\n\n<highlights from="mentioned">'), 'mentioned without a Stage: <stage>none</stage>, then <highlights>');
 
   // the saved page itself in front (its copy open): in <stage> alone, named and addressed as the library has it

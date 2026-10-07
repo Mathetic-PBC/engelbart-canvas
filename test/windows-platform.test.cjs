@@ -181,6 +181,20 @@ test('Engelbart\'s git on Windows keeps files as the repository has them (core.a
   assert.deepEqual(seen[1], ['-c', 'core.hooksPath=/dev/null', '-c', 'core.quotepath=off', '-c', 'advice.detachedHead=false', 'status'], 'a Mac: the same arguments as before');
 });
 
+test('the terminal box recalls PowerShell\'s history on Windows (PSReadLine), before Git Bash\'s; a Mac reads zsh\'s as before', () => {
+  const { readShellHistory } = require('../src/main/shell-history.cjs');
+  const home = temp();
+  const appData = path.join(home, 'AppData', 'Roaming');
+  const file = path.join(appData, 'Microsoft', 'Windows', 'PowerShell', 'PSReadLine', 'ConsoleHost_history.txt');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, 'git status\r\nGet-ChildItem `\r\n  -Recurse\r\nnpm test\r\ngit status\r\ncafé ă\r\n');
+  fs.writeFileSync(path.join(home, '.bash_history'), 'ls\n');
+  fs.writeFileSync(path.join(home, '.zsh_history'), ': 1:0;echo from zsh\n');
+  assert.deepEqual(readShellHistory({ homeDir: home, environment: { APPDATA: appData }, platform: 'win32' }), ['Get-ChildItem \n  -Recurse', 'npm test', 'git status', 'café ă']);
+  assert.deepEqual(readShellHistory({ homeDir: home, environment: {}, platform: 'win32' }), ['Get-ChildItem \n  -Recurse', 'npm test', 'git status', 'café ă'], 'APPDATA unset: under the home folder');
+  assert.deepEqual(readShellHistory({ homeDir: home, environment: {}, platform: 'darwin' }), ['echo from zsh'], 'a Mac: zsh\'s first, as before');
+});
+
 test('an app packed for Windows keeps app.asar in resources/: the package check reads it there', async () => {
   const asar = require(require.resolve('@electron/asar', { paths: [path.dirname(require.resolve('app-builder-lib'))] }));
   const dir = temp();

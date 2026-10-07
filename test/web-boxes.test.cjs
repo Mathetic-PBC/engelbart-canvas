@@ -397,13 +397,14 @@ test('a selected box: Backspace removes it (not while a field has the keyboard) 
 
 test('@bart: a box is <box crop="/abs/…png"> with its <text>, in a web <stage> and a mentioned page; highlights beside it as before', () => {
   const inkRoot = '/data/annotations';
+  const crop = (id) => path.join(inkRoot, 'crops', `${id}.png`); // the platform's separators, as the app writes it
   const ink = { [WEB]: [webMark('w1', 'a passage'), boxMark('b1'), boxMark('b2', { text: '', crop: null }), boxMark('b3', { crop: '../../etc/passwd', note: 'see this' })] };
   const listed = webMarksOf(ink, inkRoot);
-  assert.deepEqual(listed.map((h) => [h.box || false, h.quote, h.crop || '']), [[false, 'a passage', ''], [true, '', '/data/annotations/crops/b1.png'], [true, '', ''], [true, '', '']]);
+  assert.deepEqual(listed.map((h) => [h.box || false, h.quote, h.crop || '']), [[false, 'a passage', ''], [true, '', crop('b1')], [true, '', ''], [true, '', '']]);
   const page = { name: 'Douglas Engelbart', address: 'https://en.wikipedia.org/wiki/Douglas_Engelbart', path: '', annotations: '/data/annotations/pages/x.json', inkRoot };
   const stage = webStageBlock(page, ink);
   assert.ok(stage.includes('<highlight>\n<quote>\na passage\n</quote>\n</highlight>\n'));
-  assert.ok(stage.includes('<box crop="/data/annotations/crops/b1.png">\n<text>\nFigure 2: results\n</text>\n</box>\n'), stage);
+  assert.ok(stage.includes(`<box crop="${crop('b1')}">\n<text>\nFigure 2: results\n</text>\n</box>\n`), stage);
   assert.ok(stage.includes('<box/>\n')); // a box with nothing to say still says it is there
   assert.ok(stage.includes('<box>\n<text>\nFigure 2: results\n</text>\n<note>\nsee this\n</note>\n</box>\n')); // no crop outside crops/
   assert.ok(!/<quote>\n\n/.test(stage));
@@ -411,11 +412,11 @@ test('@bart: a box is <box crop="/abs/…png"> with its <text>, in a web <stage>
   assert.ok(webStageBlock(page, { [WEB]: [boxMark('b1')] }).startsWith('<stage source="web" title="Douglas Engelbart" address="https://en.wikipedia.org/wiki/Douglas_Engelbart" annotations='));
 
   const mentioned = mentionedBlock([{ source: 'web', name: 'Saved', address: 'https://saved.example.org/', path: '/p/index.html', annotations: '/ink/s.json', inkRoot, ink: { [WEB]: [boxMark('s1')] } }]);
-  assert.equal(mentioned, '<highlights from="mentioned">\n<page source="web" title="Saved" address="https://saved.example.org/" path="/p/index.html" annotations="/ink/s.json">\n<box crop="/data/annotations/crops/s1.png">\n<text>\nFigure 2: results\n</text>\n</box>\n</page>\n</highlights>');
+  assert.equal(mentioned, `<highlights from="mentioned">\n<page source="web" title="Saved" address="https://saved.example.org/" path="/p/index.html" annotations="/ink/s.json">\n<box crop="${crop('s1')}">\n<text>\nFigure 2: results\n</text>\n</box>\n</page>\n</highlights>`);
 
   // a pdf page's list with a box in it (later builds) is read as a box, never as a quote or a free note
   const pdf = marksOf({ 2: [{ id: 'p', rects: [{ x: 0, y: 0, w: 1, h: 0.1 }], y: 0.1, text: 'pdf text' }, { id: 'pb', y: 0.3, box: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 }, crop: 'crops/pb.png', text: 'under' }] }, inkRoot);
-  assert.deepEqual(pdf.map((h) => [h.page, h.box || false, h.quote, h.crop || '']), [[2, false, 'pdf text', ''], [2, true, '', '/data/annotations/crops/pb.png']]);
+  assert.deepEqual(pdf.map((h) => [h.page, h.box || false, h.quote, h.crop || '']), [[2, false, 'pdf text', ''], [2, true, '', crop('pb')]]);
 });
 
 test('the system prompt tells Bart what a <box> is and to open its crop when the question is about what it shows', () => {

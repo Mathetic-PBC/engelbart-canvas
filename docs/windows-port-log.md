@@ -16,15 +16,25 @@ docs/windows-port.md. Done when CI passes on windows-latest and macos-latest for
   sides' imports kept), `DocEditor.jsx` and `doc-editor-answer-line.test.cjs` (this side had only the cherry-picked
   f2d0ac0, so hudsons-feedback's versions). Mac `npm ci` and `npm test` locally: 1384 tests, 1384 pass. Pushed for
   the first CI run on the new code.
+- 2026-10-07, catch-up run 1 (020338b): macOS passed (1384 tests, 1383 pass, the bundled-Git skip). Windows: 3
+  failures, all fixtures: web-boxes (crop paths written with `/`; the app writes the platform's separator, as
+  `path.join` does), web-highlights (a saved page's path built with `+ '/index.html'`; now `path.join`, with the page
+  context in the failure message), zotero (the 0600 mode of the saved key: POSIX only, guarded). Review of the new code
+  for Windows: browser sign-in import (Keychain, ~/Library) is already created on macOS only, so on Windows it is not
+  offered; the terminal box's ↑ history now reads PowerShell's (PSReadLine's ConsoleHost_history.txt) first on
+  Windows, then Git Bash's (`src/main/shell-history.cjs`; the Mac reads zsh's first, as before; test in
+  windows-platform.test.cjs). Zotero's storage (~/Zotero/storage) is where Zotero keeps it on Windows too.
 
 ### Tests skipped on Windows (new code since 22d738c)
 
-None yet.
+None. POSIX-only assertions guarded inside a test (the rest of it runs): the 0600 mode of Zotero's saved key
+(zotero.test.cjs; Windows has no such modes).
 
 ### CI runs
 
 | Commit | Run | macOS | Windows | Linux | Notes |
 |---|---|---|---|---|---|
+| 020338b | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37604197560 | ✓ | ✗ 3 tests | ✗ (allowed) | the merge; Windows: path fixtures, a file mode |
 
 ## Where things stand
 
