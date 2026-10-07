@@ -42,7 +42,17 @@ local folder, runs the line against it, smoke tests the installed copy and runs 
 
 ### Status
 
-- 2026-10-07, install run 2: install.ps1 finds the install folder from the uninstall entry's UninstallString (the
+- 2026-10-07, install run 2 (f210c51, https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37667770887):
+  macOS ✓ (1391 tests, 1389 pass, 2 skipped: the bundled-Git test's own and the new Windows-only PowerShell test);
+  Windows ✓ (1394 tests, 1356 pass, 38 skipped, 0 failed; dist:win; `irm | iex` in Windows PowerShell 5.1 installed
+  0.1.10; smoke-windows on the installed copy; the second run, PowerShell 7: "Engelbart 0.1.10 is already installed
+  in C:\Users\runneradmin\AppData\Local\Programs\Engelbart and up to date."). Linux hung an hour in apt-get and was
+  cancelled, which marks the whole run cancelled: the apt step now has a 10-minute limit, and upload:win picks the run
+  whose windows-latest and macos-latest jobs passed instead of the run's overall status. `UPLOAD_DRY_RUN=1 npm run
+  upload:win` against it: Engelbart-0.1.10-x64.exe (135150341 bytes) and its blockmap, then index.html, install.ps1,
+  SHA256SUMS-windows.txt, then latest.yml; install.ps1 reads https://mathetic.com/engelbart/; the page is the live one
+  with the Windows section added. Pushed for a run on these two changes.
+- 2026-10-07, install run 2's change: install.ps1 finds the install folder from the uninstall entry's UninstallString (the
   NSIS installer writes no InstallLocation), and compares only three parts of the exe's version (its ProductVersion
   is 0.1.10.0) in the fallback.
 - 2026-10-07, install run 1 (fd68788): macOS ✓. Windows: npm test 1394 tests, 1356 pass, 38 skipped, 0 failed
@@ -57,6 +67,7 @@ local folder, runs the line against it, smoke tests the installed copy and runs 
 | Commit | Run | macOS | Windows | Notes |
 |---|---|---|---|---|
 | fd68788 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37665101651 | ✓ | ✗ second run reinstalled | install, smoke of the installed copy ✓; up-to-date check missed the registry entry |
+| f210c51 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37667770887 | ✓ | ✓ install, smoke, up to date | Linux hung in apt (run reported cancelled) |
 
 ## Catch-up to 0.1.10
 

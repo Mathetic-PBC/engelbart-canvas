@@ -21,7 +21,13 @@ FROM="$ROOT/release/win-ci"
 fail() { echo "The Windows release was not uploaded: $1"; exit 1; }
 
 command -v gh >/dev/null || fail "gh (the GitHub CLI) is not installed."
-RUN=$(cd "$ROOT" && gh run list --workflow ci.yml --commit "$COMMIT" --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty') || fail "could not ask GitHub for CI runs (is \`gh auth login\` done?)."
+# Green: the windows-latest and macos-latest jobs passed (Linux is allowed to fail, and when it hangs the whole run is
+# reported cancelled).
+RUNS=$(cd "$ROOT" && gh run list --workflow ci.yml --commit "$COMMIT" --status completed --limit 10 --json databaseId --jq '.[].databaseId') || fail "could not ask GitHub for CI runs (is \`gh auth login\` done?)."
+RUN=""
+for id in $RUNS; do
+  [ "$(cd "$ROOT" && gh run view "$id" --json jobs --jq '[.jobs[] | select(.name == "windows-latest" or .name == "macos-latest") | select(.conclusion == "success")] | length')" = 2 ] && { RUN=$id; break; }
+done
 [ -n "$RUN" ] || fail "no green CI run for ${COMMIT:0:7}; push it and wait for CI, or name another commit."
 echo "Engelbart $VERSION for Windows from CI run $RUN (${COMMIT:0:7})"
 rm -rf "$FROM"
