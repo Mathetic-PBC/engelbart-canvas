@@ -139,6 +139,9 @@ const LAYER_CSS = `
 [data-pdf][data-space],[data-pdf][data-space] *{cursor:grab!important}
 [data-pdf][data-panning],[data-pdf][data-panning] *{cursor:grabbing!important}
 [data-pdf] [data-grip]{cursor:grab}
+[data-pdf] [data-box] [data-grip] span{opacity:0;transition:opacity 120ms}
+[data-pdf] [data-box]:hover [data-grip] span,[data-pdf] [data-box]:focus-within [data-grip] span,[data-pdf] [data-box][data-focused] [data-grip] span{opacity:1}
+[data-pdf] [data-box]:hover,[data-pdf] [data-box]:focus-within,[data-pdf] [data-box][data-focused]{border-color:#ececec !important}
 [data-pdf][data-dragging],[data-pdf][data-dragging] *{cursor:grabbing!important;user-select:none!important}
 [data-pdf][data-blank]:not([data-panning]),[data-pdf][data-blank]:not([data-panning]) :not([data-notes],[data-notes] *){cursor:grab!important}
 [data-pdf][data-neartext] .pdf-text,[data-pdf][data-neartext] .pdf-text .endOfContent{cursor:text!important}
@@ -175,9 +178,10 @@ const CHIP = { position: 'absolute', zIndex: 5, height: 26, padding: '0 10px', b
 const chipStyle = (side) => ({ ...CHIP, ...(side === 'left' ? { left: 12, top: '50%', transform: 'translateY(-50%)' } : side === 'right' ? { right: BAR_SIDE + 12, top: '50%', transform: 'translateY(-50%)' } : side === 'up' ? { top: 10, left: '50%', transform: 'translateX(-50%)' } : { bottom: 62, left: '50%', transform: 'translateX(-50%)' }) });
 const SIDES = ['left', 'right', 'up', 'down'];
 const NO_OFF = { left: 0, right: 0, up: 0, down: 0 };
-// A box (MATH-27): a grip at its top that moves it; no border or shadow (2026-10-06), its edge transparent so it keeps its size.
-const BOX_BG = 'rgba(255,255,255,.97)';
-const FOCUS_WASH = 'rgb(242,247,254)'; // the box of the note in focus (MATH-15): the white of a box with a little blue
+// A box (MATH-27): a grip at its top that moves it. Since 2026-10-06 it is no box to see: no shadow or fill, the note ink on
+// the desk; its edge is transparent (so it keeps its size) and, with its grip, shows faintly only as its trash button does. The note in focus is not washed or edged in blue either: the
+// others fade.
+const BOX_BG = 'transparent';
 const BOX_LOOK = `position:absolute;box-sizing:border-box;border:1px solid transparent;border-radius:8px;background:${BOX_BG};pointer-events:auto`;
 const GRIP_CSS = 'height:12px;display:flex;align-items:center;justify-content:center';
 const GRIP_BAR = '<span style="width:22px;height:3px;border-radius:2px;background:#d9d9d9"></span>';
@@ -1958,10 +1962,8 @@ export default class PaperView extends React.Component {
     this.painted = id || null;
     for (const el of host.querySelectorAll('[data-focus]')) el.remove();
     for (const el of host.querySelectorAll('[data-box-mark]')) {
-      const mine = !!id && el.dataset.boxMark === id, on = mine && el.dataset.noteFor === id;
+      const mine = !!id && el.dataset.boxMark === id;
       el.style.opacity = id && !mine ? '0.45' : '';
-      el.style.background = on ? FOCUS_WASH : BOX_BG;
-      el.style.boxShadow = on ? 'inset 2px 0 0 rgba(0,112,243,.45)' : '';
       if (this.focusId && el.dataset.boxMark === this.focusId) el.dataset.focused = '1'; else delete el.dataset.focused; // its trash button shows
     }
     if (!id) return;
