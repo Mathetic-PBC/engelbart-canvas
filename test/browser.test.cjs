@@ -175,7 +175,8 @@ test('views: one page shows at a time, pages stay locked down, windows become ta
   assert.deepEqual(a.webContents.windowOpen({ url: 'engelbart://app/index.html', disposition: 'new-window' }), { action: 'deny' });
   assert.deepEqual(a.webContents.windowOpen({ url: 'file:///etc/passwd', disposition: 'foreground-tab' }), { action: 'deny' });
 
-  // Signing in: a popup is a real child window with its opener, locked down like a tab and never given the preload.
+  // Signing in: a popup is a real child window with its opener, locked down like a tab. It has the session's page preload
+  // (MATH-54 build 2) as every page does, but it is no tab: main answers it nothing (web-page-marks.test.cjs).
   const popupAnswer = a.webContents.windowOpen({ url: 'about:blank', disposition: 'new-window' });
   assert.equal(popupAnswer.action, 'allow');
   assert.deepEqual(popupAnswer.overrideBrowserWindowOptions.webPreferences, a.options.webPreferences);

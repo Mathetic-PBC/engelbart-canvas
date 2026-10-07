@@ -16,7 +16,7 @@ const projects = require('./projects.cjs');
 const { LIBRARY_TAGS } = require('./db.cjs');
 const { reading } = require('../stage/files.cjs');
 const { readHtmlMeta } = require('./page-meta.cjs');
-const { withAsk } = require('../../shared/mark-answers.cjs');
+const { WEB, withAsk } = require('../../shared/mark-answers.cjs');
 const { addressKey, isPreviewAddress } = require('../../shared/address-key.cjs');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -200,6 +200,26 @@ async function addMarkAnswer(ctx, where, page, markId, entry) {
     const next = withAsk(marks, page, markId, entry);
     if (next === marks) return false;
     return writeJson(file, next);
+  });
+}
+
+/**
+ * A highlight made on a web page (MATH-54 build 2, the Stage's right-click Highlight) added to the end of its ink's "web"
+ * list, kept as page ink is (inkPlace: the library's row for a saved page, else the address as addressKey spells it).
+ * `url` is where the tab is; `mark` is { id, quote: { exact, prefix, suffix }, note, asks, at }. → whether it was written:
+ * a preview's, or a page the library cannot place (a file outside home), is not.
+ */
+async function addWebMark(ctx, url, mark) {
+  return inkInTurn(async () => {
+    let place;
+    try { place = await inkPlace(ctx, url); } catch { return false; }
+    const file = place.id ? annotationFile(ctx, place.id) : place.file;
+    if (!file) return false;
+    const held = place.id ? await readAnnotations(ctx, place.id) : readPlace(place);
+    const marks = held && typeof held === 'object' && !Array.isArray(held) ? held : {};
+    const list = Array.isArray(marks[WEB]) ? marks[WEB] : [];
+    if (list.some((m) => m && m.id === mark.id)) return false;
+    return writeJson(file, { ...marks, [WEB]: [...list, mark] });
   });
 }
 
@@ -932,4 +952,4 @@ async function previewItem(ctx, id, { listRemoteFiles } = {}) {
   return out;
 }
 
-module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, annotationsFileOf, writePageAnnotations, addMarkAnswer, projectsForLibraryItem, libraryForProject, bodiesForProject, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, addPageCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem };
+module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, annotationsFileOf, writePageAnnotations, addMarkAnswer, addWebMark, projectsForLibraryItem, libraryForProject, bodiesForProject, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, addPageCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem };

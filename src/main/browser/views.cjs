@@ -1,11 +1,13 @@
 'use strict';
 const { isGithubSignIn, endedGithubSession, GITHUB_SESSION_COOKIES } = require('../../shared/github.cjs');
+const { isPreviewAddress } = require('../../shared/address-key.cjs');
+const PAGE = require('./page-preload.cjs');
 
 // The Browser pane's pages (decision 48). Each browser tab is a WebContentsView: a native view
 // with its own top-level webContents, laid over a placeholder the renderer measures. A page is
 // therefore never framed, so X-Frame-Options and CSP frame-ancestors do not apply to it, and
-// web security stays on. Pages get no preload and live in their own persistent session, apart
-// from the app's. Electron is passed in so the rules below can be tested without it.
+// web security stays on. Pages live in their own persistent session, apart from the app's. Electron
+// is passed in so the rules below can be tested without it.
 //
 // Signing in (decision 49): a page that opens a window keeps its opener, because OAuth and 2FA
 // flows finish by talking back to it (postMessage, then window.close()). A popup (window.open
@@ -23,11 +25,21 @@ const { isGithubSignIn, endedGithubSession, GITHUB_SESSION_COOKIES } = require('
 // ending .pdf: a site serving one as octet-stream) is saved to a temporary file, and its bytes go
 // to the renderer, which draws them with the Paper pane's viewer. A pdf on disk is read directly.
 // The page under it stays where it was, so Back leaves the pdf.
+//
+// Highlights on web pages (MATH-54 build 2, 2026-10-06): one preload (page-preload.cjs) is registered on the browsing
+// session, so every page in it has it, a tab a page opened (adopt) and a popup as much as a typed tab; it stays sandboxed
+// and isolated and gives the page nothing. It tints the page's web highlights with CSS.highlights, which main styles with
+// insertCSS (MARK_CSS). It talks to main only over its tab's own `webContents.ipc`, and main answers only a tab it knows
+// (tabOf), from its main frame, in the shapes below and no longer than their limits; a popup is no tab and gets nothing.
+// The right-click menu's Highlight, with a selection, asks the preload for the selection's quote and saves it through
+// `pageMarks` (index.cjs: the library's ink for the page, store/library.cjs addWebMark), then has it tinted. A sandbox
+// preview or a local server (isPreviewAddress) is never filed, so it offers no Highlight and gets no marks.
 
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { fileURLToPath } = require('node:url');
+const { randomUUID } = require('node:crypto');
 
 const PARTITION = 'persist:browser';
 // A copy run from a checkout (`npm start`, `electron .`) keeps the Stage's cookies apart (2026-10-06). A package turns on
@@ -51,6 +63,14 @@ const MAX_PDF_BYTES = 200 * 1024 * 1024; // the library's limit
 const PDF_TYPE = /^\s*application\/(?:x-)?pdf\b/i;
 const FIND_MAX = 1000;
 const SAVE_TIMEOUT_MS = 2 * 60 * 1000;
+const PAGE_PRELOAD = path.join(__dirname, 'page-preload.cjs');
+const PAGE_PRELOAD_ID = 'engelbart-page';
+// The PDF's highlight blue (pdf/PaperView.jsx renderMarks). An author sheet: Chromium leaves ::highlight() out of a user
+// one (cssOrigin 'user' paints nothing, checked 2026-10-06 on Electron 44). !important, so a page's own rule for the name
+// wins only with !important of its own.
+const MARK_CSS = `::highlight(${PAGE.HIGHLIGHT}){background-color:rgba(0,112,243,.14) !important}`;
+const QUOTE_TIMEOUT_MS = 2000;
+const MAX_PAGE_MARKS = 2000;
 
 /** http(s) only. 0.0.0.0 is what dev servers print, not an address to visit. */
 function parseBrowserUrl(value) {
@@ -163,6 +183,35 @@ function boundsFrom(rect, zoom) {
   return out;
 }
 
+/** Whether ink on the page at `url` is kept: a page on the web or on disk; never a preview or a local server. */
+function fileablePage(url) {
+  let u;
+  try { u = new URL(String(url || '')); } catch { return false; }
+  if (u.protocol === 'file:') return true;
+  return (u.protocol === 'http:' || u.protocol === 'https:') && !isPreviewAddress(u.href);
+}
+
+/** A quote as a page's preload sends it: { exact, prefix, suffix } of strings within their limits; anything else is null. */
+function quoteInput(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const { exact, prefix = '', suffix = '' } = value;
+  if (typeof exact !== 'string' || typeof prefix !== 'string' || typeof suffix !== 'string') return null;
+  if (!exact.trim() || exact.length > PAGE.MAX_EXACT || prefix.length > PAGE.MAX_AFFIX || suffix.length > PAGE.MAX_AFFIX) return null;
+  return { exact, prefix, suffix };
+}
+
+/** A page's web marks as its preload is given them: [{ id, quote }], only the well-formed, at most MAX_PAGE_MARKS. */
+function marksForPage(list) {
+  const out = [];
+  for (const m of Array.isArray(list) ? list : []) {
+    if (out.length >= MAX_PAGE_MARKS) break;
+    if (!m || typeof m.id !== 'string' || m.id.length > 64 || !m.quote) continue;
+    const quote = quoteInput({ exact: m.quote.exact, prefix: String(m.quote.prefix || '').slice(-PAGE.MAX_AFFIX), suffix: String(m.quote.suffix || '').slice(0, PAGE.MAX_AFFIX) });
+    if (quote) out.push({ id: m.id, quote });
+  }
+  return out;
+}
+
 // The browsing session is the app's, one for every window (2026-10-03): its handlers are set once, by the first window's
 // views, and each finds the window whose tab (or popup) the page is. A permission answered in one window is answered in
 // all of them, for this run, as it is for the session.
@@ -202,12 +251,15 @@ function joinSession(browsing, member, appName) {
       callback(headers ? { responseHeaders: headers } : {});
     });
     browsing.on('will-download', (_event, item, contents) => { const owner = ownerOf(contents); if (owner) owner.receivePdf(item, contents); });
+    // Every page in the session has the highlights' preload (MATH-54 build 2): a tab adopt() built around a webContents
+    // Chromium made gets it as well, which a preload in a view's webPreferences would not reach.
+    if (typeof browsing.registerPreloadScript === 'function') browsing.registerPreloadScript({ type: 'frame', id: PAGE_PRELOAD_ID, filePath: PAGE_PRELOAD });
   }
   shared.members.add(member);
   return shared;
 }
 
-function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLayerChange = () => {}, pdfDir = path.join(os.tmpdir(), 'engelbart-pdf'), partition = PARTITION }) {
+function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLayerChange = () => {}, pdfDir = path.join(os.tmpdir(), 'engelbart-pdf'), partition = PARTITION, pageMarks = null, newId = randomUUID }) {
   const { WebContentsView, session, Menu, clipboard, dialog, shell } = electron;
   const entries = new Map(); // tab id -> { view, error, requested, pending, seq, found }
   const popups = new Set(); // child windows opened by pages
@@ -344,13 +396,72 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     }
     if (params.linkURL) template.push({ label: 'Copy Link', click: () => clipboard.writeText(params.linkURL) }, { type: 'separator' });
     if (params.isEditable) template.push({ role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }, { type: 'separator' });
-    else if (params.selectionText) template.push({ role: 'copy' }, { type: 'separator' });
+    else if (params.selectionText) {
+      if (canHighlight(contents, params, tab)) template.push({ label: 'Highlight', click: () => { void highlightSelection(tab, contents); } });
+      template.push({ role: 'copy' }, { type: 'separator' });
+    }
     template.push({ label: 'Back', enabled: contents.navigationHistory.canGoBack(), click: () => contents.navigationHistory.goBack() });
     template.push({ label: 'Forward', enabled: contents.navigationHistory.canGoForward(), click: () => contents.navigationHistory.goForward() });
     template.push({ label: 'Reload', click: () => { if (tab) command(tab, 'reload'); else contents.reload(); } });
     template.push({ type: 'separator' });
     template.push({ label: 'Inspect Element', click: () => { contents.inspectElement(params.x, params.y); } });
     Menu.buildFromTemplate(template).popup({ window: getWindow() || undefined });
+  }
+
+  /* ------------------------------------------------------------------ highlights on web pages (MATH-54 build 2) */
+
+  /** Highlight is offered for a selection, in a tab (not a popup, not a field), on a page whose ink is kept. */
+  function canHighlight(contents, params, tab) {
+    const chosen = String(params.selectionText || '').trim();
+    return !!(pageMarks && tab && entries.has(tab) && !params.isEditable && chosen && chosen.length <= PAGE.MAX_EXACT && fileablePage(contents.getURL()));
+  }
+
+  /** A message from tab `id`'s page: the tab is still this one, and it came from its main frame (the preload's). */
+  function fromTab(event, id, entry) {
+    if (!event || entries.get(id) !== entry || tabOf(event.sender) !== id) return false;
+    const frame = event.senderFrame, main = entry.view.webContents.mainFrame;
+    return !!frame && !!main && (frame === main || frame.frameTreeNodeId === main.frameTreeNodeId);
+  }
+
+  /** The tab's preload is asked for the selection's quote, saved as a web mark, and told to tint it. */
+  async function highlightSelection(id, contents) {
+    const entry = entries.get(id);
+    if (!entry || !pageMarks || contents.isDestroyed()) return false;
+    const url = contents.getURL();
+    if (!fileablePage(url)) return false;
+    const nonce = nextId('quote');
+    const quote = await new Promise((resolve) => {
+      const timer = setTimeout(() => { if (entry.quoteWait && entry.quoteWait.nonce === nonce) entry.quoteWait = null; resolve(null); }, QUOTE_TIMEOUT_MS);
+      if (typeof timer.unref === 'function') timer.unref();
+      entry.quoteWait = { nonce, resolve: (value) => { clearTimeout(timer); entry.quoteWait = null; resolve(value); } };
+      contents.send(PAGE.CHANNELS.quote, nonce);
+    });
+    // the page went elsewhere meanwhile: its selection is not this page's
+    if (!quote || entries.get(id) !== entry || contents.isDestroyed() || contents.getURL() !== url) return false;
+    const mark = { id: newId(), quote, note: null, at: new Date().toISOString() };
+    let saved = false;
+    try { saved = await pageMarks.add(url, mark); } catch { saved = false; }
+    if (saved && !contents.isDestroyed()) contents.send(PAGE.CHANNELS.add, { nonce, mark: { id: mark.id, quote } });
+    return !!saved;
+  }
+
+  /** What tab `id`'s preload may ask (its marks) and answer (a quote main asked for), on the tab's own ipc. */
+  function listenToPage(contents, id, entry) {
+    if (!contents.ipc) return;
+    contents.ipc.handle(PAGE.CHANNELS.marks, async (event, ...args) => {
+      if (!fromTab(event, id, entry)) throw new Error('Not a page in the Stage');
+      if (args.length) throw new TypeError('marks takes nothing');
+      const url = contents.getURL();
+      if (!pageMarks || !fileablePage(url)) return [];
+      try { return marksForPage(await pageMarks.list(url)); } catch { return []; }
+    });
+    contents.ipc.on(PAGE.CHANNELS.quote, (event, reply) => {
+      const waiting = entry.quoteWait;
+      if (!waiting || !fromTab(event, id, entry) || !reply || typeof reply !== 'object' || reply.nonce !== waiting.nonce) return;
+      waiting.resolve(quoteInput(reply.quote));
+    });
+    // the page's tints are styled anew with each document (insertCSS lasts until the page goes)
+    contents.on('dom-ready', () => { if (!contents.isDestroyed()) contents.insertCSS(MARK_CSS).catch(() => {}); });
   }
 
   /** What every page gets, in a tab or in a popup: http(s) or the disk, loopback certificates, a sign-in prompt. */
@@ -476,11 +587,12 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     view.setVisible(false);
     win.contentView.addChildView(view);
     onLayerChange();
-    const entry = { view, error: null, requested: '', pending: '', seq: 0, found: '', drawn: false, download: '', retrying: false };
+    const entry = { view, error: null, requested: '', pending: '', seq: 0, found: '', drawn: false, download: '', retrying: false, quoteWait: null };
     entries.set(id, entry);
 
     const contents = view.webContents;
     protect(contents, id);
+    listenToPage(contents, id, entry);
     contents.setWindowOpenHandler(windowOpenHandler(id, contents));
     contents.on('did-create-window', (popup) => watchPopup(popup, id));
     // window.close() from the page (the last step of many sign-ins) closes the tab.
@@ -706,7 +818,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     if (shared) shared.members.delete(member);
   }
 
-  return { open, show, hide, command, find, stopFind, shortcut, savePage, close, closeAll, answerLogin, flush, dispose, has: (id) => entries.has(id) };
+  return { open, show, hide, command, find, stopFind, shortcut, savePage, close, closeAll, answerLogin, flush, dispose, has: (id) => entries.has(id), highlightSelection };
 }
 
 // Each handler is registered once and acts on the views of the window that called (`viewsFor(event)`, 2026-10-03).
@@ -742,4 +854,4 @@ function registerBrowserIpc({ ipcMain, trustedHandler, viewsFor = null, views = 
   }
 }
 
-module.exports = { PARTITION, DEV_PARTITION, stagePartition, parseBrowserUrl, parseFileUrl, externalScheme, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews, registerBrowserIpc };
+module.exports = { PAGE_PRELOAD, MARK_CSS, fileablePage, quoteInput, marksForPage, PARTITION, DEV_PARTITION, stagePartition, parseBrowserUrl, parseFileUrl, externalScheme, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews, registerBrowserIpc };

@@ -28,6 +28,7 @@ const { rememberChoice } = require('./bart/choices.cjs');
 const { modelsInForce, createModelSettings } = require('./bart/settings.cjs');
 const { resolveShell } = require('./terminal/launch.cjs');
 const home = require('./store/home.cjs');
+const library = require('./store/library.cjs');
 const { createRunner } = require('./tools/run.cjs');
 const { detectTools } = require('./tools/detect.cjs');
 const { findBundledGit } = require('./tools/bundled-git.cjs');
@@ -703,6 +704,11 @@ if (!hasSingleInstanceLock) {
           fileRoot: () => homeDir,
           onLayerChange: () => postItViews.raise(),
           partition: BROWSER_PARTITION,
+          // A page's web highlights (MATH-54 build 2): its ink as the library keeps it, the "web" list in it.
+          pageMarks: {
+            list: async (url) => { const ink = await library.readPageAnnotations(await store.context(), url); return ink && Array.isArray(ink.web) ? ink.web : []; },
+            add: async (url, mark) => library.addWebMark(await store.context(), url, mark),
+          },
         });
         return { browserViews, postItViews };
       },
