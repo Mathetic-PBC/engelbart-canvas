@@ -188,6 +188,12 @@ const REPO_MARK = {
 const radius = (top, closes) => `${top ? '10px 10px' : '0 0'} ${closes ? '10px 10px' : '0 0'}`;
 // A flag the models file recognises is a little bolder than the text around it; a `--word` it does not know stays plain.
 const FLAG_LOOK = 'font-weight:500';
+// An answer's bullet or number stands in a column of its own (MATH-69), as wide drawn as edited: the `•` or `10.` drawn,
+// the `- ` or `10. ` faint while the caret is on the line, so its text starts at the same place either way. A mark wider
+// than the column (`100.`, a todo's `- [ ] `) widens it, the drawn one by about the space the edited one has after it.
+const MARK_COL = '1.75em';
+const MARK_DRAWN = `flex:none;min-width:${MARK_COL};padding-right:0.25em;box-sizing:border-box`;
+const MARK_EDITED = `display:inline-block;min-width:${MARK_COL};margin-left:-${MARK_COL};box-sizing:border-box;white-space:pre`;
 
 export default class DocEditor extends React.Component {
   state = { activeLine: null, mention: null, mentionIdx: 0, pop: null, picker: null, browse: null };
@@ -687,11 +693,13 @@ export default class DocEditor extends React.Component {
       // Its Try line (2026-10-04) has the repository's mark just before the link.
       const repo = at && at.agent === 'discover' && !active && !paper ? guideRepo(p.text) : null, run = repo ? this.repoMarkHtml(repo) : '';
       // The caret's line keeps its heading's size or its bullet's indent: its `## ` or `- ` shows faint where the heading
-      // starts or the bullet stood, the same characters as before, so the caret and offsets are as they were.
+      // starts or the bullet stood, the same characters as before, so the caret and offsets are as they were. The bullet's
+      // `- ` stands in the mark's column (MATH-69), pulled into the line's hanging indent, so its text stays where it was
+      // drawn and a wrapped line goes on under the text, not under the mark.
       const q = active ? parseLine(p.text) : null, cut = q && (q.type === 'h' || isMarked(q.type)) ? p.text.length - q.text.length : 0;
       const tokens = cut ? [p.text.slice(0, cut), ...p.text.slice(cut).split(INLINE).filter(Boolean)] : null;
-      const hang = cut && q.type !== 'h' ? `padding-left:${q.depth * 18}px;` : '';
-      const a = this.answerLook(p.text), content = active ? (tokens ? this.activeHtml(tokens, null, `color:#b5b5b5;${q.type === 'h' ? '' : 'margin-right:4px;'}`) : this.activeHtml(tokensOf(p, line))) : offer ? this.resultOfferHtml(i) : recap ? this.recapHtml(recap, first) : (run ? a.content.replace('<a ', `${run}<a `) : a.content) + mark;
+      const hang = cut && q.type !== 'h' ? `padding-left:calc(${q.depth * 18}px + ${MARK_COL});` : '';
+      const a = this.answerLook(p.text), content = active ? (tokens ? this.activeHtml(tokens, null, `color:#b5b5b5;${q.type === 'h' ? '' : `${MARK_EDITED};`}`) : this.activeHtml(tokensOf(p, line))) : offer ? this.resultOfferHtml(i) : recap ? this.recapHtml(recap, first) : (run ? a.content.replace('<a ', `${run}<a `) : a.content) + mark;
       return `<div ${raw}${mark ? ' data-paper-line="1"' : ''} style="padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(!at && first, closes)};margin-bottom:${closes ? 14 : 0}px;color:#4d4d4d;font-size:16px;line-height:1.65;cursor:text"><span style="display:block;padding:${first ? 2 : 0}px 0 ${last ? 2 : 0}px 12px;border-left:2px solid #dcdcdc"><span class="t" style="display:block;min-height:${a.minHeight}px;border-radius:4px;${a.look}${hang}${mark ? 'position:relative;padding-right:28px;' : ''}${active ? 'background:#f5f5f5;box-shadow:0 0 0 4px #f5f5f5;' : ''}">${content || '<br>'}</span></span></div>`;
     }
     if (p.type === 'quote') {
@@ -870,7 +878,7 @@ export default class DocEditor extends React.Component {
   answerLook(text) {
     const q = parseLine(text), ink = (html) => html.replace(/<strong style="font-weight:600">/g, '<strong style="color:#171717;font-weight:600">');
     if (q.type === 'h') return { content: ink(inlineHtml(q.text, this.mentionOpts)), look: `font:600 ${[18, 17, 16][q.level - 1]}px/1.5 var(--font-sans);color:#171717;padding-top:8px;`, minHeight: 26 };
-    if (isMarked(q.type)) return { content: `<span style="display:flex;gap:10px;padding-left:${q.depth * 18}px"><span contenteditable="false" style="flex:none;color:#8f8f8f;user-select:none">${esc(listMark(q))}</span><span style="flex:1;min-width:0">${ink(inlineHtml(q.text, this.mentionOpts))}</span></span>`, look: 'padding-top:4px;padding-bottom:4px;', minHeight: 26 };
+    if (isMarked(q.type)) return { content: `<span style="display:flex;padding-left:${q.depth * 18}px"><span contenteditable="false" style="${MARK_DRAWN};color:#8f8f8f;user-select:none">${esc(listMark(q))}</span><span style="flex:1;min-width:0">${ink(inlineHtml(q.text, this.mentionOpts))}</span></span>`, look: 'padding-top:4px;padding-bottom:4px;', minHeight: 26 };
     return { content: ink(inlineHtml(text, this.mentionOpts)), look: 'text-wrap:pretty;', minHeight: text ? 26 : 22 };
   }
   /* ---------------------------------------------------------------- Build cards (2026-09-25) */
