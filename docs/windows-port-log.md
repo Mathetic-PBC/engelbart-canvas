@@ -12,6 +12,12 @@ docs/windows-port.md. Done when CI passes on windows-latest and macos-latest for
 
 ### Status
 
+- 2026-10-07, **done on d7b90fd** (contains f53c66d): catch-up run 2
+  (https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37605945169) passed on macos-latest (npm ci; npm test
+  1385 tests, 1384 pass, 1 skipped, the bundled-Git test's own; build; `npm run package`) and windows-latest (npm ci;
+  npm test 1388 tests, 1350 pass, 38 skipped, 0 failed; build; installer; smoke-windows: window, PowerShell 7 echo,
+  Git at C:\Program Files\Git\mingw64\bin\git.exe, clean quit). Linux fails, allowed. Every test name on
+  origin/hudsons-feedback (f53c66d) is on this branch; none deleted, none newly skipped on the Mac.
 - 2026-10-07: merged origin/hudsons-feedback into windows-port (19df8f6). Conflicts: `src/main/index.cjs` (both
   sides' imports kept), `DocEditor.jsx` and `doc-editor-answer-line.test.cjs` (this side had only the cherry-picked
   f2d0ac0, so hudsons-feedback's versions). Mac `npm ci` and `npm test` locally: 1384 tests, 1384 pass. Pushed for
@@ -27,7 +33,15 @@ docs/windows-port.md. Done when CI passes on windows-latest and macos-latest for
 
 ### Tests skipped on Windows (new code since 22d738c)
 
-None. POSIX-only assertions guarded inside a test (the rest of it runs): the 0600 mode of Zotero's saved key
+None added by the port. One test of the new code skips on Windows by its own condition (unchanged from
+hudsons-feedback):
+
+| Test file | Test | Reason |
+|---|---|---|
+| overleaf.test.cjs | readZip reads a zip made by the zip command (stored and deflated entries) | `t.skip('no zip command')` when `zip -v` fails: it makes its fixture with the `zip` program, which Windows and Git for Windows don't have; readZip itself runs in the test's other cases |
+
+Windows' 38 skips = the port's 20 + the 17 already in the code before (listed in "Tests skipped on Windows" below) +
+this one. POSIX-only assertions guarded inside a test (the rest of it runs): the 0600 mode of Zotero's saved key
 (zotero.test.cjs; Windows has no such modes).
 
 ### CI runs
@@ -35,6 +49,7 @@ None. POSIX-only assertions guarded inside a test (the rest of it runs): the 060
 | Commit | Run | macOS | Windows | Linux | Notes |
 |---|---|---|---|---|---|
 | 020338b | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37604197560 | ✓ | ✗ 3 tests | ✗ (allowed) | the merge; Windows: path fixtures, a file mode |
+| d7b90fd | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37605945169 | ✓ | ✓ installer, smoke | ✗ (allowed) | **green on both, contains f53c66d: the done commit** |
 
 ## Where things stand
 
