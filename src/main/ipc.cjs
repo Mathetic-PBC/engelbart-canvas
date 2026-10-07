@@ -216,7 +216,7 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
 // that window's browser views' savePage). `stagePageFor(win, tabId)` reaches a window's Stage tab for an @bart turn
 // (MATH-54 build 3a): { selection(), screenshot() } (the app passes that window's browser views'), or null.
 // `getUpdates()`: the updater (updates.cjs), made after this is registered; null until then, and in the tests.
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, getUpdates = () => null }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, getUpdates = () => null }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
   const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
@@ -347,6 +347,13 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     await openGithubPage(url);
     return true;
   });
+  // Zotero (src/main/zotero/connection.cjs, MATH-65): signing in through the default browser and the broker. Every change
+  // is announced on `engelbart:zotero` with the status, which names the account and never carries the key.
+  const zt = () => { if (!zotero) throw new Error('Zotero is not available'); return zotero; };
+  handle('zotero-status', () => (zotero ? zotero.status() : { configured: false, connected: false, username: '', userID: '', persisted: true, pending: null, error: '' }));
+  handle('zotero-connect', () => zt().connect());
+  handle('zotero-cancel', () => zt().cancel());
+  handle('zotero-disconnect', () => zt().disconnect());
   handle('record-edit', withCtx((ctx, pid, wid) => { projects.recordEdit(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); navChanged(); return true; }));
   handle('seen-agents', withCtx((ctx, pid, wid) => { const seen = projects.seenAgents(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); if (seen) navChanged(); return seen; }));
   handle('list-projects', withCtx((ctx) => projects.listProjects(ctx)));

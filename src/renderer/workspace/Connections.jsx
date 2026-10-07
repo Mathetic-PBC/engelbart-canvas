@@ -4,14 +4,15 @@ import { GH } from '../ui/Icons.jsx';
 import { Group, Row, BUTTON, text } from '../ui/SettingsRows.jsx';
 import { rowOf } from '../model/tools.js';
 import { useGithubStatus } from './useGithubStatus.js';
+import { useZoteroStatus } from './useZoteroStatus.js';
 import ConnectionActions, { ConnectionProgress } from './ConnectionActions.jsx';
 
 // Connections (restored 2026-10-02 from feat/canvas-workspace-updates-2026-09-28): the app's accounts. A page of the
 // Settings window, after Model (../ui/Settings.jsx; MATH-64, 2026-10-06: until then an icon in the top-right controls,
-// its panel hanging under it). GitHub, then Claude Code and Codex (2026-10-03), each a row of the page's one group, laid
-// out as Model's are. GitHub's sign-in, its device page and its "Repository access" page all open in the default browser
-// (github-open, src/main/ipc.cjs → shell.openExternal), never in Stage or an Engelbart window; so do Claude Code's and
-// Codex's, which their own CLIs open.
+// its panel hanging under it). GitHub, Zotero (MATH-65), then Claude Code and Codex (2026-10-03), each a row of the page's
+// one group, laid out as Model's are. GitHub's sign-in, its device page and its "Repository access" page all open in the
+// default browser (github-open, src/main/ipc.cjs → shell.openExternal), never in Stage or an Engelbart window; so do
+// Zotero's (main opens the broker's page itself) and Claude Code's and Codex's, which their own CLIs open.
 
 const button = { flex: 'none', padding: '5px 8px', border: 0, borderRadius: 5, background: 'transparent', cursor: 'pointer', ...text(12, '#4d4d4d') };
 // A row's one button (Connect, Sign in, Install…): Settings' own, dimmed while it cannot be pressed.
@@ -56,6 +57,39 @@ export async function githubAction(action, status) {
   if (action === 'cancel') return api.githubCancel();
   if (action === 'copy') { await api.copyText(status.pending.userCode); return null; }
   await api.githubOpen(action === 'manage' ? 'install' : 'device');
+  return null;
+}
+
+// Zotero (MATH-65): the account only, laid out as GitHub's row. Connect opens the broker's sign-in in the default browser
+// (src/main/zotero/browser-auth.cjs); while it waits, the row says to finish there and offers Cancel. Disconnect, behind
+// the options menu, forgets the key and revokes it. Reading the library (collections, items, PDFs) is the next build.
+const ZoteroIcon = () => <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3.5 3h9l-9 10h9" /></svg>;
+
+export function ZoteroConnection({ status, busy, error, onAction }) {
+  const connected = !!status?.connected;
+  const pending = !connected && !!status?.pending;
+  const problem = error || status?.error || '';
+  const description = !status ? 'Checking connection…' : connected && busy === 'disconnect' ? 'Disconnecting…' : connected ? `Connected${status.username ? ` · ${status.username}` : ''}`
+    : pending ? 'Finish signing in in your browser' : busy === 'connect' ? 'Connecting…' : !status.configured ? 'Not configured' : 'Not connected';
+  const spinning = pending || busy === 'connect' || (connected && busy === 'disconnect');
+  const disabled = !!busy || !status || (!status.configured && !connected);
+  return <Row data-connection="zotero" icon={<ZoteroIcon />} label="Zotero"
+    hint={<span role="status" style={{ display: 'flex', alignItems: 'center', gap: 6, overflowWrap: 'anywhere' }}>{spinning && <Spinner />}<span style={{ minWidth: 0 }}>{description}</span></span>}
+    detail={<>
+      {connected && status.persisted === false && <p style={note()}>Connected until Engelbart quits.</p>}
+      {!pending && problem && <p role="alert" style={note('var(--red-600)')}>{problem}</p>}
+    </>}>
+    {connected ? <ConnectionActions provider="zotero" label="Zotero" busy={busy} onAction={onAction} items={[{ action: 'disconnect', label: 'Disconnect' }]} />
+      : pending ? <button type="button" className="hov-bd2" data-connection-action="cancel" disabled={!!busy} onClick={() => onAction('cancel')} style={bordered(!!busy)}>{busy === 'cancel' ? 'Cancelling…' : 'Cancel'}</button>
+      : <button type="button" className="hov-bd2" data-connection-action="connect" disabled={disabled} onClick={() => onAction('connect')} style={bordered(disabled)}>{busy === 'connect' ? 'Connecting…' : 'Connect'}</button>}
+  </Row>;
+}
+
+/** What each Zotero action calls. The answers are the status, which never carries the key. */
+export function zoteroAction(action) {
+  if (action === 'connect') return api.zoteroConnect();
+  if (action === 'cancel') return api.zoteroCancel();
+  if (action === 'disconnect') return api.zoteroDisconnect();
   return null;
 }
 
@@ -127,6 +161,9 @@ export function ConnectionsPage() {
   const [status, setStatus] = useGithubStatus();
   const [busy, setBusy] = React.useState(null);
   const [problem, setProblem] = React.useState('');
+  const [zotero, setZotero] = useZoteroStatus();
+  const [zoteroBusy, setZoteroBusy] = React.useState(null);
+  const [zoteroProblem, setZoteroProblem] = React.useState('');
   const [tools, setTools] = React.useState(null);
   const [toolBusy, setToolBusy] = React.useState({});
   const [toolProblem, setToolProblem] = React.useState({});
@@ -140,6 +177,15 @@ export function ConnectionsPage() {
     } catch (error) { setProblem(errorMessage(error)); }
     finally { setBusy(null); }
   };
+  const actZotero = async action => {
+    if (zoteroBusy) return;
+    setZoteroBusy(action); setZoteroProblem('');
+    try {
+      const next = await zoteroAction(action);
+      if (next) setZotero(next);
+    } catch (error) { setZoteroProblem(errorMessage(error)); }
+    finally { setZoteroBusy(null); }
+  };
   const actTool = async (name, action) => {
     const tool = tools?.tools?.[name];
     if (!tool || toolBusy[name]) return;
@@ -152,6 +198,7 @@ export function ConnectionsPage() {
   };
   return <Group title="Accounts" data-connections-page="1">
     <GithubConnection key="github" status={status} busy={busy} error={problem} onAction={act} />
+    <ZoteroConnection key="zotero" status={zotero} busy={zoteroBusy} error={zoteroProblem} onAction={actZotero} />
     {TOOL_CONNECTIONS.map(name => <ToolConnection key={name} id={name} tool={tools?.tools?.[name]} busy={toolBusy[name] || null} error={toolProblem[name] || ''} onAction={action => actTool(name, action)} />)}
   </Group>;
 }

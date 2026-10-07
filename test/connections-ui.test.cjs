@@ -28,8 +28,9 @@ const bridge = {};
 global.window = { engelbartAPI: bridge };
 try { compiled._compile(built.outputFiles[0].text, filename); }
 finally { if (previousWindow === undefined) delete global.window; else global.window = previousWindow; }
-const { ConnectionsPage, GithubConnection, githubAction, ToolConnection, toolAction, watchTools, TOOL_CONNECTIONS } = compiled.exports;
+const { ConnectionsPage, GithubConnection, githubAction, ZoteroConnection, zoteroAction, ToolConnection, toolAction, watchTools, TOOL_CONNECTIONS } = compiled.exports;
 const signedOut = { configured: true, connected: false, pending: null, error: '', installUrl: '' };
+const zoteroSignedOut = { configured: true, connected: false, username: '', userID: '', persisted: true, pending: null, error: '' };
 const render = (status, extra = {}) => {
   elements.length = 0;
   return renderToStaticMarkup(React.createElement(GithubConnection, { status, ...extra }));
@@ -163,17 +164,17 @@ test('Connections is a page of the Settings window, not an icon in the top-right
   assert.doesNotMatch(source, /createPortal|usePlaced|export default/, 'no popover left: no portal, no placing, no trigger');
 });
 
-test('the page holds three rows in a group of Settings\' own: GitHub, then Claude Code and Codex, with no popover header or ×', () => {
-  Object.assign(bridge, { githubStatus: async () => signedOut, onGithub: () => () => {}, tools: async () => ({}), onTools: () => () => {} });
+test('the page holds four rows in a group of Settings\' own: GitHub, Zotero, then Claude Code and Codex, with no popover header or ×', () => {
+  Object.assign(bridge, { githubStatus: async () => signedOut, onGithub: () => () => {}, zoteroStatus: async () => zoteroSignedOut, onZotero: () => () => {}, tools: async () => ({}), onTools: () => () => {} });
   try {
     elements.length = 0;
     const html = renderToStaticMarkup(React.createElement(ConnectionsPage));
-    assert.deepEqual([...html.matchAll(/data-connection="([^"]+)"/g)].map(match => match[1]), ['github', 'claude', 'codex']);
+    assert.deepEqual([...html.matchAll(/data-connection="([^"]+)"/g)].map(match => match[1]), ['github', 'zotero', 'claude', 'codex']);
     assert.match(html, /^<section aria-label="Accounts" data-connections-page="1">/);
-    assert.match(html, /Checking connection…/);
+    assert.equal((html.match(/Checking connection…/g) || []).length, 2, 'GitHub and Zotero before their first status');
     assert.equal((html.match(/Checking…/g) || []).length, 2, 'Claude Code and Codex before the first snapshot');
     assert.doesNotMatch(html, /Close connections|role="dialog"|data-connections-panel|×/);
-    assert.equal((html.match(/aria-hidden="true" style="height:1px/g) || []).length, 2, 'hairlines between the three rows, as Model\'s groups have');
+    assert.equal((html.match(/aria-hidden="true" style="height:1px/g) || []).length, 3, 'hairlines between the four rows, as Model\'s groups have');
   } finally {
     for (const key of Object.keys(bridge)) delete bridge[key];
   }
@@ -351,9 +352,87 @@ test('the page reads the snapshot when it opens, follows every change, and lets 
   }
 });
 
-test('the page shows Claude Code and Codex under GitHub, and watches the tools while it is open', () => {
+test('the page shows Zotero under GitHub, then Claude Code and Codex, and watches the tools while it is open', () => {
   assert.deepEqual([...TOOL_CONNECTIONS], ['claude', 'codex']);
   const source = fs.readFileSync(path.join(__dirname, '../src/renderer/workspace/Connections.jsx'), 'utf8');
-  assert.match(source, /<GithubConnection [^\n]*\/>\n\s*\{TOOL_CONNECTIONS\.map\(name => <ToolConnection key=\{name\} id=\{name\} tool=\{tools\?\.tools\?\.\[name\]\}/);
+  assert.match(source, /<GithubConnection [^\n]*\/>\n\s*<ZoteroConnection [^\n]*\/>\n\s*\{TOOL_CONNECTIONS\.map\(name => <ToolConnection key=\{name\} id=\{name\} tool=\{tools\?\.tools\?\.\[name\]\}/);
   assert.match(source, /React\.useEffect\(\(\) => watchTools\(setTools\), \[\]\)/, 'watched while the page is open');
+});
+
+// Zotero (MATH-65): the account row, laid out as GitHub's; its status comes from src/main/zotero/connection.cjs.
+const renderZotero = (status, extra = {}) => {
+  elements.length = 0;
+  return renderToStaticMarkup(React.createElement(ZoteroConnection, { status, onAction: () => {}, ...extra }));
+};
+
+test('Zotero: Not connected and Connect; rendering starts nothing', () => {
+  const actions = [];
+  const html = renderZotero(zoteroSignedOut, { onAction: name => actions.push(name) });
+  assert.match(html, /data-connection="zotero"/);
+  assert.match(html, /Zotero/);
+  assert.match(html, /Not connected/);
+  assert.deepEqual(actions, []);
+  assert.equal(action('connect').props.children, 'Connect');
+  assert.equal(action('connect').props.disabled, false);
+  action('connect').props.onClick();
+  assert.deepEqual(actions, ['connect']);
+  assert.match(renderZotero(zoteroSignedOut, { busy: 'connect' }), /Connecting…/);
+  assert.equal(action('connect').props.disabled, true, 'no second sign-in while one starts');
+  assert.match(renderZotero(null), /Checking connection…/);
+  assert.equal(action('connect').props.disabled, true);
+});
+
+test('Zotero: while the browser sign-in waits, "Finish signing in in your browser" and Cancel', () => {
+  const actions = [];
+  const html = renderZotero({ ...zoteroSignedOut, pending: { kind: 'browser', expiresAt: 1 } }, { onAction: name => actions.push(name) });
+  assert.match(html, /Finish signing in in your browser/);
+  assert.equal(action('connect'), undefined);
+  assert.equal(action('cancel').props.children, 'Cancel');
+  action('cancel').props.onClick();
+  assert.deepEqual(actions, ['cancel']);
+  assert.match(renderZotero({ ...zoteroSignedOut, pending: { kind: 'browser', expiresAt: 1 } }, { busy: 'cancel' }), /Cancelling…/);
+  assert.equal(action('cancel').props.disabled, true);
+});
+
+test('Zotero: Connected · the username, Disconnect behind the options menu', () => {
+  const actions = [];
+  const html = renderZotero({ ...zoteroSignedOut, connected: true, username: 'researcher', userID: '475425' }, { onAction: name => actions.push(name) });
+  assert.match(html, /role="status"[^>]*><span[^>]*>Connected · researcher<\/span>/);
+  assert.doesNotMatch(html, /Disconnect|475425|role="alert"/, 'the menu is closed; the user id is not shown');
+  assert.equal(action('connect'), undefined);
+  const menu = elements.find(element => element.props.provider === 'zotero');
+  assert.equal(menu.props.label, 'Zotero');
+  assert.deepEqual(menu.props.items, [{ action: 'disconnect', label: 'Disconnect' }]);
+  menu.props.onAction('disconnect');
+  assert.deepEqual(actions, ['disconnect']);
+  assert.match(renderZotero({ ...zoteroSignedOut, connected: true, username: 'researcher' }, { busy: 'disconnect' }), /Disconnecting…/);
+  assert.equal(elements.find(element => element.props['data-zotero-actions']).props.disabled, true);
+  assert.match(renderZotero({ ...zoteroSignedOut, connected: true, username: 'researcher', persisted: false }), /Connected until Engelbart quits/);
+  assert.match(renderZotero({ ...zoteroSignedOut, connected: true, username: '' }), /role="status"[^>]*><span[^>]*>Connected<\/span>/);
+});
+
+test('Zotero: the sign-in\'s error, or an action\'s, in red, with Connect to try again', () => {
+  const html = renderZotero({ ...zoteroSignedOut, error: 'Cancelled on Zotero.' });
+  assert.match(html, /role="alert" style="[^"]*var\(--red-600\)[^"]*">Cancelled on Zotero\.<\/p>/);
+  assert.equal(action('connect').props.disabled, false);
+  assert.match(renderZotero(zoteroSignedOut, { error: 'Zotero is not available' }), /role="alert"[^>]*>Zotero is not available/);
+  assert.doesNotMatch(renderZotero({ ...zoteroSignedOut, error: 'old', pending: { kind: 'browser' } }), /role="alert"/, 'a new sign-in hides the last one\'s error');
+});
+
+test('Zotero: each action calls its bridge method', async () => {
+  const calls = [];
+  Object.assign(bridge, {
+    zoteroConnect: async () => { calls.push('zoteroConnect'); return { ...zoteroSignedOut, pending: { kind: 'browser' } }; },
+    zoteroCancel: async () => { calls.push('zoteroCancel'); return zoteroSignedOut; },
+    zoteroDisconnect: async () => { calls.push('zoteroDisconnect'); return zoteroSignedOut; },
+  });
+  try {
+    assert.equal((await zoteroAction('connect')).pending.kind, 'browser');
+    await zoteroAction('cancel');
+    await zoteroAction('disconnect');
+    assert.equal(zoteroAction('reopen'), null);
+    assert.deepEqual(calls, ['zoteroConnect', 'zoteroCancel', 'zoteroDisconnect']);
+  } finally {
+    for (const key of Object.keys(bridge)) delete bridge[key];
+  }
 });

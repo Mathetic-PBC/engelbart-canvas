@@ -46,6 +46,8 @@ const { createGithub } = require('./github/connection.cjs');
 const { createBrowserAuth, CLIENT_ID: GITHUB_CLIENT_ID } = require('./github/browser-auth.cjs');
 const { createE2bKey } = require('./github/e2b-key.cjs');
 const { createRepoAccess } = require('./github/repo-access.cjs');
+const { createZotero } = require('./zotero/connection.cjs');
+const { createBrowserAuth: createZoteroBrowserAuth } = require('./zotero/browser-auth.cjs');
 const { createSandboxManager } = require('./sandbox/manager.cjs');
 const { createSandboxPty } = require('./sandbox/pty.cjs');
 const { createSandboxTerminals } = require('./sandbox/terminals.cjs');
@@ -771,6 +773,26 @@ if (!hasSingleInstanceLock) {
       },
       ...(githubWeb ? { web: githubWeb, api: process.env.ENGELBART_GITHUB_API || githubWeb } : {}),
     });
+    // Zotero (src/main/zotero, MATH-65): default-browser sign-in through the broker on engelbart.mathetic.com, the API key
+    // kept encrypted in <dataRoot>/zotero.json beside github.json. ENGELBART_ZOTERO_BROKER and ENGELBART_ZOTERO_API name a
+    // fake broker and a fake api.zotero.org, for scripted runs only.
+    const zoteroBrowserAuth = createZoteroBrowserAuth({ ...(process.env.ENGELBART_ZOTERO_BROKER ? { broker: process.env.ENGELBART_ZOTERO_BROKER } : {}) });
+    const zotero = createZotero({
+      file: () => path.join(store.config().dataRoot, 'zotero.json'),
+      crypt: {
+        available: () => safeStorage.isEncryptionAvailable(),
+        encrypt: (text) => safeStorage.encryptString(text).toString('base64'),
+        decrypt: (text) => safeStorage.decryptString(Buffer.from(text, 'base64')),
+      },
+      browserAuth: () => zoteroBrowserAuth,
+      openAuthorize: (url) => electronShell.openExternal(parseExternalUrl(url).href),
+      onConnected: () => {
+        const ctx = focusedWindow();
+        if (ctx && !ctx.win.isDestroyed()) { if (ctx.win.isMinimized()) ctx.win.restore(); ctx.win.show(); ctx.win.focus(); }
+      },
+      onChange: (status) => sendToWindow('engelbart:zotero', status),
+      ...(process.env.ENGELBART_ZOTERO_API ? { api: process.env.ENGELBART_ZOTERO_API } : {}),
+    });
     // The E2B API key for whoever is signed in (src/main/github/e2b-key.cjs), in memory only, and the only key the sandbox
     // worker gets (sandbox/manager.cjs). ENGELBART_E2B_KEY_HOST is for scripted runs only.
     const e2bKey = createE2bKey({
@@ -816,6 +838,7 @@ if (!hasSingleInstanceLock) {
       getUpdates: () => updates,
       github,
       openGithubPage,
+      zotero,
       identifyRepo: createRepoIdentifier({ auth: github.authHeaders }),
       listRemoteFiles: createRemoteFileLister({ auth: github.authHeaders }),
       ipcMain,

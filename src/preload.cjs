@@ -80,6 +80,13 @@ const engelbartAPI = Object.freeze({
   githubRepos: invoke('github-repos'),
   githubOpen: invoke('github-open'),
   onGithub: (callback) => subscribe('engelbart:github', callback),
+  // Zotero (MATH-65): the browser sign-in through the broker (status { configured, connected, username, userID, persisted,
+  // pending: { kind, expiresAt }, error }). The API key stays in main.
+  zoteroStatus: invoke('zotero-status'),
+  zoteroConnect: invoke('zotero-connect'),
+  zoteroCancel: invoke('zotero-cancel'),
+  zoteroDisconnect: invoke('zotero-disconnect'),
+  onZotero: (callback) => subscribe('engelbart:zotero', callback),
   // ⌘J pressed while a Browser page has the keyboard (src/main/browser/views.cjs); the app's own pages see the key themselves.
   onNextWorkspace: (callback) => subscribe('engelbart:next-workspace', callback),
   listProjects: invoke('list-projects'),
