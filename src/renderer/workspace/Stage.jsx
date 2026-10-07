@@ -7,6 +7,7 @@ import { usePreviewTouch, useSandboxes } from '../ui/SandboxProgress.jsx';
 import { previewLibraryId } from '../model/sandbox-notifications.js';
 import { KindGlyph, SEARCH, FOLDER, Expand, Collapse } from '../ui/Icons.jsx';
 import { kindOf, stripScheme, OPEN_IN_BROWSER } from '../model/address.js';
+import { wsLabel } from '../model/names.js';
 import { MAX_TABS, SAVE_LABEL, WAKE_RETRY_MS, addressKey, afterClose, landTab, landingFinds, linkPlan, looksLikePlace, onStage, placeTab, previewName, previewWait, restoreTabs, stageRows, stageSnapshot, tabKey, tabPlace, parseTable, withPassage } from '../model/stage.js';
 import { markdownBlocks, inlineRuns } from '../model/markdown.js';
 import PaperView from '../pdf/PaperView.jsx';
@@ -129,7 +130,8 @@ function SaveTip({ text }) {
 
 // "+ Save": the thing's name in the library, then where it goes — the library alone, or the library and this workspace
 // (the heavier button, and what Enter does).
-function SaveCard({ title, onSave, onClose, cardRef }) {
+// `wsName`: this workspace's name, on the button that adds the page to it (MATH-20), cut as its tab is.
+function SaveCard({ title, wsName, onSave, onClose, cardRef }) {
   const [name, setName] = React.useState(title);
   const [tip, setTip] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
@@ -164,7 +166,7 @@ function SaveCard({ title, onSave, onClose, cardRef }) {
         </div>
         <div style={{ position: 'relative', display: 'flex' }}>
           <button type="button" className="hov-save" disabled={busy} onClick={() => commit(true)} onMouseEnter={() => setTip('ws')} onMouseLeave={() => setTip(null)} aria-label="Add to library and this workspace" style={{ ...button, border: '1px solid #eaeaea', background: '#f2f2f2', color: '#171717', transition: 'border-color 120ms, background 120ms' }}>
-            <Grid /><span style={{ fontWeight: 600 }}>Workspace</span>
+            <Grid /><span title={wsName || undefined} style={{ fontWeight: 600 }}>{wsLabel(wsName)}</span>
           </button>
           {tip === 'ws' && <SaveTip text="Add to library and this workspace" />}
         </div>
@@ -1247,7 +1249,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
             >{SAVE_LABEL[saveState]}</button>
           )}
         </div>
-        {saving && saveState === 'none' && <SaveCard key={pageInput} title={pageTitle || stripScheme(pageInput)} onSave={save.onSave} onClose={() => setSaving(false)} cardRef={saveCard} />}
+        {saving && saveState === 'none' && <SaveCard key={pageInput} title={pageTitle || stripScheme(pageInput)} wsName={save.wsName} onSave={save.onSave} onClose={() => setSaving(false)} cardRef={saveCard} />}
         <div style={{ position: 'relative' }} ref={menuRef}>
           <button type="button" className="hov-wash" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setMenu(menu ? null : { x: r.right, y: r.bottom }); }} aria-label="More" style={{ ...ICON_BUTTON, background: menu ? '#f2f2f2' : 'transparent', font: '600 16px/1 var(--font-sans)', color: '#4d4d4d' }}>⋮</button>
           {menu && (
