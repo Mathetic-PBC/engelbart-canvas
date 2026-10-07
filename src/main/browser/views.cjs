@@ -4,6 +4,7 @@ const { isPreviewAddress } = require('../../shared/address-key.cjs');
 const PAGE = require('./page-preload.cjs');
 const BOX = require('./boxes.cjs');
 const LAYER = require('./box-layer-preload.cjs');
+const OVERLEAF = require('../overleaf/editor.cjs');
 
 // The Browser pane's pages (decision 48). Each browser tab is a WebContentsView: a native view
 // with its own top-level webContents, laid over a placeholder the renderer measures. A page is
@@ -50,6 +51,11 @@ const LAYER = require('./box-layer-preload.cjs');
 // `pageMarks`. The page reports where its boxes are, and main draws them with one inserted rule (boxesCss), replaced as
 // they move. A click on a box's edge selects it (the preload's), and Backspace or Delete removes it; the Stage shows
 // "Box removed · Undo" (browser:box-removed), and Undo or ⌘Z in the page puts it back, picture and all.
+//
+// Overleaf (MATH-65, Overleaf part 1, 2026-10-07; ../overleaf/): the tabs showing an Overleaf editor (overleafTabs), and
+// the open file read live from one (readOverleaf): a script run in the page's main world with executeJavaScript, which
+// reads CodeMirror's state (the preload's isolated world cannot see the page's objects, and the DOM holds only the lines
+// in view). Within OVERLEAF.READ_TIMEOUT_MS or not at all; nothing is kept here.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -543,6 +549,29 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /** The tabs showing an Overleaf editor (overleaf.com/project/<id>) → [{ id, projectId, title, front }], `front` the one shown. */
+  function overleafTabs() {
+    const out = [];
+    for (const [id, entry] of entries) {
+      const contents = entry.view.webContents;
+      if (contents.isDestroyed() || entry.error) continue;
+      const projectId = OVERLEAF.overleafProjectId(contents.getURL());
+      if (projectId) out.push({ id, projectId, title: contents.getTitle(), front: entry.view.getVisible() });
+    }
+    return out;
+  }
+
+  /**
+   * The editor of tab `id`'s Overleaf page read now (../overleaf/editor.cjs readEditor): { ok: true, read } or
+   * { ok: false, why }. A tab that is gone or not an Overleaf editor is { ok: false, why: 'error' }.
+   */
+  function readOverleaf(id, { timeoutMs = OVERLEAF.READ_TIMEOUT_MS } = {}) {
+    const entry = entries.get(id);
+    const contents = entry && entry.view.webContents;
+    if (!contents || contents.isDestroyed() || !OVERLEAF.overleafProjectId(contents.getURL())) return Promise.resolve({ ok: false, why: 'error' });
+    return OVERLEAF.readEditor(contents, { timeoutMs });
   }
 
   /** What tab `id`'s preload may ask (its marks) and answer (a quote or a selection main asked for), on the tab's own ipc. */
@@ -1147,7 +1176,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     if (shared) shared.members.delete(member);
   }
 
-  return { open, show, hide, command, find, stopFind, shortcut, savePage, close, closeAll, answerLogin, flush, dispose, has: (id) => entries.has(id), highlightSelection, pageSelection, screenshot, startBox, endBox, makeBox, removeBox, undoBox, canBox };
+  return { open, show, hide, command, find, stopFind, shortcut, savePage, close, closeAll, answerLogin, flush, dispose, has: (id) => entries.has(id), highlightSelection, pageSelection, screenshot, overleafTabs, readOverleaf, startBox, endBox, makeBox, removeBox, undoBox, canBox };
 }
 
 // Each handler is registered once and acts on the views of the window that called (`viewsFor(event)`, 2026-10-03).

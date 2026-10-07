@@ -23,6 +23,10 @@
 // MATH-65 build 2 (2026-10-07): a mentioned Zotero item is its <zotero_item> under the line (../context/expand-mentions.cjs),
 // its attachment's folder granted when it is outside the data root; and every @bart and @discover turn's <engelbart>
 // names the mirror of the connected library (`zotero library: …`, ../zotero/mirror.cjs pointerLine) when there is one.
+// MATH-65, Overleaf part 1 (2026-10-07): `overleaf` (../overleaf/stage.cjs forTurn) is the window's Overleaf tabs. The one
+// in front is <stage source="overleaf"> in place of the web page's, with the open file read live from its editor and the
+// folder of the project's copy (refreshed before the turn when over a minute old); every other is a line of
+// <overleaf_tabs> after <stage>. Both are in `now`. Started first: a download runs while the documents are read.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -40,6 +44,7 @@ const { attrOf, stageBlock, webStageBlock, mentionedBlock } = require('./highlig
 const { fileInRow } = require('../store/folder-files.cjs');
 const { saveShot } = require('./shots.cjs');
 const zoteroMirror = require('../zotero/mirror.cjs');
+const { overleafStageBlock, overleafTabsBlock } = require('../overleaf/stage.cjs');
 
 const HERE = '<<< this is the question being asked now >>>';
 // @bart's <stage> with nothing in front, and a resumed turn's <highlights> when the documents mention nothing highlighted.
@@ -287,7 +292,8 @@ async function mentionedPapers(ctx, project, rows) {
  * sent ('' for the other agents). `entries` (the library as Context.json
  * holds it) and `workspaceName` are for the fake agents, which name what a real one would read.
  */
-async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = 'bart', highlight = null, stage = null, live = null }) {
+async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = 'bart', highlight = null, stage = null, live = null, overleaf = null }) {
+  const overleafRun = agent === 'bart' && typeof overleaf === 'function' ? Promise.resolve().then(() => overleaf(ctx)).catch(() => null) : null;
   const found = projects.findWorkspace(ctx, projectId, workspaceId);
   const { project, workspace } = found;
   const rows = await ctx.libraryDb.list();
@@ -321,12 +327,18 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
   // @bart sees the person's highlights: the pdf or web page in front in the Stage (<stage>none</stage> when nothing is,
   // MATH-54 follow-up; a web page with its selection and picture, build 3a), then the ones the documents mention. `now` is the two again for a resumed session, whose own
   // copies are as they were when it started (./ask.cjs firstMessage): <highlights>none</highlights> when none has any.
-  const inFront = agent === 'bart' && stage ? { pdf: stagePaper, web: stageWebPage }[stage.kind] : null;
+  // An Overleaf editor in front (MATH-65) is its own <stage>: its picture is taken, the page's selection is the editor's.
+  const projectsOpen = overleafRun ? await overleafRun : null;
+  const overleafFront = projectsOpen && projectsOpen.front ? projectsOpen.front : null;
+  const inFront = agent === 'bart' && stage && !overleafFront ? { pdf: stagePaper, web: stageWebPage }[stage.kind] : null;
   // A question asked from a highlight is about the highlight: the page's selection is not asked for, its picture is.
   const front = inFront ? await inFront(ctx, project, rows, stage, { live, askId, selecting: ref.kind !== 'mark' }) : null;
   let now = '';
   if (agent === 'bart') {
-    const staged = !front ? NO_STAGE : front.source === 'web' ? webStageBlock(front, front.ink) : stageBlock(front, stage.page, front.ink);
+    let staged = overleafFront ? overleafStageBlock(overleafFront, { screenshot: (await livePage(ctx, live, askId, { selecting: false })).screenshot })
+      : !front ? NO_STAGE : front.source === 'web' ? webStageBlock(front, front.ink) : stageBlock(front, stage.page, front.ink);
+    const otherProjects = projectsOpen ? overleafTabsBlock(projectsOpen.background) : '';
+    if (otherProjects) staged = `${staged}\n${otherProjects}`;
     const mentioned = await mentionedPapers(ctx, project, rows.filter((row) => seen.has(row.id) && row.id !== pointed && !(front && front.id === row.id)));
     const marked = mentionedBlock(mentioned);
     documents.push(staged, ...(marked ? [marked] : []));

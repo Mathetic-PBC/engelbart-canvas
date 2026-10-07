@@ -491,13 +491,14 @@ function createBart({ readModels, environment = process.env, runDirectory = path
    * `highlight` ({ quote, note, paper }): a question asked from a note on a pdf highlight (`ref.kind` 'mark', MATH-27),
    * whose exchange is kept by the mark's id like any other (threadKey). `stage` ({ rowId, url, page, kind }): what is in
    * front in the Stage, for @bart's <stage> (./context.cjs). `live` ({ selection(), screenshot() }, MATH-54 build 3a): the
-   * web page in front's tab, asked for its selection and picture as they are now.
+   * web page in front's tab, asked for its selection and picture as they are now. `overleaf` (MATH-65): the window's
+   * Overleaf tabs (overleaf/stage.cjs forTurn), for <stage source="overleaf"> and <overleaf_tabs>.
    */
-  async function ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null, stage = null, live = null }, { onProgress } = {}) {
+  async function ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null, stage = null, live = null, overleaf = null }, { onProgress } = {}) {
     const models = readModels();
     const bart = agent === 'bart';
     // The context first: @brainstorm's path is read against the library it shows (turnPlan).
-    const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent, highlight, stage, live });
+    const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent, highlight, stage, live, overleaf });
     const plan = turnPlan({ agent, text, turns, choice: bart ? choice : null, entries: context.entries }, models);
     const { question, provider, steps, pinned, prior, asked, shown, extra, mode } = plan;
     if (!question && bart) throw new BartError('failed', 'There is no question on the line.');
@@ -754,9 +755,9 @@ function fakeDiscover(context, plan) {
 function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(), brainstormThreads = createThreads({ idleMs: BRAINSTORM_IDLE_MS }), discoverThreads = createThreads({ idleMs: DISCOVER_IDLE_MS }), onPicked = () => {} }) {
   const waits = new Map();
   return {
-    async ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null, stage = null, live = null }, { onProgress } = {}) {
+    async ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null, stage = null, live = null, overleaf = null }, { onProgress } = {}) {
       const models = readModels();
-      const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent, highlight, stage, live });
+      const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent, highlight, stage, live, overleaf });
       const plan = turnPlan({ agent, text, turns, choice: agent === 'bart' ? choice : null, entries: context.entries }, models);
       const { brainstorm, question, provider, steps, pinned, prior } = plan, discover = agent === 'discover';
       if (pinned && question && agent === 'bart') remember(onPicked, steps[0]);

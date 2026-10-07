@@ -50,6 +50,8 @@ const { createZotero } = require('./zotero/connection.cjs');
 const { createBrowserAuth: createZoteroBrowserAuth } = require('./zotero/browser-auth.cjs');
 const { createZoteroSync, scheduleSyncs: scheduleZoteroSyncs } = require('./zotero/sync.cjs');
 const { mirrorDir: zoteroMirrorDir } = require('./zotero/mirror.cjs');
+const { createOverleafCopies } = require('./overleaf/copy.cjs');
+const { createOverleafStage } = require('./overleaf/stage.cjs');
 const { createSandboxManager } = require('./sandbox/manager.cjs');
 const { createSandboxPty } = require('./sandbox/pty.cjs');
 const { createSandboxTerminals } = require('./sandbox/terminals.cjs');
@@ -861,6 +863,9 @@ if (!hasSingleInstanceLock) {
     // While someone uses the app, anywhere in it, every ready repository's sandbox stays awake; ten minutes without, they
     // sleep (sandbox/activity.cjs, the manager's wakeAll).
     if (sandbox) watchActivity({ app, webContents, onActive: () => { store.context().then((ctx) => sandbox?.wakeAll(ctx)).catch(() => {}); } });
+    // The Overleaf projects open in the Stage (MATH-65): each one's copy is downloaded with the Stage's own session, the
+    // sign-in the person made there, so no cookie leaves it.
+    const overleafStage = createOverleafStage({ copies: createOverleafCopies({ fetch: (url, init) => electronSession.fromPartition(BROWSER_PARTITION).fetch(url, init) }) });
     registerEngelbartIpc({
       // Made below, after this: the window's update banner asks for it when it is used.
       getUpdates: () => updates,
@@ -905,6 +910,10 @@ if (!hasSingleInstanceLock) {
       // An @bart turn with a web page in front (MATH-54 build 3a): the calling window's tab, for its selection and picture.
       stagePageFor: (ctx, tabId) => (ctx && ctx.browserViews && ctx.browserViews.has(tabId)
         ? { selection: () => ctx.browserViews.pageSelection(tabId), screenshot: () => ctx.browserViews.screenshot(tabId) }
+        : null),
+      // An @bart turn (MATH-65): the calling window's Overleaf tabs, the one in front read live, every project's copy refreshed.
+      overleafFor: (ctx, stage) => (ctx && ctx.browserViews
+        ? overleafStage.forTurn({ tabs: ctx.browserViews.overleafTabs(), read: (id) => ctx.browserViews.readOverleaf(id) }, stage)
         : null),
       notify: sendToRenderer,
       // "Choose from disk…" in the sidebar's + menu: files and folders together, several at once (macOS allows both in one panel).
