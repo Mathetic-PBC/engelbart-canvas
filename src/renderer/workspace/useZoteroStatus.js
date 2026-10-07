@@ -33,7 +33,7 @@ export function useZoteroFinding() {
 }
 
 // The Zotero items whose pdf main waits for in the Downloads folder (MATH-65 build 4: a chip opened the paper in the
-// browser; engelbart:zotero-waiting): a Set of item keys, for their chips to say "Waiting for your download…".
+// browser; engelbart:zotero-waiting): a Set of item keys, for their chips to say to download the PDF.
 export function useZoteroWaiting() {
   const [waiting, setWaiting] = React.useState(() => new Set());
   React.useEffect(() => {

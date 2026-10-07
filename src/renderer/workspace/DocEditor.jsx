@@ -162,8 +162,10 @@ const CARD_CSS = '.bart-ic{display:inline-flex;align-items:center;justify-conten
   + '[data-mention][data-beside]{background:#e8f0fe;border-radius:3px}'
   // A Zotero item's chip while a free copy of its paper is looked for (MATH-65 build 3, markFinding).
   + '[data-zotero][data-finding]::after{content:" · Finding a free copy…";color:#8f8f8f;font-style:italic}'
-  // Build 4: opened in the browser, its pdf waited for in the Downloads folder; and a file dragged over it.
-  + '[data-zotero][data-waiting]::after{content:" · Waiting for your download…";color:#8f8f8f;font-style:italic}'
+  // Build 4: opened in the browser, its pdf waited for in the Downloads folder (said in a label under the chip, as .bart-tip
+  // is drawn, since beside it went unseen: David, 2026-10-07); and a file dragged over it.
+  + '[data-zotero][data-waiting]{position:relative}'
+  + '[data-zotero][data-waiting]::after{content:"Download the PDF in your browser to open it in the Stage";position:absolute;left:0;top:100%;z-index:5;margin-top:4px;padding:4px 7px;border:1px solid #eaeaea;border-radius:6px;background:#fff;color:#4d4d4d;font:12px/1.2 var(--font-sans);font-style:normal;white-space:nowrap;pointer-events:none}'
   + '[data-zotero][data-drop]{background:#e8f0fe;border-radius:3px;box-shadow:0 0 0 1px #9bb6e8}';
 // A Zotero chip's hover text while its paper's download is waited for (MATH-65 build 4).
 const WAITING_TIP = "Opened in your browser. Download the PDF and it'll open here.";
@@ -381,8 +383,8 @@ export default class DocEditor extends React.Component {
     this.markFinding();
   }
   // A Zotero item's chips while main looks for a free copy of its paper (MATH-65 build 3; `zoteroFinding`, a Set of item
-  // keys) say "Finding a free copy…"; while main waits for it in the Downloads folder (build 4, `zoteroWaiting`), "Waiting
-  // for your download…", with hover text saying why. On the page only, as markBeside's marks are.
+  // keys) say "Finding a free copy…"; while main waits for it in the Downloads folder (build 4, `zoteroWaiting`), a label
+  // under them says to download it, with hover text saying why. On the page only, as markBeside's marks are.
   markFinding() {
     const ed = this.editorEl(); if (!ed || !ed.querySelectorAll) return;
     const finding = this.props.zoteroFinding, waiting = this.props.zoteroWaiting;

@@ -129,10 +129,11 @@ const Shelf = () => (
     <rect x="10.8" y="2" width="3.2" height="12" rx="1" />
   </svg>
 );
-// A dashed square: the Box tool (MATH-70).
+// A dashed square with a pointer in its corner: the Box tool (MATH-70). Lucide's square-dashed-mouse-pointer, the icon of
+// engelbart-web's Annotate control (components/annotate/control.tsx), which David liked (2026-10-07).
 const BoxGlyph = () => (
-  <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block', flex: 'none', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round' }}>
-    <path d="M2 4.5v-1.5a1 1 0 0 1 1-1h1.5 M7 2h2 M11.5 2h1.5a1 1 0 0 1 1 1v1.5 M14 7v2 M14 11.5v1.5a1 1 0 0 1-1 1h-1.5 M9 14h-2 M4.5 14h-1.5a1 1 0 0 1-1-1v-1.5 M2 9v-2" />
+  <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true" style={{ display: 'block', flex: 'none', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }}>
+    <path d="M12.034 12.681a.498.498 0 0 1 .647-.647l9 3.5a.5.5 0 0 1-.033.943l-3.444 1.068a1 1 0 0 0-.66.66l-1.067 3.443a.5.5 0 0 1-.943.033z M5 3a2 2 0 0 0-2 2 M19 3a2 2 0 0 1 2 2 M5 21a2 2 0 0 1-2-2 M9 3h1 M9 21h2 M14 3h1 M3 9v1 M21 9v2 M3 14v1" />
   </svg>
 );
 const Grid = () => (

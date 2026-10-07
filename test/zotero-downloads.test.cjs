@@ -425,7 +425,7 @@ test('a pdf dropped on a chip is the item\'s pdf ("added by hand", no title chec
 
 /* ------------------------------------------------------------------------------------------------------ the chip */
 
-test('the chip: "Waiting for your download…" with its hover text, a drop on it goes to onDropOnZotero, the download opens in the Stage', async () => {
+test('the chip: a label under it saying to download the PDF, with its hover text, a drop on it goes to onDropOnZotero, the download opens in the Stage', async () => {
   const filename = path.join(__dirname, '__DocEditor-zotero-dl-unit.cjs');
   const bundled = buildSync({ entryPoints: [path.join(__dirname, '../src/renderer/workspace/DocEditor.jsx')], bundle: true, platform: 'node', format: 'cjs', jsx: 'automatic', write: false, external: ['react', 'react-dom'], loader: { '.css': 'empty' } });
   const compiled = new Module(filename, module);
@@ -449,7 +449,7 @@ test('the chip: "Waiting for your download…" with its hover text, a drop on it
   assert.equal(a.attrs.has('data-waiting'), false, 'back to normal');
   assert.equal(a.attrs.get('title'), 'Zotero');
   const source = fs.readFileSync(path.join(__dirname, '../src/renderer/workspace/DocEditor.jsx'), 'utf8');
-  assert.match(source, /\[data-zotero\]\[data-waiting\]::after\{content:" · Waiting for your download…";color:#8f8f8f;font-style:italic\}/);
+  assert.match(source, /\[data-zotero\]\[data-waiting\]::after\{content:"Download the PDF in your browser to open it in the Stage";position:absolute;left:0;top:100%/);
 
   // A drop of files on the chip: the first pdf's path, not the document's drop.
   const dropped = [], items = [];
