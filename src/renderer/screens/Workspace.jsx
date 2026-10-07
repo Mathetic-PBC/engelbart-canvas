@@ -1716,7 +1716,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onDismissAsk={dropPaperAsk}
           onContinueAsk={topic ? continueAsk : undefined}
           onCopyText={(value) => api.copyText(value).catch((error) => onError(error))}
-          save={topic && pageState ? { state: pageState, onSave: savePage, onLink: () => linkIds([pageKnown.row.id]) } : null}
+          save={topic && pageState ? { state: pageState, wsName: topic.name, onSave: savePage, onLink: () => linkIds([pageKnown.row.id]) } : null}
           style={{ flex: 'none', width: paneWidth, minWidth: 0, minHeight: 0, display: docFull ? 'none' : 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }}
         />
       </div>
