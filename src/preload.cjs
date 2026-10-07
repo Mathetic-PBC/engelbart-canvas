@@ -89,6 +89,8 @@ const engelbartAPI = Object.freeze({
   // The library (MATH-65 build 2): the status's `sync` { state, items, syncedAt, error } is the mirror's. zoteroSync()
   // starts a sync; zoteroList(rel) a level of it for the @ menu (collections by name, then items); zoteroOpen(key) what a
   // mentioned item opens: { path, source } a pdf for the paper viewer, { url, external } a page for the default browser, or { error }.
+  // Build 5: the status's `sync` also has { groups, problems }; zoteroList('') is My Library and each group; an item's key
+  // here and on the channels below is its ref, `g<groupID>:<key>` for a group's.
   zoteroSync: invoke('zotero-sync'),
   zoteroList: invoke('zotero-list'),
   zoteroOpen: invoke('zotero-open'),

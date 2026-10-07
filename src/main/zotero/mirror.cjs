@@ -12,12 +12,19 @@
 // Build 4: more free sources (Semantic Scholar, arXiv), and a copy the person downloaded in their browser after a chip
 // opened the item there (./downloads.cjs) or dropped on its chip: kept in files/<itemKey>/ as a found copy is, and read
 // the same way (`source` says which).
+// Build 5: group libraries. Each group the person is in is mirrored as My Library is, in <mirror>/groups/<groupID>/ with
+// the same files (./sync.cjs). Item keys are only unique within a library, so a mention names its library: `zotero:<key>`
+// is an item of My Library (every mention written before build 5), `zotero:g<groupID>:<key>` one of that group (a `ref`,
+// parseRef). The @ menu's Zotero lists My Library, then each group by name (listLibraries), each browsed as before.
 
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
 const KEY_RE = /^[A-Za-z0-9]{1,32}$/;
+const GROUP_RE = /^[0-9]{1,20}$/;
+const REF_RE = /^(?:g([0-9]{1,20}):)?([A-Za-z0-9]{1,32})$/;
+const MY_LIBRARY = 'My Library';
 // The kinds of attachment opened for an item, best first: a pdf, an epub, a saved web page.
 const OPENABLE = ['application/pdf', 'application/epub+zip', 'text/html'];
 const MAX_ENTRIES = 5000;
@@ -31,6 +38,18 @@ const SLASH = '∕';
 // and a disconnect delete. No project is ever a dot folder (store/projects.cjs).
 const mirrorDir = (dataRoot) => path.join(dataRoot, '.zotero');
 const defaultStorage = () => path.join(os.homedir(), 'Zotero', 'storage');
+/** A group's mirror: <mirror>/groups/<groupID>. */
+const groupDir = (base, group) => path.join(base, 'groups', String(group));
+/** A library's mirror: `group` '' is My Library, the mirror's own folder. */
+const libraryRoot = (base, group = '') => (group ? groupDir(base, group) : base);
+
+/** A mention's target ('KEY' or 'g<groupID>:KEY') → { group: '' | groupID, key }, or null when it is neither. */
+function parseRef(ref) {
+  const m = REF_RE.exec(String(ref ?? ''));
+  return m ? { group: m[1] || '', key: m[2] } : null;
+}
+/** The target a mention of item `key` of library `group` writes. */
+const refOf = (group, key) => (group ? `g${group}:${key}` : String(key));
 
 // items.json and collections.json, read again only when they change.
 const cache = new Map();
@@ -49,6 +68,38 @@ const readCollections = (root) => { const v = readCached(path.join(root, 'collec
 
 /** Whether a mirror is there to read: a sync has finished at least once. */
 const hasMirror = (root) => !!root && !!readItems(root);
+
+const readState = (root) => { try { return JSON.parse(fs.readFileSync(path.join(root, 'state.json'), 'utf8')); } catch { return null; } };
+/** A library's name: My Library, else the group's as its last sync found it (else "Group <id>"). */
+function libraryName(base, group = '') {
+  if (!group) return MY_LIBRARY;
+  const state = base ? readState(groupDir(base, group)) : null;
+  return state && typeof state.name === 'string' && state.name.trim() ? state.name.trim() : `Group ${group}`;
+}
+
+/** The groups mirrored under `base` → [groupID], each with a state.json (synced at least once). */
+function groupIds(base) {
+  let names = [];
+  try { names = fs.readdirSync(path.join(base, 'groups')); } catch { return []; }
+  return names.filter((name) => GROUP_RE.test(name) && fs.existsSync(path.join(groupDir(base, name), 'state.json')));
+}
+
+/**
+ * The libraries mirrored under `base`, as the @ menu shows them: My Library, then each group by name → [{ group, name,
+ * root, shown }]. `shown` is unique among them (a group named as another, or as My Library, gets its id after it).
+ */
+function librariesOf(base) {
+  if (!base) return [];
+  const groups = groupIds(base).map((group) => ({ group, name: libraryName(base, group), root: groupDir(base, group) }))
+    .sort((a, b) => a.name.localeCompare(b.name) || Number(a.group) - Number(b.group));
+  const taken = new Set();
+  return [{ group: '', name: MY_LIBRARY, root: base }, ...groups].map((lib) => {
+    let shown = shownName(lib.name);
+    if (taken.has(shown.toLowerCase())) shown = `${shown} (${lib.group})`;
+    taken.add(shown.toLowerCase());
+    return { ...lib, shown };
+  });
+}
 
 /** An item by its key, or null. */
 function itemOf(root, key) {
@@ -78,7 +129,7 @@ const shownName = (name) => String(name || 'Untitled').replace(/\//g, SLASH);
  * for a collection that is gone; { error } before the first sync has finished. An item's `find` is what typing
  * matches besides its title (its authors and year); `hint` what the row shows beside it.
  */
-function listLevel(root, rel = '') {
+function listLevel(root, rel = '', { group = '' } = {}) {
   const items = root ? readItems(root) : null;
   if (!items) return { error: 'Your Zotero library is still syncing…' };
   const collections = readCollections(root);
@@ -93,17 +144,43 @@ function listLevel(root, rel = '') {
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((c) => ({ name: shownName(c.name), rel: [...parts, shownName(c.name)].join('/'), dir: true, type: 'folder' }));
   const held = parent ? items.filter((item) => (item.collections || []).includes(parent)) : items;
-  const entries = held.map((item) => {
-    const who = authorsOf(item), year = item.year || '';
-    const file = (item.attachments || []).some((a) => OPENABLE.includes(a.contentType));
-    return {
-      name: item.title || 'Untitled', rel: `~${item.key}`, dir: false, type: file ? 'pdf' : item.url ? 'website' : 'md', zotero: item.key,
-      find: `${who} ${(item.creators || []).map((c) => c.name).join(' ')} ${year} ${item.citeKey || ''}`.toLowerCase(),
-      hint: [who, year].filter(Boolean).join(' · '),
-    };
-  });
-  const all = [...subs, ...entries];
+  const all = [...subs, ...held.map((item) => itemEntry(item, group))];
   return { entries: all.slice(0, MAX_ENTRIES), total: all.length };
+}
+
+/** An item's row in the @ menu; `library` (a group's name) is said beside it where items of several libraries are listed. */
+function itemEntry(item, group = '', library = '') {
+  const who = authorsOf(item), year = item.year || '';
+  const file = (item.attachments || []).some((a) => OPENABLE.includes(a.contentType));
+  const ref = refOf(group, item.key);
+  return {
+    name: item.title || 'Untitled', rel: `~${ref}`, dir: false, type: file ? 'pdf' : item.url ? 'website' : 'md', zotero: ref,
+    find: `${who} ${(item.creators || []).map((c) => c.name).join(' ')} ${year} ${item.citeKey || ''}${library ? ` ${library}` : ''}`.toLowerCase(),
+    hint: [who, year, library].filter(Boolean).join(' · '),
+  };
+}
+
+/**
+ * Zotero in the @ menu (build 5): at its top, My Library and then each group by name, as folders, then every item of
+ * them all (a group's item says its group beside it); `rel` '<library>/<collection path>' one library's level
+ * (listLevel), whose items mention it (`zotero:g<groupID>:<key>` for a group's). → listLevel's answers.
+ */
+function listLibraries(base, rel = '') {
+  const libraries = librariesOf(base).filter((lib) => hasMirror(lib.root));
+  if (!libraries.length) return { error: 'Your Zotero library is still syncing…' };
+  const parts = String(rel || '').split('/').filter(Boolean);
+  if (!parts.length) {
+    const dirs = libraries.map((lib) => ({ name: lib.shown, rel: lib.shown, dir: true, type: 'folder' }));
+    const items = libraries.flatMap((lib) => readItems(lib.root).map((item) => itemEntry(item, lib.group, lib.group ? lib.name : '')))
+      .sort((a, b) => a.name.localeCompare(b.name) || a.zotero.localeCompare(b.zotero));
+    const all = [...dirs, ...items];
+    return { entries: all.slice(0, MAX_ENTRIES), total: all.length };
+  }
+  const lib = libraries.find((one) => one.shown === parts[0]);
+  if (!lib) return { missing: true };
+  const level = listLevel(lib.root, parts.slice(1).join('/'), { group: lib.group });
+  if (!level.entries) return level;
+  return { ...level, entries: level.entries.map((entry) => (entry.dir ? { ...entry, rel: `${lib.shown}/${entry.rel}` } : entry)) };
 }
 
 /* --------------------------------------------------------------------------------------------------- attachments */
@@ -187,12 +264,18 @@ function pageOf(item) {
  */
 async function openTarget(root, key, options = {}) {
   const item = root ? itemOf(root, key) : null;
-  if (!item) return { error: hasMirror(root) ? 'This item is no longer in your Zotero library.' : 'Your Zotero library is not synced yet.' };
+  if (!item) return { error: goneWords(root, options.library) };
   const found = await resolvePdf(root, item, options);
   if (found.path) return { path: found.path, source: found.source };
   const url = pageOf(item);
   if (url) return { url, external: true };
   return { error: found.failed || 'This item has no file or address to open.' };
+}
+
+/** Why an item cannot be read: gone from its library, its group no longer the person's, or nothing synced yet. */
+function goneWords(root, library) {
+  if (library && library.group) return hasMirror(root) ? `This item is no longer in the Zotero group "${library.name}".` : 'This item is in a Zotero group you are no longer in, or that has not synced yet.';
+  return hasMirror(root) ? 'This item is no longer in your Zotero library.' : 'Your Zotero library is not synced yet.';
 }
 
 /* ------------------------------------------------------------------------------------------------ Bart's context */
@@ -206,10 +289,12 @@ const readText = (file) => { try { return fs.readFileSync(file, 'utf8'); } catch
  * its metadata, its BibTeX, its notes, its annotations (quote, comment and page), and where its attachment's file and
  * indexed text are on disk (`file`, so the agent may be granted its folder). The attachment is downloaded now when it is
  * not on this Mac (`download`); one that cannot be is named as such. An item the mirror does not hold → a `missing` line.
+ * `library` { group, name } (build 5): the library it is in, said as library="…" (and group="<id>" for a group's).
  */
 async function itemBlock(root, key, name = '', options = {}) {
   const item = root ? itemOf(root, key) : null;
-  if (!item) return { lines: [`<zotero_item key="${attr(key, 40)}" title="${attr(name)}" missing="true" />`], file: '', missing: true };
+  const where = libraryAttrs(options.library);
+  if (!item) return { lines: [`<zotero_item key="${attr(key, 40)}" title="${attr(name)}"${where} missing="true" />`], file: '', missing: true };
   const dir = path.join(root, 'items', item.key);
   const resolved = await resolvePdf(root, item, options);
   const found = resolved.path && !KEPT.has(resolved.source) ? resolved : null;
@@ -219,6 +304,7 @@ async function itemBlock(root, key, name = '', options = {}) {
   const texts = (item.attachments || []).map((a) => path.join(dir, `fulltext-${a.key}.txt`)).filter(exists);
   const head = [
     `title: ${item.title}`,
+    ...(options.library ? [`library: ${options.library.group ? `${options.library.name} (Zotero group ${options.library.group})` : `${MY_LIBRARY} (the person's own Zotero library)`}`] : []),
     ...(item.creators && item.creators.length ? [`creators: ${item.creators.map((c) => (c.type && c.type !== 'author' ? `${c.name} (${c.type})` : c.name)).join('; ')}`] : []),
     ...(item.year ? [`year: ${item.year}`] : []),
     `type: ${item.itemType}`,
@@ -234,7 +320,7 @@ async function itemBlock(root, key, name = '', options = {}) {
     ...texts.map((file) => `full text: ${file}`),
     `folder: ${dir}`,
   ];
-  const lines = [`<zotero_item key="${attr(item.key, 40)}" cite="${attr(item.citeKey, 200)}">`, ...head];
+  const lines = [`<zotero_item key="${attr(item.key, 40)}" cite="${attr(item.citeKey, 200)}"${where}>`, ...head];
   if (item.abstractNote) lines.push('<abstract>', cut(item.abstractNote, 6000), '</abstract>');
   const bib = readText(path.join(dir, 'item.bib')).trim();
   if (bib) lines.push('<bibtex>', bib, '</bibtex>');
@@ -268,6 +354,24 @@ async function itemBlock(root, key, name = '', options = {}) {
   return { lines, file: resolved.path || '', missing: false };
 }
 
+/** library="…" (and group="<id>") for a <zotero_item>: '' when the library is not known. */
+function libraryAttrs(library) {
+  if (!library) return '';
+  return library.group ? ` library="${attr(library.name)}" group="${attr(library.group, 20)}"` : ` library="${MY_LIBRARY}"`;
+}
+
+/**
+ * The <zotero_item> block for a mention's target (`ref`, parseRef) → itemBlock's answer, read from its library's mirror
+ * under `base`. `service` (./sync.cjs's): its library(group) downloads, finds free copies and knows Zotero's storage.
+ */
+async function mentionBlock(base, ref, name = '', service = null) {
+  const parsed = parseRef(ref);
+  if (!parsed) return { lines: [`<zotero_item key="${attr(ref, 60)}" title="${attr(name)}" missing="true" />`], file: '', missing: true };
+  const lib = service && typeof service.library === 'function' ? service.library(parsed.group) : null;
+  const options = lib ? { download: lib.download, ...(lib.openAccess ? { openAccess: lib.openAccess } : {}), ...(lib.storageDir ? { storageDir: lib.storageDir } : {}) } : {};
+  return itemBlock(base ? libraryRoot(base, parsed.group) : null, parsed.key, name, { ...options, library: { group: parsed.group, name: libraryName(base, parsed.group) } });
+}
+
 /** Where a kept copy came from, for its "pdf:" line: source="…" and in words. */
 function keptNote(copy) {
   const on = copy.foundAt ? ` on ${copy.foundAt.slice(0, 10)}` : '';
@@ -286,9 +390,16 @@ function collectionNames(root, item) {
  * the library when asked about it. '' when there is none.
  */
 function pointerLine(root) {
-  const items = root ? readItems(root) : null;
-  if (!items) return '';
-  return `zotero library: ${root} (${items.length} items; items.json, collections.json, library.bib, and items/<key>/ with item.bib, children.json and fulltext-*.txt)`;
+  if (!root) return '';
+  const lines = [];
+  const items = readItems(root);
+  if (items) lines.push(`zotero library: ${root} (My Library, ${items.length} items; items.json, collections.json, library.bib, and items/<key>/ with item.bib, children.json and fulltext-*.txt)`);
+  // Build 5: each group's mirror, with the same files.
+  for (const lib of librariesOf(root).slice(1)) {
+    const held = readItems(lib.root);
+    if (held) lines.push(`zotero group: ${lib.root} ("${attr(lib.name, 200)}", group ${lib.group}, ${held.length} items; the same files)`);
+  }
+  return lines.join('\n');
 }
 
-module.exports = { KEPT, mirrorDir, defaultStorage, hasMirror, readItems, itemOf, authorsOf, listLevel, openableOf, localFile, resolveAttachment, resolvePdf, pageOf, openTarget, itemBlock, pointerLine, SLASH, KEY_RE };
+module.exports = { KEPT, mirrorDir, defaultStorage, hasMirror, readItems, itemOf, authorsOf, listLevel, listLibraries, librariesOf, libraryName, libraryRoot, groupDir, groupIds, parseRef, refOf, openableOf, localFile, resolveAttachment, resolvePdf, pageOf, openTarget, itemBlock, mentionBlock, pointerLine, SLASH, KEY_RE, GROUP_RE, MY_LIBRARY };

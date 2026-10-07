@@ -64,7 +64,8 @@ export async function githubAction(action, status) {
 // (src/main/zotero/browser-auth.cjs); while it waits, the row says to finish there and offers Cancel. Disconnect, behind
 // the options menu, forgets the key, revokes it and deletes the mirror of the library. Connected, the row says where the
 // mirror stands (build 2, src/main/zotero/sync.cjs: `status.sync`): "Syncing…", "Synced · N items", or what went wrong;
-// "Sync now" in the menu syncs it again.
+// "Sync now" in the menu syncs it again. Build 5: with groups, "Synced · N items · M groups" (items of every library), and
+// a group that could not be synced is said under it.
 const ZoteroIcon = () => <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3.5 3h9l-9 10h9" /></svg>;
 
 export function ZoteroConnection({ status, busy, error, onAction }) {
@@ -80,6 +81,7 @@ export function ZoteroConnection({ status, busy, error, onAction }) {
     hint={<span role="status" style={{ display: 'flex', alignItems: 'center', gap: 6, overflowWrap: 'anywhere' }}>{spinning && <Spinner />}<span style={{ minWidth: 0 }}>{description}</span></span>}
     detail={<>
       {library && <p data-zotero-sync={status.sync.state} role={library.error ? 'alert' : 'status'} style={{ ...note(library.error ? 'var(--red-600)' : undefined), display: 'flex', alignItems: 'center', gap: 6 }}>{library.busy && <Spinner />}<span style={{ minWidth: 0 }}>{library.text}</span></p>}
+      {library && library.groups && <p data-zotero-groups role="alert" style={note('var(--red-600)')}>{library.groups}</p>}
       {connected && status.persisted === false && <p style={note()}>Connected until Engelbart quits.</p>}
       {!pending && problem && <p role="alert" style={note('var(--red-600)')}>{problem}</p>}
     </>}>
@@ -89,12 +91,19 @@ export function ZoteroConnection({ status, busy, error, onAction }) {
   </Row>;
 }
 
-/** What the Zotero row says of the library's mirror (`sync` { state, items, error }) → { text, busy, error }, or null. */
+/**
+ * What the Zotero row says of the library's mirror (`sync` { state, items, error, groups, problems }) → { text, busy,
+ * error, groups }, or null. `groups`: the groups the last sync could not, in words ('' when none).
+ */
 export function zoteroSyncLine(sync) {
   if (!sync) return null;
-  if (sync.state === 'syncing') return { text: 'Syncing…', busy: true, error: false };
-  if (sync.state === 'error') return { text: sync.error || 'The library could not be synced.', busy: false, error: true };
-  if (sync.state === 'synced') return { text: `Synced · ${sync.items} ${sync.items === 1 ? 'item' : 'items'}`, busy: false, error: false };
+  if (sync.state === 'syncing') return { text: 'Syncing…', busy: true, error: false, groups: '' };
+  const problems = Array.isArray(sync.problems) ? sync.problems.filter((p) => p && p.name) : [];
+  const groups = problems.slice(0, 2).map((p) => `${p.name}: ${p.error || 'could not be synced.'}`).join(' ')
+    + (problems.length > 2 ? ` And ${problems.length - 2} more ${problems.length - 2 === 1 ? 'group' : 'groups'} could not be synced.` : '');
+  if (sync.state === 'error') return { text: sync.error || 'The library could not be synced.', busy: false, error: true, groups };
+  const count = Number(sync.groups) || 0;
+  if (sync.state === 'synced') return { text: `Synced · ${sync.items} ${sync.items === 1 ? 'item' : 'items'}${count ? ` · ${count} ${count === 1 ? 'group' : 'groups'}` : ''}`, busy: false, error: false, groups };
   return null;
 }
 

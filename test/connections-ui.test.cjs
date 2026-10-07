@@ -420,6 +420,11 @@ test('Zotero (MATH-65 build 2): the row says where the library\'s mirror stands'
   assert.match(renderZotero({ ...connected, sync: { state: 'error', items: 3, syncedAt: 'x', error: 'Zotero asked to slow down.' } }), /data-zotero-sync="error" role="alert" style="[^"]*var\(--red-600\)[^"]*">.*Zotero asked to slow down\./);
   assert.doesNotMatch(renderZotero({ ...connected, sync: { state: 'idle', items: 0, syncedAt: '', error: '' } }), /data-zotero-sync/, 'nothing synced yet, nothing said');
   assert.doesNotMatch(renderZotero({ ...connected, sync: { state: 'synced', items: 2 } }, { busy: 'disconnect' }), /Synced/, 'not while disconnecting');
+  // Build 5: groups counted, and a group that could not be synced said under the line, in red.
+  const groups = renderZotero({ ...connected, sync: { state: 'synced', items: 40, groups: 2, problems: [{ name: 'Lab Readings', error: 'Zotero is not answering right now.' }] } });
+  assert.match(groups, /Synced · 40 items · 2 groups/);
+  assert.match(groups, /data-zotero-groups="true" role="alert" style="[^"]*var\(--red-600\)[^"]*">Lab Readings: Zotero is not answering right now\.</);
+  assert.doesNotMatch(renderZotero({ ...connected, sync: { state: 'synced', items: 40, groups: 2, problems: [] } }), /data-zotero-groups/);
 });
 
 test('Zotero: the sign-in\'s error, or an action\'s, in red, with Connect to try again', () => {

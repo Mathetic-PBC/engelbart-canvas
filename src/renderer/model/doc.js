@@ -41,7 +41,7 @@ export const REPLY_RE = /^bart(\+?)> ?(.*)$/;
 export const ATTRIBUTION_RE = /^\*[^*]+\*$/;
 export const QUOTE_RE = /^> ?(.*)$/;
 export const ATTACH_RE = /^!\[([^\]\n]*)\]\(img:([\w-]+)\)$/;
-export const INLINE = /(!\[[^\]\n]*\]\(img:[\w-]+\)|@(?:[Bb]art|[Bb]rainstorm|[Oo]rient|[Dd]iscover)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]\(lib:[\w-]+(?::[\w.~%\/-]+)?\)|@\[[^\]\n]+\]\(zotero:[A-Za-z0-9]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`])/g;
+export const INLINE = /(!\[[^\]\n]*\]\(img:[\w-]+\)|@(?:[Bb]art|[Bb]rainstorm|[Oo]rient|[Dd]iscover)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]\(lib:[\w-]+(?::[\w.~%\/-]+)?\)|@\[[^\]\n]+\]\(zotero:(?:g[0-9]+:)?[A-Za-z0-9]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`])/g;
 const LINK_RE = /^\[([^\]]+)\]\(([^)]+)\)$/;
 // Another workspace of the project, mentioned (2026-09-25): `@[Name](ws:<id>)`. The id finds it after a rename (workspaces
 // are born "Untitled Workspace n" and named later); the line shows the @, the workspace icon right after it, then the name
@@ -75,13 +75,15 @@ export function fileMentionOf(tok) {
 // An item of the connected Zotero library (MATH-65 build 2, 2026-10-07): `@[Title](zotero:<itemKey>)`. The item is no
 // library row: main reads it from the mirror of the library (src/main/zotero/mirror.cjs) when Bart is asked or the chip is
 // clicked (its pdf in the Stage, else its address). Before the plain mention in INLINE too.
-export const ZOTERO_MENTION_RE = /^@\[([^\]\n]+)\]\(zotero:([A-Za-z0-9]+)\)$/;
-/** The token that mentions the Zotero item `key`, under its title. */
-export const zoteroMention = (title, key) => `@[${String(title || '').replace(/[[\]\n]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200) || 'Untitled'}](zotero:${key})`;
-/** A Zotero mention's parts → { name, key }, or null. */
+// Build 5: item keys are only unique within a library, so the target is a ref: `<itemKey>` an item of My Library (as
+// every mention written before), `g<groupID>:<itemKey>` one of that group (src/main/zotero/mirror.cjs parseRef).
+export const ZOTERO_MENTION_RE = /^@\[([^\]\n]+)\]\(zotero:((?:g[0-9]{1,20}:)?[A-Za-z0-9]{1,32})\)$/;
+/** The token that mentions the Zotero item `ref` (its key, or g<groupID>:<key>), under its title. */
+export const zoteroMention = (title, ref) => `@[${String(title || '').replace(/[[\]\n]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200) || 'Untitled'}](zotero:${ref})`;
+/** A Zotero mention's parts → { name, key, group } (`key` the ref, `group` '' for My Library), or null. */
 export function zoteroMentionOf(tok) {
   const m = String(tok ?? '').match(ZOTERO_MENTION_RE);
-  return m ? { name: m[1], key: m[2] } : null;
+  return m ? { name: m[1], key: m[2], group: (/^g([0-9]+):/.exec(m[2]) || ['', ''])[1] } : null;
 }
 // What kind of file a name is, by its extension, as the library tells (store/library.cjs FILE_TYPES): the chip's glyph.
 const FILE_KINDS = { md: 'md', markdown: 'md', pdf: 'pdf', html: 'html', htm: 'html', csv: 'data', tsv: 'data', json: 'data', jsonl: 'data', ndjson: 'data', parquet: 'data', xlsx: 'data', docx: 'md', png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', heic: 'image', svg: 'image' };
@@ -426,7 +428,8 @@ function fileHtml(tok, opts) {
   const kind = state && state.dir ? 'folder' : fileKindOf(f.rel), gone = state === false;
   return `<span data-mention="${esc(f.name)}" data-folder="${esc(f.folderId)}" data-file="${esc(f.rel)}"${gone ? ' data-missing="1"' : ''} title="${esc(gone ? `Not found: ${where}` : where)}" style="${gone ? 'color:#8f8f8f;font-weight:500;cursor:pointer;border-bottom:1px dotted #d9d9d9;text-decoration:line-through;text-decoration-color:#c9c9c9' : MENTION_LOOK};white-space:nowrap">@${FILE_ICONS[kind] || FILE_ICONS.file}${esc(f.name)}</span>`;
 }
-// A Zotero item's chip (MATH-65 build 2): the @, a book glyph, its title; `data-zotero` (its key) is what a click opens.
+// A Zotero item's chip (MATH-65 build 2): the @, a book glyph, its title; `data-zotero` (its ref: its key, after
+// g<groupID>: for a group's) is what a click opens.
 function zoteroHtml(name, key) {
   return `<span data-mention="${esc(name)}" data-zotero="${esc(key)}" title="Zotero" style="${MENTION_LOOK};white-space:nowrap">@${ZOTERO_ICON}${esc(name)}</span>`;
 }

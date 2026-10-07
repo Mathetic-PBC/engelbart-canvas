@@ -207,7 +207,9 @@ export function mentionRows({ query, library, page, pageRow, workspaces = [], he
 /**
  * The connected Zotero library in the @ menu (MATH-65 build 2): no library row, but opened as one of its folders is
  * (`@Zotero/` in the line), its collections then its items listed by main from the mirror (zotero-list). An item picked
- * is mentioned as `@[Title](zotero:<key>)` (model/doc.js zoteroMention); the library itself is not mentioned.
+ * is mentioned as `@[Title](zotero:<key>)` (model/doc.js zoteroMention); the library itself is not mentioned. Build 5:
+ * its top is My Library and then each group by name, each opened the same way; a group's item is
+ * `@[Title](zotero:g<groupID>:<key>)`.
  */
 export const ZOTERO_ROW = Object.freeze({ id: 'zotero', type: 'folder', name: 'Zotero', zotero: true, tags: [] });
 export const isZotero = (row) => !!row && row.zotero === true;

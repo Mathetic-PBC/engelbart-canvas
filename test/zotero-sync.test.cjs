@@ -105,6 +105,7 @@ async function fakeApi(t, lib, { files = null, trouble = () => null, hold = null
       const start = Number(url.searchParams.get('start') || 0), limit = Number(url.searchParams.get('limit') || 25);
       return json(200, list.slice(start, start + limit), { 'total-results': String(list.length) });
     };
+    if (route === '/groups') return page([]); // build 5: in no group (test/zotero-groups.test.cjs has groups)
     if (route === '/collections') return page([...lib.collections.values()].filter((c) => c.version > since));
     if (route === '/items' && url.searchParams.get('itemKey')) {
       const keys = url.searchParams.get('itemKey').split(',');
@@ -229,10 +230,10 @@ test('the next sync asks only for what changed since, and applies a change, a de
   assert.equal(fs.readFileSync(path.join(root, 'items', 'SMITH001', 'fulltext-ATTPDF01.txt'), 'utf8'), 'Indexed again.');
   assert.ok(!/jonesField/.test(fs.readFileSync(path.join(root, 'library.bib'), 'utf8')));
 
-  // Nothing changed: one question, answered 304 (build 3, If-Modified-Since-Version).
+  // Nothing changed: one question, answered 304 (build 3, If-Modified-Since-Version), and the list of groups (build 5).
   api.seen.length = 0;
   await sync.sync();
-  assert.deepEqual(api.seen.map((r) => [r.path.split('/').pop(), r.unless]), [['collections', String(lib.version())]]);
+  assert.deepEqual(api.seen.map((r) => [r.path.split('/').pop(), r.unless]), [['collections', String(lib.version())], ['groups', null]]);
 });
 
 test('pages of 100, until Total-Results', async (t) => {
@@ -321,7 +322,7 @@ test('the IPC: status carries the mirror, Sync now syncs, Disconnect deletes the
   const handlers = new Map();
   registerEngelbartIpc({ store: {}, ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, trustedHandler: (fn) => async (event, ...args) => fn(...args), zotero, zoteroLibrary: library });
   const call = (name, ...args) => handlers.get(`engelbart:${name}`)({}, ...args);
-  assert.deepEqual((await call('zotero-status')).sync, { state: 'idle', items: 0, syncedAt: '', error: '' });
+  assert.deepEqual((await call('zotero-status')).sync, { state: 'idle', items: 0, syncedAt: '', error: '', groups: 0, problems: [] });
   assert.equal((await call('zotero-list', '')).error, 'Your Zotero library is still syncing…');
   const started = await call('zotero-sync');
   assert.equal(started.sync.state, 'syncing', 'answers at once');
@@ -330,10 +331,12 @@ test('the IPC: status carries the mirror, Sync now syncs, Disconnect deletes the
   assert.equal(status.sync.state, 'synced');
   assert.equal(status.sync.items, 5);
   const top = await call('zotero-list', '');
-  assert.deepEqual(top.entries.slice(0, 1).map((e) => [e.name, e.dir, e.rel]), [['Reading', true, 'Reading']]);
-  assert.deepEqual((await call('zotero-list', 'Reading')).entries.map((e) => e.name), ['Methods∕Tools', 'Learning to Learn']);
-  assert.deepEqual((await call('zotero-list', 'Reading/Methods∕Tools')).entries.map((e) => e.name), ['A Book']);
+  assert.deepEqual(top.entries.slice(0, 1).map((e) => [e.name, e.dir, e.rel]), [['My Library', true, 'My Library']], 'build 5: My Library first, then any groups');
+  assert.deepEqual((await call('zotero-list', 'My Library')).entries.slice(0, 1).map((e) => [e.name, e.dir, e.rel]), [['Reading', true, 'My Library/Reading']]);
+  assert.deepEqual((await call('zotero-list', 'My Library/Reading')).entries.map((e) => e.name), ['Methods∕Tools', 'Learning to Learn']);
+  assert.deepEqual((await call('zotero-list', 'My Library/Reading/Methods∕Tools')).entries.map((e) => e.name), ['A Book']);
   assert.deepEqual(await call('zotero-list', 'Nope'), { missing: true });
+  assert.deepEqual(await call('zotero-list', 'My Library/Nope'), { missing: true });
   assert.deepEqual(await call('zotero-open', 'WEB00001'), { url: 'https://example.org/page', external: true });
   assert.match((await call('zotero-open', 'GONE0001')).error, /no longer in your Zotero library/);
   await assert.rejects(async () => call('zotero-open', '../x'), /invalid/);
@@ -359,8 +362,9 @@ test('a later sync sends If-Modified-Since-Version: an unchanged library costs o
   api.seen.length = 0;
   clock += 10 * 60_000;
   const done = await sync.autoSync();
-  assert.equal(api.seen.length, 1, 'one request');
+  assert.equal(api.seen.length, 2, 'one request, and the list of groups');
   assert.deepEqual([api.seen[0].path, api.seen[0].unless], [`/users/${USER_ID}/collections`, String(lib.version())]);
+  assert.equal(api.seen[1].path, `/users/${USER_ID}/groups`);
   assert.equal(done.state, 'synced');
   assert.equal(done.syncedAt, new Date(clock).toISOString(), 'checked now');
   assert.equal(sync.lastSyncAt(), clock);
@@ -415,7 +419,7 @@ test('every 10 minutes and on coming to the front after 2: never two syncs at on
   release();
   await running;
   await new Promise((resolve) => setTimeout(resolve, 30));
-  assert.equal(api.seen.length, 1, 'one sync, one request: the 304');
+  assert.equal(api.seen.length, 2, 'one sync: the 304, and the list of groups');
   assert.equal(api.busy.most, 1, 'never two requests at once');
 
   // Signed out: the clock does nothing.
@@ -565,7 +569,7 @@ test('a mentioned item is a <zotero_item> under its line: metadata, BibTeX, note
   assert.ok(!body.includes(KEY));
 
   // The line every @bart turn carries.
-  assert.equal(mirror.pointerLine(root), `zotero library: ${root} (5 items; items.json, collections.json, library.bib, and items/<key>/ with item.bib, children.json and fulltext-*.txt)`);
+  assert.equal(mirror.pointerLine(root), `zotero library: ${root} (My Library, 5 items; items.json, collections.json, library.bib, and items/<key>/ with item.bib, children.json and fulltext-*.txt)`);
   assert.equal(mirror.pointerLine(tmp('empty')), '');
 });
 
@@ -591,8 +595,9 @@ test("Bart's context: the mirror's line in <engelbart>, the item under its line,
   const { zoteroMention } = await doc();
   await projects.writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id }, `About ${zoteroMention('Learning to Learn', 'SMITH001')}\n@bart what is the key claim?\nbart~> z1\n`);
   const c = await buildContext(ctx, project.id, { ref: { kind: 'workspace', workspaceId: workspace.id }, workspaceId: workspace.id, askId: 'z1', agent: 'bart' });
-  assert.match(c.head, new RegExp(`zotero library: ${mirror.mirrorDir(layout.root).replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')} \\(5 items`));
-  assert.match(c.documents, /<zotero_item key="SMITH001" cite="smithLearning2020">/);
+  assert.match(c.head, new RegExp(`zotero library: ${mirror.mirrorDir(layout.root).replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')} \\(My Library, 5 items`));
+  assert.match(c.documents, /<zotero_item key="SMITH001" cite="smithLearning2020" library="My Library">/);
+  assert.ok(c.documents.includes("library: My Library (the person's own Zotero library)"), 'build 5: which library it is in');
   assert.ok(c.documents.includes(`attachment: ${path.join(storage, 'ATTPDF01', 'smith.pdf')} (application/pdf)`));
   assert.ok(c.dirs.includes(path.join(storage, 'ATTPDF01')), 'the attachment\'s folder may be read');
   assert.match(BART_SYSTEM_PROMPT, /"zotero library:" line/);

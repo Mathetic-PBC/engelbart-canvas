@@ -377,30 +377,39 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     return zoteroStatus(zotero.status());
   });
   const zoteroRoot = () => (zoteroLibrary && zotero && zotero.status().connected ? zoteroLibrary.root() : null);
+  // Build 5: group libraries. zotero-list's top is My Library and each group (zotero/mirror.cjs listLibraries); an item
+  // is named by its ref, `<key>` for My Library's and `g<groupID>:<key>` for a group's (mirror.cjs parseRef), in
+  // zotero-open and zotero-attach and on the finding, waiting and downloaded channels.
   handle('zotero-list', (rel) => {
     const root = zoteroRoot();
     if (!root) return { error: 'Zotero is not connected' };
-    return zoteroMirror.listLevel(root, rel == null ? '' : str(rel, 'path', 4096));
+    return zoteroMirror.listLibraries(root, rel == null ? '' : str(rel, 'path', 4096));
   });
+  const zoteroRef = (value) => {
+    const ref = str(value, 'item key', 64);
+    const parsed = zoteroMirror.parseRef(ref);
+    if (!parsed) throw new TypeError('item key is invalid');
+    return { ref, ...parsed };
+  };
   handle('zotero-open', async (key) => {
     const root = zoteroRoot();
     if (!root) return { error: 'Zotero is not connected' };
-    const itemKey = str(key, 'item key', 32);
-    if (!zoteroMirror.KEY_RE.test(itemKey)) throw new TypeError('item key is invalid');
-    const target = await zoteroMirror.openTarget(root, itemKey, { download: zoteroLibrary.download, ...(zoteroLibrary.openAccess ? { openAccess: zoteroLibrary.openAccess } : {}), ...(zoteroLibrary.storageDir ? { storageDir: zoteroLibrary.storageDir } : {}) });
-    if (target && target.external && typeof zoteroLibrary.awaitDownload === 'function' && zoteroLibrary.awaitDownload(itemKey)) return { ...target, waiting: true };
+    const { ref, group, key: itemKey } = zoteroRef(key);
+    const lib = typeof zoteroLibrary.library === 'function' ? zoteroLibrary.library(group) : null;
+    if (!lib) return { error: 'Zotero is not connected' };
+    const target = await zoteroMirror.openTarget(lib.root, itemKey, { download: lib.download, ...(lib.openAccess ? { openAccess: lib.openAccess } : {}), ...(lib.storageDir ? { storageDir: lib.storageDir } : {}), library: { group, name: lib.name } });
+    if (target && target.external && typeof zoteroLibrary.awaitDownload === 'function' && zoteroLibrary.awaitDownload(ref)) return { ...target, waiting: true };
     return target;
   });
   handle('zotero-waiting', () => (zoteroRoot() && typeof zoteroLibrary.waitingFor === 'function' ? zoteroLibrary.waitingFor() : []));
   handle('zotero-attach', (key, file) => {
     const root = zoteroRoot();
     if (!root) return { error: 'Zotero is not connected' };
-    const itemKey = str(key, 'item key', 32);
-    if (!zoteroMirror.KEY_RE.test(itemKey)) throw new TypeError('item key is invalid');
+    const { ref } = zoteroRef(key);
     const from = str(file, 'file', 4096);
     if (!path.isAbsolute(from)) throw new TypeError('file must be an absolute path');
     try {
-      const copy = zoteroLibrary.attach(itemKey, from);
+      const copy = zoteroLibrary.attach(ref, from);
       return copy ? { path: copy.path, source: copy.source } : { error: 'The PDF could not be kept.' };
     } catch (error) { return { error: error && error.message ? error.message : 'The PDF could not be kept.' }; }
   });

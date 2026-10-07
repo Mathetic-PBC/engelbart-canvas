@@ -10,7 +10,8 @@
 // current name. A mention that leads nowhere says so where it stands. A pasted image becomes the path of its
 // file, which means something outside the app; img:<id> does not.
 // An item of the connected Zotero library (`@[Title](zotero:<itemKey>)`, MATH-65 build 2) is its <zotero_item> block
-// (zotero/mirror.cjs itemBlock): its metadata, BibTeX, notes and annotations, and where its file is.
+// (zotero/mirror.cjs itemBlock): its metadata, BibTeX, notes and annotations, and where its file is. Build 5: an item of
+// a group is `@[Title](zotero:g<groupID>:<itemKey>)`, and its block says which library it is in.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -31,15 +32,16 @@ function buildLines(text, project) {
 
 // The editor's inline tokens (src/renderer/model/doc.js), so a mention inside `code` stays text
 // here as it does on screen. test/expand-mentions.test.cjs holds the two together.
-const INLINE = /(!\[[^\]\n]*\]\(img:[\w-]+\)|@(?:[Bb]art|[Bb]rainstorm|[Oo]rient|[Dd]iscover)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]\(lib:[\w-]+(?::[\w.~%\/-]+)?\)|@\[[^\]\n]+\]\(zotero:[A-Za-z0-9]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`])/g;
+const INLINE = /(!\[[^\]\n]*\]\(img:[\w-]+\)|@(?:[Bb]art|[Bb]rainstorm|[Oo]rient|[Dd]iscover)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]\(lib:[\w-]+(?::[\w.~%\/-]+)?\)|@\[[^\]\n]+\]\(zotero:(?:g[0-9]+:)?[A-Za-z0-9]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`])/g;
 const IMAGE_TOKEN = /^!\[([^\]\n]*)\]\(img:([\w-]+)\)$/;
 const WS_TOKEN = /^@\[([^\]\n]+)\]\(ws:([\w-]+)\)$/; // another workspace of the project (doc.js WS_MENTION_RE)
 // A library item by id (doc.js LIB_MENTION_RE), and a file inside a library folder by the folder's id and its path in it,
 // percent-encoded a segment at a time (doc.js FILE_MENTION_RE, MATH-22).
 const LIB_TOKEN = /^@\[([^\]\n]+)\]\(lib:([\w-]+)\)$/;
 const FILE_TOKEN = /^@\[([^\]\n]+)\]\(lib:([\w-]+):([\w.~%/-]+)\)$/;
-// An item of the connected Zotero library by its key (doc.js ZOTERO_MENTION_RE, MATH-65 build 2).
-const ZOTERO_TOKEN = /^@\[([^\]\n]+)\]\(zotero:([A-Za-z0-9]+)\)$/;
+// An item of the connected Zotero library by its ref (doc.js ZOTERO_MENTION_RE, MATH-65 build 2): its key, after
+// g<groupID>: for a group's (build 5).
+const ZOTERO_TOKEN = /^@\[([^\]\n]+)\]\(zotero:((?:g[0-9]{1,20}:)?[A-Za-z0-9]{1,32})\)$/;
 /** The key a mentioned Zotero item's file is kept under in `seen` (bart/context.cjs grants its folder). */
 const zoteroFileKey = (file) => `zfile:${file}`;
 const decodeRel = (rel) => String(rel).split('/').filter(Boolean).map((part) => { try { return decodeURIComponent(part); } catch { return part; } }).join('/');
@@ -175,7 +177,7 @@ async function expandLines(text, source, seen, tally) {
  * `source` is where mentions lead: find(name) → a library row or null, read(row) → a note's text,
  * image(id) → a pasted image's file or null, workspace(id) → { name, path, text } of a workspace of the project or null.
  * Optional: get(id) → the library row a `lib:<id>` mention names, file(folderId, rel) → a file in a library folder
- * (store/folder-files.cjs fileInRow) or null, zotero(key, name) → zotero/mirror.cjs itemBlock's answer or null. `seen` holds what is already included (the document itself, when it is a
+ * (store/folder-files.cjs fileInRow) or null, zotero(ref, name) → zotero/mirror.cjs mentionBlock's answer or null. `seen` holds what is already included (the document itself, when it is a
  * note); a mentioned file is added to it as fileKey(folderId, rel), and its folder's id with it. → { lines, files, missing }
  */
 async function expandMentions(text, source, seen = new Set()) {
@@ -229,9 +231,10 @@ function projectSource(ctx, projectId, rows) {
     // An item of the connected Zotero library (MATH-65 build 2): read from the mirror; its file is downloaded now when
     // it is not on this Mac and the app can (ctx.zotero(), main's ./zotero/sync.cjs), and one with no file of its own
     // has a free copy looked for (build 3, ../zotero/oa.cjs).
-    zotero: (key, name) => {
+    // Build 5: `ref` names its library (mirror.cjs parseRef), a group's read from its own mirror.
+    zotero: (ref, name) => {
       const service = typeof ctx.zotero === 'function' ? ctx.zotero() : null;
-      return zoteroMirror.itemBlock(ctx.dataRoot ? zoteroMirror.mirrorDir(ctx.dataRoot) : null, key, name, service ? { download: service.download, ...(service.openAccess ? { openAccess: service.openAccess } : {}), ...(service.storageDir ? { storageDir: service.storageDir } : {}) } : {});
+      return zoteroMirror.mentionBlock(ctx.dataRoot ? zoteroMirror.mirrorDir(ctx.dataRoot) : null, ref, name, service);
     },
     // Not readDoc: that reads a file that is gone as an empty document, and here it is a missing one.
     read: async (row) => fs.readFileSync((await projects.resolveDoc(ctx, row.project_id, { kind: 'note', id: row.id })).file, 'utf8'),

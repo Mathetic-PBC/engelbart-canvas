@@ -27,13 +27,20 @@
 // Build 4: an item whose chip opened its page in the default browser has its pdf waited for in the Downloads folder
 // (./downloads.cjs, `awaitDownload`), and a pdf dropped on its chip is made its pdf (`attach`). Each is copied into
 // files/<itemKey>/ as a found copy is (./oa.cjs saveCopy); the person's own file is only ever read.
+// Build 5: group libraries. Each sync asks which groups the person is in (/users/<id>/groups), then mirrors each as My
+// Library is, in groups/<groupID>/ with the same files (its state.json also names the group), from /groups/<id>/…: only
+// what changed, If-Modified-Since-Version, the same clock. One after another, My Library first. A group that fails is
+// said (status().problems) and the others still sync; a group no longer listed, or that answers 403 or 404 (left, or
+// access lost), has its mirror deleted. When the list itself cannot be had, the groups' mirrors are left as they are.
+// An item of a group is `g<groupID>:<key>` wherever a ref is taken (./mirror.cjs parseRef): its chip's free copy,
+// download wait and dropped pdf go to its group's folder. Nothing is ever written back to Zotero: every request is a GET.
 
 const fs = require('node:fs');
 const path = require('node:path');
 const { API } = require('./connection.cjs');
 const { createOpenAccess, saveCopy, readPdfFile, OPENALEX, SEMANTIC_SCHOLAR, ARXIV_API, ARXIV } = require('./oa.cjs');
 const { createDownloadWatch, paperLike, WAIT_MS, POLL_MS } = require('./downloads.cjs');
-const { itemOf } = require('./mirror.cjs');
+const { itemOf, parseRef, refOf, libraryRoot, groupDir, groupIds, libraryName, GROUP_RE } = require('./mirror.cjs');
 
 const PAGE = 100;
 const KEY_BATCH = 50; // itemKey= takes at most 50 keys
@@ -46,8 +53,14 @@ const EVERY_MS = 10 * 60_000; // a sync this often while the app is open
 const STALE_MS = 2 * 60_000; // a window brought to the front syncs when the last sync is older than this
 
 class ZoteroSyncError extends Error {
-  constructor(message, code = 'zotero-sync') { super(message); this.code = code; }
+  constructor(message, code = 'zotero-sync', status = 0) { super(message); this.code = code; this.status = status; }
 }
+// A failure of My Library that ends the whole sync: the groups would fail the same way (or be asked too much).
+const ENDS_ALL = new Set(['signed-out', 'no-root', 'forbidden', 'busy', 'network', 'aborted']);
+// A group's that ends the rest: Zotero asked to slow down, or there is no data folder.
+const ENDS_GROUPS = new Set(['signed-out', 'no-root', 'busy', 'aborted']);
+// A group's answer that means it is no longer the person's: its mirror goes.
+const lostGroup = (error) => error instanceof ZoteroSyncError && (error.code === 'forbidden' || (error.code === 'http' && error.status === 404));
 
 /* --------------------------------------------------------------------------------------------------- small helpers */
 
@@ -281,7 +294,7 @@ const defaultSleep = (ms, signal) => new Promise((resolve, reject) => {
  * (./oa.cjs). Build 4: `downloadsDir()` the Downloads folder watched after a chip opened a paper in the browser,
  * `onWaiting(itemKey, on)` as a wait starts and ends, `onDownloaded(itemKey, copy)` when a download was the paper and is
  * kept (./downloads.cjs; `readPdfText`, `downloadWaitMs` and `downloadPollMs` for the tests). → { sync, autoSync,
- * lastSyncAt, status, clear, download, openAccess, awaitDownload, attach, waitingFor, stopWatching, root, storageDir }
+ * lastSyncAt, status, clear, download, openAccess, awaitDownload, attach, library, waitingFor, stopWatching, root, storageDir }
  */
 function createZoteroSync({ fetch = globalThis.fetch, api = API, root, account, sleep = defaultSleep, onChange = () => {}, now = () => Date.now(), storageDir = undefined, openAlex = OPENALEX, semanticScholar = SEMANTIC_SCHOLAR, arxivApi = ARXIV_API, arxiv = ARXIV, openAccessTimeoutMs = undefined, onFinding = () => {}, downloadsDir = null, onWaiting = () => {}, onDownloaded = () => {}, readPdfText = undefined, downloadWaitMs = WAIT_MS, downloadPollMs = POLL_MS } = {}) {
   let running = null; // the sync under way
@@ -290,30 +303,38 @@ function createZoteroSync({ fetch = globalThis.fetch, api = API, root, account, 
   let generation = 0; // a clear() stops whatever ran before it from writing
   let controller = null;
   let notBefore = 0; // a Backoff header holds every request until then
-  let state = { state: 'idle', error: '' };
+  let state = { state: 'idle', error: '', problems: [] };
 
   const rootNow = () => (typeof root === 'function' ? root() : root);
   const changed = () => { try { onChange(status()); } catch { /* a listener never breaks a sync */ } };
 
-  /** { state: 'idle' | 'syncing' | 'synced' | 'error', items, syncedAt, error }: what the Zotero row says. */
+  /**
+   * { state: 'idle' | 'syncing' | 'synced' | 'error', items, syncedAt, error, groups, problems }: what the Zotero row says.
+   * `items` counts every library's, `groups` the groups mirrored, `problems` [{ name, error }] the groups the last sync
+   * could not (My Library's own failure is `error`).
+   */
   function status() {
     const at = rootNow();
     const kept = at ? readJson(path.join(at, 'state.json')) : null;
-    const items = kept && Number.isFinite(kept.items) ? kept.items : 0;
+    const groups = at ? groupIds(at) : [];
+    let items = kept && Number.isFinite(kept.items) ? kept.items : 0;
+    for (const group of groups) { const held = readJson(path.join(groupDir(at, group), 'state.json')); if (held && Number.isFinite(held.items)) items += held.items; }
     const syncedAt = kept ? kept.syncedAt || '' : '';
-    const shown = state.state === 'idle' && kept ? 'synced' : state.state;
-    return { state: shown, items, syncedAt, error: state.error || '' };
+    const shown = state.state === 'idle' && (kept || groups.length) ? 'synced' : state.state;
+    return { state: shown, items, syncedAt, error: state.error || '', groups: groups.length, problems: state.problems || [] };
   }
 
   /* ---------------------------------------------------------------- requests */
 
-  // One request to the library (`route` from /users/<id>), JSON unless `as` says otherwise. Waits out a Backoff, and a
-  // 429 or 503's Retry-After (else a little longer each time) before trying again.
-  async function request(route, params = {}, { signal, as = 'json', redirect = 'error', headers = {} } = {}) {
+  // One request to a library (`route` from /users/<id>, or /groups/<group> for a group's), JSON unless `as` says
+  // otherwise. Waits out a Backoff, and a 429 or 503's Retry-After (else a little longer each time) before trying again.
+  async function request(route, params = {}, { signal, as = 'json', redirect = 'error', headers = {}, group = '' } = {}) {
     const who = account();
     if (!who || !who.key || !who.userID) throw new ZoteroSyncError('Zotero is not connected.', 'signed-out');
+    if (group && !GROUP_RE.test(String(group))) throw new ZoteroSyncError('That is not a Zotero group.', 'key');
     const query = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '').map(([k, v]) => [k, String(v)])).toString();
-    const url = `${api}/users/${encodeURIComponent(who.userID)}${route}${query ? `?${query}` : ''}`;
+    const prefix = group ? `/groups/${group}` : `/users/${encodeURIComponent(who.userID)}`;
+    const url = `${api}${prefix}${route}${query ? `?${query}` : ''}`;
     for (let tries = 1; ; tries++) {
       const wait = notBefore - now();
       if (wait > 0) await sleep(Math.min(wait, MAX_WAIT_MS), signal);
@@ -331,12 +352,12 @@ function createZoteroSync({ fetch = globalThis.fetch, api = API, root, account, 
       const backoff = Number(response.headers.get('backoff'));
       if (Number.isFinite(backoff) && backoff > 0) notBefore = Math.max(notBefore, now() + backoff * 1000);
       if (response.status === 429 || response.status === 503 || (response.status >= 500 && response.status !== 501)) {
-        if (tries >= MAX_TRIES) throw new ZoteroSyncError(response.status === 429 ? 'Zotero asked to slow down. Try again in a few minutes.' : 'Zotero is not answering right now. Try again later.', 'busy');
+        if (tries >= MAX_TRIES) throw response.status === 429 ? new ZoteroSyncError('Zotero asked to slow down. Try again in a few minutes.', 'busy', 429) : new ZoteroSyncError('Zotero is not answering right now. Try again later.', 'unavailable', response.status);
         const after = Number(response.headers.get('retry-after'));
         await sleep(Math.min(Number.isFinite(after) && after >= 0 ? after * 1000 : 1000 * 2 ** (tries - 1), MAX_WAIT_MS), signal);
         continue;
       }
-      if (response.status === 403) throw new ZoteroSyncError('Zotero refused the key. Disconnect and connect Zotero again.', 'forbidden');
+      if (response.status === 403) throw new ZoteroSyncError(group ? 'Zotero refused access to this group.' : 'Zotero refused the key. Disconnect and connect Zotero again.', 'forbidden', 403);
       return response;
     }
   }
@@ -344,7 +365,7 @@ function createZoteroSync({ fetch = globalThis.fetch, api = API, root, account, 
   async function json(route, params, options) {
     const response = await request(route, params, options);
     if (response.status === 304) return { notModified: true, body: null, version: 0, total: 0 };
-    if (!response.ok) throw new ZoteroSyncError(`Zotero answered ${response.status} for ${route.split('?')[0]}.`, 'http');
+    if (!response.ok) throw new ZoteroSyncError(`Zotero answered ${response.status} for ${route.split('?')[0]}.`, 'http', response.status);
     return { body: await response.json(), version: Number(response.headers.get('last-modified-version')) || 0, total: Number(response.headers.get('total-results')) };
   }
 
@@ -401,44 +422,111 @@ function createZoteroSync({ fetch = globalThis.fetch, api = API, root, account, 
     const run = generation;
     controller = new AbortController();
     const { signal } = controller;
-    state = { state: 'syncing', error: '' }; changed();
+    state = { state: 'syncing', error: '', problems: [] }; changed();
     try {
-      await pull(run, signal);
+      const problems = await pullAll(run, signal);
       if (run !== generation) return;
-      state = { state: 'idle', error: '' };
+      state = problems.mine ? { state: 'error', error: problems.mine, problems: problems.groups } : { state: 'idle', error: '', problems: problems.groups };
     } catch (error) {
       if (run !== generation) return;
-      state = { state: 'error', error: error instanceof ZoteroSyncError ? error.message : 'The Zotero library could not be synced.' };
+      state = { state: 'error', error: error instanceof ZoteroSyncError ? error.message : 'The Zotero library could not be synced.', problems: [] };
     } finally {
       finishedAt = now();
       if (run === generation) changed();
     }
   }
 
-  async function pull(run, signal) {
+  const words = (error) => (error instanceof ZoteroSyncError ? error.message : 'It could not be synced.');
+
+  /**
+   * My Library, then the groups (build 5), one after another. A failure that would fail every library ends the sync
+   * (thrown); else My Library's is `mine` and each group's is one of `groups` [{ name, error }].
+   */
+  async function pullAll(run, signal) {
     const who = account();
     if (!who) throw new ZoteroSyncError('Zotero is not connected.', 'signed-out');
     const at = rootNow();
     if (!at) throw new ZoteroSyncError('There is no data folder to keep the library in.', 'no-root');
+    const out = { mine: '', groups: [] };
+    try { await pull({ group: '', root: at }, run, signal); } catch (error) {
+      if (error instanceof ZoteroSyncError && ENDS_ALL.has(error.code)) throw error;
+      out.mine = words(error);
+    }
+    if (run !== generation) return out;
+    let listed = null;
+    try { listed = await listGroups(signal); } catch (error) {
+      if (error instanceof ZoteroSyncError && ENDS_GROUPS.has(error.code)) throw error;
+      out.groups.push({ name: 'Your groups', error: `The list of your groups could not be had: ${words(error)}` });
+    }
+    if (run !== generation || !listed) return out;
+    const ids = new Set(listed.map((group) => group.id));
+    for (const group of groupIds(at)) if (!ids.has(group)) dropGroup(at, group); // left, or no longer readable
+    for (const group of listed) {
+      if (run !== generation) return out;
+      try { await pull({ group: group.id, name: group.name, root: groupDir(at, group.id) }, run, signal); } catch (error) {
+        if (error instanceof ZoteroSyncError && ENDS_GROUPS.has(error.code)) throw error;
+        if (lostGroup(error)) { if (run === generation) dropGroup(at, group.id); continue; }
+        out.groups.push({ name: group.name, error: words(error) });
+      }
+    }
+    return out;
+  }
+
+  /** The groups the person is in (/users/<id>/groups, every page) → [{ id, name }]. */
+  async function listGroups(signal) {
+    const { list } = await paged('/groups', { format: 'json' }, { signal });
+    const out = [], seen = new Set();
+    for (const entry of list) {
+      const id = String((entry && (entry.id ?? (entry.data && entry.data.id))) ?? '');
+      if (!GROUP_RE.test(id) || seen.has(id)) continue;
+      seen.add(id);
+      const name = String((entry.data && entry.data.name) || '').trim() || `Group ${id}`;
+      out.push({ id, name });
+    }
+    return out;
+  }
+
+  /** Deletes a group's mirror (the person left it, or lost access), and stops waiting for its downloads. */
+  function dropGroup(at, group) {
+    if (downloads) for (const ref of downloads.waiting()) { const parsed = parseRef(ref); if (parsed && parsed.group === group) downloads.stop(ref); }
+    try { fs.rmSync(groupDir(at, group), { recursive: true, force: true }); } catch { /* already gone */ }
+  }
+
+  /**
+   * One library brought up to Zotero's: `lib` { group: '' (My Library) | groupID, name, root }. Its state.json says
+   * whose (the user, and the group) and at which version; another's, or an older layout's, is started over.
+   */
+  async function pull(lib, run, signal) {
+    const who = account();
+    if (!who) throw new ZoteroSyncError('Zotero is not connected.', 'signed-out');
+    const at = lib.root;
+    const { group } = lib;
     const kept = readJson(path.join(at, 'state.json'));
-    let raw = kept && kept.v === VERSION && kept.userID === String(who.userID) ? readJson(path.join(at, 'raw.json')) : null;
+    const ours = kept && kept.v === VERSION && kept.userID === String(who.userID) && String(kept.groupID || '') === group;
+    let raw = ours ? readJson(path.join(at, 'raw.json')) : null;
     let since = 0;
     if (raw && raw.items && raw.collections) since = Number(kept.version) || 0;
     else {
-      fs.rmSync(at, { recursive: true, force: true }); // none yet, another account's, or one from an older layout: from the start
+      // None yet, another account's, or one from an older layout: from the start. My Library's folder holds the groups'
+      // too: they stay, unless the mirror was another account's.
+      const other = !group && kept && kept.userID && kept.userID !== String(who.userID);
+      if (group || other) fs.rmSync(at, { recursive: true, force: true });
+      else { let names = []; try { names = fs.readdirSync(at); } catch { /* none yet */ } for (const name of names) if (name !== 'groups') fs.rmSync(path.join(at, name), { recursive: true, force: true }); }
       raw = { collections: {}, items: {}, bib: {} };
     }
     raw.bib = raw.bib || {};
+    const whose = group ? { userID: String(who.userID), groupID: group, name: lib.name || `Group ${group}` } : { userID: String(who.userID) };
+    const options = { signal, group };
 
-    const collections = await paged('/collections', { since, format: 'json' }, { signal }, since);
+    const collections = await paged('/collections', { since, format: 'json' }, options, since);
     if (collections.notModified) { // nothing changed since: only when it was checked
-      if (run === generation) writeJson(path.join(at, 'state.json'), { ...kept, syncedAt: new Date(now()).toISOString() });
+      if (run === generation) writeJson(path.join(at, 'state.json'), { ...kept, ...whose, syncedAt: new Date(now()).toISOString() });
       return;
     }
-    const items = await paged('/items', { since, format: 'json', includeTrashed: 1 }, { signal });
+    const items = await paged('/items', { since, format: 'json', includeTrashed: 1 }, options);
     const version = collections.version || items.version;
-    const deleted = since ? (await json('/deleted', { since }, { signal })).body || {} : {};
-    const texts = (await json('/fulltext', { since }, { signal })).body || {};
+    const deleted = since ? (await json('/deleted', { since }, options)).body || {} : {};
+    const texts = (await json('/fulltext', { since }, options)).body || {};
 
     for (const entry of collections.list) {
       const data = entry && entry.data; if (!data || !data.key) continue;
@@ -458,7 +546,7 @@ function createZoteroSync({ fetch = globalThis.fetch, api = API, root, account, 
     // BibTeX for what is new or changed, in batches (include=bibtex gives each item's own entry, by key).
     for (let i = 0; i < fresh.length; i += KEY_BATCH) {
       const batch = fresh.slice(i, i + KEY_BATCH);
-      const answer = await json('/items', { itemKey: batch.join(','), format: 'json', include: 'bibtex' }, { signal });
+      const answer = await json('/items', { itemKey: batch.join(','), format: 'json', include: 'bibtex' }, options);
       for (const entry of Array.isArray(answer.body) ? answer.body : []) {
         if (entry && entry.key && typeof entry.bibtex === 'string' && entry.bibtex.trim()) raw.bib[entry.key] = entry.bibtex;
       }
@@ -468,9 +556,9 @@ function createZoteroSync({ fetch = globalThis.fetch, api = API, root, account, 
     const fulltext = {};
     for (const key of Object.keys(texts)) {
       if (!KEY_RE.test(key) || !raw.items[key]) continue;
-      const response = await request(`/items/${key}/fulltext`, {}, { signal });
+      const response = await request(`/items/${key}/fulltext`, {}, options);
       if (response.status === 404) continue;
-      if (!response.ok) throw new ZoteroSyncError(`Zotero answered ${response.status} for an attachment's text.`, 'http');
+      if (!response.ok) throw new ZoteroSyncError(`Zotero answered ${response.status} for an attachment's text.`, 'http', response.status);
       const body = await response.json();
       if (body && typeof body.content === 'string') fulltext[key] = body.content;
     }
@@ -479,22 +567,24 @@ function createZoteroSync({ fetch = globalThis.fetch, api = API, root, account, 
     fs.mkdirSync(at, { recursive: true });
     writeJson(path.join(at, 'raw.json'), raw);
     const count = writeViews(at, raw, fulltext);
-    writeJson(path.join(at, 'state.json'), { v: VERSION, userID: String(who.userID), version: version || Number(kept && kept.version) || 0, syncedAt: new Date(now()).toISOString(), items: count });
+    writeJson(path.join(at, 'state.json'), { v: VERSION, ...whose, version: version || Number(kept && kept.version) || 0, syncedAt: new Date(now()).toISOString(), items: count });
   }
 
   /* -------------------------------------------------------------- attachments */
 
   /**
-   * An attachment's file from Zotero's storage (/items/<key>/file) → its path under files/<key>/. The redirect to where
-   * the file is kept is followed here, without the key. Throws when there is none to download.
+   * An attachment's file from Zotero's storage (/items/<key>/file, of /groups/<group> for a group's) → its path under
+   * its library's files/<key>/. The redirect to where the file is kept is followed here, without the key. Throws when
+   * there is none to download.
    */
-  async function download(attachmentKey, filename) {
+  async function download(attachmentKey, filename, group = '') {
     if (!KEY_RE.test(String(attachmentKey))) throw new ZoteroSyncError('That is not a Zotero attachment.', 'key');
-    const at = rootNow(); if (!at) throw new ZoteroSyncError('There is no data folder to keep the file in.', 'no-root');
+    const base = rootNow(); if (!base) throw new ZoteroSyncError('There is no data folder to keep the file in.', 'no-root');
+    const at = libraryRoot(base, group);
     const name = path.basename(String(filename || '')).replace(/[\0/\\]/g, '') || `${attachmentKey}.pdf`;
     const target = path.join(at, 'files', attachmentKey, name);
     if (fs.existsSync(target)) return target;
-    let response = await request(`/items/${attachmentKey}/file`, {}, { as: 'file', redirect: 'manual' });
+    let response = await request(`/items/${attachmentKey}/file`, {}, { as: 'file', redirect: 'manual', group });
     for (let hops = 0; response.status >= 300 && response.status < 400 && hops < 5; hops++) {
       const location = response.headers.get('location');
       if (!location) break;
@@ -521,7 +611,7 @@ function createZoteroSync({ fetch = globalThis.fetch, api = API, root, account, 
     if (controller) controller.abort();
     again = false;
     finishedAt = 0;
-    state = { state: 'idle', error: '' };
+    state = { state: 'idle', error: '', problems: [] };
     if (downloads) downloads.stopAll();
     const at = rootNow();
     if (at) { try { fs.rmSync(at, { recursive: true, force: true }); } catch { /* already gone */ } }
@@ -529,43 +619,74 @@ function createZoteroSync({ fetch = globalThis.fetch, api = API, root, account, 
   }
 
   // A free copy of an item with no pdf of its own (./oa.cjs): OpenAlex, Semantic Scholar, arXiv, never Zotero, and
-  // never the key.
-  const oa = createOpenAccess({ fetch, api: openAlex, semanticScholar, arxivApi, arxiv, root: rootNow, now, onFinding, ...(openAccessTimeoutMs ? { timeoutMs: openAccessTimeoutMs } : {}) });
+  // never the key. One finder a library (build 5), kept in its own folder; the chip is told by the item's ref.
+  const finders = new Map();
+  function finder(group = '') {
+    if (!finders.has(group)) {
+      finders.set(group, createOpenAccess({
+        fetch, api: openAlex, semanticScholar, arxivApi, arxiv, now, ...(openAccessTimeoutMs ? { timeoutMs: openAccessTimeoutMs } : {}),
+        root: () => { const base = rootNow(); return base ? libraryRoot(base, group) : null; },
+        onFinding: (key, busy) => onFinding(refOf(group, key), busy),
+      }));
+    }
+    return finders.get(group);
+  }
 
-  // Build 4: the pdf the person downloads in their browser, copied in when it is the paper (./downloads.cjs).
+  // Build 4: the pdf the person downloads in their browser, copied in when it is the paper (./downloads.cjs). Waited for
+  // by the item's ref (build 5), so the same key in two libraries is two waits.
   const downloads = downloadsDir ? createDownloadWatch({
     dir: downloadsDir, onWaiting, waitMs: downloadWaitMs, pollMs: downloadPollMs, ...(readPdfText ? { readText: readPdfText } : {}),
-    onMatch: (item, file) => {
-      const at = rootNow();
-      if (!at) return false;
-      const copy = saveCopy(at, item, readPdfFile(file), { source: 'downloaded in browser', from: file, at: now() });
-      if (copy) { try { onDownloaded(item.key, copy); } catch { /* a listener never undoes a copy */ } }
+    onMatch: (waited, file) => {
+      const base = rootNow();
+      const parsed = parseRef(waited.key);
+      if (!base || !parsed) return false;
+      const copy = saveCopy(libraryRoot(base, parsed.group), { ...waited, key: parsed.key }, readPdfFile(file), { source: 'downloaded in browser', from: file, at: now() });
+      if (copy) { try { onDownloaded(waited.key, copy); } catch { /* a listener never undoes a copy */ } }
       return !!copy;
     },
   }) : null;
 
-  /** Waits for item `key`'s pdf in the Downloads folder (its chip opened its page in the browser) → whether it does. */
-  function awaitDownload(key) {
-    const at = rootNow();
-    const item = at && downloads ? itemOf(at, key) : null;
-    return !!item && paperLike(item) && downloads.wait(item);
+  /** The item a ref names, in its library's mirror → { item, root, group } or null. */
+  function itemFor(ref) {
+    const base = rootNow();
+    const parsed = parseRef(ref);
+    if (!base || !parsed) return null;
+    const root = libraryRoot(base, parsed.group);
+    const item = itemOf(root, parsed.key);
+    return item ? { item, root, group: parsed.group } : null;
+  }
+
+  /** Waits for item `ref`'s pdf in the Downloads folder (its chip opened its page in the browser) → whether it does. */
+  function awaitDownload(ref) {
+    const found = downloads ? itemFor(ref) : null;
+    return !!found && paperLike(found.item) && downloads.wait({ ...found.item, key: refOf(found.group, found.item.key) });
   }
 
   /**
-   * Makes `file` (a pdf the person dropped on the item's chip) item `key`'s pdf: copied in, never moved, as 'added by
+   * Makes `file` (a pdf the person dropped on the item's chip) item `ref`'s pdf: copied in, never moved, as 'added by
    * hand'. No title check: they chose it. → oa.cjs keptCopy's answer; throws with words when it is not a pdf.
    */
-  function attach(key, file) {
-    const at = rootNow();
-    const item = at ? itemOf(at, key) : null;
-    if (!item) throw new ZoteroSyncError('This item is no longer in your Zotero library.', 'missing');
-    const copy = saveCopy(at, item, readPdfFile(file), { source: 'added by hand', from: file, at: now() });
-    if (downloads) downloads.stop(key);
+  function attach(ref, file) {
+    const found = itemFor(ref);
+    if (!found) throw new ZoteroSyncError(parseRef(ref) && parseRef(ref).group ? 'This item is no longer in that Zotero group.' : 'This item is no longer in your Zotero library.', 'missing');
+    const copy = saveCopy(found.root, found.item, readPdfFile(file), { source: 'added by hand', from: file, at: now() });
+    if (downloads) downloads.stop(refOf(found.group, found.item.key));
     return copy;
   }
 
+  /**
+   * Library `group` ('' My Library) as ./mirror.cjs reads it (build 5) → { group, name, root, download(key, filename),
+   * openAccess(item), storageDir }, or null with no data folder.
+   */
+  function library(group = '') {
+    const base = rootNow();
+    if (!base || (group && !GROUP_RE.test(String(group)))) return null;
+    const oa = finder(group);
+    return { group, name: libraryName(base, group), root: libraryRoot(base, group), download: (key, filename) => download(key, filename, group), openAccess: oa.find, storageDir };
+  }
+
   return {
-    sync, autoSync, lastSyncAt, status, clear, download, openAccess: oa.find, awaitDownload, attach,
+    sync, autoSync, lastSyncAt, status, clear, download, openAccess: (item) => finder('').find(item), awaitDownload, attach, library,
     waitingFor: () => (downloads ? downloads.waiting() : []), stopWatching: () => { if (downloads) downloads.stopAll(); },
     root: rootNow, storageDir,
   };

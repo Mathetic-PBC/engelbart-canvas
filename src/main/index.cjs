@@ -815,6 +815,8 @@ if (!hasSingleInstanceLock) {
     // ENGELBART_ARXIV name fakes, for scripted runs only). A paper whose chip opened its page in the browser has its pdf
     // waited for in the Downloads folder for 10 minutes (zotero/downloads.cjs); one that is the paper is copied in, opened
     // in the Stage of the window focused last, and the app comes to the front. The waits end when the app quits.
+    // Build 5: the groups the person is in are mirrored too, each in .zotero/groups/<groupID>/, on the same clock; the
+    // channels below carry an item's ref (`g<groupID>:<key>` for a group's item, its key for My Library's).
     zoteroLibrary = createZoteroSync({
       root: () => zoteroMirrorDir(store.config().dataRoot),
       account: () => { const key = zotero.key(); return key ? { userID: zotero.status().userID, key } : null; },
