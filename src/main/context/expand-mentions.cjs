@@ -227,10 +227,11 @@ function projectSource(ctx, projectId, rows) {
     // A file inside a library folder (MATH-22) → store/folder-files.cjs fileInRow's answer, or null without the folder.
     file: (folderId, rel) => { const row = byId.get(folderId); return row && row.folder_path ? fileInRow(row, rel, ctx.homeDir) : null; },
     // An item of the connected Zotero library (MATH-65 build 2): read from the mirror; its file is downloaded now when
-    // it is not on this Mac and the app can (ctx.zotero(), main's ./zotero/sync.cjs).
+    // it is not on this Mac and the app can (ctx.zotero(), main's ./zotero/sync.cjs), and one with no file of its own
+    // has a free copy looked for (build 3, ../zotero/oa.cjs).
     zotero: (key, name) => {
       const service = typeof ctx.zotero === 'function' ? ctx.zotero() : null;
-      return zoteroMirror.itemBlock(ctx.dataRoot ? zoteroMirror.mirrorDir(ctx.dataRoot) : null, key, name, service ? { download: service.download, ...(service.storageDir ? { storageDir: service.storageDir } : {}) } : {});
+      return zoteroMirror.itemBlock(ctx.dataRoot ? zoteroMirror.mirrorDir(ctx.dataRoot) : null, key, name, service ? { download: service.download, ...(service.openAccess ? { openAccess: service.openAccess } : {}), ...(service.storageDir ? { storageDir: service.storageDir } : {}) } : {});
     },
     // Not readDoc: that reads a file that is gone as an empty document, and here it is a missing one.
     read: async (row) => fs.readFileSync((await projects.resolveDoc(ctx, row.project_id, { kind: 'note', id: row.id })).file, 'utf8'),

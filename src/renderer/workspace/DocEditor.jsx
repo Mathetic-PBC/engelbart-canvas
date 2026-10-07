@@ -154,7 +154,9 @@ const CARD_CSS = '.bart-ic{display:inline-flex;align-items:center;justify-conten
   // Near the bottom of the window a name goes above its icon instead (editorOver sets the mark).
   + '[data-tip-up]>.bart-tip{top:auto;bottom:100%;margin-top:0;margin-bottom:4px}'
   // The mention whose note is open in the pane beside (MATH-23, markBeside).
-  + '[data-mention][data-beside]{background:#e8f0fe;border-radius:3px}';
+  + '[data-mention][data-beside]{background:#e8f0fe;border-radius:3px}'
+  // A Zotero item's chip while a free copy of its paper is looked for (MATH-65 build 3, markFinding).
+  + '[data-zotero][data-finding]::after{content:" · Finding a free copy…";color:#8f8f8f;font-style:italic}';
 // Lucide's drawings at the design's weight: 16px, 1.5px stroke, round caps.
 // A map card's three lists (main/bart/card.cjs `map`).
 const MAP_LABELS = { settled: 'Seems settled', open: 'Seems open', untouched: 'Not touched yet' };
@@ -364,6 +366,17 @@ export default class DocEditor extends React.Component {
     for (const m of ed.querySelectorAll('[data-mention]')) {
       const on = m.dataset.ws ? !!ws && m.dataset.ws === ws : m.dataset.file == null && m.dataset.zotero == null && !!want && String(m.dataset.mention).toLowerCase() === want;
       if (on !== m.hasAttribute('data-beside')) m.toggleAttribute('data-beside', on);
+    }
+    this.markFinding();
+  }
+  // A Zotero item's chips while main looks for a free copy of its paper (MATH-65 build 3; `zoteroFinding`, a Set of item
+  // keys) say "Finding a free copy…". On the page only, as markBeside's marks are.
+  markFinding() {
+    const ed = this.editorEl(); if (!ed || !ed.querySelectorAll) return;
+    const finding = this.props.zoteroFinding;
+    for (const m of ed.querySelectorAll('[data-zotero]')) {
+      const on = !!finding && finding.has(m.dataset.zotero);
+      if (on !== m.hasAttribute('data-finding')) m.toggleAttribute('data-finding', on);
     }
   }
   // Escape with the model selector or a mention's card open shuts it, and that is all it does: it is marked as used, so the

@@ -88,11 +88,13 @@ const engelbartAPI = Object.freeze({
   zoteroDisconnect: invoke('zotero-disconnect'),
   // The library (MATH-65 build 2): the status's `sync` { state, items, syncedAt, error } is the mirror's. zoteroSync()
   // starts a sync; zoteroList(rel) a level of it for the @ menu (collections by name, then items); zoteroOpen(key) what a
-  // mentioned item opens: { path } its file, { url } its page, or { error }.
+  // mentioned item opens: { path, source } a pdf for the paper viewer, { url, external } a page for the default browser, or { error }.
   zoteroSync: invoke('zotero-sync'),
   zoteroList: invoke('zotero-list'),
   zoteroOpen: invoke('zotero-open'),
   onZotero: (callback) => subscribe('engelbart:zotero', callback),
+  // Build 3: { key, finding } as a free copy of an item is looked for (the chip says "Finding a free copy…") and after.
+  onZoteroFinding: (callback) => subscribe('engelbart:zotero-finding', callback),
   // ⌘J pressed while a Browser page has the keyboard (src/main/browser/views.cjs); the app's own pages see the key themselves.
   onNextWorkspace: (callback) => subscribe('engelbart:next-workspace', callback),
   listProjects: invoke('list-projects'),

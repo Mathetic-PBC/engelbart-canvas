@@ -48,7 +48,7 @@ const { createE2bKey } = require('./github/e2b-key.cjs');
 const { createRepoAccess } = require('./github/repo-access.cjs');
 const { createZotero } = require('./zotero/connection.cjs');
 const { createBrowserAuth: createZoteroBrowserAuth } = require('./zotero/browser-auth.cjs');
-const { createZoteroSync } = require('./zotero/sync.cjs');
+const { createZoteroSync, scheduleSyncs: scheduleZoteroSyncs } = require('./zotero/sync.cjs');
 const { mirrorDir: zoteroMirrorDir } = require('./zotero/mirror.cjs');
 const { createSandboxManager } = require('./sandbox/manager.cjs');
 const { createSandboxPty } = require('./sandbox/pty.cjs');
@@ -803,15 +803,24 @@ if (!hasSingleInstanceLock) {
     // The connected library, mirrored in <dataRoot>/.zotero/ (src/main/zotero/sync.cjs, MATH-65 build 2) for Bart and the
     // @ menu: synced after connecting, a little after launch when connected, and from the Zotero row's "Sync now". The key
     // goes to api.zotero.org only. ENGELBART_ZOTERO_STORAGE names Zotero's storage folder when not ~/Zotero/storage.
+    // Build 3: synced every 10 minutes while the app is open, and when a window comes to the front if the last sync was
+    // over 2 minutes ago (one at a time; an unchanged library is one 304). A free copy of an item with no pdf is looked
+    // for through OpenAlex (zotero/oa.cjs) when it is mentioned or its chip clicked; the chip is told while it runs.
+    // ENGELBART_OPENALEX_API names a fake OpenAlex, for scripted runs only.
     zoteroLibrary = createZoteroSync({
       root: () => zoteroMirrorDir(store.config().dataRoot),
       account: () => { const key = zotero.key(); return key ? { userID: zotero.status().userID, key } : null; },
       onChange: () => sendToWindow('engelbart:zotero', zoteroStatus()),
+      onFinding: (key, finding) => sendToWindow('engelbart:zotero-finding', { key, finding }),
       ...(process.env.ENGELBART_ZOTERO_API ? { api: process.env.ENGELBART_ZOTERO_API } : {}),
       ...(process.env.ENGELBART_ZOTERO_STORAGE ? { storageDir: process.env.ENGELBART_ZOTERO_STORAGE } : {}),
+      ...(process.env.ENGELBART_OPENALEX_API ? { openAlex: process.env.ENGELBART_OPENALEX_API } : {}),
     });
     const zoteroStatus = () => { const status = zotero.status(); return { ...status, sync: status.connected ? zoteroLibrary.status() : null }; };
-    setTimeout(() => { try { if (zotero.key()) void zoteroLibrary.sync().catch(() => {}); } catch { /* no keychain yet: next launch */ } }, 4000);
+    const zoteroConnected = () => { try { return !!zotero.key(); } catch { return false; } };
+    setTimeout(() => { if (zoteroConnected()) void zoteroLibrary.autoSync().catch(() => {}); }, 4000);
+    const zoteroSchedule = scheduleZoteroSyncs(zoteroLibrary, { connected: zoteroConnected });
+    app.on('browser-window-focus', () => zoteroSchedule.focus());
     // The E2B API key for whoever is signed in (src/main/github/e2b-key.cjs), in memory only, and the only key the sandbox
     // worker gets (sandbox/manager.cjs). ENGELBART_E2B_KEY_HOST is for scripted runs only.
     const e2bKey = createE2bKey({

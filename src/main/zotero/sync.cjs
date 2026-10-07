@@ -20,10 +20,15 @@
 // or a "Citation Key:" line in Extra), else made from the first author, the year and the first word of the title, and
 // the same for as long as the item is (keys are given out in the order items were added). Signing out deletes the
 // mirror (clear). Nothing here logs; an error says what went wrong in words, never with the key.
+// Build 3: while the app is open the library is synced every 10 minutes, and when a window comes back to the front if
+// the last sync was over 2 minutes ago (scheduleSyncs; never two at once, autoSync). A later sync's first request sends
+// If-Modified-Since-Version, so an unchanged library costs one 304. An item with no pdf of its own may have a free copy
+// found for it (./oa.cjs, `openAccess`), when it is mentioned or opened, never here in a sync.
 
 const fs = require('node:fs');
 const path = require('node:path');
 const { API } = require('./connection.cjs');
+const { createOpenAccess, OPENALEX } = require('./oa.cjs');
 
 const PAGE = 100;
 const KEY_BATCH = 50; // itemKey= takes at most 50 keys
@@ -32,6 +37,8 @@ const MAX_TRIES = 5;
 const MAX_WAIT_MS = 10 * 60_000;
 const VERSION = 1;
 const KEY_RE = /^[A-Za-z0-9]{1,32}$/;
+const EVERY_MS = 10 * 60_000; // a sync this often while the app is open
+const STALE_MS = 2 * 60_000; // a window brought to the front syncs when the last sync is older than this
 
 class ZoteroSyncError extends Error {
   constructor(message, code = 'zotero-sync') { super(message); this.code = code; }
@@ -264,10 +271,13 @@ const defaultSleep = (ms, signal) => new Promise((resolve, reject) => {
  * `root()`: the mirror's folder (<dataRoot>/.zotero), followed as the data root changes. `account()`: { userID, key } of
  * whoever is signed in, or null (connection.cjs status().userID and key()). `sleep(ms, signal)`: how waits are made
  * (the tests' records them). `onChange(status)`: after each change of status(). `storageDir`: Zotero's storage folder on
- * this Mac, when not ~/Zotero/storage (./mirror.cjs). → { sync, status, clear, download, root, storageDir }
+ * this Mac, when not ~/Zotero/storage (./mirror.cjs). `openAlex`: OpenAlex's address (a fake one in the tests), and
+ * `onFinding(itemKey, busy)` told as a free copy is looked for (./oa.cjs). → { sync, autoSync, lastSyncAt, status, clear,
+ * download, openAccess, root, storageDir }
  */
-function createZoteroSync({ fetch = globalThis.fetch, api = API, root, account, sleep = defaultSleep, onChange = () => {}, now = () => Date.now(), storageDir = undefined } = {}) {
+function createZoteroSync({ fetch = globalThis.fetch, api = API, root, account, sleep = defaultSleep, onChange = () => {}, now = () => Date.now(), storageDir = undefined, openAlex = OPENALEX, openAccessTimeoutMs = undefined, onFinding = () => {} } = {}) {
   let running = null; // the sync under way
+  let finishedAt = 0; // when the last sync ended, ms (0: none since launch; state.json's syncedAt then)
   let again = false; // asked for while one ran: one more after it
   let generation = 0; // a clear() stops whatever ran before it from writing
   let controller = null;
@@ -291,7 +301,7 @@ function createZoteroSync({ fetch = globalThis.fetch, api = API, root, account, 
 
   // One request to the library (`route` from /users/<id>), JSON unless `as` says otherwise. Waits out a Backoff, and a
   // 429 or 503's Retry-After (else a little longer each time) before trying again.
-  async function request(route, params = {}, { signal, as = 'json', redirect = 'error' } = {}) {
+  async function request(route, params = {}, { signal, as = 'json', redirect = 'error', headers = {} } = {}) {
     const who = account();
     if (!who || !who.key || !who.userID) throw new ZoteroSyncError('Zotero is not connected.', 'signed-out');
     const query = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '').map(([k, v]) => [k, String(v)])).toString();
@@ -302,7 +312,7 @@ function createZoteroSync({ fetch = globalThis.fetch, api = API, root, account, 
       let response;
       try {
         response = await fetch(url, {
-          headers: { 'zotero-api-key': who.key, 'zotero-api-version': '3', accept: as === 'json' ? 'application/json' : '*/*' },
+          headers: { ...headers, 'zotero-api-key': who.key, 'zotero-api-version': '3', accept: as === 'json' ? 'application/json' : '*/*' },
           redirect, credentials: 'omit', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) : AbortSignal.timeout(TIMEOUT_MS),
         });
       } catch (error) {
@@ -325,16 +335,21 @@ function createZoteroSync({ fetch = globalThis.fetch, api = API, root, account, 
 
   async function json(route, params, options) {
     const response = await request(route, params, options);
+    if (response.status === 304) return { notModified: true, body: null, version: 0, total: 0 };
     if (!response.ok) throw new ZoteroSyncError(`Zotero answered ${response.status} for ${route.split('?')[0]}.`, 'http');
     return { body: await response.json(), version: Number(response.headers.get('last-modified-version')) || 0, total: Number(response.headers.get('total-results')) };
   }
 
-  /** Every page of a list (limit=100&start=…) → { list, version }, `version` the library's at the first page. */
-  async function paged(route, params, options) {
+  /**
+   * Every page of a list (limit=100&start=…) → { list, version }, `version` the library's at the first page. `unless`:
+   * the library version kept, sent with the first page as If-Modified-Since-Version → { notModified: true } on a 304.
+   */
+  async function paged(route, params, options, unless = 0) {
     const list = [];
     let version = 0;
     for (let start = 0; ;) {
-      const page = await json(route, { ...params, limit: PAGE, start }, options);
+      const page = await json(route, { ...params, limit: PAGE, start }, start === 0 && unless ? { ...options, headers: { 'if-modified-since-version': String(unless) } } : options);
+      if (page.notModified) return { notModified: true, list: [], version: 0 };
       if (!version) version = page.version;
       const got = Array.isArray(page.body) ? page.body : [];
       list.push(...got);
@@ -358,6 +373,22 @@ function createZoteroSync({ fetch = globalThis.fetch, api = API, root, account, 
     return running;
   }
 
+  /** A sync from the clock or a window brought forward: none when one is under way already (never two at once, and no
+   * second one queued behind it). → status() */
+  function autoSync() {
+    if (running) return running;
+    return sync();
+  }
+
+  /** When the last sync ended (ms): this run's, else the mirror's syncedAt, else 0. */
+  function lastSyncAt() {
+    if (finishedAt) return finishedAt;
+    const at = rootNow();
+    const kept = at ? readJson(path.join(at, 'state.json')) : null;
+    const t = kept ? Date.parse(kept.syncedAt) : NaN;
+    return Number.isFinite(t) ? t : 0;
+  }
+
   async function once() {
     const run = generation;
     controller = new AbortController();
@@ -371,6 +402,7 @@ function createZoteroSync({ fetch = globalThis.fetch, api = API, root, account, 
       if (run !== generation) return;
       state = { state: 'error', error: error instanceof ZoteroSyncError ? error.message : 'The Zotero library could not be synced.' };
     } finally {
+      finishedAt = now();
       if (run === generation) changed();
     }
   }
@@ -390,7 +422,11 @@ function createZoteroSync({ fetch = globalThis.fetch, api = API, root, account, 
     }
     raw.bib = raw.bib || {};
 
-    const collections = await paged('/collections', { since, format: 'json' }, { signal });
+    const collections = await paged('/collections', { since, format: 'json' }, { signal }, since);
+    if (collections.notModified) { // nothing changed since: only when it was checked
+      if (run === generation) writeJson(path.join(at, 'state.json'), { ...kept, syncedAt: new Date(now()).toISOString() });
+      return;
+    }
     const items = await paged('/items', { since, format: 'json', includeTrashed: 1 }, { signal });
     const version = collections.version || items.version;
     const deleted = since ? (await json('/deleted', { since }, { signal })).body || {} : {};
@@ -476,13 +512,33 @@ function createZoteroSync({ fetch = globalThis.fetch, api = API, root, account, 
     generation += 1;
     if (controller) controller.abort();
     again = false;
+    finishedAt = 0;
     state = { state: 'idle', error: '' };
     const at = rootNow();
     if (at) { try { fs.rmSync(at, { recursive: true, force: true }); } catch { /* already gone */ } }
     changed();
   }
 
-  return { sync, status, clear, download, root: rootNow, storageDir };
+  // A free copy of an item with no pdf of its own (./oa.cjs): OpenAlex, never Zotero, and never the key.
+  const oa = createOpenAccess({ fetch, api: openAlex, root: rootNow, now, onFinding, ...(openAccessTimeoutMs ? { timeoutMs: openAccessTimeoutMs } : {}) });
+
+  return { sync, autoSync, lastSyncAt, status, clear, download, openAccess: oa.find, root: rootNow, storageDir };
 }
 
-module.exports = { createZoteroSync, ZoteroSyncError, writeViews, citeKeys, betterBibtexKey, madeKey, rekeyed, noteText, PAGE };
+/**
+ * Syncs `library` (createZoteroSync's) while the app is open, when `connected()`: every `every` ms, and on focus() (a
+ * window come back to the front) when the last sync ended over `stale` ms ago. Each goes through autoSync, so one under
+ * way is never doubled. → { focus, stop }
+ */
+function scheduleSyncs(library, { connected, every = EVERY_MS, stale = STALE_MS, now = () => Date.now(), setInterval: startClock = setInterval, clearInterval: stopClock = clearInterval } = {}) {
+  const ok = () => { try { return !!connected(); } catch { return false; } };
+  const run = () => { if (ok()) void library.autoSync().catch(() => {}); };
+  const clock = startClock(run, every);
+  if (clock && typeof clock.unref === 'function') clock.unref();
+  return {
+    focus() { if (ok() && now() - library.lastSyncAt() > stale) run(); },
+    stop() { stopClock(clock); },
+  };
+}
+
+module.exports = { createZoteroSync, scheduleSyncs, ZoteroSyncError, writeViews, citeKeys, betterBibtexKey, madeKey, rekeyed, noteText, PAGE, EVERY_MS, STALE_MS };

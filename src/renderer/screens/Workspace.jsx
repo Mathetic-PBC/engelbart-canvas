@@ -14,7 +14,8 @@ import { adoptSession, dropSession, SHOW_TERMINAL } from '../terminal/sessions.j
 import { letGoNotes, mentionRows, mentionedIds, pickedChanges, ZOTERO_ROW } from '../model/rail.js';
 import { useBodies } from '../workspace/useBodies.js';
 import { useFolderFiles } from '../workspace/useFolderFiles.js';
-import { useZoteroStatus } from '../workspace/useZoteroStatus.js';
+import { useZoteroStatus, useZoteroFinding } from '../workspace/useZoteroStatus.js';
+import { zoteroChipAction } from '../model/zotero.js';
 import { flatWorkspaces, nextPlace, placesToGo } from '../model/nav.js';
 import { onStage, savesPageCopy } from '../model/stage.js';
 import { paperState, savePaper, repoState, tryRepo } from '../model/guide.js';
@@ -943,24 +944,27 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     stageRef.current.openInput(href, options);
   }, [showRight]);
   // The connected Zotero library (MATH-65 build 2): its row in the @ menu while connected, opened as a library folder is
-  // (main lists its collections and items from the mirror), and a mentioned item's chip opens its pdf in the Stage, or
-  // its address when it has no file (main downloads the file when it is not on this Mac).
+  // (main lists its collections and items from the mirror), and a mentioned item's chip opens its pdf in the Stage's
+  // paper viewer (main downloads the file when it is not on this Mac, or finds a free copy, build 3), or, with no pdf to
+  // be had, its DOI's page or URL in the default browser: publishers' bot checks block them in the Stage. While a free
+  // copy is looked for its chips say so (zoteroFinding).
   const [zotero] = useZoteroStatus();
+  const zoteroFinding = useZoteroFinding();
   const zoteroOn = !!(zotero && zotero.connected);
   const listFolder = React.useCallback((id, rel) => (id === ZOTERO_ROW.id ? api.zoteroList(rel) : api.listFolder(id, rel)), []);
   const openZotero = React.useCallback(async ({ key, name }, options = {}) => {
     try {
-      const target = await api.zoteroOpen(key);
-      if (target && target.path) {
+      const action = zoteroChipAction(await api.zoteroOpen(key), name || key);
+      if (action.pdf) {
         if (!stageRef.current) return;
         showRight('stage');
-        stageRef.current.openFile(target.path, { newTab: !!options.newTab });
-      } else if (target && target.url) openLink(target.url, { newTab: !!options.newTab });
-      else onError(new Error((target && target.error) || `"${name || key}" could not be opened`));
+        stageRef.current.openFile(action.pdf, { newTab: !!options.newTab });
+      } else if (action.external) await api.openExternal(action.external);
+      else onError(new Error(action.error));
     } catch (error) {
       onError(error);
     }
-  }, [showRight, openLink, onError]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [showRight, onError]); // eslint-disable-line react-hooks/exhaustive-deps
   // What the window itself would open in a new window or tab (a ⌘-click on a link the editor does not handle): main sends
   // it here while this listens, not to the default browser (src/main/index.cjs, 2026-10-02). Not while the project's folder
   // is being asked for: the Stage under that is out of reach.
@@ -1543,6 +1547,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     fileState: folderFiles.fileState,
     onOpenFile: openFolderFile,
     onOpenZotero: openZotero,
+    zoteroFinding,
     workspacePeek,
     onOpenWorkspace: openMentionedWorkspace,
     onNoteVerb: (name) => makeNote(name, false),

@@ -353,7 +353,9 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // is announced on `engelbart:zotero` with the status, which names the account and never carries the key.
   // The library (MATH-65 build 2, zotero/sync.cjs): the status carries the mirror's too (`sync`: { state, items, syncedAt,
   // error }); zotero-sync starts a sync and answers at once, its progress following on `engelbart:zotero`. Disconnecting
-  // deletes the mirror. zotero-list is a level of the library for the @ menu, zotero-open what a mention's chip opens.
+  // deletes the mirror. zotero-list is a level of the library for the @ menu, zotero-open what a mention's chip opens:
+  // { path, source } a pdf for the paper viewer (its own, or a free copy found now, build 3), else { url, external } for
+  // the default browser. While a free copy is looked for, main says so on `engelbart:zotero-finding` ({ key, finding }).
   const zt = () => { if (!zotero) throw new Error('Zotero is not available'); return zotero; };
   const zoteroStatus = (status) => ({ ...status, sync: zoteroLibrary && status.connected ? zoteroLibrary.status() : null });
   handle('zotero-status', () => (zotero ? zoteroStatus(zotero.status()) : { configured: false, connected: false, username: '', userID: '', persisted: true, pending: null, error: '', sync: null }));
@@ -380,7 +382,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     if (!root) return { error: 'Zotero is not connected' };
     const itemKey = str(key, 'item key', 32);
     if (!zoteroMirror.KEY_RE.test(itemKey)) throw new TypeError('item key is invalid');
-    return zoteroMirror.openTarget(root, itemKey, { download: zoteroLibrary.download, ...(zoteroLibrary.storageDir ? { storageDir: zoteroLibrary.storageDir } : {}) });
+    return zoteroMirror.openTarget(root, itemKey, { download: zoteroLibrary.download, ...(zoteroLibrary.openAccess ? { openAccess: zoteroLibrary.openAccess } : {}), ...(zoteroLibrary.storageDir ? { storageDir: zoteroLibrary.storageDir } : {}) });
   });
   handle('record-edit', withCtx((ctx, pid, wid) => { projects.recordEdit(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); navChanged(); return true; }));
   handle('seen-agents', withCtx((ctx, pid, wid) => { const seen = projects.seenAgents(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); if (seen) navChanged(); return seen; }));

@@ -12,3 +12,22 @@ export function useZoteroStatus() {
   }, []);
   return [status, setStatus];
 }
+
+// The Zotero items main is looking for a free copy of (MATH-65 build 3, engelbart:zotero-finding): a Set of item keys,
+// a new one on each change, for their chips to say "Finding a free copy…".
+export function useZoteroFinding() {
+  const [finding, setFinding] = React.useState(() => new Set());
+  React.useEffect(() => {
+    if (typeof api.onZoteroFinding !== 'function') return undefined;
+    return api.onZoteroFinding((event) => {
+      if (!event || typeof event.key !== 'string') return;
+      setFinding((current) => {
+        if (current.has(event.key) === !!event.finding) return current;
+        const next = new Set(current);
+        if (event.finding) next.add(event.key); else next.delete(event.key);
+        return next;
+      });
+    });
+  }, []);
+  return finding;
+}

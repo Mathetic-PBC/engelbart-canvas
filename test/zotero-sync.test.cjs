@@ -11,7 +11,7 @@ const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 const { pathToFileURL } = require('node:url');
-const { createZoteroSync, citeKeys, madeKey, rekeyed, noteText } = require('../src/main/zotero/sync.cjs');
+const { createZoteroSync, scheduleSyncs, citeKeys, madeKey, rekeyed, noteText } = require('../src/main/zotero/sync.cjs');
 const mirror = require('../src/main/zotero/mirror.cjs');
 const { expandMentions, INLINE: MAIN_INLINE } = require('../src/main/context/expand-mentions.cjs');
 const { registerEngelbartIpc } = require('../src/main/ipc.cjs');
@@ -81,13 +81,20 @@ function filler(lib, n) {
 }
 
 /** api.zotero.org for `lib`: every request recorded. `trouble(url)` may answer instead (429, Backoff…). */
-async function fakeApi(t, lib, { files = null, trouble = () => null } = {}) {
+async function fakeApi(t, lib, { files = null, trouble = () => null, hold = null } = {}) {
   const seen = [];
-  const base = await serve(t, (req, res) => {
+  const busy = { now: 0, most: 0 }; // requests being answered at once
+  const base = await serve(t, async (req, res) => {
     const url = new URL(req.url, 'http://x');
-    seen.push({ path: url.pathname, query: Object.fromEntries(url.searchParams), key: req.headers['zotero-api-key'], apiVersion: req.headers['zotero-api-version'] });
+    seen.push({ path: url.pathname, query: Object.fromEntries(url.searchParams), key: req.headers['zotero-api-key'], apiVersion: req.headers['zotero-api-version'], unless: req.headers['if-modified-since-version'] || null });
+    busy.now += 1; busy.most = Math.max(busy.most, busy.now);
+    res.on('finish', () => { busy.now -= 1; });
+    if (hold) await hold(url);
     const json = (status, value, headers = {}) => { res.statusCode = status; res.setHeader('content-type', 'application/json'); res.setHeader('last-modified-version', String(lib.version())); for (const [k, v] of Object.entries(headers)) res.setHeader(k, v); res.end(JSON.stringify(value)); };
     if (req.headers['zotero-api-key'] !== KEY || req.headers['zotero-api-version'] !== '3') return json(403, { error: 'forbidden' });
+    // If-Modified-Since-Version: the library unchanged since that version → 304, nothing else.
+    const unless = req.headers['if-modified-since-version'];
+    if (unless && Number(unless) >= lib.version()) { res.statusCode = 304; res.setHeader('last-modified-version', String(lib.version())); return res.end(); }
     const special = trouble(url, seen.length);
     if (special) { res.statusCode = special.status; for (const [k, v] of Object.entries(special.headers || {})) res.setHeader(k, v); return res.end(special.body || ''); }
     const prefix = `/users/${USER_ID}`;
@@ -121,7 +128,7 @@ async function fakeApi(t, lib, { files = null, trouble = () => null } = {}) {
     if (m && files) { res.statusCode = 302; res.setHeader('location', `${files.base}/s3/${m[1]}?signature=x`); return res.end(); }
     return json(404, {});
   });
-  return { base, seen };
+  return { base, seen, busy };
 }
 
 /** Where Zotero keeps files: answers any path with bytes, and records whether the key came along. */
@@ -222,10 +229,10 @@ test('the next sync asks only for what changed since, and applies a change, a de
   assert.equal(fs.readFileSync(path.join(root, 'items', 'SMITH001', 'fulltext-ATTPDF01.txt'), 'utf8'), 'Indexed again.');
   assert.ok(!/jonesField/.test(fs.readFileSync(path.join(root, 'library.bib'), 'utf8')));
 
-  // Nothing changed: nothing but the four questions.
+  // Nothing changed: one question, answered 304 (build 3, If-Modified-Since-Version).
   api.seen.length = 0;
   await sync.sync();
-  assert.deepEqual(api.seen.map((r) => r.path.split('/').pop()).sort(), ['collections', 'deleted', 'fulltext', 'items']);
+  assert.deepEqual(api.seen.map((r) => [r.path.split('/').pop(), r.unless]), [['collections', String(lib.version())]]);
 });
 
 test('pages of 100, until Total-Results', async (t) => {
@@ -327,7 +334,7 @@ test('the IPC: status carries the mirror, Sync now syncs, Disconnect deletes the
   assert.deepEqual((await call('zotero-list', 'Reading')).entries.map((e) => e.name), ['Methods∕Tools', 'Learning to Learn']);
   assert.deepEqual((await call('zotero-list', 'Reading/Methods∕Tools')).entries.map((e) => e.name), ['A Book']);
   assert.deepEqual(await call('zotero-list', 'Nope'), { missing: true });
-  assert.deepEqual(await call('zotero-open', 'WEB00001'), { url: 'https://example.org/page' });
+  assert.deepEqual(await call('zotero-open', 'WEB00001'), { url: 'https://example.org/page', external: true });
   assert.match((await call('zotero-open', 'GONE0001')).error, /no longer in your Zotero library/);
   await assert.rejects(async () => call('zotero-open', '../x'), /invalid/);
   const out = await call('zotero-disconnect');
@@ -335,6 +342,91 @@ test('the IPC: status carries the mirror, Sync now syncs, Disconnect deletes the
   assert.ok(!fs.existsSync(root), 'disconnecting deletes the mirror');
   assert.equal((await call('zotero-list', '')).error, 'Zotero is not connected');
   for (const [name] of handlers) assert.ok(!/key/i.test(name.replace('engelbart:', '').replace('zotero-', '')) || !/zotero/.test(name), name);
+});
+
+/* ------------------------------------------------------------------------------------- syncing while the app is open */
+
+test('a later sync sends If-Modified-Since-Version: an unchanged library costs one 304, a changed one syncs', async (t) => {
+  const lib = seed();
+  const api = await fakeApi(t, lib);
+  const root = path.join(tmp('304'), 'zotero');
+  let clock = Date.parse('2026-10-06T10:00:00Z');
+  const { sync } = syncer(api.base, root, { now: () => clock });
+  await sync.sync();
+  assert.equal(api.seen[0].unless, null, 'the first sync asks for everything, unconditionally');
+  const before = fs.readFileSync(path.join(root, 'items.json'), 'utf8');
+
+  api.seen.length = 0;
+  clock += 10 * 60_000;
+  const done = await sync.autoSync();
+  assert.equal(api.seen.length, 1, 'one request');
+  assert.deepEqual([api.seen[0].path, api.seen[0].unless], [`/users/${USER_ID}/collections`, String(lib.version())]);
+  assert.equal(done.state, 'synced');
+  assert.equal(done.syncedAt, new Date(clock).toISOString(), 'checked now');
+  assert.equal(sync.lastSyncAt(), clock);
+  assert.equal(fs.readFileSync(path.join(root, 'items.json'), 'utf8'), before, 'the mirror as it was');
+
+  lib.item({ key: 'NEW00001', itemType: 'journalArticle', title: 'Fresh', creators: [], date: '2026' });
+  api.seen.length = 0;
+  await sync.autoSync();
+  assert.ok(api.seen.length > 1, 'changed: the whole incremental sync');
+  assert.ok(JSON.parse(fs.readFileSync(path.join(root, 'items.json'), 'utf8')).some((i) => i.key === 'NEW00001'));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'state.json'), 'utf8')).version, lib.version());
+});
+
+test('every 10 minutes and on coming to the front after 2: never two syncs at once, none while signed out', async (t) => {
+  const lib = seed();
+  let release = null;
+  const held = { on: false };
+  const api = await fakeApi(t, lib, { hold: async () => { if (held.on) await new Promise((resolve) => { release = resolve; }); } });
+  const root = path.join(tmp('clock'), 'zotero');
+  let clock = Date.parse('2026-10-06T10:00:00Z');
+  const { sync } = syncer(api.base, root, { now: () => clock });
+  let tick = null, every = 0, stopped = false;
+  let connected = true;
+  const schedule = scheduleSyncs(sync, {
+    connected: () => connected, now: () => clock,
+    setInterval: (fn, ms) => { tick = fn; every = ms; return 7; }, clearInterval: (id) => { stopped = id === 7; },
+  });
+  assert.equal(every, 10 * 60_000, 'every 10 minutes');
+
+  // No sync yet: coming to the front syncs.
+  schedule.focus();
+  await sync.autoSync();
+  const first = api.seen.length;
+  assert.ok(first > 1);
+
+  // Back to the front within 2 minutes: nothing.
+  clock += 60_000;
+  schedule.focus();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(api.seen.length, first, 'synced a minute ago: left alone');
+
+  // A slow sync from the clock; the clock again, the window to the front and autoSync while it runs start nothing more.
+  clock += 3 * 60_000;
+  api.seen.length = 0; api.busy.most = 0;
+  held.on = true;
+  tick();
+  const running = sync.autoSync();
+  while (!release) await new Promise((resolve) => setTimeout(resolve, 5));
+  tick(); schedule.focus(); tick();
+  assert.equal(sync.status().state, 'syncing');
+  held.on = false;
+  release();
+  await running;
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(api.seen.length, 1, 'one sync, one request: the 304');
+  assert.equal(api.busy.most, 1, 'never two requests at once');
+
+  // Signed out: the clock does nothing.
+  connected = false;
+  clock += 20 * 60_000;
+  api.seen.length = 0;
+  tick(); schedule.focus();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(api.seen.length, 0);
+  schedule.stop();
+  assert.ok(stopped);
 });
 
 /* ---------------------------------------------------------------------------------------------------- attachments */
@@ -359,14 +451,14 @@ test("an attachment is opened from Zotero's storage folder, or its linked path, 
   // In the storage folder: opened from there, nothing fetched.
   fs.mkdirSync(path.join(storage, 'ATTPDF01'));
   fs.writeFileSync(path.join(storage, 'ATTPDF01', 'smith.pdf'), '%PDF stored');
-  assert.deepEqual(await mirror.openTarget(root, 'SMITH001', options), { path: path.join(storage, 'ATTPDF01', 'smith.pdf') });
-  assert.deepEqual(await mirror.openTarget(root, 'LINK0001', options), { path: linked }, 'a linked file at its own path');
+  assert.deepEqual(await mirror.openTarget(root, 'SMITH001', options), { path: path.join(storage, 'ATTPDF01', 'smith.pdf'), source: 'storage' });
+  assert.deepEqual(await mirror.openTarget(root, 'LINK0001', options), { path: linked, source: 'linked' }, 'a linked file at its own path');
   assert.equal(api.seen.length, 0, 'no download');
 
   // Not there: downloaded once, into files/, the redirect followed without the key.
   fs.rmSync(path.join(storage, 'ATTPDF01'), { recursive: true });
   const fetched = await mirror.openTarget(root, 'SMITH001', options);
-  assert.deepEqual(fetched, { path: path.join(root, 'files', 'ATTPDF01', 'smith.pdf') });
+  assert.deepEqual(fetched, { path: path.join(root, 'files', 'ATTPDF01', 'smith.pdf'), source: 'downloaded' });
   assert.equal(fs.readFileSync(fetched.path, 'utf8'), '%PDF-1.4 downloaded');
   assert.deepEqual(api.seen.map((r) => r.path), [`/users/${USER_ID}/items/ATTPDF01/file`]);
   assert.deepEqual(files.seen, [{ path: '/s3/ATTPDF01?signature=x', key: null }], 'where the file is kept never gets the key');
@@ -376,7 +468,7 @@ test("an attachment is opened from Zotero's storage folder, or its linked path, 
   // A saved web page is an attachment too; a linked file that is gone is not downloaded, and the item falls back to its URL.
   fs.mkdirSync(path.join(storage, 'ATTHTML1'));
   fs.writeFileSync(path.join(storage, 'ATTHTML1', 'snap.html'), '<p>snap</p>');
-  assert.deepEqual(await mirror.openTarget(root, 'SNAP0001', options), { path: path.join(storage, 'ATTHTML1', 'snap.html') });
+  assert.deepEqual(await mirror.openTarget(root, 'SNAP0001', options), { path: path.join(storage, 'ATTHTML1', 'snap.html'), source: 'storage' });
   fs.rmSync(linked);
   assert.match((await mirror.openTarget(root, 'LINK0001', options)).error, /no file or address/);
   assert.equal(api.seen.length, 1);
@@ -527,6 +619,6 @@ test('citation keys: Better BibTeX first, then author, year and first word, with
 
 test('nothing logged held the key, and the Zotero modules log nothing', () => {
   assert.ok(!logged.some((line) => line.includes(KEY)));
-  const sources = ['sync.cjs', 'mirror.cjs'].map((name) => fs.readFileSync(path.join(__dirname, '../src/main/zotero', name), 'utf8')).join('\n');
+  const sources = ['sync.cjs', 'mirror.cjs', 'oa.cjs'].map((name) => fs.readFileSync(path.join(__dirname, '../src/main/zotero', name), 'utf8')).join('\n');
   assert.doesNotMatch(sources, /console\./);
 });

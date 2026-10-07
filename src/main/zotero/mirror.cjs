@@ -6,6 +6,9 @@
 // An attachment's file is found where it already is before anything is downloaded: a linked file at its own path, else
 // Zotero's storage folder on this Mac (~/Zotero/storage/<attachmentKey>/<file>), else a copy downloaded before
 // (files/<attachmentKey>/), else, only when asked (`download`), Zotero's copy is fetched (sync.cjs download).
+// Build 3: an item with none of these may have a free copy (./oa.cjs, `openAccess`): found through OpenAlex when it is
+// mentioned or its chip is clicked, kept in files/<itemKey>/. A chip opens a pdf in the paper viewer and anything without
+// one in the default browser (its DOI's page, else its URL), never in the Stage, where publishers' bot checks block it.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -147,18 +150,42 @@ async function resolveAttachment(root, item, { storageDir = defaultStorage(), do
 }
 
 /**
- * What a mention of item `key` opens (a chip clicked) → { path } its attachment's file, else { url } its page (its URL,
- * else its DOI's), else { error }.
+ * The pdf (or other file) an item is read from → { path, source: 'linked' | 'storage' | 'downloaded' | 'open access',
+ * attachment?, url?, foundAt? }, or { failed } when it has none: its own attachment first (resolveAttachment), else, when
+ * it has none that can be had, a free copy (`openAccess(item)`, sync.cjs's, → ./oa.cjs find's answer or null).
+ */
+async function resolvePdf(root, item, options = {}) {
+  let failed = '';
+  try {
+    const own = await resolveAttachment(root, item, options);
+    if (own) return own;
+  } catch (error) { failed = error && error.message ? error.message : 'The file could not be downloaded.'; }
+  let free = null;
+  try { free = typeof options.openAccess === 'function' ? await options.openAccess(item) : null; } catch { free = null; }
+  if (free && free.path) return { path: free.path, source: 'open access', url: free.url || '', foundAt: free.foundAt || '' };
+  return { failed };
+}
+
+/** An item's page in the default browser: its DOI's, else its URL; '' when it has neither. */
+function pageOf(item) {
+  const doi = String(item.doi || '').trim().replace(/^https?:\/\/(dx\.)?doi\.org\//i, '').replace(/^doi:\s*/i, '');
+  if (doi) return `https://doi.org/${doi}`;
+  return /^https?:\/\//i.test(String(item.url || '')) ? item.url : '';
+}
+
+/**
+ * What a mention of item `key` opens (a chip clicked) → { path, source } its file, a free copy found now when it has
+ * none of its own (opened in the paper viewer); else { url, external: true } its DOI's page or its URL (the default
+ * browser); else { error }.
  */
 async function openTarget(root, key, options = {}) {
   const item = root ? itemOf(root, key) : null;
   if (!item) return { error: hasMirror(root) ? 'This item is no longer in your Zotero library.' : 'Your Zotero library is not synced yet.' };
-  let found = null, failed = '';
-  try { found = await resolveAttachment(root, item, options); } catch (error) { failed = error && error.message ? error.message : 'The file could not be downloaded.'; }
-  if (found) return { path: found.path };
-  const url = item.url || (item.doi ? `https://doi.org/${item.doi}` : '');
-  if (url) return { url };
-  return { error: failed || 'This item has no file or address to open.' };
+  const found = await resolvePdf(root, item, options);
+  if (found.path) return { path: found.path, source: found.source };
+  const url = pageOf(item);
+  if (url) return { url, external: true };
+  return { error: found.failed || 'This item has no file or address to open.' };
 }
 
 /* ------------------------------------------------------------------------------------------------ Bart's context */
@@ -177,8 +204,10 @@ async function itemBlock(root, key, name = '', options = {}) {
   const item = root ? itemOf(root, key) : null;
   if (!item) return { lines: [`<zotero_item key="${attr(key, 40)}" title="${attr(name)}" missing="true" />`], file: '', missing: true };
   const dir = path.join(root, 'items', item.key);
-  let found = null, failed = '';
-  try { found = await resolveAttachment(root, item, options); } catch (error) { failed = error && error.message ? error.message : 'could not be downloaded'; }
+  const resolved = await resolvePdf(root, item, options);
+  const found = resolved.path && resolved.source !== 'open access' ? resolved : null;
+  const free = resolved.path && resolved.source === 'open access' ? resolved : null;
+  const failed = resolved.failed || '';
   const openable = openableOf(item);
   const texts = (item.attachments || []).map((a) => path.join(dir, `fulltext-${a.key}.txt`)).filter(exists);
   const head = [
@@ -194,6 +223,7 @@ async function itemBlock(root, key, name = '', options = {}) {
     found ? `attachment: ${found.path} (${found.attachment.contentType || 'file'})`
       : openable ? `attachment: ${openable.filename || openable.title || openable.key} (${openable.contentType || 'file'}), not on this Mac${failed ? `: ${failed}` : ''}`
         : 'attachment: none',
+    ...(free ? [`pdf: ${free.path} (source="open access": found through OpenAlex${free.url ? ` at ${free.url}` : ''}${free.foundAt ? ` on ${free.foundAt.slice(0, 10)}` : ''})`] : []),
     ...texts.map((file) => `full text: ${file}`),
     `folder: ${dir}`,
   ];
@@ -228,7 +258,7 @@ async function itemBlock(root, key, name = '', options = {}) {
     lines.push('</annotations>');
   }
   lines.push('</zotero_item>');
-  return { lines, file: found ? found.path : '', missing: false };
+  return { lines, file: resolved.path || '', missing: false };
 }
 
 function collectionNames(root, item) {
@@ -246,4 +276,4 @@ function pointerLine(root) {
   return `zotero library: ${root} (${items.length} items; items.json, collections.json, library.bib, and items/<key>/ with item.bib, children.json and fulltext-*.txt)`;
 }
 
-module.exports = { mirrorDir, defaultStorage, hasMirror, readItems, itemOf, authorsOf, listLevel, openableOf, localFile, resolveAttachment, openTarget, itemBlock, pointerLine, SLASH, KEY_RE };
+module.exports = { mirrorDir, defaultStorage, hasMirror, readItems, itemOf, authorsOf, listLevel, openableOf, localFile, resolveAttachment, resolvePdf, pageOf, openTarget, itemBlock, pointerLine, SLASH, KEY_RE };
