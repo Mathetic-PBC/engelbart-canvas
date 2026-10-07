@@ -850,6 +850,10 @@ if (!hasSingleInstanceLock) {
         if (!ctx || !ctx.browserViews) throw new Error('No window for the browser');
         return ctx.browserViews.savePage(tabId, dir);
       },
+      // An @bart turn with a web page in front (MATH-54 build 3a): the calling window's tab, for its selection and picture.
+      stagePageFor: (ctx, tabId) => (ctx && ctx.browserViews && ctx.browserViews.has(tabId)
+        ? { selection: () => ctx.browserViews.pageSelection(tabId), screenshot: () => ctx.browserViews.screenshot(tabId) }
+        : null),
       notify: sendToRenderer,
       // "Choose from disk…" in the sidebar's + menu: files and folders together, several at once (macOS allows both in one panel).
       // Onboarding's Papers step asks for pdfs only (`kind` 'pdf').

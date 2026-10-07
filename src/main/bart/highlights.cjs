@@ -5,7 +5,8 @@
 // (src/renderer/pdf/marks.js, src/shared/mark-answers.cjs). A free note is a mark without rects; it has no quote.
 // A web page's ink (MATH-54, 2026-10-06) is the same file with a "web" list beside the pages: { "web": [mark] }, a mark
 // { id, quote: { exact, prefix, suffix }, note, asks, … } with no page. Its <stage> and its entry in <highlights> say
-// source="web" and give the page's title and address instead of a paper and a page.
+// source="web" and give the page's title and address instead of a paper and a page. Build 3a (2026-10-06): a web <stage>
+// also carries the person's selection there as it is now and the path of a picture of the page (liveXml).
 
 const { clipMiddle } = require('./clip.cjs');
 const { WEB } = require('../../shared/mark-answers.cjs');
@@ -126,21 +127,35 @@ function stageBlock(paper, page, ink, budget = STAGE_BUDGET) {
 const webAttrs = (page) => `source="web" title="${attrOf(page.name, 200)}" address="${attrOf(page.address, 4096)}"${page.path ? ` path="${attrOf(page.path, 4096)}"` : ''}`;
 
 /**
+ * What the person has selected on the web page in front and what it looks like (MATH-54 build 3a), as they are now:
+ * <selection><quote>…</quote><page_text>…</page_text></selection> when `selection` ({ quote: { exact }, pageText }) holds
+ * a passage, <screenshot path="…"/> when `screenshot` is a picture's path. '' for neither.
+ */
+function liveXml({ selection = null, screenshot = '' } = {}) {
+  const exact = text(selection && selection.quote && selection.quote.exact), around = text(selection && selection.pageText);
+  const parts = [];
+  if (exact) parts.push(`<selection>\n<quote>\n${exact}\n</quote>\n${around ? `<page_text>\n${around}\n</page_text>\n` : ''}</selection>\n`);
+  if (screenshot) parts.push(`<screenshot path="${attrOf(screenshot, 4096)}"/>\n`);
+  return parts.join('');
+}
+
+/**
  * <stage source="web" title="…" address="…" path="…" annotations="…"> the highlights of the web page in front </stage>
  * (MATH-54), at most `budget` characters: those with a note or an ask before the bare ones, shown in the order the ink
  * keeps them, with <more n="K"/> when K were left out. `page`: { name (its title), address, path (a saved copy's
- * index.html, else none), annotations (the ink file, '' for a page whose ink is not kept: a preview) }. No highlights:
- * one line, highlights="0", which still says what the page is.
+ * index.html, else none), annotations (the ink file, '' for a page whose ink is not kept: a preview), selection,
+ * screenshot }. Its live selection and picture (liveXml, build 3a) come first, outside the budget. No highlights:
+ * highlights="0", which still says what the page is; one line when there is nothing live either.
  */
 function webStageBlock(page, ink, budget = STAGE_BUDGET) {
   const attrs = webAttrs(page);
-  const list = webMarksOf(ink);
-  if (!list.length) return `<stage ${attrs} highlights="0"/>`;
+  const list = webMarksOf(ink), live = liveXml(page);
+  if (!list.length) return live ? `<stage ${attrs} highlights="0">\n${live}</stage>` : `<stage ${attrs} highlights="0"/>`;
   const open = `<stage ${attrs}${page.annotations ? ` annotations="${attrOf(page.annotations, 4096)}"` : ''}>\n`, close = '</stage>';
   const candidates = list.map((h, i) => ({ h, at: i, xml: highlightXml(h) }));
   const taken = take(candidates, budget - open.length - close.length - MORE_ROOM);
   const shown = candidates.filter((c) => taken.has(c));
-  return `${open}${shown.map((c) => c.xml).join('')}${moreLine(list.length - shown.length)}${close}`;
+  return `${open}${live}${shown.map((c) => c.xml).join('')}${moreLine(list.length - shown.length)}${close}`;
 }
 
 /** One mentioned item's highlights and the tags around them: a pdf's <paper>, a web page's <page source="web"> (MATH-54). */
@@ -181,4 +196,4 @@ function mentionedBlock(papers, budget = MENTIONED_BUDGET) {
   return `${open}${body.join('')}${close}`;
 }
 
-module.exports = { attrOf, marksOf, webMarksOf, stageBlock, webStageBlock, mentionedBlock, STAGE_BUDGET, MENTIONED_BUDGET, QUOTE_MAX, ANSWER_MAX };
+module.exports = { attrOf, marksOf, webMarksOf, stageBlock, webStageBlock, liveXml, mentionedBlock, STAGE_BUDGET, MENTIONED_BUDGET, QUOTE_MAX, ANSWER_MAX };

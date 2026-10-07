@@ -34,6 +34,11 @@ const PAGE = require('./page-preload.cjs');
 // The right-click menu's Highlight, with a selection, asks the preload for the selection's quote and saves it through
 // `pageMarks` (index.cjs: the library's ink for the page, store/library.cjs addWebMark), then has it tinted. A sandbox
 // preview or a local server (isPreviewAddress) is never filed, so it offers no Highlight and gets no marks.
+//
+// What @bart sees of the page in front (MATH-54 build 3a, 2026-10-06): its selection as it is now (pageSelection: the
+// preload's quote and the page's text around it, answered within SELECTION_TIMEOUT_MS or not at all, kept nowhere) and
+// what it looks like (screenshot: capturePage as a PNG, its longer edge at most SHOT_MAX_EDGE). A preview's selection is
+// read too: nothing of it is filed.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -70,6 +75,10 @@ const PAGE_PRELOAD_ID = 'engelbart-page';
 // wins only with !important of its own.
 const MARK_CSS = `::highlight(${PAGE.HIGHLIGHT}){background-color:rgba(0,112,243,.14) !important}`;
 const QUOTE_TIMEOUT_MS = 2000;
+const SELECTION_TIMEOUT_MS = 300; // an @bart turn does not wait on a page that does not answer
+const MAX_PAGE_TEXT = 2 * PAGE.PAGE_TEXT + 2 * PAGE.MAX_EXACT; // the most page text main takes with a selection
+const SHOT_TIMEOUT_MS = 1500;
+const SHOT_MAX_EDGE = 1568; // pixels on the longer edge: what the models look at without scaling it down themselves
 const MAX_PAGE_MARKS = 2000;
 
 /** http(s) only. 0.0.0.0 is what dev servers print, not an address to visit. */
@@ -198,6 +207,15 @@ function quoteInput(value) {
   if (typeof exact !== 'string' || typeof prefix !== 'string' || typeof suffix !== 'string') return null;
   if (!exact.trim() || exact.length > PAGE.MAX_EXACT || prefix.length > PAGE.MAX_AFFIX || suffix.length > PAGE.MAX_AFFIX) return null;
   return { exact, prefix, suffix };
+}
+
+/** A live selection as a page's preload sends it: { quote (quoteInput's), pageText (at most MAX_PAGE_TEXT) }, or null. */
+function selectionInput(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const quote = quoteInput(value.quote);
+  if (!quote) return null;
+  const pageText = typeof value.pageText === 'string' ? value.pageText.slice(0, MAX_PAGE_TEXT) : '';
+  return { quote, pageText };
 }
 
 /** A page's web marks as its preload is given them: [{ id, quote }], only the well-formed, at most MAX_PAGE_MARKS. */
@@ -445,7 +463,51 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     return !!saved;
   }
 
-  /** What tab `id`'s preload may ask (its marks) and answer (a quote main asked for), on the tab's own ipc. */
+  /**
+   * The selection on tab `id`'s page as it is now, for an @bart turn (MATH-54 build 3a): { quote, pageText }, or null when
+   * there is none, the tab is gone, or the page does not answer within `timeoutMs`. Nothing is saved or tinted.
+   */
+  function pageSelection(id, { timeoutMs = SELECTION_TIMEOUT_MS } = {}) {
+    const entry = entries.get(id);
+    if (!entry) return Promise.resolve(null);
+    const contents = entry.view.webContents;
+    if (contents.isDestroyed()) return Promise.resolve(null);
+    const nonce = nextId('selection');
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => { entry.selectionWaits.delete(nonce); resolve(null); }, timeoutMs);
+      if (typeof timer.unref === 'function') timer.unref();
+      entry.selectionWaits.set(nonce, (value) => { clearTimeout(timer); entry.selectionWaits.delete(nonce); resolve(value); });
+      try { contents.send(PAGE.CHANNELS.selection, nonce); } catch { entry.selectionWaits.get(nonce)(null); }
+    });
+  }
+
+  /**
+   * What tab `id`'s page looks like now, as PNG bytes (its longer edge at most SHOT_MAX_EDGE), or null: no tab, a capture
+   * that fails, takes past SHOT_TIMEOUT_MS or comes back empty.
+   */
+  async function screenshot(id) {
+    const entry = entries.get(id);
+    if (!entry || entry.view.webContents.isDestroyed()) return null;
+    let timer;
+    try {
+      let image = await Promise.race([
+        entry.view.webContents.capturePage(),
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), SHOT_TIMEOUT_MS); }),
+      ]);
+      if (!image || image.isEmpty()) return null;
+      const { width, height } = image.getSize();
+      const scale = SHOT_MAX_EDGE / Math.max(width, height);
+      if (scale < 1) image = image.resize({ width: Math.round(width * scale), height: Math.round(height * scale), quality: 'good' });
+      const png = image.toPNG();
+      return png && png.length ? png : null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** What tab `id`'s preload may ask (its marks) and answer (a quote or a selection main asked for), on the tab's own ipc. */
   function listenToPage(contents, id, entry) {
     if (!contents.ipc) return;
     contents.ipc.handle(PAGE.CHANNELS.marks, async (event, ...args) => {
@@ -459,6 +521,11 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       const waiting = entry.quoteWait;
       if (!waiting || !fromTab(event, id, entry) || !reply || typeof reply !== 'object' || reply.nonce !== waiting.nonce) return;
       waiting.resolve(quoteInput(reply.quote));
+    });
+    contents.ipc.on(PAGE.CHANNELS.selection, (event, reply) => {
+      const waiting = reply && typeof reply === 'object' ? entry.selectionWaits.get(reply.nonce) : null;
+      if (!waiting || !fromTab(event, id, entry)) return;
+      waiting(selectionInput(reply));
     });
     // the page's tints are styled anew with each document (insertCSS lasts until the page goes)
     contents.on('dom-ready', () => { if (!contents.isDestroyed()) contents.insertCSS(MARK_CSS).catch(() => {}); });
@@ -587,7 +654,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     view.setVisible(false);
     win.contentView.addChildView(view);
     onLayerChange();
-    const entry = { view, error: null, requested: '', pending: '', seq: 0, found: '', drawn: false, download: '', retrying: false, quoteWait: null };
+    const entry = { view, error: null, requested: '', pending: '', seq: 0, found: '', drawn: false, download: '', retrying: false, quoteWait: null, selectionWaits: new Map() };
     entries.set(id, entry);
 
     const contents = view.webContents;
@@ -818,7 +885,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     if (shared) shared.members.delete(member);
   }
 
-  return { open, show, hide, command, find, stopFind, shortcut, savePage, close, closeAll, answerLogin, flush, dispose, has: (id) => entries.has(id), highlightSelection };
+  return { open, show, hide, command, find, stopFind, shortcut, savePage, close, closeAll, answerLogin, flush, dispose, has: (id) => entries.has(id), highlightSelection, pageSelection, screenshot };
 }
 
 // Each handler is registered once and acts on the views of the window that called (`viewsFor(event)`, 2026-10-03).
@@ -854,4 +921,4 @@ function registerBrowserIpc({ ipcMain, trustedHandler, viewsFor = null, views = 
   }
 }
 
-module.exports = { PAGE_PRELOAD, MARK_CSS, fileablePage, quoteInput, marksForPage, PARTITION, DEV_PARTITION, stagePartition, parseBrowserUrl, parseFileUrl, externalScheme, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews, registerBrowserIpc };
+module.exports = { PAGE_PRELOAD, MARK_CSS, SELECTION_TIMEOUT_MS, SHOT_MAX_EDGE, fileablePage, quoteInput, selectionInput, marksForPage, PARTITION, DEV_PARTITION, stagePartition, parseBrowserUrl, parseFileUrl, externalScheme, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews, registerBrowserIpc };

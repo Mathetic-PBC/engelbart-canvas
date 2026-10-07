@@ -16,6 +16,10 @@
 // on one has <highlight source="web">.
 // MATH-54 follow-up (2026-10-06): every @bart turn carries both as they are now, a resumed one too (`now`), and
 // <stage>none</stage> when nothing is in front.
+// MATH-54 build 3a (2026-10-06): a web page in front also gives what the person has selected on it as it is now
+// (<selection>, read from the tab's page in front, never saved) and a picture of it (<screenshot path="…"/>, ./shots.cjs).
+// `live` ({ selection(), screenshot() }, ipc.cjs from browser/views.cjs) reaches the tab; a page that does not answer in
+// time has no selection, a picture that fails is left out.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -31,11 +35,27 @@ const { instructionsBlock } = require('../store/onboarding.cjs');
 const library = require('../store/library.cjs');
 const { attrOf, stageBlock, webStageBlock, mentionedBlock } = require('./highlights.cjs');
 const { fileInRow } = require('../store/folder-files.cjs');
+const { saveShot } = require('./shots.cjs');
 
 const HERE = '<<< this is the question being asked now >>>';
 // @bart's <stage> with nothing in front, and a resumed turn's <highlights> when the documents mention nothing highlighted.
 const NO_STAGE = '<stage>none</stage>';
 const NO_HIGHLIGHTS = '<highlights>none</highlights>';
+// How long a turn waits on the page in front for its selection and for its picture (MATH-54 build 3a).
+const SELECTION_WAIT_MS = 300;
+const SHOT_WAIT_MS = 2000;
+
+/** What `ask()` gives within `ms`, else null; null as well when it throws. */
+async function inTime(ask, ms) {
+  let timer;
+  try {
+    return await Promise.race([Promise.resolve().then(ask), new Promise((resolve) => { timer = setTimeout(() => resolve(null), ms); })]);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** The pending line of this question marks its place; the pending lines of other questions are noise. */
 function markPlace(text, askId) {
@@ -205,11 +225,29 @@ async function stagePaper(ctx, project, rows, stage) {
   return { ...paper, ...(await inkOf(ctx, paper.id ? { rowId: paper.id } : ref.url ? { url: ref.url } : { rowId: ref.rowId })) };
 }
 
-/** The web page in front in the Stage (`stage` { url, title }, MATH-54) → webPageOf's, with its ink and ink file ('' for a preview's). */
-async function stageWebPage(ctx, project, rows, stage) {
-  const page = await webPageOf(ctx, project, rows, { url: stage.url }, stage.title);
+/**
+ * What `live` ({ selection(), screenshot() }) gives of the page in front for turn `askId` → { selection, screenshot }: the
+ * selection ({ quote, pageText }) unless `selecting` is off, and the picture saved as the turn's (./shots.cjs), its path.
+ * Each is null or '' when the page does not answer in time, has none, or the picture cannot be kept.
+ */
+async function livePage(ctx, live, askId, { selecting = true } = {}) {
+  if (!live) return { selection: null, screenshot: '' };
+  const [selection, png] = await Promise.all([
+    selecting && live.selection ? inTime(() => live.selection(), SELECTION_WAIT_MS) : null,
+    live.screenshot ? inTime(() => live.screenshot(), SHOT_WAIT_MS) : null,
+  ]);
+  const quoted = selection && selection.quote && typeof selection.quote.exact === 'string' && selection.quote.exact.trim() ? selection : null;
+  return { selection: quoted, screenshot: (png && saveShot(ctx.dataRoot, askId, png)) || '' };
+}
+
+/**
+ * The web page in front in the Stage (`stage` { url, title }, MATH-54) → webPageOf's, with its ink and ink file ('' for a
+ * preview's), and livePage's selection and screenshot (`live`, build 3a).
+ */
+async function stageWebPage(ctx, project, rows, stage, { live = null, askId = '', selecting = true } = {}) {
+  const [page, now] = await Promise.all([webPageOf(ctx, project, rows, { url: stage.url }, stage.title), livePage(ctx, live, askId, { selecting })]);
   if (!page.address && !page.path) page.address = stage.url;
-  return { ...page, ...(await inkOf(ctx, page.id ? { rowId: page.id } : { url: stage.url })) };
+  return { ...page, ...(await inkOf(ctx, page.id ? { rowId: page.id } : { url: stage.url })), ...now };
 }
 
 // A library row that may be a pdf: one, or an address saved before the Stage kept a copy (store/web-pdfs.cjs).
@@ -237,7 +275,7 @@ async function mentionedPapers(ctx, project, rows) {
  * sent ('' for the other agents). `entries` (the library as Context.json
  * holds it) and `workspaceName` are for the fake agents, which name what a real one would read.
  */
-async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = 'bart', highlight = null, stage = null }) {
+async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = 'bart', highlight = null, stage = null, live = null }) {
   const found = projects.findWorkspace(ctx, projectId, workspaceId);
   const { project, workspace } = found;
   const rows = await ctx.libraryDb.list();
@@ -269,10 +307,11 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
     documents.push(block('workspace', space.title, shown(space.body)));
   }
   // @bart sees the person's highlights: the pdf or web page in front in the Stage (<stage>none</stage> when nothing is,
-  // MATH-54 follow-up), then the ones the documents mention. `now` is the two again for a resumed session, whose own
+  // MATH-54 follow-up; a web page with its selection and picture, build 3a), then the ones the documents mention. `now` is the two again for a resumed session, whose own
   // copies are as they were when it started (./ask.cjs firstMessage): <highlights>none</highlights> when none has any.
   const inFront = agent === 'bart' && stage ? { pdf: stagePaper, web: stageWebPage }[stage.kind] : null;
-  const front = inFront ? await inFront(ctx, project, rows, stage) : null;
+  // A question asked from a highlight is about the highlight: the page's selection is not asked for, its picture is.
+  const front = inFront ? await inFront(ctx, project, rows, stage, { live, askId, selecting: ref.kind !== 'mark' }) : null;
   let now = '';
   if (agent === 'bart') {
     const staged = !front ? NO_STAGE : front.source === 'web' ? webStageBlock(front, front.ink) : stageBlock(front, stage.page, front.ink);
@@ -308,4 +347,4 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
   return { project, dirs, head, contextJson: `<context_json>\n${JSON.stringify(entries, null, 1)}\n</context_json>`, mentionedFiles: mentionedFilesBlock(files), files, documents: documents.join('\n\n'), now, entries, workspaceName: workspace.name };
 }
 
-module.exports = { HERE, NO_STAGE, NO_HIGHLIGHTS, markPlace, buildContext, conversationBlock, catalogEntries, mentionedFiles, mentionedFilesBlock, libraryDirs, block, highlightBlock, paperOf, webPageOf };
+module.exports = { HERE, NO_STAGE, NO_HIGHLIGHTS, SELECTION_WAIT_MS, markPlace, buildContext, conversationBlock, catalogEntries, mentionedFiles, mentionedFilesBlock, libraryDirs, block, highlightBlock, paperOf, webPageOf };

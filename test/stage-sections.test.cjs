@@ -611,14 +611,14 @@ test.describe('the Stage: what is in front for @bart', () => {
     globalThis.document = { baseURI: 'file:///app/index.html' };
   });
 
-  test('a web page is { kind: "web", url, title }, the page as it is now', async () => {
+  test('a web page is { kind: "web", url, title, tab }, the page as it is now, and the tab main asks for its selection and picture', async () => {
     const s = pageStage();
     s.open(ESSAY);
     await s.settle();
     const id = opened(s);
-    assert.deepEqual(s.front(), { kind: 'web', url: ESSAY, title: '' }, 'not loaded yet: where it is going');
+    assert.deepEqual(s.front(), { kind: 'web', url: ESSAY, title: '', tab: id }, 'not loaded yet: where it is going');
     loaded(s, id);
-    assert.deepEqual(s.front(), { kind: 'web', url: ESSAY, title: 'How might we learn?' });
+    assert.deepEqual(s.front(), { kind: 'web', url: ESSAY, title: 'How might we learn?', tab: id });
     loaded(s, id, 'https://andymatuschak.org/hmwl/#notes');
     assert.equal(s.front().url, 'https://andymatuschak.org/hmwl/#notes', 'where the tab went (main files it without the fragment)');
   });

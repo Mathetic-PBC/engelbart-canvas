@@ -94,7 +94,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * What is in front in the Stage when @bart is asked (MATH-27, 2026-10-06): { rowId, url, page, kind }, the library row
  * the tab shows (else its address) and the page in view. A web page (MATH-54) is { kind: 'web', url, title }: where the
  * tab is and what the page calls itself. Only those two are read (bart/context.cjs <stage>): anything else, and no
- * Stage, is null.
+ * Stage, is null. With `tab`, the Stage tab that shows it (MATH-54 build 3a), whose selection and picture are asked for.
  */
 function stageInput(value) {
   if (value == null) return null;
@@ -103,7 +103,9 @@ function stageInput(value) {
   if (kind === 'web') {
     const url = str(value.url, 'address', 4096).trim();
     const title = clipped(value.title == null ? '' : value.title, 'page title', 300).replace(/\s+/g, ' ').trim();
-    return url ? { kind, url, title } : null;
+    const tab = value.tab == null ? null : str(value.tab, 'tab id', 128);
+    if (tab && !/^[\w.-]+$/.test(tab)) throw new TypeError('tab id is invalid');
+    return url ? { kind, url, title, ...(tab ? { tab } : {}) } : null;
   }
   if (kind !== 'pdf') return null;
   const rowId = value.rowId == null ? null : str(value.rowId, 'library id', 64);
@@ -211,9 +213,10 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
 // out on `notify`, and nothing is announced. `fetchUrl` is how a dropped link is read (add-library-url; the app passes
 // the Stage's session, so a picture or a pdf behind a sign-in comes too).
 // `savePageFor(win, tabId, dir)` writes the page a window's Stage tab shows into dir (add-library-page; the app passes
-// that window's browser views' savePage).
+// that window's browser views' savePage). `stagePageFor(win, tabId)` reaches a window's Stage tab for an @bart turn
+// (MATH-54 build 3a): { selection(), screenshot() } (the app passes that window's browser views'), or null.
 // `getUpdates()`: the updater (updates.cjs), made after this is registered; null until then, and in the tests.
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, getUpdates = () => null }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, getUpdates = () => null }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
   const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
@@ -498,9 +501,11 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       // A highlight's note asks @bart alone (MATH-27), with the passage it is on.
       if (ref.kind === 'mark' && agent !== 'bart') throw new TypeError('a highlight asks @bart');
       const projectId = str(pid, 'project id', 64);
-      // `stage`: the pdf in front in the Stage, which @bart alone is shown (MATH-27); the others' context stays as it was.
+      // `stage`: the pdf or web page in front in the Stage, which @bart alone is shown (MATH-27); the others' context stays as it was.
       const stage = agent === 'bart' ? stageInput(value.stage) : null;
-      const question = { askId, ref, workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice, agent, ...(ref.kind === 'mark' ? { highlight: highlightInput(value.highlight) } : {}), ...(stage ? { stage } : {}) };
+      // `live`: a web page's tab in this window, asked for its selection and picture as they are now (MATH-54 build 3a).
+      const live = stage && stage.kind === 'web' && stage.tab && stagePageFor ? stagePageFor(win, stage.tab) : null;
+      const question = { askId, ref, workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice, agent, ...(ref.kind === 'mark' ? { highlight: highlightInput(value.highlight) } : {}), ...(stage ? { stage } : {}), ...(live ? { live } : {}) };
       if (ref.kind === 'mark') {
         // a web page's mark has no page (MATH-54): its answer goes in the ink's "web" list
         mark = { markId: ref.id, page: ref.source === 'web' ? null : ref.page, rowId: ref.rowId || null, url: ref.rowId ? null : ref.url, ...(ref.source === 'web' ? { source: 'web' } : {}) };

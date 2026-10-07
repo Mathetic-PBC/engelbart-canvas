@@ -10,15 +10,21 @@
 // (`engelbart-page:marks`) and each is found again by its quote: where the passage is more than once, the words around it
 // pick which. One not found is skipped, for now. The right-click menu's Highlight asks for the selection's quote
 // (`engelbart-page:quote`, answered with main's nonce) and, once main has saved it, tints it (`engelbart-page:add`).
+// MATH-54 build 3a (2026-10-06): an @bart turn with the page in front asks for the selection as it is now
+// (`engelbart-page:selection`): its quote and about PAGE_TEXT characters of the page's text around it, kept nowhere. A
+// page keeps its selection while the person types in the document (another webContents; checked on Electron 44), so it
+// is read as it stands, not remembered. A selection that starts or ends inside a word is taken to the whole word, for
+// both (snapWords): what began at "he futur" is "the future".
 //
 // Sandboxed, this can require only 'electron'. The finding is plain functions over text, exported below for the tests
 // when Node loads this file; in a page, `module` is no CommonJS module and the page part runs instead.
 
-const CHANNELS = Object.freeze({ marks: 'engelbart-page:marks', quote: 'engelbart-page:quote', add: 'engelbart-page:add' });
+const CHANNELS = Object.freeze({ marks: 'engelbart-page:marks', quote: 'engelbart-page:quote', add: 'engelbart-page:add', selection: 'engelbart-page:selection' });
 const HIGHLIGHT = 'engelbart-web-mark'; // the ::highlight() name main's insertCSS styles
 const CONTEXT = 32; // characters of prefix and of suffix a new quote keeps
 const MAX_EXACT = 5000; // a longer selection is not highlighted (views.cjs says the same)
 const MAX_AFFIX = 64;
+const PAGE_TEXT = 4000; // characters of the page's text a live selection comes with, itself included
 const SKIP = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'TEXTAREA', 'SELECT', 'OPTION']);
 const SPACE = /\s/;
 
@@ -70,16 +76,50 @@ function rangeOf({ segs }, start, end) {
   return { startNode: a.node, startOffset: a.map[start - a.start], endNode: b.node, endOffset: b.map[end - 1 - b.start] + 1 };
 }
 
+// A letter, a digit or a joining mark; an apostrophe between two letters ("don't") is inside the word too.
+const LETTER = /[\p{L}\p{N}\p{M}_]/u;
+const inWord = (text, i) => i >= 0 && i < text.length && (LETTER.test(text[i]) || (/['\u2019]/.test(text[i]) && LETTER.test(text[i - 1] || '') && LETTER.test(text[i + 1] || '')));
+
+/**
+ * Characters [start, end) of the text taken out to whole words: a start inside a word goes back to its first letter, an
+ * end inside one on to its last. Only within the text node each end is in: two nodes run together with no space between
+ * them (a block's last word and the next block's first) are not one word.
+ */
+function snapWords({ text, segs }, start, end) {
+  if (!segs.length || end <= start) return { start, end };
+  const a = segAt(segs, start), b = segAt(segs, end - 1);
+  const first = a.start, last = b.start + b.map.length;
+  while (start > first && inWord(text, start - 1) && inWord(text, start)) start -= 1;
+  while (end < last && inWord(text, end - 1) && inWord(text, end)) end += 1;
+  return { start, end };
+}
+
 /**
  * A selection from (seg `from`, offset `fromRaw` in its node) to (seg `to`, `toRaw`) → its quote, whitespace at either end
- * left out: { quote: { exact, prefix, suffix }, start, end }, or null when it holds no text or more than MAX_EXACT.
+ * left out and each end taken to the whole word (snapWords): { quote: { exact, prefix, suffix }, start, end }, or null
+ * when it holds no text or more than MAX_EXACT.
  */
-function quoteOf({ text, segs }, from, fromRaw, to, toRaw) {
+function quoteOf(map, from, fromRaw, to, toRaw) {
+  const { text, segs } = map;
   let start = segs[from].start + before(segs[from], fromRaw), end = segs[to].start + before(segs[to], toRaw);
   while (start < end && text[start] === ' ') start += 1;
   while (end > start && text[end - 1] === ' ') end -= 1;
-  if (end <= start || end - start > MAX_EXACT) return null;
+  if (end <= start) return null;
+  ({ start, end } = snapWords(map, start, end));
+  if (end - start > MAX_EXACT) return null;
   return { quote: { exact: text.slice(start, end), prefix: text.slice(Math.max(0, start - CONTEXT), start), suffix: text.slice(end, end + CONTEXT) }, start, end };
+}
+
+/**
+ * The page's text around characters [start, end): about `size` characters, the passage in the middle of them (a passage
+ * longer than that, with a little on each side), cut at spaces so no word is broken at either edge.
+ */
+function textAround(text, start, end, size = PAGE_TEXT) {
+  const side = Math.max(200, Math.floor((size - (end - start)) / 2));
+  let from = Math.max(0, start - side), to = Math.min(text.length, end + side);
+  if (from > 0) { const space = text.indexOf(' ', from); from = space >= 0 && space < start ? space + 1 : from; }
+  if (to < text.length) { const space = text.lastIndexOf(' ', to); to = space >= end ? space : to; }
+  return text.slice(from, to).trim();
 }
 
 /** A quote as main keeps it, spaced as the text is: each run of whitespace one space. */
@@ -166,7 +206,10 @@ function runInPage() {
     return missed;
   }
 
-  /** The selection's quote and Range, or null: no selection, none in this page's text, or longer than MAX_EXACT. */
+  /**
+   * The selection's quote, Range and the page's text around it (textAround), or null: no selection, none in this page's
+   * text, or longer than MAX_EXACT.
+   */
   function selected() {
     const selection = document.getSelection();
     if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null;
@@ -180,7 +223,7 @@ function runInPage() {
     if (from < 0) return null;
     const a = map.segs[from].node, b = map.segs[to].node;
     const got = quoteOf(map, from, a === range.startContainer ? range.startOffset : 0, to, b === range.endContainer ? range.endOffset : b.data.length);
-    return got && { quote: got.quote, range: domRange(rangeOf(map, got.start, got.end)) };
+    return got && { quote: got.quote, range: domRange(rangeOf(map, got.start, got.end)), pageText: textAround(map.text, got.start, got.end) };
   }
 
   ipcRenderer.on(CHANNELS.quote, (_event, nonce) => {
@@ -188,6 +231,12 @@ function runInPage() {
     try { got = selected(); } catch { got = null; }
     pending = got ? { nonce, range: got.range } : null;
     ipcRenderer.send(CHANNELS.quote, { nonce, quote: got ? got.quote : null });
+  });
+  // the selection as it is now, for an @bart turn: nothing is tinted or kept
+  ipcRenderer.on(CHANNELS.selection, (_event, nonce) => {
+    let got = null;
+    try { got = selected(); } catch { got = null; }
+    ipcRenderer.send(CHANNELS.selection, { nonce, quote: got ? got.quote : null, pageText: got ? got.pageText : '' });
   });
   ipcRenderer.on(CHANNELS.add, (_event, value) => {
     const { nonce, mark } = value || {};
@@ -204,4 +253,4 @@ function runInPage() {
 }
 
 if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof require === 'function') runInPage();
-else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, HIGHLIGHT, CONTEXT, MAX_EXACT, MAX_AFFIX, textMap, rangeOf, quoteOf, anchor, alike };
+else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, HIGHLIGHT, CONTEXT, MAX_EXACT, MAX_AFFIX, PAGE_TEXT, textMap, rangeOf, snapWords, quoteOf, textAround, anchor, alike };

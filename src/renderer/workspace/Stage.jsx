@@ -686,15 +686,16 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   // ⌘1–9 (MATH-12, 2026-10-06): the Stage's n-th tab, when the Stage is what was last clicked (Workspace decides).
   const tabAt = (index) => { const t = tabs[index]; if (!t) return false; select(t); return true; };
   // What is in front (MATH-27, 2026-10-06), for @bart's <stage>: { rowId, url, page, kind }, a pdf's page the one in view.
-  // A web page (MATH-54) is { kind: 'web', url, title }: where the tab is now and what the page calls itself (main finds
-  // the library's row and the ink by the address; a sandbox preview's is not kept).
+  // A web page (MATH-54) is { kind: 'web', url, title, tab }: where the tab is now and what the page calls itself (main finds
+  // the library's row and the ink by the address; a sandbox preview's is not kept), and the tab, whose selection and
+  // picture main asks for (build 3a).
   const front = () => {
     const t = tabsRef.current.find((x) => x.id === frontRef.current) || tabsRef.current[0];
     if (!t) return null;
     const p = t.pdf;
     if (!p && !t.file && (isPage(kindOf(t.url)) || t.opened)) { // a file (one drawn here, a docx made a page) is no web page
       const url = (t.web && t.web.url) || t.url;
-      if (url && url !== 'about:blank') return url.length > 4096 ? null : { kind: 'web', url, title: (t.web && t.web.title) || (t.row && t.row.name) || '' };
+      if (url && url !== 'about:blank') return url.length > 4096 ? null : { kind: 'web', url, title: (t.web && t.web.title) || (t.row && t.row.name) || '', tab: t.id };
     }
     if (!p || p.error || (!p.rowId && !p.url)) return { rowId: null, url: null, page: 1, kind: t.file ? 'file' : 'page' };
     if (!p.rowId && String(p.url).length > 4096) return null; // past what main takes
