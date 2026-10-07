@@ -45,10 +45,22 @@ function paperTool(tool, input) {
   return 'Looking papers up';
 }
 
+// A Build's tools for putting things in the library (2026-10-07; ../build/engelbart-tools.cjs).
+function engelbartTool(tool, input, short) {
+  const given = input && typeof input === 'object' ? input : {};
+  if (tool === 'save_file') return `Saving${quoted(given.name).replace(/^ for/, '')} to Engelbart`;
+  if (tool === 'duplicate_file') return `Duplicating ${given.item && /^\//.test(given.item) ? short(given.item) : 'an item'} in Engelbart`;
+  if (tool === 'move_file_into_engelbart') return `Moving ${short(given.path)} into Engelbart`;
+  return 'Saving to Engelbart';
+}
+
 function claudeTool(name, input, short) {
   const given = input && typeof input === 'object' ? input : {};
   const paper = String(name || '').match(/^mcp__papers__(\w+)$/);
   if (paper) return paperTool(paper[1], given);
+  const own = String(name || '').match(/^mcp__engelbart__(\w+)$/);
+  if (own) return engelbartTool(own[1], given, short);
+  if (name === 'Agent' || name === 'Task') return `Handing${quoted(given.description).replace(/^ for/, '')} to a subagent`;
   if (name === 'Read') return `Reading ${short(given.file_path)}`;
   if (name === 'Grep') return `Searching code${quoted(given.pattern)}`;
   if (name === 'Glob') return `Listing ${clip(given.pattern, 40) || 'files'}`;
@@ -113,7 +125,7 @@ function codexUpdate(event, short) {
     if (!started) return null;
     let args = item.arguments;
     if (typeof args === 'string') { try { args = JSON.parse(args); } catch { args = {}; } }
-    return { activity: item.server === 'papers' ? paperTool(item.tool, args) : `Using ${clip(item.tool, 24)}`, log: true };
+    return { activity: item.server === 'papers' ? paperTool(item.tool, args) : item.server === 'engelbart' ? engelbartTool(item.tool, args, short) : `Using ${clip(item.tool, 24)}`, log: true };
   }
   // A Build's patch (2026-09-25): the first file it touches names it.
   if (item.type === 'file_change' && !started) { const first = Array.isArray(item.changes) && item.changes[0]; return { activity: `Editing ${first ? short(first.path) : 'files'}`, log: true }; }

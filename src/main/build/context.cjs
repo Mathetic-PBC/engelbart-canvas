@@ -68,10 +68,10 @@ async function freezeContext(ctx, projectId, { task, workspaceId = null, attach 
     '<engelbart>',
     `project: ${project.name}`,
     ...(project.description ? [`project description: ${project.description.replace(/\s+/g, ' ')}`] : []),
-    `your working copy (make every change here): ${task.worktree}`,
+    `your working copy (make every change to the code here): ${task.worktree}`,
     `branch: ${task.branch}, started from ${task.baseBranch || 'a detached commit'} at ${String(task.baseSha || '').slice(0, 12)}`,
     `the person's own folder (do not touch): ${task.repo}`,
-    `notes and workspaces (read only): ${project.dir}`,
+    `notes and workspaces (you may write here; the engelbart tools add to the library): ${project.dir}`,
     `built from: ${from}`,
     '</engelbart>',
   ].join('\n'));

@@ -7,7 +7,11 @@
 //              background the worktree (git), its setup, the first turn. A post-it added to a workspace is a Build of it
 //              whose task is the post-it, put in as an archived version
 //   turn       a slot (three for Builds, one of its own for quick tasks), the agent (./runner.cjs) under its CLI's tool
-//              lock, a checkpoint commit, the ending read (NEEDS YOU / ESCALATE / done), a reply that waited sent next
+//              lock, a checkpoint commit, the ending read (NEEDS YOU / ESCALATE / done), a reply that waited sent next.
+//              Around the agent (2026-10-07, ./policy.cjs): the library's files kept aside (./keep.cjs) and Engelbart's
+//              tools opened for it (./engelbart-tools.cjs); after it, before the checkpoint, what it deleted of the
+//              library put back and the worktree back on its branch where the turn started (./git-guard.cjs), each said
+//              on the card
 //   reply      the next turn in the same session; while a turn runs it waits, or (`interrupt`) the turn is cut short
 //   run step   after a turn that ends in review (a Build, never a quick task): what the repository can run is found,
 //              started and checked (./run-step.cjs), and runs in the background until Review opens it; the card waits
@@ -45,6 +49,7 @@
 // tagged git, made in the project) from its first Build on. A post-it's Build always works in the default repo.
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
@@ -62,6 +67,10 @@ const store = require('./store.cjs');
 const { freezeContext, replyMessage, freshMessage } = require('./context.cjs');
 const { loadBuildPrompt, readEnding } = require('./prompt.cjs');
 const { buildPolicy } = require('./policy.cjs');
+const { keepLibrary } = require('./keep.cjs');
+const { gitCommonDir } = require('./git-guard.cjs');
+const { createEngelbartTools } = require('./engelbart-tools.cjs');
+const { openToolBridge } = require('../sandbox/local-tools.cjs');
 const { githubRepo } = require('../sandbox/runs.cjs');
 const { worktreePath } = require('./run-tools.cjs');
 const { runnableStore } = require('./runnables.cjs');
@@ -160,10 +169,31 @@ function createShell({ environment = process.env, run = execFile, tools = null }
   });
 }
 
+/**
+ * What the card says when a turn's agent got past what a Build may do: library files it deleted or changed, put back
+ * (./keep.cjs `restore`), and a branch it moved (git.cjs `holdBranch`). → lines, none when it kept to them.
+ */
+function guardNotes(putBack = [], holding = null) {
+  const names = (list) => {
+    const shown = list.slice(0, 5).map((entry) => `“${entry.name}”`);
+    return `${shown.join(', ')}${list.length > shown.length ? ` and ${list.length - shown.length} more` : ''}`;
+  };
+  const out = [];
+  const deleted = putBack.filter((entry) => entry.how === 'deleted');
+  const changed = putBack.filter((entry) => entry.how === 'changed');
+  if (deleted.length) out.push(`The agent deleted ${names(deleted)} from the library. Engelbart put ${deleted.length === 1 ? 'it' : 'them'} back.`);
+  if (changed.length) out.push(`The agent changed ${names(changed)}. Engelbart put ${changed.length === 1 ? 'it' : 'them'} back as ${changed.length === 1 ? 'it was' : 'they were'}: papers are only read in a Build.`);
+  if (holding && holding.branch) out.push('The agent left the Build\'s branch. Engelbart put its copy back on it, with the files as the agent left them.');
+  if (holding && holding.commits) out.push('The agent moved the Build\'s branch (commits of its own, or a reset). Engelbart put the branch back where the turn started; what the agent did is in this turn\'s checkpoint.');
+  return out;
+}
+
 // `githubToken`: the GitHub sign-in (github/connection.cjs token), for cloning a private library repository on a Mac
 // whose Git has no GitHub credentials of its own (git.cjs clone). `libraryChanged()`: a library row was made or given a
-// folder here (the sidebar reads the library again). `runStep`: ./run-step.cjs's, or null for no run step.
-function createBuilds({ git, runner, readModels, notify = () => {}, tools = null, gitReady = () => true, runShell = createShell({ tools }), copyTree = null, githubToken = async () => null, libraryChanged = () => {}, runStep = null, limits = LIMITS, turnMs = TURN_MS, autoFixes = AUTO_FIXES, diffMs = DIFF_MS, now = () => new Date() }) {
+// folder here (the sidebar reads the library again). `runStep`: ./run-step.cjs's, or null for no run step. `inspectPdf`:
+// what tags a pdf an agent puts in the library (../context/pdf-kind.cjs). `keepDir`: where a turn keeps the library's
+// files aside (./keep.cjs).
+function createBuilds({ git, runner, readModels, notify = () => {}, tools = null, gitReady = () => true, runShell = createShell({ tools }), copyTree = null, githubToken = async () => null, libraryChanged = () => {}, runStep = null, inspectPdf = null, keepDir = path.join(os.tmpdir(), 'engelbart-build-keep'), limits = LIMITS, turnMs = TURN_MS, autoFixes = AUTO_FIXES, diffMs = DIFF_MS, now = () => new Date() }) {
   const live = new Map(); // id → { controller, stopping: null | 'stop' | 'quit', done: Promise }
   const active = { build: 0, quick: 0 };
   const waiting = { build: [], quick: [] };
@@ -644,6 +674,8 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     const entry = { controller, stopping: null, done: new Promise((resolve) => { settle = resolve; }) };
     live.set(id, entry);
     let free = null;
+    let bridge = null; // Engelbart's tools for this turn (closed when it ends, or here when something threw before)
+    let keeping = null; // the library kept aside for this turn (put back when it ends, or here)
     try {
       await haltRunStep(id); // a run step still working ends (its changes a checkpoint) before the worktree is the agent's again
       if (active[pool] >= limits[pool]) save(ctx, projectId, id, { status: 'queued' });
@@ -652,19 +684,33 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
         save(ctx, projectId, id, (held) => ({ status: entry.stopping === 'quit' ? 'interrupted' : 'stopped', messages: [...held.messages, say('engelbart', 'Stopped before it started.')] }));
         return;
       }
+      // What the agent may reach (./policy.cjs), with the library kept aside while it works (./keep.cjs), where its branch
+      // stands (put back after the turn when the agent moved it) and Engelbart's tools for it (./engelbart-tools.cjs).
+      // Made before the card says it runs, so that from then on the agent is what a reply or Stop reaches.
+      let started, startedMerging;
+      [keeping, started, startedMerging, bridge] = await Promise.all([
+        keepLibrary(ctx, { dir: path.join(keepDir, id), kept: buildPolicy({ project, dataRoot: ctx.dataRoot }).kept }).catch(() => null),
+        git.head(task.worktree).catch(() => null),
+        git.merging(task.worktree).catch(() => false),
+        openToolBridge(createEngelbartTools({ ctx, projectId, task, inspectPdf, onAdded: () => libraryChanged() })).catch(() => null),
+      ]);
+      const policy = buildPolicy({ project, dataRoot: ctx.dataRoot, gitDir: gitCommonDir(task.worktree), papers: keeping ? keeping.papers : [] });
       task = save(ctx, projectId, id, (held) => ({ status: 'running', error: null, question: null, turn: (held.turn || 0) + 1 }));
       track(() => projects.agentStarted(ctx, { id, kind: 'build', projectId, workspaceId: task.workspaceId, doc: task.workspaceId ? { kind: 'workspace', workspaceId: task.workspaceId } : null }));
       const feed = createFeed({ onProgress: (progress) => { try { notify('engelbart:build-progress', { projectId, id, ...progress }); } catch { /* closed */ } } });
       const diffs = watchDiff(projectId, task);
       let diffsDone = Promise.resolve();
       const system = loadBuildPrompt(ctx.dataRoot, { quick: task.kind === 'quick' });
-      const policy = buildPolicy({ project, dataRoot: ctx.dataRoot });
       const agent = TOOL_OF[task.provider];
       const once = (session, text) => {
         feed.reset();
         // Each step, and whatever the model starts after one (a tool's result is in by then), reads the diff again.
         const onUpdate = (update) => { feed.take(update); if (update && (update.log || update.activity || update.textStart)) diffs.poke(); };
-        const call = () => runner.turn({ task: { ...task, worktree: task.cwd }, message: text, session, system, policy, signal: controller.signal, timeoutMs: turnMs[pool], onUpdate });
+        // Stopped (or cut short for a reply) before the agent started, while the turn was being made ready or its CLI was
+        // busy: the agent never starts, and the turn ends as a stopped one does.
+        const call = () => (controller.signal.aborted
+          ? Promise.reject(Object.assign(new Error('Stopped.'), { kind: 'stopped', session }))
+          : runner.turn({ task: { ...task, worktree: task.cwd }, message: text, session, system, policy, engelbart: bridge ? bridge.connection : null, signal: controller.signal, timeoutMs: turnMs[pool], onUpdate }));
         return tools ? tools.use(agent, call) : call();
       };
       let out = null;
@@ -685,6 +731,13 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
         feed.end();
         diffsDone = diffs.end();
       }
+      if (bridge) await bridge.close().catch(() => {});
+      bridge = null;
+      // The library as it was, and the worktree on its branch, before the checkpoint takes what the agent left.
+      const putBack = keeping ? await keeping.restore().catch(() => []) : [];
+      keeping = null;
+      const holding = started && started.branch === task.branch ? await git.holdBranch(task.worktree, task.branch, started.sha, { merging: startedMerging }).catch(() => null) : null;
+      const guarded = guardNotes(putBack, holding).map((text) => say('engelbart', text));
       let sha = null;
       let kept = null;
       // A turn that was resolving a conflict and did not finish leaves no half-merge behind: the Build goes back to its conflict.
@@ -694,10 +747,10 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
       const stopping = entry.stopping;
       task = save(ctx, projectId, id, (held) => {
         const next = { sessionId: (out && out.session) || (failure && failure.session) || held.sessionId, checkpoints: sha ? [...held.checkpoints, { sha, turn: held.turn, at: now().toISOString() }] : held.checkpoints };
-        const notes = kept ? [say('engelbart', `The turn's work could not be saved as a checkpoint: ${kept}`)] : [];
+        const notes = [...guarded, ...(kept ? [say('engelbart', `The turn's work could not be saved as a checkpoint: ${kept}`)] : [])];
         if (unresolved) {
           next.status = stopping === 'quit' ? 'interrupted' : 'conflict';
-          next.messages = [...held.messages, say('engelbart', `${failure.kind === 'stopped' ? 'Stopped' : failure.message} The conflict was left as it was before.`)];
+          next.messages = [...held.messages, ...guarded, say('engelbart', `${failure.kind === 'stopped' ? 'Stopped' : failure.message} The conflict was left as it was before.`)];
         } else if (failure && failure.kind === 'stopped' && stopping === 'reply' && held.queued) {
           next.status = 'running'; // cut short for the reply, which goes on at once in the same session: nothing to say
           next.messages = [...held.messages, ...notes];
@@ -720,6 +773,8 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
       track(() => projects.agentFinished(ctx, id));
       void diffsDone.then(() => sendDiff(projectId, task, false));
     } finally {
+      if (bridge) await bridge.close().catch(() => {});
+      if (keeping) await keeping.restore().catch(() => []);
       if (free) free();
       live.delete(id);
       settle();

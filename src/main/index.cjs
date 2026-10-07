@@ -640,7 +640,7 @@ if (!hasSingleInstanceLock) {
       git: createGit({ gitPath: () => { const record = gitRecord(); return record.status === 'ready' && record.path ? record.path : 'git'; } }),
       runner: process.env.ENGELBART_BUILD_FAKE === '1'
         ? createFakeBuildRunner({ delayMs: Number(process.env.ENGELBART_BUILD_FAKE_MS) || 900 }) // _MS: how long a fake turn takes
-        : createBuildRunner({ runDirectory: path.join(app.getPath('userData'), 'build-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-build'), tools }),
+        : createBuildRunner({ runDirectory: path.join(app.getPath('userData'), 'build-runs'), tools }), // Codex in the person's own CODEX_HOME (2026-10-07)
       readModels: () => readModels('build'),
       // Every window hears a Build's changes, and a quick task's reach the post-it it came from in every window showing
       // its project (post-its/views.cjs); what its run step opens goes to the window that asked (routeRun).
@@ -653,7 +653,9 @@ if (!hasSingleInstanceLock) {
       gitReady,
       // Cloning a private library repository with the GitHub sign-in (github is made further down, long before a clone).
       githubToken: () => github.token(),
-      libraryChanged, // the default repo's row made, a clone kept on its row: the sidebar reads the library again
+      libraryChanged, // the default repo's row made, a clone kept on its row, an agent's save_file: the sidebar reads the library again
+      inspectPdf, // a pdf an agent moves into Engelbart is read for whether it is a paper
+      keepDir: path.join(app.getPath('userData'), 'build-keep'), // a turn's library files kept aside (build/keep.cjs)
       // The run step after a turn that ends in review (build/run-step.cjs): Claude Code on the person's subscription finds
       // what the repository runs; Engelbart starts, checks and shows it (a UI in the Stage, a terminal program in a
       // terminal of its own, an app in its window). ENGELBART_RUN_STEP=off leaves it out; a scripted run
