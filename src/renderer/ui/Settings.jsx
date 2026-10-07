@@ -111,12 +111,12 @@ function TestData({ test, close }) {
   );
 }
 
-// Lucide's "sparkles" (the intelligence a model brings, as Linear and others draw AI) and "flask-conical", at the nav's
+// Lucide's "cpu" (the model; its "sparkles" until 2026-10-07, too busy at this size: David) and "flask-conical", at the nav's
 // size; the plug Connections' own icon was (its 16-unit path at this grid's scale). Lucide is ISC; its paths are pasted in.
 const icon = (paths) => (
   <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" style={{ flex: 'none', display: 'block' }}>{paths}</svg>
 );
-const MODEL_ICON = icon(<><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z" /><path d="M20 2v4" /><path d="M22 4h-4" /><circle cx="4" cy="20" r="2" /></>);
+const MODEL_ICON = icon(<><rect x="4" y="4" width="16" height="16" rx="2" /><rect x="8" y="8" width="8" height="8" rx="1" /><path d="M12 2v2M12 20v2M17 2v2M17 20v2M7 2v2M7 20v2M2 12h2M2 17h2M2 7h2M20 12h2M20 17h2M20 7h2" /></>);
 const PLUG_ICON = icon(<path d="M8.25 2.25v4.5M15.75 2.25v4.5M6 6.75h12v3a6 6 0 0 1-12 0zM12 15.75v3a3 3 0 0 1-3 3H6" />);
 const FLASK_ICON = icon(<><path d="M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-5.069-10.127A2 2 0 0 1 14 9.527V2" /><path d="M8.5 2h7" /><path d="M7 16h10" /></>);
 

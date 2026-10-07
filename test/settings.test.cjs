@@ -486,12 +486,13 @@ test('Escape: an open "…" menu first, then the search field\'s text, then the 
   assert.equal(escapeAction({}), 'close');
 });
 
-test('Model\'s icon is Lucide\'s sparkles, drawn as the others are (SR-07, A5)', () => {
+test('Model\'s icon is Lucide\'s cpu (sparkles until 2026-10-07), drawn as the others are (SR-07, A5)', () => {
   const { PAGES } = load('ui/Settings.jsx');
   const svg = (id) => renderToStaticMarkup(PAGES.find((page) => page.id === id).icon);
   const model = svg('model');
   assert.match(model, /^<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24"[^>]*stroke-width="1.75"/);
-  assert.ok(model.includes('M11.017 2.814a1 1 0 0 1 1.966 0') && model.includes('M20 2v4') && model.includes('<circle cx="4" cy="20" r="2"></circle>'));
+  assert.ok(model.includes('<rect x="4" y="4" width="16" height="16" rx="2"></rect>') && model.includes('<rect x="8" y="8" width="8" height="8" rx="1"></rect>') && model.includes('M12 2v2'));
+  assert.ok(!model.includes('M11.017 2.814'), 'not the sparkles');
   assert.ok(!model.includes('m3.3 7 8.7 5 8.7-5'), 'not the box');
   assert.ok(svg('connections').includes('M8.25 2.25v4.5'), 'Connections keeps its plug');
 });
