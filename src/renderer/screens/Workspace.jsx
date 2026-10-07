@@ -19,6 +19,7 @@ import { paperState, savePaper, repoState, tryRepo } from '../model/guide.js';
 import { buildLine, placeAnswer } from '../model/doc.js';
 import { openBeside, closePane } from '../model/panes.js';
 import { addDropped } from '../model/drop.js';
+import { addOrFind } from '../model/add-or-find.js';
 import { createDocSync } from '../model/doc-sync.js';
 import { askEntry, answerOf, continueLines, runningBack } from '../pdf/canvas.js';
 import { buildRequestOf } from '../../main/bart/question.cjs';
@@ -1164,7 +1165,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   /* --------------------------------------------------------------- sidebar */
   // Everything that brings a library item into this workspace links it (context, and off `removed`); adding makes the
-  // row first and is refused when the library already holds the thing (library.addItem). The row that arrives flashes.
+  // row first, or finds the library's own when it already holds the thing (addOrFind, MATH-67). The row that arrives flashes.
 
   // A GitHub repository that comes in starts its sandbox (src/main/sandbox); one that could not start is still added and
   // linked, and says why.
@@ -1179,7 +1180,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   const addInput = async (input, name, opts) => {
     if (!topic) throw new Error('Open a workspace first');
-    const row = await api.addLibraryItem(input, name ? { name } : undefined);
+    const row = await addOrFind(api, input, name ? { name } : undefined);
     await linkIds([row.id], opts);
     if (row.sandbox_error) onError(new Error(row.sandbox_error));
     return row;
@@ -1191,7 +1192,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     const problems = [];
     const ids = [];
     for (const file of paths || []) {
-      try { ids.push((await api.addLibraryItem(file)).id); } catch (error) { problems.push(errorMessage(error)); }
+      try { ids.push((await addOrFind(api, file)).id); } catch (error) { problems.push(errorMessage(error)); }
     }
     await linkIds(ids);
     return problems;
