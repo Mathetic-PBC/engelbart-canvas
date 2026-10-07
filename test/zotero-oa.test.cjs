@@ -75,7 +75,10 @@ async function world(t, works) {
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify(work));
   });
-  return { openalex, publisher, seen };
+  // Build 4: Semantic Scholar and arXiv after OpenAlex; here they know nothing (test/zotero-downloads.test.cjs has them).
+  const scholar = await serve(t, (req, res) => { seen.scholar = (seen.scholar || 0) + 1; if (works.hang) return; res.statusCode = 404; res.end('{}'); });
+  const arxiv = await serve(t, (req, res) => { seen.arxiv = (seen.arxiv || 0) + 1; if (works.hang) return; res.setHeader('content-type', 'application/atom+xml'); res.end('<feed></feed>'); });
+  return { openalex, publisher, seen, scholar, arxiv, sources: { api: openalex, semanticScholar: scholar, arxivApi: arxiv, arxiv }, syncSources: { openAlex: openalex, semanticScholar: scholar, arxivApi: arxiv, arxiv } };
 }
 const work = (best, ...rest) => (base) => ({ best_oa_location: best ? { pdf_url: `${base}${best}` } : null, locations: rest.map((p) => ({ pdf_url: p ? `${base}${p}` : null })) });
 
@@ -96,11 +99,11 @@ test('a free copy found: the first address that really is a pdf, saved under the
   const w = await world(t, { '10.1016/j.cell.2020.01.001': work('/blocked', '/blocked', '/fake.pdf', '/paper.pdf') });
   const told = [];
   const clock = Date.parse('2026-10-06T12:00:00Z');
-  const oa = createOpenAccess({ api: w.openalex, root, now: () => clock, onFinding: (key, busy) => told.push([key, busy]) });
+  const oa = createOpenAccess({ ...w.sources, root, now: () => clock, onFinding: (key, busy) => told.push([key, busy]) });
   const item = mirror.itemOf(root, 'SMITH001');
   const [found, again] = await Promise.all([oa.find(item), oa.find(item)]);
   const file = path.join(root, 'files', 'SMITH001', 'Smith 2020 Learning to Learn.pdf');
-  assert.deepEqual(found, { path: file, url: `${w.publisher}/paper.pdf`, foundAt: '2026-10-06T12:00:00.000Z', source: 'open access' });
+  assert.deepEqual(found, { path: file, url: `${w.publisher}/paper.pdf`, foundAt: '2026-10-06T12:00:00.000Z', source: 'open access', via: 'OpenAlex' });
   assert.deepEqual(again, found, 'asked twice at once: one lookup');
   assert.equal(w.seen.openalex.length, 1);
   assert.equal(w.seen.openalex[0].url, '/works/doi:10.1016/j.cell.2020.01.001');
@@ -135,19 +138,19 @@ test('no free copy: none, never an error, and the miss remembered for 7 days', a
   mirrorOf(root, tmp('storage'));
   const w = await world(t, { '10.1016/closed.1': work(null, null, '/blocked') });
   let clock = Date.parse('2026-10-06T12:00:00Z');
-  const oa = createOpenAccess({ api: w.openalex, root, now: () => clock });
+  const oa = createOpenAccess({ ...w.sources, root, now: () => clock });
   const item = mirror.itemOf(root, 'NOCOPY01');
   assert.equal(await oa.find(item), null);
   assert.equal(w.seen.openalex[0].url, '/works/doi:10.1016/closed.1', 'the DOI as OpenAlex takes it, from https://doi.org/…');
   const record = JSON.parse(fs.readFileSync(path.join(root, 'items', 'NOCOPY01', 'open-access.json'), 'utf8'));
-  assert.deepEqual(record, { v: 1, source: 'OpenAlex', found: false, checkedAt: '2026-10-06T12:00:00.000Z', until: '2026-10-13T12:00:00.000Z' });
+  assert.deepEqual(record, { v: 1, found: false, sources: ['OpenAlex', 'Semantic Scholar', 'arXiv'], checkedAt: '2026-10-06T12:00:00.000Z', until: '2026-10-13T12:00:00.000Z' });
   assert.ok(!fs.existsSync(path.join(root, 'files', 'NOCOPY01')), 'nothing saved');
 
   clock += 6 * DAY;
   assert.equal(await oa.find(item), null);
   assert.equal(w.seen.openalex.length, 1, 'within 7 days: not asked again');
   // A new OpenAlex (another launch) reads the miss from disk.
-  assert.equal(await createOpenAccess({ api: w.openalex, root, now: () => clock }).find(item), null);
+  assert.equal(await createOpenAccess({ ...w.sources, root, now: () => clock }).find(item), null);
   assert.equal(w.seen.openalex.length, 1);
 
   clock = Date.parse('2026-10-06T12:00:00Z') + MISS_MS + 1;
@@ -165,14 +168,14 @@ test('a timeout: a pdf address that hangs is passed over for the next; OpenAlex 
   mirrorOf(root, tmp('storage'));
   const w = await world(t, { '10.1016/j.cell.2020.01.001': work('/hang', '/paper.pdf') });
   let clock = Date.parse('2026-10-06T12:00:00Z');
-  const oa = createOpenAccess({ api: w.openalex, root, now: () => clock, timeoutMs: 150 });
+  const oa = createOpenAccess({ ...w.sources, root, now: () => clock, timeoutMs: 150 });
   const started = Date.now();
   const found = await oa.find(mirror.itemOf(root, 'SMITH001'));
   assert.equal(found.url, `${w.publisher}/paper.pdf`);
   assert.ok(Date.now() - started < 3000, 'the hanging address given up on its timeout');
 
   const hanging = await world(t, { hang: true });
-  const stuck = createOpenAccess({ api: hanging.openalex, root, now: () => clock, timeoutMs: 150 });
+  const stuck = createOpenAccess({ ...hanging.sources, root, now: () => clock, timeoutMs: 150 });
   const item = mirror.itemOf(root, 'NOCOPY01');
   assert.equal(await stuck.find(item), null, 'no pdf, no error');
   assert.ok(!fs.existsSync(path.join(root, 'items', 'NOCOPY01', 'open-access.json')), 'not remembered on disk: offline costs no week');
@@ -190,7 +193,7 @@ test('the chip: a pdf (its own or a free copy) opens in the paper viewer, no pdf
   const w = await world(t, { '10.1016/j.cell.2020.01.001': work('/paper.pdf') });
   const zoteroApi = await serve(t, (req, res) => { res.statusCode = 404; res.end('{}'); }); // Zotero has no copy of any file
   const finding = [];
-  const library = createZoteroSync({ api: zoteroApi, root, openAlex: w.openalex, account: () => ({ userID: USER_ID, key: KEY }), sleep: async () => {}, storageDir: storage, onFinding: (key, busy) => finding.push([key, busy]) });
+  const library = createZoteroSync({ api: zoteroApi, root, ...w.syncSources, account: () => ({ userID: USER_ID, key: KEY }), sleep: async () => {}, storageDir: storage, onFinding: (key, busy) => finding.push([key, busy]) });
   const zotero = { status: () => ({ configured: true, connected: true, username: 'r', userID: USER_ID, persisted: true, pending: null, error: '' }) };
   const handlers = new Map();
   registerEngelbartIpc({ store: {}, ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, trustedHandler: (fn) => async (event, ...args) => fn(...args), zotero, zoteroLibrary: library });
@@ -255,7 +258,7 @@ test('<zotero_item> with the free copy: its pdf path with source="open access", 
   mirrorOf(root, storage);
   const w = await world(t, { '10.1016/j.cell.2020.01.001': work('/paper.pdf') });
   const clock = Date.parse('2026-10-06T12:00:00Z');
-  const library = createZoteroSync({ api: 'http://127.0.0.1:9', root, openAlex: w.openalex, account: () => ({ userID: USER_ID, key: KEY }), sleep: async () => {}, storageDir: storage, now: () => clock });
+  const library = createZoteroSync({ api: 'http://127.0.0.1:9', root, ...w.syncSources, account: () => ({ userID: USER_ID, key: KEY }), sleep: async () => {}, storageDir: storage, now: () => clock });
   const { zoteroMention } = await doc();
   const source = { find: () => null, image: () => null, zotero: (key, name) => mirror.itemBlock(root, key, name, { storageDir: storage, download: library.download, openAccess: library.openAccess }) };
   const seen = new Set();
@@ -271,7 +274,8 @@ test('<zotero_item> with the free copy: its pdf path with source="open access", 
   const own = await mirror.itemBlock(root, 'LEE00001', 'Own Copy', { storageDir: storage, openAccess: library.openAccess });
   assert.ok(own.lines.includes(`attachment: ${path.join(storage, 'ATTLEE01', 'lee.pdf')} (application/pdf)`));
   assert.ok(!own.lines.some((line) => line.startsWith('pdf:')));
-  assert.match(BART_SYSTEM_PROMPT, /"pdf:" line with source="open access"/);
+  assert.match(BART_SYSTEM_PROMPT, /"pdf:" line when the item has no file of its own/);
+  assert.match(BART_SYSTEM_PROMPT, /source="open access" for a free copy/);
   assert.match(BART_SYSTEM_PROMPT, /When the question needs more than the abstract/);
 });
 
@@ -287,7 +291,7 @@ test('a sync never looks for free copies, and nothing is written back to Zotero'
     res.end('[]');
   });
   const root = path.join(tmp('nosync'), '.zotero');
-  const library = createZoteroSync({ api: zoteroApi, root, openAlex: w.openalex, account: () => ({ userID: USER_ID, key: KEY }), sleep: async () => {} });
+  const library = createZoteroSync({ api: zoteroApi, root, ...w.syncSources, account: () => ({ userID: USER_ID, key: KEY }), sleep: async () => {} });
   assert.equal((await library.sync()).items, 1);
   assert.equal(w.seen.openalex.length, 0, 'not during a sync');
   assert.ok((await library.openAccess(mirror.itemOf(root, 'DOI00001'))).path, 'only when asked');

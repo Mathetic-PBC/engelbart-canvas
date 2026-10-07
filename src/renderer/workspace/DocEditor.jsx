@@ -107,6 +107,11 @@ const mentionToken = (r) => (r.kind === 'workspace' ? wsMention(r.name, r.id)
   : r.kind === 'entry' && r.zotero ? zoteroMention(r.name, r.zotero)
     : (r.kind === 'entry' || r.kind === 'self') && r.rel ? fileMention(r.kind === 'self' ? r.entryName : r.name, r.row.id, r.rel)
       : `@[${r.name}]`);
+// The Zotero item's chip a drag of files is over (MATH-65 build 4), or null.
+const zoteroChipFor = (e) => {
+  const types = [...((e && e.dataTransfer && e.dataTransfer.types) || [])];
+  return types.includes('Files') && e.target && e.target.closest ? e.target.closest('[data-zotero]') : null;
+};
 const pickedRow = (r) => (r.kind === 'entry' && r.zotero ? null : (r.kind === 'entry' || r.kind === 'self') && r.row ? { kind: 'item', key: r.row.id, row: r.row, name: r.row.name } : r);
 // The mention token of `text` that ends at `at` (`before`) or starts there → [start, end], or null: the line's own
 // tokens (doc.js INLINE), so a mention inside bold or a link's text is not one here.
@@ -156,7 +161,12 @@ const CARD_CSS = '.bart-ic{display:inline-flex;align-items:center;justify-conten
   // The mention whose note is open in the pane beside (MATH-23, markBeside).
   + '[data-mention][data-beside]{background:#e8f0fe;border-radius:3px}'
   // A Zotero item's chip while a free copy of its paper is looked for (MATH-65 build 3, markFinding).
-  + '[data-zotero][data-finding]::after{content:" · Finding a free copy…";color:#8f8f8f;font-style:italic}';
+  + '[data-zotero][data-finding]::after{content:" · Finding a free copy…";color:#8f8f8f;font-style:italic}'
+  // Build 4: opened in the browser, its pdf waited for in the Downloads folder; and a file dragged over it.
+  + '[data-zotero][data-waiting]::after{content:" · Waiting for your download…";color:#8f8f8f;font-style:italic}'
+  + '[data-zotero][data-drop]{background:#e8f0fe;border-radius:3px;box-shadow:0 0 0 1px #9bb6e8}';
+// A Zotero chip's hover text while its paper's download is waited for (MATH-65 build 4).
+const WAITING_TIP = "Opened in your browser. Download the PDF and it'll open here.";
 // Lucide's drawings at the design's weight: 16px, 1.5px stroke, round caps.
 // A map card's three lists (main/bart/card.cjs `map`).
 const MAP_LABELS = { settled: 'Seems settled', open: 'Seems open', untouched: 'Not touched yet' };
@@ -281,8 +291,9 @@ export default class DocEditor extends React.Component {
       // Nothing dropped in the editor is the browser's to place. A drop into one of its fields stays refused (2026-10-05).
       // The page around the text takes a drop too (2026-10-05: let go in the margin or below the last line, a picture
       // from Finder flew back): it goes in at the nearest place in the text (dropPoint). The page's own fields are theirs.
-      dragover: (e) => { if (inEd(e) || onPage(e)) e.preventDefault(); },
-      drop: (e) => { if (!inEd(e) && !onPage(e)) return; e.preventDefault(); if (!inFollow(e)) this.editorDrop(e); },
+      dragover: (e) => { if (inEd(e) || onPage(e)) e.preventDefault(); this.markDropChip(inEd(e) ? zoteroChipFor(e) : null); },
+      dragleave: (e) => { if (this.dropChip && !(e.relatedTarget && this.dropChip.contains(e.relatedTarget))) this.markDropChip(null); },
+      drop: (e) => { this.markDropChip(null); if (!inEd(e) && !onPage(e)) return; e.preventDefault(); if (!inFollow(e)) this.editorDrop(e); },
       // Switching to another app blurs the page too; that is not leaving the line, and redrawing it would drop a selection.
       // Leaving it otherwise puts back a question being edited (2026-10-03).
       focusout: (e) => { if (inEd(e) && document.hasFocus() && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-mention-menu]'))) { this.cancelEdit(); this.setState({ activeLine: null, mention: null }); } },
@@ -370,14 +381,26 @@ export default class DocEditor extends React.Component {
     this.markFinding();
   }
   // A Zotero item's chips while main looks for a free copy of its paper (MATH-65 build 3; `zoteroFinding`, a Set of item
-  // keys) say "Finding a free copy…". On the page only, as markBeside's marks are.
+  // keys) say "Finding a free copy…"; while main waits for it in the Downloads folder (build 4, `zoteroWaiting`), "Waiting
+  // for your download…", with hover text saying why. On the page only, as markBeside's marks are.
   markFinding() {
     const ed = this.editorEl(); if (!ed || !ed.querySelectorAll) return;
-    const finding = this.props.zoteroFinding;
+    const finding = this.props.zoteroFinding, waiting = this.props.zoteroWaiting;
     for (const m of ed.querySelectorAll('[data-zotero]')) {
       const on = !!finding && finding.has(m.dataset.zotero);
+      const wait = !on && !!waiting && waiting.has(m.dataset.zotero);
       if (on !== m.hasAttribute('data-finding')) m.toggleAttribute('data-finding', on);
+      if (wait !== m.hasAttribute('data-waiting')) {
+        m.toggleAttribute('data-waiting', wait);
+        if (typeof m.setAttribute === 'function') m.setAttribute('title', wait ? WAITING_TIP : 'Zotero');
+      }
     }
+  }
+  // A file dragged over a Zotero item's chip marks it (build 4): let go there, it becomes the item's pdf (editorDrop).
+  markDropChip(chip) {
+    if (this.dropChip && this.dropChip !== chip && this.dropChip.removeAttribute) this.dropChip.removeAttribute('data-drop');
+    if (chip && chip !== this.dropChip) chip.setAttribute('data-drop', '');
+    this.dropChip = chip || null;
   }
   // Escape with the model selector or a mention's card open shuts it, and that is all it does: it is marked as used, so the
   // window's Escape (leaving the document's full screen, closing the workspace) leaves it alone. → whether it did
@@ -1753,6 +1776,17 @@ export default class DocEditor extends React.Component {
   // and everything else (and every picture, in a document that is read only) to props.onDropItems.
   editorDrop(e) {
     if (!carriesDrop(e)) return;
+    // Let go on a Zotero item's chip (MATH-65 build 4), a file becomes the item's pdf: main copies it in and refuses one
+    // that is not a pdf. The first pdf of what was dropped, else the first file.
+    const chip = zoteroChipFor(e);
+    if (chip && this.props.onDropOnZotero) {
+      const where = [...((e.dataTransfer && e.dataTransfer.files) || [])].map((file) => { try { return this.props.pathForFile ? this.props.pathForFile(file) : null; } catch { return null; } }).filter(Boolean);
+      const file = where.find((p) => /\.pdf$/i.test(p)) || where[0];
+      if (file) {
+        Promise.resolve(this.props.onDropOnZotero({ key: chip.dataset.zotero, name: chip.dataset.mention }, file)).catch((error) => { if (this.props.onError) this.props.onError(error); });
+        return;
+      }
+    }
     const files = [...((e.dataTransfer && e.dataTransfer.files) || [])];
     const items = readDrop(e.dataTransfer, this.props.pathForFile);
     const pictures = !this.props.readOnly && this.props.onPasteImage ? items.filter(isPastable) : [];

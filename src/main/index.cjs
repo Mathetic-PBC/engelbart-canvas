@@ -811,6 +811,10 @@ if (!hasSingleInstanceLock) {
     // over 2 minutes ago (one at a time; an unchanged library is one 304). A free copy of an item with no pdf is looked
     // for through OpenAlex (zotero/oa.cjs) when it is mentioned or its chip clicked; the chip is told while it runs.
     // ENGELBART_OPENALEX_API names a fake OpenAlex, for scripted runs only.
+    // Build 4: Semantic Scholar and arXiv after OpenAlex (ENGELBART_SEMANTIC_SCHOLAR_API, ENGELBART_ARXIV_API and
+    // ENGELBART_ARXIV name fakes, for scripted runs only). A paper whose chip opened its page in the browser has its pdf
+    // waited for in the Downloads folder for 10 minutes (zotero/downloads.cjs); one that is the paper is copied in, opened
+    // in the Stage of the window focused last, and the app comes to the front. The waits end when the app quits.
     zoteroLibrary = createZoteroSync({
       root: () => zoteroMirrorDir(store.config().dataRoot),
       account: () => { const key = zotero.key(); return key ? { userID: zotero.status().userID, key } : null; },
@@ -819,7 +823,19 @@ if (!hasSingleInstanceLock) {
       ...(process.env.ENGELBART_ZOTERO_API ? { api: process.env.ENGELBART_ZOTERO_API } : {}),
       ...(process.env.ENGELBART_ZOTERO_STORAGE ? { storageDir: process.env.ENGELBART_ZOTERO_STORAGE } : {}),
       ...(process.env.ENGELBART_OPENALEX_API ? { openAlex: process.env.ENGELBART_OPENALEX_API } : {}),
+      ...(process.env.ENGELBART_SEMANTIC_SCHOLAR_API ? { semanticScholar: process.env.ENGELBART_SEMANTIC_SCHOLAR_API } : {}),
+      ...(process.env.ENGELBART_ARXIV_API ? { arxivApi: process.env.ENGELBART_ARXIV_API } : {}),
+      ...(process.env.ENGELBART_ARXIV ? { arxiv: process.env.ENGELBART_ARXIV } : {}),
+      downloadsDir: () => app.getPath('downloads'),
+      onWaiting: (key, waiting) => sendToWindow('engelbart:zotero-waiting', { key, waiting }),
+      onDownloaded: (key, copy) => {
+        const ctx = focusedWindow();
+        if (ctx && !ctx.win.isDestroyed()) windows.send(ctx, 'engelbart:zotero-downloaded', { key, path: copy.path });
+        showWindow();
+        if (process.platform === 'darwin') app.focus({ steal: true });
+      },
     });
+    app.on('will-quit', () => zoteroLibrary.stopWatching());
     const zoteroStatus = () => { const status = zotero.status(); return { ...status, sync: status.connected ? zoteroLibrary.status() : null }; };
     const zoteroConnected = () => { try { return !!zotero.key(); } catch { return false; } };
     setTimeout(() => { if (zoteroConnected()) void zoteroLibrary.autoSync().catch(() => {}); }, 4000);

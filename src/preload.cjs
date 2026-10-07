@@ -95,6 +95,13 @@ const engelbartAPI = Object.freeze({
   onZotero: (callback) => subscribe('engelbart:zotero', callback),
   // Build 3: { key, finding } as a free copy of an item is looked for (the chip says "Finding a free copy…") and after.
   onZoteroFinding: (callback) => subscribe('engelbart:zotero-finding', callback),
+  // Build 4: the items whose pdf is waited for in the Downloads folder (a chip opened the paper in the browser): their
+  // keys now, then { key, waiting } on each change; { key, path } once the download was the paper, to open; and
+  // zoteroAttach(key, path) to make a pdf dropped on a chip the item's ({ path, source } or { error }).
+  zoteroWaiting: invoke('zotero-waiting'),
+  onZoteroWaiting: (callback) => subscribe('engelbart:zotero-waiting', callback),
+  onZoteroDownloaded: (callback) => subscribe('engelbart:zotero-downloaded', callback),
+  zoteroAttach: invoke('zotero-attach'),
   // ⌘J pressed while a Browser page has the keyboard (src/main/browser/views.cjs); the app's own pages see the key themselves.
   onNextWorkspace: (callback) => subscribe('engelbart:next-workspace', callback),
   listProjects: invoke('list-projects'),

@@ -9,6 +9,9 @@
 // Build 3: an item with none of these may have a free copy (./oa.cjs, `openAccess`): found through OpenAlex when it is
 // mentioned or its chip is clicked, kept in files/<itemKey>/. A chip opens a pdf in the paper viewer and anything without
 // one in the default browser (its DOI's page, else its URL), never in the Stage, where publishers' bot checks block it.
+// Build 4: more free sources (Semantic Scholar, arXiv), and a copy the person downloaded in their browser after a chip
+// opened the item there (./downloads.cjs) or dropped on its chip: kept in files/<itemKey>/ as a found copy is, and read
+// the same way (`source` says which).
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -149,10 +152,14 @@ async function resolveAttachment(root, item, { storageDir = defaultStorage(), do
   return { path: file, source: 'downloaded', attachment };
 }
 
+// A copy kept for an item with no file of its own (./oa.cjs keptCopy's `source`): found free, or brought by the person.
+const KEPT = new Set(['open access', 'downloaded in browser', 'added by hand']);
+
 /**
- * The pdf (or other file) an item is read from → { path, source: 'linked' | 'storage' | 'downloaded' | 'open access',
- * attachment?, url?, foundAt? }, or { failed } when it has none: its own attachment first (resolveAttachment), else, when
- * it has none that can be had, a free copy (`openAccess(item)`, sync.cjs's, → ./oa.cjs find's answer or null).
+ * The pdf (or other file) an item is read from → { path, source: 'linked' | 'storage' | 'downloaded' | 'open access' |
+ * 'downloaded in browser' | 'added by hand', attachment?, url?, foundAt?, via?, from? }, or { failed } when it has none:
+ * its own attachment first (resolveAttachment), else, when it has none that can be had, the copy kept for it
+ * (`openAccess(item)`, sync.cjs's, → ./oa.cjs find's answer or null).
  */
 async function resolvePdf(root, item, options = {}) {
   let failed = '';
@@ -162,7 +169,7 @@ async function resolvePdf(root, item, options = {}) {
   } catch (error) { failed = error && error.message ? error.message : 'The file could not be downloaded.'; }
   let free = null;
   try { free = typeof options.openAccess === 'function' ? await options.openAccess(item) : null; } catch { free = null; }
-  if (free && free.path) return { path: free.path, source: 'open access', url: free.url || '', foundAt: free.foundAt || '' };
+  if (free && free.path) return { path: free.path, source: KEPT.has(free.source) ? free.source : 'open access', url: free.url || '', foundAt: free.foundAt || '', via: free.via || 'OpenAlex', ...(free.from ? { from: free.from } : {}) };
   return { failed };
 }
 
@@ -205,8 +212,8 @@ async function itemBlock(root, key, name = '', options = {}) {
   if (!item) return { lines: [`<zotero_item key="${attr(key, 40)}" title="${attr(name)}" missing="true" />`], file: '', missing: true };
   const dir = path.join(root, 'items', item.key);
   const resolved = await resolvePdf(root, item, options);
-  const found = resolved.path && resolved.source !== 'open access' ? resolved : null;
-  const free = resolved.path && resolved.source === 'open access' ? resolved : null;
+  const found = resolved.path && !KEPT.has(resolved.source) ? resolved : null;
+  const free = resolved.path && KEPT.has(resolved.source) ? resolved : null;
   const failed = resolved.failed || '';
   const openable = openableOf(item);
   const texts = (item.attachments || []).map((a) => path.join(dir, `fulltext-${a.key}.txt`)).filter(exists);
@@ -223,7 +230,7 @@ async function itemBlock(root, key, name = '', options = {}) {
     found ? `attachment: ${found.path} (${found.attachment.contentType || 'file'})`
       : openable ? `attachment: ${openable.filename || openable.title || openable.key} (${openable.contentType || 'file'}), not on this Mac${failed ? `: ${failed}` : ''}`
         : 'attachment: none',
-    ...(free ? [`pdf: ${free.path} (source="open access": found through OpenAlex${free.url ? ` at ${free.url}` : ''}${free.foundAt ? ` on ${free.foundAt.slice(0, 10)}` : ''})`] : []),
+    ...(free ? [`pdf: ${free.path} (${keptNote(free)})`] : []),
     ...texts.map((file) => `full text: ${file}`),
     `folder: ${dir}`,
   ];
@@ -261,6 +268,14 @@ async function itemBlock(root, key, name = '', options = {}) {
   return { lines, file: resolved.path || '', missing: false };
 }
 
+/** Where a kept copy came from, for its "pdf:" line: source="…" and in words. */
+function keptNote(copy) {
+  const on = copy.foundAt ? ` on ${copy.foundAt.slice(0, 10)}` : '';
+  if (copy.source === 'downloaded in browser') return `source="downloaded in browser": the person downloaded it in their browser${on}, after Engelbart opened the item's page there`;
+  if (copy.source === 'added by hand') return `source="added by hand": the person chose this file as the item's pdf${on}`;
+  return `source="open access": found through ${copy.via || 'OpenAlex'}${copy.url ? ` at ${copy.url}` : ''}${on}`;
+}
+
 function collectionNames(root, item) {
   const byKey = new Map(readCollections(root).map((c) => [c.key, c]));
   return (item.collections || []).map((key) => byKey.get(key)).filter(Boolean).map((c) => c.path || c.name);
@@ -276,4 +291,4 @@ function pointerLine(root) {
   return `zotero library: ${root} (${items.length} items; items.json, collections.json, library.bib, and items/<key>/ with item.bib, children.json and fulltext-*.txt)`;
 }
 
-module.exports = { mirrorDir, defaultStorage, hasMirror, readItems, itemOf, authorsOf, listLevel, openableOf, localFile, resolveAttachment, resolvePdf, pageOf, openTarget, itemBlock, pointerLine, SLASH, KEY_RE };
+module.exports = { KEPT, mirrorDir, defaultStorage, hasMirror, readItems, itemOf, authorsOf, listLevel, openableOf, localFile, resolveAttachment, resolvePdf, pageOf, openTarget, itemBlock, pointerLine, SLASH, KEY_RE };

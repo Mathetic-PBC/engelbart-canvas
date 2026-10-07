@@ -24,11 +24,16 @@
 // the last sync was over 2 minutes ago (scheduleSyncs; never two at once, autoSync). A later sync's first request sends
 // If-Modified-Since-Version, so an unchanged library costs one 304. An item with no pdf of its own may have a free copy
 // found for it (./oa.cjs, `openAccess`), when it is mentioned or opened, never here in a sync.
+// Build 4: an item whose chip opened its page in the default browser has its pdf waited for in the Downloads folder
+// (./downloads.cjs, `awaitDownload`), and a pdf dropped on its chip is made its pdf (`attach`). Each is copied into
+// files/<itemKey>/ as a found copy is (./oa.cjs saveCopy); the person's own file is only ever read.
 
 const fs = require('node:fs');
 const path = require('node:path');
 const { API } = require('./connection.cjs');
-const { createOpenAccess, OPENALEX } = require('./oa.cjs');
+const { createOpenAccess, saveCopy, readPdfFile, OPENALEX, SEMANTIC_SCHOLAR, ARXIV_API, ARXIV } = require('./oa.cjs');
+const { createDownloadWatch, paperLike, WAIT_MS, POLL_MS } = require('./downloads.cjs');
+const { itemOf } = require('./mirror.cjs');
 
 const PAGE = 100;
 const KEY_BATCH = 50; // itemKey= takes at most 50 keys
@@ -271,11 +276,14 @@ const defaultSleep = (ms, signal) => new Promise((resolve, reject) => {
  * `root()`: the mirror's folder (<dataRoot>/.zotero), followed as the data root changes. `account()`: { userID, key } of
  * whoever is signed in, or null (connection.cjs status().userID and key()). `sleep(ms, signal)`: how waits are made
  * (the tests' records them). `onChange(status)`: after each change of status(). `storageDir`: Zotero's storage folder on
- * this Mac, when not ~/Zotero/storage (./mirror.cjs). `openAlex`: OpenAlex's address (a fake one in the tests), and
- * `onFinding(itemKey, busy)` told as a free copy is looked for (./oa.cjs). → { sync, autoSync, lastSyncAt, status, clear,
- * download, openAccess, root, storageDir }
+ * this Mac, when not ~/Zotero/storage (./mirror.cjs). `openAlex`, `semanticScholar`, `arxivApi`, `arxiv`: the free
+ * sources' addresses (fake ones in the tests), and `onFinding(itemKey, busy)` told as a free copy is looked for
+ * (./oa.cjs). Build 4: `downloadsDir()` the Downloads folder watched after a chip opened a paper in the browser,
+ * `onWaiting(itemKey, on)` as a wait starts and ends, `onDownloaded(itemKey, copy)` when a download was the paper and is
+ * kept (./downloads.cjs; `readPdfText`, `downloadWaitMs` and `downloadPollMs` for the tests). → { sync, autoSync,
+ * lastSyncAt, status, clear, download, openAccess, awaitDownload, attach, waitingFor, stopWatching, root, storageDir }
  */
-function createZoteroSync({ fetch = globalThis.fetch, api = API, root, account, sleep = defaultSleep, onChange = () => {}, now = () => Date.now(), storageDir = undefined, openAlex = OPENALEX, openAccessTimeoutMs = undefined, onFinding = () => {} } = {}) {
+function createZoteroSync({ fetch = globalThis.fetch, api = API, root, account, sleep = defaultSleep, onChange = () => {}, now = () => Date.now(), storageDir = undefined, openAlex = OPENALEX, semanticScholar = SEMANTIC_SCHOLAR, arxivApi = ARXIV_API, arxiv = ARXIV, openAccessTimeoutMs = undefined, onFinding = () => {}, downloadsDir = null, onWaiting = () => {}, onDownloaded = () => {}, readPdfText = undefined, downloadWaitMs = WAIT_MS, downloadPollMs = POLL_MS } = {}) {
   let running = null; // the sync under way
   let finishedAt = 0; // when the last sync ended, ms (0: none since launch; state.json's syncedAt then)
   let again = false; // asked for while one ran: one more after it
@@ -514,15 +522,53 @@ function createZoteroSync({ fetch = globalThis.fetch, api = API, root, account, 
     again = false;
     finishedAt = 0;
     state = { state: 'idle', error: '' };
+    if (downloads) downloads.stopAll();
     const at = rootNow();
     if (at) { try { fs.rmSync(at, { recursive: true, force: true }); } catch { /* already gone */ } }
     changed();
   }
 
-  // A free copy of an item with no pdf of its own (./oa.cjs): OpenAlex, never Zotero, and never the key.
-  const oa = createOpenAccess({ fetch, api: openAlex, root: rootNow, now, onFinding, ...(openAccessTimeoutMs ? { timeoutMs: openAccessTimeoutMs } : {}) });
+  // A free copy of an item with no pdf of its own (./oa.cjs): OpenAlex, Semantic Scholar, arXiv, never Zotero, and
+  // never the key.
+  const oa = createOpenAccess({ fetch, api: openAlex, semanticScholar, arxivApi, arxiv, root: rootNow, now, onFinding, ...(openAccessTimeoutMs ? { timeoutMs: openAccessTimeoutMs } : {}) });
 
-  return { sync, autoSync, lastSyncAt, status, clear, download, openAccess: oa.find, root: rootNow, storageDir };
+  // Build 4: the pdf the person downloads in their browser, copied in when it is the paper (./downloads.cjs).
+  const downloads = downloadsDir ? createDownloadWatch({
+    dir: downloadsDir, onWaiting, waitMs: downloadWaitMs, pollMs: downloadPollMs, ...(readPdfText ? { readText: readPdfText } : {}),
+    onMatch: (item, file) => {
+      const at = rootNow();
+      if (!at) return false;
+      const copy = saveCopy(at, item, readPdfFile(file), { source: 'downloaded in browser', from: file, at: now() });
+      if (copy) { try { onDownloaded(item.key, copy); } catch { /* a listener never undoes a copy */ } }
+      return !!copy;
+    },
+  }) : null;
+
+  /** Waits for item `key`'s pdf in the Downloads folder (its chip opened its page in the browser) → whether it does. */
+  function awaitDownload(key) {
+    const at = rootNow();
+    const item = at && downloads ? itemOf(at, key) : null;
+    return !!item && paperLike(item) && downloads.wait(item);
+  }
+
+  /**
+   * Makes `file` (a pdf the person dropped on the item's chip) item `key`'s pdf: copied in, never moved, as 'added by
+   * hand'. No title check: they chose it. → oa.cjs keptCopy's answer; throws with words when it is not a pdf.
+   */
+  function attach(key, file) {
+    const at = rootNow();
+    const item = at ? itemOf(at, key) : null;
+    if (!item) throw new ZoteroSyncError('This item is no longer in your Zotero library.', 'missing');
+    const copy = saveCopy(at, item, readPdfFile(file), { source: 'added by hand', from: file, at: now() });
+    if (downloads) downloads.stop(key);
+    return copy;
+  }
+
+  return {
+    sync, autoSync, lastSyncAt, status, clear, download, openAccess: oa.find, awaitDownload, attach,
+    waitingFor: () => (downloads ? downloads.waiting() : []), stopWatching: () => { if (downloads) downloads.stopAll(); },
+    root: rootNow, storageDir,
+  };
 }
 
 /**
