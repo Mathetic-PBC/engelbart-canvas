@@ -78,7 +78,7 @@ test('release-site: release/upload-linux/ has the AppImage, its feed, install-li
     assert.equal(install.replace(/^# >>> linux[^\n]*\n[\s\S]*?^# <<< linux\n/m, ''), before);
     assert.match(install, /if \[ "\$\(uname -s\)" = Linux \]; then\n {2}linux_installer=\$\(curl -fsSL "\$\{DOWNLOADS\}install-linux\.sh/);
     assert.ok(install.indexOf('# <<< linux') < install.indexOf('= Darwin ] || fail'));
-    assert.equal(fs.statSync(path.join(out, 'install.sh')).mode & 0o111, 0o111);
+    if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(out, 'install.sh')).mode & 0o111, 0o111); // POSIX modes
     // The Mac's sums: only install.sh's line changes, to the new file's.
     const sums = fs.readFileSync(path.join(out, 'SHA256SUMS.txt'), 'utf8');
     assert.equal(sums, `${'a'.repeat(64)}  Engelbart-0.1.10-arm64.dmg\n${crypto.createHash('sha256').update(install).digest('hex')}  install.sh\n`);
@@ -241,9 +241,12 @@ test('install-linux.sh: no Git, an ARM computer, a bad checksum and an unreachab
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-linux-refuse-'));
   const home = path.join(dir, 'home');
   fs.mkdirSync(home);
-  const folder = ciFolder(path.join(dir, 'site'), { sha512: crypto.createHash('sha512').update('something else').digest('base64') });
+  const folder = ciFolder(path.join(dir, 'site'));
   const { writeLinuxSite } = await site();
-  writeLinuxSite({ root: ROOT, from: folder, version: VERSION, downloads: DOWNLOADS, out: path.join(dir, 'served') });
+  const served = writeLinuxSite({ root: ROOT, from: folder, version: VERSION, downloads: DOWNLOADS, out: path.join(dir, 'served') });
+  // The feed as served names another file's checksum (the site writer refuses such a folder itself).
+  const feed = path.join(served, 'latest-linux.yml');
+  fs.writeFileSync(feed, fs.readFileSync(feed, 'utf8').replace(/sha512: \S+/g, `sha512: ${crypto.createHash('sha512').update('something else').digest('base64')}`));
   const server = await serve(path.join(dir, 'served'));
   const env = { PATH: process.env.PATH, HOME: home, LANG: 'C.UTF-8', ENGELBART_DOWNLOADS: server.url, ENGELBART_NO_OPEN: '1', ENGELBART_APPARMOR: 'no' };
   const run = (extra) => new Promise((resolve) => {

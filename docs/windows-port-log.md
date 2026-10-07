@@ -55,19 +55,36 @@ installer offers (with sudo) an AppArmor profile, as Chrome's package does, befo
 
 ### Tests skipped on Linux
 
-| Test file | Test | Reason |
-|---|---|---|
+None added for Linux. The 14 tests that skip on ubuntu-latest (Linux run 1, 896d930) skip by their own conditions,
+already in the code, because what they test is macOS's or Windows' alone:
 
-(Filled from the first green Linux run.)
+| Test file | Tests | Their condition |
+|---|---|---|
+| bundled-git.test.cjs | findBundledGit …; the real one: Build's git commands … | macOS only: Engelbart's own Git ships for the Mac alone; the second needs `fetch-git.mjs` |
+| install-mac.test.cjs | the 2 tests of install-mac.sh run by the app | macOS only (codesign, ditto, an .app) |
+| pretend-mac tests | the 8 "pretend Mac" scenarios | macOS only (scenarios of a Mac's login shell and installers) |
+| release-windows.test.cjs | install-windows.ps1: a download that does not match … | runs Windows PowerShell |
+| attachments test | macOS: a real docx through textutil, a real heic through sips | textutil and sips are macOS's |
+
+New tests that are Linux's or POSIX's own (release-linux.test.cjs): the 2 that run install-linux.sh skip off Linux
+(bash, GNU coreutils, /proc); the launcher's test skips on Windows (a POSIX shell script). On Windows that makes 41
+skips: the 38 before and these 3.
 
 ### Status
 
-- 2026-10-07: written; Mac tests pass locally. Pushing for the first CI run.
+- 2026-10-07, Linux run 1 (896d930, https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37696023134):
+  macOS ✓ (1398 tests). Linux npm test: 1398 tests, 1383 pass, 14 skipped, 1 failed — the 6 earlier failures pass
+  (zsh installed; /proc for a leftover's folder), the apt step finished; the failure was the new test's own: it wrote
+  its bad-checksum folder with the site writer, which refuses one (now the served feed is changed afterwards).
+  Windows: 1401 tests, 1359 pass, 41 skipped, 1 failed: the new site test checked install.sh's execute bits, which
+  Windows has not (now POSIX only, as zotero's 0600). The steps after npm test did not run on either.
+- 2026-10-07: written; Mac tests pass locally. Pushed for the first CI run.
 
 ### CI runs
 
 | Commit | Run | macOS | Windows | Linux | Notes |
 |---|---|---|---|---|---|
+| 896d930 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37696023134 | ✓ | ✗ 1 test | ✗ 1 test | both the new test's own; the 6 old Linux failures pass |
 
 ## One-command install
 
