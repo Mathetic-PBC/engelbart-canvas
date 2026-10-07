@@ -3,6 +3,29 @@
 The run that follows docs/windows-port.md, on branch `windows-port` (cut from `hudsons-feedback` at 22d738c).
 Newest status first; the sections below are kept current.
 
+## Catch-up to 0.1.10
+
+Goal (2026-10-07): bring `windows-port` up to `hudsons-feedback` f53c66d (Release 0.1.10: 87 commits since 22d738c —
+Zotero and Overleaf connections, web boxes, PDF canvas changes, Settings, Stage cookie encryption and more), keep the
+Windows port and every hudsons-feedback change, then make what the new code needs on Windows work, per
+docs/windows-port.md. Done when CI passes on windows-latest and macos-latest for one commit containing f53c66d.
+
+### Status
+
+- 2026-10-07: merged origin/hudsons-feedback into windows-port (19df8f6). Conflicts: `src/main/index.cjs` (both
+  sides' imports kept), `DocEditor.jsx` and `doc-editor-answer-line.test.cjs` (this side had only the cherry-picked
+  f2d0ac0, so hudsons-feedback's versions). Mac `npm ci` and `npm test` locally: 1384 tests, 1384 pass. Pushed for
+  the first CI run on the new code.
+
+### Tests skipped on Windows (new code since 22d738c)
+
+None yet.
+
+### CI runs
+
+| Commit | Run | macOS | Windows | Linux | Notes |
+|---|---|---|---|---|---|
+
 ## Where things stand
 
 - 2026-10-06, the open decisions settled (see "Needs a decision"): Engelbart's own git keeps LF on Windows
