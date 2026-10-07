@@ -92,6 +92,23 @@ export function mentionAt(text, caret) {
   const m = String(text ?? '').slice(0, caret).match(MENTION_QUERY_RE);
   return m ? { query: m[1], start: caret - m[0].length } : null;
 }
+/** What a library folder opened from the @ menu writes into the line (MATH-22): `@Folder/`, `@Folder/sub/`, … */
+export const folderPath = (name, rel) => `@${[name, ...(rel ? rel.split('/') : [])].join('/')}/`;
+/**
+ * The @ menu's query inside a library folder opened from it (MATH-22): the line keeps the folder's path (`path`, standing
+ * at `start`; folderPath), spaces and all, and what follows it up to the caret narrows that level (it may hold spaces too,
+ * as file names do). → { query, start }; { into, start } when a `/` was typed right after a name (the subfolder by that
+ * name, if there is one, is entered); null when the path is no longer there before the caret.
+ */
+export function folderMentionAt(text, caret, { start, path }) {
+  const s = String(text ?? ''), end = start + path.length;
+  if (caret < end || s.slice(start, end) !== path) return null;
+  const rest = s.slice(end, caret);
+  if (/[@[\]\n]/.test(rest) || rest.length > 80) return null;
+  const slash = rest.indexOf('/');
+  if (slash < 0) return { query: rest, start };
+  return slash > 0 && slash === rest.length - 1 ? { into: rest.slice(0, -1), start } : null;
+}
 // ui/Icons.jsx WS, as markup for the rendered line: 0.8em square, on the text's baseline.
 const WS_ICON = '<svg viewBox="0 0 16 16" width="0.8em" height="0.8em" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true" style="display:inline-block;vertical-align:-0.06em;margin:0 0.2em 0 0.1em"><rect x="1.5" y="1.5" width="4.5" height="4.5" rx="1"/><rect x="8" y="1.5" width="6.5" height="4.5" rx="1"/><rect x="1.5" y="8" width="6.5" height="6.5" rx="1"/><rect x="10" y="8" width="4.5" height="4.5" rx="1"/></svg>';
 // ui/Icons.jsx's kind glyphs as markup, for a file mention's chip (MATH-22): drawn as WS_ICON is, after the @.

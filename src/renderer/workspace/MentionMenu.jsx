@@ -3,12 +3,25 @@
 // +. It hangs under the caret, or above it when the line is near the bottom of the window, and scrolls past a dozen rows.
 // A library folder (MATH-22) carries a › and opens in place when picked: a row back up, "Mention this folder", then what
 // it holds (model/rail.js folderRows); a row that only says something (loading, how many more) is grey and not picked.
+// A long name is cut in the middle, so its end and extension show (model/rail.js nameParts); the row's title is the whole.
 import React from 'react';
 import { KindGlyph } from '../ui/Icons.jsx';
 import { usePlaced } from '../ui/usePlaced.js';
-import { isFolderRow } from '../model/rail.js';
+import { isFolderRow, nameParts } from '../model/rail.js';
 
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
+const ONE_LINE = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+
+// A row's name: its start gives way first, its end stays.
+function Name({ m }) {
+  const { head, tail } = m.kind === 'note' ? { head: m.name, tail: '' } : nameParts(m.name);
+  return (
+    <span data-name="1" style={{ flex: 1, minWidth: 0, display: 'flex', font: '14px/1.4 var(--font-sans)', color: m.kind === 'note' ? '#8f8f8f' : '#171717' }}>
+      <span style={{ ...ONE_LINE, flex: '0 1 auto', minWidth: 0 }}>{head}</span>
+      {tail && <span style={{ flex: 'none', whiteSpace: 'pre' }}>{tail}</span>}
+    </span>
+  );
+}
 
 // A row of the menu, from model/rail.js; a library row itself (an editor that has no list of its own) is drawn as its kind.
 function Glyph({ m }) {
@@ -34,12 +47,13 @@ export default function MentionMenu({ items, index, anchor, onPick, onHover }) {
           key={m.key || m.id || m.name}
           data-on={i === index ? 1 : 0}
           data-mention-row={m.key || m.id}
+          title={m.kind === 'note' ? undefined : m.name}
           onMouseDown={(e) => { e.preventDefault(); if (m.kind !== 'note') onPick(m); }}
           onMouseMove={() => { if (onHover && i !== index) onHover(i); }} // moved onto, not appeared under: the keyboard's row stays put
           style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 32, boxSizing: 'border-box', padding: '0 10px', borderRadius: 6, cursor: m.kind === 'note' ? 'default' : 'pointer', background: i === index && m.kind !== 'note' ? '#f2f2f2' : 'transparent' }}
         >
           <Glyph m={m} />
-          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '14px/1.4 var(--font-sans)', color: m.kind === 'note' ? '#8f8f8f' : '#171717' }}>{m.name}</span>
+          <Name m={m} />
           {m.kind === 'back' && m.hint && <span style={{ flex: '0 1 auto', minWidth: 0, maxWidth: '60%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', direction: 'rtl', textAlign: 'left', font: '12px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{m.hint}</span>}
           {(isFolderRow(m) || (m.kind === 'entry' && m.dir)) && <span style={{ flex: 'none', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', font: '15px/1 var(--font-sans)', color: '#8f8f8f' }}>›</span>}
           {m.kind === 'workspace' && m.above.length > 0 && <span style={{ flex: '0 1 auto', minWidth: 0, maxWidth: '45%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '12px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{m.above.join(' / ')}</span>}

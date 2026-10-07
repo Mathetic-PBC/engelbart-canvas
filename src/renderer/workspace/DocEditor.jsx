@@ -49,7 +49,7 @@
 //     (preventDefault), so the window's Escape leaves it alone (Workspace.jsx).
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, listMark, threads, turnText, wsMention, fileMention, chatMention, mentionAt, agentOf, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE } from '../model/doc.js';
+import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, listMark, threads, turnText, wsMention, fileMention, chatMention, mentionAt, folderPath, folderMentionAt, agentOf, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE } from '../model/doc.js';
 import { fieldRows, isVerbRow, isFolderRow, folderRows, firstPick, parentRel } from '../model/rail.js';
 import { readFlags, readQuestion, readDiscover, withChoice, withMode, discoverSpans, modelOf, effortOf, buildRequestOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
 import { SKIPPED, MAP_GROUPS, RESULT_OFFER, cardOfAnswer, questionOf, isChoice, answerLine, withWrap, readAnswer, recapLine, resultParts } from '../../main/bart/card.cjs';
@@ -199,7 +199,7 @@ export default class DocEditor extends React.Component {
   state = { activeLine: null, mention: null, mentionIdx: 0, pop: null, picker: null, browse: null };
   edRef = React.createRef();
   history = []; future = []; caret = null; lastHtml = ''; lastKey = null; selRaw = null; openKey = ''; copied = null; copiedT = null;
-  syncing = false; wantFocus = false; composing = false; mounted = false; timers = new Set(); held = false; downOnRoot = false; downOnPage = false;
+  syncing = false; wantFocus = false; wantAnchor = false; composing = false; mounted = false; timers = new Set(); held = false; downOnRoot = false; downOnPage = false;
   openLogs = new Set(); // asks whose list of steps is open
   pickerT = null;
   // A follow-up being typed, the model picked for it and the images pasted into it ([{ n, id }]), by the first line of its
@@ -1418,7 +1418,7 @@ export default class DocEditor extends React.Component {
     if (had || buildField) this.caret = null;
     if (html === this.lastHtml && key === this.lastKey) {
       if (this.caret && (hadFocus || this.wantFocus)) { ed.focus({ preventScroll: true }); this.applyCaret(); }
-      this.wantFocus = false; return;
+      this.wantFocus = false; this.menuToCaret(); return;
     }
     let c = had || buildField ? null : this.caret || (hadFocus ? this.caretInfo()?.anchor : null);
     if (!c && hadFocus && !had && !buildField && !ed.querySelector('[data-line]')) { const ls = this.lines(), last = ls.length - 1, p = parseLine(ls[last]); c = { line: last, offset: lineText(p, ls[last]).length }; }
@@ -1428,7 +1428,12 @@ export default class DocEditor extends React.Component {
     this.syncing = true; ed.innerHTML = html; this.lastHtml = html; this.lastKey = key; this.markBeside(); this.restoreFollow(ed, had && !had.card && !had.discover ? had : null); this.restoreCards(ed, had); this.restoreDiscover(ed, had && had.discover ? had : null); this.restoreBuilds(ed, buildField);
     if (menu) this.followMenuRedrawn(menu);
     if (c && !had && !buildField && (hadFocus || this.wantFocus)) { ed.focus({ preventScroll: true }); this.caret = c; this.applyCaret(); }
-    this.wantFocus = false; this.syncing = false;
+    this.wantFocus = false; this.syncing = false; this.menuToCaret();
+  }
+  // The @ menu's line was rewritten under it (a folder's path written in, MATH-22): it hangs from the caret again.
+  menuToCaret() {
+    if (!this.wantAnchor) return; this.wantAnchor = false;
+    const anchor = this.state.mention && this.mentionAnchor(); if (anchor) this.setState((s) => (s.mention ? { mention: { ...s.mention, anchor } } : null));
   }
   // A selection made backwards (shift+←) is put back backwards, so the next shift+arrow moves the end being moved.
   applyCaret() { const c = this.caret; this.caret = null; if (!c) return; if (c.sel) { if (c.back) this.setSelection(c.line, c.sel[1], c.sel[0]); else this.setSelection(c.line, c.sel[0], c.sel[1]); } else this.setSelection(c.line, c.offset, c.offset); }
@@ -1597,13 +1602,19 @@ export default class DocEditor extends React.Component {
     if (unchanged && (strip || cleared)) this.syncEditor();
     if (caret) {
       // No @ menu inside code: an `@` there is code.
-      const p = parseLine(ls[pos] ?? ''), txt = lineText(p, ls[pos]), m = inCode ? null : mentionAt(txt, caret.offset);
-      if (m) {
-        const anchor = this.caretRect();
-        this.setState({ activeLine: pos, mention: { i: pos, query: m.query, start: m.start, caret: caret.offset, anchor }, mentionIdx: 0 });
-      } else this.setState((s) => (s.mention || s.activeLine !== pos ? { mention: null, activeLine: pos } : null));
+      if (inCode) this.setState((s) => (s.mention || s.activeLine !== pos ? { mention: null, activeLine: pos } : null));
+      else this.lineMention(pos, lineText(parseLine(ls[pos] ?? ''), ls[pos]), caret.offset);
     }
   };
+  // The @ menu after typing on line `pos` (its text `txt`, the caret at `offset`): opened, narrowed or closed by what stands
+  // before the caret; in a library folder opened from it, by what follows the path the line keeps (MATH-22).
+  lineMention(pos, txt, offset) {
+    const read = this.readMention(txt, offset, { i: pos }), m = read.found;
+    if (!m) { this.setState((s) => (s.mention || s.browse || s.activeLine !== pos ? { mention: null, browse: null, activeLine: pos } : null)); return; }
+    const mention = { i: pos, query: m.query, start: m.start, caret: offset, anchor: this.caretRect() };
+    this.setState({ activeLine: pos, mention, browse: read.browse, mentionIdx: this.mentionStart(mention, read.browse) });
+    if (read.into != null) this.browseInto(mention, read.browse.row, read.into, read.browse.before); // `sub/` typed: in it
+  }
   editorKey = (e) => {
     if (this.state.picker) this.closePicker();
     const s = this.state, c = this.caretInfo(); if (!c) return; const ls = this.lines();
@@ -2018,9 +2029,12 @@ export default class DocEditor extends React.Component {
   // The @ menu in a follow-up field (2026-10-02): opened, narrowed or closed by what stands before the field's caret, as
   // on a document line, and hung from that caret. It is the menu's `field` form: the thread's first line, and no line `i`.
   followMention(input) {
-    const from = Number(input.dataset.followInput), caret = input.selectionStart, found = mentionAt(input.value, caret), open = this.state.mention;
-    if (found) this.setState({ mention: { field: from, query: found.query, start: found.start, caret, anchor: fieldCaret(input, caret) }, mentionIdx: 0 });
-    else if (open && open.field === from) this.setState({ mention: null });
+    const from = Number(input.dataset.followInput), caret = input.selectionStart, read = this.readMention(input.value, caret, { field: from }), found = read.found, open = this.state.mention;
+    if (found) {
+      const mention = { field: from, query: found.query, start: found.start, caret, anchor: fieldCaret(input, caret) };
+      this.setState({ mention, browse: read.browse, mentionIdx: this.mentionStart(mention, read.browse) });
+      if (read.into != null) this.browseInto(mention, read.browse.row, read.into, read.browse.before);
+    } else if (open && open.field === from) this.setState({ mention: null, browse: null });
   }
   // Text pasted into a field of the editor's own (a follow-up, a Build's reply, a card's field, Send to Discover) that
   // was copied from a PDF goes in without the page's layout (MATH-24); the field's input handler then runs as for typing.
@@ -2289,24 +2303,20 @@ export default class DocEditor extends React.Component {
   /** The folder the menu is in → { at, row, rel, listing }, or null at the menu's top. */
   browsing() { const b = this.state.browse, m = this.state.mention; return b && m && b.at === this.mentionKey(m) ? b : null; }
   canBrowse() { return typeof this.props.listFolder === 'function'; }
-  // The menu goes into `rel` of the folder `row` (MF-01): what was typed to find the folder is taken out, so what is typed
-  // next narrows the level, and the level is asked of main (listFolder) each time, live.
-  openFolder(row, rel) {
+  // The menu goes into `rel` of the folder `row` (MF-01): the line (or field) keeps its path, `@Folder/sub/`, in place of
+  // what was typed to find it, the caret after the last `/`, so what is typed next narrows the level. The level is asked
+  // of main (listFolder) each time, live. `before`: what was typed after the `@` to find the folder, put back on leaving it.
+  openFolder(row, rel, before) {
     const m = this.state.mention; if (!m || !row || !this.canBrowse()) return;
-    let caret = m.caret;
-    if (m.caret > m.start + 1) {
-      if (m.field != null) {
-        const input = this.followField(m.field);
-        if (input) { input.setRangeText('', m.start + 1, Math.min(m.caret, input.value.length), 'end'); this.followText.set(m.field, input.value); this.paintSend(input); }
-      } else {
-        const ls = this.lines(), p = parseLine(ls[m.i] || ''), cur = lineText(p, ls[m.i]);
-        this.writeText(m.i, cur.slice(0, m.start + 1) + cur.slice(m.caret), { line: m.i, offset: m.start + 1 });
-        this.wantFocus = true;
-      }
-      caret = m.start + 1;
-    }
-    const at = this.mentionKey(m), id = row.id;
-    this.setState({ mention: { ...m, query: '', caret }, browse: { at, row, rel, listing: undefined }, mentionIdx: 0 });
+    const was = before ?? (this.browsing() ? this.browsing().before : m.query || '');
+    const path = folderPath(row.name || '', rel);
+    const anchor = this.putMention(m, path);
+    this.browseInto({ ...m, query: '', caret: m.start + path.length, anchor }, row, rel, was);
+  }
+  // The folder's level is shown for `m`, whose line already holds its path.
+  browseInto(m, row, rel, before) {
+    const at = this.mentionKey(m), id = row.id, path = folderPath(row.name || '', rel);
+    this.setState({ mention: m, browse: { at, start: m.start, path, before, row, rel, listing: undefined }, mentionIdx: 0 });
     Promise.resolve().then(() => this.props.listFolder(id, rel)).catch((error) => ({ error: (error && error.message) || 'This folder could not be read' })).then((listing) => {
       const b = this.state.browse;
       if (!this.mounted || !b || b.at !== at || b.row.id !== id || b.rel !== rel) return; // gone elsewhere meanwhile
@@ -2314,17 +2324,53 @@ export default class DocEditor extends React.Component {
       this.setState({ browse: next, mentionIdx: firstPick(folderRows({ browse: next, listing: next.listing, query: (this.state.mention || {}).query })) });
     });
   }
-  // Back up a level; from the folder's top, back to the whole menu.
-  leaveFolder() {
-    const b = this.browsing(); if (!b) return;
-    const up = parentRel(b.rel);
-    if (up == null) this.setState({ browse: null, mentionIdx: 0 }); else this.openFolder(b.row, up);
+  // `text` in place of the menu's `@…` (from its `@` to the caret), the caret after it; in a follow-up field as on a line.
+  // → where the menu hangs now (a line's menu moves to the caret once the line is redrawn: menuToCaret).
+  putMention(m, text) {
+    if (m.field != null) {
+      const input = this.followField(m.field); if (!input) return m.anchor;
+      input.setRangeText(text, m.start, Math.min(m.caret, input.value.length), 'end');
+      this.followText.set(m.field, input.value); this.paintSend(input); this.fitFollow(input);
+      return fieldCaret(input) || m.anchor;
+    }
+    const ls = this.lines(), p = parseLine(ls[m.i] || ''), cur = lineText(p, ls[m.i]);
+    this.writeText(m.i, cur.slice(0, m.start) + text + cur.slice(m.caret), { line: m.i, offset: m.start + text.length });
+    this.wantFocus = true; this.wantAnchor = true;
+    return m.anchor;
   }
-  // Backspace with nothing typed after the `@` (the caret at `at`), inside a folder: up a level, the `@` kept. → whether it did
+  // Back up a level, its name taken off the path; from the folder's top, back to the whole menu with what was typed before.
+  leaveFolder() {
+    const b = this.browsing(), m = this.state.mention; if (!b) return;
+    const up = parentRel(b.rel);
+    if (up != null) { this.openFolder(b.row, up, b.before); return; }
+    const text = `@${b.before}`, anchor = this.putMention(m, text);
+    this.setState({ browse: null, mention: { ...m, query: b.before, caret: m.start + text.length, anchor }, mentionIdx: 0 });
+  }
+  // Backspace right after the path's last `/` (nothing typed after it), inside a folder: up a level. → whether it did
   upFromFolder(m, at) {
-    if (!m || m.query || at !== m.start + 1 || !this.browsing()) return false;
+    const b = this.browsing();
+    if (!m || m.query || !b || at !== b.start + b.path.length) return false;
     this.leaveFolder(); return true;
   }
+  // What the @ menu reads before `caret` in `text`, on line `where.i` or in field `where.field`: inside a folder opened from
+  // there, the path the line keeps and what follows it (folderMentionAt), else mentionAt. → { found, browse } with the
+  // folder still open (or null), and `into`, the subfolder to enter when its name and a `/` were typed after the path.
+  // Words with a space that no name holds are writing, not a search: the menu closes.
+  readMention(text, caret, where) {
+    const b = this.state.browse;
+    if (b && b.at === this.mentionKey({ ...where, start: b.start })) {
+      const f = folderMentionAt(text, caret, b), entries = (b.listing && b.listing.entries) || [];
+      if (f && f.into != null) {
+        const dir = entries.find((e) => e.dir && e.name === f.into);
+        if (dir) return { found: { query: '', start: b.start }, browse: b, into: dir.rel };
+      } else if (f && !(/\s/.test(f.query) && b.listing !== undefined && !entries.some((e) => e.name.toLowerCase().includes(f.query.trim().toLowerCase())))) {
+        return { found: f, browse: b };
+      }
+    }
+    return { found: mentionAt(text, caret), browse: null };
+  }
+  // The keyboard's row for a menu just read: in a folder its first entry, else the top.
+  mentionStart(m, browse) { return browse ? firstPick(folderRows({ browse, listing: browse.listing, query: (m.query || '').toLowerCase() })) : 0; }
   // Enter on a line holding `@Note name`: the note is made (named, or untitled when nothing follows), and the words
   // become its mention if the line still holds them once it exists.
   async noteVerb(i) {

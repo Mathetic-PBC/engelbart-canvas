@@ -3,6 +3,8 @@
 // MATH-22 (2026-10-06): a file inside a library folder is mentioned as `@[Name](lib:<folderId>:<path>)`, its path
 // percent-encoded a segment at a time. It is drawn as a chip with its kind's glyph, counts as a mention of its folder
 // (linked on pick, unlinked after the last mention of the folder or a file in it), and the older tokens keep working.
+// Follow-up: a folder opened in the @ menu leaves its path in the line (`@My Papers/sub/`), read back as one mention, and a
+// long name in the menu is cut in the middle.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -105,4 +107,36 @@ test('the @ menu in a folder: back, "Mention this folder", subfolders then files
   assert.deepEqual(folderRows({ browse: { row, rel: '' }, listing: { missing: true }, query: '' }).map((m) => [m.kind, m.name]), [['back', 'All'], ['note', 'This folder is not on this Mac any more']]);
   assert.deepEqual(folderRows({ browse: { row, rel: '' }, listing: undefined, query: '' }).map((m) => m.kind), ['back', 'note']);
   assert.deepEqual([parentRel('a/b'), parentRel('a'), parentRel('')], ['a', '', null]);
+});
+
+test('a folder opened in the @ menu keeps its path in the line, and what follows its last / is the query, spaces and all', async () => {
+  const { folderPath, folderMentionAt, mentionAt } = await doc();
+  assert.equal(folderPath('My Papers', ''), '@My Papers/');
+  assert.equal(folderPath('My Papers', 'sub dir/deeper'), '@My Papers/sub dir/deeper/');
+  const at = { start: 4, path: '@My Papers/sub dir/' };
+  const line = 'See @My Papers/sub dir/smith 20 and on';
+  assert.equal(mentionAt('See @My Papers/', 15), null, 'read the plain way, a space ends it');
+  assert.deepEqual(folderMentionAt('See @My Papers/sub dir/', 23, at), { query: '', start: 4 });
+  assert.deepEqual(folderMentionAt(line, 31, at), { query: 'smith 20', start: 4 }, 'one mention from the @');
+  assert.deepEqual(folderMentionAt('See @My Papers/sub dir/deeper/', 30, at), { into: 'deeper', start: 4 }, 'a name and a / typed');
+  assert.equal(folderMentionAt('See @My Papers/sub dir/a/b', 26, at), null, 'past one level typed by hand: not this folder');
+  assert.equal(folderMentionAt('See @My Papers/sub dir//', 24, at), null);
+  assert.equal(folderMentionAt('See @My Papers/sub dir', 22, at), null, 'the path broken');
+  assert.equal(folderMentionAt('See @My Papers/sub dir/x', 20, at), null, 'the caret back inside the path');
+  assert.equal(folderMentionAt('See @My Papers/sub dir/a @b', 27, at), null, 'another @');
+  assert.equal(folderMentionAt('See @My Papers/sub dir/[x', 25, at), null);
+  assert.equal(folderMentionAt(`See @My Papers/sub dir/${'x'.repeat(81)}`, 23 + 81, at), null, 'too long to be a search');
+});
+
+test('a long name is cut in its middle: the end and extension stay, a short name is whole', async () => {
+  const { nameParts } = await rail();
+  const long = '_FutureHCI_26__The_Illusion_of_Learning__Toward_Growth_Centered_AI';
+  const a = nameParts(`${long}.pdf`), b = nameParts(`${long}-2.pdf`);
+  assert.equal(a.head + a.tail, `${long}.pdf`);
+  assert.deepEqual([a.tail, b.tail], ['entered_AI.pdf', 'tered_AI-2.pdf'], 'two names that start the same end apart');
+  assert.deepEqual(nameParts('top.md'), { head: 'top.md', tail: '' });
+  assert.deepEqual(nameParts('exactly twenty-four ch.x'), { head: 'exactly twenty-four ch.x', tail: '' });
+  assert.equal(nameParts('a name with no extension at all here').tail, 't all here', 'no extension: its last ten characters');
+  assert.equal(nameParts('abcdefghijklmnopqrstuvwxy.pdf').tail.length, 14, 'never more than half the name');
+  assert.equal(nameParts('abcdefghijklmnopqrstuvwxy.longextension').tail, 'gextension', 'past eight letters it is no extension: the last ten');
 });

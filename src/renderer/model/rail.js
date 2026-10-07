@@ -240,6 +240,16 @@ export function folderRows({ browse, listing, query }) {
 }
 /** The row the keyboard starts on in a folder: its first file or subfolder, else "Mention this folder", else the first. */
 export const firstPick = (rows) => { const at = rows.findIndex((m) => m.kind === 'entry'); return at >= 0 ? at : Math.max(0, rows.findIndex((m) => m.kind === 'self')); };
+/**
+ * A name the @ menu may have to cut, in two (MATH-22 follow-up): its start, which the row cuts with an ellipsis when it
+ * runs out of room, and its end, the extension and the ten characters before it, always shown. Long names that start
+ * the same ("_FutureHCI_26__The_Illusion…", "…-2.pdf") then still differ on screen. A short name is not split.
+ */
+export function nameParts(name) {
+  const s = String(name || ''); if (s.length <= 24) return { head: s, tail: '' };
+  const ext = (s.match(/\.[A-Za-z0-9]{1,8}$/) || [''])[0], keep = Math.min(ext.length + 10, Math.floor(s.length / 2));
+  return { head: s.slice(0, s.length - keep), tail: s.slice(s.length - keep) };
+}
 /** The path of the level above `rel` ('' at the folder's top), or null when `rel` is the top already. */
 export const parentRel = (rel) => (rel ? rel.split('/').slice(0, -1).join('/') : null);
 
