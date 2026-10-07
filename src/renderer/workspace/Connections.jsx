@@ -120,7 +120,7 @@ export function zoteroAction(action) {
 // not a second way in. A row is the tool check's snapshot through rowOf; its one button does what the dialog's does. While
 // the CLI waits for the browser, Reopen page opens its page there again (open-external). Sign out runs the CLI's logout.
 export const TOOL_CONNECTIONS = Object.freeze(['claude', 'codex']);
-const TOOL_NAME = { claude: 'Claude Code', codex: 'Codex' };
+export const TOOL_NAME = Object.freeze({ claude: 'Claude Code', codex: 'Codex' });
 const TOOL_LABEL = { install: 'Install', update: 'Update', 'sign-in': 'Sign in', retry: 'Try again' };
 const glyph = { viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.3, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': 'true' };
 const TOOL_ICON = {

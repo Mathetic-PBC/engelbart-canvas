@@ -286,6 +286,9 @@ function setup({ list = [] } = {}) {
 const fromMain = (contents) => ({ sender: contents, senderFrame: contents.mainFrame });
 const key = (contents, input) => { let prevented = false; contents.emit('before-input-event', { preventDefault: () => { prevented = true; } }, { type: 'keyDown', key: '', isAutoRepeat: false, shift: false, meta: false, control: false, alt: false, ...input }); return prevented; };
 const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
+// Until `done()` holds (or a second passes): a box's save waits on the page's reply (setImmediate), which a 10ms timer can
+// beat while the whole suite keeps the event loop busy.
+const settle = async (done) => { for (const end = Date.now() + 1000; !done() && Date.now() < end;) await tick(); };
 
 test('⌥ held in the page lays the drawing layer over it (not while a field has the keyboard); letting go is the layer\'s to judge', () => {
   const { fake, views, page, told } = setup();
@@ -332,7 +335,7 @@ test('a box drawn: the page says what it is kept by, its picture is taken, and i
   layer.webContents.ipc.listeners.get(LAYER.CHANNELS.done)({}, { x: 100, y: 50, w: 300, h: 200 });
   assert.equal(layer.visible, false); // the layer goes as soon as the box is done
   assert.ok(told.some(([c, p]) => c === 'browser:boxing' && p.on === false));
-  await tick();
+  await settle(() => saved.length && page.sent.at(-1)?.[0] === PAGE.CHANNELS.boxAdd);
   const asked = page.sent.find(([channel]) => channel === PAGE.CHANNELS.box);
   assert.deepEqual(asked[1].rect, { x: 100, y: 50, w: 300, h: 200 });
   assert.equal(saved.length, 1);

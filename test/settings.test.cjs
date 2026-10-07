@@ -420,11 +420,80 @@ test('Escape with a page\'s "…" menu open closes the menu, not Settings; the n
   assert.equal(menuHasEscape(null), false);
   assert.equal(menuHasEscape({}), false, 'the window itself has no closest()');
   const source = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/Settings.jsx'), 'utf8');
-  assert.match(source, /if \(event\.key === 'Escape' && !menuHasEscape\(event\.target\)\) \{ event\.preventDefault\(\); event\.stopPropagation\(\); onClose\(\); \}/);
+  assert.match(source, /const action = escapeAction\(event\.target\);\s*if \(action === 'menu'\) return;\s*event\.preventDefault\(\); event\.stopPropagation\(\);\s*if \(action === 'clear'\) setQuery\(''\); else onClose\(\);/);
+  assert.match(source, /window\.addEventListener\('keydown', onKey, true\)/, 'in the capture phase, before the workspace sees it');
   // The menu takes the key itself, and marks it used, so the workspace's own Escape leaves it alone.
   const actions = fs.readFileSync(path.join(__dirname, '../src/renderer/workspace/ConnectionActions.jsx'), 'utf8');
   assert.match(actions, /if \(event\.key === 'Escape' && open\) \{ event\.preventDefault\(\); event\.stopPropagation\(\); close\(true\); \}/);
   assert.match(actions, /role="menu"/);
+});
+
+test('searching the column: title or keyword, any case, trimmed; hidden pages never match (SR-02, A1, A4)', () => {
+  const { PAGES, pageMatches } = load('ui/Settings.jsx');
+  const listed = (query, test = null) => PAGES.filter((page) => !page.shown || page.shown({ test })).filter((page) => pageMatches(page, query)).map((page) => page.id);
+  assert.deepEqual(listed(''), ['model', 'connections'], 'empty: every page');
+  assert.deepEqual(listed('   '), ['model', 'connections'], 'blank is empty');
+  assert.deepEqual(listed('conn'), ['connections'], 'the title');
+  assert.deepEqual(listed('zot'), ['connections'], 'a keyword');
+  assert.deepEqual(listed('deep'), ['model'], 'a level name');
+  assert.deepEqual(listed('--quick'), ['model'], 'a level hint');
+  assert.deepEqual(listed('  GITHUB '), ['connections'], 'any case, trimmed');
+  assert.deepEqual(listed('codex'), ['model', 'connections'], 'Codex is on both');
+  assert.deepEqual(listed('claude code'), ['connections'], 'the CLI by the name its row shows');
+  assert.deepEqual(listed('xyz'), []);
+  assert.deepEqual(listed('reset'), [], 'Test data is hidden outside test mode');
+  assert.deepEqual(listed('reset', { testMode: true }), ['test-data']);
+  assert.deepEqual(listed('start over', { testMode: true }), ['test-data']);
+});
+
+test('the column: the search field first, headings only over pages listed, "No results" when none are (SR-01, SR-03, SR-06, A1)', () => {
+  const { PAGES, SettingsNav } = load('ui/Settings.jsx');
+  const nav = (query, open = 'model', pages = PAGES) => renderToStaticMarkup(React.createElement(SettingsNav, { pages, open, query, onQuery: () => {}, onOpen: () => {} }));
+  const items = (html) => [...html.matchAll(/data-settings-page="([\w-]+)"/g)].map((match) => match[1]);
+  const all = nav('');
+  assert.match(all, /<input type="text" aria-label="Search settings" data-settings-search="1" placeholder="Search…"/);
+  assert.ok(!/autofocus/i.test(all), 'not focused on open');
+  assert.ok(all.indexOf('data-settings-search') < all.indexOf('>Settings<'), 'above the first heading');
+  assert.deepEqual(items(all), ['model', 'connections', 'test-data']);
+  assert.ok(all.includes('>Settings<') && all.includes('>Developer<'));
+  assert.match(all, /<div style="display:flex;flex-direction:column;gap:2px"><button/, 'a 2px gap between items');
+  assert.ok(all.includes('margin:16px 0 4px'), 'a later heading keeps its 16px');
+  const zot = nav('zot');
+  assert.deepEqual(items(zot), ['connections']);
+  assert.ok(zot.includes('>Settings<') && !zot.includes('>Developer<'), 'a heading only over a page listed');
+  const reset = nav('reset');
+  assert.deepEqual(items(reset), ['test-data']);
+  assert.ok(!reset.includes('>Settings<') && reset.includes('margin:0 0 4px'), 'the first heading listed sits under the field');
+  const none = nav('xyz');
+  assert.deepEqual(items(none), []);
+  assert.match(none, /data-settings-no-results="1"[^>]*>No results</);
+  assert.ok(!none.includes('>Settings<') && !none.includes('>Developer<'), 'no headings');
+  assert.ok(!all.includes('No results'));
+  // The open page stays open on the right; only the column narrows.
+  assert.match(nav('zot', 'model'), /data-settings-page="connections"(?![^>]*aria-current)/);
+  assert.match(nav('', 'connections'), /data-settings-page="connections" aria-current="page"/);
+});
+
+test('Escape: an open "…" menu first, then the search field\'s text, then the window (SR-05, A3)', () => {
+  const { escapeAction } = load('ui/Settings.jsx');
+  const field = (value) => ({ value, closest: () => null, matches: (selector) => selector === '[data-settings-search]' });
+  const menu = { closest: (selector) => (selector === '[role="menu"]' ? {} : null), matches: () => false };
+  assert.equal(escapeAction(field('zot')), 'clear', 'text in the field: cleared, the window stays');
+  assert.equal(escapeAction(field('')), 'close', 'the field empty: the window closes');
+  assert.equal(escapeAction(menu), 'menu');
+  assert.equal(escapeAction({ value: 'x', closest: () => null, matches: () => false }), 'close', 'another field with text');
+  assert.equal(escapeAction(null), 'close');
+  assert.equal(escapeAction({}), 'close');
+});
+
+test('Model\'s icon is Lucide\'s sparkles, drawn as the others are (SR-07, A5)', () => {
+  const { PAGES } = load('ui/Settings.jsx');
+  const svg = (id) => renderToStaticMarkup(PAGES.find((page) => page.id === id).icon);
+  const model = svg('model');
+  assert.match(model, /^<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24"[^>]*stroke-width="1.75"/);
+  assert.ok(model.includes('M11.017 2.814a1 1 0 0 1 1.966 0') && model.includes('M20 2v4') && model.includes('<circle cx="4" cy="20" r="2"></circle>'));
+  assert.ok(!model.includes('m3.3 7 8.7 5 8.7-5'), 'not the box');
+  assert.ok(svg('connections').includes('M8.25 2.25v4.5'), 'Connections keeps its plug');
 });
 
 test('Model: Quick, Standard and Deep of the provider @discover runs on, each a model and an effort', () => {

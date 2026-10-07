@@ -202,7 +202,9 @@ test('Highlight asks the page for its quote, saves it as a web mark and has it t
   const quote = { exact: 'a passage', prefix: 'before ', suffix: ' after' };
   contents.onSend = (channel, nonce) => { if (channel === PAGE.CHANNELS.quote) setImmediate(() => contents.ipc.listeners.get(PAGE.CHANNELS.quote)(fromMain(contents), { nonce, quote })); };
   menuFor(fake, contents, { selectionText: 'a passage' })[0].click();
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  // Until the save lands (or a second passes): the page's reply comes by setImmediate, which a 10ms timer can beat
+  // while the whole suite keeps the event loop busy.
+  for (const end = Date.now() + 1000; !contents.sent.some(([channel]) => channel === PAGE.CHANNELS.add) && Date.now() < end;) await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(saved.length, 1);
   const [url, mark] = saved[0];
   assert.equal(url, 'https://www.example.com/post?utm_source=x'); // the library files it by addressKey

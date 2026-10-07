@@ -5,13 +5,14 @@
 // @discover line (Standard) and its --quick / --deep take (models file → `discover`, src/main/bart/settings.cjs; each pick
 // is saved as it is made, and the next run starts there, in any window, with no restart); Connections, the app's accounts
 // (../workspace/Connections.jsx; MATH-64, it was its own icon beside the bell until then); and in test mode Test data,
-// the actions that were test mode's own gear (./TestToggle.jsx keeps the pill).
+// the actions that were test mode's own gear (./TestToggle.jsx keeps the pill). A search field tops the column and
+// narrows it to the pages whose title or keywords hold the query (2026-10-07).
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
 import { EFFORT_LABELS } from '../../main/bart/question.cjs';
 import { shownProviders, defaultProvider, defaultStep, patchOf } from '../model/intelligence.js';
-import { ConnectionsPage } from '../workspace/Connections.jsx';
+import { ConnectionsPage, TOOL_CONNECTIONS, TOOL_NAME } from '../workspace/Connections.jsx';
 import { Group, Row, BUTTON, text } from './SettingsRows.jsx';
 
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
@@ -110,35 +111,108 @@ function TestData({ test, close }) {
   );
 }
 
-// Lucide's "box" (a model, as model hubs draw one) and "flask-conical", at the nav's size; the plug Connections' own icon
-// was (its 16-unit path at this grid's scale).
+// Lucide's "sparkles" (the intelligence a model brings, as Linear and others draw AI) and "flask-conical", at the nav's
+// size; the plug Connections' own icon was (its 16-unit path at this grid's scale). Lucide is ISC; its paths are pasted in.
 const icon = (paths) => (
   <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" style={{ flex: 'none', display: 'block' }}>{paths}</svg>
 );
-const MODEL_ICON = icon(<><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" /><path d="m3.3 7 8.7 5 8.7-5" /><path d="M12 22V12" /></>);
+const MODEL_ICON = icon(<><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z" /><path d="M20 2v4" /><path d="M22 4h-4" /><circle cx="4" cy="20" r="2" /></>);
 const PLUG_ICON = icon(<path d="M8.25 2.25v4.5M15.75 2.25v4.5M6 6.75h12v3a6 6 0 0 1-12 0zM12 15.75v3a3 3 0 0 1-3 3H6" />);
 const FLASK_ICON = icon(<><path d="M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-5.069-10.127A2 2 0 0 1 14 9.527V2" /><path d="M8.5 2h7" /><path d="M7 16h10" /></>);
 
 // The settings window's pages, in order, under their headings in the left column. `shown` (optional) decides from the
-// window's props whether a page is there.
+// window's props whether a page is there. `keywords`: the names on the page a person would search the column for.
 export const PAGES = Object.freeze([
-  { id: 'model', section: 'Settings', title: 'Model', icon: MODEL_ICON, Body: () => <IntelligenceLevels /> },
-  { id: 'connections', section: 'Settings', title: 'Connections', icon: PLUG_ICON, Body: ConnectionsPage },
-  { id: 'test-data', section: 'Developer', title: 'Test data', icon: FLASK_ICON, shown: ({ test }) => !!(test && test.testMode), Body: TestData },
+  { id: 'model', section: 'Settings', title: 'Model', icon: MODEL_ICON, Body: () => <IntelligenceLevels />,
+    keywords: [...LEVELS.flatMap((level) => [level.name, level.hint]), 'model', 'effort', 'intelligence', 'discover', 'Claude', 'Codex'] },
+  { id: 'connections', section: 'Settings', title: 'Connections', icon: PLUG_ICON, Body: ConnectionsPage,
+    keywords: ['GitHub', 'Zotero', 'accounts', 'sign in', 'sign out', ...TOOL_CONNECTIONS.map((id) => TOOL_NAME[id])] },
+  { id: 'test-data', section: 'Developer', title: 'Test data', icon: FLASK_ICON, shown: ({ test }) => !!(test && test.testMode), Body: TestData,
+    keywords: ['reveal', 'reset', 'start over', 'test library'] },
 ]);
+
+/** Whether a page answers a search: case-insensitive, its title or a keyword holding the trimmed query. An empty one, every page. */
+export function pageMatches(page, query) {
+  const want = String(query || '').trim().toLowerCase();
+  return !want || [page.title, ...(page.keywords || [])].some((name) => name.toLowerCase().includes(want));
+}
 
 /** Escape pressed in an open menu on a page (Connections' "…": Sign out, Disconnect) is that menu's: it closes the menu, and the next one the window. */
 export const menuHasEscape = (target) => !!(target && target.closest && target.closest('[role="menu"]'));
 
-const NAV_ITEM = { display: 'flex', alignItems: 'center', gap: 9, width: '100%', height: 30, boxSizing: 'border-box', padding: '0 9px', border: 0, borderRadius: 6, cursor: 'pointer', textAlign: 'left' };
+/** What Escape does where it was pressed: 'menu' (an open "…" menu takes it), 'clear' (the search field holds text), or 'close' the window. */
+export function escapeAction(target) {
+  if (menuHasEscape(target)) return 'menu';
+  if (target && target.matches && target.matches('[data-settings-search]') && target.value) return 'clear';
+  return 'close';
+}
 
-/** The settings window: pages listed on the left, the open one on the right; Escape, × or a press outside closes it. */
+const NAV_ITEM = { display: 'flex', alignItems: 'center', gap: 9, width: '100%', height: 30, boxSizing: 'border-box', padding: '0 9px', border: 0, borderRadius: 6, cursor: 'pointer', textAlign: 'left' };
+const SEARCH = { width: '100%', height: 30, boxSizing: 'border-box', padding: '0 9px 0 30px', border: '1px solid #e4e4e4', borderRadius: 7, background: '#fff', ...text(13), outline: 'none' };
+// Lucide's "search", 14px.
+const SEARCH_ICON = (
+  <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8f8f8f" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" style={{ position: 'absolute', left: 10, top: '50%', marginTop: -7, pointerEvents: 'none' }}><path d="m21 21-4.34-4.34" /><circle cx="11" cy="11" r="8" /></svg>
+);
+
+/**
+ * The left column: the search field, then the pages that answer it under their headings (a heading only over a page
+ * listed). `pages`: those shown; `open`: the open page's id, which stays open on the right when the search hides it.
+ * Enter in the field opens the first page listed.
+ */
+export function SettingsNav({ pages, open, query, onQuery, onOpen }) {
+  const listed = pages.filter((page) => pageMatches(page, query));
+  const sections = [];
+  for (const page of listed) {
+    const last = sections[sections.length - 1];
+    if (last && last.title === page.section) last.pages.push(page); else sections.push({ title: page.section, pages: [page] });
+  }
+  return (
+    <nav aria-label="Settings pages" style={{ flex: 'none', width: 200, boxSizing: 'border-box', padding: '16px 10px', borderRight: '1px solid #ebebeb', background: '#f5f5f5', overflowY: 'auto' }}>
+      <div style={{ position: 'relative', marginBottom: 12 }}>
+        {SEARCH_ICON}
+        <input type="text" aria-label="Search settings" data-settings-search="1" placeholder="Search…" value={query} spellCheck={false}
+          onChange={(event) => onQuery(event.target.value)}
+          onKeyDown={(event) => { if (event.key === 'Enter' && listed.length) { event.preventDefault(); onOpen(listed[0].id); } }}
+          style={SEARCH} />
+      </div>
+      {!listed.length && <div data-settings-no-results="1" style={{ padding: '0 9px', ...text(13, '#8f8f8f') }}>No results</div>}
+      {sections.map((section, index) => (
+        <React.Fragment key={section.title}>
+          <div style={{ padding: '0 9px', margin: index ? '16px 0 4px' : '0 0 4px', ...text(12.5, '#8f8f8f', 500) }}>{section.title}</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {section.pages.map((candidate) => {
+              const on = candidate.id === open;
+              return (
+                <button key={candidate.id} type="button" data-settings-page={candidate.id} aria-current={on ? 'page' : undefined} onClick={() => onOpen(candidate.id)} className={on ? undefined : 'hov-wash2'}
+                  style={{ ...NAV_ITEM, background: on ? '#e8e8e8' : 'transparent', ...text(13.5, '#171717', on ? 500 : 400) }}>
+                  <span style={{ color: on ? '#171717' : '#6f6f6f' }}>{candidate.icon}</span>{candidate.title}
+                </button>
+              );
+            })}
+          </div>
+        </React.Fragment>
+      ))}
+    </nav>
+  );
+}
+
+/**
+ * The settings window: pages listed on the left, the open one on the right; Escape, × or a press outside closes it.
+ * Escape in the search field while it holds text clears the text instead.
+ */
 function SettingsDialog({ test, onClose }) {
   const pages = PAGES.filter((page) => !page.shown || page.shown({ test }));
   const [page, setPage] = React.useState(pages[0].id);
+  const [query, setQuery] = React.useState('');
   React.useEffect(() => {
     // Taken before the workspace's own Escape (which leaves the workspace) can see it, as BuildReject does.
-    const onKey = (event) => { if (event.key === 'Escape' && !menuHasEscape(event.target)) { event.preventDefault(); event.stopPropagation(); onClose(); } };
+    const onKey = (event) => {
+      if (event.key !== 'Escape') return;
+      const action = escapeAction(event.target);
+      if (action === 'menu') return;
+      event.preventDefault(); event.stopPropagation();
+      if (action === 'clear') setQuery(''); else onClose();
+    };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, [onClose]);
@@ -147,20 +221,7 @@ function SettingsDialog({ test, onClose }) {
   return createPortal(
     <div data-overlay="1" data-levels-dialog="1" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }} style={{ position: 'fixed', inset: 0, zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(23,23,23,.18)' }}>
       <div role="dialog" aria-modal="true" aria-label="Settings" style={{ position: 'relative', display: 'flex', width: 'min(780px, calc(100vw - 32px))', height: 'min(540px, calc(100vh - 80px))', background: '#fcfcfc', border: '1px solid #d4d4d4', borderRadius: 12, boxShadow: '0 16px 48px #00000024', overflow: 'hidden', animation: `rise 160ms ${EASE}` }}>
-        <nav aria-label="Settings pages" style={{ flex: 'none', width: 200, boxSizing: 'border-box', padding: '16px 10px', borderRight: '1px solid #ebebeb', background: '#f5f5f5' }}>
-          {pages.map((candidate, index) => {
-            const on = candidate.id === open.id;
-            return (
-              <React.Fragment key={candidate.id}>
-                {(index === 0 || pages[index - 1].section !== candidate.section) && <div style={{ padding: '0 9px', margin: index ? '16px 0 4px' : '0 0 4px', ...text(12.5, '#8f8f8f', 500) }}>{candidate.section}</div>}
-                <button type="button" data-settings-page={candidate.id} aria-current={on ? 'page' : undefined} onClick={() => setPage(candidate.id)} className={on ? undefined : 'hov-wash2'}
-                  style={{ ...NAV_ITEM, background: on ? '#e8e8e8' : 'transparent', ...text(13.5, '#171717', on ? 500 : 400) }}>
-                  <span style={{ color: on ? '#171717' : '#6f6f6f' }}>{candidate.icon}</span>{candidate.title}
-                </button>
-              </React.Fragment>
-            );
-          })}
-        </nav>
+        <SettingsNav pages={pages} open={open.id} query={query} onQuery={setQuery} onOpen={setPage} />
         <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '30px 40px 36px', boxSizing: 'border-box' }}>
           <div style={{ ...text(22, '#171717', 500), letterSpacing: '-0.01em' }}>{open.title}</div>
           <Body test={test} close={onClose} />
