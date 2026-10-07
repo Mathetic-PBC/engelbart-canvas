@@ -249,3 +249,46 @@ test('the menu cuts a long name in the middle, so names that start the same stil
   assert.match(html, />top\.md<\/span><\/span>/, 'a short name is not split');
   assert.doesNotMatch(html, /title="3 more/, 'a row that only says something has no title');
 });
+
+// MATH-65 build 2: the connected Zotero library opens in the @ menu as a library folder does (`@Zotero/`), collections then
+// items, filtered by title or author; an item picked is `@[Title](zotero:<key>)`, links nothing, and its chip opens it.
+test('Zotero opens like a folder: @Zotero/ in the line, a collection deeper, an item picked is its zotero: mention', async () => {
+  const ZOTERO = { id: 'zotero', type: 'folder', name: 'Zotero', zotero: true, tags: [] };
+  const ITEM = { name: 'Learning to Learn', rel: '~SMITH001', dir: false, type: 'pdf', zotero: 'SMITH001', find: 'smith and ng 2020', hint: 'Smith and Ng · 2020' };
+  const ZLEVELS = {
+    '': { entries: [{ name: 'Reading', rel: 'Reading', dir: true, type: 'folder' }, ITEM, { name: 'Graph Other', rel: '~LEE00002', dir: false, type: 'md', zotero: 'LEE00002', find: 'lee 2021', hint: 'Lee · 2021' }], total: 3 },
+    Reading: { entries: [ITEM], total: 1 },
+  };
+  const m = mounted(['See @zo']);
+  const opened = [];
+  m.props.listFolder = async (id, rel) => { m.asked.push([id, rel]); return ZLEVELS[rel]; };
+  m.props.onOpenZotero = (item, options) => opened.push([item, options]);
+  m.editor.state.mention = { i: 0, start: 4, caret: 7, query: 'zo' };
+  m.editor.pickMention({ kind: 'item', key: 'zotero', row: ZOTERO, name: 'Zotero' });
+  assert.equal(m.lines()[0], 'See @Zotero/');
+  await settle();
+  assert.deepEqual(m.asked, [['zotero', '']]);
+  assert.deepEqual(names(m.editor.mentionList()), ['back:All', 'entry:Reading', 'entry:Learning to Learn', 'entry:Graph Other'], 'no "Mention this folder": the library is not mentioned');
+  m.type('See @Zotero/smith');
+  assert.deepEqual(names(m.editor.mentionList()), ['entry:Learning to Learn'], 'an author narrows it');
+  m.type('See @Zotero/Reading/');
+  await settle();
+  assert.equal(m.editor.state.browse.rel, 'Reading');
+  assert.deepEqual(names(m.editor.mentionList()), ['back:Zotero', 'entry:Learning to Learn']);
+  m.editor.pickMention(m.editor.mentionList()[1]);
+  const token = '@[Learning to Learn](zotero:SMITH001)';
+  assert.equal(m.lines()[0], `See ${token}`, 'the path gives way to the item\'s mention');
+  assert.deepEqual(m.picked, [], 'nothing comes into the workspace: a Zotero item is no library row');
+
+  const html = m.editor.editorHtml();
+  assert.match(html, /data-mention="Learning to Learn" data-zotero="SMITH001"/);
+  m.editor.editorEl = () => ({});
+  const chip = { dataset: { mention: 'Learning to Learn', zotero: 'SMITH001' } };
+  m.editor.editorClick({ target: { closest: (sel) => (sel === '[data-mention]' ? chip : null) }, preventDefault() {}, metaKey: true, ctrlKey: false });
+  assert.deepEqual(opened, [[{ key: 'SMITH001', name: 'Learning to Learn' }, { newTab: true }]]);
+  assert.deepEqual(m.opened, [], 'not opened as a file in a folder');
+
+  m.caretAt(0, 4 + token.length);
+  assert.equal(m.key('Backspace').prevented, true, 'Backspace after it takes the whole token');
+  assert.equal(m.lines()[0], 'See ');
+});

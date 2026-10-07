@@ -20,6 +20,9 @@
 // (<selection>, read from the tab's page in front, never saved) and a picture of it (<screenshot path="…"/>, ./shots.cjs).
 // `live` ({ selection(), screenshot() }, ipc.cjs from browser/views.cjs) reaches the tab; a page that does not answer in
 // time has no selection, a picture that fails is left out.
+// MATH-65 build 2 (2026-10-07): a mentioned Zotero item is its <zotero_item> under the line (../context/expand-mentions.cjs),
+// its attachment's folder granted when it is outside the data root; and every @bart and @discover turn's <engelbart>
+// names the mirror of the connected library (`zotero library: …`, ../zotero/mirror.cjs pointerLine) when there is one.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -36,6 +39,7 @@ const library = require('../store/library.cjs');
 const { attrOf, stageBlock, webStageBlock, mentionedBlock } = require('./highlights.cjs');
 const { fileInRow } = require('../store/folder-files.cjs');
 const { saveShot } = require('./shots.cjs');
+const zoteroMirror = require('../zotero/mirror.cjs');
 
 const HERE = '<<< this is the question being asked now >>>';
 // @bart's <stage> with nothing in front, and a resumed turn's <highlights> when the documents mention nothing highlighted.
@@ -135,6 +139,12 @@ function mentionedFiles(rows, seen, homeDir = os.homedir()) {
 function mentionedFilesBlock(files) {
   return files.length ? `<mentioned_files>\n${JSON.stringify(files, null, 1)}\n</mentioned_files>` : '';
 }
+
+// The agents told where the Zotero mirror is (MATH-65 build 2): those that answer about the library. @brainstorm reads this
+// workspace alone.
+const ZOTERO_READERS = new Set(['bart', 'discover']);
+/** The files of the Zotero items the documents mention, kept in `seen` by expand-mentions.cjs → [{ dir }]. */
+const zoteroFiles = (seen) => [...seen].filter((key) => typeof key === 'string' && key.startsWith('zfile:')).map((key) => ({ dir: path.dirname(key.slice(6)) }));
 
 // The agents that may open the library's own files (2026-09-30, MB-06): the folders those files are in join the
 // --add-dir list, read-only like the rest. @bart too since 2026-10-02 (a paper in ~/Downloads was out of its reach).
@@ -332,6 +342,7 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
     `code directory: ${project.directory || 'none set'}`,
     `notes and workspaces: ${project.dir}`,
     `asked from: ${from}`,
+    ...(ZOTERO_READERS.has(agent) && ctx.dataRoot ? [zoteroMirror.pointerLine(zoteroMirror.mirrorDir(ctx.dataRoot))].filter(Boolean) : []),
     '</engelbart>',
     instructionsBlock(ctx.dataRoot),
   ].filter(Boolean).join('\n');
@@ -339,7 +350,7 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
   const dirs = LIBRARY_READERS.has(agent) ? [...granted, ...libraryDirs(project, rows, granted, { seen, scope })] : granted;
   // A pdf opened from disk that the library does not hold (the highlight's, the Stage's): its folder too, by the same rules
   // as the library's.
-  for (const held of [paper, front && !front.id ? front : null]) {
+  for (const held of [paper, front && !front.id ? front : null, ...zoteroFiles(seen)]) {
     const folder = held && held.dir ? path.resolve(held.dir) : null;
     if (!folder || folder === path.parse(folder).root || folder === path.resolve(os.homedir()) || dirs.some((root) => within(folder, root))) continue;
     try { if (fs.statSync(folder).isDirectory()) dirs.push(folder); } catch { /* gone: nothing to grant */ }

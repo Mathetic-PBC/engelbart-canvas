@@ -41,7 +41,7 @@ export const REPLY_RE = /^bart(\+?)> ?(.*)$/;
 export const ATTRIBUTION_RE = /^\*[^*]+\*$/;
 export const QUOTE_RE = /^> ?(.*)$/;
 export const ATTACH_RE = /^!\[([^\]\n]*)\]\(img:([\w-]+)\)$/;
-export const INLINE = /(!\[[^\]\n]*\]\(img:[\w-]+\)|@(?:[Bb]art|[Bb]rainstorm|[Oo]rient|[Dd]iscover)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]\(lib:[\w-]+(?::[\w.~%\/-]+)?\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`])/g;
+export const INLINE = /(!\[[^\]\n]*\]\(img:[\w-]+\)|@(?:[Bb]art|[Bb]rainstorm|[Oo]rient|[Dd]iscover)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]\(lib:[\w-]+(?::[\w.~%\/-]+)?\)|@\[[^\]\n]+\]\(zotero:[A-Za-z0-9]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`])/g;
 const LINK_RE = /^\[([^\]]+)\]\(([^)]+)\)$/;
 // Another workspace of the project, mentioned (2026-09-25): `@[Name](ws:<id>)`. The id finds it after a rename (workspaces
 // are born "Untitled Workspace n" and named later); the line shows the @, the workspace icon right after it, then the name
@@ -71,6 +71,17 @@ export const fileMention = (name, folderId, rel) => `@[${String(name || '').repl
 export function fileMentionOf(tok) {
   const m = String(tok ?? '').match(FILE_MENTION_RE);
   return m ? { name: m[1], folderId: m[2], rel: decodeRel(m[3]) } : null;
+}
+// An item of the connected Zotero library (MATH-65 build 2, 2026-10-07): `@[Title](zotero:<itemKey>)`. The item is no
+// library row: main reads it from the mirror of the library (src/main/zotero/mirror.cjs) when Bart is asked or the chip is
+// clicked (its pdf in the Stage, else its address). Before the plain mention in INLINE too.
+export const ZOTERO_MENTION_RE = /^@\[([^\]\n]+)\]\(zotero:([A-Za-z0-9]+)\)$/;
+/** The token that mentions the Zotero item `key`, under its title. */
+export const zoteroMention = (title, key) => `@[${String(title || '').replace(/[[\]\n]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200) || 'Untitled'}](zotero:${key})`;
+/** A Zotero mention's parts → { name, key }, or null. */
+export function zoteroMentionOf(tok) {
+  const m = String(tok ?? '').match(ZOTERO_MENTION_RE);
+  return m ? { name: m[1], key: m[2] } : null;
 }
 // What kind of file a name is, by its extension, as the library tells (store/library.cjs FILE_TYPES): the chip's glyph.
 const FILE_KINDS = { md: 'md', markdown: 'md', pdf: 'pdf', html: 'html', htm: 'html', csv: 'data', tsv: 'data', json: 'data', jsonl: 'data', ndjson: 'data', parquet: 'data', xlsx: 'data', docx: 'md', png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', heic: 'image', svg: 'image' };
@@ -122,6 +133,8 @@ const FILE_ICONS = {
   folder: svgIcon('<path d="M1.5 4a1 1 0 0 1 1-1h3.3l1.5 1.8h6.2a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z"/>'),
 };
 FILE_ICONS.file = FILE_ICONS.pdf;
+// A Zotero item's glyph: a book.
+const ZOTERO_ICON = svgIcon('<path d="M3 2.5h7.5a1.5 1.5 0 0 1 1.5 1.5v9.5H4.5A1.5 1.5 0 0 1 3 12z"/><path d="M3 12a1.5 1.5 0 0 1 1.5-1.5H12"/>');
 // A bare address, typed, pasted or written by @bart, is a link as it stands (closing punctuation is not part of it).
 const URL_RE = /^https?:\/\/\S+$/;
 
@@ -281,6 +294,7 @@ export function tokShown(tok, opts) {
   if (tok.startsWith('*') && tok.endsWith('*') && tok.length > 2) return { shown: tok.slice(1, -1), pre: 1 };
   const ws = tok.match(WS_MENTION_RE); if (ws) return { shown: '@' + ws[1], pre: 1 }; // the icon after the @ is not text
   const file = tok.match(FILE_MENTION_RE); if (file) return { shown: '@' + file[1], pre: 1 }; // nor a file's glyph
+  const zotero = tok.match(ZOTERO_MENTION_RE); if (zotero) return { shown: '@' + zotero[1], pre: 1 }; // nor a Zotero item's
   const lib = tok.match(LIB_MENTION_RE); if (lib) return { shown: '@' + libShown(lib[1], lib[2], opts && opts.libName), pre: 1 };
   if (tok.startsWith('@[')) { const nm = tok.slice(2, -1), chat = chatMention(nm); return { shown: '@' + (chat ? chat.shown : nm), pre: 1 }; }
   const m = tok.match(LINK_RE); if (m) return { shown: m[1], pre: 1 };
@@ -412,6 +426,10 @@ function fileHtml(tok, opts) {
   const kind = state && state.dir ? 'folder' : fileKindOf(f.rel), gone = state === false;
   return `<span data-mention="${esc(f.name)}" data-folder="${esc(f.folderId)}" data-file="${esc(f.rel)}"${gone ? ' data-missing="1"' : ''} title="${esc(gone ? `Not found: ${where}` : where)}" style="${gone ? 'color:#8f8f8f;font-weight:500;cursor:pointer;border-bottom:1px dotted #d9d9d9;text-decoration:line-through;text-decoration-color:#c9c9c9' : MENTION_LOOK};white-space:nowrap">@${FILE_ICONS[kind] || FILE_ICONS.file}${esc(f.name)}</span>`;
 }
+// A Zotero item's chip (MATH-65 build 2): the @, a book glyph, its title; `data-zotero` (its key) is what a click opens.
+function zoteroHtml(name, key) {
+  return `<span data-mention="${esc(name)}" data-zotero="${esc(key)}" title="Zotero" style="${MENTION_LOOK};white-space:nowrap">@${ZOTERO_ICON}${esc(name)}</span>`;
+}
 // A mention by name, `@[Name]`. A chat's (chatMention) shows its word: Bart's is blue, a chat that is gone grey. Anything
 // else is a note or a library item: `named(name)` (optional) is false when nothing goes by that name, which leaves it grey;
 // `trashed(name)` true for a note in the trash, grey but still clickable.
@@ -445,6 +463,8 @@ export function inlineHtml(text, opts) {
     const lib = p.match(LIB_MENTION_RE);
     if (lib) return libHtml(lib[1], lib[2], opts && opts.libName, opts && opts.trashed);
     if (FILE_MENTION_RE.test(p)) return fileHtml(p, opts);
+    const zotero = p.match(ZOTERO_MENTION_RE);
+    if (zotero) return zoteroHtml(zotero[1], zotero[2]);
     if (p.startsWith('@[')) return nameHtml(p.slice(2, -1), opts && opts.named, opts && opts.trashed);
     const m = p.match(LINK_RE);
     if (m) return `<a href="${esc(m[2])}" data-link="1" style="color:#0070f3;text-decoration:underline;text-underline-offset:3px">${esc(m[1])}</a>`;
@@ -598,6 +618,7 @@ function plainHtml(text) {
     const ws = tok.match(WS_MENTION_RE); if (ws) return esc(ws[1]);
     const lib = tok.match(LIB_MENTION_RE); if (lib) return esc(lib[1]);
     const file = tok.match(FILE_MENTION_RE); if (file) return esc(file[1]);
+    const zotero = tok.match(ZOTERO_MENTION_RE); if (zotero) return esc(zotero[1]);
     if (tok.startsWith('@[')) return esc(tok.slice(2, -1));
     const m = tok.match(LINK_RE); if (m) return SAFE_HREF.test(m[2]) ? `<a href="${esc(m[2])}">${esc(m[1])}</a>` : esc(m[1]);
     if (URL_RE.test(tok)) return `<a href="${esc(tok)}">${esc(tok)}</a>`;

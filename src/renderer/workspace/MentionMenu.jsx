@@ -3,6 +3,7 @@
 // +. It hangs under the caret, or above it when the line is near the bottom of the window, and scrolls past a dozen rows.
 // A library folder (MATH-22) carries a › and opens in place when picked: a row back up, "Mention this folder", then what
 // it holds (model/rail.js folderRows); a row that only says something (loading, how many more) is grey and not picked.
+// Zotero (MATH-65 build 2) opens the same way; an item of it says its authors and year beside its title.
 // A long name is cut in the middle, so its end and extension show (model/rail.js nameParts); the row's title is the whole.
 import React from 'react';
 import { KindGlyph } from '../ui/Icons.jsx';
@@ -56,6 +57,7 @@ export default function MentionMenu({ items, index, anchor, onPick, onHover }) {
           <Name m={m} />
           {m.kind === 'back' && m.hint && <span style={{ flex: '0 1 auto', minWidth: 0, maxWidth: '60%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', direction: 'rtl', textAlign: 'left', font: '12px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{m.hint}</span>}
           {(isFolderRow(m) || (m.kind === 'entry' && m.dir)) && <span style={{ flex: 'none', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', font: '15px/1 var(--font-sans)', color: '#8f8f8f' }}>›</span>}
+          {m.kind === 'entry' && m.zotero && m.hint && <span style={{ flex: '0 1 auto', minWidth: 0, maxWidth: '40%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '12px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{m.hint}</span>}
           {m.kind === 'workspace' && m.above.length > 0 && <span style={{ flex: '0 1 auto', minWidth: 0, maxWidth: '45%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '12px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{m.above.join(' / ')}</span>}
           {m.kind === 'fresh' && <span style={{ flex: 'none', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', font: '15px/1 var(--font-sans)', color: '#8f8f8f' }}>+</span>}
         </div>

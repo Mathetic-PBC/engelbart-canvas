@@ -11,9 +11,10 @@ import { hasTag, isNote } from '../model/kind.js';
 import { isUntitled, nextUntitled } from '../model/names.js';
 import { OPEN_IN_BROWSER } from '../model/address.js';
 import { adoptSession, dropSession, SHOW_TERMINAL } from '../terminal/sessions.js';
-import { letGoNotes, mentionRows, mentionedIds, pickedChanges } from '../model/rail.js';
+import { letGoNotes, mentionRows, mentionedIds, pickedChanges, ZOTERO_ROW } from '../model/rail.js';
 import { useBodies } from '../workspace/useBodies.js';
 import { useFolderFiles } from '../workspace/useFolderFiles.js';
+import { useZoteroStatus } from '../workspace/useZoteroStatus.js';
 import { flatWorkspaces, nextPlace, placesToGo } from '../model/nav.js';
 import { onStage, savesPageCopy } from '../model/stage.js';
 import { paperState, savePaper, repoState, tryRepo } from '../model/guide.js';
@@ -57,8 +58,8 @@ import { repositoryClick, OPEN_SANDBOX_TERMINAL } from '../model/sandbox-notific
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const IMAGE_REF_RE = /\]\(img:([\w-]+)\)/g;
 // A note or a library row by its name; `@[Name](ws:<id>)` is a workspace, `@[Name](lib:<folderId>:<path>)` a file in a
-// library folder (MATH-22), which is no row of its own.
-const MENTION_RE = /@\[([^\]\n]+)\](?!\(ws:|\(lib:[\w-]+:)/g;
+// library folder (MATH-22), which is no row of its own, and `@[Title](zotero:<key>)` a Zotero item (MATH-65), no row either.
+const MENTION_RE = /@\[([^\]\n]+)\](?!\(ws:|\(lib:[\w-]+:|\(zotero:)/g;
 const SAVE_DELAY = 400;
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
 
@@ -941,6 +942,25 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     showRight('stage');
     stageRef.current.openInput(href, options);
   }, [showRight]);
+  // The connected Zotero library (MATH-65 build 2): its row in the @ menu while connected, opened as a library folder is
+  // (main lists its collections and items from the mirror), and a mentioned item's chip opens its pdf in the Stage, or
+  // its address when it has no file (main downloads the file when it is not on this Mac).
+  const [zotero] = useZoteroStatus();
+  const zoteroOn = !!(zotero && zotero.connected);
+  const listFolder = React.useCallback((id, rel) => (id === ZOTERO_ROW.id ? api.zoteroList(rel) : api.listFolder(id, rel)), []);
+  const openZotero = React.useCallback(async ({ key, name }, options = {}) => {
+    try {
+      const target = await api.zoteroOpen(key);
+      if (target && target.path) {
+        if (!stageRef.current) return;
+        showRight('stage');
+        stageRef.current.openFile(target.path, { newTab: !!options.newTab });
+      } else if (target && target.url) openLink(target.url, { newTab: !!options.newTab });
+      else onError(new Error((target && target.error) || `"${name || key}" could not be opened`));
+    } catch (error) {
+      onError(error);
+    }
+  }, [showRight, openLink, onError]); // eslint-disable-line react-hooks/exhaustive-deps
   // What the window itself would open in a new window or tab (a ⌘-click on a link the editor does not handle): main sends
   // it here while this listens, not to the default browser (src/main/index.cjs, 2026-10-02). Not while the project's folder
   // is being asked for: the Stage under that is out of reach.
@@ -1080,8 +1100,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const [mentionOpen, setMentionOpen] = React.useState(false);
   const mentionBodies = useBodies(project.id, mentionOpen);
   const mentionItems = React.useCallback(
-    (query) => mentionRows({ query, library: findable, page: pageKnown ? openPage : null, pageRow: pageKnown ? pageKnown.row : null, workspaces: mentionSpaces, hereId: topic ? topic.id : null, bodies: mentionBodies }),
-    [findable, openPage, pageKnown, mentionSpaces, topic, mentionBodies],
+    (query) => mentionRows({ query, library: findable, page: pageKnown ? openPage : null, pageRow: pageKnown ? pageKnown.row : null, workspaces: mentionSpaces, hereId: topic ? topic.id : null, bodies: mentionBodies, zotero: zoteroOn }),
+    [findable, openPage, pageKnown, mentionSpaces, topic, mentionBodies, zoteroOn],
   );
   // A mentioned workspace's peek (workspace/WorkspacePeek.jsx): the tree, state.json's agents and recent edits, and its
   // document as open here (unsaved words included) or as saved.
@@ -1519,9 +1539,10 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     mentionItems,
     onMentionOpen: setMentionOpen,
     onMentionPicked: mentionPicked,
-    listFolder: api.listFolder,
+    listFolder,
     fileState: folderFiles.fileState,
     onOpenFile: openFolderFile,
+    onOpenZotero: openZotero,
     workspacePeek,
     onOpenWorkspace: openMentionedWorkspace,
     onNoteVerb: (name) => makeNote(name, false),

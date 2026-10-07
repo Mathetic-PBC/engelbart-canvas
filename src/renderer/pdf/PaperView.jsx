@@ -2172,7 +2172,8 @@ export default class PaperView extends React.Component {
     const browse = this.browsing();
     if (browse) return folderRows({ browse, listing: browse.listing, query: open.query.toLowerCase() });
     const bart = this.asksFrom(m) && !String((m && m.note) || '').slice(0, open.start).trim();
-    return (this.props.mentionItems(open.query.toLowerCase()) || []).filter((r) => r && ((r.kind === 'item' && r.row && r.row.id) || (bart && r.kind === 'verb' && r.verb === 'bart')));
+    // Zotero's row (MATH-65 build 2) is the documents' alone: a note mentions library items.
+    return (this.props.mentionItems(open.query.toLowerCase()) || []).filter((r) => r && ((r.kind === 'item' && r.row && r.row.id && !r.row.zotero) || (bart && r.kind === 'verb' && r.verb === 'bart')));
   }
   // Keys in a note's field: the menu's first while it is open (↑ ↓ move, Enter or Tab picks, Escape closes it alone),
   // then Enter in a highlight's note that starts with @bart asks (Shift+Enter is a new line), then Escape leaves the note.

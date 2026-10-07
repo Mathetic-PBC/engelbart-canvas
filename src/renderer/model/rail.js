@@ -182,7 +182,7 @@ const FIRST_WORKSPACES = 3; // before anything is typed
  * (MATH-59, matchRank): names that start with what is typed, names that hold it, where they are or their kind, their
  * summary, and last (with `bodies`) only what they say.
  */
-export function mentionRows({ query, library, page, pageRow, workspaces = [], hereId = null, bodies = null }) {
+export function mentionRows({ query, library, page, pageRow, workspaces = [], hereId = null, bodies = null, zotero = false }) {
   const needle = String(query || '').trim().toLowerCase();
   const verbs = [BART_VERB, NOTE_VERB, BRAINSTORM_VERB, DISCOVER_VERB].filter((verb) => !needle || verb.name.toLowerCase().startsWith(needle));
   const pool = library.filter((row) => row.type !== 'image');
@@ -197,13 +197,22 @@ export function mentionRows({ query, library, page, pageRow, workspaces = [], he
   const said = needle ? others.filter((workspace) => !named.includes(workspace) && bodyOf(bodies, 'workspaces', workspace.id).includes(needle)) : [];
   const spaces = (needle ? [...named, ...said].slice(0, MAX_WORKSPACES) : others.slice(0, FIRST_WORKSPACES))
     .map((workspace) => ({ kind: 'workspace', key: `ws:${workspace.id}`, id: workspace.id, name: workspace.name, above: workspace.above || [] }));
-  return [...out, ...spaces, ...hits.slice(0, MAX_MENTIONS)];
+  // The connected Zotero library (MATH-65 build 2): one row, opened like a library folder, before the library's own.
+  const zoteroRow = zotero && (!needle || ZOTERO_ROW.name.toLowerCase().startsWith(needle)) ? [{ kind: 'item', key: ZOTERO_ROW.id, row: ZOTERO_ROW, name: ZOTERO_ROW.name }] : [];
+  return [...out, ...spaces, ...zoteroRow, ...hits.slice(0, MAX_MENTIONS)];
 }
 
 /* ------------------------------------------------------------ files in a folder (MATH-22) */
 
-/** A library row the @ menu goes into rather than mentions: a folder on this Mac, a repository's clone included. */
-export const isBrowsable = (row) => !!row && row.type === 'folder' && !!row.folder_path;
+/**
+ * The connected Zotero library in the @ menu (MATH-65 build 2): no library row, but opened as one of its folders is
+ * (`@Zotero/` in the line), its collections then its items listed by main from the mirror (zotero-list). An item picked
+ * is mentioned as `@[Title](zotero:<key>)` (model/doc.js zoteroMention); the library itself is not mentioned.
+ */
+export const ZOTERO_ROW = Object.freeze({ id: 'zotero', type: 'folder', name: 'Zotero', zotero: true, tags: [] });
+export const isZotero = (row) => !!row && row.zotero === true;
+/** A library row the @ menu goes into rather than mentions: a folder on this Mac, a repository's clone included; Zotero. */
+export const isBrowsable = (row) => !!row && (isZotero(row) || (row.type === 'folder' && !!row.folder_path));
 /** The @ menu's row for a library folder: picked, it opens (MF-01). */
 export const isFolderRow = (m) => !!m && m.kind === 'item' && isBrowsable(m.row);
 
@@ -224,14 +233,15 @@ export function folderRows({ browse, listing, query }) {
   const say = (key, name) => [...out, { kind: 'note', key: `note:${key}`, name }];
   if (listing === undefined) return say('loading', 'Opening…');
   if (!listing || listing.error) return say('error', (listing && listing.error) || 'This folder could not be read');
-  if (listing.missing) return say('missing', rel ? 'This folder is no longer there' : 'This folder is not on this Mac any more');
-  if (!needle) {
+  if (listing.missing) return say('missing', isZotero(row) ? 'This collection is no longer in Zotero' : rel ? 'This folder is no longer there' : 'This folder is not on this Mac any more');
+  if (!needle && !isZotero(row)) {
     out.push(rel
       ? { kind: 'self', key: `self:${rel}`, name: 'Mention this folder', row, rel, entryName: parts[parts.length - 1], dir: true }
       : { kind: 'self', key: 'self', name: 'Mention this folder', row });
   }
-  const hits = (listing.entries || []).filter((entry) => !needle || entry.name.toLowerCase().includes(needle));
-  for (const entry of hits.slice(0, MAX_MENTIONS)) out.push({ kind: 'entry', key: `entry:${entry.rel}`, name: entry.name, row, rel: entry.rel, dir: !!entry.dir, type: entry.type || null });
+  // A Zotero item is found by its authors and year too (`find`), and says them beside its title (`hint`).
+  const hits = (listing.entries || []).filter((entry) => !needle || entry.name.toLowerCase().includes(needle) || (entry.find || '').includes(needle));
+  for (const entry of hits.slice(0, MAX_MENTIONS)) out.push({ kind: 'entry', key: `entry:${entry.rel}`, name: entry.name, row, rel: entry.rel, dir: !!entry.dir, type: entry.type || null, ...(entry.zotero ? { zotero: entry.zotero, hint: entry.hint || '' } : {}) });
   // More than shown: those cut here, and (nothing typed) those main left out of a very large folder.
   const more = hits.length - Math.min(hits.length, MAX_MENTIONS) + (needle ? 0 : Math.max(0, (listing.total || 0) - (listing.entries || []).length));
   if (more > 0) out.push({ kind: 'note', key: 'note:more', name: `${more} more${needle ? '' : ': type to narrow'}` });
@@ -262,8 +272,8 @@ export const fieldRows = (rows) => rows.filter((row) => row && !isVerbRow(row));
 export const mentionName = (value) => String(value || '').replace(/[[\]]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200) || 'Untitled page';
 
 // Every mention a document holds: `@[Name]`, `@[Name](lib:<id>)`, `@[Name](ws:<id>)`, and a file in a library folder,
-// `@[Name](lib:<folderId>:<path>)` (MATH-22).
-const MENTION_TOKEN_RE = /@\[([^\]\n]+)\](?:\((ws|lib):([\w-]+)(?::[\w.~%/-]+)?\))?/g;
+// `@[Name](lib:<folderId>:<path>)` (MATH-22), and a Zotero item, `@[Title](zotero:<key>)`, which is no row.
+const MENTION_TOKEN_RE = /@\[([^\]\n]+)\](?:\((ws|lib|zotero):([\w-]+)(?::[\w.~%/-]+)?\))?/g;
 /**
  * The library rows a document mentions, by id (MATH-57): a library mention its item, a plain one every row of its name
  * (as the rail reads them, Workspace.jsx `mentioned`). A workspace is no row. A file in a folder (MATH-22) is a mention of

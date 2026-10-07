@@ -24,7 +24,7 @@ function noteName(text) {
     let line = raw.replace(/^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+\[[ xX]?\]\s*|[-*+]\s+|\d+[.)]\s+)/, '');
     line = line
       .replace(/!\[([^\]]*)\]\([^)]*\)/g, '')
-      .replace(/@\[([^\]]*)\]\(ws:[\w-]+\)/g, '$1')
+      .replace(/@\[([^\]]*)\]\((?:ws|lib|zotero):[^)\s]*\)/g, '$1')
       .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
       .replace(/@\[([^\]]*)\]/g, '$1')
       .replace(/\*\*|__|~~|`|\*/g, '')

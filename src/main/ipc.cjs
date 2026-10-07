@@ -13,6 +13,7 @@ const db = require('./store/db.cjs');
 const projects = require('./store/projects.cjs');
 const library = require('./store/library.cjs');
 const folderFiles = require('./store/folder-files.cjs');
+const zoteroMirror = require('./zotero/mirror.cjs');
 const { expandDoc } = require('./context/expand-mentions.cjs');
 const { failureLines } = require('./bart/reply.cjs');
 const { clipMiddle } = require('./bart/clip.cjs');
@@ -131,7 +132,7 @@ function projectInput(value) {
 // that is open, as `afterOpen(ctx, { again: true })`, when a row it would act on has just been added (2026-10-02).
 // `testMode`: whether this copy has test mode at all (./developer.cjs). Without it config.json's `testMode` is read as
 // off but never rewritten, so a developer's copy sharing the file keeps its setting.
-function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf = null, afterOpen = null, testMode: available = false }) {
+function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf = null, afterOpen = null, testMode: available = false, zotero = null }) {
   const layout = home.ensureHome(homeDir, rootDir, { test: available });
   const contexts = new Map();
 
@@ -155,7 +156,8 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
       home.ensureHome(homeDir, rootDir, { test: available });
       const dataRoot = current === 'test' ? layout.testRoot : layout.root;
       const libraryDb = await db.openLibraryDb(dataRoot);
-      const next = { homeDir, root: layout.root, dataRoot, mode: current, libraryDb };
+      // `zotero()`: main's Zotero library (zotero/sync.cjs), for a mentioned item's file to be downloaded (MATH-65 build 2).
+      const next = { homeDir, root: layout.root, dataRoot, mode: current, libraryDb, ...(zotero ? { zotero } : {}) };
       // Test mode's sample library, except after "Start as a new user" (a new install has an empty library).
       if (current === 'test' && !fs.existsSync(path.join(dataRoot, FRESH_MARK))) await library.seedIfEmpty(next, fixturesDir);
       // A library behind the category rules (converted from the old types, or from before a change of
@@ -216,7 +218,7 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
 // that window's browser views' savePage). `stagePageFor(win, tabId)` reaches a window's Stage tab for an @bart turn
 // (MATH-54 build 3a): { selection(), screenshot() } (the app passes that window's browser views'), or null.
 // `getUpdates()`: the updater (updates.cjs), made after this is registered; null until then, and in the tests.
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, getUpdates = () => null }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, getUpdates = () => null }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
   const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
@@ -349,11 +351,37 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   });
   // Zotero (src/main/zotero/connection.cjs, MATH-65): signing in through the default browser and the broker. Every change
   // is announced on `engelbart:zotero` with the status, which names the account and never carries the key.
+  // The library (MATH-65 build 2, zotero/sync.cjs): the status carries the mirror's too (`sync`: { state, items, syncedAt,
+  // error }); zotero-sync starts a sync and answers at once, its progress following on `engelbart:zotero`. Disconnecting
+  // deletes the mirror. zotero-list is a level of the library for the @ menu, zotero-open what a mention's chip opens.
   const zt = () => { if (!zotero) throw new Error('Zotero is not available'); return zotero; };
-  handle('zotero-status', () => (zotero ? zotero.status() : { configured: false, connected: false, username: '', userID: '', persisted: true, pending: null, error: '' }));
-  handle('zotero-connect', () => zt().connect());
-  handle('zotero-cancel', () => zt().cancel());
-  handle('zotero-disconnect', () => zt().disconnect());
+  const zoteroStatus = (status) => ({ ...status, sync: zoteroLibrary && status.connected ? zoteroLibrary.status() : null });
+  handle('zotero-status', () => (zotero ? zoteroStatus(zotero.status()) : { configured: false, connected: false, username: '', userID: '', persisted: true, pending: null, error: '', sync: null }));
+  handle('zotero-connect', async () => zoteroStatus(await zt().connect()));
+  handle('zotero-cancel', () => zoteroStatus(zt().cancel()));
+  handle('zotero-disconnect', async () => {
+    const status = await zt().disconnect();
+    if (zoteroLibrary) zoteroLibrary.clear();
+    return zoteroStatus(status);
+  });
+  handle('zotero-sync', () => {
+    if (!zotero || !zotero.status().connected) throw new Error('Zotero is not connected');
+    if (zoteroLibrary) void zoteroLibrary.sync().catch(() => {});
+    return zoteroStatus(zotero.status());
+  });
+  const zoteroRoot = () => (zoteroLibrary && zotero && zotero.status().connected ? zoteroLibrary.root() : null);
+  handle('zotero-list', (rel) => {
+    const root = zoteroRoot();
+    if (!root) return { error: 'Zotero is not connected' };
+    return zoteroMirror.listLevel(root, rel == null ? '' : str(rel, 'path', 4096));
+  });
+  handle('zotero-open', (key) => {
+    const root = zoteroRoot();
+    if (!root) return { error: 'Zotero is not connected' };
+    const itemKey = str(key, 'item key', 32);
+    if (!zoteroMirror.KEY_RE.test(itemKey)) throw new TypeError('item key is invalid');
+    return zoteroMirror.openTarget(root, itemKey, { download: zoteroLibrary.download, ...(zoteroLibrary.storageDir ? { storageDir: zoteroLibrary.storageDir } : {}) });
+  });
   handle('record-edit', withCtx((ctx, pid, wid) => { projects.recordEdit(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); navChanged(); return true; }));
   handle('seen-agents', withCtx((ctx, pid, wid) => { const seen = projects.seenAgents(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); if (seen) navChanged(); return seen; }));
   handle('list-projects', withCtx((ctx) => projects.listProjects(ctx)));

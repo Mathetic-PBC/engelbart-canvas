@@ -60,9 +60,11 @@ export async function githubAction(action, status) {
   return null;
 }
 
-// Zotero (MATH-65): the account only, laid out as GitHub's row. Connect opens the broker's sign-in in the default browser
+// Zotero (MATH-65): the account, laid out as GitHub's row. Connect opens the broker's sign-in in the default browser
 // (src/main/zotero/browser-auth.cjs); while it waits, the row says to finish there and offers Cancel. Disconnect, behind
-// the options menu, forgets the key and revokes it. Reading the library (collections, items, PDFs) is the next build.
+// the options menu, forgets the key, revokes it and deletes the mirror of the library. Connected, the row says where the
+// mirror stands (build 2, src/main/zotero/sync.cjs: `status.sync`): "Syncing…", "Synced · N items", or what went wrong;
+// "Sync now" in the menu syncs it again.
 const ZoteroIcon = () => <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3.5 3h9l-9 10h9" /></svg>;
 
 export function ZoteroConnection({ status, busy, error, onAction }) {
@@ -71,22 +73,34 @@ export function ZoteroConnection({ status, busy, error, onAction }) {
   const problem = error || status?.error || '';
   const description = !status ? 'Checking connection…' : connected && busy === 'disconnect' ? 'Disconnecting…' : connected ? `Connected${status.username ? ` · ${status.username}` : ''}`
     : pending ? 'Finish signing in in your browser' : busy === 'connect' ? 'Connecting…' : !status.configured ? 'Not configured' : 'Not connected';
+  const library = connected && busy !== 'disconnect' ? zoteroSyncLine(status.sync) : null;
   const spinning = pending || busy === 'connect' || (connected && busy === 'disconnect');
   const disabled = !!busy || !status || (!status.configured && !connected);
   return <Row data-connection="zotero" icon={<ZoteroIcon />} label="Zotero"
     hint={<span role="status" style={{ display: 'flex', alignItems: 'center', gap: 6, overflowWrap: 'anywhere' }}>{spinning && <Spinner />}<span style={{ minWidth: 0 }}>{description}</span></span>}
     detail={<>
+      {library && <p data-zotero-sync={status.sync.state} role={library.error ? 'alert' : 'status'} style={{ ...note(library.error ? 'var(--red-600)' : undefined), display: 'flex', alignItems: 'center', gap: 6 }}>{library.busy && <Spinner />}<span style={{ minWidth: 0 }}>{library.text}</span></p>}
       {connected && status.persisted === false && <p style={note()}>Connected until Engelbart quits.</p>}
       {!pending && problem && <p role="alert" style={note('var(--red-600)')}>{problem}</p>}
     </>}>
-    {connected ? <ConnectionActions provider="zotero" label="Zotero" busy={busy} onAction={onAction} items={[{ action: 'disconnect', label: 'Disconnect' }]} />
+    {connected ? <ConnectionActions provider="zotero" label="Zotero" busy={busy} onAction={onAction} items={[{ action: 'sync', label: 'Sync now' }, { action: 'disconnect', label: 'Disconnect', separator: true }]} />
       : pending ? <button type="button" className="hov-bd2" data-connection-action="cancel" disabled={!!busy} onClick={() => onAction('cancel')} style={bordered(!!busy)}>{busy === 'cancel' ? 'Cancelling…' : 'Cancel'}</button>
       : <button type="button" className="hov-bd2" data-connection-action="connect" disabled={disabled} onClick={() => onAction('connect')} style={bordered(disabled)}>{busy === 'connect' ? 'Connecting…' : 'Connect'}</button>}
   </Row>;
 }
 
+/** What the Zotero row says of the library's mirror (`sync` { state, items, error }) → { text, busy, error }, or null. */
+export function zoteroSyncLine(sync) {
+  if (!sync) return null;
+  if (sync.state === 'syncing') return { text: 'Syncing…', busy: true, error: false };
+  if (sync.state === 'error') return { text: sync.error || 'The library could not be synced.', busy: false, error: true };
+  if (sync.state === 'synced') return { text: `Synced · ${sync.items} ${sync.items === 1 ? 'item' : 'items'}`, busy: false, error: false };
+  return null;
+}
+
 /** What each Zotero action calls. The answers are the status, which never carries the key. */
 export function zoteroAction(action) {
+  if (action === 'sync') return api.zoteroSync();
   if (action === 'connect') return api.zoteroConnect();
   if (action === 'cancel') return api.zoteroCancel();
   if (action === 'disconnect') return api.zoteroDisconnect();

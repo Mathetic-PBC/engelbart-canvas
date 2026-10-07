@@ -360,7 +360,7 @@ test('IPC: zotero status / connect / cancel / disconnect answer the status, and 
 
   const bare = new Map();
   registerEngelbartIpc({ store: {}, ipcMain: { handle: (name, fn) => bare.set(name, fn) }, trustedHandler: (fn) => fn });
-  assert.deepEqual(await bare.get('engelbart:zotero-status')({}), { configured: false, connected: false, username: '', userID: '', persisted: true, pending: null, error: '' });
+  assert.deepEqual(await bare.get('engelbart:zotero-status')({}), { configured: false, connected: false, username: '', userID: '', persisted: true, pending: null, error: '', sync: null });
   await assert.rejects(async () => bare.get('engelbart:zotero-connect')({}), /not available/);
 });
 

@@ -48,6 +48,8 @@ const { createE2bKey } = require('./github/e2b-key.cjs');
 const { createRepoAccess } = require('./github/repo-access.cjs');
 const { createZotero } = require('./zotero/connection.cjs');
 const { createBrowserAuth: createZoteroBrowserAuth } = require('./zotero/browser-auth.cjs');
+const { createZoteroSync } = require('./zotero/sync.cjs');
+const { mirrorDir: zoteroMirrorDir } = require('./zotero/mirror.cjs');
 const { createSandboxManager } = require('./sandbox/manager.cjs');
 const { createSandboxPty } = require('./sandbox/pty.cjs');
 const { createSandboxTerminals } = require('./sandbox/terminals.cjs');
@@ -94,6 +96,7 @@ let manager = null;
 let settings = null;
 let store = null;
 let sweeper = null;
+let zoteroLibrary = null; // the Zotero library's mirror (src/main/zotero/sync.cjs), made with the Zotero sign-in
 let bart = null;
 let builds = null;
 let sandbox = null;
@@ -568,7 +571,7 @@ if (!hasSingleInstanceLock) {
     const afterOpen = process.env.ENGELBART_WEB_PDFS === 'off' ? null
       : (ctx, { again = false } = {}) => checkWebPdfs(ctx, { fetchPdf, inspectPdf, onChange: () => { libraryChanged(); pdfAdded(); }, log: (line) => console.warn(`[engelbart] ${line}`), again });
     // Test mode only in a developer's copy: run from a checkout, or packaged by `npm run relaunch` (./developer.cjs).
-    store = createStore({ homeDir, rootDir: process.env.ENGELBART_ROOT_DIR || null, fixturesDir: FIXTURES, inspectPdf, afterOpen, testMode: hasTestMode({ packaged: app.isPackaged, distDir: DIST, env: process.env }) });
+    store = createStore({ homeDir, rootDir: process.env.ENGELBART_ROOT_DIR || null, fixturesDir: FIXTURES, inspectPdf, afterOpen, testMode: hasTestMode({ packaged: app.isPackaged, distDir: DIST, env: process.env }), zotero: () => zoteroLibrary });
     // Git, Claude Code and Codex (src/main/tools): checked at every launch in the background and recorded in
     // config.json → tools; installed, updated and signed in to from the setup dialog. The Git that comes with
     // Engelbart stands in when the Mac has none of its own (tools/bundled-git.cjs), and on a Mac with neither agent
@@ -792,10 +795,23 @@ if (!hasSingleInstanceLock) {
       onConnected: () => {
         const ctx = focusedWindow();
         if (ctx && !ctx.win.isDestroyed()) { if (ctx.win.isMinimized()) ctx.win.restore(); ctx.win.show(); ctx.win.focus(); }
+        void zoteroLibrary.sync().catch(() => {}); // the library, mirrored as soon as it is connected
       },
-      onChange: (status) => sendToWindow('engelbart:zotero', status),
+      onChange: () => sendToWindow('engelbart:zotero', zoteroStatus()),
       ...(process.env.ENGELBART_ZOTERO_API ? { api: process.env.ENGELBART_ZOTERO_API } : {}),
     });
+    // The connected library, mirrored in <dataRoot>/.zotero/ (src/main/zotero/sync.cjs, MATH-65 build 2) for Bart and the
+    // @ menu: synced after connecting, a little after launch when connected, and from the Zotero row's "Sync now". The key
+    // goes to api.zotero.org only. ENGELBART_ZOTERO_STORAGE names Zotero's storage folder when not ~/Zotero/storage.
+    zoteroLibrary = createZoteroSync({
+      root: () => zoteroMirrorDir(store.config().dataRoot),
+      account: () => { const key = zotero.key(); return key ? { userID: zotero.status().userID, key } : null; },
+      onChange: () => sendToWindow('engelbart:zotero', zoteroStatus()),
+      ...(process.env.ENGELBART_ZOTERO_API ? { api: process.env.ENGELBART_ZOTERO_API } : {}),
+      ...(process.env.ENGELBART_ZOTERO_STORAGE ? { storageDir: process.env.ENGELBART_ZOTERO_STORAGE } : {}),
+    });
+    const zoteroStatus = () => { const status = zotero.status(); return { ...status, sync: status.connected ? zoteroLibrary.status() : null }; };
+    setTimeout(() => { try { if (zotero.key()) void zoteroLibrary.sync().catch(() => {}); } catch { /* no keychain yet: next launch */ } }, 4000);
     // The E2B API key for whoever is signed in (src/main/github/e2b-key.cjs), in memory only, and the only key the sandbox
     // worker gets (sandbox/manager.cjs). ENGELBART_E2B_KEY_HOST is for scripted runs only.
     const e2bKey = createE2bKey({
@@ -842,6 +858,7 @@ if (!hasSingleInstanceLock) {
       github,
       openGithubPage,
       zotero,
+      zoteroLibrary,
       identifyRepo: createRepoIdentifier({ auth: github.authHeaders }),
       listRemoteFiles: createRemoteFileLister({ auth: github.authHeaders }),
       ipcMain,

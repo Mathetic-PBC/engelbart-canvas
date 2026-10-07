@@ -86,6 +86,12 @@ const engelbartAPI = Object.freeze({
   zoteroConnect: invoke('zotero-connect'),
   zoteroCancel: invoke('zotero-cancel'),
   zoteroDisconnect: invoke('zotero-disconnect'),
+  // The library (MATH-65 build 2): the status's `sync` { state, items, syncedAt, error } is the mirror's. zoteroSync()
+  // starts a sync; zoteroList(rel) a level of it for the @ menu (collections by name, then items); zoteroOpen(key) what a
+  // mentioned item opens: { path } its file, { url } its page, or { error }.
+  zoteroSync: invoke('zotero-sync'),
+  zoteroList: invoke('zotero-list'),
+  zoteroOpen: invoke('zotero-open'),
   onZotero: (callback) => subscribe('engelbart:zotero', callback),
   // ⌘J pressed while a Browser page has the keyboard (src/main/browser/views.cjs); the app's own pages see the key themselves.
   onNextWorkspace: (callback) => subscribe('engelbart:next-workspace', callback),

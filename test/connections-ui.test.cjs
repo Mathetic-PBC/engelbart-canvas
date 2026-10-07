@@ -394,7 +394,7 @@ test('Zotero: while the browser sign-in waits, "Finish signing in in your browse
   assert.equal(action('cancel').props.disabled, true);
 });
 
-test('Zotero: Connected · the username, Disconnect behind the options menu', () => {
+test('Zotero: Connected · the username, Sync now and Disconnect behind the options menu', () => {
   const actions = [];
   const html = renderZotero({ ...zoteroSignedOut, connected: true, username: 'researcher', userID: '475425' }, { onAction: name => actions.push(name) });
   assert.match(html, /role="status"[^>]*><span[^>]*>Connected · researcher<\/span>/);
@@ -402,13 +402,24 @@ test('Zotero: Connected · the username, Disconnect behind the options menu', ()
   assert.equal(action('connect'), undefined);
   const menu = elements.find(element => element.props.provider === 'zotero');
   assert.equal(menu.props.label, 'Zotero');
-  assert.deepEqual(menu.props.items, [{ action: 'disconnect', label: 'Disconnect' }]);
+  assert.deepEqual(menu.props.items, [{ action: 'sync', label: 'Sync now' }, { action: 'disconnect', label: 'Disconnect', separator: true }]);
+  menu.props.onAction('sync');
   menu.props.onAction('disconnect');
-  assert.deepEqual(actions, ['disconnect']);
+  assert.deepEqual(actions, ['sync', 'disconnect']);
   assert.match(renderZotero({ ...zoteroSignedOut, connected: true, username: 'researcher' }, { busy: 'disconnect' }), /Disconnecting…/);
   assert.equal(elements.find(element => element.props['data-zotero-actions']).props.disabled, true);
   assert.match(renderZotero({ ...zoteroSignedOut, connected: true, username: 'researcher', persisted: false }), /Connected until Engelbart quits/);
   assert.match(renderZotero({ ...zoteroSignedOut, connected: true, username: '' }), /role="status"[^>]*><span[^>]*>Connected<\/span>/);
+});
+
+test('Zotero (MATH-65 build 2): the row says where the library\'s mirror stands', () => {
+  const connected = { ...zoteroSignedOut, connected: true, username: 'researcher' };
+  assert.match(renderZotero({ ...connected, sync: { state: 'syncing', items: 0, syncedAt: '', error: '' } }), /data-zotero-sync="syncing" role="status"[^>]*>.*<span[^>]*>Syncing…<\/span>/);
+  assert.match(renderZotero({ ...connected, sync: { state: 'synced', items: 1204, syncedAt: 'x', error: '' } }), /data-zotero-sync="synced"[^>]*>.*Synced · 1204 items/);
+  assert.match(renderZotero({ ...connected, sync: { state: 'synced', items: 1, syncedAt: 'x', error: '' } }), /Synced · 1 item</);
+  assert.match(renderZotero({ ...connected, sync: { state: 'error', items: 3, syncedAt: 'x', error: 'Zotero asked to slow down.' } }), /data-zotero-sync="error" role="alert" style="[^"]*var\(--red-600\)[^"]*">.*Zotero asked to slow down\./);
+  assert.doesNotMatch(renderZotero({ ...connected, sync: { state: 'idle', items: 0, syncedAt: '', error: '' } }), /data-zotero-sync/, 'nothing synced yet, nothing said');
+  assert.doesNotMatch(renderZotero({ ...connected, sync: { state: 'synced', items: 2 } }, { busy: 'disconnect' }), /Synced/, 'not while disconnecting');
 });
 
 test('Zotero: the sign-in\'s error, or an action\'s, in red, with Connect to try again', () => {
@@ -425,13 +436,15 @@ test('Zotero: each action calls its bridge method', async () => {
     zoteroConnect: async () => { calls.push('zoteroConnect'); return { ...zoteroSignedOut, pending: { kind: 'browser' } }; },
     zoteroCancel: async () => { calls.push('zoteroCancel'); return zoteroSignedOut; },
     zoteroDisconnect: async () => { calls.push('zoteroDisconnect'); return zoteroSignedOut; },
+    zoteroSync: async () => { calls.push('zoteroSync'); return { ...zoteroSignedOut, connected: true, sync: { state: 'syncing' } }; },
   });
   try {
     assert.equal((await zoteroAction('connect')).pending.kind, 'browser');
     await zoteroAction('cancel');
+    assert.equal((await zoteroAction('sync')).sync.state, 'syncing');
     await zoteroAction('disconnect');
     assert.equal(zoteroAction('reopen'), null);
-    assert.deepEqual(calls, ['zoteroConnect', 'zoteroCancel', 'zoteroDisconnect']);
+    assert.deepEqual(calls, ['zoteroConnect', 'zoteroCancel', 'zoteroSync', 'zoteroDisconnect']);
   } finally {
     for (const key of Object.keys(bridge)) delete bridge[key];
   }
