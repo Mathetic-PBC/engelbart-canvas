@@ -254,6 +254,13 @@ const engelbartAPI = Object.freeze({
   browserClose: (id) => ipcRenderer.invoke('browser:close', id),
   browserCloseAll: () => ipcRenderer.invoke('browser:close-all'),
   browserLoginReply: (requestId, credentials) => ipcRenderer.invoke('browser:login-reply', requestId, credentials),
+  // Boxes on a page (MATH-70): the drawing layer over tab `id`, and the box it last removed put back. Main says when the
+  // layer is up or gone ({ id, on }), when a box was removed ({ id, markId }) and when one came back.
+  browserBox: (id) => ipcRenderer.invoke('browser:box', id),
+  browserBoxUndo: (id) => ipcRenderer.invoke('browser:box-undo', id),
+  onBrowserBoxing: (callback) => subscribe('browser:boxing', callback),
+  onBrowserBoxRemoved: (callback) => subscribe('browser:box-removed', callback),
+  onBrowserBoxRestored: (callback) => subscribe('browser:box-restored', callback),
   onBrowserState: (callback) => subscribe('browser:state', callback),
   onBrowserClosed: (callback) => subscribe('browser:closed', callback),
   onBrowserLogin: (callback) => subscribe('browser:login', callback),

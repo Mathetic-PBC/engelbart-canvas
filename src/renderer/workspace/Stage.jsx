@@ -1,6 +1,7 @@
 import React from 'react';
 import { EDGE as WINDOW_EDGE } from '../ui/WindowEdges.jsx';
 import { isGithubSignIn } from '../../shared/github.cjs';
+import { isPreviewAddress } from '../../shared/address-key.cjs';
 import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
 import { usePreviewTouch, useSandboxes } from '../ui/SandboxProgress.jsx';
@@ -49,6 +50,9 @@ const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platfor
 // Second pass (2026-10-06): every tab holding a pdf takes its ink whenever the viewer saves it, so one brought forward
 // later never saves what it read before over it; and main tells every window how a question from a highlight ended
 // (onPaperAskDone), so its answer lands here too in a window reloaded since it asked, or another holding the pdf.
+// Boxes on a page (MATH-70 build 1): the Box button lays main's drawing layer over the page (⌥ held in the page does the
+// same, main: browser/views.cjs); a box removed in the page (Backspace) shows "Box removed · Undo" in the address row,
+// beside the page and never over it, for about REMOVED_MS.
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
@@ -63,6 +67,7 @@ const DEVICES = [
 const ERR_CONNECTION_REFUSED = -102;
 const RETRY_MS = 2000;
 const STAGE_SAVE_MS = 150; // the tabs are kept this long after they last changed (and at once when the page goes away)
+const REMOVED_MS = 5000; // how long "Box removed · Undo" stays (as a pdf's "Highlight removed")
 const HOVER_MS = 650; // a tab's card, the first time; then quickly while moving along the strip
 const newId = () => (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : String(Date.now() + Math.random()));
 const blankTab = () => ({ id: newId(), url: 'about:blank', web: null, item: null, file: null, pdf: null, pendingFind: null, pendingTo: null, sections: null, activeSection: -1 });
@@ -79,6 +84,9 @@ const basename = (value) => String(value || '').split('/').pop();
 const VIEWS = new Set(['md', 'table', 'text', 'image', 'folder', 'unsupported', 'error', 'loading']); // a file drawn here, not in the view
 
 const ICON_BUTTON = { width: 26, height: 26, padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', font: '14px/1 var(--font-sans)' };
+// The pdf's "Highlight removed · Undo" (PaperView TOAST), standing in the address row.
+const BOX_TOAST = { flex: 'none', display: 'flex', alignItems: 'center', gap: 4, height: 26, boxSizing: 'border-box', padding: '0 4px 0 10px', background: '#171717', borderRadius: 8, font: '400 12.5px/1 var(--font-sans)', color: '#fff', whiteSpace: 'nowrap' };
+const BOX_TOAST_UNDO = { flex: 'none', height: 20, padding: '0 8px', border: 0, borderRadius: 5, background: 'transparent', font: '500 12.5px/1 var(--font-sans)', color: '#fff', cursor: 'pointer' };
 
 // A file, for its glyph: what the library would call it. A tab given back and not shown yet (`restore`): what it will
 // show, its library row found by `rowOf`.
@@ -115,6 +123,12 @@ const Shelf = () => (
     <rect x="1.5" y="3" width="3.2" height="11" rx="1" />
     <path fillRule="evenodd" d="M6 5a1 1 0 0 1 1-1h1.4a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1zM6.85 6.4a.5.5 0 0 1 .5-.5h.7a.5.5 0 0 1 0 1h-.7a.5.5 0 0 1-.5-.5zm0 5.2a.5.5 0 0 1 .5-.5h.7a.5.5 0 0 1 0 1h-.7a.5.5 0 0 1-.5-.5z" />
     <rect x="10.8" y="2" width="3.2" height="12" rx="1" />
+  </svg>
+);
+// A dashed square: the Box tool (MATH-70).
+const BoxGlyph = () => (
+  <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block', flex: 'none', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round' }}>
+    <path d="M2 4.5v-1.5a1 1 0 0 1 1-1h1.5 M7 2h2 M11.5 2h1.5a1 1 0 0 1 1 1v1.5 M14 7v2 M14 11.5v1.5a1 1 0 0 1-1 1h-1.5 M9 14h-2 M4.5 14h-1.5a1 1 0 0 1-1-1v-1.5 M2 9v-2" />
   </svg>
 );
 const Grid = () => (
@@ -467,6 +481,22 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const pdfBytes = pdf && !pdf.rowId && WEB_URL.test(pdf.url) ? pdf.bytes : null;
   // a page from the web in this tab's view, which Save can keep whole (MATH-17): the tab names it to main
   const webPage = page && WEB_URL.test(pageInput || '');
+  // Boxes (MATH-70): a page whose ink is kept can be boxed; which tab has the drawing layer, and the box last removed.
+  const boxable = page && !failed && !wait && !!web && (WEB_URL.test(web.url || '') || DISK_URL.test(web.url || '')) && !isPreviewAddress(web.url || '');
+  const [boxing, setBoxing] = React.useState(null);
+  const [boxRemoved, setBoxRemoved] = React.useState(null); // { id (the tab), markId }
+  const boxTimer = React.useRef(0);
+  React.useEffect(() => {
+    if (!api.onBrowserBoxing) return undefined;
+    const offBoxing = api.onBrowserBoxing(({ id, on }) => setBoxing((current) => (on ? id : current === id ? null : current)));
+    const offRemoved = api.onBrowserBoxRemoved(({ id, markId }) => {
+      clearTimeout(boxTimer.current);
+      setBoxRemoved({ id, markId });
+      boxTimer.current = setTimeout(() => setBoxRemoved(null), REMOVED_MS);
+    });
+    const offRestored = api.onBrowserBoxRestored(({ id }) => setBoxRemoved((current) => (current && current.id === id ? null : current)));
+    return () => { offBoxing(); offRemoved(); offRestored(); clearTimeout(boxTimer.current); };
+  }, []);
   React.useEffect(() => { if (onPage) onPage(savable ? { input: pageInput, title: pageTitle || stripScheme(pageInput), bytes: pdfBytes || null, tabId: tab.id, webPage } : null); }, [savable, pageInput, pageTitle, pdfBytes, tab.id, webPage, onPage]);
   React.useEffect(() => { if (onFront) onFront(tab.item || null); }, [tab.item, onFront]);
   React.useEffect(() => { setSaving(false); }, [tab.id, pageInput]);
@@ -1253,6 +1283,16 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
             >{SAVE_LABEL[saveState]}</button>
           )}
         </div>
+        {boxRemoved && boxRemoved.id === tab.id && (
+          <div data-box-removed="1" role="status" style={BOX_TOAST} onMouseDown={(event) => event.preventDefault()}>
+            <span>Box removed</span>
+            <span style={{ color: '#8f8f8f' }}>·</span>
+            <button type="button" data-box-undo="1" style={BOX_TOAST_UNDO} onClick={() => { const id = boxRemoved.id; clearTimeout(boxTimer.current); setBoxRemoved(null); quiet(api.browserBoxUndo(id)); }}>Undo</button>
+          </div>
+        )}
+        {boxable && (
+          <button type="button" className="hov-wash" data-stage-box={boxing === tab.id ? 'on' : 'off'} aria-pressed={boxing === tab.id} onClick={() => quiet(api.browserBox(tab.id))} aria-label="Box part of the page" title="Box part of the page (or hold ⌥ and drag)" style={{ ...ICON_BUTTON, display: 'flex', alignItems: 'center', justifyContent: 'center', background: boxing === tab.id ? '#f2f2f2' : 'transparent', color: boxing === tab.id ? '#0070f3' : '#4d4d4d' }}><BoxGlyph /></button>
+        )}
         {saving && saveState === 'none' && <SaveCard key={pageInput} title={pageTitle || stripScheme(pageInput)} onSave={save.onSave} onClose={() => setSaving(false)} cardRef={saveCard} />}
         <div style={{ position: 'relative' }} ref={menuRef}>
           <button type="button" className="hov-wash" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setMenu(menu ? null : { x: r.right, y: r.bottom }); }} aria-label="More" style={{ ...ICON_BUTTON, background: menu ? '#f2f2f2' : 'transparent', font: '600 16px/1 var(--font-sans)', color: '#4d4d4d' }}>⋮</button>

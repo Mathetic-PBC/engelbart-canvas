@@ -208,12 +208,14 @@ async function webPageOf(ctx, project, rows, ref, title = '') {
 
 // The ink a paper has, and the file it is read from (the annotations attribute: Bart reads it again for a follow-up). A
 // library row's own, else the ink kept by the pdf's address (store/library.cjs). Ink that cannot be read is none.
+// `inkRoot`, the annotations folder, is where a box's picture is found from (MATH-70, highlights.cjs).
 async function inkOf(ctx, where) {
+  const inkRoot = path.join(ctx.dataRoot, 'annotations');
   try {
     const ink = where.rowId ? await library.readAnnotations(ctx, where.rowId) : await library.readPageAnnotations(ctx, where.url);
-    return { ink, annotations: await library.annotationsFileOf(ctx, where) };
+    return { ink, annotations: await library.annotationsFileOf(ctx, where), inkRoot };
   } catch {
-    return { ink: null, annotations: '' };
+    return { ink: null, annotations: '', inkRoot };
   }
 }
 

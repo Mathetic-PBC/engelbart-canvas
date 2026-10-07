@@ -2,6 +2,8 @@
 const { isGithubSignIn, endedGithubSession, GITHUB_SESSION_COOKIES } = require('../../shared/github.cjs');
 const { isPreviewAddress } = require('../../shared/address-key.cjs');
 const PAGE = require('./page-preload.cjs');
+const BOX = require('./boxes.cjs');
+const LAYER = require('./box-layer-preload.cjs');
 
 // The Browser pane's pages (decision 48). Each browser tab is a WebContentsView: a native view
 // with its own top-level webContents, laid over a placeholder the renderer measures. A page is
@@ -39,6 +41,15 @@ const PAGE = require('./page-preload.cjs');
 // preload's quote and the page's text around it, answered within SELECTION_TIMEOUT_MS or not at all, kept nowhere) and
 // what it looks like (screenshot: capturePage as a PNG, its longer edge at most SHOT_MAX_EDGE). A preview's selection is
 // read too: nothing of it is filed.
+//
+// Boxes (MATH-70 build 1, 2026-10-07; ./boxes.cjs): the Stage's Box button, or ⌥ held while the page has the keyboard and
+// no text field of its own does, lays a transparent drawing layer over the tab (box-layer-preload.cjs) until a box is
+// drawn, Esc is pressed or ⌥ let go: a native view cannot let clicks through to the page below, so it is there only
+// while drawing. A box drawn is given to the page's preload, which says what it is kept by (its anchor) and what text is
+// under it; its picture is captured from the page (capturePage of its rectangle) and the mark saved with it through
+// `pageMarks`. The page reports where its boxes are, and main draws them with one inserted rule (boxesCss), replaced as
+// they move. A click on a box's edge selects it (the preload's), and Backspace or Delete removes it; the Stage shows
+// "Box removed · Undo" (browser:box-removed), and Undo or ⌘Z in the page puts it back, picture and all.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -80,6 +91,9 @@ const MAX_PAGE_TEXT = 2 * PAGE.PAGE_TEXT + 2 * PAGE.MAX_EXACT; // the most page 
 const SHOT_TIMEOUT_MS = 1500;
 const SHOT_MAX_EDGE = 1568; // pixels on the longer edge: what the models look at without scaling it down themselves
 const MAX_PAGE_MARKS = 2000;
+const BOX_LAYER_PRELOAD = path.join(__dirname, 'box-layer-preload.cjs');
+const BOX_LAYER_PAGE = 'data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Chtml%3E%3Chead%3E%3Cmeta%20charset%3D%22utf-8%22%3E%3C%2Fhead%3E%3Cbody%3E%3C%2Fbody%3E%3C%2Fhtml%3E';
+const BOX_TIMEOUT_MS = 2000; // how long the page has to say what a box drawn on it is
 
 /** http(s) only. 0.0.0.0 is what dev servers print, not an address to visit. */
 function parseBrowserUrl(value) {
@@ -218,16 +232,40 @@ function selectionInput(value) {
   return { quote, pageText };
 }
 
-/** A page's web marks as its preload is given them: [{ id, quote }], only the well-formed, at most MAX_PAGE_MARKS. */
+/**
+ * A page's web marks as its preload is given them: [{ id, quote }] for a highlight, [{ id, box }] for a box (MATH-70),
+ * only the well-formed, at most MAX_PAGE_MARKS.
+ */
 function marksForPage(list) {
   const out = [];
   for (const m of Array.isArray(list) ? list : []) {
     if (out.length >= MAX_PAGE_MARKS) break;
-    if (!m || typeof m.id !== 'string' || m.id.length > 64 || !m.quote) continue;
+    if (!m || typeof m.id !== 'string' || m.id.length > 64) continue;
+    if (BOX.isBox(m)) { const box = BOX.boxInput(m.box); if (box) out.push({ id: m.id, box }); continue; }
+    if (!m.quote) continue;
     const quote = quoteInput({ exact: m.quote.exact, prefix: String(m.quote.prefix || '').slice(-PAGE.MAX_AFFIX), suffix: String(m.quote.suffix || '').slice(0, PAGE.MAX_AFFIX) });
     if (quote) out.push({ id: m.id, quote });
   }
   return out;
+}
+
+/** What a page's preload says of a box drawn on it: { box (boxInput's), text (at most TEXT_MAX) }, or null. */
+function boxReplyInput(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const box = BOX.boxInput(value.box);
+  if (!box) return null;
+  return { box, text: typeof value.text === 'string' ? value.text.replace(/\s+/g, ' ').trim().slice(0, BOX.TEXT_MAX) : '' };
+}
+
+/** Where a page says its boxes are: { rects: [{ id, x, y, w, h }], selected, size }, only the well-formed; null for anything else. */
+function boxReportInput(value) {
+  if (!value || typeof value !== 'object' || !Array.isArray(value.rects)) return null;
+  const ok = (n) => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= 1e6;
+  const rects = value.rects.slice(0, BOX.MAX_BOXES).filter((r) => r && typeof r.id === 'string' && r.id.length <= 64 && [r.x, r.y, r.w, r.h].every(ok) && r.w > 0 && r.h > 0)
+    .map((r) => ({ id: r.id, x: r.x, y: r.y, w: r.w, h: r.h }));
+  const selected = typeof value.selected === 'string' && value.selected.length <= 64 ? value.selected : null;
+  const size = value.size && ok(value.size.width) && ok(value.size.height) ? { width: value.size.width, height: value.size.height } : null;
+  return { rects, selected, size };
 }
 
 // The browsing session is the app's, one for every window (2026-10-03): its handlers are set once, by the first window's
@@ -527,8 +565,196 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       if (!waiting || !fromTab(event, id, entry)) return;
       waiting(selectionInput(reply));
     });
+    // boxes (MATH-70): what a box drawn here is, where the page's boxes are now, whether a field has the keyboard
+    contents.ipc.on(PAGE.CHANNELS.box, (event, reply) => {
+      const waiting = entry.boxWait;
+      if (!waiting || !fromTab(event, id, entry) || !reply || typeof reply !== 'object' || reply.nonce !== waiting.nonce) return;
+      waiting.resolve(boxReplyInput(reply));
+    });
+    contents.ipc.on(PAGE.CHANNELS.boxes, (event, report) => {
+      if (!fromTab(event, id, entry)) return;
+      const got = boxReportInput(report);
+      if (got) drawBoxes(entry, contents, got);
+    });
+    contents.ipc.on(PAGE.CHANNELS.editing, (event, value) => { if (fromTab(event, id, entry)) entry.editing = value === true; });
     // the page's tints are styled anew with each document (insertCSS lasts until the page goes)
     contents.on('dom-ready', () => { if (!contents.isDestroyed()) contents.insertCSS(MARK_CSS).catch(() => {}); });
+    // a new document has none of the boxes' rule, nothing selected and no field with the keyboard yet
+    contents.on('did-navigate', () => { entry.boxes = null; entry.boxCss = ''; entry.boxKey = null; entry.editing = false; if (layer.tab === id) endBox(false); });
+    // the same document at another address (a page that changes its own address): its boxes are that address's
+    contents.on('did-navigate-in-page', (_event, url, isMainFrame) => {
+      if (!isMainFrame || !pageMarks || !fileablePage(url)) return;
+      Promise.resolve(pageMarks.list(url)).then((list) => {
+        if (!contents.isDestroyed() && contents.getURL() === url) contents.send(PAGE.CHANNELS.boxSet, marksForPage(list).filter((m) => m.box));
+      }, () => {});
+    });
+  }
+
+  /* ------------------------------------------------------------------------------------------- boxes (MATH-70) */
+
+  // The page's boxes drawn by one inserted rule, the new one in before the old one is taken out; one change at a time.
+  function drawBoxes(entry, contents, report) {
+    entry.boxes = report;
+    entry.boxDraw = entry.boxDraw.then(async () => {
+      if (contents.isDestroyed() || entry.boxes !== report) return;
+      const css = BOX.boxesCss(report.rects, report.selected, report.size);
+      if (css === entry.boxCss) return;
+      const old = entry.boxKey;
+      entry.boxCss = css;
+      entry.boxKey = css ? await contents.insertCSS(css).catch(() => null) : null;
+      if (old) await contents.removeInsertedCSS(old).catch(() => {});
+    });
+    return entry.boxDraw;
+  }
+  const selectedBox = (entry) => (entry.boxes && entry.boxes.selected && entry.boxes.rects.some((r) => r.id === entry.boxes.selected) ? entry.boxes.selected : null);
+
+  // The drawing layer: one per window, made the first time it is wanted, over the tab in front while a box is drawn.
+  const layer = { view: null, ready: false, tab: null, mode: null, queued: null };
+  function layerView() {
+    if (layer.view) return layer.view;
+    const view = new WebContentsView({ webPreferences: { preload: BOX_LAYER_PRELOAD, sandbox: true, contextIsolation: true, nodeIntegration: false } });
+    view.setBackgroundColor('#00000000');
+    view.setVisible(false);
+    const contents = view.webContents;
+    contents.on('did-finish-load', () => { layer.ready = true; if (layer.queued) { contents.send(LAYER.CHANNELS.start, layer.queued); layer.queued = null; } });
+    contents.on('will-navigate', (event) => event.preventDefault());
+    contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    if (contents.ipc) {
+      contents.ipc.on(LAYER.CHANNELS.done, (_event, rect) => { const tab = layer.tab; endBox(true); if (tab && rect) void makeBox(tab, rect); });
+      contents.ipc.on(LAYER.CHANNELS.click, (_event, point) => {
+        const tab = layer.tab, entry = tab ? entries.get(tab) : null;
+        endBox(true);
+        if (entry && point && Number.isFinite(point.x) && Number.isFinite(point.y)) {
+          const zoom = entry.view.webContents.getZoomFactor() || 1;
+          entry.view.webContents.send(PAGE.CHANNELS.boxHit, { x: point.x / zoom, y: point.y / zoom });
+        }
+      });
+      contents.ipc.on(LAYER.CHANNELS.cancel, () => endBox(true));
+    }
+    contents.loadURL(BOX_LAYER_PAGE).catch(() => {});
+    layer.view = view;
+    return view;
+  }
+
+  /** Whether tab `id` can be boxed now: a tab in front, showing a page whose ink is kept, not loading for the first time. */
+  function canBox(id) {
+    const entry = entries.get(id);
+    return !!(pageMarks && entry && entry.view.getVisible() && !entry.error && !entry.view.webContents.isDestroyed() && fileablePage(entry.view.webContents.getURL()));
+  }
+
+  /** The drawing layer over tab `id` (`mode` 'button', the Stage's Box; 'alt', ⌥ held in the page), with the keyboard. */
+  function startBox(id, mode = 'button') {
+    assertId(id);
+    const win = getWindow();
+    if (!canBox(id) || !win || win.isDestroyed()) return false;
+    const entry = entries.get(id);
+    const view = layerView();
+    if (layer.tab && layer.tab !== id) endBox(false);
+    win.contentView.addChildView(view); // again: on top
+    view.setBounds(entry.view.getBounds());
+    view.setVisible(true);
+    onLayerChange();
+    layer.tab = id;
+    layer.mode = mode;
+    const start = { mode };
+    if (layer.ready) view.webContents.send(LAYER.CHANNELS.start, start); else layer.queued = start;
+    view.webContents.focus();
+    send('browser:boxing', { id, on: true });
+    return true;
+  }
+
+  /** The drawing layer gone; with `focusPage`, the page under it has the keyboard again. */
+  function endBox(focusPage = true) {
+    const id = layer.tab;
+    if (!id) return false;
+    layer.tab = null;
+    layer.mode = null;
+    layer.queued = null;
+    if (layer.view) layer.view.setVisible(false);
+    const entry = entries.get(id);
+    if (focusPage && entry && !entry.view.webContents.isDestroyed()) entry.view.webContents.focus();
+    send('browser:boxing', { id, on: false });
+    return true;
+  }
+
+  /** The page's picture of `rect` (the view's pixels) as PNG bytes, its longer edge at most SHOT_MAX_EDGE; null when it fails. */
+  async function cropOf(contents, rect) {
+    let timer;
+    try {
+      const bounds = { x: Math.max(0, Math.round(rect.x)), y: Math.max(0, Math.round(rect.y)), width: Math.max(1, Math.round(rect.w)), height: Math.max(1, Math.round(rect.h)) };
+      let image = await Promise.race([contents.capturePage(bounds), new Promise((resolve) => { timer = setTimeout(() => resolve(null), SHOT_TIMEOUT_MS); })]);
+      if (!image || image.isEmpty()) return null;
+      const { width, height } = image.getSize();
+      const scale = SHOT_MAX_EDGE / Math.max(width, height);
+      if (scale < 1) image = image.resize({ width: Math.round(width * scale), height: Math.round(height * scale), quality: 'good' });
+      const png = image.toPNG();
+      return png && png.length ? png : null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * A box drawn over tab `id` at `rect` (the layer's pixels, which are the page view's): the page says what it is kept by
+   * and what text is under it, its picture is taken, and it is saved as a mark in the page's ink and drawn. → whether it
+   * was saved.
+   */
+  async function makeBox(id, rect) {
+    const entry = entries.get(id);
+    if (!entry || !pageMarks || ![rect.x, rect.y, rect.w, rect.h].every(Number.isFinite) || rect.w <= 0 || rect.h <= 0) return false;
+    const contents = entry.view.webContents;
+    if (contents.isDestroyed()) return false;
+    const url = contents.getURL();
+    if (!fileablePage(url)) return false;
+    const zoom = contents.getZoomFactor() || 1;
+    const nonce = nextId('box');
+    const [got, crop] = await Promise.all([
+      new Promise((resolve) => {
+        const timer = setTimeout(() => { if (entry.boxWait && entry.boxWait.nonce === nonce) entry.boxWait = null; resolve(null); }, BOX_TIMEOUT_MS);
+        if (typeof timer.unref === 'function') timer.unref();
+        entry.boxWait = { nonce, resolve: (value) => { clearTimeout(timer); entry.boxWait = null; resolve(value); } };
+        contents.send(PAGE.CHANNELS.box, { nonce, rect: { x: rect.x / zoom, y: rect.y / zoom, w: rect.w / zoom, h: rect.h / zoom } });
+      }),
+      cropOf(contents, rect),
+    ]);
+    if (!got || entries.get(id) !== entry || contents.isDestroyed() || contents.getURL() !== url) return false;
+    const markId = newId();
+    const mark = { id: markId, box: got.box, crop: crop ? BOX.cropName(markId) : null, text: got.text, note: null, at: new Date().toISOString() };
+    let saved = false;
+    try { saved = await pageMarks.add(url, mark, { crop }); } catch { saved = false; }
+    if (saved && !contents.isDestroyed()) contents.send(PAGE.CHANNELS.boxAdd, { id: mark.id, box: mark.box });
+    return !!saved;
+  }
+
+  /** The box selected on tab `id`'s page taken out of its ink, picture and all, and kept for Undo. → whether it was. */
+  async function removeBox(id, markId) {
+    const entry = entries.get(id);
+    if (!entry || !pageMarks || !pageMarks.remove) return false;
+    const contents = entry.view.webContents, url = contents.getURL();
+    let removed = null;
+    try { removed = await pageMarks.remove(url, markId); } catch { removed = null; }
+    if (!removed) return false;
+    entry.removed = { url, removed };
+    if (!contents.isDestroyed()) contents.send(PAGE.CHANNELS.boxRemove, markId);
+    send('browser:box-removed', { id, markId });
+    return true;
+  }
+
+  /** The box last removed on tab `id` put back where it was, with its picture. → whether it was. */
+  async function undoBox(id) {
+    assertId(id);
+    const entry = entries.get(id);
+    if (!entry || !entry.removed || !pageMarks || !pageMarks.restore) return false;
+    const { url, removed } = entry.removed;
+    entry.removed = null;
+    let back = false;
+    try { back = await pageMarks.restore(url, removed); } catch { back = false; }
+    const contents = entry.view.webContents;
+    if (back && !contents.isDestroyed() && contents.getURL() === url) contents.send(PAGE.CHANNELS.boxAdd, { id: removed.mark.id, box: removed.mark.box });
+    send('browser:box-restored', { id, markId: removed.mark.id });
+    return !!back;
   }
 
   /** What every page gets, in a tab or in a popup: http(s) or the disk, loopback certificates, a sign-in prompt. */
@@ -654,7 +880,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     view.setVisible(false);
     win.contentView.addChildView(view);
     onLayerChange();
-    const entry = { view, error: null, requested: '', pending: '', seq: 0, found: '', drawn: false, download: '', retrying: false, quoteWait: null, selectionWaits: new Map() };
+    const entry = { view, error: null, requested: '', pending: '', seq: 0, found: '', drawn: false, download: '', retrying: false, quoteWait: null, selectionWaits: new Map(), editing: false, boxWait: null, boxes: null, boxCss: '', boxKey: null, boxDraw: Promise.resolve(), removed: null };
     entries.set(id, entry);
 
     const contents = view.webContents;
@@ -687,6 +913,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     // ⌘T and ⌘W are the pane's, as in Chrome, where a page cannot take them. ⌘F is the Edit menu's
     // (shortcut below), which a page that has its own find (Google Docs) gets to first.
     contents.on('before-input-event', (event, input) => {
+      if (boxKey(id, entry, event, input)) return;
       if (input.type !== 'keyDown' || input.alt || !(process.platform === 'darwin' ? input.meta : input.control)) return;
       const key = String(input.key).toLowerCase();
       if (key === 'r') command(id, 'reload');
@@ -702,6 +929,30 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       event.preventDefault();
     });
     return entry;
+  }
+
+  /**
+   * The page's keys for boxes (MATH-70): ⌥ alone, held, lays the drawing layer over it (not while a text field has the
+   * keyboard) and letting go takes it away; with a box selected, Backspace or Delete removes it and Esc lets it go; ⌘Z
+   * puts back the box last removed. → whether the key was the boxes'.
+   */
+  function boxKey(id, entry, event, input) {
+    const command = process.platform === 'darwin' ? input.meta : input.control;
+    if (input.key === 'Alt') {
+      if (input.type === 'keyDown' && !input.isAutoRepeat && !input.shift && !input.meta && !input.control && !entry.editing && canBox(id)) startBox(id, 'alt');
+      else if (input.type === 'keyUp' && layer.tab === id && layer.mode === 'alt' && layer.view) layer.view.webContents.send(LAYER.CHANNELS.altUp);
+      return false; // the page sees ⌥ as ever
+    }
+    if (input.type !== 'keyDown' || entry.editing) return false;
+    const selected = selectedBox(entry);
+    if (selected && (input.key === 'Backspace' || input.key === 'Delete') && !command && !input.alt && !input.shift) {
+      event.preventDefault();
+      void removeBox(id, selected);
+      return true;
+    }
+    if (selected && input.key === 'Escape') { event.preventDefault(); entry.view.webContents.send(PAGE.CHANNELS.boxSelect, null); return true; }
+    if (entry.removed && command && !input.shift && !input.alt && String(input.key).toLowerCase() === 'z') { event.preventDefault(); void undoBox(id); return true; }
+    return false;
   }
 
   function focusApp() {
@@ -773,6 +1024,8 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     entry.seq += 1;
     entry.view.setBounds(bounds);
     entry.view.setVisible(true);
+    if (layer.tab && layer.tab !== id) endBox(false);
+    else if (layer.tab === id && layer.view) layer.view.setBounds(bounds);
     onLayerChange();
     return true;
   }
@@ -796,6 +1049,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
   /** Hides whatever shows. With `snapshot`, the page's picture comes back first, so the renderer
    *  can keep it on screen under a menu or a modal that the native view would have covered. */
   async function hide(options) {
+    endBox(false);
     let picture = null;
     for (const entry of entries.values()) {
       if (!entry.view.getVisible()) continue;
@@ -848,6 +1102,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
   function detach(id) {
     const entry = entries.get(id);
     if (!entry) return null;
+    if (layer.tab === id) endBox(false);
     entries.delete(id);
     const win = getWindow();
     try {
@@ -871,6 +1126,13 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     for (const popup of [...popups]) { if (!popup.isDestroyed()) popup.destroy(); }
     popups.clear();
     for (const requestId of [...logins.keys()]) answerLogin(requestId, null);
+    if (layer.view) {
+      const win = getWindow();
+      try { if (win && !win.isDestroyed()) win.contentView.removeChildView(layer.view); } catch { /* the window went first */ }
+      if (!layer.view.webContents.isDestroyed()) layer.view.webContents.close();
+      layer.view = null;
+      layer.ready = false;
+    }
   }
 
   /** Sign-ins are cookies; Chromium writes them lazily, so quitting asks for them now. */
@@ -885,7 +1147,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     if (shared) shared.members.delete(member);
   }
 
-  return { open, show, hide, command, find, stopFind, shortcut, savePage, close, closeAll, answerLogin, flush, dispose, has: (id) => entries.has(id), highlightSelection, pageSelection, screenshot };
+  return { open, show, hide, command, find, stopFind, shortcut, savePage, close, closeAll, answerLogin, flush, dispose, has: (id) => entries.has(id), highlightSelection, pageSelection, screenshot, startBox, endBox, makeBox, removeBox, undoBox, canBox };
 }
 
 // Each handler is registered once and acts on the views of the window that called (`viewsFor(event)`, 2026-10-03).
@@ -908,6 +1170,8 @@ function registerBrowserIpc({ ipcMain, trustedHandler, viewsFor = null, views = 
   handle('browser:close', (mine, id) => mine.close(id));
   handle('browser:login-reply', (mine, requestId, credentials) => mine.answerLogin(requestId, credentials));
   handle('browser:close-all', (mine) => { mine.closeAll(); return true; });
+  handle('browser:box', (mine, id) => mine.startBox(id, 'button'));
+  handle('browser:box-undo', (mine, id) => mine.undoBox(id));
 
   if (cookieImport) {
     const text = (value, what) => { if (typeof value !== 'string' || !value || value.length > 256) throw new TypeError(`${what} must be a short string`); return value; };
@@ -921,4 +1185,4 @@ function registerBrowserIpc({ ipcMain, trustedHandler, viewsFor = null, views = 
   }
 }
 
-module.exports = { PAGE_PRELOAD, MARK_CSS, SELECTION_TIMEOUT_MS, SHOT_MAX_EDGE, fileablePage, quoteInput, selectionInput, marksForPage, PARTITION, DEV_PARTITION, stagePartition, parseBrowserUrl, parseFileUrl, externalScheme, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews, registerBrowserIpc };
+module.exports = { PAGE_PRELOAD, BOX_LAYER_PRELOAD, MARK_CSS, SELECTION_TIMEOUT_MS, SHOT_MAX_EDGE, fileablePage, quoteInput, selectionInput, marksForPage, boxReplyInput, boxReportInput, PARTITION, DEV_PARTITION, stagePartition, parseBrowserUrl, parseFileUrl, externalScheme, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews, registerBrowserIpc };

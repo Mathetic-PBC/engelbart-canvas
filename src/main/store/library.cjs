@@ -17,6 +17,7 @@ const { LIBRARY_TAGS } = require('./db.cjs');
 const { reading } = require('../stage/files.cjs');
 const { readHtmlMeta } = require('./page-meta.cjs');
 const { WEB, withAsk } = require('../../shared/mark-answers.cjs');
+const { CROP_RE } = require('../browser/boxes.cjs');
 const { addressKey, isPreviewAddress } = require('../../shared/address-key.cjs');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -206,20 +207,88 @@ async function addMarkAnswer(ctx, where, page, markId, entry) {
 /**
  * A highlight made on a web page (MATH-54 build 2, the Stage's right-click Highlight) added to the end of its ink's "web"
  * list, kept as page ink is (inkPlace: the library's row for a saved page, else the address as addressKey spells it).
- * `url` is where the tab is; `mark` is { id, quote: { exact, prefix, suffix }, note, asks, at }. → whether it was written:
+ * `url` is where the tab is; `mark` is { id, quote: { exact, prefix, suffix }, note, asks, at }, or a box (MATH-70,
+ * browser/boxes.cjs) { id, box, crop, text, note, at } with its picture's PNG bytes as `crop`. → whether it was written:
  * a preview's, or a page the library cannot place (a file outside home), is not.
  */
-async function addWebMark(ctx, url, mark) {
+async function addWebMark(ctx, url, mark, { crop = null } = {}) {
   return inkInTurn(async () => {
-    let place;
-    try { place = await inkPlace(ctx, url); } catch { return false; }
-    const file = place.id ? annotationFile(ctx, place.id) : place.file;
-    if (!file) return false;
-    const held = place.id ? await readAnnotations(ctx, place.id) : readPlace(place);
-    const marks = held && typeof held === 'object' && !Array.isArray(held) ? held : {};
-    const list = Array.isArray(marks[WEB]) ? marks[WEB] : [];
+    const at = await webInk(ctx, url);
+    if (!at) return false;
+    const { file, marks, list } = at;
     if (list.some((m) => m && m.id === mark.id)) return false;
-    return writeJson(file, { ...marks, [WEB]: [...list, mark] });
+    // a box (MATH-70) comes with its picture: written first, and gone again when the mark cannot be
+    const picture = crop && crop.length && mark.crop ? cropFile(ctx, mark.crop) : null;
+    if (picture) writeCrop(picture, crop);
+    try {
+      return writeJson(file, { ...marks, [WEB]: [...list, mark] });
+    } catch (error) {
+      if (picture) fs.rmSync(picture, { force: true });
+      throw error;
+    }
+  });
+}
+
+/** The web page `url`'s ink: { file (written to), marks, list (its "web" list) }, or null for a page whose ink is not kept. */
+async function webInk(ctx, url) {
+  let place;
+  try { place = await inkPlace(ctx, url); } catch { return null; }
+  const file = place.id ? annotationFile(ctx, place.id) : place.file;
+  if (!file) return null;
+  const held = place.id ? await readAnnotations(ctx, place.id) : readPlace(place);
+  const marks = held && typeof held === 'object' && !Array.isArray(held) ? held : {};
+  return { file, marks, list: Array.isArray(marks[WEB]) ? marks[WEB] : [] };
+}
+
+// A box's picture (MATH-70, 2026-10-07): <dataRoot>/annotations/crops/<mark id>.png, its mark's `crop` the path relative
+// to the annotations folder ("crops/<id>.png", browser/boxes.cjs cropName). Deleted with its mark, never pruned.
+
+/** The absolute path of a box's picture from its mark's `crop`, or null for anything that is not "crops/<id>.png". */
+function cropFile(ctx, crop) {
+  const name = typeof crop === 'string' ? crop.match(CROP_RE) : null;
+  return name ? path.join(ctx.dataRoot, 'annotations', 'crops', `${name[1]}.png`) : null;
+}
+
+function writeCrop(file, png) {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: DIR_MODE });
+  const temporary = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, png, { mode: 0o600 });
+  fs.renameSync(temporary, file);
+}
+
+/**
+ * Mark `markId` taken out of web page `url`'s "web" list, and its picture deleted. → { mark, index, crop (the picture's
+ * bytes, for undo; null without one) }, or null when it is not there or the ink is not kept.
+ */
+async function removeWebMark(ctx, url, markId) {
+  return inkInTurn(async () => {
+    const at = await webInk(ctx, url);
+    if (!at) return null;
+    const index = at.list.findIndex((m) => m && m.id === markId);
+    if (index < 0) return null;
+    const mark = at.list[index];
+    writeJson(at.file, { ...at.marks, [WEB]: at.list.filter((_, i) => i !== index) });
+    const picture = cropFile(ctx, mark.crop);
+    let crop = null;
+    if (picture) {
+      try { crop = fs.readFileSync(picture); } catch { crop = null; }
+      fs.rmSync(picture, { force: true });
+    }
+    return { mark, index, crop };
+  });
+}
+
+/** What removeWebMark gave back, put back: the mark at its index (the end, if the list is shorter now) and its picture. */
+async function restoreWebMark(ctx, url, { mark, index, crop } = {}) {
+  if (!mark || typeof mark.id !== 'string') return false;
+  return inkInTurn(async () => {
+    const at = await webInk(ctx, url);
+    if (!at || at.list.some((m) => m && m.id === mark.id)) return false;
+    const picture = crop && crop.length ? cropFile(ctx, mark.crop) : null;
+    if (picture) writeCrop(picture, crop);
+    const list = [...at.list];
+    list.splice(Math.max(0, Math.min(Number(index) || 0, list.length)), 0, mark);
+    return writeJson(at.file, { ...at.marks, [WEB]: list });
   });
 }
 
@@ -954,4 +1023,4 @@ async function previewItem(ctx, id, { listRemoteFiles } = {}) {
   return out;
 }
 
-module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, annotationsFileOf, writePageAnnotations, addMarkAnswer, addWebMark, projectsForLibraryItem, libraryForProject, bodiesForProject, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, addPageCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem, FILE_TYPES, PEEK_SKIP };
+module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, annotationsFileOf, writePageAnnotations, addMarkAnswer, addWebMark, removeWebMark, restoreWebMark, cropFile, projectsForLibraryItem, libraryForProject, bodiesForProject, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, addPageCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem, FILE_TYPES, PEEK_SKIP };
