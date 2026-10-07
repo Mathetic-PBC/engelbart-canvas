@@ -78,7 +78,7 @@ import { nextFind, createTargetGate, sectionSpans, paintSection, clearFind, FIND
 import { wheelZooms, wheelZoom, createPageCache } from '../model/paper-zoom.js';
 import { mentionAt, libMention, fileMention, fileMentionOf, noteHtml, noteInkHtml, noteParts, noteOffset, inlineHtml, esc, LIB_MENTION_RE } from '../model/doc.js';
 import { isFolderRow, folderRows, firstPick, parentRel } from '../model/rail.js';
-import { sideSpace, deskOf, deskGeom, deskNeed, placeOf, posOf, spaceBoxes, extentAt, fitZoom, offscreen, offscreenSide, chipLabel, revealScroll, noteQuestion, askedByNote, turnsOf, shownAsks, keptMarks, modelLabel, runningLabel, blankAt, DESK, DESK_EDGE, BOX_GAP, ASK_W, SIDE_GAP, POS_DY, LINE, PRESS_MOVE } from './canvas.js';
+import { sideSpace, deskOf, deskGeom, deskNeed, placeOf, posOf, spaceBoxes, extentAt, fitZoom, offscreen, offscreenSide, chipLabel, revealScroll, noteQuestion, askedByNote, turnsOf, shownAsks, keptMarks, modelLabel, runningLabel, blankAt, textColumn, DESK, DESK_EDGE, BOX_GAP, ASK_W, NOTE_W, SIDE_GAP, POS_DY, LINE, PRESS_MOVE } from './canvas.js';
 import { fieldCaret } from '../workspace/caret.js';
 import MentionMenu from '../workspace/MentionMenu.jsx';
 
@@ -305,6 +305,7 @@ export default class PaperView extends React.Component {
     this.libDrawn = ''; // the mentioned items' names the notes were drawn with (libKey)
     this.drawn = {}; // { [page]: { boxes, units } }: the cards as last drawn (desk px), for spacing and fitting
     this.freeW = new Map(); // a free note's width (desk px) as last measured against its page's text (cardBox)
+    this.cols = new Map(); // page → its text's column, { l, r } page units, once measured (columnOf)
     this.drag = null; // a box being moved by its grip
     this.pan = null; // a Space-drag or middle-drag under way
     this.space = false; // Space held over the paper: a drag pans
@@ -560,6 +561,7 @@ export default class PaperView extends React.Component {
     this.undos = []; // another paper
     this.hideRemoved();
     this.freeW.clear();
+    this.cols.clear();
     this.gate.drawing();
     const data = toBytes(this.props.bytes);
     if (!data) { this.setState({ note: 'No paper to open.', page: 0, pages: 0 }); return; }
@@ -1307,6 +1309,25 @@ export default class PaperView extends React.Component {
     const host = this.host.current, tl = this.find1(`[data-text-layer="${page}"]`);
     return !!(tl && tl.querySelector('span') && !(host && host.dataset && host.dataset.pinching));
   }
+  // Page n's text column in page units (./canvas.js textColumn), measured once its text is drawn and kept for every zoom
+  // after; null until then, when cards go against the page's edge.
+  columnOf(page) {
+    if (this.cols.has(page)) return this.cols.get(page);
+    const tl = this.find1(`[data-text-layer="${page}"]`);
+    if (!tl || !this.textDrawn(page)) return null;
+    const box = tl.getBoundingClientRect();
+    if (!box.width) return null;
+    const lefts = [], rights = [];
+    for (const s of tl.querySelectorAll('span')) {
+      if ((s.textContent || '').trim().length < 3) continue;
+      const r = s.getBoundingClientRect();
+      if (!r.width) continue;
+      lefts.push((r.left - box.left) / box.width); rights.push((r.right - box.left) / box.width);
+    }
+    const col = textColumn(lefts, rights);
+    if (col) this.cols.set(page, col);
+    return col;
+  }
 
   // Nothing has the keyboard (2026-10-06): it is on the page itself, or on something of the paper's that is no field,
   // button or link. A note's field, a button (the Stage's, the sidebar's, an answer's Copy) or the document keeps its keys.
@@ -1582,9 +1603,11 @@ export default class PaperView extends React.Component {
     // is full where it wants to be and the other would keep it nearer. Never saved: `side` stays as it was made.
     const beside = model.units.filter((unit) => unit.boxes.length);
     const sides = new Map([...stackNotes(beside.map((unit) => ({ id: unit.id, ideal: unit.want, h: unit.boxes.reduce((h, b, i) => h + b.height + (i ? BOX_GAP : 0), 0), side: unit.side })), { gap: BOX_GAP })].map(([id, at]) => [id, at.side]));
+    // Against the text's column, not the paper's edge (2026-10-06, David): over the page's own margin when it has one.
+    const col = this.columnOf(page), L = col ? col.l * pageW : 0, R = col ? col.r * pageW : pageW;
     for (const unit of beside) {
       const side = sides.get(unit.id) || unit.side;
-      for (const b of unit.boxes) b.left = side === 'left' ? G - SIDE_GAP - b.width : G + pageW + SIDE_GAP;
+      for (const b of unit.boxes) b.left = side === 'left' ? G + L - SIDE_GAP - b.width : G + R + SIDE_GAP;
     }
     const tops = spaceBoxes(beside.map((unit) => ({ id: unit.id, want: unit.want, boxes: unit.boxes.map((b) => ({ left: b.left, width: b.width, height: b.height })) })), fixed);
     for (const unit of beside) {
@@ -1605,13 +1628,17 @@ export default class PaperView extends React.Component {
     if (m.pos && !(m.rects || []).length) {
       if (this.textDrawn(page) || !this.freeW.has(m.id)) {
         const at = placeOf(m.pos, G, u);
-        width = Math.max(120, Math.min(this.freeWidth(page, at.left, at.top + POS_DY, 22), DESK + u * 0.6));
+        width = Math.max(120, Math.min(this.freeWidth(page, at.left, at.top + POS_DY, 22), NOTE_W));
         if (this.textDrawn(page)) this.freeW.set(m.id, width);
       } else width = this.freeW.get(m.id);
     }
+    // At most that wide, else only as wide as what it holds (2026-10-06, David: notes ran long, and one on the left of
+    // its page sat far from the text). A note being typed in keeps the full width to type into.
+    const typing = m.note != null && (this.editing === m.id || !String(m.note).trim() || !this.showsNotes());
+    const size = typing ? `width:${width}px` : `width:max-content;min-width:${Math.min(120, width)}px;max-width:${width}px`;
     const box = document.createElement('div');
     box.dataset.box = 'card'; box.dataset.boxMark = m.id; box.dataset.noteFor = m.id;
-    box.style.cssText = `${BOX_LOOK};left:0;top:0;width:${width}px;display:flex;flex-direction:column;transition:opacity 120ms,background 120ms`;
+    box.style.cssText = `${BOX_LOOK};left:0;top:0;${size};display:flex;flex-direction:column;transition:opacity 120ms,background 120ms`;
     box.onmouseenter = () => this.paintFocus(m.id);
     box.onmouseleave = () => this.paintFocus(this.focusId);
     const grip = makeEl('div', GRIP_CSS, { grip: '1' });

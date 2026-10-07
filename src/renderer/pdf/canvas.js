@@ -58,6 +58,21 @@ export function deskNeed(marks, pageWOf, running = () => 0) {
   return { left, right };
 }
 
+/**
+ * The printed text's column on a page (2026-10-06, David: a card beside its highlight sits next to the text at any zoom,
+ * not out past the paper's margin) from the left and right edges of its text runs, each a fraction of the page's width →
+ * { l, r } in page units, or null with too few runs to tell. The 2nd and 98th percentiles, so a line number or a stray
+ * mark in the margin does not count.
+ */
+export function textColumn(lefts, rights) {
+  const ls = (lefts || []).filter(Number.isFinite).sort((a, b) => a - b);
+  const rs = (rights || []).filter(Number.isFinite).sort((a, b) => a - b);
+  if (ls.length < 5 || rs.length < 5) return null;
+  const at = (xs, q) => xs[Math.min(xs.length - 1, Math.floor(q * xs.length))];
+  const l = Math.min(1, Math.max(0, at(ls, 0.02))), r = Math.min(1, Math.max(0, at(rs, 0.98)));
+  return r > l ? { l, r } : null;
+}
+
 /** A page's layout geometry ({ G, R, pageW } layout px, `k` its zoom) in desk px, where its boxes are laid out. */
 export const deskGeom = (g) => { const k = (g && g.k) || 1; return { G: (g.G || 0) / k, R: (g.R || 0) / k, pageW: (g.pageW || 0) / k, k }; };
 

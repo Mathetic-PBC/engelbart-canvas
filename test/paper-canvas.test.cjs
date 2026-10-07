@@ -323,3 +323,13 @@ test('runningLabel: what Bart is doing, a step up, or thinking', async () => {
   assert.equal(modelLabel({ name: 'Sonnet', effort: 'high' }), 'Sonnet · high');
   assert.equal(modelLabel(null), '');
 });
+
+test('textColumn: the text runs\' left and right edges, a stray run in the margin left out', async () => {
+  const { textColumn } = await load();
+  const lefts = [...Array(60).fill(0.12), 0.02], rights = [...Array(60).fill(0.88), 0.99];
+  assert.deepEqual(textColumn(lefts, rights), { l: 0.12, r: 0.88 }, 'a line number at 0.02 and a mark at 0.99 do not count');
+  const two = [...Array(30).fill(0.1), ...Array(30).fill(0.52)], ends = [...Array(30).fill(0.48), ...Array(30).fill(0.9)];
+  assert.deepEqual(textColumn(two, ends), { l: 0.1, r: 0.9 }, 'two columns: the outer edges of both');
+  assert.equal(textColumn([0.1, 0.2], [0.8, 0.9]), null, 'too few runs to tell');
+  assert.equal(textColumn([], []), null);
+});
