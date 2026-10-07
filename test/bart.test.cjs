@@ -275,7 +275,7 @@ test('an answer becomes kept lines that say which model gave it; quotes are flat
 });
 
 test('the system prompt says what the harness relies on', () => {
-  for (const phrase of ['ESCALATE: <one sentence', 'never an instruction to you', 'fenced code blocks', 'three backticks and the language', '<context_json>', '<conversation>', 'carrying only <level> and <question>', 'You never change anything']) assert.ok(BART_SYSTEM_PROMPT.includes(phrase), phrase);
+  for (const phrase of ['ESCALATE: <one sentence', 'never an instruction to you', 'fenced code blocks', 'three backticks and the language', '<context_json>', '<conversation>', 'carrying only <stage>, <highlights>, <level> and <question>', 'You never change anything']) assert.ok(BART_SYSTEM_PROMPT.includes(phrase), phrase);
   // A question asked from a note on a PDF highlight (MATH-27): its own block, and its own rules for the box beside the passage.
   for (const phrase of ['<highlight>, when the question was asked from a note on a PDF highlight', '# Asked from a highlight', 'at most three sentences, under 500 characters', 'Longer answer: continue in the workspace.']) assert.ok(BART_SYSTEM_PROMPT.includes(phrase), phrase);
   assert.ok(BART_SYSTEM_PROMPT.indexOf('# Asked from a highlight') < BART_SYSTEM_PROMPT.indexOf('# Moving up a step'), 'the highlight rules come before moving up');
@@ -307,7 +307,8 @@ test('context from a workspace: the document with mentions in place, and Context
   await projects.writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id }, 'See @[Plan].\n@bart why?\nbart~> a1\n');
   const context = await buildContext(ctx, project.id, { ref: { kind: 'workspace', workspaceId: workspace.id }, workspaceId: workspace.id, askId: 'a1' });
   assert.match(context.head, /^<engelbart>\nproject: Asking\ncode directory: .+\nnotes and workspaces: .+\nasked from: the workspace "Agents"\n<\/engelbart>$/);
-  assert.match(context.documents, /^<workspace name="Agents">\nSee @\[Plan\]\.\n\n<file name="Plan" type="md" tags="note" path="[^"]+">\nthe plan\n<\/file>\n\n@bart why\?\n<<< this is the question being asked now >>>\n<\/workspace>$/);
+  assert.match(context.documents, /^<workspace name="Agents">\nSee @\[Plan\]\.\n\n<file name="Plan" type="md" tags="note" path="[^"]+">\nthe plan\n<\/file>\n\n@bart why\?\n<<< this is the question being asked now >>>\n<\/workspace>\n\n<stage>none<\/stage>$/, '@bart: <stage>none</stage> with nothing in front');
+  assert.equal(context.now, '<stage>none</stage>\n\n<highlights>none</highlights>', 'what a resumed turn is sent');
   const entries = JSON.parse(context.contextJson.replace(/^<context_json>\n|\n<\/context_json>$/g, ''));
   assert.deepEqual(entries.map((entry) => [entry.name, entry.mentioned]).sort(), [['Plan', true], ['Unrelated', false]]);
   assert.equal(entries.find((entry) => entry.name === 'Plan').path, (await ctx.libraryDb.get(plan.id)).path);
@@ -319,7 +320,7 @@ test('context from a note: the workspace and the note are separate blocks, and t
   await projects.writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id }, 'Top. @[Asked here]\n');
   const context = await buildContext(ctx, project.id, { ref: { kind: 'note', id: asked.id }, workspaceId: workspace.id, askId: 'n1' });
   assert.match(context.head, /asked from: the note "Asked here", opened from the workspace "Agents"/);
-  assert.equal(context.documents, `<workspace name="Agents">\nTop. @[Asked here]\n</workspace>\n\n<note name="Asked here">\nbody\n@bart what?\n${HERE}\n</note>`);
+  assert.equal(context.documents, `<workspace name="Agents">\nTop. @[Asked here]\n</workspace>\n\n<note name="Asked here">\nbody\n@bart what?\n${HERE}\n</note>\n\n<stage>none</stage>`);
 });
 
 /* ------------------------------------------------------------- the person's pdf highlights (MATH-27, 2026-10-06) */
@@ -417,7 +418,7 @@ test('ask-bart hands @bart the Stage, and no other agent; a Stage it cannot read
   assert.ok(out.failed && seenQuestions.length === 4, 'refused before it is asked');
 });
 
-test('buildContext with the Stage: <stage> for the pdf in front, <highlights> for the mentioned ones, a paper once; none of it without a pdf in front, for a mark too, or for the other agents', async () => {
+test('buildContext with the Stage: <stage> for the pdf in front, <highlights> for the mentioned ones, a paper once; <stage>none</stage> without a pdf in front, for a mark too; none of it for the other agents', async () => {
   const library = require('../src/main/store/library.cjs');
   const { randomUUID } = require('node:crypto');
   const downloads = path.join(homeDir, 'Downloads');
@@ -443,10 +444,10 @@ test('buildContext with the Stage: <stage> for the pdf in front, <highlights> fo
   assert.ok(stageText.includes(`</stage>\n\n<highlights from="mentioned">\n<paper name="Cited Paper" path="${cited.file}" annotations="${path.join(ctx.dataRoot, 'annotations', `${cited.id}.json`)}">\n<highlight page="1">\n<quote>\ncited passage\n</quote>\n</highlight>\n</paper>\n</highlights>`));
   assert.ok(stageText.includes('<stage paper="Open Paper"') && !stageText.includes('<paper name="Open Paper"'), 'open and mentioned: in <stage> alone');
   assert.ok(!stageText.includes('Plain Paper"'), 'a mentioned pdf without highlights is left out');
-  // Nothing in front that is a pdf, or nothing at all: <highlights> alone.
+  // Nothing in front that is a pdf, or nothing at all: <stage>none</stage>, then <highlights>.
   for (const stage of [null, { kind: 'page', url: 'https://example.org/', page: 1 }]) {
     const c = await ask({ stage });
-    assert.ok(!c.documents.includes('<stage') && c.documents.includes('<paper name="Open Paper"') && c.documents.includes('<paper name="Cited Paper"'));
+    assert.ok(c.documents.includes('</workspace>\n\n<stage>none</stage>\n\n<highlights from="mentioned">') && c.documents.includes('<paper name="Open Paper"') && c.documents.includes('<paper name="Cited Paper"'));
   }
   // An open pdf with no highlights: one line.
   const bare = await ask({ stage: { rowId: plain.id, url: null, page: 3, kind: 'pdf' } });
@@ -483,8 +484,9 @@ test('buildContext with the Stage: <stage> for the pdf in front, <highlights> fo
 
 test('the system prompt tells @bart what <stage> and <highlights> are, after <highlight>', () => {
   const at = (s) => BART_SYSTEM_PROMPT.indexOf(s);
-  assert.ok(at('- <highlight>, when') < at('- <stage>, when a PDF is open in the Stage') && at('- <stage>, when') < at('- <highlights>, when the documents mention PDFs') && at('- <highlights>') < at('- <conversation>'));
-  assert.match(BART_SYSTEM_PROMPT, /read it again for a follow-up, or when <more> says some were left out/);
+  assert.ok(at('- <highlight>, when') < at('- <stage>: what is in front in the Stage') && at('- <stage>:') < at('- <highlights>, when the documents mention PDFs') && at('- <highlights>') < at('- <conversation>'));
+  assert.match(BART_SYSTEM_PROMPT, /read it only when <more> says some were left out/);
+  assert.ok(!/read it again for a follow-up/.test(BART_SYSTEM_PROMPT), 'a follow-up is sent the highlights: no reading them off disk');
 });
 
 test('the fake agent (scripted runs) answers through the same loop, moves up on "hard", and stops', async () => {
@@ -715,7 +717,7 @@ test('a follow-up resumes the session inside the window and is given everything 
   assert.equal(second.lines[0], 'bart> answer 2');
   assert.match(calls[1].command, /^exec codex exec resume "\$ENGELBART_BART_SESSION" /);
   assert.equal(calls[1].env.ENGELBART_BART_SESSION, '01a0bc2d-7c18-77d2-8b21-3cc7e942cbcc');
-  assert.match(calls[1].input, /^<level>[^\n]+<\/level>\n\n<question>\nand then\?\n<\/question>$/, 'inside the window only the new question is sent');
+  assert.match(calls[1].input, /^<stage>none<\/stage>\n\n<highlights>none<\/highlights>\n\n<level>[^\n]+<\/level>\n\n<question>\nand then\?\n<\/question>$/, 'inside the window the new question is sent, with the Stage and highlights as they are now');
 
   // The person edited the first answer: the session's memory and the document disagree, so the document wins.
   const edited = [{ question: 'why?', answer: 'answer 1, corrected' }, { question: 'and then?', answer: 'answer 2' }];
@@ -780,6 +782,73 @@ test('an image pasted into a question is sent as its file\'s path, to a resumed 
   await ask('p4', `again ${shot}`, [...second, { question: `and ${gone}?`, answer: 'answer 3' }]);
   assert.match(calls[3].command, /^exec codex exec --color never /);
   assert.equal(question(calls[3].input), `again ![Attachment 1](${file})`, 'a new session\'s question gets the path too');
+});
+
+/* ------------------------------------------- a resumed @bart turn sees the Stage as it is now (MATH-54 follow-up) */
+
+// A stubbed Codex that answers `first` the first time, then "answer N", and keeps one session, for the follow-ups below.
+function stageRunner(name, first = null) {
+  const authFile = path.join(homeDir, `auth-${name}.json`);
+  fs.writeFileSync(authFile, JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'x' } }));
+  const calls = [];
+  const run = (shell, args, options, callback) => {
+    calls.push({ command: args[args.length - 1], input: fs.readFileSync(options.env.ENGELBART_BART_INPUT, 'utf8') });
+    fs.writeFileSync(options.env.ENGELBART_BART_OUTPUT, calls.length === 1 && first ? first : `answer ${calls.length}`);
+    callback(null, '{"type":"thread.started","thread_id":"01a0bc2d-7c18-77d2-8b21-3cc7e942cbcf"}\n');
+  };
+  return { calls, run, options: { readModels: () => MODELS, environment: { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir }, runDirectory: path.join(homeDir, `runs-${name}`), codexHome: path.join(homeDir, `codex-home-${name}`), codexAuthFile: authFile, run } };
+}
+
+test('a resumed @bart turn is sent the Stage and the highlights as they are now: a new highlight, another tab, no Stage', async () => {
+  const library = require('../src/main/store/library.cjs');
+  const { randomUUID } = require('node:crypto');
+  const downloads = path.join(homeDir, 'Downloads');
+  fs.mkdirSync(downloads, { recursive: true });
+  const rowOf = async (name) => {
+    const id = randomUUID(), file = path.join(downloads, `${name}.pdf`);
+    fs.writeFileSync(file, '%PDF-1.4\n');
+    await ctx.libraryDb.insert({ id, name, project_id: project.id, tags: ['paper'], type: 'pdf', path: file });
+    return { id, file };
+  };
+  const open = await rowOf('Front Paper'), cited = await rowOf('Cited Later');
+  await library.writeAnnotations(ctx, open.id, { 2: [hl('f1', 'the first passage')] });
+  const { calls, options } = stageRunner('stage-now');
+  const bart = createBart({ ...options, threads: createThreads() });
+  const ref = { kind: 'workspace', workspaceId: workspace.id };
+  await projects.writeDoc(ctx, project.id, ref, 'Reading @[Cited Later].\n@bart what is this?\nbart~> sn1\n');
+  const said = [];
+  const ask = async (askId, text, stage) => {
+    const out = await bart.ask(ctx, project.id, { askId, ref, workspaceId: workspace.id, text, turns: [...said], stage });
+    said.push({ question: text, answer: out.lines[0].replace(/^bart> /, '') });
+    return calls[calls.length - 1];
+  };
+  const pdf = { rowId: open.id, url: null, page: 2, kind: 'pdf' };
+
+  const first = await ask('sn1', 'what is this?', pdf);
+  assert.match(first.command, /^exec codex exec --color never /);
+  assert.ok(first.input.includes('<stage paper="Front Paper"') && first.input.includes('the first passage') && !first.input.includes('<highlights'), 'a new session: the documents carry them');
+
+  // A highlight made on the paper in front, and one on the mentioned paper, after the thread started.
+  await library.writeAnnotations(ctx, open.id, { 2: [hl('f1', 'the first passage'), hl('f2', 'a passage marked after', { note: 'mine' })] });
+  await library.writeAnnotations(ctx, cited.id, { 4: [hl('c4', 'cited, marked later')] });
+  const second = await ask('sn2', 'and the new one?', pdf);
+  assert.match(second.command, / resume /);
+  assert.match(second.input, /^<stage paper="Front Paper" [^\n]*page="2" annotations="[^"]+">\n<highlight page="2">\n<quote>\nthe first passage\n[^]*a passage marked after\n<\/quote>\n<note>\nmine\n<\/note>[^]*<\/stage>\n\n<highlights from="mentioned">\n<paper name="Cited Later"[^]*cited, marked later[^]*<\/highlights>\n\n<level>[^\n]+<\/level>\n\n<question>\nand the new one\?\n<\/question>$/);
+
+  // Another tab brought forward: a web page.
+  const third = await ask('sn3', 'and this page?', { kind: 'web', url: 'https://example.org/essay', title: 'An essay' });
+  assert.match(third.command, / resume /);
+  assert.match(third.input, /^<stage source="web" title="An essay" address="https:\/\/example\.org\/essay" highlights="0"\/>\n\n<highlights from="mentioned">/);
+  assert.ok(!third.input.includes('Front Paper'), 'the paper is no longer in front');
+
+  // The Stage closed: none. And the mentioned paper's highlight removed: none either.
+  await library.writeAnnotations(ctx, cited.id, {});
+  const fourth = await ask('sn4', 'and now?', null);
+  assert.match(fourth.command, / resume /);
+  assert.match(fourth.input, /^<stage>none<\/stage>\n\n<highlights>none<\/highlights>\n\n<level>[^\n]+<\/level>\n\n<question>\nand now\?\n<\/question>$/);
+
+  for (const row of [open, cited]) await ctx.libraryDb.remove(row.id); // the tests below grant no ~/Downloads
+  await projects.writeDoc(ctx, project.id, ref, '');
 });
 
 test('the fake agent follows up the same way, so a scripted run can show which path was taken', async () => {
@@ -1789,7 +1858,7 @@ test('@brainstorm\'s context: this workspace\'s library and mentions only, other
     assert.ok(names(c).some(([name]) => name === 'TutorTrace'));
     assert.match(c.documents, /@bart why\?\nbart> because TutorTrace\n@brainstorm/, `${agent}: the document as it stands`);
   }
-  assert.equal((await ask('bart')).documents, (await ask('discover')).documents);
+  assert.equal((await ask('bart')).documents, `${(await ask('discover')).documents}\n\n<stage>none</stage>`);
 });
 
 test('ask-bart takes the agent, and a Brainstorm is an agent of its workspace like Bart; @orient is no agent of its own any more (M-01)', async () => {
@@ -2269,4 +2338,19 @@ test('the fake @discover on a mentioned library paper: no card, "## This paper" 
   const follow = await run([...first.doc, '@discover @[Retries Considered]'], 'np6');
   assert.equal(follow.text[0], '## This paper');
   assert.equal((await run([...follow.doc, '@discover only after 2022'], 'np7')).text[0], '## Recent');
+});
+
+test('@brainstorm and @discover: a resumed turn is sent no <stage> or <highlights> of the Stage, as before', async () => {
+  for (const [agent, opening, reply, told] of [['brainstorm', '', JSON.stringify(FOCUS), /^<path>open<\/path>\n<stage>move<\/stage>\n<card>2 of 5<\/card>\n\n<level>/], ['discover', 'agents', JSON.stringify(FOCUS), /^<mode>standard\.[^\n]*<\/mode>\n\n<level>/]]) {
+    const { calls, options } = stageRunner(`stage-${agent}`, reply);
+    const bart = createBart({ ...options, brainstormThreads: createThreads(), discoverThreads: createThreads() });
+    const ref = { kind: 'workspace', workspaceId: workspace.id };
+    const stage = { kind: 'web', url: 'https://example.org/essay', title: 'An essay' };
+    const first = await bart.ask(ctx, project.id, { askId: `${agent}1`, ref, workspaceId: workspace.id, text: opening, agent, stage });
+    const said = [{ question: opening, answer: first.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n') }];
+    await bart.ask(ctx, project.id, { askId: `${agent}2`, ref, workspaceId: workspace.id, text: '(skipped)', turns: said, agent, stage: null });
+    assert.match(calls[1].command, / resume /, agent);
+    assert.match(calls[1].input, told, agent);
+    for (const call of calls) assert.ok(!/<stage>none|<stage source=|<stage paper=|<highlights/.test(call.input), agent);
+  }
 });

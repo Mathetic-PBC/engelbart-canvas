@@ -14,6 +14,8 @@
 // A web page is read the same way (MATH-54, 2026-10-06): in front in the Stage it is <stage source="web">, its title and
 // address and its highlights; a saved page the documents mention is in <highlights>; a question asked from a highlight
 // on one has <highlight source="web">.
+// MATH-54 follow-up (2026-10-06): every @bart turn carries both as they are now, a resumed one too (`now`), and
+// <stage>none</stage> when nothing is in front.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -30,6 +32,9 @@ const library = require('../store/library.cjs');
 const { attrOf, stageBlock, webStageBlock, mentionedBlock } = require('./highlights.cjs');
 
 const HERE = '<<< this is the question being asked now >>>';
+// @bart's <stage> with nothing in front, and a resumed turn's <highlights> when the documents mention nothing highlighted.
+const NO_STAGE = '<stage>none</stage>';
+const NO_HIGHLIGHTS = '<highlights>none</highlights>';
 
 /** The pending line of this question marks its place; the pending lines of other questions are noise. */
 function markPlace(text, askId) {
@@ -202,8 +207,9 @@ async function mentionedPapers(ctx, project, rows) {
 }
 
 /**
- * → { project, dirs, head, contextJson, documents, entries, workspaceName }. `head` and the documents are text; the
- * caller adds the level and the question (./ask.cjs), which differ per step. `entries` (the library as Context.json
+ * → { project, dirs, head, contextJson, documents, now, entries, workspaceName }. `head` and the documents are text; the
+ * caller adds the level and the question (./ask.cjs), which differ per step. `now`: @bart's <stage> and <highlights>
+ * alone, what a resumed turn is sent ('' for the other agents). `entries` (the library as Context.json
  * holds it) and `workspaceName` are for the fake agents, which name what a real one would read.
  */
 async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = 'bart', highlight = null, stage = null }) {
@@ -237,14 +243,18 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
     const space = await expandDoc(ctx, projectId, ref, { seen });
     documents.push(block('workspace', space.title, shown(space.body)));
   }
-  // @bart sees the person's highlights: the pdf or web page in front in the Stage, then the ones the documents mention.
+  // @bart sees the person's highlights: the pdf or web page in front in the Stage (<stage>none</stage> when nothing is,
+  // MATH-54 follow-up), then the ones the documents mention. `now` is the two again for a resumed session, whose own
+  // copies are as they were when it started (./ask.cjs firstMessage): <highlights>none</highlights> when none has any.
   const inFront = agent === 'bart' && stage ? { pdf: stagePaper, web: stageWebPage }[stage.kind] : null;
   const front = inFront ? await inFront(ctx, project, rows, stage) : null;
-  if (front) documents.push(front.source === 'web' ? webStageBlock(front, front.ink) : stageBlock(front, stage.page, front.ink));
+  let now = '';
   if (agent === 'bart') {
+    const staged = !front ? NO_STAGE : front.source === 'web' ? webStageBlock(front, front.ink) : stageBlock(front, stage.page, front.ink);
     const mentioned = await mentionedPapers(ctx, project, rows.filter((row) => seen.has(row.id) && row.id !== pointed && !(front && front.id === row.id)));
     const marked = mentionedBlock(mentioned);
-    if (marked) documents.push(marked);
+    documents.push(staged, ...(marked ? [marked] : []));
+    now = `${staged}\n\n${marked || NO_HIGHLIGHTS}`;
   }
   const own = scoped ? (await (await db.openNotesDb(project.dir)).list()).filter((note) => note.topic_id === workspace.id).map((note) => note.id) : [];
   const scope = { agent, workspace, own };
@@ -268,7 +278,7 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
     if (!folder || folder === path.parse(folder).root || folder === path.resolve(os.homedir()) || dirs.some((root) => within(folder, root))) continue;
     try { if (fs.statSync(folder).isDirectory()) dirs.push(folder); } catch { /* gone: nothing to grant */ }
   }
-  return { project, dirs, head, contextJson: `<context_json>\n${JSON.stringify(entries, null, 1)}\n</context_json>`, documents: documents.join('\n\n'), entries, workspaceName: workspace.name };
+  return { project, dirs, head, contextJson: `<context_json>\n${JSON.stringify(entries, null, 1)}\n</context_json>`, documents: documents.join('\n\n'), now, entries, workspaceName: workspace.name };
 }
 
-module.exports = { HERE, markPlace, buildContext, conversationBlock, catalogEntries, libraryDirs, block, highlightBlock, paperOf, webPageOf };
+module.exports = { HERE, NO_STAGE, NO_HIGHLIGHTS, markPlace, buildContext, conversationBlock, catalogEntries, libraryDirs, block, highlightBlock, paperOf, webPageOf };

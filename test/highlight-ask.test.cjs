@@ -137,7 +137,7 @@ test('buildContext from a highlight on a library pdf: the workspace as backgroun
   const ref = { kind: 'mark', id: 'm1', rowId: paperId, page: 6 };
   const c = await buildContext(ctx, project.id, { ref, workspaceId: workspace.id, askId: 'h1', highlight: { quote: 'Cohen\'s κ was 0.79 overall', note: '@bart is that good?', paper: 'ignored: the library names it' } });
   assert.match(c.head, /\nasked from: a highlight on page 6 of "TutorTrace", opened from the workspace "TutorTrace notes"\n/);
-  assert.equal(c.documents, `<workspace name="TutorTrace notes">\nWhat do the labels mean?\n@bart earlier?\nbart> An earlier answer.\n</workspace>\n\n<highlight paper="TutorTrace" path="${paperPath}" page="6">\n<quote>\nCohen's κ was 0.79 overall\n</quote>\n<note>\n@bart is that good?\n</note>\n</highlight>`);
+  assert.equal(c.documents, `<workspace name="TutorTrace notes">\nWhat do the labels mean?\n@bart earlier?\nbart> An earlier answer.\n</workspace>\n\n<highlight paper="TutorTrace" path="${paperPath}" page="6">\n<quote>\nCohen's κ was 0.79 overall\n</quote>\n<note>\n@bart is that good?\n</note>\n</highlight>\n\n<stage>none</stage>`);
   assert.ok(!c.documents.includes('<<<'), 'no line of the workspace is where it was asked');
   const entries = JSON.parse(c.contextJson.replace(/^<context_json>\n|\n<\/context_json>$/g, ''));
   assert.deepEqual(entries.filter((e) => e.mentioned).map((e) => e.name), ['TutorTrace'], 'the paper is what the person points at');
@@ -148,7 +148,7 @@ test('buildContext from a highlight on an address: a file:// address is given as
   const loose = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-highlight-loose-')), 'Some Paper.pdf');
   fs.writeFileSync(loose, '%PDF-1.4\n');
   const local = await buildContext(ctx, project.id, { ref: { kind: 'mark', id: 'm2', url: pathToFileURL(loose).href, page: 1 }, workspaceId: workspace.id, askId: 'h2', highlight: { quote: 'q', note: '' } });
-  assert.match(local.documents, new RegExp(`<highlight paper="Some Paper\\.pdf" path="${loose.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}" page="1">\\n<quote>\\nq\\n</quote>\\n<note>\\n\\n</note>\\n</highlight>$`));
+  assert.match(local.documents, new RegExp(`<highlight paper="Some Paper\\.pdf" path="${loose.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}" page="1">\\n<quote>\\nq\\n</quote>\\n<note>\\n\\n</note>\\n</highlight>\\n\\n<stage>none</stage>$`));
   assert.ok(local.dirs.includes(path.dirname(loose)), 'a pdf the library does not hold can be read too');
   const web = await buildContext(ctx, project.id, { ref: { kind: 'mark', id: 'm3', url: 'https://arxiv.org/pdf/2401.00001v2', page: 2 }, workspaceId: workspace.id, askId: 'h3', highlight: { quote: 'q', note: 'n', paper: 'Scim' } });
   assert.match(web.head, /asked from: a highlight on page 2 of "Scim", opened from the workspace "TutorTrace notes"/);

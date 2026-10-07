@@ -27,7 +27,8 @@
 // that is given exactly what a first question is given, read again, plus the earlier turns as the
 // document holds them. A session is found by what the document says was said (./threadKey), so it
 // is resumed only while its own memory of the exchange and the document agree. Nothing tells the
-// person which of the two happened.
+// person which of the two happened. MATH-54 follow-up (2026-10-06): a resumed @bart turn is sent the Stage and the
+// highlights as they are now too (<stage>, <highlights>; ./context.cjs `now`), ahead of the question.
 //
 // @brainstorm (2026-09-30): the same run with another agent. Its own system prompt (./brainstorm-system-prompt.cjs),
 // one fixed step (./models.cjs readBrainstorm; 2026-10-02: no flags, and its foot gives the time alone), file tools only,
@@ -201,11 +202,13 @@ async function withImagePaths(ctx, projectId, question) {
 
 /**
  * What a question is given: everything, for a new session; the question alone, for a session that already holds the
- * rest. `extra` goes in front of the level either way (@brainstorm's path and stage, @discover's mode).
+ * rest. `extra` goes in front of the level either way (@brainstorm's path and stage, @discover's mode). A resumed @bart
+ * turn is also sent the Stage and the highlights as they are now (`context.now`, MATH-54 follow-up): what it was given
+ * when the session started may be out of date.
  */
 function firstMessage({ context, prior, question, resumed, extra = '' }) {
   const asked = `<question>\n${question}\n</question>`;
-  if (resumed) return (level) => [extra, level, asked].filter(Boolean).join('\n\n');
+  if (resumed) return (level) => [extra, context.now, level, asked].filter(Boolean).join('\n\n');
   return (level) => [context.head, context.contextJson, context.documents, conversationBlock(prior), extra, level, asked].filter(Boolean).join('\n\n');
 }
 
@@ -774,7 +777,8 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
         const out = await climb({
           steps, pinned, onProgress: stepShown(agent, onProgress),
           first: message, session: held ? held.session : null,
-          // What it was sent is what it reports: a resumed session gets the question alone, a new one gets everything.
+          // What it was sent is what it reports: a resumed session gets the question alone (an @bart one, the Stage and
+          // highlights as well), a new one gets everything.
           turn: async ({ message: sent }) => ({ session: 'fake', text: await act(brainstorm ? fakeCard(context, { ...plan, text }, models) : discover ? fakeDiscover(context, plan) : /hard/.test(question) && /step 1 of/.test(sent) ? 'ESCALATE: the question says it is hard' : `FAKE ANSWER to "${question}".\n\n## Seen\n- **${context.documents.length}** characters of documents\n- \`${steps.length}\` steps${prior.length ? `\n- ${/<conversation>/.test(sent) ? `a new session, given ${prior.length} earlier ${prior.length === 1 ? 'turn' : 'turns'}` : /<engelbart>/.test(sent) ? 'a new session, given no earlier turns' : 'the same session, given the question alone'}` : ''}${/code/.test(question) ? `\n\nThe same as JSON:\n\n\`\`\`json\n{\n  "fake": true,\n  "steps": ${steps.length},\n  "note": "# not a heading"\n}\n\`\`\`` : ''}`) }),
         });
         const meta = { provider, level: out.level, trail: out.trail, ms: out.ms, pinned };

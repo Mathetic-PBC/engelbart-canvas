@@ -244,7 +244,7 @@ test('buildContext: <stage source="web"> for the web page in front, <highlights>
   const inkFile = fileFor('live.example.org/post');
   assert.ok(front.includes(`<stage source="web" title="Live post" address="http://live.example.org/post" annotations="${inkFile}">\n<highlight>\n<quote>\na live passage\n</quote>\n</highlight>\n</stage>`), front.slice(-900));
   assert.ok(front.includes(`<highlights from="mentioned">\n<page source="web" title="Saved essay" address="https://blog.example.org/saved" path="${savedFile}" annotations="${path.join(ctx.dataRoot, 'annotations', `${saved}.json`)}">\n<highlight>\n<quote>\na saved passage\n</quote>\n<note>\nworth citing\n</note>\n<ask>\n<question>\nwho wrote it?\n</question>\n<answer>\nThe editors.\n</answer>\n</ask>\n</highlight>\n</page>\n</highlights>`));
-  assert.ok(plain.includes('<page source="web" title="Saved essay"') && !plain.includes('<stage'), 'mentioned without a Stage: <highlights> alone');
+  assert.ok(plain.includes('<page source="web" title="Saved essay"') && plain.includes('<stage>none</stage>\n\n<highlights from="mentioned">'), 'mentioned without a Stage: <stage>none</stage>, then <highlights>');
 
   // the saved page itself in front (its copy open): in <stage> alone, named and addressed as the library has it
   const open = (await ask({ stage: { kind: 'web', url: pathToFileURL(savedFile).href, title: 'Saved essay – Blog' } })).documents;
