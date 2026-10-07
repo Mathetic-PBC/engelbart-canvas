@@ -24,7 +24,7 @@ export const BOX_GAP = 12; // desk px kept between two boxes by the spacing pass
 export const DESK_EDGE = 24; // desk px a moved box keeps from the desk's edge (the desk grows to keep it)
 export const NOTE_W = 240; // a note's box, on the desk
 export const ASK_W = 320; // a highlight's card: its note and its answers
-export const SIDE_GAP = 28; // a box beside its page: desk px from the page's edge
+export const SIDE_GAP = 12; // a box beside its page: desk px from the text's edge (28 until 2026-10-07: closer, David)
 export const POS_DY = 11; // `pos` is where a box's first line sits: 11px under its top, as free notes were always kept
 
 /**

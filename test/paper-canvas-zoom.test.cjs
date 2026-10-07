@@ -142,7 +142,7 @@ test('at 50% and 200% every card\'s left, top, width and height against the page
   assert.equal(base.boxes.m1.width, 320, 'today\'s sizes at 100%: ASK_W, the note and its answer alike');
   assert.equal(base.boxes.m1.height, 44 + 120);
   assert.equal(base.boxes.m2.height, 44 + 2 * 120, 'the answer moved on its own before is in the card');
-  assert.equal(base.boxes.m1.left, 612 + 28, 'SIDE_GAP from the page\'s edge');
+  assert.equal(base.boxes.m1.left, 612 + 12, 'SIDE_GAP from the page\'s edge');
   near(base.boxes.m2.left, 1.3 * 612, 1e-9, 'the card where the mark was moved');
   assert.equal(view.sheets[1].wrap.querySelectorAll('line').length, 0, 'nothing joins anything');
   for (const f of [0.5, 2]) {
@@ -237,7 +237,7 @@ test('one card a highlight: its note, then each answer and each answer being wri
   const [card] = cards;
   assert.equal(card.style.width, `${ASK_W}px`, 'one width throughout');
   const [grip, note, a1, a2, run] = card.children;
-  assert.ok(grip.dataset.grip && grip.querySelector('[data-act="remove"]'), 'the handle row, with its trash button (MATH-66)');
+  assert.ok(grip.dataset.grip && !grip.querySelector('[data-act="remove"]'), 'the handle row, with no trash button (gone 2026-10-07)');
   assert.ok(note.dataset.cardNote, 'the note at the top');
   assert.deepEqual([a1.dataset.ask, a2.dataset.ask, run.dataset.askRun], ['a1', 'a2', 'h1'], 'the answers in order, then the one being written');
   for (const sec of [a1, a2, run]) assert.equal(sec.style.borderTop, '1px solid #ececec', 'a thin divider over each');
@@ -248,5 +248,5 @@ test('one card a highlight: its note, then each answer and each answer being wri
   assert.equal(run.querySelector('[data-run-question]').style.display, 'none', 'nor over the answer being written');
   // The card is where its mark would be beside the page: a1's own place from before cards is not read.
   assert.equal(view.drawn[1].boxes.length, 1);
-  assert.equal(view.drawn[1].boxes[0].left, view.desk(1).G + view.desk(1).pageW + 28);
+  assert.equal(view.drawn[1].boxes[0].left, view.desk(1).G + view.desk(1).pageW + 12);
 });

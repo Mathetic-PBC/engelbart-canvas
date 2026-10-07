@@ -34,8 +34,8 @@
 // Boxes that were not moved are spaced on every draw (canvas.js spaceBoxes), never saved. A note on a highlight that
 // starts with @bart asks on Enter (`onAsk`; Shift+Enter is a new line), and a second one continues the exchange (its
 // `asks` go as the turns). An answer being written (`pendingAsks`, the workspace's) is a box of its own until it lands
-// (`addAsk`, from the Stage). Space-drag or a middle-drag pans; a fade and a chip say where boxes are out of view; the
-// bar has Fit page and Fit page + notes.
+// (`addAsk`, from the Stage). Space-drag or a middle-drag pans; a fade says where boxes are out of view. Since 2026-10-07
+// (David) there is no chip ("2 notes →") with it, and the bar has no Fit page or Fit page + notes.
 // Follow-ups (2026-10-06): the boxes hanging under a moved one widen the desk as it does (canvas.js deskNeed), while it is
 // dragged too; @bart from a part of a selection across pages sends the whole passage (./marks.js passageOf), and so does
 // Continue in workspace; a deleted answer comes back with ⌘Z (undoKey) and stays a turn of its exchange, so the next
@@ -65,8 +65,8 @@
 // keptMarks). A highlight's card has no arrow to it (taken out again on 2026-10-06, as MATH-15 had it).
 // @bart at the start of a note that can ask is the document's blue
 // label, in the note shown and, through a backdrop under its transparent text, in its field (model/doc.js noteInkHtml).
-// Removing a mark (MATH-66, 2026-10-06): a card's trash button (in its handle row, shown on hover or while the card is in
-// focus) or Backspace / Delete on the highlight in focus, nothing having the keyboard, takes the mark away, every part of a
+// Removing a mark (MATH-66, 2026-10-06): Backspace / Delete on the mark in focus (a highlight pressed, or a card's grip:
+// the card's trash button went 2026-10-07, David), nothing having the keyboard, takes the mark away, every part of a
 // selection across pages with it, and an answer still being written on it is stopped first (removeMark). No confirmation:
 // a toast says so for about 5 s with Undo, and ⌘Z does the same, the mark coming back where it was with its note, answers
 // and place (undoRemoval).
@@ -78,7 +78,7 @@ import { nextFind, createTargetGate, sectionSpans, paintSection, clearFind, FIND
 import { wheelZooms, wheelZoom, createPageCache } from '../model/paper-zoom.js';
 import { mentionAt, libMention, fileMention, fileMentionOf, noteHtml, noteInkHtml, noteParts, noteOffset, inlineHtml, esc, LIB_MENTION_RE } from '../model/doc.js';
 import { isFolderRow, folderRows, firstPick, parentRel } from '../model/rail.js';
-import { sideSpace, deskOf, deskGeom, deskNeed, placeOf, posOf, spaceBoxes, extentAt, fitZoom, offscreen, offscreenSide, chipLabel, revealScroll, noteQuestion, askedByNote, turnsOf, shownAsks, keptMarks, modelLabel, runningLabel, blankAt, textColumn, DESK, DESK_EDGE, BOX_GAP, ASK_W, NOTE_W, SIDE_GAP, POS_DY, LINE, PRESS_MOVE } from './canvas.js';
+import { sideSpace, deskOf, deskGeom, deskNeed, placeOf, posOf, spaceBoxes, extentAt, fitZoom, offscreen, noteQuestion, askedByNote, turnsOf, shownAsks, keptMarks, modelLabel, runningLabel, blankAt, textColumn, DESK, DESK_EDGE, BOX_GAP, ASK_W, NOTE_W, SIDE_GAP, POS_DY, LINE, PRESS_MOVE } from './canvas.js';
 import { fieldCaret } from '../workspace/caret.js';
 import MentionMenu from '../workspace/MentionMenu.jsx';
 
@@ -144,17 +144,13 @@ const LAYER_CSS = `
 [data-pdf][data-panning],[data-pdf][data-panning] *{cursor:grabbing!important}
 [data-pdf] [data-grip]{cursor:grab}
 [data-pdf] [data-box] [data-grip] span{opacity:0;transition:opacity 120ms}
-[data-pdf] [data-box]:hover [data-grip] span,[data-pdf] [data-box]:focus-within [data-grip] span,[data-pdf] [data-box][data-focused] [data-grip] span{opacity:1}
-[data-pdf] [data-box]:hover,[data-pdf] [data-box]:focus-within,[data-pdf] [data-box][data-focused]{border-color:#ececec !important}
+[data-pdf] [data-box]:hover:not(:focus-within) [data-grip] span,[data-pdf] [data-box][data-focused]:not(:focus-within) [data-grip] span{opacity:1}
+[data-pdf] [data-box]:hover:not(:focus-within),[data-pdf] [data-box][data-focused]:not(:focus-within){border-color:#ececec !important}
 [data-pdf][data-dragging],[data-pdf][data-dragging] *{cursor:grabbing!important;user-select:none!important}
 [data-pdf][data-blank]:not([data-panning]),[data-pdf][data-blank]:not([data-panning]) :not([data-notes],[data-notes] *){cursor:grab!important}
 [data-pdf][data-neartext] .pdf-text,[data-pdf][data-neartext] .pdf-text .endOfContent{cursor:text!important}
 [data-pdf] [data-box] button{border:0;background:transparent;padding:2px 6px;border-radius:5px;font:12px/1.4 var(--font-sans);color:#4d4d4d;cursor:pointer;white-space:nowrap}
 [data-pdf] [data-box] button:hover{background:#f2f2f2}
-[data-pdf] [data-box] [data-act="remove"]{opacity:0;pointer-events:none;background:rgba(255,255,255,.97);color:#8f8f8f;transition:opacity 120ms,background 120ms}
-[data-pdf] [data-box] [data-act="remove"]:hover{background:#f2f2f2;color:#171717}
-[data-pdf] [data-box]:hover [data-act="remove"],[data-pdf] [data-box]:focus-within [data-act="remove"],[data-pdf] [data-box][data-focused] [data-act="remove"]{opacity:1;pointer-events:auto}
-[data-pdf][data-dragging] [data-box] [data-act="remove"]{opacity:0}
 [data-pdf] [data-box] [data-ask-body],[data-pdf] [data-box] [data-run-body]{user-select:text;cursor:text}
 [data-pdf] [data-box] [data-ask-body] p,[data-pdf] [data-box] [data-run-body] p{margin:0 0 6px}
 [data-pdf] [data-box] a{color:#0070f3;text-decoration:underline;text-underline-offset:2px}
@@ -168,7 +164,6 @@ const LAYER_CSS = `
 const BAR = { position: 'absolute', left: '50%', bottom: 16, transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 2, height: 34, boxSizing: 'border-box', padding: '0 4px 0 12px', background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, font: '400 12.5px/1 var(--font-sans)', fontVariantNumeric: 'tabular-nums', color: '#4d4d4d', whiteSpace: 'nowrap', zIndex: 5 };
 const BAR_STEP = { flex: 'none', width: 26, height: 26, padding: 0, borderRadius: 6, border: 0, background: 'transparent', font: '400 14px/1 var(--font-sans)', color: '#4d4d4d', cursor: 'pointer' };
 const BAR_PCT = { flex: 'none', minWidth: 48, height: 26, padding: '0 6px', borderRadius: 6, border: 0, background: 'transparent', font: '500 12.5px/1 var(--font-sans)', fontVariantNumeric: 'tabular-nums', color: '#171717', cursor: 'pointer' };
-const BAR_FIT = { flex: 'none', height: 26, padding: '0 8px', borderRadius: 6, border: 0, background: 'transparent', font: '400 12.5px/1 var(--font-sans)', color: '#4d4d4d', cursor: 'pointer' };
 // Boxes out of view (MATH-27): a fade on each edge with some beyond it, and a chip that brings them in. The scrollbars
 // are 10px (LAYER_CSS): the fades stop short of them.
 const BAR_SIDE = 10;
@@ -178,20 +173,16 @@ const fadeStyle = (side) => {
   const at = side === 'left' ? { left: 0, top: 0, bottom: BAR_SIDE, width: FADE } : side === 'right' ? { right: BAR_SIDE, top: 0, bottom: BAR_SIDE, width: FADE } : side === 'up' ? { top: 0, left: 0, right: BAR_SIDE, height: FADE } : { bottom: BAR_SIDE, left: 0, right: BAR_SIDE, height: FADE };
   return { position: 'absolute', ...at, pointerEvents: 'none', zIndex: 4, background: `linear-gradient(${to}, rgba(250,250,250,.96), rgba(250,250,250,0))` };
 };
-const CHIP = { position: 'absolute', zIndex: 5, height: 26, padding: '0 10px', border: '1px solid #eaeaea', borderRadius: 999, background: '#fff', font: '500 12px/1 var(--font-sans)', color: '#4d4d4d', cursor: 'pointer', whiteSpace: 'nowrap', boxShadow: '0 1px 2px rgba(0,0,0,.04)' };
-const chipStyle = (side) => ({ ...CHIP, ...(side === 'left' ? { left: 12, top: '50%', transform: 'translateY(-50%)' } : side === 'right' ? { right: BAR_SIDE + 12, top: '50%', transform: 'translateY(-50%)' } : side === 'up' ? { top: 10, left: '50%', transform: 'translateX(-50%)' } : { bottom: 62, left: '50%', transform: 'translateX(-50%)' }) });
 const SIDES = ['left', 'right', 'up', 'down'];
 const NO_OFF = { left: 0, right: 0, up: 0, down: 0 };
 // A box (MATH-27): a grip at its top that moves it. Since 2026-10-06 it is no box to see: no shadow or fill, the note ink on
-// the desk; its edge is transparent (so it keeps its size) and, with its grip, shows faintly only as its trash button does. The note in focus is not washed or edged in blue either: the
+// the desk; its edge is transparent (so it keeps its size) and, with its grip, shows faintly on hover or in focus, never
+// while it is being typed in (David, 2026-10-06). The note in focus is not washed or edged in blue either: the
 // others fade.
 const BOX_BG = 'transparent';
 const BOX_LOOK = `position:absolute;box-sizing:border-box;border:1px solid transparent;border-radius:8px;background:${BOX_BG};pointer-events:auto`;
 const GRIP_CSS = 'height:12px;display:flex;align-items:center;justify-content:center';
 const GRIP_BAR = '<span style="width:22px;height:3px;border-radius:2px;background:#d9d9d9"></span>';
-// The trash button in a card's handle row (MATH-66): small, at the top right, over the card's own white (LAYER_CSS).
-const TRASH_CSS = 'position:absolute;top:1px;right:3px;width:18px;height:18px;padding:0;display:flex;align-items:center;justify-content:center;border-radius:5px';
-const TRASH_SVG = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4h11M6.5 4V2.5h3V4M4 4l.7 9.5h6.6L12 4M6.8 6.5v4.5M9.2 6.5v4.5"/></svg>';
 const REMOVED_MS = 5000; // how long "Highlight removed · Undo" stays
 const TOAST = { position: 'absolute', left: '50%', bottom: 60, transform: 'translateX(-50%)', zIndex: 6, display: 'flex', alignItems: 'center', gap: 4, height: 30, boxSizing: 'border-box', padding: '0 4px 0 12px', background: '#171717', borderRadius: 8, font: '400 12.5px/1 var(--font-sans)', color: '#fff', whiteSpace: 'nowrap', boxShadow: '0 2px 8px rgba(0,0,0,.12)' };
 const TOAST_UNDO = { flex: 'none', height: 22, padding: '0 8px', border: 0, borderRadius: 5, background: 'transparent', font: '500 12.5px/1 var(--font-sans)', color: '#fff', cursor: 'pointer' };
@@ -1644,15 +1635,6 @@ export default class PaperView extends React.Component {
     const grip = makeEl('div', GRIP_CSS, { grip: '1' });
     grip.title = 'Drag to move';
     grip.innerHTML = GRIP_BAR;
-    // The trash button (MATH-66): shown on hover or while the card is in focus (LAYER_CSS). A press on it keeps the
-    // keyboard where it is (a note being typed in is not left first) and is no drag.
-    const free = !(m.rects || []).length, trash = makeEl('button', TRASH_CSS, { act: 'remove' });
-    trash.title = free ? 'Remove note' : 'Remove highlight';
-    trash.setAttribute('aria-label', trash.title);
-    trash.innerHTML = TRASH_SVG;
-    trash.onmousedown = (ev) => { ev.preventDefault(); ev.stopPropagation(); };
-    trash.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); this.removeMark(page, m); };
-    grip.appendChild(trash);
     box.appendChild(grip);
     box.onmousedown = (ev) => ev.stopPropagation(); // not a click on the page: no new note, the pending selection stays
     this.grip(box, page);
@@ -1867,7 +1849,8 @@ export default class PaperView extends React.Component {
     if (grip) grip.onmousedown = (ev) => this.startDrag(ev, box, page);
   }
   startDrag(ev, el, page) {
-    if (ev.button !== 0 || (ev.target && ev.target.closest && ev.target.closest('[data-act]'))) return; // the trash button
+    if (ev.button !== 0) return;
+    if (el.dataset.boxMark) this.focusMark(el.dataset.boxMark); // a card's grip pressed: Backspace / Delete removes it (markKey)
 
     ev.preventDefault(); ev.stopPropagation();
     const model = this.drawn[page], b = model && model.boxes.find((x) => x.el === el);
@@ -1973,15 +1956,6 @@ export default class PaperView extends React.Component {
   syncOffscreenSoon() {
     if (this.offRaf || typeof requestAnimationFrame !== 'function') return;
     this.offRaf = requestAnimationFrame(() => { this.offRaf = 0; this.syncOffscreen(); });
-  }
-  // A chip: the boxes off its edge scrolled into view (all of them when they fit, else the nearest).
-  reveal(side) {
-    const host = this.host.current;
-    if (!host) return;
-    const view = this.viewRect();
-    const { dx, dy } = revealScroll(this.boxRects(view).filter((r) => offscreenSide(r, view) === side), view, side);
-    if (typeof host.scrollBy === 'function') host.scrollBy({ left: dx, top: dy, behavior: 'smooth' });
-    else { host.scrollLeft += dx; host.scrollTop += dy; }
   }
 
   /* ---------------------------------------------------------------- the mark in focus (MATH-15) */
@@ -2313,9 +2287,6 @@ export default class PaperView extends React.Component {
             ? <span style={{ position: 'absolute', left: 0, right: 0, top: 14, textAlign: 'center', font: '12px/1.5 var(--font-sans)', color: '#8f8f8f', pointerEvents: 'none' }}>{note}</span>
             : null}
           {!note && SIDES.map((side) => (off[side] ? <div key={`fade-${side}`} data-fade={side} style={fadeStyle(side)} /> : null))}
-          {!note && SIDES.map((side) => (off[side] && !(side === 'down' && removed) ? (
-            <button key={`chip-${side}`} type="button" data-chip={side} className="hov-wash" style={chipStyle(side)} onMouseDown={(e) => e.preventDefault()} onClick={() => this.reveal(side)}>{chipLabel(off[side], side)}</button>
-          ) : null))}
           {removed ? (
             <div data-removed="1" role="status" style={TOAST} onMouseDown={(e) => e.preventDefault()}>
               <span>{removed.label}</span>
@@ -2334,9 +2305,6 @@ export default class PaperView extends React.Component {
               <button type="button" className="hov-wash" aria-label="Zoom out" style={BAR_STEP} onClick={() => this.zoomStepBy(-1)}>−</button>
               <button type="button" className="hov-wash" title="100% = fit width" style={BAR_PCT} onClick={() => this.togglePct()}>{pct}%</button>
               <button type="button" className="hov-wash" aria-label="Zoom in" style={BAR_STEP} onClick={() => this.zoomStepBy(1)}>+</button>
-              <span style={{ flex: 'none', width: 1, height: 16, margin: '0 4px', background: '#eaeaea' }} />
-              <button type="button" className="hov-wash" title="The page in view, whole" style={BAR_FIT} onClick={() => this.fitPage(false)}>Fit page</button>
-              <button type="button" className="hov-wash" title="The page in view and every note and answer beside it" style={BAR_FIT} onClick={() => this.fitPage(true)}>Fit page + notes</button>
             </div>
           ) : null}
         </div>
