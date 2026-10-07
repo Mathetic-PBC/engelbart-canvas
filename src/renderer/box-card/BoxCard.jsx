@@ -20,6 +20,11 @@ const api = window.boxCardAPI;
 const NOTE_INK = '#1f2633';
 const NOTE_LOOK = { padding: '0 6px', font: "500 20px/1.2 'Caveat',cursive", letterSpacing: '.2px', color: NOTE_INK, WebkitFontSmoothing: 'antialiased' };
 const ASK_W = 320;
+// A card with no answers is only as wide as its note (David, 2026-10-07: "make the text box smaller"), from MIN_W to ASK_W:
+// its longest line, measured in the note's ink, and the field's padding and edge.
+const MIN_W = 140;
+const NOTE_ROOM = 12 + 2 + 6;
+const PLACEHOLDER = 'Note, or @bart and a question';
 const GRIP = { height: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' };
 const GRIP_BAR = { width: 22, height: 3, borderRadius: 2, background: '#d9d9d9' };
 const TRASH = { position: 'absolute', top: 1, right: 3, width: 18, height: 18, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 5, border: 0, background: 'rgba(255,255,255,.97)', color: '#8f8f8f', cursor: 'pointer' };
@@ -64,7 +69,7 @@ function Note({ value, onChange, onKeyDown, fieldRef }) {
   return (
     <div style={{ flex: 'none', paddingBottom: 4, position: 'relative' }}>
       {inked && <div aria-hidden="true" style={{ ...NOTE_LOOK, position: 'absolute', inset: 0, margin: 0, whiteSpace: 'pre-wrap', overflowWrap: 'break-word', overflow: 'hidden', pointerEvents: 'none' }} dangerouslySetInnerHTML={{ __html: noteInkHtml(value) }} />}
-      <textarea ref={fieldRef} rows={1} value={value} placeholder="Note, or @bart and a question" spellCheck={false} onChange={(event) => onChange(event.target.value)} onKeyDown={onKeyDown} style={field} />
+      <textarea ref={fieldRef} rows={1} value={value} placeholder={PLACEHOLDER} spellCheck={false} onChange={(event) => onChange(event.target.value)} onKeyDown={onKeyDown} style={field} />
     </div>
   );
 }
@@ -105,7 +110,8 @@ const NOTE_SAVE_MS = 300;
 function BoxCard() {
   const [state, setState] = React.useState(null); // { mark: { id, note, asks }, running }
   const [note, setNote] = React.useState('');
-  const field = React.useRef(null), root = React.useRef(null), shown = React.useRef(null), timer = React.useRef(0), unsaved = React.useRef(null);
+  const [noteW, setNoteW] = React.useState(0);
+  const field = React.useRef(null), root = React.useRef(null), mirror = React.useRef(null), shown = React.useRef(null), timer = React.useRef(0), unsaved = React.useRef(null);
 
   const flush = React.useCallback(() => {
     clearTimeout(timer.current);
@@ -124,11 +130,18 @@ function BoxCard() {
     api.ready();
     return () => { off(); flush(); };
   }, [flush]);
-  // how tall it is, for main to give its view that height
+  // the note's longest line (the placeholder's while it is empty), for the card's width
+  React.useLayoutEffect(() => {
+    const el = mirror.current;
+    if (!el) return;
+    el.textContent = note || PLACEHOLDER;
+    setNoteW(el.getBoundingClientRect().width);
+  }, [note]);
+  // how big it is, for main to give its view that size
   React.useEffect(() => {
     const el = root.current;
     if (!el || typeof ResizeObserver !== 'function') return undefined;
-    const observer = new ResizeObserver(() => api.size({ height: el.offsetHeight }));
+    const observer = new ResizeObserver(() => api.size({ height: el.offsetHeight, width: el.offsetWidth }));
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
@@ -151,10 +164,12 @@ function BoxCard() {
 
   const asks = state && state.mark ? state.mark.asks || [] : [];
   const running = state && Array.isArray(state.running) ? state.running : [];
+  const width = asks.length || running.length ? ASK_W : Math.min(ASK_W, Math.max(MIN_W, Math.ceil(noteW) + NOTE_ROOM));
   return (
-    <div ref={root} style={{ padding: 8, width: ASK_W + 16 }}>
+    <div ref={root} style={{ padding: 8, width: width + 16 }}>
       <style>{CSS}</style>
-      <div data-card="1" style={{ width: ASK_W, display: 'flex', flexDirection: 'column', background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,.08)', paddingBottom: 4 }}>
+      <span ref={mirror} aria-hidden="true" style={{ ...NOTE_LOOK, padding: 0, position: 'absolute', left: -9999, top: 0, visibility: 'hidden', whiteSpace: 'pre' }} />
+      <div data-card="1" style={{ width, display: 'flex', flexDirection: 'column', background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,.08)', paddingBottom: 4 }}>
         <div style={GRIP}>
           <span style={GRIP_BAR} />
           <button type="button" data-trash="1" title="Remove box" aria-label="Remove box" onMouseDown={(event) => event.preventDefault()} onClick={() => api.remove()} style={TRASH}>{TRASH_SVG}</button>

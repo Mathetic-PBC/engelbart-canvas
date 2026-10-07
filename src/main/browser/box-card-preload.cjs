@@ -3,7 +3,7 @@
 // engelbart://app/box-card.html, drawn by src/renderer/box-card/BoxCard.jsx. These are its only channels, on its own
 // view's ipc; main binds every one to the box the card is showing, so the card names no box, tab or page.
 //   in:  state { mark: { id, note, asks }, running }: the box's note and answers as kept, and what is being asked from it
-//   out: ready(), note(text), ask(question), stop(askId), remove(), size({ height })
+//   out: ready(), note(text), ask(question), stop(askId), remove(), size({ height, width })
 // Sandboxed and isolated: the card's page gets `window.boxCardAPI` and nothing else.
 
 const CHANNELS = Object.freeze({
@@ -24,7 +24,7 @@ function runInCard() {
     ask: (question) => ipcRenderer.send(CHANNELS.ask, String(question)),
     stop: (askId) => ipcRenderer.send(CHANNELS.stop, String(askId)),
     remove: () => ipcRenderer.send(CHANNELS.remove),
-    size: ({ height } = {}) => ipcRenderer.send(CHANNELS.size, { height: Number(height) }),
+    size: ({ height, width } = {}) => ipcRenderer.send(CHANNELS.size, { height: Number(height), width: Number(width) }),
   }));
 }
 

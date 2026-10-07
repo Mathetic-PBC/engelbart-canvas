@@ -717,6 +717,13 @@ test('the card: one view per window beside the selected box on the tab in front,
   const fromCard = { sender: card.webContents, senderFrame: card.webContents.mainFrame };
   card.webContents.ipc.listeners.get(CARD.CHANNELS.size)(fromCard, { height: 180.2 });
   assert.equal(card.bounds.height, 181);
+  // and its width, as the card says (only as wide as its note, 2026-10-07): never wider than CARD_W, which it is when it says none
+  card.webContents.ipc.listeners.get(CARD.CHANNELS.size)(fromCard, { height: 180.2, width: 200.4 });
+  assert.equal(card.bounds.width, 201);
+  card.webContents.ipc.listeners.get(CARD.CHANNELS.size)(fromCard, { height: 180.2, width: 999 });
+  assert.equal(card.bounds.width, VIEWS.CARD_W);
+  card.webContents.ipc.listeners.get(CARD.CHANNELS.size)(fromCard, { height: 180.2 });
+  assert.equal(card.bounds.width, VIEWS.CARD_W);
   view({ id: 'b1', rect: { x: 500, y: 10, w: 200, h: 100 }, viewport: { width: 800, height: 600 }, scrolling: true });
   assert.deepEqual(card.bounds, { x: 156, y: 50, width: VIEWS.CARD_W, height: 181 });
   assert.equal(card.visible, VIEWS.CARD_HIDE_WHILE_SCROLLING ? false : true);

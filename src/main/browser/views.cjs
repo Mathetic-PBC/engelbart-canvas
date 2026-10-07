@@ -118,7 +118,8 @@ const BOX_TIMEOUT_MS = 2000; // how long the page has to say what a box drawn on
 const FRAME_TIMEOUT_MS = 150; // how long a resize waits for the page to have painted without the box's lines
 const BOX_CARD_PRELOAD = path.join(__dirname, 'box-card-preload.cjs');
 const BOX_CARD_URL = 'engelbart://app/box-card.html';
-const CARD_W = 336; // the card's width in the app's CSS pixels: BoxCard's ASK_W (320) and its shadow's room
+const CARD_W = 336; // the card's widest, in the app's CSS pixels: BoxCard's ASK_W (320) and its shadow's room; it says how
+// wide it is (only as wide as its note when it has no answers, 2026-10-07), and is never wider than this
 const CARD_MIN_H = 64; // its height until it says how tall it is
 const CARD_MAX_H = 1600;
 // Whether the card is hidden while the page scrolls and shown again where the box is once it stops (the page says when:
@@ -929,7 +930,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
   /* --------------------------------------------------------------------------------- the selected box's card */
 
   // One per window, made the first time a box is selected: { view, ready, tab, markId, height, running, note }.
-  const card = { view: null, ready: false, tab: null, markId: null, height: 0, running: [], note: null, saving: Promise.resolve(), queued: null };
+  const card = { view: null, ready: false, tab: null, markId: null, height: 0, width: 0, running: [], note: null, saving: Promise.resolve(), queued: null };
   /** Messages from the card's own page alone (box-card.html, its main frame). */
   function fromCard(event) {
     try { assertTrustedRenderer(event, BOX_CARD_URL); } catch { return false; }
@@ -958,8 +959,10 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       contents.ipc.on(CARD.CHANNELS.remove, (event) => { if (fromCard(event) && card.tab && card.markId) void removeBox(card.tab, card.markId); });
       contents.ipc.on(CARD.CHANNELS.size, (event, value) => {
         const height = value && typeof value === 'object' ? Number(value.height) : NaN;
+        const width = value && typeof value === 'object' ? Number(value.width) : NaN;
         if (!fromCard(event) || !Number.isFinite(height)) return;
         card.height = Math.max(CARD_MIN_H, Math.min(CARD_MAX_H, Math.ceil(height)));
+        card.width = Number.isFinite(width) && width > 0 ? Math.min(CARD_W, Math.ceil(width)) : 0;
         if (card.tab) placeCard(card.tab);
       });
     }
@@ -1035,12 +1038,12 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     if (!sel || !entry.view.getVisible() || !pageMarks || !win || win.isDestroyed()) { if (card.tab === id) hideCard(); return; }
     if (layer.tab === id) { hideCardView(); return; }
     const view = cardView();
-    if (card.tab !== id || card.markId !== sel.id) { hideCardView(); card.tab = id; card.markId = sel.id; card.note = null; card.height = 0; void refreshCard(); }
+    if (card.tab !== id || card.markId !== sel.id) { hideCardView(); card.tab = id; card.markId = sel.id; card.note = null; card.height = 0; card.width = 0; void refreshCard(); }
     if (CARD_HIDE_WHILE_SCROLLING && sel.scrolling) { hideCardView(); return; }
     const zoom = entry.view.webContents.getZoomFactor() || 1, page = entry.view.getBounds();
     const box = { x: page.x + sel.rect.x * zoom, y: page.y + sel.rect.y * zoom, width: sel.rect.w * zoom, height: sel.rect.h * zoom };
     const appZoom = (win.webContents && win.webContents.getZoomFactor && win.webContents.getZoomFactor()) || 1;
-    const at = BOX.cardPlace(box, page, { width: CARD_W * appZoom, height: (card.height || CARD_MIN_H) * appZoom });
+    const at = BOX.cardPlace(box, page, { width: (card.width || CARD_W) * appZoom, height: (card.height || CARD_MIN_H) * appZoom });
     if (!at) { hideCardView(); return; }
     if (view.webContents.getZoomFactor && view.webContents.getZoomFactor() !== appZoom) view.webContents.setZoomFactor(appZoom);
     view.setBounds(at);
