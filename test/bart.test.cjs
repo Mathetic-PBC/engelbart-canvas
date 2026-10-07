@@ -1134,20 +1134,31 @@ test('@brainstorm\'s system prompt says what the harness relies on, and a file r
     '- "next": the last card (below). Ask it when their answer already says what they want to dig into next.',
     'versions: one "mcq" card, id "versions", title "Which one is your question?" The first option is their draft, word for word, with "why": "as you wrote it".', 'Add no concept, method, population, measure or comparison they did not write.', 'Each label is one question under 200 characters.', 'With none, ask an "open" card with id "versions" instead: "Read your question once more. Would you change anything?"',
     // MATH-40 follow-up: the last card's title leads in with what they kept coming back to; the agent writes the lead-in alone.
-    '- next: the last card. An "open" card with id "next". Its title is one lead-in sentence, then "So what do you want to dig into next?": "You kept coming back to <a few of their words>. So what do you want to dig into next?"',
-    'You write only the lead-in, in their words; code fixes the id, the question after it and the field. The lead-in is an observation, never a suggestion',
+    '- next: the last card. An "open" card with id "next". Its title is one lead-in sentence, then "So what do you want to dig into next?".',
+    // MATH-40 round 2: "kept coming back to" only for something said more than once; else the one thing that stood out.
+    'Say they kept coming back to something only when they said it more than once in this exchange',
+    'Otherwise the lead-in names the one thing that stood out, for example: Bouncing ideas off people seems to be how you untangle things. So what do you want to dig into next?',
+    'You write only the lead-in, in your own plain words; code fixes the id, the question after it and the field. The lead-in is an observation, never a suggestion',
     'After their answer the exchange ends: what they wrote is the result, shown as theirs, and you write nothing more.',
     'A card with id "again" ("What\'s one part of that you\'d start with?") was asked by code, not by you.',
     // Nothing above the card: what it picks up of theirs is in its title, which never talks about the system.
-    '- One card, one question. Nothing goes above the card: whatever you pick up of theirs is in the title.',
+    '- One card, one short question, the way you\'d say it out loud: about 15 words. Never two questions joined by "and", and no second sentence that adds to the question. Nothing goes above the card: whatever you pick up of theirs is in the title.',
+    // MATH-40 round 2: their words paraphrased, a few words of plain reaction allowed, the most alive thing followed.
+    '- Say what they said in your own plain words. Quote at most two or three of their words, and only when the exact words matter.',
+    '- A title may open with a few words of plain reaction, the kind a friend says while listening: "Yeah, that\'s normal early on." or "Huh, that\'s a real one." Never praise, grading or a suggestion.',
+    'In their last answer, notice the most alive thing', 'Follow that, rather than whatever they said most recently.',
+    'Its title asks the move about the most alive thing in their last answer, put in your own plain words.',
+    '# How it sounds\n\nThese pairs show the tone, not wording to reuse.',
+    '  But: When did you last have to figure out what to work on next?', '  But: Which of the in-between stuff was the fuzziest?', '  But: Yeah, that\'s normal early on. What do you do when it\'s like that?', '  But: Bouncing ideas off people seems to be how you untangle things. So what do you want to dig into next?',
     '- A title talks to the person about what they wrote. It never talks about the system, the session\'s mechanics or the workspace: never "there\'s nothing written here yet"',
-    '- On the first card, with writing of theirs about the subject, the title may lead in with one phrase of theirs from the part nearest the line',
+    '- On the first card, with writing of theirs about the subject, the title may pick up what they wrote nearest the line, in your own words',
     'A correction in the note ("; note: …") overrides your reading for the rest of the exchange.', 'Ask only what the person alone can answer.', 'A skip is not an answer: ask the card <stage> names, with a different move than the one they skipped, and nothing about the skip. Nothing is graded',
     '- If they ask about the session itself (why this question, what comes next, how many are left), answer it plainly in one short sentence at the start of the title and go on with the card. A question about the topic gets one short sentence at the start of the title pointing to @bart ("That\'s one for @bart: put it on its own line.").',
-    '# Register\n\nTalk like a PhD student sitting next to them, mentoring:', 'A good mentor here has been told not to give answers.', 'Short, plain, warm without praise. No product-spec language. Plain text inside every string: no markdown.',
+    '# Register\n\nTalk like a PhD student sitting next to them, mentoring, not a user researcher running an interview:', 'A good mentor here has been told not to give answers.', 'Short, plain, warm without praise. No product-spec language. Plain text inside every string: no markdown.',
     'no code fence.\n{"card": "questions" | "focus",\n "questions":']) assert.ok(BRAINSTORM_SYSTEM_PROMPT.includes(phrase), phrase);
   for (const gone of ['# "say"', '"say" is required', '"say" is empty', 'in "say"', '{"say"', 'Fine, let\'s leave that.', 'three times']) assert.ok(!BRAINSTORM_SYSTEM_PROMPT.split('\n').some((line) => line.includes(gone)), `MATH-40 follow-up, nothing above the cards: ${gone}`);
   for (const gone of ['# The recap', 'What you know: …', 'Where it thins out', 'Your question: …', 'Where do you want to find a question?', 'id "know"', 'id "thin"', 'id "took"', 'land on a research question', 'Never skip thin, draft or versions', 'Skipping the first card', 'area, know, took, thin', '"none" only with', 'your reading in "say"', '"say" may be empty only on the first card of an exchange that isn\'t area']) assert.ok(!BRAINSTORM_SYSTEM_PROMPT.includes(gone), `MATH-40: ${gone}`);
+  for (const gone of ['led in by a few of their words', 'leads in from their last answer with a few of their words', 'You kept coming back to <a few of their words>', 'may lead in with one phrase of theirs', 'Name both, in their words']) assert.ok(!BRAINSTORM_SYSTEM_PROMPT.includes(gone), `MATH-40 round 2, paraphrase, not quotes: ${gone}`);
   for (const gone of ['one short reflection', 'or empty when the card says it all', 'talking ideas through at a table', 'That\'s a question for @bart']) assert.ok(!BRAINSTORM_SYSTEM_PROMPT.includes(gone), `2026-10-06: ${gone}`);
   for (const gone of ['# Closing', '"closing"', 'before you go', 'So what will you do first?', 'closing card']) assert.ok(!BRAINSTORM_SYSTEM_PROMPT.includes(gone), `round 6: no closing card (${gone})`);
   for (const gone of ['<answers>', '# Wrapping up', 'Where do you want to put your attention?', 'What pulls apart', 'Next, you said', 'Prefer "free" and "open"', 'puzzle', 'What puzzles you', 'What draws you', 'id "subject"', 'oriented on']) assert.ok(!BRAINSTORM_SYSTEM_PROMPT.includes(gone), `gone (${gone})`);
