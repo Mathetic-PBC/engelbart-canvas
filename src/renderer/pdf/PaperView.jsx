@@ -1,5 +1,5 @@
 // PaperView — the "Paper" pane: a PDF drawn page by page with pdf.js, each page one white
-// sheet, rough.js zigzag highlights, Caveat handwritten notes and faint rough.js arrows. Port of
+// sheet, rough.js zigzag highlights and Caveat handwritten notes. Port of
 // the design's syncPdf / pdfMouseUp / freeWidth / pendingSelKey / addMark / renderMarks
 // (design/goal-canvas/Goal Canvas.dc.html lines 516–602), with two changes: marks are stored in
 // page units (fractions of the page's drawn width) so they survive a re-layout at another zoom,
@@ -25,7 +25,7 @@
 // no `onOpenMention` a note is its field alone, as before: the token reads as typed.
 // The page as a canvas (MATH-27 phase 1, 2026-10-06; the pure parts are ./canvas.js). Every page lies on a desk at least
 // DESK desk px wide each side (scaled with the page since the true canvas, below), that a box moved past its edge widens.
-// Every note is a box with a light border and a grip: a highlight's note opens on the desk beside it (its `side`), a double-click on blank space (a click
+// Every note is a box with a grip (no border, 2026-10-06): a highlight's note opens on the desk beside it (its `side`), a double-click on blank space (a click
 // until 2026-10-06) makes a free note there, and dragging the grip moves either (`pos`, page units, saved on drop); a click in its text edits it. Each
 // answer Bart gave from a highlight's note (`asks`) is a box under the note, joined by a short line, moved the same way.
 // Boxes that were not moved are spaced on every draw (canvas.js spaceBoxes), never saved. A note on a highlight that
@@ -41,9 +41,9 @@
 // Second pass (2026-10-06): a box being written is filled in place as Bart works (fillRun), its Stop and "▸ steps" the
 // same buttons throughout, so a click on one is not lost to the next tick; an answer that is here already is not added
 // again (addAsk: main tells every window how an ask ended, the one that asked too).
-// A true canvas (MATH-27 follow-up, 2026-10-06): what is drawn on the desk scales with the page. Boxes, the arrows and the
-// lines joining them are laid out in desk px (./canvas.js: the px of 100%) on each sheet's notes and arrows layers, and
-// those layers are scaled by the page's zoom (`k`, geo[n].k: the layout's zoom), so at 200% a note is 480px wide, its
+// A true canvas (MATH-27 follow-up, 2026-10-06): what is drawn on the desk scales with the page. Boxes and the
+// lines joining them are laid out in desk px (./canvas.js: the px of 100%) on each sheet's notes layer, and
+// that layer is scaled by the page's zoom (`k`, geo[n].k: the layout's zoom), so at 200% a note is 480px wide, its
 // type twice as big and its gap from the page twice as wide, and a box keeps its place against the page's text at every
 // zoom, moved or not. The desk is DESK desk px a side, k times as wide in a layout. A pinch scales what is drawn, and
 // the drawing that follows puts every box where the pinch left it; a free note keeps the width it was measured at until
@@ -55,12 +55,12 @@
 // the note asks now (canvas.js askedByNote). A question carries the page's text around the passage (pageTextAround), a
 // selection snaps out to whole words (snapWords), and a card leaves its highlight's margin only as a last resort
 // (marks.js NOTE_SLACK).
-// Blank space, arrows and @bart (MATH-27 follow-up, 2026-10-06): a drag from blank space (the desk, or the page further than
+// Blank space and @bart (MATH-27 follow-up, 2026-10-06): a drag from blank space (the desk, or the page further than
 // a line, canvas.js LINE, from its text) pans as Space-drag does, and one on or near text selects as before (pointAt); a
 // click there only puts the focus and a pending selection away, and a double-click writes a free note. The cursor is a hand
 // over blank space (syncCursor). A free note left empty goes when it loses the keyboard and is never saved (canvas.js
-// keptMarks). A highlight's card has its rough.js arrow back, faint and only when it is not beside its highlight; the mark
-// in focus has its own at full strength (drawArrows). @bart at the start of a note that can ask is the document's blue
+// keptMarks). A highlight's card has no arrow to it (taken out again on 2026-10-06, as MATH-15 had it).
+// @bart at the start of a note that can ask is the document's blue
 // label, in the note shown and, through a backdrop under its transparent text, in its field (model/doc.js noteInkHtml).
 // Removing a mark (MATH-66, 2026-10-06): a card's trash button (in its handle row, shown on hover or while the card is in
 // focus) or Backspace / Delete on the highlight in focus, nothing having the keyboard, takes the mark away, every part of a
@@ -74,7 +74,7 @@ import { mergeLineRects, placeHighlight, boxSeed, selectionParts, scalePart, par
 import { nextFind, createTargetGate, sectionSpans, paintSection, clearFind, FIND, FIND_ACTIVE } from '../model/find.js';
 import { wheelZooms, wheelZoom, createPageCache } from '../model/paper-zoom.js';
 import { mentionAt, libMention, noteHtml, noteInkHtml, noteParts, noteOffset, inlineHtml, esc, LIB_MENTION_RE } from '../model/doc.js';
-import { sideSpace, deskOf, deskGeom, deskNeed, placeOf, posOf, spaceBoxes, extentAt, fitZoom, offscreen, offscreenSide, chipLabel, revealScroll, noteQuestion, askedByNote, turnsOf, shownAsks, keptMarks, modelLabel, runningLabel, blankAt, besideHighlight, arrowEnds, DESK, DESK_EDGE, BOX_GAP, ASK_W, SIDE_GAP, POS_DY, LINE, PRESS_MOVE } from './canvas.js';
+import { sideSpace, deskOf, deskGeom, deskNeed, placeOf, posOf, spaceBoxes, extentAt, fitZoom, offscreen, offscreenSide, chipLabel, revealScroll, noteQuestion, askedByNote, turnsOf, shownAsks, keptMarks, modelLabel, runningLabel, blankAt, DESK, DESK_EDGE, BOX_GAP, ASK_W, SIDE_GAP, POS_DY, LINE, PRESS_MOVE } from './canvas.js';
 import { fieldCaret } from '../workspace/caret.js';
 import MentionMenu from '../workspace/MentionMenu.jsx';
 
@@ -175,10 +175,10 @@ const CHIP = { position: 'absolute', zIndex: 5, height: 26, padding: '0 10px', b
 const chipStyle = (side) => ({ ...CHIP, ...(side === 'left' ? { left: 12, top: '50%', transform: 'translateY(-50%)' } : side === 'right' ? { right: BAR_SIDE + 12, top: '50%', transform: 'translateY(-50%)' } : side === 'up' ? { top: 10, left: '50%', transform: 'translateX(-50%)' } : { bottom: 62, left: '50%', transform: 'translateX(-50%)' }) });
 const SIDES = ['left', 'right', 'up', 'down'];
 const NO_OFF = { left: 0, right: 0, up: 0, down: 0 };
-// A box (MATH-27): a light border, a grip at its top that moves it.
-const BOX_BG = 'rgba(255,255,255,.97)', BOX_SHADOW = '0 1px 2px rgba(0,0,0,.03)';
+// A box (MATH-27): a grip at its top that moves it; no border or shadow (2026-10-06), its edge transparent so it keeps its size.
+const BOX_BG = 'rgba(255,255,255,.97)';
 const FOCUS_WASH = 'rgb(242,247,254)'; // the box of the note in focus (MATH-15): the white of a box with a little blue
-const BOX_LOOK = `position:absolute;box-sizing:border-box;border:1px solid #e3e3e3;border-radius:8px;background:${BOX_BG};pointer-events:auto;box-shadow:${BOX_SHADOW}`;
+const BOX_LOOK = `position:absolute;box-sizing:border-box;border:1px solid transparent;border-radius:8px;background:${BOX_BG};pointer-events:auto`;
 const GRIP_CSS = 'height:12px;display:flex;align-items:center;justify-content:center';
 const GRIP_BAR = '<span style="width:22px;height:3px;border-radius:2px;background:#d9d9d9"></span>';
 // The trash button in a card's handle row (MATH-66): small, at the top right, over the card's own white (LAYER_CSS).
@@ -188,9 +188,6 @@ const REMOVED_MS = 5000; // how long "Highlight removed · Undo" stays
 const TOAST = { position: 'absolute', left: '50%', bottom: 60, transform: 'translateX(-50%)', zIndex: 6, display: 'flex', alignItems: 'center', gap: 4, height: 30, boxSizing: 'border-box', padding: '0 4px 0 12px', background: '#171717', borderRadius: 8, font: '400 12.5px/1 var(--font-sans)', color: '#fff', whiteSpace: 'nowrap', boxShadow: '0 2px 8px rgba(0,0,0,.12)' };
 const TOAST_UNDO = { flex: 'none', height: 22, padding: '0 8px', border: 0, borderRadius: 5, background: 'transparent', font: '500 12.5px/1 var(--font-sans)', color: '#fff', cursor: 'pointer' };
 const DIVIDER = 'border-top:1px solid #ececec'; // between the note and an answer in a card, and between two answers
-// An arrow from a highlight to its card (2026-10-06): the stroke of the arrows MATH-15 took away, at about half of it
-// unless its mark is in focus (styleArrows).
-const ARROW_INK = 'rgba(0,112,243,.35)', ARROW_FAINT = 0.5;
 const SPINNER = 'flex:none;width:10px;height:10px;box-sizing:border-box;border:1.5px solid #c9d9f2;border-top-color:#0070f3;border-radius:50%;animation:pdf-spin .8s linear infinite';
 
 // Find (the Browser pane's ⌘F, 2026-09-22): matches are Ranges over the text layer, painted with
@@ -387,7 +384,7 @@ export default class PaperView extends React.Component {
       this.hoverRaf = requestAnimationFrame(() => { this.hoverRaf = 0; this.syncCursor(); });
     };
     this.spanCache = new WeakMap(); // a text layer → its spans' rects in its sheet's px (spanRects)
-    this.painted = null; // the mark paintFocus last showed (the one in focus, or the one pointed at): its arrow is full strength
+    this.painted = null; // the mark paintFocus last showed (the one in focus, or the one pointed at)
     this.onAux = (e) => { if (e.button === 1) e.preventDefault(); }; // no paste or autoscroll on a middle click
     // A box's grip held: the box follows the pointer, the view scrolls at the pane's edges (dragTick).
     this.onDragMove = (e) => { const d = this.drag; if (!d) return; d.at = { x: e.clientX, y: e.clientY }; this.dragTo(); };
@@ -766,7 +763,7 @@ export default class PaperView extends React.Component {
       g.G = next.G; g.R = next.R;
       this.place(n);
       const model = this.drawn[n];
-      if (model && dG) { for (const b of model.boxes) { b.left += dG / (g.k || 1); b.el.style.left = `${b.left}px`; } this.drawArrows(n); }
+      if (model && dG) { for (const b of model.boxes) { b.left += dG / (g.k || 1); b.el.style.left = `${b.left}px`; } }
     }
     if (!changed) return false;
     this.pdfG = this.geo[1].G;
@@ -790,7 +787,7 @@ export default class PaperView extends React.Component {
     // The cards in desk px, scaled to the page's zoom: as wide as the sheet once scaled, no wider (a layer scaled past the
     // sheet would widen the scroll).
     const k = g.k || 1, dw = sheetW / k, dh = pageH / k, scaled = Math.abs(k - 1) < 1e-6 ? '' : `scale(${k})`;
-    for (const layer of [s.notes, s.ar]) if (layer) { layer.style.width = `${dw}px`; layer.style.height = `${dh}px`; layer.style.transform = scaled; }
+    for (const layer of [s.notes]) if (layer) { layer.style.width = `${dw}px`; layer.style.height = `${dh}px`; layer.style.transform = scaled; }
   }
 
   /* paper — drawn page by page. Each page is one white sheet on a desk (MATH-27): the desk G on its left and R on its
@@ -860,13 +857,10 @@ export default class PaperView extends React.Component {
       // from their top-left corner to the page's zoom (place).
       const notes = document.createElement('div');
       notes.dataset.notes = n; notes.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;z-index:2;transform-origin:0 0';
-      // The arrows from highlights to their cards (2026-10-06), under the cards, in desk px and scaled as they are.
-      const ar = document.createElementNS(SVG, 'svg');
-      ar.dataset.arrows = n; ar.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;overflow:visible;z-index:2;transform-origin:0 0';
       wrap.append(bg);
       if (old) wrap.append(old);
-      wrap.append(hl, tl, ar, notes);
-      sheets[n] = { wrap, bg, canvas: old || null, hl, tl, ar, notes };
+      wrap.append(hl, tl, notes);
+      sheets[n] = { wrap, bg, canvas: old || null, hl, tl, notes };
       inner.appendChild(wrap);
     }
 
@@ -1589,57 +1583,8 @@ export default class PaperView extends React.Component {
       let t = tops.get(unit.id);
       for (const b of unit.boxes) { b.top = t; b.el.style.left = `${b.left}px`; b.el.style.top = `${t}px`; t += b.height + BOX_GAP; }
     }
-    this.drawArrows(page);
   }
 
-  // The arrows of page n (2026-10-06, as before MATH-15 took them away): rough.js, from each highlight to its card, in desk
-  // px on the page's arrows layer. Each is drawn, and shown only when its card is not beside its highlight (canvas.js
-  // besideHighlight: moved, in the other margin, or pushed down), faint; the mark in focus has its own at full strength,
-  // shown either way (styleArrows).
-  drawArrows(page) {
-    const ar = this.find1(`[data-arrows="${page}"]`), model = this.drawn[page];
-    if (!ar) return;
-    ar.innerHTML = '';
-    if (!model) return;
-    const { G, pageW: P } = this.desk(page), ra = rough ? rough.svg(ar) : null;
-    for (const b of model.boxes) {
-      const m = b.m, lines = mergeLineRects((m && m.rects) || []);
-      if (!lines.length || !b.width) continue;
-      const hl = { left: G + Math.min(...lines.map((r) => r.x)) * P, top: Math.min(...lines.map((r) => r.y)) * P, right: G + Math.max(...lines.map((r) => r.x + r.w)) * P, bottom: Math.max(...lines.map((r) => r.y + r.h)) * P };
-      const drawnSide = b.left + b.width / 2 < G + P / 2 ? 'left' : 'right';
-      const beside = besideHighlight({ moved: b.how === 'pos', side: m.side, drawnSide, cardTop: b.top, markTop: Number(m.y) * P });
-      const { from, to } = arrowEnds(hl, b, (lines[0].y + lines[0].h / 2) * P);
-      const g = document.createElementNS(SVG, 'g');
-      g.dataset.arrowFor = m.id;
-      if (beside) g.dataset.beside = '1';
-      const bow = to.x < from.x ? -6 : 6, mid = [(from.x + to.x) / 2, (from.y + to.y) / 2 + bow];
-      const dx = to.x - mid[0], dy = to.y - mid[1], len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len, hx = to.x - ux * 7, hy = to.y - uy * 7;
-      const heads = [[hx - uy * 3.5, hy + ux * 3.5], [hx + uy * 3.5, hy - ux * 3.5]];
-      if (ra) {
-        const opts = { stroke: ARROW_INK, strokeWidth: 1.1, roughness: 1.4, bowing: 1.2, seed: boxSeed(page, lines[0]) };
-        g.appendChild(ra.curve([[from.x, from.y], mid, [to.x, to.y]], opts));
-        for (const [x, y] of heads) g.appendChild(ra.line(to.x, to.y, x, y, opts));
-      } else {
-        const path = document.createElementNS(SVG, 'path');
-        path.setAttribute('d', `M${from.x} ${from.y}Q${mid[0]} ${mid[1]} ${to.x} ${to.y}${heads.map(([x, y]) => `M${to.x} ${to.y}L${x} ${y}`).join('')}`);
-        path.setAttribute('fill', 'none'); path.setAttribute('stroke', ARROW_INK); path.setAttribute('stroke-width', 1.1);
-        g.appendChild(path);
-      }
-      ar.appendChild(g);
-    }
-    this.styleArrows(this.painted, ar);
-  }
-  // Each arrow as the mark `id` in focus has it: that mark's at full strength and shown, every other one faint and shown
-  // only when its card is not beside its highlight. `within`: one page's arrows layer (default: every page's).
-  styleArrows(id, within = null) {
-    const root = within || this.host.current;
-    if (!root) return;
-    for (const g of root.querySelectorAll('[data-arrow-for]')) {
-      const on = !!id && g.dataset.arrowFor === id;
-      g.setAttribute('opacity', on ? '1' : String(ARROW_FAINT));
-      g.setAttribute('display', on || g.dataset.beside !== '1' ? 'inline' : 'none');
-    }
-  }
 
   // A mark's card (2026-10-06): the grip, then its note (being typed in, empty, or with nowhere for a mention to go: its
   // field; else its text), then each answer (askSection) and each answer being written (runBox), every one after the first
@@ -2011,13 +1956,12 @@ export default class PaperView extends React.Component {
   paintFocus(id) {
     const host = this.host.current; if (!host) return;
     this.painted = id || null;
-    this.styleArrows(this.painted);
     for (const el of host.querySelectorAll('[data-focus]')) el.remove();
     for (const el of host.querySelectorAll('[data-box-mark]')) {
       const mine = !!id && el.dataset.boxMark === id, on = mine && el.dataset.noteFor === id;
       el.style.opacity = id && !mine ? '0.45' : '';
       el.style.background = on ? FOCUS_WASH : BOX_BG;
-      el.style.boxShadow = on ? `inset 2px 0 0 rgba(0,112,243,.45), ${BOX_SHADOW}` : BOX_SHADOW;
+      el.style.boxShadow = on ? 'inset 2px 0 0 rgba(0,112,243,.45)' : '';
       if (this.focusId && el.dataset.boxMark === this.focusId) el.dataset.focused = '1'; else delete el.dataset.focused; // its trash button shows
     }
     if (!id) return;

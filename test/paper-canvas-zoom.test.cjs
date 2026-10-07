@@ -1,6 +1,6 @@
 'use strict';
 
-// A true canvas (src/renderer/pdf/PaperView.jsx and canvas.js, MATH-27 follow-up, 2026-10-06): boxes, their arrows and
+// A true canvas (src/renderer/pdf/PaperView.jsx and canvas.js, MATH-27 follow-up, 2026-10-06): boxes and
 // the lines joining them are laid out in desk px and each page's layer of them is scaled by its zoom, so a box keeps its
 // place, size and gap against the page at 50%, 100% and 200%, moved or not, and a pinch that settles leaves every box
 // where the pinch put it. PaperView lays out a twelve-point stand-in of a page here: a small fake DOM (no pdf.js, no

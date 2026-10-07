@@ -2,8 +2,8 @@
 
 // MATH-27 follow-up (src/renderer/pdf/PaperView.jsx, canvas.js and src/renderer/model/doc.js, 2026-10-06): a drag from
 // blank space pans and one from text selects; a click on blank space writes no note, a double-click does; a free note left
-// empty goes when it loses the keyboard and is never saved; a highlight's card has an arrow only when it is not beside its
-// highlight, and the mark in focus has its own at full strength; @bart at the start of a note is the document's blue
+// empty goes when it loses the keyboard and is never saved; a highlight's card has no arrow (taken out again the same
+// day); @bart at the start of a note is the document's blue
 // label, shown and in its field's backdrop. PaperView lays out one page of a small fake DOM here (no pdf.js, no rough.js):
 // the page's text is a few spans placed by hand.
 
@@ -281,74 +281,6 @@ test('keptMarks drops a free note with nothing in it, never a highlight or a not
   assert.deepEqual(keptMarks(list).map((m) => m.id), ['f', 'h']);
   assert.equal(emptyFree(list[0]), true);
   assert.equal(emptyFree({ rects: [], note: '', asks: [{ id: 'a' }] }), false, 'one with an answer is no empty note');
-});
-
-/* ------------------------------------------------------------------------------------------------ arrows */
-
-test('besideHighlight: moved, in the other margin, or more than two lines down is not beside', async () => {
-  const { besideHighlight, LINE } = await loadCanvas();
-  const base = { moved: false, side: 'right', drawnSide: 'right', cardTop: 94, markTop: 100 };
-  assert.equal(besideHighlight(base), true);
-  assert.equal(besideHighlight({ ...base, moved: true }), false);
-  assert.equal(besideHighlight({ ...base, drawnSide: 'left' }), false);
-  assert.equal(besideHighlight({ ...base, cardTop: 100 + 2 * LINE }), true, 'two lines down is still beside');
-  assert.equal(besideHighlight({ ...base, cardTop: 100 + 2 * LINE + 1 }), false);
-  assert.equal(besideHighlight({ ...base, cardTop: 100 + 3 * LINE, line: 2 * LINE }), true, 'lines scale with the page');
-});
-
-test('arrowEnds: from the highlight\'s edge nearest its card to the card\'s near edge', async () => {
-  const { arrowEnds } = await loadCanvas();
-  const hl = { left: 450, top: 100, right: 850, bottom: 128 };
-  assert.deepEqual(arrowEnds(hl, { left: 1040, top: 90, width: 320, height: 44 }, 106), { from: { x: 853, y: 106 }, to: { x: 1042, y: 101 } });
-  assert.deepEqual(arrowEnds(hl, { left: 52, top: 300, width: 320, height: 44 }, 106), { from: { x: 447, y: 106 }, to: { x: 368, y: 311 } });
-  assert.deepEqual(arrowEnds(hl, { left: 500, top: 400, width: 320, height: 44 }, 106), { from: { x: 650, y: 130 }, to: { x: 650, y: 398 } }, 'below it, over the page');
-});
-
-test('an arrow shows for a moved card, one in the other margin and one pushed down, not for one beside; the mark in focus has its own at full strength', async () => {
-  const u = (px) => px / 612, hl = (id, y, side, more = {}) => ({ id, rects: [{ x: side === 'left' ? u(20) : u(400), y: u(y), w: u(150), h: u(12) }], side, y: u(y), note: id, text: id, ...more });
-  const two = [{ id: 'a1', question: 'q', answer: 'a' }, { id: 'a2', question: 'q', answer: 'a' }];
-  const marks = {
-    1: [
-      hl('beside', 100, 'right'),
-      hl('pushed', 110, 'right'), // under `beside`'s card: 56px down
-      hl('full', 300, 'left', { asks: two }), // a tall card fills the left margin there
-      hl('other', 310, 'left'), // so this one goes to the right margin
-      hl('moved', 500, 'right', { pos: { x: 0.5, y: 0.95 } }),
-    ],
-  };
-  const { view, s } = await viewer(marks, { onOpenMention() {} });
-  const arrows = Object.fromEntries(s.ar.querySelectorAll('[data-arrow-for]').map((g) => [g.dataset.arrowFor, g]));
-  assert.deepEqual(Object.keys(arrows).sort(), ['beside', 'full', 'moved', 'other', 'pushed'], 'every highlight\'s card has one drawn');
-  const shown = (id) => arrows[id].getAttribute('display') !== 'none';
-  assert.equal(shown('beside'), false, 'beside its highlight: none');
-  assert.equal(shown('full'), false);
-  for (const id of ['pushed', 'other', 'moved']) {
-    assert.equal(shown(id), true, `${id}: shown`);
-    assert.equal(arrows[id].getAttribute('opacity'), '0.5', `${id}: faint`);
-  }
-  const other = view.drawn[1].boxes.find((b) => b.m.id === 'other');
-  assert.ok(other.left > G + 612, 'the card did go to the other margin');
-  assert.ok(arrows.moved.children[0].getAttribute('stroke').includes('.35'), 'the old stroke');
-  // Focus: a click on a highlight, pointing at a card or typing in it.
-  view.focusMark('beside');
-  assert.equal(shown('beside'), true, 'shown while its mark is in focus');
-  assert.equal(arrows.beside.getAttribute('opacity'), '1', 'at full strength');
-  assert.equal(arrows.moved.getAttribute('opacity'), '0.5');
-  view.paintFocus('moved'); // pointing at its card
-  assert.equal(arrows.moved.getAttribute('opacity'), '1');
-  assert.equal(shown('beside'), false);
-  view.focusMark(null);
-  assert.equal(arrows.moved.getAttribute('opacity'), '0.5');
-  // Drawn again with the cards (a re-render keeps the focus's strength), on a layer scaled like theirs.
-  view.focusMark('other');
-  view.renderMarks(1);
-  const again = s.ar.querySelector('[data-arrow-for="other"]');
-  assert.equal(again.getAttribute('opacity'), '1');
-  assert.equal(s.ar.style.transform, s.notes.style.transform, 'scaled as the cards are');
-  view.zoomTo(200);
-  await view.layout(undefined);
-  assert.equal(view.sheets[1].ar.style.transform, 'scale(2)');
-  assert.equal(view.sheets[1].notes.style.transform, 'scale(2)');
 });
 
 /* ------------------------------------------------------------------------------------------------ @bart in notes */
