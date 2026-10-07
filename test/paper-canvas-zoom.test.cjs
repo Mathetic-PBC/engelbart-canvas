@@ -243,7 +243,7 @@ test('one card a highlight: its note, then each answer and each answer being wri
   for (const sec of [a1, a2, run]) assert.equal(sec.style.borderTop, '1px solid #ececec', 'a thin divider over each');
   assert.equal(note.style.borderTop, undefined);
   assert.match(a1.innerHTML, />why\?</, 'an earlier question of the thread is shown');
-  assert.match(a1.innerHTML, /Sonnet · high/);
+  assert.doesNotMatch(a1.innerHTML, /Sonnet/, 'the model is kept (meta) but not shown (MATH-70 build 3)');
   assert.doesNotMatch(a2.innerHTML, />and then\?</, 'the note asks it now: not shown again');
   assert.equal(run.querySelector('[data-run-question]').style.display, 'none', 'nor over the answer being written');
   // The card is where its mark would be beside the page: a1's own place from before cards is not read.

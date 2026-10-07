@@ -59,6 +59,8 @@ const OVERLEAF = require('../overleaf/editor.cjs');
 // (boxResize); main draws the page's boxes without that one, waits for the page to paint, takes the new picture under a
 // new name (boxes.cjs nextCropName; the old one is kept for the answers about it) and updates the mark (`pageMarks.update`,
 // store/library.cjs updateWebMark). A rule inserted while the pointer is over a handle gives it the handle's cursor.
+// MATH-70 build 3 (2026-10-07): a box being resized is drawn as the drawing layer draws one (a flat fill, its size beside
+// the pointer: boxes.cjs readoutCss, in the same rule), and the pointer is a hand over any box's edge.
 // The selected box has a card beside it: one small view per window (`card`, like `layer`; box-card-preload.cjs, the
 // renderer's box-card/BoxCard.jsx), shown while a box is selected on the tab in front and in view, to the box's right when
 // there is room, else its left (boxes.cjs cardPlace), following it as the page scrolls; gone on navigating, another tab,
@@ -124,7 +126,7 @@ const CARD_MAX_H = 1600;
 // sampled every few ms), the card's bounds kept within 0.5px of the box as the page reported it; how it looks against
 // the page's own compositor scrolling is not measured, and this is the one switch should it trail on screen.
 const CARD_HIDE_WHILE_SCROLLING = false;
-const CURSOR_VALUES = new Set(['nwse-resize', 'nesw-resize', 'ns-resize', 'ew-resize']);
+const CURSOR_VALUES = new Set(['nwse-resize', 'nesw-resize', 'ns-resize', 'ew-resize', 'pointer']);
 const RUN_LINES = 400, RUN_LINE = 4000;
 
 /** http(s) only. 0.0.0.0 is what dev servers print, not an address to visit. */
@@ -297,7 +299,11 @@ function boxReportInput(value) {
     .map((r) => ({ id: r.id, x: r.x, y: r.y, w: r.w, h: r.h }));
   const selected = typeof value.selected === 'string' && value.selected.length <= 64 ? value.selected : null;
   const size = value.size && ok(value.size.width) && ok(value.size.height) ? { width: value.size.width, height: value.size.height } : null;
-  return { rects, selected, size };
+  // the box being resized, where the pointer is in the viewport and how big that is (build 3)
+  const z = value.resizing, v = z && z.viewport;
+  const resizing = z && typeof z.id === 'string' && rects.some((r) => r.id === z.id) && ok(z.x) && ok(z.y) && v && ok(v.width) && ok(v.height)
+    ? { id: z.id, x: z.x, y: z.y, viewport: { width: v.width, height: v.height } } : null;
+  return { rects, selected, size, resizing };
 }
 
 /** Where a page says its selected box is in its viewport: { id, rect: { x, y, w, h }, viewport, scrolling }, or { id: null }. */
@@ -721,7 +727,9 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     entry.boxDraw = entry.boxDraw.then(async () => {
       if (contents.isDestroyed() || entry.boxes !== report) return;
       // a box being pictured after a resize is left out until its picture is taken
-      const css = BOX.boxesCss(entry.boxHide ? report.rects.filter((r) => r.id !== entry.boxHide) : report.rects, report.selected, report.size);
+      const z = report.resizing, rect = z && report.rects.find((r) => r.id === z.id);
+      const css = BOX.boxesCss(entry.boxHide ? report.rects.filter((r) => r.id !== entry.boxHide) : report.rects, report.selected, report.size, z ? z.id : null)
+        + (rect ? BOX.readoutCss({ x: z.x, y: z.y, w: rect.w, h: rect.h, zoom: contents.getZoomFactor() || 1, viewport: z.viewport }) : '');
       if (css === entry.boxCss) return;
       const old = entry.boxKey;
       entry.boxCss = css;

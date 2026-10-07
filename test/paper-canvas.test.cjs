@@ -315,13 +315,11 @@ test('continueLines: the passage and where it is, then the question and the answ
 });
 
 test('runningLabel: what Bart is doing, a step up, or thinking', async () => {
-  const { runningLabel, modelLabel } = await load();
+  const { runningLabel } = await load();
   assert.equal(runningLabel({ activity: 'Reading tutortrace.pdf' }), 'Bart · Reading tutortrace.pdf');
   assert.equal(runningLabel({ activity: '', movedUp: 1, name: 'Opus', effort: 'high' }), 'Bart · Moving up to Opus high');
   assert.equal(runningLabel({ movedUp: 0, name: 'Sonnet', effort: 'high' }), 'Bart · Thinking');
   assert.equal(runningLabel(null), 'Bart · Thinking');
-  assert.equal(modelLabel({ name: 'Sonnet', effort: 'high' }), 'Sonnet · high');
-  assert.equal(modelLabel(null), '');
 });
 
 test('textColumn: the text runs\' left and right edges, a stray run in the margin left out', async () => {

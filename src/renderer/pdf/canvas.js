@@ -298,9 +298,6 @@ export function askedByNote(question, note) {
   return q === squash(asks != null ? asks : note);
 }
 
-/** What the box's header names the model by: "Sol · high". */
-export const modelLabel = (meta) => (meta && meta.name ? [meta.name, meta.effort].filter(Boolean).join(' · ') : '');
-
 /** The header of an answer still being written: "Bart · Reading …", "Bart · Moving up to Opus high", "Bart · Thinking". */
 export function runningLabel(ask) {
   if (!ask) return 'Bart · Thinking';

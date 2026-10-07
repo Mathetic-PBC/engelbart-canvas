@@ -16,6 +16,9 @@
 // square handles (HANDLES, white with a 1px stroke) that resize it (page-preload.cjs). A resize takes a new picture under
 // a new name (nextCropName: "crops/<id>-<n>.png"), the old one kept for the answers given about it (an ask's `crop`), and
 // every picture of a mark goes and comes back with it (cropsOf). A selected box has a card beside it (cardPlace).
+// MATH-70 build 3 (2026-10-07): a box being resized looks like one being drawn (box-layer-preload.cjs): a flat light-grey
+// fill (FILL) with no outline or handles, and its width and height in points beside the pointer, large and black with a
+// white outline (readoutCss: an html::before rule, fixed in the viewport, in the same look, READOUT_CSS).
 
 const TEXT_MAX = 2000; // characters of the page's text under a box that are kept
 const SELECTOR_MAX = 1000;
@@ -28,6 +31,13 @@ const PAD = Math.ceil(HANDLE / 2) + 2; // room around the boxes for a handle hal
 // The handles, by name (a resize moves the edges a name holds: n, e, s, w), as fractions of the box's width and height.
 const HANDLES = Object.freeze([['nw', 0, 0], ['n', 0.5, 0], ['ne', 1, 0], ['e', 1, 0.5], ['se', 1, 1], ['s', 0.5, 1], ['sw', 0, 1], ['w', 0, 0.5]]);
 const CARD_GAP = 8; // pixels between a box and its card
+// The drawing layer's look (box-layer-preload.cjs, the same text): the fill of a box being drawn or resized, and its numbers.
+const FILL = 'rgba(160,160,160,0.4)';
+const READOUT_CSS = 'font:600 15px/1.1 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;font-variant-numeric:tabular-nums;'
+  + 'letter-spacing:0;color:#000;-webkit-text-stroke:2.5px #fff;paint-order:stroke fill;white-space:pre;text-align:left';
+const READOUT_GAP = 14; // points from the pointer to the numbers' corner
+const READOUT_DIGIT = 10; // points a digit takes, about, to know when the numbers would not fit and go the other side
+const READOUT_HEIGHT = 34; // points the two lines take, about
 
 const finite = (v, limit = 1e6) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= limit;
 const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
@@ -104,11 +114,12 @@ function cardPlace(box, page, size, gap = CARD_GAP) {
 
 /**
  * The rule that draws `rects` ([{ id, x, y, w, h }] in the coordinates of html's containing block, CSS pixels): each a 1px
- * outline with no fill, `selected` (an id) with its 8 handles too. `size` ({ width, height }, the document's scroll size)
- * keeps the rule from reaching past the page's right and bottom, so it never adds to what scrolls; past its left and top
- * it adds nothing (a box's handles there are not cut off). '' when there is nothing to draw.
+ * outline with no fill, `selected` (an id) with its 8 handles too, and `resizing` (an id) a flat fill instead, as a box
+ * being drawn is. `size` ({ width, height }, the document's scroll size) keeps the rule from reaching past the page's
+ * right and bottom, so it never adds to what scrolls; past its left and top it adds nothing (a box's handles there are
+ * not cut off). '' when there is nothing to draw.
  */
-function boxesCss(rects, selected = null, size = null) {
+function boxesCss(rects, selected = null, size = null, resizing = null) {
   const shown = (Array.isArray(rects) ? rects : []).filter((r) => r && [r.x, r.y, r.w, r.h].every((n) => finite(n)) && r.w > 0 && r.h > 0).slice(0, MAX_BOXES);
   if (!shown.length) return '';
   const maxW = size && finite(size.width) && size.width > 0 ? size.width : Infinity, maxH = size && finite(size.height) && size.height > 0 ? size.height : Infinity;
@@ -118,6 +129,7 @@ function boxesCss(rects, selected = null, size = null) {
   // whole pixels, the 1px lines on them: a line between two pixels is drawn as two pale ones
   const shapes = shown.map((r) => {
     const x = Math.round(r.x - left), y = Math.round(r.y - top), w = Math.max(1, Math.round(r.w)), h = Math.max(1, Math.round(r.h));
+    if (resizing != null && r.id === resizing) return `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${FILL}" stroke="none"/>`;
     const outline = `<rect x="${x + 0.5}" y="${y + 0.5}" width="${Math.max(0, w - 1)}" height="${Math.max(0, h - 1)}" fill="none" stroke="${STROKE}" stroke-width="1"/>`;
     if (r.id !== selected) return outline;
     const half = (HANDLE - 1) / 2; // the square inside its stroke
@@ -134,4 +146,28 @@ function boxesCss(rects, selected = null, size = null) {
   return `html::after{${rule}}`;
 }
 
-module.exports = { TEXT_MAX, SELECTOR_MAX, ANCHOR_TEXT, MAX_BOXES, HANDLE, PAD, HANDLES, CARD_GAP, anchorInput, boxInput, isBox, cropName, CROP_RE, cropNumber, cropsOf, nextCropName, handlesOf, cardPlace, boxesCss };
+/**
+ * The numbers beside the pointer while a box is resized: `w` and `h` (the box's size, the page's CSS pixels) in points
+ * (times `zoom`, the page's zoom factor) as two lines, x over y, at READOUT_GAP points below and right of the pointer
+ * (`x`, `y` in the viewport, CSS pixels) or on its other side where they would not fit in `viewport` ({ width, height }).
+ * One html::before rule, fixed in the viewport, inert, the same size whatever the zoom; '' for no numbers.
+ */
+function readoutCss({ x, y, w, h, zoom = 1, viewport = null } = {}) {
+  if (![x, y, w, h].every((n) => finite(n)) || !(finite(zoom) && zoom > 0)) return '';
+  const pts = [w, h].map((n) => String(Math.max(0, Math.round(n * zoom))));
+  const gap = READOUT_GAP / zoom, width = (Math.max(...pts.map((t) => t.length)) * READOUT_DIGIT) / zoom, height = READOUT_HEIGHT / zoom;
+  const vw = viewport && finite(viewport.width) ? viewport.width : Infinity, vh = viewport && finite(viewport.height) ? viewport.height : Infinity;
+  const right = x + gap + width <= vw, below = y + gap + height <= vh;
+  const left = Math.round((right ? x + gap : x - gap) * 100) / 100, top = Math.round((below ? y + gap : y - gap) * 100) / 100;
+  // scaled about its top-left corner, then moved by its own size to the pointer's left or above it when flipped
+  const transform = `scale(${Math.round((1 / zoom) * 1e4) / 1e4}) translate(${right ? 0 : '-100%'},${below ? 0 : '-100%'})`;
+  const rule = [
+    `content:"${pts[0]}\\A ${pts[1]}"`, 'display:block', 'position:fixed', `left:${left}px`, `top:${top}px`, 'right:auto', 'bottom:auto', 'width:auto', 'height:auto',
+    'margin:0', 'padding:0', 'border:0', 'background:none', 'box-shadow:none', 'filter:none', 'clip-path:none', 'mask:none', 'mix-blend-mode:normal',
+    'opacity:1', 'visibility:visible', 'pointer-events:none', 'z-index:2147483647', 'text-transform:none', 'text-indent:0', 'text-decoration:none', 'text-shadow:none',
+    'transform-origin:0 0', `transform:${transform}`, ...READOUT_CSS.split(';'),
+  ].map((p) => `${p} !important`).join(';');
+  return `html::before{${rule}}`;
+}
+
+module.exports = { FILL, READOUT_CSS, READOUT_GAP, readoutCss, TEXT_MAX, SELECTOR_MAX, ANCHOR_TEXT, MAX_BOXES, HANDLE, PAD, HANDLES, CARD_GAP, anchorInput, boxInput, isBox, cropName, CROP_RE, cropNumber, cropsOf, nextCropName, handlesOf, cardPlace, boxesCss };

@@ -10,12 +10,32 @@
 // grey rectangle with a thin light edge and its width and height stacked beside the pointer. Both are in points (CSS
 // pixels of this view, which is never zoomed: the screen's points), which is what ⌘⇧4 shows on a Retina display as far as
 // we know (READOUT_SCALE; not compared side by side yet). No words over the page: Esc still cancels, ⌥ still draws.
+// MATH-70 build 3 (2026-10-07): closer to ⌘⇧4. The system cursor is hidden and the layer draws its own (CROSS_SVG): thin
+// dark-grey lines CROSS pixels across, each over a faint light halo, and a translucent grey circle CIRCLE pixels wide with
+// a darker rim, centred on the point. The numbers are large and black with a white outline (READOUT_CSS), x over y, just
+// below-right of the point; while dragging they are the width and height, and the rectangle is a flat light-grey fill
+// (FILL) with no edge. A box resized on the page looks the same (boxes.cjs, the same FILL and READOUT_CSS).
 
 const CHANNELS = Object.freeze({ start: 'engelbart-box:start', done: 'engelbart-box:done', click: 'engelbart-box:click', cancel: 'engelbart-box:cancel', altUp: 'engelbart-box:alt-up' });
 const MIN = 6; // pixels: a smaller drag is a click
 // What the readouts count in: 1, points (macOS's ⌘⇧4 on a Retina display, as far as we know); devicePixelRatio for pixels.
 const READOUT_SCALE = 'points';
-const READOUT_GAP = 14; // pixels from the pointer to the numbers' corner, as ⌘⇧4 sets them
+const READOUT_GAP = 14; // pixels from the point to the numbers' corner, clear of the circle
+// The numbers' look, here and on a page whose box is being resized (boxes.cjs READOUT_CSS: the same text).
+const READOUT_CSS = 'font:600 15px/1.1 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;font-variant-numeric:tabular-nums;'
+  + 'letter-spacing:0;color:#000;-webkit-text-stroke:2.5px #fff;paint-order:stroke fill;white-space:pre;text-align:left';
+const FILL = 'rgba(160,160,160,0.4)'; // the rectangle being drawn (boxes.cjs FILL)
+const CROSS = 40; // pixels: the crosshair's lines, end to end
+const CIRCLE = 24; // pixels: the circle's diameter
+// The crosshair, CROSS + 1 pixels square with the point at the middle of its middle pixel: the circle, then each line's
+// halo and the line on it.
+const CROSS_SVG = (() => {
+  const c = CROSS / 2 + 0.5, end = CROSS + 1;
+  const lines = (stroke, width) => `<path d="M0 ${c}H${end}M${c} 0V${end}" stroke="${stroke}" stroke-width="${width}" fill="none"/>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${end}" height="${end}" viewBox="0 0 ${end} ${end}">`
+    + `<circle cx="${c}" cy="${c}" r="${CIRCLE / 2 - 0.5}" fill="rgba(128,128,128,0.3)" stroke="rgba(70,70,70,0.55)" stroke-width="1"/>`
+    + lines('rgba(255,255,255,0.4)', 3) + lines('#3a3a3a', 1) + '</svg>';
+})();
 
 /** The two numbers the readout shows: the pointer's place before the press, the rectangle's size while dragging. */
 function readout({ dragging, screenX, screenY, w, h }, scale = 1) {
@@ -33,33 +53,37 @@ function readoutAt(x, y, size, view, gap = READOUT_GAP) {
 function runInLayer() {
   const { ipcRenderer } = require('electron');
   let from = null, rect = null, mode = 'button', altGone = false;
-  let frame = null, numbers = null, pointer = null;
+  let frame = null, numbers = null, cross = null, pointer = null;
   const scale = () => (READOUT_SCALE === 'points' ? 1 : window.devicePixelRatio || 1);
 
   function build() {
     const style = document.createElement('style');
-    style.textContent = 'html,body{margin:0;height:100%;background:transparent;cursor:crosshair;user-select:none;overflow:hidden}'
-      + '#f{position:fixed;display:none;box-sizing:border-box;border:1px solid rgba(255,255,255,.75);background:rgba(110,110,110,.28);pointer-events:none}'
-      // ⌘⇧4's numbers: small, dark, each line right under the other, with a light halo that reads on any page
-      + '#n{position:fixed;display:none;pointer-events:none;font:500 10.5px/1.2 -apple-system,BlinkMacSystemFont,sans-serif;font-variant-numeric:tabular-nums;'
-      + 'color:#1d1d1f;text-shadow:0 0 2px #fff,0 0 2px #fff,0 0 1px #fff;white-space:pre;text-align:left}';
+    style.textContent = 'html,body{margin:0;height:100%;background:transparent;cursor:none;user-select:none;overflow:hidden}'
+      + `#f{position:fixed;display:none;background:${FILL};pointer-events:none}`
+      + `#c{position:fixed;left:0;top:0;display:none;width:${CROSS + 1}px;height:${CROSS + 1}px;pointer-events:none}#c svg{display:block}`
+      + `#n{position:fixed;left:0;top:0;display:none;pointer-events:none;${READOUT_CSS}}`;
     document.head.appendChild(style);
     frame = document.createElement('div'); frame.id = 'f';
+    cross = document.createElement('div'); cross.id = 'c'; cross.innerHTML = CROSS_SVG;
     numbers = document.createElement('div'); numbers.id = 'n';
-    document.body.append(frame, numbers);
+    document.body.append(frame, cross, numbers);
   }
+  /** The crosshair and the numbers where the pointer is; both hidden when it is not over the layer. */
   function showNumbers() {
     if (!numbers || !pointer) return;
+    const x = Math.round(pointer.x), y = Math.round(pointer.y);
+    cross.style.transform = `translate(${x - CROSS / 2}px,${y - CROSS / 2}px)`;
+    cross.style.display = 'block';
     const [a, b] = readout({ dragging: !!(from && rect && (rect.w || rect.h)), screenX: pointer.screenX, screenY: pointer.screenY, w: rect && rect.w, h: rect && rect.h }, scale());
     const text = `${a}\n${b}`;
     if (numbers.textContent !== text) numbers.textContent = text;
     numbers.style.display = 'block';
-    const at = readoutAt(pointer.x, pointer.y, { width: numbers.offsetWidth, height: numbers.offsetHeight }, { width: window.innerWidth, height: window.innerHeight });
-    numbers.style.left = `${at.left}px`;
-    numbers.style.top = `${at.top}px`;
+    const at = readoutAt(x, y, { width: numbers.offsetWidth, height: numbers.offsetHeight }, { width: window.innerWidth, height: window.innerHeight });
+    numbers.style.transform = `translate(${at.left}px,${at.top}px)`;
   }
+  const hidePointer = () => { if (numbers) numbers.style.display = 'none'; if (cross) cross.style.display = 'none'; };
   const reset = () => { from = null; rect = null; altGone = false; if (frame) frame.style.display = 'none'; showNumbers(); };
-  const send = (channel, value) => { ipcRenderer.send(channel, value); pointer = null; if (numbers) numbers.style.display = 'none'; reset(); };
+  const send = (channel, value) => { ipcRenderer.send(channel, value); pointer = null; hidePointer(); reset(); };
 
   ipcRenderer.on(CHANNELS.start, (_event, value) => {
     if (!frame) build();
@@ -95,11 +119,11 @@ function runInLayer() {
     if (rect && rect.w >= MIN && rect.h >= MIN) send(CHANNELS.done, rect);
     else send(CHANNELS.click, { x: from.x, y: from.y, alt: altGone });
   });
-  window.addEventListener('mouseleave', () => { if (!from && numbers) numbers.style.display = 'none'; });
+  window.addEventListener('mouseleave', () => { if (!from) hidePointer(); });
   window.addEventListener('keydown', (event) => { if (event.key === 'Escape') { event.preventDefault(); send(CHANNELS.cancel, { reason: 'escape' }); } });
   window.addEventListener('keyup', (event) => { if (event.key === 'Alt' && mode === 'alt') altUp(); });
   window.addEventListener('blur', () => { if (!from) return; reset(); });
 }
 
 if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof require === 'function') runInLayer();
-else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, MIN, READOUT_SCALE, READOUT_GAP, readout, readoutAt };
+else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, MIN, READOUT_SCALE, READOUT_GAP, READOUT_CSS, FILL, CROSS, CIRCLE, CROSS_SVG, readout, readoutAt };

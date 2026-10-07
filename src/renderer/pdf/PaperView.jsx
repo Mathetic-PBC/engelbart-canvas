@@ -78,7 +78,7 @@ import { nextFind, createTargetGate, sectionSpans, paintSection, clearFind, FIND
 import { wheelZooms, wheelZoom, createPageCache } from '../model/paper-zoom.js';
 import { mentionAt, libMention, fileMention, fileMentionOf, noteHtml, noteInkHtml, noteParts, noteOffset, inlineHtml, esc, LIB_MENTION_RE } from '../model/doc.js';
 import { isFolderRow, folderRows, firstPick, parentRel } from '../model/rail.js';
-import { sideSpace, deskOf, deskGeom, deskNeed, placeOf, posOf, spaceBoxes, extentAt, fitZoom, offscreen, noteQuestion, askedByNote, turnsOf, shownAsks, keptMarks, modelLabel, runningLabel, blankAt, textColumn, DESK, DESK_EDGE, BOX_GAP, ASK_W, NOTE_W, SIDE_GAP, POS_DY, LINE, PRESS_MOVE } from './canvas.js';
+import { sideSpace, deskOf, deskGeom, deskNeed, placeOf, posOf, spaceBoxes, extentAt, fitZoom, offscreen, noteQuestion, askedByNote, turnsOf, shownAsks, keptMarks, runningLabel, blankAt, textColumn, DESK, DESK_EDGE, BOX_GAP, ASK_W, NOTE_W, SIDE_GAP, POS_DY, LINE, PRESS_MOVE } from './canvas.js';
 import { fieldCaret } from '../workspace/caret.js';
 import MentionMenu from '../workspace/MentionMenu.jsx';
 
@@ -1683,9 +1683,10 @@ export default class PaperView extends React.Component {
       sec.innerHTML = `<button type="button" data-act="expand" title="${esc(a.question || '')}" style="font-weight:500;color:#171717">Bart ›</button>`;
       return sec;
     }
-    const model = modelLabel(a.meta), lib = { libName: (id) => this.libName(id) }, asked = askedByNote(a.question, m.note) ? '' : String(a.question || '');
+    // the model that wrote it (a.meta) is kept but not shown (MATH-70 build 3)
+    const lib = { libName: (id) => this.libName(id) }, asked = askedByNote(a.question, m.note) ? '' : String(a.question || '');
     sec.style.cssText = `${line}flex:none;display:flex;flex-direction:column;padding-top:${divided ? 8 : 0}px;font:13px/1.55 var(--font-sans);color:#171717`;
-    sec.innerHTML = (asked || model ? `<div style="flex:none;display:flex;align-items:baseline;gap:8px;padding:0 12px 6px"><span title="${esc(asked)}" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8f8f8f">${esc(asked)}</span>${model ? `<span style="flex:none;font-size:11.5px;color:#b5b5b5">${esc(model)}</span>` : ''}</div>` : '')
+    sec.innerHTML = (asked ? `<div title="${esc(asked)}" style="flex:none;padding:0 12px 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8f8f8f">${esc(asked)}</div>` : '')
       + `<div data-ask-body="1" style="flex:none;max-height:${this.boxMaxHeight()}px;overflow:auto;padding:0 12px 2px;overflow-wrap:anywhere">${answerHtml(a.answer, lib)}</div>`
       + '<div style="flex:none;display:flex;flex-wrap:wrap;gap:2px;padding:2px 6px 4px">'
       + (this.props.onContinueAsk ? '<button type="button" data-act="continue">Continue in workspace</button>' : '')

@@ -30,6 +30,9 @@
 // is what is at that point (elementFromPoint), and the alt text of a picture by the same rule over its visible part. A
 // cover with pointer-events:none is not seen by elementFromPoint (a known gap). An inserted rule (main's) gives the
 // pointer the handle's cursor; the page's DOM is still never changed.
+// MATH-70 build 3 (2026-10-07): a box being resized is reported with where the pointer is (resizing), for main to draw it
+// as ⌘⇧4 draws one (boxes.cjs: a flat fill and its size beside the pointer). Over a box's edge, where a click selects it
+// (boxAt's band), the pointer is a hand (EDGE_CURSOR); off it, the page's own again.
 //
 // Sandboxed, this can require only 'electron'. The finding is plain functions over text, exported below for the tests
 // when Node loads this file; in a page, `module` is no CommonJS module and the page part runs instead.
@@ -62,6 +65,7 @@ const EDGE = 8; // pixels either side of a box's edge that a click selects it by
 const HANDLES = [['nw', 0, 0], ['n', 0.5, 0], ['ne', 1, 0], ['e', 1, 0.5], ['se', 1, 1], ['s', 0.5, 1], ['sw', 0, 1], ['w', 0, 0.5]];
 const HANDLE_HIT = 6;
 const MIN_BOX = 6; // pixels: a box is never resized smaller (box-layer-preload.cjs MIN)
+const EDGE_CURSOR = 'pointer'; // over the edge band of any box: it can be clicked
 const CURSORS = { nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize', n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize' };
 // Whether a box being resized is drawn at its new size as it is dragged (main redraws its rule each frame), or only once
 // it is let go. Live: measured on a GitHub repository page and a Wikipedia article (2026-10-07, Electron 44, 40 pointer
@@ -293,6 +297,9 @@ function handleAt(r, x, y, reach = HANDLE_HIT) {
   return best;
 }
 
+/** The pointer's cursor: a handle's (its name) before a box's edge (an id), the page's own ('') over neither. */
+const cursorFor = (handle, edge) => (handle && CURSORS[handle]) || (edge ? EDGE_CURSOR : '');
+
 /**
  * Box `start` ({ x, y, w, h }) with handle `handle` dragged by (dx, dy): the edges the handle holds move, never past the
  * other side less `min`, and the whole box is kept inside `bounds` (the visible page, { x, y, w, h }). → { x, y, w, h }.
@@ -484,6 +491,8 @@ function runInPage() {
     const size = html ? { width: html.scrollWidth, height: html.scrollHeight } : null;
     const round = (n) => Math.round(n * 10) / 10;
     const report = { rects: rects.map((r) => ({ id: r.id, x: round(r.x), y: round(r.y), w: round(r.w), h: round(r.h) })), selected: picked, size, missing };
+    // the box being resized and where the pointer is in the viewport: main draws its size beside it
+    if (drag && drag.pointer) report.resizing = { id: drag.id, x: round(drag.pointer.x), y: round(drag.pointer.y), viewport: viewportSize() };
     lastRects = report.rects.map((r) => ({ ...r, x: r.x + at.x, y: r.y + at.y }));
     sendView();
     const text = JSON.stringify(report);
@@ -597,9 +606,11 @@ function runInPage() {
   // main waits for the page to have painted (twice: the frame the change is in is then on screen) before a picture
   ipcRenderer.on(CHANNELS.frame, (_event, nonce) => { requestAnimationFrame(() => requestAnimationFrame(() => ipcRenderer.send(CHANNELS.frame, nonce))); });
 
-  // The pointer's cursor over a handle of the selected box: main inserts a rule for it, and takes it out again.
+  // The pointer's cursor over a handle of the selected box, or over any box's edge: main inserts a rule for it, and takes
+  // it out again.
   let cursor = '';
   function setCursor(value) { if (value === cursor) return; cursor = value; ipcRenderer.send(CHANNELS.cursor, value); }
+  const cursorAt = (x, y) => cursorFor(picked ? handleAt(pickedView(), x, y) : null, boxAt(lastRects, x + window.scrollX, y + window.scrollY));
 
   // Resizing (build 2): a press on a handle of the selected box. Its rectangle follows the pointer in the viewport (kept
   // inside it), drawn by main once a frame (LIVE_RESIZE); let go, the page says what it is kept by now and the text under
@@ -609,13 +620,14 @@ function runInPage() {
     const r = pickedView();
     const handle = r && handleAt(r, event.clientX, event.clientY);
     if (!handle) return false;
-    drag = { id: picked, handle, start: r, from: { x: event.clientX, y: event.clientY }, rect: r };
+    drag = { id: picked, handle, start: r, from: { x: event.clientX, y: event.clientY }, rect: r, pointer: { x: event.clientX, y: event.clientY } };
     setCursor(CURSORS[handle]);
     return true;
   }
   function moveHandle(event) {
     const { width, height } = viewportSize();
     drag.rect = resizeRect(drag.start, drag.handle, event.clientX - drag.from.x, event.clientY - drag.from.y, { x: 0, y: 0, w: width, h: height });
+    drag.pointer = { x: event.clientX, y: event.clientY };
     if (LIVE_RESIZE && !dragFrame) dragFrame = requestAnimationFrame(() => { dragFrame = 0; if (drag) measure(); });
   }
   function endDrag(keep = true) {
@@ -651,12 +663,10 @@ function runInPage() {
   }, true);
   window.addEventListener('mousemove', (event) => {
     if (drag) { stop(event); moveHandle(event); return; }
-    if (!picked) return;
-    const handle = handleAt(pickedView(), event.clientX, event.clientY);
-    setCursor(handle ? CURSORS[handle] : '');
+    setCursor(boxes.size ? cursorAt(event.clientX, event.clientY) : '');
   }, true);
   window.addEventListener('mouseup', (event) => {
-    if (drag && event.button === 0) { stop(event); endDrag(true); if (picked) { const h = handleAt(pickedView(), event.clientX, event.clientY); setCursor(h ? CURSORS[h] : ''); } return; }
+    if (drag && event.button === 0) { stop(event); endDrag(true); setCursor(cursorAt(event.clientX, event.clientY)); return; }
     if (swallow) stop(event);
   }, true);
   window.addEventListener('click', (event) => { if (!swallow) return; stop(event); swallow = false; }, true);
@@ -707,4 +717,4 @@ function runInPage() {
 }
 
 if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof require === 'function') runInPage();
-else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, HIGHLIGHT, CONTEXT, MAX_EXACT, MAX_AFFIX, PAGE_TEXT, BOX_TEXT, EDGE, HANDLES, HANDLE_HIT, MIN_BOX, CURSORS, LIVE_RESIZE, VISIBILITY, textMap, rangeOf, snapWords, quoteOf, textAround, anchor, alike, chooseAnchor, fractionsOf, placeIn, sameElement, refind, boxAt, handleAt, resizeRect, shows };
+else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, HIGHLIGHT, CONTEXT, MAX_EXACT, MAX_AFFIX, PAGE_TEXT, BOX_TEXT, EDGE, HANDLES, HANDLE_HIT, MIN_BOX, CURSORS, EDGE_CURSOR, LIVE_RESIZE, VISIBILITY, textMap, rangeOf, snapWords, quoteOf, textAround, anchor, alike, chooseAnchor, fractionsOf, placeIn, sameElement, refind, boxAt, handleAt, cursorFor, resizeRect, shows };

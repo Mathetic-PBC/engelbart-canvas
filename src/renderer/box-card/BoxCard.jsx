@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import '../tokens/typography.css';
 import '@fontsource/caveat/500.css';
 import { inlineHtml, noteInkHtml } from '../model/doc.js';
-import { noteQuestion, askedByNote, modelLabel, runningLabel } from '../pdf/canvas.js';
+import { noteQuestion, askedByNote, runningLabel } from '../pdf/canvas.js';
 
 // The card beside a selected box on a web page (MATH-70 build 2, 2026-10-07): its own small view, one per window, which
 // main places beside the box and moves with it (src/main/browser/views.cjs `card`). The one component Hudson will replace:
@@ -69,17 +69,13 @@ function Note({ value, onChange, onKeyDown, fieldRef }) {
   );
 }
 
-/** A finished answer: its question in grey when it is not what the note asks now, the model, then the answer. */
+/** A finished answer: its question in grey when it is not what the note asks now, then the answer. The model that wrote it
+ *  (ask.meta) is kept but not shown (MATH-70 build 3). */
 function Answer({ ask, note, divided }) {
-  const asked = askedByNote(ask.question, note) ? '' : String(ask.question || ''), model = modelLabel(ask.meta);
+  const asked = askedByNote(ask.question, note) ? '' : String(ask.question || '');
   return (
     <div data-ask={ask.id} style={{ flex: 'none', display: 'flex', flexDirection: 'column', borderTop: divided ? DIVIDER : 0, paddingTop: divided ? 8 : 0 }}>
-      {(asked || model) && (
-        <div style={{ flex: 'none', display: 'flex', alignItems: 'baseline', gap: 8, padding: '0 12px 6px' }}>
-          <span title={asked} style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#8f8f8f' }}>{asked}</span>
-          {model && <span style={{ flex: 'none', fontSize: 11.5, color: '#b5b5b5' }}>{model}</span>}
-        </div>
-      )}
+      {asked && <div title={asked} style={{ flex: 'none', padding: '0 12px 6px', color: '#8f8f8f', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{asked}</div>}
       <div data-answer="1" onClick={noFollow} style={{ flex: 'none', maxHeight: ANSWER_MAX, overflow: 'auto', padding: '0 12px 6px', overflowWrap: 'anywhere', userSelect: 'text' }} dangerouslySetInnerHTML={{ __html: answerHtml(ask.answer) }} />
     </div>
   );
