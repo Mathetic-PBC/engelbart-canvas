@@ -72,6 +72,9 @@ skips: the 38 before and these 3.
 
 ### Status
 
+- 2026-10-08, Linux run 5 (7b6b329, https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37708412073):
+  macOS ✓. Linux and Windows: 1 test each, the same: sourceOf's `/usr/bin/git` → "apple" ran under the runner's own
+  platform; it now names macOS (`'darwin'`), with Linux's "other" beside it.
 - 2026-10-08, Linux run 4 (43ff71f, https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37705773404):
   macOS ✓, Windows ✓. Linux: tests ✓, AppImage ✓, smoke-linux no longer hangs, and its new diagnostic showed the
   login shell does find /usr/bin/git. The app missed it because the tool check took /usr/bin/git for Apple's stub on
@@ -108,6 +111,7 @@ skips: the 38 before and these 3.
 | 392567f | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37697931884 | ✓ | ✓ | ✗ 1 test | the no-Git case could not find bash |
 | f3851a6 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37699844498 | ✓ | ✓ | ✗ smoke (cancelled) | tests ✓, AppImage ✓; smoke: sandbox off by AppArmor, window, terminal ✓, Git not found, then hung |
 | 43ff71f | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37705773404 | ✓ | ✓ | ✗ smoke | the app took /usr/bin/git for Apple's stub |
+| 7b6b329 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37708412073 | ✓ | ✗ 1 test | ✗ 1 test | sourceOf's Apple case ran unnamed |
 
 ## One-command install
 

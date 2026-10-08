@@ -59,7 +59,8 @@ test('sourceOf tells how a program was installed from where its file really is',
   assert.equal(sourceOf('codex', '/opt/homebrew/Caskroom/codex/0.155.1/bin/codex'), 'homebrew');
   assert.equal(sourceOf('codex', '/Users/h/.codex/packages/standalone/releases/0.155.1/bin/codex'), 'standalone');
   assert.equal(sourceOf('claude', '/Users/h/.nvm/versions/node/v22/lib/node_modules/@anthropic-ai/claude-code/cli.js'), 'npm');
-  assert.equal(sourceOf('git', '/usr/bin/git'), 'apple');
+  assert.equal(sourceOf('git', '/usr/bin/git', 'darwin'), 'apple');
+  assert.equal(sourceOf('git', '/usr/bin/git', 'linux'), 'other', 'Linux\'s /usr/bin/git is Git itself (2026-10-07)');
   assert.equal(sourceOf('git', '/opt/homebrew/Cellar/git/2.51.0/bin/git'), 'homebrew');
   if (process.platform === 'win32') assert.ok(knownPlaces('claude', 'C:\\Users\\h').includes('C:\\Users\\h\\.local\\bin\\claude.exe')); // Windows' own places (test/windows-platform.test.cjs)
   else assert.ok(knownPlaces('claude', '/Users/h').includes('/Users/h/.local/bin/claude'));
