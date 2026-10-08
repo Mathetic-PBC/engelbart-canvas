@@ -57,7 +57,12 @@ const { createSandboxPty } = require('./sandbox/pty.cjs');
 const { createSandboxTerminals } = require('./sandbox/terminals.cjs');
 const { watchActivity } = require('./sandbox/activity.cjs');
 const { prepareLocalClaude } = require('./sandbox/local-claude.cjs');
-const { createRepoIdentifier, createRemoteFileLister } = require('./store/page-meta.cjs');
+const { createRepoIdentifier, createRemoteFileLister, createDescriber } = require('./store/page-meta.cjs');
+const { createConnect } = require('./connect/session.cjs');
+const { createConnectAgents } = require('./connect/agents.cjs');
+const { createFakeConnectAgents } = require('./connect/fake.cjs');
+const { openToolBridge } = require('./sandbox/local-tools.cjs');
+const { resolveBuildChoice } = require('./bart/models.cjs');
 const { checkWebPdfs, readPdfResponse } = require('./store/web-pdfs.cjs');
 const { createPostItViews, createPostItPeers, registerPostItIpc } = require('./post-its/views.cjs');
 const { createGit } = require('./build/git.cjs');
@@ -888,7 +893,30 @@ if (!hasSingleInstanceLock) {
     // The Overleaf projects open in the Stage (MATH-65): each one's copy is downloaded with the Stage's own session, the
     // sign-in the person made there, so no cookie leaves it.
     const overleafStage = createOverleafStage({ copies: createOverleafCopies({ fetch: (url, init) => electronSession.fromPartition(BROWSER_PARTITION).fetch(url, init) }) });
+    // Connect your library (src/main/connect, 2026-10-07): onboarding's experimental chat, test mode only. A librarian agent
+    // asks what should come in, and import agents bring each source into the data root in the background, on the person's
+    // subscription, reading only (they write through Engelbart's import tools). Its events go to the windows directly: the
+    // onboarding screen never attaches a terminal. ENGELBART_CONNECT_FAKE=1 (or ENGELBART_BART_FAKE=1) runs it with no model.
+    const connect = createConnect({
+      agents: process.env.ENGELBART_CONNECT_FAKE === '1' || process.env.ENGELBART_BART_FAKE === '1'
+        ? createFakeConnectAgents({ delayMs: Number(process.env.ENGELBART_CONNECT_FAKE_MS) || 700 })
+        : createConnectAgents({ runDirectory: path.join(app.getPath('userData'), 'connect-runs'), interviewHome: path.join(app.getPath('userData'), 'codex-home-connect'), importHome: path.join(app.getPath('userData'), 'codex-home-connect-import'), tools }),
+      resolveChoice: (pick) => resolveBuildChoice(readModels('build'), pick && typeof pick === 'object' ? pick : {}),
+      context: () => store.context(),
+      homeDir,
+      zotero: {
+        status: () => zotero.status(),
+        root: () => (zotero.status().connected ? zoteroLibrary.root() : null),
+        download: (key, filename) => zoteroLibrary.download(key, filename),
+      },
+      github: { status: () => github.status(), repos: () => github.repos() },
+      deps: { describe: createDescriber(), identifyRepo: createRepoIdentifier({ auth: github.authHeaders }), inspectPdf, onAdded: libraryChanged, onPdf: pdfAdded },
+      notify: (snapshot) => sendToWindow('engelbart:connect', snapshot),
+      openBridge: openToolBridge,
+    });
+    app.on('will-quit', () => connect.stopAll());
     registerEngelbartIpc({
+      connect,
       // Made below, after this: the window's update banner asks for it when it is used.
       getUpdates: () => updates,
       github,

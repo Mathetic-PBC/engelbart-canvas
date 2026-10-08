@@ -376,7 +376,7 @@ export default function App() {
         />
       )}
       {phase === 'create' && (
-        <Onboarding key={run} mode={onboardMode} tools={tools} onTools={onboardingTools} onDone={onboarded} onBack={returning ? goHome : null} />
+        <Onboarding key={run} mode={onboardMode} tools={tools} onTools={onboardingTools} onDone={onboarded} onBack={returning ? goHome : null} connect={!!config.testMode} />
       )}
       {phase === 'workspace' && tree && (
         <Workspace

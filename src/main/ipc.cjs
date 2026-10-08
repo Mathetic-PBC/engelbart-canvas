@@ -27,6 +27,7 @@ const onboarding = require('./store/onboarding.cjs');
 const { buildChoices } = require('./bart/models.cjs');
 const { githubRepo } = require('./sandbox/runs.cjs');
 const { candidate: pdfCandidate } = require('./store/web-pdfs.cjs');
+const { detect: detectSources } = require('./connect/scan.cjs');
 
 const BUILD_LINE_RE = /^build> ([a-z0-9]{6,32})$/;
 const buildId = (value) => { if (typeof value !== 'string' || !/^[0-9a-f]{10}$/.test(value)) throw new TypeError('build id is invalid'); return value; };
@@ -219,7 +220,7 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
 // (MATH-54 build 3a): { selection(), screenshot() } (the app passes that window's browser views'), or null.
 // `overleafFor(win, stage)`: a window's Overleaf tabs for an @bart turn (MATH-65; overleaf/stage.cjs forTurn), or null.
 // `getUpdates()`: the updater (updates.cjs), made after this is registered; null until then, and in the tests.
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
   const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
@@ -271,6 +272,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     try {
       await additions.catch(() => {});
       await beforeContextChange();
+      connect?.stopAll(); // its imports write into the library that is about to close
       await sandbox?.close();
       return await change();
     } finally { changingMode = false; }
@@ -430,13 +432,37 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     const value = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
     const folder = value.folder === 'existing' ? 'existing' : 'new';
     const context = (Array.isArray(value.context) ? value.context : []).slice(0, 500).map((id) => str(id, 'library id', 64));
-    return onboarding.startProject(ctx, { name: str(value.name, 'name'), description: optStr(value.description, 'description', 8000) || '', folder, directory: folder === 'existing' ? str(value.directory, 'directory', 4096) : '', context }).then((made) => {
+    const imported = optStr(value.connect, 'import id', 64);
+    return onboarding.startProject(ctx, { name: str(value.name, 'name'), description: optStr(value.description, 'description', 8000) || '', folder, directory: folder === 'existing' ? str(value.directory, 'directory', 4096) : '', context }).then(async (made) => {
       // A folder Engelbart made gets its Build repository and first commit now, in the background, once the tool check
       // has found Git (build/manager.cjs prepareDefault): the first Build never meets a folder without a history.
       if (folder === 'new' && builds) void toolsChecked().then(() => builds.prepareDefault(ctx, made.project.id)).catch(() => {});
+      // Connect your library's notes, held until there was a project (connect/session.cjs attachProject), go into this one.
+      if (imported && connect) made.importedNotes = await connect.attachProject(ctx, imported, made.project.id).catch(() => 0);
       return made;
     });
   }), { project: (_args, out) => out && out.project && out.project.id, library: true });
+  // Connect your library (./connect, 2026-10-07): onboarding's experimental chat that brings the person's notes, chats,
+  // papers, sites and code into the library. Test mode only: refused in the normal library and in a copy without test
+  // mode. connect-detect: which apps are on this Mac (the choose screen starts with those ticked). connect-start: the
+  // choose screen's picks → the session (the librarian's first turn runs in the background); connect-answer: a reply
+  // ({ text } | { picked } | { skipped }); connect-chose: a button in the chat used ({ app, kind: 'signin' | 'folder' |
+  // 'file', path }); connect-import: Import, every source not yet handed over goes now; connect-stop. Every change of a
+  // session is sent as `engelbart:connect` with its snapshot.
+  const cx = () => {
+    if (!connect) throw new Error('Connect your library is not available');
+    if (!store.config().testMode) throw new Error('Connect your library is experimental and runs in test mode only');
+    return connect;
+  };
+  const importId = (value) => str(value, 'import id', 64);
+  const plainObject = (value, what) => { if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${what} is invalid`); return value; };
+  handle('connect-detect', withCtx((ctx) => { cx(); return detectSources({ homeDir: ctx.homeDir, zotero: () => (zotero ? zotero.status() : null), github: () => (github ? github.status() : null) }); }));
+  handle('connect-start', (input) => cx().start(plainObject(input, 'choices')));
+  handle('connect-answer', (id, input) => cx().answer(importId(id), plainObject(input, 'answer')));
+  handle('connect-chose', (id, input) => { const value = plainObject(input, 'choice'); return cx().connected(importId(id), { app: str(value.app, 'app', 64), kind: str(value.kind, 'kind', 16), path: optStr(value.path, 'path', 4096) }); });
+  handle('connect-import', (id) => cx().importNow(importId(id)));
+  handle('connect-stop', (id) => cx().stop(importId(id)));
+  handle('connect-state', (id) => cx().state(importId(id)));
   // A repository's sandbox is stopped (and its runs forgotten) before its row can go.
   saving('discard-library-item', (id) => queued(async () => {
     const ctx = await store.context();

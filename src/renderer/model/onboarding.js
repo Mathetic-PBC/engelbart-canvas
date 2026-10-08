@@ -7,13 +7,14 @@ import { launchRows, installable } from './tools.js';
 /**
  * A new install walks all six screens; + Project on the all-projects screen only the last two. The tools screen
  * (second, 2026-09-28: it replaces the setup dialog a first launch used to open) is left out when `tools` is false:
- * the launch check found nothing to install.
+ * the launch check found nothing to install. Connect your library (2026-10-07, screens/ConnectLibrary.jsx) is
+ * experimental: it is in the flow, before Add to your library, only when `connect` is true (test mode).
  */
-export const FLOWS = { new: ['welcome', 'tools', 'import', 'instructions', 'create', 'context'], existing: ['create', 'context'] };
+export const FLOWS = { new: ['welcome', 'tools', 'connect', 'import', 'instructions', 'create', 'context'], existing: ['create', 'context'] };
 
-export function flowOf(mode, { tools = true } = {}) {
+export function flowOf(mode, { tools = true, connect = false } = {}) {
   const flow = FLOWS[mode] || FLOWS.new;
-  return tools ? flow : flow.filter((step) => step !== 'tools');
+  return flow.filter((step) => (step !== 'tools' || tools) && (step !== 'connect' || connect));
 }
 
 /** Screens that are several screens in effect (2a, 2b …), one box shown at a time. */

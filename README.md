@@ -138,6 +138,10 @@ The pill top-right exists on every screen of a developer's copy. **Test · on** 
 
 Test mode is only in a developer's copy (`src/main/developer.cjs`): Engelbart run from a checkout (`npm start`, `npm run relaunch -- --dev`), or packaged by `npm run relaunch`, which builds with `ENGELBART_DEVELOPER=1`. Any other package, which is what ships, has no pill and no `⚙`, uses `~/.engelbart` whatever `config.json` says (without rewriting it, so a developer's copy on the same Mac keeps its setting), refuses the switch and the reset, and never makes `~/.engelbart/test/`. A release has to be built with `npm run build` right before packaging, without `ENGELBART_DEVELOPER`: the build writes `dist/build.json`, which is what the package reads. `ENGELBART_TEST_MODE=off` takes test mode away from a developer's copy too, to see the app as it ships (`npm run new-mac` sets it).
 
+## Connect your library (experimental, test mode only)
+
+In test mode a new user's onboarding has one more screen after the tools: **Connect your library** (Claude Design "Connect Library", `design/connect-library/`). They tick what should come in — notes (Obsidian, Notion…), meeting transcripts, AI chats (Claude Code, Codex, Claude and ChatGPT exports…), websites, papers (Zotero, a folder), code (GitHub, local folders) — ticked to start with wherever the app is found on this Mac. **Refine** opens a chat with a librarian agent that has looked at what is there (vault folders and counts, Zotero collections, recent chat titles, most visited sites) and asks only what changes what comes in, as single-choice chips, multiple-choice chips or a short reply; its buttons sign in (Zotero, GitHub) or choose a folder or an export. Each source it settles goes to an import agent at once, in the background, two at a time, while the chat goes on; **Import** sends the rest. Both run hidden on Claude Code or Codex (the chip's model), reading only, and write through Engelbart's import tools (`src/main/connect/tools.cjs`, served as an MCP server): a note per Markdown file with its pictures and `[[links]]` as mentions, a note per chat, library rows for papers, sites and repositories. Notes wait in `<data root>/.connect/<session>/notes/` until Open project makes the project. Outside test mode main refuses every `connect-*` call, so the normal library is never touched. `ENGELBART_CONNECT_FAKE=1` (or `ENGELBART_BART_FAKE=1`) runs it without a model.
+
 ## What lands on disk
 
 ```
@@ -149,6 +153,7 @@ Test mode is only in a developer's copy (`src/main/developer.cjs`): Engelbart ru
   library.pglite/                     table `library`: every md, pdf, folder, website, data file, image; `type` is the format, `tags` what was inferred: paper, git, note (+ summary, summary_edited, char_count)
   .context/status.json                the last summary sweep that did something
   .context/summary-system-prompt.md   optional: replaces the built-in summary prompt
+  .connect/<id>/                      test mode: a Connect your library session (session.json; notes/ held until the project exists); imported.json: what came in from where
   annotations/<library id>.json       PDF highlights and margin notes
   .backups/<project>-<time>/          copies taken before a layout conversion (and of a settings file's first merge)
   <project>/
@@ -181,6 +186,7 @@ src/main/updates.cjs         new versions of the packaged app (docs/releasing-ma
 src/main/build/              Build: git (worktrees, checkpoints, Accept), store (task records), context, prompt, policy (the sandbox stub), runner (one CLI turn), manager
 src/main/store/archive.cjs   Clear, the archived versions of a workspace, Restore
 src/main/browser/            views.cjs: the Browser pane's pages as WebContentsViews (decision 48)
+src/main/connect/            Connect your library (onboarding, test mode): readers and scan of this Mac, the librarian and import agents, their tools, the session
 src/main/sandbox/            E2B previews of GitHub repositories: manager (runs, lifecycle), worker (forked; the E2B SDK), local Claude setup + its MCP tools, the Python helpers run inside the sandbox
 src/preload.cjs              window.terminalAPI (ET contract) + window.engelbartAPI
 src/renderer/App.jsx         create | all projects | workspace; reopens the last topic; the test pill

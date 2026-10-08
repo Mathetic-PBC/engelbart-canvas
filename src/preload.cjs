@@ -116,6 +116,16 @@ const engelbartAPI = Object.freeze({
   checkFolder: invoke('check-folder'),
   startProject: invoke('start-project'),
   discardLibraryItem: invoke('discard-library-item'),
+  // Connect your library (src/main/connect; onboarding, test mode only): connectStart(choices) → the session's snapshot,
+  // then every change of it on onConnect.
+  connectDetect: invoke('connect-detect'),
+  connectStart: invoke('connect-start'),
+  connectAnswer: invoke('connect-answer'),
+  connectChose: invoke('connect-chose'),
+  connectImport: invoke('connect-import'),
+  connectStop: invoke('connect-stop'),
+  connectState: invoke('connect-state'),
+  onConnect: (callback) => subscribe('engelbart:connect', callback),
   renameProject: invoke('rename-project'),
   // Delete on the all-projects screen: into the trash for a week; Recently deleted lists it (and purges older ones), Restore brings it back.
   trashProject: invoke('trash-project'),

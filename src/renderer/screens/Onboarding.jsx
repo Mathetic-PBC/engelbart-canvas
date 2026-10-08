@@ -10,6 +10,7 @@ import { SUBS, forward, pagerOf, importButtons, createButtons, rowWhy, contextRo
 import { launchRows, installable, rowOf } from '../model/tools.js';
 import { useGithubStatus } from '../workspace/useGithubStatus.js';
 import ImportSignins from '../workspace/ImportSignins.jsx';
+import ConnectLibrary from './ConnectLibrary.jsx';
 import welcomePng from '../../../design/assets/welcome-field.png';
 
 const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || '');
@@ -144,8 +145,11 @@ function GithubPart({ held, onToggle, busyId }) {
   );
 }
 
-/** `tools`: the tool check's snapshot (App.jsx). `onTools('install' | 'skip')`: what the tools screen was answered with. */
-export default function Onboarding({ mode = 'new', tools = null, onTools = () => {}, onDone, onBack }) {
+/**
+ * `tools`: the tool check's snapshot (App.jsx). `onTools('install' | 'skip')`: what the tools screen was answered with.
+ * `connect`: Connect your library is in the flow (test mode only, 2026-10-07: experimental).
+ */
+export default function Onboarding({ mode = 'new', tools = null, onTools = () => {}, onDone, onBack, connect = false }) {
   const flowMode = mode === 'existing' ? 'existing' : 'new';
   const [place, setPlace] = React.useState({ step: flowMode === 'existing' ? 'create' : 'welcome', sub: 0, detour: false });
   const { step, sub } = place;
@@ -165,6 +169,7 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
   const [sel, setSel] = React.useState({});
   const [error, setError] = React.useState('');
   const [importing, setImporting] = React.useState(false); // the "Import sign-ins…" picker is open (MATH-18, macOS only)
+  const [connectId, setConnectId] = React.useState(null); // Connect your library's session: its staged notes go into the project
   // Its "Sign in again" sites (2026-10-06): there is no Stage until the project opens, so they open on it then (App.jsx).
   const stageLinks = React.useRef([]);
   const [ghStatus] = useGithubStatus();
@@ -190,7 +195,7 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
   // change under the person while the installs it started run. While it is undecided the screen is there, checking.
   const [withTools, setWithTools] = React.useState(() => toolsWanted(tools));
   React.useEffect(() => { if (withTools === null) { const wanted = toolsWanted(tools); if (wanted !== null) setWithTools(wanted); } }, [tools, withTools]);
-  const flowOptions = { tools: withTools !== false };
+  const flowOptions = { tools: withTools !== false, connect: !!connect && flowMode === 'new' };
 
   const go = (next) => { setPlace((now) => ({ ...now, ...next })); setEntry(''); setEntryErr(''); setError(''); };
   const advance = () => go(forward(flowMode, place, flowOptions));
@@ -305,7 +310,7 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
     const ids = contextRows(library).filter((row) => sel[row.id]).map((row) => row.id);
     go({ step: 'open', sub: 0 });
     try {
-      const made = await api.startProject({ name: name.trim(), description: desc.trim(), folder, directory: folder === 'existing' ? folderPath : '', context: ids });
+      const made = await api.startProject({ name: name.trim(), description: desc.trim(), folder, directory: folder === 'existing' ? folderPath : '', context: ids, ...(connectId ? { connect: connectId } : {}) });
       await onDone(made, { stageLinks: [...stageLinks.current] });
     } catch (failure) {
       setPlace({ step: 'context', sub: 0, detour: false });
@@ -530,6 +535,9 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
         </div>
       </div>
     );
+  } else if (step === 'connect') {
+    // Drawn outside the 800 × 600 window below: the design's box is its own card, and the chat needs the height.
+    body = null;
   } else if (step === 'open') {
     body = <div data-screen-label="08 Opening" style={{ width: '100%', display: 'flex', justifyContent: 'center' }}><ThinkingDots label="opening Getting started" /></div>;
   }
@@ -539,8 +547,23 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
       <div className="title-bar title-lead" style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 54, display: 'flex', alignItems: 'center', padding: '0 24px' }}>
         {onBack && <button type="button" className="hov-ink" onClick={onBack} title="All projects" style={{ ...plain, font: '500 17px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Engelbart</button>}
       </div>
+      {/* Connect your library (test mode only): the design's box, centred on the window, Skip for now under it. */}
+      {step === 'connect' && (
+        <div data-screen-label="03 Connect library" style={{ flex: 'none', width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
+          <ConnectLibrary onSession={setConnectId} onDone={(id) => { if (id) setConnectId(id); advance(); }} />
+          <div style={{ flex: 'none', width: 'min(600px, calc(100% - 32px))', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+            <button type="button" className="hov-ink" data-onboarding-skip="1" onClick={advance} style={skipStyle}>{connectId ? 'Continue' : 'Skip for now'}</button>
+            {pager && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                <Pager count={pager.count} index={pager.index} />
+                <div data-onboarding-step-of="1" style={{ font: '12px/1 var(--font-sans)', color: '#8f8f8f' }}>{`${pager.index + 1} of ${pager.count}`}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       {/* No card (2026-09-28): the same 800 × 600 at most, drawn on nothing, so lists inside still scroll and the page never does. */}
-      <div data-screen-label="Onboarding window" style={{ flex: 'none', display: 'flex', flexDirection: 'column', width: 'min(800px, 100%)', height: 'min(600px, 100%)', overflow: 'hidden' }}>
+      {step !== 'connect' && <div data-screen-label="Onboarding window" style={{ flex: 'none', display: 'flex', flexDirection: 'column', width: 'min(800px, 100%)', height: 'min(600px, 100%)', overflow: 'hidden' }}>
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'safe center', gap: 24, padding: '40px 32px 28px' }}>
           {body}
           {pager && !place.detour && (
@@ -550,7 +573,7 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
             </div>
           )}
         </div>
-      </div>
+      </div>}
       {importing && <ImportSignins opensLater onClose={() => setImporting(false)} onOpenSite={(url) => { if (!stageLinks.current.includes(url)) stageLinks.current.push(url); }} />}
     </div>
   );
