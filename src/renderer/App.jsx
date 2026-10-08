@@ -71,7 +71,7 @@ export default function App() {
   const [launchAsk, setLaunchAsk] = React.useState(null); // what the launch check asks about, until the dialog can open
   const askedAtLaunch = React.useRef(false);
   const lastTools = React.useRef(null);
-  // Connect your library (test mode, 2026-10-07): its popup ({ sessionId } from the chip, { projectId } the one-time offer).
+  // Connect your library (2026-10-07): its popup ({ sessionId } from the chip, { projectId } the one-time offer).
   const [connectPopup, setConnectPopup] = React.useState(null);
 
   const fail = (candidate) => setError(errorMessage(candidate));
@@ -216,12 +216,12 @@ export default function App() {
     document.title = phase === 'workspace' && projectName ? `${projectName} — Engelbart` : 'Engelbart';
   }, [phase, projectName]);
 
-  // Connect your library for someone who has projects: offered once, as a popup over the workspace they are in (test mode).
-  const connectOn = !!(config && config.testMode);
-  const connectSessions = useConnectSessions(connectOn, config ? config.dataRoot : '');
+  // Connect your library for someone who has projects: offered once, as a popup over the workspace they are in. In every
+  // library, test mode's or not (2026-10-08), each with its own sessions and its own offer.
+  const connectSessions = useConnectSessions(!!config, config ? config.dataRoot : '');
   const openProjectId = phase === 'workspace' && tree ? tree.project.id : null;
   React.useEffect(() => {
-    if (!connectOn || !openProjectId) return undefined;
+    if (!openProjectId) return undefined;
     let alive = true;
     const timer = setTimeout(() => {
       api.connectOffer().then((offer) => {
@@ -231,7 +231,7 @@ export default function App() {
       }).catch(() => {});
     }, 1200); // after the workspace has drawn itself
     return () => { alive = false; clearTimeout(timer); };
-  }, [connectOn, openProjectId]);
+  }, [openProjectId]);
 
   // Another window saved something here: this project's tree (a workspace or note made, renamed, linked; a document
   // cleared) is read again, or, on the projects screen, the projects. A project another window deleted is left for the
@@ -396,7 +396,7 @@ export default function App() {
         />
       )}
       {phase === 'create' && (
-        <Onboarding key={run} mode={onboardMode} tools={tools} onTools={onboardingTools} onDone={onboarded} onBack={returning ? goHome : null} connect={!!config.testMode} />
+        <Onboarding key={run} mode={onboardMode} tools={tools} onTools={onboardingTools} onDone={onboarded} onBack={returning ? goHome : null} />
       )}
       {phase === 'workspace' && tree && (
         <Workspace
@@ -419,7 +419,7 @@ export default function App() {
           onVisit={onVisit}
           onError={fail}
           // Connect your library's sessions, for the sidebar's Inbox: one that needs you or has finished, opened in its popup
-          connectSessions={connectOn ? connectSessions : []}
+          connectSessions={connectSessions}
           onOpenConnect={(id) => setConnectPopup({ sessionId: id })}
         />
       )}
@@ -444,10 +444,10 @@ export default function App() {
         onStartNew: () => resetTest(true),
         onReveal: () => api.reveal(config.testRoot).catch(fail),
       } : null}>
-        {connectOn && <ConnectChip sessions={connectSessions} onOpen={(id) => setConnectPopup({ sessionId: id })} />}
+        <ConnectChip sessions={connectSessions} onOpen={(id) => setConnectPopup({ sessionId: id })} />
         {config.testModeAvailable && <TestToggle testMode={config.testMode} busy={busy} onToggle={toggleTest} />}
       </WindowControls>
-      {connectOn && connectPopup && <ConnectPopup key={connectPopup.sessionId || connectPopup.projectId} request={connectPopup} onClose={() => setConnectPopup(null)} />}
+      {connectPopup && <ConnectPopup key={connectPopup.sessionId || connectPopup.projectId} request={connectPopup} onClose={() => setConnectPopup(null)} />}
     </div>
     </SandboxProgress>
   );

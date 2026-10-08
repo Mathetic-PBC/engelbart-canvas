@@ -7,7 +7,8 @@ in `design/assets/logos/`, named as the design names them. Brief: the "Onboardin
 onboarding" workspace.
 
 Implemented in `src/renderer/screens/ConnectLibrary.jsx` (+ `src/renderer/model/connect.js`, `src/renderer/ui/ConnectDock.jsx`)
-and `src/main/connect/`. Experimental: test mode only (main refuses every `connect-*` call outside it).
+and `src/main/connect/`. Test mode only until 2026-10-08; since then in every library ("migrate the agent onboarding
+features to non-testing, too"), each library with its own sessions, offer and MEMORY.md.
 
 ## Second build (2026-10-07, the workspace's feedback)
 

@@ -9,7 +9,7 @@ import { dockLine } from '../model/connect.js';
 // the sandbox bell, so it is never under a native view: the Stage's pages and the post-its) says how it goes, amber when
 // an agent needs the person (a few words; the whole line is its tooltip), and opens it again as a popup. The same popup is the one-time offer to someone who has
 // projects already ("Existing users should see a popup to do this once, but not as an onboarding flow just like a popup
-// they can dismiss"), its notes going into the project open then. Test mode only, as all of Connect.
+// they can dismiss"), its notes going into the project open then. In every library since 2026-10-08, as all of Connect.
 
 /** The sessions main holds for this data root, kept current from its announcements. */
 export function useConnectSessions(enabled, dataRoot = '') {

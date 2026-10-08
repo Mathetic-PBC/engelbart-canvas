@@ -120,7 +120,7 @@ const engelbartAPI = Object.freeze({
   checkFolder: invoke('check-folder'),
   startProject: invoke('start-project'),
   discardLibraryItem: invoke('discard-library-item'),
-  // Connect your library (src/main/connect; onboarding and a one-time popup, test mode only): connectStart(choices) → the
+  // Connect your library (src/main/connect; onboarding and a one-time popup, in every library): connectStart(choices) → the
   // session's snapshot, then every change of it on onConnect. connectNeed(id, needId, 'open' | 'done' | 'skip'): a step an
   // agent handed the person. connectList(): the sessions the dock shows.
   connectDetect: invoke('connect-detect'),

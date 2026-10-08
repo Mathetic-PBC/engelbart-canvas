@@ -1,7 +1,8 @@
 'use strict';
 
 // npm run build && npx electron scripts/smoke-connect.cjs
-// Runs the real app, hidden, against disposable data in test mode with Connect your library's fake agents
+// Runs the real app, hidden, against disposable data in the normal library (test mode off, as the app people download
+// runs it: Connect left test mode on 2026-10-08) with Connect your library's fake agents
 // (ENGELBART_CONNECT_FAKE), and walks a new user's onboarding through it (src/renderer/screens/ConnectLibrary.jsx,
 // src/main/connect): no tools screen (both agents signed in), Connect in place of Add to your library and Custom
 // instructions ("2 of 4"); the choose screen starts with Notes ticked (a vault Obsidian knows), ChatGPT ticked by hand,
@@ -29,9 +30,9 @@ process.env.ENGELBART_CONNECT_FAKE_NEEDS = 'ChatGPT';
 process.env.ENGELBART_CONNECT_APPLICATIONS = ''; // this Mac's /Applications is not the disposable one's
 process.env.ENGELBART_HEADLESS = '1';
 
-// Test mode on, and a vault Obsidian knows, in the disposable home.
+// Test mode off, and a vault Obsidian knows, in the disposable home.
 const home = require('../src/main/store/home.cjs');
-home.writeConfig(home.ensureHome(root).root, { testMode: true });
+home.writeConfig(home.ensureHome(root).root, { testMode: false });
 const write = (rel, text) => { const file = path.join(root, rel); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); };
 write('Notes/.obsidian/daily-notes.json', JSON.stringify({ folder: 'Daily' }));
 write('Notes/Research/Help-seeking.md', 'Novices rarely ask. See [[Tutoring]].\n');
@@ -81,7 +82,7 @@ app.whenReady().then(async () => {
     wc.setBackgroundThrottling(false);
     await until(() => js(wc, '!!document.querySelector("[data-onboarding=new]")').catch(() => false), 'a new user\'s onboarding');
     await press(wc, '[data-onboarding-continue] button');
-    await until(async () => (await step(wc)) === 'connect', 'Connect your library, after the welcome (test mode, both agents signed in)');
+    await until(async () => (await step(wc)) === 'connect', 'Connect your library, after the welcome (test mode off, both agents signed in)');
 
     /* ------------------------------------------------ choose: Notes ticked where Obsidian was found, ChatGPT by hand */
     await until(() => has(wc, '[data-connect-library="choose"] [data-connect-app="Obsidian"]'), 'the choose screen, Notes open');
@@ -139,7 +140,8 @@ app.whenReady().then(async () => {
     assert.match(progress, /✓ remembered/, 'what ChatGPT remembers');
     assert.match(progress, /Saved · 1 secret masked/);
     assert.doesNotMatch(progress, /Activity/, 'no activity log');
-    const memoryFile = fs.readFileSync(path.join(root, '.engelbart', 'test', 'MEMORY.md'), 'utf8');
+    const memoryFile = fs.readFileSync(path.join(root, '.engelbart', 'MEMORY.md'), 'utf8');
+    assert.equal(fs.existsSync(path.join(root, '.engelbart', 'test', 'MEMORY.md')), false, 'the normal library\'s, not test mode\'s');
     assert.doesNotMatch(memoryFile, /hunter2|sk-test/, 'MEMORY.md without its secrets');
     await shot(wc, '5-working');
     await press(wc, '[data-connect-done]');

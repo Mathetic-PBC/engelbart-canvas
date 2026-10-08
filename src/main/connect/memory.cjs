@@ -1,14 +1,15 @@
 'use strict';
 
-// MEMORY.md (2026-10-07, "Agent onboarding": "there should be a MEMORY.md file in the user's engelbart folder, the same one
-// with the config.json file and stuff, and it should be created in the background based on all the stuff from this
-// process, including memories from ai providers"). It lives in the data root beside config.json: ~/.engelbart/MEMORY.md,
-// or ~/.engelbart/test/MEMORY.md in test mode, which is the only place Connect your library runs, so an experimental run
-// never touches the real one. Connect's session (./session.cjs) writes it after its imports: an agent drafts it from the
-// chat, what came in and what the AI assistants remember (./prompts.cjs MEMORY_SYSTEM_PROMPT), "one background claude
-// sonnet agent just edit[s] it to get rid of any secrets" (REDACT_SYSTEM_PROMPT), scrubSecrets catches what has an
-// unmistakable shape, and only then is it saved. A file already there is updated, not replaced (the person's own edits
-// are kept), and each saved version goes to .connect/memory-history/ first.
+// MEMORY.md (2026-10-07, "Agent onboarding": "there should be a MEMORY.md file in the user's engelbart folder, the same
+// one with the config.json file and stuff, and it should be created in the background based on all the stuff from this
+// process, including memories from ai providers"). It lives in the data root beside config.json:
+// ~/.engelbart/MEMORY.md, or ~/.engelbart/test/MEMORY.md in test mode, each library's its own (Connect your library
+// runs in both since 2026-10-08), so a run in test mode never touches the real one. Connect's session (./session.cjs)
+// writes it after its imports: an agent drafts it from the chat, what came in and what the AI assistants remember
+// (./prompts.cjs MEMORY_SYSTEM_PROMPT), "one background claude sonnet agent just edit[s] it to get rid of any secrets"
+// (REDACT_SYSTEM_PROMPT), scrubSecrets catches what has an unmistakable shape, and only then is it saved. A file
+// already there is updated, not replaced (the person's own edits are kept), and each saved version goes to
+// .connect/memory-history/ first.
 //
 // @bart and Build are given it as <memory> (memoryBlock), beside the person's custom instructions: that is what it is for,
 // "onboard[ing] the agents to Engelbart instead of requiring that the human adds all of their context".

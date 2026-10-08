@@ -25,17 +25,18 @@ import perplexity from '../../../design/assets/logos/perplexity.svg';
 import cursor from '../../../design/assets/logos/cursor_light.svg';
 import github from '../../../design/assets/logos/github.svg';
 
-// Connect your library (2026-10-07): port of Claude Design "Connect Library.dc.html" (design/connect-library/), an
-// experimental window, test mode only: a step of a new user's onboarding (in place of Add to your library and Custom
-// instructions), and a one-time popup for someone who has projects (ui/ConnectDock.jsx). Choose: what should go in the
-// library, by source and app, ticked where main found the app; GitHub through the same repository list as onboarding's;
-// what the agents will do and the permissions they need, asked up front. Refine: one continuous chat with the librarian
-// agent (src/main/connect), its questions drawn as cards with one option per line (single choice: a round mark, multiple:
-// a square one, each option's why under it), its buttons sign in to a connector, ask macOS, or choose a folder. Each
-// source it settles starts importing in the background while the chat goes on. When an agent meets something only the
-// person can do (a sign-in, a code, a permission) it shows as "Needs you", with the button that does it. Import, at the
-// lower right, lights up once the librarian has nothing more to ask; then the window shows every import and MEMORY.md,
-// with Stop, and can be put away: the work goes on in the background, the dock and the sidebar's Inbox following it.
+// Connect your library (2026-10-07): port of Claude Design "Connect Library.dc.html" (design/connect-library/), a
+// window in every library (test mode's only until 2026-10-08): a step of a new user's onboarding (in place of Add to
+// your library and Custom instructions), and a one-time popup for someone who has projects (ui/ConnectDock.jsx).
+// Choose: what should go in the library, by source and app, ticked where main found the app; GitHub through the same
+// repository list as onboarding's; what the agents will do and the permissions they need, asked up front. Refine: one
+// continuous chat with the librarian agent (src/main/connect), its questions drawn as cards with one option per line
+// (single choice: a round mark, multiple: a square one, each option's why under it), its buttons sign in to a
+// connector, ask macOS, or choose a folder. Each source it settles starts importing in the background while the chat
+// goes on. When an agent meets something only the person can do (a sign-in, a code, a permission) it shows as "Needs
+// you", with the button that does it. Import, at the lower right, lights up once the librarian has nothing more to ask;
+// then the window shows every import and MEMORY.md, with Stop, and can be put away: the work goes on in the background,
+// the dock and the sidebar's Inbox following it.
 // 2026-10-08 ("Agent onboarding"): no growing strip of agents over the chat (one line under it says what the librarian
 // does and goes through the subagents at work, as Claude Code lists its own), no activity log, no paragraphs of
 // disclaimers on the choose screen, no account of what each import added; the imports still going come first; a Needs-you

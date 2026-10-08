@@ -3,7 +3,7 @@
 // Connect your library (2026-10-07; Claude Design "Connect Library.dc.html", the "Onboarding brainstorm" note): the kinds
 // of thing the person can bring into their library and the apps each comes from, as the choose screen lists them. Shared
 // by main (src/main/connect: what is looked for on this Mac, how an app is reached) and the renderer (the list itself).
-// Experimental: test mode only.
+// In every library since 2026-10-08 (test mode's only until then).
 //
 // `reach` says how the agents get at an app. Since the second build ("Agent onboarding", 2026-10-07: "Instead of telling
 // me to do stuff, it must use computer use to do all this stuff for me!") the person is never told to export, download

@@ -1,10 +1,10 @@
 'use strict';
 
-// Connect your library (2026-10-07; Claude Design "Connect Library.dc.html", the "Onboarding brainstorm" note). An
-// experimental screen, test mode only: the person picks what should go into their library, then a librarian agent talks
-// with them in one continuous chat (single and multiple choice and short open questions, built from what was found) and
-// hands each source to an import agent as soon as it is settled. Imports run in the background while the chat goes on and
-// after the window is put away.
+// Connect your library (2026-10-07; Claude Design "Connect Library.dc.html", the "Onboarding brainstorm" note). In
+// every library since 2026-10-08 (test mode's only until then): the person picks what should go into their library,
+// then a librarian agent talks with them in one continuous chat (single and multiple choice and short open questions,
+// built from what was found) and hands each source to an import agent as soon as it is settled. Imports run in the
+// background while the chat goes on and after the window is put away.
 //
 // Second build (same day, "Agent onboarding"), what this file does now:
 //   · the agents do the work: survey agents look at each web or connector app first (its files, chats, projects) so the
@@ -29,7 +29,7 @@
 //   · a session still going when Engelbart quits (or switches library) is saved as it is and picked up again when that
 //     library is next open (suspendAll, resume)
 //
-// What it writes is only in the data root it started in (test mode: ~/.engelbart/test): <dataRoot>/.connect/<id>/
+// What it writes is only in the data root it started in (~/.engelbart, or ~/.engelbart/test in test mode): <dataRoot>/.connect/<id>/
 // (session.json, what was said, how each import went and what resuming needs; notes/ notes an earlier build staged;
 // memories/ what each assistant answered), <dataRoot>/imports/<id>/ (what the agents downloaded), assets/md/, MEMORY.md,
 // and the library rows the import tools add.
@@ -295,7 +295,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
 
   function engelbartBlock(s) {
     const where = `What comes in is saved in their library: notes, chats and documents as Markdown files in ${path.join(s.dataRoot, 'assets', 'md')}, papers, files and links as library items.`;
-    return `<engelbart>\nA person is connecting their library to Engelbart (test mode). Their library is at ${s.dataRoot}. ${where}\nPermissions they gave: read files anywhere in their home folder: ${s.choices.permissions.files ? 'yes' : 'no, only the folders of the sources they picked'}; use their accounts in Engelbart's background browser: ${s.choices.permissions.browser ? 'yes' : 'no (web apps are left out)'}; ask their AI assistants what they remember: ${s.choices.permissions.recall ? 'yes' : 'no'}.\n</engelbart>`;
+    return `<engelbart>\nA person is connecting their library to Engelbart. Their library is at ${s.dataRoot}. ${where}\nPermissions they gave: read files anywhere in their home folder: ${s.choices.permissions.files ? 'yes' : 'no, only the folders of the sources they picked'}; use their accounts in Engelbart's background browser: ${s.choices.permissions.browser ? 'yes' : 'no (web apps are left out)'}; ask their AI assistants what they remember: ${s.choices.permissions.recall ? 'yes' : 'no'}.\n</engelbart>`;
   }
 
   const surveying = (s) => s.jobs.some((job) => job.kind === 'survey' && !ENDED.has(job.status));

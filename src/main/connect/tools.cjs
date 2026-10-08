@@ -1,10 +1,10 @@
 'use strict';
 
-// Connect your library (2026-10-07, experimental, test mode only): the tools an import agent is given, served to Claude
+// Connect your library (2026-10-07; every library since 2026-10-08): the tools an import agent is given, served to Claude
 // Code and Codex as the MCP server `engelbart` (./import-mcp.cjs) over the loopback bridge Build's tools use
 // (../sandbox/local-tools.cjs openToolBridge), one bridge per import. The agent decides what to bring in from what the
 // person said in the chat; these do the reading and the writing, so a vault of 300 notes is one call, not 300.
-// They only ever write into the Engelbart data root the session started in (in test mode ~/.engelbart/test): Markdown files
+// They only ever write into the Engelbart data root the session started in (~/.engelbart, or ~/.engelbart/test): Markdown files
 // of the library's own in <data root>/assets/md (notes, chats, documents: ./notes.cjs writeFile; 2026-10-08, "save the
 // imported content not as notes but as md files ... in the engelbart assets folder") and library rows
 // (../store/library.cjs addItem, as the sidebar adds them). Nothing the person has is changed, moved or deleted.

@@ -1,6 +1,6 @@
 'use strict';
 
-// Connect your library (2026-10-07, experimental, test mode only): what Engelbart reads on this Mac for the interviewer's
+// Connect your library (2026-10-07; every library since 2026-10-08): what Engelbart reads on this Mac for the interviewer's
 // first look (./scan.cjs) and the import agents' tools (./tools.cjs). Everything here only reads; nothing is written
 // except a private copy of a browser's History database (it is locked while the browser runs), deleted after the query.
 //   folders      an overview (counts per top folder, the daily-notes folder), the note files under one

@@ -67,9 +67,9 @@ function Footer({ showSkip, onSkip, continueDisabled, onContinue, label = 'Conti
 
 /**
  * `tools`: the tool check's snapshot (App.jsx). `onTools('install' | 'skip')`: what the tools screen was answered with.
- * `connect`: Connect your library is in the flow (test mode only, 2026-10-07: experimental).
+ * A new user's flow has Connect your library (2026-10-07; in every library, not test mode's only, since 2026-10-08).
  */
-export default function Onboarding({ mode = 'new', tools = null, onTools = () => {}, onDone, onBack, connect = false }) {
+export default function Onboarding({ mode = 'new', tools = null, onTools = () => {}, onDone, onBack }) {
   const flowMode = mode === 'existing' ? 'existing' : 'new';
   const [place, setPlace] = React.useState({ step: flowMode === 'existing' ? 'create' : 'welcome', sub: 0, detour: false });
   const { step, sub } = place;
@@ -93,7 +93,7 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
   // Connect your library needs Claude Code or Codex: skipping the tools screen without one takes it out of the flow, and
   // Add to your library and Custom instructions come back in its place.
   const [connectDropped, setConnectDropped] = React.useState(false);
-  const connectMode = !!connect && flowMode === 'new' && !connectDropped;
+  const connectMode = flowMode === 'new' && !connectDropped;
   // Its "Sign in again" sites (2026-10-06): there is no Stage until the project opens, so they open on it then (App.jsx).
   const stageLinks = React.useRef([]);
   const [ghStatus] = useGithubStatus();
@@ -117,8 +117,8 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
 
   // Whether the tools screen is in the flow: decided by the first check that answers, then kept, so the pager does not
   // change under the person while the installs it started run. While it is undecided the screen is there, checking.
-  const [withTools, setWithTools] = React.useState(() => toolsWanted(tools, { connect: !!connect && flowMode === 'new' }));
-  React.useEffect(() => { if (withTools === null) { const wanted = toolsWanted(tools, { connect: !!connect && flowMode === 'new' }); if (wanted !== null) setWithTools(wanted); } }, [tools, withTools]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [withTools, setWithTools] = React.useState(() => toolsWanted(tools, { connect: flowMode === 'new' }));
+  React.useEffect(() => { if (withTools === null) { const wanted = toolsWanted(tools, { connect: flowMode === 'new' }); if (wanted !== null) setWithTools(wanted); } }, [tools, withTools]); // eslint-disable-line react-hooks/exhaustive-deps
   const flowOptions = { tools: withTools !== false, connect: connectMode };
 
   const go = (next) => { setPlace((now) => ({ ...now, ...next })); setEntry(''); setEntryErr(''); setError(''); };
@@ -259,7 +259,7 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
     // What the launch check would have asked about in the setup dialog, on a screen of the flow instead. Install all
     // starts the installs and moves on at once: they run in the background, and the setup dialog asks only what is
     // left (signing in) once onboarding is over. Skip for now asks nothing more until the next launch.
-    // With Connect your library next (test mode): "signing into claude code and/or codex must be done before this step",
+    // With Connect your library next: "signing into claude code and/or codex must be done before this step",
     // so each agent's row has its own Install or Sign in, Install all stays on the screen, and Continue waits for one of
     // them to be ready. Skipping it then takes Connect out of the flow.
     const plan = withTools ? toolsStep(tools, { connect: connectMode }) : { ids: [], install: [], label: 'Continue', disabled: false, stay: false };
@@ -486,13 +486,14 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
       <div className="title-bar title-lead" style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 54, display: 'flex', alignItems: 'center', padding: '0 24px' }}>
         {onBack && <button type="button" className="hov-ink" onClick={onBack} title="All projects" style={{ ...plain, font: '500 17px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Engelbart</button>}
       </div>
-      {/* Connect your library (test mode only): a page across the window (2026-10-08: "more horizontal … not a popup"), Skip for now under it. */}
+      {/* Connect your library: a page across the window (2026-10-08: "more horizontal … not a popup"), Skip for now under it. */}
       {step === 'connect' && (
         <div data-screen-label="03 Connect library" style={{ flex: 'none', width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
           <ConnectLibrary mode="onboarding" onSession={(id) => { setConnectId(id); api.connectOfferSeen('started').catch(() => {}); }} onContinue={advance} onSkip={advance} onAdded={(row) => take(row, 'github', true)} />
           <div style={{ flex: 'none', width: 'min(1080px, 100%)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
-            {/* Leaving with a session puts it away: it goes on in the background, the chip in the top right following it. */}
-            <button type="button" className="hov-ink" data-onboarding-skip="1" onClick={() => { if (connectId) api.connectMinimize(connectId, true).catch(() => {}); advance(); }} style={skipStyle}>{connectId ? 'Continue' : 'Skip for now'}</button>
+            {/* Leaving with a session puts it away: it goes on in the background, the chip in the top right following it.
+                Skipping it counts as the one-time offer seen: the project about to open does not ask again. */}
+            <button type="button" className="hov-ink" data-onboarding-skip="1" onClick={() => { if (connectId) api.connectMinimize(connectId, true).catch(() => {}); else api.connectOfferSeen('dismissed').catch(() => {}); advance(); }} style={skipStyle}>{connectId ? 'Continue' : 'Skip for now'}</button>
             {pager && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
                 <Pager count={pager.count} index={pager.index} />

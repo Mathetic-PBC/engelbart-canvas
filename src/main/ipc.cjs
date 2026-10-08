@@ -450,9 +450,10 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       return made;
     });
   }), { project: (_args, out) => out && out.project && out.project.id, library: true });
-  // Connect your library (./connect, 2026-10-07): the experimental chat that brings the person's notes, chats, papers,
-  // sites and code into the library, in onboarding and, once, as a popup for someone who has projects already. Test mode
-  // only: refused in the normal library and in a copy without test mode. connect-detect: which apps are on this Mac (and
+  // Connect your library (./connect, 2026-10-07): the chat that brings the person's notes, chats, papers, sites and code
+  // into the library, in onboarding and, once, as a popup for someone who has projects already. In every library since
+  // 2026-10-08 ("migrate the agent onboarding features to non-testing, too"); it was test mode's only until then, and
+  // each data root keeps its own sessions, offer and MEMORY.md. connect-detect: which apps are on this Mac (and
   // signed in to in Engelbart's browser), so the choose screen starts with those ticked; connect-providers: Claude Code and
   // Codex, which can run and on which pinned model. connect-start: the choose screen's picks → the session (the scan, the
   // surveys and the librarian's first turn run in the background); connect-answer: a reply ({ text } | { picked, text? } |
@@ -462,7 +463,6 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // dock shows. Every change of a session is sent as `engelbart:connect` with its snapshot.
   const cx = () => {
     if (!connect) throw new Error('Connect your library is not available');
-    if (!store.config().testMode) throw new Error('Connect your library is experimental and runs in test mode only');
     return connect;
   };
   const importId = (value) => str(value, 'import id', 64);
@@ -486,7 +486,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('connect-dismiss', (id) => cx().dismiss(importId(id)));
   handle('connect-state', (id) => cx().state(importId(id)));
   // A session that was still going when Engelbart closed goes on now (resume), before the list is read.
-  handle('connect-list', withCtx((ctx) => { if (!connect || !store.config().testMode) return []; connect.resume(ctx); return connect.list(ctx.dataRoot); }));
+  handle('connect-list', withCtx((ctx) => { if (!connect) return []; connect.resume(ctx); return connect.list(ctx.dataRoot); }));
   // macOS's Automation prompt for Notes, asked from the choose screen's permissions (./connect/apple-notes.cjs).
   handle('connect-notes-permission', () => { cx(); return appleNotes ? appleNotes.permission() : { allowed: false, error: 'Apple Notes cannot be read here' }; });
   // The connectors Engelbart signs in to for the agents (./connect/connectors.cjs): Granola and Notion.
@@ -495,9 +495,10 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('connect-connector-cancel', (app) => { cx(); if (connectors) connectors.cancel(appName(app)); return true; });
   // The one-time popup for someone with projects (2026-10-07: "Existing users should see a popup to do this once, but not
   // as an onboarding flow just like a popup they can dismiss"): shown until it has been seen once in this data root.
+  // ENGELBART_CONNECT_OFFER=off never shows it (the smokes that are not about Connect: it would cover their workspace).
   const offerFile = (ctx) => path.join(ctx.dataRoot, '.connect', 'offer.json');
   handle('connect-offer', withCtx((ctx) => {
-    if (!connect || !store.config().testMode) return { show: false };
+    if (!connect || process.env.ENGELBART_CONNECT_OFFER === 'off') return { show: false };
     try { return { show: !JSON.parse(fs.readFileSync(offerFile(ctx), 'utf8')).seen }; } catch { return { show: true }; }
   }));
   handle('connect-offer-seen', withCtx((ctx, how) => {

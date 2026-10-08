@@ -899,8 +899,8 @@ if (!hasSingleInstanceLock) {
     // The Overleaf projects open in the Stage (MATH-65): each one's copy is downloaded with the Stage's own session, the
     // sign-in the person made there, so no cookie leaves it.
     const overleafStage = createOverleafStage({ copies: createOverleafCopies({ fetch: (url, init) => electronSession.fromPartition(BROWSER_PARTITION).fetch(url, init) }) });
-    // Connect your library (src/main/connect, 2026-10-07): the experimental chat of onboarding and of a one-time popup, test
-    // mode only. A librarian agent asks what should come in; survey, recall and import agents do the work in the background
+    // Connect your library (src/main/connect, 2026-10-07): the chat of onboarding and of a one-time popup, in every library
+    // since 2026-10-08. A librarian agent asks what should come in; survey, recall and import agents do the work in the background
     // on the person's subscription, pinned to Sonnet high or Sol high. They read this Mac, use Engelbart's own hidden
     // browser on the Stage's sign-ins (./connect/browser.cjs: never the screen), the connectors Engelbart signs in to
     // (Granola, Notion) and macOS Automation (Apple Notes), and write only through Engelbart's import tools; then MEMORY.md.

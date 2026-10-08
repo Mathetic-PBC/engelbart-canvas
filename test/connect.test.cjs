@@ -1,6 +1,6 @@
 'use strict';
 
-// Connect your library (src/main/connect, 2026-10-07; experimental, test mode only): what is read on this Mac, how a
+// Connect your library (src/main/connect, 2026-10-07; every library since 2026-10-08): what is read on this Mac, how a
 // Markdown file becomes a note, the import tools, the librarian's reply as it is read, and whole sessions with the fake
 // agents. Second build ("Agent onboarding"): the models pinned to Sonnet high / Sol high, the priority queue (surveys,
 // recalls, imports, then MEMORY.md), a step handed to the person (needs_you) and answered, MEMORY.md written with its
@@ -733,7 +733,7 @@ test('the window\'s model, and the onboarding flow with Connect your library in 
   // "replace steps 3 and 4 with this, since it will essentially be the same"
   assert.deepEqual(flow.flowOf('new', { connect: true }), ['welcome', 'tools', 'connect', 'create', 'context']);
   assert.deepEqual(flow.flowOf('new', { connect: true, tools: false }), ['welcome', 'connect', 'create', 'context']);
-  assert.deepEqual(flow.flowOf('new'), ['welcome', 'tools', 'import', 'instructions', 'create', 'context'], 'outside test mode: as before');
+  assert.deepEqual(flow.flowOf('new'), ['welcome', 'tools', 'import', 'instructions', 'create', 'context'], 'without Connect (the tools screen skipped with no agent): as before');
   assert.deepEqual(flow.forward('new', { step: 'tools', sub: 0 }, { connect: true }), { step: 'connect', sub: 0 });
   assert.deepEqual(flow.forward('new', { step: 'connect', sub: 0 }, { connect: true }), { step: 'create', sub: 0 });
   assert.deepEqual(flow.pagerOf('new', 'connect', { connect: true }), { count: 5, index: 2 });

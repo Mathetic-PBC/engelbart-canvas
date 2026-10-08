@@ -14,6 +14,7 @@ const root = process.env.ENGELBART_POST_IT_SMOKE_ROOT || fs.mkdtempSync(path.joi
 app.setPath('userData', path.join(root, 'electron'));
 process.env.ENGELBART_HOME_DIR = root;
 process.env.ENGELBART_SUMMARIES = 'off';
+process.env.ENGELBART_CONNECT_OFFER = 'off'; // Connect your library's one-time popup would cover the workspace
 process.env.ENGELBART_TOOLS = 'off'; // no tool check or setup dialog over the cards (src/main/tools)
 process.env.ENGELBART_BART_FAKE = '1';
 process.env.ENGELBART_HEADLESS = '1';

@@ -38,7 +38,7 @@ function smoke() {
   const http = require('node:http');
   app.setPath('userData', path.join(root, 'electron'));
   Object.assign(process.env, {
-    ENGELBART_HOME_DIR: root, ENGELBART_SUMMARIES: 'off', ENGELBART_TOOLS: 'off', ENGELBART_BART_FAKE: '1', ENGELBART_HEADLESS: '1',
+    ENGELBART_HOME_DIR: root, ENGELBART_SUMMARIES: 'off', ENGELBART_CONNECT_OFFER: 'off', ENGELBART_TOOLS: 'off', ENGELBART_BART_FAKE: '1', ENGELBART_HEADLESS: '1',
     ENGELBART_SANDBOXES: 'off', ENGELBART_WEB_PDFS: 'off', ENGELBART_UPDATES: 'off', ENGELBART_RUN_STEP: 'off',
   });
   require('../src/main/index.cjs');

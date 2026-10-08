@@ -7,11 +7,11 @@ import { launchRows, installable } from './tools.js';
 /**
  * A new install walks all six screens; + Project on the all-projects screen only the last two. The tools screen
  * (second, 2026-09-28: it replaces the setup dialog a first launch used to open) is left out when `tools` is false:
- * the launch check found nothing to install. Connect your library (2026-10-07, screens/ConnectLibrary.jsx) is
- * experimental: it is in the flow only when `connect` is true (test mode), and then it takes the place of Add to your
- * library and Custom instructions ("replace steps 3 and 4 with this, since it will essentially be the same": its agents
- * bring the papers, sites and code in, and MEMORY.md, made from what the person's AI assistants remember, does what the
- * custom instructions did).
+ * the launch check found nothing to install. Connect your library (2026-10-07, screens/ConnectLibrary.jsx) is in the
+ * flow when `connect` is true (every new user's, test mode's or not, since 2026-10-08; false once the tools screen was
+ * skipped with no agent to run it), and then it takes the place of Add to your library and Custom instructions
+ * ("replace steps 3 and 4 with this, since it will essentially be the same": its agents bring the papers, sites and code
+ * in, and MEMORY.md, made from what the person's AI assistants remember, does what the custom instructions did).
  */
 export const FLOWS = { new: ['welcome', 'tools', 'connect', 'import', 'instructions', 'create', 'context'], existing: ['create', 'context'] };
 
@@ -52,7 +52,7 @@ export function pagerOf(mode, step, options) {
  * Whether a new install's onboarding has the tools screen, from the tool check's snapshot: null until the first check
  * has answered, then whether it found something Install all would install (Git missing, or neither agent installed).
  * What else the check asks about (signing in, an update) waits for the setup dialog after onboarding, except with Connect
- * your library in the flow (`connect`, test mode), whose agents run on Claude Code or Codex: then the screen is there
+ * your library in the flow (`connect`), whose agents run on Claude Code or Codex: then the screen is there
  * until one of them is installed and signed in too ("signing into claude code and/or codex must be done before this step").
  */
 export function toolsWanted(snapshot, { connect = false } = {}) {
