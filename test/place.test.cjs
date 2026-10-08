@@ -22,3 +22,13 @@ test('place: under what it hangs from when it fits, above near the bottom of the
   assert.equal(place({ left: 1100, right: 1180, top: 100, bottom: 120 }, { width: 330, height: 100 }, view).left, 862, 'it stays inside the window sideways');
   assert.equal(place({ left: 900, right: 1000, top: 100, bottom: 120 }, { width: 332, height: 100 }, view, { align: 'end' }).left, 668, 'a right-aligned panel hangs from the right edge');
 });
+
+test('placeBeside: the sidebar\'s panels open to the right of it at the row\'s height, moved up to stay in the window, on the left with no room (2026-10-07)', async () => {
+  const { place, placeBeside } = await load();
+  const row = { left: 8, right: 300, top: 200, bottom: 228 };
+  assert.deepEqual(placeBeside(row, { width: 340, height: 300 }, view), { left: 308, top: 200, maxHeight: null }, 'beside, at the row\'s top');
+  assert.deepEqual(placeBeside({ ...row, top: 700, bottom: 728 }, { width: 340, height: 300 }, view), { left: 308, top: 492, maxHeight: null }, 'near the bottom it moves up');
+  assert.deepEqual(placeBeside(row, { width: 340, height: 900 }, view), { left: 308, top: 8, maxHeight: 784 }, 'taller than the window: cut to it, and it scrolls');
+  assert.equal(placeBeside({ left: 900, right: 1000, top: 100, bottom: 120 }, { width: 340, height: 100 }, view).left, 552, 'no room on the right: on the left');
+  assert.deepEqual(place(row, { width: 340, height: 300 }, view, { side: 'right' }), placeBeside(row, { width: 340, height: 300 }, view, { gap: 6 }), 'place() with side right is placeBeside');
+});

@@ -8,7 +8,7 @@ import { place } from '../model/place.js';
  * The limit is off while it measures, and a list that cannot scroll is put back to its top, so where it was scrolled to is
  * kept and given back (MATH-55): hovering a row of the @ menu, or the document loading under it, never moves the list.
  */
-export function usePlaced(anchor, { gap = 6, align = 'start', cap = null } = {}) {
+export function usePlaced(anchor, { gap = 6, align = 'start', cap = null, side = 'below' } = {}) {
   const ref = React.useRef(null);
   const [at, setAt] = React.useState(null);
   React.useLayoutEffect(() => {
@@ -18,7 +18,7 @@ export function usePlaced(anchor, { gap = 6, align = 'start', cap = null } = {})
     el.style.maxHeight = held;
     if (el.scrollTop !== scrolled) el.scrollTop = scrolled;
     const want = cap ? Math.min(natural, cap) : natural;
-    const spot = place(anchor, { width, height: want }, { width: window.innerWidth || 1200, height: window.innerHeight || 800 }, { gap, align });
+    const spot = place(anchor, { width, height: want }, { width: window.innerWidth || 1200, height: window.innerHeight || 800 }, { gap, align, side });
     const next = { left: spot.left, top: spot.top, maxHeight: spot.maxHeight != null ? spot.maxHeight : want < natural ? want : null };
     setAt((prev) => (prev && prev.left === next.left && prev.top === next.top && prev.maxHeight === next.maxHeight ? prev : next));
   });

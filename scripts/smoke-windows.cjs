@@ -52,7 +52,7 @@ function smoke() {
   const appWindows = () => BrowserWindow.getAllWindows().filter((win) => !win.isDestroyed() && win.webContents.getURL().startsWith('engelbart://app/index.html'));
   const state = () => JSON.parse(fs.readFileSync(path.join(root, '.engelbart', 'state.json'), 'utf8'));
   const editorText = (win) => js(win.webContents, 'document.querySelector("main [data-editor]")?.innerText || ""').catch(() => '');
-  const here = (win) => js(win.webContents, 'document.querySelector("[data-crumb-here]")?.dataset.crumbHere || null').catch(() => null);
+  const here = (win) => js(win.webContents, 'document.querySelector("[data-workspace-here]")?.dataset.workspaceHere || null').catch(() => null);
   const cards = (win) => win.contentView.children.filter((view) => view.webContents?.getURL() === 'engelbart://app/post-it.html');
   const key = (wc, keyCode, ch) => { wc.sendInputEvent({ type: 'keyDown', keyCode }); if (ch) wc.sendInputEvent({ type: 'char', keyCode: ch }); wc.sendInputEvent({ type: 'keyUp', keyCode }); };
   const typeKeys = async (wc, text) => { for (const ch of text) { key(wc, ch === ' ' ? 'Space' : ch, ch); await pause(8); } };
@@ -122,7 +122,11 @@ function smoke() {
 
       /* ---------------------------------------------- saved windows; closing one leaves the other */
       b.setBounds({ x: 120, y: 90, width: 1000, height: 700 });
-      await js(b.webContents, 'document.querySelector("[data-crumb-home]").click()');
+      await js(b.webContents, 'document.querySelector("[data-sb-trigger=project]").click()'); // the project's menu → All projects
+      await until(() => js(b.webContents, '!!document.querySelector("[data-sb-switch-project]")'), 'the project menu');
+      await js(b.webContents, 'document.querySelector("[data-sb-switch-project]").click()');
+      await until(() => js(b.webContents, '!!document.querySelector("[data-sb-all-projects]")'), 'its projects');
+      await js(b.webContents, 'document.querySelector("[data-sb-all-projects]").click()');
       await until(() => js(b.webContents, '!document.querySelector("main [data-editor]")'), 'second window on the projects screen');
       await until(() => (state().windows || []).length === 2 && state().windows.some((entry) => entry.projectId === null), 'both windows in state.json');
       const kept = state().windows;

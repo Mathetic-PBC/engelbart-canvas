@@ -575,9 +575,15 @@ function recountWorkspaces(ctx) {
   return fixed;
 }
 
+// When a workspace's document was last saved (workspace.md's mtime; made counts as saved): the sidebar lists the workspaces
+// worked in last (2026-10-07), with state.json `recent` for the notes typed in them.
+function editedAt(dir) {
+  try { return fs.statSync(path.join(dir, 'workspace.md')).mtime.toISOString(); } catch { return null; }
+}
+
 function workspaceTree(parentDir, depth = 0) {
   if (depth > 32) return [];
-  return workspaceRecords(parentDir).map((workspace) => ({ ...publicWorkspace(workspace), children: workspaceTree(workspace.dir, depth + 1) }));
+  return workspaceRecords(parentDir).map((workspace) => ({ ...publicWorkspace(workspace), edited: editedAt(workspace.dir), children: workspaceTree(workspace.dir, depth + 1) }));
 }
 
 // A workspace's directory name: never one the project keeps for itself.
@@ -1011,7 +1017,32 @@ function forgetProject(ctx, projectId) {
     const list = Array.isArray(state[key]) ? state[key] : [];
     if (list.some((entry) => plainObject(entry) && entry.projectId === projectId)) patch[key] = list.filter((entry) => !(plainObject(entry) && entry.projectId === projectId));
   }
+  const starred = plainObject(state.starred) || {};
+  if (projectId in starred) { const { [projectId]: gone, ...kept } = starred; patch.starred = kept; } // eslint-disable-line no-unused-vars
   if (Object.keys(patch).length) writeState(ctx, patch);
+}
+
+/* ----------------------------------------------------------------- starred */
+
+// What the sidebar's Starred lists (2026-10-07): `starred[projectId]`, the library ids starred in that project, oldest
+// first. A star is the project's, not the library row's: one paper can be starred in one project and not in another.
+const MAX_STARRED = 500;
+const starredIds = (value) => [...new Set((Array.isArray(value) ? value : []).map(idOrNull).filter(Boolean))].slice(-MAX_STARRED);
+
+function readStarred(ctx, projectId) {
+  const id = idOrNull(projectId); if (!id) return [];
+  return starredIds((plainObject(readState(ctx).starred) || {})[id]);
+}
+
+/** Stars an item in a project (`on`), or takes its star off. → the project's starred ids. */
+function setStarred(ctx, projectId, itemId, on) {
+  const pid = idOrNull(projectId), iid = idOrNull(itemId);
+  if (!pid || !iid) throw new TypeError('a star needs a project id and a library id');
+  const all = plainObject(readState(ctx).starred) || {};
+  const held = starredIds(all[pid]).filter((id) => id !== iid);
+  const next = on ? starredIds([...held, iid]) : held;
+  writeState(ctx, { starred: { ...all, [pid]: next } });
+  return next;
 }
 
 /* ------------------------------------------------------------- where to next */
@@ -1268,6 +1299,8 @@ module.exports = {
   writeStage,
   readNav,
   recordEdit,
+  readStarred,
+  setStarred,
   cleanDocRef,
   agentStarted,
   agentFinished,

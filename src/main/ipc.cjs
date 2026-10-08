@@ -335,6 +335,14 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // Every change is announced on `engelbart:nav`; the renderer reads `nav` again.
   const navChanged = () => notify('engelbart:nav', {});
   handle('nav', withCtx((ctx) => projects.readNav(ctx)));
+  // The sidebar's Starred (2026-10-07): a project's starred library ids. Every change is announced on `engelbart:starred`
+  // with the project's list, so its other windows show it too.
+  handle('starred', withCtx((ctx, projectId) => projects.readStarred(ctx, projectId)));
+  handle('set-starred', withCtx((ctx, projectId, itemId, on) => {
+    const ids = projects.setStarred(ctx, str(projectId, 'project id', 64), str(itemId, 'library id', 64), on === true);
+    if (notify) notify('engelbart:starred', { projectId, ids });
+    return ids;
+  }));
 
   // GitHub (src/main/github/connection.cjs): signing in through the default browser, and the repositories the App can read.
   // Every change of the sign-in is announced on `engelbart:github` with the status. `github-open` shows GitHub's device
