@@ -74,7 +74,7 @@ const STAGE_SAVE_MS = 150; // the tabs are kept this long after they last change
 const REMOVED_MS = 5000; // how long "Box removed · Undo" stays (as a pdf's "Highlight removed")
 const HOVER_MS = 650; // a tab's card, the first time; then quickly while moving along the strip
 const newId = () => (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : String(Date.now() + Math.random()));
-const blankTab = () => ({ id: newId(), url: 'about:blank', web: null, item: null, file: null, pdf: null, pendingFind: null, pendingTo: null, sections: null, activeSection: -1 });
+const blankTab = () => ({ id: newId(), url: 'about:blank', web: null, item: null, file: null, pdf: null, pendingFind: null, pendingTo: null, sections: null, activeSection: -1, pendingGuide: null, guide: null });
 const noSections = (t) => (t.sections && t.sections.length ? { ...t, sections: null, activeSection: -1 } : t);
 const isPage = (k) => k.kind === 'web' || k.kind === 'local' || k.kind === 'disk';
 const hasScheme = (input) => /^https?:\/\//i.test(input);
@@ -401,6 +401,14 @@ function paintRanges(ranges, active, scroller) {
   if (r.top < box.top + 24 || r.bottom > box.bottom - 24) scroller.scrollTop += r.top - box.top - scroller.clientHeight / 3;
 }
 const clearRanges = () => { const h = highlights(); if (h) { h.delete(FIND); h.delete(FIND_ON); } };
+// Bart's guide in a file drawn here (onboarding build 2): its passage tinted as PaperView tints it in a pdf, and scrolled to.
+const GUIDE = 'stage-guide';
+function paintGuideIn(root, text) {
+  const ranges = textRanges(root, text).slice(0, 1);
+  const h = highlights();
+  if (h) { if (ranges.length) h.set(GUIDE, new Highlight(...ranges)); else h.delete(GUIDE); }
+  if (ranges[0] && root) { const box = root.getBoundingClientRect(), r = ranges[0].getBoundingClientRect(); root.scrollTop += r.top - box.top - root.clientHeight / 3; }
+}
 
 /* --------------------------------------------------------------------------------------------------- Stage */
 
@@ -559,7 +567,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   // `find`: a passage to find there once it is ready, given to the new tab or to the one that comes forward; `to`, where its section ends.
   // `newTab` (a ⌘-click on a link): a tab of its own, even when one shows it already. `sections`: an @discover guide's for
   // the paper, which come with the passage and replace the tab's (model/stage.js withPassage).
-  const claim = (key, find = '', to = '', { newTab = false, sections = null, also = '' } = {}) => {
+  const claim = (key, find = '', to = '', { newTab = false, sections = null, also = '', guide = null } = {}) => {
     const current = tabsRef.current;
     const front = Math.max(0, current.findIndex((t) => t.id === (frontRef.current || current[0].id)));
     const place = placeTab(current, front, key, { newTab, also });
@@ -567,10 +575,10 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
       const id = current[place.focus].id;
       frontRef.current = id;
       setActiveId(id);
-      if (find) update(id, (t) => withPassage(t, find, to, sections));
+      if (find) update(id, (t) => withPassage(t, find, to, sections, guide));
       return null;
     }
-    const fresh = withPassage({ ...blankTab(), claimed: true }, find, to, sections);
+    const fresh = withPassage({ ...blankTab(), claimed: true }, find, to, sections, guide);
     if (place.replace != null) {
       const old = current[place.replace];
       quiet(api.browserClose(old.id));
@@ -689,6 +697,11 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     const id = claim(`l:${addressKey(fileUrl(file))}`, '', '', options);
     if (id) readPath(id, file, null);
   };
+  // A climb's rung (onboarding build 2): its paper's copy in the project, at its passage, shown as Bart's guide highlight.
+  const openGuide = ({ path: file, find, page = null }, options = {}) => {
+    const id = claim(`l:${addressKey(fileUrl(file))}`, find || '', '', { ...options, guide: find ? { page } : null });
+    if (id) readPath(id, file, null);
+  };
   // Files from the computer open as tabs of their own; + Save is what puts them in the library. Past 15, the rest are left.
   const openPaths = (paths) => {
     let room = MAX_TABS - tabsRef.current.filter((t) => tabKey(t) || t.pdf || t.file).length;
@@ -738,7 +751,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     const page = viewer && typeof viewer.currentPage === 'function' ? viewer.currentPage() : 0;
     return { rowId: p.rowId || null, url: p.rowId ? null : p.url, page: page > 0 ? page : 1, kind: 'pdf' };
   };
-  React.useImperativeHandle(ref, () => ({ openRow, openInput, openPaths, openFile, newTab, closeTab: () => closeTab(tab.id), tabAt, front }));
+  React.useImperativeHandle(ref, () => ({ openRow, openInput, openPaths, openFile, openGuide, newTab, closeTab: () => closeTab(tab.id), tabAt, front }));
 
   /* ------------------------------------------------------------------- @bart on a highlight (MATH-27) */
   // A finished answer onto its mark: the viewer in front adds it when it shows that pdf, and every tab holding the pdf
@@ -1134,6 +1147,9 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   // highlight until stopFindInPage and a file's stays painted until clearRanges, and only the card's closing does either.
   // With the card open already its query becomes the passage, as before; ⌘F later opens it with the last one typed.
   const land = (id, text) => {
+    // Bart's guide in a drawn file (a climb's abstract): tinted as his, scrolled to, no find card.
+    const t = tabsRef.current.find((x) => x.id === id);
+    if (t && t.pendingGuide) { update(id, (x) => landTab(x, text)); paintGuideIn(viewRef.current, text); return; }
     clearPending(id, text);
     const h = keys.current;
     if (!h.finding || h.findText === text) runFind(text, 0);
@@ -1381,6 +1397,8 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
               target={tab.pendingFind || null}
               targetTo={tab.pendingTo || null}
               initialSection={sectionsOn ? tab.sections[tab.activeSection] || null : null}
+              targetGuide={tab.pendingGuide || null}
+              initialGuide={tab.guide || null}
               view={pdf.view || null}
               onView={(view) => { const { seq } = pdf; update(tab.id, (t) => (t.pdf && t.pdf.seq === seq ? { ...t, pdf: { ...t.pdf, view } } : t)); }}
               onTarget={(text, result) => landed(tab.id, text, result)}

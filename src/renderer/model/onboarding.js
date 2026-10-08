@@ -134,3 +134,28 @@ export const TOOL_WHY = {
   claude: 'Anthropic’s agent. Runs @bart and Build with your Claude account.',
   codex: 'OpenAI’s agent. Runs @bart and Build with your ChatGPT account.',
 };
+
+/* ------------------------------------------------------------ preparing the first places to start (build 2) */
+
+/** The longest the preparing screen after Open project stays up: it ends sooner when every sub-question has something. */
+export const PREPARE_MS = 20_000;
+
+/** Whether a climb has something approved to show: a rung read and approved, or the step that stands in for one. */
+export const hasApproved = (climb) => !!(climb && Array.isArray(climb.rungs) && climb.rungs.length);
+
+/**
+ * The preparing screen after Open project (2026-10-08), from what is known: `starts` [{ id, text }] once the project is
+ * made (null while the plan is still being written), `climbs` { <start id>: climb } (main/bart/climbs.cjs), `elapsedMs`
+ * since Open project. → { done, label }: done once every sub-question has at least one approved item, or after
+ * PREPARE_MS, or at once when there are no sub-questions; the label names the step under way, lowercase: reading your
+ * answers (the plan), finding places to start (papers read, a draft written), checking each step (the approval).
+ */
+export function preparingState({ starts = null, climbs = {}, elapsedMs = 0 } = {}) {
+  if (!starts) return { done: false, label: 'reading your answers' };
+  if (!starts.length || elapsedMs >= PREPARE_MS) return { done: true, label: 'checking each step' };
+  const mine = starts.map((start) => (climbs || {})[start.id] || null);
+  if (mine.every(hasApproved)) return { done: true, label: 'checking each step' };
+  // Named by the sub-questions still waiting: the slowest of them is what the screen waits on.
+  const finding = mine.filter((climb) => !hasApproved(climb)).some((climb) => !climb || climb.step === 'reading' || climb.step === 'finding');
+  return { done: false, label: finding ? 'finding places to start' : 'checking each step' };
+}

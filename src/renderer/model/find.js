@@ -35,7 +35,7 @@ export function createTargetGate() {
 // A link's section (2026-09-30, @discover round 2: `#find=<start words>&to=<end words>`): from the start words to just
 // before the first sentence of the next section, tinted under find's colours. Its parts that do not need a page. Since
 // 2026-10-03 the section is find's no longer: it stays while find searches and stops, until another is shown or it is cleared.
-export const FIND = 'pdf-find', FIND_ACTIVE = 'pdf-find-active', SECTION = 'pdf-section';
+export const FIND = 'pdf-find', FIND_ACTIVE = 'pdf-find-active', SECTION = 'pdf-section', GUIDE = 'pdf-guide';
 export const SECTION_PAGES = 6;
 
 /**
@@ -67,4 +67,20 @@ export function paintSection(registry, ranges, Make) {
 /** Find stopped: its matches and its match in front go; a link's section stays (2026-10-03). Nothing of it was ever ink. */
 export function clearFind(registry) {
   if (registry) for (const name of [FIND, FIND_ACTIVE]) registry.delete(name);
+}
+
+// Bart's guide (onboarding build 2, 2026-10-08): a climb's passage, tinted apart from find and the section, and from the
+// person's own ink, which it never is. Like a section it stays while find searches and stops.
+
+/** Which match of a guide's passage is its own: the first on the page it was anchored to, else the first anywhere. */
+export function guideSpot(spots, page) {
+  if (!spots || !spots.length) return null;
+  return (page && spots.find((spot) => spot.page === page)) || spots[0];
+}
+
+/** The guide's passage painted (`registry` CSS.highlights, `Make` the Highlight constructor), or taken away (no ranges). */
+export function paintGuide(registry, ranges, Make) {
+  if (!registry) return;
+  if (!ranges || !ranges.length) { registry.delete(GUIDE); return; }
+  registry.set(GUIDE, new Make(...ranges));
 }

@@ -84,6 +84,7 @@ textarea::placeholder,input::placeholder{color:#8f8f8f;font-style:italic}
 .hov-x:hover{background:#e3e3e3!important;color:#171717!important}
 ::highlight(stage-find){background-color:rgba(0,112,243,.16);color:inherit}
 ::highlight(stage-find-cur){background-color:rgba(0,112,243,.4);color:inherit}
+::highlight(stage-guide){background-color:rgba(47,91,211,.12);color:inherit;text-decoration:underline 1.5px rgba(47,91,211,.55);text-underline-offset:3px}
 /* A project card's Delete (2026-10-03): only while the pointer is on the card; red-free, it darkens on its own hover. */
 .rail-minus{opacity:0;transition:opacity 120ms,color 120ms}
 [data-project-card]:hover .rail-minus,.rail-minus:focus-visible{opacity:1}

@@ -3,7 +3,7 @@ import { api, errorMessage } from '../api.js';
 import Button from '../ui/Button.jsx';
 import Pager from '../ui/Pager.jsx';
 import ThinkingDots from '../ui/ThinkingDots.jsx';
-import { QUESTIONS, forward, wrapUp, pagerOf, cardButtons, partsOf, sentenceOf, soFarOf, planFallback, toolsWanted, TOOL_WHY } from '../model/onboarding.js';
+import { QUESTIONS, forward, wrapUp, pagerOf, cardButtons, partsOf, sentenceOf, soFarOf, planFallback, toolsWanted, preparingState, TOOL_WHY } from '../model/onboarding.js';
 import { launchRows, installable, rowOf } from '../model/tools.js';
 import welcomePng from '../../../design/assets/welcome-cards.png';
 
@@ -21,6 +21,10 @@ import welcomePng from '../../../design/assets/welcome-cards.png';
 // workspace named with the question and the sub-questions under "Suggested places to start" (workspace/StartsBlock.jsx).
 // The tools screen installs Git, Claude Code and Codex in the background (App.jsx holds the setup dialog back until
 // onboarding is over).
+// Build 2 (2026-10-08): after Open project, a short preparing screen (berkeley-research's 3×3 dots and a lowercase label
+// naming the step under way: reading your answers, finding places to start, checking each step) until every sub-question
+// has at least one approved place to start, 20 seconds at most (model/onboarding.js preparingState). The climbs began on
+// the plan, while they were on Putting it together (src/main/bart/climbs.cjs), so it is often done already and flashes by.
 
 // The design's colours (its :root): greys, and one muted olive for what is theirs and what moves them on.
 const C = { g200: '#eaeaea', g300: '#c9c9c9', g500: '#8f8f8f', g700: '#4d4d4d', ink: '#171717', guess: '#a3a3a3', olive: '#6b7a3a', oliveInk: '#55622c', oliveWash: '#f1f3e8', oliveLine: '#b9c296' };
@@ -171,6 +175,7 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
   const [answers, setAnswers] = React.useState({ working: '', why: '', unsure: '' });
   const [parts, setParts] = React.useState(null); // Putting it together's { working, findOut, why }, made as it opens
   const [stuck, setStuck] = React.useState(false);
+  const [preparing, setPreparing] = React.useState('reading your answers'); // the step the preparing screen names
   const [error, setError] = React.useState('');
   const [id, setId] = React.useState(null); // Bart's onboarding session (src/main/bart/onboard.cjs)
   const idRef = React.useRef(null);
@@ -255,17 +260,41 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
   const open = async () => {
     const now = parts || partsOf(answers);
     const text = sentenceOf(now);
+    const began = Date.now();
+    setPreparing('reading your answers');
     go('open');
+    let result;
     try {
       const planned = (await askPlan(text, now.findOut)) || planFallback(answers, now.findOut);
-      const result = await api.startProject({ name: planned.name, description: text, question: planned.question, starts: planned.starts, brief: fullAnswers(now.findOut), folder: 'new', onboardingId: idRef.current });
+      result = await api.startProject({ name: planned.name, description: text, question: planned.question, starts: planned.starts, brief: fullAnswers(now.findOut), folder: 'new', onboardingId: idRef.current });
       made.current = true;
-      await onDone(result);
     } catch (failure) {
       setStep('together');
       setError(errorMessage(failure));
+      return;
     }
+    await prepared(result, began);
+    await onDone(result);
   };
+
+  // The preparing screen: until every sub-question has something approved, or PREPARE_MS from Open project. Asked when
+  // main says a climb changed, and every half second besides (a change told before this listened is not missed).
+  const prepared = (result, began) => new Promise((resolve) => {
+    const starts = (result && result.starts) || [];
+    let ended = false, timer = null, stop = () => {};
+    const check = async () => {
+      if (ended) return;
+      let climbs = {};
+      try { climbs = (await api.workspaceClimbs(result.project.id, result.workspaceId)).starts || {}; } catch { climbs = {}; }
+      const state = preparingState({ starts, climbs, elapsedMs: Date.now() - began });
+      if (ended) return;
+      setPreparing(state.label);
+      if (state.done) { ended = true; clearInterval(timer); stop(); resolve(); }
+    };
+    stop = api.onClimbsChanged ? api.onClimbsChanged((payload) => { if (payload && payload.workspaceId === result.workspaceId) void check(); }) || (() => {}) : () => {};
+    timer = setInterval(() => { void check(); }, 500);
+    void check();
+  });
 
   const pager = pagerOf(flowMode, step, flowOptions);
   const errorLine = error ? <span data-onboarding-error="1" style={{ font: '12.5px/1.5 var(--font-sans)', color: '#e70022', textAlign: 'center', overflowWrap: 'anywhere' }}>{error}</span> : null;
@@ -366,7 +395,7 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
       </>
     );
   } else if (step === 'open') {
-    body = <div data-screen-label="Opening" style={{ display: 'flex', justifyContent: 'center', minHeight: 120, alignItems: 'center' }}><ThinkingDots label="opening your project" /></div>;
+    body = <div data-screen-label="Preparing" data-onboarding-preparing={preparing} style={{ display: 'flex', justifyContent: 'center', minHeight: 120, alignItems: 'center' }}><ThinkingDots label={preparing} /></div>;
   }
 
   return (

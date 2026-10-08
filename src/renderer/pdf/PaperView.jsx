@@ -16,6 +16,9 @@
 // passage alone is. The section is find's no longer (2026-10-03, the Stage's Sections menu): it stays while find
 // searches and stops, until another is shown or clearSection(). `initialSection` { find, to }: the section to show the
 // same way when the viewer opens with no target (a tab with a guide's sections come to the front again). Never ink.
+// Bart's guide (onboarding build 2, 2026-10-08): with `targetGuide` ({ page }) the target is a climb's passage, shown as
+// Bart's guide highlight (GUIDE, blue, apart from find's yellow and from the person's own ink), on its page when it is
+// found there; `initialGuide` { find, page } shows it again when the tab comes back. Never ink, never saved.
 // A margin note mentions library items (MATH-21, 2026-10-05): `@` in it opens the @ menu (`mentionItems`, the workspace's
 // list, of which only library rows are kept, and Bart at the start of a highlight's note: MATH-27), and a pick writes
 // `@[Name](lib:<id>)` into the note (model/doc.js libMention).
@@ -74,7 +77,7 @@ import React from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import rough from 'roughjs';
 import { mergeLineRects, placeHighlight, boxSeed, selectionParts, scalePart, partMarks, passageOf, stackNotes, wordBounds, pdfText, pageWindow } from './marks.js';
-import { nextFind, createTargetGate, sectionSpans, paintSection, clearFind, FIND, FIND_ACTIVE } from '../model/find.js';
+import { nextFind, createTargetGate, sectionSpans, paintSection, paintGuide, guideSpot, clearFind, FIND, FIND_ACTIVE } from '../model/find.js';
 import { wheelZooms, wheelZoom, createPageCache } from '../model/paper-zoom.js';
 import { nearOrder, allOrder, tooFar, DRAW_AHEAD } from '../model/paper-draw.js';
 import { mentionAt, libMention, fileMention, fileMentionOf, noteHtml, noteInkHtml, noteParts, noteOffset, inlineHtml, esc, LIB_MENTION_RE } from '../model/doc.js';
@@ -157,6 +160,7 @@ const LAYER_CSS = `
 [data-pdf] [data-box] a{color:#0070f3;text-decoration:underline;text-underline-offset:2px}
 @keyframes pdf-spin{to{transform:rotate(360deg)}}
 ::highlight(pdf-section){background-color:rgba(255,196,0,.13)}
+::highlight(pdf-guide){background-color:rgba(47,91,211,.16);text-decoration:underline 1.5px rgba(47,91,211,.6);text-underline-offset:3px}
 ::highlight(pdf-find){background-color:rgba(255,196,0,.35)}
 ::highlight(pdf-find-active){background-color:rgba(255,140,0,.6)}
 `;
@@ -400,7 +404,8 @@ export default class PaperView extends React.Component {
     this.findSpots = []; // where each of findRanges is: { page, from, to } in its page's text
     this.section = null; // { text, to, spot }: a link's section, its start words found at `spot` ({ page, from, to })
     this.gate = createTargetGate();
-    const first = props.target ? { find: props.target, to: props.targetTo } : props.initialSection || {};
+    this.guide = null; // { text, page }: Bart's guide passage shown (targetGuide / initialGuide)
+    const first = props.target ? { find: props.target, to: props.targetTo } : props.initialSection || (props.initialGuide ? { find: props.initialGuide.find } : {});
     this.gate.set(targetKey(first.find, first.to));
   }
 
@@ -509,6 +514,7 @@ export default class PaperView extends React.Component {
     this.cancelLayout();
     this.stopFind();
     this.clearSection();
+    this.clearGuide();
     if (this.doc) { const d = this.doc; this.doc = null; destroyDoc(d); }
   }
 
@@ -567,7 +573,7 @@ export default class PaperView extends React.Component {
       if (gen !== this.gen) { destroyDoc(doc); return; }
       this.doc = doc;
       this.setState({ note: '' });
-      const view = this.props.target || this.props.initialSection ? null : this.props.view;
+      const view = this.props.target || this.props.initialSection || this.props.initialGuide ? null : this.props.view;
       if (view && view.zoom > 0) this.zoom = view.zoom;
       await this.layout(null);
       const h = this.host.current;
@@ -931,6 +937,7 @@ export default class PaperView extends React.Component {
       this.textsAt = gen;
       if (this.findQuery) this.report(this.find(this.findQuery, 0, { scroll: false }));
       if (this.section) { this.section.spot = this.sectionStart(this.section.text).spot; this.paintSection(); } // the text layer was drawn again: found again
+      if (this.guide) this.showGuide(this.guide.text, this.guide.page, { scroll: false });
       const text = this.gate.drawn();
       if (text) this.applyTarget(text);
     } catch (err) {
@@ -1059,7 +1066,8 @@ export default class PaperView extends React.Component {
   // find has not been asked anything.
   applyTarget(key) {
     const [text, to = ''] = String(key).split('\n');
-    const result = this.showSection(text, to);
+    const guide = this.props.targetGuide || (!this.props.target && this.props.initialGuide && this.props.initialGuide.find === text ? this.props.initialGuide : null);
+    const result = guide ? this.showGuide(text, guide.page) : this.showSection(text, to);
     if (typeof this.props.onTarget === 'function') this.props.onTarget(text, result);
   }
 
@@ -1087,6 +1095,25 @@ export default class PaperView extends React.Component {
     this.paintSection();
     this.scrollToRange(range);
     return { matches, active: 1 };
+  }
+
+  /** Bart's guide passage (2026-10-08): found on its page (else its first match), tinted as his, scrolled to. Not ink. */
+  showGuide(find, page = null, { scroll = true } = {}) {
+    const text = String(find || '');
+    if (!text.trim()) { this.clearGuide(); return { matches: 0, active: 0 }; }
+    const pages = this.pageTexts();
+    const spots = this.matchSpots(text, pages);
+    const spot = guideSpot(spots, page);
+    const range = spot ? this.rangeIn(pages, spot.page, spot.from, spot.to) : null;
+    this.guide = { text, page };
+    paintGuide(highlights(), range ? [range] : [], Highlight);
+    if (range && scroll) this.scrollToRange(range);
+    return { matches: spots.length, active: range ? 1 : 0 };
+  }
+
+  clearGuide() {
+    this.guide = null;
+    paintGuide(highlights(), [], null);
   }
 
   clearSection() {

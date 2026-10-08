@@ -317,9 +317,9 @@ async function createProjectWithWelcome(ctx, input, { workspaceName = 'Getting s
   const workspace = await createWorkspace(ctx, project.id, { name: workspaceName });
   const note = await createNote(ctx, project.id, { name: 'Welcome!', workspaceId: workspace.id, text: WELCOME_NOTE });
   await setWorkspaceContext(ctx, project.id, workspace.id, [note.id, ...context.filter((id) => id !== note.id)]);
-  if (cleanStarts(starts).length) await setWorkspaceStarts(ctx, project.id, workspace.id, starts);
+  const saved = cleanStarts(starts).length ? (await setWorkspaceStarts(ctx, project.id, workspace.id, starts)).starts : [];
   if (project.description && describe) await writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id }, `${project.description}\n`);
-  return { project, workspaceId: workspace.id, workspaceName: workspace.name, noteId: note.id, noteName: note.name };
+  return { project, workspaceId: workspace.id, workspaceName: workspace.name, noteId: note.id, noteName: note.name, starts: saved };
 }
 
 async function setProjectDirectory(ctx, id, directory) {
@@ -1233,7 +1233,11 @@ function resolveTypedPath(ctx, project, input) {
   else candidates = [project.dir, ctx.dataRoot, ctx.root, project.directory].filter(Boolean).map((base) => path.join(base, target));
   const resolved = stageFiles.reading(() => fs.realpathSync(candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0])); // nothing there, or macOS keeps it
   const homeReal = fs.realpathSync(ctx.homeDir);
-  if (resolved !== homeReal && !resolved.startsWith(homeReal + path.sep)) throw new Error('Only files inside your home directory can be opened');
+  const inside = (dir) => resolved === dir || resolved.startsWith(dir + path.sep);
+  // The project's own files (the papers its climbs open, .context/papers: bart/climbs.cjs) open wherever its data root is.
+  let ownReal = null;
+  try { ownReal = fs.realpathSync(project.dir); } catch { ownReal = null; }
+  if (!inside(homeReal) && !(ownReal && inside(ownReal))) throw new Error('Only files inside your home directory can be opened');
   return resolved;
 }
 

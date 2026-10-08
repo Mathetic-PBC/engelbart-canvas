@@ -1428,9 +1428,37 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     try {
       await api.setWorkspaceStarts(project.id, docWorkspaceId, next);
       await reload();
+      // An edited sub-question is climbed again, for its new words (onboarding build 2).
+      if (api.ensureClimbs) await api.ensureClimbs(project.id, docWorkspaceId);
     } catch (error) {
       onError(error);
     }
+  };
+  // Their climbs (onboarding build 2, main/bart/climbs.cjs): read when the workspace comes to the front and whenever main
+  // says they changed. Coming to the front, a start with no climb for its words (or one a quit left unfinished) is climbed.
+  const [climbs, setClimbs] = React.useState({ workspaceId: null, starts: {} });
+  const [activeRung, setActiveRung] = React.useState(null);
+  const climbWorkspace = frontStarts.length ? docWorkspaceId : null;
+  React.useEffect(() => {
+    if (!climbWorkspace || !api.workspaceClimbs) return undefined;
+    let live = true;
+    const load = () => api.workspaceClimbs(project.id, climbWorkspace).then((out) => { if (live) setClimbs({ workspaceId: climbWorkspace, starts: (out && out.starts) || {} }); }).catch(() => {});
+    const stop = api.onClimbsChanged((payload) => { if (payload && payload.workspaceId === climbWorkspace) void load(); });
+    void load();
+    api.ensureClimbs(project.id, climbWorkspace).catch(() => {});
+    return () => { live = false; if (stop) stop(); };
+  }, [project.id, climbWorkspace]); // eslint-disable-line react-hooks/exhaustive-deps
+  const frontClimbs = climbs.workspaceId === climbWorkspace ? climbs.starts : {};
+  // A rung opens its paper in the Stage at its passage, highlighted as Bart's guide (never ink of theirs).
+  const openRung = (rung) => {
+    if (!rung.open || !rung.open.path || !stageRef.current) { onError(new Error('That paper is not in this project any more.')); return; }
+    setActiveRung(rung.id);
+    showRight('stage');
+    stageRef.current.openGuide({ path: rung.open.path, find: rung.open.find, page: rung.open.page || null });
+  };
+  // A step that is not a paper: their files, chosen here, into the library and this workspace.
+  const climbAction = async () => {
+    try { const problems = await pickFromDisk(); if (problems.length) onError(new Error(problems.join('\n'))); } catch (error) { onError(error); }
   };
 
   const renameDoc = async (next) => {
@@ -1786,7 +1814,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
                 onKeepMine={() => keepMine(doc.key)}
                 onTakeTheirs={() => takeTheirs(doc.key)}
                 onClose={pane ? () => closeBeside(i) : null}
-                under={!pane && frontStarts.length ? <StartsBlock starts={frontStarts} onSave={saveStarts} /> : null}
+                under={!pane && frontStarts.length ? <StartsBlock key={docWorkspaceId} starts={frontStarts} onSave={saveStarts} climbs={frontClimbs} activeRung={activeRung} onOpenRung={openRung} onAction={climbAction} onOpenMore={(url) => openLink(url)} /> : null}
                 empty={pane ? null : noWorkspace}
                 style={paneStyle(i)}
                 editor={{

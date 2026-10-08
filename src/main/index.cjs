@@ -25,6 +25,9 @@ const { inspectPdf } = require('./context/pdf-kind.cjs');
 const { createCliSummarizer, createFakeSummarizer } = require('./context/summarizer.cjs');
 const { createBart, createFakeBart, createThreads, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS } = require('./bart/ask.cjs');
 const { createOnboard, createFakeSession } = require('./bart/onboard.cjs');
+const { createClimbs } = require('./bart/climbs.cjs');
+const { createShelf } = require('./bart/shelf.cjs');
+const { createPapers } = require('./bart/papers.cjs');
 const { rememberChoice } = require('./bart/choices.cjs');
 const { modelsInForce, createModelSettings } = require('./bart/settings.cjs');
 const { resolveShell } = require('./terminal/launch.cjs');
@@ -102,6 +105,7 @@ let sweeper = null;
 let zoteroLibrary = null; // the Zotero library's mirror (src/main/zotero/sync.cjs), made with the Zotero sign-in
 let bart = null;
 let onboard = null; // Bart's part in onboarding's cards (./bart/onboard.cjs)
+let climbs = null; // the climbs under a workspace's suggested places to start (./bart/climbs.cjs, onboarding build 2)
 let builds = null;
 let sandbox = null;
 let tools = null;
@@ -219,6 +223,7 @@ async function requestQuit({ update = false } = {}) {
     if (sweeper) await sweeper.stop();
     if (bart) bart.stopAll();
     if (onboard) onboard.closeAll();
+    if (climbs) climbs.stopAll();
     if (builds) await builds.stopAll(); // each running turn stops, saves a checkpoint and is marked interrupted
     // No E2B preview is left running (and paid for) after quitting: a ready one goes to sleep, to wake when it is next
     // opened, and one still being set up stops. One that cannot be reached (offline, signed out) does not hold the quit:
@@ -634,8 +639,22 @@ if (!hasSingleInstanceLock) {
       : createBart({ readModels: bartModels, onPicked: bartPicked, runDirectory: path.join(app.getPath('userData'), 'bart-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-bart'), brainstormCodexHome: path.join(app.getPath('userData'), 'codex-home-brainstorm'), discoverCodexHome: path.join(app.getPath('userData'), 'codex-home-discover'), threads: bartThreads(), brainstormThreads: brainstormThreads(), discoverThreads: discoverThreads(), tools });
     // Onboarding's cards (2026-10-07): one session per onboarding, warm from when it opens, on the fastest level Bart has
     // (bart/models.cjs onboardStep), and OpenAlex searches straight from here. ENGELBART_BART_FAKE=1 answers without a model.
+    // Build 2 (2026-10-08): the climbs, begun on the plan while the cards are answered and written into the project. The
+    // papers they quote are read once into userData (start-papers); the writer is @bart's first step, the approval its
+    // second (Opus high). A change is told to every window.
+    const papers = createPapers();
+    climbs = createClimbs({
+      readModels: bartModels,
+      ...(process.env.ENGELBART_BART_FAKE === '1' ? { makeSession: () => createFakeSession({ delayMs: 600 }) } : {}),
+      sessionOptions: { runDirectory: path.join(app.getPath('userData'), 'onboarding-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-climbs'), tools },
+      shelf: createShelf({ dir: path.join(app.getPath('userData'), 'start-papers'), papers }),
+      papers,
+      onChange: (payload) => { if (windows) windows.broadcast('engelbart:climbs-changed', payload); },
+    });
     onboard = createOnboard({
       readModels: bartModels,
+      papers,
+      climbs,
       ...(process.env.ENGELBART_BART_FAKE === '1' ? { makeSession: () => createFakeSession() } : {}),
       sessionOptions: { runDirectory: path.join(app.getPath('userData'), 'onboarding-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-onboarding'), tools },
     });
@@ -926,6 +945,7 @@ if (!hasSingleInstanceLock) {
       writeClipboard: (text) => clipboard.writeText(text),
       bart,
       onboard,
+      climbs,
       builds,
       sandbox,
       readModels,

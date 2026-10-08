@@ -139,6 +139,10 @@ const engelbartAPI = Object.freeze({
   restoreWorkspace: invoke('restore-workspace'),
   setWorkspaceContext: invoke('set-workspace-context'),
   setWorkspaceStarts: invoke('set-workspace-starts'),
+  // A workspace's climbs (src/main/bart/climbs.cjs, onboarding build 2): kept, ensured, and told when they change.
+  workspaceClimbs: invoke('workspace-climbs'),
+  ensureClimbs: invoke('climbs-ensure'),
+  onClimbsChanged: (callback) => subscribe('engelbart:climbs-changed', callback),
   saveImage: invoke('save-image'),
   readImage: invoke('read-image'),
   createNote: invoke('create-note'),

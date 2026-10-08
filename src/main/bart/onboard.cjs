@@ -12,7 +12,8 @@
 //     three sub-questions, made while they are on the card, so they are there the moment the project opens.
 // Every message carries every answer so far, so a session started again loses nothing.
 //
-// The searches (for build 2, which sorts the papers under the sub-questions) run straight from main against OpenAlex
+// The searches (for build 2's climbs, ./climbs.cjs: the best papers are read as they are found, and the plan's
+// sub-questions are climbed the moment it is written, attach binding them to the project) run straight from main against OpenAlex
 // (./papers.cjs `search`), with no agent: 3 to 5 after each of the first three cards, their papers merged by id and kept
 // with the project, <project>/.context/start-candidates.json, once it exists; until then here. A search that ends after
 // the project opened is written there too. Searches the model did not write are made from their own words (queriesOf).
@@ -170,7 +171,7 @@ function readCandidates(projectDir) {
  * `readModels`: @bart's list in force (the provider its question would start on). `makeSession(options)`: a warm session
  * (./onboard-session.cjs; a fake one in tests). `papers`: ./papers.cjs's tools, of which only `search` is used.
  */
-function createOnboard({ readModels, makeSession = (options) => createWarmSession(options), papers = createPapers(), sessionOptions = {}, idleMs = IDLE_MS, now = () => new Date().toISOString() } = {}) {
+function createOnboard({ readModels, makeSession = (options) => createWarmSession(options), papers = createPapers(), climbs = null, sessionOptions = {}, idleMs = IDLE_MS, now = () => new Date().toISOString() } = {}) {
   const held = new Map(); // id → { session, back, searches, papers, projectDir, pending, timer, suggestions, planNext, planning }
   const get = (id) => {
     const entry = typeof id === 'string' ? held.get(id) : null;
@@ -205,6 +206,9 @@ function createOnboard({ readModels, makeSession = (options) => createWarmSessio
         entry.searches.push({ after: card, query, at: now(), error: String(error && error.message || error).slice(0, 200) });
       }
       keep(entry);
+      // Build 2: the best papers so far are read now (record, pdf, text), so their climbs can start the moment the
+      // sub-questions exist.
+      if (climbs) { try { climbs.prefetch(entry.papers); } catch { /* read later, when a climb asks */ } }
     }
   }
 
@@ -213,7 +217,9 @@ function createOnboard({ readModels, makeSession = (options) => createWarmSessio
     if (!entry) return false;
     clearTimeout(entry.timer);
     for (const which of ['session', 'back']) if (entry[which]) { try { entry[which].close(); } catch { /* gone */ } entry[which] = null; }
-    // Searches still running finish into the project's file; nothing else is kept once they do.
+    // Searches still running finish into the project's file; nothing else is kept once they do. Climbs not bound to a
+    // project (onboarding left without one) stop.
+    if (climbs && !entry.projectDir) climbs.cancel(id);
     Promise.allSettled([...entry.pending]).then(() => held.delete(id));
     entry.closed = true;
     return true;
@@ -293,18 +299,25 @@ function createOnboard({ readModels, makeSession = (options) => createWarmSessio
           out = readPlan(text, next.given);
         } catch { out = { ...fallbackPlan(next.given), fallback: true }; }
         entry.planning = false;
+        // Build 2: the latest plan's sub-questions are climbed at once, while the person is still on the card.
+        if (climbs && !entry.planNext && !entry.closed) { try { climbs.begin(id, { question: out.question, starts: out.starts, brief: next.given, candidates: () => entry.papers }); } catch { /* climbed when the project opens */ } }
         for (const resolve of next.askers) resolve(out);
         runNext();
       };
       runNext();
       return answered;
     },
-    /** The project exists: what was found is written into it, and so is what is still being found. The session ends. */
-    attach(id, projectDir) {
+    /**
+     * The project exists: what was found is written into it, and so is what is still being found. The session ends.
+     * `made` { projectId, workspaceId, starts: [{ id, text }], question, brief }: the climbs begun on the plan become its
+     * starts' (build 2, ./climbs.cjs bind).
+     */
+    attach(id, projectDir, made = null) {
       const entry = held.get(id);
       if (!entry || typeof projectDir !== 'string') return false;
       entry.projectDir = projectDir;
       keep(entry);
+      if (climbs && made) { try { climbs.bind(id, { projectDir, projectId: made.projectId, workspaceId: made.workspaceId, starts: made.starts || [], question: made.question, brief: made.brief || null, candidates: () => entry.papers }); } catch { /* climbed when the workspace shows */ } }
       close(id);
       return true;
     },
@@ -315,6 +328,30 @@ function createOnboard({ readModels, makeSession = (options) => createWarmSessio
     /** Settles once the searches started so far have ended (tests). */
     settled(id) { const entry = held.get(id); return entry ? Promise.allSettled([...entry.pending]) : Promise.resolve([]); },
   };
+}
+
+/** A scripted climb's draft: the first sentence of the first quotable text of up to three papers, in the climb's order. */
+function fakeDraft(message) {
+  const stages = ['problem', 'known', 'open'];
+  const rungs = [];
+  let paper = null;
+  for (const line of message.split('\n')) {
+    const head = line.match(/^\[(W\d+)\]/);
+    if (head) { paper = head[1]; continue; }
+    const text = line.match(/^ {2}(?:Abstract|Excerpt \d+ \([^)]*\)): (.+)$/);
+    if (!text || !paper || rungs.some((one) => one.paper === paper) || rungs.length >= 3) continue;
+    const sentence = (text[1].match(/^.{30,}?[.!?](?=\s|$)/) || [text[1].slice(0, 200)])[0];
+    rungs.push({ stage: stages[rungs.length], paper, passage: sentence, line: `fake step ${rungs.length + 1}`, gloss: '' });
+  }
+  return JSON.stringify({ answer: 'A fake answer.', rungs, more: [] });
+}
+
+/** A scripted check: every rung approved, and the newcomer gets there. */
+function fakeCheck(message) {
+  const count = (message.match(/^Rung \d+ /gm) || []).length;
+  const lines = Array.from({ length: count }, (_, i) => JSON.stringify({ rung: i + 1, read_in_context: true, says_what_line_claims: true, self_contained: true, assumes_only_earlier: true, why: 'fake check', fix: null }));
+  lines.push(JSON.stringify({ newcomer: true, own_answer: 'A fake answer.', newcomer_answer: 'A fake answer.', same: true, confusing: [] }));
+  return lines.join('\n');
 }
 
 /**
@@ -331,6 +368,10 @@ function createFakeSession({ delayMs = 300 } = {}) {
     if (/finish the sentence "So that/.test(message)) return `fake purpose: ${said(QUESTIONS.why).toLowerCase()}\nsearch: ${queriesOf(said(QUESTIONS.why))[0] || 'fake'}\nsearch: fake search two\nsearch: fake search three`;
     if (/Suggest one way to fill the blank/.test(message)) return `fake way to find out about ${said(QUESTIONS.unsure).toLowerCase() || 'it'}`;
     if (/Write exactly five lines/.test(message)) return 'name: Fake Project Name\nquestion: What would a fake question ask?\n1. What makes the fake problem hard?\n2. What has fake prior work found?\n3. What does your own fake data show?';
+    // Build 2's climbs (./climb.cjs): a draft quoting the first sentence of up to three papers, and a check approving all.
+    if (/Papers you may quote/.test(message)) return fakeDraft(message);
+    if (/Write one line of JSON for rung 1/.test(message)) return '{"rung": 1, "read_in_context": true, "says_what_line_claims": true, "self_contained": true, "assumes_only_earlier": true, "why": "fake check", "fix": null}';
+    if (/the newcomer check/.test(message)) return fakeCheck(message);
     return 'search: fake search one\nsearch: fake search two\nsearch: fake search three';
   };
   return {

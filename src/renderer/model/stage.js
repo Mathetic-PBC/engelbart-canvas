@@ -73,15 +73,19 @@ export function sectionAt(sections, find, to) {
  * ready. The sections an @discover guide gave with it (guideSections, 2026-10-03) replace the tab's, the clicked one in
  * front (`activeSection`); a passage from anywhere else leaves the tab none. No passage: the tab as it was.
  */
-export function withPassage(tab, find, to, sections) {
+export function withPassage(tab, find, to, sections, guide = null) {
   if (!find) return tab;
+  // Bart's guide (onboarding build 2, 2026-10-08): a climb's passage, `guide` { page }; it waits as any passage does, and
+  // lands as the guide highlight (landTab), with no sections and no find card. Any other passage replaces it.
+  if (guide) return { ...tab, pendingFind: find, pendingTo: null, sections: [], activeSection: -1, pendingGuide: { page: guide.page || null }, guide: null };
   const list = Array.isArray(sections) ? sections : [];
-  return { ...tab, pendingFind: find, pendingTo: to || null, sections: list, activeSection: sectionAt(list, find, to) };
+  return { ...tab, pendingFind: find, pendingTo: to || null, sections: list, activeSection: sectionAt(list, find, to), pendingGuide: null, guide: null };
 }
 
 /** A tab whose passage was found (Stage landed): it waits no longer, and the section it starts is the one in front. */
 export function landTab(tab, find) {
   if (!tab || tab.pendingFind !== find) return tab;
+  if (tab.pendingGuide) return { ...tab, pendingFind: null, pendingTo: null, guide: { find, page: tab.pendingGuide.page || null }, pendingGuide: null };
   const sections = tab.sections || [];
   return { ...tab, pendingFind: null, pendingTo: null, activeSection: sections.length ? sectionAt(sections, find, tab.pendingTo) : -1 };
 }
@@ -91,7 +95,7 @@ export function landTab(tab, find) {
  * @discover guide's sections came with (2026-10-03), where the Sections menu shows what was found instead. (A page or a
  * drawn file never opens it: Stage land, 2026-10-03.)
  */
-export const landingFinds = (tab) => !(tab && tab.pdf && tab.sections && tab.sections.length);
+export const landingFinds = (tab) => !(tab && ((tab.pdf && tab.sections && tab.sections.length) || tab.pendingGuide || tab.guide));
 
 /** The library row a link's address is: one the Stage shows whose path (or file: address) or url is that address. */
 export function rowForAddress(library, address) {

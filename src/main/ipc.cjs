@@ -219,7 +219,7 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
 // (MATH-54 build 3a): { selection(), screenshot() } (the app passes that window's browser views'), or null.
 // `overleafFor(win, stage)`: a window's Overleaf tabs for an @bart turn (MATH-65; overleaf/stage.cjs forTurn), or null.
 // `getUpdates()`: the updater (updates.cjs), made after this is registered; null until then, and in the tests.
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, onboard = null, replyNow = null }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, onboard = null, climbs = null, replyNow = null }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
   const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
@@ -457,7 +457,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     const starts = (Array.isArray(value.starts) ? value.starts : []).slice(0, 6).map((text) => str(text, 'sub-question', 600));
     const onboardingId = optStr(value.onboardingId, 'onboarding id', 64);
     return onboarding.startProject(ctx, { name: str(value.name, 'name'), description: optStr(value.description, 'description', 8000) || '', question: optStr(value.question, 'question', 600) || '', starts, brief: answersOf(value.brief), folder, directory: folder === 'existing' ? str(value.directory, 'directory', 4096) : '' }).then((made) => {
-      if (onboardingId && onboard) onboard.attach(onboardingId, made.project.dir);
+      // The climbs begun on the plan become the first workspace's starts' (build 2, ./bart/climbs.cjs).
+      if (onboardingId && onboard) onboard.attach(onboardingId, made.project.dir, { projectId: made.project.id, workspaceId: made.workspaceId, starts: made.starts || [], question: made.workspaceName, brief: made.project.brief || null });
       // A folder Engelbart made gets its Build repository and first commit now, in the background, once the tool check
       // has found Git (build/manager.cjs prepareDefault): the first Build never meets a folder without a history.
       if (folder === 'new' && builds) void toolsChecked().then(() => builds.prepareDefault(ctx, made.project.id)).catch(() => {});
@@ -512,6 +513,22 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   saving('trash-workspace', withCtx((ctx, pid, wid) => { const out = projects.trashWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); navChanged(); return out; }), { project: first });
   saving('restore-workspace', withCtx((ctx, pid, wid) => { const out = projects.restoreWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); navChanged(); return out; }), { project: first });
   saving('set-workspace-starts', withCtx((ctx, pid, wid, starts) => projects.setWorkspaceStarts(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), (Array.isArray(starts) ? starts : []).slice(0, 24))), { project: first });
+  // A workspace's climbs (onboarding build 2, ./bart/climbs.cjs): what is kept for its starts → { starts: { <id>: climb } };
+  // climbs-ensure also climbs a start that has none for its words (edited, added, or left unfinished by a quit). A
+  // change is told to every window on `engelbart:climbs-changed` ({ projectId, workspaceId }).
+  const climbsOf = (ctx, pid, wid) => {
+    const { project, workspace } = projects.findWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64));
+    return { project, workspace, starts: workspace.starts || [] };
+  };
+  handle('workspace-climbs', withCtx((ctx, pid, wid) => {
+    const { project, starts } = climbsOf(ctx, pid, wid);
+    return climbs ? climbs.read(project.dir, starts.map((start) => start.id)) : { starts: {} };
+  }));
+  handle('climbs-ensure', withCtx((ctx, pid, wid) => {
+    const { project, workspace, starts } = climbsOf(ctx, pid, wid);
+    if (!climbs || !starts.length) return { started: [] };
+    return { started: climbs.ensure({ projectDir: project.dir, projectId: project.id, workspaceId: workspace.id, question: workspace.name, brief: project.brief || null, starts }) };
+  }));
   saving('set-workspace-context', (pid, wid, entries) => changeWorkspaceContext(pid, wid, (ctx, projectId, workspaceId) => projects.setWorkspaceContext(ctx, projectId, workspaceId, entries)), { project: first });
   // The sidebar: search, +, Save and an @mention bring a library item into a workspace; the trash takes it out (and remembers that it did).
   // `picked`: the @ menu linked it; `unmentioned`: its last mention left the document (MATH-57).
