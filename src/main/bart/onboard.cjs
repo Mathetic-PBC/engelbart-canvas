@@ -74,7 +74,7 @@ function stuckMessage(answers, { before = [] } = {}) {
 
 /** The project's name, its question and three sub-questions, from the sentence they put together. */
 function planMessage(answers, sentence) {
-  return `${answersBlock(answers)}\n\nTheir sentence: "${clean(sentence, 1200) || '(not written)'}"\n\nWrite exactly five lines:\nname: a name for the project, 2 to 5 words, title case, from what they are working on\nquestion: their research question, one sentence under 14 words ending in a question mark, from what they want to find out (else what they are least sure about)\n1. a sub-question\n2. a sub-question\n3. a sub-question\nThe three sub-questions break the research question into places to start, each under 12 words, ending in a question mark. At least one is about their own data, study or contribution (what they will collect, build or show), not only what is already published.`;
+  return `${answersBlock(answers)}\n\nTheir sentence: "${clean(sentence, 1200) || '(not written)'}"\n\nWrite exactly five lines:\nname: a name for the project, 2 to 5 words, title case, from what they are working on\nquestion: their research question, one sentence under 14 words ending in a question mark, from what they want to find out (else what they are least sure about)\n1. a sub-question\n2. a sub-question\n3. a sub-question\nThe three sub-questions break the research question into places to start, each under 12 words, ending in a question mark. Order them as a story, the way an advisor walks someone in: 1 is about understanding the problem itself (what it is, where it shows up, why it is hard), 2 about how it has been studied (what is already published, the methods and findings), and 3, last, about their own data, study or contribution (what they will collect, build or show).`;
 }
 
 const strip = (text) => clean(text).replace(/^["“'‘*_-]+|["”'’*_]+$/g, '').trim();
@@ -123,7 +123,8 @@ function fallbackPlan(answers) {
   const name = words.length ? titleCase(words.slice(0, 4)) : 'New project';
   const question = asQuestion(answers.findOut) || asQuestion(answers.unsure) || (topic ? `What is known about ${topic}?` : 'What do you want to find out?');
   const about = topic ? clean(topic, 90).replace(/^[A-Z](?![A-Z])/, (c) => c.toLowerCase()) : 'this';
-  const starts = [`What has already been found about ${about}?`, `What will your own data or study show that is new?`, `What would count as an answer to your question?`];
+  // In the order the prompt asks for (planMessage): the problem, how it has been studied, then their own contribution.
+  const starts = [`What would count as an answer to your question?`, `What has already been found about ${about}?`, `What will your own data or study show that is new?`];
   return { name, question, starts };
 }
 
@@ -329,7 +330,7 @@ function createFakeSession({ delayMs = 300 } = {}) {
     if (/finish the sentence "You're working on/.test(message)) return `fake reflection of ${said(QUESTIONS.working).toLowerCase()}\nsearch: ${queriesOf(said(QUESTIONS.working))[0] || 'fake'}\nsearch: fake search two\nsearch: fake search three`;
     if (/finish the sentence "So that/.test(message)) return `fake purpose: ${said(QUESTIONS.why).toLowerCase()}\nsearch: ${queriesOf(said(QUESTIONS.why))[0] || 'fake'}\nsearch: fake search two\nsearch: fake search three`;
     if (/Suggest one way to fill the blank/.test(message)) return `fake way to find out about ${said(QUESTIONS.unsure).toLowerCase() || 'it'}`;
-    if (/Write exactly five lines/.test(message)) return 'name: Fake Project Name\nquestion: What would a fake question ask?\n1. What has fake prior work found?\n2. What does your own fake data show?\n3. What would fake evidence look like?';
+    if (/Write exactly five lines/.test(message)) return 'name: Fake Project Name\nquestion: What would a fake question ask?\n1. What makes the fake problem hard?\n2. What has fake prior work found?\n3. What does your own fake data show?';
     return 'search: fake search one\nsearch: fake search two\nsearch: fake search three';
   };
   return {

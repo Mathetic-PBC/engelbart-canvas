@@ -1,6 +1,6 @@
 import React from 'react';
 import DocEditor from './DocEditor.jsx';
-import { isUntitled } from '../model/names.js';
+import { isUntitled, titleTyped } from '../model/names.js';
 
 // One document of the middle column (MATH-23): its title, the notice when another window saved over edits here, and its
 // editor. Pane 0 is the document in front (the tab), with the footer's Copy, Build and Clear; pane 1 is a note or a
@@ -8,6 +8,19 @@ import { isUntitled } from '../model/names.js';
 // in its header instead. The two sit side by side, each half the column (Workspace.jsx): neither covers the other.
 
 const FOOT_BUTTON = { padding: '3px 6px', border: 0, borderRadius: 5, background: '#fff', cursor: 'pointer', font: '400 15px/1.4 var(--font-sans)', color: '#8f8f8f', transition: 'color 120ms' };
+
+/**
+ * A key in the title. Escape leaves the title, and that is all it does: marked as used, so the window's Escape (leaving
+ * the full screen) leaves it alone. Enter (with Shift or not: a title is never two lines) names the document and drops
+ * the caret into it.
+ */
+export function titleKeyDown(event, editorRef) {
+  if (event.key === 'Escape') { event.preventDefault(); event.target.blur(); return; }
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  event.target.blur();
+  if (editorRef && editorRef.current && editorRef.current.focusStart) editorRef.current.focusStart();
+}
 
 export default function DocPane({
   index, kind = 'note', editorRef, docKey, text, readOnly = false, title, onRename, titleFocus,
@@ -28,27 +41,22 @@ export default function DocPane({
   const header = (
     <>
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-      <input
+      {/* A textarea, not an input, so a long title (a question, from onboarding) wraps onto as many lines as it needs and
+          is never cut off or scrolled sideways; it grows with its text (field-sizing). Still one line of text: Enter
+          never makes a new line. */}
+      <textarea
         ref={(element) => { if (element && titleFocus && titleFocus.current) { titleFocus.current = false; element.focus(); } }}
+        rows={1}
         value={draft}
         readOnly={readOnly}
-        onChange={(event) => setDraft(event.target.value.replace(/[/\\]/g, '-'))} // a title is a file name: slashes become hyphens as you type
+        onChange={(event) => setDraft(titleTyped(event.target.value))} // slashes become hyphens as you type, line breaks spaces
         onBlur={commit}
-        onKeyDown={(event) => {
-          // Escape leaves the title, and that is all it does: marked as used, so the window's Escape (leaving the full
-          // screen) leaves it alone.
-          if (event.key === 'Escape') { event.preventDefault(); event.target.blur(); return; }
-          if (event.key !== 'Enter') return;
-          // Enter names the document and drops the caret into it.
-          event.preventDefault();
-          event.target.blur();
-          if (editorRef && editorRef.current && editorRef.current.focusStart) editorRef.current.focusStart();
-        }}
+        onKeyDown={(event) => titleKeyDown(event, editorRef)}
         placeholder={isUntitled(title) ? title : 'Untitled'}
         data-doc-title="1"
         aria-label="Title"
         spellCheck={false}
-        style={{ display: 'block', flex: '1 1 auto', minWidth: 0, width: '100%', padding: 0, border: 0, background: 'transparent', font: '500 22px/1.35 var(--font-sans)', letterSpacing: '-0.3px', color: '#171717' }}
+        style={{ display: 'block', flex: '1 1 auto', minWidth: 0, width: '100%', margin: 0, padding: 0, border: 0, background: 'transparent', resize: 'none', overflow: 'hidden', fieldSizing: 'content', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', font: '500 22px/1.35 var(--font-sans)', letterSpacing: '-0.3px', color: '#171717' }}
       />
       {onClose && <button type="button" className="hov-x" data-pane-close={index} onClick={onClose} aria-label="Close the pane beside" title="Close" style={{ flex: 'none', width: 26, height: 26, marginTop: 2, padding: 0, border: 0, borderRadius: '50%', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '18px/1 var(--font-sans)', color: '#8f8f8f', transition: 'background 120ms' }}>×</button>}
     </div>

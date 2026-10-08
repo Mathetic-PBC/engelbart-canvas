@@ -6,6 +6,12 @@ const UNTITLED_RE = /^Untitled (?:Workspace|Note) \d+$/;
 
 export const isUntitled = (name) => UNTITLED_RE.test(String(name || ''));
 
+/**
+ * A title as it is typed (workspace/DocPane.jsx): a title is a file name, so slashes become hyphens; and it is one line
+ * that wraps, so a line break (pasted, say) becomes a space.
+ */
+export const titleTyped = (value) => String(value || '').replace(/[/\\]/g, '-').replace(/\r?\n|\r/g, ' ');
+
 /** The first free "Untitled <kind> n" among `names`. */
 export function nextUntitled(kind, names) {
   const taken = new Set((names || []).map((name) => String(name)));

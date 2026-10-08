@@ -150,7 +150,11 @@ test('Skip moves on, Wrap up jumps to Putting it together, Submit waits for word
   assert.deepEqual(flow.cardButtons('why', '  because '), { showWrap: true, submitDisabled: false });
   assert.deepEqual(flow.cardButtons('together', ''), { showWrap: false, submitDisabled: true }, 'Submit waits for the blank');
   assert.deepEqual(flow.cardButtons('together', 'which behaviors predict transfer'), { showWrap: false, submitDisabled: false });
-  assert.deepEqual(flow.REFLECTED, { why: { from: 'working', label: 'You’re working on' }, unsure: { from: 'why', label: 'So that' } });
+  // Above the cards, Putting it together as it grows: their words, one clause per answer, a whole sentence, newest last.
+  assert.deepEqual(flow.soFarOf({}), []);
+  assert.deepEqual(flow.soFarOf({ working: 'I’m working on How students ask AI for help.' }), [{ part: 'working', text: 'I’m working on how students ask AI for help' }]);
+  assert.deepEqual(flow.soFarOf({ working: 'How students ask AI for help', why: 'So that instructors see the process', unsure: 'whether logs show it' }).map((one) => one.part), ['working', 'why']);
+  assert.equal(flow.soFarOf({ working: '', why: 'Instructors see the process' })[0].text, 'I’m doing this so that instructors see the process', 'a skipped first card still reads');
 });
 
 test('Putting it together is made of their own words, and reads with any part skipped', async () => {
@@ -187,6 +191,17 @@ test('reading what the model wrote: the line without its label, the searches, th
   assert.equal(partial.starts.length, 3);
   assert.ok(partial.starts.some((one) => /your own data/.test(one)), 'one is about their own data, even when made from their words');
   assert.equal(partial.fallback, true);
+});
+
+test('the sub-questions are asked for as a story: the problem first, then how it has been studied, their own data last', () => {
+  const message = onboard.planMessage({ working: 'Teachable agents for debugging' }, 'I’m working on teachable agents.');
+  const [problem, studied, theirs] = [/1 is about understanding the problem/, /2 about how it has been studied/, /3, last, about their own data, study or contribution/].map((step) => message.search(step));
+  assert.ok(problem > 0 && problem < studied && studied < theirs, 'the order is asked for, in that order');
+  assert.match(message, /the way an advisor walks someone in/);
+  const made = onboard.fallbackPlan({ working: 'Teachable agents for debugging' }).starts;
+  assert.match(made[0], /count as an answer/, 'made from their words: the problem first');
+  assert.match(made[1], /already been found/, 'then what has been found');
+  assert.match(made[2], /your own data/, 'their own data last');
 });
 
 /** A warm session that answers as the model would, from the message (onboard.cjs's fake), counting its turns. */

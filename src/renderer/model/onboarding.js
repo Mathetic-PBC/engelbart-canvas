@@ -24,12 +24,6 @@ export const QUESTIONS = {
   unsure: { title: 'What are you least sure about?', placeholder: 'The part you can’t answer yet…', label: 'What you are least sure about' },
 };
 
-/** Bart's line above a card (BSC-3, BSC-4): which answer it says back, and the words it finishes. */
-export const REFLECTED = {
-  why: { from: 'working', label: 'You’re working on' },
-  unsure: { from: 'why', label: 'So that' },
-};
-
 export function flowOf(mode, { tools = true } = {}) {
   const flow = FLOWS[mode] || FLOWS.new;
   return tools ? flow : flow.filter((step) => step !== 'tools');
@@ -88,16 +82,31 @@ export function partsOf(answers) {
 }
 
 /**
- * The sentence as the project's description: "I'm working on … because I want to find out … so that …." Parts left
- * empty are left out with the words that lead into them, so it still reads; nothing at all is ''.
+ * The sentence's clauses, in order, each with the part it is made from ('working', 'findOut', 'why'): "I'm working on
+ * …", "because I want to find out …", "so that …". Parts left empty are left out with the words that lead into them, so
+ * what is left still reads.
  */
-export function sentenceOf({ working = '', findOut = '', why = '' }) {
+export function clausesOf({ working = '', findOut = '', why = '' }) {
   const w = theirWords(working, 'working'), f = theirWords(findOut, 'findOut'), y = theirWords(why, 'why');
   const clauses = [];
-  if (w) clauses.push(`I’m working on ${w}`);
-  if (f) clauses.push(w ? `because I want to find out ${f}` : `I want to find out ${f}`);
-  if (y) clauses.push(clauses.length ? `so that ${y}` : `I’m doing this so that ${y}`);
-  return clauses.length ? `${clauses.join(' ')}.` : '';
+  if (w) clauses.push({ part: 'working', text: `I’m working on ${w}` });
+  if (f) clauses.push({ part: 'findOut', text: w ? `because I want to find out ${f}` : `I want to find out ${f}` });
+  if (y) clauses.push({ part: 'why', text: clauses.length ? `so that ${y}` : `I’m doing this so that ${y}` });
+  return clauses;
+}
+
+/** The sentence as the project's description: "I'm working on … because I want to find out … so that …."; nothing at all is ''. */
+export function sentenceOf(parts) {
+  const clauses = clausesOf(parts);
+  return clauses.length ? `${clauses.map((clause) => clause.text).join(' ')}.` : '';
+}
+
+/**
+ * Putting it together as it grows, above the question cards (BSC-3, BSC-4): their answers so far, in their words, as
+ * the sentence will read (no blank yet), one clause per answer, the last of them the newest. [] before any answer.
+ */
+export function soFarOf(answers) {
+  return clausesOf(partsOf(answers || {}));
 }
 
 /** The plan when Bart could not be asked at all: a name and a question from their words, no sub-questions. */

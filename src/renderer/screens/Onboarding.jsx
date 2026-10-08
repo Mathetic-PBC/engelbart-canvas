@@ -3,7 +3,7 @@ import { api, errorMessage } from '../api.js';
 import Button from '../ui/Button.jsx';
 import Pager from '../ui/Pager.jsx';
 import ThinkingDots from '../ui/ThinkingDots.jsx';
-import { QUESTIONS, REFLECTED, forward, wrapUp, pagerOf, cardButtons, partsOf, sentenceOf, planFallback, toolsWanted, TOOL_WHY } from '../model/onboarding.js';
+import { QUESTIONS, forward, wrapUp, pagerOf, cardButtons, partsOf, sentenceOf, soFarOf, planFallback, toolsWanted, TOOL_WHY } from '../model/onboarding.js';
 import { launchRows, installable, rowOf } from '../model/tools.js';
 import welcomePng from '../../../design/assets/welcome-cards.png';
 
@@ -13,9 +13,9 @@ import welcomePng from '../../../design/assets/welcome-cards.png';
 // you working on? Why this, and why now? What are you least sure about? Putting it together. Skip moves on, Wrap up jumps
 // to Putting it together, Submit moves on.
 //
-// Bart (src/main/bart/onboard.cjs) has one session for the whole onboarding, started as it opens: after a card it says
-// the answer back in one line, streamed above the next card ("You're working on …", "So that …"), and searches for papers
-// in main. On Putting it together their own words make the sentence, editable in place, Stuck? offers one way to fill
+// Above each card, Putting it together's sentence as it grows, in their own words, one answer at a time (SoFar). Bart
+// (src/main/bart/onboard.cjs) has one session for the whole onboarding, started as it opens: after a card it searches
+// for papers in main. On Putting it together their own words make the sentence, editable in place, Stuck? offers one way to fill
 // the blank, and one call names the project, words its question and writes three sub-questions while they are on it.
 // Opening the project (api.startProject): Bart's name, the sentence as its description, the default folder, the first
 // workspace named with the question and the sub-questions under "Suggested places to start" (workspace/StartsBlock.jsx).
@@ -29,8 +29,8 @@ const plain = { padding: 0, border: 0, background: 'none', cursor: 'pointer' };
 
 // What inline styles cannot say: hover, focus, placeholders.
 const CSS = `
-.ob-field{display:block;width:100%;margin:0;padding:8px 10px;border:1px solid #d0d0d0;border-radius:8px;background:#fff;resize:none;outline:none;font:15px/1.5 var(--font-sans);color:${C.ink};transition:border-color 120ms}
-.ob-field:focus{border-color:#a3a3a3}
+.ob-field{display:block;width:100%;margin:0;padding:8px 10px;border:1px solid ${C.g500};border-radius:8px;background:#fff;resize:none;outline:none;font:15px/1.5 var(--font-sans);color:${C.ink};transition:border-color 120ms}
+.ob-field:focus{border-color:${C.g700}}
 .ob-field::placeholder{color:${C.g500};font-style:italic}
 .ob-text-btn{padding:4px 2px;border:0;background:transparent;color:${C.g500};font:500 12px/1.5 var(--font-sans);cursor:pointer}
 .ob-text-btn:hover{color:${C.ink}}
@@ -51,6 +51,7 @@ const CSS = `
 .ob-stuck:hover{color:${C.ink}}
 .ob-stuck:disabled{cursor:default;text-decoration:none}
 @keyframes ob-fade{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+@keyframes ob-pulse{0%,70%,100%{opacity:.18}35%{opacity:1}}
 `;
 
 const CHEVRON = <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>;
@@ -66,12 +67,57 @@ function Counter({ pager }) {
   );
 }
 
-/** The design's card: white, a grey edge, its question in bold, 560 wide at most. */
+/** The design's card: white, a grey edge (#d4d4d4, a step darker than the design's), its question in bold, 560 wide at most. */
 function Card({ title, children, data }) {
   return (
-    <div data-onboarding-card={data} style={{ width: '100%', maxWidth: 560, boxSizing: 'border-box', padding: '14px 16px 16px', border: `1px solid ${C.g200}`, borderRadius: 10, background: '#fff', animation: rise }}>
+    <div data-onboarding-card={data} style={{ width: '100%', maxWidth: 560, boxSizing: 'border-box', padding: '14px 16px 16px', border: '1px solid #d4d4d4', borderRadius: 10, background: '#fff', animation: rise }}>
       <div style={{ font: '600 16px/1.45 var(--font-sans)', color: C.ink }}>{title}</div>
       {children}
+    </div>
+  );
+}
+
+/**
+ * Waiting, as berkeley-research's setup waits (engelbart/lab-search/setup.js generating(), setup.css .generating and
+ * .dots): a 3×3 grid of 3px dots pulsing in a wave from the top left, and a muted label.
+ */
+function Waiting({ label, data }) {
+  return (
+    <div role="status" data-onboarding-waiting={data} style={{ display: 'flex', alignItems: 'center', gap: 9, minHeight: 19.5, marginTop: 10, font: '11.5px/1.5 var(--font-sans)', letterSpacing: '.3px', color: C.g500, animation: 'ob-fade 220ms ease-out both' }}>
+      <span aria-hidden="true" style={{ flex: 'none', display: 'grid', gridTemplateColumns: 'repeat(3, 3px)', gap: 2 }}>
+        {Array.from({ length: 9 }, (_, i) => (
+          <span key={i} style={{ width: 3, height: 3, borderRadius: '50%', background: C.ink, opacity: 0.18, animation: 'ob-pulse 1.1s ease-in-out infinite', animationDelay: `${((i % 3) + Math.floor(i / 3)) * 90}ms` }} />
+        ))}
+      </span>
+      <span>{label}</span>
+    </div>
+  );
+}
+
+/**
+ * Putting it together as it grows, above a question card: their answers so far as the sentence will read them, the
+ * newest a little darker. Two lines at most: a longer sentence keeps its end, and its start fades out at the top.
+ */
+function SoFar({ clauses }) {
+  const box = React.useRef(null), inner = React.useRef(null);
+  const [long, setLong] = React.useState(false);
+  const text = clauses.map((clause) => clause.text).join(' ');
+  React.useLayoutEffect(() => {
+    const measure = () => { if (box.current && inner.current) setLong(inner.current.offsetHeight > box.current.clientHeight + 1); };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [text]);
+  if (!clauses.length) return null;
+  const fade = long ? 'linear-gradient(to bottom, transparent, #000 1.45em)' : 'none';
+  return (
+    <div ref={box} data-onboarding-so-far="1" style={{ width: '100%', maxWidth: 560, maxHeight: '2.9em', overflow: 'hidden', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', font: '15px/1.45 var(--font-sans)', textAlign: 'center', textWrap: 'pretty', maskImage: fade, WebkitMaskImage: fade, animation: 'ob-fade 220ms ease-out' }}>
+      <div ref={inner}>
+        {clauses.map((clause, i) => {
+          const newest = i === clauses.length - 1;
+          return <span key={clause.part} data-onboarding-so-far-part={clause.part} data-newest={newest ? '1' : undefined} style={{ color: newest ? '#6b6b6b' : C.guess }}>{newest ? `${clause.text}.` : `${clause.text} `}</span>;
+        })}
+      </div>
     </div>
   );
 }
@@ -123,7 +169,6 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
   const [step, setStep] = React.useState(flowMode === 'existing' ? 'working' : 'welcome');
   const [drafts, setDrafts] = React.useState({ working: '', why: '', unsure: '' });
   const [answers, setAnswers] = React.useState({ working: '', why: '', unsure: '' });
-  const [lines, setLines] = React.useState({}); // Bart's line after a card: { working, why }
   const [parts, setParts] = React.useState(null); // Putting it together's { working, findOut, why }, made as it opens
   const [stuck, setStuck] = React.useState(false);
   const [error, setError] = React.useState('');
@@ -137,8 +182,7 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
   React.useEffect(() => {
     let live = true;
     api.onboardingOpen().then((opened) => { if (!live) { api.onboardingClose(opened.id).catch(() => {}); return; } idRef.current = opened.id; setId(opened.id); }).catch(() => {});
-    const off = api.onOnboardingLine((said) => { if (said && said.id === idRef.current && said.line) setLines((now) => ({ ...now, [said.card]: said.line })); });
-    return () => { live = false; off(); if (idRef.current && !made.current) api.onboardingClose(idRef.current).catch(() => {}); };
+    return () => { live = false; if (idRef.current && !made.current) api.onboardingClose(idRef.current).catch(() => {}); };
   }, []);
   // As the first card comes into view: started again if it could not start before (the tools screen installed its CLI).
   React.useEffect(() => { if (id && step === 'working') api.onboardingWarm(id).catch(() => {}); }, [id, step]);
@@ -190,10 +234,7 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
     const text = keep ? drafts[card].trim() : '';
     const next = { ...answers, [card]: text };
     setAnswers(next);
-    setLines((now) => { const { [card]: _gone, ...rest } = now; return rest; }); // eslint-disable-line no-unused-vars
-    if (text && id) {
-      api.onboardingAnswer(id, { card, answers: next }).then((out) => { if (out && out.line) setLines((now) => ({ ...now, [card]: out.line })); }).catch(() => {});
-    }
+    if (text && id) api.onboardingAnswer(id, { card, answers: next }).catch(() => {});
   };
   const submit = (card) => { if (!drafts[card].trim()) return; leaveCard(card, true); go(forward(flowMode, card, flowOptions)); };
   const skip = (card) => { leaveCard(card, false); go(forward(flowMode, card, flowOptions)); };
@@ -284,17 +325,11 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
       </div>
     );
   } else if (QUESTIONS[step]) {
-    const card = step, q = QUESTIONS[card], reflected = REFLECTED[card];
-    const said = reflected ? lines[reflected.from] : '';
+    const card = step, q = QUESTIONS[card];
     const buttons = cardButtons(card, drafts[card]);
     body = (
       <React.Fragment key={card}>
-        {said && (
-          <div data-onboarding-reflection={reflected.from} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, maxWidth: 560, textAlign: 'center', animation: 'ob-fade 220ms ease-out' }}>
-            <div style={{ font: '12px/1.5 var(--font-sans)', color: '#A3A3A3' }}>{reflected.label}</div>
-            <div style={{ font: '15px/1.45 var(--font-sans)', color: '#5F5F5F' }}>{said}</div>
-          </div>
-        )}
+        <SoFar clauses={soFarOf(answers)} />
         <Card title={q.title} data={card}>
           <div style={{ marginTop: 12 }}>
             <textarea
@@ -324,7 +359,7 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
             {' '}because I want to find out <Inline className="ob-blank" value={parts.findOut} onChange={set('findOut')} placeholder="what you want to find out" label="What you want to find out" data="findOut" />
             {' '}so that <Inline className="ob-theirs" value={parts.why} onChange={set('why')} placeholder="why it matters" label="Why this matters" data="why" />.
           </div>
-          <button type="button" className="ob-stuck" data-onboarding-stuck="1" disabled={stuck || !id} onClick={askStuck}>{stuck ? 'Thinking…' : 'Stuck?'}</button>
+          {stuck ? <Waiting label="Thinking…" data="stuck" /> : <button type="button" className="ob-stuck" data-onboarding-stuck="1" disabled={!id} onClick={askStuck}>Stuck?</button>}
           <Acts showWrap={buttons.showWrap} submitDisabled={buttons.submitDisabled} onSkip={open} onSubmit={open} />
         </Card>
         {errorLine}

@@ -414,8 +414,8 @@ export default function App() {
       {setup && tools && <ToolSetup snapshot={tools} ids={setup.ids} mode={setup.mode} onClose={() => setSetup(null)} />}
       <WindowEdges />
       {/* test mode, its pill and Settings' Test data section, only in a developer's copy (src/main/developer.cjs): the app
-          people download has no test mode */}
-      <WindowControls test={config.testModeAvailable ? {
+          people download has no test mode. Onboarding (and + Project's cards) has no bell and no gear, only the pill. */}
+      <WindowControls onboarding={phase === 'create'} test={config.testModeAvailable ? {
         testMode: config.testMode,
         onReset: () => resetTest(false),
         onStartNew: () => resetTest(true),
