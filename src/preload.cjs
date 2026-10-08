@@ -60,6 +60,10 @@ const engelbartAPI = Object.freeze({
   recordEdit: invoke('record-edit'),
   seenAgents: invoke('seen-agents'),
   onNav: (callback) => subscribe('engelbart:nav', callback),
+  // the sidebar's Starred: a project's starred library ids, and every change of them ({ projectId, ids })
+  starred: invoke('starred'),
+  setStarred: invoke('set-starred'),
+  onStarred: (callback) => subscribe('engelbart:starred', callback),
   // the library changed behind the screen's back (a pdf saved as a link became a saved pdf: store/web-pdfs.cjs; another
   // window added, renamed or removed a row)
   onLibraryChanged: (callback) => subscribe('engelbart:library-changed', callback),

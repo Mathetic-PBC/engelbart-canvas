@@ -405,7 +405,8 @@ test('the gear opens the settings window at Model, then Connections, with Test d
   const source = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/Settings.jsx'), 'utf8');
   assert.ok(!source.includes('⚙'), 'a drawn gear, not the character');
   assert.match(source, /className="settings-gear"/);
-  assert.match(source, /aria-haspopup="dialog" onClick=\{\(\) => setOpen\(true\)\}/, 'no menu: a press opens the window');
+  assert.match(source, /aria-haspopup="dialog" onClick=\{\(\) => setOpen\(''\)\}/, 'no menu: a press opens the window');
+  assert.match(source, /window\.addEventListener\(OPEN_SETTINGS, onOpen\)/, 'and the sidebar\'s gear opens it too, on a page of its choosing');
   assert.doesNotMatch(source, /<[^>]*\srole="menu"/, 'the gear has no menu of its own');
 });
 

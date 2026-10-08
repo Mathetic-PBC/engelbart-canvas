@@ -7,8 +7,9 @@ import { BART_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM } from '../workspace/DocEdito
 import DocPane from '../workspace/DocPane.jsx';
 import RightPane, { RIGHT_MODES } from '../workspace/RightPane.jsx';
 import { kindOf, Expand, Collapse } from '../ui/Icons.jsx';
+import { PanelCloseIcon, PanelOpenIcon } from '../ui/SidebarIcons.jsx';
 import { hasTag, isNote } from '../model/kind.js';
-import { isUntitled, nextUntitled } from '../model/names.js';
+import { nextUntitled } from '../model/names.js';
 import { OPEN_IN_BROWSER } from '../model/address.js';
 import { adoptSession, dropSession, SHOW_TERMINAL } from '../terminal/sessions.js';
 import { letGoNotes, mentionRows, mentionedIds, pickedChanges, ZOTERO_ROW } from '../model/rail.js';
@@ -16,7 +17,7 @@ import { useBodies } from '../workspace/useBodies.js';
 import { useFolderFiles } from '../workspace/useFolderFiles.js';
 import { useZoteroStatus, useZoteroFinding, useZoteroWaiting } from '../workspace/useZoteroStatus.js';
 import { zoteroChipAction } from '../model/zotero.js';
-import { flatWorkspaces, nextPlace, placesToGo } from '../model/nav.js';
+import { flatWorkspaces, nextPlace } from '../model/nav.js';
 import { onStage, savesPageCopy } from '../model/stage.js';
 import { paperState, savePaper, repoState, tryRepo } from '../model/guide.js';
 import { buildLine, placeAnswer } from '../model/doc.js';
@@ -35,20 +36,20 @@ import PostItTask from '../post-its/PostItTask.jsx';
 import { useSandboxes } from '../ui/SandboxProgress.jsx';
 import { repositoryClick, OPEN_SANDBOX_TERMINAL } from '../model/sandbox-notifications.js';
 
-// The workspace screen (design 2026-09-17): a header in three columns — Engelbart / project /
-// parent workspaces over the sidebar, the document tabs over the document, the Stage · Terminal
-// switcher over the right pane — then sidebar, document, right pane. The Stage (2026-09-23, Add -
-// Mention Stage.dc.html) opens everything that is not a note: a sidebar row, an @mention, a link in
+// The workspace screen (design 2026-09-17): a header in three columns — over the sidebar the window's lights and the
+// sidebar's toggle (2026-10-07; Engelbart / project / parent workspaces until the sidebar took the project's name and the
+// workspaces), the document tabs over the document, the Stage · Terminal switcher over the right pane — then sidebar,
+// document, right pane. The sidebar folds away from its toggle or ⌘\, and stays folded across launches. The Stage
+// (2026-09-23, Add - Mention Stage.dc.html) opens everything that is not a note: a sidebar row, an @mention, a link in
 // the document or the terminal; its full screen takes the document's place, never the sidebar's.
-// A project is a tree of workspaces (2026-09-18): the sidebar shows the current one, its
-// siblings on hover, and its child workspaces as rows.
-// Each workspace keeps its own view (2026-09-22): the note tabs it had open, the document in
-// front, and where each document was scrolled to. Leaving a workspace and coming back — or
+// A project is a tree of workspaces (2026-09-18). Each workspace keeps its own view (2026-09-22): the note tabs it had
+// open, the document in front, and where each document was scrolled to. Leaving a workspace and coming back — or
 // quitting and reopening — shows it as it was left (state.json `views`, main/store/projects.cjs).
-// The sidebar (2026-09-22, Canvas.dc.html and Add - Mention.dc.html) brings library items in through its search, adds
-// new ones through its +, and takes them out on its trash (meta.json `removed`); the Browser's Save and the @ menu add
-// the page in front. Its next row and ⌘J go to the workspace an agent waits in, else the one written in before
-// (state.json `recent` and `agents`, model/nav.js); typing in a document here records this workspace as written in.
+// The sidebar (workspace/Rail.jsx, 2026-10-07): the project and its switcher, Inbox, Agents, Connections, Library and Add
+// sources, the workspaces worked in last, and this workspace's sources. Its Library and Search bring library items in, Add
+// sources adds new ones, and a source's minus takes it out (meta.json `removed`); the Browser's Save and the @ menu add the
+// page in front. ⌘J goes to the workspace an agent waits in, else the one written in before (state.json `recent` and
+// `agents`, model/nav.js); typing in a document here records this workspace as written in.
 // Dragging the sidebar's edge resizes only the document; the right pane keeps its width until its own edge is dragged.
 // Post-its (2026-09-22) float over all of it (post-its/ProjectPostIts.jsx).
 // The middle column (MATH-23) can take the whole window: the document's full screen hides the sidebar and the right pane,
@@ -102,6 +103,7 @@ const PANE_MIN = 240; // px: a column too narrow for two of these side by side s
 const NO_PANES = [];
 const noView = () => null; // a document beside the one in front keeps no scroll position: it opens at its top
 const POST_ITS_HIDDEN = 'engelbart.postIts.hidden';
+const SIDEBAR_HIDDEN = 'engelbart.sidebar.hidden';
 
 /**
  * The document a tab stands for in this workspace (`topic`): its key in `docs` and what main reads it by (`ref`), with
@@ -143,7 +145,7 @@ function indexWorkspaces(roots) {
   return map;
 }
 
-export default function Workspace({ tree, library, initialWorkspaceId, initialTab, initialViews, initialStage, style, active, reload, onClose, onHome, onVisit, onError }) {
+export default function Workspace({ tree, library, initialWorkspaceId, initialTab, initialViews, initialStage, style, active, reload, onClose, onHome, onOpenProject, onNewProject, onVisit, onError }) {
   const project = tree.project;
   const index = React.useMemo(() => indexWorkspaces(tree.workspaces), [tree.workspaces]);
   const notesById = React.useMemo(() => new Map(library.filter(isNote).map((row) => [row.id, row])), [library]);
@@ -152,8 +154,6 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const topicId = wantedId && index.has(wantedId) ? wantedId : (tree.workspaces[0] ? tree.workspaces[0].id : null);
   const here = topicId ? index.get(topicId) : null;
   const topics = here ? (here.parent ? here.parent.children : tree.workspaces) : tree.workspaces; // the current workspace's siblings
-  const ancestors = [];
-  for (let up = here && here.parent; up; up = index.get(up.id).parent) ancestors.unshift(up);
   const allWorkspaces = React.useMemo(() => flatWorkspaces(tree.workspaces), [tree.workspaces]);
   const [railWidth, setRailWidth] = React.useState(300);
   const [notePlus, setNotePlus] = React.useState(null); // the +'s note menu beside the tabs: the +'s rect while it is open
@@ -231,9 +231,24 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const [postItsHidden, setPostItsHidden] = React.useState(() => { try { return window.localStorage.getItem(POST_ITS_HIDDEN) === '1'; } catch { return false; } });
   React.useEffect(() => { try { window.localStorage.setItem(POST_ITS_HIDDEN, postItsHidden ? '1' : '0'); } catch { /* not remembered */ } }, [postItsHidden]);
   const showPostIts = React.useCallback(() => setPostItsHidden(false), []);
+  // The sidebar folded away (2026-10-07: its toggle in the title bar, or ⌘\), remembered across launches.
+  const [railHidden, setRailHidden] = React.useState(() => { try { return window.localStorage.getItem(SIDEBAR_HIDDEN) === '1'; } catch { return false; } });
+  React.useEffect(() => { try { window.localStorage.setItem(SIDEBAR_HIDDEN, railHidden ? '1' : '0'); } catch { /* not remembered */ } }, [railHidden]);
+  // Starred sources (the sidebar's Starred): this project's, kept by main in state.json; another window's stars arrive too.
+  const [starred, setStarred] = React.useState([]);
+  React.useEffect(() => {
+    let live = true;
+    setStarred([]);
+    api.starred(project.id).then((ids) => { if (live && Array.isArray(ids)) setStarred(ids); }).catch(() => {});
+    const off = api.onStarred((change) => { if (live && change && change.projectId === project.id && Array.isArray(change.ids)) setStarred(change.ids); });
+    return () => { live = false; off(); };
+  }, [project.id]);
+  const starRow = React.useCallback((row, on) => {
+    setStarred((now) => (on ? [...now.filter((id) => id !== row.id), row.id] : now.filter((id) => id !== row.id))); // at once; main's answer follows
+    api.setStarred(project.id, row.id, on).then((ids) => { if (Array.isArray(ids)) setStarred(ids); }).catch(onError);
+  }, [project.id, onError]);
   const [openPage, setOpenPage] = React.useState(null); // the page in front in the Browser: { input, title, bytes, tabId, webPage } | null
   const [pageInfo, setPageInfo] = React.useState(null); // what the library holds for it: { input, row, addable, found }
-  const [renaming, setRenaming] = React.useState(null);
   const [images, setImages] = React.useState({}); // library image id → object URL
   // Each pane's editor (pane 0: the document in front), for Escape and the title's Enter.
   const editorRefs = React.useRef([]);
@@ -815,6 +830,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   const activeRowId = activeTab !== 'ws' ? activeTab : (rightMode === 'stage' && stageFront ? stageFront : 'ws');
 
+  // This workspace's sources (the sidebar's Your sources): its context, the notes made in it and what its document
+  // mentions. Its sub-workspaces are under it in Workspaces, and its archived versions in Workspaces' More (2026-10-07).
   const rows = React.useMemo(() => {
     const out = [];
     if (!topic) return out;
@@ -823,25 +840,22 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       const row = byId.get(id);
       if (!row || present.has(row.id)) continue;
       present.add(row.id);
-      out.push({ ...row, depth: 0, on: activeRowId === row.id, editing: renaming === row.id });
+      out.push(row);
     }
     for (const note of tree.notes || []) {
       if (note.workspaceId === topic.id && !present.has(note.id)) {
         present.add(note.id);
-        out.push({ id: note.id, name: note.name, type: 'md', tags: ['note'], depth: 0, on: activeRowId === note.id, editing: renaming === note.id });
+        out.push(byId.get(note.id) || { id: note.id, name: note.name, type: 'md', tags: ['note'] });
       }
     }
     for (const row of mentioned) {
       if (!present.has(row.id)) {
         present.add(row.id);
-        out.push({ ...row, depth: 0, on: activeRowId === row.id, editing: renaming === row.id });
+        out.push(row);
       }
     }
-    for (const child of here ? here.node.children || [] : []) out.push({ id: child.id, name: child.name, type: 'child', depth: 0, on: activeRowId === child.id, editing: renaming === child.id });
-    // This workspace's earlier versions, one per Clear, newest first (2026-09-25; the sidebar's Archived section).
-    for (const entry of [...(topic.archives || [])].reverse()) out.push({ id: `archive:${entry.file}`, name: entry.title || 'Untitled', type: 'archive', file: entry.file, clearedAt: entry.clearedAt, depth: 0, on: false, editing: false });
     return out;
-  }, [topic, here, byId, renaming, activeRowId, tree.notes, mentioned]);
+  }, [topic, byId, tree.notes, mentioned]);
 
   // What the @ menu and the sidebar's search offer (MATH-58): the library less the notes trashed from their last
   // workspace. `mentionable`, which an @mention already written is opened by, keeps the whole library, those notes marked
@@ -852,7 +866,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const mentionable = React.useMemo(() => [BART_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, ...library.filter((row) => row.type !== 'image').map((row) => (letGo.has(row.id) ? { ...describe(row), trashed: true } : describe(row)))], [library, letGo]);
 
   // On the rail: what the search does not offer again, and what makes the Browser's Save read ✓.
-  const railIds = React.useMemo(() => new Set(rows.filter((row) => row.type !== 'child' && row.type !== 'archive').map((row) => row.id)), [rows]);
+  const railIds = React.useMemo(() => new Set(rows.map((row) => row.id)), [rows]);
   const inRail = React.useCallback((id) => railIds.has(id), [railIds]);
 
   // The page in front in the Browser, and what the library holds for it (asked again whenever the library changes).
@@ -1156,11 +1170,6 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // A ⌘-click on a workspace's mention goes there (the one workspace in the strip changes); a click opens its document
   // beside this one (openDocBeside).
   const openMentionedWorkspace = (id) => { if (index.has(id)) selectTopic(id); };
-  // All of them, for the next row's hover list: by the tree's names, gone ones left out.
-  const places = React.useMemo(() => placesToGo({ here: topic ? { projectId: project.id, workspaceId: topic.id } : null, recent: navHere.recent, agents: navHere.agents }).flatMap((place) => {
-    const held = index.get(place.workspaceId);
-    return held ? [{ ...place, name: held.node.name }] : [];
-  }), [navHere, topic, project.id, index]);
   const goTo = (place) => { if (place) selectTopic(place.workspaceId); };
   // ⌘J, wherever the keyboard is: the app's pages see it in the capture phase, before the editor or a terminal can; a
   // Browser page has the main process send it (src/main/browser/views.cjs).
@@ -1179,25 +1188,23 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return () => { window.removeEventListener('keydown', onKey, true); off(); };
   }, [active]);
 
-  // A sibling of the current workspace (the switcher's + New), or a child of it (+ Workspace).
-  const addTopic = async (asChild) => {
-    try {
-      const child = asChild === true && here;
-      const level = child ? here.node.children || [] : topics;
-      const parentId = child ? here.node.id : (here && here.parent ? here.parent.id : null);
-      const created = await api.createWorkspace(project.id, { name: nextUntitled('Workspace', level.map((candidate) => candidate.name)), parentId });
-      await reload();
-      wantTitleFocus.current = true;
-      selectTopic(created.id);
-    } catch (error) {
-      onError(error);
-    }
+  // A workspace made from the sidebar (2026-10-07: Workspaces' +, a workspace's + or its More), named in its dialog, at the
+  // top or in `parentId`; with no name it is untitled and the caret goes to its title. Then it is gone into. What went
+  // wrong is the dialog's to say. A project with none makes one at the top (the empty document's + Workspace).
+  const createWorkspace = async ({ name = '', parentId = null } = {}) => {
+    const level = parentId ? ((index.get(parentId) || {}).node || {}).children || [] : tree.workspaces;
+    const given = String(name || '').trim();
+    const created = await api.createWorkspace(project.id, { name: given || nextUntitled('Workspace', level.map((candidate) => candidate.name)), parentId });
+    await reload();
+    if (!given) wantTitleFocus.current = true;
+    selectTopic(created.id);
+    return created;
   };
+  const addTopic = () => createWorkspace().catch(onError);
 
-  const renameTopic = async (name) => {
-    if (!topic) return;
+  const renameWorkspace = async (id, name) => {
     try {
-      await api.renameWorkspace(project.id, topic.id, name);
+      await api.renameWorkspace(project.id, id, name);
       await reload();
     } catch (error) {
       onError(error);
@@ -1233,6 +1240,18 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     await reload();
     selectTopic(id);
   };
+
+  // The project's name, from the sidebar's project menu (Rename).
+  const renameProject = async (name) => {
+    try {
+      await api.renameProject(project.id, name);
+      await reload();
+    } catch (error) {
+      onError(error);
+    }
+  };
+  // The project's Builds, for the sidebar's Agents.
+  const buildList = React.useMemo(() => Object.values(builds), [builds]);
 
   /* --------------------------------------------------------------- sidebar */
   // Everything that brings a library item into this workspace links it (context, and off `removed`); adding makes the
@@ -1295,28 +1314,11 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return note;
   };
 
-  // A workspace nested in this one, from the +'s Sub-Workspace: made, then gone into, the caret in its title. It opened
-  // as a tab here from 2026-09-23 until 2026-09-25, when one workspace in the strip became the rule.
-  const makeChild = async () => {
-    const created = await api.createWorkspace(project.id, { name: nextUntitled('Workspace', (here && here.node.children ? here.node.children : []).map((candidate) => candidate.name)), parentId: topic.id });
-    await reload();
-    wantTitleFocus.current = true;
-    selectTopic(created.id);
-  };
-
   // A repository picked from the +'s GitHub view: the library's row for it comes in, else it is added by its address
   // (signed in, so a private one gets its GitHub id too).
   const pickRepo = async ({ repo, row }) => {
     if (row) await linkIds([row.id]);
     else await addInput(repo.url);
-  };
-
-  // The search: something already here opens; anything else in the library comes in; an address or a path is added first.
-  const searchPick = async (result, typed) => {
-    if (!topic) return;
-    if (result.kind === 'item' && railIds.has(result.row.id)) openItem(result.row);
-    else if (result.kind === 'item') await linkIds([result.row.id]);
-    else if (result.kind === 'fresh') await addInput(typed);
   };
 
   // The trash: off this workspace, not out of the library. A note's tab closes and a paper leaves the right pane.
@@ -1465,7 +1467,6 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
         return;
       }
       if (event.key !== 'Escape') return;
-      if (renaming) { setRenaming(null); return; }
       // The document's full screen (MATH-23): Escape leaves it only when nothing else used it. What had the key goes first:
       // the caret leaves its line, the @ menu or a card's field shuts (DocEditor marks those as used), a dialog closes
       // (they stop the key). Then a menu open with the key elsewhere shuts, then a focused field is left; the next Escape
@@ -1489,7 +1490,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [active, tabs, rightMode, renaming, docFull, notePlus, onClose]);
+  }, [active, tabs, rightMode, docFull, notePlus, onClose]);
 
   /* --------------------------------------------------------------- resizing */
 
@@ -1499,8 +1500,12 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const RAIL_MIN = 220, RAIL_MAX = 520, DOC_MIN = 280, RIGHT_MIN = 320;
   const railRoom = Math.max(RAIL_MIN, viewWidth - 2 - DOC_MIN - RIGHT_MIN);
   const rail = clamp(railWidth, RAIL_MIN, Math.min(RAIL_MAX, railRoom));
-  const rightRoom = Math.max(RIGHT_MIN, viewWidth - rail - 2 - DOC_MIN);
-  const right = clamp(rightWidth == null ? Math.round((viewWidth - rail - 2) / 2) : rightWidth, RIGHT_MIN, rightRoom);
+  // Folded away (or under the document's full screen), the sidebar and its edge take no room: the document and the right
+  // pane share the window.
+  const railShown = !docFull && !railHidden;
+  const railSpace = railShown ? rail + 1 : 0;
+  const rightRoom = Math.max(RIGHT_MIN, viewWidth - railSpace - 1 - DOC_MIN);
+  const right = clamp(rightWidth == null ? Math.round((viewWidth - railSpace - 1) / 2) : rightWidth, RIGHT_MIN, rightRoom);
   const pointerUp = (event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); };
   const railDown = (event) => {
     event.preventDefault();
@@ -1522,10 +1527,35 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // The right pane's full screen: the Stage or the terminal, whichever is in front, takes the document's place (its header
   // column too); the sidebar stays. Switching between them keeps it.
   const full = stageFull;
-  const paneWidth = full ? Math.max(RIGHT_MIN, viewWidth - rail - 1) : right;
+  const paneWidth = full ? Math.max(RIGHT_MIN, viewWidth - railSpace) : right;
+  // The sidebar's toggle and ⌘\ (2026-10-07). Under the document's full screen it brings the sidebar back, leaving that.
+  const toggleRail = () => {
+    if (docFull) { setDocFull(false); setRailHidden(false); return; }
+    setRailHidden((now) => !now);
+  };
+  const toggleRailRef = React.useRef(toggleRail);
+  toggleRailRef.current = toggleRail;
+  React.useEffect(() => {
+    if (!active) return undefined;
+    const onKey = (event) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.key !== '\\') return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!event.repeat) toggleRailRef.current();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [active]);
+  // While the sidebar shows its own gear, the one in the top-right controls is out of sight (styles.css).
+  React.useEffect(() => {
+    const root = document.documentElement;
+    if (active && railShown) root.dataset.sidebarGear = '1'; else delete root.dataset.sidebarGear;
+    return () => { delete root.dataset.sidebarGear; };
+  }, [active, railShown]);
 
-  // Where the trash can is, for the post-its (main/post-its/views.cjs throws away a card let go over it): sent whenever it
-  // may have moved, and none while this screen is not showing.
+  // Where the trash is, for the post-its (main/post-its/views.cjs throws away a card let go over it): the sidebar's foot
+  // (2026-10-07; the trash can until then), sent whenever it may have moved, and none while this screen is not showing or
+  // the sidebar is folded away.
   const trashEl = React.useRef(null);
   const trashRef = React.useCallback((element) => { trashEl.current = element; }, []);
   React.useEffect(() => {
@@ -1539,9 +1569,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     if (trashEl.current) observer.observe(trashEl.current);
     window.addEventListener('resize', send);
     return () => { observer.disconnect(); window.removeEventListener('resize', send); };
-  }, [active, rail, viewWidth]);
+  }, [active, rail, viewWidth, railShown]);
 
-  const headWide = rail >= 260;
   // In the document's full screen its tab strip reaches the window's top-right corner, where the controls on every screen
   // sit (ui/WindowControls.jsx): the strip stops short of them, so its full-screen button is not under them.
   const [controlsRoom, setControlsRoom] = React.useState(0);
@@ -1625,30 +1654,18 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const noWorkspace = topics.length === 0 ? (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
       <span style={{ font: '13px/1.6 var(--font-sans)', color: '#8f8f8f', textAlign: 'center' }}>This project has no workspace yet. A workspace holds a document, its context, and any workspaces nested inside it.</span>
-      <button type="button" className="hov-bd2" onClick={() => addTopic(false)} style={{ padding: '8px 12px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', cursor: 'pointer', font: '500 12.5px/1 var(--font-sans)', color: '#171717' }}>+ Workspace</button>
+      <button type="button" className="hov-bd2" onClick={addTopic} style={{ padding: '8px 12px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', cursor: 'pointer', font: '500 12.5px/1 var(--font-sans)', color: '#171717' }}>+ Workspace</button>
     </div>
   ) : null;
 
   return (
-    <div data-screen-label="Workspace" style={style}>
+    <div data-screen-label="Workspace" data-workspace-here={topic ? topic.id : undefined} style={style}>
       <header className="title-bar" style={{ display: 'flex', alignItems: 'stretch', minHeight: 54, background: '#fafafa', flex: 'none' }}>
-        <div className="title-lead" style={{ flex: 'none', width: rail, boxSizing: 'border-box', borderBottom: '1px solid #eaeaea', display: 'flex', alignItems: 'center', gap: 8, padding: '0 16px', minWidth: 0, overflow: 'hidden' }}>
-          <button type="button" className="hov-ink" onClick={onHome} title="All projects" aria-label="All projects" data-crumb-home="1" style={{ flex: 'none', padding: 0, border: 0, background: 'none', cursor: 'pointer', font: '500 16px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717', whiteSpace: 'nowrap' }}>Engelbart</button>
-          <span style={{ flex: 'none', font: '15px/1 var(--font-sans)', color: '#c9c9c9' }}>/</span>
-          <span title={project.directory || project.dir} style={{ flex: '0 4 auto', minWidth: 20, font: '400 14px/1.3 var(--font-sans)', color: '#4d4d4d', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{project.name}</span>
-          {headWide && ancestors.map((ancestor, i) => (
-            <React.Fragment key={ancestor.id}>
-              <span style={{ flex: 'none', font: '15px/1 var(--font-sans)', color: '#c9c9c9' }}>/</span>
-              <button type="button" className="hov-ink" onClick={() => selectTopic(ancestor.id)} title={ancestor.name} data-ancestor={ancestor.id} style={{ flex: i === ancestors.length - 1 ? '0 1 auto' : '0 5 auto', minWidth: i === ancestors.length - 1 ? 44 : 16, padding: 0, border: 0, background: 'transparent', cursor: 'pointer', font: '400 14px/1.3 var(--font-sans)', color: isUntitled(ancestor.name) ? '#8f8f8f' : '#4d4d4d', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', transition: 'color 120ms' }}>{ancestor.name}</button>
-            </React.Fragment>
-          ))}
-          {/* Where you are ends the trail, as in any breadcrumb, and goes nowhere; the names before it go up (2026-09-22). */}
-          {headWide && topic && (
-            <>
-              <span style={{ flex: 'none', font: '15px/1 var(--font-sans)', color: '#c9c9c9' }}>/</span>
-              <span title={topic.name} data-crumb-here={topic.id} style={{ flex: '0 2 auto', minWidth: 32, font: '500 14px/1.3 var(--font-sans)', color: isUntitled(topic.name) ? '#8f8f8f' : '#171717', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'default' }}>{topic.name}</span>
-            </>
-          )}
+        {/* Over the sidebar: the window's lights, then the sidebar's toggle (Iconography "Toggle sidebar"); folded, only they stay. */}
+        <div className="title-lead" data-title-lead="1" style={{ flex: 'none', width: railShown ? rail : 'auto', boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px 0 14px', minWidth: 0, overflow: 'hidden' }}>
+          <button type="button" className="sb-icon" data-sidebar-toggle={railShown ? 'shown' : 'hidden'} aria-label={railShown ? 'Hide the sidebar' : 'Show the sidebar'} title={`${railShown ? 'Hide' : 'Show'} the sidebar (⌘\\)`} onClick={toggleRail}>
+            {railShown ? <PanelCloseIcon /> : <PanelOpenIcon />}
+          </button>
         </div>
         <div style={{ flex: 'none', width: 1, background: '#eaeaea' }} />
         {/* The document's tabs, drawn as the Stage's (2026-09-25): no rule under them; the tab in front runs into the page. */}
@@ -1686,48 +1703,52 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
         <Rail
           width={rail}
-          topics={topics}
-          topic={topic}
-          allWorkspaces={allWorkspaces}
-          onOpenDoc={showWs}
-          onSelectTopic={selectTopic}
-          onRenameTopic={renameTopic}
-          onAddTopic={() => addTopic(false)}
-          onDeleteTopic={deleteTopic}
+          hidden={!railShown}
+          project={project}
+          onOpenProject={(id) => { const last = nav.recent.find((entry) => entry.projectId === id); onOpenProject(id, last ? last.workspaceId : null); }}
+          onNewProject={onNewProject}
+          onAllProjects={onHome}
+          onRenameProject={renameProject}
+          roots={tree.workspaces}
+          hereId={topic ? topic.id : null}
+          recent={navHere.recent}
+          agents={navHere.agents}
+          builds={buildList}
+          onSelectWorkspace={selectTopic}
+          onCreateWorkspace={createWorkspace}
+          onRenameWorkspace={renameWorkspace}
+          onDeleteWorkspace={deleteTopic}
+          onOpenVersion={(version) => { goToVersion(version.workspaceId, { file: version.file, title: version.title }).catch(onError); }}
+          onSeenAll={(ids) => { for (const id of ids) api.seenAgents(project.id, id).catch(() => {}); }}
           rows={rows}
+          activeRowId={activeRowId}
           flashId={flashId}
-          onRowClick={onRowClick}
-          onRowRenameStart={(row) => setRenaming(row.id)}
-          onRowRename={renameRow}
-          onRowRenameEnd={() => setRenaming(null)}
+          starred={starred}
+          onStar={starRow}
           library={findable}
           inRail={inRail}
-          onSearchPick={searchPick}
-          onAddInput={(input) => addInput(input)}
-          onPickDisk={pickFromDisk}
-          onNewNote={() => makeNote('', true)}
-          onNewChild={makeChild}
-          onPickRepo={pickRepo}
+          onOpenRow={onRowClick}
+          onRenameRow={renameRow}
+          onRemoveRow={trashRow}
+          onLinkRow={(row) => linkIds([row.id]).catch(onError)}
           onOpenHeld={(projectId, workspaceId) => { if (projectId === project.id && workspaceId && index.has(workspaceId)) selectTopic(workspaceId); }}
           onDropItems={addDroppedHere}
-          onTrashRow={trashRow}
-          onRestoreArchive={(row) => restoreVersion(row.file)}
-          trashFull={!!(topic && topic.removed && topic.removed.length) || postItTrash > 0 || !!(tree.trash && tree.trash.length)}
+          onAddInput={(input) => addInput(input)}
+          onPickDisk={pickFromDisk}
+          onNewNote={topic ? () => makeNote('', true) : null}
+          onNewSticky={active ? () => api.postItsCreate(project.id) : null}
+          onPickRepo={pickRepo}
+          onOpenLink={openLink}
+          postItsHidden={postItsHidden}
+          onTogglePostIts={active ? () => setPostItsHidden((now) => !now) : null}
+          trashFull={postItTrash > 0 || !!(tree.trash && tree.trash.length)}
           workspaceTrash={{ rows: tree.trash || [], restore: restoreTopic }}
           postItTrash={active ? { count: postItTrash, load: () => api.postItsTrashed(project.id), restore: (id) => api.postItsRestore(project.id, id) } : null}
           postItDrag={postItDrag}
           trashRef={trashRef}
-          next={next}
-          projectId={project.id}
-          onGoNext={goTo}
-          places={places}
-          onPostIt={active ? () => api.postItsCreate(project.id).catch(onError) : null}
-          postItsHidden={postItsHidden}
-          onTogglePostIts={active ? () => setPostItsHidden((now) => !now) : null}
-          hidden={docFull}
         />
 
-        {!docFull && <Separator onDown={railDown} onMove={railMove} onUp={pointerUp} onReset={() => setRailWidth(300)} />}
+        {railShown && <Separator onDown={railDown} onMove={railMove} onUp={pointerUp} onReset={() => setRailWidth(300)} />}
 
         {/* The document, and the one opened beside it (MATH-23): side by side, each pane scrolling down on its own. */}
         <main ref={mainRef} data-doc-column="1" style={{ flex: '1 1 0', minWidth: DOC_MIN, minHeight: 0, display: full ? 'none' : 'flex', overflowX: 'auto', overflowY: 'hidden', position: 'relative', isolation: 'isolate' }}>

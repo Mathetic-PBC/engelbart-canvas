@@ -392,6 +392,10 @@ export default function App() {
           reload={reload}
           onClose={goHome}
           onHome={goHome}
+          // the sidebar's project menu (2026-10-07): another project, opened where it was left; or a new one, made as
+          // + Project makes it
+          onOpenProject={(id, workspaceId) => openProject(id, workspaceId ? { workspaceId } : null).catch(fail)}
+          onNewProject={() => { leaveProject(); setPhase('create'); }}
           onVisit={onVisit}
           onError={fail}
         />

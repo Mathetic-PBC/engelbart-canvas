@@ -1,6 +1,7 @@
 'use strict';
 
-// The workspace sidebar's search and the document's @ menu (Canvas.dc.html, Add - Mention.dc.html, 2026-09-22).
+// The library's searches and the document's @ menu (Canvas.dc.html, Add - Mention.dc.html, 2026-09-22). What the sidebar
+// lists (its groups, its workspaces, each section's share) is test/sidebar-model.test.cjs's.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -98,26 +99,6 @@ test('@Bart, as the menu writes it, is a question like a typed @bart; both rende
   assert.equal(doc.parseLine('@Barty').type === 'bart', false);
 });
 
-test('sections: Notes, Websites, GitHub, Files, Sub-Workspaces, Archived in that order; Files takes everything else; empty ones stay (2026-09-29)', async () => {
-  const { railSections, sectionOf } = await load();
-  const rows = [...library, row('k1', 'Evaluation harness', 'child'), row('g2', 'engelbart-canvas', 'folder', ['git'], { folder_path: '/Users/h/e' }), row('h1', 'saved.html', 'html')];
-  const sections = railSections(rows);
-  assert.deepEqual(sections.map((s) => s.label), ['Notes', 'Websites', 'GitHub', 'Files', 'Sub-Workspaces', 'Archived']);
-  assert.deepEqual(sections.map((s) => s.rows.map((r) => r.id)), [['n1'], ['w1'], ['g1', 'g2'], ['p1', 'i1', 'c1', 'f1', 'h1'], ['k1'], []]);
-  assert.equal(sectionOf(row('m1', 'README', 'md')), 'Files', 'an outside md is a file, not a note');
-  assert.deepEqual(railSections([row('p1', 'ColBERT', 'pdf', ['paper'])]).map((s) => [s.key, s.rows.length]), [['Notes', 0], ['Websites', 0], ['GitHub', 0], ['Files', 1], ['Workspaces', 0], ['Archived', 0]]);
-  assert.deepEqual(railSections([]).map((s) => s.rows.length), [0, 0, 0, 0, 0, 0], 'a workspace with nothing in it still shows every section');
-});
-
-test('every section but Archived has a + of its own: what it adds, and whether it opens a panel (MATH-44)', async () => {
-  const { RAIL_SECTIONS, ADD_PANELS, railSections } = await load();
-  assert.deepEqual(RAIL_SECTIONS.filter((s) => s.key !== 'Archived').filter((s) => !s.add).map((s) => s.key), [], 'Notes, Websites, GitHub, Files and Sub-Workspaces each have one');
-  assert.equal(RAIL_SECTIONS.find((s) => s.key === 'Archived').add, undefined, 'a version is made by Clear, not a +');
-  assert.deepEqual(RAIL_SECTIONS.map((s) => [s.key, s.add || null]), [['Notes', 'note'], ['Websites', 'link'], ['GitHub', 'github'], ['Files', 'disk'], ['Workspaces', 'workspace'], ['Archived', null]]);
-  assert.deepEqual(RAIL_SECTIONS.filter((s) => ADD_PANELS.has(s.add)).map((s) => s.key), ['Websites', 'GitHub'], 'only these ask before adding');
-  assert.deepEqual(railSections([]).map((s) => s.add || null), RAIL_SECTIONS.map((s) => s.add || null), 'the sections the sidebar draws carry it');
-});
-
 test('the @ menu offers the project\'s other workspaces after the page and before the library (2026-09-25)', async () => {
   const { mentionRows } = await load();
   const workspaces = [
@@ -134,15 +115,6 @@ test('the @ menu offers the project\'s other workspaces after the page and befor
   assert.deepEqual(typed.filter((r) => r.kind === 'workspace').map((r) => [r.id, r.above]), [['a', []], ['b', ['Agents']]], 'names that start with the words first, each with what is above it');
   assert.deepEqual(typed[0], { kind: 'workspace', key: 'ws:a', id: 'a', name: 'Agents', above: [] });
   assert.deepEqual(mentionRows({ query: 'colbert', library, page: null, pageRow: null, workspaces }).map((r) => r.key), ['p1']);
-});
-
-test('the Archived section: a workspace\'s earlier versions, last (2026-09-25)', async () => {
-  const { railSections, sectionOf, RAIL_SECTIONS } = await load();
-  assert.equal(RAIL_SECTIONS[RAIL_SECTIONS.length - 1].label, 'Archived');
-  assert.equal(sectionOf({ type: 'archive' }), 'Archived');
-  const rows = [{ id: 'archive:2026-09-25T21-03-12Z', type: 'archive', name: 'Storage plan' }, { id: 'n1', type: 'md', tags: ['note'], name: 'Spec' }];
-  assert.deepEqual(railSections(rows).filter((s) => s.rows.length).map((s) => [s.key, s.rows.map((r) => r.id)]), [['Notes', ['n1']], ['Archived', ['archive:2026-09-25T21-03-12Z']]]);
-  assert.deepEqual(railSections([rows[1]]).find((s) => s.key === 'Archived').rows, [], 'no versions: the section is there, empty');
 });
 
 test('"Add from library" in the Build panel: the ones written in last before anything is typed, then every match; no pictures, nothing attached already (2026-09-27)', async () => {

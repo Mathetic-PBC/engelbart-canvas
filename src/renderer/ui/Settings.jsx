@@ -200,9 +200,9 @@ export function SettingsNav({ pages, open, query, onQuery, onOpen }) {
  * The settings window: pages listed on the left, the open one on the right; Escape, × or a press outside closes it.
  * Escape in the search field while it holds text clears the text instead.
  */
-function SettingsDialog({ test, onClose }) {
+function SettingsDialog({ test, initialPage = null, onClose }) {
   const pages = PAGES.filter((page) => !page.shown || page.shown({ test }));
-  const [page, setPage] = React.useState(pages[0].id);
+  const [page, setPage] = React.useState(pages.some((candidate) => candidate.id === initialPage) ? initialPage : pages[0].id);
   const [query, setQuery] = React.useState('');
   React.useEffect(() => {
     // Taken before the workspace's own Escape (which leaves the workspace) can see it, as BuildReject does.
@@ -233,16 +233,27 @@ function SettingsDialog({ test, onClose }) {
   );
 }
 
+// The workspace sidebar's gear and its Connections panel (2026-10-07) open this window too, on a page of their choosing
+// (`detail.page`), by this event: the window keeps the one `test` the controls were given. While the sidebar shows its own
+// gear, the controls' gear is out of sight (styles.css, html[data-sidebar-gear]).
+export const OPEN_SETTINGS = 'engelbart:open-settings';
+export const openSettings = (page = null) => window.dispatchEvent(new CustomEvent(OPEN_SETTINGS, { detail: { page } }));
+
 /** `test` (a developer's copy only, else null): { testMode, onReveal, onStartNew, onReset }, for the Test data page. */
 export default function Settings({ test = null }) {
-  const [open, setOpen] = React.useState(false);
-  const close = React.useCallback(() => setOpen(false), []);
+  const [open, setOpen] = React.useState(null); // the page it opened on ('' the first), while it is open
+  const close = React.useCallback(() => setOpen(null), []);
+  React.useEffect(() => {
+    const onOpen = (event) => setOpen((event.detail && event.detail.page) || '');
+    window.addEventListener(OPEN_SETTINGS, onOpen);
+    return () => window.removeEventListener(OPEN_SETTINGS, onOpen);
+  }, []);
   return (
     <div data-settings="1" style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-      <button type="button" className="settings-gear" title="Settings" aria-label="Settings" aria-expanded={open} aria-haspopup="dialog" onClick={() => setOpen(true)}>
+      <button type="button" className="settings-gear" title="Settings" aria-label="Settings" aria-expanded={open !== null} aria-haspopup="dialog" onClick={() => setOpen('')}>
         {GEAR}
       </button>
-      {open && <SettingsDialog test={test} onClose={close} />}
+      {open !== null && <SettingsDialog key={open} test={test} initialPage={open || null} onClose={close} />}
     </div>
   );
 }

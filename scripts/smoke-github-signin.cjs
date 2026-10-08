@@ -52,8 +52,8 @@ const server = http.createServer(async (req, res) => {
     await until(() => js(win.webContents, '!!window.engelbartAPI && !!document.querySelector("button")').catch(() => false), 'ready');
     await js(win.webContents, `window.engelbartAPI.createProjectWithWelcome({name:'GitHub smoke',directory:${JSON.stringify(root)}})`);
     win.webContents.reload();
-    await until(() => js(win.webContents, '!!document.querySelector("[data-rail-add]")').catch(() => false), 'workspace');
-    await js(win.webContents, 'document.querySelector("[data-rail-add] > button").click()');
+    await until(() => js(win.webContents, '!!document.querySelector("[data-sb-fixed-row=add]")').catch(() => false), 'workspace');
+    await js(win.webContents, 'document.querySelector("[data-sb-fixed-row=add]").click()'); // the sidebar's Add sources
     await until(() => js(win.webContents, '!!document.querySelector("[data-add-github]")'), 'GitHub menu');
     await js(win.webContents, 'document.querySelector("[data-add-github]").click()');
     await until(() => js(win.webContents, '!!document.querySelector("[data-github-waiting]")'), 'waiting in app');

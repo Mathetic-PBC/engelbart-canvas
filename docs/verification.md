@@ -191,3 +191,28 @@ Unit tests: 119 passing (`test/doc-model.test.cjs` gained the task/bullet/`@Task
 | A run in progress | Answer so far smaller and grey with **no rule**; `2 steps` with a square-ended angle; Stop as text | 1:1 screenshot |
 
 Not exercised against a real model in this pass: `--resume` inside the window with Claude Code and Codex (the command lines and the resumed input are asserted with the CLI stubbed; both resumes were verified by hand on 2026-09-19 for the escalation ladder, which uses the same calls), and whether `ultra` is accepted for every Codex model on Hudson's plan.
+
+### Addendum — 2026-10-07 (the new sidebar)
+
+Built from the Sidebar workspace's plan (requirements, hand-drawn mockup and Order, Iconography, Switch Projects); the plan
+asked for a Claude Design file first, which this Build could not make (no browser), so it was built in the app directly.
+`npm test` covers the model (`test/sidebar-model.test.cjs`), the drawn sidebar (`test/sidebar-ui.test.cjs`), stars and the
+tree's edit times (`test/projects.test.cjs`) and the panels' placement (`test/place.test.cjs`). Driven in the real app,
+hidden, on disposable data by `scripts/smoke-sidebar.cjs` (`ENGELBART_SIDEBAR_SHOTS=<dir>` for pictures); the post-its and
+windows smokes were run again on it.
+
+| Step | Observed | Evidence |
+| --- | --- | --- |
+| Open a project with ten workspaces, two deep | Head `Memex studies ⌄` with Settings and Search; Inbox (dot and `1`), Agents, Connections, Library, Add sources; Workspaces: User Interface open on Sidebar (marked), Focusing attention, Middle Canvas, then Onboarding, Library, `··· More`; no grandchild; Your sources: Starred and Notes open, the rest folded with counts | `60-sidebar.png` |
+| Inbox, Agents, Connections, Library, Add sources | each opens beside the sidebar at its row (never over it); Escape closes it and leaves the workspace open | `61-sidebar-library.png`, `62-sidebar-add-sources.png` |
+| Add sources | Note, Sticky, the link field, Choose from disk…, Add from GitHub…; no search, no Sub-Workspace, no rule | `62-sidebar-add-sources.png` |
+| The project's chevron | Switch project ›, Rename; the list: this project ticked, New project, All projects and library | `63-sidebar-project-menu.png` |
+| Workspaces' More | every workspace as the tree has them, the one open here marked; Archived versions under them | `64-sidebar-all-workspaces.png` |
+| The gear; Connections → Manage connections | Settings opens at Model, then at Connections; the top-right gear is out of sight while the sidebar shows its own | smoke assertions |
+| Right click a note → Star; a row's ⊖ | it joins Starred (`state.json` `starred`); the other leaves this workspace | smoke assertions |
+| Search, `Middle`, Enter | Middle Canvas opens and is marked in Workspaces | `65-sidebar-search.png` |
+| Workspaces' +, `Reading group`, Enter | made, gone into, first in Workspaces | smoke assertions |
+| Hide stickies; the toggle in the title bar; ⌘\ | the label turns to Show stickies; the sidebar folds away (the top-right gear comes back) and returns | `66-sidebar-folded.png` |
+| A post-it dragged onto the sidebar's foot | it crumples and is thrown away; the trash beside Hide stickies lists it; Restore brings it back | `scripts/smoke-post-its.cjs`: passed on one run of three; on the others the synthetic drag stalled partway, as it does on every run on the commit before (old trash can) |
+
+Not done: reordering workspaces (requirement 10; the tree is still ordered by when each was made); a Claude Design file.
