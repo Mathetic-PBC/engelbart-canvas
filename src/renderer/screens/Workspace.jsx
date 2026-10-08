@@ -97,6 +97,8 @@ function Separator({ onDown, onMove, onUp, onReset }) {
 }
 
 const WS_TAB = { id: 'ws', title: 'Workspace' };
+// What an empty workspace page shows until something is written (2026-10-08, the design's "Write your thoughts…").
+const WRITE_HINT = 'Write your thoughts, or ask @bart to explain, brainstorm, or find papers.';
 const ARCHIVE_TAB = 'archive:'; // an archived version's tab (2026-09-27: it opens in the middle, read-only, not on the Stage)
 const FOOT_BUTTON = { padding: '3px 6px', border: 0, borderRadius: 5, background: '#fff', cursor: 'pointer', font: '400 15px/1.4 var(--font-sans)', color: '#8f8f8f', transition: 'color 120ms' };
 const VIEW_SAVE_DELAY = 400;
@@ -1420,8 +1422,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const currentTab = tabs.find((tab) => tab.id === activeTab);
   const docTitle = activeTab === 'ws' ? (topic ? topic.name : '') : (currentTab ? currentTab.title : '');
   // The title of the document in front named anew (its pane, DocPane, holds the draft): the workspace, or the note.
-  // The workspace in front's suggested places to start (onboarding's sub-questions, ../workspace/StartsBlock.jsx): shown
-  // under its title while its own document is in front, edited or removed there.
+  // The workspace in front's questions to investigate (onboarding's sub-questions, ../workspace/StartsBlock.jsx): shown
+  // under its title while its own document is in front, edited there (never removed: 2026-10-08).
   const frontWorkspace = docWorkspaceId && !docArchive && activeTab === 'ws' ? index.get(docWorkspaceId) : null;
   const frontStarts = (frontWorkspace && frontWorkspace.node.starts) || [];
   const saveStarts = async (next) => {
@@ -1829,6 +1831,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
                   viewOf: pane ? noView : viewOf,
                   onView: pane ? null : recordPosition,
                   footer: pane ? null : footer,
+                  // An empty workspace page says what it is for (2026-10-08), under its questions to investigate.
+                  placeholder: !pane && activeTab === 'ws' && !doc.archive ? WRITE_HINT : null,
                 }}
               />
             );

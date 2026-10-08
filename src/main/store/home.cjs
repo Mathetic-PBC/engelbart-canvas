@@ -84,6 +84,13 @@ function normalizeGithub(value) {
   return { clientId, appSlug };
 }
 
+// OpenAlex (2026-10-08): the key onboarding's paper searches and @discover's tools call with (../bart/papers.cjs
+// openAlexKey; OPENALEX_API_KEY wins). Empty: the keyless daily allowance, which a day of use can run out.
+function normalizeOpenalex(value) {
+  const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  return { apiKey: typeof input.apiKey === 'string' ? input.apiKey.trim().slice(0, 200) : '' };
+}
+
 function normalizeConfig(value) {
   const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   return {
@@ -94,6 +101,7 @@ function normalizeConfig(value) {
     github: normalizeGithub(input.github),
     // Git, Claude Code and Codex as the last check saw them, and what the person chose about them (../tools/record.cjs).
     tools: normalizeTools(input.tools),
+    openalex: normalizeOpenalex(input.openalex),
   };
 }
 

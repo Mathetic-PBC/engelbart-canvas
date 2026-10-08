@@ -12,10 +12,21 @@
 // A record is what the agent needs to write a guide entry and to go on tracing: an id to pass to the other tools, the
 // title, authors, year, venue, DOI, abstract, an open-access address and an arXiv page when there are any. Lists carry
 // no abstract (resolve gives it), so a list of a hundred references stays small.
+//
+// The key (2026-10-08): nothing passed one before, and the keyless allowance ran out in a day of testing, every search
+// then a 429. OPENALEX_API_KEY in the environment, else ~/.engelbart/config.json `openalex.apiKey`, read for every call so
+// a key pasted in takes effect at once. After a 429 the tools say so for LIMITED_MS without calling again (`limited()`),
+// so a climb can tell "OpenAlex is not available" from "nothing was found". ENGELBART_OPENALEX_API names a fake OpenAlex,
+// for tests and scripted runs only.
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const API = 'https://api.openalex.org';
 const ARXIV_API = 'https://export.arxiv.org/api/query';
 const TIMEOUT_MS = 20_000;
+const LIMITED_MS = 10 * 60_000;
 const MAX_LIST = 100;
 const LIST_FIELDS = 'id,title,publication_year,authorships,primary_location,doi,cited_by_count,type';
 const FULL_FIELDS = `${LIST_FIELDS},abstract_inverted_index,best_oa_location,open_access,locations,referenced_works_count,referenced_works,related_works`;
@@ -80,11 +91,32 @@ function fullRecord(work) {
   };
 }
 
-class PapersError extends Error {}
+class PapersError extends Error {
+  constructor(message, code = null) { super(message); if (code) this.code = code; }
+}
 
-/** `fetchImpl` and `wait` are for tests. */
-function createPapers({ fetchImpl = globalThis.fetch, wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), apiKey = null } = {}) {
+/** The OpenAlex key: OPENALEX_API_KEY, else config.json's `openalex.apiKey` under `root` (~/.engelbart); null without one. */
+function openAlexKey({ env = process.env, root = path.join(os.homedir(), '.engelbart') } = {}) {
+  const fromEnv = String(env.OPENALEX_API_KEY || '').trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const config = JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8'));
+    const key = config && config.openalex && typeof config.openalex.apiKey === 'string' ? config.openalex.apiKey.trim() : '';
+    return key || null;
+  } catch { return null; }
+}
+
+const LIMITED = 'OpenAlex refused the call: the daily allowance for callers without a key is used up, or too many calls came at once.';
+
+/**
+ * `fetchImpl`, `wait` and `clock` are for tests. `apiKey`: a key, or a function asked for one each call (openAlexKey by
+ * default). `api`: OpenAlex's address (ENGELBART_OPENALEX_API, a fake, else the real one).
+ */
+function createPapers({ fetchImpl = globalThis.fetch, wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), apiKey = () => openAlexKey(), api: base = process.env.ENGELBART_OPENALEX_API || API, clock = () => Date.now() } = {}) {
+  let limitedAt = null; // when OpenAlex last answered 429; null once a call has gone through since
+  const limited = () => limitedAt != null && clock() - limitedAt < LIMITED_MS;
   async function get(url, { json = true } = {}) {
+    if (limited()) throw new PapersError(LIMITED, 'rate-limited');
     for (let attempt = 0; ; attempt += 1) {
       let response;
       try {
@@ -93,17 +125,19 @@ function createPapers({ fetchImpl = globalThis.fetch, wait = (ms) => new Promise
         if (attempt === 0) { await wait(1500); continue; }
         throw new PapersError(`OpenAlex could not be reached (${String(error && error.message || error).split('\n')[0]}).`);
       }
-      if (response.status === 404) return null;
+      if (response.status === 404) { limitedAt = null; return null; }
       if ((response.status === 429 || response.status >= 500) && attempt === 0) { await wait(1500); continue; }
-      if (response.status === 429) throw new PapersError('OpenAlex refused the call: the daily allowance for callers without a key is used up, or too many calls came at once.');
+      if (response.status === 429) { limitedAt = clock(); throw new PapersError(LIMITED, 'rate-limited'); }
       if (!response.ok) throw new PapersError(`OpenAlex answered ${response.status}.`);
+      limitedAt = null;
       return json ? response.json() : response.text();
     }
   }
   const api = (route, params = {}) => {
-    const url = new URL(`${API}${route}`);
+    const url = new URL(`${base}${route}`);
     for (const [key, value] of Object.entries(params)) if (value != null && value !== '') url.searchParams.set(key, String(value));
-    if (apiKey) url.searchParams.set('api_key', apiKey);
+    const key = typeof apiKey === 'function' ? apiKey() : apiKey;
+    if (key) url.searchParams.set('api_key', key);
     return get(url.toString());
   };
   const work = (id) => api(`/works/${id}`, { select: FULL_FIELDS });
@@ -187,12 +221,23 @@ function createPapers({ fetchImpl = globalThis.fetch, wait = (ms) => new Promise
       const out = await list(`author.id:${short(person.id)}`, { sort: sort === 'recent' ? 'publication_date:desc' : 'cited_by_count:desc', limit: count(limit, 25) });
       return { found: true, author: describe(person), others_with_that_name: others.map(describe), total: out.total, order: sort === 'recent' ? 'most recent first' : 'most cited first', results: out.results };
     },
-    async search({ query, limit, from_year: fromYear, until_year: untilYear }) {
+    /**
+     * Words, optionally within years. `min_cited`, `types` (article, review, book-chapter…) and `with_abstract` filter in
+     * OpenAlex itself (onboarding's searches use them: raw keyword hits were obscure papers no one cites).
+     */
+    async search({ query, limit, from_year: fromYear, until_year: untilYear, min_cited: minCited, types, with_abstract: withAbstract }) {
       const text = clean(query);
       if (!text) throw new PapersError('Give words to search for.');
-      const out = await list(years(fromYear, untilYear).join(',') || undefined, { search: text, limit: count(limit, 10, 25) });
+      const filters = [...years(fromYear, untilYear)];
+      if (Number.isInteger(minCited) && minCited > 0) filters.push(`cited_by_count:>${minCited - 1}`);
+      const kinds = (Array.isArray(types) ? types : []).map((one) => String(one).replace(/[^a-z-]/g, '')).filter(Boolean);
+      if (kinds.length) filters.push(`type:${kinds.join('|')}`);
+      if (withAbstract) filters.push('has_abstract:true');
+      const out = await list(filters.join(',') || undefined, { search: text, limit: count(limit, 10, 25) });
       return { total: out.total, order: 'relevance (OpenAlex ranks the most cited high: prefer the citation graph)', results: out.results };
     },
+    /** Whether OpenAlex refused a call in the last LIMITED_MS (a 429): its tools fail at once meanwhile. */
+    limited,
   };
 }
 
@@ -229,4 +274,4 @@ async function callTool(papers, name, args) {
   }
 }
 
-module.exports = { PAPER_TOOLS, createPapers, callTool, abstractOf, fullRecord, listRecord, PapersError };
+module.exports = { PAPER_TOOLS, createPapers, callTool, abstractOf, fullRecord, listRecord, PapersError, openAlexKey, LIMITED_MS };

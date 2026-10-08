@@ -2,7 +2,8 @@
 
 // @discover's paper tools as an MCP server over stdio (2026-09-30; ./papers.cjs), started by Claude Code (--mcp-config)
 // or Codex (its private home's config.toml) with Engelbart's own executable as Node (ELECTRON_RUN_AS_NODE), as the
-// sandbox adapter is (../sandbox/local-mcp.cjs). It holds no credentials and reads nothing on disk.
+// sandbox adapter is (../sandbox/local-mcp.cjs). The one thing it reads is the OpenAlex key, when there is one (./papers.cjs
+// openAlexKey: OPENALEX_API_KEY, else ~/.engelbart/config.json).
 const { Server } = require('@modelcontextprotocol/sdk/server/index.js');
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
 const { ListToolsRequestSchema, CallToolRequestSchema } = require('@modelcontextprotocol/sdk/types.js');

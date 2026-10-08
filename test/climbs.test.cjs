@@ -116,7 +116,7 @@ test('excerpts for Bart: the windows nearest the sub-question, never the referen
 /* -------------------------------------------------------------------------------- a climb: order and approval */
 
 const BY = { provider: 'anthropic', model: 'Opus', id: 'opus', effort: 'high' };
-const verdict = (n, ok = true, extra = {}) => JSON.stringify({ rung: n, read_in_context: true, says_what_line_claims: ok, self_contained: true, assumes_only_earlier: true, why: ok ? 'fine' : 'claims too much', fix: null, ...extra });
+const verdict = (n, ok = true, extra = {}) => JSON.stringify({ rung: n, read_in_context: true, answers_sub_question: true, says_what_line_claims: ok, self_contained: true, assumes_only_earlier: true, why: ok ? 'fine' : 'claims too much', fix: null, ...extra });
 const newcomer = (same = true, confusing = []) => JSON.stringify({ newcomer: true, own_answer: 'Struggle first helps transfer.', newcomer_answer: same ? 'Struggle first helps transfer.' : '?', same, confusing });
 
 /** A scripted writer and checker: `draft` the writer's rungs, `checks` one reply per whole-climb check, `first` the first rung's. */
@@ -169,7 +169,7 @@ test('a climb: drafted, gated, put in order, approved rung by rung, the newcomer
     assert.equal(rung.approval.at, '2026-10-08T00:00:00.000Z');
     assert.equal(rung.approval.read.passage, rung.passage);
     assert.match(rung.approval.read.context, /«/);
-    assert.deepEqual(Object.keys(rung.approval.verdict).sort(), ['assumes_only_earlier', 'read_in_context', 'says_what_line_claims', 'self_contained', 'why']);
+    assert.deepEqual(Object.keys(rung.approval.verdict).sort(), ['answers_sub_question', 'assumes_only_earlier', 'read_in_context', 'says_what_line_claims', 'self_contained', 'why']);
   }
   assert.deepEqual(out.more.map((one) => one.label), ['Other 2020'], 'a paper with no text is listed apart, not checked');
   // Rungs appeared one at a time, and every one ever shown was approved.
@@ -295,6 +295,7 @@ test('the checker\'s reply is read line by line, fences and half-written lines p
   assert.equal(climb.passes(out.verdicts.get(2)), false);
   assert.equal(out.newcomer.same, true);
   assert.equal(climb.passes({ read_in_context: true, says_what_line_claims: true, self_contained: true }), false, 'every check, or none');
+  assert.equal(climb.passes({ read_in_context: true, says_what_line_claims: true, self_contained: true, assumes_only_earlier: true }), false, 'the four of build 2 are not enough: it must answer the sub-question');
 });
 
 /* ------------------------------------------------------------------------------- the runs, and their fallbacks */
@@ -435,16 +436,21 @@ test('scripted runs (ENGELBART_BART_FAKE=1): the fake session drafts quotes that
 
 /* ------------------------------------------------------------------------------------- the preparing screen */
 
-test('the preparing screen ends when every sub-question has an approved item, or after 20 seconds, naming the step under way', async () => {
-  const { preparingState, PREPARE_MS } = await renderer('onboarding.js');
-  assert.equal(PREPARE_MS, 20000);
+test('the preparing screen ends when the first sub-question has two approved papers, or after 60 seconds, naming the step under way', async () => {
+  const { preparingState, PREPARE_MS, FIRST_PAPERS } = await renderer('onboarding.js');
+  assert.deepEqual([PREPARE_MS, FIRST_PAPERS], [60000, 2]);
   assert.deepEqual(preparingState({ starts: null }), { done: false, label: 'reading your answers' });
   const starts = [{ id: 'a' }, { id: 'b' }];
-  assert.deepEqual(preparingState({ starts, climbs: {}, elapsedMs: 100 }), { done: false, label: 'finding places to start' });
-  assert.deepEqual(preparingState({ starts, climbs: { a: { step: 'checking', rungs: [] }, b: { step: 'finding', rungs: [] } }, elapsedMs: 100 }), { done: false, label: 'finding places to start' });
-  assert.deepEqual(preparingState({ starts, climbs: { a: { step: 'checking', rungs: [{ id: 1 }] }, b: { step: 'checking', rungs: [] } }, elapsedMs: 100 }), { done: false, label: 'checking each step' });
-  assert.equal(preparingState({ starts, climbs: { a: { step: 'checking', rungs: [{ id: 1 }] }, b: { step: 'done', rungs: [{ kind: 'action' }] } }, elapsedMs: 100 }).done, true, 'one approved item each, the rest still being checked');
-  assert.equal(preparingState({ starts, climbs: {}, elapsedMs: 20000 }).done, true, 'twenty seconds at most');
+  const paper = (id) => ({ id, kind: 'paper' });
+  assert.deepEqual(preparingState({ starts, climbs: {}, elapsedMs: 100 }), { done: false, label: 'finding papers' });
+  assert.deepEqual(preparingState({ starts, climbs: { a: { step: 'finding', status: 'writing', rungs: [] } }, elapsedMs: 100 }), { done: false, label: 'finding papers' });
+  assert.deepEqual(preparingState({ starts, climbs: { a: { step: 'checking', status: 'checking', rungs: [paper(1)] } }, elapsedMs: 100 }), { done: false, label: 'checking each passage' }, 'one paper is not enough');
+  assert.equal(preparingState({ starts, climbs: { a: { step: 'checking', status: 'checking', rungs: [paper(1), paper(2)] }, b: { step: 'reading', rungs: [] } }, elapsedMs: 100 }).done, true, 'two on the first, the rest still coming');
+  assert.equal(preparingState({ starts, climbs: { a: { step: 'checking', status: 'checking', rungs: [{ kind: 'action' }, paper(1)] }, b: { rungs: [paper(3), paper(4)] } }, elapsedMs: 100 }).done, false, 'a step that is not a paper does not count, nor the second sub-question\'s papers');
+  assert.equal(preparingState({ starts, climbs: { a: { step: 'done', status: 'done', rungs: [paper(1)] } }, elapsedMs: 100 }).done, true, 'the first climb ended with one: nothing more is coming');
+  assert.equal(preparingState({ starts, climbs: { a: { step: 'done', status: 'unavailable', rungs: [] } }, elapsedMs: 100 }).done, true, 'OpenAlex refused: nothing is coming');
+  assert.equal(preparingState({ starts, climbs: {}, elapsedMs: 59999 }).done, false);
+  assert.equal(preparingState({ starts, climbs: {}, elapsedMs: 60000 }).done, true, 'sixty seconds at most, then the workspace with what there is');
   assert.equal(preparingState({ starts: [], climbs: {}, elapsedMs: 0 }).done, true, 'no sub-questions: nothing to wait for');
 });
 
@@ -478,17 +484,24 @@ function load(file) {
   return compiled.exports;
 }
 
-test('the block: each approved rung as "paper · part" and its line, the next step being checked, reading not checked apart', () => {
+test('the block: "Questions to investigate", each a triangle and its words; a paper as a row of title, author year · section and its line', () => {
   const { default: StartsBlock, climbFor } = load('workspace/StartsBlock.jsx');
   const starts = [{ id: 's1', text: 'How have prior studies measured transfer?', by: 'bart' }, { id: 's2', text: 'Which student behaviors does your data capture?', by: 'bart' }];
-  const rung = { id: 'r1', kind: 'paper', label: 'Kapur 2008', part: 'Method', line: 'Struggle first, then tested on new problems', gloss: 'Transfer: using what you learned on a new problem.', approval: { model: 'Opus', effort: 'high', at: '2026-10-08T00:00:00Z' } };
+  const rung = { id: 'r1', kind: 'paper', label: 'Kapur 2008', part: 'Method', paper: { id: 'W1', title: 'Productive failure' }, line: 'Struggle first, then tested on new problems', gloss: 'Transfer: using what you learned on a new problem.', approval: { model: 'Opus', effort: 'high', at: '2026-10-08T00:00:00Z' } };
   const climbsHere = {
     s1: { question: starts[0].text, status: 'checking', rungs: [rung], more: [] },
     s2: { question: 'An older wording', status: 'done', rungs: [rung], more: [] },
   };
-  assert.equal(climbFor(starts[1], climbsHere), null, 'a climb made for other words is not shown');
+  assert.equal(climbFor(starts[1], climbsHere), climbsHere.s2, 'what was shown under an edited sub-question stays');
   const html = renderToStaticMarkup(React.createElement(StartsBlock, { starts, onSave: () => {}, climbs: climbsHere, activeRung: 'r1' }));
-  assert.match(html, /Kapur 2008 · Method/);
+  assert.match(html, />Questions to investigate</);
+  assert.doesNotMatch(html, /Suggested places to start/);
+  // A row is the triangle and the words: no dashed circle, no number, no "Bart's suggestion", no way to delete it.
+  assert.doesNotMatch(html, /stroke-dasharray|data-start-remove|Remove sub-question|Bart’s suggestion|data-start-bart/);
+  assert.doesNotMatch(html, />1<\/span>|>2<\/span>/, 'no number');
+  assert.equal((html.match(/data-start-toggle="1"/g) || []).length, 2);
+  assert.match(html, /data-rung-title="1"[^>]*>Productive failure</);
+  assert.match(html, /data-rung-where="1"[^>]*>Kapur 2008 · Method</);
   assert.match(html, /Struggle first, then tested on new problems/);
   assert.match(html, /data-rung-gloss="1"[^>]*>Transfer: using what you learned/);
   assert.match(html, /aria-current="true"/);
@@ -499,5 +512,205 @@ test('the block: each approved rung as "paper · part" and its line, the next st
   assert.match(done, /More reading, not checked/);
   assert.match(done, /Other 2020 · A paper behind a paywall/);
   const waiting = renderToStaticMarkup(React.createElement(StartsBlock, { starts: starts.slice(0, 1), onSave: () => {}, climbs: {} }));
-  assert.match(waiting, /Finding places to start…/);
+  assert.match(waiting, /Finding papers…/);
+  // OpenAlex refused: said under the sub-questions, and no step stands in for papers.
+  const refused = renderToStaticMarkup(React.createElement(StartsBlock, { starts: starts.slice(0, 1), onSave: () => {}, climbs: { s1: { question: starts[0].text, status: 'unavailable', rungs: [], more: [] } } }));
+  assert.match(refused, /data-starts-unavailable="1"[^>]*>OpenAlex, where Bart finds papers, isn’t available right now\. Bart will look again the next time this workspace opens\.</);
+  assert.doesNotMatch(refused, /Add a paper you trust|Finding papers/);
+});
+
+/* ------------------------------------------------- follow-ups (2026-10-08): picking, the fifth check, nothing goes */
+
+test('picking: code sets aside a paper no one cites when cited ones are there; the approving model picks the rest, with reasons', async () => {
+  const pool = [
+    { id: 'W10', title: 'Deep shift-invariant behavior prediction', cited_by: 0, year: 2024 },
+    { id: 'W11', title: 'Help seeking in interactive learning environments', cited_by: 900, venue: 'Review of Educational Research', type: 'review', abstract: 'A review.' },
+    { id: 'W12', title: 'Productive failure', cited_by: 700, abstract: 'Struggle.' },
+    { id: 'W13', title: 'Teacher well-being and classroom behaviour', cited_by: 40, abstract: 'Teachers.' },
+  ];
+  assert.deepEqual(climb.worthReading(pool).map((one) => one.id), ['W11', 'W12', 'W13'], 'three cited ten times or more: the uncited one is set aside');
+  assert.deepEqual(climb.worthReading(pool.slice(0, 2)).map((one) => one.id), ['W10', 'W11'], 'with fewer, nothing is set aside');
+  const asked = [];
+  const ask = async (role, message) => { asked.push({ role, message }); return { text: '{"picked": [{"paper": "W12", "why": "the classic study"}, {"paper": "W11", "why": "a review"}, {"paper": "W99", "why": "not given"}], "refused": [{"paper": "W13", "why": "teachers, not students"}]}', by: BY }; };
+  const out = await climb.pickPapers({ sub: 'What counts as student help seeking?', question: 'Q?', papers: pool, ask, now: () => 'then' });
+  assert.deepEqual(out.ids, ['W12', 'W11'], 'the model\'s order, only papers it was given');
+  assert.equal(asked[0].role, 'picker');
+  assert.match(asked[0].message, /\[W11\] "Help seeking in interactive learning environments" \(.*Review of Educational Research · review · cited by 900\)/);
+  assert.doesNotMatch(asked[0].message, /W10/, 'the uncited one never reaches the model');
+  assert.match(climb.PICKER_SYSTEM, /would an expert hand this paper to a newcomer/);
+  assert.match(climb.PICKER_SYSTEM, /Never pick an obscure paper no one cites when better ones are there/);
+  assert.deepEqual(out.record.picked.map((one) => one.why), ['the classic study', 'a review']);
+  assert.deepEqual(out.record.refused.map((one) => one.paper), ['W13', 'W10']);
+  assert.equal(out.record.by, 'Opus high');
+  // The model failing: code's order stands, and the record says no model picked.
+  const failed = await climb.pickPapers({ sub: 'S?', question: 'Q?', papers: pool, ask: async () => { throw new Error('down'); } });
+  assert.deepEqual(failed.ids, ['W11', 'W12', 'W13']);
+  assert.equal(failed.record.by, null);
+});
+
+test('a climb quotes only the papers picked: the picker\'s refusals never reach the writer, and the pick is kept with the climb', async () => {
+  const projectDir = tmp();
+  const shelf = fakeShelf([{ ...KAPUR, cited_by: 500 }, { ...BASTANI, cited_by: 300 }]);
+  const writers = [];
+  const answer = (message) => {
+    if (/Candidate papers:/.test(message)) return '{"picked": [{"paper": "W2", "why": "on point"}], "refused": [{"paper": "W1", "why": "another setting"}]}';
+    if (/Papers you may quote/.test(message)) { writers.push(message); return JSON.stringify({ answer: 'A', rungs: [{ stage: 'known', paper: 'W2', passage: 'Access to answers can stand in for learning.', line: 'Answers can replace learning' }] }); }
+    return /Write one line/.test(message) ? verdict(1) : [verdict(1), newcomer()].join('\n');
+  };
+  fs.mkdirSync(path.join(projectDir, '.context'), { recursive: true });
+  fs.writeFileSync(path.join(projectDir, '.context', 'start-candidates.json'), JSON.stringify({ papers: [{ id: 'W1', title: KAPUR.title, cited_by: 500 }, { id: 'W2', title: BASTANI.title, cited_by: 300 }] }));
+  const made = climbs.createClimbs({ readModels: models, makeSession: sessionsFrom(answer), shelf, papers: { search: async () => ({ results: [] }) }, readWaitMs: 50 });
+  made.ensure({ projectDir, projectId: 'p', workspaceId: 'w', question: 'Q?', starts: [{ id: 's1', text: 'Does an AI tutor harm exam scores?' }] });
+  await made.settled();
+  assert.equal(writers.length, 1);
+  assert.match(writers[0], /\[W2\]/);
+  assert.doesNotMatch(writers[0], /\[W1\]/, 'refused by the picker: never quoted');
+  const kept = climbs.readClimbs(projectDir).starts.s1;
+  assert.deepEqual(kept.pick.picked, [{ paper: 'W2', why: 'on point' }]);
+  assert.deepEqual(kept.pick.refused, [{ paper: 'W1', why: 'another setting' }]);
+});
+
+test('searches filter in OpenAlex: cited, a kind a newcomer reads, with an abstract; loosened once when that finds almost nothing', async () => {
+  const calls = [];
+  const papers = { search: async (args) => { calls.push(args); return { results: args.min_cited ? [{ id: 'W1' }] : [{ id: 'W1' }, { id: 'W2' }] }; } };
+  const out = await climbs.searchFiltered(papers, 'help seeking', 8);
+  assert.deepEqual(calls[0], { query: 'help seeking', limit: 8, min_cited: climbs.MIN_CITED, types: climbs.TYPES, with_abstract: true });
+  assert.deepEqual(calls[1], { query: 'help seeking', limit: 8, with_abstract: true });
+  assert.deepEqual(out.results.map((one) => one.id), ['W1', 'W2']);
+  const once = [];
+  await climbs.searchFiltered({ search: async (args) => { once.push(args); return { results: [{ id: 'a' }, { id: 'b' }] }; } }, 'x', 8);
+  assert.equal(once.length, 1, 'enough found: one call');
+});
+
+test('the fifth check: a passage is approved only when it answers the sub-question in its setting, not when it only shares its words', () => {
+  assert.ok(climb.CHECKS.includes('answers_sub_question'));
+  assert.match(climb.CHECKER_SYSTEM, /answers_sub_question: it speaks directly to the sub-question, in the setting/);
+  assert.match(climb.CHECKER_SYSTEM, /teacher well-being/);
+  assert.match(climb.WRITER_SYSTEM, /Every passage speaks directly to the sub-question/);
+  const message = climb.checkerMessage({ sub: 'What counts as student behavior?', rungs: [{ stage: 'problem', label: 'X 2020', part: 'Results', source: 'pdf', page: 2, line: 'l', gloss: '', passage: 'p', context: 'c' }], firstOnly: true });
+  assert.match(message, /"answers_sub_question": true\|false/);
+  assert.equal(climb.passes(JSON.parse(verdict(1, true, { answers_sub_question: false }))), false);
+});
+
+test('nothing shown ever disappears: a rung shown and refused by a later round stays; fixes may move it, never drop or reword it', async () => {
+  // Rung 1 is approved alone first, so it shows; round 1 refuses it with a drop and moves rung 3 first.
+  const drop = verdict(1, false, { fix: { line: 'A reworded line' } });
+  const { ask } = scripted({
+    draft: { answer: 'A', rungs: RUNGS, more: [] },
+    checks: [[drop, verdict(2), verdict(3), newcomer(false, [{ rung: 1, problem: 'off topic', fix: 'drop' }, { rung: 3, problem: 'should come first', fix: 'reorder', move_to: 1 }])].join('\n'), [verdict(1), verdict(2), verdict(3), newcomer()].join('\n')],
+  });
+  const updates = [];
+  const out = await climb.buildClimb({ sub: 'S?', question: 'Q?', papers: [KAPUR], ask, onUpdate: (one) => updates.push(one) });
+  const first = updates.find((one) => one.rungs.length)?.rungs[0];
+  assert.equal(first.line, 'Struggle before teaching can help');
+  for (const one of updates.filter((u) => updates.indexOf(u) >= updates.findIndex((x) => x.rungs.length))) {
+    const again = one.rungs.find((rung) => rung.id === first.id);
+    assert.ok(again, 'once shown, in every update after');
+    assert.equal(again.line, first.line, 'never reworded');
+  }
+  assert.equal(out.rungs.length, 3);
+  assert.equal(out.rungs[0].stage, 'known', 'moved: a fix may reorder');
+  assert.ok(out.rungs.some((rung) => rung.id === first.id));
+  // applyFixes on its own: a shown rung survives a drop and a failed verdict with no fix.
+  const list = [{ id: 'a', line: 'x' }, { id: 'b', line: 'y' }];
+  const verdicts = new Map([[1, JSON.parse(verdict(1, false))], [2, JSON.parse(verdict(2, false))]]);
+  assert.deepEqual(climb.applyFixes(list, verdicts, { confusing: [{ rung: 1, fix: 'drop' }] }, new Set(['a'])).rungs.map((rung) => rung.id), ['a']);
+});
+
+test('a climb begun again keeps every rung shown before and adds to them; a step that stood in for papers gives way to papers', async () => {
+  const shownPaper = { id: 'old', kind: 'paper', paper: { id: 'W1' }, passage: 'Old passage.', label: 'Kapur 2008', part: 'Method', line: 'old' };
+  const action = { id: 'action-paper', kind: 'action', which: 'paper' };
+  const fresh = { id: 'new', kind: 'paper', paper: { id: 'W2' }, passage: 'New passage.' };
+  assert.deepEqual(climbs.withPrior([shownPaper], [fresh]).map((one) => one.id), ['old', 'new']);
+  assert.deepEqual(climbs.withPrior([shownPaper], [{ ...shownPaper, id: 'same-words' }, fresh]).map((one) => one.id), ['old', 'new'], 'the same passage is not shown twice');
+  assert.deepEqual(climbs.withPrior([action], [fresh]).map((one) => one.id), ['new']);
+  assert.deepEqual(climbs.withPrior([action], []).map((one) => one.id), ['action-paper']);
+
+  // Edited: its new climb starts from what was shown under the old words.
+  const projectDir = tmp();
+  const shelf = fakeShelf([BASTANI]);
+  const answer = (message) => {
+    if (/Papers you may quote/.test(message)) return JSON.stringify({ answer: 'A', rungs: [{ stage: 'known', paper: 'W2', passage: 'Access to answers can stand in for learning.', line: 'Answers can replace learning' }] });
+    return /Write one line/.test(message) ? verdict(1) : [verdict(1), newcomer()].join('\n');
+  };
+  fs.mkdirSync(path.join(projectDir, '.context'), { recursive: true });
+  fs.writeFileSync(path.join(projectDir, '.context', 'climbs.json'), JSON.stringify({ v: 1, starts: { s1: { question: 'Old words?', status: 'done', rungs: [shownPaper] } } }));
+  fs.writeFileSync(path.join(projectDir, '.context', 'start-candidates.json'), JSON.stringify({ papers: [{ id: 'W2', title: BASTANI.title, cited_by: 3 }] }));
+  const made = climbs.createClimbs({ readModels: models, makeSession: sessionsFrom(answer), shelf, papers: { search: async () => ({ results: [] }) }, readWaitMs: 50 });
+  const states = [];
+  const where = { projectDir, projectId: 'p', workspaceId: 'w', question: 'Q?' };
+  made.ensure({ ...where, starts: [{ id: 's1', text: 'Does an AI tutor harm exam scores?' }] });
+  const poll = setInterval(() => { const one = climbs.readClimbs(projectDir).starts.s1; if (one) states.push(one.rungs.map((rung) => rung.id)); }, 1);
+  await made.settled();
+  clearInterval(poll);
+  const kept = climbs.readClimbs(projectDir).starts.s1;
+  assert.equal(kept.question, 'Does an AI tutor harm exam scores?');
+  assert.deepEqual(kept.rungs.map((rung) => rung.id).slice(0, 1), ['old']);
+  assert.equal(kept.rungs.length, 2);
+  assert.ok(states.every((ids) => ids[0] === 'old'), 'the old rung was there in every state written');
+});
+
+test('OpenAlex refusing (429): the climb ends "unavailable", not with a step standing in for papers, and is climbed again next time', async () => {
+  const projectDir = tmp();
+  const limited = Object.assign(new Error('OpenAlex refused the call'), { code: 'rate-limited' });
+  let refusing = true;
+  const searched = [];
+  const shelf = fakeShelf([BASTANI]);
+  const papers = { search: async ({ query }) => { searched.push(query); if (refusing) throw limited; return { results: [{ id: 'W2', title: BASTANI.title, cited_by: 3 }] }; } };
+  const answer = (message) => {
+    if (/Papers you may quote/.test(message)) return JSON.stringify({ answer: 'A', rungs: [{ stage: 'known', paper: 'W2', passage: 'Access to answers can stand in for learning.', line: 'Answers can replace learning' }] });
+    return /Write one line/.test(message) ? verdict(1) : [verdict(1), newcomer()].join('\n');
+  };
+  const made = climbs.createClimbs({ readModels: models, makeSession: sessionsFrom(answer), shelf, papers, readWaitMs: 50 });
+  const where = { projectDir, projectId: 'p', workspaceId: 'w', question: 'Q?' };
+  const starts = [{ id: 's1', text: 'Which student behaviors does your data capture?' }];
+  made.ensure({ ...where, starts });
+  await made.settled();
+  let kept = climbs.readClimbs(projectDir).starts.s1;
+  assert.equal(kept.status, 'unavailable');
+  assert.deepEqual(kept.rungs, [], 'no "Add your data" in place of papers');
+  assert.equal(searched.length, 1, 'after the 429, nothing more is asked of OpenAlex');
+  // The workspace shows again with OpenAlex back: climbed again.
+  refusing = false;
+  assert.deepEqual(made.ensure({ ...where, starts }), ['s1']);
+  await made.settled();
+  kept = climbs.readClimbs(projectDir).starts.s1;
+  assert.equal(kept.status, 'done');
+  assert.equal(kept.rungs[0].label, 'Bastani et al. 2025');
+});
+
+/* ------------------------------------------------------------------------------------------ OpenAlex itself */
+
+const papersLib = require('../src/main/bart/papers.cjs');
+
+test('OpenAlex: the key from OPENALEX_API_KEY, else config.json\'s openalex.apiKey; a fake OpenAlex by ENGELBART_OPENALEX_API', async () => {
+  const root = tmp();
+  assert.equal(papersLib.openAlexKey({ env: {}, root }), null);
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ openalex: { apiKey: ' from-config ' } }));
+  assert.equal(papersLib.openAlexKey({ env: {}, root }), 'from-config');
+  assert.equal(papersLib.openAlexKey({ env: { OPENALEX_API_KEY: 'from-env' }, root }), 'from-env');
+  const urls = [];
+  const fetchImpl = async (url) => { urls.push(new URL(url)); return { ok: true, status: 200, json: async () => ({ meta: { count: 0 }, results: [] }) }; };
+  const papers = papersLib.createPapers({ fetchImpl, apiKey: () => 'k1', api: 'http://127.0.0.1:9/openalex', wait: async () => {} });
+  await papers.search({ query: 'help seeking', limit: 8, min_cited: 5, types: ['article', 'review'], with_abstract: true });
+  assert.equal(urls[0].origin + urls[0].pathname, 'http://127.0.0.1:9/openalex/works');
+  assert.equal(urls[0].searchParams.get('api_key'), 'k1');
+  assert.equal(urls[0].searchParams.get('filter'), 'cited_by_count:>4,type:article|review,has_abstract:true');
+  assert.equal(urls[0].searchParams.get('search'), 'help seeking');
+  await papers.search({ query: 'plain' });
+  assert.equal(urls[1].searchParams.get('filter'), null, 'no filter asked, none sent');
+});
+
+test('OpenAlex: a 429 is told apart from nothing found, and for a while no call is made at all', async () => {
+  let calls = 0, at = 0;
+  const fetchImpl = async () => { calls += 1; return { ok: false, status: 429 }; };
+  const papers = papersLib.createPapers({ fetchImpl, apiKey: null, api: 'http://127.0.0.1:9', wait: async () => {}, clock: () => at });
+  assert.equal(papers.limited(), false);
+  await assert.rejects(papers.search({ query: 'x' }), (error) => error.code === 'rate-limited');
+  assert.equal(calls, 2, 'tried once more after a pause');
+  assert.equal(papers.limited(), true);
+  await assert.rejects(papers.resolve({ query: 'W1' }), (error) => error.code === 'rate-limited');
+  assert.equal(calls, 2, 'refused at once, without calling');
+  at = papersLib.LIMITED_MS;
+  assert.equal(papers.limited(), false, 'tried again later');
 });

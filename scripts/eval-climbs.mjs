@@ -2,7 +2,7 @@
 // (src/main/bart/onboard.cjs, climbs.cjs) — the searches after the cards, the papers read, the plan's sub-questions,
 // a climb for each drafted, gated in code and approved — and, per climb, what came of it: the newcomer check's result,
 // how many rungs, how long each passage is, and every passage the exact-match gate refused. Run by hand; not part of
-// npm test. It uses your Claude Code (or Codex) sign-in, as @bart does, and OpenAlex without a key.
+// npm test. It uses your Claude Code (or Codex) sign-in, as @bart does, and OpenAlex with your key when there is one.
 //
 //   node scripts/eval-climbs.mjs                      all the questions
 //   node scripts/eval-climbs.mjs --only 2             the first two
@@ -13,7 +13,9 @@
 // Papers are kept between runs in $TMPDIR/engelbart-eval-papers (--papers DIR to choose), so a second run reads none again.
 // OpenAlex without a key has a small daily budget shared by everyone on your network's address (about ten questions' worth;
 // it answers 429 once it is spent, until midnight UTC, and onboarding's searches in the app go without too). With
-// OPENALEX_API_KEY set the run uses your key instead.
+// OPENALEX_API_KEY set, or ~/.engelbart/config.json's openalex.apiKey, the run uses that key instead (papers.cjs openAlexKey).
+// Since 2026-10-08 the cards are "working" and "why" ("What would this make possible?") and the question they settle on;
+// each climb's pick (which papers the approving model chose to read, and why the rest were refused) is printed too.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -29,12 +31,12 @@ const { createPapers } = require('../src/main/bart/papers.cjs');
 const { normalizeModels, DEFAULT_MODELS } = require('../src/main/bart/models.cjs');
 
 const QUESTIONS = [
-  { working: 'how what students do in an AI-assisted programming course relates to what they can do later on their own', unsure: 'which behaviors actually predict transfer', findOut: 'Which behaviors predict learning transfer?' },
-  { working: 'novice programmers asking an AI tutor for help', unsure: 'whether asking for help early hurts learning', findOut: 'Does help-seeking from AI tutors reduce what novice programmers learn?' },
-  { working: 'how teachers manage small-group work in middle school classrooms', unsure: 'what cues teachers use to step in', findOut: 'How do teachers decide when to intervene in student group work?' },
-  { working: 'worked examples in introductory programming', unsure: 'when worked examples stop helping', findOut: 'What makes worked examples effective for learning to program?' },
-  { working: 'retrieval practice in university science courses', unsure: 'whether the testing effect holds for conceptual understanding', findOut: 'Do retrieval practice benefits hold for complex, conceptual material?' },
-  { working: 'feedback in large online courses', unsure: 'whether immediate or delayed feedback is better', findOut: 'How does feedback timing affect learning in online courses?' },
+  { working: 'how what students do in an AI-assisted programming course relates to what they can do later on their own', why: 'instructors could tell which habits to encourage', question: 'Which behaviors predict learning transfer?' },
+  { working: 'novice programmers asking an AI tutor for help', why: 'tutors could hold back help until it is useful', question: 'Does help-seeking from AI tutors reduce what novice programmers learn?' },
+  { working: 'how teachers manage small-group work in middle school classrooms', why: 'new teachers would know when to step in', question: 'How do teachers decide when to intervene in student group work?' },
+  { working: 'worked examples in introductory programming', why: 'course designers could use them where they help', question: 'What makes worked examples effective for learning to program?' },
+  { working: 'retrieval practice in university science courses', why: 'lecturers could use quizzes for deep understanding', question: 'Do retrieval practice benefits hold for complex, conceptual material?' },
+  { working: 'feedback in large online courses', why: 'platforms could time feedback better', question: 'How does feedback timing affect learning in online courses?' },
 ];
 
 const args = process.argv.slice(2);
@@ -47,7 +49,7 @@ const papersDir = flag('--papers') || path.join(os.tmpdir(), 'engelbart-eval-pap
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-eval-climbs-'));
 
 const readModels = () => ({ ...normalizeModels(DEFAULT_MODELS), provider });
-const papers = createPapers({ apiKey: process.env.OPENALEX_API_KEY || null });
+const papers = createPapers();
 const shelf = createShelf({ dir: papersDir, papers });
 const sessionOptions = { runDirectory: path.join(scratch, 'runs'), codexHome: path.join(scratch, 'codex-home') };
 const climbs = createClimbs({ readModels, shelf, papers, sessionOptions });
@@ -60,12 +62,12 @@ say(`Climbs eval: ${only} question(s) on ${provider === 'openai' ? 'Codex' : 'Cl
 
 const report = [];
 for (const answers of QUESTIONS.slice(from, from + only)) {
-  const question = answers.findOut;
+  const question = answers.question;
   say(`\n=== ${question}`);
   const began = Date.now();
   const { id } = onboard.open();
   // The cards, as a person would answer them: the searches run after each, and the best papers are read.
-  for (const card of ['working', 'unsure']) await onboard.answer(id, { card, answers });
+  for (const card of ['working', 'why']) await onboard.answer(id, { card, answers });
   await onboard.settled(id);
   const found = onboard.candidates(id);
   say(`  searches: ${found.searches.length}, papers found: ${found.papers.length} (${seconds(Date.now() - began)})`);
@@ -73,7 +75,7 @@ for (const answers of QUESTIONS.slice(from, from + only)) {
   if (refused && !found.papers.length) say(`  OpenAlex: ${refused.error}`);
   // The plan: its sub-questions start their climbs at once.
   const planAt = Date.now();
-  const plan = await onboard.plan(id, { answers, sentence: `I'm working on ${answers.working} because I want to find out ${question.replace(/\?$/, '').toLowerCase()}.` });
+  const plan = await onboard.plan(id, { answers, sentence: `I'm working on ${answers.working} so that ${answers.why}.` });
   say(`  plan (${seconds(Date.now() - planAt)}): ${plan.question}${plan.fallback ? ' [from their words]' : ''}`);
   plan.starts.forEach((start, i) => say(`    ${i + 1}. ${start}`));
   // The project: a folder of its own; the climbs are written there.
@@ -99,6 +101,7 @@ for (const answers of QUESTIONS.slice(from, from + only)) {
     say(`    newcomer check: ${newcomer}`);
     say(`    rungs: ${climb.rungs.length}${climb.fallback ? ` (fallback: ${climb.fallback})` : ''}; first approved ${firstSeen.has(start.id) ? seconds(firstSeen.get(start.id)) : '—'} after the plan`);
     say(`    passage lengths: ${lengths.join(', ') || '—'}`);
+    if (climb.pick) say(`    picked (${climb.pick.by || 'code, no model'}): ${climb.pick.picked.map((one) => `${one.paper} (${one.why})`).join('; ') || '—'}; refused ${climb.pick.refused.length}`);
     if (climb.timing) say(`    timing from its start: papers read ${climb.timing.read != null ? seconds(climb.timing.read) : '—'}, drafted ${climb.timing.drafted != null ? seconds(climb.timing.drafted) : '—'}, first approved ${climb.timing.firstApproved != null ? seconds(climb.timing.firstApproved) : '—'}, done ${seconds(climb.timing.done || 0)}`);
     for (const rung of climb.rungs) say(`      · ${rung.kind === 'action' ? rung.title : `${rung.label} · ${rung.part}`} — ${rung.line}${rung.gloss ? ` [gloss: ${rung.gloss}]` : ''}`);
     for (const check of climb.checks || []) say(`    check ${check.kind === 'first' ? 'first rung' : `round ${check.round}`} at ${seconds(check.ms)}: ${check.approved}/${check.rungs} approved${check.refused.map((one) => `; refused ${one.rung} (${one.failed.join(', ')}): ${one.why}`).join('')}`);

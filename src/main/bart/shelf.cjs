@@ -5,11 +5,13 @@
 // open-access pdf, found as a Zotero item's free copy is (../zotero/oa.cjs: OpenAlex's pdf addresses, then Semantic
 // Scholar's, then arXiv's), then its text page by page (../context/pdf-text.cjs, pdf.js, as the reader draws it). Kept in
 // `dir`, one folder a paper, so a paper is fetched once whatever project or onboarding asks again:
-//   <dir>/<W…>/record.json   { id, title, authors, year, venue, doi, abstract, at }
+//   <dir>/<W…>/record.json   { id, title, authors, year, venue, type, cited_by, doi, abstract, at }
 //   <dir>/<W…>/text.json     { pages: [{ page, lines }], at }   only when a pdf was had
 //   <dir>/oa/…               the pdfs (oa.cjs's files/ and items/)
 // A paper with no pdf to be had keeps its abstract, which may be quoted (an abstract is a good first rung); one with
 // neither is never a rung. Nothing here throws: a failure is a paper with less to read.
+// Since 2026-10-08 a paper's record is had first and alone (`describe`: free by id), so the papers worth reading are
+// picked from title, abstract, venue, year and citations (./climb.cjs pickPapers) before any pdf is fetched.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -68,16 +70,24 @@ function createShelf({ dir, papers, openAccess = null, readPdf = readPages, now 
     return { ...record, pdf: kept && text ? kept.path : null, pages: kept && text && Array.isArray(text.pages) ? text.pages : null };
   }
 
+  /** The record of paper `candidate` ({ id, … }), from the shelf or OpenAlex → it, or null (not found, or not reached). */
+  async function recordOf(candidate) {
+    const id = candidate.id;
+    const record = readJson(path.join(dir, id, 'record.json'));
+    // A record kept before citations were (2026-10-08) takes them from the search that found it.
+    if (record) return record.cited_by == null && candidate.cited_by != null ? { ...record, cited_by: candidate.cited_by, type: record.type || candidate.type || null } : record;
+    let full = null;
+    try { const out = await papers.resolve({ query: id }); full = out && out.found ? out.paper : null; } catch { full = null; }
+    if (!full) return null;
+    const made = { id, title: full.title, authors: full.authors || [], year: full.year || null, venue: full.venue || null, type: full.type || null, cited_by: full.cited_by || 0, doi: full.doi || null, abstract: plainAbstract(full.abstract) || null, oa: full.open_access || null, at: now() };
+    writeJson(path.join(dir, id, 'record.json'), made);
+    return made;
+  }
+
   async function fetchOne(candidate) {
     const id = candidate.id;
-    let record = readJson(path.join(dir, id, 'record.json'));
-    if (!record) {
-      let full = null;
-      try { const out = await papers.resolve({ query: id }); full = out && out.found ? out.paper : null; } catch { full = null; }
-      if (!full) return get(id) || null;
-      record = { id, title: full.title, authors: full.authors || [], year: full.year || null, venue: full.venue || null, doi: full.doi || null, abstract: plainAbstract(full.abstract) || null, oa: full.open_access || null, at: now() };
-      writeJson(path.join(dir, id, 'record.json'), record);
-    }
+    const record = await recordOf(candidate);
+    if (!record) return get(id) || null;
     if (!readJson(path.join(dir, id, 'text.json'))) {
       const last = (name) => String(name || '').trim().split(/\s+/).pop();
       const item = { key: id, doi: record.doi || '', title: record.title || '', year: record.year || '', creators: (record.authors || []).filter((name) => !/^et al\./.test(name)).slice(0, 1).map((name) => ({ type: 'author', last: last(name) })) };
@@ -102,6 +112,12 @@ function createShelf({ dir, papers, openAccess = null, readPdf = readPages, now 
       const under = fetchOne(candidate).catch(() => get(id)).finally(() => running.delete(id));
       running.set(id, under);
       return under;
+    },
+    /** A candidate's record alone, no pdf: what picking it reads. → { id, title, authors, year, venue, type, cited_by, abstract } | null */
+    async describe(candidate) {
+      const id = candidate && candidate.id;
+      if (!ID_RE.test(String(id || ''))) return null;
+      try { return await recordOf(candidate); } catch { return null; }
     },
     get,
     dir,

@@ -12,12 +12,22 @@
 //   3. The rungs are put in the climb's order (orderRungs).
 //   4. Approval, by the strongest level Bart has (@bart's second step: Opus high, or Sol high on Codex), which reads each
 //      passage with the text around it as the paper has it, and records per rung: read in context, says what the line
-//      claims, self-contained, assumes only earlier rungs. Then it reads the climb in order as a newcomer, answers the
-//      sub-question from the rungs alone, and compares with its own answer. A confusing step is fixed (reordered, bridged,
-//      glossed, its line reworded, or dropped) and the climb checked again, MAX_ROUNDS checks at most. The first rung
-//      is also checked on its own as soon as it is gated, so something approved is there early.
+//      claims, self-contained, assumes only earlier rungs (since 2026-10-08 also: answers the sub-question). Then it
+//      reads the climb in order as a newcomer, answers the sub-question from the rungs alone, and compares with its own
+//      answer. A confusing step is fixed (reordered, bridged, glossed, its line reworded, or dropped) and the climb
+//      checked again, MAX_ROUNDS checks at most. The first rung is also checked on its own as soon as it is gated, so
+//      something approved is there early.
 // Only an approved rung is ever published (`onUpdate`); each keeps a record of its approval: which model, the text it
 // read, when, its verdict. What could be read only by title is listed apart, "more reading, not checked".
+// Follow-ups (2026-10-08, from a hand test):
+//   - Before any of it, the approving model picks which papers are worth reading (pickPapers), from title, abstract,
+//     venue, year and citations: would an expert hand this paper to a newcomer on this question? Raw keyword hits had
+//     been obscure papers no one cites. Code first sets aside a paper no one cites when cited ones are there (worthReading).
+//   - A fifth check, answers_sub_question: the passage speaks to the sub-question itself, in its setting, not only
+//     shares its words (a list of undesirable behaviours from a paper on teacher well-being, under "What counts as
+//     student behavior…?", passed the four).
+//   - Nothing shown ever disappears: a rung once shown stays, whatever a later round says of it; fixes only add rungs
+//     or move them. (Papers had appeared and then gone when a round's fixes replaced the rungs.)
 // Nothing here talks to a model or the disk: `ask(role, message, { onDelta, priority })` does (./climbs.cjs).
 
 const { randomUUID } = require('node:crypto');
@@ -29,7 +39,9 @@ const STAGE_NAMES = { problem: 'understanding the problem', foundations: 'founda
 const MAX_RUNGS = 5;
 const MAX_ROUNDS = 3;
 const FIRST_TRIES = 2;
-const CHECKS = ['read_in_context', 'says_what_line_claims', 'self_contained', 'assumes_only_earlier'];
+const CHECKS = ['read_in_context', 'answers_sub_question', 'says_what_line_claims', 'self_contained', 'assumes_only_earlier'];
+const MAX_PICK = 6; // papers picked to read for one sub-question
+const PICK_FROM = 12; // papers the picker chooses among
 
 const clean = (value, max = 600) => String(value == null ? '' : value).replace(/\s+/g, ' ').trim().slice(0, max);
 
@@ -38,6 +50,7 @@ const WRITER_SYSTEM = `You are Bart, in Engelbart, a research notebook. A resear
 The climb's order, skipping a stage the answer does not need: understanding the problem → foundations → how it is studied → what is known now → the open edge.
 
 Each rung is one passage from one paper and one line, "what you'll learn here". Read in order, the lines are the steps of the climb.
+- Every passage speaks directly to the sub-question, in the setting it asks about. A passage that only shares its words (a list from a paper on another population, setting or question) is no rung.
 - Copy every passage exactly as it is written in the text you are given: the same words, punctuation and case, nothing left out in the middle, no ellipsis. A passage that is not word for word in the paper is thrown away.
 - As short as it can be without losing what it teaches: usually 1 to 3 sentences, rarely a paragraph.
 - Self-contained: no "this approach", "these results", "the above", no acronym without what it stands for, no "see Table 2". Never start a passage with a word that points back ("This", "These", "It", "However", "Thus"…) unless it names the paper ("This study…"). Prefer a short passage and a one-line gloss to a longer passage.
@@ -48,13 +61,72 @@ Each rung is one passage from one paper and one line, "what you'll learn here". 
 
 Reply with JSON only, no markdown fences.`;
 
-const CHECKER_SYSTEM = `You approve, or refuse, each step of a reading climb before a researcher sees it. A climb is a few passages from papers, each with a one-line "what you'll learn here", that should walk a newcomer up to the answer to one sub-question, read in order. You are the last check: be strict. A passage is approved only when all four hold:
+const CHECKER_SYSTEM = `You approve, or refuse, each step of a reading climb before a researcher sees it. A climb is a few passages from papers, each with a one-line "what you'll learn here", that should walk a newcomer up to the answer to one sub-question, read in order. You are the last check: be strict. A passage is approved only when all five hold:
 - read_in_context: you read it in the text around it, and cut out there it still means what it means in the paper.
+- answers_sub_question: it speaks directly to the sub-question, in the setting the sub-question asks about, and helps a newcomer answer it. Being in the paper and sharing the sub-question's words is not enough: a list of undesirable behaviours from a paper on teacher well-being does not tell anyone what counts as student behaviour in a classroom study.
 - says_what_line_claims: it says what its line says you will learn, and the line claims no more than it says.
 - self_contained: it stands alone, with its gloss if it has one: no "this approach", "these results", "the above" or acronym left unexplained, no "see Table 2".
 - assumes_only_earlier: every term or method it relies on is taught by an earlier rung, its own gloss, or plain everyday knowledge.
 A fix you offer is short: a line under 15 words that claims only what the passage says, or a gloss. A rung has one gloss line and yours replaces it, so write the whole gloss it needs: one line, under 30 words, every term it must explain (two at most). A rung that needs more than that to pass should be refused without a fix.
 Reply with JSON lines only, exactly as asked, no markdown fences.`;
+
+const PICKER_SYSTEM = `You choose which papers a newcomer to a research question should read first, before anyone quotes them. For one sub-question you are given candidate papers found by searching a catalogue: title, authors, year, venue, type, how often each is cited, and the abstract when there is one. Ask of each: would an expert hand this paper to a newcomer on this sub-question?
+- Prefer papers the field relies on: highly cited, reviews and surveys, well-known venues, and recent work only when it is the best on this exact question.
+- Never pick an obscure paper no one cites when better ones are there.
+- Refuse a paper about another setting, population or question, however many words it shares with this one.
+- Fewer is better: pick only papers worth an hour of a newcomer's time.
+Reply with JSON only, no markdown fences.`;
+
+/**
+ * Code's part of picking, before any model: papers as they stand → the ones worth showing the picker. A paper no one
+ * cites is set aside when three cited at least ten times are there.
+ */
+function worthReading(papers) {
+  const list = (papers || []).filter((paper) => paper && paper.id);
+  const cited = (paper) => Number(paper.cited_by) || 0;
+  const strong = list.filter((paper) => cited(paper) >= 10).length;
+  return (strong >= 3 ? list.filter((paper) => cited(paper) > 0) : list).slice(0, PICK_FROM);
+}
+
+function pickMessage({ sub, question, papers }) {
+  const blocks = papers.map((paper) => {
+    const facts = [paperLabel(paper), paper.venue ? clean(paper.venue, 120) : '', paper.type || '', `cited by ${Number(paper.cited_by) || 0}`].filter(Boolean).join(' · ');
+    return `[${paper.id}] "${clean(paper.title, 300)}" (${facts})${paper.abstract ? `\n  Abstract: ${clean(paper.abstract, 900)}` : '\n  (no abstract)'}`;
+  });
+  return [
+    `Research question: ${clean(question, 300)}`,
+    `Sub-question: ${clean(sub, 300)}`,
+    `Candidate papers:\n${blocks.join('\n\n') || '(none)'}`,
+    `Pick the papers worth reading for this sub-question, best first, at most ${MAX_PICK}; refuse the rest, each with its reason.\nJSON: {"picked": [{"paper": "W…", "why": "one short sentence"}], "refused": [{"paper": "W…", "why": "one short sentence"}]}`,
+  ].join('\n\n');
+}
+
+/** What the picker sent, kept to `ids` → { ok, picked: [{ paper, why }], refused: [{ paper, why }] }. */
+function readPick(text, ids) {
+  const value = jsonIn(text);
+  const known = new Set(ids);
+  const list = (key) => (value && Array.isArray(value[key]) ? value[key] : []).filter((one) => one && known.has(clean(one.paper, 40))).map((one) => ({ paper: clean(one.paper, 40), why: clean(one.why, 300) }));
+  const picked = [];
+  for (const one of list('picked')) if (!picked.some((held) => held.paper === one.paper)) picked.push(one);
+  return { ok: !!value && Array.isArray(value.picked), picked: picked.slice(0, MAX_PICK), refused: list('refused').filter((one) => !picked.some((held) => held.paper === one.paper)) };
+}
+
+/**
+ * The papers worth reading for `sub`, picked by the approving model from their records (`papers`: { id, title, authors,
+ * year, venue, type, cited_by, abstract }). `ask(role, message, options)` as buildClimb's. → { ids (best first), record }:
+ * the record keeps who picked, when, and every reason; when the model could not say, code's order stands (record.by null).
+ */
+async function pickPapers({ sub, question, papers, ask, now = () => new Date().toISOString() }) {
+  const pool = worthReading(papers);
+  const aside = (papers || []).filter((paper) => paper && paper.id && !pool.includes(paper)).map((paper) => ({ paper: paper.id, why: 'set aside in code: no one cites it, and cited papers are there' }));
+  const fallback = () => ({ ids: pool.slice(0, MAX_PICK).map((paper) => paper.id), record: { by: null, at: now(), picked: [], refused: aside, note: 'not picked by a model: the nearest papers, in order' } });
+  if (pool.length <= 1) return fallback();
+  let reply;
+  try { reply = await ask('picker', pickMessage({ sub, question, papers: pool }), { priority: 0 }); } catch { return fallback(); }
+  const read = readPick(reply.text, pool.map((paper) => paper.id));
+  if (!read.ok) return fallback();
+  return { ids: read.picked.map((one) => one.paper), record: { by: reply.by ? `${reply.by.model} ${reply.by.effort}` : null, at: now(), picked: read.picked, refused: [...read.refused, ...aside] } };
+}
 
 // A passage that opens by pointing at what came before it ("This indicates…", "These principles…", "It…") cannot stand
 // alone: refused in code before any model reads it. "This paper", "this study" and the like name the paper: they stand.
@@ -108,7 +180,7 @@ function papersBlock(papers, sub) {
 
 function writerMessage({ sub, question, brief, papers }) {
   const { quotable, unquotable } = papersBlock(papers, `${sub} ${question}`);
-  const said = brief ? Object.entries({ 'Working on': brief.working, 'Why': brief.why, 'Least sure about': brief.unsure }).filter(([, v]) => v).map(([k, v]) => `${k}: ${clean(v, 400)}`).join('\n') : '';
+  const said = brief ? Object.entries({ 'Working on': brief.working, 'Why they are interested': brief.why, 'Least sure about': brief.unsure }).filter(([, v]) => v).map(([k, v]) => `${k}: ${clean(v, 400)}`).join('\n') : '';
   return [
     `Research question: ${clean(question, 300)}`,
     `Sub-question: ${clean(sub, 300)}`,
@@ -129,7 +201,7 @@ function rungBlock(rung, n) {
   ].join('\n');
 }
 
-const VERDICT_SHAPE = '{"rung": n, "read_in_context": true|false, "says_what_line_claims": true|false, "self_contained": true|false, "assumes_only_earlier": true|false, "why": "one short sentence", "fix": null | {"line": "a new line, or omit", "gloss": "a one-line gloss, or omit"}}';
+const VERDICT_SHAPE = '{"rung": n, "read_in_context": true|false, "answers_sub_question": true|false, "says_what_line_claims": true|false, "self_contained": true|false, "assumes_only_earlier": true|false, "why": "one short sentence", "fix": null | {"line": "a new line, or omit", "gloss": "a one-line gloss, or omit"}}';
 
 /** The approving model's message: every rung (or the first alone, `firstOnly`), and the newcomer check after them. */
 function checkerMessage({ sub, rungs, firstOnly = false }) {
@@ -164,7 +236,8 @@ const passes = (verdict) => !!verdict && CHECKS.every((key) => verdict[key] === 
 // A fix is taken only when it is as short as a line or a gloss may be: a longer one is no fix.
 const MAX_LINE = 140, MAX_GLOSS = 220;
 const short = (value, max) => { const text = clean(value, 1000); return text && text.length <= max ? text : ''; };
-function fixRung(rung, verdict, confusing) {
+function fixRung(rung, verdict, confusing, frozen = false) {
+  if (frozen) return rung; // shown already: it stays as it is (it may still be moved)
   let next = rung, changed = false;
   const fix = verdict && verdict.fix && typeof verdict.fix === 'object' ? verdict.fix : null;
   if (fix && short(fix.line, MAX_LINE)) { next = { ...next, line: short(fix.line, MAX_LINE) }; changed = true; }
@@ -178,14 +251,17 @@ function fixRung(rung, verdict, confusing) {
   return next;
 }
 
-/** The climb after a check: fixes applied, dropped rungs gone, moves made. → { rungs, changed } */
-function applyFixes(rungs, verdicts, newcomer) {
+/**
+ * The climb after a check: fixes applied, dropped rungs gone, moves made. → { rungs, changed }. A rung in `shown` (ids)
+ * is never dropped or reworded: it may only be moved.
+ */
+function applyFixes(rungs, verdicts, newcomer, shown = new Set()) {
   const confusing = newcomer && Array.isArray(newcomer.confusing) ? newcomer.confusing.filter((one) => one && Number.isInteger(Number(one.rung))) : [];
   let changed = false;
   const kept = [];
   rungs.forEach((rung, i) => {
     const mine = confusing.filter((one) => Number(one.rung) === i + 1);
-    const next = fixRung(rung, verdicts.get(i + 1), mine);
+    const next = fixRung(rung, verdicts.get(i + 1), mine, shown.has(rung.id));
     if (next !== rung) changed = true;
     if (next) kept.push({ rung: next, move: mine.find((one) => one.fix === 'reorder' && Number.isInteger(Number(one.move_to))) });
   });
@@ -261,12 +337,21 @@ async function buildClimb({ sub, question, brief = null, papers, ask, onUpdate =
 
   // 4. Approval.
   const approved = new Map(); // rung id → its published form
+  const onPage = new Map(); // rung id → its form as first shown: once shown, it stays
   const show = (list) => {
-    // What is shown: the climb's rungs in order, up to the first not approved (a later one may lean on it).
+    // What is shown: every rung shown before, where the climb now has it, and new ones in order up to the first not
+    // approved (a later one may lean on it).
     const out = [];
-    for (const rung of list) { const one = approved.get(rung.id); if (!one) break; out.push(one); }
+    let open = true;
+    for (const rung of list) {
+      if (onPage.has(rung.id)) { out.push(onPage.get(rung.id)); continue; }
+      const one = open ? approved.get(rung.id) : null;
+      if (one) out.push(one); else open = false;
+    }
+    for (const [id, one] of onPage) if (!out.some((held) => held.id === id)) out.push(one);
+    for (const one of out) if (!onPage.has(one.id)) onPage.set(one.id, one);
     climb.rungs = out;
-    climb.pending = Math.max(0, list.length - out.length);
+    climb.pending = list.filter((rung) => !onPage.has(rung.id)).length;
     tell();
   };
   // The first rung on its own first (about ten seconds at Opus high, measured 2026-10-08), so something approved is up
@@ -310,21 +395,22 @@ async function buildClimb({ sub, question, brief = null, papers, ask, onUpdate =
     climb.rounds = round;
     const { verdicts, newcomer } = readCheck(reply.text);
     logCheck('climb', round, list, verdicts, reply.by);
-    // This round's verdicts are the record: a rung approved before and refused now is taken back.
+    // This round's verdicts are the record for what is not shown yet: one approved before and refused now is taken back
+    // before anyone sees it. One shown stays, its record the approval it was shown on.
     for (const [i, rung] of list.entries()) {
       const verdict = verdicts.get(i + 1);
-      if (passes(verdict)) approved.set(rung.id, published(rung, verdict, reply.by, now(), round)); else approved.delete(rung.id);
+      if (passes(verdict)) approved.set(rung.id, published(rung, verdict, reply.by, now(), round)); else if (!onPage.has(rung.id)) approved.delete(rung.id);
     }
     checked = list;
     const confusing = newcomer && Array.isArray(newcomer.confusing) ? newcomer.confusing : [];
     climb.newcomer = {
-      passed: !!newcomer && newcomer.same === true && !confusing.length && list.every((rung) => approved.has(rung.id)),
+      passed: !!newcomer && newcomer.same === true && !confusing.length && list.every((rung, i) => passes(verdicts.get(i + 1))),
       own: clean(newcomer && newcomer.own_answer, 1200), newcomer: clean(newcomer && newcomer.newcomer_answer, 1200), same: !!newcomer && newcomer.same === true,
       confusing: confusing.slice(0, 8).map((one) => ({ rung: Number(one && one.rung) || null, problem: clean(one && one.problem, 300), fix: clean(one && one.fix, 20) })),
       round, at: now(), by: reply.by, ...(newcomer ? {} : { unread: true }),
     };
     if (climb.newcomer.passed) break;
-    const fixed = applyFixes(list, verdicts, newcomer);
+    const fixed = applyFixes(list, verdicts, newcomer, new Set(onPage.keys()));
     if (!fixed.changed) break; // nothing a check could pass: what was approved stands
     if (round === MAX_ROUNDS) break; // the fixed climb was never checked whole: the last checked one stands
     // A rung changed by a fix is a new rung: approved again before it is shown.
@@ -340,4 +426,4 @@ async function buildClimb({ sub, question, brief = null, papers, ask, onUpdate =
   return climb;
 }
 
-module.exports = { pointsBackOf, STAGES, STAGE_NAMES, CHECKS, MAX_RUNGS, MAX_ROUNDS, WRITER_SYSTEM, CHECKER_SYSTEM, orderRungs, readDraft, writerMessage, checkerMessage, readCheck, passes, applyFixes, buildClimb, jsonIn };
+module.exports = { pointsBackOf, STAGES, STAGE_NAMES, CHECKS, MAX_RUNGS, MAX_ROUNDS, MAX_PICK, WRITER_SYSTEM, CHECKER_SYSTEM, PICKER_SYSTEM, worthReading, pickMessage, readPick, pickPapers, orderRungs, readDraft, writerMessage, checkerMessage, readCheck, passes, applyFixes, buildClimb, jsonIn };

@@ -1,12 +1,14 @@
 'use strict';
 
 // Onboarding (2026-09-28; as brainstorm cards since 2026-10-07, design/onboarding-brainstorm). A new install walks
-// through Welcome, the tools (when one is missing), then four cards: What are you working on? Why this, and why now? What
-// are you least sure about? Putting it together. + Project on the all-projects screen is the four cards. Bart's part
+// through Welcome, the tools (when one is missing), then the cards: What are you working on? Why are you interested in
+// this? Putting it together, where they settle on their question (three since 2026-10-08; "What are you least sure
+// about?" is gone). + Project on the all-projects screen is the cards. Bart's part
 // while they answer is ../bart/onboard.cjs. What the flow writes, all in `startProject`:
-//   - the project: named by Bart from the answers (renamable), its description their sentence ("I'm working on … because
-//     I want to find out … so that …"), its folder the default, made under the home directory;
-//   - its brief (project.json `brief`), their four answers in their own words. The custom instructions and the library
+//   - the project: named by Bart from the answers (renamable), its description their sentence ("I'm working on …
+//     because …", as Bart joined it), its folder the default, made under the home directory;
+//   - its brief (project.json `brief`): what they are working on, why they are interested in it and the question they
+//     settled on, in their own words. The custom instructions and the library
 //     rows picked as the project's context, which the screens before 2026-10-07 asked for, were what @bart and Build
 //     were told about the person and the project; the brief is told in their place (`briefBlock`). Instructions written
 //     before then, `<dataRoot>/instructions.md`, are still read (`instructionsBlock`);
@@ -43,7 +45,7 @@ function writeInstructions(ctx, text) {
 function briefBlock(project) {
   const brief = project && project.brief;
   if (!brief) return '';
-  const lines = [['working', 'What they are working on'], ['why', 'Why this, and why now'], ['unsure', 'What they are least sure about'], ['findOut', 'What they want to find out']]
+  const lines = [['working', 'What they are working on'], ['why', 'Why they are interested in it'], ['question', 'The question they want to answer'], ['unsure', 'What they are least sure about'], ['findOut', 'What they want to find out']]
     .filter(([key]) => brief[key]).map(([key, label]) => `${label}: ${brief[key]}`);
   return lines.length ? `<project_brief note="What the person said about this project when they started it, in their own words. It tells you what they are after; it may have moved on since.">\n${lines.join('\n')}\n</project_brief>` : '';
 }

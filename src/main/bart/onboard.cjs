@@ -1,20 +1,26 @@
 'use strict';
 
 // Onboarding as brainstorm cards, build 1 (2026-10-07; design/onboarding-brainstorm, screens/Onboarding.jsx): what Bart
-// does while a person answers the four cards. One session per onboarding (./onboard-session.cjs), on the fastest level
-// Bart has (./models.cjs onboardStep), started when onboarding opens, for what the person waits on: the line said back
-// and Stuck?. What they do not wait on (the third card's searches, the plan) runs in a second one started beside it, so
-// a Stuck? never queues behind a plan (checked by hand 2026-10-07: in one session it waited about seven seconds). Per card:
-//   - after "What are you working on?" and "Why this, and why now?": one line said back above the next card, streamed
-//     ("You're working on …", "So that …"), and 3 to 5 searches for papers on it, in the same reply;
-//   - after "What are you least sure about?": the searches alone;
-//   - on "Putting it together": Stuck? (one way to fill the blank), and one call for the project's name, its question and
-//     three sub-questions, made while they are on the card, so they are there the moment the project opens.
+// does while a person answers the cards. One session per onboarding (./onboard-session.cjs), on the fastest level Bart
+// has (./models.cjs onboardStep), started when onboarding opens, for what the person waits on: the line said back and
+// Stuck?. What they do not wait on (the plan) runs in a second one started beside it, so a Stuck? never queues behind a
+// plan (checked by hand 2026-10-07: in one session it waited about seven seconds). Per card:
+//   - after "What are you working on?" and "Why are you interested in this?": one line said back, streamed ("You're
+//     working on …", "Because …"), and 3 to 5 searches for papers on it, in the same reply;
+//   - on the way to "Putting it together": their answers joined into one sentence that reads naturally, their own words
+//     kept and each marked so the card can underline it (join, on the session they wait on);
+//   - on "Putting it together": Stuck? (one research question to settle on), and one call for the project's name, its
+//     question and three sub-questions, made while they are on the card, so they are there the moment the project opens.
 // Every message carries every answer so far, so a session started again loses nothing.
+// Since 2026-10-08 (from a hand test): "What are you least sure about?" is gone and "Why this, and why now?" asks "Why
+// are you interested in this?". Putting it together is their answers joined by Bart ("I'm working on predicting student
+// behavior because AI is changing how students learn.") and, under it, the question they want to answer, filled with
+// Bart's suggestion from the plan; Stuck? suggests another question. The plan is asked again for their question when
+// they change it, so the sub-questions are for the question they settle on.
 //
 // The searches (for build 2's climbs, ./climbs.cjs: the best papers are read as they are found, and the plan's
 // sub-questions are climbed the moment it is written, attach binding them to the project) run straight from main against OpenAlex
-// (./papers.cjs `search`), with no agent: 3 to 5 after each of the first three cards, their papers merged by id and kept
+// (./papers.cjs `search`), with no agent: 3 to 5 after each question card, their papers merged by id and kept
 // with the project, <project>/.context/start-candidates.json, once it exists; until then here. A search that ends after
 // the project opened is written there too. Searches the model did not write are made from their own words (queriesOf).
 //
@@ -27,17 +33,19 @@ const { createWarmSession } = require('./onboard-session.cjs');
 const { onboardStep } = require('./models.cjs');
 const { createPapers } = require('./papers.cjs');
 
-const CARDS = ['working', 'why', 'unsure', 'together'];
-const QUESTIONS = { working: 'What are you working on?', why: 'Why this, and why now?', unsure: 'What are you least sure about?', findOut: 'What do you want to find out?' };
+const { searchFiltered, isLimited } = require('./climbs.cjs');
+
+const CARDS = ['working', 'why', 'together'];
+const QUESTIONS = { working: 'What are you working on?', why: 'Why are you interested in this?', question: 'The question they want to answer:' };
 // What each reflection finishes, as the card above it shows it.
-const LABELS = { working: 'You’re working on', why: 'So that' };
+const LABELS = { working: 'You’re working on', why: 'Because' };
 const CANDIDATES_FILE = 'start-candidates.json';
 const MAX_QUERIES = 5;
 const PER_SEARCH = 8;
 const IDLE_MS = 30 * 60_000;
 const PLAN_TIMEOUT_MS = 40_000;
 
-const ONBOARD_SYSTEM_PROMPT = `You help a researcher start a project in Engelbart, a research notebook, by saying back what they tell you. They answer four questions, one at a time: what they are working on, why this and why now, what they are least sure about, and what they want to find out. Each message gives their answers so far and asks for one thing in an exact format.
+const ONBOARD_SYSTEM_PROMPT = `You help a researcher start a project in Engelbart, a research notebook, by saying back what they tell you. They answer two questions, one at a time: what they are working on, and why they are interested in it. Then they settle on the research question they want to answer. Each message gives their answers so far and asks for one thing in an exact format.
 
 Reply in that format only: no preamble, no markdown, no quotation marks, nothing after it.
 
@@ -45,37 +53,39 @@ Keep their words and their terms. Make it shorter and plainer, never grander, an
 
 const clean = (value, max = 2000) => String(value == null ? '' : value).replace(/\s+/g, ' ').trim().slice(0, max);
 
-/** The answers as the renderer sends them, made safe: strings, bounded; '' for a card skipped. */
+/** The answers as the renderer sends them, made safe: strings, bounded; '' for a card skipped or a question not written. */
 function cleanAnswers(answers) {
   const given = answers && typeof answers === 'object' ? answers : {};
-  return { working: clean(given.working), why: clean(given.why), unsure: clean(given.unsure), findOut: clean(given.findOut, 600) };
+  return { working: clean(given.working), why: clean(given.why), question: clean(given.question, 600) };
 }
 
 function answersBlock(answers) {
-  const lines = ['working', 'why', 'unsure', 'findOut'].filter((key) => answers[key]).map((key) => `${QUESTIONS[key]} ${answers[key]}`);
+  const lines = ['working', 'why', 'question'].filter((key) => answers[key]).map((key) => `${QUESTIONS[key]} ${answers[key]}`);
   return `<answers>\n${lines.join('\n') || '(none yet)'}\n</answers>`;
 }
 
 const SEARCH_LINES = 'Then 3 to 5 lines, each "search: " and 2 to 6 words to search a catalogue of research papers with: the topic in the words papers on it would use, each line a different angle.';
 
-/** The message after a card is answered: a reflection and searches (working, why), or the searches alone (unsure). */
+/** The message after a card is answered (working, why): a reflection and searches. */
 function cardMessage(card, answers) {
   const block = answersBlock(answers);
   if (card === 'working') return `${block}\n\nLine 1: finish the sentence "You're working on …" with what they said they are working on, in under 16 words, keeping their terms. Write only the ending: no "You're working on", no full stop.\n${SEARCH_LINES}`;
-  if (card === 'why') return `${block}\n\nLine 1: finish the sentence "So that …" with what their answer to "${QUESTIONS.why}" says the work is for, in under 16 words, keeping their terms. Write only the ending: no "So that", no full stop.\n${SEARCH_LINES}`;
-  return `${block}\n\n${SEARCH_LINES.replace('Then 3', 'Write 3')} Search for what they are least sure about, in the setting of what they are working on.`;
+  return `${block}\n\nLine 1: finish the sentence "Because …" with why their answer to "${QUESTIONS.why}" says they are interested, in under 16 words, keeping their terms. Write only the ending: no "Because", no full stop.\n${SEARCH_LINES}`;
 }
 
-/** Stuck?: one way to fill the blank, not one of the earlier suggestions. */
+/** Stuck?: one research question they could settle on, not one they have seen (Bart's first suggestion included). */
 function stuckMessage(answers, { before = [] } = {}) {
   const working = answers.working || '…', why = answers.why || '…';
-  const not = before.length ? `\nNot one of these, which they have seen: ${before.map((one) => `"${clean(one, 200)}"`).join('; ')}.` : '';
-  return `${answersBlock(answers)}\n\nThey are completing: "I'm working on ${working} because I want to find out ___ so that ${why}."\nSuggest one way to fill the blank: something they could find out, drawn from what they are least sure about. Under 15 words, starting with a lowercase word (unless it is a name), no full stop. Reply with the words for the blank only.${not}`;
+  const not = before.length ? `\nNot one of these, which they have seen: ${before.map((one) => `"${clean(one, 300)}"`).join('; ')}.` : '';
+  return `${answersBlock(answers)}\n\nThey wrote: "I'm working on ${working} because ${why}." Under it they are choosing the research question they want to answer.\nSuggest one research question they could settle on: one they could answer with their work, in their terms, one sentence under 14 words ending in a question mark. Reply with the question only.${not}`;
 }
 
-/** The project's name, its question and three sub-questions, from the sentence they put together. */
+/** The project's name, its question and three sub-questions, from their sentence and the question they settled on (if any). */
 function planMessage(answers, sentence) {
-  return `${answersBlock(answers)}\n\nTheir sentence: "${clean(sentence, 1200) || '(not written)'}"\n\nWrite exactly five lines:\nname: a name for the project, 2 to 5 words, title case, from what they are working on\nquestion: their research question, one sentence under 14 words ending in a question mark, from what they want to find out (else what they are least sure about)\n1. a sub-question\n2. a sub-question\n3. a sub-question\nThe three sub-questions break the research question into places to start, each under 12 words, ending in a question mark. Order them as a story, the way an advisor walks someone in: 1 is about understanding the problem itself (what it is, where it shows up, why it is hard), 2 about how it has been studied (what is already published, the methods and findings), and 3, last, about their own data, study or contribution (what they will collect, build or show).`;
+  const asked = answers.question
+    ? 'question: their question, exactly as they wrote it (only a capital first and a question mark last if it lacks them)'
+    : 'question: a research question for them, one sentence under 14 words ending in a question mark, that their work could answer: from what they are working on and why they are interested in it';
+  return `${answersBlock(answers)}\n\nTheir sentence: "${clean(sentence, 1200) || '(not written)'}"\n\nWrite exactly five lines:\nname: a name for the project, 2 to 5 words, title case, from what they are working on\n${asked}\n1. a sub-question\n2. a sub-question\n3. a sub-question\nThe three sub-questions break the research question into places to start, each under 12 words, ending in a question mark. Order them as a story, the way an advisor walks someone in: 1 is about understanding the problem itself (what it is, where it shows up, why it is hard), 2 about how it has been studied (what is already published, the methods and findings), and 3, last, about their own data, study or contribution (what they will collect, build or show).`;
 }
 
 const strip = (text) => clean(text).replace(/^["“'‘*_-]+|["”'’*_]+$/g, '').trim();
@@ -85,9 +95,47 @@ function reflectionOf(card, text) {
   const first = String(text || '').split('\n').map(strip).find((line) => line && !/^search:/i.test(line)) || '';
   let line = first;
   if (card === 'working') line = line.replace(/^(you['’]?re|you are)\s+working\s+on\s+/i, '');
-  if (card === 'why') line = line.replace(/^so\s+that\s+/i, '');
+  if (card === 'why') line = line.replace(/^(?:because|so\s+that)\s+/i, '');
   line = line.replace(/[.…]+$/, '').trim();
   return line ? line[0].toUpperCase() + line.slice(1) : '';
+}
+
+/**
+ * Putting it together's sentence: their answers joined so it reads naturally, each part in [[ ]] so the card can
+ * underline it and let them edit it.
+ */
+function joinMessage(answers) {
+  const parts = ['working', 'why'].filter((key) => answers[key]);
+  const which = parts.map((key) => `"${QUESTIONS[key]}"`).join(', then what comes from ');
+  return `${answersBlock(answers)}\n\nJoin ${parts.length > 1 ? 'their answers' : 'their answer'} into one sentence that starts "I'm working on" (or "I'm interested in this" when they did not say what they work on) and reads naturally, like: I'm working on [[predicting student behavior]] because [[AI is changing how students learn]].\nKeep their own words wherever you can. Change only what the sentence needs: grammar, a capital, a lead-in they wrote themselves ("I'm working on", "because", "so that"), how the parts join. Add nothing they did not say.\nPut what comes from ${which} in [[ ]], in that order, each once; everything else outside them. Reply with the sentence only.`;
+}
+
+const contentWords = (text) => String(text || '').toLowerCase().replace(/[^\p{L}\p{N}\s'-]/gu, ' ').split(/\s+/).filter((word) => word.length > 2 && !STOP.has(word));
+
+/**
+ * The joined sentence as the model wrote it → { lead, working, join, why, end } (the parts it marked, the words around
+ * them), or null when it is not one: a part missing or extra, a part not mostly their words, words around the parts too
+ * long to be only joins. A part they skipped is '' with no `join`.
+ */
+function readJoin(text, answers) {
+  const line = strip(String(text || '').split('\n').map((one) => one.trim()).find(Boolean) || '');
+  const wanted = ['working', 'why'].filter((key) => answers[key]);
+  const marks = [...line.matchAll(/\[\[(.+?)\]\]/g)];
+  if (!wanted.length || marks.length !== wanted.length) return null;
+  const pieces = line.split(/\[\[.+?\]\]/);
+  if (pieces.some((piece) => /\[\[|\]\]/.test(piece))) return null;
+  const out = { lead: pieces[0], working: '', join: '', why: '', end: pieces[pieces.length - 1] };
+  if (wanted.length === 2) out.join = pieces[1];
+  for (const [i, key] of wanted.entries()) {
+    const part = clean(marks[i][1], 600);
+    const theirs = new Set(contentWords(answers[key]));
+    const words = contentWords(part);
+    // Their words, mostly: at least half of the part's words are in their answer.
+    if (!part || (words.length && words.filter((word) => theirs.has(word)).length * 2 < words.length)) return null;
+    out[key] = part;
+  }
+  if (out.lead.length > 60 || out.join.length > 40 || out.end.length > 12 || !/^I/.test(out.lead.trim())) return null;
+  return out;
 }
 
 /** The searches a reply wrote: its "search:" lines, at most five, each a few words. */
@@ -115,14 +163,14 @@ function queriesOf(text) {
 /** A question as a question: a capital first, a question mark last. */
 const asQuestion = (text) => { const t = clean(text, 300).replace(/[.!…]+$/, ''); return t ? `${t[0].toUpperCase()}${t.slice(1)}${t.endsWith('?') ? '' : '?'}` : ''; };
 const titleCase = (words) => words.map((word) => word[0].toUpperCase() + word.slice(1)).join(' ');
-const topicOf = (answers) => clean(answers.working || answers.unsure || answers.findOut, 400).replace(/^(i['’]?m|i am)\s+(working on|studying|looking at)\s+/i, '').replace(/[.!?]+$/, '');
+const topicOf = (answers) => clean(answers.working || answers.question, 400).replace(/^(i['’]?m|i am)\s+(working on|studying|looking at)\s+/i, '').replace(/[.!?]+$/, '');
 
 /** The plan made from their own words, when the model gave none (or part of one). */
 function fallbackPlan(answers) {
   const topic = topicOf(answers);
   const words = clean(topic).toLowerCase().replace(/[^\p{L}\p{N}\s'-]/gu, ' ').split(/\s+/).filter((word) => word.length > 2 && !STOP.has(word));
   const name = words.length ? titleCase(words.slice(0, 4)) : 'New project';
-  const question = asQuestion(answers.findOut) || asQuestion(answers.unsure) || (topic ? `What is known about ${topic}?` : 'What do you want to find out?');
+  const question = asQuestion(answers.question) || (topic ? `What is known about ${topic}?` : 'What do you want to find out?');
   const about = topic ? clean(topic, 90).replace(/^[A-Z](?![A-Z])/, (c) => c.toLowerCase()) : 'this';
   // In the order the prompt asks for (planMessage): the problem, how it has been studied, then their own contribution.
   const starts = [`What would count as an answer to your question?`, `What has already been found about ${about}?`, `What will your own data or study show that is new?`];
@@ -195,20 +243,27 @@ function createOnboard({ readModels, makeSession = (options) => createWarmSessio
   };
   const keep = (entry) => { if (entry.projectDir) { try { writeCandidates(entry.projectDir, entry); } catch { /* kept in memory; nothing else waits on it */ } } };
 
-  /** The searches after `card`, one after another (OpenAlex refuses many at once from a caller without a key). */
+  /**
+   * The searches after `card`, one after another (OpenAlex refuses many at once from a caller without a key), filtered
+   * in OpenAlex to papers that are cited, of a kind a newcomer reads, with an abstract (./climbs.cjs searchFiltered). After a
+   * 429 the rest are not sent: the allowance is used up.
+   */
   async function search(entry, card, queries) {
     for (const query of queries.slice(0, MAX_QUERIES)) {
+      let refused = false;
       try {
-        const out = await papers.search({ query, limit: PER_SEARCH });
+        const out = await searchFiltered(papers, query, PER_SEARCH);
         entry.papers = mergeCandidates(entry.papers, out.results, { query, card });
         entry.searches.push({ after: card, query, at: now(), found: (out.results || []).length });
       } catch (error) {
-        entry.searches.push({ after: card, query, at: now(), error: String(error && error.message || error).slice(0, 200) });
+        refused = isLimited(error);
+        entry.searches.push({ after: card, query, at: now(), error: String(error && error.message || error).slice(0, 200), ...(refused ? { limited: true } : {}) });
       }
       keep(entry);
       // Build 2: the best papers so far are read now (record, pdf, text), so their climbs can start the moment the
       // sub-questions exist.
       if (climbs) { try { climbs.prefetch(entry.papers); } catch { /* read later, when a climb asks */ } }
+      if (refused) break;
     }
   }
 
@@ -244,21 +299,20 @@ function createOnboard({ readModels, makeSession = (options) => createWarmSessio
       return true;
     },
     /**
-     * A card answered (`card`: working, why or unsure; `answers`: every answer so far) → { line, queries }: the line said
-     * back above the next card (none after unsure), streamed through `onDelta(line)` as it arrives, and the searches it
-     * starts, which run on after this returns.
+     * A card answered (`card`: working or why; `answers`: every answer so far) → { line, queries }: the line said back,
+     * streamed through `onDelta(line)` as it arrives, and the searches it starts, which run on after this returns.
      */
     async answer(id, { card, answers }, { onDelta } = {}) {
-      if (!['working', 'why', 'unsure'].includes(card)) throw new TypeError('card must be working, why or unsure');
+      if (!['working', 'why'].includes(card)) throw new TypeError('card must be working or why');
       const entry = get(id), given = cleanAnswers(answers);
       if (!given[card]) return { line: '', queries: [] };
       let text = '';
-      const session = sessionOf(entry, card === 'unsure' ? 'back' : 'session');
+      const session = sessionOf(entry, 'session');
       if (session) {
-        const shown = (so) => { const line = reflectionOf(card, so); if (line && onDelta && card !== 'unsure') onDelta(line); };
+        const shown = (so) => { const line = reflectionOf(card, so); if (line && onDelta) onDelta(line); };
         try { text = await session.turn(cardMessage(card, given), { onDelta: shown }); } catch { text = ''; }
       }
-      const line = card === 'unsure' ? '' : reflectionOf(card, text);
+      const line = reflectionOf(card, text);
       const wrote = queriesIn(text);
       const queries = wrote.length >= 3 ? wrote : [...new Set([...wrote, ...queriesOf(card === 'working' ? given.working : `${given[card]} ${given.working}`)])].slice(0, MAX_QUERIES);
       const running = search(entry, card, queries);
@@ -266,12 +320,25 @@ function createOnboard({ readModels, makeSession = (options) => createWarmSessio
       running.finally(() => entry.pending.delete(running));
       return { line, queries };
     },
-    /** Stuck?: one way to fill the blank; '' when the model could not say. */
-    async stuck(id, { answers }) {
+    /**
+     * Putting it together's sentence (`answers`: working, why) → readJoin's { lead, working, join, why, end }, or {}
+     * when the model could not join them (the card keeps their words as they are).
+     */
+    async join(id, { answers }) {
+      const entry = get(id), given = cleanAnswers(answers), session = sessionOf(entry);
+      if (!session || (!given.working && !given.why)) return {};
+      try { return readJoin(await session.turn(joinMessage(given)), given) || {}; } catch { return {}; }
+    },
+    /**
+     * Stuck?: one research question to settle on, not one they have seen (`seen`: what the field has held, Bart's first
+     * suggestion among them); '' when the model could not say.
+     */
+    async stuck(id, { answers, seen = [] }) {
       const entry = get(id), session = sessionOf(entry);
       if (!session) return { text: '' };
+      for (const one of Array.isArray(seen) ? seen : []) { const text = clean(one, 300); if (text && !entry.suggestions.includes(text)) entry.suggestions.push(text); }
       try {
-        const text = strip(String(await session.turn(stuckMessage(cleanAnswers(answers), { before: entry.suggestions }))).split('\n')[0]).replace(/[.…]+$/, '').slice(0, 200);
+        const text = asQuestion(strip(String(await session.turn(stuckMessage(cleanAnswers(answers), { before: entry.suggestions.slice(-8) }))).split('\n')[0]).slice(0, 200));
         if (text) entry.suggestions.push(text);
         return { text };
       } catch { return { text: '' }; }
@@ -349,7 +416,7 @@ function fakeDraft(message) {
 /** A scripted check: every rung approved, and the newcomer gets there. */
 function fakeCheck(message) {
   const count = (message.match(/^Rung \d+ /gm) || []).length;
-  const lines = Array.from({ length: count }, (_, i) => JSON.stringify({ rung: i + 1, read_in_context: true, says_what_line_claims: true, self_contained: true, assumes_only_earlier: true, why: 'fake check', fix: null }));
+  const lines = Array.from({ length: count }, (_, i) => JSON.stringify({ rung: i + 1, read_in_context: true, answers_sub_question: true, says_what_line_claims: true, self_contained: true, assumes_only_earlier: true, why: 'fake check', fix: null }));
   lines.push(JSON.stringify({ newcomer: true, own_answer: 'A fake answer.', newcomer_answer: 'A fake answer.', same: true, confusing: [] }));
   return lines.join('\n');
 }
@@ -365,12 +432,19 @@ function createFakeSession({ delayMs = 300 } = {}) {
     const said = (question) => { const m = message.match(new RegExp(`${question.replace(/[?,]/g, (c) => `\\${c}`)} (.+)`)); return m ? m[1] : ''; };
     if (/^Reply with the one word/.test(message)) return 'ready';
     if (/finish the sentence "You're working on/.test(message)) return `fake reflection of ${said(QUESTIONS.working).toLowerCase()}\nsearch: ${queriesOf(said(QUESTIONS.working))[0] || 'fake'}\nsearch: fake search two\nsearch: fake search three`;
-    if (/finish the sentence "So that/.test(message)) return `fake purpose: ${said(QUESTIONS.why).toLowerCase()}\nsearch: ${queriesOf(said(QUESTIONS.why))[0] || 'fake'}\nsearch: fake search two\nsearch: fake search three`;
-    if (/Suggest one way to fill the blank/.test(message)) return `fake way to find out about ${said(QUESTIONS.unsure).toLowerCase() || 'it'}`;
-    if (/Write exactly five lines/.test(message)) return 'name: Fake Project Name\nquestion: What would a fake question ask?\n1. What makes the fake problem hard?\n2. What has fake prior work found?\n3. What does your own fake data show?';
+    if (/finish the sentence "Because/.test(message)) return `fake purpose: ${said(QUESTIONS.why).toLowerCase()}\nsearch: ${queriesOf(said(QUESTIONS.why))[0] || 'fake'}\nsearch: fake search two\nsearch: fake search three`;
+    if (/^Join their answers? into one sentence/m.test(message)) {
+      const lower = (text) => (/^[A-Z][a-z]/.test(text) ? text[0].toLowerCase() + text.slice(1) : text).replace(/[.!]+$/, '');
+      const w = lower(said(QUESTIONS.working).replace(/^i['’]?m working on /i, '')), y = lower(said(QUESTIONS.why).replace(/^because /i, ''));
+      return w && y ? `I'm working on [[${w}]] because [[${y}]].` : w ? `I'm working on [[${w}]].` : `I'm interested in this because [[${y}]].`;
+    }
+    if (/Suggest one research question/.test(message)) return `What would a fake question ask about ${queriesOf(said(QUESTIONS.working))[0] || 'it'}, take ${(message.match(/Not one of these/) ? (message.split('"; "').length + 1) : 1)}?`;
+    if (/Write exactly five lines/.test(message)) { const theirs = said(QUESTIONS.question); return `name: Fake Project Name\nquestion: ${theirs || 'What would a fake question ask?'}\n1. What makes the fake problem hard?\n2. What has fake prior work found?\n3. What does your own fake data show?`; }
+    // Picking the papers worth reading (./climb.cjs pickPapers): every candidate, in the order given.
+    if (/Candidate papers:/.test(message)) return JSON.stringify({ picked: (message.match(/^\[(W\d+)\]/gm) || []).map((one) => ({ paper: one.slice(1, -1), why: 'fake pick' })), refused: [] });
     // Build 2's climbs (./climb.cjs): a draft quoting the first sentence of up to three papers, and a check approving all.
     if (/Papers you may quote/.test(message)) return fakeDraft(message);
-    if (/Write one line of JSON for rung 1/.test(message)) return '{"rung": 1, "read_in_context": true, "says_what_line_claims": true, "self_contained": true, "assumes_only_earlier": true, "why": "fake check", "fix": null}';
+    if (/Write one line of JSON for rung 1/.test(message)) return '{"rung": 1, "read_in_context": true, "answers_sub_question": true, "says_what_line_claims": true, "self_contained": true, "assumes_only_earlier": true, "why": "fake check", "fix": null}';
     if (/the newcomer check/.test(message)) return fakeCheck(message);
     return 'search: fake search one\nsearch: fake search two\nsearch: fake search three';
   };
@@ -389,4 +463,4 @@ function createFakeSession({ delayMs = 300 } = {}) {
   };
 }
 
-module.exports = { CARDS, QUESTIONS, LABELS, CANDIDATES_FILE, ONBOARD_SYSTEM_PROMPT, createOnboard, createFakeSession, cleanAnswers, cardMessage, stuckMessage, planMessage, reflectionOf, queriesIn, queriesOf, readPlan, fallbackPlan, mergeCandidates, writeCandidates, readCandidates };
+module.exports = { CARDS, QUESTIONS, LABELS, CANDIDATES_FILE, ONBOARD_SYSTEM_PROMPT, createOnboard, createFakeSession, cleanAnswers, cardMessage, stuckMessage, planMessage, joinMessage, readJoin, reflectionOf, queriesIn, queriesOf, readPlan, fallbackPlan, mergeCandidates, writeCandidates, readCandidates };

@@ -2522,6 +2522,12 @@ export default class DocEditor extends React.Component {
         <div ref={this.scrollRef} onClick={this.docClick} onScroll={this.onScroll} onWheel={this.stopSettling} onPointerDown={this.stopSettling} onKeyDown={this.stopSettling} style={compact ? { flex: 'none', overflow: 'visible', padding: '0 0 2px', cursor: 'grab' } : { flex: 1, minHeight: 0, overflow: 'auto', padding: '28px clamp(12px, 4%, 40px) max(120px, calc(50vh - 40px))', cursor: 'text' }}>
           <div style={{ maxWidth: compact ? 'none' : '65ch', marginInline: 'auto', paddingInline: compact ? 0 : 'clamp(0px, 3%, 24px)', cursor: 'auto', fontSize: 17 }}>
             {this.props.header}
+            {/* An empty document's hint (`placeholder`, 2026-10-08): over the first line, never part of the text. */}
+            {!compact && this.props.placeholder && !String(this.props.text || '').trim() && (
+              <div aria-hidden="true" style={{ position: 'relative', height: 0 }}>
+                <div data-doc-placeholder="1" style={{ position: 'absolute', top: 18, left: 0, right: 0, pointerEvents: 'none', font: '17px/1.6 var(--font-sans)', color: '#a3a3a3' }}>{this.props.placeholder}</div>
+              </div>
+            )}
             <div
               data-editor="1"
               ref={this.edRef}

@@ -1,7 +1,7 @@
 'use strict';
 
-// The climbs under a workspace's "Suggested places to start" (onboarding build 2, 2026-10-08; ./climb.cjs makes one).
-// What runs them, when, and where they are kept.
+// The climbs under a workspace's "Questions to investigate" ("Suggested places to start" until 2026-10-08; onboarding
+// build 2, 2026-10-08; ./climb.cjs makes one). What runs them, when, and where they are kept.
 //
 // When: onboarding's searches find papers while the cards are answered (./onboard.cjs), and the best of them are read
 // at once (prefetch: ./shelf.cjs fetches each one's record, open-access pdf and text). As soon as the sub-questions
@@ -20,6 +20,17 @@
 // abstract a markdown file of the abstract — and the passage to show there). `onChange({ projectId, workspaceId })` is
 // told after each write.
 //
+// Follow-ups (2026-10-08, from a hand test):
+//   - Searches filter in OpenAlex (searchFilters: cited at least MIN_CITED times, an article, review or book, with an
+//     abstract), loosened once when that finds almost nothing. The nearest PICK_FROM candidates' records are read (free
+//     by id, no pdf), the approving model picks the ones worth reading (./climb.cjs pickPapers), and only those are
+//     fetched in full and quoted. The pick is kept with the climb (`pick`).
+//   - Nothing shown ever disappears: a climb begun again (a start edited, a quit, OpenAlex back) keeps every rung shown
+//     before and only adds to them (`prior`).
+//   - OpenAlex refusing (a 429: no key, and the keyless allowance used up) is not "nothing found": a climb that got
+//     nothing new because of it ends 'unavailable' instead of settling for a step that is not a paper, the block says so,
+//     and the next time the workspace shows, it is climbed again (ensure).
+//
 // The models: the writer at the fastest level Bart has (Sonnet medium; Luna on Codex), the approval at the second step of
 // @bart's ladder (Opus high; Sol high on Codex): "the strongest level Bart has" short of Fable and Astra, which a question
 // reaches only when it asks to. At most LIMIT run at once, a first rung's check before a draft, a draft before a whole
@@ -28,19 +39,23 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createWarmSession } = require('./onboard-session.cjs');
-const { buildClimb, WRITER_SYSTEM, CHECKER_SYSTEM } = require('./climb.cjs');
+const { buildClimb, pickPapers, WRITER_SYSTEM, CHECKER_SYSTEM, PICKER_SYSTEM } = require('./climb.cjs');
 const { onboardStep } = require('./models.cjs');
 const { nearness } = require('./climb-text.cjs');
 const { paperLabel } = require('./shelf.cjs');
 
 const FILE = 'climbs.json';
 const LIMIT = 4;
-const PREFETCH = 12; // papers read while the cards are answered
-const PER_CLIMB = 8; // candidates read for one sub-question
+const PREFETCH = 12; // papers whose records are read while the cards are answered
+const PREFETCH_FULL = 4; // of those, read in full (pdf and text) before any is picked
+const PICK_FROM = 12; // candidates whose records the picker reads, for one sub-question
+const MIN_CITED = 5; // a search's papers are cited at least this often, unless that leaves almost nothing
+const TYPES = ['article', 'review', 'book-chapter', 'book'];
 const QUOTABLE = 6; // papers a writer is given to quote from
 const READ_WAIT_MS = 15_000; // how long a climb waits for its papers to be read before it goes on with what is
 const READING = 4; // papers read at once (OpenAlex records, open-access pdfs, their text)
-const TIMEOUTS = { writer: 150_000, checker: 240_000 };
+const TIMEOUTS = { writer: 150_000, checker: 240_000, picker: 150_000 };
+const SYSTEMS = { writer: WRITER_SYSTEM, checker: CHECKER_SYSTEM, picker: PICKER_SYSTEM };
 
 const ACTIONS = {
   data: { title: 'Add your data: logs, exports, a codebook', line: 'Choose the files here, or drop them on the sidebar’s library.', how: 'files' },
@@ -49,6 +64,15 @@ const ACTIONS = {
 
 /** Whether a sub-question is about the person's own data, study or work (build 1 puts that one last). */
 const aboutTheirOwn = (text) => /\b(your|you|my|our)\b/i.test(String(text || '')) && /\b(data|dataset|logs?|study|studies|collect|measure|capture|build|design|show|contribution|work|sample|participants|records?)\b/i.test(String(text || ''));
+
+/** Rungs shown before (`prior`) and the climb's now, as one list: the prior first, a passage shown twice once. */
+function withPrior(prior, rungs) {
+  const papersNow = rungs.filter((rung) => rung.kind === 'paper');
+  // A step that is not a paper stood in for papers: once there are papers it gives way.
+  const kept = papersNow.length ? prior.filter((rung) => rung.kind === 'paper') : prior;
+  const same = (a, b) => a.id === b.id || (a.kind === 'paper' && b.kind === 'paper' && a.paper && b.paper && a.paper.id === b.paper.id && a.passage === b.passage) || (a.kind === 'action' && b.kind === 'action' && a.which === b.which);
+  return [...kept, ...rungs.filter((rung) => !kept.some((held) => same(held, rung)))];
+}
 
 /** The action step a sub-question falls back on, as a climb's one item. */
 function actionClimb(sub, now) {
@@ -65,6 +89,23 @@ function rankCandidates(candidates) {
 /** The candidates for one sub-question: nearest by title, then found by the most searches, then the most cited. */
 function candidatesFor(sub, candidates) {
   return (candidates || []).filter((one) => one && typeof one.id === 'string').map((one) => ({ one, near: nearness(one, sub) })).sort((a, b) => (b.near - a.near) || (((b.one.queries || []).length) - ((a.one.queries || []).length)) || ((b.one.cited_by || 0) - (a.one.cited_by || 0))).map(({ one }) => one);
+}
+
+/** Whether an error is OpenAlex refusing (a 429), not a search that found nothing. */
+const isLimited = (error) => !!error && error.code === 'rate-limited';
+
+/**
+ * One search the way onboarding and the climbs search (2026-10-08): filtered in OpenAlex to papers that are cited, of a
+ * kind a newcomer reads, with an abstract; once more with only the last filter when that finds fewer than two. A 429
+ * is thrown (isLimited).
+ */
+async function searchFiltered(papers, query, limit) {
+  const strict = await papers.search({ query, limit, min_cited: MIN_CITED, types: TYPES, with_abstract: true });
+  if ((strict.results || []).length >= 2) return strict;
+  const loose = await papers.search({ query, limit, with_abstract: true });
+  const out = [...(strict.results || [])];
+  for (const one of loose.results || []) if (!out.some((held) => held.id === one.id)) out.push(one);
+  return { ...loose, results: out };
 }
 
 /** Searches for one sub-question when onboarding's papers gave nothing: its content words, whole and the first half. */
@@ -144,7 +185,7 @@ function createClimbs({ readModels, makeSession = (options) => createWarmSession
    */
   function stepOf(role) {
     const models = readModels();
-    if (role !== 'checker') return onboardStep(models);
+    if (role === 'writer') return onboardStep(models);
     const provider = models.provider, entry = models.providers[provider];
     const ladder = entry.ladder || [];
     const rung = ladder[1] || ladder[ladder.length - 1] || { model: Object.keys(entry.models)[0], effort: entry.efforts[0] };
@@ -164,7 +205,7 @@ function createClimbs({ readModels, makeSession = (options) => createWarmSession
       if (!session) {
         // Codex keeps its instructions in its home: one home a role, so a draft and a check never read each other's.
         const own = sessionOptions.codexHome ? { codexHome: `${sessionOptions.codexHome}-${role}` } : {};
-        session = makeSession({ step, system: role === 'checker' ? CHECKER_SYSTEM : WRITER_SYSTEM, timeoutMs: TIMEOUTS[role], ...sessionOptions, ...own });
+        session = makeSession({ step, system: SYSTEMS[role] || WRITER_SYSTEM, timeoutMs: TIMEOUTS[role] || TIMEOUTS.writer, ...sessionOptions, ...own });
         job.sessions.add(session);
         if (shared) job.checker = session;
       }
@@ -193,25 +234,44 @@ function createClimbs({ readModels, makeSession = (options) => createWarmSession
   const asked = new Map(); // paper id → its reading
   const read = (candidate) => { if (!asked.has(candidate.id)) asked.set(candidate.id, readLater(candidate)); return asked.get(candidate.id); };
 
-  /** Papers for a climb: the nearest candidates read (waited for up to readWaitMs), quotable ones first. */
-  async function papersFor(sub, candidates) {
-    const near = candidatesFor(sub, candidates).slice(0, PER_CLIMB);
-    const all = Promise.all(near.map((one) => read(one)));
-    await Promise.race([all, new Promise((resolve) => { const timer = setTimeout(resolve, readWaitMs); if (timer.unref) timer.unref(); })]);
-    const got = near.map((one) => shelf.get(one.id)).filter(Boolean);
-    const quotable = got.filter((paper) => paper.abstract || paper.pages).sort((a, b) => (nearness(b, sub) - nearness(a, sub)) || ((b.pages ? 1 : 0) - (a.pages ? 1 : 0))).slice(0, QUOTABLE);
+  const waitAtMost = (promise) => Promise.race([promise, new Promise((resolve) => { const timer = setTimeout(resolve, readWaitMs); if (timer.unref) timer.unref(); })]);
+
+  /**
+   * Papers for a climb (2026-10-08): the nearest candidates' records (no pdf), the ones worth reading picked by the
+   * approving model, and only those read in full (waited for up to readWaitMs), in the pick's order. → { papers, pick }
+   */
+  async function papersFor(sub, candidates, { question, ask, job }) {
+    const near = candidatesFor(sub, candidates).slice(0, PICK_FROM);
+    const records = await waitAtMost(Promise.all(near.map((one) => (shelf.describe ? shelf.describe(one) : read(one)).catch(() => null))));
+    const described = near.map((one, i) => {
+      const record = (records && records[i]) || shelf.get(one.id);
+      return record ? { ...record, cited_by: record.cited_by != null ? record.cited_by : one.cited_by, type: record.type || one.type || null } : null;
+    }).filter(Boolean);
+    if (job.cancelled) return { papers: [], pick: null };
+    const pick = await pickPapers({ sub, question, papers: described, ask, now });
+    const chosen = pick.ids.map((id) => near.find((one) => one.id === id)).filter(Boolean);
+    await waitAtMost(Promise.all(chosen.map((one) => read(one))));
+    const got = chosen.map((one) => shelf.get(one.id)).filter(Boolean);
+    const quotable = got.filter((paper) => paper.abstract || paper.pages).slice(0, QUOTABLE);
     const unquotable = got.filter((paper) => !paper.abstract && !paper.pages).slice(0, 3);
-    return [...quotable, ...unquotable];
+    return { papers: [...quotable, ...unquotable], pick: pick.record };
   }
 
-  /** OpenAlex searched in a sub-question's words (`count` searches, fallbackQueries) → their papers, each once. */
-  async function searchFor(sub, count, limit = 6) {
+  /** OpenAlex searched in a sub-question's words (`count` searches, fallbackQueries) → their papers, each once. A 429 marks `job.limited`. */
+  async function searchFor(sub, count, limit = 6, job = null) {
     const found = [];
     for (const query of fallbackQueries(sub).slice(0, count)) {
-      try { const out = await papers.search({ query, limit }); for (const one of out.results || []) if (!found.some((held) => held.id === one.id)) found.push({ ...one, queries: [query] }); } catch { /* offline: on to the next */ }
+      try {
+        const out = await searchFiltered(papers, query, limit);
+        for (const one of out.results || []) if (!found.some((held) => held.id === one.id)) found.push({ ...one, queries: [query] });
+      } catch (error) {
+        if (isLimited(error)) { if (job) job.limited = true; break; }
+        /* offline: on to the next */
+      }
     }
     return found;
   }
+  const openAlexLimited = (job) => !!job.limited || !!(papers && typeof papers.limited === 'function' && papers.limited());
 
   /* ------------------------------------------------------------------------------------------ jobs */
   const jobs = new Set();
@@ -230,8 +290,8 @@ function createClimbs({ readModels, makeSession = (options) => createWarmSession
     try { onChange({ projectId: target.projectId, workspaceId: target.workspaceId }); } catch { /* a listener never stops a climb */ }
   }
 
-  function startJob({ text, question, brief, candidates, target = null }) {
-    const job = { text, question, brief, target, state: null, cancelled: false, sessions: new Set(), checker: null, done: null };
+  function startJob({ text, question, brief, candidates, target = null, prior = [] }) {
+    const job = { text, question, brief, target, prior: Array.isArray(prior) ? prior : [], state: null, cancelled: false, limited: false, pick: null, sessions: new Set(), checker: null, done: null };
     jobs.add(job);
     if (target) writing.set(`${target.projectDir}\n${target.startId}`, job);
     const ask = asker(job);
@@ -239,51 +299,65 @@ function createClimbs({ readModels, makeSession = (options) => createWarmSession
     // rung approved, done.
     const began = Date.now(), timing = {};
     const mark = (name) => { if (timing[name] == null) timing[name] = Date.now() - began; };
+    // What is shown: the rungs shown before this climb began, then this climb's (withPrior).
+    const stateOf = (climb) => ({ ...climb, rungs: withPrior(job.prior, climb.rungs || []), fallback: job.fallback || null, pick: job.pick, timing: { ...timing } });
     const update = (climb) => {
       if (job.cancelled) return;
       if (climb.status === 'checking') mark('drafted');
       if (climb.rungs.length) mark('firstApproved');
-      job.state = { ...climb, fallback: job.fallback || null, timing: { ...timing } };
+      job.state = stateOf(climb);
       write(job);
     };
+    const quote = async (pool) => {
+      const { papers: papersNow, pick } = await papersFor(text, pool, { question, ask, job });
+      if (pick) job.pick = pick;
+      mark('read');
+      if (job.cancelled) return null;
+      return buildClimb({ sub: text, question, brief, papers: papersNow, ask, onUpdate: update, cancelled: () => job.cancelled, now });
+    };
     job.done = (async () => {
-      job.state = { question: text, status: 'reading', step: 'reading', answer: '', rungs: [], pending: 0, more: [], failures: [], newcomer: null, rounds: 0, fallback: null };
+      job.state = stateOf({ question: text, status: 'reading', step: 'reading', answer: '', rungs: [], pending: 0, more: [], failures: [], newcomer: null, rounds: 0 });
       write(job);
       let climb = null;
       try {
         // Onboarding's papers were found from their answers; one search in the sub-question's own words joins them, so
         // a sub-question onboarding's searches did not reach ("what counts as transfer?") has papers on it too.
-        const own = await searchFor(text, 1);
+        const own = await searchFor(text, 1, 8, job);
         const pool = [...(typeof candidates === 'function' ? candidates() : candidates || [])];
         for (const one of own) if (!pool.some((held) => held.id === one.id)) pool.push(one);
-        const papersNow = await papersFor(text, pool);
-        mark('read');
-        if (job.cancelled) return null;
-        climb = await buildClimb({ sub: text, question, brief, papers: papersNow, ask, onUpdate: update, cancelled: () => job.cancelled, now });
+        climb = await quote(pool);
       } catch { climb = null; }
       if (job.cancelled) return null;
-      // Nothing approved from onboarding's papers: a quick search for this sub-question.
-      if (!climb || !climb.rungs.length) {
+      // Nothing approved from onboarding's papers: a quick search for this sub-question (unless OpenAlex is refusing).
+      if ((!climb || !climb.rungs.length) && !openAlexLimited(job)) {
         job.fallback = 'search';
-        const found = await searchFor(text, 2, 8);
+        const found = await searchFor(text, 2, 8, job);
         if (found.length && !job.cancelled) {
           try {
-            const papersNow = await papersFor(text, found);
             const failures = climb ? climb.failures : [];
-            climb = await buildClimb({ sub: text, question, brief, papers: papersNow, ask, onUpdate: update, cancelled: () => job.cancelled, now });
-            climb.failures = [...failures, ...climb.failures];
+            const again = await quote(found);
+            if (again) { climb = again; climb.failures = [...failures, ...climb.failures]; }
           } catch { /* on to the last resort */ }
         }
       }
       if (job.cancelled) return null;
-      // Still nothing: a step that is not a paper.
+      const base = climb || { question: text, answer: '', more: [], failures: [], newcomer: null, rounds: 0 };
       if (!climb || !climb.rungs.length) {
-        job.fallback = 'action';
-        climb = { ...(climb || { question: text, answer: '', more: [], failures: [], newcomer: null, rounds: 0 }), status: 'done', step: 'done', pending: 0, rungs: [actionClimb(text, now())] };
+        if (openAlexLimited(job)) {
+          // OpenAlex refused: not "nothing found". Said so under the sub-questions, and climbed again next time.
+          job.fallback = 'unavailable';
+          climb = { ...base, status: 'unavailable', step: 'done', pending: 0, rungs: [] };
+        } else if (!job.prior.some((rung) => rung.kind === 'paper')) {
+          // Still nothing: a step that is not a paper.
+          job.fallback = 'action';
+          climb = { ...base, status: 'done', step: 'done', pending: 0, rungs: [actionClimb(text, now())] };
+        } else {
+          climb = { ...base, status: 'done', step: 'done', pending: 0, rungs: [] };
+        }
       }
-      if (climb.rungs.length) mark('firstApproved');
+      if (climb.rungs.length || job.prior.length) mark('firstApproved');
       mark('done');
-      job.state = { ...climb, fallback: job.fallback || null, timing: { ...timing } };
+      job.state = stateOf(climb);
       write(job);
       return job.state;
     })().finally(() => {
@@ -303,8 +377,15 @@ function createClimbs({ readModels, makeSession = (options) => createWarmSession
   const runs = new Map(); // onboarding id → { jobs: Map(text → job), question, brief, candidates }
 
   return {
-    /** While the cards are answered: the best of what the searches found so far, read now. */
-    prefetch(candidates) { for (const one of rankCandidates(candidates).slice(0, PREFETCH)) read(one); },
+    /**
+     * While the cards are answered: the records of the best of what the searches found so far, read now (free by id),
+     * so picking can start at once; the few most likely to be picked are read in full too.
+     */
+    prefetch(candidates) {
+      const ranked = rankCandidates(candidates).slice(0, PREFETCH);
+      for (const one of ranked) if (shelf.describe) shelf.describe(one).catch(() => null);
+      for (const one of ranked.slice(0, PREFETCH_FULL)) read(one);
+    },
     /**
      * The plan's sub-questions exist: a climb starts for each, before the project does. Asked again with a new plan, a
      * climb for the same words goes on, and one for words no longer there stops.
@@ -350,8 +431,9 @@ function createClimbs({ readModels, makeSession = (options) => createWarmSession
       return { starts: Object.fromEntries(startIds.filter((id) => kept[id]).map((id) => [id, kept[id]])) };
     },
     /**
-     * A workspace's starts as they are: one with no climb for its words, or one a quit left unfinished, is climbed now;
-     * climbs of starts removed are dropped. → which start ids started.
+     * A workspace's starts as they are: one with no climb for its words, one a quit left unfinished, or one OpenAlex
+     * refused ('unavailable'), is climbed now, keeping what it showed; climbs of starts removed are dropped. → which start
+     * ids started.
      */
     ensure({ projectDir, projectId, workspaceId, question, brief = null, starts }) {
       const kept = readClimbs(projectDir).starts;
@@ -364,7 +446,9 @@ function createClimbs({ readModels, makeSession = (options) => createWarmSession
         const climb = kept[start.id];
         if (climb && climb.question === start.text && climb.status === 'done') continue;
         if (running) cancel(running);
-        startJob({ text: start.text, question, brief, candidates, target: { projectDir, projectId, workspaceId, startId: start.id } });
+        // What was shown under it stays (edited, its old words' papers too) and the new climb adds to it.
+        const prior = running && running.state ? running.state.rungs || [] : (climb && climb.rungs) || [];
+        startJob({ text: start.text, question, brief, candidates, prior, target: { projectDir, projectId, workspaceId, startId: start.id } });
         started.push(start.id);
       }
       const ids = new Set((starts || []).map((start) => start.id));
@@ -382,4 +466,4 @@ function createClimbs({ readModels, makeSession = (options) => createWarmSession
   };
 }
 
-module.exports = { createClimbs, readClimbs, withOpen, actionClimb, aboutTheirOwn, rankCandidates, candidatesFor, fallbackQueries, ACTIONS, FILE };
+module.exports = { createClimbs, readClimbs, withOpen, withPrior, actionClimb, aboutTheirOwn, rankCandidates, candidatesFor, fallbackQueries, searchFiltered, isLimited, ACTIONS, FILE, MIN_CITED, TYPES };

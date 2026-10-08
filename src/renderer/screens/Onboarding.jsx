@@ -3,28 +3,35 @@ import { api, errorMessage } from '../api.js';
 import Button from '../ui/Button.jsx';
 import Pager from '../ui/Pager.jsx';
 import ThinkingDots from '../ui/ThinkingDots.jsx';
-import { QUESTIONS, forward, wrapUp, pagerOf, cardButtons, partsOf, sentenceOf, soFarOf, planFallback, toolsWanted, preparingState, TOOL_WHY } from '../model/onboarding.js';
+import { QUESTIONS, forward, wrapUp, pagerOf, cardButtons, partsOf, sentenceOf, joinedOf, FRAME, JOIN_MS, planFallback, questionOf, toolsWanted, preparingState, TOOL_WHY } from '../model/onboarding.js';
 import { launchRows, installable, rowOf } from '../model/tools.js';
 import welcomePng from '../../../design/assets/welcome-cards.png';
 
 // Onboarding as brainstorm cards (2026-10-07, build 1 of 2): design/onboarding-brainstorm, BSC-1 to BSC-5, its inline
-// styles' values replicated here. mode 'new' (first launch: welcome → tools, only when one is missing → the four cards →
-// the project) or 'existing' (+ Project: the four cards → the project). The cards ask one question at a time: What are
-// you working on? Why this, and why now? What are you least sure about? Putting it together. Skip moves on, Wrap up jumps
-// to Putting it together, Submit moves on.
+// styles' values replicated here. mode 'new' (first launch: welcome → tools, only when one is missing → the cards → the
+// project) or 'existing' (+ Project: the cards → the project). The cards ask one question at a time: What are you
+// working on? Why are you interested in this? Putting it together. Skip moves on, Wrap up jumps to Putting it together,
+// Submit moves on. (2026-10-08, from a hand test: "What are you least sure about?" is gone, and the second card asked
+// "Why this, and why now?".) A question card shows its question and its box, nothing above it (the sentence growing
+// above the cards is gone, 2026-10-08).
 //
-// Above each card, Putting it together's sentence as it grows, in their own words, one answer at a time (SoFar). Bart
-// (src/main/bart/onboard.cjs) has one session for the whole onboarding, started as it opens: after a card it searches
-// for papers in main. On Putting it together their own words make the sentence, editable in place, Stuck? offers one way to fill
-// the blank, and one call names the project, words its question and writes three sub-questions while they are on it.
+// Bart (src/main/bart/onboard.cjs) has one session for the whole onboarding, started as it opens: after a card it
+// searches for papers in main. On the way to Putting it together he joins their answers into one sentence that reads
+// naturally, their own words kept ("I'm working on predicting student behavior because AI is changing how students
+// learn."), each part underlined and editable in place; when he has not answered within JOIN_MS, their words as they
+// are ("I'm working on … because …"). Under it the question they want to answer, filled with Bart's suggestion as soon as the plan has one;
+// they can change it, and Stuck? suggests another. One call names the project, words a question and writes three
+// sub-questions while they are on the card, and again for their question when they change it. Submit always works: an
+// empty field takes Bart's suggestion. (It had been "because I want to find out ___", Submit greyed until the blank
+// was filled, and nothing said so.)
 // Opening the project (api.startProject): Bart's name, the sentence as its description, the default folder, the first
-// workspace named with the question and the sub-questions under "Suggested places to start" (workspace/StartsBlock.jsx).
+// workspace named with the question and the sub-questions under "Questions to investigate" (workspace/StartsBlock.jsx).
 // The tools screen installs Git, Claude Code and Codex in the background (App.jsx holds the setup dialog back until
 // onboarding is over).
-// Build 2 (2026-10-08): after Open project, a short preparing screen (berkeley-research's 3×3 dots and a lowercase label
-// naming the step under way: reading your answers, finding places to start, checking each step) until every sub-question
-// has at least one approved place to start, 20 seconds at most (model/onboarding.js preparingState). The climbs began on
-// the plan, while they were on Putting it together (src/main/bart/climbs.cjs), so it is often done already and flashes by.
+// Build 2 (2026-10-08): after Open project, a preparing screen (berkeley-research's 3×3 dots, larger, and a lowercase
+// label naming the step under way; no step counter) until the first sub-question has two approved papers, 60 seconds at
+// most, then the workspace opens with what there is and the rest fills in (model/onboarding.js preparingState). The
+// climbs began on the plan, while they were on Putting it together (src/main/bart/climbs.cjs).
 
 // The design's colours (its :root): greys, and one muted olive for what is theirs and what moves them on.
 const C = { g200: '#eaeaea', g300: '#c9c9c9', g500: '#8f8f8f', g700: '#4d4d4d', ink: '#171717', guess: '#a3a3a3', olive: '#6b7a3a', oliveInk: '#55622c', oliveWash: '#f1f3e8', oliveLine: '#b9c296' };
@@ -47,10 +54,6 @@ const CSS = `
 .ob-theirs:focus{background:${C.oliveWash}}
 .ob-theirs:empty{display:inline-block;min-width:4em;color:${C.guess};font-style:italic;text-decoration-style:dashed}
 .ob-theirs:empty::before{content:attr(data-placeholder)}
-.ob-blank{display:inline;padding:0 2px;color:${C.ink};border-bottom:2px solid ${C.olive};outline:none;cursor:text;white-space:pre-wrap;word-break:break-word}
-.ob-blank:empty{display:inline-block;min-width:9em}
-.ob-blank:empty::before{content:attr(data-placeholder);color:${C.oliveLine};font-style:italic}
-.ob-blank:focus{background:${C.oliveWash}}
 .ob-stuck{margin-top:10px;padding:0;border:0;background:transparent;color:${C.g500};font:13px/1.5 var(--font-sans);cursor:pointer;text-decoration:underline;text-decoration-color:${C.g300};text-underline-offset:3px}
 .ob-stuck:hover{color:${C.ink}}
 .ob-stuck:disabled{cursor:default;text-decoration:none}
@@ -94,34 +97,6 @@ function Waiting({ label, data }) {
         ))}
       </span>
       <span>{label}</span>
-    </div>
-  );
-}
-
-/**
- * Putting it together as it grows, above a question card: their answers so far as the sentence will read them, the
- * newest a little darker. Two lines at most: a longer sentence keeps its end, and its start fades out at the top.
- */
-function SoFar({ clauses }) {
-  const box = React.useRef(null), inner = React.useRef(null);
-  const [long, setLong] = React.useState(false);
-  const text = clauses.map((clause) => clause.text).join(' ');
-  React.useLayoutEffect(() => {
-    const measure = () => { if (box.current && inner.current) setLong(inner.current.offsetHeight > box.current.clientHeight + 1); };
-    measure();
-    window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
-  }, [text]);
-  if (!clauses.length) return null;
-  const fade = long ? 'linear-gradient(to bottom, transparent, #000 1.45em)' : 'none';
-  return (
-    <div ref={box} data-onboarding-so-far="1" style={{ width: '100%', maxWidth: 560, maxHeight: '2.9em', overflow: 'hidden', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', font: '15px/1.45 var(--font-sans)', textAlign: 'center', textWrap: 'pretty', maskImage: fade, WebkitMaskImage: fade, animation: 'ob-fade 220ms ease-out' }}>
-      <div ref={inner}>
-        {clauses.map((clause, i) => {
-          const newest = i === clauses.length - 1;
-          return <span key={clause.part} data-onboarding-so-far-part={clause.part} data-newest={newest ? '1' : undefined} style={{ color: newest ? '#6b6b6b' : C.guess }}>{newest ? `${clause.text}.` : `${clause.text} `}</span>;
-        })}
-      </div>
     </div>
   );
 }
@@ -171,16 +146,22 @@ function Inline({ value, onChange, className, placeholder, label, data }) {
 export default function Onboarding({ mode = 'new', tools = null, onTools = () => {}, onDone, onBack }) {
   const flowMode = mode === 'existing' ? 'existing' : 'new';
   const [step, setStep] = React.useState(flowMode === 'existing' ? 'working' : 'welcome');
-  const [drafts, setDrafts] = React.useState({ working: '', why: '', unsure: '' });
-  const [answers, setAnswers] = React.useState({ working: '', why: '', unsure: '' });
-  const [parts, setParts] = React.useState(null); // Putting it together's { working, findOut, why }, made as it opens
+  const [drafts, setDrafts] = React.useState({ working: '', why: '' });
+  const [answers, setAnswers] = React.useState({ working: '', why: '' });
+  const [parts, setParts] = React.useState(null); // Putting it together's { working, why }, once joined (or not, in time)
+  const [frame, setFrame] = React.useState(FRAME); // the words around them: Bart's join, else their words as they are
+  const joining = React.useRef(null); // Bart's join, asked on the way to Putting it together
+  const [question, setQuestion] = React.useState(''); // the question they want to answer: Bart's suggestion until changed
+  const [suggesting, setSuggesting] = React.useState(false); // the first plan, whose question fills the field, is coming
+  const touched = React.useRef(false); // the field was typed in (or filled by Stuck?): a later suggestion leaves it be
+  const seen = React.useRef([]); // every question the field was filled with, so Stuck? says a new one
   const [stuck, setStuck] = React.useState(false);
   const [preparing, setPreparing] = React.useState('reading your answers'); // the step the preparing screen names
   const [error, setError] = React.useState('');
   const [id, setId] = React.useState(null); // Bart's onboarding session (src/main/bart/onboard.cjs)
   const idRef = React.useRef(null);
   const made = React.useRef(false);
-  const plan = React.useRef({ sentence: null, promise: null });
+  const plans = React.useRef(new Map()); // `${sentence}\n${question}` → the plan asked for them
 
   // The session starts as onboarding opens, so the first card never waits on a cold start; it ends when the project is
   // made (start-project) or onboarding is left.
@@ -212,61 +193,95 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  // Putting it together opens on their own words, once.
-  React.useEffect(() => { if (step === 'together' && !parts) setParts(partsOf(answers)); }, [step, parts, answers]);
+  // Putting it together opens on Bart's join of their answers, once: waited for JOIN_MS at most from the card opening,
+  // then their words as they are. A join arriving later is not used: the sentence never changes under them.
+  React.useEffect(() => {
+    if (step !== 'together' || parts) return undefined;
+    let live = true;
+    const settle = (joined) => { if (!live) return; live = false; if (joined) { setFrame(joined.frame); setParts(joined.parts); } else { setFrame(FRAME); setParts(partsOf(answers)); } };
+    const timer = setTimeout(() => settle(null), JOIN_MS);
+    (joining.current || Promise.resolve(null)).then((out) => settle(joinedOf(out)), () => settle(null));
+    return () => { live = false; clearTimeout(timer); };
+  }, [step, parts]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const fullAnswers = (findOut = parts ? parts.findOut : '') => ({ ...answers, findOut });
-  const sentence = parts ? sentenceOf(parts) : '';
+  const sentence = parts ? sentenceOf(parts, frame) : '';
+  const settled = questionOf(question);
 
-  // The project's name, question and sub-questions: asked as Putting it together opens and again once an edit to the
-  // sentence has rested, so the latest is ready (or nearly) when they submit. The answer to the sentence as it is is kept.
-  const askPlan = React.useCallback((text, findOut) => {
-    if (plan.current.sentence === text && plan.current.promise) return plan.current.promise;
-    const promise = idRef.current ? api.onboardingPlan(idRef.current, { answers: { ...answers, findOut }, sentence: text }).catch(() => null) : Promise.resolve(null);
-    plan.current = { sentence: text, promise };
+  // The project's name, question and sub-questions: asked for the sentence alone as Putting it together opens (its
+  // question is Bart's suggestion, which fills the field), and again once an edit to the sentence or a question of
+  // theirs has rested, so the plan for what they submit is ready (or nearly). The plan for the sentence alone is also
+  // the plan for the question it suggested: keeping that suggestion asks for nothing more.
+  const askPlan = React.useCallback((text, asked) => {
+    const key = `${text}\n${asked}`;
+    if (plans.current.has(key)) return plans.current.get(key);
+    const promise = idRef.current ? api.onboardingPlan(idRef.current, { answers: { ...answers, question: asked }, sentence: text }).catch(() => null) : Promise.resolve(null);
+    plans.current.set(key, promise);
+    if (!asked) promise.then((out) => { const suggested = out && questionOf(out.question); if (suggested && !plans.current.has(`${text}\n${suggested}`)) plans.current.set(`${text}\n${suggested}`, promise); });
     return promise;
   }, [answers]);
   const askedOnce = React.useRef(false);
   React.useEffect(() => {
     if (step !== 'together' || !parts || !id) return undefined;
-    const timer = setTimeout(() => askPlan(sentence, parts.findOut), askedOnce.current ? 1200 : 0);
+    const first = !askedOnce.current;
+    const timer = setTimeout(() => {
+      const asked = touched.current ? settled : '';
+      const promise = askPlan(sentence, asked);
+      if (asked) return;
+      if (first) setSuggesting(true);
+      promise.then((out) => {
+        setSuggesting(false);
+        const suggested = out && questionOf(out.question);
+        if (suggested && !touched.current) { setQuestion(suggested); if (!seen.current.includes(suggested)) seen.current.push(suggested); }
+      });
+    }, first ? 0 : 1200);
     askedOnce.current = true;
     return () => clearTimeout(timer);
-  }, [step, id, sentence]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [step, id, sentence, settled]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /** A question card left: by Submit (`keep`, its words are the answer) or by Skip (none). Bart is told either way. */
-  const leaveCard = (card, keep) => {
+  /**
+   * A question card left for `next`: by Submit (`keep`, its words are the answer) or by Skip (none). Bart is told when
+   * there are words; on the way to Putting it together he is asked to join the answers.
+   */
+  const leaveCard = (card, keep, next) => {
     const text = keep ? drafts[card].trim() : '';
-    const next = { ...answers, [card]: text };
-    setAnswers(next);
-    if (text && id) api.onboardingAnswer(id, { card, answers: next }).catch(() => {});
+    const now = { ...answers, [card]: text };
+    setAnswers(now);
+    if (text && id) api.onboardingAnswer(id, { card, answers: now }).catch(() => {});
+    if (next === 'together') joining.current = id && (now.working || now.why) ? api.onboardingJoin(id, { answers: now }).catch(() => null) : null;
+    go(next);
   };
-  const submit = (card) => { if (!drafts[card].trim()) return; leaveCard(card, true); go(forward(flowMode, card, flowOptions)); };
-  const skip = (card) => { leaveCard(card, false); go(forward(flowMode, card, flowOptions)); };
+  const submit = (card) => { if (!drafts[card].trim()) return; leaveCard(card, true, forward(flowMode, card, flowOptions)); };
+  const skip = (card) => leaveCard(card, false, forward(flowMode, card, flowOptions));
   // Wrap up keeps what is typed in the field, as Submit would, and goes straight to Putting it together.
-  const wrap = (card) => { leaveCard(card, !!drafts[card].trim()); go(wrapUp(flowMode, card, flowOptions)); };
+  const wrap = (card) => leaveCard(card, !!drafts[card].trim(), wrapUp(flowMode, card, flowOptions));
 
+  // Stuck?: another question to settle on, never one the field has held.
   const askStuck = async () => {
     if (stuck || !id) return;
     setStuck(true);
     try {
-      const out = await api.onboardingStuck(id, { answers: fullAnswers() });
-      if (out && out.text) setParts((now) => ({ ...now, findOut: out.text }));
+      const out = await api.onboardingStuck(id, { answers: { ...answers, question: settled }, seen: [...seen.current, settled].filter(Boolean) });
+      const suggested = out && questionOf(out.text);
+      if (suggested) { touched.current = true; setQuestion(suggested); seen.current.push(suggested); }
     } catch { /* Stuck? stays as it was */ } finally { setStuck(false); }
   };
 
-  // Open the project: Bart's plan for the sentence as it stands (waited for when it is still being written), else their
-  // own words. The folder is the default one, made for it.
+  // Open the project: their question (an empty field takes Bart's suggestion, waited for when it is still being
+  // written), Bart's plan for it, else their own words. The folder is the default one, made for it. Always works.
   const open = async () => {
     const now = parts || partsOf(answers);
-    const text = sentenceOf(now);
+    const text = parts ? sentenceOf(parts, frame) : sentenceOf(now);
     const began = Date.now();
     setPreparing('reading your answers');
     go('open');
     let result;
     try {
-      const planned = (await askPlan(text, now.findOut)) || planFallback(answers, now.findOut);
-      result = await api.startProject({ name: planned.name, description: text, question: planned.question, starts: planned.starts, brief: fullAnswers(now.findOut), folder: 'new', onboardingId: idRef.current });
+      let asked = touched.current || settled ? settled : '';
+      let planned = await askPlan(text, asked);
+      if (!asked && planned && planned.question) { asked = questionOf(planned.question); }
+      planned = planned || planFallback(answers, asked);
+      const settledOn = asked || questionOf(planned.question);
+      result = await api.startProject({ name: planned.name, description: text, question: settledOn, starts: planned.starts, brief: { working: answers.working, why: answers.why, question: settledOn }, folder: 'new', onboardingId: idRef.current });
       made.current = true;
     } catch (failure) {
       setStep('together');
@@ -358,7 +373,6 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
     const buttons = cardButtons(card, drafts[card]);
     body = (
       <React.Fragment key={card}>
-        <SoFar clauses={soFarOf(answers)} />
         <Card title={q.title} data={card}>
           <div style={{ marginTop: 12 }}>
             <textarea
@@ -377,25 +391,42 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
         </Card>
       </React.Fragment>
     );
-  } else if (step === 'together' && parts) {
-    const buttons = cardButtons('together', parts.findOut);
+  } else if (step === 'together') {
+    const buttons = cardButtons('together', question);
     const set = (key) => (value) => setParts((now) => ({ ...now, [key]: value }));
+    // Bart's words around theirs (grey), their parts underlined and editable.
+    const part = (key) => (key === 'working'
+      ? <Inline key="working" className="ob-theirs" value={parts.working} onChange={set('working')} placeholder="what you’re working on" label="What you are working on" data="working" />
+      : <Inline key="why" className="ob-theirs" value={parts.why} onChange={set('why')} placeholder="why it interests you" label="Why you are interested in this" data="why" />);
+    const [first, second] = frame.parts;
     body = (
       <>
         <Card title="Putting it together" data="together">
-          <div data-onboarding-sentence="1" style={{ marginTop: 12, font: '19px/1.75 var(--font-sans)', color: C.g500 }}>
-            I’m working on <Inline className="ob-theirs" value={parts.working} onChange={set('working')} placeholder="what you’re working on" label="What you are working on" data="working" />
-            {' '}because I want to find out <Inline className="ob-blank" value={parts.findOut} onChange={set('findOut')} placeholder="what you want to find out" label="What you want to find out" data="findOut" />
-            {' '}so that <Inline className="ob-theirs" value={parts.why} onChange={set('why')} placeholder="why it matters" label="Why this matters" data="why" />.
-          </div>
-          {stuck ? <Waiting label="Thinking…" data="stuck" /> : <button type="button" className="ob-stuck" data-onboarding-stuck="1" disabled={!id} onClick={askStuck}>Stuck?</button>}
+          {parts ? (
+            <div data-onboarding-sentence="1" data-joined={frame === FRAME ? undefined : '1'} style={{ marginTop: 12, font: '19px/1.75 var(--font-sans)', color: C.g500 }}>
+              {frame.lead}{part(first)}{second ? <>{frame.join}{part(second)}</> : null}{frame.end}
+            </div>
+          ) : <Waiting label="Thinking…" data="join" />}
+          <label htmlFor="ob-question" style={{ display: 'block', marginTop: 16, marginBottom: 6, font: '500 13px/1.5 var(--font-sans)', color: C.g700 }}>The question I want to answer:</label>
+          <textarea
+            id="ob-question"
+            className="ob-field"
+            rows={2}
+            value={question}
+            placeholder={suggesting ? 'Bart is suggesting one…' : 'Your question…'}
+            data-onboarding-question="1"
+            data-suggested={!touched.current && question ? '1' : undefined}
+            onChange={(event) => { touched.current = true; setQuestion(event.target.value.replace(/\n/g, ' ')); }}
+            onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void open(); } }}
+          />
+          {stuck ? <Waiting label="Thinking…" data="stuck" /> : <button type="button" className="ob-stuck" data-onboarding-stuck="1" disabled={!id} onClick={askStuck} title="Suggest another question">Stuck?</button>}
           <Acts showWrap={buttons.showWrap} submitDisabled={buttons.submitDisabled} onSkip={open} onSubmit={open} />
         </Card>
         {errorLine}
       </>
     );
   } else if (step === 'open') {
-    body = <div data-screen-label="Preparing" data-onboarding-preparing={preparing} style={{ display: 'flex', justifyContent: 'center', minHeight: 120, alignItems: 'center' }}><ThinkingDots label={preparing} /></div>;
+    body = <div data-screen-label="Preparing" data-onboarding-preparing={preparing} style={{ display: 'flex', justifyContent: 'center', minHeight: 160, alignItems: 'center' }}><ThinkingDots label={preparing} size={6} labelSize={16} /></div>;
   }
 
   return (

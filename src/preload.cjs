@@ -118,6 +118,7 @@ const engelbartAPI = Object.freeze({
   onboardingOpen: invoke('onboarding-open'),
   onboardingWarm: invoke('onboarding-warm'),
   onboardingAnswer: invoke('onboarding-answer'),
+  onboardingJoin: invoke('onboarding-join'),
   onboardingStuck: invoke('onboarding-stuck'),
   onboardingPlan: invoke('onboarding-plan'),
   onboardingClose: invoke('onboarding-close'),

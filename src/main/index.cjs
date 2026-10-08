@@ -54,6 +54,7 @@ const { createZotero } = require('./zotero/connection.cjs');
 const { createBrowserAuth: createZoteroBrowserAuth } = require('./zotero/browser-auth.cjs');
 const { createZoteroSync, scheduleSyncs: scheduleZoteroSyncs } = require('./zotero/sync.cjs');
 const { mirrorDir: zoteroMirrorDir } = require('./zotero/mirror.cjs');
+const { createOpenAccess } = require('./zotero/oa.cjs');
 const { createOverleafCopies } = require('./overleaf/copy.cjs');
 const { createOverleafStage } = require('./overleaf/stage.cjs');
 const { createSandboxManager } = require('./sandbox/manager.cjs');
@@ -642,12 +643,21 @@ if (!hasSingleInstanceLock) {
     // Build 2 (2026-10-08): the climbs, begun on the plan while the cards are answered and written into the project. The
     // papers they quote are read once into userData (start-papers); the writer is @bart's first step, the approval its
     // second (Opus high). A change is told to every window.
+    // OpenAlex with the person's key (OPENALEX_API_KEY, else config.json openalex.apiKey, 2026-10-08), or the fake
+    // ENGELBART_OPENALEX_API names; the shelf's open-access lookups go to the same fakes (scripted runs only).
     const papers = createPapers();
+    const fakeSources = {
+      ...(process.env.ENGELBART_OPENALEX_API ? { api: process.env.ENGELBART_OPENALEX_API } : {}),
+      ...(process.env.ENGELBART_SEMANTIC_SCHOLAR_API ? { semanticScholar: process.env.ENGELBART_SEMANTIC_SCHOLAR_API } : {}),
+      ...(process.env.ENGELBART_ARXIV_API ? { arxivApi: process.env.ENGELBART_ARXIV_API } : {}),
+      ...(process.env.ENGELBART_ARXIV ? { arxiv: process.env.ENGELBART_ARXIV } : {}),
+    };
+    const startPapers = path.join(app.getPath('userData'), 'start-papers');
     climbs = createClimbs({
       readModels: bartModels,
       ...(process.env.ENGELBART_BART_FAKE === '1' ? { makeSession: () => createFakeSession({ delayMs: 600 }) } : {}),
       sessionOptions: { runDirectory: path.join(app.getPath('userData'), 'onboarding-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-climbs'), tools },
-      shelf: createShelf({ dir: path.join(app.getPath('userData'), 'start-papers'), papers }),
+      shelf: createShelf({ dir: startPapers, papers, openAccess: createOpenAccess({ root: path.join(startPapers, 'oa'), ...fakeSources }) }),
       papers,
       onChange: (payload) => { if (windows) windows.broadcast('engelbart:climbs-changed', payload); },
     });

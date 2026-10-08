@@ -33,9 +33,10 @@ test('config defaults to test mode off and persists a toggle atomically', () => 
   const providers = ['openai', 'anthropic'];
   const github = { clientId: 'Iv23liAZNYl96zlluMDs', appSlug: 'engelbart-mathetic' };
   const tools = normalizeTools({});
-  assert.deepEqual(readConfig(root), { testMode: false, providers, summarizer, github, tools }, 'a new install is on ~/.engelbart; summaries default to Codex, gpt-6-luna, high; @bart offers both providers; GitHub sign-in is configured without manual setup');
-  assert.deepEqual(writeConfig(root, { testMode: true }), { testMode: true, providers, summarizer, github, tools });
-  assert.deepEqual(readConfig(root), { testMode: true, providers, summarizer, github, tools });
+  const openalex = { apiKey: '' }; // 2026-10-08: the OpenAlex key, empty until one is pasted in
+  assert.deepEqual(readConfig(root), { testMode: false, providers, summarizer, github, tools, openalex }, 'a new install is on ~/.engelbart; summaries default to Codex, gpt-6-luna, high; @bart offers both providers; GitHub sign-in is configured without manual setup');
+  assert.deepEqual(writeConfig(root, { testMode: true }), { testMode: true, providers, summarizer, github, tools, openalex });
+  assert.deepEqual(readConfig(root), { testMode: true, providers, summarizer, github, tools, openalex });
 
   // Switching is one word; each provider keeps its own model and effort; nonsense falls back to the defaults.
   const file = path.join(root, 'config.json');
@@ -46,7 +47,7 @@ test('config defaults to test mode off and persists a toggle atomically', () => 
   // A config file from before the setting existed gains it on the next launch.
   fs.writeFileSync(file, JSON.stringify({ testMode: false }));
   ensureHome(path.dirname(root));
-  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { testMode: false, providers, summarizer, github, tools });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { testMode: false, providers, summarizer, github, tools, openalex });
 
   // Earlier builds wrote empty GitHub settings; these users also get the shared app without editing config.
   fs.writeFileSync(file, JSON.stringify({ testMode: false, providers, summarizer, github: { clientId: '', appSlug: '' } }));

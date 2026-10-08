@@ -37,7 +37,7 @@ export default function DocPane({
     onRename(next);
   };
 
-  // `under`: what stands between the title and the document (the workspace's suggested places to start, ./StartsBlock.jsx).
+  // `under`: what stands between the title and the document (the workspace's questions to investigate, ./StartsBlock.jsx).
   const header = (
     <>
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
