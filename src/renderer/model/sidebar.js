@@ -4,7 +4,7 @@
 //
 // From the top: the project's name (its menu switches project or renames it) with Settings and Search; Inbox, Agents,
 // Connections, Library and Add sources, fixed in place; Workspaces, the three worked in last, each opening onto its
-// sub-workspaces; Your sources, this workspace's things sorted into Starred, Notes, Websites, Code and Files; and at the
+// sub-workspaces; Your sources, this workspace's things under Starred and Notes, then the websites, code and files mixed; and at the
 // foot the stickies' Show / Hide. Every section keeps to its share of the sidebar: what does not fit is behind "More",
 // which lists everything in a panel beside the sidebar.
 
@@ -12,18 +12,20 @@ import { hasTag, isNote } from './kind.js';
 
 /* ----------------------------------------------------------- your sources */
 
-/** "Your sources", in order. Starred holds what is starred in this project, of any kind; the rest sort this workspace's rows. */
+/**
+ * "Your sources", in order: two subsections, Starred (what is starred in this project, of any kind) and Notes, always open
+ * (Hudson, 2026-10-08), then everything else, websites, code and files mixed together under no heading of their own.
+ */
 export const SOURCE_GROUPS = Object.freeze([
   { key: 'starred', label: 'Starred' },
   { key: 'notes', label: 'Notes' },
-  { key: 'websites', label: 'Websites' },
-  { key: 'code', label: 'Code' },
-  { key: 'files', label: 'Files' },
+  { key: 'other', label: 'Sources', header: false },
 ]);
 
 /**
- * Which group a row of this workspace sorts into: a note; a repository, which is Code whether it is an address or a clone;
- * a website; and everything else (papers, pages and documents on disk, folders, data, pictures) is a file.
+ * What a row of this workspace is: a note; a repository, which is Code whether it is an address or a clone; a website; and
+ * everything else (papers, pages and documents on disk, folders, data, pictures) is a file. The sidebar draws each its own
+ * icon, and sorts the last three into one list (sourceGroup).
  */
 export function sourceKind(row) {
   if (isNote(row)) return 'notes';
@@ -32,13 +34,16 @@ export function sourceKind(row) {
   return 'files';
 }
 
+/** Which of SOURCE_GROUPS a row of this workspace sorts into (never Starred: that one is by star): 'notes' or 'other'. */
+export const sourceGroup = (row) => (sourceKind(row) === 'notes' ? 'notes' : 'other');
+
 /**
- * The groups with their rows: this workspace's rows by kind (in their own order), and Starred, the starred ids (oldest
- * first) as the library has them, wherever they are; a star whose row is gone is left out. → [{ key, label, rows }]
+ * The groups with their rows: this workspace's rows by group (in their own order), and Starred, the starred ids (oldest
+ * first) as the library has them, wherever they are; a star whose row is gone is left out. → [{ key, label, header?, rows }]
  */
 export function sourceGroups(rows, starredIds = [], library = []) {
   const by = new Map(SOURCE_GROUPS.map((group) => [group.key, []]));
-  for (const row of rows) by.get(sourceKind(row)).push(row);
+  for (const row of rows) by.get(sourceGroup(row)).push(row);
   const known = new Map([...library, ...rows].map((row) => [row.id, row]));
   by.set('starred', starredIds.map((id) => known.get(id)).filter(Boolean));
   return SOURCE_GROUPS.map((group) => ({ ...group, rows: by.get(group.key) }));
@@ -47,23 +52,24 @@ export function sourceGroups(rows, starredIds = [], library = []) {
 /* ------------------------------------------------------------- the budget */
 
 /**
- * How many rows each open group shows when they share `room` lines (a section keeps to its share of the sidebar: Hudson,
- * "if they are expanded they cannot extend past their section"). Every group's header is a line; an open group with
- * nothing in it says so on one; an open group shows its rows, at least one and at most `cap`, and a "More" line under
- * them when any are left out. Past the first, rows are dealt out one at a time, group by group, so each open group shows a
- * few before any shows many. `groups`: [{ key, open, count }]. → { shown: { key: n }, more: { key: bool }, lines, fits };
- * `fits` is false when not even that first row each has room (the section scrolls then, rather than show a "More" alone).
+ * How many rows each group shows when they share `room` lines (a section keeps to its share of the sidebar: Hudson,
+ * "if they are expanded they cannot extend past their section"). The groups are always open. A group with a heading
+ * (`header` not false) spends a line on it, and on "None yet" when it holds nothing; a group shows its rows, at least one
+ * and at most `cap`, and a "More" line under them when any are left out. Past the first, rows are dealt out one at a
+ * time, group by group, so each group shows a few before any shows many. `groups`: [{ key, count, header? }].
+ * → { shown: { key: n }, more: { key: bool }, lines, fits }; `fits` is false when not even that first row each has
+ * room (the section scrolls then, rather than show a "More" alone).
  */
 export function fitGroups(groups, room, { cap = 5 } = {}) {
   const shown = {}, more = {};
   let lines = 0;
   const open = [];
   for (const group of groups) {
-    lines += 1;
+    const headed = group.header !== false;
+    if (headed) lines += 1;
     shown[group.key] = 0;
     more[group.key] = false;
-    if (!group.open) continue;
-    if (!group.count) { lines += 1; continue; } // its "None yet"
+    if (!group.count) { if (headed) lines += 1; continue; } // its "None yet"
     shown[group.key] = 1;
     more[group.key] = group.count > 1;
     lines += more[group.key] ? 2 : 1;
@@ -87,9 +93,6 @@ export function fitGroups(groups, room, { cap = 5 } = {}) {
   }
   return { shown, more, lines, fits };
 }
-
-/** Whether a group of Your sources starts open: Starred and Notes when they hold something; the rest show their count. */
-export const groupOpenByDefault = (key, count) => count > 0 && (key === 'starred' || key === 'notes');
 
 /* ------------------------------------------------------------- workspaces */
 

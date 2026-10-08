@@ -12,6 +12,7 @@ import { isUntitled } from '../model/names.js';
 import { looksAddable, searchRows } from '../model/rail.js';
 import { findWorkspaces } from '../model/nav.js';
 import { sinceWords } from '../model/sidebar.js';
+import { NotificationRows, useBuildNotifications } from '../ui/SandboxNotifications.jsx';
 import { usePlaced } from '../ui/usePlaced.js';
 import { useBodies } from './useBodies.js';
 import { useGithubStatus } from './useGithubStatus.js';
@@ -253,14 +254,23 @@ export function PeekCard({ peek, more, onHold, onClose, onOpenWorkspace }) {
 
 const agentIcon = (kind) => (kind === 'build' || kind === 'quick' ? <I.AgentsIcon size={15} /> : <I.ChatIcon size={15} />);
 
-/** The agents that finished and wait for you to look, newest first; a press goes to their workspace, which clears them. */
+/**
+ * The agents that finished and wait for you to look, newest first (a press goes to their workspace, which clears them),
+ * and under them the repository builds the notification bell held before it moved here (2026-10-08): Building… → Build
+ * finished / Build failed. Opening the Inbox reads them.
+ */
 export function InboxPanel({ anchor, entries, nameOf, onGo, onClear, onClose, ignore }) {
+  const { sandboxes, rows: builds } = useBuildNotifications();
+  const unread = builds.filter((row) => !row.read).map((row) => row.id);
+  React.useEffect(() => { if (sandboxes && unread.length) sandboxes.markNotificationsRead(unread); }, [sandboxes, unread.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
+  const total = entries.length + builds.length;
   return (
     <Floating anchor={anchor} width={340} label="Inbox" onClose={onClose} ignore={ignore} data-sb-panel="inbox">
-      <PanelHead title="Inbox" count={entries.length}>
+      <PanelHead title="Inbox" count={total}>
         {entries.length > 0 && <FootButton onClick={onClear} data-inbox-clear="1">Mark all as seen</FootButton>}
+        {builds.length > 0 && <FootButton onClick={() => sandboxes.clearNotifications(builds.map((row) => row.id))} data-inbox-clear-builds="1">Clear builds</FootButton>}
       </PanelHead>
-      {entries.length === 0
+      {total === 0 && !(sandboxes && sandboxes.error)
         ? <Empty>Nothing new. When an agent finishes or asks you something, it lands here.</Empty>
         : (
           <Scroll>
@@ -274,6 +284,12 @@ export function InboxPanel({ anchor, entries, nameOf, onGo, onClear, onClose, ig
                 onClick={() => onGo(entry)}
               />
             ))}
+            {sandboxes && (builds.length > 0 || sandboxes.error) && (
+              <div data-inbox-builds="1">
+                {entries.length > 0 && <div style={{ padding: '10px 10px 4px', ...text(12, '#8f8f8f', 500) }}>Builds</div>}
+                <NotificationRows sandboxes={sandboxes} rows={builds} onClose={onClose} />
+              </div>
+            )}
           </Scroll>
         )}
     </Floating>
@@ -485,7 +501,7 @@ export function WorkspacesPanel({ anchor, roots, hereId, versions, onGo, onNew, 
   return (
     <Floating anchor={anchor} width={340} cap={620} label="All workspaces" onClose={onClose} ignore={ignore} data-sb-panel="workspaces">
       <PanelHead title="Workspaces" count={all.length}>
-        <RowAction label="New workspace" shown onClick={() => { onClose(); onNew(null); }} data-sb-panel-new="1"><I.PlusIcon size={14} /></RowAction>
+        <RowAction label="Add workspace" shown onClick={() => { onClose(); onNew(null); }} data-sb-panel-new="1"><I.PlusIcon size={14} /></RowAction>
       </PanelHead>
       {all.length > 8 && <SearchField value={q} onChange={setQ} placeholder="Find a workspace" />}
       <Scroll>
@@ -505,7 +521,7 @@ export function WorkspacesPanel({ anchor, roots, hereId, versions, onGo, onNew, 
                 onDoubleClick={() => setRenaming(node.id)}
                 actions={renaming === node.id ? null : (
                   <>
-                    <RowAction label={`New sub-workspace in ${node.name}`} onClick={() => { onClose(); onNew(node.id); }}><I.PlusIcon size={14} /></RowAction>
+                    <RowAction label="Add sub-workspace" onClick={() => { onClose(); onNew(node.id); }}><I.PlusIcon size={14} /></RowAction>
                     <RowAction label={`Delete ${node.name}`} onClick={() => onDelete(node.id)} data-sb-delete-workspace={node.id}><I.TrashIcon size={14} /></RowAction>
                   </>
                 )}

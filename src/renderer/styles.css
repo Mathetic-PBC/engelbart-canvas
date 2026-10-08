@@ -99,7 +99,7 @@ textarea::placeholder,input::placeholder{color:#8f8f8f;font-style:italic}
 .sb-act{opacity:0;transition:opacity 120ms,color 120ms,background 120ms}
 .sb-row:hover .sb-act,.sb-prow:hover .sb-act,.sb-act:focus-visible,.sb-act-on{opacity:1}
 .sb-act:hover{color:#171717!important;background:#e6e6e6!important}
-.sb-icon{display:flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:transparent;color:#5c5c5c;cursor:pointer;transition:background 120ms,color 120ms}
+.sb-icon{display:flex;align-items:center;justify-content:center;flex:none;width:30px;height:30px;padding:0;border:0;border-radius:6px;background:transparent;color:#5c5c5c;cursor:pointer;transition:background 120ms,color 120ms}
 .sb-icon:hover,.sb-icon[aria-expanded="true"]{background:#ececec;color:#171717}
 .sb-icon:focus-visible{outline:none;box-shadow:0 0 0 2px rgba(0,112,243,.28)}
 .sb-project:hover{background:#ededed!important}
@@ -112,3 +112,5 @@ textarea::placeholder,input::placeholder{color:#8f8f8f;font-style:italic}
 @media(prefers-reduced-motion:reduce){.sb-pulse{animation:none}}
 /* While the sidebar shows its own gear, the top-right controls' gear is out of sight (Workspace.jsx). */
 html[data-sidebar-gear] [data-window-controls] [data-settings]{display:none!important}
+/* the notification bell lives in the sidebar's Inbox while the sidebar is shown (2026-10-08) */
+html[data-sidebar-gear] [data-window-controls] .notification-control{display:none!important}

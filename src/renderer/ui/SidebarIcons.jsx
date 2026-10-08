@@ -2,11 +2,12 @@
 // Connectors (blocks), Stickies (a note with its corner turned, solid while shown and dotted while hidden), Toggle sidebar,
 // Workspace ("B · small on bottom"), Add, Inbox (empty, or with a dot when something is new), Search, the chevrons, a link
 // for websites, Note, Folder, Star, Code and the gear. Most are Lucide's (ISC), pasted in; the workspace, the sticky and
-// the gear are drawn to match the pictures. Each is a 24-unit square stroked in the text's colour, 16px unless told.
+// the gear are drawn to match the pictures. Each is a 24-unit square stroked in the text's colour, 18px unless told
+// (2026-10-08: a little bigger than the 16px it was).
 
 import React from 'react';
 
-function Svg({ size = 16, stroke = 2, style, children, ...rest }) {
+function Svg({ size = 18, stroke = 2, style, children, ...rest }) {
   return (
     <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round" style={{ flex: 'none', display: 'block', ...style }} {...rest}>
       {children}
@@ -37,7 +38,8 @@ export function InboxIcon({ dot = false, ...rest }) {
 
 export const AgentsIcon = (props) => <Svg {...props}><path d="M4.04 4.69a.5.5 0 0 1 .65-.65l16 6.5a.5.5 0 0 1-.06.95l-6.13 1.58a2 2 0 0 0-1.43 1.44l-1.58 6.12a.5.5 0 0 1-.95.07z" /></Svg>;
 export const ConnectionsIcon = (props) => <Svg {...props}><rect width="7" height="7" x="14" y="3" rx="1" /><path d="M10 21V8a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1H3" /></Svg>;
-export const LibraryIcon = (props) => <Svg {...props}><path d="m16 6 4 14" /><path d="M12 6v14" /><path d="M8 8v12" /><path d="M4 4v16" /></Svg>;
+// Three books, one fewer than Lucide's four, and drawn thicker (2026-10-08).
+export const LibraryIcon = (props) => <Svg stroke={2.8} {...props}><path d="M5 4v16" /><path d="M11.5 7v13" /><path d="m16.5 6.5 3.5 13.5" /></Svg>;
 export const AddIcon = (props) => <Svg {...props}><circle cx="12" cy="12" r="10" /><path d="M8 12h8" /><path d="M12 8v8" /></Svg>;
 export const ProjectIcon = (props) => <Svg {...props}><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z" /><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12" /><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17" /></Svg>;
 // "B · small on bottom": a tall pane on the left, a square over a short one on the right.

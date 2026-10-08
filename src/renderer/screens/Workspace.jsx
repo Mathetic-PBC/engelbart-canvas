@@ -87,9 +87,9 @@ function describe(row) {
   return { ...row, title: row.name, summary, facts: `${kind.label}${row.last_edited ? ` · edited ${String(row.last_edited).slice(0, 10)}` : ''}` };
 }
 
-function Separator({ onDown, onMove, onUp, onReset }) {
+function Separator({ onDown, onMove, onUp, onReset, bare = false }) {
   return (
-    <div role="separator" aria-orientation="vertical" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onDoubleClick={onReset} style={{ position: 'relative', flex: 'none', width: 1, background: '#eaeaea', cursor: 'col-resize', touchAction: 'none' }}>
+    <div role="separator" aria-orientation="vertical" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onDoubleClick={onReset} style={{ position: 'relative', flex: 'none', width: 1, background: bare ? 'transparent' : '#eaeaea', cursor: 'col-resize', touchAction: 'none' }}>
       <div style={{ position: 'absolute', inset: '0 -6px', zIndex: 4 }} />
     </div>
   );
@@ -1667,7 +1667,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
             {railShown ? <PanelCloseIcon /> : <PanelOpenIcon />}
           </button>
         </div>
-        <div style={{ flex: 'none', width: 1, background: '#eaeaea' }} />
+        <div style={{ flex: 'none', width: 1 }} />
         {/* The document's tabs, drawn as the Stage's (2026-09-25): no rule under them; the tab in front runs into the page. */}
         <div data-doc-strip="1" style={{ flex: '1 1 0', minWidth: 0, boxSizing: 'border-box', display: full ? 'none' : 'flex', alignItems: 'flex-end', padding: `0 ${docFull ? controlsRoom + 8 : 8}px 0 10px`, overflow: 'hidden' }}>
           <div style={{ flex: '0 1 auto', minWidth: 0, display: 'flex', alignItems: 'flex-end', height: '100%' }}>
@@ -1689,7 +1689,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           {/* The document's full screen (MATH-23), at the strip's end as the Stage's is at its own. */}
           {topic && <button type="button" className="hov-wash2" onClick={toggleDocFull} aria-label={docFull ? 'Exit full screen' : 'Full screen'} title={docFull ? 'Exit full screen (Esc)' : 'Full screen'} data-doc-full={docFull ? '1' : '0'} style={{ flex: 'none', alignSelf: 'flex-end', width: 28, height: 28, margin: '0 0 3px auto', padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 120ms' }}>{docFull ? <Collapse /> : <Expand />}</button>}
         </div>
-        <div style={{ flex: 'none', width: 1, background: '#eaeaea', display: full || docFull ? 'none' : undefined }} />
+        <div style={{ flex: 'none', width: 1, display: full || docFull ? 'none' : undefined }} />
         <div style={{ flex: 'none', width: paneWidth, minWidth: 0, boxSizing: 'border-box', display: docFull ? 'none' : 'flex', alignItems: 'center', gap: 16, padding: '0 20px', overflow: 'hidden' }}>
           {RIGHT_MODES.map((mode) => {
             const on = rightMode === mode.id;
@@ -1700,7 +1700,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
         </div>
       </header>
 
-      <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+      {/* Under the header, the sidebar and the header share one ground and the page is a card on it, its corners rounded
+          where they meet, so no line is needed between them (the rail's handle and the header's dividers are unseen). */}
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', background: '#fafafa' }}>
         <Rail
           width={rail}
           hidden={!railShown}
@@ -1748,7 +1750,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           trashRef={trashRef}
         />
 
-        {railShown && <Separator onDown={railDown} onMove={railMove} onUp={pointerUp} onReset={() => setRailWidth(300)} />}
+        {railShown && <Separator bare onDown={railDown} onMove={railMove} onUp={pointerUp} onReset={() => setRailWidth(300)} />}
+
+        <div data-page-card="1" style={{ flex: '1 1 0', minWidth: 0, minHeight: 0, display: 'flex', overflow: 'hidden', background: '#fff', borderRadius: railShown ? '12px 0 0 12px' : 0, boxShadow: railShown ? '0 0 0 1px rgba(0,0,0,.045)' : 'none' }}>
 
         {/* The document, and the one opened beside it (MATH-23): side by side, each pane scrolling down on its own. */}
         <main ref={mainRef} data-doc-column="1" style={{ flex: '1 1 0', minWidth: DOC_MIN, minHeight: 0, display: full ? 'none' : 'flex', overflowX: 'auto', overflowY: 'hidden', position: 'relative', isolation: 'isolate' }}>
@@ -1822,6 +1826,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           save={topic && pageState ? { state: pageState, onSave: savePage, onLink: () => linkIds([pageKnown.row.id]) } : null}
           style={{ flex: 'none', width: paneWidth, minWidth: 0, minHeight: 0, display: docFull ? 'none' : 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }}
         />
+        </div>
       </div>
 
       {buildDialog && (

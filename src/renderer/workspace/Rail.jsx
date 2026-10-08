@@ -5,7 +5,7 @@ import { KIND, KindGlyph as Glyph } from '../ui/Icons.jsx';
 import { isUntitled } from '../model/names.js';
 import { looksAddable, searchRows } from '../model/rail.js';
 import { flatWorkspaces } from '../model/nav.js';
-import { agentGroups, archivedVersions, countWorkspaces, fitChildren, fitGroups, groupOpenByDefault, inboxEntries, pathTo, recentWorkspaces, sourceGroups } from '../model/sidebar.js';
+import { agentGroups, archivedVersions, countWorkspaces, fitChildren, fitGroups, inboxEntries, pathTo, recentWorkspaces, sourceGroups, sourceKind } from '../model/sidebar.js';
 import GithubPane from './GithubPane.jsx';
 import { useAddRun } from './useAddRun.js';
 import { usePlaced } from '../ui/usePlaced.js';
@@ -13,6 +13,7 @@ import { useBodies } from './useBodies.js';
 import { carriesDrop, readDrop } from '../model/drop.js';
 import TrashPanel from '../post-its/TrashPanel.jsx';
 import { openSettings } from '../ui/Settings.jsx';
+import { useBuildNotifications } from '../ui/SandboxNotifications.jsx';
 import * as I from '../ui/SidebarIcons.jsx';
 import {
   AgentsPanel, ConnectionsPanel, ContextMenu, Floating, InboxPanel, LibraryPanel, NewWorkspaceDialog, OVERLEAF_URL, PeekCard,
@@ -23,14 +24,16 @@ import {
 // Order, Iconography, Switch Projects, and Linear's sidebar, its "Your teams" above all). From the top:
 //   the head: the project's name, cut to fit, and its chevron, which opens its menu (Switch project, Rename); then
 //     Settings and Search, the two icons right of it;
-//   fixed rows, always there and never folded: Inbox (the agents that finished and wait for you; its tray wears a dot),
+//   fixed rows, always there and never folded: Inbox (the agents that finished and wait for you, and the repository builds
+//     the notification bell used to hold: while the sidebar shows, the bell is in here; its tray wears a dot),
 //     Agents (running, waiting on you, done), Connections (GitHub, Zotero, Overleaf), Library (search it, add from it, open
 //     it whole) and Add sources (a Note, a Sticky, a link or a path, files from disk, a repository from GitHub);
 //   Workspaces, a section: the three worked in last, each with its sub-workspaces under a chevron (children only, never
 //     grandchildren), the one open here marked; a + on the title makes a workspace and a + on a row a sub-workspace in it,
 //     each named in a small dialog. A fixed size: what does not fit is behind "More";
-//   Your sources, a section, the largest: this workspace's things under Starred, Notes, Websites, Code and Files, each a
-//     row with its icon and chevron and the first few under it, then "More". A star on any of them keeps it under Starred;
+//   Your sources, a section, the largest: this workspace's things under two subsections, Starred and Notes, which are always
+//     open (no chevrons: the whole section folds), the first few of each indented under its name, then "More"; and below
+//     them the websites, code and files mixed in one list, each with its own icon. A star on any of them keeps it under Starred;
 //   the foot: the stickies shown or hidden (it never makes or deletes one), and the trash when it holds something.
 // Sections have no icons and fold on their chevrons, which always show; items in them have icons unless they are indented,
 // when a faint line runs beside them instead. A section never runs past its share of the sidebar: "More" opens a panel
@@ -38,11 +41,13 @@ import {
 // click offers the rest. The sidebar folds away from the toggle in the title bar or ⌘\ (Workspace.jsx).
 
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
-const LINE = 28; // a line of the sidebar: a fixed row, a group, a source, a workspace, "More"
+const LINE = 30; // a line of the sidebar: a fixed row, a group, a source, a workspace, "More"
 const GROUP_CAP = 5; // "the first few" of a group
+const ICON = 18; // the icon's box in a row
 const CHILD_ROOM = 3; // the sub-workspaces the Workspaces section shows, shared by its open rows
 const WORKSPACE_ROWS = 3; // Hudson: "List last three edited workspaces"
 const OPEN_KEY = 'engelbart.sidebar.open';
+const SIZE = { row: 14.5, indent: 13.5, head: 13 }; // the text of a row, an indented row and a section's title
 
 /* ------------------------------------------------------------------ marks */
 
@@ -119,7 +124,7 @@ function LinkAddButton({ busy, disabled = false, onClick }) {
  * `search`, a search over the library first, whose rows bring what they find in; a new Note, Sticky or Sub-Workspace when
  * their handlers are given; then a link or a path, files from disk, or a repository from GitHub (GithubPane), each a new
  * row of the library, and of this workspace when there is one. The sidebar's "Add sources" (2026-10-07) has a Note and a
- * Sticky, no search, no Sub-Workspace and no rule under them. `onDone` closes it once something was added; `onBusy` says
+ * Sticky, no search, no Sub-Workspace and no rule under them; its link or path comes first (2026-10-08), above the Note. `onDone` closes it once something was added; `onBusy` says
  * when it is at work (it cannot close then).
  */
 function AddMenuBody({ projectId = null, search = true, onAdd, onPickDisk, onNewNote, onNewSticky, onNewChild, onPickRepo, onSearchPick, library, inRail, onDone, onBusy }) {
@@ -161,7 +166,7 @@ function AddMenuBody({ projectId = null, search = true, onAdd, onPickDisk, onNew
     return () => { alive = false; clearTimeout(wait); };
   }, [typedAddable, typed]);
   const answer = typedAddable && found && found.query === typed ? found.result : undefined;
-  const bodies = useBodies(projectId, search); // what things say, matched too (MATH-29); the home page's library has no project
+  const bodies = useBodies(projectId, search, { all: !projectId }); // what things say, matched too (MATH-29); the home page's library has no project, so it reads the whole library's
   const results = search && typed ? searchRows({ query: typed, library, inRail, found: answer, bodies }) : [];
   const at = results.length ? Math.min(idx, results.length - 1) : -1;
   const pickResult = (result) => { if (result && !busy) void run(async () => { await onSearchPick(result, typed); return []; }); };
@@ -218,6 +223,13 @@ function AddMenuBody({ projectId = null, search = true, onAdd, onPickDisk, onNew
         </>
       ) : (
         <>
+          {!search && (
+            <>
+              <LinkField inputRef={fieldRef} value={value} busy={busy} error={error} onChange={(next) => { setValue(next); setError(''); }} onEnter={commit} />
+              {error && <AddError>{error}</AddError>}
+              {addable && <LinkAddButton busy={busy} onClick={commit} />}
+            </>
+          )}
           {onNewNote && (
             <button type="button" className="hov-wash" data-new="note" disabled={busy} onClick={() => make(onNewNote)} style={menuRow}>
               <I.NoteIcon size={16} style={{ color: '#171717' }} />
@@ -237,8 +249,12 @@ function AddMenuBody({ projectId = null, search = true, onAdd, onPickDisk, onNew
             </button>
           )}
           {search && (onNewNote || onNewChild) && <div style={{ height: 1, margin: '6px 0 8px', background: '#eaeaea' }} />}
-          <LinkField inputRef={fieldRef} value={value} busy={busy} error={error} onChange={(next) => { setValue(next); setError(''); }} onEnter={commit} />
-          {error && <AddError>{error}</AddError>}
+          {search && (
+            <>
+              <LinkField inputRef={fieldRef} value={value} busy={busy} error={error} onChange={(next) => { setValue(next); setError(''); }} onEnter={commit} />
+              {error && <AddError>{error}</AddError>}
+            </>
+          )}
           <button type="button" className="hov-wash" disabled={busy} onClick={() => run(onPickDisk)} style={menuRow}>
             <I.FolderIcon size={16} style={{ color: '#171717' }} />
             <span style={menuText}>Choose from disk…</span>
@@ -247,7 +263,7 @@ function AddMenuBody({ projectId = null, search = true, onAdd, onPickDisk, onNew
             <span className="glyph-fit" style={{ flex: 'none', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#171717' }}><span style={{ display: 'flex', width: 14, height: 14 }}>{KIND.git.glyph}</span></span>
             <span style={menuText}>Add from GitHub…</span>
           </button>
-          {addable && <LinkAddButton busy={busy} onClick={commit} />}
+          {search && addable && <LinkAddButton busy={busy} onClick={commit} />}
         </>
       )}
     </>
@@ -296,7 +312,7 @@ export function AddToLibrary({ projectId = null, onAdd, onPickDisk, onNewNote, o
 /* ------------------------------------------------------------- the pieces */
 
 // Which parts are folded open, kept for the next time the app opens (a convenience of this machine: storage may refuse).
-// Keys: `section:<key>`, `group:<key>` (Your sources), `ws:<id>` (a workspace row). A part never touched takes its default.
+// Keys: `section:<key>`, `ws:<id>` (a workspace row). A part never touched takes its default.
 function readOpen() {
   try { const saved = JSON.parse(window.localStorage.getItem(OPEN_KEY) || '{}'); return saved && typeof saved === 'object' ? saved : {}; } catch { return {}; }
 }
@@ -312,7 +328,7 @@ const keepFocus = (event) => { if (!(event.target.closest && event.target.closes
 
 /** The chevron that folds (Iconography: down while folded, turned up while open), always shown. */
 function Chevron({ open, onClick, label }) {
-  const mark = <I.ChevronDown size={12} stroke={2.4} style={{ color: '#9b9b9b', transform: open ? 'rotate(180deg)' : 'none', transition: `transform 160ms ${EASE}` }} />;
+  const mark = <I.ChevronDown size={13} stroke={2.4} style={{ color: '#9b9b9b', transform: open ? 'rotate(180deg)' : 'none', transition: `transform 160ms ${EASE}` }} />;
   if (!onClick) return <span aria-hidden="true" style={{ flex: 'none', display: 'flex', marginLeft: 5 }}>{mark}</span>;
   return (
     <button type="button" className="sb-chevron" aria-label={label} aria-expanded={open} onClick={(event) => { event.stopPropagation(); onClick(event); }} onDoubleClick={(event) => event.stopPropagation()} style={{ flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, marginLeft: 2, padding: 0, border: 0, borderRadius: 4, background: 'transparent', cursor: 'pointer' }}>
@@ -344,8 +360,8 @@ function Row({ icon, label, title, indent = false, active = false, faint = false
       {...rest}
       style={{ flex: 'none', position: 'relative', display: 'flex', alignItems: 'center', height, boxSizing: 'border-box', padding: indent ? '0 6px 0 10px' : '0 6px 0 8px', borderRadius: 6, cursor: 'pointer', outline: 'none', animation: flash ? 'added 1600ms ease-out' : undefined, ...style }}
     >
-      {!indent && icon && <span style={{ flex: 'none', width: 16, height: 16, marginRight: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', color: active ? '#171717' : '#5c5c5c' }}>{icon}</span>}
-      <span style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...text(indent ? 13 : 13.5, faint ? '#9b9b9b' : active ? '#171717' : indent ? '#4d4d4d' : '#262626', active ? 500 : 400), lineHeight: `${height}px` }}>{label}</span>
+      {!indent && icon && <span style={{ flex: 'none', width: ICON, height: ICON, marginRight: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', color: active ? '#171717' : '#5c5c5c' }}>{icon}</span>}
+      <span style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...text(indent ? SIZE.indent : SIZE.row, faint ? '#9b9b9b' : active ? '#171717' : indent ? '#4d4d4d' : '#262626', active ? 500 : 400), lineHeight: `${height}px` }}>{label}</span>
       {chevron}
       <span style={{ flex: '1 0 6px' }} />
       {hover && <span className="sb-hover" style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 1 }}>{hover}</span>}
@@ -371,8 +387,8 @@ function Indented({ children, ...rest }) {
 function MoreRow({ indent = false, onClick, open = false, ...rest }) {
   return (
     <div role="button" tabIndex={0} className="sb-row sb-more" data-active={open ? '1' : undefined} onClick={onClick} onMouseDown={keepFocus} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onClick(event); } }} {...rest} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: indent ? 6 : 10, height: LINE, boxSizing: 'border-box', padding: indent ? '0 6px 0 10px' : '0 6px 0 8px', borderRadius: 6, cursor: 'pointer', outline: 'none', color: '#8f8f8f' }}>
-      <I.DotsIcon size={16} />
-      <span style={text(indent ? 13 : 13.5, '#8f8f8f')}>More</span>
+      <I.DotsIcon size={ICON} />
+      <span style={text(indent ? SIZE.indent : SIZE.row, '#8f8f8f')}>More</span>
     </div>
   );
 }
@@ -382,7 +398,7 @@ function SectionHead({ label, open, onToggle, plus = null, ...rest }) {
   return (
     <div className="sb-section-head" {...rest} style={{ flex: 'none', display: 'flex', alignItems: 'center', height: LINE, padding: '0 6px 0 8px', marginTop: 12 }}>
       <button type="button" className="sb-section-toggle" aria-expanded={open} onClick={onToggle} style={{ display: 'flex', alignItems: 'center', minWidth: 0, padding: '2px 0', border: 0, background: 'transparent', cursor: 'pointer' }}>
-        <span style={{ ...text(12.5, '#8f8f8f', 500), whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+        <span style={{ ...text(SIZE.head, '#8f8f8f', 500), whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
         <Chevron open={open} />
       </button>
       <span style={{ flex: 1 }} />
@@ -391,8 +407,10 @@ function SectionHead({ label, open, onToggle, plus = null, ...rest }) {
   );
 }
 
-const GROUP_ICON = { starred: <I.StarIcon />, notes: <I.NoteIcon />, websites: <I.LinkIcon />, code: <I.CodeIcon />, files: <I.FolderIcon /> };
-const GROUP_EMPTY = { starred: 'Star a source to keep it here', notes: 'No notes yet', websites: 'No websites yet', code: 'No code yet', files: 'No files yet' };
+const GROUP_ICON = { starred: <I.StarIcon />, notes: <I.NoteIcon /> };
+const GROUP_EMPTY = { starred: 'Star a source to keep it here', notes: 'No notes yet' };
+// A mixed source's own icon: a link for a website, code for a repository, a folder for files; a note or a star keeps its own.
+const SOURCE_ICON = { notes: <I.NoteIcon />, websites: <I.LinkIcon />, code: <I.CodeIcon />, files: <I.FolderIcon /> };
 
 /** The rows to show of a group: its first `n`, with the one open in front among them when it would be cut. */
 function visibleRows(rows, n, activeId) {
@@ -487,7 +505,7 @@ export default function Rail({
     event.preventDefault();
     setMenu({ at: { x: event.clientX, y: event.clientY }, items: [
       { label: 'Open', icon: <I.WorkspaceIcon size={14} />, onClick: () => onSelectWorkspace(node.id) },
-      { label: 'New sub-workspace', icon: <I.PlusIcon size={14} />, onClick: () => setCreating({ parent: node }) },
+      { label: 'Add sub-workspace', icon: <I.PlusIcon size={14} />, onClick: () => setCreating({ parent: node }) },
       { label: 'Rename', icon: <I.PencilIcon size={14} />, onClick: () => setRenaming(node.id) },
       { separator: true },
       { label: 'Delete', icon: <I.TrashIcon size={14} />, danger: true, onClick: () => onDeleteWorkspace(node.id) },
@@ -497,17 +515,16 @@ export default function Rail({
   /* --------------------------------------------------------- your sources */
   const groups = React.useMemo(() => sourceGroups(rows, starred, library), [rows, starred, library]);
   const srcSection = isOpen('section:sources', true);
-  const groupOpen = (group) => isOpen(`group:${group.key}`, groupOpenByDefault(group.key, group.rows.length));
   const lines = useLines(sourcesRef, LINE);
-  const fit = fitGroups(groups.map((group) => ({ key: group.key, open: groupOpen(group), count: group.rows.length })), lines, { cap: GROUP_CAP });
-  // A row that just arrived opens its group, once, so it is seen arriving.
+  const fit = fitGroups(groups.map((group) => ({ key: group.key, header: group.header, count: group.rows.length })), lines, { cap: GROUP_CAP });
+  // A row that just arrived opens the section, once, so it is seen arriving.
   const shownFlash = React.useRef(null);
   React.useEffect(() => {
     if (!flashId || shownFlash.current === flashId) return;
     const home = groups.find((group) => group.key !== 'starred' && group.rows.some((row) => row.id === flashId));
     if (!home) return;
     shownFlash.current = flashId;
-    setOpened((now) => ({ ...now, 'section:sources': true, [`group:${home.key}`]: true }));
+    setOpened((now) => ({ ...now, 'section:sources': true }));
   }, [flashId, groups, setOpened]);
 
   const sourceMenu = (event, row) => {
@@ -536,6 +553,8 @@ export default function Rail({
 
   /* --------------------------------------------------------------- agents */
   const inbox = React.useMemo(() => inboxEntries(agents, project.id), [agents, project.id]);
+  const { unread: unreadBuilds } = useBuildNotifications(); // the bell's, now in the Inbox
+  const inboxCount = inbox.length + unreadBuilds;
   // A workspace where an agent finished and waits for you, or one nested in it, wears a blue dot (the Inbox says what).
   const waitsIn = React.useMemo(() => new Set(inbox.map((entry) => entry.workspaceId).filter(Boolean)), [inbox]);
   const waits = (node) => waitsIn.has(node.id) || (node.children || []).some(waits);
@@ -560,53 +579,51 @@ export default function Rail({
       <SectionHead label="Your sources" open={srcSection} onToggle={() => toggleOpen('section:sources', true)} data-sb-head="sources" />
       <div ref={sourcesRef} data-sb-sources-body="1" onScroll={peek.drop} style={{ flex: '1 1 0', minHeight: 0, display: 'flex', flexDirection: 'column', overflowY: srcSection && !fit.fits ? 'auto' : 'hidden' }}>
         {srcSection && groups.map((group) => {
-          const open = groupOpen(group);
+          const headed = group.header !== false; // Starred and Notes: a name, always open; the rest are one list, no name
           const shown = visibleRows(group.rows, fit.shown[group.key], activeRowId);
           const panelOpen = panel && panel.kind === 'sources' && panel.key === group.key;
+          const rowsOf = (indent) => (
+            <>
+              {shown.map((row) => {
+                const on = starredSet.has(row.id);
+                return (
+                  <Row
+                    key={row.id}
+                    data-sb-source={row.id}
+                    indent={indent}
+                    icon={SOURCE_ICON[sourceKind(row)]}
+                    label={renaming === row.id ? <RenameField initial={row.name} onDone={(name) => { setRenaming(null); if (name) onRenameRow(row, name); }} style={text(indent ? SIZE.indent : SIZE.row)} /> : row.name}
+                    title={row.name}
+                    faint={isUntitled(row.name)}
+                    active={row.id === activeRowId}
+                    flash={flashId === row.id}
+                    onClick={(event) => { if (renaming === row.id) return; peek.drop(); onOpenRow(row, event); }}
+                    onDoubleClick={() => { peek.drop(); setRenaming(row.id); }}
+                    onContextMenu={(event) => sourceMenu(event, row)}
+                    onMouseEnter={(event) => { if (renaming !== row.id) peek.open(row, event.currentTarget, panelEdge(event.currentTarget)); }}
+                    onMouseLeave={peek.close}
+                    hover={renaming === row.id ? null : (
+                      <>
+                        <RowAction label={on ? 'Unstar' : 'Star'} shown={on && group.key !== 'starred'} onClick={() => onStar(row, !on)} data-sb-star={row.id}><I.StarIcon size={15} filled={on} /></RowAction>
+                        {inRail(row.id) && <RowAction label={`Take ${row.name} out of this workspace`} onClick={() => { peek.drop(); onRemoveRow(row); }} data-sb-remove={row.id}><I.MinusCircleIcon size={15} /></RowAction>}
+                      </>
+                    )}
+                  />
+                );
+              })}
+              {fit.more[group.key] && <MoreRow indent={indent} open={panelOpen} data-sb-trigger={`sources:${group.key}`} data-sb-more={group.key} onClick={(event) => toggle('sources', event.currentTarget, group.key)} />}
+            </>
+          );
+          if (!headed) return group.rows.length > 0 ? <React.Fragment key={group.key}><div data-sb-group-rows={group.key} style={{ display: 'flex', flexDirection: 'column', marginTop: 4 }}>{rowsOf(false)}</div></React.Fragment> : null;
           return (
             <React.Fragment key={group.key}>
-              <Row
-                data-sb-group={group.key}
-                icon={GROUP_ICON[group.key]}
-                label={group.label}
-                expanded={open}
-                chevron={<Chevron open={open} />}
-                right={!open && group.rows.length ? <span style={text(12, '#a3a3a3')}>{group.rows.length}</span> : null}
-                onClick={() => toggleOpen(`group:${group.key}`, groupOpenByDefault(group.key, group.rows.length))}
-              />
-              {open && (group.rows.length === 0
-                ? <Indented><div data-sb-empty={group.key} style={{ height: LINE, display: 'flex', alignItems: 'center', paddingLeft: 10, ...text(12.5, '#a3a3a3') }}>{GROUP_EMPTY[group.key]}</div></Indented>
-                : (shown.length > 0 || fit.more[group.key]) && (
-                  <Indented data-sb-group-rows={group.key}>
-                    {shown.map((row) => {
-                      const on = starredSet.has(row.id);
-                      return (
-                        <Row
-                          key={row.id}
-                          data-sb-source={row.id}
-                          indent
-                          label={renaming === row.id ? <RenameField initial={row.name} onDone={(name) => { setRenaming(null); if (name) onRenameRow(row, name); }} /> : row.name}
-                          title={row.name}
-                          faint={isUntitled(row.name)}
-                          active={row.id === activeRowId}
-                          flash={flashId === row.id}
-                          onClick={(event) => { if (renaming === row.id) return; peek.drop(); onOpenRow(row, event); }}
-                          onDoubleClick={() => { peek.drop(); setRenaming(row.id); }}
-                          onContextMenu={(event) => sourceMenu(event, row)}
-                          onMouseEnter={(event) => { if (renaming !== row.id) peek.open(row, event.currentTarget, panelEdge(event.currentTarget)); }}
-                          onMouseLeave={peek.close}
-                          hover={renaming === row.id ? null : (
-                            <>
-                              <RowAction label={on ? 'Unstar' : 'Star'} shown={on && group.key !== 'starred'} onClick={() => onStar(row, !on)} data-sb-star={row.id}><I.StarIcon size={14} filled={on} /></RowAction>
-                              {inRail(row.id) && <RowAction label={`Take ${row.name} out of this workspace`} onClick={() => { peek.drop(); onRemoveRow(row); }} data-sb-remove={row.id}><I.MinusCircleIcon size={14} /></RowAction>}
-                            </>
-                          )}
-                        />
-                      );
-                    })}
-                    {fit.more[group.key] && <MoreRow indent open={panelOpen} data-sb-trigger={`sources:${group.key}`} data-sb-more={group.key} onClick={(event) => toggle('sources', event.currentTarget, group.key)} />}
-                  </Indented>
-                ))}
+              <div data-sb-group={group.key} style={{ flex: 'none', display: 'flex', alignItems: 'center', height: LINE, boxSizing: 'border-box', padding: '0 6px 0 8px' }}>
+                <span style={{ flex: 'none', width: ICON, height: ICON, marginRight: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#5c5c5c' }}>{GROUP_ICON[group.key]}</span>
+                <span style={{ ...text(SIZE.row, '#262626', 500), lineHeight: `${LINE}px` }}>{group.label}</span>
+              </div>
+              {group.rows.length === 0
+                ? <Indented><div data-sb-empty={group.key} style={{ height: LINE, display: 'flex', alignItems: 'center', paddingLeft: 10, ...text(SIZE.indent - 0.5, '#a3a3a3') }}>{GROUP_EMPTY[group.key]}</div></Indented>
+                : (shown.length > 0 || fit.more[group.key]) && <Indented data-sb-group-rows={group.key}>{rowsOf(true)}</Indented>}
             </React.Fragment>
           );
         })}
@@ -617,11 +634,11 @@ export default function Rail({
   return (
     <aside ref={asideRef} aria-label="Sidebar" data-sidebar="1" style={{ flex: 'none', width, minHeight: 0, display: hidden ? 'none' : 'flex', flexDirection: 'column', position: 'relative', zIndex: 7, boxSizing: 'border-box', padding: '0 8px', background: '#fafafa' }}>
       {/* The head: the project, then Settings and Search. */}
-      <div data-sb-head="project" style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 2, height: 40, padding: '4px 0 2px' }}>
+      <div data-sb-head="project" style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 2, height: 44, padding: '4px 0 2px' }}>
         {renaming === 'project'
           ? (
-            <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', height: 30, padding: '0 8px', border: '1px solid #c9c9c9', borderRadius: 6, background: '#fff' }}>
-              <RenameField initial={project.name} onDone={(name) => { setRenaming(null); if (name) onRenameProject(name); }} style={text(14, '#171717', 600)} />
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', height: 32, padding: '0 8px', border: '1px solid #c9c9c9', borderRadius: 6, background: '#fff' }}>
+              <RenameField initial={project.name} onDone={(name) => { setRenaming(null); if (name) onRenameProject(name); }} style={text(15, '#171717', 600)} />
             </div>
           )
           : (
@@ -633,10 +650,10 @@ export default function Rail({
               aria-expanded={!!(panel && panel.kind === 'project')}
               title={project.name}
               onClick={(event) => toggle('project', event.currentTarget)}
-              style={{ flex: '0 1 auto', minWidth: 0, display: 'flex', alignItems: 'center', gap: 6, height: 30, padding: '0 8px', border: 0, borderRadius: 6, background: panel && panel.kind === 'project' ? '#ececec' : 'transparent', cursor: 'pointer' }}
+              style={{ flex: '0 1 auto', minWidth: 0, display: 'flex', alignItems: 'center', gap: 6, height: 32, padding: '0 8px', border: 0, borderRadius: 6, background: panel && panel.kind === 'project' ? '#ececec' : 'transparent', cursor: 'pointer' }}
             >
-              <span data-sb-project-name="1" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...text(14, '#171717', 600) }}>{project.name}</span>
-              <I.ChevronDown size={13} stroke={2.4} style={{ color: '#8f8f8f' }} />
+              <span data-sb-project-name="1" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...text(15, '#171717', 600) }}>{project.name}</span>
+              <I.ChevronDown size={14} stroke={2.4} style={{ color: '#8f8f8f' }} />
             </button>
           )}
         <span style={{ flex: '1 0 4px' }} />
@@ -646,8 +663,8 @@ export default function Rail({
 
       {/* Fixed in place: buttons, never folded. */}
       <nav aria-label="Places" data-sb-fixed="1" style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 1, paddingTop: 4 }}>
-        <Row height={LINE} data-sb-trigger="inbox" data-sb-fixed-row="inbox" icon={<I.InboxIcon dot={inbox.length > 0} />} label="Inbox" active={panel && panel.kind === 'inbox'} right={inbox.length ? <span data-sb-count="inbox" style={text(12, '#8f8f8f')}>{inbox.length}</span> : null} onClick={(event) => toggle('inbox', event.currentTarget)} />
-        <Row height={LINE} data-sb-trigger="agents" data-sb-fixed-row="agents" icon={<I.AgentsIcon />} label="Agents" active={panel && panel.kind === 'agents'} right={agentList.running.length ? <span data-sb-count="agents" style={{ display: 'flex', alignItems: 'center', gap: 6, ...text(12, '#8f8f8f') }}><span className="sb-pulse" aria-hidden="true" />{agentList.running.length}</span> : null} onClick={(event) => toggle('agents', event.currentTarget)} />
+        <Row height={LINE} data-sb-trigger="inbox" data-sb-fixed-row="inbox" icon={<I.InboxIcon dot={inboxCount > 0} />} label="Inbox" active={panel && panel.kind === 'inbox'} right={inboxCount ? <span data-sb-count="inbox" style={text(13, '#8f8f8f')}>{inboxCount}</span> : null} onClick={(event) => toggle('inbox', event.currentTarget)} />
+        <Row height={LINE} data-sb-trigger="agents" data-sb-fixed-row="agents" icon={<I.AgentsIcon />} label="Agents" active={panel && panel.kind === 'agents'} right={agentList.running.length ? <span data-sb-count="agents" style={{ display: 'flex', alignItems: 'center', gap: 6, ...text(13, '#8f8f8f') }}><span className="sb-pulse" aria-hidden="true" />{agentList.running.length}</span> : null} onClick={(event) => toggle('agents', event.currentTarget)} />
         <Row height={LINE} data-sb-trigger="connections" data-sb-fixed-row="connections" icon={<I.ConnectionsIcon />} label="Connections" active={panel && panel.kind === 'connections'} onClick={(event) => toggle('connections', event.currentTarget)} />
         <Row height={LINE} data-sb-trigger="library" data-sb-fixed-row="library" icon={<I.LibraryIcon />} label="Library" active={panel && panel.kind === 'library'} onClick={(event) => toggle('library', event.currentTarget)} />
         <Row height={LINE} data-sb-trigger="add" data-sb-fixed-row="add" icon={<I.AddIcon />} label="Add sources" active={panel && panel.kind === 'add'} onClick={(event) => toggle('add', event.currentTarget)} />
@@ -660,7 +677,7 @@ export default function Rail({
           open={wsSection}
           onToggle={() => toggleOpen('section:workspaces', true)}
           data-sb-head="workspaces"
-          plus={<RowAction label="New workspace" shown onClick={() => setCreating({ parent: null })} data-sb-new-workspace="1"><I.PlusIcon size={14} /></RowAction>}
+          plus={<RowAction label="Add workspace" shown onClick={() => setCreating({ parent: null })} data-sb-new-workspace="1"><I.PlusIcon size={15} /></RowAction>}
         />
         {wsSection && ranked.map((entry) => {
           const { node } = entry;
@@ -678,7 +695,7 @@ export default function Rail({
                 active={node.id === hereId}
                 expanded={entry.children.length ? open : undefined}
                 chevron={entry.children.length ? <Chevron open={open} label={open ? `Fold ${node.name}` : `Show what is in ${node.name}`} onClick={() => toggleOpen(`ws:${node.id}`, wsOpenByDefault(entry))} /> : null}
-                hover={renaming === node.id ? null : <RowAction label={`New sub-workspace in ${node.name}`} onClick={() => setCreating({ parent: node })} data-sb-new-child={node.id}><I.PlusIcon size={14} /></RowAction>}
+                hover={renaming === node.id ? null : <RowAction label="Add sub-workspace" onClick={() => setCreating({ parent: node })} data-sb-new-child={node.id}><I.PlusIcon size={15} /></RowAction>}
                 right={waitDot(node)}
                 onClick={() => { if (renaming !== node.id) onSelectWorkspace(node.id); }}
                 onDoubleClick={() => setRenaming(node.id)}
@@ -706,7 +723,7 @@ export default function Rail({
             </React.Fragment>
           );
         })}
-        {wsSection && !ranked.length && <div style={{ height: LINE, display: 'flex', alignItems: 'center', padding: '0 8px', ...text(12.5, '#a3a3a3') }}>No workspaces yet</div>}
+        {wsSection && !ranked.length && <div style={{ height: LINE, display: 'flex', alignItems: 'center', padding: '0 8px', ...text(13.5, '#a3a3a3') }}>No workspaces yet</div>}
         {wsSection && wsMore && <MoreRow data-sb-trigger="workspaces" data-sb-more="workspaces" open={!!(panel && panel.kind === 'workspaces')} onClick={(event) => toggle('workspaces', event.currentTarget)} />}
       </section>
 
@@ -721,7 +738,7 @@ export default function Rail({
         style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 2, margin: '6px 0 10px', borderRadius: 7, background: stickiesDrag ? (postItDrag.over ? '#e6e6e6' : '#f0f0f0') : 'transparent', boxShadow: stickiesDrag ? 'inset 0 0 0 1px #dedede' : 'none', transition: 'background 120ms' }}
       >
         {stickiesDrag
-          ? <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10, height: LINE, padding: '0 8px', ...text(13.5, '#4d4d4d') }}><I.TrashIcon style={{ color: '#4d4d4d' }} />Drop here to throw it away</div>
+          ? <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10, height: LINE, padding: '0 8px', ...text(14.5, '#4d4d4d') }}><I.TrashIcon style={{ color: '#4d4d4d' }} />Drop here to throw it away</div>
           : (
             <Row
               height={LINE}
@@ -736,7 +753,7 @@ export default function Rail({
             />
           )}
         {!stickiesDrag && trashFull && (
-          <RowAction label="Trash" shown data-sb-trigger="trash" data-sb-trash="1" onClick={(event) => toggle('trash', event.currentTarget)}><I.TrashIcon size={15} /></RowAction>
+          <RowAction label="Trash" shown data-sb-trigger="trash" data-sb-trash="1" onClick={(event) => toggle('trash', event.currentTarget)}><I.TrashIcon size={16} /></RowAction>
         )}
       </div>
 

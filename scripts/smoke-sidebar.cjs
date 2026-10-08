@@ -136,7 +136,7 @@ app.whenReady().then(async () => {
     assert.ok(!rows.includes('Iconography'), 'no grandchild');
     assert.ok(await has(wc, '[data-sb-workspace][data-active="1"]'), 'where you are is marked');
     assert.ok(await has(wc, '[data-sb-more="workspaces"]'), 'More, for the rest');
-    assert.deepEqual(await js(wc, '[...document.querySelectorAll("[data-sb-group]")].map((el)=>el.dataset.sbGroup)'), ['starred', 'notes', 'websites', 'code', 'files'], 'the groups in order');
+    assert.deepEqual(await js(wc, '[...document.querySelectorAll("[data-sb-group]")].map((el)=>el.dataset.sbGroup)'), ['starred', 'notes'], 'the two subsections in order');
     await shot(wc, '01-sidebar');
 
     /* ------------------------------------------------ panels beside the sidebar */

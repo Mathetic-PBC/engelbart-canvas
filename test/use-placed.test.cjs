@@ -56,15 +56,21 @@ function load(fake) {
 // A 1000px list in a panel: with a limit it scrolls, and like a browser's it is put back to its top when the limit goes.
 function list(natural = 1000) {
   let maxHeight = '', scrollTop = 0;
+  const lists = []; // lists inside the panel: they too lose their place while the limit is off
+  let innerTop = 0;
+  const inner = { get scrollTop() { return innerTop; }, set scrollTop(value) { innerTop = value; } };
   const limit = () => (/^\d+px$/.test(maxHeight) ? parseInt(maxHeight, 10) : Infinity);
   const room = () => Math.max(0, natural - Math.min(natural, limit()));
   return {
     style: {
       get maxHeight() { return maxHeight; },
-      set maxHeight(value) { maxHeight = value; scrollTop = Math.min(scrollTop, room()); },
+      set maxHeight(value) { maxHeight = value; scrollTop = Math.min(scrollTop, room()); if (value === 'none') innerTop = 0; },
     },
     get offsetHeight() { return Math.min(natural, limit()); },
     offsetWidth: 400,
+    inner,
+    querySelectorAll: () => lists,
+    holdInner: () => { lists.push(inner); },
     get scrollTop() { return scrollTop; },
     set scrollTop(value) { scrollTop = Math.max(0, Math.min(value, room())); },
   };
@@ -87,6 +93,24 @@ test('the @ menu keeps its scroll through a hover\'s re-render and the document 
     assert.equal(el.scrollTop, 300, 'a hover leaves the list where it was');
     render(hook, el); render(hook, el); // the document loading under it
     assert.equal(el.scrollTop, 300, 'and so does any other render');
+  } finally {
+    if (previous === undefined) delete global.window; else global.window = previous;
+  }
+});
+
+test('a list inside the panel keeps its scroll too: the Library\'s did not (2026-10-08)', () => {
+  const previous = global.window;
+  global.window = { innerWidth: 1200, innerHeight: 800 };
+  try {
+    const { fake, render } = hooks();
+    const usePlaced = load(fake);
+    const el = list();
+    el.holdInner();
+    const hook = () => usePlaced({ left: 100, right: 100, top: 40, bottom: 60 }, { cap: 420 });
+    render(hook, el);
+    el.inner.scrollTop = 250; // the Library's rows scrolled by hand
+    render(hook, el); // a row hovered
+    assert.equal(el.inner.scrollTop, 250, 'the list inside is where it was');
   } finally {
     if (previous === undefined) delete global.window; else global.window = previous;
   }

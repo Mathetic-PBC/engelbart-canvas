@@ -99,6 +99,8 @@ test('Workspaces: the three worked in last, the one holding this workspace open 
 test('a + on the Workspaces title, and on each workspace row but not on its sub-workspaces', () => {
   const { html } = render();
   assert.match(html, /data-sb-new-workspace="1"/);
+  assert.match(html, /aria-label="Add workspace"[^>]*title="Add workspace"/, 'its tooltip');
+  assert.match(html, /aria-label="Add sub-workspace"[^>]*title="Add sub-workspace"/, 'and the row\'s');
   assert.deepEqual(attrs(html, 'data-sb-new-child'), ['ui', 'ag', 'lb']);
 });
 
@@ -111,24 +113,33 @@ test('sections have no icon: a section\'s title is its name and its chevron, whi
   }
 });
 
-test('Your sources: Starred, Notes, Websites, Code, Files, each with its icon; Starred and Notes open, the rest folded with their count', () => {
+test('Your sources: Starred and Notes, each with its icon and no chevron, always open; the rest mixed below with no heading', () => {
   const { html } = render();
-  assert.deepEqual(attrs(html, 'data-sb-group'), ['starred', 'notes', 'websites', 'code', 'files']);
-  assert.match(html, /data-sb-group="starred"[^>]*><span[^>]*><svg/, 'a group is an item: it has its icon');
+  assert.deepEqual(attrs(html, 'data-sb-group'), ['starred', 'notes'], 'two subsections');
+  assert.match(html, /data-sb-group="starred"[^>]*><span[^>]*><svg/, 'a subsection has its icon');
+  const sources = html.slice(html.indexOf('data-sb-sources-body'));
+  assert.doesNotMatch(sources, /aria-expanded/, 'nothing folds but the section itself');
   assert.deepEqual(attrs(html.slice(html.indexOf('data-sb-group-rows="starred"')), 'data-sb-source')[0], 'p1', 'the starred paper under Starred');
-  assert.match(html, /data-sb-group="websites"[^>]*>.*?>2<\/span>/, 'Websites folded: its count');
+  assert.match(html, /data-sb-group-rows="other"/, 'websites, code and files in one list');
+  assert.doesNotMatch(html, /data-sb-group="(websites|code|files|other)"/);
 });
 
-test('an open group shows its first few, indented without icons, then More; a starred row keeps its star in sight', () => {
+test('an open subsection shows its first few, indented without icons, then More; a starred row keeps its star in sight', () => {
   const { html } = render();
-  const notesRows = html.slice(html.indexOf('data-sb-group-rows="notes"'), html.indexOf('data-sb-group="websites"'));
-  assert.deepEqual(attrs(notesRows, 'data-sb-source'), ['n0', 'n1', 'n2', 'n3', 'n4'], 'five: "the first few"');
+  const notesRows = html.slice(html.indexOf('data-sb-group-rows="notes"'), html.indexOf('data-sb-group-rows="other"'));
+  assert.deepEqual(attrs(notesRows, 'data-sb-source').slice(0, 5), ['n0', 'n1', 'n2', 'n3', 'n4'], 'five: "the first few"');
   assert.match(notesRows, /data-sb-more="notes"/);
   assert.match(notesRows, /data-sb-source="n0"[^>]*><span style="flex:0 1 auto/, 'an indented row starts with its name, no icon');
   const starredNote = render({ starred: ['n1'] }).html;
   const n1 = starredNote.slice(starredNote.indexOf('data-sb-group-rows="notes"'));
   assert.match(n1.slice(n1.indexOf('data-sb-source="n1"')), /^[^]*?class="sb-act sb-act-on"[^>]*data-sb-star="n1"/, 'starred: its star shows without the pointer on it');
   assert.match(n1.slice(n1.indexOf('data-sb-source="n2"')), /^[^]*?class="sb-act"[^>]*data-sb-star="n2"/, 'not starred: on hover only');
+});
+
+test('the mixed sources are not indented and each has its own icon', () => {
+  const { html } = render();
+  const other = html.slice(html.indexOf('data-sb-group-rows="other"'));
+  assert.match(other, /data-sb-source="[^"]+"[^>]*><span[^>]*><svg/, 'a mixed row starts with its icon');
 });
 
 test('the foot: Hide stickies while they show, Show stickies (dotted) while hidden; the trash only while something is in it', () => {
@@ -144,6 +155,7 @@ test('a project with no workspace yet says so, and still offers the +', () => {
   const { html } = render({ roots: [], hereId: null, rows: [], starred: [] });
   assert.match(html, /No workspaces yet/);
   assert.match(html, /data-sb-new-workspace="1"/);
+  assert.match(html, /aria-label="Add workspace"[^>]*title="Add workspace"/, 'its tooltip');
   assert.doesNotMatch(html, /data-sb-more="workspaces"/);
 });
 

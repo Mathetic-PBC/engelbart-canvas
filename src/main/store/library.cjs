@@ -430,6 +430,21 @@ function readBody(file) {
 async function bodiesForProject(ctx, projectId) {
   const project = projects.findProject(ctx, projectId);
   const rows = await libraryForProject(ctx, projectId);
+  const items = await bodiesOfRows(ctx, rows);
+  const workspaces = {};
+  for (const workspace of projects.flattenWorkspaces(project.dir)) {
+    const text = readBody(path.join(project.dir, workspace.path, 'workspace.md'));
+    if (text) workspaces[workspace.id] = text;
+  }
+  return { items, workspaces };
+}
+
+/** What every row of the library says, for the all-projects screen's search (no project, so no workspaces). */
+async function bodiesForLibrary(ctx) {
+  return { items: await bodiesOfRows(ctx, await ctx.libraryDb.list()), workspaces: {} };
+}
+
+async function bodiesOfRows(ctx, rows) {
   const items = Object.fromEntries(await ctx.libraryDb.textsFor(rows.filter((row) => row.type === 'pdf').map((row) => row.id), MAX_BODY_CHARS));
   // A file the library links to is read where it is, as the peek reads it: inside the home directory (or the data root).
   const roots = [ctx.homeDir, ctx.dataRoot].map((dir) => { try { return fs.realpathSync(dir); } catch { return null; } }).filter(Boolean);
@@ -441,12 +456,7 @@ async function bodiesForProject(ctx, projectId) {
     const text = readBody(real);
     if (text) items[row.id] = text;
   }
-  const workspaces = {};
-  for (const workspace of projects.flattenWorkspaces(project.dir)) {
-    const text = readBody(path.join(project.dir, workspace.path, 'workspace.md'));
-    if (text) workspaces[workspace.id] = text;
-  }
-  return { items, workspaces };
+  return items;
 }
 
 /* ------------------------------------------------------------- repositories */
@@ -1084,4 +1094,4 @@ async function previewItem(ctx, id, { listRemoteFiles } = {}) {
   return out;
 }
 
-module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, annotationsFileOf, writePageAnnotations, addMarkAnswer, addWebMark, updateWebMark, readWebMark, removeWebMark, restoreWebMark, cropFile, projectsForLibraryItem, libraryForProject, bodiesForProject, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, addPageCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem, FILE_TYPES, PEEK_SKIP };
+module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, annotationsFileOf, writePageAnnotations, addMarkAnswer, addWebMark, updateWebMark, readWebMark, removeWebMark, restoreWebMark, cropFile, projectsForLibraryItem, libraryForProject, bodiesForProject, bodiesForLibrary, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, addPageCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem, FILE_TYPES, PEEK_SKIP };

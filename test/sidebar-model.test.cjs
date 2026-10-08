@@ -23,11 +23,13 @@ const rows = [
   row('i1', 'Attachment 1', 'image'),
 ];
 
-test('Your sources: Starred, Notes, Websites, Code, Files in that order; a repository is Code as an address or a clone; Files takes the rest', async () => {
+test('Your sources: Starred and Notes are the subsections; websites, code and files are mixed in one list after them', async () => {
   const { SOURCE_GROUPS, sourceGroups, sourceKind } = await load();
-  assert.deepEqual(SOURCE_GROUPS.map((group) => group.label), ['Starred', 'Notes', 'Websites', 'Code', 'Files']);
+  assert.deepEqual(SOURCE_GROUPS.map((group) => group.label), ['Starred', 'Notes', 'Sources']);
+  assert.deepEqual(SOURCE_GROUPS.map((group) => group.header), [undefined, undefined, false], 'the mixed list has no heading');
   const groups = sourceGroups(rows, [], rows);
-  assert.deepEqual(groups.map((group) => [group.key, group.rows.map((r) => r.id)]), [['starred', []], ['notes', ['n1']], ['websites', ['w1']], ['code', ['g1', 'g2']], ['files', ['p1', 'm1', 'c1', 'f1', 'i1']]]);
+  assert.deepEqual(groups.map((group) => [group.key, group.rows.map((r) => r.id)]), [['starred', []], ['notes', ['n1']], ['other', ['p1', 'g1', 'g2', 'w1', 'm1', 'c1', 'f1', 'i1']]], 'in the workspace\'s own order');
+  assert.deepEqual(['n1', 'w1', 'g1', 'g2', 'p1'].map((id) => sourceKind(rows.find((r) => r.id === id))), ['notes', 'websites', 'code', 'code', 'files'], 'each keeps its kind, for its icon: a repository is Code as an address or a clone');
   assert.equal(sourceKind(row('m2', 'README', 'md')), 'files', 'a Markdown file that is not a note is a file');
 });
 
@@ -38,40 +40,35 @@ test('Starred lists the starred ids in the order they were starred, from the lib
   assert.deepEqual(starred.rows.map((r) => r.id), ['x1', 'p1']);
 });
 
-test('a section keeps to its room: every header, then at least one row of each open group, then a few more each, "More" under what is cut', async () => {
+test('a section keeps to its room: a header for Starred and Notes, then at least one row of each, then a few more each, "More" under what is cut', async () => {
   const { fitGroups } = await load();
-  const groups = [{ key: 'starred', open: true, count: 2 }, { key: 'notes', open: true, count: 7 }, { key: 'websites', open: false, count: 2 }, { key: 'code', open: false, count: 1 }, { key: 'files', open: false, count: 4 }];
+  const groups = [{ key: 'starred', count: 2 }, { key: 'notes', count: 7 }, { key: 'other', header: false, count: 6 }];
   const fit = fitGroups(groups, 12, { cap: 5 });
-  assert.deepEqual(fit.shown, { starred: 2, notes: 4, websites: 0, code: 0, files: 0 }, 'Starred whole; Notes as many as the room leaves');
-  assert.deepEqual(fit.more, { starred: false, notes: true, websites: false, code: false, files: false });
+  assert.deepEqual(fit.shown, { starred: 2, notes: 3, other: 3 }, 'dealt round: Starred whole, Notes and the mixed list as the room leaves');
+  assert.deepEqual(fit.more, { starred: false, notes: true, other: true });
   assert.equal(fit.lines, 12);
   assert.equal(fit.fits, true);
   assert.deepEqual(fitGroups(groups, 40, { cap: 5 }).shown.notes, 5, 'never past "the first few" however much room there is');
   assert.equal(fitGroups(groups, 40, { cap: 5 }).more.notes, true);
 });
 
-test('dealt group by group: each open group shows a few before any shows many; the last row takes "More"\'s place', async () => {
+test('dealt group by group: each group shows a few before any shows many; the last row takes "More"\'s place', async () => {
   const { fitGroups } = await load();
-  const open = ['a', 'b', 'c'].map((key) => ({ key, open: true, count: 9 }));
+  const open = ['a', 'b', 'c'].map((key) => ({ key, count: 9 }));
   assert.deepEqual(fitGroups(open, 14).shown, { a: 3, b: 3, c: 2 }, '3 headers, a first row and "More" each leave 5 rows, dealt a, b, c, a, b');
   assert.deepEqual(fitGroups(open, 12).shown, { a: 2, b: 2, c: 2 });
-  assert.deepEqual(fitGroups([{ key: 'a', open: true, count: 2 }], 3).shown, { a: 2 }, 'two rows and no "More" in three lines');
-  assert.deepEqual(fitGroups([{ key: 'a', open: true, count: 3 }], 3), { shown: { a: 1 }, more: { a: true }, lines: 3, fits: true }, 'one row and "More": the second row would need the third line and leave one out');
+  assert.deepEqual(fitGroups([{ key: 'a', count: 2 }], 3).shown, { a: 2 }, 'a header and two rows, no "More"');
+  assert.deepEqual(fitGroups([{ key: 'a', count: 3 }], 3), { shown: { a: 1 }, more: { a: true }, lines: 3, fits: true }, 'one row and "More": the second row would need a fourth line and leave one out');
+  assert.deepEqual(fitGroups([{ key: 'a', header: false, count: 3 }], 3).shown, { a: 3 }, 'no heading, no line for it');
 });
 
-test('an open group never shows "More" alone: with no room for one row each, the section scrolls instead', async () => {
+test('a group never shows "More" alone: with no room for one row each, the section scrolls instead', async () => {
   const { fitGroups } = await load();
-  const fit = fitGroups(['a', 'b', 'c'].map((key) => ({ key, open: true, count: 4 })), 6);
+  const fit = fitGroups(['a', 'b', 'c'].map((key) => ({ key, count: 4 })), 6);
   assert.equal(fit.fits, false);
   assert.deepEqual(fit.shown, { a: 1, b: 1, c: 1 }, 'one row each, and no more dealt');
-  const empty = fitGroups([{ key: 'starred', open: true, count: 0 }, { key: 'notes', open: false, count: 3 }], 10);
-  assert.deepEqual([empty.lines, empty.shown, empty.more], [3, { starred: 0, notes: 0 }, { starred: false, notes: false }], 'an open empty group says so on one line; a folded one is its header');
-});
-
-test('Starred and Notes start open when they hold something; the other groups start folded, showing their count', async () => {
-  const { groupOpenByDefault } = await load();
-  assert.deepEqual(['starred', 'notes', 'websites', 'code', 'files'].map((key) => groupOpenByDefault(key, 3)), [true, true, false, false, false]);
-  assert.equal(groupOpenByDefault('notes', 0), false);
+  const empty = fitGroups([{ key: 'starred', count: 0 }, { key: 'other', header: false, count: 0 }], 10);
+  assert.deepEqual([empty.lines, empty.shown, empty.more], [2, { starred: 0, other: 0 }, { starred: false, other: false }], 'an empty group says so on one line under its header; one with no heading takes none');
 });
 
 // A tree like Hudson's: areas at the top, the workspaces worked in under them, one deeper.
