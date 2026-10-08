@@ -72,6 +72,27 @@ skips: the 38 before and these 3.
 
 ### Status
 
+- 2026-10-08, **done on 9a3d773**: Linux run 6 (https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37709695365),
+  run conclusion success, Linux counting. ubuntu-latest ✓: npm test 1399 tests, 1385 pass, 14 skipped, 0 failed;
+  `npm run dist:linux` (Engelbart-0.1.10-x86_64.AppImage, 160516769 bytes, and latest-linux.yml); smoke-linux on
+  release/linux-unpacked (sandbox off by AppArmor, window, bash terminal echo, Git 2.55.0 at /usr/bin/git, clean quit);
+  `curl -fsSL http://127.0.0.1:8766/install.sh | bash` (install.sh handing over to install-linux.sh) installed 0.1.10
+  into ~/.local/share/engelbart with ~/.local/bin/engelbart and the menu entry and icon, and said "Chromium's sandbox:
+  off: AppArmor lets only programs with a profile make user namespaces, and Engelbart has none."; smoke-linux on the
+  installed copy passed (sandbox off, as said); the second run: "Engelbart 0.1.10 is already installed in
+  /home/runner/.local/share/engelbart and up to date." with no download; then ENGELBART_FORCE=1 ENGELBART_APPARMOR=yes
+  added /etc/apparmor.d/engelbart-1001 with sudo, said "Chromium's sandbox: on: the AppArmor profile
+  /etc/apparmor.d/engelbart-1001 lets Engelbart make user namespaces.", and smoke-linux passed with the sandbox on.
+  windows-latest ✓ (1402 tests, 1361 pass, 41 skipped, 0 failed; the Windows install step passed); macos-latest ✓
+  (1399 tests, 1395 pass, 4 skipped; `npm run package`). Against the last green run (5a399d9) no Mac or Windows test
+  is missing, and the only new skips there are the new Linux tests (2 on the Mac, 3 on Windows); no `test(` line was
+  removed. `UPLOAD_DRY_RUN=1 npm run upload:linux` takes run 37709695365 and lists Engelbart-0.1.10-x86_64.AppImage,
+  index.html, install-linux.sh, install.sh, SHA256SUMS-linux.txt, SHA256SUMS.txt, then latest-linux.yml; against the
+  live files, install.sh gains only the Linux block, SHA256SUMS.txt only install.sh's line, and the page only the
+  Linux section after the Windows one. Not uploaded.
+  Still to know: a Mac release made from a branch without this (hudsons-feedback's install-mac.sh and release-site.mjs)
+  writes install.sh without the Linux block and a page without the Windows and Linux sections; until windows-port's
+  scripts are what Mac releases are made from, run upload:win and upload:linux again after a Mac release.
 - 2026-10-08, Linux run 5 (7b6b329, https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37708412073):
   macOS ✓. Linux and Windows: 1 test each, the same: sourceOf's `/usr/bin/git` → "apple" ran under the runner's own
   platform; it now names macOS (`'darwin'`), with Linux's "other" beside it.
@@ -112,6 +133,7 @@ skips: the 38 before and these 3.
 | f3851a6 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37699844498 | ✓ | ✓ | ✗ smoke (cancelled) | tests ✓, AppImage ✓; smoke: sandbox off by AppArmor, window, terminal ✓, Git not found, then hung |
 | 43ff71f | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37705773404 | ✓ | ✓ | ✗ smoke | the app took /usr/bin/git for Apple's stub |
 | 7b6b329 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37708412073 | ✓ | ✗ 1 test | ✗ 1 test | sourceOf's Apple case ran unnamed |
+| 9a3d773 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37709695365 | ✓ | ✓ install step ✓ | ✓ install, smoke, up to date, AppArmor profile | **run success; the done commit** |
 
 ## One-command install
 
