@@ -6,9 +6,10 @@
 // to other notes (`[[Note]]`, `[[Note|shown]]`, an embedded note `![[Note]]`) become Engelbart mentions (`@[Note]`), as do
 // relative links to .md files (a Notion export's "Title 0123…cdef.md" read as "Title").
 //
-// Onboarding asks before there is a project (the connect screen comes before Create), so a note that arrives then is
-// staged: <session folder>/notes/<id>.json { title, body, images: [{ token, file, alt }], source }, and written into the
-// project when onboarding makes it (flushStaged). Once a session knows its project, notes go straight in (writeNote).
+// Since 2026-10-08 what comes in is a Markdown file of the library's own in <data root>/assets/md, not a project's note
+// (writeFile): it needs no project. Staging, below, is kept for sessions that staged notes before then: <session folder>/
+// notes/<id>.json { title, body, images: [{ token, file, alt }], source }, written into the project onboarding makes
+// (flushStaged).
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -121,6 +122,35 @@ async function writeNote(ctx, projectId, { title, body, images = [] }, { project
   return { id: note.id, name: note.name };
 }
 
+/**
+ * What an import brings in now (2026-10-08: "save the imported content not as notes but as md files ... in the engelbart
+ * assets folder"): a Markdown file of the library's own, <data root>/assets/md/<id>/<title>.md (library.addMarkdownCopy),
+ * its pictures copied beside it and linked by their names; one that cannot be kept is named in brackets. No project is
+ * needed, so nothing waits for onboarding. → the library row
+ */
+async function writeFile(ctx, { title, body, images = [] }, { library }) {
+  let text = String(body || '');
+  const pictures = [];
+  const taken = new Set();
+  for (const image of images) {
+    let replacement = `[picture: ${image.alt}]`;
+    const ext = path.extname(image.file).toLowerCase();
+    try {
+      const stat = fs.statSync(image.file);
+      if (IMAGE_MIMES[ext] && stat.isFile() && stat.size <= MAX_IMAGE_BYTES) {
+        const stem = String(image.alt || '').replace(/[^\w.-]+/g, '-').replace(/^[-.]+|-+$/g, '').slice(0, 60) || 'picture';
+        let name = `${stem}${ext}`;
+        for (let n = 2; taken.has(name.toLowerCase()); n += 1) name = `${stem}-${n}${ext}`;
+        taken.add(name.toLowerCase());
+        pictures.push({ file: image.file, name });
+        replacement = `![${image.alt}](${name})`;
+      }
+    } catch { /* the picture went, or cannot be read: named instead */ }
+    text = text.split(`![${image.alt}](${image.token})`).join(replacement);
+  }
+  return library.addMarkdownCopy(ctx, { name: sanitizeName(title), text, pictures });
+}
+
 const stagedDir = (sessionDir) => path.join(sessionDir, 'notes');
 
 /** A note kept until the session has a project. → its staged id */
@@ -155,4 +185,4 @@ async function flushStaged(ctx, sessionDir, projectId, { projects }) {
   return written;
 }
 
-module.exports = { MAX_NOTE_BYTES, noteName, createIndex, findPicture, convertMarkdown, placeImages, writeNote, stageNote, stagedNotes, stagedCount, flushStaged };
+module.exports = { MAX_NOTE_BYTES, noteName, createIndex, findPicture, convertMarkdown, placeImages, writeNote, writeFile, stageNote, stagedNotes, stagedCount, flushStaged };

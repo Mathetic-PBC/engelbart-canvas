@@ -6,6 +6,7 @@ import { isUntitled } from '../model/names.js';
 import { looksAddable, searchRows } from '../model/rail.js';
 import { flatWorkspaces } from '../model/nav.js';
 import { agentGroups, archivedVersions, countWorkspaces, fitChildren, fitGroups, inboxEntries, pathTo, recentWorkspaces, sourceGroups, sourceKind } from '../model/sidebar.js';
+import { connectInbox, dockLine } from '../model/connect.js';
 import GithubPane from './GithubPane.jsx';
 import { useAddRun } from './useAddRun.js';
 import { usePlaced } from '../ui/usePlaced.js';
@@ -443,6 +444,7 @@ export default function Rail({
   project, onOpenProject, onNewProject, onAllProjects, onRenameProject,
   roots = [], hereId = null, recent = [], agents = [], builds = [],
   onSelectWorkspace, onCreateWorkspace, onRenameWorkspace, onDeleteWorkspace, onOpenVersion, onSeenAll,
+  connectSessions = [], onOpenConnect = () => {},
   rows = [], activeRowId = null, flashId = null, starred = [], onStar,
   library = [], inRail = () => false, onOpenRow, onRenameRow, onRemoveRow, onLinkRow, onOpenHeld, onDropItems,
   onAddInput, onPickDisk, onNewNote, onNewSticky, onPickRepo, onOpenLink,
@@ -553,8 +555,11 @@ export default function Rail({
 
   /* --------------------------------------------------------------- agents */
   const inbox = React.useMemo(() => inboxEntries(agents, project.id), [agents, project.id]);
+  // Connect your library's notes (2026-10-08): it needs you, or it is done. They lead the Inbox; a press opens its popup.
+  const connectNotes = React.useMemo(() => connectInbox(connectSessions, project.id), [connectSessions, project.id]);
+  const inboxAll = React.useMemo(() => [...connectNotes, ...inbox], [connectNotes, inbox]);
   const { unread: unreadBuilds } = useBuildNotifications(); // the bell's, now in the Inbox
-  const inboxCount = inbox.length + unreadBuilds;
+  const inboxCount = inboxAll.length + unreadBuilds;
   // A workspace where an agent finished and waits for you, or one nested in it, wears a blue dot (the Inbox says what).
   const waitsIn = React.useMemo(() => new Set(inbox.map((entry) => entry.workspaceId).filter(Boolean)), [inbox]);
   const waits = (node) => waitsIn.has(node.id) || (node.children || []).some(waits);
@@ -760,7 +765,11 @@ export default function Rail({
       {peek.peek && !panel && !menu && <PeekCard peek={peek.peek} more={peek.more} onHold={peek.hold} onClose={peek.close} onOpenWorkspace={(pid, wid) => { peek.drop(); onOpenHeld(pid, wid); }} />}
 
       {panel && panel.kind === 'project' && <ProjectMenu anchor={panel.anchor} project={project} onSwitch={onOpenProject} onNewProject={onNewProject} onAllProjects={onAllProjects} onRename={() => setRenaming('project')} onClose={close} ignore={ignore('project')} />}
-      {panel && panel.kind === 'inbox' && <InboxPanel anchor={panel.anchor} entries={inbox} nameOf={nameOf} onGo={goAgent} onClear={() => { onSeenAll([...new Set(inbox.map((entry) => entry.workspaceId).filter(Boolean))]); }} onClose={close} ignore={ignore('inbox')} />}
+      {panel && panel.kind === 'inbox' && <InboxPanel anchor={panel.anchor} entries={inboxAll} nameOf={nameOf} onGo={(entry) => { if (entry.kind === 'connect') { close(); onOpenConnect(entry.sessionId); } else goAgent(entry); }} onClear={() => {
+        onSeenAll([...new Set(inbox.map((entry) => entry.workspaceId).filter(Boolean))]);
+        // a finished Connect is seen once it is cleared; one that needs you stays until it is answered
+        for (const entry of connectNotes) { const session = connectSessions.find((each) => each.id === entry.sessionId); if (session && dockLine(session).tone === 'done') api.connectDismiss(entry.sessionId).catch(() => {}); }
+      }} onClose={close} ignore={ignore('inbox')} />}
       {panel && panel.kind === 'agents' && <AgentsPanel anchor={panel.anchor} groups={agentList} nameOf={nameOf} onGo={goAgent} onClose={close} ignore={ignore('agents')} />}
       {panel && panel.kind === 'connections' && <ConnectionsPanel anchor={panel.anchor} onOverleaf={() => onOpenLink(OVERLEAF_URL)} onClose={close} ignore={ignore('connections')} />}
       {panel && panel.kind === 'library' && <LibraryPanel anchor={panel.anchor} projectId={project.id} library={library} inRail={inRail} onOpen={(row) => onOpenRow(row)} onLink={onLinkRow} onAddInput={onAddInput} onOpenFull={onAllProjects} onOpenWorkspace={onOpenHeld} onClose={close} ignore={ignore('library')} />}

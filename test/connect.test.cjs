@@ -180,7 +180,10 @@ test('a Markdown file as a note: Obsidian links become mentions, pictures are se
   for (const id of ids) assert.equal((await ctx.libraryDb.get(id)).type, 'image');
 });
 
-test('the import tools: validated arguments, notes staged until there is a project, nothing brought in twice', async () => {
+// What an import brought in: Markdown files of the library's own in <data root>/assets/md (2026-10-08), by name.
+const mdFiles = async () => (await ctx.libraryDb.list()).filter((row) => row.type === 'md' && row.path && row.path.startsWith(path.join(ctx.dataRoot, 'assets', 'md') + path.sep));
+
+test('the import tools: validated arguments, notes and chats as Markdown files in assets/md (no project needed), nothing brought in twice', async () => {
   assert.throws(() => validateImportTool('import_note_files', {}), /files is required/);
   assert.throws(() => validateImportTool('import_note_files', { files: 'x' }), /list of text/);
   assert.throws(() => validateImportTool('import_google_files', { items: ['x'] }), /list of objects/);
@@ -193,9 +196,16 @@ test('the import tools: validated arguments, notes staged until there is a proje
   assert.equal(listed.total, 2);
   const first = await call('import_note_files', { files: listed.files, root: vault });
   assert.equal(first.added, 2);
-  assert.match(first.where, /held until/);
-  assert.equal(notes.stagedNotes(dir).length, 2);
-  assert.equal(notes.stagedCount(dir), 2);
+  assert.match(first.where, /assets\/md/);
+  assert.equal(notes.stagedCount(dir), 0, 'nothing waits for a project');
+  const idea = (await mdFiles()).find((row) => row.name === 'Idea');
+  assert.ok(idea, 'Idea is a file of the library');
+  assert.deepEqual([idea.tags, idea.project_id, path.basename(idea.path), path.basename(path.dirname(idea.path))], [[], null, 'Idea.md', idea.id]);
+  const text = fs.readFileSync(idea.path, 'utf8');
+  assert.match(text, /builds on @\[Other note\]/);
+  assert.match(text, /!\[pic\]\(pic\.png\)/, 'its picture beside it, linked by its name');
+  assert.match(text, /!\[alt\]\(alt\.png\)/);
+  assert.deepEqual(fs.readdirSync(path.dirname(idea.path)).sort(), ['Idea.md', 'alt.png', 'pic.png']);
   const again = await call('import_note_files', { files: [...listed.files, '/etc/hosts'] });
   assert.equal(again.added, 0);
   assert.deepEqual(again.skipped.map((entry) => entry.why).sort(), ['Only files inside the home directory can be read', 'brought in before', 'brought in before']);
@@ -215,16 +225,15 @@ test('the import tools: validated arguments, notes staged until there is a proje
   assert.deepEqual(counted, { notes: 3, items: 1 });
   await assert.rejects(call('zotero_collections', {}), /Zotero is not signed in/);
 
-  // The project made: the staged notes go in, named by their files, and later notes go straight there.
+  // A project changes nothing: what comes in is still the library's, never a project's note.
   const { project } = await projects.createProjectWithWelcome(ctx, { name: 'Imported' });
-  const flushed = await notes.flushStaged(ctx, dir, project.id, { projects });
-  assert.deepEqual(flushed.map((note) => note.name).sort(), ['Idea', 'Other note', 'Why do novices skip tests?']);
-  assert.equal(notes.stagedNotes(dir).length, 0);
   projectId = project.id;
   await call('add_note', { title: 'Meeting with Ana', markdown: 'We agreed on twenty participants.', source: 'granola:1' });
   assert.equal((await call('add_note', { title: 'Meeting with Ana', markdown: 'again', source: 'granola:1' })).added, false);
-  const rows = (await ctx.libraryDb.list()).filter((row) => row.project_id === project.id && row.tags.includes('note')).map((row) => row.name).sort();
-  assert.deepEqual(rows, ['Idea', 'Meeting with Ana', 'Other note', 'Welcome!', 'Why do novices skip tests?']);
+  assert.deepEqual((await mdFiles()).map((row) => row.name).filter((name) => ['Idea', 'Meeting with Ana', 'Other note', 'Why do novices skip tests?'].includes(name)).sort(), ['Idea', 'Meeting with Ana', 'Other note', 'Why do novices skip tests?']);
+  const inProject = (await ctx.libraryDb.list()).filter((row) => row.project_id === project.id && row.tags.includes('note')).map((row) => row.name);
+  assert.deepEqual(inProject, ['Welcome!'], 'no note was made in the project');
+  assert.equal(notes.stagedNotes(dir).length, 0);
 });
 
 test('each kind of agent is served its own tools: a survey brings nothing in, a recall only keeps its answer', async () => {
@@ -489,9 +498,10 @@ function fakeConnect({ home = homeDir, delayMs = 5, agents = null, ...rest } = {
   return { connect, snapshots, state: (id) => () => connect.state(id) };
 }
 
-test('a session with the fake agents: a folder button, a question card, imports in the background, Import, MEMORY.md without its secrets, and the notes into the project', async () => {
+test('a session with the fake agents: a folder button, a question card, imports in the background as files of the library, Import, MEMORY.md without its secrets', async () => {
   const fresh = fs.mkdtempSync(path.join(homeDir, 'fresh-')); // a home with no Obsidian: the vault comes from the button
   const { connect, snapshots, state } = fakeConnect({ home: fresh });
+  const before = (await mdFiles()).length;
   await assert.rejects(connect.start({ sources: {} }), /Pick at least one source/);
   const started = await connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] }, sites: { on: true } }, provider: 'openai' });
   assert.deepEqual(started.choice, { provider: 'openai', name: 'Codex', modelName: 'Sol', effort: 'high' }, 'only the provider was chosen; its model is pinned');
@@ -509,7 +519,8 @@ test('a session with the fake agents: a folder button, a question card, imports 
   assert.equal(connect.state(started.id).chat[3].text, 'Everything — but not Personal');
   now = await until(state(started.id), (s) => s.jobs.some((job) => job.kind === 'import' && job.status === 'done'), 'the notes import');
   assert.equal(now.jobs[0].notes, 5, 'the fake brings in five of the vault\'s notes');
-  assert.equal(now.staged, 5);
+  assert.equal(now.staged, 0, 'nothing waits for a project');
+  assert.equal((await mdFiles()).length - before, 5, 'each a Markdown file in assets/md');
   assert.ok(snapshots.some((snapshot) => snapshot.jobs.some((job) => job.status === 'running')), 'its progress was sent while it ran');
   assert.ok(now.log.some((entry) => /Brought in 5 notes/.test(entry.text)), 'the action log says what it did');
   // Websites were never talked through: Import hands them over at once.
@@ -527,10 +538,9 @@ test('a session with the fake agents: a folder button, a question card, imports 
   assert.ok(fs.existsSync(path.join(ctx.dataRoot, '.connect', started.id, 'session.json')));
 
   const { project } = await projects.createProjectWithWelcome(ctx, { name: 'From connect' });
-  assert.equal(await connect.attachProject(ctx, started.id, project.id), 5);
-  assert.equal(connect.state(started.id).staged, 0);
+  assert.equal(await connect.attachProject(ctx, started.id, project.id), 0, 'no notes were held for it');
   const names = (await ctx.libraryDb.list()).filter((row) => row.project_id === project.id && row.tags.includes('note')).map((row) => row.name);
-  assert.equal(names.length, 6, 'Welcome! and the five notes');
+  assert.deepEqual(names, ['Welcome!']);
   connect.dismiss(started.id);
   assert.equal(connect.list(ctx.dataRoot).some((s) => s.id === started.id), false);
   fs.rmSync(memory.memoryPath(ctx.dataRoot));
@@ -584,7 +594,7 @@ test('a whole source handed over still reaches its apps: its import gets the age
   connect.stop(started.id);
 });
 
-test('an existing user\'s session puts notes straight into their project; Stop ends every agent and MEMORY.md is not written', async () => {
+test('an existing user\'s session belongs to their project; Stop ends every agent and MEMORY.md is not written', async () => {
   const { project } = await projects.createProjectWithWelcome(ctx, { name: 'Existing' });
   const { connect, state } = fakeConnect({ delayMs: 60 });
   const started = await connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] }, chats: { on: true, apps: ['ChatGPT'] } }, projectId: project.id, permissions: { recall: false } });
@@ -614,6 +624,66 @@ test('without Claude Code or Codex signed in nothing starts; the provider can ch
   one.stop(started.id);
 });
 
+test('Skip holds for the run: the app is never put to the person again, and its queued work ends as skipped', async () => {
+  process.env.ENGELBART_CONNECT_FAKE_NEEDS = 'Claude';
+  const { connect, state } = fakeConnect({ delayMs: 150 });
+  let started = null;
+  try {
+    // three surveys take the three places, so the recalls wait their turn
+    started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT', 'Gemini', 'Claude'] } } });
+    const asked = await until(state(started.id), (s) => s.needs.length === 1, 'Claude\'s sign-in');
+    const after = await connect.need(started.id, asked.needs[0].id, 'skip');
+    assert.equal(after.needs.length, 0);
+    // queued or already started, Claude's recall ends as skipped
+    const ended = await until(state(started.id), (s) => ['stopped', 'done', 'failed'].includes(s.jobs.find((job) => job.kind === 'recall' && job.apps[0] === 'Claude').status), 'Claude\'s recall ended');
+    const recall = ended.jobs.find((job) => job.kind === 'recall' && job.apps[0] === 'Claude');
+    assert.deepEqual([recall.status, recall.skipped], ['stopped', true], 'Claude\'s recall is not run');
+    assert.ok(!fs.existsSync(path.join(ctx.dataRoot, '.connect', started.id, 'memories', 'Claude.md')));
+    // Import hands nothing over for a skipped app, and an agent that asks again hears "skipped" with no card.
+    await until(state(started.id), (s) => !s.thinking, 'the librarian');
+    const imported = connect.importNow(started.id);
+    const handed = imported.jobs.filter((job) => job.kind === 'import');
+    assert.ok(handed.every((job) => !job.apps.includes('Claude')), JSON.stringify(handed.map((job) => job.apps)));
+    assert.equal(imported.needs.length, 0);
+  } finally {
+    if (started) connect.stop(started.id); // nothing left waiting: a session left running keeps the test process open
+    delete process.env.ENGELBART_CONNECT_FAKE_NEEDS;
+  }
+});
+
+test('a session still going when Engelbart quits is picked up again when the library opens: its work queued again, the librarian asked again', async () => {
+  const first = fakeConnect({ delayMs: 400 });
+  const started = await first.connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] }, chats: { on: true, apps: ['ChatGPT'] } }, permissions: { recall: false } });
+  await until(first.state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask), 'the first question');
+  first.connect.answer(started.id, { picked: ['Everything'] });
+  await until(first.state(started.id), (s) => s.jobs.some((job) => job.kind === 'import' && job.status === 'running'), 'an import running');
+  first.connect.suspendAll(); // Engelbart quits
+  const saved = JSON.parse(fs.readFileSync(path.join(ctx.dataRoot, '.connect', started.id, 'session.json'), 'utf8'));
+  assert.equal(saved.suspended, true);
+  assert.equal(saved.stopped, false, 'put away, not stopped');
+  assert.equal(first.connect.list(ctx.dataRoot).length, 0);
+
+  // The next launch: the same library opened again.
+  const second = fakeConnect({ delayMs: 5 });
+  assert.ok(second.connect.resume(ctx) >= 1);
+  assert.ok(second.connect.has(started.id));
+  assert.equal(second.connect.resume(ctx), 0, 'once a launch');
+  const back = second.connect.state(started.id);
+  assert.equal(back.chat[0].role, 'agent', 'the chat as it was');
+  assert.ok(back.log.some((entry) => /Picked up again/.test(entry.text)));
+  const done = await until(second.state(started.id), (s) => s.jobs.some((job) => job.kind === 'import' && job.status === 'done'), 'the import finished after the restart', 1500);
+  assert.ok(done.jobs.find((job) => job.kind === 'import' && job.status === 'done').notes >= 0);
+  // An old session that was stopped by the person is left alone.
+  const stoppedOne = fakeConnect({ delayMs: 5 });
+  const other = await stoppedOne.connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] } } });
+  stoppedOne.connect.stop(other.id);
+  const third = fakeConnect({ delayMs: 5 });
+  third.connect.resume(ctx);
+  assert.equal(third.connect.has(other.id), false);
+  for (const s of second.connect.list(ctx.dataRoot)) second.connect.stop(s.id);
+  for (const s of third.connect.list(ctx.dataRoot)) third.connect.stop(s.id);
+});
+
 test('the window\'s model, and the onboarding flow with Connect your library in place of Add to your library and Custom instructions', async () => {
   const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
   const found = { apps: { Obsidian: { found: true }, 'Claude Code': { found: true }, ChatGPT: { found: true } }, sites: { found: true }, github: { found: false } };
@@ -633,8 +703,27 @@ test('the window\'s model, and the onboarding flow with Connect your library in 
   assert.equal(model.statusOf({ kind: 'survey', status: 'running' }).text, 'looking…');
   assert.equal(model.statusOf({ kind: 'recall', status: 'done' }).text, '✓ remembered');
   assert.equal(model.allEnded([{ status: 'done' }, { status: 'queued' }]), false);
-  assert.equal(model.needView({ app: 'ChatGPT', kind: 'signin' }).action, 'Open the sign-in window');
-  assert.equal(model.needView({ app: 'Granola', kind: 'connector' }).action, 'Sign in to Granola');
+  // "one login button on the right ... or skip"
+  assert.equal(model.needView({ app: 'ChatGPT', kind: 'signin' }).action, 'Log in');
+  assert.equal(model.needView({ app: 'Granola', kind: 'connector' }).action, 'Log in');
+  assert.equal(model.needView({ app: 'Apple Notes', kind: 'permission' }).action, 'Allow');
+  assert.equal(model.statusOf({ status: 'stopped', skipped: true, notes: 0, items: 0 }).text, 'skipped');
+  // "show the ones still running at the top"
+  const jobs = [{ id: 'a', status: 'done' }, { id: 'b', status: 'queued' }, { id: 'c', status: 'running' }, { id: 'd', status: 'waiting' }, { id: 'e', status: 'failed' }];
+  assert.deepEqual(model.runningFirst(jobs).map((job) => job.id), ['c', 'd', 'b', 'a', 'e']);
+  // the line under the chat: the librarian, then one subagent at a time
+  const going = { thinking: true, activity: 'Reading what you picked', jobs: [{ id: 's1', kind: 'survey', label: 'Looking through ChatGPT', status: 'running', activity: 'Opened chatgpt.com' }, { id: 's2', kind: 'import', label: 'Notes', status: 'waiting' }, { id: 'm', kind: 'memory', status: 'running' }] };
+  assert.deepEqual(model.workLine(going, 0), { lead: 'Reading what you picked…', agent: { id: 's1', label: 'Looking through ChatGPT', doing: 'Opened chatgpt.com', place: '1 of 2', waiting: false } });
+  assert.deepEqual(model.workLine(going, 1).agent, { id: 's2', label: 'Notes', doing: 'needs you', place: '2 of 2', waiting: true });
+  assert.equal(model.workLine({ thinking: false, jobs: [{ status: 'done', kind: 'import' }] }), null);
+  // the sidebar's Inbox: needs you, or done; this project's or one with no project yet
+  const inbox = model.connectInbox([
+    { id: '1', projectId: 'p1', needs: [{ app: 'Claude', kind: 'signin' }], jobs: [], created: '2026-10-08T00:00:00Z' },
+    { id: '2', projectId: null, done: true, needs: [], jobs: [{ status: 'done', notes: 2, items: 0 }], memory: { status: 'saved' }, counts: { notes: 2, items: 0 } },
+    { id: '3', projectId: 'p1', done: true, needs: [], jobs: [{ status: 'running', notes: 0, items: 0 }], memory: { status: 'waiting' } },
+    { id: '4', projectId: 'p2', needs: [{ app: 'Claude', kind: 'signin' }], jobs: [] },
+  ], 'p1');
+  assert.deepEqual(inbox.map((entry) => [entry.sessionId, entry.did]), [['1', 'Claude needs you to sign in'], ['2', 'Library connected · 2 added · MEMORY.md saved']]);
   assert.equal(model.memoryLine({ status: 'saved', removed: 2 }).text, 'Saved · 2 secrets masked');
   assert.deepEqual(model.dockLine({ needs: [{ app: 'ChatGPT', kind: 'signin' }], jobs: [] }), { tone: 'warn', short: 'Needs you', text: 'ChatGPT needs you to sign in' });
   assert.deepEqual(model.dockLine({ needs: [], done: true, jobs: [{ status: 'running', notes: 0, items: 0 }, { status: 'done', notes: 1, items: 0 }], memory: { status: 'waiting' } }), { tone: 'busy', short: 'Importing 1/2', text: 'Importing · 1 of 2 done' });

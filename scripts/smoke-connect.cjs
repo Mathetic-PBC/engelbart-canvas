@@ -113,18 +113,23 @@ app.whenReady().then(async () => {
     await press(wc, '[data-connect-card="live"] [data-connect-option="Everything"]');
     await press(wc, '[data-connect-card="live"] [data-connect-submit]');
     await until(() => has(wc, '[data-connect-need="signin"]'), 'ChatGPT\'s survey handing over its sign-in');
-    assert.match(await text(wc, '[data-connect-need="signin"]'), /ChatGPT needs you to sign in[\s\S]*Open the sign-in window/);
+    // One Log in button and Skip (2026-10-08). The run is hidden, so there is no window to sign in in: the window being
+    // closed is what says it is done, as main's windowClosed does.
+    assert.match(await text(wc, '[data-connect-need="signin"]'), /ChatGPT needs you to sign in[\s\S]*Skip\s*Log in/);
+    assert.equal(await has(wc, '[data-connect-need-done]'), false, 'no Done');
+    assert.equal(await has(wc, '[data-connect-need-signins]'), false, 'nothing brought over from Chrome');
     await shot(wc, '3-needs-you');
-    await press(wc, '[data-connect-need-done]');
+    await js(wc, `window.engelbartAPI.connectList().then(async (list) => { const s = list[0]; await window.engelbartAPI.connectNeed(s.id, s.needs[0].id, 'done'); })`);
     await until(() => has(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]'), 'the survey\'s findings, one per line', 400);
     assert.equal(await attr(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]', 'role'), 'checkbox', 'several can be picked');
+    await pause(400); // the chat scrolls to its newest message first
     await press(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]');
     await press(wc, '[data-connect-card="live"] [data-connect-submit]');
     await until(async () => (await attr(wc, '[data-connect-import]', 'data-ready')) === '1', 'Import lit: nothing more to ask', 400);
     await pause(500); // the button's colour fades in
     await shot(wc, '4-chat-done');
 
-    /* ------------------------------------------------ Import: the working view, MEMORY.md, the action log */
+    /* ------------------------------------------------ Import: the working view, MEMORY.md */
     await press(wc, '[data-connect-import]');
     await until(() => has(wc, '[data-connect-library="working"]'), 'the working view');
     await until(async () => (await attr(wc, '[data-connect-memory]', 'data-connect-memory')) === 'saved', 'MEMORY.md saved', 600);
@@ -132,14 +137,14 @@ app.whenReady().then(async () => {
     assert.match(progress, /✓ 4 added/, 'the vault\'s four notes');
     assert.match(progress, /✓ remembered/, 'what ChatGPT remembers');
     assert.match(progress, /Saved · 1 secret masked/);
-    assert.match(progress, /You\s*Done: Sign in to ChatGPT/, 'the action log');
+    assert.doesNotMatch(progress, /Activity/, 'no activity log');
     const memoryFile = fs.readFileSync(path.join(root, '.engelbart', 'test', 'MEMORY.md'), 'utf8');
     assert.doesNotMatch(memoryFile, /hunter2|sk-test/, 'MEMORY.md without its secrets');
     await shot(wc, '5-working');
     await press(wc, '[data-connect-done]');
     await until(async () => (await step(wc)) === 'create', 'Create a new project next');
 
-    /* ------------------------------------------------ the rest of onboarding: the notes go into the project, the chip */
+    /* ------------------------------------------------ the rest of onboarding: what came in is the library's files, the chip */
     await fill(wc, '[data-onboarding-name]', 'Connect smoke');
     await press(wc, '[data-onboarding-continue] button');
     await press(wc, '[data-onboarding-skip]');
@@ -147,14 +152,15 @@ app.whenReady().then(async () => {
     await until(async () => (await step(wc)) === 'context', 'Project context');
     await press(wc, '[data-onboarding-open] button');
     await until(() => js(wc, '!document.querySelector("[data-onboarding]")'), 'the project open', 400);
-    const names = await js(wc, `window.engelbartAPI.library().then((rows)=>{const project=rows.find((row)=>row.name==='Welcome!');return rows.filter((row)=>row.project_id===project.project_id&&row.tags.includes('note')).map((row)=>row.name).sort()})`);
-    assert.deepEqual(names, ['2026-10-01', 'ChatGPT fake note', 'Help-seeking', 'Tools for thought', 'Tutoring', 'Welcome!'], 'the staged notes went into the new project');
+    const names = await js(wc, `window.engelbartAPI.library().then((rows)=>rows.filter((row)=>row.type==='md'&&!row.project_id&&/[\\/]assets[\\/]md[\\/]/.test(row.path||'')).map((row)=>row.name).sort())`);
+    assert.deepEqual(names, ['2026-10-01', 'ChatGPT fake note', 'Help-seeking', 'Tools for thought', 'Tutoring'], 'Markdown files of the library, in assets/md');
     await until(() => has(wc, '[data-connect-dock="done"]'), 'the chip: the library is connected');
     assert.match(await text(wc, '[data-connect-dock]'), /^Library ✓/);
     assert.equal(await attr(wc, '[data-connect-dock-open]', 'data-connect-dock-text'), 'Library connected · 5 added · MEMORY.md saved');
     const chip = await js(wc, 'JSON.stringify(document.querySelector("[data-connect-dock]").getBoundingClientRect())');
     assert.ok(JSON.parse(chip).width < 170, `the chip stays small beside the bell: ${chip}`);
     assert.equal(await has(wc, '[data-connect-popup]'), false, 'no offer: this person connected their library in onboarding');
+    assert.equal(await text(wc, '[data-sb-count="inbox"]'), '1', 'the sidebar\'s Inbox says the library is connected');
     await shot(wc, '6-project');
     await press(wc, '[data-connect-dock-open]');
     await until(() => has(wc, '[data-connect-popup="session"] [data-connect-library="working"]'), 'the chip opens it again');

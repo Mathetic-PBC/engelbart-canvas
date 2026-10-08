@@ -145,7 +145,7 @@ function indexWorkspaces(roots) {
   return map;
 }
 
-export default function Workspace({ tree, library, initialWorkspaceId, initialTab, initialViews, initialStage, style, active, reload, onClose, onHome, onOpenProject, onNewProject, onVisit, onError }) {
+export default function Workspace({ tree, library, initialWorkspaceId, initialTab, initialViews, initialStage, style, active, reload, onClose, onHome, onOpenProject, onNewProject, onVisit, onError, connectSessions = [], onOpenConnect = () => {} }) {
   const project = tree.project;
   const index = React.useMemo(() => indexWorkspaces(tree.workspaces), [tree.workspaces]);
   const notesById = React.useMemo(() => new Map(library.filter(isNote).map((row) => [row.id, row])), [library]);
@@ -1722,6 +1722,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onDeleteWorkspace={deleteTopic}
           onOpenVersion={(version) => { goToVersion(version.workspaceId, { file: version.file, title: version.title }).catch(onError); }}
           onSeenAll={(ids) => { for (const id of ids) api.seenAgents(project.id, id).catch(() => {}); }}
+          connectSessions={connectSessions}
+          onOpenConnect={onOpenConnect}
           rows={rows}
           activeRowId={activeRowId}
           flashId={flashId}

@@ -252,12 +252,13 @@ export function PeekCard({ peek, more, onHold, onClose, onOpenWorkspace }) {
 
 /* ------------------------------------------------------------------ Inbox */
 
-const agentIcon = (kind) => (kind === 'build' || kind === 'quick' ? <I.AgentsIcon size={15} /> : <I.ChatIcon size={15} />);
+const agentIcon = (kind) => (kind === 'build' || kind === 'quick' ? <I.AgentsIcon size={15} /> : kind === 'connect' ? <I.LibraryIcon size={15} /> : <I.ChatIcon size={15} />);
 
 /**
  * The agents that finished and wait for you to look, newest first (a press goes to their workspace, which clears them),
  * and under them the repository builds the notification bell held before it moved here (2026-10-08): Building… → Build
- * finished / Build failed. Opening the Inbox reads them.
+ * finished / Build failed. Opening the Inbox reads them. Connect your library's notes (needs you, done) come first; a
+ * press opens its popup.
  */
 export function InboxPanel({ anchor, entries, nameOf, onGo, onClear, onClose, ignore }) {
   const { sandboxes, rows: builds } = useBuildNotifications();

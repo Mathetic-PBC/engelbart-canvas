@@ -4,9 +4,10 @@
 // Code and Codex as the MCP server `engelbart` (./import-mcp.cjs) over the loopback bridge Build's tools use
 // (../sandbox/local-tools.cjs openToolBridge), one bridge per import. The agent decides what to bring in from what the
 // person said in the chat; these do the reading and the writing, so a vault of 300 notes is one call, not 300.
-// They only ever write into the Engelbart data root the session started in (in test mode ~/.engelbart/test): notes of the
-// project onboarding makes (staged until it exists, ./notes.cjs) and library rows (../store/library.cjs addItem, as the
-// sidebar adds them). Nothing the person has is changed, moved or deleted.
+// They only ever write into the Engelbart data root the session started in (in test mode ~/.engelbart/test): Markdown files
+// of the library's own in <data root>/assets/md (notes, chats, documents: ./notes.cjs writeFile; 2026-10-08, "save the
+// imported content not as notes but as md files ... in the engelbart assets folder") and library rows
+// (../store/library.cjs addItem, as the sidebar adds them). Nothing the person has is changed, moved or deleted.
 // What has been brought in is remembered in <data root>/.connect/imported.json (a note's source file, a chat's id, a
 // Zotero item's key), so a second import of the same thing is skipped instead of making "Note 2".
 //
@@ -52,16 +53,16 @@ const GOOGLE_KINDS = ['doc', 'sheet', 'slides', 'file', 'pdf'];
 const IMPORT_TOOLS = [
   { name: 'folder_overview', description: 'A folder at a glance: how many notes, pdfs and pictures it holds, and the same for each folder at its top (most notes first), with the share of notes named by date and the daily-notes folder when there is one. path: absolute or ~/….', inputSchema: schema({ path: str }, ['path']) },
   { name: 'list_note_files', description: 'The note files (.md, .markdown, .txt) under a folder, newest first, as absolute paths. include: only these folders (relative to it); exclude: never these; days: only those changed in the last n days.', inputSchema: schema({ folder: str, include: strs, exclude: strs, days: num }, ['folder']) },
-  { name: 'import_note_files', description: `Bring note files into Engelbart, each as its own note named by its file, its pictures included and Obsidian links ([[Note]]) turned into mentions. files: absolute paths, up to ${MAX_FILES_A_CALL} a call (call again for more). root: the vault or export folder they come from, where pictures are looked up by name. A file brought in before is skipped. Returns how many were added and why any were skipped.`, inputSchema: schema({ files: strs, root: str }, ['files']) },
-  { name: 'add_note', description: 'Add a note you wrote (Markdown) to Engelbart: a page\'s text, a meeting\'s notes and transcript, a summary of a source with no files of its own. title: what it is called. source: where it came from, a path, link or id, so it is never brought in twice.', inputSchema: schema({ title: str, markdown: str, source: str }, ['title', 'markdown']) },
+  { name: 'import_note_files', description: `Bring note files into Engelbart's library, each as its own Markdown file named by its file, its pictures included and Obsidian links ([[Note]]) turned into mentions. files: absolute paths, up to ${MAX_FILES_A_CALL} a call (call again for more). root: the vault or export folder they come from, where pictures are looked up by name. A file brought in before is skipped. Returns how many were added and why any were skipped.`, inputSchema: schema({ files: strs, root: str }, ['files']) },
+  { name: 'add_note', description: 'Add a Markdown file you wrote to Engelbart\'s library: a page\'s text, a meeting\'s notes and transcript, a summary of a source with no files of its own. title: what it is called. source: where it came from, a path, link or id, so it is never brought in twice.', inputSchema: schema({ title: str, markdown: str, source: str }, ['title', 'markdown']) },
   { name: 'add_to_library', description: 'Add one thing to the Engelbart library: a web link, a GitHub repository link, an arXiv id or DOI, or the absolute path of a pdf, file or folder (a folder with .git is a repository). name: what the library calls it (optional). Something the library already holds is not added twice.', inputSchema: schema({ input: str, name: str }, ['input']) },
   { name: 'unpack', description: 'Unpack a .zip (one you downloaded with browser_download, or on this Mac) into a folder in Engelbart\'s imports, and say what it holds. Then bring its notes in with list_note_files and import_note_files, its pdfs with add_to_library.', inputSchema: schema({ file: str }, ['file']) },
   { name: 'list_chats', description: `AI chats on this Mac or in an export, newest first: id, title, first prompt, folder, date. app: ${CHAT_APPS.join(', ')} (Claude and ChatGPT only from an export; use web_chats for their accounts). days: only the last n days. project: only chats run in a folder whose path holds this. query: words to look for. automated: include runs a program started (left out by default). limit: at most (default 200).`, inputSchema: schema({ app: str, days: num, project: str, query: str, limit: num, automated: bool }, ['app']) },
   { name: 'read_chat', description: 'One chat from list_chats as its turns of text (tool calls left out), to judge what it is about. max_chars: how much at most (default 6000).', inputSchema: schema({ app: str, id: str, max_chars: num }, ['app', 'id']) },
-  { name: 'import_chats', description: `Bring chats from list_chats into Engelbart, each as a note of its turns (what the person asked and what the assistant answered), named by the chat's title. ids: up to ${MAX_CHATS_A_CALL} a call. A chat brought in before is skipped.`, inputSchema: schema({ app: str, ids: strs }, ['app', 'ids']) },
+  { name: 'import_chats', description: `Bring chats from list_chats into Engelbart's library, each as a Markdown file of its turns (what the person asked and what the assistant answered), named by the chat's title. ids: up to ${MAX_CHATS_A_CALL} a call. A chat brought in before is skipped.`, inputSchema: schema({ app: str, ids: strs }, ['app', 'ids']) },
   { name: 'web_chats', description: `The person's chats in their own ${WEB_CHAT_APPS.join(' or ')} account, read from the signed-in page in Engelbart's browser, newest first: id, title, date, project. days, query (words in the title), project (part of a project's name), limit (default 200). Says when the person must sign in.`, inputSchema: schema({ app: str, days: num, query: str, project: str, limit: num }, ['app']) },
   { name: 'web_chat_read', description: 'One chat from web_chats as its turns of text, to judge what it is about. max_chars: how much at most (default 6000).', inputSchema: schema({ app: str, id: str, max_chars: num }, ['app', 'id']) },
-  { name: 'import_web_chats', description: `Bring chats from web_chats into Engelbart, each as a note of its turns, named by its title. ids: up to ${MAX_WEB_CHATS_A_CALL} a call (what did not fit in the time is returned as left). A chat brought in before is skipped.`, inputSchema: schema({ app: str, ids: strs }, ['app', 'ids']) },
+  { name: 'import_web_chats', description: `Bring chats from web_chats into Engelbart's library, each as a Markdown file of its turns, named by its title. ids: up to ${MAX_WEB_CHATS_A_CALL} a call (what did not fit in the time is returned as left). A chat brought in before is skipped.`, inputSchema: schema({ app: str, ids: strs }, ['app', 'ids']) },
   { name: 'browser_open', description: 'Open a page in Engelbart\'s hidden browser (the person\'s sign-ins; only this job\'s apps\' sites). Returns its address and title.', inputSchema: schema({ url: str }, ['url']) },
   { name: 'browser_read', description: 'What the page shows now: its text (from offset, at most max_chars, default 8000) and its controls (links, buttons, fields, rows), each with a ref to click or type into, a link\'s href and an item\'s id (Drive file ids) when it has one.', inputSchema: schema({ offset: num, max_chars: num }) },
   { name: 'browser_click', description: 'Click a control by its ref from browser_read.', inputSchema: schema({ ref: str }, ['ref']) },
@@ -72,12 +73,12 @@ const IMPORT_TOOLS = [
   { name: 'browser_screenshot', description: 'A picture of the page as it is now, when its text is not enough.', inputSchema: schema({}) },
   { name: 'browser_eval', description: 'Run a script in the page (an async function body: use await and return a value that is JSON). For what the page itself can ask its own site for (fetch with its sign-in). Never to type passwords or change anything in the account.', inputSchema: schema({ script: str }, ['script']) },
   { name: 'browser_download', description: 'Download a file with the person\'s sign-in (an export, a zip, a pdf) into Engelbart\'s imports. Returns its path, to unpack or bring in.', inputSchema: schema({ url: str, name: str }, ['url']) },
-  { name: 'import_google_files', description: `Bring Google Drive files in by id, with the person's Google sign-in: items [{ id, kind, name }], kind doc (a Google Doc: a note, as Markdown with its pictures), sheet (a note with its first sheet as a table), slides (a note of its text), or file / pdf (a file in Drive: into the library). Up to ${MAX_GOOGLE_A_CALL} a call; a file brought in before is skipped.`, inputSchema: schema({ items: objs }, ['items']) },
+  { name: 'import_google_files', description: `Bring Google Drive files in by id, with the person's Google sign-in: items [{ id, kind, name }], kind doc (a Google Doc: a Markdown file with its pictures), sheet (a Markdown file with its first sheet as a table), slides (a Markdown file of its text), or file / pdf (a file in Drive: into the library). Up to ${MAX_GOOGLE_A_CALL} a call; a file brought in before is skipped.`, inputSchema: schema({ items: objs }, ['items']) },
   { name: 'overleaf_projects', description: 'The person\'s Overleaf projects (id, name, last updated, owner, archived), read from their signed-in project page.', inputSchema: schema({}) },
-  { name: 'import_overleaf_projects', description: 'Bring Overleaf projects in by id (up to 20 a call; what did not fit in the time is returned as left): each is downloaded as its source zip with the person\'s sign-in, unpacked into Engelbart\'s imports and kept in the library as a folder, with its main .tex as a note and its compiled pdf.', inputSchema: schema({ ids: strs }, ['ids']) },
+  { name: 'import_overleaf_projects', description: 'Bring Overleaf projects in by id (up to 20 a call; what did not fit in the time is returned as left): each is downloaded as its source zip with the person\'s sign-in, unpacked into Engelbart\'s imports and kept in the library as a folder, with its main .tex as a Markdown file and its compiled pdf.', inputSchema: schema({ ids: strs }, ['ids']) },
   { name: 'apple_notes_folders', description: 'Apple Notes\' folders (id, name, account, how many notes), asked through macOS Automation.', inputSchema: schema({}) },
   { name: 'apple_notes_list', description: 'Apple Notes\' notes, newest first: id, name, folder, modified. folder: an id or name; days; query: words in the name or folder; limit (default 500).', inputSchema: schema({ folder: str, days: num, query: str, limit: num }) },
-  { name: 'import_apple_notes', description: 'Bring Apple Notes in by id, each as its own note with its pictures. Up to 200 a call; a note brought in before is skipped.', inputSchema: schema({ ids: strs }, ['ids']) },
+  { name: 'import_apple_notes', description: 'Bring Apple Notes in by id, each as its own Markdown file with its pictures. Up to 200 a call; a note brought in before is skipped.', inputSchema: schema({ ids: strs }, ['ids']) },
   { name: 'browser_history', description: 'The most visited sites (by "site", the default) or pages (by "page") in a Chromium browser on this Mac (Chrome, Arc, Brave, Edge, Chromium, Vivaldi). browser and profile pick one (default: the one used last). days: how far back (default 90). exclude: hosts to leave out. limit: at most (default 50).', inputSchema: schema({ browser: str, profile: str, days: num, by: str, exclude: strs, limit: num }) },
   { name: 'browser_bookmarks', description: 'A Chromium browser profile\'s bookmarks: title, link and folder. browser and profile as browser_history.', inputSchema: schema({ browser: str, profile: str }) },
   { name: 'links_in_notes', description: 'The web links written in the notes under a folder, most used first, with the notes they are in.', inputSchema: schema({ folder: str, limit: num }, ['folder']) },
@@ -203,7 +204,6 @@ const looksSignedOut = (file, type) => {
  * (./apple-notes.cjs); `log(text)` the action log. → call(name, args)
  */
 function createImportTools({ session, context, added = () => {}, zotero = null, github = null, deps = {}, env = process.env, kind = 'import', page = null, needs = null, recall = null, appleNotes = null, log = () => {} }) {
-  const projects = require('../store/projects.cjs');
   const library = require('../store/library.cjs');
   const mirror = require('../zotero/mirror.cjs');
   const imported = createImported(session.dataRoot);
@@ -233,12 +233,11 @@ function createImportTools({ session, context, added = () => {}, zotero = null, 
     return page;
   };
 
-  /** A note in: written into the project when there is one, else staged until onboarding makes it. */
+  /** A note, chat or document in: a Markdown file of the library's own in <data root>/assets/md, its pictures beside it. */
   async function putNote({ title, body, images = [], source }) {
     const ctx = await ctxNow();
-    const projectId = session.projectId();
-    if (projectId) await notes.writeNote(ctx, projectId, { title, body, images }, { projects });
-    else notes.stageNote(session.dir, { title, body, images, source });
+    const row = await notes.writeFile(ctx, { title, body, images }, { library });
+    if (deps.onAdded) deps.onAdded(row);
     if (source) imported.add(source);
     added('notes', 1, title);
   }
@@ -323,7 +322,7 @@ function createImportTools({ session, context, added = () => {}, zotero = null, 
         count += 1;
       }
       if (count) log(`Brought in ${count} note${count === 1 ? '' : 's'}`);
-      return { added: count, skipped: skipped.slice(0, 30), skippedCount: skipped.length, where: session.projectId() ? 'the project' : 'held until onboarding makes the project' };
+      return { added: count, skipped: skipped.slice(0, 30), skippedCount: skipped.length, where: 'the library, as Markdown files in Engelbart\'s assets/md' };
     },
     add_note: async ({ title, markdown, source }) => {
       if (markdown.length > MAX_NOTE_CHARS) throw new Error(`A note is at most ${MAX_NOTE_CHARS} characters`);

@@ -20,11 +20,19 @@
 //     no agent moves up to another model
 //   · MEMORY.md: recall agents ask the AI assistants what they remember (with the person's leave), and once everything has
 //     ended a memory agent writes it from all of it, a Claude Sonnet agent takes secrets out, and it is saved (./memory.cjs)
-//   · a session can belong to an existing project (the one-time popup): notes go straight into it
+//   · a session can belong to an existing project (the one-time popup)
+//
+// Third build (2026-10-08, "Agent onboarding" again):
+//   · what comes in is a Markdown file of the library's own in <dataRoot>/assets/md, not a project's note ("save the
+//     imported content not as notes but as md files"), so nothing waits for onboarding to make the project
+//   · Skip on a "Needs you" holds for the run: that app is never put to the person again (skipApp)
+//   · a session still going when Engelbart quits (or switches library) is saved as it is and picked up again when that
+//     library is next open (suspendAll, resume)
 //
 // What it writes is only in the data root it started in (test mode: ~/.engelbart/test): <dataRoot>/.connect/<id>/
-// (session.json, what was said and how each import went; notes/ the notes staged until the project exists; memories/ what
-// each assistant answered), <dataRoot>/imports/<id>/ (what the agents downloaded), MEMORY.md, and what the import tools add.
+// (session.json, what was said, how each import went and what resuming needs; notes/ notes an earlier build staged;
+// memories/ what each assistant answered), <dataRoot>/imports/<id>/ (what the agents downloaded), assets/md/, MEMORY.md,
+// and the library rows the import tools add.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -185,7 +193,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   const readyNow = () => { try { return (ready() || []).filter((provider) => PROVIDERS.includes(provider)); } catch { return [...PROVIDERS]; } };
   const choiceFor = (provider) => connectChoice(provider, (() => { try { return models(); } catch { return null; } })());
 
-  const publicJob = (job) => ({ id: job.id, kind: job.kind, source: job.source, label: job.label, apps: job.apps, status: job.status, notes: job.notes, items: job.items, activity: job.activity, summary: job.summary, error: job.error, started: job.started, ended: job.ended });
+  const publicJob = (job) => ({ id: job.id, kind: job.kind, source: job.source, label: job.label, apps: job.apps, status: job.status, skipped: !!job.skipped, notes: job.notes, items: job.items, activity: job.activity, summary: job.summary, error: job.error, started: job.started, ended: job.ended });
   const publicNeed = (need) => ({ id: need.id, app: need.app, kind: need.kind, reason: need.reason, jobs: need.jobs.length, opened: need.opened, busy: need.busy, error: need.error, at: need.at });
   function snapshot(s) {
     return {
@@ -196,15 +204,23 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       counts: { notes: s.jobs.reduce((n, job) => n + job.notes, 0), items: s.jobs.reduce((n, job) => n + job.items, 0) },
     };
   }
-  function save(s) {
+  // What session.json keeps is enough to pick the session up again after Engelbart quits (resume): the chat, the choices,
+  // what was found, the jobs with their plans, the librarian's agent session, what the person skipped. Never MEMORY.md's
+  // draft before its secrets are out: a session that quit then writes it again.
+  function save(s, { force = false } = {}) {
+    if (s.suspended && !force) return;
     try {
       fs.mkdirSync(s.dir, { recursive: true, mode: 0o700 });
-      fs.writeFileSync(path.join(s.dir, 'session.json'), JSON.stringify({ ...snapshot(s), log: s.log, choices: s.choices, picked: s.picked, jobs: s.jobs.map((job) => ({ ...publicJob(job), plan: job.plan, titles: job.titles })) }, null, 2), { mode: 0o600 });
+      fs.writeFileSync(path.join(s.dir, 'session.json'), JSON.stringify({
+        ...snapshot(s), log: s.log, choices: s.choices, picked: s.picked, found: s.found, interviewSession: s.interviewSession, skipped: [...s.skipped],
+        suspended: !!s.suspended, jobs: s.jobs.map((job) => ({ ...publicJob(job), key: job.key, plan: job.plan, titles: job.titles })),
+      }, null, 2), { mode: 0o600 });
     } catch { /* the chat goes on */ }
   }
   let emitTimer = null;
   const pending = new Set();
   function emit(s, { soon = false } = {}) {
+    if (s.suspended) return; // put away until Engelbart opens this library again: its agents' last words are not news
     if (!soon) { pending.delete(s); save(s); notify(snapshot(s)); return; }
     pending.add(s);
     if (emitTimer) return;
@@ -272,7 +288,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   }
 
   function engelbartBlock(s) {
-    const where = s.mode === 'existing' ? 'Notes brought in now go into the project they have open.' : 'Notes brought in now go into the project they make at the end of onboarding.';
+    const where = `What comes in is saved in their library: notes, chats and documents as Markdown files in ${path.join(s.dataRoot, 'assets', 'md')}, papers, files and links as library items.`;
     return `<engelbart>\nA person is connecting their library to Engelbart (test mode). Their library is at ${s.dataRoot}. ${where}\nPermissions they gave: read files anywhere in their home folder: ${s.choices.permissions.files ? 'yes' : 'no, only the folders of the sources they picked'}; use their accounts in Engelbart's background browser: ${s.choices.permissions.browser ? 'yes' : 'no (web apps are left out)'}; ask their AI assistants what they remember: ${s.choices.permissions.recall ? 'yes' : 'no'}.\n</engelbart>`;
   }
 
@@ -306,7 +322,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
 
   /** One librarian turn: what the person did → its reply applied (a message in the chat, imports started). */
   async function interviewTurn(s, message) {
-    if (s.stopped) return;
+    if (s.stopped || s.suspended) return;
     s.thinking = true;
     s.activity = '';
     s.error = '';
@@ -344,7 +360,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       emit(s);
       // A survey that reported while the librarian talked, and it said it would wait: woken now. Waiting with no survey
       // left to report would leave the chat still for good: it is told so (twice at most), and goes on.
-      if (!s.stopped && !s.finished && s.waitingForSurvey) {
+      if (!s.stopped && !s.suspended && !s.finished && s.waitingForSurvey) {
         if (s.surveyNews.length) wake(s);
         else if (!surveying(s) && (s.nudges = (s.nudges || 0) + 1) <= 2) void interviewTurn(s, 'Every survey has reported already: what they found is in <found>. Go on.');
       }
@@ -361,7 +377,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
 
   /** The librarian woken by what a survey found, when it said it was waiting for one. */
   function wake(s) {
-    if (s.thinking || s.stopped || s.finished) return;
+    if (s.thinking || s.stopped || s.suspended || s.finished) return;
     const apps = [...new Set(s.surveyNews.splice(0))];
     if (!apps.length) return;
     void interviewTurn(s, apps.map((app) => messageOf({ survey: app })).join('; '));
@@ -373,6 +389,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   function dispatch(s, { kind = 'import', source, apps = [], label, plan = '', extra = null }) {
     const key = `${kind}:${source}:${[...apps].sort().join(',')}`;
     if (s.jobs.some((job) => job.key === key) || s.jobs.length >= MAX_JOBS) return null;
+    if (apps.length && apps.every((app) => s.skipped.has(app))) return null; // the person skipped them for this run
     if (kind === 'import' && apps.length && s.jobs.some((job) => job.kind === 'import' && job.source === source && !job.apps.length)) return null; // the whole source went already
     s.seq += 1;
     const job = { id: randomUUID(), key, kind, priority: PRIORITY[kind], seq: s.seq, source, apps, label, plan, extra, status: 'queued', notes: 0, items: 0, titles: [], activity: '', summary: '', error: '', started: null, ended: null };
@@ -383,7 +400,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   }
 
   function pump(s) {
-    if (s.stopped) return;
+    if (s.stopped || s.suspended) return;
     for (;;) {
       const running = s.jobs.filter((job) => job.status === 'running' || job.status === 'waiting').length;
       if (running >= MAX_RUNNING) break;
@@ -458,7 +475,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       const connectorsNow = bridged && connectors ? await connectors.serversFor(covered).catch(() => []) : [];
       if (bridged) bridge = await openBridge(callTool, { signal: controller.signal, maxBody: 1_000_000 });
       const choice = job.kind === 'redact' ? s.redactChoice || s.choice : s.choice;
-      const dirs = job.kind === 'memory' ? [s.dir, ...(s.projectDir ? [s.projectDir] : [])].filter((dir) => fs.existsSync(dir)) : job.kind === 'redact' ? [] : s.dirs;
+      const dirs = job.kind === 'memory' ? [s.dir, path.join(s.dataRoot, 'assets', 'md'), ...(s.projectDir ? [s.projectDir] : [])].filter((dir) => fs.existsSync(dir)) : job.kind === 'redact' ? [] : s.dirs;
       const message = job.kind === 'memory' ? await memoryMessage(s) : job.kind === 'redact' ? `<memory_md>\n${s.memoryDraft}\n</memory_md>` : jobMessage(s, job);
       const out = await agents.turn({ choice, kind: job.kind, system: systemOf(s, job.kind), message, session: null, dirs, signal: controller.signal, bridge: bridge && bridge.connection, connectors: connectorsNow, onUpdate, meta: { kind: job.kind, session: s, job, callTool } });
       if (job.kind === 'survey') surveyed(s, job, out.text);
@@ -526,6 +543,9 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   /** An agent hands the person a step (a sign-in, a code, a permission): one request per app and kind, then waits for it. */
   function askPerson(s, job, { kind, reason }) {
     const app = job.apps[0] || job.label;
+    // Skip holds for the whole run (2026-10-08: "hitting skip should skip it permanently for this run, right now it tries
+    // again"): an app the person skipped is never put to them again; the agent hears at once that it was skipped.
+    if (s.skipped.has(app)) return Promise.resolve({ status: 'skipped', note: `The person skipped ${app} for this run. Do not ask again: finish without it.` });
     let need = s.needs.find((entry) => !entry.closed && entry.app === app && entry.kind === kind);
     if (!need) {
       need = { id: randomUUID(), app, kind, reason, jobs: [], waiters: new Map(), opened: false, busy: false, error: '', closed: false, at: now() };
@@ -556,11 +576,33 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   function closeNeed(s, need, how) {
     if (need.closed) return;
     need.closed = true;
+    if (how === 'skip' && !s.stopped) skipApp(s, need.app, need.jobs);
     for (const [jobId, resolve] of need.waiters) { resolve({ status: how === 'skip' ? 'skipped' : 'done' }); if (browser) browser.hide(jobId); }
     need.waiters.clear();
     for (const jobId of need.jobs) if (browser) browser.hide(jobId);
     logAction(s, null, how === 'skip' ? `Skipped: ${need.reason}` : `Done: ${need.reason}`, 'You');
     emit(s);
+  }
+
+  /**
+   * An app the person skipped, left out for the rest of the run: its other jobs end as skipped (queued ones at once, running
+   * ones stopped; those that waited on the card hear "skipped" and finish what they report), no new one is queued
+   * (dispatch, Import), and the librarian is told not to offer it again.
+   */
+  function skipApp(s, app, waiting = []) {
+    if (!app || s.skipped.has(app)) return;
+    s.skipped.add(app);
+    for (const job of s.jobs) {
+      if (!job.apps.length || !job.apps.every((each) => s.skipped.has(each)) || waiting.includes(job.id)) continue;
+      if (job.status === 'queued') { job.status = 'stopped'; job.skipped = true; job.ended = now(); }
+      else if (job.status === 'running' && job.controller) { job.skipped = true; job.controller.abort(); }
+    }
+    const source = sourceOfApp(app);
+    if (source) {
+      const note = { ...((s.found[source] || {})[app] || {}), skipped: 'The person skipped this app for this run: leave it out, and do not offer, ask about or hand it over again.' };
+      s.found[source] = { ...(s.found[source] || {}), [app]: note };
+      s.newFound = { ...(s.newFound || {}), [source]: { ...((s.newFound || {})[source] || {}), [app]: note } };
+    }
   }
 
   /** A job that ended stops waiting; a request no job waits on any more goes. */
@@ -585,7 +627,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
 
   /** MEMORY.md is written once the questions are over and every survey, recall and import has ended. */
   function maybeMemory(s) {
-    if (s.stopped || s.memoryQueued || !(s.done || s.finished)) return;
+    if (s.stopped || s.suspended || s.memoryQueued || !(s.done || s.finished)) return;
     if (s.jobs.some((job) => WORK.has(job.kind) && !ENDED.has(job.status))) return;
     const worked = s.jobs.some((job) => WORK.has(job.kind) && job.status === 'done') || Object.keys(s.recalls).length;
     if (!worked) { s.memory = { ...s.memory, status: 'skipped' }; return; }
@@ -608,7 +650,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       `<imports>\n${JSON.stringify({ imports, surveys }, null, 1)}\n</imports>`,
       custom ? `<custom_instructions>\n${custom}\n</custom_instructions>` : '',
       s.choices.custom ? `<import_instructions>\n${s.choices.custom}\n</import_instructions>` : '',
-      `<folders note="Where the imported notes are, to Read when a title is not enough.">${[path.join(s.dir, 'notes'), s.projectDir].filter(Boolean).join(', ')}</folders>`,
+      `<folders note="Where what came in is, as Markdown files (one folder each), to Read when a title is not enough.">${[path.join(s.dataRoot, 'assets', 'md'), path.join(s.dir, 'notes'), s.projectDir].filter(Boolean).join(', ')}</folders>`,
       `Today is ${s.created.slice(0, 10)}. Write MEMORY.md now.`,
     ].filter(Boolean).join('\n\n');
   }
@@ -668,18 +710,23 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       picked: { folders: {}, exports: {} }, chat: [], thinking: true, activity: 'Looking at what you picked…', done: false, finished: false, minimized: false, dismissed: false, error: '',
       jobs: [], seq: 0, needs: [], log: [], controllers: new Set(), interviewSession: null, interviewController: null, found: {}, newFound: null, toldImports: '', projectId, projectDir, stopped: false,
       waitingForSurvey: false, surveyNews: [], recalls: {}, memory: { status: 'waiting', path: memory.memoryPath(ctx.dataRoot), error: '' }, memoryQueued: false, memoryDraft: null,
+      skipped: new Set(), suspended: false,
     };
     sessions.set(id, s);
     s.dirs = dirsOf(s);
     logAction(s, null, `Started with ${PROVIDER_NAMES[s.choice.provider]} (${s.choice.modelName} · ${s.choice.effort})`);
     emit(s);
-    void (async () => {
-      try { s.found = await scanFor(choices, { homeDir, env, picked: s.picked, zotero, github, appleNotes: choices.permissions.notes ? appleNotes : null }); } catch (error) { s.found = { error: error.message }; }
-      s.dirs = dirsOf(s);
-      startWork(s);
-      await interviewTurn(s, 'Start.');
-    })();
+    void opening(s);
     return snapshot(s);
+  }
+
+  /** A session's opening: the scan of what was picked, the first surveys and recalls, the librarian's first turn. */
+  async function opening(s) {
+    try { s.found = await scanFor(s.choices, { homeDir, env, picked: s.picked, zotero, github, appleNotes: s.choices.permissions.notes ? appleNotes : null }); } catch (error) { s.found = { error: error.message }; }
+    if (s.stopped || s.suspended) return;
+    s.dirs = dirsOf(s);
+    startWork(s);
+    await interviewTurn(s, 'Start.');
   }
 
   function busy(s) { if (s.thinking) throw new Error('Wait for the librarian to answer'); }
@@ -789,7 +836,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
         if (reach === 'automation') return s.choices.permissions.notes;
         return !(found && found.needs);
       };
-      const apps = choice.apps.filter((app) => !covered.has(app) && reachable(app));
+      const apps = choice.apps.filter((app) => !covered.has(app) && !s.skipped.has(app) && reachable(app));
       if (sent.length && !apps.length) continue;
       if (choice.apps.length && !apps.length && !choice.folders.length && !choice.repos.length) continue; // nothing of it can be reached
       const label = sourceOf(source).label;
@@ -828,10 +875,12 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       if (out.allowed) { s.choices.permissions.notes = true; closeNeed(s, found, 'done'); } else { found.error = line(out.error, 200); emit(s); }
       return snapshot(s);
     }
-    // A web sign-in, a code, a password, a captcha: the agent's own window, shown to the person to do it there.
+    // A web sign-in, a code, a password, a captcha: the agent's own window, on its sign-in page, shown to the person to do it
+    // there (the agents' sign-ins are Engelbart's browser's, so a sign-in in another browser would not reach them). Closing
+    // the window carries on (windowClosed).
     const jobId = found.jobs.find((each) => browser && browser.has(each));
     if (!jobId || !browser.show(jobId, { title: `${found.reason} — Engelbart` })) {
-      found.error = 'There is no window to show here: sign in on the Stage, or bring your sign-ins over from Chrome, then press Done.';
+      found.error = 'There is no sign-in window to show: sign in to it on the Stage, or skip it.';
       emit(s);
       return snapshot(s);
     }
@@ -914,9 +963,136 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     return written.length;
   }
 
-  function stopAll() {
-    for (const s of sessions.values()) { try { if (!s.stopped) stop(s.id); } catch { /* gone */ } }
+  /* ------------------------------------------------------------------------------------------ quitting and resuming */
+
+  /**
+   * Engelbart quits, or switches to another library: every session still going is saved as it is (`suspended`) and its
+   * agents end, to be picked up again by resume when that library is open next. Nothing it did is undone.
+   */
+  function suspendAll() {
+    for (const s of [...sessions.values()]) {
+      if (!s.stopped && !s.dismissed) {
+        s.suspended = true;
+        save(s, { force: true });
+        if (s.interviewController) s.interviewController.abort();
+        for (const controller of s.controllers) controller.abort();
+      }
+      sessions.delete(s.id);
+      resumed.delete(s.dataRoot);
+    }
     if (browser) browser.closeAll();
+  }
+
+  const resumed = new Set(); // the data roots whose saved sessions were looked at
+  const RESUME_DAYS = 7;
+
+  /** A saved session that was not done when Engelbart closed: not stopped, dismissed or over, and less than a week old. */
+  function unfinished(saved) {
+    if (!saved || typeof saved !== 'object' || saved.stopped || saved.dismissed) return false;
+    const created = Date.parse(saved.created);
+    if (!Number.isFinite(created) || Date.now() - created > RESUME_DAYS * 86_400_000) return false;
+    const jobs = Array.isArray(saved.jobs) ? saved.jobs : [];
+    if (!saved.done && !saved.finished) return true;
+    if (jobs.some((job) => job && WORK.has(job.kind) && !ENDED.has(job.status))) return true;
+    return !!(saved.memory && ['waiting', 'writing', 'cleaning'].includes(saved.memory.status));
+  }
+
+  /** Paths a saved session kept for an app (a folder chosen, an export), still inside the home folder and still there. */
+  function keptPaths(value) {
+    const out = {};
+    for (const [app, file] of Object.entries(value && typeof value === 'object' ? value : {})) {
+      const real = typeof file === 'string' ? readers.expandPath(homeDir, file) : null;
+      if (real && real.startsWith(homeDir + path.sep) && fs.existsSync(real) && (APPS[app] || app === 'GitHub')) out[app] = real;
+    }
+    return out;
+  }
+
+  /** What each assistant answered, read back from the session's memories/ folder. */
+  function keptRecalls(dir) {
+    const out = {};
+    let names = [];
+    try { names = fs.readdirSync(path.join(dir, 'memories')).filter((name) => name.endsWith('.md')); } catch { return out; }
+    for (const name of names) {
+      const app = name.slice(0, -3);
+      if (!APPS[app]) continue;
+      try { out[app] = fs.readFileSync(path.join(dir, 'memories', name), 'utf8').trim(); } catch { /* gone */ }
+    }
+    return out;
+  }
+
+  /** One saved session made live again: its unfinished jobs queued, the librarian asked again if it had not answered. */
+  function revive(ctx, id, saved) {
+    const dir = path.join(ctx.dataRoot, '.connect', id);
+    const usable = readyNow();
+    const provider = usable.includes(saved.provider) ? saved.provider : usable[0] || (PROVIDERS.includes(saved.provider) ? saved.provider : 'anthropic');
+    let projectId = null, projectDir = null;
+    if (typeof saved.projectId === 'string' && ID_RE.test(saved.projectId)) {
+      try { const project = require('../store/projects.cjs').findProject(ctx, saved.projectId); projectId = project.id; projectDir = project.dir; } catch { projectId = null; }
+    }
+    const kept = saved.memory && saved.memory.status === 'saved';
+    const s = {
+      id, mode: saved.mode === 'existing' && projectId ? 'existing' : 'onboarding', dataRoot: ctx.dataRoot, homeDir, dir, downloads: path.join(ctx.dataRoot, 'imports', id), created: saved.created, choices: cleanChoices(saved.choices, homeDir), choice: choiceFor(provider), redactChoice: null,
+      picked: { folders: keptPaths(saved.picked && saved.picked.folders), exports: keptPaths(saved.picked && saved.picked.exports) },
+      chat: (Array.isArray(saved.chat) ? saved.chat : []).filter((entry) => entry && (entry.role === 'agent' || entry.role === 'user')), thinking: false, activity: '', done: !!saved.done, finished: !!saved.finished, minimized: true, dismissed: false, error: '',
+      jobs: [], seq: 0, needs: [], log: (Array.isArray(saved.log) ? saved.log : []).slice(-MAX_LOG), controllers: new Set(), interviewSession: typeof saved.interviewSession === 'string' ? saved.interviewSession : null, interviewController: null,
+      found: saved.found && typeof saved.found === 'object' ? saved.found : {}, newFound: null, toldImports: '', projectId, projectDir, stopped: false,
+      waitingForSurvey: !!saved.waiting, surveyNews: [], recalls: keptRecalls(dir), memory: kept ? { ...saved.memory } : { status: 'waiting', path: memory.memoryPath(ctx.dataRoot), error: '' }, memoryQueued: kept, memoryDraft: null,
+      skipped: new Set((Array.isArray(saved.skipped) ? saved.skipped : []).filter((app) => typeof app === 'string')), suspended: false,
+    };
+    for (const job of Array.isArray(saved.jobs) ? saved.jobs : []) {
+      if (!job || !Object.hasOwn(PRIORITY, job.kind)) continue;
+      // MEMORY.md is written again once the work has ended, unless it was saved: its draft was never kept on disk.
+      if ((job.kind === 'memory' || job.kind === 'redact') && !kept) continue;
+      const again = !ENDED.has(job.status);
+      const apps = (Array.isArray(job.apps) ? job.apps : []).filter((app) => typeof app === 'string' && (APPS[app] || app === 'GitHub'));
+      s.seq += 1;
+      s.jobs.push({
+        id: typeof job.id === 'string' && ID_RE.test(job.id) ? job.id : randomUUID(), key: typeof job.key === 'string' ? job.key : `${job.kind}:${job.source}:${[...apps].sort().join(',')}`,
+        kind: job.kind, priority: PRIORITY[job.kind], seq: s.seq, source: String(job.source || ''), apps, label: line(job.label, 120), plan: typeof job.plan === 'string' ? clip(job.plan, 8000) : '', extra: null,
+        status: again ? 'queued' : job.status, skipped: !!job.skipped, notes: Number(job.notes) || 0, items: Number(job.items) || 0, titles: (Array.isArray(job.titles) ? job.titles : []).slice(0, 80).map((title) => line(title, 120)),
+        activity: '', summary: again ? '' : line(job.summary, 500), error: again ? '' : line(job.error, 300), started: again ? null : job.started || null, ended: again ? null : job.ended || null,
+      });
+    }
+    sessions.set(id, s);
+    s.dirs = dirsOf(s);
+    logAction(s, null, 'Picked up again after Engelbart closed');
+    emit(s);
+    pump(s);
+    if (!s.chat.length && !s.jobs.length) {
+      // closed before the librarian's first word: the opening again
+      s.thinking = true;
+      s.activity = 'Looking at what you picked…';
+      void opening(s);
+    } else if (!s.done && !s.finished) {
+      const last = s.chat[s.chat.length - 1];
+      if (!last) void interviewTurn(s, 'Start.');
+      else if (last.role === 'user') void interviewTurn(s, `${line(last.text, 2000)} (Engelbart closed before you answered this. Answer it now.)`);
+      else if (saved.thinking || (s.waitingForSurvey && !surveying(s))) void interviewTurn(s, 'Engelbart closed while you were working, and has opened again. What the surveys found is in <found>. Go on from where you were.');
+    }
+    maybeMemory(s);
+    return s;
+  }
+
+  /**
+   * "if i close engelbart and it hasnt finish it should auto-resume" (2026-10-08): the sessions of this library that were
+   * still going when Engelbart closed (or switched library) start again where they were, in the background: the jobs that
+   * were running or queued are queued again (an import skips what came in before), a librarian turn that had not answered
+   * is asked again, and MEMORY.md is written once everything has ended. Once per library each time it is opened. → how many
+   */
+  function resume(ctx) {
+    if (!ctx || !ctx.dataRoot || resumed.has(ctx.dataRoot)) return 0;
+    resumed.add(ctx.dataRoot);
+    let names = [];
+    try { names = fs.readdirSync(path.join(ctx.dataRoot, '.connect')).filter((name) => ID_RE.test(name)); } catch { return 0; }
+    let n = 0;
+    for (const id of names) {
+      if (sessions.has(id)) continue;
+      let saved = null;
+      try { saved = JSON.parse(fs.readFileSync(path.join(ctx.dataRoot, '.connect', id, 'session.json'), 'utf8')); } catch { continue; }
+      if (!unfinished(saved)) continue;
+      try { revive(ctx, id, saved); n += 1; } catch { sessions.delete(id); }
+    }
+    return n;
   }
 
   /** The sessions of a data root that are not dismissed, newest first (the dock, a window that opens later). */
@@ -938,7 +1114,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   }
 
   return {
-    start, answer, authorize, importNow, need, stop, stopJob, stopAll, retryMemory, setMinimized, dismiss, attachProject, windowClosed, logJob, list, providers, cancelSignIn,
+    start, answer, authorize, importNow, need, stop, stopJob, suspendAll, resume, retryMemory, setMinimized, dismiss, attachProject, windowClosed, logJob, list, providers, cancelSignIn,
     setProvider: (id, provider) => { const s = get(id); setProvider(s, provider); emit(s); return snapshot(s); },
     // the first build's name for authorize
     connected: (id, input) => authorize(id, input),

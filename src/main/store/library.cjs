@@ -5,7 +5,8 @@
 // Nothing here copies user files; the seeds are the app's own fixtures (spec §2 #7, #15). The copies
 // are of what came without a file: a pdf read from the web and saved (addPdfCopy), a page from the web
 // saved from the Stage (addPageCopy), and a picture or a pdf dragged in from a browser (addFileCopy).
-// They live in <data root>/assets/pdfs, assets/pages and assets/images.
+// They live in <data root>/assets/pdfs, assets/pages and assets/images; Connect your library's Markdown in assets/md
+// (addMarkdownCopy).
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -830,6 +831,32 @@ async function addPageCopy(ctx, input, save, { name: given = null } = {}) {
   return summary ? ctx.libraryDb.setSummary(id, summary, new Date()) : row;
 }
 
+/**
+ * A Markdown text kept as a file of the library's own (2026-10-08, Connect your library: "save the imported content not as
+ * notes but as md files ... saved as files in the engelbart assets folder"): <data root>/assets/md/<id>/<name>.md, its
+ * pictures beside it, and a row of type `md` with no `note` tag and no project. `pictures` [{ file, name }] are copied in
+ * as `name` (the text links them by that name). A row that cannot be written leaves no folder. → the row
+ */
+async function addMarkdownCopy(ctx, { name, text, pictures = [] } = {}) {
+  const title = String(name == null ? '' : name).replace(/[\x00-\x1f\x7f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200) || 'Untitled';
+  const stem = title.replace(/[/\\:]/g, '-').replace(/^\.+/, '').trim() || 'Untitled';
+  const id = randomUUID();
+  const base = path.join(ctx.dataRoot, 'assets', 'md');
+  fs.mkdirSync(base, { recursive: true, mode: DIR_MODE });
+  // by its real path, as the resolver gives a file: the copy open in the Stage is found as this row
+  const dir = path.join(fs.realpathSync(base), id);
+  fs.mkdirSync(dir, { mode: DIR_MODE });
+  const file = path.join(dir, `${stem}.md`);
+  try {
+    for (const picture of pictures) fs.copyFileSync(picture.file, path.join(dir, path.basename(picture.name)));
+    fs.writeFileSync(file, String(text == null ? '' : text), { mode: 0o600 });
+    return await ctx.libraryDb.insert({ id, name: title, type: 'md', tags: [], path: file, url: null, folder_path: null, project_id: null, github_id: null, categorized: CATEGORY_RULES });
+  } catch (error) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
 /* ---------------------------------------------------- dragged in (MATH-19) */
 
 // What is dragged onto the library or a workspace from Finder, Chrome or Safari (2026-10-05). A file with a path is
@@ -1094,4 +1121,4 @@ async function previewItem(ctx, id, { listRemoteFiles } = {}) {
   return out;
 }
 
-module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, annotationsFileOf, writePageAnnotations, addMarkAnswer, addWebMark, updateWebMark, readWebMark, removeWebMark, restoreWebMark, cropFile, projectsForLibraryItem, libraryForProject, bodiesForProject, bodiesForLibrary, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, addPageCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem, FILE_TYPES, PEEK_SKIP };
+module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, annotationsFileOf, writePageAnnotations, addMarkAnswer, addWebMark, updateWebMark, readWebMark, removeWebMark, restoreWebMark, cropFile, projectsForLibraryItem, libraryForProject, bodiesForProject, bodiesForLibrary, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, addPageCopy, addMarkdownCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem, FILE_TYPES, PEEK_SKIP };

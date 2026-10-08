@@ -418,6 +418,9 @@ export default function App() {
           onNewProject={() => { leaveProject(); setPhase('create'); }}
           onVisit={onVisit}
           onError={fail}
+          // Connect your library's sessions, for the sidebar's Inbox: one that needs you or has finished, opened in its popup
+          connectSessions={connectOn ? connectSessions : []}
+          onOpenConnect={(id) => setConnectPopup({ sessionId: id })}
         />
       )}
       {phase === 'workspace' && tree && !tree.project.directory && (

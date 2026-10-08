@@ -59,7 +59,7 @@ You may open files with Read, Grep and Glob to look closer, but <found> is usual
 - When there is an obvious default, make it the first option ("Everything but Daily and Personal").
 
 What the person wants, by source (guidance, not a script):
-- Notes (Obsidian and the like): some folders in, others out; daily notes and personal folders are usually out. Each file becomes its own note with the same title, pictures included. Never ask them to review files one by one.
+- Notes (Obsidian and the like): some folders in, others out; daily notes and personal folders are usually out. Each file becomes its own Markdown file in their library with the same title, pictures included. Never ask them to review files one by one.
 - Google Drive: offer the folders and documents the survey found (research first) as a multiple choice of individual items, plus "Everything in <folder>" where it fits.
 - Papers (Zotero): often only one project's collection, with everything in it. List their collections so they can pick: they may not remember them. Overleaf: list their projects.
 - Websites: there is no single app, so ask where to look: their bookmarks, their most visited sites in the browser <found> names, links they pasted into their notes. Offer what <found> shows. Tools they use every day (mail, calendar, social media) usually stay out.
@@ -91,13 +91,13 @@ Source ids: notes, transcripts, chats, sites, papers, code. At most one of "ask"
 const TOOLS_BLOCK = `# Tools
 
 Engelbart's tools (the MCP server "engelbart") read sources and write into the person's library:
-- Files on this Mac: folder_overview, list_note_files, import_note_files (notes from a folder: an Obsidian vault, a download, an export; each file its own note with its title and pictures), add_to_library (a pdf, file, folder, link, arXiv id or DOI), unpack (a downloaded .zip into a folder you can then import from).
+- Files on this Mac: folder_overview, list_note_files, import_note_files (notes from a folder: an Obsidian vault, a download, an export; each file its own Markdown file in the library with its title and pictures), add_to_library (a pdf, file, folder, link, arXiv id or DOI), unpack (a downloaded .zip into a folder you can then import from).
 - Chats on this Mac: list_chats, read_chat, import_chats (Claude Code, Codex, Cursor; Claude or ChatGPT exports when there is one).
 - Chats on the web: web_chats, web_chat_read, import_web_chats (ChatGPT and Claude, straight from the person's signed-in account).
 - Engelbart's browser, hidden, with the person's sign-ins, limited to this job's apps' sites: browser_open, browser_read (the page's text and its controls, each with a ref), browser_click, browser_type, browser_press, browser_scroll, browser_wait, browser_screenshot, browser_eval (a script in the page, for what the page itself can fetch), browser_download (a file with the person's sign-in, into Engelbart).
 - Google Drive: import_google_files (Docs, Sheets, Slides and files by their Drive ids). Overleaf: overleaf_projects, import_overleaf_projects. Apple Notes: apple_notes_folders, apple_notes_list, import_apple_notes.
 - Sites: browser_history, browser_bookmarks, links_in_notes. Zotero: zotero_collections, zotero_items, import_zotero_items. GitHub: github_repos.
-- add_note: a note you write yourself (a page's text, a meeting's notes and transcript), with source set to where it came from so it is never brought in twice.
+- add_note: a Markdown file you write yourself (a page's text, a meeting's notes and transcript), with source set to where it came from so it is never brought in twice.
 - needs_you: when only the person can do the next step (a sign-in, a two-factor code, a password, a captcha, a macOS permission, a connector's sign-in), call it with kind and a short reason. It waits for them and returns done, skipped, or still waiting (then call wait_for_you, up to ten times, or go on without that app and say so).
 An app's own connector, when the person signed in to it (Granola, Notion), appears as its own tools, named after it.
 Your file tools (Read, Grep, Glob) read files on this Mac; WebSearch and WebFetch read help pages, never the person's accounts. You cannot edit, create, move or delete files yourself: everything comes in through Engelbart's tools.`;

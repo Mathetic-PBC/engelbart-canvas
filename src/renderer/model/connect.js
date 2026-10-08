@@ -86,6 +86,7 @@ export function choicesOf({ picks, apps, folders = {}, repos = [], custom = '', 
 export function statusOf(job) {
   const n = (job.notes || 0) + (job.items || 0);
   const added = `${n} added`;
+  if (job.skipped) return { text: 'skipped', done: true };
   if (job.kind === 'survey') {
     if (job.status === 'done') return { text: 'looked', done: true };
     if (job.status === 'failed') return { text: 'could not look', done: true, failed: true };
@@ -114,14 +115,37 @@ export const allEnded = (jobs) => (jobs || []).every((job) => statusOf(job).done
 /** The jobs the progress list shows: the work, without MEMORY.md's own (it has a row of its own). */
 export const workJobs = (jobs) => (jobs || []).filter((job) => job.kind !== 'memory' && job.kind !== 'redact');
 
+/** The jobs still going first (2026-10-08: "show the ones still running at the top"), running before queued, then the ended, each group in its order. */
+export function runningFirst(jobs) {
+  const rank = (job) => { const status = statusOf(job); return status.done ? 2 : job.status === 'queued' ? 1 : 0; };
+  return (jobs || []).map((job, i) => ({ job, i })).sort((a, b) => rank(a.job) - rank(b.job) || a.i - b.i).map((entry) => entry.job);
+}
+
+/**
+ * The line under the chat, as Claude Code shows its subagents (2026-10-08: "list the current action of the agent and cycle
+ * through the subagents at the bottom"): what the librarian is doing, and the subagents still at work, one at a time.
+ * `tick` turns the cycle. → { lead, agent: { label, doing, place } | null } or null when nothing works.
+ */
+export function workLine(session, tick = 0) {
+  if (!session) return null;
+  const busy = workJobs(session.jobs).filter((job) => job.status === 'running' || job.status === 'waiting');
+  const lead = session.thinking ? `${session.activity || 'Thinking'}…`.replace(/……$/, '…') : '';
+  if (!lead && !busy.length) return null;
+  const at = busy.length ? ((tick % busy.length) + busy.length) % busy.length : 0;
+  const job = busy[at];
+  return { lead, agent: job ? { id: job.id, label: job.label, doing: job.status === 'waiting' ? 'needs you' : job.activity || statusOf(job).text, place: busy.length > 1 ? `${at + 1} of ${busy.length}` : '', waiting: job.status === 'waiting' } : null };
+}
+
 /** What a step the agents hand the person asks of them, and the button that does it. */
 export function needView(need) {
   const kind = need && need.kind;
-  if (kind === 'connector') return { title: `${need.app} needs you to sign in`, action: `Sign in to ${need.app}`, hint: `${need.app}’s own sign-in page opens in your browser.` };
-  if (kind === 'permission') return { title: `${need.app} needs your permission`, action: 'Allow', hint: 'macOS asks once whether Engelbart may read it.' };
-  if (need && (need.app === 'Zotero' || need.app === 'GitHub')) return { title: `${need.app} needs you to sign in`, action: `Sign in to ${need.app}`, hint: '' };
-  const what = { signin: 'sign in', '2fa': 'enter a code', password: 'enter your password', captcha: 'prove you are not a robot', confirm: 'confirm something' }[kind] || 'do something';
-  return { title: `${need ? need.app : 'An app'} needs you to ${what}`, action: kind === 'signin' ? 'Open the sign-in window' : 'Open the window', hint: 'The agent’s own window opens: do it there, then press Done. Nothing is typed for you.' };
+  if (kind === 'connector') return { title: `${need.app} needs you to sign in`, action: 'Log in', hint: '' };
+  if (kind === 'permission') return { title: `${need.app} needs your permission`, action: 'Allow', hint: '' };
+  if (need && (need.app === 'Zotero' || need.app === 'GitHub')) return { title: `${need.app} needs you to sign in`, action: 'Log in', hint: '' };
+  // One button and Skip (2026-10-08: "It should just be one login button on the right ... or skip"): the agent's own window
+  // opens on its sign-in page; closing it carries on.
+  const what = { signin: 'sign in', '2fa': 'enter a code', password: 'sign in', captcha: 'prove you are not a robot', confirm: 'confirm something' }[kind] || 'sign in';
+  return { title: `${need ? need.app : 'An app'} needs you to ${what}`, action: kind === 'signin' || kind === 'password' ? 'Log in' : 'Open', hint: '' };
 }
 
 /** MEMORY.md's line in the progress list. */
@@ -163,4 +187,20 @@ export function logTime(at) {
   const date = new Date(at);
   if (Number.isNaN(date.getTime())) return '';
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+/**
+ * Connect your library in the sidebar's Inbox (2026-10-08: "all the notifications should be sent to the inbox in the sidebar
+ * ... if the user is needed or if it is done"): a session of this project (or one onboarding has not given a project) that
+ * needs the person, or has finished. → [{ id, kind: 'connect', sessionId, name, did, at }]
+ */
+export function connectInbox(sessions, projectId) {
+  const out = [];
+  for (const session of sessions || []) {
+    if (!session || session.dismissed || session.stopped || (session.projectId && session.projectId !== projectId)) continue;
+    const view = dockLine(session);
+    if (!view || view.tone === 'busy') continue;
+    out.push({ id: `connect:${session.id}`, kind: 'connect', sessionId: session.id, workspaceId: null, name: 'Connect your library', did: view.text, at: session.created || null });
+  }
+  return out;
 }

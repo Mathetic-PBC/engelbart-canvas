@@ -225,7 +225,7 @@ async function requestQuit({ update = false } = {}) {
   try {
     if (sweeper) await sweeper.stop();
     if (bart) bart.stopAll();
-    if (connect) connect.stopAll(); // its imports write into the library about to close; its agents' hidden windows go
+    if (connect) connect.suspendAll(); // saved to go on at the next launch (resume); its agents and their hidden windows go
     if (builds) await builds.stopAll(); // each running turn stops, saves a checkpoint and is marked interrupted
     // No E2B preview is left running (and paid for) after quitting: a ready one goes to sleep, to wake when it is next
     // opened, and one still being set up stops. One that cannot be reached (offline, signed out) does not hold the quit:
@@ -966,7 +966,7 @@ if (!hasSingleInstanceLock) {
       }
       return out;
     };
-    app.on('will-quit', () => connect.stopAll());
+    app.on('will-quit', () => connect.suspendAll());
     registerEngelbartIpc({
       connect,
       connectors,

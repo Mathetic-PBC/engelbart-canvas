@@ -272,7 +272,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     try {
       await additions.catch(() => {});
       await beforeContextChange();
-      connect?.stopAll(); // its imports write into the library that is about to close
+      connect?.suspendAll(); // its imports write into the library about to close: saved, to go on when it is open again
       await sandbox?.close();
       return await change();
     } finally { changingMode = false; }
@@ -485,7 +485,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('connect-minimize', (id, value) => cx().setMinimized(importId(id), !!value));
   handle('connect-dismiss', (id) => cx().dismiss(importId(id)));
   handle('connect-state', (id) => cx().state(importId(id)));
-  handle('connect-list', withCtx((ctx) => (connect && store.config().testMode ? connect.list(ctx.dataRoot) : [])));
+  // A session that was still going when Engelbart closed goes on now (resume), before the list is read.
+  handle('connect-list', withCtx((ctx) => { if (!connect || !store.config().testMode) return []; connect.resume(ctx); return connect.list(ctx.dataRoot); }));
   // macOS's Automation prompt for Notes, asked from the choose screen's permissions (./connect/apple-notes.cjs).
   handle('connect-notes-permission', () => { cx(); return appleNotes ? appleNotes.permission() : { allowed: false, error: 'Apple Notes cannot be read here' }; });
   // The connectors Engelbart signs in to for the agents (./connect/connectors.cjs): Granola and Notion.

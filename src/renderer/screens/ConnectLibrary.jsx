@@ -1,11 +1,10 @@
 import React from 'react';
 import { api, errorMessage } from '../api.js';
 import GithubRepos from '../workspace/GithubRepos.jsx';
-import ImportSignins from '../workspace/ImportSignins.jsx';
 import { heldRow } from '../model/github.js';
 import { rowOf } from '../model/tools.js';
 import { markOpen } from '../ui/connect-open.js';
-import { SOURCES, initialPicks, subOf, choicesOf, statusOf, workJobs, needView, memoryLine, logTime, pickedApps, permissionsFor } from '../model/connect.js';
+import { SOURCES, initialPicks, subOf, choicesOf, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, pickedApps, permissionsFor } from '../model/connect.js';
 import obsidian from '../../../design/assets/logos/obsidian.svg';
 import notion from '../../../design/assets/logos/notion.svg';
 import apple from '../../../design/assets/logos/apple.svg';
@@ -35,8 +34,12 @@ import github from '../../../design/assets/logos/github.svg';
 // a square one, each option's why under it), its buttons sign in to a connector, ask macOS, or choose a folder. Each
 // source it settles starts importing in the background while the chat goes on. When an agent meets something only the
 // person can do (a sign-in, a code, a permission) it shows as "Needs you", with the button that does it. Import, at the
-// lower right, lights up once the librarian has nothing more to ask; then the window shows every import, MEMORY.md and the
-// action log, with Stop, and can be put away: the work goes on in the background, the dock following it.
+// lower right, lights up once the librarian has nothing more to ask; then the window shows every import and MEMORY.md,
+// with Stop, and can be put away: the work goes on in the background, the dock and the sidebar's Inbox following it.
+// 2026-10-08 ("Agent onboarding"): no growing strip of agents over the chat (one line under it says what the librarian
+// does and goes through the subagents at work, as Claude Code lists its own), no activity log, no paragraphs of
+// disclaimers on the choose screen, no account of what each import added; the imports still going come first; a Needs-you
+// card is one Log in button and Skip, and Skip leaves that app out for the run.
 
 const LOGOS = { Obsidian: obsidian, Notion: notion, 'Apple Notes': apple, OneNote: onenote, Zotero: zotero, Overleaf: overleaf, 'Google Docs': googledocs, Evernote: evernote, Granola: granola, 'Google Meet': meet, Zoom: zoom, ChatGPT: openai, Codex: codex, Claude: claude, 'Claude Code': claude, Grok: grok, Gemini: gemini, Perplexity: perplexity, Cursor: cursor, GitHub: github };
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
@@ -199,59 +202,69 @@ function AuthorizeCard({ authorize, live, busy, onUse, onSkip, onCancel }) {
   );
 }
 
-/** A step an agent handed the person: what it is, the button that does it, Done and Skip. */
-function NeedCard({ need, onOpen, onDone, onSkip, onSignins }) {
+/** A step an agent handed the person: what it is, and at its right one button that does it, and Skip (for the whole run). */
+function NeedCard({ need, onOpen, onSkip }) {
   const view = needView(need);
-  const web = !['connector', 'permission'].includes(need.kind) && need.app !== 'Zotero' && need.app !== 'GitHub';
   return (
-    <div data-connect-need={need.kind} style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '12px 14px', border: '1px solid #f5c26b', borderRadius: 10, background: '#fffaf0', animation: `rise 200ms ${EASE}` }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#a35200' }}>
-        {ALERT}
-        <span style={{ flex: 1, minWidth: 0, font: '500 13.5px/1.4 var(--font-sans)', color: '#171717' }}>{view.title}</span>
-        <span style={{ flex: 'none', font: '11.5px/1 var(--font-sans)', color: '#a35200' }}>Needs you</span>
-      </div>
-      <div style={{ font: '12.5px/1.5 var(--font-sans)', color: '#4d4d4d' }}>{need.reason}{need.jobs > 1 ? ` · ${need.jobs} agents wait on it` : ''}</div>
-      {view.hint && <div style={{ font: '12px/1.5 var(--font-sans)', color: '#8f8f8f' }}>{view.hint}</div>}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <button type="button" className="cx-btn" data-connect-need-open="1" disabled={need.busy} onClick={() => onOpen(need)}>{need.busy ? 'Waiting…' : view.action}</button>
-        {web && <button type="button" className="cx-ghost" data-connect-need-signins="1" onClick={onSignins}>Bring over sign-ins from Chrome…</button>}
-        {(web || need.opened) && <button type="button" className="cx-ghost" data-connect-need-done="1" onClick={() => onDone(need)}>Done</button>}
+    <div data-connect-need={need.kind} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 12px 10px 14px', border: '1px solid #f5c26b', borderRadius: 10, background: '#fffaf0', animation: `rise 200ms ${EASE}` }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={{ flex: 'none', display: 'flex', color: '#a35200' }}>{logoOf(need.app) || ALERT}</span>
+        <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
+          <span style={{ font: '500 13.5px/1.4 var(--font-sans)', color: '#171717' }}>{view.title}</span>
+          {need.reason && need.reason !== view.title && <span style={{ font: '12px/1.4 var(--font-sans)', color: '#8f8f8f', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{need.reason}</span>}
+        </span>
         <button type="button" className="bart-text" data-connect-need-skip="1" onClick={() => onSkip(need)}>Skip</button>
+        <button type="button" className="cx-btn" data-connect-need-open="1" disabled={need.busy} onClick={() => onOpen(need)}>{need.busy ? 'Waiting…' : view.action}</button>
       </div>
       {need.error && <div style={{ font: '12px/1.5 var(--font-sans)', color: '#e70022' }}>{need.error}</div>}
     </div>
   );
 }
 
-/** One import (or survey, or recall) in the progress list: its label, status, what it is doing, and Stop. */
+/** One import (or survey, or recall) in the progress list: its label, status, and Stop; what went wrong, if it failed. */
 function JobRow({ job, onStop }) {
   const status = statusOf(job);
   return (
     <div data-connect-job={job.status} data-connect-job-kind={job.kind} style={{ display: 'flex', flexDirection: 'column', gap: 3, padding: '9px 0', borderBottom: '1px solid #f2f2f2' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         {logoOf(job.apps[0]) || <span style={{ width: 14 }} />}
-        <span style={{ flex: 1, minWidth: 0, font: '13.5px/1.4 var(--font-sans)', color: '#171717', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{job.label}</span>
+        <span style={{ flex: 1, minWidth: 0, font: '13.5px/1.4 var(--font-sans)', color: status.done ? '#4d4d4d' : '#171717', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{job.label}</span>
         <span style={{ flex: 'none', font: '12.5px/1 var(--font-sans)', color: status.failed ? '#e70022' : status.waiting ? '#a35200' : status.done ? '#171717' : '#8f8f8f' }}>{status.text}</span>
         {!status.done && <button type="button" className="bart-text" data-connect-stop-job={job.id} onClick={() => onStop(job)} style={{ padding: '2px 0 2px 4px' }}>Stop</button>}
       </div>
-      {(job.activity || job.summary || job.error) && <span style={{ paddingLeft: 24, font: '12px/1.5 var(--font-sans)', color: job.error ? '#e70022' : '#8f8f8f', overflowWrap: 'anywhere' }}>{job.error || (status.done ? job.summary : `${job.activity}…`.replace(/……$/, '…'))}</span>}
+      {job.error && <span style={{ paddingLeft: 24, font: '12px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere' }}>{job.error}</span>}
     </div>
   );
 }
 
-/** The action log: every step of every agent, newest first. */
-function ActivityLog({ log }) {
-  const rows = [...(log || [])].reverse();
+/**
+ * Under the chat, one line that never grows (2026-10-08: "list the current action of the agent and cycle through the
+ * subagents at the bottom, similar to how claude code lists subagents"): what the librarian is doing, then the subagents
+ * at work, one at a time, every few seconds the next.
+ */
+function WorkLine({ session }) {
+  const [tick, setTick] = React.useState(0);
+  const busy = workJobs(session.jobs).filter((job) => job.status === 'running' || job.status === 'waiting').length;
+  React.useEffect(() => {
+    if (busy < 2) return undefined;
+    const timer = setInterval(() => setTick((n) => n + 1), 2600);
+    return () => clearInterval(timer);
+  }, [busy]);
+  const view = workLine(session, tick);
+  if (!view) return null;
+  const { agent } = view;
   return (
-    <div data-connect-log="1" style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-      {rows.map((entry, i) => (
-        <div key={`${entry.at}-${i}`} style={{ display: 'grid', gridTemplateColumns: '38px 140px 1fr', gap: 8, alignItems: 'baseline', padding: '3px 0', font: '12px/1.45 var(--font-sans)' }}>
-          <span style={{ color: '#c9c9c9', fontVariantNumeric: 'tabular-nums' }}>{logTime(entry.at)}</span>
-          <span style={{ color: '#8f8f8f', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.who}</span>
-          <span style={{ color: '#171717', overflowWrap: 'anywhere' }}>{entry.text}</span>
-        </div>
-      ))}
-      {!rows.length && <span style={{ font: 'italic 12.5px/1.5 var(--font-sans)', color: '#8f8f8f' }}>Nothing yet.</span>}
+    <div data-connect-workline="1" aria-live="polite" style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 8, height: 24, padding: '0 4px', font: '12.5px/1 var(--font-sans)', color: '#8f8f8f', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+      <span aria-hidden="true" style={{ flex: 'none', width: 7, height: 7, borderRadius: '50%', background: agent && agent.waiting && !view.lead ? '#e8a317' : '#0070f3', animation: 'github-wait 1.4s ease-in-out infinite' }} />
+      {view.lead && <span data-connect-thinking="1" style={{ flex: 'none', maxWidth: agent ? '45%' : '100%', overflow: 'hidden', textOverflow: 'ellipsis', color: '#4d4d4d' }}>{view.lead}</span>}
+      {view.lead && agent && <span style={{ flex: 'none', color: '#c9c9c9' }}>·</span>}
+      {agent && (
+        <span key={agent.id} data-connect-subagent={agent.id} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6, animation: `rise 220ms ${EASE}` }}>
+          <span style={{ flex: 'none', color: '#4d4d4d' }}>⎿ {agent.label}</span>
+          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', color: agent.waiting ? '#a35200' : '#8f8f8f' }}>{agent.doing}</span>
+          {agent.place && <span style={{ flex: 'none', color: '#c9c9c9', fontVariantNumeric: 'tabular-nums' }}>{agent.place}</span>}
+        </span>
+      )}
     </div>
   );
 }
@@ -329,8 +342,6 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   const [draft, setDraft] = React.useState('');
   const [error, setError] = React.useState('');
   const [authorizing, setAuthorizing] = React.useState(false);
-  const [signins, setSignins] = React.useState(false);
-  const [logOpen, setLogOpen] = React.useState(false);
   const [library, setLibrary] = React.useState([]);
   const [busyRepo, setBusyRepo] = React.useState('');
   const addedRepos = React.useRef(new Set()); // library ids this window added (unticking takes them out again)
@@ -355,11 +366,22 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     api.tools().then(setToolSnap).catch(() => {});
     readProviders();
     readLibrary();
-    if (sessionId) {
-      api.connectState(sessionId).then((snapshot) => { setSession(snapshot); setView(snapshot.finished ? 'working' : 'chat'); api.connectMinimize(sessionId, false).catch(() => {}); }).catch((failure) => { setError(errorMessage(failure)); setView('choose'); });
-    } else {
+    const show = (snapshot) => { idRef.current = snapshot.id; setSession(snapshot); setView(snapshot.finished ? 'working' : 'chat'); api.connectMinimize(snapshot.id, false).catch(() => {}); };
+    const choose = () => {
       api.connectDetect().then((value) => { setFound(value); setPicks(initialPicks(value)); }).catch((failure) => { setError(errorMessage(failure)); setPicks(initialPicks(null)); });
       api.connectConnectors().then((list) => setConnectorStatus(Object.fromEntries((list || []).map((entry) => [entry.app, entry])))).catch(() => {});
+    };
+    if (sessionId) {
+      api.connectState(sessionId).then(show).catch((failure) => { setError(errorMessage(failure)); setView('choose'); });
+    } else if (!popup) {
+      // Onboarding again after Engelbart closed in the middle of it: the session that picked up where it was (main's
+      // resume) is shown, not a new one.
+      api.connectList().then((list) => {
+        const going = (list || []).find((entry) => entry.mode === 'onboarding' && !entry.projectId && !entry.stopped && !entry.dismissed);
+        if (going) { show(going); onSession(going.id); } else choose();
+      }).catch(choose);
+    } else {
+      choose();
     }
     return () => offs.forEach((off) => off && off());
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -461,7 +483,6 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
       setSession(await api.connectNeed(session.id, need.id, 'open'));
     } catch (failure) { setError(errorMessage(failure)); }
   };
-  const needDone = (need) => api.connectNeed(session.id, need.id, 'done').then(setSession).catch((failure) => setError(errorMessage(failure)));
   const needSkip = (need) => api.connectNeed(session.id, need.id, 'skip').then(setSession).catch((failure) => setError(errorMessage(failure)));
   const pickProvider = (next) => {
     setProvider(next);
@@ -566,7 +587,6 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
             {/* What the agents will do, and the permissions they need: "add the permission requests … as well as a disclaimer that the agents will do all of it automatically" */}
             <div data-connect-permissions="1" style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '14px 16px', border: '1px solid #eaeaea', borderRadius: 10, background: '#fafafa' }}>
               <div style={{ font: '500 13.5px/1.4 var(--font-sans)', color: '#171717' }}>Agents do all of this for you</div>
-              <div style={{ font: '12.5px/1.55 var(--font-sans)', color: '#4d4d4d', textWrap: 'pretty' }}>Once you start, agents work in the background on their own: they read what you picked on this Mac and open your accounts in Engelbart’s own hidden browser to bring things in. You won’t be asked to export or download anything. They never type a password; when an app needs you to sign in, it shows here. You can watch every step and stop them at any time.</div>
               {[
                 { key: 'files', label: 'Read files on this Mac', why: permissions.files ? 'Anywhere in your home folder' : 'Only the folders of what you picked' },
                 ...(asks.web.length ? [{ key: 'browser', label: 'Use my accounts in the background', why: asks.web.join(', ') }] : []),
@@ -580,12 +600,6 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
                   </span>
                 </button>
               ))}
-              {asks.web.length > 0 && permissions.browser && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, paddingLeft: 24 }}>
-                  <span style={{ flex: 1, font: '12px/1.45 var(--font-sans)', color: '#8f8f8f' }}>Already signed in in Chrome? Bring those sign-ins over so the agents need nothing from you.</span>
-                  <button type="button" className="cx-ghost" data-connect-signins="1" onClick={() => setSignins(true)}>Bring over…</button>
-                </div>
-              )}
               {asks.notes && (
                 <div data-connect-notes-permission={notesState || 'ask'} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   {logoOf('Apple Notes')}
@@ -603,14 +617,13 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
                     {logoOf(app)}
                     <span style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
                       <span style={{ font: '13px/1.4 var(--font-sans)', color: '#171717' }}>{status.connected ? `Connected to ${app}` : `Sign in to ${app}`}</span>
-                      <span style={{ font: '12px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{status.connected ? 'The agents read it through its own connector' : `${app}’s own connector: its sign-in page opens in your browser`}</span>
+                      <span style={{ font: '12px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{status.connected ? 'Through its own connector' : 'Opens in your browser'}</span>
                     </span>
                     {status.pending ? <button type="button" className="bart-text" onClick={() => api.connectConnectorCancel(app).catch(() => {})}>Cancel</button>
                       : !status.connected && <button type="button" className="cx-ghost" onClick={() => connectorSignIn(app)}>Sign in…</button>}
                   </div>
                 );
               })}
-              <div style={{ font: '12px/1.5 var(--font-sans)', color: '#8f8f8f', textWrap: 'pretty' }}>When everything is in, an agent writes MEMORY.md in your Engelbart folder from it, so every agent knows your research, and a second one takes out anything secret before it is saved.</div>
             </div>
 
             <div className="focus-bd2" style={{ display: 'flex', padding: '10px 12px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', transition: 'border-color 120ms' }}>
@@ -628,11 +641,6 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
       {view === 'chat' && session && (
         <>
           {header(`Refine with ${targetName}`, { backButton: true })}
-          {(jobs.length > 0 || needs.length > 0) && (
-            <div data-connect-jobs="1" style={{ flex: 'none', display: 'flex', flexWrap: 'wrap', gap: '4px 14px', padding: '8px 20px', borderBottom: '1px solid #f2f2f2', font: '12px/1.4 var(--font-sans)', color: '#8f8f8f' }}>
-              {jobs.map((job) => { const status = statusOf(job); return <span key={job.id} title={job.activity || job.summary || job.error || ''} style={{ whiteSpace: 'nowrap' }}><span style={{ color: '#4d4d4d' }}>{job.label}</span> · <span style={{ color: status.failed ? '#e70022' : status.waiting ? '#a35200' : status.done ? '#171717' : '#8f8f8f' }}>{status.text}</span></span>; })}
-            </div>
-          )}
           <div ref={chatRef} data-connect-chat="1" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16, padding: '18px 20px' }}>
             {session.chat.map((item, i) => {
               if (item.role !== 'agent') return <div key={i} data-connect-user="1" style={{ alignSelf: 'flex-end', maxWidth: '80%', padding: '8px 12px', borderRadius: 12, background: '#f2f2f2', font: '14.5px/1.6 var(--font-sans)', color: '#171717', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', animation: `rise 160ms ${EASE}` }}>{item.text}</div>;
@@ -645,22 +653,17 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
                 </div>
               );
             })}
-            {session.thinking && <div data-connect-thinking="1" style={{ font: 'italic 14px/1.5 var(--font-sans)', color: '#8f8f8f' }}>{session.activity ? `${session.activity}…`.replace(/……$/, '…') : 'Thinking…'}</div>}
             {!session.thinking && session.waiting && <div data-connect-waiting="1" style={{ font: 'italic 13.5px/1.5 var(--font-sans)', color: '#8f8f8f' }}>An agent is looking; the librarian goes on when it reports.</div>}
-            {needs.map((need) => <NeedCard key={need.id} need={need} onOpen={openNeed} onDone={needDone} onSkip={needSkip} onSignins={() => setSignins(true)} />)}
+            {needs.map((need) => <NeedCard key={need.id} need={need} onOpen={openNeed} onSkip={needSkip} />)}
             {(session.error || error) && <div data-connect-error="1" style={{ font: '12.5px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere' }}>{session.error || error}{session.error ? ' Reply to try again.' : ''}</div>}
           </div>
-          {logOpen && (
-            <div style={{ flex: 'none', maxHeight: 180, overflowY: 'auto', padding: '8px 20px', borderTop: '1px solid #f2f2f2', background: '#fcfcfc' }}><ActivityLog log={session.log} /></div>
-          )}
           <div style={{ flex: 'none', padding: '0 16px 12px' }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px 12px 16px', background: '#fafafa', borderRadius: 10, marginTop: 8 }}>
               <textarea ref={draftRef} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendDraft(); } }} rows={1} data-connect-draft="1" placeholder="Reply…" spellCheck={false} style={{ flex: 1, minWidth: 0, display: 'block', minHeight: 24, margin: 0, padding: 0, border: 0, background: 'none', outline: 'none', resize: 'none', font: '15px/1.6 var(--font-sans)', color: '#171717' }} />
               <ProviderChip providers={providers} provider={session.provider} fallback={session.choice} onPick={pickProvider} onSend={sendDraft} sendOn={!!draft.trim() && !session.thinking} sendLabel="Send" style={{ marginTop: -3 }} />
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingTop: 10 }}>
-              <button type="button" className="bart-text" data-connect-activity="1" onClick={() => setLogOpen((now) => !now)}>{logOpen ? 'Hide activity' : `Activity${running ? ` · ${running} working` : ''}`}</button>
-              <span style={{ flex: 1 }} />
+              <div style={{ flex: 1, minWidth: 0 }}><WorkLine session={session} /></div>
               {/* "the import button should be in bottom right and should not be highlighted until the agent returns all questions have been asked" */}
               <button type="button" data-connect-import="1" data-ready={done ? '1' : '0'} onClick={importNow} title={done ? 'Bring in everything picked' : 'The librarian still has questions; Import now uses sensible defaults for the rest'} style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 7, height: 34, padding: '0 16px 0 14px', border: `1px solid ${done ? '#0070f3' : '#eaeaea'}`, borderRadius: 8, background: done ? '#0070f3' : '#fff', color: done ? '#fff' : '#8f8f8f', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', whiteSpace: 'nowrap', transition: 'background 160ms, color 160ms, border-color 160ms' }}>{DOWNLOAD}Import</button>
             </div>
@@ -672,10 +675,10 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
         <>
           {header(session.stopped ? 'Stopped' : running || (session.memory && !memoryLine(session.memory).done) ? 'Bringing everything in' : 'Your library is connected', { lead: <span style={{ flex: 'none', width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', background: '#171717', color: '#fff' }}>{CHECK}</span> })}
           <div data-connect-progress="1" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12, padding: '14px 20px 16px' }}>
-            <span style={{ font: '12.5px/1.55 var(--font-sans)', color: '#8f8f8f', textWrap: 'pretty' }}>{session.stopped ? 'Everything was stopped. What came in stays in your library.' : `The agents keep working in the background: you can put this away, and the chip at the top right follows it. ${session.projectId ? 'Notes go into the project.' : 'Notes go into the project you create next.'}`}</span>
-            {needs.map((need) => <NeedCard key={need.id} need={need} onOpen={openNeed} onDone={needDone} onSkip={needSkip} onSignins={() => setSignins(true)} />)}
+            <span style={{ font: '12.5px/1.55 var(--font-sans)', color: '#8f8f8f', textWrap: 'pretty' }}>{session.stopped ? 'Everything was stopped. What came in stays in your library.' : 'This keeps going in the background, and your Inbox says when it needs you or is done.'}</span>
+            {needs.map((need) => <NeedCard key={need.id} need={need} onOpen={openNeed} onSkip={needSkip} />)}
             <div style={{ display: 'flex', flexDirection: 'column' }}>
-              {jobs.map((job) => <JobRow key={job.id} job={job} onStop={stopJob} />)}
+              {runningFirst(jobs).map((job) => <JobRow key={job.id} job={job} onStop={stopJob} />)}
               {!jobs.length && <span style={{ padding: '9px 0', font: 'italic 13px/1.5 var(--font-sans)', color: '#8f8f8f' }}>Nothing could be reached: sign in or allow it in the chat first.</span>}
               {(() => {
                 const line = memoryLine(session.memory);
@@ -690,10 +693,6 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
                 );
               })()}
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <span style={{ font: '500 11px/1 var(--font-sans)', letterSpacing: '.06em', textTransform: 'uppercase', color: '#8f8f8f' }}>Activity</span>
-              <ActivityLog log={session.log} />
-            </div>
             {error && <span data-connect-error="1" style={{ font: '12.5px/1.5 var(--font-sans)', color: '#e70022' }}>{error}</span>}
           </div>
           <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 12, padding: '12px 20px', borderTop: '1px solid #eaeaea' }}>
@@ -704,7 +703,6 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
         </>
       )}
 
-      {signins && <ImportSignins opensLater onClose={() => setSignins(false)} onOpenSite={() => {}} />}
     </div>
   );
 }
