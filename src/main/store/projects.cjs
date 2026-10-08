@@ -18,8 +18,8 @@
 //   <dataRoot>/.trash/<slug>/…                       a deleted project, restorable for a week (trashProject)
 //
 // `directory` is where the project's code lives: terminals and agents start there.
-// `brief` (2026-10-07) is what the person answered on onboarding's cards, in their own words: { working, why, question }
-// since 2026-10-08 (before: { working, why, unsure, findOut }), read by @bart and Build (./onboarding.cjs briefBlock).
+// `brief` (2026-10-07) is what the person answered on onboarding's cards, in their own words: { working, goal, question }
+// since 2026-10-08 (before: { working, why, question }, and first { working, why, unsure, findOut }), read by @bart and Build (./onboarding.cjs briefBlock).
 // A workspace's `starts` are its questions to investigate (the first workspace's, from onboarding): [{ id, text, by }],
 // `by` 'bart' until the person edits one.
 // A workspace's `context` is a flat list of library ids. Grouping is done by nesting a workspace.
@@ -53,7 +53,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const MAX_TREE_ENTRIES = 500;
 const MAX_TREE_DEPTH = 6;
 const MAX_DESCRIPTION = 4000;
-const BRIEF_KEYS = ['working', 'why', 'question', 'unsure', 'findOut']; // unsure and findOut: projects made before 2026-10-08
+const BRIEF_KEYS = ['working', 'goal', 'question', 'why', 'unsure', 'findOut']; // why, unsure and findOut: projects made before (2026-10-08)
 const MAX_STARTS = 12;
 
 const WELCOME_NOTE = [

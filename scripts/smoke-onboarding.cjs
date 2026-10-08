@@ -3,10 +3,9 @@
 // npm run build && npx electron scripts/smoke-onboarding.cjs
 // Runs the real app, hidden, against disposable data, the fake Bart (ENGELBART_BART_FAKE=1) and a fake OpenAlex served
 // here (ENGELBART_OPENALEX_API: no call reaches the real one, whose keyless allowance is small), and walks onboarding
-// as a new user (2026-10-08 follow-ups): What are you working on? → Why are you interested in this? (each card its
-// question and box, nothing above it) → Putting it together (their answers joined by Bart, their parts underlined and
-// editable, and the question, filled with Bart's suggestion; Submit always works) → the preparing
-// screen (no step counter) → the workspace: "Questions to investigate", rows of a triangle and the words, no way to
+// as a new user (2026-10-08 follow-ups): What are you working on? → What are you trying to do with it? (each card its
+// question and box, nothing above it, no step counter) → What research question would you like to start with? (an empty
+// field; Show examples, ↻ for others, one clicked fills the field) → the preparing screen → the workspace: "Questions to investigate", rows of a triangle and the words, no way to
 // delete one, papers as rows, the empty page's hint. ENGELBART_ONBOARDING_SHOTS=<dir> saves pictures along the way.
 // ENGELBART_ONBOARDING_429=1 has the fake OpenAlex refuse every call: the block says OpenAlex is not available.
 const { app } = require('electron');
@@ -88,31 +87,31 @@ async function main() {
   assert.equal(await js(wc, '!!document.querySelector("[data-onboarding-so-far]")'), false, 'nothing above the card');
   await fill(wc, '[data-onboarding-field="working"]', 'How what students do before asking an AI tutor relates to what they learn');
   await click(wc, '[data-onboarding-submit]');
-  // 2. Why are you interested in this?
-  await until(async () => (await step()) === 'why', 'the second card');
-  assert.equal(await js(wc, 'document.querySelector("[data-onboarding-card] div").textContent'), 'Why are you interested in this?');
-  assert.equal(await js(wc, '!!document.querySelector("[data-onboarding-so-far]")'), false, 'no growing sentence above the card');
-  await fill(wc, '[data-onboarding-field="why"]', 'Because instructors could grade the process, not only the answer');
+  // 2. What are you trying to do with it?
+  await until(async () => (await step()) === 'goal', 'the second card');
+  assert.equal(await js(wc, 'document.querySelector("[data-onboarding-card] div").textContent'), 'What are you trying to do with it?');
+  assert.equal(await js(wc, '!!document.querySelector("[data-onboarding-step-of]")'), false, 'no step counter');
+  await fill(wc, '[data-onboarding-field="goal"]', 'Find data instructors could grade the process with');
   await pause(500); // the card rises in
-  await shot(wc, '1-why');
+  await shot(wc, '1-goal');
   await click(wc, '[data-onboarding-submit]');
-  // 3. Putting it together: Bart's sentence, the question filled with Bart's suggestion, Submit enabled throughout.
-  await until(async () => (await step()) === 'together', 'Putting it together');
-  assert.equal(await js(wc, '!!document.querySelector("[data-onboarding-field=unsure]")'), false);
-  await until(() => js(wc, '!!document.querySelector("[data-onboarding-sentence]")'), 'the sentence');
-  const joined = await js(wc, '({ text: document.querySelector("[data-onboarding-sentence]").textContent, bart: document.querySelector("[data-onboarding-sentence]").dataset.joined || null, parts: [...document.querySelectorAll("[data-onboarding-sentence] [data-onboarding-part]")].map((el) => el.dataset.onboardingPart) })');
-  assert.equal(joined.text, "I'm working on how what students do before asking an AI tutor relates to what they learn because instructors could grade the process, not only the answer.");
-  assert.equal(joined.bart, '1', 'joined by Bart, not their words as they are');
-  assert.deepEqual(joined.parts, ['working', 'why'], 'their parts, underlined and editable');
-  assert.equal(await js(wc, 'document.querySelector("[data-onboarding-submit]").disabled'), false, 'Submit works before anything is typed');
-  assert.match(await js(wc, 'document.querySelector("label[for=ob-question]").textContent'), /^The question I want to answer:$/);
-  const suggested = await until(() => js(wc, 'document.querySelector("[data-onboarding-question]").value'), 'Bart\'s suggestion in the field');
-  assert.equal(suggested, 'What would a fake question ask?');
-  await shot(wc, '2-together');
-  await click(wc, '[data-onboarding-stuck]');
-  const another = await until(async () => { const value = await js(wc, 'document.querySelector("[data-onboarding-question]") && document.querySelector("[data-onboarding-question]").value'); return value && value !== suggested ? value : null; }, 'Stuck? suggests another question');
-  assert.match(another, /\?$/);
-  await fill(wc, '[data-onboarding-question]', 'Which behaviors before asking predict learning?');
+  // 3. Their research question: empty until they type or choose; Show examples, ↻ for three others, a click fills it.
+  await until(async () => (await step()) === 'question', 'the question card');
+  assert.equal(await js(wc, 'document.querySelector("[data-onboarding-card] div").textContent'), 'What research question would you like to start with?');
+  assert.equal(await js(wc, 'document.querySelector("[data-onboarding-field=question]").value'), '', 'Bart never fills it himself');
+  assert.equal(await js(wc, 'document.querySelector("[data-onboarding-submit]").disabled'), true);
+  assert.equal(await js(wc, '!!document.querySelector("[data-onboarding-sentence], [data-onboarding-stuck]")'), false, 'no sentence, no Stuck?');
+  await until(() => js(wc, '!document.querySelector("[data-onboarding-examples]").disabled'), 'Show examples ready');
+  await click(wc, '[data-onboarding-examples]');
+  const firstExamples = await until(async () => { const list = await js(wc, '[...document.querySelectorAll("[data-onboarding-example]")].map((el) => el.textContent)'); return list.length ? list : null; }, 'the examples');
+  assert.equal(firstExamples.length, 3);
+  await shot(wc, '2-examples');
+  await click(wc, '[data-onboarding-examples-again]');
+  const others = await until(async () => { const list = await js(wc, '[...document.querySelectorAll("[data-onboarding-example]")].map((el) => el.textContent)'); return list.length && list[0] !== firstExamples[0] ? list : null; }, 'other examples');
+  assert.ok(others.every((one) => !firstExamples.includes(one)), 'three new ones');
+  await click(wc, '[data-onboarding-example]');
+  assert.equal(await js(wc, 'document.querySelector("[data-onboarding-field=question]").value'), others[0], 'a click fills the field');
+  await fill(wc, '[data-onboarding-field="question"]', 'Which behaviors before asking predict learning?');
   await shot(wc, '3-their-question');
   await click(wc, '[data-onboarding-submit]');
   // 4. The preparing screen: no step counter.
@@ -145,7 +144,7 @@ async function main() {
   await pause(400);
   await shot(wc, '5-workspace');
   const brief = JSON.parse(fs.readFileSync(fs.readdirSync(path.join(root, '.engelbart', 'test')).map((dir) => path.join(root, '.engelbart', 'test', dir, 'project.json')).find((file) => fs.existsSync(file)) || fs.readdirSync(path.join(root, '.engelbart')).map((dir) => path.join(root, '.engelbart', dir, 'project.json')).find((file) => fs.existsSync(file)), 'utf8')).brief;
-  assert.deepEqual(Object.keys(brief).sort(), ['question', 'why', 'working']);
+  assert.deepEqual(Object.keys(brief).sort(), ['goal', 'question', 'working']);
   console.log(`onboarding smoke passed (${refusing ? 'OpenAlex refusing' : 'OpenAlex answering'}); fake OpenAlex calls: ${calls.filter((one) => one.startsWith('/works')).length}`);
 }
 

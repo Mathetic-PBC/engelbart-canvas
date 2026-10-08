@@ -180,7 +180,7 @@ function papersBlock(papers, sub) {
 
 function writerMessage({ sub, question, brief, papers }) {
   const { quotable, unquotable } = papersBlock(papers, `${sub} ${question}`);
-  const said = brief ? Object.entries({ 'Working on': brief.working, 'Why they are interested': brief.why, 'Least sure about': brief.unsure }).filter(([, v]) => v).map(([k, v]) => `${k}: ${clean(v, 400)}`).join('\n') : '';
+  const said = brief ? Object.entries({ 'Working on': brief.working, 'Trying to': brief.goal, 'Why they are interested': brief.why, 'Least sure about': brief.unsure }).filter(([, v]) => v).map(([k, v]) => `${k}: ${clean(v, 400)}`).join('\n') : '';
   return [
     `Research question: ${clean(question, 300)}`,
     `Sub-question: ${clean(sub, 300)}`,

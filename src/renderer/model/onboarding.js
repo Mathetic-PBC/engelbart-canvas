@@ -1,27 +1,29 @@
 // Onboarding's order and gates (2026-09-28; as brainstorm cards since 2026-10-07, design/onboarding-brainstorm). Pure:
-// screens/Onboarding.jsx asks where Submit, Skip and Wrap up go, and how their own words become the sentence.
+// screens/Onboarding.jsx asks where Submit, Skip and Wrap up go.
 
 import { launchRows, installable } from './tools.js';
 
 /**
  * A new install: welcome, the tools (second, and only when something is missing: the cards need a working model), the
- * cards, then the project it opens. + Project on the all-projects screen: the cards and the project. 'open' (the
- * preparing screen) is in the flow but has no counter. The tools screen is left out when `tools` is false: the launch
- * check found nothing to install. Since 2026-10-08 (a hand test): two questions, then Putting it together; "What are you
- * least sure about?" is gone.
+ * cards, then the project it opens. + Project on the all-projects screen: the cards and the project. 'open' is the
+ * preparing screen. The tools screen is left out when `tools` is false: the launch check found nothing to install.
+ * Since 2026-10-08 (a hand test: Bart's question from two thin answers was a guess): what they work on, what they are
+ * trying to do with it, then the research question they want to start with, theirs (or an example of Bart's they
+ * chose). "Putting it together" and the joined sentence are gone, and so is the step counter.
  */
 export const FLOWS = {
-  new: ['welcome', 'tools', 'working', 'why', 'together', 'open'],
-  existing: ['working', 'why', 'together', 'open'],
+  new: ['welcome', 'tools', 'working', 'goal', 'question', 'open'],
+  existing: ['working', 'goal', 'question', 'open'],
 };
 
-/** The cards, in order: two questions, then their answers put together, with the question they settle on. */
-export const CARDS = ['working', 'why', 'together'];
+/** The cards, in order. */
+export const CARDS = ['working', 'goal', 'question'];
 
-/** Each question card's words (BSC-2, BSC-3; the second reworded 2026-10-08, it was "Why this, and why now?"). */
+/** Each card's words. The question card also has Bart's examples (screens/Onboarding.jsx). */
 export const QUESTIONS = {
   working: { title: 'What are you working on?', placeholder: 'In your own words…', label: 'What you are working on' },
-  why: { title: 'Why are you interested in this?', placeholder: 'In a sentence or two…', label: 'Why you are interested in this' },
+  goal: { title: 'What are you trying to do with it?', placeholder: 'Build a model, write a review, decide what to try…', label: 'What you are trying to do with it' },
+  question: { title: 'What research question would you like to start with?', placeholder: 'Your question…', label: 'The research question you want to start with' },
 };
 
 export function flowOf(mode, { tools = true } = {}) {
@@ -37,94 +39,23 @@ export function forward(mode, step, options) {
   return (at < 0 ? null : full.slice(at + 1).find((name) => flow.includes(name))) || step;
 }
 
-/** Wrap up: from a question card straight to Putting it together; anywhere else, on as Submit goes. */
+/** Wrap up: from the first two cards straight to the question card; anywhere else, on as Submit goes. */
 export function wrapUp(mode, step, options) {
-  return QUESTIONS[step] ? 'together' : forward(mode, step, options);
+  return step === 'working' || step === 'goal' ? 'question' : forward(mode, step, options);
 }
 
 /**
- * The counter under a screen: `{ count, index }`, or null off the flow and on the preparing screen ('open', no step
- * counter since 2026-10-08), which is not counted either.
- */
-export function pagerOf(mode, step, options) {
-  const flow = flowOf(mode, options).filter((name) => name !== 'open');
-  const index = flow.indexOf(step);
-  return index < 0 ? null : { count: flow.length, index };
-}
-
-/**
- * A card's buttons: Skip and Submit always; Wrap up on the question cards only (on Putting it together there is nothing
- * to jump to). Submit is greyed on a question card while its field is empty; on Putting it together it always works
- * (2026-10-08: it waited for a blank nothing said was needed).
+ * A card's buttons: Skip and Submit always; Wrap up on the first two cards only. Submit is greyed while the field is
+ * empty (Skip on the question card opens the project on a question of Bart's).
  */
 export function cardButtons(step, value) {
-  return { showWrap: !!QUESTIONS[step], submitDisabled: step === 'together' ? false : !String(value || '').trim() };
+  return { showWrap: step === 'working' || step === 'goal', submitDisabled: !String(value || '').trim() };
 }
 
-const LEADS = {
-  working: /^(?:(?:i['’]?m|i\s+am|we['’]?re|we\s+are)\s+)?(?:currently\s+)?(?:working\s+on|studying|researching|looking\s+(?:at|into))\s+/i,
-  why: /^(?:so\s+that|because|since|so)\s+/i,
-};
-
-/**
- * An answer as it reads inside the sentence: what the sentence already says taken off its start ("I'm working on",
- * "because", "so that"), lower case unless it starts with a name or an acronym, no full stop.
- */
-export function theirWords(text, kind) {
-  let words = String(text || '').replace(/\s+/g, ' ').trim();
-  if (LEADS[kind]) words = words.replace(LEADS[kind], '');
-  words = words.replace(/[.!…]+$/, '').trim();
-  const first = words.split(' ')[0] || '';
-  const keep = first === 'I' || /^I['’]/.test(first) || (first.length > 1 && first === first.toUpperCase()) || /^[A-Z][a-z]*[A-Z]/.test(first);
-  return words && !keep ? words[0].toLowerCase() + words.slice(1) : words;
-}
-
-/** Putting it together's two parts, from the answers: their words, not Bart's. */
-export function partsOf(answers) {
-  return { working: theirWords(answers.working, 'working'), why: theirWords(answers.why, 'why') };
-}
-
-/**
- * The sentence's clauses, in order, each with the part it is made from ('working', 'why'): "I'm working on …",
- * "because …". A part left empty is left out with the words that lead into it, so what is left still reads.
- */
-export function clausesOf({ working = '', why = '' }) {
-  const w = theirWords(working, 'working'), y = theirWords(why, 'why');
-  const clauses = [];
-  if (w) clauses.push({ part: 'working', text: `I’m working on ${w}` });
-  if (y) clauses.push({ part: 'why', text: clauses.length ? `because ${y}` : `I’m interested in this because ${y}` });
-  return clauses;
-}
-
-/**
- * Putting it together's sentence (2026-10-08): Bart joins their answers so it reads naturally, keeping their words
- * (main/bart/onboard.cjs join), as a frame around their two parts: { lead, join, end } and which parts it holds. Until
- * he has (JOIN_MS at most), or when he could not, the frame is their words as they are (FRAME).
- */
-export const JOIN_MS = 3000;
-export const FRAME = { lead: 'I’m working on ', join: ' because ', end: '.', parts: ['working', 'why'] };
-
-/** Bart's join as main sends it → { frame, parts } for the card, or null when it is not one (the card keeps FRAME). */
-export function joinedOf(out) {
-  if (!out || typeof out !== 'object') return null;
-  const text = (key) => (typeof out[key] === 'string' ? out[key] : '');
-  const parts = ['working', 'why'].filter((key) => text(key).trim());
-  if (!parts.length || !text('lead').trim()) return null;
-  return { frame: { lead: text('lead'), join: parts.length > 1 ? text('join') : '', end: text('end'), parts }, parts: { working: text('working').trim(), why: text('why').trim() } };
-}
-
-/**
- * The sentence as the project's description: Bart's frame around their parts as they now are; their words alone
- * ("I'm working on … because …."; nothing at all is '') without one, or when a part his frame holds was emptied.
- */
-export function sentenceOf(parts, frame = null) {
-  const own = (key) => String((parts || {})[key] || '').replace(/\s+/g, ' ').trim();
-  if (frame && frame !== FRAME && frame.parts.every((key) => own(key))) {
-    const [first, second] = frame.parts;
-    return `${frame.lead}${own(first)}${second ? `${frame.join}${own(second)}` : ''}${frame.end}`.replace(/\s+/g, ' ').trim();
-  }
-  const clauses = clausesOf(parts || {});
-  return clauses.length ? `${clauses.map((clause) => clause.text).join(' ')}.` : '';
+/** The project's description: their two answers, as they wrote them. */
+export function descriptionOf({ working = '', goal = '' } = {}) {
+  const line = (text) => { const words = String(text || '').replace(/\s+/g, ' ').trim().replace(/[.!…]+$/, ''); return words ? `${words[0].toUpperCase()}${words.slice(1)}.` : ''; };
+  return [line(working), goal.trim() ? `Trying to: ${line(goal)}` : ''].filter(Boolean).join(' ');
 }
 
 /** A question as the field and the title show it: one line, a capital first, a question mark last; '' for none. */
@@ -135,7 +66,7 @@ export function questionOf(text) {
 
 /** The plan when Bart could not be asked at all: a name from their words, their question, no sub-questions. */
 export function planFallback(answers, question) {
-  const words = theirWords(answers.working, 'working').split(' ').filter((word) => word.length > 3).slice(0, 4);
+  const words = String(answers.working || '').replace(/^(?:i['’]?m|i\s+am)\s+(?:working\s+on|studying)\s+/i, '').toLowerCase().split(/\s+/).filter((word) => word.length > 3).slice(0, 4);
   const name = words.length ? words.map((word) => word[0].toUpperCase() + word.slice(1)).join(' ') : 'New project';
   return { name, question: questionOf(question), starts: [] };
 }

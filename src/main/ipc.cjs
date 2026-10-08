@@ -430,12 +430,12 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // unticked again before the project exists. Bart's part while the cards are answered (./bart/onboard.cjs, 2026-10-07):
   // onboarding-open starts its session and answers { id }; onboarding-warm starts it again when it is not running;
   // onboarding-answer, after a card, answers { line, queries }, the line streamed first on `engelbart:onboarding-line`
-  // ({ id, card, line }), the searches running on in main; onboarding-join, their answers joined for Putting it together
-  // ({ lead, working, join, why, end }, or {}); onboarding-stuck answers { text }; onboarding-plan
-  // { name, question, starts }; onboarding-close ends it (start-project does too, once what it found is in the project).
-  // The answers (2026-10-08): what they work on, why they are interested in it, and the question they settled on.
-  const answersOf = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(['working', 'why', 'question'].map((key) => [key, optStr(value[key], key, 4000) || ''])) : {});
-  const seenOf = (value) => (Array.isArray(value) ? value.slice(0, 12).map((one) => optStr(one, 'suggestion', 600) || '').filter(Boolean) : []);
+  // ({ id, card, line }), the searches running on in main; onboarding-examples answers { examples } (Show examples on
+  // the question card); onboarding-plan { name, question, starts }; onboarding-close ends it (start-project does too,
+  // once what it found is in the project).
+  // The answers (2026-10-08): what they work on, what they are trying to do with it, and their research question.
+  const answersOf = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(['working', 'goal', 'question'].map((key) => [key, optStr(value[key], key, 4000) || ''])) : {});
+  const seenOf = (value) => (Array.isArray(value) ? value.slice(0, 24).map((one) => optStr(one, 'suggestion', 600) || '').filter(Boolean) : []);
   const needOnboard = () => { if (!onboard) throw new Error('Bart is not available'); return onboard; };
   handle('onboarding-open', () => needOnboard().open());
   handle('onboarding-warm', (id) => needOnboard().warm(str(id, 'onboarding id', 64)));
@@ -446,9 +446,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     const said = (line) => { const payload = { id: onboardingId, card, line }; if (replyNow && win) replyNow(win, 'engelbart:onboarding-line', payload); else answer(win, 'engelbart:onboarding-line', payload); };
     return needOnboard().answer(onboardingId, { card, answers: answersOf(value.answers) }, { onDelta: said });
   });
-  handle('onboarding-join', (id, input) => needOnboard().join(str(id, 'onboarding id', 64), { answers: answersOf(input && input.answers) }));
-  handle('onboarding-stuck', (id, input) => needOnboard().stuck(str(id, 'onboarding id', 64), { answers: answersOf(input && input.answers), seen: seenOf(input && input.seen) }));
-  handle('onboarding-plan', (id, input) => needOnboard().plan(str(id, 'onboarding id', 64), { answers: answersOf(input && input.answers), sentence: optStr(input && input.sentence, 'sentence', 4000) || '' }));
+  handle('onboarding-examples', (id, input) => needOnboard().examples(str(id, 'onboarding id', 64), { answers: answersOf(input && input.answers), seen: seenOf(input && input.seen) }));
+  handle('onboarding-plan', (id, input) => needOnboard().plan(str(id, 'onboarding id', 64), { answers: answersOf(input && input.answers) }));
   handle('onboarding-close', (id) => (onboard ? onboard.close(str(id, 'onboarding id', 64)) : false));
   handle('free-folder', withCtx((ctx, name) => onboarding.freeFolder(ctx, str(name, 'name'))));
   handle('check-folder', withCtx((ctx, value) => onboarding.existingFolder(ctx, str(value, 'directory', 4096))));

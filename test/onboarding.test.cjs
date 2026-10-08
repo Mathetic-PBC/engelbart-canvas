@@ -56,10 +56,10 @@ test('a folder made for the project sits in the home directory and never takes o
   assert.equal(onboarding.existingFolder(ctx, '~/teachable-agents'), first.path);
 });
 
-test('startProject: Bart\'s name, the sentence as description, the question as the workspace, his sub-questions, the brief', async () => {
-  const sentence = 'I’m working on how what students do before asking an AI relates to what they learn because instructors could grade the process.';
-  // Since 2026-10-08: what they work on, why they are interested in it, and the question they settled on.
-  const brief = { working: 'How what students do before asking an AI relates to what they learn', why: 'Instructors can grade the process', question: 'Which behaviors predict learning transfer?' };
+test('startProject: Bart\'s name, their answers as description, the question as the workspace, his sub-questions, the brief', async () => {
+  const sentence = 'How what students do before asking an AI relates to what they learn. Trying to: Find data instructors could grade the process with.';
+  // Since 2026-10-08: what they work on, what they are trying to do with it, and their research question.
+  const brief = { working: 'How what students do before asking an AI relates to what they learn', goal: 'Find data instructors could grade the process with', question: 'Which behaviors predict learning transfer?' };
   const made = await onboarding.startProject(ctx, { name: 'Process-based assessment', description: sentence, question: 'Which behaviors predict learning transfer?', starts: ['How have prior studies measured transfer?', 'Which student behaviors does your data capture?', 'What outcome would show transfer?'], brief, folder: 'new' });
   assert.equal(made.project.name, 'Process-based assessment');
   assert.equal(made.project.directory, path.join(homeDir, 'process-based-assessment'), 'the default folder, made for it');
@@ -75,10 +75,11 @@ test('startProject: Bart\'s name, the sentence as description, the question as t
 
   // What custom instructions and the picked context gave @bart and Build, the answers give now: the description and the brief.
   const context = await buildContext(ctx, made.project.id, { ref: { kind: 'workspace', workspaceId: made.workspaceId }, workspaceId: made.workspaceId, askId: 'abc' });
-  assert.match(context.head, /project description: I’m working on how what students do/);
-  assert.match(context.head, /<project_brief [^>]*>\nWhat they are working on: How what students do before asking an AI relates to what they learn\nWhy they are interested in it: Instructors can grade the process\nThe question they want to answer: Which behaviors predict learning transfer\?\n<\/project_brief>/);
-  // A project made before 2026-10-08 keeps its four answers, still told.
+  assert.match(context.head, /project description: How what students do before asking an AI/);
+  assert.match(context.head, /<project_brief [^>]*>\nWhat they are working on: How what students do before asking an AI relates to what they learn\nWhat they are trying to do with it: Find data instructors could grade the process with\nThe question they want to answer: Which behaviors predict learning transfer\?\n<\/project_brief>/);
+  // Projects made before keep their answers, still told.
   assert.match(onboarding.briefBlock({ brief: { working: 'w', unsure: 'u', findOut: 'f' } }), /What they are least sure about: u\nWhat they want to find out: f/);
+  assert.match(onboarding.briefBlock({ brief: { working: 'w', why: 'y' } }), /Why they are interested in it: y/);
   onboarding.writeInstructions(ctx, 'Be blunt.');
   const again = await buildContext(ctx, made.project.id, { ref: { kind: 'workspace', workspaceId: made.workspaceId }, workspaceId: made.workspaceId, askId: 'abd' });
   assert.match(again.head, /<custom_instructions[^>]*>\nBe blunt\.\n<\/custom_instructions>/, 'instructions written before the cards are still read');
@@ -120,69 +121,49 @@ test('discardItem removes a row only while nothing holds it', async () => {
 test('the order: welcome, tools, the cards, the project; + Project the cards and the project', async () => {
   const flow = await flowModel();
   const walk = (mode, from, options) => { const out = []; let at = from; for (let i = 0; i < 20 && at !== 'open'; i += 1) { at = flow.forward(mode, at, options); out.push(at); } return out; };
-  // 2026-10-08: What are you working on? → Why are you interested in this? → Putting it together. No "least sure" card.
-  assert.deepEqual(walk('new', 'welcome'), ['tools', 'working', 'why', 'together', 'open']);
-  assert.deepEqual(walk('existing', 'working'), ['why', 'together', 'open']);
-  assert.deepEqual(flow.flowOf('new'), ['welcome', 'tools', 'working', 'why', 'together', 'open']);
-  assert.deepEqual(flow.CARDS, ['working', 'why', 'together']);
-  for (const gone of ['import', 'instructions', 'create', 'context', 'unsure']) assert.equal(flow.flowOf('new').includes(gone), false, `${gone} is not in the flow`);
-  assert.deepEqual(flow.QUESTIONS.why, { title: 'Why are you interested in this?', placeholder: 'In a sentence or two…', label: 'Why you are interested in this' });
+  // 2026-10-08: What are you working on? → What are you trying to do with it? → their research question.
+  assert.deepEqual(walk('new', 'welcome'), ['tools', 'working', 'goal', 'question', 'open']);
+  assert.deepEqual(walk('existing', 'working'), ['goal', 'question', 'open']);
+  assert.deepEqual(flow.flowOf('new'), ['welcome', 'tools', 'working', 'goal', 'question', 'open']);
+  assert.deepEqual(flow.CARDS, ['working', 'goal', 'question']);
+  for (const gone of ['import', 'instructions', 'create', 'context', 'unsure', 'why', 'together']) assert.equal(flow.flowOf('new').includes(gone), false, `${gone} is not in the flow`);
   assert.equal(flow.QUESTIONS.working.title, 'What are you working on?');
-  // The counter leaves out the preparing screen, which has none.
-  assert.deepEqual(flow.pagerOf('new', 'welcome', { tools: false }), { count: 4, index: 0 });
-  assert.deepEqual(flow.pagerOf('new', 'working', { tools: false }), { count: 4, index: 1 });
-  assert.deepEqual(flow.pagerOf('new', 'together', { tools: false }), { count: 4, index: 3 });
-  assert.deepEqual(flow.pagerOf('new', 'tools'), { count: 5, index: 1 });
-  assert.deepEqual(flow.pagerOf('existing', 'working'), { count: 3, index: 0 });
-  assert.equal(flow.pagerOf('existing', 'welcome'), null);
-  assert.equal(flow.pagerOf('new', 'open'), null, 'no step counter on the preparing screen');
-  assert.equal(flow.pagerOf('existing', 'open'), null);
+  assert.equal(flow.QUESTIONS.goal.title, 'What are you trying to do with it?');
+  assert.equal(flow.QUESTIONS.question.title, 'What research question would you like to start with?');
+  assert.equal(flow.pagerOf, undefined, 'no step counter');
 
   // Nothing to install: the tools screen is left out, and one showing when that is found out moves on to the cards.
   assert.equal(flow.forward('new', 'welcome', { tools: false }), 'working');
   assert.equal(flow.forward('new', 'tools', { tools: false }), 'working');
-  assert.equal(flow.pagerOf('new', 'tools', { tools: false }), null);
 });
 
-test('Skip moves on, Wrap up jumps to Putting it together, Submit waits for words on a question card and always works on the last', async () => {
+test('Skip moves on, Wrap up jumps to the question card, Submit waits for words', async () => {
   const flow = await flowModel();
-  // Skip and Submit both move on (forward); Wrap up from any question card lands on Putting it together.
-  assert.equal(flow.forward('new', 'working'), 'why');
-  assert.equal(flow.forward('existing', 'why'), 'together');
-  assert.equal(flow.forward('existing', 'together'), 'open');
-  for (const card of ['working', 'why']) {
-    assert.equal(flow.wrapUp('new', card), 'together', `Wrap up from ${card}`);
-    assert.equal(flow.wrapUp('existing', card), 'together');
+  assert.equal(flow.forward('new', 'working'), 'goal');
+  assert.equal(flow.forward('existing', 'goal'), 'question');
+  assert.equal(flow.forward('existing', 'question'), 'open');
+  for (const card of ['working', 'goal']) {
+    assert.equal(flow.wrapUp('new', card), 'question', `Wrap up from ${card}`);
+    assert.equal(flow.wrapUp('existing', card), 'question');
   }
-  assert.equal(flow.wrapUp('existing', 'together'), 'open', 'on the last card there is nowhere to jump: on, as Submit');
+  assert.equal(flow.wrapUp('existing', 'question'), 'open', 'on the last card there is nowhere to jump: on, as Submit');
   assert.deepEqual(flow.cardButtons('working', ''), { showWrap: true, submitDisabled: true });
-  assert.deepEqual(flow.cardButtons('why', '  because '), { showWrap: true, submitDisabled: false });
-  assert.deepEqual(flow.cardButtons('together', ''), { showWrap: false, submitDisabled: false }, 'Submit always works on the last card: an empty question takes Bart\'s');
-  assert.deepEqual(flow.cardButtons('together', 'Which behaviors predict transfer?'), { showWrap: false, submitDisabled: false });
-  // Nothing grows above the question cards any more (2026-10-08): the sentence is on the last card only.
-  assert.equal(flow.soFarOf, undefined);
+  assert.deepEqual(flow.cardButtons('goal', ' a model '), { showWrap: true, submitDisabled: false });
+  assert.deepEqual(flow.cardButtons('question', ''), { showWrap: false, submitDisabled: true }, 'their question, typed or chosen; Skip takes Bart\'s');
+  assert.deepEqual(flow.cardButtons('question', 'Which behaviors predict transfer?'), { showWrap: false, submitDisabled: false });
+  for (const gone of ['partsOf', 'sentenceOf', 'joinedOf', 'theirWords', 'soFarOf']) assert.equal(flow[gone], undefined, `${gone} is gone with Putting it together`);
 });
 
-test('Putting it together: their words as they are ("I\'m working on … because ….") until Bart joins them, reading with any part skipped', async () => {
+test('their answers as the description, a question as a question, a plan from their words', async () => {
   const flow = await flowModel();
-  assert.equal(flow.theirWords('I’m working on How students ask AI for help.', 'working'), 'how students ask AI for help');
-  assert.equal(flow.theirWords('AI tutors in CS1', 'working'), 'AI tutors in CS1', 'an acronym keeps its capitals');
-  assert.equal(flow.theirWords('So that instructors can grade the process!', 'why'), 'instructors can grade the process');
-  assert.equal(flow.theirWords('Because I teach CS1', 'why'), 'I teach CS1');
-  const parts = flow.partsOf({ working: 'How what students do before asking an AI relates to what they learn', why: 'Instructors can grade the process, not just the result' });
-  assert.deepEqual(parts, { working: 'how what students do before asking an AI relates to what they learn', why: 'instructors can grade the process, not just the result' });
-  const sentence = flow.sentenceOf(parts);
-  assert.equal(sentence, 'I’m working on how what students do before asking an AI relates to what they learn because instructors can grade the process, not just the result.');
-  assert.doesNotMatch(sentence, /find out|___/, 'no blank left to fill');
-  assert.equal(flow.theirWords('Because AI is changing how students learn', 'why'), 'AI is changing how students learn');
-  assert.equal(flow.sentenceOf({ working: 'agents', why: '' }), 'I’m working on agents.');
-  assert.equal(flow.sentenceOf({ working: '', why: 'novices learn' }), 'I’m interested in this because novices learn.');
-  assert.equal(flow.sentenceOf({ working: '', why: '' }), '');
+  assert.equal(flow.descriptionOf({ working: 'predicting student behavior', goal: 'find real data to train a model.' }), 'Predicting student behavior. Trying to: Find real data to train a model.');
+  assert.equal(flow.descriptionOf({ working: 'agents', goal: '' }), 'Agents.');
+  assert.equal(flow.descriptionOf({}), '');
   assert.equal(flow.questionOf('  whether they help. '), 'Whether they help?');
   assert.equal(flow.questionOf('Which behaviors predict transfer?'), 'Which behaviors predict transfer?');
   assert.equal(flow.questionOf(''), '');
-  assert.deepEqual(flow.planFallback({ working: 'Teachable agents for debugging' }, 'whether they help'), { name: 'Teachable Agents Debugging', question: 'Whether they help?', starts: [] });
-  assert.deepEqual(flow.planFallback({ working: 'Teachable agents for debugging' }, ''), { name: 'Teachable Agents Debugging', question: '', starts: [] });
+  assert.deepEqual(flow.planFallback({ working: 'Teachable agents for debugging' }, 'Whether they help?'), { name: 'Teachable Agents Debugging', question: 'Whether they help?', starts: [] });
+  assert.deepEqual(flow.planFallback({ working: 'I’m working on teachable agents for debugging' }, ''), { name: 'Teachable Agents Debugging', question: '', starts: [] });
 });
 
 test('onboardStep: the fastest level, never Opus: Sonnet or Luna at medium', () => {
@@ -193,7 +174,7 @@ test('onboardStep: the fastest level, never Opus: Sonnet or Luna at medium', () 
 
 test('reading what the model wrote: the line without its label, the searches, the plan, and their words when it wrote none', () => {
   assert.equal(onboard.reflectionOf('working', 'You’re working on how students ask for help.\nsearch: help seeking'), 'How students ask for help');
-  assert.equal(onboard.reflectionOf('why', '"because instructors can see the process"'), 'Instructors can see the process');
+  assert.equal(onboard.reflectionOf('goal', '"to find real data for a model"'), 'Find real data for a model');
   assert.equal(onboard.reflectionOf('working', 'search: only searches'), '');
   assert.deepEqual(onboard.queriesIn('line\nsearch: help seeking AI tutors\n- search: "metacognition" novices\nsearch: Help seeking AI tutors\nsearch: a\nsearch: b\nsearch: c\nsearch: d'), ['help seeking AI tutors', 'metacognition novices', 'a', 'b', 'c']);
   assert.deepEqual(onboard.queriesOf('How what students do before asking an AI relates to what they learn'), ['students before asking relates learn', 'students before asking', 'asking relates learn']);
@@ -207,7 +188,7 @@ test('reading what the model wrote: the line without its label, the searches, th
 });
 
 test('the sub-questions are asked for as a story: the problem first, then how it has been studied, their own data last', () => {
-  const message = onboard.planMessage({ working: 'Teachable agents for debugging' }, 'I’m working on teachable agents.');
+  const message = onboard.planMessage({ working: 'Teachable agents for debugging' });
   const [problem, studied, theirs] = [/1 is about understanding the problem/, /2 about how it has been studied/, /3, last, about their own data, study or contribution/].map((step) => message.search(step));
   assert.ok(problem > 0 && problem < studied && studied < theirs, 'the order is asked for, in that order');
   assert.match(message, /the way an advisor walks someone in/);
@@ -261,9 +242,9 @@ test('the sessions: opened warm, a line streamed back after a card, the searches
   assert.equal(found.papers.length, 4);
 
   // Skipped: nothing is said back and nothing searched.
-  assert.deepEqual(await ob.answer(id, { card: 'why', answers: { working: 'How students ask AI for help', why: '' } }), { line: '', queries: [] });
-  const second = await ob.answer(id, { card: 'why', answers: { working: 'How students ask AI for help', why: 'So instructors can see effort' } });
-  assert.equal(second.line, 'Fake purpose: so instructors can see effort');
+  assert.deepEqual(await ob.answer(id, { card: 'goal', answers: { working: 'How students ask AI for help', goal: '' } }), { line: '', queries: [] });
+  const second = await ob.answer(id, { card: 'goal', answers: { working: 'How students ask AI for help', goal: 'Find data on effort' } });
+  assert.equal(second.line, 'Fake goal: find data on effort');
   await ob.settled(id);
 
   // The project exists: everything found so far is written into it, then what the searches still running find too.
@@ -272,10 +253,10 @@ test('the sessions: opened warm, a line streamed back after a card, the searches
   await ob.settled(id);
   const kept = onboard.readCandidates(projectDir);
   assert.equal(kept.searches.length, 6);
-  assert.deepEqual([...new Set(kept.searches.map((one) => one.after))], ['working', 'why']);
+  assert.deepEqual([...new Set(kept.searches.map((one) => one.after))], ['working', 'goal']);
   assert.ok(kept.papers.length > 4);
-  assert.deepEqual(kept.papers.find((paper) => paper.id === 'W1').after, ['working', 'why']);
-  await assert.rejects(ob.answer(id, { card: 'unsure', answers: { working: 'x' } }), /card must be working or why|Unknown onboarding/, 'the "least sure" card is gone');
+  assert.deepEqual(kept.papers.find((paper) => paper.id === 'W1').after, ['working', 'goal']);
+  await assert.rejects(ob.answer(id, { card: 'why', answers: { working: 'x' } }), /card must be working or goal|Unknown onboarding/, 'the "why" card is gone');
   assert.equal(made.length, 2, 'every card used those two');
   assert.equal(log.length, 3, 'the warm-up and the two lines said back');
   assert.equal(backLog.length, 1, 'the warm-up: nothing else ran beside');
@@ -292,11 +273,11 @@ test('the session failing: no line, searches from their own words, a plan from t
   const found = ob.candidates(id);
   assert.ok(found.searches.some((one) => one.error === 'OpenAlex answered 500.'));
   assert.ok(found.papers.length > 0);
-  const plan = await ob.plan(id, { answers: { working: 'Teachable agents for debugging' }, sentence: 'I’m working on teachable agents.' });
+  const plan = await ob.plan(id, { answers: { working: 'Teachable agents for debugging' } });
   assert.equal(plan.fallback, true);
   assert.equal(plan.name, 'Teachable Agents Debugging');
   assert.equal(plan.starts.length, 3);
-  assert.deepEqual(await ob.stuck(id, { answers: {} }), { text: '' });
+  assert.deepEqual(await ob.examples(id, { answers: {} }), { examples: [] });
   assert.throws(() => ob.warm('not-open'), /Unknown onboarding/);
 });
 
@@ -306,39 +287,57 @@ test('the plan: one asked while another runs waits; one superseded before it sta
   const session = { provider: 'anthropic', warm: async () => 'ready', alive: () => true, close() {}, turn: (message) => { sent.push(message); if (sent.length === 1) return new Promise((resolve) => { release = () => resolve('name: First\nquestion: first?\n1. a?\n2. b?\n3. c?'); }); return Promise.resolve(`name: Latest\nquestion: latest?\n1. a?\n2. b?\n3. c? ${sent.length}`); } };
   const ob = onboard.createOnboard({ readModels: () => normalizeModels(DEFAULT_MODELS), makeSession: () => session, papers: fakePapers([]) });
   const { id } = ob.open();
-  const one = ob.plan(id, { answers: { working: 'w' }, sentence: 'one' });
-  const two = ob.plan(id, { answers: { working: 'w' }, sentence: 'two' });
-  const three = ob.plan(id, { answers: { working: 'w' }, sentence: 'three' });
+  const one = ob.plan(id, { answers: { working: 'w', question: 'one?' } });
+  const two = ob.plan(id, { answers: { working: 'w', question: 'two?' } });
+  const three = ob.plan(id, { answers: { working: 'w', question: 'three?' } });
   release();
   assert.equal((await one).name, 'First');
   assert.equal((await two).name, 'Latest', 'answered with the newer plan');
   assert.equal((await three).name, 'Latest');
-  assert.equal(sent.filter((message) => /Their sentence/.test(message)).length, 2, '"two" never ran');
-  assert.match(sent[1], /Their sentence: "three"/);
-  // Stuck?: one research question to settle on, not one already seen.
-  const stuck = onboard.stuckMessage({ working: 'w', why: 'y' }, { before: ['Earlier question?'] });
-  assert.match(stuck, /They wrote: "I'm working on w because y\."/);
-  assert.match(stuck, /Suggest one research question they could settle on/);
-  assert.match(stuck, /Not one of these, which they have seen: "Earlier question\?"/);
-  assert.doesNotMatch(stuck, /___|find out/);
+  assert.equal(sent.filter((message) => /Write exactly five lines/.test(message)).length, 2, '"two" never ran');
+  assert.match(sent[1], /question they want to start with: three\?/);
 });
 
-test('the plan: Bart suggests the question from their sentence; once they write their own, it is kept as written and broken down', async () => {
-  const suggest = onboard.planMessage({ working: 'Teachable agents', why: 'novices debug alone' }, 'I’m working on teachable agents because novices debug alone.');
-  assert.match(suggest, /question: a research question for them, .* from what they are working on and why they are interested in it/);
-  const theirs = onboard.planMessage({ working: 'Teachable agents', question: 'Do teachable agents help novices debug?' }, 's');
-  assert.match(theirs, /The question they want to answer: Do teachable agents help novices debug\?/);
+test('the plan: their question kept as written and broken down; Bart writes one only when they skipped', async () => {
+  const theirs = onboard.planMessage({ working: 'Teachable agents', goal: 'Decide what to build', question: 'Do teachable agents help novices debug?' });
+  assert.match(theirs, /What are you trying to do with it\? Decide what to build/);
+  assert.match(theirs, /The research question they want to start with: Do teachable agents help novices debug\?/);
   assert.match(theirs, /question: their question, exactly as they wrote it/);
-  assert.deepEqual(onboard.cleanAnswers({ working: ' a ', why: 'b', question: 'c?', unsure: 'gone' }), { working: 'a', why: 'b', question: 'c?' });
+  const skipped = onboard.planMessage({ working: 'Teachable agents', goal: 'Decide what to build' });
+  assert.match(skipped, /question: a research question for them, .* from what they are working on and what they are trying to do with it/);
+  assert.deepEqual(onboard.cleanAnswers({ working: ' a ', goal: 'b', question: 'c?', why: 'gone', unsure: 'gone' }), { working: 'a', goal: 'b', question: 'c?' });
   assert.equal(onboard.fallbackPlan({ working: 'Teachable agents', question: 'do they help' }).question, 'Do they help?');
-  // The scripted session: the plan keeps their question; Stuck? answers with a question, a new one each time.
   const ob = onboard.createOnboard({ readModels: () => normalizeModels(DEFAULT_MODELS), makeSession: () => onboard.createFakeSession({ delayMs: 1 }), papers: fakePapers([]) });
   const { id } = ob.open();
-  assert.equal((await ob.plan(id, { answers: { working: 'Teachable agents', question: 'Do teachable agents help novices debug?' }, sentence: 's' })).question, 'Do teachable agents help novices debug?');
-  const first = await ob.stuck(id, { answers: { working: 'Teachable agents' }, seen: ['Bart’s first suggestion?'] });
-  const second = await ob.stuck(id, { answers: { working: 'Teachable agents' }, seen: [first.text] });
-  assert.match(first.text, /\?$/);
-  assert.notEqual(first.text, second.text);
+  assert.equal((await ob.plan(id, { answers: { working: 'Teachable agents', question: 'Do teachable agents help novices debug?' } })).question, 'Do teachable agents help novices debug?');
+});
+
+test('Show examples: three questions, each a different kind, grounded in the papers found; never one already seen', async () => {
+  const message = onboard.examplesMessage({ working: 'Predicting student behavior', goal: 'Find real data to train a model' }, { papers: [{ title: 'Early warning systems in higher education', year: 2019 }], before: ['Seen one?'] });
+  assert.match(message, /What are you trying to do with it\? Find real data to train a model/);
+  assert.match(message, /- Early warning systems in higher education \(2019\)/);
+  assert.match(message, /one about what is already known, one about how it has been studied or measured \(methods, data\), one about what is still open or changing/);
+  assert.match(message, /Not one of these, which they have seen: "Seen one\?"/);
+  assert.doesNotMatch(onboard.examplesMessage({ working: 'w' }), /Papers a search found|Not one of these/);
+  assert.deepEqual(onboard.readExamples('1. which datasets have been used to predict dropout\n2) How is engagement measured in online courses?\n- Which datasets have been used to predict dropout?\n3. short?\n4. What is still open about early warning systems?\nfree text'), ['Which datasets have been used to predict dropout?', 'How is engagement measured in online courses?', 'What is still open about early warning systems?']);
+
+  // The session beside: grounded in the papers the searches found, the most-found first; ↻ never repeats.
+  const sent = [];
+  const fake = onboard.createFakeSession({ delayMs: 1 });
+  const ob = onboard.createOnboard({ readModels: () => normalizeModels(DEFAULT_MODELS), makeSession: () => ({ ...fake, turn: (text, options) => { sent.push(text); return fake.turn(text, options); } }), papers: fakePapers([]) });
+  const { id } = ob.open();
+  await ob.answer(id, { card: 'working', answers: { working: 'Predicting student behavior' } });
+  await ob.settled(id);
+  const first = await ob.examples(id, { answers: { working: 'Predicting student behavior', goal: 'Find data' } });
+  assert.equal(first.examples.length, 3);
+  assert.ok(first.examples.every((one) => /\?$/.test(one)));
+  assert.match(sent[sent.length - 1], /- Shared paper \(2020\)/, 'the paper every search found is listed first');
+  const again = await ob.examples(id, { answers: { working: 'Predicting student behavior', goal: 'Find data' }, seen: first.examples });
+  assert.equal(again.examples.length, 3);
+  assert.ok(again.examples.every((one) => !first.examples.includes(one)), 'three new ones');
+  assert.ok(first.examples.every((one) => sent[sent.length - 1].includes(one)), 'those seen are named as not to say again');
+  const failing = onboard.createOnboard({ readModels: () => normalizeModels(DEFAULT_MODELS), makeSession: () => countingSession([], { fail: true }), papers: fakePapers([]) });
+  assert.deepEqual(await failing.examples(failing.open().id, { answers: { working: 'w' } }), { examples: [] });
 });
 
 test('the warm session: Claude Code once, its turns as stream-json on stdin, the text as it arrives; started again after it dies', async () => {
@@ -399,39 +398,4 @@ test('the tools screen: undecided until the first check, then only when somethin
   assert.equal(flow.toolsWanted(snap(tool('ready'), tool('missing'), tool('ready'))), false, 'one agent is enough');
   assert.equal(flow.toolsWanted(snap(tool('ready'), tool('signed-out'), tool('missing'))), false, 'signing in waits for the dialog');
   assert.equal(flow.toolsWanted(snap(tool('missing', { busy: { action: 'install' } }), tool('ready'), tool('ready'))), false, 'already installing');
-});
-
-test('Putting it together: Bart joins their answers into one sentence, their words kept and marked; anything else is refused', async () => {
-  const answers = { working: 'Predicting student behavior', why: 'Because AI is changing how students learn' };
-  const message = onboard.joinMessage(answers);
-  assert.match(message, /What are you working on\? Predicting student behavior\nWhy are you interested in this\? Because AI is changing how students learn/);
-  assert.match(message, /Keep their own words wherever you can/);
-  assert.match(message, /I'm working on \[\[predicting student behavior\]\] because \[\[AI is changing how students learn\]\]\./);
-  assert.deepEqual(onboard.readJoin("I'm working on [[predicting student behavior]] because [[AI is changing how students learn]].", answers), { lead: "I'm working on ", working: 'predicting student behavior', join: ' because ', why: 'AI is changing how students learn', end: '.' });
-  // Not a join of theirs: a part missing, a part in other words, prose around the parts, no lead.
-  assert.equal(onboard.readJoin("I'm working on [[predicting student behavior]].", answers), null);
-  assert.equal(onboard.readJoin("I'm working on [[forecasting learner conduct]] because [[AI is changing how students learn]].", answers), null);
-  assert.equal(onboard.readJoin("I'm working on [[predicting student behavior]], which matters a great deal for every school in the country, because [[AI is changing how students learn]].", answers), null);
-  assert.equal(onboard.readJoin('[[Predicting student behavior]] because [[AI is changing how students learn]].', answers), null);
-  // One answer skipped: one part, no join.
-  assert.deepEqual(onboard.readJoin("I'm interested in this because [[AI is changing how students learn]].", { why: answers.why }), { lead: "I'm interested in this because ", working: '', join: '', why: 'AI is changing how students learn', end: '.' });
-
-  // The warm session joins; one that fails answers {} and the card keeps their words.
-  const ob = onboard.createOnboard({ readModels: () => normalizeModels(DEFAULT_MODELS), makeSession: () => onboard.createFakeSession({ delayMs: 1 }), papers: fakePapers([]) });
-  const { id } = ob.open();
-  assert.deepEqual(await ob.join(id, { answers }), { lead: "I'm working on ", working: 'predicting student behavior', join: ' because ', why: 'AI is changing how students learn', end: '.' });
-  assert.deepEqual(await ob.join(id, { answers: {} }), {}, 'nothing to join');
-  const failing = onboard.createOnboard({ readModels: () => normalizeModels(DEFAULT_MODELS), makeSession: () => countingSession([], { fail: true }), papers: fakePapers([]) });
-  assert.deepEqual(await failing.join(failing.open().id, { answers }), {});
-
-  // The card: Bart's frame around their parts, which stay theirs to edit; emptied, their words as they are.
-  const flow = await flowModel();
-  assert.equal(flow.JOIN_MS, 3000);
-  assert.equal(flow.joinedOf({}), null);
-  const joined = flow.joinedOf(await ob.join(id, { answers }));
-  assert.deepEqual(joined.frame, { lead: "I'm working on ", join: ' because ', end: '.', parts: ['working', 'why'] });
-  assert.equal(flow.sentenceOf(joined.parts, joined.frame), "I'm working on predicting student behavior because AI is changing how students learn.");
-  assert.equal(flow.sentenceOf({ ...joined.parts, why: 'schools are changing' }, joined.frame), "I'm working on predicting student behavior because schools are changing.", 'an edit to their part keeps Bart\'s words around it');
-  assert.equal(flow.sentenceOf({ ...joined.parts, why: '' }, joined.frame), 'I’m working on predicting student behavior.', 'a part emptied: their words as they are');
-  assert.equal(flow.sentenceOf({ working: 'agents', why: 'novices debug' }, flow.FRAME), 'I’m working on agents because novices debug.');
 });
