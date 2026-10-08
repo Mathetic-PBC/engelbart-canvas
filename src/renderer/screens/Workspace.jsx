@@ -33,6 +33,7 @@ import BuildReject from '../workspace/BuildReject.jsx';
 import BuildReview from '../workspace/BuildReview.jsx';
 import PostItBuild from '../post-its/PostItBuild.jsx';
 import PostItTask from '../post-its/PostItTask.jsx';
+import StartsBlock from '../workspace/StartsBlock.jsx';
 import { useSandboxes } from '../ui/SandboxProgress.jsx';
 import { repositoryClick, OPEN_SANDBOX_TERMINAL } from '../model/sandbox-notifications.js';
 
@@ -1419,6 +1420,19 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const currentTab = tabs.find((tab) => tab.id === activeTab);
   const docTitle = activeTab === 'ws' ? (topic ? topic.name : '') : (currentTab ? currentTab.title : '');
   // The title of the document in front named anew (its pane, DocPane, holds the draft): the workspace, or the note.
+  // The workspace in front's suggested places to start (onboarding's sub-questions, ../workspace/StartsBlock.jsx): shown
+  // under its title while its own document is in front, edited or removed there.
+  const frontWorkspace = docWorkspaceId && !docArchive && activeTab === 'ws' ? index.get(docWorkspaceId) : null;
+  const frontStarts = (frontWorkspace && frontWorkspace.node.starts) || [];
+  const saveStarts = async (next) => {
+    try {
+      await api.setWorkspaceStarts(project.id, docWorkspaceId, next);
+      await reload();
+    } catch (error) {
+      onError(error);
+    }
+  };
+
   const renameDoc = async (next) => {
     if (docArchive) return;
     if (activeTab !== 'ws') { await renameNoteDoc(activeTab, next); return; }
@@ -1772,6 +1786,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
                 onKeepMine={() => keepMine(doc.key)}
                 onTakeTheirs={() => takeTheirs(doc.key)}
                 onClose={pane ? () => closeBeside(i) : null}
+                under={!pane && frontStarts.length ? <StartsBlock starts={frontStarts} onSave={saveStarts} /> : null}
                 empty={pane ? null : noWorkspace}
                 style={paneStyle(i)}
                 editor={{

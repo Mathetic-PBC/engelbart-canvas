@@ -41,7 +41,7 @@ const { expandDoc } = require('../context/expand-mentions.cjs');
 const { PENDING_RE } = require('./reply.cjs');
 const { stripAgentReplies } = require('./strip.cjs');
 const db = require('../store/db.cjs');
-const { instructionsBlock } = require('../store/onboarding.cjs');
+const { instructionsBlock, briefBlock } = require('../store/onboarding.cjs');
 const library = require('../store/library.cjs');
 const { attrOf, cropPath, stageBlock, webStageBlock, mentionedBlock } = require('./highlights.cjs');
 const { isBox } = require('../browser/boxes.cjs');
@@ -370,6 +370,7 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
     ...(ZOTERO_READERS.has(agent) && ctx.dataRoot ? [zoteroMirror.pointerLine(zoteroMirror.mirrorDir(ctx.dataRoot))].filter(Boolean) : []),
     '</engelbart>',
     instructionsBlock(ctx.dataRoot),
+    briefBlock(project),
   ].filter(Boolean).join('\n');
   const granted = [project.directory, ctx.dataRoot].filter(Boolean);
   const dirs = LIBRARY_READERS.has(agent) ? [...granted, ...libraryDirs(project, rows, granted, { seen, scope })] : granted;

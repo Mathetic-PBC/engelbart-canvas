@@ -281,6 +281,18 @@ function readBrainstorm(text, models) {
   return { question: readFlags(text, models).rest, provider, steps: [{ provider, key: rung.model, model: entry.models[rung.model].id, name: entry.models[rung.model].name, effort: rung.effort }], pinned: false };
 }
 
+/**
+ * Onboarding's step (2026-10-07; ./onboard.cjs): the fastest level Bart has, on the provider an @bart question would start
+ * on. The models are listed fastest first (Sonnet, Luna), so the first one, at the lowest effort the provider lists
+ * (medium): never Opus or Fable, whose reflections would not appear within the two seconds a card allows.
+ */
+function onboardStep(models) {
+  const provider = models.provider, entry = models.providers[provider];
+  const key = Object.keys(entry.models)[0];
+  const effort = EFFORTS.find((level) => entry.efforts.includes(level)) || entry.efforts[0];
+  return { provider, key, model: entry.models[key].id, name: entry.models[key].name, effort };
+}
+
 /** Whatever the file holds, made safe to run: unknown providers dropped, bad models, efforts and steps replaced by the defaults. */
 function normalizeModels(value) {
   const given = isObject(value) ? value : {};
@@ -355,4 +367,4 @@ function loadModels(homeRoot, { only } = {}) {
   return only ? onlyProviders(models, only) : models;
 }
 
-module.exports = { MODELS_FILE, EFFORTS, MODES, DEFAULT_MODELS, DEFAULT_BUILD, DEFAULT_BRAINSTORM, DEFAULT_DISCOVER, PAST_DEFAULT_MODELS, normalizeModels, normalizeBuild, normalizeBrainstorm, normalizeDiscover, withFirstStep, fileShape, buildChoices, resolveBuildChoice, onlyProviders, preferUsable, startingAt, loadModels, effortOf, modelOf, readFlags, readQuestion, readBrainstorm, readDiscover, withChoice };
+module.exports = { MODELS_FILE, EFFORTS, MODES, DEFAULT_MODELS, DEFAULT_BUILD, DEFAULT_BRAINSTORM, DEFAULT_DISCOVER, PAST_DEFAULT_MODELS, normalizeModels, normalizeBuild, normalizeBrainstorm, normalizeDiscover, withFirstStep, fileShape, buildChoices, resolveBuildChoice, onlyProviders, preferUsable, startingAt, loadModels, effortOf, modelOf, readFlags, readQuestion, readBrainstorm, readDiscover, withChoice, onboardStep };

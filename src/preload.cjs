@@ -113,9 +113,15 @@ const engelbartAPI = Object.freeze({
   listProjects: invoke('list-projects'),
   createProject: invoke('create-project'),
   createProjectWithWelcome: invoke('create-project-with-welcome'),
-  // Onboarding (src/main/store/onboarding.cjs).
-  instructions: invoke('instructions'),
-  setInstructions: invoke('set-instructions'),
+  // Onboarding (src/main/store/onboarding.cjs), and Bart's part in its cards (src/main/bart/onboard.cjs, 2026-10-07): a
+  // card's line said back arrives on onOnboardingLine ({ id, card, line }) as it is written.
+  onboardingOpen: invoke('onboarding-open'),
+  onboardingWarm: invoke('onboarding-warm'),
+  onboardingAnswer: invoke('onboarding-answer'),
+  onboardingStuck: invoke('onboarding-stuck'),
+  onboardingPlan: invoke('onboarding-plan'),
+  onboardingClose: invoke('onboarding-close'),
+  onOnboardingLine: (callback) => subscribe('engelbart:onboarding-line', callback),
   freeFolder: invoke('free-folder'),
   checkFolder: invoke('check-folder'),
   startProject: invoke('start-project'),
@@ -132,6 +138,7 @@ const engelbartAPI = Object.freeze({
   trashWorkspace: invoke('trash-workspace'),
   restoreWorkspace: invoke('restore-workspace'),
   setWorkspaceContext: invoke('set-workspace-context'),
+  setWorkspaceStarts: invoke('set-workspace-starts'),
   saveImage: invoke('save-image'),
   readImage: invoke('read-image'),
   createNote: invoke('create-note'),

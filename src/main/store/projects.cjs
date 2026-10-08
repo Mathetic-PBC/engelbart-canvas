@@ -5,11 +5,11 @@
 // pasted images live in <project>/assets and are library rows of type `image`.
 // `ctx.dataRoot` is ~/.engelbart (test off) or ~/.engelbart/test (test on).
 //
-//   <dataRoot>/<slug>/project.json                   { id, name, created, directory }
+//   <dataRoot>/<slug>/project.json                   { id, name, created, directory, description, brief }
 //   <dataRoot>/<slug>/notes.pglite/
 //   <dataRoot>/<slug>/<Note>.md
 //   <dataRoot>/<slug>/assets/<id>.<ext>
-//   <dataRoot>/<slug>/<Workspace>/meta.json          { id, status, context, created, chars, builds, archives }
+//   <dataRoot>/<slug>/<Workspace>/meta.json          { id, status, context, created, chars, builds, archives, starts }
 //   <dataRoot>/<slug>/<Workspace>/workspace.md
 //   <dataRoot>/<slug>/<Workspace>/.archive/<t>.md    the document as it was when Clear was pressed (./archive.cjs)
 //   <dataRoot>/<slug>/<Workspace>/<Child>/…          the same, recursively
@@ -18,6 +18,9 @@
 //   <dataRoot>/.trash/<slug>/…                       a deleted project, restorable for a week (trashProject)
 //
 // `directory` is where the project's code lives: terminals and agents start there.
+// `brief` (2026-10-07) is what the person answered on onboarding's cards, in their own words: { working, why, unsure,
+// findOut }, read by @bart and Build (./onboarding.cjs briefBlock). A workspace's `starts` are its "Suggested places to
+// start" (the first workspace's, from onboarding): [{ id, text, by }], `by` 'bart' until the person edits one.
 // A workspace's `context` is a flat list of library ids. Grouping is done by nesting a workspace.
 // `chars` is the length of workspace.md, the workspace's counterpart of a note's library.char_count.
 // The earlier layout (<slug>/<Goal>/<Topic>/…) is converted on first touch: see ./migrate.cjs.
@@ -49,6 +52,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const MAX_TREE_ENTRIES = 500;
 const MAX_TREE_DEPTH = 6;
 const MAX_DESCRIPTION = 4000;
+const BRIEF_KEYS = ['working', 'why', 'unsure', 'findOut'];
+const MAX_STARTS = 12;
 
 const WELCOME_NOTE = [
   'This is a note. Notes are plain markdown files in your project folder, and the sidebar lists what this workspace can see.',
@@ -63,6 +68,22 @@ const WELCOME_NOTE = [
 ].join('\n');
 
 const nowIso = () => new Date().toISOString();
+
+/** A project's brief as project.json may hold it: its four answers, strings, bounded; null when it says nothing. */
+function cleanBrief(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const out = {};
+  for (const key of BRIEF_KEYS) if (typeof value[key] === 'string' && value[key].trim()) out[key] = value[key].replace(/\s+/g, ' ').trim().slice(0, 2000);
+  return Object.keys(out).length ? out : null;
+}
+
+/** A workspace's suggested places to start: [{ id, text, by }], each with words, at most twelve. */
+function cleanStarts(value) {
+  return (Array.isArray(value) ? value : [])
+    .filter((one) => one && typeof one === 'object' && typeof one.text === 'string' && one.text.trim())
+    .slice(0, MAX_STARTS)
+    .map((one) => ({ id: typeof one.id === 'string' && UUID_RE.test(one.id) ? one.id : randomUUID(), text: one.text.replace(/\s+/g, ' ').trim().slice(0, 300), by: one.by === 'bart' ? 'bart' : 'you' }));
+}
 const byCreated = (a, b) => String(a.created || '').localeCompare(String(b.created || ''));
 
 function assertId(value, what) {
@@ -183,11 +204,12 @@ function projectRecord(dir) {
   try { exists = !!saved && fs.statSync(saved).isDirectory(); } catch { exists = false; }
   // A saved directory that is gone (moved, unmounted) counts as not chosen: the project asks again.
   const description = typeof meta.description === 'string' ? meta.description.trim() : '';
+  const brief = cleanBrief(meta.brief);
   // Where the Builds' default repo is (build/manager.cjs, 2026-09-29): the code directory, or a library row.
   const defaultTarget = targetOrNull(meta.defaultTarget);
   // Before defaultTarget: the folder the default repo was made as, in `directory`; read once, to convert it (build/manager.cjs).
   const defaultRepo = typeof meta.defaultRepo === 'string' && /^[^/\\\0]{1,255}$/.test(meta.defaultRepo) && !['.', '..'].includes(meta.defaultRepo) ? meta.defaultRepo : null;
-  return { id: meta.id, name, slug: path.basename(dir), dir, created: meta.created || null, directory: exists ? saved : null, directoryMissing: saved && !exists ? saved : null, description, defaultTarget, defaultRepo };
+  return { id: meta.id, name, slug: path.basename(dir), dir, created: meta.created || null, directory: exists ? saved : null, directoryMissing: saved && !exists ? saved : null, description, brief, defaultTarget, defaultRepo };
 }
 
 function projectRecords(ctx) {
@@ -275,26 +297,29 @@ async function createProject(ctx, input) {
   const name = sanitizeName(options.name);
   const directory = options.directory == null ? null : checkDirectory(options.directory);
   const description = typeof options.description === 'string' ? options.description.trim().slice(0, MAX_DESCRIPTION) : '';
+  const brief = cleanBrief(options.brief);
   const slug = resolveSlug(ctx, name, options.path);
   const dir = path.join(ctx.dataRoot, slug);
   fs.mkdirSync(dir, { mode: DIR_MODE });
-  const meta = { id: randomUUID(), name, created: nowIso(), ...(directory ? { directory } : {}), ...(description ? { description } : {}) };
+  const meta = { id: randomUUID(), name, created: nowIso(), ...(directory ? { directory } : {}), ...(description ? { description } : {}), ...(brief ? { brief } : {}) };
   writeJson(path.join(dir, 'project.json'), meta);
   migrated.add(dir);
   await db.openNotesDb(dir);
   return publicProject(projectRecord(dir), { workspaceCount: 0, lastEdited: meta.created });
 }
 
-// First-run flow: the project, a first workspace, and a "Welcome!" note open in its context. Onboarding
-// (2026-09-28, ./onboarding.cjs) names the workspace "Getting started", starts its document with the project's
-// description, and puts the library rows chosen on its last screen in context after the note.
-async function createProjectWithWelcome(ctx, input, { workspaceName = 'Getting started', context = [] } = {}) {
+// First-run flow: the project, a first workspace, and a "Welcome!" note in its context, its document starting with the
+// project's description. Onboarding (2026-10-07, ./onboarding.cjs) names the workspace with the person's question, gives
+// it the sub-questions Bart suggested (`starts`), and leaves its document empty (`describe: false`): the description is
+// their sentence, which the page does not repeat.
+async function createProjectWithWelcome(ctx, input, { workspaceName = 'Getting started', context = [], starts = [], describe = true } = {}) {
   const project = await createProject(ctx, input);
   const workspace = await createWorkspace(ctx, project.id, { name: workspaceName });
   const note = await createNote(ctx, project.id, { name: 'Welcome!', workspaceId: workspace.id, text: WELCOME_NOTE });
   await setWorkspaceContext(ctx, project.id, workspace.id, [note.id, ...context.filter((id) => id !== note.id)]);
-  if (project.description) await writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id }, `${project.description}\n`);
-  return { project, workspaceId: workspace.id, noteId: note.id, noteName: note.name };
+  if (cleanStarts(starts).length) await setWorkspaceStarts(ctx, project.id, workspace.id, starts);
+  if (project.description && describe) await writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id }, `${project.description}\n`);
+  return { project, workspaceId: workspace.id, workspaceName: workspace.name, noteId: note.id, noteName: note.name };
 }
 
 async function setProjectDirectory(ctx, id, directory) {
@@ -504,7 +529,7 @@ function workspaceRecord(dir) {
   const archives = (Array.isArray(meta.archives) ? meta.archives : [])
     .filter((entry) => entry && typeof entry.file === 'string' && ARCHIVE_RE.test(entry.file))
     .map((entry) => ({ file: entry.file, clearedAt: typeof entry.clearedAt === 'string' ? entry.clearedAt : null, title: typeof entry.title === 'string' ? entry.title.slice(0, 200) : '' }));
-  return { id: meta.id, name: path.basename(dir), context, removed, picked, chars, builds, archives, dir, created: meta.created || null };
+  return { id: meta.id, name: path.basename(dir), context, removed, picked, chars, builds, archives, starts: cleanStarts(meta.starts), dir, created: meta.created || null };
 }
 
 function docChars(dir) {
@@ -533,7 +558,7 @@ function findWorkspace(ctx, projectId, workspaceId) {
 }
 
 function publicWorkspace(workspace) {
-  return { id: workspace.id, name: workspace.name, context: workspace.context, removed: workspace.removed, picked: workspace.picked || [], chars: workspace.chars, builds: workspace.builds || [], archives: workspace.archives || [], created: workspace.created };
+  return { id: workspace.id, name: workspace.name, context: workspace.context, removed: workspace.removed, picked: workspace.picked || [], chars: workspace.chars, builds: workspace.builds || [], archives: workspace.archives || [], starts: workspace.starts || [], created: workspace.created };
 }
 
 /** Every workspace of a project, flat, with its path from the project directory ("Agents/Inline chat agent"). */
@@ -675,6 +700,16 @@ function patchWorkspaceMeta(workspace, patch) {
 async function setWorkspaceContext(ctx, projectId, workspaceId, entries) {
   const { workspace } = findWorkspace(ctx, projectId, workspaceId);
   return patchWorkspaceMeta(workspace, { context: flatContext(entries) });
+}
+
+/** A workspace's suggested places to start, as edited (one changed is the person's, one removed is gone); none removes the list. */
+async function setWorkspaceStarts(ctx, projectId, workspaceId, starts) {
+  const { workspace } = findWorkspace(ctx, projectId, workspaceId);
+  const meta = readJson(path.join(workspace.dir, 'meta.json'));
+  const { starts: _gone, ...rest } = meta; // eslint-disable-line no-unused-vars
+  const next = cleanStarts(starts);
+  writeJson(path.join(workspace.dir, 'meta.json'), next.length ? { ...rest, starts: next } : rest);
+  return publicWorkspace(workspaceRecord(workspace.dir));
 }
 
 /** A Build started from this workspace (2026-09-25): its id joins meta.json `builds`. */
@@ -1270,6 +1305,9 @@ module.exports = {
   trashedWorkspaces,
   restoreWorkspace,
   setWorkspaceContext,
+  setWorkspaceStarts,
+  cleanBrief,
+  cleanStarts,
   addWorkspaceBuild,
   patchWorkspace: (ctx, projectId, workspaceId, patch) => patchWorkspaceMeta(findWorkspace(ctx, projectId, workspaceId).workspace, patch),
   writeTextAtomic,

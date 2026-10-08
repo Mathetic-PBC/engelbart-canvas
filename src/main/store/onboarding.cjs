@@ -1,14 +1,18 @@
 'use strict';
 
-// Onboarding (2026-09-28; Claude Design "Onboarding.dc.html"). A new install walks through Welcome, Add to your library
-// (GitHub, then websites, then papers), Custom instructions, Create a new project (name, description, folder) and
-// Project context; + Project on the all-projects screen is the last two only. What the screens write:
-//   - library rows, through the same addItem the sidebar uses (ipc `add-library-item`); a repository unticked again
-//     during onboarding is discarded (`discardItem`), and only if nothing holds it;
-//   - the custom instructions, `<dataRoot>/instructions.md`, read by @bart and Build (`instructionsBlock`);
-//   - the project (`startProject`): its folder, made under the home directory when Engelbart is asked to make one,
-//     a "Getting started" workspace whose document starts with the description, the "Welcome!" note, and the chosen library
-//     rows in the workspace's context.
+// Onboarding (2026-09-28; as brainstorm cards since 2026-10-07, design/onboarding-brainstorm). A new install walks
+// through Welcome, the tools (when one is missing), then four cards: What are you working on? Why this, and why now? What
+// are you least sure about? Putting it together. + Project on the all-projects screen is the four cards. Bart's part
+// while they answer is ../bart/onboard.cjs. What the flow writes, all in `startProject`:
+//   - the project: named by Bart from the answers (renamable), its description their sentence ("I'm working on … because
+//     I want to find out … so that …"), its folder the default, made under the home directory;
+//   - its brief (project.json `brief`), their four answers in their own words. The custom instructions and the library
+//     rows picked as the project's context, which the screens before 2026-10-07 asked for, were what @bart and Build
+//     were told about the person and the project; the brief is told in their place (`briefBlock`). Instructions written
+//     before then, `<dataRoot>/instructions.md`, are still read (`instructionsBlock`);
+//   - its first workspace, named with their question, holding Bart's three sub-questions under "Suggested places to
+//     start" (meta.json `starts`) and the "Welcome!" note in its context.
+// `discardItem` and the folder helpers stay for the library and the + Project of older screens.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -33,6 +37,15 @@ function writeInstructions(ctx, text) {
   if (!value) { fs.rmSync(instructionsPath(ctx), { force: true }); return ''; }
   projects.writeTextAtomic(instructionsPath(ctx), `${value}\n`);
   return value;
+}
+
+/** What the person said about the project on onboarding's cards, as a block of an agent's first message; '' when nothing. */
+function briefBlock(project) {
+  const brief = project && project.brief;
+  if (!brief) return '';
+  const lines = [['working', 'What they are working on'], ['why', 'Why this, and why now'], ['unsure', 'What they are least sure about'], ['findOut', 'What they want to find out']]
+    .filter(([key]) => brief[key]).map(([key, label]) => `${label}: ${brief[key]}`);
+  return lines.length ? `<project_brief note="What the person said about this project when they started it, in their own words. It tells you what they are after; it may have moved on since.">\n${lines.join('\n')}\n</project_brief>` : '';
 }
 
 /** The person's custom instructions as a block of an agent's first message, or '' when there are none. */
@@ -66,11 +79,12 @@ function existingFolder(ctx, value) {
 }
 
 /**
- * The project the Create screen describes → createProjectWithWelcome's answer. `folder` is 'new' (made now, under the
- * home directory, never an existing one) or 'existing' (`directory`). `context` holds library ids; rows the library does
- * not have, and notes (they belong to their own project), are left out.
+ * The project the cards describe → createProjectWithWelcome's answer. `name`: Bart's (else the person's). `description`:
+ * their sentence. `question`: the first workspace's name (else "Getting started"). `starts`: Bart's sub-questions, each
+ * text marked as his. `brief`: their answers. `folder` is 'new' (made now, under the home directory, never an existing
+ * one: the default) or 'existing' (`directory`).
  */
-async function startProject(ctx, { name, description = '', folder = 'new', directory = '', context = [] } = {}) {
+async function startProject(ctx, { name, description = '', question = '', starts = [], brief = null, folder = 'new', directory = '' } = {}) {
   let dir;
   if (folder === 'new') {
     dir = freeFolder(ctx, name).path;
@@ -78,11 +92,8 @@ async function startProject(ctx, { name, description = '', folder = 'new', direc
   } else {
     dir = existingFolder(ctx, directory);
   }
-  const rows = await ctx.libraryDb.list();
-  const known = new Map(rows.map((row) => [row.id, row]));
-  const chosen = [...new Set((Array.isArray(context) ? context : []).filter((id) => typeof id === 'string' && UUID_RE.test(id)))]
-    .filter((id) => known.has(id) && !known.get(id).tags.includes('note'));
-  return projects.createProjectWithWelcome(ctx, { name, description, directory: dir }, { workspaceName: 'Getting started', context: chosen });
+  const suggested = (Array.isArray(starts) ? starts : []).filter((text) => typeof text === 'string' && text.trim()).slice(0, 6).map((text) => ({ text, by: 'bart' }));
+  return projects.createProjectWithWelcome(ctx, { name, description, directory: dir, brief }, { workspaceName: String(question || '').trim() || 'Getting started', starts: suggested, describe: false });
 }
 
 /**
@@ -99,4 +110,4 @@ async function discardItem(ctx, id, { release = null } = {}) {
   return ctx.libraryDb.remove(id);
 }
 
-module.exports = { INSTRUCTIONS_FILE, readInstructions, writeInstructions, instructionsBlock, freeFolder, existingFolder, startProject, discardItem };
+module.exports = { INSTRUCTIONS_FILE, readInstructions, writeInstructions, instructionsBlock, briefBlock, freeFolder, existingFolder, startProject, discardItem };

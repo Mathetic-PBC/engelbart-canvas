@@ -219,7 +219,7 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
 // (MATH-54 build 3a): { selection(), screenshot() } (the app passes that window's browser views'), or null.
 // `overleafFor(win, stage)`: a window's Overleaf tabs for an @bart turn (MATH-65; overleaf/stage.cjs forTurn), or null.
 // `getUpdates()`: the updater (updates.cjs), made after this is registered; null until then, and in the tests.
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, onboard = null, replyNow = null }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
   const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
@@ -426,19 +426,38 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('list-projects', withCtx((ctx) => projects.listProjects(ctx)));
   saving('create-project', withCtx((ctx, input) => projects.createProject(ctx, projectInput(input))), { project: (_args, out) => out && out.id });
   saving('create-project-with-welcome', withCtx((ctx, input) => projects.createProjectWithWelcome(ctx, projectInput(input))), { project: (_args, out) => out && out.project && out.project.id });
-  // Onboarding (./store/onboarding.cjs): custom instructions, the folder "Create a folder for me" would make, the project
-  // the last two screens describe, and a repository unticked again before the project exists.
-  handle('instructions', withCtx((ctx) => onboarding.readInstructions(ctx)));
-  handle('set-instructions', withCtx((ctx, text) => onboarding.writeInstructions(ctx, str(text, 'instructions', 40000))));
+  // Onboarding (./store/onboarding.cjs): the folder a project's would be, the project the cards describe, and a repository
+  // unticked again before the project exists. Bart's part while the cards are answered (./bart/onboard.cjs, 2026-10-07):
+  // onboarding-open starts its session and answers { id }; onboarding-warm starts it again when it is not running;
+  // onboarding-answer, after a card, answers { line, queries }, the line streamed first on `engelbart:onboarding-line`
+  // ({ id, card, line }), the searches running on in main; onboarding-stuck answers { text }; onboarding-plan
+  // { name, question, starts }; onboarding-close ends it (start-project does too, once what it found is in the project).
+  const answersOf = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(['working', 'why', 'unsure', 'findOut'].map((key) => [key, optStr(value[key], key, 4000) || ''])) : {});
+  const needOnboard = () => { if (!onboard) throw new Error('Bart is not available'); return onboard; };
+  handle('onboarding-open', () => needOnboard().open());
+  handle('onboarding-warm', (id) => needOnboard().warm(str(id, 'onboarding id', 64)));
+  handleFor('onboarding-answer', (win, id, input) => {
+    const value = input && typeof input === 'object' ? input : {};
+    const card = str(value.card, 'card', 16), onboardingId = str(id, 'onboarding id', 64);
+    // Not `answer`: that waits for the window's terminal to attach, which onboarding's screen never has.
+    const said = (line) => { const payload = { id: onboardingId, card, line }; if (replyNow && win) replyNow(win, 'engelbart:onboarding-line', payload); else answer(win, 'engelbart:onboarding-line', payload); };
+    return needOnboard().answer(onboardingId, { card, answers: answersOf(value.answers) }, { onDelta: said });
+  });
+  handle('onboarding-stuck', (id, input) => needOnboard().stuck(str(id, 'onboarding id', 64), { answers: answersOf(input && input.answers) }));
+  handle('onboarding-plan', (id, input) => needOnboard().plan(str(id, 'onboarding id', 64), { answers: answersOf(input && input.answers), sentence: optStr(input && input.sentence, 'sentence', 4000) || '' }));
+  handle('onboarding-close', (id) => (onboard ? onboard.close(str(id, 'onboarding id', 64)) : false));
   handle('free-folder', withCtx((ctx, name) => onboarding.freeFolder(ctx, str(name, 'name'))));
   handle('check-folder', withCtx((ctx, value) => onboarding.existingFolder(ctx, str(value, 'directory', 4096))));
   // The launch check's first answer (a minute at most): until then Git's record may still be last launch's.
   const toolsChecked = async () => { for (let n = 0; n < 60 && tools && !tools.snapshot().checked; n += 1) await new Promise((resolve) => { setTimeout(resolve, 1000); }); };
+  // `onboardingId`: the cards' session, whose papers found so far (and still being found) are kept with the project.
   saving('start-project', withCtx((ctx, input) => {
     const value = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
     const folder = value.folder === 'existing' ? 'existing' : 'new';
-    const context = (Array.isArray(value.context) ? value.context : []).slice(0, 500).map((id) => str(id, 'library id', 64));
-    return onboarding.startProject(ctx, { name: str(value.name, 'name'), description: optStr(value.description, 'description', 8000) || '', folder, directory: folder === 'existing' ? str(value.directory, 'directory', 4096) : '', context }).then((made) => {
+    const starts = (Array.isArray(value.starts) ? value.starts : []).slice(0, 6).map((text) => str(text, 'sub-question', 600));
+    const onboardingId = optStr(value.onboardingId, 'onboarding id', 64);
+    return onboarding.startProject(ctx, { name: str(value.name, 'name'), description: optStr(value.description, 'description', 8000) || '', question: optStr(value.question, 'question', 600) || '', starts, brief: answersOf(value.brief), folder, directory: folder === 'existing' ? str(value.directory, 'directory', 4096) : '' }).then((made) => {
+      if (onboardingId && onboard) onboard.attach(onboardingId, made.project.dir);
       // A folder Engelbart made gets its Build repository and first commit now, in the background, once the tool check
       // has found Git (build/manager.cjs prepareDefault): the first Build never meets a folder without a history.
       if (folder === 'new' && builds) void toolsChecked().then(() => builds.prepareDefault(ctx, made.project.id)).catch(() => {});
@@ -492,6 +511,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // Delete in the switcher: the workspace, and all nested in it, into the sidebar's trash for a week; Restore there.
   saving('trash-workspace', withCtx((ctx, pid, wid) => { const out = projects.trashWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); navChanged(); return out; }), { project: first });
   saving('restore-workspace', withCtx((ctx, pid, wid) => { const out = projects.restoreWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); navChanged(); return out; }), { project: first });
+  saving('set-workspace-starts', withCtx((ctx, pid, wid, starts) => projects.setWorkspaceStarts(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), (Array.isArray(starts) ? starts : []).slice(0, 24))), { project: first });
   saving('set-workspace-context', (pid, wid, entries) => changeWorkspaceContext(pid, wid, (ctx, projectId, workspaceId) => projects.setWorkspaceContext(ctx, projectId, workspaceId, entries)), { project: first });
   // The sidebar: search, +, Save and an @mention bring a library item into a workspace; the trash takes it out (and remembers that it did).
   // `picked`: the @ menu linked it; `unmentioned`: its last mention left the document (MATH-57).

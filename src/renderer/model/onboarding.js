@@ -1,47 +1,112 @@
-// Onboarding's order and gates (2026-09-28; Claude Design "Onboarding.dc.html" and Hudson's tweaks in
-// design/onboarding/TWEAKS.md). Pure: screens/Onboarding.jsx asks where Continue and Skip go.
+// Onboarding's order and gates (2026-09-28; as brainstorm cards since 2026-10-07, design/onboarding-brainstorm). Pure:
+// screens/Onboarding.jsx asks where Submit, Skip and Wrap up go, and how their own words become the sentence.
 
-import { hasTag } from './kind.js';
 import { launchRows, installable } from './tools.js';
 
 /**
- * A new install walks all six screens; + Project on the all-projects screen only the last two. The tools screen
- * (second, 2026-09-28: it replaces the setup dialog a first launch used to open) is left out when `tools` is false:
- * the launch check found nothing to install.
+ * A new install: welcome, the tools (second, and only when something is missing: the cards need a working model), the
+ * four cards, then the project it opens. + Project on the all-projects screen: the four cards and the project. 'open'
+ * is the last dot of the pager (the design's "6 of 6" is the project). The tools screen is left out when `tools` is
+ * false: the launch check found nothing to install.
  */
-export const FLOWS = { new: ['welcome', 'tools', 'import', 'instructions', 'create', 'context'], existing: ['create', 'context'] };
+export const FLOWS = {
+  new: ['welcome', 'tools', 'working', 'why', 'unsure', 'together', 'open'],
+  existing: ['working', 'why', 'unsure', 'together', 'open'],
+};
+
+/** The cards, in order: three questions, then their answers put together. */
+export const CARDS = ['working', 'why', 'unsure', 'together'];
+
+/** Each question card's words (BSC-2 to BSC-4). */
+export const QUESTIONS = {
+  working: { title: 'What are you working on?', placeholder: 'In your own words…', label: 'What you are working on' },
+  why: { title: 'Why this, and why now?', placeholder: 'In a sentence or two…', label: 'Why this, and why now' },
+  unsure: { title: 'What are you least sure about?', placeholder: 'The part you can’t answer yet…', label: 'What you are least sure about' },
+};
+
+/** Bart's line above a card (BSC-3, BSC-4): which answer it says back, and the words it finishes. */
+export const REFLECTED = {
+  why: { from: 'working', label: 'You’re working on' },
+  unsure: { from: 'why', label: 'So that' },
+};
 
 export function flowOf(mode, { tools = true } = {}) {
   const flow = FLOWS[mode] || FLOWS.new;
   return tools ? flow : flow.filter((step) => step !== 'tools');
 }
 
-/** Screens that are several screens in effect (2a, 2b …), one box shown at a time. */
-export const SUBS = { import: ['github', 'url', 'pdf'], create: ['name', 'desc', 'folder'] };
-
-/**
- * Where a forward move from `{ step, sub }` lands: the next part of the same screen, else the next screen, else 'open'
- * (after the context screen). `detour` is set when the context screen sent the person to add to the library outside
- * the flow (the existing-user flow has no import screen): the end of the import screen returns to context.
- * `options` as flowOf's: from a screen left out of the flow, the next one still in it.
- */
-export function forward(mode, { step, sub = 0, detour = false }, options) {
-  const parts = SUBS[step];
-  if (parts && sub < parts.length - 1) return { step, sub: sub + 1 };
-  if (step === 'context') return { step: 'open', sub: 0 };
-  if (detour && step === 'import') return { step: 'context', sub: 0 };
+/** Where Continue, Submit or Skip go from `step`: the next step of the flow ('open' after the last card). */
+export function forward(mode, step, options) {
   const full = FLOWS[mode] || FLOWS.new;
   const flow = flowOf(mode, options);
   const at = full.indexOf(step);
-  const next = at < 0 ? null : full.slice(at + 1).find((name) => flow.includes(name));
-  return next ? { step: next, sub: 0 } : { step, sub };
+  return (at < 0 ? null : full.slice(at + 1).find((name) => flow.includes(name))) || step;
 }
 
-/** The pager under every screen of the flow: `{ count, index }`, or null off the flow (opening, a detour). */
+/** Wrap up: from a question card straight to Putting it together; anywhere else, on as Submit goes. */
+export function wrapUp(mode, step, options) {
+  return QUESTIONS[step] ? 'together' : forward(mode, step, options);
+}
+
+/** The pager under every screen: `{ count, index }`, or null off the flow. */
 export function pagerOf(mode, step, options) {
   const flow = flowOf(mode, options);
   const index = flow.indexOf(step);
   return index < 0 ? null : { count: flow.length, index };
+}
+
+/**
+ * A card's buttons: Skip and Submit always, Submit greyed while there is nothing to submit (the field, or the blank of
+ * Putting it together); Wrap up on the question cards only (on Putting it together there is nothing to jump to).
+ */
+export function cardButtons(step, value) {
+  return { showWrap: !!QUESTIONS[step], submitDisabled: !String(value || '').trim() };
+}
+
+const LEADS = {
+  working: /^(?:(?:i['’]?m|i\s+am|we['’]?re|we\s+are)\s+)?(?:currently\s+)?(?:working\s+on|studying|researching|looking\s+(?:at|into))\s+/i,
+  why: /^(?:so\s+that|because|since|so)\s+/i,
+  findOut: /^(?:i\s+want\s+to\s+)?(?:find\s+out|figure\s+out|learn|know)\s+/i,
+};
+
+/**
+ * An answer as it reads inside the sentence: what the sentence already says taken off its start ("I'm working on",
+ * "because", "so that", "find out"), lower case unless it starts with a name or an acronym, no full stop.
+ */
+export function theirWords(text, kind) {
+  let words = String(text || '').replace(/\s+/g, ' ').trim();
+  if (LEADS[kind]) words = words.replace(LEADS[kind], '');
+  words = words.replace(/[.!…]+$/, '').trim();
+  const first = words.split(' ')[0] || '';
+  const keep = first === 'I' || /^I['’]/.test(first) || (first.length > 1 && first === first.toUpperCase()) || /^[A-Z][a-z]*[A-Z]/.test(first);
+  return words && !keep ? words[0].toLowerCase() + words.slice(1) : words;
+}
+
+/** Putting it together's three parts, from the answers: their words, not Bart's. The blank starts empty. */
+export function partsOf(answers) {
+  return { working: theirWords(answers.working, 'working'), findOut: '', why: theirWords(answers.why, 'why') };
+}
+
+/**
+ * The sentence as the project's description: "I'm working on … because I want to find out … so that …." Parts left
+ * empty are left out with the words that lead into them, so it still reads; nothing at all is ''.
+ */
+export function sentenceOf({ working = '', findOut = '', why = '' }) {
+  const w = theirWords(working, 'working'), f = theirWords(findOut, 'findOut'), y = theirWords(why, 'why');
+  const clauses = [];
+  if (w) clauses.push(`I’m working on ${w}`);
+  if (f) clauses.push(w ? `because I want to find out ${f}` : `I want to find out ${f}`);
+  if (y) clauses.push(clauses.length ? `so that ${y}` : `I’m doing this so that ${y}`);
+  return clauses.length ? `${clauses.join(' ')}.` : '';
+}
+
+/** The plan when Bart could not be asked at all: a name and a question from their words, no sub-questions. */
+export function planFallback(answers, findOut) {
+  const words = theirWords(answers.working, 'working').split(' ').filter((word) => word.length > 3).slice(0, 4);
+  const name = words.length ? words.map((word) => word[0].toUpperCase() + word.slice(1)).join(' ') : 'New project';
+  const asked = theirWords(findOut, 'findOut') || theirWords(answers.unsure, 'findOut');
+  const question = asked ? `${asked[0].toUpperCase()}${asked.slice(1)}${asked.endsWith('?') ? '' : '?'}` : '';
+  return { name, question, starts: [] };
 }
 
 /**
@@ -60,65 +125,3 @@ export const TOOL_WHY = {
   claude: 'Anthropic’s agent. Runs @bart and Build with your Claude account.',
   codex: 'OpenAI’s agent. Runs @bart and Build with your ChatGPT account.',
 };
-
-/**
- * The import screen's buttons, from how many rows its current part has (`n`): Skip while that part is empty; Continue
- * always shown and live once it holds something. It opens the next part, and after the last part the next screen
- * (there is no separate Next: Hudson, 2026-09-28). The GitHub part's Continue is live too once GitHub is connected
- * (`signedIn`), with nothing ticked: connecting is the step, a repository is not required (2026-10-02).
- */
-export function importButtons(sub, n, { signedIn = false } = {}) {
-  const connected = SUBS.import[sub] === 'github' && signedIn;
-  return { showSkip: n === 0, continueDisabled: n === 0 && !connected };
-}
-
-/**
- * The create screen's: Skip only on an empty description; Continue (next part, then the context screen) greyed on an
- * empty name, an empty description, and an existing folder not yet named.
- */
-export function createButtons(sub, { name, desc, folder = 'new', folderPath = '' }) {
-  const part = SUBS.create[sub];
-  const empty = (value) => !String(value || '').trim();
-  return {
-    showSkip: part === 'desc' && empty(desc),
-    continueDisabled: (part === 'name' && empty(name)) || (part === 'desc' && empty(desc)) || (part === 'folder' && folder === 'existing' && empty(folderPath)),
-  };
-}
-
-const hostOf = (url) => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; } };
-
-/** What a library row is, in the words of the context screen: "paper · arxiv.org", "git repo · github.com", "website · …". */
-export function rowWhy(row) {
-  const what = hasTag(row, 'git') ? 'git repo' : hasTag(row, 'paper') ? 'paper' : row.type === 'website' ? 'website' : row.type;
-  const where = row.url && !/^file:/i.test(row.url) ? hostOf(row.url) : '';
-  return [what, where].filter(Boolean).join(' · ');
-}
-
-/** The library rows a project can be given: everything but notes (they belong to their project) and pasted pictures. */
-export function contextRows(library) {
-  return (library || []).filter((row) => !hasTag(row, 'note') && row.type !== 'image');
-}
-
-/** The prompt "Import from an AI provider" copies (Hudson's wording, design chat message 58). */
-export const PROFILE_PROMPT = `I want to export a research profile of me that I can give to another AI assistant or collaborator. Using everything you know about me from memory and our past conversations, write a structured profile of me *as a researcher*. Ignore personal, financial, and non-research details unless they directly shape my research.
-
-Cover the following, and skip any section you have no real evidence for:
-
-1. Field(s) and position: my disciplines, subfields, career stage, institutional affiliation (or independence), and how I describe my own work.
-2. Core research questions and thesis: the central problem(s) I'm working on, the claims or constructs I've proposed, and what I'm arguing against or distancing myself from.
-3. Current and past projects: for each, the question, study design, data, status (idea / running / analyzing / submitted / published), and target venue.
-4. Methods and epistemology: my methodological commitments (e.g., qualitative vs. quantitative, specific analytic traditions), theoretical frameworks I build on, and standards of evidence I hold myself to.
-5. Intellectual lineage: thinkers, papers, and traditions I draw on, and any I explicitly reject.
-6. Collaborators and ecosystem: advisors, co-authors, labs, and communities, with each person's role.
-7. Open problems: methodological or conceptual issues I'm currently stuck on or actively iterating on.
-8. Trajectory: my research goals, target institutions or venues, and how I'm trying to get there.
-9. Working style: how I want AI to engage with my research (tone, level of pushback, formatting, what to avoid).
-
-Rules:
-- Be specific. Use the exact terms, names, and framings I've used rather than generic paraphrases.
-- Mark each claim with its epistemic status: [stated] if I said it directly, [inferred] if you're reading it from patterns in our conversations, [uncertain] if you're unsure or it may be outdated.
-- Do not invent details, papers, or collaborators to fill gaps. An empty section is better than a fabricated one.
-- Where something may have changed since I last mentioned it, note roughly when it came up.
-- After the profile, list the 3–5 most important things you *don't* know about my research that would substantially improve the profile, so I can fill them in.
-
-Output the final profile inside a single code block so I can copy it cleanly.`;

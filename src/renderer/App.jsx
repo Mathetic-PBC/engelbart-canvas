@@ -12,7 +12,7 @@ import UpdateBanner from './ui/UpdateBanner.jsx';
 import { launchRows, installedSignedOut, TOOL_ORDER } from './model/tools.js';
 
 // Screens: the app opens straight into the workspace you were last in, and the first run (no projects yet) is
-// onboarding (screens/Onboarding.jsx, 2026-09-28); + Project runs its last two screens. Onboarding ends in the project
+// onboarding (screens/Onboarding.jsx, 2026-09-28; brainstorm cards since 2026-10-07); + Project runs its four cards. Onboarding ends in the project
 // it made (the welcome tour that followed it was taken out on 2026-10-01). "Engelbart" in the header (or Escape) shows
 // all projects. A project whose project.json has no code directory yet is held
 // behind a modal until one is chosen (2026-09-18).
@@ -286,12 +286,12 @@ export default function App() {
     }
   }
 
-  // Onboarding made the project (api.startProject): land in its Getting started workspace with the Welcome! note open, and
-  // the sites its sign-in import said to sign in to again on the Stage.
-  async function onboarded(made, { stageLinks = [] } = {}) {
+  // Onboarding made the project (api.startProject): land on its first workspace's page, its question as the title and
+  // Bart's sub-questions under it (2026-10-07; the Welcome! note stays in its context, closed).
+  async function onboarded(made) {
     setError('');
     await loadHome();
-    await openProject(made.project.id, { workspaceId: made.workspaceId, tab: { id: made.noteId, title: made.noteName }, stage: stageLinks.length ? { links: stageLinks } : null });
+    await openProject(made.project.id, { workspaceId: made.workspaceId });
   }
 
   async function goHome() {

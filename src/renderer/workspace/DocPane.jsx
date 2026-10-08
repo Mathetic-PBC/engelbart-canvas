@@ -11,7 +11,7 @@ const FOOT_BUTTON = { padding: '3px 6px', border: 0, borderRadius: 5, background
 
 export default function DocPane({
   index, kind = 'note', editorRef, docKey, text, readOnly = false, title, onRename, titleFocus,
-  conflict, onKeepMine, onTakeTheirs, onClose, empty, editor, style,
+  conflict, onKeepMine, onTakeTheirs, onClose, empty, editor, style, under = null,
 }) {
   // The title is a field of its own: a draft while it is typed, named on Enter or when the caret leaves it. An untitled
   // name is its hint, not its value.
@@ -24,7 +24,9 @@ export default function DocPane({
     onRename(next);
   };
 
+  // `under`: what stands between the title and the document (the workspace's suggested places to start, ./StartsBlock.jsx).
   const header = (
+    <>
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
       <input
         ref={(element) => { if (element && titleFocus && titleFocus.current) { titleFocus.current = false; element.focus(); } }}
@@ -50,6 +52,8 @@ export default function DocPane({
       />
       {onClose && <button type="button" className="hov-x" data-pane-close={index} onClick={onClose} aria-label="Close the pane beside" title="Close" style={{ flex: 'none', width: 26, height: 26, marginTop: 2, padding: 0, border: 0, borderRadius: '50%', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '18px/1 var(--font-sans)', color: '#8f8f8f', transition: 'background 120ms' }}>×</button>}
     </div>
+    {under}
+    </>
   );
 
   return (
