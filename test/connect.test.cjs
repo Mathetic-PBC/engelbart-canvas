@@ -24,7 +24,7 @@ const notes = require('../src/main/connect/notes.cjs');
 const { createImportTools, validateImportTool, chatNote, toolsFor, googleMarkdown, csvTable, IMPORT_TOOLS } = require('../src/main/connect/tools.cjs');
 const { createConnect, readReply, readSurvey, cleanChoices, connectChoice } = require('../src/main/connect/session.cjs');
 const { createFakeConnectAgents } = require('../src/main/connect/fake.cjs');
-const { detect } = require('../src/main/connect/scan.cjs');
+const { detect, scanFor } = require('../src/main/connect/scan.cjs');
 const { importToolLabel, writeImportConfig, claudeServers, claudeToolsFor } = require('../src/main/connect/agents.cjs');
 const { hostAllowed, hostsFor, fileNameOf } = require('../src/main/connect/browser.cjs');
 const { listWebChats, readWebChat } = require('../src/main/connect/web-chats.cjs');
@@ -34,7 +34,7 @@ const { createConnectors } = require('../src/main/connect/connectors.cjs');
 const memory = require('../src/main/connect/memory.cjs');
 const { SKILLS, skillOf, skillsFor } = require('../src/main/connect/skills.cjs');
 const prompts = require('../src/main/connect/prompts.cjs');
-const { APPS } = require('../src/shared/connect-sources.cjs');
+const { APPS, LOCAL_PDFS } = require('../src/shared/connect-sources.cjs');
 const { openToolBridge } = require('../src/main/sandbox/local-tools.cjs');
 const { buildContext } = require('../src/main/bart/context.cjs');
 
@@ -749,4 +749,81 @@ test('the window\'s model, and the onboarding flow with Connect your library in 
   assert.deepEqual(flow.toolsStep(snap(tool('ready'), tool('missing'), tool('missing')), { connect: true }), { ids: ['claude', 'codex'], install: ['claude', 'codex'], label: 'Install all', disabled: false, stay: true });
   assert.deepEqual(flow.toolsStep(snap(tool('ready'), tool('ready'), tool('missing')), { connect: true }).label, 'Continue');
   assert.equal(flow.agentReady(signedOut), false);
+});
+
+// Papers on this Mac (2026-10-08, "Agent onboarding": "add capability to search local papers ... the questions for this
+// should center around folders and genres of papers rather than individual ones").
+const pdfHome = () => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(homeDir, 'pdfs-')));
+  const put = (rel, text) => { const file = path.join(home, rel); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, `%PDF-1.4\n${text}\n%%EOF\n`); return file; };
+  put('Downloads/2310.01234v2.pdf', '1 0 obj << /Title (Scaffolding novice debugging) >> endobj');
+  put('Downloads/Invoice-2026-09.pdf', '1 0 obj << /Title (Invoice) >> endobj');
+  put('Downloads/scan.pdf', '<x:xmpmeta><dc:title><rdf:Alt><rdf:li xml:lang="x-default">Working Spheres in Information Work</rdf:li></rdf:Alt></dc:title></x:xmpmeta>');
+  put('Documents/Research/HCI/mark2004.pdf', '');
+  put('Documents/Research/HCI/142750.142767.pdf', '');
+  put('Documents/Research/HCI/Lecture 3 slides.pdf', '');
+  put('Downloads/Some.app/Contents/Resources/manual.pdf', '');
+  put('Zotero/storage/ABCD/paper.pdf', '');
+  return home;
+};
+
+test('PDFs on this Mac: the folders that hold them with counts, kinds and titles; a folder\'s PDFs listed and brought in by path', async () => {
+  const home = pdfHome();
+  assert.equal(readers.pdfTitle(path.join(home, 'Downloads', '2310.01234v2.pdf')), 'Scaffolding novice debugging');
+  assert.equal(readers.pdfTitle(path.join(home, 'Downloads', 'scan.pdf')), 'Working Spheres in Information Work');
+  assert.deepEqual(['2310.01234v2.pdf', 'Invoice-2026-09.pdf', 'smith2019.pdf', 'Lecture 3 slides.pdf', 'scan.pdf', 'CV_draft.pdf'].map((name) => readers.pdfGuess(name)), ['paper', 'personal', 'paper', 'book', 'unclear', 'unclear']);
+  const found = detect({ homeDir: home, applications: [] }).apps[LOCAL_PDFS];
+  assert.deepEqual([found.found, found.where], [true, 'Downloads, Documents']);
+  const glance = readers.pdfFolders([...readers.pdfRoots(home), path.join(home, 'Downloads')], { homeDir: home });
+  assert.equal(glance.pdfs, 6, 'app bundles and ~/Zotero are passed over, and a folder is not counted twice');
+  assert.deepEqual(glance.folders.map((entry) => [entry.folder, entry.pdfs, entry.kinds]), [
+    ['~/Documents/Research/HCI', 3, { paper: 2, book: 1 }],
+    ['~/Downloads', 3, { paper: 1, personal: 1, unclear: 1 }],
+  ]);
+  assert.ok(glance.folders[1].examples.some((line) => line === 'scan.pdf — Working Spheres in Information Work'), JSON.stringify(glance.folders[1].examples));
+  assert.ok(!glance.folders[1].examples.some((line) => /Invoice/.test(line)), 'personal PDFs are never shown as examples');
+  // The librarian's first look: everywhere when the person let the agents read their home folder, else a folder button.
+  const scanned = await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true } }, { homeDir: home });
+  assert.equal(scanned.papers[LOCAL_PDFS].pdfs, 6);
+  const narrow = await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: false } }, { homeDir: home });
+  assert.deepEqual(narrow.papers[LOCAL_PDFS], { reach: 'local', needs: 'folder' });
+  const chosen = await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [path.join(home, 'Documents')] } }, permissions: { files: false } }, { homeDir: home });
+  assert.deepEqual(chosen.papers[LOCAL_PDFS].lookedIn, ['~/Documents']);
+  // The import agent's tools: list by kind and words, bring in by path, nothing twice.
+  const call = createImportTools({ session: { dataRoot: ctx.dataRoot, homeDir: home, dir: path.join(ctx.dataRoot, '.connect', 'pdf-test'), projectId: () => null, exports: {}, folders: {} }, context: async () => ({ ...ctx, homeDir: home }), env: {} });
+  const papers = await call('list_pdfs', { folder: '~/Documents', kind: 'paper' });
+  assert.deepEqual(papers.pdfs.map((pdf) => [pdf.name, pdf.folder]).sort(), [['142750.142767.pdf', 'Research/HCI'], ['mark2004.pdf', 'Research/HCI']]);
+  assert.equal((await call('list_pdfs', { folder: '~/Downloads', query: 'working spheres' })).pdfs[0].name, 'scan.pdf', 'found by its title');
+  const first = await call('import_pdfs', { files: [...papers.pdfs.map((pdf) => pdf.path), path.join(home, 'Documents', 'nope.pdf')] });
+  assert.equal(first.added, 2);
+  assert.deepEqual(first.skipped.map((entry) => entry.why), ['not there']);
+  const again = await call('import_pdfs', { files: papers.pdfs.map((pdf) => pdf.path) });
+  assert.deepEqual([again.added, again.skippedCount], [0, 2]);
+  const rows = (await ctx.libraryDb.list()).filter((row) => row.path && row.path.startsWith(home + path.sep));
+  assert.deepEqual(rows.map((row) => [row.type, path.basename(row.path)]).sort(), [['pdf', '142750.142767.pdf'], ['pdf', 'mark2004.pdf']], 'kept where they are');
+  assert.equal(importToolLabel('import_pdfs', { files: ['a', 'b'] }), 'Bringing in 2 PDFs');
+  assert.match(prompts.INTERVIEW_SYSTEM_PROMPT, /folders and kinds of papers, never about single files/);
+});
+
+test('Skip on the librarian\'s question brings nothing of it in: the source is left out, and Import does not hand it over', async () => {
+  const { connect, state } = fakeConnect();
+  const started = await connect.start({ sources: { sites: { on: true }, code: { on: true } }, permissions: { browser: false, recall: false } });
+  let now = await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask), 'the websites question');
+  assert.equal(now.chat[now.chat.length - 1].ask.source, 'sites');
+  connect.answer(started.id, { skipped: true });
+  now = await until(state(started.id), (s) => !s.thinking && s.chat.filter((entry) => entry.ask).length === 2, 'the next question');
+  assert.equal(now.chat[1].text, 'Skip');
+  assert.ok(now.log.some((entry) => entry.text === 'Skipped Websites'));
+  // Import hands over what was not talked through, never what was skipped.
+  now = connect.importNow(started.id);
+  assert.deepEqual(now.jobs.filter((job) => job.kind === 'import').map((job) => job.source), ['code']);
+  const saved = JSON.parse(fs.readFileSync(path.join(ctx.dataRoot, '.connect', started.id, 'session.json'), 'utf8'));
+  assert.deepEqual(saved.skippedSources, ['sites'], 'kept for a session picked up again');
+  connect.stop(started.id);
+  // A question that named its apps leaves out only those; a button, its app.
+  const choices = cleanChoices({ sources: { papers: { on: true, apps: ['Zotero', LOCAL_PDFS] } } }, homeDir);
+  assert.deepEqual(readReply(`{"ask":{"source":"papers","apps":["${LOCAL_PDFS}","Obsidian"],"kind":"multi","title":"Which folders?","options":["Research"]}}`, choices).ask.apps, [LOCAL_PDFS]);
+  assert.equal(readReply(`{"authorize":{"app":"${LOCAL_PDFS}","kind":"folder"}}`, choices).authorize.label, 'Choose a folder of PDFs…');
+  assert.match(prompts.INTERVIEW_SYSTEM_PROMPT, /Skip means nothing of it comes in/);
+  assert.doesNotMatch(prompts.INTERVIEW_SYSTEM_PROMPT, /Decide sensibly yourself/);
 });

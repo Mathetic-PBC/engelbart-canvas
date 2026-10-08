@@ -26,6 +26,11 @@
 //   · what comes in is a Markdown file of the library's own in <dataRoot>/assets/md, not a project's note ("save the
 //     imported content not as notes but as md files"), so nothing waits for onboarding to make the project
 //   · Skip on a "Needs you" holds for the run: that app is never put to the person again (skipApp)
+//   · Skip on the librarian's question or button brings nothing of it in (2026-10-08: "When I hit skip it should not bring
+//     in anything, not just have the agent choose"): the question's source (or the apps it named) or the button's app is
+//     left out for the run, in code, so neither the librarian nor Import can hand it over (skipAsked)
+//   · Papers on this Mac: the folders that hold PDFs, asked about by folder and kind (../../shared/connect-sources.cjs
+//     LOCAL_PDFS, ./scan.cjs pdfsAtAGlance)
 //   · a session still going when Engelbart quits (or switches library) is saved as it is and picked up again when that
 //     library is next open (suspendAll, resume)
 //
@@ -37,7 +42,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { SOURCES, APPS, sourceOf, appOf, sourceOfApp, recallApps } = require('../../shared/connect-sources.cjs');
+const { SOURCES, APPS, LOCAL_PDFS, sourceOf, appOf, sourceOfApp, recallApps } = require('../../shared/connect-sources.cjs');
 const prompts = require('./prompts.cjs');
 const { scanFor } = require('./scan.cjs');
 const readers = require('./readers.cjs');
@@ -137,7 +142,9 @@ function readReply(text, choices) {
     ask = { source: 'code', kind: 'repos', title: line(value.ask.title, 300), options: [], placeholder: '' };
   } else if (value.ask && typeof value.ask === 'object' && ASK_KINDS.has(value.ask.kind) && value.ask.kind !== 'repos' && typeof value.ask.title === 'string' && value.ask.title.trim()) {
     const options = (Array.isArray(value.ask.options) ? value.ask.options : []).map(optionOf).filter(Boolean).filter((option, i, all) => all.findIndex((other) => other.label === option.label) === i).slice(0, 10);
-    if (value.ask.kind === 'open' || options.length) ask = { source: sourceOf(value.ask.source) ? value.ask.source : null, kind: value.ask.kind, title: line(value.ask.title, 300), options: value.ask.kind === 'open' ? [] : options, placeholder: value.ask.kind === 'open' ? line(value.ask.placeholder, 120) : '' };
+    const source = sourceOf(value.ask.source) ? value.ask.source : null;
+    const apps = source && Array.isArray(value.ask.apps) ? [...new Set(value.ask.apps.filter((app) => sourceOf(source).apps.includes(app)))] : [];
+    if (value.ask.kind === 'open' || options.length) ask = { source, ...(apps.length ? { apps } : {}), kind: value.ask.kind, title: line(value.ask.title, 300), options: value.ask.kind === 'open' ? [] : options, placeholder: value.ask.kind === 'open' ? line(value.ask.placeholder, 120) : '' };
   }
   let authorize = null;
   const a = value.authorize || value.connect; // "connect" was the first build's name for it
@@ -145,7 +152,7 @@ function readReply(text, choices) {
     const reach = appOf(a.app) ? appOf(a.app).reach : 'signin';
     const fits = a.kind === 'signin' ? SIGNIN_APPS.has(a.app) : a.kind === 'connector' ? reach === 'connector' : a.kind === 'permission' ? reach === 'automation' : reach === 'local';
     if (fits) {
-      const label = line(a.label, 60) || (a.kind === 'permission' ? `Allow Engelbart to read ${a.app}` : a.kind === 'folder' ? `Choose your ${a.app} folder…` : `Sign in to ${a.app}`);
+      const label = line(a.label, 60) || (a.kind === 'permission' ? `Allow Engelbart to read ${a.app}` : a.kind === 'folder' ? (a.app === LOCAL_PDFS ? 'Choose a folder of PDFs…' : `Choose your ${a.app} folder…`) : `Sign in to ${a.app}`);
       authorize = { source: sourceOf(a.source) ? a.source : sourceOfApp(a.app), app: a.app, kind: a.kind, label };
     }
   }
@@ -168,7 +175,7 @@ function readSurvey(text) {
 
 /** What the person did, as the librarian is told it. */
 function messageOf(input) {
-  if (input.skipped) return 'skipped';
+  if (input.skipped) return input.left ? `skipped: ${input.left} is left out for this run; nothing of it comes in` : 'skipped';
   if (input.importNow) return 'Import now.';
   if (Array.isArray(input.picked) && input.picked.length) return `picked ${input.picked.map((label) => `"${line(label, 160)}"`).join(', ')}${input.text ? `, and said: ${line(input.text, 2000)}` : ''}`;
   if (input.authorized) return `${input.authorized.kind === 'permission' ? 'allowed' : input.authorized.kind === 'signin' ? 'signed in' : 'authorized'} "${input.authorized.app}"`;
@@ -218,7 +225,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     try {
       fs.mkdirSync(s.dir, { recursive: true, mode: 0o700 });
       fs.writeFileSync(path.join(s.dir, 'session.json'), JSON.stringify({
-        ...snapshot(s), log: s.log, choices: s.choices, picked: s.picked, found: s.found, interviewSession: s.interviewSession, skipped: [...s.skipped],
+        ...snapshot(s), log: s.log, choices: s.choices, picked: s.picked, found: s.found, interviewSession: s.interviewSession, skipped: [...s.skipped], skippedSources: [...s.skippedSources],
         suspended: !!s.suspended, jobs: s.jobs.map((job) => ({ ...publicJob(job), key: job.key, plan: job.plan, titles: job.titles })),
       }, null, 2), { mode: 0o600 });
     } catch { /* the chat goes on */ }
@@ -392,7 +399,10 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   /* --------------------------------------------------------------------------------------------- the priority queue */
 
   /** A job queued: started when a place is free, the most urgent kind first. The same kind, source and apps go once. */
-  function dispatch(s, { kind = 'import', source, apps = [], label, plan = '', extra = null }) {
+  function dispatch(s, { kind = 'import', source, apps: given = [], label, plan = '', extra = null }) {
+    if (kind === 'import' && s.skippedSources.has(source)) return null; // the person skipped it: nothing of it comes in
+    const apps = kind === 'import' && given.length ? given.filter((app) => !s.skipped.has(app)) : given;
+    if (given.length && !apps.length) return null;
     const key = `${kind}:${source}:${[...apps].sort().join(',')}`;
     if (s.jobs.some((job) => job.key === key) || s.jobs.length >= MAX_JOBS) return null;
     if (apps.length && apps.every((app) => s.skipped.has(app))) return null; // the person skipped them for this run
@@ -612,6 +622,35 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     }
   }
 
+  /**
+   * Skip on the librarian's last question or button: nothing of what it was about comes in (2026-10-08: "When I hit skip
+   * it should not bring in anything, not just have the agent choose"). A question leaves out the apps it named, else its
+   * whole source; a button leaves out its app. → what was left out, in words, or '' when the last turn asked nothing.
+   */
+  function skipAsked(s) {
+    const last = [...s.chat].reverse().find((entry) => entry.role === 'agent');
+    if (!last) return '';
+    if (last.authorize && last.authorize.app) { skipApp(s, last.authorize.app); return last.authorize.app; }
+    const ask = last.ask;
+    if (!ask || !ask.source || !sourceOf(ask.source)) return '';
+    if (Array.isArray(ask.apps) && ask.apps.length) { for (const app of ask.apps) skipApp(s, app); return ask.apps.join(', '); }
+    skipSource(s, ask.source);
+    return sourceOf(ask.source).label;
+  }
+
+  /**
+   * A source the person skipped, left out for the rest of the run: no import of it starts after this (dispatch, Import).
+   * What they settled before the question, and the librarian handed over then, goes on.
+   */
+  function skipSource(s, source) {
+    if (s.skippedSources.has(source)) return;
+    s.skippedSources.add(source);
+    const note = { ...((s.newFound || {})[source] || {}), skipped: 'The person skipped this source for this run: nothing of it comes in. Do not offer, ask about or dispatch it again.' };
+    s.found[source] = { ...(s.found[source] || {}), skipped: note.skipped };
+    s.newFound = { ...(s.newFound || {}), [source]: note };
+    logAction(s, null, `Skipped ${sourceOf(source).label}`, 'You');
+  }
+
   /** A job that ended stops waiting; a request no job waits on any more goes. */
   function releaseNeeds(s, job) {
     for (const need of s.needs) {
@@ -717,7 +756,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       picked: { folders: {}, exports: {} }, chat: [], thinking: true, activity: 'Looking at what you picked…', done: false, finished: false, minimized: false, dismissed: false, error: '',
       jobs: [], seq: 0, needs: [], log: [], controllers: new Set(), interviewSession: null, interviewController: null, found: {}, newFound: null, toldImports: '', projectId, projectDir, stopped: false,
       waitingForSurvey: false, surveyNews: [], recalls: {}, memory: { status: 'waiting', path: memory.memoryPath(ctx.dataRoot), error: '' }, memoryQueued: false, memoryDraft: null,
-      skipped: new Set(), suspended: false,
+      skipped: new Set(), skippedSources: new Set(), suspended: false,
     };
     sessions.set(id, s);
     s.dirs = dirsOf(s);
@@ -748,6 +787,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const clean = value.skipped ? { skipped: true } : picked && picked.length ? { picked, text } : { text };
     if (!clean.skipped && !clean.picked && !clean.text) throw new Error('Say something first');
     if (typeof value.provider === 'string') setProvider(s, value.provider);
+    if (clean.skipped) clean.left = skipAsked(s);
     s.chat.push({ role: 'user', text: shownOf(clean), at: now() });
     void interviewTurn(s, messageOf(clean));
     return snapshot(s);
@@ -833,7 +873,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     if (s.interviewController) s.interviewController.abort();
     for (const [source, choice] of Object.entries(s.choices.sources)) {
       const sent = s.jobs.filter((job) => job.kind === 'import' && job.source === source);
-      if (!choice.on || sent.some((job) => !job.apps.length)) continue;
+      if (!choice.on || s.skippedSources.has(source) || sent.some((job) => !job.apps.length)) continue;
       const covered = new Set(sent.flatMap((job) => job.apps));
       const reachable = (app) => {
         const found = ((s.found || {})[source] || {})[app];
@@ -1082,7 +1122,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       jobs: [], seq: 0, needs: [], log: (Array.isArray(saved.log) ? saved.log : []).slice(-MAX_LOG), controllers: new Set(), interviewSession: typeof saved.interviewSession === 'string' ? saved.interviewSession : null, interviewController: null,
       found: saved.found && typeof saved.found === 'object' ? saved.found : {}, newFound: null, toldImports: '', projectId, projectDir, stopped: false,
       waitingForSurvey: !!saved.waiting, surveyNews: [], recalls: keptRecalls(dir), memory: kept ? { ...saved.memory } : { status: 'waiting', path: memory.memoryPath(ctx.dataRoot), error: '' }, memoryQueued: kept, memoryDraft: null,
-      skipped: new Set((Array.isArray(saved.skipped) ? saved.skipped : []).filter((app) => typeof app === 'string')), suspended: false,
+      skipped: new Set((Array.isArray(saved.skipped) ? saved.skipped : []).filter((app) => typeof app === 'string')),
+      skippedSources: new Set((Array.isArray(saved.skippedSources) ? saved.skippedSources : []).filter((id) => sourceOf(id))), suspended: false,
     };
     for (const job of Array.isArray(saved.jobs) ? saved.jobs : []) {
       if (!job || !Object.hasOwn(PRIORITY, job.kind)) continue;

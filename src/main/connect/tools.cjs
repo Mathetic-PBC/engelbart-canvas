@@ -19,6 +19,9 @@
 // can do (a sign-in, a code) to the Connect window and waits; save_memory keeps an assistant's answer for MEMORY.md. A
 // survey brings nothing in and a recall only saves its answer (WRITING tools refused to both), and each agent's server
 // lists only its kind's tools (TOOLS_FOR).
+// PDFs on this Mac (2026-10-08): list_pdfs lists a folder's PDFs with their titles and the kind their names suggest (and,
+// with check, whether each reads as a research paper: ../context/pdf-kind.cjs), so an import can keep a folder's papers
+// of one kind; import_pdfs brings many in a call, each kept where it is, as add_to_library adds one.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -41,6 +44,8 @@ const CHAT_APPS = ['Claude Code', 'Codex', 'Cursor', 'Claude', 'ChatGPT'];
 const MAX_FILES_A_CALL = 300;
 const MAX_CHATS_A_CALL = 100;
 const MAX_ZOTERO_A_CALL = 300;
+const MAX_PDFS_A_CALL = 200;
+const MAX_PDF_CHECKS = 80;
 const MAX_GOOGLE_A_CALL = 25;
 const MAX_WEB_CHATS_A_CALL = 40;
 const CALL_BUDGET_MS = 170_000; // a call answers within the bridge's four minutes: what is left is said, for another call
@@ -56,6 +61,8 @@ const IMPORT_TOOLS = [
   { name: 'import_note_files', description: `Bring note files into Engelbart's library, each as its own Markdown file named by its file, its pictures included and Obsidian links ([[Note]]) turned into mentions. files: absolute paths, up to ${MAX_FILES_A_CALL} a call (call again for more). root: the vault or export folder they come from, where pictures are looked up by name. A file brought in before is skipped. Returns how many were added and why any were skipped.`, inputSchema: schema({ files: strs, root: str }, ['files']) },
   { name: 'add_note', description: 'Add a Markdown file you wrote to Engelbart\'s library: a page\'s text, a meeting\'s notes and transcript, a summary of a source with no files of its own. title: what it is called. source: where it came from, a path, link or id, so it is never brought in twice.', inputSchema: schema({ title: str, markdown: str, source: str }, ['title', 'markdown']) },
   { name: 'add_to_library', description: 'Add one thing to the Engelbart library: a web link, a GitHub repository link, an arXiv id or DOI, or the absolute path of a pdf, file or folder (a folder with .git is a repository). name: what the library calls it (optional). Something the library already holds is not added twice.', inputSchema: schema({ input: str, name: str }, ['input']) },
+  { name: 'list_pdfs', description: 'The PDFs under a folder on this Mac, newest first: path, name, title (from the file, when it says), folder (relative), modified, size, and kind, a guess from its name: paper, book (books, slides, lecture notes), personal (receipts, statements, tickets: never bring these in) or unclear. include: only these folders (relative to it); exclude: never these; days: changed in the last n days; query: words in the name, title or folder; kind: only that guess; limit: at most (default 300). check: also read the first pages of each (up to 80) and say whether it is a research paper (paper true or false).', inputSchema: schema({ folder: str, include: strs, exclude: strs, days: num, query: str, kind: str, limit: num, check: bool }, ['folder']) },
+  { name: 'import_pdfs', description: `Bring PDFs on this Mac into the library by their absolute paths, up to ${MAX_PDFS_A_CALL} a call (what did not fit in the time is returned as left). Each stays where it is and the library points at it; one read as a research paper is tagged paper. A PDF the library holds already is skipped.`, inputSchema: schema({ files: strs }, ['files']) },
   { name: 'unpack', description: 'Unpack a .zip (one you downloaded with browser_download, or on this Mac) into a folder in Engelbart\'s imports, and say what it holds. Then bring its notes in with list_note_files and import_note_files, its pdfs with add_to_library.', inputSchema: schema({ file: str }, ['file']) },
   { name: 'list_chats', description: `AI chats on this Mac or in an export, newest first: id, title, first prompt, folder, date. app: ${CHAT_APPS.join(', ')} (Claude and ChatGPT only from an export; use web_chats for their accounts). days: only the last n days. project: only chats run in a folder whose path holds this. query: words to look for. automated: include runs a program started (left out by default). limit: at most (default 200).`, inputSchema: schema({ app: str, days: num, project: str, query: str, limit: num, automated: bool }, ['app']) },
   { name: 'read_chat', description: 'One chat from list_chats as its turns of text (tool calls left out), to judge what it is about. max_chars: how much at most (default 6000).', inputSchema: schema({ app: str, id: str, max_chars: num }, ['app', 'id']) },
@@ -92,13 +99,13 @@ const IMPORT_TOOLS = [
 ];
 
 // What each kind of agent may call: a survey looks, a recall asks and saves its answer, an import brings things in.
-const LOOK = ['folder_overview', 'list_note_files', 'list_chats', 'read_chat', 'web_chats', 'web_chat_read', 'browser_open', 'browser_read', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll', 'browser_wait', 'browser_screenshot', 'browser_eval', 'overleaf_projects', 'apple_notes_folders', 'apple_notes_list', 'browser_history', 'browser_bookmarks', 'links_in_notes', 'zotero_collections', 'zotero_items', 'github_repos', 'needs_you', 'wait_for_you'];
+const LOOK = ['folder_overview', 'list_note_files', 'list_pdfs', 'list_chats', 'read_chat', 'web_chats', 'web_chat_read', 'browser_open', 'browser_read', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll', 'browser_wait', 'browser_screenshot', 'browser_eval', 'overleaf_projects', 'apple_notes_folders', 'apple_notes_list', 'browser_history', 'browser_bookmarks', 'links_in_notes', 'zotero_collections', 'zotero_items', 'github_repos', 'needs_you', 'wait_for_you'];
 const TOOLS_FOR = Object.freeze({
   survey: LOOK,
   recall: ['browser_open', 'browser_read', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll', 'browser_wait', 'browser_screenshot', 'needs_you', 'wait_for_you', 'save_memory'],
   import: IMPORT_TOOLS.map((tool) => tool.name).filter((name) => name !== 'save_memory'),
 });
-const WRITING = new Set(['import_note_files', 'add_note', 'add_to_library', 'unpack', 'import_chats', 'import_web_chats', 'browser_download', 'import_google_files', 'import_overleaf_projects', 'import_apple_notes', 'import_zotero_items']);
+const WRITING = new Set(['import_note_files', 'import_pdfs', 'add_note', 'add_to_library', 'unpack', 'import_chats', 'import_web_chats', 'browser_download', 'import_google_files', 'import_overleaf_projects', 'import_apple_notes', 'import_zotero_items']);
 
 /** The tool definitions an agent of `kind` is served. */
 const toolsFor = (kind) => { const names = new Set(TOOLS_FOR[kind] || TOOLS_FOR.import); return IMPORT_TOOLS.filter((tool) => names.has(tool.name)); };
@@ -334,6 +341,39 @@ function createImportTools({ session, context, added = () => {}, zotero = null, 
       return { added: true };
     },
     add_to_library: ({ input, name }) => addRow(input, name),
+    list_pdfs: async ({ folder, include, exclude, days, query, kind, limit, check }) => {
+      const out = readers.pdfFiles(where(folder, 'folder'), { include, exclude, days, query, kind, limit: Math.min(1000, Math.max(1, Math.round(limit || 300))) });
+      if (check && deps.inspectPdf) {
+        const started = Date.now();
+        let checked = 0;
+        for (const pdf of out.pdfs) {
+          if (checked >= MAX_PDF_CHECKS || Date.now() - started > CALL_BUDGET_MS / 2) break;
+          try { pdf.paper = (await deps.inspectPdf(pdf.path)).includes('paper'); } catch { pdf.paper = null; }
+          checked += 1;
+        }
+        out.checked = checked;
+      }
+      return out;
+    },
+    import_pdfs: async ({ files }) => {
+      if (files.length > MAX_PDFS_A_CALL) throw new Error(`At most ${MAX_PDFS_A_CALL} files a call`);
+      const started = Date.now();
+      let count = 0;
+      const skipped = [];
+      const left = [];
+      for (const given of files) {
+        if (Date.now() - started > CALL_BUDGET_MS) { left.push(given); continue; }
+        let file;
+        try { file = where(given); } catch (error) { skipped.push({ file: given, why: error.message }); continue; }
+        const stat = (() => { try { return fs.statSync(file); } catch { return null; } })();
+        if (!stat || !stat.isFile() || !/\.pdf$/i.test(file)) { skipped.push({ file: given, why: stat ? 'not a pdf' : 'not there' }); continue; }
+        const out = await addRow(file, null, { describe: false });
+        if (out.added) count += 1;
+        else skipped.push({ file: given, why: 'in the library already' });
+      }
+      if (count) log(`Brought in ${count} PDF${count === 1 ? '' : 's'}`);
+      return { added: count, skipped: skipped.slice(0, 30), skippedCount: skipped.length, left };
+    },
     unpack: ({ file }) => {
       const zip = where(file, 'file');
       if (!/\.zip$/i.test(zip)) throw new Error('Only a .zip can be unpacked');

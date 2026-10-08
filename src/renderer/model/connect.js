@@ -3,9 +3,9 @@
 // (src/main/connect), how an import's progress reads, what a step the agents hand the person says, and what the dock
 // shows. The sources and apps are src/shared/connect-sources.cjs.
 
-import { SOURCES, APPS, recallApps, webApps } from '../../shared/connect-sources.cjs';
+import { SOURCES, APPS, LOCAL_PDFS, recallApps, webApps } from '../../shared/connect-sources.cjs';
 
-export { SOURCES, APPS };
+export { SOURCES, APPS, LOCAL_PDFS };
 
 /**
  * Where the choose screen starts, from what main found (`connect-detect`): an app is ticked when it was found (on this

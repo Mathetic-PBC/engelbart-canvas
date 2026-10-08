@@ -4,7 +4,7 @@ import GithubRepos from '../workspace/GithubRepos.jsx';
 import { heldRow } from '../model/github.js';
 import { rowOf } from '../model/tools.js';
 import { markOpen } from '../ui/connect-open.js';
-import { SOURCES, initialPicks, subOf, choicesOf, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, pickedApps, permissionsFor } from '../model/connect.js';
+import { SOURCES, LOCAL_PDFS, initialPicks, subOf, choicesOf, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, pickedApps, permissionsFor } from '../model/connect.js';
 import obsidian from '../../../design/assets/logos/obsidian.svg';
 import notion from '../../../design/assets/logos/notion.svg';
 import apple from '../../../design/assets/logos/apple.svg';
@@ -87,7 +87,7 @@ const subRow = { display: 'flex', alignItems: 'center', gap: 10, width: '100%', 
 function AppRow({ name, on, onToggle, where }) {
   return (
     <button type="button" className="hov-wash" data-connect-app={name} onClick={onToggle} title={where || undefined} style={subRow}>
-      <span style={{ margin: '0 1px', display: 'flex' }}>{logoOf(name) || <span style={{ width: 14 }} />}</span>
+      <span style={{ margin: '0 1px', display: 'flex', color: '#4d4d4d' }}>{logoOf(name) || (name === LOCAL_PDFS ? FOLDER : <span style={{ width: 14 }} />)}</span>
       <span style={{ flex: 1, minWidth: 0, font: '13px/1 var(--font-sans)', color: on ? '#171717' : '#4d4d4d', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
       {where && <span style={{ flex: 'none', maxWidth: 170, font: '11.5px/1 var(--font-sans)', color: '#c9c9c9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{where}</span>}
       <Box on={on} />

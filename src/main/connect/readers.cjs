@@ -11,6 +11,9 @@
 //                sdk entry points, `codex exec`, Codex subagents) are marked `automated` and left out unless asked for.
 //   websites     a Chromium browser's history (top sites or pages) and bookmarks, and the links written in notes
 //   Zotero       the collections and items of the mirror Engelbart keeps (../zotero/sync.cjs)
+//   PDFs         the folders that hold PDFs (Downloads, Documents, Desktop, iCloud Drive…) with counts, a few titles and
+//                a rough guess of what kind of PDFs each holds, and the PDFs under one folder (2026-10-08, "Agent
+//                onboarding": papers on this Mac, asked about by folder and kind, never one by one)
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -561,8 +564,154 @@ function zoteroItems(root, { collection = '', nested = true, query = '', limit =
   return out;
 }
 
+/* ----------------------------------------------------------------------------------------------- PDFs on this Mac */
+
+// Folders a Mac keeps documents in, looked through when the person let the agents read their home folder. ~/Zotero is
+// not among them: its PDFs come in through Zotero, with their metadata.
+const PDF_ROOTS = ['Downloads', 'Documents', 'Desktop', 'Papers', 'Research', 'Dropbox', path.join('Library', 'Mobile Documents', 'com~apple~CloudDocs')];
+// Packages and libraries that are folders on disk but never hold the person's papers.
+const PACKAGE_RE = /\.(?:app|bundle|framework|photoslibrary|musiclibrary|tvlibrary|xcodeproj|xcworkspace|pkg|plugin|kext|lproj)$/i;
+const PDF_SKIP = new Set(['Zotero', 'Library', 'site-packages', 'dist', 'build', 'target', 'vendor', 'Pods']);
+
+/** The folders PDFs are looked for in: those of PDF_ROOTS that are here, and Google Drive's when it syncs to this Mac. */
+function pdfRoots(homeDir = os.homedir()) {
+  const drives = (() => { try { return fs.readdirSync(path.join(homeDir, 'Library', 'CloudStorage')).filter((name) => /^(?:GoogleDrive|Dropbox|OneDrive)/.test(name)).map((name) => path.join(homeDir, 'Library', 'CloudStorage', name)); } catch { return []; } })();
+  return [...PDF_ROOTS.map((rel) => path.join(homeDir, rel)), ...drives].filter(isDir);
+}
+
+/** Every PDF under `dir`, depth first to `depth` levels, packages and code folders passed over, at most `max` entries seen. */
+function walkPdfs(dir, { max = 40000, depth = 6 } = {}, visit) {
+  let seen = 0;
+  const stack = [[dir, 0]];
+  while (stack.length) {
+    const [here, level] = stack.pop();
+    let entries = [];
+    try { entries = fs.readdirSync(here, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      seen += 1;
+      if (seen > max) return true;
+      if (entry.name.startsWith('.')) continue;
+      const full = path.join(here, entry.name);
+      if (entry.isDirectory()) {
+        if (level < depth && !SKIP_DIRS.has(entry.name) && !PDF_SKIP.has(entry.name) && !PACKAGE_RE.test(entry.name)) stack.push([full, level + 1]);
+      } else if (entry.isFile() && /\.pdf$/i.test(entry.name)) visit(full, entry.name);
+    }
+  }
+  return false;
+}
+
+/**
+ * A PDF's title as the file says it, read cheaply from its first and last 64 KB (the XMP packet's dc:title, else the Info
+ * dictionary's /Title), or ''. Misses what is kept in compressed object streams: a hint for the librarian, not a fact.
+ */
+function pdfTitle(file) {
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    const size = fs.fstatSync(fd).size;
+    const span = Math.min(size, 64 * 1024);
+    const head = Buffer.alloc(span);
+    fs.readSync(fd, head, 0, span, 0);
+    const tail = Buffer.alloc(span);
+    fs.readSync(fd, tail, 0, span, Math.max(0, size - span));
+    const text = head.toString('latin1') + tail.toString('latin1');
+    const xmp = text.match(/<dc:title>[\s\S]{0,200}?<rdf:li[^>]*>([^<]{3,300})<\/rdf:li>/);
+    if (xmp) return clip(Buffer.from(xmp[1], 'latin1').toString('utf8').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>'), 200);
+    const hex = text.match(/\/Title\s*<(FEFF[0-9A-Fa-f]{4,600})>/);
+    if (hex) { const bytes = Buffer.from(hex[1].slice(4), 'hex'); for (let i = 0; i + 1 < bytes.length; i += 2) [bytes[i], bytes[i + 1]] = [bytes[i + 1], bytes[i]]; return clip(bytes.toString('utf16le'), 200); }
+    const plain = text.match(/\/Title\s*\(((?:\\.|[^\\)]){3,300})\)/);
+    if (!plain || /^\xfe\xff/.test(plain[1])) return '';
+    const title = plain[1].replace(/\\([nrt()\\])/g, (m, c) => ({ n: ' ', r: ' ', t: ' ' }[c] || c));
+    return /[\x00-\x08]/.test(title) || /^(?:untitled|microsoft word - .*|\s*)$/i.test(title) ? '' : clip(title, 200);
+  } catch { return ''; } finally { if (fd !== undefined) try { fs.closeSync(fd); } catch { /* closed */ } }
+}
+
+// What kind of PDF a name (and title) suggests, for the librarian's questions about kinds: `paper` (an arXiv id, a
+// DOI-like or ACM-style number, a venue or a paper's words), `personal` (receipts, statements, tickets, résumés: never
+// offered), `book` (books, slides, lecture notes, manuals), else `unclear`, left to the titles.
+const PAPER_ID_RE = /(?:^|[^\d])\d{4}\.\d{4,5}(?:v\d+)?(?:[^\d]|$)|^\d{5,}\.\d{5,}|^10\.\d{4,}/;
+const PERSONAL_RE = /\b(?:invoice|receipt|bank statement|statement of account|bill|tax(?:es)?|w-?2|w-?9|1099|1040|payslip|pay ?stub|lease|rental agreement|insurance|boarding pass|ticket|itinerary|reservation|booking|confirmation|bank|passport|visa|i-?20|ds-?160|medical|prescription|lab results|vaccin\w*|resume|résumé|cover letter|offer letter|transcript|diploma|refund|warranty|utility)\b/i;
+const PAPER_RE = /\b(?:et al|arxiv|preprint|proceedings|proc\.|journal|conference|symposium|workshop|chi|uist|cscw|neurips|nips|icml|iclr|acl|emnlp|naacl|cvpr|iccv|eccv|sigcse|icer|aaai|ijcai|kdd|paper|thesis|dissertation)\b|^[a-z]+(?:[-_ ][a-z]+)?[-_ ]?(?:19|20)\d{2}[a-z]?(?:[-_ ]|\.pdf$)/i;
+const BOOK_RE = /\b(?:book|textbook|handbook|chapter|ch\d+|slides?|lecture|lec\d*|syllabus|manual|guide|notes|homework|hw\d*|problem set|pset|exam|midterm|final)\b/i;
+function pdfGuess(name, title = '') {
+  const text = `${name.replace(/\.pdf$/i, '').replace(/[_]+/g, ' ')} ${title}`;
+  if (PAPER_ID_RE.test(name)) return 'paper';
+  if (PERSONAL_RE.test(text)) return 'personal';
+  if (PAPER_RE.test(name) || PAPER_RE.test(title)) return 'paper';
+  if (BOOK_RE.test(text)) return 'book';
+  return 'unclear';
+}
+
+/**
+ * The folders under `roots` that hold PDFs, most first: how many, the newest, how many of each kind (pdfGuess), and the
+ * names and titles of a few of the newest. → { roots, pdfs, folders: [...], moreFolders, truncated }. Only reads.
+ */
+function pdfFolders(roots, { homeDir = os.homedir(), top = 40, samples = 6, titles = 150, max = 40000 } = {}) {
+  const byFolder = new Map();
+  let total = 0, truncated = false;
+  // A folder inside another one looked through is not looked through twice.
+  const sorted = [...new Set(roots.map((root) => path.resolve(root)))].sort((a, b) => a.length - b.length);
+  const seen = sorted.filter((dir, i) => !sorted.slice(0, i).some((outer) => dir.startsWith(outer + path.sep)));
+  for (const dir of seen) {
+    truncated = walkPdfs(dir, { max }, (file, name) => {
+      total += 1;
+      const folder = path.dirname(file);
+      const stat = statOf(file);
+      const entry = byFolder.get(folder) || { path: folder, pdfs: 0, newest: 0, files: [] };
+      entry.pdfs += 1;
+      entry.newest = Math.max(entry.newest, stat ? stat.mtimeMs : 0);
+      entry.files.push({ file, name, mtime: stat ? stat.mtimeMs : 0 });
+      byFolder.set(folder, entry);
+    }) || truncated;
+  }
+  let budget = titles;
+  const list = [...byFolder.values()].sort((a, b) => b.pdfs - a.pdfs || b.newest - a.newest);
+  const folders = list.slice(0, top).map((entry) => {
+    const kinds = { paper: 0, personal: 0, book: 0, unclear: 0 };
+    for (const each of entry.files) kinds[pdfGuess(each.name)] += 1;
+    const newest = entry.files.sort((a, b) => b.mtime - a.mtime).filter((each) => pdfGuess(each.name) !== 'personal').slice(0, samples);
+    const examples = newest.map((each) => { const title = budget-- > 0 ? pdfTitle(each.file) : ''; return title && title !== each.name.replace(/\.pdf$/i, '') ? `${each.name} — ${title}` : each.name; });
+    return { folder: shownPath(homeDir, entry.path), path: entry.path, pdfs: entry.pdfs, newest: iso(entry.newest), kinds: Object.fromEntries(Object.entries(kinds).filter(([, n]) => n)), examples };
+  });
+  return { roots: [...seen].map((dir) => shownPath(homeDir, dir)), pdfs: total, folders, moreFolders: Math.max(0, list.length - top), truncated };
+}
+
+/**
+ * The PDFs under `dir`, newest first: path, name, title, the folder it is in (relative), when it changed, its size and the
+ * kind its name suggests. `days`: changed in the last n days; `query`: words in its name, title or folder; `kind`: only
+ * that pdfGuess; `include` / `exclude`: folders relative to `dir`. At most `limit`.
+ */
+function pdfFiles(dir, { days = null, query = '', kind = '', include = [], exclude = [], limit = 300, titles = true } = {}) {
+  const root = path.resolve(dir);
+  const norm = (list) => (Array.isArray(list) ? list : []).map((rel) => String(rel || '').replace(/^\/+|\/+$/g, '')).filter(Boolean);
+  const ins = norm(include), outs = norm(exclude);
+  const under = (rel, folder) => rel === folder || rel.startsWith(`${folder}/`);
+  const since = cutoff(days);
+  const found = [];
+  walkPdfs(root, { max: 200000, depth: 12 }, (file, name) => {
+    const rel = path.relative(root, path.dirname(file)).split(path.sep).join('/');
+    if (ins.length && !ins.some((folder) => under(rel, folder))) return;
+    if (outs.some((folder) => under(rel, folder))) return;
+    const stat = statOf(file);
+    if (!stat || (since && stat.mtimeMs < since)) return;
+    found.push({ file, name, folder: rel, mtime: stat.mtimeMs, size: stat.size });
+  });
+  const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
+  const out = [];
+  for (const entry of found.sort((a, b) => b.mtime - a.mtime)) {
+    if (out.length >= limit) break;
+    const title = titles ? pdfTitle(entry.file) : '';
+    const guess = pdfGuess(entry.name, title);
+    if (kind && guess !== kind) continue;
+    if (words.length) { const text = `${entry.name} ${title} ${entry.folder}`.toLowerCase(); if (!words.every((word) => text.includes(word))) continue; }
+    out.push({ path: entry.file, name: entry.name, title: title || null, folder: entry.folder || '.', modified: iso(entry.mtime), size: entry.size, kind: guess });
+  }
+  return { total: found.length, pdfs: out };
+}
+
 module.exports = {
   NOTE_EXT, IMAGE_EXT, shownPath, expandPath, walkFiles, folderOverview, noteFiles, obsidianDailyFolder, obsidianVaults,
   localChats, localChatCounts, localChatFile, localTranscript, readExport, exportChat, exportChats, exportCounts, exportTranscript,
   browserProfiles, profileOf, browserHistory, browserBookmarks, linksIn, hostOf, chromeTime, zoteroCollections, zoteroItems,
+  pdfRoots, pdfFolders, pdfFiles, pdfTitle, pdfGuess,
 };

@@ -95,6 +95,8 @@ function importToolLabel(tool, input = {}) {
     case 'import_note_files': return `Bringing in ${n(input.files)} note${n(input.files) === 1 ? '' : 's'}`;
     case 'add_note': return `Writing “${quote(input.title)}”`;
     case 'add_to_library': return `Adding ${quote(input.name || input.input)}`;
+    case 'list_pdfs': return `Listing PDFs in ${path.basename(String(input.folder || 'a folder'))}`;
+    case 'import_pdfs': return `Bringing in ${n(input.files)} PDF${n(input.files) === 1 ? '' : 's'}`;
     case 'unpack': return `Unpacking ${path.basename(String(input.file || 'a zip'))}`;
     case 'list_chats': case 'web_chats': return `Listing ${input.app || ''} chats`.replace(/\s+/g, ' ');
     case 'read_chat': case 'web_chat_read': return `Reading a ${input.app || ''} chat`.replace(/\s+/g, ' ');

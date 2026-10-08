@@ -95,6 +95,12 @@ const SKILLS = {
   Zotero: `# Zotero
 - zotero_collections lists the collections with keys and counts; zotero_items lists items (by collection key, words); import_zotero_items brings items in by key as papers, with their pdfs. If a tool says Zotero is not signed in, call needs_you with kind "signin" and reason "Sign in to Zotero" (Engelbart's own sign-in).`,
 
+  'PDFs on this Mac': `# PDFs on this Mac
+- <found> lists the folders that hold PDFs (the chosen ones, and Downloads, Documents, Desktop and iCloud Drive when the person let the agents read their home folder), most first: how many, the newest, a guess of how many of each kind (paper, book, personal, unclear) and a few names and titles.
+- Work by folder and by kind, as the plan says: list_pdfs on a folder (kind "paper", query, days, include and exclude narrow it; check true reads the first pages to say whether each is a research paper), judge the unclear ones by their titles, then import_pdfs with their paths, up to 200 a call. A whole folder the plan wants in goes in whole, but never its personal PDFs.
+- Never bring in personal or administrative PDFs (receipts, invoices, bank and tax papers, tickets, forms, résumés, medical records), wherever they are. Leave out by default: what is inside ~/Zotero (Zotero's own import brings it), installers and manuals for apps.
+- Each PDF stays where it is: the library points at it, and one that reads as a research paper is tagged paper.`,
+
   Overleaf: `# Overleaf
 - ${BROWSER}
 - overleaf_projects lists the person's projects (id, name, last updated, owner) from https://www.overleaf.com/project in Engelbart's browser; import_overleaf_projects brings projects in by id: each is downloaded as its source zip with the person's sign-in, unpacked into Engelbart, and kept in the library as a folder, its main .tex file and compiled pdf too when there is one.

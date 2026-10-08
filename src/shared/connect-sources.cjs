@@ -17,13 +17,18 @@
 //   automation  macOS Automation: Engelbart asks the app itself, which macOS asks the person to allow once (Apple Notes)
 // `memory`: an AI assistant that keeps memories of the person. With their leave, an agent asks it for a research profile
 // (src/main/connect/prompts.cjs RECALL_PROMPT), which goes into MEMORY.md.
+// LOCAL_PDFS (2026-10-08, "Agent onboarding": "add capability to search local papers ... the questions for this should
+// center around folders and genres of papers rather than individual ones"): the PDFs in the person's own folders
+// (Downloads, Documents, Desktop, iCloud Drive…), looked through by folder (src/main/connect/readers.cjs pdfFolders).
+
+const LOCAL_PDFS = 'PDFs on this Mac';
 
 const SOURCES = Object.freeze([
   { id: 'notes', label: 'Notes', apps: ['Obsidian', 'Notion', 'Apple Notes', 'OneNote', 'Google Docs', 'Evernote'] },
   { id: 'transcripts', label: 'Meeting transcripts', apps: ['Granola', 'Google Meet', 'Zoom'] },
   { id: 'chats', label: 'AI chats', apps: ['ChatGPT', 'Codex', 'Claude', 'Claude Code', 'Grok', 'Gemini', 'Perplexity', 'Cursor'] },
   { id: 'sites', label: 'Websites', apps: [] },
-  { id: 'papers', label: 'Papers', apps: ['Zotero', 'Overleaf'] },
+  { id: 'papers', label: 'Papers', apps: ['Zotero', 'Overleaf', LOCAL_PDFS] },
   { id: 'code', label: 'Code', apps: [] },
 ]);
 
@@ -49,6 +54,7 @@ const APPS = Object.freeze({
   Cursor: { reach: 'local' },
   Zotero: { reach: 'signin' },
   Overleaf: { reach: 'web', sites: ['overleaf.com'], start: 'https://www.overleaf.com/project' },
+  [LOCAL_PDFS]: { reach: 'local', pick: 'folder' },
   GitHub: { reach: 'signin' },
 });
 
@@ -65,4 +71,4 @@ const recallApps = (apps) => (Array.isArray(apps) ? apps : []).filter((app) => a
 /** The apps reached on the web, of `apps`. */
 const webApps = (apps) => (Array.isArray(apps) ? apps : []).filter((app) => appOf(app) && appOf(app).reach === 'web');
 
-module.exports = { SOURCES, APPS, SIGN_IN_SITES, SOURCE_IDS, sourceOf, appOf, sourceOfApp, recallApps, webApps };
+module.exports = { SOURCES, APPS, LOCAL_PDFS, SIGN_IN_SITES, SOURCE_IDS, sourceOf, appOf, sourceOfApp, recallApps, webApps };
