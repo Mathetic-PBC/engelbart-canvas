@@ -599,7 +599,7 @@ export default function Rail({
                     key={row.id}
                     data-sb-source={row.id}
                     indent={indent}
-                    icon={SOURCE_ICON[sourceKind(row)]}
+                    icon={row.type === 'md' && sourceKind(row) === 'files' ? <I.FileIcon /> : SOURCE_ICON[sourceKind(row)]}
                     label={renaming === row.id ? <RenameField initial={row.name} onDone={(name) => { setRenaming(null); if (name) onRenameRow(row, name); }} style={text(indent ? SIZE.indent : SIZE.row)} /> : row.name}
                     title={row.name}
                     faint={isUntitled(row.name)}

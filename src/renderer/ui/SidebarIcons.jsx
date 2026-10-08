@@ -49,6 +49,8 @@ export const ChevronDown = (props) => <Svg {...props}><path d="m6 9 6 6 6-6" /><
 export const ChevronRight = (props) => <Svg {...props}><path d="m9 18 6-6-6-6" /></Svg>;
 export const LinkIcon = (props) => <Svg {...props}><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></Svg>;
 export const NoteIcon = (props) => <Svg {...props}><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z" /><path d="M14 2v4a2 2 0 0 0 2 2h4" /><path d="M9 13.5h6" /><path d="M9 17.5h6" /></Svg>;
+// A markdown file that is not a note: the note's page with its corner turned, without the two lines.
+export const FileIcon = (props) => <Svg {...props}><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z" /><path d="M14 2v4a2 2 0 0 0 2 2h4" /></Svg>;
 export const FolderIcon = (props) => <Svg {...props}><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" /></Svg>;
 const STAR_PATH = 'M11.53 2.3a.53.53 0 0 1 .94 0l2.31 4.68a2.12 2.12 0 0 0 1.6 1.16l5.17.76a.53.53 0 0 1 .29.9l-3.74 3.64a2.12 2.12 0 0 0-.61 1.88l.88 5.14a.53.53 0 0 1-.77.56l-4.62-2.43a2.12 2.12 0 0 0-1.97 0L6.4 21.01a.53.53 0 0 1-.77-.56l.88-5.14a2.12 2.12 0 0 0-.61-1.88L2.16 9.8a.53.53 0 0 1 .29-.91l5.17-.75a2.12 2.12 0 0 0 1.6-1.16z';
 export const StarIcon = ({ filled = false, ...props }) => <Svg {...props}><path d={STAR_PATH} fill={filled ? 'currentColor' : 'none'} /></Svg>;
