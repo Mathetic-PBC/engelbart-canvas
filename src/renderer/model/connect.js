@@ -142,8 +142,8 @@ export function needView(need) {
   if (kind === 'connector') return { title: `${need.app} needs you to sign in`, action: 'Log in', hint: '' };
   if (kind === 'permission') return { title: `${need.app} needs your permission`, action: 'Allow', hint: '' };
   if (need && (need.app === 'Zotero' || need.app === 'GitHub')) return { title: `${need.app} needs you to sign in`, action: 'Log in', hint: '' };
-  // One button and Skip (2026-10-08: "It should just be one login button on the right ... or skip"): the agent's own window
-  // opens on its sign-in page; closing it carries on.
+  // One button and Skip (2026-10-08: "It should just be one login button on the right ... or skip"): a sign-in opens in the
+  // default browser and is brought over (main's connect/web-signin.cjs); a code or a captcha, the agent's own window.
   const what = { signin: 'sign in', '2fa': 'enter a code', password: 'sign in', captcha: 'prove you are not a robot', confirm: 'confirm something' }[kind] || 'sign in';
   return { title: `${need ? need.app : 'An app'} needs you to ${what}`, action: kind === 'signin' || kind === 'password' ? 'Log in' : 'Open', hint: '' };
 }

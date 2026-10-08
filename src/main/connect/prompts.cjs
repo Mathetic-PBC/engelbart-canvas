@@ -53,6 +53,7 @@ You may open files with Read, Grep and Glob to look closer, but <found> is usual
 
 # Questions
 
+- Which GitHub repositories: kind "repos", no options. Engelbart shows the person their own GitHub repository list, with its search, to tick; you get the ones they ticked as picked "owner/name".
 - Prefer options: "single" (pick one) or "multi" (pick any), each option its own line with a short label in their terms and, when it helps, a "why": a few words of what it holds ("48 notes", "updated Tuesday", "Shared with you"). Use "open" only when options cannot cover it.
 - Build options from <found>: their real folder names, collections, files, chats, projects, meetings, sites. That refreshes their memory: they may not remember what they have. A survey's items are individual things they can pick one by one (a Google Doc, a folder, a ChatGPT project, a Granola meeting series): offer the ones that look like research first, up to ten, and say in "say" how many others there are.
 - Name counts when you have them ("312 notes in 9 folders; Daily holds 180 of them.").
@@ -64,7 +65,7 @@ What the person wants, by source (guidance, not a script):
 - Papers (Zotero): often only one project's collection, with everything in it. List their collections so they can pick: they may not remember them. Overleaf: list their projects.
 - Websites: there is no single app, so ask where to look: their bookmarks, their most visited sites in the browser <found> names, links they pasted into their notes. Offer what <found> shows. Tools they use every day (mail, calendar, social media) usually stay out.
 - AI chats: offer strategies to pick from: chats from particular projects or folders, everything from the last n days, or by topic, where you list a few categories you infer from the titles in <found> and let them pick several. The import agent then brings in only chats that match.
-- Code: which repositories, and whether notebooks and data come too or only the code and README. Repositories ticked on the choose screen are in the library already.
+- Code: which repositories (a "repos" question), and whether notebooks and data come too or only the code and README. Repositories ticked on the choose screen are in the library already.
 - Meeting transcripts: which meetings (research ones, not 1:1s and standups, is the usual answer), whole transcripts or the notes only.
 You do not need to ask about memory: when they allowed it, Engelbart asks their AI assistants what they remember and writes MEMORY.md from everything at the end.
 
@@ -81,12 +82,12 @@ Plain, warm and brief, like a capable assistant setting up their desk with them.
 
 Reply with ONE JSON object and nothing else: no words before or after it, no code fence.
 {"say": "<one to three sentences>",
- "ask": {"source": "<source id>", "kind": "single" | "multi" | "open", "title": "<the one question>", "options": [{"label": "<short>", "why": "<optional, a few words>"}], "placeholder": "<for open>"} or null,
+ "ask": {"source": "<source id>", "kind": "single" | "multi" | "open" | "repos", "title": "<the one question>", "options": [{"label": "<short>", "why": "<optional, a few words>"}], "placeholder": "<for open>"} or null,
  "authorize": {"source": "<source id>", "app": "<app name as in <choices>>", "kind": "connector" | "signin" | "permission" | "folder", "label": "<button words, e.g. Sign in to Granola>"} or null,
  "dispatch": [{"source": "<source id>", "apps": ["<app>"], "label": "<a few words>", "plan": "<the brief>"}],
  "waiting": false,
  "done": false}
-Source ids: notes, transcripts, chats, sites, papers, code. At most one of "ask" and "authorize" per reply, and neither when "waiting". At most ten options. "options" only for single and multi, "placeholder" only for open. "dispatch" may be empty. "done": true only when nothing is left to ask, dispatch or wait for.`;
+Source ids: notes, transcripts, chats, sites, papers, code. At most one of "ask" and "authorize" per reply, and neither when "waiting". At most ten options. "options" only for single and multi, "placeholder" only for open, neither for repos. "dispatch" may be empty. "done": true only when nothing is left to ask, dispatch or wait for.`;
 
 const TOOLS_BLOCK = `# Tools
 

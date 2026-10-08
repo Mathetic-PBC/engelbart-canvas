@@ -53,7 +53,10 @@ const MAX_LOG = 400;
 const SHOWN_LOG = 150;
 const NEED_WAIT_MS = 170_000;
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const ASK_KINDS = new Set(['single', 'multi', 'open']);
+const ASK_KINDS = new Set(['single', 'multi', 'open', 'repos']);
+// Which of GitHub's repositories, asked as any choice is: the window shows the GitHub list instead (2026-10-08: "when
+// asking me which repositories it should use our existing nice github ui"), whether or not the librarian said "repos".
+const REPOS_ASK = /\bwhich\b.*\brepo(?:s|sitory|sitories)?\b/i;
 const AUTHORIZE_KINDS = new Set(['signin', 'connector', 'permission', 'folder']);
 const SIGNIN_APPS = new Set(['Zotero', 'GitHub']);
 const PRIORITY = Object.freeze({ survey: 0, recall: 1, import: 2, memory: 3, redact: 4 });
@@ -129,7 +132,10 @@ function readReply(text, choices) {
   if (!value || typeof value !== 'object') return { say: clip(raw, 2000) || '…', ask: null, authorize: null, dispatch: [], waiting: false, done: false, unread: true };
   const on = (id) => !!(choices.sources[id] && choices.sources[id].on);
   let ask = null;
-  if (value.ask && typeof value.ask === 'object' && ASK_KINDS.has(value.ask.kind) && typeof value.ask.title === 'string' && value.ask.title.trim()) {
+  const reposAsk = value.ask && typeof value.ask === 'object' && typeof value.ask.title === 'string' && (value.ask.kind === 'repos' || (value.ask.source === 'code' && value.ask.kind !== 'open' && REPOS_ASK.test(value.ask.title)));
+  if (reposAsk && value.ask.title.trim()) {
+    ask = { source: 'code', kind: 'repos', title: line(value.ask.title, 300), options: [], placeholder: '' };
+  } else if (value.ask && typeof value.ask === 'object' && ASK_KINDS.has(value.ask.kind) && value.ask.kind !== 'repos' && typeof value.ask.title === 'string' && value.ask.title.trim()) {
     const options = (Array.isArray(value.ask.options) ? value.ask.options : []).map(optionOf).filter(Boolean).filter((option, i, all) => all.findIndex((other) => other.label === option.label) === i).slice(0, 10);
     if (value.ask.kind === 'open' || options.length) ask = { source: sourceOf(value.ask.source) ? value.ask.source : null, kind: value.ask.kind, title: line(value.ask.title, 300), options: value.ask.kind === 'open' ? [] : options, placeholder: value.ask.kind === 'open' ? line(value.ask.placeholder, 120) : '' };
   }
@@ -188,13 +194,13 @@ function shownOf(input) {
  * change; `openBridge` (../sandbox/local-tools.cjs openToolBridge); `browser` the agents' browser (./browser.cjs, null
  * where there is none); `connectors` (./connectors.cjs); `appleNotes` (./apple-notes.cjs).
  */
-function createConnect({ agents, models = () => null, ready = () => [...PROVIDERS], context, homeDir, env = process.env, zotero = {}, github = {}, deps = {}, notify = () => {}, openBridge, browser = null, connectors = null, appleNotes = null, now = () => new Date().toISOString() }) {
+function createConnect({ agents, models = () => null, ready = () => [...PROVIDERS], context, homeDir, env = process.env, zotero = {}, github = {}, deps = {}, notify = () => {}, openBridge, browser = null, connectors = null, appleNotes = null, webSignIn = null, now = () => new Date().toISOString() }) {
   const sessions = new Map();
   const readyNow = () => { try { return (ready() || []).filter((provider) => PROVIDERS.includes(provider)); } catch { return [...PROVIDERS]; } };
   const choiceFor = (provider) => connectChoice(provider, (() => { try { return models(); } catch { return null; } })());
 
   const publicJob = (job) => ({ id: job.id, kind: job.kind, source: job.source, label: job.label, apps: job.apps, status: job.status, skipped: !!job.skipped, notes: job.notes, items: job.items, activity: job.activity, summary: job.summary, error: job.error, started: job.started, ended: job.ended });
-  const publicNeed = (need) => ({ id: need.id, app: need.app, kind: need.kind, reason: need.reason, jobs: need.jobs.length, opened: need.opened, busy: need.busy, error: need.error, at: need.at });
+  const publicNeed = (need) => ({ id: need.id, app: need.app, kind: need.kind, reason: need.reason, jobs: need.jobs.length, opened: need.opened, busy: need.busy, browser: need.browser || '', error: need.error, at: need.at });
   function snapshot(s) {
     return {
       id: s.id, mode: s.mode, chat: s.chat, thinking: s.thinking, activity: s.activity, waiting: s.waitingForSurvey, done: s.done, error: s.error, finished: s.finished, stopped: s.stopped, minimized: s.minimized, dismissed: s.dismissed,
@@ -576,6 +582,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   function closeNeed(s, need, how) {
     if (need.closed) return;
     need.closed = true;
+    if (need.cancel) need.cancel(); // a sign-in still waited for in the default browser
     if (how === 'skip' && !s.stopped) skipApp(s, need.app, need.jobs);
     for (const [jobId, resolve] of need.waiters) { resolve({ status: how === 'skip' ? 'skipped' : 'done' }); if (browser) browser.hide(jobId); }
     need.waiters.clear();
@@ -611,7 +618,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       if (need.closed || !need.jobs.includes(job.id)) continue;
       need.waiters.delete(job.id);
       need.jobs = need.jobs.filter((id) => id !== job.id);
-      if (!need.jobs.length) need.closed = true;
+      if (!need.jobs.length) { need.closed = true; if (need.cancel) need.cancel(); }
     }
   }
 
@@ -875,19 +882,46 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       if (out.allowed) { s.choices.permissions.notes = true; closeNeed(s, found, 'done'); } else { found.error = line(out.error, 200); emit(s); }
       return snapshot(s);
     }
-    // A web sign-in, a code, a password, a captcha: the agent's own window, on its sign-in page, shown to the person to do it
-    // there (the agents' sign-ins are Engelbart's browser's, so a sign-in in another browser would not reach them). Closing
-    // the window carries on (windowClosed).
+    // A web app's sign-in: in the person's default browser, where they are likely signed in already, then brought over to
+    // Engelbart's (./web-signin.cjs). The window waits on it in the background; done once Engelbart holds the sign-in.
+    if ((found.kind === 'signin' || found.kind === 'password') && webSignIn && webSignIn.supports(found.app)) {
+      if (found.busy) return snapshot(s);
+      const controller = new AbortController();
+      found.busy = true;
+      found.browser = webSignIn.browserName();
+      found.cancel = () => controller.abort();
+      emit(s);
+      const opened = (name) => { found.opened = true; found.browser = name; logAction(s, null, `Opened ${found.app}'s sign-in in ${name}`, 'You'); emit(s); };
+      webSignIn.signIn(found.app, { signal: controller.signal, onOpened: opened }).catch((error) => ({ status: 'failed', error: error.message })).then((out) => {
+        found.busy = false;
+        found.cancel = null;
+        if (found.closed || out.status === 'cancelled') return;
+        if (out.status === 'signed-in') { logAction(s, null, `Signed in to ${found.app} from ${out.browser}`, 'You'); closeNeed(s, found, 'done'); return; }
+        if (out.status === 'unsupported') { showWindow(s, found, `${out.browser}'s sign-ins can't be brought into Engelbart: sign in here instead.`); return; }
+        found.error = out.status === 'timeout' ? `Still not signed in to ${found.app} in ${out.browser}. Log in to keep waiting, or skip it.` : line(out.error, 200);
+        emit(s);
+      });
+      return snapshot(s);
+    }
+    showWindow(s, found);
+    return snapshot(s);
+  }
+
+  /**
+   * A code, a captcha, or a sign-in the default browser cannot carry over: the agent's own window, on its page, shown to the
+   * person to do it there (the agents' sign-ins are Engelbart's browser's). Closing the window carries on (windowClosed).
+   */
+  function showWindow(s, found, note = '') {
     const jobId = found.jobs.find((each) => browser && browser.has(each));
     if (!jobId || !browser.show(jobId, { title: `${found.reason} — Engelbart` })) {
       found.error = 'There is no sign-in window to show: sign in to it on the Stage, or skip it.';
       emit(s);
-      return snapshot(s);
+      return;
     }
     found.opened = true;
+    found.error = note;
     logAction(s, null, `Opened the window: ${found.reason}`, 'You');
     emit(s);
-    return snapshot(s);
   }
 
   /** A step the agents' browser took for a job, into that job's session's action log. */
@@ -898,11 +932,22 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     }
   }
 
-  /** The person closed a window shown to them: what it was shown for counts as done. */
+  /**
+   * The person closed a window shown to them: what it was shown for counts as done, but a web app's sign-in only when
+   * Engelbart's browser holds it now (2026-10-08: signed in, then asked again), else the card stays with Log in.
+   */
   function windowClosed(jobId) {
     for (const s of sessions.values()) {
       const found = s.needs.find((entry) => !entry.closed && entry.jobs.includes(jobId));
-      if (found) closeNeed(s, found, 'done');
+      if (!found) continue;
+      if (!(webSignIn && webSignIn.supports(found.app))) { closeNeed(s, found, 'done'); continue; }
+      webSignIn.signedIn(found.app).catch(() => true).then((yes) => {
+        if (found.closed) return;
+        if (yes) { closeNeed(s, found, 'done'); return; }
+        found.opened = false;
+        found.error = `Not signed in to ${found.app} yet.`;
+        emit(s);
+      });
     }
   }
 

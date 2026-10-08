@@ -560,6 +560,26 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
     return { browser: browser.id, profile: profile.id, defaults: DEFAULT_DOMAINS, domains: list };
   }
 
+  /**
+   * The names of the live cookies a profile holds for `wanted` registrable domains → [{ domain, name }]. No Keychain and no
+   * values, as domains(): enough to tell whether a site's sign-in cookie is there before anything is decrypted or written
+   * (Connect your library's sign-in in the default browser, ../connect/web-signin.cjs).
+   */
+  function cookieNames(browserId, profileId, wanted) {
+    const { browser, profile } = resolveProfile(browserId, profileId);
+    const want = new Set((Array.isArray(wanted) ? wanted : []).map((d) => String(d).toLowerCase()));
+    const firefox = browser.family === 'firefox';
+    const read = firefox ? withCopy(profile.cookieFile, tmpBase, readFirefoxDb) : withCopy(profile.cookieFile, tmpBase, readChromiumDb);
+    const kept = firefox ? firefoxKept : chromiumKept;
+    const at = unixNow();
+    const out = [];
+    for (const row of read.rows) {
+      const domain = registrableDomain(row.host);
+      if (want.has(domain) && kept(row, at)) out.push({ domain, name: row.name });
+    }
+    return out;
+  }
+
   /** The signed-in check for each imported domain that has one, all at once over the Stage's session, so together they
    *  take no longer than one (checkTimeoutMs). A check that fails or times out comes back null. */
   async function runChecks(session, importedDomains) {
@@ -576,7 +596,7 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
    * checks } — with no cookie value anywhere in it. A Keychain denial or miss (Chromium) throws before anything is written
    * (CK-05). No domains is nothing to import (2026-10-06): no Keychain prompt, no read, no write and no record.
    */
-  async function run({ browser: browserId, profile: profileId, domains: wanted }) {
+  async function run({ browser: browserId, profile: profileId, domains: wanted, quiet = false }) {
     const { browser, profile } = resolveProfile(browserId, profileId);
     const want = new Set((Array.isArray(wanted) ? wanted : []).map((d) => String(d).toLowerCase()));
     if (!want.size) return { browser: browser.id, profile: profile.name, imported: 0, skipped: 0, sessionOnly: 0, checks: [] };
@@ -613,6 +633,9 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
     await store.flushStore();
 
     const importedDomains = [...want];
+    // `quiet` (an import Connect makes itself, again until the person has signed in): no sign-in checks over the network and
+    // no record; the caller checks for itself.
+    if (quiet) return { browser: browser.id, profile: profile.name, imported, skipped, sessionOnly, checks: [] };
     const checks = await runChecks(session, importedDomains);
     recordImport(importsFile, {
       browser: browser.id,
@@ -627,7 +650,7 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
     return { browser: browser.id, profile: profile.name, imported, skipped, sessionOnly, checks };
   }
 
-  return { sources, domains, import: run };
+  return { sources, domains, cookieNames, import: run };
 }
 
 // `security` exits with the low byte of the Keychain's OSStatus (2026-10-06): 44 is errSecItemNotFound (-25300), no key of

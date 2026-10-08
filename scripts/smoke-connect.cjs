@@ -93,7 +93,8 @@ app.whenReady().then(async () => {
     await press(wc, '[data-connect-source="chats"] button[aria-expanded]');
     await press(wc, '[data-connect-app="ChatGPT"]');
     assert.equal(await attr(wc, '[data-connect-app=ChatGPT] [role=checkbox]', 'aria-checked'), 'true');
-    assert.match(await text(wc, '[data-connect-permissions]'), /Agents do all of this for you[\s\S]*Use my accounts in the background\s*ChatGPT[\s\S]*Ask ChatGPT what it remembers/);
+    // Each a line with no subtext under it (2026-10-08).
+    assert.match(await text(wc, '[data-connect-permissions]'), /Agents do all of this for you[\s\S]*Use my accounts in the background\s*✓?\s*Ask ChatGPT what it remembers about my research\s*$/);
     await shot(wc, '1-choose');
     // Code: onboarding's own repository list, roomy (here GitHub is not set up, so its sign-in shows in its place).
     await press(wc, '[data-connect-source="code"] button[aria-expanded]');

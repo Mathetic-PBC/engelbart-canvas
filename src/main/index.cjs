@@ -63,6 +63,7 @@ const { createConnectAgents } = require('./connect/agents.cjs');
 const { createFakeConnectAgents } = require('./connect/fake.cjs');
 const { createAgentBrowser } = require('./connect/browser.cjs');
 const { createConnectors } = require('./connect/connectors.cjs');
+const { createWebSignIn, SIGN_IN_COOKIES } = require('./connect/web-signin.cjs');
 const { createAppleNotes } = require('./connect/apple-notes.cjs');
 const { APPS: CONNECT_APPS } = require('../shared/connect-sources.cjs');
 const { openToolBridge } = require('./sandbox/local-tools.cjs');
@@ -926,6 +927,24 @@ if (!hasSingleInstanceLock) {
       headless: process.env.ENGELBART_HEADLESS === '1',
     });
     const appleNotes = createAppleNotes();
+    // A web app's sign-in in the person's default browser, brought over into the Stage's session the agents use
+    // (./connect/web-signin.cjs). Its own importer remembers a browser's Keychain key while Engelbart runs, so macOS asks once
+    // however often it looks again.
+    const keychainKeys = new Map();
+    const webSignIn = createWebSignIn({
+      cookieImport: process.platform === 'darwin' ? createCookieImport({
+        supportDir: path.join(app.getPath('home'), 'Library', 'Application Support'),
+        userDataDir: app.getPath('userData'),
+        getSession: () => electronSession.fromPartition(BROWSER_PARTITION),
+        keychain: (name) => {
+          if (!keychainKeys.has(name)) keychainKeys.set(name, keychainRunner(name).catch((error) => { keychainKeys.delete(name); throw error; }));
+          return keychainKeys.get(name);
+        },
+      }) : null,
+      defaultBrowser: () => { try { return app.getApplicationNameForProtocol('https://'); } catch { return ''; } },
+      openExternal: (url) => electronShell.openExternal(parseExternalUrl(url).href),
+      getSession: () => electronSession.fromPartition(BROWSER_PARTITION),
+    });
     // The providers whose CLI can run now (the tool check), as Connect names them; before the first check, both.
     const connectReady = () => {
       if (connectFake) return ['anthropic', 'openai'];
@@ -952,10 +971,10 @@ if (!hasSingleInstanceLock) {
       browser: agentBrowser,
       connectors,
       appleNotes,
+      webSignIn,
     });
     // The apps Engelbart's browser holds a sign-in for (their sign-in cookie in the Stage's session): ticked on the choose
     // screen, as an app found on this Mac is.
-    const SIGN_IN_COOKIES = { ChatGPT: ['chatgpt.com', /session-token/], Claude: ['claude.ai', /^sessionKey$/], 'Google Docs': ['google.com', /^(__Secure-1PSID|SID)$/], 'Google Meet': ['google.com', /^(__Secure-1PSID|SID)$/], Gemini: ['google.com', /^(__Secure-1PSID|SID)$/], Overleaf: ['overleaf.com', /^overleaf_session/], Perplexity: ['perplexity.ai', /session-token/], Grok: ['grok.com', /^sso$/], Notion: ['notion.so', /^token_v2$/] };
     const connectSignedIn = async () => {
       const cookies = electronSession.fromPartition(BROWSER_PARTITION).cookies;
       const out = [];

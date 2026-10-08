@@ -56,6 +56,8 @@ const CSS = '.bart-ic{display:inline-flex;align-items:center;justify-content:cen
   + '.bs-field{display:block;width:100%;box-sizing:border-box;margin:0;padding:8px 10px;border:1px solid #eaeaea;border-radius:8px;background:#fff;outline:none;resize:none;font:14px/1.5 var(--font-sans);color:#171717}.bs-field:focus{border-color:#c9c9c9}.bs-field::placeholder{color:#8f8f8f}'
   + '.bs-submit{padding:8px 14px;border:0;border-radius:8px;background:#0070f3;color:#fff;font:500 13px/1 var(--font-sans);cursor:pointer;transition:opacity 120ms}.bs-submit:hover{opacity:.86}.bs-submit:disabled{background:#eaeaea;color:#8f8f8f;cursor:default;opacity:1}'
   + '.cx-btn{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 12px;border:1px solid #171717;border-radius:8px;background:#171717;color:#fff;cursor:pointer;font:500 12.5px/1 var(--font-sans);white-space:nowrap}.cx-btn:hover{opacity:.88}.cx-btn:disabled{opacity:.5;cursor:default}'
+  + '.cx-cols{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);grid-template-rows:minmax(0,1fr);column-gap:48px}.cx-cols>*{min-height:0;overflow-y:auto}'
+  + '@media (max-width:820px){.cx-cols{grid-template-columns:minmax(0,1fr);grid-template-rows:none;overflow-y:auto}.cx-cols>*{overflow:visible}}'
   + '.cx-ghost{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 10px;border:1px solid #eaeaea;border-radius:8px;background:#fff;color:#171717;cursor:pointer;font:500 12.5px/1 var(--font-sans);white-space:nowrap}.cx-ghost:hover{border-color:#c9c9c9}.cx-ghost:disabled{color:#8f8f8f;cursor:default}';
 
 const Svg = ({ size = 12, width = 2, children }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={width} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{children}</svg>;
@@ -148,6 +150,34 @@ function ProviderChip({ lead = '', providers, provider, fallback = null, onPick,
   );
 }
 
+/**
+ * The librarian asking which GitHub repositories: the GitHub list onboarding and the choose screen use, with its search
+ * and sign-in (2026-10-08: "when asking me which repositories it should use our existing nice github ui"); Submit sends
+ * the ticked ones as "owner/name".
+ */
+function ReposCard({ ask, live, onAnswer }) {
+  const [picks, setPicks] = React.useState([]);
+  const toggle = (repo) => setPicks((now) => (now.includes(repo.fullName) ? now.filter((x) => x !== repo.fullName) : [...now, repo.fullName]));
+  return (
+    <div data-connect-card={live ? 'live' : 'answered'} data-connect-card-kind="repos" style={{ padding: '14px 16px 14px', border: '1px solid #eaeaea', borderRadius: 10, background: '#fff' }}>
+      <div style={{ font: '600 15px/1.45 var(--font-sans)', color: '#171717' }}>{ask.title}</div>
+      {live && (
+        <>
+          <div data-connect-repos="1" style={{ height: 340, display: 'flex', flexDirection: 'column', marginTop: 10 }}>
+            <GithubRepos held={(repo) => picks.includes(repo.fullName)} onToggle={toggle} busyId="" />
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
+            <button type="button" className="bart-text" data-connect-skip="1" onClick={() => onAnswer({ skipped: true })} style={{ paddingLeft: 0 }}>Skip</button>
+            <span style={{ flex: 1 }} />
+            {picks.length > 0 && <span style={{ font: '12.5px/1 var(--font-sans)', color: '#8f8f8f' }}>{picks.length} selected</span>}
+            <button type="button" className="bs-submit" data-connect-submit="1" disabled={!picks.length} onClick={() => onAnswer({ picked: picks })}>Submit</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 /** The librarian's question as a card: one option per line (round mark: one; square: several), its why under it. */
 function QuestionCard({ ask, live, onAnswer }) {
   const [picks, setPicks] = React.useState([]);
@@ -202,7 +232,10 @@ function AuthorizeCard({ authorize, live, busy, onUse, onSkip, onCancel }) {
   );
 }
 
-/** A step an agent handed the person: what it is, and at its right one button that does it, and Skip (for the whole run). */
+/**
+ * A step an agent handed the person: what it is, and at its right one button that does it, and Skip (for the whole run).
+ * A web app's Log in opens its sign-in in the default browser (main's web-signin.cjs) and waits there, saying which.
+ */
 function NeedCard({ need, onOpen, onSkip }) {
   const view = needView(need);
   return (
@@ -214,7 +247,7 @@ function NeedCard({ need, onOpen, onSkip }) {
           {need.reason && need.reason !== view.title && <span style={{ font: '12px/1.4 var(--font-sans)', color: '#8f8f8f', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{need.reason}</span>}
         </span>
         <button type="button" className="bart-text" data-connect-need-skip="1" onClick={() => onSkip(need)}>Skip</button>
-        <button type="button" className="cx-btn" data-connect-need-open="1" disabled={need.busy} onClick={() => onOpen(need)}>{need.busy ? 'Waiting…' : view.action}</button>
+        <button type="button" className="cx-btn" data-connect-need-open="1" disabled={need.busy} onClick={() => onOpen(need)}>{need.busy ? (need.browser ? `Finish in ${need.browser}…` : 'Waiting…') : view.action}</button>
       </div>
       {need.error && <div style={{ font: '12px/1.5 var(--font-sans)', color: '#e70022' }}>{need.error}</div>}
     </div>
@@ -260,7 +293,7 @@ function WorkLine({ session }) {
       {view.lead && agent && <span style={{ flex: 'none', color: '#c9c9c9' }}>·</span>}
       {agent && (
         <span key={agent.id} data-connect-subagent={agent.id} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6, animation: `rise 220ms ${EASE}` }}>
-          <span style={{ flex: 'none', color: '#4d4d4d' }}>⎿ {agent.label}</span>
+          <span style={{ flex: 'none', color: '#4d4d4d' }}>{agent.label}</span>
           <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', color: agent.waiting ? '#a35200' : '#8f8f8f' }}>{agent.doing}</span>
           {agent.place && <span style={{ flex: 'none', color: '#c9c9c9', fontVariantNumeric: 'tabular-nums' }}>{agent.place}</span>}
         </span>
@@ -327,6 +360,7 @@ const engelbartSignIn = (app) => (app === 'Zotero' ? waitFor(api.zoteroConnect, 
  */
 export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, projectId = null, onSession = () => {}, onContinue = () => {}, onClose = () => {}, onSkip = () => {}, onAdded = () => {} }) {
   const popup = mode === 'popup';
+  const page = !popup; // onboarding: a page of the window, not a box on it
   const [found, setFound] = React.useState(null);
   const [view, setView] = React.useState(sessionId ? 'loading' : 'choose'); // choose | chat | working
   const [picks, setPicks] = React.useState(null); // { picks, apps, open }
@@ -390,11 +424,23 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   const shownId = session ? session.id : null;
   React.useEffect(() => { if (!shownId) return undefined; markOpen(shownId, true); return () => markOpen(shownId, false); }, [shownId]);
 
-  // The chat follows its newest message.
+  // The chat follows its newest message, from its top (2026-10-08: "when a question comes in i see the bottom, not the
+  // top"): to the end when the newest message and what is under it fit, else to where it begins.
   const length = session ? session.chat.length : 0;
   const thinking = !!(session && session.thinking);
   const needCount = session ? session.needs.length : 0;
-  React.useEffect(() => { const el = chatRef.current; if (el) setTimeout(() => { el.scrollTop = el.scrollHeight; }, 40); }, [length, thinking, view, needCount]);
+  React.useEffect(() => {
+    const el = chatRef.current;
+    if (!el) return undefined;
+    const timer = setTimeout(() => {
+      const end = el.scrollHeight - el.clientHeight;
+      const agents = el.querySelectorAll('[data-connect-agent]');
+      const newest = agents[agents.length - 1];
+      const answered = !session || !session.chat.length || session.chat[session.chat.length - 1].role !== 'agent';
+      el.scrollTop = newest && !answered ? Math.min(end, Math.max(0, newest.offsetTop - 18)) : end;
+    }, 40);
+    return () => clearTimeout(timer);
+  }, [length, thinking, view, needCount]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const begin = (snapshot) => { idRef.current = snapshot.id; setSession(snapshot); onSession(snapshot.id); };
 
@@ -519,6 +565,8 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   const running = jobs.filter((job) => !statusOf(job).done).length;
   const done = !!(session && session.done);
   const wide = view !== 'choose';
+  // On the page the chat and the progress read in a column of their own width, centred; their scrollbars at the edge.
+  const gutter = page ? 'max(20px, calc((100% - 760px) / 2))' : '20px';
   const header = (title, { backButton = false, lead = null } = {}) => (
     <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 8, padding: backButton ? '12px 12px 12px 12px' : '16px 14px 10px 20px', borderBottom: wide ? '1px solid #eaeaea' : 0 }}>
       {backButton && <button type="button" className="bart-ic" onClick={back} aria-label="Back" title="Back">{BACK}</button>}
@@ -533,122 +581,156 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   const asks = permissionsFor(picked);
 
   return (
-    <div data-connect-library={view} role="dialog" aria-label="Connect your library" style={{ position: 'relative', flex: '0 1 auto', minHeight: 0, width: `min(${wide ? 640 : 560}px, calc(100% - 32px))`, height: wide ? 'min(700px, 100%)' : 'auto', maxHeight: 'min(760px, 100%)', display: 'flex', flexDirection: 'column', background: '#fff', border: '1px solid #c9c9c9', borderRadius: 12, boxShadow: '0 12px 40px #0000001f', animation: `rise 160ms ${EASE}`, overflow: 'hidden' }}>
+    <div data-connect-library={view} role={page ? 'region' : 'dialog'} aria-label="Connect your library" style={page
+      ? { position: 'relative', flex: '1 1 auto', minHeight: 0, width: 'min(1080px, 100%)', display: 'flex', flexDirection: 'column', background: '#fff', animation: `rise 160ms ${EASE}`, overflow: 'hidden' }
+      : { position: 'relative', flex: '0 1 auto', minHeight: 0, width: `min(${wide ? 640 : 560}px, calc(100% - 32px))`, height: wide ? 'min(700px, 100%)' : 'auto', maxHeight: 'min(760px, 100%)', display: 'flex', flexDirection: 'column', background: '#fff', border: '1px solid #c9c9c9', borderRadius: 12, boxShadow: '0 12px 40px #0000001f', animation: `rise 160ms ${EASE}`, overflow: 'hidden' }}>
       <style>{CSS}</style>
 
-      {view === 'choose' && (
-        <>
-          {header('What should go in your library?')}
-          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16, padding: '4px 20px 16px' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', margin: '0 -8px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, padding: '0 8px', font: '12.5px/1 var(--font-sans)', color: '#8f8f8f' }}>
-                Sources<span style={{ fontSize: 9 }}>▾</span><span style={{ flex: 1 }} />
-                <button type="button" className="bart-text" data-connect-all="1" onClick={() => setPicks((now) => ({ ...now, picks: Object.fromEntries(SOURCES.map((source) => [source.id, !allOn])) }))}>{allOn ? 'Clear' : 'Select all'}</button>
-              </div>
-              {SOURCES.map((source) => {
-                const on = !!picks.picks[source.id];
-                const open = !!picks.open[source.id] && source.id !== 'sites';
-                const sub = subOf(source.id, { on, apps: picks.apps, repos: reposTicked(), folders: folders[source.id] || [] });
-                const where = source.id === 'sites' ? (found && found.sites && found.sites.where) : '';
-                return (
-                  <React.Fragment key={source.id}>
-                    <div className="hov-wash" data-connect-source={source.id} style={{ display: 'flex', alignItems: 'center', gap: 8, height: 34, padding: '0 8px 0 4px', borderRadius: 6 }}>
-                      <button type="button" onClick={() => expand(source.id)} aria-expanded={open ? 'true' : 'false'} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, height: '100%', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', textAlign: 'left', color: on ? '#171717' : '#8f8f8f' }}>
-                        <span style={{ flex: 'none', width: 12, display: 'flex', justifyContent: 'center', color: '#8f8f8f', transform: `rotate(${open ? 90 : 0}deg)`, transition: 'transform 140ms' }}>{source.id === 'sites' ? null : CARET_RIGHT}</span>
-                        <span style={{ flex: 1, minWidth: 0, font: '13.5px/1 var(--font-sans)', color: '#171717' }}>{source.label}</span>
-                        <span title={where || undefined} style={{ flex: 'none', font: '12px/1 var(--font-sans)', color: '#8f8f8f' }}>{sub || (where && on ? where : '')}</span>
-                      </button>
-                      <span onClick={(event) => { event.stopPropagation(); toggleSource(source.id); }}><Box on={on} /></span>
-                    </div>
-                    {open && (
-                      <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 1, padding: '1px 0 6px 26px' }}>
-                        <span style={{ position: 'absolute', left: 33, top: 2, bottom: 8, width: 1, background: '#eaeaea' }} />
-                        {source.apps.map((app) => <AppRow key={app} name={app} where={found && found.apps && found.apps[app] && found.apps[app].found ? found.apps[app].where : ''} on={on && !!(picks.apps[source.id] && picks.apps[source.id][app])} onToggle={() => toggleApp(source.id, app)} />)}
-                        {source.id === 'papers' && (folders.papers.length
-                          ? folders.papers.map((dir) => <FolderRow key={dir} path={dir} onRemove={() => setFolders((now) => ({ ...now, papers: [] }))} />)
-                          : <AddRow label="Select a folder of papers…" hint="optional" data="papers-folder" onClick={() => pickFolder('papers')} />)}
-                        {source.id === 'code' && (
-                          <>
-                            {/* Onboarding's own repository list, roomy: "make the ui better for selecting a repository, it is currently way too cramped" */}
-                            <div data-connect-github="1" style={{ height: 320, display: 'flex', flexDirection: 'column', padding: '2px 8px 6px 18px' }}>
-                              <GithubRepos held={heldRepo} onToggle={toggleRepo} busyId={busyRepo} />
-                            </div>
-                            {folders.code.map((dir) => <FolderRow key={dir} path={dir} onRemove={() => setFolders((now) => ({ ...now, code: now.code.filter((x) => x !== dir) }))} />)}
-                            <AddRow label="Select a folder…" hint="local repos" data="code-folder" onClick={() => pickFolder('code')} />
-                          </>
-                        )}
-                      </div>
-                    )}
-                  </React.Fragment>
-                );
-              })}
+      {view === 'choose' && (() => {
+        const sourcesList = (
+          <div style={{ flex: 'none', display: 'flex', flexDirection: 'column', margin: '0 -8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, padding: '0 8px', font: '12.5px/1 var(--font-sans)', color: '#8f8f8f' }}>
+              Sources<span style={{ fontSize: 9 }}>▾</span><span style={{ flex: 1 }} />
+              <button type="button" className="bart-text" data-connect-all="1" onClick={() => setPicks((now) => ({ ...now, picks: Object.fromEntries(SOURCES.map((source) => [source.id, !allOn])) }))}>{allOn ? 'Clear' : 'Select all'}</button>
             </div>
-
-            {/* What the agents will do, and the permissions they need: "add the permission requests … as well as a disclaimer that the agents will do all of it automatically" */}
-            <div data-connect-permissions="1" style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '14px 16px', border: '1px solid #eaeaea', borderRadius: 10, background: '#fafafa' }}>
-              <div style={{ font: '500 13.5px/1.4 var(--font-sans)', color: '#171717' }}>Agents do all of this for you</div>
-              {[
-                { key: 'files', label: 'Read files on this Mac', why: permissions.files ? 'Anywhere in your home folder' : 'Only the folders of what you picked' },
-                ...(asks.web.length ? [{ key: 'browser', label: 'Use my accounts in the background', why: asks.web.join(', ') }] : []),
-                ...(asks.recall.length && permissions.browser ? [{ key: 'recall', label: `Ask ${asks.recall.join(' and ')} what ${asks.recall.length === 1 ? 'it remembers' : 'they remember'} about my research`, why: 'One new chat in each, for MEMORY.md' }] : []),
-              ].map((row) => (
-                <button key={row.key} type="button" role="checkbox" aria-checked={permissions[row.key] ? 'true' : 'false'} data-connect-permission={row.key} onClick={() => setPermissions((now) => ({ ...now, [row.key]: !now[row.key] }))} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, width: '100%', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', textAlign: 'left' }}>
-                  <span style={{ paddingTop: 2 }}><Box on={!!permissions[row.key]} /></span>
-                  <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    <span style={{ font: '13px/1.4 var(--font-sans)', color: '#171717' }}>{row.label}</span>
-                    <span style={{ font: '12px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{row.why}</span>
-                  </span>
-                </button>
-              ))}
-              {asks.notes && (
-                <div data-connect-notes-permission={notesState || 'ask'} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  {logoOf('Apple Notes')}
-                  <span style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    <span style={{ font: '13px/1.4 var(--font-sans)', color: '#171717' }}>Let Engelbart read Apple Notes</span>
-                    <span style={{ font: '12px/1.4 var(--font-sans)', color: notesState && notesState !== 'allowed' && notesState !== 'asking' ? '#e70022' : '#8f8f8f' }}>{notesState === 'allowed' ? 'Allowed' : notesState === 'asking' ? 'macOS is asking you…' : notesState || 'macOS asks you once'}</span>
-                  </span>
-                  {notesState !== 'allowed' && <button type="button" className="cx-ghost" disabled={notesState === 'asking'} onClick={allowNotes}>Allow…</button>}
-                </div>
-              )}
-              {asks.connectors.map((app) => {
-                const status = connectorStatus[app] || {};
-                return (
-                  <div key={app} data-connect-connector={app} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    {logoOf(app)}
-                    <span style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                      <span style={{ font: '13px/1.4 var(--font-sans)', color: '#171717' }}>{status.connected ? `Connected to ${app}` : `Sign in to ${app}`}</span>
-                      <span style={{ font: '12px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{status.connected ? 'Through its own connector' : 'Opens in your browser'}</span>
-                    </span>
-                    {status.pending ? <button type="button" className="bart-text" onClick={() => api.connectConnectorCancel(app).catch(() => {})}>Cancel</button>
-                      : !status.connected && <button type="button" className="cx-ghost" onClick={() => connectorSignIn(app)}>Sign in…</button>}
+            {SOURCES.map((source) => {
+              const on = !!picks.picks[source.id];
+              const open = !!picks.open[source.id] && source.id !== 'sites';
+              const sub = subOf(source.id, { on, apps: picks.apps, repos: reposTicked(), folders: folders[source.id] || [] });
+              const where = source.id === 'sites' ? (found && found.sites && found.sites.where) : '';
+              return (
+                <React.Fragment key={source.id}>
+                  <div className="hov-wash" data-connect-source={source.id} style={{ display: 'flex', alignItems: 'center', gap: 8, height: 34, padding: '0 8px 0 4px', borderRadius: 6 }}>
+                    <button type="button" onClick={() => expand(source.id)} aria-expanded={open ? 'true' : 'false'} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, height: '100%', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', textAlign: 'left', color: on ? '#171717' : '#8f8f8f' }}>
+                      <span style={{ flex: 'none', width: 12, display: 'flex', justifyContent: 'center', color: '#8f8f8f', transform: `rotate(${open ? 90 : 0}deg)`, transition: 'transform 140ms' }}>{source.id === 'sites' ? null : CARET_RIGHT}</span>
+                      <span style={{ flex: 1, minWidth: 0, font: '13.5px/1 var(--font-sans)', color: '#171717' }}>{source.label}</span>
+                      <span title={where || undefined} style={{ flex: 'none', font: '12px/1 var(--font-sans)', color: '#8f8f8f' }}>{sub || (where && on ? where : '')}</span>
+                    </button>
+                    <span onClick={(event) => { event.stopPropagation(); toggleSource(source.id); }}><Box on={on} /></span>
                   </div>
-                );
-              })}
-            </div>
-
-            <div className="focus-bd2" style={{ display: 'flex', padding: '10px 12px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', transition: 'border-color 120ms' }}>
-              <textarea value={custom} onChange={(event) => setCustom(event.target.value)} rows={2} spellCheck={false} data-connect-custom="1" placeholder="custom instructions… e.g. skip papers I only skimmed" style={{ all: 'unset', flex: 1, minHeight: 40, resize: 'none', font: '13px/1.6 var(--font-sans)', color: '#171717', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }} />
-            </div>
-            {!ready && <AgentSetup snapshot={toolSnap} />}
+                  {open && (
+                    <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 1, padding: '1px 0 6px 26px' }}>
+                      <span style={{ position: 'absolute', left: 33, top: 2, bottom: 8, width: 1, background: '#eaeaea' }} />
+                      {source.apps.map((app) => <AppRow key={app} name={app} where={found && found.apps && found.apps[app] && found.apps[app].found ? found.apps[app].where : ''} on={on && !!(picks.apps[source.id] && picks.apps[source.id][app])} onToggle={() => toggleApp(source.id, app)} />)}
+                      {source.id === 'papers' && (folders.papers.length
+                        ? folders.papers.map((dir) => <FolderRow key={dir} path={dir} onRemove={() => setFolders((now) => ({ ...now, papers: [] }))} />)
+                        : <AddRow label="Select a folder of papers…" hint="optional" data="papers-folder" onClick={() => pickFolder('papers')} />)}
+                      {source.id === 'code' && (
+                        <>
+                          {/* Onboarding's own repository list, roomy: "make the ui better for selecting a repository, it is currently way too cramped" */}
+                          <div data-connect-github="1" style={{ height: 320, display: 'flex', flexDirection: 'column', padding: '2px 8px 6px 18px' }}>
+                            <GithubRepos held={heldRepo} onToggle={toggleRepo} busyId={busyRepo} />
+                          </div>
+                          {folders.code.map((dir) => <FolderRow key={dir} path={dir} onRemove={() => setFolders((now) => ({ ...now, code: now.code.filter((x) => x !== dir) }))} />)}
+                          <AddRow label="Select a folder…" hint="local repos" data="code-folder" onClick={() => pickFolder('code')} />
+                        </>
+                      )}
+                    </div>
+                  )}
+                </React.Fragment>
+              );
+            })}
           </div>
-          <div style={{ flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12, padding: '12px 20px', borderTop: '1px solid #eaeaea' }}>
+        );
+        const permissionsBox = (
+          // What the agents will do, and the permissions they need: "add the permission requests … as well as a disclaimer
+          // that the agents will do all of it automatically" (2026-10-08: each a line, no subtext under it).
+          <div data-connect-permissions="1" style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '14px 16px', border: '1px solid #eaeaea', borderRadius: 10, background: '#fafafa' }}>
+            <div style={{ font: '500 13.5px/1.4 var(--font-sans)', color: '#171717' }}>Agents do all of this for you</div>
+            {[
+              { key: 'files', label: 'Read files on this Mac' },
+              ...(asks.web.length ? [{ key: 'browser', label: 'Use my accounts in the background' }] : []),
+              ...(asks.recall.length && permissions.browser ? [{ key: 'recall', label: `Ask ${asks.recall.join(' and ')} what ${asks.recall.length === 1 ? 'it remembers' : 'they remember'} about my research` }] : []),
+            ].map((row) => (
+              <button key={row.key} type="button" role="checkbox" aria-checked={permissions[row.key] ? 'true' : 'false'} data-connect-permission={row.key} onClick={() => setPermissions((now) => ({ ...now, [row.key]: !now[row.key] }))} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, width: '100%', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', textAlign: 'left' }}>
+                <span style={{ paddingTop: 2.5 }}><Box on={!!permissions[row.key]} /></span>
+                <span style={{ flex: 1, minWidth: 0, font: '13px/1.4 var(--font-sans)', color: '#171717' }}>{row.label}</span>
+              </button>
+            ))}
+            {asks.notes && (
+              <div data-connect-notes-permission={notesState || 'ask'} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                {logoOf('Apple Notes')}
+                <span style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <span style={{ font: '13px/1.4 var(--font-sans)', color: '#171717' }}>Let Engelbart read Apple Notes</span>
+                  <span style={{ font: '12px/1.4 var(--font-sans)', color: notesState && notesState !== 'allowed' && notesState !== 'asking' ? '#e70022' : '#8f8f8f' }}>{notesState === 'allowed' ? 'Allowed' : notesState === 'asking' ? 'macOS is asking you…' : notesState || 'macOS asks you once'}</span>
+                </span>
+                {notesState !== 'allowed' && <button type="button" className="cx-ghost" disabled={notesState === 'asking'} onClick={allowNotes}>Allow…</button>}
+              </div>
+            )}
+            {asks.connectors.map((app) => {
+              const status = connectorStatus[app] || {};
+              return (
+                <div key={app} data-connect-connector={app} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  {logoOf(app)}
+                  <span style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <span style={{ font: '13px/1.4 var(--font-sans)', color: '#171717' }}>{status.connected ? `Connected to ${app}` : `Sign in to ${app}`}</span>
+                    <span style={{ font: '12px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{status.connected ? 'Through its own connector' : 'Opens in your browser'}</span>
+                  </span>
+                  {status.pending ? <button type="button" className="bart-text" onClick={() => api.connectConnectorCancel(app).catch(() => {})}>Cancel</button>
+                    : !status.connected && <button type="button" className="cx-ghost" onClick={() => connectorSignIn(app)}>Sign in…</button>}
+                </div>
+              );
+            })}
+          </div>
+        );
+        const customBox = (
+          <div className="focus-bd2" style={{ display: 'flex', padding: '10px 12px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', transition: 'border-color 120ms' }}>
+            <textarea value={custom} onChange={(event) => setCustom(event.target.value)} rows={2} spellCheck={false} data-connect-custom="1" placeholder="custom instructions… e.g. skip papers I only skimmed" style={{ all: 'unset', flex: 1, minHeight: 40, resize: 'none', font: '13px/1.6 var(--font-sans)', color: '#171717', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }} />
+          </div>
+        );
+        const send = (
+          <div style={{ flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12, ...(page ? { paddingTop: 4 } : { padding: '12px 20px', borderTop: '1px solid #eaeaea' }) }}>
             {error && <span data-connect-error="1" style={{ flex: 1, minWidth: 0, font: '12.5px/1.4 var(--font-sans)', color: '#e70022' }}>{error}</span>}
             <ProviderChip lead="Refine with" providers={providers} provider={provider} onPick={pickProvider} onSend={start} sendOn={anyOn && !!provider} sendLabel="Refine" />
           </div>
-        </>
-      )}
+        );
+        // Onboarding draws it as a page of its own, side by side (2026-10-08: "make this general thing more horizontal right
+        // now it looks sort of like a popup not a proper onboarding screen"): the sources on the left, what the agents do,
+        // the instructions and Refine on the right. The popup keeps the one column.
+        if (page) {
+          return (
+            <>
+              <h1 style={{ flex: 'none', margin: '0 0 22px', font: '500 28px/1.2 var(--font-sans)', letterSpacing: '-0.4px', color: '#171717' }}>What should go in your library?</h1>
+              <div className="cx-cols" style={{ flex: 1, minHeight: 0 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', padding: '0 8px 16px' }}>{sourcesList}</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '28px 2px 4px' }}>
+                  {permissionsBox}
+                  {customBox}
+                  {!ready && <AgentSetup snapshot={toolSnap} />}
+                  <span style={{ flex: 1 }} />
+                  {send}
+                </div>
+              </div>
+            </>
+          );
+        }
+        return (
+          <>
+            {header('What should go in your library?')}
+            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16, padding: '4px 20px 16px' }}>
+              {sourcesList}
+              {permissionsBox}
+              {customBox}
+              {!ready && <AgentSetup snapshot={toolSnap} />}
+            </div>
+            {send}
+          </>
+        );
+      })()}
 
       {view === 'chat' && session && (
         <>
           {header(`Refine with ${targetName}`, { backButton: true })}
-          <div ref={chatRef} data-connect-chat="1" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16, padding: '18px 20px' }}>
+          <div ref={chatRef} data-connect-chat="1" style={{ position: 'relative', flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16, padding: `18px ${gutter}` }}>
             {session.chat.map((item, i) => {
               if (item.role !== 'agent') return <div key={i} data-connect-user="1" style={{ alignSelf: 'flex-end', maxWidth: '80%', padding: '8px 12px', borderRadius: 12, background: '#f2f2f2', font: '14.5px/1.6 var(--font-sans)', color: '#171717', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', animation: `rise 160ms ${EASE}` }}>{item.text}</div>;
               const live = i === last && !session.thinking && !session.finished && !session.stopped;
               return (
                 <div key={i} data-connect-agent="1" style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: '94%', animation: `rise 260ms ${EASE}` }}>
                   {item.text && <div style={{ font: '14.5px/1.7 var(--font-sans)', color: '#171717', whiteSpace: 'pre-wrap', textWrap: 'pretty' }}>{item.text}</div>}
-                  {item.ask && <QuestionCard key={`${i}-${item.at}`} ask={item.ask} live={live} onAnswer={reply} />}
+                  {item.ask && (item.ask.kind === 'repos'
+                    ? <ReposCard key={`${i}-${item.at}`} ask={item.ask} live={live} onAnswer={reply} />
+                    : <QuestionCard key={`${i}-${item.at}`} ask={item.ask} live={live} onAnswer={reply} />)}
                   {item.authorize && (live || i === last) && <AuthorizeCard authorize={item.authorize} live={live} busy={authorizing && live} onUse={useAuthorize} onSkip={() => reply({ skipped: true })} onCancel={cancelAuthorize} />}
                 </div>
               );
@@ -657,7 +739,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
             {needs.map((need) => <NeedCard key={need.id} need={need} onOpen={openNeed} onSkip={needSkip} />)}
             {(session.error || error) && <div data-connect-error="1" style={{ font: '12.5px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere' }}>{session.error || error}{session.error ? ' Reply to try again.' : ''}</div>}
           </div>
-          <div style={{ flex: 'none', padding: '0 16px 12px' }}>
+          <div style={{ flex: 'none', padding: `0 ${page ? gutter : '16px'} 12px` }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px 12px 16px', background: '#fafafa', borderRadius: 10, marginTop: 8 }}>
               <textarea ref={draftRef} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendDraft(); } }} rows={1} data-connect-draft="1" placeholder="Reply…" spellCheck={false} style={{ flex: 1, minWidth: 0, display: 'block', minHeight: 24, margin: 0, padding: 0, border: 0, background: 'none', outline: 'none', resize: 'none', font: '15px/1.6 var(--font-sans)', color: '#171717' }} />
               <ProviderChip providers={providers} provider={session.provider} fallback={session.choice} onPick={pickProvider} onSend={sendDraft} sendOn={!!draft.trim() && !session.thinking} sendLabel="Send" style={{ marginTop: -3 }} />
@@ -674,7 +756,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
       {view === 'working' && session && (
         <>
           {header(session.stopped ? 'Stopped' : running || (session.memory && !memoryLine(session.memory).done) ? 'Bringing everything in' : 'Your library is connected', { lead: <span style={{ flex: 'none', width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', background: '#171717', color: '#fff' }}>{CHECK}</span> })}
-          <div data-connect-progress="1" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12, padding: '14px 20px 16px' }}>
+          <div data-connect-progress="1" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12, padding: `14px ${gutter} 16px` }}>
             <span style={{ font: '12.5px/1.55 var(--font-sans)', color: '#8f8f8f', textWrap: 'pretty' }}>{session.stopped ? 'Everything was stopped. What came in stays in your library.' : 'This keeps going in the background, and your Inbox says when it needs you or is done.'}</span>
             {needs.map((need) => <NeedCard key={need.id} need={need} onOpen={openNeed} onSkip={needSkip} />)}
             <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -695,7 +777,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
             </div>
             {error && <span data-connect-error="1" style={{ font: '12.5px/1.5 var(--font-sans)', color: '#e70022' }}>{error}</span>}
           </div>
-          <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 12, padding: '12px 20px', borderTop: '1px solid #eaeaea' }}>
+          <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 12, padding: `12px ${gutter}`, borderTop: '1px solid #eaeaea' }}>
             {!session.stopped && (running > 0 || (session.memory && !memoryLine(session.memory).done)) && <button type="button" className="cx-ghost" data-connect-stop-all="1" onClick={stopAll}>Stop all</button>}
             <span style={{ flex: 1 }} />
             <button type="button" data-connect-done="1" onClick={putAway} style={{ flex: 'none', whiteSpace: 'nowrap', height: 34, padding: '0 16px', border: '1px solid #171717', borderRadius: 8, background: '#171717', color: '#fff', cursor: 'pointer', font: '500 13px/1 var(--font-sans)' }}>{popup ? 'Run in background' : 'Continue'}</button>

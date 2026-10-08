@@ -475,7 +475,7 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
       </div>
     );
   } else if (step === 'connect') {
-    // Drawn outside the 800 × 600 window below: the design's box is its own card, and the chat needs the height.
+    // Drawn outside the 800 × 600 window below: it is wider, side by side, and the chat needs the height.
     body = null;
   } else if (step === 'open') {
     body = <div data-screen-label="08 Opening" style={{ width: '100%', display: 'flex', justifyContent: 'center' }}><ThinkingDots label="opening Getting started" /></div>;
@@ -486,11 +486,11 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
       <div className="title-bar title-lead" style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 54, display: 'flex', alignItems: 'center', padding: '0 24px' }}>
         {onBack && <button type="button" className="hov-ink" onClick={onBack} title="All projects" style={{ ...plain, font: '500 17px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Engelbart</button>}
       </div>
-      {/* Connect your library (test mode only): the design's box, centred on the window, Skip for now under it. */}
+      {/* Connect your library (test mode only): a page across the window (2026-10-08: "more horizontal … not a popup"), Skip for now under it. */}
       {step === 'connect' && (
         <div data-screen-label="03 Connect library" style={{ flex: 'none', width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
           <ConnectLibrary mode="onboarding" onSession={(id) => { setConnectId(id); api.connectOfferSeen('started').catch(() => {}); }} onContinue={advance} onSkip={advance} onAdded={(row) => take(row, 'github', true)} />
-          <div style={{ flex: 'none', width: 'min(640px, calc(100% - 32px))', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+          <div style={{ flex: 'none', width: 'min(1080px, 100%)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
             {/* Leaving with a session puts it away: it goes on in the background, the chip in the top right following it. */}
             <button type="button" className="hov-ink" data-onboarding-skip="1" onClick={() => { if (connectId) api.connectMinimize(connectId, true).catch(() => {}); advance(); }} style={skipStyle}>{connectId ? 'Continue' : 'Skip for now'}</button>
             {pager && (
