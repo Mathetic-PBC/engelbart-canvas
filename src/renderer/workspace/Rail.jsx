@@ -5,7 +5,7 @@ import { KIND, KindGlyph as Glyph } from '../ui/Icons.jsx';
 import { isUntitled } from '../model/names.js';
 import { looksAddable, searchRows } from '../model/rail.js';
 import { flatWorkspaces } from '../model/nav.js';
-import { agentGroups, archivedVersions, countWorkspaces, fitChildren, fitGroups, inboxEntries, pathTo, recentWorkspaces, sourceGroups, sourceKind } from '../model/sidebar.js';
+import { agentGroups, archivedVersions, countWorkspaces, fitChildren, fitGroups, inboxEntries, pathTo, recentWorkspaces, sinceWords, sourceGroups, sourceKind, versionsOf } from '../model/sidebar.js';
 import { connectInbox, dockLine } from '../model/connect.js';
 import GithubPane from './GithubPane.jsx';
 import { useAddRun } from './useAddRun.js';
@@ -29,7 +29,7 @@ import {
 //     the notification bell used to hold: while the sidebar shows, the bell is in here; its tray wears a dot),
 //     Agents (running, waiting on you, done), Connections (GitHub, Zotero, Overleaf), Library (search it, add from it, open
 //     it whole) and Add sources (a Note, a Sticky, a link or a path, files from disk, a repository from GitHub);
-//   Workspaces, a section: the three worked in last, each with its sub-workspaces under a chevron (children only, never
+//   Workspaces, a section: the three worked in last, each with its sub-workspaces and archived versions under a chevron (children only, never
 //     grandchildren), the one open here marked; a + on the title makes a workspace and a + on a row a sub-workspace in it,
 //     each named in a small dialog. A fixed size: what does not fit is behind "More";
 //   Your sources, a section, the largest: this workspace's things under two subsections, Starred and Notes, which are always
@@ -489,18 +489,21 @@ export default function Rail({
   const herePath = React.useMemo(() => pathTo(roots, hereId), [roots, hereId]);
   const ranked = React.useMemo(() => recentWorkspaces({ roots, recent, hereId, count: WORKSPACE_ROWS }), [roots, recent, hereId]);
   // A row starts open when it holds the workspace open here (itself or one nested in it), so its sub-workspaces show.
-  const wsOpenByDefault = (entry) => entry.holdsHere && entry.children.length > 0;
+  // A workspace's archived versions sit under it after its sub-workspaces, as indented rows of their own.
+  const nestedCount = (entry) => entry.children.length + versionsOf(entry.node).length;
+  const wsOpenByDefault = (entry) => entry.holdsHere && nestedCount(entry) > 0;
   const wsOpen = (entry) => isOpen(`ws:${entry.node.id}`, wsOpenByDefault(entry));
-  const childLines = fitChildren(ranked.map((entry) => ({ id: entry.node.id, open: wsOpen(entry), count: entry.children.length })), CHILD_ROOM);
+  const childLines = fitChildren(ranked.map((entry) => ({ id: entry.node.id, open: wsOpen(entry), count: nestedCount(entry) })), CHILD_ROOM);
   const childrenOf = (entry) => {
     const n = childLines[entry.node.id] || 0;
     const onWay = entry.holdsHere ? herePath[1] : null; // the child on the way to the workspace open here, shown first
     const list = onWay ? [entry.children.find((child) => child.node.id === onWay.id), ...entry.children.filter((child) => child.node.id !== onWay.id)].filter(Boolean) : entry.children;
-    return list.slice(0, n);
+    const nested = [...list.map((child) => ({ type: 'workspace', child })), ...versionsOf(entry.node).map((version) => ({ type: 'version', version }))];
+    return nested.slice(0, n);
   };
   const shownCount = ranked.reduce((n, entry) => n + 1 + (wsOpen(entry) ? childrenOf(entry).length : 0), 0);
-  const wsMore = countWorkspaces(roots) > shownCount;
   const versions = React.useMemo(() => archivedVersions(roots), [roots]);
+  const wsMore = countWorkspaces(roots) + versions.length > shownCount;
   const wsSection = isOpen('section:workspaces', true);
 
   const workspaceMenu = (event, node) => {
@@ -698,8 +701,8 @@ export default function Rail({
                 title={node.name}
                 faint={isUntitled(node.name)}
                 active={node.id === hereId}
-                expanded={entry.children.length ? open : undefined}
-                chevron={entry.children.length ? <Chevron open={open} label={open ? `Fold ${node.name}` : `Show what is in ${node.name}`} onClick={() => toggleOpen(`ws:${node.id}`, wsOpenByDefault(entry))} /> : null}
+                expanded={nestedCount(entry) ? open : undefined}
+                chevron={nestedCount(entry) ? <Chevron open={open} label={open ? `Fold ${node.name}` : `Show what is in ${node.name}`} onClick={() => toggleOpen(`ws:${node.id}`, wsOpenByDefault(entry))} /> : null}
                 hover={renaming === node.id ? null : <RowAction label="Add sub-workspace" onClick={() => setCreating({ parent: node })} data-sb-new-child={node.id}><I.PlusIcon size={15} /></RowAction>}
                 right={waitDot(node)}
                 onClick={() => { if (renaming !== node.id) onSelectWorkspace(node.id); }}
@@ -708,21 +711,32 @@ export default function Rail({
               />
               {children.length > 0 && (
                 <Indented data-sb-children={node.id}>
-                  {children.map(({ node: child }) => (
+                  {children.map((item) => (item.type === 'version' ? (
                     <Row
-                      key={child.id}
-                      data-sb-workspace={child.id}
+                      key={`${item.version.workspaceId}/${item.version.file}`}
+                      data-sb-version={item.version.file}
                       indent
-                      label={renaming === child.id ? <RenameField initial={child.name} onDone={(name) => { setRenaming(null); if (name) onRenameWorkspace(child.id, name); }} /> : child.name}
-                      title={child.name}
-                      faint={isUntitled(child.name)}
-                      active={child.id === markChild}
-                      right={waitDot(child)}
-                      onClick={() => { if (renaming !== child.id) onSelectWorkspace(child.id); }}
-                      onDoubleClick={() => setRenaming(child.id)}
-                      onContextMenu={(event) => workspaceMenu(event, child)}
+                      label={item.version.title}
+                      title={`Archived${item.version.clearedAt ? `, cleared ${sinceWords(item.version.clearedAt)}` : ''}: ${item.version.title}`}
+                      faint
+                      right={<I.ArchiveIcon size={13} style={{ color: '#b0b0b0' }} />}
+                      onClick={() => onOpenVersion(item.version)}
                     />
-                  ))}
+                  ) : (
+                    <Row
+                      key={item.child.node.id}
+                      data-sb-workspace={item.child.node.id}
+                      indent
+                      label={renaming === item.child.node.id ? <RenameField initial={item.child.node.name} onDone={(name) => { setRenaming(null); if (name) onRenameWorkspace(item.child.node.id, name); }} /> : item.child.node.name}
+                      title={item.child.node.name}
+                      faint={isUntitled(item.child.node.name)}
+                      active={item.child.node.id === markChild}
+                      right={waitDot(item.child.node)}
+                      onClick={() => { if (renaming !== item.child.node.id) onSelectWorkspace(item.child.node.id); }}
+                      onDoubleClick={() => setRenaming(item.child.node.id)}
+                      onContextMenu={(event) => workspaceMenu(event, item.child.node)}
+                    />
+                  )))}
                 </Indented>
               )}
             </React.Fragment>

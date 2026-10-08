@@ -831,7 +831,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const activeRowId = activeTab !== 'ws' ? activeTab : (rightMode === 'stage' && stageFront ? stageFront : 'ws');
 
   // This workspace's sources (the sidebar's Your sources): its context, the notes made in it and what its document
-  // mentions. Its sub-workspaces are under it in Workspaces, and its archived versions in Workspaces' More (2026-10-07).
+  // mentions. Its sub-workspaces are under it in Workspaces, and its archived versions are indented under it with them (2026-10-08; all of them in Workspaces' More).
   const rows = React.useMemo(() => {
     const out = [];
     if (!topic) return out;

@@ -158,3 +158,10 @@ test('archived versions of every workspace, newest first; sinceWords', async () 
   const now = Date.parse(at(0));
   assert.deepEqual([sinceWords(at(0), now), sinceWords(at(4), now), sinceWords(at(130), now), sinceWords(at(3000), now), sinceWords(null, now)], ['just now', '4 min ago', '2 h ago', '2 d ago', '']);
 });
+
+test('versionsOf: one workspace\'s own archived versions, newest first, none of its sub-workspaces\'', async () => {
+  const { versionsOf } = await load();
+  const node = { id: 'a', name: 'A', archives: [{ file: '1.md', title: 'Old', clearedAt: at(300) }, { file: '2.md', title: '', clearedAt: at(10) }], children: [{ id: 'b', name: 'B', archives: [{ file: '3.md', title: 'Child', clearedAt: at(1) }], children: [] }] };
+  assert.deepEqual(versionsOf(node).map((v) => [v.workspaceId, v.file, v.title]), [['a', '2.md', 'Untitled'], ['a', '1.md', 'Old']]);
+  assert.deepEqual(versionsOf({ id: 'c', name: 'C', children: [] }), []);
+});

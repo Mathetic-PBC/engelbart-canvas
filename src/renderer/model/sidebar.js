@@ -245,10 +245,17 @@ export function archivedVersions(roots) {
   const out = [];
   const walk = (list) => {
     for (const node of list || []) {
-      for (const entry of node.archives || []) out.push({ workspaceId: node.id, name: node.name, file: entry.file, title: entry.title || 'Untitled', clearedAt: entry.clearedAt || null });
+      out.push(...versionsOf(node));
       walk(node.children);
     }
   };
   walk(roots);
   return out.sort((a, b) => time(b.clearedAt) - time(a.clearedAt));
+}
+
+/** One workspace's own archived versions (not its sub-workspaces'), newest first, shown indented under it in the sidebar. */
+export function versionsOf(node) {
+  return (node.archives || [])
+    .map((entry) => ({ workspaceId: node.id, name: node.name, file: entry.file, title: entry.title || 'Untitled', clearedAt: entry.clearedAt || null }))
+    .sort((a, b) => time(b.clearedAt) - time(a.clearedAt));
 }
