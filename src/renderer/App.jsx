@@ -9,6 +9,7 @@ import Onboarding from './screens/Onboarding.jsx';
 import Workspace from './screens/Workspace.jsx';
 import ToolSetup from './ui/ToolSetup.jsx';
 import UpdateBanner from './ui/UpdateBanner.jsx';
+import { useConnectSessions, ConnectChip, ConnectPopup } from './ui/ConnectDock.jsx';
 import { launchRows, installedSignedOut, TOOL_ORDER } from './model/tools.js';
 
 // Screens: the app opens straight into the workspace you were last in, and the first run (no projects yet) is
@@ -70,6 +71,8 @@ export default function App() {
   const [launchAsk, setLaunchAsk] = React.useState(null); // what the launch check asks about, until the dialog can open
   const askedAtLaunch = React.useRef(false);
   const lastTools = React.useRef(null);
+  // Connect your library (test mode, 2026-10-07): its popup ({ sessionId } from the chip, { projectId } the one-time offer).
+  const [connectPopup, setConnectPopup] = React.useState(null);
 
   const fail = (candidate) => setError(errorMessage(candidate));
 
@@ -212,6 +215,23 @@ export default function App() {
     if (phase === 'home') api.reportPlace({ projectId: null, workspaceId: null });
     document.title = phase === 'workspace' && projectName ? `${projectName} — Engelbart` : 'Engelbart';
   }, [phase, projectName]);
+
+  // Connect your library for someone who has projects: offered once, as a popup over the workspace they are in (test mode).
+  const connectOn = !!(config && config.testMode);
+  const connectSessions = useConnectSessions(connectOn, config ? config.dataRoot : '');
+  const openProjectId = phase === 'workspace' && tree ? tree.project.id : null;
+  React.useEffect(() => {
+    if (!connectOn || !openProjectId) return undefined;
+    let alive = true;
+    const timer = setTimeout(() => {
+      api.connectOffer().then((offer) => {
+        if (!alive || !offer || !offer.show) return;
+        setConnectPopup((now) => now || { projectId: openProjectId });
+        api.connectOfferSeen('shown').catch(() => {});
+      }).catch(() => {});
+    }, 1200); // after the workspace has drawn itself
+    return () => { alive = false; clearTimeout(timer); };
+  }, [connectOn, openProjectId]);
 
   // Another window saved something here: this project's tree (a workspace or note made, renamed, linked; a document
   // cleared) is read again, or, on the projects screen, the projects. A project another window deleted is left for the
@@ -421,8 +441,10 @@ export default function App() {
         onStartNew: () => resetTest(true),
         onReveal: () => api.reveal(config.testRoot).catch(fail),
       } : null}>
+        {connectOn && <ConnectChip sessions={connectSessions} onOpen={(id) => setConnectPopup({ sessionId: id })} />}
         {config.testModeAvailable && <TestToggle testMode={config.testMode} busy={busy} onToggle={toggleTest} />}
       </WindowControls>
+      {connectOn && connectPopup && <ConnectPopup key={connectPopup.sessionId || connectPopup.projectId} request={connectPopup} onClose={() => setConnectPopup(null)} />}
     </div>
     </SandboxProgress>
   );

@@ -42,6 +42,7 @@ const { PENDING_RE } = require('./reply.cjs');
 const { stripAgentReplies } = require('./strip.cjs');
 const db = require('../store/db.cjs');
 const { instructionsBlock } = require('../store/onboarding.cjs');
+const { memoryBlock } = require('../connect/memory.cjs');
 const library = require('../store/library.cjs');
 const { attrOf, cropPath, stageBlock, webStageBlock, mentionedBlock } = require('./highlights.cjs');
 const { isBox } = require('../browser/boxes.cjs');
@@ -370,6 +371,7 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
     ...(ZOTERO_READERS.has(agent) && ctx.dataRoot ? [zoteroMirror.pointerLine(zoteroMirror.mirrorDir(ctx.dataRoot))].filter(Boolean) : []),
     '</engelbart>',
     instructionsBlock(ctx.dataRoot),
+    memoryBlock(ctx.dataRoot), // MEMORY.md, when Connect your library wrote one (2026-10-07)
   ].filter(Boolean).join('\n');
   const granted = [project.directory, ctx.dataRoot].filter(Boolean);
   const dirs = LIBRARY_READERS.has(agent) ? [...granted, ...libraryDirs(project, rows, granted, { seen, scope })] : granted;

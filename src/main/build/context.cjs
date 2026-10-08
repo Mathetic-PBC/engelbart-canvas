@@ -14,6 +14,7 @@ const archive = require('../store/archive.cjs');
 const { expandMentions, expandRows, projectSource } = require('../context/expand-mentions.cjs');
 const { catalogEntries } = require('../bart/context.cjs');
 const { instructionsBlock } = require('../store/onboarding.cjs');
+const { memoryBlock } = require('../connect/memory.cjs');
 
 const BUILD_LINE_RE = /^build> [a-z0-9]{6,32}$/;
 const attr = (value) => String(value).replace(/[<>"\n\r]/g, ' ').slice(0, 200);
@@ -77,6 +78,8 @@ async function freezeContext(ctx, projectId, { task, workspaceId = null, attach 
   ].join('\n'));
   const instructions = instructionsBlock(ctx.dataRoot);
   if (instructions) parts.push(instructions);
+  const remembered = memoryBlock(ctx.dataRoot); // MEMORY.md, when Connect your library wrote one (2026-10-07)
+  if (remembered) parts.push(remembered);
   parts.push(request
     ? '<task>\nDo what the request below asks. The person typed it on a line of a workspace as a full Build: larger changes are fine, and you may ask with NEEDS YOU when a choice is theirs. Notes it mentions are included under it; the rest of the workspace is not.\n</task>'
     : !fromPostIt

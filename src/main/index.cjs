@@ -40,7 +40,7 @@ const { SettingsStore } = require('./terminal/settings.cjs');
 const { shouldHideWindowOnClose } = require('./terminal/window-lifecycle.cjs');
 const { assertTrustedRenderer, parseExternalUrl } = require('./ipc-validation.cjs');
 const { createStore, registerEngelbartIpc } = require('./ipc.cjs');
-const { stagePartition, createBrowserViews, registerBrowserIpc } = require('./browser/views.cjs');
+const { stagePartition, createBrowserViews, registerBrowserIpc, cleanUserAgent } = require('./browser/views.cjs');
 const { createCookieImport, keychainRunner } = require('./browser/import-cookies.cjs');
 const { createGithub } = require('./github/connection.cjs');
 const { createBrowserAuth, CLIENT_ID: GITHUB_CLIENT_ID } = require('./github/browser-auth.cjs');
@@ -61,8 +61,11 @@ const { createRepoIdentifier, createRemoteFileLister, createDescriber } = requir
 const { createConnect } = require('./connect/session.cjs');
 const { createConnectAgents } = require('./connect/agents.cjs');
 const { createFakeConnectAgents } = require('./connect/fake.cjs');
+const { createAgentBrowser } = require('./connect/browser.cjs');
+const { createConnectors } = require('./connect/connectors.cjs');
+const { createAppleNotes } = require('./connect/apple-notes.cjs');
+const { APPS: CONNECT_APPS } = require('../shared/connect-sources.cjs');
 const { openToolBridge } = require('./sandbox/local-tools.cjs');
-const { resolveBuildChoice } = require('./bart/models.cjs');
 const { checkWebPdfs, readPdfResponse } = require('./store/web-pdfs.cjs');
 const { createPostItViews, createPostItPeers, registerPostItIpc } = require('./post-its/views.cjs');
 const { createGit } = require('./build/git.cjs');
@@ -109,6 +112,7 @@ let builds = null;
 let sandbox = null;
 let tools = null;
 let updates = null;
+let connect = null; // Connect your library's sessions (./connect/session.cjs): stopped, their agents' windows closed, at quit
 let quitPending = false;
 let quitReady = false;
 
@@ -221,6 +225,7 @@ async function requestQuit({ update = false } = {}) {
   try {
     if (sweeper) await sweeper.stop();
     if (bart) bart.stopAll();
+    if (connect) connect.stopAll(); // its imports write into the library about to close; its agents' hidden windows go
     if (builds) await builds.stopAll(); // each running turn stops, saves a checkpoint and is marked interrupted
     // No E2B preview is left running (and paid for) after quitting: a ready one goes to sleep, to wake when it is next
     // opened, and one still being set up stops. One that cannot be reached (offline, signed out) does not hold the quit:
@@ -893,15 +898,46 @@ if (!hasSingleInstanceLock) {
     // The Overleaf projects open in the Stage (MATH-65): each one's copy is downloaded with the Stage's own session, the
     // sign-in the person made there, so no cookie leaves it.
     const overleafStage = createOverleafStage({ copies: createOverleafCopies({ fetch: (url, init) => electronSession.fromPartition(BROWSER_PARTITION).fetch(url, init) }) });
-    // Connect your library (src/main/connect, 2026-10-07): onboarding's experimental chat, test mode only. A librarian agent
-    // asks what should come in, and import agents bring each source into the data root in the background, on the person's
-    // subscription, reading only (they write through Engelbart's import tools). Its events go to the windows directly: the
-    // onboarding screen never attaches a terminal. ENGELBART_CONNECT_FAKE=1 (or ENGELBART_BART_FAKE=1) runs it with no model.
-    const connect = createConnect({
-      agents: process.env.ENGELBART_CONNECT_FAKE === '1' || process.env.ENGELBART_BART_FAKE === '1'
+    // Connect your library (src/main/connect, 2026-10-07): the experimental chat of onboarding and of a one-time popup, test
+    // mode only. A librarian agent asks what should come in; survey, recall and import agents do the work in the background
+    // on the person's subscription, pinned to Sonnet high or Sol high. They read this Mac, use Engelbart's own hidden
+    // browser on the Stage's sign-ins (./connect/browser.cjs: never the screen), the connectors Engelbart signs in to
+    // (Granola, Notion) and macOS Automation (Apple Notes), and write only through Engelbart's import tools; then MEMORY.md.
+    // Its events go to the windows directly: the onboarding screen never attaches a terminal. ENGELBART_CONNECT_FAKE=1 (or
+    // ENGELBART_BART_FAKE=1) runs it with no model.
+    const connectFake = process.env.ENGELBART_CONNECT_FAKE === '1' || process.env.ENGELBART_BART_FAKE === '1';
+    const crypt = {
+      available: () => safeStorage.isEncryptionAvailable(),
+      encrypt: (text) => safeStorage.encryptString(text).toString('base64'),
+      decrypt: (text) => safeStorage.decryptString(Buffer.from(text, 'base64')),
+    };
+    const connectors = createConnectors({
+      file: () => path.join(store.config().dataRoot, 'connectors.json'),
+      crypt,
+      openExternal: (url) => electronShell.openExternal(parseExternalUrl(url).href),
+      onChange: (status) => sendToWindow('engelbart:connectors', status),
+    });
+    const agentBrowser = createAgentBrowser({
+      BrowserWindow,
+      getSession: () => electronSession.fromPartition(BROWSER_PARTITION),
+      userAgent: (ua) => cleanUserAgent(ua, app.getName()),
+      log: (jobId, text) => { if (connect) connect.logJob(jobId, text); },
+      onClosed: (jobId) => { if (connect) connect.windowClosed(jobId); },
+      headless: process.env.ENGELBART_HEADLESS === '1',
+    });
+    const appleNotes = createAppleNotes();
+    // The providers whose CLI can run now (the tool check), as Connect names them; before the first check, both.
+    const connectReady = () => {
+      if (connectFake) return ['anthropic', 'openai'];
+      const usable = tools && typeof tools.usableAgents === 'function' ? tools.usableAgents() : null;
+      return usable === null ? ['anthropic', 'openai'] : usable.map((name) => (name === 'claude' ? 'anthropic' : 'openai'));
+    };
+    connect = createConnect({
+      agents: connectFake
         ? createFakeConnectAgents({ delayMs: Number(process.env.ENGELBART_CONNECT_FAKE_MS) || 700 })
         : createConnectAgents({ runDirectory: path.join(app.getPath('userData'), 'connect-runs'), interviewHome: path.join(app.getPath('userData'), 'codex-home-connect'), importHome: path.join(app.getPath('userData'), 'codex-home-connect-import'), tools }),
-      resolveChoice: (pick) => resolveBuildChoice(readModels('build'), pick && typeof pick === 'object' ? pick : {}),
+      models: () => readModels('build'),
+      ready: connectReady,
       context: () => store.context(),
       homeDir,
       zotero: {
@@ -913,10 +949,29 @@ if (!hasSingleInstanceLock) {
       deps: { describe: createDescriber(), identifyRepo: createRepoIdentifier({ auth: github.authHeaders }), inspectPdf, onAdded: libraryChanged, onPdf: pdfAdded },
       notify: (snapshot) => sendToWindow('engelbart:connect', snapshot),
       openBridge: openToolBridge,
+      browser: agentBrowser,
+      connectors,
+      appleNotes,
     });
+    // The apps Engelbart's browser holds a sign-in for (their sign-in cookie in the Stage's session): ticked on the choose
+    // screen, as an app found on this Mac is.
+    const SIGN_IN_COOKIES = { ChatGPT: ['chatgpt.com', /session-token/], Claude: ['claude.ai', /^sessionKey$/], 'Google Docs': ['google.com', /^(__Secure-1PSID|SID)$/], 'Google Meet': ['google.com', /^(__Secure-1PSID|SID)$/], Gemini: ['google.com', /^(__Secure-1PSID|SID)$/], Overleaf: ['overleaf.com', /^overleaf_session/], Perplexity: ['perplexity.ai', /session-token/], Grok: ['grok.com', /^sso$/], Notion: ['notion.so', /^token_v2$/] };
+    const connectSignedIn = async () => {
+      const cookies = electronSession.fromPartition(BROWSER_PARTITION).cookies;
+      const out = [];
+      for (const [name, [domain, pattern]] of Object.entries(SIGN_IN_COOKIES)) {
+        if (!CONNECT_APPS[name]) continue;
+        const held = await cookies.get({ domain }).catch(() => []);
+        if (held.some((cookie) => pattern.test(cookie.name))) out.push(name);
+      }
+      return out;
+    };
     app.on('will-quit', () => connect.stopAll());
     registerEngelbartIpc({
       connect,
+      connectors,
+      appleNotes,
+      connectSignedIn,
       // Made below, after this: the window's update banner asks for it when it is used.
       getUpdates: () => updates,
       github,

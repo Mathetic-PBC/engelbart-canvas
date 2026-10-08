@@ -3,13 +3,20 @@
 // Connect your library (2026-10-07; Claude Design "Connect Library.dc.html", the "Onboarding brainstorm" note): the kinds
 // of thing the person can bring into their library and the apps each comes from, as the choose screen lists them. Shared
 // by main (src/main/connect: what is looked for on this Mac, how an app is reached) and the renderer (the list itself).
-// Experimental: onboarding shows it only in test mode.
+// Experimental: test mode only.
 //
-// `reach` says how an import agent gets at an app:
-//   local   Engelbart reads where the app keeps its files on this Mac (found: `where`)
-//   signin  Engelbart's own sign-in (Zotero, GitHub), started from a button in the chat
-//   export  the person exports from the app and chooses the file or folder (a button in the chat says how)
-// `pick` is what that button chooses: 'folder', or 'file' (a .json or .zip export).
+// `reach` says how the agents get at an app. Since the second build ("Agent onboarding", 2026-10-07: "Instead of telling
+// me to do stuff, it must use computer use to do all this stuff for me!") the person is never told to export, download
+// or choose a file for an app that lives on the web; the agents do it:
+//   local       files on this Mac. `pick` ('folder') is what a button chooses when they are not where the app keeps them
+//   web         the agents' own browser, hidden, on the sign-ins of Engelbart's Stage (src/main/connect/browser.cjs).
+//               `sites` are the only hosts it opens for the app (sign-in pages: SIGN_IN_SITES), `start` where it begins
+//   connector   the app's official MCP server, which Engelbart signs in to with OAuth (src/main/connect/connectors.cjs);
+//               `mcp` is its address
+//   signin      Engelbart's own sign-in (Zotero, GitHub)
+//   automation  macOS Automation: Engelbart asks the app itself, which macOS asks the person to allow once (Apple Notes)
+// `memory`: an AI assistant that keeps memories of the person. With their leave, an agent asks it for a research profile
+// (src/main/connect/prompts.cjs RECALL_PROMPT), which goes into MEMORY.md.
 
 const SOURCES = Object.freeze([
   { id: 'notes', label: 'Notes', apps: ['Obsidian', 'Notion', 'Apple Notes', 'OneNote', 'Google Docs', 'Evernote'] },
@@ -20,31 +27,42 @@ const SOURCES = Object.freeze([
   { id: 'code', label: 'Code', apps: [] },
 ]);
 
+const GOOGLE = ['drive.google.com', 'docs.google.com', 'accounts.google.com', 'myaccount.google.com', 'www.google.com', 'google.com'];
+
 const APPS = Object.freeze({
-  Obsidian: { reach: 'local', pick: 'folder', how: 'Choose the vault folder.' },
-  Notion: { reach: 'export', pick: 'folder', how: 'In Notion: Settings → Export all workspace content, Markdown & CSV. Unzip it and choose the folder.' },
-  'Apple Notes': { reach: 'export', pick: 'folder', how: 'Apple Notes keeps its notes in a locked database. Export them to a folder (File → Export, or an exporter app) and choose it.' },
-  OneNote: { reach: 'export', pick: 'folder', how: 'Export your notebooks (File → Export) to a folder and choose it.' },
-  'Google Docs': { reach: 'local', pick: 'folder', how: 'Choose your Google Drive folder (Google Drive for desktop), or a Google Takeout export.' },
-  Evernote: { reach: 'export', pick: 'folder', how: 'Export your notebooks as Markdown or .enex to a folder and choose it.' },
-  Granola: { reach: 'export', pick: 'folder', how: 'Granola encrypts what it keeps on this Mac. Copy the transcripts you want into a folder and choose it.' },
-  'Google Meet': { reach: 'export', pick: 'folder', how: 'Meet saves transcripts as Google Docs in Drive → Meet Recordings. Choose that folder in your Google Drive folder.' },
-  Zoom: { reach: 'local', pick: 'folder', how: 'Choose the folder Zoom saves recordings and transcripts to (usually ~/Documents/Zoom).' },
-  ChatGPT: { reach: 'export', pick: 'file', how: 'In ChatGPT: Settings → Data controls → Export data. Choose the .zip it emails you, or its conversations.json.' },
-  Codex: { reach: 'local', pick: 'folder', how: 'Codex keeps its sessions in ~/.codex/sessions.' },
-  Claude: { reach: 'export', pick: 'file', how: 'In Claude: Settings → Privacy → Export data. Choose the .zip it emails you, or its conversations.json.' },
-  'Claude Code': { reach: 'local', pick: 'folder', how: 'Claude Code keeps its sessions in ~/.claude/projects.' },
-  Grok: { reach: 'export', pick: 'file', how: 'Export your Grok data (Settings → Data) and choose the file.' },
-  Gemini: { reach: 'export', pick: 'folder', how: 'Export Gemini Apps activity with Google Takeout and choose the folder.' },
-  Perplexity: { reach: 'export', pick: 'folder', how: 'Export threads you want as Markdown to a folder and choose it.' },
-  Cursor: { reach: 'export', pick: 'folder', how: 'Export the chats you want as Markdown to a folder and choose it.' },
-  Zotero: { reach: 'signin', pick: null, how: 'Sign in to Zotero; Engelbart keeps a copy of your library to read.' },
-  Overleaf: { reach: 'export', pick: 'folder', how: 'Download your projects (Menu → Download → Source) and choose the folder they are in.' },
-  GitHub: { reach: 'signin', pick: null, how: 'Sign in to GitHub to choose repositories.' },
+  Obsidian: { reach: 'local', pick: 'folder' },
+  Notion: { reach: 'connector', mcp: 'https://mcp.notion.com/mcp', sites: ['notion.so', 'notion.com'], start: 'https://www.notion.so/' },
+  'Apple Notes': { reach: 'automation' },
+  OneNote: { reach: 'web', sites: ['onenote.com', 'onenote.cloud.microsoft', 'office.com', 'live.com', 'microsoft.com', 'microsoftonline.com', 'sharepoint.com'], start: 'https://www.onenote.com/notebooks' },
+  'Google Docs': { reach: 'web', sites: GOOGLE, start: 'https://drive.google.com/drive/recent' },
+  Evernote: { reach: 'web', sites: ['evernote.com'], start: 'https://www.evernote.com/client/web' },
+  Granola: { reach: 'connector', mcp: 'https://mcp.granola.ai/mcp' },
+  'Google Meet': { reach: 'web', sites: [...GOOGLE, 'meet.google.com'], start: 'https://drive.google.com/drive/search?q=type:document%20Meet%20Recordings' },
+  Zoom: { reach: 'local', pick: 'folder', sites: ['zoom.us'] },
+  ChatGPT: { reach: 'web', sites: ['chatgpt.com', 'chat.openai.com', 'openai.com'], start: 'https://chatgpt.com/', memory: true },
+  Codex: { reach: 'local' },
+  Claude: { reach: 'web', sites: ['claude.ai', 'claude.com', 'anthropic.com'], start: 'https://claude.ai/recents', memory: true },
+  'Claude Code': { reach: 'local' },
+  Grok: { reach: 'web', sites: ['grok.com', 'x.ai', 'x.com'], start: 'https://grok.com/', memory: true },
+  Gemini: { reach: 'web', sites: ['gemini.google.com', ...GOOGLE], start: 'https://gemini.google.com/app', memory: true },
+  Perplexity: { reach: 'web', sites: ['perplexity.ai'], start: 'https://www.perplexity.ai/library' },
+  Cursor: { reach: 'local' },
+  Zotero: { reach: 'signin' },
+  Overleaf: { reach: 'web', sites: ['overleaf.com'], start: 'https://www.overleaf.com/project' },
+  GitHub: { reach: 'signin' },
 });
+
+// Where a sign-in may take a page on its way back to an app (an agent's browser only goes where its apps' `sites` are).
+const SIGN_IN_SITES = Object.freeze(['accounts.google.com', 'appleid.apple.com', 'idmsa.apple.com', 'login.microsoftonline.com', 'login.live.com', 'auth.openai.com', 'auth0.openai.com', 'accounts.x.ai', 'github.com', 'okta.com', 'auth0.com']);
 
 const SOURCE_IDS = Object.freeze(SOURCES.map((source) => source.id));
 const sourceOf = (id) => SOURCES.find((source) => source.id === id) || null;
 const appOf = (name) => (Object.hasOwn(APPS, name) ? APPS[name] : null);
+/** The source an app is listed under ('notes' for Obsidian), or null. GitHub is Code's. */
+const sourceOfApp = (name) => (name === 'GitHub' ? 'code' : (SOURCES.find((source) => source.apps.includes(name)) || {}).id || null);
+/** The AI assistants an agent can ask for what they remember, of `apps`. */
+const recallApps = (apps) => (Array.isArray(apps) ? apps : []).filter((app) => appOf(app) && appOf(app).memory);
+/** The apps reached on the web, of `apps`. */
+const webApps = (apps) => (Array.isArray(apps) ? apps : []).filter((app) => appOf(app) && appOf(app).reach === 'web');
 
-module.exports = { SOURCES, APPS, SOURCE_IDS, sourceOf, appOf };
+module.exports = { SOURCES, APPS, SIGN_IN_SITES, SOURCE_IDS, sourceOf, appOf, sourceOfApp, recallApps, webApps };

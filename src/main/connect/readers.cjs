@@ -563,6 +563,6 @@ function zoteroItems(root, { collection = '', nested = true, query = '', limit =
 
 module.exports = {
   NOTE_EXT, IMAGE_EXT, shownPath, expandPath, walkFiles, folderOverview, noteFiles, obsidianDailyFolder, obsidianVaults,
-  localChats, localChatCounts, localChatFile, localTranscript, readExport, exportChats, exportCounts, exportTranscript,
+  localChats, localChatCounts, localChatFile, localTranscript, readExport, exportChat, exportChats, exportCounts, exportTranscript,
   browserProfiles, profileOf, browserHistory, browserBookmarks, linksIn, hostOf, chromeTime, zoteroCollections, zoteroItems,
 };

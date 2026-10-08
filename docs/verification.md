@@ -216,3 +216,39 @@ windows smokes were run again on it.
 | A post-it dragged onto the sidebar's foot | it crumples and is thrown away; the trash beside Hide stickies lists it; Restore brings it back | `scripts/smoke-post-its.cjs`: passed on one run of three; on the others the synthetic drag stalled partway, as it does on every run on the commit before (old trash can) |
 
 Not done: reordering workspaces (requirement 10; the tree is still ordered by when each was made); a Claude Design file.
+
+### Addendum — 2026-10-07 (Connect your library, second build: "Agent onboarding")
+
+Test mode only. `npm test` covers the session with the fake agents (`test/connect.test.cjs`: the pinned models, the
+priority queue, a survey handing the person its sign-in, recall, MEMORY.md with its secrets taken out and given to @bart,
+an existing user's project, Stop), the tools each kind of agent is served, the agents' browser's sites, ChatGPT's and
+Claude's page scripts against fakes, Google Drive's Markdown and Sheets, Apple Notes through a stubbed osascript, Cursor's
+database, a connector's OAuth sign-in and refresh against a fake server, every app's skill, and the onboarding flow.
+Driven in the real app, hidden, on disposable data by `scripts/smoke-connect.cjs` (fake agents),
+`scripts/smoke-connect-tools.cjs` (the tools screen first) and `scripts/smoke-connect-browser.cjs` (the hidden browser on
+a page served locally). `scripts/smoke-sidebar.cjs` still passes; `scripts/smoke-settings.cjs` times out at "the window, at
+Model" here and on the commit before this one alike (the Sidebar build moved the gear it presses).
+
+| Step | Observed | Evidence |
+| --- | --- | --- |
+| Claude Code installed but signed out, Codex missing (`scripts/smoke-connect-tools.cjs`) | the tools screen before Connect (`2 of 5`): Claude Code's row with Sign in, Codex's with Install, Continue greyed; after the (fake) sign-in Continue goes to Connect, `3 of 5` | `75-connect-tools-signed-out.png`, `76-connect-tools-ready.png` |
+| A new user, both agents signed in, test mode | welcome, then Connect as `2 of 4`: Add to your library and Custom instructions are gone | `67-connect-choose.png` |
+| The choose screen | Obsidian ticked (its vault found), ChatGPT ticked by hand; the chip reads `Claude Code · Sonnet · High` and offers only the provider | `67-connect-choose.png` |
+| Agents do all of this for you | the disclaimer; Read files on this Mac, Use my accounts in the background (ChatGPT), Ask ChatGPT what it remembers; Bring over sign-ins from Chrome; Code's repository list 320 px tall | `68-connect-permissions.png`, smoke assertions |
+| Refine | the question as a card, one option per line with its why; Import outlined grey (`data-ready=0`) | `69-connect-card.png` |
+| ChatGPT's survey needs a sign-in | an amber card: Open the sign-in window, Bring over sign-ins from Chrome, Done, Skip; the strip says `needs you`; Done gives it back | `70-connect-needs-you.png` |
+| The survey reports | the librarian, which waited, offers its three items as a multiple choice; once answered, `That's everything` and Import turns blue | `71-connect-chat-done.png` |
+| Import | the working view: the survey `looked`, the recall `✓ remembered`, Notes `✓ 4 added`, AI chats `✓ 1 added`, MEMORY.md `Saved · 1 secret masked`, the activity log (`You · Done: Sign in to ChatGPT`) | `72-connect-working.png`; MEMORY.md on disk has neither planted secret |
+| Continue, create, Open project | the staged notes in the new project; the chip `Library ✓` beside the bell, under 170 px, the Stage's tabs clear; no offer popup | `73-connect-project.png` |
+| The chip | opens the session again as a popup over the workspace (the Stage's page drawn as a picture under it); × puts it away | `74-connect-popup.png` |
+| The hidden browser (`smoke-connect-browser.cjs`) | never shown; reads text and controls (a Drive row's id, a password field's value never); types into a field and an editor; refuses a password field; clicks; waits; a same-origin fetch and a download carry the page's cookies; another host refused by browser_open, a download and a link, and logged; ChatGPT's listing and reading scripts against fakes of its endpoints | script output |
+
+Run for real on scratch data, never on anyone's accounts: Claude Code (Sonnet high) and Codex (Sol high) each ran a whole
+session on a scratch vault (the librarian, an import through Engelbart's tools that left Daily and Personal out, MEMORY.md
+written and then checked for secrets by Claude Sonnet; a planted key in a note never reached it); and a Claude Code import
+agent drove the hidden browser through its MCP tools on a stand-in notes app served locally, bringing the two research
+notes in and leaving the shopping list out.
+
+Not exercised: ChatGPT, Claude, Google Drive, Overleaf, Notion, Gemini, Grok, Perplexity, Evernote and OneNote in a real
+account; Granola's and Notion's real OAuth (only a fake server); macOS's Automation prompt for Notes (osascript stubbed);
+the agent's window shown for a real sign-in (smoke runs never show windows).

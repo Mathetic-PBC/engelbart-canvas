@@ -140,6 +140,11 @@ function stagedNotes(sessionDir) {
   }).filter(Boolean);
 }
 
+/** How many notes wait for the project (counted, not read). */
+function stagedCount(sessionDir) {
+  try { return fs.readdirSync(stagedDir(sessionDir)).filter((name) => name.endsWith('.json')).length; } catch { return 0; }
+}
+
 /** Every staged note written into the project, oldest first, each removed once it is in. → [{ id, name }] */
 async function flushStaged(ctx, sessionDir, projectId, { projects }) {
   const written = [];
@@ -150,4 +155,4 @@ async function flushStaged(ctx, sessionDir, projectId, { projects }) {
   return written;
 }
 
-module.exports = { MAX_NOTE_BYTES, noteName, createIndex, findPicture, convertMarkdown, placeImages, writeNote, stageNote, stagedNotes, flushStaged };
+module.exports = { MAX_NOTE_BYTES, noteName, createIndex, findPicture, convertMarkdown, placeImages, writeNote, stageNote, stagedNotes, stagedCount, flushStaged };

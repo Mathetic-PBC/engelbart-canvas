@@ -220,7 +220,7 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
 // (MATH-54 build 3a): { selection(), screenshot() } (the app passes that window's browser views'), or null.
 // `overleafFor(win, stage)`: a window's Overleaf tabs for an @bart turn (MATH-65; overleaf/stage.cjs forTurn), or null.
 // `getUpdates()`: the updater (updates.cjs), made after this is registered; null until then, and in the tests.
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null, connectors = null, appleNotes = null, connectSignedIn = async () => [] }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
   const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
@@ -450,13 +450,16 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       return made;
     });
   }), { project: (_args, out) => out && out.project && out.project.id, library: true });
-  // Connect your library (./connect, 2026-10-07): onboarding's experimental chat that brings the person's notes, chats,
-  // papers, sites and code into the library. Test mode only: refused in the normal library and in a copy without test
-  // mode. connect-detect: which apps are on this Mac (the choose screen starts with those ticked). connect-start: the
-  // choose screen's picks → the session (the librarian's first turn runs in the background); connect-answer: a reply
-  // ({ text } | { picked } | { skipped }); connect-chose: a button in the chat used ({ app, kind: 'signin' | 'folder' |
-  // 'file', path }); connect-import: Import, every source not yet handed over goes now; connect-stop. Every change of a
-  // session is sent as `engelbart:connect` with its snapshot.
+  // Connect your library (./connect, 2026-10-07): the experimental chat that brings the person's notes, chats, papers,
+  // sites and code into the library, in onboarding and, once, as a popup for someone who has projects already. Test mode
+  // only: refused in the normal library and in a copy without test mode. connect-detect: which apps are on this Mac (and
+  // signed in to in Engelbart's browser), so the choose screen starts with those ticked; connect-providers: Claude Code and
+  // Codex, which can run and on which pinned model. connect-start: the choose screen's picks → the session (the scan, the
+  // surveys and the librarian's first turn run in the background); connect-answer: a reply ({ text } | { picked, text? } |
+  // { skipped }); connect-authorize: a button in the chat used ({ app, kind: 'signin' | 'connector' | 'permission' |
+  // 'folder', path }); connect-need: a request an agent handed the person, opened, done or skipped; connect-import: Import,
+  // every source not yet handed over goes now; connect-stop (all) and connect-stop-job; connect-list: the sessions the
+  // dock shows. Every change of a session is sent as `engelbart:connect` with its snapshot.
   const cx = () => {
     if (!connect) throw new Error('Connect your library is not available');
     if (!store.config().testMode) throw new Error('Connect your library is experimental and runs in test mode only');
@@ -464,13 +467,46 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   };
   const importId = (value) => str(value, 'import id', 64);
   const plainObject = (value, what) => { if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${what} is invalid`); return value; };
-  handle('connect-detect', withCtx((ctx) => { cx(); return detectSources({ homeDir: ctx.homeDir, zotero: () => (zotero ? zotero.status() : null), github: () => (github ? github.status() : null) }); }));
+  const appName = (value) => str(value, 'app', 64);
+  handle('connect-detect', withCtx(async (ctx) => { cx(); return detectSources({ homeDir: ctx.homeDir, zotero: () => (zotero ? zotero.status() : null), github: () => (github ? github.status() : null), signedIn: await connectSignedIn().catch(() => []), connectors: (app) => !!(connectors && connectors.status(app).connected), ...(process.env.ENGELBART_CONNECT_APPLICATIONS != null ? { applications: process.env.ENGELBART_CONNECT_APPLICATIONS.split(':').filter(Boolean) } : {}) }); }));
+  handle('connect-providers', () => cx().providers());
   handle('connect-start', (input) => cx().start(plainObject(input, 'choices')));
   handle('connect-answer', (id, input) => cx().answer(importId(id), plainObject(input, 'answer')));
-  handle('connect-chose', (id, input) => { const value = plainObject(input, 'choice'); return cx().connected(importId(id), { app: str(value.app, 'app', 64), kind: str(value.kind, 'kind', 16), path: optStr(value.path, 'path', 4096) }); });
+  const authorizeInput = (input) => { const value = plainObject(input, 'choice'); return { app: appName(value.app), kind: str(value.kind, 'kind', 16), path: optStr(value.path, 'path', 4096) }; };
+  handle('connect-authorize', (id, input) => cx().authorize(importId(id), authorizeInput(input)));
+  handle('connect-chose', (id, input) => cx().authorize(importId(id), authorizeInput(input)));
+  handle('connect-cancel-sign-in', (id, app) => cx().cancelSignIn(importId(id), appName(app)));
+  handle('connect-need', (id, needId, action) => cx().need(importId(id), str(needId, 'request id', 64), str(action, 'action', 8)));
   handle('connect-import', (id) => cx().importNow(importId(id)));
   handle('connect-stop', (id) => cx().stop(importId(id)));
+  handle('connect-stop-job', (id, jobId) => cx().stopJob(importId(id), str(jobId, 'job id', 64)));
+  handle('connect-provider', (id, provider) => cx().setProvider(importId(id), str(provider, 'provider', 16)));
+  handle('connect-retry-memory', (id) => cx().retryMemory(importId(id)));
+  handle('connect-minimize', (id, value) => cx().setMinimized(importId(id), !!value));
+  handle('connect-dismiss', (id) => cx().dismiss(importId(id)));
   handle('connect-state', (id) => cx().state(importId(id)));
+  handle('connect-list', withCtx((ctx) => (connect && store.config().testMode ? connect.list(ctx.dataRoot) : [])));
+  // macOS's Automation prompt for Notes, asked from the choose screen's permissions (./connect/apple-notes.cjs).
+  handle('connect-notes-permission', () => { cx(); return appleNotes ? appleNotes.permission() : { allowed: false, error: 'Apple Notes cannot be read here' }; });
+  // The connectors Engelbart signs in to for the agents (./connect/connectors.cjs): Granola and Notion.
+  handle('connect-connectors', () => { cx(); return connectors ? connectors.list() : []; });
+  handle('connect-connector-sign-in', (app) => { cx(); if (!connectors) throw new Error('Connectors are not available'); return connectors.signIn(appName(app)); });
+  handle('connect-connector-cancel', (app) => { cx(); if (connectors) connectors.cancel(appName(app)); return true; });
+  // The one-time popup for someone with projects (2026-10-07: "Existing users should see a popup to do this once, but not
+  // as an onboarding flow just like a popup they can dismiss"): shown until it has been seen once in this data root.
+  const offerFile = (ctx) => path.join(ctx.dataRoot, '.connect', 'offer.json');
+  handle('connect-offer', withCtx((ctx) => {
+    if (!connect || !store.config().testMode) return { show: false };
+    try { return { show: !JSON.parse(fs.readFileSync(offerFile(ctx), 'utf8')).seen }; } catch { return { show: true }; }
+  }));
+  handle('connect-offer-seen', withCtx((ctx, how) => {
+    cx();
+    fs.mkdirSync(path.dirname(offerFile(ctx)), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(offerFile(ctx), JSON.stringify({ seen: true, how: how === 'started' ? 'started' : 'dismissed', at: new Date().toISOString() }), { mode: 0o600 });
+    return true;
+  }));
+  // MEMORY.md (./connect/memory.cjs): whether there is one in this data root, for the window to name and reveal.
+  handle('connect-memory', withCtx((ctx) => { const file = path.join(ctx.dataRoot, 'MEMORY.md'); try { const stat = fs.statSync(file); return { exists: true, path: file, updated: stat.mtime.toISOString(), bytes: stat.size }; } catch { return { exists: false, path: file }; } }));
   // A repository's sandbox is stopped (and its runs forgotten) before its row can go.
   saving('discard-library-item', (id) => queued(async () => {
     const ctx = await store.context();

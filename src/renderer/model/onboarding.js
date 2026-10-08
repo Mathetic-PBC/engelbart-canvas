@@ -8,13 +8,16 @@ import { launchRows, installable } from './tools.js';
  * A new install walks all six screens; + Project on the all-projects screen only the last two. The tools screen
  * (second, 2026-09-28: it replaces the setup dialog a first launch used to open) is left out when `tools` is false:
  * the launch check found nothing to install. Connect your library (2026-10-07, screens/ConnectLibrary.jsx) is
- * experimental: it is in the flow, before Add to your library, only when `connect` is true (test mode).
+ * experimental: it is in the flow only when `connect` is true (test mode), and then it takes the place of Add to your
+ * library and Custom instructions ("replace steps 3 and 4 with this, since it will essentially be the same": its agents
+ * bring the papers, sites and code in, and MEMORY.md, made from what the person's AI assistants remember, does what the
+ * custom instructions did).
  */
 export const FLOWS = { new: ['welcome', 'tools', 'connect', 'import', 'instructions', 'create', 'context'], existing: ['create', 'context'] };
 
 export function flowOf(mode, { tools = true, connect = false } = {}) {
   const flow = FLOWS[mode] || FLOWS.new;
-  return flow.filter((step) => (step !== 'tools' || tools) && (step !== 'connect' || connect));
+  return flow.filter((step) => (step !== 'tools' || tools) && (connect ? step !== 'import' && step !== 'instructions' : step !== 'connect'));
 }
 
 /** Screens that are several screens in effect (2a, 2b …), one box shown at a time. */
@@ -48,11 +51,42 @@ export function pagerOf(mode, step, options) {
 /**
  * Whether a new install's onboarding has the tools screen, from the tool check's snapshot: null until the first check
  * has answered, then whether it found something Install all would install (Git missing, or neither agent installed).
- * What else the check asks about (signing in, an update) waits for the setup dialog after onboarding.
+ * What else the check asks about (signing in, an update) waits for the setup dialog after onboarding, except with Connect
+ * your library in the flow (`connect`, test mode), whose agents run on Claude Code or Codex: then the screen is there
+ * until one of them is installed and signed in too ("signing into claude code and/or codex must be done before this step").
  */
-export function toolsWanted(snapshot) {
+export function toolsWanted(snapshot, { connect = false } = {}) {
   if (!snapshot || !snapshot.checked) return null;
-  return installable(snapshot, launchRows(snapshot)).length > 0;
+  if (installable(snapshot, launchRows(snapshot)).length > 0) return true;
+  return connect ? !agentReady(snapshot) : false;
+}
+
+/** Whether Claude Code or Codex is installed and signed in: what Connect your library's agents need. */
+export function agentReady(snapshot) {
+  return !!(snapshot && snapshot.tools) && ['claude', 'codex'].some((id) => snapshot.tools[id] && snapshot.tools[id].status === 'ready');
+}
+
+/**
+ * The tools screen's rows and main button. Without Connect: the rows the launch check asks about, Install all (or
+ * Continue) installs in the background and moves on at once. With it: Git when it needs anything, and both agents with
+ * their own Install or Sign in; the button installs what is missing and stays, and Continue waits for an agent to be ready.
+ * → { ids, install: [tools Install all would install], label, disabled, stay }
+ */
+export function toolsStep(snapshot, { connect = false } = {}) {
+  if (!snapshot || !snapshot.tools) return { ids: [], install: [], label: 'Continue', disabled: true, stay: false };
+  if (!connect) {
+    const ids = launchRows(snapshot);
+    const install = installable(snapshot, ids);
+    return { ids, install, label: install.length ? 'Install all' : 'Continue', disabled: false, stay: false };
+  }
+  const git = snapshot.tools.git;
+  const ids = [...(git && git.status !== 'ready' && !git.skip ? ['git'] : []), 'claude', 'codex'].filter((id) => snapshot.tools[id]);
+  if (agentReady(snapshot)) return { ids, install: [], label: 'Continue', disabled: false, stay: false };
+  // An agent installed and waiting for its sign-in: its row's Sign in is the step, not installing the other one.
+  const installedAgent = ['claude', 'codex'].some((id) => snapshot.tools[id] && snapshot.tools[id].installed);
+  const install = installable(snapshot, installedAgent ? ids.filter((id) => id === 'git') : ids);
+  if (install.length) return { ids, install, label: 'Install all', disabled: false, stay: true };
+  return { ids, install: [], label: 'Continue', disabled: true, stay: true };
 }
 
 /** What each tool is for, under its name on the tools screen. */
