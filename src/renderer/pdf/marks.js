@@ -140,15 +140,28 @@ export function placeHighlight(list, mark) {
 // PaperView cuts a selection into one range a page (each text layer it touches) and measures each; these are the parts
 // that need no DOM.
 
+// A stray sliver (2026-10-08, Hudson: "a thin vertical line also highlights"): a rect much taller than the selection's
+// lines and taller than it is wide, as rotated text in a margin (arXiv's side stamp) or a tall glyph gives. Left in, it
+// also joins every line it spans into one band (mergeLineRects).
+const TALL = 1.8; // × the selection's median rect height
+
+/** Rects with stray slivers dropped: any taller than TALL × the median height and narrower than tall. Unusable ones go too. */
+export function dropSlivers(rects) {
+  const list = (rects || []).filter(usable);
+  if (list.length < 2) return list;
+  const hs = list.map((r) => r.h).sort((a, b) => a - b), median = hs[Math.floor((hs.length - 1) / 2)];
+  return list.filter((r) => !(r.h > TALL * median && r.w < r.h));
+}
+
 /**
  * A selection's pieces, one a page ({ page, rects, width, text, u }: rects in layout px relative to that page's text
  * layer, `width` the layer's width in the same px, `u` the page's drawn width) → its parts in page order: the rects
- * merged into one box per stretch of a line, the side a note goes on, the top. A piece with no usable rects is dropped.
+ * merged into one box per stretch of a line (stray slivers dropped first: dropSlivers), the side a note goes on, the top. A piece with no usable rects is dropped.
  */
 export function selectionParts(pieces) {
   const out = [];
   for (const { page, rects, width, text, u } of pieces || []) {
-    const boxes = mergeLineRects(rects);
+    const boxes = mergeLineRects(dropSlivers(rects));
     if (boxes.length) out.push({ page, rects: boxes, side: sideOf(boxes, width), y: Math.min(...boxes.map(top)), text, u });
   }
   return out.sort((a, b) => a.page - b.page);

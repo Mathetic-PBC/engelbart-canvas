@@ -185,6 +185,22 @@ test('placeHighlight: no overlap (another line, or beside it on the same line) i
 
 /* ------------------------------------------------------------------ a selection across pages (MATH-14) */
 
+test('dropSlivers: a rect far taller than the lines and narrower than tall goes (2026-10-08); lines and lone rects stay', async () => {
+  const { dropSlivers } = await load();
+  assert.deepEqual(dropSlivers([]), []);
+  assert.deepEqual(dropSlivers([r(30, 100, 8, 400)]), [r(30, 100, 8, 400)]); // alone: what was selected
+  // Two lines and arXiv's rotated side stamp, as a drag into the left margin takes in.
+  assert.deepEqual(dropSlivers([r(87, 120, 380, 14), r(30, 60, 12, 420), r(87, 136, 300, 14)]), [r(87, 120, 380, 14), r(87, 136, 300, 14)]);
+  // A one-letter word is narrow but line-high, and a heading is taller but wider than tall: both stay.
+  assert.deepEqual(dropSlivers([r(87, 120, 4, 14), r(87, 140, 200, 14), r(87, 160, 300, 30)]), [r(87, 120, 4, 14), r(87, 140, 200, 14), r(87, 160, 300, 30)]);
+});
+
+test('selectionParts: a stray sliver does not join the lines it spans into one box', async () => {
+  const { selectionParts } = await load();
+  const [part] = selectionParts([{ page: 1, rects: [r(87, 120, 380, 14), r(30, 60, 12, 420), r(87, 136, 300, 14)], width: 600, text: 'two lines', u: 600 }]);
+  assert.deepEqual(part.rects, [r(87, 120, 380, 14), r(87, 136, 300, 14)]);
+});
+
 test('selectionParts: a page with no usable rects has no part; the rest are merged boxes in page order, with side and top', async () => {
   const { selectionParts } = await load();
   const parts = selectionParts([
