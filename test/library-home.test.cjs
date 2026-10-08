@@ -89,6 +89,72 @@ test('who holds what: both directions agree with each other and with the catalog
   assert.deepEqual(catalog.workspaces.map((w) => [w.path, w.chars]), [['Outer', 0], ['Outer/Inner', 0]]);
 });
 
+test('what search reads inside (MATH-29): the project\'s pdf texts, notes, md files and workspace documents, each cut at 500,000 characters; nothing of another project\'s; never on the library rows', async () => {
+  const mine = await projects.createProject(ctx, 'Bodies');
+  const theirs = await projects.createProject(ctx, 'Other bodies');
+  const draft = await projects.createWorkspace(ctx, mine.id, { name: 'Draft' });
+  const nested = await projects.createWorkspace(ctx, mine.id, { name: 'Nested', parentId: draft.id });
+  const blank = await projects.createWorkspace(ctx, mine.id, { name: 'Blank' });
+  const elsewhere = await projects.createWorkspace(ctx, theirs.id, { name: 'Elsewhere' });
+  const write = (pid, id, text) => projects.writeDoc(ctx, pid, { kind: 'workspace', workspaceId: id }, text);
+  await write(mine.id, draft.id, 'A phrase only the draft holds.');
+  await write(mine.id, nested.id, 'Deeper down, a nested plan.');
+  await write(theirs.id, elsewhere.id, 'Their workspace.');
+
+  const note = await projects.createNote(ctx, mine.id, { name: 'Field notes', text: 'Observed in the lab: Late Interaction.' });
+  const huge = await projects.createNote(ctx, mine.id, { name: 'Huge', text: `${'é'.repeat(300_000)}${'x'.repeat(300_000)}` });
+  const gone = await projects.createNote(ctx, mine.id, { name: 'Deleted outside', text: 'soon gone' });
+  fs.rmSync(path.join(mine.dir, 'Deleted outside.md'));
+  const theirNote = await projects.createNote(ctx, theirs.id, { name: 'Their note', text: 'not yours' });
+  const readme = path.join(homeDir, 'README.md');
+  fs.writeFileSync(readme, '# Outside md\nAdded from disk.');
+  const outsideHome = path.join(os.tmpdir(), `engelbart-outside-${process.pid}.md`);
+  fs.writeFileSync(outsideHome, 'outside the home directory');
+  const insert = (name, more) => ctx.libraryDb.insert({ id: randomUUID(), name, ...more });
+  const md = await insert('README.md', { type: 'md', path: readme });
+  const far = await insert('Far.md', { type: 'md', path: outsideHome, project_id: mine.id });
+  const paper = await insert('Swept paper', { type: 'pdf', path: path.join(homeDir, 'swept.pdf'), project_id: mine.id });
+  const scan = await insert('A scan', { type: 'pdf', path: path.join(homeDir, 'scan.pdf'), project_id: mine.id });
+  const unswept = await insert('Not swept yet', { type: 'pdf', path: path.join(homeDir, 'unswept.pdf'), project_id: mine.id });
+  const longPaper = await insert('Long paper', { type: 'pdf', path: path.join(homeDir, 'long.pdf'), project_id: mine.id });
+  const theirPaper = await insert('Their paper', { type: 'pdf', path: path.join(homeDir, 'their.pdf'), project_id: theirs.id });
+  const site = await insert('A page', { type: 'website', url: 'https://example.org/page', project_id: mine.id });
+  await ctx.libraryDb.setText(paper.id, 'Text the sweep read from a PDF.', 1);
+  await ctx.libraryDb.setText(scan.id, '', 1);
+  await ctx.libraryDb.setText(longPaper.id, 'y'.repeat(600_000), 1);
+  await ctx.libraryDb.setText(theirPaper.id, 'their text', 1);
+  await projects.setWorkspaceContext(ctx, mine.id, draft.id, [md.id]); // held by being in a workspace, not by origin
+
+  const bodies = await library.bodiesForProject(ctx, mine.id);
+  assert.deepEqual(Object.keys(bodies).sort(), ['items', 'workspaces']);
+  assert.equal(bodies.items[paper.id], 'Text the sweep read from a PDF.');
+  assert.equal(bodies.items[note.id], 'Observed in the lab: Late Interaction.', 'as written: the renderer lowercases');
+  assert.equal(bodies.items[md.id], '# Outside md\nAdded from disk.', 'an md from disk the project holds');
+  assert.equal(library.MAX_BODY_CHARS, 500_000);
+  assert.equal(bodies.items[longPaper.id], 'y'.repeat(500_000));
+  assert.equal(bodies.items[huge.id], `${'é'.repeat(300_000)}${'x'.repeat(200_000)}`, 'cut at characters, not bytes');
+  for (const [left, why] of [[scan, 'empty text'], [unswept, 'not swept'], [gone, 'file gone'], [far, 'outside home'], [site, 'no text'], [theirPaper, 'another project'], [theirNote, 'another project']]) {
+    assert.equal(left.id in bodies.items, false, `${left.name}: ${why}`);
+  }
+  assert.deepEqual(bodies.workspaces, { [draft.id]: 'A phrase only the draft holds.', [nested.id]: 'Deeper down, a nested plan.' }, 'nested ones too; an empty one and another project\'s are left out');
+  assert.equal(blank.id in bodies.workspaces, false);
+
+  const other = await library.bodiesForProject(ctx, theirs.id);
+  assert.deepEqual(other, { items: { [theirNote.id]: 'not yours', [theirPaper.id]: 'their text' }, workspaces: { [elsewhere.id]: 'Their workspace.' } });
+
+  // The rows the renderer is sent are as they were.
+  const before = Object.keys(await ctx.libraryDb.get(paper.id)).sort();
+  for (const listed of [(await library.listLibrary(ctx)).find((r) => r.id === paper.id), (await library.libraryForProject(ctx, mine.id)).find((r) => r.id === paper.id)]) {
+    for (const field of ['text', 'body', 'bodies']) assert.equal(field in listed, false, field);
+  }
+  assert.deepEqual(Object.keys((await library.listLibrary(ctx)).find((r) => r.id === paper.id)).sort(), before);
+  await assert.rejects(library.bodiesForProject(ctx, 'not-a-project'), /project/);
+  await assert.rejects(ctx.libraryDb.textsFor('x', 10), /ids must be an array/);
+  assert.deepEqual(await ctx.libraryDb.textsFor([], 10), new Map());
+  fs.rmSync(outsideHome, { force: true });
+  for (const row of [md, far, paper, scan, unswept, longPaper, theirPaper, site]) await ctx.libraryDb.remove(row.id); // pdfs with no file would be left due for recategorize
+});
+
 test('the all-projects list carries each card: recent workspaces newest first with their text, and what the project holds', async () => {
   const project = await projects.createProject(ctx, 'Cards');
   const names = ['One', 'Two', 'Three', 'Four', 'Five'];
@@ -492,4 +558,13 @@ test('the trash takes a row off a workspace whatever put it there, and linking i
   seen = await projects.linkToWorkspace(ctx, project.id, workspace.id, [note.id]);
   assert.deepEqual([seen.context, seen.removed], [[b.id, note.id], [a.id]], 'brought back: in context, no longer removed');
   await assert.rejects(projects.linkToWorkspace(ctx, project.id, workspace.id, ['not-an-id']), /library id is invalid/);
+});
+
+test('resolveAddition: a bare address is an https link, read as its full spelling would be; a file\'s bare name is still refused (2026-10-06)', () => {
+  const home = os.homedir();
+  assert.equal(library.resolveAddition('github.com', { homeDir: home }).url, 'https://github.com/');
+  const repo = library.resolveAddition('github.com/anthropics/claude-code', { homeDir: home });
+  assert.deepEqual([repo.url, repo.tags, repo.name], ['https://github.com/anthropics/claude-code', ['git'], 'anthropics/claude-code']);
+  assert.deepEqual(library.resolveAddition('arxiv.org/abs/2401.00001', { homeDir: home }).tags, ['paper']);
+  assert.throws(() => library.resolveAddition('notes.md', { homeDir: home }), /Paste a link, or a path/);
 });

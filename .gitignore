@@ -5,3 +5,5 @@ vendor/
 .DS_Store
 .superpowers/
 *.log
+.env.local
+__pycache__/

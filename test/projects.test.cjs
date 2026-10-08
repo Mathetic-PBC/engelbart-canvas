@@ -96,6 +96,201 @@ test('workspaces nest to any depth; docs, context and renames work at every leve
   await assert.rejects(projects.createWorkspace(ctx, project.id, { name: 'x', parentId: '00000000-0000-4000-8000-000000000000' }), /Unknown workspace/);
 });
 
+test('delete puts a workspace and what is nested in it in the trash; restore puts it back; a week later it is purged (2026-09-30)', async () => {
+  const project = await projects.createProject(ctx, 'Trash Can');
+  const top = await projects.createWorkspace(ctx, project.id, { name: 'Plans' });
+  const child = await projects.createWorkspace(ctx, project.id, { name: 'Draft', parentId: top.id });
+  const grandchild = await projects.createWorkspace(ctx, project.id, { name: 'Notes', parentId: child.id });
+  await projects.writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: child.id }, 'kept\n');
+
+  assert.deepEqual(projects.trashWorkspace(ctx, project.id, child.id), { id: child.id, name: 'Draft' });
+  let tree = await projects.loadProject(ctx, project.id);
+  assert.deepEqual(tree.workspaces.find((workspace) => workspace.id === top.id).children, [], 'gone from the tree');
+  assert.throws(() => projects.findWorkspace(ctx, project.id, grandchild.id), /Unknown workspace/, 'what was nested in it went too');
+  assert.equal((await projects.listProjects(ctx)).find((candidate) => candidate.id === project.id).workspaceCount, 1);
+  assert.equal(tree.trash.length, 1);
+  assert.deepEqual([tree.trash[0].id, tree.trash[0].name, tree.trash[0].nested], [child.id, 'Draft', 1]);
+
+  // A new workspace takes its name meanwhile: the restored one comes back beside it, under its old parent.
+  await projects.createWorkspace(ctx, project.id, { name: 'Draft', parentId: top.id });
+  const back = projects.restoreWorkspace(ctx, project.id, child.id);
+  assert.equal(back.name, 'Draft 2');
+  assert.equal(await projects.readDoc(ctx, project.id, { kind: 'workspace', workspaceId: grandchild.id }), '');
+  assert.equal(await projects.readDoc(ctx, project.id, { kind: 'workspace', workspaceId: child.id }), 'kept\n');
+  assert.equal('trashed' in JSON.parse(fs.readFileSync(path.join(project.dir, 'Plans', 'Draft 2', 'meta.json'), 'utf8')), false);
+  assert.deepEqual(projects.trashedWorkspaces(ctx, project.id), []);
+  assert.throws(() => projects.restoreWorkspace(ctx, project.id, child.id), /no longer in the trash/);
+
+  // Its parent deleted too: it comes back at the top. And a week on, the trash forgets it.
+  projects.trashWorkspace(ctx, project.id, child.id);
+  projects.trashWorkspace(ctx, project.id, top.id);
+  assert.equal(projects.restoreWorkspace(ctx, project.id, child.id).name, 'Draft 2');
+  assert.ok(fs.existsSync(path.join(project.dir, 'Draft 2', 'Notes', 'meta.json')));
+  assert.equal(projects.trashedWorkspaces(ctx, project.id, Date.now() + 8 * 24 * 60 * 60 * 1000).length, 0);
+  assert.equal(fs.readdirSync(path.join(project.dir, '.trash')).length, 0, 'purged from disk');
+});
+
+/* ------------------------------------------------------------ project trash */
+
+const buildStore = require('../src/main/build/store.cjs');
+const WEEK = 7 * 24 * 60 * 60 * 1000;
+const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000', 'hex');
+const metaAt = (dir) => JSON.parse(fs.readFileSync(path.join(dir, 'project.json'), 'utf8'));
+const stateFile = () => JSON.parse(fs.readFileSync(path.join(layout.testRoot, 'state.json'), 'utf8'));
+/** Every file under a folder with its bytes: what "untouched" is checked against. */
+const snapshot = (dir) => Object.fromEntries(fs.readdirSync(dir, { recursive: true }).sort().map((name) => [name, fs.statSync(path.join(dir, name)).isFile() ? fs.readFileSync(path.join(dir, name), 'utf8') : '/']));
+
+/** A project with a code folder, a workspace with a document, a note, a pasted image and a view in state.json. */
+async function trashable(name) {
+  const code = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-trash-code-'));
+  fs.writeFileSync(path.join(code, 'main.py'), 'print(1)\n');
+  const project = await projects.createProject(ctx, { name, directory: code });
+  const workspace = await projects.createWorkspace(ctx, project.id, { name: 'Plans' });
+  await projects.writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id }, 'the plan\n');
+  const note = await projects.createNote(ctx, project.id, { name: 'Ideas', workspaceId: workspace.id, text: 'an idea\n' });
+  const image = await projects.saveImage(ctx, project.id, { bytes: PNG, mime: 'image/png', name: 'Sketch' });
+  projects.writeView(ctx, project.id, workspace.id, { active: note.id, tabs: [{ id: note.id, title: 'Ideas' }], positions: {} });
+  projects.writeStage(ctx, project.id, { active: 0, tabs: [{ address: 'https://example.org/', title: 'Example' }] });
+  return { code, project, workspace, note, image, before: snapshot(code) };
+}
+
+/** A Build record in a project folder, as build/store.cjs keeps it (status, worktree, cwd). */
+function record(project, id, { status = 'review', worktree = path.join(layout.testRoot, 'worktrees', project.slug, id), inside = '' } = {}) {
+  return buildStore.writeTask({ dir: project.dir }, { id, kind: 'build', projectId: project.id, status, title: 'T', repo: '/nowhere', worktree, cwd: path.join(worktree, inside), branch: `engelbart/${id}`, messages: [], created: new Date().toISOString() });
+}
+
+test('delete: a project goes into <dataRoot>/.trash with its notes and images; Restore brings it back as it was; the code folder is never touched (2026-10-03)', async () => {
+  const { code, project, workspace, note, image, before } = await trashable('Old Thesis');
+  const stopped = [];
+  assert.deepEqual(await projects.trashProject(ctx, project.id, { stopBuilds: async (id) => { stopped.push(id); } }), { id: project.id, name: 'Old Thesis' });
+  assert.deepEqual(stopped, [project.id], 'its Builds were stopped first');
+  const into = path.join(layout.testRoot, '.trash', project.slug);
+  assert.ok(!fs.existsSync(project.dir) && fs.existsSync(path.join(into, 'Plans', 'workspace.md')));
+  assert.ok(!(await projects.listProjects(ctx)).some((candidate) => candidate.id === project.id), 'gone from the list');
+  assert.throws(() => projects.findProject(ctx, project.id), /Unknown project/);
+  assert.equal((await ctx.libraryDb.get(note.id)).path, path.join(into, 'Ideas.md'), 'the note row points into the trash');
+  assert.equal((await ctx.libraryDb.get(image.id)).path, path.join(into, 'assets', path.basename(image.path)), 'and the image row');
+  const { trashed } = metaAt(into);
+  assert.deepEqual([trashed.slug, trashed.name, Number.isNaN(Date.parse(trashed.at))], [project.slug, project.slug, false]);
+  const listed = await projects.trashedProjects(ctx);
+  const mine = listed.find((entry) => entry.id === project.id);
+  assert.deepEqual([mine.name, mine.workspaceCount, Date.parse(mine.expires) - Date.parse(mine.deleted)], ['Old Thesis', 1, WEEK]);
+  assert.deepEqual(snapshot(code), before, 'the code folder is untouched');
+
+  const back = await projects.restoreProject(ctx, project.id);
+  assert.deepEqual([back.id, back.slug, back.dir, back.directory, back.workspaceCount], [project.id, project.slug, project.dir, code, 1]);
+  assert.ok((await projects.listProjects(ctx)).some((candidate) => candidate.id === project.id));
+  assert.equal(await projects.readDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id }), 'the plan\n');
+  assert.equal(await projects.readDoc(ctx, project.id, { kind: 'note', id: note.id }), 'an idea\n');
+  assert.deepEqual((await projects.loadProject(ctx, project.id)).notes.map((row) => row.id), [note.id], 'its notes database opens again');
+  assert.equal((await ctx.libraryDb.get(note.id)).path, path.join(project.dir, 'Ideas.md'));
+  assert.equal((await ctx.libraryDb.get(image.id)).path, image.path);
+  assert.equal((await projects.readImage(ctx, image.id)).bytes.length, PNG.length);
+  assert.equal('trashed' in metaAt(project.dir), false);
+  assert.ok(!(await projects.trashedProjects(ctx)).some((entry) => entry.id === project.id));
+  assert.ok(projects.readViews(ctx, project.id)[workspace.id], 'its views were kept');
+  assert.equal(projects.readStage(ctx, project.id).tabs.length, 1, 'and its Stage tabs');
+  assert.deepEqual(snapshot(code), before);
+  await assert.rejects(projects.restoreProject(ctx, project.id), /no longer in the trash/);
+  await assert.rejects(projects.restoreProject(ctx, '99999999-9999-4999-8999-999999999999'), /no longer in the trash/);
+});
+
+test('restore when the folder name is taken: the next free one, its open Builds\' worktrees follow it, a copy that cannot move is discarded (2026-10-03)', async () => {
+  const { code, project, note, before } = await trashable('Taken');
+  for (const id of ['aaaaaaaaa1', 'aaaaaaaaa2', 'aaaaaaaaa3', 'aaaaaaaaa4']) fs.mkdirSync(path.join(layout.testRoot, 'worktrees', project.slug, id), { recursive: true });
+  record(project, 'aaaaaaaaa1', { inside: 'app' });
+  record(project, 'aaaaaaaaa2', { status: 'accepted' });
+  record(project, 'aaaaaaaaa3', { status: 'stopped' });
+  record(project, 'aaaaaaaaa4', { worktree: path.join(layout.testRoot, 'worktrees', project.slug, 'gone-away') }); // nothing there to move
+  await projects.trashProject(ctx, project.id);
+  const other = await projects.createProject(ctx, 'Taken');
+  assert.equal(other.slug, project.slug, 'a new project took the folder name meanwhile');
+
+  const moves = [];
+  const removed = [];
+  const moveWorktree = async (task, to) => {
+    if (task.id === 'aaaaaaaaa3') throw new Error('locked');
+    moves.push([task.id, to]);
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.renameSync(task.worktree, to);
+  };
+  const back = await projects.restoreProject(ctx, project.id, { moveWorktree, removeWorktrees: async (tasks) => { removed.push(...tasks.map((task) => task.id)); } });
+  assert.equal(back.slug, `${project.slug} 2`);
+  assert.equal(back.name, 'Taken');
+  const at = (id) => path.join(layout.testRoot, 'worktrees', back.slug, id);
+  assert.deepEqual(moves, [['aaaaaaaaa1', at('aaaaaaaaa1')]], 'only open Builds move');
+  const tasks = Object.fromEntries(buildStore.listTasks({ dir: back.dir }).map((task) => [task.id, task]));
+  assert.deepEqual([tasks.aaaaaaaaa1.worktree, tasks.aaaaaaaaa1.cwd, tasks.aaaaaaaaa1.status], [at('aaaaaaaaa1'), path.join(at('aaaaaaaaa1'), 'app'), 'review']);
+  assert.equal(tasks.aaaaaaaaa2.worktree, path.join(layout.testRoot, 'worktrees', project.slug, 'aaaaaaaaa2'), 'an accepted one stays as it was');
+  assert.deepEqual([tasks.aaaaaaaaa3.status, removed], ['discarded', ['aaaaaaaaa3']]);
+  assert.match(tasks.aaaaaaaaa3.messages.at(-1).text, /could not be moved .*locked.*discarded/);
+  assert.equal(tasks.aaaaaaaaa4.worktree, at('aaaaaaaaa4'), 'a copy that is gone is made again where it now belongs (Resume)');
+  assert.equal((await ctx.libraryDb.get(note.id)).path, path.join(back.dir, 'Ideas.md'));
+  assert.equal(projects.findProject(ctx, other.id).dir, project.dir, 'the other project keeps its folder');
+  assert.deepEqual(snapshot(code), before);
+});
+
+test('the trash purges a project a week after it went in: its folder, its library rows, its Builds\' worktrees, its views (2026-10-03)', async () => {
+  const { code, project, workspace, note, image, before } = await trashable('Short Lived');
+  record(project, 'bbbbbbbbb1');
+  record(project, 'bbbbbbbbb2', { status: 'discarded' });
+  record(project, 'bbbbbbbbb3', { status: 'accepted' });
+  buildStore.writeTask({ dir: project.dir }, { ...buildStore.readTask({ dir: project.dir }, 'bbbbbbbbb3'), keptCopy: true }); // a crash left its copy
+  projects.recordEdit(ctx, project.id, workspace.id);
+  const kept = await projects.createProject(ctx, 'Not deleted');
+  const keptNote = await projects.createNote(ctx, kept.id, { name: 'Stays' });
+  projects.setStarred(ctx, project.id, note.id, true);
+  projects.setStarred(ctx, kept.id, keptNote.id, true);
+  await projects.trashProject(ctx, project.id);
+
+  const removed = [];
+  const removeWorktrees = async (tasks) => { removed.push(...tasks.map((task) => task.id)); };
+  assert.ok((await projects.trashedProjects(ctx, Date.now() + WEEK - 60_000, { removeWorktrees })).some((entry) => entry.id === project.id), 'not yet a week');
+  assert.deepEqual(removed, []);
+  const later = await projects.trashedProjects(ctx, Date.now() + WEEK + 60_000, { removeWorktrees });
+  assert.ok(!later.some((entry) => entry.id === project.id));
+  assert.ok(!fs.existsSync(path.join(layout.testRoot, '.trash', project.slug)), 'its folder is gone');
+  assert.deepEqual(removed.sort(), ['bbbbbbbbb1', 'bbbbbbbbb3'], 'the worktrees of open Builds, and of an accepted one whose copy was kept');
+  assert.equal(await ctx.libraryDb.get(note.id), null);
+  assert.equal(await ctx.libraryDb.get(image.id), null);
+  assert.equal((await ctx.libraryDb.list()).filter((row) => row.project_id === project.id).length, 0);
+  assert.ok(await ctx.libraryDb.get(keptNote.id), 'another project\'s rows stay');
+  const state = stateFile();
+  assert.equal(project.id in (state.views || {}), false);
+  assert.equal(project.id in (state.stages || {}), false, 'its Stage tabs are forgotten');
+  assert.deepEqual(projects.readStage(ctx, project.id), { active: 0, tabs: [] });
+  assert.equal((state.recent || []).some((entry) => entry.projectId === project.id), false);
+  assert.equal(project.id in (state.starred || {}), false, 'its stars are forgotten');
+  assert.deepEqual(projects.readStarred(ctx, kept.id), [keptNote.id], 'another project\'s stay');
+  assert.deepEqual(snapshot(code), before, 'the code folder is untouched');
+  await assert.rejects(projects.restoreProject(ctx, project.id), /no longer in the trash/, 'a purged project cannot be restored');
+});
+
+test('a delete or a restore cut short is finished as restored the next time the trash is read; a code folder inside the project refuses (2026-10-03)', async () => {
+  // Restore cut short after the folder moved back: the rows still point into the trash, project.json still has `trashed`.
+  const first = await trashable('Half Back');
+  await projects.trashProject(ctx, first.project.id);
+  fs.renameSync(path.join(layout.testRoot, '.trash', first.project.slug), first.project.dir);
+  assert.match((await ctx.libraryDb.get(first.note.id)).path, /\.trash/);
+  assert.ok(!(await projects.trashedProjects(ctx)).some((entry) => entry.id === first.project.id));
+  assert.equal((await ctx.libraryDb.get(first.note.id)).path, path.join(first.project.dir, 'Ideas.md'));
+  assert.equal('trashed' in metaAt(first.project.dir), false);
+  // Running restore again repairs as well, and changes nothing more.
+  const meta = metaAt(first.project.dir);
+  fs.writeFileSync(path.join(first.project.dir, 'project.json'), JSON.stringify({ ...meta, trashed: { at: new Date().toISOString(), slug: first.project.slug, name: first.project.slug } }));
+  assert.equal((await projects.restoreProject(ctx, first.project.id)).dir, first.project.dir);
+  assert.equal('trashed' in metaAt(first.project.dir), false);
+  assert.equal((await ctx.libraryDb.get(first.note.id)).path, path.join(first.project.dir, 'Ideas.md'));
+
+  // A code folder inside the project's Engelbart folder would go into the trash with it: refused, nothing moves.
+  const odd = await projects.createProject(ctx, 'Code Inside');
+  fs.mkdirSync(path.join(odd.dir, 'src'));
+  await projects.setProjectDirectory(ctx, odd.id, path.join(odd.dir, 'src'));
+  let stopped = false;
+  await assert.rejects(projects.trashProject(ctx, odd.id, { stopBuilds: async () => { stopped = true; } }), /code folder is inside/);
+  assert.ok(!stopped && fs.existsSync(path.join(odd.dir, 'src')));
+});
+
 test('workspace context is a flat list: folders sent by an old client are flattened, bad entries rejected', async () => {
   const project = await projects.createProject(ctx, 'Folders');
   const workspace = await projects.createWorkspace(ctx, project.id, { name: 'W' });
@@ -104,6 +299,33 @@ test('workspace context is a flat list: folders sent by an old client are flatte
   const folder = { id: '11111111-1111-4111-8111-111111111111', name: 'Reading', children: [note.id] };
   assert.deepEqual((await projects.setWorkspaceContext(ctx, project.id, workspace.id, [folder, other.id, note.id])).context, [note.id, other.id]);
   await assert.rejects(projects.setWorkspaceContext(ctx, project.id, workspace.id, [42]), /id or a folder/);
+});
+
+test('an item the @ menu linked is unlinked with its last mention, quietly; one linked from the sidebar is not (MATH-57)', async () => {
+  const project = await projects.createProject(ctx, 'Picked');
+  const workspace = await projects.createWorkspace(ctx, project.id, { name: 'W' });
+  const [paper, side, both] = ['21111111-1111-4111-8111-111111111111', '31111111-1111-4111-8111-111111111111', '41111111-1111-4111-8111-111111111111'];
+  await projects.linkToWorkspace(ctx, project.id, workspace.id, [side]); // the sidebar's search
+  let now = await projects.linkToWorkspace(ctx, project.id, workspace.id, [paper, side], { picked: true }); // then both picked from the @ menu
+  assert.deepEqual([now.context, now.picked], [[side, paper], [paper]], 'only what was not linked already counts as picked');
+
+  // The last mention of each goes: the picked one leaves context and is not remembered as thrown away; the other stays.
+  now = await projects.unlinkFromWorkspace(ctx, project.id, workspace.id, paper, { unmentioned: true });
+  assert.deepEqual([now.context, now.picked, now.removed], [[side], [], []]);
+  now = await projects.unlinkFromWorkspace(ctx, project.id, workspace.id, side, { unmentioned: true });
+  assert.deepEqual([now.context, now.removed], [[side], []], 'a sidebar-added item stays');
+
+  // ⌘Z brings the mention back: linked again, as picked.
+  now = await projects.linkToWorkspace(ctx, project.id, workspace.id, [paper], { picked: true });
+  assert.deepEqual([now.context, now.picked], [[side, paper], [paper]]);
+  // Added from the sidebar after it was picked: it stays from then on. The trash still takes it, and remembers it.
+  await projects.linkToWorkspace(ctx, project.id, workspace.id, [both], { picked: true });
+  now = await projects.linkToWorkspace(ctx, project.id, workspace.id, [both]);
+  assert.deepEqual(now.picked, [paper]);
+  now = await projects.unlinkFromWorkspace(ctx, project.id, workspace.id, both, { unmentioned: true });
+  assert.ok(now.context.includes(both));
+  now = await projects.unlinkFromWorkspace(ctx, project.id, workspace.id, paper);
+  assert.deepEqual([now.context, now.picked, now.removed], [[side, both], [], [paper]]);
 });
 
 test('pasted images: bytes land in <project>/assets, the library gets an image row, and only images are accepted', async () => {
@@ -198,6 +420,90 @@ test('views: each workspace keeps its tabs, the document in front and its scroll
   assert.equal(withWs.active, ws2);
 });
 
+test('cleanStage: a library row or a place, once each, at most 15, a title of 200 characters; active follows what was kept (MATH-10)', () => {
+  const row = '55555555-5555-4555-8555-555555555555', other = '66666666-6666-4666-8666-666666666666';
+  assert.equal(projects.cleanStage(null), null);
+  assert.equal(projects.cleanStage([]), null);
+  assert.deepEqual(projects.cleanStage({}), { active: 0, tabs: [] });
+  const clean = projects.cleanStage({
+    active: 6,
+    tabs: [
+      { item: row, title: 'ColBERT' },
+      { item: 'not-an-id', title: 'x' }, // no row id, no address
+      { address: 'about:blank', title: 'blank' },
+      { address: 'ABOUT:srcdoc' },
+      { address: 'x'.repeat(10) }, // neither a URL nor an absolute path
+      { address: `https://example.org/${'a'.repeat(2048)}` }, // too long
+      { address: 'http://www.example.org/a/', title: 'Example' },
+      { address: 'https://example.org/a#top', title: 'the same page' },
+      { item: row, title: 'twice' },
+      { address: '/Users/h/notes.md', title: 'notes.md' },
+      { address: 'file:///Users/h/notes.md', title: 'the same file' },
+      { address: 'javascript:alert(1)' },
+      { address: 42 },
+      null,
+      'https://example.org',
+      { address: '  https://other.org/p  ', title: 'T'.repeat(300), extra: true, bytes: [1, 2] },
+      { item: other, address: 'https://ignored.org' },
+    ],
+  });
+  assert.deepEqual(clean.tabs, [
+    { item: row, title: 'ColBERT' },
+    { address: 'http://www.example.org/a/', title: 'Example' },
+    { address: '/Users/h/notes.md', title: 'notes.md' },
+    { address: 'https://other.org/p', title: 'T'.repeat(200) },
+    { item: other, title: '' },
+  ]);
+  assert.equal(clean.active, 1, 'the page in front is where it was kept');
+  assert.equal(projects.cleanStage({ active: 7, tabs: clean.tabs.concat([]) }).active, 4, 'past the end: the last');
+  assert.equal(projects.cleanStage({ active: 1, tabs: [{ address: 'https://a.org' }, { address: 'https://a.org/' }] }).active, 0, 'a duplicate in front: the one it repeats');
+  assert.equal(projects.cleanStage({ active: -3, tabs: [{ address: 'https://a.org' }] }).active, 0);
+  assert.equal(projects.cleanStage({ active: '2', tabs: [{ address: 'https://a.org' }] }).active, 0);
+  assert.deepEqual(projects.cleanStage({ active: 2, tabs: [] }), { active: 0, tabs: [] });
+
+  const many = Array.from({ length: 20 }, (_, i) => ({ address: `https://s${i}.org`, title: `s${i}` }));
+  const capped = projects.cleanStage({ active: 18, tabs: many });
+  assert.equal(capped.tabs.length, 15);
+  assert.deepEqual(capped.tabs.map((tab) => tab.title), many.slice(0, 15).map((tab) => tab.title));
+  assert.equal(capped.active, 14, 'a tab in front past 15 is clamped to the last kept');
+});
+
+test('Stage tabs: kept per project in state.json beside the views, windows and recent workspaces, which writing them keeps (MATH-10)', async () => {
+  const project = await projects.createProject(ctx, 'Stage kept');
+  const other = await projects.createProject(ctx, 'Stage elsewhere');
+  const ws = await projects.createWorkspace(ctx, project.id, { name: 'Plans' });
+  projects.writeLastOpen(ctx, { projectId: project.id, workspaceId: ws.id });
+  const view = projects.writeView(ctx, project.id, ws.id, { active: 'ws', tabs: [], positions: {} });
+  const windows = projects.writeWindows(ctx, [{ projectId: project.id, workspaceId: ws.id, bounds: { x: 0, y: 0, width: 800, height: 600 } }]);
+  const heldRecent = stateFile().recent; // put back at the end: the next test counts the recent workspaces
+  projects.recordEdit(ctx, project.id, ws.id);
+  const recent = stateFile().recent;
+
+  assert.deepEqual(projects.readStage(ctx, project.id), { active: 0, tabs: [] }, 'nothing kept yet');
+  const saved = projects.writeStage(ctx, project.id, { active: 1, tabs: [{ address: 'https://example.org', title: 'Example' }, { address: '/Users/h/a.pdf', title: 'a' }] });
+  assert.deepEqual(saved, { active: 1, tabs: [{ address: 'https://example.org', title: 'Example' }, { address: '/Users/h/a.pdf', title: 'a' }] });
+  projects.writeStage(ctx, other.id, { active: 0, tabs: [{ address: 'https://other.org', title: 'Other' }] });
+  assert.deepEqual(projects.readStage(ctx, project.id), saved, 'each project its own');
+  assert.equal(projects.readStage(ctx, other.id).tabs[0].title, 'Other');
+
+  const state = stateFile();
+  assert.deepEqual(state.views[project.id][ws.id], view, 'the views are kept');
+  assert.deepEqual(state.windows, windows, 'and the windows');
+  assert.deepEqual(state.recent, recent, 'and the recent workspaces');
+  assert.deepEqual([state.projectId, state.workspaceId], [project.id, ws.id], 'and where the app reopens');
+  projects.writeView(ctx, project.id, ws.id, { active: 'ws', tabs: [], positions: {} });
+  assert.deepEqual(projects.readStage(ctx, project.id), saved, 'writing a view keeps the Stage');
+
+  projects.writeStage(ctx, project.id, { active: 0, tabs: [] });
+  assert.deepEqual(projects.readStage(ctx, project.id), { active: 0, tabs: [] }, 'every tab closed is kept too');
+  assert.deepEqual(projects.readStage(ctx, 'nope'), { active: 0, tabs: [] });
+  assert.throws(() => projects.writeStage(ctx, 'nope', { tabs: [] }), /project id/);
+  assert.throws(() => projects.writeStage(ctx, project.id, null), /invalid/);
+  // What another version wrote by hand is read through cleanStage.
+  fs.writeFileSync(path.join(layout.testRoot, 'state.json'), JSON.stringify({ ...stateFile(), recent: heldRecent, stages: { [project.id]: { active: 9, tabs: [{ address: 'about:blank' }, { address: 'https://a.org' }] } } }));
+  assert.deepEqual(projects.readStage(ctx, project.id), { active: 0, tabs: [{ address: 'https://a.org', title: '' }] });
+});
+
 test('where to next: state.json keeps the last three workspaces written in and the agents, beside the views; stale rows are not read (2026-09-22)', async () => {
   const project = await projects.createProject(ctx, 'Next place');
   const a = await projects.createWorkspace(ctx, project.id, { name: 'Alpha' });
@@ -269,6 +575,41 @@ test('where to next: state.json keeps the last three workspaces written in and t
   assert.deepEqual(projects.readNav(ctx).recent.map((entry) => entry.name), ['Alpha', 'Delta', 'Gamma', 'Beta']);
 });
 
+test('the sidebar\'s Starred: a project\'s starred library ids in state.json, oldest first, once each; another project\'s are its own (2026-10-07)', async () => {
+  const project = await projects.createProject(ctx, 'Stars');
+  const other = await projects.createProject(ctx, 'Other stars');
+  const [a, b, c] = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222', '33333333-3333-4333-8333-333333333333'];
+  assert.deepEqual(projects.readStarred(ctx, project.id), [], 'none yet');
+  projects.setStarred(ctx, project.id, a, true);
+  projects.setStarred(ctx, project.id, b, true);
+  assert.deepEqual(projects.setStarred(ctx, project.id, a, true), [b, a], 'starred again: last');
+  projects.setStarred(ctx, other.id, c, true);
+  assert.deepEqual(projects.setStarred(ctx, project.id, b, false), [a], 'a star taken off');
+  assert.deepEqual(projects.readStarred(ctx, project.id), [a]);
+  assert.deepEqual(projects.readStarred(ctx, other.id), [c]);
+  const state = JSON.parse(fs.readFileSync(path.join(ctx.dataRoot, 'state.json'), 'utf8'));
+  assert.deepEqual(state.starred[project.id], [a], 'kept beside the views');
+  assert.throws(() => projects.setStarred(ctx, project.id, 'not-an-id', true), /library id/);
+  assert.deepEqual(projects.readStarred(ctx, 'nope'), []);
+  fs.writeFileSync(path.join(ctx.dataRoot, 'state.json'), JSON.stringify({ ...state, starred: { [project.id]: [a, 'junk', a, 7, b] } }));
+  assert.deepEqual(projects.readStarred(ctx, project.id), [a, b], 'what is not an id, and a second star of one, is not read');
+});
+
+test('the tree says when each workspace\'s document was last saved: the sidebar lists the ones worked in last (2026-10-07)', async () => {
+  const project = await projects.createProject(ctx, 'Edited');
+  const top = await projects.createWorkspace(ctx, project.id, { name: 'Top' });
+  const child = await projects.createWorkspace(ctx, project.id, { name: 'Child', parentId: top.id });
+  const before = (await projects.loadProject(ctx, project.id)).workspaces[0];
+  assert.ok(!Number.isNaN(Date.parse(before.edited)), 'made is saved');
+  assert.ok(!Number.isNaN(Date.parse(before.children[0].edited)));
+  const file = path.join(project.dir, 'Top', 'Child', 'workspace.md');
+  const later = new Date(Date.now() + 60_000);
+  fs.utimesSync(file, later, later);
+  const after = (await projects.loadProject(ctx, project.id)).workspaces[0];
+  assert.equal(after.children[0].id, child.id);
+  assert.equal(Math.round(Date.parse(after.children[0].edited) / 1000), Math.round(later.getTime() / 1000), 'its workspace.md\'s time');
+});
+
 test('read-text-file: project-relative, ~/ and absolute paths inside the home directory only', async () => {
   const project = await projects.createProject(ctx, 'Browser');
   fs.writeFileSync(path.join(project.dir, 'notes.txt'), 'hello\nworld\n');
@@ -285,6 +626,22 @@ test('read-text-file: project-relative, ~/ and absolute paths inside the home di
   const big = await projects.readProjectTextFile(ctx, project.id, 'big.txt');
   assert.equal(big.text.length, 20000);
   assert.equal(big.truncated, true);
+});
+
+test('stage-file: a missing path is "Nothing is at that path", one macOS refuses says so (2026-10-02)', async (t) => {
+  const { BLOCKED } = require('../src/main/stage/files.cjs');
+  const project = await projects.createProject(ctx, 'Stage Paths');
+  const kept = path.join(project.dir, 'kept.md');
+  fs.writeFileSync(kept, '# kept');
+  await assert.rejects(projects.readStageFile(ctx, project.id, path.join(project.dir, 'missing.md')), { message: 'Nothing is at that path' });
+  const real = fs.realpathSync;
+  t.mock.method(fs, 'realpathSync', function (target, ...rest) {
+    if (target === kept) throw Object.assign(new Error(`EPERM: operation not permitted, lstat '${target}'`), { code: 'EPERM' });
+    return real.call(fs, target, ...rest);
+  });
+  await assert.rejects(projects.readStageFile(ctx, project.id, kept), { message: BLOCKED });
+  t.mock.restoreAll();
+  assert.equal((await projects.readStageFile(ctx, project.id, kept)).text, '# kept');
 });
 
 test('resolve-page-file: an html file by full path, or relative to the project, the engelbart folder or the code directory', async () => {
@@ -316,4 +673,34 @@ test('resolve-page-file: an html file by full path, or relative to the project, 
   fs.symlinkSync('/etc/hosts', path.join(project.dir, 'escape.html'));
   assert.equal(await projects.resolvePageFile(ctx, project.id, 'escape.html'), null);
   assert.equal((await projects.readProjectTextFile(ctx, project.id, 'notes.txt')).text, 'text');
+});
+
+test('ipc: trash-project stops the project\'s running @bart asks and its Builds first; trashed-projects and restore-project; the preload names all three (2026-10-03)', async (t) => {
+  const { createStore, registerEngelbartIpc } = require('../src/main/ipc.cjs');
+  const store = createStore({ homeDir: fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-trash-ipc-')), testMode: true });
+  await store.setTestMode(false);
+  t.after(() => store.close());
+  const handlers = new Map();
+  const asks = [];
+  const stopped = [];
+  const builds = { stopProject: async (_, pid) => { stopped.push(pid); }, removeWorktrees: async () => {}, moveWorktree: async () => {} };
+  registerEngelbartIpc({ store, ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, trustedHandler: (fn) => fn, notify: () => {}, bart: { stop: (id) => { asks.push(id); return true; } }, builds });
+  const h = (name) => handlers.get(`engelbart:${name}`);
+  const own = await store.context();
+  const project = await h('create-project')({ name: 'Gone Soon' });
+  const other = await h('create-project')({ name: 'Staying' });
+  const ws = await h('create-workspace')(project.id, { name: 'W' });
+  const ws2 = await h('create-workspace')(other.id, { name: 'W' });
+  projects.agentStarted(own, { id: 'ask-here', kind: 'bart', projectId: project.id, workspaceId: ws.id });
+  projects.agentStarted(own, { id: 'ask-there', kind: 'discover', projectId: other.id, workspaceId: ws2.id });
+
+  assert.deepEqual(await h('trash-project')(project.id), { id: project.id, name: 'Gone Soon' });
+  assert.deepEqual([asks, stopped], [['ask-here'], [project.id]]);
+  assert.deepEqual((await h('trashed-projects')()).map((entry) => entry.name), ['Gone Soon']);
+  assert.deepEqual((await h('list-projects')()).map((entry) => entry.name), ['Staying']);
+  assert.equal((await h('restore-project')(project.id)).name, 'Gone Soon');
+  assert.deepEqual(await h('trashed-projects')(), []);
+  await assert.rejects(h('restore-project')(project.id), /no longer in the trash/);
+  const preload = fs.readFileSync(path.join(__dirname, '../src/preload.cjs'), 'utf8');
+  for (const [name, channel] of [['trashProject', 'trash-project'], ['restoreProject', 'restore-project'], ['trashedProjects', 'trashed-projects']]) assert.ok(preload.includes(`${name}: invoke('${channel}')`), name);
 });

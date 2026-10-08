@@ -4,12 +4,16 @@
 // directory). The SQL is plain Postgres so the same statements run on a Supabase project
 // later; this module is the swap point (spec §2 #3).
 //
-//   <testRoot>/library.pglite    table `library`  — every mentionable thing, all projects
+//   <testRoot>/library.pglite    table `library`  — every mentionable thing, all projects; `sandbox_runs` and
+//                                `sandbox_environments` — a GitHub repository's E2B previews (src/main/sandbox);
+//                                `repo_runnables` — what runs in a repository, and how (src/main/build/runnables.cjs);
+//                                `library_text` — a pdf's extracted text, for search (src/main/context/sweeper.cjs)
 //   <project>/notes.pglite       table `notes`    — the notes created in that project
 
 const fs = require('node:fs');
 const path = require('node:path');
 const { PGlite } = require('@electric-sql/pglite');
+const { collectBuildMilestones } = require('../../shared/build-history.cjs');
 
 // `type` is what a row is, read off the thing itself and never guessed: a file's format, or
 // `folder`, `website`, `image` for the three that are not a file with an extension. What a row is
@@ -71,6 +75,74 @@ update library set type = 'html' where type = 'website' and path is not null;
 alter table library add constraint library_type_check check (type in (${typeList}));
 alter table library drop constraint if exists library_note_is_md;
 alter table library add constraint library_note_is_md check (type = 'md' or not ('note' = any(tags)));
+
+-- Each attempt belongs to a library item; retrying creates another run. Keep the run's
+-- sandbox handle when a library deletion is attempted: cleanup must be explicit first.
+create table if not exists sandbox_runs (
+  id uuid primary key,
+  library_id uuid not null references library (id) on delete restrict,
+  sandbox_id text,
+  status text not null default 'starting' check (status in ('starting', 'ready', 'failed', 'stopped')),
+  preview_url text,
+  port integer check (port between 1 and 65535),
+  error text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  finished_at timestamptz
+);
+create index if not exists sandbox_runs_library_created on sandbox_runs (library_id, created_at desc);
+alter table sandbox_runs add column if not exists build_log jsonb not null default '[]';
+-- Null marks pre-upgrade runs for a one-time backfill from whatever history remains.
+alter table sandbox_runs add column if not exists build_milestones jsonb;
+alter table sandbox_runs alter column build_milestones set default '{}';
+alter table sandbox_runs add column if not exists env_revision uuid;
+-- Keep discovered names after their event rolls out of the bounded build log.
+alter table sandbox_runs add column if not exists env_report jsonb;
+-- When its preview was last in front of a focused window (manager.cjs's touch): one asleep and unopened for 7 days ends.
+alter table sandbox_runs add column if not exists last_opened_at timestamptz;
+-- How a person uses the repository, as Claude declared it (worker.cjs): 'interface', 'terminal' or 'both'; null for runs
+-- from before 2026-10-03, which were all previews. Its reason, and for a terminal { cwd, hint } (an example command).
+alter table sandbox_runs add column if not exists kind text;
+alter table sandbox_runs add column if not exists kind_reason text;
+alter table sandbox_runs add column if not exists terminal jsonb;
+create table if not exists sandbox_environments (
+  library_id uuid primary key references library (id) on delete cascade,
+  revision uuid not null,
+  encrypted text not null,
+  updated_at timestamptz not null default now()
+);
+-- What runs in a repository (2026-09-29): each web UI, desktop app or terminal program a Build's run step found, in a
+-- folder relative to the repository's root ('.' for the root), and the commands that last passed Engelbart's own check
+-- there. A UI's run command holds {port}, where Engelbart puts the free port it gives it at each run; no port is kept.
+-- The commands change only when a check passes; a runnable that never passed in its time is 'failed', with the last
+-- error. verified_commit: the commit its commands were last checked at.
+create table if not exists repo_runnables (
+  id uuid primary key,
+  library_id uuid not null references library (id) on delete cascade,
+  folder text not null default '.',
+  name text not null,
+  type text not null check (type in ('ui', 'app', 'terminal')),
+  install_command text,
+  run_command text,
+  status text not null default 'pending' check (status in ('pending', 'verified', 'failed')),
+  last_error text,
+  verified_commit text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (type <> 'ui' or run_command is null or position('{port}' in run_command) > 0)
+);
+create unique index if not exists repo_runnables_one on repo_runnables (library_id, folder, name);
+-- A pdf's text, as the sweep's text pass read it (2026-10-05, MATH-29), for search. A table of its own, not a column:
+-- "select * from library" is what the renderer is sent. file_mtime: the file's modification time (ms) when it was read;
+-- the text is read again only when that changes. '' is a pdf that was read and held no text (a scan).
+create table if not exists library_text (
+  library_id uuid primary key references library (id) on delete cascade,
+  text text not null,
+  file_mtime double precision not null,
+  extracted_at timestamptz not null default now()
+);
+create unique index if not exists sandbox_runs_one_active on sandbox_runs (library_id)
+  where status in ('starting', 'ready');
 `;
 
 const NOTES_SCHEMA = `
@@ -189,6 +261,10 @@ function requireText(value, name, { optional = false, max = 4096 } = {}) {
 async function openLibraryDb(testRoot) {
   const dir = path.join(testRoot, 'library.pglite');
   const db = await openRaw(dir, LIBRARY_SCHEMA, { setAsideIf: typedTheOldWay });
+  for (const run of (await db.query('select id, build_log from sandbox_runs where build_milestones is null')).rows) {
+    await db.query('update sandbox_runs set build_milestones = $2::jsonb where id = $1 and build_milestones is null',
+      [run.id, JSON.stringify(collectBuildMilestones(run.build_log))]);
+  }
   return {
     dir,
     async insert(row) {
@@ -325,16 +401,44 @@ async function openLibraryDb(testRoot) {
       const result = await db.query("select * from library where type = 'pdf' and path is not null order by created");
       return result.rows.map(plain);
     },
+    // What the text pass has read: library id → the modification time of the file its text was taken from.
+    async textStamps() {
+      const result = await db.query('select library_id, file_mtime from library_text');
+      return new Map(result.rows.map((row) => [row.library_id, row.file_mtime]));
+    },
+    // A pdf's text as read from its file at `mtime` ('' when it held none), in place of what was kept before.
+    // Postgres text cannot hold NUL, which a pdf's text can.
+    async setText(id, text, mtime) {
+      if (typeof text !== 'string') throw new TypeError('text must be a string');
+      if (!Number.isFinite(mtime)) throw new TypeError('mtime must be a number');
+      await db.query(
+        `insert into library_text (library_id, text, file_mtime) values ($1, $2, $3)
+         on conflict (library_id) do update set text = excluded.text, file_mtime = excluded.file_mtime, extracted_at = now()`,
+        [requireText(id, 'id', { max: 64 }), text.replace(/\u0000/g, ''), mtime],
+      );
+      return true;
+    },
+    // The kept text of the pdfs among `ids`, each cut at `max` characters: library id → text. One that held none is left out.
+    async textsFor(ids, max) {
+      if (!Array.isArray(ids)) throw new TypeError('ids must be an array');
+      if (!ids.length) return new Map();
+      const result = await db.query(
+        "select library_id, left(text, $2) as text from library_text where library_id = any($1::uuid[]) and text <> ''",
+        [ids.map((id) => requireText(id, 'id', { max: 64 })), requireCount(max)],
+      );
+      return new Map(result.rows.map((row) => [row.library_id, row.text]));
+    },
     // Escape hatch for tests and repairs.
     async query(sql, params = []) {
       const result = await db.query(sql, params);
       return result.rows.map(plain);
     },
-    async rewritePathPrefix(oldPrefix, newPrefix) {
+    // `projectId`: only the rows made in that project (a project back from the trash, store/projects.cjs restoreProject).
+    async rewritePathPrefix(oldPrefix, newPrefix, { projectId = null } = {}) {
       const result = await db.query(
         `update library set path = $2 || substr(path, char_length($1) + 1)
-         where path is not null and left(path, char_length($1)) = $1`,
-        [requireText(oldPrefix, 'oldPrefix'), requireText(newPrefix, 'newPrefix')],
+         where path is not null and left(path, char_length($1)) = $1 and ($3::text is null or project_id::text = $3)`,
+        [requireText(oldPrefix, 'oldPrefix'), requireText(newPrefix, 'newPrefix'), requireText(projectId, 'projectId', { optional: true, max: 64 })],
       );
       return result.affectedRows || 0;
     },
@@ -426,10 +530,10 @@ async function openNotesDb(projectDir) {
 }
 
 function postItValues(row) {
-  if (!row || typeof row.text !== 'string' || row.text.length > 400000) throw new TypeError('Post-it text must be at most 400000 characters');
+  if (!row || typeof row.text !== 'string' || row.text.length > 400000) throw new TypeError('Sticky text must be at most 400000 characters');
   const values = [row.text];
   for (const [key, min, max] of [['nx', 0, 1], ['ny', 0, 1], ['width', 180, 2400], ['height', 140, 2400], ['z', 0, Number.MAX_SAFE_INTEGER]]) {
-    if (!Number.isFinite(row[key]) || row[key] < min || row[key] > max) throw new TypeError(`Post-it ${key} is out of range`);
+    if (!Number.isFinite(row[key]) || row[key] < min || row[key] > max) throw new TypeError(`Sticky ${key} is out of range`);
     values.push(row[key]);
   }
   return values;

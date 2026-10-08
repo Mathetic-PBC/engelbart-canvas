@@ -13,7 +13,9 @@
 //   <dataRoot>/<slug>/<Workspace>/workspace.md
 //   <dataRoot>/<slug>/<Workspace>/.archive/<t>.md    the document as it was when Clear was pressed (./archive.cjs)
 //   <dataRoot>/<slug>/<Workspace>/<Child>/…          the same, recursively
+//   <dataRoot>/<slug>/.trash/<Workspace>/…           a deleted workspace, restorable for a week (trashWorkspace)
 //   <dataRoot>/<slug>/builds/<id>/                   a Build's record (../build/store.cjs)
+//   <dataRoot>/.trash/<slug>/…                       a deleted project, restorable for a week (trashProject)
 //
 // `directory` is where the project's code lives: terminals and agents start there.
 // A workspace's `context` is a flat list of library ids. Grouping is done by nesting a workspace.
@@ -28,6 +30,8 @@ const { fileURLToPath, pathToFileURL } = require('node:url');
 const { sanitizeName, slugify, uniqueName, readJson, writeJson, DIR_MODE } = require('./home.cjs');
 const db = require('./db.cjs');
 const { migrateProjectDir } = require('./migrate.cjs');
+const buildStore = require('../build/store.cjs');
+const { addressKey } = require('../../shared/address-key.cjs');
 
 // A workspace's meta.json `status` is no longer shown or changed (2026-09-25: the todo / in progress / done marks were
 // deleted). It stays on disk only as the mark that a folder is a workspace and not an older layout's goal (migrate.cjs).
@@ -158,6 +162,13 @@ function treeContains(entries, id) {
 /* ------------------------------------------------------------------ projects */
 
 const migrated = new Set();
+/** A default repo as project.json keeps it: { kind: 'project' } (the code directory) or { kind: 'library', id }; else null. */
+const targetOrNull = (value) => {
+  if (!value || typeof value !== 'object') return null;
+  if (value.kind === 'project') return { kind: 'project' };
+  if (value.kind === 'library' && typeof value.id === 'string' && UUID_RE.test(value.id)) return { kind: 'library', id: value.id };
+  return null;
+};
 
 function projectRecord(dir) {
   const meta = readJson(path.join(dir, 'project.json'));
@@ -172,7 +183,11 @@ function projectRecord(dir) {
   try { exists = !!saved && fs.statSync(saved).isDirectory(); } catch { exists = false; }
   // A saved directory that is gone (moved, unmounted) counts as not chosen: the project asks again.
   const description = typeof meta.description === 'string' ? meta.description.trim() : '';
-  return { id: meta.id, name, slug: path.basename(dir), dir, created: meta.created || null, directory: exists ? saved : null, directoryMissing: saved && !exists ? saved : null, description };
+  // Where the Builds' default repo is (build/manager.cjs, 2026-09-29): the code directory, or a library row.
+  const defaultTarget = targetOrNull(meta.defaultTarget);
+  // Before defaultTarget: the folder the default repo was made as, in `directory`; read once, to convert it (build/manager.cjs).
+  const defaultRepo = typeof meta.defaultRepo === 'string' && /^[^/\\\0]{1,255}$/.test(meta.defaultRepo) && !['.', '..'].includes(meta.defaultRepo) ? meta.defaultRepo : null;
+  return { id: meta.id, name, slug: path.basename(dir), dir, created: meta.created || null, directory: exists ? saved : null, directoryMissing: saved && !exists ? saved : null, description, defaultTarget, defaultRepo };
 }
 
 function projectRecords(ctx) {
@@ -271,7 +286,7 @@ async function createProject(ctx, input) {
 }
 
 // First-run flow: the project, a first workspace, and a "Welcome!" note open in its context. Onboarding
-// (2026-09-28, ./onboarding.cjs) names the workspace "Welcome", starts its document with the project's
+// (2026-09-28, ./onboarding.cjs) names the workspace "Getting started", starts its document with the project's
 // description, and puts the library rows chosen on its last screen in context after the note.
 async function createProjectWithWelcome(ctx, input, { workspaceName = 'Getting started', context = [] } = {}) {
   const project = await createProject(ctx, input);
@@ -289,6 +304,16 @@ async function setProjectDirectory(ctx, id, directory) {
   writeJson(path.join(project.dir, 'project.json'), { ...meta, directory: resolved });
   const next = projectRecord(project.dir);
   return publicProject(next, summary(next));
+}
+
+/** Where the project's Builds work by default: { kind: 'project' } or { kind: 'library', id } (build/manager.cjs checks it first). */
+function setDefaultTarget(ctx, id, target) {
+  const project = findProject(ctx, id);
+  const value = targetOrNull(target);
+  if (!value) throw new TypeError('the default repo must be the code directory or a library row');
+  const meta = readJson(path.join(project.dir, 'project.json')) || {};
+  if (JSON.stringify(targetOrNull(meta.defaultTarget)) !== JSON.stringify(value)) writeJson(path.join(project.dir, 'project.json'), { ...meta, defaultTarget: value });
+  return value;
 }
 
 async function renameProject(ctx, id, name) {
@@ -314,6 +339,150 @@ async function renameProject(ctx, id, name) {
   return publicProject(renamed, summary(renamed));
 }
 
+// Delete, on the all-projects screen (2026-10-03): the project's folder, everything in it (workspaces, notes, pasted
+// images, Build records), goes into <dataRoot>/.trash, a dot folder no listing of projects sees. project.json `trashed`
+// keeps when it went, the folder name it had (`slug`) and the one it has in the trash (`name`); the library rows of its
+// notes and images follow it there. Home's "Recently deleted" lists it; Restore puts it back under its old folder name
+// when that is free, else the next free one; a week after it went in it is purged, and with it its Builds' worktrees,
+// its library rows and its views in state.json. Its code directory is never touched: it is not in the project's folder.
+// `trashed` is written before the folder moves: a delete cut short is then a project still listed whose project.json has
+// `trashed`, never a folder in the trash that nothing lists or purges. A project listed with `trashed` (a delete or a
+// restore cut short) is finished as restored when the trash is next read.
+const PROJECT_WORKTREES = 'worktrees';
+const folderName = (value) => (typeof value === 'string' && /^[^/\\\0]{1,255}$/.test(value) && !value.startsWith('.') ? value : null);
+const realOrResolved = (dir) => { try { return fs.realpathSync(dir); } catch { return path.resolve(dir); } };
+const inside = (child, parent) => { const rel = path.relative(realOrResolved(parent), realOrResolved(child)); return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel)); };
+
+/** `stopBuilds(id)`: its Builds stopped first (build/manager.cjs stopProject). → { id, name } */
+async function trashProject(ctx, id, { stopBuilds = null } = {}) {
+  const project = findProject(ctx, id);
+  if (project.directory && inside(project.directory, project.dir)) throw new Error(`${project.name}'s code folder is inside its Engelbart folder, so deleting the project would take the code with it.`);
+  if (stopBuilds) await stopBuilds(id);
+  await db.closeDb(path.join(project.dir, 'notes.pglite'));
+  const bin = path.join(ctx.dataRoot, TRASH_DIR);
+  fs.mkdirSync(bin, { recursive: true, mode: DIR_MODE });
+  const name = uniqueName(bin, project.slug);
+  const into = path.join(bin, name);
+  const file = path.join(project.dir, 'project.json');
+  const meta = readJson(file) || {};
+  writeJson(file, { ...meta, trashed: { at: nowIso(), slug: project.slug, name } });
+  try {
+    fs.renameSync(project.dir, into);
+  } catch (error) {
+    writeJson(file, meta);
+    throw error;
+  }
+  migrated.delete(project.dir);
+  await ctx.libraryDb.rewritePathPrefix(project.dir + path.sep, into + path.sep);
+  return { id: project.id, name: project.name };
+}
+
+/** A project folder's trash record → { id, name, dir, at, slug, into } or null; `trashed` read from its project.json. */
+function trashedEntry(dir) {
+  const meta = readJson(path.join(dir, 'project.json'));
+  const trashed = meta && typeof meta.id === 'string' && UUID_RE.test(meta.id) ? plainObject(meta.trashed) : null;
+  const at = trashed && typeof trashed.at === 'string' ? Date.parse(trashed.at) : NaN;
+  if (Number.isNaN(at)) return null;
+  return { id: meta.id, name: typeof meta.name === 'string' && meta.name.trim() ? meta.name : path.basename(dir), dir, at, slug: folderName(trashed.slug), into: folderName(trashed.name) };
+}
+
+const trashedProjectRecords = (ctx) => subdirs(path.join(ctx.dataRoot, TRASH_DIR)).map(trashedEntry).filter(Boolean);
+
+/** Projects in the data root whose project.json still has `trashed`: a delete or a restore that was cut short. */
+const cutShort = (ctx) => subdirs(ctx.dataRoot).map(trashedEntry).filter(Boolean);
+
+/**
+ * A project folder that is back where it belongs (`dir`): the rows of its notes and images that point into the trash
+ * (or, after a delete cut short before they moved, at the folder it had) point at it again, then `trashed` goes. Every
+ * step finds nothing to do the second time, so running it again after a crash repairs what the first run left.
+ */
+async function settleRestored(ctx, entry, dir) {
+  const from = [entry.into && path.join(ctx.dataRoot, TRASH_DIR, entry.into), entry.slug && path.join(ctx.dataRoot, entry.slug)].filter((old) => old && old !== dir);
+  for (const old of from) await ctx.libraryDb.rewritePathPrefix(old + path.sep, dir + path.sep, { projectId: entry.id });
+  const file = path.join(dir, 'project.json');
+  const { trashed, ...meta } = readJson(file) || {}; // eslint-disable-line no-unused-vars
+  if (trashed !== undefined) writeJson(file, meta);
+}
+
+/**
+ * The projects in the trash, newest first, each { id, name, deleted, expires, workspaceCount }. Those in it a week are
+ * purged first (`removeWorktrees`: build/manager.cjs's), and a project whose delete or restore was cut short is
+ * finished as restored.
+ */
+async function trashedProjects(ctx, now = Date.now(), { removeWorktrees = null } = {}) {
+  for (const entry of cutShort(ctx)) await settleRestored(ctx, entry, entry.dir).catch((error) => console.error(`Engelbart: could not finish restoring ${entry.dir}: ${error.message}`));
+  const out = [];
+  for (const entry of trashedProjectRecords(ctx)) {
+    if (entry.at < now - TRASH_DAYS * DAY) { await purgeProject(ctx, entry, { removeWorktrees }).catch((error) => console.error(`Engelbart: could not purge ${entry.dir}: ${error.message}`)); continue; }
+    out.push({ id: entry.id, name: entry.name, deleted: new Date(entry.at).toISOString(), expires: new Date(entry.at + TRASH_DAYS * DAY).toISOString(), workspaceCount: countWorkspaces(entry.dir) });
+  }
+  return out.sort((a, b) => b.deleted.localeCompare(a.deleted));
+}
+
+/**
+ * Gone for good: the worktrees of its Builds that were still open (and of accepted ones whose copy outlived a crash), the
+ * library rows made in it, its views and places in state.json, then its folder. What fails is left; the folder goes last,
+ * so a purge cut short runs again the next time the trash is read.
+ */
+async function purgeProject(ctx, entry, { removeWorktrees = null } = {}) {
+  const open = buildStore.listTasks({ dir: entry.dir }).filter((task) => !buildStore.FINAL.has(task.status) || task.keptCopy);
+  if (open.length && removeWorktrees) await Promise.resolve().then(() => removeWorktrees(open)).catch(() => {});
+  for (const row of await ctx.libraryDb.list()) {
+    if (row.project_id === entry.id) await ctx.libraryDb.remove(row.id).catch(() => false); // a row a sandbox run still names stays
+  }
+  forgetProject(ctx, entry.id);
+  await db.closeDb(path.join(entry.dir, 'notes.pglite'));
+  fs.rmSync(entry.dir, { recursive: true, force: true });
+}
+
+/**
+ * Restore: the project back from the trash, under the folder name it had when that is free (else the next free one).
+ * When the name changes, its open Builds' worktrees follow it to worktrees/<slug>/<id> (`moveWorktree(task, to)`); one
+ * that cannot be moved is discarded (`removeWorktrees`, its copy and branch). → the project, as listProjects has it
+ */
+async function restoreProject(ctx, id, { moveWorktree = null, removeWorktrees = null } = {}) {
+  assertId(id, 'project');
+  const half = cutShort(ctx).find((candidate) => candidate.id === id);
+  if (half) {
+    await settleRestored(ctx, half, half.dir);
+    const project = projectRecord(half.dir);
+    return publicProject(project, summary(project));
+  }
+  const entry = trashedProjectRecords(ctx).find((candidate) => candidate.id === id);
+  if (!entry) throw new Error('That project is no longer in the trash');
+  const slug = entry.slug && !ROOT_RESERVED.has(entry.slug) && !fs.existsSync(path.join(ctx.dataRoot, entry.slug)) ? entry.slug : freeSlug(ctx, entry.slug || entry.name);
+  const back = path.join(ctx.dataRoot, slug);
+  if (slug !== entry.slug) await followSlug(ctx, entry, slug, { moveWorktree, removeWorktrees });
+  fs.renameSync(entry.dir, back);
+  migrated.add(back);
+  await ctx.libraryDb.rewritePathPrefix(entry.dir + path.sep, back + path.sep);
+  await settleRestored(ctx, entry, back);
+  const project = projectRecord(back);
+  return publicProject(project, summary(project));
+}
+
+/** A restored project's new folder name: each open Build's worktree moves to worktrees/<slug>/<id>, and its record says so. */
+async function followSlug(ctx, entry, slug, { moveWorktree, removeWorktrees }) {
+  const where = { dir: entry.dir };
+  for (const task of buildStore.listTasks(where)) {
+    if (buildStore.FINAL.has(task.status) || typeof task.worktree !== 'string') continue;
+    const to = path.join(ctx.dataRoot, PROJECT_WORKTREES, slug, task.id);
+    if (task.worktree === to) continue;
+    const moved = { worktree: to, cwd: path.join(to, typeof task.cwd === 'string' ? path.relative(task.worktree, task.cwd) : '') };
+    try {
+      // Nothing where it was: moved before a restore was cut short, or gone (Resume makes it again from its branch).
+      if (fs.existsSync(task.worktree)) {
+        if (!moveWorktree) continue; // left where it is: a Build works wherever its record says its copy is
+        await moveWorktree(task, to);
+      }
+      buildStore.writeTask(where, { ...task, ...moved });
+    } catch (error) {
+      if (removeWorktrees) await Promise.resolve().then(() => removeWorktrees([task])).catch(() => {});
+      buildStore.writeTask(where, { ...task, status: 'discarded', queued: null, finished: nowIso(), messages: [...(task.messages || []), buildStore.message('engelbart', `Its copy could not be moved when the project came back from the trash (${error.message}), so it was discarded.`)] });
+    }
+  }
+}
+
 /* ---------------------------------------------------------------- workspaces */
 
 function workspaceRecord(dir) {
@@ -328,12 +497,14 @@ function workspaceRecord(dir) {
   // Kept by every save through the app; a workspace last saved before the count existed is measured.
   const chars = Number.isInteger(meta.chars) && meta.chars >= 0 ? meta.chars : docChars(dir);
   const removed = Array.isArray(meta.removed) ? meta.removed.filter((id) => typeof id === 'string' && UUID_RE.test(id)) : [];
+  // What the @ menu linked (MATH-57): it leaves with its last mention in the document.
+  const picked = Array.isArray(meta.picked) ? meta.picked.filter((id) => typeof id === 'string' && UUID_RE.test(id)) : [];
   // The Builds started from this workspace (2026-09-25), and its archived versions, oldest first (./archive.cjs).
   const builds = Array.isArray(meta.builds) ? meta.builds.filter((id) => typeof id === 'string' && BUILD_ID_RE.test(id)) : [];
   const archives = (Array.isArray(meta.archives) ? meta.archives : [])
     .filter((entry) => entry && typeof entry.file === 'string' && ARCHIVE_RE.test(entry.file))
     .map((entry) => ({ file: entry.file, clearedAt: typeof entry.clearedAt === 'string' ? entry.clearedAt : null, title: typeof entry.title === 'string' ? entry.title.slice(0, 200) : '' }));
-  return { id: meta.id, name: path.basename(dir), context, removed, chars, builds, archives, dir, created: meta.created || null };
+  return { id: meta.id, name: path.basename(dir), context, removed, picked, chars, builds, archives, dir, created: meta.created || null };
 }
 
 function docChars(dir) {
@@ -362,7 +533,7 @@ function findWorkspace(ctx, projectId, workspaceId) {
 }
 
 function publicWorkspace(workspace) {
-  return { id: workspace.id, name: workspace.name, context: workspace.context, removed: workspace.removed, chars: workspace.chars, builds: workspace.builds || [], archives: workspace.archives || [], created: workspace.created };
+  return { id: workspace.id, name: workspace.name, context: workspace.context, removed: workspace.removed, picked: workspace.picked || [], chars: workspace.chars, builds: workspace.builds || [], archives: workspace.archives || [], created: workspace.created };
 }
 
 /** Every workspace of a project, flat, with its path from the project directory ("Agents/Inline chat agent"). */
@@ -404,9 +575,15 @@ function recountWorkspaces(ctx) {
   return fixed;
 }
 
+// When a workspace's document was last saved (workspace.md's mtime; made counts as saved): the sidebar lists the workspaces
+// worked in last (2026-10-07), with state.json `recent` for the notes typed in them.
+function editedAt(dir) {
+  try { return fs.statSync(path.join(dir, 'workspace.md')).mtime.toISOString(); } catch { return null; }
+}
+
 function workspaceTree(parentDir, depth = 0) {
   if (depth > 32) return [];
-  return workspaceRecords(parentDir).map((workspace) => ({ ...publicWorkspace(workspace), children: workspaceTree(workspace.dir, depth + 1) }));
+  return workspaceRecords(parentDir).map((workspace) => ({ ...publicWorkspace(workspace), edited: editedAt(workspace.dir), children: workspaceTree(workspace.dir, depth + 1) }));
 }
 
 // A workspace's directory name: never one the project keeps for itself.
@@ -431,6 +608,62 @@ async function renameWorkspace(ctx, projectId, workspaceId, name) {
   const next = path.join(parentDir, workspaceDirName(parentDir, name, workspace.name));
   fs.renameSync(workspace.dir, next);
   return publicWorkspace(workspaceRecord(next));
+}
+
+// Delete, from the switcher (2026-09-30): the workspace goes into the trash with everything nested in it, into
+// <project>/.trash, a dot folder no listing of workspaces sees. meta.json `trashed` keeps when it went, its name and the
+// workspace it was under, so Restore puts it back there (at the top when that one is gone too). The sidebar's trash lists
+// it and purges it a week after it went in, as it does the post-its.
+const TRASH_DIR = '.trash';
+const TRASH_DAYS = 7;
+const DAY = 24 * 60 * 60 * 1000;
+
+function trashWorkspace(ctx, projectId, workspaceId) {
+  const { project, workspace, parentDir } = findWorkspace(ctx, projectId, workspaceId);
+  const parent = parentDir === project.dir ? null : workspaceRecord(parentDir);
+  const bin = path.join(project.dir, TRASH_DIR);
+  fs.mkdirSync(bin, { recursive: true, mode: DIR_MODE });
+  const into = path.join(bin, uniqueName(bin, workspace.name));
+  fs.renameSync(workspace.dir, into);
+  patchWorkspaceMeta({ dir: into }, { trashed: { at: nowIso(), name: workspace.name, parentId: parent ? parent.id : null } });
+  return { id: workspace.id, name: workspace.name };
+}
+
+function trashedRecords(project) {
+  const bin = path.join(project.dir, TRASH_DIR);
+  return subdirs(bin).map((dir) => {
+    const workspace = workspaceRecord(dir);
+    const trashed = workspace && readJson(path.join(dir, 'meta.json')).trashed;
+    const at = trashed && typeof trashed.at === 'string' ? Date.parse(trashed.at) : NaN;
+    if (!workspace || Number.isNaN(at)) return null;
+    const name = typeof trashed.name === 'string' && trashed.name ? trashed.name : workspace.name;
+    return { workspace, dir, at, name, parentId: typeof trashed.parentId === 'string' && UUID_RE.test(trashed.parentId) ? trashed.parentId : null };
+  }).filter(Boolean);
+}
+
+/** The workspaces in the trash, newest first, each { id, name, deleted, expires, nested }; those in it a week are purged. */
+function trashedWorkspaces(ctx, projectId, now = Date.now()) {
+  const project = findProject(ctx, projectId);
+  const out = [];
+  for (const entry of trashedRecords(project)) {
+    if (entry.at < now - TRASH_DAYS * DAY) { fs.rmSync(entry.dir, { recursive: true, force: true }); continue; }
+    out.push({ id: entry.workspace.id, name: entry.name, deleted: new Date(entry.at).toISOString(), expires: new Date(entry.at + TRASH_DAYS * DAY).toISOString(), nested: countWorkspaces(entry.dir) });
+  }
+  return out.sort((a, b) => b.deleted.localeCompare(a.deleted));
+}
+
+function restoreWorkspace(ctx, projectId, workspaceId) {
+  const project = findProject(ctx, projectId);
+  assertId(workspaceId, 'workspace');
+  const entry = trashedRecords(project).find((candidate) => candidate.workspace.id === workspaceId);
+  if (!entry) throw new Error('That workspace is no longer in the trash');
+  const parent = entry.parentId ? findWorkspaceIn(project.dir, entry.parentId) : null;
+  const parentDir = parent ? parent.workspace.dir : project.dir;
+  const back = path.join(parentDir, workspaceDirName(parentDir, entry.name, entry.workspace.name));
+  fs.renameSync(entry.dir, back);
+  const { trashed, ...meta } = readJson(path.join(back, 'meta.json')); // eslint-disable-line no-unused-vars
+  writeJson(path.join(back, 'meta.json'), meta);
+  return publicWorkspace(workspaceRecord(back));
 }
 
 function patchWorkspaceMeta(workspace, patch) {
@@ -460,19 +693,26 @@ function addWorkspaceBuild(ctx, projectId, workspaceId, buildId) {
 // it off `removed`. Both run here, one read and one write of meta.json, so quick adds never race.
 const MAX_REMOVED = 1000;
 
-async function linkToWorkspace(ctx, projectId, workspaceId, ids) {
+async function linkToWorkspace(ctx, projectId, workspaceId, ids, { picked = false } = {}) {
   const { workspace } = findWorkspace(ctx, projectId, workspaceId);
   const adding = (Array.isArray(ids) ? ids : [ids]).map((id) => assertId(id, 'library'));
   const context = [...workspace.context];
+  // `picked` (MATH-57): linked by picking it from the @ menu, which is remembered for an item not linked already. Linked
+  // any other way, it stays when its mentions go.
+  const chosen = picked ? [...workspace.picked, ...adding.filter((id) => !context.includes(id) && !workspace.picked.includes(id))] : workspace.picked.filter((id) => !adding.includes(id));
   for (const id of adding) if (!context.includes(id)) context.push(id);
-  return patchWorkspaceMeta(workspace, { context: flatContext(context), removed: workspace.removed.filter((id) => !adding.includes(id)) });
+  return patchWorkspaceMeta(workspace, { context: flatContext(context), removed: workspace.removed.filter((id) => !adding.includes(id)), picked: chosen });
 }
 
-async function unlinkFromWorkspace(ctx, projectId, workspaceId, id) {
+// `unmentioned` (MATH-57): the document's last mention of an item the @ menu linked went, and the item goes with it. Only
+// such an item, and it is not remembered as thrown away: mentioned again, it is on the rail as any mention is.
+async function unlinkFromWorkspace(ctx, projectId, workspaceId, id, { unmentioned = false } = {}) {
   const { workspace } = findWorkspace(ctx, projectId, workspaceId);
   const gone = assertId(id, 'library');
+  const context = workspace.context.filter((held) => held !== gone), picked = workspace.picked.filter((held) => held !== gone);
+  if (unmentioned) return workspace.picked.includes(gone) ? patchWorkspaceMeta(workspace, { context, picked }) : publicWorkspace(workspace);
   const removed = [...workspace.removed.filter((held) => held !== gone), gone].slice(-MAX_REMOVED);
-  return patchWorkspaceMeta(workspace, { context: workspace.context.filter((held) => held !== gone), removed });
+  return patchWorkspaceMeta(workspace, { context, removed, picked });
 }
 
 /* --------------------------------------------------------------------- notes */
@@ -587,7 +827,7 @@ async function writeDoc(ctx, projectId, ref, text) {
 
 /* ------------------------------------------------------------- last opened */
 
-// Where the app reopens: <dataRoot>/state.json { projectId, workspaceId, views, recent, agents }. Missing or stale ids
+// Where the app reopens: <dataRoot>/state.json { projectId, workspaceId, views, stages, recent, agents }. Missing or stale ids
 // fall back to the first project / workspace. (Files written before the layout change carry
 // `topicId`, which is the same id.)
 // `views[projectId][workspaceId]` is what a workspace had open when it was left (2026-09-22): the document in front
@@ -621,6 +861,43 @@ function writeLastOpen(ctx, value) {
   const next = { projectId: idOrNull(input.projectId), workspaceId: idOrNull(input.workspaceId) };
   writeState(ctx, next);
   return next;
+}
+
+// The windows open when the app last kept them (2026-10-03), every one reopened at the next launch:
+// `windows: [{ projectId, workspaceId, bounds: { x, y, width, height } }]`, the window focused last at the end; a projectId
+// of null is a window on the projects screen. Written by main (index.cjs) as windows move, resize and go somewhere, and
+// at quit. Without it (a state.json from before) the app opens one window where `projectId` / `workspaceId` say.
+const MAX_WINDOWS = 24;
+
+function cleanBounds(value) {
+  const input = plainObject(value); if (!input) return null;
+  const out = {};
+  for (const key of ['x', 'y', 'width', 'height']) {
+    const n = Number(input[key]);
+    if (!Number.isFinite(n) || Math.abs(n) > 100000) return null;
+    out[key] = Math.round(n);
+  }
+  return out.width >= 100 && out.height >= 100 ? out : null;
+}
+
+function cleanWindows(value) {
+  const out = [];
+  for (const entry of Array.isArray(value) ? value : []) {
+    const input = plainObject(entry); if (!input) continue;
+    const projectId = idOrNull(input.projectId);
+    out.push({ projectId, workspaceId: projectId ? idOrNull(input.workspaceId) : null, bounds: cleanBounds(input.bounds) });
+  }
+  return out.slice(-MAX_WINDOWS);
+}
+
+function readWindows(ctx) {
+  return cleanWindows(readState(ctx).windows);
+}
+
+function writeWindows(ctx, list) {
+  const windows = cleanWindows(list);
+  writeState(ctx, { windows });
+  return windows;
 }
 
 /** { top, line?, offset?, hash? } — the scroll offset in pixels, and the first line on screen, how far its top sat above the pane's edge, a hash of its text. */
@@ -676,6 +953,98 @@ function writeView(ctx, projectId, workspaceId, view) {
   return clean;
 }
 
+// `stages[projectId]` is what the project's Stage had open (MATH-10, 2026-10-05): its tabs, each a library row
+// `{ item, title }` or a place `{ address, title }` (a URL or an absolute path), and `active`, the index of the one in
+// front. One list for the project, shared by its workspaces, as the Stage is. Written by the renderer as tabs change
+// (Stage.jsx), so ⌘R and quitting give the same tabs back; no page's contents, ink or history are kept.
+const MAX_STAGE_TABS = 15; // MAX_TABS in renderer/model/stage.js
+const MAX_ADDRESS = 2048;
+
+/** A place a Stage tab can go back to: http, https or file, or an absolute path; never about:. */
+function cleanAddress(value) {
+  if (typeof value !== 'string') return null;
+  const address = value.trim();
+  if (!address || address.length > MAX_ADDRESS || /^about:/i.test(address)) return null;
+  return /^(https?|file):/i.test(address) || address.startsWith('/') ? address : null;
+}
+
+/** { active, tabs }: entries that are neither a row nor a place go, and the second of two that are one (by row, else by addressKey). */
+function cleanStage(value) {
+  const input = plainObject(value); if (!input) return null;
+  const tabs = [], seen = new Map(); // key → where it is kept
+  const at = new Map(); // the index it came at → the index it is kept at
+  (Array.isArray(input.tabs) ? input.tabs : []).forEach((tab, i) => {
+    const entry = plainObject(tab); if (!entry) return;
+    const item = idOrNull(entry.item), address = item ? null : cleanAddress(entry.address);
+    if (!item && !address) return;
+    const key = item ? `i:${item}` : `l:${addressKey(address.startsWith('/') ? `file://${address}` : address)}`;
+    if (seen.has(key)) { at.set(i, seen.get(key)); return; }
+    if (tabs.length >= MAX_STAGE_TABS) return;
+    seen.set(key, tabs.length);
+    at.set(i, tabs.length);
+    const title = typeof entry.title === 'string' ? entry.title.slice(0, 200) : '';
+    tabs.push(item ? { item, title } : { address, title });
+  });
+  const wanted = Number.isInteger(input.active) ? input.active : 0;
+  const active = at.has(wanted) ? at.get(wanted) : Math.max(0, Math.min(wanted, tabs.length - 1));
+  return { active, tabs };
+}
+
+/** What the project's Stage had open → { active, tabs } (none: no tabs). */
+function readStage(ctx, projectId) {
+  const id = idOrNull(projectId);
+  const held = id ? (plainObject(readState(ctx).stages) || {})[id] : null;
+  return cleanStage(held) || { active: 0, tabs: [] };
+}
+
+function writeStage(ctx, projectId, value) {
+  const pid = idOrNull(projectId); if (!pid) throw new TypeError('a Stage needs a project id');
+  const clean = cleanStage(value); if (!clean) throw new TypeError('stage is invalid');
+  const stages = plainObject(readState(ctx).stages) || {};
+  writeState(ctx, { stages: { ...stages, [pid]: clean } });
+  return clean;
+}
+
+/** A project purged from the trash: its views and its Stage, and its entries among the recent workspaces and the agents, go. */
+function forgetProject(ctx, projectId) {
+  const state = readState(ctx);
+  const patch = {};
+  const views = plainObject(state.views) || {};
+  if (projectId in views) { const { [projectId]: gone, ...kept } = views; patch.views = kept; } // eslint-disable-line no-unused-vars
+  const stages = plainObject(state.stages) || {};
+  if (projectId in stages) { const { [projectId]: gone, ...kept } = stages; patch.stages = kept; } // eslint-disable-line no-unused-vars
+  for (const key of ['recent', 'agents']) {
+    const list = Array.isArray(state[key]) ? state[key] : [];
+    if (list.some((entry) => plainObject(entry) && entry.projectId === projectId)) patch[key] = list.filter((entry) => !(plainObject(entry) && entry.projectId === projectId));
+  }
+  const starred = plainObject(state.starred) || {};
+  if (projectId in starred) { const { [projectId]: gone, ...kept } = starred; patch.starred = kept; } // eslint-disable-line no-unused-vars
+  if (Object.keys(patch).length) writeState(ctx, patch);
+}
+
+/* ----------------------------------------------------------------- starred */
+
+// What the sidebar's Starred lists (2026-10-07): `starred[projectId]`, the library ids starred in that project, oldest
+// first. A star is the project's, not the library row's: one paper can be starred in one project and not in another.
+const MAX_STARRED = 500;
+const starredIds = (value) => [...new Set((Array.isArray(value) ? value : []).map(idOrNull).filter(Boolean))].slice(-MAX_STARRED);
+
+function readStarred(ctx, projectId) {
+  const id = idOrNull(projectId); if (!id) return [];
+  return starredIds((plainObject(readState(ctx).starred) || {})[id]);
+}
+
+/** Stars an item in a project (`on`), or takes its star off. → the project's starred ids. */
+function setStarred(ctx, projectId, itemId, on) {
+  const pid = idOrNull(projectId), iid = idOrNull(itemId);
+  if (!pid || !iid) throw new TypeError('a star needs a project id and a library id');
+  const all = plainObject(readState(ctx).starred) || {};
+  const held = starredIds(all[pid]).filter((id) => id !== iid);
+  const next = on ? starredIds([...held, iid]) : held;
+  writeState(ctx, { starred: { ...all, [pid]: next } });
+  return next;
+}
+
 /* ------------------------------------------------------------- where to next */
 
 // What the sidebar's "next" row and ⌘J go to (2026-09-22), kept in state.json beside the views:
@@ -692,7 +1061,7 @@ const RECENT_KEEP = 3;
 const RECENT_WINDOW = 30 * 60 * 1000;
 const MAX_RECENT = 100;
 const MAX_AGENTS = 50;
-const AGENT_KINDS = new Set(['bart', 'build']);
+const AGENT_KINDS = new Set(['bart', 'brainstorm', 'discover', 'build']);
 const AGENT_STATUSES = new Set(['running', 'waiting']);
 const liveAgents = new Set(); // ids of the agents running in this process
 const isoOrNull = (value) => (typeof value === 'string' && value.length <= 40 && !Number.isNaN(Date.parse(value)) ? value : null);
@@ -711,10 +1080,19 @@ function cleanRecent(value, now = Date.now()) {
   return out;
 }
 
+// A highlight on a pdf (MATH-27): its mark's id (PaperView's, not a uuid), the library row or the address the pdf is, its page.
+// A highlight on a web page (MATH-54) has `source: 'web'` and no page.
+const MARK_ID_RE = /^[\w-]{1,64}$/;
 function cleanDocRef(value) {
   const input = plainObject(value);
   if (input && input.kind === 'workspace' && idOrNull(input.workspaceId)) return { kind: 'workspace', workspaceId: input.workspaceId };
   if (input && input.kind === 'note' && idOrNull(input.id)) return { kind: 'note', id: input.id };
+  const web = !!input && input.source === 'web' && input.page == null;
+  if (input && input.kind === 'mark' && typeof input.id === 'string' && MARK_ID_RE.test(input.id) && (web || (Number.isInteger(input.page) && input.page > 0))) {
+    const on = web ? { source: 'web' } : { page: input.page };
+    if (idOrNull(input.rowId)) return { kind: 'mark', id: input.id, rowId: input.rowId, ...on };
+    if (typeof input.url === 'string' && input.url && input.url.length <= 8192) return { kind: 'mark', id: input.id, url: input.url, ...on };
+  }
   return null;
 }
 
@@ -818,7 +1196,7 @@ function resolveTypedPath(ctx, project, input) {
   else if (target === '~') candidates = [ctx.homeDir];
   else if (path.isAbsolute(target)) candidates = [target];
   else candidates = [project.dir, ctx.dataRoot, ctx.root, project.directory].filter(Boolean).map((base) => path.join(base, target));
-  const resolved = fs.realpathSync(candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0]);
+  const resolved = stageFiles.reading(() => fs.realpathSync(candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0])); // nothing there, or macOS keeps it
   const homeReal = fs.realpathSync(ctx.homeDir);
   if (resolved !== homeReal && !resolved.startsWith(homeReal + path.sep)) throw new Error('Only files inside your home directory can be opened');
   return resolved;
@@ -866,7 +1244,7 @@ async function loadProject(ctx, projectId) {
   const project = findProject(ctx, projectId);
   const notesDb = await db.openNotesDb(project.dir);
   const notes = (await notesDb.list()).map(publicNote);
-  return { project: publicProject(project), workspaces: workspaceTree(project.dir), notes };
+  return { project: publicProject(project), workspaces: workspaceTree(project.dir), notes, trash: trashedWorkspaces(ctx, projectId) };
 }
 
 module.exports = {
@@ -879,10 +1257,18 @@ module.exports = {
   createProject,
   createProjectWithWelcome,
   setProjectDirectory,
+  setDefaultTarget,
   renameProject,
+  trashProject,
+  trashedProjects,
+  purgeProject,
+  restoreProject,
   loadProject,
   createWorkspace,
   renameWorkspace,
+  trashWorkspace,
+  trashedWorkspaces,
+  restoreWorkspace,
   setWorkspaceContext,
   addWorkspaceBuild,
   patchWorkspace: (ctx, projectId, workspaceId, patch) => patchWorkspaceMeta(findWorkspace(ctx, projectId, workspaceId).workspace, patch),
@@ -904,10 +1290,18 @@ module.exports = {
   resolvePageFile,
   readLastOpen,
   writeLastOpen,
+  readWindows,
+  writeWindows,
   readViews,
   writeView,
+  cleanStage,
+  readStage,
+  writeStage,
   readNav,
   recordEdit,
+  readStarred,
+  setStarred,
+  cleanDocRef,
   agentStarted,
   agentFinished,
   agentStopped,

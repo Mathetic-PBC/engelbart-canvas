@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "repositories": [
+    {
+      "name": "mqo00/rope",
+      "commit": "1ada01830031e5882f2585577720b182deac6246",
+      "files": ["system/package.json", "system/package-lock.json"],
+      "installs": [{ "manager": "npm", "cwd": "system" }]
+    },
+    {
+      "name": "kjfeng/cocoa-canvas",
+      "commit": "e49079a413497d4fe363af4e8a6e6fefd7539597",
+      "files": ["package.json", "package-lock.json", "client/package.json", "server/package.json"],
+      "installs": [{ "manager": "npm", "cwd": "." }]
+    },
+    {
+      "name": "mqo00/hypocompass",
+      "commit": "7bc855e7316aeb17e9919013a26aa0427138d480",
+      "files": ["system/frontend/package.json", "system/frontend/package-lock.json", "system/backend/requirements.txt"],
+      "installs": [{ "manager": "pip", "cwd": "system/backend" }, { "manager": "npm", "cwd": "system/frontend" }]
+    }
+  ]
+}

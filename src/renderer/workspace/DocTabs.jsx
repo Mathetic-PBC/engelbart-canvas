@@ -1,5 +1,5 @@
 import React from 'react';
-import { isUntitled } from '../model/names.js';
+import { isUntitled, wsLabel } from '../model/names.js';
 import { KindGlyph } from '../ui/Icons.jsx';
 import { FluidTab, TabCard, TabClose, TabTitle, useTabCard } from '../ui/FluidTab.jsx';
 
@@ -13,7 +13,8 @@ const THRESHOLD = 4; // px of travel before a press becomes a drag
  *  release. Workspace stays first and nothing moves past it.
  *  Every note tab closes; Workspace is always there and has no × (2026-09-25; it closed too from 2026-09-23).
  *  The Workspace tab is the only workspace document in the strip (2026-09-25). */
-export default function DocTabs({ tabs, activeTab, onSelect, onClose, onMove }) {
+// `wsName`: the workspace's own name, shown on its tab in place of "Workspace" (MATH-20), cut to that word's length.
+export default function DocTabs({ tabs, activeTab, onSelect, onClose, onMove, wsName }) {
   const els = React.useRef(new Map()); // tab id → element
   const drag = React.useRef(null); // { id, pointerId, startX, x, moved }
   const lefts = React.useRef(new Map()); // tab id → offsetLeft at the last layout
@@ -107,7 +108,7 @@ export default function DocTabs({ tabs, activeTab, onSelect, onClose, onMove }) 
         const dragging = draggingId === tab.id;
         const ws = tab.id === 'ws';
         const sep = !on && tabs[i + 1] && tabs[i + 1].id !== activeTab;
-        const untitled = isUntitled(tab.title);
+        const title = ws ? wsLabel(wsName) : tab.title, untitled = !ws && isUntitled(tab.title);
         return (
           <FluidTab
             key={tab.id}
@@ -117,6 +118,7 @@ export default function DocTabs({ tabs, activeTab, onSelect, onClose, onMove }) 
             lifted={dragging}
             data-no-drag="1"
             data-doc-tab={tab.id}
+            title={ws && wsName ? wsName : undefined}
             onClick={() => onSelect(tab.id)}
             onPointerDown={(event) => { card.hide(); onPointerDown(event, tab); }}
             onPointerMove={onPointerMove}
@@ -127,7 +129,7 @@ export default function DocTabs({ tabs, activeTab, onSelect, onClose, onMove }) 
             style={{ touchAction: 'none' }}
           >
             {ws && <span data-ws-icon="1" style={{ flex: 'none', display: 'flex', color: on ? '#4d4d4d' : '#8f8f8f' }}><KindGlyph kind="workspace" item={{ type: 'workspace' }} box={14} color="currentColor" /></span>}
-            <TabTitle weight={ws ? 600 : 400} color={untitled ? '#8f8f8f' : on || ws ? '#171717' : '#4d4d4d'}>{tab.title}</TabTitle>
+            <TabTitle weight={ws ? 600 : 400} color={untitled ? '#8f8f8f' : on || ws ? '#171717' : '#4d4d4d'}>{title}</TabTitle>
             {!ws && <TabClose onClose={() => onClose(tab.id)} title="Close" />}
           </FluidTab>
         );

@@ -39,10 +39,16 @@ test('Git missing, and neither agent installed, are asked about; a skip is remem
   assert.deepEqual(launchRows(snapshot({ git: { status: 'failed', error: "Xcode's license has not been accepted" } })), ['git'], 'a Git that cannot run is asked about too');
 });
 
-test('agents that are installed but cannot run a question are asked about; one that can run is enough', async () => {
-  const { launchRows } = await load();
+test('agents that are installed but cannot run a question are asked about, and one not signed in always is (2026-09-29)', async () => {
+  const { launchRows, installedSignedOut } = await load();
   assert.deepEqual(launchRows(snapshot({ claude: { status: 'signed-out' }, codex: { status: 'missing' } })), ['claude']);
-  assert.deepEqual(launchRows(snapshot({ claude: { status: 'signed-out' } })), [], 'Codex can run it');
+  assert.deepEqual(launchRows(snapshot({ claude: { status: 'signed-out' } })), ['claude'], 'Codex could run a question, but Claude Code still asks to sign in');
+  assert.deepEqual(launchRows(snapshot({ claude: { status: 'signed-out', skip: true } })), [], 'unless skipped');
+  const installing = snapshot({ claude: { status: 'installing', installed: false, busy: { action: 'install' } }, codex: { status: 'missing' } });
+  const installed = snapshot({ claude: { status: 'signed-out' }, codex: { status: 'missing' } });
+  assert.deepEqual(installedSignedOut(installing, installed), ['claude'], 'an install that ends without a sign-in asks for one');
+  assert.deepEqual(installedSignedOut(installing, snapshot({ codex: { status: 'missing' } })), [], 'one signed in already asks nothing');
+  assert.deepEqual(installedSignedOut(null, installed), []);
   assert.deepEqual(launchRows(snapshot({ codex: { status: 'outdated', version: '0.150.0' } })), ['codex'], 'an update waiting for the person');
   assert.deepEqual(launchRows(snapshot({ codex: { status: 'outdated', version: '0.150.0', autoUpdate: true } })), [], 'an update that happens by itself asks nothing');
 });
@@ -57,9 +63,20 @@ test('rows say what a tool is doing in a few words, with one button', async () =
   assert.equal(rowOf({ ...tools.git, busy: { action: 'install', phase: 'Waiting for Apple’s installer' } }).state, 'Waiting for Apple’s installer');
   const signing = rowOf({ ...tools.codex, busy: { action: 'sign-in', url: 'https://auth.openai.com/x' } });
   assert.deepEqual([signing.action, signing.page], ['cancel', 'https://auth.openai.com/x']);
+  const leaving = rowOf({ ...tools.codex, status: 'ready', busy: { action: 'sign-out' } });
+  assert.deepEqual([leaving.state, leaving.tone, leaving.action], ['Signing out…', 'busy', null], 'Connections\' Sign out (2026-10-03)');
   assert.equal(rowOf({ ...tools.git, status: 'outdated', version: '2.20.0', source: 'apple' }).action, null, 'Apple’s Git is updated by macOS');
   assert.deepEqual([rowOf({ ...tools.claude, status: 'ready', version: '3.0.1', untested: true }).state, rowOf({ ...tools.claude, status: 'ready' }).tone], ['3.0.1 · untested', 'ok']);
   assert.equal(rowOf({ ...tools.git, skip: true }).state, 'Skipped');
+});
+
+test('a row names the account Claude Code or Codex is signed in as, and nobody otherwise (2026-10-03)', async () => {
+  const { rowOf } = await load();
+  const ready = rowOf(snapshot({ claude: { status: 'ready', signedIn: true, account: 'someone@example.com' } }).tools.claude);
+  assert.deepEqual([ready.account, ready.state], ['someone@example.com', REQUIREMENTS.claude.minimum], 'the state is still the version, for the setup dialog');
+  assert.equal(rowOf(snapshot({ codex: { status: 'ready', signedIn: true } }).tools.codex).account, null, 'none found');
+  assert.equal(rowOf(snapshot({ codex: { status: 'signed-out', signedIn: false, account: 'someone@example.com' } }).tools.codex).account, null);
+  assert.equal(rowOf(snapshot({}).tools.git).account, null);
 });
 
 test('Skip warns that Engelbart will be restricted, and only when it will be', async () => {
@@ -76,4 +93,15 @@ test('Install all takes the rows not installed; the dialog is done when every ro
   assert.equal(allDone(tools, ['git']), false);
   assert.equal(allDone(snapshot({}), ['git', 'claude']), true);
   assert.equal(allDone(snapshot({ claude: { status: 'signed-out' } }), ['claude']), false, 'installed but not signed in is not done');
+});
+
+test('a ready row shows its note (an older copy first on PATH) in amber; a failed row its message in red (2026-09-30)', async () => {
+  const { rowOf } = await load();
+  const note = 'An older Claude Code comes first on your PATH, so typing claude in a terminal runs it; Engelbart uses a newer one. To remove the older one: brew uninstall --cask claude-code. It is at /opt/homebrew/bin/claude.';
+  const ready = rowOf(snapshot({ claude: { status: 'ready', note } }).tools.claude);
+  assert.deepEqual([ready.tone, ready.detail, ready.detailTone, ready.action], ['ok', note, 'warn', null]);
+  assert.equal(rowOf(snapshot({}).tools.claude).detail, null, 'no note, no line');
+  const failed = rowOf(snapshot({ claude: { status: 'failed', error: 'Your login shell (/bin/zsh) never runs Engelbart\'s commands' } }).tools.claude);
+  assert.deepEqual([failed.state, failed.detailTone, failed.action], ['Not working', 'error', 'retry']);
+  assert.equal(normalizeTools({ claude: { note: `  ${note}\n` } }).claude.note, note, 'kept on one line');
 });

@@ -39,6 +39,12 @@ async function minifiedSources() {
 }
 
 if (process.platform !== 'darwin') { console.error('The Mac app is packaged on a Mac.'); process.exit(1); }
+// A node_modules that is a symlink to another checkout's: electron-builder then keeps only the packages package.json
+// names and drops every one npm hoisted beside them (how 0.1.2 shipped without 35; scripts/check-app-modules.cjs).
+if (fs.existsSync(path.join(ROOT, 'node_modules')) && fs.lstatSync(path.join(ROOT, 'node_modules')).isSymbolicLink()) {
+  console.error('node_modules here is a symlink, and electron-builder leaves most packages out of the app when it is.\nRemove it and run `npm ci` in this checkout first.');
+  process.exit(1);
+}
 if (!release) { // read by the config as it loads: an everyday build is never sent to Apple, nor told of releases to update to
   process.env.ENGELBART_SIGN = 'adhoc';
   delete process.env.ENGELBART_DOWNLOAD_URL;
@@ -77,6 +83,6 @@ if (!release) {
   await build({ targets: Platform.MAC.createTarget(['dmg', 'zip'], Arch.arm64, Arch.x64), config, publish: 'never' });
   const { writeSite } = await import('./release-site.mjs');
   const site = writeSite({ root: ROOT, version, downloads, developerId: config.extraMetadata.engelbart.developerId });
-  console.log(`\nUpload everything in ${path.relative(ROOT, site)}/ to ${downloads}`);
+  console.log(`\nUpload everything in ${path.relative(ROOT, site)}/ to ${downloads}: npm run upload:mac`);
   console.log(`Install command: curl -fsSL ${downloads}install.sh | bash`);
 }

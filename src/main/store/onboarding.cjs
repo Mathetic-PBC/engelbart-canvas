@@ -7,7 +7,7 @@
 //     during onboarding is discarded (`discardItem`), and only if nothing holds it;
 //   - the custom instructions, `<dataRoot>/instructions.md`, read by @bart and Build (`instructionsBlock`);
 //   - the project (`startProject`): its folder, made under the home directory when Engelbart is asked to make one,
-//     a "Welcome" workspace whose document starts with the description, the "Welcome!" note, and the chosen library
+//     a "Getting started" workspace whose document starts with the description, the "Welcome!" note, and the chosen library
 //     rows in the workspace's context.
 
 const fs = require('node:fs');
@@ -82,18 +82,20 @@ async function startProject(ctx, { name, description = '', folder = 'new', direc
   const known = new Map(rows.map((row) => [row.id, row]));
   const chosen = [...new Set((Array.isArray(context) ? context : []).filter((id) => typeof id === 'string' && UUID_RE.test(id)))]
     .filter((id) => known.has(id) && !known.get(id).tags.includes('note'));
-  return projects.createProjectWithWelcome(ctx, { name, description, directory: dir }, { workspaceName: 'Welcome', context: chosen });
+  return projects.createProjectWithWelcome(ctx, { name, description, directory: dir }, { workspaceName: 'Getting started', context: chosen });
 }
 
 /**
  * A row added during onboarding and unticked again goes: only when it is not a note and no project holds it (no
- * workspace has it in context, none made it). Anything else stays and the answer is false.
+ * workspace has it in context, none made it). Anything else stays and the answer is false. `release` runs first when
+ * given: a GitHub repository's sandbox stopped and its runs forgotten (sandbox/manager.cjs), else the row cannot go.
  */
-async function discardItem(ctx, id) {
+async function discardItem(ctx, id, { release = null } = {}) {
   if (typeof id !== 'string' || !UUID_RE.test(id)) throw new TypeError('library id is invalid');
   const row = await ctx.libraryDb.get(id);
   if (!row || row.tags.includes('note') || row.project_id) return false;
   if ((await library.projectsForLibraryItem(ctx, id)).length) return false;
+  if (release) await release();
   return ctx.libraryDb.remove(id);
 }
 

@@ -13,9 +13,15 @@
 //   * hand ZDOTDIR back to your own value, so ~/.zlogin runs as usual and anything started from
 //     the shell (installers that edit ${ZDOTDIR:-$HOME}/.zshrc, nested shells) sees your setup;
 //   * put Engelbart's own Git first on PATH while it stands in for a missing one (ENGELBART_GIT_BIN,
-//     src/main/tools/bundled-git.cjs), after your .zshrc, which may have rebuilt PATH.
+//     src/main/tools/bundled-git.cjs), after your .zshrc, which may have rebuilt PATH, and Claude Code's and Codex's
+//     folders last when your PATH misses them (ENGELBART_AGENT_PATH, src/main/tools/manager.cjs environment).
 // Because the launcher is also $TERMINAL_USER_SHELL, the shell that replaces Claude Code or
-// Codex when they exit gets the same treatment. bash and fish run through the launcher untouched.
+// Codex when they exit gets the same treatment.
+//
+// bash (2026-09-30, scripts/mac-states): a terminal's login bash is started interactive with an init file instead,
+// <userData>/bash/init.bash, which reads what a login bash reads (/etc/profile, then the first of ~/.bash_profile,
+// ~/.bash_login, ~/.profile) and then puts the same folders on PATH, so `claude` typed in the terminal runs there too.
+// It has no prompt marks yet, and `shopt login_shell` is off in it. fish runs through the launcher untouched.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -42,6 +48,7 @@ ZDOTDIR="$ENGELBART_ZDOTDIR"
 ZDOTDIR="\${ENGELBART_USER_ZDOTDIR:-$HOME}"
 [[ -r "$ZDOTDIR/.zshrc" ]] && source "$ZDOTDIR/.zshrc"
 [[ -n "\${ENGELBART_GIT_BIN:-}" ]] && path=("$ENGELBART_GIT_BIN" $path)
+[[ -n "\${ENGELBART_AGENT_PATH:-}" ]] && path=($path \${(s.:.)ENGELBART_AGENT_PATH})
 engelbart_hide_prompt() { PROMPT='' PS1='' RPROMPT='' RPS1='' PROMPT_EOL_MARK='' }
 engelbart_precmd() { engelbart_hide_prompt; printf '\\e]633;P;Cwd=%s\\a\\e]633;A\\a' "$PWD" }
 engelbart_preexec() { local line="\${1//[[:cntrl:]]/ }"; printf '\\e]633;E;%s\\a\\e]633;C\\a' "\${line[1,400]}" }
@@ -60,6 +67,18 @@ function writeIfChanged(file, text, mode) {
   try { fs.chmodSync(file, mode); } catch { /* best effort */ }
 }
 
+const BASH_INIT = `# Engelbart wrapper: what a login bash reads, then Engelbart's own Git first on PATH while it stands in, and
+# Claude Code's and Codex's folders last when your PATH misses them.
+[ -r /etc/profile ] && . /etc/profile
+if [ -r "$HOME/.bash_profile" ]; then . "$HOME/.bash_profile"
+elif [ -r "$HOME/.bash_login" ]; then . "$HOME/.bash_login"
+elif [ -r "$HOME/.profile" ]; then . "$HOME/.profile"
+fi
+[ -n "\${ENGELBART_GIT_BIN:-}" ] && PATH="$ENGELBART_GIT_BIN:$PATH"
+[ -n "\${ENGELBART_AGENT_PATH:-}" ] && PATH="$PATH:$ENGELBART_AGENT_PATH"
+export PATH
+`;
+
 /** Writes the wrapper startup files under <userData>/zsh and returns that directory. */
 function prepareZshDir(userDataDir) {
   const dir = path.join(userDataDir, 'zsh');
@@ -74,6 +93,19 @@ function prepareLauncher(userDataDir, realShell) {
   const dir = path.join(userDataDir, 'shell');
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const launcher = path.join(dir, path.basename(realShell));
+  if (path.basename(realShell) === 'bash') {
+    const init = path.join(userDataDir, 'bash', 'init.bash');
+    fs.mkdirSync(path.dirname(init), { recursive: true, mode: 0o700 });
+    writeIfChanged(init, BASH_INIT, 0o600);
+    // Only a terminal's own shell (-il): a command it is given (-ilc, the Claude Code and Codex items) runs as before.
+    writeIfChanged(launcher, `#!/bin/sh
+# Engelbart: start bash reading Engelbart's init file, which reads what a login bash would.
+SHELL=${quote(realShell)}; export SHELL
+if [ "$#" -eq 1 ] && [ "$1" = "-il" ]; then exec ${quote(realShell)} --init-file ${quote(init)} -i; fi
+exec ${quote(realShell)} "$@"
+`, 0o700);
+    return launcher;
+  }
   writeIfChanged(launcher, `#!/bin/sh
 # Engelbart: start your shell with Engelbart's startup wrappers (zsh finds them through ZDOTDIR).
 ENGELBART_PRIOR_ZDOTDIR="\${ZDOTDIR-}"; export ENGELBART_PRIOR_ZDOTDIR

@@ -30,7 +30,7 @@ function stampOf(date) {
 /** What a version is called in the sidebar: its first line with words in it, without its markdown. */
 function titleOf(text) {
   for (const raw of String(text || '').split('\n')) {
-    const line = raw.replace(/^\s*(#{1,3} |- \[[ xX]?\] |[-*] |> )/, '').replace(/@\[([^\]\n]+)\](\(ws:[\w-]+\))?/g, '$1').replace(/!\[[^\]\n]*\]\([^)]*\)/g, '').replace(/[*`]/g, '').trim();
+    const line = raw.replace(/^\s*(#{1,3} |- \[[ xX]?\] |[-*] |> )/, '').replace(/@\[([^\]\n]+)\](\((?:ws|lib|zotero):[^)\s]*\))?/g, '$1').replace(/!\[[^\]\n]*\]\([^)]*\)/g, '').replace(/[*`]/g, '').trim();
     if (line && !/^(bart[~+?]?>|build>)/.test(raw.trim())) return line.slice(0, 120);
   }
   return 'Untitled';

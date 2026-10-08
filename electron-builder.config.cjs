@@ -19,6 +19,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { Arch } = require('electron-builder');
+const { assertAppModules } = require('./scripts/check-app-modules.cjs');
 
 function developerId() {
   if (process.env.ENGELBART_SIGN === 'adhoc') return false;
@@ -43,11 +44,20 @@ module.exports = {
   artifactName: 'Engelbart-${version}-${arch}.${ext}',
   // Read by the app (src/main/updates.cjs): where new versions are, and whether it can install them itself.
   extraMetadata: { engelbart: { downloads, developerId: signed } },
+  // Encrypt the Stage's cookies on disk (MATH-18 / CK-11, 2026-10-06). The Stage keeps imported sign-ins in its
+  // persist:browser store (Partitions/browser/Cookies); without this fuse Chromium writes those values in the clear.
+  // electron-builder 26.15.3 supports `electronFuses` (app-builder-lib flips them with @electron/fuses right before
+  // signing, so the ad-hoc/Developer ID signature is re-applied after). WARNING: this is one-way. Once shipped, it must
+  // never be turned off — Electron encrypts on write, and disabling the fuse again leaves the existing cookie store
+  // unreadable, signing every imported user out.
+  electronFuses: { enableCookieEncryption: true, resetAdHocDarwinSignature: !signed },
   files: [
     'package.json',
     ...(source
       ? [{ from: source, to: 'src', filter: ['main/**/*.cjs', 'shared/**/*.cjs', 'preload.cjs', 'post-it-preload.cjs'] }]
       : ['src/main/**/*.cjs', 'src/shared/**/*.cjs', 'src/preload.cjs', 'src/post-it-preload.cjs']),
+    // The E2B sandbox's helpers (src/main/sandbox): uploaded into each sandbox and run there, never on the Mac.
+    'src/main/sandbox/*.py',
     'dist/**/*',
     '!dist/**/*.map',
     'fixtures/**/*', // test mode's seed library
@@ -79,6 +89,8 @@ module.exports = {
     }
     const git = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, 'Contents', 'Resources', 'git', 'engelbart-bin', 'git');
     if (!fs.existsSync(git)) throw new Error(`No Git for ${Arch[context.arch]} in the app: run \`node scripts/fetch-git.mjs ${Arch[context.arch]}\` first.`);
+    // Every package the main process loads is inside (0.1.2 shipped without 35 of them: scripts/check-app-modules.cjs).
+    assertAppModules(path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`), `The ${Arch[context.arch]} app`);
   },
   mac: {
     target: [

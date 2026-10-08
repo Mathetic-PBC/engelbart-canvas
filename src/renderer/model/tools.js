@@ -6,8 +6,9 @@ const AGENTS = ['claude', 'codex'];
 
 /**
  * The tools the dialog opens with after the launch check, or [] for no dialog: Git missing (or unable
- * to run); neither agent installed; no agent able to run a question; an update waiting for the
- * person. A skipped tool is not asked about again until Ask again.
+ * to run); neither agent installed; no agent able to run a question; an agent installed but not signed
+ * in (2026-09-29: often one Engelbart installed in the background, which then still needs its sign-in);
+ * an update waiting for the person. A skipped tool is not asked about again until Ask again.
  */
 export function launchRows(snapshot) {
   if (!snapshot || !snapshot.checked) return [];
@@ -22,9 +23,22 @@ export function launchRows(snapshot) {
   }
   for (const name of AGENTS) {
     const tool = tools[name];
-    if (!rows.includes(name) && !tool.skip && (tool.status === 'outdated' || tool.status === 'incompatible') && !tool.autoUpdate && !tool.busy) rows.push(name);
+    if (rows.includes(name) || tool.skip || tool.busy) continue;
+    if (tool.status === 'signed-out' || ((tool.status === 'outdated' || tool.status === 'incompatible') && !tool.autoUpdate)) rows.push(name);
   }
   return TOOL_ORDER.filter((name) => rows.includes(name));
+}
+
+/**
+ * The agents an install has just brought in without a sign-in: installing in `before`, done and signed out in `after`,
+ * not skipped. The dialog asks them to sign in once the install is over (App.jsx), whenever it ends.
+ */
+export function installedSignedOut(before, after) {
+  if (!before || !after) return [];
+  return AGENTS.filter((name) => {
+    const was = before.tools[name], now = after.tools[name];
+    return !!(was && now && was.busy && was.busy.action === 'install' && !now.busy && now.status === 'signed-out' && !now.skip);
+  });
 }
 
 /** A tool needs the person when it is not installed, cannot run, or waits on them (the rows Skip applies to). */
@@ -34,19 +48,22 @@ export function needsAction(tool) {
 
 /**
  * One row: `state` (what it says), `tone` (ok | muted | busy | warn | error), `action` (the one button:
- * install | update | sign-in | retry | cancel, or null), `detail` (a line under it, in red), `page` (an
- * address to open again while signing in), `skipped`.
+ * install | update | sign-in | retry | cancel, or null), `detail` (a line under it), `detailTone` (error, in red, or
+ * warn: the record's `note`, such as an older copy first on PATH), `page` (an address to open again while signing in),
+ * `skipped`, `account` (who Claude Code or Codex is signed in as, or null: Connections' "Connected · <account>").
  */
 export function rowOf(tool) {
   const busy = tool.busy || null;
-  const row = { id: tool.id, name: tool.name, state: '', tone: 'muted', action: null, detail: null, page: null, skipped: !!tool.skip };
+  const account = tool.signedIn === true && typeof tool.account === 'string' && tool.account ? tool.account : null;
+  const row = { id: tool.id, name: tool.name, state: '', tone: 'muted', action: null, detail: null, detailTone: 'error', page: null, skipped: !!tool.skip, account };
   if (busy && busy.action === 'install') return { ...row, state: busy.phase || 'Installing…', tone: 'busy' };
   if (busy && busy.action === 'update') return { ...row, state: 'Updating…', tone: 'busy' };
   if (busy && busy.action === 'sign-in') return { ...row, state: 'Finish signing in in your browser', tone: 'busy', action: 'cancel', page: busy.url || null };
+  if (busy && busy.action === 'sign-out') return { ...row, state: 'Signing out…', tone: 'busy' }; // Connections' Sign out
   const version = tool.version || '';
   switch (tool.status) {
     case 'ready': // `bundled`: the Git that came with Engelbart, standing in for a Mac without one
-      return { ...row, state: version ? `${version}${tool.untested ? ' · untested' : ''}${tool.source === 'bundled' ? ' · built in' : ''}` : 'Installed', tone: 'ok', detail: version ? null : tool.error };
+      return { ...row, state: version ? `${version}${tool.untested ? ' · untested' : ''}${tool.source === 'bundled' ? ' · built in' : ''}` : 'Installed', tone: 'ok', detail: version ? (tool.note || null) : tool.error, detailTone: version ? 'warn' : 'error' };
     case 'signed-out':
       return { ...row, state: 'Not signed in', tone: 'warn', action: 'sign-in', detail: tool.error };
     case 'missing':

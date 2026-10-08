@@ -20,13 +20,20 @@ How a version of Engelbart gets from this repository onto other people's Macs (2
 3. Build both kinds of Mac:
 
    ```sh
-   ENGELBART_DOWNLOAD_URL=https://example.com/engelbart npm run dist:mac
+   ENGELBART_DOWNLOAD_URL=https://mathetic.com/engelbart npm run dist:mac
    ```
+
+   From a checkout with its own `node_modules`, installed with `npm ci`: never a symlink to another checkout's, which
+   made electron-builder leave 35 packages out of 0.1.2 (E2B Builds and update checks failed in the installed app). The
+   script refuses a symlinked `node_modules`, and every app it packs is checked for every package its main process
+   needs (`scripts/check-app-modules.cjs`, also `node scripts/check-app-modules.cjs /Applications/Engelbart.app`).
 
    About a minute. It builds the renderer for production (minified, no source maps), minifies the main process file by
    file, fetches Git for both architectures (cached in `vendor/git` after the first time), and makes
    `Engelbart-<version>-arm64` (Apple silicon) and `-x64` (Intel), each as a `.dmg` and a `.zip`, about 155 MB each.
-4. Upload everything in `release/upload/` to that folder, replacing what is there:
+4. Upload it: `npm run upload:mac` (`scripts/upload-release.sh`; `UPLOAD_DRY_RUN=1` first lists what it would send).
+   It uses your `npx wrangler login` and puts everything in `release/upload/` into the R2 bucket `engelbart-releases`
+   under `engelbart/`, which https://mathetic.com/engelbart/ serves:
 
    ```
    Engelbart-0.1.1-arm64.dmg   Engelbart-0.1.1-arm64.zip   Engelbart-0.1.1-arm64.zip.blockmap
@@ -34,12 +41,15 @@ How a version of Engelbart gets from this repository onto other people's Macs (2
    latest-mac.yml              install.sh                  index.html      SHA256SUMS.txt
    ```
 
-   Upload `latest-mac.yml` last: it is what tells installed apps and the install command that a version exists, so the
-   files it names should be there first. Older versions' files can be deleted.
+   Every file goes up in 5 MiB parts, each retried on its own, through a temporary Worker it deploys and deletes: on
+   2026-09-30 this Mac's uploads to Cloudflare broke a few MB in, and a single 168 MB upload never got through. It can
+   be run again after any failure (what is already there is skipped). `latest-mac.yml` goes last, and only once both
+   zips as stored match the sha512 it names: it is what tells installed apps and the install command that a version
+   exists, so until then the previous version stays live. Older versions' files can be deleted.
 5. Send people the page (`index.html`, the folder's address) or the command:
 
    ```sh
-   curl -fsSL https://example.com/engelbart/install.sh | bash
+   curl -fsSL https://mathetic.com/engelbart | bash
    ```
 
 ## What people see
@@ -49,6 +59,8 @@ against the checksum in `latest-mac.yml`, puts Engelbart in `/Applications` (`~/
 write there) and opens it. A file curl downloaded is not marked as coming from the internet, so macOS opens the app
 without the Gatekeeper warning. Running the command again updates Engelbart in place. It needs macOS 13 or later
 (Electron 44's minimum).
+When the newest version is already installed, the command says so and exits without downloading or changing anything
+(`ENGELBART_FORCE=1` reinstalls it anyway).
 
 **The .dmg**, while builds are not notarized (see Signing): the first open shows **"Engelbart" Not Opened** (Apple could
 not verify it is free of malware) with Done and Move to Trash. Done, then System Settings › Privacy & Security, scroll
@@ -76,8 +88,12 @@ Updates…**. A new version is offered once per launch:
 
 - **Signed ad hoc** (today): macOS installs an update only when it is signed like the app it replaces, which an ad hoc
   signature never is, so **Update** runs the install command in the background. The app stays open while the new version
-  downloads and is checked, then quits, is replaced where it is, and opens again. If anything fails first, the app says
-  why and stays as it was. The command's output: `~/Library/Logs/Engelbart/update.log`.
+  downloads (a banner in each window shows how far it is) and is checked, then asks: **Restart to Update** quits, the
+  app is replaced where it is and opens again; **Later** leaves the command waiting for as long as the app stays open,
+  and it is installed at the next quit, which opens nothing. Restart to Update from the menu or a banner asks first
+  when terminal sessions are running, as any quit does (Cancel is then as Later). If the command was stopped
+  meanwhile, Restart to Update downloads it again and then restarts. If anything fails before it is ready, the app says why and stays as it was. The command's output:
+  `~/Library/Logs/Engelbart/update.log`.
 - **Developer ID** (once signed): electron-updater downloads it in the background and installs it when the app quits;
   **Restart Now** does it at once.
 
@@ -123,4 +139,5 @@ This is set up but has not been run, because there was no certificate to run it 
   Manager (~110 MB nothing uses). To move to a newer one, copy the two macOS entries (URL, checksum) from the npm package
   dugite's `script/embedded-git.json` into `scripts/fetch-git.mjs`.
 - Chromium's own strings in English only (`electronLanguages`), as Engelbart's are.
-- The icon (`build/icon.icns`) is a placeholder drawn by `scripts/make-icon.cjs`.
+- The icon (`build/icon.icns`) is drawn by `scripts/make-icon.cjs` from the artwork in `design/assets/app-icon.png`, set in
+  macOS's rounded icon shape (`npx electron scripts/make-icon.cjs [new-artwork.png]`).

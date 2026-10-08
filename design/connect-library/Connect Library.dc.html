@@ -1,0 +1,320 @@
+</helmet>
+<sc-if value="{{ shown }}" hint-placeholder-val="{{ true }}">
+<div data-overlay="1" role="dialog" aria-label="Connect your library" sc-camel-on-mouse-down="{{ bg }}" style="position:absolute;inset:0;z-index:140;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(23,23,23,.18);pointer-events:auto">
+  <div sc-camel-on-mouse-down="{{ boxDown }}" style="position:relative;width:min({{ modalW }}, calc(100% - 32px));height:{{ modalH }};max-height:min(720px, calc(100% - 64px));display:flex;flex-direction:column;background:#fff;border:1px solid #c9c9c9;border-radius:12px;box-shadow:0 12px 40px #0000001f;animation:rise 160ms cubic-bezier(.25,.1,.25,1);overflow:hidden">
+
+    <sc-if value="{{ sChoose }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:18px 20px 6px"><div style="font:500 15px/1.4 var(--font-sans);color:#171717">What should go in your library?</div></div>
+      <div style="flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:14px;padding:8px 20px 16px">
+        <div style="display:flex;flex-direction:column;margin:0 -8px">
+          <div style="display:flex;align-items:center;gap:6px;height:28px;padding:0 8px;font:12.5px/1 var(--font-sans);color:#8f8f8f">Sources<span style="font-size:9px">▾</span><span style="flex:1"></span><button type="button" class="bart-text" sc-camel-on-click="{{ toggleAll }}">{{ allLabel }}</button></div>
+          <div class="hov-wash" style="display:flex;align-items:center;gap:8px;height:34px;padding:0 8px 0 4px;border-radius:6px;background:{{ src.notes.rowBg }}">
+            <button type="button" sc-camel-on-click="{{ src.notes.expand }}" aria-expanded="{{ src.notes.expanded }}" style="flex:1;min-width:0;display:flex;align-items:center;gap:8px;height:100%;padding:0;border:0;background:transparent;cursor:pointer;text-align:left;color:{{ src.notes.ic }}">
+              <span style="flex:none;width:12px;display:flex;justify-content:center;color:#8f8f8f;transform:rotate({{ src.notes.caret }});transition:transform 140ms"><svg width="12" height="12" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"></path></svg></span>
+              <span style="flex:1;min-width:0;font:13.5px/1 var(--font-sans);color:#171717">Notes</span>
+              <span style="flex:none;font:12px/1 var(--font-sans);color:#8f8f8f">{{ src.notes.sub }}</span>
+            </button>
+            <span role="checkbox" aria-checked="{{ src.notes.pressed }}" sc-camel-on-click="{{ src.notes.toggle }}" style="flex:none;width:14px;height:14px;display:flex;align-items:center;justify-content:center;border-radius:4px;box-sizing:border-box;background:{{ src.notes.bg }};border:{{ src.notes.border }};color:#fff;font:600 9px/1 var(--font-sans);cursor:pointer">{{ src.notes.mark }}</span>
+          </div>
+          <sc-if value="{{ src.notes.open }}"><div style="position:relative;display:flex;flex-direction:column;gap:1px;padding:1px 0 4px 26px"><span style="position:absolute;left:33px;top:2px;bottom:6px;width:1px;background:#eaeaea"></span>
+            <sc-for list="{{ src.notes.apps }}" as="ap" hint-placeholder-count="3"><button type="button" class="hov-wash" sc-camel-on-click="{{ ap.toggle }}" style="display:flex;align-items:center;gap:10px;width:100%;height:30px;padding:0 8px 0 18px;border:0;border-radius:6px;background:transparent;cursor:pointer;text-align:left"><span aria-hidden="true" style="flex:none;display:block;width:14px;height:14px;margin:0 1px;background:{{ ap.logoBg }} center / contain no-repeat"></span><span style="flex:1;min-width:0;font:13px/1 var(--font-sans);color:{{ ap.fg }}">{{ ap.name }}</span><span role="checkbox" aria-checked="{{ ap.pressed }}" style="flex:none;width:14px;height:14px;display:flex;align-items:center;justify-content:center;border-radius:4px;box-sizing:border-box;background:{{ ap.bg }};border:{{ ap.border }};color:#fff;font:600 9px/1 var(--font-sans);cursor:pointer">{{ ap.mark }}</span></button></sc-for>
+          </div></sc-if>
+          <div class="hov-wash" style="display:flex;align-items:center;gap:8px;height:34px;padding:0 8px 0 4px;border-radius:6px;background:{{ src.transcripts.rowBg }}">
+            <button type="button" sc-camel-on-click="{{ src.transcripts.expand }}" aria-expanded="{{ src.transcripts.expanded }}" style="flex:1;min-width:0;display:flex;align-items:center;gap:8px;height:100%;padding:0;border:0;background:transparent;cursor:pointer;text-align:left;color:{{ src.transcripts.ic }}">
+              <span style="flex:none;width:12px;display:flex;justify-content:center;color:#8f8f8f;transform:rotate({{ src.transcripts.caret }});transition:transform 140ms"><svg width="12" height="12" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"></path></svg></span>
+              <span style="flex:1;min-width:0;font:13.5px/1 var(--font-sans);color:#171717">Meeting transcripts</span>
+              <span style="flex:none;font:12px/1 var(--font-sans);color:#8f8f8f">{{ src.transcripts.sub }}</span>
+            </button>
+            <span role="checkbox" aria-checked="{{ src.transcripts.pressed }}" sc-camel-on-click="{{ src.transcripts.toggle }}" style="flex:none;width:14px;height:14px;display:flex;align-items:center;justify-content:center;border-radius:4px;box-sizing:border-box;background:{{ src.transcripts.bg }};border:{{ src.transcripts.border }};color:#fff;font:600 9px/1 var(--font-sans);cursor:pointer">{{ src.transcripts.mark }}</span>
+          </div>
+          <sc-if value="{{ src.transcripts.open }}"><div style="position:relative;display:flex;flex-direction:column;gap:1px;padding:1px 0 4px 26px"><span style="position:absolute;left:33px;top:2px;bottom:6px;width:1px;background:#eaeaea"></span>
+            <sc-for list="{{ src.transcripts.apps }}" as="ap" hint-placeholder-count="3"><button type="button" class="hov-wash" sc-camel-on-click="{{ ap.toggle }}" style="display:flex;align-items:center;gap:10px;width:100%;height:30px;padding:0 8px 0 18px;border:0;border-radius:6px;background:transparent;cursor:pointer;text-align:left"><span aria-hidden="true" style="flex:none;display:block;width:14px;height:14px;margin:0 1px;background:{{ ap.logoBg }} center / contain no-repeat"></span><span style="flex:1;min-width:0;font:13px/1 var(--font-sans);color:{{ ap.fg }}">{{ ap.name }}</span><span role="checkbox" aria-checked="{{ ap.pressed }}" style="flex:none;width:14px;height:14px;display:flex;align-items:center;justify-content:center;border-radius:4px;box-sizing:border-box;background:{{ ap.bg }};border:{{ ap.border }};color:#fff;font:600 9px/1 var(--font-sans);cursor:pointer">{{ ap.mark }}</span></button></sc-for>
+          </div></sc-if>
+          <div class="hov-wash" style="display:flex;align-items:center;gap:8px;height:34px;padding:0 8px 0 4px;border-radius:6px;background:{{ src.chats.rowBg }}">
+            <button type="button" sc-camel-on-click="{{ src.chats.expand }}" aria-expanded="{{ src.chats.expanded }}" style="flex:1;min-width:0;display:flex;align-items:center;gap:8px;height:100%;padding:0;border:0;background:transparent;cursor:pointer;text-align:left;color:{{ src.chats.ic }}">
+              <span style="flex:none;width:12px;display:flex;justify-content:center;color:#8f8f8f;transform:rotate({{ src.chats.caret }});transition:transform 140ms"><svg width="12" height="12" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"></path></svg></span>
+              <span style="flex:1;min-width:0;font:13.5px/1 var(--font-sans);color:#171717">AI chats</span>
+              <span style="flex:none;font:12px/1 var(--font-sans);color:#8f8f8f">{{ src.chats.sub }}</span>
+            </button>
+            <span role="checkbox" aria-checked="{{ src.chats.pressed }}" sc-camel-on-click="{{ src.chats.toggle }}" style="flex:none;width:14px;height:14px;display:flex;align-items:center;justify-content:center;border-radius:4px;box-sizing:border-box;background:{{ src.chats.bg }};border:{{ src.chats.border }};color:#fff;font:600 9px/1 var(--font-sans);cursor:pointer">{{ src.chats.mark }}</span>
+          </div>
+          <sc-if value="{{ src.chats.open }}"><div style="position:relative;display:flex;flex-direction:column;gap:1px;padding:1px 0 4px 26px"><span style="position:absolute;left:33px;top:2px;bottom:6px;width:1px;background:#eaeaea"></span>
+            <sc-for list="{{ src.chats.apps }}" as="ap" hint-placeholder-count="3"><button type="button" class="hov-wash" sc-camel-on-click="{{ ap.toggle }}" style="display:flex;align-items:center;gap:10px;width:100%;height:30px;padding:0 8px 0 18px;border:0;border-radius:6px;background:transparent;cursor:pointer;text-align:left"><span aria-hidden="true" style="flex:none;display:block;width:14px;height:14px;margin:0 1px;background:{{ ap.logoBg }} center / contain no-repeat"></span><span style="flex:1;min-width:0;font:13px/1 var(--font-sans);color:{{ ap.fg }}">{{ ap.name }}</span><span role="checkbox" aria-checked="{{ ap.pressed }}" style="flex:none;width:14px;height:14px;display:flex;align-items:center;justify-content:center;border-radius:4px;box-sizing:border-box;background:{{ ap.bg }};border:{{ ap.border }};color:#fff;font:600 9px/1 var(--font-sans);cursor:pointer">{{ ap.mark }}</span></button></sc-for>
+          </div></sc-if>
+          <div class="hov-wash" style="display:flex;align-items:center;gap:8px;height:34px;padding:0 8px 0 4px;border-radius:6px;background:{{ src.sites.rowBg }}">
+            <button type="button" sc-camel-on-click="{{ src.sites.expand }}" aria-expanded="{{ src.sites.expanded }}" style="flex:1;min-width:0;display:flex;align-items:center;gap:8px;height:100%;padding:0;border:0;background:transparent;cursor:pointer;text-align:left;color:{{ src.sites.ic }}">
+              <span style="flex:none;width:12px"></span>
+              <span style="flex:1;min-width:0;font:13.5px/1 var(--font-sans);color:#171717">Websites</span>
+              <span style="flex:none;font:12px/1 var(--font-sans);color:#8f8f8f">{{ src.sites.sub }}</span>
+            </button>
+            <span role="checkbox" aria-checked="{{ src.sites.pressed }}" sc-camel-on-click="{{ src.sites.toggle }}" style="flex:none;width:14px;height:14px;display:flex;align-items:center;justify-content:center;border-radius:4px;box-sizing:border-box;background:{{ src.sites.bg }};border:{{ src.sites.border }};color:#fff;font:600 9px/1 var(--font-sans);cursor:pointer">{{ src.sites.mark }}</span>
+          </div>
+          <div class="hov-wash" style="display:flex;align-items:center;gap:8px;height:34px;padding:0 8px 0 4px;border-radius:6px;background:{{ src.papers.rowBg }}">
+            <button type="button" sc-camel-on-click="{{ src.papers.expand }}" aria-expanded="{{ src.papers.expanded }}" style="flex:1;min-width:0;display:flex;align-items:center;gap:8px;height:100%;padding:0;border:0;background:transparent;cursor:pointer;text-align:left;color:{{ src.papers.ic }}">
+              <span style="flex:none;width:12px;display:flex;justify-content:center;color:#8f8f8f;transform:rotate({{ src.papers.caret }});transition:transform 140ms"><svg width="12" height="12" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"></path></svg></span>
+              <span style="flex:1;min-width:0;font:13.5px/1 var(--font-sans);color:#171717">Papers</span>
+              <span style="flex:none;font:12px/1 var(--font-sans);color:#8f8f8f">{{ src.papers.sub }}</span>
+            </button>
+            <span role="checkbox" aria-checked="{{ src.papers.pressed }}" sc-camel-on-click="{{ src.papers.toggle }}" style="flex:none;width:14px;height:14px;display:flex;align-items:center;justify-content:center;border-radius:4px;box-sizing:border-box;background:{{ src.papers.bg }};border:{{ src.papers.border }};color:#fff;font:600 9px/1 var(--font-sans);cursor:pointer">{{ src.papers.mark }}</span>
+          </div>
+          <sc-if value="{{ src.papers.open }}"><div style="position:relative;display:flex;flex-direction:column;gap:1px;padding:1px 0 4px 26px"><span style="position:absolute;left:33px;top:2px;bottom:6px;width:1px;background:#eaeaea"></span>
+            <sc-for list="{{ src.papers.apps }}" as="ap" hint-placeholder-count="2"><button type="button" class="hov-wash" sc-camel-on-click="{{ ap.toggle }}" style="display:flex;align-items:center;gap:10px;width:100%;height:30px;padding:0 8px 0 18px;border:0;border-radius:6px;background:transparent;cursor:pointer;text-align:left"><span aria-hidden="true" style="flex:none;display:block;width:14px;height:14px;margin:0 1px;background:{{ ap.logoBg }} center / contain no-repeat"></span><span style="flex:1;min-width:0;font:13px/1 var(--font-sans);color:{{ ap.fg }}">{{ ap.name }}</span><span role="checkbox" aria-checked="{{ ap.pressed }}" style="flex:none;width:14px;height:14px;display:flex;align-items:center;justify-content:center;border-radius:4px;box-sizing:border-box;background:{{ ap.bg }};border:{{ ap.border }};color:#fff;font:600 9px/1 var(--font-sans);cursor:pointer">{{ ap.mark }}</span></button></sc-for>
+            <sc-if value="{{ folder }}"><div style="display:flex;align-items:center;gap:10px;height:30px;padding:0 8px 0 18px;color:#171717"><svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg><span style="flex:1;min-width:0;font:12px/1 var(--font-mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ folder }}</span><button type="button" class="hov-ink" sc-camel-on-click="{{ clearFolder }}" aria-label="Remove folder" style="display:inline-flex;padding:0 2px;border:0;background:transparent;cursor:pointer;color:#8f8f8f;font:14px/1 var(--font-sans)">×</button></div></sc-if>
+            <sc-if value="{{ noFolder }}"><button type="button" class="hov-wash" sc-camel-on-click="{{ pickFolder }}" style="display:flex;align-items:center;gap:10px;width:100%;height:30px;padding:0 8px 0 18px;border:0;border-radius:6px;background:transparent;cursor:pointer;text-align:left;color:#8f8f8f"><svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M12 5v14"></path></svg><span style="flex:1;min-width:0;font:13px/1 var(--font-sans)">Select a folder…</span><span style="font:12px/1 var(--font-sans);color:#c9c9c9">optional</span></button></sc-if>
+          </div></sc-if>
+          <div class="hov-wash" style="display:flex;align-items:center;gap:8px;height:34px;padding:0 8px 0 4px;border-radius:6px;background:{{ src.code.rowBg }}">
+            <button type="button" sc-camel-on-click="{{ src.code.expand }}" aria-expanded="{{ src.code.expanded }}" style="flex:1;min-width:0;display:flex;align-items:center;gap:8px;height:100%;padding:0;border:0;background:transparent;cursor:pointer;text-align:left;color:{{ src.code.ic }}">
+              <span style="flex:none;width:12px;display:flex;justify-content:center;color:#8f8f8f;transform:rotate({{ src.code.caret }});transition:transform 140ms"><svg width="12" height="12" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"></path></svg></span>
+              <span style="flex:1;min-width:0;font:13.5px/1 var(--font-sans);color:#171717">Code</span>
+              <span style="flex:none;font:12px/1 var(--font-sans);color:#8f8f8f">{{ src.code.sub }}</span>
+            </button>
+            <span role="checkbox" aria-checked="{{ src.code.pressed }}" sc-camel-on-click="{{ src.code.toggle }}" style="flex:none;width:14px;height:14px;display:flex;align-items:center;justify-content:center;border-radius:4px;box-sizing:border-box;background:{{ src.code.bg }};border:{{ src.code.border }};color:#fff;font:600 9px/1 var(--font-sans);cursor:pointer">{{ src.code.mark }}</span>
+          </div>
+          <sc-if value="{{ src.code.open }}"><div style="position:relative;display:flex;flex-direction:column;gap:1px;padding:1px 0 4px 26px"><span style="position:absolute;left:33px;top:2px;bottom:6px;width:1px;background:#eaeaea"></span>
+            <sc-for list="{{ src.code.apps }}" as="ap" hint-placeholder-count="2"><button type="button" class="hov-wash" sc-camel-on-click="{{ ap.toggle }}" style="display:flex;align-items:center;gap:10px;width:100%;height:30px;padding:0 8px 0 18px;border:0;border-radius:6px;background:transparent;cursor:pointer;text-align:left"><span aria-hidden="true" style="flex:none;display:block;width:14px;height:14px;margin:0 1px;background:{{ ap.logoBg }} center / contain no-repeat"></span><span style="flex:1;min-width:0;font:13px/1 var(--font-sans);color:{{ ap.fg }}">{{ ap.name }}</span><span role="checkbox" aria-checked="{{ ap.pressed }}" style="flex:none;width:14px;height:14px;display:flex;align-items:center;justify-content:center;border-radius:4px;box-sizing:border-box;background:{{ ap.bg }};border:{{ ap.border }};color:#fff;font:600 9px/1 var(--font-sans);cursor:pointer">{{ ap.mark }}</span></button></sc-for>
+            <sc-for list="{{ codeFolders }}" as="cf" hint-placeholder-count="0"><div style="display:flex;align-items:center;gap:10px;height:30px;padding:0 8px 0 18px;color:#171717"><svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg><span style="flex:1;min-width:0;font:12px/1 var(--font-mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ cf.path }}</span><button type="button" class="hov-ink" sc-camel-on-click="{{ cf.remove }}" aria-label="Remove folder" style="display:inline-flex;padding:0 2px;border:0;background:transparent;cursor:pointer;color:#8f8f8f;font:14px/1 var(--font-sans)">×</button></div></sc-for>
+            <button type="button" class="hov-wash" sc-camel-on-click="{{ addRepo }}" style="display:flex;align-items:center;gap:10px;width:100%;height:30px;padding:0 8px 0 18px;border:0;border-radius:6px;background:transparent;cursor:pointer;text-align:left;color:#8f8f8f"><svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M12 5v14"></path></svg><span style="flex:1;min-width:0;font:13px/1 var(--font-sans)">Select repositories…</span></button>
+            <button type="button" class="hov-wash" sc-camel-on-click="{{ addCodeFolder }}" style="display:flex;align-items:center;gap:10px;width:100%;height:30px;padding:0 8px 0 18px;border:0;border-radius:6px;background:transparent;cursor:pointer;text-align:left;color:#8f8f8f"><svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M12 5v14"></path></svg><span style="flex:1;min-width:0;font:13px/1 var(--font-sans)">Select a folder…</span><span style="font:12px/1 var(--font-sans);color:#c9c9c9">local repos</span></button>
+          </div></sc-if>
+        </div>
+        <button type="button" role="checkbox" aria-checked="{{ computerPressed }}" sc-camel-on-click="{{ toggleComputer }}" style="display:flex;align-items:center;gap:10px;width:100%;padding:0;border:0;background:transparent;cursor:pointer;text-align:left"><span style="flex:none;width:14px;height:14px;display:flex;align-items:center;justify-content:center;border-radius:4px;box-sizing:border-box;background:{{ computerBg }};border:{{ computerBorder }};color:#fff;font:600 9px/1 var(--font-sans)">{{ computerMark }}</span><span style="font:13px/1.4 var(--font-sans);color:#171717">Allow agents to use my computer</span></button>
+        <div class="focus-bd2" style="display:flex;padding:10px 12px;border:1px solid #eaeaea;border-radius:8px;background:#fafafa;transition:border-color 120ms"><textarea value="{{ custom }}" sc-camel-on-change="{{ onCustom }}" rows="2" spellcheck="false" placeholder="custom instructions… e.g. skip papers I only skimmed" style="all:unset;flex:1;min-height:40px;resize:none;font:13px/1.6 var(--font-sans);color:#171717;white-space:pre-wrap;overflow-wrap:anywhere"></textarea></div>
+      </div>
+      <div style="flex:none;display:flex;align-items:center;justify-content:flex-end;gap:12px;padding:12px 20px;border-top:1px solid #eaeaea">
+        <sc-if value="{{ error }}"><span style="flex:1;min-width:0;font:12.5px/1.4 var(--font-sans);color:#e70022">{{ error }}</span></sc-if>
+        <span class="bart-chip" role="button" sc-camel-on-click="{{ togglePicker }}" title="Choose the model" style="flex:none;display:inline-flex;align-items:center;gap:6px;padding:5px 6px 5px 12px;border:1px solid #eaeaea;border-radius:999px;background:#fff;cursor:pointer;font:13px/1 var(--font-sans);color:#171717;white-space:nowrap">
+          <span>Refine with {{ targetName }}</span>
+          <span style="color:#8f8f8f">{{ modelLabel }}</span>
+          <span style="display:inline-flex;color:#8f8f8f"><svg width="12" height="12" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></span>
+          <span style="width:1px;height:14px;background:#eaeaea;margin:0 2px"></span>
+          <button type="button" sc-camel-on-click="{{ start }}" class="bart-send" aria-label="Refine" style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:50%;background:{{ startBg }};color:{{ startFg }};cursor:pointer"><svg width="13" height="13" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path></svg></button>
+        </span>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ sChat }}">
+      <div style="flex:none;display:flex;align-items:center;gap:8px;padding:12px 16px 12px 12px;border-bottom:1px solid #eaeaea">
+        <button type="button" class="bart-ic" sc-camel-on-click="{{ back }}" aria-label="Back" title="Back"><svg width="16" height="16" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg></button>
+        <div style="flex:1;min-width:0;font:500 15px/1.4 var(--font-sans);color:#171717">Refine with {{ targetName }}</div>
+        <button type="button" class="hov-dim" sc-camel-on-click="{{ send }}" style="flex:none;display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 14px 0 12px;border:1px solid #171717;border-radius:8px;background:#171717;color:#fff;cursor:pointer;font:500 13px/1 var(--font-sans);white-space:nowrap"><svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><path d="m7 10 5 5 5-5"></path><path d="M12 15V3"></path></svg>Import</button>
+      </div>
+      <div ref="{{ chatRef }}" style="flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:16px;padding:18px 20px">
+        <sc-for list="{{ msgs }}" as="m" hint-placeholder-count="1">
+          <sc-if value="{{ m.agent }}">
+            <div style="display:flex;flex-direction:column;gap:10px;max-width:92%;animation:rise 260ms cubic-bezier(.25,.1,.25,1)">
+              <div style="font:14.5px/1.7 var(--font-sans);color:#171717;white-space:pre-wrap;text-wrap:pretty">{{ m.text }}</div>
+              <sc-if value="{{ m.hasChips }}"><div style="display:flex;flex-wrap:wrap;gap:6px">
+                <sc-for list="{{ m.chips }}" as="ch" hint-placeholder-count="3"><button type="button" class="bart-chip" sc-camel-on-click="{{ ch.send }}" style="display:inline-flex;align-items:center;padding:6px 12px;border:1px solid #eaeaea;border-radius:999px;background:#fff;cursor:pointer;font:13px/1.2 var(--font-sans);color:#171717">{{ ch.label }}</button></sc-for>
+              </div></sc-if>
+            </div>
+          </sc-if>
+          <sc-if value="{{ m.user }}">
+            <div style="align-self:flex-end;max-width:80%;padding:8px 12px;border-radius:12px;background:#f2f2f2;font:14.5px/1.6 var(--font-sans);color:#171717;white-space:pre-wrap;overflow-wrap:anywhere;animation:rise 160ms cubic-bezier(.25,.1,.25,1)">{{ m.text }}</div>
+          </sc-if>
+        </sc-for>
+        <sc-if value="{{ thinking }}"><div style="font:italic 14px/1.5 var(--font-sans);color:#8f8f8f">{{ thinkingLabel }}</div></sc-if>
+      </div>
+      <div style="flex:none;padding:0 16px 16px">
+        <div style="display:flex;align-items:flex-start;gap:10px;padding:14px 14px 14px 16px;background:#fafafa;border-radius:10px">
+          <textarea value="{{ draft }}" sc-camel-on-change="{{ onDraft }}" sc-camel-on-key-down="{{ onDraftKey }}" rows="1" placeholder="Reply…" spellcheck="false" style="flex:1;min-width:0;display:block;min-height:24px;margin:0;padding:0;border:0;background:none;outline:none;resize:none;font:15px/1.6 var(--font-sans);color:#171717"></textarea>
+          <span class="bart-chip" role="button" sc-camel-on-click="{{ togglePicker }}" title="Choose the model" style="flex:none;display:inline-flex;align-items:center;gap:6px;margin-top:-3px;padding:5px 6px 5px 12px;border:1px solid #eaeaea;border-radius:999px;background:#fff;cursor:pointer;font:13px/1 var(--font-sans);color:#171717;white-space:nowrap">
+            <span>{{ modelLabel }}</span>
+            <span style="display:inline-flex;color:#8f8f8f"><svg width="12" height="12" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></span>
+            <span style="width:1px;height:14px;background:#eaeaea;margin:0 2px"></span>
+            <button type="button" sc-camel-on-click="{{ sendDraft }}" class="bart-send" aria-label="Send" style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:50%;background:{{ sendBg }};color:{{ sendFg }};cursor:pointer"><svg width="13" height="13" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path></svg></button>
+          </span>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ sSent }}">
+      <div style="padding:18px 20px 6px;display:flex;align-items:center;gap:10px"><span style="flex:none;width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:#171717;color:#fff"><svg width="12" height="12" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span><div style="font:500 15px/1.4 var(--font-sans);color:#171717">Importing with {{ targetName }}</div></div>
+      <div style="flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;padding:6px 20px 16px">
+        <sc-for list="{{ progress }}" as="c" hint-placeholder-count="3"><div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #f2f2f2"><span style="flex:1;font:13.5px/1.4 var(--font-sans);color:#171717">{{ c.label }}</span><span style="font:12.5px/1 var(--font-sans);color:{{ c.color }}">{{ c.status }}</span></div></sc-for>
+      </div>
+      <div style="flex:none;display:flex;justify-content:flex-end;padding:12px 20px;border-top:1px solid #eaeaea"><button type="button" sc-camel-on-click="{{ close }}" style="flex:none;white-space:nowrap;height:34px;padding:0 16px;border:1px solid #171717;border-radius:8px;background:#171717;color:#fff;cursor:pointer;font:500 13px/1 var(--font-sans)">Done</button></div>
+    </sc-if>
+
+    <sc-if value="{{ pickerOn }}">
+      <div data-bart-picker="1" sc-camel-on-mouse-down="{{ stop }}" style="position:absolute;right:16px;bottom:{{ pickerBottom }};z-index:20;width:332px;box-sizing:border-box;display:flex;padding:4px;background:#fff;border:1px solid #eaeaea;border-radius:12px;animation:rise 160ms cubic-bezier(.25,.1,.25,1)">
+        <div style="flex:1 1 0;min-width:0;padding:4px">
+          <div style="position:relative;margin-bottom:4px"><div role="button" sc-camel-on-click="{{ toggleProviderList }}" style="display:flex;align-items:center;gap:8px;height:32px;padding:0 10px;border:1px solid #eaeaea;border-radius:8px;background:#fff;cursor:pointer;font:500 13px/1 var(--font-sans);color:#171717;box-sizing:border-box"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ targetName }}</span><span style="flex:none;display:inline-flex;color:#8f8f8f"><svg width="12" height="12" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></span></div>
+            <sc-if value="{{ providerList }}"><div role="listbox" style="position:absolute;left:0;right:0;top:36px;z-index:1;padding:4px;background:#fff;border:1px solid #eaeaea;border-radius:8px"><sc-for list="{{ providers }}" as="pv" hint-placeholder-count="2"><div class="hov-wash" sc-camel-on-mouse-down="{{ pv.pick }}" style="display:flex;align-items:center;gap:10px;height:32px;padding:0 8px 0 10px;border-radius:6px;cursor:pointer;font:{{ pv.weight }} 13px/1 var(--font-sans);color:#171717"><span style="flex:1">{{ pv.name }}</span><span style="flex:none;width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;box-sizing:border-box;border:{{ pv.border }};background:{{ pv.bg }};color:#fff;font:600 10px/1 var(--font-sans)">{{ pv.mark }}</span></div></sc-for></div></sc-if>
+          </div>
+          <sc-for list="{{ pickerModels }}" as="pm" hint-placeholder-count="3"><div class="hov-wash" sc-camel-on-mouse-down="{{ pm.pick }}" style="display:flex;align-items:center;gap:10px;height:32px;padding:0 8px 0 10px;border-radius:6px;cursor:pointer;font:{{ pm.weight }} 13px/1 var(--font-sans);color:#171717"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ pm.name }}</span><span style="flex:none;width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;box-sizing:border-box;border:{{ pm.border }};background:{{ pm.bg }};color:#fff;font:600 10px/1 var(--font-sans)">{{ pm.mark }}</span></div></sc-for>
+        </div>
+        <div style="flex:none;width:1px;margin:4px 0;background:#eaeaea"></div>
+        <div style="flex:none;width:136px;padding:4px">
+          <div style="padding:6px 10px 6px;font:500 9px/1 var(--font-sans);letter-spacing:1.6px;text-transform:uppercase;color:#8f8f8f;height:32px;box-sizing:border-box;display:flex;align-items:center;margin-bottom:4px">Effort</div>
+          <sc-for list="{{ pickerEfforts }}" as="pe" hint-placeholder-count="4"><div class="hov-wash" sc-camel-on-mouse-down="{{ pe.pick }}" style="display:flex;align-items:center;gap:10px;height:32px;padding:0 8px 0 10px;border-radius:6px;cursor:pointer;font:{{ pe.weight }} 13px/1 var(--font-sans);color:#171717"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ pe.name }}</span><span style="flex:none;width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;box-sizing:border-box;border:{{ pe.border }};background:{{ pe.bg }};color:#fff;font:600 10px/1 var(--font-sans)">{{ pe.mark }}</span></div></sc-for>
+        </div>
+      </div>
+    </sc-if>
+  </div>
+</div>
+</sc-if>
+</x-dc>
+<script type="text/x-dc" data-dc-script="" data-props="{&quot;open&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;provider&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;claude&quot;,&quot;codex&quot;],&quot;default&quot;:&quot;claude&quot;,&quot;tsType&quot;:&quot;'claude' | 'codex'&quot;},&quot;onSend&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;(x: { agent: string, model: string, effort: string, prompt: string }) =&gt; void&quot;},&quot;onClose&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;() =&gt; void&quot;}}">
+class Component extends DCLogic {
+  chatEl = null;
+  chatRef = (el) => { this.chatEl = el; };
+  scrollDown() { setTimeout(() => { const el = this.chatEl; if (el) el.scrollTop = el.scrollHeight; }, 60); }
+  freshChat() { return { msgs: [], i: 0, thinking: false, draft: '', decisions: {}, extra: [] }; }
+  fresh() {
+    const codex = this.props.provider === 'codex';
+    return { step: 'choose', pick: { provider: codex ? 'codex' : 'claude', model: codex ? 'sol' : 'opus', effort: 'high' }, pickerOpen: false, providerList: false, custom: '', range: '6mo', picks: { notes: true, transcripts: false, chats: true, sites: true, papers: true, code: true }, apps: { notes: { Obsidian: true, Notion: true }, transcripts: { Granola: true }, papers: { Zotero: true, Overleaf: true }, code: { hypocompass: true }, chats: { ChatGPT: true, Claude: true, 'Claude Code': true } }, folder: '', open: { notes: true }, computer: true, repos: ['hypocompass', 'engelbart-canvas', 'claude-plugins'], codeFolders: [], chat: this.freshChat(), closed: false, error: '', tick: 0 };
+  }
+  state = this.fresh();
+  componentDidUpdate(prev) {
+    if (prev && ((prev.open !== this.props.open && this.props.open) || prev.provider !== this.props.provider)) { this.setState(this.fresh()); return; }
+    const c = this.state.chat;
+    if (c.msgs.length !== this._lastLen || c.thinking !== this._lastThinking) { this._lastLen = c.msgs.length; this._lastThinking = c.thinking; this.scrollDown(); }
+  }
+  componentWillUnmount() { clearInterval(this.iv); clearTimeout(this.tt); }
+  data() {
+    const s = this.state, tool = s.pick.provider === 'codex' ? 'Codex' : 'Claude Code';
+    const ri = { '30d': 0, '6mo': 1, all: 2 }[s.range];
+    const APPS = {
+      notes: ['Obsidian', 'Notion', 'Apple Notes', 'OneNote', 'Google Docs', 'Evernote'],
+      transcripts: ['Granola', 'Google Meet', 'Zoom'],
+      papers: ['Zotero', 'Overleaf'],
+      code: s.repos,
+      chats: ['ChatGPT', 'Codex', 'Claude', 'Claude Code', 'Grok', 'Gemini', 'Perplexity', 'Cursor'],
+    };
+    const appsOf = (id) => { const all = APPS[id] || []; const sel = all.filter((a) => s.apps[id] && s.apps[id][a]); return sel.length ? sel : all; };
+    const list = (xs) => xs.length <= 2 ? xs.join(' and ') : xs.slice(0, -1).join(', ') + ' and ' + xs[xs.length - 1];
+    const SRC = [
+      ['notes', 'Notes', [9, 38, 120], `Notes — from ${list(appsOf('notes'))}. Attach a note to the paper, repo or project it is about instead of adding it alone.`],
+      ['transcripts', 'Meeting transcripts', [4, 22, 60], `Meeting transcripts — from ${list(appsOf('transcripts'))}. Add a three-line summary of each and link it to the project discussed.`],
+      ['chats', 'AI chats', [12, 54, 140], `AI chats — conversations in ${list(appsOf('chats'))}. Add the goal of each as a note on the project it was about.`],
+      ['sites', 'Websites', [25, 25, 25], 'Frequent websites — the 25 sites I visit most in my Chrome history. One entry per site, not per page.'],
+      ['papers', 'Papers', [12, 64, 142], `Research papers — from ${list(appsOf('papers'))}${s.folder ? ` and every PDF in ${s.folder}` : ''}. Read title, authors, year and DOI or arXiv id from each; link each Overleaf project to its paper when titles match.`],
+      ['code', 'Code', [1, 3, 5], `Code — the GitHub repos ${list(appsOf('code'))}${s.codeFolders.length ? ` and the local repos in ${list(s.codeFolders)}` : ''}. Use each README's first paragraph as the summary and link a repo to the paper it implements.`],
+    ];
+    const n = (id) => SRC.find((r) => r[0] === id)[2][ri];
+    const Q = {
+      notes: { look: `Reading ${list(appsOf('notes'))}…`, text: `${n('notes')} notes across ${list(appsOf('notes'))}. About a third are daily logs or meeting notes. Include those?`, chips: ['Attach to their project', 'Only ones with decisions', 'Leave them out'] },
+      transcripts: { look: `Opening ${list(appsOf('transcripts'))}…`, text: `${n('transcripts')} transcripts. Many are 1:1s and standups. Which should come in?`, chips: ['Only research meetings', 'All of them', 'Summaries only'] },
+      chats: { look: `Reading your chats in ${list(appsOf('chats'))}…`, text: `${n('chats')} conversations across ${list(appsOf('chats'))}. Most are one-off questions. Which should become notes?`, chips: ['Only goal-directed ones', 'All of them', 'None'] },
+      sites: { look: 'Going through your Chrome history…', text: 'Your top 25 sites include tools as well as reading — Gmail, Calendar, Canvas, X. Leave those out?', chips: ['Leave out Gmail and Calendar', 'Leave out all the tools', 'Keep everything'] },
+      papers: { look: `Reading ${s.folder || '~/Zotero and ~/Downloads'}…`, text: `I found ${n('papers')} PDFs${s.folder ? ' in ' + s.folder : ''}. About ${Math.round(n('papers') * 0.3)} look like course readings, not research. Keep those?`, chips: ['Keep them all', 'Only ones I highlighted', 'Leave them out'] },
+      code: { look: 'Reading your repositories…', text: `${list(appsOf('code'))}${s.codeFolders.length ? ' plus ' + s.codeFolders.length + ' local folder' + (s.codeFolders.length > 1 ? 's' : '') : ''}. Should I import notebooks and data folders too, or just the code and README?`, chips: ['Code and README only', 'Include notebooks', 'Everything'] },
+    };
+    const on = SRC.filter(([id]) => s.picks[id]);
+    return { tool, ri, SRC, n, Q, on, APPS, qs: on.map(([id, label]) => ({ id, label, ...Q[id] })) };
+  }
+  ask(i) {
+    const { qs } = this.data();
+    const q = qs[i];
+    const msg = q ? { role: 'a', text: q.text, chips: q.chips, qid: q.id } : { role: 'a', text: 'That’s everything. Hit Import when you’re ready, or tell me anything else to change.', chips: ['Tag everything with the project name', 'Skip anything before 2020'] };
+    this.setState((s) => ({ chat: { ...s.chat, thinking: true } }));
+    clearTimeout(this.tt);
+    this.tt = setTimeout(() => this.setState((s) => ({ chat: { ...s.chat, thinking: false, i, msgs: [...s.chat.msgs, msg] } })), 1000);
+  }
+  reply(text) {
+    const t = String(text || '').trim(); if (!t || this.state.chat.thinking) return;
+    const c = this.state.chat, { qs } = this.data();
+    const last = c.msgs[c.msgs.length - 1];
+    const msgs = [...c.msgs.map((m) => ({ ...m, chips: null })), { role: 'u', text: t }];
+    if (last && last.qid) {
+      this.setState({ chat: { ...c, msgs, draft: '', decisions: { ...c.decisions, [last.qid]: t } } });
+      this.ask(c.i + 1);
+    } else {
+      this.setState({ chat: { ...c, msgs, draft: '', extra: [...c.extra, t] } });
+      clearTimeout(this.tt);
+      this.setState((s) => ({ chat: { ...s.chat, thinking: true } }));
+      this.tt = setTimeout(() => this.setState((s) => ({ chat: { ...s.chat, thinking: false, msgs: [...s.chat.msgs, { role: 'a', text: 'Noted — I’ll do that too.' }] } })), 800);
+    }
+  }
+  renderVals() {
+    const s = this.state, p = this.props, c = s.chat;
+    const open = p.open ?? true;
+    const close = () => { clearInterval(this.iv); clearTimeout(this.tt); this.setState({ closed: true }); if (p.onClose) p.onClose(); };
+    const { tool, ri, SRC, Q, on, qs, APPS } = this.data();
+    const MODELS = { claude: [['sonnet', 'Sonnet'], ['opus', 'Opus'], ['fable', 'Fable']], codex: [['sol', 'Sol'], ['luna', 'Luna'], ['astra', 'Astra']] };
+    const EFF = [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max']];
+    const mark = (sel) => ({ mark: sel ? '✓' : '', border: sel ? '0' : '1.5px solid #c9c9c9', bg: sel ? '#171717' : 'transparent', weight: sel ? 500 : 400 });
+    const pk = s.pick, models = MODELS[pk.provider];
+    const modelName = (models.find((m) => m[0] === pk.model) || models[0])[1], effName = EFF.find((e) => e[0] === pk.effort)[1];
+    const decisions = qs.filter((q) => c.decisions[q.id]).map((q) => `${q.label} — ${c.decisions[q.id]}`);
+    const prompt = [
+      'Import my research into my Engelbart library.', '',
+      'Use the `bart` CLI — run `bart library --help` first. For each item, add a title, a link or local path, and a one-line summary of what it is. Skip anything already in the library.', '',
+      'Import:', ...on.map((r, i) => `${i + 1}. ${r[3]}`), '',
+      ...(decisions.length || c.extra.length ? ['From our chat:', ...decisions.map((d) => `- ${d}`), ...c.extra.map((d) => `- ${d}`), ''] : []),
+      ...(s.custom.trim() ? ['Also: ' + s.custom.trim(), ''] : []),
+      s.computer ? 'You may use my computer — open apps, read local files and use my signed-in browser — to reach these sources.' : 'Don’t control my computer; only read files and use APIs or CLIs.',
+      'Only include things created, opened or changed in the last 6 months.',
+      'Don’t ask me to confirm each item. When you’re done, reply with how many items you added from each source and anything you couldn’t read.',
+    ].join('\n');
+    const R = (k, u) => (window.__resources && window.__resources[k]) || u;
+    const LOGOS = { Obsidian: R('logo_obsidian', 'design/assets/logos/obsidian.svg'), Notion: R('logo_notion', 'design/assets/logos/notion.svg'), 'Apple Notes': R('logo_apple', 'design/assets/logos/apple.svg'), OneNote: R('logo_microsoft_onenote', 'design/assets/logos/microsoft-onenote.svg'), Zotero: R('logo_zotero', 'design/assets/logos/zotero.svg'), Overleaf: R('logo_overleaf', 'design/assets/logos/overleaf.svg'), 'Google Docs': R('logo_googledocs', 'design/assets/logos/googledocs.svg'), Evernote: R('logo_evernote', 'design/assets/logos/evernote.svg'),
+      Granola: R('logo_granola_light', 'design/assets/logos/granola-light.svg'), 'Google Meet': R('logo_google_meet', 'design/assets/logos/google-meet.svg'), Zoom: R('logo_zoom', 'design/assets/logos/zoom.svg'),
+      ChatGPT: R('logo_openai', 'design/assets/logos/openai.svg'), Codex: R('logo_codex_light', 'design/assets/logos/codex_light.svg'), Claude: R('logo_claude_ai_icon', 'design/assets/logos/claude-ai-icon.svg'), 'Claude Code': R('logo_claude_ai_icon', 'design/assets/logos/claude-ai-icon.svg'), Grok: R('logo_grok_light', 'design/assets/logos/grok-light.svg'), Gemini: R('logo_gemini', 'design/assets/logos/gemini.svg'), Perplexity: R('logo_perplexity', 'design/assets/logos/perplexity.svg'), Cursor: R('logo_cursor_light', 'design/assets/logos/cursor_light.svg') };
+    const logoUrl = (name) => LOGOS[name] || (s.repos.includes(name) ? R('logo_github', 'design/assets/logos/github.svg') : '');
+    const src = {};
+    const ck = (on) => ({ pressed: on ? 'true' : 'false', bg: on ? '#171717' : '#fff', border: on ? '0' : '1.5px solid #c9c9c9', mark: on ? '✓' : '' });
+    SRC.forEach(([id]) => {
+      const t = !!s.picks[id], all = APPS[id] || [], sel = all.filter((a) => s.apps[id] && s.apps[id][a]), opn = !!(s.open || {})[id];
+      src[id] = { ...ck(t), open: opn && id !== 'sites', expanded: opn ? 'true' : 'false', caret: opn ? '90deg' : '0deg', ic: t ? '#171717' : '#8f8f8f', rowBg: 'transparent',
+        sub: !t ? '' : id === 'code' ? `${sel.length || all.length} repo${(sel.length || all.length) === 1 ? '' : 's'}${s.codeFolders.length ? ` · ${s.codeFolders.length} folder${s.codeFolders.length > 1 ? 's' : ''}` : ''}` : all.length ? (sel.length && sel.length < all.length ? `${sel.length} of ${all.length}` : 'All') : '',
+        toggle: (e) => { e.stopPropagation(); this.setState((st) => ({ picks: { ...st.picks, [id]: !st.picks[id] }, error: '' })); },
+        expand: () => id === 'sites' ? this.setState((st) => ({ picks: { ...st.picks, sites: !st.picks.sites } })) : this.setState((st) => ({ open: { ...st.open, [id]: !(st.open || {})[id] } })),
+        apps: all.map((name) => { const on2 = t && sel.includes(name); return { name, logoBg: `url(${logoUrl(name)})`, ...ck(on2), fg: on2 ? '#171717' : '#4d4d4d',
+          toggle: () => this.setState((st) => { const cur = { ...(st.apps[id] || {}) }; const was = !!st.picks[id] && !!cur[name]; cur[name] = !was; const any = Object.values(cur).some(Boolean); return { apps: { ...st.apps, [id]: cur }, picks: { ...st.picks, [id]: any } }; }) }; }) };
+    });
+    const allOn = SRC.every(([id]) => s.picks[id]);
+    const sChoose = s.step === 'choose', sChat = s.step === 'chat', sSent = s.step === 'sent';
+    const ready = on.length > 0, hasDraft = !!c.draft.trim();
+    return {
+      shown: open && !s.closed, close, bg: (e) => { if (e.target === e.currentTarget) close(); },
+      boxDown: (e) => { if (s.pickerOpen && !(e.target.closest && e.target.closest('[data-bart-picker], .bart-chip'))) this.setState({ pickerOpen: false, providerList: false }); },
+      stop: () => {},
+      modalW: sChat ? '600px' : '520px', modalH: sChat ? '640px' : 'auto',
+      sChoose, sChat, sSent, chatRef: this.chatRef, src, error: s.error,
+      computerPressed: s.computer ? 'true' : 'false', computerBg: s.computer ? '#171717' : '#fff', computerBorder: s.computer ? '0' : '1.5px solid #c9c9c9', computerMark: s.computer ? '✓' : '', toggleComputer: () => this.setState({ computer: !s.computer }),
+      allLabel: allOn ? 'Clear' : 'Select all', toggleAll: () => this.setState({ picks: Object.fromEntries(SRC.map(([id]) => [id, !allOn])) }),
+      codeFolders: s.codeFolders.map((path) => ({ path, remove: (e) => { e.stopPropagation(); this.setState((st) => ({ codeFolders: st.codeFolders.filter((x) => x !== path) })); } })),
+      addCodeFolder: () => this.setState((st) => { const opts = ['~/code/tutor-eval', '~/code/scratch', '~/Desktop/prototype']; const next = opts.find((o) => !st.codeFolders.includes(o)); return next ? { codeFolders: [...st.codeFolders, next], picks: { ...st.picks, code: true } } : null; }),
+      addRepo: () => this.setState((st) => { const opts = ['berkeley-ui', 'compact-focus', 'trajectory-viz']; const next = opts.find((o) => !st.repos.includes(o)); return next ? { repos: [...st.repos, next], apps: { ...st.apps, code: { ...(st.apps.code || {}), [next]: true } }, picks: { ...st.picks, code: true } } : null; }),
+      folder: s.folder, noFolder: !s.folder, pickFolder: () => this.setState({ folder: '~/Research/Papers' }), clearFolder: (e) => { e.stopPropagation(); this.setState({ folder: '' }); },
+      targetName: tool, modelLabel: sChat ? `${modelName} ${effName}` : modelName,
+      custom: s.custom, onCustom: (e) => this.setState({ custom: e.target.value }),
+      startBg: ready ? '#0070f3' : '#f2f2f2', startFg: ready ? '#fff' : '#8f8f8f',
+      start: (e) => {
+        if (e && e.stopPropagation) e.stopPropagation();
+        if (!ready) { this.setState({ error: 'Pick at least one source.' }); return; }
+        this.setState({ step: 'chat', error: '', pickerOpen: false, chat: this.freshChat() });
+        this.ask(0);
+      },
+      back: () => { clearTimeout(this.tt); this.setState({ step: 'choose', chat: this.freshChat(), pickerOpen: false }); },
+      msgs: c.msgs.map((m) => ({ agent: m.role === 'a', user: m.role === 'u', text: m.text, hasChips: !!(m.chips && m.chips.length), chips: (m.chips || []).map((label) => ({ label, send: () => this.reply(label) })) })),
+      thinking: sChat && c.thinking, thinkingLabel: (qs[c.msgs.length ? c.i + 1 : 0] || {}).look || 'Thinking…',
+      draft: c.draft, onDraft: (e) => { const v = e.target.value; this.setState((st) => ({ chat: { ...st.chat, draft: v } })); },
+      onDraftKey: (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.reply(c.draft); } },
+      sendDraft: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.reply(c.draft); },
+      sendBg: hasDraft ? '#0070f3' : '#f2f2f2', sendFg: hasDraft ? '#fff' : '#8f8f8f',
+      pickerOn: s.pickerOpen && !sSent, pickerBottom: sChat ? '76px' : '58px',
+      togglePicker: () => this.setState({ pickerOpen: !s.pickerOpen, providerList: false }),
+      toggleProviderList: () => this.setState({ providerList: !s.providerList }),
+      providers: [['claude', 'Claude Code'], ['codex', 'Codex']].map(([id, name]) => ({ name, ...mark(pk.provider === id), pick: (e) => { e.preventDefault(); this.setState({ providerList: false, pick: { ...pk, provider: id, model: MODELS[id][id === 'codex' ? 0 : 1][0] } }); } })),
+      pickerModels: models.map(([id, name]) => ({ name, ...mark(pk.model === id), pick: (e) => { e.preventDefault(); this.setState({ pick: { ...pk, model: id } }); } })),
+      pickerEfforts: EFF.map(([id, name]) => ({ name, ...mark(pk.effort === id), pick: (e) => { e.preventDefault(); this.setState({ pick: { ...pk, effort: id } }); } })),
+      send: () => {
+        if (p.onSend) p.onSend({ agent: pk.provider, model: pk.model, effort: pk.effort, prompt });
+        clearTimeout(this.tt);
+        this.setState({ step: 'sent', tick: 0, pickerOpen: false, sentIds: on.map((r) => r[0]), sentCounts: on.map((r) => r[2][ri]) });
+        clearInterval(this.iv); this.iv = setInterval(() => this.setState((st) => ({ tick: st.tick + 1 })), 900);
+      },
+      progress: (s.sentIds || []).map((id, i) => {
+        const r = SRC.find((x) => x[0] === id), cnt = s.sentCounts[i];
+        const doneAt = 2 + i * 2, st = s.tick >= doneAt ? 'done' : s.tick >= doneAt - 2 ? 'run' : 'wait';
+        return { label: r[1], status: st === 'done' ? `✓ ${cnt} added` : st === 'run' ? 'importing…' : 'queued', color: st === 'done' ? '#171717' : '#8f8f8f' };
+      }),
+    };
+  }
+}
+</script>
+
+
+

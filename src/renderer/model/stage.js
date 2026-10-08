@@ -4,23 +4,175 @@
 
 import { kindLabel, isNote } from './kind.js';
 import { looksAddable } from './rail.js';
+import { kindOf } from './address.js';
+import { addressKey } from '../../shared/address-key.cjs';
 
 /** The most tabs the Stage holds; past it, what is opened takes the place of the tab in front (Hudson, 2026-09-23). */
 export const MAX_TABS = 15;
 
-/** How one address is spelled for "is it open already": http or https, www. or not, a trailing slash, a #fragment. */
-export function addressKey(value) {
-  const v = String(value || '').trim();
-  if (!v || v === 'about:blank') return '';
-  let u;
-  try { u = new URL(v); } catch { return v; }
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') return u.href.replace(/#.*$/, '');
-  return `${u.host.toLowerCase().replace(/^www\./, '')}${u.pathname.replace(/\/+$/, '')}${u.search}`;
+/** How one address is spelled for "is it open already": http or https, www. or not, a trailing slash, a #fragment (shared with main). */
+export { addressKey };
+
+/**
+ * A link's target (2026-09-30, @discover's guide): the address, and the passage to find there, from a `#find=` fragment of
+ * percent-encoded words (`https://arxiv.org/pdf/2312.10893#find=We%20argue%20that`), and where its section ends, from
+ * `&to=` (round 2: the first words of the section after it). → { address, find, to }; `find` and `to` are '' when there
+ * is none, and without `find` the address is the link as it came: any other fragment (#page=3, #section) stays on it.
+ * Each value is decoded after the split, so an `&` in the words is `%26`. A path keeps its percent-encoding off
+ * (`/Users/me/My%20Paper.pdf` is the file with a space), so it matches the library.
+ */
+export function splitTarget(href) {
+  const link = String(href == null ? '' : href).trim();
+  const hash = link.indexOf('#');
+  const fragment = hash >= 0 ? link.slice(hash + 1) : '';
+  const m = fragment.match(/^find=([\s\S]*?)&to=([^&]*)$/) || fragment.match(/^find=([\s\S]*)$/);
+  if (!m) return { address: link, find: '', to: '' };
+  const words = (value) => {
+    let out;
+    try { out = decodeURIComponent(value || ''); } catch { out = value || ''; }
+    return out.replace(/\s+/g, ' ').trim();
+  };
+  let address = link.slice(0, hash);
+  if (/^(?:\/|~\/)/.test(address) && /%[0-9a-f]{2}/i.test(address)) { try { address = decodeURIComponent(address); } catch { /* as written */ } }
+  return { address, find: words(m[1]), to: words(m[2]) };
 }
 
-/** What a tab is for "is it open already": the library row it shows, else where it is; a blank tab is nothing. */
+// A link in an answer line as the editor draws one (model/doc.js INLINE): `[text](href)`, inside bold or not; code is not a link.
+const GUIDE_LINK_RE = /\[([^\]\n]+)\]\(([^)\s]+)\)/g;
+
+/**
+ * The sections an @discover guide suggests for one paper (2026-10-03): every link with a passage (#find=) to `address` in
+ * the reply `replyLines` (its lines' text, after `bart> `), in the order they come, each passage once →
+ * [{ label, find, to }], `label` the link's text ("3.2 Design Goals"). The paper's title link has no passage: not a section.
+ */
+export function guideSections(replyLines, address) {
+  const where = String(address || '').trim();
+  const out = [], seen = new Set();
+  if (!where) return out;
+  for (const line of replyLines || []) {
+    const text = String(line == null ? '' : line).replace(/`[^`\n]+`/g, '');
+    for (const m of text.matchAll(GUIDE_LINK_RE)) {
+      const target = splitTarget(m[2]);
+      if (!target.find || target.address !== where) continue;
+      const key = `${target.find}\n${target.to}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ label: m[1].replace(/\s+/g, ' ').trim(), find: target.find, to: target.to });
+    }
+  }
+  return out;
+}
+
+/** Which of a tab's sections a passage is the start of (-1: none). */
+export function sectionAt(sections, find, to) {
+  return (sections || []).findIndex((s) => s.find === find && (s.to || '') === (to || ''));
+}
+
+/**
+ * A tab a link's passage goes to (Stage claim): it waits there as `pendingFind` / `pendingTo` until what the tab shows is
+ * ready. The sections an @discover guide gave with it (guideSections, 2026-10-03) replace the tab's, the clicked one in
+ * front (`activeSection`); a passage from anywhere else leaves the tab none. No passage: the tab as it was.
+ */
+export function withPassage(tab, find, to, sections) {
+  if (!find) return tab;
+  const list = Array.isArray(sections) ? sections : [];
+  return { ...tab, pendingFind: find, pendingTo: to || null, sections: list, activeSection: sectionAt(list, find, to) };
+}
+
+/** A tab whose passage was found (Stage landed): it waits no longer, and the section it starts is the one in front. */
+export function landTab(tab, find) {
+  if (!tab || tab.pendingFind !== find) return tab;
+  const sections = tab.sections || [];
+  return { ...tab, pendingFind: null, pendingTo: null, activeSection: sections.length ? sectionAt(sections, find, tab.pendingTo) : -1 };
+}
+
+/**
+ * Whether a link's passage, found in a pdf, opens the find card with its words: yes, as ever, except in one an
+ * @discover guide's sections came with (2026-10-03), where the Sections menu shows what was found instead. (A page or a
+ * drawn file never opens it: Stage land, 2026-10-03.)
+ */
+export const landingFinds = (tab) => !(tab && tab.pdf && tab.sections && tab.sections.length);
+
+/** The library row a link's address is: one the Stage shows whose path (or file: address) or url is that address. */
+export function rowForAddress(library, address) {
+  const where = String(address || '').trim();
+  if (!where) return null;
+  let path = null;
+  if (/^file:\/\//i.test(where)) { try { path = decodeURIComponent(new URL(where).pathname); } catch { path = null; } } else if (where.startsWith('/')) path = where;
+  const key = /^https?:\/\//i.test(where) ? addressKey(where) : '';
+  return (library || []).find((row) => onStage(row) && ((path && row.path === path) || (key && row.url && addressKey(row.url) === key))) || null;
+}
+
+// A paper's address as the library spells it (main/store/library.cjs resolveAddition): an arXiv pdf, a version or a
+// .pdf is the paper's abstract page, a DOI is doi.org's. Anything else is as it came.
+const ARXIV_RE = /^(?:arxiv:\s*|https?:\/\/(?:www\.)?arxiv\.org\/(?:abs|pdf)\/)?(\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?\/?$/i;
+const DOI_RE = /^(?:doi:\s*|https?:\/\/(?:dx\.)?doi\.org\/)?(10\.\d{4,9}\/\S+)$/i;
+export function libraryAddress(address) {
+  const where = String(address || '').trim();
+  let m;
+  if ((m = where.match(ARXIV_RE))) return `https://arxiv.org/abs/${m[1]}`;
+  if ((m = where.match(DOI_RE))) return `https://doi.org/${m[1]}`;
+  return where;
+}
+
+/**
+ * The library row a paper's address is (2026-10-02, an @discover guide's title): rowForAddress, and else the row the
+ * library made for it, which spells an arXiv pdf as its abstract page (`arxiv.org/pdf/2205.04561` is the row of
+ * `arxiv.org/abs/2205.04561`).
+ */
+export function paperRow(library, address) {
+  const spelled = libraryAddress(address);
+  return rowForAddress(library, address) || (spelled !== String(address || '').trim() ? rowForAddress(library, spelled) : null);
+}
+
+/** A page's save button, by where the page is: not in the library, in it but not this workspace, here. The Stage's address and an @discover guide's titles (2026-10-02). */
+export const SAVE_LABEL = { none: '+ Save', lib: '+ Workspace', here: '✓' };
+
+/**
+ * Whether Save keeps the page in front as a copy (MATH-17): a page from the web in a tab's view (`page`, what the Stage
+ * hands up: its `tabId` and `webPage`) whose address the library takes for a plain page (`found`, lookupItem's: a
+ * website with no tags). A repository (`git`) and a paper (`paper`) are added by their address, as before.
+ */
+export const savesPageCopy = (page, found) => !!(page && page.webPage && page.tabId && !page.bytes && found && found.type === 'website' && Array.isArray(found.tags) && !found.tags.length);
+
+const fileAddress = (file) => `file://${String(file).split('/').map(encodeURIComponent).join('/')}`;
+
+/**
+ * Where a link opens (Stage.openInput) → { address, find, to, row, key }. A link with a passage to a library row opens that
+ * row, ink and all; otherwise the address does. `key` is the tab it comes forward in when that is open already (tabKey;
+ * '' always takes a tab of its own, as a path did before passages): a page by its address, a row by its id, and with a
+ * passage a file by its path too.
+ * A passage in an arXiv pdf opens the paper's row once the library keeps its copy (2026-10-02: a paper saved from its
+ * guide reads offline); while the row is still its abstract page, the pdf's address opens, as before.
+ */
+export function linkPlan(href, library) {
+  const { address, find, to } = splitTarget(href);
+  const kept = find ? paperRow(library, address) : null;
+  const row = find ? rowForAddress(library, address) || (kept && kept.type === 'pdf' && kept.path ? kept : null) : null;
+  if (row) return { address, find, to, row, key: `i:${row.id}` };
+  const k = kindOf(address);
+  const page = k.kind === 'web' || k.kind === 'local' || k.kind === 'disk';
+  let key = page && !/^file:/i.test(address) ? `l:${addressKey(k.url)}` : '';
+  if (!key && find && address.startsWith('/')) key = `l:${addressKey(fileAddress(address))}`;
+  return { address, find, to, row: null, key };
+}
+
+/** A kept tab's key (stageSnapshot's `{ item }` or `{ address }`): a path is spelled as a file: address, as a file's tab is. */
+function keptKey(entry) {
+  if (!entry) return '';
+  if (entry.item) return `i:${entry.item}`;
+  const where = String(entry.address || '');
+  const key = addressKey(where.startsWith('/') ? `file://${where}` : where);
+  return key ? `l:${key}` : '';
+}
+
+/**
+ * What a tab is for "is it open already": the library row it shows, else where it is; a blank tab is nothing. A tab given
+ * back after ⌘R or a relaunch and not shown yet (`restore`, MATH-10) is what it will show.
+ */
 export function tabKey(tab) {
   if (!tab) return '';
+  if (tab.restore) return keptKey(tab.restore);
   if (tab.item) return `i:${tab.item}`;
   const where = tab.file && tab.file.path ? `file://${tab.file.path}` : tab.pdf ? tab.pdf.url : tab.url;
   const key = addressKey(where);
@@ -29,17 +181,120 @@ export function tabKey(tab) {
 
 /**
  * Where something being opened goes (the design's openInStage): the tab that already shows it comes forward; a blank tab
- * in front is used; at MAX_TABS the tab in front is replaced; otherwise a new tab at the end.
+ * in front is used; at MAX_TABS the tab in front is replaced; otherwise a new tab at the end. `newTab` (a ⌘-click on a
+ * link): a tab of its own even when one already shows it, still the blank tab in front, still at most MAX_TABS.
  * Answers { focus: index } | { replace: index } | { append: true }.
  */
-export function placeTab(tabs, activeIndex, key) {
-  const at = key ? tabs.findIndex((tab) => tabKey(tab) === key) : -1;
+export function placeTab(tabs, activeIndex, key, { newTab = false, also = '' } = {}) {
+  // `also`: another key the same thing may be open under (a library row's address, opened as a page before it was saved).
+  const at = key && !newTab ? tabs.findIndex((tab) => tabKey(tab) === key || (!!also && tabKey(tab) === also)) : -1;
   if (at >= 0) return { focus: at };
   const front = tabs[activeIndex];
   if (front && tabKey(front) === '' && !front.pdf && !front.file && !front.claimed) return { replace: activeIndex }; // `claimed`: something is on its way into it
   if (tabs.length >= MAX_TABS) return { replace: activeIndex };
   return { append: true };
 }
+
+/* ------------------------------------------------------------------ kept across ⌘R and quitting (MATH-10) */
+
+// A place a tab can be opened at again: a page, a local server, a file. Main keeps http, https and file addresses and
+// absolute paths (main/store/projects.cjs cleanStage), never about:; a sandbox: address names nothing to open.
+const REOPENS = new Set(['web', 'local', 'disk', 'file']);
+const reopens = (address) => !!address && address.length <= 2048 && !/^about:/i.test(address)
+  && (/^(https?|file):/i.test(address) || address.startsWith('/')) && REOPENS.has(kindOf(address).kind);
+
+/** What one tab is kept as: `{ item, title }` for a library row, `{ address, title }` for a place; null when it is not kept. */
+function keptTab(tab) {
+  if (!tab || tab.from) return null; // a popup is its page's: a sign-in, a window it opened
+  if (tab.restore) return tab.restore.item ? { item: tab.restore.item, title: tab.restore.title || '' } : { address: tab.restore.address, title: tab.restore.title || '' };
+  if (tab.item) return { item: tab.item, title: (tab.row && tab.row.name) || '' };
+  if (tab.file && (tab.file.kind === 'loading' || tab.file.kind === 'error')) return null;
+  const address = String((tab.pdf ? tab.pdf.input || tab.pdf.url : tab.file && tab.file.path ? tab.file.path : tab.url) || '').trim();
+  if (!reopens(address)) return null;
+  const title = tab.pdf ? tab.pdf.name : tab.file && tab.file.name ? tab.file.name : (tab.web && tab.web.title) || '';
+  return { address, title: String(title || '').slice(0, 200) };
+}
+
+/**
+ * The Stage's tabs as main keeps them (MATH-10): `{ active, tabs }`, each tab a library row `{ item, title }` or a place
+ * `{ address, title }` — a pdf by its input (its address on the web, its path on disk), a file by its path, a page where
+ * it is now (`tab.url` follows the page). Blank tabs, popups and files still loading or that failed are not kept; nor is
+ * anything a tab holds (bytes, ink, sections, a passage, the page's history). A tab given back and not shown yet is kept
+ * as it was given. `active` is the tab in front among those kept (0 when it is not kept).
+ */
+export function stageSnapshot(tabs, activeId) {
+  const list = tabs || [];
+  const front = list.find((t) => t.id === activeId) || list[0];
+  const out = [];
+  let active = 0;
+  for (const tab of list) {
+    const kept = keptTab(tab);
+    if (!kept) continue;
+    if (tab === front) active = out.length;
+    out.push(kept);
+  }
+  return { active, tabs: out };
+}
+
+/** A tab nothing has been opened in: what the Stage starts with, and what ⌘T makes. */
+const untouched = (tab) => !!tab && tabKey(tab) === '' && !tab.pdf && !tab.file && !tab.claimed && !tab.opened && !tab.pendingFind;
+
+/**
+ * The kept tabs given back (Stage, MATH-10) to the tabs open now. `saved` is main's `{ active, tabs }`; `make(entry)` a tab
+ * for a kept entry that is not shown yet. A library row no longer in `library` is gone. What was opened before the kept
+ * tabs came back (a pdf from the all-projects screen, a link) is kept, once: where it was kept, else after the kept ones;
+ * a lone untouched tab gives way. At most MAX_TABS: kept tabs past it are left, never one opened.
+ * → { tabs, front }: `front` the tab to put in front, a kept one, or null to leave the one in front as it is (anything was
+ * opened meanwhile, or nothing came back: then `tabs` is `open` itself).
+ */
+export function restoreTabs(open, saved, library, make) {
+  const now = open || [];
+  const entries = saved && Array.isArray(saved.tabs) ? saved.tabs : [];
+  const lone = now.length === 1 && untouched(now[0]);
+  const kept = lone ? [] : now;
+  const rows = new Set((library || []).filter(onStage).map((row) => row.id));
+  const used = new Set(), keys = new Set();
+  const out = [], made = []; // made: [index in saved.tabs, tab] for the tabs made here
+  entries.forEach((entry, i) => {
+    if (!entry || (entry.item && !rows.has(entry.item))) return;
+    const key = keptKey(entry);
+    if (!key || keys.has(key)) return;
+    keys.add(key);
+    const same = kept.find((t) => !used.has(t.id) && tabKey(t) === key);
+    if (same) { used.add(same.id); out.push(same); return; }
+    const tab = make(entry);
+    out.push(tab);
+    made.push([i, tab]);
+  });
+  for (const t of kept) if (!used.has(t.id)) out.push(t);
+  while (out.length > MAX_TABS) {
+    const last = made.pop(); if (!last) break;
+    out.splice(out.indexOf(last[1]), 1);
+  }
+  if (!made.length) return { tabs: now, front: null }; // nothing new: the tabs as they are
+  if (kept.length) return { tabs: out, front: null };
+  const want = saved && Number.isInteger(saved.active) ? saved.active : 0;
+  const pick = made.find(([i]) => i >= want) || made[made.length - 1];
+  return { tabs: out, front: pick[1].id };
+}
+
+/** How long a preview's first page is waited for, retried every WAKE_RETRY_MS while it fails. */
+export const WAKE_MS = 60_000;
+export const WAKE_RETRY_MS = 3_000;
+
+/**
+ * What a preview's tab shows before its first page (2026-10-04: a sandbox asleep can take seconds, and its first load can
+ * fail while it wakes). `web` the tab's page state (main's browser:state, `drawn` once a page arrived), `since` when this
+ * wait began (0: it begins now), `now`. → 'waking' from the click on (the message; a failed load is retried meanwhile),
+ * 'failed' after WAKE_MS (Couldn't load, Retry), or null: the page as it is (a page drawn once, a tab that is no preview).
+ */
+export function previewWait({ preview, web, since, now }) {
+  if (!preview || (web && web.drawn)) return null;
+  return since && now - since >= WAKE_MS ? 'failed' : 'waking';
+}
+
+/** A sandbox preview's repository in a few words: "manifund" for manifund/manifund; '' when it is not known. */
+export const previewName = (row) => String((row && row.name) || '').split('/').filter(Boolean).pop() || '';
 
 /** Where a tab is closed from, which tab is in front afterwards (the one to its right, else to its left). */
 export function afterClose(count, activeIndex, closedIndex) {
@@ -59,10 +314,10 @@ export function tabPlace(value) {
   return host || v;
 }
 
-/** A library row the Stage can show: anything but a note (notes open in the middle), a pasted image, or a folder that is only a folder. */
+/** A library row the Stage can show: anything but a note (notes open in the middle) or a pasted image. */
 export function onStage(row) {
   if (!row || isNote(row) || row.type === 'workspace' || row.type === 'child') return false;
-  if (row.type === 'folder') return !!row.url; // a repository's folder shows its address
+  if (row.type === 'folder') return !!(row.url || row.folder_path); // a repository's folder shows its address, a plain one itself
   return !!(row.url || row.path);
 }
 

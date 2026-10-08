@@ -16,9 +16,12 @@
 //              installer that says it finished is not believed until the program answers.
 //   update     the same, and a launcher left broken by the update is pointed back at the version that
 //              worked (./install.cjs rollback), when the install keeps one.
+//   sign-out   the CLI's own logout (2026-10-03, Connections), then a check of that tool, so its record says signed out.
 //   use        what a run of a program (an @bart turn, a summary) holds while it runs.
 //   environment  what everything Engelbart starts is given: the folder of Engelbart's own Git while it
-//              stands in for a missing one (./bundled-git.cjs), which ../terminal/launch.cjs puts first on PATH.
+//              stands in for a missing one (./bundled-git.cjs), which ../terminal/launch.cjs puts first on PATH,
+//              and the folders of Claude Code and Codex when the login shell's PATH misses them (a new account:
+//              their installers put them in ~/.local/bin, which a fresh .zshrc does not add), which it puts last.
 //
 // What changes is sent on as a snapshot (`onChange`), which the renderer's dialog draws.
 
@@ -32,17 +35,17 @@ const { markRollback, rollback } = require('./install.cjs');
 const STALE_MS = 10 * 60_000;
 const RETRY_UPDATE_MS = 24 * 60 * 60_000;
 const SIGN_IN_MS = 10 * 60_000;
-const OBSERVED = ['installed', 'version', 'status', 'signedIn', 'path', 'onPath', 'source', 'untested', 'updaterOff', 'checkedAt', 'error'];
+const OBSERVED = ['installed', 'version', 'status', 'signedIn', 'account', 'path', 'onPath', 'source', 'untested', 'updaterOff', 'checkedAt', 'error', 'note'];
 const WORKS = new Set(['ready', 'signed-out']);
 
 const pick = (found) => Object.fromEntries(OBSERVED.filter((key) => Object.hasOwn(found, key)).map((key) => [key, found[key]]));
 
-function createTools({ readTools, writeTools, detect, actions, signInProcess = null, rollbackOptions = {}, installAtLaunch = [], now = () => new Date(), setTimer = setTimeout, clearTimer = clearTimeout, onChange = () => {}, platform = process.platform }) {
+function createTools({ readTools, writeTools, detect, actions, signInProcess = null, signOutProcess = null, rollbackOptions = {}, installAtLaunch = [], now = () => new Date(), setTimer = setTimeout, clearTimer = clearTimeout, onChange = () => {}, platform = process.platform }) {
   // What the checks saw (starting from what the last launch wrote), and what is happening now.
   const disk = () => normalizeTools(readTools());
   const seen = {};
   { const last = disk(); for (const name of TOOL_NAMES) seen[name] = { ...last[name] }; }
-  const busy = {}; // name → { action: 'check' | 'install' | 'update' | 'sign-in', phase?, url? }
+  const busy = {}; // name → { action: 'check' | 'install' | 'update' | 'sign-in' | 'sign-out', phase?, url? }
   const locks = Object.fromEntries(TOOL_NAMES.map((name) => [name, createLock()]));
   const installer = createLock();
   const signIns = new Map();
@@ -228,6 +231,23 @@ function createTools({ readTools, writeTools, detect, actions, signInProcess = n
     return !!run;
   }
 
+  /**
+   * The CLI's own logout, then a check of that tool: the record (and every row) says Not signed in once the CLI does.
+   * → { ok, error }. Not while it signs in or anything else runs for it.
+   */
+  async function signOut(name) {
+    if (!AGENTS.includes(name) || !signOutProcess || !records[name].path) return { ok: false, error: null };
+    if (busy[name] || signIns.has(name)) return { ok: false, error: null };
+    busy[name] = { action: 'sign-out' };
+    emit();
+    let exit = null;
+    try { exit = await signOutProcess(name, records[name].path); } catch (error) { exit = { code: null, output: error.message }; } finally { busy[name] = null; }
+    await check([name]);
+    if (records[name].signedIn !== true) return { ok: true, error: null };
+    const label = REQUIREMENTS[name].name;
+    return { ok: false, error: (exit && exit.output ? `Could not sign out of ${label}: ${exit.output}` : `${label} still says it is signed in.`).slice(0, 300) };
+  }
+
   /** The person's Skip (remembered per tool) and Ask again. */
   function skip(names) {
     const chosen = {};
@@ -269,15 +289,25 @@ function createTools({ readTools, writeTools, detect, actions, signInProcess = n
     return AGENTS.filter((name) => records[name].installed && records[name].status === 'ready');
   }
 
-  /** What every program Engelbart starts gets besides its own environment: ENGELBART_GIT_BIN while Engelbart's own Git stands in. */
+  /**
+   * What every program Engelbart starts gets besides its own environment: ENGELBART_GIT_BIN while Engelbart's own Git
+   * stands in, and ENGELBART_AGENT_PATH (folders, joined by ":") while an agent is installed where PATH does not reach.
+   * ENGELBART_CLAUDE_BIN / ENGELBART_CODEX_BIN: the full path of one whose name runs another copy, or nothing
+   * (2026-09-30): the terminal's Claude Code and Codex items run it by that (../terminal/launch.cjs).
+   */
   function environment() {
+    const out = {};
     const git = records.git;
-    if (git.source !== 'bundled' || git.status !== 'ready' || !git.path) return {};
-    try { if (!fs.existsSync(git.path)) return {}; } catch { return {}; } // the app moved since the last check; the next one finds it
-    return { ENGELBART_GIT_BIN: path.dirname(git.path) };
+    // A path that is gone: the app moved (or the program was removed) since the last check; the next one finds it.
+    const there = (file) => { try { return fs.existsSync(file); } catch { return false; } };
+    if (git.source === 'bundled' && git.status === 'ready' && git.path && there(git.path)) out.ENGELBART_GIT_BIN = path.dirname(git.path);
+    const folders = [...new Set(AGENTS.filter((name) => binaryFor(name) && there(records[name].path)).map((name) => path.dirname(records[name].path)))];
+    if (folders.length) out.ENGELBART_AGENT_PATH = folders.join(':');
+    for (const name of AGENTS) if (binaryFor(name) && there(records[name].path)) out[`ENGELBART_${name.toUpperCase()}_BIN`] = records[name].path;
+    return out;
   }
 
-  /** The full path to run a program by, when the login shell's PATH does not reach it; else null (its name is enough). */
+  /** The full path to run a program by, when its name does not run it (PATH misses it, or reaches another copy first); else null. */
   function binaryFor(name) {
     const record = records[name];
     return record.onPath === false && record.path ? record.path : null;
@@ -296,7 +326,7 @@ function createTools({ readTools, writeTools, detect, actions, signInProcess = n
     ];
   }
 
-  return { start, check, update, install, signIn, cancelSignIn, skip, askAgain, setUpdates, ensure, use, usableAgents, binaryFor, environment, providers, snapshot, canAutoUpdate };
+  return { start, check, update, install, signIn, cancelSignIn, signOut, skip, askAgain, setUpdates, ensure, use, usableAgents, binaryFor, environment, providers, snapshot, canAutoUpdate };
 }
 
 module.exports = { createTools, STALE_MS, RETRY_UPDATE_MS };

@@ -146,11 +146,11 @@ test('createLaunchSpec uses login-interactive shell args and fixed provider comm
 
   const claude = createLaunchSpec({ provider: 'claude', cwd, cols: 80, rows: 24 }, environment);
   assert.equal(claude.file, '/bin/zsh');
-  assert.deepEqual(claude.args.slice(0, 2), ['-ilc', 'unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID CLAUDE_AGENT_ID CLAUDE_PARENT_SESSION_ID CODEX_SESSION_ID CODEX_THREAD_ID CODEX_CI CODEX_VERSION NO_COLOR; claude; provider_status=$?; printf "\\r\\n[Claude Code exited with status %d]\\r\\n" "$provider_status"; exec "$TERMINAL_USER_SHELL" -il']);
+  assert.deepEqual(claude.args.slice(0, 2), ['-ilc', 'unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID CLAUDE_AGENT_ID CLAUDE_PARENT_SESSION_ID CODEX_SESSION_ID CODEX_THREAD_ID CODEX_CI CODEX_VERSION NO_COLOR; if [ -n "${ENGELBART_CLAUDE_BIN:-}" ]; then "$ENGELBART_CLAUDE_BIN"; else claude; fi; provider_status=$?; printf "\\r\\n[Claude Code exited with status %d]\\r\\n" "$provider_status"; exec "$TERMINAL_USER_SHELL" -il']);
   assert.equal(claude.env.TERMINAL_USER_SHELL, '/bin/zsh');
 
   const codex = createLaunchSpec({ provider: 'codex', cwd, cols: 80, rows: 24 }, environment);
-  assert.deepEqual(codex.args.slice(0, 2), ['-ilc', 'unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID CLAUDE_AGENT_ID CLAUDE_PARENT_SESSION_ID CODEX_SESSION_ID CODEX_THREAD_ID CODEX_CI CODEX_VERSION NO_COLOR; codex; provider_status=$?; printf "\\r\\n[Codex exited with status %d]\\r\\n" "$provider_status"; exec "$TERMINAL_USER_SHELL" -il']);
+  assert.deepEqual(codex.args.slice(0, 2), ['-ilc', 'unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID CLAUDE_AGENT_ID CLAUDE_PARENT_SESSION_ID CODEX_SESSION_ID CODEX_THREAD_ID CODEX_CI CODEX_VERSION NO_COLOR; if [ -n "${ENGELBART_CODEX_BIN:-}" ]; then "$ENGELBART_CODEX_BIN"; else codex; fi; provider_status=$?; printf "\\r\\n[Codex exited with status %d]\\r\\n" "$provider_status"; exec "$TERMINAL_USER_SHELL" -il']);
 });
 
 test('an agent started from the terminal gets Engelbart\'s own Git first on PATH while it stands in; bash and fish too (2026-09-28)', (t) => {
@@ -163,6 +163,17 @@ test('an agent started from the terminal gets Engelbart\'s own Git first on PATH
   assert.deepEqual(createLaunchSpec({ provider: 'shell', cwd, cols: 80, rows: 24 }, environment).args, ['-il'], 'a plain zsh gets it from its startup files');
   assert.deepEqual(loginShellArgs('/usr/local/bin/fish', 'codex', environment), ['--login', '--interactive', '--command', 'set -gx PATH $ENGELBART_GIT_BIN $PATH; codex']);
   assert.deepEqual(loginShellArgs('/bin/bash', 'codex', environment), ['-ilc', 'PATH="$ENGELBART_GIT_BIN:$PATH"; codex']);
+});
+
+test('Claude Code and Codex installed where the login shell\'s PATH misses them run by name in the terminal: their folders go last on PATH (2026-09-29)', (t) => {
+  const cwd = temporaryDirectory(t);
+  const environment = { HOME: cwd, SHELL: '/bin/zsh', PATH: '/usr/bin:/bin', ENGELBART_AGENT_PATH: `${cwd}/.local/bin` };
+  const claude = createLaunchSpec({ provider: 'claude', cwd, cols: 80, rows: 24 }, environment);
+  assert.ok(claude.args[1].startsWith('PATH="$PATH:$ENGELBART_AGENT_PATH"; unset CLAUDECODE '), claude.args[1]);
+  assert.equal(claude.env.ENGELBART_AGENT_PATH, environment.ENGELBART_AGENT_PATH);
+  assert.deepEqual(loginShellArgs('/bin/zsh', 'codex', { ...environment, ENGELBART_GIT_BIN: '/git/bin' }), ['-ilc', 'PATH="$ENGELBART_GIT_BIN:$PATH"; PATH="$PATH:$ENGELBART_AGENT_PATH"; codex'], 'Engelbart\'s Git first, the agents last');
+  assert.deepEqual(loginShellArgs('/usr/local/bin/fish', 'codex', environment), ['--login', '--interactive', '--command', 'set -gx PATH $PATH (string split : -- $ENGELBART_AGENT_PATH); codex']);
+  assert.deepEqual(loginShellArgs('/bin/zsh', 'codex', { HOME: cwd }), ['-ilc', 'codex'], 'on PATH already: left as it is');
 });
 
 test('normalizeSettings clamps corrupt persisted values to app-owned defaults', (t) => {

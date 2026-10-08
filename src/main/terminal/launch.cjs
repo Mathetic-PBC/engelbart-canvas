@@ -27,14 +27,16 @@ const TRANSIENT_KEYS = new Set([
 const POSIX_STARTUP_UNSET = 'unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID CLAUDE_AGENT_ID CLAUDE_PARENT_SESSION_ID CODEX_SESSION_ID CODEX_THREAD_ID CODEX_CI CODEX_VERSION NO_COLOR; ';
 const FISH_STARTUP_UNSET = 'set -e CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID CLAUDE_AGENT_ID CLAUDE_PARENT_SESSION_ID CODEX_SESSION_ID CODEX_THREAD_ID CODEX_CI CODEX_VERSION NO_COLOR; ';
 
+// By its full path when its name runs another copy (ENGELBART_CLAUDE_BIN, ../tools/manager.cjs environment: an old one
+// first on PATH, 2026-09-30); else by its name, which also runs an alias of it.
 const ZSH_PROVIDER_SCRIPTS = Object.freeze({
-  claude: `${POSIX_STARTUP_UNSET}claude; provider_status=$?; printf "\\r\\n[Claude Code exited with status %d]\\r\\n" "$provider_status"; exec "$TERMINAL_USER_SHELL" -il`,
-  codex: `${POSIX_STARTUP_UNSET}codex; provider_status=$?; printf "\\r\\n[Codex exited with status %d]\\r\\n" "$provider_status"; exec "$TERMINAL_USER_SHELL" -il`,
+  claude: `${POSIX_STARTUP_UNSET}if [ -n "\${ENGELBART_CLAUDE_BIN:-}" ]; then "$ENGELBART_CLAUDE_BIN"; else claude; fi; provider_status=$?; printf "\\r\\n[Claude Code exited with status %d]\\r\\n" "$provider_status"; exec "$TERMINAL_USER_SHELL" -il`,
+  codex: `${POSIX_STARTUP_UNSET}if [ -n "\${ENGELBART_CODEX_BIN:-}" ]; then "$ENGELBART_CODEX_BIN"; else codex; fi; provider_status=$?; printf "\\r\\n[Codex exited with status %d]\\r\\n" "$provider_status"; exec "$TERMINAL_USER_SHELL" -il`,
 });
 
 const FISH_PROVIDER_SCRIPTS = Object.freeze({
-  claude: `${FISH_STARTUP_UNSET}claude; set provider_status $status; printf "\\r\\n[Claude Code exited with status %d]\\r\\n" $provider_status; exec "$TERMINAL_USER_SHELL" --login --interactive`,
-  codex: `${FISH_STARTUP_UNSET}codex; set provider_status $status; printf "\\r\\n[Codex exited with status %d]\\r\\n" $provider_status; exec "$TERMINAL_USER_SHELL" --login --interactive`,
+  claude: `${FISH_STARTUP_UNSET}if set -q ENGELBART_CLAUDE_BIN; $ENGELBART_CLAUDE_BIN; else; claude; end; set provider_status $status; printf "\\r\\n[Claude Code exited with status %d]\\r\\n" $provider_status; exec "$TERMINAL_USER_SHELL" --login --interactive`,
+  codex: `${FISH_STARTUP_UNSET}if set -q ENGELBART_CODEX_BIN; $ENGELBART_CODEX_BIN; else; codex; end; set provider_status $status; printf "\\r\\n[Codex exited with status %d]\\r\\n" $provider_status; exec "$TERMINAL_USER_SHELL" --login --interactive`,
 });
 
 // Engelbart's own Git, while it stands in for a missing one (../tools/bundled-git.cjs), goes first on PATH for what a
@@ -43,15 +45,23 @@ const FISH_PROVIDER_SCRIPTS = Object.freeze({
 const POSIX_GIT_PATH = 'PATH="$ENGELBART_GIT_BIN:$PATH"; ';
 const FISH_GIT_PATH = 'set -gx PATH $ENGELBART_GIT_BIN $PATH; ';
 
+// Claude Code and Codex where the login shell's PATH does not reach them (../tools/manager.cjs environment: a new account,
+// whose .zshrc never added ~/.local/bin, where their installers put them) go last on PATH, so `claude` and `codex` run
+// by name in the terminal as they do anywhere else, and the person's own copies, when PATH has them, still come first.
+const POSIX_AGENT_PATH = 'PATH="$PATH:$ENGELBART_AGENT_PATH"; ';
+const FISH_AGENT_PATH = 'set -gx PATH $PATH (string split : -- $ENGELBART_AGENT_PATH); ';
+
 const isFish = (shell) => path.basename(shell) === 'fish';
 const gitPathFor = (shell, environment) => (environment && environment.ENGELBART_GIT_BIN ? (isFish(shell) ? FISH_GIT_PATH : POSIX_GIT_PATH) : '');
+const agentPathFor = (shell, environment) => (environment && environment.ENGELBART_AGENT_PATH ? (isFish(shell) ? FISH_AGENT_PATH : POSIX_AGENT_PATH) : '');
 
 /**
  * How `command` runs in the person's login shell, the PATH the terminal has (an app opened from Finder has none
- * worth using). `environment`: what the shell will be started with; ENGELBART_GIT_BIN in it goes first on PATH.
+ * worth using). `environment`: what the shell will be started with; ENGELBART_GIT_BIN in it goes first on PATH,
+ * ENGELBART_AGENT_PATH's folders last.
  */
 function loginShellArgs(shell, command, environment = {}) {
-  const full = `${gitPathFor(shell, environment)}${command}`;
+  const full = `${gitPathFor(shell, environment)}${agentPathFor(shell, environment)}${command}`;
   return isFish(shell) ? ['--login', '--interactive', '--command', full] : ['-ilc', full];
 }
 
@@ -140,7 +150,7 @@ function validateCreateRequest(request) {
 
 function shellArguments(shell, provider, environment = {}) {
   if (provider === 'shell') {
-    return isFish(shell) ? ['--login', '--interactive'] : ['-il']; // zsh's own startup files put Engelbart's Git first (../shell-rc.cjs)
+    return isFish(shell) ? ['--login', '--interactive'] : ['-il']; // zsh's own startup files put Engelbart's Git first and the agents last (../shell-rc.cjs)
   }
   return loginShellArgs(shell, (isFish(shell) ? FISH_PROVIDER_SCRIPTS : ZSH_PROVIDER_SCRIPTS)[provider], environment);
 }

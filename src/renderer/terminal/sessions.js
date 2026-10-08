@@ -18,8 +18,9 @@ import {
   splitUtf8Chunks,
 } from './helpers.cjs';
 import { OPEN_IN_BROWSER } from '../model/address.js';
+import { pdfText } from '../model/paste.js';
 
-const PROVIDER_NAMES = { shell: 'Shell', claude: 'Claude Code', codex: 'Codex' };
+const PROVIDER_NAMES = { shell: 'Shell', claude: 'Claude Code', codex: 'Codex', sandbox: 'Sandbox' };
 const DEFAULT_FONT_SIZE = 12.5;
 
 const THEME = {
@@ -189,6 +190,16 @@ function makeTerminalRecord(snapshot, projectId) {
     event.stopPropagation();
     terminal.clearSelection();
   }, true);
+  // Text copied from a PDF goes to Claude Code, Codex or the shell without the page's layout (MATH-24): its line breaks
+  // and split words come out (model/paste.js). Caught before xterm's own paste handler, which pastes anything else.
+  view.addEventListener('paste', (event) => {
+    const raw = event.clipboardData ? (event.clipboardData.getData('text/plain') || '').replace(/\r/g, '') : '';
+    const text = pdfText(raw);
+    if (!raw || text === raw) return;
+    event.preventDefault();
+    event.stopPropagation();
+    terminal.paste(text);
+  }, true);
   view.addEventListener('focusin', () => {
     if (!record.inputLocked) return;
     terminal.blur();
@@ -323,15 +334,24 @@ export function bootstrap() {
       state.bootstrapComplete = true;
       notify();
     }
-    void api().providers().then((available) => {
-      for (const provider of available) state.providers.set(provider.id, provider);
-      notify();
-    }).catch((error) => {
+    void refreshProviders().catch((error) => {
       pushError(`CLI availability could not be checked: ${errorMessage(error)}`);
     });
+    // Claude Code or Codex installed (or signed in) while the app is open, often in the background at first launch: the
+    // agent menu offers it as soon as the tool check has found it, not at the next launch.
+    const engelbart = window.engelbartAPI;
+    if (engelbart && engelbart.onTools) engelbart.onTools(() => { void refreshProviders().catch(() => {}); });
     return state;
   })();
   return state.bootstrapping;
+}
+
+/** What the agent menu offers, asked of main again (tools/manager.cjs providers). */
+function refreshProviders() {
+  return api().providers().then((available) => {
+    for (const provider of available) state.providers.set(provider.id, provider);
+    notify();
+  });
 }
 
 export function getState() {
@@ -346,6 +366,26 @@ export function subscribe(listener) {
 
 export function sessionsFor(projectId) {
   return [...state.sessions.values()].filter((record) => record.projectId === projectId);
+}
+
+// A session main opened itself (a Build's run step: a terminal program it checked, running in the Build's worktree,
+// src/main/build/run-step.cjs; or a shell in a repository's sandbox, src/main/sandbox/terminals.cjs): the project's from
+// now on, even one this window already had (opened again from another project, or listed at bootstrap with none);
+// SHOW_TERMINAL ({ id }) asks the terminal pane to show it.
+export const SHOW_TERMINAL = 'engelbart:show-terminal';
+export async function adoptSession(snapshot, projectId) {
+  await bootstrap();
+  const known = snapshot && state.sessions.get(snapshot.id);
+  if (known && projectId && known.projectId !== projectId) {
+    known.projectId = projectId;
+    state.projectOf.set(snapshot.id, projectId);
+    notify();
+  }
+  return known || addSession(snapshot, projectId);
+}
+/** A session main closed itself (the Build was accepted or discarded): its tab goes. */
+export function dropSession(id) {
+  removeSession(id);
 }
 
 /** Estimate cols/rows from a stage element before the PTY exists (ET estimateDimensions). */

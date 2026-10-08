@@ -9,7 +9,7 @@ const { pathToFileURL } = require('node:url');
 const db = require('../src/main/store/db.cjs');
 const { ensureHome } = require('../src/main/store/home.cjs');
 const projects = require('../src/main/store/projects.cjs');
-const { INLINE, expandMentions, expandDoc } = require('../src/main/context/expand-mentions.cjs');
+const { INLINE, expandMentions, expandDoc, imagePaths } = require('../src/main/context/expand-mentions.cjs');
 
 /** A library held in memory: notes carry their text, everything else is a row. */
 function sourceOf(rows, images = {}) {
@@ -107,6 +107,20 @@ test('a mention inside code stays text, @bart is not a file, and a mention with 
   assert.equal(result.missing, 1);
 });
 
+test('@brainstorm is a question too, and a card\'s JSON is copied as it stands (2026-09-30)', async () => {
+  const source = sourceOf([note('Plan', 'p')]);
+  const doc = ['@brainstorm about @[Plan]', 'bart> ```json', 'bart> {"card": "focus"}', 'bart> ```', '@brainstorm picked "Plan"'].join('\n');
+  const result = await expand(doc, source);
+  assert.equal(result.text, ['@brainstorm about @[Plan]', '', '<file name="Plan" type="md" tags="note" path="/p/Plan.md">', 'p', '</file>', '', 'bart> ```json', 'bart> {"card": "focus"}', 'bart> ```', '@brainstorm picked "Plan"'].join('\n'));
+  assert.deepEqual('@Brainstorm `@bart` x'.split(INLINE).filter(Boolean), ['@Brainstorm', ' ', '`@bart`', ' x']);
+});
+
+test('@discover is a question too (2026-09-30)', async () => {
+  const doc = '@discover about @[Plan]';
+  const result = await expand(doc, sourceOf([note('Plan', 'p')]));
+  assert.equal(result.text, ['@discover about @[Plan]', '', '<file name="Plan" type="md" tags="note" path="/p/Plan.md">', 'p', '</file>'].join('\n'));
+});
+
 test('a note whose file cannot be read is missing, not empty', async () => {
   const result = await expand('@[Lost]', sourceOf([{ id: 'x', name: 'Lost', type: 'md', tags: ['note'], path: '/p/Lost.md' }]));
   assert.equal(result.text, '@[Lost]\n\n<file name="Lost" type="md" tags="note" path="/p/Lost.md" missing="true" />');
@@ -143,10 +157,45 @@ test('a pasted image becomes the path of its file, inline or on a line of its ow
   assert.equal(result.text, '![Attachment 1](/home/p/assets/a1b2-c3.png)\n- [ ] fix ![Attachment 1](/home/p/assets/a1b2-c3.png) and ![Attachment 2](img:nope)');
 });
 
+test('imagePaths: a question\'s pasted images become the paths of their files, and nothing else changes (2026-10-02)', () => {
+  const source = sourceOf([note('Plan', 'never read')], { 'a1b2-c3': '/home/p/assets/a1b2-c3.png' });
+  assert.equal(imagePaths('--opus what is ![Attachment 2](img:a1b2-c3) showing?', source), '--opus what is ![Attachment 2](/home/p/assets/a1b2-c3.png) showing?');
+  assert.equal(imagePaths('![Attachment 3](img:nope) gone, `![Attachment 2](img:a1b2-c3)` in code, @[Plan] mentioned', source), '![Attachment 3](img:nope) gone, `![Attachment 2](img:a1b2-c3)` in code, @[Plan] mentioned', 'an image that is gone stays as written; code and mentions are untouched');
+  assert.equal(imagePaths('[Attachment 2] typed', source), '[Attachment 2] typed');
+});
+
 test('the inline tokens are the editor\'s own', async () => {
   const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
+  // A library mention by id, `@[Name](lib:<id>)` (MATH-21), and a file in a library folder, `@[Name](lib:<id>:<path>)`
+  // (MATH-22, which a document's @ menu writes), are read here too since MATH-22.
   assert.equal(INLINE.source, model.INLINE.source);
   assert.equal(INLINE.flags, model.INLINE.flags);
+});
+
+test('a library mention is its item by id; a file in a library folder is where it is, its folder mentioned (MATH-22)', async () => {
+  const rows = [{ id: 'r-1', name: 'Renamed Paper', type: 'pdf', tags: ['paper'], path: '/p/paper.pdf' }, { id: 'f-1', name: 'Papers', type: 'folder', tags: [], folder_path: '/home/papers' }];
+  const files = { 'f-1\nsub dir/Smith (2024) #2.pdf': { folder: 'Papers', path: '/home/papers/sub dir/Smith (2024) #2.pdf', exists: true, dir: false, type: 'pdf' } };
+  const source = {
+    ...sourceOf(rows),
+    get: (id) => rows.find((row) => row.id === id) || null,
+    file: (folderId, rel) => files[`${folderId}\n${rel}`] || { folder: 'Papers', path: `/home/papers/${rel}`, exists: false },
+  };
+  const seen = new Set();
+  const result = await expand('See @[Old Name](lib:r-1) and @[Smith (2024) #2.pdf](lib:f-1:sub%20dir/Smith%20%282024%29%20%232.pdf), again @[x](lib:f-1:sub%20dir/Smith%20%282024%29%20%232.pdf).\nGone @[Old.pdf](lib:f-1:Old.pdf)', source, seen);
+  assert.equal(result.text, [
+    'See @[Old Name](lib:r-1) and @[Smith (2024) #2.pdf](lib:f-1:sub%20dir/Smith%20%282024%29%20%232.pdf), again @[x](lib:f-1:sub%20dir/Smith%20%282024%29%20%232.pdf).',
+    '',
+    '<file name="Renamed Paper" type="pdf" tags="paper" path="/p/paper.pdf" />',
+    '',
+    '<file name="Smith (2024) #2.pdf" type="pdf" folder="Papers" path="/home/papers/sub dir/Smith (2024) #2.pdf" />',
+    '',
+    'Gone @[Old.pdf](lib:f-1:Old.pdf)',
+    '',
+    '<file name="Old.pdf" folder="Papers" path="/home/papers/Old.pdf" missing="true" />',
+  ].join('\n'));
+  assert.ok(seen.has('r-1') && seen.has('f-1'), 'the item and the folder are mentioned');
+  assert.ok(seen.has('file:f-1:sub dir/Smith (2024) #2.pdf') && seen.has('file:f-1:Old.pdf'), 'each file once, by its path');
+  assert.deepEqual({ files: result.files, missing: result.missing }, { files: 2, missing: 1 });
 });
 
 /* ------------------------------------------------------------- with the store */

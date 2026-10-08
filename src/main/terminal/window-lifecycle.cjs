@@ -4,14 +4,17 @@ function shouldHideWindowOnClose(platform, quitReady) {
   return platform === 'darwin' && !quitReady;
 }
 
+// One per window (2026-10-03): `scope(id)` names the terminal sessions whose output goes to this window, and only their
+// flow control follows it. Without a scope it is every session's, as when there was one window.
 class RendererLifecycle {
-  constructor(manager) {
+  constructor(manager, scope = null) {
     this.manager = manager;
+    this.scope = scope;
     this.ready = false;
   }
 
   bootstrap(snapshot) {
-    this.manager.attachRenderer();
+    this.manager.attachRenderer(this.scope);
     this.ready = true;
     try {
       return snapshot();
@@ -23,7 +26,7 @@ class RendererLifecycle {
 
   detach() {
     this.ready = false;
-    this.manager.detachRenderer();
+    this.manager.detachRenderer(this.scope);
   }
 
   send(window, channel, payload) {

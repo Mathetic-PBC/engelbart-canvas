@@ -73,7 +73,8 @@ function readContext(project, id) {
 }
 
 /** A message for the conversation: who said it, what, when (cut to a size a record can carry). */
-const message = (role, text, now = new Date()) => ({ role, text: String(text || '').slice(0, MAX_MESSAGE_CHARS), at: now.toISOString() });
+// `images`: a reply's pasted images ([{ n, id }], 2026-09-29), numbered across the Build.
+const message = (role, text, now = new Date(), images = null) => ({ role, text: String(text || '').slice(0, MAX_MESSAGE_CHARS), at: now.toISOString(), ...(images && images.length ? { images } : {}) });
 
 /** What the renderer is sent: the record less nothing it could not show, plus whether it is done with. */
 function publicTask(task) {
@@ -94,7 +95,9 @@ function publicTask(task) {
     escalation: task.escalation || null,
     error: task.error || null,
     queued: task.queued || null,
+    queuedImages: task.queuedImages || null,
     turn: task.turn || 0,
+    target: task.target || null, // the repository it works in ({ kind, id, name }); null for a record from before 2026-09-29
     branch: task.branch,
     baseBranch: task.baseBranch,
     worktree: task.worktree,
@@ -103,7 +106,12 @@ function publicTask(task) {
     checks: task.checks || null,
     conflict: task.conflict || null,
     accepted: task.accepted || null,
+    landing: task.landing || null, // Accept refused and sent to the agent by itself: { attempt } until it runs again (2026-09-29)
     version: task.version || null, // a post-it added to a workspace: the archived version it was put in as ({ file, title })
+    // its last run step (manager.cjs, run-step.cjs): { status, phase, runnables: [{ name, folder, type, status, passed,
+    // install_command, run_command, url, error, sessionId, pid }], error }
+    runStep: task.runStep || null,
+    keptCopy: !!task.keptCopy, // accepted while something ran: its copy stays, detached at what landed, until it is stopped
     created: task.created,
     updated: task.updated,
     final: FINAL.has(task.status),

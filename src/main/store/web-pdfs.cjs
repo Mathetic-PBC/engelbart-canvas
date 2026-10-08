@@ -4,10 +4,12 @@
 // migrated to pdfs. a checker should run on opening engelbart to ensure that this has been done").
 //
 // Before the Stage kept a copy (spec §2 #87), + Save on a pdf from the web made a `website` row: the address only.
-// Each launch (every time a library opens: store.context, not awaited) this checks every page row the library holds
-// against a record of what was already settled, and in the background downloads the ones that turn out to be pdfs,
-// turning each row into a `pdf` with its copy in <data root>/assets/pdfs/<id>.pdf. The row stays the same row — id,
-// name, address, tags, summary — so workspaces, @mentions and ink (kept by id, or by the address) all follow it.
+// Each launch (every time a library opens: store.context, not awaited), and again as soon as a page row is added
+// (store.recheck, 2026-10-02: a paper saved from an @discover guide is kept now, not on the next launch), this checks
+// every page row the library holds against a record of what was already settled, and in the background downloads the
+// ones that turn out to be pdfs, turning each row into a `pdf` with its copy in <data root>/assets/pdfs/<id>.pdf. The
+// row stays the same row — id, name, address, tags, summary — so workspaces, @mentions and ink (kept by id, or by the
+// address) all follow it.
 //
 // Which page rows are pdfs: an address whose path ends in .pdf, an arXiv paper (its pdf is arxiv.org/pdf/<id>: the
 // library already treats the abstract page's row as the paper, and ink drawn on the pdf is on that row), and anything
@@ -106,13 +108,26 @@ async function migrateOne(ctx, c, { fetchPdf, inspectPdf }) {
 }
 
 const running = new Map(); // data root → the run in progress (a library opened twice checks once)
+const following = new Map(); // data root → the run that starts when that one is over (`again`)
 
 /**
  * The checker: reads the record and the library, and when something is pending works through it in the background.
  * `fetchPdf(url)` answers the pdf's bytes, null for something that is not a pdf, or throws. `onChange()` is called
  * after each row that became a pdf. Answers { pending, saved, pages, failed } when the run is over.
+ * `again` (a row was just added, 2026-10-02): a run already at work read the library before that row was there, so one
+ * more run follows it. Every add meanwhile waits for that same run, which has not read the library yet.
  */
-function checkWebPdfs(ctx, { fetchPdf, inspectPdf = null, onChange = () => {}, log = () => {} } = {}) {
+function checkWebPdfs(ctx, { fetchPdf, inspectPdf = null, onChange = () => {}, log = () => {}, again = false } = {}) {
+  if (running.has(ctx.dataRoot) && again) {
+    if (!following.has(ctx.dataRoot)) {
+      const next = running.get(ctx.dataRoot).catch(() => {}).then(() => {
+        following.delete(ctx.dataRoot);
+        return checkWebPdfs(ctx, { fetchPdf, inspectPdf, onChange, log });
+      });
+      following.set(ctx.dataRoot, next);
+    }
+    return following.get(ctx.dataRoot);
+  }
   if (running.has(ctx.dataRoot)) return running.get(ctx.dataRoot);
   const run = (async () => {
     const record = readRecord(ctx);

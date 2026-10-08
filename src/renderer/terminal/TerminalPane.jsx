@@ -8,6 +8,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { api } from '../api.js';
 import { FluidTab, TabCard, TabClose, TabTitle, useTabCard } from '../ui/FluidTab.jsx';
+import { Expand, Collapse } from '../ui/Icons.jsx';
+import { useSandboxTouch } from '../ui/SandboxProgress.jsx';
 import {
   bootstrap,
   clearSession,
@@ -25,6 +27,7 @@ import {
   sendInput,
   sessionsFor,
   setInputLock,
+  SHOW_TERMINAL,
   subscribe,
   unmountView,
 } from './sessions.js';
@@ -34,7 +37,9 @@ const AGENTS = [
   { id: 'claude', label: 'Claude Code' },
   { id: 'codex', label: 'Codex' },
 ];
-const LABEL = Object.fromEntries(AGENTS.map((agent) => [agent.id, agent.label]));
+const LABEL = { ...Object.fromEntries(AGENTS.map((agent) => [agent.id, agent.label])), sandbox: 'Sandbox' };
+// A shell in a repository's E2B sandbox (src/main/sandbox/terminals.cjs): named for its repository, in a directory there.
+const inSandbox = (record) => record.snapshot.provider === 'sandbox';
 const MONO = 'var(--font-mono)';
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
 // Control characters by code, never as literals: editors and tools strip the raw bytes.
@@ -68,7 +73,8 @@ function errorText(error) {
   return error instanceof Error ? error.message : String(error || 'Unknown error');
 }
 
-export default function TerminalPane({ cwd, projectId, visible = true }) {
+// `full` / `onFull`: the right pane's full screen (Workspace.jsx), its button at the end of the tabs as the Stage's is.
+export default function TerminalPane({ cwd, projectId, visible = true, full = false, onFull = null }) {
   useSyncExternalStore(subscribeVersion, getVersion);
   const state = getState();
   const stageRef = useRef(null);
@@ -99,6 +105,16 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
   const agentLabel = LABEL[now.agent] || LABEL.shell;
   const boxIsInput = running && now.integrated && !takeover; // the box owns typing; the transcript is locked
   const showBox = running && !takeover;
+  const conversation = running && now.agent !== 'shell'; // Claude Code, Codex or a sandbox's shell: the program is the whole tab
+  // A sandbox's shell in front of a focused window is in use: its sandbox stays awake (it sleeps 10 minutes after).
+  useSandboxTouch(visible && current && inSandbox(current) && running ? current.snapshot.libraryId || null : null);
+
+  // A session main opened for this project (a Build's terminal program) is the one shown.
+  useEffect(() => {
+    const show = (event) => { const id = event.detail && event.detail.id; if (id && sessionsFor(projectId).some((record) => record.snapshot.id === id)) setActiveId(id); };
+    window.addEventListener(SHOW_TERMINAL, show);
+    return () => window.removeEventListener(SHOW_TERMINAL, show);
+  }, [projectId]);
 
   // Bootstrap once; start one shell in the project directory when this project has none.
   useEffect(() => {
@@ -172,13 +188,14 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
     for (const record of getState().sessions.values()) { unmountView(record.snapshot.id); setInputLock(record.snapshot.id, false); }
   }, []);
 
-  // A running program takes the keyboard — after a beat, so `ls` does not make the focus jump.
+  // A running program takes the keyboard — after a beat, so `ls` does not make the focus jump. Claude Code and Codex take
+  // it at once: they are whole-screen programs, and the footer settles its height before they draw.
   useEffect(() => {
     if (!now.busy) { setTakeover(false); return undefined; }
-    if (!now.integrated) { setTakeover(true); return undefined; }
+    if (!now.integrated || now.agent !== 'shell') { setTakeover(true); return undefined; }
     const timer = setTimeout(() => setTakeover(true), TAKEOVER_DELAY);
     return () => clearTimeout(timer);
-  }, [now.busy, now.integrated, currentId]);
+  }, [now.busy, now.integrated, now.agent, currentId]);
 
   // While the box is the input, keys that reach the transcript are handed to the box.
   useEffect(() => {
@@ -371,7 +388,7 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
             const alive = record.snapshot.status === 'running';
             const next = sessions[i + 1];
             const sep = !on && next && next.snapshot.id !== currentId;
-            const title = `${basename(cwdOf(record))}${alive ? '' : ` · exited${Number.isInteger(record.snapshot.exitCode) ? ` ${record.snapshot.exitCode}` : ''}`}`;
+            const title = `${inSandbox(record) ? record.snapshot.title : basename(cwdOf(record))}${alive ? '' : ` · exited${Number.isInteger(record.snapshot.exitCode) ? ` ${record.snapshot.exitCode}` : ''}`}`;
             const last = sessions.length === 1;
             return (
               <FluidTab key={id} on={on} sep={sep} data-term-tab={id} onMouseDown={(event) => { if (event.button === 0) { card.hide(); activate(id); } }} onMouseEnter={(event) => { if (!on) card.enter(event, id); }} onMouseLeave={card.leave}>
@@ -409,6 +426,9 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
             </div>
           )}
         </div>
+        {onFull && (
+          <button type="button" className="hov-wash2" onClick={() => { card.hide(); onFull(); }} aria-label={full ? 'Exit full screen' : 'Full screen'} title={full ? 'Exit full screen' : 'Full screen'} data-term-full={full ? '1' : '0'} style={{ flex: 'none', alignSelf: 'center', width: 28, height: 28, margin: '2px 0 0 4px', padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 120ms' }}>{full ? <Collapse /> : <Expand />}</button>
+        )}
       </div>
 
       <div ref={stageRef} onClick={onStageClick} data-term-stage="1" style={{ position: 'relative', flex: 1, minHeight: 0, padding: '10px 14px 0', background: '#fff', cursor: boxIsInput ? 'default' : 'text', overflow: 'hidden' }}>
@@ -424,10 +444,11 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
         ))}
       </div>
 
-      <div style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 10, padding: '10px 14px 12px', borderTop: '1px solid #eaeaea', background: '#fafafa' }}>
+      {/* A conversation's footer is the chips alone, with as much room below them as above (2026-09-29). */}
+      <div style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 10, padding: conversation ? '10px 14px' : '10px 14px 12px', borderTop: '1px solid #eaeaea', background: '#fafafa' }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 6px' }}>
           <span data-agent-chip="1" style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fff', font: `500 11.5px/1.4 ${MONO}`, color: '#171717', whiteSpace: 'nowrap' }}><span style={{ color: '#8f8f8f' }}>›_</span>{agentLabel}</span>
-          <button type="button" className="hov-bd2" onClick={() => void changeCwd()} disabled={!currentId} title="Change working directory…" data-cwd-chip="1" style={{ flex: '0 1 auto', minWidth: 0, display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fff', font: `11.5px/1.4 ${MONO}`, color: '#4d4d4d', whiteSpace: 'nowrap', overflow: 'hidden', cursor: currentId ? 'pointer' : 'default', textAlign: 'left', transition: 'border-color 120ms' }}><span style={{ color: '#8f8f8f' }}>▭</span><span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentCwd || '~'}</span></button>
+          <button type="button" className="hov-bd2" onClick={() => void changeCwd()} disabled={!currentId || (current && inSandbox(current))} title={current && inSandbox(current) ? 'In the repository\'s sandbox' : 'Change working directory…'} data-cwd-chip="1" style={{ flex: '0 1 auto', minWidth: 0, display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fff', font: `11.5px/1.4 ${MONO}`, color: '#4d4d4d', whiteSpace: 'nowrap', overflow: 'hidden', cursor: currentId ? 'pointer' : 'default', textAlign: 'left', transition: 'border-color 120ms' }}><span style={{ color: '#8f8f8f' }}>▭</span><span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentCwd || '~'}</span></button>
         </div>
         {currentId && (showBox ? (
           <input
@@ -442,8 +463,9 @@ export default function TerminalPane({ cwd, projectId, visible = true }) {
             placeholder="Run commands"
             style={{ display: 'block', width: '100%', padding: '2px 0', border: 0, background: 'transparent', font: `12.5px/1.7 ${MONO}`, color: '#171717', caretColor: '#0070f3' }}
           />
-        ) : (
-          // Same height as the box, so the transcript (and the program drawing in it) is not resized.
+        ) : conversation ? null : (
+          // Same height as the box, so the transcript (and the program drawing in it) is not resized. A Claude Code or
+          // Codex conversation keeps no room for a box it never shows (2026-09-29).
           <div data-term-hint="1" style={{ padding: '2px 0', font: `12.5px/1.7 ${MONO}`, color: '#8f8f8f', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {running ? '\u00a0' : 'this terminal has exited — press + for a new one'}
           </div>

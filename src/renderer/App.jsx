@@ -2,16 +2,24 @@ import React from 'react';
 import { api, errorMessage } from './api.js';
 import TestToggle from './ui/TestToggle.jsx';
 import WindowEdges from './ui/WindowEdges.jsx';
+import WindowControls from './ui/WindowControls.jsx';
+import SandboxProgress from './ui/SandboxProgress.jsx';
 import Home from './screens/Home.jsx';
 import Onboarding from './screens/Onboarding.jsx';
 import Workspace from './screens/Workspace.jsx';
 import ToolSetup from './ui/ToolSetup.jsx';
-import { launchRows, TOOL_ORDER } from './model/tools.js';
+import UpdateBanner from './ui/UpdateBanner.jsx';
+import { useConnectSessions, ConnectChip, ConnectPopup } from './ui/ConnectDock.jsx';
+import { launchRows, installedSignedOut, TOOL_ORDER } from './model/tools.js';
 
 // Screens: the app opens straight into the workspace you were last in, and the first run (no projects yet) is
-// onboarding (screens/Onboarding.jsx, 2026-09-28); + Project runs its last two screens. "Engelbart" in the header (or
-// Escape) shows all projects. A project whose project.json has no code directory yet is held
+// onboarding (screens/Onboarding.jsx, 2026-09-28); + Project runs its last two screens. Onboarding ends in the project
+// it made (the welcome tour that followed it was taken out on 2026-10-01). "Engelbart" in the header (or Escape) shows
+// all projects. A project whose project.json has no code directory yet is held
 // behind a modal until one is chosen (2026-09-18).
+// Several windows (2026-10-03, src/main/windows.cjs): each opens where main says (its place before a reload or a
+// relaunch, the workspace it was opened from, or the projects screen) and tells main where it goes. What another window
+// saves arrives as an announcement: the project's tree or the projects are read again, the library too.
 
 const pickFolder = (current) => window.terminalAPI.pickDirectory(current || undefined);
 
@@ -50,6 +58,7 @@ export default function App() {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState('');
   const [projects, setProjects] = React.useState([]);
+  const [trashed, setTrashed] = React.useState([]); // projects in the trash (Home's Recently deleted), newest first
   const [library, setLibrary] = React.useState([]);
   const [tree, setTree] = React.useState(null);
   const [entry, setEntry] = React.useState(null); // { workspaceId, tab, views } for the project being opened
@@ -61,25 +70,43 @@ export default function App() {
   const [setup, setSetup] = React.useState(null); // { mode: 'launch' | 'all', ids }
   const [launchAsk, setLaunchAsk] = React.useState(null); // what the launch check asks about, until the dialog can open
   const askedAtLaunch = React.useRef(false);
+  const lastTools = React.useRef(null);
+  // Connect your library (2026-10-07): its popup ({ sessionId } from the chip, { projectId } the one-time offer).
+  const [connectPopup, setConnectPopup] = React.useState(null);
 
   const fail = (candidate) => setError(errorMessage(candidate));
 
+  // The trash is read first: reading it purges the projects in it a week, and their library rows with them.
+  const trashedNow = React.useRef([]);
   const loadHome = React.useCallback(async () => {
+    const gone = await api.trashedProjects().catch(() => []);
     const [list, rows] = await Promise.all([api.listProjects(), api.library()]);
+    trashedNow.current = gone;
+    setTrashed(gone);
     setProjects(list);
     setLibrary(rows);
     return list;
   }, []);
 
+  // The notes and images of a project in the trash are in the trash with it: no screen lists them until it is restored.
+  const shownLibrary = React.useMemo(() => {
+    const gone = new Set(trashed.map((project) => project.id));
+    return gone.size ? library.filter((row) => !gone.has(row.project_id)) : library;
+  }, [library, trashed]);
+
   // Rows the main process changed on its own (a pdf saved as a link became a saved pdf): the library is read again.
   React.useEffect(() => api.onLibraryChanged(() => { api.library().then(setLibrary).catch(() => {}); }), []);
 
   // The launch check's first answer opens the setup dialog once, and only when something needs you; Engelbart ▸
-  // Set Up Tools… opens it with all three tools at any time.
+  // Set Up Tools… opens it with all three tools at any time. An agent installed while the app is open (Claude Code, in
+  // the background, on a Mac that had neither) asks for its sign-in once the install is over, whatever was answered before.
   React.useEffect(() => {
     const take = (snapshot) => {
       if (!snapshot || !snapshot.tools) return;
       setTools(snapshot);
+      const before = lastTools.current;
+      lastTools.current = snapshot;
+      if (askedAtLaunch.current && installedSignedOut(before, snapshot).length) setLaunchAsk((current) => current || 'after');
       if (askedAtLaunch.current || !snapshot.checked) return;
       askedAtLaunch.current = true;
       const ids = launchRows(snapshot);
@@ -141,11 +168,18 @@ export default function App() {
     setError('');
   }, []);
 
-  // Startup (and after the data root changes): the last project you were in, or the create screen.
+  // Startup (and after the data root changes): the last project you were in, or the create screen. A window's first start
+  // goes where main says this window belongs, when it says (the projects screen, or a workspace).
+  const firstStart = React.useRef(true);
   const start = React.useCallback(async () => {
     const list = await loadHome();
-    if (!list.length) { setPhase('create'); return; }
-    const last = await api.lastOpen().catch(() => null);
+    const first = firstStart.current;
+    firstStart.current = false;
+    // Every project deleted: all projects, where Recently deleted can bring one back, not a new install's onboarding.
+    if (!list.length) { setPhase(trashedNow.current.length ? 'home' : 'create'); return; }
+    const target = first ? await api.windowTarget().catch(() => null) : null;
+    if (target && target.home) { setPhase('home'); return; }
+    const last = target && target.projectId ? target : await api.lastOpen().catch(() => null);
     const id = last && list.some((project) => project.id === last.projectId) ? last.projectId : list[0].id;
     await openProject(id, last && last.projectId === id ? last : null);
   }, [loadHome, openProject]);
@@ -173,6 +207,64 @@ export default function App() {
     setTree(null);
     setEntry(null);
   }
+
+  // Where this window is, for main to reopen it there (a workspace reports itself through onVisit; onboarding, which ends
+  // in a project, is not a place) and for its title, which names it in the Window menu.
+  const projectName = tree ? tree.project.name : '';
+  React.useEffect(() => {
+    if (phase === 'home') api.reportPlace({ projectId: null, workspaceId: null });
+    document.title = phase === 'workspace' && projectName ? `${projectName} — Engelbart` : 'Engelbart';
+  }, [phase, projectName]);
+
+  // Connect your library for someone who has projects: offered once, as a popup over the workspace they are in. In every
+  // library, test mode's or not (2026-10-08), each with its own sessions and its own offer.
+  const connectSessions = useConnectSessions(!!config, config ? config.dataRoot : '');
+  const openProjectId = phase === 'workspace' && tree ? tree.project.id : null;
+  React.useEffect(() => {
+    if (!openProjectId) return undefined;
+    let alive = true;
+    const timer = setTimeout(() => {
+      api.connectOffer().then((offer) => {
+        if (!alive || !offer || !offer.show) return;
+        setConnectPopup((now) => now || { projectId: openProjectId });
+        api.connectOfferSeen('shown').catch(() => {});
+      }).catch(() => {});
+    }, 1200); // after the workspace has drawn itself
+    return () => { alive = false; clearTimeout(timer); };
+  }, [openProjectId]);
+
+  // Another window saved something here: this project's tree (a workspace or note made, renamed, linked; a document
+  // cleared) is read again, or, on the projects screen, the projects. A project another window deleted is left for the
+  // projects screen. Another window switched the data root (test mode): this one starts over on it, as the window that
+  // switched it does.
+  const latest = React.useRef({});
+  latest.current = { phase, tree, reload, loadHome, start };
+  React.useEffect(() => {
+    let timer = null;
+    const offProject = api.onProjectChanged(({ projectId, trashed: gone } = {}) => {
+      const now = latest.current;
+      if (gone && now.phase === 'workspace' && now.tree && now.tree.project.id === projectId) {
+        setTree(null);
+        setEntry(null);
+        setPhase('home');
+      }
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const held = latest.current;
+        if (held.phase === 'home') held.loadHome().catch(() => {});
+        else if (held.phase === 'workspace' && held.tree && held.tree.project.id === projectId) held.reload();
+      }, 150);
+    });
+    const offRoot = api.onDataRootChanged(({ config: next, fresh } = {}) => {
+      if (!next) return;
+      setConfig(next);
+      setTree(null);
+      setEntry(null);
+      if (fresh) setRun((n) => n + 1);
+      latest.current.start().catch((candidate) => setError(errorMessage(candidate)));
+    });
+    return () => { clearTimeout(timer); offProject(); offRoot(); };
+  }, []);
 
   async function toggleTest() {
     if (!config || busy) return;
@@ -214,11 +306,12 @@ export default function App() {
     }
   }
 
-  // Onboarding made the project (api.startProject): land in its Welcome workspace with the Welcome! note open.
-  async function onboarded(made) {
+  // Onboarding made the project (api.startProject): land in its Getting started workspace with the Welcome! note open, and
+  // the sites its sign-in import said to sign in to again on the Stage.
+  async function onboarded(made, { stageLinks = [] } = {}) {
     setError('');
     await loadHome();
-    await openProject(made.project.id, { workspaceId: made.workspaceId, tab: { id: made.noteId, title: made.noteName } });
+    await openProject(made.project.id, { workspaceId: made.workspaceId, tab: { id: made.noteId, title: made.noteName }, stage: stageLinks.length ? { links: stageLinks } : null });
   }
 
   async function goHome() {
@@ -231,8 +324,33 @@ export default function App() {
     }
   }
 
+  // Delete on a project card (Home asks first): into the trash for a week. Restore brings it back. The project open
+  // here is left first, so nothing of it writes while it moves.
+  async function deleteProject(id) {
+    setError('');
+    try {
+      if (tree && tree.project.id === id) { leaveProject(); setPhase('home'); }
+      await api.trashProject(id);
+    } catch (candidate) {
+      fail(candidate);
+    }
+    try { await loadHome(); } catch (candidate) { fail(candidate); }
+  }
+
+  async function restoreProject(id) {
+    setError('');
+    try {
+      await api.restoreProject(id);
+    } catch (candidate) {
+      fail(candidate);
+    }
+    try { await loadHome(); } catch (candidate) { fail(candidate); }
+  }
+
   const onVisit = React.useCallback((workspaceId) => {
-    if (tree) api.setLastOpen({ projectId: tree.project.id, workspaceId }).catch(() => {});
+    if (!tree) return;
+    api.setLastOpen({ projectId: tree.project.id, workspaceId }).catch(() => {});
+    api.reportPlace({ projectId: tree.project.id, workspaceId });
   }, [tree]);
 
   async function chooseDirectory(directory) {
@@ -247,13 +365,17 @@ export default function App() {
   }
 
   if (!config || phase === 'boot') return <div style={{ position: 'absolute', inset: 0, background: '#fff' }} />;
+  const returning = projects.length > 0 || trashed.length > 0; // someone whose projects are all in the trash is not new
+  const onboardMode = returning ? 'existing' : 'new';
 
   return (
+    <SandboxProgress key={config.dataRoot} dataRoot={config.dataRoot} library={library} inWorkspace={phase === 'workspace' && !!tree}>
     <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#fff' }}>
       {phase === 'home' && (
         <Home
           projects={projects}
-          library={library}
+          trashed={trashed}
+          library={shownLibrary}
           error={error}
           onCreateScreen={() => setPhase('create')}
           onOpenWorkspace={(id, workspaceId, stage) => openProject(id, workspaceId || stage ? { workspaceId, stage } : null).catch(fail)}
@@ -269,16 +391,18 @@ export default function App() {
           onOpenNote={(row) => openProject(row.project_id, { tab: { id: row.id, title: row.name } }).catch(fail)}
           onLibraryChanged={() => loadHome().catch(fail)}
           onRename={async (id, name) => { try { await api.renameProject(id, name); await loadHome(); } catch (candidate) { fail(candidate); } }}
+          onDelete={deleteProject}
+          onRestore={restoreProject}
         />
       )}
       {phase === 'create' && (
-        <Onboarding key={run} mode={projects.length ? 'existing' : 'new'} tools={tools} onTools={onboardingTools} onDone={onboarded} onBack={projects.length ? goHome : null} />
+        <Onboarding key={run} mode={onboardMode} tools={tools} onTools={onboardingTools} onDone={onboarded} onBack={returning ? goHome : null} />
       )}
       {phase === 'workspace' && tree && (
         <Workspace
           key={tree.project.id}
           tree={tree}
-          library={library}
+          library={shownLibrary}
           initialWorkspaceId={entry ? entry.workspaceId : null}
           initialTab={entry ? entry.tab : null}
           initialStage={entry ? entry.stage : null}
@@ -288,9 +412,15 @@ export default function App() {
           reload={reload}
           onClose={goHome}
           onHome={goHome}
+          // the sidebar's project menu (2026-10-07): another project, opened where it was left; or a new one, made as
+          // + Project makes it
+          onOpenProject={(id, workspaceId) => openProject(id, workspaceId ? { workspaceId } : null).catch(fail)}
+          onNewProject={() => { leaveProject(); setPhase('create'); }}
           onVisit={onVisit}
-          onOpenElsewhere={(projectId, workspaceId) => openProject(projectId, { workspaceId }).catch(fail)}
           onError={fail}
+          // Connect your library's sessions, for the sidebar's Inbox: one that needs you or has finished, opened in its popup
+          connectSessions={connectSessions}
+          onOpenConnect={(id) => setConnectPopup({ sessionId: id })}
         />
       )}
       {phase === 'workspace' && tree && !tree.project.directory && (
@@ -302,19 +432,23 @@ export default function App() {
           <button type="button" onClick={() => setError('')} style={{ padding: '0 2px', border: 0, background: 'transparent', cursor: 'pointer', color: '#c9c9c9', font: '14px/1 var(--font-sans)' }}>×</button>
         </div>
       )}
+      {/* a new version downloading, or ready to restart into (src/main/updates.cjs), on every screen */}
+      <UpdateBanner />
       {setup && tools && <ToolSetup snapshot={tools} ids={setup.ids} mode={setup.mode} onClose={() => setSetup(null)} />}
       <WindowEdges />
-      {/* only in a developer's copy (src/main/developer.cjs): the app people download has no test mode */}
-      {config.testModeAvailable && (
-        <TestToggle
-          testMode={config.testMode}
-          busy={busy}
-          onToggle={toggleTest}
-          onReset={() => resetTest(false)}
-          onStartNew={() => resetTest(true)}
-          onReveal={() => api.reveal(config.testRoot).catch(fail)}
-        />
-      )}
+      {/* test mode, its pill and Settings' Test data section, only in a developer's copy (src/main/developer.cjs): the app
+          people download has no test mode */}
+      <WindowControls test={config.testModeAvailable ? {
+        testMode: config.testMode,
+        onReset: () => resetTest(false),
+        onStartNew: () => resetTest(true),
+        onReveal: () => api.reveal(config.testRoot).catch(fail),
+      } : null}>
+        <ConnectChip sessions={connectSessions} onOpen={(id) => setConnectPopup({ sessionId: id })} />
+        {config.testModeAvailable && <TestToggle testMode={config.testMode} busy={busy} onToggle={toggleTest} />}
+      </WindowControls>
+      {connectPopup && <ConnectPopup key={connectPopup.sessionId || connectPopup.projectId} request={connectPopup} onClose={() => setConnectPopup(null)} />}
     </div>
+    </SandboxProgress>
   );
 }

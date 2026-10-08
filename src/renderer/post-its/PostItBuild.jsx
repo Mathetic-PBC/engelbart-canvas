@@ -2,27 +2,39 @@
 // TWEAKS.md). It opens from the card's Build button, beside the card and over it and any other card it reaches (it is a
 // covering panel: main draws those cards as pictures under it). It holds the model and effort grid, and along its foot
 // what is chosen, Context (the library, in a popout of its own beside this one) and the send. Sending starts the post-it
-// as a quick task. The model chosen is remembered for the next post-it.
+// as a quick task. The model chosen is remembered for the next post-it (by main since 2026-09-29, beside @bart's and the
+// Build panel's: bart/choices.cjs); until a first pick, it starts on Build's default, Opus high while Claude Code can run.
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
 import { attachRows } from '../model/rail.js';
+import { DEFAULT_TARGET } from '../model/build-target.js';
 import { usePlaced } from '../ui/usePlaced.js';
+import { useBodies } from '../workspace/useBodies.js';
 import { KIND } from '../ui/Icons.jsx';
 import GithubPane from '../workspace/GithubPane.jsx';
 import ModelGrid, { EASE, choiceLabel, useBeside } from './ModelGrid.jsx';
 
 const WIDTH = 420;
 const CONTEXT_WIDTH = 290;
-const REMEMBERED = 'engelbart.postIt.build'; // { provider, model, effort, efforts }
+// The effort last used with each model, for the grid ({ efforts }). Before 2026-09-29 the pick itself was kept here too
+// ({ provider, model, effort }): such a pick is handed to main once, then dropped from here.
+const REMEMBERED = 'engelbart.postIt.build';
 
 const read = () => { try { return JSON.parse(localStorage.getItem(REMEMBERED) || 'null'); } catch { return null; } };
 const write = (value) => { try { localStorage.setItem(REMEMBERED, JSON.stringify(value)); } catch { /* a convenience only */ } };
 
-/** What was chosen last, if the models file still offers it; else the default provider's default. */
+const offered = (models, held) => !!(held && models.providers[held.provider] && models.providers[held.provider].models[held.model] && models.providers[held.provider].efforts.includes(held.effort));
+
+/** Where the popup starts: what main says (the last pick, else the default); a pick this window kept before main did, once. */
 export function startingChoice(models, held = read()) {
-  if (held && models.providers[held.provider] && models.providers[held.provider].models[held.model] && models.providers[held.provider].efforts.includes(held.effort)) {
-    return { provider: held.provider, model: held.model, effort: held.effort };
+  if (held && held.provider) {
+    write({ efforts: held.efforts || {} });
+    if (offered(models, held)) {
+      const kept = { provider: held.provider, model: held.model, effort: held.effort };
+      api.rememberModelChoice('quick', kept).catch(() => {});
+      return kept;
+    }
   }
   const step = models.providers[models.provider].ladder[0];
   return { provider: models.provider, model: step.model, effort: step.effort };
@@ -39,7 +51,7 @@ const menuRow = { display: 'flex', alignItems: 'center', gap: 12, width: '100%',
  * Context (the design's popout): a search over the library whose rows are picked and unpicked (a ✓, no circles), then
  * a link or path, files from disk, or a repository from GitHub, added to the library and picked at once.
  */
-function ContextPopout({ style, library, inRail, picked, onToggle, onAdded, onClose }) {
+function ContextPopout({ style, projectId, library, inRail, picked, onToggle, onAdded, onClose }) {
   const [q, setQ] = React.useState('');
   const [view, setView] = React.useState('menu'); // 'menu' | 'github'
   const [value, setValue] = React.useState('');
@@ -51,7 +63,8 @@ function ContextPopout({ style, library, inRail, picked, onToggle, onAdded, onCl
     const timer = setTimeout(() => { if (fieldRef.current && view === 'menu') fieldRef.current.focus({ preventScroll: true }); }, 0);
     return () => clearTimeout(timer);
   }, [style.visibility, view]);
-  const rows = attachRows({ query: q, library, inRail });
+  const bodies = useBodies(projectId, true); // what things say, matched too (MATH-29); asked each time the popout opens
+  const rows = attachRows({ query: q, library, inRail, bodies });
   // Picked rows stay listed while nothing is typed, even when they are not among the recent ones.
   const shown = q.trim() ? rows : [...picked.filter((row) => !rows.some((held) => held.row.id === row.id)).map((row) => ({ key: row.id, row, name: row.name })), ...rows];
   const run = async (work) => {
@@ -113,6 +126,7 @@ export default function PostItBuild({ projectId, quick, anchor, library, inRail,
   const [choice, setChoice] = React.useState(null);
   const [efforts, setEfforts] = React.useState(() => (read() || {}).efforts || {});
   const [pre, setPre] = React.useState(null);
+  const target = DEFAULT_TARGET; // a post-it's Build always works in the default repo: no picker (2026-09-29)
   const [picked, setPicked] = React.useState([]); // library rows for Context
   const [ctxOpen, setCtxOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
@@ -122,8 +136,8 @@ export default function PostItBuild({ projectId, quick, anchor, library, inRail,
 
   React.useEffect(() => {
     let live = true;
-    api.buildModels().then((value) => { if (live) { setModels(value); setChoice(startingChoice(value)); } }).catch((e) => { if (live) setError(errorMessage(e)); });
-    api.buildPreflight(projectId).then((value) => { if (live) setPre(value); }).catch((e) => { if (live) setError(errorMessage(e)); });
+    api.buildModels('quick').then((value) => { if (live) { setModels(value); setChoice(startingChoice(value)); } }).catch((e) => { if (live) setError(errorMessage(e)); });
+    api.buildPreflight(projectId, DEFAULT_TARGET).then((value) => { if (live) setPre(value); }).catch((e) => { if (live) setError(errorMessage(e)); });
     return () => { live = false; };
   }, [projectId]);
 
@@ -131,17 +145,14 @@ export default function PostItBuild({ projectId, quick, anchor, library, inRail,
     setChoice(next);
     const kept = { ...efforts, [next.model]: next.effort };
     setEfforts(kept);
-    write({ ...next, efforts: kept });
+    write({ efforts: kept });
+    api.rememberModelChoice('quick', { provider: next.provider, model: next.model, effort: next.effort }).catch(() => {});
   };
-  const ready = !!(choice && pre && pre.ok && !busy && quick && quick.text.trim());
+  const ready = !!(choice && target && pre && pre.ok && !busy && quick && quick.text.trim());
   const send = async () => {
     if (!ready) return;
     setBusy(true); setError('');
-    try { await onStart({ ...choice, attach: picked.map((row) => row.id) }); } catch (e) { setError(errorMessage(e)); setBusy(false); }
-  };
-  const startHistory = async () => {
-    setBusy(true); setError('');
-    try { setPre(await api.buildInit(projectId)); } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
+    try { await onStart({ ...choice, attach: picked.map((row) => row.id), target }); } catch (e) { setError(errorMessage(e)); setBusy(false); }
   };
 
   React.useEffect(() => {
@@ -171,11 +182,10 @@ export default function PostItBuild({ projectId, quick, anchor, library, inRail,
         {problem && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 18px 0' }}>
             <span data-build-note="1" style={{ flex: 1, minWidth: 0, font: '12.5px/1.5 var(--font-sans)', color: '#e70022' }}>{problem}</span>
-            {pre && !pre.ok && pre.canInit && <button type="button" className="bart-text" data-build-init="1" disabled={busy} onClick={startHistory} style={{ color: '#171717' }}>Start history</button>}
           </div>
         )}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, padding: '8px 8px 8px 18px' }}>
-          <span data-build-choice="1" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '12px/1.3 var(--font-sans)', color: '#4d4d4d' }}>{choiceLabel(models, choice)}</span>
+          <span data-build-choice="1" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '12px/1.3 var(--font-sans)', color: '#4d4d4d' }}>{choiceLabel(models, choice)}{pre && pre.target ? ` · in ${pre.target.name}` : ''}</span>
           <button type="button" data-build-context="1" onClick={() => setCtxOpen((open) => !open)} aria-expanded={ctxOpen} aria-label="Add context from the library" title="Add context from the library" className="hov-wash"
             style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 5, minWidth: 30, height: 30, padding: '0 10px 0 8px', border: 0, borderRadius: 999, background: ctxOpen ? '#f2f2f2' : 'transparent', color: ctxOpen || nCtx ? '#171717' : '#4d4d4d', cursor: 'pointer', font: '500 12px/1 var(--font-sans)', transition: 'background 120ms' }}>
             {CIRCLE_PLUS}<span>Context</span>{nCtx > 0 && <span style={{ color: '#8f8f8f' }}>· {nCtx}</span>}
@@ -186,6 +196,7 @@ export default function PostItBuild({ projectId, quick, anchor, library, inRail,
       {ctxOpen && (
         <ContextPopout
           style={ctxStyle}
+          projectId={projectId}
           library={library}
           inRail={inRail}
           picked={picked}

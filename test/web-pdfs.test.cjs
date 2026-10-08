@@ -90,3 +90,85 @@ test('a docx is a library type of its own (2026-09-23)', async () => {
   const row = await library.addItem(ctx, file);
   assert.deepEqual([row.type, row.name, row.path], ['docx', 'Report.docx', fs.realpathSync(file)]);
 });
+
+test('`again`: a row added while a run is at work is checked by one more run after it; adds meanwhile share that run', async () => {
+  const first = await ctx.libraryDb.insert(page('First', 'https://slow.example.org/first.pdf'));
+  let release, reached;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const asked = new Promise((resolve) => { reached = resolve; });
+  const fetchPdf = async (url) => { if (url.includes('/first.pdf')) { reached(); await gate; } return PDF; };
+  const running = webPdfs.checkWebPdfs(ctx, { fetchPdf });
+  await asked; // the run has read the library: what is added now is not in it
+  const second = await ctx.libraryDb.insert(page('Second', 'https://slow.example.org/second.pdf'));
+  assert.equal(webPdfs.checkWebPdfs(ctx, { fetchPdf }), running, 'without `again`, the run at work answers');
+  const again = webPdfs.checkWebPdfs(ctx, { fetchPdf, again: true });
+  const third = await ctx.libraryDb.insert(page('Third', 'https://slow.example.org/third.pdf'));
+  assert.equal(webPdfs.checkWebPdfs(ctx, { fetchPdf, again: true }), again, 'one run follows, however many adds');
+  release();
+  assert.deepEqual(await running, { pending: 1, saved: 1, pages: 0, failed: 0 });
+  assert.deepEqual(await again, { pending: 2, saved: 2, pages: 0, failed: 0 });
+  for (const row of [first, second, third]) assert.equal((await ctx.libraryDb.get(row.id)).type, 'pdf', row.name);
+  // With nothing at work, `again` is a run like any other.
+  assert.equal((await webPdfs.checkWebPdfs(ctx, { fetchPdf, again: true })).pending, 0);
+});
+
+// The app's wiring (2026-10-02): add-library-item (ipc.cjs) runs the check straight away through store.recheck, so a
+// paper saved by its address is kept without the library being opened again.
+test('adding an arXiv paper or a .pdf address checks it at once: the row becomes a saved pdf, a second add during the run too', async (t) => {
+  const { createStore, registerEngelbartIpc } = require('../src/main/ipc.cjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-webpdf-add-'));
+  let release, reached, changed = () => {};
+  const gate = new Promise((resolve) => { release = resolve; });
+  const asked = new Promise((resolve) => { reached = resolve; });
+  const fetched = [];
+  const fetchPdf = async (url) => { fetched.push(url); if (url === 'https://arxiv.org/pdf/2205.04561') { reached(); await gate; } return url.startsWith('https://blog.') ? null : PDF; };
+  const afterOpen = (context, { again = false } = {}) => webPdfs.checkWebPdfs(context, { fetchPdf, again, onChange: () => changed() });
+  const store = createStore({ homeDir: home, testMode: true, afterOpen });
+  await store.setTestMode(false);
+  t.after(() => store.close());
+  const handlers = new Map();
+  registerEngelbartIpc({ store, ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, trustedHandler: (fn) => fn, describe: async () => null, identifyRepo: async () => null });
+  const add = handlers.get('engelbart:add-library-item');
+  const library = await store.context();
+  const saved = (count) => new Promise((resolve) => { let n = 0; changed = () => { n += 1; if (n === count) resolve(); }; });
+  const both = saved(2);
+  const arxiv = await add('https://arxiv.org/pdf/2205.04561', { name: 'Scim: Intelligent Skimming Support' });
+  assert.equal(arxiv.type, 'website', 'added as its address, answered at once');
+  await asked;
+  const pdf = await add('https://papers.example.org/citesee.pdf', { name: 'CiteSee' });
+  release();
+  await both;
+  for (const [row, name] of [[arxiv, 'Scim: Intelligent Skimming Support'], [pdf, 'CiteSee']]) {
+    const now = await library.libraryDb.get(row.id);
+    assert.deepEqual([now.type, now.name, now.url], ['pdf', name, row.url]);
+    assert.equal(fs.readFileSync(now.path, 'utf8'), '%PDF-1.7 saved');
+  }
+  assert.deepEqual(fetched, ['https://arxiv.org/pdf/2205.04561', 'https://papers.example.org/citesee.pdf']);
+  // A repository is no page to ask; a page that is not a pdf stays a page.
+  await add('https://github.com/o/r');
+  const blog = await add('https://blog.example.org/post', { name: 'Post' });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal((await library.libraryDb.get(blog.id)).type, 'website');
+  assert.ok(!fetched.some((url) => url.includes('github.com')));
+});
+
+// MATH-29 (2026-10-05): a pdf that comes in through either add asks the sweeper to read its text now (ipc.cjs's
+// pdfAdded; index.cjs points it at sweeper.sweepSoon, and at a page row that became a pdf through checkWebPdfs' onChange).
+test('adding a pdf from disk or saving one from the web calls pdfAdded; adding anything else does not', async (t) => {
+  const { createStore, registerEngelbartIpc } = require('../src/main/ipc.cjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-webpdf-told-'));
+  const store = createStore({ homeDir: home, testMode: true });
+  await store.setTestMode(false);
+  t.after(() => store.close());
+  const handlers = new Map();
+  let told = 0;
+  registerEngelbartIpc({ store, ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, trustedHandler: (fn) => fn, describe: async () => null, identifyRepo: async () => null, pdfAdded: () => { told += 1; } });
+  const file = path.join(home, 'From disk.pdf');
+  fs.writeFileSync(file, PDF);
+  assert.equal((await handlers.get('engelbart:add-library-item')(file)).type, 'pdf');
+  assert.equal(told, 1);
+  await handlers.get('engelbart:add-library-item')('https://blog.example.org/post', { name: 'Post' });
+  assert.equal(told, 1, 'a page is not a pdf');
+  assert.equal((await handlers.get('engelbart:add-library-pdf')('https://papers.example.org/saved.pdf', PDF, { name: 'Saved' })).type, 'pdf');
+  assert.equal(told, 2);
+});

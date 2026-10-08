@@ -54,6 +54,14 @@ export const NOTE = () => (
   </svg>
 );
 
+// The same sheet without its lines: a markdown file that is not a note.
+export const FILE = () => (
+  <svg viewBox="0 0 16 16" width="1em" height="1em" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" aria-hidden="true">
+    <path d="M5 1.5h4.5L13 5v7.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2z" />
+    <path d="M9.5 1.5v2A1.5 1.5 0 0 0 11 5h2" />
+  </svg>
+);
+
 export const SEARCH = () => (
   <svg viewBox="0 0 16 16" width={16} height={16} fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" aria-hidden="true">
     <circle cx={6.75} cy={6.75} r={4.5} />
@@ -97,9 +105,14 @@ export const TASK = () => (
 );
 
 /** Kind → glyph (React node or Unicode string) and the kind's name, keyed by `kindKey(row)`. */
+// Full screen: arrows out to take the middle, arrows in to give it back (Hudson's two pictures). The Stage's, and the
+// document's (MATH-23).
+export const Expand = () => <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block', fill: 'none', stroke: '#171717', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round' }}><path d="M9.3 2.5h4.2v4.2M13.5 2.5L9 7M6.7 13.5H2.5V9.3M2.5 13.5L7 9" /></svg>;
+export const Collapse = () => <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block', fill: 'none', stroke: '#171717', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round' }}><path d="M13.5 2.5L9.5 6.5M9.5 3.3v3.2h3.2M2.5 13.5l4-4M6.5 12.7V9.5H3.3" /></svg>;
+
 export const KIND = {
   note: { glyph: <NOTE />, label: 'note' },
-  md: { glyph: <NOTE />, label: 'md' },
+  md: { glyph: <FILE />, label: 'md' },
   docx: { glyph: <NOTE />, label: 'docx' },
   pdf: { glyph: <PDF />, label: 'pdf' },
   git: { glyph: <GH />, label: 'git repo' },

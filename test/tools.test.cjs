@@ -9,11 +9,12 @@ const os = require('node:os');
 const path = require('node:path');
 const { REQUIREMENTS } = require('../src/main/tools/requirements.cjs');
 const { parseVersion, compareVersions, judge } = require('../src/main/tools/version.cjs');
-const { parseLookup, sourceOf, observed, detectTools, knownPlaces } = require('../src/main/tools/detect.cjs');
+const { parseLookup, sourceOf, observed, detectTools, knownPlaces, AUTH, codexAccount } = require('../src/main/tools/detect.cjs');
 const { classifyFailure, roomFor, createActions, markRollback, rollback } = require('../src/main/tools/install.cjs');
 const { createLock } = require('../src/main/tools/lock.cjs');
 const { createTools } = require('../src/main/tools/manager.cjs');
 const { createFakeTools } = require('../src/main/tools/fake.cjs');
+const { createSignOutProcess, SIGN_OUT_COMMANDS } = require('../src/main/tools/sign-in.cjs');
 const { ensureHome, readConfig, writeTools } = require('../src/main/store/home.cjs');
 
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-tools-'));
@@ -178,6 +179,82 @@ test('detectTools: Codex signed in with an API key counts as signed out for Enge
   assert.match(found.codex.error, /API key/);
 });
 
+// Who is signed in (2026-10-03): Claude Code's `auth status --json` has `email`; `codex login status` prints only
+// "Logged in using ChatGPT", so Codex's is the `email` claim of tokens.id_token in its auth.json.
+const jwt = (claims) => ['eyJhbGciOiJSUzI1NiJ9', Buffer.from(JSON.stringify(claims)).toString('base64url'), 'c2lnbmF0dXJl'].join('.');
+
+test('Claude Code\'s account is the email in its status JSON; without one, or when the output is not JSON, there is none', () => {
+  const read = AUTH.claude.read;
+  const status = { loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty', email: 'someone@example.com', orgId: 'org-1', orgName: 'someone@example.com\'s Organization', subscriptionType: 'max' };
+  assert.deepEqual(read(`${JSON.stringify(status, null, 2)}\n`), { signedIn: true, account: 'someone@example.com' });
+  assert.deepEqual(read(`Warning: an update is available\n${JSON.stringify(status)}\n`), { signedIn: true, account: 'someone@example.com' }, 'past a line printed in front of it');
+  assert.deepEqual(read('{"loggedIn": true, "authMethod": "console"}'), { signedIn: true, account: null }, 'signed in, no email');
+  assert.deepEqual(read('{"loggedIn": true, "email": ""}'), { signedIn: true, account: null });
+  assert.deepEqual(read('{"loggedIn": true, "email": {"address": "x"}}'), { signedIn: true, account: null }, 'only a string is an account');
+  assert.deepEqual(read('{"loggedIn": false, "email": "someone@example.com"}'), { signedIn: false, account: null }, 'signed out: nobody');
+  assert.deepEqual(read('"loggedIn": true, "email": "someone@example.com"'), { signedIn: true, account: null }, 'not JSON: the old reading, and no account');
+  assert.deepEqual(read('{"loggedIn": true, "email": "someone@example.com"'), { signedIn: true, account: null }, 'cut off');
+  assert.deepEqual(read('error: unknown command \'auth\''), { signedIn: null, account: null });
+});
+
+test('Codex\'s account is the email claim of the ID token in its auth.json; a missing file or a malformed token gives none', () => {
+  const home = temp();
+  const codexHome = path.join(home, '.codex');
+  fs.mkdirSync(codexHome);
+  const auth = path.join(codexHome, 'auth.json');
+  const write = (idToken) => fs.writeFileSync(auth, JSON.stringify({ auth_mode: 'chatgpt', OPENAI_API_KEY: null, tokens: { id_token: idToken, access_token: 'secret-access', refresh_token: 'secret-refresh', account_id: 'acct-1' }, last_refresh: '2026-10-03T00:00:00Z' }));
+  assert.equal(codexAccount({ env: {}, home }), null, 'no auth.json');
+  write(jwt({ email: 'someone@example.com', email_verified: true, sub: 'user-1', 'https://api.openai.com/auth': { chatgpt_plan_type: 'plus' } }));
+  assert.equal(codexAccount({ env: {}, home }), 'someone@example.com');
+  const custom = path.join(home, 'elsewhere');
+  fs.mkdirSync(custom);
+  fs.copyFileSync(auth, path.join(custom, 'auth.json'));
+  fs.rmSync(auth);
+  assert.equal(codexAccount({ env: { CODEX_HOME: custom }, home }), 'someone@example.com', '$CODEX_HOME first');
+  assert.equal(codexAccount({ env: {}, home }), null, 'not in ~/.codex any more');
+  for (const [token, why] of [['not-a-token', 'one part'], ['a.%%%.c', 'payload not base64url'], [`a.${Buffer.from('{"email":').toString('base64url')}.c`, 'payload not JSON'], [jwt({ sub: 'user-1' }), 'no email claim'], [jwt({ email: 42 }), 'email not a string'], [null, 'no id_token']]) {
+    write(token);
+    assert.equal(codexAccount({ env: {}, home }), null, why);
+  }
+  fs.writeFileSync(auth, '{ not json');
+  assert.equal(codexAccount({ env: {}, home }), null, 'auth.json not JSON');
+});
+
+test('detectTools: Codex signed in with ChatGPT carries its account into the record, and no token goes with it', async () => {
+  const home = temp();
+  const codexHome = path.join(home, '.codex');
+  fs.mkdirSync(codexHome);
+  const idToken = jwt({ email: 'someone@example.com', sub: 'user-1' });
+  fs.writeFileSync(path.join(codexHome, 'auth.json'), JSON.stringify({ auth_mode: 'chatgpt', tokens: { id_token: idToken, access_token: 'secret-access', refresh_token: 'secret-refresh' } }));
+  const status = (stdout) => fakeRunner({ lookup: '@tool codex\n/opt/homebrew/bin/codex\n', shell: { '--version': { stdout: 'codex-cli 0.155.1\n' }, 'login status': { stdout } } });
+  const before = process.env.CODEX_HOME;
+  delete process.env.CODEX_HOME; // the default, ~/.codex, under this test's home
+  try {
+    const found = await detectTools({ runner: status('Logged in using ChatGPT\n'), only: ['codex'], home });
+    assert.deepEqual([found.codex.status, found.codex.signedIn, found.codex.account], ['ready', true, 'someone@example.com']);
+    assert.doesNotMatch(JSON.stringify(found), /secret-|eyJ|c2lnbmF0dXJl/, 'only the address leaves auth.json');
+    const out = await detectTools({ runner: status('Not logged in\n'), only: ['codex'], home });
+    assert.deepEqual([out.codex.status, out.codex.account], ['signed-out', null], 'a left-over auth.json names nobody once the CLI says signed out');
+    const key = await detectTools({ runner: status('Logged in using an API key - sk-proj-***\n'), only: ['codex'], home });
+    assert.deepEqual([key.codex.status, key.codex.account], ['signed-out', null]);
+    fs.writeFileSync(path.join(codexHome, 'auth.json'), '{ not json');
+    const unread = await detectTools({ runner: status('Logged in using ChatGPT\n'), only: ['codex'], home });
+    assert.deepEqual([unread.codex.status, unread.codex.signedIn, unread.codex.account, unread.codex.error], ['ready', true, null, null], 'an unreadable auth.json is no account, not an error');
+  } finally {
+    if (before === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = before;
+  }
+});
+
+test('the record keeps the account only while signed in, and drops anything that is not one', () => {
+  const { normalizeTools } = require('../src/main/tools/record.cjs');
+  const tools = normalizeTools({ claude: { signedIn: true, account: 'someone@example.com' }, codex: { signedIn: false, account: 'someone@example.com' }, git: { account: 'someone@example.com' } });
+  assert.deepEqual([tools.claude.account, tools.codex.account, Object.hasOwn(tools.git, 'account')], ['someone@example.com', null, false]);
+  assert.equal(normalizeTools({ claude: { signedIn: true, account: 'two words' } }).claude.account, null);
+  assert.equal(normalizeTools({ claude: { signedIn: true, account: 7 } }).claude.account, null);
+  assert.equal(observed('claude', { file: '/x/claude', ran: true, version: '2.1.300', signedIn: false, account: 'someone@example.com' }).account, null);
+  assert.equal(observed('claude', { file: '/x/claude', ran: false, signedIn: true, account: 'someone@example.com' }).account, null, 'a copy that did not run says nothing about who is signed in');
+});
+
 test('detectTools: a version that never answers is retried once, then reported without guessing', async () => {
   const home = temp();
   let asked = 0;
@@ -308,9 +385,10 @@ function managerFor(spec, options = {}) {
   const tools = createTools({
     readTools: () => readConfig(root).tools,
     writeTools: (value) => writeTools(root, value),
-    detect: fake.detect,
+    detect: options.detect ? options.detect(fake) : fake.detect,
     actions: options.actions ? { ...fake.actions, ...options.actions(fake) } : fake.actions,
     signInProcess: fake.signInProcess,
+    signOutProcess: options.signOutProcess ? options.signOutProcess(fake) : fake.signOutProcess,
     onChange: (snapshot) => seen.push(snapshot),
     ...(options.now ? { now: options.now } : {}),
     ...(options.installAtLaunch ? { installAtLaunch: options.installAtLaunch } : {}),
@@ -432,6 +510,61 @@ test('manager: sign-in waits for the CLI, shows its page, and checks again', asy
   assert.deepEqual([readConfig(root).tools.claude.signedIn, readConfig(root).tools.claude.status], [true, 'ready']);
 });
 
+test('manager: sign-out runs the CLI\'s logout, then checks that tool again (2026-10-03, Connections)', async () => {
+  const calls = [];
+  const { tools, root, seen } = managerFor({ claude: '2.1.300', codex: '0.155.1' }, {
+    detect: (fake) => async (only) => { calls.push(['check', ...only]); return fake.detect(only); },
+    signOutProcess: (fake) => async (name, file) => { calls.push(['logout', name, file]); return fake.signOutProcess(name, file); },
+  });
+  await tools.start();
+  assert.deepEqual([readConfig(root).tools.claude.status, readConfig(root).tools.claude.account, tools.snapshot().tools.claude.account], ['ready', 'researcher@example.com', 'researcher@example.com'], 'who is signed in, through the record to the rows');
+  calls.length = 0;
+  seen.length = 0;
+  assert.deepEqual(await tools.signOut('claude'), { ok: true, error: null });
+  assert.deepEqual(calls, [['logout', 'claude', '/Users/fake/.local/bin/claude'], ['check', 'claude']], 'the logout first, then a check of that tool only');
+  assert.equal(seen[0].tools.claude.busy.action, 'sign-out', 'the rows say it is signing out while the CLI runs');
+  assert.deepEqual([readConfig(root).tools.claude.signedIn, readConfig(root).tools.claude.status, readConfig(root).tools.claude.account], [false, 'signed-out', null]);
+  assert.equal(readConfig(root).tools.codex.status, 'ready', 'Codex is left signed in');
+  assert.equal(tools.snapshot().tools.claude.busy, null);
+});
+
+test('manager: a sign-out the CLI refuses says why; none starts while signing in, for Git, or for an agent not installed', async () => {
+  const refused = managerFor({ codex: '0.155.1' }, { signOutProcess: () => async () => ({ code: 1, output: 'Error: could not remove auth.json' }) });
+  await refused.tools.start();
+  assert.deepEqual(await refused.tools.signOut('codex'), { ok: false, error: 'Could not sign out of Codex: Error: could not remove auth.json' });
+  assert.equal(readConfig(refused.root).tools.codex.status, 'ready', 'still signed in, as the check found');
+  const silent = managerFor({ claude: '2.1.300' }, { signOutProcess: () => async () => ({ code: 0, output: '' }) });
+  await silent.tools.start();
+  assert.deepEqual(await silent.tools.signOut('claude'), { ok: false, error: 'Claude Code still says it is signed in.' });
+
+  const calls = [];
+  const { tools } = managerFor({ git: '2.50.1', claude: '2.1.300 signed-out', codex: 'missing' }, { signOutProcess: () => async (name) => { calls.push(name); return { code: 0, output: '' }; } });
+  await tools.start();
+  assert.deepEqual(await tools.signOut('git'), { ok: false, error: null });
+  assert.deepEqual(await tools.signOut('codex'), { ok: false, error: null }, 'not installed: nothing to run');
+  const signing = tools.signIn('claude');
+  assert.deepEqual(await tools.signOut('claude'), { ok: false, error: null }, 'not in the middle of a sign-in');
+  await signing;
+  assert.deepEqual(calls, []);
+});
+
+test('the logout command is each CLI\'s own, run in the login shell by the program\'s full path', async () => {
+  assert.deepEqual(SIGN_OUT_COMMANDS, { claude: 'exec "$ENGELBART_TOOL" auth logout 2>&1', codex: 'exec "$ENGELBART_TOOL" logout 2>&1' });
+  const runs = [];
+  let answer = { code: 0, stdout: 'Successfully logged out from your Anthropic account.\n', marked: true, timedOut: false };
+  const runner = { shellPath: '/bin/zsh', shell: async (command, options) => { runs.push([command, options.env]); return answer; } };
+  const signOut = createSignOutProcess({ runner });
+  assert.deepEqual(await signOut('claude', '/Users/someone/.local/bin/claude'), { code: 0, output: '' });
+  assert.deepEqual(runs, [['exec "$ENGELBART_TOOL" auth logout 2>&1', { ENGELBART_TOOL: '/Users/someone/.local/bin/claude' }]]);
+  answer = { code: 1, stdout: '\u001b[31mError:\u001b[0m not logged in\nTry codex login\n', marked: true, timedOut: false };
+  assert.deepEqual(await signOut('codex', '/opt/homebrew/bin/codex'), { code: 1, output: 'Try codex login' }, 'the last line, without colour codes');
+  assert.equal(runs[1][0], 'exec "$ENGELBART_TOOL" logout 2>&1');
+  answer = { code: 0, stdout: '', marked: false, timedOut: false };
+  assert.match((await signOut('codex', '/opt/homebrew/bin/codex')).output, /never runs Engelbart's commands/);
+  answer = { code: null, stdout: '', marked: false, timedOut: true };
+  assert.deepEqual(await signOut('codex', '/opt/homebrew/bin/codex'), { code: null, output: 'it did not finish within 30 seconds' });
+});
+
 test('manager: runs and updates of the same program never overlap', async () => {
   let running = 0;
   let overlapped = false;
@@ -470,6 +603,18 @@ test('manager: while Engelbart\'s own Git stands in, everything it starts is giv
   const own = managerFor({ git: '2.50.1' });
   await own.tools.start();
   assert.deepEqual(own.tools.environment(), {}, 'the person\'s own Git: PATH is left as it is');
+});
+
+test('manager: an agent installed where the login shell\'s PATH misses it hands its folder to everything Engelbart starts (2026-09-29)', async () => {
+  const home = temp();
+  const launcher = path.join(home, '.local', 'bin', 'claude');
+  fs.mkdirSync(path.dirname(launcher), { recursive: true });
+  fs.writeFileSync(launcher, '#!/bin/sh\n', { mode: 0o755 });
+  const { root } = ensureHome(temp());
+  const tools = createTools({ readTools: () => readConfig(root).tools, writeTools: (value) => writeTools(root, value), detect: async () => ({ claude: { ...observed('claude', { file: launcher, onPath: false, source: 'native', ran: true, version: '2.1.300', signedIn: false }), checkedAt: new Date().toISOString() } }), actions: {} });
+  await tools.check(['claude']);
+  assert.deepEqual(tools.environment(), { ENGELBART_AGENT_PATH: path.dirname(launcher), ENGELBART_CLAUDE_BIN: launcher }, 'and its full path, which the terminal\'s Claude Code item runs (2026-09-30)');
+  assert.equal(tools.binaryFor('claude'), launcher);
 });
 
 test('manager: on a Mac with neither agent, Claude Code is installed at launch without asking; never over a skip, beside Codex, or on a check that could not ask the shell', async () => {
@@ -553,6 +698,9 @@ function realShell() {
   const root = temp();
   const bin = path.join(root, 'bin');
   fs.mkdirSync(bin);
+  // After /etc/zprofile: its path_helper puts the system's folders first (/opt/homebrew/bin among them), and a Claude
+  // Code installed there was found instead of the one here (2026-09-29). As a person's own .zprofile would, this sets it.
+  fs.writeFileSync(path.join(root, '.zprofile'), `export PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}\n`);
   return { root, bin, runner: createRunner({ environment: { HOME: root, ZDOTDIR: root, SHELL: '/bin/zsh', PATH: `${bin}:/usr/bin:/bin` } }) };
 }
 
@@ -574,13 +722,13 @@ test('real zsh: an alias is reported to the terminal without its definition, and
   assert.equal(tools.usableAgents().includes('claude'), false, '@bart cannot run an alias');
 });
 
-test('real zsh: sign-in is read from each CLI, and the account details stay out of the record', async () => {
+test('real zsh: sign-in and the account are read from each CLI, and nothing else of its status goes into the record', async () => {
   const { root, bin, runner } = realShell();
   fs.writeFileSync(path.join(root, '.zshrc'), '');
-  fs.writeFileSync(path.join(bin, 'claude'), '#!/bin/sh\ncase "$1" in --version) echo "2.1.300 (Claude Code)";; auth) printf \'{"loggedIn": true, "email": "someone@example.com"}\\n\';; esac\n', { mode: 0o700 });
+  fs.writeFileSync(path.join(bin, 'claude'), '#!/bin/sh\ncase "$1" in --version) echo "2.1.300 (Claude Code)";; auth) printf \'{"loggedIn": true, "email": "someone@example.com", "orgId": "org-private-id"}\\n\';; esac\n', { mode: 0o700 });
   fs.writeFileSync(path.join(bin, 'codex'), '#!/bin/sh\ncase "$1" in --version) echo "codex-cli 0.155.1";; login) echo "Not logged in"; exit 1;; esac\n', { mode: 0o700 });
   const found = await detectTools({ runner, only: ['claude', 'codex'], home: root, systemBins: [] });
-  assert.deepEqual([found.claude.status, found.claude.signedIn], ['ready', true]);
-  assert.deepEqual([found.codex.status, found.codex.signedIn], ['signed-out', false]);
-  assert.doesNotMatch(JSON.stringify(found), /someone@example/);
+  assert.deepEqual([found.claude.status, found.claude.signedIn, found.claude.account], ['ready', true, 'someone@example.com']);
+  assert.deepEqual([found.codex.status, found.codex.signedIn, found.codex.account], ['signed-out', false, null]);
+  assert.doesNotMatch(JSON.stringify(found), /org-private-id/);
 });

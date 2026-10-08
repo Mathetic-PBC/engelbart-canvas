@@ -45,3 +45,15 @@ test('a sign-in that fails reports its last line, and Cancel ends one that waits
   const ended = await Promise.race([run.done, new Promise((_, reject) => setTimeout(() => reject(new Error('cancel did not end it')), 5000))]);
   assert.deepEqual(ended, { code: null, output: '' }, 'cancelled, not a success');
 });
+
+test('a CLI found where PATH does not reach signs in with its folder on PATH (Claude Code warns when it is not)', async (t) => {
+  const { root, environment } = fixture(t);
+  const away = path.join(root, '.local', 'bin');
+  fs.mkdirSync(away, { recursive: true });
+  const cli = path.join(away, 'claude');
+  // Stands in for Claude Code's own check: its folder has to be on the PATH it was started with.
+  fs.writeFileSync(cli, `#!/bin/sh\ncase ":$PATH:" in *":${away}:"*) echo "Login successful."; exit 0;; esac\necho "Native installation exists but ${away} is not in your PATH"\nexit 7\n`, { mode: 0o755 });
+  const signIn = createSignInProcess({ pty, shell: '/bin/zsh', environment });
+  const exit = await Promise.race([signIn('claude', cli).done, new Promise((_, reject) => setTimeout(() => reject(new Error('sign-in did not end')), 8000))]);
+  assert.deepEqual(exit, { code: 0, output: '' });
+});

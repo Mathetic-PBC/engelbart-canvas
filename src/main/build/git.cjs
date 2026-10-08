@@ -7,8 +7,10 @@
 // arguments, never through a shell. `gitPath()` is the git the tool check found (../tools); tests pass the one on PATH.
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
+const { randomBytes } = require('node:crypto');
 
 const FALLBACK_NAME = 'Engelbart';
 const FALLBACK_EMAIL = 'build@engelbart.local';
@@ -27,6 +29,13 @@ class GitError extends Error {
 
 const firstLine = (text) => String(text || '').split('\n').map((line) => line.trim()).find(Boolean) || '';
 
+// A clone's credential helper for the GitHub sign-in (clone): it answers `get` for https://github.com alone, from
+// ENGELBART_GITHUB_TOKEN, and ignores `store` and `erase`. An empty credential.helper first leaves the person's own
+// helpers out of that command (their keychain would otherwise be asked to store the token). Config through
+// GIT_CONFIG_COUNT (Git 2.31+) keeps it off the command line; an older Git ignores it and uses the person's own.
+const GITHUB_HELPER = '!f() { test "$1" = get || exit 0; protocol=; host=; while IFS== read -r key value; do test -z "$key" && break; case "$key" in protocol) protocol=$value ;; host) host=$value ;; esac; done; test "$protocol" = https && test "$host" = github.com && test -n "$ENGELBART_GITHUB_TOKEN" || exit 0; printf \'username=x-access-token\\npassword=%s\\n\' "$ENGELBART_GITHUB_TOKEN"; }; f';
+const credentialEnv = () => ({ GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'credential.helper', GIT_CONFIG_VALUE_0: '', GIT_CONFIG_KEY_1: 'credential.helper', GIT_CONFIG_VALUE_1: GITHUB_HELPER });
+
 function createGit({ gitPath = () => 'git', run = execFile, environment = process.env } = {}) {
   const env = () => {
     const base = { ...environment };
@@ -34,10 +43,10 @@ function createGit({ gitPath = () => 'git', run = execFile, environment = proces
     return { ...base, GIT_TERMINAL_PROMPT: '0', GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true', GIT_MERGE_AUTOEDIT: 'no', GIT_PAGER: 'cat', PAGER: 'cat', LC_MESSAGES: 'C', LANGUAGE: 'en' };
   };
 
-  /** → { code, stdout, stderr }; never throws. */
-  function exec(cwd, args, { timeout = TIMEOUT_MS, input = null } = {}) {
+  /** → { code, stdout, stderr }; never throws. `extra`: environment for this one command. */
+  function exec(cwd, args, { timeout = TIMEOUT_MS, input = null, env: extra = {} } = {}) {
     return new Promise((resolve) => {
-      const child = run(gitPath(), ['-c', 'core.hooksPath=/dev/null', '-c', 'core.quotepath=off', '-c', 'advice.detachedHead=false', ...args], { cwd, env: env(), timeout, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
+      const child = run(gitPath(), ['-c', 'core.hooksPath=/dev/null', '-c', 'core.quotepath=off', '-c', 'advice.detachedHead=false', ...args], { cwd, env: { ...env(), ...extra }, timeout, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
         resolve({ code: error ? (typeof error.code === 'number' ? error.code : -1) : 0, stdout: String(stdout || ''), stderr: String(stderr || ''), missing: !!(error && error.code === 'ENOENT') });
       });
       if (child && child.stdin) { if (input != null) child.stdin.end(input); else child.stdin.end(); }
@@ -107,6 +116,12 @@ function createGit({ gitPath = () => 'git', run = execFile, environment = proces
     await exec(repo, ['worktree', 'prune']);
   }
 
+  /** A worktree moved to `to` (which must not exist yet), git's record of it with it: its project came back from the trash under another folder name. */
+  async function moveWorktree(repo, from, to) {
+    fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o700 });
+    await must(repo, ['worktree', 'move', from, to], { timeout: LONG_MS });
+  }
+
   async function deleteBranch(repo, branch) {
     const out = await exec(repo, ['branch', '-D', branch]);
     return out.code === 0;
@@ -158,6 +173,25 @@ function createGit({ gitPath = () => 'git', run = execFile, environment = proces
     }
     const patch = await must(dir, ['diff', '--find-renames', '--no-color', '--no-ext-diff', from, to]);
     return { files, patch: patch.length > maxPatch ? patch.slice(0, maxPatch) : patch, truncated: patch.length > maxPatch };
+  }
+
+  /**
+   * What changed since `from` as the worktree stands now, new files too, with nothing committed (2026-09-29: the Build
+   * card's diff, while the agent works). The files go into a copy of the worktree's index, never the index itself, so
+   * the agent's own `git status` is untouched. → as diff
+   */
+  async function workingDiff(dir, from, options) {
+    const gitDir = path.resolve(dir, (await trim(dir, ['rev-parse', '--git-dir'])));
+    const index = path.join(gitDir, `engelbart-live-${process.pid}-${Math.random().toString(36).slice(2)}.index`);
+    const own = { env: { GIT_INDEX_FILE: index } };
+    try {
+      try { fs.copyFileSync(path.join(gitDir, 'index'), index); } catch { await must(dir, ['read-tree', 'HEAD'], own); }
+      await must(dir, ['add', '-A'], own);
+      const tree = (await must(dir, ['write-tree'], own)).trim();
+      return await diff(dir, from, tree, options);
+    } finally {
+      try { fs.unlinkSync(index); } catch { /* never made */ }
+    }
   }
 
   const mergeBase = (dir, a, b) => trim(dir, ['merge-base', a, b]);
@@ -233,9 +267,32 @@ function createGit({ gitPath = () => 'git', run = execFile, environment = proces
     return checkpoint(dir, message, who);
   }
 
+  /**
+   * HEAD's tree with the changes of `shas` (commits in its history: a Build's run steps) taken back out, newest first, in
+   * a scratch index: the worktree and its own index are never touched. What is left is the Build's own work (Review shows
+   * the two apart). → the tree, or null when a later commit changed the same lines and they cannot be taken out.
+   */
+  async function treeWithout(dir, shas) {
+    const index = path.join(os.tmpdir(), `engelbart-index-${process.pid}-${randomBytes(6).toString('hex')}`);
+    const scratch = { env: { GIT_INDEX_FILE: index } };
+    try {
+      await must(dir, ['read-tree', 'HEAD'], scratch);
+      for (const sha of [...shas].reverse()) {
+        const patch = await must(dir, ['diff', '--binary', '--full-index', `${sha}^`, sha]);
+        if (!patch.trim()) continue;
+        const out = await exec(dir, ['apply', '--cached', '--reverse', '--whitespace=nowarn', '-'], { ...scratch, input: patch });
+        if (out.code !== 0) return null;
+      }
+      return (await must(dir, ['write-tree'], scratch)).trim();
+    } finally {
+      try { fs.unlinkSync(index); } catch { /* never made */ }
+    }
+  }
+
   /** A folder with no history gets one: git init, a .gitignore when there is none, and everything in a first commit. */
-  async function init(dir) {
-    const inside = await exec(dir, ['rev-parse', '--is-inside-work-tree']);
+  /** `own`: `dir` gets a repository of its own even inside another one (the default repo, never a parent's commit). */
+  async function init(dir, { own = false } = {}) {
+    const inside = own ? { code: fs.existsSync(path.join(dir, '.git')) ? 0 : 1 } : await exec(dir, ['rev-parse', '--is-inside-work-tree']);
     if (inside.code !== 0) await must(dir, ['init', '--quiet']);
     const ignore = path.join(dir, '.gitignore');
     if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, 'node_modules/\n.env\n.env.*\n.DS_Store\n');
@@ -245,7 +302,38 @@ function createGit({ gitPath = () => 'git', run = execFile, environment = proces
     return head(dir);
   }
 
+  /**
+   * `url` cloned into `dir` (which must not exist yet), never with a prompt. With `token` (the GitHub sign-in), GitHub's
+   * request for a password is answered by GITHUB_HELPER, the only credential helper of this one command: the token is in
+   * its environment, never on a command line, and nothing is kept (not in the clone's config, whose remote is the plain
+   * address, nor in the person's keychain, whose helper is left out). Without it, the person's own Git credentials.
+   */
+  async function clone(url, dir, { token = null } = {}) {
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    const extra = token ? { ...credentialEnv(), ENGELBART_GITHUB_TOKEN: token } : {};
+    await must(path.dirname(dir), ['clone', '--quiet', '--', url, dir], { timeout: LONG_MS, env: extra });
+  }
+
   const message = (dir, sha = 'HEAD') => trim(dir, ['log', '-1', '--format=%B', sha]);
+
+  /**
+   * The worktree back on `branch` at `sha`, where its turn started, when the agent moved it (2026-10-07; ./git-guard.cjs
+   * keeps it from doing so, this is what holds when that was got round): another branch or a detached HEAD checked out,
+   * commits of its own, the branch reset or deleted. The files stay as they are, for the turn's checkpoint, which then
+   * holds the agent's commits as one. A turn that started in a merge (a conflict sent to the agent) may have concluded
+   * it: that commit is kept, as concludeMerge would have made it. → what was put right: { branch, commits }
+   */
+  async function holdBranch(dir, branch, sha, { merging: wasMerging = false } = {}) {
+    const ref = `refs/heads/${branch}`;
+    const at = await exec(dir, ['symbolic-ref', '--quiet', 'HEAD']);
+    const moved = at.code !== 0 || at.stdout.trim() !== ref;
+    const tip = (await exec(dir, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])).stdout.trim();
+    let commits = tip !== sha;
+    if (commits && wasMerging && tip && !moved) commits = (await exec(dir, ['rev-parse', '--verify', '--quiet', `${tip}^1`])).stdout.trim() !== sha;
+    if (commits) await must(dir, ['update-ref', '-m', 'Engelbart: where the turn started', ref, sha]);
+    if (moved) await must(dir, ['symbolic-ref', '-m', 'Engelbart: back on the Build\'s branch', 'HEAD', ref]);
+    return { branch: moved, commits };
+  }
 
   /** Files whose added lines still hold a conflict marker between two commits (a merge left half resolved). */
   async function markers(dir, from, to) {
@@ -259,7 +347,7 @@ function createGit({ gitPath = () => 'git', run = execFile, environment = proces
     return [...files];
   }
 
-  return { exec, top, head, revParse, dirtyPaths, identity, addWorktree, removeWorktree, deleteBranch, branchExists, merging, abortMerge, checkpoint, diff, mergeBase, isAncestor, conflicted, squashOnto, checkoutBranch, fastForward, mergeInto, concludeMerge, init, message, markers };
+  return { exec, top, head, revParse, dirtyPaths, identity, addWorktree, removeWorktree, moveWorktree, deleteBranch, branchExists, merging, abortMerge, checkpoint, diff, workingDiff, treeWithout, mergeBase, isAncestor, conflicted, squashOnto, checkoutBranch, fastForward, mergeInto, concludeMerge, holdBranch, init, clone, message, markers };
 }
 
-module.exports = { createGit, GitError, FALLBACK_NAME, FALLBACK_EMAIL };
+module.exports = { createGit, GitError, GITHUB_HELPER, credentialEnv, FALLBACK_NAME, FALLBACK_EMAIL };

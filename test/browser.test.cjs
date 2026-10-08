@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { pathToFileURL } = require('node:url');
-const { parseBrowserUrl, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews } = require('../src/main/browser/views.cjs');
+const { parseBrowserUrl, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews, stagePartition, PARTITION, DEV_PARTITION } = require('../src/main/browser/views.cjs');
 
 const address = () => import(pathToFileURL(path.join(__dirname, '../src/renderer/model/address.js')).href);
 
@@ -105,7 +105,7 @@ function fakeElectron() {
     setBounds(bounds) { this.bounds = bounds; }
   }
   const browsing = {
-    flushed: 0, cookies: { on() {}, flushStore: async () => { browsing.flushed += 1; } }, ua: 'X Electron/44.4.1 Y', setUserAgent(value) { this.ua = value; }, getUserAgent() { return this.ua; }, setPermissionRequestHandler(handler) { this.permission = handler; },
+    flushed: 0, removed: [], cookies: { on() {}, flushStore: async () => { browsing.flushed += 1; }, remove: async (url, name) => { browsing.removed.push([url, name]); } }, ua: 'X Electron/44.4.1 Y', setUserAgent(value) { this.ua = value; }, getUserAgent() { return this.ua; }, setPermissionRequestHandler(handler) { this.permission = handler; },
     webRequest: { onHeadersReceived(filter, handler) { browsing.headersFilter = filter; browsing.headers = handler; } },
     on(name, handler) { browsing[name] = handler; },
   };
@@ -175,7 +175,8 @@ test('views: one page shows at a time, pages stay locked down, windows become ta
   assert.deepEqual(a.webContents.windowOpen({ url: 'engelbart://app/index.html', disposition: 'new-window' }), { action: 'deny' });
   assert.deepEqual(a.webContents.windowOpen({ url: 'file:///etc/passwd', disposition: 'foreground-tab' }), { action: 'deny' });
 
-  // Signing in: a popup is a real child window with its opener, locked down like a tab and never given the preload.
+  // Signing in: a popup is a real child window with its opener, locked down like a tab. It has the session's page preload
+  // (MATH-54 build 2) as every page does, but it is no tab: main answers it nothing (web-page-marks.test.cjs).
   const popupAnswer = a.webContents.windowOpen({ url: 'about:blank', disposition: 'new-window' });
   assert.equal(popupAnswer.action, 'allow');
   assert.deepEqual(popupAnswer.overrideBrowserWindowOptions.webPreferences, a.options.webPreferences);
@@ -252,6 +253,71 @@ test('views: one page shows at a time, pages stay locked down, windows become ta
   await views.flush();
   assert.equal(fake.browsing.flushed, 1);
   assert.equal(views.show('a', { x: 0, y: 0, width: 1, height: 1 }), false);
+});
+
+test('views: a checkout keeps the Stage\'s cookies in a partition of its own; a package uses persist:browser (2026-10-06)', () => {
+  assert.equal(stagePartition(true), PARTITION);
+  assert.equal(stagePartition(false), DEV_PARTITION);
+  assert.notEqual(PARTITION, DEV_PARTITION);
+  const fake = fakeElectron();
+  const asked = [];
+  fake.electron.session = { fromPartition: (name) => { asked.push(name); return fake.browsing; } };
+  const views = createBrowserViews({ electron: fake.electron, getWindow: () => fake.win, send: () => {}, appName: 'Engelbart', partition: DEV_PARTITION });
+  views.open('a', 'https://www.apple.com');
+  assert.equal(fake.made[0].options.webPreferences.partition, DEV_PARTITION);
+  assert.ok(asked.length && asked.every((name) => name === DEV_PARTITION), 'every session it asks for is the checkout\'s');
+});
+
+test('views: a first load that is cancelled is a failure; one replaced, one after a page, or a pdf is not (2026-10-04)', () => {
+  const fake = fakeElectron();
+  const sent = [];
+  const views = createBrowserViews({ electron: fake.electron, getWindow: () => fake.win, send: (channel, payload) => sent.push([channel, payload]), appName: 'Engelbart' });
+  const state = () => sent.filter(([channel]) => channel === 'browser:state').at(-1)[1];
+  const abort = (contents, url) => contents.emit('did-fail-load', {}, -3, 'ERR_ABORTED', url, true);
+
+  // A sandbox waking: the tab's first load is cancelled and nothing follows. It says so instead of staying blank.
+  views.open('a', 'https://43110-sleepy.e2b.app/');
+  const a = fake.made[0].webContents;
+  a.url = '';
+  abort(a, 'https://43110-sleepy.e2b.app/');
+  a.emit('did-stop-loading');
+  assert.deepEqual(state().error, { code: -3, description: 'The page did not load', url: 'https://43110-sleepy.e2b.app/' });
+  assert.equal(state().drawn, false);
+  // Retried, it arrives: drawn from then on.
+  views.command('a', 'reload');
+  a.emit('did-navigate');
+  assert.equal(state().error, null);
+  assert.equal(state().drawn, true);
+  // Once a page is there, a cancelled load (Stop, a link the page itself replaced) is no failure.
+  abort(a, 'https://43110-sleepy.e2b.app/next');
+  a.emit('did-stop-loading');
+  assert.equal(state().error, null);
+
+  // Chromium may say nothing but stop (a 204 answer): the same.
+  views.open('d', 'https://43110-quiet.e2b.app/');
+  const d = fake.made[1].webContents;
+  d.url = '';
+  d.emit('did-stop-loading');
+  assert.equal(state().id, 'd');
+  assert.equal(state().error.description, 'The page did not load');
+
+  // A first load replaced by another: the newer one is still loading when the cancelled one stops.
+  views.open('b', 'https://example.com/one');
+  const b = fake.made[2].webContents;
+  b.isLoading = () => true;
+  abort(b, 'https://example.com/one');
+  b.emit('did-stop-loading');
+  assert.equal(sent.filter(([channel, payload]) => channel === 'browser:state' && payload.id === 'b' && payload.error).length, 0);
+
+  // A first load that turned into a pdf: the cancel is the download the viewer gets.
+  views.open('c', 'https://arxiv.org/pdf/2310.05292');
+  const c = fake.made[3].webContents;
+  const item = Object.assign(new EventEmitter(), { getURL: () => 'https://arxiv.org/pdf/2310.05292', getMimeType: () => 'application/pdf', getFilename: () => 'x.pdf', getReceivedBytes: () => 1, setSavePath() {}, cancel() {} });
+  fake.browsing['will-download']({}, item, c);
+  abort(c, 'https://arxiv.org/pdf/2310.05292');
+  c.emit('did-stop-loading');
+  assert.equal(sent.filter(([channel, payload]) => channel === 'browser:state' && payload.id === 'c' && payload.error).length, 0);
+  views.closeAll();
 });
 
 test('views: a page on disk opens from inside the home directory only, and only a page on disk may link to another', () => {
@@ -405,23 +471,99 @@ test('views: find in the page, and the keys a page cannot keep (⌘T, ⌘W; ⇧�
   assert.deepEqual(sent.at(-1), ['browser:shortcut', { name: 'find-next', tab: 'a' }]);
 });
 
-test('GitHub webpages open in the default browser from direct loads, links, redirects and popups', () => {
+test('GitHub pages open on the Stage; only its sign-in pages go to the default browser', () => {
   const f = fakeElectron();
   const external = [];
   f.electron.shell = { openExternal: async url => { external.push(url); } };
   const views = createBrowserViews({ electron: f.electron, getWindow: () => f.win, send() {} });
   views.open('github', 'https://github.com/Mathetic-PBC/engelbart-canvas');
-  assert.equal(external.length, 1);
-  assert.equal(f.made.length, 0);
+  assert.equal(external.length, 0);
+  assert.equal(f.made.length, 1);
+  views.open('login', 'https://github.com/login?return_to=%2Fsettings');
+  assert.deepEqual(external, ['https://github.com/login?return_to=%2Fsettings']);
+  assert.equal(f.made.length, 1);
   views.open('web', 'https://example.com');
-  const contents = f.made[0].webContents;
+  const contents = f.made[1].webContents;
   for (const event of ['will-navigate', 'will-redirect']) {
     let stopped = false;
     contents.emit(event, { preventDefault() { stopped = true; } }, 'https://github.com/login');
     assert.equal(stopped, true);
+    stopped = false;
+    contents.emit(event, { preventDefault() { stopped = true; } }, 'https://github.com/Mathetic-PBC/engelbart-canvas/pulls');
+    assert.equal(stopped, false);
   }
-  assert.deepEqual(contents.windowOpen({ url: 'https://github.com/login', disposition: 'new-window' }), { action: 'deny' });
+  assert.deepEqual(contents.windowOpen({ url: 'https://github.com/apps/engelbart-mathetic/installations/new', disposition: 'new-window' }), { action: 'deny' });
   assert.equal(external.length, 4);
-  views.open('lookalike', 'https://github.com.evil.example');
+  views.open('lookalike', 'https://github.com.evil.example/login');
   assert.equal(external.length, 4);
+});
+
+test('a GitHub page sent to /login by an ended sign-in drops that sign-in and loads again, once, on the Stage', async () => {
+  const f = fakeElectron();
+  const external = [];
+  f.electron.shell = { openExternal: async url => { external.push(url); } };
+  const sent = [];
+  const views = createBrowserViews({ electron: f.electron, getWindow: () => f.win, send: (channel, payload) => sent.push([channel, payload]) });
+  const repo = 'https://github.com/mqo00/rope';
+  const login = 'https://github.com/login?return_to=https%3A%2F%2Fgithub.com%2Fmqo00%2Frope';
+  views.open('t', repo);
+  const contents = f.made[0].webContents;
+  const redirect = (url) => { const event = { isMainFrame: true, stopped: false, preventDefault() { this.stopped = true; } }; contents.emit('will-redirect', event, url); return event.stopped; };
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+  contents.emit('did-start-navigation', { url: repo, isMainFrame: true, isSameDocument: false });
+  assert.equal(redirect(login), true);
+  contents.emit('did-fail-load', {}, -3, 'ERR_ABORTED', repo, true);
+  contents.emit('did-stop-loading'); // the cancelled load, before the page is asked for again: no "did not load"
+  assert.equal(sent.filter(([channel]) => channel === 'browser:state').at(-1)[1].error, null);
+  await settle();
+  assert.deepEqual(f.browsing.removed, [['https://github.com', 'user_session'], ['https://github.com', '__Host-user_session_same_site']]);
+  assert.deepEqual(contents.loaded, [repo, repo]);
+  assert.equal(external.length, 0);
+
+  // Sent to /login again: a sign-in after all, for the default browser.
+  contents.emit('did-start-navigation', { url: repo, isMainFrame: true, isSameDocument: false });
+  assert.equal(redirect(login), true);
+  await settle();
+  assert.deepEqual(external, [login]);
+  assert.deepEqual(contents.loaded, [repo, repo]);
+  assert.equal(f.browsing.removed.length, 2);
+
+  // Neither a sign-in page asked for, nor a page elsewhere sent to GitHub's sign-in, nor a frame's redirect is retried.
+  for (const from of ['https://github.com/login', 'https://example.com/']) {
+    contents.emit('did-start-navigation', { url: from, isMainFrame: true, isSameDocument: false });
+    assert.equal(redirect(login), true);
+  }
+  contents.emit('did-start-navigation', { url: 'https://github.com/other/repo', isMainFrame: true, isSameDocument: false });
+  const frame = { isMainFrame: false, stopped: false, preventDefault() { this.stopped = true; } };
+  contents.emit('will-redirect', frame, login);
+  assert.equal(frame.stopped, true);
+  await settle();
+  assert.equal(external.length, 4);
+  assert.equal(f.browsing.removed.length, 2);
+});
+
+test('savePage: the page a tab shows, saved complete into a folder; not a tab that is missing, loading or failed (MATH-17)', async () => {
+  const f = fakeElectron();
+  const views = createBrowserViews({ electron: f.electron, getWindow: () => f.win, send() {} });
+  views.open('t', 'https://blog.example.org/post');
+  const contents = f.made[0].webContents;
+  const saved = [];
+  contents.savePage = async (file, type) => { saved.push([file, type]); };
+  contents.getTitle = () => 'A Post';
+  assert.deepEqual(await views.savePage('t', '/data/assets/pages/x'), { file: '/data/assets/pages/x/index.html', url: 'https://blog.example.org/post', title: 'A Post' });
+  assert.deepEqual(saved, [['/data/assets/pages/x/index.html', 'HTMLComplete']]);
+
+  await assert.rejects(() => views.savePage('gone', '/d'), /not open/);
+  await assert.rejects(() => views.savePage(42, '/d'), TypeError);
+  contents.isLoading = () => true;
+  await assert.rejects(() => views.savePage('t', '/d'), /still loading/);
+  contents.isLoading = () => false;
+  contents.emit('did-fail-load', {}, -105, 'ERR_NAME_NOT_RESOLVED', 'https://blog.example.org/post', true);
+  await assert.rejects(() => views.savePage('t', '/d'), /did not load/);
+  assert.equal(saved.length, 1);
+  // Chromium's own failure is the caller's to report
+  contents.emit('did-navigate');
+  contents.savePage = async () => { throw new Error('Failed to save the page'); };
+  await assert.rejects(() => views.savePage('t', '/d'), /Failed to save/);
 });

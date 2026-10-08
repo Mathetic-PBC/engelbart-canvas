@@ -10,6 +10,9 @@ const { prepareZshDir, prepareLauncher, environmentForSessions } = require('../s
 const { createLaunchSpec, loginShellArgs } = require('../src/main/terminal/launch.cjs');
 const { parseHistory, unmetafy, readShellHistory } = require('../src/main/shell-history.cjs');
 
+// Every shell here runs `detached` (2026-09-29): in a session of its own, with no controlling terminal. Run from a
+// terminal (npm test, or an Engelbart started with npm start running a Build's checks), an interactive zsh reads that
+// terminal's keyboard instead of the input it is given, and never runs its commands.
 function temporaryDirectory(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-zsh-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
@@ -52,7 +55,7 @@ test('through the launcher, zsh runs the user rc files, hides the prompt, emits 
     'for f in $preexec_functions; do $f "echo hi; ls"; done',
     'print -r -- "env=$FROM_ZSHENV$FROM_ZPROFILE$FROM_ZSHRC prompt=[$PROMPT] rprompt=[$RPROMPT] zdotdir=[${ZDOTDIR-unset}] shell=[$SHELL]"',
   ].join('; ');
-  const result = spawnSync(launcher, ['-ilc', script], { env: { HOME: home, PATH: '/usr/bin:/bin', TERM: 'dumb' }, encoding: 'utf8', timeout: 10000 });
+  const result = spawnSync(launcher, ['-ilc', script], { detached: true, env: { HOME: home, PATH: '/usr/bin:/bin', TERM: 'dumb' }, encoding: 'utf8', timeout: 10000 });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /env=111 prompt=\[\] rprompt=\[\] zdotdir=\[unset\] shell=\[\/bin\/zsh\]/);
   assert.ok(result.stdout.includes(`\u001b]633;P;Cwd=${process.cwd()}\u0007\u001b]633;A\u0007`), 'prompt mark with the directory');
@@ -65,7 +68,7 @@ test('the shell that replaces an agent when it exits is integrated too (prompt m
   fs.writeFileSync(path.join(home, '.zshrc'), "PROMPT='user> '\n");
   const launcher = prepareLauncher(userData, '/bin/zsh');
   // What the engine runs for Claude Code / Codex: `<agent>; …; exec "$TERMINAL_USER_SHELL" -il`.
-  const result = spawnSync(launcher, ['-ilc', 'true; exec "$TERMINAL_USER_SHELL" -il'], { env: { HOME: home, PATH: '/usr/bin:/bin', TERM: 'dumb', TERMINAL_USER_SHELL: launcher }, input: 'print -r -- "prompt=[$PROMPT]"\nexit\n', encoding: 'utf8', timeout: 10000 });
+  const result = spawnSync(launcher, ['-ilc', 'true; exec "$TERMINAL_USER_SHELL" -il'], { detached: true, env: { HOME: home, PATH: '/usr/bin:/bin', TERM: 'dumb', TERMINAL_USER_SHELL: launcher }, input: 'print -r -- "prompt=[$PROMPT]"\nexit\n', encoding: 'utf8', timeout: 10000 });
   assert.equal(result.status, 0, result.stderr);
   assert.ok(result.stdout.includes('\u001b]633;A\u0007'), 'ready mark from the follow-up shell');
   assert.ok(result.stdout.includes('prompt=[]'), result.stdout);
@@ -79,7 +82,7 @@ test('a ZDOTDIR the user sets in ~/.zshenv is honoured and handed back', { skip:
   fs.writeFileSync(path.join(home, '.zshenv'), `export ZDOTDIR=${JSON.stringify(custom)}\n`);
   fs.writeFileSync(path.join(custom, '.zshrc'), 'export FROM_CUSTOM=1\n');
   const launcher = prepareLauncher(userData, '/bin/zsh');
-  const result = spawnSync(launcher, ['-ilc', 'print -r -- "custom=$FROM_CUSTOM zdotdir=[$ZDOTDIR]"'], { env: { HOME: home, PATH: '/usr/bin:/bin', TERM: 'dumb' }, encoding: 'utf8', timeout: 10000 });
+  const result = spawnSync(launcher, ['-ilc', 'print -r -- "custom=$FROM_CUSTOM zdotdir=[$ZDOTDIR]"'], { detached: true, env: { HOME: home, PATH: '/usr/bin:/bin', TERM: 'dumb' }, encoding: 'utf8', timeout: 10000 });
   assert.equal(result.status, 0, result.stderr);
   assert.ok(result.stdout.includes(`custom=1 zdotdir=[${custom}]`), result.stdout);
 });
@@ -93,17 +96,35 @@ test('Engelbart\'s own Git comes first on PATH after the person\'s startup files
   // Startup files that rebuild PATH from scratch, as some do; /etc/zprofile's path_helper puts /usr/bin first on its own.
   fs.writeFileSync(path.join(home, '.zshrc'), 'export PATH=/usr/bin:/bin:/usr/sbin:/sbin\n');
   const env = { HOME: home, PATH: `${bin}:/usr/bin:/bin`, TERM: 'dumb', ENGELBART_GIT_BIN: bin };
-  const hidden = spawnSync('/bin/zsh', loginShellArgs('/bin/zsh', 'command -v git', env), { env, encoding: 'utf8', timeout: 10000 });
+  const hidden = spawnSync('/bin/zsh', loginShellArgs('/bin/zsh', 'command -v git', env), { detached: true, env, encoding: 'utf8', timeout: 10000 });
   assert.equal(hidden.status, 0, hidden.stderr);
   assert.equal(hidden.stdout.trim().split('\n').pop(), path.join(bin, 'git'), 'a hidden run (@bart, Build, summaries)');
   const launcher = prepareLauncher(userData, '/bin/zsh');
-  const terminal = spawnSync(launcher, ['-il'], { env, input: 'command -v git\nexit\n', encoding: 'utf8', timeout: 10000 });
+  const terminal = spawnSync(launcher, ['-il'], { detached: true, env, input: 'command -v git\nexit\n', encoding: 'utf8', timeout: 10000 });
   assert.equal(terminal.status, 0, terminal.stderr);
   assert.ok(terminal.stdout.includes(path.join(bin, 'git')), `the terminal: ${terminal.stdout}`);
   const without = { HOME: home, PATH: `${bin}:/usr/bin:/bin`, TERM: 'dumb' };
   assert.deepEqual(loginShellArgs('/bin/zsh', 'command -v git', without), ['-ilc', 'command -v git'], 'the person\'s own Git: the command is left as it is');
-  const own = spawnSync(launcher, ['-il'], { env: without, input: 'command -v git\nexit\n', encoding: 'utf8', timeout: 10000 });
+  const own = spawnSync(launcher, ['-il'], { detached: true, env: without, input: 'command -v git\nexit\n', encoding: 'utf8', timeout: 10000 });
   assert.ok(!own.stdout.includes(path.join(bin, 'git')), own.stdout);
+});
+
+test('an agent whose folder the person\'s PATH misses is found by name in the terminal and in hidden runs, after their own (2026-09-29)', { skip: !fs.existsSync('/bin/zsh') }, (t) => {
+  const userData = temporaryDirectory(t);
+  const home = temporaryDirectory(t);
+  const bin = path.join(home, '.local', 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, 'claude'), '#!/bin/sh\necho engelbart-claude\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(home, '.zshrc'), 'export PATH=/usr/bin:/bin:/usr/sbin:/sbin\n'); // a new account's: no ~/.local/bin
+  const env = { HOME: home, PATH: '/usr/bin:/bin', TERM: 'dumb', ENGELBART_AGENT_PATH: bin };
+  const hidden = spawnSync('/bin/zsh', loginShellArgs('/bin/zsh', 'command -v claude', env), { detached: true, env, encoding: 'utf8', timeout: 10000 });
+  assert.equal(hidden.stdout.trim().split('\n').pop(), path.join(bin, 'claude'), hidden.stderr);
+  const launcher = prepareLauncher(userData, '/bin/zsh');
+  const terminal = spawnSync(launcher, ['-il'], { detached: true, env, input: 'command -v claude\nexit\n', encoding: 'utf8', timeout: 10000 });
+  assert.equal(terminal.status, 0, terminal.stderr);
+  assert.ok(terminal.stdout.includes(path.join(bin, 'claude')), `the terminal: ${terminal.stdout}`);
+  const without = spawnSync(launcher, ['-il'], { detached: true, env: { HOME: home, PATH: '/usr/bin:/bin', TERM: 'dumb' }, input: 'command -v claude || echo none\nexit\n', encoding: 'utf8', timeout: 10000 });
+  assert.ok(!without.stdout.includes(path.join(bin, 'claude')), without.stdout);
 });
 
 test('shell history: extended-format prefixes, continuation lines, metafied bytes, latest-use order', (t) => {

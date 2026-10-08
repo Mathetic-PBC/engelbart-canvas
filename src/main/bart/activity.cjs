@@ -33,8 +33,34 @@ function pathLabeller(dirs = []) {
 
 function host(url) { try { return new URL(String(url)).hostname.replace(/^www\./, ''); } catch { return 'a page'; } }
 
+// @discover's paper tools (./papers.cjs), by the tool's own name: what it was asked, never what came back.
+function paperTool(tool, input) {
+  const given = input && typeof input === 'object' ? input : {};
+  if (tool === 'resolve') return `Looking up${quoted(given.query).replace(/^ for/, '')}`;
+  if (tool === 'references') return `Reading what${quoted(given.id).replace(/^ for/, '')} cites`;
+  if (tool === 'citations') return `Reading what cites${quoted(given.id).replace(/^ for/, '')}`;
+  if (tool === 'author_works') return `Listing the works of${quoted(given.author).replace(/^ for/, '')}`;
+  if (tool === 'related') return `Finding papers near${quoted(given.id).replace(/^ for/, '')}`;
+  if (tool === 'search') return `Searching papers${quoted(given.query)}`;
+  return 'Looking papers up';
+}
+
+// A Build's tools for putting things in the library (2026-10-07; ../build/engelbart-tools.cjs).
+function engelbartTool(tool, input, short) {
+  const given = input && typeof input === 'object' ? input : {};
+  if (tool === 'save_file') return `Saving${quoted(given.name).replace(/^ for/, '')} to Engelbart`;
+  if (tool === 'duplicate_file') return `Duplicating ${given.item && /^\//.test(given.item) ? short(given.item) : 'an item'} in Engelbart`;
+  if (tool === 'move_file_into_engelbart') return `Moving ${short(given.path)} into Engelbart`;
+  return 'Saving to Engelbart';
+}
+
 function claudeTool(name, input, short) {
   const given = input && typeof input === 'object' ? input : {};
+  const paper = String(name || '').match(/^mcp__papers__(\w+)$/);
+  if (paper) return paperTool(paper[1], given);
+  const own = String(name || '').match(/^mcp__engelbart__(\w+)$/);
+  if (own) return engelbartTool(own[1], given, short);
+  if (name === 'Agent' || name === 'Task') return `Handing${quoted(given.description).replace(/^ for/, '')} to a subagent`;
   if (name === 'Read') return `Reading ${short(given.file_path)}`;
   if (name === 'Grep') return `Searching code${quoted(given.pattern)}`;
   if (name === 'Glob') return `Listing ${clip(given.pattern, 40) || 'files'}`;
@@ -94,6 +120,13 @@ function codexUpdate(event, short) {
     return started ? { activity: 'Searching the web' } : null;
   }
   if (item.type === 'reasoning') return { activity: 'Thinking' };
+  // @discover's paper tools (2026-09-30): `arguments` arrives as an object or as its JSON.
+  if (item.type === 'mcp_tool_call') {
+    if (!started) return null;
+    let args = item.arguments;
+    if (typeof args === 'string') { try { args = JSON.parse(args); } catch { args = {}; } }
+    return { activity: item.server === 'papers' ? paperTool(item.tool, args) : item.server === 'engelbart' ? engelbartTool(item.tool, args, short) : `Using ${clip(item.tool, 24)}`, log: true };
+  }
   // A Build's patch (2026-09-25): the first file it touches names it.
   if (item.type === 'file_change' && !started) { const first = Array.isArray(item.changes) && item.changes[0]; return { activity: `Editing ${first ? short(first.path) : 'files'}`, log: true }; }
   if (item.type === 'agent_message' && !started) return { text: String(item.text || '') };
@@ -149,4 +182,4 @@ function createFeed({ onProgress = () => {}, intervalMs = 100 } = {}) {
   };
 }
 
-module.exports = { pathLabeller, claudeUpdate, codexUpdate, commandLabel, eventReader, createFeed };
+module.exports = { pathLabeller, claudeUpdate, codexUpdate, commandLabel, paperTool, eventReader, createFeed };

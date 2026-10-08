@@ -1,18 +1,25 @@
 // The workspace's Build panel (2026-09-25 as a modal, design docs/superpowers/specs/2026-09-25-build-workflow-design.md B2;
 // a panel since 2026-09-27). It opens above the Build button under the document with no backdrop. It is the top layer:
 // post-its it reaches are covered by it, not moved aside (data-cover: main draws them as pictures under it,
-// post-its/ProjectPostIts.jsx). What it holds: "Add from library" (a ringed + and a search that comes up over it), the
-// attached items, "Automatically clear workspace" (off each time), a line when the code folder leaves something out or
-// cannot take a Build, and at the lower right the model chip with the send inside it, drawn as the @bart line's. A
-// post-it's Build has a popup of its own (post-its/PostItBuild.jsx).
+// post-its/ProjectPostIts.jsx). What it holds: the repository it works in (2026-09-29: the project's default repo unless
+// another is picked; the pick is remembered per workspace, model/build-target.js; Make default on a row of the picker
+// makes it the project's default, main/build/manager.cjs setDefault), "Add
+// from library" (a ringed + and a search that comes up over it), the attached items, "Automatically clear workspace" (off each time), a line when
+// the repository leaves something out, is made or cloned when the Build starts, or cannot take a Build (a folder picked
+// here with no history is given one when the Build starts, unasked; never the default: build/manager.cjs), and at the lower right the
+// model chip with the send inside it, drawn as the @bart line's. A post-it's Build has a popup of its own
+// (post-its/PostItBuild.jsx), which always works in the default repo, whatever is picked here.
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
 import BartPicker from './BartPicker.jsx';
 import { EFFORT_LABELS } from '../../main/bart/question.cjs';
 import { attachRows } from '../model/rail.js';
+import { DEFAULT_TARGET, pickedTarget, rememberTarget, sameTarget, targetKey, targetTag } from '../model/build-target.js';
 import { KindGlyph as Glyph } from '../ui/Icons.jsx';
 import { usePlaced } from '../ui/usePlaced.js';
+import { useBodies } from './useBodies.js';
+import { useSandboxes } from '../ui/SandboxProgress.jsx';
 
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
 const WIDTH = 420;
@@ -26,12 +33,19 @@ const CIRCLE_PLUS = (
 );
 const SEARCH = <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#171717" strokeWidth="2.6" strokeLinecap="round" style={{ flex: 'none' }}><circle cx="10" cy="10" r="6.5" /><line x1="15" y1="15" x2="21" y2="21" /></svg>;
 
+const GIT_FOLDER = { type: 'folder', tags: ['git'] }; // the glyph of a repository that is not a library row
+const TAG = { flex: 'none', font: '500 10px/1 var(--font-sans)', letterSpacing: '1.2px', textTransform: 'uppercase', color: '#8f8f8f' };
+
 const providerOf = (models, key) => Object.keys(models.providers).find((id) => models.providers[id].models[key]) || models.provider;
 const rectOf = (element) => { const r = element.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width }; };
 /** Nothing to hang from: the middle of the window, near its top, as the modal was. */
 const fallbackAnchor = () => { const x = Math.max(8, ((window.innerWidth || 1200) - WIDTH) / 2), y = Math.round((window.innerHeight || 800) * 0.12); return { left: x, right: x + WIDTH, top: y, bottom: y }; };
 
-/** The search that comes up over "Add from library": a field with the caret in it, and its rows. ↑/↓ move, Enter picks, Esc clears then closes. */
+/**
+ * The search that comes up over "Add from library": a field with the caret in it, and its rows. ↑/↓ move, Enter picks,
+ * Esc clears then closes. A row's `action` ({ label, run }) is a button of its own at the row's end while it is the
+ * highlighted one (the repository picker's Make default).
+ */
 function Lookup({ anchor, placeholder, rowsFor, onPick, onClose, glyph }) {
   const [ref, placed] = usePlaced(anchor, { gap: 6, cap: 360 });
   const [q, setQ] = React.useState('');
@@ -58,11 +72,17 @@ function Lookup({ anchor, placeholder, rowsFor, onPick, onClose, glyph }) {
         <input ref={fieldRef} data-build-lookup-search="1" value={q} onChange={(event) => { setQ(event.target.value); setIdx(0); }} onKeyDown={onKey} placeholder={placeholder} aria-label={placeholder} spellCheck={false} style={{ flex: 1, minWidth: 0, padding: '6px 0', border: 0, background: 'transparent', font: '13px/1.5 var(--font-sans)', color: '#171717' }} />
       </div>
       {rows.map((item, i) => (
-        <button key={item.key} type="button" data-build-lookup-row={item.key} onMouseDown={(event) => event.preventDefault()} onClick={() => onPick(item)} onMouseMove={() => { if (idx !== i) setIdx(i); }} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', padding: '6px 10px', border: 0, borderRadius: 6, background: i === at ? '#f2f2f2' : 'transparent', textAlign: 'left', cursor: 'pointer', transition: 'background 120ms' }}>
-          <Glyph item={item.row || glyph} box={16} color="#8f8f8f" />
-          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '13px/1.5 var(--font-sans)', color: '#171717' }}>{item.name}</span>
-          {item.tag && <span style={{ flex: 'none', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '500 10px/1 var(--font-sans)', letterSpacing: '1.2px', textTransform: 'uppercase', color: '#8f8f8f' }}>{item.tag}</span>}
-        </button>
+        <div key={item.key} onMouseMove={() => { if (idx !== i) setIdx(i); }} style={{ display: 'flex', alignItems: 'center', borderRadius: 6, background: i === at ? '#f2f2f2' : 'transparent', transition: 'background 120ms' }}>
+          <button type="button" data-build-lookup-row={item.key} onMouseDown={(event) => event.preventDefault()} onClick={() => onPick(item)} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, boxSizing: 'border-box', padding: '6px 10px', border: 0, borderRadius: 6, background: 'transparent', textAlign: 'left', cursor: 'pointer' }}>
+            <Glyph item={item.row || glyph} box={16} color="#8f8f8f" />
+            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '13px/1.5 var(--font-sans)', color: '#171717' }}>{item.name}</span>
+            {item.tag && <span style={{ flex: 'none', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '500 10px/1 var(--font-sans)', letterSpacing: '1.2px', textTransform: 'uppercase', color: '#8f8f8f' }}>{item.tag}</span>}
+          </button>
+          {item.action && i === at && (
+            <button type="button" className="bart-text" data-build-lookup-action={item.key} onMouseDown={(event) => event.preventDefault()} onClick={(event) => { event.stopPropagation(); item.action.run(); }}
+              style={{ flex: 'none', marginRight: 8, whiteSpace: 'nowrap' }}>{item.action.label}</button>
+          )}
+        </div>
       ))}
     </div>,
     document.body,
@@ -91,12 +111,15 @@ function Chip({ item, glyph, onRemove, ...rest }) {
 
 /**
  * `anchor` { left, right, top, bottom }: the Build button it opens above. `onStart({ provider, model, effort, attach,
- * clear })` starts it; the panel closes itself only on Esc, ×, or a press elsewhere in the window (never while it is
- * sending).
+ * clear, target })` starts it; the panel closes itself only on Esc, ×, or a press elsewhere in the window (never while
+ * it is sending). A repository not on this Mac is cloned by the start itself (main/build start, 2026-09-29), so Send is
+ * all it takes. `workspaceId`: whose pick the panel remembers.
  */
-export default function BuildPanel({ projectId, title, anchor, library, inRail, onClose, onStart }) {
+export default function BuildPanel({ projectId, workspaceId, title, anchor, library, inRail, onClose, onStart }) {
   const [models, setModels] = React.useState(null);
   const [choice, setChoice] = React.useState(null); // { provider, model, effort }
+  const [targets, setTargets] = React.useState(null); // where a Build can work, the default repo first (main's list)
+  const [target, setTarget] = React.useState(null); // the one picked: { kind } or { kind: 'library', id }
   const [pre, setPre] = React.useState(null);
   const [attached, setAttached] = React.useState([]);
   const [clear, setClear] = React.useState(false); // "Automatically clear workspace": off every time (2026-09-27)
@@ -104,37 +127,73 @@ export default function BuildPanel({ projectId, title, anchor, library, inRail, 
   const [picker, setPicker] = React.useState(null); // the chip's rect while the selector is open
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState('');
+  const [cloning, setCloning] = React.useState(false);
+  const [asked, setAsked] = React.useState(0); // bumped when the default changes: the default repo may be another folder now
   const chipRef = React.useRef(null);
   const libraryRef = React.useRef(null);
+  const targetRef = React.useRef(null);
+  const sandboxes = useSandboxes();
+  const bodies = useBodies(projectId, !!(lookup && lookup.kind === 'library')); // what things say, while "Add from library" is up (MATH-29)
   const [ref, placed] = usePlaced(anchor || fallbackAnchor(), { gap: 8 });
 
   React.useEffect(() => {
     let live = true;
-    api.buildModels().then((value) => {
+    // The list starts on the model last picked here (main keeps it), else on Build's default: Opus high while Claude Code can run.
+    api.buildModels('build').then((value) => {
       if (!live) return;
       setModels(value);
       const start = value.providers[value.provider].ladder[0];
       setChoice({ provider: value.provider, model: start.model, effort: start.effort });
     }).catch((e) => { if (live) setError(errorMessage(e)); });
-    api.buildPreflight(projectId).then((value) => { if (live) setPre(value); }).catch((e) => { if (live) setError(errorMessage(e)); });
+    api.buildTargets(projectId).then((list) => {
+      if (!live) return;
+      setTargets(list);
+      setTarget(pickedTarget(projectId, workspaceId, list));
+    }).catch((e) => { if (live) { setError(errorMessage(e)); setTarget(DEFAULT_TARGET); } });
     return () => { live = false; };
-  }, [projectId]);
+  }, [projectId, workspaceId]);
+  // What the picked repository says: whether it can take a Build, or must be made or cloned first.
+  const picked = target ? targetKey(target) : '';
+  React.useEffect(() => {
+    if (!target) return undefined;
+    let live = true;
+    setPre(null);
+    setError('');
+    api.buildPreflight(projectId, target).then((value) => { if (live) setPre(value); }).catch((e) => { if (live) setError(errorMessage(e)); });
+    return () => { live = false; };
+  }, [projectId, picked, asked]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const send = async () => {
-    if (!choice || busy || !pre || !pre.ok) return;
+    if (!choice || !target || busy || !pre || !(pre.ok || pre.canClone)) return;
     setBusy(true);
+    setCloning(!pre.ok && !!pre.canClone);
     setError('');
     try {
-      await onStart({ ...choice, attach: attached.map((row) => row.id), clear });
+      await onStart({ ...choice, attach: attached.map((row) => row.id), clear, target });
     } catch (e) {
       setError(errorMessage(e));
       setBusy(false);
+      setCloning(false);
+      if (pre.canClone) api.buildPreflight(projectId, target).then(setPre).catch(() => {}); // a clone that failed leaves nothing; one that worked is used next time
     }
   };
-  const startHistory = async () => {
+  // Make default: the project's default repo (every workspace's, and post-its'); the picker's rows are read again.
+  const makeDefault = async (item) => {
+    if (busy) return;
     setBusy(true);
     setError('');
-    try { setPre(await api.buildInit(projectId)); } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
+    try {
+      const list = await api.buildSetDefault(projectId, item.kind === 'library' ? { kind: 'library', id: item.id } : { kind: item.kind });
+      setTargets(list);
+      setTarget((now) => (now && list.some((entry) => sameTarget(entry, now)) ? now : DEFAULT_TARGET));
+      setAsked((n) => n + 1);
+    } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
+  };
+  const pickTarget = (item) => {
+    const next = item.kind === 'library' ? { kind: 'library', id: item.id } : { kind: item.kind };
+    rememberTarget(projectId, workspaceId, next);
+    setTarget(next);
+    setLookup(null);
   };
 
   React.useEffect(() => {
@@ -155,7 +214,8 @@ export default function BuildPanel({ projectId, title, anchor, library, inRail, 
       const target = event.target;
       const inside = (selector) => !!(target && target.closest && target.closest(selector));
       if (picker && !inside('[data-bart-picker]') && !(chipRef.current && chipRef.current.contains(target))) setPicker(null);
-      if (lookup && !inside('[data-build-lookup]') && !(libraryRef.current && libraryRef.current.contains(target))) setLookup(null);
+      const opener = lookup && (lookup.kind === 'target' ? targetRef : libraryRef).current;
+      if (lookup && !inside('[data-build-lookup]') && !(opener && opener.contains(target))) setLookup(null);
       if (!busy && !inside('[data-build-panel], [data-bart-picker], [data-build-lookup], [data-build-doc]')) onClose();
     };
     document.addEventListener('mousedown', away, true);
@@ -166,13 +226,25 @@ export default function BuildPanel({ projectId, title, anchor, library, inRail, 
   const openLookup = (kind, element) => { setPicker(null); setLookup((now) => (now && now.kind === kind ? null : { kind, anchor: rectOf(element) })); };
   const entry = models && choice ? models.providers[choice.provider] : null;
   const chosen = entry ? entry.models[choice.model] : null;
-  const ready = !!(choice && pre && pre.ok && !busy);
-  const problem = pre && !pre.ok ? pre.problems[0].message : '';
-  const note = pre && pre.ok && pre.dirty ? `${pre.dirty} uncommitted ${pre.dirty === 1 ? 'file' : 'files'} left out` : '';
+  const ready = !!(choice && target && pre && (pre.ok || pre.canClone) && !busy);
+  const problem = pre && !pre.ok && !pre.canClone ? pre.problems[0].message : '';
+  const note = pre && pre.ok && pre.create ? `Makes ${pre.target.name}/ in the project folder, with a history of its own.`
+    : pre && !pre.ok && pre.canClone ? (cloning ? `Cloning into ${pre.cloneTo}…` : `Clones it into ${pre.cloneTo} in the project folder first.`)
+    : pre && pre.ok && pre.dirty ? `${pre.dirty} uncommitted ${pre.dirty === 1 ? 'file' : 'files'} left out` : '';
   const line = error || problem || note;
+  const alarming = !!(error || problem);
   const heading = 'Build';
   const named = title;
-  const libraryRows = (query) => attachRows({ query, library, taken: attached.map((row) => row.id), inRail });
+  const libraryRows = (query) => attachRows({ query, library, taken: attached.map((row) => row.id), inRail, bodies });
+  const current = target && targets ? targets.find((item) => sameTarget(item, target)) || null : null;
+  const glyphOf = (item) => (item && item.kind === 'library' && library.find((row) => row.id === item.id)) || GIT_FOLDER;
+  const tagOf = (item) => targetTag(item, !!(item.kind === 'library' && sandboxes && sandboxes.items && sandboxes.items[item.id]));
+  const targetRows = (query) => {
+    const words = String(query || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return (targets || [])
+      .filter((item) => words.every((word) => `${item.name} ${item.folder || ''} ${item.url || ''}`.toLowerCase().includes(word)))
+      .map((item) => ({ key: targetKey(item), item, name: item.name, tag: `${sameTarget(item, target) ? '✓ ' : ''}${tagOf(item)}`, row: glyphOf(item), action: item.kind === 'default' ? null : { label: 'Make default', run: () => { void makeDefault(item); } } }));
+  };
 
   return createPortal(
     <>
@@ -182,6 +254,17 @@ export default function BuildPanel({ projectId, title, anchor, library, inRail, 
           <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '15px/1.4 var(--font-sans)', color: '#4d4d4d' }}>{named}</span>
           <button type="button" className="hov-ink" onClick={() => { if (!busy) onClose(); }} aria-label="Close" style={{ flex: 'none', padding: '0 2px', border: 0, background: 'transparent', cursor: 'pointer', font: '18px/1 var(--font-sans)', color: '#8f8f8f' }}>×</button>
         </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+          <span style={{ flex: 'none', font: '13px/1.4 var(--font-sans)', color: '#8f8f8f' }}>Repository</span>
+          <button ref={targetRef} type="button" className="hov-wash" data-build-target={picked || '1'} disabled={!targets} onClick={(event) => openLookup('target', event.currentTarget)}
+            aria-haspopup="dialog" aria-expanded={!!(lookup && lookup.kind === 'target')} title={current ? current.folder || current.url || '' : ''}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 7, minWidth: 0, maxWidth: '100%', padding: '3px 8px 3px 6px', border: `1px solid ${lookup && lookup.kind === 'target' ? '#c9c9c9' : '#eaeaea'}`, borderRadius: 6, background: '#fff', cursor: targets ? 'pointer' : 'default', font: '13px/1.4 var(--font-sans)', color: '#171717', transition: 'border-color 120ms' }}>
+            <Glyph item={glyphOf(current)} box={14} />
+            <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{current ? current.name : '…'}</span>
+            {current && <span style={TAG}>{tagOf(current)}</span>}
+            <span aria-hidden="true" style={{ flex: 'none', font: '12px/1 var(--font-sans)', color: '#8f8f8f', position: 'relative', top: -3 }}>⌄</span>
+          </button>
+        </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 2, margin: '0 0 0 -6px' }}>
           <AddButton ref={libraryRef} label="Add from library" open={!!(lookup && lookup.kind === 'library')} onClick={(event) => openLookup('library', event.currentTarget)} data-build-attach="1" aria-haspopup="dialog" />
         </div>
@@ -190,10 +273,9 @@ export default function BuildPanel({ projectId, title, anchor, library, inRail, 
             {attached.map((row) => <Chip key={row.id} item={row} data-build-attached={row.id} onRemove={() => setAttached((now) => now.filter((held) => held.id !== row.id))} />)}
           </div>
         )}
-        {(line || (pre && !pre.ok && pre.canInit)) && (
+        {line && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span data-build-note="1" style={{ flex: 1, minWidth: 0, font: '12.5px/1.5 var(--font-sans)', color: error || problem ? '#e70022' : '#8f8f8f' }}>{line}</span>
-            {pre && !pre.ok && pre.canInit && <button type="button" className="bart-text" data-build-init="1" disabled={busy} onClick={startHistory} style={{ color: '#171717' }}>Start history</button>}
+            <span data-build-note="1" style={{ flex: 1, minWidth: 0, font: '12.5px/1.5 var(--font-sans)', color: alarming ? '#e70022' : '#8f8f8f' }}>{line}</span>
           </div>
         )}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 32 }}>
@@ -222,6 +304,16 @@ export default function BuildPanel({ projectId, title, anchor, library, inRail, 
           onClose={() => setLookup(null)}
         />
       )}
+      {lookup && lookup.kind === 'target' && (
+        <Lookup
+          anchor={lookup.anchor}
+          placeholder="Search repositories"
+          rowsFor={targetRows}
+          onPick={(row) => pickTarget(row.item)}
+          onClose={() => setLookup(null)}
+          glyph={GIT_FOLDER}
+        />
+      )}
       {picker && models && choice && (
         <BartPicker
           models={models}
@@ -229,7 +321,11 @@ export default function BuildPanel({ projectId, title, anchor, library, inRail, 
           anchor={picker}
           hover={false}
           cover
-          onPick={(pick) => setChoice({ provider: providerOf(models, pick.model), model: pick.model, effort: pick.effort })}
+          onPick={(pick) => {
+            const next = { provider: providerOf(models, pick.model), model: pick.model, effort: pick.effort };
+            setChoice(next);
+            api.rememberModelChoice('build', next).catch(() => {}); // the next Build panel starts here
+          }}
           onEnter={() => {}}
           onLeave={() => {}}
         />

@@ -14,6 +14,11 @@
 // section, that text is its summary, no model runs, and the length rule does not apply; a PDF
 // without one is summarized from its extracted text. Images and every other type stay null. Writing a summary sets summary and summary_edited
 // and nothing else. Afterwards every project's .context/catalog.json is brought up to date.
+//
+// Before any of that, the text pass (2026-10-05, MATH-29): every PDF's text is kept in library_text, for search. It has
+// no quiet period and no model: a PDF is read as soon as its file is there, and again whenever the file's modification
+// time changes. One that holds no text (a scan) is kept as '' and not read again until its file changes. It runs first
+// so a slow summary cannot hold it up, and alone when summaries are off (`summaries: false`).
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -24,10 +29,10 @@ const { loadSystemPrompt } = require('./summarizer.cjs');
 const { extractAbstract, extractText } = require('./pdf-text.cjs');
 
 const MINUTE = 60_000;
-const DEFAULTS = { quietMs: 30 * MINUTE, minChars: 1000, intervalMs: MINUTE, firstDelayMs: 5_000, perSweep: 5 };
+const DEFAULTS = { quietMs: 30 * MINUTE, minChars: 1000, intervalMs: MINUTE, firstDelayMs: 5_000, perSweep: 5, textsPerSweep: Infinity };
 
 function createSweeper(options) {
-  const { getContext, summarize, now = () => Date.now(), log = () => {} } = options;
+  const { getContext, summarize, summaries = true, now = () => Date.now(), log = () => {} } = options;
   const config = { ...DEFAULTS, ...Object.fromEntries(Object.entries(options).filter(([key, value]) => key in DEFAULTS && value != null)) };
   const retry = new Map(); // row id → { attempts, at }
   const papers = new Map(); // paper id → { modified, nothing }: PDFs already found to hold no abstract and no usable text
@@ -38,6 +43,8 @@ function createSweeper(options) {
   let spentUsd = 0;
   let last = null;
   let inFlight = null; // AbortController of the dispatch under way
+  let reading = null; // the text pass under way
+  let stopping = false;
 
   // One model call for one row, under the shared limits. `stillCurrent` says whether the source
   // changed while the summary was being written; if it did the result is dropped and the row settles again.
@@ -106,17 +113,45 @@ function createSweeper(options) {
     await dispatch(ctx, row, text, report, async () => { try { return fs.statSync(row.path).mtimeMs === modified; } catch { return false; } });
   }
 
+  // A PDF's text, read when its file is new or has changed since it was last read; at most textsPerSweep in one pass,
+  // by default every one waiting (pdf.js only, no model, so perSweep, which bounds summaries, does not apply).
+  async function considerText(ctx, row, stamps, report) {
+    if (stopping || !/\.pdf$/i.test(row.path)) return;
+    let modified;
+    try { modified = fs.statSync(row.path).mtimeMs; } catch { return; } // the file is gone
+    if (stamps.get(row.id) === modified) return; // read since it last changed
+    if (report.texts >= config.textsPerSweep) return;
+    report.texts += 1;
+    let text = '';
+    try { text = await extractText(row.path); } catch { text = ''; }
+    try { await ctx.libraryDb.setText(row.id, text, modified); } catch (error) { report.failed.push({ name: row.name, kind: 'text', message: String((error && error.message) || error).slice(0, 300) }); }
+  }
+
+  // One text pass at a time, whether a sweep runs it or a beat does while a sweep waits on a summary.
+  function readTexts(ctx, report) {
+    if (!reading) {
+      reading = (async () => {
+        const stamps = await ctx.libraryDb.textStamps();
+        for (const row of await ctx.libraryDb.papersWithFiles()) await considerText(ctx, row, stamps, report);
+      })().finally(() => { reading = null; });
+    }
+    return reading;
+  }
+
   async function sweepOnce() {
     const ctx = await getContext();
-    const report = { at: new Date(now()).toISOString(), dispatched: 0, extracted: 0, summarized: [], abstracts: [], cleared: [], short: [], pending: [], discarded: [], missing: [], failed: [], catalogs: [] };
-    for (const row of await ctx.libraryDb.uncountedNotes()) {
-      try { await ctx.libraryDb.setCharCount(row.id, fs.readFileSync(row.path, 'utf8').length); } catch { /* the file is gone */ }
+    const report = { at: new Date(now()).toISOString(), dispatched: 0, extracted: 0, texts: 0, summarized: [], abstracts: [], cleared: [], short: [], pending: [], discarded: [], missing: [], failed: [], catalogs: [] };
+    await readTexts(ctx, report);
+    if (summaries) {
+      for (const row of await ctx.libraryDb.uncountedNotes()) {
+        try { await ctx.libraryDb.setCharCount(row.id, fs.readFileSync(row.path, 'utf8').length); } catch { /* the file is gone */ }
+      }
+      projects.recountWorkspaces(ctx);
+      for (const row of await ctx.libraryDb.summaryCandidates(new Date(now() - config.quietMs), config.minChars)) await considerNote(ctx, row, report);
+      for (const row of await ctx.libraryDb.papersWithFiles()) await considerPaper(ctx, row, report);
+      report.catalogs = await writeCatalogs(ctx, { now: () => new Date(now()) });
     }
-    projects.recountWorkspaces(ctx);
-    for (const row of await ctx.libraryDb.summaryCandidates(new Date(now() - config.quietMs), config.minChars)) await considerNote(ctx, row, report);
-    for (const row of await ctx.libraryDb.papersWithFiles()) await considerPaper(ctx, row, report);
-    report.catalogs = await writeCatalogs(ctx, { now: () => new Date(now()) });
-    const interesting = report.summarized.length || report.abstracts.length || report.cleared.length || report.failed.length || report.discarded.length || report.catalogs.length;
+    const interesting = report.texts || report.summarized.length || report.abstracts.length || report.cleared.length || report.failed.length || report.discarded.length || report.catalogs.length;
     if (interesting || !last) {
       last = { ...report, providerPausedUntil: pausedUntil > now() ? new Date(pausedUntil).toISOString() : null, spentUsdThisRun: Number(spentUsd.toFixed(4)) };
       try {
@@ -133,24 +168,40 @@ function createSweeper(options) {
     return running;
   }
 
+  // A beat (the minute, launch, wake, a PDF just added). A sweep still under way may be waiting on a summary, its text
+  // pass long over: the text pass then runs by itself rather than after it.
+  async function textsOnly() {
+    const report = { at: new Date(now()).toISOString(), texts: 0, failed: [] };
+    await readTexts(await getContext(), report);
+    if (report.texts || report.failed.length) log(report);
+    return report;
+  }
+  function beat() {
+    if (running) void textsOnly().catch((error) => { log({ error: String((error && error.message) || error) }); });
+    else void sweep();
+  }
+
   return {
     sweep,
     start() {
       if (timer) return;
-      soon = setTimeout(() => { soon = null; void sweep(); }, config.firstDelayMs);
-      timer = setInterval(() => { void sweep(); }, config.intervalMs);
+      stopping = false;
+      soon = setTimeout(() => { soon = null; beat(); }, config.firstDelayMs);
+      timer = setInterval(beat, config.intervalMs);
       if (timer.unref) timer.unref();
     },
     sweepSoon(delayMs = 1500) {
       if (soon) clearTimeout(soon);
-      soon = setTimeout(() => { soon = null; void sweep(); }, delayMs);
+      soon = setTimeout(() => { soon = null; beat(); }, delayMs);
     },
     async stop() {
+      stopping = true; // no further PDF is read; the one being read finishes
       if (timer) clearInterval(timer);
       if (soon) clearTimeout(soon);
       timer = null; soon = null;
       if (inFlight) inFlight.abort();
       if (running) await running;
+      if (reading) await reading.catch(() => {});
     },
     status: () => last,
   };

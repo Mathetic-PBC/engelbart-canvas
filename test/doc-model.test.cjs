@@ -7,6 +7,15 @@ const { pathToFileURL } = require('node:url');
 
 const load = () => import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
 
+test('an ask\'s pending line gives way to its answer or its Build\'s line, where it stood; nowhere when it is gone (2026-10-02)', async () => {
+  const { placeAnswer, buildLine } = await load();
+  const doc = 'Plan.\n@bart --build add a hello comment\nbart~> ab12\nAfter.';
+  assert.equal(placeAnswer(doc, 'ab12', [buildLine('0123456789')]), 'Plan.\n@bart --build add a hello comment\nbuild> 0123456789\nAfter.');
+  assert.equal(placeAnswer('@bart --build\nbart~> ab12', 'ab12', ['bart> **No Build.** Write what to build after --build.']), '@bart --build\nbart> **No Build.** Write what to build after --build.');
+  assert.equal(placeAnswer(doc, 'ab12', []), 'Plan.\n@bart --build add a hello comment\nAfter.', 'a stopped ask leaves nothing');
+  assert.equal(placeAnswer('Plan.', 'ab12', ['x']), null);
+});
+
 test('a task line is a checkbox; a bare dash is a bullet (2026-09-20)', async () => {
   const { parseLine } = await load();
   assert.deepEqual(parseLine('  - [x] a'), { type: 'todo', depth: 1, done: true, text: 'a' });
@@ -31,22 +40,34 @@ test('bullets are their own kind of line, nested by two spaces', async () => {
   assert.deepEqual(parseLine(listLine(3, 'round trip')), { type: 'list', depth: 3, text: 'round trip' });
 });
 
-test('@Task starts a task, in either case, only at the head of a line', async () => {
-  const { parseLine } = await load();
-  assert.deepEqual(parseLine('@Task write the paper'), { type: 'todo', depth: 0, done: false, text: 'write the paper' });
-  assert.deepEqual(parseLine('@task write the paper'), { type: 'todo', depth: 0, done: false, text: 'write the paper' });
-  assert.deepEqual(parseLine('@TASK '), { type: 'todo', depth: 0, done: false, text: '' }, 'the space is the trigger, as "- " used to be');
-  assert.deepEqual(parseLine('  @Task nested'), { type: 'todo', depth: 1, done: false, text: 'nested' });
-  assert.deepEqual(parseLine('@Task'), { type: 'p', text: '@Task' }, 'no space yet: still being typed');
-  assert.deepEqual(parseLine('@taskforce meets'), { type: 'p', text: '@taskforce meets' });
-  assert.deepEqual(parseLine('ask @Task about it'), { type: 'p', text: 'ask @Task about it' });
+test('numbered rows, 1. and 1), are lists that keep their number and mark (MATH-13, 2026-10-05)', async () => {
+  const { parseLine, listLine, listMark, sameLine, canonicalLine, retypedRow, selectionHtml, replyRawOffset } = await load();
+  assert.deepEqual(parseLine('1. one'), { type: 'list', depth: 0, text: 'one', num: 1, delim: '.' });
+  assert.deepEqual(parseLine('  12) twelve'), { type: 'list', depth: 1, text: 'twelve', num: 12, delim: ')' });
+  assert.deepEqual(parseLine('3. '), { type: 'list', depth: 0, text: '', num: 3, delim: '.' }, 'typed "3. " starts the row');
+  assert.deepEqual(parseLine('1.no space'), { type: 'p', text: '1.no space' });
+  assert.deepEqual(parseLine('1.5 litres'), { type: 'p', text: '1.5 litres' });
+  assert.equal(listLine(1, 'x', 4, ')'), '  4) x');
+  assert.equal(listMark(parseLine('7) x')), '7)');
+  assert.equal(listMark(parseLine('- x')), '\u2022');
+  const p = parseLine('2) b');
+  assert.equal(sameLine(p, 'changed'), '2) changed', 'its number and mark survive an edit');
+  assert.equal(sameLine({ ...p, num: p.num + 1 }, ''), '3) ', 'Enter writes the next number');
+  assert.equal(canonicalLine('1) x'), '1) x');
+  assert.deepEqual(retypedRow(parseLine('- '), '1. first'), { line: '1. first', ate: 3 }, 'a number typed into an empty bullet numbers it');
+  assert.equal(selectionHtml('1. a\n2) b'), '1. a<br>2) b');
+  assert.equal(replyRawOffset({ type: 'reply', text: '10. abc' }, 4), 5, 'an answer shows "10." where its "10. " stands');
 });
 
-test('canonicalLine stores either task trigger as the checkbox line it makes', async () => {
+test('@Task is plain text since it went (2026-09-29): a checkbox is typed as - [ ]', async () => {
+  const { parseLine, canonicalLine } = await load();
+  assert.deepEqual(parseLine('@Task write the paper'), { type: 'p', text: '@Task write the paper' });
+  assert.deepEqual(parseLine('  @task nested'), { type: 'p', text: '  @task nested' });
+  assert.equal(canonicalLine('@Task x'), '@Task x');
+});
+
+test('canonicalLine stores a typed checkbox as the checkbox line it makes', async () => {
   const { canonicalLine } = await load();
-  assert.equal(canonicalLine('@Task x'), '- [ ] x');
-  assert.equal(canonicalLine('  @task x'), '  - [ ] x');
-  assert.equal(canonicalLine('@Task '), '- [ ] ');
   assert.equal(canonicalLine('- [] x'), '- [ ] x');
   assert.equal(canonicalLine('- [x] done'), '- [x] done');
   assert.equal(canonicalLine('* star'), '- star', 'one bullet marker is stored');
@@ -58,7 +79,7 @@ test('a marker typed into a row that already draws one re-types the row', async 
   const { parseLine, retypedRow } = await load();
   const bullet = parseLine('- ');
   assert.deepEqual(retypedRow(bullet, '- [ ] real work'), { line: '- [ ] real work', ate: 6 });
-  assert.deepEqual(retypedRow(bullet, '@Task real work'), { line: '- [ ] real work', ate: 6 });
+  assert.equal(retypedRow(bullet, '@Task real work'), null, '@Task is no marker (2026-09-29)');
   assert.deepEqual(retypedRow(bullet, '- nested?'), { line: '- nested?', ate: 2 }, 'no literal "- " inside a bullet');
   assert.deepEqual(retypedRow(bullet, '- []'), { line: '- [ ] ', ate: 4 }, 'the checkbox alone starts the task');
   assert.deepEqual(retypedRow(bullet, '- []one'), { line: '- []one', ate: 2 }, 'half a checkbox: the bullet marker is absorbed, the rest is text');
@@ -137,6 +158,7 @@ test('rawOffset adds the heading base and handles mentions', async () => {
   assert.equal(rawOffset(parseLine('## Title'), 2), 5);          // "## Ti|tle"
   assert.equal(rawOffset(parseLine('## Title'), 0), 3);
   assert.equal(rawOffset(parseLine('see @[hypocompass] now'), 6), 7); // "see @h|ypocompass" → "see @[h|ypocompass]"
+  assert.equal(rawOffset(parseLine('see @[hypocompass] now'), 16), 18); // "see @hypocompass|" → after the `]` (MATH-56)
   assert.equal(rawOffset(parseLine('see @[hypocompass] now'), 4), 4); // before the mention
 });
 
@@ -314,21 +336,94 @@ test('code blocks inside an @bart answer: the lines stay answer lines and say wh
   assert.equal(turnText(doc, thread.turns[0]).answer, 'Like this:\n```json\n{\n  "a": 1\n\n}\n```', 'a follow-up sends the block back as markdown');
 });
 
-test('a workspace mention is one token that keeps its id and shows the workspace icon in place of the @, then the name (2026-09-25)', async () => {
+test('a workspace mention is one token that keeps its id and shows the @, the workspace icon, then the name (2026-09-29)', async () => {
   const { INLINE, WS_MENTION_RE, wsMention, tokShown, inlineHtml, parseLine, rawOffset } = await load();
   const id = '0a1b2c3d-0000-4000-8000-000000000000';
   const token = wsMention('Pulling [in] workspaces', id);
   assert.equal(token, `@[Pulling in workspaces](ws:${id})`, 'brackets would end the name early');
   assert.deepEqual(`see ${token} and @[Plan].`.split(INLINE).filter(Boolean), ['see ', token, ' and ', '@[Plan]', '.']);
   assert.deepEqual(token.match(WS_MENTION_RE).slice(1), ['Pulling in workspaces', id]);
-  assert.deepEqual(tokShown(token), { shown: 'Pulling in workspaces', pre: 2 }, 'the icon is not text, so offsets count the name alone');
+  assert.deepEqual(tokShown(token), { shown: '@Pulling in workspaces', pre: 1 }, 'the icon is not text, so offsets count the @ and the name');
   const html = inlineHtml(token);
   assert.match(html, new RegExp(`data-mention="Pulling in workspaces" data-ws="${id}"`));
-  assert.match(html, /"><svg [^>]*>.*<\/svg>Pulling in workspaces<\/span>$/, 'the icon, then the name: no @');
+  assert.match(html, /">@<svg [^>]*>.*<\/svg>Pulling in workspaces<\/span>$/, 'the @, the icon right after it, then the name');
   assert.doesNotMatch(inlineHtml('@[Plan]'), /<svg/, 'a note mention has no icon');
   const p = parseLine(`- ${token} next`);
-  assert.equal(rawOffset(p, 'Pulling in workspaces next'.length), `${token} next`.length, 'a click after the mention maps past the id');
-  assert.equal(rawOffset(p, 1), 3, 'a click after the first letter of the name lands after it in the source');
+  assert.equal(rawOffset(p, '@Pulling in workspaces next'.length), `${token} next`.length, 'a click after the mention maps past the id');
+  assert.equal(rawOffset(p, 2), 3, 'a click after the first letter of the name lands after it in the source');
+});
+
+test('a library mention is one token that keeps its id; workspace and plain mentions split as before (MATH-21)', async () => {
+  const { INLINE, LIB_MENTION_RE, libMention, tokShown, rawOffset, parseLine } = await load();
+  assert.deepEqual('see @[A](lib:x-1) now'.split(INLINE).filter(Boolean), ['see ', '@[A](lib:x-1)', ' now']);
+  assert.deepEqual('@[A](lib:x-1)@[B](ws:y-2) @[C] [l](u)'.split(INLINE).filter(Boolean), ['@[A](lib:x-1)', '@[B](ws:y-2)', ' ', '@[C]', ' ', '[l](u)']);
+  assert.deepEqual('@[A](lib:not an id)'.split(INLINE).filter(Boolean), ['@[A]', '(lib:not an id)'], 'only an id makes it one');
+  assert.deepEqual('@[A](lib:x-1)'.match(LIB_MENTION_RE).slice(1), ['A', 'x-1']);
+  assert.equal(libMention('Pulling [in]\nworkspaces', 'x-1'), '@[Pulling inworkspaces](lib:x-1)', 'brackets and line breaks would end it early');
+  assert.equal(libMention('  [ ] ', 'x-1'), '@[Untitled](lib:x-1)');
+  assert.equal(libMention(null, 'x-1'), '@[Untitled](lib:x-1)');
+  assert.deepEqual(tokShown('@[A paper](lib:x-1)'), { shown: '@A paper', pre: 1 });
+  const token = '@[A paper](lib:x-1)';
+  assert.equal(rawOffset(parseLine(`${token} next`), '@A paper next'.length), `${token} next`.length, 'a click after it maps past the id');
+});
+
+test('inlineHtml draws a library mention as a mention holding its id; libName gives its name now, or null when it is gone (MATH-21)', async () => {
+  const { inlineHtml } = await load();
+  const STYLE = 'color:#0070f3;font-weight:500;cursor:pointer;border-bottom:1px dotted #c9c9c9';
+  assert.equal(inlineHtml('see @[A <b>](lib:x-1)'), `see <span data-mention="A &lt;b&gt;" data-lib="x-1" style="${STYLE}">@A &lt;b&gt;</span>`);
+  assert.equal(inlineHtml('@[A](lib:x-1)', { libName: (id) => (id === 'x-1' ? 'Renamed' : null) }), `<span data-mention="Renamed" data-lib="x-1" style="${STYLE}">@Renamed</span>`);
+  const gone = inlineHtml('@[A](lib:x-1)', { libName: () => null });
+  assert.doesNotMatch(gone, /data-lib|data-mention|cursor:pointer/);
+  assert.match(gone, /^<span [^>]*color:#8f8f8f[^>]*>@A<\/span>$/, 'the saved name, grey');
+  assert.match(inlineHtml('@[A](lib:x-1)', { libName: () => undefined }), /data-lib="x-1"[^>]*>@A</, 'nothing known: the saved name');
+  assert.match(inlineHtml('**@[A](lib:x-1)**', { libName: () => 'B' }), /<strong[^>]*><span data-mention="B" data-lib="x-1"/, 'inside bold too');
+  // Without opts, what was drawn before is drawn the same.
+  for (const text of ['a **b** c', '*i* `c`', '@bart go', '@[hypocompass] and @[Plan](ws:w-1)', '[t](https://a.b) https://x.y/z', '![Attachment 1](img:abc)', '<b>&"']) {
+    assert.equal(inlineHtml(text), inlineHtml(text, {}), text);
+    assert.equal(inlineHtml(text), inlineHtml(text, { libName: () => null }), text);
+  }
+  assert.match(inlineHtml('@[hypocompass]'), /^<span data-mention="hypocompass" style="[^"]*">@hypocompass<\/span>$/);
+});
+
+test('a margin note shown as text: its library mentions drawn, everything else as typed; a click maps back into it (MATH-21)', async () => {
+  const { noteHtml, noteParts, noteOffset } = await load();
+  assert.equal(noteHtml('a *b* `c` https://x.y @bart @[P] <i>'), 'a *b* `c` https://x.y @bart @[P] &lt;i&gt;', 'a note without library mentions reads as typed');
+  assert.match(noteHtml('see @[A](lib:x-1) too', { libName: () => 'B' }), /^see <span data-mention="B" data-lib="x-1"[^>]*>@B<\/span> too$/);
+  assert.match(noteHtml('see @[A](lib:x-1)', { libName: () => null }), /^see <span [^>]*color:#8f8f8f[^>]*>@A<\/span>$/);
+  const note = 'ab @[A](lib:x) cd';
+  assert.deepEqual(noteParts(note), ['ab ', '@[A](lib:x)', ' cd']);
+  assert.deepEqual(noteParts('@[A](lib:x)@[B](lib:y)'), ['@[A](lib:x)', '@[B](lib:y)'], 'no empty pieces between mentions');
+  assert.equal(noteOffset(note, 0, 1), 1);
+  assert.equal(noteOffset(note, 1, 0), 'ab @[A](lib:x)'.length, 'a click on a mention puts the caret after it');
+  assert.equal(noteOffset(note, 2, 2), 'ab @[A](lib:x) c'.length);
+  assert.equal(noteOffset(note, 2, Infinity), note.length);
+  assert.equal(noteOffset(note, 9, 0), note.length, 'past the last piece: the end');
+});
+
+test('the @ menu\'s query is the @ and what follows it up to the caret, on a line or in a follow-up field (2026-10-02)', async () => {
+  const { mentionAt } = await load();
+  assert.deepEqual(mentionAt('@', 1), { query: '', start: 0 }, 'a bare @ opens the whole menu');
+  assert.deepEqual(mentionAt('compare with @pla', 17), { query: 'pla', start: 13 });
+  assert.deepEqual(mentionAt('compare with @pla and more', 17), { query: 'pla', start: 13 }, 'only what stands before the caret counts');
+  assert.deepEqual(mentionAt('mail@host', 9), { query: 'host', start: 4 }, 'as on a document line, no space is needed before it');
+  assert.deepEqual(mentionAt('@@pl', 4), { query: 'pl', start: 1 }, 'the last @');
+  assert.deepEqual(mentionAt(`@${'x'.repeat(30)}`, 31), { query: 'x'.repeat(30), start: 0 });
+  for (const [text, caret] of [['', 0], ['plain', 5], ['@pla ', 5], ['@[Plan] ', 8], ['@[Pla', 5], ['@pla', 0], [`@${'x'.repeat(31)}`, 32]]) {
+    assert.equal(mentionAt(text, caret), null, JSON.stringify([text, caret]));
+  }
+  assert.equal(mentionAt(null, 0), null);
+});
+
+test('a follow-up sent with a mention is an @bart line whose mention draws as one, under the same thread (2026-10-02)', async () => {
+  const { parseLine, threads, inlineHtml, INLINE, wsMention } = await load();
+  const ws = wsMention('Other place', '0a1b2c3d-0000-4000-8000-000000000000');
+  const sent = `@bart --opus --high and @[Plan] with ${ws}?`; // sendFollow's line: the agent, the flags, the field's words
+  assert.deepEqual(parseLine(sent), { type: 'bart', text: `--opus --high and @[Plan] with ${ws}?` });
+  const tokens = sent.split(INLINE).filter(Boolean);
+  assert.ok(tokens.includes('@[Plan]') && tokens.includes(ws));
+  assert.match(inlineHtml('@[Plan]'), /^<span data-mention="Plan"/);
+  const doc = ['@bart why?', 'bart> Because.', 'bart> *Sonnet · high · 3 s*', sent, 'bart~> a2', ''];
+  assert.deepEqual(threads(doc).map((thread) => thread.turns.map((turn) => turn.q)), [[0, 3]], 'it joins the card it was asked under');
 });
 
 test('a Build\'s line holds its id alone; it is its own kind of line, and it ends an @bart card (2026-09-25)', async () => {
@@ -341,4 +436,199 @@ test('a Build\'s line holds its id alone; it is its own kind of line, and it end
   const lines = ['@bart why?', 'bart> because', 'build> 0123456789', '@bart and?'];
   assert.deepEqual(threads(lines).map((t) => [t.from, t.to]), [[0, 1], [3, 3]], 'a Build between two questions keeps them apart');
   assert.equal(parseLines(['```', 'build> 0123456789', '```'])[1].type, 'code', 'inside a code block it is code');
+});
+
+test('@brainstorm is an @bart line asked of another agent: with or without words, coloured as a token, one thread kind (2026-09-30)', async () => {
+  const { parseLine, agentOf, threads, turnText, inlineHtml, INLINE } = await load();
+  assert.deepEqual(parseLine('@brainstorm'), { type: 'bart', text: '', agent: 'brainstorm' });
+  assert.deepEqual(parseLine('@Brainstorm what about retries?'), { type: 'bart', text: 'what about retries?', agent: 'brainstorm' }, 'what the @ menu writes');
+  assert.deepEqual(parseLine('@brainstorm picked "The workspace"; note: soon'), { type: 'bart', text: 'picked "The workspace"; note: soon', agent: 'brainstorm' });
+  assert.deepEqual([agentOf(parseLine('@bart q')), agentOf(parseLine('@brainstorm')), agentOf(parseLine('plain'))], ['bart', 'brainstorm', 'bart']);
+  assert.equal(parseLine('@brainstorming').type, 'p');
+  assert.deepEqual('@Brainstorm here'.split(INLINE).filter(Boolean), ['@Brainstorm', ' here']);
+  assert.match(inlineHtml('@brainstorm here'), /<span style="color:#0070f3;font-weight:500">@brainstorm<\/span> here/);
+  const doc = [
+    '@brainstorm',                            // 0
+    'bart> ```json',                          // 1
+    'bart> {',                                // 2
+    'bart>   "card": "focus"',                // 3
+    'bart> }',                                // 4
+    'bart> ```',                              // 5
+    'bart>',                                  // 6
+    'bart> *Sonnet · high · 3 s*',            // 7
+    '@brainstorm picked "Retries"',           // 8
+    'bart~> k2',                              // 9
+    '',
+  ];
+  const [thread] = threads(doc);
+  assert.deepEqual(thread.turns.map((turn) => [turn.q, turn.from, turn.to, turn.foot, turn.pending]), [[0, 1, 7, 7, null], [8, 9, 9, -1, 'k2']]);
+  assert.deepEqual(turnText(doc, thread.turns[0]), { question: '', answer: '```json\n{\n  "card": "focus"\n}\n```' }, 'an empty line is still a turn; the card is its JSON');
+  assert.deepEqual(threads(['@bart why?', 'bart> because', '@brainstorm', 'bart~> k3']).map((t) => [t.from, t.to, t.turns.length]), [[0, 1, 1], [2, 3, 1]], 'another agent\'s line starts a card of its own (2026-10-02)');
+});
+
+test('an @orient line (M-02): still read, drawn and kept as written, asked as @brainstorm, and a thread of its own under another card; @brainstorm answers continue an @orient thread', async () => {
+  const { parseLine, agentOf, threads, turnText, inlineHtml, INLINE, AGENT_TOKEN } = await load();
+  assert.deepEqual(parseLine('@orient metacognitive support in AI tools'), { type: 'bart', text: 'metacognitive support in AI tools', agent: 'orient' }, 'the line is not rewritten');
+  assert.deepEqual(parseLine('@Orient @[TutorTrace]'), { type: 'bart', text: '@[TutorTrace]', agent: 'orient' });
+  assert.deepEqual([agentOf(parseLine('@orient x')), agentOf(parseLine('@Orient')), agentOf(parseLine('@brainstorm x'))], ['brainstorm', 'brainstorm', 'brainstorm'], 'it runs as @brainstorm');
+  assert.equal(parseLine('@orientation x').type, 'p', 'a longer word is not the agent');
+  assert.deepEqual('@Orient hi'.split(INLINE).filter(Boolean), ['@Orient', ' hi']);
+  assert.ok(AGENT_TOKEN.test('@orient') && AGENT_TOKEN.test('@Orient'));
+  assert.match(inlineHtml('@orient go'), /^<span style="color:#0070f3;font-weight:500">@orient<\/span> go$/);
+  const card = ['bart> ```json', 'bart> {"say": "", "card": "questions", "questions": {"items": [{"id": "know", "type": "open", "title": "K?"}]}, "ready": false}', 'bart> ```', 'bart>', 'bart> *3 s*'];
+  // Under a brainstorm card, an @orient line starts a thread of its own, as it did when it was an agent of its own.
+  const doc = ['@brainstorm', ...card, '@orient metacognition', ...card, '@brainstorm people overrate what they learn', 'bart~> a1'];
+  const found = threads(doc);
+  assert.deepEqual(found.map((t) => [t.from, t.turns.length, agentOf(parseLine(doc[t.from]))]), [[0, 1, 'brainstorm'], [6, 2, 'brainstorm']], 'the @brainstorm answer under its card goes on with the @orient thread');
+  assert.deepEqual(turnText(doc, found[1].turns[0]).question, 'metacognition');
+  const own = ['@orient metacognition', ...card, '@orient people overrate it', ...card, '@brainstorm (wrap up)', 'bart~> a3'];
+  assert.deepEqual(threads(own).map((t) => t.turns.length), [3], 'an @orient thread takes @orient and @brainstorm lines alike');
+  assert.deepEqual(threads(['@bart why?', 'bart> because', '@orient x', 'bart~> a4']).map((t) => t.from), [0, 2], 'under an @bart answer too');
+});
+
+test('@discover is an @bart line asked of a third agent: with or without words, coloured as a token, one thread kind (2026-09-30)', async () => {
+  const { parseLine, agentOf, threads, inlineHtml, INLINE, tokShown } = await load();
+  assert.deepEqual(tokShown('**[A paper](https://x.org)**'), { shown: 'A paper', pre: 2 });
+  assert.deepEqual(parseLine('@discover'), { type: 'bart', text: '', agent: 'discover' });
+  assert.deepEqual(parseLine('@Discover why agents loop --deep'), { type: 'bart', text: 'why agents loop --deep', agent: 'discover' }, 'what the @ menu writes');
+  assert.deepEqual([agentOf(parseLine('@discover x')), agentOf(parseLine('@discovery x'))], ['discover', 'bart']);
+  assert.equal(parseLine('@discovery').type, 'p');
+  assert.match(inlineHtml('@discover here'), /<span style="color:#0070f3;font-weight:500">@discover<\/span> here/);
+  assert.deepEqual('@Discover `@bart` x'.split(INLINE).filter(Boolean), ['@Discover', ' ', '`@bart`', ' x']);
+  assert.equal(inlineHtml('**[A paper](https://arxiv.org/abs/1)** · Ada'), '<strong style="font-weight:600"><a href="https://arxiv.org/abs/1" data-link="1" style="color:#0070f3;text-decoration:underline;text-underline-offset:3px">A paper</a></strong> · Ada', 'a guide\'s title: a link in bold');
+  assert.match(inlineHtml('**@[Plan]** · Ada'), /^<strong style="font-weight:600"><span data-mention="Plan"[^>]*>@Plan<\/span><\/strong> · Ada$/, 'a library item in bold is still a mention');
+  assert.deepEqual(threads(['@discover agents', 'bart> ## Start here', 'bart> *Opus · high · 90 s*', '@discover only after 2022', 'bart~> k4']).map((t) => t.turns.length), [2], 'a follow-up joins the guide\'s card');
+});
+
+test('the blank line Send to Discover puts before "@discover" keeps it out of the brainstorm or orient thread, an older recap\'s Look for line or not (round 4, MATH-31)', async () => {
+  const { threads, agentOf, parseLine } = await load();
+  for (const recap of [['@brainstorm (skipped)', 'bart> Your question: a', 'bart> What puzzles you: b'], ['@orient (wrap up)', 'bart> What you know: a', 'bart> Where it thins out: b'], ['@brainstorm (skipped)', 'bart> Where you are: a', 'bart> Look for: retry loops']]) {
+    const apart = threads([...recap, '', '@discover how tutors notice struggle', 'bart~> d1', '']);
+    assert.deepEqual(apart.map((t) => [t.from, t.to]), [[0, 2], [4, 5]], recap[0]);
+    assert.deepEqual(threads([...recap, '@discover how tutors notice struggle', 'bart~> d1']).map((t) => [t.from, t.to]), [[0, 2], [3, 4]], 'without it the line is still a thread of its own: it asks another agent (2026-10-02)');
+  }
+  assert.equal(agentOf(parseLine('@discover how tutors notice struggle')), 'discover');
+});
+
+test('different agents never join one thread: a line for another agent starts its own card and reply field (2026-10-02)', async () => {
+  const { threads, agentOf, parseLine } = await load();
+  const card = ['bart> ```json', 'bart> {', 'bart>   "card": "focus"', 'bart> }', 'bart> ```', 'bart>', 'bart> *Sonnet · high · 3 s*'];
+  const mixed = threads(['@brainstorm', ...card, '@discover retry loops', 'bart~> d1', '']);
+  assert.deepEqual(mixed.map((t) => [t.from, t.to, t.turns.length]), [[0, 7, 1], [8, 9, 1]], 'a brainstorm answer followed directly by @discover gives two threads');
+  const [brainstorm, discover] = mixed, end = brainstorm.turns[brainstorm.turns.length - 1];
+  assert.deepEqual([end.q, end.answered, end.pending, end.folded], [0, true, null, false], 'the brainstorm card is its thread\'s last turn, so it stays live with its controls');
+  assert.deepEqual([agentOf(parseLine('@brainstorm')), agentOf(parseLine('@discover retry loops'))], ['brainstorm', 'discover']);
+  assert.equal(discover.turns[0].pending, 'd1');
+
+  for (const agent of ['bart', 'brainstorm', 'discover']) {
+    const doc = [`@${agent} first`, 'bart> one', 'bart> *Opus · high · 4 s*', `@${agent} again`, 'bart> two', 'bart> *Opus · high · 3 s*', `@${agent} once more`, `bart~> ${agent}3`];
+    assert.deepEqual(threads(doc).map((t) => [t.from, t.to, t.turns.map((turn) => turn.q)]), [[0, 7, [0, 3, 6]]], `@${agent} still joins follow-ups from the same agent`);
+  }
+
+  const underBart = threads(['@bart why?', 'bart> because', 'bart> *Opus · high · 4 s*', '@discover agents that loop', 'bart~> d2']);
+  assert.deepEqual(underBart.map((t) => [t.from, t.to, t.turns.length]), [[0, 2, 1], [3, 4, 1]], '@discover directly under a @bart answer gives two threads');
+  assert.deepEqual(threads(['@bart a', 'bart> b', '@bart c', 'bart> d', '@discover e', 'bart~> f', '@bart g']).map((t) => t.turns.map((turn) => turn.q)), [[0, 2], [4], [6]], 'a thread ends at the first line from another agent, and the first agent\'s line after it starts again');
+});
+
+// Copy and cut (2026-10-02): what a selection copies is the document's markdown, so links keep their addresses.
+const COPY_DOC = [
+  '# Reading list',
+  'See [the ROPE paper](https://github.com/mqo00/rope) and https://example.com/docs for setup.',
+  '- first **bold** item',
+  '- second item with [a link](https://openalex.org)',
+  '- [ ] a task for @[Welcome!]',
+  '@bart what is ROPE?',
+  'bart> ## Short answer',
+  'bart> - It is [ROPE](https://github.com/mqo00/rope), a tutor.',
+  'bart> ',
+  'bart> *Sol · medium · 1 s*',
+  'A paragraph with an important word.',
+];
+
+test('a selection inside one line copies the text selected, links whole', async () => {
+  const { selectionMarkdown, parseLine, rawOffset, tokShown, lineText, INLINE } = await load();
+  // Where a click at the end of a rendered line lands in its source (the editor's caretInfo goes through rawOffset).
+  const shownEnd = (line) => { const p = parseLine(line), text = lineText(p, line); return rawOffset(p, text.split(INLINE).filter(Boolean).reduce((n, tok) => n + tokShown(tok).shown.length, 0), p.type === 'list' ? undefined : line); };
+  const at = (line, offset) => ({ line, offset });
+  assert.equal(selectionMarkdown(COPY_DOC, at(1, 0), at(1, shownEnd(COPY_DOC[1]))), COPY_DOC[1], 'a bare address and a titled link both survive');
+  assert.equal(shownEnd(COPY_DOC[3]), 24, 'the end of a rendered link lands before its `](url)`');
+  assert.equal(selectionMarkdown(COPY_DOC, at(3, 0), at(3, 24)), 'second item with [a link](https://openalex.org)', 'and still copies the whole link; one line is its text, no mark');
+  assert.equal(selectionMarkdown(COPY_DOC, at(10, 20), at(10, 29)), 'important', 'inside one word, that word');
+  assert.equal(selectionMarkdown(COPY_DOC, at(1, 9), at(1, 13)), 'ROPE', 'a word picked out of a link\'s title is that word');
+  assert.equal(selectionMarkdown(COPY_DOC, at(1, 21), at(1, 50)), 'https://github.com/mqo00/rope', 'the address of a link, selected in its source on the caret\'s line');
+  assert.equal(selectionMarkdown(COPY_DOC, at(1, 13), at(1, 9)), 'ROPE', 'focus before anchor reads the same');
+  assert.equal(selectionMarkdown(COPY_DOC, at(10, 4), at(10, 4)), '', 'nothing selected, nothing copied');
+  assert.equal(selectionMarkdown(['ask @[Plan](ws:abc123) and @[Note] now'], at(0, 0), at(0, 8)), 'ask @[Plan](ws:abc123)', 'a mention cut by the selection is copied whole');
+  assert.equal(selectionMarkdown(['ask @[Plan](ws:abc123) and @[Note] now'], at(0, 10), at(0, 38)), ' and @[Note] now', 'starting right after a mention takes none of it');
+  assert.equal(selectionMarkdown(['```js', 'const a = [x](y);', '```'], at(1, 6), at(1, 14)), 'a = [x](', 'code is copied as typed');
+});
+
+test('a selection across lines keeps its marks and links; answers lose their prefixes and their closing line', async () => {
+  const { selectionMarkdown } = await load();
+  const at = (line, offset) => ({ line, offset });
+  assert.equal(selectionMarkdown(COPY_DOC, at(0, 2), at(10, 35)), [
+    '# Reading list', COPY_DOC[1], '- first **bold** item', '- second item with [a link](https://openalex.org)', '- [ ] a task for @[Welcome!]',
+    '@bart what is ROPE?', '## Short answer', '- It is [ROPE](https://github.com/mqo00/rope), a tutor.', '', 'A paragraph with an important word.',
+  ].join('\n'), 'from the start of a rendered heading: its `# ` comes too');
+  assert.equal(selectionMarkdown(COPY_DOC, at(1, 9), at(3, 6)), '[ROPE paper](https://github.com/mqo00/rope) and https://example.com/docs for setup.\n- first **bold** item\n- second',
+    'a link cut at the start is still a link; the last line keeps its mark');
+  assert.equal(selectionMarkdown(COPY_DOC, at(2, 10), at(3, 6)), '**ld** item\n- second', 'bold cut at the start is still bold');
+  assert.equal(selectionMarkdown(COPY_DOC, at(2, 0), at(3, 24)), '- first **bold** item\n- second item with [a link](https://openalex.org)', 'ending on a link\'s title takes the whole link');
+  assert.equal(selectionMarkdown(COPY_DOC, at(3, 24), at(4, 6)), '\n- [ ] a task', 'starting right after a link at the end of a line takes none of it');
+  assert.equal(selectionMarkdown(COPY_DOC, at(2, 0), at(3, 0)), '- first **bold** item\n', 'ending at the start of a line takes its line break only');
+  assert.equal(selectionMarkdown(COPY_DOC, at(6, 0), at(9, 0)), '## Short answer\n- It is [ROPE](https://github.com/mqo00/rope), a tutor.\n', 'an answer\'s own heading and bullet marks stay');
+  const doc = ['@bart q', 'bart+> one [x](https://x.y)', 'bart+> *Opus · 2 s*', 'build> 0123456789', '@bart again', 'bart~> k1', 'end'];
+  assert.equal(selectionMarkdown(doc, at(0, 0), at(6, 3)), '@bart q\none [x](https://x.y)\n@bart again\nend', 'a folded answer loses `bart+> `; a Build\'s line and a run at work hold ids and are left out');
+  assert.equal(selectionMarkdown(doc, at(6, 3), at(0, 0)), '@bart q\none [x](https://x.y)\n@bart again\nend');
+  assert.equal(selectionMarkdown(['```js', 'const a = [x](y);', '```', 'after'], at(0, 0), at(3, 5)), '```js\nconst a = [x](y);\n```\nafter', 'code comes as typed, fences too');
+  assert.equal(selectionMarkdown(['see @[Plan](ws:abc123) now', 'and @[Note]'], at(0, 4), at(1, 11)), '@[Plan](ws:abc123) now\nand @[Note]', 'mentions stay mentions, so they paste back as mentions');
+});
+
+test('the HTML a copy carries: links to click, bold and italic, names for mentions, no attachments', async () => {
+  const { selectionHtml } = await load();
+  assert.equal(selectionHtml('See [a](https://a.b) and https://c.d/e, **bold [L](https://l.m)** *it* `c<d>` @[Plan] @[Space](ws:w1) ![Attachment 1](img:abc)'),
+    'See <a href="https://a.b">a</a> and <a href="https://c.d/e">https://c.d/e</a>, <strong>bold <a href="https://l.m">L</a></strong> <em>it</em> <code>c&lt;d&gt;</code> Plan Space ');
+  assert.equal(selectionHtml('# Head\n- one\n  - [x] two\n- [ ] three\n\n```\n  code <b>\n```\n![pic](https://x.y/p.png)\n![Attachment 2](img:def)\n> quoted'),
+    '<strong>Head</strong><br>• one<br>&nbsp;&nbsp;&nbsp;&nbsp;☑ two<br>☐ three<br><br><code>&nbsp;&nbsp;code &lt;b&gt;</code><br><a href="https://x.y/p.png">pic</a><br>&gt; quoted', 'one line per line; fences and attached images go');
+  assert.equal(selectionHtml('[click](javascript:alert) [x](ws:abc) [m](mailto:a@b.c)'), 'click x <a href="mailto:a@b.c">m</a>', 'only web and mail addresses become links');
+  assert.equal(selectionHtml('[q](https://a.b/?q="x"&y=1)'), '<a href="https://a.b/?q=&quot;x&quot;&amp;y=1">q</a>');
+  assert.doesNotMatch(selectionHtml('[a](https://a.b) @[Plan] `x`'), /style=/, 'no inline styles or chips');
+});
+
+test('text pasted from a web page gets its links back from the page\'s HTML', async () => {
+  const { withLinks } = await load();
+  const a = (text, href) => ({ text, href });
+  assert.equal(withLinks('Read the OpenAlex docs and the ROPE repo.', [a('OpenAlex docs', 'https://docs.openalex.org/'), a('ROPE repo', 'https://github.com/mqo00/rope')]),
+    'Read the [OpenAlex docs](https://docs.openalex.org/) and the [ROPE repo](https://github.com/mqo00/rope).');
+  assert.equal(withLinks('here and here', [a('here', 'https://a.b'), a('here', 'https://c.d')]), '[here](https://a.b) and [here](https://c.d)', 'in order: each title where it next stands');
+  assert.equal(withLinks('a cat sat', [a('at', 'https://a.b')]), 'a cat sat', 'a title is found as words of its own, not inside one');
+  assert.equal(withLinks('see Python (programming language).', [a('Python (programming language)', 'https://en.wikipedia.org/wiki/Python_(programming_language)')]),
+    'see [Python (programming language)](https://en.wikipedia.org/wiki/Python_%28programming_language%29).', 'parentheses in the address are encoded, so the link still reads as one');
+  assert.equal(withLinks('OpenAlex\ndocs', [a('OpenAlex\n  docs', 'https://x.y')]), 'OpenAlex\ndocs', 'a title the plain text breaks differently is left alone');
+  assert.equal(withLinks('the OpenAlex docs', [a('OpenAlex\n  docs', 'https://x.y')]), 'the [OpenAlex docs](https://x.y)', 'the HTML\'s spacing is read as the page shows it');
+  const plain = 'https://x.y/ and [1] and mail and wiki and gone';
+  assert.equal(withLinks(plain, [a('https://x.y/', 'https://x.y'), a('[1]', 'https://x.y/#1'), a('mail', 'mailto:a@b.c'), a('wiki', '/wiki/X'), a('', 'https://img.y'), a('missing', 'https://m.y')]), plain,
+    'a link that is its own address, a title with brackets, an address that is not the web, an image link and a title not in the text are left as they are');
+  assert.equal(withLinks('plain', []), 'plain');
+});
+
+test('flattenPaste: several pasted lines become one question line, one space at each break (2026-10-02)', async () => {
+  const { flattenPaste, parseLine, agentOf } = await load();
+  assert.equal(flattenPaste('one\ntwo\nthree'), 'one two three');
+  assert.equal(flattenPaste('one\n\ntwo\n\n\n\nthree'), 'one two three', 'blank lines make one space, not many');
+  assert.equal(flattenPaste('one\r\ntwo\r\n\r\nthree'), 'one two three', 'Windows line breaks');
+  assert.equal(flattenPaste('one\rtwo'), 'one two', 'a lone carriage return is a break too');
+  assert.equal(flattenPaste('  \n one\ntwo  \n\n'), 'one two', 'the ends are trimmed');
+  assert.equal(flattenPaste('one  \n   two'), 'one two', 'spaces around a break go with it');
+  assert.equal(flattenPaste('def f():\n\treturn 1\n\t\tdone'), 'def f(): return 1 done', 'tabs that indent a line go with the break');
+  assert.equal(flattenPaste('\tone\ttwo\t\n'), 'one\ttwo', 'a tab inside a line is kept, as a one-line paste keeps it');
+  assert.equal(flattenPaste('a  b\nc'), 'a  b c', 'spacing inside a line is kept');
+  assert.equal(flattenPaste('\n\n \t\n'), '');
+  assert.equal(flattenPaste(''), '');
+  for (const line of ['@bart ', '@brainstorm ', '@discover ', '@bart --build ']) {
+    const p = parseLine(line + flattenPaste('first\n\nsecond\nthird'));
+    assert.equal(p.type, 'bart', `${line.trim()} is a question line`);
+    assert.equal(p.text, (line.slice(line.indexOf(' ') + 1) + 'first second third'), 'the whole paste is the question');
+    assert.equal(agentOf(p), line.slice(1, line.indexOf(' ')));
+  }
 });
