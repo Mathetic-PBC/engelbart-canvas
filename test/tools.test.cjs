@@ -101,7 +101,7 @@ function fakeRunner({ lookup = '', shell = {}, exec = {}, fish = false } = {}) {
 test('detectTools: never runs Apple\'s git stub without a developer folder (it would open Apple\'s installer)', async () => {
   const home = temp();
   const runner = fakeRunner({ lookup: '@tool git\n/usr/bin/git\n@tool claude\n@tool codex\n@env DISABLE_AUTOUPDATER=\n', exec: { '/usr/bin/xcode-select -p': { code: 2, stderr: 'xcode-select: error: unable to get active developer directory' } } });
-  const found = await detectTools({ runner, only: ['git'], home });
+  const found = await detectTools({ runner, only: ['git'], home, platform: 'darwin' });
   assert.deepEqual([found.git.status, found.git.installed], ['missing', false]);
   assert.ok(!runner.calls.some((call) => call.kind === 'exec' && call.file === '/usr/bin/git'), 'the stub was not run');
 });
@@ -114,9 +114,9 @@ test('detectTools: Apple git is read from the developer folder, and an unaccepte
   const realGit = path.join(developer, 'usr', 'bin', 'git');
   const base = { '/usr/bin/xcode-select -p': { stdout: `${developer}\n` }, [`${realGit} --version`]: { stdout: 'git version 2.50.1 (Apple Git-155)\n' } };
   const lookup = '@tool git\n/usr/bin/git\n@tool claude\n@tool codex\n';
-  const good = await detectTools({ runner: fakeRunner({ lookup, exec: { ...base, '/usr/bin/git --version': { stdout: 'git version 2.50.1' } } }), only: ['git'], home });
+  const good = await detectTools({ runner: fakeRunner({ lookup, exec: { ...base, '/usr/bin/git --version': { stdout: 'git version 2.50.1' } } }), only: ['git'], home, platform: 'darwin' });
   assert.deepEqual([good.git.status, good.git.version, good.git.source, good.git.path], ['ready', '2.50.1', 'apple', '/usr/bin/git']);
-  const license = await detectTools({ runner: fakeRunner({ lookup, exec: { ...base, '/usr/bin/git --version': { code: 69, stderr: 'You have not agreed to the Xcode license agreements.' } } }), only: ['git'], home });
+  const license = await detectTools({ runner: fakeRunner({ lookup, exec: { ...base, '/usr/bin/git --version': { code: 69, stderr: 'You have not agreed to the Xcode license agreements.' } } }), only: ['git'], home, platform: 'darwin' });
   assert.equal(license.git.status, 'failed');
   assert.match(license.git.error, /license/);
 });
@@ -126,9 +126,17 @@ test('detectTools: with no Git of the person\'s own, the one that came with Enge
   const bundled = '/Applications/Engelbart.app/Contents/Resources/git/engelbart-bin/git';
   const exec = { '/usr/bin/xcode-select -p': { code: 2 }, [`${bundled} --version`]: { stdout: 'git version 2.53.0\n' } };
   const runner = fakeRunner({ lookup: '@tool git\n/usr/bin/git\n@tool claude\n@tool codex\n', exec });
-  const found = await detectTools({ runner, only: ['git'], home, bundledGit: bundled });
+  const found = await detectTools({ runner, only: ['git'], home, bundledGit: bundled, platform: 'darwin' });
   assert.deepEqual([found.git.status, found.git.installed, found.git.source, found.git.path, found.git.version, found.git.onPath], ['ready', true, 'bundled', bundled, '2.53.0', false]);
   assert.ok(!runner.calls.some((call) => call.kind === 'exec' && call.file === '/usr/bin/git'), 'the stub was not run');
+});
+
+test('detectTools: on Linux /usr/bin/git is Git itself, read as any other, and xcode-select is never asked (2026-10-07)', async () => {
+  const home = temp();
+  const runner = fakeRunner({ lookup: '@tool git\n/usr/bin/git\n@tool claude\n@tool codex\n@env DISABLE_AUTOUPDATER=\n', exec: { '/usr/bin/git --version': { stdout: 'git version 2.43.0\n' } } });
+  const found = await detectTools({ runner, only: ['git'], home, platform: 'linux' });
+  assert.deepEqual([found.git.status, found.git.installed, found.git.path, found.git.version, found.git.onPath, found.git.source], ['ready', true, '/usr/bin/git', '2.43.0', true, 'other']);
+  assert.ok(!runner.calls.some((call) => call.kind === 'exec' && /xcode-select/.test(call.file)), 'no xcode-select');
 });
 
 test('detectTools: the person\'s own Git is used when it works; Engelbart\'s only when theirs is broken or too old', async () => {

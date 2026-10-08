@@ -132,10 +132,10 @@ function knownPlaces(name, home, systemBins = SYSTEM_BINS, { platform = process.
 }
 
 /** How a program was installed, from where its file really is: this decides how it updates and whether an update can be undone. */
-function sourceOf(name, file) {
+function sourceOf(name, file, platform = process.platform) {
   const real = realPath(file);
   if (name === 'git') {
-    if (real === APPLE_GIT_STUB || real.startsWith('/Applications/Xcode') || real.startsWith('/Library/Developer/CommandLineTools/')) return 'apple';
+    if ((platform === 'darwin' && real === APPLE_GIT_STUB) || real.startsWith('/Applications/Xcode') || real.startsWith('/Library/Developer/CommandLineTools/')) return 'apple';
     if (/\/(Cellar|Homebrew|homebrew)\//.test(real) || real.startsWith('/opt/homebrew/')) return 'homebrew';
     return 'other';
   }
@@ -271,13 +271,14 @@ function observed(name, { file = null, onPath = null, source = null, version = n
   return out;
 }
 
-/** The person's own Git: the first on the login shell's PATH (Apple's stub read through, never run bare). */
-async function detectOwnGit(runner, candidates) {
+/** The person's own Git: the first on the login shell's PATH (Apple's stub read through, never run bare). Only macOS
+ *  has the stub: on Linux /usr/bin/git is Git itself (2026-10-07, docs/windows-port-log.md "Linux"). */
+async function detectOwnGit(runner, candidates, platform = process.platform) {
   const first = candidates[0] || null;
   if (!first) return observed('git', {});
-  if (realPath(first) !== APPLE_GIT_STUB) {
+  if (platform !== 'darwin' || realPath(first) !== APPLE_GIT_STUB) {
     const read = await readVersion(runner, 'git', first, { direct: true });
-    return observed('git', { file: first, onPath: true, source: sourceOf('git', first), ...read });
+    return observed('git', { file: first, onPath: true, source: sourceOf('git', first, platform), ...read });
   }
   // Apple's stub: which git it hands over to, if any. No developer folder = no git, and the stub is not touched.
   const selected = await runner.exec('/usr/bin/xcode-select', ['-p'], { timeout: 5000 });
@@ -295,8 +296,8 @@ async function detectOwnGit(runner, candidates) {
 }
 
 /** Their own Git when it works; else Engelbart's (`bundled`: its launcher), unless that cannot run either. `preferBundled`: tests of the stand-in on a Mac that has Git. */
-async function detectGit(runner, candidates, { bundled = null, preferBundled = false } = {}) {
-  const own = preferBundled && bundled ? observed('git', {}) : await detectOwnGit(runner, candidates);
+async function detectGit(runner, candidates, { bundled = null, preferBundled = false, platform = process.platform } = {}) {
+  const own = preferBundled && bundled ? observed('git', {}) : await detectOwnGit(runner, candidates, platform);
   if (!bundled || own.status === 'ready') return own;
   const read = await readVersion(runner, 'git', bundled, { direct: true });
   if (!read.ran && own.installed) return own;
@@ -381,7 +382,7 @@ async function detectTools({ runner, only = ['git', 'claude', 'codex'], home = o
   const lookupError = lookup.marked ? null : lookup.timedOut ? `The login shell (${runner.shellPath}) did not answer within ${LOOKUP_TIMEOUT_MS / 1000} seconds.` : shellSilent(runner);
   const checkedAt = now().toISOString();
   const jobs = only.map(async (name) => {
-    const found = name === 'git' ? await detectGit(runner, paths.git, { bundled: bundledGit, preferBundled: preferBundledGit }) : await detectAgent(runner, name, paths[name], { env, home, systemBins, platform });
+    const found = name === 'git' ? await detectGit(runner, paths.git, { bundled: bundledGit, preferBundled: preferBundledGit, platform }) : await detectAgent(runner, name, paths[name], { env, home, systemBins, platform });
     return [name, { ...found, error: found.error || (found.status === 'missing' ? lookupError : null), checkedAt }];
   });
   return { ...Object.fromEntries(await Promise.all(jobs)), aliases, lookupError };
