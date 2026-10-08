@@ -43,6 +43,8 @@ const BASTANI = {
   abstract: 'Students who practised with an AI tutor did better while it was there, and worse on an exam taken without it. Access to answers can stand in for learning.',
   pages: null,
 };
+// The same text under other ids: a climb quotes one passage a paper.
+const KAPURS = [KAPUR, { ...KAPUR, id: 'W4' }, { ...KAPUR, id: 'W5' }];
 const NO_TEXT = { id: 'W3', title: 'A paper behind a paywall', authors: ['Ann Other'], year: 2020, venue: null, doi: '10.1/pay', abstract: null, pages: null };
 
 /* ------------------------------------------------------------------------------------------ the gate, in code */
@@ -138,8 +140,8 @@ function scripted({ draft, checks, first = verdict(1) }) {
 
 const RUNGS = [
   { stage: 'known', paper: 'W1', passage: 'Students who struggled first solved more of the new problems.', line: 'Struggling first helped on new problems', gloss: '' },
-  { stage: 'problem', paper: 'W1', passage: 'Students who struggle with a problem before instruction learn more from it.', line: 'Struggle before teaching can help', gloss: '' },
-  { stage: 'methods', paper: 'W1', passage: 'Seventy students were randomly assigned to struggle first or to be taught first; both groups then took the same test of new problems.', line: 'Transfer is tested with new problems', gloss: 'Randomly assigned: chance decides who gets which teaching.' },
+  { stage: 'problem', paper: 'W4', passage: 'Students who struggle with a problem before instruction learn more from it.', line: 'Struggle before teaching can help', gloss: '' },
+  { stage: 'methods', paper: 'W5', passage: 'Seventy students were randomly assigned to struggle first or to be taught first; both groups then took the same test of new problems.', line: 'Transfer is tested with new problems', gloss: 'Randomly assigned: chance decides who gets which teaching.' },
 ];
 
 test('order: the climb runs problem → foundations → how it is studied → what is known → the open edge, a stage\'s rungs as written', () => {
@@ -148,9 +150,9 @@ test('order: the climb runs problem → foundations → how it is studied → wh
 });
 
 test('a climb: drafted, gated, put in order, approved rung by rung, the newcomer check passed, each rung with its record', async () => {
-  const { ask, calls } = scripted({ draft: { answer: 'Struggle first helps.', rungs: [...RUNGS, { stage: 'open', paper: 'W1', passage: 'Words no paper has ever printed anywhere at all.', line: 'x' }], more: ['W3'] }, checks: [[verdict(1), verdict(2), verdict(3), newcomer()].join('\n')] });
+  const { ask, calls } = scripted({ draft: { answer: 'Struggle first helps.', rungs: [...RUNGS, { stage: 'open', paper: 'W2', passage: 'Words no paper has ever printed anywhere at all.', line: 'x' }], more: ['W3'] }, checks: [[verdict(1), verdict(2), verdict(3), newcomer()].join('\n')] });
   const updates = [];
-  const out = await climb.buildClimb({ sub: 'How have prior studies measured transfer?', question: 'Which behaviors predict learning transfer?', papers: [KAPUR, BASTANI, NO_TEXT], ask, onUpdate: (one) => updates.push(one), now: () => '2026-10-08T00:00:00.000Z' });
+  const out = await climb.buildClimb({ sub: 'How have prior studies measured transfer?', question: 'Which behaviors predict learning transfer?', papers: [...KAPURS, BASTANI, NO_TEXT], ask, onUpdate: (one) => updates.push(one), now: () => '2026-10-08T00:00:00.000Z' });
   assert.equal(out.status, 'done');
   assert.deepEqual(out.rungs.map((rung) => rung.stage), ['problem', 'methods', 'known']);
   assert.deepEqual(out.rungs.map((rung) => rung.part), ['Abstract', 'Method', 'Results']);
@@ -185,7 +187,7 @@ test('approval is required: a refused rung is never shown, nor any after it, and
     checks: [[verdict(1), fix, verdict(3), newcomer(false, [{ rung: 2, problem: 'overclaims', fix: 'line', line: 'Struggle first can help, for new problems' }])].join('\n'), [verdict(1), verdict(2), verdict(3), newcomer()].join('\n')],
   });
   const updates = [];
-  const out = await climb.buildClimb({ sub: 'S?', question: 'Q?', papers: [KAPUR], ask, onUpdate: (one) => updates.push(one) });
+  const out = await climb.buildClimb({ sub: 'S?', question: 'Q?', papers: KAPURS, ask, onUpdate: (one) => updates.push(one) });
   // Rung 2 as drafted was refused: it never showed, and neither did rung 3 (it may lean on rung 2) until the fix passed.
   for (const one of updates) {
     assert.ok(one.rungs.every((rung) => rung.line !== 'Transfer is tested with new problems'), 'the refused rung never shows');
@@ -200,12 +202,12 @@ test('approval is required: a refused rung is never shown, nor any after it, and
 
 test('approval is required: a rung refused with no fix is dropped, and one never checked is never shown', async () => {
   const { ask } = scripted({ draft: { answer: 'A', rungs: RUNGS, more: [] }, checks: [[verdict(1), verdict(2, false), newcomer(false)].join('\n'), [verdict(1), verdict(2, false), newcomer(false)].join('\n')] });
-  const out = await climb.buildClimb({ sub: 'S?', question: 'Q?', papers: [KAPUR], ask });
+  const out = await climb.buildClimb({ sub: 'S?', question: 'Q?', papers: KAPURS, ask });
   // Rung 3 got no verdict in round 1 and rung 2 was dropped: round 2 checked [1, 3] and refused 3.
   assert.deepEqual(out.rungs.map((rung) => rung.stage), ['problem']);
   assert.equal(out.newcomer.passed, false);
   // The checker that never answers: nothing is shown.
-  const silent = await climb.buildClimb({ sub: 'S?', question: 'Q?', papers: [KAPUR], ask: async (role) => (role === 'writer' ? { text: JSON.stringify({ answer: 'A', rungs: RUNGS }), by: BY } : { text: 'I cannot.', by: BY }) });
+  const silent = await climb.buildClimb({ sub: 'S?', question: 'Q?', papers: KAPURS, ask: async (role) => (role === 'writer' ? { text: JSON.stringify({ answer: 'A', rungs: RUNGS }), by: BY } : { text: 'I cannot.', by: BY }) });
   assert.deepEqual(silent.rungs, []);
 });
 
@@ -219,12 +221,31 @@ test('the first rung is checked on its own and shown before the whole climb\'s c
     await held;
     return { text: [verdict(1), verdict(2), verdict(3), newcomer()].join('\n'), by: BY };
   };
-  const running = climb.buildClimb({ sub: 'S?', question: 'Q?', papers: [KAPUR], ask, onUpdate: (one) => updates.push(one) });
+  const running = climb.buildClimb({ sub: 'S?', question: 'Q?', papers: KAPURS, ask, onUpdate: (one) => updates.push(one) });
   for (let n = 0; n < 50 && !updates.some((one) => one.rungs.length === 1); n += 1) await new Promise((resolve) => { setImmediate(resolve); });
   const early = updates.find((one) => one.rungs.length === 1);
   assert.ok(early, 'the first rung shows while the whole climb is still being checked');
   assert.equal(early.status, 'checking');
   assert.equal(early.pending, 2);
+  release();
+  assert.equal((await running).rungs.length, 3);
+});
+
+test('the first check reads the first two rungs, so two are shown before the whole climb\'s check ends', async () => {
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const updates = [];
+  const ask = async (role, message) => {
+    if (role === 'writer') return { text: JSON.stringify({ answer: 'A', rungs: RUNGS }), by: BY };
+    if (/Write one line of JSON for rung 1 and one for rung 2/.test(message)) return { text: [verdict(1), verdict(2)].join('\n'), by: BY };
+    await held;
+    return { text: [verdict(1), verdict(2), verdict(3), newcomer()].join('\n'), by: BY };
+  };
+  const running = climb.buildClimb({ sub: 'S?', question: 'Q?', papers: KAPURS, ask, onUpdate: (one) => updates.push(one) });
+  for (let n = 0; n < 50 && !updates.some((one) => one.rungs.length === 2); n += 1) await new Promise((resolve) => { setImmediate(resolve); });
+  const early = updates.find((one) => one.rungs.length === 2);
+  assert.ok(early, 'two rungs show while the whole climb is still being checked');
+  assert.equal(early.status, 'checking');
   release();
   assert.equal((await running).rungs.length, 3);
 });
@@ -237,10 +258,19 @@ test('a passage that opens by pointing back is refused in code, before any model
   assert.equal(climb.pointsBackOf('Thinking aloud is a method.'), '', 'a word that only starts like one');
   const kapur = { ...KAPUR, pages: [...KAPUR.pages, { page: 4, lines: ['This indicates that struggle before instruction is productive for transfer.'] }] };
   const { ask, calls } = scripted({ draft: { answer: 'A', rungs: [RUNGS[1], { stage: 'known', paper: 'W1', passage: 'This indicates that struggle before instruction is productive for transfer.', line: 'x' }] }, checks: [[verdict(1), newcomer()].join('\n')] });
-  const out = await climb.buildClimb({ sub: 'S?', question: 'Q?', papers: [kapur], ask });
+  const out = await climb.buildClimb({ sub: 'S?', question: 'Q?', papers: [kapur, KAPURS[1]], ask });
   assert.equal(out.rungs.length, 1);
   assert.match(out.failures[0].why, /pointing back \("This"\)/);
   assert.ok(calls.every((call) => !/This indicates that struggle/.test(call.message) || call.role === 'writer'));
+});
+
+test('one passage a paper, and no more than MAX_RUNGS: a second passage from a paper is refused in code', async () => {
+  assert.equal(climb.MAX_RUNGS, 3);
+  const { ask, calls } = scripted({ draft: { answer: 'A', rungs: [RUNGS[1], { ...RUNGS[2], paper: 'W4' }] }, checks: [[verdict(1), newcomer()].join('\n')] });
+  const out = await climb.buildClimb({ sub: 'S?', question: 'Q?', papers: KAPURS, ask });
+  assert.equal(out.rungs.length, 1);
+  assert.equal(out.failures[0].why, 'a second passage from the same paper');
+  assert.ok(calls.every((call) => !/Transfer is tested with new problems/.test(call.message) || call.role === 'writer'));
 });
 
 test('a draft whose passages all fail the gate is written once more, told why each failed', async () => {
@@ -253,7 +283,7 @@ test('a draft whose passages all fail the gate is written once more, told why ea
     }
     return { text: /Write one line/.test(message) ? verdict(1) : [verdict(1), newcomer()].join('\n'), by: BY };
   };
-  const out = await climb.buildClimb({ sub: 'S?', question: 'Q?', papers: [KAPUR], ask });
+  const out = await climb.buildClimb({ sub: 'S?', question: 'Q?', papers: KAPURS, ask });
   assert.equal(drafts.length, 2);
   assert.match(drafts[1], /were all refused, in code:\n- \[W1\] "Students who struggle with a problem before teaching[^\n]*: not word for word/);
   assert.equal(out.rungs.length, 1);
@@ -269,11 +299,11 @@ test('the first rung: refused with a fix, the fix is checked at once; refused wi
     return { text: [verdict(1), verdict(2), verdict(3), newcomer()].join('\n'), by: BY };
   };
   const updates = [];
-  const out = await climb.buildClimb({ sub: 'S?', question: 'Q?', papers: [KAPUR], ask, onUpdate: (one) => updates.push(one) });
+  const out = await climb.buildClimb({ sub: 'S?', question: 'Q?', papers: KAPURS, ask, onUpdate: (one) => updates.push(one) });
   assert.deepEqual(firsts, ['Struggle before teaching can help', 'Struggle before teaching may help']);
   const early = updates.find((one) => one.rungs.length === 1 && one.rounds === 0);
   assert.equal(early.rungs[0].line, 'Struggle before teaching may help', 'the fixed first rung is up before the whole climb is checked');
-  assert.deepEqual(out.checks.map((check) => [check.kind, check.approved, check.rungs]), [['first', 0, 1], ['first', 1, 1], ['climb', 3, 3]]);
+  assert.deepEqual(out.checks.map((check) => [check.kind, check.approved, check.rungs]), [['first', 0, 2], ['first', 1, 2], ['climb', 3, 3]], 'the first check reads the first two rungs');
   assert.deepEqual(out.checks[0].refused[0].failed, ['says_what_line_claims']);
   // Refused with no fix: dropped, and the next rung is checked as the first.
   const dropped = [verdict(1, false), verdict(1)];
@@ -283,7 +313,7 @@ test('the first rung: refused with a fix, the fix is checked at once; refused wi
     if (/Write one line of JSON for rung 1/.test(message)) { tried.push(message.match(/Line \(what you'll learn here\): (.+)/)[1]); return { text: dropped.shift(), by: BY }; }
     return { text: [verdict(1), verdict(2), newcomer()].join('\n'), by: BY };
   };
-  const out2 = await climb.buildClimb({ sub: 'S?', question: 'Q?', papers: [KAPUR], ask: ask2 });
+  const out2 = await climb.buildClimb({ sub: 'S?', question: 'Q?', papers: KAPURS, ask: ask2 });
   assert.deepEqual(tried, ['Struggle before teaching can help', 'Transfer is tested with new problems']);
   assert.deepEqual(out2.rungs.map((rung) => rung.stage), ['methods', 'known']);
 });
@@ -493,7 +523,11 @@ test('the block: "Questions to investigate", each a triangle and its words; a pa
     s2: { question: 'An older wording', status: 'done', rungs: [rung], more: [] },
   };
   assert.equal(climbFor(starts[1], climbsHere), climbsHere.s2, 'what was shown under an edited sub-question stays');
-  const html = renderToStaticMarkup(React.createElement(StartsBlock, { starts, onSave: () => {}, climbs: climbsHere, activeRung: 'r1' }));
+  const shut = renderToStaticMarkup(React.createElement(StartsBlock, { starts, onSave: () => {}, climbs: climbsHere }));
+  assert.doesNotMatch(shut, /data-rung=/, 'every sub-question starts shut');
+  assert.equal((shut.match(/data-start-row="1"[^>]*cursor:pointer/g) || []).length, 2, 'the whole row opens it');
+  assert.match(shut, /data-start-text="1"[^>]*title="Double-click to edit"[^>]*cursor:pointer/);
+  const html = renderToStaticMarkup(React.createElement(StartsBlock, { starts, opened: ['s1'], onSave: () => {}, climbs: climbsHere, activeRung: 'r1' }));
   assert.match(html, />Questions to investigate</);
   assert.doesNotMatch(html, /Suggested places to start/);
   // A row is the triangle and the words: no dashed circle, no number, no "Bart's suggestion", no way to delete it.
@@ -506,15 +540,15 @@ test('the block: "Questions to investigate", each a triangle and its words; a pa
   assert.match(html, /data-rung-gloss="1"[^>]*>Transfer: using what you learned/);
   assert.match(html, /aria-current="true"/);
   assert.match(html, /Bart is checking the next step…/);
-  assert.equal((html.match(/data-rung="r1"/g) || []).length, 1, 'the second start is shut, as in the design');
-  const done = renderToStaticMarkup(React.createElement(StartsBlock, { starts: starts.slice(0, 1), onSave: () => {}, climbs: { s1: { ...climbsHere.s1, status: 'done', more: [{ id: 'W3', label: 'Other 2020', title: 'A paper behind a paywall', url: 'https://doi.org/10.1/pay' }] } } }));
+  assert.equal((html.match(/data-rung="r1"/g) || []).length, 1, 'only the one asked open is open');
+  const done = renderToStaticMarkup(React.createElement(StartsBlock, { starts: starts.slice(0, 1), opened: ['s1'], onSave: () => {}, climbs: { s1: { ...climbsHere.s1, status: 'done', more: [{ id: 'W3', label: 'Other 2020', title: 'A paper behind a paywall', url: 'https://doi.org/10.1/pay' }] } } }));
   assert.doesNotMatch(done, /checking the next step/);
   assert.match(done, /More reading, not checked/);
   assert.match(done, /Other 2020 · A paper behind a paywall/);
-  const waiting = renderToStaticMarkup(React.createElement(StartsBlock, { starts: starts.slice(0, 1), onSave: () => {}, climbs: {} }));
+  const waiting = renderToStaticMarkup(React.createElement(StartsBlock, { starts: starts.slice(0, 1), opened: ['s1'], onSave: () => {}, climbs: {} }));
   assert.match(waiting, /Finding papers…/);
   // OpenAlex refused: said under the sub-questions, and no step stands in for papers.
-  const refused = renderToStaticMarkup(React.createElement(StartsBlock, { starts: starts.slice(0, 1), onSave: () => {}, climbs: { s1: { question: starts[0].text, status: 'unavailable', rungs: [], more: [] } } }));
+  const refused = renderToStaticMarkup(React.createElement(StartsBlock, { starts: starts.slice(0, 1), opened: ['s1'], onSave: () => {}, climbs: { s1: { question: starts[0].text, status: 'unavailable', rungs: [], more: [] } } }));
   assert.match(refused, /data-starts-unavailable="1"[^>]*>OpenAlex, where Bart finds papers, isn’t available right now\. Bart will look again the next time this workspace opens\.</);
   assert.doesNotMatch(refused, /Add a paper you trust|Finding papers/);
 });
@@ -600,7 +634,7 @@ test('nothing shown ever disappears: a rung shown and refused by a later round s
     checks: [[drop, verdict(2), verdict(3), newcomer(false, [{ rung: 1, problem: 'off topic', fix: 'drop' }, { rung: 3, problem: 'should come first', fix: 'reorder', move_to: 1 }])].join('\n'), [verdict(1), verdict(2), verdict(3), newcomer()].join('\n')],
   });
   const updates = [];
-  const out = await climb.buildClimb({ sub: 'S?', question: 'Q?', papers: [KAPUR], ask, onUpdate: (one) => updates.push(one) });
+  const out = await climb.buildClimb({ sub: 'S?', question: 'Q?', papers: KAPURS, ask, onUpdate: (one) => updates.push(one) });
   const first = updates.find((one) => one.rungs.length)?.rungs[0];
   assert.equal(first.line, 'Struggle before teaching can help');
   for (const one of updates.filter((u) => updates.indexOf(u) >= updates.findIndex((x) => x.rungs.length))) {

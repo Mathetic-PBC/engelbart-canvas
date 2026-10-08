@@ -9,13 +9,15 @@ import React from 'react';
 // in the Stage, highlighted as Bart's guide (`onOpenRung`). Later rungs appear as each is approved, "Bart is checking the
 // next step…" under them meanwhile. A step that is not a paper ("Add your data: …") opens the file picker (`onAction`).
 // Papers whose text could not be had are listed apart, "More reading, not checked". The caret on a sub-question shows or
-// hides its climb: the first is open, as in the design.
+// hides its climb.
 // Follow-ups (2026-10-08, from a hand test): the heading is "Questions to investigate"; a sub-question is a row of a
 // disclosure triangle and its words, nothing else (no dashed circle, number, "Bart's suggestion" or ×): sub-questions
 // cannot be deleted, only edited. A paper is a row of its title, "author year · section" and its one line. Nothing shown
 // goes: a climb is shown under its sub-question whatever words it was made for (an edited one keeps what it showed, and
 // its new climb adds to it). When OpenAlex refused the searches (status 'unavailable'), the block says so under the
 // sub-questions; they are climbed again the next time the workspace shows.
+// Since 2026-10-08 (a hand test): the whole row of a sub-question shows or hides its papers (a pointer over its words,
+// not only the triangle); a double-click edits it. Every sub-question starts shut (`opened` names any to start open).
 
 const CARET_OPEN = <svg width="10" height="10" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14l-7 9z" fill="#6B6F76" /></svg>;
 const CARET_SHUT = <svg width="10" height="10" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l9-7z" fill="#6B6F76" /></svg>;
@@ -85,8 +87,8 @@ function Start({ start, n, open, onToggle, climb, activeRung, onOpenRung, onActi
   };
   return (
     <li data-start={start.id} data-start-by={start.by} style={{ display: 'flex', flexDirection: 'column', paddingBottom: open ? 6 : 0 }}>
-      <div className="hov-wash" style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 40, padding: '0 10px 0 4px', borderRadius: 8, font: '14px/1.45 var(--font-sans)', color: '#1F2633' }}>
-        <button type="button" data-start-toggle="1" onClick={onToggle} aria-expanded={open} aria-label={open ? `Hide the papers for question ${n}` : `Show the papers for question ${n}`} style={{ flex: 'none', width: 22, height: 22, padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{open ? CARET_DOWN : CARET_RIGHT}</button>
+      <div className="hov-wash" data-start-row="1" onClick={editing ? undefined : onToggle} style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 40, padding: '0 10px 0 4px', borderRadius: 8, font: '14px/1.45 var(--font-sans)', color: '#1F2633', cursor: editing ? 'auto' : 'pointer' }}>
+        <button type="button" data-start-toggle="1" onClick={(event) => { event.stopPropagation(); onToggle(); }} aria-expanded={open} aria-label={open ? `Hide the papers for question ${n}` : `Show the papers for question ${n}`} style={{ flex: 'none', width: 22, height: 22, padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{open ? CARET_DOWN : CARET_RIGHT}</button>
         {editing ? (
           <input
             autoFocus
@@ -103,7 +105,7 @@ function Start({ start, n, open, onToggle, climb, activeRung, onOpenRung, onActi
             style={{ flex: '1 1 auto', minWidth: 0, padding: '2px 0', border: 0, borderBottom: '1px solid #c9c9c9', background: 'transparent', outline: 'none', font: '500 14px/1.45 var(--font-sans)', color: '#1F2633' }}
           />
         ) : (
-          <button type="button" data-start-text="1" onClick={() => setEditing(true)} title="Click to edit" style={{ flex: '1 1 auto', minWidth: 0, padding: '9px 0', border: 0, background: 'transparent', font: '500 14px/1.45 var(--font-sans)', color: '#1F2633', textAlign: 'left', cursor: 'text' }}>{start.text}</button>
+          <button type="button" data-start-text="1" onDoubleClick={() => setEditing(true)} aria-expanded={open} title="Double-click to edit" style={{ flex: '1 1 auto', minWidth: 0, padding: '9px 0', border: 0, background: 'transparent', font: '500 14px/1.45 var(--font-sans)', color: '#1F2633', textAlign: 'left', cursor: 'pointer' }}>{start.text}</button>
         )}
       </div>
       {open && <Climb climb={climb} activeRung={activeRung} onOpenRung={onOpenRung} onAction={onAction} onOpenMore={onOpenMore} />}
@@ -120,13 +122,13 @@ export function climbFor(start, climbs) {
 }
 
 /**
- * `starts`: [{ id, text, by }]. `onSave(next)`: the list as edited (an edited one is the person's, `by: 'you'`); none is
+ * `starts`: [{ id, text, by }]; `opened`: the ids of any to start open (none, by default). `onSave(next)`: the list as edited (an edited one is the person's, `by: 'you'`); none is
  * ever taken out. `climbs` { <start id>: climb }; `onOpenRung(rung)`, `onAction(rung)`, `onOpenMore(url)`; `activeRung`:
  * the rung last opened.
  */
-export default function StartsBlock({ starts, onSave, climbs = {}, activeRung = null, onOpenRung = () => {}, onAction = () => {}, onOpenMore = () => {} }) {
+export default function StartsBlock({ starts, onSave, opened = [], climbs = {}, activeRung = null, onOpenRung = () => {}, onAction = () => {}, onOpenMore = () => {} }) {
   const [open, setOpen] = React.useState(true);
-  const [shut, setShut] = React.useState(() => new Set((starts || []).slice(1).map((one) => one.id))); // the design: the first open
+  const [shut, setShut] = React.useState(() => new Set((starts || []).filter((one) => !opened.includes(one.id)).map((one) => one.id))); // all shut but `opened`
   if (!starts || !starts.length) return null;
   const unavailable = starts.some((start) => { const climb = climbFor(start, climbs); return climb && climb.status === 'unavailable'; });
   const change = (id, text) => onSave(starts.map((one) => (one.id === id ? { ...one, text, by: 'you' } : one)));

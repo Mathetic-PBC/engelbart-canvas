@@ -23,6 +23,11 @@
 // with the project, <project>/.context/start-candidates.json, once it exists; until then here. A search that ends after
 // the project opened is written there too. Searches the model did not write are made from their own words (queriesOf).
 //
+// Since 2026-10-08 (a hand test: two of three sub-questions asked what the research question asked): the three together
+// answer the research question, none restates it and no two could be answered by the same passages; a plan whose
+// sub-questions are near-duplicates in words (overlapOf: the same words once the question's own are set aside) is asked
+// for once more, told which. Code only catches near-duplicates in wording; the prompt is what keeps the rest apart.
+//
 // Nothing here fails a card: a turn that fails is no line, a plan that fails is made from their words (fallbackPlan).
 
 const fs = require('node:fs');
@@ -33,6 +38,7 @@ const { onboardStep } = require('./models.cjs');
 const { createPapers } = require('./papers.cjs');
 
 const { searchFiltered, isLimited } = require('./climbs.cjs');
+const { termsOf } = require('./climb-text.cjs');
 
 const CARDS = ['working', 'goal', 'question'];
 const QUESTIONS = { working: 'What are you working on?', goal: 'What are you trying to do with it?', question: 'The research question they want to start with:' };
@@ -100,8 +106,35 @@ function planMessage(answers) {
   const asked = answers.question
     ? 'question: their question, exactly as they wrote it (only a capital first and a question mark last if it lacks them)'
     : 'question: a research question for them, one sentence under 14 words ending in a question mark, from what they are working on and what they are trying to do with it';
-  return `${answersBlock(answers)}\n\nWrite exactly five lines:\nname: a name for the project, 2 to 5 words, title case, from what they are working on\n${asked}\n1. a sub-question\n2. a sub-question\n3. a sub-question\nThe three sub-questions break the research question into places to start, each under 12 words, ending in a question mark. Order them as a story, the way an advisor walks someone in: 1 is about understanding the problem itself (what it is, where it shows up, why it is hard), 2 about how it has been studied (what is already published, the methods and findings), and 3, last, about their own data, study or contribution (what they will collect, build or show).`;
+  return `${answersBlock(answers)}\n\nWrite exactly five lines:\nname: a name for the project, 2 to 5 words, title case, from what they are working on\n${asked}\n1. a sub-question\n2. a sub-question\n3. a sub-question\nThe three sub-questions break the research question into places to start, each under 12 words, ending in a question mark. Order them as a story, the way an advisor walks someone in: 1 is about understanding the problem itself (what it is, where it shows up, why it is hard), 2 about how it has been studied (what is already published, the methods and findings), and 3, last, about their own data, study or contribution (what they will collect, build or show). Together the three answer the research question; none restates it, and no two could be answered by the same passages of the same papers.`;
 }
+
+const OVERLAP = 0.5;
+
+/**
+ * Why a plan's sub-questions overlap, in words, or '' when they do not: one that only repeats the research question's
+ * words, or two sharing half their other words (stems, the question's own set aside). Near-duplicates only.
+ */
+function overlapOf(starts, question) {
+  const asked = new Set(termsOf(question));
+  const own = starts.map((one) => [...new Set(termsOf(one))]);
+  for (let i = 0; i < own.length; i += 1) {
+    if (own[i].length >= 2 && own[i].every((term) => asked.has(term))) return `sub-question ${i + 1} restates the research question`;
+  }
+  const rest = own.map((terms) => terms.filter((term) => !asked.has(term)));
+  for (let i = 0; i < rest.length; i += 1) {
+    for (let j = i + 1; j < rest.length; j += 1) {
+      if (!rest[i].length || !rest[j].length) continue;
+      const shared = rest[i].filter((term) => rest[j].includes(term)).length;
+      if (shared / new Set([...rest[i], ...rest[j]]).size >= OVERLAP) return `sub-questions ${i + 1} and ${j + 1} ask nearly the same thing`;
+    }
+  }
+  return '';
+}
+
+/** The plan asked again, told why the last one was refused. */
+const againMessage = (answers, why) => `${planMessage(answers)}\n\nA plan you wrote was refused: ${why}. Write the five lines again, with three sub-questions that ask different things.`;
+
 
 const strip = (text) => clean(text).replace(/^["“'‘*_-]+|["”'’*_]+$/g, '').trim();
 
@@ -334,6 +367,12 @@ function createOnboard({ readModels, makeSession = (options) => createWarmSessio
           if (!session) throw new Error('no session');
           const text = await Promise.race([session.turn(planMessage(next.given)), new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error('slow')), PLAN_TIMEOUT_MS); if (timer.unref) timer.unref(); })]);
           out = readPlan(text, next.given);
+          const overlap = out.fallback ? '' : overlapOf(out.starts, out.question);
+          if (overlap) {
+            const again = await Promise.race([session.turn(againMessage(next.given, overlap)), new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error('slow')), PLAN_TIMEOUT_MS); if (timer.unref) timer.unref(); })]).catch(() => '');
+            const second = again ? readPlan(again, next.given) : null;
+            if (second && !second.fallback) out = second;
+          }
         } catch { out = { ...fallbackPlan(next.given), fallback: true }; }
         entry.planning = false;
         // Build 2: the latest plan's sub-questions are climbed at once, while the person is still on the question card.
@@ -409,7 +448,7 @@ function createFakeSession({ delayMs = 300 } = {}) {
     if (/Candidate papers:/.test(message)) return JSON.stringify({ picked: (message.match(/^\[(W\d+)\]/gm) || []).map((one) => ({ paper: one.slice(1, -1), why: 'fake pick' })), refused: [] });
     // Build 2's climbs (./climb.cjs): a draft quoting the first sentence of up to three papers, and a check approving all.
     if (/Papers you may quote/.test(message)) return fakeDraft(message);
-    if (/Write one line of JSON for rung 1/.test(message)) return '{"rung": 1, "read_in_context": true, "answers_sub_question": true, "says_what_line_claims": true, "self_contained": true, "assumes_only_earlier": true, "why": "fake check", "fix": null}';
+    if (/Write one line of JSON for rung 1/.test(message)) return fakeCheck(message).split('\n').slice(0, -1).join('\n');
     if (/the newcomer check/.test(message)) return fakeCheck(message);
     return 'search: fake search one\nsearch: fake search two\nsearch: fake search three';
   };
@@ -428,4 +467,4 @@ function createFakeSession({ delayMs = 300 } = {}) {
   };
 }
 
-module.exports = { CARDS, QUESTIONS, LABELS, CANDIDATES_FILE, ONBOARD_SYSTEM_PROMPT, createOnboard, createFakeSession, cleanAnswers, cardMessage, examplesMessage, readExamples, planMessage, reflectionOf, queriesIn, queriesOf, readPlan, fallbackPlan, mergeCandidates, writeCandidates, readCandidates };
+module.exports = { CARDS, QUESTIONS, LABELS, CANDIDATES_FILE, ONBOARD_SYSTEM_PROMPT, createOnboard, createFakeSession, cleanAnswers, cardMessage, examplesMessage, readExamples, planMessage, overlapOf, againMessage, reflectionOf, queriesIn, queriesOf, readPlan, fallbackPlan, mergeCandidates, writeCandidates, readCandidates };

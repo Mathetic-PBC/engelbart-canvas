@@ -28,6 +28,11 @@
 //     student behavior…?", passed the four).
 //   - Nothing shown ever disappears: a rung once shown stays, whatever a later round says of it; fixes only add rungs
 //     or move them. (Papers had appeared and then gone when a round's fixes replaced the rungs.)
+//   - At most MAX_RUNGS (3) rungs and one passage a paper (five had been shown under one sub-question, three from one
+//     paper under another); a passage where the authors sell their own method is refused when the same text has a
+//     sentence that answers ("Unlike many existing works, PPP…" over "procrastination … is an important factor"); a paper
+//     on another subject is refused at picking (a report on competencies, under behaviours used in predictive models).
+//   - The first check reads the first FIRST_RUNGS (2) rungs, not one: the preparing screen waits for two papers.
 // Nothing here talks to a model or the disk: `ask(role, message, { onDelta, priority })` does (./climbs.cjs).
 
 const { randomUUID } = require('node:crypto');
@@ -36,9 +41,10 @@ const { paperLabel } = require('./shelf.cjs');
 
 const STAGES = ['problem', 'foundations', 'methods', 'known', 'open'];
 const STAGE_NAMES = { problem: 'understanding the problem', foundations: 'foundations', methods: 'how it is studied', known: 'what is known now', open: 'the open edge' };
-const MAX_RUNGS = 5;
+const MAX_RUNGS = 3;
 const MAX_ROUNDS = 3;
 const FIRST_TRIES = 2;
+const FIRST_RUNGS = 2; // rungs the first check reads, so two are approved early
 const CHECKS = ['read_in_context', 'answers_sub_question', 'says_what_line_claims', 'self_contained', 'assumes_only_earlier'];
 const MAX_PICK = 6; // papers picked to read for one sub-question
 const PICK_FROM = 12; // papers the picker chooses among
@@ -56,14 +62,16 @@ Each rung is one passage from one paper and one line, "what you'll learn here". 
 - Self-contained: no "this approach", "these results", "the above", no acronym without what it stands for, no "see Table 2". Never start a passage with a word that points back ("This", "These", "It", "However", "Thus"…) unless it names the paper ("This study…"). Prefer a short passage and a one-line gloss to a longer passage.
 - No rung assumes what an earlier rung did not teach: a term or method is explained by an earlier rung, or this rung's gloss explains it. A rung has one gloss: one line, under 30 words, that may explain two terms.
 - An abstract is a good first rung.
+- Quote the sentence that states what the sub-question asks (a finding, a definition, a fact), not one where the authors sell their own method or set it against "existing works".
+- At most one passage from any paper.
 - A line is plain and short (under 15 words) and says what the passage teaches. It is checked against the passage alone and refused if it claims more: no conclusion the passage does not state, no "shows" for what it only suggests, no detail from elsewhere in the paper. When unsure, say less.
-- Use only papers given as quotable. Two to ${MAX_RUNGS} rungs; fewer is better when fewer get there.
+- Use only papers given as quotable. One to ${MAX_RUNGS} rungs; fewer is better when fewer get there.
 
 Reply with JSON only, no markdown fences.`;
 
 const CHECKER_SYSTEM = `You approve, or refuse, each step of a reading climb before a researcher sees it. A climb is a few passages from papers, each with a one-line "what you'll learn here", that should walk a newcomer up to the answer to one sub-question, read in order. You are the last check: be strict. A passage is approved only when all five hold:
 - read_in_context: you read it in the text around it, and cut out there it still means what it means in the paper.
-- answers_sub_question: it speaks directly to the sub-question, in the setting the sub-question asks about, and helps a newcomer answer it. Being in the paper and sharing the sub-question's words is not enough: a list of undesirable behaviours from a paper on teacher well-being does not tell anyone what counts as student behaviour in a classroom study.
+- answers_sub_question: it speaks directly to the sub-question, in the setting the sub-question asks about, and helps a newcomer answer it. Being in the paper and sharing the sub-question's words is not enough: a list of undesirable behaviours from a paper on teacher well-being does not tell anyone what counts as student behaviour in a classroom study. A sentence where the authors promote their own method or set it against "existing works" fails when the text around it has a sentence that answers the sub-question; say which in "why".
 - says_what_line_claims: it says what its line says you will learn, and the line claims no more than it says.
 - self_contained: it stands alone, with its gloss if it has one: no "this approach", "these results", "the above" or acronym left unexplained, no "see Table 2".
 - assumes_only_earlier: every term or method it relies on is taught by an earlier rung, its own gloss, or plain everyday knowledge.
@@ -73,7 +81,7 @@ Reply with JSON lines only, exactly as asked, no markdown fences.`;
 const PICKER_SYSTEM = `You choose which papers a newcomer to a research question should read first, before anyone quotes them. For one sub-question you are given candidate papers found by searching a catalogue: title, authors, year, venue, type, how often each is cited, and the abstract when there is one. Ask of each: would an expert hand this paper to a newcomer on this sub-question?
 - Prefer papers the field relies on: highly cited, reviews and surveys, well-known venues, and recent work only when it is the best on this exact question.
 - Never pick an obscure paper no one cites when better ones are there.
-- Refuse a paper about another setting, population or question, however many words it shares with this one.
+- Refuse a paper about another setting, population or question, however many words it shares with this one, and one whose subject is not the sub-question's subject as the research question frames it (a report on soft skills such as resilience is not about the behaviours a predictive model uses).
 - Fewer is better: pick only papers worth an hour of a newcomer's time.
 Reply with JSON only, no markdown fences.`;
 
@@ -203,11 +211,12 @@ function rungBlock(rung, n) {
 
 const VERDICT_SHAPE = '{"rung": n, "read_in_context": true|false, "answers_sub_question": true|false, "says_what_line_claims": true|false, "self_contained": true|false, "assumes_only_earlier": true|false, "why": "one short sentence", "fix": null | {"line": "a new line, or omit", "gloss": "a one-line gloss, or omit"}}';
 
-/** The approving model's message: every rung (or the first alone, `firstOnly`), and the newcomer check after them. */
+/** The approving model's message: every rung (or the first FIRST_RUNGS, `firstOnly`), and the newcomer check after them. */
 function checkerMessage({ sub, rungs, firstOnly = false }) {
-  const list = (firstOnly ? rungs.slice(0, 1) : rungs).map((rung, i) => rungBlock(rung, i + 1)).join('\n\n');
-  const head = `Sub-question: ${clean(sub, 300)}\n\n${firstOnly ? 'The first rung of its climb' : 'Its climb, in order'}:\n\n${list}`;
-  if (firstOnly) return `${head}\n\nWrite one line of JSON for rung 1, nothing else:\n${VERDICT_SHAPE}\nfix: when a check fails and a reworded line or a one-line gloss would make it pass, give them; else null.`;
+  const some = firstOnly ? rungs.slice(0, FIRST_RUNGS) : rungs;
+  const list = some.map((rung, i) => rungBlock(rung, i + 1)).join('\n\n');
+  const head = `Sub-question: ${clean(sub, 300)}\n\n${firstOnly ? `The first ${some.length > 1 ? `${some.length} rungs` : 'rung'} of its climb` : 'Its climb, in order'}:\n\n${list}`;
+  if (firstOnly) return `${head}\n\nWrite one line of JSON for rung 1${some.length > 1 ? ` and one for rung ${some.length}, in order` : ''}, nothing else:\n${VERDICT_SHAPE}\nfix: when a check fails and a reworded line or a one-line gloss would make it pass, give them; else null.`;
   return `${head}\n\nWrite, one per line, nothing else:\n1. For each rung in order, one line of JSON: ${VERDICT_SHAPE}\n   fix: when a check fails and a reworded line or a one-line gloss would make it pass, give them; else null.\n2. Then one last line of JSON, the newcomer check: first your own short answer to the sub-question; then read only the rungs' lines, glosses and passages in order as a newcomer who knew nothing of this, and answer the sub-question from them alone; then compare.\n{"newcomer": true, "own_answer": "...", "newcomer_answer": "...", "same": true|false, "confusing": [{"rung": n, "problem": "...", "fix": "reorder" | "bridge" | "gloss" | "line" | "drop", "move_to": n, "gloss": "...", "line": "..."}]}\n   same: the newcomer's answer gets the substance of yours. confusing: every step a newcomer would stumble on, with its fix ("bridge" and "gloss" give the one-line gloss, "line" the new line, "reorder" where it goes); [] when none.`;
 }
 
@@ -319,7 +328,8 @@ async function buildClimb({ sub, question, brief = null, papers, ask, onUpdate =
     for (const one of draft.rungs) {
       const paper = byId.get(one.paper);
       const pointsBack = pointsBackOf(one.passage);
-      const gate = !paper ? { ok: false, why: 'not one of the papers given' } : pointsBack ? { ok: false, why: `starts by pointing back ("${pointsBack}")` } : gatePassage(one.passage, paper);
+      const twice = paper && gated.some((held) => held.paper.id === paper.id);
+      const gate = !paper ? { ok: false, why: 'not one of the papers given' } : twice ? { ok: false, why: 'a second passage from the same paper' } : pointsBack ? { ok: false, why: `starts by pointing back ("${pointsBack}")` } : gatePassage(one.passage, paper);
       if (!gate.ok) { climb.failures.push({ paper: one.paper, passage: one.passage.slice(0, 400), why: gate.why, draft: attempt + 1 }); continue; }
       const part = gate.source === 'abstract' ? 'Abstract' : partName(sectionAt(paper.pages, gate.page, gate.start)) || one.part || `p. ${gate.page}`;
       gated.push({ id: randomUUID(), stage: one.stage, line: one.line, gloss: one.gloss, passage: one.passage, part, label: paperLabel(paper), paper: { id: paper.id, title: paper.title, authors: paper.authors, year: paper.year, venue: paper.venue, doi: paper.doi }, source: gate.source, page: gate.page, start: gate.start, end: gate.end, find: gate.find, occurrences: gate.occurrences, sentences: gate.sentences || sentencesIn(one.passage), context: contextOf(paper, gate) });
@@ -354,20 +364,23 @@ async function buildClimb({ sub, question, brief = null, papers, ask, onUpdate =
     climb.pending = list.filter((rung) => !onPage.has(rung.id)).length;
     tell();
   };
-  // The first rung on its own first (about ten seconds at Opus high, measured 2026-10-08), so something approved is up
-  // soon: refused with a fix, the fixed rung is checked at once; refused again (or with no fix), it is dropped and the
-  // next rung is tried the same way, FIRST_TRIES checks in all. Then the whole climb's rounds, with what stood.
+  // The first FIRST_RUNGS rungs on their own first (about ten seconds at Opus high, measured 2026-10-08), so two
+  // approved are up soon: the first refused with a fix, the fixed rung is checked at once; refused again (or with no
+  // fix), it is dropped and what follows is tried the same way, FIRST_TRIES checks in all. Then the whole climb's
+  // rounds, with what stood.
   for (let tries = 0; tries < FIRST_TRIES && rungs.length && !cancelled(); tries += 1) {
-    const rung = rungs[0];
+    const head = rungs.slice(0, FIRST_RUNGS), rung = head[0];
     let reply;
-    try { reply = await ask('checker', checkerMessage({ sub, rungs: [rung], firstOnly: true }), { priority: 0 }); } catch { break; }
+    try { reply = await ask('checker', checkerMessage({ sub, rungs: head, firstOnly: true }), { priority: 0 }); } catch { break; }
     if (cancelled()) return climb;
     const verdicts = readCheck(reply.text).verdicts, verdict = verdicts.get(1);
-    logCheck('first', 0, [rung], verdicts, reply.by);
-    if (passes(verdict)) { approved.set(rung.id, published(rung, verdict, reply.by, now(), 0)); show(rungs); break; }
+    logCheck('first', 0, head, verdicts, reply.by);
+    head.forEach((one, i) => { if (passes(verdicts.get(i + 1)) && !approved.has(one.id)) approved.set(one.id, published(one, verdicts.get(i + 1), reply.by, now(), 0)); });
+    if (passes(verdict)) { show(rungs); break; }
     const fixed = fixRung(rung, verdict, []);
     rungs = fixed && fixed !== rung ? [{ ...fixed, id: randomUUID() }, ...rungs.slice(1)] : rungs.slice(1);
     show(rungs);
+    if (rungs.length && approved.has(rungs[0].id)) break; // what follows was approved already
   }
 
   // The climb that stands is one checked whole: the last list a round read, up to its first rung not approved.
@@ -426,4 +439,4 @@ async function buildClimb({ sub, question, brief = null, papers, ask, onUpdate =
   return climb;
 }
 
-module.exports = { pointsBackOf, STAGES, STAGE_NAMES, CHECKS, MAX_RUNGS, MAX_ROUNDS, MAX_PICK, WRITER_SYSTEM, CHECKER_SYSTEM, PICKER_SYSTEM, worthReading, pickMessage, readPick, pickPapers, orderRungs, readDraft, writerMessage, checkerMessage, readCheck, passes, applyFixes, buildClimb, jsonIn };
+module.exports = { pointsBackOf, STAGES, STAGE_NAMES, CHECKS, MAX_RUNGS, MAX_ROUNDS, MAX_PICK, FIRST_RUNGS, WRITER_SYSTEM, CHECKER_SYSTEM, PICKER_SYSTEM, worthReading, pickMessage, readPick, pickPapers, orderRungs, readDraft, writerMessage, checkerMessage, readCheck, passes, applyFixes, buildClimb, jsonIn };

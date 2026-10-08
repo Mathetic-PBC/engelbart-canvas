@@ -136,6 +136,9 @@ async function main() {
     await until(() => js(wc, '!!document.querySelector("[data-starts-unavailable]")'), 'OpenAlex is said to be unavailable', 1600);
     assert.equal(await js(wc, 'document.querySelectorAll("[data-rung-kind=action]").length'), 0, 'no step stands in for papers');
   } else {
+    // Every sub-question starts shut; a click on its words opens it.
+    assert.equal(await js(wc, 'document.querySelectorAll("[data-rung]").length'), 0, 'every sub-question starts shut');
+    await js(wc, 'document.querySelector("[data-start] [data-start-text]").click()');
     await until(() => js(wc, 'document.querySelectorAll("[data-start]")[0].querySelectorAll("[data-rung-kind=paper]").length >= 1'), 'papers under the first question', 1600);
     const titles = await js(wc, '[...document.querySelectorAll("[data-rung-title]")].map((el) => el.textContent)');
     assert.ok(!titles.includes('Deep shift-invariant behavior prediction'), 'the uncited paper is never shown');

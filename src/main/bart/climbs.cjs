@@ -27,6 +27,9 @@
 //     fetched in full and quoted. The pick is kept with the climb (`pick`).
 //   - Nothing shown ever disappears: a climb begun again (a start edited, a quit, OpenAlex back) keeps every rung shown
 //     before and only adds to them (`prior`).
+//   - Speed (a hand test: the preparing screen hit its 60 s cap, 24 s of it reading papers, mostly hunting pdfs that
+//     were never found): the picked papers are quoted from their records' abstracts at once, and their pdfs and text
+//     are fetched behind, for a climb made later (a sub-question edited, ensure). No climb waits on a pdf.
 //   - OpenAlex refusing (a 429: no key, and the keyless allowance used up) is not "nothing found": a climb that got
 //     nothing new because of it ends 'unavailable' instead of settling for a step that is not a paper, the block says so,
 //     and the next time the workspace shows, it is climbed again (ensure).
@@ -238,7 +241,8 @@ function createClimbs({ readModels, makeSession = (options) => createWarmSession
 
   /**
    * Papers for a climb (2026-10-08): the nearest candidates' records (no pdf), the ones worth reading picked by the
-   * approving model, and only those read in full (waited for up to readWaitMs), in the pick's order. → { papers, pick }
+   * approving model, in the pick's order, each as the shelf has it (with its text when a pdf was read already), else its
+   * record (the abstract). Their pdfs are fetched behind, never waited for. → { papers, pick }
    */
   async function papersFor(sub, candidates, { question, ask, job }) {
     const near = candidatesFor(sub, candidates).slice(0, PICK_FROM);
@@ -250,8 +254,8 @@ function createClimbs({ readModels, makeSession = (options) => createWarmSession
     if (job.cancelled) return { papers: [], pick: null };
     const pick = await pickPapers({ sub, question, papers: described, ask, now });
     const chosen = pick.ids.map((id) => near.find((one) => one.id === id)).filter(Boolean);
-    await waitAtMost(Promise.all(chosen.map((one) => read(one))));
-    const got = chosen.map((one) => shelf.get(one.id)).filter(Boolean);
+    for (const one of chosen) read(one);
+    const got = chosen.map((one) => shelf.get(one.id) || described.find((record) => record.id === one.id)).filter(Boolean);
     const quotable = got.filter((paper) => paper.abstract || paper.pages).slice(0, QUOTABLE);
     const unquotable = got.filter((paper) => !paper.abstract && !paper.pages).slice(0, 3);
     return { papers: [...quotable, ...unquotable], pick: pick.record };

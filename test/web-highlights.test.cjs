@@ -44,6 +44,10 @@ test('addressKey: www, http or https, a trailing slash, a #fragment and tracking
   assert.notEqual(addressKey('https://example.org/post?id=1'), addressKey('https://example.org/post?id=2'));
   assert.equal(addressKey('https://example.org/s?q=a%20b&referrer=me'), 'example.org/s?q=a%20b&referrer=me', 'kept as written; a name that only starts like one is kept');
   assert.equal(addressKey('file:///Users/h/a.html#x'), 'file:///Users/h/a.html');
+  // One file, however its path was encoded: the Stage opened "Stecher & Hamilton….md" in a new tab each time (2026-10-08).
+  const paper = '/Users/h/.context/papers/Stecher & Hamilton 2014 Measuring (abstract).md';
+  assert.equal(addressKey(`file://${paper}`), addressKey(`file://${paper.split('/').map(encodeURIComponent).join('/')}`));
+  assert.equal(addressKey(`file://${paper}`), 'file:///Users/h/.context/papers/Stecher%20%26%20Hamilton%202014%20Measuring%20(abstract).md');
   assert.equal(addressKey('about:blank'), '');
   assert.equal(addressKey('not an address'), 'not an address');
 });

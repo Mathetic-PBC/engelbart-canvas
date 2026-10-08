@@ -20,14 +20,21 @@ function cleanSearch(search) {
 
 /**
  * http or https, www. or not, a trailing slash, a #fragment, tracking parameters (utm_*, fbclid, gclid, mc_cid, mc_eid,
- * ref): one address. The rest of the query stays — `?id=2` can be another page. Another scheme loses its #fragment
- * only; anything that is no URL is as it came.
+ * ref): one address. The rest of the query stays — `?id=2` can be another page. A file's path is spelled one way
+ * whatever was encoded; another scheme loses its #fragment only; anything that is no URL is as it came.
  */
 function addressKey(value) {
   const v = String(value || '').trim();
   if (!v || v === 'about:blank') return '';
   let u;
   try { u = new URL(v); } catch { return v; }
+  // A file's path one spelling, each part encoded as encodeURIComponent does (2026-10-08: "Stecher & Hamilton 2014….md"
+  // was "&" spelled one way and "%26" the other, so a paper already open in the Stage opened in a new tab each time).
+  if (u.protocol === 'file:') {
+    let path;
+    try { path = u.pathname.split('/').map((part) => encodeURIComponent(decodeURIComponent(part))).join('/'); } catch { path = u.pathname; }
+    return `file://${u.host}${path}${u.search}`;
+  }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return u.href.replace(/#.*$/, '');
   return `${u.host.toLowerCase().replace(/^www\./, '')}${u.pathname.replace(/\/+$/, '')}${cleanSearch(u.search)}`;
 }

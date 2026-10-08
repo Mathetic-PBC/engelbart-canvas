@@ -312,6 +312,28 @@ test('the plan: their question kept as written and broken down; Bart writes one 
   assert.equal((await ob.plan(id, { answers: { working: 'Teachable agents', question: 'Do teachable agents help novices debug?' } })).question, 'Do teachable agents help novices debug?');
 });
 
+test('the plan: sub-questions that overlap or restate the question are asked for once more, told which', async () => {
+  const question = 'Which student behaviors predict learning outcomes in AI tutoring?';
+  assert.match(onboard.planMessage({ working: 'w', question }), /none restates it, and no two could be answered by the same passages/);
+  assert.equal(onboard.overlapOf(['Which behaviors predict student learning?', 'How have tutoring logs been measured?', 'What will your own data show?'], question), 'sub-question 1 restates the research question');
+  assert.equal(onboard.overlapOf(['How is help-seeking measured in tutoring logs?', 'How have studies measured help-seeking from logs?', 'What will your own data show?'], question), 'sub-questions 1 and 2 ask nearly the same thing');
+  assert.equal(onboard.overlapOf(['What counts as gaming the system?', 'How have studies measured help-seeking from logs?', 'What will your own data show?'], question), '');
+  const sent = [];
+  const replies = [
+    `name: First\nquestion: ${question}\n1. How is help-seeking measured in tutoring logs?\n2. How have studies measured help-seeking from logs?\n3. What will your own data show?`,
+    `name: Second\nquestion: ${question}\n1. What counts as gaming the system?\n2. How have studies measured help-seeking from logs?\n3. What will your own data show?`,
+  ];
+  const session = { provider: 'anthropic', warm: async () => 'ready', alive: () => true, close() {}, turn: async (message) => { sent.push(message); return replies.shift() || ''; } };
+  const ob = onboard.createOnboard({ readModels: () => normalizeModels(DEFAULT_MODELS), makeSession: () => session, papers: fakePapers([]) });
+  const { id } = ob.open();
+  const plan = await ob.plan(id, { answers: { working: 'w', question } });
+  assert.equal(plan.name, 'Second');
+  assert.equal(plan.starts[0], 'What counts as gaming the system?');
+  const asked = sent.filter((message) => /Write exactly five lines/.test(message));
+  assert.equal(asked.length, 2);
+  assert.match(asked[1], /refused: sub-questions 1 and 2 ask nearly the same thing/);
+});
+
 test('Show examples: three questions, each a different kind, grounded in the papers found; never one already seen', async () => {
   const message = onboard.examplesMessage({ working: 'Predicting student behavior', goal: 'Find real data to train a model' }, { papers: [{ title: 'Early warning systems in higher education', year: 2019 }], before: ['Seen one?'] });
   assert.match(message, /What are you trying to do with it\? Find real data to train a model/);
