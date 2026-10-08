@@ -72,6 +72,15 @@ skips: the 38 before and these 3.
 
 ### Status
 
+- 2026-10-07, Linux run 3 (f3851a6, https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37699844498):
+  macOS ✓, Windows ✓. Linux npm test ✓ (1398 tests, 1384 pass, 14 skipped, 0 failed); `npm run dist:linux` made
+  Engelbart-0.1.10-x86_64.AppImage and latest-linux.yml. smoke-linux on release/linux-unpacked: the launcher found the
+  runner's AppArmor restricting user namespaces and started the app without the sandbox (as designed: "AppArmor lets
+  only programs with a profile make user namespaces, and Engelbart has none"); the window loaded; a bash terminal
+  echoed; then the tool check reported no Git, and smoke-linux hung after failing until the job's hour was up (run
+  reported cancelled). Now: on Linux the app runs in its own process group, killed at the end, and smoke-linux exits
+  itself; a failed Git check prints what the login shell answers to the same lookup; the Linux smoke and install
+  steps have a 10-minute limit.
 - 2026-10-07, Linux run 2 (392567f, https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37697931884):
   macOS ✓, Windows ✓ (the install step still passes). Linux: 1398 tests, 1383 pass, 14 skipped, 1 failed: the refusals
   test's no-Git case ran `bash` by name with a PATH that holds only uname, so it was not found (ENOENT); its bad
@@ -90,6 +99,7 @@ skips: the 38 before and these 3.
 |---|---|---|---|---|---|
 | 896d930 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37696023134 | ✓ | ✗ 1 test | ✗ 1 test | both the new test's own; the 6 old Linux failures pass |
 | 392567f | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37697931884 | ✓ | ✓ | ✗ 1 test | the no-Git case could not find bash |
+| f3851a6 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37699844498 | ✓ | ✓ | ✗ smoke (cancelled) | tests ✓, AppImage ✓; smoke: sandbox off by AppArmor, window, terminal ✓, Git not found, then hung |
 
 ## One-command install
 

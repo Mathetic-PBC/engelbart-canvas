@@ -159,6 +159,7 @@ jobs:
         run: npm run dist:linux
       - name: Smoke test the packaged Linux app
         if: runner.os == 'Linux'
+        timeout-minutes: 10
         run: xvfb-run -a node scripts/smoke-linux.cjs release/linux-unpacked/engelbart-launch
       # The one-line install as a person runs it on Linux: the Mac's command (install.sh hands Linux to
       # install-linux.sh), against the AppImage above served from a folder here. The installed copy is smoke tested, the
@@ -166,6 +167,7 @@ jobs:
       # install command offers is added (with the runner's sudo) and the sandbox must then be on.
       - name: Install with the one-line command (Linux)
         if: runner.os == 'Linux'
+        timeout-minutes: 10
         shell: bash
         run: |
           set -euo pipefail

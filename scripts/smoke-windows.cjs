@@ -16,7 +16,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 
 const ROOT = path.join(__dirname, '..');
 const linux = process.platform === 'linux';
@@ -74,6 +74,7 @@ async function main() {
   const work = path.join(folder, 'work');
   for (const dir of [home, userData, work]) fs.mkdirSync(dir, { recursive: true });
   let child = null;
+  let group = null; // Linux: the app's process group
   let output = '';
   try {
     child = spawn(app, ['--remote-debugging-port=0', `--user-data-dir=${userData}`], {
@@ -83,7 +84,9 @@ async function main() {
         ENGELBART_TOOLS: 'off', ENGELBART_SUMMARIES: 'off', ENGELBART_SANDBOXES: 'off', ENGELBART_WEB_PDFS: 'off', ENGELBART_UPDATES: 'off', ENGELBART_RUN_STEP: 'off',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: linux, // its own process group on Linux, so whatever it leaves running is stopped with it (below)
     });
+    if (linux) group = child.pid;
     const exited = new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));
     for (const stream of [child.stdout, child.stderr]) stream.on('data', (chunk) => { output = (output + chunk).slice(-20_000); });
     console.log(`Starting ${app}`);
@@ -126,7 +129,19 @@ async function main() {
     // 3. A POSIX script through the login shell (Git for Windows' bash on Windows) prints its output: the tool check.
     const checked = await evaluate(page, 'engelbartAPI.toolsCheck()');
     const git = checked && checked.tools && checked.tools.git;
-    if (!git || git.status !== 'ready' || !git.path) throw new Error(`The tool check found no Git through the login shell: ${JSON.stringify(git)}`);
+    if (!git || git.status !== 'ready' || !git.path) {
+      let lookup = '';
+      if (linux) { // what the login shell itself answers, with the app's home (the check's own lookup, src/main/tools/detect.cjs)
+        const shell = process.env.SHELL || '/bin/bash';
+        try {
+          lookup = execFileSync(shell, ['-ilc', "printf '__mark__\\n'; type -aP git; echo \"PATH=$PATH\""], { env: { ...process.env, HOME: home }, encoding: 'utf8', timeout: 20_000, stdio: ['ignore', 'pipe', 'pipe'] });
+        } catch (error) {
+          lookup = `${error.message}\n${error.stdout || ''}${error.stderr || ''}`;
+        }
+        lookup = `\nThe login shell (${shell} -ilc, HOME=${home}) answers:\n${lookup}`;
+      }
+      throw new Error(`The tool check found no Git through the login shell: ${JSON.stringify(git)}${lookup}`);
+    }
     if (process.platform === 'win32' && !/^[a-z]:\\/i.test(git.path)) throw new Error(`The tool check printed Git at ${git.path}, not a Windows path.`);
     console.log(`ok: the login shell's script found Git ${git.version} at ${git.path}`);
 
@@ -148,8 +163,10 @@ async function main() {
     process.exitCode = 1;
   } finally {
     if (child) child.kill();
+    if (group) try { process.kill(-group, 'SIGKILL'); } catch { /* the group is gone */ }
     await pause(1000);
     try { fs.rmSync(folder, { recursive: true, force: true }); } catch { /* left for the system to clear */ }
+    if (linux) process.exit(process.exitCode); // a helper process Chromium left holding the app's output open keeps Node waiting
   }
 }
 
