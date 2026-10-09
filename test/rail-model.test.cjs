@@ -274,3 +274,26 @@ test('a note trashed from its only workspace is not in the @ menu nor the search
   assert.equal(letGoNotes({ workspaces: [workspaces[0], { id: 'c', context: [], removed: [], children: [] }], notes: [{ id: 'n1', workspaceId: 'c' }] }).has('n1'), false);
   assert.equal(letGoNotes({ workspaces: [], notes }).size, 0, 'nothing trashed, nothing let go');
 });
+
+test('the Library panel with a chip on (2026-10-09): Recent is the last edited of that kind alone; a search sees only that kind', async () => {
+  const { libraryPanelRows, LIBRARY_RECENT } = await load();
+  const inRail = () => false;
+  const day = (n) => new Date(Date.UTC(2026, 9, n)).toISOString();
+  // 60 notes, all edited after every paper, so an unfiltered Recent holds no paper at all
+  const notes = Array.from({ length: 60 }, (_, i) => row(`n${i}`, `Note ${i} on retrieval`, 'md', ['note'], { last_edited: day(10 + (i % 15)) }));
+  const papers = [3, 1, 5, 2, 4].map((n) => row(`p${n}`, `Retrieval paper ${n}`, 'pdf', ['paper'], { last_edited: day(n) }));
+  const all = [...papers, ...notes, row('i1', 'Attachment 1', 'image', [], { last_edited: day(30) })];
+  const recent = libraryPanelRows({ query: '', library: all, inRail });
+  assert.equal(recent.length, LIBRARY_RECENT);
+  assert.ok(recent.every((r) => r.row.type === 'md'), 'All: forty notes, no picture');
+  const papersRecent = libraryPanelRows({ query: '', library: all, chip: 'papers', inRail });
+  assert.deepEqual(papersRecent.map((r) => r.key), ['p5', 'p4', 'p3', 'p2', 'p1'], 'the five papers, most recently edited first');
+  assert.equal(libraryPanelRows({ query: '', library: all, chip: 'notes', inRail }).length, LIBRARY_RECENT, 'a chip\'s Recent still shows up to forty');
+  const typed = libraryPanelRows({ query: 'retrieval', library: all, chip: 'papers', inRail });
+  assert.deepEqual(typed.map((r) => r.key).sort(), ['p1', 'p2', 'p3', 'p4', 'p5'], 'a matching note is left out');
+  assert.ok(libraryPanelRows({ query: 'retrieval', library: all, inRail }).some((r) => r.key === 'n0'), 'and found under All');
+  assert.deepEqual(libraryPanelRows({ query: 'Note 1', library: all, chip: 'papers', inRail }), [], 'nothing of that kind matches');
+  // a pasted link is the main process's answer whatever chip is on
+  const fresh = libraryPanelRows({ query: 'https://example.org/new', library: all, chip: 'papers', inRail, found: { row: null, found: { name: 'New page', type: 'website', tags: [] } } });
+  assert.deepEqual(fresh.map((r) => r.kind), ['fresh']);
+});

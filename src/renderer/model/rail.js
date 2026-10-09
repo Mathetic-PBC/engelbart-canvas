@@ -2,7 +2,7 @@
 // (Claude Design "Canvas.dc.html" and "Add - Mention.dc.html", 2026-09-22). Pure: the rows come in, the lists go out; the
 // screen does the adding. What the sidebar itself lists is model/sidebar.js's.
 
-import { kindLabel } from './kind.js';
+import { kindLabel, libraryFilter } from './kind.js';
 import { findWorkspaces } from './nav.js';
 
 // A web address without its scheme (github.com, example.org/page), as the main process reads one (store/library.cjs).
@@ -76,6 +76,22 @@ export function searchRows({ query, library, inRail, found, bodies = null }) {
   const rows = hits.map(item);
   const one = bare ? answered() : null;
   return one && !rows.some((row) => row.key === one.key) ? [...rows, one] : rows;
+}
+
+/** How many rows the sidebar's Library panel lists before anything is typed. */
+export const LIBRARY_RECENT = 40;
+const edited = (row) => Date.parse(row.last_edited || row.created || '') || 0;
+
+/**
+ * The sidebar's Library panel (2026-10-09): `chip` (kind.js LIBRARY_CHIPS) narrows the library first, so it holds in both
+ * modes. Nothing typed, the LIBRARY_RECENT last edited of what is left; typed, searchRows over only that, in its order. A
+ * pasted link or path is searchRows' answer whatever the chip: it is not looked for in the library.
+ */
+export function libraryPanelRows({ query, library, chip = 'all', inRail, found, bodies = null }) {
+  const things = (library || []).filter((row) => libraryFilter(row, chip));
+  const typed = String(query || '').trim();
+  if (!typed) return [...things].sort((a, b) => edited(b) - edited(a)).slice(0, LIBRARY_RECENT).map((row) => ({ kind: 'item', key: row.id, row, name: row.name, tag: inRail(row.id) ? 'here' : '' }));
+  return searchRows({ query: typed, library: things, inRail, found, bodies });
 }
 
 /**

@@ -33,3 +33,30 @@ test('how a row is shown: the type says what it is, the tags say the rest, and n
   // the editor's stand-ins (an unresolved mention, @bart, Task, a workspace row) have no tags and still get a glyph
   assert.deepEqual([kindKey({ type: 'note' }), kindKey({ type: 'chat' }), kindKey({ type: 'task' }), kindKey({ type: 'workspace' }), kindKey(undefined)], ['note', 'chat', 'task', 'workspace', 'note']);
 });
+
+test('the Library panel\'s chips: each kind under one chip, a repository address under Repos not Web, pictures under none', async () => {
+  const { libraryFilter, libraryCounts, LIBRARY_CHIPS } = await load();
+  const rows = {
+    note: { type: 'md', tags: ['note'] },
+    mdFile: { type: 'md', tags: [] },
+    pdf: { type: 'pdf', tags: ['paper'] },
+    gitFolder: { type: 'folder', tags: ['git'] },
+    gitAddress: { type: 'website', tags: ['git'], name: 'tinygrad/tinygrad' },
+    website: { type: 'website', tags: [] },
+    html: { type: 'html', tags: [] },
+    docx: { type: 'docx', tags: [] },
+    folder: { type: 'folder', tags: [] },
+    csv: { type: 'csv', tags: [] },
+    image: { type: 'image', tags: [] },
+  };
+  const chips = LIBRARY_CHIPS.map((chip) => chip.id).filter((id) => id !== 'all');
+  assert.deepEqual(chips, ['notes', 'papers', 'repos', 'web', 'files']);
+  const under = Object.fromEntries(Object.entries(rows).map(([name, row]) => [name, chips.filter((chip) => libraryFilter(row, chip))]));
+  assert.deepEqual(under, {
+    note: ['notes'], mdFile: ['files'], pdf: ['papers'], gitFolder: ['repos'], gitAddress: ['repos'], website: ['web'], html: ['web'],
+    docx: ['files'], folder: ['files'], csv: ['files'], image: [],
+  });
+  assert.equal(Object.values(rows).filter((row) => libraryFilter(row, 'all')).length, 10, 'All is everything but the picture');
+  assert.equal(libraryFilter(rows.pdf), true, 'no chip is All');
+  assert.deepEqual(libraryCounts(Object.values(rows)), { all: 10, notes: 1, papers: 1, repos: 2, web: 2, files: 4 });
+});

@@ -9,7 +9,8 @@ import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
 import { GH, KindGlyph as Glyph } from '../ui/Icons.jsx';
 import { isUntitled } from '../model/names.js';
-import { looksAddable, searchRows } from '../model/rail.js';
+import { libraryPanelRows, looksAddable, searchRows } from '../model/rail.js';
+import { LIBRARY_CHIPS, libraryCounts } from '../model/kind.js';
 import { findWorkspaces } from '../model/nav.js';
 import { sinceWords } from '../model/sidebar.js';
 import { NotificationRows, useBuildNotifications } from '../ui/SandboxNotifications.jsx';
@@ -364,8 +365,61 @@ export function ConnectionsPanel({ anchor, onOverleaf, onClose, ignore }) {
 
 /* ---------------------------------------------------------------- Library */
 
-const LIBRARY_RECENT = 40;
-const edited = (row) => Date.parse(row.last_edited || row.created || '') || 0;
+/**
+ * The Library panel's chips (All · Notes · Papers · Repos · Web · Files): one on at a time, a press on the one that is on
+ * goes back to All, a chip with nothing under it is left out. Each shows its count only when every count fits the row.
+ * The keyboard: Tab from the search lands on the chip that is on, Left and Right move along, Space or Enter picks one;
+ * a pick hands the keyboard back to the search (`onPicked`).
+ */
+function LibraryChips({ chip, counts, onPick, chipsRef }) {
+  const shown = LIBRARY_CHIPS.filter((one) => one.id === 'all' || counts[one.id] > 0);
+  const rowRef = React.useRef(null);
+  const measureRef = React.useRef(null);
+  const [fits, setFits] = React.useState(true);
+  const sign = shown.map((one) => `${one.id}:${counts[one.id]}`).join(',');
+  React.useLayoutEffect(() => {
+    if (rowRef.current && measureRef.current) setFits(measureRef.current.scrollWidth <= rowRef.current.clientWidth);
+  }, [sign]);
+  const move = (event, from) => {
+    const buttons = [...(chipsRef.current ? chipsRef.current.querySelectorAll('[data-library-chip]') : [])];
+    const at = buttons.indexOf(event.currentTarget);
+    if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+      event.preventDefault();
+      const next = buttons[(at + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length];
+      if (next) next.focus();
+    } else if (event.key === ' ' || event.key === 'Enter') {
+      event.preventDefault();
+      event.stopPropagation();
+      onPick(from);
+    }
+  };
+  const chipStyle = (on) => ({ flex: 'none', display: 'flex', alignItems: 'center', gap: 4, padding: '2px 8px', border: `1px solid ${on ? '#efefef' : '#eaeaea'}`, borderRadius: 6, background: on ? '#efefef' : 'transparent', cursor: 'pointer', whiteSpace: 'nowrap', ...text(12, on ? '#171717' : '#4d4d4d', on ? 500 : 400) });
+  const label = (one, withCount) => <>{one.label}{withCount && <span style={text(12, '#8f8f8f')}>{counts[one.id]}</span>}</>;
+  return (
+    <div ref={(el) => { rowRef.current = el; chipsRef.current = el; }} role="toolbar" aria-label="Show only" data-library-chips="1" style={{ flex: 'none', position: 'relative', display: 'flex', alignItems: 'center', gap: 4, margin: '0 10px 6px', overflow: 'hidden' }}>
+      {shown.map((one) => (
+        <button
+          key={one.id}
+          type="button"
+          className={one.id === chip ? '' : 'hov-wash'}
+          data-library-chip={one.id}
+          aria-pressed={one.id === chip}
+          tabIndex={one.id === chip ? 0 : -1}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => onPick(one.id)}
+          onKeyDown={(event) => move(event, one.id)}
+          style={chipStyle(one.id === chip)}
+        >
+          {label(one, fits)}
+        </button>
+      ))}
+      {/* the same row with every count, out of sight, to know whether the counts fit */}
+      <div ref={measureRef} aria-hidden="true" style={{ position: 'absolute', left: 0, top: 0, width: 'max-content', visibility: 'hidden', pointerEvents: 'none', display: 'flex', gap: 4, whiteSpace: 'nowrap' }}>
+        {shown.map((one) => <span key={one.id} style={chipStyle(one.id === chip)}>{label(one, true)}</span>)}
+      </div>
+    </div>
+  );
+}
 
 /**
  * Library (Sidebar brainstorming: "a modal … search, recent and current-context items, Open full Library"): the search has
@@ -392,11 +446,22 @@ export function LibraryPanel({ anchor, projectId, library, inRail, onOpen, onLin
   }, [addable, typed]);
   const answer = addable && found && found.query === typed ? found.result : undefined;
   const bodies = useBodies(projectId, true);
-  const things = React.useMemo(() => library.filter((row) => row.type !== 'image'), [library]); // a pasted picture is its document's
-  const rows = React.useMemo(() => {
-    if (!typed) return [...things].sort((a, b) => edited(b) - edited(a)).slice(0, LIBRARY_RECENT).map((row) => ({ kind: 'item', key: row.id, row, name: row.name, tag: inRail(row.id) ? 'here' : '' }));
-    return searchRows({ query: typed, library: things, inRail, found: answer, bodies });
-  }, [typed, things, inRail, answer, bodies]);
+  const counts = React.useMemo(() => libraryCounts(library), [library]); // a pasted picture is its document's: under no chip
+  // Which kind is shown: kept while the panel is open, All again each time it opens; a chip emptied meanwhile is All.
+  const [picked, setPicked] = React.useState('all');
+  const chip = counts[picked] > 0 ? picked : 'all';
+  const chipNoun = (LIBRARY_CHIPS.find((one) => one.id === chip) || {}).noun || '';
+  const inputRef = React.useRef(null);
+  const chipsRef = React.useRef(null);
+  const pickChip = (id) => {
+    setPicked(id === chip ? 'all' : id);
+    setIdx(0);
+    if (inputRef.current) inputRef.current.focus({ preventScroll: true });
+  };
+  const rows = React.useMemo(
+    () => libraryPanelRows({ query: typed, library, chip, inRail, found: answer, bodies }),
+    [typed, library, chip, inRail, answer, bodies],
+  );
   const at = rows.length ? Math.min(idx, rows.length - 1) : -1;
   const peek = usePeek();
   const run = async (work) => {
@@ -414,12 +479,17 @@ export function LibraryPanel({ anchor, projectId, library, inRail, onOpen, onLin
     if (event.key === 'ArrowDown') { event.preventDefault(); if (n) setIdx((at + 1) % n); }
     else if (event.key === 'ArrowUp') { event.preventDefault(); if (n) setIdx((at - 1 + n) % n); }
     else if (event.key === 'Enter') { event.preventDefault(); if (at >= 0) pick(rows[at]); }
+    else if (event.key === 'Tab' && !event.shiftKey && chipsRef.current) {
+      const on = chipsRef.current.querySelector('[data-library-chip][tabindex="0"]') || chipsRef.current.querySelector('[data-library-chip]');
+      if (on) { event.preventDefault(); on.focus(); }
+    }
   };
   return (
     <Floating anchor={anchor} width={360} cap={600} label="Library" onClose={onClose} ignore={ignore} data-sb-panel="library">
-      <PanelHead title="Library" count={things.length} />
-      <SearchField value={q} onChange={(value) => { setQ(value); setIdx(0); setProblem(''); }} onKeyDown={onKey} placeholder="Search the library, or paste a link" />
-      {!typed && <div style={{ padding: '2px 14px 2px', ...text(12, '#8f8f8f', 500) }}>Recent</div>}
+      <PanelHead title="Library" count={counts.all} />
+      <SearchField value={q} onChange={(value) => { setQ(value); setIdx(0); setProblem(''); }} onKeyDown={onKey} inputRef={inputRef} placeholder="Search the library, or paste a link" />
+      {counts.all > 0 && <LibraryChips chip={chip} counts={counts} onPick={pickChip} chipsRef={chipsRef} />}
+      {!typed && <div data-library-heading="1" style={{ padding: '2px 14px 2px', ...text(12, '#8f8f8f', 500) }}>{chipNoun ? `Recent ${chipNoun}` : 'Recent'}</div>}
       <Scroll>
         {rows.map((result, i) => {
           const row = result.kind === 'item' ? result.row : null;
@@ -441,7 +511,9 @@ export function LibraryPanel({ anchor, projectId, library, inRail, onOpen, onLin
             />
           );
         })}
-        {!rows.length && <Empty>{typed ? 'Nothing in the library by that name.' : 'The library is empty. Add a source to start it.'}</Empty>}
+        {!rows.length && <Empty>{chipNoun
+          ? (typed ? `No ${chipNoun} match` : `No ${chipNoun} in the library`)
+          : (typed ? 'Nothing in the library by that name.' : 'The library is empty. Add a source to start it.')}</Empty>}
         {(problem || (answer && answer.error)) && <div style={{ padding: '4px 10px', ...text(12, '#e70022'), overflowWrap: 'anywhere' }}>{problem || answer.error}</div>}
       </Scroll>
       <PanelFoot><FootButton onClick={() => { onClose(); onOpenFull(); }} data-sb-open-library="1"><I.LibraryIcon size={14} />Open full library</FootButton></PanelFoot>
