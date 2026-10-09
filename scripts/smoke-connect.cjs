@@ -130,9 +130,9 @@ app.whenReady().then(async () => {
     // No opening line (2026-10-09): the dots in the middle until the librarian says something, then never again.
     await until(async () => (await has(wc, '[data-connect-chat] [data-connect-starting]')) || has(wc, '[data-connect-chat] [data-connect-agent]'), 'the dots, or the librarian already');
     if (await has(wc, '[data-connect-chat] [data-connect-starting]')) {
-      // The starting view says what is happening (2026-10-09), and the line under the chat waits for it to go.
+      // The starting view: the dots and how far (2026-10-09), and the line under the chat waits for it to go.
       assert.match(await text(wc, '[data-connect-starting]'), /Getting to know your library/);
-      assert.equal(await has(wc, '[data-connect-starting-now]'), true, 'what is happening now');
+      assert.equal(await has(wc, '[data-connect-starting-now]'), false, 'not what each agent is doing');
       await shot(wc, '1c-starting');
     } else assert.doesNotMatch(await text(wc, '[data-connect-chat]'), /Looking at what you picked|Found \d/, 'no opening line in the chat');
     // One clear Continue on the connect step once a session exists: filled, by the pager; Skip for now gone.

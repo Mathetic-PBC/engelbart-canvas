@@ -56,7 +56,7 @@ const EASE = 'cubic-bezier(.25,.1,.25,1)';
 export const CHOOSE_WIDTH = 600;
 // The design's classes (DocEditor's CARD_CSS, not mounted here) and @brainstorm's card (one option per line).
 const CSS = '.bart-ic{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:none;cursor:pointer;color:#4d4d4d}.bart-ic:hover{background:#f2f2f2;color:#171717}'
-  + '.bart-chip{transition:border-color 120ms}.bart-chip:hover{border-color:#c9c9c9!important}.bart-chip[data-connect-chip-primary]:hover{border-color:#000!important;background:#000!important}.bart-send{transition:background 120ms}.bart-send:hover{opacity:.86}'
+  + '.bart-chip{transition:border-color 120ms}.bart-chip:hover{border-color:#c9c9c9!important}.bart-chip[data-connect-chip-primary]:hover{border-color:#171717!important;background:#171717!important}.bart-send{transition:background 120ms}.bart-send:hover{opacity:.86}'
   + '.bart-text{padding:4px 2px;border:0;background:transparent;color:#8f8f8f;font:500 12px/1.4 var(--font-sans);cursor:pointer}.bart-text:hover{color:#171717}'
   + '.bs-opt{display:flex;align-items:flex-start;gap:10px;width:100%;box-sizing:border-box;margin:0;padding:9px 12px;border:1px solid #eaeaea;border-radius:8px;background:#fff;text-align:left;cursor:pointer;font:14.5px/1.45 var(--font-sans);color:#171717;transition:border-color 120ms}'
   + '.bs-opt+.bs-opt{margin-top:6px}.bs-opt:hover{border-color:#c9c9c9}.bs-opt[aria-checked="true"]{border-color:#0070f3}.bs-opt:disabled{cursor:default;color:#8f8f8f}.bs-opt:disabled:hover{border-color:#eaeaea}'
@@ -165,22 +165,22 @@ function ProviderChip({ lead = '', providers, provider, fallback = null, onPick,
   const current = (providers || []).find((entry) => entry.provider === provider) || fallback;
   const usable = (providers || []).filter((entry) => entry.ready);
   // With a lead ("Refine with"), the button that starts the run (2026-10-09: "make this button look better and stand out
-  // more"): filled dark, bigger, its arrow white; dimmed until there is something to refine. Without, the chat's quiet chip.
+  // more", then "slightly less pronounced"): filled dark, its arrow blue; dimmed until there is something to refine. Without, the chat's quiet chip.
   const primary = !!lead;
   const lit = primary && sendOn;
   const quiet = primary ? 'rgba(255,255,255,.62)' : '#8f8f8f';
   return (
     <span style={{ position: 'relative', flex: 'none', display: 'inline-flex', ...style }}>
       <span className="bart-chip" role="button" data-connect-chip="1" data-connect-chip-primary={primary ? '1' : undefined} onClick={() => setOpen((now) => !now)} title="Choose Claude Code or Codex" style={primary
-        ? { display: 'inline-flex', alignItems: 'center', gap: 7, padding: '6px 6px 6px 18px', border: '1px solid #171717', borderRadius: 999, background: '#171717', boxShadow: lit ? '0 6px 18px rgba(0,0,0,.16), 0 1px 2px rgba(0,0,0,.12)' : 'none', opacity: lit ? 1 : 0.45, cursor: 'pointer', font: '500 14px/1 var(--font-sans)', color: '#fff', whiteSpace: 'nowrap', transition: `opacity 160ms ${EASE}, box-shadow 160ms ${EASE}` }
+        ? { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 5px 5px 15px', border: '1px solid #2b2b2b', borderRadius: 999, background: '#2b2b2b', boxShadow: lit ? '0 2px 8px rgba(0,0,0,.10)' : 'none', opacity: lit ? 1 : 0.45, cursor: 'pointer', font: '500 13.5px/1 var(--font-sans)', color: '#fff', whiteSpace: 'nowrap', transition: `opacity 160ms ${EASE}, box-shadow 160ms ${EASE}` }
         : { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 6px 5px 12px', border: '1px solid #eaeaea', borderRadius: 999, background: '#fff', cursor: 'pointer', font: '13px/1 var(--font-sans)', color: '#171717', whiteSpace: 'nowrap' }}>
         {lead && <span style={{ fontWeight: 400, color: quiet }}>{lead}</span>}
         <span data-connect-provider={provider || ''}>{current ? current.name : 'No agent'}</span>
         {current && <span style={{ fontWeight: 400, color: quiet }}>{`${current.modelName} · ${current.effort === 'xhigh' ? 'Extra high' : current.effort.charAt(0).toUpperCase() + current.effort.slice(1)}`}</span>}
         {usable.length > 1 && <span style={{ display: 'inline-flex', color: quiet }}>{CARET_DOWN}</span>}
-        <span style={{ width: 1, height: primary ? 18 : 14, background: primary ? 'rgba(255,255,255,.2)' : '#eaeaea', margin: primary ? '0 3px 0 4px' : '0 2px' }} />
+        <span style={{ width: 1, height: primary ? 16 : 14, background: primary ? 'rgba(255,255,255,.2)' : '#eaeaea', margin: primary ? '0 3px 0 4px' : '0 2px' }} />
         <button type="button" className="bart-send" data-connect-send="1" aria-label={sendLabel} onClick={(event) => { event.stopPropagation(); onSend(); }} style={primary
-          ? { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, padding: 0, border: 0, borderRadius: '50%', background: '#0070f3', color: '#fff', cursor: sendOn ? 'pointer' : 'default' }
+          ? { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, padding: 0, border: 0, borderRadius: '50%', background: '#0070f3', color: '#fff', cursor: sendOn ? 'pointer' : 'default' }
           : { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, padding: 0, border: 0, borderRadius: '50%', background: sendOn ? '#0070f3' : '#f2f2f2', color: sendOn ? '#fff' : '#8f8f8f', cursor: sendOn ? 'pointer' : 'default' }}>{ARROW_UP}</button>
       </span>
       {open && (
@@ -378,32 +378,16 @@ function WorkLine({ session }) {
 
 /**
  * Until the librarian says something (2026-10-09: "make the loading icon better and have some status to it"): the dots,
- * bigger, what is happening now (the agents at work one at a time, as the line under the chat cycles them) and how many
- * sources have been looked at.
+ * bigger, and how many sources have been looked at; not what each agent is doing ("get rid of this").
  */
 function Starting({ session }) {
-  const [tick, setTick] = React.useState(0);
   const jobs = workJobs(session.jobs);
-  const busy = jobs.filter((job) => job.status === 'running' || job.status === 'waiting');
-  React.useEffect(() => {
-    if (busy.length < 2) return undefined;
-    const timer = setInterval(() => setTick((n) => n + 1), 2600);
-    return () => clearInterval(timer);
-  }, [busy.length]);
-  const job = busy.length ? busy[tick % busy.length] : null;
   const ended = jobs.filter((entry) => statusOf(entry).done).length;
-  const now = job
-    ? { key: job.id, logo: logoOf(job.apps[0]), text: job.status === 'waiting' ? `${job.label} needs you` : `${job.label} · ${job.activity || statusOf(job).text}` }
-    : { key: 'lead', logo: null, text: session.thinking ? `${session.activity || 'Thinking'}…`.replace(/……$/, '…') : 'Looking at what you picked…' };
   return (
     <div data-connect-starting="1" role="status" aria-live="polite" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 18, paddingBottom: 40, animation: `rise 260ms ${EASE}` }}>
       <ThinkingDots label="" size={7} />
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, maxWidth: 420, textAlign: 'center' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, textAlign: 'center' }}>
         <div style={{ font: '500 16px/1.3 var(--font-sans)', letterSpacing: '-0.1px', color: '#171717' }}>Getting to know your library</div>
-        <div key={now.key} data-connect-starting-now="1" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, minHeight: 20, maxWidth: '100%', font: '13.5px/1.4 var(--font-sans)', color: '#4d4d4d', animation: `rise 220ms ${EASE}` }}>
-          {now.logo}
-          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{now.text}</span>
-        </div>
         {jobs.length > 0 && <div data-connect-starting-count="1" style={{ font: '12.5px/1 var(--font-sans)', color: '#8f8f8f', fontVariantNumeric: 'tabular-nums' }}>{`${ended} of ${jobs.length} looked at`}</div>}
       </div>
     </div>
