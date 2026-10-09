@@ -35,6 +35,13 @@ const clip = (text, max) => { const value = String(text || '').replace(/\s+/g, '
 const cutoff = (days) => (Number.isFinite(days) && days > 0 ? Date.now() - days * DAY_MS : 0);
 function readJsonFile(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } }
 
+// Windows (2026-10-09, docs/windows-port-log.md "Catch-up to 0.1.13"): apps keep there in the home's AppData (Roaming:
+// Obsidian; Local: the Chromium browsers), looked in besides the Mac's ~/Library/Application Support; a browser's history
+// is read with node:sqlite (no sqlite3 command), and an export's .zip with Windows' own tar (no unzip).
+const WINDOWS = process.platform === 'win32';
+const roaming = (homeDir, ...parts) => path.join(homeDir, 'AppData', 'Roaming', ...parts);
+const local = (homeDir, ...parts) => path.join(homeDir, 'AppData', 'Local', ...parts);
+
 /** `~/x` or an absolute path → absolute; anything else null. */
 function expandPath(homeDir, value) {
   const raw = String(value || '').trim();
@@ -136,9 +143,10 @@ function noteFiles(dir, { include = [], exclude = [], days = null, max = 2000 } 
 /* ------------------------------------------------------------------------------------------------------- Obsidian */
 
 /** The vaults Obsidian knows on this Mac that are still there → [{ name, path, shown, open, lastOpened }]. */
-function obsidianVaults(homeDir = os.homedir()) {
-  let config;
-  try { config = JSON.parse(fs.readFileSync(path.join(homeDir, 'Library', 'Application Support', 'obsidian', 'obsidian.json'), 'utf8')); } catch { return []; }
+function obsidianVaults(homeDir = os.homedir(), platform = process.platform) {
+  const files = [path.join(homeDir, 'Library', 'Application Support', 'obsidian', 'obsidian.json'), ...(platform === 'win32' ? [roaming(homeDir, 'obsidian', 'obsidian.json')] : [])];
+  const config = files.map(readJsonFile).find(Boolean);
+  if (!config) return [];
   return Object.values((config && config.vaults) || {})
     .filter((vault) => vault && typeof vault.path === 'string' && isDir(vault.path))
     .map((vault) => ({ name: path.basename(vault.path), path: vault.path, shown: shownPath(homeDir, vault.path), open: !!vault.open, lastOpened: iso(Number(vault.ts)) }))
@@ -333,6 +341,26 @@ function localTranscript(app, id, options = {}) {
 
 const exportCache = new Map(); // file → { mtime, chats }
 
+/**
+ * `sqlite3 -json -readonly <file> <query>` in this process, with node:sqlite, for Windows, where there is no sqlite3
+ * command: the same JSON (Chrome's times are past 2^53, so read as BigInt and given as numbers, as sqlite3 prints them).
+ */
+function sqliteHere(command, args, options, callback) {
+  const [, , file, query] = args;
+  let out;
+  try {
+    const { DatabaseSync } = require('node:sqlite');
+    const db = new DatabaseSync(file, { readOnly: true });
+    try {
+      const statement = db.prepare(query);
+      statement.setReadBigInts(true);
+      out = JSON.stringify(statement.all().map((row) => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, typeof value === 'bigint' ? Number(value) : value]))));
+    } finally { db.close(); }
+  } catch (error) { setImmediate(() => callback(error, '')); return null; }
+  setImmediate(() => callback(null, out));
+  return null;
+}
+
 /** The conversations.json an export holds: the file itself, inside a folder, or inside a .zip (read with unzip). */
 function exportText(file) {
   const stat = statOf(file);
@@ -343,7 +371,8 @@ function exportText(file) {
     return fs.readFileSync(inside, 'utf8');
   }
   if (/\.zip$/i.test(file)) {
-    try { return execFileSync('unzip', ['-p', file, 'conversations.json'], { maxBuffer: 2 * 1024 * 1024 * 1024 }).toString('utf8'); } catch { throw new Error(`No conversations.json in ${path.basename(file)}`); }
+    const [command, args] = WINDOWS ? [path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe'), ['-xOf', file, 'conversations.json']] : ['unzip', ['-p', file, 'conversations.json']];
+    try { return execFileSync(command, args, { maxBuffer: 2 * 1024 * 1024 * 1024, windowsHide: true }).toString('utf8'); } catch { throw new Error(`No conversations.json in ${path.basename(file)}`); }
   }
   return fs.readFileSync(file, 'utf8');
 }
@@ -411,15 +440,20 @@ function exportTranscript(file, id) {
 /* -------------------------------------------------------------------------------------------------------- websites */
 
 const CHROMIUM = [['Chrome', ['Google', 'Chrome']], ['Arc', ['Arc', 'User Data']], ['Brave', ['BraveSoftware', 'Brave-Browser']], ['Edge', ['Microsoft Edge']], ['Chromium', ['Chromium']], ['Vivaldi', ['Vivaldi']]];
+// Under AppData\Local on Windows.
+const WINDOWS_CHROMIUM = [['Chrome', ['Google', 'Chrome', 'User Data']], ['Brave', ['BraveSoftware', 'Brave-Browser', 'User Data']], ['Edge', ['Microsoft', 'Edge', 'User Data']], ['Chromium', ['Chromium', 'User Data']], ['Vivaldi', ['Vivaldi', 'User Data']]];
 
 /**
  * The Chromium browsers' profiles on this Mac that have a history or bookmarks → [{ browser, profile, name, dir, used }],
  * the one used last first. `name` is what the browser calls the profile (its Local State), `used` when its history last changed.
  */
-function browserProfiles(homeDir = os.homedir()) {
+function browserProfiles(homeDir = os.homedir(), platform = process.platform) {
   const out = [];
-  for (const [browser, parts] of CHROMIUM) {
-    const base = path.join(homeDir, 'Library', 'Application Support', ...parts);
+  const bases = [
+    ...CHROMIUM.map(([browser, parts]) => [browser, path.join(homeDir, 'Library', 'Application Support', ...parts)]),
+    ...(platform === 'win32' ? WINDOWS_CHROMIUM.map(([browser, parts]) => [browser, local(homeDir, ...parts)]) : []),
+  ];
+  for (const [browser, base] of bases) {
     let names = [];
     try { names = fs.readdirSync(base); } catch { continue; }
     const info = ((readJsonFile(path.join(base, 'Local State')) || {}).profile || {}).info_cache || {};
@@ -447,7 +481,7 @@ const fromChromeTime = (value) => (Number(value) > 0 ? Number(value) / 1000 - 11
  * A browser profile's most visited pages since `days` ago, grouped by site (`by` 'site': { host, visits, pages, title,
  * url } with its most visited page) or as pages ('page': { url, title, visits, last }). `exclude`: hosts left out.
  */
-async function browserHistory(dir, { days = 90, limit = 50, by = 'site', exclude = [], sqlite = 'sqlite3', run = execFile } = {}) {
+async function browserHistory(dir, { days = 90, limit = 50, by = 'site', exclude = [], sqlite = 'sqlite3', run = WINDOWS ? sqliteHere : execFile } = {}) {
   const source = path.join(dir, 'History');
   if (!statOf(source)) throw new Error('This browser profile has no history');
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-history-'));

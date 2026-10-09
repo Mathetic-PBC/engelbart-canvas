@@ -1079,17 +1079,21 @@ test('the real runner (2026-10-07): Engelbart\'s MCP server, the git guard first
   const policy = buildPolicy({ project: { dir: path.join(ctx.dataRoot, 'p') }, dataRoot: ctx.dataRoot, gitDir: '/repo/.git' });
   const engelbart = { url: 'http://127.0.0.1:1/tools', token: 'a'.repeat(64) };
   await runner.turn({ task: { id: 'abcdef0125', provider: 'anthropic', modelId: 'opus', effort: 'high', worktree }, message: 'do it', system: 'SYSTEM', policy, engelbart });
-  assert.match(calls[0].command, /^PATH="\$ENGELBART_BUILD_GUARD:\$PATH"; exec claude -p .* --setting-sources user,project,local --mcp-config "\$ENGELBART_BUILD_MCP" --no-chrome --tools /);
+  // Windows (docs/windows-port-log.md "Catch-up to 0.1.13"): Git for Windows' bash, whose PATH is written the POSIX way
+  const windows = process.platform === 'win32';
+  const guardFirst = windows ? 'PATH="\\$\\(cygpath -u "\\$ENGELBART_BUILD_GUARD"\\):\\$PATH"; ' : 'PATH="\\$ENGELBART_BUILD_GUARD:\\$PATH"; ';
+  assert.match(calls[0].command, new RegExp(`^${guardFirst}exec claude -p .* --setting-sources user,project,local --mcp-config "\\$ENGELBART_BUILD_MCP" --no-chrome --tools `));
   const server = JSON.parse(calls[0].mcp).mcpServers.engelbart;
   assert.deepEqual([server.command, server.args[0], server.env], [process.execPath, path.join(__dirname, '..', 'src', 'main', 'build', 'engelbart-mcp.cjs'), { ELECTRON_RUN_AS_NODE: '1' }]);
   assert.deepEqual(JSON.parse(calls[0].connection), engelbart, 'the bridge reaches the server through a file of its own');
   assert.equal(calls[0].env.ENGELBART_BUILD_GUARD, path.join(runDirectory, 'git-guard', 'bin'));
-  assert.ok(fs.statSync(path.join(calls[0].env.ENGELBART_BUILD_GUARD, 'git')).mode & 0o100);
+  assert.ok(windows || fs.statSync(path.join(calls[0].env.ENGELBART_BUILD_GUARD, 'git')).mode & 0o100, 'executable (Windows has no execute bit: bash reads the #! line)');
   assert.equal(calls[0].env.ENGELBART_BUILD_GIT_DIR, '/repo/.git');
-  assert.match(calls[0].env.GIT_CONFIG_PARAMETERS, /^'includeIf\.gitdir:\/repo\/\.git\.path'='[^']+build\.gitconfig' 'includeIf\.gitdir:\/repo\/\.git\/\*\*\.path'=/);
+  if (windows) assert.match(calls[0].env.GIT_CONFIG_PARAMETERS, /^'includeIf\.gitdir\/i:\/repo\/\.git\.path'='[^']+build\.gitconfig' 'includeIf\.gitdir\/i:\/repo\/\.git\/\*\*\.path'=/);
+  else assert.match(calls[0].env.GIT_CONFIG_PARAMETERS, /^'includeIf\.gitdir:\/repo\/\.git\.path'='[^']+build\.gitconfig' 'includeIf\.gitdir:\/repo\/\.git\/\*\*\.path'=/);
   const codex = await runner.turn({ task: { id: 'abcdef0125', provider: 'openai', modelId: 'gpt-6-sol', effort: 'high', worktree }, message: 'do it', system: 'SYSTEM', policy, engelbart });
   assert.equal(codex.text, 'codex did it');
-  assert.match(calls[1].command, /^PATH="\$ENGELBART_BUILD_GUARD:\$PATH"; exec codex exec --color never /);
+  assert.match(calls[1].command, new RegExp(`^${guardFirst}exec codex exec --color never `));
   assert.equal(calls[1].env.CODEX_HOME, personal, 'the person\'s own Codex home: their config, hooks, rules and MCP servers');
   assert.ok(!fs.existsSync(path.join(personal, 'AGENTS.md')), 'and their AGENTS.md is never written');
   for (const value of ['developer_instructions="SYSTEM"', 'features.multi_agent=true', 'features.computer_use=false', 'features.browser_use=false', 'mcp_servers.computer-use.enabled=false', `mcp_servers.engelbart.command=${JSON.stringify(process.execPath)}`, 'mcp_servers.engelbart.env={ ELECTRON_RUN_AS_NODE = "1" }']) assert.ok(calls[1].settings.includes(value), value);

@@ -17,6 +17,8 @@ const { knownPlaces, lookupCommand, parseLookup, sourceOf } = require('../src/ma
 const { createActions, markRollback, rollback, rollbackPoint } = require('../src/main/tools/install.cjs');
 const { createProcesses, freePort, groupPids, killTree, stopLeftover } = require('../src/main/build/run-processes.cjs');
 const { assertAppModules } = require('../scripts/check-app-modules.cjs');
+const readers = require('../src/main/connect/readers.cjs');
+const { cursorDb } = require('../src/main/connect/cursor.cjs');
 
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-windows-platform-'));
 const W = path.win32;
@@ -208,7 +210,48 @@ test('an app packed for Windows keeps app.asar in resources/: the package check 
   assert.equal(assertAppModules(app), 1);
 });
 
+test('Connect on Windows looks in AppData too: Obsidian\'s vaults, the Chromium browsers\' profiles, Cursor\'s chats; a Mac as before', () => {
+  const home = temp();
+  const write = (rel, text) => { const file = path.join(home, ...rel.split('/')); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); return file; };
+  const vault = path.join(home, 'Vault');
+  fs.mkdirSync(vault);
+  write('AppData/Roaming/obsidian/obsidian.json', JSON.stringify({ vaults: { a: { path: vault, ts: 1759900000000, open: true } } }));
+  assert.deepEqual(readers.obsidianVaults(home, 'win32').map((entry) => entry.path), [vault]);
+  assert.deepEqual(readers.obsidianVaults(home, 'darwin'), [], 'a Mac reads ~/Library alone');
+  write('AppData/Local/Google/Chrome/User Data/Default/Bookmarks', '{"roots":{}}');
+  write('AppData/Local/Microsoft/Edge/User Data/Profile 1/Bookmarks', '{"roots":{}}');
+  assert.deepEqual(readers.browserProfiles(home, 'win32').map((entry) => [entry.browser, entry.profile]).sort(), [['Chrome', 'Default'], ['Edge', 'Profile 1']]);
+  assert.deepEqual(readers.browserProfiles(home, 'darwin'), []);
+  assert.equal(cursorDb(home, 'win32'), path.join(home, 'AppData', 'Roaming', 'Cursor', 'User', 'globalStorage', 'state.vscdb'));
+  assert.equal(cursorDb(home, 'darwin'), path.join(home, 'Library', 'Application Support', 'Cursor', 'User', 'globalStorage', 'state.vscdb'));
+  write('Library/Application Support/Cursor/User/globalStorage/state.vscdb', '');
+  assert.equal(cursorDb(home, 'win32'), path.join(home, 'Library', 'Application Support', 'Cursor', 'User', 'globalStorage', 'state.vscdb'), 'the Mac\'s place when it is there');
+});
+
 if (process.platform === 'win32') {
+  test('Windows: a browser\'s history read with node:sqlite (no sqlite3 command), and an export\'s .zip with Windows\' tar (no unzip)', async () => {
+    const dir = path.join(temp(), 'Default');
+    fs.mkdirSync(dir);
+    const { DatabaseSync } = require('node:sqlite');
+    const db = new DatabaseSync(path.join(dir, 'History'));
+    const recent = readers.chromeTime(Date.now() - 86_400_000);
+    db.exec(`CREATE TABLE urls(id INTEGER PRIMARY KEY, url TEXT, title TEXT, visit_count INTEGER, typed_count INTEGER, last_visit_time INTEGER, hidden INTEGER DEFAULT 0);
+      INSERT INTO urls(url,title,visit_count,last_visit_time) VALUES ('https://distill.pub/a','A',5,${recent}),('https://distill.pub/b','B',3,${recent}),('https://mail.google.com/','Mail',90,${recent}),('https://old.example/','Old',50,1);`);
+    db.close();
+    const sites = await readers.browserHistory(dir, { days: 30, exclude: ['mail.google.com'] });
+    assert.deepEqual(sites.map((site) => [site.host, site.visits, site.pages]), [['distill.pub', 8, 2]]);
+    const pages = await readers.browserHistory(dir, { days: 30, by: 'page', limit: 1 });
+    assert.equal(pages[0].url, 'https://mail.google.com/');
+    assert.ok(Math.abs(Date.parse(pages[0].last) - (Date.now() - 86_400_000)) < 60_000, 'Chrome\'s time, past 2^53, read as a date');
+    const folder = temp();
+    const chats = path.join(folder, 'conversations.json');
+    fs.writeFileSync(chats, JSON.stringify([{ uuid: 'c1', name: 'Hello', created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z', chat_messages: [{ sender: 'human', text: 'Hi' }, { sender: 'assistant', text: 'Hello' }] }]));
+    const zip = path.join(folder, 'export.zip');
+    await promisify(execFile)(resolvePowerShell(process.env), ['-NoProfile', '-Command', `Compress-Archive -LiteralPath '${chats}' -DestinationPath '${zip}'`]);
+    assert.deepEqual(readers.exportChats(zip).map((chat) => chat.title), readers.exportChats(chats).map((chat) => chat.title));
+    assert.equal(readers.exportChats(zip).length, 1);
+  });
+
   const run = promisify(execFile);
 
   test('Windows: Git for Windows\' bash is found and runs a POSIX script as a login shell, with the agents\' folders on its PATH', async () => {

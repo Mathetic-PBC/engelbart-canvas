@@ -18,6 +18,12 @@ const { createGit } = require('../src/main/build/git.cjs');
 const { keepLibrary } = require('../src/main/build/keep.cjs');
 const { createEngelbartTools, validateEngelbartTool, ENGELBART_TOOLS } = require('../src/main/build/engelbart-tools.cjs');
 const { openToolBridge } = require('../src/main/sandbox/local-tools.cjs');
+const { resolveShell } = require('../src/main/terminal/launch.cjs');
+
+// Windows (docs/windows-port-log.md "Catch-up to 0.1.13"): the agent's git runs as it does there, in Git for Windows'
+// bash, with the guard put first on PATH by the agent's command (guardPath); a git started by Node is git.exe itself.
+const WINDOWS = process.platform === 'win32';
+const BASH = WINDOWS ? resolveShell(process.env) : null;
 
 const homeDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-reach-')));
 const layout = ensureHome(homeDir);
@@ -58,13 +64,20 @@ test('the git guard: history, branches, stashes, settings and pushes of the Buil
   const { repo, worktree, other } = repositories('guard');
   const guard = prepareGitGuard(path.join(homeDir, 'guard-files'));
   const gitDir = gitCommonDir(worktree);
-  assert.equal(gitDir, fs.realpathSync(path.join(repo, '.git')), 'the worktree\'s shared git folder, read from its files');
+  assert.equal(gitDir, (WINDOWS ? fs.realpathSync.native : fs.realpathSync)(path.join(repo, '.git')), 'the worktree\'s shared git folder, read from its files');
   assert.equal(gitCommonDir(repo), gitDir);
   assert.equal(gitCommonDir(homeDir), null);
-  const env = { ...plainEnv, ...who, PATH: `${guard.bin}:${plainEnv.PATH}`, ...guardEnvironment(guard, gitDir, plainEnv) };
-  const git = (cwd, ...args) => spawnSync('git', args, { cwd, env, encoding: 'utf8' });
+  const env = WINDOWS ? { ...plainEnv, ...who, ...guardEnvironment(guard, gitDir, plainEnv) } : { ...plainEnv, ...who, PATH: `${guard.bin}:${plainEnv.PATH}`, ...guardEnvironment(guard, gitDir, plainEnv) };
+  const git = WINDOWS
+    ? (cwd, ...args) => spawnSync(BASH, ['-c', `${guardPath(BASH)}exec git "$@"`, 'git', ...args], { cwd, env, encoding: 'utf8' })
+    : (cwd, ...args) => spawnSync('git', args, { cwd, env, encoding: 'utf8' });
   const refused = (out) => out.status !== 0 && /Engelbart: /.test(out.stderr);
-  assert.equal(spawnSync('/bin/sh', ['-c', 'command -v git'], { env, encoding: 'utf8' }).stdout.trim(), path.join(guard.bin, 'git'), 'first on PATH');
+  if (WINDOWS) {
+    const shim = spawnSync(BASH, ['-c', 'printf %s "$(cygpath -u "$1")/git"', 'bash', guard.bin], { encoding: 'utf8' }).stdout;
+    assert.equal(spawnSync(BASH, ['-c', `${guardPath(BASH)}command -v git`], { env, encoding: 'utf8' }).stdout.trim(), shim, 'first on PATH');
+  } else {
+    assert.equal(spawnSync('/bin/sh', ['-c', 'command -v git'], { env, encoding: 'utf8' }).stdout.trim(), path.join(guard.bin, 'git'), 'first on PATH');
+  }
   write(path.join(worktree, 'b.txt'), 'b\n');
   // reading and file commands
   for (const args of [['status', '--short'], ['diff'], ['log', '--oneline', '-1'], ['add', 'b.txt'], ['branch'], ['branch', '--show-current'], ['config', 'user.name'], ['config', '--get', 'core.hooksPath'], ['remote', '-v'], ['stash', 'list'], ['tag', '-l'], ['reset', '--', 'b.txt'], ['checkout', '--', 'a.txt'], ['reset', '--hard'], ['--version']]) {
@@ -80,7 +93,7 @@ test('the git guard: history, branches, stashes, settings and pushes of the Buil
   assert.equal(sh(worktree, 'rev-parse', 'HEAD'), sh(repo, 'rev-parse', 'main'), 'no commit was made');
   assert.equal(spawnSync('git', ['config', '--local', 'user.name'], { cwd: repo, encoding: 'utf8', env: plainEnv }).stdout, '', 'the repository\'s settings are as they were');
   // a git that is not the guard (an absolute path, a PATH rebuilt by a startup file) meets the hooks instead
-  const real = spawnSync('/bin/sh', ['-c', 'command -v git'], { env: plainEnv, encoding: 'utf8' }).stdout.trim();
+  const real = WINDOWS ? 'git' : spawnSync('/bin/sh', ['-c', 'command -v git'], { env: plainEnv, encoding: 'utf8' }).stdout.trim(); // Windows: git.exe, by Node
   for (const args of [['commit', '--allow-empty', '-m', 'x'], ['branch', 'new'], ['-c', 'alias.c=commit', 'c', '--allow-empty', '-m', 'x']]) {
     const out = spawnSync(real, args, { cwd: worktree, env, encoding: 'utf8' });
     assert.ok(out.status !== 0 && /Engelbart: refs\/heads\/\S+ cannot change/.test(out.stderr), `${real} ${args.join(' ')}: ${out.stderr}`);
@@ -95,8 +108,10 @@ test('the git guard: history, branches, stashes, settings and pushes of the Buil
   assert.equal(own.status, 0, own.stderr);
   assert.match(own.stderr, /own-hook-ran/, 'its own hooks run');
   assert.equal(git(other, 'config', 'user.name', 'Bob').status, 0);
-  assert.equal(guardPath('/bin/zsh'), 'PATH="$ENGELBART_BUILD_GUARD:$PATH"; ');
-  assert.equal(guardPath('/opt/homebrew/bin/fish'), 'set -gx PATH $ENGELBART_BUILD_GUARD $PATH; ');
+  assert.equal(guardPath('/bin/zsh', 'darwin'), 'PATH="$ENGELBART_BUILD_GUARD:$PATH"; ');
+  assert.equal(guardPath('/opt/homebrew/bin/fish', 'darwin'), 'set -gx PATH $ENGELBART_BUILD_GUARD $PATH; ');
+  assert.equal(guardPath('C:\\Program Files\\Git\\bin\\bash.exe', 'win32'), 'PATH="$(cygpath -u "$ENGELBART_BUILD_GUARD"):$PATH"; ');
+  assert.match(guardEnvironment({ bin: 'C:\\g\\bin', config: 'C:\\g\\build.gitconfig' }, 'C:\\r\\.git', {}, 'win32').GIT_CONFIG_PARAMETERS, /^'includeIf\.gitdir\/i:C:\/r\/\.git\.path'='C:\/g\/build\.gitconfig' /, 'Windows: forward slashes, any case');
   assert.match(guardEnvironment(guard, gitDir, { GIT_CONFIG_PARAMETERS: "'their.key'='v'" }).GIT_CONFIG_PARAMETERS, / 'their\.key'='v'$/, 'the person\'s own come after');
 });
 
