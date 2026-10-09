@@ -307,11 +307,12 @@ export default function App() {
   }
 
   // Onboarding made the project (api.startProject): land in its Getting started workspace with the Welcome! note open, and
-  // the sites its sign-in import said to sign in to again on the Stage.
+  // the sites its sign-in import said to sign in to again on the Stage. A new user's (made.gettingStarted, 2026-10-09)
+  // lands on the workspace's own document instead, under its Getting started panel; the note is in its sidebar.
   async function onboarded(made, { stageLinks = [] } = {}) {
     setError('');
     await loadHome();
-    await openProject(made.project.id, { workspaceId: made.workspaceId, tab: { id: made.noteId, title: made.noteName }, stage: stageLinks.length ? { links: stageLinks } : null });
+    await openProject(made.project.id, { workspaceId: made.workspaceId, tab: made.gettingStarted ? null : { id: made.noteId, title: made.noteName }, stage: stageLinks.length ? { links: stageLinks } : null });
   }
 
   async function goHome() {

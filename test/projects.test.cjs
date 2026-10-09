@@ -5,9 +5,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 const db = require('../src/main/store/db.cjs');
 const { ensureHome } = require('../src/main/store/home.cjs');
 const projects = require('../src/main/store/projects.cjs');
+const gettingStarted = require('../src/main/store/getting-started.cjs');
 const { migrateProjectDir } = require('../src/main/store/migrate.cjs');
 
 const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-projects-'));
@@ -65,6 +67,60 @@ test('createProjectWithWelcome makes a first workspace and a Welcome! note in it
   assert.equal(tree.notes[0].workspaceId, made.workspaceId);
   assert.ok(fs.existsSync(path.join(made.project.dir, 'Getting started', 'workspace.md')));
   assert.ok(fs.existsSync(path.join(made.project.dir, 'Welcome!.md')));
+  // 2026-10-09: no checklist; the Getting started panel has the steps.
+  const welcome = fs.readFileSync(path.join(made.project.dir, 'Welcome!.md'), 'utf8');
+  assert.match(welcome, /^This is a note\. Notes are plain markdown files in your project folder/);
+  assert.match(welcome, /\nLater: write a task with @Task and press Build to have an agent do it\.\n/);
+  assert.doesNotMatch(welcome, /- \[ \]|\+ Context|Tab and Shift-Tab/);
+});
+
+test('createStartedWorkspace: the description then an empty line, the Welcome! note first in context, and again for a second', async () => {
+  const made = await projects.createProjectWithWelcome(ctx, { name: 'Started', description: 'Help-seeking in novices.' });
+  const rows = [await ctx.libraryDb.insert({ id: randomUUID(), name: 'A paper', type: 'website', url: 'https://example.org/a', tags: [] }), await ctx.libraryDb.insert({ id: randomUUID(), name: 'Another', type: 'website', url: 'https://example.org/b', tags: [] })];
+  const first = await projects.createStartedWorkspace(ctx, made.project.id, { name: 'Tutoring', description: 'Where tutoring goes next.', context: rows.map((row) => row.id) });
+  assert.equal(first.name, 'Tutoring');
+  assert.deepEqual(first.context, [made.noteId, ...rows.map((row) => row.id)], 'the Welcome! note first, then the suggestion\'s rows');
+  assert.equal(await projects.readDoc(ctx, made.project.id, { kind: 'workspace', workspaceId: first.id }), 'Where tutoring goes next.\n\n');
+  const second = await projects.createStartedWorkspace(ctx, made.project.id, { name: 'Tutoring', description: '', context: [made.noteId], welcomeId: made.noteId });
+  assert.equal(second.name, 'Tutoring 2', 'a second with the same name is its own workspace');
+  assert.deepEqual(second.context, [made.noteId]);
+  const tree = await projects.loadProject(ctx, made.project.id);
+  assert.deepEqual(tree.workspaces.map((workspace) => workspace.name), ['Getting started', 'Tutoring', 'Tutoring 2']);
+});
+
+test('Getting started: its state kept in .context, the first unticked step open, hidden for good; Start makes workspaces and ticks step 2', async () => {
+  const made = await projects.createProjectWithWelcome(ctx, { name: 'Panel', description: 'Why novices do not ask for help, and what tutors can do about it.' });
+  assert.equal(gettingStarted.readGettingStarted(ctx, made.project.id), null, '+ Project: no panel');
+  const started = gettingStarted.startGettingStarted(ctx, made.project.id, { workspaceId: made.workspaceId, welcomeId: made.noteId });
+  assert.deepEqual([started.ticked, started.hidden, started.open], [[], false, 1]);
+  assert.ok(fs.existsSync(path.join(made.project.dir, '.context', 'getting-started.json')));
+  assert.equal((await projects.loadProject(ctx, made.project.id)).workspaces.length, 1, 'the .context folder is no workspace');
+  let state = gettingStarted.setGettingStarted(ctx, made.project.id, { ticked: [1, 3, 9, 3] });
+  assert.deepEqual([state.ticked, state.open], [[1, 3], 2], 'ticks kept; the first unticked is open');
+  assert.deepEqual(gettingStarted.readGettingStarted(ctx, made.project.id).ticked, [1, 3]);
+  assert.equal(gettingStarted.openStep([1, 2, 3, 4, 5]), null);
+
+  // Step 2: a suggestion, a second, then the person's own words.
+  const offered = [{ name: 'Help-seeking', description: 'Why novices do not ask.', why: 'your notes', items: [] }, { name: 'Tutors', description: 'What tutors do.', why: '3 chats', items: [] }];
+  const recorded = [];
+  const one = await gettingStarted.pickWorkspace(ctx, made.project.id, { index: 0 }, { suggestions: offered, recordPick: (name) => recorded.push(name) });
+  assert.equal(one.name, 'Help-seeking');
+  assert.deepEqual(one.gettingStarted.ticked, [1, 2, 3], 'picking ticks step 2');
+  assert.equal(one.gettingStarted.open, 4);
+  assert.deepEqual(one.workspace.context, [made.noteId]);
+  const two = await gettingStarted.pickWorkspace(ctx, made.project.id, { index: 1 }, { suggestions: offered, recordPick: (name) => recorded.push(name) });
+  assert.equal(two.name, 'Tutors', 'a second pick works too');
+  const own = await gettingStarted.pickWorkspace(ctx, made.project.id, { custom: 'Why novices do not ask for help, and what tutors can do about it.' }, { recordPick: (name) => recorded.push(name) });
+  assert.equal(own.name, 'Why novices do not ask for help, and');
+  assert.equal(await projects.readDoc(ctx, made.project.id, { kind: 'workspace', workspaceId: own.workspace.id }), 'Why novices do not ask for help, and what tutors can do about it.\n\n', 'the whole text its description');
+  assert.deepEqual(own.workspace.context, [made.noteId], 'Getting started\'s context');
+  assert.deepEqual(recorded, ['Help-seeking', 'Tutors', 'Why novices do not ask for help, and']);
+  await assert.rejects(gettingStarted.pickWorkspace(ctx, made.project.id, { index: 5 }, { suggestions: offered }), /no longer there/);
+  await assert.rejects(gettingStarted.pickWorkspace(ctx, made.project.id, { custom: '  ' }), /Write what/);
+
+  state = gettingStarted.setGettingStarted(ctx, made.project.id, { hidden: true });
+  assert.equal(state.hidden, true);
+  assert.equal(gettingStarted.setGettingStarted(ctx, made.project.id, { hidden: false, ticked: [] }).hidden, true, 'hidden stays hidden');
 });
 
 test('workspaces nest to any depth; docs, context and renames work at every level', async () => {

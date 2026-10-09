@@ -197,6 +197,25 @@ app.whenReady().then(async () => {
     await shot(wc, '7-popup');
     await press(wc, '[data-connect-close]');
     await until(() => js(wc, '!document.querySelector("[data-connect-popup]")'), 'closed again');
+
+    /* ------------------------------------------------ Getting started (2026-10-09): the panel, the suggested workspaces, Start */
+    await until(() => has(wc, '[data-getting-started-count]'), 'the Getting started panel above the workspace\'s document');
+    assert.equal(await text(wc, '[data-getting-started-count]'), 'Getting started 0/5');
+    assert.equal(await attr(wc, '[data-getting-started-step="1"]', 'data-open'), '1', 'the first step open');
+    assert.match(await text(wc, '[data-getting-started-hint="1"]'), /^Click Library in the sidebar\.$/);
+    assert.ok(await has(wc, '[data-editor][data-empty-hint]'), 'the empty line\'s hint');
+    await press(wc, '[data-getting-started-title="2"]');
+    await until(() => has(wc, '[data-getting-started-card="0"]'), 'the suggested workspaces, once written', 600);
+    await shot(wc, '8-getting-started');
+    const project = await js(wc, 'window.engelbartAPI.listProjects().then((list)=>list[0].id)').catch(() => null);
+    await press(wc, '[data-getting-started-start="0"]');
+    await until(() => js(wc, '!document.querySelector("[data-getting-started]")'), 'the started workspace open (no panel there)');
+    if (project) {
+      const state = await js(wc, `window.engelbartAPI.gettingStarted(${JSON.stringify(project)})`);
+      assert.deepEqual(state.ticked, [2], 'Start ticked step 2');
+      const tree = await js(wc, `window.engelbartAPI.loadProject(${JSON.stringify(project)})`);
+      assert.equal(tree.workspaces.length, 2, 'Getting started and the one started');
+    }
     console.log(`Connect your library smoke passed. Data: ${root}`);
     app.exit(0);
   } catch (error) {

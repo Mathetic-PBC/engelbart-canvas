@@ -237,7 +237,7 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
     const back = step === 'context' ? { step: 'context', sub: 0, detour: false } : { step: 'create', sub: SUBS.create.length - 1, detour: false };
     go({ step: 'open', sub: 0 });
     try {
-      const made = await api.startProject({ name: name.trim(), description: desc.trim(), folder, directory: folder === 'existing' ? folderPath : '', context: ids, ...(connectId ? { connect: connectId } : {}) });
+      const made = await api.startProject({ name: name.trim(), description: desc.trim(), folder, directory: folder === 'existing' ? folderPath : '', context: ids, ...(connectId ? { connect: connectId } : {}), ...(flowMode === 'new' ? { onboarding: true } : {}) });
       await onDone(made, { stageLinks: [...stageLinks.current] });
     } catch (failure) {
       setPlace(back);

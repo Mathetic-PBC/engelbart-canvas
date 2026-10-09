@@ -15,6 +15,7 @@
 //                              own per job, so two imports at once never share a configuration.
 //   memory                     Read, Grep and Glob over the session's notes; writes MEMORY.md's draft as its reply.
 //   redact                     no tools at all: the draft in, the draft without secrets out.
+//   suggest                    no tools at all: MEMORY.md and the library's rows in, three or four workspaces out.
 // Neither CLI is given computer use or Claude in Chrome (--no-chrome; Codex's own browser and computer use stay off): the
 // agents' browser is Engelbart's, whose sites and steps Engelbart controls and logs. Every kind runs on the model its
 // session pinned (./session.cjs CONNECT_MODELS, Sonnet high or Sol high: "do not even allow me to change model or
@@ -35,7 +36,7 @@ const READ_TOOLS = 'Read,Grep,Glob';
 const WEB_TOOLS = 'WebSearch,WebFetch';
 const IMPORT_TOOLS_PREFIX = 'mcp__engelbart__*';
 const IMPORT_SERVER = path.join(__dirname, 'import-mcp.cjs');
-const TIMEOUTS = Object.freeze({ interview: 10 * 60_000, survey: 15 * 60_000, import: 45 * 60_000, recall: 15 * 60_000, memory: 15 * 60_000, redact: 6 * 60_000 });
+const TIMEOUTS = Object.freeze({ interview: 10 * 60_000, survey: 15 * 60_000, import: 45 * 60_000, recall: 15 * 60_000, memory: 15 * 60_000, redact: 6 * 60_000, suggest: 6 * 60_000 });
 const BRIDGED = new Set(['survey', 'import', 'recall']);
 const INTERVIEW_TIMEOUT_MS = TIMEOUTS.interview;
 const IMPORT_TIMEOUT_MS = TIMEOUTS.import;
@@ -156,7 +157,7 @@ function updateOf(provider, event, short) {
 
 /** Claude Code's tools for a kind: what it is given (--tools) and what it may use without asking (--allowedTools). */
 function claudeToolsFor(kind, connectors = []) {
-  if (kind === 'redact') return { tools: '', allowed: '' };
+  if (kind === 'redact' || kind === 'suggest') return { tools: '', allowed: '' };
   if (!BRIDGED.has(kind)) return { tools: READ_TOOLS, allowed: READ_TOOLS };
   const tools = `${READ_TOOLS},${WEB_TOOLS}`;
   const extra = connectors.filter((connector) => SERVER_NAME_RE.test(connector.name)).map((connector) => `mcp__${connector.name}__*`);
