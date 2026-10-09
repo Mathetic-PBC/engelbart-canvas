@@ -1829,6 +1829,9 @@ export default class DocEditor extends React.Component {
     // back. A copy from this editor already holds its links as markdown, and code takes what was copied as it is.
     const html = text.includes('](') || isCode(p) || isFence(p) ? '' : data.getData('text/html');
     if (html) text = withLinks(text, [...new DOMParser().parseFromString(html, 'text/html').querySelectorAll('a[href]')].map((a) => ({ text: a.textContent, href: a.getAttribute('href') })));
+    // A quote's lines are all it holds (2026-10-07), so blank lines at the ends of a paste would only leave quote lines of
+    // nothing, which cannot be edited away.
+    if (p.type === 'quote') text = text.replace(/^\n+|\n+$/g, '');
     const same = c.anchor.line === c.focus.line, a = same ? Math.min(c.anchor.offset, c.focus.offset) : c.anchor.offset, b = same ? Math.max(c.anchor.offset, c.focus.offset) : a;
     const parts = text.split('\n');
     if (parts.length === 1) { this.writeText(i, cur.slice(0, a) + text + cur.slice(b), { line: i, offset: a + text.length }); return; }
@@ -1836,6 +1839,15 @@ export default class DocEditor extends React.Component {
     // be asked join into it, and so does a paste that starts one on an empty line. Anywhere else the lines stay lines.
     const asks = (!!this.editing && this.editing.q === i) || (p.type === 'bart' ? !this.lockedAt(ls, i) : p.type === 'p' && !line && BART_RE.test(parts[0].trimStart()));
     if (asks) { const flat = flattenPaste(text); this.writeText(i, cur.slice(0, a) + flat + cur.slice(b), { line: i, offset: a + flat.length }); return; }
+    // Typed `> ` then pasted (2026-10-07): every line pasted stays in the quote, one quote line each (a blank one is `>`, so
+    // the block is not broken). The caret's line source includes its `> `, which the paste never goes before.
+    if (p.type === 'quote') {
+      const lead = line.length - p.text.length, head = line.slice(0, Math.max(a, lead)), tail = line.slice(Math.max(b, lead));
+      const row = (t) => (t ? `> ${t}` : '>'), end = parts[parts.length - 1] + tail;
+      this.setLines((x) => { const out = [...x]; out[i] = head + parts[0]; out.splice(i + 1, 0, ...parts.slice(1, -1).map(row), row(end)); return out; }, { line: i + parts.length - 1, offset: row(end).length - tail.length });
+      this.setState({ activeLine: i + parts.length - 1, mention: null });
+      return;
+    }
     const first = cur.slice(0, a) + parts[0], last = parts[parts.length - 1] + cur.slice(b);
     const inAnswer = (text) => (p.type === 'reply' ? sameLine(p, text) : text);
     this.setLines((x) => { const out = [...x]; out[i] = sameLine(p, first); out.splice(i + 1, 0, ...parts.slice(1, -1).map(inAnswer), inAnswer(last)); return out; }, { line: i + parts.length - 1, offset: parts[parts.length - 1].length });

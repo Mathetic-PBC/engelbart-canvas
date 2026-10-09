@@ -60,6 +60,10 @@ const engelbartAPI = Object.freeze({
   recordEdit: invoke('record-edit'),
   seenAgents: invoke('seen-agents'),
   onNav: (callback) => subscribe('engelbart:nav', callback),
+  // the sidebar's Starred: a project's starred library ids, and every change of them ({ projectId, ids })
+  starred: invoke('starred'),
+  setStarred: invoke('set-starred'),
+  onStarred: (callback) => subscribe('engelbart:starred', callback),
   // the library changed behind the screen's back (a pdf saved as a link became a saved pdf: store/web-pdfs.cjs; another
   // window added, renamed or removed a row)
   onLibraryChanged: (callback) => subscribe('engelbart:library-changed', callback),
@@ -116,6 +120,35 @@ const engelbartAPI = Object.freeze({
   checkFolder: invoke('check-folder'),
   startProject: invoke('start-project'),
   discardLibraryItem: invoke('discard-library-item'),
+  // Connect your library (src/main/connect; onboarding and a one-time popup, in every library): connectStart(choices) → the
+  // session's snapshot, then every change of it on onConnect. connectNeed(id, needId, 'open' | 'done' | 'skip'): a step an
+  // agent handed the person. connectList(): the sessions the dock shows.
+  connectDetect: invoke('connect-detect'),
+  connectProviders: invoke('connect-providers'),
+  connectStart: invoke('connect-start'),
+  connectAnswer: invoke('connect-answer'),
+  connectAuthorize: invoke('connect-authorize'),
+  connectChose: invoke('connect-chose'),
+  connectCancelSignIn: invoke('connect-cancel-sign-in'),
+  connectNeed: invoke('connect-need'),
+  connectImport: invoke('connect-import'),
+  connectStop: invoke('connect-stop'),
+  connectStopJob: invoke('connect-stop-job'),
+  connectProvider: invoke('connect-provider'),
+  connectRetryMemory: invoke('connect-retry-memory'),
+  connectMinimize: invoke('connect-minimize'),
+  connectDismiss: invoke('connect-dismiss'),
+  connectState: invoke('connect-state'),
+  connectList: invoke('connect-list'),
+  connectNotesPermission: invoke('connect-notes-permission'),
+  connectConnectors: invoke('connect-connectors'),
+  connectConnectorSignIn: invoke('connect-connector-sign-in'),
+  connectConnectorCancel: invoke('connect-connector-cancel'),
+  connectOffer: invoke('connect-offer'),
+  connectOfferSeen: invoke('connect-offer-seen'),
+  connectMemory: invoke('connect-memory'),
+  onConnect: (callback) => subscribe('engelbart:connect', callback),
+  onConnectors: (callback) => subscribe('engelbart:connectors', callback),
   renameProject: invoke('rename-project'),
   // Delete on the all-projects screen: into the trash for a week; Recently deleted lists it (and purges older ones), Restore brings it back.
   trashProject: invoke('trash-project'),

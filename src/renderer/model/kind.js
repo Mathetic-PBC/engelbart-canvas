@@ -26,3 +26,39 @@ export const kindRank = (row) => { const at = KIND_ORDER.indexOf(kindKey(row)); 
 export function kindLabel(row) {
   return [row.type === 'website' ? 'link' : row.type, ...(Array.isArray(row.tags) ? row.tags : [])].join(' · ');
 }
+
+/**
+ * The sidebar Library panel's chips (2026-10-09), in their order: `noun` names what a chip holds in its heading and its
+ * empty line ("Recent papers", "No papers match"). Only one is on at a time; All is the default.
+ */
+export const LIBRARY_CHIPS = [
+  { id: 'all', label: 'All', noun: '' },
+  { id: 'notes', label: 'Notes', noun: 'notes' },
+  { id: 'papers', label: 'Papers', noun: 'papers' },
+  { id: 'repos', label: 'Repos', noun: 'repos' },
+  { id: 'web', label: 'Web', noun: 'web pages' },
+  { id: 'files', label: 'Files', noun: 'files' },
+];
+
+const CHIP_KINDS = { notes: ['note'], papers: ['pdf'], repos: ['git'], web: ['website', 'html'] };
+const CHIPPED = new Set(Object.values(CHIP_KINDS).flat());
+
+/**
+ * Whether `row` is under `chip`, by its kindKey: a repository whether address or folder (a website tagged git is a repo,
+ * not web); Files is everything no other chip takes (an md that is not a note, docx, a folder, data). A picture is
+ * under none, All included: it is its document's.
+ */
+export function libraryFilter(row, chip = 'all') {
+  const key = kindKey(row);
+  if (key === 'image') return false;
+  if (chip === 'all') return true;
+  if (chip === 'files') return !CHIPPED.has(key);
+  return (CHIP_KINDS[chip] || []).includes(key);
+}
+
+/** How many rows each chip holds: { all, notes, papers, repos, web, files }. */
+export function libraryCounts(rows) {
+  const counts = Object.fromEntries(LIBRARY_CHIPS.map((chip) => [chip.id, 0]));
+  for (const row of rows || []) for (const chip of LIBRARY_CHIPS) if (libraryFilter(row, chip.id)) counts[chip.id] += 1;
+  return counts;
+}

@@ -27,6 +27,7 @@ const onboarding = require('./store/onboarding.cjs');
 const { buildChoices } = require('./bart/models.cjs');
 const { githubRepo } = require('./sandbox/runs.cjs');
 const { candidate: pdfCandidate } = require('./store/web-pdfs.cjs');
+const { detect: detectSources } = require('./connect/scan.cjs');
 
 const BUILD_LINE_RE = /^build> ([a-z0-9]{6,32})$/;
 const buildId = (value) => { if (typeof value !== 'string' || !/^[0-9a-f]{10}$/.test(value)) throw new TypeError('build id is invalid'); return value; };
@@ -219,7 +220,7 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
 // (MATH-54 build 3a): { selection(), screenshot() } (the app passes that window's browser views'), or null.
 // `overleafFor(win, stage)`: a window's Overleaf tabs for an @bart turn (MATH-65; overleaf/stage.cjs forTurn), or null.
 // `getUpdates()`: the updater (updates.cjs), made after this is registered; null until then, and in the tests.
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null, connectors = null, appleNotes = null, connectSignedIn = async () => [] }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
   const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
@@ -271,6 +272,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     try {
       await additions.catch(() => {});
       await beforeContextChange();
+      connect?.suspendAll(); // its imports write into the library about to close: saved, to go on when it is open again
       await sandbox?.close();
       return await change();
     } finally { changingMode = false; }
@@ -333,6 +335,14 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // Every change is announced on `engelbart:nav`; the renderer reads `nav` again.
   const navChanged = () => notify('engelbart:nav', {});
   handle('nav', withCtx((ctx) => projects.readNav(ctx)));
+  // The sidebar's Starred (2026-10-07): a project's starred library ids. Every change is announced on `engelbart:starred`
+  // with the project's list, so its other windows show it too.
+  handle('starred', withCtx((ctx, projectId) => projects.readStarred(ctx, projectId)));
+  handle('set-starred', withCtx((ctx, projectId, itemId, on) => {
+    const ids = projects.setStarred(ctx, str(projectId, 'project id', 64), str(itemId, 'library id', 64), on === true);
+    if (notify) notify('engelbart:starred', { projectId, ids });
+    return ids;
+  }));
 
   // GitHub (src/main/github/connection.cjs): signing in through the default browser, and the repositories the App can read.
   // Every change of the sign-in is announced on `engelbart:github` with the status. `github-open` shows GitHub's device
@@ -430,13 +440,75 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     const value = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
     const folder = value.folder === 'existing' ? 'existing' : 'new';
     const context = (Array.isArray(value.context) ? value.context : []).slice(0, 500).map((id) => str(id, 'library id', 64));
-    return onboarding.startProject(ctx, { name: str(value.name, 'name'), description: optStr(value.description, 'description', 8000) || '', folder, directory: folder === 'existing' ? str(value.directory, 'directory', 4096) : '', context }).then((made) => {
+    const imported = optStr(value.connect, 'import id', 64);
+    return onboarding.startProject(ctx, { name: str(value.name, 'name'), description: optStr(value.description, 'description', 8000) || '', folder, directory: folder === 'existing' ? str(value.directory, 'directory', 4096) : '', context }).then(async (made) => {
       // A folder Engelbart made gets its Build repository and first commit now, in the background, once the tool check
       // has found Git (build/manager.cjs prepareDefault): the first Build never meets a folder without a history.
       if (folder === 'new' && builds) void toolsChecked().then(() => builds.prepareDefault(ctx, made.project.id)).catch(() => {});
+      // Connect your library's notes, held until there was a project (connect/session.cjs attachProject), go into this one.
+      if (imported && connect) made.importedNotes = await connect.attachProject(ctx, imported, made.project.id).catch(() => 0);
       return made;
     });
   }), { project: (_args, out) => out && out.project && out.project.id, library: true });
+  // Connect your library (./connect, 2026-10-07): the chat that brings the person's notes, chats, papers, sites and code
+  // into the library, in onboarding and, once, as a popup for someone who has projects already. In every library since
+  // 2026-10-08 ("migrate the agent onboarding features to non-testing, too"); it was test mode's only until then, and
+  // each data root keeps its own sessions, offer and MEMORY.md. connect-detect: which apps are on this Mac (and
+  // signed in to in Engelbart's browser), so the choose screen starts with those ticked; connect-providers: Claude Code and
+  // Codex, which can run and on which pinned model. connect-start: the choose screen's picks → the session (the scan, the
+  // surveys and the librarian's first turn run in the background); connect-answer: a reply ({ text } | { picked, text? } |
+  // { skipped }); connect-authorize: a button in the chat used ({ app, kind: 'signin' | 'connector' | 'permission' |
+  // 'folder', path }); connect-need: a request an agent handed the person, opened, done or skipped; connect-import: Import,
+  // every source not yet handed over goes now; connect-stop (all) and connect-stop-job; connect-list: the sessions the
+  // dock shows. Every change of a session is sent as `engelbart:connect` with its snapshot.
+  const cx = () => {
+    if (!connect) throw new Error('Connect your library is not available');
+    return connect;
+  };
+  const importId = (value) => str(value, 'import id', 64);
+  const plainObject = (value, what) => { if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${what} is invalid`); return value; };
+  const appName = (value) => str(value, 'app', 64);
+  handle('connect-detect', withCtx(async (ctx) => { cx(); return detectSources({ homeDir: ctx.homeDir, zotero: () => (zotero ? zotero.status() : null), github: () => (github ? github.status() : null), signedIn: await connectSignedIn().catch(() => []), connectors: (app) => !!(connectors && connectors.status(app).connected), ...(process.env.ENGELBART_CONNECT_APPLICATIONS != null ? { applications: process.env.ENGELBART_CONNECT_APPLICATIONS.split(':').filter(Boolean) } : {}) }); }));
+  handle('connect-providers', () => cx().providers());
+  handle('connect-start', (input) => cx().start(plainObject(input, 'choices')));
+  handle('connect-answer', (id, input) => cx().answer(importId(id), plainObject(input, 'answer')));
+  const authorizeInput = (input) => { const value = plainObject(input, 'choice'); return { app: appName(value.app), kind: str(value.kind, 'kind', 16), path: optStr(value.path, 'path', 4096) }; };
+  handle('connect-authorize', (id, input) => cx().authorize(importId(id), authorizeInput(input)));
+  handle('connect-chose', (id, input) => cx().authorize(importId(id), authorizeInput(input)));
+  handle('connect-cancel-sign-in', (id, app) => cx().cancelSignIn(importId(id), appName(app)));
+  handle('connect-need', (id, needId, action) => cx().need(importId(id), str(needId, 'request id', 64), str(action, 'action', 8)));
+  handle('connect-import', (id) => cx().importNow(importId(id)));
+  handle('connect-stop', (id) => cx().stop(importId(id)));
+  handle('connect-stop-job', (id, jobId) => cx().stopJob(importId(id), str(jobId, 'job id', 64)));
+  handle('connect-provider', (id, provider) => cx().setProvider(importId(id), str(provider, 'provider', 16)));
+  handle('connect-retry-memory', (id) => cx().retryMemory(importId(id)));
+  handle('connect-minimize', (id, value) => cx().setMinimized(importId(id), !!value));
+  handle('connect-dismiss', (id) => cx().dismiss(importId(id)));
+  handle('connect-state', (id) => cx().state(importId(id)));
+  // A session that was still going when Engelbart closed goes on now (resume), before the list is read.
+  handle('connect-list', withCtx((ctx) => { if (!connect) return []; connect.resume(ctx); return connect.list(ctx.dataRoot); }));
+  // macOS's Automation prompt for Notes, asked from the choose screen's permissions (./connect/apple-notes.cjs).
+  handle('connect-notes-permission', () => { cx(); return appleNotes ? appleNotes.permission() : { allowed: false, error: 'Apple Notes cannot be read here' }; });
+  // The connectors Engelbart signs in to for the agents (./connect/connectors.cjs): Granola and Notion.
+  handle('connect-connectors', () => { cx(); return connectors ? connectors.list() : []; });
+  handle('connect-connector-sign-in', (app) => { cx(); if (!connectors) throw new Error('Connectors are not available'); return connectors.signIn(appName(app)); });
+  handle('connect-connector-cancel', (app) => { cx(); if (connectors) connectors.cancel(appName(app)); return true; });
+  // The one-time popup for someone with projects (2026-10-07: "Existing users should see a popup to do this once, but not
+  // as an onboarding flow just like a popup they can dismiss"): shown until it has been seen once in this data root.
+  // ENGELBART_CONNECT_OFFER=off never shows it (the smokes that are not about Connect: it would cover their workspace).
+  const offerFile = (ctx) => path.join(ctx.dataRoot, '.connect', 'offer.json');
+  handle('connect-offer', withCtx((ctx) => {
+    if (!connect || process.env.ENGELBART_CONNECT_OFFER === 'off') return { show: false };
+    try { return { show: !JSON.parse(fs.readFileSync(offerFile(ctx), 'utf8')).seen }; } catch { return { show: true }; }
+  }));
+  handle('connect-offer-seen', withCtx((ctx, how) => {
+    cx();
+    fs.mkdirSync(path.dirname(offerFile(ctx)), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(offerFile(ctx), JSON.stringify({ seen: true, how: how === 'started' ? 'started' : 'dismissed', at: new Date().toISOString() }), { mode: 0o600 });
+    return true;
+  }));
+  // MEMORY.md (./connect/memory.cjs): whether there is one in this data root, for the window to name and reveal.
+  handle('connect-memory', withCtx((ctx) => { const file = path.join(ctx.dataRoot, 'MEMORY.md'); try { const stat = fs.statSync(file); return { exists: true, path: file, updated: stat.mtime.toISOString(), bytes: stat.size }; } catch { return { exists: false, path: file }; } }));
   // A repository's sandbox is stopped (and its runs forgotten) before its row can go.
   saving('discard-library-item', (id) => queued(async () => {
     const ctx = await store.context();
@@ -726,7 +798,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('projects-for-library-item', withCtx((ctx, id) => library.projectsForLibraryItem(ctx, str(id, 'library id', 64))));
   handle('library-for-project', withCtx((ctx, pid) => library.libraryForProject(ctx, str(pid, 'project id', 64))));
   // What the project's pdfs, notes and workspaces say, for the search and the @ menu to match (MATH-29); asked when one opens.
-  handle('library-bodies', withCtx((ctx, pid) => library.bodiesForProject(ctx, str(pid, 'project id', 64))));
+  handle('library-bodies', withCtx((ctx, pid) => (pid == null ? library.bodiesForLibrary(ctx) : library.bodiesForProject(ctx, str(pid, 'project id', 64)))));
   // Adding makes a new row or throws "Already in the library as …" (library.addItem). `options.name` names it (the Browser's Save card).
   // A GitHub repository's sandbox starts once the row is saved; a failure to start it leaves the row saved and says why.
   // A page row that may be a pdf (an arXiv paper, a .pdf address, any other page that might answer with one) is checked

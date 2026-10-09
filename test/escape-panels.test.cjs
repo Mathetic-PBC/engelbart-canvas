@@ -20,8 +20,13 @@ test('the Import sign-ins picker takes Escape before the workspace, wherever the
   assert.doesNotMatch(picker, /onKeyDown=\{\(event\) => \{ if \(event\.key === 'Escape'\) onClose\(\); \}\}/, 'no Escape left to bubble on to the workspace');
 });
 
-test('a section\'s + panel lets Escape through to a terminal or an editor while it is adding', () => {
+test('the sidebar\'s panels take Escape before the workspace, the newest one first, and Add sources stays open while it is adding (2026-10-07)', () => {
+  const panels = read('workspace/SidebarPanels.jsx');
+  assert.match(panels, /if \(event\.key !== 'Escape' \|\| layers\[layers\.length - 1\] !== layer\) return;\s*event\.preventDefault\(\);\s*event\.stopPropagation\(\);\s*live\.current\(\);/);
+  assert.match(panels, /window\.addEventListener\('keydown', key, true\);/, 'in the capture phase, before an editor or the workspace');
   const rail = read('workspace/Rail.jsx');
-  assert.match(rail, /const own = \(panelRef\.current && panelRef\.current\.contains\(event\.target\)\) \|\| event\.target === document\.body \|\| event\.target === document\.documentElement;/);
-  assert.match(rail, /if \(live\.current && !own\) return;\s*event\.preventDefault\(\); event\.stopPropagation\(\); close\(\);/);
+  assert.match(rail, /const closeAdd = React\.useCallback\(\(\) => \{ if \(!addBusy\.current\) setPanel\(null\); \}, \[\]\);/);
+  assert.match(rail, /label="Add sources" onClose=\{closeAdd\}/);
+  const trash = read('post-its/TrashPanel.jsx');
+  assert.match(trash, /if \(event\.key === 'Escape'\) \{ event\.preventDefault\(\); onClose\(\); \}/, 'the trash marks the key used, so the workspace stays');
 });

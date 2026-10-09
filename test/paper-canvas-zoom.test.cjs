@@ -135,6 +135,7 @@ function sameScaled(at, base, f, tol, what) {
 
 test('at 50% and 200% every card\'s left, top, width and height against the page are its 100% values times the zoom', async () => {
   const { view } = viewer();
+  view.paneFit = () => Infinity; // in a pane wide enough: a card held to a narrower pane is the next test's
   view.zoom = 1;
   await view.layout(null);
   const base = onScreen(view);
@@ -154,6 +155,17 @@ test('at 50% and 200% every card\'s left, top, width and height against the page
     assert.equal(at.g.pageW, 612 * f);
     sameScaled(at, base, f, 1e-6, `${f * 100}%`);
   }
+});
+
+test('a card is never wider than the pane can show (2026-10-08): at 200% in a 612px pane it is 612 − 2·16 px on screen', async () => {
+  const { view } = viewer();
+  view.zoom = 2;
+  await view.layout(null);
+  const at = onScreen(view);
+  for (const id of ['m1', 'm2']) near(at.boxes[id].width, W - 32, 1e-6, `${id} held to the pane`);
+  view.zoomTo(100);
+  await view.layout(undefined);
+  assert.equal(onScreen(view).boxes.m1.width, 320, 'ASK_W where it fits');
 });
 
 test('the desk scales too: at least DESK desk px a side, and as wide as a moved box needs, so none is cut off at its edge', async () => {
@@ -201,6 +213,7 @@ test('a pinch that settles draws every box where, and as big as, the pinch left 
 
 test('a box dropped at 200% is where it was dropped at 100% and 50%: `pos` keeps its meaning', async () => {
   const { view } = viewer({ 1: [{ id: 'm1', rects: [{ x: 0.1, y: 0.2, w: 0.5, h: 0.015 }], side: 'right', y: 0.2, note: 'n', text: 'a' }] });
+  view.paneFit = () => Infinity; // in a pane wide enough (see the test on cards held to the pane)
   view.zoom = 2;
   await view.layout(null);
   // Dragged by its grip 100 screen px right and 40 down (the view at 200%, no pinch).

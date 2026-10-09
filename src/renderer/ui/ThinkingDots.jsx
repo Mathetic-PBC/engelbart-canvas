@@ -10,7 +10,7 @@ export default function ThinkingDots({ label = 'generating', size = 4 }) {
           <span key={i} style={{ width: size, height: size, borderRadius: '50%', background: 'var(--ink)', opacity: 0.15, animation: 'eng-pulse 1.1s ease-in-out infinite', animationDelay: `${i * 90}ms` }} />
         ))}
       </span>
-      <span style={{ font: `${size > 3 ? 13 : 11.5}px/1 var(--font-sans)`, letterSpacing: '0.3px', color: 'var(--fnt)' }}>{label}</span>
+      {label && <span style={{ font: `${size > 3 ? 13 : 11.5}px/1 var(--font-sans)`, letterSpacing: '0.3px', color: 'var(--fnt)' }}>{label}</span>}
     </div>
   );
 }

@@ -4,12 +4,14 @@ import Button from '../ui/Button.jsx';
 import Option from '../ui/Option.jsx';
 import Pager from '../ui/Pager.jsx';
 import ThinkingDots from '../ui/ThinkingDots.jsx';
-import { GH, GLOBE, PDF, SEARCH } from '../ui/Icons.jsx';
+import { GH, GLOBE, PDF } from '../ui/Icons.jsx';
 import { heldRow } from '../model/github.js';
-import { SUBS, forward, pagerOf, importButtons, createButtons, rowWhy, contextRows, toolsWanted, TOOL_WHY, PROFILE_PROMPT } from '../model/onboarding.js';
-import { launchRows, installable, rowOf } from '../model/tools.js';
+import { SUBS, forward, pagerOf, importButtons, createButtons, rowWhy, contextRows, toolsWanted, toolsStep, agentReady, TOOL_WHY, PROFILE_PROMPT } from '../model/onboarding.js';
+import { rowOf } from '../model/tools.js';
 import { useGithubStatus } from '../workspace/useGithubStatus.js';
 import ImportSignins from '../workspace/ImportSignins.jsx';
+import GithubRepos from '../workspace/GithubRepos.jsx';
+import ConnectLibrary, { CHOOSE_WIDTH } from './ConnectLibrary.jsx';
 import welcomePng from '../../../design/assets/welcome-field.png';
 
 const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || '');
@@ -63,88 +65,10 @@ function Footer({ showSkip, onSkip, continueDisabled, onContinue, label = 'Conti
   );
 }
 
-/** Add to your library, part 2a: GitHub through the app's own sign-in (src/main/github), then a tick per repository. */
-function GithubPart({ held, onToggle, busyId }) {
-  const [status, setStatus] = useGithubStatus();
-  const [starting, setStarting] = React.useState(false);
-  const [problem, setProblem] = React.useState('');
-  const [list, setList] = React.useState(null);
-  const [q, setQ] = React.useState('');
-  const connected = !!(status && status.connected);
-
-  const load = React.useCallback(() => {
-    api.githubRepos().then((value) => { setList(value.repos || []); setProblem(''); }).catch((error) => { setList([]); setProblem(errorMessage(error)); });
-  }, []);
-  React.useEffect(() => {
-    if (!connected) { setList(null); return undefined; }
-    load();
-    window.addEventListener('focus', load); // an install on GitHub may have added repositories
-    return () => window.removeEventListener('focus', load);
-  }, [connected, load]);
-
-  const connect = async () => {
-    setStarting(true);
-    setProblem('');
-    try { setStatus(await api.githubConnect()); } catch (error) { setProblem(errorMessage(error)); } finally { setStarting(false); }
-  };
-
-  const error = problem || (status && status.error) || '';
-  const pending = status && !connected && status.pending;
-  if (!status) return <div style={{ flex: 1 }} />;
-  if (!status.configured) return <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center', font: '13px/1.6 var(--font-sans)', color: '#e70022' }}>{problem || 'GitHub is not set up in this build.'}</div>;
-  if (!connected && (pending || starting)) {
-    return (
-      <div data-github-pane="code" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, animation: riseSub }}>
-        <ThinkingDots label="waiting for GitHub" />
-        {pending && (
-          <div style={{ display: 'flex', gap: 14 }}>
-            <button type="button" className="hov-ink" onClick={() => api.githubOpen('device').catch((failure) => setProblem(errorMessage(failure)))} style={{ ...plain, font: '12.5px/1 var(--font-sans)', color: '#8f8f8f' }}>Open browser again</button>
-            <button type="button" className="hov-ink" data-github-cancel="1" onClick={() => api.githubCancel().then(setStatus).catch((failure) => setProblem(errorMessage(failure)))} style={{ ...plain, font: '12.5px/1 var(--font-sans)', color: '#8f8f8f' }}>Cancel</button>
-          </div>
-        )}
-      </div>
-    );
-  }
-  if (!connected) {
-    return (
-      <div data-github-pane="signed-out" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, padding: 24, textAlign: 'center', animation: riseSub }}>
-        <span style={{ maxWidth: 300, font: '13.5px/1.6 var(--font-sans)', color: '#4d4d4d', textWrap: 'pretty' }}>Sign in to choose which repositories Engelbart can read.</span>
-        <span data-github-signin="1"><Button variant="filled" onClick={connect}>Sign in with GitHub</Button></span>
-        {error && <span style={{ font: '12.5px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere' }}>{error}</span>}
-      </div>
-    );
-  }
-  const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  const rows = (list || []).filter((repo) => { const hay = `${repo.fullName} ${repo.description || ''}`.toLowerCase(); return words.every((word) => hay.includes(word)); });
-  return (
-    <div data-github-pane="repos" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', animation: riseSub }}>
-      <div style={{ flex: 'none', padding: '10px 0 6px' }}>
-        <div className="focus-bd2" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 10px', background: '#fff', border: '1px solid #eaeaea', borderRadius: 8 }}>
-          <Glyph size={14} color="#8f8f8f"><SEARCH /></Glyph>
-          <input value={q} onChange={(event) => setQ(event.target.value)} autoFocus placeholder="search repositories…" spellCheck={false} data-github-search="1" style={{ flex: 1, minWidth: 0, padding: '7px 0', border: 0, background: 'transparent', font: '13.5px/1.4 var(--font-sans)', color: '#171717' }} />
-        </div>
-      </div>
-      <div data-github-repos="1" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', padding: '0 0 4px', margin: '0 -10px' }}>
-        {!list && <span style={{ padding: 10, ...faint }}>…</span>}
-        {rows.map((repo) => {
-          const on = !!held(repo);
-          return (
-            <button key={repo.id} type="button" className="hov-ink-wash" data-github-repo={repo.fullName} data-on={on ? '1' : '0'} disabled={busyId === repo.id} onClick={() => onToggle(repo)} title={repo.description || repo.fullName} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '7px 10px', textAlign: 'left', background: 'transparent', border: 0, borderRadius: 6, cursor: 'pointer' }}>
-              <Glyph size={14} color="#8f8f8f"><GH /></Glyph>
-              <span style={{ flex: 1, minWidth: 0, font: '13.5px/1.4 var(--font-sans)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><span style={{ color: '#8f8f8f' }}>{repo.owner}/</span><span style={{ color: '#171717' }}>{repo.fullName.slice(repo.owner.length + 1)}</span></span>
-              {repo.private && <span aria-label="private" style={{ flex: 'none', display: 'flex', color: '#8f8f8f', opacity: 0.8 }}><svg aria-hidden="true" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="7" width="10" height="7.5" rx="1.5" /><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" /></svg></span>}
-              <span style={{ flex: 'none', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', background: on ? '#1f9d55' : 'transparent', color: '#fff', font: '600 10px/1 var(--font-sans)' }}>{on ? '✓' : ''}</span>
-            </button>
-          );
-        })}
-        {list && !rows.length && <span style={{ padding: 10, ...faint }}>no repositories match…</span>}
-        {error && <span style={{ padding: '6px 10px', font: '12.5px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere' }}>{error}</span>}
-      </div>
-    </div>
-  );
-}
-
-/** `tools`: the tool check's snapshot (App.jsx). `onTools('install' | 'skip')`: what the tools screen was answered with. */
+/**
+ * `tools`: the tool check's snapshot (App.jsx). `onTools('install' | 'skip')`: what the tools screen was answered with.
+ * A new user's flow has Connect your library (2026-10-07; in every library, not test mode's only, since 2026-10-08).
+ */
 export default function Onboarding({ mode = 'new', tools = null, onTools = () => {}, onDone, onBack }) {
   const flowMode = mode === 'existing' ? 'existing' : 'new';
   const [place, setPlace] = React.useState({ step: flowMode === 'existing' ? 'create' : 'welcome', sub: 0, detour: false });
@@ -165,6 +89,11 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
   const [sel, setSel] = React.useState({});
   const [error, setError] = React.useState('');
   const [importing, setImporting] = React.useState(false); // the "Import sign-ins…" picker is open (MATH-18, macOS only)
+  const [connectId, setConnectId] = React.useState(null); // Connect your library's session: its staged notes go into the project
+  // Connect your library needs Claude Code or Codex: skipping the tools screen without one takes it out of the flow, and
+  // Add to your library and Custom instructions come back in its place.
+  const [connectDropped, setConnectDropped] = React.useState(false);
+  const connectMode = flowMode === 'new' && !connectDropped;
   // Its "Sign in again" sites (2026-10-06): there is no Stage until the project opens, so they open on it then (App.jsx).
   const stageLinks = React.useRef([]);
   const [ghStatus] = useGithubStatus();
@@ -188,9 +117,9 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
 
   // Whether the tools screen is in the flow: decided by the first check that answers, then kept, so the pager does not
   // change under the person while the installs it started run. While it is undecided the screen is there, checking.
-  const [withTools, setWithTools] = React.useState(() => toolsWanted(tools));
-  React.useEffect(() => { if (withTools === null) { const wanted = toolsWanted(tools); if (wanted !== null) setWithTools(wanted); } }, [tools, withTools]);
-  const flowOptions = { tools: withTools !== false };
+  const [withTools, setWithTools] = React.useState(() => toolsWanted(tools, { connect: flowMode === 'new' }));
+  React.useEffect(() => { if (withTools === null) { const wanted = toolsWanted(tools, { connect: flowMode === 'new' }); if (wanted !== null) setWithTools(wanted); } }, [tools, withTools]); // eslint-disable-line react-hooks/exhaustive-deps
+  const flowOptions = { tools: withTools !== false, connect: connectMode };
 
   const go = (next) => { setPlace((now) => ({ ...now, ...next })); setEntry(''); setEntryErr(''); setError(''); };
   const advance = () => go(forward(flowMode, place, flowOptions));
@@ -286,32 +215,36 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
     try { await api.setInstructions(instr); advance(); } catch (failure) { setError(errorMessage(failure)); }
   };
 
+  // Continue (and Skip) on the create screen: the next part, or on a new user's last part the project itself, opened with
+  // no context (2026-10-09: the new flow has no Project context screen). A folder picked under the name is checked first.
   const createNext = async () => {
     const part = SUBS.create[sub];
     if (part === 'name' && !name.trim()) return;
-    if (part !== 'folder') { advance(); return; }
-    if (folder === 'existing') {
+    if (part === 'name' && folder === 'existing') {
       try { await api.checkFolder(folderPath); } catch (failure) { setError(errorMessage(failure)); return; }
     }
+    if (createButtons(sub, { name, desc, folder, folderPath }, { mode: flowMode }).opens) { openProject([]); return; }
     advance();
   };
 
+  // "Use an existing folder…" under the name: the folder picked takes the place of the one made at ~/<name>.
   const browseFolder = async () => {
     const chosen = await window.terminalAPI.pickDirectory(undefined).catch(() => null);
-    if (chosen) { setFolderPath(chosen); setError(''); }
+    if (chosen) { setFolder('existing'); setFolderPath(chosen); setError(''); }
   };
 
-  const open = async () => {
-    const ids = contextRows(library).filter((row) => sel[row.id]).map((row) => row.id);
+  const openProject = async (ids) => {
+    const back = step === 'context' ? { step: 'context', sub: 0, detour: false } : { step: 'create', sub: SUBS.create.length - 1, detour: false };
     go({ step: 'open', sub: 0 });
     try {
-      const made = await api.startProject({ name: name.trim(), description: desc.trim(), folder, directory: folder === 'existing' ? folderPath : '', context: ids });
+      const made = await api.startProject({ name: name.trim(), description: desc.trim(), folder, directory: folder === 'existing' ? folderPath : '', context: ids, ...(connectId ? { connect: connectId } : {}) });
       await onDone(made, { stageLinks: [...stageLinks.current] });
     } catch (failure) {
-      setPlace({ step: 'context', sub: 0, detour: false });
+      setPlace(back);
       setError(errorMessage(failure));
     }
   };
+  const open = () => openProject(contextRows(library).filter((row) => sel[row.id]).map((row) => row.id));
 
   const pager = pagerOf(flowMode, step, flowOptions);
   const errorLine = error ? <span data-onboarding-error="1" style={{ font: '12.5px/1.5 var(--font-sans)', color: '#e70022', textAlign: 'center', overflowWrap: 'anywhere' }}>{error}</span> : null;
@@ -330,37 +263,52 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
     // What the launch check would have asked about in the setup dialog, on a screen of the flow instead. Install all
     // starts the installs and moves on at once: they run in the background, and the setup dialog asks only what is
     // left (signing in) once onboarding is over. Skip for now asks nothing more until the next launch.
-    const ids = withTools ? launchRows(tools) : [];
-    const toInstall = withTools ? installable(tools, ids) : [];
+    // With Connect your library next: "signing into claude code and/or codex must be done before this step",
+    // so each agent's row has its own Install or Sign in, Install all stays on the screen, and Continue waits for one of
+    // them to be ready. Skipping it then takes Connect out of the flow.
+    const plan = withTools ? toolsStep(tools, { connect: connectMode }) : { ids: [], install: [], label: 'Continue', disabled: false, stay: false };
     const install = () => {
-      if (toInstall.length) api.toolsInstall(toInstall).catch(() => {});
+      if (plan.install.length) api.toolsInstall(plan.install).catch(() => {});
+      if (plan.stay) return;
       onTools('install');
       advance();
     };
-    const skip = () => { onTools('skip'); advance(); };
+    const skip = () => {
+      onTools('skip');
+      if (connectMode && !agentReady(tools)) { setConnectDropped(true); go(forward(flowMode, place, { ...flowOptions, connect: false })); return; }
+      advance();
+    };
+    const act = (id, row) => {
+      setError('');
+      const run = row.action === 'install' ? api.toolsInstall([id]) : row.action === 'sign-in' ? api.toolsSignIn(id) : row.action === 'cancel' ? api.toolsCancelSignIn(id) : row.action === 'update' ? api.toolsUpdate(id) : api.toolsCheck();
+      Promise.resolve(run).catch((failure) => setError(errorMessage(failure)));
+    };
     body = (
       <div data-screen-label="02 Tools" style={{ ...column, minHeight: 0, gap: 24, animation: rise }}>
-        <Head title="Set up your tools">Engelbart works through Git and an agent: Claude Code or Codex. They install in the background while you carry on.</Head>
+        <Head title="Set up your tools">{connectMode ? 'Engelbart works through Git and an agent: Claude Code or Codex. Install one and sign in; the next step’s agents run on it.' : 'Engelbart works through Git and an agent: Claude Code or Codex. They install in the background while you carry on.'}</Head>
         {withTools === null && <div style={{ minHeight: 150, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ThinkingDots label="checking this Mac" /></div>}
         {withTools && (
           <div data-onboarding-tools="1" style={{ display: 'flex', flexDirection: 'column', borderBottom: '1px solid #f2f2f2' }}>
-            {ids.map((id) => {
+            {plan.ids.map((id) => {
               const row = rowOf(tools.tools[id]);
               const apple = id === 'git' && tools.platform === 'darwin' && row.action === 'install';
+              const label = { install: 'Install', update: 'Update', 'sign-in': 'Sign in', retry: 'Try again', cancel: 'Cancel' }[row.action];
               return (
                 <div key={id} data-tool-row={id} style={{ display: 'flex', alignItems: 'flex-start', gap: 16, padding: '14px 2px', borderTop: '1px solid #f2f2f2' }}>
                   <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
                     <span style={{ font: '500 14px/1.4 var(--font-sans)', color: '#171717' }}>{row.name}</span>
                     <span style={{ font: '12.5px/1.5 var(--font-sans)', color: '#8f8f8f', textWrap: 'pretty' }}>{TOOL_WHY[id]}{apple ? ' Installing it opens Apple’s installer for the command line tools.' : ''}</span>
+                    {connectMode && row.page && <button type="button" className="hov-ink" onClick={() => api.openExternal(row.page).catch(() => {})} style={{ ...plain, alignSelf: 'flex-start', font: '12.5px/1.4 var(--font-sans)', color: '#8f8f8f' }}>Open the sign-in page again</button>}
                   </span>
                   <span data-tool-state style={{ flex: 'none', paddingTop: 2, font: '12px/1.4 var(--font-mono)', color: row.tone === 'ok' ? '#171717' : '#8f8f8f' }}>{row.state}</span>
+                  {connectMode && row.action && <span data-tool-action={row.action} style={{ flex: 'none' }}><Button size="sm" onClick={() => act(id, row)}>{label}</Button></span>}
                 </div>
               );
             })}
           </div>
         )}
         {errorLine}
-        <Footer showSkip onSkip={skip} label={toInstall.length ? 'Install all' : 'Continue'} continueDisabled={withTools === null} onContinue={install} />
+        <Footer showSkip onSkip={skip} label={plan.label} continueDisabled={withTools === null || plan.disabled} onContinue={install} />
       </div>
     );
   } else if (step === 'import') {
@@ -384,7 +332,7 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
               </>
             )}
           </div>
-          {cur === 'github' && <GithubPart held={heldRepo} onToggle={toggleRepo} busyId={busy} />}
+          {cur === 'github' && <GithubRepos held={heldRepo} onToggle={toggleRepo} busyId={busy} />}
           {cur === 'url' && (
             <form onSubmit={addEntry} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', animation: riseSub }}>
               <div data-onboarding-items="1" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', padding: '8px 2px' }}>
@@ -455,17 +403,31 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
       </div>
     );
   } else if (step === 'create') {
-    const buttons = createButtons(sub, { name, desc, folder, folderPath });
+    const buttons = createButtons(sub, { name, desc, folder, folderPath }, { mode: flowMode });
+    const quietLink = { ...plain, padding: 0, font: '12.5px/1.5 var(--font-sans)', color: '#8f8f8f', textDecoration: 'underline', textUnderlineOffset: 3 };
     const part = SUBS.create[sub];
     body = (
       <form data-screen-label="06 Create project" data-part={part} onSubmit={(event) => { event.preventDefault(); createNext(); }} style={{ ...column, gap: 24, animation: rise }}>
         <Head title="Create a new project">Projects let you organize all of the citations, websites, papers, and code for your research without anything getting lost.</Head>
         <div style={{ width: '100%', minHeight: 150, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
           {part === 'name' && (
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 8, animation: riseSub }}>
-              <span style={{ font: '500 14px/1.4 var(--font-sans)' }}>Project name</span>
-              <input value={name} onChange={(event) => setName(event.target.value)} autoFocus placeholder="e.g. Teachable agents for debugging" spellCheck={false} data-onboarding-name="1" className="focus-bd2" style={{ width: '100%', padding: '11px 14px', background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, font: '15.5px/1.4 var(--font-sans)', color: '#171717', transition: 'border-color 120ms' }} />
-            </label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, animation: riseSub }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <span style={{ font: '500 14px/1.4 var(--font-sans)' }}>Project name</span>
+                <input value={name} onChange={(event) => setName(event.target.value)} autoFocus placeholder="e.g. Teachable agents for debugging" spellCheck={false} data-onboarding-name="1" className="focus-bd2" style={{ width: '100%', padding: '11px 14px', background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, font: '15.5px/1.4 var(--font-sans)', color: '#171717', transition: 'border-color 120ms' }} />
+              </label>
+              {/* The folder part is gone (2026-10-09): a folder is made at ~/<name>, unless one is picked here. */}
+              {folder === 'existing' && folderPath ? (
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', padding: '0 2px' }}>
+                  <span data-onboarding-folder-path="1" style={{ font: '12.5px/1.5 var(--font-mono)', color: '#171717', overflowWrap: 'anywhere' }}>{folderPath}</span>
+                  <button type="button" className="hov-ink" data-onboarding-new-folder="1" onClick={() => { setFolder('new'); setFolderPath(''); setError(''); }} style={quietLink}>Create a folder for me instead</button>
+                </div>
+              ) : (
+                <div style={{ padding: '0 2px' }}>
+                  <button type="button" className="hov-ink" data-onboarding-use-folder="1" onClick={browseFolder} title={newPath ? `Otherwise a folder is made at ${newPath}` : undefined} style={quietLink}>Use an existing folder…</button>
+                </div>
+              )}
+            </div>
           )}
           {part === 'desc' && (
             <label style={{ display: 'flex', flexDirection: 'column', gap: 8, animation: riseSub }}>
@@ -473,29 +435,9 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
               <textarea value={desc} onChange={(event) => setDesc(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); createNext(); } }} autoFocus rows={3} placeholder="what you're studying, and what done looks like…" data-onboarding-desc="1" className="focus-bd2" style={{ width: '100%', resize: 'none', padding: '11px 14px', background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, font: '15px/1.6 var(--font-sans)', color: '#171717', transition: 'border-color 120ms' }} />
             </label>
           )}
-          {part === 'folder' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, animation: riseSub }}>
-              <span style={{ font: '500 14px/1.4 var(--font-sans)' }}>Folder</span>
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 8 }}>
-                <Option data="folder-new" on={folder === 'new'} label="Create a folder for me" onClick={() => { setFolder('new'); setError(''); }} />
-                <Option data="folder-existing" on={folder === 'existing'} label="Use an existing folder" onClick={() => setFolder('existing')} />
-              </div>
-              {folder === 'new' && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 4px 0', font: '13px/1.5 var(--font-mono)', color: '#8f8f8f' }}>
-                  <span>will create</span><span data-onboarding-new-path="1" style={{ color: '#171717' }}>{newPath}</span>
-                </div>
-              )}
-              {folder === 'existing' && (
-                <div className="focus-bd2" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 4px 2px 12px', background: '#fff', border: '1px solid #eaeaea', borderRadius: 8 }}>
-                  <input value={folderPath} onChange={(event) => { setFolderPath(event.target.value); setError(''); }} autoFocus placeholder="~/research/my-project" spellCheck={false} data-onboarding-folder="1" style={{ flex: 1, minWidth: 0, padding: '6px 0', border: 0, background: 'transparent', font: '13px/1.4 var(--font-mono)', color: '#171717' }} />
-                  <span data-onboarding-browse="1"><Button size="sm" onClick={browseFolder}>Choose…</Button></span>
-                </div>
-              )}
-            </div>
-          )}
         </div>
         {errorLine}
-        <Footer showSkip={buttons.showSkip} onSkip={advance} continueDisabled={buttons.continueDisabled} onContinue={createNext} />
+        <Footer showSkip={buttons.showSkip} onSkip={createNext} label={buttons.label} continueDisabled={buttons.continueDisabled} onContinue={createNext} />
       </form>
     );
   } else if (step === 'context') {
@@ -530,6 +472,9 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
         </div>
       </div>
     );
+  } else if (step === 'connect') {
+    // Drawn outside the 800 × 600 window below: it is wider, side by side, and the chat needs the height.
+    body = null;
   } else if (step === 'open') {
     body = <div data-screen-label="08 Opening" style={{ width: '100%', display: 'flex', justifyContent: 'center' }}><ThinkingDots label="opening Getting started" /></div>;
   }
@@ -539,8 +484,31 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
       <div className="title-bar title-lead" style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 54, display: 'flex', alignItems: 'center', padding: '0 24px' }}>
         {onBack && <button type="button" className="hov-ink" onClick={onBack} title="All projects" style={{ ...plain, font: '500 17px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Engelbart</button>}
       </div>
+      {/* Connect your library: a page across the window (2026-10-08: "more horizontal … not a popup"), Skip for now under it. */}
+      {step === 'connect' && (
+        <div data-screen-label="03 Connect library" style={{ flex: 'none', width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
+          <ConnectLibrary mode="onboarding" onSession={(id) => { setConnectId(id); api.connectOfferSeen('started').catch(() => {}); }} onContinue={advance} onSkip={advance} onAdded={(row) => take(row, 'github', true)} />
+          <div style={{ flex: 'none', width: connectId ? 'min(1080px, 100%)' : `min(${CHOOSE_WIDTH}px, 100%)`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+            {/* Leaving with a session puts it away: it goes on in the background, the chip in the top right following it.
+                Skipping it counts as the one-time offer seen: the project about to open does not ask again. */}
+            {/* One clear Continue once a session has started (2026-10-09): filled, at the right by the pager; before, Skip for now. */}
+            <div style={{ display: 'flex' }}>
+              {!connectId && <button type="button" className="hov-ink" data-onboarding-skip="1" onClick={() => { api.connectOfferSeen('dismissed').catch(() => {}); advance(); }} style={skipStyle}>Skip for now</button>}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+              {pager && (
+                <>
+                  <Pager count={pager.count} index={pager.index} />
+                  <div data-onboarding-step-of="1" style={{ font: '12px/1 var(--font-sans)', color: '#8f8f8f' }}>{`${pager.index + 1} of ${pager.count}`}</div>
+                </>
+              )}
+              {connectId && <span data-onboarding-continue="1"><Button variant="filled" go onClick={() => { api.connectMinimize(connectId, true).catch(() => {}); advance(); }}>Continue</Button></span>}
+            </div>
+          </div>
+        </div>
+      )}
       {/* No card (2026-09-28): the same 800 × 600 at most, drawn on nothing, so lists inside still scroll and the page never does. */}
-      <div data-screen-label="Onboarding window" style={{ flex: 'none', display: 'flex', flexDirection: 'column', width: 'min(800px, 100%)', height: 'min(600px, 100%)', overflow: 'hidden' }}>
+      {step !== 'connect' && <div data-screen-label="Onboarding window" style={{ flex: 'none', display: 'flex', flexDirection: 'column', width: 'min(800px, 100%)', height: 'min(600px, 100%)', overflow: 'hidden' }}>
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'safe center', gap: 24, padding: '40px 32px 28px' }}>
           {body}
           {pager && !place.detour && (
@@ -550,7 +518,7 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
             </div>
           )}
         </div>
-      </div>
+      </div>}
       {importing && <ImportSignins opensLater onClose={() => setImporting(false)} onOpenSite={(url) => { if (!stageLinks.current.includes(url)) stageLinks.current.push(url); }} />}
     </div>
   );

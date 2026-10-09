@@ -32,7 +32,7 @@ export default function TrashPanel({ anchor, trash, workspaces, onClose }) {
   const bringBack = (id) => workspaces.restore(id).then(() => setProblem(''), (error) => setProblem(errorMessage(error)));
   React.useEffect(() => {
     const away = (event) => { if (ref.current && !ref.current.contains(event.target) && !event.target.closest('[data-trash]')) onClose(); };
-    const key = (event) => { if (event.key === 'Escape') onClose(); };
+    const key = (event) => { if (event.key === 'Escape') { event.preventDefault(); onClose(); } }; // taken: the workspace's Escape would leave it
     document.addEventListener('mousedown', away, true);
     document.addEventListener('keydown', key);
     return () => { document.removeEventListener('mousedown', away, true); document.removeEventListener('keydown', key); };

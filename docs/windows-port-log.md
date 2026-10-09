@@ -3,6 +3,32 @@
 The run that follows docs/windows-port.md, on branch `windows-port` (cut from `hudsons-feedback` at 22d738c).
 Newest status first; the sections below are kept current.
 
+## Catch-up to 0.1.13
+
+Goal (2026-10-09): bring windows-port up to origin/david-onboarding-revisions 6bb60b6 (Release 0.1.13: Hudson's 0.1.11
+plus the onboarding changes: the stacked Connect choose screen, the filled Refine button, the starting view with status
+instead of the opening line, the old Welcome! note), keeping the Windows port and every change from that branch, then
+make what the new code needs work on Windows (docs/windows-port.md). package.json says 0.1.13. Done when one commit
+containing 6bb60b6 passes CI on windows-latest and macos-latest (Linux may fail) and `UPLOAD_DRY_RUN=1
+CLOUDFLARE_ACCOUNT_ID=… npm run upload:win` lists the 0.1.13 installer, latest.yml, install.ps1,
+SHA256SUMS-windows.txt and index.html. No real upload: the command is handed to the person.
+
+### Status
+
+- 2026-10-09: merged 6bb60b6 (23 commits since cf474cb's base; 139 files). One conflict: scripts/smoke-windows.cjs,
+  which on that branch is still the old multi-window smoke test (windows-port renamed it scripts/smoke-new-window.cjs,
+  "Needs a decision" below, and smoke-windows.cjs is the packaged-Windows smoke test): kept ours, and that branch's two
+  changes to it (ENGELBART_CONNECT_OFFER off; the sidebar's project menu in place of the breadcrumb) applied to
+  smoke-new-window.cjs. package.json: 0.1.13. Mac `npm ci` and `npm test`: 1482 tests, 1479 pass, 3 skipped, 0 failed.
+  Pushed for the first CI run. To look at on Windows: the new Build git guard (src/main/build/git-guard.cjs: a
+  `#!/bin/sh` git first on the agent's PATH, hooks through GIT_CONFIG_PARAMETERS) and the Connect module
+  (src/main/connect: Apple Notes through osascript, other apps' folders).
+
+### CI runs
+
+| Commit | Run | macOS | Windows | Linux | Notes |
+|---|---|---|---|---|---|
+
 ## Linux
 
 Goal (2026-10-07): Engelbart installs and runs on Linux x64 with the Mac's command, `curl -fsSL

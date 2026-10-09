@@ -527,6 +527,12 @@ test('the Keychain runner over a fake execFile: the password, exit 44 is "not fo
   const other = await mod.keychainRunner('Chrome Safe Storage', fakeExecFile({ code: 1, stderr: 'security: something else' })).catch((error) => error);
   assert.equal(other.denied, false);
   assert.equal(other.notFound, false);
+
+  // No answer within the minute (execFile's timeout kills it): a refusal too (2026-10-09).
+  const unanswered = await mod.keychainRunner('Chrome Safe Storage', (file, args, options, callback) => { callback(Object.assign(new Error('Command failed'), { killed: true, signal: 'SIGTERM', code: null }), '', ''); }).catch((error) => error);
+  assert.deepEqual([unanswered.denied, unanswered.timedOut, unanswered.notFound], [true, true, false]);
+  assert.equal(mod.bundleOf('chrome'), 'com.google.Chrome');
+  assert.equal(mod.bundleOf('dia'), null, 'not confirmed: never opened in');
 });
 
 test('a missing Keychain key says so, by browser name, and imports nothing; a denial still says denied', async () => {

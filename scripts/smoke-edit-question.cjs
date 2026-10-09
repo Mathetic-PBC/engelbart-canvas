@@ -15,6 +15,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-edit-smoke-'));
 app.setPath('userData', path.join(root, 'electron'));
 process.env.ENGELBART_HOME_DIR = root;
 process.env.ENGELBART_SUMMARIES = 'off';
+process.env.ENGELBART_CONNECT_OFFER = 'off'; // Connect your library's one-time popup would cover the workspace
 process.env.ENGELBART_TOOLS = 'off';
 process.env.ENGELBART_WEB_PDFS = 'off';
 process.env.ENGELBART_BART_FAKE = '1';

@@ -114,6 +114,33 @@ export function NotificationBell({ notifications, items, library, markRead, clea
   </div>;
 }
 
+// The build notifications as the workspace sidebar's Inbox holds them (2026-10-08: the bell moved there). `rows` are the
+// ones still to show, `unread` how many are new; null without the sandbox provider.
+export function useBuildNotifications() {
+  const sandboxes = useSandboxes();
+  const notifications = sandboxes ? sandboxes.notifications : null;
+  const items = sandboxes ? sandboxes.items : null;
+  const rows = React.useMemo(() => (notifications ? availableBuildNotifications(notifications, items) : []), [notifications, items]);
+  return { sandboxes, rows, unread: rows.filter((row) => !row.read).length };
+}
+
+/** The notification rows themselves, for a panel that holds them: Building… → Build finished / Build failed, one per repository. `onClose` shuts the panel before a row's action opens something. */
+export function NotificationRows({ sandboxes, rows, onClose = () => {} }) {
+  const { items, library, markNotificationsRead, clearNotifications, open: openPreview, openTerminal, openRepository, openBuild, busy = {}, error } = sandboxes;
+  return <>
+    {error && <p className="notification-error" role="alert">{error}</p>}
+    {rows.map((notification) => {
+      const run = items[notification.libraryId]?.run;
+      const repo = library.find((row) => row.id === notification.libraryId);
+      if (!run) return null;
+      const use = (action) => { markNotificationsRead([notification.id]); onClose(); action(); };
+      return <BuildNotification key={notification.id} notification={notification} run={run} sandbox={items[notification.libraryId]?.sandbox ?? null} repo={repo} busy={!!busy[run.id]} onClear={clearNotifications}
+        onRepository={(row) => use(() => openRepository(row))} onBuild={(row) => use(() => openBuild(row, null))}
+        onOpen={(value) => use(() => openPreview(value))} onTerminal={openTerminal ? (value) => use(() => openTerminal(value)) : undefined} />;
+    })}
+  </>;
+}
+
 export default function SandboxNotifications() {
   const sandboxes = useSandboxes();
   return sandboxes ? <NotificationBell notifications={sandboxes.notifications} items={sandboxes.items} library={sandboxes.library}

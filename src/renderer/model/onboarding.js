@@ -7,21 +7,30 @@ import { launchRows, installable } from './tools.js';
 /**
  * A new install walks all six screens; + Project on the all-projects screen only the last two. The tools screen
  * (second, 2026-09-28: it replaces the setup dialog a first launch used to open) is left out when `tools` is false:
- * the launch check found nothing to install.
+ * the launch check found nothing to install. Connect your library (2026-10-07, screens/ConnectLibrary.jsx) is in the
+ * flow when `connect` is true (every new user's, test mode's or not, since 2026-10-08; false once the tools screen was
+ * skipped with no agent to run it), and then it takes the place of Add to your library and Custom instructions
+ * ("replace steps 3 and 4 with this, since it will essentially be the same": its agents bring the papers, sites and code
+ * in, and MEMORY.md, made from what the person's AI assistants remember, does what the custom instructions did).
+ * A new user's flow ends on Create (2026-10-09, "fewer create screens"): its last part opens the project, with no Project
+ * context screen; + Project keeps create → context.
  */
-export const FLOWS = { new: ['welcome', 'tools', 'import', 'instructions', 'create', 'context'], existing: ['create', 'context'] };
+export const FLOWS = { new: ['welcome', 'tools', 'connect', 'import', 'instructions', 'create'], existing: ['create', 'context'] };
 
-export function flowOf(mode, { tools = true } = {}) {
+export function flowOf(mode, { tools = true, connect = false } = {}) {
   const flow = FLOWS[mode] || FLOWS.new;
-  return tools ? flow : flow.filter((step) => step !== 'tools');
+  return flow.filter((step) => (step !== 'tools' || tools) && (connect ? step !== 'import' && step !== 'instructions' : step !== 'connect'));
 }
 
-/** Screens that are several screens in effect (2a, 2b …), one box shown at a time. */
-export const SUBS = { import: ['github', 'url', 'pdf'], create: ['name', 'desc', 'folder'] };
+/**
+ * Screens that are several screens in effect (2a, 2b …), one box shown at a time. Create has no folder part since
+ * 2026-10-09: a folder is made at ~/<name> unless "Use an existing folder…" under the name picks one.
+ */
+export const SUBS = { import: ['github', 'url', 'pdf'], create: ['name', 'desc'] };
 
 /**
  * Where a forward move from `{ step, sub }` lands: the next part of the same screen, else the next screen, else 'open'
- * (after the context screen). `detour` is set when the context screen sent the person to add to the library outside
+ * (after the context screen, or the last screen of the flow). `detour` is set when the context screen sent the person to add to the library outside
  * the flow (the existing-user flow has no import screen): the end of the import screen returns to context.
  * `options` as flowOf's: from a screen left out of the flow, the next one still in it.
  */
@@ -34,7 +43,8 @@ export function forward(mode, { step, sub = 0, detour = false }, options) {
   const flow = flowOf(mode, options);
   const at = full.indexOf(step);
   const next = at < 0 ? null : full.slice(at + 1).find((name) => flow.includes(name));
-  return next ? { step: next, sub: 0 } : { step, sub };
+  if (next) return { step: next, sub: 0 };
+  return flow.includes(step) ? { step: 'open', sub: 0 } : { step, sub };
 }
 
 /** The pager under every screen of the flow: `{ count, index }`, or null off the flow (opening, a detour). */
@@ -47,11 +57,42 @@ export function pagerOf(mode, step, options) {
 /**
  * Whether a new install's onboarding has the tools screen, from the tool check's snapshot: null until the first check
  * has answered, then whether it found something Install all would install (Git missing, or neither agent installed).
- * What else the check asks about (signing in, an update) waits for the setup dialog after onboarding.
+ * What else the check asks about (signing in, an update) waits for the setup dialog after onboarding, except with Connect
+ * your library in the flow (`connect`), whose agents run on Claude Code or Codex: then the screen is there
+ * until one of them is installed and signed in too ("signing into claude code and/or codex must be done before this step").
  */
-export function toolsWanted(snapshot) {
+export function toolsWanted(snapshot, { connect = false } = {}) {
   if (!snapshot || !snapshot.checked) return null;
-  return installable(snapshot, launchRows(snapshot)).length > 0;
+  if (installable(snapshot, launchRows(snapshot)).length > 0) return true;
+  return connect ? !agentReady(snapshot) : false;
+}
+
+/** Whether Claude Code or Codex is installed and signed in: what Connect your library's agents need. */
+export function agentReady(snapshot) {
+  return !!(snapshot && snapshot.tools) && ['claude', 'codex'].some((id) => snapshot.tools[id] && snapshot.tools[id].status === 'ready');
+}
+
+/**
+ * The tools screen's rows and main button. Without Connect: the rows the launch check asks about, Install all (or
+ * Continue) installs in the background and moves on at once. With it: Git when it needs anything, and both agents with
+ * their own Install or Sign in; the button installs what is missing and stays, and Continue waits for an agent to be ready.
+ * → { ids, install: [tools Install all would install], label, disabled, stay }
+ */
+export function toolsStep(snapshot, { connect = false } = {}) {
+  if (!snapshot || !snapshot.tools) return { ids: [], install: [], label: 'Continue', disabled: true, stay: false };
+  if (!connect) {
+    const ids = launchRows(snapshot);
+    const install = installable(snapshot, ids);
+    return { ids, install, label: install.length ? 'Install all' : 'Continue', disabled: false, stay: false };
+  }
+  const git = snapshot.tools.git;
+  const ids = [...(git && git.status !== 'ready' && !git.skip ? ['git'] : []), 'claude', 'codex'].filter((id) => snapshot.tools[id]);
+  if (agentReady(snapshot)) return { ids, install: [], label: 'Continue', disabled: false, stay: false };
+  // An agent installed and waiting for its sign-in: its row's Sign in is the step, not installing the other one.
+  const installedAgent = ['claude', 'codex'].some((id) => snapshot.tools[id] && snapshot.tools[id].installed);
+  const install = installable(snapshot, installedAgent ? ids.filter((id) => id === 'git') : ids);
+  if (install.length) return { ids, install, label: 'Install all', disabled: false, stay: true };
+  return { ids, install: [], label: 'Continue', disabled: true, stay: true };
 }
 
 /** What each tool is for, under its name on the tools screen. */
@@ -73,15 +114,19 @@ export function importButtons(sub, n, { signedIn = false } = {}) {
 }
 
 /**
- * The create screen's: Skip only on an empty description; Continue (next part, then the context screen) greyed on an
- * empty name, an empty description, and an existing folder not yet named.
+ * The create screen's: Skip only on an empty description; Continue (next part, then the next screen) greyed on an empty
+ * name, an empty description, and an existing folder not yet named. On a new user's last part both open the project
+ * (`opens`), and Continue reads "Open project".
  */
-export function createButtons(sub, { name, desc, folder = 'new', folderPath = '' }) {
+export function createButtons(sub, { name, desc, folder = 'new', folderPath = '' }, { mode = 'existing' } = {}) {
   const part = SUBS.create[sub];
   const empty = (value) => !String(value || '').trim();
+  const opens = mode === 'new' && sub === SUBS.create.length - 1;
   return {
     showSkip: part === 'desc' && empty(desc),
-    continueDisabled: (part === 'name' && empty(name)) || (part === 'desc' && empty(desc)) || (part === 'folder' && folder === 'existing' && empty(folderPath)),
+    continueDisabled: (part === 'name' && (empty(name) || (folder === 'existing' && empty(folderPath)))) || (part === 'desc' && empty(desc)),
+    label: opens ? 'Open project' : 'Continue',
+    opens,
   };
 }
 

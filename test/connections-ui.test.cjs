@@ -152,14 +152,18 @@ test('the connected options are Repository access and Disconnect, and no Refresh
   assert.deepEqual(elements.find(element => element.props.provider === 'github').props.items.map(item => item.action), ['disconnect']);
 });
 
-test('Connections is a page of the Settings window, not an icon in the top-right controls nor in the sidebar (MATH-64)', () => {
+test('Connections is a page of the Settings window, not an icon in the top-right controls (MATH-64); the sidebar\'s Connections row shows where each stands and opens that page (2026-10-07)', () => {
   const controls = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/WindowControls.jsx'), 'utf8');
   assert.doesNotMatch(controls, /<Connections|import Connections/);
   assert.match(controls, /<SandboxNotifications \/>\s*<Settings test=\{test\} \/>/);
   const css = fs.readFileSync(path.join(__dirname, '../src/renderer/styles.css'), 'utf8');
   assert.doesNotMatch(css, /connections-trigger/);
   const rail = fs.readFileSync(path.join(__dirname, '../src/renderer/workspace/Rail.jsx'), 'utf8');
-  assert.doesNotMatch(rail, /Connections/);
+  assert.match(rail, /<ConnectionsPanel /);
+  assert.doesNotMatch(rail, /ConnectionsPage|GithubConnection|ZoteroConnection/, 'no second set of account controls in the sidebar');
+  const panels = fs.readFileSync(path.join(__dirname, '../src/renderer/workspace/SidebarPanels.jsx'), 'utf8');
+  assert.match(panels, /const manage = \(\) => \{ onClose\(\); openSettings\('connections'\); \};/, 'its rows open Settings at Connections');
+  assert.doesNotMatch(panels, /githubConnect|zoteroConnect|githubDisconnect|zoteroDisconnect/, 'it only shows where each stands');
   const source = fs.readFileSync(path.join(__dirname, '../src/renderer/workspace/Connections.jsx'), 'utf8');
   assert.doesNotMatch(source, /createPortal|usePlaced|export default/, 'no popover left: no portal, no placing, no trigger');
 });

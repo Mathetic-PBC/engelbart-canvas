@@ -1,45 +1,9 @@
-// What the workspace sidebar's search and the document's @ menu list (Claude Design "Canvas.dc.html" and
-// "Add - Mention.dc.html", 2026-09-22). Pure: the rows come in, the lists go out; the screen does the adding.
+// What the library searches (the sidebar's Search and Library, Add context's search) and the document's @ menu list
+// (Claude Design "Canvas.dc.html" and "Add - Mention.dc.html", 2026-09-22). Pure: the rows come in, the lists go out; the
+// screen does the adding. What the sidebar itself lists is model/sidebar.js's.
 
-import { hasTag, isNote, kindLabel } from './kind.js';
+import { kindLabel, libraryFilter } from './kind.js';
 import { findWorkspaces } from './nav.js';
-
-/**
- * The sidebar's sections, in order (Claude Design "Sidebar.dc.html", 2026-09-23): Notes, Websites, GitHub, Files and
- * Sub-Workspaces. Files is everything else (papers, folders, pages on disk, data, images: "files should be de facto other").
- * `add` is what the + in a section's header does (MATH-44, 2026-10-06): 'note' and 'workspace' make one here at once,
- * 'disk' opens the system picker, 'github' the repository picker and 'link' a field for an address or a path. Archived
- * has none: a version is made by Clear.
- */
-export const RAIL_SECTIONS = [
-  { key: 'Notes', label: 'Notes', add: 'note' },
-  { key: 'Websites', label: 'Websites', add: 'link' },
-  { key: 'GitHub', label: 'GitHub', add: 'github' },
-  { key: 'Files', label: 'Files', add: 'disk' },
-  { key: 'Workspaces', label: 'Sub-Workspaces', add: 'workspace' },
-  // This workspace's earlier versions, one per Clear (2026-09-25).
-  { key: 'Archived', label: 'Archived' },
-];
-
-/** The section +'s that open a panel under the header; the others add at once and show one only to say what failed. */
-export const ADD_PANELS = new Set(['link', 'github']);
-
-/** Which section a rail row sorts into: a repository by its tag whether it is an address or a clone. */
-export function sectionOf(row) {
-  if (row.type === 'archive') return 'Archived';
-  if (row.type === 'child' || row.type === 'workspace') return 'Workspaces';
-  if (isNote(row)) return 'Notes';
-  if (hasTag(row, 'git')) return 'GitHub';
-  if (row.type === 'website') return 'Websites';
-  return 'Files';
-}
-
-/** The rail's rows under their sections, each keeping the rows' order; every section is shown, empty or not (2026-09-29). */
-export function railSections(rows) {
-  const by = new Map(RAIL_SECTIONS.map((section) => [section.key, []]));
-  for (const row of rows) by.get(sectionOf(row)).push(row);
-  return RAIL_SECTIONS.map((section) => ({ ...section, rows: by.get(section.key) }));
-}
 
 // A web address without its scheme (github.com, example.org/page), as the main process reads one (store/library.cjs).
 const BARE_HOST = /^(?:www\.)?(?:[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?\.)+[a-z]{2,24}(?::\d{1,5})?(?:[/?#]\S*)?$/i;
@@ -112,6 +76,22 @@ export function searchRows({ query, library, inRail, found, bodies = null }) {
   const rows = hits.map(item);
   const one = bare ? answered() : null;
   return one && !rows.some((row) => row.key === one.key) ? [...rows, one] : rows;
+}
+
+/** How many rows the sidebar's Library panel lists before anything is typed. */
+export const LIBRARY_RECENT = 40;
+const edited = (row) => Date.parse(row.last_edited || row.created || '') || 0;
+
+/**
+ * The sidebar's Library panel (2026-10-09): `chip` (kind.js LIBRARY_CHIPS) narrows the library first, so it holds in both
+ * modes. Nothing typed, the LIBRARY_RECENT last edited of what is left; typed, searchRows over only that, in its order. A
+ * pasted link or path is searchRows' answer whatever the chip: it is not looked for in the library.
+ */
+export function libraryPanelRows({ query, library, chip = 'all', inRail, found, bodies = null }) {
+  const things = (library || []).filter((row) => libraryFilter(row, chip));
+  const typed = String(query || '').trim();
+  if (!typed) return [...things].sort((a, b) => edited(b) - edited(a)).slice(0, LIBRARY_RECENT).map((row) => ({ kind: 'item', key: row.id, row, name: row.name, tag: inRail(row.id) ? 'here' : '' }));
+  return searchRows({ query: typed, library: things, inRail, found, bodies });
 }
 
 /**

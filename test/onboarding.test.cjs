@@ -86,21 +86,27 @@ test('discardItem removes a row only while nothing holds it', async () => {
   assert.ok(await ctx.libraryDb.get(held.id));
 });
 
-test('the order: parts before screens, context then open, a detour back to context, the pager only on the flow', async () => {
+test('the order: parts before screens, a new user\'s flow opening the project after Create, + Project ending on context, the pager only on the flow', async () => {
   const { pathToFileURL } = require('node:url');
   const flow = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/onboarding.js')).href);
-  const walk = (mode, from) => { const out = []; let at = from; for (let i = 0; i < 20 && at.step !== 'open'; i += 1) { at = flow.forward(mode, at); out.push(at.sub ? `${at.step}.${at.sub}` : at.step); } return out; };
-  assert.deepEqual(walk('new', { step: 'welcome', sub: 0 }), ['tools', 'import', 'import.1', 'import.2', 'instructions', 'create', 'create.1', 'create.2', 'context', 'open']);
-  assert.deepEqual(walk('existing', { step: 'create', sub: 0 }), ['create.1', 'create.2', 'context', 'open']);
+  const walk = (mode, from, options) => { const out = []; let at = from; for (let i = 0; i < 20 && at.step !== 'open'; i += 1) { at = flow.forward(mode, at, options); out.push(at.sub ? `${at.step}.${at.sub}` : at.step); } return out; };
+  // 2026-10-09: no folder part, and no Project context screen for a new user.
+  assert.deepEqual(flow.SUBS.create, ['name', 'desc']);
+  assert.deepEqual(flow.flowOf('new'), ['welcome', 'tools', 'import', 'instructions', 'create']);
+  assert.deepEqual(walk('new', { step: 'welcome', sub: 0 }), ['tools', 'import', 'import.1', 'import.2', 'instructions', 'create', 'create.1', 'open']);
+  assert.deepEqual(walk('new', { step: 'welcome', sub: 0 }, { connect: true }), ['tools', 'connect', 'create', 'create.1', 'open']);
+  assert.deepEqual(walk('existing', { step: 'create', sub: 0 }), ['create.1', 'context', 'open'], '+ Project keeps its context screen');
   assert.deepEqual(flow.forward('existing', { step: 'import', sub: 2, detour: true }), { step: 'context', sub: 0 });
-  assert.deepEqual(flow.pagerOf('new', 'tools'), { count: 6, index: 1 });
-  assert.deepEqual(flow.pagerOf('new', 'instructions'), { count: 6, index: 3 });
+  assert.deepEqual(flow.pagerOf('new', 'tools'), { count: 5, index: 1 });
+  assert.deepEqual(flow.pagerOf('new', 'instructions'), { count: 5, index: 3 });
+  assert.equal(flow.pagerOf('new', 'context'), null);
+  assert.deepEqual(flow.pagerOf('existing', 'context'), { count: 2, index: 1 });
   assert.equal(flow.pagerOf('existing', 'import'), null);
 
   // Nothing to install: the tools screen is left out, and one showing when that is found out moves on.
   assert.deepEqual(flow.forward('new', { step: 'welcome', sub: 0 }, { tools: false }), { step: 'import', sub: 0 });
   assert.deepEqual(flow.forward('new', { step: 'tools', sub: 0 }, { tools: false }), { step: 'import', sub: 0 });
-  assert.deepEqual(flow.pagerOf('new', 'instructions', { tools: false }), { count: 5, index: 2 });
+  assert.deepEqual(flow.pagerOf('new', 'instructions', { tools: false }), { count: 4, index: 2 });
   assert.equal(flow.pagerOf('new', 'tools', { tools: false }), null);
 
   // One Continue (no Next, 2026-09-28): live once the part holds something, and Skip while it is empty.
@@ -109,13 +115,18 @@ test('the order: parts before screens, context then open, a detour back to conte
   assert.deepEqual(flow.importButtons(1, 0, { signedIn: true }), { showSkip: true, continueDisabled: true }, 'only the GitHub part');
   assert.deepEqual(flow.importButtons(0, 2), { showSkip: false, continueDisabled: false });
   assert.deepEqual(flow.importButtons(2, 1), { showSkip: false, continueDisabled: false });
-  assert.deepEqual(flow.createButtons(0, { name: ' ', desc: '' }), { showSkip: false, continueDisabled: true });
-  assert.deepEqual(flow.createButtons(0, { name: 'x', desc: '' }), { showSkip: false, continueDisabled: false });
-  assert.deepEqual(flow.createButtons(1, { name: 'x', desc: '' }), { showSkip: true, continueDisabled: true });
-  assert.deepEqual(flow.createButtons(1, { name: 'x', desc: 'why' }), { showSkip: false, continueDisabled: false });
-  assert.equal(flow.createButtons(2, { name: 'x', desc: '', folder: 'new' }).continueDisabled, false);
-  assert.equal(flow.createButtons(2, { name: 'x', desc: '', folder: 'existing', folderPath: ' ' }).continueDisabled, true);
-  assert.equal(flow.createButtons(2, { name: 'x', desc: '', folder: 'existing', folderPath: '~/code' }).continueDisabled, false);
+  const keep = { showSkip: false, continueDisabled: false, label: 'Continue', opens: false };
+  assert.deepEqual(flow.createButtons(0, { name: ' ', desc: '' }), { ...keep, continueDisabled: true });
+  assert.deepEqual(flow.createButtons(0, { name: 'x', desc: '' }), keep);
+  assert.deepEqual(flow.createButtons(1, { name: 'x', desc: '' }), { ...keep, showSkip: true, continueDisabled: true });
+  assert.deepEqual(flow.createButtons(1, { name: 'x', desc: 'why' }), keep, '+ Project goes on to context');
+  assert.deepEqual(flow.createButtons(0, { name: 'x', desc: '' }, { mode: 'new' }), keep, 'the name part goes on to the description');
+  assert.deepEqual(flow.createButtons(1, { name: 'x', desc: 'why' }, { mode: 'new' }), { ...keep, label: 'Open project', opens: true }, 'a new user\'s last part opens the project');
+  assert.deepEqual(flow.createButtons(1, { name: 'x', desc: '' }, { mode: 'new' }), { showSkip: true, continueDisabled: true, label: 'Open project', opens: true }, 'and so does its Skip');
+  // A folder picked with "Use an existing folder…" under the name; the default, ~/<name>, needs nothing.
+  assert.equal(flow.createButtons(0, { name: 'x', desc: '', folder: 'new' }).continueDisabled, false);
+  assert.equal(flow.createButtons(0, { name: 'x', desc: '', folder: 'existing', folderPath: ' ' }).continueDisabled, true);
+  assert.equal(flow.createButtons(0, { name: 'x', desc: '', folder: 'existing', folderPath: '~/code' }).continueDisabled, false);
 
   assert.equal(flow.rowWhy({ type: 'website', tags: ['git'], url: 'https://github.com/a/b' }), 'git repo · github.com');
   assert.equal(flow.rowWhy({ type: 'pdf', tags: ['paper'], path: '/x.pdf' }), 'paper');

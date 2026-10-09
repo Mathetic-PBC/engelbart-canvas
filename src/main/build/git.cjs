@@ -327,6 +327,25 @@ function createGit({ gitPath = () => 'git', run = execFile, environment = proces
 
   const message = (dir, sha = 'HEAD') => trim(dir, ['log', '-1', '--format=%B', sha]);
 
+  /**
+   * The worktree back on `branch` at `sha`, where its turn started, when the agent moved it (2026-10-07; ./git-guard.cjs
+   * keeps it from doing so, this is what holds when that was got round): another branch or a detached HEAD checked out,
+   * commits of its own, the branch reset or deleted. The files stay as they are, for the turn's checkpoint, which then
+   * holds the agent's commits as one. A turn that started in a merge (a conflict sent to the agent) may have concluded
+   * it: that commit is kept, as concludeMerge would have made it. → what was put right: { branch, commits }
+   */
+  async function holdBranch(dir, branch, sha, { merging: wasMerging = false } = {}) {
+    const ref = `refs/heads/${branch}`;
+    const at = await exec(dir, ['symbolic-ref', '--quiet', 'HEAD']);
+    const moved = at.code !== 0 || at.stdout.trim() !== ref;
+    const tip = (await exec(dir, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])).stdout.trim();
+    let commits = tip !== sha;
+    if (commits && wasMerging && tip && !moved) commits = (await exec(dir, ['rev-parse', '--verify', '--quiet', `${tip}^1`])).stdout.trim() !== sha;
+    if (commits) await must(dir, ['update-ref', '-m', 'Engelbart: where the turn started', ref, sha]);
+    if (moved) await must(dir, ['symbolic-ref', '-m', 'Engelbart: back on the Build\'s branch', 'HEAD', ref]);
+    return { branch: moved, commits };
+  }
+
   /** Files whose added lines still hold a conflict marker between two commits (a merge left half resolved). */
   async function markers(dir, from, to) {
     const out = await must(dir, ['diff', '--no-color', '--no-ext-diff', '-U0', from, to]);
@@ -339,7 +358,7 @@ function createGit({ gitPath = () => 'git', run = execFile, environment = proces
     return [...files];
   }
 
-  return { exec, top, head, revParse, dirtyPaths, identity, addWorktree, removeWorktree, moveWorktree, deleteBranch, branchExists, merging, abortMerge, checkpoint, diff, workingDiff, treeWithout, mergeBase, isAncestor, conflicted, squashOnto, checkoutBranch, fastForward, mergeInto, concludeMerge, init, clone, message, markers };
+  return { exec, top, head, revParse, dirtyPaths, identity, addWorktree, removeWorktree, moveWorktree, deleteBranch, branchExists, merging, abortMerge, checkpoint, diff, workingDiff, treeWithout, mergeBase, isAncestor, conflicted, squashOnto, checkoutBranch, fastForward, mergeInto, concludeMerge, holdBranch, init, clone, message, markers };
 }
 
 module.exports = { createGit, GitError, GITHUB_HELPER, credentialEnv, FALLBACK_NAME, FALLBACK_EMAIL };

@@ -7,6 +7,7 @@ import DocPreview from '../ui/DocPreview.jsx';
 import { hasTag, isNote, kindKey, kindRank, KIND_ORDER } from '../model/kind.js';
 import { AddToLibrary, TRASH_MARK } from '../workspace/Rail.jsx';
 import { addDropped, carriesDrop, readDrop } from '../model/drop.js';
+import { useBodies } from '../workspace/useBodies.js';
 
 // All projects (Claude Design "Projects.dc.html", 2026-09-21): the library as a rail on the left
 // — one list sorted by kind, a search field, Add context — and the projects beside it as cards that
@@ -142,10 +143,14 @@ export default function Home({ projects, trashed = [], library, onCreateScreen, 
     // A picture pasted into a document is that project's attachment, not shown here; one added to the library is (MATH-19).
     return library.filter((row) => !(row.type === 'image' && row.project_id)).sort((a, b) => kindRank(a) - kindRank(b) || String(b.last_edited || '').localeCompare(String(a.last_edited || '')));
   }, [library]);
+  // What the library's pdfs and notes say (2026-10-08), asked for while something is typed: the search finds them by it too.
+  const bodies = useBodies(null, !!query.trim(), { all: true });
   const shown = React.useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return needle ? rows.filter((row) => `${row.name} ${row.url || ''} ${kindOf(row).label}`.toLowerCase().includes(needle)) : rows;
-  }, [rows, query]);
+    if (!needle) return rows;
+    const says = (row) => { const text = bodies && bodies.items.get(row.id); return !!text && text.includes(needle); };
+    return rows.filter((row) => `${row.name} ${row.url || ''} ${kindOf(row).label} ${row.summary || ''}`.toLowerCase().includes(needle) || says(row));
+  }, [rows, query, bodies]);
   const byId = React.useMemo(() => new Map(rows.map((row) => [row.id, row])), [rows]);
 
   // Two workspace tiles a card, three and four as the projects column gets room for them.

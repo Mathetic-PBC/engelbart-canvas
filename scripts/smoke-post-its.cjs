@@ -14,6 +14,7 @@ const root = process.env.ENGELBART_POST_IT_SMOKE_ROOT || fs.mkdtempSync(path.joi
 app.setPath('userData', path.join(root, 'electron'));
 process.env.ENGELBART_HOME_DIR = root;
 process.env.ENGELBART_SUMMARIES = 'off';
+process.env.ENGELBART_CONNECT_OFFER = 'off'; // Connect your library's one-time popup would cover the workspace
 process.env.ENGELBART_TOOLS = 'off'; // no tool check or setup dialog over the cards (src/main/tools)
 process.env.ENGELBART_BART_FAKE = '1';
 process.env.ENGELBART_HEADLESS = '1';
@@ -72,6 +73,14 @@ async function shot(contents, name) {
   const picture = await contents.capturePage(undefined, { stayHidden: true, stayAwake: true });
   fs.writeFileSync(path.join(SHOTS, `${name}.png`), picture.toPNG());
 }
+// A post-it, from the sidebar's Add sources → Sticky (2026-10-07; the sticky-note picture at its foot until then).
+async function newPostIt(win) {
+  const add = await center(win.webContents, '[data-sb-fixed-row="add"]');
+  await click(win.webContents, add.x, add.y);
+  await until(() => js(win.webContents, '!!document.querySelector(\'[data-sb-panel="add"] [data-new="sticky"]\')'), 'Add sources');
+  const sticky = await center(win.webContents, '[data-sb-panel="add"] [data-new="sticky"]');
+  await click(win.webContents, sticky.x, sticky.y);
+}
 const readyCard = async (win, id) => until(async () => {
   for (const v of cards(win)) if (await js(v.webContents, 'document.querySelector("[data-editor]") ? window.postItAPI.ready().then(c=>c.id) : null').catch(() => null) === id) return v;
   return null;
@@ -88,13 +97,12 @@ app.whenReady().then(async () => {
     const created = await js(win.webContents, `window.engelbartAPI.createProjectWithWelcome({name:'Post-it smoke', directory:${JSON.stringify(root)}})`);
     const pid = created.project.id;
     win.webContents.reload();
-    await until(() => js(win.webContents, '!!document.querySelector("[data-add-post-it]") && !!document.querySelector("main [data-editor]")').catch(() => false), 'post-it icon and document');
+    await until(() => js(win.webContents, '!!document.querySelector("[data-sb-fixed-row=add]") && !!document.querySelector("main [data-editor]")').catch(() => false), 'Add sources and the document');
     await pause(300);
     const db = await require('../src/main/store/db.cjs').openNotesDb(created.project.dir);
 
     /* ------------------------------------------------ face, font, markdown, Enter */
-    const button = await center(win.webContents, '[data-add-post-it]');
-    await click(win.webContents, button.x, button.y);
+    await newPostIt(win);
     let card = await until(() => cards(win)[0], 'native card creation');
     await until(() => js(card.webContents, '!!document.querySelector("[data-editor]") && document.activeElement === document.querySelector("[data-editor]")'), 'card editor focused');
     assert.deepEqual([card.getBounds().width, card.getBounds().height], [260, 260], 'a new card is square');
@@ -177,7 +185,7 @@ app.whenReady().then(async () => {
     await dragThrough(card, start, line(from, { x: can.x, y: can.y }, 16), { release: false });
     await pause(120);
     const crumpled = card.getBounds();
-    assert.ok(crumpled.width < 120, `crumpled over the can: ${JSON.stringify(crumpled)}`);
+    assert.ok(crumpled.width < 120, `crumpled over the trash: ${JSON.stringify(crumpled)}, the trash ${JSON.stringify(can)}, the card from ${JSON.stringify(b1)}, the window ${JSON.stringify(win.getContentBounds())}`);
     assert.ok(crumpled.x >= can.right, 'the crumpled card sits clear of the can');
     assert.equal(await js(win.webContents, 'document.querySelector("[data-trash]").dataset.trashOver'), '1', 'the can shows it will take the card');
     await shot(card.webContents, 'crumpled-card');
@@ -189,7 +197,7 @@ app.whenReady().then(async () => {
     await until(() => cards(win).length === 0, 'the thrown card goes');
     await until(() => js(win.webContents, 'document.querySelector("[data-trash]").dataset.trash === "full"'), 'the can shows it holds something');
     assert.equal((await db.postIts.trashed())[0].id, cardId, 'thrown away = in the trash, not deleted');
-    await js(win.webContents, 'document.querySelector("[data-trash]").click()');
+    await js(win.webContents, 'document.querySelector("[data-sb-trash]").click()');
     await until(() => js(win.webContents, `!!document.querySelector('[data-restore-post-it="${cardId}"]')`), 'the trash panel lists it');
     assert.match(await js(win.webContents, 'document.querySelector("[data-trash-panel]").textContent'), /deleted in 7 days/);
     await pause(200);
@@ -235,16 +243,15 @@ app.whenReady().then(async () => {
     const rowsNow = async () => JSON.stringify([await db.postIts.list(), await db.postIts.trashed()]);
     const toggleState = () => js(win.webContents, 'document.querySelector("[data-toggle-post-its]").dataset.togglePostIts');
     const toggle = () => js(win.webContents, 'document.querySelector("[data-toggle-post-its]").click()');
-    const place = await js(win.webContents, '(()=>{const n=document.querySelector("[data-add-post-it]").getBoundingClientRect(),t=document.querySelector("[data-toggle-post-its]").getBoundingClientRect();return{right:t.right-n.right,bottom:t.bottom-n.bottom,left:t.left-n.left,top:t.top-n.top}})()');
-    assert.ok(place.left > 0 && place.top > 0 && Math.abs(place.bottom) <= 1, `the toggle sits at the note's lower right: ${JSON.stringify(place)}`);
+    assert.equal(await js(win.webContents, '!!document.querySelector("[data-sb-foot] [data-toggle-post-its]")'), true, 'the toggle is the sidebar\'s foot');
     const word = () => js(win.webContents, 'document.querySelector("[data-toggle-post-its]").textContent');
-    assert.equal(await word(), 'Hide', 'plain text naming what a click does');
+    assert.equal(await word(), 'Hide stickies', 'plain words naming what a click does');
     const saved = await rowsNow(), count = cards(win).length;
     assert.equal(await toggleState(), 'shown');
     await toggle();
     await until(() => cards(win).every((v) => !v.getVisible()), 'hide takes every card out of sight');
     assert.equal(await toggleState(), 'hidden');
-    assert.equal(await word(), 'Show');
+    assert.equal(await word(), 'Show stickies');
     await pause(300);
     assert.equal(await rowsNow(), saved, 'hiding writes, creates and deletes nothing');
     assert.equal(cards(win).length, count, 'hidden cards keep their views');
@@ -261,8 +268,7 @@ app.whenReady().then(async () => {
     assert.equal(await rowsNow(), reopened, 'showing writes, creates and deletes nothing');
     await toggle();
     await until(() => !card.getVisible(), 'hidden again');
-    const add = await center(win.webContents, '[data-add-post-it]');
-    await click(win.webContents, add.x, add.y);
+    await newPostIt(win);
     await until(() => cards(win).length === count + 1 && cards(win).every((v) => v.getVisible()), 'making a post-it while hidden shows them all');
     await until(async () => (await toggleState()) === 'shown', 'the toggle follows');
     console.log('PASS show/hide: every card out of sight and back, no row touched; a new post-it shows them again');

@@ -137,10 +137,10 @@ const LAYER_CSS = `
 [data-pdf] .pdf-text span[role="img"]{user-select:none;cursor:default}
 [data-pdf][data-pinching] .pdf-text{display:none}
 [data-pdf]{overflow-x:scroll!important}
-[data-pdf]::-webkit-scrollbar{width:10px;height:10px;background:#f2f2f2}
-[data-pdf]::-webkit-scrollbar-thumb{background:#d0d0d0;border-radius:5px;border:2px solid #f2f2f2}
+[data-pdf]::-webkit-scrollbar{width:10px;height:10px;background:#fff}
+[data-pdf]::-webkit-scrollbar-thumb{background:#d0d0d0;border-radius:5px;border:2px solid #fff}
 [data-pdf]::-webkit-scrollbar-thumb:hover{background:#b5b5b5}
-[data-pdf]::-webkit-scrollbar-corner{background:#f2f2f2}
+[data-pdf]::-webkit-scrollbar-corner{background:#fff}
 [data-pdf][data-space],[data-pdf][data-space] *{cursor:grab!important}
 [data-pdf][data-panning],[data-pdf][data-panning] *{cursor:grabbing!important}
 [data-pdf] [data-grip]{cursor:grab}
@@ -150,7 +150,7 @@ const LAYER_CSS = `
 [data-pdf][data-dragging],[data-pdf][data-dragging] *{cursor:grabbing!important;user-select:none!important}
 [data-pdf][data-blank]:not([data-panning]),[data-pdf][data-blank]:not([data-panning]) :not([data-notes],[data-notes] *){cursor:grab!important}
 [data-pdf][data-neartext] .pdf-text,[data-pdf][data-neartext] .pdf-text .endOfContent{cursor:text!important}
-[data-pdf] [data-box] button{border:0;background:transparent;padding:2px 6px;border-radius:5px;font:12px/1.4 var(--font-sans);color:#4d4d4d;cursor:pointer;white-space:nowrap}
+[data-pdf] [data-box] button{border:0;background:transparent;padding:2px 6px;border-radius:5px;font:13px/1.4 var(--font-sans);color:#4d4d4d;cursor:pointer;white-space:nowrap}
 [data-pdf] [data-box] button:hover{background:#f2f2f2}
 [data-pdf] [data-box] [data-ask-body],[data-pdf] [data-box] [data-run-body]{user-select:text;cursor:text}
 [data-pdf] [data-box] [data-ask-body] p,[data-pdf] [data-box] [data-run-body] p{margin:0 0 6px}
@@ -172,7 +172,7 @@ const FADE = 36;
 const fadeStyle = (side) => {
   const to = { left: 'to right', right: 'to left', up: 'to bottom', down: 'to top' }[side];
   const at = side === 'left' ? { left: 0, top: 0, bottom: BAR_SIDE, width: FADE } : side === 'right' ? { right: BAR_SIDE, top: 0, bottom: BAR_SIDE, width: FADE } : side === 'up' ? { top: 0, left: 0, right: BAR_SIDE, height: FADE } : { bottom: BAR_SIDE, left: 0, right: BAR_SIDE, height: FADE };
-  return { position: 'absolute', ...at, pointerEvents: 'none', zIndex: 4, background: `linear-gradient(${to}, rgba(250,250,250,.96), rgba(250,250,250,0))` };
+  return { position: 'absolute', ...at, pointerEvents: 'none', zIndex: 4, background: `linear-gradient(${to}, rgba(255,255,255,.96), rgba(255,255,255,0))` };
 };
 const SIDES = ['left', 'right', 'up', 'down'];
 const NO_OFF = { left: 0, right: 0, up: 0, down: 0 };
@@ -184,6 +184,7 @@ const BOX_BG = 'transparent';
 const BOX_LOOK = `position:absolute;box-sizing:border-box;border:1px solid transparent;border-radius:8px;background:${BOX_BG};pointer-events:auto`;
 const GRIP_CSS = 'height:12px;display:flex;align-items:center;justify-content:center';
 const GRIP_BAR = '<span style="width:22px;height:3px;border-radius:2px;background:#d9d9d9"></span>';
+const REVEAL_PAD = 16; // px a card is kept from the pane's edges: its widest (paneFit), and scrolled into view (revealCard)
 const REMOVED_MS = 5000; // how long "Highlight removed · Undo" stays
 const TOAST = { position: 'absolute', left: '50%', bottom: 60, transform: 'translateX(-50%)', zIndex: 6, display: 'flex', alignItems: 'center', gap: 4, height: 30, boxSizing: 'border-box', padding: '0 4px 0 12px', background: '#171717', borderRadius: 8, font: '400 12.5px/1 var(--font-sans)', color: '#fff', whiteSpace: 'nowrap', boxShadow: '0 2px 8px rgba(0,0,0,.12)' };
 const TOAST_UNDO = { flex: 'none', height: 22, padding: '0 8px', border: 0, borderRadius: 5, background: 'transparent', font: '500 12.5px/1 var(--font-sans)', color: '#fff', cursor: 'pointer' };
@@ -218,12 +219,33 @@ function rangeText(range) {
   }
   return out;
 }
+// A range's client rects, its text's alone (2026-10-08): each text node it takes in measured on its own, one of only
+// white space skipped. The rects of the elements it takes in whole, and a lone space's sliver past the end of a line,
+// were drawn as thin vertical lines. With no text in it, the range's own rects.
+function textRects(range) {
+  const root = range.commonAncestorContainer, out = [];
+  const nodes = root.nodeType === Node.TEXT_NODE ? [root] : [];
+  if (!nodes.length) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) if (range.intersectsNode(node)) nodes.push(node);
+  }
+  for (const node of nodes) {
+    const from = node === range.startContainer ? range.startOffset : 0, to = node === range.endContainer ? range.endOffset : node.data.length;
+    if (to <= from || !node.data.slice(from, to).trim()) continue;
+    const part = document.createRange();
+    part.setStart(node, from); part.setEnd(node, to);
+    out.push(...part.getClientRects());
+  }
+  return out.length ? out : [...range.getClientRects()];
+}
 const SVG = 'http://www.w3.org/2000/svg';
 // A note's handwriting, the same in its field and shown as text. Still Caveat (MATH-15, 2026-10-06), set larger: its
 // x-height is small (0.36 em), so at 17px it read smaller than the paper's own text; 20px brings it near the body's,
 // a little tracking keeps its letters apart, and the ink is a touch softer than black. Line height 1.2 (notes are short).
+// Larger again on 2026-10-08 (Hudson: "the font of annotations should be larger"): 24px, and an answer's 15px (ANSWER_FONT).
 const NOTE_INK = '#1f2633';
-const NOTE_LOOK = `pointer-events:auto;padding:0 6px;font:500 20px/1.2 'Caveat',cursive;letter-spacing:.2px;color:${NOTE_INK};-webkit-font-smoothing:antialiased;transition:opacity 120ms,background 120ms`;
+const ANSWER_FONT = 'font:15px/1.55 var(--font-sans)'; // an answer, and one being written, in its card (13px until 2026-10-08)
+const NOTE_LOOK = `pointer-events:auto;padding:0 6px;font:500 24px/1.2 'Caveat',cursive;letter-spacing:.2px;color:${NOTE_INK};-webkit-font-smoothing:antialiased;transition:opacity 120ms,background 120ms`;
 
 // An answer as its box draws it (MATH-27): a paragraph a line, with what Bart was told a box may hold (bold, italic,
 // code, links), and a list's or a heading's mark taken off should one come anyway. answerParas: each paragraph's inside.
@@ -332,7 +354,7 @@ export default class PaperView extends React.Component {
     this.onBlur = () => { this.pointerIsDown = false; this.endSelecting(); this.holdSpace(false); };
     this.onKeyUp = (e) => { if (e && e.code === 'Space') this.holdSpace(false); if (!this.pointerIsDown) this.endSelecting(); };
     this.onSelectionChange = () => this.trackSelecting();
-    this.onKeyCapture = (e) => { if (this.spaceKey(e) || this.pendingSelKey(e) || this.undoKey(e) || this.markKey(e)) e.stopPropagation(); };
+    this.onKeyCapture = (e) => { if (this.spaceKey(e) || this.copyKey(e) || this.pendingSelKey(e) || this.undoKey(e) || this.markKey(e)) e.stopPropagation(); };
     this.onWheel = (e) => this.pinch(e);
     this.onScroll = () => {
       if (this.state.mention) this.closeMention();
@@ -1257,7 +1279,7 @@ export default class PaperView extends React.Component {
       const text = sel.toString();
       const parts = selectionParts(cut.map(({ page, layer, range: part }) => {
         const box = layer.getBoundingClientRect();
-        const rects = [...part.getClientRects()].filter((r) => r.width > 1 && r.height > 1)
+        const rects = textRects(part).filter((r) => r.width > 1 && r.height > 1)
           .map((r) => ({ x: (r.left - box.left) / css, y: (r.top - box.top) / css, w: r.width / css, h: r.height / css }));
         return { page, rects, width: box.width / css, text: cut.length > 1 ? rangeText(part) : text, u: this.geom(page).pageW };
       }));
@@ -1335,7 +1357,7 @@ export default class PaperView extends React.Component {
     this.clearPending();
     const y = clamp(at.y, 0, g.pageH);
     const m = this.addMark({ page: at.n, rects: [], side: null, y, text: '' }, '', { x: at.x, y });
-    requestAnimationFrame(() => { const ta = this.find1(`textarea[data-mark="${m.id}"]`); if (ta) ta.focus(); });
+    requestAnimationFrame(() => { const ta = this.find1(`textarea[data-mark="${m.id}"]`); if (ta) { ta.focus({ preventScroll: true }); this.revealCard(m.id); } });
   }
   // The cursor for where the pointer is (onHover): grab over blank space (LAYER_CSS data-blank), text on a page near its
   // text (data-neartext), the page's own elsewhere. Left alone while a drag of any kind is under way.
@@ -1462,6 +1484,22 @@ export default class PaperView extends React.Component {
     return true;
   }
 
+  // ⌘C (or Ctrl+C) with nothing else selected and nothing having the keyboard (2026-10-08): a selection on the page is
+  // taken off the page once the pointer is up (it is pending, see pdfMouseUp), so the app's Copy found nothing. Its text
+  // is copied, else, after a press in this pane, the passage of the highlight in focus.
+  copyKey(e) {
+    if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || String(e.key).toLowerCase() !== 'c' || !this.keyFree(e.target)) return false;
+    const sel = getSelection();
+    if (sel && !sel.isCollapsed) return false;
+    const found = !this.pendingSel && this.focusId && this.downHere ? this.findMark(this.focusId) : null;
+    const text = this.pendingSel ? this.pendingSel.text : found ? passageOf(this.marks, found.m) : '';
+    if (!String(text || '').trim()) return false;
+    e.preventDefault();
+    const copy = this.props.onCopyText || ((t) => navigator.clipboard.writeText(t));
+    Promise.resolve().then(() => copy(text)).catch(() => {});
+    return true;
+  }
+
   pendingSelKey(e) {
     const p = this.pendingSel; if (!p) return false;
     if (!this.keyFree(e.target)) return false;
@@ -1470,7 +1508,10 @@ export default class PaperView extends React.Component {
     if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
       e.preventDefault();
       const m = this.addMark(p, e.key); this.clearPending();
-      requestAnimationFrame(() => { const ta = m && this.find1(`textarea[data-mark="${m.id}"]`); if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } });
+      requestAnimationFrame(() => {
+        const ta = m && this.find1(`textarea[data-mark="${m.id}"]`);
+        if (ta) { ta.focus({ preventScroll: true }); ta.setSelectionRange(ta.value.length, ta.value.length); this.revealCard(m.id); }
+      });
       return true;
     }
     return false;
@@ -1706,10 +1747,11 @@ export default class PaperView extends React.Component {
     if (m.pos && !(m.rects || []).length) {
       if (this.textDrawn(page) || !this.freeW.has(m.id)) {
         const at = placeOf(m.pos, G, u);
-        width = Math.max(120, Math.min(this.freeWidth(page, at.left, at.top + POS_DY, 22), NOTE_W));
+        width = Math.max(120, Math.min(this.freeWidth(page, at.left, at.top + POS_DY, 29), NOTE_W));
         if (this.textDrawn(page)) this.freeW.set(m.id, width);
       } else width = this.freeW.get(m.id);
     }
+    width = Math.min(width, this.paneFit(page)); // never wider than the pane can show
     // At most that wide, else only as wide as what it holds (2026-10-06, David: notes ran long, and one on the left of
     // its page sat far from the text). A note being typed in keeps the full width to type into.
     const typing = m.note != null && (this.editing === m.id || !String(m.note).trim() || !this.showsNotes());
@@ -1772,16 +1814,35 @@ export default class PaperView extends React.Component {
     }
     // the model that wrote it (a.meta) is kept but not shown (MATH-70 build 3)
     const lib = { libName: (id) => this.libName(id) }, asked = askedByNote(a.question, m.note) ? '' : String(a.question || '');
-    sec.style.cssText = `${line}flex:none;display:flex;flex-direction:column;padding-top:${divided ? 8 : 0}px;font:13px/1.55 var(--font-sans);color:#171717`;
+    sec.style.cssText = `${line}flex:none;display:flex;flex-direction:column;padding-top:${divided ? 8 : 0}px;${ANSWER_FONT};color:#171717`;
     sec.innerHTML = (asked ? `<div title="${esc(asked)}" style="flex:none;padding:0 12px 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8f8f8f">${esc(asked)}</div>` : '')
-      + `<div data-ask-body="1" style="flex:none;max-height:${this.boxMaxHeight()}px;overflow:auto;padding:0 12px 2px;overflow-wrap:anywhere">${answerHtml(a.answer, lib)}</div>`
+      + `<div data-ask-body="1" style="flex:none;max-height:${this.boxMaxHeight(page)}px;overflow:auto;padding:0 12px 2px;overflow-wrap:anywhere">${answerHtml(a.answer, lib)}</div>`
       + '<div style="flex:none;display:flex;flex-wrap:wrap;gap:2px;padding:2px 6px 4px">'
       + (this.props.onContinueAsk ? '<button type="button" data-act="continue">Continue in workspace</button>' : '')
       + (this.props.onCopyText ? '<button type="button" data-act="copy">Copy</button>' : '')
       + '<button type="button" data-act="delete">Delete</button><button type="button" data-act="collapse">Collapse</button></div>';
     return sec;
   }
-  boxMaxHeight() { const host = this.host.current; return Math.max(140, Math.round((host && host.clientHeight ? host.clientHeight : 600) * 0.4)); }
+  // In desk px, so that on screen it is 40% of the pane's height at any zoom (the card is scaled by it: 2026-10-08).
+  boxMaxHeight(page) { const host = this.host.current; return Math.round(Math.max(140, (host && host.clientHeight ? host.clientHeight : 600) * 0.4) / (this.geom(page).k || 1)); }
+  // The widest a card on page n may be, desk px, to be seen whole in the pane (2026-10-08, Hudson: "the annotation text
+  // should fit to the window of the stager"): the pane's width less REVEAL_PAD each side, at the page's zoom.
+  paneFit(page) {
+    const host = this.host.current;
+    return host && host.clientWidth ? Math.max(140, (host.clientWidth - 2 * REVEAL_PAD) / (this.geom(page).k || 1)) : Infinity;
+  }
+  // Mark id's card scrolled into the pane, by as little as will do (2026-10-08): a new note, an ask sent from it, an answer
+  // landing in it. One bigger than the pane shows its top-left. `seen`: only when some of it is in view already, so an
+  // answer landing while the paper is read elsewhere does not take the view there.
+  revealCard(id, seen = false) {
+    const host = this.host.current, el = id && this.find1(`[data-box-mark="${id}"]`);
+    if (!host || !el) return;
+    const view = this.viewRect(), r = el.getBoundingClientRect();
+    if (seen && (r.right <= view.left || r.left >= view.right || r.bottom <= view.top || r.top >= view.bottom)) return;
+    const along = (lo, hi, vLo, vHi) => (hi - lo > vHi - vLo - 2 * REVEAL_PAD || lo < vLo + REVEAL_PAD ? lo - vLo - REVEAL_PAD : hi > vHi - REVEAL_PAD ? hi - vHi + REVEAL_PAD : 0);
+    host.scrollLeft += along(r.left, r.right, view.left, view.right);
+    host.scrollTop += along(r.top, r.bottom, view.top, view.bottom);
+  }
 
   askClick(ev, m, a, page) {
     const link = ev.target.closest && ev.target.closest('a[href]');
@@ -1818,7 +1879,7 @@ export default class PaperView extends React.Component {
   // Bart is doing, with a spinner, and Stop; ▸ shows its steps; the answer comes in once it is writing. A failure says
   // why, with × to close it. Made once; each change of what Bart is doing fills it in place (fillRun).
   runBox(p, page, divided = false) {
-    const box = makeEl('div', `${divided ? `${DIVIDER};` : ''}flex:none;display:flex;flex-direction:column;padding-top:${divided ? 8 : 0}px;font:13px/1.55 var(--font-sans);color:#171717`, { askRun: p.askId });
+    const box = makeEl('div', `${divided ? `${DIVIDER};` : ''}flex:none;display:flex;flex-direction:column;padding-top:${divided ? 8 : 0}px;${ANSWER_FONT};color:#171717`, { askRun: p.askId });
     box.onmousedown = (ev) => ev.stopPropagation();
     box.onclick = (ev) => this.runClick(ev, p.askId, page);
     const steps = makeEl('div', 'display:none;flex:none;padding:0 6px 4px', { runSteps: '1' });
@@ -1828,8 +1889,8 @@ export default class PaperView extends React.Component {
       makeEl('div', 'flex:none;padding:0 12px 6px;color:#8f8f8f;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', { runQuestion: '1' }),
       makeEl('div', 'display:none;flex:none;padding:0 12px 8px;color:#c4372d;overflow-wrap:anywhere', { runError: '1' }),
       steps,
-      makeEl('div', 'display:none;flex:none;padding:0 12px 6px;font-size:12px;line-height:1.7;color:#8f8f8f', { runLog: '1' }),
-      makeEl('div', `display:none;flex:none;max-height:${this.boxMaxHeight()}px;overflow:auto;padding:0 12px 8px;color:#8f8f8f;overflow-wrap:anywhere`, { runBody: '1' }),
+      makeEl('div', 'display:none;flex:none;padding:0 12px 6px;font-size:13px;line-height:1.7;color:#8f8f8f', { runLog: '1' }),
+      makeEl('div', `display:none;flex:none;max-height:${this.boxMaxHeight(page)}px;overflow:auto;padding:0 12px 8px;color:#8f8f8f;overflow-wrap:anywhere`, { runBody: '1' }),
     );
     this.fillRun(box, p);
     return box;
@@ -1907,8 +1968,13 @@ export default class PaperView extends React.Component {
     const now = Array.isArray(this.props.pendingAsks) ? this.props.pendingAsks : [];
     const pages = new Set([...before, ...now].filter(Boolean).map((p) => p.page));
     const ids = (list, page) => list.filter((p) => p && p.page === page).map((p) => `${p.markId}/${p.askId}`).join(',');
+    const had = new Set(before.filter(Boolean).map((p) => p.askId));
     for (const page of pages) {
-      if (ids(before, page) !== ids(now, page)) { this.renderMarks(page); continue; }
+      if (ids(before, page) !== ids(now, page)) {
+        this.renderMarks(page);
+        for (const p of now) if (p && p.page === page && p.askId && !had.has(p.askId)) this.revealCard(p.markId, true); // an ask just sent
+        continue;
+      }
       let filled = false;
       for (const p of this.pendingOn(page)) {
         const box = this.find1(`[data-ask-run="${p.askId}"]`);
@@ -1926,6 +1992,7 @@ export default class PaperView extends React.Component {
     m.asks = [...(m.asks || []), entry];
     this.reframe(); // under a moved box it holds the desk wide, as its box being written did
     this.renderMarks(page);
+    this.revealCard(markId, true);
     this.scheduleSave();
     return true;
   }
@@ -2370,7 +2437,7 @@ export default class PaperView extends React.Component {
           </>
         ) : null}
         <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          <div ref={this.host} data-pdf="1" style={{ flex: 1, minHeight: 0, overflow: 'auto', border: 0, borderTop: title ? '1px solid #eaeaea' : 0, borderRadius: 0, background: '#fafafa', padding: 0 }} />
+          <div ref={this.host} data-pdf="1" style={{ flex: 1, minHeight: 0, overflow: 'auto', border: 0, borderTop: title ? '1px solid #eaeaea' : 0, borderRadius: 0, background: '#fff', padding: 0 }} />
           {note
             ? <span style={{ position: 'absolute', left: 0, right: 0, top: 14, textAlign: 'center', font: '12px/1.5 var(--font-sans)', color: '#8f8f8f', pointerEvents: 'none' }}>{note}</span>
             : null}

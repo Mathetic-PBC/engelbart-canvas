@@ -60,7 +60,7 @@ function scripted(steps) {
   return {
     calls,
     async turn(input) {
-      calls.push({ message: input.message, session: input.session, cwd: input.task.worktree, system: input.system, policy: input.policy });
+      calls.push({ message: input.message, session: input.session, cwd: input.task.worktree, system: input.system, policy: input.policy, engelbart: input.engelbart });
       const step = steps.shift();
       if (!step) throw Object.assign(new Error('no more steps'), { kind: 'failed' });
       const out = typeof step === 'function' ? await step(input) : step;
@@ -141,14 +141,25 @@ test('a turn ends on NEEDS YOU (last line), ESCALATE (a quick task), or done', (
   assert.match(loadBuildPrompt(ctx.dataRoot, { quick: true }), /ESCALATE:/);
 });
 
-test('the policy: the project\'s folders can be read, never written; nothing else is granted', () => {
+test('the policy (2026-10-07): notes written, saved copies, papers and Engelbart\'s records never edited, the person\'s own setup, no computer use', () => {
   const project = { dir: path.join(ctx.dataRoot, 'p') };
-  const policy = buildPolicy({ project, dataRoot: ctx.dataRoot });
-  assert.deepEqual(policy.readOnly, [project.dir, path.join(ctx.dataRoot, 'assets')]);
-  assert.deepEqual([policy.mcpServers, policy.computerUse], [[], false]);
-  const deny = claudeSettings(policy).permissions.deny;
-  assert.ok(deny.includes(`Edit(/${project.dir}/**)`) && deny.includes(`Write(/${project.dir}/**)`));
+  const assets = path.join(ctx.dataRoot, 'assets');
+  const paper = path.join(homeDir, 'Downloads', 'paper.pdf');
+  const policy = buildPolicy({ project, dataRoot: ctx.dataRoot, papers: [paper, paper], gitDir: '/repo/.git' });
+  assert.deepEqual(policy.folders, [project.dir, assets]);
+  assert.deepEqual(policy.writable, [project.dir]);
+  assert.deepEqual(policy.kept, [assets, path.join(project.dir, 'assets')]);
+  assert.deepEqual(policy.papers, [paper]);
+  assert.deepEqual([policy.gitDir, policy.personal, policy.subagents, policy.computerUse], ['/repo/.git', true, true, false]);
+  const settings = claudeSettings(policy);
+  const deny = settings.permissions.deny;
+  assert.deepEqual(settings.permissions.allow, ['mcp__engelbart'], 'Engelbart\'s own tools need no classifier');
+  for (const tool of ['Edit', 'Write', 'NotebookEdit']) {
+    for (const rule of [`/${assets}/**`, `/${path.join(project.dir, 'assets')}/**`, `/${paper}`, `/${path.join(project.dir, 'builds')}/**`, `/${path.join(project.dir, 'notes.pglite')}/**`, `/${path.join(project.dir, 'project.json')}`, `/${path.join(project.dir, '**', 'meta.json')}`, `/${path.join(ctx.dataRoot, 'library.pglite')}/**`]) assert.ok(deny.includes(`${tool}(${rule})`), `${tool}(${rule})`);
+  }
+  assert.ok(!deny.includes(`Edit(/${project.dir}/**)`), 'notes and workspaces can be written');
   assert.ok(!deny.some((rule) => rule.includes('worktrees')), 'the worktrees under the data root stay writable');
+  assert.ok(deny.includes('mcp__computer-use'));
 });
 
 /* ---------------------------------------------------------------------- lifecycle */
@@ -185,7 +196,8 @@ test('Build: the record, the frozen context, a worktree from the last commit, a 
   assert.equal(agent.calls[0].message, context);
   assert.equal(agent.calls[0].session, null);
   assert.equal(agent.calls[0].cwd, task.worktree);
-  assert.match(context, /your working copy \(make every change here\): .*worktrees/);
+  assert.match(context, /your working copy \(make every change to the code here\): .*worktrees/);
+  assert.match(context, /notes and workspaces \(you may write here; the engelbart tools add to the library\): /);
   assert.match(context, /<workspace name="Feature">\nBuild @\[Spec\] now\.\n\n<file name="Spec" type="md" tags="note"[^>]*>\nThe spec says: add b\.txt\.\n<\/file>/);
   assert.match(context, /<attached>\n<file name="A paper" type="pdf"/);
   assert.ok(!/<history/.test(context), 'no archived version yet');
@@ -197,6 +209,66 @@ test('Build: the record, the frozen context, a worktree from the last commit, a 
   assert.ok(spec.id);
   const seen = await builds.review(ctx, project.id, task.id);
   assert.deepEqual(seen.files.map((f) => `${f.status} ${f.path}`), ['A b.txt']);
+});
+
+test('a turn\'s reach (2026-10-07): Engelbart\'s tools over its bridge; a paper the agent deleted put back and a branch it moved held, both said on the card', async () => {
+  const { project, workspace } = await scene();
+  const paperFile = path.join(homeDir, 'reach-paper.pdf');
+  write(paperFile, '%PDF-1.4\n%%EOF\n');
+  const paper = await ctx.libraryDb.insert({ id: '6f7f8f9f-0000-4000-8000-0000000000aa', name: 'Reach paper', type: 'pdf', path: paperFile, project_id: project.id });
+  let saved = null;
+  const agent = scripted([async ({ task, policy, engelbart }) => {
+    // what it was given: the repository whose history is Engelbart's, the paper for the edit tools' rules, the bridge
+    assert.equal(policy.gitDir, fs.realpathSync(path.join(task.repo, '.git')));
+    assert.ok(policy.papers.includes(paperFile));
+    const response = await fetch(engelbart.url, { method: 'POST', headers: { authorization: `Bearer ${engelbart.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'save_file', args: { name: 'Build notes', content: '# What I found' } }) });
+    saved = JSON.parse((await response.json()).content[0].text);
+    // what it should not do: delete a paper, commit, leave its branch
+    fs.rmSync(paperFile);
+    write(path.join(task.worktree, 'c.txt'), 'sea\n');
+    sh(task.worktree, 'add', 'c.txt');
+    sh(task.worktree, 'commit', '-qm', 'the agent\'s own commit');
+    sh(task.worktree, 'checkout', '-q', '-b', 'side');
+    write(path.join(task.worktree, 'd.txt'), 'dee\n');
+    return 'Did it.';
+  }]);
+  const { builds, raw } = manager(agent);
+  const { id } = await builds.start(ctx, project.id, { workspaceId: workspace.id });
+  const task = await settled(project, id);
+  assert.equal(task.status, 'review');
+  assert.equal(fs.readFileSync(paperFile, 'utf8'), '%PDF-1.4\n%%EOF\n', 'the paper is back');
+  assert.equal(sh(task.worktree, 'rev-parse', '--abbrev-ref', 'HEAD'), task.branch, 'back on its branch');
+  assert.equal(sh(task.worktree, 'rev-parse', 'HEAD^'), task.baseSha, 'one checkpoint on where it started: the agent\'s commit folded in');
+  assert.deepEqual(sh(task.worktree, 'show', '--name-only', '--format=', 'HEAD').split('\n').sort(), ['c.txt', 'd.txt']);
+  const said = task.messages.filter((m) => m.role === 'engelbart').map((m) => m.text).join('\n');
+  assert.match(said, /The agent deleted “Reach paper” from the library\. Engelbart put it back\./);
+  assert.match(said, /The agent left the Build's branch/);
+  assert.match(said, /The agent moved the Build's branch/);
+  // what it saved is a note of the project, linked to the workspace
+  assert.equal(saved.name, 'Build notes');
+  assert.equal(fs.readFileSync(saved.path, 'utf8'), '# What I found');
+  assert.ok(projects.findWorkspace(ctx, project.id, workspace.id).workspace.context.includes(saved.id));
+  assert.ok(paper.id && raw);
+});
+
+test('Stop while a turn is being made ready (the library kept aside, Engelbart\'s tools opened): its agent never starts, and the Build is stopped (2026-10-07)', async () => {
+  const { project, workspace } = await scene();
+  const agent = scripted(['First.', 'Never said.']);
+  const { builds } = manager(agent);
+  const { id } = await builds.start(ctx, project.id, { workspaceId: workspace.id });
+  assert.equal((await settled(project, id)).status, 'review');
+  let open;
+  const gate = new Promise((resolve) => { open = resolve; });
+  const slow = { ...ctx, libraryDb: { ...ctx.libraryDb, list: async () => { await gate; return ctx.libraryDb.list(); } } };
+  await builds.reply(slow, project.id, id, 'Again.');
+  let stopped = false;
+  for (let i = 0; i < 250 && !stopped; i += 1) { stopped = builds.stop(project.id, id); if (!stopped) await new Promise((resolve) => setTimeout(resolve, 5)); }
+  assert.ok(stopped);
+  open();
+  let task = null;
+  for (let i = 0; i < 500 && (!task || task.status !== 'stopped'); i += 1) { await new Promise((resolve) => setTimeout(resolve, 20)); task = store.readTask(projects.findProject(ctx, project.id), id); }
+  assert.equal(task.status, 'stopped');
+  assert.equal(agent.calls.length, 1, 'the agent was never started for the reply');
 });
 
 test('NEEDS YOU, a reply in the same session, a reply that waits for the turn, Stop', async () => {
@@ -225,7 +297,8 @@ test('NEEDS YOU, a reply in the same session, a reply that waits for the turn, S
   assert.equal(task.status, 'review');
   assert.deepEqual(task.messages.filter((m) => m.role !== 'engelbart').map((m) => `${m.role}: ${m.text}`), ['agent: Half done.', 'you: Green.', 'agent: Painted it green.', 'you: Also the border.', 'agent: Border too.']);
   await builds.reply(ctx, project.id, id, 'One more.');
-  await new Promise((resolve) => setTimeout(resolve, 60));
+  // once the agent works (a turn is made ready first: the library kept aside, Engelbart's tools opened; 2026-10-07)
+  for (let i = 0; i < 250 && agent.calls.length < 4; i += 1) await new Promise((resolve) => setTimeout(resolve, 20));
   assert.ok(builds.stop(project.id, id));
   task = await settled(project, id);
   assert.equal(task.status, 'stopped');
@@ -940,7 +1013,8 @@ test('the real runner: command lines for both CLIs, the worktree as the working 
   const calls = [];
   const run = (shell, args, options, callback) => {
     const command = args[args.length - 1];
-    calls.push({ command, cwd: options.cwd, env: options.env, input: fs.readFileSync(options.env.ENGELBART_BUILD_INPUT, 'utf8'), settings: options.env.ENGELBART_BUILD_SETTINGS ? fs.readFileSync(options.env.ENGELBART_BUILD_SETTINGS, 'utf8') : null });
+    const read = (file) => (file ? fs.readFileSync(file, 'utf8') : null);
+    calls.push({ command, cwd: options.cwd, env: options.env, input: read(options.env.ENGELBART_BUILD_INPUT), settings: read(options.env.ENGELBART_BUILD_SETTINGS), mcp: read(options.env.ENGELBART_BUILD_MCP) });
     if (/codex/.test(command)) { fs.writeFileSync(options.env.ENGELBART_BUILD_OUTPUT, 'codex did it'); callback(null, '{"type":"thread.started","thread_id":"01a0bc2d-7c18-77d2-8b21-3cc7e942cbcc"}\n'); } else callback(null, `${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'claude did it' })}\n`);
     return null;
   };
@@ -951,7 +1025,11 @@ test('the real runner: command lines for both CLIs, the worktree as the working 
   const policy = buildPolicy({ project: { dir: path.join(ctx.dataRoot, 'p') }, dataRoot: ctx.dataRoot });
   const claude = await runner.turn({ task: { id: 'abcdef0123', provider: 'anthropic', modelId: 'opus', effort: 'high', worktree }, message: 'do it', system: 'SYSTEM', policy });
   assert.equal(claude.text, 'claude did it');
-  assert.match(calls[0].command, /^exec claude -p --output-format stream-json --verbose --include-partial-messages --session-id "\$ENGELBART_BUILD_SESSION" --restricted --strict-mcp-config --tools "Read,Grep,Glob,Edit,Write,Bash,WebSearch,WebFetch" --permission-mode auto --permission-prompts none --add-dir "\$ENGELBART_BUILD_READ0" --add-dir "\$ENGELBART_BUILD_READ1" --settings "\$ENGELBART_BUILD_SETTINGS" --model "\$ENGELBART_BUILD_MODEL" --effort high --append-system-prompt-file "\$ENGELBART_BUILD_PROMPT" < "\$ENGELBART_BUILD_INPUT"$/);
+  // 2026-10-07: the person's settings, hooks and MCP servers (no --restricted, no --strict-mcp-config), subagents, no Chrome
+  assert.match(calls[0].command, /^exec claude -p --output-format stream-json --verbose --include-partial-messages --session-id "\$ENGELBART_BUILD_SESSION" --setting-sources user,project,local --no-chrome --tools "Read,Grep,Glob,Edit,Write,Bash,WebSearch,WebFetch,Agent" --permission-mode auto --permission-prompts none --add-dir "\$ENGELBART_BUILD_DIR0" --add-dir "\$ENGELBART_BUILD_DIR1" --settings "\$ENGELBART_BUILD_SETTINGS" --model "\$ENGELBART_BUILD_MODEL" --effort high --append-system-prompt-file "\$ENGELBART_BUILD_PROMPT" < "\$ENGELBART_BUILD_INPUT"$/);
+  assert.deepEqual([calls[0].env.ENGELBART_BUILD_DIR0, calls[0].env.ENGELBART_BUILD_DIR1], policy.folders);
+  assert.equal(calls[0].mcp, null, 'no bridge, no engelbart server');
+  assert.ok(!('GIT_CONFIG_PARAMETERS' in calls[0].env), 'no repository named, no git guard');
   assert.equal(calls[0].cwd, worktree);
   assert.equal(calls[0].input, 'do it');
   assert.ok(!('ANTHROPIC_API_KEY' in calls[0].env) && !('OPENAI_API_KEY' in calls[0].env));
@@ -961,9 +1039,11 @@ test('the real runner: command lines for both CLIs, the worktree as the working 
   assert.equal(calls[1].env.ENGELBART_BUILD_SESSION, claude.session);
   const codex = await runner.turn({ task: { id: 'abcdef0123', provider: 'openai', modelId: 'gpt-6-sol', effort: 'high', worktree }, message: 'do it', system: 'SYSTEM', policy });
   assert.deepEqual([codex.text, codex.session], ['codex did it', '01a0bc2d-7c18-77d2-8b21-3cc7e942cbcc']);
-  assert.match(calls[2].command, /^exec codex exec --color never -m "\$ENGELBART_BUILD_MODEL" -c 'model_reasoning_effort="high"' -c 'sandbox_mode="workspace-write"' -c 'approval_policy="on-request"' -c 'approvals_reviewer="auto_review"' -c 'tools\.web_search=true' --json -o/);
+  assert.match(calls[2].command, /^exec codex exec --color never -m "\$ENGELBART_BUILD_MODEL" -c 'model_reasoning_effort="high"' -c 'sandbox_mode="workspace-write"' -c 'approval_policy="on-request"' -c 'approvals_reviewer="auto_review"' -c 'tools\.web_search=true' -c "\$ENGELBART_BUILD_C0" -c "\$ENGELBART_BUILD_C1" .* --json -o/);
   assert.equal(calls[2].env.CODEX_HOME, codexHome);
-  assert.equal(fs.readFileSync(path.join(codexHome, 'AGENTS.md'), 'utf8'), 'SYSTEM');
+  const settings = Object.keys(calls[2].env).filter((key) => /^ENGELBART_BUILD_C\d+$/.test(key)).sort((a, b) => Number(a.slice(18)) - Number(b.slice(18))).map((key) => calls[2].env[key]);
+  assert.deepEqual(settings, ['developer_instructions="SYSTEM"', 'features.multi_agent=true', `sandbox_workspace_write.writable_roots=${JSON.stringify([path.join(ctx.dataRoot, 'p')])}`, 'features.computer_use=false', 'features.browser_use=false', 'features.browser_use_external=false']);
+  assert.ok(!fs.existsSync(path.join(codexHome, 'AGENTS.md')), 'Build\'s prompt is no longer an AGENTS.md: the home is the person\'s');
   await runner.turn({ task: { id: 'abcdef0123', provider: 'openai', modelId: 'gpt-6-sol', effort: 'high', worktree }, message: 'again', session: codex.session, system: 'SYSTEM', policy });
   assert.match(calls[3].command, /^exec codex exec resume "\$ENGELBART_BUILD_SESSION" -m/);
   assert.equal(fs.readdirSync(path.join(homeDir, 'build-runs')).length, 0, 'nothing of a turn stays on disk');
@@ -973,6 +1053,51 @@ test('the real runner: command lines for both CLIs, the worktree as the working 
   stopped.abort();
   await assert.rejects(cut.turn({ task: { id: 'abcdef0123', provider: 'anthropic', modelId: 'opus', effort: 'high', worktree }, message: 'x', system: 'SYSTEM', policy, signal: stopped.signal }), (error) => error.kind === 'stopped' && /^[0-9a-f-]{36}$/.test(error.session));
   await assert.rejects(cut.turn({ task: { id: 'abcdef0123', provider: 'openai', modelId: 'gpt-6-sol', effort: 'high', worktree }, message: 'x', system: 'SYSTEM', policy, signal: stopped.signal }), (error) => error.kind === 'stopped' && error.session === '01a0bc2d-7c18-77d2-8b21-3cc7e942cbcd');
+});
+
+test('the real runner (2026-10-07): Engelbart\'s MCP server, the git guard first on PATH, Codex in the person\'s own home with their computer-use server off', async () => {
+  const personal = path.join(homeDir, 'person-codex');
+  fs.mkdirSync(personal, { recursive: true });
+  fs.writeFileSync(path.join(personal, 'auth.json'), JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'x' } }));
+  fs.writeFileSync(path.join(personal, 'config.toml'), 'model = "gpt-6-sol"\n\n[mcp_servers.computer-use]\ncommand = "/Applications/Codex.app/cu"\n');
+  const calls = [];
+  const run = (shell, args, options, callback) => {
+    const command = args[args.length - 1];
+    const read = (file) => (file ? fs.readFileSync(file, 'utf8') : null);
+    const mcp = read(options.env.ENGELBART_BUILD_MCP);
+    const settings = Object.keys(options.env).filter((key) => /^ENGELBART_BUILD_C\d+$/.test(key)).sort((a, b) => Number(a.slice(18)) - Number(b.slice(18))).map((key) => options.env[key]);
+    const served = settings.find((value) => value.startsWith('mcp_servers.engelbart.args='));
+    const connection = mcp ? read(JSON.parse(mcp).mcpServers.engelbart.args[1]) : served ? read(JSON.parse(served.slice(27))[1]) : null;
+    calls.push({ command, env: options.env, mcp, settings, connection });
+    if (/codex/.test(command)) { fs.writeFileSync(options.env.ENGELBART_BUILD_OUTPUT, 'codex did it'); callback(null, '{"type":"thread.started","thread_id":"01a0bc2d-7c18-77d2-8b21-3cc7e942cbce"}\n'); } else callback(null, `${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'claude did it' })}\n`);
+    return null;
+  };
+  const runDirectory = path.join(homeDir, 'build-runs-reach');
+  const runner = createRunner({ environment: { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir, CODEX_HOME: personal }, runDirectory, run });
+  const worktree = path.join(homeDir, 'wt-reach');
+  fs.mkdirSync(worktree, { recursive: true });
+  const policy = buildPolicy({ project: { dir: path.join(ctx.dataRoot, 'p') }, dataRoot: ctx.dataRoot, gitDir: '/repo/.git' });
+  const engelbart = { url: 'http://127.0.0.1:1/tools', token: 'a'.repeat(64) };
+  await runner.turn({ task: { id: 'abcdef0125', provider: 'anthropic', modelId: 'opus', effort: 'high', worktree }, message: 'do it', system: 'SYSTEM', policy, engelbart });
+  assert.match(calls[0].command, /^PATH="\$ENGELBART_BUILD_GUARD:\$PATH"; exec claude -p .* --setting-sources user,project,local --mcp-config "\$ENGELBART_BUILD_MCP" --no-chrome --tools /);
+  const server = JSON.parse(calls[0].mcp).mcpServers.engelbart;
+  assert.deepEqual([server.command, server.args[0], server.env], [process.execPath, path.join(__dirname, '..', 'src', 'main', 'build', 'engelbart-mcp.cjs'), { ELECTRON_RUN_AS_NODE: '1' }]);
+  assert.deepEqual(JSON.parse(calls[0].connection), engelbart, 'the bridge reaches the server through a file of its own');
+  assert.equal(calls[0].env.ENGELBART_BUILD_GUARD, path.join(runDirectory, 'git-guard', 'bin'));
+  assert.ok(fs.statSync(path.join(calls[0].env.ENGELBART_BUILD_GUARD, 'git')).mode & 0o100);
+  assert.equal(calls[0].env.ENGELBART_BUILD_GIT_DIR, '/repo/.git');
+  assert.match(calls[0].env.GIT_CONFIG_PARAMETERS, /^'includeIf\.gitdir:\/repo\/\.git\.path'='[^']+build\.gitconfig' 'includeIf\.gitdir:\/repo\/\.git\/\*\*\.path'=/);
+  const codex = await runner.turn({ task: { id: 'abcdef0125', provider: 'openai', modelId: 'gpt-6-sol', effort: 'high', worktree }, message: 'do it', system: 'SYSTEM', policy, engelbart });
+  assert.equal(codex.text, 'codex did it');
+  assert.match(calls[1].command, /^PATH="\$ENGELBART_BUILD_GUARD:\$PATH"; exec codex exec --color never /);
+  assert.equal(calls[1].env.CODEX_HOME, personal, 'the person\'s own Codex home: their config, hooks, rules and MCP servers');
+  assert.ok(!fs.existsSync(path.join(personal, 'AGENTS.md')), 'and their AGENTS.md is never written');
+  for (const value of ['developer_instructions="SYSTEM"', 'features.multi_agent=true', 'features.computer_use=false', 'features.browser_use=false', 'mcp_servers.computer-use.enabled=false', `mcp_servers.engelbart.command=${JSON.stringify(process.execPath)}`, 'mcp_servers.engelbart.env={ ELECTRON_RUN_AS_NODE = "1" }']) assert.ok(calls[1].settings.includes(value), value);
+  assert.deepEqual(JSON.parse(calls[1].connection), engelbart);
+  assert.equal(calls[1].env.ENGELBART_BUILD_GIT_DIR, '/repo/.git');
+  assert.deepEqual(fs.readdirSync(runDirectory), ['git-guard'], 'nothing of a turn stays on disk but the guard');
+  fs.writeFileSync(path.join(personal, 'auth.json'), JSON.stringify({ auth_mode: 'apikey', OPENAI_API_KEY: 'sk-never' }));
+  await assert.rejects(runner.turn({ task: { id: 'abcdef0125', provider: 'openai', modelId: 'gpt-6-sol', effort: 'high', worktree }, message: 'x', system: 'SYSTEM', policy }), (error) => error.kind === 'unavailable' && /ChatGPT/.test(error.message));
 });
 
 test('the fake agent (scripted runs) edits its worktree, asks when told to, and stops', async () => {

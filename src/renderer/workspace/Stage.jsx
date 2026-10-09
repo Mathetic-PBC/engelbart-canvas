@@ -1365,7 +1365,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
         )}
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column', background: '#fafafa' }}>
+      <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column', background: pdf ? '#fff' : '#fafafa' }}>
         {finding && <FindCard inputRef={findRef} text={findText} found={matches} onText={setFindText} onStep={(step) => runFind(findText, step)} onClose={closeFind} />}
         {sectionsOn && pdfReady && <SectionsMenu key={tab.id} sections={tab.sections} active={tab.activeSection} below={finding} onPick={pickSection} onClose={closeSections} />}
         {/* a page sits under a band while the find card is open: a native view would cover it */}

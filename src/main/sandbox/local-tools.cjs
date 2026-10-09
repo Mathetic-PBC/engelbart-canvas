@@ -211,7 +211,11 @@ function createSandboxTools({ sandbox, startApp, appStatus, stopApp, appState, i
   return call;
 }
 
-async function openToolBridge(callTool, { secrets = [], signal } = {}) {
+// A tool's answer that is MCP content as it stands (a picture: Connect's browser_screenshot), not a value to wrap as text.
+const MCP_CONTENT = '__mcpContent';
+const mcpContent = (content) => ({ [MCP_CONTENT]: content });
+
+async function openToolBridge(callTool, { secrets = [], signal, maxBody = 128_000 } = {}) {
   signal?.throwIfAborted();
   const token = randomBytes(32).toString('hex');
   const server = http.createServer(async (req, res) => {
@@ -225,11 +229,12 @@ async function openToolBridge(callTool, { secrets = [], signal } = {}) {
       let body = '';
       for await (const chunk of req) {
         body += chunk.toString();
-        if (Buffer.byteLength(body) > 128_000) { reply(413, { error: 'Request too large' }); return; }
+        if (Buffer.byteLength(body) > maxBody) { reply(413, { error: 'Request too large' }); return; }
       }
       signal?.throwIfAborted();
       const { name, args } = JSON.parse(body);
       const value = await callTool(name, args);
+      if (value && Array.isArray(value[MCP_CONTENT])) { reply(200, { content: value[MCP_CONTENT] }); return; }
       reply(200, { content: [{ type: 'text', text: JSON.stringify(redact(value, secrets)) }] });
     } catch (error) {
       const details = error.app || error.dependency_install ? JSON.stringify({ error: String(error.message).slice(-2000), app: error.app,
@@ -244,4 +249,4 @@ async function openToolBridge(callTool, { secrets = [], signal } = {}) {
     close: () => new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); }) };
 }
 
-module.exports = { ROOT, quote, KINDS, HINT_LIMIT, TOOL_DEFINITIONS, repoPath, validateTool, createSandboxTools, openToolBridge };
+module.exports = { ROOT, quote, KINDS, HINT_LIMIT, TOOL_DEFINITIONS, repoPath, validateTool, createSandboxTools, openToolBridge, mcpContent };

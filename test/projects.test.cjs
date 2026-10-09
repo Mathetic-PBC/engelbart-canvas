@@ -241,6 +241,8 @@ test('the trash purges a project a week after it went in: its folder, its librar
   projects.recordEdit(ctx, project.id, workspace.id);
   const kept = await projects.createProject(ctx, 'Not deleted');
   const keptNote = await projects.createNote(ctx, kept.id, { name: 'Stays' });
+  projects.setStarred(ctx, project.id, note.id, true);
+  projects.setStarred(ctx, kept.id, keptNote.id, true);
   await projects.trashProject(ctx, project.id);
 
   const removed = [];
@@ -260,6 +262,8 @@ test('the trash purges a project a week after it went in: its folder, its librar
   assert.equal(project.id in (state.stages || {}), false, 'its Stage tabs are forgotten');
   assert.deepEqual(projects.readStage(ctx, project.id), { active: 0, tabs: [] });
   assert.equal((state.recent || []).some((entry) => entry.projectId === project.id), false);
+  assert.equal(project.id in (state.starred || {}), false, 'its stars are forgotten');
+  assert.deepEqual(projects.readStarred(ctx, kept.id), [keptNote.id], 'another project\'s stay');
   assert.deepEqual(snapshot(code), before, 'the code folder is untouched');
   await assert.rejects(projects.restoreProject(ctx, project.id), /no longer in the trash/, 'a purged project cannot be restored');
 });
@@ -571,6 +575,41 @@ test('where to next: state.json keeps the last three workspaces written in and t
   assert.equal(projects.readNav(ctx).recent.length, 4, 'all four when all four are fresh');
   projects.recordEdit(ctx, project.id, a.id);
   assert.deepEqual(projects.readNav(ctx).recent.map((entry) => entry.name), ['Alpha', 'Delta', 'Gamma', 'Beta']);
+});
+
+test('the sidebar\'s Starred: a project\'s starred library ids in state.json, oldest first, once each; another project\'s are its own (2026-10-07)', async () => {
+  const project = await projects.createProject(ctx, 'Stars');
+  const other = await projects.createProject(ctx, 'Other stars');
+  const [a, b, c] = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222', '33333333-3333-4333-8333-333333333333'];
+  assert.deepEqual(projects.readStarred(ctx, project.id), [], 'none yet');
+  projects.setStarred(ctx, project.id, a, true);
+  projects.setStarred(ctx, project.id, b, true);
+  assert.deepEqual(projects.setStarred(ctx, project.id, a, true), [b, a], 'starred again: last');
+  projects.setStarred(ctx, other.id, c, true);
+  assert.deepEqual(projects.setStarred(ctx, project.id, b, false), [a], 'a star taken off');
+  assert.deepEqual(projects.readStarred(ctx, project.id), [a]);
+  assert.deepEqual(projects.readStarred(ctx, other.id), [c]);
+  const state = JSON.parse(fs.readFileSync(path.join(ctx.dataRoot, 'state.json'), 'utf8'));
+  assert.deepEqual(state.starred[project.id], [a], 'kept beside the views');
+  assert.throws(() => projects.setStarred(ctx, project.id, 'not-an-id', true), /library id/);
+  assert.deepEqual(projects.readStarred(ctx, 'nope'), []);
+  fs.writeFileSync(path.join(ctx.dataRoot, 'state.json'), JSON.stringify({ ...state, starred: { [project.id]: [a, 'junk', a, 7, b] } }));
+  assert.deepEqual(projects.readStarred(ctx, project.id), [a, b], 'what is not an id, and a second star of one, is not read');
+});
+
+test('the tree says when each workspace\'s document was last saved: the sidebar lists the ones worked in last (2026-10-07)', async () => {
+  const project = await projects.createProject(ctx, 'Edited');
+  const top = await projects.createWorkspace(ctx, project.id, { name: 'Top' });
+  const child = await projects.createWorkspace(ctx, project.id, { name: 'Child', parentId: top.id });
+  const before = (await projects.loadProject(ctx, project.id)).workspaces[0];
+  assert.ok(!Number.isNaN(Date.parse(before.edited)), 'made is saved');
+  assert.ok(!Number.isNaN(Date.parse(before.children[0].edited)));
+  const file = path.join(project.dir, 'Top', 'Child', 'workspace.md');
+  const later = new Date(Date.now() + 60_000);
+  fs.utimesSync(file, later, later);
+  const after = (await projects.loadProject(ctx, project.id)).workspaces[0];
+  assert.equal(after.children[0].id, child.id);
+  assert.equal(Math.round(Date.parse(after.children[0].edited) / 1000), Math.round(later.getTime() / 1000), 'its workspace.md\'s time');
 });
 
 test('read-text-file: project-relative, ~/ and absolute paths inside the home directory only', async () => {
