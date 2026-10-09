@@ -73,7 +73,7 @@ test('a folder at a glance: notes per top folder, the daily-notes folder from Ob
   assert.equal(overview.images, 1);
   assert.equal(overview.dailyFolder, 'Journal');
   assert.deepEqual(overview.folders.map((entry) => [entry.name, entry.notes, entry.dated]), [['Journal', 3, 1], ['Research', 2, 0], ['Personal', 1, 0], ['attachments', 0, 0]]);
-  const files = readers.noteFiles(vault, { exclude: ['Journal', 'Personal'] }).map((file) => path.relative(vault, file)).sort();
+  const files = readers.noteFiles(vault, { exclude: ['Journal', 'Personal'] }).map((file) => path.relative(vault, file).split(path.sep).join('/')).sort();
   assert.deepEqual(files, ['Research/Idea.md', 'Research/Other note.md']);
   assert.deepEqual(readers.noteFiles(vault, { include: ['Personal'] }).map((file) => path.basename(file)), ['Secret.md']);
   assert.deepEqual(readers.linksIn(vault).map((link) => [link.url, link.count, link.notes]), [['https://example.org/paper', 1, ['Idea']]]);

@@ -56,12 +56,19 @@ SHA256SUMS-windows.txt and index.html. No real upload: the command is handed to 
     - The reach test's agent compared policy.gitDir with fs.realpathSync. It now uses realpathSync.native on Windows
       (long names, as gitCommonDir gives them). The status assertion now names the task's error.
     - The runner test (already fixed in 3c342a9).
+- 2026-10-09, run 2 (3c342a9): the guard test now ran in Git Bash on Windows through every reading command before
+  `config user.name` (the identity, above); the runner test passed. Run 3 (ff632a0): **macOS green**. Windows: 2
+  left, the same kind: a fixture built with `path.relative` (noteFiles) and memory.cjs's own `~\…` path (now `~/…`).
+  Linux: tests green (1484, 1470 pass, 14 skipped); the packaged app's smoke test passed the window, the terminal and
+  Git, then exited 1 at the quit step without printing its error (Linux may fail; looked at below if it stays).
 
 ### CI runs
 
 | Commit | Run | macOS | Windows | Linux | Notes |
 |---|---|---|---|---|---|
 | 6c96a36 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37958518571 | ✗ 1 test | ✗ 11 tests | ✗ 1 test | the merge; the guard test needs a Git identity; Windows: shown paths, a `?` in a file name, the guard in Git Bash |
+| 3c342a9 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37959774124 | ✗ 1 test | ✗ 10 tests | ✗ 1 test | the guard in Git Bash; the runner test passes on Windows |
+| ff632a0 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37960794781 | ✓ | ✗ 2 tests | ✗ smoke (quit step) | ~/ paths, file names, the guard test's identity |
 
 ## Linux
 

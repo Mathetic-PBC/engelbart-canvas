@@ -83,13 +83,14 @@ function saveMemory(dataRoot, text, { now = () => new Date() } = {}) {
 /**
  * What the coding agents on this Mac keep about the person: Claude Code's user memory (~/.claude/CLAUDE.md) and Codex's
  * (AGENTS.md in its home), clipped. "Memories from ai providers" that live on disk; the web assistants' are asked for.
+ * `file` is shown as ~/…, with forward slashes on Windows too (docs/windows-port-log.md "Catch-up to 0.1.13").
  */
 function localMemories(homeDir, env = process.env, { max = 8000 } = {}) {
   const out = [];
   const take = (app, file) => {
     try {
       const text = fs.readFileSync(file, 'utf8').trim();
-      if (text) out.push({ app, file: file.startsWith(homeDir + path.sep) ? `~${file.slice(homeDir.length)}` : file, text: text.length > max ? `${text.slice(0, max)}\n…` : text });
+      if (text) out.push({ app, file: file.startsWith(homeDir + path.sep) ? `~${file.slice(homeDir.length).split(path.sep).join('/')}` : file, text: text.length > max ? `${text.slice(0, max)}\n…` : text });
     } catch { /* none */ }
   };
   take('Claude Code', path.join(homeDir, '.claude', 'CLAUDE.md'));
