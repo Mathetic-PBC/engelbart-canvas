@@ -286,11 +286,34 @@ function NeedCard({ need, onOpen, onSkip }) {
         <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
           <span style={{ font: '500 13.5px/1.4 var(--font-sans)', color: '#171717' }}>{view.title}</span>
           {need.reason && need.reason !== view.title && <span style={{ font: '12px/1.4 var(--font-sans)', color: '#8f8f8f', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{need.reason}</span>}
+          {need.note && !need.error && <span data-connect-need-note="1" style={{ font: '12px/1.45 var(--font-sans)', color: '#8f8f8f', textWrap: 'pretty' }}>{need.note}</span>}
         </span>
         <button type="button" className="bart-text" data-connect-need-skip="1" onClick={() => onSkip(need)}>Skip</button>
         <button type="button" className="cx-btn" data-connect-need-open="1" disabled={need.busy} onClick={() => onOpen(need)}>{need.busy ? (need.browser ? `Finish in ${need.browser}…` : 'Waiting…') : view.action}</button>
       </div>
       {need.error && <div style={{ font: '12px/1.5 var(--font-sans)', color: '#e70022' }}>{need.error}</div>}
+    </div>
+  );
+}
+
+/**
+ * The sign-ins waiting on the person, in one strip right above Reply (2026-10-09), so the librarian's latest question stays
+ * the last thing in the chat. More than two fold into "<n> sign-ins waiting", which opens them.
+ */
+function NeedsStrip({ needs, onOpen, onSkip }) {
+  const [open, setOpen] = React.useState(false);
+  if (!needs.length) return null;
+  const folded = needs.length > 2 && !open;
+  return (
+    <div data-connect-needs="1" style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: '40vh', overflowY: 'auto', paddingTop: 8 }}>
+      {needs.length > 2 && (
+        <button type="button" data-connect-needs-toggle="1" aria-expanded={open} onClick={() => setOpen(!open)} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 14px', border: '1px solid #f5c26b', borderRadius: 10, background: '#fffaf0', cursor: 'pointer', font: '500 13.5px/1.4 var(--font-sans)', color: '#171717', textAlign: 'left' }}>
+          <span style={{ flex: 'none', display: 'flex', color: '#a35200' }}>{ALERT}</span>
+          <span style={{ flex: 1 }}>{needs.length} sign-ins waiting</span>
+          <span style={{ font: '12.5px/1 var(--font-sans)', color: '#8f8f8f' }}>{open ? 'Hide' : 'Show'}</span>
+        </button>
+      )}
+      {!folded && needs.map((need) => <NeedCard key={need.id} need={need} onOpen={onOpen} onSkip={onSkip} />)}
     </div>
   );
 }
@@ -846,10 +869,10 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
               );
             })}
             {!session.thinking && session.waiting && <div data-connect-waiting="1" style={{ font: 'italic 13.5px/1.5 var(--font-sans)', color: '#8f8f8f' }}>An agent is looking; the librarian goes on when it reports.</div>}
-            {needs.map((need) => <NeedCard key={need.id} need={need} onOpen={openNeed} onSkip={needSkip} />)}
             {(session.error || error) && <div data-connect-error="1" style={{ font: '12.5px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere' }}>{session.error || error}{session.error ? ' Reply to try again.' : ''}</div>}
           </div>
           <div style={{ flex: 'none', padding: `0 ${page ? gutter : '16px'} 12px` }}>
+            <NeedsStrip needs={needs} onOpen={openNeed} onSkip={needSkip} />
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px 12px 16px', background: '#fafafa', borderRadius: 10, marginTop: 8 }}>
               <textarea ref={draftRef} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendDraft(); } }} rows={1} data-connect-draft="1" placeholder="Reply…" spellCheck={false} style={{ flex: 1, minWidth: 0, display: 'block', minHeight: 24, margin: 0, padding: 0, border: 0, background: 'none', outline: 'none', resize: 'none', font: '15px/1.6 var(--font-sans)', color: '#171717' }} />
               <ProviderChip providers={providers} provider={session.provider} fallback={session.choice} onPick={pickProvider} onSend={sendDraft} sendOn={!!draft.trim() && !session.thinking} sendLabel="Send" style={{ marginTop: -3 }} />

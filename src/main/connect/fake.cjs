@@ -6,7 +6,8 @@
 // survey reports three items; a recall saves a short profile; an import brings in a few notes from the vault, a few
 // Claude Code chats or one note per web app through the real tools, so the progress, the staging and the project's notes
 // are real; the memory agent drafts MEMORY.md with two planted secrets and the secrets check takes out one of them (the
-// shape check takes the other). ENGELBART_CONNECT_FAKE_NEEDS=<app> makes that app's survey ask the person to sign in.
+// shape check takes the other). ENGELBART_CONNECT_FAKE_NEEDS=<app> makes that app's survey ask the person to sign in,
+// unless they signed in on the card shown before the run.
 // Same shape as ./agents.cjs turn().
 
 const sleep = (ms, signal) => new Promise((resolve, reject) => {
@@ -45,10 +46,12 @@ function interviewReply(s, message) {
   return { say: dispatch.length ? `Bringing in ${dispatch[0].label} now. That's everything.` : 'That\'s everything.', ask: null, authorize: null, dispatch, waiting: false, done: true };
 }
 
-async function surveyRun({ job, callTool }, delayMs, signal) {
+async function surveyRun({ session: s, job, callTool }, delayMs, signal) {
   const app = job.apps[0];
   await sleep(delayMs, signal);
-  if (String(process.env.ENGELBART_CONNECT_FAKE_NEEDS || '').split(',').includes(app)) {
+  // Signed in on the card shown before the run (session.cjs signInsFirst): nothing to ask again.
+  const signedInFirst = !!(s && s.needs.some((need) => need.app === app && need.upfront && need.outcome === 'done'));
+  if (!signedInFirst && String(process.env.ENGELBART_CONNECT_FAKE_NEEDS || '').split(',').includes(app)) {
     let out = await callTool('needs_you', { kind: 'signin', reason: `Sign in to ${app}` });
     for (let n = 0; n < 10 && out.status === 'waiting'; n += 1) out = await callTool('wait_for_you', {});
     if (out.status === 'skipped') return JSON.stringify({ app, signedIn: false, summary: `${app} was skipped.`, items: [] });

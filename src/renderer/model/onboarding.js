@@ -12,20 +12,25 @@ import { launchRows, installable } from './tools.js';
  * skipped with no agent to run it), and then it takes the place of Add to your library and Custom instructions
  * ("replace steps 3 and 4 with this, since it will essentially be the same": its agents bring the papers, sites and code
  * in, and MEMORY.md, made from what the person's AI assistants remember, does what the custom instructions did).
+ * A new user's flow ends on Create (2026-10-09, "fewer create screens"): its last part opens the project, with no Project
+ * context screen; + Project keeps create → context.
  */
-export const FLOWS = { new: ['welcome', 'tools', 'connect', 'import', 'instructions', 'create', 'context'], existing: ['create', 'context'] };
+export const FLOWS = { new: ['welcome', 'tools', 'connect', 'import', 'instructions', 'create'], existing: ['create', 'context'] };
 
 export function flowOf(mode, { tools = true, connect = false } = {}) {
   const flow = FLOWS[mode] || FLOWS.new;
   return flow.filter((step) => (step !== 'tools' || tools) && (connect ? step !== 'import' && step !== 'instructions' : step !== 'connect'));
 }
 
-/** Screens that are several screens in effect (2a, 2b …), one box shown at a time. */
-export const SUBS = { import: ['github', 'url', 'pdf'], create: ['name', 'desc', 'folder'] };
+/**
+ * Screens that are several screens in effect (2a, 2b …), one box shown at a time. Create has no folder part since
+ * 2026-10-09: a folder is made at ~/<name> unless "Use an existing folder…" under the name picks one.
+ */
+export const SUBS = { import: ['github', 'url', 'pdf'], create: ['name', 'desc'] };
 
 /**
  * Where a forward move from `{ step, sub }` lands: the next part of the same screen, else the next screen, else 'open'
- * (after the context screen). `detour` is set when the context screen sent the person to add to the library outside
+ * (after the context screen, or the last screen of the flow). `detour` is set when the context screen sent the person to add to the library outside
  * the flow (the existing-user flow has no import screen): the end of the import screen returns to context.
  * `options` as flowOf's: from a screen left out of the flow, the next one still in it.
  */
@@ -38,7 +43,8 @@ export function forward(mode, { step, sub = 0, detour = false }, options) {
   const flow = flowOf(mode, options);
   const at = full.indexOf(step);
   const next = at < 0 ? null : full.slice(at + 1).find((name) => flow.includes(name));
-  return next ? { step: next, sub: 0 } : { step, sub };
+  if (next) return { step: next, sub: 0 };
+  return flow.includes(step) ? { step: 'open', sub: 0 } : { step, sub };
 }
 
 /** The pager under every screen of the flow: `{ count, index }`, or null off the flow (opening, a detour). */
@@ -108,15 +114,19 @@ export function importButtons(sub, n, { signedIn = false } = {}) {
 }
 
 /**
- * The create screen's: Skip only on an empty description; Continue (next part, then the context screen) greyed on an
- * empty name, an empty description, and an existing folder not yet named.
+ * The create screen's: Skip only on an empty description; Continue (next part, then the next screen) greyed on an empty
+ * name, an empty description, and an existing folder not yet named. On a new user's last part both open the project
+ * (`opens`), and Continue reads "Open project".
  */
-export function createButtons(sub, { name, desc, folder = 'new', folderPath = '' }) {
+export function createButtons(sub, { name, desc, folder = 'new', folderPath = '' }, { mode = 'existing' } = {}) {
   const part = SUBS.create[sub];
   const empty = (value) => !String(value || '').trim();
+  const opens = mode === 'new' && sub === SUBS.create.length - 1;
   return {
     showSkip: part === 'desc' && empty(desc),
-    continueDisabled: (part === 'name' && empty(name)) || (part === 'desc' && empty(desc)) || (part === 'folder' && folder === 'existing' && empty(folderPath)),
+    continueDisabled: (part === 'name' && (empty(name) || (folder === 'existing' && empty(folderPath)))) || (part === 'desc' && empty(desc)),
+    label: opens ? 'Open project' : 'Continue',
+    opens,
   };
 }
 

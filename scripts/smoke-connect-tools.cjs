@@ -4,7 +4,7 @@
 // "signing into claude code and/or codex must be done before this step": the real app, hidden, in test mode on disposable
 // data, on a pretend Mac (ENGELBART_TOOLS_FAKE) where Claude Code is installed but signed out and Codex is missing. The
 // tools screen comes before Connect your library, each agent's row with its own Sign in or Install; Continue waits; Claude
-// Code's Sign in (the fake's, which ends by itself) makes it ready; Continue goes on to Connect, "3 of 5".
+// Code's Sign in (the fake's, which ends by itself) makes it ready; Continue goes on to Connect, "3 of 4".
 // ENGELBART_CONNECT_SHOTS=<dir> saves pictures.
 const { app, BrowserWindow } = require('electron');
 const assert = require('node:assert/strict');
@@ -62,7 +62,7 @@ app.whenReady().then(async () => {
     await until(() => js(wc, '!!document.querySelector("[data-tool-row=claude] [data-tool-action=sign-in]")'), 'Claude Code\'s Sign in');
     assert.equal(await js(wc, '!!document.querySelector("[data-tool-row=codex] [data-tool-action=install]")'), true, 'Codex\'s Install');
     assert.equal(await js(wc, 'document.querySelector("[data-onboarding-continue] button").disabled'), true, 'Continue waits for an agent');
-    assert.equal(await js(wc, 'document.querySelector("[data-onboarding-step-of]").textContent'), '2 of 5', 'welcome, tools, connect, create, context');
+    assert.equal(await js(wc, 'document.querySelector("[data-onboarding-step-of]").textContent'), '2 of 4', 'welcome, tools, connect, create');
     await shot(wc, 'tools-1-signed-out');
     await press(wc, '[data-tool-row=claude] [data-tool-action=sign-in] button');
     await until(() => js(wc, '!document.querySelector("[data-onboarding-continue] button").disabled'), 'Claude Code signed in: Continue', 400);
@@ -70,7 +70,7 @@ app.whenReady().then(async () => {
     await press(wc, '[data-onboarding-continue] button');
     await until(async () => (await step(wc)) === 'connect', 'Connect your library next');
     await until(() => js(wc, '!!document.querySelector("[data-connect-library=choose]")'), 'its choose screen');
-    assert.equal(await js(wc, 'document.querySelector("[data-onboarding-step-of]").textContent'), '3 of 5');
+    assert.equal(await js(wc, 'document.querySelector("[data-onboarding-step-of]").textContent'), '3 of 4');
     assert.equal(await js(wc, '!!document.querySelector("[data-connect-agent-setup]")'), false, 'an agent is ready: nothing to sign in to here');
     console.log(`Connect tools smoke passed. Data: ${root}`);
     app.exit(0);

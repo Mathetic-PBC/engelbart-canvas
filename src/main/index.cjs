@@ -41,7 +41,8 @@ const { shouldHideWindowOnClose } = require('./terminal/window-lifecycle.cjs');
 const { assertTrustedRenderer, parseExternalUrl } = require('./ipc-validation.cjs');
 const { createStore, registerEngelbartIpc } = require('./ipc.cjs');
 const { stagePartition, createBrowserViews, registerBrowserIpc, cleanUserAgent } = require('./browser/views.cjs');
-const { createCookieImport, keychainRunner } = require('./browser/import-cookies.cjs');
+const { execFile } = require('node:child_process');
+const { createCookieImport, keychainRunner, bundleOf } = require('./browser/import-cookies.cjs');
 const { createGithub } = require('./github/connection.cjs');
 const { createBrowserAuth, CLIENT_ID: GITHUB_CLIENT_ID } = require('./github/browser-auth.cjs');
 const { createE2bKey } = require('./github/e2b-key.cjs');
@@ -933,7 +934,8 @@ if (!hasSingleInstanceLock) {
     const keychainKeys = new Map();
     const webSignIn = createWebSignIn({
       cookieImport: process.platform === 'darwin' ? createCookieImport({
-        supportDir: path.join(app.getPath('home'), 'Library', 'Application Support'),
+        // The home Engelbart was given (ENGELBART_HOME_DIR in scripted runs, so they never read this Mac's browsers).
+        supportDir: path.join(homeDir, 'Library', 'Application Support'),
         userDataDir: app.getPath('userData'),
         getSession: () => electronSession.fromPartition(BROWSER_PARTITION),
         keychain: (name) => {
@@ -943,6 +945,12 @@ if (!hasSingleInstanceLock) {
       }) : null,
       defaultBrowser: () => { try { return app.getApplicationNameForProtocol('https://'); } catch { return ''; } },
       openExternal: (url) => electronShell.openExternal(parseExternalUrl(url).href),
+      // A browser other than the default (Safari's cookies can't be read): `open -b <bundle id> <url>`.
+      openIn: (browserId, url) => new Promise((resolve, reject) => {
+        const bundle = bundleOf(browserId);
+        if (!bundle) { reject(new Error(`No way to open ${browserId}`)); return; }
+        execFile('open', ['-b', bundle, parseExternalUrl(url).href], (error) => (error ? reject(error) : resolve()));
+      }),
       getSession: () => electronSession.fromPartition(BROWSER_PARTITION),
     });
     // The providers whose CLI can run now (the tool check), as Connect names them; before the first check, both.

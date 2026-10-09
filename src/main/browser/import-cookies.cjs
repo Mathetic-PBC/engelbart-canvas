@@ -23,22 +23,27 @@ const { execFile } = require('node:child_process');
 const { endedGithubSession, GITHUB_SESSION_COOKIES } = require('../../shared/github.cjs');
 
 // The Chromium-family browsers (CK-01). `dir` is under ~/Library/Application Support; `keychain` is the Keychain generic
-// password whose value derives the decryption key. Chrome, Brave, Edge, Vivaldi, Opera and Chromium are the long-standing
-// names. Arc, Comet and Dia are newer Chromium forks: their folders and Keychain names are set from their published layout
-// but were NOT verified against an installed copy here (the Build may not read real profiles) — confirm before relying.
+// password whose value derives the decryption key; `bundle` the macOS bundle id `open -b` opens a page in (Connect your
+// library's sign-in in another browser than the default, ../connect/web-signin.cjs). Chrome, Brave, Edge, Vivaldi, Opera and
+// Chromium are the long-standing names. Arc, Comet and Dia are newer Chromium forks: their folders and Keychain names are set
+// from their published layout but were NOT verified against an installed copy here (the Build may not read real profiles) —
+// confirm before relying. Comet's and Dia's bundle ids are not confirmed, so they are left out: a page is never opened in them.
 const CHROMIUM = [
-  { id: 'chrome', name: 'Chrome', dir: 'Google/Chrome', keychain: 'Chrome Safe Storage' },
-  { id: 'brave', name: 'Brave', dir: 'BraveSoftware/Brave-Browser', keychain: 'Brave Safe Storage' },
-  { id: 'edge', name: 'Edge', dir: 'Microsoft Edge', keychain: 'Microsoft Edge Safe Storage' },
-  { id: 'vivaldi', name: 'Vivaldi', dir: 'Vivaldi', keychain: 'Vivaldi Safe Storage' },
-  { id: 'opera', name: 'Opera', dir: 'com.operasoftware.Opera', keychain: 'Opera Safe Storage' },
-  { id: 'chromium', name: 'Chromium', dir: 'Chromium', keychain: 'Chromium Safe Storage' },
-  { id: 'arc', name: 'Arc', dir: 'Arc/User Data', keychain: 'Arc Safe Storage' }, // verify
+  { id: 'chrome', name: 'Chrome', dir: 'Google/Chrome', keychain: 'Chrome Safe Storage', bundle: 'com.google.Chrome' },
+  { id: 'brave', name: 'Brave', dir: 'BraveSoftware/Brave-Browser', keychain: 'Brave Safe Storage', bundle: 'com.brave.Browser' },
+  { id: 'edge', name: 'Edge', dir: 'Microsoft Edge', keychain: 'Microsoft Edge Safe Storage', bundle: 'com.microsoft.edgemac' },
+  { id: 'vivaldi', name: 'Vivaldi', dir: 'Vivaldi', keychain: 'Vivaldi Safe Storage', bundle: 'com.vivaldi.Vivaldi' },
+  { id: 'opera', name: 'Opera', dir: 'com.operasoftware.Opera', keychain: 'Opera Safe Storage', bundle: 'com.operasoftware.Opera' },
+  { id: 'chromium', name: 'Chromium', dir: 'Chromium', keychain: 'Chromium Safe Storage', bundle: 'org.chromium.Chromium' },
+  { id: 'arc', name: 'Arc', dir: 'Arc/User Data', keychain: 'Arc Safe Storage', bundle: 'company.thebrowser.Browser' }, // verify
   { id: 'comet', name: 'Comet', dir: 'Comet', keychain: 'Comet Safe Storage' }, // verify
   { id: 'dia', name: 'Dia', dir: 'Dia/User Data', keychain: 'Dia Safe Storage' }, // verify
 ];
-const FIREFOX = { id: 'firefox', name: 'Firefox', dir: 'Firefox' };
+const FIREFOX = { id: 'firefox', name: 'Firefox', dir: 'Firefox', bundle: 'org.mozilla.firefox' };
 const BY_ID = new Map([...CHROMIUM.map((b) => [b.id, { ...b, family: 'chromium' }]), [FIREFOX.id, { ...FIREFOX, family: 'firefox' }]]);
+
+/** The macOS bundle id of a browser the importer knows, or null (none confirmed, or not one it knows). */
+const bundleOf = (id) => (BY_ID.get(id) && BY_ID.get(id).bundle) || null;
 
 // Chromium stores times as microseconds since 1601-01-01; Unix time counts seconds since 1970-01-01. The gap is fixed.
 const WINDOWS_TO_UNIX_SECONDS = 11644473600;
@@ -521,7 +526,7 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
     const out = [];
     for (const browser of BY_ID.values()) {
       const profiles = profilesFor(browser, supportDir);
-      if (profiles.length) out.push({ id: browser.id, name: browser.name, family: browser.family, profiles: profiles.map((p) => ({ id: p.id, name: p.name })) });
+      if (profiles.length) out.push({ id: browser.id, name: browser.name, family: browser.family, bundle: browser.bundle || null, profiles: profiles.map((p) => ({ id: p.id, name: p.name })) });
     }
     return out;
   }
@@ -607,11 +612,16 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
         key = deriveKey(await keychain(browser.keychain));
       } catch (error) {
         const failure = keychainFailure(error);
-        throw new Error(failure === 'not-found'
+        const thrown = new Error(failure === 'not-found'
           ? `Engelbart couldn't find ${browser.name}'s key in the Keychain, so its cookies can't be read. Nothing was imported.`
           : failure === 'denied'
             ? `Engelbart needs Keychain access to read ${browser.name}'s cookies, and the request was denied. Nothing was imported.`
             : `Engelbart could not read ${browser.name}'s Keychain key. Nothing was imported.`);
+        // Which way it failed, for a caller that goes on to another browser (../connect/web-signin.cjs).
+        thrown.denied = failure === 'denied';
+        thrown.notFound = failure === 'not-found';
+        thrown.browser = browser.name;
+        throw thrown;
       }
     }
 
@@ -679,10 +689,13 @@ function keychainRunner(serviceName, run = execFile) {
     run('/usr/bin/security', ['find-generic-password', '-w', '-s', serviceName], { timeout: 60000 }, (error, stdout) => {
       if (error) {
         const notFound = error.code === KEYCHAIN_NOT_FOUND;
-        const denied = !notFound && (KEYCHAIN_DENIED.has(error.code) || /denied|user (?:name|interaction)|cancel/i.test(error.message || ''));
+        // No answer within the minute it waits (the prompt left on screen, execFile's timeout kills it) counts as a no.
+        const timedOut = !notFound && !!error.killed;
+        const denied = !notFound && (timedOut || KEYCHAIN_DENIED.has(error.code) || /denied|user (?:name|interaction)|cancel/i.test(error.message || ''));
         const failure = new Error(notFound ? 'The Keychain has no such key' : denied ? 'Keychain access was denied' : 'The Keychain key could not be read');
         failure.notFound = notFound;
         failure.denied = denied;
+        failure.timedOut = timedOut;
         reject(failure);
         return;
       }
@@ -694,6 +707,7 @@ function keychainRunner(serviceName, run = execFile) {
 module.exports = {
   CHROMIUM,
   FIREFOX,
+  bundleOf,
   DEFAULT_DOMAINS,
   SIGN_IN_CHECKS,
   deriveKey,

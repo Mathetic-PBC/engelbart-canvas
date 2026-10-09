@@ -5,12 +5,15 @@
 // runs it: Connect left test mode on 2026-10-08) with Connect your library's fake agents
 // (ENGELBART_CONNECT_FAKE), and walks a new user's onboarding through it (src/renderer/screens/ConnectLibrary.jsx,
 // src/main/connect): no tools screen (both agents signed in), Connect in place of Add to your library and Custom
-// instructions ("2 of 4"); the choose screen starts with Notes ticked (a vault Obsidian knows), ChatGPT ticked by hand,
-// the permissions card naming it; Refine opens the chat, whose question is a card with one option per line; ChatGPT's
-// survey hands the person its sign-in (ENGELBART_CONNECT_FAKE_NEEDS), Done gives it back; the librarian waits for the
-// survey, then offers what it found; Import lights up once nothing is left to ask; the working view follows every import,
-// MEMORY.md is saved without its planted secrets, Continue moves on, and the project made at the end holds the vault's
-// notes, with the chip in the top right saying the library is connected. ENGELBART_CONNECT_SHOTS=<dir> saves pictures.
+// instructions, and no Project context ("2 of 3", 2026-10-09); the choose screen starts with Notes ticked (a vault
+// Obsidian knows), ChatGPT ticked by hand, the permissions card naming it; Refine opens the chat, its first line said at
+// once, whose question is a card with one option per line; ChatGPT, signed in nowhere this disposable home can read, gets
+// its sign-in card before its survey starts, in the strip above Reply and not in the chat; Done gives it back and the
+// survey runs; the librarian waits for it, then offers what it found; the connect step's Continue is a filled button once
+// the session has started; Import lights up once nothing is left to ask; the working view follows every import, MEMORY.md
+// is saved without its planted secrets, Continue moves on, Create has no folder part and its Skip opens the project, which
+// holds the vault's notes, with the chip in the top right saying the library is connected. ENGELBART_CONNECT_SHOTS=<dir>
+// saves pictures.
 const { app, BrowserWindow } = require('electron');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -88,7 +91,9 @@ app.whenReady().then(async () => {
     await until(() => has(wc, '[data-connect-library="choose"] [data-connect-app="Obsidian"]'), 'the choose screen, Notes open');
     assert.equal(await attr(wc, '[data-connect-app=Obsidian] [role=checkbox]', 'aria-checked'), 'true', 'Obsidian ticked: its vault was found');
     assert.equal(await attr(wc, '[data-connect-source=papers] [role=checkbox]', 'aria-checked'), 'false', 'nothing found for papers');
-    assert.match(await text(wc, '[data-onboarding-step-of]'), /^2 of 4$/, 'welcome, connect, create, context: Add to your library and Custom instructions are gone');
+    assert.match(await text(wc, '[data-onboarding-step-of]'), /^2 of 3$/, 'welcome, connect, create: Add to your library, Custom instructions and Project context are gone');
+    assert.ok(await has(wc, '[data-onboarding-skip]'), 'Skip for now before a session');
+    assert.equal(await has(wc, '[data-onboarding-continue]'), false, 'no Continue before a session');
     assert.match(await text(wc, '[data-connect-provider]'), /^Claude Code$/);
     assert.match(await text(wc, '[data-connect-chip]'), /Sonnet · High/, 'the pinned model, shown and not offered');
     await press(wc, '[data-connect-source="chats"] button[aria-expanded]');
@@ -119,14 +124,24 @@ app.whenReady().then(async () => {
 
     /* ------------------------------------------------ refine: a card with one option per line, the needs-you card, the survey's findings */
     await press(wc, '[data-connect-library="choose"] [data-connect-send]');
+    await until(() => has(wc, '[data-connect-chat] [data-connect-agent]'), 'a first line in the chat at once');
+    // One clear Continue on the connect step once a session exists: filled, by the pager; Skip for now gone.
+    await until(() => has(wc, '[data-onboarding-continue] button'), 'the connect step\'s Continue');
+    assert.equal(await has(wc, '[data-onboarding-skip]'), false, 'no Skip for now with a session');
+    const filled = await js(wc, '(()=>{const b=document.querySelector("[data-onboarding-continue] button");const c=getComputedStyle(b).backgroundColor;return c!=="rgba(0, 0, 0, 0)"&&c!=="transparent"&&c!=="rgb(255, 255, 255)"})()');
+    assert.equal(filled, true, 'Continue is a filled button');
+    // ChatGPT's sign-in, sorted before its survey: its card in the strip above Reply, not in the chat.
+    await until(() => has(wc, '[data-connect-needs] [data-connect-need="signin"]'), 'ChatGPT\'s sign-in card, before the run asks');
+    assert.equal(await has(wc, '[data-connect-chat] [data-connect-need]'), false, 'no sign-in card inside the chat');
+    const above = await js(wc, '(()=>{const strip=document.querySelector("[data-connect-needs]").getBoundingClientRect();const reply=document.querySelector("[data-connect-draft]").getBoundingClientRect();return strip.bottom<=reply.top})()');
+    assert.equal(above, true, 'the strip sits above Reply');
     await until(() => has(wc, '[data-connect-card="live"] [data-connect-option="Everything"]'), 'the notes question, as a card');
     assert.equal(await attr(wc, '[data-connect-import]', 'data-ready'), '0', 'Import is not lit while questions remain');
     await shot(wc, '2-card');
     await press(wc, '[data-connect-card="live"] [data-connect-option="Everything"]');
     await press(wc, '[data-connect-card="live"] [data-connect-submit]');
-    await until(() => has(wc, '[data-connect-need="signin"]'), 'ChatGPT\'s survey handing over its sign-in');
-    // One Log in button and Skip (2026-10-08). The run is hidden, so there is no window to sign in in: the window being
-    // closed is what says it is done, as main's windowClosed does.
+    // One Log in button and Skip (2026-10-08). The run is hidden and no browser can be read here: Done is given through
+    // the API, as main's windowClosed would.
     assert.match(await text(wc, '[data-connect-need="signin"]'), /ChatGPT needs you to sign in[\s\S]*Skip\s*Log in/);
     assert.equal(await has(wc, '[data-connect-need-done]'), false, 'no Done');
     assert.equal(await has(wc, '[data-connect-need-signins]'), false, 'nothing brought over from Chrome');
@@ -158,12 +173,14 @@ app.whenReady().then(async () => {
     await until(async () => (await step(wc)) === 'create', 'Create a new project next');
 
     /* ------------------------------------------------ the rest of onboarding: what came in is the library's files, the chip */
+    // No folder part: ~/<name> by default, "Use an existing folder…" under the name for another; no Project context.
+    assert.match(await text(wc, '[data-onboarding-use-folder]'), /^Use an existing folder…$/);
+    assert.equal(await has(wc, '[data-onboarding-folder]'), false, 'no folder part');
     await fill(wc, '[data-onboarding-name]', 'Connect smoke');
     await press(wc, '[data-onboarding-continue] button');
+    await until(() => has(wc, '[data-onboarding-desc]'), 'the description');
+    assert.match(await text(wc, '[data-onboarding-continue] button'), /Open project/);
     await press(wc, '[data-onboarding-skip]');
-    await press(wc, '[data-onboarding-continue] button');
-    await until(async () => (await step(wc)) === 'context', 'Project context');
-    await press(wc, '[data-onboarding-open] button');
     await until(() => js(wc, '!document.querySelector("[data-onboarding]")'), 'the project open', 400);
     const names = await js(wc, `window.engelbartAPI.library().then((rows)=>rows.filter((row)=>row.type==='md'&&!row.project_id&&/[\\/]assets[\\/]md[\\/]/.test(row.path||'')).map((row)=>row.name).sort())`);
     assert.deepEqual(names, ['2026-10-01', 'ChatGPT fake note', 'Help-seeking', 'Tools for thought', 'Tutoring'], 'Markdown files of the library, in assets/md');

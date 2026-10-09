@@ -51,12 +51,14 @@ const { createImportTools } = require('./tools.cjs');
 const { skillsFor } = require('./skills.cjs');
 const memory = require('./memory.cjs');
 const { clipMiddle } = require('../bart/clip.cjs');
+const { READABLE_NAMES } = require('./web-signin.cjs');
 
 const MAX_RUNNING = 3;
 const MAX_JOBS = 40;
 const MAX_LOG = 400;
 const SHOWN_LOG = 150;
 const NEED_WAIT_MS = 170_000;
+const SIGN_IN_CHECK_MS = 10_000; // the sign-ins looked at before the surveys start, all together, at most this long
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ASK_KINDS = new Set(['single', 'multi', 'open', 'repos']);
 // Which of GitHub's repositories, asked as any choice is: the window shows the GitHub list instead (2026-10-08: "when
@@ -207,7 +209,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   const choiceFor = (provider) => connectChoice(provider, (() => { try { return models(); } catch { return null; } })());
 
   const publicJob = (job) => ({ id: job.id, kind: job.kind, source: job.source, label: job.label, apps: job.apps, status: job.status, skipped: !!job.skipped, notes: job.notes, items: job.items, activity: job.activity, summary: job.summary, error: job.error, started: job.started, ended: job.ended });
-  const publicNeed = (need) => ({ id: need.id, app: need.app, kind: need.kind, reason: need.reason, jobs: need.jobs.length, opened: need.opened, busy: need.busy, browser: need.browser || '', error: need.error, at: need.at });
+  const publicNeed = (need) => ({ id: need.id, app: need.app, kind: need.kind, reason: need.reason, jobs: need.jobs.length, opened: need.opened, busy: need.busy, browser: need.browser || '', error: need.error, note: need.note || '', at: need.at });
   function snapshot(s) {
     return {
       id: s.id, mode: s.mode, chat: s.chat, thinking: s.thinking, activity: s.activity, waiting: s.waitingForSurvey, done: s.done, error: s.error, finished: s.finished, stopped: s.stopped, minimized: s.minimized, dismissed: s.dismissed,
@@ -291,7 +293,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   }
 
   function conversationText(s) {
-    return s.chat.map((entry) => `${entry.role === 'agent' ? 'librarian' : 'person'}: ${entry.text}${entry.ask ? `\n  (asked, ${entry.ask.kind}: ${entry.ask.title}${entry.ask.options.length ? ` — ${entry.ask.options.map((option) => option.label).join(' | ')}` : ''})` : ''}${entry.authorize ? `\n  (offered the button: ${entry.authorize.label})` : ''}`).join('\n');
+    return s.chat.filter((entry) => !entry.opener).map((entry) => `${entry.role === 'agent' ? 'librarian' : 'person'}: ${entry.text}${entry.ask ? `\n  (asked, ${entry.ask.kind}: ${entry.ask.title}${entry.ask.options.length ? ` — ${entry.ask.options.map((option) => option.label).join(' | ')}` : ''})` : ''}${entry.authorize ? `\n  (offered the button: ${entry.authorize.label})` : ''}`).join('\n');
   }
 
   function importsText(s) {
@@ -305,7 +307,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     return `<engelbart>\nA person is connecting their library to Engelbart. Their library is at ${s.dataRoot}. ${where}\nPermissions they gave: read files anywhere in their home folder: ${s.choices.permissions.files ? 'yes' : 'no, only the folders of the sources they picked'}; use their accounts in Engelbart's background browser: ${s.choices.permissions.browser ? 'yes' : 'no (web apps are left out)'}; ask their AI assistants what they remember: ${s.choices.permissions.recall ? 'yes' : 'no'}.\n</engelbart>`;
   }
 
-  const surveying = (s) => s.jobs.some((job) => job.kind === 'survey' && !ENDED.has(job.status));
+  const surveying = (s) => s.jobs.some((job) => job.kind === 'survey' && !ENDED.has(job.status)) || !!(s.held && s.held.size);
 
   async function firstMessage(s, message, { again = false } = {}) {
     const ctx = await context();
@@ -532,14 +534,22 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     if (s.waitingForSurvey && !s.thinking) wake(s);
   }
 
-  /** The surveys and recalls a session starts with: every web or connector app it may reach, every assistant it may ask. */
-  function startWork(s) {
+  /**
+   * The surveys and recalls a session starts with: every web or connector app it may reach, every assistant it may ask.
+   * An app in `held` is still signed out (signInsFirst): its survey and recall wait for its sign-in card (releaseHeld).
+   */
+  function startWork(s, held = new Set()) {
     for (const [source, choice] of Object.entries(s.choices.sources)) {
       if (!choice.on) continue;
       for (const app of choice.apps) {
         const reach = appOf(app) ? appOf(app).reach : null;
         if (reach === 'web') {
           if (!s.choices.permissions.browser) { s.found[source] = { ...(s.found[source] || {}), [app]: { reach, left: 'They did not let the agents use their accounts, so this app is left out.' } }; continue; }
+          if (held.has(app)) {
+            s.held.set(app, { source, recall: false });
+            s.found[source] = { ...(s.found[source] || {}), [app]: { reach, survey: 'running', signIn: 'waiting: the person was shown a Log in card for it; its survey starts once they sign in' } };
+            continue;
+          }
           s.found[source] = { ...(s.found[source] || {}), [app]: { reach, survey: 'running' } };
           dispatch(s, { kind: 'survey', source, apps: [app], label: `Looking through ${app}` });
         } else if (reach === 'connector') {
@@ -550,8 +560,72 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       }
     }
     if (s.choices.permissions.recall && s.choices.permissions.browser) {
-      for (const app of recallApps((s.choices.sources.chats || {}).on ? s.choices.sources.chats.apps : [])) dispatch(s, { kind: 'recall', source: 'chats', apps: [app], label: `Asking ${app} what it remembers` });
+      for (const app of recallApps((s.choices.sources.chats || {}).on ? s.choices.sources.chats.apps : [])) {
+        if (s.held.has(app)) s.held.get(app).recall = true;
+        else dispatch(s, { kind: 'recall', source: 'chats', apps: [app], label: `Asking ${app} what it remembers` });
+      }
     }
+  }
+
+  /** A held app's sign-in card answered: done starts its survey and recall; skip leaves it out, and the librarian hears. */
+  function releaseHeld(s, app, how) {
+    const held = s.held.get(app);
+    if (!held) return;
+    s.held.delete(app);
+    const { [app]: was = {}, ...rest } = s.found[held.source] || {};
+    const { signIn: _signIn, ...entry } = was;
+    if (how === 'skip' || s.stopped) {
+      const left = { reach: entry.reach || 'web', skipped: 'The person skipped this app for this run: leave it out, and do not offer, ask about or hand it over again.' };
+      s.found[held.source] = { ...rest, [app]: left };
+      s.newFound = { ...(s.newFound || {}), [held.source]: { ...((s.newFound || {})[held.source] || {}), [app]: left } };
+      s.surveyNews.push(app);
+      if (s.waitingForSurvey && !s.thinking) wake(s);
+      return;
+    }
+    s.found[held.source] = { ...rest, [app]: { ...entry, survey: s.finished ? 'not run: Import was pressed first' : 'running' } };
+    if (!s.finished) dispatch(s, { kind: 'survey', source: held.source, apps: [app], label: `Looking through ${app}` });
+    if (held.recall) dispatch(s, { kind: 'recall', source: 'chats', apps: [app], label: `Asking ${app} what it remembers` });
+  }
+
+  /**
+   * The ticked web apps' sign-ins, looked at before any survey starts (2026-10-09): each brought over from a browser that
+   * holds it, all together, at most SIGN_IN_CHECK_MS. A refusal from macOS, or no answer in time, counts as signed out, and
+   * one browser is asked once. → the apps still signed out
+   */
+  async function signInsFirst(s) {
+    const out = new Set();
+    if (!webSignIn || !s.choices.permissions.browser) return out;
+    const apps = Object.values(s.choices.sources).filter((choice) => choice.on).flatMap((choice) => choice.apps)
+      .filter((app) => appOf(app) && appOf(app).reach === 'web' && webSignIn.supports(app));
+    if (!apps.length) return out;
+    const denied = new Set();
+    const results = new Map();
+    let timer = null;
+    const limit = new Promise((resolve) => { timer = setTimeout(resolve, deps.signInCheckMs || SIGN_IN_CHECK_MS); if (timer.unref) timer.unref(); });
+    await Promise.race([
+      Promise.all(apps.map((app) => webSignIn.signInQuiet(app, { denied }).catch(() => ({ signedIn: false })).then((result) => { results.set(app, result); }))),
+      limit,
+    ]);
+    clearTimeout(timer);
+    for (const app of apps) {
+      const result = results.get(app);
+      if (result && result.signedIn) logAction(s, null, result.browser ? `Signed in to ${app} from ${result.browser}` : `Signed in to ${app} already`);
+      else out.add(app);
+    }
+    return out;
+  }
+
+  /** A sign-in card shown before the run asks for it: no agent waits on it; the app's survey does (releaseHeld). */
+  function upfrontNeed(s, app) {
+    const reason = `Sign in to ${app}`;
+    s.needs.push({ id: randomUUID(), app, kind: 'signin', reason, jobs: [], waiters: new Map(), opened: false, busy: false, error: '', note: noteFor(app, 'signin'), closed: false, upfront: true, at: now() });
+    logAction(s, null, `Needs you: ${reason}`);
+  }
+
+  /** The line under a sign-in card before macOS is first asked for a browser's sign-ins this run, or ''. */
+  function noteFor(app, kind) {
+    if (!(kind === 'signin' || kind === 'password') || !webSignIn || !webSignIn.supports(app) || !webSignIn.keychainNote) return '';
+    try { return webSignIn.keychainNote(app) || ''; } catch { return ''; }
   }
 
   /* ------------------------------------------------------------------------------------------------------ needs you */
@@ -564,7 +638,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     if (s.skipped.has(app)) return Promise.resolve({ status: 'skipped', note: `The person skipped ${app} for this run. Do not ask again: finish without it.` });
     let need = s.needs.find((entry) => !entry.closed && entry.app === app && entry.kind === kind);
     if (!need) {
-      need = { id: randomUUID(), app, kind, reason, jobs: [], waiters: new Map(), opened: false, busy: false, error: '', closed: false, at: now() };
+      need = { id: randomUUID(), app, kind, reason, jobs: [], waiters: new Map(), opened: false, busy: false, error: '', note: noteFor(app, kind), closed: false, at: now() };
       s.needs.push(need);
       logAction(s, job, `Needs you: ${reason}`);
     }
@@ -592,8 +666,10 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   function closeNeed(s, need, how) {
     if (need.closed) return;
     need.closed = true;
+    need.outcome = how;
     if (need.cancel) need.cancel(); // a sign-in still waited for in the default browser
     if (how === 'skip' && !s.stopped) skipApp(s, need.app, need.jobs);
+    if (need.upfront) releaseHeld(s, need.app, how);
     for (const [jobId, resolve] of need.waiters) { resolve({ status: how === 'skip' ? 'skipped' : 'done' }); if (browser) browser.hide(jobId); }
     need.waiters.clear();
     for (const jobId of need.jobs) if (browser) browser.hide(jobId);
@@ -657,7 +733,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       if (need.closed || !need.jobs.includes(job.id)) continue;
       need.waiters.delete(job.id);
       need.jobs = need.jobs.filter((id) => id !== job.id);
-      if (!need.jobs.length) { need.closed = true; if (need.cancel) need.cancel(); }
+      if (!need.jobs.length && !need.upfront) { need.closed = true; if (need.cancel) need.cancel(); }
     }
   }
 
@@ -756,7 +832,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       picked: { folders: {}, exports: {} }, chat: [], thinking: true, activity: 'Looking at what you picked…', done: false, finished: false, minimized: false, dismissed: false, error: '',
       jobs: [], seq: 0, needs: [], log: [], controllers: new Set(), interviewSession: null, interviewController: null, found: {}, newFound: null, toldImports: '', projectId, projectDir, stopped: false,
       waitingForSurvey: false, surveyNews: [], recalls: {}, memory: { status: 'waiting', path: memory.memoryPath(ctx.dataRoot), error: '' }, memoryQueued: false, memoryDraft: null,
-      skipped: new Set(), skippedSources: new Set(), suspended: false,
+      skipped: new Set(), skippedSources: new Set(), suspended: false, held: new Map(),
     };
     sessions.set(id, s);
     s.dirs = dirsOf(s);
@@ -766,13 +842,57 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     return snapshot(s);
   }
 
-  /** A session's opening: the scan of what was picked, the first surveys and recalls, the librarian's first turn. */
+  /**
+   * A session's opening: a first line at once, the scan of what was picked (said in a sentence, without the model), the
+   * web apps' sign-ins looked at, the first surveys and recalls (a signed-out app's wait for its card), the librarian's
+   * first turn.
+   */
   async function opening(s) {
+    let opener = s.chat.find((entry) => entry.opener);
+    if (!opener) {
+      opener = { role: 'agent', text: 'Looking at what you picked…', ask: null, authorize: null, opener: true, at: now() };
+      s.chat.push(opener);
+      emit(s);
+    }
     try { s.found = await scanFor(s.choices, { homeDir, env, picked: s.picked, zotero, github, appleNotes: s.choices.permissions.notes ? appleNotes : null }); } catch (error) { s.found = { error: error.message }; }
     if (s.stopped || s.suspended) return;
+    opener.text = foundSentence(s);
     s.dirs = dirsOf(s);
-    startWork(s);
+    emit(s);
+    const signedOut = await signInsFirst(s);
+    if (s.stopped || s.suspended) return;
+    startWork(s, signedOut);
+    for (const app of signedOut) if (s.held.has(app)) upfrontNeed(s, app);
+    emit(s);
     await interviewTurn(s, 'Start.');
+  }
+
+  /** What the scan found, in one plain sentence: "Found 2 Obsidian vaults, 36 PDFs in Downloads and your Claude Code chats. Starting with your notes." */
+  function foundSentence(s) {
+    const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+    const parts = [];
+    const firstSource = [];
+    for (const [source, apps] of Object.entries(s.found || {})) {
+      if (!apps || typeof apps !== 'object' || source === 'error') continue;
+      const before = parts.length;
+      for (const [app, value] of Object.entries(apps)) {
+        if (!value || typeof value !== 'object') continue;
+        if (Array.isArray(value.vaults) && value.vaults.length) parts.push(`${plural(value.vaults.length, `${app} vault`)}`);
+        else if (Array.isArray(value.folders) && value.folders.length && typeof value.pdfs === 'number') {
+          const where = value.folders.slice(0, 2).map((folder) => folder.folder).filter(Boolean);
+          parts.push(`${plural(value.pdfs, 'PDF')}${where.length ? ` in ${where.join(' and ')}` : ''}`);
+        } else if (typeof value.chats === 'number' && value.chats) parts.push(`your ${app} chats`);
+        else if (value.signedIn && typeof value.items === 'number') parts.push(`${plural(value.items, `${app} item`)}`);
+        else if (Array.isArray(value.repos) && value.repos.length) parts.push(`${plural(value.repos.length, `${app} repository`, `${app} repositories`)}`);
+      }
+      if (parts.length > before) firstSource.push(source);
+    }
+    const ticked = Object.entries(s.choices.sources).filter(([, choice]) => choice.on).map(([source]) => source);
+    const startWith = ticked.find((source) => firstSource.includes(source)) || ticked[0];
+    const label = startWith && sourceOf(startWith) ? sourceOf(startWith).label.toLowerCase() : '';
+    const list = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0];
+    const found = list ? `Found ${list}.` : 'Had a look at what you picked.';
+    return label ? `${found} Starting with your ${label}.` : found;
   }
 
   function busy(s) { if (s.thinking) throw new Error('Wait for the librarian to answer'); }
@@ -928,17 +1048,20 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       if (found.busy) return snapshot(s);
       const controller = new AbortController();
       found.busy = true;
-      found.browser = webSignIn.browserName();
       found.cancel = () => controller.abort();
       emit(s);
       const opened = (name) => { found.opened = true; found.browser = name; logAction(s, null, `Opened ${found.app}'s sign-in in ${name}`, 'You'); emit(s); };
       webSignIn.signIn(found.app, { signal: controller.signal, onOpened: opened }).catch((error) => ({ status: 'failed', error: error.message })).then((out) => {
         found.busy = false;
         found.cancel = null;
+        found.note = noteFor(found.app, found.kind); // macOS has been asked now, or will be by the next browser
+        if (out.browser) found.browser = out.browser; // the browser it used, not the default it may have passed over
         if (found.closed || out.status === 'cancelled') return;
         if (out.status === 'signed-in') { logAction(s, null, `Signed in to ${found.app} from ${out.browser}`, 'You'); closeNeed(s, found, 'done'); return; }
         if (out.status === 'unsupported') { showWindow(s, found, `${out.browser}'s sign-ins can't be brought into Engelbart: sign in here instead.`); return; }
-        found.error = out.status === 'timeout' ? `Still not signed in to ${found.app} in ${out.browser}. Log in to keep waiting, or skip it.` : line(out.error, 200);
+        found.error = out.status === 'no-browser' ? `Signing in to ${found.app} needs ${READABLE_NAMES}.`
+          : out.status === 'denied' ? `macOS didn't let Engelbart use ${out.browser}'s sign-ins. Log in to ask again, or Skip.`
+            : out.status === 'timeout' ? `Still not signed in to ${found.app} in ${out.browser}. Log in to keep waiting, or skip it.` : line(out.error, 200);
         emit(s);
       });
       return snapshot(s);
@@ -1123,8 +1246,10 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       found: saved.found && typeof saved.found === 'object' ? saved.found : {}, newFound: null, toldImports: '', projectId, projectDir, stopped: false,
       waitingForSurvey: !!saved.waiting, surveyNews: [], recalls: keptRecalls(dir), memory: kept ? { ...saved.memory } : { status: 'waiting', path: memory.memoryPath(ctx.dataRoot), error: '' }, memoryQueued: kept, memoryDraft: null,
       skipped: new Set((Array.isArray(saved.skipped) ? saved.skipped : []).filter((app) => typeof app === 'string')),
-      skippedSources: new Set((Array.isArray(saved.skippedSources) ? saved.skippedSources : []).filter((id) => sourceOf(id))), suspended: false,
+      skippedSources: new Set((Array.isArray(saved.skippedSources) ? saved.skippedSources : []).filter((id) => sourceOf(id))), suspended: false, held: new Map(),
     };
+    // Closed before the librarian's first word, with only the opening line said: the opening again.
+    if (s.chat.every((entry) => entry.opener)) s.chat = [];
     for (const job of Array.isArray(saved.jobs) ? saved.jobs : []) {
       if (!job || !Object.hasOwn(PRIORITY, job.kind)) continue;
       // MEMORY.md is written again once the work has ended, unless it was saved: its draft was never kept on disk.
@@ -1138,6 +1263,18 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
         status: again ? 'queued' : job.status, skipped: !!job.skipped, notes: Number(job.notes) || 0, items: Number(job.items) || 0, titles: (Array.isArray(job.titles) ? job.titles : []).slice(0, 80).map((title) => line(title, 120)),
         activity: '', summary: again ? '' : line(job.summary, 500), error: again ? '' : line(job.error, 300), started: again ? null : job.started || null, ended: again ? null : job.ended || null,
       });
+    }
+    // A survey that waited on a sign-in card when Engelbart closed (the card is not kept): it runs now, and asks again itself.
+    for (const [source, apps] of Object.entries(s.found)) {
+      for (const [app, value] of Object.entries(apps && typeof apps === 'object' ? apps : {})) {
+        if (!value || !value.signIn || s.skipped.has(app)) continue;
+        const { signIn: _signIn, ...entry } = value;
+        s.found[source] = { ...s.found[source], [app]: entry };
+        if (!s.jobs.some((job) => job.kind === 'survey' && job.apps.includes(app))) {
+          s.seq += 1;
+          s.jobs.push({ id: randomUUID(), key: `survey:${source}:${app}`, kind: 'survey', priority: PRIORITY.survey, seq: s.seq, source, apps: [app], label: `Looking through ${app}`, plan: '', extra: null, status: 'queued', notes: 0, items: 0, titles: [], activity: '', summary: '', error: '', started: null, ended: null });
+        }
+      }
     }
     sessions.set(id, s);
     s.dirs = dirsOf(s);

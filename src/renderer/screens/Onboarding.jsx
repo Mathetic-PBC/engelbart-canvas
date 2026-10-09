@@ -215,32 +215,36 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
     try { await api.setInstructions(instr); advance(); } catch (failure) { setError(errorMessage(failure)); }
   };
 
+  // Continue (and Skip) on the create screen: the next part, or on a new user's last part the project itself, opened with
+  // no context (2026-10-09: the new flow has no Project context screen). A folder picked under the name is checked first.
   const createNext = async () => {
     const part = SUBS.create[sub];
     if (part === 'name' && !name.trim()) return;
-    if (part !== 'folder') { advance(); return; }
-    if (folder === 'existing') {
+    if (part === 'name' && folder === 'existing') {
       try { await api.checkFolder(folderPath); } catch (failure) { setError(errorMessage(failure)); return; }
     }
+    if (createButtons(sub, { name, desc, folder, folderPath }, { mode: flowMode }).opens) { openProject([]); return; }
     advance();
   };
 
+  // "Use an existing folder…" under the name: the folder picked takes the place of the one made at ~/<name>.
   const browseFolder = async () => {
     const chosen = await window.terminalAPI.pickDirectory(undefined).catch(() => null);
-    if (chosen) { setFolderPath(chosen); setError(''); }
+    if (chosen) { setFolder('existing'); setFolderPath(chosen); setError(''); }
   };
 
-  const open = async () => {
-    const ids = contextRows(library).filter((row) => sel[row.id]).map((row) => row.id);
+  const openProject = async (ids) => {
+    const back = step === 'context' ? { step: 'context', sub: 0, detour: false } : { step: 'create', sub: SUBS.create.length - 1, detour: false };
     go({ step: 'open', sub: 0 });
     try {
       const made = await api.startProject({ name: name.trim(), description: desc.trim(), folder, directory: folder === 'existing' ? folderPath : '', context: ids, ...(connectId ? { connect: connectId } : {}) });
       await onDone(made, { stageLinks: [...stageLinks.current] });
     } catch (failure) {
-      setPlace({ step: 'context', sub: 0, detour: false });
+      setPlace(back);
       setError(errorMessage(failure));
     }
   };
+  const open = () => openProject(contextRows(library).filter((row) => sel[row.id]).map((row) => row.id));
 
   const pager = pagerOf(flowMode, step, flowOptions);
   const errorLine = error ? <span data-onboarding-error="1" style={{ font: '12.5px/1.5 var(--font-sans)', color: '#e70022', textAlign: 'center', overflowWrap: 'anywhere' }}>{error}</span> : null;
@@ -399,17 +403,31 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
       </div>
     );
   } else if (step === 'create') {
-    const buttons = createButtons(sub, { name, desc, folder, folderPath });
+    const buttons = createButtons(sub, { name, desc, folder, folderPath }, { mode: flowMode });
+    const quietLink = { ...plain, padding: 0, font: '12.5px/1.5 var(--font-sans)', color: '#8f8f8f', textDecoration: 'underline', textUnderlineOffset: 3 };
     const part = SUBS.create[sub];
     body = (
       <form data-screen-label="06 Create project" data-part={part} onSubmit={(event) => { event.preventDefault(); createNext(); }} style={{ ...column, gap: 24, animation: rise }}>
         <Head title="Create a new project">Projects let you organize all of the citations, websites, papers, and code for your research without anything getting lost.</Head>
         <div style={{ width: '100%', minHeight: 150, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
           {part === 'name' && (
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 8, animation: riseSub }}>
-              <span style={{ font: '500 14px/1.4 var(--font-sans)' }}>Project name</span>
-              <input value={name} onChange={(event) => setName(event.target.value)} autoFocus placeholder="e.g. Teachable agents for debugging" spellCheck={false} data-onboarding-name="1" className="focus-bd2" style={{ width: '100%', padding: '11px 14px', background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, font: '15.5px/1.4 var(--font-sans)', color: '#171717', transition: 'border-color 120ms' }} />
-            </label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, animation: riseSub }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <span style={{ font: '500 14px/1.4 var(--font-sans)' }}>Project name</span>
+                <input value={name} onChange={(event) => setName(event.target.value)} autoFocus placeholder="e.g. Teachable agents for debugging" spellCheck={false} data-onboarding-name="1" className="focus-bd2" style={{ width: '100%', padding: '11px 14px', background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, font: '15.5px/1.4 var(--font-sans)', color: '#171717', transition: 'border-color 120ms' }} />
+              </label>
+              {/* The folder part is gone (2026-10-09): a folder is made at ~/<name>, unless one is picked here. */}
+              {folder === 'existing' && folderPath ? (
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', padding: '0 2px' }}>
+                  <span data-onboarding-folder-path="1" style={{ font: '12.5px/1.5 var(--font-mono)', color: '#171717', overflowWrap: 'anywhere' }}>{folderPath}</span>
+                  <button type="button" className="hov-ink" data-onboarding-new-folder="1" onClick={() => { setFolder('new'); setFolderPath(''); setError(''); }} style={quietLink}>Create a folder for me instead</button>
+                </div>
+              ) : (
+                <div style={{ padding: '0 2px' }}>
+                  <button type="button" className="hov-ink" data-onboarding-use-folder="1" onClick={browseFolder} title={newPath ? `Otherwise a folder is made at ${newPath}` : undefined} style={quietLink}>Use an existing folder…</button>
+                </div>
+              )}
+            </div>
           )}
           {part === 'desc' && (
             <label style={{ display: 'flex', flexDirection: 'column', gap: 8, animation: riseSub }}>
@@ -417,29 +435,9 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
               <textarea value={desc} onChange={(event) => setDesc(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); createNext(); } }} autoFocus rows={3} placeholder="what you're studying, and what done looks like…" data-onboarding-desc="1" className="focus-bd2" style={{ width: '100%', resize: 'none', padding: '11px 14px', background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, font: '15px/1.6 var(--font-sans)', color: '#171717', transition: 'border-color 120ms' }} />
             </label>
           )}
-          {part === 'folder' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, animation: riseSub }}>
-              <span style={{ font: '500 14px/1.4 var(--font-sans)' }}>Folder</span>
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 8 }}>
-                <Option data="folder-new" on={folder === 'new'} label="Create a folder for me" onClick={() => { setFolder('new'); setError(''); }} />
-                <Option data="folder-existing" on={folder === 'existing'} label="Use an existing folder" onClick={() => setFolder('existing')} />
-              </div>
-              {folder === 'new' && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 4px 0', font: '13px/1.5 var(--font-mono)', color: '#8f8f8f' }}>
-                  <span>will create</span><span data-onboarding-new-path="1" style={{ color: '#171717' }}>{newPath}</span>
-                </div>
-              )}
-              {folder === 'existing' && (
-                <div className="focus-bd2" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 4px 2px 12px', background: '#fff', border: '1px solid #eaeaea', borderRadius: 8 }}>
-                  <input value={folderPath} onChange={(event) => { setFolderPath(event.target.value); setError(''); }} autoFocus placeholder="~/research/my-project" spellCheck={false} data-onboarding-folder="1" style={{ flex: 1, minWidth: 0, padding: '6px 0', border: 0, background: 'transparent', font: '13px/1.4 var(--font-mono)', color: '#171717' }} />
-                  <span data-onboarding-browse="1"><Button size="sm" onClick={browseFolder}>Choose…</Button></span>
-                </div>
-              )}
-            </div>
-          )}
         </div>
         {errorLine}
-        <Footer showSkip={buttons.showSkip} onSkip={advance} continueDisabled={buttons.continueDisabled} onContinue={createNext} />
+        <Footer showSkip={buttons.showSkip} onSkip={createNext} label={buttons.label} continueDisabled={buttons.continueDisabled} onContinue={createNext} />
       </form>
     );
   } else if (step === 'context') {
@@ -493,13 +491,19 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
           <div style={{ flex: 'none', width: 'min(1080px, 100%)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
             {/* Leaving with a session puts it away: it goes on in the background, the chip in the top right following it.
                 Skipping it counts as the one-time offer seen: the project about to open does not ask again. */}
-            <button type="button" className="hov-ink" data-onboarding-skip="1" onClick={() => { if (connectId) api.connectMinimize(connectId, true).catch(() => {}); else api.connectOfferSeen('dismissed').catch(() => {}); advance(); }} style={skipStyle}>{connectId ? 'Continue' : 'Skip for now'}</button>
-            {pager && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                <Pager count={pager.count} index={pager.index} />
-                <div data-onboarding-step-of="1" style={{ font: '12px/1 var(--font-sans)', color: '#8f8f8f' }}>{`${pager.index + 1} of ${pager.count}`}</div>
-              </div>
-            )}
+            {/* One clear Continue once a session has started (2026-10-09): filled, at the right by the pager; before, Skip for now. */}
+            <div style={{ display: 'flex' }}>
+              {!connectId && <button type="button" className="hov-ink" data-onboarding-skip="1" onClick={() => { api.connectOfferSeen('dismissed').catch(() => {}); advance(); }} style={skipStyle}>Skip for now</button>}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+              {pager && (
+                <>
+                  <Pager count={pager.count} index={pager.index} />
+                  <div data-onboarding-step-of="1" style={{ font: '12px/1 var(--font-sans)', color: '#8f8f8f' }}>{`${pager.index + 1} of ${pager.count}`}</div>
+                </>
+              )}
+              {connectId && <span data-onboarding-continue="1"><Button variant="filled" go onClick={() => { api.connectMinimize(connectId, true).catch(() => {}); advance(); }}>Continue</Button></span>}
+            </div>
           </div>
         </div>
       )}
