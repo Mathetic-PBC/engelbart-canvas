@@ -15,6 +15,19 @@ SHA256SUMS-windows.txt and index.html. No real upload: the command is handed to 
 
 ### Status
 
+- 2026-10-09, **done on c204d0d** (contains 6bb60b6; package.json 0.1.13): catch-up run 4
+  (https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37963133942) passed on all three. macos-latest: npm
+  test 1484 tests, 1480 pass, 4 skipped; build; `npm run package`. windows-latest: npm test 1488 tests, 1446 pass, 42
+  skipped, 0 failed; installer; smoke-windows (window, PowerShell 7 echo, Git at C:\Program
+  Files\Git\mingw64\bin\git.exe, clean quit); the one-line install put Engelbart 0.1.13 in
+  %LOCALAPPDATA%\Programs\Engelbart. ubuntu-latest: npm test 1484 tests, 1470 pass, 14 skipped; AppImage, smoke and
+  install all passed (run 3's quit-step exit did not come back: a flake). Mac `npm ci` and `npm test` locally: 1484
+  tests, 1481 pass, 3 skipped.
+  `UPLOAD_DRY_RUN=1 CLOUDFLARE_ACCOUNT_ID=… npm run upload:win` (nothing sent) took run 37963133942's installer and
+  listed: Engelbart-0.1.13-x64.exe (136780916 bytes), its .blockmap, index.html, install.ps1, SHA256SUMS-windows.txt,
+  then latest.yml (version 0.1.13); live Windows feed now 0.1.10. The page it writes is the live one (Mac 0.1.14,
+  released meanwhile from another branch) with the Windows section set to 0.1.13. The live site has no Linux section,
+  install.sh no Linux hand-off, and no latest-linux.yml: Linux was never uploaded. Real upload not run: handed over.
 - 2026-10-09: merged 6bb60b6 (23 commits since cf474cb's base; 139 files). One conflict: scripts/smoke-windows.cjs,
   which on that branch is still the old multi-window smoke test (windows-port renamed it scripts/smoke-new-window.cjs,
   "Needs a decision" below, and smoke-windows.cjs is the packaged-Windows smoke test): kept ours, and that branch's two
@@ -69,6 +82,19 @@ SHA256SUMS-windows.txt and index.html. No real upload: the command is handed to 
 | 6c96a36 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37958518571 | ✗ 1 test | ✗ 11 tests | ✗ 1 test | the merge; the guard test needs a Git identity; Windows: shown paths, a `?` in a file name, the guard in Git Bash |
 | 3c342a9 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37959774124 | ✗ 1 test | ✗ 10 tests | ✗ 1 test | the guard in Git Bash; the runner test passes on Windows |
 | ff632a0 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37960794781 | ✓ | ✗ 2 tests | ✗ smoke (quit step) | ~/ paths, file names, the guard test's identity |
+| c204d0d | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37963133942 | ✓ | ✓ installer, smoke, install | ✓ | **green on all three, contains 6bb60b6: the done commit** |
+
+### Tests skipped on Windows (new code since 0.1.10)
+
+None added by this catch-up. Windows' 42 = the 38 of "Catch-up to 0.1.10" + the 3 of "Linux" (engelbart-launch and
+the two install-linux.sh tests: POSIX scripts) + one 0.1.13 test that skips by its own condition, unchanged:
+
+| Test file | Test | Reason |
+|---|---|---|
+| connect.test.cjs | a Chromium browser: bookmarks, and its history by site from a copy of the locked database | `t.skip('no sqlite3')`: it makes its fixture with the sqlite3 command, which Windows lacks. Its bookmarks part runs first; the history on Windows (node:sqlite) is tested in windows-platform.test.cjs |
+
+POSIX-only assertions guarded inside a test (the rest runs): the guard shim's execute bit (build.test.cjs, "the real
+runner"; Windows has none, bash reads the #! line).
 
 ## Linux
 
