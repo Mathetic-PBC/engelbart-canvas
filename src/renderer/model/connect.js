@@ -7,23 +7,115 @@ import { SOURCES, APPS, LOCAL_PDFS, recallApps, webApps } from '../../shared/con
 
 export { SOURCES, APPS, LOCAL_PDFS };
 
+// MATH-114 (2026-10-09): the choose screen as the mockup's grouped list. Each source is a group whose header ticks its
+// rows (tri-state); a row says at its right how the app is reached and where it stands; ticking is the consent (a
+// connector's sign-in, macOS's Apple Notes prompt, a folder for a local app that was not found). Websites is one row (the
+// browser's history), Code two (GitHub, and the repositories on this Mac). One checkbox lets the agents read with the
+// person's own subscription (files and browser); asking an assistant what it remembers is ticking that assistant.
+
+/** The AI assistants that remember the person (connect-sources' `memory`): found, they still start unticked. */
+export const MEMORY_APPS = Object.freeze(recallApps(Object.keys(APPS)));
+/** Websites' one row, and Code's second (the first is GitHub). */
+export const BROWSER_ROW = 'Browser history';
+export const LOCAL_REPOS = 'Local repos';
+
+/** The rows a group's header ticks, in order. */
+export function rowsOf(sourceId) {
+  if (sourceId === 'sites') return [BROWSER_ROW];
+  if (sourceId === 'code') return ['GitHub', LOCAL_REPOS];
+  const source = SOURCES.find((entry) => entry.id === sourceId);
+  return source ? source.apps : [];
+}
+
+/** Whether a row was found (on this Mac, signed in to, connected): what the header and Select all tick. */
+export function foundRow(found, sourceId, row) {
+  if (!found) return false;
+  if (sourceId === 'sites') return !!(found.sites && found.sites.found);
+  if (sourceId === 'code') return row === 'GitHub' ? !!(found.github && found.github.found) : (found.localRepos || []).length > 0;
+  return !!(found.apps && found.apps[row] && found.apps[row].found);
+}
+
+/** Whether a row is ticked. Local repos is, when any repository on this Mac (or folder picked for Code) is. */
+export function ticked(state, sourceId, row) {
+  if (!state) return false;
+  if (sourceId === 'code' && row === LOCAL_REPOS) return Object.values(state.local || {}).some(Boolean);
+  return !!(state.apps && state.apps[sourceId] && state.apps[sourceId][row]);
+}
+
+// Each source is on exactly when one of its rows is ticked: never on with none (appsOf would read that as every app).
+function derive(state) {
+  const picks = {};
+  for (const source of SOURCES) picks[source.id] = rowsOf(source.id).some((row) => ticked(state, source.id, row));
+  return { ...state, picks };
+}
+
 /**
- * Where the choose screen starts, from what main found (`connect-detect`): an app is ticked when it was found (on this
- * Mac, or signed in to in Engelbart's browser), a source when one of its apps was (Websites: a browser; Code: a GitHub
- * sign-in). Nothing is open but the first ticked source.
+ * Where the choose screen starts, from what main found (`connect-detect`): a row is ticked when it was found (on this Mac,
+ * signed in to in Engelbart's browser, connected; Websites: a browser; Code: a GitHub sign-in), except the assistants that
+ * remember the person (asking them is its own consent) and the repositories on this Mac. Nothing is open but the first
+ * ticked source.
  */
 export function initialPicks(found) {
   const apps = {};
-  const picks = {};
   for (const source of SOURCES) {
     apps[source.id] = {};
-    for (const app of source.apps) apps[source.id][app] = !!(found && found.apps && found.apps[app] && found.apps[app].found);
-    picks[source.id] = source.id === 'sites' ? !!(found && found.sites && found.sites.found)
-      : source.id === 'code' ? !!(found && found.github && found.github.found)
-        : Object.values(apps[source.id]).some(Boolean);
+    for (const row of rowsOf(source.id)) if (!(source.id === 'code' && row === LOCAL_REPOS)) apps[source.id][row] = foundRow(found, source.id, row) && !MEMORY_APPS.includes(row);
   }
-  const first = SOURCES.find((source) => picks[source.id] && source.apps.length);
-  return { picks, apps, open: first ? { [first.id]: true } : {} };
+  const state = derive({ apps, local: {}, open: {} });
+  const first = SOURCES.find((source) => state.picks[source.id] && source.apps.length);
+  return { ...state, open: first ? { [first.id]: true } : {} };
+}
+
+/** A row ticked or not. Local repos ticks every repository found (`repos`: their paths), or none. */
+export function tickRow(state, sourceId, row, on, repos = []) {
+  if (sourceId === 'code' && row === LOCAL_REPOS) {
+    const local = Object.fromEntries(Object.keys(state.local || {}).map((dir) => [dir, !!on]));
+    for (const dir of repos) local[dir] = !!on;
+    return derive({ ...state, local });
+  }
+  return derive({ ...state, apps: { ...state.apps, [sourceId]: { ...(state.apps[sourceId] || {}), [row]: !!on } } });
+}
+
+/** A repository on this Mac (or a folder picked for Code) ticked or not. */
+export function tickRepo(state, dir, on) {
+  return derive({ ...state, local: { ...(state.local || {}), [dir]: !!on } });
+}
+
+/** A group's header: 'all' of its rows ticked, 'some', or 'none'. */
+export function groupState(state, sourceId) {
+  const rows = rowsOf(sourceId);
+  const n = rows.filter((row) => ticked(state, sourceId, row)).length;
+  return n === 0 ? 'none' : n === rows.length ? 'all' : 'some';
+}
+
+/**
+ * A group's header clicked: with anything ticked, everything goes off; with nothing, its found rows come on (Local repos:
+ * every repository found). A group with nothing found opens instead, for the person to pick its rows.
+ */
+export function tickGroup(state, sourceId, found) {
+  const rows = rowsOf(sourceId);
+  const repos = ((found && found.localRepos) || []).map((repo) => repo.path);
+  if (groupState(state, sourceId) !== 'none') return rows.reduce((next, row) => tickRow(next, sourceId, row, false), state);
+  const on = rows.filter((row) => foundRow(found, sourceId, row));
+  if (!on.length) return { ...state, open: { ...state.open, [sourceId]: true } };
+  return on.reduce((next, row) => tickRow(next, sourceId, row, true, repos), state);
+}
+
+/** Select all: every found row of every group; `false`: nothing. */
+export function tickAll(state, found, on = true) {
+  const repos = ((found && found.localRepos) || []).map((repo) => repo.path);
+  return SOURCES.reduce((next, source) => rowsOf(source.id).reduce((acc, row) => (on ? (foundRow(found, source.id, row) ? tickRow(acc, source.id, row, true, repos) : acc) : tickRow(acc, source.id, row, false)), next), state);
+}
+
+/** Whether every found row is ticked (Select all's button then says Clear). */
+export function allPicked(state, found) {
+  const rows = SOURCES.flatMap((source) => rowsOf(source.id).filter((row) => foundRow(found, source.id, row)).map((row) => [source.id, row]));
+  return rows.length > 0 && rows.every(([id, row]) => ticked(state, id, row));
+}
+
+/** The repository folders ticked for Code, sent as its `folders` (gitFolders takes a repository's own folder). */
+export function localPicked(state) {
+  return Object.entries((state && state.local) || {}).filter(([, on]) => on).map(([dir]) => dir);
 }
 
 /** The apps of a source that are ticked (a source turned on with none ticked counts every app, as the design has it). */
@@ -39,18 +131,70 @@ export function pickedApps(picks, apps) {
   return SOURCES.filter((source) => picks[source.id]).flatMap((source) => appsOf(source.id, apps));
 }
 
-/** What a source's row says at its right: "All", "2 of 6", "3 repos · 1 folder", '' while it is off. */
-export function subOf(sourceId, { on, apps, repos = [], folders = [] }) {
-  if (!on) return '';
-  const source = SOURCES.find((entry) => entry.id === sourceId);
-  if (sourceId === 'code') {
-    const parts = [repos.length ? `${repos.length} repo${repos.length === 1 ? '' : 's'}` : '', folders.length ? `${folders.length} folder${folders.length === 1 ? '' : 's'}` : ''].filter(Boolean);
-    return parts.join(' · ') || 'GitHub';
+/** What a group's header says after its name: the rows ticked ("Obsidian, Google Docs"; "GitHub, 2 local repos"), or "nothing picked". */
+export function subOf(sourceId, state) {
+  const names = rowsOf(sourceId).filter((row) => ticked(state, sourceId, row)).map((row) => (sourceId === 'code' && row === LOCAL_REPOS ? reposCount(state) : row));
+  return names.length ? names.join(', ') : 'nothing picked';
+}
+const reposCount = (state) => { const n = localPicked(state).length; return `${n} local repo${n === 1 ? '' : 's'}`; };
+
+/**
+ * What a row says at its right, from how its app is reached and where it stands → { text, tone: 'muted' | 'busy' |
+ * 'error' | '' }. `connectors`: app → { connected, pending } (main's connectors); `notes`: the Apple Notes prompt's state
+ * ('' | 'asking' | 'allowed' | why not); `folder`: one the person picked for it.
+ */
+export function rowLabel(app, { found = null, connectors = {}, notes = '', folder = '' } = {}) {
+  const spec = APPS[app];
+  const seen = (found && found.apps && found.apps[app]) || {};
+  if (folder) return { text: folder, tone: '' };
+  if (!spec) return { text: '', tone: '' };
+  if (spec.reach === 'connector') {
+    const status = connectors[app] || {};
+    if (status.connected) return { text: 'signed in', tone: '' };
+    if (status.pending) return { text: `Waiting for ${app} sign-in…`, tone: 'busy' };
+    return { text: `Opens ${app} in your browser to sign in`, tone: 'muted' };
   }
-  if (!source || !source.apps.length) return sourceId === 'papers' && folders.length ? `${folders.length} folder${folders.length === 1 ? '' : 's'}` : '';
-  const chosen = source.apps.filter((app) => apps[sourceId] && apps[sourceId][app]);
-  const base = chosen.length && chosen.length < source.apps.length ? `${chosen.length} of ${source.apps.length}` : 'All';
-  return sourceId === 'papers' && folders.length ? `${base} · ${folders.length} folder${folders.length === 1 ? '' : 's'}` : base;
+  if (spec.reach === 'automation') {
+    if (notes === 'allowed') return { text: 'allowed', tone: '' };
+    if (notes === 'asking') return { text: 'macOS is asking you…', tone: 'busy' };
+    return notes ? { text: notes, tone: 'error' } : { text: '', tone: '' };
+  }
+  if (spec.reach === 'web') {
+    if (seen.signedIn) return { text: 'signed in to Engelbart', tone: '' };
+    return seen.found ? { text: 'Sign in to add', tone: 'muted' } : { text: 'Not found', tone: 'muted' };
+  }
+  return seen.found ? { text: seen.where || '', tone: '' } : { text: 'Not found', tone: 'muted' };
+}
+
+/** The line under a row's name, when it needs one: an assistant is read and asked; macOS asks before Apple Notes. */
+export function rowSub(app) {
+  if (MEMORY_APPS.includes(app)) return 'Chats about your question · asks what it remembers, for a head start';
+  if (app === 'Apple Notes') return 'macOS will ask';
+  return '';
+}
+
+/**
+ * What the one checkbox ("Use my … subscription to read these") covers of what is ticked: the apps read on this Mac, in
+ * Engelbart's browser and through Engelbart's own sign-ins, the browser's history, and the repositories. Connectors, Apple
+ * Notes and asking an assistant what it remembers each have their own consent, and are left out.
+ */
+export function consentFor(state) {
+  const names = [];
+  for (const source of SOURCES) {
+    for (const row of rowsOf(source.id)) {
+      if (!ticked(state, source.id, row)) continue;
+      if (source.id === 'sites') names.push('your browser history');
+      else if (source.id === 'code') names.push(row === 'GitHub' ? 'GitHub' : reposCount(state));
+      else if (['local', 'web', 'signin'].includes((APPS[row] || {}).reach)) names.push(row);
+    }
+  }
+  return names;
+}
+
+/** The permissions sent: files and the browser from the one checkbox, recall from an assistant ticked, Apple Notes from macOS. */
+export function permissionsOf(state, { consent = true, notes = false } = {}) {
+  const apps = SOURCES.flatMap((source) => source.apps.filter((app) => ticked(state, source.id, app)));
+  return { files: !!consent, browser: !!consent, recall: recallApps(apps).length > 0, notes: !!notes };
 }
 
 /**

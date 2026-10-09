@@ -24,7 +24,7 @@ const notes = require('../src/main/connect/notes.cjs');
 const { createImportTools, validateImportTool, chatNote, toolsFor, googleMarkdown, csvTable, IMPORT_TOOLS } = require('../src/main/connect/tools.cjs');
 const { createConnect, readReply, readSurvey, cleanChoices, connectChoice } = require('../src/main/connect/session.cjs');
 const { createFakeConnectAgents } = require('../src/main/connect/fake.cjs');
-const { detect, scanFor } = require('../src/main/connect/scan.cjs');
+const { detect, scanFor, localRepos } = require('../src/main/connect/scan.cjs');
 const { importToolLabel, writeImportConfig, claudeServers, claudeToolsFor } = require('../src/main/connect/agents.cjs');
 const { hostAllowed, hostsFor, fileNameOf } = require('../src/main/connect/browser.cjs');
 const { listWebChats, readWebChat } = require('../src/main/connect/web-chats.cjs');
@@ -83,13 +83,48 @@ test('detect: Obsidian\'s vaults from obsidian.json, apps installed or signed in
   assert.deepEqual(readers.obsidianVaults(homeDir).map((entry) => [entry.name, entry.shown, entry.open]), [['Vault', '~/Vault', true]]);
   const apps = path.join(homeDir, 'Apps');
   fs.mkdirSync(path.join(apps, 'Granola.app'), { recursive: true });
+  fs.mkdirSync(path.join(apps, 'Perplexity.app'), { recursive: true });
   const found = detect({ homeDir, applications: [apps], signedIn: ['ChatGPT'] }).apps;
   assert.equal(found.Obsidian.found, true);
   assert.equal(found['Claude Code'].found, false);
   assert.deepEqual([found.Granola.found, found.Granola.where], [true, 'on this Mac']);
-  assert.deepEqual([found.ChatGPT.found, found.ChatGPT.where], [true, 'signed in in Engelbart']);
+  assert.deepEqual([found.ChatGPT.found, found.ChatGPT.where, found.ChatGPT.signedIn], [true, 'signed in to Engelbart', true]);
+  // MATH-114: a web app found only as its desktop app is not signed in to yet
+  assert.deepEqual([found.Perplexity.found, found.Perplexity.where, found.Perplexity.signedIn], [true, 'Sign in to add', false]);
   assert.equal(found.Claude.found, false);
   assert.equal(found['Apple Notes'].found, false, 'macOS asks before Notes is read: never ticked by itself');
+});
+
+test('localRepos: Claude Code and Codex sessions grouped by repository, counted, and nothing read inside macOS\'s protected folders', () => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-repos-')));
+  const put = (rel, text) => { const file = path.join(home, rel); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); };
+  const lines = (events) => `${events.map((event) => JSON.stringify(event)).join('\n')}\n`;
+  const claude = (name, cwd, prompt) => put(`.claude/projects/p/${name}.jsonl`, lines([{ type: 'user', entrypoint: 'cli', cwd, message: { role: 'user', content: prompt } }]));
+  const thesis = path.join(home, 'code', 'thesis');
+  fs.mkdirSync(path.join(thesis, '.git'), { recursive: true });
+  fs.mkdirSync(path.join(thesis, 'src'), { recursive: true });
+  fs.mkdirSync(path.join(home, 'scratch'), { recursive: true }); // no .git: not a repository
+  claude('11111111-1111-4111-8111-111111111111', thesis, 'Why do the tests fail?');
+  claude('22222222-2222-4222-8222-222222222222', path.join(thesis, 'src'), 'Tidy this module');
+  claude('33333333-3333-4333-8333-333333333333', path.join(home, 'scratch'), 'Try something');
+  claude('44444444-4444-4444-8444-444444444444', path.join(home, 'Documents', 'paper-code'), 'Plot the results');
+  claude('55555555-5555-4555-8555-555555555555', home, 'Where am I?');
+  claude('66666666-6666-4666-8666-666666666666', path.join(home, 'Documents'), 'What is here?');
+  put('.codex/sessions/2026/10/01/rollout-a.jsonl', lines([
+    { type: 'session_meta', payload: { id: 'c1', cwd: thesis, timestamp: '2026-10-01T10:00:00Z' } },
+    { type: 'event_msg', payload: { type: 'user_message', message: 'Add a benchmark' } },
+  ]));
+  const looked = [];
+  const access = fs.accessSync;
+  fs.accessSync = (file, ...rest) => { looked.push(String(file)); return access(file, ...rest); };
+  let repos;
+  try { repos = localRepos({ homeDir: home, env: {} }); } finally { fs.accessSync = access; }
+  assert.deepEqual(repos.map((repo) => [repo.name, repo.shown, repo.sessions, repo.checked]), [
+    ['thesis', '~/code/thesis', 3, true],
+    ['paper-code', '~/Documents/paper-code', 1, false],
+  ]);
+  assert.ok(looked.includes(path.join(thesis, '.git')), 'a repository outside the protected folders is checked');
+  assert.equal(looked.some((file) => file.startsWith(path.join(home, 'Documents') + path.sep)), false, 'nothing read inside ~/Documents');
 });
 
 test('Claude Code and Codex sessions: listed by first typed prompt, programs\' runs left out, read as turns of text', () => {
@@ -690,10 +725,59 @@ test('the window\'s model, and the onboarding flow with Connect your library in 
   const start = model.initialPicks(found);
   assert.deepEqual(start.picks, { notes: true, transcripts: false, chats: true, sites: true, papers: false, code: false });
   assert.deepEqual(start.open, { notes: true });
-  assert.equal(model.subOf('notes', { on: true, apps: start.apps }), '1 of 6');
-  assert.equal(model.subOf('code', { on: true, apps: {}, repos: ['a/b'], folders: ['/x', '/y'] }), '1 repo · 2 folders');
-  assert.deepEqual(model.permissionsFor(model.pickedApps(start.picks, start.apps)), { web: ['ChatGPT'], recall: ['ChatGPT'], connectors: [], notes: false });
+  // MATH-114: an assistant that remembers the person starts unticked even when found; the rest found start ticked
+  assert.deepEqual([start.apps.chats.ChatGPT, start.apps.chats['Claude Code'], start.apps.notes.Obsidian, start.apps.sites[model.BROWSER_ROW]], [false, true, true, true]);
+  assert.deepEqual(model.pickedApps(start.picks, start.apps), ['Obsidian', 'Claude Code']);
+  assert.equal(model.subOf('notes', start), 'Obsidian');
+  assert.equal(model.subOf('transcripts', start), 'nothing picked');
+  assert.equal(model.subOf('sites', start), model.BROWSER_ROW);
+  assert.equal(model.rowSub('ChatGPT'), 'Chats about your question · asks what it remembers, for a head start');
+  assert.equal(model.rowSub('Apple Notes'), 'macOS will ask');
+  assert.equal(model.rowSub('Obsidian'), '');
   assert.deepEqual(model.permissionsFor(['Granola', 'Apple Notes', 'Claude']), { web: ['Claude'], recall: ['Claude'], connectors: ['Granola'], notes: true });
+  // recall only once a memory app is ticked; files and the browser from the one checkbox
+  assert.deepEqual(model.permissionsOf(start, { consent: true }), { files: true, browser: true, recall: false, notes: false });
+  const withChatGPT = model.tickRow(start, 'chats', 'ChatGPT', true);
+  assert.equal(withChatGPT.picks.chats, true);
+  assert.deepEqual(model.permissionsOf(withChatGPT, { consent: false, notes: true }), { files: false, browser: false, recall: true, notes: true });
+  // the checkbox names what is read on this Mac and in Engelbart's browser, not connectors, Apple Notes or recall
+  const more = ['Notion', 'Apple Notes', 'Google Docs'].reduce((state, app) => model.tickRow(state, 'notes', app, true), withChatGPT);
+  assert.deepEqual(model.consentFor(more), ['Obsidian', 'Google Docs', 'ChatGPT', 'Claude Code', 'your browser history']);
+  assert.deepEqual(model.consentFor(model.tickAll(start, found, false)), []);
+  // each row's label, by how it is reached and where it stands
+  const seen = { apps: { Obsidian: { found: true, where: '~/Vault' }, ChatGPT: { found: true, signedIn: true, where: 'signed in to Engelbart' }, Perplexity: { found: true, signedIn: false, where: 'Sign in to add' }, Cursor: { found: false }, Evernote: { found: false } } };
+  assert.deepEqual(model.rowLabel('Obsidian', { found: seen }), { text: '~/Vault', tone: '' });
+  assert.deepEqual(model.rowLabel('Cursor', { found: seen }), { text: 'Not found', tone: 'muted' });
+  assert.deepEqual(model.rowLabel('Cursor', { found: seen, folder: '~/Work' }), { text: '~/Work', tone: '' });
+  assert.deepEqual(model.rowLabel('ChatGPT', { found: seen }), { text: 'signed in to Engelbart', tone: '' });
+  assert.deepEqual(model.rowLabel('Perplexity', { found: seen }), { text: 'Sign in to add', tone: 'muted' });
+  assert.deepEqual(model.rowLabel('Evernote', { found: seen }), { text: 'Not found', tone: 'muted' });
+  assert.deepEqual(model.rowLabel('Granola', { found: seen }), { text: 'Opens Granola in your browser to sign in', tone: 'muted' });
+  assert.deepEqual(model.rowLabel('Granola', { found: seen, connectors: { Granola: { pending: true } } }), { text: 'Waiting for Granola sign-in…', tone: 'busy' });
+  assert.deepEqual(model.rowLabel('Notion', { found: seen, connectors: { Notion: { connected: true } } }), { text: 'signed in', tone: '' });
+  assert.deepEqual(model.rowLabel('Apple Notes', { notes: 'asking' }), { text: 'macOS is asking you…', tone: 'busy' });
+  // a group's header: tri-state, and a group is never on with no row ticked (appsOf would read that as every app)
+  assert.equal(model.groupState(start, 'notes'), 'some');
+  assert.equal(model.groupState(start, 'sites'), 'all');
+  assert.equal(model.groupState(start, 'transcripts'), 'none');
+  const offObsidian = model.tickRow(start, 'notes', 'Obsidian', false);
+  assert.deepEqual([offObsidian.picks.notes, model.groupState(offObsidian, 'notes'), model.choicesOf({ picks: offObsidian.picks, apps: offObsidian.apps }).sources.notes.apps], [false, 'none', []]);
+  const notesOff = model.tickGroup(start, 'notes', found);
+  assert.deepEqual([notesOff.picks.notes, Object.values(notesOff.apps.notes).some(Boolean)], [false, false]);
+  const notesOn = model.tickGroup(notesOff, 'notes', found);
+  assert.deepEqual(model.choicesOf({ picks: notesOn.picks, apps: notesOn.apps }).sources.notes.apps, ['Obsidian'], 'the header ticks the rows found, not every app');
+  const nothing = model.tickGroup(start, 'transcripts', found);
+  assert.deepEqual([nothing.picks.transcripts, nothing.open.transcripts], [false, true], 'a group with nothing found opens for the person to pick');
+  // Code: GitHub, and the repositories on this Mac (unticked to start; sent as Code's folders)
+  const withRepos = { ...found, github: { found: true, where: 'signed in' }, localRepos: [{ path: '/Users/me/a', sessions: 3 }, { path: '/Users/me/b', sessions: 1 }] };
+  const code = model.initialPicks(withRepos);
+  assert.deepEqual([code.apps.code.GitHub, model.localPicked(code), model.groupState(code, 'code')], [true, [], 'some']);
+  const oneRepo = model.tickRepo(code, '/Users/me/a', true);
+  assert.deepEqual([model.localPicked(oneRepo), model.subOf('code', oneRepo), model.groupState(oneRepo, 'code')], [['/Users/me/a'], 'GitHub, 1 local repo', 'all']);
+  const allCode = model.tickGroup(model.tickGroup(code, 'code', withRepos), 'code', withRepos);
+  assert.deepEqual([model.localPicked(allCode), allCode.apps.code.GitHub], [['/Users/me/a', '/Users/me/b'], true]);
+  assert.equal(model.allPicked(model.tickAll(code, withRepos), withRepos), true);
+  assert.equal(model.allPicked(code, withRepos), false);
   const sent = model.choicesOf({ picks: start.picks, apps: start.apps, folders: { papers: ['/p'] }, repos: ['a/b'], custom: ' skip drafts ', permissions: { files: false, recall: false }, provider: 'openai', projectId: 'p1' });
   assert.deepEqual(sent.sources.notes, { on: true, apps: ['Obsidian'], folders: [], repos: [] });
   assert.deepEqual(sent.permissions, { files: false, browser: true, recall: false, notes: false });

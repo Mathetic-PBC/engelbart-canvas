@@ -4,7 +4,7 @@ import GithubRepos from '../workspace/GithubRepos.jsx';
 import { heldRow } from '../model/github.js';
 import { rowOf } from '../model/tools.js';
 import { markOpen } from '../ui/connect-open.js';
-import { SOURCES, LOCAL_PDFS, initialPicks, subOf, choicesOf, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, pickedApps, permissionsFor } from '../model/connect.js';
+import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, subOf, choicesOf, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, consentFor, permissionsOf } from '../model/connect.js';
 import obsidian from '../../../design/assets/logos/obsidian.svg';
 import notion from '../../../design/assets/logos/notion.svg';
 import apple from '../../../design/assets/logos/apple.svg';
@@ -41,6 +41,13 @@ import github from '../../../design/assets/logos/github.svg';
 // does and goes through the subagents at work, as Claude Code lists its own), no activity log, no paragraphs of
 // disclaimers on the choose screen, no account of what each import added; the imports still going come first; a Needs-you
 // card is one Log in button and Skip, and Skip leaves that app out for the run.
+// MATH-114 (2026-10-09): the choose screen reads as safe. The mockup's grouped list: each source a group with a tri-state
+// header and a summary of what is ticked; every row says at its right how its app is reached and where it stands, and
+// rows not found stay visible. Ticking is the consent: a connector's sign-in starts (no Sign in… button), Apple Notes asks
+// macOS (no Allow…), a local app that was not found asks for its folder, and an assistant that remembers the person is
+// asked only when ticked (they start unticked). One checkbox, naming the provider, lets the agents read the rest with the
+// person's own subscription, over a box that says where it all goes. Code: GitHub, and the repositories on this Mac that
+// Claude Code and Codex were run in (src/main/connect/scan.cjs localRepos).
 
 const LOGOS = { Obsidian: obsidian, Notion: notion, 'Apple Notes': apple, OneNote: onenote, Zotero: zotero, Overleaf: overleaf, 'Google Docs': googledocs, Evernote: evernote, Granola: granola, 'Google Meet': meet, Zoom: zoom, ChatGPT: openai, Codex: codex, Claude: claude, 'Claude Code': claude, Grok: grok, Gemini: gemini, Perplexity: perplexity, Cursor: cursor, GitHub: github };
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
@@ -73,25 +80,58 @@ const CHECK = <Svg size={12} width={2.5}><path d="M20 6 9 17l-5-5" /></Svg>;
 const MINUS = <Svg size={16} width={1.6}><path d="M5 12h14" /></Svg>;
 const CLOSE = <Svg size={15} width={1.6}><path d="M18 6 6 18" /><path d="m6 6 12 12" /></Svg>;
 const FILE = <Svg size={14} width={1.6}><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" /><path d="M14 2v4a2 2 0 0 0 2 2h4" /><path d="M10 13h4" /><path d="M10 17h4" /></Svg>;
+const GLOBE = <Svg size={14} width={1.5}><circle cx="12" cy="12" r="10" /><path d="M2 12h20" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></Svg>;
+/** "a, b and c". */
+const listOf = (names) => (names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
+const LOCK = <Svg size={13} width={1.8}><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></Svg>;
 const ALERT = <Svg size={14} width={1.8}><path d="M12 9v4" /><path d="M12 17h.01" /><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" /></Svg>;
 
 const shown = (dir) => String(dir || '').replace(/^\/Users\/[^/]+/, '~');
 const logoOf = (name) => (LOGOS[name] ? <span aria-hidden="true" style={{ flex: 'none', display: 'block', width: 14, height: 14, background: `url(${LOGOS[name]}) center / contain no-repeat` }} /> : null);
 
-function Box({ on, size = 14 }) {
-  return <span role="checkbox" aria-checked={on ? 'true' : 'false'} style={{ flex: 'none', width: size, height: size, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 4, boxSizing: 'border-box', background: on ? '#171717' : '#fff', border: on ? 0 : '1.5px solid #c9c9c9', color: '#fff', font: '600 9px/1 var(--font-sans)', cursor: 'pointer' }}>{on ? '✓' : ''}</span>;
+/** A tick: on, off, or (a group's header with some of its rows ticked) `some`. */
+function Box({ on, some = false, size = 14 }) {
+  const full = on && !some;
+  return <span role="checkbox" aria-checked={some ? 'mixed' : on ? 'true' : 'false'} style={{ flex: 'none', width: size, height: size, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 4, boxSizing: 'border-box', background: on || some ? '#171717' : '#fff', border: on || some ? 0 : '1.5px solid #c9c9c9', color: '#fff', font: '600 9px/1 var(--font-sans)', cursor: 'pointer' }}>{some ? '–' : full ? '✓' : ''}</span>;
 }
 
-const subRow = { display: 'flex', alignItems: 'center', gap: 10, width: '100%', height: 30, padding: '0 8px 0 18px', border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', textAlign: 'left' };
+const subRow = { display: 'flex', alignItems: 'center', gap: 10, width: '100%', minHeight: 30, padding: '5px 8px 5px 18px', border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', textAlign: 'left', boxSizing: 'border-box' };
+const LABEL_COLOR = { muted: '#c9c9c9', busy: '#a35200', error: '#e70022', '': '#8f8f8f' };
 
-function AppRow({ name, on, onToggle, where }) {
+/** A row's name, the line under it when it has one, and at its right how it is reached and where it stands. */
+function RowText({ name, on, sub, label }) {
   return (
-    <button type="button" className="hov-wash" data-connect-app={name} onClick={onToggle} title={where || undefined} style={subRow}>
-      <span style={{ margin: '0 1px', display: 'flex', color: '#4d4d4d' }}>{logoOf(name) || (name === LOCAL_PDFS ? FOLDER : <span style={{ width: 14 }} />)}</span>
-      <span style={{ flex: 1, minWidth: 0, font: '13px/1 var(--font-sans)', color: on ? '#171717' : '#4d4d4d', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
-      {where && <span style={{ flex: 'none', maxWidth: 170, font: '11.5px/1 var(--font-sans)', color: '#c9c9c9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{where}</span>}
+    <>
+      <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
+        <span style={{ font: '13px/1.2 var(--font-sans)', color: on ? '#171717' : '#4d4d4d', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+        {sub && <span data-connect-row-sub="1" style={{ font: '11.5px/1.35 var(--font-sans)', color: '#8f8f8f', overflowWrap: 'anywhere' }}>{sub}</span>}
+      </span>
+      {label && label.text && <span data-connect-row-label={label.tone || 'plain'} title={label.text} style={{ flex: 'none', maxWidth: 260, font: '11.5px/1.2 var(--font-sans)', color: LABEL_COLOR[label.tone || ''], overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label.text}</span>}
+    </>
+  );
+}
+
+function AppRow({ name, on, onToggle, label, sub = '', icon = null, data = name }) {
+  return (
+    <button type="button" className="hov-wash" data-connect-app={data} onClick={onToggle} style={subRow}>
+      <span style={{ margin: '0 1px', display: 'flex', color: '#4d4d4d' }}>{icon || logoOf(name) || (name === LOCAL_PDFS ? FOLDER : <span style={{ width: 14 }} />)}</span>
+      <RowText name={name} on={on} sub={sub} label={label} />
       <Box on={on} />
     </button>
+  );
+}
+
+/** A row that opens to more rows (Code's GitHub and Local repos): its caret opens it, the rest of it ticks it. */
+function ExpandRow({ name, on, some = false, open, onOpen, onToggle, label, icon }) {
+  return (
+    <div className="hov-wash" data-connect-app={name} style={{ ...subRow, padding: '5px 8px 5px 4px', cursor: 'default' }}>
+      <button type="button" data-connect-row-open={name} aria-expanded={open ? 'true' : 'false'} aria-label={open ? `Close ${name}` : `Open ${name}`} onClick={onOpen} style={{ flex: 'none', width: 12, display: 'flex', justifyContent: 'center', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', color: '#8f8f8f', transform: `rotate(${open ? 90 : 0}deg)`, transition: 'transform 140ms' }}>{CARET_RIGHT}</button>
+      <button type="button" onClick={onToggle} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, padding: 0, border: 0, background: 'transparent', cursor: 'pointer', textAlign: 'left' }}>
+        <span style={{ margin: '0 1px', display: 'flex', color: '#4d4d4d' }}>{icon || logoOf(name)}</span>
+        <RowText name={name} on={on || some} label={label} />
+        <Box on={on} some={some} />
+      </button>
+    </div>
   );
 }
 
@@ -366,7 +406,12 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   const [view, setView] = React.useState(sessionId ? 'loading' : 'choose'); // choose | chat | working
   const [picks, setPicks] = React.useState(null); // { picks, apps, open }
   const [folders, setFolders] = React.useState({ papers: [], code: [] });
-  const [permissions, setPermissions] = React.useState({ files: true, browser: true, recall: true, notes: false });
+  const [consent, setConsent] = React.useState(true); // "Use my … subscription to read these": files and the browser
+  const [appFolders, setAppFolders] = React.useState({}); // app → the folder picked for a local app not found
+  const [extraRepos, setExtraRepos] = React.useState([]); // folders picked for Code that were not among the repositories found
+  const [repoCount, setRepoCount] = React.useState(null); // GitHub's repositories, for its row
+  const [openRows, setOpenRows] = React.useState({}); // Code's GitHub and Local repos rows, opened
+  const [leaves, setLeaves] = React.useState(false); // "What leaves my Mac?" opened
   const [notesState, setNotesState] = React.useState(''); // '' | 'asking' | 'allowed' | <why not>
   const [connectorStatus, setConnectorStatus] = React.useState({}); // app → { connected, pending }
   const [custom, setCustom] = React.useState('');
@@ -403,7 +448,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     readLibrary();
     const show = (snapshot) => { idRef.current = snapshot.id; setSession(snapshot); setView(snapshot.finished ? 'working' : 'chat'); api.connectMinimize(snapshot.id, false).catch(() => {}); };
     const choose = () => {
-      api.connectDetect().then((value) => { setFound(value); setPicks(initialPicks(value)); }).catch((failure) => { setError(errorMessage(failure)); setPicks(initialPicks(null)); });
+      api.connectDetect().then((value) => { setFound(value); setPicks(initialPicks(value)); if (value && value.github && value.github.found) countRepos(); }).catch((failure) => { setError(errorMessage(failure)); setPicks(initialPicks(null)); });
       api.connectConnectors().then((list) => setConnectorStatus(Object.fromEntries((list || []).map((entry) => [entry.app, entry])))).catch(() => {});
     };
     if (sessionId) {
@@ -446,19 +491,56 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   const begin = (snapshot) => { idRef.current = snapshot.id; setSession(snapshot); onSession(snapshot.id); };
 
   /* ------------------------------------------------------------------ the choose screen's actions */
-  const toggleSource = (id) => setPicks((now) => ({ ...now, picks: { ...now.picks, [id]: !now.picks[id] } }));
-  const expand = (id) => (id === 'sites' ? toggleSource(id) : setPicks((now) => ({ ...now, open: { ...now.open, [id]: !now.open[id] } })));
-  const toggleApp = (id, app) => setPicks((now) => {
-    const was = !!now.picks[id] && !!(now.apps[id] && now.apps[id][app]);
-    const apps = { ...now.apps, [id]: { ...now.apps[id], [app]: !was } };
-    return { ...now, apps, picks: { ...now.picks, [id]: Object.values(apps[id]).some(Boolean) } };
-  });
-  const pickFolder = async (id) => {
-    const chosen = await window.terminalAPI.pickDirectory(undefined).catch(() => null);
-    if (!chosen) return;
-    setFolders((now) => ({ ...now, [id]: id === 'papers' ? [chosen] : (now[id].includes(chosen) ? now[id] : [...now[id], chosen]) }));
-    setPicks((now) => ({ ...now, picks: { ...now.picks, [id]: true } }));
+  // Ticking is the consent (MATH-114): a connector's sign-in starts, Apple Notes asks macOS, a local app that was not found
+  // asks for its folder. Rows ticked from the start sign in when the run does (its needs), never on load.
+  const countRepos = () => api.githubRepos().then((value) => setRepoCount((value.repos || []).length)).catch(() => {});
+  const localRepos = found && Array.isArray(found.localRepos) ? found.localRepos : [];
+  const repoPaths = () => [...localRepos.map((repo) => repo.path), ...extraRepos];
+  const setRow = (id, row, on) => setPicks((now) => tickRow(now, id, row, on, repoPaths()));
+  const toggleGroup = (id) => setPicks((now) => tickGroup(now, id, found));
+  const expand = (id) => setPicks((now) => ({ ...now, open: { ...now.open, [id]: !now.open[id] } }));
+  const pickDir = () => window.terminalAPI.pickDirectory(undefined).catch(() => null);
+  const toggleApp = async (id, app) => {
+    const on = ticked(picks, id, app);
+    const spec = APPS[app] || {};
+    const seen = (found && found.apps && found.apps[app]) || {};
+    setError('');
+    if (on) {
+      setRow(id, app, false);
+      if (spec.reach === 'connector' && (connectorStatus[app] || {}).pending) api.connectConnectorCancel(app).catch(() => {});
+      return;
+    }
+    if (spec.reach === 'local' && !seen.found && !appFolders[app]) {
+      const chosen = await pickDir();
+      if (!chosen) return;
+      setAppFolders((now) => ({ ...now, [app]: chosen }));
+      setRow(id, app, true);
+      return;
+    }
+    setRow(id, app, true);
+    if (spec.reach === 'connector' && !(connectorStatus[app] || {}).connected) { if (!await connectorSignIn(app)) setRow(id, app, false); }
+    else if (spec.reach === 'automation' && notesState !== 'allowed') { if (!await allowNotes()) setRow(id, app, false); }
+    else if (spec.reach === 'signin' && !seen.found) {
+      const done = await engelbartSignIn(app).catch((failure) => { setError(errorMessage(failure)); return false; });
+      if (done) setFound((now) => ({ ...now, apps: { ...now.apps, [app]: { ...((now.apps || {})[app] || {}), found: true, where: 'signed in' } } }));
+      else setRow(id, app, false);
+    }
+    // A web app not signed in stays ticked: the run asks for its sign-in in Engelbart's browser (a need), as the Stage does.
   };
+  const pickPapers = async () => {
+    const chosen = await pickDir();
+    if (!chosen) return;
+    setFolders((now) => ({ ...now, papers: [chosen] }));
+    setRow('papers', LOCAL_PDFS, true);
+  };
+  const pickRepo = async () => {
+    const chosen = await pickDir();
+    if (!chosen) return;
+    if (!localRepos.some((repo) => repo.path === chosen)) setExtraRepos((now) => (now.includes(chosen) ? now : [...now, chosen]));
+    setPicks((now) => tickRepo(now, chosen, true));
+    setOpenRows((now) => ({ ...now, [LOCAL_REPOS]: true }));
+  };
+  const dropRepo = (dir) => { setExtraRepos((now) => now.filter((x) => x !== dir)); setPicks((now) => { const local = { ...now.local }; delete local[dir]; return tickRepo({ ...now, local }, dir, false); }); };
   // GitHub's repositories, as onboarding's step adds them: ticked is in the library now, unticked goes again if this added it.
   const heldRepo = (repo) => heldRow(repo, library);
   const toggleRepo = async (repo) => {
@@ -467,7 +549,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     try {
       if (!row) {
         try { const added = await api.addLibraryItem(repo.url); addedRepos.current.add(added.id); onAdded(added); } catch (failure) { if (!/^Already/.test(errorMessage(failure))) setError(errorMessage(failure)); }
-        setPicks((now) => ({ ...now, picks: { ...now.picks, code: true } }));
+        setRow('code', 'GitHub', true);
       } else if (addedRepos.current.has(row.id) && await api.discardLibraryItem(row.id)) addedRepos.current.delete(row.id);
       await readLibrary();
     } finally { setBusyRepo(''); }
@@ -477,12 +559,20 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     setNotesState('asking');
     const out = await api.connectNotesPermission().catch((failure) => ({ allowed: false, error: errorMessage(failure) }));
     setNotesState(out.allowed ? 'allowed' : out.error || 'macOS did not allow it');
-    setPermissions((now) => ({ ...now, notes: !!out.allowed }));
+    if (!out.allowed) setError(`Apple Notes: ${out.error || 'macOS did not allow it'}`);
+    return !!out.allowed;
   };
   const connectorSignIn = async (app) => {
-    setError('');
     setConnectorStatus((now) => ({ ...now, [app]: { ...(now[app] || {}), pending: true } }));
-    try { const status = await api.connectConnectorSignIn(app); setConnectorStatus((now) => ({ ...now, [app]: status })); } catch (failure) { setConnectorStatus((now) => ({ ...now, [app]: { ...(now[app] || {}), pending: false } })); setError(errorMessage(failure)); }
+    try {
+      const status = await api.connectConnectorSignIn(app);
+      setConnectorStatus((now) => ({ ...now, [app]: status }));
+      return !!(status && status.connected);
+    } catch (failure) {
+      setConnectorStatus((now) => ({ ...now, [app]: { ...(now[app] || {}), pending: false } }));
+      setError(errorMessage(failure));
+      return false;
+    }
   };
 
   const start = async () => {
@@ -490,8 +580,13 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     if (!anyOn) { setError('Pick at least one source.'); return; }
     if (!provider) { setError('Sign in to Claude Code or Codex first.'); return; }
     setError('');
+    const chosen = { papers: [...folders.papers], code: localPicked(picks) };
+    for (const source of SOURCES) for (const app of source.apps) if (appFolders[app] && ticked(picks, source.id, app) && app !== LOCAL_PDFS) chosen[source.id] = [...(chosen[source.id] || []), appFolders[app]];
+    if (!ticked(picks, 'papers', LOCAL_PDFS)) chosen.papers = [];
+    else if (appFolders[LOCAL_PDFS]) chosen.papers = [...new Set([...chosen.papers, appFolders[LOCAL_PDFS]])];
     try {
-      const snapshot = await api.connectStart(choicesOf({ picks: picks.picks, apps: picks.apps, folders, repos: reposTicked(), custom, permissions, provider, projectId }));
+      const permissions = permissionsOf(picks, { consent, notes: notesState === 'allowed' });
+      const snapshot = await api.connectStart(choicesOf({ picks: picks.picks, apps: picks.apps, folders: chosen, repos: reposTicked(), custom, permissions, provider, projectId }));
       begin(snapshot);
       setView('chat');
       setTimeout(() => draftRef.current && draftRef.current.focus(), 60);
@@ -543,7 +638,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     idRef.current = null;
     setSession(null);
     setView('choose');
-    if (!picks) api.connectDetect().then((value) => { setFound(value); setPicks(initialPicks(value)); }).catch(() => setPicks(initialPicks(null)));
+    if (!picks) api.connectDetect().then((value) => { setFound(value); setPicks(initialPicks(value)); if (value && value.github && value.github.found) countRepos(); }).catch(() => setPicks(initialPicks(null)));
   };
   // Put away: the work goes on in the background, the dock showing it. Onboarding moves on.
   const putAway = () => {
@@ -558,7 +653,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   const current = (providers || []).find((entry) => entry.provider === (session ? session.provider : provider)) || null;
   const targetName = current ? current.name : 'Claude Code';
   const anyOn = picks ? SOURCES.some((source) => picks.picks[source.id]) : false;
-  const allOn = picks ? SOURCES.every((source) => picks.picks[source.id]) : false;
+  const allOn = picks ? allPicked(picks, found) : false;
   const ready = providers === null || providers.some((entry) => entry.ready); // unknown until the list comes: no flash of "sign in first"
   const jobs = session ? workJobs(session.jobs) : [];
   const needs = session ? session.needs : [];
@@ -578,8 +673,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     </div>
   );
 
-  const picked = picks ? pickedApps(picks.picks, picks.apps) : [];
-  const asks = permissionsFor(picked);
+  const reads = picks ? consentFor(picks) : [];
 
   return (
     <div data-connect-library={view} role={page ? 'region' : 'dialog'} aria-label="Connect your library" style={page
@@ -588,42 +682,73 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
       <style>{CSS}</style>
 
       {view === 'choose' && (() => {
+        const label = (app) => rowLabel(app, { found, connectors: connectorStatus, notes: notesState, folder: appFolders[app] ? shown(appFolders[app]) : app === LOCAL_PDFS && folders.papers.length ? shown(folders.papers[0]) : '' });
+        const github = (found && found.github) || {};
+        const githubLabel = github.found ? { text: `${github.where || 'signed in'}${repoCount != null ? ` · ${repoCount} repo${repoCount === 1 ? '' : 's'}` : ''}`, tone: '' } : { text: 'Sign in to add', tone: 'muted' };
+        const reposOn = localPicked(picks).length;
+        const reposAll = repoPaths().length;
+        const toggleGithub = async () => {
+          if (ticked(picks, 'code', 'GitHub')) { setRow('code', 'GitHub', false); return; }
+          setRow('code', 'GitHub', true);
+          if (github.found) return;
+          setError('');
+          const done = await engelbartSignIn('GitHub').catch((failure) => { setError(errorMessage(failure)); return false; });
+          if (!done) { setRow('code', 'GitHub', false); return; }
+          setFound((now) => ({ ...now, github: { found: true, where: 'signed in' } }));
+          countRepos();
+        };
+        const toggleLocal = () => {
+          if (reposOn) setPicks((now) => tickRow(now, 'code', LOCAL_REPOS, false));
+          else if (reposAll) setPicks((now) => tickRow(now, 'code', LOCAL_REPOS, true, repoPaths()));
+          else pickRepo();
+        };
         const sourcesList = (
           <div style={{ flex: 'none', display: 'flex', flexDirection: 'column', margin: '0 -8px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, padding: '0 8px', font: '12.5px/1 var(--font-sans)', color: '#8f8f8f' }}>
               Sources<span style={{ fontSize: 9 }}>▾</span><span style={{ flex: 1 }} />
-              <button type="button" className="bart-text" data-connect-all="1" onClick={() => setPicks((now) => ({ ...now, picks: Object.fromEntries(SOURCES.map((source) => [source.id, !allOn])) }))}>{allOn ? 'Clear' : 'Select all'}</button>
+              <button type="button" className="bart-text" data-connect-all="1" onClick={() => setPicks((now) => tickAll(now, found, !allOn))}>{allOn ? 'Clear' : 'Select all'}</button>
             </div>
             {SOURCES.map((source) => {
-              const on = !!picks.picks[source.id];
-              const open = !!picks.open[source.id] && source.id !== 'sites';
-              const sub = subOf(source.id, { on, apps: picks.apps, repos: reposTicked(), folders: folders[source.id] || [] });
-              const where = source.id === 'sites' ? (found && found.sites && found.sites.where) : '';
+              const state = groupState(picks, source.id);
+              const open = !!picks.open[source.id];
               return (
                 <React.Fragment key={source.id}>
-                  <div className="hov-wash" data-connect-source={source.id} style={{ display: 'flex', alignItems: 'center', gap: 8, height: 34, padding: '0 8px 0 4px', borderRadius: 6 }}>
-                    <button type="button" onClick={() => expand(source.id)} aria-expanded={open ? 'true' : 'false'} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, height: '100%', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', textAlign: 'left', color: on ? '#171717' : '#8f8f8f' }}>
-                      <span style={{ flex: 'none', width: 12, display: 'flex', justifyContent: 'center', color: '#8f8f8f', transform: `rotate(${open ? 90 : 0}deg)`, transition: 'transform 140ms' }}>{source.id === 'sites' ? null : CARET_RIGHT}</span>
-                      <span style={{ flex: 1, minWidth: 0, font: '13.5px/1 var(--font-sans)', color: '#171717' }}>{source.label}</span>
-                      <span title={where || undefined} style={{ flex: 'none', font: '12px/1 var(--font-sans)', color: '#8f8f8f' }}>{sub || (where && on ? where : '')}</span>
+                  <div className="hov-wash" data-connect-source={source.id} data-connect-group={state} style={{ display: 'flex', alignItems: 'center', gap: 8, height: 34, padding: '0 8px 0 4px', borderRadius: 6 }}>
+                    <button type="button" onClick={() => expand(source.id)} aria-expanded={open ? 'true' : 'false'} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, height: '100%', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', textAlign: 'left' }}>
+                      <span style={{ flex: 'none', width: 12, display: 'flex', justifyContent: 'center', color: '#8f8f8f', transform: `rotate(${open ? 90 : 0}deg)`, transition: 'transform 140ms' }}>{CARET_RIGHT}</span>
+                      <span style={{ flex: 'none', font: '13.5px/1 var(--font-sans)', color: '#171717' }}>{source.label}</span>
+                      <span data-connect-summary="1" style={{ flex: 1, minWidth: 0, font: '12px/1 var(--font-sans)', color: state === 'none' ? '#c9c9c9' : '#8f8f8f', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{subOf(source.id, picks)}</span>
                     </button>
-                    <span onClick={(event) => { event.stopPropagation(); toggleSource(source.id); }}><Box on={on} /></span>
+                    <span data-connect-group-box={source.id} onClick={(event) => { event.stopPropagation(); toggleGroup(source.id); }}><Box on={state === 'all'} some={state === 'some'} /></span>
                   </div>
                   {open && (
                     <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 1, padding: '1px 0 6px 26px' }}>
                       <span style={{ position: 'absolute', left: 33, top: 2, bottom: 8, width: 1, background: '#eaeaea' }} />
-                      {source.apps.map((app) => <AppRow key={app} name={app} where={found && found.apps && found.apps[app] && found.apps[app].found ? found.apps[app].where : ''} on={on && !!(picks.apps[source.id] && picks.apps[source.id][app])} onToggle={() => toggleApp(source.id, app)} />)}
+                      {source.apps.map((app) => <AppRow key={app} name={app} label={label(app)} sub={rowSub(app)} on={ticked(picks, source.id, app)} onToggle={() => toggleApp(source.id, app)} />)}
+                      {source.id === 'sites' && <AppRow name={BROWSER_ROW} icon={GLOBE} label={found && found.sites && found.sites.found ? { text: found.sites.where, tone: '' } : { text: 'Not found', tone: 'muted' }} on={ticked(picks, 'sites', BROWSER_ROW)} onToggle={() => setRow('sites', BROWSER_ROW, !ticked(picks, 'sites', BROWSER_ROW))} />}
                       {source.id === 'papers' && (folders.papers.length
                         ? folders.papers.map((dir) => <FolderRow key={dir} path={dir} onRemove={() => setFolders((now) => ({ ...now, papers: [] }))} />)
-                        : <AddRow label="Select a folder of papers…" hint="optional" data="papers-folder" onClick={() => pickFolder('papers')} />)}
+                        : <AddRow label="Select a folder of papers…" hint="optional" data="papers-folder" onClick={pickPapers} />)}
                       {source.id === 'code' && (
                         <>
-                          {/* Onboarding's own repository list, roomy: "make the ui better for selecting a repository, it is currently way too cramped" */}
-                          <div data-connect-github="1" style={{ height: 320, display: 'flex', flexDirection: 'column', padding: '2px 8px 6px 18px' }}>
-                            <GithubRepos held={heldRepo} onToggle={toggleRepo} busyId={busyRepo} />
-                          </div>
-                          {folders.code.map((dir) => <FolderRow key={dir} path={dir} onRemove={() => setFolders((now) => ({ ...now, code: now.code.filter((x) => x !== dir) }))} />)}
-                          <AddRow label="Select a folder…" hint="local repos" data="code-folder" onClick={() => pickFolder('code')} />
+                          <ExpandRow name="GitHub" on={ticked(picks, 'code', 'GitHub')} open={!!openRows.GitHub} onOpen={() => setOpenRows((now) => ({ ...now, GitHub: !now.GitHub }))} onToggle={toggleGithub} label={githubLabel} />
+                          {openRows.GitHub && (
+                            // Onboarding's own repository list, roomy: "make the ui better for selecting a repository, it is currently way too cramped"
+                            <div data-connect-github="1" style={{ height: 320, display: 'flex', flexDirection: 'column', padding: '2px 8px 6px 34px' }}>
+                              <GithubRepos held={heldRepo} onToggle={toggleRepo} busyId={busyRepo} />
+                            </div>
+                          )}
+                          <ExpandRow name={LOCAL_REPOS} icon={FOLDER} on={reposAll > 0 && reposOn === reposAll} some={reposOn > 0 && reposOn < reposAll} open={!!openRows[LOCAL_REPOS]} onOpen={() => setOpenRows((now) => ({ ...now, [LOCAL_REPOS]: !now[LOCAL_REPOS] }))} onToggle={toggleLocal} label={localRepos.length ? { text: `${localRepos.length} on this Mac`, tone: '' } : { text: 'Not found', tone: 'muted' }} />
+                          {openRows[LOCAL_REPOS] && (
+                            <div data-connect-local-repos="1" style={{ display: 'flex', flexDirection: 'column', gap: 1, paddingLeft: 16 }}>
+                              {localRepos.map((repo) => (
+                                <AppRow key={repo.path} data={`repo:${repo.path}`} name={repo.name} icon={FOLDER} on={!!(picks.local && picks.local[repo.path])} onToggle={() => setPicks((now) => tickRepo(now, repo.path, !(now.local && now.local[repo.path])))}
+                                  sub={`${repo.shown} · ${repo.sessions} session${repo.sessions === 1 ? '' : 's'}${repo.checked ? '' : ' · checked when you continue'}`} />
+                              ))}
+                              {extraRepos.map((dir) => <FolderRow key={dir} path={dir} onRemove={() => dropRepo(dir)} />)}
+                              <AddRow label="Select a folder…" hint="a repository" data="code-folder" onClick={pickRepo} />
+                            </div>
+                          )}
                         </>
                       )}
                     </div>
@@ -633,45 +758,29 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
             })}
           </div>
         );
+        const company = current && current.provider === 'openai' ? 'OpenAI' : 'Anthropic';
         const permissionsBox = (
-          // What the agents will do, and the permissions they need: "add the permission requests … as well as a disclaimer
-          // that the agents will do all of it automatically" (2026-10-08: each a line, no subtext under it).
-          <div data-connect-permissions="1" style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '14px 16px', border: '1px solid #eaeaea', borderRadius: 10, background: '#fafafa' }}>
-            <div style={{ font: '500 13.5px/1.4 var(--font-sans)', color: '#171717' }}>Agents do all of this for you</div>
-            {[
-              { key: 'files', label: 'Read files on this Mac' },
-              ...(asks.web.length ? [{ key: 'browser', label: 'Use my accounts in the background' }] : []),
-              ...(asks.recall.length && permissions.browser ? [{ key: 'recall', label: `Ask ${asks.recall.join(' and ')} what ${asks.recall.length === 1 ? 'it remembers' : 'they remember'} about my research` }] : []),
-            ].map((row) => (
-              <button key={row.key} type="button" role="checkbox" aria-checked={permissions[row.key] ? 'true' : 'false'} data-connect-permission={row.key} onClick={() => setPermissions((now) => ({ ...now, [row.key]: !now[row.key] }))} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, width: '100%', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', textAlign: 'left' }}>
-                <span style={{ paddingTop: 2.5 }}><Box on={!!permissions[row.key]} /></span>
-                <span style={{ flex: 1, minWidth: 0, font: '13px/1.4 var(--font-sans)', color: '#171717' }}>{row.label}</span>
-              </button>
-            ))}
-            {asks.notes && (
-              <div data-connect-notes-permission={notesState || 'ask'} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                {logoOf('Apple Notes')}
-                <span style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <span style={{ font: '13px/1.4 var(--font-sans)', color: '#171717' }}>Let Engelbart read Apple Notes</span>
-                  <span style={{ font: '12px/1.4 var(--font-sans)', color: notesState && notesState !== 'allowed' && notesState !== 'asking' ? '#e70022' : '#8f8f8f' }}>{notesState === 'allowed' ? 'Allowed' : notesState === 'asking' ? 'macOS is asking you…' : notesState || 'macOS asks you once'}</span>
+          // One checkbox (MATH-114): the person's own subscription reads what is ticked. Connectors, Apple Notes and asking an
+          // assistant what it remembers are consented to by ticking their rows, and are not named here.
+          <div data-connect-permissions="1" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {reads.length > 0 && (
+              <button type="button" role="checkbox" aria-checked={consent ? 'true' : 'false'} data-connect-permission="consent" onClick={() => setConsent((now) => !now)} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, width: '100%', padding: '14px 16px', border: '1px solid #eaeaea', borderRadius: 10, background: '#fafafa', cursor: 'pointer', textAlign: 'left' }}>
+                <span style={{ paddingTop: 2.5 }}><Box on={consent} /></span>
+                <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <span style={{ font: '500 13.5px/1.4 var(--font-sans)', color: '#171717' }}>Use my {targetName} subscription to read these</span>
+                  <span style={{ font: '12.5px/1.45 var(--font-sans)', color: '#8f8f8f' }}>Reads {listOf(reads)}. macOS may ask before Engelbart reads some of these.</span>
                 </span>
-                {notesState !== 'allowed' && <button type="button" className="cx-ghost" disabled={notesState === 'asking'} onClick={allowNotes}>Allow…</button>}
-              </div>
+              </button>
             )}
-            {asks.connectors.map((app) => {
-              const status = connectorStatus[app] || {};
-              return (
-                <div key={app} data-connect-connector={app} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  {logoOf(app)}
-                  <span style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    <span style={{ font: '13px/1.4 var(--font-sans)', color: '#171717' }}>{status.connected ? `Connected to ${app}` : `Sign in to ${app}`}</span>
-                    <span style={{ font: '12px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{status.connected ? 'Through its own connector' : 'Opens in your browser'}</span>
-                  </span>
-                  {status.pending ? <button type="button" className="bart-text" onClick={() => api.connectConnectorCancel(app).catch(() => {})}>Cancel</button>
-                    : !status.connected && <button type="button" className="cx-ghost" onClick={() => connectorSignIn(app)}>Sign in…</button>}
-                </div>
-              );
-            })}
+            <div data-connect-reassure="1" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 16px', border: '1px solid #eaeaea', borderRadius: 10 }}>
+              <span style={{ flex: 'none', paddingTop: 2, color: '#8f8f8f', display: 'flex' }}>{LOCK}</span>
+              <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6, font: '12.5px/1.5 var(--font-sans)', color: '#4d4d4d' }}>
+                <span>Stored only on your Mac in ~/.engelbart. {targetName} reads it through your account. Mathetic never sees it.{' '}
+                  <button type="button" className="bart-text" data-connect-leaves="1" aria-expanded={leaves ? 'true' : 'false'} onClick={() => setLeaves((now) => !now)}>What leaves my Mac?</button>
+                </span>
+                {leaves && <span data-connect-leaves-text="1" style={{ color: '#8f8f8f' }}>What the agents read is sent to {company} through your own {targetName} account, the way any {targetName} session is, to be turned into notes. The notes, and everything Engelbart keeps, stay in ~/.engelbart on this Mac. Nothing goes to Mathetic.</span>}
+              </span>
+            </div>
           </div>
         );
         const customBox = (

@@ -94,11 +94,21 @@ app.whenReady().then(async () => {
     await press(wc, '[data-connect-source="chats"] button[aria-expanded]');
     await press(wc, '[data-connect-app="ChatGPT"]');
     assert.equal(await attr(wc, '[data-connect-app=ChatGPT] [role=checkbox]', 'aria-checked'), 'true');
-    // Each a line with no subtext under it (2026-10-08).
-    assert.match(await text(wc, '[data-connect-permissions]'), /Agents do all of this for you[\s\S]*Use my accounts in the background\s*✓?\s*Ask ChatGPT what it remembers about my research\s*$/);
+    // MATH-114: asking ChatGPT what it remembers is ticking it; one checkbox, naming the provider, for the rest.
+    assert.match(await text(wc, '[data-connect-app=ChatGPT]'), /asks what it remembers/);
+    assert.equal(await js(wc, 'document.querySelectorAll("[data-connect-permission]").length'), 1, 'one consent checkbox');
+    assert.match(await text(wc, '[data-connect-permission]'), /^✓?Use my Claude Code subscription to read these/);
+    assert.match(await text(wc, '[data-connect-permission]'), /macOS may ask before Engelbart reads some of these\.$/);
+    assert.doesNotMatch(await text(wc, '[data-connect-permissions]'), /what (it|they) remembers?/, 'no "Ask … remember" row');
+    assert.match(await text(wc, '[data-connect-reassure]'), /Stored only on your Mac in ~\/\.engelbart\. Claude Code reads it through your account\. Mathetic never sees it\./);
+    const buttons = await js(wc, 'JSON.stringify([...document.querySelectorAll("[data-connect-library=choose] button")].map((el) => el.textContent.trim()))');
+    assert.equal(JSON.parse(buttons).some((label) => /^(Sign in…|Allow…)$/.test(label)), false, 'no Sign in… or Allow… buttons: ticking is the consent');
     await shot(wc, '1-choose');
-    // Code: onboarding's own repository list, roomy (here GitHub is not set up, so its sign-in shows in its place).
+    // Code: GitHub's row opens onboarding's own repository list, roomy (here GitHub is not set up, so its sign-in shows in its place).
     await press(wc, '[data-connect-source="code"] button[aria-expanded]');
+    await until(() => has(wc, '[data-connect-row-open="GitHub"]'), 'Code\'s rows: GitHub and Local repos');
+    assert.ok(await has(wc, '[data-connect-app="Local repos"]'), 'Local repos under Code');
+    await press(wc, '[data-connect-row-open="GitHub"]');
     await until(() => has(wc, '[data-connect-github]'), 'the repository list under Code');
     const github = JSON.parse(await js(wc, 'JSON.stringify(document.querySelector("[data-connect-github]").getBoundingClientRect())'));
     assert.ok(github.height >= 300, `the repository list has room: ${github.height}`);

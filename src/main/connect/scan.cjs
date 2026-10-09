@@ -47,7 +47,8 @@ function detect({ homeDir, env = process.env, zotero = () => null, github = () =
   const zoom = path.join(homeDir, 'Documents', 'Zoom');
   set('Zoom', exists(zoom), exists(zoom) ? '~/Documents/Zoom' : '');
   const drives = googleDrives(homeDir);
-  set('Google Docs', drives.length || web.has('Google Docs') || has('Google Docs'), web.has('Google Docs') ? 'signed in in Engelbart' : drives.length ? 'Google Drive on this Mac' : '');
+  set('Google Docs', drives.length || web.has('Google Docs') || has('Google Docs'), web.has('Google Docs') ? 'signed in to Engelbart' : 'Sign in to add');
+  apps['Google Docs'].signedIn = web.has('Google Docs');
   const zs = zotero() || {};
   set('Zotero', zs.connected || exists(path.join(homeDir, 'Zotero')), zs.connected ? `signed in${zs.username ? ` as ${zs.username}` : ''}` : (exists(path.join(homeDir, 'Zotero')) ? '~/Zotero (sign in to read it)' : ''));
   // Only whether the folders are there: reading inside Downloads or Documents is left to the scan, after the person picked.
@@ -58,7 +59,10 @@ function detect({ homeDir, env = process.env, zotero = () => null, github = () =
     const reach = APPS[app].reach;
     if (reach === 'connector') { const on = connectors(app); set(app, on || has(app), on ? 'connected' : has(app) ? 'on this Mac' : ''); continue; }
     if (reach === 'automation') { set(app, false, 'on this Mac'); continue; } // macOS asks first, so only when ticked
-    set(app, web.has(app) || has(app), web.has(app) ? 'signed in in Engelbart' : has(app) ? 'on this Mac' : '');
+    // Found because its desktop app is installed is not the same as reachable: the agents read it in Engelbart's browser,
+    // which needs a sign-in there (MATH-114: "Sign in to add", not "on this Mac").
+    set(app, web.has(app) || has(app), web.has(app) ? 'signed in to Engelbart' : has(app) ? 'Sign in to add' : '');
+    apps[app].signedIn = web.has(app);
   }
   const profiles = readers.browserProfiles(homeDir);
   const gs = github() || {};
@@ -66,7 +70,53 @@ function detect({ homeDir, env = process.env, zotero = () => null, github = () =
     apps,
     sites: { found: profiles.length > 0, where: [...new Set(profiles.map((profile) => profile.browser))].join(', ') },
     github: { found: !!gs.connected, where: gs.connected ? `signed in${gs.login ? ` as ${gs.login}` : ''}` : '' },
+    localRepos: safely(() => localRepos({ homeDir, env })),
   };
+}
+
+// The folders macOS keeps behind a prompt (Files and Folders, iCloud Drive): nothing inside them is touched before the
+// person picks, as the PDF folders above (MATH-114).
+const PROTECTED = ['Documents', 'Desktop', 'Downloads', path.join('Library', 'Mobile Documents')];
+
+/**
+ * The repositories on this Mac found before any folder is picked (MATH-114): the folders Claude Code and Codex sessions
+ * were run in (readers.localChats, programs' runs left out), grouped by that folder, with how many sessions each. One that
+ * macOS does not protect is kept only when it, or a folder above it in the home folder, holds a .git (and is then named by
+ * that one); one under ~/Documents, ~/Desktop or ~/Downloads is listed unchecked (`checked: false`), its .git looked for
+ * by gitFolders once the person continues. Engelbart's own folders (~/.engelbart and the like) and temporary ones are left
+ * out. → [{ path, shown, name, sessions, checked }], most sessions first.
+ */
+function localRepos({ homeDir, env = process.env, limit = 2000, max = 40 } = {}) {
+  const home = path.resolve(homeDir);
+  const inside = (dir, root) => dir === root || dir.startsWith(root + path.sep);
+  const guarded = PROTECTED.map((name) => path.join(home, name));
+  const byFolder = new Map();
+  for (const app of ['Claude Code', 'Codex']) {
+    for (const chat of readers.localChats(app, { homeDir, env, limit })) {
+      const dir = chat.project && chat.project.startsWith('~') ? path.join(home, chat.project.slice(1)) : chat.project;
+      if (dir && path.isAbsolute(dir)) byFolder.set(path.resolve(dir), (byFolder.get(path.resolve(dir)) || 0) + 1);
+    }
+  }
+  const repos = new Map();
+  for (const [dir, sessions] of byFolder) {
+    if (inside(dir, home) ? dir === home || path.relative(home, dir).startsWith('.') : /^\/(private|tmp|var)(\/|$)/.test(dir)) continue;
+    let root = null;
+    let checked = true;
+    if (guarded.some((top) => inside(dir, top))) {
+      if (guarded.includes(dir)) continue; // ~/Desktop itself is not a repository
+      root = dir;
+      checked = false;
+    } else {
+      for (let at = dir, up = 0; up < 8 && at !== home && at !== path.dirname(at); at = path.dirname(at), up += 1) {
+        if (exists(path.join(at, '.git'))) { root = at; break; }
+      }
+    }
+    if (!root) continue;
+    const held = repos.get(root) || { path: root, shown: readers.shownPath(homeDir, root), name: path.basename(root), sessions: 0, checked };
+    held.sessions += sessions;
+    repos.set(root, held);
+  }
+  return [...repos.values()].sort((a, b) => b.sessions - a.sessions || a.name.localeCompare(b.name)).slice(0, max);
 }
 
 const safely = (work) => { try { return work(); } catch (error) { return { error: error.message }; } };
@@ -187,4 +237,4 @@ function gitFolders(dir, depth = 2) {
   return entries.filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules').flatMap((entry) => gitFolders(path.join(dir, entry.name), depth - 1)).slice(0, 100);
 }
 
-module.exports = { detect, scanFor, gitFolders, googleDrives, pdfsAtAGlance };
+module.exports = { detect, scanFor, gitFolders, localRepos, googleDrives, pdfsAtAGlance };
