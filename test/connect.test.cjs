@@ -22,7 +22,7 @@ const projects = require('../src/main/store/projects.cjs');
 const readers = require('../src/main/connect/readers.cjs');
 const notes = require('../src/main/connect/notes.cjs');
 const { createImportTools, validateImportTool, chatNote, toolsFor, googleMarkdown, csvTable, IMPORT_TOOLS } = require('../src/main/connect/tools.cjs');
-const { createConnect, readReply, readSurvey, readSuggestions, workspaceName, cleanChoices, connectChoice } = require('../src/main/connect/session.cjs');
+const { createConnect, readReply, readSurvey, cleanChoices, connectChoice } = require('../src/main/connect/session.cjs');
 const { createFakeConnectAgents } = require('../src/main/connect/fake.cjs');
 const { createWebSignIn } = require('../src/main/connect/web-signin.cjs');
 const { detect, scanFor, localRepos } = require('../src/main/connect/scan.cjs');
@@ -574,74 +574,14 @@ test('a session with the fake agents: a folder button, a question card, imports 
   assert.doesNotMatch(saved, /sk-test/, 'the shape check took the key out');
   assert.equal(now.memory.removed, 1);
   assert.ok(fs.existsSync(path.join(ctx.dataRoot, '.connect', started.id, 'session.json')));
-  assert.equal(now.workspaces, 'waiting', 'no suggestions before onboarding has made the project');
-  assert.equal(now.jobs.some((job) => job.kind === 'suggest'), false);
 
   const { project } = await projects.createProjectWithWelcome(ctx, { name: 'From connect' });
   assert.equal(await connect.attachProject(ctx, started.id, project.id), 0, 'no notes were held for it');
   const names = (await ctx.libraryDb.list()).filter((row) => row.project_id === project.id && row.tags.includes('note')).map((row) => row.name);
   assert.deepEqual(names, ['Welcome!']);
-  // Getting started's suggestions (2026-10-09): MEMORY.md saved and the project made, the suggest agent writes them.
-  const suggested = await until(() => connect.workspaces(ctx, project.id), (value) => value.status === 'ready' || value.status === 'none', 'the suggested workspaces', 1500);
-  assert.equal(suggested.status, 'ready');
-  assert.deepEqual(suggested.suggestions.map((entry) => entry.name), ['Help-seeking in novices', 'Tutoring systems', 'Tools for thought']);
-  const known = new Set((await ctx.libraryDb.list()).map((row) => row.id));
-  assert.ok(suggested.suggestions[0].items.length > 0 && suggested.suggestions.every((entry) => entry.items.every((id) => known.has(id))), 'library rows it was shown');
-  const rows = await ctx.libraryDb.list();
-  assert.equal(suggested.suggestions.some((entry) => entry.items.some((id) => rows.find((row) => row.id === id).tags.includes('note'))), false, 'never a project\'s note');
-  assert.equal(connect.state(started.id).workspaces, 'ready');
-  assert.equal(connect.state(started.id).jobs.some((job) => job.kind === 'suggest'), false, 'not in the working view');
-  assert.equal(JSON.parse(fs.readFileSync(path.join(ctx.dataRoot, '.connect', started.id, 'workspaces.json'), 'utf8')).status, 'ready');
-  connect.pickedWorkspace(ctx, project.id, 'Tutoring systems');
-  assert.deepEqual(connect.workspaces(ctx, project.id).picked, ['Tutoring systems']);
-  assert.deepEqual(connect.workspaces(ctx, 'not-a-project'), { status: 'none', suggestions: [], picked: [] });
   connect.dismiss(started.id);
-  // After a restart (no live session), read from the session's folder.
-  const later = fakeConnect().connect.workspaces(ctx, project.id);
-  assert.deepEqual([later.status, later.suggestions.length, later.picked], ['ready', 3, ['Tutoring systems']]);
   assert.equal(connect.list(ctx.dataRoot).some((s) => s.id === started.id), false);
   fs.rmSync(memory.memoryPath(ctx.dataRoot));
-});
-
-test('suggested workspaces: the reply read safely (lengths clipped, unknown ids and repeated names dropped, four at most); bad JSON is none', () => {
-  const ids = ['a', 'b', 'c'];
-  const many = Array.from({ length: 13 }, (_, i) => (i % 2 ? 'b' : `x${i}`));
-  const reply = JSON.stringify({ workspaces: [
-    { name: 'Transfer of learning in novice programmers across languages', description: 'D'.repeat(500), why: 'your Zotero collection \'Transfer\'', items: ['a', 'zzz', 'a', 'c'] },
-    { name: 'transfer of learning in novice programmers across languages' },
-    { name: 'Help-seeking', items: many },
-    { name: '' }, { name: 'Three' }, { name: 'Four' }, { name: 'Five' },
-  ] });
-  const read = readSuggestions(`\`\`\`json\n${reply}\n\`\`\``, ids);
-  assert.deepEqual(read.map((entry) => entry.name), ['Transfer of learning in novice', 'Help-seeking', 'Three', 'Four'], 'cut at a word, a repeat dropped, four kept');
-  assert.ok(read.every((entry) => entry.name.length <= 40));
-  assert.equal(read[0].description.length, 300);
-  assert.deepEqual(read[0].items, ['a', 'c'], 'unknown and repeated ids dropped');
-  assert.deepEqual(read[1].items, ['b']);
-  assert.equal(read[0].why, 'your Zotero collection \'Transfer\'');
-  assert.equal(readSuggestions('Sorry, I cannot.', ids), null);
-  assert.equal(readSuggestions('{"workspaces": [{"name": ', ids), null);
-  assert.equal(readSuggestions(JSON.stringify({ workspaces: [] }), ids), null);
-  assert.equal(workspaceName('Supercalifragilisticexpialidociousmorethanforty'), 'Supercalifragilisticexpialidociousmoreth');
-});
-
-test('no suggestions when MEMORY.md was skipped: the suggest agent never runs and the status is none', async () => {
-  const order = [];
-  const inner = createFakeConnectAgents({ delayMs: 5 });
-  const agents = { turn: (input) => { const kind = input.meta && input.meta.kind; order.push(kind); if (kind === 'import') return Promise.reject(new Error('nothing came in')); return inner.turn(input); } };
-  const { connect, state } = fakeConnect({ agents });
-  const started = await connect.start({ sources: { sites: { on: true } }, permissions: { recall: false } });
-  await until(state(started.id), (s) => !s.thinking, 'the first turn');
-  connect.importNow(started.id);
-  const now = await until(state(started.id), (s) => s.memory.status === 'skipped', 'MEMORY.md skipped');
-  assert.equal(now.workspaces, 'none');
-  const { project } = await projects.createProjectWithWelcome(ctx, { name: 'Skipped memory' });
-  await connect.attachProject(ctx, started.id, project.id);
-  await new Promise((resolve) => { setTimeout(resolve, 50); });
-  assert.equal(order.includes('suggest'), false, JSON.stringify(order));
-  assert.equal(order.includes('memory'), false);
-  assert.equal(connect.workspaces(ctx, project.id).status, 'none');
-  connect.dismiss(started.id);
 });
 
 /**

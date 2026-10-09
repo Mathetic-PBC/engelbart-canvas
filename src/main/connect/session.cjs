@@ -66,13 +66,7 @@ const ASK_KINDS = new Set(['single', 'multi', 'open', 'repos']);
 const REPOS_ASK = /\bwhich\b.*\brepo(?:s|sitory|sitories)?\b/i;
 const AUTHORIZE_KINDS = new Set(['signin', 'connector', 'permission', 'folder']);
 const SIGNIN_APPS = new Set(['Zotero', 'GitHub']);
-const PRIORITY = Object.freeze({ survey: 0, recall: 1, import: 2, memory: 3, redact: 4, suggest: 5 });
-// Engelbart's own jobs, not shown in the working view's list: MEMORY.md's secrets check and the suggested workspaces.
-const HIDDEN = new Set(['redact', 'suggest']);
-const SUGGEST_ROWS = 300;
-const SUGGEST_MAX = 4;
-const SUGGEST_ITEMS = 12;
-const NAME_MAX = 40;
+const PRIORITY = Object.freeze({ survey: 0, recall: 1, import: 2, memory: 3, redact: 4 });
 const WORK = new Set(['survey', 'recall', 'import']);
 const ENDED = new Set(['done', 'failed', 'stopped']);
 // "change the default model for the context brainstorming and for the background subagents to sonnet high/sol high, and
@@ -181,59 +175,6 @@ function readSurvey(text) {
   return { signedIn: typeof value.signedIn === 'boolean' ? value.signedIn : null, summary: line(value.summary, 600), total: Number.isFinite(value.total) ? value.total : null, items, notes: value.notes ? line(value.notes, 600) : null };
 }
 
-/** A workspace's name from words: one line, at most `max` characters, cut at a word when there is one to cut at. */
-function workspaceName(text, max = NAME_MAX) {
-  const value = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
-  if (value.length <= max) return value;
-  const cut = value.slice(0, max + 1).lastIndexOf(' ');
-  return (cut >= max / 2 ? value.slice(0, cut) : value.slice(0, max)).replace(/[\s,;:.\-–—]+$/, '');
-}
-
-/**
- * The suggest agent's reply made safe (2026-10-09, onboarding's Getting started) → [{ name, description, why, items }],
- * at most four, or null when nothing in it can be used. `ids` the library rows it was shown: any other id is dropped.
- */
-function readSuggestions(text, ids) {
-  const known = ids instanceof Set ? ids : new Set(Array.isArray(ids) ? ids : []);
-  const raw = String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-  const start = raw.indexOf('{'), end = raw.lastIndexOf('}');
-  let value = null;
-  if (start >= 0 && end > start) { try { value = JSON.parse(raw.slice(start, end + 1)); } catch { value = null; } }
-  const list = value && typeof value === 'object' && Array.isArray(value.workspaces) ? value.workspaces : [];
-  const out = [];
-  const names = new Set();
-  for (const entry of list) {
-    if (!entry || typeof entry !== 'object' || typeof entry.name !== 'string') continue;
-    const name = workspaceName(entry.name);
-    if (!name || names.has(name.toLowerCase())) continue;
-    names.add(name.toLowerCase());
-    const items = [...new Set((Array.isArray(entry.items) ? entry.items : []).filter((id) => typeof id === 'string' && known.has(id)))].slice(0, SUGGEST_ITEMS);
-    out.push({ name, description: line(entry.description, 300), why: line(entry.why, 160), items });
-    if (out.length === SUGGEST_MAX) break;
-  }
-  return out.length ? out : null;
-}
-
-/** workspaces.json of a session's folder → { status, suggestions, picked }, or null when there is none. */
-function readSuggestFile(dir) {
-  try {
-    const value = JSON.parse(fs.readFileSync(path.join(dir, 'workspaces.json'), 'utf8'));
-    if (!value || typeof value !== 'object') return null;
-    const status = ['waiting', 'writing', 'ready', 'none'].includes(value.status) ? value.status : 'none';
-    const suggestions = (Array.isArray(value.suggestions) ? value.suggestions : []).filter((entry) => entry && typeof entry.name === 'string' && entry.name.trim()).slice(0, SUGGEST_MAX)
-      .map((entry) => ({ name: workspaceName(entry.name), description: line(entry.description, 300), why: line(entry.why, 160), items: (Array.isArray(entry.items) ? entry.items : []).filter((id) => typeof id === 'string').slice(0, SUGGEST_ITEMS) }));
-    const picked = (Array.isArray(value.picked) ? value.picked : []).filter((name) => typeof name === 'string').slice(0, 40);
-    return { status: status === 'ready' && !suggestions.length ? 'none' : status, suggestions, picked };
-  } catch { return null; }
-}
-
-function writeSuggestFile(dir, suggest) {
-  try {
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(path.join(dir, 'workspaces.json'), JSON.stringify({ status: suggest.status, suggestions: suggest.suggestions, picked: suggest.picked }, null, 2), { mode: 0o600 });
-  } catch { /* shown from memory until the next write */ }
-}
-
 /** What the person did, as the librarian is told it. */
 function messageOf(input) {
   if (input.skipped) return input.left ? `skipped: ${input.left} is left out for this run; nothing of it comes in` : 'skipped';
@@ -272,9 +213,9 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   function snapshot(s) {
     return {
       id: s.id, mode: s.mode, chat: s.chat, thinking: s.thinking, activity: s.activity, waiting: s.waitingForSurvey, done: s.done, error: s.error, finished: s.finished, stopped: s.stopped, minimized: s.minimized, dismissed: s.dismissed,
-      jobs: s.jobs.filter((job) => !HIDDEN.has(job.kind)).map(publicJob), needs: s.needs.filter((need) => !need.closed).map(publicNeed), log: s.log.slice(-SHOWN_LOG),
+      jobs: s.jobs.filter((job) => job.kind !== 'redact').map(publicJob), needs: s.needs.filter((need) => !need.closed).map(publicNeed), log: s.log.slice(-SHOWN_LOG),
       provider: s.choice.provider, choice: { provider: s.choice.provider, name: PROVIDER_NAMES[s.choice.provider], modelName: s.choice.modelName, effort: s.choice.effort },
-      permissions: s.choices.permissions, projectId: s.projectId, staged: s.projectId ? 0 : notes.stagedCount(s.dir), memory: { ...s.memory }, workspaces: s.suggest ? s.suggest.status : 'none', created: s.created,
+      permissions: s.choices.permissions, projectId: s.projectId, staged: s.projectId ? 0 : notes.stagedCount(s.dir), memory: { ...s.memory }, created: s.created,
       counts: { notes: s.jobs.reduce((n, job) => n + job.notes, 0), items: s.jobs.reduce((n, job) => n + job.items, 0) },
     };
   }
@@ -520,14 +461,13 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     if (kind === 'recall') return prompts.RECALL_SYSTEM_PROMPT;
     if (kind === 'memory') return prompts.MEMORY_SYSTEM_PROMPT;
     if (kind === 'redact') return prompts.REDACT_SYSTEM_PROMPT;
-    if (kind === 'suggest') return prompts.SUGGEST_SYSTEM_PROMPT;
     return promptOf(s.dataRoot, 'connect-import-system-prompt.md', prompts.IMPORT_SYSTEM_PROMPT);
   }
 
   async function runJob(s, job) {
     job.status = 'running';
     job.started = now();
-    logAction(s, job, job.kind === 'memory' ? 'Writing MEMORY.md' : job.kind === 'redact' ? 'Taking any secrets out of MEMORY.md' : job.kind === 'suggest' ? 'Suggesting workspaces to start with' : 'Started');
+    logAction(s, job, job.kind === 'memory' ? 'Writing MEMORY.md' : job.kind === 'redact' ? 'Taking any secrets out of MEMORY.md' : 'Started');
     emit(s);
     const controller = new AbortController();
     s.controllers.add(controller);
@@ -553,14 +493,13 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       const connectorsNow = bridged && connectors ? await connectors.serversFor(covered).catch(() => []) : [];
       if (bridged) bridge = await openBridge(callTool, { signal: controller.signal, maxBody: 1_000_000 });
       const choice = job.kind === 'redact' ? s.redactChoice || s.choice : s.choice;
-      const dirs = job.kind === 'memory' ? [s.dir, path.join(s.dataRoot, 'assets', 'md'), ...(s.projectDir ? [s.projectDir] : [])].filter((dir) => fs.existsSync(dir)) : HIDDEN.has(job.kind) ? [] : s.dirs;
-      const message = job.kind === 'memory' ? await memoryMessage(s) : job.kind === 'suggest' ? await suggestMessage(s) : job.kind === 'redact' ? `<memory_md>\n${s.memoryDraft}\n</memory_md>` : jobMessage(s, job);
+      const dirs = job.kind === 'memory' ? [s.dir, path.join(s.dataRoot, 'assets', 'md'), ...(s.projectDir ? [s.projectDir] : [])].filter((dir) => fs.existsSync(dir)) : job.kind === 'redact' ? [] : s.dirs;
+      const message = job.kind === 'memory' ? await memoryMessage(s) : job.kind === 'redact' ? `<memory_md>\n${s.memoryDraft}\n</memory_md>` : jobMessage(s, job);
       const out = await agents.turn({ choice, kind: job.kind, system: systemOf(s, job.kind), message, session: null, dirs, signal: controller.signal, bridge: bridge && bridge.connection, connectors: connectorsNow, onUpdate, meta: { kind: job.kind, session: s, job, callTool } });
       if (job.kind === 'survey') surveyed(s, job, out.text);
       else if (job.kind === 'memory') drafted(s, out.text);
       else if (job.kind === 'redact') await finishMemory(s, out.text);
-      else if (job.kind === 'suggest') suggested(s, out.text);
-      job.summary = job.kind === 'memory' || HIDDEN.has(job.kind) ? '' : line(job.kind === 'survey' ? (readSurvey(out.text).summary || out.text) : out.text, 500);
+      job.summary = job.kind === 'memory' || job.kind === 'redact' ? '' : line(job.kind === 'survey' ? (readSurvey(out.text).summary || out.text) : out.text, 500);
       job.status = 'done';
       logAction(s, job, job.kind === 'import' ? `Finished: ${job.summary}` : job.kind === 'survey' ? `Looked: ${job.summary}` : job.kind === 'recall' ? (s.recalls[job.apps[0]] ? 'Kept what it remembers' : `Finished: ${job.summary}`) : 'Finished');
     } catch (error) {
@@ -569,7 +508,6 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       logAction(s, job, job.status === 'stopped' ? 'Stopped' : `Failed: ${job.error}`);
       if (job.kind === 'survey') surveyed(s, job, null, job.error || 'stopped');
       if (job.kind === 'memory' || job.kind === 'redact') { s.memory = { ...s.memory, status: job.status === 'stopped' ? 'stopped' : 'failed', error: job.error }; }
-      if (job.kind === 'suggest' && !s.suspended) setSuggest(s, { status: 'none', suggestions: [] }); // quitting picks it up again (revive)
     } finally {
       s.controllers.delete(controller);
       job.controller = null;
@@ -581,7 +519,6 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       emit(s);
       pump(s);
       maybeMemory(s);
-      maybeSuggest(s);
     }
   }
 
@@ -815,7 +752,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     if (s.stopped || s.suspended || s.memoryQueued || !(s.done || s.finished)) return;
     if (s.jobs.some((job) => WORK.has(job.kind) && !ENDED.has(job.status))) return;
     const worked = s.jobs.some((job) => WORK.has(job.kind) && job.status === 'done') || Object.keys(s.recalls).length;
-    if (!worked) { s.memory = { ...s.memory, status: 'skipped' }; maybeSuggest(s); return; }
+    if (!worked) { s.memory = { ...s.memory, status: 'skipped' }; return; }
     s.memoryQueued = true;
     s.memory = { ...s.memory, status: 'writing', error: '' };
     dispatch(s, { kind: 'memory', source: 'memory', apps: [], label: 'MEMORY.md' });
@@ -862,86 +799,6 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     logAction(s, null, `Saved MEMORY.md${scrubbed.removed ? ` (${scrubbed.removed} more secret${scrubbed.removed === 1 ? '' : 's'} masked)` : ''}`);
   }
 
-  /* ---------------------------------------------------------------------------------------- suggested workspaces */
-
-  // Onboarding's Getting started (2026-10-09): once MEMORY.md is saved and onboarding has made the project, an agent with
-  // no tools reads MEMORY.md, the project and the library's rows and suggests three or four workspaces to start in. Kept
-  // in <session dir>/workspaces.json { status, suggestions, picked }: waiting (for MEMORY.md or the project), writing,
-  // ready, or none (MEMORY.md was skipped or failed, or the reply could not be used: the panel offers "Something else…").
-
-  function setSuggest(s, patch) {
-    s.suggest = { ...s.suggest, ...patch };
-    if (!s.suspended) writeSuggestFile(s.dir, s.suggest);
-    emit(s);
-  }
-
-  /** The suggest job, once MEMORY.md is saved in a new user's session whose project exists. */
-  function maybeSuggest(s) {
-    if (!s.suggest || s.suggestQueued || s.stopped || s.suspended || s.mode !== 'onboarding') return;
-    if (s.suggest.status !== 'waiting') return;
-    if (['skipped', 'failed', 'stopped'].includes(s.memory.status)) { setSuggest(s, { status: 'none' }); return; }
-    if (s.memory.status !== 'saved' || !s.projectId) return;
-    s.suggestQueued = true;
-    setSuggest(s, { status: 'writing' });
-    dispatch(s, { kind: 'suggest', source: 'workspaces', apps: [], label: 'Suggested workspaces' });
-  }
-
-  async function suggestMessage(s) {
-    const ctx = await context();
-    let project = null;
-    try { project = require('../store/projects.cjs').findProject(ctx, s.projectId); } catch { project = null; }
-    const rows = ((await ctx.libraryDb.list()) || []).filter((row) => row && !(row.tags || []).includes('note')).reverse().slice(0, SUGGEST_ROWS);
-    s.suggestIds = new Set(rows.map((row) => row.id));
-    const library = rows.map((row) => ({ id: row.id, name: line(row.name, 160), type: row.type, tags: row.tags || [], summary: line(row.summary, 300) }));
-    return [
-      `<memory_md>\n${clipMiddle(memory.readMemory(s.dataRoot) || '', 30000)}\n</memory_md>`,
-      `<project>\n${JSON.stringify({ name: project ? project.name : '', description: project ? project.description || '' : '' })}\n</project>`,
-      `<library>\n${JSON.stringify(library, null, 0).replace(/},{/g, '},\n{')}\n</library>`,
-      'Suggest the workspaces now.',
-    ].join('\n\n');
-  }
-
-  function suggested(s, text) {
-    const suggestions = readSuggestions(text, s.suggestIds || new Set());
-    setSuggest(s, suggestions ? { status: 'ready', suggestions } : { status: 'none', suggestions: [] });
-    logAction(s, null, suggestions ? `Suggested ${suggestions.length} workspace${suggestions.length === 1 ? '' : 's'}` : 'Could not suggest workspaces');
-  }
-
-  /** The session onboarding made `projectId` with: live, else its folder → { id, dir, live } or null. */
-  function sessionOfProject(ctx, projectId) {
-    const live = [...sessions.values()].filter((s) => s.dataRoot === ctx.dataRoot && s.projectId === projectId && s.mode === 'onboarding').sort((a, b) => String(b.created).localeCompare(String(a.created)))[0];
-    if (live) return { id: live.id, dir: live.dir, live };
-    let names = [];
-    try { names = fs.readdirSync(path.join(ctx.dataRoot, '.connect')).filter((name) => ID_RE.test(name)); } catch { return null; }
-    let best = null;
-    for (const id of names) {
-      const dir = path.join(ctx.dataRoot, '.connect', id);
-      let saved = null;
-      try { saved = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8')); } catch { continue; }
-      if (!saved || saved.projectId !== projectId || saved.mode === 'existing') continue;
-      if (!best || String(saved.created).localeCompare(String(best.created)) > 0) best = { id, dir, live: null, created: saved.created };
-    }
-    return best;
-  }
-
-  /** The workspaces suggested for a project onboarding made → { status, suggestions, picked }; { status: 'none' } when none. */
-  function workspaces(ctx, projectId) {
-    const found = ctx && typeof projectId === 'string' ? sessionOfProject(ctx, projectId) : null;
-    if (!found) return { status: 'none', suggestions: [], picked: [] };
-    const held = found.live ? found.live.suggest : readSuggestFile(found.dir);
-    if (!held) return { status: 'none', suggestions: [], picked: [] };
-    return { status: held.status, suggestions: held.suggestions.map((entry) => ({ ...entry, items: [...entry.items] })), picked: [...held.picked] };
-  }
-
-  /** A workspace the person started from Getting started: its name is kept, so its card says Started. */
-  function pickedWorkspace(ctx, projectId, name) {
-    const found = sessionOfProject(ctx, projectId);
-    if (!found) return;
-    if (found.live) { if (!found.live.suggest.picked.includes(name)) setSuggest(found.live, { picked: [...found.live.suggest.picked, name] }); return; }
-    const held = readSuggestFile(found.dir) || { status: 'none', suggestions: [], picked: [] };
-    if (!held.picked.includes(name)) writeSuggestFile(found.dir, { ...held, picked: [...held.picked, name] });
-  }
-
   /* -------------------------------------------------------------------------------------------------------- start */
 
   async function rescan(s, sourceIds) {
@@ -976,7 +833,6 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       jobs: [], seq: 0, needs: [], log: [], controllers: new Set(), interviewSession: null, interviewController: null, found: {}, newFound: null, toldImports: '', projectId, projectDir, stopped: false,
       waitingForSurvey: false, surveyNews: [], recalls: {}, memory: { status: 'waiting', path: memory.memoryPath(ctx.dataRoot), error: '' }, memoryQueued: false, memoryDraft: null,
       skipped: new Set(), skippedSources: new Set(), suspended: false, held: new Map(),
-      suggest: { status: projectId ? 'none' : 'waiting', suggestions: [], picked: [] }, suggestQueued: false, suggestIds: null,
     };
     sessions.set(id, s);
     s.dirs = dirsOf(s);
@@ -1277,7 +1133,6 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     for (const job of s.jobs) if (job.status === 'queued') { job.status = 'stopped'; job.ended = now(); }
     for (const found of s.needs) if (!found.closed) closeNeed(s, found, 'skip');
     if (s.memory.status === 'waiting' || s.memory.status === 'writing' || s.memory.status === 'cleaning') s.memory = { ...s.memory, status: 'stopped' };
-    if (s.suggest && (s.suggest.status === 'waiting' || s.suggest.status === 'writing')) setSuggest(s, { status: 'none' });
     logAction(s, null, 'Stopped everything', 'You');
     emit(s);
     return snapshot(s);
@@ -1290,7 +1145,6 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     if (s.jobs.some((job) => (job.kind === 'memory' || job.kind === 'redact') && !ENDED.has(job.status))) return snapshot(s);
     s.jobs = s.jobs.filter((job) => job.kind !== 'memory' && job.kind !== 'redact');
     s.memoryQueued = false;
-    if (s.suggest && s.suggest.status === 'none' && !s.suggestQueued && s.mode === 'onboarding') setSuggest(s, { status: 'waiting' }); // MEMORY.md again, then the suggestions
     if (s.memoryDraft) { s.memoryQueued = true; s.memory = { ...s.memory, status: 'cleaning', error: '' }; dispatch(s, { kind: 'redact', source: 'memory', apps: [], label: 'MEMORY.md, secrets out' }); } else maybeMemory(s);
     emit(s);
     return snapshot(s);
@@ -1314,7 +1168,6 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     try { s.projectDir = require('../store/projects.cjs').findProject(ctx, projectId).dir; } catch { s.projectDir = null; }
     const written = await notes.flushStaged(ctx, s.dir, projectId, { projects: require('../store/projects.cjs') });
     emit(s);
-    maybeSuggest(s); // MEMORY.md was saved before the project was made
     return written.length;
   }
 
@@ -1349,7 +1202,6 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const jobs = Array.isArray(saved.jobs) ? saved.jobs : [];
     if (!saved.done && !saved.finished) return true;
     if (jobs.some((job) => job && WORK.has(job.kind) && !ENDED.has(job.status))) return true;
-    if (saved.mode !== 'existing' && saved.projectId && saved.memory && saved.memory.status === 'saved' && ['waiting', 'writing'].includes(saved.workspaces)) return true; // the suggestions were not written
     return !!(saved.memory && ['waiting', 'writing', 'cleaning'].includes(saved.memory.status));
   }
 
@@ -1395,17 +1247,13 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       waitingForSurvey: !!saved.waiting, surveyNews: [], recalls: keptRecalls(dir), memory: kept ? { ...saved.memory } : { status: 'waiting', path: memory.memoryPath(ctx.dataRoot), error: '' }, memoryQueued: kept, memoryDraft: null,
       skipped: new Set((Array.isArray(saved.skipped) ? saved.skipped : []).filter((app) => typeof app === 'string')),
       skippedSources: new Set((Array.isArray(saved.skippedSources) ? saved.skippedSources : []).filter((id) => sourceOf(id))), suspended: false, held: new Map(),
-      suggest: null, suggestQueued: false, suggestIds: null,
     };
     // Closed before the librarian's first word, with only the opening line said: the opening again.
     if (s.chat.every((entry) => entry.opener)) s.chat = [];
-    const savedSuggest = readSuggestFile(dir);
-    s.suggest = savedSuggest ? { ...savedSuggest, status: savedSuggest.status === 'writing' ? 'waiting' : savedSuggest.status } : { status: s.mode === 'onboarding' ? 'waiting' : 'none', suggestions: [], picked: [] };
     for (const job of Array.isArray(saved.jobs) ? saved.jobs : []) {
       if (!job || !Object.hasOwn(PRIORITY, job.kind)) continue;
       // MEMORY.md is written again once the work has ended, unless it was saved: its draft was never kept on disk.
       if ((job.kind === 'memory' || job.kind === 'redact') && !kept) continue;
-      if (job.kind === 'suggest') continue; // asked again below (maybeSuggest), when it had not answered
       const again = !ENDED.has(job.status);
       const apps = (Array.isArray(job.apps) ? job.apps : []).filter((app) => typeof app === 'string' && (APPS[app] || app === 'GitHub'));
       s.seq += 1;
@@ -1445,7 +1293,6 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       else if (saved.thinking || (s.waitingForSurvey && !surveying(s))) void interviewTurn(s, 'Engelbart closed while you were working, and has opened again. What the surveys found is in <found>. Go on from where you were.');
     }
     maybeMemory(s);
-    maybeSuggest(s);
     return s;
   }
 
@@ -1490,7 +1337,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   }
 
   return {
-    start, answer, authorize, importNow, need, stop, stopJob, suspendAll, resume, retryMemory, setMinimized, dismiss, attachProject, windowClosed, logJob, list, providers, cancelSignIn, workspaces, pickedWorkspace,
+    start, answer, authorize, importNow, need, stop, stopJob, suspendAll, resume, retryMemory, setMinimized, dismiss, attachProject, windowClosed, logJob, list, providers, cancelSignIn,
     setProvider: (id, provider) => { const s = get(id); setProvider(s, provider); emit(s); return snapshot(s); },
     // the first build's name for authorize
     connected: (id, input) => authorize(id, input),
@@ -1498,4 +1345,4 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   };
 }
 
-module.exports = { createConnect, cleanChoices, readReply, readSurvey, readSuggestions, workspaceName, messageOf, shownOf, connectChoice, CONNECT_MODELS, PROVIDER_NAMES, PRIORITY, MAX_RUNNING };
+module.exports = { createConnect, cleanChoices, readReply, readSurvey, messageOf, shownOf, connectChoice, CONNECT_MODELS, PROVIDER_NAMES, PRIORITY, MAX_RUNNING };

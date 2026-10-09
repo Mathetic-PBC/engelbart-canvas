@@ -1,6 +1,7 @@
 import React from 'react';
 import { api, errorMessage } from '../api.js';
 import GithubRepos from '../workspace/GithubRepos.jsx';
+import ThinkingDots from '../ui/ThinkingDots.jsx';
 import { heldRow } from '../model/github.js';
 import { rowOf } from '../model/tools.js';
 import { markOpen } from '../ui/connect-open.js';
@@ -51,6 +52,8 @@ import github from '../../../design/assets/logos/github.svg';
 
 const LOGOS = { Obsidian: obsidian, Notion: notion, 'Apple Notes': apple, OneNote: onenote, Zotero: zotero, Overleaf: overleaf, 'Google Docs': googledocs, Evernote: evernote, Granola: granola, 'Google Meet': meet, Zoom: zoom, ChatGPT: openai, Codex: codex, Claude: claude, 'Claude Code': claude, Grok: grok, Gemini: gemini, Perplexity: perplexity, Cursor: cursor, GitHub: github };
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
+/** The choose screen's column in onboarding (2026-10-09); Onboarding.jsx lines Skip for now up with it. */
+export const CHOOSE_WIDTH = 600;
 // The design's classes (DocEditor's CARD_CSS, not mounted here) and @brainstorm's card (one option per line).
 const CSS = '.bart-ic{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:none;cursor:pointer;color:#4d4d4d}.bart-ic:hover{background:#f2f2f2;color:#171717}'
   + '.bart-chip{transition:border-color 120ms}.bart-chip:hover{border-color:#c9c9c9!important}.bart-send{transition:background 120ms}.bart-send:hover{opacity:.86}'
@@ -64,8 +67,6 @@ const CSS = '.bart-ic{display:inline-flex;align-items:center;justify-content:cen
   + '.bs-field{display:block;width:100%;box-sizing:border-box;margin:0;padding:8px 10px;border:1px solid #eaeaea;border-radius:8px;background:#fff;outline:none;resize:none;font:14px/1.5 var(--font-sans);color:#171717}.bs-field:focus{border-color:#c9c9c9}.bs-field::placeholder{color:#8f8f8f}'
   + '.bs-submit{padding:8px 14px;border:0;border-radius:8px;background:#0070f3;color:#fff;font:500 13px/1 var(--font-sans);cursor:pointer;transition:opacity 120ms}.bs-submit:hover{opacity:.86}.bs-submit:disabled{background:#eaeaea;color:#8f8f8f;cursor:default;opacity:1}'
   + '.cx-btn{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 12px;border:1px solid #171717;border-radius:8px;background:#171717;color:#fff;cursor:pointer;font:500 12.5px/1 var(--font-sans);white-space:nowrap}.cx-btn:hover{opacity:.88}.cx-btn:disabled{opacity:.5;cursor:default}'
-  + '.cx-cols{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);grid-template-rows:minmax(0,1fr);column-gap:48px}.cx-cols>*{min-height:0;overflow-y:auto}'
-  + '@media (max-width:820px){.cx-cols{grid-template-columns:minmax(0,1fr);grid-template-rows:none;overflow-y:auto}.cx-cols>*{overflow:visible}}'
   + '.cx-ghost{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 10px;border:1px solid #eaeaea;border-radius:8px;background:#fff;color:#171717;cursor:pointer;font:500 12.5px/1 var(--font-sans);white-space:nowrap}.cx-ghost:hover{border-color:#c9c9c9}.cx-ghost:disabled{color:#8f8f8f;cursor:default}';
 
 const Svg = ({ size = 12, width = 2, children }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={width} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{children}</svg>;
@@ -437,7 +438,6 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   const [leaves, setLeaves] = React.useState(false); // "What leaves my Mac?" opened
   const [notesState, setNotesState] = React.useState(''); // '' | 'asking' | 'allowed' | <why not>
   const [connectorStatus, setConnectorStatus] = React.useState({}); // app → { connected, pending }
-  const [custom, setCustom] = React.useState('');
   const [providers, setProviders] = React.useState(null);
   const [provider, setProvider] = React.useState(null);
   const [toolSnap, setToolSnap] = React.useState(null);
@@ -609,7 +609,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     else if (appFolders[LOCAL_PDFS]) chosen.papers = [...new Set([...chosen.papers, appFolders[LOCAL_PDFS]])];
     try {
       const permissions = permissionsOf(picks, { consent, notes: notesState === 'allowed' });
-      const snapshot = await api.connectStart(choicesOf({ picks: picks.picks, apps: picks.apps, folders: chosen, repos: reposTicked(), custom, permissions, provider, projectId }));
+      const snapshot = await api.connectStart(choicesOf({ picks: picks.picks, apps: picks.apps, folders: chosen, repos: reposTicked(), permissions, provider, projectId }));
       begin(snapshot);
       setView('chat');
       setTimeout(() => draftRef.current && draftRef.current.focus(), 60);
@@ -784,10 +784,11 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
         const company = current && current.provider === 'openai' ? 'OpenAI' : 'Anthropic';
         const permissionsBox = (
           // One checkbox (MATH-114): the person's own subscription reads what is ticked. Connectors, Apple Notes and asking an
-          // assistant what it remembers are consented to by ticking their rows, and are not named here.
-          <div data-connect-permissions="1" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          // assistant what it remembers are consented to by ticking their rows, and are not named here. One card with the
+          // reassurance under it (2026-10-09, David's mockup).
+          <div data-connect-permissions="1" style={{ display: 'flex', flexDirection: 'column', border: '1px solid #eaeaea', borderRadius: 10, background: '#fafafa' }}>
             {reads.length > 0 && (
-              <button type="button" role="checkbox" aria-checked={consent ? 'true' : 'false'} data-connect-permission="consent" onClick={() => setConsent((now) => !now)} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, width: '100%', padding: '14px 16px', border: '1px solid #eaeaea', borderRadius: 10, background: '#fafafa', cursor: 'pointer', textAlign: 'left' }}>
+              <button type="button" role="checkbox" aria-checked={consent ? 'true' : 'false'} data-connect-permission="consent" onClick={() => setConsent((now) => !now)} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, width: '100%', padding: '14px 16px 12px', border: 0, borderBottom: '1px solid #eaeaea', borderRadius: 0, background: 'transparent', cursor: 'pointer', textAlign: 'left' }}>
                 <span style={{ paddingTop: 2.5 }}><Box on={consent} /></span>
                 <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
                   <span style={{ font: '500 13.5px/1.4 var(--font-sans)', color: '#171717' }}>Use my {targetName} subscription to read these</span>
@@ -795,7 +796,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
                 </span>
               </button>
             )}
-            <div data-connect-reassure="1" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 16px', border: '1px solid #eaeaea', borderRadius: 10 }}>
+            <div data-connect-reassure="1" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 16px' }}>
               <span style={{ flex: 'none', paddingTop: 2, color: '#8f8f8f', display: 'flex' }}>{LOCK}</span>
               <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6, font: '12.5px/1.5 var(--font-sans)', color: '#4d4d4d' }}>
                 <span>Stored only on your Mac in ~/.engelbart. {targetName} reads it through your account. Mathetic never sees it.{' '}
@@ -806,35 +807,26 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
             </div>
           </div>
         );
-        const customBox = (
-          <div className="focus-bd2" style={{ display: 'flex', padding: '10px 12px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', transition: 'border-color 120ms' }}>
-            <textarea value={custom} onChange={(event) => setCustom(event.target.value)} rows={2} spellCheck={false} data-connect-custom="1" placeholder="custom instructions… e.g. skip papers I only skimmed" style={{ all: 'unset', flex: 1, minHeight: 40, resize: 'none', font: '13px/1.6 var(--font-sans)', color: '#171717', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }} />
-          </div>
-        );
         const send = (
           <div style={{ flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12, ...(page ? { paddingTop: 4 } : { padding: '12px 20px', borderTop: '1px solid #eaeaea' }) }}>
             {error && <span data-connect-error="1" style={{ flex: 1, minWidth: 0, font: '12.5px/1.4 var(--font-sans)', color: '#e70022' }}>{error}</span>}
             <ProviderChip lead="Refine with" providers={providers} provider={provider} onPick={pickProvider} onSend={start} sendOn={anyOn && !!provider} sendLabel="Refine" />
           </div>
         );
-        // Onboarding draws it as a page of its own, side by side (2026-10-08: "make this general thing more horizontal right
-        // now it looks sort of like a popup not a proper onboarding screen"): the sources on the left, what the agents do,
-        // the instructions and Refine on the right. The popup keeps the one column.
+        // Onboarding draws it as a page of its own, one column stacked as David's mockup has it (2026-10-09, in place of the
+        // side by side of 2026-10-08): the sources, the card saying what reads them, Refine under it. No custom
+        // instructions box.
         if (page) {
           return (
-            <>
-              <h1 style={{ flex: 'none', margin: '0 0 22px', font: '500 28px/1.2 var(--font-sans)', letterSpacing: '-0.4px', color: '#171717' }}>What should go in your library?</h1>
-              <div className="cx-cols" style={{ flex: 1, minHeight: 0 }}>
-                <div style={{ display: 'flex', flexDirection: 'column', padding: '0 8px 16px' }}>{sourcesList}</div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '28px 2px 4px' }}>
-                  {permissionsBox}
-                  {customBox}
-                  {!ready && <AgentSetup snapshot={toolSnap} />}
-                  <span style={{ flex: 1 }} />
-                  {send}
-                </div>
+            <div data-connect-column="1" style={{ flex: 1, minHeight: 0, width: `min(${CHOOSE_WIDTH}px, 100%)`, alignSelf: 'center', display: 'flex', flexDirection: 'column' }}>
+              <h1 style={{ flex: 'none', margin: '0 0 22px', textAlign: 'center', font: '500 28px/1.2 var(--font-sans)', letterSpacing: '-0.4px', color: '#171717' }}>What should go in your library?</h1>
+              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16, padding: '0 8px 4px' }}>
+                {sourcesList}
+                {permissionsBox}
+                {!ready && <AgentSetup snapshot={toolSnap} />}
               </div>
-            </>
+              <div style={{ flex: 'none', padding: '14px 8px 0' }}>{send}</div>
+            </div>
           );
         }
         return (
@@ -843,7 +835,6 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
             <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16, padding: '4px 20px 16px' }}>
               {sourcesList}
               {permissionsBox}
-              {customBox}
               {!ready && <AgentSetup snapshot={toolSnap} />}
             </div>
             {send}
@@ -855,7 +846,13 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
         <>
           {header(`Refine with ${targetName}`, { backButton: true })}
           <div ref={chatRef} data-connect-chat="1" style={{ position: 'relative', flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16, padding: `18px ${gutter}` }}>
+            {/* The opening line ("Found 2 Obsidian vaults…") is not shown (2026-10-09): until the librarian says something,
+                the dots used everywhere else, in the middle. */}
+            {!session.chat.some((item) => !item.opener) && !session.error && !error && (
+              <div data-connect-starting="1" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ThinkingDots label="" /></div>
+            )}
             {session.chat.map((item, i) => {
+              if (item.opener) return null;
               if (item.role !== 'agent') return <div key={i} data-connect-user="1" style={{ alignSelf: 'flex-end', maxWidth: '80%', padding: '8px 12px', borderRadius: 12, background: '#f2f2f2', font: '14.5px/1.6 var(--font-sans)', color: '#171717', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', animation: `rise 160ms ${EASE}` }}>{item.text}</div>;
               const live = i === last && !session.thinking && !session.finished && !session.stopped;
               return (

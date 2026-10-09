@@ -53,7 +53,12 @@ const MAX_DESCRIPTION = 4000;
 const WELCOME_NOTE = [
   'This is a note. Notes are plain markdown files in your project folder, and the sidebar lists what this workspace can see.',
   '',
-  'Later: write a task with @Task and press Build to have an agent do it.',
+  '- [ ] Type @Task or "- []" for a task, then press Build',
+  '- [ ] Type @ to mention a paper, folder or note from your library',
+  '- [ ] Type @bart, a question, and press Enter',
+  '- A bare dash is a bullet; Tab and Shift-Tab nest it',
+  '',
+  'The Workspace tab is this workspace\'s own document. Add papers, folders and notes from the sidebar with + Context and + Folder, and nest a workspace inside this one with + Workspace. Paste an image anywhere.',
   '',
 ].join('\n');
 
@@ -290,22 +295,6 @@ async function createProjectWithWelcome(ctx, input, { workspaceName = 'Getting s
   await setWorkspaceContext(ctx, project.id, workspace.id, [note.id, ...context.filter((id) => id !== note.id)]);
   if (project.description) await writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id }, `${project.description}\n`);
   return { project, workspaceId: workspace.id, noteId: note.id, noteName: note.name };
-}
-
-// A workspace started from onboarding's Getting started panel (2026-10-09): one it suggested or the person's own words.
-// Its document starts with the description and an empty line to write on; its context is the Welcome! note first, then
-// `context` (the suggestion's library rows). `welcomeId` the note when known, else the project's first "Welcome!".
-// → the workspace
-async function createStartedWorkspace(ctx, projectId, { name, description = '', context = [], welcomeId = null } = {}) {
-  if (!welcomeId) {
-    const welcome = (await loadProject(ctx, projectId)).notes.find((note) => note.name === 'Welcome!');
-    welcomeId = welcome ? welcome.id : null;
-  }
-  const workspace = await createWorkspace(ctx, projectId, { name });
-  const text = String(description || '').trim();
-  await writeDoc(ctx, projectId, { kind: 'workspace', workspaceId: workspace.id }, text ? `${text}\n\n` : '');
-  const entries = [...(welcomeId ? [welcomeId] : []), ...context.filter((id) => id !== welcomeId)];
-  return entries.length ? setWorkspaceContext(ctx, projectId, workspace.id, entries) : workspace;
 }
 
 async function setProjectDirectory(ctx, id, directory) {
@@ -1267,7 +1256,6 @@ module.exports = {
   listProjects,
   createProject,
   createProjectWithWelcome,
-  createStartedWorkspace,
   setProjectDirectory,
   setDefaultTarget,
   renameProject,

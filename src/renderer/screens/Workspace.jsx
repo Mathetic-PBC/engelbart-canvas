@@ -5,8 +5,6 @@ import DocTabs from '../workspace/DocTabs.jsx';
 import NotePicker from '../workspace/NotePicker.jsx';
 import { BART_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM } from '../workspace/DocEditor.jsx';
 import DocPane from '../workspace/DocPane.jsx';
-import GettingStarted from '../workspace/GettingStarted.jsx';
-import { EMPTY_HINT } from '../model/getting-started.js';
 import RightPane, { RIGHT_MODES } from '../workspace/RightPane.jsx';
 import { kindOf, Expand, Collapse } from '../ui/Icons.jsx';
 import { PanelCloseIcon, PanelOpenIcon } from '../ui/SidebarIcons.jsx';
@@ -1630,25 +1628,6 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     onTryRepo: tryGuideRepo,
     onError,
   };
-  // Getting started (2026-10-09): a new user's first project shows its panel above the Getting started workspace's own
-  // document (workspace/GettingStarted.jsx), and the empty-line hint in its workspaces' documents, until it is hidden.
-  const [gettingStarted, setGettingStarted] = React.useState(null);
-  React.useEffect(() => {
-    let alive = true;
-    setGettingStarted(null);
-    api.gettingStarted(project.id).then((value) => { if (alive) setGettingStarted(value || null); }).catch(() => {});
-    return () => { alive = false; };
-  }, [project.id]);
-  const guiding = !!(gettingStarted && !gettingStarted.hidden);
-  const startedIn = async (workspaceId) => {
-    await reload();
-    selectRef.current(workspaceId);
-  };
-  const workspaceNamed = (name) => { const found = allWorkspaces.find((workspace) => workspace.name === name); return found ? found.id : null; };
-  const gettingStartedPanel = guiding && topic && topic.id === gettingStarted.workspaceId && activeTab === 'ws' ? (
-    <GettingStarted projectId={project.id} description={project.description || ''} state={gettingStarted} onState={setGettingStarted} onStarted={startedIn} workspaceIdOf={workspaceNamed} onError={onError} />
-  ) : null;
-
   const footer = (
     // Copy, then (on the Workspace tab: a workspace is one Build) Build and Clear (2026-09-25). Build sits beside
     // Copy until it replaces it.
@@ -1813,8 +1792,6 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
                   viewOf: pane ? noView : viewOf,
                   onView: pane ? null : recordPosition,
                   footer: pane ? null : footer,
-                  above: pane ? null : gettingStartedPanel,
-                  emptyHint: !pane && guiding && activeTab === 'ws' && !doc.archive ? EMPTY_HINT : null,
                 }}
               />
             );

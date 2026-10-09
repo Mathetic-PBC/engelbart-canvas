@@ -24,7 +24,6 @@ const { inspectPdf } = require('./context/pdf-kind.cjs');
 const { TOOL_NAMES } = require('./tools/requirements.cjs');
 const archive = require('./store/archive.cjs');
 const onboarding = require('./store/onboarding.cjs');
-const gettingStarted = require('./store/getting-started.cjs');
 const { buildChoices } = require('./bart/models.cjs');
 const { githubRepo } = require('./sandbox/runs.cjs');
 const { candidate: pdfCandidate } = require('./store/web-pdfs.cjs');
@@ -448,8 +447,6 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       if (folder === 'new' && builds) void toolsChecked().then(() => builds.prepareDefault(ctx, made.project.id)).catch(() => {});
       // Connect your library's notes, held until there was a project (connect/session.cjs attachProject), go into this one.
       if (imported && connect) made.importedNotes = await connect.attachProject(ctx, imported, made.project.id).catch(() => 0);
-      // A new user's onboarding (not + Project): the Getting started panel, at the top of its first workspace.
-      if (value.onboarding === true) made.gettingStarted = gettingStarted.startGettingStarted(ctx, made.project.id, { workspaceId: made.workspaceId, welcomeId: made.noteId });
       return made;
     });
   }), { project: (_args, out) => out && out.project && out.project.id, library: true });
@@ -509,26 +506,6 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     fs.mkdirSync(path.dirname(offerFile(ctx)), { recursive: true, mode: 0o700 });
     fs.writeFileSync(offerFile(ctx), JSON.stringify({ seen: true, how: how === 'started' ? 'started' : 'dismissed', at: new Date().toISOString() }), { mode: 0o600 });
     return true;
-  }));
-  // Onboarding's Getting started panel (2026-10-09, ./store/getting-started.cjs): the workspaces Connect suggested for a
-  // project onboarding made (connect-workspaces → { status, suggestions, picked }), one started from them or from the
-  // person's own words (connect-pick-workspace, { index } | { custom }), and the panel's ticks and Hide.
-  const noSuggestions = () => ({ status: 'none', suggestions: [], picked: [] });
-  handle('connect-workspaces', withCtx((ctx, pid) => { const projectId = str(pid, 'project id', 64); return connect ? connect.workspaces(ctx, projectId) : noSuggestions(); }));
-  saving('connect-pick-workspace', withCtx(async (ctx, pid, input) => {
-    const projectId = str(pid, 'project id', 64);
-    const value = plainObject(input, 'choice');
-    const choice = value.custom !== undefined ? { custom: str(value.custom, 'text', 8000) } : { index: Number.isInteger(value.index) ? value.index : -1 };
-    const offered = connect ? connect.workspaces(ctx, projectId) : noSuggestions();
-    const out = await gettingStarted.pickWorkspace(ctx, projectId, choice, { suggestions: offered.status === 'ready' ? offered.suggestions : [], recordPick: (name) => { if (connect) connect.pickedWorkspace(ctx, projectId, name); } });
-    projects.recordEdit(ctx, projectId, out.workspace.id);
-    navChanged();
-    return { workspaceId: out.workspace.id, name: out.name, gettingStarted: out.gettingStarted };
-  }), { project: first });
-  handle('getting-started', withCtx((ctx, pid) => gettingStarted.readGettingStarted(ctx, str(pid, 'project id', 64))));
-  handle('set-getting-started', withCtx((ctx, pid, input) => {
-    const value = plainObject(input, 'state');
-    return gettingStarted.setGettingStarted(ctx, str(pid, 'project id', 64), { ...(Array.isArray(value.ticked) ? { ticked: value.ticked.slice(0, 5) } : {}), hidden: value.hidden === true });
   }));
   // MEMORY.md (./connect/memory.cjs): whether there is one in this data root, for the window to name and reveal.
   handle('connect-memory', withCtx((ctx) => { const file = path.join(ctx.dataRoot, 'MEMORY.md'); try { const stat = fs.statSync(file); return { exists: true, path: file, updated: stat.mtime.toISOString(), bytes: stat.size }; } catch { return { exists: false, path: file }; } }));

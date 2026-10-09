@@ -108,6 +108,9 @@ app.whenReady().then(async () => {
     assert.match(await text(wc, '[data-connect-reassure]'), /Stored only on your Mac in ~\/\.engelbart\. Claude Code reads it through your account\. Mathetic never sees it\./);
     const buttons = await js(wc, 'JSON.stringify([...document.querySelectorAll("[data-connect-library=choose] button")].map((el) => el.textContent.trim()))');
     assert.equal(JSON.parse(buttons).some((label) => /^(Sign in…|Allow…)$/.test(label)), false, 'no Sign in… or Allow… buttons: ticking is the consent');
+    // One column, stacked (2026-10-09): no custom instructions box.
+    assert.equal(await has(wc, '[data-connect-column]'), true, 'the choose screen is one column');
+    assert.equal(await has(wc, '[data-connect-custom]'), false, 'no custom instructions box');
     await shot(wc, '1-choose');
     // Code: GitHub's row opens onboarding's own repository list, roomy (here GitHub is not set up, so its sign-in shows in its place).
     await press(wc, '[data-connect-source="code"] button[aria-expanded]');
@@ -124,7 +127,9 @@ app.whenReady().then(async () => {
 
     /* ------------------------------------------------ refine: a card with one option per line, the needs-you card, the survey's findings */
     await press(wc, '[data-connect-library="choose"] [data-connect-send]');
-    await until(() => has(wc, '[data-connect-chat] [data-connect-agent]'), 'a first line in the chat at once');
+    // No opening line (2026-10-09): the dots in the middle until the librarian says something, then never again.
+    await until(async () => (await has(wc, '[data-connect-chat] [data-connect-starting]')) || has(wc, '[data-connect-chat] [data-connect-agent]'), 'the dots, or the librarian already');
+    assert.doesNotMatch(await text(wc, '[data-connect-chat]'), /Looking at what you picked|Found \d/, 'no opening line in the chat');
     // One clear Continue on the connect step once a session exists: filled, by the pager; Skip for now gone.
     await until(() => has(wc, '[data-onboarding-continue] button'), 'the connect step\'s Continue');
     assert.equal(await has(wc, '[data-onboarding-skip]'), false, 'no Skip for now with a session');
@@ -197,25 +202,6 @@ app.whenReady().then(async () => {
     await shot(wc, '7-popup');
     await press(wc, '[data-connect-close]');
     await until(() => js(wc, '!document.querySelector("[data-connect-popup]")'), 'closed again');
-
-    /* ------------------------------------------------ Getting started (2026-10-09): the panel, the suggested workspaces, Start */
-    await until(() => has(wc, '[data-getting-started-count]'), 'the Getting started panel above the workspace\'s document');
-    assert.equal(await text(wc, '[data-getting-started-count]'), 'Getting started 0/5');
-    assert.equal(await attr(wc, '[data-getting-started-step="1"]', 'data-open'), '1', 'the first step open');
-    assert.match(await text(wc, '[data-getting-started-hint="1"]'), /^Click Library in the sidebar\.$/);
-    assert.ok(await has(wc, '[data-editor][data-empty-hint]'), 'the empty line\'s hint');
-    await press(wc, '[data-getting-started-title="2"]');
-    await until(() => has(wc, '[data-getting-started-card="0"]'), 'the suggested workspaces, once written', 600);
-    await shot(wc, '8-getting-started');
-    const project = await js(wc, 'window.engelbartAPI.listProjects().then((list)=>list[0].id)').catch(() => null);
-    await press(wc, '[data-getting-started-start="0"]');
-    await until(() => js(wc, '!document.querySelector("[data-getting-started]")'), 'the started workspace open (no panel there)');
-    if (project) {
-      const state = await js(wc, `window.engelbartAPI.gettingStarted(${JSON.stringify(project)})`);
-      assert.deepEqual(state.ticked, [2], 'Start ticked step 2');
-      const tree = await js(wc, `window.engelbartAPI.loadProject(${JSON.stringify(project)})`);
-      assert.equal(tree.workspaces.length, 2, 'Getting started and the one started');
-    }
     console.log(`Connect your library smoke passed. Data: ${root}`);
     app.exit(0);
   } catch (error) {

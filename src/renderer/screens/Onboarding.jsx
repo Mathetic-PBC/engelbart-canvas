@@ -11,7 +11,7 @@ import { rowOf } from '../model/tools.js';
 import { useGithubStatus } from '../workspace/useGithubStatus.js';
 import ImportSignins from '../workspace/ImportSignins.jsx';
 import GithubRepos from '../workspace/GithubRepos.jsx';
-import ConnectLibrary from './ConnectLibrary.jsx';
+import ConnectLibrary, { CHOOSE_WIDTH } from './ConnectLibrary.jsx';
 import welcomePng from '../../../design/assets/welcome-field.png';
 
 const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || '');
@@ -237,7 +237,7 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
     const back = step === 'context' ? { step: 'context', sub: 0, detour: false } : { step: 'create', sub: SUBS.create.length - 1, detour: false };
     go({ step: 'open', sub: 0 });
     try {
-      const made = await api.startProject({ name: name.trim(), description: desc.trim(), folder, directory: folder === 'existing' ? folderPath : '', context: ids, ...(connectId ? { connect: connectId } : {}), ...(flowMode === 'new' ? { onboarding: true } : {}) });
+      const made = await api.startProject({ name: name.trim(), description: desc.trim(), folder, directory: folder === 'existing' ? folderPath : '', context: ids, ...(connectId ? { connect: connectId } : {}) });
       await onDone(made, { stageLinks: [...stageLinks.current] });
     } catch (failure) {
       setPlace(back);
@@ -488,7 +488,7 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
       {step === 'connect' && (
         <div data-screen-label="03 Connect library" style={{ flex: 'none', width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
           <ConnectLibrary mode="onboarding" onSession={(id) => { setConnectId(id); api.connectOfferSeen('started').catch(() => {}); }} onContinue={advance} onSkip={advance} onAdded={(row) => take(row, 'github', true)} />
-          <div style={{ flex: 'none', width: 'min(1080px, 100%)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+          <div style={{ flex: 'none', width: connectId ? 'min(1080px, 100%)' : `min(${CHOOSE_WIDTH}px, 100%)`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
             {/* Leaving with a session puts it away: it goes on in the background, the chip in the top right following it.
                 Skipping it counts as the one-time offer seen: the project about to open does not ask again. */}
             {/* One clear Continue once a session has started (2026-10-09): filled, at the right by the pager; before, Skip for now. */}

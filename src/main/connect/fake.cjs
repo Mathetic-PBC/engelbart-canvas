@@ -6,9 +6,8 @@
 // survey reports three items; a recall saves a short profile; an import brings in a few notes from the vault, a few
 // Claude Code chats or one note per web app through the real tools, so the progress, the staging and the project's notes
 // are real; the memory agent drafts MEMORY.md with two planted secrets and the secrets check takes out one of them (the
-// shape check takes the other); the suggest agent offers three workspaces made of the library rows it was shown.
-// ENGELBART_CONNECT_FAKE_NEEDS=<app> makes that app's survey ask the person to sign in, unless they signed in on the card
-// shown before the run.
+// shape check takes the other). ENGELBART_CONNECT_FAKE_NEEDS=<app> makes that app's survey ask the person to sign in,
+// unless they signed in on the card shown before the run.
 // Same shape as ./agents.cjs turn().
 
 const sleep = (ms, signal) => new Promise((resolve, reject) => {
@@ -107,16 +106,6 @@ Their OpenAI key, sk-test-0123456789abcdefghij, was pasted in a chat.
 ## Sources
 - The fake recall, ${new Date().toISOString().slice(0, 10)}.`;
 
-/** Three workspaces from the rows in <library>: the first three rows' names, each with the rows after it. */
-function suggestReply(message) {
-  let rows = [];
-  try { rows = JSON.parse(String(message).match(/<library>\n([\s\S]*?)\n<\/library>/)[1]); } catch { rows = []; }
-  const names = ['Help-seeking in novices', 'Tutoring systems', 'Tools for thought'];
-  return JSON.stringify({
-    workspaces: names.map((name, i) => ({ name, description: `Where ${name.toLowerCase()} goes next.`, why: `${rows.slice(i, i + 3).length} of your library's newest items`, items: rows.slice(i, i + 3).map((row) => row.id) })),
-  });
-}
-
 function createFakeConnectAgents({ delayMs = 600 } = {}) {
   return {
     async turn({ meta, signal, kind, message }) {
@@ -125,7 +114,6 @@ function createFakeConnectAgents({ delayMs = 600 } = {}) {
       if (what === 'import') return { text: await importRun(meta, delayMs, signal), session: null };
       if (what === 'recall') return { text: await recallRun(meta, delayMs, signal), session: null };
       if (what === 'memory') { await sleep(delayMs, signal); return { text: MEMORY_DRAFT, session: null }; }
-      if (what === 'suggest') { await sleep(delayMs, signal); return { text: suggestReply(message), session: null }; }
       if (what === 'redact') { await sleep(delayMs, signal); const draft = String(message).replace(/^<memory_md>\n|\n<\/memory_md>$/g, ''); return { text: draft.replace('password: hunter2', 'password: [removed]'), session: null }; }
       await sleep(delayMs, signal);
       return { text: JSON.stringify(interviewReply(meta.session, meta.message)), session: 'fake-session' };
@@ -133,4 +121,4 @@ function createFakeConnectAgents({ delayMs = 600 } = {}) {
   };
 }
 
-module.exports = { createFakeConnectAgents, interviewReply, suggestReply, MEMORY_DRAFT };
+module.exports = { createFakeConnectAgents, interviewReply, MEMORY_DRAFT };
