@@ -219,7 +219,7 @@ test('a turn\'s reach (2026-10-07): Engelbart\'s tools over its bridge; a paper 
   let saved = null;
   const agent = scripted([async ({ task, policy, engelbart }) => {
     // what it was given: the repository whose history is Engelbart's, the paper for the edit tools' rules, the bridge
-    assert.equal(policy.gitDir, fs.realpathSync(path.join(task.repo, '.git')));
+    assert.equal(policy.gitDir, (process.platform === 'win32' ? fs.realpathSync.native : fs.realpathSync)(path.join(task.repo, '.git'))); // Windows: its long name, as Git gives it (git-guard.cjs)
     assert.ok(policy.papers.includes(paperFile));
     const response = await fetch(engelbart.url, { method: 'POST', headers: { authorization: `Bearer ${engelbart.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'save_file', args: { name: 'Build notes', content: '# What I found' } }) });
     saved = JSON.parse((await response.json()).content[0].text);
@@ -235,7 +235,7 @@ test('a turn\'s reach (2026-10-07): Engelbart\'s tools over its bridge; a paper 
   const { builds, raw } = manager(agent);
   const { id } = await builds.start(ctx, project.id, { workspaceId: workspace.id });
   const task = await settled(project, id);
-  assert.equal(task.status, 'review');
+  assert.equal(task.status, 'review', task.error);
   assert.equal(fs.readFileSync(paperFile, 'utf8'), '%PDF-1.4\n%%EOF\n', 'the paper is back');
   assert.equal(sh(task.worktree, 'rev-parse', '--abbrev-ref', 'HEAD'), task.branch, 'back on its branch');
   assert.equal(sh(task.worktree, 'rev-parse', 'HEAD^'), task.baseSha, 'one checkpoint on where it started: the agent\'s commit folded in');

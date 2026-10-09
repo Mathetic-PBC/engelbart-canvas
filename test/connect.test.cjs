@@ -203,7 +203,7 @@ test('a Markdown file as a note: Obsidian links become mentions, pictures are se
   const { body, images } = notes.convertMarkdown(fs.readFileSync(source, 'utf8'), { sourcePath: source, root: vault, index });
   assert.match(body, /builds on @\[Other note\] and @\[Third\]\./);
   assert.equal(images.length, 2, 'the embed found by name in the vault, the link by its relative path');
-  assert.deepEqual(images.map((image) => path.relative(vault, image.file)), ['attachments/pic.png', 'attachments/pic.png']);
+  assert.deepEqual(images.map((image) => path.relative(vault, image.file).split(path.sep).join('/')), ['attachments/pic.png', 'attachments/pic.png']);
   assert.match(body, /!\[pic\]\(engelbart-image:0\)/);
   assert.match(body, /!\[alt\]\(engelbart-image:1\)/);
   assert.match(notes.convertMarkdown('![[Idea]] and [x](Plan%20abcdef0123456789abcdef0123456789.md)').body, /^@\[Idea\] and @\[Plan\]$/);

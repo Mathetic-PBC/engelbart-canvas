@@ -23,11 +23,45 @@ SHA256SUMS-windows.txt and index.html. No real upload: the command is handed to 
   Pushed for the first CI run. To look at on Windows: the new Build git guard (src/main/build/git-guard.cjs: a
   `#!/bin/sh` git first on the agent's PATH, hooks through GIT_CONFIG_PARAMETERS) and the Connect module
   (src/main/connect: Apple Notes through osascript, other apps' folders).
+- 2026-10-09, review of the new code for Windows (3c342a9):
+  - **Build git guard** (src/main/build/git-guard.cjs). A Build's agent starts in Git for Windows' bash, whose PATH is
+    POSIX (/c/Users/…). The command put the guard's Windows folder (C:\…, a ":" inside it) first, so the shim was never
+    found; and the shim, comparing PATH entries and git folders as strings, would have taken itself for the real git
+    and never matched the Build's repository. Now on Windows: `PATH="$(cygpath -u "$ENGELBART_BUILD_GUARD"):$PATH"`
+    (as launch.cjs does for Engelbart's Git), the shim's own folder through cygpath, the repository compared by
+    identity (`-ef`, so case and short names like RUNNER~1 don't matter), includeIf with forward slashes and `gitdir/i`,
+    the git folder named by its long name (realpathSync.native). Claude Code runs commands in that bash, so it meets
+    the shim; a git started outside it (PowerShell, by git.exe) meets the hooks, which Git for Windows runs with its
+    own sh. The Mac's shim, hooks and command are byte for byte as before (checked). build-reach.test.cjs runs the
+    guard test on Windows through Git Bash; build.test.cjs expects the Windows command there.
+  - **Connect** (src/main/connect). Apple Notes already refuses off a Mac; browser sign-in import is still created on
+    macOS only (as in 0.1.10). The readers looked only under ~/Library/Application Support: on Windows they now also
+    look under AppData (Roaming: Obsidian's obsidian.json, Cursor's state.vscdb; Local: Chrome, Brave, Edge, Chromium,
+    Vivaldi's User Data). A browser's history is read with node:sqlite on Windows (no sqlite3 command; Chrome's times
+    are past 2^53, read as BigInt), an export's .zip with Windows' own tar (System32\tar.exe; no unzip). Tests in
+    windows-platform.test.cjs: the locations everywhere (platform given), history and .zip on Windows. Left as on the
+    Mac: which apps count as installed (it looks for .app bundles), the PDF folders (~/Downloads, ~/Documents and
+    ~/Desktop are the same names on Windows), and the wording "on this Mac".
+  - Mac `npm test`: 1483 tests, 1480 pass, 3 skipped, 0 failed.
+- 2026-10-09, catch-up run 1 (6c96a36, the merge) failed on all three:
+  - **The guard test, everywhere.** It reads `git config user.name`, which exits 1 on a runner with no Git identity
+    (this Mac has one). The test now gives one the way a person's `git -c` would (GIT_CONFIG_PARAMETERS, which the guard
+    keeps after its own); the commands checked are the same. Checked here with an empty HOME and GIT_CONFIG_GLOBAL=/dev/null.
+  - **Windows, 10 more.**
+    - Connect showed home paths as `~\Vault`: shownPath now writes `~/…` on Windows too, and expandPath takes `~\…` back.
+    - A note titled "Why do novices skip tests?" could not be saved: `?` is not allowed in a Windows file name. A Markdown
+      copy's file name (library.cjs markdownStem) now has none of `<>:"/\|?*`, no trailing dot or space, and no device
+      name (CON, NUL…). The row keeps the title. A Mac names the file as before. Test in windows-platform.test.cjs.
+    - A picture test compared `path.relative` output with `/` (a fixture; now in `/`).
+    - The reach test's agent compared policy.gitDir with fs.realpathSync. It now uses realpathSync.native on Windows
+      (long names, as gitCommonDir gives them). The status assertion now names the task's error.
+    - The runner test (already fixed in 3c342a9).
 
 ### CI runs
 
 | Commit | Run | macOS | Windows | Linux | Notes |
 |---|---|---|---|---|---|
+| 6c96a36 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/37958518571 | ✗ 1 test | ✗ 11 tests | ✗ 1 test | the merge; the guard test needs a Git identity; Windows: shown paths, a `?` in a file name, the guard in Git Bash |
 
 ## Linux
 

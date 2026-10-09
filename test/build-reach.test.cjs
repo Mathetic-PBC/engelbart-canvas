@@ -67,7 +67,9 @@ test('the git guard: history, branches, stashes, settings and pushes of the Buil
   assert.equal(gitDir, (WINDOWS ? fs.realpathSync.native : fs.realpathSync)(path.join(repo, '.git')), 'the worktree\'s shared git folder, read from its files');
   assert.equal(gitCommonDir(repo), gitDir);
   assert.equal(gitCommonDir(homeDir), null);
-  const env = WINDOWS ? { ...plainEnv, ...who, ...guardEnvironment(guard, gitDir, plainEnv) } : { ...plainEnv, ...who, PATH: `${guard.bin}:${plainEnv.PATH}`, ...guardEnvironment(guard, gitDir, plainEnv) };
+  // a user.name to read where git has none set (a CI runner), given as the person's own `git -c` would be
+  const named = { ...plainEnv, GIT_CONFIG_PARAMETERS: "'user.name'='Person'" };
+  const env = WINDOWS ? { ...plainEnv, ...who, ...guardEnvironment(guard, gitDir, named) } : { ...plainEnv, ...who, PATH: `${guard.bin}:${plainEnv.PATH}`, ...guardEnvironment(guard, gitDir, named) };
   const git = WINDOWS
     ? (cwd, ...args) => spawnSync(BASH, ['-c', `${guardPath(BASH)}exec git "$@"`, 'git', ...args], { cwd, env, encoding: 'utf8' })
     : (cwd, ...args) => spawnSync('git', args, { cwd, env, encoding: 'utf8' });

@@ -832,6 +832,17 @@ async function addPageCopy(ctx, input, save, { name: given = null } = {}) {
 }
 
 /**
+ * The file name a Markdown copy titled `title` is kept under (without .md). Windows (2026-10-09, docs/windows-port-log.md
+ * "Catch-up to 0.1.13") takes none of <>:"/\\|?* in a name, nor one that ends in a dot or a space, nor its device names
+ * (CON, NUL, COM1…): a title like "Why do novices skip tests?" could not be saved there. The row keeps the title as it is.
+ */
+function markdownStem(title, platform = process.platform) {
+  if (platform !== 'win32') return title.replace(/[/\\:]/g, '-').replace(/^\.+/, '').trim() || 'Untitled';
+  const stem = title.replace(/[<>:"/\\|?*]/g, '-').replace(/^\.+/, '').replace(/[. ]+$/, '').trim() || 'Untitled';
+  return /^(?:con|prn|aux|nul|com\d|lpt\d)(?:\.|$)/i.test(stem) ? `${stem}-` : stem;
+}
+
+/**
  * A Markdown text kept as a file of the library's own (2026-10-08, Connect your library: "save the imported content not as
  * notes but as md files ... saved as files in the engelbart assets folder"): <data root>/assets/md/<id>/<name>.md, its
  * pictures beside it, and a row of type `md` with no `note` tag and no project. `pictures` [{ file, name }] are copied in
@@ -839,7 +850,7 @@ async function addPageCopy(ctx, input, save, { name: given = null } = {}) {
  */
 async function addMarkdownCopy(ctx, { name, text, pictures = [] } = {}) {
   const title = String(name == null ? '' : name).replace(/[\x00-\x1f\x7f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200) || 'Untitled';
-  const stem = title.replace(/[/\\:]/g, '-').replace(/^\.+/, '').trim() || 'Untitled';
+  const stem = markdownStem(title);
   const id = randomUUID();
   const base = path.join(ctx.dataRoot, 'assets', 'md');
   fs.mkdirSync(base, { recursive: true, mode: DIR_MODE });
@@ -1121,4 +1132,4 @@ async function previewItem(ctx, id, { listRemoteFiles } = {}) {
   return out;
 }
 
-module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, annotationsFileOf, writePageAnnotations, addMarkAnswer, addWebMark, updateWebMark, readWebMark, removeWebMark, restoreWebMark, cropFile, projectsForLibraryItem, libraryForProject, bodiesForProject, bodiesForLibrary, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, addPageCopy, addMarkdownCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem, FILE_TYPES, PEEK_SKIP };
+module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, annotationsFileOf, writePageAnnotations, addMarkAnswer, addWebMark, updateWebMark, readWebMark, removeWebMark, restoreWebMark, cropFile, projectsForLibraryItem, libraryForProject, bodiesForProject, bodiesForLibrary, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, addPageCopy, addMarkdownCopy, markdownStem, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem, FILE_TYPES, PEEK_SKIP };

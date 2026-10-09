@@ -19,6 +19,7 @@ const { createProcesses, freePort, groupPids, killTree, stopLeftover } = require
 const { assertAppModules } = require('../scripts/check-app-modules.cjs');
 const readers = require('../src/main/connect/readers.cjs');
 const { cursorDb } = require('../src/main/connect/cursor.cjs');
+const { markdownStem } = require('../src/main/store/library.cjs');
 
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-windows-platform-'));
 const W = path.win32;
@@ -226,6 +227,18 @@ test('Connect on Windows looks in AppData too: Obsidian\'s vaults, the Chromium 
   assert.equal(cursorDb(home, 'darwin'), path.join(home, 'Library', 'Application Support', 'Cursor', 'User', 'globalStorage', 'state.vscdb'));
   write('Library/Application Support/Cursor/User/globalStorage/state.vscdb', '');
   assert.equal(cursorDb(home, 'win32'), path.join(home, 'Library', 'Application Support', 'Cursor', 'User', 'globalStorage', 'state.vscdb'), 'the Mac\'s place when it is there');
+});
+
+test('a Markdown copy\'s file name on Windows has none of <>:"/\\|?*, no dot or space at its end, no device name; a Mac\'s as before', () => {
+  assert.equal(markdownStem('Why do novices skip tests?', 'win32'), 'Why do novices skip tests-');
+  assert.equal(markdownStem('a <b> "c" | d * e: f/g\\h', 'win32'), 'a -b- -c- - d - e- f-g-h');
+  assert.equal(markdownStem('Notes...', 'win32'), 'Notes');
+  assert.equal(markdownStem('CON', 'win32'), 'CON-');
+  assert.equal(markdownStem('nul.txt', 'win32'), 'nul.txt-');
+  assert.equal(markdownStem('Console', 'win32'), 'Console');
+  assert.equal(markdownStem('???', 'win32'), '---');
+  assert.equal(markdownStem('Why do novices skip tests?', 'darwin'), 'Why do novices skip tests?');
+  assert.equal(markdownStem('a: b/c', 'darwin'), 'a- b-c');
 });
 
 if (process.platform === 'win32') {

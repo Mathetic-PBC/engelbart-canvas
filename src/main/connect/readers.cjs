@@ -29,7 +29,8 @@ const DAY_MS = 86_400_000;
 
 const statOf = (file) => { try { return fs.statSync(file); } catch { return null; } };
 const isDir = (dir) => { const stat = statOf(dir); return !!(stat && stat.isDirectory()); };
-const shownPath = (homeDir, file) => (homeDir && file.startsWith(homeDir + path.sep) ? `~${file.slice(homeDir.length)}` : file);
+// ~/… with forward slashes, Windows too (where ~\… is also taken back: expandPath).
+const shownPath = (homeDir, file) => (homeDir && file.startsWith(homeDir + path.sep) ? `~${file.slice(homeDir.length).split(path.sep).join('/')}` : file);
 const iso = (ms) => (Number.isFinite(ms) && ms > 0 ? new Date(ms).toISOString() : null);
 const clip = (text, max) => { const value = String(text || '').replace(/\s+/g, ' ').trim(); return value.length > max ? `${value.slice(0, max - 1)}…` : value; };
 const cutoff = (days) => (Number.isFinite(days) && days > 0 ? Date.now() - days * DAY_MS : 0);
@@ -46,7 +47,7 @@ const local = (homeDir, ...parts) => path.join(homeDir, 'AppData', 'Local', ...p
 function expandPath(homeDir, value) {
   const raw = String(value || '').trim();
   if (!raw) return null;
-  if (raw === '~' || raw.startsWith('~/')) return path.join(homeDir, raw.slice(1));
+  if (raw === '~' || raw.startsWith('~/') || raw.startsWith(`~${path.sep}`)) return path.join(homeDir, raw.slice(1));
   return path.isAbsolute(raw) ? path.resolve(raw) : null;
 }
 
