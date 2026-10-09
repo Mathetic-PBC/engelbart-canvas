@@ -1,7 +1,7 @@
 {
   "name": "engelbart",
   "productName": "Engelbart",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "private": true,
   "description": "Engelbart: plan research projects in documents, then hand the work to Claude Code and Codex.",
   "author": "Engelbart",
